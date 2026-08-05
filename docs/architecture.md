@@ -1,4 +1,4 @@
-# Архитектура CloudBrain
+# Архитектура Mind Diary
 
 Статус: proposal, 2026-08-05. Ни один компонент ниже ещё не реализован.
 
@@ -20,7 +20,7 @@
 - возможность начать с lexical search и добавить embeddings после измерений.
 
 OKF намеренно не определяет storage, transactions, locks, ACL, query API или
-MCP. Эти свойства принадлежат CloudBrain и не должны выдаваться за требования
+MCP. Эти свойства принадлежат Mind Diary и не должны выдаваться за требования
 формата.
 
 ## Контекст системы
@@ -310,7 +310,7 @@ filters и section fetch при необходимости получают от
 меняют compatibility contract. Historical revision выбирается selector всего
 mount, а не аргументом отдельного retrieval call.
 
-CloudBrain-specific tools добавляются узко:
+Mind Diary-specific tools добавляются узко:
 
 - `get_space_info` и `browse_entries`;
 - `list_revisions`, `get_revision` и `list_checkpoints`;
@@ -339,7 +339,7 @@ Read-only и mutation tools получают правдивые MCP annotations.
 маскируются под `search`/`fetch`.
 
 Resource identity не содержит `mount_id`: mount — authorization context, а не
-часть знания. Внутри одного CloudBrain deployment immutable resource имеет URI
+часть знания. Внутри одного Mind Diary deployment immutable resource имеет URI
 наподобие:
 
 ```text
@@ -600,7 +600,7 @@ precision/grounding и стоимости.
 ## Недоверенное содержимое и import boundary
 
 OKF content, raw sources и metadata являются данными, а не инструкциями
-CloudBrain или вызывающему агенту. Retrieval responses должны отделять content
+Mind Diary или вызывающему агенту. Retrieval responses должны отделять content
 от server guidance. Embedded prompt может повлиять на модель, поэтому server не
 доверяет намерению tool call: scope, draft boundary и внешний approval artifact
 не дают такому content самостоятельно повысить права или перейти в commit.

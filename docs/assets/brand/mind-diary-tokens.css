@@ -1,0 +1,15 @@
+:root {
+  --mind-diary-ink: #172b5b;
+  --mind-diary-paper: #fff9f0;
+  --mind-diary-memory-violet: #5b4bc4;
+  --mind-diary-living-coral: #f26b5e;
+  --mind-diary-quiet-sage: #9aaf9e;
+  --mind-diary-white: #ffffff;
+
+  --mind-diary-font-display: "Manrope", "Inter", system-ui, sans-serif;
+  --mind-diary-font-ui: "Inter", system-ui, sans-serif;
+
+  --mind-diary-radius-card: 20px;
+  --mind-diary-radius-control: 12px;
+  --mind-diary-border-subtle: color-mix(in srgb, var(--mind-diary-ink) 16%, transparent);
+}

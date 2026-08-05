@@ -4,7 +4,7 @@
 
 ## Текущее состояние
 
-- CloudBrain находится на стадии design-first bootstrap: сервисный код ещё не
+- Mind Diary находится на стадии design-first bootstrap: сервисный код ещё не
   реализован и ни одно развёртывание не считается выполненным.
 - Репозиторий содержит предложение по архитектуре и MVP, а также проверку
   актуального Open Knowledge Format (OKF).
@@ -14,11 +14,12 @@
 ## Что прочитать перед изменениями
 
 1. [Обзор продукта](docs/overview.md).
-2. [Доменную модель и доступ](docs/specs/domain-model.md).
-3. [URL-адресацию и персонализированное открытие](docs/specs/personalized-opening.md).
-4. [Архитектуру](docs/architecture.md).
-5. [Спецификацию MVP](docs/specs/mvp.md).
-6. [Проверку текущего OKF](docs/reports/2026-08-05-okf-status.md).
+2. [Базовую айдентику](docs/brand.md) — перед user-facing naming, UI или copy.
+3. [Доменную модель и доступ](docs/specs/domain-model.md).
+4. [URL-адресацию и персонализированное открытие](docs/specs/personalized-opening.md).
+5. [Архитектуру](docs/architecture.md).
+6. [Спецификацию MVP](docs/specs/mvp.md).
+7. [Проверку текущего OKF](docs/reports/2026-08-05-okf-status.md).
 
 Архитектурные и specification-документы пока имеют статус proposal. Не
 выдавайте предложенные компоненты, инструменты MCP, схемы хранения или этапы за
@@ -28,6 +29,10 @@
 
 - Этот репозиторий — реализация сервиса, а не OKF bundle. Обычным проектным
   Markdown-файлам не нужно OKF-frontmatter.
+- Принятая product language: `Mind Diary` — продукт, `Mind` — пользовательское
+  имя `KnowledgeSpace`, `Memory` — пользовательский umbrella term для
+  `KnowledgeEntry`. Security, storage и API продолжают использовать точные
+  технические имена; `Memory` не означает conversation/model/AgentCore memory.
 - Живая совместная сущность сервиса называется `KnowledgeSpace`. Переносимой
   канонической формой одной её revision остаётся `OKFBundle`: дерево исходных
   OKF-файлов и assets. Memberships, ACL, tenant metadata, idempotency keys и

@@ -6,8 +6,9 @@ migrations ещё не реализованы.
 
 ## Терминология
 
-Главная пользовательская сущность называется **KnowledgeSpace** («пространство
-знаний», в коротком UI — `Space`). Это живой совместный объект CloudBrain: у
+Главная техническая сущность называется **KnowledgeSpace** («пространство
+знаний», в product UI — **Mind**, в коротком техническом тексте — `Space`). Это
+живой совместный объект Mind Diary: у
 него есть canonical URL, содержимое, HEAD revision, участники, роли, настройки
 и audit history.
 
@@ -23,12 +24,12 @@ migrations ещё не реализованы.
 
 | Термин | Значение |
 |---|---|
-| `KnowledgeSpace` | Совместный aggregate и access boundary вокруг одного логического дерева знаний. |
+| `KnowledgeSpace` / `Mind` | Совместный aggregate и access boundary вокруг одного логического дерева знаний; `Mind` — product language. |
 | `SpaceRevision` | Неизменяемый снимок содержимого Space с manifest и parent revision. |
 | `Checkpoint` | Неизменяемая именованная ссылка на одну `SpaceRevision`. Это service metadata, не OKF `tags`. |
 | `Snapshot View` | Read-only view/mount, один раз разрешённый в точную revision по ID, времени или Checkpoint. |
 | `OKFBundle` | Материализованный импорт/экспорт ровно одной `SpaceRevision`. В нём нет memberships и ACL. |
-| `KnowledgeEntry` | Пользовательский searchable OKF concept document. Это не общий тип для любых bytes. |
+| `KnowledgeEntry` / `Memory` | Пользовательский searchable OKF concept document; `Memory` — product umbrella, но не общий тип для любых bytes. |
 | `Source` | Source-faithful материал или typed source concept с provenance. |
 | `Asset` | Binary/non-Markdown объект со своими правилами чтения и передачи. |
 | `Index` / `Log` | Reserved OKF `index.md` и `log.md`, не обычные `KnowledgeEntry`. |
@@ -524,7 +525,7 @@ Visibility — отдельная политика, не роль и не fake m
 - `unlisted` — возможный будущий режим;
 - `public_read` — возможный будущий Wikipedia-like режим.
 
-Первый Wikipedia-like сценарий CloudBrain означает совместное авторство,
+Первый Wikipedia-like сценарий Mind Diary означает совместное авторство,
 revision history и revert внутри private Space. `public_read` реализуется через
 KnowledgeSite и только по `published_revision`; он требует отдельного threat
 model для anonymous identity, discovery, indexing, cache, citations и переходов

@@ -153,7 +153,7 @@ fetch(id)
 расширяют эти standard inputs; для них при доказанной необходимости появятся
 отдельные tools.
 
-CloudBrain-specific минимальный набор:
+Mind Diary-specific минимальный набор:
 
 ```text
 get_space_info()
