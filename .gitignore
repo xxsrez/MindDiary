@@ -1,0 +1,37 @@
+.DS_Store
+
+# Dependencies and build output
+node_modules/
+dist/
+build/
+coverage/
+.next/
+.vinext/
+.vite/
+.wrangler/
+*.tsbuildinfo
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+.dev.vars*
+
+# AWS and infrastructure build output
+.aws-sam/
+cdk.out/
+.terraform/
+*.tfstate
+*.tfstate.*
+
+# Python tooling that may be used for experiments
+.venv/
+__pycache__/
+.pytest_cache/
+*.py[cod]
+
+# Logs and local test artifacts
+*.log
+playwright-report/
+test-results/
+tmp/
