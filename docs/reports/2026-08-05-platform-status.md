@@ -1,0 +1,77 @@
+# Состояние платформенных предпосылок на 2026-08-05
+
+Статус: report. Наблюдение выполнено 2026-08-05; внешнее состояние после этой
+даты может измениться.
+
+## Вывод
+
+Архитектурное направление Mind Diary остаётся жизнеспособным, но две прежние
+формулировки устарели:
+
+- MCP `2026-07-28` уже опубликован как текущая stable specification, поэтому
+  его нельзя называть draft/RC;
+- текущая документация OpenAI Sites говорит о зависимости public-beta
+  доступности от plan, region и workspace settings, но не выделяет отдельное
+  EEA-ограничение.
+
+Это не доказывает, что ChatGPT или AgentCore уже одинаково поддерживают все
+семантические изменения MCP `2026-07-28`. Поэтому protocol lifecycle остаётся
+за adapter boundary: `2026-07-28` — target, а `2025-11-25` — явный legacy
+compatibility profile только для клиента, на котором он реально потребовался.
+
+## Проверенные факты
+
+### MCP
+
+- Текущая нормативная спецификация имеет revision `2026-07-28` и использует
+  stateless per-request protocol metadata вместо legacy session handshake.
+- Страница `2025-11-25` остаётся доступна как предыдущая version и полезна для
+  совместимости, но уже не является текущей stable revision.
+- Переход между версиями нельзя свести к смене одной константы: lifecycle и
+  transport conformance должны тестироваться отдельными profiles.
+
+### OpenAI Plugins и Sites
+
+- Для company knowledge OpenAI по-прежнему требует стандартные read-only
+  `search`/`fetch` schemas и user-openable absolute URLs.
+- Public plugin submission требует стабильный public HTTPS Streamable HTTP MCP
+  endpoint; реальная проверка в ChatGPT developer mode остаётся обязательной.
+- Sites находится в public beta и может зависеть от plan, region и workspace
+  settings. Sites документирует durable D1/R2 bindings, server-side identity,
+  project linkage через `.openai/hosting.json` и custom domains там, где они
+  доступны.
+- Sites documentation не обещает, что произвольный Site является совместимым
+  Streamable HTTP MCP host. Совместное размещение остаётся compatibility spike.
+
+### AWS AgentCore Runtime
+
+- AgentCore Runtime документирует MCP container contract на
+  `0.0.0.0:8000/mcp` и Streamable HTTP.
+- Stateless mode подходит Mind Diary, потому что canonical revisions,
+  memberships и jobs находятся во внешнем storage, а не в MCP session.
+- Совместимость конкретного SDK/runtime с target MCP revision всё равно должна
+  подтверждаться integration suite, а не выводиться из наличия `/mcp` route.
+
+## Изменения в проектной документации
+
+- Current MCP target исправлен на `2026-07-28`; legacy `2025-11-25` изолирован.
+- Compatibility gates стали version-aware вместо безусловного требования
+  `initialize`.
+- Sites availability приведена к текущей официальной формулировке.
+- Непроверенные MCP-in-Sites и client-version assumptions остаются явно
+  помеченными как эксперименты и открытые вопросы.
+
+## Ограничения
+
+Это документальная сверка официальных источников, а не live deployment test.
+Она не подтверждает доступность Sites на текущем аккаунте, прохождение ChatGPT
+plugin review или развёртывание container в AgentCore.
+
+## Первичные источники
+
+- [MCP specification 2026-07-28](https://modelcontextprotocol.io/specification/2026-07-28/basic)
+- [MCP specification 2025-11-25](https://modelcontextprotocol.io/specification/2025-11-25/basic)
+- [OpenAI: build an MCP server](https://developers.openai.com/plugins/build/mcp-server)
+- [OpenAI: authenticate an MCP server](https://developers.openai.com/plugins/build/auth)
+- [OpenAI Sites](https://learn.chatgpt.com/docs/sites)
+- [AWS: deploy MCP servers in AgentCore Runtime](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/runtime-mcp.html)

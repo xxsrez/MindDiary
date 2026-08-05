@@ -41,7 +41,7 @@ flowchart LR
     Agent -->|Streamable HTTP, OAuth| Edge
     Admin -->|HTTPS| Edge
     Visitor --> Site
-    Site -->|published revision + session| Edge
+    Site -->|authorized revision + optional session| Edge
     Edge --> Core
     Core --> Personal
     Core --> Canon
@@ -121,9 +121,11 @@ Application core зависит от портов `ObjectStore`, `MetadataStore`
 
 ### 3. Protocol adapters
 
-- MCP adapter реализует stable protocol `2025-11-25`, Streamable HTTP и version
-  negotiation. RC `2026-07-28` не становится default до финальной спецификации,
-  поддержки SDK и conformance tests.
+- MCP adapter изолирует protocol-specific lifecycle за transport boundary.
+  Current stable `2026-07-28` является целевым профилем; явный compatibility
+  profile `2025-11-25` сохраняется, пока реально проверенные OpenAI/AWS clients
+  могут требовать legacy initialize/session flow. Stateless per-request
+  metadata 2026 и legacy lifecycle не смешиваются внутри одного profile.
 - Web/API adapter обслуживает canonical Space URLs, SpaceLanding, admin UI,
   KnowledgeSite и large-transfer orchestration.
 - Background adapter выполняет идемпотентную индексацию и housekeeping.
@@ -403,10 +405,10 @@ control plane. Membership mutation не меняет content HEAD, но атом
 membership state/version, `membership_epoch`, owner count, idempotency result и
 audit event. Последнего active Owner снять нельзя.
 
-Remote MCP следует authorization profile `2025-11-25`: OAuth 2.1,
-authorization code + PKCE, Protected Resource Metadata и audience-bound access
-tokens. Issuer, audience, expiry и scopes проверяются на каждом вызове. Входящий
-token нельзя пересылать downstream.
+Remote MCP следует authorization profile выбранной protocol version: OAuth
+2.1, authorization code + PKCE, Protected Resource Metadata и audience-bound
+access tokens. Issuer, audience, expiry и scopes проверяются на каждом вызове.
+Входящий token нельзя пересылать downstream.
 
 Для OpenAI-публикации также нужны стабильный HTTPS endpoint, domain challenge,
 logging/metrics и реальная проверка Developer mode. Cognito не поддерживает
@@ -498,13 +500,15 @@ Sites deployment — compatibility spike, а не архитектурная г�
 
 Gate для признания Sites MCP-host:
 
-1. Инициализация MCP и version negotiation.
+1. Прохождение lifecycle реально выбранного profile: required per-request
+   protocol metadata для `2026-07-28` либо legacy initialize/version negotiation
+   для `2025-11-25`; фактически принятая ChatGPT версия фиксируется в отчёте.
 2. `tools/list`, `search` и `fetch` из реального ChatGPT Developer mode.
 3. Streaming без buffering и корректная отмена/ошибки.
 4. OAuth discovery, scopes и refresh flow.
 5. `/.well-known/openai-apps-challenge` и стабильный public URL.
-6. Проверка текущей account/region availability для Madeira; Sites остаётся
-   public beta и документировал ограничения EEA.
+6. Проверка текущей plan/region/workspace availability для Madeira; Sites
+   остаётся public beta, а доступность зависит от этих условий.
 
 Compatibility spikes совместного размещения MCP и server-side adaptive chat
 запускаются отдельно. Если gate не пройден, Sites остаётся UI/static presentation,
@@ -639,8 +643,9 @@ scripts из Markdown/assets. Download URLs короткоживущие, scoped
 ## Внешние основания
 
 - [OKF 0.2 specification](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md)
-- [MCP stable specification 2025-11-25](https://modelcontextprotocol.io/specification/2025-11-25/basic)
-- [MCP resources](https://modelcontextprotocol.io/specification/2025-11-25/server/resources)
+- [MCP stable specification 2026-07-28](https://modelcontextprotocol.io/specification/2026-07-28/basic)
+- [MCP resources 2026-07-28](https://modelcontextprotocol.io/specification/2026-07-28/server/resources)
+- [MCP legacy compatibility specification 2025-11-25](https://modelcontextprotocol.io/specification/2025-11-25/basic)
 - [OpenAI: build an MCP server](https://developers.openai.com/plugins/build/mcp-server)
 - [OpenAI: MCP authentication](https://developers.openai.com/plugins/build/auth)
 - [OpenAI Sites](https://learn.chatgpt.com/docs/sites)

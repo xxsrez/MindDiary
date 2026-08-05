@@ -30,6 +30,9 @@ Mind Diary пока находится на стадии проектирова�
 
 - [Состояние OKF на 2026-08-05](reports/2026-08-05-okf-status.md) — сверка
   официальной спецификации с зафиксированным OKF 0.2 snapshot.
+- [Состояние платформенных предпосылок на 2026-08-05](reports/2026-08-05-platform-status.md)
+  — актуальные MCP, OpenAI Sites/Plugins и AWS AgentCore факты, на которых
+  основан proposal.
 
 ## Статусы документов
 
@@ -55,5 +58,5 @@ High-level контур проекта закрыт следующими док�
 
 API reference, отдельный threat model, production runbooks, deployment guide и
 changelog намеренно не созданы: сервисного кода, public release и развёртывания
-пока нет. Перед anonymous
-publication threat model станет обязательным отдельным документом.
+пока нет. Перед anonymous publication threat model станет обязательным
+отдельным документом.

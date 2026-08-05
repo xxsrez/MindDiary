@@ -98,7 +98,7 @@ MVP — сразу возвращать `personalized`, не требуя сна
 `SpaceSession`. В интерфейсе остаются «показать базовую версию» и объяснение,
 что подача была адаптирована.
 
-Минимальная воспроизводимая модель:
+Минимальная трассируемая модель:
 
 ```text
 target_space_id
@@ -158,7 +158,7 @@ purpose-bound профиль: например, язык, уровень зна�
   Personal Space, не выбирает поля профиля и не расширяет scope.
 - PersonalContextProvider применяет server-owned policy и лимит; raw personal
   corpus не передаётся target Space, его Owners, Editors или публичному site.
-- Landing фиксирует exact target и personal revision IDs для воспроизводимости,
+- Landing фиксирует exact target и personal revision IDs для трассировки,
   но personal revision ID показывается только самому аутентифицированному
   пользователю.
 - Personalized responses используют private per-principal cache или `no-store`;

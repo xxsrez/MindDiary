@@ -5,10 +5,11 @@
 ## Контекст
 
 Проекту нужна лексика, которую массовый пользователь понимает без знакомства с
-OKF, MCP, knowledge graphs или архитектурой хранения. Рабочее имя `CloudBrain`
-описывает инфраструктурную идею, но не даёт самостоятельного человеческого
-образа. Термины `KnowledgeSpace` и `KnowledgeEntry` точны для доменной модели,
-однако слишком технические для основного интерфейса и коммуникации.
+OKF, MCP, knowledge graphs или архитектурой хранения. Прежнее техническое
+рабочее имя описывало инфраструктурную идею, но не давало самостоятельного
+человеческого образа. Термины `KnowledgeSpace` и `KnowledgeEntry` точны для
+доменной модели, однако слишком технические для основного интерфейса и
+коммуникации.
 
 ## Решение
 
@@ -40,8 +41,12 @@ OKF, MCP, knowledge graphs или архитектурой хранения. Р�
   метафора не размывала security и storage semantics.
 - `Memory` нельзя смешивать с conversation memory, Amazon Bedrock AgentCore
   Memory или model context. Для них используются точные технические названия.
-- Имя репозитория, package namespaces, production domain и URL migration не
-  меняются этим ADR и требуют отдельных операционных решений.
+- Каноническое имя GitHub repository и локальной папки — `MindDiary`.
+- Пользовательское имя сайта — `Mind Diary`; preferred lowercase slug для
+  Sites, deployment и package identifiers — `mind-diary`, если конкретная
+  платформа позволяет его выбрать.
+- Точный production domain остаётся отдельным решением. Product slug не
+  заменяет `space_handle` и не меняет canonical URL model отдельных Minds.
 
 ## Рассмотренные направления
 

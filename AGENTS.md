@@ -20,6 +20,7 @@
 5. [Архитектуру](docs/architecture.md).
 6. [Спецификацию MVP](docs/specs/mvp.md).
 7. [Проверку текущего OKF](docs/reports/2026-08-05-okf-status.md).
+8. [Проверку платформенных предпосылок](docs/reports/2026-08-05-platform-status.md).
 
 Архитектурные и specification-документы пока имеют статус proposal. Не
 выдавайте предложенные компоненты, инструменты MCP, схемы хранения или этапы за
@@ -33,6 +34,10 @@
   имя `KnowledgeSpace`, `Memory` — пользовательский umbrella term для
   `KnowledgeEntry`. Security, storage и API продолжают использовать точные
   технические имена; `Memory` не означает conversation/model/AgentCore memory.
+- Каноническое техническое имя репозитория и локальной папки — `MindDiary`.
+  Пользовательское имя сайта — `Mind Diary`; preferred lowercase slug для
+  платформ, package names и deployment identifiers — `mind-diary`. Slug
+  продукта не заменяет `space_handle` отдельного Mind.
 - Живая совместная сущность сервиса называется `KnowledgeSpace`. Переносимой
   канонической формой одной её revision остаётся `OKFBundle`: дерево исходных
   OKF-файлов и assets. Memberships, ACL, tenant metadata, idempotency keys и
@@ -112,9 +117,11 @@
 
 ## Платформенные правила
 
-- Стабильная целевая версия MCP — `2025-11-25`. Draft/RC `2026-07-28` можно
-  исследовать только за negotiation boundary; переход требует отдельного
-  решения и conformance tests.
+- Текущая стабильная целевая версия MCP — `2026-07-28`. Изолированный
+  compatibility profile `2025-11-25` сохраняйте только для реально
+  проверенного клиента, который ещё требует legacy initialize/session flow.
+  Не смешивайте lifecycle двух версий и не заявляйте поддержку без conformance
+  tests на конкретном adapter/client pair.
 - OpenAI Sites считается подтверждённым хостом web/admin UI. Размещение
   Streamable HTTP MCP в Sites остаётся экспериментом, пока реальное
   подключение ChatGPT не пройдёт compatibility gate из архитектуры.

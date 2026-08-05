@@ -3,10 +3,6 @@
 Статус: report. Наблюдение выполнено 2026-08-05; внешнее состояние после этой
 даты может измениться.
 
-Примечание: отчёт создавался под рабочим именем `CloudBrain`; после принятия
-бренда проект называется **Mind Diary**. Старое имя внутри датированного отчёта
-сохранено как исторический контекст.
-
 ## Вывод
 
 Последняя официально объявленная версия — **OKF 0.2**. Текущий нормативный
@@ -15,7 +11,7 @@
 момент проверки нет.
 
 Следовательно, текущая локальная модель `knowledge-db`, ориентированная на OKF
-0.2, не требует миграции. CloudBrain всё равно должен выполнять version
+0.2, не требует миграции. Mind Diary всё равно должен выполнять version
 negotiation/best-effort read, потому что будущая версия может появиться позже.
 
 ## Как проверялось
@@ -45,7 +41,7 @@ negotiation/best-effort read, потому что будущая версия м
   анонсе названы направлениями дальнейшей работы, но в нормативный OKF 0.2 не
   входят.
 
-## Что важно для CloudBrain
+## Что важно для Mind Diary
 
 Нормативный OKF определяет переносимое дерево Markdown concepts и assets, но не
 определяет:
@@ -56,7 +52,7 @@ negotiation/best-effort read, потому что будущая версия м
 - tenant isolation, ACL и sharing;
 - runtime/attester ABI, sandboxing и cache receipts.
 
-Поэтому CloudBrain обязан проектировать эти механизмы как собственный envelope,
+Поэтому Mind Diary обязан проектировать эти механизмы как собственный envelope,
 не изменяя смысл OKF. Канонический export сохраняет исходные files/paths,
 неизвестные types/fields и legacy fallbacks. Search index производен, а ACL и
 revision metadata находятся вне frontmatter.
@@ -72,7 +68,7 @@ protocol, sandboxing и attester ABI.
 ## Ограничения проверки
 
 Проверка подтверждает состояние официального репозитория на указанную дату. Она
-не доказывает совместимость будущей реализации CloudBrain: conformance будет
+не доказывает совместимость будущей реализации Mind Diary: conformance будет
 проверяться отдельно на реальных import/export fixtures.
 
 [spec-main]: https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md

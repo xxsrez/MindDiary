@@ -221,10 +221,11 @@ annotations. Input validation errors должны быть понятны мод
    исполняется в UI.
 15. Инструкция внутри concept не может получить approval token, расширить scope
    или перевести draft в commit; повтор token после успешного commit отклоняется.
-16. MCP Inspector проходит initialize, `tools/list`, `search`, `fetch`, draft,
-    затем получает reviewed token через operator CLI и выполняет commit через
-    Streamable HTTP. Автоматический integration test повторяет поток через
-    test-only issuer вне MCP.
+16. MCP Inspector проходит lifecycle выбранного profile (`2026-07-28`
+    per-request metadata либо legacy `2025-11-25` initialize), `tools/list`,
+    `search`, `fetch`, draft, затем получает reviewed token через operator CLI
+    и выполняет commit через Streamable HTTP. Автоматический integration test
+    повторяет поток через test-only issuer вне MCP.
 17. Ни один лог или trace не содержит body concept, PersonalContext/personal
     fact, landing body, access/approval token или transfer URL.
 18. Space нельзя создать без `space_handle`, display `name` и creator-owner;
@@ -273,7 +274,8 @@ Sites-релиз считается MCP-релизом только после �
 Developer mode, а не только локальным fetch:
 
 - stable public HTTPS `/mcp`;
-- protocol negotiation и `tools/list`;
+- lifecycle выбранного MCP profile и `tools/list`; фактически принятая ChatGPT
+  версия фиксируется, а fallback на `2025-11-25` остаётся явным;
 - `search`/`fetch` с canonical URLs и citations;
 - canonical `/{space_handle}` и revision-bound base/personalized SpaceLanding;
 - streaming/error behavior без buffering;

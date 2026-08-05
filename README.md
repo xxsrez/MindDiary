@@ -29,8 +29,10 @@ server, UI и облачная инфраструктура ещё не реал
 - [Обзор продукта](docs/overview.md)
 - [Предлагаемая архитектура](docs/architecture.md)
 - [Доменная модель и доступ](docs/specs/domain-model.md)
+- [URL-адресация и персонализированное открытие](docs/specs/personalized-opening.md)
 - [Спецификация MVP](docs/specs/mvp.md)
 - [Проверка актуальности OKF](docs/reports/2026-08-05-okf-status.md)
+- [Проверка платформенных предпосылок](docs/reports/2026-08-05-platform-status.md)
 
 ## Статус
 

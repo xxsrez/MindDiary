@@ -33,6 +33,20 @@
 Рабочее UI-имя designated Personal Space — **My Mind**, но оно ещё требует
 проверки на реальных onboarding-сценариях и пока не является частью ADR.
 
+## Написание имени и технические slugs
+
+| Контекст | Форма | Правило |
+|---|---|---|
+| Продукт, сайт и UI | `Mind Diary` | Всегда два слова с пробелом |
+| GitHub repository и локальная папка | `MindDiary` | Каноническое техническое имя проекта |
+| Site/deployment/package slug | `mind-diary` | Preferred lowercase form, когда платформа позволяет выбрать slug |
+| URL отдельного Mind | `/{space_handle}` | Независим от slug продукта и выбирается для каждого Space |
+
+`MindDiary` и `mind-diary` не используются как пользовательский wordmark.
+Точное production domain name пока не принято. В OpenAI Sites видимое имя
+должно быть **Mind Diary**, а preferred Site slug — `mind-diary`, если он
+доступен и платформа позволяет его зафиксировать.
+
 ## Характер
 
 Mind Diary говорит и выглядит:

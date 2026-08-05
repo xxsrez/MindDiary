@@ -185,8 +185,10 @@ suggested questions, но не target facts, provenance, trust или ACL. По�
 
 Сам `SpaceLanding` — revision-bound projection, а не новый OKF document и не
 вторая копия corpus. Его authored inputs могут храниться в OKF, presentation
-settings — в service metadata, а generated части всегда воспроизводимы из
-указанной revision и помечены как derived.
+settings — в service metadata, а generated части помечены как derived и
+трассируются до exact target/personal revisions. Детерминированное
+воспроизведение дополнительно потребует зафиксированных generator/model,
+policy и receipt; один revision ID его не гарантирует.
 
 `SpaceLanding` не содержит memberships, contributor identities, private
 settings, raw personal facts или conversation history и не загружает target или
