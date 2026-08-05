@@ -10,6 +10,9 @@
 - ленивое, цитируемое чтение через MCP;
 - безопасную многописательскую модель, которой нет в самом OKF;
 - private shared KnowledgeSpaces, many-to-many memberships и четыре роли;
+- required human-readable names и стабильную ID-based адресацию;
+- публикацию выбранной revision как adaptive knowledge site без копирования
+  канонического corpus;
 - ранний web-прототип в OpenAI Sites;
 - целевой AWS deployment без переписывания доменного ядра;
 - возможность начать с lexical search и добавить embeddings после измерений.
@@ -23,7 +26,9 @@ MCP. Эти свойства принадлежат CloudBrain и не долж�
 ```mermaid
 flowchart LR
     Agent[ChatGPT, Codex или другой MCP client]
-    Web[Web/admin UI]
+    Admin[Web/admin UI]
+    Visitor[KnowledgeSite visitor]
+    Site[KnowledgeSite + SpaceGuide]
     Edge[MCP и Web/API adapters]
     Core[OKF application core]
     Canon[(Canonical revision store)]
@@ -31,7 +36,9 @@ flowchart LR
     Index[(Rebuildable search index)]
 
     Agent -->|Streamable HTTP, OAuth| Edge
-    Web -->|HTTPS| Edge
+    Admin -->|HTTPS| Edge
+    Visitor --> Site
+    Site -->|published revision + session| Edge
     Edge --> Core
     Core --> Canon
     Core --> Meta
@@ -53,6 +60,7 @@ User/Principal --< SpaceMembership >-- KnowledgeSpace
 KnowledgeMount -----------------------> exactly one KnowledgeSpace
 KnowledgeSpace --HEAD-----------------> SpaceRevision
 SpaceRevision --materialize----------> OKFBundle
+KnowledgeSite --published revision----> SpaceRevision
 ```
 
 Контент различает `KnowledgeEntry`, `Source`, `Asset`, reserved `Index` и
@@ -80,6 +88,7 @@ Use cases работают с явным `ActorContext`, KnowledgeMount, SpaceMe
 SpaceRevision:
 
 - create Space, list accessible Spaces и получить current membership;
+- resolve/rename Space через tenant-scoped unique name без смены `space_id`;
 - add/change/revoke memberships и transfer ownership через control plane;
 - import/export/validate bundle;
 - browse/search/fetch;
@@ -87,16 +96,23 @@ SpaceRevision:
 - publish index jobs и audit events;
 - выдавать короткоживущие object-transfer intents для больших файлов.
 
-Application core зависит от портов `ObjectStore`, `MetadataStore`,
-command-level `MembershipCommands`, `SearchIndex`, `Embedder`, `Authorizer`,
-`ApprovalVerifier`, `AuditSink` и `Clock`, но не от их реализаций.
+После MVP те же use cases получают publication и interaction orchestration:
+promote published revision, render KnowledgeSite, start SpaceSession и получить
+revision-bound adaptive response. Эти операции не входят в OKF codec.
+
+Application core зависит от портов `ObjectStore`, `MetadataStore`, command-level
+`SpaceCommands`/`MembershipCommands`, `SearchIndex`, `Embedder`, `Authorizer`,
+`ApprovalVerifier`, `AuditSink` и `Clock`, но не от их реализаций. Будущие
+presentation/interaction capabilities подключаются через отдельные
+`PresentationRenderer` и `ResponseGenerator` ports.
 
 ### 3. Protocol adapters
 
 - MCP adapter реализует stable protocol `2025-11-25`, Streamable HTTP и version
   negotiation. RC `2026-07-28` не становится default до финальной спецификации,
   поддержки SDK и conformance tests.
-- Web/API adapter обслуживает admin UI и large-transfer orchestration.
+- Web/API adapter обслуживает admin UI, KnowledgeSite и large-transfer
+  orchestration.
 - Background adapter выполняет идемпотентную индексацию и housekeeping.
 
 ### 4. Infrastructure adapters
@@ -107,6 +123,18 @@ command-level `MembershipCommands`, `SearchIndex`, `Embedder`, `Authorizer`,
   OpenSearch Serverless как optional derived index.
 
 Ни один infrastructure adapter не меняет публичные use-case contracts.
+
+## Identity Space и имя
+
+Canonical identity — immutable `space_id`. Обязательное `name` служит людям и в
+MVP уникально по `(tenant_id, normalized_name)`. Оно не должно быть global:
+глобальная проверка раскрывала бы private names и создавала ненужные конфликты.
+
+Create atomically резервирует normalized name, создаёт Space и creator-owner.
+Rename использует `expected_metadata_version`, обновляет resolver и audit, но не
+меняет content HEAD. API, ACL, jobs, resource URIs и indexes продолжают хранить
+`space_id`; это оставляет путь к будущим public namespaces, slugs и aliases без
+миграции канонических данных.
 
 ## Каноническая модель ревизий
 
@@ -268,14 +296,58 @@ RFC 7591 Dynamic Client Registration; если конкретный клиент
 pre-registration или Client ID Metadata Documents, потребуется другой OAuth
 provider либо auth broker.
 
+## KnowledgeSite и adaptive interaction
+
+KnowledgeSite не экспортирует Space в отдельную «сайтовую» базу. Publication
+record связывает route и presentation settings с одним
+`published_revision_id`; renderer читает ту же immutable revision, что MCP и
+export. Content HEAD и published revision различаются.
+
+```text
+Owner promotes SpaceRevision
+        │
+        ▼
+KnowledgeSite renders authored entrypoint
+        │ visitor question / audience profile
+        ▼
+SpaceSession -> SpaceGuide -> revision-bound search/fetch
+        │
+        ▼
+answer + sources + suggested next topics
+```
+
+Default publication policy — `pinned`. Commit не меняет сайт, пока Owner с
+`space.publish` явно не продвинет revision. `follow_head` может понадобиться для
+community-wiki, но это отдельная policy с видимым предупреждением: каждый
+принятый commit немедленно становится опубликованным.
+
+Первая public-модель считает весь corpus published revision доступным для
+site/search/fetch. Entrypoint управляет навигацией, но не скрывает paths. Пока
+нет отдельного subset-publication manifest и security model, private и public
+материал должны находиться в разных Spaces.
+
+`SpaceSession` содержит только context конкретного посетителя. Фраза «я
+профессиональный историк» может изменить vocabulary, depth и порядок подачи,
+но не authorization, ranking trust signals или canonical facts. Если профиль
+нужно сохранить между сессиями, это opt-in private profile metadata с отдельной
+retention policy, а не OKF concept по умолчанию.
+
+`SpaceGuide` читает ровно одну разрешённую revision и возвращает provenance. Для
+member session её задаёт KnowledgeMount, для anonymous site session — только
+publication record. Opening brief, suggested questions и recommendations
+являются derived outputs: они не попадают в Space другим пользователям и не
+становятся знаниями без обычного draft/review/commit. Cross-space recommendations
+запрещены без явных mounts и новой authorization спецификации; outbound push и
+внешние actions также остаются за границей текущего дизайна.
+
 ## Deployment profiles
 
 ### Local vertical slice
 
 - Один процесс и один MCP endpoint.
 - Filesystem сохраняет exact revision objects.
-- SQLite хранит HEAD, memberships, owner count, membership epoch, jobs и lexical
-  FTS index.
+- SQLite хранит name resolver, metadata version, HEAD, memberships, owner count,
+  membership epoch, jobs и lexical FTS index.
 - Один тестовый tenant и несколько principals; tenant/space/membership filter
   остаётся обязательным в API.
 - Никаких embeddings до корректного source-backed search/fetch.
@@ -286,9 +358,10 @@ provider либо auth broker.
 
 Подтверждённая роль Sites — web/admin UI с server-side routes, D1 для structured
 data и R2 для objects. Первый Sites milestone — UI для import, validation,
-browse, export и управления участниками/ролями поверх тех же application use
-cases. Data-only MCP остаётся ядром агентного продукта, но совместное размещение
-MCP не блокирует этот UI.
+browse, export и управления участниками/ролями, плюс read-only preview
+KnowledgeSite для выбранной revision. Data-only MCP остаётся ядром агентного
+продукта, но совместное размещение MCP и adaptive conversation не блокируют этот
+UI.
 
 Официальная документация Sites не обещает Streamable HTTP MCP, SSE без
 buffering, `/mcp` compatibility или прохождение plugin review. Поэтому единый
@@ -304,9 +377,10 @@ Gate для признания Sites MCP-host:
 6. Проверка текущей account/region availability для Madeira; Sites остаётся
    public beta и документировал ограничения EEA.
 
-Compatibility spike совместного размещения MCP запускается отдельно. Если gate
-не пройден, Sites остаётся UI, а portable MCP container размещается отдельно.
-Это не меняет domain или tool contracts.
+Compatibility spikes совместного размещения MCP и server-side adaptive chat
+запускаются отдельно. Если gate не пройден, Sites остаётся UI/static presentation,
+а portable MCP/interaction container размещается отдельно. Это не меняет domain
+или tool contracts.
 
 ### AWS target
 
@@ -342,6 +416,11 @@ Membership storage использует command-level operations
 membership по strongly consistent primary key, а не через eventually consistent
 индекс «мои Spaces».
 
+Create/rename отдельно резервируют `(tenant_id, normalized_name)` conditional
+write и меняют Space metadata version в той же transaction. Name lookup может
+иметь отдельную projection, но durable records и authorization продолжают
+использовать `space_id`.
+
 AgentCore Gateway, Verified Permissions, Object Lock, Bedrock Knowledge Bases и
 AgentCore Memory не входят в AWS v1. Их добавляют только при подтверждённой
 задаче: aggregation/policy, сложный ABAC, compliance retention, сменный RAG
@@ -361,7 +440,8 @@ cross-language качество нельзя предполагать без т�
 ## Observability и audit
 
 - Operational logs/traces содержат request ID, latency, tool, result count и
-  error class, но не приватный текст concept/chunk.
+  error class, но не приватный текст concept/chunk, audience profile или
+  conversation body.
 - Application audit хранит actor, tenant, mount, action, Space, old/new revision,
   object/result IDs и outcome.
 - CloudTrail покрывает AWS control plane и явно включённые data events, но не
@@ -394,6 +474,12 @@ scripts из Markdown/assets. Download URLs короткоживущие, scoped
   собственного небезопасного authorization server?
 - Когда после MVP действительно понадобится multi-space или path-filtered mount?
 - Какая отдельная модель visibility и anonymous access нужна для `public_read`?
+- Какие normalization, namespace, slug и alias rules нужны после tenant-unique
+  MVP names?
+- Нужен ли community Space режим `follow_head`, или publication всегда требует
+  отдельного promotion?
+- Какие session retention/consent правила допустимы для adaptive profiles и
+  proactive recommendations?
 - Хватит ли lexical search для MVP, и на каком corpus оправдан hybrid search?
 - Как сохранить byte-perfect YAML style при изменении одного поля: AST
   round-trip или canonical reserialization с явным diff?

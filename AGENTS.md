@@ -31,6 +31,12 @@
   канонической формой одной её revision остаётся `OKFBundle`: дерево исходных
   OKF-файлов и assets. Memberships, ACL, tenant metadata, idempotency keys и
   состояние индекса не записываются в OKF-frontmatter.
+- Каждый Space имеет immutable `space_id` и обязательное человекочитаемое
+  `name`. В MVP нормализованное имя уникально только внутри tenant; durable
+  references и authorization используют `space_id`, а не изменяемое имя.
+- Personal, group, community-wiki и site — сценарии одного Space, а не значения
+  фиксированного `space_type`. Поведение складывается из memberships,
+  visibility, publication policy и presentation surface.
 - Импорт и round-trip обязаны сохранять неизвестные OKF types и поля. Reader
   поддерживает legacy 0.1 fallbacks; writer по умолчанию создаёт OKF 0.2.
 - Полнотекстовые, векторные и графовые индексы всегда производны и должны
@@ -53,6 +59,16 @@
   Owners может быть несколько, последнего Owner нельзя demote/revoke.
 - Membership management остаётся в trusted web/CLI control plane и не
   публикуется рядом с corpus tools в content MCP.
+- `KnowledgeSite` публикует явно выбранную immutable SpaceRevision, а не drafts
+  и не service metadata. Привязанный `SpaceGuide` может адаптировать объяснение
+  под session-scoped audience profile и предлагать derived insights, но не
+  меняет каноническое знание без обычного draft/review/commit flow.
+- В public-модели весь corpus `published_revision` считается читаемым;
+  entrypoint не является ACL. До отдельной subset-publication спецификации
+  private и public content держите в разных Spaces.
+- Профиль посетителя, история разговора и generated answers не попадают в
+  `OKFBundle` автоматически. Cross-space retrieval требует явной новой модели
+  mounts и authorization.
 - Доменное ядро и OKF codec не импортируют AWS SDK, Sites bindings, HTTP
   framework или конкретный поисковый движок. Инфраструктура подключается через
   узкие порты и адаптеры.
@@ -92,6 +108,9 @@
 
 - Spaces по умолчанию приватны. Не логируйте содержимое приватных concepts,
   chunks, source assets, access/approval tokens или presigned URLs.
+- Не публикуйте content HEAD автоматически. Public/unlisted site читает только
+  `published_revision`; режим follow-HEAD требует отдельного явного решения и
+  предупреждения writers о немедленной публикации commit.
 - Любой read/search/write проверяет tenant и ACL до обращения к каноническому
   объекту или производному индексу.
 - Не используйте клиентский `tenant_id` как источник истины и не передавайте

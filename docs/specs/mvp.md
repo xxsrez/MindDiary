@@ -18,6 +18,8 @@ MVP считается vertical slice, а не набором независим
 ### Bundle lifecycle
 
 - Импорт ZIP или локального OKF bundle с Markdown и binary assets.
+- Создание target Space требует отдельного service-level `name`; import не
+  превращает название из bundle в identity или ACL автоматически.
 - Проверка OKF 0.2 conformance с отдельными quality warnings.
 - Best-effort чтение неизвестных будущих полей и legacy 0.1 fallbacks
   `timestamp`/`# Citations`.
@@ -53,6 +55,8 @@ MVP считается vertical slice, а не набором независим
 
 - Два private KnowledgeSpaces в тестовом tenant: основной collaborative Space и
   isolation fixture; несколько active users имеют пересекающиеся memberships.
+- Каждый Space имеет immutable `space_id` и обязательное `name`; нормализованное
+  имя уникально внутри tenant, а authorization использует только ID.
 - Many-to-many `SpaceMembership` с ролями `reader`, `editor`, `admin`, `owner`.
 - Один content MCP mount всегда связан ровно с одним Space.
 - Создание Space атомарно создаёт creator membership с ролью Owner.
@@ -145,18 +149,22 @@ annotations. Input validation errors должны быть понятны мод
     test-only issuer вне MCP.
 11. Ни один лог или trace не содержит body concept, access/approval token или
     transfer URL.
-12. Space нельзя создать без creator-owner; content import не импортирует ACL.
-13. Reader не создаёт draft; Editor делает reviewed commit; Admin управляет
+12. Space нельзя создать без name и creator-owner; content import не импортирует
+    имя как identity или ACL.
+13. Два нормализованно одинаковых имени в одном tenant получают conflict; такое
+    же имя в другом tenant допустимо. Rename использует metadata CAS и не меняет
+    content HEAD или `space_id`.
+14. Reader не создаёт draft; Editor делает reviewed commit; Admin управляет
     Reader/Editor, но не Admin/Owner; Owner управляет всеми ролями.
-14. Один principal может быть Editor в основном Space и Reader в isolation
+15. Один principal может быть Editor в основном Space и Reader в isolation
     fixture; его роль не является глобальным свойством пользователя.
-15. Две конкурентные попытки снять двух последних Owners не оставляют Space без
+16. Две конкурентные попытки снять двух последних Owners не оставляют Space без
     Owner; ownership transfer атомарен.
-16. Revoked/demoted Editor не завершает draft, начатый до изменения membership;
+17. Revoked/demoted Editor не завершает draft, начатый до изменения membership;
     stale membership version получает conflict.
-17. Membership mutation не меняет content HEAD и имеет ровно один audit event;
+18. Membership mutation не меняет content HEAD и имеет ровно один audit event;
     retry с тем же idempotency key возвращает тот же результат.
-18. Полный test suite, OKF fixtures и docs validation проходят на одном commit.
+19. Полный test suite, OKF fixtures и docs validation проходят на одном commit.
 
 ## Compatibility gate для Sites
 
@@ -198,6 +206,8 @@ Developer mode, а не только локальным fetch:
 - billing и organization administration;
 - invitations, groups, path/tag grants, `unlisted`/`public_read`, public links и
   cross-tenant sharing;
+- KnowledgeSite publication, SpaceSession/SpaceGuide, adaptive answers,
+  proactive recommendations, outbound push и `follow_head` publication;
 - AgentCore Gateway, Memory, Bedrock Knowledge Bases, Verified Permissions,
   Object Lock и multi-region replication.
 
