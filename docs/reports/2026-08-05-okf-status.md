@@ -12,8 +12,9 @@
 
 Следовательно, выбранная для Mind Diary базовая версия OKF 0.2 остаётся
 актуальной и не требует пересмотра из-за нового релиза. Сервис всё равно должен
-выполнять version negotiation/best-effort read, потому что будущая версия может
-появиться позже.
+сохранять явную version boundary, потому что будущая версия может появиться
+позже. Первый прототип пишет только 0.2; legacy import/migration потребует
+отдельной policy и не должен silently менять semantics.
 
 ## Как проверялось
 
@@ -54,9 +55,10 @@
 - runtime/attester ABI, sandboxing и cache receipts.
 
 Поэтому Mind Diary обязан проектировать эти механизмы как собственный envelope,
-не изменяя смысл OKF. Канонический export сохраняет исходные files/paths,
-неизвестные types/fields и legacy fallbacks. Search index производен, а ACL и
-revision metadata находятся вне frontmatter.
+не изменяя смысл OKF. В первом прототипе changesets работают только с UTF-8
+Markdown, а канонический export сохраняет files/paths и неизвестные types/fields.
+ZIP/local import и binary Asset transport в scope не входят. Search index
+производен, а ACL и revision metadata находятся вне frontmatter.
 
 `index.md` даёт естественную основу progressive disclosure: агент сначала
 получает карту, затем выбранный concept и только потом source. `verified` и
@@ -78,7 +80,7 @@ round-trip и может отдать как обычный concept без type-
 
 Проверка подтверждает состояние официального репозитория на указанную дату. Она
 не доказывает совместимость будущей реализации Mind Diary: conformance будет
-проверяться отдельно на реальных import/export fixtures.
+проверяться отдельно на changeset, codec и export fixtures.
 
 [spec-main]: https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md
 [introduce-02]: https://github.com/GoogleCloudPlatform/knowledge-catalog/commit/780fe9d30b5bbca8931256edf1d0290d6bda5462

@@ -14,9 +14,9 @@ Mind Diary даёт пользователям и их агентам управ
 пользовательская `KnowledgeEntry` — **Memory**. Технические документы используют
 Space/Entry там, где важна точность API, ACL или OKF semantics.
 
-Вторая цель проекта — пройти реальный cloud-контур: identity, object storage,
-transactional metadata, MCP runtime, асинхронная индексация, observability и
-переносимость deployment между Sites и AWS.
+Вторая цель проекта — пройти реальный cloud-контур на OpenAI Sites: identity,
+object storage, transactional metadata, MCP runtime, асинхронная индексация и
+observability, сохранив переносимость для post-MVP перехода на AWS.
 
 ## Ментальная модель
 
@@ -33,8 +33,11 @@ concurrency. Ответы агента и персонализированная
 ## Account и Personal Mind
 
 Система доступна только зарегистрированным authenticated пользователям. Первый
-Sites prototype связывает проверенную ChatGPT/Sites identity с внутренним
-`principal_id`.
+production MVP на Sites связывает проверенную ChatGPT/Sites identity с внутренним
+`principal_id`. Initial verified-email binding нормализуется server-side;
+exact match возвращает существующий account. Неизвестный email явно создаёт
+новый изолированный account без прежних прав либо запускает ручной recovery с
+независимой проверкой identity; automatic relink/merge запрещён.
 
 При регистрации Mind Diary атомарно создаёт ровно один Personal Mind. Он жёстко
 связан с account: пользователь является его единственным Owner, другие
@@ -44,9 +47,10 @@ name автоматически следует за именем пользов�
 
 Удаление account в первом прототипе безвозвратно удаляет Personal Mind, все
 ordinary Minds этого Owner вместе с их историей и memberships пользователя в
-чужих Minds, удаляет его pending invitations и отзывает MCP tokens. Эта простая
-политика принята только для прототипа и будет отдельно пересмотрена перед
-production.
+чужих Minds, удаляет его pending invitations, external identity/profile и
+отзывает MCP tokens. Commits в Minds других Owners остаются с opaque non-PII
+`deleted-principal` author marker. Эта простая политика принята для MVP и будет
+отдельно пересмотрена перед production-grade расширением за его пределы.
 
 ## Адресуемые Minds
 
@@ -59,20 +63,24 @@ production.
 Canonical URL имеет вид `https://{space-host}/{space_handle}`. При создании UI
 предлагает handle из имени и позволяет исправить его до подтверждения. Router
 сначала разрешает handle в `space_id`, затем проверяет доступ; URL не является
-authorization identity.
+authorization identity. Canonical handle имеет фиксированную ASCII grammar и
+reserved registry; после удаления неразрешимый handle навсегда retired и не
+может указывать на другой Mind.
 
 Visibility выбирает только Owner:
 
 - `private` — доступ только принятым participants;
 - `unlisted` — authenticated non-member читает по точному URL, но Mind не
-  появляется в каталоге;
+  появляется в каталоге; URL не является secret;
 - `public` — authenticated non-member читает и видит Mind в Public Minds
   catalog.
 
 Anonymous доступа нет даже у public Mind. Public/unlisted reader видит live HEAD
 и immutable history так же, как Reader membership. Отдельного
 `published_revision` в первом прототипе нет: новый commit сразу становится
-видим всем читателям, которым visibility даёт доступ.
+видим всем читателям, которым visibility даёт доступ. Owner UI предупреждает,
+что это открывает также всю историю и что возврат в private прекращает будущий
+доступ, но не отменяет уже состоявшееся раскрытие.
 
 ## Участники и роли
 
@@ -97,14 +105,19 @@ email. Invitation появляется внутри Mind Diary, роль выб�
 
 ## Content и revisions
 
-Каждая revision материализуется как `OKFBundle`: дерево OKF files и assets без
+Каждая revision материализуется как дерево UTF-8 Markdown в OKF 0.2 без
 memberships, ACL, tokens и service indexes. Обычная работа идёт по отдельным
-файлам, а не через скачивание ZIP целиком.
+файлам; ZIP/local bundle import и binary Asset upload/fetch в первый прототип не
+входят. Выбранную revision можно детерминированно экспортировать как
+`OKFBundle`.
 
 Основная write-команда принимает `expected_revision`, `idempotency_key` и набор
 операций. Все операции применяются атомарно и создают ровно одну revision.
 Stale writer получает conflict с current HEAD, перечитывает данные и строит
 изменение заново. Automatic semantic merge в первой версии не нужен.
+Idempotency key связан с principal, Mind, operation и canonical request hash:
+повтор того же payload возвращает прежний result, другой payload с тем же key
+получает conflict.
 
 `index.md` изменяется специальной server-side CAS operation. `log.md`
 обновляется semantic operation `add_log_entry`, которая сохраняет OKF
@@ -113,7 +126,10 @@ newest-first/date grouping; это не literal byte append. Добавлени�
 
 Удаление файла меняет только новую HEAD: старые immutable revisions сохраняются.
 Удаление всего Mind Owner или каскад account deletion, напротив, в прототипе
-физически удаляет всю историю.
+физически удаляет всю историю. Единственный сохраняемый marker — non-linkable
+retired handle; target-linked audit/idempotency records и forensic deletion
+receipt также не сохраняются. Это сознательный временный trade-off delete-all
+прототипа.
 
 ## MCP и web control plane
 
@@ -132,7 +148,14 @@ newest-first/date grouping; это не literal byte append. Добавлени�
 MCP сразу commit-ит authorized изменения; отдельного server draft, diff
 approval или ручного подтверждения commit нет. Server всё равно проверяет
 token, current role/visibility, scopes, HEAD CAS и idempotency на каждом
-вызове.
+вызове. `content:write` включает read; write-only token не существует.
+
+Первый прототип использует custom Mind-aware MCP tools. Он не заявляет
+company-knowledge compatibility: стандартный `search(query)` не выбирает Mind,
+а его результаты требуют user-openable content URL, которого здесь нет.
+Недоверенный content не расширяет server scopes или control plane, но может
+склонить модель вызвать уже разрешённый write; explicit write scope, history и
+audit ограничивают, а не устраняют этот риск.
 
 Sites отвечает за account/control plane: создание Minds, visibility,
 invitations, roles, ownership, deletion, настройки и выпуск MCP tokens. Content
@@ -157,7 +180,8 @@ variable. Token связан с principal, а не Mind; default lifetime 90 д�
    его и становится единственным Owner.
 3. Owner/Admin приглашает зарегистрированных пользователей как Reader/Editor;
    Owner также может пригласить Admin.
-4. Пользователь выпускает named MCP token и подключает Codex или Claude Code.
+4. Пользователь выпускает named MCP token и подключает Codex; Claude Code
+   становится поддерживаемым client только после отдельного conformance test.
 5. Агент вызывает `list_minds`, выбирает `/me` или другой доступный Mind,
    просматривает index/search/fetch.
 6. Editor/Admin/Owner отправляет atomic changeset с current HEAD revision.
@@ -165,14 +189,16 @@ variable. Token связан с principal, а не Mind; default lifetime 90 д�
    пишет audit event и запускает rebuild derived index.
 8. Public/unlisted readers сразу видят новую HEAD; historical selector остаётся
    привязан к exact старой revision и read-only.
-9. Admin/Owner может получить детерминированный OKF export выбранной revision.
+9. Любой Reader/baseline Reader может получить детерминированный OKF export
+   exact разрешённой revision через повторно авторизованный download URL.
 
 ## Product principles
 
 - **Authenticated only.** Visibility расширяет доступ зарегистрированным
   пользователям, но не создаёт anonymous surface.
 - **Private by default.** Новый Mind и Personal Mind начинаются private.
-- **Portable by construction.** OKF import/export — основной контракт данных.
+- **Portable by construction.** OKF 0.2 representation и deterministic export —
+  основной контракт данных.
 - **Progressive disclosure.** Индекс, search и fetch вместо полного corpus в
   model context.
 - **Live knowledge.** Public/unlisted readers видят текущую HEAD сразу после
@@ -195,6 +221,8 @@ OKF access, immediate CAS commits, immutable history и export.
 email delivery, fuzzy global user search, granular file permissions, branches,
 automatic semantic merge, legal retention/recovery model, billing,
 organization administration и general cross-Mind synthesis.
+Также отложены ZIP/local bundle import, binary Asset transport, legacy 0.1
+migration, named checkpoints и company-knowledge compatibility profile.
 
 Personalized content landing из ограниченного PersonalContext остаётся частью
 product direction, но не входит в критерии первого прототипа. В этом slice
@@ -206,11 +234,17 @@ landing требуют отдельного принятого scope.
 
 - **Local vertical slice:** shared application core, filesystem/object adapter,
   SQLite metadata/FTS и Streamable HTTP MCP.
-- **Sites prototype:** authenticated web/control UI и, если compatibility gate
-  пройден, тот же deployment для MCP adapter. Иначе MCP запускается в отдельном
-  portable runtime.
-- **AWS target:** Bedrock AgentCore Runtime, S3 canonical objects, DynamoDB
-  transactional metadata и optional derived OpenSearch index.
+- **Sites MVP production:** единственный текущий production target. Один
+  production Site должен дать authenticated web/control UI, persistence и
+  Streamable HTTP MCP; провал compatibility gate блокирует release.
+- **Post-MVP AWS path:** Bedrock AgentCore Runtime, S3 canonical objects,
+  DynamoDB transactional metadata и optional derived OpenSearch index. Это
+  будущая миграция, не текущая release surface.
+
+В текущем проектном языке «зарелизить на продакшн» означает опубликовать exact
+проверенный commit в production OpenAI Site Mind Diary и подтвердить live web +
+MCP flows. Local run, preview, Sites UI без required MCP или отдельный container
+не считаются production release MVP.
 
 ## Что означает успех
 
@@ -219,10 +253,11 @@ landing требуют отдельного принятого scope.
 - Single-owner и transfer invariants выдерживают concurrent mutations.
 - Public/private/unlisted одинаково проверяют authenticated identity и дают
   ожидаемые baseline права.
-- Codex и Claude Code через один user token находят доступные Minds, читают
-  exact revision и immediate commit-ят изменения с CAS.
+- Проверенный Codex client через один user token находит доступные Minds, читает
+  exact revision и immediate commit-ит изменения с CAS; каждый дополнительный
+  client, включая Claude Code, заявляется только после своего conformance test.
 - Два concurrent Editors не теряют изменения: stale attempt получает conflict.
 - Исторический read не смешивается с HEAD и проверяет current access.
-- Export проходит OKF validation и сохраняет неизвестные fields/assets.
-- Перенос Sites → AWS меняет adapters, но не domain, API semantics или OKF
-  representation.
+- Export проходит OKF validation и сохраняет неизвестные fields/types.
+- Будущий перенос Sites → AWS меняет adapters, но не domain, API semantics или
+  OKF representation.

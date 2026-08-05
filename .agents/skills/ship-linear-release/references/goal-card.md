@@ -16,9 +16,9 @@ Done when: Два свежих согласованных Linear snapshot exact 
 candidate, CI, deployment или rollback artifacts; каждый batch имеет
 BATCH_RELEASE_RECEIPT exact default-branch SHA и вошедшие issue имеют
 FEATURE_RECEIPT + Done. Для design/build deployment, live smoke и tag явно
-not-applicable и не заявляются. Для release каждая required surface имеет exact
-artifact/deployment, successful live smoke, previous-stable rollback evidence и
-обязательный immutable tag по tracked version policy.
+not-applicable и не заявляются. Для release production OpenAI Site имеет exact
+artifact/version/deployment, successful live web + MCP smoke, previous-stable
+rollback evidence и обязательный immutable tag по tracked version policy.
 
 Verify with: Feature branches проходят targeted gate; каждый sealed candidate
 проходит один integrated gate по validation key; default branch обновляется
@@ -27,10 +27,11 @@ required CI проверяет exact default SHA. Gate берётся из те�
 live acceptance и реально существующих scripts/configs: project-docs validator
 и git diff --check для docs, canonical code/security checks после появления
 кода, strict full-bundle OKF validation и exact MCP/client profiles при
-применимости. Release artifacts соответствуют exact SHA, smoke выполняется до
-tag/Linear Done, rollback опирается на сохранённый previous-stable receipt.
+применимости. Sites artifact соответствует exact SHA, web + MCP smoke
+выполняется до tag/Linear Done, rollback опирается на сохранённый
+previous-stable Sites receipt.
 
-Constraints: Один coordinator владеет Linear/default branch/deployments/tags.
+Constraints: Один coordinator владеет Linear/default branch/Sites/tags.
 Каждая issue выполняется свежим worker в отдельном worktree/feature branch.
 workers=1 по умолчанию; explicit N — верхняя граница; auto ограничивается
 runtime slots, графом независимости и ресурсами. Размер batch не равен числу
@@ -41,10 +42,11 @@ regressions; same-scope возвращать в исходную feature; system
 generation выносить на решение пользователю. Contract digest должен быть
 tracked до dispatch; смена версии активного run проходит migration checkpoint
 с переиспользованием доказанных artifacts. Worker никогда не меняет
-default/Linear/deployments/tags. Normal path: один integrated gate на validation
-key, один default push и, только для release, один deploy на required surface;
-receipts обновляются только на содержательных state transitions, external jobs
-проверяются bounded polling без streaming logs.
+default/Linear/Sites/tags. Normal path: один integrated gate на validation key,
+один default push и, только для release, один Sites deploy; отдельный production
+container или AWS запрещён без нового решения. Receipts обновляются только на
+содержательных state transitions, external jobs проверяются bounded polling
+без streaming logs.
 
 Blocked when: Тот же внешний доступ, неустранимая неоднозначность или
 необходимое продуктовое решение не позволяют продвинуть ни текущий batch, ни

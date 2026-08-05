@@ -22,6 +22,20 @@ compatibility profile только для клиента, на котором о
 Для первого прототипа документально подтверждён practicable путь с bearer
 token в Codex, но не end-to-end совместимость готового Mind Diary MCP с Codex
 или Claude Code: её ещё нужно проверить conformance tests.
+Production MVP требует положительный Codex test. Claude Code остаётся отдельным
+неблокирующим profile и не называется supported до собственного test.
+
+## Принятое project decision после проверки
+
+Внешние факты выше не выбирают deployment architecture автоматически. Для Mind
+Diary принято отдельное product/architecture решение: единственная production
+platform MVP — OpenAI Sites, а AWS/AgentCore отложен на post-MVP этап.
+
+Это решение не превращает непроверенный MCP-in-Sites в подтверждённую
+capability. Напротив, реальный Sites + MCP compatibility gate становится
+обязательным production criterion. Если он не проходит, MVP release блокируется
+до нового решения; fallback в отдельный container или AWS не выполняется
+автоматически.
 
 ## Проверенные факты
 
@@ -37,7 +51,10 @@ token в Codex, но не end-to-end совместимость готового
 ### OpenAI Plugins и Sites
 
 - Для company knowledge OpenAI по-прежнему требует стандартные read-only
-  `search`/`fetch` schemas и user-openable absolute URLs.
+  `search`/`fetch` schemas и user-openable absolute URLs. Standard
+  `search(query)` принимает одну query string и не имеет отдельного Mind
+  selector; поэтому user-scoped multi-Mind surface первого прототипа не может
+  честно считаться этим profile без отдельного routing/URL design.
 - Public plugin submission требует стабильный public HTTPS Streamable HTTP MCP
   endpoint; реальная проверка в ChatGPT developer mode остаётся обязательной.
 - Для authenticated production MCP plugin OpenAI описывает OAuth 2.1 с PKCE;
@@ -84,13 +101,20 @@ token в Codex, но не end-to-end совместимость готового
 - Первый prototype auth зафиксирован как revocable personal bearer token;
   OAuth 2.1 + PKCE оставлен production target.
 - Sites identity binding отделён от internal immutable `principal_id`, потому
-  что текущая документация не фиксирует stable external subject.
+  что текущая документация не фиксирует stable external subject. Initial email
+  binding нормализуется server-side; unknown email явно создаёт isolated account
+  без прежних прав либо идёт в manual recovery, без automatic relink/merge.
+- MCP первого прототипа зафиксирован как custom Mind-aware tool profile;
+  company-knowledge compatibility отложена до отдельного решения.
+- Production target MVP зафиксирован как Sites-only; AWS и отдельный MCP runtime
+  удалены из fallback path и оставлены post-MVP направлениями.
 
 ## Ограничения
 
 Это документальная сверка официальных источников, а не live deployment test.
 Она не подтверждает доступность Sites на текущем аккаунте, прохождение ChatGPT
-plugin review или развёртывание container в AgentCore.
+plugin review, рабочий Mind Diary MCP на Sites или будущий AgentCore
+deployment.
 
 ## Первичные источники
 

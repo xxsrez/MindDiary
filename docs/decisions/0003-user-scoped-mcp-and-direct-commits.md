@@ -19,7 +19,8 @@ workflow.
 - Первый MCP auth использует named revocable opaque bearer token, bound к
   principal. Secret имеет не менее 256 random bits, показывается один раз, на
   server хранится hash; default expiry 90 дней; scopes — `content:read` и
-  `content:write`.
+  `content:write`, причём write scope включает read и write-only token не
+  выпускается.
 - MCP content mutations commit-ятся сразу. `commit_changeset` принимает
   `expected_revision`, `idempotency_key` и atomic file operations; persisted
   draft, diff approval и approval artifact отсутствуют.
@@ -27,6 +28,9 @@ workflow.
 - `index.md` меняется специальной CAS operation; `log.md` — semantic
   `add_log_entry`, сохраняющей OKF newest-first/date grouping. Concept, index и
   log могут входить в одну atomic revision.
+- Idempotency record namespace — actor + Mind + operation + key. Он связывается
+  с canonical request hash: retry того же payload возвращает прежний result, а
+  повторное использование key с другим payload получает conflict.
 - Sites обслуживает control plane, MCP — content plane. Оба adapters используют
   общий application core/internal API; raw REST не становится customer API.
 - В первом prototype slice routes `/me` и `/{space_handle}` используются для
@@ -38,8 +42,14 @@ workflow.
 - Token не ограничивается одним Mind: актуальные role/visibility и scopes
   проверяются server-side на каждом call.
 - Membership, visibility, ownership, deletion и token management не входят в
-  content MCP и не могут быть вызваны инструкцией из corpus.
+  content MCP и не могут быть добавлены инструкцией из corpus. Prompt injection
+  всё ещё может склонить модель вызвать разрешённый content write; scope, ACL,
+  immutable history и audit ограничивают, а не устраняют этот risk.
 - Public/unlisted readers видят новую HEAD немедленно после successful commit.
+- Первый prototype использует custom Mind-aware `search(mind, ...)` и
+  `fetch(id)`. Он не заявляет OpenAI company-knowledge compatibility:
+  стандартный `search(query)` не несёт explicit Mind selector, а текущие
+  `okf://` identifiers не являются user-openable citation URLs.
 - Low expected writer count делает CAS/re-read/retry приемлемым baseline.
 - User оплачивает inference своего agent client; Mind Diary предоставляет MCP,
   storage и deterministic server operations без собственного LLM call в этом
@@ -53,6 +63,9 @@ workflow.
   connections и мешает агенту выбрать нужный Mind по запросу.
 - Autonomous cross-Mind retrieval: создаёт неявное смешивание ACL/provenance;
   для него нужен отдельный explicit use case.
+- Standard `search(query)` поверх всех доступных Minds: нарушает explicit
+  single-Mind boundary. Отдельный company-knowledge/read profile потребует
+  нового решения о scoping и user-openable URLs.
 - Persisted draft + manual approval каждого commit: добавляет лишний шаг в
   прототип и был прямо исключён из выбранного workflow.
 - Literal append `log.md`: нарушает newest-first/date-grouped структуру OKF.

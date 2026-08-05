@@ -10,8 +10,9 @@ Mind Diary — проект совместных облачных Minds (`Knowle
 user-scoped MCP даёт агенту доступ ко всем разрешённым Minds, но каждый вызов
 явно работает с одним corpus. Изменения сразу создают immutable revision через
 optimistic HEAD CAS.
-Практическая цель проекта — пройти путь от локального vertical slice и раннего
-web-прототипа до production-подобной архитектуры в AWS.
+Практическая цель проекта — пройти путь от local vertical slice до production
+MVP в OpenAI Sites. AWS/AgentCore остаётся post-MVP направлением, а не текущей
+release surface.
 
 Сейчас репозиторий содержит проверенный design bootstrap. Исполняемый MCP
 server, UI и облачная инфраструктура ещё не реализованы.
@@ -37,6 +38,8 @@ server, UI и облачная инфраструктура ещё не реал
 Базовый фичасет первого прототипа зафиксирован в ADR и спецификациях. Следующий
 этап — определить точные API schemas и реализовать local vertical slice:
 authenticated account bootstrap, `/me`, roles/visibility, user-scoped
-Streamable HTTP MCP, `search`/`fetch`, atomic content commits, history и OKF
-round-trip. До реализации в репозитории нет команды запуска, которую можно
-честно назвать рабочей.
+Streamable HTTP MCP с custom Mind-aware tools, atomic content commits, history и
+deterministic OKF 0.2 export, после чего весь обязательный slice должен пройти
+production gate в Sites. ZIP import и binary Asset transport в этот scope не
+входят. До реализации в репозитории нет команды запуска, которую можно честно
+назвать рабочей.

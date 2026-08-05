@@ -11,7 +11,7 @@ Mind Diary пока находится на стадии проектирова�
 2. [Базовая айдентика](brand.md) — `Mind Diary → Mind → Memory`, знак, палитра,
    типографика, голос и canonical assets.
 3. [Архитектура](architecture.md) — переносимое ядро, ревизии OKF, MCP surface,
-   Sites-прототип и целевая AWS-топология.
+   Sites-only MVP production и post-MVP AWS path.
 4. [Доменная модель и доступ](specs/domain-model.md) — KnowledgeSpace,
    содержимое, memberships, роли и owner invariants.
 5. [URL-адресация и персонализированное открытие](specs/personalized-opening.md)
@@ -31,6 +31,9 @@ Mind Diary пока находится на стадии проектирова�
 - [ADR-0003: user-scoped MCP и immediate commits](decisions/0003-user-scoped-mcp-and-direct-commits.md)
   — принят один MCP на пользователя, personal bearer token и atomic write без
   отдельного draft/approval.
+- [ADR-0004: OpenAI Sites как production target MVP](decisions/0004-sites-only-mvp-production.md)
+  — production release означает весь обязательный vertical slice на одном
+  Site; AWS и отдельный MCP runtime отложены.
 
 ## Исследования
 
@@ -59,8 +62,8 @@ High-level контур проекта закрыт следующими док�
   model;
 - URL-адресация и граница будущего ограниченного Personal Mind overlay — в
   personalized-opening specification;
-- границы компонентов, основные flows, MCP/web surfaces и deployment profiles —
-  в architecture;
+- границы компонентов, основные flows, MCP/web surfaces, Sites production и
+  post-MVP AWS path — в architecture;
 - authorization, non-enumeration private URLs, untrusted content и безопасные
   mutation boundaries — совместно в domain model, architecture и спецификации
   первого прототипа;

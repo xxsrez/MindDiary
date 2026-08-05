@@ -10,10 +10,11 @@
 - authenticated Sites account и автоматически созданный Personal Mind;
 - ordinary Minds с single Owner, invitations, roles и visibility;
 - user-scoped MCP для Codex/Claude Code без загрузки всего corpus;
-- individual-file OKF access и переносимый full-bundle import/export;
+- individual-file UTF-8 Markdown access и переносимый deterministic export;
 - immediate multi-file commits с immutable history и optimistic concurrency;
 - public/unlisted live-HEAD reads только для authenticated users;
-- ранний Sites prototype и переносимый AWS target без AWS SDK в domain core;
+- Sites-only MVP production и post-MVP AWS portability без AWS SDK в domain
+  core;
 - future path к bounded PersonalContext без передачи личного corpus target
   Mind.
 
@@ -63,8 +64,8 @@ KnowledgeSpace --HEAD/history-------> SpaceRevision
 SpaceRevision --materialize---------> OKFBundle
 ```
 
-`KnowledgeSpace` — service aggregate и access boundary. `OKFBundle` содержит
-только canonical files/assets одной revision; account, handle, ACL,
+`KnowledgeSpace` — service aggregate и access boundary. `OKFBundle` export
+содержит только canonical Markdown files одной revision; account, handle, ACL,
 invitations, tokens, idempotency results, audit и indexes — service metadata.
 
 Personal Mind использует тот же content/revision schema, но application commands
@@ -74,14 +75,18 @@ Personal Mind использует тот же content/revision schema, но app
 
 ### 1. OKF domain и codec
 
-Слой знает bundle paths, reserved `index.md`/`log.md`, frontmatter, provenance,
-trust/lifecycle fields, assets, legacy fallbacks и validation. Он:
+Слой первого прототипа знает Markdown paths, reserved `index.md`/`log.md`,
+frontmatter, provenance, trust/lifecycle fields и validation. Он:
 
 - принимает и возвращает исходные UTF-8 bytes;
 - сохраняет неизвестные types/fields при round-trip;
 - по умолчанию пишет OKF 0.2;
 - разделяет conformance errors и quality warnings;
 - не знает об MCP, HTTP, auth, Sites, AWS SDK, SQL или search engine.
+
+ZIP/local bundle import, binary Asset transport и legacy 0.1 migration не входят
+в этот slice. Будущий legacy reader обязан получить explicit migration policy
+и не может silently менять version/status semantics.
 
 ### 2. Application core
 
@@ -93,8 +98,8 @@ ports:
 - invitations, membership roles и ownership transfer;
 - visibility и public catalog;
 - token issue/revoke/authenticate;
-- import/export/validate bundle;
-- browse/search/fetch/history/checkpoints;
+- export/validate revision;
+- browse/search/fetch/history;
 - atomic `commit_changeset`;
 - future-proposal bounded PersonalContext/SpaceLanding;
 - outbox/index jobs и audit.
@@ -117,10 +122,10 @@ Core первого прототипа зависит от `MetadataStore`, `Obj
 ### 4. Infrastructure adapters
 
 - Local: filesystem/object directory, SQLite transactional metadata/FTS.
-- Sites experiment: D1 metadata и R2 canonical bytes/assets, если runtime и
-  binding support подтверждены live test.
-- AWS target: S3 canonical objects, DynamoDB transactional metadata/outbox и
-  optional OpenSearch Serverless derived index.
+- Sites MVP target: platform persistence, включая D1/R2 где применимо, только
+  после live-проверки bindings, quotas и нужной transactional semantics.
+- Post-MVP AWS adapters: S3 canonical objects, DynamoDB transactional
+  metadata/outbox и optional OpenSearch Serverless derived index.
 
 ## Identity и authentication
 
@@ -131,12 +136,17 @@ prototype создаёт свой opaque immutable `principal_id` и binding к 
 external identity. Email/display name не передаются клиентом как authority.
 
 Документация Sites сейчас описывает verified email header и optional full-name
-header, но не обещает стабильный external subject. Поэтому смена email,
-account relink и collision policy — обязательный implementation spike; нельзя
-молча использовать mutable email как durable primary key.
+header, но не обещает стабильный external subject. Initial binding использует
+server-normalized verified email, exact match возвращает existing principal.
+Unknown email нельзя отличить от смены email: explicit create получает новый
+изолированный principal без прежних прав, а recovery требует отдельной ручной
+проверки identity. Сервис никогда автоматически не relink/merge-ит accounts и
+не переносит access. Email не является durable authorization ID.
 
 Account bootstrap transaction создаёт principal, Personal Mind и owner binding.
 Retry использует external-binding idempotency и возвращает существующий account.
+Display name инициализируется из verified full name либо вводится при первом
+входе; его последующая смена обновляет metadata Personal Mind, а не content HEAD.
 
 ### MCP personal access tokens
 
@@ -159,7 +169,8 @@ Secret содержит не менее 256 random bits, показываетс�
 как `Authorization: Bearer`. Сервер сравнивает hash constant-time, проверяет
 expiry/revocation, строит `ActorContext` и затем на каждом tool call заново
 проверяет current Mind access. Token bound к principal, не Mind. Он не даёт
-control-plane capabilities и не логируется.
+control-plane capabilities и не логируется. `content:write` включает
+`content:read`; write-only token не выпускается.
 
 Codex configuration использует `bearer_token_env_var`. Для Claude Code и других
 clients support объявляется только после conformance test. OAuth 2.1 + PKCE и
@@ -171,7 +182,10 @@ authorization-server metadata остаются target для production/public p
 Обычный Mind хранит immutable `space_id`, immutable в prototype
 `space_handle`, derived `normalized_handle`, mutable `name` и
 `metadata_version`. Create atomically резервирует host-scoped handle и создаёт
-sole Owner. Router разрешает handle в ID до metadata/object read.
+sole Owner. Canonical grammar, normalization, reserved names, generic
+`handle_unavailable` и permanent retirement после deletion определены в
+[доменной модели](specs/domain-model.md#identity-и-адресация-mind). Router разрешает
+handle в ID до metadata/object read.
 
 `/me` — reserved route, разрешаемый только из authenticated `principal_id` в
 `personal_space_id`. Скрытый service handle Personal Mind не является
@@ -190,7 +204,9 @@ baseline_reader(visibility: public | unlisted)
 Reader после exact handle resolve, `public` — также через catalog. Baseline
 grant не создаёт membership. Owner-only visibility mutation увеличивает
 metadata/access epoch; перевод в private сразу инвалидирует caches и будущие
-reads non-members.
+reads non-members. `unlisted` означает только отсутствие в каталоге, не secret
+URL. Включение `public`/`unlisted` открывает live HEAD и всю immutable history;
+обратный switch не отменяет уже состоявшееся раскрытие.
 
 ## Membership, invitations и ownership
 
@@ -227,19 +243,19 @@ KnowledgeSpace
 │   ├── revision_id + monotonic revision_number
 │   ├── parent_revision_id
 │   ├── manifest: path, SHA-256, media_type, size
-│   ├── exact OKF files and source assets
+│   ├── exact UTF-8 OKF Markdown files
 │   └── committed_by, committed_at UTC, summary
-├── Checkpoint name -> exact revision_id
 └── derived index state per revision
 ```
 
 Manifest — service envelope, не нормативный OKF file. Export материализует
 только выбранное дерево. Object-store version IDs не заменяют domain revision.
 
-History resolver принимает HEAD, exact ID, UTC `as_of` или Checkpoint. Non-HEAD
-selector фиксирует `resolved_revision_id` и принудительно read-only. Каждый read
-проверяет current membership/baseline grant и token scope. Checkpoint immutable,
-не является OKF tag или publication pointer.
+History resolver принимает HEAD, exact ID или UTC `as_of`. `as_of` выбирает
+revision с максимальным number и `committed_at <= as_of`, без fallback на HEAD.
+Non-HEAD selector фиксирует `resolved_revision_id` и принудительно read-only.
+Каждый read проверяет current membership/baseline grant и token scope. Named
+checkpoints/tags не входят в первый прототип.
 
 ## Поток content write
 
@@ -277,6 +293,9 @@ Multi-file changeset all-or-nothing. `index.md` обновляется explicit 
 under HEAD CAS; automatic merge отложен. `add_log_entry` парсит canonical
 `log.md`, вставляет событие в newest-first/date-grouped позицию и снова
 валидирует файл. Idempotency result предотвращает duplicate revision/log entry.
+Ключ namespaced по `principal_id + space_id + operation + key` и связан с
+canonical request hash: тот же payload возвращает прежний result, другой
+payload с тем же key — `409 Idempotency Conflict`.
 
 ## Поток content read
 
@@ -310,9 +329,17 @@ client-supplied `principal_id`, `space_id` или role как источник �
 Private/unlisted enumeration защищена: unlisted не попадает в list без
 membership, private denied response не раскрывает metadata.
 
+Surface использует custom Mind-aware tools. Первый прототип не заявляет OpenAI
+company-knowledge compatibility: стандартный `search(query)` не передаёт Mind
+selector, а его results требуют user-openable web URLs, которых content surface
+не предоставляет. Такой profile требует отдельного design decision.
+
 Content MCP не содержит invitation, membership, visibility, ownership, deletion
-или token-management tools. Corpus считается недоверенным и не может инициировать
-эти operations. Tool annotations — UX metadata, а не security boundary.
+или token-management tools. Corpus не может расширить server scopes или получить
+эти operations. Но prompt injection способен склонить модель вызвать уже
+разрешённый content write; explicit write scope, current ACL, immutable history
+и audit ограничивают, а не устраняют этот residual risk. Tool annotations — UX
+metadata, а не security boundary.
 
 ## Sites control plane и internal API
 
@@ -321,11 +348,11 @@ list/create/rename, catalog, visibility, invitations, roles, transfer, deletion
 и personal tokens. Работа с OKF files происходит через MCP; browser может
 показывать лишь status/metadata, необходимые для управления.
 
-Первый deployment предпочтительно содержит Web adapter, MCP adapter и core в
-одном portable application, если Sites runtime действительно поддержит
-Streamable HTTP semantics. Внутренние use-case routes при этом не публикуются.
-Если нужен split deployment, Web/MCP вызывают service-authenticated internal
-REST, не прокидывая user bearer token downstream.
+Production deployment MVP размещает Web adapter, MCP adapter и core в одном
+OpenAI Site. Внутренние use-case routes при этом не публикуются. Если Sites не
+поддержит required Streamable HTTP или persistence semantics, production
+release блокируется до нового архитектурного решения; split deployment не
+включается как автоматический fallback.
 
 ## Personalization boundary
 
@@ -350,29 +377,34 @@ explicit target Mind. General cross-Mind search/synthesis требует нов�
   и FTS index.
 - Filesystem/object directory хранит content-addressed canonical objects.
 - Integration suite проверяет account, roles/visibility, history, concurrent
-  commits, import/export и MCP lifecycle.
+  commits, export и MCP lifecycle.
 
-### OpenAI Sites prototype
+### OpenAI Sites MVP production
 
-- Sites — подтверждённый host web/admin UI с Sign in with ChatGPT.
+- Sites — единственная production platform текущего MVP и подтверждённый host
+  web/admin UI с Sign in with ChatGPT.
 - D1/R2 используются только после проверки bindings, quotas и atomicity нужных
   operations.
 - Streamable HTTP MCP в том же Sites deployment остаётся compatibility
   experiment, а не подтверждённой возможностью.
-- Gate включает real Codex/Claude clients, stable HTTPS endpoint, streaming,
-  bearer forwarding/configuration, protocol lifecycle и persistence across
-  deployments.
-- При провале gate MCP запускается отдельным portable container, Sites остаётся
-  control UI.
+- Gate включает real Codex client, stable HTTPS endpoint, streaming, bearer
+  forwarding/configuration, protocol lifecycle и persistence across deployments.
+  Claude Code и другие clients получают собственную non-blocking gate до
+  заявления их поддержки.
+- Production release требует успешных web/control и MCP flows одного exact
+  Sites version/deployment. При провале gate релиз блокируется; отдельный
+  portable runtime не создаётся без нового решения.
 
-### AWS target
+### Post-MVP AWS path
 
-- Portable container в Bedrock AgentCore Runtime.
+- Будущий portable container в Bedrock AgentCore Runtime.
 - S3 для canonical objects; DynamoDB conditional writes для HEAD, metadata,
   invitations, tokens metadata и outbox.
 - Optional OpenSearch Serverless только как derived index после benchmark.
 - IAM least privilege, private service access, OTEL/CloudWatch без content body.
 - Тот же domain/integration suite, что local profile.
+- Этот profile не входит в MVP release, его deployment требует нового принятого
+  решения.
 
 ## Observability и audit
 
@@ -381,32 +413,39 @@ invitation outcomes, token issuance/revocation и deletion counts. Logs/traces �
 содержат concept/source bodies, PersonalContext, raw email where avoidable,
 token secret/hash, presigned URL или private search query.
 
-Каждая account, ownership, membership, visibility, deletion и successful
-content commit operation создаёт audit event с opaque actor/subject IDs, target
-`space_id`, request/idempotency ID, outcome и safe metadata. OKF `log.md` не
-заменяет audit log.
+Каждая account, ownership, membership, visibility и successful content commit
+operation создаёт audit event с opaque actor/subject IDs, target `space_id`,
+request/idempotency ID, outcome и safe metadata. Whole-Mind hard deletion
+удаляет target-linked audit/idempotency records вместе с aggregate; остаётся
+только non-linkable retired-handle marker, без forensic deletion receipt. Это
+сознательная потеря post-delete accountability в delete-all прототипе. Account
+deletion также удаляет identity/profile, но commits в Minds других Owners
+сохраняют opaque non-PII `deleted-principal` tombstone. OKF `log.md` не заменяет
+audit log.
 
-## Недоверенное content и import boundary
+## Недоверенное content boundary
 
 - ACL разрешается до object/index read.
-- Concept/source text не является system instruction и не расширяет tools или
-  scopes.
-- Import блокирует path traversal, absolute paths, symlinks, decompression
-  bombs, invalid encoding и quota overflow.
+- Concept/source text не расширяет server tools или scopes; модель всё ещё может
+  ошибочно интерпретировать его как инструкцию в пределах разрешённых tools.
+- Changeset принимает только canonical relative Markdown paths и valid UTF-8,
+  ограничивает размер/число operations и отклоняет reserved-path misuse.
 - Web renderer не исполняет embedded HTML/script без isolation/sanitization.
-- Большие bytes передаются через short-lived object intents.
+- Full export передаётся через short-lived download URL с повторной проверкой
+  доступа; upload intent в первом прототипе отсутствует.
 
 ## Риски и открытые вопросы
 
-- Какой stable external identifier даст Sites для account relink помимо email?
-- Пройдёт ли Sites реальный Streamable HTTP MCP gate или потребуется отдельный
-  runtime?
+- Даст ли Sites stable external identifier, позволяющий позже заменить ручной
+  fail-closed account recovery безопасным automatic relink?
+- Пройдёт ли Sites реальный Streamable HTTP MCP gate? До положительного
+  evidence это blocker MVP production release, а не основание автоматически
+  выбрать отдельный runtime.
 - Какой exact token hash/KDF и lookup strategy дают приемлемую latency без
   хранения recoverable secrets?
 - Как реализовать immediate full deletion и доказать удаление replicated/index
   data до появления production retention model?
-- Нужны ли позже soft delete/recovery и что делать с collaborators owned Mind
-  при account deletion?
+- Нужны ли позже soft delete/recovery и formal privacy-retention policy?
 - Когда сложности конфликтов оправдают structured index merge вместо current
   HEAD CAS/retry?
 - Какие personal categories и consent model допустимы для personalization?

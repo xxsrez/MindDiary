@@ -156,7 +156,7 @@ DECISION: tiny-direct-fix | reopen-feature | new-linear-bug
 ACTION: <fix/exclude/revert/rollback/block>
 LINEAR_BUG: <identifier/id или none>
 SOURCE_ISSUES: <identifiers или none>
-PREVIOUS_STABLE: <surface=tag/sha/artifact/deployment> | none
+PREVIOUS_STABLE: tag=<tag>; sha=<full>; sites_version_id=<id> | none
 EVIDENCE: <bounded reference, не raw log>
 NEXT: <одно действие>
 UPDATED_AT: <timestamp>
@@ -184,12 +184,15 @@ VALIDATION: run=<pass/fail+timestamp> | reused=<receipt/key> | none
 PREPUSH_CI: sha=<full>; run/check=<id|not-available>; status=<terminal|none>
 MAIN: origin/<default>=<full>; cas=<pass/fail>
 CI: sha=<full>; run/check=<id|none>; status=<terminal|none>
-DEPLOYMENTS: not-applicable(profile=<design|build>) |
-             <surface=artifact_id/digest; deployment_id/status/url>
-LIVE_SMOKE: not-applicable(profile=<design|build>) | <surface flows+timestamp+result>
+SITES: not-applicable(profile=<design|build>) |
+       project=<id>; version=<number>; version_id=<id>; archive_sha256=<digest>
+DEPLOYMENT: not-applicable(profile=<design|build>) |
+            id=<id>; status=<terminal>; url=<url>
+LIVE_SMOKE: not-applicable(profile=<design|build>) |
+            web=<flows+timestamp+result>; mcp=<profiles+timestamp+result>
 PRODUCT: tag=<annotated tag@sha | not-applicable | none>
 PREVIOUS_STABLE: not-applicable(profile=<design|build>) |
-                 <surface=tag/sha/artifact/deployment> | none
+                 tag=<tag>; sha=<full>; sites_version_id=<id> | none
 DEFECTS: <DEFECT_CANDIDATE keys/signatures или none>
 LINEAR_DONE: <identifiers или none>
 GAPS: <точные недоказанные границы или none>
@@ -214,15 +217,15 @@ integrated gate и exact default/CI state.
 
 1. remote Git refs и annotated tags;
 2. CI для exact SHA;
-3. artifacts/deployments каждой configured release surface;
+3. Sites saved versions, artifact digest и deployments;
 4. live Linear scope, claims и receipts;
 5. локальные branches/worktrees/caches.
 
-Refs, CI и deployment facts авторитетнее пересказа в comment; Linear определяет
+Refs, CI и Sites facts авторитетнее пересказа в comment; Linear определяет
 актуальный scope; локальное состояние — только подсказка. При расхождении
 обнови receipt фактическими IDs/status и продолжи с первой незавершённой
-стадии. Переиспользуй найденные feature refs, CI result, artifacts,
-deployments и tag вместо создания дублей. Никогда не восстанавливай secret из
+стадии. Переиспользуй найденные feature refs, CI result, Sites version,
+deployment и tag вместо создания дублей. Никогда не восстанавливай secret из
 receipt или лога.
 
 При несовпадении `CONTRACT.digest` сначала поставь `STATUS: migrating`,

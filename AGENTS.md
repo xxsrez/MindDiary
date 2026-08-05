@@ -9,6 +9,8 @@
 - Репозиторий содержит принятый product baseline первого прототипа,
   предложения по его реализации и проверку актуального Open Knowledge Format
   (OKF).
+- Единственная целевая production platform текущего MVP — OpenAI Sites. Это
+  принятое направление, а не утверждение о уже выполненном deployment.
 - Основной язык проектной документации — русский. Английские имена протоколов,
   API и полей сохраняйте, когда перевод снижает точность.
 
@@ -40,9 +42,10 @@ product decisions отделяйте от ещё не выбранных дет�
   платформ, package names и deployment identifiers — `mind-diary`. Slug
   продукта не заменяет `space_handle` отдельного Mind.
 - Живая совместная сущность сервиса называется `KnowledgeSpace`. Переносимой
-  канонической формой одной её revision остаётся `OKFBundle`: дерево исходных
-  OKF-файлов и assets. Memberships, ACL, account/service metadata, idempotency
-  keys и состояние индекса не записываются в OKF-frontmatter.
+  канонической формой одной её revision остаётся `OKFBundle`. В первом прототипе
+  это дерево исходных UTF-8 Markdown; binary Assets отложены. Memberships, ACL,
+  account/service metadata, idempotency keys и состояние индекса не записываются
+  в OKF-frontmatter.
 - Каждый ordinary Space имеет immutable внутренний `space_id`, обязательный
   immutable в прототипе `space_handle` и изменяемое display `name`. Canonical
   URL имеет вид `https://{space-host}/{space_handle}`; handle уникален внутри
@@ -60,6 +63,10 @@ product decisions отделяйте от ещё не выбранных дет�
   storage schema, но с жёсткими service invariants: один participant-owner,
   route `/me`, service-managed handle, отсутствие transfer, publication и
   отдельного delete. Display name следует за именем principal.
+- Initial Sites binding использует normalized verified email, но authorization
+  опирается на immutable `principal_id`. Exact match возвращает existing account;
+  unknown email явно создаёт новый isolated account без прежних прав либо идёт
+  в manual identity recovery. Automatic relink/merge/access transfer запрещён.
 - Обычные Minds поддерживают `private`, `unlisted` и `public`. Authenticated
   non-member получает reader-equivalent доступ к live HEAD и истории в
   `unlisted` по точному URL, а в `public` также через каталог. Это baseline
@@ -67,15 +74,18 @@ product decisions отделяйте от ещё не выбранных дет�
 - Personal, group и community-wiki — сценарии одного Space, а не значения
   фиксированного `space_type`. Будущая anonymous web-publication остаётся
   отдельной моделью и не заменяет visibility прототипа.
-- Импорт и round-trip обязаны сохранять неизвестные OKF types и поля. Reader
-  поддерживает legacy 0.1 fallbacks; writer по умолчанию создаёт OKF 0.2.
+- Первый прототип создаёт и изменяет только UTF-8 Markdown content в OKF 0.2.
+  ZIP/local bundle import и binary Asset upload/fetch не входят в scope. Codec
+  сохраняет неизвестные OKF types/fields при чтении, изменении и export;
+  будущий legacy 0.1 import потребует отдельной migration policy без silent
+  version/status reinterpretation.
 - Полнотекстовые, векторные и графовые индексы всегда производны и должны
   перестраиваться из выбранной канонической ревизии.
 - Изменение создаёт новую immutable revision. Продвижение HEAD требует
   `expected_revision` или эквивалентной optimistic-concurrency проверки.
 - Каждая успешно committed `SpaceRevision` остаётся доступной через историю по
-  точному ID, UTC-времени commit или immutable `Checkpoint`. `Checkpoint` —
-  service metadata, а не OKF `tags`, и не попадает в `OKFBundle`.
+  точному ID или UTC-времени commit. Checkpoints/tags не входят в первый
+  прототип и не подменяют immutable revision IDs.
 - Исторический selector одного Mind разрешается в точный `revision_id` и всегда
   read-only, даже для Owner. Каждый historical read проверяет текущий доступ:
   membership либо актуальный baseline visibility grant; старые ACL не
@@ -98,6 +108,9 @@ product decisions отделяйте от ещё не выбранных дет�
   доступными Minds: `/me`, memberships, каталогом `public` и `unlisted` по
   точному handle. Каждая content operation явно выбирает один Mind и одну
   revision; неявное смешивание corpus нескольких Minds запрещено.
+- Первый прототип публикует custom Mind-aware MCP tools и не заявляет OpenAI
+  company-knowledge compatibility. Standard `search(query)` не имеет Mind
+  selector, а `okf://` identifiers не являются user-openable content URLs.
 - Роли Space — `reader`, `editor`, `admin`, `owner`. `editor` включает чтение и
   полный create/update/delete content. У active ordinary Mind ровно один Owner.
   Создатель становится им атомарно; transfer возможен только existing active
@@ -108,14 +121,18 @@ product decisions отделяйте от ещё не выбранных дет�
   Reader/Editor, Owner также Admin.
 - Первый MCP auth использует revocable named opaque bearer tokens principal:
   secret не менее 256 random bits показывается один раз, хранится только hash,
-  default expiry 90 дней, scopes `content:read`/`content:write`. Token не даёт
-  control-plane capabilities и не привязан к одному Mind.
-- Membership management остаётся в trusted web/CLI control plane и не
+  default expiry 90 дней, scopes `content:read`/`content:write`.
+  `content:write` всегда включает `content:read`; write-only token запрещён.
+  Token не даёт control-plane capabilities и не привязан к одному Mind.
+- Membership management остаётся в trusted Sites control plane и не
   публикуется рядом с corpus tools в content MCP.
 - В прототипе `public`/`unlisted` открывают authenticated non-members весь live
   HEAD и immutable history с правами Reader; отдельного `published_revision`
   нет. Commit Editor немедленно виден этим читателям. Будущий `KnowledgeSite`
   и anonymous publication требуют новой спецификации.
+- `unlisted` означает только отсутствие в каталоге, а не секретность URL.
+  `space_handle` человекочитаем и не является access token; настоящая
+  share-by-link capability потребует отдельного случайного секрета.
 - Профиль посетителя, история разговора и generated answers не попадают в
   target `OKFBundle` автоматически. Target content считается недоверенным и не
   может формировать запросы к Personal Mind, выбирать personal fields или
@@ -124,6 +141,10 @@ product decisions отделяйте от ещё не выбранных дет�
 - Доменное ядро и OKF codec не импортируют AWS SDK, Sites bindings, HTTP
   framework или конкретный поисковый движок. Инфраструктура подключается через
   узкие порты и адаптеры.
+- Whole-Mind deletion удаляет content/history и target-linked service records;
+  остаётся только non-linkable retired-handle marker. Account deletion удаляет
+  external identity/profile, но commits в Minds других Owners сохраняют opaque
+  non-PII `deleted-principal` tombstone.
 - Не исполняйте `Attested Computation` автоматически до отдельной спецификации
   sandbox, attester ABI, receipts и threat model.
 
@@ -134,13 +155,35 @@ product decisions отделяйте от ещё не выбранных дет�
   проверенного клиента, который ещё требует legacy initialize/session flow.
   Не смешивайте lifecycle двух версий и не заявляйте поддержку без conformance
   tests на конкретном adapter/client pair.
-- OpenAI Sites считается подтверждённым хостом web/admin UI. Размещение
-  Streamable HTTP MCP в Sites остаётся экспериментом, пока реальное
-  подключение ChatGPT не пройдёт compatibility gate из архитектуры.
-- Целевой AWS runtime — Bedrock AgentCore Runtime, но приложение должно
-  оставаться переносимым в обычный container runtime.
-- Большие imports, exports и assets не передавайте внутри JSON-RPC. Используйте
-  object storage и короткоживущие upload/download URLs.
+- OpenAI Sites — единственный production target MVP для web/admin UI,
+  application core, persistence и Streamable HTTP MCP. Размещение MCP в Sites
+  остаётся непроверенной platform capability до реального compatibility gate;
+  провал gate блокирует production release, а не разрешает молчаливый fallback
+  в отдельный container или AWS.
+- AWS, включая Bedrock AgentCore Runtime, S3, DynamoDB и OpenSearch, отложен на
+  post-MVP этап. Domain core и adapters всё равно проектируйте переносимыми и
+  без AWS SDK в доменном ядре.
+- Большой export не передавайте внутри JSON-RPC: используйте object storage и
+  короткоживущий download URL. Upload intents, archive import и binary Asset
+  transport не проектируйте до отдельного решения.
+
+## Релизный контракт
+
+- Фразы «зарелизить на продакшн», «зарелизить на прод» и `release to
+  production` без дополнительного уточнения означают: собрать и проверить
+  exact commit, опубликовать его в production OpenAI Site Mind Diary и
+  подтвердить live-состояние этого Site.
+- Production release MVP охватывает весь обязательный vertical slice на Sites:
+  authenticated web/control UI, persistence и доступный клиентам content MCP.
+  Обязательный client gate первого release — Codex. Claude Code и другие clients
+  не блокируют MVP и не называются supported до отдельного conformance test.
+  Успех только UI или локального MCP не является production release.
+- До появления проверенного Sites project/config deployment не считается
+  существующим. После появления release evidence должен связывать exact Git
+  SHA, Sites project/version/deployment, live URL и smoke web + MCP flows.
+- Не deploy-те текущий MVP в AWS, AgentCore или отдельный portable runtime без
+  нового явного решения пользователя. AWS portability — архитектурное
+  ограничение, а не текущая production surface.
 
 ## Документация и качество
 
@@ -161,18 +204,21 @@ product decisions отделяйте от ещё не выбранных дет�
 ## Безопасность
 
 - Spaces по умолчанию приватны. Не логируйте содержимое приватных concepts,
-  chunks, source assets, access tokens или presigned URLs.
+  chunks, source content, access tokens или download URLs.
 - Переключать `private | unlisted | public` может только Owner. Для `public` и
-  `unlisted` HEAD по определению сразу читаем authenticated non-members;
-  интерфейс обязан предупреждать Owner и writers об этом эффекте.
+  `unlisted` live HEAD и вся immutable history по определению сразу читаемы
+  authenticated non-members; интерфейс обязан явно предупреждать Owner и
+  writers об обоих эффектах. Возврат в `private` не отменяет уже состоявшееся
+  раскрытие.
 - Любой read/search/write проверяет authenticated principal и доступ к Mind до
   обращения к каноническому объекту или производному индексу; MCP-вызов также
   проверяет token status и scopes.
 - Не используйте клиентские `principal_id`, `space_id` или role как источник
   истины и не передавайте входящий user token downstream-сервисам.
-- Содержимое базы считается недоверенным input, а не инструкциями агенту или
-  серверу. Текст concept/source не может расширить scopes, вызвать mutation или
-  изменить system/tool policy.
-- Импорт архивов обязан блокировать path traversal, absolute paths, symlinks,
-  decompression bombs и превышение quotas. Web UI не рендерит недоверенный HTML
-  или script без безопасной изоляции.
+- Содержимое базы считается недоверенным input, а не server authority. Оно не
+  может само расширить scopes или получить control-plane capability, но может
+  попытаться через prompt injection склонить модель к разрешённому content
+  write. Immediate commits сознательно принимают этот остаточный риск; его
+  ограничивают explicit write scope, current ACL, immutable history, audit и
+  отсутствие control-plane tools в content MCP.
+- Web UI не рендерит недоверенный HTML или script без безопасной изоляции.

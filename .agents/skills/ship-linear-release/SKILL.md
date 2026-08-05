@@ -3,9 +3,9 @@ name: ship-linear-release
 description: >-
   Start or continue Mind Diary's autonomous delivery of the current Linear
   milestone. Coordinate one or many isolated issue workers, feature worktrees,
-  batched integration, defect triage, exact-SHA verification, capability-driven
-  publication or deployment, rollback, and Linear closure. Support the current
-  design-first bootstrap without claiming that service code, CI, Sites, AWS, or
+  batched integration, defect triage, exact-SHA verification, OpenAI Sites
+  production deployment, rollback, and Linear closure. Support the current
+  design-first bootstrap without claiming that service code, CI, Sites, or
   production already exists. Interpret worker count from nearby free-form
   language as well as workers=N/auto. Use only when the user explicitly invokes
   $ship-linear-release or asks to run this current-milestone delivery skill. Do
@@ -26,8 +26,9 @@ Mind Diary находится в design-first bootstrap: сервисный ко
   validator и diff; никаких выдуманных build/deploy/smoke/tag;
 - `build` — code без release contract: доступные code/security/integration
   gates, CI и default branch;
-- `release` — tracked deployable surfaces, build/test, smoke/rollback и version
-  policy; только этот профиль разрешает production deployment и tag.
+- `release` — tracked OpenAI Sites project/config, build/test, web + MCP
+  smoke/rollback и version policy; только этот профиль разрешает production
+  deployment и tag.
 
 Отсутствие release-профиля не мешает закрыть design/build issue, если её live
 acceptance criteria полностью доказаны. Оно мешает только заявлениям о
@@ -39,8 +40,8 @@ Root — единственный coordinator; issue workers реализуют 
 в начале каждого goal-хода.
 
 Нормальный путь — contract preflight, feature-only workers, sealed candidate,
-integrated gate, доступный pre-push CI и один default push. В `release` — не
-более одного deploy на surface; не выпускай каждую issue отдельно.
+integrated gate, доступный pre-push CI и один default push. В `release` — один
+Sites deploy; не выпускай каждую issue отдельно.
 
 ## Понять вызов
 
@@ -105,9 +106,9 @@ release:
 - автоматически создавать deduplicated linked Bug, назначать на `me` и при
   необходимости добавлять его в тот же milestone;
 - fast-forward обновлять default branch;
-- при `delivery_profile=release` сохранять и deploy только уже
-  сконфигурированные release artifacts, выполнять documented production smoke
-  и создавать новый immutable annotated tag по tracked version policy.
+- при `delivery_profile=release` сохранить/deploy exact artifact только в
+  configured production OpenAI Site, проверить live web + MCP и создать новый
+  immutable annotated tag по tracked version policy.
 
 Это разрешение не распространяется на продуктовые решения, секреты,
 force-push, переписывание истории, другой milestone/project или изменение
@@ -119,7 +120,7 @@ force-push, переписывание истории, другой milestone/pr
 1. До dispatch и sealing зафиксируй capability boundary текущей среды:
    documented repo commands, docs validator, toolchain, CI, browser/UI paths,
    OKF fixtures/validator, MCP Inspector и client profiles, credentials и
-   configured Sites/container/AWS release surfaces.
+   configured production OpenAI Sites project/bindings.
 2. В hard gate включай все доступные проверки, необходимые live acceptance и
    tracked contract. Используй сильнейшие безопасные substitutes: focused
    unit/property/security tests, integration tests, protocol conformance,
@@ -143,7 +144,7 @@ Coordinator единолично владеет:
 
 - live Linear scope, scheduling, states, claims, Bugs и receipts;
 - созданием и удалением task-owned worktrees;
-- integration candidate, default branch, configured deployments, smoke и tags;
+- integration candidate, default branch, Sites deployment, smoke и tags;
 - defect attribution, исключением feature, rollback и release ledger.
 
 Каждый свежий issue worker владеет только:
@@ -166,8 +167,8 @@ run только по текущему tracked контракту.
 ## Ограничить orchestration cost
 
 1. Нормальный batch делает один полный integrated gate на validation key и в
-   `release` не более одного deploy каждой configured surface. Исключения —
-   доказанный rollback и новая source generation после исправления.
+   `release` один Sites deploy. Исключения — доказанный rollback и новая source
+   generation после исправления.
 2. Не используй streaming watcher, который многократно печатает полный job
    tree или лог. Проверяй внешний job компактным JSON/status snapshot не чаще
    одного раза в 45–60 секунд; полный failing log читай один раз и только
@@ -190,8 +191,8 @@ run только по текущему tracked контракту.
 
 1. Прочитай текущие `AGENTS.md` и все обязательные документы из него. Затем
    проверь Git default branch, remotes, status, refs/tags и только реально
-   существующие build/CI/release configs (`.openai/hosting.json`, container/AWS
-   manifests и аналогичные). Не меняй dirty пользовательский checkout.
+   существующие build/CI/Sites configs, включая `.openai/hosting.json`. Не
+   меняй dirty пользовательский checkout.
    Зафиксируй честный `delivery_profile`; для текущего design-first tree по
    умолчанию это `design`, пока tracked implementation/release contract не
    докажет иное.
@@ -214,8 +215,7 @@ run только по текущему tracked контракту.
    - Активный другой goal не заменяй и не завершай.
 5. Восстанови прерванный run и получи свежий scope в порядке из
    [receipts.md](references/receipts.md): remote refs/tags -> exact-SHA CI ->
-   configured deployment surfaces -> Linear scope/receipts -> локальные
-   worktrees.
+   Sites versions/deployments -> Linear scope/receipts -> локальные worktrees.
    - Если сохранённый `contract_digest` отличается от текущего, сначала войди
      в migration checkpoint: запрети новый dispatch, сопоставь старые
      commits/refs/checks/deployments с фактическим state и сохрани пригодные
@@ -424,28 +424,26 @@ batch без неё и выпусти независимые issue. Серьёз
    неизменном validation key не повторяй локальный full suite. Отсутствие
    configured CI запиши как `none`, не выдумывай check.
 4. Для `design` и `build` не создавай deployment или tag. Запиши
-   `DEPLOYMENTS: not-applicable(profile=<profile>)` и не называй batch
+   `SITES/DEPLOYMENT: not-applicable(profile=<profile>)` и не называй batch
    production release. После доказательства acceptance, integrated gate и
    exact default/CI state можно перейти к Linear closure.
-5. Для `release` перечисли configured surfaces из tracked repo/runbook до
-   первой мутации. Типичный Mind Diary release может иметь отдельные Sites
-   web/control и portable MCP runtime surfaces; не считай их одним deployment
-   и не заявляй совместимость второй поверхности по успеху первой.
-6. Для каждой surface найди или один раз создай artifact exact validated SHA,
-   deploy его по документированному adapter-у и продолжай по найденным opaque
-   IDs после прерывания. Затем выполни surface-specific live smoke и требуемые
-   cross-surface identity/auth/MCP compatibility gates.
-7. До первого deploy установи exact `previous_stable` и проверяемый rollback
-   artifact каждой surface. Если его нельзя доказать, остановись до deploy за
-   одним продуктовым решением. Не создавай baseline по предположению.
-8. Только после успешного smoke всех required surfaces создай и push immutable
+5. Для `release` требуй один configured production OpenAI Site из tracked
+   `.openai/hosting.json`/runbook. Web/control, persistence и `/mcp` — flows
+   одного Sites release; отдельный container или AWS запрещён без нового
+   решения.
+6. Найди или один раз создай Sites artifact exact validated SHA, deploy его и
+   продолжай по найденным version/deployment IDs после прерывания. Затем
+   выполни live authenticated web/control и required MCP client gates.
+7. До deploy установи exact `previous_stable` Sites version и rollback
+   artifact. Если их нельзя доказать, остановись до deploy; не создавай
+   baseline по предположению.
+8. Только после успешного Sites web + MCP smoke создай и push immutable
    annotated tag на exact candidate SHA без force, если tracked version policy
    требует tag. Не выводи SemVer из произвольного имени milestone. Если policy
    отсутствует или имя нельзя однозначно сопоставить version, запроси решение
    до первого deploy. Существующий tag не двигай, не удаляй и не переиспользуй.
-9. В annotation запиши milestone, profile, batch ID, exact SHA, issue
-   identifiers, deployment/artifact IDs and digests, previous stable artifacts
-   и live smoke.
+9. В annotation запиши milestone, batch ID, exact SHA, issue identifiers, Sites
+   version/deployment/artifact digest, previous stable и web + MCP smoke.
 10. Upsert-ни `BATCH_RELEASE_RECEIPT`; затем обнови issue receipts и переведи
    только issue с полностью доказанным live acceptance в существующий
    completed-state (`Done`, если так он называется). После свежего milestone
@@ -462,9 +460,8 @@ idempotently продолжи тот же SHA/tag.
 
 1. не создавай новый stable tag и не ставь issue `Done`;
 2. зафиксируй failed deployment/version как evidence;
-3. redeploy exact saved artifact каждой затронутой surface из
-   `previous_stable` receipt;
-4. проверь предыдущие критические production flows и cross-surface contract;
+3. redeploy exact saved Sites version из `previous_stable` receipt;
+4. проверь предыдущие критические web/control и MCP production flows;
 5. создай/верни defect в работу и выпусти исправление новым commit, candidate,
    artifact/deployment и новой immutable version по tracked policy.
 
@@ -482,7 +479,7 @@ Checkpoint должен содержать только:
 
 ```text
 batch -> profile -> issues -> candidate/default SHA -> validation key ->
-deployments/live/tag/rollback -> defects/gaps -> remaining counts
+Sites/live/tag/rollback -> defects/gaps -> remaining counts
 ```
 
 Перед следующим batch получи новый Linear snapshot. Goal заверши только после

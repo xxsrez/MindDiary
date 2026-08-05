@@ -1,10 +1,10 @@
 # Пакетная доставка milestone
 
 Читай этот файл при сборке нескольких готовых feature refs в один проверенный
-batch. Coordinator единолично владеет default branch, Linear, configured
-deployments и release tags.
+batch. Coordinator единолично владеет default branch, Linear, production Sites
+deployment и release tags.
 Workers владеют только своими worktree/branch, реализацией, commit и
-`FEATURE_RECEIPT`; они не меняют default branch, Linear, deployments и tags.
+`FEATURE_RECEIPT`; они не меняют default branch, Linear, Sites и tags.
 
 ## Сформировать batch
 
@@ -54,9 +54,8 @@ Workers владеют только своими worktree/branch, реализа
 Повторно используй успешный integrated gate только при точном совпадении
 `source_tree_oid + gate_contract_hash + environment_fingerprint` и наличии
 durable evidence. Это переиспользует только validation: exact-SHA CI и
-default-branch CAS всегда проверяются для текущего batch; deployment/live smoke
-выполняются заново только для `delivery_profile=release` и каждой required
-surface.
+default-branch CAS всегда проверяются для текущего batch; Sites deployment/live
+smoke выполняются заново только для `delivery_profile=release`.
 
 Для generation без подходящего evidence один раз выполни полный integrated gate
 на exact candidate tree. Построй его из обязательных правил `AGENTS.md`, live
@@ -67,8 +66,8 @@ UI flows и version-specific MCP/client conformance при применимос�
 
 Недоступную external/client/platform проверку зафиксируй как `not-available`.
 Она совместима с `gate-passed` только если live acceptance и выбранный profile
-не требуют именно этого evidence. Не подменяй требуемый Sites/AgentCore/client
-gate локальным smoke и не заявляй compatibility по отсутствию ошибки.
+не требуют именно этого evidence. Не подменяй требуемый Sites/client gate
+локальным smoke и не заявляй compatibility по отсутствию ошибки.
 
 При провале классифицируй причину:
 
@@ -127,15 +126,15 @@ CI exact default SHA остаётся обязательным после push.
    `not-applicable` и не создавай их. После полного доказательства acceptance,
    integrated gate, default ref и configured CI можно закрыть вошедшие issue;
    такой batch называется `integrated`, а не production release.
-5. Для `delivery_profile=release` перечисли required surfaces из tracked repo
-   и runbook. Mind Diary может иметь отдельные Sites web/control и portable MCP
-   runtime surfaces; каждая требует своего artifact, deployment ID, live smoke
-   и rollback evidence.
-6. Для каждой surface найди существующий artifact этого SHA или один раз создай
-   его из exact validated build, затем deploy ровно один раз. Повторный ход
-   продолжай по сохранённым opaque IDs, не создавая дубликаты.
-7. Дождись terminal success всех required surfaces, затем выполни их live smoke
-   и cross-surface identity/auth/MCP gates из release contract.
+5. Для `delivery_profile=release` разреши exact production OpenAI Site по
+   tracked `.openai/hosting.json` и runbook. Web/control, persistence и `/mcp`
+   — обязательные flows одного Sites release; отдельный container и AWS не
+   являются fallback.
+6. Найди существующий Sites artifact этого SHA или один раз создай его из exact
+   validated build, затем deploy ровно один раз. Повторный ход продолжай по
+   сохранённым version/deployment IDs, не создавая дубликаты.
+7. Дождись terminal success и выполни live authenticated web/control, storage
+   persistence и required MCP client gates одного Site.
 8. Только после успешного live smoke создай immutable annotated tag на exact
    `candidate_sha`, если tracked version policy требует tag. Не выводи SemVer
    из произвольного имени milestone; при отсутствии однозначной policy спроси
@@ -145,17 +144,17 @@ CI exact default SHA остаётся обязательным после push.
    milestone snapshot очисти только task-owned worktrees/refs, чьи commits уже
    достижимы из default branch или immutable tag.
 
-До первого нового deploy определи `previous_stable` и exact rollback artifact
-для каждой surface. Если связь с reachable Git SHA и рабочим live flow нельзя
+До первого deploy определи `previous_stable` Sites version и exact rollback
+artifact. Если связь с reachable Git SHA и рабочими web + MCP flows нельзя
 доказать, не выдумывай baseline и остановись до deploy за одним продуктовым
 решением.
 
 ## Провал production smoke
 
 Не создавай tag и не переводи release-scoped issue в `Done`. Сохрани failed
-artifact/deployment как evidence, оформи `DEFECT_CANDIDATE` и redeploy exact
-saved artifact затронутой surface из `previous_stable`. Дождись terminal
-success и проверь прежние критические flows и cross-surface contract.
+Sites artifact/deployment как evidence, оформи `DEFECT_CANDIDATE` и redeploy
+exact saved version из `previous_stable`. Дождись terminal success и проверь
+прежние критические web/control и MCP flows.
 
 Так как default branch уже содержит failed candidate, не строй новый batch
 поверх известного дефекта молча. Примени ту же классификацию: маленький direct

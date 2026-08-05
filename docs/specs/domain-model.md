@@ -17,12 +17,11 @@ Mind Diary: у него есть стабильная identity, дерево OKF
 | `KnowledgeSpace` / `Mind` | Access boundary вокруг одного логического дерева знаний. |
 | `Personal Mind` | Ровно один private Mind, автоматически и навсегда связанный с одним principal. |
 | `SpaceRevision` | Неизменяемый снимок всего content Mind с manifest и parent revision. |
-| `Checkpoint` | Неизменяемая именованная ссылка на одну `SpaceRevision`; service metadata, не OKF `tags`. |
 | `Snapshot View` | Read-only view одной исторической revision. |
-| `OKFBundle` | Материализованный импорт или export одной revision; memberships и ACL в него не входят. |
+| `OKFBundle` | Материализованный export одной revision; memberships и ACL в него не входят. |
 | `KnowledgeEntry` / `Memory` | Пользовательский searchable OKF concept; `Memory` — umbrella term в UI. |
 | `Source` | Source-faithful материал или typed source concept с provenance. |
-| `Asset` | Binary/non-Markdown объект со своими правилами передачи. |
+| `Asset` | Binary/non-Markdown объект OKF; transport для него не входит в первый прототип. |
 | `Index` / `Log` | Reserved OKF `index.md` и `log.md`, а не обычные `KnowledgeEntry`. |
 | `SpaceMembership` | Принятая связь principal с обычным Mind, ролью и lifecycle state. |
 | `SpaceInvitation` | Ожидающее принятия приглашение уже зарегистрированного principal. |
@@ -67,11 +66,19 @@ flowchart LR
 Доступ к системе имеет только зарегистрированный и аутентифицированный
 principal. Anonymous access отсутствует во всех visibility modes.
 
-Первый Sites prototype получает проверенный account context от Sites и создаёт
-собственный immutable `principal_id`. Текущая документация Sites подтверждает
-verified email header, но не фиксирует стабильный внешний subject identifier;
-поэтому правила смены email и relink account остаются platform gap до
-реализации.
+Production MVP на Sites получает проверенный account context от Sites и создаёт
+собственный immutable `principal_id`. Начальный external binding использует
+server-normalized verified email. Exact match открывает существующий principal.
+Текущая документация Sites не фиксирует стабильный внешний subject identifier,
+поэтому неизвестный email невозможно автоматически отличить от смены email:
+пользователь явно создаёт новый изолированный account без унаследованных прав
+либо запускает manual recovery. Relink, merge и перенос access требуют отдельной
+проверки identity и никогда не выполняются автоматически. Email не становится
+internal authorization ID.
+
+`Principal.display_name` инициализируется из verified full name, если он есть;
+иначе пользователь задаёт его при первом входе. Дальнейшее изменение profile
+name атомарно обновляет display name Personal Mind, но не его content revision.
 
 Account bootstrap — одна атомарная операция:
 
@@ -109,6 +116,25 @@ namespace, резервируется атомарно и после созда�
 Router сначала разрешает handle в `space_id`, после чего ACL, revisions, audit,
 jobs и object keys используют только `space_id`. Handle не является bearer
 secret или доказательством доступа.
+
+Handle policy первого прототипа фиксирована до создания persistent IDs:
+
+- canonical form — lowercase ASCII `[a-z0-9]` с одиночным `-` между segments;
+- длина 3–63 characters; leading/trailing/consecutive hyphen запрещены;
+- input проходит Unicode NFKC, затем либо явную transliteration в UI, либо
+  отклоняется server-side, если итог не canonical ASCII;
+- percent-decoding выполняется ровно один раз; encoded slash, backslash, dot
+  segments и control characters отклоняются;
+- reserved registry включает `me`, `mcp`, `api`, `admin`, `settings`, `public`,
+  `assets`, `www` и все занятые top-level service routes;
+- comparison и uniqueness выполняются по canonical form;
+- после hard deletion handle навсегда остаётся retired в минимальном registry,
+  который не содержит `space_id`, Owner или content. Старый URL не может начать
+  указывать на другой Mind.
+
+Create возвращает одинаковое `handle_unavailable` для occupied, reserved и
+retired values. Это снижает usefulness availability probe, но глобальная
+уникальность всё равно не считается абсолютной защитой от inference.
 
 Reserved route Personal Mind:
 
@@ -160,7 +186,11 @@ invitation не подходит для transfer.
 memberships, invitations и все остальные связанные с Mind service records.
 Principal-bound MCP tokens не удаляются: после удаления они просто больше не
 могут разрешить этот Mind. Более детальная retention/privacy модель будет
-спроектирована позже.
+спроектирована позже. Единственное исключение — неразрешимый retired-handle
+record без связи с прежним `space_id`; target-linked audit и idempotency records
+также удаляются. Отдельный forensic deletion receipt не сохраняется: это
+сознательный accountability trade-off принятого delete-all прототипа, который
+должен быть пересмотрен вместе с retention/privacy model.
 
 Удаление account в прототипе также немедленное и безвозвратное:
 
@@ -168,10 +198,15 @@ Principal-bound MCP tokens не удаляются: после удаления 
 - каждый ordinary Mind, где principal является Owner, удаляется целиком вместе
   с историей, даже если в нём есть другие participants;
 - memberships и pending invitations principal в Minds других Owners удаляются;
-- все MCP access tokens principal отзываются.
+- все MCP access tokens principal отзываются;
+- external bindings, verified email, display name и прочий profile удаляются;
+- commits и canonical content в Minds других Owners не меняются. Их
+  `committed_by` ссылается на необратимый `deleted-principal` tombstone с opaque
+  ID и состоянием `deleted`, без email, display name или возможности login.
 
 UI обязан заранее показать точный каскад удаления. Эта политика сознательно
-временная и требует скорого пересмотра до production.
+временная и требует пересмотра перед production-grade расширением за пределы
+MVP.
 
 ## Invitations и membership
 
@@ -226,8 +261,7 @@ capabilities, а не числовое значение enum.
 |---|:---:|:---:|:---:|:---:|
 | Browse, search, fetch, history, validate | ✓ | ✓ | ✓ | ✓ |
 | Create/update/delete content and commit HEAD | — | ✓ | ✓ | ✓ |
-| Create immutable Checkpoint | — | ✓ | ✓ | ✓ |
-| Full OKF export | — | — | ✓ | ✓ |
+| Full OKF export | ✓ | ✓ | ✓ | ✓ |
 | Invite/remove/change Reader or Editor | — | — | ✓ | ✓ |
 | Configure non-destructive settings | — | — | ✓ | ✓ |
 | Grant/revoke Admin | — | — | — | ✓ |
@@ -237,6 +271,11 @@ capabilities, а не числовое значение enum.
 `editor` — техническое имя роли с write access. Оно включает чтение и полное
 изменение content: create, replace и delete любых разрешённых файлов. Более
 тонкие path/type grants отложены.
+
+Full export — bulk convenience operation, а не security boundary: Reader и
+baseline Reader уже могут прочитать тот же corpus по файлам. Export требует
+`content:read`, фиксирует exact revision, повторно проверяет current access при
+выдаче download URL и может иметь отдельные rate/size limits.
 
 Admin не может создать, изменить или удалить Admin/Owner. Owner не назначает
 второго Owner обычной role mutation: только атомарный `transfer_ownership`
@@ -256,6 +295,10 @@ MCP arguments или cached token claims. Opaque access token определяе
 principal и scopes; Authorizer читает актуальное состояние Mind на каждом
 вызове.
 
+`content:write` включает `content:read`; write-only token в первом прототипе не
+существует. Token с одним `content:read` остаётся read-only независимо от роли
+principal.
+
 ## Visibility
 
 Visibility — отдельная owner-controlled политика, а не роль или fake
@@ -264,7 +307,7 @@ membership. Новый ordinary Mind по умолчанию `private`.
 | Mode | Authenticated participant | Authenticated non-member | Discovery |
 |---|---|---|---|
 | `private` | По своей роли | Нет доступа; ответ не раскрывает metadata/существование | Нет |
-| `unlisted` | По своей роли | Reader-equivalent по точному handle/URL | Нет каталога |
+| `unlisted` | По своей роли | Reader-equivalent по точному handle/URL | Нет каталога; URL не является secret |
 | `public` | По своей роли | Reader-equivalent | Глобальный каталог Public Minds |
 
 Baseline reader-equivalent access включает live HEAD, browse/search/fetch и
@@ -276,7 +319,10 @@ management capabilities. Явный Reader membership в public Mind разре�
 Только Owner меняет visibility. Переход в `private` немедленно прекращает все
 baseline grants. Для `public` и `unlisted` отдельного `published_revision` нет:
 успешный Editor commit становится новой HEAD и сразу виден всем текущим
-читателям. Anonymous visitors доступа не получают ни в одном mode.
+читателям. Baseline grant также открывает всю immutable history, поэтому UI
+перед включением `public`/`unlisted` предупреждает, что последующий возврат в
+`private` прекратит будущий доступ, но не отменит уже состоявшееся раскрытие.
+Anonymous visitors доступа не получают ни в одном mode.
 
 ## Content commits и concurrency
 
@@ -308,15 +354,16 @@ Reserved files требуют явной семантики:
   operation заменяет его под общим HEAD CAS. Автоматический merge отложен;
 - `log.md` обновляется через `add_log_entry`, который сохраняет требуемый OKF
   newest-first/date-grouped порядок. Это не буквальный byte append;
-- idempotency key не допускает повторной log entry или второй revision при
-  сетевом retry;
+- idempotency key namespaced по `principal_id + space_id + operation + key` и
+  связан с canonical request hash. Тот же key с тем же payload возвращает тот
+  же result; тот же key с другим payload возвращает `409 Idempotency Conflict`;
 - service audit/revision log не смешивается с canonical OKF `log.md`.
 
 Добавление concept, его ссылки в `index.md` и записи в `log.md` должно проходить
 одним changeset. Search/index infrastructure всегда производна и может быть
 перестроена из точной canonical revision.
 
-## История, Checkpoints и Snapshot View
+## История и Snapshot View
 
 Каждый успешный commit добавляет immutable revision в линейную историю:
 
@@ -330,11 +377,13 @@ manifest_hash
 summary
 ```
 
-Исторический selector — exact `revision_id`, UTC `as_of` или immutable
-Checkpoint — один раз разрешается в `resolved_revision_id`. Non-HEAD view всегда
+Исторический selector — exact `revision_id` или UTC `as_of` — один раз
+разрешается в `resolved_revision_id`. `as_of` выбирает revision с максимальным
+`revision_number`, у которой server-assigned `committed_at <= as_of`; если такой
+revision нет, возвращается not found, без fallback на HEAD. Non-HEAD view всегда
 read-only даже для Owner. Доступ проверяется заново по current membership или
 current baseline visibility grant; отозванные старые права не
-«воскрешаются».
+«воскрешаются». Именованные checkpoints/tags не входят в первый прототип.
 
 Удаление файла из HEAD не стирает его из уже committed revisions. Whole-Mind и
 account deletion, напротив, в прототипе физически удаляют всю историю согласно
@@ -364,6 +413,7 @@ CAS commits, individual-file OKF access и user-scoped MCP.
 
 Не входят anonymous access/publication, unregistered-user onboarding,
 email invitations, fuzzy global user search, granular content grants, branches,
-automatic semantic merge, legal retention policy, recovery after deletion,
-billing/organization administration и cross-Mind content synthesis без
-отдельного explicit use case.
+automatic semantic merge, named checkpoints, ZIP/local bundle import, binary
+Asset upload/fetch, legacy 0.1 migration, legal retention policy, recovery after
+deletion, billing/organization administration и cross-Mind content synthesis
+без отдельного explicit use case.

@@ -38,9 +38,11 @@ handle и разрешает его в `space_id`, после чего authoriza
 grant.
 
 При создании UI предлагает handle из display name и позволяет изменить его до
-подтверждения. Будущий rename handle потребует CAS, tombstone и permanent
-redirect. До реализации фиксируются normalization, reserved routes, length,
-percent encoding и confusable/homograph policy.
+подтверждения. Первый прототип уже фиксирует lowercase ASCII grammar, NFKC,
+length 3–63, reserved route registry, single percent-decoding и permanent
+retirement после deletion; точный contract находится в
+[доменной модели](domain-model.md#identity-и-адресация-mind). Будущий rename handle
+потребует CAS, tombstone и permanent redirect.
 
 Personal Mind имеет service-managed скрытый handle, но user-facing resolver
 его не использует:
@@ -61,6 +63,7 @@ Display name Personal Mind следует за display name пользовате
 2. Authorizer проверяет active membership либо baseline visibility grant:
    `private` — только participant, `unlisted` — authenticated non-member по
    точному URL, `public` — authenticated non-member также из каталога.
+   `unlisted` означает только отсутствие в каталоге: URL не является secret.
 3. В первом прототипе control plane возвращает только разрешённое
    metadata/status представление; raw content остаётся в MCP.
 4. В будущем, после отдельного принятия scope, revision resolver сможет выбрать
@@ -72,7 +75,15 @@ Private request без membership не раскрывает name, summary или
 Mind. При переводе public/unlisted Mind в private baseline grants прекращаются
 немедленно. Content MCP public/unlisted Mind читает live HEAD: отдельного
 `published_revision` в прототипе нет. Будущий landing должен соблюдать то же
-правило, если отдельная publication model не будет принята явно.
+правило, если отдельная publication model не будет принята явно. Baseline grant
+также открывает всю immutable history; возврат в private не отменяет уже
+состоявшееся раскрытие.
+
+Initial Sites binding использует normalized verified email, но internal access
+всегда опирается на immutable `principal_id`. Exact match возвращает existing
+account; unknown email явно создаёт новый изолированный account без прежних прав
+либо запускает manual recovery с независимой проверкой identity. Automatic
+relink/merge запрещён.
 
 ## Personal Mind как будущий источник контекста
 
@@ -186,5 +197,3 @@ personalization — отдельный будущий trusted server-side use ca
 - Какие категории требуют отдельного consent и как долго хранить receipts?
 - Какой будущий slice и acceptance criteria должны вводить personalized
   landing после базовой MCP/control-plane работы?
-- Как разрешить account relink при смене verified email, пока Sites не
-  документирует стабильный внешний subject identifier?

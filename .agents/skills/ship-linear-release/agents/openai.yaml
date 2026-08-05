@@ -1,7 +1,7 @@
 interface:
   display_name: "Ship Linear Release"
   short_description: "Доставляет Linear milestone одним batch"
-  default_prompt: "Используй $ship-linear-release с контролируемым числом workers: подготовь незавершённые Linear-задачи Mind Diary в изолированных worktrees и доставь их одним проверенным batch по доступному design, build или release profile."
+  default_prompt: "Используй $ship-linear-release с контролируемым числом workers: подготовь незавершённые Linear-задачи Mind Diary в изолированных worktrees и доставь их одним проверенным batch; production release выполняй только в OpenAI Sites."
 
 policy:
   allow_implicit_invocation: false
