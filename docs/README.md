@@ -15,10 +15,10 @@ Mind Diary пока находится на стадии проектирова�
 4. [Доменная модель и доступ](specs/domain-model.md) — KnowledgeSpace,
    содержимое, memberships, роли и owner invariants.
 5. [URL-адресация и персонализированное открытие](specs/personalized-opening.md)
-   — человекочитаемый `space_handle`, Personal Mind, bounded context и privacy
-   invariants.
-6. [Спецификация MVP](specs/mvp.md) — первый проверяемый vertical slice и его
-   критерии готовности.
+   — принятые URL/Personal Mind invariants и отложенный proposal bounded
+   personalization.
+6. [Спецификация первого прототипа](specs/mvp.md) — первый проверяемый vertical
+   slice и его критерии готовности.
 
 ## Принятые решения
 
@@ -57,13 +57,15 @@ High-level контур проекта закрыт следующими док�
 - базовая визуальная и речевая система — в brand guide;
 - сущности, account bootstrap, адресация, роли, visibility и история — в domain
   model;
-- персонализированное открытие и ограниченный Personal Mind overlay — в
+- URL-адресация и граница будущего ограниченного Personal Mind overlay — в
   personalized-opening specification;
 - границы компонентов, основные flows, MCP/web surfaces и deployment profiles —
   в architecture;
 - authorization, non-enumeration private URLs, untrusted content и безопасные
-  mutation boundaries — совместно в domain model, architecture и MVP;
-- проверяемый первый vertical slice и non-goals — в MVP specification;
+  mutation boundaries — совместно в domain model, architecture и спецификации
+  первого прототипа;
+- проверяемый первый vertical slice и non-goals — в спецификации первого
+  прототипа;
 - актуальность внешнего формата данных — в датированном OKF report;
 - текущие платформенные предпосылки и их ограничения — в датированном platform
   report.

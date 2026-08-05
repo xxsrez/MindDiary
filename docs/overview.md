@@ -44,8 +44,9 @@ name автоматически следует за именем пользов�
 
 Удаление account в первом прототипе безвозвратно удаляет Personal Mind, все
 ordinary Minds этого Owner вместе с их историей и memberships пользователя в
-чужих Minds. Эта простая политика принята только для прототипа и будет отдельно
-пересмотрена перед production.
+чужих Minds, удаляет его pending invitations и отзывает MCP tokens. Эта простая
+политика принята только для прототипа и будет отдельно пересмотрена перед
+production.
 
 ## Адресуемые Minds
 
@@ -135,9 +136,9 @@ token, current role/visibility, scopes, HEAD CAS и idempotency на каждо�
 
 Sites отвечает за account/control plane: создание Minds, visibility,
 invitations, roles, ownership, deletion, настройки и выпуск MCP tokens. Content
-files через browser UI не редактируются. Web и MCP adapters используют общий
-application core/internal API; raw REST не является пользовательской
-поверхностью.
+files через browser UI не читаются и не редактируются. Web и MCP adapters
+используют общий application core/internal API; raw REST не является
+пользовательской поверхностью.
 
 Для первого прототипа MCP authentication — revocable personal bearer token,
 который пользователь выпускает на сайте и передаёт клиенту через environment
@@ -195,9 +196,11 @@ email delivery, fuzzy global user search, granular file permissions, branches,
 automatic semantic merge, legal retention/recovery model, billing,
 organization administration и general cross-Mind synthesis.
 
-Personalized landing из ограниченного PersonalContext остаётся частью product
-direction; его точный UI и consent policy могут следовать после базового
-MCP/control-plane vertical slice.
+Personalized content landing из ограниченного PersonalContext остаётся частью
+product direction, но не входит в критерии первого прототипа. В этом slice
+`/me` и `/{space_handle}` нужны для адресации и management; raw content и
+основная работа с ним доступны через MCP. UI, consent и generation policy для
+landing требуют отдельного принятого scope.
 
 ## Платформенный путь
 

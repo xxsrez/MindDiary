@@ -27,8 +27,8 @@ Mind Diary: у него есть стабильная identity, дерево OKF
 | `SpaceMembership` | Принятая связь principal с обычным Mind, ролью и lifecycle state. |
 | `SpaceInvitation` | Ожидающее принятия приглашение уже зарегистрированного principal. |
 | `Baseline visibility grant` | Reader-equivalent доступ authenticated non-member по visibility; не membership. |
-| `SpaceLanding` | Base или personalized представление одной разрешённой revision. |
-| `PersonalContext` | Ограниченная derived projection Personal Mind для персонализации, не второй corpus. |
+| `SpaceLanding` | Отложенный proposal: base или personalized представление одной разрешённой revision. |
+| `PersonalContext` | Отложенный proposal: ограниченная derived projection Personal Mind для персонализации, не второй corpus. |
 
 Слово «артефакт» допустимо как неформальное общее описание content, но API не
 должен скрывать под ним разные правила concept, source, asset и reserved files.
@@ -157,8 +157,10 @@ invitation не подходит для transfer.
 
 Только Owner может немедленно и безвозвратно удалить ordinary Mind. Для первого
 прототипа удаляются metadata, content HEAD, все immutable revisions, indexes,
-memberships, invitations и tokens/links, относящиеся к этому Mind. Более
-детальная retention/privacy модель будет спроектирована позже.
+memberships, invitations и все остальные связанные с Mind service records.
+Principal-bound MCP tokens не удаляются: после удаления они просто больше не
+могут разрешить этот Mind. Более детальная retention/privacy модель будет
+спроектирована позже.
 
 Удаление account в прототипе также немедленное и безвозвратное:
 
@@ -249,9 +251,10 @@ current role or baseline visibility grant
 ∩ revision mode capabilities
 ```
 
-Role и membership state не принимаются из MCP arguments и не считаются
-достоверными из долгоживущего JWT. Authorizer читает актуальное состояние на
-каждом вызове.
+Role, membership state и выбранный `space_id` не принимаются как достоверные из
+MCP arguments или cached token claims. Opaque access token определяет только
+principal и scopes; Authorizer читает актуальное состояние Mind на каждом
+вызове.
 
 ## Visibility
 

@@ -1,7 +1,8 @@
 # URL-адресация и персонализированное открытие Mind
 
-Статус: proposal, 2026-08-05. Product behavior принято для первого прототипа;
-generation policy и UI ещё не реализованы.
+Статус: proposal, 2026-08-05. URL-адресация и Personal Mind invariants приняты
+для первого прототипа; personalized content landing отложен и не входит в его
+критерии готовности.
 
 В product language `KnowledgeSpace` называется **Mind**, а `KnowledgeEntry` —
 **Memory**. Технические разделы сохраняют Space-термины для identifiers, ACL и
@@ -13,10 +14,12 @@ revision semantics.
 - Personal Mind текущего principal всегда открывается по reserved route `/me`.
 - Внутренний immutable `space_id` остаётся primary identity для ACL, revisions,
   audit, jobs и ссылочной целостности.
-- Доступ к любому landing требует authenticated Mind Diary account; anonymous
+- Доступ к любому route требует authenticated Mind Diary account; anonymous
   opening в первом прототипе отсутствует.
-- Первый ответ может быть адаптирован до начала разговора с помощью
-  server-filtered контекста Personal Mind текущего principal.
+- В первом прототипе routes используются для адресации и management, а работа
+  с raw content происходит через MCP.
+- Будущий personalized landing может адаптировать первый ответ до начала
+  разговора с помощью server-filtered контекста Personal Mind principal.
 
 ## Два уровня identity
 
@@ -53,24 +56,25 @@ Display name Personal Mind следует за display name пользовате
 
 После authentication обычный `/{space_handle}` разрешается так:
 
-1. Router превращает normalized handle в `space_id` без доверия к клиентскому
-   tenant или role.
+1. Router превращает normalized handle в `space_id` без доверия к клиентским
+   `principal_id`, `space_id` или role.
 2. Authorizer проверяет active membership либо baseline visibility grant:
    `private` — только participant, `unlisted` — authenticated non-member по
    точному URL, `public` — authenticated non-member также из каталога.
-3. Revision resolver выбирает live HEAD либо exact historical revision для
-   Snapshot View.
-4. Presentation layer строит base landing выбранной revision.
-5. Если включена разрешённая персонализация, trusted provider читает
-   ограниченный контекст exact Personal Mind revision и строит personalized
-   variant.
+3. В первом прототипе control plane возвращает только разрешённое
+   metadata/status представление; raw content остаётся в MCP.
+4. В будущем, после отдельного принятия scope, revision resolver сможет выбрать
+   live HEAD или exact historical revision, presentation layer — построить base
+   landing, а trusted provider — personalized variant из ограниченного
+   контекста exact Personal Mind revision.
 
 Private request без membership не раскрывает name, summary или существование
 Mind. При переводе public/unlisted Mind в private baseline grants прекращаются
-немедленно. Public/unlisted landing читает live HEAD: отдельного
-`published_revision` в прототипе нет.
+немедленно. Content MCP public/unlisted Mind читает live HEAD: отдельного
+`published_revision` в прототипе нет. Будущий landing должен соблюдать то же
+правило, если отдельная publication model не будет принята явно.
 
-## Personal Mind как источник контекста
+## Personal Mind как будущий источник контекста
 
 Personal Mind создаётся атомарно с account и навсегда связан с ним:
 
@@ -83,7 +87,8 @@ ownership transfer, publication или отдельного deletion. Это ser
 invariants, а не новый `space_type` или OKF field. Content сохраняет обычные
 revisions, provenance и export semantics.
 
-Personalization не даёт целевому Mind или его Owner доступ к Personal Mind.
+Будущая personalization не даёт целевому Mind или его Owner доступ к Personal
+Mind.
 `PersonalContextProvider` работает server-side от identity текущего principal,
 не принимает произвольный personal space/path/query из target content и
 возвращает минимальную purpose-bound projection, например язык, уровень знаний,
@@ -92,8 +97,9 @@ Personalization не даёт целевому Mind или его Owner дост
 
 ## SpaceLanding
 
-`SpaceLanding` — revision-bound derived projection, а не OKF document. Он имеет
-два режима:
+`SpaceLanding` — отложенный revision-bound derived projection, а не OKF
+document. Он не является частью первого prototype slice. Если этот proposal
+будет принят, landing будет иметь два режима:
 
 - `base` — authored/derived общее представление target revision;
 - `personal_space` — представление той же target revision, адаптированное через
@@ -127,7 +133,8 @@ Derived text помечается как generated. Он не записывае
 authorized agent должен сохранить результат, это происходит обычным immediate
 content commit с HEAD CAS.
 
-Новое opening фиксирует exact target revision и exact Personal Mind revision.
+В такой реализации новое opening фиксирует exact target revision и exact
+Personal Mind revision.
 Уже возвращённая projection не следует за последующим продвижением HEAD; новый
 request разрешает revisions заново. Пользователь может выключить адаптацию и
 получить `base`.
@@ -136,7 +143,7 @@ request разрешает revisions заново. Пользователь мо
 
 ```mermaid
 flowchart LR
-    Request["Authenticated GET /{handle} or /me"]
+    Request["Future authenticated content landing"]
     Resolver["resolve target space_id"]
     TargetAuth["authorize membership or visibility"]
     TargetRevision["resolve target revision"]
@@ -149,11 +156,12 @@ flowchart LR
     TargetAuth --> PersonalPolicy --> PersonalRevision --> Context --> Landing
 ```
 
-User-scoped MCP сам по себе умеет выбирать разные доступные Minds, но один
-content call всегда работает с явно указанным target Mind. Personalization —
-отдельный trusted server-side use case; он не означает implicit cross-Mind
-search или смешивание нескольких corpora. Любой будущий general cross-Mind
-retrieval должен явно авторизовать каждый target и описать provenance результата.
+User-scoped MCP первого прототипа умеет выбирать разные доступные Minds, но
+один content call всегда работает с явно указанным target Mind. Предлагаемая
+personalization — отдельный будущий trusted server-side use case; она не
+означает implicit cross-Mind search или смешивание нескольких corpora. Любой
+будущий general cross-Mind retrieval должен явно авторизовать каждый target и
+описать provenance результата.
 
 ## Security и privacy invariants
 
@@ -176,6 +184,7 @@ retrieval должен явно авторизовать каждый target и 
   профиля вместо поиска по всему corpus?
 - Как показать пользователю использованный контекст до генерации landing?
 - Какие категории требуют отдельного consent и как долго хранить receipts?
-- Нужна ли персонализация уже в первом UI slice или после базовой MCP работы?
+- Какой будущий slice и acceptance criteria должны вводить personalized
+  landing после базовой MCP/control-plane работы?
 - Как разрешить account relink при смене verified email, пока Sites не
   документирует стабильный внешний subject identifier?

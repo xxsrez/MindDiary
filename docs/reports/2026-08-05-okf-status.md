@@ -50,7 +50,7 @@
 - storage и serving;
 - query/search API или MCP;
 - transactions, revisions, locks и merge semantics;
-- tenant isolation, ACL и sharing;
+- account/Space isolation, ACL и sharing;
 - runtime/attester ABI, sandboxing и cache receipts.
 
 Поэтому Mind Diary обязан проектировать эти механизмы как собственный envelope,
@@ -68,9 +68,11 @@ service-level operations: заменить `index.md` под общим HEAD CAS
 добавить запись в newest-first/date-grouped `log.md`. Эти операции должны
 материализовать валидные OKF files и не выдаваться за часть спецификации OKF.
 
-Attested Computation в MVP можно хранить и отдавать как concept. Автоматическое
-исполнение откладывается, потому что OKF 0.2 не стандартизирует полный runtime
-protocol, sandboxing и attester ABI.
+Неизвестный type, включая Attested Computation, reader должен сохранить при
+round-trip и может отдать как обычный concept без type-specific semantics.
+Первый прототип не реализует специальное исполнение Attested Computation:
+автоматический runtime откладывается, потому что OKF 0.2 не стандартизирует
+полный protocol, sandboxing и attester ABI.
 
 ## Ограничения проверки
 

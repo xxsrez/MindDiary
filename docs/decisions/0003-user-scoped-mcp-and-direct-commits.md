@@ -29,6 +29,9 @@ workflow.
   log могут входить в одну atomic revision.
 - Sites обслуживает control plane, MCP — content plane. Оба adapters используют
   общий application core/internal API; raw REST не становится customer API.
+- В первом prototype slice routes `/me` и `/{space_handle}` используются для
+  адресации и management. Personalized content landing остаётся отдельным
+  будущим proposal.
 
 ## Последствия
 

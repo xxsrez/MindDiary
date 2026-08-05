@@ -30,8 +30,9 @@
 | База знаний | `Mind` / `Minds` | `KnowledgeSpace` / `Space` |
 | Запись | `Memory` / `Memories` | `KnowledgeEntry`; `Source` и `Asset` остаются отдельными техническими типами |
 
-Рабочее UI-имя автоматически созданного Personal Mind — **My Mind**. В web
-навигации он открывается по `/me`; user-facing copy не показывает его служебный
+В навигации Personal Mind можно обозначать как **My Mind**, но это label, а не
+его display name. Display name автоматически следует за именем пользователя.
+В web он открывается по `/me`; user-facing copy не показывает его служебный
 `space_handle`.
 
 ## Написание имени и технические slugs
@@ -184,7 +185,7 @@ quartered shield, факультетские животные и цветовы�
 | Создание | `Create a Mind` | `Initialize knowledge repository` |
 | Добавление | `Add a Memory` | `Ingest data` |
 | Разговор | `Ask this Mind` | `Query the AI brain` |
-| Совместная работа | `Share this Mind` | `Configure multi-tenant access` |
+| Совместная работа | `Share this Mind` | `Configure access-control policies` |
 | Пустое состояние | `Add the first Memory` | `No entities found` |
 | Ограничение | `This Mind may not know yet` | `Hallucination detected` |
 

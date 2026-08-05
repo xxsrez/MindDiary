@@ -14,7 +14,8 @@
 - immediate multi-file commits с immutable history и optimistic concurrency;
 - public/unlisted live-HEAD reads только для authenticated users;
 - ранний Sites prototype и переносимый AWS target без AWS SDK в domain core;
-- возможность bounded PersonalContext без передачи личного corpus target Mind.
+- future path к bounded PersonalContext без передачи личного corpus target
+  Mind.
 
 OKF не определяет transactions, locks, ACL, revisions, query API или MCP. Эти
 свойства принадлежат Mind Diary.
@@ -95,12 +96,13 @@ ports:
 - import/export/validate bundle;
 - browse/search/fetch/history/checkpoints;
 - atomic `commit_changeset`;
-- optional bounded PersonalContext/SpaceLanding;
+- future-proposal bounded PersonalContext/SpaceLanding;
 - outbox/index jobs и audit.
 
-Core зависит от `MetadataStore`, `ObjectStore`, `SearchIndex`, `Authorizer`,
-`TokenHasher`, `AuditSink`, `Clock` и optional `PersonalContextProvider`, но не
-от concrete adapters.
+Core первого прототипа зависит от `MetadataStore`, `ObjectStore`, `SearchIndex`,
+`Authorizer`, `TokenHasher`, `AuditSink` и `Clock`, но не от concrete adapters.
+Если post-prototype personalization будет принята, она подключит отдельный
+узкий `PersonalContextProvider` port.
 
 ### 3. Protocol adapters
 
@@ -304,9 +306,9 @@ content_tool(mind, revision?, ...) -> exactly one resolved space_id
 
 Opaque search result ID фиксирует `space_id + revision_id + path`, поэтому
 subsequent `fetch(id)` не перескакивает на новую HEAD. MCP не принимает
-client-supplied tenant, role или principal. Private/unlisted enumeration
-защищена: unlisted не попадает в list без membership, private denied response не
-раскрывает metadata.
+client-supplied `principal_id`, `space_id` или role как источник истины.
+Private/unlisted enumeration защищена: unlisted не попадает в list без
+membership, private denied response не раскрывает metadata.
 
 Content MCP не содержит invitation, membership, visibility, ownership, deletion
 или token-management tools. Corpus считается недоверенным и не может инициировать
@@ -327,11 +329,12 @@ REST, не прокидывая user bearer token downstream.
 
 ## Personalization boundary
 
-После target authorization `PersonalContextProvider` может по отдельному
-`personal.context.read` разрешить exact revision собственного Personal Mind и
-вернуть server-filtered profile. Target content не формирует personal query,
-не выбирает fields и не расширяет scope. Derived landing приватен principal и
-не кэшируется как shared response.
+Это post-prototype proposal, а не capability первого vertical slice. Если он
+будет принят, после target authorization `PersonalContextProvider` сможет по
+отдельному `personal.context.read` разрешить exact revision собственного
+Personal Mind и вернуть server-filtered profile. Target content не формирует
+personal query, не выбирает fields и не расширяет scope. Derived landing
+приватен principal и не кэшируется как shared response.
 
 Этот use case не меняет правило content MCP: каждый обычный tool call имеет один
 explicit target Mind. General cross-Mind search/synthesis требует новой

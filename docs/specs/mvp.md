@@ -161,6 +161,8 @@ Sites UI поддерживает:
 Browser UI не получает raw content file editor/API. Web и MCP adapters вызывают
 общий application core/internal API. Если их позже разделят на services,
 internal REST получает service authentication и не становится customer API.
+Routes `/me` и `/{space_handle}` в этом slice служат адресации и management;
+revision-bound personalized content landing не входит в prototype scope.
 
 ## Первая MCP-поверхность
 
@@ -257,8 +259,8 @@ service network, которого Sites пока не обещает. Если S
 19. Удаление file сохраняет старую revision. Whole-Mind deletion удаляет всю
     history и больше не разрешает handle/object IDs.
 20. Account deletion каскадно удаляет Personal Mind и owned Minds, убирает
-    memberships в остальных Minds и отзывает tokens; UI до действия перечисляет
-    affected Minds.
+    memberships/pending invitations в остальных Minds и отзывает tokens; UI до
+    действия перечисляет affected Minds.
 21. Malicious archive с traversal, absolute path, symlink, decompression bomb
     или quota overflow отклоняется до canonical write.
 22. Unknown OKF fields/types и raw assets сохраняются через import/export
@@ -292,6 +294,7 @@ Sites prototype считается полным MCP deployment только по
 ## Не входит в первый прототип
 
 - anonymous access и anonymous KnowledgeSite publication;
+- revision-bound personalized content landing и PersonalContext generation;
 - invite/onboarding незарегистрированных пользователей и email delivery;
 - fuzzy/global display-name user search;
 - granular path/type permissions и ingest-only human role;
@@ -301,7 +304,8 @@ Sites prototype считается полным MCP deployment только по
 - billing, organization administration и server-paid inference;
 - mandatory vector search, crawling, OCR, transcription и Attested Computation;
 - general cross-Mind search/synthesis и multiple Personal Minds;
-- full browser content editor, autonomous external actions и outbound push.
+- raw browser content viewer/editor, autonomous external actions и outbound
+  push.
 
 ## Измерения перед следующими решениями
 

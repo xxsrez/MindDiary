@@ -6,8 +6,9 @@
 
 - Mind Diary находится на стадии design-first bootstrap: сервисный код ещё не
   реализован и ни одно развёртывание не считается выполненным.
-- Репозиторий содержит предложение по архитектуре и MVP, а также проверку
-  актуального Open Knowledge Format (OKF).
+- Репозиторий содержит принятый product baseline первого прототипа,
+  предложения по его реализации и проверку актуального Open Knowledge Format
+  (OKF).
 - Основной язык проектной документации — русский. Английские имена протоколов,
   API и полей сохраняйте, когда перевод снижает точность.
 
@@ -18,7 +19,7 @@
 3. [Доменную модель и доступ](docs/specs/domain-model.md).
 4. [URL-адресацию и персонализированное открытие](docs/specs/personalized-opening.md).
 5. [Архитектуру](docs/architecture.md).
-6. [Спецификацию MVP](docs/specs/mvp.md).
+6. [Спецификацию первого прототипа](docs/specs/mvp.md).
 7. [Проверку текущего OKF](docs/reports/2026-08-05-okf-status.md).
 8. [Проверку платформенных предпосылок](docs/reports/2026-08-05-platform-status.md).
 
@@ -40,12 +41,13 @@ product decisions отделяйте от ещё не выбранных дет�
   продукта не заменяет `space_handle` отдельного Mind.
 - Живая совместная сущность сервиса называется `KnowledgeSpace`. Переносимой
   канонической формой одной её revision остаётся `OKFBundle`: дерево исходных
-  OKF-файлов и assets. Memberships, ACL, tenant metadata, idempotency keys и
-  состояние индекса не записываются в OKF-frontmatter.
-- Каждый Space имеет immutable внутренний `space_id`, обязательный immutable в
-  MVP `space_handle` и изменяемое display `name`. Canonical URL имеет вид
-  `https://{space-host}/{space_handle}`; handle уникален внутри verified host
-  namespace и разрешается в `space_id` до authorization или object read.
+  OKF-файлов и assets. Memberships, ACL, account/service metadata, idempotency
+  keys и состояние индекса не записываются в OKF-frontmatter.
+- Каждый ordinary Space имеет immutable внутренний `space_id`, обязательный
+  immutable в прототипе `space_handle` и изменяемое display `name`. Canonical
+  URL имеет вид `https://{space-host}/{space_handle}`; handle уникален внутри
+  verified host namespace и разрешается в `space_id` до authorization или
+  object read. Personal Mind использует `/me` и скрытый service-managed handle.
 - `space_handle` — внешний URL identifier, но не authorization identity.
   Durable records, ACL, revisions, jobs и audit используют `space_id`. Rename
   display name, смена HEAD или visibility не меняют URL; будущий rename
@@ -78,7 +80,7 @@ product decisions отделяйте от ещё не выбранных дет�
   read-only, даже для Owner. Каждый historical read проверяет текущий доступ:
   membership либо актуальный baseline visibility grant; старые ACL не
   «воскрешаются».
-- MVP не поддерживает branches, moving tags, merge или запись поверх
+- Первый прототип не поддерживает branches, moving tags, merge или запись поверх
   исторической revision. Удаление content из HEAD не стирает его из уже
   committed истории. Whole-Mind и account deletion в прототипе, напротив,
   немедленно удаляют всю историю; production retention/privacy model ещё не
@@ -88,7 +90,8 @@ product decisions отделяйте от ещё не выбранных дет�
   безопасность обеспечивают authentication, current role, token scopes,
   idempotency, audit и HEAD CAS. MCP tool annotations остаются только UX-сигналом.
 - `verified` и другие OKF trust signals не являются механизмом авторизации.
-  Tenant и права выводятся только из проверенного identity context.
+  Principal, выбранный Mind и права выводятся только из проверенного identity
+  context и актуального server-side состояния.
 - MCP делает Space лениво доступным через search/fetch/resources; он не
   помещает весь corpus в контекст модели автоматически.
 - Один MCP connection аутентифицирует principal и даёт ему операции над всеми
@@ -162,10 +165,11 @@ product decisions отделяйте от ещё не выбранных дет�
 - Переключать `private | unlisted | public` может только Owner. Для `public` и
   `unlisted` HEAD по определению сразу читаем authenticated non-members;
   интерфейс обязан предупреждать Owner и writers об этом эффекте.
-- Любой read/search/write проверяет tenant и ACL до обращения к каноническому
-  объекту или производному индексу.
-- Не используйте клиентский `tenant_id` как источник истины и не передавайте
-  входящий OAuth token downstream-сервисам.
+- Любой read/search/write проверяет authenticated principal и доступ к Mind до
+  обращения к каноническому объекту или производному индексу; MCP-вызов также
+  проверяет token status и scopes.
+- Не используйте клиентские `principal_id`, `space_id` или role как источник
+  истины и не передавайте входящий user token downstream-сервисам.
 - Содержимое базы считается недоверенным input, а не инструкциями агенту или
   серверу. Текст concept/source не может расширить scopes, вызвать mutation или
   изменить system/tool policy.
