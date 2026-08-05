@@ -8,17 +8,22 @@ Mind Diary пока находится на стадии проектирова�
 1. [Обзор продукта](overview.md) — зачем нужен Mind Diary, какую проблему он
    решает, как Mind становится адресуемой knowledge surface и где проходят
    границы продукта.
-2. [Базовая айдентика](brand.md) — `Mind Diary → Mind → Memory`, знак, палитра,
+2. [Roadmap и стратегия проверки](roadmap.md) — Codex-first initial audience,
+   Sites-only MVP, планируемые imports/checkpoints, будущий website AI и
+   основная post-MVP AWS direction.
+3. [Базовая айдентика](brand.md) — `Mind Diary → Mind → Memory`, знак, палитра,
    типографика, голос и canonical assets.
-3. [Архитектура](architecture.md) — переносимое ядро, ревизии OKF, MCP surface,
+4. [Архитектура](architecture.md) — переносимое ядро, ревизии OKF, MCP surface,
    Sites-only MVP production и post-MVP AWS path.
-4. [Доменная модель и доступ](specs/domain-model.md) — KnowledgeSpace,
+5. [Доменная модель и доступ](specs/domain-model.md) — KnowledgeSpace,
    содержимое, memberships, роли и owner invariants.
-5. [URL-адресация и персонализированное открытие](specs/personalized-opening.md)
+6. [URL-адресация и персонализированное открытие](specs/personalized-opening.md)
    — принятые URL/Personal Mind invariants и отложенный proposal bounded
    personalization.
-6. [Спецификация первого прототипа](specs/mvp.md) — первый проверяемый vertical
+7. [Спецификация первого прототипа](specs/mvp.md) — первый проверяемый vertical
    slice и его критерии готовности.
+8. [REST и MCP API](specs/api.md) — предлагаемый wire-level contract control
+   REST, internal application API, MCP tools/resources, schemas и errors.
 
 ## Принятые решения
 
@@ -57,6 +62,8 @@ Mind Diary пока находится на стадии проектирова�
 High-level контур проекта закрыт следующими документами:
 
 - продуктовая идея, сценарии, URL/landing и платформенный путь — в overview;
+- последовательность Codex-first validation → AWS → website AI и статус
+  post-MVP функций — в roadmap;
 - базовая визуальная и речевая система — в brand guide;
 - сущности, account bootstrap, адресация, роли, visibility и история — в domain
   model;
@@ -69,11 +76,15 @@ High-level контур проекта закрыт следующими док�
   первого прототипа;
 - проверяемый первый vertical slice и non-goals — в спецификации первого
   прототипа;
+- REST routes, общие schemas, MCP tools/resources и error contracts — в API
+  specification;
 - актуальность внешнего формата данных — в датированном OKF report;
+- конкурентная среда, уточнённый ICP, риски и validation gates — в датированном
+  market assessment;
 - текущие платформенные предпосылки и их ограничения — в датированном platform
   report.
 
-API reference, отдельный threat model, production runbooks, deployment guide и
-changelog намеренно не созданы: сервисного кода, release и развёртывания пока
-нет. До anonymous publication потребуется новая спецификация и отдельный threat
-model.
+Machine-readable OpenAPI/JSON Schemas, отдельный threat model, production
+runbooks, deployment guide и changelog пока не созданы: сервисного кода,
+release и развёртывания нет. До anonymous publication потребуется новая
+спецификация и отдельный threat model.

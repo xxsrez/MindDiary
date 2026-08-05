@@ -21,7 +21,7 @@ Mind Diary: у него есть стабильная identity, дерево OKF
 | `OKFBundle` | Материализованный export одной revision; memberships и ACL в него не входят. |
 | `KnowledgeEntry` / `Memory` | Пользовательский searchable OKF concept; `Memory` — umbrella term в UI. |
 | `Source` | Source-faithful материал или typed source concept с provenance. |
-| `Asset` | Binary/non-Markdown объект OKF; transport для него не входит в первый прототип. |
+| `Asset` / `OpaqueAsset` / `BundleFile` | Пользовательское и возможные технические имена producer-defined non-Markdown файла или resource, связанного с bundle. OKF 0.2 не задаёт нормативную Asset entity или binary manifest; support не входит в первый прототип. |
 | `Index` / `Log` | Reserved OKF `index.md` и `log.md`, а не обычные `KnowledgeEntry`. |
 | `SpaceMembership` | Принятая связь principal с обычным Mind, ролью и lifecycle state. |
 | `SpaceInvitation` | Ожидающее принятия приглашение уже зарегистрированного principal. |
@@ -30,7 +30,9 @@ Mind Diary: у него есть стабильная identity, дерево OKF
 | `PersonalContext` | Отложенный proposal: ограниченная derived projection Personal Mind для персонализации, не второй corpus. |
 
 Слово «артефакт» допустимо как неформальное общее описание content, но API не
-должен скрывать под ним разные правила concept, source, asset и reserved files.
+должен скрывать под ним разные правила concept, source, opaque file и reserved
+files. Точная post-MVP модель `OpaqueAsset`/`BundleFile` остаётся открытым
+решением из [roadmap](../roadmap.md), а не частью нормативного OKF core.
 
 ## Основные отношения
 

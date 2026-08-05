@@ -11,19 +11,29 @@
   (OKF).
 - Единственная целевая production platform текущего MVP — OpenAI Sites. Это
   принятое направление, а не утверждение о уже выполненном deployment.
+- MVP — дешёвая Codex-first проверка managed OKF workflow. Начальная аудитория
+  умеет работать с Codex, но не обязательно умеет самостоятельно устанавливать
+  skills, вести bundle, следить за OKF и собирать storage/access stack.
+- Ограничения MVP не являются границами конечного продукта. Принятая staged
+  direction: Sites + Codex validation, затем основная AWS infrastructure и
+  отдельная website AI surface для более широкой аудитории.
 - Основной язык проектной документации — русский. Английские имена протоколов,
   API и полей сохраняйте, когда перевод снижает точность.
 
 ## Что прочитать перед изменениями
 
 1. [Обзор продукта](docs/overview.md).
-2. [Базовую айдентику](docs/brand.md) — перед user-facing naming, UI или copy.
-3. [Доменную модель и доступ](docs/specs/domain-model.md).
-4. [URL-адресацию и персонализированное открытие](docs/specs/personalized-opening.md).
-5. [Архитектуру](docs/architecture.md).
-6. [Спецификацию первого прототипа](docs/specs/mvp.md).
-7. [Проверку текущего OKF](docs/reports/2026-08-05-okf-status.md).
-8. [Проверку платформенных предпосылок](docs/reports/2026-08-05-platform-status.md).
+2. [Roadmap и стратегию проверки](docs/roadmap.md) — перед product/market
+   analysis, планированием post-MVP функций или трактовкой MVP non-goals.
+3. [Базовую айдентику](docs/brand.md) — перед user-facing naming, UI или copy.
+4. [Доменную модель и доступ](docs/specs/domain-model.md).
+5. [URL-адресацию и персонализированное открытие](docs/specs/personalized-opening.md).
+6. [Архитектуру](docs/architecture.md).
+7. [Спецификацию первого прототипа](docs/specs/mvp.md).
+8. [REST и MCP API](docs/specs/api.md) — перед изменением protocol surface,
+   backend routes, schemas или error contracts.
+9. [Проверку текущего OKF](docs/reports/2026-08-05-okf-status.md).
+10. [Проверку платформенных предпосылок](docs/reports/2026-08-05-platform-status.md).
 
 Архитектурные и specification-документы пока имеют статус proposal. Принятые
 product decisions отделяйте от ещё не выбранных деталей реализации; ни то ни
@@ -43,7 +53,9 @@ product decisions отделяйте от ещё не выбранных дет�
   продукта не заменяет `space_handle` отдельного Mind.
 - Живая совместная сущность сервиса называется `KnowledgeSpace`. Переносимой
   канонической формой одной её revision остаётся `OKFBundle`. В первом прототипе
-  это дерево исходных UTF-8 Markdown; binary Assets отложены. Memberships, ACL,
+  это дерево исходных UTF-8 Markdown. OKF 0.2 не задаёт нормативную `Asset`
+  entity или binary manifest; будущие producer-defined `BundleFile`/
+  `OpaqueAsset` отложены и требуют отдельной specification. Memberships, ACL,
   account/service metadata, idempotency keys и состояние индекса не записываются
   в OKF-frontmatter.
 - Каждый ordinary Space имеет immutable внутренний `space_id`, обязательный
@@ -75,17 +87,20 @@ product decisions отделяйте от ещё не выбранных дет�
   фиксированного `space_type`. Будущая anonymous web-publication остаётся
   отдельной моделью и не заменяет visibility прототипа.
 - Первый прототип создаёт и изменяет только UTF-8 Markdown content в OKF 0.2.
-  ZIP/local bundle import и binary Asset upload/fetch не входят в scope. Codec
-  сохраняет неизвестные OKF types/fields при чтении, изменении и export;
-  будущий legacy 0.1 import потребует отдельной migration policy без silent
-  version/status reinterpretation.
+  ZIP/local bundle import и non-Markdown file upload/fetch не входят в scope.
+  Productized imports явно планируются post-MVP; exact formats и security
+  boundary ещё не приняты. Codec сохраняет неизвестные OKF types/fields при
+  чтении, изменении и export; будущий legacy 0.1 import потребует отдельной
+  migration policy без silent version/status reinterpretation.
 - Полнотекстовые, векторные и графовые индексы всегда производны и должны
   перестраиваться из выбранной канонической ревизии.
 - Изменение создаёт новую immutable revision. Продвижение HEAD требует
   `expected_revision` или эквивалентной optimistic-concurrency проверки.
 - Каждая успешно committed `SpaceRevision` остаётся доступной через историю по
   точному ID или UTC-времени commit. Checkpoints/tags не входят в первый
-  прототип и не подменяют immutable revision IDs.
+  прототип и не подменяют immutable revision IDs. Named checkpoints явно
+  планируются post-MVP; их naming, mutability и API требуют отдельной
+  specification.
 - Исторический selector одного Mind разрешается в точный `revision_id` и всегда
   read-only, даже для Owner. Каждый historical read проверяет текущий доступ:
   membership либо актуальный baseline visibility grant; старые ACL не
@@ -138,6 +153,10 @@ product decisions отделяйте от ещё не выбранных дет�
   может формировать запросы к Personal Mind, выбирать personal fields или
   расширять scopes. Любая композиция нескольких Minds требует явного trusted
   use case и отдельной проверки доступа к каждому из них.
+- После Codex-first validation product direction включает собственную AI
+  surface в web UI: backend вызывает model APIs, а пользователю не требуется
+  самостоятельно настраивать Codex/MCP. Provider, billing, consent, retrieval,
+  citations и write safety пока не приняты и не входят в MVP.
 - Доменное ядро и OKF codec не импортируют AWS SDK, Sites bindings, HTTP
   framework или конкретный поисковый движок. Инфраструктура подключается через
   узкие порты и адаптеры.
@@ -160,12 +179,15 @@ product decisions отделяйте от ещё не выбранных дет�
   остаётся непроверенной platform capability до реального compatibility gate;
   провал gate блокирует production release, а не разрешает молчаливый fallback
   в отдельный container или AWS.
-- AWS, включая Bedrock AgentCore Runtime, S3, DynamoDB и OpenSearch, отложен на
-  post-MVP этап. Domain core и adapters всё равно проектируйте переносимыми и
-  без AWS SDK в доменном ядре.
+- AWS, включая Bedrock AgentCore Runtime, S3, DynamoDB и OpenSearch, — основная
+  planned infrastructure direction и самостоятельная учебная цель после
+  подтверждения MVP. Это не текущая release surface и не автоматический
+  fallback. Domain core и adapters проектируйте переносимыми и без AWS SDK в
+  доменном ядре.
 - Большой export не передавайте внутри JSON-RPC: используйте object storage и
-  короткоживущий download URL. Upload intents, archive import и binary Asset
-  transport не проектируйте до отдельного решения.
+  короткоживущий download URL. Upload intents, archive import и non-Markdown
+  file transport не проектируйте до отдельного решения; вероятная будущая
+  поддержка не означает уже принятого file profile.
 
 ## Релизный контракт
 
@@ -191,6 +213,9 @@ product decisions отделяйте от ещё не выбранных дет�
   документы-заглушки, каждый новый документ связывайте с `docs/README.md`.
 - Явно различайте проверенный внешний факт, требование пользователя,
   архитектурное предложение, гипотезу и открытый вопрос.
+- При product/market analysis оценивайте отдельно Codex-first wedge, будущий
+  website AI и engineering/learning value. Не считайте MVP exclusions отказом
+  от roadmap и не переносите сигнал assisted ближнего круга на массовый рынок.
 - Для изменений поведения сначала обновляйте спецификацию; значимые принятые
   решения фиксируйте отдельным ADR только после их принятия.
 - Не заявляйте conformance, сборку, тесты, deployment или live-интеграцию без

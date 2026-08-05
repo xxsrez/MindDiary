@@ -87,8 +87,8 @@ storage и deployment ещё не реализованы.
 ### Canonical content и export
 
 - Первый прототип принимает через changesets только UTF-8 Markdown paths и
-  создаёт OKF 0.2; ZIP/local bundle import и binary Asset upload/fetch в scope
-  не входят.
+  создаёт OKF 0.2; ZIP/local bundle import и upload/fetch producer-defined
+  non-Markdown files в scope не входят.
 - Проверка OKF 0.2 conformance отдельно от quality warnings.
 - Неизвестные OKF types/fields сохраняются при read-modify-write и export.
 - Legacy 0.1 import/migration отложен и в будущем потребует explicit policy без
@@ -202,6 +202,10 @@ start_export(mind, revision_selector?)
 get_export_status(job_id)
 ```
 
+Сигнатуры выше задают product surface. Exact REST/MCP wire schemas, result
+envelopes, pagination, errors, tool annotations и Resources contract находятся
+в [API specification](api.md).
+
 Это custom Mind-aware tool profile для Codex и отдельно проверяемых clients.
 Первый прототип не
 заявляет OpenAI company-knowledge compatibility: стандартный read-only
@@ -294,7 +298,7 @@ network, которого Sites пока не обещает. Если Streamabl
     отзывает tokens; commits в Minds других Owners остаются с non-PII
     `deleted-principal` tombstone. UI до действия перечисляет affected Minds.
 21. Changeset принимает только UTF-8 Markdown и создаёт OKF 0.2; ZIP/local
-    bundle import и binary Asset transport отсутствуют.
+    bundle import и transport producer-defined non-Markdown files отсутствуют.
 22. Unknown OKF fields/types сохраняются при read-modify-write и deterministic
     export; conformance errors отделены от quality warnings.
 23. Reader и baseline Reader могут экспортировать exact разрешённую revision;
@@ -344,7 +348,8 @@ portable container и AWS/AgentCore не используются без нов�
 - branches, moving tags, named checkpoints, automatic semantic merge и
   historical writes;
 - separate drafts, diff approval и commit approval artifacts;
-- ZIP/local bundle import, binary Asset upload/fetch и legacy 0.1 migration;
+- ZIP/local bundle import, upload/fetch producer-defined non-Markdown files и
+  legacy 0.1 migration;
 - OpenAI company-knowledge `search`/`fetch` compatibility profile;
 - legal retention, recovery, soft delete и production privacy erasure model;
 - billing, organization administration и server-paid inference;
@@ -354,8 +359,26 @@ portable container и AWS/AgentCore не используются без нов�
 - raw browser content viewer/editor, autonomous external actions и outbound
   push.
 
+Этот список ограничивает только первый prototype release. Product roadmap явно
+сохраняет imports и named checkpoints как запланированные post-MVP функции,
+website AI — как отдельную фазу расширения аудитории, а AWS — как основную
+post-MVP infrastructure direction. Модель non-Markdown files/assets остаётся
+открытым решением. См. [roadmap](../roadmap.md).
+
 ## Измерения перед следующими решениями
 
+- Assisted setup completion, time-to-first-useful search и
+  time-to-first-meaningful commit.
+- Retention первой и четвёртой недели отдельно для ближнего круга и внешней
+  pilot cohort.
+- Доля реального usage с writes, history/revert и export, а не только reads и
+  демонстрационными вызовами.
+- Выбор managed Mind вместо local skill/Git/manual context для конкретного
+  повторяющегося workflow.
+- Запросы на import, named checkpoint и non-Markdown source files из реальной
+  работы, а не из feature voting.
+- Готовность продолжать использование и отдельно willingness-to-pay; оплата
+  Codex не считается оплатой Mind Diary.
 - MCP client compatibility и auth setup completion rate.
 - Search/fetch p50/p95, context size и citation success rate.
 - Доля запросов, решённых lexical search без embeddings.

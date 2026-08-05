@@ -45,8 +45,9 @@
 
 ## Что важно для Mind Diary
 
-Нормативный OKF определяет переносимое дерево Markdown concepts и assets, но не
-определяет:
+Нормативный OKF определяет переносимое дерево Markdown concepts и позволяет им
+ссылаться на underlying resources и producer-defined files. Он не определяет
+нормативную `Asset` entity, binary manifest или transport и также не определяет:
 
 - storage и serving;
 - query/search API или MCP;
@@ -57,8 +58,9 @@
 Поэтому Mind Diary обязан проектировать эти механизмы как собственный envelope,
 не изменяя смысл OKF. В первом прототипе changesets работают только с UTF-8
 Markdown, а канонический export сохраняет files/paths и неизвестные types/fields.
-ZIP/local import и binary Asset transport в scope не входят. Search index
-производен, а ACL и revision metadata находятся вне frontmatter.
+ZIP/local import и producer-defined non-Markdown file transport в scope не
+входят. Search index производен, а ACL и revision metadata находятся вне
+frontmatter.
 
 `index.md` даёт естественную основу progressive disclosure: агент сначала
 получает карту, затем выбранный concept и только потом source. `verified` и

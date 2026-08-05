@@ -29,7 +29,8 @@ Sites пока не доказывает, что реальный Streamable HTT
   MVP production release блокируется до нового решения; MCP не переносится
   автоматически в отдельный container.
 - AWS deployment — Bedrock AgentCore Runtime, S3, DynamoDB и optional
-  OpenSearch — отложен на post-MVP этап и не входит в текущий release contract.
+  OpenSearch — является основной planned post-MVP infrastructure direction и
+  самостоятельной учебной целью, но не входит в текущий release contract.
 - Domain core, OKF codec и application ports продолжают проектироваться
   переносимыми, чтобы поздний переход с Sites на AWS не менял domain semantics.
 - Preferred Sites slug остаётся `mind-diary`; exact production domain и URL
@@ -45,8 +46,9 @@ Sites пока не доказывает, что реальный Streamable HTT
   сигналом автоматически развернуть AgentCore или отдельный runtime.
 - Любая новая production surface до завершения MVP требует нового явного
   решения и обновления этого ADR, спецификации и release skill.
-- AWS остаётся архитектурным направлением и portability constraint, но не
-  текущим критерием готовности или release destination.
+- AWS остаётся основной post-MVP direction и portability constraint, но не
+  текущим критерием готовности или release destination; фактическая миграция
+  требует отдельного решения после validation signal.
 
 ## Рассмотренные варианты
 
@@ -57,6 +59,7 @@ Sites пока не доказывает, что реальный Streamable HTT
 - **Local-only prototype.** Недостаточен: не даёт production Site и live
   integration evidence.
 
-Связанные документы: [архитектура](../architecture.md),
+Связанные документы: [roadmap](../roadmap.md),
+[архитектура](../architecture.md),
 [спецификация первого прототипа](../specs/mvp.md) и
 [платформенный отчёт](../reports/2026-08-05-platform-status.md).

@@ -84,8 +84,9 @@ frontmatter, provenance, trust/lifecycle fields и validation. Он:
 - разделяет conformance errors и quality warnings;
 - не знает об MCP, HTTP, auth, Sites, AWS SDK, SQL или search engine.
 
-ZIP/local bundle import, binary Asset transport и legacy 0.1 migration не входят
-в этот slice. Будущий legacy reader обязан получить explicit migration policy
+ZIP/local bundle import, transport producer-defined non-Markdown files и legacy
+0.1 migration не входят в этот slice. Будущий legacy reader обязан получить
+explicit migration policy
 и не может silently менять version/status semantics.
 
 ### 2. Application core
@@ -348,6 +349,9 @@ list/create/rename, catalog, visibility, invitations, roles, transfer, deletion
 и personal tokens. Работа с OKF files происходит через MCP; browser может
 показывать лишь status/metadata, необходимые для управления.
 
+Предлагаемые REST routes, internal command/query boundary и exact MCP
+tools/resources schemas зафиксированы в [API specification](specs/api.md).
+
 Production deployment MVP размещает Web adapter, MCP adapter и core в одном
 OpenAI Site. Внутренние use-case routes при этом не публикуются. Если Sites не
 поддержит required Streamable HTTP или persistence semantics, production
@@ -397,6 +401,9 @@ explicit target Mind. General cross-Mind search/synthesis требует нов�
 
 ### Post-MVP AWS path
 
+- Это основная planned infrastructure direction после подтверждения MVP и
+  самостоятельная учебная цель проекта; она не является текущим release
+  fallback.
 - Будущий portable container в Bedrock AgentCore Runtime.
 - S3 для canonical objects; DynamoDB conditional writes для HEAD, metadata,
   invitations, tokens metadata и outbox.

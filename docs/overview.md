@@ -16,7 +16,23 @@ Space/Entry там, где важна точность API, ACL или OKF seman
 
 Вторая цель проекта — пройти реальный cloud-контур на OpenAI Sites: identity,
 object storage, transactional metadata, MCP runtime, асинхронная индексация и
-observability, сохранив переносимость для post-MVP перехода на AWS.
+observability, сохранив переносимость для основной post-MVP infrastructure
+direction на AWS. Работа с AWS — также самостоятельная учебная цель проекта.
+
+Начальная аудитория — пользователи Codex, которые умеют работать с агентом, но
+не хотят самостоятельно устанавливать skill, создавать и сопровождать OKF
+bundle, следить за версией формата и собирать storage/access workflow. Local
+skill precursor уже показал качественную setup friction у такой аудитории.
+Sites + Codex MVP должен дешёво проверить, снимает ли managed service эту
+работу. Подробная последовательность фаз и граница этого evidence зафиксированы
+в [roadmap](roadmap.md).
+
+После подтверждения базового workflow product direction включает перенос core
+на AWS, productized imports, named checkpoints и собственную AI-поверхность в
+web UI с backend model API calls. Эта будущая поверхность должна позволить
+работать без самостоятельной настройки Codex/MCP и тем самым открыть продукт
+технически неподготовленной аудитории. Она не считается проверенной успехом
+первого Codex pilot.
 
 ## Ментальная модель
 
@@ -107,8 +123,9 @@ email. Invitation появляется внутри Mind Diary, роль выб�
 
 Каждая revision материализуется как дерево UTF-8 Markdown в OKF 0.2 без
 memberships, ACL, tokens и service indexes. Обычная работа идёт по отдельным
-файлам; ZIP/local bundle import и binary Asset upload/fetch в первый прототип не
-входят. Выбранную revision можно детерминированно экспортировать как
+файлам; ZIP/local bundle import и upload/fetch producer-defined non-Markdown
+files в первый прототип не входят. Выбранную revision можно детерминированно
+экспортировать как
 `OKFBundle`.
 
 Основная write-команда принимает `expected_revision`, `idempotency_key` и набор
@@ -221,8 +238,15 @@ OKF access, immediate CAS commits, immutable history и export.
 email delivery, fuzzy global user search, granular file permissions, branches,
 automatic semantic merge, legal retention/recovery model, billing,
 organization administration и general cross-Mind synthesis.
-Также отложены ZIP/local bundle import, binary Asset transport, legacy 0.1
-migration, named checkpoints и company-knowledge compatibility profile.
+Также отложены ZIP/local bundle import, transport producer-defined non-Markdown
+files, legacy 0.1 migration, named checkpoints и company-knowledge compatibility
+profile.
+
+Imports и named checkpoints не просто исключены из MVP, а явно запланированы в
+post-MVP roadmap. Support non-Markdown files/assets вероятно потребуется, но
+его producer profile и первый поддерживаемый slice пока не приняты. Ограничения
+этого раздела нельзя трактовать как полные границы будущего продукта; см.
+[roadmap](roadmap.md).
 
 Personalized content landing из ограниченного PersonalContext остаётся частью
 product direction, но не входит в критерии первого прототипа. В этом slice
@@ -237,9 +261,10 @@ landing требуют отдельного принятого scope.
 - **Sites MVP production:** единственный текущий production target. Один
   production Site должен дать authenticated web/control UI, persistence и
   Streamable HTTP MCP; провал compatibility gate блокирует release.
-- **Post-MVP AWS path:** Bedrock AgentCore Runtime, S3 canonical objects,
+- **Primary post-MVP AWS path:** Bedrock AgentCore Runtime, S3 canonical objects,
   DynamoDB transactional metadata и optional derived OpenSearch index. Это
-  будущая миграция, не текущая release surface.
+  будущая основная infrastructure direction и учебная цель, не текущая release
+  surface.
 
 В текущем проектном языке «зарелизить на продакшн» означает опубликовать exact
 проверенный commit в production OpenAI Site Mind Diary и подтвердить live web +
