@@ -8,7 +8,8 @@
 в private KnowledgeSpace; их агенты находят source-grounded knowledge через MCP,
 дочитывают канонический OKF concept и безопасно создают новую revision.
 Участники открывают read-only состояние Space по revision/date/Checkpoint.
-Каждый Space имеет стабильный auth-gated URL с audience-neutral landing.
+Каждый Space имеет стабильный auth-gated `/{space_handle}` с base landing и
+ограниченной персонализацией из designated Personal Space пользователя.
 Admin/Owner получает переносимый валидный export.
 
 MVP считается vertical slice, а не набором независимых демонстраций. В нём одна
@@ -20,8 +21,9 @@ MVP считается vertical slice, а не набором независим
 ### Bundle lifecycle
 
 - Импорт ZIP или локального OKF bundle с Markdown и binary assets.
-- Создание target Space требует отдельного service-level `name`; import не
-  превращает название из bundle в identity или ACL автоматически.
+- Создание target Space требует отдельные service-level `space_handle` и
+  display `name`; import не превращает название из bundle в URL identity или
+  ACL автоматически.
 - Проверка OKF 0.2 conformance с отдельными quality warnings.
 - Best-effort чтение неизвестных будущих полей и legacy 0.1 fallbacks
   `timestamp`/`# Citations`.
@@ -42,20 +44,26 @@ MVP считается vertical slice, а не набором независим
 ### Canonical URL и landing
 
 - Каждый Space получает canonical HTTPS URL вида
-  `https://{deployment-host}/spaces/{space_id}`. В local profile host тестовый,
-  но path contract совпадает с Sites/AWS adapters.
-- Rename, новая HEAD и смена presentation settings не меняют canonical URL.
-  Human-readable aliases не входят в MVP.
-- Авторизованный переход возвращает `SpaceLanding` выбранной revision: title,
-  audience-neutral summary, authored entrypoints, provenance/freshness,
-  suggested questions и available actions.
-- Landing не содержит memberships/private settings, не персонализируется и не
-  загружает весь corpus. Derived text помечается как generated.
+  `https://{space-host}/{space_handle}`. В local profile host тестовый, но path
+  contract совпадает с Sites/AWS adapters.
+- `space_handle` — immutable в MVP и уникален внутри verified host namespace.
+  Rename display name, новая HEAD и смена presentation settings не меняют URL.
+- Авторизованный переход возвращает `SpaceLanding` выбранной target revision:
+  title, base summary, authored entrypoints, provenance/freshness, suggested
+  questions и available actions.
+- Если у principal есть designated Personal Space, consent и
+  `personal.context.read`, landing по умолчанию получает mode `personal_space`
+  и адаптирует подачу из exact personal revision. Иначе mode — `base`; UI
+  позволяет принудительно показать base.
+- Landing не содержит memberships/private settings, raw personal facts и не
+  загружает ни target, ни personal corpus. Derived text помечается как
+  generated и не записывается в Space автоматически.
 - Private URL проверяет current membership до чтения Space metadata;
   неавторизованный ответ не раскрывает name, summary или факт существования.
-- Web representation и `get_space_info` ссылаются на один `space_id`, canonical
-  URL и `resolved_revision_id`. Начало adaptive SpaceSession и anonymous public
-  landing остаются вне MVP.
+- Web representation и `get_space_info` ссылаются на один target `space_id`,
+  canonical URL, target `resolved_revision_id`, personalization mode и, только
+  для самого principal, `personal_context_revision_id`. Полная adaptive
+  SpaceSession и anonymous public landing остаются вне MVP.
 
 ### Read-only history
 
@@ -93,21 +101,26 @@ MVP считается vertical slice, а не набором независим
 
 ### Access
 
-- Два private KnowledgeSpaces в тестовом tenant: основной collaborative Space и
-  isolation fixture; несколько active users имеют пересекающиеся memberships.
-- Каждый Space имеет immutable `space_id` и обязательное `name`; нормализованное
-  имя уникально внутри tenant, а authorization использует только ID.
+- Не менее четырёх private KnowledgeSpaces в fixture: основной collaborative
+  target, isolation Space и по designated Personal Space для двух principals.
+- Каждый Space имеет immutable `space_id`, immutable в MVP `space_handle` и
+  обязательное mutable display `name`. Нормализованный handle уникален внутри
+  host namespace; authorization после resolver использует только ID.
 - Many-to-many `SpaceMembership` с ролями `reader`, `editor`, `admin`, `owner`.
 - Один content MCP mount всегда связан ровно с одним Space.
-- Canonical URL выводится из verified deployment host и `space_id`, а не из
-  переданных клиентом tenant/name/role.
+- Canonical URL выводится из verified deployment host и сохранённого handle, а
+  не из переданных клиентом tenant/name/role. Resolver переводит handle в ID до
+  authorization и object read.
+- Personal Space overlay server-side разрешает только designated Space того же
+  verified principal и не даёт MCP второй searchable corpus.
 - Создание Space атомарно создаёт creator membership с ролью Owner.
 - Owners может быть несколько; последнего active Owner нельзя demote/revoke.
 - Admin управляет Reader/Editor memberships и Space settings/export. Только
   Owner управляет Admin/Owner memberships, visibility и Space lifecycle.
 - Отдельные scopes как минимум `space.read`, `space.history.read`,
   `space.draft`, `space.commit`, `space.export`, `space.checkpoint.write`,
-  `space.settings`, `space.members.write`, `space.owner`.
+  `space.settings`, `space.members.write`, `space.owner` и
+  `personal.context.read`.
 - Identity берётся из проверенного auth context, не из tool arguments.
 - Role задаёт максимум capabilities; mount/OAuth scopes могут только сузить их.
 - `space.commit` не заменяет approval token; autonomous commit не входит в MVP.
@@ -156,12 +169,13 @@ start_export()
 get_export_status(job_id)
 ```
 
-`get_space_info` возвращает название Space, текущую роль, effective content
-capabilities, canonical URL, audience-neutral landing metadata, selector,
-`resolved_revision_id`, commit time, `is_historical` и `management_url`. Это
-информация для UX, а не доказательство прав: server-side authorization всё
-равно читает текущий membership из проверенного identity context. Создание
-Checkpoint остаётся trusted control-plane operation, а не content MCP tool.
+`get_space_info` возвращает handle/display name Space, текущую роль, effective
+content capabilities, canonical URL, landing mode, selector, target
+`resolved_revision_id`, private `personal_context_revision_id` при его
+использовании, commit time, `is_historical` и `management_url`. Это информация
+для UX, а не доказательство прав: server-side authorization всё равно читает
+текущий membership из проверенного identity context. Создание Checkpoint
+остаётся trusted control-plane operation, а не content MCP tool.
 
 Import может сначала оставаться web/CLI operation. Если он входит в MCP,
 archive передаётся через upload intent/presigned URL, а не base64 в JSON-RPC.
@@ -211,13 +225,14 @@ annotations. Input validation errors должны быть понятны мод
     затем получает reviewed token через operator CLI и выполняет commit через
     Streamable HTTP. Автоматический integration test повторяет поток через
     test-only issuer вне MCP.
-17. Ни один лог или trace не содержит body concept, access/approval token или
-    transfer URL.
-18. Space нельзя создать без name и creator-owner; content import не импортирует
-    имя как identity или ACL.
-19. Два нормализованно одинаковых имени в одном tenant получают conflict; такое
-    же имя в другом tenant допустимо. Rename использует metadata CAS и не меняет
-    content HEAD или `space_id`.
+17. Ни один лог или trace не содержит body concept, PersonalContext/personal
+    fact, landing body, access/approval token или transfer URL.
+18. Space нельзя создать без `space_handle`, display `name` и creator-owner;
+    content import не импортирует handle, name или ACL.
+19. Два нормализованно одинаковых handles на одном verified host получают
+    conflict даже в разных tenants; на другом verified host тот же handle
+    допустим. Display names могут совпадать. Rename name использует metadata CAS
+    и не меняет content HEAD, handle или `space_id`.
 20. Reader не создаёт draft; Editor делает reviewed commit; Admin управляет
     Reader/Editor, но не Admin/Owner; Owner управляет всеми ролями.
 21. Один principal может быть Editor в основном Space и Reader в isolation
@@ -229,14 +244,28 @@ annotations. Input validation errors должны быть понятны мод
 24. Membership mutation не меняет content HEAD и имеет ровно один audit event;
     retry с тем же idempotency key возвращает тот же результат.
 25. Полный test suite, OKF fixtures и docs validation проходят на одном commit.
-26. Create Space возвращает canonical `/spaces/{space_id}`; rename и смена HEAD
-    не меняют URL, а name/slug не используется как authorization identity.
-27. Authorized member получает по URL audience-neutral landing exact resolved
-    revision. Два неавторизованных запроса к случайному и существующему private
-    ID не различимы по раскрываемой Space metadata.
-28. Web landing и `get_space_info` возвращают тот же `space_id`, canonical URL
-    и `resolved_revision_id`; landing не содержит membership list или весь
-    corpus.
+26. Create Space возвращает canonical `/{space_handle}`; rename display name и
+    смена HEAD не меняют URL. Router разрешает handle в `space_id` до ACL и
+    object read; handle не используется как доказательство прав.
+27. Authorized member получает по URL landing exact target revision. Два
+    неавторизованных запроса к случайному и существующему private handle не
+    различимы по раскрываемой Space metadata.
+28. Web landing и `get_space_info` возвращают тот же target `space_id`, handle,
+    canonical URL и `resolved_revision_id`; landing не содержит membership list
+    или весь target/personal corpus.
+29. Два authorized principals с разными designated Personal Spaces получают
+    разную глубину/порядок подачи одной target revision, но одинаковые target
+    facts, revision ID и provenance.
+30. Principal без designation, consent или `personal.context.read` получает
+    `base`; instrumentation подтверждает, что его Personal Space не читался.
+31. Malicious instruction в target concept не может выбрать arbitrary personal
+    path/query, получить raw personal fact, сменить designation или расширить
+    `personal.context.read`.
+32. Personalized landing одного principal не выдаётся другому, не попадает в
+    shared/CDN cache и не виден в audit/analytics Owners target Space.
+33. Personalized landing фиксирует exact personal revision ID. Продвижение HEAD
+    Personal Space не меняет уже возвращённый result/receipt; новый opening
+    явно разрешает новую revision.
 
 ## Compatibility gate для Sites
 
@@ -246,7 +275,7 @@ Developer mode, а не только локальным fetch:
 - stable public HTTPS `/mcp`;
 - protocol negotiation и `tools/list`;
 - `search`/`fetch` с canonical URLs и citations;
-- canonical `/spaces/{space_id}` и revision-bound SpaceLanding;
+- canonical `/{space_handle}` и revision-bound base/personalized SpaceLanding;
 - streaming/error behavior без buffering;
 - OAuth discovery, PKCE, audience/scopes и refresh;
 - domain challenge;
@@ -286,10 +315,12 @@ Developer mode, а не только локальным fetch:
 - billing и organization administration;
 - invitations, groups, path/tag grants, `unlisted`/`public_read`, public links и
   cross-tenant sharing;
-- human-readable public aliases, global discovery/link graph и anonymous
-  SpaceLanding;
-- KnowledgeSite publication, SpaceSession/SpaceGuide, adaptive answers,
-  proactive recommendations, outbound push и `follow_head` publication;
+- handle rename/aliases, global discovery/link graph и anonymous SpaceLanding;
+- general cross-space search, несколько Personal Spaces/профилей, использование
+  sensitive personal categories и sharing designated Personal Space;
+- KnowledgeSite publication, полноценная SpaceSession/SpaceGuide, свободные
+  adaptive answers, proactive recommendations, outbound push и `follow_head`
+  publication;
 - AgentCore Gateway, Memory, Bedrock Knowledge Bases, Verified Permissions,
   Object Lock и multi-region replication.
 
@@ -298,6 +329,10 @@ Developer mode, а не только локальным fetch:
 - Retrieval benchmark для русского, английского и mixed-language corpus.
 - Доля запросов, решённых lexical search без embeddings.
 - Search/fetch p50/p95, размер контекста и citation success rate.
+- Base/personalized landing p50/p95, доля fallback и субъективная полезность
+  адаптации без изменения factual grounding.
+- Доля пользователей, включивших Personal Space context, и частота ручного
+  переключения на base без логирования личного содержания.
 - Частота revision conflicts и среднее время index lag.
 - Стоимость хранения/запросов на fixture масштаба 1k, 10k и 100k concepts.
 - Фактическая совместимость Sites с MCP и OAuth.

@@ -27,32 +27,38 @@ CloudBrain — не способ заранее загрузить всю тем
 
 Сам Space не является автономным агентом. Каноническое знание остаётся
 неизменяемой ревизией, а ответы, рекомендации и порядок подачи — derived
-presentation конкретной ревизии для конкретной сессии.
+presentation конкретной ревизии для конкретного пользователя или сессии.
 
 ## Адресуемая сеть знаний
 
 Продуктовая гипотеза CloudBrain — «интернет из знаний»: базовой адресуемой
 единицей становится не страница и не чат, а `KnowledgeSpace`. У каждого Space
-есть стабильный canonical HTTPS URL внутри deployment, например
-`/spaces/{space_id}`. Переименование Space или смена человекочитаемого alias не
-ломают ссылку; будущий адрес вида `/@publisher/napoleon` остаётся удобным
-redirect, а не identity.
+есть стабильный человекочитаемый canonical HTTPS URL вида
+`https://{space-host}/{space_handle}`. `space_handle` — внешнее имя-идентификатор
+в пределах host namespace; внутри сервиса оно разрешается в immutable
+`space_id`, который используют ACL, revisions, audit и storage.
 
-Переход по URL сначала открывает `SpaceLanding` — общее audience-neutral
-представление одной разрешённой revision. Оно отвечает на четыре вопроса:
+Переход по URL сначала открывает `SpaceLanding` одной разрешённой revision. Он
+отвечает на четыре вопроса:
 
 - что это за Space и о чём он;
 - какие основные темы и authored entrypoints доступны;
 - на какой revision, источниках и freshness signals основано представление;
 - что можно прочитать или спросить дальше.
 
-Landing одинаков до начала разговора и не использует личный профиль посетителя.
-«Обезличенное» здесь означает отсутствие персональной адаптации и раскрытия
-участников, а не превращение private content в публичный.
-После явного действия «начать разговор» создаётся `SpaceSession`: тогда уровень
-подготовки, вопрос и контекст пользователя могут менять глубину и порядок
-объяснения, но не corpus и права. Это разделяет нейтральную точку входа и
-персональную беседу.
+Для anonymous/no-consent посетителя это `base`-представление. Для
+аутентифицированного пользователя продуктовая гипотеза — уже первый landing
+адаптировать под его язык, уровень знаний, интересы и цели с помощью
+ограниченного контекста из designated Personal Space. Пользователь может
+отключить адаптацию и увидеть базовую версию. Personal context меняет подачу,
+но не corpus, source trust, revision или права.
+
+Personal Space при этом не является особым форматом базы. Это обычный private
+KnowledgeSpace, связанный с principal отдельной service metadata. Server-side
+policy извлекает из него минимальный purpose-bound контекст; целевой Space не
+получает доступ к личному corpus и не может управлять таким извлечением.
+Последующий разговор создаёт `SpaceSession` и продолжает адаптацию в тех же
+границах.
 
 URL существует и у private Space, но это не public link. Неавторизованный
 запрос не получает название, summary или подтверждение существования Space.
@@ -63,8 +69,9 @@ cross-space links и поисковая сеть — возможное разв
 
 ## Основные сущности
 
-- `KnowledgeSpace` — live collaborative container с обязательным именем,
-  canonical URL, содержимым, участниками, ролями, настройками и HEAD revision.
+- `KnowledgeSpace` — live collaborative container с immutable внутренним ID,
+  стабильным URL handle, display name, содержимым, участниками, ролями,
+  настройками и HEAD revision.
 - `SpaceRevision` — immutable snapshot содержимого.
 - `Checkpoint` — неизменяемое человекочитаемое имя для конкретной
   `SpaceRevision`; это не OKF content tag.
@@ -77,8 +84,11 @@ cross-space links и поисковая сеть — возможное разв
   `admin` или `owner`.
 - `KnowledgeMount` связывает один MCP connection с одним Space и подмножеством
   разрешённых возможностей.
-- `SpaceLanding` — audience-neutral начальное представление Space по его URL,
-  привязанное к одной разрешённой revision.
+- `Personal Space designation` связывает principal с одним обычным private
+  Space, который можно использовать как источник разрешённого личного контекста.
+- `SpaceLanding` — базовое или персонализированное начальное представление Space
+  по его URL, привязанное к exact target revision и, при адаптации, exact
+  Personal Space revision.
 - `KnowledgeSite` публикует выбранную immutable revision как обычные страницы и
   интерактивную точку входа.
 - `SpaceSession` хранит контекст конкретного разговора, включая заявленный
@@ -93,17 +103,18 @@ cross-space links и поисковая сеть — возможное разв
 Это не фиксированные `space_type`, а сценарии и конфигурации одной сущности:
 
 1. **Personal Space.** Один Owner хранит знания по теме или обо всём сразу;
-   Space остаётся private.
+   Space остаётся private. Один такой Space может быть явно designated как
+   default Personal Space для адаптации других Spaces.
 2. **Shared Space.** Семья или небольшая группа добавляет разные наблюдения и
    получает общую source-aware картину без потери авторства и revision history.
 3. **Community Space.** Доверенные Editors совместно собирают знания по игре или
    другой теме в wiki-подобной модели. Moderation, reputation и review queues
    появятся только при реальной необходимости.
 4. **Knowledge site.** Владелец публикует выбранную ревизию как статическую
-   основу сайта. Посетитель по стабильному URL сначала получает нейтральный
-   SpaceLanding, затем может начать разговор, сообщить свой уровень — например,
-   «я профессиональный историк» — и получить более глубокую подачу на основе
-   того же corpus.
+   основу сайта. Anonymous посетитель получает базовый SpaceLanding, а
+   аутентифицированный пользователь может сразу получить более подходящую
+   подачу — например, как профессиональный историк — и затем продолжить
+   разговор на основе того же corpus.
 5. **Historical view.** Участник открывает Space «на момент два месяца назад»
    или по Checkpoint. Время разрешается в точную revision, и весь разговор,
    поиск и fetch остаются привязаны к ней без смешивания с HEAD.
@@ -116,16 +127,20 @@ SpaceGuide при этом полезен не только публичному
 
 ## Основной сценарий
 
-1. Пользователь создаёт именованный private KnowledgeSpace и в той же транзакции
-   становится его первым Owner либо импортирует OKF bundle в новый Space.
+1. Пользователь создаёт private KnowledgeSpace с уникальным в host namespace
+   `space_handle` и display name; в той же транзакции он становится первым
+   Owner либо импортирует OKF bundle в новый Space.
 2. Owner/Admin добавляет существующих пользователей как Reader или Editor;
    Owner отдельно управляет Admin/Owner memberships.
 3. CloudBrain валидирует структуру, сохраняет immutable SpaceRevision и строит
    производный индекс.
-4. Space получает canonical URL на основе `space_id`. Авторизованный переход
-   открывает audience-neutral landing текущей разрешённой revision.
+4. Space получает canonical URL `/{space_handle}`. Router разрешает handle во
+   внутренний `space_id`, проверяет доступ и открывает base либо personalized
+   landing текущей разрешённой revision.
 5. Каждый пользователь подключает к агенту KnowledgeMount одного Space и
-   получает не больше прав своей membership и OAuth scopes.
+   получает не больше прав своей membership и OAuth scopes. Разрешённый
+   Personal Space overlay остаётся server-side presentation context, а не
+   вторым corpus в mount.
 6. Агент вызывает `search`, затем `fetch` или читает OKF resource по URI.
 7. Editor/Admin/Owner при наличии write scope создаёт draft с ожидаемой
    исходной ревизией.
@@ -138,10 +153,11 @@ SpaceGuide при этом полезен не только публичному
    унести базу на другую платформу.
 
 Будущий publication flow отдельно выбирает `published_revision`, строит из неё
-KnowledgeSite и привязывает SpaceGuide. Начальная страница берётся из authored
-content; заявленный посетителем audience profile меняет объяснение и подбор
-следующих материалов только внутри его SpaceSession. Generated answer или
-recommendation становится общим знанием лишь после обычного draft/review/commit.
+KnowledgeSite и привязывает SpaceGuide. Базовая страница берётся из authored
+content; разрешённый Personal Space context или заявленный в SpaceSession
+audience profile меняет объяснение и подбор следующих материалов. Generated
+answer или recommendation становится общим знанием лишь после обычного
+draft/review/commit.
 
 ## Продуктовые принципы
 
@@ -151,10 +167,12 @@ recommendation становится общим знанием лишь посл�
   агентной wiki-синтеза; поиск возвращает provenance и канонические URI.
 - **Progressive disclosure.** Агент не загружает bundle целиком и может
   переходить от индекса к concept и первоисточнику.
-- **Addressable by default.** У каждого Space есть стабильный ID-based URL;
-  mutable name и public aliases не являются identity.
-- **Neutral before adaptive.** URL сначала открывает audience-neutral landing;
-  персонализация начинается только внутри явной SpaceSession.
+- **Human-addressable by default.** У каждого Space есть стабильный
+  `/{space_handle}`; URL name является внешней identity, а внутренний
+  `space_id` сохраняет ссылочную и authorization целостность.
+- **Personalized with a neutral fallback.** Authenticated opening может сразу
+  учитывать Personal Space; базовая версия всегда доступна, anonymous opening
+  не использует личный контекст.
 - **Safe writes.** Нет last-writer-wins: мутации используют revisions,
   idempotency и optimistic concurrency.
 - **Explicit time travel.** Исторический selector разрешается один раз в
@@ -174,11 +192,11 @@ recommendation становится общим знанием лишь посл�
 ## Границы первой версии
 
 В первую версию входят импорт и экспорт OKF 0.2, browse/search/fetch, проверка
-bundle, обязательное tenant-unique имя, private shared Space, несколько
-memberships с четырьмя ролями,
+bundle, обязательные host-unique `space_handle` и display name, private shared
+Space, designated Personal Space, несколько memberships с четырьмя ролями,
 membership audit, last-owner protection, безопасная точечная запись, а также
-canonical auth-gated URL, нейтральный landing и read-only история по revision
-ID, времени и immutable Checkpoint. Подробные критерии находятся в
+canonical auth-gated URL, base/personalized landing и read-only история по
+revision ID, времени и immutable Checkpoint. Подробные критерии находятся в
 [спецификации MVP](specs/mvp.md).
 
 Не входят автоматический web crawler, полнофункциональный редактор документов,
@@ -211,9 +229,10 @@ invitations/groups, public или cross-tenant sharing, автономная п�
   ни одна конкурентная операция не оставляет Space без Owner.
 - ChatGPT или другой MCP client находит concept через `search`, получает его
   через `fetch` и показывает рабочую ссылку на канонический resource.
-- Rename не ломает canonical Space URL; авторизованный участник видит по нему
-  audience-neutral landing разрешённой revision, а посторонний не узнаёт о
-  существовании private Space.
+- Rename display name не ломает canonical `/{space_handle}`. Два пользователя
+  могут увидеть разную подачу одной target revision из-за разных Personal
+  Spaces, но одинаковые факты и provenance; посторонний не узнаёт metadata
+  private Space.
 - Участник открывает состояние Space на заданное время или по Checkpoint;
   интерфейс показывает resolved revision, а search/fetch не подмешивают HEAD.
 - KnowledgeSite показывает только явно опубликованную revision; посетитель

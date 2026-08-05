@@ -34,7 +34,9 @@ migrations ещё не реализованы.
 | `Index` / `Log` | Reserved OKF `index.md` и `log.md`, не обычные `KnowledgeEntry`. |
 | `SpaceMembership` | Связь principal с одним Space, ролью и lifecycle state. |
 | `KnowledgeMount` | Authorization binding одного MCP connection к одному Space. Не часть знания. |
-| `SpaceLanding` | Audience-neutral начальное представление одной разрешённой revision по canonical Space URL. |
+| `Personal Space designation` | Service-level связь principal с одним private KnowledgeSpace для разрешённой персонализации. |
+| `PersonalContext` | Минимальная derived projection exact Personal Space revision для адаптации, не второй corpus. |
+| `SpaceLanding` | Base или personalized представление одной разрешённой target revision по canonical Space URL. |
 | `KnowledgeSite` | Web-представление явно опубликованной `SpaceRevision`; не отдельная копия знаний. |
 | `SpaceSession` | Контекст одного участника или посетителя и его audience profile; service metadata, не OKF. |
 | `SpaceGuide` | Read-only orchestration, которая отвечает и предлагает материалы по разрешённой revision. |
@@ -58,6 +60,8 @@ flowchart LR
     Source[Source]
     Asset[Asset]
     Mount[KnowledgeMount]
+    PersonalDesignation[Personal Space designation]
+    PersonalContext[PersonalContext]
     Landing[SpaceLanding]
     Site[KnowledgeSite]
     Session[SpaceSession]
@@ -65,6 +69,8 @@ flowchart LR
 
     User -->|many| Membership
     Membership -->|many-to-one| Space
+    User -->|zero or one| PersonalDesignation
+    PersonalDesignation -->|designates ordinary private| Space
     Mount -->|actor + effective permissions| Membership
     Mount -->|exactly one| Space
     Space -->|HEAD| Revision
@@ -74,7 +80,9 @@ flowchart LR
     Revision --> Source
     Revision --> Asset
     Revision -->|materialize| Bundle
-    Landing -->|describes one allowed revision| Revision
+    Landing -->|describes target revision| Revision
+    PersonalContext -->|reads exact personal revision| Revision
+    Landing -->|optional bounded adaptation| PersonalContext
     Space -->|canonical URL| Landing
     Site -->|published revision| Revision
     Site -->|renders| Landing
@@ -87,78 +95,92 @@ flowchart LR
 может быть несколько пользователей и несколько одновременных editors. Web
 control plane показывает список доступных Spaces; content MCP по-прежнему
 работает только с одним Space на connection и не делает неявный cross-space
-search.
+search. Server-side PersonalContext является узким исключением для presentation
+и не превращает Personal Space во второй mount.
 
 ## Имя и адресация
 
-Каждый Space имеет два разных идентификатора:
+Space имеет человекочитаемую внешнюю identity и отдельную внутреннюю identity:
 
 ```text
-space_id          # immutable opaque primary identity
-name              # required human-readable name
-normalized_name   # service-derived uniqueness key
-metadata_version  # CAS for rename/settings
-canonical_path    # derived /spaces/{space_id}, never name-based
+space_id          # immutable opaque internal primary identity
+space_handle      # required stable external URL identity, one path segment
+normalized_handle # service-derived key within verified host namespace
+name              # required mutable display name
+metadata_version  # CAS for name/settings
+canonical_path    # derived /{space_handle}
 ```
 
-В MVP `normalized_name` уникален в пределах tenant. Global uniqueness не нужна:
-она раскрывала бы существование private Spaces и создавала бы ненужный рынок
-имён. Минимальная нормализация фиксируется до реализации и как минимум включает
-trim, Unicode NFC и case folding.
-
-API, ACL, audit, revisions, mounts и durable links адресуют Space через
-`space_id`. Человек может выбрать Space по имени, но resolver сначала переводит
-`tenant_id + normalized_name` в ID. Rename выполняется с
-`expected_metadata_version`; изменение имени не меняет content HEAD и не
-переписывает OKF bundle.
-
-Каждый Space с момента создания имеет deployment-scoped canonical HTTPS URL:
+Canonical URL с момента создания имеет форму:
 
 ```text
-https://{deployment-host}/spaces/{space_id}
+https://{space-host}/{space_handle}
 ```
 
-Host зависит от deployment, но path строится только на immutable `space_id`.
-Rename, смена visibility, новая HEAD или promotion published revision не меняют
-этот адрес. Для public UX отдельный namespace/slug и aliases могут дать адрес
-наподобие `/@publisher/napoleon`; alias перенаправляет на canonical URL, может
-иметь историю redirect и никогда не используется как authorization key.
-Production URL должен использовать управляемый product/custom domain, а не
-provider-specific hostname: перенос Sites → AWS сохраняет host либо оставляет
-permanent redirect со старого URL.
+`space_handle` — то самое имя Space, которым человек адресует его в сети.
+`normalized_handle` уникален по `(host_namespace, normalized_handle)`; при
+едином product host это означает глобальную уникальность на всём host. Host
+берётся из trusted deployment configuration, а не из клиентского tenant input.
+Минимальная normalization policy, Unicode/confusable rules, reserved routes и
+percent encoding фиксируются до реализации.
 
-Canonical URL существует и у private Space, но не является публичным доступом.
-Resolver проверяет visibility, current membership и scopes до чтения названия,
-landing или revision. Неавторизованный ответ не должен позволять отличить
-несуществующий Space от существующего private Space.
+Router сначала разрешает handle в `space_id`. API, ACL, audit, revisions,
+mounts, jobs, indexes и object keys после этого используют только `space_id`.
+Это не обесценивает внешнюю identity handle: она является canonical web
+address, а ID остаётся внутренним ключом целостности и авторизации.
+
+В MVP `space_handle` immutable, а display `name` можно менять с
+`expected_metadata_version`. Rename name, смена visibility, новая HEAD или
+promotion published revision не меняют URL. Будущий rename handle потребует
+отдельной CAS-команды, permanent redirect и tombstone: старый handle нельзя
+отдать другому Space. Production использует управляемый product/custom domain;
+перенос Sites → AWS сохраняет host либо permanent redirect со старого домена.
+
+Canonical URL существует и у private Space, но не является публичным доступом
+или bearer secret. Resolver не раскрывает name, landing или revision до проверки
+visibility, current membership и scopes. Запрос к неизвестному и существующему
+private handle не должен различаться по раскрываемой Space metadata. При этом
+конфликт регистрации host-unique handle сам может раскрыть занятость имени;
+этот privacy/UX trade-off остаётся открытым до публичного self-service signup.
 
 ## SpaceLanding
 
 Успешный переход по canonical URL возвращает `SpaceLanding` для ровно одной
-разрешённой revision: HEAD для обычного member view, resolved revision для
-Snapshot View или `published_revision_id` для anonymous KnowledgeSite.
+разрешённой target revision: HEAD для обычного member view, resolved revision
+для Snapshot View или `published_revision_id` для anonymous KnowledgeSite.
 
 Минимальная модель landing:
 
 ```text
 space_id
+space_handle
 canonical_url
-resolved_revision_id
+target_revision_id
 title
-audience_neutral_summary
+base_summary
+personalization_mode: base | personal_space
+personal_context_revision_id?
+personalized_summary?
 entrypoints[]
 source / freshness indicators
 suggested_questions[]
 available_actions[]
 ```
 
-Landing даёт общее, одинаковое для всех посетителей этого access mode описание:
-что находится в Space, с чего начать, на какой revision и evidence оно
-опирается. Title, summary и entrypoints в приоритете берутся из authored
-presentation/OKF content выбранной revision. Derived summary или suggested
-questions явно помечаются как generated и не становятся canonical knowledge.
-Для anonymous publication Owner отдельно подтверждает landing; private HEAD не
-может автоматически породить public summary.
+Режим `base` даёт общее описание: что находится в Space, с чего начать, на
+какой revision и evidence оно опирается. Title, summary и entrypoints в
+приоритете берутся из authored presentation/OKF content выбранной revision.
+Derived summary или suggested questions явно помечаются как generated и не
+становятся canonical knowledge. Для anonymous publication Owner отдельно
+подтверждает base landing; private HEAD не может автоматически породить public
+summary.
+
+Режим `personal_space` строится для authenticated principal из той же target
+revision и ограниченного `PersonalContext`, разрешённого из exact revision его
+designated Personal Space. Он может менять язык, глубину, порядок, примеры и
+suggested questions, но не target facts, provenance, trust или ACL. Пользователь
+без designation/scope/consent и любой anonymous visitor получает `base`;
+аутентифицированный пользователь может переключиться на base вручную.
 
 Сам `SpaceLanding` — revision-bound projection, а не новый OKF document и не
 вторая копия corpus. Его authored inputs могут храниться в OKF, presentation
@@ -166,11 +188,14 @@ settings — в service metadata, а generated части всегда восп�
 указанной revision и помечены как derived.
 
 `SpaceLanding` не содержит memberships, contributor identities, private
-settings, audience profile или conversation history и не загружает весь corpus
-в browser/model context. После явного начала разговора создаётся отдельная
-`SpaceSession`; только внутри неё presentation может адаптироваться под вопрос
-и уровень пользователя. Canonical URL при этом остаётся адресом Space, а не ID
-сессии.
+settings, raw personal facts или conversation history и не загружает target или
+personal corpus целиком в browser/model context. Personalized output приватен
+для principal, не виден Owners целевого Space и не попадает в shared cache.
+После начала разговора отдельная `SpaceSession` продолжает адаптацию. Canonical
+URL остаётся адресом Space, а не ID пользователя или сессии.
+
+Точная модель designation, bounded provider, consent и cache isolation описана
+в [спецификации персонализированного открытия](personalized-opening.md).
 
 ## Сценарии, а не типы Space
 
@@ -179,7 +204,7 @@ settings, audience profile или conversation history и не загружае�
 
 | Сценарий | Конфигурация |
 |---|---|
-| Personal | `private`, один Owner, publication отсутствует. |
+| Personal | `private`, один Owner, publication отсутствует; может быть designated для principal. |
 | Shared/family | `private`, несколько memberships и параллельные Editors. |
 | Community wiki | Несколько trusted Editors; moderation/reputation пока отсутствуют. |
 | Knowledge site | Space имеет publication на выбранную revision и presentation surface. |
@@ -190,6 +215,12 @@ Visibility, membership и publication policy остаются независим
 
 `principal_id` — opaque stable ID, полученный из проверенной пары
 `issuer + subject`; email или display name не являются identity key.
+
+У principal может быть не более одного `default_personal_space_id`. Designation
+явно ссылается на обычный private KnowledgeSpace, где principal — Owner; это
+service metadata, не membership role и не OKF type. В MVP designated Personal
+Space не имеет других participants. Автоматическое создание Personal Space и
+долговременный consent пока остаются продуктовыми гипотезами.
 
 Минимальная запись `SpaceMembership`:
 
@@ -265,7 +296,14 @@ membership capabilities
 - `space.members.read`;
 - `space.members.write`;
 - `space.publish`;
-- `space.owner`.
+- `space.owner`;
+- `personal.context.read` — отдельный user-level scope только для bounded
+  presentation из designated Personal Space; он не даёт content MCP второй
+  mount или bulk access к личному corpus.
+
+`personal.context.read` не входит в role matrix target Space и не может быть
+выдан его Admin/Owner. Authorizer отдельно проверяет, что designated Personal
+Space принадлежит тому же verified principal и остаётся private.
 
 Role и membership state не кэшируются в JWT как источник истины. Каждый
 tool/resource проверяет текущий active membership. `membership_epoch` Space
@@ -295,29 +333,34 @@ Space/membership commands работают через command-level storage port
 generic CRUD:
 
 ```text
-create_space_with_owner(name)
+create_space_with_owner(space_handle, name)
 rename_space
+designate_personal_space
 add_membership
 change_membership_role
 revoke_membership
 transfer_ownership
 ```
 
-Membership changes принимают `expected_membership_version`, rename —
+Create дополнительно принимает host-unique `space_handle`. Membership changes
+принимают `expected_membership_version`, rename display name —
 `expected_metadata_version`; все повторяемые commands принимают
-`idempotency_key`. Create резервирует имя условно, когда Space ещё не существует.
+`idempotency_key`. Create условно резервирует handle, когда Space ещё не
+существует.
 Одна storage transaction:
 
 1. проверяет tenant-level create capability либо current active membership;
-2. резервирует tenant-scoped `normalized_name`, если команда меняет имя;
+2. резервирует host-scoped `normalized_handle` при create; display name не
+   является uniqueness key;
 3. делает CAS target membership или Space metadata;
 4. сохраняет last-owner invariant;
 5. увеличивает нужный epoch/version;
 6. записывает audit event и idempotency result.
 
-Успешного Space/membership change без audit event быть не может. Audit содержит
-opaque actor/subject IDs, before/after name, role or state, request ID и outcome,
-но не email, JWT, approval token или private content.
+Успешного Space/membership/designation change без audit event быть не может.
+Audit содержит opaque actor/subject IDs, handle, before/after display name,
+role/designation state, request ID и outcome, но не email, personal facts, JWT,
+approval token или private content.
 
 ## Совместное редактирование
 
@@ -425,9 +468,9 @@ configuration содержит:
 site_id
 space_id
 published_revision_id
-route alias / visibility
+canonical space_handle / visibility
 entrypoint
-approved audience-neutral landing
+approved base landing
 presentation settings
 publication_version
 ```
@@ -443,20 +486,24 @@ revision через `space.publish`. Возможный режим `follow_head`
 publication потребует отдельного publication manifest и security model.
 
 KnowledgeSite сначала рендерит authored entrypoint, например root `index.md` или
-выбранный concept. Интерактивный слой создаёт `SpaceSession` и использует
-`SpaceGuide`:
+выбранный concept. Для anonymous visitor это approved base landing. Для
+authenticated visitor с consent presentation layer может до разговора создать
+personalized landing, а интерактивный слой затем создаёт `SpaceSession` и
+использует `SpaceGuide`:
 
-1. visitor читает базовое представление published revision;
-2. задаёт вопрос или сообщает audience profile, например уровень подготовки;
+1. visitor читает base либо personalized представление published revision;
+2. задаёт вопрос или дополняет audience profile, например сообщает уровень
+   подготовки;
 3. Guide делает revision-bound search/fetch и строит ответ с provenance;
 4. profile меняет глубину, терминологию и последовательность объяснения, но не
    факты, ACL или каноническую revision;
 5. generated answer, suggested question или recommendation остаётся derived
    session output, пока Editor явно не проведёт его через draft/review/commit.
 
-В authenticated personal/shared сценарии тот же Guide читает revision, доступную
-через KnowledgeMount. В anonymous site-сценарии он всегда ограничен
-`published_revision_id`; audience profile не может расширить этот corpus.
+В authenticated personal/shared сценарии тот же Guide читает target revision,
+доступную через KnowledgeMount, и может получить bounded PersonalContext. В
+anonymous site-сценарии он всегда ограничен `published_revision_id` и не имеет
+Personal Space; profile не может расширить corpus.
 
 «Проактивность» первой версии interaction означает opening brief, suggested
 questions и revision-bound recommendations во время активной сессии. Outbound
@@ -464,9 +511,10 @@ push, расписания, действия во внешних система�
 Spaces требуют отдельной consent/delivery/authorization спецификации.
 
 Audience profile и conversation history по умолчанию session-scoped и не
-попадают ни в SpaceRevision, ни в OKFBundle. Сохранение пользовательских
-предпочтений требует opt-in, retention policy и отдельного private profile
-store. Один visitor не меняет представление для остальных.
+попадают ни в SpaceRevision, ни в OKFBundle. Долговременные предпочтения могут
+быть authored knowledge в designated Personal Space, но их использование
+требует scope/consent и privacy policy. Один visitor не меняет представление
+для остальных.
 
 ## Visibility
 
@@ -484,11 +532,13 @@ private ↔ public.
 
 ## Граница MVP
 
-Обновлённый MVP включает required tenant-unique name, private shared Space,
+Обновлённый MVP включает required host-unique immutable `space_handle`, mutable
+display name, private shared Space, designated private Personal Space,
 несколько active users, четыре роли, membership audit и last-owner protection.
 Он также включает read-only историю по revision ID, времени и immutable
-Checkpoint, canonical auth-gated Space URL и audience-neutral landing для
-разрешённой revision. Он не включает public aliases/discovery, anonymous
-KnowledgeSite, branches, merges, historical writes, moving tags, hard-erasure
-policy, SpaceGuide, invitations, groups, path/tag grants, public links,
-cross-tenant sharing или organization administration.
+Checkpoint, canonical auth-gated `/{space_handle}`, base landing и ограниченный
+personalized landing для разрешённой revision. Он не включает public
+discovery, anonymous KnowledgeSite, branches, merges, historical writes,
+moving tags, hard-erasure policy, полноценный SpaceGuide, invitations, groups,
+path/tag grants, public links, cross-tenant sharing, general cross-space search
+или organization administration.

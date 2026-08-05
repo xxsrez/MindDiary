@@ -12,7 +12,10 @@ CloudBrain пока находится на стадии проектирова�
    Sites-прототип и целевая AWS-топология.
 3. [Доменная модель и доступ](specs/domain-model.md) — KnowledgeSpace,
    содержимое, memberships, роли и owner invariants.
-4. [Спецификация MVP](specs/mvp.md) — первый проверяемый vertical slice и его
+4. [URL-адресация и персонализированное открытие](specs/personalized-opening.md)
+   — человекочитаемый `space_handle`, Personal Space, bounded context и privacy
+   invariants.
+5. [Спецификация MVP](specs/mvp.md) — первый проверяемый vertical slice и его
    критерии готовности.
 
 ## Исследования
@@ -32,6 +35,8 @@ High-level контур проекта закрыт следующими док�
 
 - продуктовая идея, сценарии, URL/landing и платформенный путь — в overview;
 - сущности, адресация, роли, история и publication — в domain model;
+- персонализированное открытие и ограниченный Personal Space overlay — в
+  personalized-opening specification;
 - границы компонентов, основные flows, MCP/web surfaces и deployment profiles —
   в architecture;
 - authorization, non-enumeration private URLs, untrusted content и безопасные

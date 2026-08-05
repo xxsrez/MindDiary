@@ -15,13 +15,14 @@
 
 1. [Обзор продукта](docs/overview.md).
 2. [Доменную модель и доступ](docs/specs/domain-model.md).
-3. [Архитектуру](docs/architecture.md).
-4. [Спецификацию MVP](docs/specs/mvp.md).
-5. [Проверку текущего OKF](docs/reports/2026-08-05-okf-status.md).
+3. [URL-адресацию и персонализированное открытие](docs/specs/personalized-opening.md).
+4. [Архитектуру](docs/architecture.md).
+5. [Спецификацию MVP](docs/specs/mvp.md).
+6. [Проверку текущего OKF](docs/reports/2026-08-05-okf-status.md).
 
-`docs/specs/domain-model.md`, `docs/architecture.md` и `docs/specs/mvp.md` пока
-имеют статус proposal. Не выдавайте предложенные компоненты, инструменты MCP,
-схемы хранения или этапы за реализованные либо окончательно принятые.
+Архитектурные и specification-документы пока имеют статус proposal. Не
+выдавайте предложенные компоненты, инструменты MCP, схемы хранения или этапы за
+реализованные либо окончательно принятые.
 
 ## Неизменные границы
 
@@ -31,16 +32,23 @@
   канонической формой одной её revision остаётся `OKFBundle`: дерево исходных
   OKF-файлов и assets. Memberships, ACL, tenant metadata, idempotency keys и
   состояние индекса не записываются в OKF-frontmatter.
-- Каждый Space имеет immutable `space_id` и обязательное человекочитаемое
-  `name`. В MVP нормализованное имя уникально только внутри tenant; durable
-  references и authorization используют `space_id`, а не изменяемое имя.
-- Каждый Space имеет deployment-scoped canonical HTTPS URL, построенный на
-  immutable `space_id`. Rename, смена slug или publication policy не меняют
-  этот URL; человекочитаемые public aliases только перенаправляют на него.
+- Каждый Space имеет immutable внутренний `space_id`, обязательный immutable в
+  MVP `space_handle` и изменяемое display `name`. Canonical URL имеет вид
+  `https://{space-host}/{space_handle}`; handle уникален внутри verified host
+  namespace и разрешается в `space_id` до authorization или object read.
+- `space_handle` — внешний URL identifier, но не authorization identity.
+  Durable records, ACL, revisions, jobs и audit используют `space_id`. Rename
+  display name, смена HEAD или publication policy не меняют URL; будущий rename
+  handle требует tombstone и permanent redirect.
 - Переход по URL сначала проверяет visibility и authorization, затем открывает
-  audience-neutral `SpaceLanding` для одной разрешённой revision. Landing не
-  персонализируется, не раскрывает memberships/private metadata и не загружает
-  corpus целиком; адаптация начинается только внутри отдельной `SpaceSession`.
+  `SpaceLanding` для одной разрешённой revision. Anonymous/no-consent режим
+  получает `base`; authenticated пользователь может сразу получить
+  `personalized` projection из target revision и ограниченного контекста своей
+  designated Personal Space.
+- Personal Space — обычный private `KnowledgeSpace`, связанный с principal
+  через service metadata, а не отдельный OKF type или storage schema. Landing
+  не раскрывает memberships/private metadata и не загружает ни target, ни
+  personal corpus целиком.
 - URL private Space не подтверждает его существование неавторизованному
   посетителю. Anonymous landing читает только явно опубликованную revision и
   никогда не выводится автоматически из private HEAD.
@@ -71,8 +79,10 @@
 - MCP делает Space лениво доступным через search/fetch/resources; он не
   помещает весь corpus в контекст модели автоматически.
 - В MVP один MCP mount открывает ровно один `KnowledgeSpace`. Не добавляйте
-  неявный cross-space search или клиентский выбор tenant/space без новой
-  спецификации безопасности.
+  неявный cross-space search или клиентский выбор tenant/space. Единственное
+  описанное исключение — server-side bounded `PersonalContextProvider`, который
+  по отдельному scope читает designated Personal Space того же principal для
+  derived presentation target Space.
 - Роли Space — `reader`, `editor`, `admin`, `owner`. `editor` включает чтение;
   человеческой роли `write-only` нет. Создатель атомарно становится Owner,
   Owners может быть несколько, последнего Owner нельзя demote/revoke.
@@ -80,14 +90,15 @@
   публикуется рядом с corpus tools в content MCP.
 - `KnowledgeSite` публикует явно выбранную immutable SpaceRevision, а не drafts
   и не service metadata. Привязанный `SpaceGuide` может адаптировать объяснение
-  под session-scoped audience profile и предлагать derived insights, но не
+  под разрешённый personal/session context и предлагать derived insights, но не
   меняет каноническое знание без обычного draft/review/commit flow.
 - В public-модели весь corpus `published_revision` считается читаемым;
   entrypoint не является ACL. До отдельной subset-publication спецификации
   private и public content держите в разных Spaces.
 - Профиль посетителя, история разговора и generated answers не попадают в
-  `OKFBundle` автоматически. Cross-space retrieval требует явной новой модели
-  mounts и authorization.
+  target `OKFBundle` автоматически. Target content считается недоверенным и не
+  может формировать запросы к Personal Space, выбирать personal fields или
+  расширять scopes. Общее cross-space retrieval требует новой спецификации.
 - Доменное ядро и OKF codec не импортируют AWS SDK, Sites bindings, HTTP
   framework или конкретный поисковый движок. Инфраструктура подключается через
   узкие порты и адаптеры.
