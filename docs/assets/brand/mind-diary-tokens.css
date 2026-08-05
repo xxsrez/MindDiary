@@ -1,12 +1,13 @@
 :root {
-  --mind-diary-ink: #172b5b;
-  --mind-diary-paper: #fff9f0;
-  --mind-diary-memory-violet: #5b4bc4;
-  --mind-diary-living-coral: #f26b5e;
-  --mind-diary-quiet-sage: #9aaf9e;
+  --mind-diary-ink: #182642;
+  --mind-diary-paper: #fff7e8;
+  --mind-diary-memory-plum: #6c4bb6;
+  --mind-diary-living-coral: #eb6f64;
+  --mind-diary-quiet-brass: #b88a3b;
+  --mind-diary-quiet-sage: #9aae9d;
   --mind-diary-white: #ffffff;
 
-  --mind-diary-font-display: "Manrope", "Inter", system-ui, sans-serif;
+  --mind-diary-font-display: "Fraunces", Georgia, serif;
   --mind-diary-font-ui: "Inter", system-ui, sans-serif;
 
   --mind-diary-radius-card: 20px;

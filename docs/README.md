@@ -15,7 +15,7 @@ Mind Diary пока находится на стадии проектирова�
 4. [Доменная модель и доступ](specs/domain-model.md) — KnowledgeSpace,
    содержимое, memberships, роли и owner invariants.
 5. [URL-адресация и персонализированное открытие](specs/personalized-opening.md)
-   — человекочитаемый `space_handle`, Personal Space, bounded context и privacy
+   — человекочитаемый `space_handle`, Personal Mind, bounded context и privacy
    invariants.
 6. [Спецификация MVP](specs/mvp.md) — первый проверяемый vertical slice и его
    критерии готовности.
@@ -25,6 +25,12 @@ Mind Diary пока находится на стадии проектирова�
 - [ADR-0001: название продукта и пользовательская лексика](decisions/0001-product-name-and-language.md)
   — принято `Mind Diary → Mind → Memory`; техническая доменная лексика
   сохраняется.
+- [ADR-0002: account, доступ и lifecycle Minds](decisions/0002-account-access-and-lifecycle.md)
+  — принят автоматический Personal Mind, single Owner, invitations и три
+  authenticated visibility modes.
+- [ADR-0003: user-scoped MCP и immediate commits](decisions/0003-user-scoped-mcp-and-direct-commits.md)
+  — принят один MCP на пользователя, personal bearer token и atomic write без
+  отдельного draft/approval.
 
 ## Исследования
 
@@ -38,7 +44,10 @@ Mind Diary пока находится на стадии проектирова�
 
 - `report` фиксирует наблюдения на указанную дату и не обещает реализацию.
 - `proposal` описывает рекомендуемое направление, которое ещё можно менять.
-- Значимые принятые решения фиксируются отдельными ADR.
+- `baseline` фиксирует рабочую основу для прототипов, но не окончательный
+  production-стандарт.
+- `accepted` используется в ADR для явно принятого решения; значимые изменения
+  такого решения фиксируются новым или superseding ADR.
 
 ## Полнота design bootstrap
 
@@ -46,17 +55,20 @@ High-level контур проекта закрыт следующими док�
 
 - продуктовая идея, сценарии, URL/landing и платформенный путь — в overview;
 - базовая визуальная и речевая система — в brand guide;
-- сущности, адресация, роли, история и publication — в domain model;
-- персонализированное открытие и ограниченный Personal Space overlay — в
+- сущности, account bootstrap, адресация, роли, visibility и история — в domain
+  model;
+- персонализированное открытие и ограниченный Personal Mind overlay — в
   personalized-opening specification;
 - границы компонентов, основные flows, MCP/web surfaces и deployment profiles —
   в architecture;
 - authorization, non-enumeration private URLs, untrusted content и безопасные
   mutation boundaries — совместно в domain model, architecture и MVP;
 - проверяемый первый vertical slice и non-goals — в MVP specification;
-- актуальность внешнего формата данных — в датированном OKF report.
+- актуальность внешнего формата данных — в датированном OKF report;
+- текущие платформенные предпосылки и их ограничения — в датированном platform
+  report.
 
 API reference, отдельный threat model, production runbooks, deployment guide и
-changelog намеренно не созданы: сервисного кода, public release и развёртывания
-пока нет. Перед anonymous publication threat model станет обязательным
-отдельным документом.
+changelog намеренно не созданы: сервисного кода, release и развёртывания пока
+нет. До anonymous publication потребуется новая спецификация и отдельный threat
+model.

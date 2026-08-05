@@ -4,14 +4,12 @@
 
 Mind Diary — проект совместных облачных Minds (`KnowledgeSpace`), которые
 пользователи и агенты подключают через MCP, читают и пополняют Memories с
-сохранением переносимого Open Knowledge Format (OKF). Каждый Mind получает
-стабильный URL: переход по человекочитаемому `/{space_handle}` открывает
-базовое либо персонализированное
-представление выбранной revision, а затем позволяет обсуждать её с адаптивным
-проводником. Для персонализации может использоваться ограниченный контекст из
-private personal Mind пользователя; каноническое знание при этом не меняется.
-Выбранную ревизию Mind можно будет явно публиковать как интерактивный knowledge
-site.
+сохранением переносимого Open Knowledge Format (OKF). Account автоматически
+получает private Personal Mind по `/me`; другие Minds имеют стабильный
+`/{space_handle}`, роли и режимы `private`, `unlisted` или `public`. Один
+user-scoped MCP даёт агенту доступ ко всем разрешённым Minds, но каждый вызов
+явно работает с одним corpus. Изменения сразу создают immutable revision через
+optimistic HEAD CAS.
 Практическая цель проекта — пройти путь от локального vertical slice и раннего
 web-прототипа до production-подобной архитектуры в AWS.
 
@@ -36,8 +34,9 @@ server, UI и облачная инфраструктура ещё не реал
 
 ## Статус
 
-Ближайший следующий этап — реализовать локальный read-only vertical slice:
-импорт OKF bundle, строгую валидацию, стабильный auth-gated Mind URL,
-base/personalized landing, `search`/`fetch` и Streamable HTTP MCP на одном
-тестовом наборе данных. До этого момента в репозитории нет команды запуска,
-которую можно честно назвать рабочей.
+Базовый фичасет первого прототипа зафиксирован в ADR и спецификациях. Следующий
+этап — определить точные API schemas и реализовать local vertical slice:
+authenticated account bootstrap, `/me`, roles/visibility, user-scoped
+Streamable HTTP MCP, `search`/`fetch`, atomic content commits, history и OKF
+round-trip. До реализации в репозитории нет команды запуска, которую можно
+честно назвать рабочей.

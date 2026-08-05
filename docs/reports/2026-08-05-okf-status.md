@@ -10,9 +10,10 @@
 `3fcbb9f828c2f23d109c855ee403c3a4c81f3a96`; обновлений формата после него на
 момент проверки нет.
 
-Следовательно, текущая локальная модель `knowledge-db`, ориентированная на OKF
-0.2, не требует миграции. Mind Diary всё равно должен выполнять version
-negotiation/best-effort read, потому что будущая версия может появиться позже.
+Следовательно, выбранная для Mind Diary базовая версия OKF 0.2 остаётся
+актуальной и не требует пересмотра из-за нового релиза. Сервис всё равно должен
+выполнять version negotiation/best-effort read, потому что будущая версия может
+появиться позже.
 
 ## Как проверялось
 
@@ -60,6 +61,12 @@ revision metadata находятся вне frontmatter.
 `index.md` даёт естественную основу progressive disclosure: агент сначала
 получает карту, затем выбранный concept и только потом source. `verified` и
 derived trust tier полезны в ответах, но никогда не заменяют authorization.
+
+`index.md` и `log.md` являются canonical authored files, но OKF не задаёт
+multi-writer protocol. Поэтому Mind Diary может безопасно предоставить
+service-level operations: заменить `index.md` под общим HEAD CAS и семантически
+добавить запись в newest-first/date-grouped `log.md`. Эти операции должны
+материализовать валидные OKF files и не выдаваться за часть спецификации OKF.
 
 Attested Computation в MVP можно хранить и отдавать как concept. Автоматическое
 исполнение откладывается, потому что OKF 0.2 не стандартизирует полный runtime

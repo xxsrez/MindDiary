@@ -22,9 +22,9 @@
 7. [Проверку текущего OKF](docs/reports/2026-08-05-okf-status.md).
 8. [Проверку платформенных предпосылок](docs/reports/2026-08-05-platform-status.md).
 
-Архитектурные и specification-документы пока имеют статус proposal. Не
-выдавайте предложенные компоненты, инструменты MCP, схемы хранения или этапы за
-реализованные либо окончательно принятые.
+Архитектурные и specification-документы пока имеют статус proposal. Принятые
+product decisions отделяйте от ещё не выбранных деталей реализации; ни то ни
+другое не выдавайте за реализованный либо развёрнутый сервис.
 
 ## Неизменные границы
 
@@ -48,23 +48,23 @@
   namespace и разрешается в `space_id` до authorization или object read.
 - `space_handle` — внешний URL identifier, но не authorization identity.
   Durable records, ACL, revisions, jobs и audit используют `space_id`. Rename
-  display name, смена HEAD или publication policy не меняют URL; будущий rename
+  display name, смена HEAD или visibility не меняют URL; будущий rename
   handle требует tombstone и permanent redirect.
-- Переход по URL сначала проверяет visibility и authorization, затем открывает
-  `SpaceLanding` для одной разрешённой revision. Anonymous/no-consent режим
-  получает `base`; authenticated пользователь может сразу получить
-  `personalized` projection из target revision и ограниченного контекста своей
-  designated Personal Space.
-- Personal Space — обычный private `KnowledgeSpace`, связанный с principal
-  через service metadata, а не отдельный OKF type или storage schema. Landing
-  не раскрывает memberships/private metadata и не загружает ни target, ни
-  personal corpus целиком.
-- URL private Space не подтверждает его существование неавторизованному
-  посетителю. Anonymous landing читает только явно опубликованную revision и
-  никогда не выводится автоматически из private HEAD.
-- Personal, group, community-wiki и site — сценарии одного Space, а не значения
-  фиксированного `space_type`. Поведение складывается из memberships,
-  visibility, publication policy и presentation surface.
+- Доступ к прототипу требует зарегистрированного authenticated principal;
+  anonymous access отсутствует даже у `public` Mind. После разрешения URL
+  server проверяет visibility и authorization до чтения metadata или objects.
+- Account bootstrap атомарно создаёт principal, его единственный Personal Mind
+  и owner membership. Personal Mind — обычный private `KnowledgeSpace` по
+  storage schema, но с жёсткими service invariants: один participant-owner,
+  route `/me`, service-managed handle, отсутствие transfer, publication и
+  отдельного delete. Display name следует за именем principal.
+- Обычные Minds поддерживают `private`, `unlisted` и `public`. Authenticated
+  non-member получает reader-equivalent доступ к live HEAD и истории в
+  `unlisted` по точному URL, а в `public` также через каталог. Это baseline
+  visibility grant, не membership.
+- Personal, group и community-wiki — сценарии одного Space, а не значения
+  фиксированного `space_type`. Будущая anonymous web-publication остаётся
+  отдельной моделью и не заменяет visibility прототипа.
 - Импорт и round-trip обязаны сохранять неизвестные OKF types и поля. Reader
   поддерживает legacy 0.1 fallbacks; writer по умолчанию создаёт OKF 0.2.
 - Полнотекстовые, векторные и графовые индексы всегда производны и должны
@@ -74,41 +74,50 @@
 - Каждая успешно committed `SpaceRevision` остаётся доступной через историю по
   точному ID, UTC-времени commit или immutable `Checkpoint`. `Checkpoint` —
   service metadata, а не OKF `tags`, и не попадает в `OKFBundle`.
-- Исторический `KnowledgeMount` один раз разрешает selector в точный
-  `revision_id` и всегда read-only, даже для Owner. Каждый исторический read
-  проверяет текущую membership и scopes; старые ACL не «воскрешаются».
+- Исторический selector одного Mind разрешается в точный `revision_id` и всегда
+  read-only, даже для Owner. Каждый historical read проверяет текущий доступ:
+  membership либо актуальный baseline visibility grant; старые ACL не
+  «воскрешаются».
 - MVP не поддерживает branches, moving tags, merge или запись поверх
   исторической revision. Удаление content из HEAD не стирает его из уже
-  committed истории; hard erasure требует отдельной retention/privacy модели.
-- По умолчанию MCP создаёт draft. Commit требует отдельного короткоживущего
-  approval artifact, привязанного к actor, Space, revision, membership epoch и
-  hash diff; MCP tool annotations сами по себе не считаются защитой от prompt
-  injection.
+  committed истории. Whole-Mind и account deletion в прототипе, напротив,
+  немедленно удаляют всю историю; production retention/privacy model ещё не
+  спроектирована.
+- MCP content mutation сразу создаёт immutable revision и продвигает HEAD.
+  Отдельных draft, diff confirmation и approval artifact в прототипе нет;
+  безопасность обеспечивают authentication, current role, token scopes,
+  idempotency, audit и HEAD CAS. MCP tool annotations остаются только UX-сигналом.
 - `verified` и другие OKF trust signals не являются механизмом авторизации.
   Tenant и права выводятся только из проверенного identity context.
 - MCP делает Space лениво доступным через search/fetch/resources; он не
   помещает весь corpus в контекст модели автоматически.
-- В MVP один MCP mount открывает ровно один `KnowledgeSpace`. Не добавляйте
-  неявный cross-space search или клиентский выбор tenant/space. Единственное
-  описанное исключение — server-side bounded `PersonalContextProvider`, который
-  по отдельному scope читает designated Personal Space того же principal для
-  derived presentation target Space.
-- Роли Space — `reader`, `editor`, `admin`, `owner`. `editor` включает чтение;
-  человеческой роли `write-only` нет. Создатель атомарно становится Owner,
-  Owners может быть несколько, последнего Owner нельзя demote/revoke.
+- Один MCP connection аутентифицирует principal и даёт ему операции над всеми
+  доступными Minds: `/me`, memberships, каталогом `public` и `unlisted` по
+  точному handle. Каждая content operation явно выбирает один Mind и одну
+  revision; неявное смешивание corpus нескольких Minds запрещено.
+- Роли Space — `reader`, `editor`, `admin`, `owner`. `editor` включает чтение и
+  полный create/update/delete content. У active ordinary Mind ровно один Owner.
+  Создатель становится им атомарно; transfer возможен только existing active
+  participant, после чего прежний Owner становится Admin.
+- Приглашать можно только зарегистрированного principal по exact verified
+  email. Pending invitation требует acceptance, истекает через семь дней, не
+  является membership и не может получить ownership. Admin приглашает только
+  Reader/Editor, Owner также Admin.
+- Первый MCP auth использует revocable named opaque bearer tokens principal:
+  secret не менее 256 random bits показывается один раз, хранится только hash,
+  default expiry 90 дней, scopes `content:read`/`content:write`. Token не даёт
+  control-plane capabilities и не привязан к одному Mind.
 - Membership management остаётся в trusted web/CLI control plane и не
   публикуется рядом с corpus tools в content MCP.
-- `KnowledgeSite` публикует явно выбранную immutable SpaceRevision, а не drafts
-  и не service metadata. Привязанный `SpaceGuide` может адаптировать объяснение
-  под разрешённый personal/session context и предлагать derived insights, но не
-  меняет каноническое знание без обычного draft/review/commit flow.
-- В public-модели весь corpus `published_revision` считается читаемым;
-  entrypoint не является ACL. До отдельной subset-publication спецификации
-  private и public content держите в разных Spaces.
+- В прототипе `public`/`unlisted` открывают authenticated non-members весь live
+  HEAD и immutable history с правами Reader; отдельного `published_revision`
+  нет. Commit Editor немедленно виден этим читателям. Будущий `KnowledgeSite`
+  и anonymous publication требуют новой спецификации.
 - Профиль посетителя, история разговора и generated answers не попадают в
   target `OKFBundle` автоматически. Target content считается недоверенным и не
-  может формировать запросы к Personal Space, выбирать personal fields или
-  расширять scopes. Общее cross-space retrieval требует новой спецификации.
+  может формировать запросы к Personal Mind, выбирать personal fields или
+  расширять scopes. Любая композиция нескольких Minds требует явного trusted
+  use case и отдельной проверки доступа к каждому из них.
 - Доменное ядро и OKF codec не импортируют AWS SDK, Sites bindings, HTTP
   framework или конкретный поисковый движок. Инфраструктура подключается через
   узкие порты и адаптеры.
@@ -149,10 +158,10 @@
 ## Безопасность
 
 - Spaces по умолчанию приватны. Не логируйте содержимое приватных concepts,
-  chunks, source assets, access/approval tokens или presigned URLs.
-- Не публикуйте content HEAD автоматически. Public/unlisted site читает только
-  `published_revision`; режим follow-HEAD требует отдельного явного решения и
-  предупреждения writers о немедленной публикации commit.
+  chunks, source assets, access tokens или presigned URLs.
+- Переключать `private | unlisted | public` может только Owner. Для `public` и
+  `unlisted` HEAD по определению сразу читаем authenticated non-members;
+  интерфейс обязан предупреждать Owner и writers об этом эффекте.
 - Любой read/search/write проверяет tenant и ACL до обращения к каноническому
   объекту или производному индексу.
 - Не используйте клиентский `tenant_id` как источник истины и не передавайте

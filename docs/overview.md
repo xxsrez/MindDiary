@@ -1,255 +1,225 @@
 # Обзор Mind Diary
 
-Статус: proposal, 2026-08-05.
+Статус: proposal, 2026-08-05. Product behavior первого прототипа принято;
+сервисный код и deployment ещё не реализованы.
 
 ## Зачем проект существует
 
-Mind Diary должен дать людям и агентам совместный управляемый доступ к
-`KnowledgeSpace` по выбранной теме: обнаружить его структуру, найти релевантные
-concepts, проверить источники, добавить новый материал, зафиксировать новую
-ревизию и экспортировать данные в переносимом виде. Выбранную ревизию можно
-будет опубликовать как knowledge site: посетитель сначала читает подготовленное
-представление, затем задаёт вопросы и получает объяснение, адаптированное под
-его уровень, но основанное на тех же источниках.
-
-Вторая, равноправная цель — получить практический опыт AWS на реальном
-продуктовом контуре: identity, object storage, transactional metadata,
-контейнерный MCP runtime, асинхронная индексация, observability и infrastructure
-as code.
+Mind Diary даёт пользователям и их агентам управляемый доступ к живым базам
+знаний: обнаружить структуру, найти релевантные concepts, проверить источники,
+добавить или исправить материал, зафиксировать новую revision и экспортировать
+данные в переносимом Open Knowledge Format.
 
 В product language один `KnowledgeSpace` называется **Mind**, а одна
-пользовательская `KnowledgeEntry` — **Memory**. Архитектурные разделы сохраняют
-термины Space/Entry там, где важна точность API, ACL или OKF semantics.
+пользовательская `KnowledgeEntry` — **Memory**. Технические документы используют
+Space/Entry там, где важна точность API, ACL или OKF semantics.
+
+Вторая цель проекта — пройти реальный cloud-контур: identity, object storage,
+transactional metadata, MCP runtime, асинхронная индексация, observability и
+переносимость deployment между Sites и AWS.
 
 ## Ментальная модель
 
-Mind Diary — не способ заранее загрузить всю тему в prompt. MCP публикует
-описания tools и resources, а клиент и модель выбирают, когда искать и что
-читать. Только результаты этих вызовов занимают контекст. Поэтому продукт
-должен оптимизировать progressive disclosure: короткий обзор, точный поиск,
-цитируемый фрагмент и возможность дочитать канонический concept или source.
+Mind Diary не загружает весь Mind в prompt. Агент лениво использует MCP:
+получает список доступных Minds, выбирает нужный по запросу пользователя,
+просматривает `index.md`, ищет, fetch-ит конкретный concept/source и только затем
+изменяет точные файлы. В контекст попадают результаты вызовов, а не весь corpus.
 
-Сам Space не является автономным агентом. Каноническое знание остаётся
-неизменяемой ревизией, а ответы, рекомендации и порядок подачи — derived
-presentation конкретной ревизии для конкретного пользователя или сессии.
+Каноническое знание — линейная история immutable revisions. Любой успешный
+write immediately создаёт новую revision и продвигает HEAD с optimistic
+concurrency. Ответы агента и персонализированная подача остаются derived output,
+пока агент явно не сохранит их обычным authorized commit.
 
-## Адресуемая сеть знаний
+## Account и Personal Mind
 
-Продуктовая гипотеза Mind Diary — «интернет из знаний»: базовой адресуемой
-единицей становится не страница и не чат, а `KnowledgeSpace`. У каждого Space
-есть стабильный человекочитаемый canonical HTTPS URL вида
-`https://{space-host}/{space_handle}`. `space_handle` — внешнее имя-идентификатор
-в пределах host namespace; внутри сервиса оно разрешается в immutable
-`space_id`, который используют ACL, revisions, audit и storage.
+Система доступна только зарегистрированным authenticated пользователям. Первый
+Sites prototype связывает проверенную ChatGPT/Sites identity с внутренним
+`principal_id`.
 
-Переход по URL сначала открывает `SpaceLanding` одной разрешённой revision. Он
-отвечает на четыре вопроса:
+При регистрации Mind Diary атомарно создаёт ровно один Personal Mind. Он жёстко
+связан с account: пользователь является его единственным Owner, другие
+participants запрещены, visibility всегда private, ownership не передаётся,
+отдельное удаление невозможно. Personal Mind открывается по `/me`, а его display
+name автоматически следует за именем пользователя.
 
-- что это за Space и о чём он;
-- какие основные темы и authored entrypoints доступны;
-- на какой revision, источниках и freshness signals основано представление;
-- что можно прочитать или спросить дальше.
+Удаление account в первом прототипе безвозвратно удаляет Personal Mind, все
+ordinary Minds этого Owner вместе с их историей и memberships пользователя в
+чужих Minds. Эта простая политика принята только для прототипа и будет отдельно
+пересмотрена перед production.
 
-Для anonymous/no-consent посетителя это `base`-представление. Для
-аутентифицированного пользователя продуктовая гипотеза — уже первый landing
-адаптировать под его язык, уровень знаний, интересы и цели с помощью
-ограниченного контекста из designated Personal Space. Пользователь может
-отключить адаптацию и увидеть базовую версию. Personal context меняет подачу,
-но не corpus, source trust, revision или права.
+## Адресуемые Minds
 
-Personal Space при этом не является особым форматом базы. Это обычный private
-KnowledgeSpace, связанный с principal отдельной service metadata. Server-side
-policy извлекает из него минимальный purpose-bound контекст; целевой Space не
-получает доступ к личному corpus и не может управлять таким извлечением.
-Последующий разговор создаёт `SpaceSession` и продолжает адаптацию в тех же
-границах.
+Обычный Mind получает:
 
-URL существует и у private Space, но это не public link. Неавторизованный
-запрос не получает название, summary или подтверждение существования Space.
-Anonymous landing возможен только для явно опубликованной revision; сервис не
-строит его автоматически из private HEAD. Глобальный каталог, discovery,
-cross-space links и поисковая сеть — возможное развитие этой гипотезы, а не
-обещание MVP.
+- immutable внутренний `space_id` для ACL, revisions, jobs и storage;
+- immutable в прототипе уникальный `space_handle` для URL;
+- mutable и неуникальный display `name`.
 
-## Основные сущности
+Canonical URL имеет вид `https://{space-host}/{space_handle}`. При создании UI
+предлагает handle из имени и позволяет исправить его до подтверждения. Router
+сначала разрешает handle в `space_id`, затем проверяет доступ; URL не является
+authorization identity.
 
-- `KnowledgeSpace` — live collaborative container с immutable внутренним ID,
-  стабильным URL handle, display name, содержимым, участниками, ролями,
-  настройками и HEAD revision.
-- `SpaceRevision` — immutable snapshot содержимого.
-- `Checkpoint` — неизменяемое человекочитаемое имя для конкретной
-  `SpaceRevision`; это не OKF content tag.
-- `Snapshot View` — read-only представление Space, один раз привязанное к точной
-  revision по ID, времени или Checkpoint.
-- `OKFBundle` — переносимый import/export одной revision без ACL и memberships.
-- `KnowledgeEntry`, `Source` и `Asset` остаются разными видами содержимого с
-  разными правилами чтения и изменения.
-- `SpaceMembership` связывает пользователя со Space и ролью `reader`, `editor`,
-  `admin` или `owner`.
-- `KnowledgeMount` связывает один MCP connection с одним Space и подмножеством
-  разрешённых возможностей.
-- `Personal Space designation` связывает principal с одним обычным private
-  Space, который можно использовать как источник разрешённого личного контекста.
-- `SpaceLanding` — базовое или персонализированное начальное представление Space
-  по его URL, привязанное к exact target revision и, при адаптации, exact
-  Personal Space revision.
-- `KnowledgeSite` публикует выбранную immutable revision как обычные страницы и
-  интерактивную точку входа.
-- `SpaceSession` хранит контекст конкретного разговора, включая заявленный
-  уровень аудитории; `SpaceGuide` использует его для адаптивных ответов и
-  предложений, не изменяя Space.
+Visibility выбирает только Owner:
 
-Точная модель и role matrix описаны в
-[доменной спецификации](specs/domain-model.md).
+- `private` — доступ только принятым participants;
+- `unlisted` — authenticated non-member читает по точному URL, но Mind не
+  появляется в каталоге;
+- `public` — authenticated non-member читает и видит Mind в Public Minds
+  catalog.
 
-## Продуктовые сценарии
+Anonymous доступа нет даже у public Mind. Public/unlisted reader видит live HEAD
+и immutable history так же, как Reader membership. Отдельного
+`published_revision` в первом прототипе нет: новый commit сразу становится
+видим всем читателям, которым visibility даёт доступ.
 
-Это не фиксированные `space_type`, а сценарии и конфигурации одной сущности:
+## Участники и роли
 
-1. **Personal Mind.** Один Owner хранит знания по теме или обо всём сразу;
-   Space остаётся private. Один такой Space может быть явно designated как
-   default Personal Space для адаптации других Spaces.
-2. **Shared Mind.** Семья или небольшая группа добавляет разные наблюдения и
-   получает общую source-aware картину без потери авторства и revision history.
-3. **Community Mind.** Доверенные Editors совместно собирают знания по игре или
-   другой теме в wiki-подобной модели. Moderation, reputation и review queues
-   появятся только при реальной необходимости.
-4. **Knowledge site.** Владелец публикует выбранную ревизию как статическую
-   основу сайта. Anonymous посетитель получает базовый SpaceLanding, а
-   аутентифицированный пользователь может сразу получить более подходящую
-   подачу — например, как профессиональный историк — и затем продолжить
-   разговор на основе того же corpus.
-5. **Historical view.** Участник открывает Space «на момент два месяца назад»
-   или по Checkpoint. Время разрешается в точную revision, и весь разговор,
-   поиск и fetch остаются привязаны к ней без смешивания с HEAD.
+У active ordinary Mind всегда ровно один Owner. Создатель становится им
+атомарно. Owner может передать ownership только existing active participant;
+target становится Owner, прежний Owner — Admin. Non-owner может выйти сам,
+Owner обязан сначала передать Mind либо удалить его.
 
-Space может пройти этот путь постепенно: personal → shared → community →
-published, не меняя `space_id` и не мигрируя каноническое OKF-дерево.
-SpaceGuide при этом полезен не только публичному сайту: в personal/shared Space
-он может предлагать следующие темы и revision-bound recommendations в пределах
-прав текущего KnowledgeMount.
+Роли:
+
+- `reader` — browse, search, fetch и history;
+- `editor` — Reader плюс полное create/update/delete content;
+- `admin` — Editor плюс управление Reader/Editor и обычными settings;
+- `owner` — Admin плюс Admin role, visibility, ownership transfer и deletion.
+
+Admin не управляет Admin/Owner. Owner не создаёт второго Owner — ownership
+меняется только атомарным transfer.
+
+Приглашать можно только зарегистрированных пользователей по exact verified
+email. Invitation появляется внутри Mind Diary, роль выбирается при создании,
+живёт семь дней и требует accept/reject. До acceptance это не membership.
+
+## Content и revisions
+
+Каждая revision материализуется как `OKFBundle`: дерево OKF files и assets без
+memberships, ACL, tokens и service indexes. Обычная работа идёт по отдельным
+файлам, а не через скачивание ZIP целиком.
+
+Основная write-команда принимает `expected_revision`, `idempotency_key` и набор
+операций. Все операции применяются атомарно и создают ровно одну revision.
+Stale writer получает conflict с current HEAD, перечитывает данные и строит
+изменение заново. Automatic semantic merge в первой версии не нужен.
+
+`index.md` изменяется специальной server-side CAS operation. `log.md`
+обновляется semantic operation `add_log_entry`, которая сохраняет OKF
+newest-first/date grouping; это не literal byte append. Добавление concept,
+обновление index и log должно быть одним changeset.
+
+Удаление файла меняет только новую HEAD: старые immutable revisions сохраняются.
+Удаление всего Mind Owner или каскад account deletion, напротив, в прототипе
+физически удаляет всю историю.
+
+## MCP и web control plane
+
+Один MCP connection аутентифицирует пользователя, а не отдельный Mind. Он
+может работать со всеми Minds, доступными этому principal:
+
+- Personal Mind `/me`;
+- accepted memberships;
+- public catalog;
+- unlisted Mind по известному exact handle.
+
+Агент выбирает Mind по запросу пользователя, но каждый content call содержит
+явный selector одного Mind. Неявный cross-Mind search или смешивание corpora не
+происходит.
+
+MCP сразу commit-ит authorized изменения; отдельного server draft, diff
+approval или ручного подтверждения commit нет. Server всё равно проверяет
+token, current role/visibility, scopes, HEAD CAS и idempotency на каждом
+вызове.
+
+Sites отвечает за account/control plane: создание Minds, visibility,
+invitations, roles, ownership, deletion, настройки и выпуск MCP tokens. Content
+files через browser UI не редактируются. Web и MCP adapters используют общий
+application core/internal API; raw REST не является пользовательской
+поверхностью.
+
+Для первого прототипа MCP authentication — revocable personal bearer token,
+который пользователь выпускает на сайте и передаёт клиенту через environment
+variable. Token связан с principal, а не Mind; default lifetime 90 дней, secret
+показывается один раз, на сервере хранится hash. OAuth 2.1 + PKCE остаётся
+следующим шагом для polished plugin integration.
+
+Пользователь оплачивает inference своего Codex/Claude client. Mind Diary в этом
+пути предоставляет MCP, storage и server-side operations, но не вызывает LLM от
+своего имени.
 
 ## Основной сценарий
 
-1. Пользователь создаёт private KnowledgeSpace с уникальным в host namespace
-   `space_handle` и display name; в той же транзакции он становится первым
-   Owner либо импортирует OKF bundle в новый Space.
-2. Owner/Admin добавляет существующих пользователей как Reader или Editor;
-   Owner отдельно управляет Admin/Owner memberships.
-3. Mind Diary валидирует структуру, сохраняет immutable SpaceRevision и строит
-   производный индекс.
-4. Space получает canonical URL `/{space_handle}`. Router разрешает handle во
-   внутренний `space_id`, проверяет доступ и открывает base либо personalized
-   landing текущей разрешённой revision.
-5. Каждый пользователь подключает к агенту KnowledgeMount одного Space и
-   получает не больше прав своей membership и OAuth scopes. Разрешённый
-   Personal Space overlay остаётся server-side presentation context, а не
-   вторым corpus в mount.
-6. Агент вызывает `search`, затем `fetch` или читает OKF resource по URI.
-7. Editor/Admin/Owner при наличии write scope создаёт draft с ожидаемой
-   исходной ревизией.
-8. Пользователь проверяет diff; trusted control plane выдаёт короткоживущий
-   approval artifact, привязанный к этому draft.
-9. Mind Diary повторно проверяет active membership, атомарно продвигает HEAD,
-   пишет audit event и переиндексирует
-   только новую ревизию.
-10. Admin/Owner в любой момент получает детерминированный OKF export и может
-   унести базу на другую платформу.
+1. Пользователь входит через Sites; account и Personal Mind создаются атомарно.
+2. На сайте он создаёт ordinary Mind, принимает предложенный handle или меняет
+   его и становится единственным Owner.
+3. Owner/Admin приглашает зарегистрированных пользователей как Reader/Editor;
+   Owner также может пригласить Admin.
+4. Пользователь выпускает named MCP token и подключает Codex или Claude Code.
+5. Агент вызывает `list_minds`, выбирает `/me` или другой доступный Mind,
+   просматривает index/search/fetch.
+6. Editor/Admin/Owner отправляет atomic changeset с current HEAD revision.
+7. Server валидирует OKF, создаёт immutable revision, CAS-продвигает HEAD,
+   пишет audit event и запускает rebuild derived index.
+8. Public/unlisted readers сразу видят новую HEAD; historical selector остаётся
+   привязан к exact старой revision и read-only.
+9. Admin/Owner может получить детерминированный OKF export выбранной revision.
 
-Будущий publication flow отдельно выбирает `published_revision`, строит из неё
-KnowledgeSite и привязывает SpaceGuide. Базовая страница берётся из authored
-content; разрешённый Personal Space context или заявленный в SpaceSession
-audience profile меняет объяснение и подбор следующих материалов. Generated
-answer или recommendation становится общим знанием лишь после обычного
-draft/review/commit.
+## Product principles
 
-## Продуктовые принципы
+- **Authenticated only.** Visibility расширяет доступ зарегистрированным
+  пользователям, но не создаёт anonymous surface.
+- **Private by default.** Новый Mind и Personal Mind начинаются private.
+- **Portable by construction.** OKF import/export — основной контракт данных.
+- **Progressive disclosure.** Индекс, search и fetch вместо полного corpus в
+  model context.
+- **Live knowledge.** Public/unlisted readers видят текущую HEAD сразу после
+  успешного commit.
+- **Safe concurrent writes.** Immutable revisions, idempotency и HEAD CAS без
+  last-writer-wins.
+- **Explicit authority.** Single Owner, принятые memberships и capability
+  checks; content не управляет ACL.
+- **Replaceable infrastructure.** Domain и OKF codec не зависят от Sites, AWS
+  SDK, HTTP framework или search engine.
 
-- **Portable by construction.** Экспорт не является аварийной функцией: OKF —
-  основной контракт данных между реализациями.
-- **Sources before synthesis.** Raw/source-faithful материал отделён от
-  агентной wiki-синтеза; поиск возвращает provenance и канонические URI.
-- **Progressive disclosure.** Агент не загружает bundle целиком и может
-  переходить от индекса к concept и первоисточнику.
-- **Human-addressable by default.** У каждого Space есть стабильный
-  `/{space_handle}`; URL name является внешней identity, а внутренний
-  `space_id` сохраняет ссылочную и authorization целостность.
-- **Personalized with a neutral fallback.** Authenticated opening может сразу
-  учитывать Personal Space; базовая версия всегда доступна, anonymous opening
-  не использует личный контекст.
-- **Safe writes.** Нет last-writer-wins: мутации используют revisions,
-  idempotency и optimistic concurrency.
-- **Explicit time travel.** Исторический selector разрешается один раз в
-  точную immutable revision; такой mount всегда read-only и показывает, какую
-  revision он фактически открыл.
-- **Private by default.** Identity, tenant isolation и ACL не смешиваются с OKF
-  trust metadata.
-- **Shared with explicit membership.** Один Space может иметь много Readers,
-  Editors, Admins и Owners; параллельные writers не обходят HEAD CAS.
-- **Replaceable infrastructure.** Runtime, metadata store, object store,
-  search, embeddings и audit имеют отдельные адаптеры.
-- **Evidence over magic.** Ответ содержит путь, revision, source pointers,
-  trust/freshness signals и честно сообщает ограничения.
-- **Adaptive presentation, stable knowledge.** Один corpus допускает разные
-  уровни объяснения; персонализация не переписывает canonical revision.
+## Границы первого прототипа
 
-## Границы первой версии
+В scope входят authenticated account, автоматический Personal Mind, ordinary
+Minds, unique handles, roles, invitation acceptance, три visibility modes,
+Public Minds catalog, user-scoped MCP, personal bearer tokens, individual-file
+OKF access, immediate CAS commits, immutable history и export.
 
-В первую версию входят импорт и экспорт OKF 0.2, browse/search/fetch, проверка
-bundle, обязательные host-unique `space_handle` и display name, private shared
-Space, designated Personal Space, несколько memberships с четырьмя ролями,
-membership audit, last-owner protection, безопасная точечная запись, а также
-canonical auth-gated URL, base/personalized landing и read-only история по
-revision ID, времени и immutable Checkpoint. Подробные критерии находятся в
-[спецификации MVP](specs/mvp.md).
+Не входят anonymous access, приглашения незарегистрированных пользователей,
+email delivery, fuzzy global user search, granular file permissions, branches,
+automatic semantic merge, legal retention/recovery model, billing,
+organization administration и general cross-Mind synthesis.
 
-Не входят автоматический web crawler, полнофункциональный редактор документов,
-исполнение Attested Computations, сложный совместный merge, billing,
-invitations/groups, public или cross-tenant sharing, автономная публикация
-синтеза, KnowledgeSite/SpaceGuide и обещание, что любой подключённый агент
-автоматически прочитает весь Space.
+Personalized landing из ограниченного PersonalContext остаётся частью product
+direction; его точный UI и consent policy могут следовать после базового
+MCP/control-plane vertical slice.
 
 ## Платформенный путь
 
-- **Local vertical slice:** filesystem/object-store adapter, transactional
-  metadata в SQLite и простой lexical index.
-- **Ранний web-релиз:** admin UI для import/export/validation в OpenAI Sites и
-  read-only preview KnowledgeSite для выбранной revision; D1/R2 adapter допустим
-  как эксперимент. Adaptive conversation и совместное размещение MCP в Sites —
-  отдельные compatibility spikes, а не gate для первого UI-релиза.
-- **AWS v1:** тот же application core и MCP adapter в Bedrock AgentCore
-  Runtime, S3 для OKF revisions/assets и DynamoDB для HEAD/ACL/revision
-  history/checkpoints/jobs.
-- **AWS v2:** асинхронный hybrid index через DynamoDB Streams, Lambda,
-  embeddings и OpenSearch Serverless после измерения пользы.
+- **Local vertical slice:** shared application core, filesystem/object adapter,
+  SQLite metadata/FTS и Streamable HTTP MCP.
+- **Sites prototype:** authenticated web/control UI и, если compatibility gate
+  пройден, тот же deployment для MCP adapter. Иначе MCP запускается в отдельном
+  portable runtime.
+- **AWS target:** Bedrock AgentCore Runtime, S3 canonical objects, DynamoDB
+  transactional metadata и optional derived OpenSearch index.
 
-## Что будет означать успех
+## Что означает успех
 
-- Одна и та же OKF fixture импортируется локально и в облачном adapter без
-  изменения доменной логики.
-- Два Editors могут независимо создать drafts; устаревший commit получает
-  conflict, а revoked Editor не завершает старый draft.
-- Admin управляет Reader/Editor memberships, Owner — Admin/Owner memberships;
-  ни одна конкурентная операция не оставляет Space без Owner.
-- ChatGPT или другой MCP client находит concept через `search`, получает его
-  через `fetch` и показывает рабочую ссылку на канонический resource.
-- Rename display name не ломает canonical `/{space_handle}`. Два пользователя
-  могут увидеть разную подачу одной target revision из-за разных Personal
-  Spaces, но одинаковые факты и provenance; посторонний не узнаёт metadata
-  private Space.
-- Участник открывает состояние Space на заданное время или по Checkpoint;
-  интерфейс показывает resolved revision, а search/fetch не подмешивают HEAD.
-- KnowledgeSite показывает только явно опубликованную revision; посетитель
-  может переключить уровень объяснения без изменения canonical content.
-- Конкурирующая запись с устаревшим `expected_revision` отклоняется и не теряет
-  данные.
-- Export выбранной ревизии проходит OKF validator и сохраняет неизвестные поля
-  и source assets.
-- Перенос Sites → AWS требует нового deployment/storage adapter и миграции
-  данных, но не переписывания MCP contracts или OKF domain model. Production
-  domain сохраняется либо старые canonical URLs получают постоянный redirect.
-
-История не является обходом доступа: на каждый read действует текущая active
-membership. Но удаление entry из HEAD само по себе не удаляет его из прежних
-committed revisions. UI обязан предупреждать об этом; hard erasure и сроки
-retention требуют отдельной privacy/security спецификации.
+- У каждого нового account есть рабочий `/me`, который невозможно расшарить или
+  удалить отдельно.
+- Single-owner и transfer invariants выдерживают concurrent mutations.
+- Public/private/unlisted одинаково проверяют authenticated identity и дают
+  ожидаемые baseline права.
+- Codex и Claude Code через один user token находят доступные Minds, читают
+  exact revision и immediate commit-ят изменения с CAS.
+- Два concurrent Editors не теряют изменения: stale attempt получает conflict.
+- Исторический read не смешивается с HEAD и проверяет current access.
+- Export проходит OKF validation и сохраняет неизвестные fields/assets.
+- Перенос Sites → AWS меняет adapters, но не domain, API semantics или OKF
+  representation.

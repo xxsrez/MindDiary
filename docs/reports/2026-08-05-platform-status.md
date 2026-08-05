@@ -19,6 +19,10 @@
 за adapter boundary: `2026-07-28` — target, а `2025-11-25` — явный legacy
 compatibility profile только для клиента, на котором он реально потребовался.
 
+Для первого прототипа документально подтверждён practicable путь с bearer
+token в Codex, но не end-to-end совместимость готового Mind Diary MCP с Codex
+или Claude Code: её ещё нужно проверить conformance tests.
+
 ## Проверенные факты
 
 ### MCP
@@ -36,12 +40,29 @@ compatibility profile только для клиента, на котором о
   `search`/`fetch` schemas и user-openable absolute URLs.
 - Public plugin submission требует стабильный public HTTPS Streamable HTTP MCP
   endpoint; реальная проверка в ChatGPT developer mode остаётся обязательной.
+- Для authenticated production MCP plugin OpenAI описывает OAuth 2.1 с PKCE;
+  это целевой путь для polished integration, но не обязательный механизм
+  личного prototype connection.
 - Sites находится в public beta и может зависеть от plan, region и workspace
   settings. Sites документирует durable D1/R2 bindings, server-side identity,
   project linkage через `.openai/hosting.json` и custom domains там, где они
   доступны.
+- Sites передаёт server-side verified email в
+  `oai-authenticated-user-email` и optional full name в
+  `oai-authenticated-user-full-name`. В проверенной документации не найдено
+  обещания стабильного external subject, поэтому durable account key и email
+  relink нельзя считать закрытым platform contract.
 - Sites documentation не обещает, что произвольный Site является совместимым
   Streamable HTTP MCP host. Совместное размещение остаётся compatibility spike.
+
+### Codex MCP client
+
+- Codex поддерживает remote MCP server по `url` и передачу bearer token из
+  environment variable через `bearer_token_env_var`.
+- Это позволяет не записывать личный secret в repository/config, но не заменяет
+  server-side expiry, revocation, scopes и per-request ACL.
+- Аналогичная возможность Claude Code не считается подтверждённой для Mind
+  Diary, пока не выполнен отдельный client conformance test.
 
 ### AWS AgentCore Runtime
 
@@ -60,6 +81,10 @@ compatibility profile только для клиента, на котором о
 - Sites availability приведена к текущей официальной формулировке.
 - Непроверенные MCP-in-Sites и client-version assumptions остаются явно
   помеченными как эксперименты и открытые вопросы.
+- Первый prototype auth зафиксирован как revocable personal bearer token;
+  OAuth 2.1 + PKCE оставлен production target.
+- Sites identity binding отделён от internal immutable `principal_id`, потому
+  что текущая документация не фиксирует stable external subject.
 
 ## Ограничения
 
@@ -73,5 +98,6 @@ plugin review или развёртывание container в AgentCore.
 - [MCP specification 2025-11-25](https://modelcontextprotocol.io/specification/2025-11-25/basic)
 - [OpenAI: build an MCP server](https://developers.openai.com/plugins/build/mcp-server)
 - [OpenAI: authenticate an MCP server](https://developers.openai.com/plugins/build/auth)
+- [OpenAI Codex: MCP](https://developers.openai.com/codex/mcp)
 - [OpenAI Sites](https://learn.chatgpt.com/docs/sites)
 - [AWS: deploy MCP servers in AgentCore Runtime](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/runtime-mcp.html)
