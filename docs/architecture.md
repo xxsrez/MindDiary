@@ -11,6 +11,7 @@
 - безопасную многописательскую модель, которой нет в самом OKF;
 - private shared KnowledgeSpaces, many-to-many memberships и четыре роли;
 - required human-readable names и стабильную ID-based адресацию;
+- canonical HTTPS URL и audience-neutral landing для каждого Space;
 - публикацию выбранной revision как adaptive knowledge site без копирования
   канонического corpus;
 - ранний web-прототип в OpenAI Sites;
@@ -27,8 +28,8 @@ MCP. Эти свойства принадлежат CloudBrain и не долж�
 flowchart LR
     Agent[ChatGPT, Codex или другой MCP client]
     Admin[Web/admin UI]
-    Visitor[KnowledgeSite visitor]
-    Site[KnowledgeSite + SpaceGuide]
+    Visitor[Member или KnowledgeSite visitor]
+    Site[Canonical Space URL + SpaceLanding + optional SpaceGuide]
     Edge[MCP и Web/API adapters]
     Core[OKF application core]
     Canon[(Canonical revision store)]
@@ -59,6 +60,8 @@ flowchart LR
 User/Principal --< SpaceMembership >-- KnowledgeSpace
 KnowledgeMount -----------------------> exactly one KnowledgeSpace
 KnowledgeSpace --HEAD-----------------> SpaceRevision
+KnowledgeSpace --canonical URL--------> SpaceLanding
+SpaceLanding --selected---------------> SpaceRevision
 SpaceRevision --materialize----------> OKFBundle
 KnowledgeSite --published revision----> SpaceRevision
 ```
@@ -89,6 +92,8 @@ SpaceRevision:
 
 - create Space, list accessible Spaces и получить current membership;
 - resolve/rename Space через tenant-scoped unique name без смены `space_id`;
+- resolve canonical Space URL и получить audience-neutral landing разрешённой
+  revision;
 - add/change/revoke memberships и transfer ownership через control plane;
 - import/export/validate bundle;
 - browse/search/fetch;
@@ -111,8 +116,8 @@ presentation/interaction capabilities подключаются через отд
 - MCP adapter реализует stable protocol `2025-11-25`, Streamable HTTP и version
   negotiation. RC `2026-07-28` не становится default до финальной спецификации,
   поддержки SDK и conformance tests.
-- Web/API adapter обслуживает admin UI, KnowledgeSite и large-transfer
-  orchestration.
+- Web/API adapter обслуживает canonical Space URLs, SpaceLanding, admin UI,
+  KnowledgeSite и large-transfer orchestration.
 - Background adapter выполняет идемпотентную индексацию и housekeeping.
 
 ### 4. Infrastructure adapters
@@ -135,6 +140,52 @@ Rename использует `expected_metadata_version`, обновляет reso
 меняет content HEAD. API, ACL, jobs, resource URIs и indexes продолжают хранить
 `space_id`; это оставляет путь к будущим public namespaces, slugs и aliases без
 миграции канонических данных.
+
+## Canonical Space URL и landing flow
+
+Web adapter выводит deployment-scoped canonical URL детерминированно из
+immutable identity:
+
+```text
+GET https://{deployment-host}/spaces/{space_id}
+```
+
+Полный host является конфигурацией deployment, а `/spaces/{space_id}` —
+стабильным application contract. Name/slug routes могут существовать как
+redirect aliases, но не заменяют canonical URL и не участвуют в authorization.
+Production custom domain сохраняется при смене Sites/AWS runtime; если меняется
+сам домен, старый canonical URL остаётся permanent redirect, а не молча
+исчезает.
+
+Поток перехода по URL:
+
+1. Router извлекает только opaque `space_id`; query/path не задаёт tenant или
+   роль.
+2. Authorizer определяет verified principal и current membership либо проверяет
+   anonymous publication policy до чтения Space metadata.
+3. Revision resolver выбирает HEAD для member view, exact historical revision
+   для Snapshot View или `published_revision_id` для anonymous view.
+4. Core строит `SpaceLanding` только для этой revision: title,
+   audience-neutral summary, authored entrypoints, provenance/freshness,
+   suggested questions и доступные действия.
+5. Renderer отдаёт HTML и эквивалентное structured representation; large corpus
+   остаётся за browse/search/fetch.
+6. Только явное начало разговора создаёт `SpaceSession` и включает adaptive
+   presentation. Landing до этого session-independent.
+
+Неавторизованный запрос к private Space получает non-enumerating ответ без
+name, summary, membership hints или различимого redirect. Derived landing text
+помечается как generated. Anonymous landing создаётся только из явно
+утверждённой publication configuration и не может автоматически суммировать
+private HEAD.
+
+SpaceLanding остаётся projection: authored content читается из revision,
+presentation settings — из service metadata, а generated fragments не
+записываются обратно в OKF без обычного draft/review/commit.
+
+Historical durable URL может расширять canonical route точным revision ID,
+например `/spaces/{space_id}/revisions/{revision_id}`. Date/Checkpoint сначала
+разрешаются в exact ID; shareable ссылка не хранит относительное время.
 
 ## Каноническая модель ревизий
 
@@ -258,12 +309,13 @@ Import остаётся web/CLI operation в MVP. Если позже он по�
 
 Исторический selector задаётся при создании mount, поэтому standard
 `search(query)`/`fetch(id)` не получают новые inputs. `get_space_info` сообщает
-selector, `resolved_revision_id`, `committed_at` и `is_historical`. Создание
-Checkpoint остаётся mutation trusted web/CLI control plane и не публикуется в
-content MCP. Historical mount предлагает только read-only tools; он не может
-создать draft, commit, импортировать content, изменить metadata или сдвинуть
-HEAD. Export уже существующей выбранной revision остаётся read operation и
-по-прежнему требует role capability и `space.export`.
+canonical Space URL, audience-neutral landing metadata, selector,
+`resolved_revision_id`, `committed_at` и `is_historical`. Создание Checkpoint
+остаётся mutation trusted web/CLI control plane и не публикуется в content MCP.
+Historical mount предлагает только read-only tools; он не может создать draft,
+commit, импортировать content, изменить metadata или сдвинуть HEAD. Export уже
+существующей выбранной revision остаётся read operation и по-прежнему требует
+role capability и `space.export`.
 
 Точные schemas являются частью MVP и будут зафиксированы до реализации.
 Read-only и mutation tools получают правдивые MCP annotations. Mutations не
@@ -351,6 +403,11 @@ record связывает route и presentation settings с одним
 `published_revision_id`; renderer читает ту же immutable revision, что MCP и
 export. Content HEAD и published revision различаются.
 
+Canonical `/spaces/{space_id}` существует независимо от publication. Для
+private member он открывает auth-gated landing разрешённой revision. Public
+alias KnowledgeSite только перенаправляет к той же identity и добавляет
+anonymous publication policy; он не создаёт второй Space.
+
 ```text
 Owner promotes SpaceRevision
         │
@@ -393,6 +450,8 @@ publication record. Opening brief, suggested questions и recommendations
 ### Local vertical slice
 
 - Один процесс и один MCP endpoint.
+- Локальный Web/API route на test base URL реализует canonical
+  `/spaces/{space_id}` и structured SpaceLanding для integration tests.
 - Filesystem сохраняет exact revision objects.
 - SQLite хранит name resolver, metadata version, HEAD, memberships, owner count,
   membership epoch, упорядоченный revision log, immutable checkpoints, jobs и
@@ -408,9 +467,9 @@ publication record. Opening brief, suggested questions и recommendations
 Подтверждённая роль Sites — web/admin UI с server-side routes, D1 для structured
 data и R2 для objects. Первый Sites milestone — UI для import, validation,
 browse, export и управления участниками/ролями, плюс read-only preview
-KnowledgeSite для выбранной revision. Data-only MCP остаётся ядром агентного
-продукта, но совместное размещение MCP и adaptive conversation не блокируют этот
-UI.
+canonical Space URL/landing и KnowledgeSite для выбранной revision. Data-only
+MCP остаётся ядром агентного продукта, но совместное размещение MCP и adaptive
+conversation не блокируют этот UI.
 
 Официальная документация Sites не обещает Streamable HTTP MCP, SSE без
 buffering, `/mcp` compatibility или прохождение plugin review. Поэтому единый
@@ -436,13 +495,14 @@ Compatibility spikes совместного размещения MCP и server-s
 Рекомендуемая первая AWS-топология:
 
 ```text
-MCP clients
-    │ OAuth/JWT
-    ▼
-Bedrock AgentCore Runtime: stateless Streamable HTTP MCP
+MCP clients ──OAuth/JWT──> Bedrock AgentCore Runtime: Streamable HTTP MCP
+Browsers ──HTTPS─────────> CloudFront/edge -> portable Web/API runtime
+                                      │ canonical /spaces/{space_id}
+                                      │
+Both adapters share application ports and use:
     ├── S3: immutable OKF revisions and assets
     ├── DynamoDB: Space, memberships, HEAD, ordered revisions, checkpoints,
-    │   jobs, idempotency
+    │   publication, jobs, idempotency
     ├── DynamoDB Streams -> idempotent Lambda indexer
     ├── OpenSearch Serverless: optional lexical + vector index
     └── CloudWatch/OpenTelemetry: operational telemetry
@@ -452,6 +512,11 @@ AgentCore Runtime выбран как MCP-native target: он принимает
 `0.0.0.0:8000/mcp`, поддерживает Streamable HTTP и JWT/SigV4 authorization.
 Stateless mode достаточен, потому что долговременная истина находится в
 storage, а не в MCP session.
+
+AgentCore остаётся MCP-native runtime, а canonical Space URL обслуживает
+отдельный переносимый Web/API adapter. Конкретный AWS compute для него
+(container service или serverless HTTP) выбирается отдельным deployment
+решением; route и application contract от этого не меняются.
 
 DynamoDB conditional writes/transactions реализуют HEAD CAS. S3 Versioning —
 аварийная страховка, но не доменная история. DynamoDB Streams + Lambda имеют
@@ -499,7 +564,7 @@ precision/grounding и стоимости.
 
 - Operational logs/traces содержат request ID, latency, tool, result count и
   error class, но не приватный текст concept/chunk, audience profile или
-  conversation body.
+  conversation body. URL routing не логирует private landing content.
 - Application audit хранит actor, tenant, mount, action, Space, old/new revision,
   requested history selector, resolved revision, object/result IDs и outcome.
 - CloudTrail покрывает AWS control plane и явно включённые data events, но не
@@ -535,6 +600,8 @@ scripts из Markdown/assets. Download URLs короткоживущие, scoped
 - Какая отдельная модель visibility и anonymous access нужна для `public_read`?
 - Какие normalization, namespace, slug и alias rules нужны после tenant-unique
   MVP names?
+- Какая discovery/link-graph модель превратит отдельные Space URLs в сеть, не
+  раскрывая private Spaces и не создавая неявный cross-space retrieval?
 - Нужен ли community Space режим `follow_head`, или publication всегда требует
   отдельного promotion?
 - Какие session retention/consent правила допустимы для adaptive profiles и

@@ -8,7 +8,8 @@ migrations ещё не реализованы.
 
 Главная пользовательская сущность называется **KnowledgeSpace** («пространство
 знаний», в коротком UI — `Space`). Это живой совместный объект CloudBrain: у
-него есть содержимое, HEAD revision, участники, роли, настройки и audit history.
+него есть canonical URL, содержимое, HEAD revision, участники, роли, настройки
+и audit history.
 
 Название выбрано вместо:
 
@@ -33,6 +34,7 @@ migrations ещё не реализованы.
 | `Index` / `Log` | Reserved OKF `index.md` и `log.md`, не обычные `KnowledgeEntry`. |
 | `SpaceMembership` | Связь principal с одним Space, ролью и lifecycle state. |
 | `KnowledgeMount` | Authorization binding одного MCP connection к одному Space. Не часть знания. |
+| `SpaceLanding` | Audience-neutral начальное представление одной разрешённой revision по canonical Space URL. |
 | `KnowledgeSite` | Web-представление явно опубликованной `SpaceRevision`; не отдельная копия знаний. |
 | `SpaceSession` | Контекст одного участника или посетителя и его audience profile; service metadata, не OKF. |
 | `SpaceGuide` | Read-only orchestration, которая отвечает и предлагает материалы по разрешённой revision. |
@@ -56,6 +58,7 @@ flowchart LR
     Source[Source]
     Asset[Asset]
     Mount[KnowledgeMount]
+    Landing[SpaceLanding]
     Site[KnowledgeSite]
     Session[SpaceSession]
     Guide[SpaceGuide]
@@ -71,7 +74,10 @@ flowchart LR
     Revision --> Source
     Revision --> Asset
     Revision -->|materialize| Bundle
+    Landing -->|describes one allowed revision| Revision
+    Space -->|canonical URL| Landing
     Site -->|published revision| Revision
+    Site -->|renders| Landing
     Session -->|conversation context| Space
     Guide -->|reads| Revision
     Guide -->|adapts for| Session
@@ -92,6 +98,7 @@ space_id          # immutable opaque primary identity
 name              # required human-readable name
 normalized_name   # service-derived uniqueness key
 metadata_version  # CAS for rename/settings
+canonical_path    # derived /spaces/{space_id}, never name-based
 ```
 
 В MVP `normalized_name` уникален в пределах tenant. Global uniqueness не нужна:
@@ -105,9 +112,65 @@ API, ACL, audit, revisions, mounts и durable links адресуют Space че�
 `expected_metadata_version`; изменение имени не меняет content HEAD и не
 переписывает OKF bundle.
 
-Для будущих public URLs отдельный namespace/slug и aliases могут дать адрес
-наподобие `/@publisher/napoleon`. Они не меняют внутреннюю identity и не входят
-в MVP.
+Каждый Space с момента создания имеет deployment-scoped canonical HTTPS URL:
+
+```text
+https://{deployment-host}/spaces/{space_id}
+```
+
+Host зависит от deployment, но path строится только на immutable `space_id`.
+Rename, смена visibility, новая HEAD или promotion published revision не меняют
+этот адрес. Для public UX отдельный namespace/slug и aliases могут дать адрес
+наподобие `/@publisher/napoleon`; alias перенаправляет на canonical URL, может
+иметь историю redirect и никогда не используется как authorization key.
+Production URL должен использовать управляемый product/custom domain, а не
+provider-specific hostname: перенос Sites → AWS сохраняет host либо оставляет
+permanent redirect со старого URL.
+
+Canonical URL существует и у private Space, но не является публичным доступом.
+Resolver проверяет visibility, current membership и scopes до чтения названия,
+landing или revision. Неавторизованный ответ не должен позволять отличить
+несуществующий Space от существующего private Space.
+
+## SpaceLanding
+
+Успешный переход по canonical URL возвращает `SpaceLanding` для ровно одной
+разрешённой revision: HEAD для обычного member view, resolved revision для
+Snapshot View или `published_revision_id` для anonymous KnowledgeSite.
+
+Минимальная модель landing:
+
+```text
+space_id
+canonical_url
+resolved_revision_id
+title
+audience_neutral_summary
+entrypoints[]
+source / freshness indicators
+suggested_questions[]
+available_actions[]
+```
+
+Landing даёт общее, одинаковое для всех посетителей этого access mode описание:
+что находится в Space, с чего начать, на какой revision и evidence оно
+опирается. Title, summary и entrypoints в приоритете берутся из authored
+presentation/OKF content выбранной revision. Derived summary или suggested
+questions явно помечаются как generated и не становятся canonical knowledge.
+Для anonymous publication Owner отдельно подтверждает landing; private HEAD не
+может автоматически породить public summary.
+
+Сам `SpaceLanding` — revision-bound projection, а не новый OKF document и не
+вторая копия corpus. Его authored inputs могут храниться в OKF, presentation
+settings — в service metadata, а generated части всегда воспроизводимы из
+указанной revision и помечены как derived.
+
+`SpaceLanding` не содержит memberships, contributor identities, private
+settings, audience profile или conversation history и не загружает весь corpus
+в browser/model context. После явного начала разговора создаётся отдельная
+`SpaceSession`; только внутри неё presentation может адаптироваться под вопрос
+и уровень пользователя. Canonical URL при этом остаётся адресом Space, а не ID
+сессии.
 
 ## Сценарии, а не типы Space
 
@@ -334,8 +397,8 @@ retention требуют отдельного дизайна, потому чт�
 могут удаляться безопасным garbage collection после retention window.
 
 `KnowledgeSite` не открывает history или Checkpoints автоматически. Anonymous
-visitor видит только `published_revision_id`; публикация другой revision —
-отдельное явное действие Owner.
+visitor видит только `published_revision_id` и утверждённый landing; публикация
+другой revision или landing — отдельное явное действие Owner.
 
 ## Content plane и control plane
 
@@ -362,8 +425,9 @@ configuration содержит:
 site_id
 space_id
 published_revision_id
-route / visibility
+route alias / visibility
 entrypoint
+approved audience-neutral landing
 presentation settings
 publication_version
 ```
@@ -423,6 +487,8 @@ private ↔ public.
 Обновлённый MVP включает required tenant-unique name, private shared Space,
 несколько active users, четыре роли, membership audit и last-owner protection.
 Он также включает read-only историю по revision ID, времени и immutable
-Checkpoint. Он не включает branches, merges, historical writes, moving tags,
-hard-erasure policy, KnowledgeSite/SpaceGuide, invitations, groups, path/tag
-grants, public links, cross-tenant sharing или organization administration.
+Checkpoint, canonical auth-gated Space URL и audience-neutral landing для
+разрешённой revision. Он не включает public aliases/discovery, anonymous
+KnowledgeSite, branches, merges, historical writes, moving tags, hard-erasure
+policy, SpaceGuide, invitations, groups, path/tag grants, public links,
+cross-tenant sharing или organization administration.

@@ -29,10 +29,42 @@ CloudBrain — не способ заранее загрузить всю тем
 неизменяемой ревизией, а ответы, рекомендации и порядок подачи — derived
 presentation конкретной ревизии для конкретной сессии.
 
+## Адресуемая сеть знаний
+
+Продуктовая гипотеза CloudBrain — «интернет из знаний»: базовой адресуемой
+единицей становится не страница и не чат, а `KnowledgeSpace`. У каждого Space
+есть стабильный canonical HTTPS URL внутри deployment, например
+`/spaces/{space_id}`. Переименование Space или смена человекочитаемого alias не
+ломают ссылку; будущий адрес вида `/@publisher/napoleon` остаётся удобным
+redirect, а не identity.
+
+Переход по URL сначала открывает `SpaceLanding` — общее audience-neutral
+представление одной разрешённой revision. Оно отвечает на четыре вопроса:
+
+- что это за Space и о чём он;
+- какие основные темы и authored entrypoints доступны;
+- на какой revision, источниках и freshness signals основано представление;
+- что можно прочитать или спросить дальше.
+
+Landing одинаков до начала разговора и не использует личный профиль посетителя.
+«Обезличенное» здесь означает отсутствие персональной адаптации и раскрытия
+участников, а не превращение private content в публичный.
+После явного действия «начать разговор» создаётся `SpaceSession`: тогда уровень
+подготовки, вопрос и контекст пользователя могут менять глубину и порядок
+объяснения, но не corpus и права. Это разделяет нейтральную точку входа и
+персональную беседу.
+
+URL существует и у private Space, но это не public link. Неавторизованный
+запрос не получает название, summary или подтверждение существования Space.
+Anonymous landing возможен только для явно опубликованной revision; сервис не
+строит его автоматически из private HEAD. Глобальный каталог, discovery,
+cross-space links и поисковая сеть — возможное развитие этой гипотезы, а не
+обещание MVP.
+
 ## Основные сущности
 
 - `KnowledgeSpace` — live collaborative container с обязательным именем,
-  содержимым, участниками, ролями, настройками и HEAD revision.
+  canonical URL, содержимым, участниками, ролями, настройками и HEAD revision.
 - `SpaceRevision` — immutable snapshot содержимого.
 - `Checkpoint` — неизменяемое человекочитаемое имя для конкретной
   `SpaceRevision`; это не OKF content tag.
@@ -45,6 +77,8 @@ presentation конкретной ревизии для конкретной с�
   `admin` или `owner`.
 - `KnowledgeMount` связывает один MCP connection с одним Space и подмножеством
   разрешённых возможностей.
+- `SpaceLanding` — audience-neutral начальное представление Space по его URL,
+  привязанное к одной разрешённой revision.
 - `KnowledgeSite` публикует выбранную immutable revision как обычные страницы и
   интерактивную точку входа.
 - `SpaceSession` хранит контекст конкретного разговора, включая заявленный
@@ -66,9 +100,10 @@ presentation конкретной ревизии для конкретной с�
    другой теме в wiki-подобной модели. Moderation, reputation и review queues
    появятся только при реальной необходимости.
 4. **Knowledge site.** Владелец публикует выбранную ревизию как статическую
-   основу сайта. Посетитель может читать её, начать разговор, сообщить свой
-   уровень — например, «я профессиональный историк» — и получить более глубокую
-   подачу на основе того же corpus.
+   основу сайта. Посетитель по стабильному URL сначала получает нейтральный
+   SpaceLanding, затем может начать разговор, сообщить свой уровень — например,
+   «я профессиональный историк» — и получить более глубокую подачу на основе
+   того же corpus.
 5. **Historical view.** Участник открывает Space «на момент два месяца назад»
    или по Checkpoint. Время разрешается в точную revision, и весь разговор,
    поиск и fetch остаются привязаны к ней без смешивания с HEAD.
@@ -87,17 +122,19 @@ SpaceGuide при этом полезен не только публичному
    Owner отдельно управляет Admin/Owner memberships.
 3. CloudBrain валидирует структуру, сохраняет immutable SpaceRevision и строит
    производный индекс.
-4. Каждый пользователь подключает к агенту KnowledgeMount одного Space и
+4. Space получает canonical URL на основе `space_id`. Авторизованный переход
+   открывает audience-neutral landing текущей разрешённой revision.
+5. Каждый пользователь подключает к агенту KnowledgeMount одного Space и
    получает не больше прав своей membership и OAuth scopes.
-5. Агент вызывает `search`, затем `fetch` или читает OKF resource по URI.
-6. Editor/Admin/Owner при наличии write scope создаёт draft с ожидаемой
+6. Агент вызывает `search`, затем `fetch` или читает OKF resource по URI.
+7. Editor/Admin/Owner при наличии write scope создаёт draft с ожидаемой
    исходной ревизией.
-7. Пользователь проверяет diff; trusted control plane выдаёт короткоживущий
+8. Пользователь проверяет diff; trusted control plane выдаёт короткоживущий
    approval artifact, привязанный к этому draft.
-8. CloudBrain повторно проверяет active membership, атомарно продвигает HEAD,
+9. CloudBrain повторно проверяет active membership, атомарно продвигает HEAD,
    пишет audit event и переиндексирует
    только новую ревизию.
-9. Admin/Owner в любой момент получает детерминированный OKF export и может
+10. Admin/Owner в любой момент получает детерминированный OKF export и может
    унести базу на другую платформу.
 
 Будущий publication flow отдельно выбирает `published_revision`, строит из неё
@@ -114,6 +151,10 @@ recommendation становится общим знанием лишь посл�
   агентной wiki-синтеза; поиск возвращает provenance и канонические URI.
 - **Progressive disclosure.** Агент не загружает bundle целиком и может
   переходить от индекса к concept и первоисточнику.
+- **Addressable by default.** У каждого Space есть стабильный ID-based URL;
+  mutable name и public aliases не являются identity.
+- **Neutral before adaptive.** URL сначала открывает audience-neutral landing;
+  персонализация начинается только внутри явной SpaceSession.
 - **Safe writes.** Нет last-writer-wins: мутации используют revisions,
   idempotency и optimistic concurrency.
 - **Explicit time travel.** Исторический selector разрешается один раз в
@@ -136,8 +177,9 @@ recommendation становится общим знанием лишь посл�
 bundle, обязательное tenant-unique имя, private shared Space, несколько
 memberships с четырьмя ролями,
 membership audit, last-owner protection, безопасная точечная запись, а также
-read-only история по revision ID, времени и immutable Checkpoint. Подробные
-критерии находятся в [спецификации MVP](specs/mvp.md).
+canonical auth-gated URL, нейтральный landing и read-only история по revision
+ID, времени и immutable Checkpoint. Подробные критерии находятся в
+[спецификации MVP](specs/mvp.md).
 
 Не входят автоматический web crawler, полнофункциональный редактор документов,
 исполнение Attested Computations, сложный совместный merge, billing,
@@ -169,6 +211,9 @@ invitations/groups, public или cross-tenant sharing, автономная п�
   ни одна конкурентная операция не оставляет Space без Owner.
 - ChatGPT или другой MCP client находит concept через `search`, получает его
   через `fetch` и показывает рабочую ссылку на канонический resource.
+- Rename не ломает canonical Space URL; авторизованный участник видит по нему
+  audience-neutral landing разрешённой revision, а посторонний не узнаёт о
+  существовании private Space.
 - Участник открывает состояние Space на заданное время или по Checkpoint;
   интерфейс показывает resolved revision, а search/fetch не подмешивают HEAD.
 - KnowledgeSite показывает только явно опубликованную revision; посетитель
@@ -178,7 +223,8 @@ invitations/groups, public или cross-tenant sharing, автономная п�
 - Export выбранной ревизии проходит OKF validator и сохраняет неизвестные поля
   и source assets.
 - Перенос Sites → AWS требует нового deployment/storage adapter и миграции
-  данных, но не переписывания MCP contracts или OKF domain model.
+  данных, но не переписывания MCP contracts или OKF domain model. Production
+  domain сохраняется либо старые canonical URLs получают постоянный redirect.
 
 История не является обходом доступа: на каждый read действует текущая active
 membership. Но удаление entry из HEAD само по себе не удаляет его из прежних

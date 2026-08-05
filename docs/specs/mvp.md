@@ -7,7 +7,8 @@
 Доказать один end-to-end сценарий: несколько пользователей совместно работают
 в private KnowledgeSpace; их агенты находят source-grounded knowledge через MCP,
 дочитывают канонический OKF concept и безопасно создают новую revision.
-Участники открывают read-only состояние Space по revision/date/Checkpoint, а
+Участники открывают read-only состояние Space по revision/date/Checkpoint.
+Каждый Space имеет стабильный auth-gated URL с audience-neutral landing.
 Admin/Owner получает переносимый валидный export.
 
 MVP считается vertical slice, а не набором независимых демонстраций. В нём одна
@@ -37,6 +38,24 @@ MVP считается vertical slice, а не набором независим
 - Жёсткий tenant/space/revision filter до выдачи результата.
 - Результаты ограничены на сервере; если совместимый tool-result metadata
   позволяет, сервер явно сообщает truncation.
+
+### Canonical URL и landing
+
+- Каждый Space получает canonical HTTPS URL вида
+  `https://{deployment-host}/spaces/{space_id}`. В local profile host тестовый,
+  но path contract совпадает с Sites/AWS adapters.
+- Rename, новая HEAD и смена presentation settings не меняют canonical URL.
+  Human-readable aliases не входят в MVP.
+- Авторизованный переход возвращает `SpaceLanding` выбранной revision: title,
+  audience-neutral summary, authored entrypoints, provenance/freshness,
+  suggested questions и available actions.
+- Landing не содержит memberships/private settings, не персонализируется и не
+  загружает весь corpus. Derived text помечается как generated.
+- Private URL проверяет current membership до чтения Space metadata;
+  неавторизованный ответ не раскрывает name, summary или факт существования.
+- Web representation и `get_space_info` ссылаются на один `space_id`, canonical
+  URL и `resolved_revision_id`. Начало adaptive SpaceSession и anonymous public
+  landing остаются вне MVP.
 
 ### Read-only history
 
@@ -80,6 +99,8 @@ MVP считается vertical slice, а не набором независим
   имя уникально внутри tenant, а authorization использует только ID.
 - Many-to-many `SpaceMembership` с ролями `reader`, `editor`, `admin`, `owner`.
 - Один content MCP mount всегда связан ровно с одним Space.
+- Canonical URL выводится из verified deployment host и `space_id`, а не из
+  переданных клиентом tenant/name/role.
 - Создание Space атомарно создаёт creator membership с ролью Owner.
 - Owners может быть несколько; последнего active Owner нельзя demote/revoke.
 - Admin управляет Reader/Editor memberships и Space settings/export. Только
@@ -136,11 +157,11 @@ get_export_status(job_id)
 ```
 
 `get_space_info` возвращает название Space, текущую роль, effective content
-capabilities, selector, `resolved_revision_id`, commit time, `is_historical` и
-`management_url`. Это информация для UX, а не доказательство прав: server-side
-authorization всё равно читает текущий membership из проверенного identity
-context. Создание Checkpoint остаётся trusted control-plane operation, а не
-content MCP tool.
+capabilities, canonical URL, audience-neutral landing metadata, selector,
+`resolved_revision_id`, commit time, `is_historical` и `management_url`. Это
+информация для UX, а не доказательство прав: server-side authorization всё
+равно читает текущий membership из проверенного identity context. Создание
+Checkpoint остаётся trusted control-plane operation, а не content MCP tool.
 
 Import может сначала оставаться web/CLI operation. Если он входит в MCP,
 archive передаётся через upload intent/presigned URL, а не base64 в JSON-RPC.
@@ -208,6 +229,14 @@ annotations. Input validation errors должны быть понятны мод
 24. Membership mutation не меняет content HEAD и имеет ровно один audit event;
     retry с тем же idempotency key возвращает тот же результат.
 25. Полный test suite, OKF fixtures и docs validation проходят на одном commit.
+26. Create Space возвращает canonical `/spaces/{space_id}`; rename и смена HEAD
+    не меняют URL, а name/slug не используется как authorization identity.
+27. Authorized member получает по URL audience-neutral landing exact resolved
+    revision. Два неавторизованных запроса к случайному и существующему private
+    ID не различимы по раскрываемой Space metadata.
+28. Web landing и `get_space_info` возвращают тот же `space_id`, canonical URL
+    и `resolved_revision_id`; landing не содержит membership list или весь
+    corpus.
 
 ## Compatibility gate для Sites
 
@@ -217,6 +246,7 @@ Developer mode, а не только локальным fetch:
 - stable public HTTPS `/mcp`;
 - protocol negotiation и `tools/list`;
 - `search`/`fetch` с canonical URLs и citations;
+- canonical `/spaces/{space_id}` и revision-bound SpaceLanding;
 - streaming/error behavior без buffering;
 - OAuth discovery, PKCE, audience/scopes и refresh;
 - domain challenge;
@@ -229,6 +259,8 @@ Developer mode, а не только локальным fetch:
 ## AWS v1 acceptance
 
 - Тот же container и MCP integration suite проходят в AgentCore Runtime.
+- Portable Web/API adapter обслуживает canonical Space URL с тем же landing
+  contract и authorization semantics, что local/Sites profile.
 - Canonical objects находятся в S3, HEAD CAS — в DynamoDB conditional write.
 - Exact ID, `as_of` и Checkpoint разрешаются в ту же revision, что в local
   adapter; historical reads проверяют current membership и не смешиваются с
@@ -254,6 +286,8 @@ Developer mode, а не только локальным fetch:
 - billing и organization administration;
 - invitations, groups, path/tag grants, `unlisted`/`public_read`, public links и
   cross-tenant sharing;
+- human-readable public aliases, global discovery/link graph и anonymous
+  SpaceLanding;
 - KnowledgeSite publication, SpaceSession/SpaceGuide, adaptive answers,
   proactive recommendations, outbound push и `follow_head` publication;
 - AgentCore Gateway, Memory, Bedrock Knowledge Bases, Verified Permissions,

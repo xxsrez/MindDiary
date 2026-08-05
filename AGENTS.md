@@ -34,6 +34,16 @@
 - Каждый Space имеет immutable `space_id` и обязательное человекочитаемое
   `name`. В MVP нормализованное имя уникально только внутри tenant; durable
   references и authorization используют `space_id`, а не изменяемое имя.
+- Каждый Space имеет deployment-scoped canonical HTTPS URL, построенный на
+  immutable `space_id`. Rename, смена slug или publication policy не меняют
+  этот URL; человекочитаемые public aliases только перенаправляют на него.
+- Переход по URL сначала проверяет visibility и authorization, затем открывает
+  audience-neutral `SpaceLanding` для одной разрешённой revision. Landing не
+  персонализируется, не раскрывает memberships/private metadata и не загружает
+  corpus целиком; адаптация начинается только внутри отдельной `SpaceSession`.
+- URL private Space не подтверждает его существование неавторизованному
+  посетителю. Anonymous landing читает только явно опубликованную revision и
+  никогда не выводится автоматически из private HEAD.
 - Personal, group, community-wiki и site — сценарии одного Space, а не значения
   фиксированного `space_type`. Поведение складывается из memberships,
   visibility, publication policy и presentation surface.
