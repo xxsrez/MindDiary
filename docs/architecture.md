@@ -145,10 +145,12 @@ immutable `SpaceRevision`:
 KnowledgeSpace
 ├── HEAD -> revision id
 ├── revision
+│   ├── revision id + monotonic revision number
 │   ├── parent revision id
 │   ├── manifest: path, SHA-256, media type, size
 │   ├── exact OKF files and source assets
-│   └── author, created_at, change summary
+│   └── committed_by, server-assigned committed_at UTC, change summary
+├── immutable checkpoint name -> exact revision id
 └── derived index state per revision
 ```
 
@@ -159,6 +161,38 @@ Manifest — producer envelope, а не файл нормативного OKF bu
 S3/R2 version IDs не заменяют SpaceRevision: одинаковый revision contract
 должен работать на любой платформе. Hash каждого объекта обеспечивает
 целостность и идемпотентность, но не означает доверие к содержанию.
+
+## Разрешение истории и read-only mounts
+
+History resolver принимает ровно один selector: HEAD, точный `revision_id`,
+UTC `as_of` или имя immutable `Checkpoint`. Для `as_of` он выбирает revision с
+максимальным монотонным номером, чей server-assigned `committed_at <= as_of`.
+Даты внутри OKF и источников не участвуют в выборе. Относительное пользовательское
+«два месяца назад» сначала становится точным UTC instant с явно выбранной
+timezone.
+
+Selector разрешается при создании/открытии mount и фиксируется как
+`resolved_revision_id` на всю сессию:
+
+```text
+selector: head | revision_id | as_of | checkpoint
+requested_value
+resolved_revision_id
+mode: live | historical
+```
+
+Не-HEAD selector всегда даёт historical mode. В нём effective permissions
+дополнительно пересекаются с read-only capability set: mutation tools не
+рекламируются и отклоняются даже для Owner. Current active membership и
+`space.history.read` проверяются на каждом обращении; resolver никогда не
+восстанавливает старую membership или ACL.
+
+`Checkpoint` хранится в transactional service metadata, уникален внутри Space
+после нормализации и не может быть retargeted. Его создание через trusted
+control plane требует `space.checkpoint.write`, но не меняет HEAD и не создаёт
+content revision. Это не OKF `tags`, не часть export и не publication pointer.
+Если подходящей revision до `as_of` нет, resolver возвращает not found и не
+подставляет первую revision или HEAD.
 
 ## Поток записи
 
@@ -185,12 +219,12 @@ S3/R2 version IDs не заменяют SpaceRevision: одинаковый revi
 
 ## Поток чтения
 
-1. `search` применяет tenant/space/membership/mount filter до выдачи
-   результатов.
+1. Mount разрешает selector в `resolved_revision_id`; `search` применяет
+   tenant/space/current-membership/mount/revision filter до выдачи результатов.
 2. Derived index возвращает path/section, excerpt, content hash, revision и
    provenance pointers.
-3. Core перечитывает каноническую revision, когда точность важнее latency или
-   index freshness не подтверждена.
+3. Core перечитывает ту же каноническую revision, когда точность важнее latency
+   или index freshness не подтверждена.
 4. `fetch` возвращает canonical text, URL/URI, OKF metadata, trust tier и
    freshness state; source pointer позволяет агенту дочитать evidence.
 5. Ответ ограничивается явным result/token budget. Обрезание помечается.
@@ -205,12 +239,14 @@ ChatGPT company knowledge/deep research стандартная пара оста
 
 `id` opaque и revision-bound: найденный результат фиксирует SpaceRevision и
 path, поэтому последующий `fetch(id)` не перескакивает на новый HEAD. Расширенные
-filters, historical revision и section fetch при необходимости получают
-отдельные tools, а не меняют compatibility contract.
+filters и section fetch при необходимости получают отдельные tools, а не
+меняют compatibility contract. Historical revision выбирается selector всего
+mount, а не аргументом отдельного retrieval call.
 
 CloudBrain-specific tools добавляются узко:
 
 - `get_space_info` и `browse_entries`;
+- `list_revisions`, `get_revision` и `list_checkpoints`;
 - `validate_space`;
 - `get_draft_diff`;
 - `create_draft`;
@@ -219,6 +255,15 @@ CloudBrain-specific tools добавляются узко:
 
 Import остаётся web/CLI operation в MVP. Если позже он появится в MCP, archive
 передаётся через upload intent, а не внутри JSON-RPC.
+
+Исторический selector задаётся при создании mount, поэтому standard
+`search(query)`/`fetch(id)` не получают новые inputs. `get_space_info` сообщает
+selector, `resolved_revision_id`, `committed_at` и `is_historical`. Создание
+Checkpoint остаётся mutation trusted web/CLI control plane и не публикуется в
+content MCP. Historical mount предлагает только read-only tools; он не может
+создать draft, commit, импортировать content, изменить metadata или сдвинуть
+HEAD. Export уже существующей выбранной revision остаётся read operation и
+по-прежнему требует role capability и `space.export`.
 
 Точные schemas являются частью MVP и будут зафиксированы до реализации.
 Read-only и mutation tools получают правдивые MCP annotations. Mutations не
@@ -249,10 +294,13 @@ resource. Оно стабильно внутри deployment, но не объя�
 
 - ровно один KnowledgeSpace;
 - current active SpaceMembership;
-- content scopes `space.read`, `space.draft`, `space.commit`, `space.export`;
+- HEAD или один selector, разрешённый в точный `resolved_revision_id`;
+- content scopes `space.read`, `space.history.read`, `space.draft`,
+  `space.commit`, `space.export`;
 - Space-level ACL без частичных path/tag grants.
 
-Control-plane scopes и sessions не являются частью content MCP mount.
+Control-plane scopes, включая `space.checkpoint.write`, и sessions не являются
+частью content MCP mount.
 
 Role определяет максимум capabilities: Reader читает; Editor также создаёт и
 commit-ит reviewed drafts; Admin управляет Reader/Editor и settings/export;
@@ -347,7 +395,8 @@ publication record. Opening brief, suggested questions и recommendations
 - Один процесс и один MCP endpoint.
 - Filesystem сохраняет exact revision objects.
 - SQLite хранит name resolver, metadata version, HEAD, memberships, owner count,
-  membership epoch, jobs и lexical FTS index.
+  membership epoch, упорядоченный revision log, immutable checkpoints, jobs и
+  lexical FTS index per revision.
 - Один тестовый tenant и несколько principals; tenant/space/membership filter
   остаётся обязательным в API.
 - Никаких embeddings до корректного source-backed search/fetch.
@@ -392,7 +441,8 @@ MCP clients
     ▼
 Bedrock AgentCore Runtime: stateless Streamable HTTP MCP
     ├── S3: immutable OKF revisions and assets
-    ├── DynamoDB: Space, memberships, HEAD, revision, job, idempotency
+    ├── DynamoDB: Space, memberships, HEAD, ordered revisions, checkpoints,
+    │   jobs, idempotency
     ├── DynamoDB Streams -> idempotent Lambda indexer
     ├── OpenSearch Serverless: optional lexical + vector index
     └── CloudWatch/OpenTelemetry: operational telemetry
@@ -407,6 +457,11 @@ DynamoDB conditional writes/transactions реализуют HEAD CAS. S3 Version
 аварийная страховка, но не доменная история. DynamoDB Streams + Lambda имеют
 at-least-once semantics, поэтому index job идентифицируется revision и content
 hash. OpenSearch не участвует в commit path и может быть полностью перестроен.
+
+Revision records поддерживают strongly consistent lookup по ID, монотонному
+номеру и predecessor для `as_of`; Checkpoint conditional write создаёт только
+новое имя и не допускает retarget. Исторический read сначала разрешает selector
+в exact revision, затем применяет тот же tenant/membership filter, что HEAD.
 
 Membership storage использует command-level operations
 `create_space_with_owner`, `change_membership`, `revoke_membership` и
@@ -434,8 +489,11 @@ precision/grounding и стоимости.
 
 Если hybrid search доказал пользу, chunk содержит `tenant_id`, `space_id`,
 `revision_id`, `path`, `section`, provenance, text hash и embedding model/version.
-Embedder остаётся портом. Titan Text Embeddings V2 — AWS-кандидат, но его
-cross-language качество нельзя предполагать без теста.
+Исторический query всегда фильтруется по exact revision. Если её index ещё не
+построен или был удалён как производный, система перестраивает его лениво либо
+явно сообщает lag/unavailable; fallback к HEAD запрещён. Embedder остаётся
+портом. Titan Text Embeddings V2 — AWS-кандидат, но его cross-language качество
+нельзя предполагать без теста.
 
 ## Observability и audit
 
@@ -443,11 +501,12 @@ cross-language качество нельзя предполагать без т�
   error class, но не приватный текст concept/chunk, audience profile или
   conversation body.
 - Application audit хранит actor, tenant, mount, action, Space, old/new revision,
-  object/result IDs и outcome.
+  requested history selector, resolved revision, object/result IDs и outcome.
 - CloudTrail покрывает AWS control plane и явно включённые data events, но не
   заменяет user-level audit.
 - Метрики: auth failures, revision conflicts, validation failures, index lag,
-  stale-index reads, search/fetch latency и export/import failures.
+  historical-resolution failures, stale-index reads, search/fetch latency и
+  export/import failures.
 
 ## Недоверенное содержимое и import boundary
 
@@ -483,7 +542,8 @@ scripts из Markdown/assets. Download URLs короткоживущие, scoped
 - Хватит ли lexical search для MVP, и на каком corpus оправдан hybrid search?
 - Как сохранить byte-perfect YAML style при изменении одного поля: AST
   round-trip или canonical reserialization с явным diff?
-- Какая политика retention нужна для unreachable revisions и удалённых sources?
+- Какая retention и hard-erasure policy нужна для committed history и удалённых
+  sources, если privacy deletion должна нарушить воспроизводимость revision?
 
 ## Внешние основания
 

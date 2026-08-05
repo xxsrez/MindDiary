@@ -24,6 +24,8 @@ migrations ещё не реализованы.
 |---|---|
 | `KnowledgeSpace` | Совместный aggregate и access boundary вокруг одного логического дерева знаний. |
 | `SpaceRevision` | Неизменяемый снимок содержимого Space с manifest и parent revision. |
+| `Checkpoint` | Неизменяемая именованная ссылка на одну `SpaceRevision`. Это service metadata, не OKF `tags`. |
+| `Snapshot View` | Read-only view/mount, один раз разрешённый в точную revision по ID, времени или Checkpoint. |
 | `OKFBundle` | Материализованный импорт/экспорт ровно одной `SpaceRevision`. В нём нет memberships и ACL. |
 | `KnowledgeEntry` | Пользовательский searchable OKF concept document. Это не общий тип для любых bytes. |
 | `Source` | Source-faithful материал или typed source concept с provenance. |
@@ -48,6 +50,7 @@ flowchart LR
     Membership[SpaceMembership]
     Space[KnowledgeSpace]
     Revision[SpaceRevision]
+    Checkpoint[Checkpoint]
     Bundle[OKFBundle]
     Entry[KnowledgeEntry]
     Source[Source]
@@ -62,6 +65,8 @@ flowchart LR
     Mount -->|actor + effective permissions| Membership
     Mount -->|exactly one| Space
     Space -->|HEAD| Revision
+    Space -->|history| Revision
+    Checkpoint -->|names exactly one| Revision
     Revision --> Entry
     Revision --> Source
     Revision --> Asset
@@ -157,6 +162,7 @@ content HEAD и не попадает в `OKFBundle`.
 |---|:---:|:---:|:---:|:---:|
 | Browse, search, fetch, history, validate | ✓ | ✓ | ✓ | ✓ |
 | Create draft, inspect diff, reviewed commit | — | ✓ | ✓ | ✓ |
+| Create immutable Checkpoint | — | ✓ | ✓ | ✓ |
 | Full OKF export | — | — | ✓ | ✓ |
 | Add/revoke `reader` or `editor` | — | — | ✓ | ✓ |
 | Configure non-destructive Space settings | — | — | ✓ | ✓ |
@@ -187,8 +193,10 @@ membership capabilities
 Предлагаемые scopes:
 
 - `space.read`;
+- `space.history.read`;
 - `space.draft`;
 - `space.commit`;
+- `space.checkpoint.write`;
 - `space.export`;
 - `space.settings`;
 - `space.members.read`;
@@ -261,15 +269,84 @@ Membership не заменяет content concurrency protocol. Нескольк�
 Текстовый merge, rebase и разрешение semantic conflicts остаются отдельной
 функцией. Role change не блокирует Space целиком и не создаёт content revision.
 
+## История, Checkpoints и Snapshot View
+
+Каждый успешный content commit добавляет полную immutable `SpaceRevision` в
+линейную историю Space. Линейность MVP следует из HEAD CAS: новая revision
+имеет ровно одного parent и становится новой HEAD. Branches, merges и запись
+поверх detached revision не поддерживаются.
+
+Минимальная service metadata revision:
+
+```text
+revision_id
+revision_number       # монотонно растёт внутри Space
+parent_revision_id
+committed_at          # server-assigned UTC
+committed_by
+manifest_hash
+summary
+```
+
+Историческое состояние выбирается одним из selector:
+
+- точный `revision_id`;
+- `as_of` — максимальная `revision_number`, у которой server-assigned
+  `committed_at <= as_of`;
+- `checkpoint` — tenant/Space-scoped имя, неизменно указывающее на точную
+  revision.
+
+Фраза вроде «два месяца назад» сначала интерпретируется клиентом или trusted
+control plane с явной timezone и превращается в точный UTC instant. Resolver
+один раз фиксирует `resolved_revision_id`; все последующие browse/search/fetch
+в сессии используют его. Ответ показывает и исходный selector, и фактически
+разрешённую revision. Даты внутри OKF content, `generated.at` и source metadata
+не участвуют в выборе истории. Если до указанного `as_of` ещё не было ни одной
+revision, resolver возвращает not found, а не подставляет первую revision или
+HEAD.
+
+`Checkpoint` создаётся Editor/Admin/Owner с `space.checkpoint.write` через
+trusted web/CLI control plane. Имя уникально внутри Space после нормализации,
+а ссылка неизменяема: retarget запрещён, для новой точки создаётся новое имя.
+Checkpoint не меняет HEAD, не создаёт `SpaceRevision`, не является publication
+и не входит в `OKFBundle`. В разговорном UI его можно пояснять как «метка
+версии», но API не использует слово `tag`, чтобы не путать с OKF content tags.
+
+Любой selector, отличный от HEAD, создаёт `Snapshot View`: mount помечается как
+historical и принудительно становится read-only независимо от роли. Mutation
+tools в нём отсутствуют или возвращают однозначную read-only ошибку. Доступ
+каждый раз проверяется по текущей active membership и `space.history.read`;
+исторические ACL/memberships не восстанавливаются, поэтому отозванный участник
+не получает доступ к старому content.
+
+Исторический search/fetch обязан читать и фильтровать только
+`resolved_revision_id`. Производный индекс строится отдельно для revision и
+может быть восстановлен лениво из canonical objects. Отсутствующий индекс не
+разрешает fallback на HEAD или смешивание chunks: browse/fetch остаются
+доступными, а search либо запускает/ожидает rebuild, либо честно сообщает о
+недоступности.
+
+В MVP все успешно committed, достижимые из истории revisions сохраняются.
+Удаление entry из HEAD не стирает его из прежних revisions; интерфейс явно
+предупреждает об этом. Hard erasure, юридический right-to-delete и сроки
+retention требуют отдельного дизайна, потому что могут нарушить
+воспроизводимость старых revisions. Неуспешно записанные и недостижимые objects
+могут удаляться безопасным garbage collection после retention window.
+
+`KnowledgeSite` не открывает history или Checkpoints автоматически. Anonymous
+visitor видит только `published_revision_id`; публикация другой revision —
+отдельное явное действие Owner.
+
 ## Content plane и control plane
 
 Membership management не публикуется в том же MCP, который помещает corpus в
 model context. Это защита от prompt injection, а не только UI-решение.
 
-- **Content MCP:** `search`, `fetch`, browse, drafts, diff и commit с внешним
-  approval.
+- **Content MCP:** `search`, `fetch`, browse, read-only просмотр истории,
+  drafts, diff и commit с внешним approval.
 - **Trusted control plane:** список Spaces, memberships, role changes,
-  ownership, visibility, lifecycle и approval issuance через web UI/CLI.
+  ownership, visibility, lifecycle, создание Checkpoint и approval issuance
+  через web UI/CLI.
 
 `get_space_info` может вернуть текущую role, effective content capabilities и
 `management_url`, но клиент никогда не передаёт role обратно как доказательство
@@ -345,5 +422,7 @@ private ↔ public.
 
 Обновлённый MVP включает required tenant-unique name, private shared Space,
 несколько active users, четыре роли, membership audit и last-owner protection.
-Он не включает KnowledgeSite/SpaceGuide, invitations, groups, path/tag grants,
-public links, cross-tenant sharing или organization administration.
+Он также включает read-only историю по revision ID, времени и immutable
+Checkpoint. Он не включает branches, merges, historical writes, moving tags,
+hard-erasure policy, KnowledgeSite/SpaceGuide, invitations, groups, path/tag
+grants, public links, cross-tenant sharing или organization administration.

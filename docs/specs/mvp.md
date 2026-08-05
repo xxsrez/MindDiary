@@ -6,7 +6,8 @@
 
 Доказать один end-to-end сценарий: несколько пользователей совместно работают
 в private KnowledgeSpace; их агенты находят source-grounded knowledge через MCP,
-дочитывают канонический OKF concept, безопасно создают новую revision, а
+дочитывают канонический OKF concept и безопасно создают новую revision.
+Участники открывают read-only состояние Space по revision/date/Checkpoint, а
 Admin/Owner получает переносимый валидный export.
 
 MVP считается vertical slice, а не набором независимых демонстраций. В нём одна
@@ -37,6 +38,26 @@ MVP считается vertical slice, а не набором независим
 - Результаты ограничены на сервере; если совместимый tool-result metadata
   позволяет, сервер явно сообщает truncation.
 
+### Read-only history
+
+- Упорядоченный список committed revisions с exact ID, parent, монотонным
+  номером, server-assigned UTC commit time, actor и summary.
+- Разрешение исторического состояния по точному `revision_id`, UTC `as_of` или
+  immutable `Checkpoint`; относительное время сначала переводится в точный UTC
+  instant с явной timezone.
+- `as_of` выбирает последнюю revision с `committed_at <= as_of`, после чего
+  mount фиксирует exact `resolved_revision_id` на всю сессию.
+- Editor/Admin/Owner создаёт Checkpoint через trusted CLI/control plane с
+  `space.checkpoint.write`. Имя уникально внутри Space, retarget запрещён;
+  Checkpoint не меняет HEAD, не является OKF `tags` и не входит в export.
+- Любой non-HEAD mount принудительно read-only даже для Owner и каждый раз
+  проверяет current active membership плюс `space.history.read`.
+- Browse/search/fetch используют только resolved revision. Если её производный
+  index отсутствует, разрешён rebuild или явный unavailable/lag, но не fallback
+  на HEAD.
+- Все успешно committed revisions сохраняются в MVP. Удаление из HEAD не
+  является hard erasure и сопровождается явным предупреждением в UI.
+
 ### Safe mutation
 
 - Создание draft changeset с одной или несколькими файловыми операциями.
@@ -63,8 +84,9 @@ MVP считается vertical slice, а не набором независим
 - Owners может быть несколько; последнего active Owner нельзя demote/revoke.
 - Admin управляет Reader/Editor memberships и Space settings/export. Только
   Owner управляет Admin/Owner memberships, visibility и Space lifecycle.
-- Отдельные scopes как минимум `space.read`, `space.draft`, `space.commit`,
-  `space.export`, `space.settings`, `space.members.write`, `space.owner`.
+- Отдельные scopes как минимум `space.read`, `space.history.read`,
+  `space.draft`, `space.commit`, `space.export`, `space.checkpoint.write`,
+  `space.settings`, `space.members.write`, `space.owner`.
 - Identity берётся из проверенного auth context, не из tool arguments.
 - Role задаёт максимум capabilities; mount/OAuth scopes могут только сузить их.
 - `space.commit` не заменяет approval token; autonomous commit не входит в MVP.
@@ -101,19 +123,24 @@ CloudBrain-specific минимальный набор:
 
 ```text
 get_space_info()
-browse_entries(path?, revision?)
-validate_space(revision?)
+browse_entries(path?)
+validate_space()
+list_revisions(before?, limit?)
+get_revision(revision_id)
+list_checkpoints()
 create_draft(expected_revision, operations, idempotency_key)
 get_draft_diff(draft_id)
 commit_draft(draft_id, expected_revision, approval_token, idempotency_key)
-start_export(revision?)
+start_export()
 get_export_status(job_id)
 ```
 
 `get_space_info` возвращает название Space, текущую роль, effective content
-capabilities и `management_url`. Это информация для UX, а не доказательство
-прав: server-side authorization всё равно читает текущий membership из
-проверенного identity context.
+capabilities, selector, `resolved_revision_id`, commit time, `is_historical` и
+`management_url`. Это информация для UX, а не доказательство прав: server-side
+authorization всё равно читает текущий membership из проверенного identity
+context. Создание Checkpoint остаётся trusted control-plane operation, а не
+content MCP tool.
 
 Import может сначала оставаться web/CLI operation. Если он входит в MCP,
 archive передаётся через upload intent/presigned URL, а не base64 в JSON-RPC.
@@ -133,38 +160,54 @@ annotations. Input validation errors должны быть понятны мод
    source pointers даже после смены HEAD.
 4. Export после import без мутаций семантически эквивалентен входному bundle, а
    неизменённые entry bytes совпадают.
-5. Commit с текущим `expected_revision` создаёт новую HEAD. Повтор с тем же
+5. Три последовательные revisions разрешаются по exact ID и `as_of`: instant
+   между второй и третьей всегда выбирает вторую и возвращает её exact ID,
+   номер и server commit time.
+6. Checkpoint остаётся привязан к той же revision после продвижения HEAD;
+   попытка retarget получает conflict, а новое имя может указать на новую
+   revision.
+7. Historical mount Owner не показывает mutation tools и отклоняет create
+   draft/commit. `search`/`fetch` читают exact resolved revision и не выдают
+   content, появившийся только в HEAD.
+8. Revoked participant не читает ни HEAD, ни прежнюю revision, даже если ранее
+   имел к ней доступ: проверяется current membership, а не historical ACL.
+9. Удалённый из HEAD entry остаётся читаемым в прежней committed revision, и UI
+   предупреждает, что обычный commit не является hard erasure.
+10. Отсутствующий historical index не вызывает fallback к HEAD: search честно
+    сообщает lag/unavailable или использует index, перестроенный именно для
+    resolved revision.
+11. Commit с текущим `expected_revision` создаёт новую HEAD. Повтор с тем же
    idempotency key возвращает тот же результат.
-6. Commit с устаревшей revision получает conflict и не меняет HEAD.
-7. Попытка прочитать другой Space/tenant отклоняется до поиска и object read;
+12. Commit с устаревшей revision получает conflict и не меняет HEAD.
+13. Попытка прочитать другой Space/tenant отклоняется до поиска и object read;
    `search` не умеет неявно перейти в другой Space.
-8. Malicious archive с `../`, absolute path, symlink или превышением quota
+14. Malicious archive с `../`, absolute path, symlink или превышением quota
    отклоняется до canonical write; Markdown с script/опасной ссылкой не
    исполняется в UI.
-9. Инструкция внутри concept не может получить approval token, расширить scope
+15. Инструкция внутри concept не может получить approval token, расширить scope
    или перевести draft в commit; повтор token после успешного commit отклоняется.
-10. MCP Inspector проходит initialize, `tools/list`, `search`, `fetch`, draft,
+16. MCP Inspector проходит initialize, `tools/list`, `search`, `fetch`, draft,
     затем получает reviewed token через operator CLI и выполняет commit через
     Streamable HTTP. Автоматический integration test повторяет поток через
     test-only issuer вне MCP.
-11. Ни один лог или trace не содержит body concept, access/approval token или
+17. Ни один лог или trace не содержит body concept, access/approval token или
     transfer URL.
-12. Space нельзя создать без name и creator-owner; content import не импортирует
+18. Space нельзя создать без name и creator-owner; content import не импортирует
     имя как identity или ACL.
-13. Два нормализованно одинаковых имени в одном tenant получают conflict; такое
+19. Два нормализованно одинаковых имени в одном tenant получают conflict; такое
     же имя в другом tenant допустимо. Rename использует metadata CAS и не меняет
     content HEAD или `space_id`.
-14. Reader не создаёт draft; Editor делает reviewed commit; Admin управляет
+20. Reader не создаёт draft; Editor делает reviewed commit; Admin управляет
     Reader/Editor, но не Admin/Owner; Owner управляет всеми ролями.
-15. Один principal может быть Editor в основном Space и Reader в isolation
+21. Один principal может быть Editor в основном Space и Reader в isolation
     fixture; его роль не является глобальным свойством пользователя.
-16. Две конкурентные попытки снять двух последних Owners не оставляют Space без
+22. Две конкурентные попытки снять двух последних Owners не оставляют Space без
     Owner; ownership transfer атомарен.
-17. Revoked/demoted Editor не завершает draft, начатый до изменения membership;
+23. Revoked/demoted Editor не завершает draft, начатый до изменения membership;
     stale membership version получает conflict.
-18. Membership mutation не меняет content HEAD и имеет ровно один audit event;
+24. Membership mutation не меняет content HEAD и имеет ровно один audit event;
     retry с тем же idempotency key возвращает тот же результат.
-19. Полный test suite, OKF fixtures и docs validation проходят на одном commit.
+25. Полный test suite, OKF fixtures и docs validation проходят на одном commit.
 
 ## Compatibility gate для Sites
 
@@ -187,6 +230,9 @@ Developer mode, а не только локальным fetch:
 
 - Тот же container и MCP integration suite проходят в AgentCore Runtime.
 - Canonical objects находятся в S3, HEAD CAS — в DynamoDB conditional write.
+- Exact ID, `as_of` и Checkpoint разрешаются в ту же revision, что в local
+  adapter; historical reads проверяют current membership и не смешиваются с
+  HEAD.
 - Повторная доставка index job безопасна и идемпотентна.
 - IAM role сервиса имеет минимальные права и не даёт клиентам прямой доступ к
   S3/DynamoDB/OpenSearch.
@@ -203,6 +249,8 @@ Developer mode, а не только локальным fetch:
 - безусловный agent-generated synthesis после ingest;
 - UI-редактор уровня Notion;
 - сложный semantic merge параллельных changesets;
+- branches, moving tags, merges или запись поверх historical/detached revision;
+- hard erasure committed history и юридическая retention/deletion policy;
 - billing и organization administration;
 - invitations, groups, path/tag grants, `unlisted`/`public_read`, public links и
   cross-tenant sharing;

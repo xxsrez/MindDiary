@@ -34,6 +34,10 @@ presentation конкретной ревизии для конкретной с�
 - `KnowledgeSpace` — live collaborative container с обязательным именем,
   содержимым, участниками, ролями, настройками и HEAD revision.
 - `SpaceRevision` — immutable snapshot содержимого.
+- `Checkpoint` — неизменяемое человекочитаемое имя для конкретной
+  `SpaceRevision`; это не OKF content tag.
+- `Snapshot View` — read-only представление Space, один раз привязанное к точной
+  revision по ID, времени или Checkpoint.
 - `OKFBundle` — переносимый import/export одной revision без ACL и memberships.
 - `KnowledgeEntry`, `Source` и `Asset` остаются разными видами содержимого с
   разными правилами чтения и изменения.
@@ -52,7 +56,7 @@ presentation конкретной ревизии для конкретной с�
 
 ## Продуктовые сценарии
 
-Это не четыре разных `space_type`, а конфигурации одной сущности:
+Это не фиксированные `space_type`, а сценарии и конфигурации одной сущности:
 
 1. **Personal Space.** Один Owner хранит знания по теме или обо всём сразу;
    Space остаётся private.
@@ -65,6 +69,9 @@ presentation конкретной ревизии для конкретной с�
    основу сайта. Посетитель может читать её, начать разговор, сообщить свой
    уровень — например, «я профессиональный историк» — и получить более глубокую
    подачу на основе того же corpus.
+5. **Historical view.** Участник открывает Space «на момент два месяца назад»
+   или по Checkpoint. Время разрешается в точную revision, и весь разговор,
+   поиск и fetch остаются привязаны к ней без смешивания с HEAD.
 
 Space может пройти этот путь постепенно: personal → shared → community →
 published, не меняя `space_id` и не мигрируя каноническое OKF-дерево.
@@ -109,6 +116,9 @@ recommendation становится общим знанием лишь посл�
   переходить от индекса к concept и первоисточнику.
 - **Safe writes.** Нет last-writer-wins: мутации используют revisions,
   idempotency и optimistic concurrency.
+- **Explicit time travel.** Исторический selector разрешается один раз в
+  точную immutable revision; такой mount всегда read-only и показывает, какую
+  revision он фактически открыл.
 - **Private by default.** Identity, tenant isolation и ACL не смешиваются с OKF
   trust metadata.
 - **Shared with explicit membership.** Один Space может иметь много Readers,
@@ -125,7 +135,8 @@ recommendation становится общим знанием лишь посл�
 В первую версию входят импорт и экспорт OKF 0.2, browse/search/fetch, проверка
 bundle, обязательное tenant-unique имя, private shared Space, несколько
 memberships с четырьмя ролями,
-membership audit, last-owner protection и безопасная точечная запись. Подробные
+membership audit, last-owner protection, безопасная точечная запись, а также
+read-only история по revision ID, времени и immutable Checkpoint. Подробные
 критерии находятся в [спецификации MVP](specs/mvp.md).
 
 Не входят автоматический web crawler, полнофункциональный редактор документов,
@@ -143,7 +154,8 @@ invitations/groups, public или cross-tenant sharing, автономная п�
   как эксперимент. Adaptive conversation и совместное размещение MCP в Sites —
   отдельные compatibility spikes, а не gate для первого UI-релиза.
 - **AWS v1:** тот же application core и MCP adapter в Bedrock AgentCore
-  Runtime, S3 для OKF revisions/assets и DynamoDB для HEAD/ACL/jobs.
+  Runtime, S3 для OKF revisions/assets и DynamoDB для HEAD/ACL/revision
+  history/checkpoints/jobs.
 - **AWS v2:** асинхронный hybrid index через DynamoDB Streams, Lambda,
   embeddings и OpenSearch Serverless после измерения пользы.
 
@@ -157,6 +169,8 @@ invitations/groups, public или cross-tenant sharing, автономная п�
   ни одна конкурентная операция не оставляет Space без Owner.
 - ChatGPT или другой MCP client находит concept через `search`, получает его
   через `fetch` и показывает рабочую ссылку на канонический resource.
+- Участник открывает состояние Space на заданное время или по Checkpoint;
+  интерфейс показывает resolved revision, а search/fetch не подмешивают HEAD.
 - KnowledgeSite показывает только явно опубликованную revision; посетитель
   может переключить уровень объяснения без изменения canonical content.
 - Конкурирующая запись с устаревшим `expected_revision` отклоняется и не теряет
@@ -165,3 +179,8 @@ invitations/groups, public или cross-tenant sharing, автономная п�
   и source assets.
 - Перенос Sites → AWS требует нового deployment/storage adapter и миграции
   данных, но не переписывания MCP contracts или OKF domain model.
+
+История не является обходом доступа: на каждый read действует текущая active
+membership. Но удаление entry из HEAD само по себе не удаляет его из прежних
+committed revisions. UI обязан предупреждать об этом; hard erasure и сроки
+retention требуют отдельной privacy/security спецификации.

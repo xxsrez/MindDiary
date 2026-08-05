@@ -43,6 +43,15 @@
   перестраиваться из выбранной канонической ревизии.
 - Изменение создаёт новую immutable revision. Продвижение HEAD требует
   `expected_revision` или эквивалентной optimistic-concurrency проверки.
+- Каждая успешно committed `SpaceRevision` остаётся доступной через историю по
+  точному ID, UTC-времени commit или immutable `Checkpoint`. `Checkpoint` —
+  service metadata, а не OKF `tags`, и не попадает в `OKFBundle`.
+- Исторический `KnowledgeMount` один раз разрешает selector в точный
+  `revision_id` и всегда read-only, даже для Owner. Каждый исторический read
+  проверяет текущую membership и scopes; старые ACL не «воскрешаются».
+- MVP не поддерживает branches, moving tags, merge или запись поверх
+  исторической revision. Удаление content из HEAD не стирает его из уже
+  committed истории; hard erasure требует отдельной retention/privacy модели.
 - По умолчанию MCP создаёт draft. Commit требует отдельного короткоживущего
   approval artifact, привязанного к actor, Space, revision, membership epoch и
   hash diff; MCP tool annotations сами по себе не считаются защитой от prompt
