@@ -14,21 +14,23 @@
 ## Что прочитать перед изменениями
 
 1. [Обзор продукта](docs/overview.md).
-2. [Архитектуру](docs/architecture.md).
-3. [Спецификацию MVP](docs/specs/mvp.md).
-4. [Проверку текущего OKF](docs/reports/2026-08-05-okf-status.md).
+2. [Доменную модель и доступ](docs/specs/domain-model.md).
+3. [Архитектуру](docs/architecture.md).
+4. [Спецификацию MVP](docs/specs/mvp.md).
+5. [Проверку текущего OKF](docs/reports/2026-08-05-okf-status.md).
 
-`docs/architecture.md` и `docs/specs/mvp.md` пока имеют статус proposal. Не
-выдавайте предложенные компоненты, инструменты MCP, схемы хранения или этапы за
-реализованные либо окончательно принятые.
+`docs/specs/domain-model.md`, `docs/architecture.md` и `docs/specs/mvp.md` пока
+имеют статус proposal. Не выдавайте предложенные компоненты, инструменты MCP,
+схемы хранения или этапы за реализованные либо окончательно принятые.
 
 ## Неизменные границы
 
 - Этот репозиторий — реализация сервиса, а не OKF bundle. Обычным проектным
   Markdown-файлам не нужно OKF-frontmatter.
-- Переносимой канонической формой каждой пользовательской базы остаётся дерево
-  исходных OKF-файлов и assets. Сервисные ACL, tenant metadata, idempotency keys
-  и состояние индекса не записываются в OKF-frontmatter.
+- Живая совместная сущность сервиса называется `KnowledgeSpace`. Переносимой
+  канонической формой одной её revision остаётся `OKFBundle`: дерево исходных
+  OKF-файлов и assets. Memberships, ACL, tenant metadata, idempotency keys и
+  состояние индекса не записываются в OKF-frontmatter.
 - Импорт и round-trip обязаны сохранять неизвестные OKF types и поля. Reader
   поддерживает legacy 0.1 fallbacks; writer по умолчанию создаёт OKF 0.2.
 - Полнотекстовые, векторные и графовые индексы всегда производны и должны
@@ -36,15 +38,21 @@
 - Изменение создаёт новую immutable revision. Продвижение HEAD требует
   `expected_revision` или эквивалентной optimistic-concurrency проверки.
 - По умолчанию MCP создаёт draft. Commit требует отдельного короткоживущего
-  approval artifact, привязанного к actor, base, revision и hash diff; MCP tool
-  annotations сами по себе не считаются защитой от prompt injection.
+  approval artifact, привязанного к actor, Space, revision, membership epoch и
+  hash diff; MCP tool annotations сами по себе не считаются защитой от prompt
+  injection.
 - `verified` и другие OKF trust signals не являются механизмом авторизации.
   Tenant и права выводятся только из проверенного identity context.
-- MCP делает базу лениво доступной через search/fetch/resources; он не помещает
-  весь corpus в контекст модели автоматически.
-- В MVP один MCP mount открывает ровно одну knowledge base. Не добавляйте
-  неявный cross-base search или клиентский выбор tenant/base без новой
+- MCP делает Space лениво доступным через search/fetch/resources; он не
+  помещает весь corpus в контекст модели автоматически.
+- В MVP один MCP mount открывает ровно один `KnowledgeSpace`. Не добавляйте
+  неявный cross-space search или клиентский выбор tenant/space без новой
   спецификации безопасности.
+- Роли Space — `reader`, `editor`, `admin`, `owner`. `editor` включает чтение;
+  человеческой роли `write-only` нет. Создатель атомарно становится Owner,
+  Owners может быть несколько, последнего Owner нельзя demote/revoke.
+- Membership management остаётся в trusted web/CLI control plane и не
+  публикуется рядом с corpus tools в content MCP.
 - Доменное ядро и OKF codec не импортируют AWS SDK, Sites bindings, HTTP
   framework или конкретный поисковый движок. Инфраструктура подключается через
   узкие порты и адаптеры.
@@ -82,7 +90,7 @@
 
 ## Безопасность
 
-- Базы по умолчанию приватны. Не логируйте содержимое приватных concepts,
+- Spaces по умолчанию приватны. Не логируйте содержимое приватных concepts,
   chunks, source assets, access/approval tokens или presigned URLs.
 - Любой read/search/write проверяет tenant и ACL до обращения к каноническому
   объекту или производному индексу.

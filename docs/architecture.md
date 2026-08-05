@@ -9,7 +9,7 @@
 - переносимый OKF 0.2 round-trip без потери неизвестных полей;
 - ленивое, цитируемое чтение через MCP;
 - безопасную многописательскую модель, которой нет в самом OKF;
-- приватные tenant-scoped базы и отдельные read/write scopes;
+- private shared KnowledgeSpaces, many-to-many memberships и четыре роли;
 - ранний web-прототип в OpenAI Sites;
 - целевой AWS deployment без переписывания доменного ядра;
 - возможность начать с lexical search и добавить embeddings после измерений.
@@ -39,8 +39,26 @@ flowchart LR
 ```
 
 Весь corpus не проходит через MCP-сессию. Search отдаёт ограниченный набор
-результатов, fetch — выбранный document или section, а large assets и exports
+результатов, fetch — выбранный canonical concept, а large assets и exports
 передаются через object storage.
+
+## Доменная граница
+
+`KnowledgeSpace` — service aggregate и access boundary вокруг одного
+логического OKF tree. Он содержит HEAD, revisions, memberships и настройки, но
+его service metadata не подмешивается в bundle:
+
+```text
+User/Principal --< SpaceMembership >-- KnowledgeSpace
+KnowledgeMount -----------------------> exactly one KnowledgeSpace
+KnowledgeSpace --HEAD-----------------> SpaceRevision
+SpaceRevision --materialize----------> OKFBundle
+```
+
+Контент различает `KnowledgeEntry`, `Source`, `Asset`, reserved `Index` и
+`Log`; generic storage object не определяет их поведение. Полная терминология,
+role matrix и owner invariants находятся в
+[доменной спецификации](specs/domain-model.md).
 
 ## Слои
 
@@ -58,8 +76,11 @@ provenance, trust/lifecycle fields, assets, legacy 0.1 fallbacks и правил
 
 ### 2. Application core
 
-Use cases работают с явным `ActorContext`, knowledge mount и revision:
+Use cases работают с явным `ActorContext`, KnowledgeMount, SpaceMembership и
+SpaceRevision:
 
+- create Space, list accessible Spaces и получить current membership;
+- add/change/revoke memberships и transfer ownership через control plane;
 - import/export/validate bundle;
 - browse/search/fetch;
 - create draft, inspect diff, commit with `expected_revision`;
@@ -67,8 +88,8 @@ Use cases работают с явным `ActorContext`, knowledge mount и revi
 - выдавать короткоживущие object-transfer intents для больших файлов.
 
 Application core зависит от портов `ObjectStore`, `MetadataStore`,
-`SearchIndex`, `Embedder`, `Authorizer`, `ApprovalVerifier`, `AuditSink` и
-`Clock`, но не от их реализаций.
+command-level `MembershipCommands`, `SearchIndex`, `Embedder`, `Authorizer`,
+`ApprovalVerifier`, `AuditSink` и `Clock`, но не от их реализаций.
 
 ### 3. Protocol adapters
 
@@ -89,11 +110,11 @@ Application core зависит от портов `ObjectStore`, `MetadataStore`
 
 ## Каноническая модель ревизий
 
-Каждая база имеет стабильный `knowledge_base_id`, а каждый commit создаёт новую
-immutable revision:
+Каждый Space имеет стабильный `space_id`, а каждый content commit создаёт новую
+immutable `SpaceRevision`:
 
 ```text
-knowledge base
+KnowledgeSpace
 ├── HEAD -> revision id
 ├── revision
 │   ├── parent revision id
@@ -107,7 +128,7 @@ Manifest — producer envelope, а не файл нормативного OKF bu
 материализует только выбранное дерево bundle; service metadata в него не
 подмешивается.
 
-S3/R2 version IDs не заменяют доменную revision: одинаковый revision contract
+S3/R2 version IDs не заменяют SpaceRevision: одинаковый revision contract
 должен работать на любой платформе. Hash каждого объекта обеспечивает
 целостность и идемпотентность, но не означает доверие к содержанию.
 
@@ -115,17 +136,19 @@ S3/R2 version IDs не заменяют доменную revision: одинак�
 
 1. Adapter аутентифицирует запрос и строит `ActorContext` без доверия к
    переданному клиентом `tenant_id`.
-2. Core проверяет mount, scope и ACL.
+2. Core загружает current active SpaceMembership и проверяет её capabilities,
+   mount/OAuth scopes и `membership_epoch`.
 3. Input нормализуется в draft changeset; OKF parser/validator выдаёт errors и
    warnings без потери исходных bytes.
 4. Пользователь проверяет diff, после чего trusted control plane выдаёт
    single-use approval token для точного draft hash и ожидаемого HEAD.
-5. Core проверяет token, scope и сверяет `expected_revision` с текущим HEAD.
+5. Core повторно проверяет membership и token, затем сверяет
+   `expected_revision` с текущим HEAD.
 6. Canonical objects и immutable manifest сохраняются идемпотентно.
 7. Transactional metadata store условно продвигает HEAD и записывает outbox/audit
    reference. При конфликте новый HEAD не создаётся.
 8. Background worker строит индекс для новой revision. Старый индекс не
-   смешивается с новым благодаря фильтру `tenant_id + knowledge_base_id +
+   смешивается с новым благодаря фильтру `tenant_id + space_id +
    revision_id`.
 
 Нужен recovery path для объектов, записанных до неудавшегося HEAD transaction:
@@ -134,7 +157,8 @@ S3/R2 version IDs не заменяют доменную revision: одинак�
 
 ## Поток чтения
 
-1. `search` применяет tenant/mount/ACL filter до выдачи результатов.
+1. `search` применяет tenant/space/membership/mount filter до выдачи
+   результатов.
 2. Derived index возвращает path/section, excerpt, content hash, revision и
    provenance pointers.
 3. Core перечитывает каноническую revision, когда точность важнее latency или
@@ -145,22 +169,25 @@ S3/R2 version IDs не заменяют доменную revision: одинак�
 
 ## MCP surface
 
-В MVP один MCP mount связан ровно с одной knowledge base. Для совместимости с
-ChatGPT retrieval первая поверхность сохраняет стандартную пару:
+В MVP один MCP mount связан ровно с одним KnowledgeSpace. Для совместимости с
+ChatGPT company knowledge/deep research стандартная пара остаётся минимальной:
 
-- `search(query, filters?, limit?)` → results с `id`, `title`,
-  `url`, excerpt, revision и metadata;
-- `fetch(id, revision?, section?)` → `id`, `title`, canonical `text`, `url` и
-  metadata.
+- `search(query)` → `{ results: [{ id, title, url }] }`;
+- `fetch(id)` → `{ id, title, text, url, metadata? }`.
+
+`id` opaque и revision-bound: найденный результат фиксирует SpaceRevision и
+path, поэтому последующий `fetch(id)` не перескакивает на новый HEAD. Расширенные
+filters, historical revision и section fetch при необходимости получают
+отдельные tools, а не меняют compatibility contract.
 
 CloudBrain-specific tools добавляются узко:
 
-- `knowledge_base_info` и `knowledge_browse`;
-- `knowledge_validate`;
-- `knowledge_diff`;
-- `knowledge_draft_create`;
-- `knowledge_draft_commit(draft_id, expected_revision, approval_token, idempotency_key)`;
-- `knowledge_export_start` и `knowledge_export_status`.
+- `get_space_info` и `browse_entries`;
+- `validate_space`;
+- `get_draft_diff`;
+- `create_draft`;
+- `commit_draft(draft_id, expected_revision, approval_token, idempotency_key)`;
+- `start_export` и `get_export_status`.
 
 Import остаётся web/CLI operation в MVP. Если позже он появится в MCP, archive
 передаётся через upload intent, а не внутри JSON-RPC.
@@ -174,8 +201,8 @@ Resource identity не содержит `mount_id`: mount — authorization cont
 наподобие:
 
 ```text
-okf://bases/{base-id}/revisions/{revision-id}/index
-okf://bases/{base-id}/revisions/{revision-id}/entries/{path}
+okf://spaces/{space-id}/revisions/{revision-id}/index
+okf://spaces/{space-id}/revisions/{revision-id}/entries/{path}
 ```
 
 Для ChatGPT citation поле `url` содержит auth-gated HTTPS-представление того же
@@ -186,25 +213,34 @@ resource. Оно стабильно внутри deployment, но не объя�
 Конкретный клиент может не показывать resources напрямую, поэтому критические
 сценарии остаются доступны через tools.
 
-## Identity и knowledge mounts
+## Identity, memberships и KnowledgeMount
 
 Один deployment обслуживает много tenants. Подключение получает не `tenant_id`
-из аргумента tool, а проверенный identity и `mount_id`. В MVP mount связывает:
+из аргумента tool, а проверенный `principal_id` из `issuer + subject` и
+`mount_id`. В MVP mount связывает:
 
-- ровно одну knowledge base;
-- scopes `kb.read`, `kb.draft`, `kb.commit`, `kb.export`, `kb.admin`;
-- base-level ACL без частичных path/tag grants.
+- ровно один KnowledgeSpace;
+- current active SpaceMembership;
+- content scopes `space.read`, `space.draft`, `space.commit`, `space.export`;
+- Space-level ACL без частичных path/tag grants.
 
-`kb.export` материализует всю выбранную revision и выдаётся только mount без
+Control-plane scopes и sessions не являются частью content MCP mount.
+
+Role определяет максимум capabilities: Reader читает; Editor также создаёт и
+commit-ит reviewed drafts; Admin управляет Reader/Editor и settings/export;
+Owner управляет Admin/Owner, visibility и lifecycle. Effective permissions —
+пересечение role capabilities, mount/OAuth scopes и deployment flags.
+
+`space.export` материализует всю выбранную revision и выдаётся только mount без
 частичных ограничений. Если позже появятся path/tag grants, они не наследуют
 bulk export: subset export потребует отдельной модели revision и provenance.
 
-Наличие `kb.commit` само по себе не завершает mutation. В reviewed mode,
+Наличие `space.commit` само по себе не завершает mutation. В reviewed mode,
 обязательном для MVP, trusted web/control-plane flow после показа diff выдаёт
-single-use approval token, связанный с actor, base, draft hash, expected HEAD и
-expiry. MCP server проверяет token повторно и пишет его ID в audit без самого
-секрета. Режим autonomous commit потребует отдельного решения и scope; tool
-annotations остаются UX hints, а не authorization control.
+single-use approval token, связанный с actor, Space, draft hash, expected HEAD,
+`membership_epoch` и expiry. MCP server повторно проверяет current membership и
+пишет token ID в audit без секрета. Режим autonomous commit потребует отдельного
+решения и scope; tool annotations остаются UX hints, а не authorization control.
 
 В local profile роль control plane выполняет отдельная operator CLI: она читает
 draft/diff через application core, требует явное подтверждение и выпускает
@@ -213,6 +249,13 @@ commit. Автоматические tests используют fixture `Approva
 только test process и отсутствующий в production container. В Sites/AWS token
 выпускает аутентифицированный web/control-plane endpoint после того же review;
 непроверенный MCP content не имеет доступа к issuer.
+
+Membership administration не публикуется в content MCP. `get_space_info`
+возвращает role/effective content capabilities и `management_url`; добавление
+участников, role changes, ownership и deletion выполняются в trusted web/CLI
+control plane. Membership mutation не меняет content HEAD, но атомарно обновляет
+membership state/version, `membership_epoch`, owner count, idempotency result и
+audit event. Последнего active Owner снять нельзя.
 
 Remote MCP следует authorization profile `2025-11-25`: OAuth 2.1,
 authorization code + PKCE, Protected Resource Metadata и audience-bound access
@@ -231,8 +274,10 @@ provider либо auth broker.
 
 - Один процесс и один MCP endpoint.
 - Filesystem сохраняет exact revision objects.
-- SQLite хранит HEAD, ACL fixture, jobs и lexical FTS index.
-- Один тестовый tenant, но tenant filter остаётся обязательным в API.
+- SQLite хранит HEAD, memberships, owner count, membership epoch, jobs и lexical
+  FTS index.
+- Один тестовый tenant и несколько principals; tenant/space/membership filter
+  остаётся обязательным в API.
 - Никаких embeddings до корректного source-backed search/fetch.
 
 Это самый короткий путь проверить domain contract без облачной сложности.
@@ -241,8 +286,9 @@ provider либо auth broker.
 
 Подтверждённая роль Sites — web/admin UI с server-side routes, D1 для structured
 data и R2 для objects. Первый Sites milestone — UI для import, validation,
-browse и export поверх тех же application use cases. Data-only MCP остаётся
-ядром агентного продукта, но совместное размещение MCP не блокирует этот UI.
+browse, export и управления участниками/ролями поверх тех же application use
+cases. Data-only MCP остаётся ядром агентного продукта, но совместное размещение
+MCP не блокирует этот UI.
 
 Официальная документация Sites не обещает Streamable HTTP MCP, SSE без
 buffering, `/mcp` compatibility или прохождение plugin review. Поэтому единый
@@ -272,7 +318,7 @@ MCP clients
     ▼
 Bedrock AgentCore Runtime: stateless Streamable HTTP MCP
     ├── S3: immutable OKF revisions and assets
-    ├── DynamoDB: tenant, ACL, HEAD, revision, job, idempotency
+    ├── DynamoDB: Space, memberships, HEAD, revision, job, idempotency
     ├── DynamoDB Streams -> idempotent Lambda indexer
     ├── OpenSearch Serverless: optional lexical + vector index
     └── CloudWatch/OpenTelemetry: operational telemetry
@@ -288,6 +334,14 @@ DynamoDB conditional writes/transactions реализуют HEAD CAS. S3 Version
 at-least-once semantics, поэтому index job идентифицируется revision и content
 hash. OpenSearch не участвует в commit path и может быть полностью перестроен.
 
+Membership storage использует command-level operations
+`create_space_with_owner`, `change_membership`, `revoke_membership` и
+`transfer_ownership`. DynamoDB transaction повторно проверяет actor membership,
+делает target version CAS, сохраняет `owner_count >= 1`, увеличивает
+`membership_epoch` и пишет audit/idempotency records. Авторизация читает
+membership по strongly consistent primary key, а не через eventually consistent
+индекс «мои Spaces».
+
 AgentCore Gateway, Verified Permissions, Object Lock, Bedrock Knowledge Bases и
 AgentCore Memory не входят в AWS v1. Их добавляют только при подтверждённой
 задаче: aggregation/policy, сложный ABAC, compliance retention, сменный RAG
@@ -299,7 +353,7 @@ MVP начинает с metadata filters + lexical search. До включени
 нужен benchmark на реальных русских и английских вопросах с измерением recall,
 precision/grounding и стоимости.
 
-Если hybrid search доказал пользу, chunk содержит `tenant_id`, `base_id`,
+Если hybrid search доказал пользу, chunk содержит `tenant_id`, `space_id`,
 `revision_id`, `path`, `section`, provenance, text hash и embedding model/version.
 Embedder остаётся портом. Titan Text Embeddings V2 — AWS-кандидат, но его
 cross-language качество нельзя предполагать без теста.
@@ -308,7 +362,7 @@ cross-language качество нельзя предполагать без т�
 
 - Operational logs/traces содержат request ID, latency, tool, result count и
   error class, но не приватный текст concept/chunk.
-- Application audit хранит actor, tenant, mount, action, base, old/new revision,
+- Application audit хранит actor, tenant, mount, action, Space, old/new revision,
   object/result IDs и outcome.
 - CloudTrail покрывает AWS control plane и явно включённые data events, но не
   заменяет user-level audit.
@@ -338,7 +392,8 @@ scripts из Markdown/assets. Download URLs короткоживущие, scoped
 - Совместим ли Sites runtime с полным MCP/OpenAI review flow на практике?
 - Какой OAuth provider удовлетворит одновременно ChatGPT и AWS deployment без
   собственного небезопасного authorization server?
-- Когда после MVP действительно понадобится multi-base или path-filtered mount?
+- Когда после MVP действительно понадобится multi-space или path-filtered mount?
+- Какая отдельная модель visibility и anonymous access нужна для `public_read`?
 - Хватит ли lexical search для MVP, и на каком corpus оправдан hybrid search?
 - Как сохранить byte-perfect YAML style при изменении одного поля: AST
   round-trip или canonical reserialization с явным diff?

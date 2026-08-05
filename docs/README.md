@@ -9,7 +9,9 @@ CloudBrain пока находится на стадии проектирова�
    решает и где проходят границы продукта.
 2. [Архитектура](architecture.md) — переносимое ядро, ревизии OKF, MCP surface,
    Sites-прототип и целевая AWS-топология.
-3. [Спецификация MVP](specs/mvp.md) — первый проверяемый vertical slice и его
+3. [Доменная модель и доступ](specs/domain-model.md) — KnowledgeSpace,
+   содержимое, memberships, роли и owner invariants.
+4. [Спецификация MVP](specs/mvp.md) — первый проверяемый vertical slice и его
    критерии готовности.
 
 ## Исследования

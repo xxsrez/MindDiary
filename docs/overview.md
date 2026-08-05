@@ -4,10 +4,10 @@
 
 ## Зачем проект существует
 
-CloudBrain должен дать агенту управляемый доступ к базе знаний по выбранной
-теме: обнаружить её структуру, найти релевантные concepts, проверить источники,
-добавить новый материал, зафиксировать новую ревизию и экспортировать данные в
-переносимом виде.
+CloudBrain должен дать людям и агентам совместный управляемый доступ к
+`KnowledgeSpace` по выбранной теме: обнаружить его структуру, найти релевантные
+concepts, проверить источники, добавить новый материал, зафиксировать новую
+ревизию и экспортировать данные в переносимом виде.
 
 Вторая, равноправная цель — получить практический опыт AWS на реальном
 продуктовом контуре: identity, object storage, transactional metadata,
@@ -22,20 +22,41 @@ CloudBrain — не способ заранее загрузить всю тем
 должен оптимизировать progressive disclosure: короткий обзор, точный поиск,
 цитируемый фрагмент и возможность дочитать канонический concept или source.
 
+## Основные сущности
+
+- `KnowledgeSpace` — live collaborative container с содержимым, участниками,
+  ролями, настройками и HEAD revision.
+- `SpaceRevision` — immutable snapshot содержимого.
+- `OKFBundle` — переносимый import/export одной revision без ACL и memberships.
+- `KnowledgeEntry`, `Source` и `Asset` остаются разными видами содержимого с
+  разными правилами чтения и изменения.
+- `SpaceMembership` связывает пользователя со Space и ролью `reader`, `editor`,
+  `admin` или `owner`.
+- `KnowledgeMount` связывает один MCP connection с одним Space и подмножеством
+  разрешённых возможностей.
+
+Точная модель и role matrix описаны в
+[доменной спецификации](specs/domain-model.md).
+
 ## Основной сценарий
 
-1. Пользователь создаёт приватную базу или импортирует существующий OKF bundle.
-2. CloudBrain валидирует структуру, сохраняет immutable revision и строит
+1. Пользователь создаёт private KnowledgeSpace и в той же транзакции становится
+   его первым Owner либо импортирует OKF bundle в новый Space.
+2. Owner/Admin добавляет существующих пользователей как Reader или Editor;
+   Owner отдельно управляет Admin/Owner memberships.
+3. CloudBrain валидирует структуру, сохраняет immutable SpaceRevision и строит
    производный индекс.
-3. Пользователь подключает к агенту knowledge mount одной конкретной базы и
-   получает права только на неё, а не глобальный доступ ко всему аккаунту.
-4. Агент вызывает `search`, затем `fetch` или читает OKF resource по URI.
-5. При наличии write scope агент создаёт draft с ожидаемой исходной ревизией.
-6. Пользователь проверяет diff; trusted control plane выдаёт короткоживущий
+4. Каждый пользователь подключает к агенту KnowledgeMount одного Space и
+   получает не больше прав своей membership и OAuth scopes.
+5. Агент вызывает `search`, затем `fetch` или читает OKF resource по URI.
+6. Editor/Admin/Owner при наличии write scope создаёт draft с ожидаемой
+   исходной ревизией.
+7. Пользователь проверяет diff; trusted control plane выдаёт короткоживущий
    approval artifact, привязанный к этому draft.
-7. CloudBrain атомарно продвигает HEAD, пишет audit event и переиндексирует
+8. CloudBrain повторно проверяет active membership, атомарно продвигает HEAD,
+   пишет audit event и переиндексирует
    только новую ревизию.
-8. Пользователь в любой момент получает детерминированный OKF export и может
+9. Admin/Owner в любой момент получает детерминированный OKF export и может
    унести базу на другую платформу.
 
 ## Продуктовые принципы
@@ -50,6 +71,8 @@ CloudBrain — не способ заранее загрузить всю тем
   idempotency и optimistic concurrency.
 - **Private by default.** Identity, tenant isolation и ACL не смешиваются с OKF
   trust metadata.
+- **Shared with explicit membership.** Один Space может иметь много Readers,
+  Editors, Admins и Owners; параллельные writers не обходят HEAD CAS.
 - **Replaceable infrastructure.** Runtime, metadata store, object store,
   search, embeddings и audit имеют отдельные адаптеры.
 - **Evidence over magic.** Ответ содержит путь, revision, source pointers,
@@ -58,13 +81,15 @@ CloudBrain — не способ заранее загрузить всю тем
 ## Границы первой версии
 
 В первую версию входят импорт и экспорт OKF 0.2, browse/search/fetch, проверка
-bundle, приватный knowledge mount и безопасная точечная запись. Подробные
+bundle, private shared Space, несколько memberships с четырьмя ролями,
+membership audit, last-owner protection и безопасная точечная запись. Подробные
 критерии находятся в [спецификации MVP](specs/mvp.md).
 
 Не входят автоматический web crawler, полнофункциональный редактор документов,
 исполнение Attested Computations, сложный совместный merge, billing,
-cross-tenant sharing, автономная публикация синтеза и обещание, что любой
-подключённый агент автоматически прочитает всю базу.
+invitations/groups, public или cross-tenant sharing, автономная публикация
+синтеза и обещание, что любой подключённый агент автоматически прочитает весь
+Space.
 
 ## Платформенный путь
 
@@ -82,6 +107,10 @@ cross-tenant sharing, автономная публикация синтеза �
 
 - Одна и та же OKF fixture импортируется локально и в облачном adapter без
   изменения доменной логики.
+- Два Editors могут независимо создать drafts; устаревший commit получает
+  conflict, а revoked Editor не завершает старый draft.
+- Admin управляет Reader/Editor memberships, Owner — Admin/Owner memberships;
+  ни одна конкурентная операция не оставляет Space без Owner.
 - ChatGPT или другой MCP client находит concept через `search`, получает его
   через `fetch` и показывает рабочую ссылку на канонический resource.
 - Конкурирующая запись с устаревшим `expected_revision` отклоняется и не теряет

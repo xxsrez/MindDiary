@@ -1,7 +1,8 @@
 # CloudBrain
 
-CloudBrain — проект облачной базы знаний, которую агенты подключают через MCP и
-читают или пополняют с сохранением переносимого Open Knowledge Format (OKF).
+CloudBrain — проект совместных облачных `KnowledgeSpace`, которые пользователи
+и агенты подключают через MCP, читают и пополняют с сохранением переносимого
+Open Knowledge Format (OKF).
 Практическая цель проекта — пройти путь от локального vertical slice и раннего
 web-прототипа до production-подобной архитектуры в AWS.
 
@@ -17,6 +18,7 @@ server, UI и облачная инфраструктура ещё не реал
 - [Карта документации](docs/README.md)
 - [Обзор продукта](docs/overview.md)
 - [Предлагаемая архитектура](docs/architecture.md)
+- [Доменная модель и доступ](docs/specs/domain-model.md)
 - [Спецификация MVP](docs/specs/mvp.md)
 - [Проверка актуальности OKF](docs/reports/2026-08-05-okf-status.md)
 
