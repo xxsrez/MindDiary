@@ -4,6 +4,8 @@ import {
   type ControlBoundaryMarker,
 } from "@mind-diary/application-control";
 
+export * from "./ui-shell.js";
+
 type WebActorContext = ControlBoundaryMarker["actor"];
 
 export const WEB_APPLICATION_BOUNDARY = {
