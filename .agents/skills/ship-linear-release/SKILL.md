@@ -40,8 +40,8 @@ Root — единственный coordinator; issue workers реализуют 
 в начале каждого goal-хода.
 
 Нормальный путь — contract preflight, feature-only workers, sealed candidate,
-integrated gate, доступный pre-push CI и один default push. В `release` — один
-Sites deploy; не выпускай каждую issue отдельно.
+integrated gate, доступный pre-push CI и один default push; в `release` — один Sites deploy.
+При деградации Git hosting с local-only opt-in применяй [offline-delivery.md](references/offline-delivery.md).
 
 ## Понять вызов
 
@@ -151,7 +151,7 @@ Coordinator единолично владеет:
 
 - одним exact Linear issue;
 - одним отдельным worktree и `codex/<identifier>-<slug>` branch;
-- issue-scoped кодом, тестами, commit/push своей branch;
+- issue-scoped кодом, тестами, commit и разрешённым manifest-ом local/remote ref;
 - bounded `FEATURE_RECEIPT` и `DEFECT_CANDIDATE`.
 
 Worker не мержит default branch, не публикует/deploy, не тегирует, не ставит
@@ -330,6 +330,7 @@ Dependency SHAs: <ordered refs или none>.
 Queue fingerprint: <hash>. Issue updatedAt: <timestamp>.
 Ownership paths: <paths>. Isolated env/cache/tmp/ports: <values>.
 Resume: <none или exact artifacts>.
+Remote mode: <online | offline-local-only>; offline base: <origin SHA или none>.
 Forbidden: default branch, Linear mutations, deploy/publish, tags, milestone closure.
 Прочитай <worktree>/.agents/skills/ship-linear-release/references/issue-worker.md
 и AGENTS.md из worktree. Ты не один: не откатывай и не захватывай чужие
@@ -423,6 +424,7 @@ batch без неё и выпусти независимые issue. Серьёз
    required CI настроен. Успешный pre-push run не отменяет этот gate, но при
    неизменном validation key не повторяй локальный full suite. Отсутствие
    configured CI запиши как `none`, не выдумывай check.
+   При offline opt-in вместо push/CI примени [offline-delivery.md](references/offline-delivery.md).
 4. Для `design` и `build` не создавай deployment или tag. Запиши
    `SITES/DEPLOYMENT: not-applicable(profile=<profile>)` и не называй batch
    production release. После доказательства acceptance, integrated gate и
@@ -471,7 +473,7 @@ revert whole batch или issue в новом commit и выпусти его н
 ## Делать checkpoint и завершить goal
 
 За один goal-ход доводи один batch до terminal checkpoint: `integrated`,
-`released`, `rolled-back`, `needs-input` или доказанного external wait. Не останавливайся
+`locally-integrated`, `released`, `rolled-back`, `needs-input` или доказанного external wait. Не останавливайся
 после подготовки одной feature и не проси пользователя запустить следующий
 шаг; активный goal продолжает следующий batch автоматически.
 
@@ -487,10 +489,11 @@ Sites/live/tag/rollback -> defects/gaps -> remaining counts
 без активных claims/candidate/deployment artifacts и с полным ledger выбранного
 profile.
 
-`update_goal(status="blocked")` используй только после трёх последовательных
-goal-ходов с тем же настоящим внешним блокером. Проблема, которую можно
-автоматически исправить, исключить, переоткрыть или оформить linked Bug, не
-является поводом останавливать пользователя.
+`update_goal(status="blocked")` используй только после трёх последовательных goal-ходов
+с тем же внешним блокером. Offline queue с безопасной локальной работой не является
+блокером; автоматически исправимая/исключаемая/переоткрываемая проблема — тоже.
+
+При любом handoff с незапушенным local head явно предупреди пользователя по offline-протоколу.
 
 Если пользователь просит изменить этот процесс, сначала обнови skill через
 `skill-creator`, проверь его и только затем запускай release.
