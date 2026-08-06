@@ -1,8 +1,10 @@
 import type {
   Capability,
   EffectiveTokenScopes,
+  RevisionMode,
   Role,
   TokenScope,
+  Visibility,
 } from "./records.js";
 
 const reader = [
@@ -37,11 +39,44 @@ const byRole: Readonly<Record<Role, readonly Capability[]>> = Object.freeze({
 
 /** Pure role policy only; effective authorization also requires trusted state. */
 export function capabilitiesForRole(role: Role): readonly Capability[] {
-  return byRole[role];
+  return byRole[role] ?? Object.freeze([]);
 }
 
 export function roleHasCapability(role: Role, capability: Capability): boolean {
-  return byRole[role].includes(capability);
+  return capabilitiesForRole(role).includes(capability);
+}
+
+export function capabilitiesForVisibilityGrant(
+  visibility: Visibility,
+): readonly Capability[] {
+  return visibility === "public" || visibility === "unlisted"
+    ? byRole.reader
+    : Object.freeze([]);
+}
+
+export function tokenScopesAllowCapability(
+  scopes: EffectiveTokenScopes,
+  capability: Capability,
+): boolean {
+  if (capability === "content:write") {
+    return scopes.some((scope) => scope === "content:write");
+  }
+  return (
+    capability.startsWith("content:") &&
+    scopes.some(
+      (scope) => scope === "content:read" || scope === "content:write",
+    )
+  );
+}
+
+export function revisionModeAllowsCapability(
+  mode: RevisionMode,
+  capability: Capability,
+): boolean {
+  return (
+    mode === "head" ||
+    (mode === "historical" && byRole.reader.includes(capability))
+  );
 }
 
 export function normalizeTokenScopes(scopes: readonly TokenScope[]): EffectiveTokenScopes {
