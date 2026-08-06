@@ -5,6 +5,7 @@ import {
 } from "@mind-diary/application-control";
 
 export * from "./ui-shell.js";
+export * from "./token-management.js";
 
 type WebActorContext = ControlBoundaryMarker["actor"];
 
