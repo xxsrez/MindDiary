@@ -24,8 +24,10 @@
     "check:secrets": "node scripts/check-secrets.mjs",
     "check": "npm run clean && npm run build && node --test tests/unit/*.test.mjs tests/integration/*.test.mjs tests/conformance/*.test.mjs && npm run validate:fixtures && npm run check:architecture && npm run check:docs && npm run check:secrets"
   },
-  "devDependencies": {
-    "typescript": "5.9.3",
+  "dependencies": {
     "yaml": "2.9.0"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3"
   }
 }
