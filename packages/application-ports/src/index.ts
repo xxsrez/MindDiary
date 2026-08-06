@@ -11,6 +11,7 @@ import {
   capabilitiesForVisibilityGrant,
   revisionModeAllowsCapability,
   tokenScopesAllowCapability,
+  version,
   type AccessTokenState,
   type Capability,
   type CanonicalRevisionEnvelope,
@@ -41,6 +42,7 @@ export {
   isReservedTopLevelRoute,
   normalizeSpaceHandle,
   parseCanonicalSpaceHandle,
+  version,
   verifiedSpaceHost,
   type CanonicalSpaceHandle,
   type HandlePolicyFailureReason,
@@ -716,6 +718,94 @@ export interface TokenHasher {
     candidate: unknown,
     lookup: TokenVerifierLookup<Value>,
   ): Promise<TokenVerificationResult<Value>>;
+}
+
+/** Safe lifecycle metadata. The cryptographic verifier is deliberately absent. */
+export interface McpTokenMetadata {
+  readonly tokenId: TokenId;
+  readonly principalId: PrincipalId;
+  readonly name: string;
+  readonly displayPrefix: string;
+  readonly scopes: EffectiveTokenScopes;
+  readonly state: AccessTokenState;
+  readonly version: Version;
+  readonly createdAt: UtcInstant;
+  readonly expiresAt: UtcInstant;
+  readonly lastUsedAt: UtcInstant | null;
+  readonly revokedAt: UtcInstant | null;
+}
+
+export interface CreateMcpTokenRequest {
+  readonly tokenId: TokenId;
+  readonly principalId: PrincipalId;
+  readonly name: string;
+  readonly verifier: TokenVerifier;
+  readonly displayPrefix: string;
+  readonly scopes: EffectiveTokenScopes;
+  readonly createdAt: UtcInstant;
+  readonly expiresAt: UtcInstant;
+}
+
+export type CreateMcpTokenResult =
+  | {
+      readonly kind: "created";
+      readonly token: Readonly<McpTokenMetadata>;
+    }
+  | {
+      readonly kind:
+        | "token_id_conflict"
+        | "verifier_conflict"
+        | "principal_deleted"
+        | "invalid_record";
+    };
+
+export interface RevokeMcpTokenRequest {
+  readonly principalId: PrincipalId;
+  readonly tokenId: TokenId;
+  readonly revokedAt: UtcInstant;
+}
+
+export type RevokeMcpTokenResult =
+  | {
+      readonly kind: "revoked";
+      readonly token: Readonly<McpTokenMetadata>;
+      readonly replayed: boolean;
+    }
+  | { readonly kind: "not_found" };
+
+export interface RevokePrincipalTokensForAccountDeletionRequest {
+  readonly principalId: PrincipalId;
+  readonly revokedAt: UtcInstant;
+}
+
+export interface RevokePrincipalTokensForAccountDeletionResult {
+  readonly revokedCount: number;
+  readonly replayed: boolean;
+}
+
+/** Server-side generator; token IDs are never accepted from browser input. */
+export interface TokenIdGenerator {
+  nextTokenId(): TokenId;
+}
+
+/**
+ * Principal-scoped token persistence. Account deletion atomically prevents any
+ * later issuance for that principal and revokes every existing token.
+ */
+export interface McpTokenStore
+  extends MetadataStore,
+    TokenVerifierLookup<Readonly<CurrentAuthorizationToken>> {
+  createMcpToken(request: CreateMcpTokenRequest): Promise<CreateMcpTokenResult>;
+  listMcpTokenMetadata(
+    principalId: PrincipalId,
+  ): Promise<readonly Readonly<McpTokenMetadata>[]>;
+  readMcpTokenForAuthorization(
+    tokenId: TokenId,
+  ): Promise<Readonly<CurrentAuthorizationToken> | null>;
+  revokeMcpToken(request: RevokeMcpTokenRequest): Promise<RevokeMcpTokenResult>;
+  revokePrincipalTokensForAccountDeletion(
+    request: RevokePrincipalTokensForAccountDeletionRequest,
+  ): Promise<RevokePrincipalTokensForAccountDeletionResult>;
 }
 
 export interface AuditSink {

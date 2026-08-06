@@ -9,17 +9,28 @@ import type {
   HandleRetirementRequest,
   HandleRetirementResult,
   HandleReservationSnapshot,
+  McpTokenMetadata,
+  McpTokenStore,
   MetadataStore,
+  CreateMcpTokenRequest,
+  CreateMcpTokenResult,
+  CurrentAuthorizationToken,
+  RevokeMcpTokenRequest,
+  RevokeMcpTokenResult,
+  RevokePrincipalTokensForAccountDeletionRequest,
+  RevokePrincipalTokensForAccountDeletionResult,
   RetiredHandleMarker,
   RevisionCommitRequest,
   RevisionCommitResult,
   RevisionMetadataStore,
   VerifiedSpaceHost,
+  TokenVerifier,
 } from "@mind-diary/application-ports";
 import {
   isReservedTopLevelHandle,
   isReservedTopLevelRoute,
   parseCanonicalSpaceHandle,
+  version,
 } from "@mind-diary/application-ports";
 
 export const METADATA_ADAPTER = "memory-revision-envelope" as const;
@@ -172,6 +183,206 @@ export class InMemoryHandleRegistry implements HandleRegistry {
       reservations: Object.freeze(reservations),
       retiredMarkers: Object.freeze(retiredMarkers),
     });
+  }
+}
+
+interface StoredMcpToken extends McpTokenMetadata {
+  readonly verifier: TokenVerifier;
+}
+
+const TOKEN_VERIFIER_PATTERN = /^hmac-sha256:v1:[0-9a-f]{64}$/u;
+const TOKEN_DISPLAY_PREFIX_PATTERN = /^mdp_v1_[A-Za-z0-9_-]{6}…$/u;
+
+function validEffectiveScopes(value: unknown): boolean {
+  return (
+    Array.isArray(value) &&
+    ((value.length === 1 && value[0] === "content:read") ||
+      (value.length === 2 &&
+        value[0] === "content:read" &&
+        value[1] === "content:write"))
+  );
+}
+
+function cloneTokenMetadata(
+  token: Readonly<McpTokenMetadata>,
+): Readonly<McpTokenMetadata> {
+  return Object.freeze({
+    tokenId: token.tokenId,
+    principalId: token.principalId,
+    name: token.name,
+    displayPrefix: token.displayPrefix,
+    scopes: Object.freeze([...token.scopes]) as McpTokenMetadata["scopes"],
+    state: token.state,
+    version: token.version,
+    createdAt: token.createdAt,
+    expiresAt: token.expiresAt,
+    lastUsedAt: token.lastUsedAt,
+    revokedAt: token.revokedAt,
+  });
+}
+
+function authorizationToken(
+  token: Readonly<StoredMcpToken>,
+): Readonly<CurrentAuthorizationToken> {
+  return Object.freeze({
+    tokenId: token.tokenId,
+    principalId: token.principalId,
+    state: token.state,
+    scopes: Object.freeze([...token.scopes]) as CurrentAuthorizationToken["scopes"],
+    version: token.version,
+    expiresAt: token.expiresAt,
+  });
+}
+
+function validTokenCreateRequest(request: CreateMcpTokenRequest): boolean {
+  const createdAt = Date.parse(request.createdAt);
+  const expiresAt = Date.parse(request.expiresAt);
+  return (
+    typeof request.tokenId === "string" &&
+    request.tokenId.length > 0 &&
+    typeof request.principalId === "string" &&
+    request.principalId.length > 0 &&
+    typeof request.name === "string" &&
+    request.name.trim().length > 0 &&
+    TOKEN_VERIFIER_PATTERN.test(request.verifier) &&
+    TOKEN_DISPLAY_PREFIX_PATTERN.test(request.displayPrefix) &&
+    validEffectiveScopes(request.scopes) &&
+    Number.isFinite(createdAt) &&
+    Number.isFinite(expiresAt) &&
+    expiresAt > createdAt
+  );
+}
+
+/** Deterministic transactional token adapter for local/unit execution. */
+export class InMemoryMcpTokenStore implements McpTokenStore {
+  readonly kind = "metadata-store" as const;
+  readonly #tokensById = new Map<McpTokenMetadata["tokenId"], StoredMcpToken>();
+  readonly #tokenIdByVerifier = new Map<TokenVerifier, McpTokenMetadata["tokenId"]>();
+  readonly #deletedPrincipals = new Set<McpTokenMetadata["principalId"]>();
+
+  async createMcpToken(
+    request: CreateMcpTokenRequest,
+  ): Promise<CreateMcpTokenResult> {
+    if (!validTokenCreateRequest(request)) {
+      return Object.freeze({ kind: "invalid_record" });
+    }
+    if (this.#deletedPrincipals.has(request.principalId)) {
+      return Object.freeze({ kind: "principal_deleted" });
+    }
+    if (this.#tokensById.has(request.tokenId)) {
+      return Object.freeze({ kind: "token_id_conflict" });
+    }
+    if (this.#tokenIdByVerifier.has(request.verifier)) {
+      return Object.freeze({ kind: "verifier_conflict" });
+    }
+
+    const stored = Object.freeze({
+      tokenId: request.tokenId,
+      principalId: request.principalId,
+      name: request.name,
+      verifier: request.verifier,
+      displayPrefix: request.displayPrefix,
+      scopes: Object.freeze([...request.scopes]) as McpTokenMetadata["scopes"],
+      state: "active" as const,
+      version: version(1),
+      createdAt: request.createdAt,
+      expiresAt: request.expiresAt,
+      lastUsedAt: null,
+      revokedAt: null,
+    });
+    // Adjacent synchronous mutations are the in-memory transaction boundary.
+    this.#tokensById.set(stored.tokenId, stored);
+    this.#tokenIdByVerifier.set(stored.verifier, stored.tokenId);
+    return Object.freeze({
+      kind: "created",
+      token: cloneTokenMetadata(stored),
+    });
+  }
+
+  async listMcpTokenMetadata(
+    principalId: McpTokenMetadata["principalId"],
+  ): Promise<readonly Readonly<McpTokenMetadata>[]> {
+    const tokens = [...this.#tokensById.values()]
+      .filter((token) => token.principalId === principalId)
+      .sort((left, right) => {
+        const byCreatedAt = Date.parse(right.createdAt) - Date.parse(left.createdAt);
+        return byCreatedAt !== 0
+          ? byCreatedAt
+          : compareUnicodeScalarValues(left.tokenId, right.tokenId);
+      })
+      .map(cloneTokenMetadata);
+    return Object.freeze(tokens);
+  }
+
+  async readMcpTokenForAuthorization(
+    tokenId: McpTokenMetadata["tokenId"],
+  ): Promise<Readonly<CurrentAuthorizationToken> | null> {
+    const token = this.#tokensById.get(tokenId);
+    return token ? authorizationToken(token) : null;
+  }
+
+  async findByVerifier(verifier: TokenVerifier) {
+    const tokenId = this.#tokenIdByVerifier.get(verifier);
+    const token = tokenId ? this.#tokensById.get(tokenId) : undefined;
+    if (!token) return Object.freeze({ kind: "not_found" } as const);
+    return Object.freeze({
+      kind: "found" as const,
+      verifier: token.verifier,
+      value: authorizationToken(token),
+    });
+  }
+
+  async revokeMcpToken(
+    request: RevokeMcpTokenRequest,
+  ): Promise<RevokeMcpTokenResult> {
+    const current = this.#tokensById.get(request.tokenId);
+    if (!current || current.principalId !== request.principalId) {
+      return Object.freeze({ kind: "not_found" });
+    }
+    if (current.state === "revoked") {
+      return Object.freeze({
+        kind: "revoked",
+        token: cloneTokenMetadata(current),
+        replayed: true,
+      });
+    }
+    const revoked = Object.freeze({
+      ...current,
+      state: "revoked" as const,
+      version: version(current.version + 1),
+      revokedAt: request.revokedAt,
+    });
+    this.#tokensById.set(revoked.tokenId, revoked);
+    return Object.freeze({
+      kind: "revoked",
+      token: cloneTokenMetadata(revoked),
+      replayed: false,
+    });
+  }
+
+  async revokePrincipalTokensForAccountDeletion(
+    request: RevokePrincipalTokensForAccountDeletionRequest,
+  ): Promise<RevokePrincipalTokensForAccountDeletionResult> {
+    const replayed = this.#deletedPrincipals.has(request.principalId);
+    this.#deletedPrincipals.add(request.principalId);
+    let revokedCount = 0;
+    for (const current of this.#tokensById.values()) {
+      if (
+        current.principalId !== request.principalId ||
+        current.state === "revoked"
+      ) {
+        continue;
+      }
+      const revoked = Object.freeze({
+        ...current,
+        state: "revoked" as const,
+        version: version(current.version + 1),
+        revokedAt: request.revokedAt,
+      });
+      this.#tokensById.set(revoked.tokenId, revoked);
+      revokedCount += 1;
+    }
+    return Object.freeze({ revokedCount, replayed });
   }
 }
 
