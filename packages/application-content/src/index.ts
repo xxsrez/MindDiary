@@ -502,3 +502,4 @@ export class CanonicalRevisionCoordinator {
 
 export * from "./changeset-preflight.js";
 export * from "./changeset-commit.js";
+export * from "./idempotency.js";

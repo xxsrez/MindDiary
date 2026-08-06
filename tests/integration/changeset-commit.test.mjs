@@ -222,6 +222,7 @@ test("success writes immutable candidate objects and performs one revision/HEAD 
     actor: editor,
     spaceId: MINDS.ordinary.spaceId,
     expectedRevisionId: REVISIONS.initial.revisionId,
+    idempotencyKey: "commit_success",
     summary: "Add atomic concept",
     operations: changes("concepts/atomic.md", "Atomic commit"),
   });
@@ -315,6 +316,7 @@ test("add_log_entry stays deferred to AND-71 and materializes no partial commit"
     actor: editor,
     spaceId: MINDS.ordinary.spaceId,
     expectedRevisionId: REVISIONS.initial.revisionId,
+    idempotencyKey: "commit_log_deferred",
     summary: "Deferred log operation",
     operations: [
       newConcept("concepts/deferred.md", "Deferred"),
@@ -348,6 +350,7 @@ test("denied preflight and transaction-time revocation leave HEAD/revisions unch
     actor: deniedActor,
     spaceId: MINDS.ordinary.spaceId,
     expectedRevisionId: REVISIONS.initial.revisionId,
+    idempotencyKey: "commit_denied",
     summary: "Must be denied",
     operations: changes("concepts/denied.md", "Denied"),
   });
@@ -377,6 +380,7 @@ test("denied preflight and transaction-time revocation leave HEAD/revisions unch
     actor: racingActor,
     spaceId: MINDS.ordinary.spaceId,
     expectedRevisionId: REVISIONS.initial.revisionId,
+    idempotencyKey: "commit_recheck",
     summary: "Lose authorization race",
     operations: changes("concepts/recheck.md", "Recheck"),
   });
@@ -425,6 +429,7 @@ test("stale expected revision reports current HEAD and changes no final state", 
     actor: editor,
     spaceId: MINDS.ordinary.spaceId,
     expectedRevisionId: REVISIONS.initial.revisionId,
+    idempotencyKey: "commit_stale",
     summary: "Stale attempt",
     operations: changes("concepts/stale.md", "Stale"),
   });
@@ -455,6 +460,7 @@ test("metadata transaction failure leaves written objects unreachable and final 
       actor: editor,
       spaceId: MINDS.ordinary.spaceId,
       expectedRevisionId: REVISIONS.initial.revisionId,
+      idempotencyKey: "commit_failure",
       summary: "Injected failure",
       operations: changes("concepts/failure.md", "Failure"),
     }),
@@ -465,6 +471,10 @@ test("metadata transaction failure leaves written objects unreachable and final 
   assert.equal(after.head, before.head);
   assert.deepEqual(after.revisions, before.revisions);
   assert.deepEqual(after.reachable, before.reachable);
+  assert.equal(
+    (await env.metadata.listIdempotencyRecordsForTest()).length,
+    0,
+  );
   assert.ok(after.objects.length > before.objects.length);
   assert.equal(after.files.some(([path]) => path === "concepts/failure.md"), false);
 });
@@ -498,6 +508,7 @@ test("two Editors racing from one HEAD get one winner and one explicit conflict 
       actor: editorA,
       spaceId: MINDS.ordinary.spaceId,
       expectedRevisionId: REVISIONS.initial.revisionId,
+      idempotencyKey: "commit_race_a",
       summary: "Race A",
       operations: changes("concepts/race-a.md", "Race A"),
     }),
@@ -505,6 +516,7 @@ test("two Editors racing from one HEAD get one winner and one explicit conflict 
       actor: editorB,
       spaceId: MINDS.ordinary.spaceId,
       expectedRevisionId: REVISIONS.initial.revisionId,
+      idempotencyKey: "commit_race_b",
       summary: "Race B",
       operations: changes("concepts/race-b.md", "Race B"),
     }),

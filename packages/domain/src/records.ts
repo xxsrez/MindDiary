@@ -210,19 +210,53 @@ export interface BackgroundJob {
   readonly updatedAt: UtcInstant;
 }
 
-export interface IdempotencyRecord {
+export interface CommitChangesetIdempotencyResult {
+  readonly kind: "commit_changeset";
+  readonly previousRevisionId: RevisionId | null;
+  readonly revisionId: RevisionId;
+}
+
+export interface StartExportIdempotencyResult {
+  readonly kind: "start_export";
+  readonly jobId: JobId;
+  readonly revisionId: RevisionId;
+}
+
+export type IdempotencyOperation =
+  | CommitChangesetIdempotencyResult["kind"]
+  | StartExportIdempotencyResult["kind"];
+
+export type IdempotencyResult =
+  | CommitChangesetIdempotencyResult
+  | StartExportIdempotencyResult;
+
+interface IdempotencyRecordBase {
   readonly idempotencyRecordId: IdempotencyRecordId;
   readonly principalId: PrincipalId;
-  readonly spaceId: SpaceId | null;
-  readonly operation: string;
+  readonly spaceId: SpaceId;
+  readonly operation: IdempotencyOperation;
   readonly key: IdempotencyKey;
   readonly canonicalRequestHash: Sha256Digest;
-  readonly state: IdempotencyState;
-  readonly resultReference: string | null;
   readonly version: Version;
   readonly createdAt: UtcInstant;
   readonly updatedAt: UtcInstant;
 }
+
+export type IdempotencyRecord =
+  | (IdempotencyRecordBase & {
+      readonly state: "started" | "failed";
+      readonly result: null;
+    })
+  | (IdempotencyRecordBase & {
+      readonly operation: "commit_changeset";
+      readonly state: "completed";
+      readonly result: Readonly<CommitChangesetIdempotencyResult>;
+    })
+  | (IdempotencyRecordBase & {
+      readonly operation: "start_export";
+      readonly state: "completed";
+      readonly result: Readonly<StartExportIdempotencyResult>;
+    });
 
 export type AuditActor =
   | { readonly kind: "principal"; readonly principalId: PrincipalId }
