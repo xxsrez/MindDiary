@@ -1,11 +1,20 @@
-import type { ActorContext } from "@mind-diary/application-contracts";
+import type {
+  ActorContext,
+  McpTokenActorContext,
+  RequestId,
+} from "@mind-diary/application-contracts";
 import {
   ObjectStoreFailure,
+  type Clock,
+  type CurrentAuthorizationToken,
+  type McpTokenStore,
   type ObjectStore,
   type RevisionMetadataStore,
   type SearchIndex,
+  type TokenHasher,
 } from "@mind-diary/application-ports";
 import {
+  CAPABILITIES,
   MARKDOWN_MEDIA_TYPE,
   canonicalMarkdownPath,
   createCanonicalRevisionEnvelope,
@@ -13,6 +22,8 @@ import {
   serializeRevisionManifest,
   utcInstant,
   type CanonicalRevisionEnvelope,
+  type Capability,
+  type EffectiveTokenScopes,
   type MarkdownMediaType,
   type RevisionAuthorReference,
   type RevisionId,
@@ -36,6 +47,126 @@ export const CONTENT_QUERIES = [
 ] as const;
 
 export const CONTENT_COMMANDS = ["commit_changeset", "start_export"] as const;
+
+export const MCP_CONTENT_DEPLOYMENT_CAPABILITIES = Object.freeze(
+  CAPABILITIES.filter((capability) => capability.startsWith("content:")),
+) as readonly Capability[];
+
+const INVALID_MCP_AUTHENTICATION = Object.freeze({ kind: "invalid" } as const);
+
+export type McpBearerAuthenticationResult =
+  | {
+      readonly kind: "authenticated";
+      readonly actor: McpTokenActorContext;
+    }
+  | { readonly kind: "invalid" };
+
+export interface McpBearerAuthenticator {
+  /** Raw bearer material is consumed here and never returned downstream. */
+  authenticate(
+    candidate: unknown,
+    requestId: RequestId,
+  ): Promise<McpBearerAuthenticationResult>;
+}
+
+export interface McpBearerAuthenticationDependencies {
+  readonly clock: Clock;
+  readonly tokenHasher: TokenHasher;
+  readonly tokens: McpTokenStore;
+  readonly deploymentCapabilities?: readonly Capability[];
+}
+
+function normalizeMcpDeploymentCapabilities(
+  configured: readonly Capability[] | undefined,
+): readonly Capability[] {
+  if (configured === undefined) return MCP_CONTENT_DEPLOYMENT_CAPABILITIES;
+  if (!Array.isArray(configured)) return Object.freeze([]);
+  const requested = new Set<unknown>(configured);
+  return Object.freeze(
+    MCP_CONTENT_DEPLOYMENT_CAPABILITIES.filter((capability) =>
+      requested.has(capability),
+    ),
+  );
+}
+
+function validEffectiveScopes(value: unknown): value is EffectiveTokenScopes {
+  return (
+    Array.isArray(value) &&
+    ((value.length === 1 && value[0] === "content:read") ||
+      (value.length === 2 &&
+        value[0] === "content:read" &&
+        value[1] === "content:write"))
+  );
+}
+
+function validAuthenticatedToken(
+  token: Readonly<CurrentAuthorizationToken>,
+  occurredAtUtc: string,
+): boolean {
+  const expiresAt = Date.parse(token.expiresAt);
+  const occurredAt = Date.parse(occurredAtUtc);
+  return (
+    typeof token.tokenId === "string" &&
+    token.tokenId.length > 0 &&
+    typeof token.principalId === "string" &&
+    token.principalId.length > 0 &&
+    token.state === "active" &&
+    validEffectiveScopes(token.scopes) &&
+    Number.isFinite(expiresAt) &&
+    Number.isFinite(occurredAt) &&
+    expiresAt > occurredAt
+  );
+}
+
+/** Request-scoped MCP authentication entry point owned by the content application. */
+export class McpBearerAuthenticationService implements McpBearerAuthenticator {
+  readonly #clock: Clock;
+  readonly #tokenHasher: TokenHasher;
+  readonly #tokens: McpTokenStore;
+  readonly #deploymentCapabilities: readonly Capability[];
+
+  constructor(dependencies: McpBearerAuthenticationDependencies) {
+    this.#clock = dependencies.clock;
+    this.#tokenHasher = dependencies.tokenHasher;
+    this.#tokens = dependencies.tokens;
+    this.#deploymentCapabilities = normalizeMcpDeploymentCapabilities(
+      dependencies.deploymentCapabilities,
+    );
+  }
+
+  async authenticate(
+    candidate: unknown,
+    requestId: RequestId,
+  ): Promise<McpBearerAuthenticationResult> {
+    const occurredAtUtc = this.#clock.now();
+    const verification = await this.#tokenHasher.verifySecret(
+      candidate,
+      this.#tokens,
+    );
+    if (verification.kind !== "verified") return INVALID_MCP_AUTHENTICATION;
+
+    const token = verification.value;
+    if (!validAuthenticatedToken(token, occurredAtUtc)) {
+      return INVALID_MCP_AUTHENTICATION;
+    }
+
+    return Object.freeze({
+      kind: "authenticated",
+      actor: Object.freeze({
+        kind: "registered_principal",
+        principalId: token.principalId,
+        authentication: Object.freeze({
+          kind: "mcp_token",
+          tokenId: token.tokenId,
+          effectiveScopes: Object.freeze([...token.scopes]) as EffectiveTokenScopes,
+        }),
+        deploymentCapabilities: this.#deploymentCapabilities,
+        requestId,
+        occurredAtUtc,
+      }),
+    });
+  }
+}
 
 export interface ContentBoundaryMarker {
   readonly actor: ActorContext;

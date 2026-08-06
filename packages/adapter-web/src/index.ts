@@ -1,12 +1,30 @@
 import {
   CONTROL_COMMANDS,
   CONTROL_QUERIES,
+  type ControlBoundaryMarker,
 } from "@mind-diary/application-control";
+
+type WebActorContext = ControlBoundaryMarker["actor"];
 
 export const WEB_APPLICATION_BOUNDARY = {
   queries: CONTROL_QUERIES,
   commands: CONTROL_COMMANDS,
 } as const;
+
+export const WEB_ACCEPTS_MCP_BEARER = false as const;
+
+/**
+ * Web control receives an already trusted Sites actor from its platform
+ * boundary. It never parses Authorization as an MCP credential.
+ */
+export function isTrustedSitesControlActor(
+  actor: WebActorContext | null,
+): boolean {
+  return (
+    actor?.kind === "registered_principal" &&
+    actor.authentication.kind === "sites_identity"
+  );
+}
 
 export const WEB_CONTROL_ROUTES = [
   ["GET", "/api/v1/session"],
