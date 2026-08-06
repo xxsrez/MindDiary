@@ -44,6 +44,9 @@ Mind Diary пока находится на стадии проектирова�
 
 - [Состояние OKF на 2026-08-05](reports/2026-08-05-okf-status.md) — сверка
   официальной спецификации с зафиксированным OKF 0.2 snapshot.
+- [Рыночная оценка Mind Diary на 2026-08-05](reports/2026-08-05-market-assessment.md)
+  — самостоятельный decision memo о спросе, конкурентах, рисках и validation
+  gates для Codex-first pilot.
 - [Состояние платформенных предпосылок на 2026-08-05](reports/2026-08-05-platform-status.md)
   — актуальные MCP, OpenAI Sites/Plugins и AWS AgentCore факты, на которых
   основан proposal.
