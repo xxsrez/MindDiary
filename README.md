@@ -15,8 +15,9 @@ MVP в OpenAI Sites. При подтверждённой пользовател�
 post-MVP infrastructure direction — AWS/AgentCore; это также самостоятельная
 учебная цель проекта, но не текущая release surface.
 
-Сейчас репозиторий содержит проверенный design bootstrap. Исполняемый MCP
-server, UI и облачная инфраструктура ещё не реализованы.
+Сейчас репозиторий содержит design bootstrap и воспроизводимый engineering
+baseline с package boundaries, deterministic fixtures и automated checks.
+Исполняемый MCP server, UI и облачная инфраструктура ещё не реализованы.
 
 Важная оговорка: подключённая MCP-база не находится целиком в контексте модели.
 Она виртуально доступна через поиск и точечное чтение, а в контекст попадают
@@ -35,17 +36,32 @@ server, UI и облачная инфраструктура ещё не реал
 - [REST и MCP API](docs/specs/api.md)
 - [Проверка актуальности OKF](docs/reports/2026-08-05-okf-status.md)
 - [Проверка платформенных предпосылок](docs/reports/2026-08-05-platform-status.md)
+- [Локальная разработка и проверки](docs/guides/development.md)
+
+## Локальная проверка
+
+Требуется Node.js `>=22.13.0`:
+
+```bash
+npm ci
+npm run check
+```
+
+Команда собирает package graph и запускает unit, integration, contract,
+full-bundle OKF, documentation, architecture и secret/config checks. Она не
+запускает service и не является Sites deployment или live MCP conformance.
 
 ## Статус
 
 Базовый фичасет первого прототипа зафиксирован в ADR и спецификациях; подробный
-REST/MCP contract подготовлен как proposal для верификации. Следующий этап —
-принять wire schemas и реализовать local vertical slice:
+REST/MCP contract подготовлен как proposal для верификации. Engineering
+baseline уже фиксирует module graph и canonical checks. Следующий этап —
+реализовать local vertical slice:
 authenticated account bootstrap, `/me`, roles/visibility, user-scoped
 Streamable HTTP MCP с custom Mind-aware tools, atomic content commits, history и
 deterministic OKF 0.2 export, после чего весь обязательный slice должен пройти
 production gate в Sites. ZIP import и transport producer-defined non-Markdown
 files в этот scope не входят, но imports и named checkpoints явно планируются
 post-MVP; support
-non-Markdown files/assets остаётся отдельным открытым решением. До реализации в
-репозитории нет команды запуска, которую можно честно назвать рабочей.
+non-Markdown files/assets остаётся отдельным открытым решением. Команды
+build/check работают только для baseline; команды запуска сервиса пока нет.
