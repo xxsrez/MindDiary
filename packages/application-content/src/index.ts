@@ -76,6 +76,19 @@ export interface McpBearerAuthenticationDependencies {
   readonly deploymentCapabilities?: readonly Capability[];
 }
 
+function normalizeMcpDeploymentCapabilities(
+  configured: readonly Capability[] | undefined,
+): readonly Capability[] {
+  if (configured === undefined) return MCP_CONTENT_DEPLOYMENT_CAPABILITIES;
+  if (!Array.isArray(configured)) return Object.freeze([]);
+  const requested = new Set<unknown>(configured);
+  return Object.freeze(
+    MCP_CONTENT_DEPLOYMENT_CAPABILITIES.filter((capability) =>
+      requested.has(capability),
+    ),
+  );
+}
+
 function validEffectiveScopes(value: unknown): value is EffectiveTokenScopes {
   return (
     Array.isArray(value) &&
@@ -116,9 +129,9 @@ export class McpBearerAuthenticationService implements McpBearerAuthenticator {
     this.#clock = dependencies.clock;
     this.#tokenHasher = dependencies.tokenHasher;
     this.#tokens = dependencies.tokens;
-    this.#deploymentCapabilities = Object.freeze([
-      ...(dependencies.deploymentCapabilities ?? MCP_CONTENT_DEPLOYMENT_CAPABILITIES),
-    ]);
+    this.#deploymentCapabilities = normalizeMcpDeploymentCapabilities(
+      dependencies.deploymentCapabilities,
+    );
   }
 
   async authenticate(

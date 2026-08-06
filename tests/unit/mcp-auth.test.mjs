@@ -9,6 +9,9 @@ import {
   isTrustedSitesControlActor,
 } from "../../packages/adapter-web/dist/index.js";
 import {
+  McpBearerAuthenticationService,
+} from "../../packages/application-content/dist/index.js";
+import {
   TokenLifecycleService,
 } from "../../packages/application-control/dist/index.js";
 import { CapabilityAuthorizer } from "../../packages/application-ports/dist/index.js";
@@ -298,6 +301,47 @@ test("authenticates each POST, builds a secret-free actor, and preserves idempot
     assert.equal("role" in actor, false);
     assert.equal(JSON.stringify(actor).includes(token.secret), false);
   }
+});
+
+test("configured MCP deployment capabilities can only narrow the content allowlist", async () => {
+  const fixture = await harness();
+  const token = await fixture.issueToken(["content:write"]);
+  const configured = [
+    "visibility:change",
+    "content:search",
+    "unknown:injected",
+    "content:browse",
+    "content:search",
+  ];
+  const authenticator = new McpBearerAuthenticationService({
+    clock: fixture.clock,
+    tokenHasher: fixture.boundary.tokenHasher,
+    tokens: fixture.boundary.tokens,
+    deploymentCapabilities: configured,
+  });
+  configured.push("content:write");
+
+  const authenticated = await authenticator.authenticate(
+    token.secret,
+    "request_capability_narrowing",
+  );
+  assert.equal(authenticated.kind, "authenticated");
+  assert.deepEqual(
+    authenticated.kind === "authenticated"
+      ? authenticated.actor.deploymentCapabilities
+      : null,
+    ["content:browse", "content:search"],
+  );
+  assert.equal(
+    authenticated.kind === "authenticated" &&
+      Object.isFrozen(authenticated.actor.deploymentCapabilities),
+    true,
+  );
+  assert.equal(
+    authenticated.kind === "authenticated" &&
+      authenticated.actor.deploymentCapabilities.includes("visibility:change"),
+    false,
+  );
 });
 
 test("missing, invalid, expired, and revoked tokens are generic transport 401s with no final mutation", async () => {
