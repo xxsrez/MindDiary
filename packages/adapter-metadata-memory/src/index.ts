@@ -1,6 +1,10 @@
 import type {
   CanonicalRevisionEnvelope,
   CanonicalSpaceHandle,
+  AuthorizationStateQuery,
+  ContentCommitMetadataStore,
+  ContentCommitMetadataTransaction,
+  CurrentAuthorizationState,
   HandleRegistry,
   HandleReservationRequest,
   HandleReservationResult,
@@ -22,7 +26,6 @@ import type {
   RetiredHandleMarker,
   RevisionCommitRequest,
   RevisionCommitResult,
-  RevisionMetadataStore,
   VerifiedSpaceHost,
   TokenVerifier,
 } from "@mind-diary/application-ports";
@@ -46,6 +49,8 @@ interface SpaceState {
   head: RevisionId | null;
   revisions: Map<RevisionId, Envelope>;
 }
+
+type AuthorizationState = Readonly<CurrentAuthorizationState>;
 
 export interface InMemoryHandleRegistrySnapshot {
   readonly reservations: readonly Readonly<HandleReservationSnapshot>[];
@@ -472,10 +477,43 @@ function cloneEnvelope(envelope: Envelope): Envelope {
   });
 }
 
-export class InMemoryRevisionMetadataStore implements RevisionMetadataStore {
+function cloneSpaces(source: ReadonlyMap<SpaceId, SpaceState>): Map<SpaceId, SpaceState> {
+  return new Map(
+    [...source].map(([spaceId, state]) => [
+      spaceId,
+      { head: state.head, revisions: new Map(state.revisions) },
+    ]),
+  );
+}
+
+function authorizationStateKey(query: AuthorizationStateQuery): string {
+  return `${query.principalId}\u0000${query.spaceId}\u0000${query.tokenId ?? ""}`;
+}
+
+function cloneAuthorizationState(state: AuthorizationState): AuthorizationState {
+  return Object.freeze({
+    principal: Object.freeze({ ...state.principal }),
+    space: Object.freeze({ ...state.space }),
+    membership:
+      state.membership === null ? null : Object.freeze({ ...state.membership }),
+    token:
+      state.token === null
+        ? null
+        : Object.freeze({
+            ...state.token,
+            scopes: Object.freeze([
+              ...state.token.scopes,
+            ]) as CurrentAuthorizationToken["scopes"],
+          }),
+  });
+}
+
+export class InMemoryRevisionMetadataStore implements ContentCommitMetadataStore {
   readonly kind = "metadata-store" as const;
-  readonly #spaces = new Map<SpaceId, SpaceState>();
-  readonly #revisionsById = new Map<RevisionId, Envelope>();
+  #spaces = new Map<SpaceId, SpaceState>();
+  #revisionsById = new Map<RevisionId, Envelope>();
+  readonly #authorizationStates = new Map<string, AuthorizationState>();
+  #transactionTail: Promise<void> = Promise.resolve();
   #nextCommitFailure: Error | null = null;
 
   async readHead(spaceId: SpaceId): Promise<RevisionId | null> {
@@ -499,6 +537,50 @@ export class InMemoryRevisionMetadataStore implements RevisionMetadataStore {
   }
 
   async commitRevision(request: RevisionCommitRequest): Promise<RevisionCommitResult> {
+    return this.runContentCommitTransaction((transaction) =>
+      transaction.commitRevision(request),
+    );
+  }
+
+  async runContentCommitTransaction<Result>(
+    operation: (
+      transaction: ContentCommitMetadataTransaction,
+    ) => Promise<Result>,
+  ): Promise<Result> {
+    return this.#runExclusive(async () => {
+      const spaces = cloneSpaces(this.#spaces);
+      const revisionsById = new Map(this.#revisionsById);
+      const authorizationStates = new Map(
+        [...this.#authorizationStates].map(([key, state]) => [
+          key,
+          cloneAuthorizationState(state),
+        ]),
+      );
+      const transaction: ContentCommitMetadataTransaction = Object.freeze({
+        kind: "authorization-transaction" as const,
+        readCurrentAuthorizationState: async (query: AuthorizationStateQuery) => {
+          const state = authorizationStates.get(authorizationStateKey(query));
+          return state ? cloneAuthorizationState(state) : null;
+        },
+        readHead: async (spaceId: SpaceId) => spaces.get(spaceId)?.head ?? null,
+        readRevision: async (spaceId: SpaceId, revisionId: RevisionId) =>
+          spaces.get(spaceId)?.revisions.get(revisionId) ?? null,
+        commitRevision: async (request: RevisionCommitRequest) =>
+          this.#commitRevisionAgainst(request, spaces, revisionsById),
+      });
+
+      const result = await operation(transaction);
+      this.#spaces = spaces;
+      this.#revisionsById = revisionsById;
+      return result;
+    });
+  }
+
+  async #commitRevisionAgainst(
+    request: RevisionCommitRequest,
+    spaces: Map<SpaceId, SpaceState>,
+    revisionsById: Map<RevisionId, Envelope>,
+  ): Promise<RevisionCommitResult> {
     const envelope = request.envelope;
     const revision = envelope.revision;
     const manifestSource = canonicalManifestSource(envelope);
@@ -513,7 +595,7 @@ export class InMemoryRevisionMetadataStore implements RevisionMetadataStore {
       });
     }
 
-    const existingGlobal = this.#revisionsById.get(revision.revisionId);
+    const existingGlobal = revisionsById.get(revision.revisionId);
     if (existingGlobal) {
       if (envelopesEqual(existingGlobal, envelope)) {
         return Object.freeze({
@@ -525,7 +607,7 @@ export class InMemoryRevisionMetadataStore implements RevisionMetadataStore {
       return Object.freeze({ kind: "revision_id_collision" });
     }
 
-    const state = this.#spaces.get(revision.spaceId);
+    const state = spaces.get(revision.spaceId);
     const expected = request.expectedHeadRevisionId;
     if (revision.parentRevisionId !== expected) {
       return Object.freeze({
@@ -575,8 +657,8 @@ export class InMemoryRevisionMetadataStore implements RevisionMetadataStore {
     // These adjacent synchronous mutations are the in-memory transaction boundary.
     nextState.revisions.set(revision.revisionId, stored);
     nextState.head = revision.revisionId;
-    this.#spaces.set(revision.spaceId, nextState);
-    this.#revisionsById.set(revision.revisionId, stored);
+    spaces.set(revision.spaceId, nextState);
+    revisionsById.set(revision.revisionId, stored);
     return Object.freeze({ kind: "committed", envelope: stored, replayed: false });
   }
 
@@ -592,5 +674,39 @@ export class InMemoryRevisionMetadataStore implements RevisionMetadataStore {
     error: Error = new Error("injected revision metadata transaction failure"),
   ): void {
     this.#nextCommitFailure = error;
+  }
+
+  /** Test/local fixture hook; production authorization mutations use metadata transactions. */
+  setCurrentAuthorizationStateForTest(
+    query: AuthorizationStateQuery,
+    state: CurrentAuthorizationState | null,
+  ): void {
+    const key = authorizationStateKey(query);
+    if (state === null) {
+      this.#authorizationStates.delete(key);
+      return;
+    }
+    this.#authorizationStates.set(key, cloneAuthorizationState(state));
+  }
+
+  async readCurrentAuthorizationState(
+    query: AuthorizationStateQuery,
+  ): Promise<AuthorizationState | null> {
+    const state = this.#authorizationStates.get(authorizationStateKey(query));
+    return state ? cloneAuthorizationState(state) : null;
+  }
+
+  async #runExclusive<Result>(operation: () => Promise<Result>): Promise<Result> {
+    const previous = this.#transactionTail;
+    let release!: () => void;
+    this.#transactionTail = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await previous;
+    try {
+      return await operation();
+    } finally {
+      release();
+    }
   }
 }
