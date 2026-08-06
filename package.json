@@ -18,14 +18,16 @@
     "test:integration": "npm run build --silent && node --test tests/integration/*.test.mjs",
     "test:conformance": "npm run build --silent && node --test tests/conformance/*.test.mjs && npm run validate:fixtures --silent",
     "test": "npm run test:unit && npm run test:integration && npm run test:conformance",
-    "validate:fixtures": "node scripts/validate-okf-fixtures.mjs",
+    "validate:fixtures": "npm run build --silent && node scripts/validate-okf-fixtures.mjs",
     "check:architecture": "node scripts/check-architecture.mjs",
     "check:docs": "node scripts/check-docs.mjs",
     "check:secrets": "node scripts/check-secrets.mjs",
     "check": "npm run clean && npm run build && node --test tests/unit/*.test.mjs tests/integration/*.test.mjs tests/conformance/*.test.mjs && npm run validate:fixtures && npm run check:architecture && npm run check:docs && npm run check:secrets"
   },
-  "devDependencies": {
-    "typescript": "5.9.3",
+  "dependencies": {
     "yaml": "2.9.0"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3"
   }
 }
