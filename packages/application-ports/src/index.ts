@@ -233,8 +233,8 @@ export interface RevisionMetadataStore extends MetadataStore {
 
 /**
  * Race-sensitive content commit view over one rollback-on-error metadata
- * transaction. The revision/HEAD write and later durable audit/outbox stages
- * must all use this same view before the transaction callback returns.
+ * transaction. This boundary intentionally has no provisional audit/outbox
+ * hook; AND-66 can add explicit durable stage methods to the same transaction.
  */
 export interface ContentCommitMetadataTransaction
   extends AuthorizationTransaction {

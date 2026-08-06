@@ -3,7 +3,6 @@ import type {
   Authorizer,
   Clock,
   ContentCommitMetadataStore,
-  ContentCommitMetadataTransaction,
   ObjectStore,
   RevisionIdGenerator,
 } from "@mind-diary/application-ports";
@@ -62,27 +61,6 @@ export class ChangesetCommitFailure extends Error {
   }
 }
 
-export interface ContentCommitTransactionHookContext {
-  readonly actor: ActorContext;
-  readonly authorization: Extract<
-    Awaited<ReturnType<Authorizer["authorize"]>>,
-    { readonly kind: "allowed" }
-  >;
-  readonly envelope: Readonly<CanonicalRevisionEnvelope>;
-}
-
-/**
- * Extension point for AND-66 durable audit/outbox staging. A hook may only
- * stage work through the supplied metadata transaction; it must not deliver
- * external effects before the transaction commits.
- */
-export interface ContentCommitTransactionHook {
-  stage(
-    transaction: ContentCommitMetadataTransaction,
-    context: Readonly<ContentCommitTransactionHookContext>,
-  ): Promise<void>;
-}
-
 export interface ChangesetCommitDependencies {
   readonly authorizer: Authorizer;
   readonly metadata: ContentCommitMetadataStore;
@@ -91,7 +69,6 @@ export interface ChangesetCommitDependencies {
   readonly clock: Clock;
   readonly revisionIds: RevisionIdGenerator;
   readonly preflightLimits?: Readonly<ChangesetPreflightLimits>;
-  readonly transactionHooks?: readonly ContentCommitTransactionHook[];
 }
 
 const ENCODER = new TextEncoder();
@@ -104,7 +81,6 @@ export class ChangesetCommitService {
   readonly #clock: Clock;
   readonly #revisionIds: RevisionIdGenerator;
   readonly #preflight: ChangesetPreflightService;
-  readonly #transactionHooks: readonly ContentCommitTransactionHook[];
 
   constructor(dependencies: ChangesetCommitDependencies) {
     this.#authorizer = dependencies.authorizer;
@@ -119,9 +95,6 @@ export class ChangesetCommitService {
         ? {}
         : { limits: dependencies.preflightLimits }),
     });
-    this.#transactionHooks = Object.freeze([
-      ...(dependencies.transactionHooks ?? []),
-    ]);
   }
 
   async commit(request: CommitChangesetRequest): Promise<CommitChangesetResult> {
@@ -214,15 +187,6 @@ export class ChangesetCommitService {
         manifestHash,
         summary: request.summary,
       });
-      const hookContext = Object.freeze({
-        actor,
-        authorization,
-        envelope,
-      });
-      for (const hook of this.#transactionHooks) {
-        await hook.stage(transaction, hookContext);
-      }
-
       const committed = await transaction.commitRevision({
         expectedHeadRevisionId: preflight.baseRevisionId,
         envelope,

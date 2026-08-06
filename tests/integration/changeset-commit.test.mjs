@@ -10,6 +10,7 @@ import { InMemoryObjectStore } from "@mind-diary/adapter-object-memory";
 import {
   CAPABILITIES,
   MARKDOWN_MEDIA_TYPE,
+  createCanonicalRevisionEnvelope,
   version,
 } from "@mind-diary/domain";
 import {
@@ -173,7 +174,6 @@ async function fixture() {
     currentActor,
     nextRevisionId,
     objectStore = objects,
-    transactionHooks = [],
   }) => {
     grant(currentActor);
     return new ChangesetCommitService({
@@ -183,7 +183,6 @@ async function fixture() {
       objects: objectStore,
       clock: { now: () => REVISIONS.next.committedAt },
       revisionIds: revisionIds(nextRevisionId),
-      transactionHooks,
     });
   };
   const snapshot = async () => {
@@ -214,20 +213,9 @@ test("success writes immutable candidate objects and performs one revision/HEAD 
     "token_commit_success",
     "request_commit_success",
   );
-  const hookCalls = [];
   const service = env.service({
     currentActor: editor,
     nextRevisionId: REVISIONS.next.revisionId,
-    transactionHooks: [
-      {
-        async stage(transaction, context) {
-          hookCalls.push({
-            head: await transaction.readHead(MINDS.ordinary.spaceId),
-            revisionId: context.envelope.revision.revisionId,
-          });
-        },
-      },
-    ],
   });
 
   const result = await service.commit({
@@ -241,12 +229,6 @@ test("success writes immutable candidate objects and performs one revision/HEAD 
   assert.equal(result.kind, "committed");
   assert.equal(result.previousRevisionId, REVISIONS.initial.revisionId);
   assert.equal(result.envelope.revision.revisionNumber, 2);
-  assert.deepEqual(hookCalls, [
-    {
-      head: REVISIONS.initial.revisionId,
-      revisionId: REVISIONS.next.revisionId,
-    },
-  ]);
   const after = await env.snapshot();
   assert.equal(after.head, REVISIONS.next.revisionId);
   assert.deepEqual(after.revisions, [
@@ -267,6 +249,52 @@ test("success writes immutable candidate objects and performs one revision/HEAD 
   assert.equal(
     historical.files.some((file) => file.path === "concepts/atomic.md"),
     false,
+  );
+});
+
+test("metadata transaction rolls back a staged revision/HEAD when its callback fails", async () => {
+  const env = await fixture();
+  const before = await env.snapshot();
+  const parent = await env.metadata.readRevision(
+    MINDS.ordinary.spaceId,
+    REVISIONS.initial.revisionId,
+  );
+  assert.ok(parent);
+  const stagedEnvelope = createCanonicalRevisionEnvelope({
+    revisionId: "revision_rolled_back",
+    spaceId: MINDS.ordinary.spaceId,
+    revisionNumber: 2,
+    parentRevisionId: REVISIONS.initial.revisionId,
+    committedAt: REVISIONS.next.committedAt,
+    committedBy: REVISION_AUTHORS.active,
+    manifest: parent.manifest,
+    manifestHash: parent.revision.manifestHash,
+    summary: "Must roll back",
+  });
+
+  await assert.rejects(
+    env.metadata.runContentCommitTransaction(async (transaction) => {
+      const staged = await transaction.commitRevision({
+        expectedHeadRevisionId: REVISIONS.initial.revisionId,
+        envelope: stagedEnvelope,
+      });
+      assert.equal(staged.kind, "committed");
+      assert.equal(
+        await transaction.readHead(MINDS.ordinary.spaceId),
+        "revision_rolled_back",
+      );
+      throw new Error("injected failure after staged revision");
+    }),
+    /injected failure after staged revision/u,
+  );
+
+  assert.deepEqual(await env.snapshot(), before);
+  assert.equal(
+    await env.metadata.readRevision(
+      MINDS.ordinary.spaceId,
+      "revision_rolled_back",
+    ),
+    null,
   );
 });
 
