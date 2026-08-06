@@ -6,10 +6,9 @@ deployment и release tags.
 Workers владеют только своими worktree/branch, реализацией, commit и
 `FEATURE_RECEIPT`; они не меняют default branch, Linear, Sites и tags.
 
-При наблюдаемой аномалии GitHub используй
-[offline-delivery.md](offline-delivery.md) для component-scoped status context.
-В local-only mode входи только при недоступности Git publication/CAS и явном
-разрешении пользователя.
+Любую техническую аномалию GitHub обрабатывай только по
+[github-outage.md](github-outage.md); не дублируй здесь outage, retry, waiver,
+local queue или recovery policy.
 
 ## Сформировать batch
 
@@ -58,9 +57,9 @@ Workers владеют только своими worktree/branch, реализа
 
 Повторно используй успешный integrated gate только при точном совпадении
 `source_tree_oid + gate_contract_hash + environment_fingerprint` и наличии
-durable evidence. Это переиспользует только validation: exact-SHA CI и
-default-branch CAS всегда проверяются для текущего batch; Sites deployment/live
-smoke выполняются заново только для `delivery_profile=release`.
+durable evidence. Это переиспользует только validation: default-branch CAS и
+terminal exact-SHA CI outcome всегда фиксируются для текущего batch; Sites
+deployment/live smoke выполняются заново только для `delivery_profile=release`.
 
 Для generation без подходящего evidence один раз выполни полный integrated gate
 на exact candidate tree. Построй его из обязательных правил `AGENTS.md`, live
@@ -109,13 +108,13 @@ bounded `PREPUSH_CI` evidence. Не создавай PR и не меняй CI/in
 
 Не запускай platform-bound baseline на несовместимом runner и не ослабляй
 threshold ради зелёного CI. При отсутствии подходящего pre-push path запиши
-`PREPUSH_CI: not-available` и продолжай по локальному gate; configured required
-CI exact default SHA остаётся обязательным после push.
+`PREPUSH_CI: not-available` и продолжай по локальному gate. После push получи
+terminal required-CI outcome обычным путём либо по `github-outage.md`.
 
 ## Продвинуть exact candidate
 
-Ниже описан online path. В offline mode не имитируй fetch/push/CI: локально
-интегрируй batch и публикуй накопленную очередь только по отдельному протоколу.
+Ниже описан normal online path. Любое отклонение GitHub от него передай
+`github-outage.md`; не импровизируй локальную очередь или waiver здесь.
 
 1. Fetch-ом потребуй `origin/<default> == expected_default_sha` и fast-forward
    ancestry `expected_default_sha -> candidate_sha`.
@@ -127,13 +126,12 @@ CI exact default SHA остаётся обязательным после push.
    содержимым. При совпавшем validation key не повторяй локальный full gate.
    Проверяй job компактным status snapshot раз в 45–60 секунд, не streaming
    watcher-ом. Полный failing log читай один раз и только для упавшего job.
-   Один явно stalled/infra-flake run можно cancel/retry на неизменном SHA;
-   повторная необъяснённая нестабильность — external gap, а не бесконечный
-   retry. Отсутствие configured CI запиши как `none`.
+   Missing/stalled/infra signal передай `github-outage.md`. Отсутствие
+   configured CI запиши как `none`.
 4. Для `delivery_profile=design|build` запиши deployments/tag как
    `not-applicable` и не создавай их. После полного доказательства acceptance,
-   integrated gate, default ref и configured CI можно закрыть вошедшие issue;
-   такой batch называется `integrated`, а не production release.
+   integrated gate, default ref и terminal CI outcome можно закрыть вошедшие
+   issue; такой batch называется `integrated`, а не production release.
 5. Для `delivery_profile=release` разреши exact production OpenAI Site по
    tracked `.openai/hosting.json` и runbook. Web/control, persistence и `/mcp`
    — обязательные flows одного Sites release; отдельный container и AWS не
