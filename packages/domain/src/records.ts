@@ -80,6 +80,7 @@ export type EffectiveTokenScopes =
   | readonly ["content:read"]
   | readonly ["content:read", "content:write"];
 export type Capability = (typeof CAPABILITIES)[number];
+export type RevisionMode = "head" | "historical";
 
 export interface Principal {
   readonly principalId: PrincipalId;
