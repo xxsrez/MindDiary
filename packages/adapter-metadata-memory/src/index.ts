@@ -2,6 +2,11 @@ import type {
   CanonicalRevisionEnvelope,
   CanonicalSpaceHandle,
   AuthorizationStateQuery,
+  CheckContentCommitIdempotencyRequest,
+  CheckContentCommitIdempotencyResult,
+  CompleteContentCommitIdempotencyRequest,
+  CompleteContentCommitIdempotencyResult,
+  ContentCommitIdempotencyNamespace,
   ContentCommitMetadataStore,
   ContentCommitMetadataTransaction,
   CurrentAuthorizationState,
@@ -13,6 +18,7 @@ import type {
   HandleRetirementRequest,
   HandleRetirementResult,
   HandleReservationSnapshot,
+  IdempotencyRecord,
   McpTokenMetadata,
   McpTokenStore,
   MetadataStore,
@@ -51,6 +57,9 @@ interface SpaceState {
 }
 
 type AuthorizationState = Readonly<CurrentAuthorizationState>;
+type CompletedIdempotencyRecord = Readonly<
+  Extract<IdempotencyRecord, { readonly state: "completed" }>
+>;
 
 export interface InMemoryHandleRegistrySnapshot {
   readonly reservations: readonly Readonly<HandleReservationSnapshot>[];
@@ -508,10 +517,81 @@ function cloneAuthorizationState(state: AuthorizationState): AuthorizationState 
   });
 }
 
+function idempotencyNamespaceKey(
+  namespace: Readonly<ContentCommitIdempotencyNamespace>,
+): string {
+  return JSON.stringify([
+    namespace.principalId,
+    namespace.spaceId,
+    namespace.operation,
+    namespace.key,
+  ]);
+}
+
+function cloneIdempotencyRecord(
+  record: CompletedIdempotencyRecord,
+): CompletedIdempotencyRecord {
+  return Object.freeze({
+    ...record,
+    result: Object.freeze({ ...record.result }),
+  });
+}
+
+function cloneIdempotencyRecords(
+  source: ReadonlyMap<string, CompletedIdempotencyRecord>,
+): Map<string, CompletedIdempotencyRecord> {
+  return new Map(
+    [...source].map(([key, record]) => [key, cloneIdempotencyRecord(record)]),
+  );
+}
+
+function checkIdempotencyAgainst(
+  request: CheckContentCommitIdempotencyRequest,
+  records: ReadonlyMap<string, CompletedIdempotencyRecord>,
+): CheckContentCommitIdempotencyResult {
+  const record = records.get(idempotencyNamespaceKey(request.namespace));
+  if (!record) return Object.freeze({ kind: "missing" });
+  if (record.canonicalRequestHash !== request.canonicalRequestHash) {
+    return Object.freeze({ kind: "conflict" });
+  }
+  return Object.freeze({
+    kind: "replay",
+    record: cloneIdempotencyRecord(record),
+  });
+}
+
+function completeIdempotencyAgainst(
+  request: CompleteContentCommitIdempotencyRequest,
+  records: Map<string, CompletedIdempotencyRecord>,
+): CompleteContentCommitIdempotencyResult {
+  const key = idempotencyNamespaceKey(request.namespace);
+  if (records.has(key)) return Object.freeze({ kind: "already_exists" });
+  const record: CompletedIdempotencyRecord = Object.freeze({
+    idempotencyRecordId:
+      `idempotency_record_${records.size + 1}` as IdempotencyRecord["idempotencyRecordId"],
+    principalId: request.namespace.principalId,
+    spaceId: request.namespace.spaceId,
+    operation: request.namespace.operation,
+    key: request.namespace.key,
+    canonicalRequestHash: request.canonicalRequestHash,
+    state: "completed",
+    result: Object.freeze({ ...request.result }),
+    version: version(1),
+    createdAt: request.completedAt,
+    updatedAt: request.completedAt,
+  });
+  records.set(key, record);
+  return Object.freeze({
+    kind: "completed",
+    record: cloneIdempotencyRecord(record),
+  });
+}
+
 export class InMemoryRevisionMetadataStore implements ContentCommitMetadataStore {
   readonly kind = "metadata-store" as const;
   #spaces = new Map<SpaceId, SpaceState>();
   #revisionsById = new Map<RevisionId, Envelope>();
+  #idempotencyRecords = new Map<string, CompletedIdempotencyRecord>();
   readonly #authorizationStates = new Map<string, AuthorizationState>();
   #transactionTail: Promise<void> = Promise.resolve();
   #nextCommitFailure: Error | null = null;
@@ -550,6 +630,7 @@ export class InMemoryRevisionMetadataStore implements ContentCommitMetadataStore
     return this.#runExclusive(async () => {
       const spaces = cloneSpaces(this.#spaces);
       const revisionsById = new Map(this.#revisionsById);
+      const idempotencyRecords = cloneIdempotencyRecords(this.#idempotencyRecords);
       const authorizationStates = new Map(
         [...this.#authorizationStates].map(([key, state]) => [
           key,
@@ -565,15 +646,34 @@ export class InMemoryRevisionMetadataStore implements ContentCommitMetadataStore
         readHead: async (spaceId: SpaceId) => spaces.get(spaceId)?.head ?? null,
         readRevision: async (spaceId: SpaceId, revisionId: RevisionId) =>
           spaces.get(spaceId)?.revisions.get(revisionId) ?? null,
+        checkIdempotency: async (request: CheckContentCommitIdempotencyRequest) =>
+          checkIdempotencyAgainst(request, idempotencyRecords),
         commitRevision: async (request: RevisionCommitRequest) =>
           this.#commitRevisionAgainst(request, spaces, revisionsById),
+        completeIdempotency: async (
+          request: CompleteContentCommitIdempotencyRequest,
+        ) => completeIdempotencyAgainst(request, idempotencyRecords),
       });
 
       const result = await operation(transaction);
       this.#spaces = spaces;
       this.#revisionsById = revisionsById;
+      this.#idempotencyRecords = idempotencyRecords;
       return result;
     });
+  }
+
+  /** Test/local fixture inspection; application replay goes through authorization. */
+  async listContentCommitIdempotencyRecordsForTest(): Promise<
+    readonly CompletedIdempotencyRecord[]
+  > {
+    return Object.freeze(
+      [...this.#idempotencyRecords.values()]
+        .map(cloneIdempotencyRecord)
+        .sort((left, right) =>
+          left.idempotencyRecordId < right.idempotencyRecordId ? -1 : 1,
+        ),
+    );
   }
 
   async #commitRevisionAgainst(

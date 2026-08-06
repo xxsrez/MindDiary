@@ -210,19 +210,33 @@ export interface BackgroundJob {
   readonly updatedAt: UtcInstant;
 }
 
-export interface IdempotencyRecord {
+export interface CommitChangesetIdempotencyResult {
+  readonly kind: "commit_changeset";
+  readonly previousRevisionId: RevisionId | null;
+  readonly revisionId: RevisionId;
+}
+
+interface IdempotencyRecordBase {
   readonly idempotencyRecordId: IdempotencyRecordId;
   readonly principalId: PrincipalId;
-  readonly spaceId: SpaceId | null;
-  readonly operation: string;
+  readonly spaceId: SpaceId;
+  readonly operation: "commit_changeset";
   readonly key: IdempotencyKey;
   readonly canonicalRequestHash: Sha256Digest;
-  readonly state: IdempotencyState;
-  readonly resultReference: string | null;
   readonly version: Version;
   readonly createdAt: UtcInstant;
   readonly updatedAt: UtcInstant;
 }
+
+export type IdempotencyRecord =
+  | (IdempotencyRecordBase & {
+      readonly state: "started" | "failed";
+      readonly result: null;
+    })
+  | (IdempotencyRecordBase & {
+      readonly state: "completed";
+      readonly result: Readonly<CommitChangesetIdempotencyResult>;
+    });
 
 export type AuditActor =
   | { readonly kind: "principal"; readonly principalId: PrincipalId }

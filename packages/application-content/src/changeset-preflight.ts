@@ -95,6 +95,8 @@ export interface ChangesetPreflightRequest {
 
 export type ChangesetValidationCode =
   | "invalid_expected_revision"
+  | "invalid_idempotency_key"
+  | "invalid_summary"
   | "operations_required"
   | "operation_limit_exceeded"
   | "invalid_operation"
@@ -172,6 +174,10 @@ interface ValidatedOperationSet {
   readonly operations: readonly Readonly<ChangesetOperation>[];
   readonly totalBytes: number;
 }
+
+export type ChangesetOperationValidationResult =
+  | ({ readonly kind: "valid" } & ValidatedOperationSet)
+  | Extract<ChangesetPreflightResult, { readonly kind: "invalid" }>;
 
 interface WorkingFile {
   readonly path: string;
@@ -389,7 +395,7 @@ function checkedLogField(
   return Object.freeze({ value, bytes: bytes.byteLength });
 }
 
-function validateOperations(
+function validateOperationsAgainstLimits(
   source: unknown,
   limits: Readonly<ChangesetPreflightLimits>,
 ): ValidatedOperationSet | Extract<ChangesetPreflightResult, { readonly kind: "invalid" }> {
@@ -578,6 +584,16 @@ function validateOperations(
   return Object.freeze({ operations: Object.freeze(operations), totalBytes });
 }
 
+/** Canonicalizes the request payload without reading target content or HEAD. */
+export function validateChangesetOperations(
+  source: unknown,
+  limits: Readonly<ChangesetPreflightLimits> = DEFAULT_CHANGESET_PREFLIGHT_LIMITS,
+): ChangesetOperationValidationResult {
+  const result = validateOperationsAgainstLimits(source, normalizeLimits(limits));
+  if ("kind" in result) return result;
+  return Object.freeze({ kind: "valid", ...result });
+}
+
 function digestMatches(
   operation: ReplaceFileOperation | DeleteFileOperation | ReplaceIndexOperation,
   file: WorkingFile,
@@ -623,8 +639,11 @@ export class ChangesetPreflightService {
         "expected revision must be a non-empty opaque ID or null",
       );
     }
-    const operationSet = validateOperations(request.operations, this.#limits);
-    if ("kind" in operationSet) return operationSet;
+    const operationSet = validateChangesetOperations(
+      request.operations,
+      this.#limits,
+    );
+    if (operationSet.kind === "invalid") return operationSet;
 
     const head = await this.#revisions.readHeadRevision(request.spaceId);
     const currentRevisionId = head?.envelope.revision.revisionId ?? null;

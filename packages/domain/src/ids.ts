@@ -29,6 +29,13 @@ export type IdempotencyKey = string & {
   readonly [opaqueIdBrand]: "idempotency-key";
 };
 
+export function idempotencyKey(value: string): IdempotencyKey {
+  if (value.length === 0) {
+    throw new TypeError("idempotency keys must not be empty");
+  }
+  return value as IdempotencyKey;
+}
+
 /**
  * Branding makes unrelated IDs non-interchangeable at compile time. It does
  * not authenticate or authorize an ID; callers still resolve it against

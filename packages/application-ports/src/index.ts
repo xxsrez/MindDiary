@@ -16,10 +16,13 @@ import {
   type Capability,
   type CanonicalRevisionEnvelope,
   type CanonicalSpaceHandle,
+  type CommitChangesetIdempotencyResult,
   type EffectiveTokenScopes,
   type HandlePolicyFailureReason,
   type MarkdownMediaType,
   type MembershipState,
+  type IdempotencyKey,
+  type IdempotencyRecord,
   type PrincipalId,
   type PrincipalState,
   type RevisionId,
@@ -36,6 +39,10 @@ import {
 } from "@mind-diary/domain";
 
 export type { CanonicalRevisionEnvelope } from "@mind-diary/domain";
+export type {
+  CommitChangesetIdempotencyResult,
+  IdempotencyRecord,
+} from "@mind-diary/domain";
 export {
   RESERVED_TOP_LEVEL_HANDLES,
   isReservedTopLevelHandle,
@@ -216,6 +223,43 @@ export interface RevisionCommitRequest {
   readonly envelope: Readonly<CanonicalRevisionEnvelope>;
 }
 
+export interface ContentCommitIdempotencyNamespace {
+  readonly principalId: PrincipalId;
+  readonly spaceId: SpaceId;
+  readonly operation: "commit_changeset";
+  readonly key: IdempotencyKey;
+}
+
+export interface CheckContentCommitIdempotencyRequest {
+  readonly namespace: Readonly<ContentCommitIdempotencyNamespace>;
+  readonly canonicalRequestHash: Sha256Digest;
+}
+
+export type CheckContentCommitIdempotencyResult =
+  | { readonly kind: "missing" }
+  | {
+      readonly kind: "replay";
+      readonly record: Readonly<
+        Extract<IdempotencyRecord, { readonly state: "completed" }>
+      >;
+    }
+  | { readonly kind: "conflict" };
+
+export interface CompleteContentCommitIdempotencyRequest
+  extends CheckContentCommitIdempotencyRequest {
+  readonly result: Readonly<CommitChangesetIdempotencyResult>;
+  readonly completedAt: UtcInstant;
+}
+
+export type CompleteContentCommitIdempotencyResult =
+  | {
+      readonly kind: "completed";
+      readonly record: Readonly<
+        Extract<IdempotencyRecord, { readonly state: "completed" }>
+      >;
+    }
+  | { readonly kind: "already_exists" };
+
 /** Transactional revision metadata and HEAD; object bytes remain in ObjectStore. */
 export interface RevisionMetadataStore extends MetadataStore {
   readHead(spaceId: SpaceId): Promise<RevisionId | null>;
@@ -243,7 +287,19 @@ export interface ContentCommitMetadataTransaction
     spaceId: SpaceId,
     revisionId: RevisionId,
   ): Promise<Readonly<CanonicalRevisionEnvelope> | null>;
+  /**
+   * Resolves the actor/Space/operation/key namespace inside this transaction.
+   * Implementations must serialize this check with revision, future effect
+   * staging, and completion so concurrent retries expose one canonical effect.
+   */
+  checkIdempotency(
+    request: CheckContentCommitIdempotencyRequest,
+  ): Promise<CheckContentCommitIdempotencyResult>;
   commitRevision(request: RevisionCommitRequest): Promise<RevisionCommitResult>;
+  /** Completes only a namespace observed as missing in this same transaction. */
+  completeIdempotency(
+    request: CompleteContentCommitIdempotencyRequest,
+  ): Promise<CompleteContentCommitIdempotencyResult>;
 }
 
 /** Atomic metadata boundary for one application-level content commit. */
