@@ -110,6 +110,13 @@ Core первого прототипа зависит от `MetadataStore`, `Obj
 Если post-prototype personalization будет принята, она подключит отдельный
 узкий `PersonalContextProvider` port.
 
+Точная форма trusted context, обязанности каждого port, отдельные control,
+content и background façades, transaction boundaries и обязательные dependency
+rules зафиксированы в
+[specification границ реализации](specs/implementation-boundaries.md). Пока
+runtime и automated import graph checks не созданы, это архитектурный contract,
+а не подтверждённая compile-time изоляция.
+
 ### 3. Protocol adapters
 
 - **Web adapter** принимает Sites identity context и обслуживает control-plane
