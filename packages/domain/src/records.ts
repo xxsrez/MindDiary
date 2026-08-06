@@ -20,8 +20,12 @@ import type {
 } from "./ids.js";
 
 declare const versionBrand: unique symbol;
+declare const revisionNumberBrand: unique symbol;
 
 export type Version = number & { readonly [versionBrand]: "version" };
+export type RevisionNumber = number & {
+  readonly [revisionNumberBrand]: "revision-number";
+};
 
 export const PRINCIPAL_STATES = ["active", "deleted"] as const;
 export const EXTERNAL_BINDING_STATES = ["active", "revoked"] as const;
@@ -162,7 +166,7 @@ export type RevisionAuthorReference =
 export interface SpaceRevision {
   readonly revisionId: RevisionId;
   readonly spaceId: SpaceId;
-  readonly revisionNumber: number;
+  readonly revisionNumber: RevisionNumber;
   readonly parentRevisionId: RevisionId | null;
   readonly committedAt: UtcInstant;
   readonly committedBy: RevisionAuthorReference;
@@ -252,4 +256,11 @@ export function version(value: number): Version {
     throw new TypeError("versions must be positive safe integers");
   }
   return value as Version;
+}
+
+export function revisionNumber(value: number): RevisionNumber {
+  if (!Number.isSafeInteger(value) || value < 1) {
+    throw new TypeError("revision numbers must be positive safe integers");
+  }
+  return value as RevisionNumber;
 }

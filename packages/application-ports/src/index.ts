@@ -11,20 +11,42 @@ import {
   capabilitiesForVisibilityGrant,
   revisionModeAllowsCapability,
   tokenScopesAllowCapability,
+  version,
   type AccessTokenState,
   type Capability,
+  type CanonicalRevisionEnvelope,
+  type CanonicalSpaceHandle,
   type EffectiveTokenScopes,
+  type HandlePolicyFailureReason,
+  type MarkdownMediaType,
   type MembershipState,
   type PrincipalId,
   type PrincipalState,
+  type RevisionId,
   type RevisionMode,
   type Role,
+  type Sha256Digest,
   type SpaceId,
   type SpaceLifecycleState,
   type TokenId,
   type UtcInstant,
+  type VerifiedSpaceHost,
   type Version,
   type Visibility,
+} from "@mind-diary/domain";
+
+export type { CanonicalRevisionEnvelope } from "@mind-diary/domain";
+export {
+  RESERVED_TOP_LEVEL_HANDLES,
+  isReservedTopLevelHandle,
+  isReservedTopLevelRoute,
+  normalizeSpaceHandle,
+  parseCanonicalSpaceHandle,
+  version,
+  verifiedSpaceHost,
+  type CanonicalSpaceHandle,
+  type HandlePolicyFailureReason,
+  type VerifiedSpaceHost,
 } from "@mind-diary/domain";
 
 export interface Clock {
@@ -35,8 +57,173 @@ export interface MetadataStore {
   readonly kind: "metadata-store";
 }
 
+export interface HandleReservationSnapshot {
+  readonly host: VerifiedSpaceHost;
+  readonly canonicalHandle: CanonicalSpaceHandle;
+  readonly spaceId: SpaceId;
+}
+
+export interface RetiredHandleMarker {
+  readonly host: VerifiedSpaceHost;
+  readonly canonicalHandle: CanonicalSpaceHandle;
+}
+
+export interface HandleReservationRequest {
+  readonly host: VerifiedSpaceHost;
+  readonly handle: string;
+  readonly spaceId: SpaceId;
+}
+
+export type HandleReservationResult =
+  | {
+      readonly kind: "reserved";
+      readonly reservation: Readonly<HandleReservationSnapshot>;
+      readonly replayed: boolean;
+    }
+  | { readonly kind: "handle_unavailable" }
+  | { readonly kind: "immutable_handle" }
+  | {
+      readonly kind: "invalid_handle";
+      readonly reason: HandlePolicyFailureReason;
+    };
+
+export interface HandleResolutionRequest {
+  readonly host: VerifiedSpaceHost;
+  readonly handle: string;
+}
+
+export type HandleResolutionResult =
+  | { readonly kind: "resolved"; readonly spaceId: SpaceId }
+  | { readonly kind: "not_found" };
+
+export interface HandleRetirementRequest extends HandleResolutionRequest {
+  readonly spaceId: SpaceId;
+}
+
+export type HandleRetirementResult =
+  | {
+      readonly kind: "retired";
+      readonly marker: Readonly<RetiredHandleMarker>;
+    }
+  | { readonly kind: "not_found" };
+
+/** Transactional host-scoped handle ownership and permanent retirement. */
+export interface HandleRegistry extends MetadataStore {
+  reserveHandle(request: HandleReservationRequest): Promise<HandleReservationResult>;
+  resolveHandle(request: HandleResolutionRequest): Promise<HandleResolutionResult>;
+  retireHandle(request: HandleRetirementRequest): Promise<HandleRetirementResult>;
+}
+
+export interface ImmutableObjectWriteRequest {
+  readonly bytes: Uint8Array;
+  readonly mediaType: MarkdownMediaType;
+  /** Server-supplied UTC time used only for bounded unreachable-object GC. */
+  readonly createdAt: UtcInstant;
+}
+
+export interface ImmutableObjectMetadata {
+  readonly sha256: Sha256Digest;
+  readonly mediaType: MarkdownMediaType;
+  readonly size: number;
+  readonly createdAt: UtcInstant;
+  /** Mutable GC lease metadata; canonical bytes and digest remain immutable. */
+  readonly protectedAt: UtcInstant;
+}
+
+export interface ImmutableObject extends ImmutableObjectMetadata {
+  readonly bytes: Uint8Array;
+}
+
+export interface ImmutableObjectPutResult {
+  readonly object: Readonly<ImmutableObjectMetadata>;
+  readonly status: "stored" | "already_exists";
+}
+
+export interface ImmutableObjectListRequest {
+  /** Only objects whose GC protection is strictly older are candidates. */
+  readonly createdBefore: UtcInstant;
+  /** Reachable digests are excluded before applying limit, preventing starvation. */
+  readonly excludedDigests: readonly Sha256Digest[];
+  readonly limit: number;
+}
+
+export interface ImmutableObjectDeleteRequest {
+  readonly sha256: Sha256Digest;
+  /** Candidate lease observed by list; a concurrent put changes it. */
+  readonly expectedProtectedAt: UtcInstant;
+  /** The delete is refused when current protection is at or after this boundary. */
+  readonly createdBefore: UtcInstant;
+}
+
+export type ObjectStoreFailureCode =
+  | "invalid_digest"
+  | "invalid_media_type"
+  | "invalid_utf8"
+  | "invalid_timestamp"
+  | "invalid_limit"
+  | "digest_collision"
+  | "object_tampered";
+
+/** Stable port-level failure used without coupling application code to an adapter. */
+export class ObjectStoreFailure extends Error {
+  readonly code: ObjectStoreFailureCode;
+
+  constructor(code: ObjectStoreFailureCode, message: string) {
+    super(message);
+    this.name = "ObjectStoreFailure";
+    this.code = code;
+  }
+}
+
 export interface ObjectStore {
   readonly kind: "object-store";
+  calculateSha256(bytes: Uint8Array): Promise<Sha256Digest>;
+  putImmutable(request: ImmutableObjectWriteRequest): Promise<ImmutableObjectPutResult>;
+  getImmutable(sha256: Sha256Digest): Promise<Readonly<ImmutableObject> | null>;
+  listImmutableObjects(
+    request: ImmutableObjectListRequest,
+  ): Promise<readonly Readonly<ImmutableObjectMetadata>[]>;
+  deleteImmutableObject(request: ImmutableObjectDeleteRequest): Promise<boolean>;
+}
+
+export type RevisionCommitResult =
+  | {
+      readonly kind: "committed";
+      readonly envelope: Readonly<CanonicalRevisionEnvelope>;
+      readonly replayed: boolean;
+    }
+  | {
+      readonly kind: "stale_head";
+      readonly currentHeadRevisionId: RevisionId | null;
+    }
+  | { readonly kind: "revision_id_collision" }
+  | {
+      readonly kind: "invalid_revision_chain";
+      readonly reason:
+        | "missing_parent"
+        | "parent_mismatch"
+        | "revision_number_mismatch"
+        | "manifest_hash_mismatch";
+    };
+
+export interface RevisionCommitRequest {
+  readonly expectedHeadRevisionId: RevisionId | null;
+  readonly envelope: Readonly<CanonicalRevisionEnvelope>;
+}
+
+/** Transactional revision metadata and HEAD; object bytes remain in ObjectStore. */
+export interface RevisionMetadataStore extends MetadataStore {
+  readHead(spaceId: SpaceId): Promise<RevisionId | null>;
+  readRevision(
+    spaceId: SpaceId,
+    revisionId: RevisionId,
+  ): Promise<Readonly<CanonicalRevisionEnvelope> | null>;
+  listRevisions(
+    spaceId: SpaceId,
+  ): Promise<readonly Readonly<CanonicalRevisionEnvelope>[]>;
+  commitRevision(request: RevisionCommitRequest): Promise<RevisionCommitResult>;
+  /** Includes every historical revision, not only each Mind's current HEAD. */
+  listReachableObjectDigests(): Promise<readonly Sha256Digest[]>;
 }
 
 export interface SearchIndex {
@@ -155,6 +342,73 @@ export interface Authorizer {
     transaction: AuthorizationTransaction,
     expected: AuthorizationStamp,
   ): Promise<AuthorizationDecision>;
+}
+
+export interface AuthorizedHandleReadRequest extends HandleResolutionRequest {
+  readonly actor: ActorContext;
+  readonly capability: Capability;
+  readonly revisionMode: RevisionMode;
+}
+
+/** Reads target metadata/objects only after exact handle resolution and access. */
+export interface ResolvedSpaceReader<Value> {
+  readResolvedSpace(spaceId: SpaceId): Promise<Value | null>;
+}
+
+export type AuthorizedHandleReadResult<Value> =
+  | {
+      readonly kind: "found";
+      readonly spaceId: SpaceId;
+      readonly value: Value;
+    }
+  | { readonly kind: "not_found" };
+
+const HANDLE_TARGET_NOT_FOUND = Object.freeze({ kind: "not_found" } as const);
+
+/**
+ * Keeps missing handles and access denial externally indistinguishable while
+ * enforcing resolve -> authorize -> target read ordering.
+ */
+export class AuthorizedHandleReader<Value> {
+  readonly #handles: HandleRegistry;
+  readonly #authorizer: Authorizer;
+  readonly #targets: ResolvedSpaceReader<Value>;
+
+  constructor(dependencies: {
+    readonly handles: HandleRegistry;
+    readonly authorizer: Authorizer;
+    readonly targets: ResolvedSpaceReader<Value>;
+  }) {
+    this.#handles = dependencies.handles;
+    this.#authorizer = dependencies.authorizer;
+    this.#targets = dependencies.targets;
+  }
+
+  async read(
+    request: AuthorizedHandleReadRequest,
+  ): Promise<AuthorizedHandleReadResult<Value>> {
+    const resolution = await this.#handles.resolveHandle({
+      host: request.host,
+      handle: request.handle,
+    });
+    if (resolution.kind === "not_found") return HANDLE_TARGET_NOT_FOUND;
+
+    const authorization = await this.#authorizer.authorize({
+      actor: request.actor,
+      spaceId: resolution.spaceId,
+      capability: request.capability,
+      revisionMode: request.revisionMode,
+    });
+    if (authorization.kind === "denied") return HANDLE_TARGET_NOT_FOUND;
+
+    const value = await this.#targets.readResolvedSpace(resolution.spaceId);
+    if (value === null) return HANDLE_TARGET_NOT_FOUND;
+    return Object.freeze({
+      kind: "found",
+      spaceId: resolution.spaceId,
+      value,
+    });
+  }
 }
 
 function denied(
@@ -412,8 +666,146 @@ export class CapabilityAuthorizer implements Authorizer {
   }
 }
 
+declare const tokenVerifierBrand: unique symbol;
+
+/** Fixed-length, versioned cryptographic verifier. It is never a public token ID. */
+export type TokenVerifier = string & {
+  readonly [tokenVerifierBrand]: "TokenVerifier";
+};
+
+export interface PersistedTokenSecretMaterial {
+  readonly format: "mdp_v1";
+  readonly algorithm: "hmac-sha256";
+  readonly verifierVersion: "v1";
+  readonly verifier: TokenVerifier;
+  readonly displayPrefix: string;
+}
+
+/**
+ * Secret-bearing issuance boundary. Implementations expose the secret through
+ * exactly one consume call and keep it out of enumerable/serializable fields.
+ */
+export interface IssuedTokenSecret {
+  readonly displayPrefix: string;
+  consumeSecret(): string | null;
+  persistence(): Readonly<PersistedTokenSecretMaterial>;
+}
+
+export type TokenVerifierLookupResult<Value> =
+  | {
+      readonly kind: "found";
+      readonly verifier: TokenVerifier;
+      readonly value: Value;
+    }
+  | { readonly kind: "not_found" }
+  | { readonly kind: "denied" };
+
+/** Exact indexed lookup; displayPrefix must never be used as the lookup key. */
+export interface TokenVerifierLookup<Value> {
+  findByVerifier(
+    verifier: TokenVerifier,
+  ): Promise<TokenVerifierLookupResult<Value>>;
+}
+
+export type TokenVerificationResult<Value> =
+  | { readonly kind: "verified"; readonly value: Value }
+  | { readonly kind: "invalid" };
+
 export interface TokenHasher {
   readonly kind: "token-hasher";
+  issueSecret(): Promise<IssuedTokenSecret>;
+  verifySecret<Value>(
+    candidate: unknown,
+    lookup: TokenVerifierLookup<Value>,
+  ): Promise<TokenVerificationResult<Value>>;
+}
+
+/** Safe lifecycle metadata. The cryptographic verifier is deliberately absent. */
+export interface McpTokenMetadata {
+  readonly tokenId: TokenId;
+  readonly principalId: PrincipalId;
+  readonly name: string;
+  readonly displayPrefix: string;
+  readonly scopes: EffectiveTokenScopes;
+  readonly state: AccessTokenState;
+  readonly version: Version;
+  readonly createdAt: UtcInstant;
+  readonly expiresAt: UtcInstant;
+  readonly lastUsedAt: UtcInstant | null;
+  readonly revokedAt: UtcInstant | null;
+}
+
+export interface CreateMcpTokenRequest {
+  readonly tokenId: TokenId;
+  readonly principalId: PrincipalId;
+  readonly name: string;
+  readonly verifier: TokenVerifier;
+  readonly displayPrefix: string;
+  readonly scopes: EffectiveTokenScopes;
+  readonly createdAt: UtcInstant;
+  readonly expiresAt: UtcInstant;
+}
+
+export type CreateMcpTokenResult =
+  | {
+      readonly kind: "created";
+      readonly token: Readonly<McpTokenMetadata>;
+    }
+  | {
+      readonly kind:
+        | "token_id_conflict"
+        | "verifier_conflict"
+        | "principal_deleted"
+        | "invalid_record";
+    };
+
+export interface RevokeMcpTokenRequest {
+  readonly principalId: PrincipalId;
+  readonly tokenId: TokenId;
+  readonly revokedAt: UtcInstant;
+}
+
+export type RevokeMcpTokenResult =
+  | {
+      readonly kind: "revoked";
+      readonly token: Readonly<McpTokenMetadata>;
+      readonly replayed: boolean;
+    }
+  | { readonly kind: "not_found" };
+
+export interface RevokePrincipalTokensForAccountDeletionRequest {
+  readonly principalId: PrincipalId;
+  readonly revokedAt: UtcInstant;
+}
+
+export interface RevokePrincipalTokensForAccountDeletionResult {
+  readonly revokedCount: number;
+  readonly replayed: boolean;
+}
+
+/** Server-side generator; token IDs are never accepted from browser input. */
+export interface TokenIdGenerator {
+  nextTokenId(): TokenId;
+}
+
+/**
+ * Principal-scoped token persistence. Account deletion atomically prevents any
+ * later issuance for that principal and revokes every existing token.
+ */
+export interface McpTokenStore
+  extends MetadataStore,
+    TokenVerifierLookup<Readonly<CurrentAuthorizationToken>> {
+  createMcpToken(request: CreateMcpTokenRequest): Promise<CreateMcpTokenResult>;
+  listMcpTokenMetadata(
+    principalId: PrincipalId,
+  ): Promise<readonly Readonly<McpTokenMetadata>[]>;
+  readMcpTokenForAuthorization(
+    tokenId: TokenId,
+  ): Promise<Readonly<CurrentAuthorizationToken> | null>;
+  revokeMcpToken(request: RevokeMcpTokenRequest): Promise<RevokeMcpTokenResult>;
+  revokePrincipalTokensForAccountDeletion(
+    request: RevokePrincipalTokensForAccountDeletionRequest,
+  ): Promise<RevokePrincipalTokensForAccountDeletionResult>;
 }
 
 export interface AuditSink {

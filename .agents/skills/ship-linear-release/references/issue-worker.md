@@ -1,8 +1,9 @@
 # Протокол issue worker в отдельном worktree
 
 Работай только над issue из переданного manifest. Ты владеешь её
-issue-scoped реализацией, тестами, локальной проверкой, commit и push только в
-свою feature-ветку в отдельном worktree. Ты не мержишь default branch, не
+issue-scoped реализацией, тестами, локальной проверкой, commit и только
+разрешённым manifest-ом local/remote ref своей feature-ветки в отдельном
+worktree. Ты не мержишь default branch, не
 публикуешь/deploy, не ставишь `Done` и по умолчанию не мутируешь Linear. Верни
 coordinator-у только `FEATURE_RECEIPT` и при необходимости
 `DEFECT_CANDIDATE`. Не создавай subagents.
@@ -21,7 +22,8 @@ Default branch, Linear mutations, deployments, tags и milestone closure зап�
    ID. Если issue удалена из milestone, стала `Canceled`/`Duplicate` либо уже
    независимо завершена, прекрати новые мутации и верни фактическое состояние.
 3. Проверь batch root SHA, `base SHA`, ordered dependency SHAs, intended branch,
-   worktree path, queue fingerprint и issue `updatedAt` из manifest. Base может
+   worktree path, queue fingerprint, `remote mode`, offline base и issue
+   `updatedAt` из manifest. Base может
    быть exact ready head предшественника в stacked lane, но обязан быть rooted
    в batch root. Если worktree не изолирован, ancestry не сходится, база
    неожиданно изменилась или ownership конфликтует с чужими правками, не
@@ -76,8 +78,10 @@ Default branch, Linear mutations, deployments, tags и milestone closure зап�
    адаптации выше.
 2. Stage только issue-scoped файлы. Сделай минимальное число осмысленных
    commits с Linear identifier; release-defect fix добавляй новым commit, не
-   переписывая уже опубликованный SHA. Push exact HEAD только в intended
-   feature branch и докажи совпадение remote ref.
+   переписывая уже опубликованный SHA. В `online` push exact HEAD только в
+   intended feature branch и докажи совпадение remote ref. В
+   `offline-local-only` не обращайся к origin: докажи exact локальную branch и
+   оставь remote publication coordinator-у.
 3. Не мержи никакую ветку, не пушь в default branch, не запускай deployment и
    не переводи issue в `Done`.
 4. Сохрани worktree и branch до явного release success coordinator-а. Не
@@ -116,6 +120,7 @@ HEAD_SHA: <full sha or none>
 SCOPE: start=<updatedAt>; final=<updatedAt>; unchanged | adapted
 RESUMED_FROM: none | branch | commit | receipt
 ORIGIN_REF: <branch=sha or none>
+REF_SCOPE: <origin | local-only>
 SMOKE: <коротко что локально проверено>
 TESTS: <короткий список команд и итогов>
 GAPS: <none или точная граница>

@@ -50,8 +50,8 @@ Key: `<release_id>`.
 
 ```text
 STATUS: planning | migrating | dispatching | assembling | sealed | validating |
-        default-pushed | integrated | deploying | live-awaiting-tag | checkpoint |
-        complete | needs-input
+        offline-queue | publishing | default-pushed | integrated | deploying |
+        live-awaiting-tag | checkpoint | complete | needs-input
 RUN_ID: <stable id>
 GOAL: <goal id/objective fingerprint>
 CONTRACT: digest=<hash>; migrated_from=<hash|none>
@@ -63,6 +63,8 @@ DEFAULT_BRANCH: <name>; observed_sha=<full>
 WORKERS: requested=<1|N|auto|auto(max=N)>; effective=<n>; reason=<bounded>
 CAPABILITIES: available=<bounded>; not_available=<bounded>
 CURRENT_BATCH: <batch_id or none>; generation=<n or none>
+OFFLINE_QUEUE: base_origin=<full>; local_head=<full>; batches=<ordered ids> | none
+LAST_REMOTE_ATTEMPT: at=<timestamp>; result=<success|technical-failure>; next_eligible=<timestamp>; reason=<bounded> | none
 QUEUE_FINGERPRINT: <hash>
 STARTED_AT: <timestamp>
 HEARTBEAT_AT: <timestamp>
@@ -119,7 +121,7 @@ ISSUE: <identifier>; <id>; scope_updated_at=<timestamp>
 ROOT_BASE: sha=<full>; tree=<oid>
 BASE: sha=<full>; tree=<oid>
 DEPENDENCIES: <ordered issue=sha@origin_ref или none>
-FEATURE: sha=<full>; tree=<oid>; origin_ref=<ref=sha>
+FEATURE: sha=<full>; tree=<oid>; ref=<origin|local-only>:<ref=sha>
 OWNERSHIP_PATHS: <компактный список>
 AFFECTED_SURFACES: <domain/ui/build/docs/...>
 CHECKS: <affected commands и pass/fail; без полного лога>
@@ -170,8 +172,9 @@ UPDATED_AT: <timestamp>
 Key: `<release_id>:<batch_id>`.
 
 ```text
-STATUS: assembling | sealed | gate-passed | default-pushed | integrated |
-        deployed | live-awaiting-tag | released | failed | rolled-back
+STATUS: assembling | sealed | gate-passed | locally-integrated | publishing |
+        default-pushed | integrated | deployed | live-awaiting-tag | released |
+        failed | rolled-back
 PROJECT_ID: <Linear project id>
 RELEASE_ID: <id>; name=<name>
 PROFILE: design | build | release
@@ -181,9 +184,10 @@ FEATURES: <topological identifier=base/dependencies->feature_sha@origin_ref>
 CANDIDATE: sha=<full>; tree=<oid>
 VALIDATION_KEY: tree=<oid>; gate=<hash>; env=<hash>
 VALIDATION: run=<pass/fail+timestamp> | reused=<receipt/key> | none
-PREPUSH_CI: sha=<full>; run/check=<id|not-available>; status=<terminal|none>
-MAIN: origin/<default>=<full>; cas=<pass/fail>
-CI: sha=<full>; run/check=<id|none>; status=<terminal|none>
+PREPUSH_CI: sha=<full>; run/check=<id|not-available>; status=<terminal|none|pending-outage>
+MAIN: origin/<default>=<full>; local/<default>=<full>; cas=<pass|fail|pending>
+CI: sha=<full>; run/check=<id|none>; status=<terminal|none|pending-outage>
+PUBLISHED_BY: head=<full>; run/check=<id>; status=<terminal> | none
 SITES: not-applicable(profile=<design|build>) |
        project=<id>; version=<number>; version_id=<id>; archive_sha256=<digest>
 DEPLOYMENT: not-applicable(profile=<design|build>) |
@@ -210,6 +214,13 @@ integrated gate и exact default/CI state.
 `not-available` в `GAPS`, если все проверки capability boundary выполнены.
 Само отсутствие external path не переводит receipt в `failed`, если acceptance
 его не требует; требуемое, но недоступное evidence нельзя считать pass.
+
+`STATUS: locally-integrated` означает, что exact candidate прошёл integrated
+gate и достижим из coordinator-owned local default, но remote push/CI ещё не
+доказаны. В таком receipt `LINEAR_DONE: none`, `MAIN.cas: pending`,
+`PUBLISHED_BY: none`; issue остаётся незавершённой. После общей публикации
+offline queue укажи exact published head и required CI в `PUBLISHED_BY`, затем
+обнови каждый покрытый batch до `integrated` и только после этого закрывай issue.
 
 ## Восстановить после прерывания
 

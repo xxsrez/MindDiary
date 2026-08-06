@@ -164,7 +164,7 @@ Personal token выбран как минимальный безопасный �
 token_id
 principal_id
 name
-secret_hash
+secret_verifier       # hmac-sha256:v1, exact lookup key
 display_prefix
 scopes: content:read, content:write
 created_at
@@ -173,8 +173,22 @@ last_used_at?
 revoked_at?
 ```
 
-Secret содержит не менее 256 random bits, показывается один раз и передаётся
-как `Authorization: Bearer`. Сервер сравнивает hash constant-time, проверяет
+Canonical secret `mdp_v1_<base64url>` содержит ровно 32 random bytes, имеет
+фиксированную длину и показывается через consume-once boundary. Persisted record
+содержит только safe display prefix, keyed HMAC-SHA-256 verifier, scopes и
+lifecycle metadata; plain/recoverable secret и HMAC key рядом с record не
+хранятся. HMAC key минимум 256 bits поступает из deployment secret store.
+
+Verifier — versioned fixed-length exact lookup key. Adapter отклоняет
+malformed/oversized input до storage, для canonical candidate делает один
+indexed lookup и сравнивает два 32-byte verifier без data-dependent early exit;
+unknown/denied record снаружи неотличим от mismatch. Медленный password KDF не
+используется: 256-bit random entropy уже исключает практический offline
+guessing, а KDF на каждом MCP request увеличивает latency и DoS amplification.
+Threat analysis, benchmark и rotation boundary зафиксированы в
+[ADR-0005](decisions/0005-mcp-token-secret-verifier.md).
+
+Default и server maximum expiry равны 90 дням. Server проверяет
 expiry/revocation, строит `ActorContext` и затем на каждом tool call заново
 проверяет current Mind access. Token bound к principal, не Mind. Он не даёт
 control-plane capabilities и не логируется. `content:write` включает
@@ -455,8 +469,6 @@ audit log.
 - Пройдёт ли Sites реальный Streamable HTTP MCP gate? До положительного
   evidence это blocker MVP production release, а не основание автоматически
   выбрать отдельный runtime.
-- Какой exact token hash/KDF и lookup strategy дают приемлемую latency без
-  хранения recoverable secrets?
 - Как реализовать immediate full deletion и доказать удаление replicated/index
   data до появления production retention model?
 - Нужны ли позже soft delete/recovery и formal privacy-retention policy?

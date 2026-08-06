@@ -6,6 +6,9 @@ deployment и release tags.
 Workers владеют только своими worktree/branch, реализацией, commit и
 `FEATURE_RECEIPT`; они не меняют default branch, Linear, Sites и tags.
 
+Если Git hosting подтверждённо недоступен и пользователь явно разрешил
+local-only progress, применяй [offline-delivery.md](offline-delivery.md).
+
 ## Сформировать batch
 
 1. Восстанови состояние по [протоколу квитанций](receipts.md), закрепи exact
@@ -108,6 +111,9 @@ threshold ради зелёного CI. При отсутствии подход
 CI exact default SHA остаётся обязательным после push.
 
 ## Продвинуть exact candidate
+
+Ниже описан online path. В offline mode не имитируй fetch/push/CI: локально
+интегрируй batch и публикуй накопленную очередь только по отдельному протоколу.
 
 1. Fetch-ом потребуй `origin/<default> == expected_default_sha` и fast-forward
    ancestry `expected_default_sha -> candidate_sha`.

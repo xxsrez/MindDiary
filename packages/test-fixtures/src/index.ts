@@ -6,6 +6,7 @@ import type {
   SpaceId,
   UtcInstant,
 } from "@mind-diary/domain";
+import { MARKDOWN_MEDIA_TYPE } from "@mind-diary/domain";
 import { OKF_VERSION, type OkfBundleFixture } from "@mind-diary/okf-codec";
 
 export const FIXED_NOW = "2026-08-06T12:00:00.000Z" as UtcInstant;
@@ -96,6 +97,16 @@ export const OKF_BUNDLE: OkfBundleFixture = Object.freeze({
   revisionId: REVISIONS.initial.revisionId,
   files: OKF_FILES,
 });
+
+export const CANONICAL_REVISION_FILES = Object.freeze(
+  OKF_FILES.map((file) =>
+    Object.freeze({
+      path: file.path,
+      mediaType: MARKDOWN_MEDIA_TYPE,
+      bytes: new TextEncoder().encode(file.text),
+    }),
+  ),
+);
 
 export const FIXTURE_MANIFEST_SHA256 =
   "c5f9e8eb128f3cf929d9aba5bf4aa0a32f1dec00b59c4a690fe299ad447f277c" as const;
