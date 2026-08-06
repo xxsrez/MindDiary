@@ -209,6 +209,64 @@ test("issuance retries create independent tokens and never recover an old secret
   assert.equal((await service.listMcpTokens(actor)).length, 2);
 });
 
+test("token ID conflict fails safely and preserves the existing final authorization state", async () => {
+  const clock = mutableClock();
+  const tokens = new InMemoryMcpTokenStore();
+  const tokenHasher = await createWebCryptoTokenHasher({ verifierKey: TEST_KEY });
+  const service = new TokenLifecycleService({
+    clock,
+    tokens,
+    tokenHasher,
+    tokenIds: { nextTokenId: () => "token_collision" },
+  });
+  const actor = sitesActor("principal_collision");
+  const first = await service.issueMcpToken(actor, {
+    name: "first",
+    scopes: ["content:write"],
+  });
+  const firstSecret = first.secret.consumeSecret();
+  const beforeList = await service.listMcpTokens(actor);
+  const beforeAuthorization = await tokens.readMcpTokenForAuthorization(
+    first.token.tokenId,
+  );
+
+  let conflict;
+  try {
+    await service.issueMcpToken(actor, {
+      name: "conflicting retry",
+      scopes: ["content:read"],
+    });
+    assert.fail("expected token issue conflict");
+  } catch (error) {
+    conflict = error;
+  }
+
+  assert.equal(conflict instanceof TokenLifecycleFailure, true);
+  assert.equal(conflict.code, "token_issue_conflict");
+  const serializedError = JSON.stringify(conflict);
+  assert.equal(conflict.message.includes(firstSecret), false);
+  assert.equal(serializedError.includes(firstSecret), false);
+  assert.equal(serializedError.includes("hmac-sha256"), false);
+  assert.equal(serializedError.includes("verifier"), false);
+
+  const afterList = await service.listMcpTokens(actor);
+  const afterAuthorization = await tokens.readMcpTokenForAuthorization(
+    first.token.tokenId,
+  );
+  assert.deepEqual(afterList, beforeList);
+  assert.deepEqual(afterAuthorization, beforeAuthorization);
+  assert.equal(afterList.length, 1);
+  assert.equal(afterList[0].state, "active");
+  assert.equal(afterList[0].version, 1);
+  const stillVerifies = await tokenHasher.verifySecret(firstSecret, tokens);
+  assert.equal(stillVerifies.kind, "verified");
+  assert.equal(
+    stillVerifies.kind === "verified" &&
+      stillVerifies.value.tokenId === first.token.tokenId,
+    true,
+  );
+});
+
 test("list and revoke stay principal-scoped; concurrent revokes converge idempotently", async () => {
   const { service, tokens } = await fixture();
   const alpha = sitesActor("principal_alpha");
