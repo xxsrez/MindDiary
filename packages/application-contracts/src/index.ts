@@ -1,5 +1,6 @@
 import type {
   Capability,
+  EffectiveTokenScopes,
   OpaqueId,
   PrincipalId,
   TokenId,
@@ -8,18 +9,35 @@ import type {
 
 export type RequestId = OpaqueId<"request">;
 
+interface RegisteredPrincipalActorBase {
+  readonly kind: "registered_principal";
+  readonly principalId: PrincipalId;
+  /** Trusted deployment configuration; it can only narrow authorization. */
+  readonly deploymentCapabilities: readonly Capability[];
+  readonly requestId: RequestId;
+  readonly occurredAtUtc: UtcInstant;
+}
+
+export type RegisteredPrincipalActorContext =
+  | (RegisteredPrincipalActorBase & {
+      readonly authentication: { readonly kind: "sites_identity" };
+    })
+  | (RegisteredPrincipalActorBase & {
+      readonly authentication: {
+        readonly kind: "mcp_token";
+        readonly tokenId: TokenId;
+        /** Authenticated snapshot for transport filtering, never a role claim. */
+        readonly effectiveScopes: EffectiveTokenScopes;
+      };
+    });
+
+export type McpTokenActorContext = Extract<
+  RegisteredPrincipalActorContext,
+  { readonly authentication: { readonly kind: "mcp_token" } }
+>;
+
 export type ActorContext =
-  | {
-      readonly kind: "registered_principal";
-      readonly principalId: PrincipalId;
-      readonly authentication:
-        | { readonly kind: "sites_identity" }
-        | { readonly kind: "mcp_token"; readonly tokenId: TokenId };
-      /** Trusted deployment configuration; it can only narrow authorization. */
-      readonly deploymentCapabilities: readonly Capability[];
-      readonly requestId: RequestId;
-      readonly occurredAtUtc: UtcInstant;
-    }
+  | RegisteredPrincipalActorContext
   | {
       readonly kind: "service";
       readonly serviceId: string;
