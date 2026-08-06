@@ -39,17 +39,19 @@ const byRole: Readonly<Record<Role, readonly Capability[]>> = Object.freeze({
 
 /** Pure role policy only; effective authorization also requires trusted state. */
 export function capabilitiesForRole(role: Role): readonly Capability[] {
-  return byRole[role];
+  return byRole[role] ?? Object.freeze([]);
 }
 
 export function roleHasCapability(role: Role, capability: Capability): boolean {
-  return byRole[role].includes(capability);
+  return capabilitiesForRole(role).includes(capability);
 }
 
 export function capabilitiesForVisibilityGrant(
   visibility: Visibility,
 ): readonly Capability[] {
-  return visibility === "private" ? Object.freeze([]) : byRole.reader;
+  return visibility === "public" || visibility === "unlisted"
+    ? byRole.reader
+    : Object.freeze([]);
 }
 
 export function tokenScopesAllowCapability(
@@ -71,7 +73,10 @@ export function revisionModeAllowsCapability(
   mode: RevisionMode,
   capability: Capability,
 ): boolean {
-  return mode === "head" || byRole.reader.includes(capability);
+  return (
+    mode === "head" ||
+    (mode === "historical" && byRole.reader.includes(capability))
+  );
 }
 
 export function normalizeTokenScopes(scopes: readonly TokenScope[]): EffectiveTokenScopes {

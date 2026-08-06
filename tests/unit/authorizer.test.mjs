@@ -3,7 +3,12 @@ import test from "node:test";
 import {
   CapabilityAuthorizer,
 } from "@mind-diary/application-ports";
-import { CAPABILITIES, version } from "@mind-diary/domain";
+import {
+  CAPABILITIES,
+  capabilitiesForRole,
+  capabilitiesForVisibilityGrant,
+  version,
+} from "@mind-diary/domain";
 
 const now = "2026-08-06T12:00:00.000Z";
 const future = "2026-11-03T12:00:00.000Z";
@@ -263,6 +268,69 @@ test("invalid capability, revision mode, state identity and timestamp fail close
     ).code,
     "invalid_authorization_request",
   );
+});
+
+test("malformed persisted authorization enums and shapes fail closed without mutation", async () => {
+  assert.deepEqual(capabilitiesForVisibilityGrant("secret"), []);
+  assert.deepEqual(capabilitiesForRole("root"), []);
+
+  const corruptions = [
+    [
+      "visibility",
+      currentState({
+        space: { ...currentState().space, visibility: "secret" },
+      }),
+    ],
+    [
+      "membership state",
+      currentState({
+        membership: { ...currentState().membership, state: "pending" },
+      }),
+    ],
+    [
+      "membership role",
+      currentState({
+        membership: { ...currentState().membership, role: "root" },
+      }),
+    ],
+    [
+      "token scope string",
+      currentState({
+        token: { ...currentState().token, scopes: "content:write" },
+      }),
+    ],
+    [
+      "write-only token scopes",
+      currentState({
+        token: { ...currentState().token, scopes: ["content:write"] },
+      }),
+    ],
+    [
+      "unknown token scope",
+      currentState({
+        token: {
+          ...currentState().token,
+          scopes: ["content:read", "control:write"],
+        },
+      }),
+    ],
+    ["missing principal shape", currentState({ principal: null })],
+    ["missing membership shape", currentState({ membership: {} })],
+    ["missing token shape", currentState({ token: {} })],
+    [
+      "invalid access version",
+      currentState({
+        space: { ...currentState().space, accessVersion: 0 },
+      }),
+    ],
+  ];
+
+  for (const [name, state] of corruptions) {
+    const before = structuredClone(state);
+    const decision = await decide(state, request("content:browse"));
+    assert.equal(decision.code, "authorization_state_unavailable", name);
+    assert.deepEqual(state, before, name);
+  }
 });
 
 test("revoked, expired, missing and wrong-principal tokens stop future access", async () => {

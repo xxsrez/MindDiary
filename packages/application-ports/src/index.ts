@@ -1,6 +1,12 @@
 import type { ActorContext } from "@mind-diary/application-contracts";
 import {
+  ACCESS_TOKEN_STATES,
   CAPABILITIES,
+  MEMBERSHIP_STATES,
+  PRINCIPAL_STATES,
+  ROLES,
+  SPACE_LIFECYCLE_STATES,
+  VISIBILITIES,
   capabilitiesForRole,
   capabilitiesForVisibilityGrant,
   revisionModeAllowsCapability,
@@ -159,17 +165,93 @@ function denied(
 }
 
 function isRegisteredActor(
-  actor: ActorContext,
+  actor: unknown,
 ): actor is Extract<ActorContext, { kind: "registered_principal" }> {
-  return actor.kind === "registered_principal";
+  return isRecord(actor) && actor.kind === "registered_principal";
 }
 
-function isKnownCapability(capability: Capability): boolean {
-  return (CAPABILITIES as readonly string[]).includes(capability);
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }
 
-function isValidRevisionMode(mode: RevisionMode): boolean {
+function isOneOf<T extends string>(
+  value: unknown,
+  values: readonly T[],
+): value is T {
+  return typeof value === "string" && values.includes(value as T);
+}
+
+function isKnownCapability(capability: unknown): capability is Capability {
+  return (
+    typeof capability === "string" &&
+    (CAPABILITIES as readonly string[]).includes(capability)
+  );
+}
+
+function isValidRevisionMode(mode: unknown): mode is RevisionMode {
   return mode === "head" || mode === "historical";
+}
+
+function isValidVersion(value: unknown): value is Version {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 1;
+}
+
+function isValidTokenScopes(value: unknown): value is EffectiveTokenScopes {
+  if (!Array.isArray(value)) return false;
+  return (
+    (value.length === 1 && value[0] === "content:read") ||
+    (value.length === 2 &&
+      value[0] === "content:read" &&
+      value[1] === "content:write")
+  );
+}
+
+function isValidMembership(
+  value: unknown,
+): value is CurrentAuthorizationMembership | null {
+  if (value === null) return true;
+  return (
+    isRecord(value) &&
+    typeof value.principalId === "string" &&
+    typeof value.spaceId === "string" &&
+    isOneOf(value.role, ROLES) &&
+    isOneOf(value.state, MEMBERSHIP_STATES) &&
+    isValidVersion(value.version)
+  );
+}
+
+function isValidToken(
+  value: unknown,
+): value is Readonly<CurrentAuthorizationToken> | null {
+  if (value === null) return true;
+  return (
+    isRecord(value) &&
+    typeof value.tokenId === "string" &&
+    typeof value.principalId === "string" &&
+    isOneOf(value.state, ACCESS_TOKEN_STATES) &&
+    isValidTokenScopes(value.scopes) &&
+    isValidVersion(value.version) &&
+    typeof value.expiresAt === "string" &&
+    Number.isFinite(Date.parse(value.expiresAt))
+  );
+}
+
+function isValidCurrentAuthorizationState(
+  value: unknown,
+): value is CurrentAuthorizationState {
+  if (!isRecord(value) || !isRecord(value.principal) || !isRecord(value.space)) {
+    return false;
+  }
+  return (
+    typeof value.principal.principalId === "string" &&
+    isOneOf(value.principal.state, PRINCIPAL_STATES) &&
+    typeof value.space.spaceId === "string" &&
+    isOneOf(value.space.state, SPACE_LIFECYCLE_STATES) &&
+    isOneOf(value.space.visibility, VISIBILITIES) &&
+    isValidVersion(value.space.accessVersion) &&
+    isValidMembership(value.membership) &&
+    isValidToken(value.token)
+  );
 }
 
 function sameStamp(left: AuthorizationStamp, right: AuthorizationStamp): boolean {
@@ -241,7 +323,9 @@ export class CapabilityAuthorizer implements Authorizer {
       spaceId: request.spaceId,
       tokenId,
     });
-    if (state === null) return denied("authorization_state_unavailable");
+    if (!isValidCurrentAuthorizationState(state)) {
+      return denied("authorization_state_unavailable");
+    }
     if (
       state.principal.principalId !== request.actor.principalId ||
       state.space.spaceId !== request.spaceId ||
