@@ -1,8 +1,9 @@
 import type { ActorContext } from "@mind-diary/application-contracts";
-import type {
-  ObjectStore,
-  RevisionMetadataStore,
-  SearchIndex,
+import {
+  ObjectStoreFailure,
+  type ObjectStore,
+  type RevisionMetadataStore,
+  type SearchIndex,
 } from "@mind-diary/application-ports";
 import {
   MARKDOWN_MEDIA_TYPE,
@@ -277,7 +278,18 @@ export class CanonicalRevisionCoordinator {
 
     const files: MaterializedRevisionFile[] = [];
     for (const entry of envelope.manifest.entries) {
-      const object = await this.#objects.getImmutable(entry.sha256);
+      let object;
+      try {
+        object = await this.#objects.getImmutable(entry.sha256);
+      } catch (error) {
+        if (error instanceof ObjectStoreFailure && error.code === "object_tampered") {
+          throw new CanonicalRevisionError(
+            "object_integrity_failure",
+            `committed object failed integrity verification for ${JSON.stringify(entry.path)}`,
+          );
+        }
+        throw error;
+      }
       if (!object) {
         throw new CanonicalRevisionError(
           "object_not_found",
@@ -324,6 +336,7 @@ export class CanonicalRevisionCoordinator {
     const reachable = new Set(await this.#revisions.listReachableObjectDigests());
     const candidates = await this.#objects.listImmutableObjects({
       createdBefore,
+      excludedDigests: [...reachable],
       limit: request.limit,
     });
     const deletedDigests: Sha256Digest[] = [];
@@ -331,6 +344,7 @@ export class CanonicalRevisionCoordinator {
       if (reachable.has(candidate.sha256)) continue;
       const deleted = await this.#objects.deleteImmutableObject({
         sha256: candidate.sha256,
+        expectedProtectedAt: candidate.protectedAt,
         createdBefore,
       });
       if (deleted) deletedDigests.push(candidate.sha256);

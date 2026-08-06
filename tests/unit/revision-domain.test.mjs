@@ -58,7 +58,16 @@ test("revision values reject invalid digest, path, media, size, number and UTC m
   );
   assert.throws(() => revisionNumber(0), TypeError);
   assert.throws(() => revisionNumber(1.5), TypeError);
-  assert.throws(() => utcInstant("2026-08-06T12:00:00+01:00"), RevisionEnvelopeError);
+  for (const instant of [
+    "2026-08-06T12:00:00+01:00",
+    "2026-02-29T12:00:00Z",
+    "2026-02-31T12:00:00Z",
+    "2026-04-31T12:00:00Z",
+    "2026-01-01T24:00:00Z",
+  ]) {
+    assert.throws(() => utcInstant(instant), RevisionEnvelopeError);
+  }
+  assert.equal(utcInstant("2024-02-29T23:59:59.123456789Z"), "2024-02-29T23:59:59.123456789Z");
 });
 
 test("SpaceRevision envelope carries positive number, exact parent and server UTC metadata", () => {

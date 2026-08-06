@@ -83,3 +83,15 @@ test("object adapter detects tampering before returning immutable bytes", async 
     (error) => error instanceof ObjectStoreIntegrityError && error.code === "object_tampered",
   );
 });
+
+test("object adapter rejects impossible UTC calendar dates", async () => {
+  const store = new InMemoryObjectStore();
+  await assert.rejects(
+    store.putImmutable({
+      bytes: encoder.encode("valid"),
+      mediaType: MARKDOWN_MEDIA_TYPE,
+      createdAt: "2026-02-31T12:00:00Z",
+    }),
+    (error) => error instanceof ObjectStoreIntegrityError && error.code === "invalid_timestamp",
+  );
+});

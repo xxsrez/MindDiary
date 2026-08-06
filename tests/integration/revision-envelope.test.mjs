@@ -140,7 +140,11 @@ test("invalid UTF-8 and metadata failure publish neither revision nor HEAD", asy
     ),
     (error) => error instanceof CanonicalRevisionError && error.code === "invalid_utf8",
   );
-  assert.equal((await objects.listImmutableObjects({ createdBefore: "2026-08-07T00:00:00Z", limit: 10 })).length, 0);
+  assert.equal((await objects.listImmutableObjects({
+    createdBefore: "2026-08-07T00:00:00Z",
+    excludedDigests: [],
+    limit: 10,
+  })).length, 0);
 
   revisions.failNextCommitForTest();
   await assert.rejects(coordinator.commit(request()), /injected revision metadata/);
@@ -150,7 +154,11 @@ test("invalid UTF-8 and metadata failure publish neither revision nor HEAD", asy
     coordinator.materialize(MINDS.ordinary.spaceId, REVISIONS.initial.revisionId),
     (error) => error instanceof CanonicalRevisionError && error.code === "revision_not_found",
   );
-  assert.equal((await objects.listImmutableObjects({ createdBefore: "2026-08-07T00:00:00Z", limit: 10 })).length, 3);
+  assert.equal((await objects.listImmutableObjects({
+    createdBefore: "2026-08-07T00:00:00Z",
+    excludedDigests: [],
+    limit: 10,
+  })).length, 3);
 });
 
 test("bounded GC deletes only unreachable objects strictly older than cutoff", async () => {
@@ -170,7 +178,11 @@ test("bounded GC deletes only unreachable objects strictly older than cutoff", a
     ),
   );
   const failedDigest = (
-    await objects.listImmutableObjects({ createdBefore: "2026-08-06T12:02:00Z", limit: 10 })
+    await objects.listImmutableObjects({
+      createdBefore: "2026-08-06T12:02:00Z",
+      excludedDigests: [],
+      limit: 10,
+    })
   ).find((object) => object.createdAt === "2026-08-06T12:01:00Z").sha256;
   const boundary = await objects.putImmutable({
     bytes: encoder.encode("# Boundary\n"),
@@ -214,4 +226,84 @@ test("bounded GC deletes only unreachable objects strictly older than cutoff", a
   });
   assert.equal(bounded.scanned, 1);
   assert.equal(bounded.deleted, 1);
+});
+
+test("bounded GC excludes reachable prefix before limit and cannot starve later garbage", async () => {
+  const { objects, coordinator } = harness();
+  await coordinator.commit(
+    request({
+      committedAt: "2026-08-06T10:00:00Z",
+      files: oneFile("reachable.md", "# Reachable oldest\n"),
+    }),
+  );
+  const garbage = await objects.putImmutable({
+    bytes: encoder.encode("# Unreachable later\n"),
+    mediaType: MARKDOWN_MEDIA_TYPE,
+    createdAt: "2026-08-06T11:00:00Z",
+  });
+
+  const collected = await coordinator.collectUnreachableObjects({
+    createdBefore: "2026-08-06T12:00:00Z",
+    limit: 1,
+  });
+  assert.deepEqual(collected.deletedDigests, [garbage.object.sha256]);
+  assert.equal(await objects.getImmutable(garbage.object.sha256), null);
+  assert.equal(
+    (await coordinator.materialize(MINDS.ordinary.spaceId, REVISIONS.initial.revisionId)).files[0].text,
+    "# Reachable oldest\n",
+  );
+});
+
+test("reusing an old digest refreshes GC protection and conditional delete cannot break HEAD", async () => {
+  const { objects, revisions, coordinator } = harness();
+  const files = oneFile("index.md", "# Reused bytes\n");
+  const old = await objects.putImmutable({
+    bytes: files[0].bytes,
+    mediaType: MARKDOWN_MEDIA_TYPE,
+    createdAt: "2026-08-06T10:00:00Z",
+  });
+  const [selected] = await objects.listImmutableObjects({
+    createdBefore: "2026-08-06T12:00:00Z",
+    excludedDigests: [],
+    limit: 1,
+  });
+  assert.equal(selected.sha256, old.object.sha256);
+
+  await coordinator.commit(
+    request({ committedAt: "2026-08-06T13:00:00Z", files }),
+  );
+  assert.equal(
+    await objects.deleteImmutableObject({
+      sha256: selected.sha256,
+      expectedProtectedAt: selected.protectedAt,
+      createdBefore: "2026-08-06T12:00:00Z",
+    }),
+    false,
+  );
+  assert.equal(await revisions.readHead(MINDS.ordinary.spaceId), REVISIONS.initial.revisionId);
+  assert.equal(
+    (await coordinator.materialize(MINDS.ordinary.spaceId, REVISIONS.initial.revisionId)).files[0].text,
+    "# Reused bytes\n",
+  );
+  const protectedObject = await objects.getImmutable(old.object.sha256);
+  assert.equal(protectedObject.createdAt, "2026-08-06T10:00:00Z");
+  assert.equal(protectedObject.protectedAt, "2026-08-06T13:00:00Z");
+});
+
+test("materialize maps stored-object tamper to stable error without changing HEAD", async () => {
+  const { objects, revisions, coordinator } = harness();
+  const committed = await coordinator.commit(
+    request({ files: oneFile("index.md", "# Integrity\n") }),
+  );
+  const digest = committed.envelope.manifest.entries[0].sha256;
+  objects.corruptBytesForTest(digest, encoder.encode("# Tampered!\n"));
+
+  await assert.rejects(
+    coordinator.materialize(MINDS.ordinary.spaceId, REVISIONS.initial.revisionId),
+    (error) =>
+      error instanceof CanonicalRevisionError &&
+      error.code === "object_integrity_failure",
+  );
+  assert.equal(await revisions.readHead(MINDS.ordinary.spaceId), REVISIONS.initial.revisionId);
+  assert.equal((await revisions.listRevisions(MINDS.ordinary.spaceId)).length, 1);
 });

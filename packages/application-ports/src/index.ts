@@ -53,6 +53,8 @@ export interface ImmutableObjectMetadata {
   readonly mediaType: MarkdownMediaType;
   readonly size: number;
   readonly createdAt: UtcInstant;
+  /** Mutable GC lease metadata; canonical bytes and digest remain immutable. */
+  readonly protectedAt: UtcInstant;
 }
 
 export interface ImmutableObject extends ImmutableObjectMetadata {
@@ -65,15 +67,39 @@ export interface ImmutableObjectPutResult {
 }
 
 export interface ImmutableObjectListRequest {
-  /** Only objects strictly older than this UTC instant are candidates. */
+  /** Only objects whose GC protection is strictly older are candidates. */
   readonly createdBefore: UtcInstant;
+  /** Reachable digests are excluded before applying limit, preventing starvation. */
+  readonly excludedDigests: readonly Sha256Digest[];
   readonly limit: number;
 }
 
 export interface ImmutableObjectDeleteRequest {
   readonly sha256: Sha256Digest;
-  /** The delete is refused when the object is at or after this boundary. */
+  /** Candidate lease observed by list; a concurrent put changes it. */
+  readonly expectedProtectedAt: UtcInstant;
+  /** The delete is refused when current protection is at or after this boundary. */
   readonly createdBefore: UtcInstant;
+}
+
+export type ObjectStoreFailureCode =
+  | "invalid_digest"
+  | "invalid_media_type"
+  | "invalid_utf8"
+  | "invalid_timestamp"
+  | "invalid_limit"
+  | "digest_collision"
+  | "object_tampered";
+
+/** Stable port-level failure used without coupling application code to an adapter. */
+export class ObjectStoreFailure extends Error {
+  readonly code: ObjectStoreFailureCode;
+
+  constructor(code: ObjectStoreFailureCode, message: string) {
+    super(message);
+    this.name = "ObjectStoreFailure";
+    this.code = code;
+  }
 }
 
 export interface ObjectStore {

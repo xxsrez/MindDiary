@@ -116,7 +116,13 @@ test("object-store locator and revision metadata expose no object-store version 
     mediaType: MARKDOWN_MEDIA_TYPE,
     createdAt: REVISIONS.initial.committedAt,
   });
-  assert.deepEqual(Object.keys(put.object).sort(), ["createdAt", "mediaType", "sha256", "size"]);
+  assert.deepEqual(Object.keys(put.object).sort(), [
+    "createdAt",
+    "mediaType",
+    "protectedAt",
+    "sha256",
+    "size",
+  ]);
   assert.equal(Object.keys(put.object).some((key) => /version/i.test(key)), false);
   assert.match(put.object.sha256, /^sha256:[0-9a-f]{64}$/);
 });

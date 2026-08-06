@@ -1,32 +1,24 @@
-import type {
-  ImmutableObject,
-  ImmutableObjectDeleteRequest,
-  ImmutableObjectListRequest,
-  ImmutableObjectMetadata,
-  ImmutableObjectPutResult,
-  ImmutableObjectWriteRequest,
-  ObjectStore,
+import {
+  ObjectStoreFailure,
+  type ObjectStoreFailureCode,
+  type ImmutableObject,
+  type ImmutableObjectDeleteRequest,
+  type ImmutableObjectListRequest,
+  type ImmutableObjectMetadata,
+  type ImmutableObjectPutResult,
+  type ImmutableObjectWriteRequest,
+  type ObjectStore,
 } from "@mind-diary/application-ports";
 
 export const OBJECT_ADAPTER = "memory-revision-envelope" as const;
 export type ObjectAdapterContract = ObjectStore;
 
-export type ObjectStoreIntegrityErrorCode =
-  | "invalid_digest"
-  | "invalid_media_type"
-  | "invalid_utf8"
-  | "invalid_timestamp"
-  | "invalid_limit"
-  | "digest_collision"
-  | "object_tampered";
+export type ObjectStoreIntegrityErrorCode = ObjectStoreFailureCode;
 
-export class ObjectStoreIntegrityError extends Error {
-  readonly code: ObjectStoreIntegrityErrorCode;
-
+export class ObjectStoreIntegrityError extends ObjectStoreFailure {
   constructor(code: ObjectStoreIntegrityErrorCode, message: string) {
-    super(message);
+    super(code, message);
     this.name = "ObjectStoreIntegrityError";
-    this.code = code;
   }
 }
 
@@ -34,13 +26,14 @@ type Digest = ImmutableObjectMetadata["sha256"];
 type Utc = ImmutableObjectMetadata["createdAt"];
 type DigestComputer = (bytes: Uint8Array) => string | Promise<string>;
 
-interface StoredObject extends ImmutableObjectMetadata {
+interface StoredObject extends Omit<ImmutableObjectMetadata, "protectedAt"> {
+  protectedAt: Utc;
   bytes: Uint8Array;
 }
 
 const SHA256_PATTERN = /^sha256:[0-9a-f]{64}$/u;
 const UTC_PATTERN =
-  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z$/u;
+  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,9})?Z$/u;
 const MARKDOWN_MEDIA_TYPE = "text/markdown; charset=utf-8";
 
 function assertDigest(value: string): asserts value is Digest {
@@ -53,12 +46,35 @@ function assertDigest(value: string): asserts value is Digest {
 }
 
 function assertUtc(value: string): asserts value is Utc {
-  if (!UTC_PATTERN.test(value) || !Number.isFinite(Date.parse(value))) {
+  const match = UTC_PATTERN.exec(value);
+  if (!match || !isCalendarUtc(match)) {
     throw new ObjectStoreIntegrityError(
       "invalid_timestamp",
       "object timestamps must be valid UTC instants",
     );
   }
+}
+
+function isCalendarUtc(match: RegExpExecArray): boolean {
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const hour = Number(match[4]);
+  const minute = Number(match[5]);
+  const second = Number(match[6]);
+  if (
+    year < 1 ||
+    month < 1 ||
+    month > 12 ||
+    hour > 23 ||
+    minute > 59 ||
+    second > 59
+  ) {
+    return false;
+  }
+  const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const days = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  return day >= 1 && day <= days[month - 1]!;
 }
 
 function assertMarkdown(bytes: Uint8Array, mediaType: string): void {
@@ -129,6 +145,9 @@ export class InMemoryObjectStore implements ObjectStore {
           "different immutable object bytes resolved to the same SHA-256 digest",
         );
       }
+      if (Date.parse(request.createdAt) > Date.parse(existing.protectedAt)) {
+        existing.protectedAt = request.createdAt;
+      }
       return Object.freeze({
         object: this.#metadata(existing),
         status: "already_exists",
@@ -140,6 +159,7 @@ export class InMemoryObjectStore implements ObjectStore {
       mediaType: request.mediaType,
       size: bytes.byteLength,
       createdAt: request.createdAt,
+      protectedAt: request.createdAt,
       bytes,
     };
     this.#objects.set(digest, stored);
@@ -164,12 +184,20 @@ export class InMemoryObjectStore implements ObjectStore {
         "object list limit must be a positive safe integer",
       );
     }
+    const excluded = new Set<string>();
+    for (const digest of request.excludedDigests) {
+      assertDigest(digest);
+      excluded.add(digest);
+    }
     const cutoff = Date.parse(request.createdBefore);
     const objects = [...this.#objects.values()]
-      .filter((object) => Date.parse(object.createdAt) < cutoff)
+      .filter(
+        (object) =>
+          !excluded.has(object.sha256) && Date.parse(object.protectedAt) < cutoff,
+      )
       .sort(
         (left, right) =>
-          Date.parse(left.createdAt) - Date.parse(right.createdAt) ||
+          Date.parse(left.protectedAt) - Date.parse(right.protectedAt) ||
           left.sha256.localeCompare(right.sha256),
       )
       .slice(0, request.limit)
@@ -182,9 +210,13 @@ export class InMemoryObjectStore implements ObjectStore {
   ): Promise<boolean> {
     assertDigest(request.sha256);
     assertUtc(request.createdBefore);
+    assertUtc(request.expectedProtectedAt);
     const stored = this.#objects.get(request.sha256);
     if (!stored) return false;
-    if (Date.parse(stored.createdAt) >= Date.parse(request.createdBefore)) {
+    if (
+      stored.protectedAt !== request.expectedProtectedAt ||
+      Date.parse(stored.protectedAt) >= Date.parse(request.createdBefore)
+    ) {
       return false;
     }
     return this.#objects.delete(request.sha256);
@@ -204,11 +236,19 @@ export class InMemoryObjectStore implements ObjectStore {
       mediaType: stored.mediaType,
       size: stored.size,
       createdAt: stored.createdAt,
+      protectedAt: stored.protectedAt,
     });
   }
 
   async #assertStoredIntegrity(stored: StoredObject): Promise<void> {
-    assertMarkdown(stored.bytes, stored.mediaType);
+    try {
+      assertMarkdown(stored.bytes, stored.mediaType);
+    } catch {
+      throw new ObjectStoreIntegrityError(
+        "object_tampered",
+        "stored immutable object media or bytes are invalid",
+      );
+    }
     const actual = await this.calculateSha256(stored.bytes);
     if (actual !== stored.sha256 || stored.bytes.byteLength !== stored.size) {
       throw new ObjectStoreIntegrityError(
