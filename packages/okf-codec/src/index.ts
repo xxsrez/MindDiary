@@ -1,13 +1,12 @@
-import type { RevisionId } from "@mind-diary/domain";
-
-export const OKF_VERSION = "0.2" as const;
-
-export interface CanonicalOkfFile {
-  readonly path: string;
-  readonly text: string;
-}
-
-export interface OkfBundleFixture {
-  readonly revisionId: RevisionId;
-  readonly files: readonly CanonicalOkfFile[];
-}
+export * from "./path.js";
+export * from "./types.js";
+export {
+  OKF_0_2_CODEC,
+  encodeOkfFile,
+  parseOkfFile,
+  readVerifiedEntries,
+  resolveOkfCodec,
+  renderOkfFile,
+  updateOkfConcept,
+  validateOkfBundle,
+} from "./validator.js";
