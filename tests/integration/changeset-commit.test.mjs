@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import test from "node:test";
 import {
   CanonicalRevisionCoordinator,
@@ -22,10 +23,15 @@ import {
   REVISION_AUTHORS,
   REVISIONS,
 } from "@mind-diary/test-fixtures";
+import { validateOkfBundle } from "@mind-diary/okf-codec";
 
 const ENCODER = new TextEncoder();
 const FUTURE = "2026-11-03T12:00:00.000Z";
 const OBJECT_LIST_CUTOFF = "9999-12-31T23:59:59.999Z";
+
+function digest(text) {
+  return `sha256:${createHash("sha256").update(text).digest("hex")}`;
+}
 
 function actor(principalId, tokenId, requestId) {
   return {
@@ -142,6 +148,15 @@ function changes(path, title) {
       type: "replace_index",
       path: "index.md",
       text: `---\nokf_version: "0.2"\n---\n\n# Fixture Mind\n\n- [Reproducible baseline](concepts/baseline.md)\n- [${title}](${path})\n`,
+      expected_sha256: digest(
+        OKF_FILES.find((file) => file.path === "index.md").text,
+      ),
+    },
+    {
+      type: "add_log_entry",
+      path: "log.md",
+      category: "Update",
+      message: `Added [${title}](${path}).`,
     },
   ];
 }
@@ -174,6 +189,7 @@ async function fixture() {
     currentActor,
     nextRevisionId,
     objectStore = objects,
+    committedAt = REVISIONS.next.committedAt,
   }) => {
     grant(currentActor);
     return new ChangesetCommitService({
@@ -181,7 +197,7 @@ async function fixture() {
       metadata,
       revisions: coordinator,
       objects: objectStore,
-      clock: { now: () => REVISIONS.next.committedAt },
+      clock: { now: () => committedAt },
       revisionIds: revisionIds(nextRevisionId),
     });
   };
@@ -238,9 +254,9 @@ test("success writes immutable candidate objects and performs one revision/HEAD 
   ]);
   assert.equal(after.files.some(([path]) => path === "concepts/atomic.md"), true);
   assert.match(after.files.find(([path]) => path === "index.md")[1], /Atomic commit/u);
-  assert.equal(
+  assert.match(
     after.files.find(([path]) => path === "log.md")[1],
-    OKF_FILES.find((file) => file.path === "log.md").text,
+    /- \*\*Update\*\*: Added \[Atomic commit\]\(concepts\/atomic\.md\)\.\n- \*\*Create\*\*:/u,
   );
   assert.deepEqual(after.reachable, [...after.objects].sort());
   const historical = await env.coordinator.materialize(
@@ -299,7 +315,7 @@ test("metadata transaction rolls back a staged revision/HEAD when its callback f
   );
 });
 
-test("add_log_entry stays deferred to AND-71 and materializes no partial commit", async () => {
+test("semantic log-only commit materializes one valid server-dated entry", async () => {
   const env = await fixture();
   const editor = actor(
     PRINCIPALS.editor.principalId,
@@ -308,7 +324,7 @@ test("add_log_entry stays deferred to AND-71 and materializes no partial commit"
   );
   const service = env.service({
     currentActor: editor,
-    nextRevisionId: "revision_log_deferred",
+    nextRevisionId: "revision_log_materialized",
   });
   const before = await env.snapshot();
 
@@ -316,21 +332,95 @@ test("add_log_entry stays deferred to AND-71 and materializes no partial commit"
     actor: editor,
     spaceId: MINDS.ordinary.spaceId,
     expectedRevisionId: REVISIONS.initial.revisionId,
-    idempotencyKey: "commit_log_deferred",
-    summary: "Deferred log operation",
+    idempotencyKey: "commit_log_materialized",
+    summary: "Materialize log operation",
     operations: [
-      newConcept("concepts/deferred.md", "Deferred"),
       {
         type: "add_log_entry",
         path: "log.md",
         category: "Update",
-        message: "Add deferred concept.",
+        message: "Recorded a semantic update.",
       },
     ],
   });
 
-  assert.equal(result.kind, "requires_log_materialization");
-  assert.deepEqual(await env.snapshot(), before);
+  assert.equal(result.kind, "committed");
+  const after = await env.snapshot();
+  assert.equal(after.head, "revision_log_materialized");
+  assert.equal(after.revisions.length, before.revisions.length + 1);
+  assert.match(
+    after.files.find(([path]) => path === "log.md")[1],
+    /## 2026-08-06\n\n- \*\*Update\*\*: Recorded a semantic update\.\n- \*\*Create\*\*:/u,
+  );
+  assert.deepEqual(
+    after.files.filter(([path]) => path !== "log.md"),
+    before.files.filter(([path]) => path !== "log.md"),
+  );
+});
+
+test("repeated semantic commits preserve valid newest-first date groups and entry order", async () => {
+  const env = await fixture();
+  const editor = actor(
+    PRINCIPALS.editor.principalId,
+    "token_repeated_log",
+    "request_repeated_log",
+  );
+  const commitLog = async ({ expectedRevisionId, revisionId, committedAt, key, message }) =>
+    env.service({
+      currentActor: editor,
+      nextRevisionId: revisionId,
+      committedAt,
+    }).commit({
+      actor: editor,
+      spaceId: MINDS.ordinary.spaceId,
+      expectedRevisionId,
+      idempotencyKey: key,
+      summary: message,
+      operations: [
+        {
+          type: "add_log_entry",
+          path: "log.md",
+          category: "Update",
+          message,
+        },
+      ],
+    });
+
+  const first = await commitLog({
+    expectedRevisionId: REVISIONS.initial.revisionId,
+    revisionId: "revision_log_day_one_first",
+    committedAt: "2026-08-07T00:00:00.000Z",
+    key: "log_day_one_first",
+    message: "First entry on day one.",
+  });
+  assert.equal(first.kind, "committed");
+  const second = await commitLog({
+    expectedRevisionId: first.envelope.revision.revisionId,
+    revisionId: "revision_log_day_one_second",
+    committedAt: "2026-08-07T23:59:59.000Z",
+    key: "log_day_one_second",
+    message: "Second entry on day one.",
+  });
+  assert.equal(second.kind, "committed");
+  const third = await commitLog({
+    expectedRevisionId: second.envelope.revision.revisionId,
+    revisionId: "revision_log_day_two",
+    committedAt: "2026-08-08T00:00:00.000Z",
+    key: "log_day_two",
+    message: "Entry on day two.",
+  });
+  assert.equal(third.kind, "committed");
+
+  const head = await env.coordinator.readHeadRevision(MINDS.ordinary.spaceId);
+  const validation = validateOkfBundle(
+    head.files.map((file) => ({ path: file.path, text: file.text })),
+  );
+  assert.equal(validation.valid, true);
+  const log = head.files.find((file) => file.path === "log.md").text;
+  assert.match(
+    log,
+    /## 2026-08-08\n\n- \*\*Update\*\*: Entry on day two\.\n\n## 2026-08-07\n\n- \*\*Update\*\*: Second entry on day one\.\n- \*\*Update\*\*: First entry on day one\.\n\n## 2026-08-06/u,
+  );
 });
 
 test("denied preflight and transaction-time revocation leave HEAD/revisions unchanged", async () => {
