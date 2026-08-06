@@ -534,6 +534,9 @@ test("concurrent exact retries commit one canonical effect and replay one result
   assert.equal(final.head, results[0].envelope.revision.revisionId);
   assert.equal(final.revisions.length, 2);
   assert.equal(final.idempotency.length, 1);
+  assert.equal((await env.metadata.listAuditEventsForTest()).length, 1);
+  assert.equal((await env.metadata.listAuditOutboxForTest()).length, 1);
+  assert.equal((await env.metadata.listBackgroundJobsForTest()).length, 1);
   const unusedRevisionId =
     final.head === "revision_concurrent_retry_a"
       ? "revision_concurrent_retry_b"

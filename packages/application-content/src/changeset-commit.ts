@@ -2,6 +2,7 @@ import type { ActorContext } from "@mind-diary/application-contracts";
 import type {
   Authorizer,
   Clock,
+  CommitEffectIdGenerator,
   ContentCommitMetadataStore,
   ContentCommitMetadataTransaction,
   IdempotencyNamespace,
@@ -12,7 +13,9 @@ import {
   MARKDOWN_MEDIA_TYPE,
   createCanonicalRevisionEnvelope,
   createRevisionManifest,
+  opaqueId,
   serializeRevisionManifest,
+  version,
   type CanonicalRevisionEnvelope,
   type IdempotencyKey,
   type RevisionId,
@@ -66,7 +69,8 @@ export type ChangesetCommitFailureCode =
   | "invalid_idempotency_state"
   | "missing_parent"
   | "revision_id_collision"
-  | "invalid_revision_chain";
+  | "invalid_revision_chain"
+  | "invalid_commit_effects";
 
 export class ChangesetCommitFailure extends Error {
   readonly code: ChangesetCommitFailureCode;
@@ -85,6 +89,7 @@ export interface ChangesetCommitDependencies {
   readonly objects: ObjectStore;
   readonly clock: Clock;
   readonly revisionIds: RevisionIdGenerator;
+  readonly effectIds?: CommitEffectIdGenerator;
   readonly preflightLimits?: Readonly<ChangesetPreflightLimits>;
   readonly idempotencyKeyMaxBytes?: number;
 }
@@ -159,6 +164,7 @@ export class ChangesetCommitService {
   readonly #objects: ObjectStore;
   readonly #clock: Clock;
   readonly #revisionIds: RevisionIdGenerator;
+  readonly #effectIds: CommitEffectIdGenerator | null;
   readonly #preflight: ChangesetPreflightService;
   readonly #preflightLimits: Readonly<ChangesetPreflightLimits>;
   readonly #idempotencyKeyMaxBytes: number;
@@ -169,6 +175,7 @@ export class ChangesetCommitService {
     this.#objects = dependencies.objects;
     this.#clock = dependencies.clock;
     this.#revisionIds = dependencies.revisionIds;
+    this.#effectIds = dependencies.effectIds ?? null;
     this.#preflightLimits =
       dependencies.preflightLimits ?? DEFAULT_CHANGESET_PREFLIGHT_LIMITS;
     this.#idempotencyKeyMaxBytes = normalizeIdempotencyKeyMaxBytes(
@@ -351,6 +358,75 @@ export class ChangesetCommitService {
           throw new ChangesetCommitFailure(
             "invalid_idempotency_state",
             "idempotency namespace changed inside the content transaction",
+          );
+        }
+        const committedRevisionId = committed.envelope.revision.revisionId;
+        const auditEventId = this.#effectIds?.nextAuditEventId() ??
+          opaqueId<"audit-event">(`audit_${committedRevisionId}`);
+        const outboxMessageId = this.#effectIds?.nextOutboxMessageId() ??
+          opaqueId<"outbox-message">(`audit_outbox_${committedRevisionId}`);
+        const indexJobId = this.#effectIds?.nextIndexJobId() ??
+          opaqueId<"job">(`index_job_${committedRevisionId}`);
+        const effects = await transaction.stageContentCommitEffects({
+          auditEvent: Object.freeze({
+            auditEventId,
+            actor: Object.freeze({
+              kind: "principal" as const,
+              principalId: actor.principalId,
+            }),
+            requestId: actor.requestId,
+            eventType: "content.changeset_committed",
+            outcome: "succeeded",
+            spaceId: request.spaceId,
+            occurredAt: committedAt,
+            safeMetadata: Object.freeze({
+              revision_id: committedRevisionId,
+              previous_revision_id: preflight.baseRevisionId,
+              revision_number: committed.envelope.revision.revisionNumber,
+              manifest_hash: committed.envelope.revision.manifestHash,
+            }),
+          }),
+          auditOutbox: Object.freeze({
+            outboxMessageId,
+            auditEventId,
+            state: "pending",
+            version: version(1),
+            attempts: 0,
+            availableAt: committedAt,
+            claimExpiresAt: null,
+            createdAt: committedAt,
+            updatedAt: committedAt,
+          }),
+          indexJob: Object.freeze({
+            jobId: indexJobId,
+            target: Object.freeze({
+              kind: "revision_index" as const,
+              spaceId: request.spaceId,
+              revisionId: committedRevisionId,
+            }),
+            state: "queued",
+            version: version(1),
+            attempts: 0,
+            availableAt: committedAt,
+            claimExpiresAt: null,
+            createdAt: committedAt,
+            updatedAt: committedAt,
+          }),
+          indexState: Object.freeze({
+            spaceId: request.spaceId,
+            revisionId: committedRevisionId,
+            status: "queued",
+            attempts: 0,
+            queuedAt: committedAt,
+            updatedAt: committedAt,
+            readyAt: null,
+            lastFailureCode: null,
+          }),
+        });
+        if (effects.kind !== "staged") {
+          throw new ChangesetCommitFailure(
+            "invalid_commit_effects",
+            `commit effects were not staged atomically: ${effects.kind}`,
           );
         }
         return Object.freeze({

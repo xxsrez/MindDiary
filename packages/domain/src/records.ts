@@ -48,6 +48,7 @@ export const JOB_STATES = [
 ] as const;
 export const IDEMPOTENCY_STATES = ["started", "completed", "failed"] as const;
 export const OUTBOX_STATES = ["pending", "delivering", "delivered", "failed"] as const;
+export const REVISION_INDEX_STATES = ["queued", "ready", "failed"] as const;
 export const ROLES = ["reader", "editor", "admin", "owner"] as const;
 export const VISIBILITIES = ["private", "unlisted", "public"] as const;
 export const TOKEN_SCOPES = ["content:read", "content:write"] as const;
@@ -76,6 +77,7 @@ export type AccessTokenState = (typeof ACCESS_TOKEN_STATES)[number];
 export type JobState = (typeof JOB_STATES)[number];
 export type IdempotencyState = (typeof IDEMPOTENCY_STATES)[number];
 export type OutboxState = (typeof OUTBOX_STATES)[number];
+export type RevisionIndexStatus = (typeof REVISION_INDEX_STATES)[number];
 export type Role = (typeof ROLES)[number];
 export type InvitationRole = Exclude<Role, "owner">;
 export type Visibility = (typeof VISIBILITIES)[number];
@@ -206,8 +208,23 @@ export interface BackgroundJob {
   readonly version: Version;
   readonly attempts: number;
   readonly availableAt: UtcInstant;
+  /** Running claim lease; expired work may be reclaimed with a new version. */
+  readonly claimExpiresAt: UtcInstant | null;
   readonly createdAt: UtcInstant;
   readonly updatedAt: UtcInstant;
+}
+
+/** Durable exact-revision state; it must never be inferred from current HEAD. */
+export interface RevisionIndexState {
+  readonly spaceId: SpaceId;
+  readonly revisionId: RevisionId;
+  readonly status: RevisionIndexStatus;
+  readonly attempts: number;
+  readonly queuedAt: UtcInstant;
+  readonly updatedAt: UtcInstant;
+  readonly readyAt: UtcInstant | null;
+  /** Bounded machine code only; private query/content never belongs here. */
+  readonly lastFailureCode: string | null;
 }
 
 export interface CommitChangesetIdempotencyResult {
@@ -281,6 +298,8 @@ export interface AuditOutboxMessage {
   readonly version: Version;
   readonly attempts: number;
   readonly availableAt: UtcInstant;
+  /** Delivering claim lease; expired work may be reclaimed with a new version. */
+  readonly claimExpiresAt: UtcInstant | null;
   readonly createdAt: UtcInstant;
   readonly updatedAt: UtcInstant;
 }
