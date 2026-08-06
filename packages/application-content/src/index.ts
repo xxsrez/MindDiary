@@ -240,6 +240,11 @@ export interface MaterializedRevision {
   readonly files: readonly Readonly<MaterializedRevisionFile>[];
 }
 
+export interface HeadRevisionReader {
+  /** Returns the exact current HEAD, or null when the Mind has no revision yet. */
+  readHeadRevision(spaceId: SpaceId): Promise<Readonly<MaterializedRevision> | null>;
+}
+
 export interface UnreachableObjectCollectionResult {
   readonly scanned: number;
   readonly deleted: number;
@@ -453,6 +458,13 @@ export class CanonicalRevisionCoordinator {
     return Object.freeze({ envelope, files: Object.freeze(files) });
   }
 
+  async readHeadRevision(
+    spaceId: SpaceId,
+  ): Promise<Readonly<MaterializedRevision> | null> {
+    const revisionId = await this.#revisions.readHead(spaceId);
+    return revisionId === null ? null : this.materialize(spaceId, revisionId);
+  }
+
   async collectUnreachableObjects(request: {
     readonly createdBefore: UtcInstant | string;
     readonly limit: number;
@@ -487,3 +499,7 @@ export class CanonicalRevisionCoordinator {
     });
   }
 }
+
+export * from "./changeset-preflight.js";
+export * from "./changeset-commit.js";
+export * from "./idempotency.js";

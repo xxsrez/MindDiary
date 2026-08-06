@@ -48,6 +48,7 @@ export const JOB_STATES = [
 ] as const;
 export const IDEMPOTENCY_STATES = ["started", "completed", "failed"] as const;
 export const OUTBOX_STATES = ["pending", "delivering", "delivered", "failed"] as const;
+export const REVISION_INDEX_STATES = ["queued", "ready", "failed"] as const;
 export const ROLES = ["reader", "editor", "admin", "owner"] as const;
 export const VISIBILITIES = ["private", "unlisted", "public"] as const;
 export const TOKEN_SCOPES = ["content:read", "content:write"] as const;
@@ -76,6 +77,7 @@ export type AccessTokenState = (typeof ACCESS_TOKEN_STATES)[number];
 export type JobState = (typeof JOB_STATES)[number];
 export type IdempotencyState = (typeof IDEMPOTENCY_STATES)[number];
 export type OutboxState = (typeof OUTBOX_STATES)[number];
+export type RevisionIndexStatus = (typeof REVISION_INDEX_STATES)[number];
 export type Role = (typeof ROLES)[number];
 export type InvitationRole = Exclude<Role, "owner">;
 export type Visibility = (typeof VISIBILITIES)[number];
@@ -206,23 +208,72 @@ export interface BackgroundJob {
   readonly version: Version;
   readonly attempts: number;
   readonly availableAt: UtcInstant;
+  /** Running claim lease; expired work may be reclaimed with a new version. */
+  readonly claimExpiresAt: UtcInstant | null;
   readonly createdAt: UtcInstant;
   readonly updatedAt: UtcInstant;
 }
 
-export interface IdempotencyRecord {
+/** Durable exact-revision state; it must never be inferred from current HEAD. */
+export interface RevisionIndexState {
+  readonly spaceId: SpaceId;
+  readonly revisionId: RevisionId;
+  readonly status: RevisionIndexStatus;
+  readonly attempts: number;
+  readonly queuedAt: UtcInstant;
+  readonly updatedAt: UtcInstant;
+  readonly readyAt: UtcInstant | null;
+  /** Bounded machine code only; private query/content never belongs here. */
+  readonly lastFailureCode: string | null;
+}
+
+export interface CommitChangesetIdempotencyResult {
+  readonly kind: "commit_changeset";
+  readonly previousRevisionId: RevisionId | null;
+  readonly revisionId: RevisionId;
+}
+
+export interface StartExportIdempotencyResult {
+  readonly kind: "start_export";
+  readonly jobId: JobId;
+  readonly revisionId: RevisionId;
+}
+
+export type IdempotencyOperation =
+  | CommitChangesetIdempotencyResult["kind"]
+  | StartExportIdempotencyResult["kind"];
+
+export type IdempotencyResult =
+  | CommitChangesetIdempotencyResult
+  | StartExportIdempotencyResult;
+
+interface IdempotencyRecordBase {
   readonly idempotencyRecordId: IdempotencyRecordId;
   readonly principalId: PrincipalId;
-  readonly spaceId: SpaceId | null;
-  readonly operation: string;
+  readonly spaceId: SpaceId;
+  readonly operation: IdempotencyOperation;
   readonly key: IdempotencyKey;
   readonly canonicalRequestHash: Sha256Digest;
-  readonly state: IdempotencyState;
-  readonly resultReference: string | null;
   readonly version: Version;
   readonly createdAt: UtcInstant;
   readonly updatedAt: UtcInstant;
 }
+
+export type IdempotencyRecord =
+  | (IdempotencyRecordBase & {
+      readonly state: "started" | "failed";
+      readonly result: null;
+    })
+  | (IdempotencyRecordBase & {
+      readonly operation: "commit_changeset";
+      readonly state: "completed";
+      readonly result: Readonly<CommitChangesetIdempotencyResult>;
+    })
+  | (IdempotencyRecordBase & {
+      readonly operation: "start_export";
+      readonly state: "completed";
+      readonly result: Readonly<StartExportIdempotencyResult>;
+    });
 
 export type AuditActor =
   | { readonly kind: "principal"; readonly principalId: PrincipalId }
@@ -247,6 +298,8 @@ export interface AuditOutboxMessage {
   readonly version: Version;
   readonly attempts: number;
   readonly availableAt: UtcInstant;
+  /** Delivering claim lease; expired work may be reclaimed with a new version. */
+  readonly claimExpiresAt: UtcInstant | null;
   readonly createdAt: UtcInstant;
   readonly updatedAt: UtcInstant;
 }

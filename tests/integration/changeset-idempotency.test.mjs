@@ -1,0 +1,545 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import {
+  CanonicalRevisionCoordinator,
+  ChangesetCommitService,
+  DEFAULT_IDEMPOTENCY_KEY_MAX_BYTES,
+} from "@mind-diary/application-content";
+import { CapabilityAuthorizer } from "@mind-diary/application-ports";
+import { InMemoryRevisionMetadataStore } from "@mind-diary/adapter-metadata-memory";
+import { InMemoryObjectStore } from "@mind-diary/adapter-object-memory";
+import { CAPABILITIES, MARKDOWN_MEDIA_TYPE, version } from "@mind-diary/domain";
+import {
+  CANONICAL_REVISION_FILES,
+  FIXED_NOW,
+  MINDS,
+  PRINCIPALS,
+  REVISION_AUTHORS,
+  REVISIONS,
+} from "@mind-diary/test-fixtures";
+
+const SPACE_A = MINDS.ordinary.spaceId;
+const SPACE_B = "space_idempotency_isolated";
+const INITIAL_A = REVISIONS.initial.revisionId;
+const INITIAL_B = "revision_idempotency_initial_b";
+const FUTURE = "2026-11-03T12:00:00.000Z";
+const ENCODER = new TextEncoder();
+
+function actor(principalId, tokenId, requestId) {
+  return {
+    kind: "registered_principal",
+    principalId,
+    authentication: {
+      kind: "mcp_token",
+      tokenId,
+      effectiveScopes: ["content:read", "content:write"],
+    },
+    deploymentCapabilities: CAPABILITIES,
+    requestId,
+    occurredAtUtc: FIXED_NOW,
+  };
+}
+
+function authorizationQuery(currentActor, spaceId) {
+  return {
+    principalId: currentActor.principalId,
+    spaceId,
+    tokenId: currentActor.authentication.tokenId,
+  };
+}
+
+function authorizationState(currentActor, spaceId, overrides = {}) {
+  return {
+    principal: {
+      principalId: currentActor.principalId,
+      state: "active",
+    },
+    space: {
+      spaceId,
+      state: "active",
+      visibility: "private",
+      accessVersion: overrides.accessVersion ?? version(1),
+    },
+    membership: {
+      principalId: currentActor.principalId,
+      spaceId,
+      role: overrides.role ?? "editor",
+      state: overrides.membershipState ?? "active",
+      version: overrides.membershipVersion ?? version(1),
+    },
+    token: {
+      tokenId: currentActor.authentication.tokenId,
+      principalId: currentActor.principalId,
+      state: overrides.tokenState ?? "active",
+      scopes: ["content:read", "content:write"],
+      version: overrides.tokenVersion ?? version(1),
+      expiresAt: FUTURE,
+    },
+  };
+}
+
+function revisionIds(...ids) {
+  let cursor = 0;
+  return {
+    nextRevisionId() {
+      const id = ids[cursor];
+      if (!id) throw new Error("revision fixture IDs exhausted");
+      cursor += 1;
+      return id;
+    },
+  };
+}
+
+function objectStoreWithFirstPutHook(objects, hook) {
+  let invoked = false;
+  return {
+    kind: "object-store",
+    calculateSha256: (bytes) => objects.calculateSha256(bytes),
+    async putImmutable(request) {
+      if (!invoked) {
+        invoked = true;
+        await hook();
+      }
+      return objects.putImmutable(request);
+    },
+    getImmutable: (digest) => objects.getImmutable(digest),
+    listImmutableObjects: (request) => objects.listImmutableObjects(request),
+    deleteImmutableObject: (request) => objects.deleteImmutableObject(request),
+  };
+}
+
+function twoPartyBarrier() {
+  let arrivals = 0;
+  let release;
+  const opened = new Promise((resolve) => {
+    release = resolve;
+  });
+  return async () => {
+    arrivals += 1;
+    if (arrivals === 2) release();
+    await opened;
+  };
+}
+
+function changes(path, title) {
+  return [
+    {
+      type: "create_file",
+      path,
+      text: `---\ntype: Reference\ntitle: ${title}\n---\n\n# ${title}\n`,
+    },
+    {
+      type: "replace_index",
+      path: "index.md",
+      text: `---\nokf_version: "0.2"\n---\n\n# Fixture Mind\n\n- [Reproducible baseline](concepts/baseline.md)\n- [${title}](${path})\n`,
+    },
+  ];
+}
+
+async function fixture() {
+  const objects = new InMemoryObjectStore();
+  const metadata = new InMemoryRevisionMetadataStore();
+  const coordinator = new CanonicalRevisionCoordinator({ objects, revisions: metadata });
+  const authorizer = new CapabilityAuthorizer(metadata);
+  const seed = async (spaceId, revisionId) => {
+    const seeded = await coordinator.commit({
+      spaceId,
+      expectedRevisionId: null,
+      revisionId,
+      committedAt: REVISIONS.initial.committedAt,
+      committedBy: REVISION_AUTHORS.active,
+      summary: "Seed idempotency fixture",
+      files: CANONICAL_REVISION_FILES,
+    });
+    assert.equal(seeded.kind, "committed");
+  };
+  const grant = (currentActor, spaceId, overrides) =>
+    metadata.setCurrentAuthorizationStateForTest(
+      authorizationQuery(currentActor, spaceId),
+      authorizationState(currentActor, spaceId, overrides),
+    );
+  const service = (ids, objectStore = objects) =>
+    new ChangesetCommitService({
+      authorizer,
+      metadata,
+      revisions: coordinator,
+      objects: objectStore,
+      clock: { now: () => REVISIONS.next.committedAt },
+      revisionIds: revisionIds(...ids),
+    });
+  const snapshot = async (spaceId) => ({
+    head: await metadata.readHead(spaceId),
+    revisions: (await metadata.listRevisions(spaceId)).map(
+      (revision) => revision.revision.revisionId,
+    ),
+    idempotency: await metadata.listIdempotencyRecordsForTest(),
+  });
+  return { objects, metadata, coordinator, seed, grant, service, snapshot };
+}
+
+function request({ currentActor, spaceId, expectedRevisionId, key, path, title }) {
+  return {
+    actor: currentActor,
+    spaceId,
+    expectedRevisionId,
+    idempotencyKey: key,
+    summary: `Add ${title}`,
+    operations: changes(path, title),
+  };
+}
+
+test("success stores a typed result and exact replay survives a later HEAD move", async () => {
+  const env = await fixture();
+  await env.seed(SPACE_A, INITIAL_A);
+  const editor = actor(
+    PRINCIPALS.editor.principalId,
+    "token_idempotency_replay",
+    "request_idempotency_replay",
+  );
+  env.grant(editor, SPACE_A);
+  const service = env.service(["revision_idempotency_original"]);
+  const originalRequest = request({
+    currentActor: editor,
+    spaceId: SPACE_A,
+    expectedRevisionId: INITIAL_A,
+    key: "same_payload_after_head_move",
+    path: "concepts/idempotent.md",
+    title: "Idempotent",
+  });
+
+  const original = await service.commit(originalRequest);
+  assert.equal(original.kind, "committed");
+  assert.equal(original.replayed, false);
+  assert.equal(original.envelope.revision.revisionId, "revision_idempotency_original");
+
+  const advanced = await env.coordinator.commit({
+    spaceId: SPACE_A,
+    expectedRevisionId: "revision_idempotency_original",
+    revisionId: "revision_after_idempotent_effect",
+    committedAt: "2026-08-06T12:01:00.000Z",
+    committedBy: REVISION_AUTHORS.active,
+    summary: "Advance HEAD independently",
+    files: [
+      ...CANONICAL_REVISION_FILES,
+      {
+        path: "concepts/advanced.md",
+        mediaType: MARKDOWN_MEDIA_TYPE,
+        bytes: ENCODER.encode(
+          "---\ntype: Reference\ntitle: Advanced\n---\n\n# Advanced\n",
+        ),
+      },
+    ],
+  });
+  assert.equal(advanced.kind, "committed");
+
+  const replay = await service.commit({
+    ...originalRequest,
+    operations: originalRequest.operations.map((operation) =>
+      operation.type === "create_file"
+        ? { text: operation.text, path: operation.path, type: operation.type }
+        : { text: operation.text, type: operation.type, path: operation.path },
+    ),
+  });
+  assert.equal(replay.kind, "committed");
+  assert.equal(replay.replayed, true);
+  assert.equal(replay.envelope.revision.revisionId, "revision_idempotency_original");
+  assert.equal(replay.previousRevisionId, INITIAL_A);
+
+  const final = await env.snapshot(SPACE_A);
+  assert.equal(final.head, "revision_after_idempotent_effect");
+  assert.deepEqual(final.revisions, [
+    INITIAL_A,
+    "revision_idempotency_original",
+    "revision_after_idempotent_effect",
+  ]);
+  assert.equal(final.idempotency.length, 1);
+  assert.deepEqual(final.idempotency[0].result, {
+    kind: "commit_changeset",
+    previousRevisionId: INITIAL_A,
+    revisionId: "revision_idempotency_original",
+  });
+  assert.match(final.idempotency[0].canonicalRequestHash, /^sha256:[0-9a-f]{64}$/u);
+});
+
+test("same namespace with a different canonical payload conflicts without effects", async () => {
+  const env = await fixture();
+  await env.seed(SPACE_A, INITIAL_A);
+  const editor = actor(
+    PRINCIPALS.editor.principalId,
+    "token_idempotency_conflict",
+    "request_idempotency_conflict",
+  );
+  env.grant(editor, SPACE_A);
+  const service = env.service(["revision_idempotency_conflict_original"]);
+  const original = request({
+    currentActor: editor,
+    spaceId: SPACE_A,
+    expectedRevisionId: INITIAL_A,
+    key: "payload_conflict",
+    path: "concepts/original.md",
+    title: "Original",
+  });
+  assert.equal((await service.commit(original)).kind, "committed");
+  const before = await env.snapshot(SPACE_A);
+
+  const conflict = await service.commit({
+    ...original,
+    summary: "Different payload",
+    operations: changes("concepts/different.md", "Different"),
+  });
+  assert.deepEqual(conflict, { kind: "idempotency_conflict" });
+  assert.deepEqual(await env.snapshot(SPACE_A), before);
+});
+
+test("the same key is isolated by principal and Space while operation stays explicit", async () => {
+  const env = await fixture();
+  await env.seed(SPACE_A, INITIAL_A);
+  await env.seed(SPACE_B, INITIAL_B);
+  const editorA = actor(
+    PRINCIPALS.owner.principalId,
+    "token_namespace_a",
+    "request_namespace_a",
+  );
+  const editorB = actor(
+    PRINCIPALS.editor.principalId,
+    "token_namespace_b",
+    "request_namespace_b",
+  );
+  env.grant(editorA, SPACE_A);
+  env.grant(editorB, SPACE_A);
+  env.grant(editorA, SPACE_B);
+  const sharedKey = "shared_namespace_key";
+
+  const first = await env.service(["revision_namespace_principal_a"]).commit(
+    request({
+      currentActor: editorA,
+      spaceId: SPACE_A,
+      expectedRevisionId: INITIAL_A,
+      key: sharedKey,
+      path: "concepts/principal-a.md",
+      title: "Principal A",
+    }),
+  );
+  assert.equal(first.kind, "committed");
+  const second = await env.service(["revision_namespace_principal_b"]).commit(
+    request({
+      currentActor: editorB,
+      spaceId: SPACE_A,
+      expectedRevisionId: "revision_namespace_principal_a",
+      key: sharedKey,
+      path: "concepts/principal-b.md",
+      title: "Principal B",
+    }),
+  );
+  assert.equal(second.kind, "committed");
+  const third = await env.service(["revision_namespace_space_b"]).commit(
+    request({
+      currentActor: editorA,
+      spaceId: SPACE_B,
+      expectedRevisionId: INITIAL_B,
+      key: sharedKey,
+      path: "concepts/space-b.md",
+      title: "Space B",
+    }),
+  );
+  assert.equal(third.kind, "committed");
+
+  const records = await env.metadata.listIdempotencyRecordsForTest();
+  assert.equal(records.length, 3);
+  assert.deepEqual(
+    records.map((record) => [
+      record.principalId,
+      record.spaceId,
+      record.operation,
+      record.key,
+    ]),
+    [
+      [editorA.principalId, SPACE_A, "commit_changeset", sharedKey],
+      [editorB.principalId, SPACE_A, "commit_changeset", sharedKey],
+      [editorA.principalId, SPACE_B, "commit_changeset", sharedKey],
+    ],
+  );
+});
+
+test("the generic contract isolates operation namespaces and replays a typed export result", async () => {
+  const env = await fixture();
+  await env.seed(SPACE_A, INITIAL_A);
+  const editor = actor(
+    PRINCIPALS.editor.principalId,
+    "token_operation_namespace",
+    "request_operation_namespace",
+  );
+  env.grant(editor, SPACE_A);
+  const shared = {
+    principalId: editor.principalId,
+    spaceId: SPACE_A,
+    key: "shared_operation_key",
+  };
+  const exportHash = `sha256:${"a".repeat(64)}`;
+
+  await env.metadata.runContentCommitTransaction(async (transaction) => {
+    const exportNamespace = { ...shared, operation: "start_export" };
+    const checked = await transaction.checkIdempotency({
+      namespace: exportNamespace,
+      canonicalRequestHash: exportHash,
+    });
+    assert.deepEqual(checked, { kind: "missing" });
+    const completed = await transaction.completeIdempotency({
+      namespace: exportNamespace,
+      canonicalRequestHash: exportHash,
+      result: {
+        kind: "start_export",
+        jobId: "job_contract_only",
+        revisionId: INITIAL_A,
+      },
+      completedAt: REVISIONS.next.committedAt,
+    });
+    assert.equal(completed.kind, "completed");
+  });
+
+  await env.metadata.runContentCommitTransaction(async (transaction) => {
+    const replay = await transaction.checkIdempotency({
+      namespace: { ...shared, operation: "start_export" },
+      canonicalRequestHash: exportHash,
+    });
+    assert.equal(replay.kind, "replay");
+    assert.deepEqual(replay.record.result, {
+      kind: "start_export",
+      jobId: "job_contract_only",
+      revisionId: INITIAL_A,
+    });
+    const commitNamespace = await transaction.checkIdempotency({
+      namespace: { ...shared, operation: "commit_changeset" },
+      canonicalRequestHash: exportHash,
+    });
+    assert.deepEqual(commitNamespace, { kind: "missing" });
+  });
+
+  const records = await env.metadata.listIdempotencyRecordsForTest();
+  assert.equal(records.length, 1);
+  assert.equal(records[0].operation, "start_export");
+});
+
+test("invalid idempotency keys are bounded by UTF-8 bytes and one-line policy", async () => {
+  const env = await fixture();
+  await env.seed(SPACE_A, INITIAL_A);
+  const editor = actor(
+    PRINCIPALS.editor.principalId,
+    "token_invalid_idempotency_key",
+    "request_invalid_idempotency_key",
+  );
+  env.grant(editor, SPACE_A);
+  const service = env.service([]);
+  const before = await env.snapshot(SPACE_A);
+  const invalidKeys = [
+    "x".repeat(DEFAULT_IDEMPOTENCY_KEY_MAX_BYTES + 1),
+    `bad${String.fromCharCode(0)}key`,
+    "bad\nkey",
+    "bad\u2028key",
+    "bad\u2029key",
+  ];
+
+  for (const [index, key] of invalidKeys.entries()) {
+    const result = await service.commit(
+      request({
+        currentActor: editor,
+        spaceId: SPACE_A,
+        expectedRevisionId: INITIAL_A,
+        key,
+        path: `concepts/invalid-key-${index}.md`,
+        title: `Invalid key ${index}`,
+      }),
+    );
+    assert.equal(result.kind, "invalid");
+    assert.equal(result.error.code, "invalid_idempotency_key");
+  }
+
+  assert.deepEqual(await env.snapshot(SPACE_A), before);
+});
+
+test("replay fails closed after current write authorization is revoked", async () => {
+  const env = await fixture();
+  await env.seed(SPACE_A, INITIAL_A);
+  const editor = actor(
+    PRINCIPALS.editor.principalId,
+    "token_idempotency_revoked",
+    "request_idempotency_revoked",
+  );
+  env.grant(editor, SPACE_A);
+  const service = env.service(["revision_before_revoke"]);
+  const original = request({
+    currentActor: editor,
+    spaceId: SPACE_A,
+    expectedRevisionId: INITIAL_A,
+    key: "replay_after_revoke",
+    path: "concepts/private-result.md",
+    title: "Private result",
+  });
+  assert.equal((await service.commit(original)).kind, "committed");
+  const before = await env.snapshot(SPACE_A);
+
+  env.grant(editor, SPACE_A, {
+    membershipState: "revoked",
+    accessVersion: version(2),
+    membershipVersion: version(2),
+  });
+  const denied = await service.commit(original);
+  assert.equal(denied.kind, "denied");
+  assert.equal(denied.decision.code, "access_denied");
+  assert.deepEqual(await env.snapshot(SPACE_A), before);
+});
+
+test("concurrent exact retries commit one canonical effect and replay one result", async () => {
+  const env = await fixture();
+  await env.seed(SPACE_A, INITIAL_A);
+  const editor = actor(
+    PRINCIPALS.editor.principalId,
+    "token_idempotency_concurrent",
+    "request_idempotency_concurrent",
+  );
+  env.grant(editor, SPACE_A);
+  const barrier = twoPartyBarrier();
+  const serviceA = env.service(
+    ["revision_concurrent_retry_a"],
+    objectStoreWithFirstPutHook(env.objects, barrier),
+  );
+  const serviceB = env.service(
+    ["revision_concurrent_retry_b"],
+    objectStoreWithFirstPutHook(env.objects, barrier),
+  );
+  const retry = request({
+    currentActor: editor,
+    spaceId: SPACE_A,
+    expectedRevisionId: INITIAL_A,
+    key: "concurrent_exact_retry",
+    path: "concepts/concurrent-idempotent.md",
+    title: "Concurrent idempotent",
+  });
+
+  const results = await Promise.all([
+    serviceA.commit(retry),
+    serviceB.commit(retry),
+  ]);
+  assert.deepEqual(results.map((result) => result.kind), ["committed", "committed"]);
+  assert.deepEqual(
+    results.map((result) => result.replayed).sort(),
+    [false, true],
+  );
+  assert.equal(
+    results[0].envelope.revision.revisionId,
+    results[1].envelope.revision.revisionId,
+  );
+
+  const final = await env.snapshot(SPACE_A);
+  assert.equal(final.head, results[0].envelope.revision.revisionId);
+  assert.equal(final.revisions.length, 2);
+  assert.equal(final.idempotency.length, 1);
+  assert.equal((await env.metadata.listAuditEventsForTest()).length, 1);
+  assert.equal((await env.metadata.listAuditOutboxForTest()).length, 1);
+  assert.equal((await env.metadata.listBackgroundJobsForTest()).length, 1);
+  const unusedRevisionId =
+    final.head === "revision_concurrent_retry_a"
+      ? "revision_concurrent_retry_b"
+      : "revision_concurrent_retry_a";
+  assert.equal(await env.metadata.readRevision(SPACE_A, unusedRevisionId), null);
+});
