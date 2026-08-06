@@ -664,8 +664,58 @@ export class CapabilityAuthorizer implements Authorizer {
   }
 }
 
+declare const tokenVerifierBrand: unique symbol;
+
+/** Fixed-length, versioned cryptographic verifier. It is never a public token ID. */
+export type TokenVerifier = string & {
+  readonly [tokenVerifierBrand]: "TokenVerifier";
+};
+
+export interface PersistedTokenSecretMaterial {
+  readonly format: "mdp_v1";
+  readonly algorithm: "hmac-sha256";
+  readonly verifierVersion: "v1";
+  readonly verifier: TokenVerifier;
+  readonly displayPrefix: string;
+}
+
+/**
+ * Secret-bearing issuance boundary. Implementations expose the secret through
+ * exactly one consume call and keep it out of enumerable/serializable fields.
+ */
+export interface IssuedTokenSecret {
+  readonly displayPrefix: string;
+  consumeSecret(): string | null;
+  persistence(): Readonly<PersistedTokenSecretMaterial>;
+}
+
+export type TokenVerifierLookupResult<Value> =
+  | {
+      readonly kind: "found";
+      readonly verifier: TokenVerifier;
+      readonly value: Value;
+    }
+  | { readonly kind: "not_found" }
+  | { readonly kind: "denied" };
+
+/** Exact indexed lookup; displayPrefix must never be used as the lookup key. */
+export interface TokenVerifierLookup<Value> {
+  findByVerifier(
+    verifier: TokenVerifier,
+  ): Promise<TokenVerifierLookupResult<Value>>;
+}
+
+export type TokenVerificationResult<Value> =
+  | { readonly kind: "verified"; readonly value: Value }
+  | { readonly kind: "invalid" };
+
 export interface TokenHasher {
   readonly kind: "token-hasher";
+  issueSecret(): Promise<IssuedTokenSecret>;
+  verifySecret<Value>(
+    candidate: unknown,
+    lookup: TokenVerifierLookup<Value>,
+  ): Promise<TokenVerificationResult<Value>>;
 }
 
 export interface AuditSink {
