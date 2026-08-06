@@ -95,3 +95,30 @@ test("object adapter rejects impossible UTC calendar dates", async () => {
     (error) => error instanceof ObjectStoreIntegrityError && error.code === "invalid_timestamp",
   );
 });
+
+test("object candidate ordering preserves nanoseconds within one millisecond", async () => {
+  const store = new InMemoryObjectStore();
+  await store.putImmutable({
+    bytes: encoder.encode("later"),
+    mediaType: MARKDOWN_MEDIA_TYPE,
+    createdAt: "2026-08-06T13:00:00.000000003Z",
+  });
+  await store.putImmutable({
+    bytes: encoder.encode("earlier"),
+    mediaType: MARKDOWN_MEDIA_TYPE,
+    createdAt: "2026-08-06T13:00:00.000000001Z",
+  });
+
+  const candidates = await store.listImmutableObjects({
+    createdBefore: "2026-08-06T13:00:00.000000004Z",
+    excludedDigests: [],
+    limit: 2,
+  });
+  assert.deepEqual(
+    candidates.map((candidate) => candidate.protectedAt),
+    [
+      "2026-08-06T13:00:00.000000001Z",
+      "2026-08-06T13:00:00.000000003Z",
+    ],
+  );
+});

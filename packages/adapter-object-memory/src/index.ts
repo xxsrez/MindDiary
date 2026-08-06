@@ -33,7 +33,7 @@ interface StoredObject extends Omit<ImmutableObjectMetadata, "protectedAt"> {
 
 const SHA256_PATTERN = /^sha256:[0-9a-f]{64}$/u;
 const UTC_PATTERN =
-  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,9})?Z$/u;
+  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,9}))?Z$/u;
 const MARKDOWN_MEDIA_TYPE = "text/markdown; charset=utf-8";
 
 function assertDigest(value: string): asserts value is Digest {
@@ -75,6 +75,24 @@ function isCalendarUtc(match: RegExpExecArray): boolean {
   const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
   const days = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
   return day >= 1 && day <= days[month - 1]!;
+}
+
+function utcOrderKey(value: Utc): string {
+  const match = UTC_PATTERN.exec(value);
+  if (!match) {
+    throw new ObjectStoreIntegrityError(
+      "invalid_timestamp",
+      "object timestamps must be valid UTC instants",
+    );
+  }
+  const fraction = (match[7] ?? "").padEnd(9, "0");
+  return `${match[1]}${match[2]}${match[3]}${match[4]}${match[5]}${match[6]}${fraction}`;
+}
+
+function compareUtc(left: Utc, right: Utc): number {
+  const leftKey = utcOrderKey(left);
+  const rightKey = utcOrderKey(right);
+  return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
 }
 
 function assertMarkdown(bytes: Uint8Array, mediaType: string): void {
@@ -145,7 +163,7 @@ export class InMemoryObjectStore implements ObjectStore {
           "different immutable object bytes resolved to the same SHA-256 digest",
         );
       }
-      if (Date.parse(request.createdAt) > Date.parse(existing.protectedAt)) {
+      if (compareUtc(request.createdAt, existing.protectedAt) > 0) {
         existing.protectedAt = request.createdAt;
       }
       return Object.freeze({
@@ -189,15 +207,15 @@ export class InMemoryObjectStore implements ObjectStore {
       assertDigest(digest);
       excluded.add(digest);
     }
-    const cutoff = Date.parse(request.createdBefore);
     const objects = [...this.#objects.values()]
       .filter(
         (object) =>
-          !excluded.has(object.sha256) && Date.parse(object.protectedAt) < cutoff,
+          !excluded.has(object.sha256) &&
+          compareUtc(object.protectedAt, request.createdBefore) < 0,
       )
       .sort(
         (left, right) =>
-          Date.parse(left.protectedAt) - Date.parse(right.protectedAt) ||
+          compareUtc(left.protectedAt, right.protectedAt) ||
           left.sha256.localeCompare(right.sha256),
       )
       .slice(0, request.limit)
@@ -215,7 +233,7 @@ export class InMemoryObjectStore implements ObjectStore {
     if (!stored) return false;
     if (
       stored.protectedAt !== request.expectedProtectedAt ||
-      Date.parse(stored.protectedAt) >= Date.parse(request.createdBefore)
+      compareUtc(stored.protectedAt, request.createdBefore) >= 0
     ) {
       return false;
     }

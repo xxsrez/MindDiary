@@ -254,29 +254,37 @@ test("bounded GC excludes reachable prefix before limit and cannot starve later 
   );
 });
 
-test("reusing an old digest refreshes GC protection and conditional delete cannot break HEAD", async () => {
+test("nanosecond GC protection refresh makes stale delete refuse without breaking HEAD", async () => {
   const { objects, revisions, coordinator } = harness();
   const files = oneFile("index.md", "# Reused bytes\n");
   const old = await objects.putImmutable({
     bytes: files[0].bytes,
     mediaType: MARKDOWN_MEDIA_TYPE,
-    createdAt: "2026-08-06T10:00:00Z",
+    createdAt: "2026-08-06T13:00:00.000000001Z",
   });
   const [selected] = await objects.listImmutableObjects({
-    createdBefore: "2026-08-06T12:00:00Z",
+    createdBefore: "2026-08-06T13:00:00.000000002Z",
     excludedDigests: [],
     limit: 1,
   });
   assert.equal(selected.sha256, old.object.sha256);
 
   await coordinator.commit(
-    request({ committedAt: "2026-08-06T13:00:00Z", files }),
+    request({ committedAt: "2026-08-06T13:00:00.000000002Z", files }),
+  );
+  assert.equal(
+    (await objects.listImmutableObjects({
+      createdBefore: "2026-08-06T13:00:00.000000002Z",
+      excludedDigests: [],
+      limit: 1,
+    })).length,
+    0,
   );
   assert.equal(
     await objects.deleteImmutableObject({
       sha256: selected.sha256,
       expectedProtectedAt: selected.protectedAt,
-      createdBefore: "2026-08-06T12:00:00Z",
+      createdBefore: "2026-08-06T13:00:00.000000003Z",
     }),
     false,
   );
@@ -286,8 +294,8 @@ test("reusing an old digest refreshes GC protection and conditional delete canno
     "# Reused bytes\n",
   );
   const protectedObject = await objects.getImmutable(old.object.sha256);
-  assert.equal(protectedObject.createdAt, "2026-08-06T10:00:00Z");
-  assert.equal(protectedObject.protectedAt, "2026-08-06T13:00:00Z");
+  assert.equal(protectedObject.createdAt, "2026-08-06T13:00:00.000000001Z");
+  assert.equal(protectedObject.protectedAt, "2026-08-06T13:00:00.000000002Z");
 });
 
 test("materialize maps stored-object tamper to stable error without changing HEAD", async () => {
