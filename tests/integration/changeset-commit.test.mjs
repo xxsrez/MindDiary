@@ -472,7 +472,7 @@ test("metadata transaction failure leaves written objects unreachable and final 
   assert.deepEqual(after.revisions, before.revisions);
   assert.deepEqual(after.reachable, before.reachable);
   assert.equal(
-    (await env.metadata.listContentCommitIdempotencyRecordsForTest()).length,
+    (await env.metadata.listIdempotencyRecordsForTest()).length,
     0,
   );
   assert.ok(after.objects.length > before.objects.length);

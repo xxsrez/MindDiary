@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   CanonicalRevisionCoordinator,
   ChangesetCommitService,
+  DEFAULT_IDEMPOTENCY_KEY_MAX_BYTES,
 } from "@mind-diary/application-content";
 import { CapabilityAuthorizer } from "@mind-diary/application-ports";
 import { InMemoryRevisionMetadataStore } from "@mind-diary/adapter-metadata-memory";
@@ -171,7 +172,7 @@ async function fixture() {
     revisions: (await metadata.listRevisions(spaceId)).map(
       (revision) => revision.revision.revisionId,
     ),
-    idempotency: await metadata.listContentCommitIdempotencyRecordsForTest(),
+    idempotency: await metadata.listIdempotencyRecordsForTest(),
   });
   return { objects, metadata, coordinator, seed, grant, service, snapshot };
 }
@@ -343,7 +344,7 @@ test("the same key is isolated by principal and Space while operation stays expl
   );
   assert.equal(third.kind, "committed");
 
-  const records = await env.metadata.listContentCommitIdempotencyRecordsForTest();
+  const records = await env.metadata.listIdempotencyRecordsForTest();
   assert.equal(records.length, 3);
   assert.deepEqual(
     records.map((record) => [
@@ -358,6 +359,102 @@ test("the same key is isolated by principal and Space while operation stays expl
       [editorA.principalId, SPACE_B, "commit_changeset", sharedKey],
     ],
   );
+});
+
+test("the generic contract isolates operation namespaces and replays a typed export result", async () => {
+  const env = await fixture();
+  await env.seed(SPACE_A, INITIAL_A);
+  const editor = actor(
+    PRINCIPALS.editor.principalId,
+    "token_operation_namespace",
+    "request_operation_namespace",
+  );
+  env.grant(editor, SPACE_A);
+  const shared = {
+    principalId: editor.principalId,
+    spaceId: SPACE_A,
+    key: "shared_operation_key",
+  };
+  const exportHash = `sha256:${"a".repeat(64)}`;
+
+  await env.metadata.runContentCommitTransaction(async (transaction) => {
+    const exportNamespace = { ...shared, operation: "start_export" };
+    const checked = await transaction.checkIdempotency({
+      namespace: exportNamespace,
+      canonicalRequestHash: exportHash,
+    });
+    assert.deepEqual(checked, { kind: "missing" });
+    const completed = await transaction.completeIdempotency({
+      namespace: exportNamespace,
+      canonicalRequestHash: exportHash,
+      result: {
+        kind: "start_export",
+        jobId: "job_contract_only",
+        revisionId: INITIAL_A,
+      },
+      completedAt: REVISIONS.next.committedAt,
+    });
+    assert.equal(completed.kind, "completed");
+  });
+
+  await env.metadata.runContentCommitTransaction(async (transaction) => {
+    const replay = await transaction.checkIdempotency({
+      namespace: { ...shared, operation: "start_export" },
+      canonicalRequestHash: exportHash,
+    });
+    assert.equal(replay.kind, "replay");
+    assert.deepEqual(replay.record.result, {
+      kind: "start_export",
+      jobId: "job_contract_only",
+      revisionId: INITIAL_A,
+    });
+    const commitNamespace = await transaction.checkIdempotency({
+      namespace: { ...shared, operation: "commit_changeset" },
+      canonicalRequestHash: exportHash,
+    });
+    assert.deepEqual(commitNamespace, { kind: "missing" });
+  });
+
+  const records = await env.metadata.listIdempotencyRecordsForTest();
+  assert.equal(records.length, 1);
+  assert.equal(records[0].operation, "start_export");
+});
+
+test("invalid idempotency keys are bounded by UTF-8 bytes and one-line policy", async () => {
+  const env = await fixture();
+  await env.seed(SPACE_A, INITIAL_A);
+  const editor = actor(
+    PRINCIPALS.editor.principalId,
+    "token_invalid_idempotency_key",
+    "request_invalid_idempotency_key",
+  );
+  env.grant(editor, SPACE_A);
+  const service = env.service([]);
+  const before = await env.snapshot(SPACE_A);
+  const invalidKeys = [
+    "x".repeat(DEFAULT_IDEMPOTENCY_KEY_MAX_BYTES + 1),
+    `bad${String.fromCharCode(0)}key`,
+    "bad\nkey",
+    "bad\u2028key",
+    "bad\u2029key",
+  ];
+
+  for (const [index, key] of invalidKeys.entries()) {
+    const result = await service.commit(
+      request({
+        currentActor: editor,
+        spaceId: SPACE_A,
+        expectedRevisionId: INITIAL_A,
+        key,
+        path: `concepts/invalid-key-${index}.md`,
+        title: `Invalid key ${index}`,
+      }),
+    );
+    assert.equal(result.kind, "invalid");
+    assert.equal(result.error.code, "invalid_idempotency_key");
+  }
+
+  assert.deepEqual(await env.snapshot(SPACE_A), before);
 });
 
 test("replay fails closed after current write authorization is revoked", async () => {

@@ -16,13 +16,14 @@ import {
   type Capability,
   type CanonicalRevisionEnvelope,
   type CanonicalSpaceHandle,
-  type CommitChangesetIdempotencyResult,
   type EffectiveTokenScopes,
   type HandlePolicyFailureReason,
   type MarkdownMediaType,
   type MembershipState,
   type IdempotencyKey,
+  type IdempotencyOperation,
   type IdempotencyRecord,
+  type IdempotencyResult,
   type PrincipalId,
   type PrincipalState,
   type RevisionId,
@@ -41,7 +42,10 @@ import {
 export type { CanonicalRevisionEnvelope } from "@mind-diary/domain";
 export type {
   CommitChangesetIdempotencyResult,
+  IdempotencyOperation,
   IdempotencyRecord,
+  IdempotencyResult,
+  StartExportIdempotencyResult,
 } from "@mind-diary/domain";
 export {
   RESERVED_TOP_LEVEL_HANDLES,
@@ -223,42 +227,65 @@ export interface RevisionCommitRequest {
   readonly envelope: Readonly<CanonicalRevisionEnvelope>;
 }
 
-export interface ContentCommitIdempotencyNamespace {
+export interface IdempotencyNamespace {
   readonly principalId: PrincipalId;
   readonly spaceId: SpaceId;
-  readonly operation: "commit_changeset";
+  readonly operation: IdempotencyOperation;
   readonly key: IdempotencyKey;
 }
 
-export interface CheckContentCommitIdempotencyRequest {
-  readonly namespace: Readonly<ContentCommitIdempotencyNamespace>;
+export interface CheckIdempotencyRequest {
+  readonly namespace: Readonly<IdempotencyNamespace>;
   readonly canonicalRequestHash: Sha256Digest;
 }
 
-export type CheckContentCommitIdempotencyResult =
+type CompletedIdempotencyRecord = Extract<
+  IdempotencyRecord,
+  { readonly state: "completed" }
+>;
+
+export type CheckIdempotencyResult =
   | { readonly kind: "missing" }
   | {
       readonly kind: "replay";
-      readonly record: Readonly<
-        Extract<IdempotencyRecord, { readonly state: "completed" }>
-      >;
+      readonly record: Readonly<CompletedIdempotencyRecord>;
     }
   | { readonly kind: "conflict" };
 
-export interface CompleteContentCommitIdempotencyRequest
-  extends CheckContentCommitIdempotencyRequest {
-  readonly result: Readonly<CommitChangesetIdempotencyResult>;
-  readonly completedAt: UtcInstant;
-}
+export type CompleteIdempotencyRequest = {
+  [Operation in IdempotencyOperation]: {
+    readonly namespace: Readonly<
+      IdempotencyNamespace & { readonly operation: Operation }
+    >;
+    readonly canonicalRequestHash: Sha256Digest;
+    readonly result: Readonly<Extract<IdempotencyResult, { kind: Operation }>>;
+    readonly completedAt: UtcInstant;
+  };
+}[IdempotencyOperation];
 
-export type CompleteContentCommitIdempotencyResult =
+export type CompleteIdempotencyResult =
   | {
       readonly kind: "completed";
-      readonly record: Readonly<
-        Extract<IdempotencyRecord, { readonly state: "completed" }>
-      >;
+      readonly record: Readonly<CompletedIdempotencyRecord>;
     }
-  | { readonly kind: "already_exists" };
+  | { readonly kind: "already_exists" }
+  | { readonly kind: "operation_result_mismatch" };
+
+/** Common transaction slice shared by every namespaced idempotent operation. */
+export interface IdempotencyTransaction {
+  /**
+   * Resolves the actor/Space/operation/key namespace inside this transaction.
+   * Implementations must serialize this check with canonical effect staging
+   * and completion so concurrent retries expose one canonical effect.
+   */
+  checkIdempotency(
+    request: CheckIdempotencyRequest,
+  ): Promise<CheckIdempotencyResult>;
+  /** Completes only a namespace observed as missing in this same transaction. */
+  completeIdempotency(
+    request: CompleteIdempotencyRequest,
+  ): Promise<CompleteIdempotencyResult>;
+}
 
 /** Transactional revision metadata and HEAD; object bytes remain in ObjectStore. */
 export interface RevisionMetadataStore extends MetadataStore {
@@ -281,25 +308,14 @@ export interface RevisionMetadataStore extends MetadataStore {
  * hook; AND-66 can add explicit durable stage methods to the same transaction.
  */
 export interface ContentCommitMetadataTransaction
-  extends AuthorizationTransaction {
+  extends AuthorizationTransaction,
+    IdempotencyTransaction {
   readHead(spaceId: SpaceId): Promise<RevisionId | null>;
   readRevision(
     spaceId: SpaceId,
     revisionId: RevisionId,
   ): Promise<Readonly<CanonicalRevisionEnvelope> | null>;
-  /**
-   * Resolves the actor/Space/operation/key namespace inside this transaction.
-   * Implementations must serialize this check with revision, future effect
-   * staging, and completion so concurrent retries expose one canonical effect.
-   */
-  checkIdempotency(
-    request: CheckContentCommitIdempotencyRequest,
-  ): Promise<CheckContentCommitIdempotencyResult>;
   commitRevision(request: RevisionCommitRequest): Promise<RevisionCommitResult>;
-  /** Completes only a namespace observed as missing in this same transaction. */
-  completeIdempotency(
-    request: CompleteContentCommitIdempotencyRequest,
-  ): Promise<CompleteContentCommitIdempotencyResult>;
 }
 
 /** Atomic metadata boundary for one application-level content commit. */

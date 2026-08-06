@@ -216,11 +216,25 @@ export interface CommitChangesetIdempotencyResult {
   readonly revisionId: RevisionId;
 }
 
+export interface StartExportIdempotencyResult {
+  readonly kind: "start_export";
+  readonly jobId: JobId;
+  readonly revisionId: RevisionId;
+}
+
+export type IdempotencyOperation =
+  | CommitChangesetIdempotencyResult["kind"]
+  | StartExportIdempotencyResult["kind"];
+
+export type IdempotencyResult =
+  | CommitChangesetIdempotencyResult
+  | StartExportIdempotencyResult;
+
 interface IdempotencyRecordBase {
   readonly idempotencyRecordId: IdempotencyRecordId;
   readonly principalId: PrincipalId;
   readonly spaceId: SpaceId;
-  readonly operation: "commit_changeset";
+  readonly operation: IdempotencyOperation;
   readonly key: IdempotencyKey;
   readonly canonicalRequestHash: Sha256Digest;
   readonly version: Version;
@@ -234,8 +248,14 @@ export type IdempotencyRecord =
       readonly result: null;
     })
   | (IdempotencyRecordBase & {
+      readonly operation: "commit_changeset";
       readonly state: "completed";
       readonly result: Readonly<CommitChangesetIdempotencyResult>;
+    })
+  | (IdempotencyRecordBase & {
+      readonly operation: "start_export";
+      readonly state: "completed";
+      readonly result: Readonly<StartExportIdempotencyResult>;
     });
 
 export type AuditActor =

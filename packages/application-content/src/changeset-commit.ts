@@ -2,9 +2,9 @@ import type { ActorContext } from "@mind-diary/application-contracts";
 import type {
   Authorizer,
   Clock,
-  ContentCommitIdempotencyNamespace,
   ContentCommitMetadataStore,
   ContentCommitMetadataTransaction,
+  IdempotencyNamespace,
   ObjectStore,
   RevisionIdGenerator,
 } from "@mind-diary/application-ports";
@@ -12,7 +12,6 @@ import {
   MARKDOWN_MEDIA_TYPE,
   createCanonicalRevisionEnvelope,
   createRevisionManifest,
-  idempotencyKey,
   serializeRevisionManifest,
   type CanonicalRevisionEnvelope,
   type IdempotencyKey,
@@ -29,6 +28,11 @@ import {
   type ChangesetPreflightResult,
   type ChangesetValidationCode,
 } from "./changeset-preflight.js";
+import {
+  DEFAULT_IDEMPOTENCY_KEY_MAX_BYTES,
+  normalizeIdempotencyKeyMaxBytes,
+  validateIdempotencyKey,
+} from "./idempotency.js";
 import type { HeadRevisionReader } from "./index.js";
 
 export interface CommitChangesetRequest {
@@ -82,6 +86,7 @@ export interface ChangesetCommitDependencies {
   readonly clock: Clock;
   readonly revisionIds: RevisionIdGenerator;
   readonly preflightLimits?: Readonly<ChangesetPreflightLimits>;
+  readonly idempotencyKeyMaxBytes?: number;
 }
 
 interface ValidatedCommitPayload {
@@ -156,6 +161,7 @@ export class ChangesetCommitService {
   readonly #revisionIds: RevisionIdGenerator;
   readonly #preflight: ChangesetPreflightService;
   readonly #preflightLimits: Readonly<ChangesetPreflightLimits>;
+  readonly #idempotencyKeyMaxBytes: number;
 
   constructor(dependencies: ChangesetCommitDependencies) {
     this.#authorizer = dependencies.authorizer;
@@ -165,6 +171,9 @@ export class ChangesetCommitService {
     this.#revisionIds = dependencies.revisionIds;
     this.#preflightLimits =
       dependencies.preflightLimits ?? DEFAULT_CHANGESET_PREFLIGHT_LIMITS;
+    this.#idempotencyKeyMaxBytes = normalizeIdempotencyKeyMaxBytes(
+      dependencies.idempotencyKeyMaxBytes ?? DEFAULT_IDEMPOTENCY_KEY_MAX_BYTES,
+    );
     this.#preflight = new ChangesetPreflightService({
       authorizer: dependencies.authorizer,
       revisions: dependencies.revisions,
@@ -195,7 +204,9 @@ export class ChangesetCommitService {
     const canonicalRequestHash = await this.#objects.calculateSha256(
       ENCODER.encode(canonicalRequestSource(request, validated.operations)),
     );
-    const namespace: Readonly<ContentCommitIdempotencyNamespace> = Object.freeze({
+    const namespace: Readonly<
+      IdempotencyNamespace & { readonly operation: "commit_changeset" }
+    > = Object.freeze({
       principalId: actor.principalId,
       spaceId: request.spaceId,
       operation: "commit_changeset",
@@ -384,13 +395,22 @@ export class ChangesetCommitService {
     if (typeof request.summary !== "string") {
       return invalid("invalid_summary", "changeset summary must be a string");
     }
-    if (
-      typeof request.idempotencyKey !== "string" ||
-      request.idempotencyKey.length === 0
-    ) {
+    const checkedKey = validateIdempotencyKey(
+      request.idempotencyKey,
+      this.#idempotencyKeyMaxBytes,
+    );
+    if (checkedKey.kind === "invalid") {
+      const message =
+        checkedKey.reason === "byte_limit_exceeded"
+          ? "idempotency key exceeds its UTF-8 byte limit"
+          : checkedKey.reason === "single_line_required"
+            ? "idempotency key must not contain control or line-separator characters"
+            : checkedKey.reason === "invalid_utf8"
+              ? "idempotency key must be canonical UTF-8"
+              : "idempotency key must be a non-empty string";
       return invalid(
         "invalid_idempotency_key",
-        "idempotency key must be a non-empty string",
+        message,
       );
     }
     const operations = validateChangesetOperations(
@@ -399,14 +419,16 @@ export class ChangesetCommitService {
     );
     if (operations.kind === "invalid") return operations;
     return Object.freeze({
-      idempotencyKey: idempotencyKey(request.idempotencyKey),
+      idempotencyKey: checkedKey.key,
       operations: operations.operations,
     });
   }
 
   async #resolveIdempotency(
     transaction: ContentCommitMetadataTransaction,
-    namespace: Readonly<ContentCommitIdempotencyNamespace>,
+    namespace: Readonly<
+      IdempotencyNamespace & { readonly operation: "commit_changeset" }
+    >,
     canonicalRequestHash: Sha256Digest,
   ): Promise<
     | { readonly kind: "missing" }
@@ -420,6 +442,15 @@ export class ChangesetCommitService {
     if (checked.kind === "missing") return checked;
     if (checked.kind === "conflict") {
       return Object.freeze({ kind: "idempotency_conflict" });
+    }
+    if (
+      checked.record.operation !== "commit_changeset" ||
+      checked.record.result.kind !== "commit_changeset"
+    ) {
+      throw new ChangesetCommitFailure(
+        "invalid_idempotency_result",
+        "commit_changeset namespace resolved to a different typed result",
+      );
     }
     const envelope = await transaction.readRevision(
       namespace.spaceId,
