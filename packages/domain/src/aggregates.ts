@@ -67,6 +67,16 @@ function sameSpace(actual: SpaceId, expected: SpaceId): boolean {
   return actual === expected;
 }
 
+function activeMembershipForPrincipal(
+  memberships: readonly Readonly<SpaceMembership>[],
+  principalId: PrincipalId,
+): Readonly<SpaceMembership> | undefined {
+  return memberships.find(
+    (membership) =>
+      membership.principalId === principalId && membership.state === "active",
+  );
+}
+
 function ensureVersion(actual: Version, expected: Version, subject: string): void {
   if (actual !== expected) {
     throw new DomainInvariantError(
@@ -295,16 +305,18 @@ export class SpaceAggregate {
       throw new DomainInvariantError("space_not_active", "Mind is not active");
     }
     ensureVersion(this.#space.metadataVersion, input.expectedMetadataVersion, "Mind metadata");
-    const source = this.#memberships.find(
-      (membership) => membership.principalId === input.sourcePrincipalId,
+    const source = activeMembershipForPrincipal(
+      this.#memberships,
+      input.sourcePrincipalId,
     );
-    const target = this.#memberships.find(
-      (membership) => membership.principalId === input.targetPrincipalId,
+    const target = activeMembershipForPrincipal(
+      this.#memberships,
+      input.targetPrincipalId,
     );
-    if (source?.state !== "active" || source.role !== "owner") {
+    if (source?.role !== "owner") {
       throw new DomainInvariantError("owner_required", "current active Owner is required");
     }
-    if (target?.state !== "active" || target.role === "owner") {
+    if (target === undefined || target.role === "owner") {
       throw new DomainInvariantError(
         "ownership_target_invalid",
         "ownership target must be a different active participant",
@@ -362,10 +374,11 @@ export class SpaceAggregate {
       throw new DomainInvariantError("space_not_active", "Mind is not active");
     }
     ensureVersion(this.#space.metadataVersion, input.expectedMetadataVersion, "Mind metadata");
-    const actorMembership = this.#memberships.find(
-      (membership) => membership.principalId === input.actorPrincipalId,
+    const actorMembership = activeMembershipForPrincipal(
+      this.#memberships,
+      input.actorPrincipalId,
     );
-    if (actorMembership?.state !== "active" || actorMembership.role !== "owner") {
+    if (actorMembership?.role !== "owner") {
       throw new DomainInvariantError(
         "owner_required",
         "visibility change requires the current Owner from aggregate state",

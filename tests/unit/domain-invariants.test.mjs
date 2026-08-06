@@ -293,6 +293,57 @@ test("ownership transfer is atomic and stale/retry attempts cannot create two Ow
   );
 });
 
+test("ownership transfer resolves active memberships after revoked history", () => {
+  const sourceRevoked = membership(ownerId, "reader", {
+    membershipId: "membership_owner_revoked_history",
+    state: "revoked",
+  });
+  const targetRevoked = membership(editorId, "reader", {
+    membershipId: "membership_editor_revoked_history",
+    state: "revoked",
+  });
+  const sourceActive = membership(ownerId, "owner", {
+    membershipId: "membership_owner_active",
+  });
+  const targetActive = membership(editorId, "editor", {
+    membershipId: "membership_editor_active",
+  });
+  const initial = ordinary({
+    memberships: [sourceRevoked, targetRevoked, sourceActive, targetActive],
+  });
+
+  const transferred = initial.transferOwnership({
+    sourcePrincipalId: ownerId,
+    targetPrincipalId: editorId,
+    expectedMetadataVersion: version(1),
+    expectedSourceMembershipVersion: version(1),
+    expectedTargetMembershipVersion: version(1),
+    occurredAt: later,
+  });
+  const active = transferred
+    .snapshot()
+    .memberships.filter((item) => item.state === "active");
+  assert.deepEqual(
+    active.map((item) => [item.principalId, item.role]),
+    [
+      [ownerId, "admin"],
+      [editorId, "owner"],
+    ],
+  );
+  assert.equal(
+    transferred.snapshot().memberships.find(
+      (item) => item.membershipId === sourceRevoked.membershipId,
+    ).role,
+    "reader",
+  );
+  assert.equal(
+    transferred.snapshot().memberships.find(
+      (item) => item.membershipId === targetRevoked.membershipId,
+    ).role,
+    "reader",
+  );
+});
+
 test("client-supplied identity cannot substitute for current aggregate role", () => {
   const initial = ordinary();
   expectDomainError("owner_required", () =>
@@ -312,6 +363,30 @@ test("client-supplied identity cannot substitute for current aggregate role", ()
     occurredAt: later,
   });
   assert.equal(changed.snapshot().space.visibility, "public");
+  assert.equal(initial.snapshot().space.visibility, "private");
+});
+
+test("visibility change resolves the active Owner after revoked history", () => {
+  const initial = ordinary({
+    memberships: [
+      membership(ownerId, "reader", {
+        membershipId: "membership_owner_revoked_history",
+        state: "revoked",
+      }),
+      membership(ownerId, "owner", {
+        membershipId: "membership_owner_active",
+      }),
+      membership(editorId, "editor"),
+    ],
+  });
+
+  const changed = initial.changeVisibility({
+    actorPrincipalId: ownerId,
+    visibility: "unlisted",
+    expectedMetadataVersion: version(1),
+    occurredAt: later,
+  });
+  assert.equal(changed.snapshot().space.visibility, "unlisted");
   assert.equal(initial.snapshot().space.visibility, "private");
 });
 

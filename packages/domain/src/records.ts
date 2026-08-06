@@ -151,13 +151,20 @@ export interface SpaceInvitation {
   readonly updatedBy: PrincipalId;
 }
 
+export type RevisionAuthorReference =
+  | { readonly kind: "principal"; readonly principalId: PrincipalId }
+  | {
+      readonly kind: "deleted-principal";
+      readonly tombstoneId: DeletedPrincipalId;
+    };
+
 export interface SpaceRevision {
   readonly revisionId: RevisionId;
   readonly spaceId: SpaceId;
   readonly revisionNumber: number;
   readonly parentRevisionId: RevisionId | null;
   readonly committedAt: UtcInstant;
-  readonly committedBy: PrincipalId;
+  readonly committedBy: RevisionAuthorReference;
   readonly manifestHash: Sha256Digest;
   readonly summary: string;
 }
