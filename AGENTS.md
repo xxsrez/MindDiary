@@ -4,8 +4,9 @@
 
 ## Текущее состояние
 
-- Mind Diary находится на стадии design-first bootstrap: сервисный код ещё не
-  реализован и ни одно развёртывание не считается выполненным.
+- Mind Diary находится на стадии design-first bootstrap: reproducible
+  engineering baseline реализован, но исполняемый сервисный vertical slice ещё
+  не реализован и ни одно развёртывание не считается выполненным.
 - Репозиторий содержит принятый product baseline первого прототипа,
   предложения по его реализации и проверку актуального Open Knowledge Format
   (OKF).
@@ -221,8 +222,12 @@ product decisions отделяйте от ещё не выбранных дет�
 - Не заявляйте conformance, сборку, тесты, deployment или live-интеграцию без
   проверки на текущем commit.
 - После изменений документации запускайте project-docs validator и
-  `git diff --check`. После появления кода допишите сюда канонические команды
-  build/test/check и держите их проверенными.
+  `git diff --check`.
+- Канонический toolchain baseline: Node.js `>=22.13.0`, npm lockfile и
+  TypeScript project references. После `npm ci` используйте `npm run build`,
+  `npm run test:unit`, `npm run test:integration`,
+  `npm run test:conformance`, `npm run check:docs` и полный `npm run check`.
+  Не называйте эти contract tests live Sites/MCP compatibility.
 - После появления OKF fixtures валидируйте весь выбранный bundle, а не только
   `wiki/`, официальным или эквивалентным строгим validator.
 

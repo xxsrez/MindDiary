@@ -31,6 +31,12 @@ Mind Diary пока находится на стадии проектирова�
    owning stories, executable/release evidence, обязательные live flows,
    post-MVP denylist и implementation decisions.
 
+## Руководства
+
+- [Локальная разработка и проверки](guides/development.md) — pinned toolchain,
+  clean-checkout path, canonical commands, package graph, fixtures, CI и
+  границы доказанного baseline.
+
 ## Принятые решения
 
 - [ADR-0001: название продукта и пользовательская лексика](decisions/0001-product-name-and-language.md)

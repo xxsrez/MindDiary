@@ -35,3 +35,18 @@ __pycache__/
 playwright-report/
 test-results/
 tmp/
+# Dependencies and generated output
+node_modules/
+packages/*/dist/
+packages/*/*.tsbuildinfo
+coverage/
+
+# Local runtime state and secrets
+.env
+.env.*
+!.env.example
+.local/
+.wrangler/
+
+# Platform and editor noise
+.DS_Store

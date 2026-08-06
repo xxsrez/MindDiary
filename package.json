@@ -1,0 +1,31 @@
+{
+  "name": "mind-diary",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Mind Diary engineering baseline; no deployable service is implemented yet.",
+  "type": "module",
+  "packageManager": "npm@10.9.2",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "clean": "tsc -b --clean && node scripts/clean-output.mjs",
+    "build": "tsc -b",
+    "test:unit": "npm run build --silent && node --test tests/unit/*.test.mjs",
+    "test:integration": "npm run build --silent && node --test tests/integration/*.test.mjs",
+    "test:conformance": "npm run build --silent && node --test tests/conformance/*.test.mjs && npm run validate:fixtures --silent",
+    "test": "npm run test:unit && npm run test:integration && npm run test:conformance",
+    "validate:fixtures": "node scripts/validate-okf-fixtures.mjs",
+    "check:architecture": "node scripts/check-architecture.mjs",
+    "check:docs": "node scripts/check-docs.mjs",
+    "check:secrets": "node scripts/check-secrets.mjs",
+    "check": "npm run clean && npm run build && node --test tests/unit/*.test.mjs tests/integration/*.test.mjs tests/conformance/*.test.mjs && npm run validate:fixtures && npm run check:architecture && npm run check:docs && npm run check:secrets"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3",
+    "yaml": "2.9.0"
+  }
+}
