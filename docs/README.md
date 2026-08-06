@@ -24,6 +24,9 @@ Mind Diary пока находится на стадии проектирова�
    slice и его критерии готовности.
 8. [REST и MCP API](specs/api.md) — предлагаемый wire-level contract control
    REST, internal application API, MCP tools/resources, schemas и errors.
+9. [Traceability matrix MVP 0.1](specs/traceability.md) — критерии 1–29,
+   owning stories, executable/release evidence, обязательные live flows,
+   post-MVP denylist и implementation decisions.
 
 ## Принятые решения
 
@@ -78,6 +81,8 @@ High-level контур проекта закрыт следующими док�
   прототипа;
 - REST routes, общие schemas, MCP tools/resources и error contracts — в API
   specification;
+- критерии 1–29, их owning stories и обязательный release evidence — в
+  traceability matrix;
 - актуальность внешнего формата данных — в датированном OKF report;
 - конкурентная среда, уточнённый ICP, риски и validation gates — в датированном
   market assessment;
