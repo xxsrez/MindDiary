@@ -13,12 +13,16 @@ import {
   tokenScopesAllowCapability,
   type AccessTokenState,
   type Capability,
+  type CanonicalRevisionEnvelope,
   type EffectiveTokenScopes,
+  type MarkdownMediaType,
   type MembershipState,
   type PrincipalId,
   type PrincipalState,
+  type RevisionId,
   type RevisionMode,
   type Role,
+  type Sha256Digest,
   type SpaceId,
   type SpaceLifecycleState,
   type TokenId,
@@ -26,6 +30,8 @@ import {
   type Version,
   type Visibility,
 } from "@mind-diary/domain";
+
+export type { CanonicalRevisionEnvelope } from "@mind-diary/domain";
 
 export interface Clock {
   now(): UtcInstant;
@@ -35,8 +41,90 @@ export interface MetadataStore {
   readonly kind: "metadata-store";
 }
 
+export interface ImmutableObjectWriteRequest {
+  readonly bytes: Uint8Array;
+  readonly mediaType: MarkdownMediaType;
+  /** Server-supplied UTC time used only for bounded unreachable-object GC. */
+  readonly createdAt: UtcInstant;
+}
+
+export interface ImmutableObjectMetadata {
+  readonly sha256: Sha256Digest;
+  readonly mediaType: MarkdownMediaType;
+  readonly size: number;
+  readonly createdAt: UtcInstant;
+}
+
+export interface ImmutableObject extends ImmutableObjectMetadata {
+  readonly bytes: Uint8Array;
+}
+
+export interface ImmutableObjectPutResult {
+  readonly object: Readonly<ImmutableObjectMetadata>;
+  readonly status: "stored" | "already_exists";
+}
+
+export interface ImmutableObjectListRequest {
+  /** Only objects strictly older than this UTC instant are candidates. */
+  readonly createdBefore: UtcInstant;
+  readonly limit: number;
+}
+
+export interface ImmutableObjectDeleteRequest {
+  readonly sha256: Sha256Digest;
+  /** The delete is refused when the object is at or after this boundary. */
+  readonly createdBefore: UtcInstant;
+}
+
 export interface ObjectStore {
   readonly kind: "object-store";
+  calculateSha256(bytes: Uint8Array): Promise<Sha256Digest>;
+  putImmutable(request: ImmutableObjectWriteRequest): Promise<ImmutableObjectPutResult>;
+  getImmutable(sha256: Sha256Digest): Promise<Readonly<ImmutableObject> | null>;
+  listImmutableObjects(
+    request: ImmutableObjectListRequest,
+  ): Promise<readonly Readonly<ImmutableObjectMetadata>[]>;
+  deleteImmutableObject(request: ImmutableObjectDeleteRequest): Promise<boolean>;
+}
+
+export type RevisionCommitResult =
+  | {
+      readonly kind: "committed";
+      readonly envelope: Readonly<CanonicalRevisionEnvelope>;
+      readonly replayed: boolean;
+    }
+  | {
+      readonly kind: "stale_head";
+      readonly currentHeadRevisionId: RevisionId | null;
+    }
+  | { readonly kind: "revision_id_collision" }
+  | {
+      readonly kind: "invalid_revision_chain";
+      readonly reason:
+        | "missing_parent"
+        | "parent_mismatch"
+        | "revision_number_mismatch"
+        | "manifest_hash_mismatch";
+    };
+
+export interface RevisionCommitRequest {
+  readonly expectedHeadRevisionId: RevisionId | null;
+  readonly envelope: Readonly<CanonicalRevisionEnvelope>;
+}
+
+/** Transactional revision metadata and HEAD; object bytes remain in ObjectStore. */
+export interface RevisionMetadataStore extends MetadataStore {
+  readHead(spaceId: SpaceId): Promise<RevisionId | null>;
+  readRevision(
+    spaceId: SpaceId,
+    revisionId: RevisionId,
+  ): Promise<Readonly<CanonicalRevisionEnvelope> | null>;
+  listRevisions(
+    spaceId: SpaceId,
+  ): Promise<readonly Readonly<CanonicalRevisionEnvelope>[]>;
+  commitRevision(request: RevisionCommitRequest): Promise<RevisionCommitResult>;
+  /** Includes every historical revision, not only each Mind's current HEAD. */
+  listReachableObjectDigests(): Promise<readonly Sha256Digest[]>;
 }
 
 export interface SearchIndex {
