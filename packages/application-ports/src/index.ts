@@ -14,7 +14,9 @@ import {
   type AccessTokenState,
   type Capability,
   type CanonicalRevisionEnvelope,
+  type CanonicalSpaceHandle,
   type EffectiveTokenScopes,
+  type HandlePolicyFailureReason,
   type MarkdownMediaType,
   type MembershipState,
   type PrincipalId,
@@ -27,11 +29,23 @@ import {
   type SpaceLifecycleState,
   type TokenId,
   type UtcInstant,
+  type VerifiedSpaceHost,
   type Version,
   type Visibility,
 } from "@mind-diary/domain";
 
 export type { CanonicalRevisionEnvelope } from "@mind-diary/domain";
+export {
+  RESERVED_TOP_LEVEL_HANDLES,
+  isReservedTopLevelHandle,
+  isReservedTopLevelRoute,
+  normalizeSpaceHandle,
+  parseCanonicalSpaceHandle,
+  verifiedSpaceHost,
+  type CanonicalSpaceHandle,
+  type HandlePolicyFailureReason,
+  type VerifiedSpaceHost,
+} from "@mind-diary/domain";
 
 export interface Clock {
   now(): UtcInstant;
@@ -39,6 +53,63 @@ export interface Clock {
 
 export interface MetadataStore {
   readonly kind: "metadata-store";
+}
+
+export interface HandleReservationSnapshot {
+  readonly host: VerifiedSpaceHost;
+  readonly canonicalHandle: CanonicalSpaceHandle;
+  readonly spaceId: SpaceId;
+}
+
+export interface RetiredHandleMarker {
+  readonly host: VerifiedSpaceHost;
+  readonly canonicalHandle: CanonicalSpaceHandle;
+}
+
+export interface HandleReservationRequest {
+  readonly host: VerifiedSpaceHost;
+  readonly handle: string;
+  readonly spaceId: SpaceId;
+}
+
+export type HandleReservationResult =
+  | {
+      readonly kind: "reserved";
+      readonly reservation: Readonly<HandleReservationSnapshot>;
+      readonly replayed: boolean;
+    }
+  | { readonly kind: "handle_unavailable" }
+  | { readonly kind: "immutable_handle" }
+  | {
+      readonly kind: "invalid_handle";
+      readonly reason: HandlePolicyFailureReason;
+    };
+
+export interface HandleResolutionRequest {
+  readonly host: VerifiedSpaceHost;
+  readonly handle: string;
+}
+
+export type HandleResolutionResult =
+  | { readonly kind: "resolved"; readonly spaceId: SpaceId }
+  | { readonly kind: "not_found" };
+
+export interface HandleRetirementRequest extends HandleResolutionRequest {
+  readonly spaceId: SpaceId;
+}
+
+export type HandleRetirementResult =
+  | {
+      readonly kind: "retired";
+      readonly marker: Readonly<RetiredHandleMarker>;
+    }
+  | { readonly kind: "not_found" };
+
+/** Transactional host-scoped handle ownership and permanent retirement. */
+export interface HandleRegistry extends MetadataStore {
+  reserveHandle(request: HandleReservationRequest): Promise<HandleReservationResult>;
+  resolveHandle(request: HandleResolutionRequest): Promise<HandleResolutionResult>;
+  retireHandle(request: HandleRetirementRequest): Promise<HandleRetirementResult>;
 }
 
 export interface ImmutableObjectWriteRequest {
@@ -269,6 +340,73 @@ export interface Authorizer {
     transaction: AuthorizationTransaction,
     expected: AuthorizationStamp,
   ): Promise<AuthorizationDecision>;
+}
+
+export interface AuthorizedHandleReadRequest extends HandleResolutionRequest {
+  readonly actor: ActorContext;
+  readonly capability: Capability;
+  readonly revisionMode: RevisionMode;
+}
+
+/** Reads target metadata/objects only after exact handle resolution and access. */
+export interface ResolvedSpaceReader<Value> {
+  readResolvedSpace(spaceId: SpaceId): Promise<Value | null>;
+}
+
+export type AuthorizedHandleReadResult<Value> =
+  | {
+      readonly kind: "found";
+      readonly spaceId: SpaceId;
+      readonly value: Value;
+    }
+  | { readonly kind: "not_found" };
+
+const HANDLE_TARGET_NOT_FOUND = Object.freeze({ kind: "not_found" } as const);
+
+/**
+ * Keeps missing handles and access denial externally indistinguishable while
+ * enforcing resolve -> authorize -> target read ordering.
+ */
+export class AuthorizedHandleReader<Value> {
+  readonly #handles: HandleRegistry;
+  readonly #authorizer: Authorizer;
+  readonly #targets: ResolvedSpaceReader<Value>;
+
+  constructor(dependencies: {
+    readonly handles: HandleRegistry;
+    readonly authorizer: Authorizer;
+    readonly targets: ResolvedSpaceReader<Value>;
+  }) {
+    this.#handles = dependencies.handles;
+    this.#authorizer = dependencies.authorizer;
+    this.#targets = dependencies.targets;
+  }
+
+  async read(
+    request: AuthorizedHandleReadRequest,
+  ): Promise<AuthorizedHandleReadResult<Value>> {
+    const resolution = await this.#handles.resolveHandle({
+      host: request.host,
+      handle: request.handle,
+    });
+    if (resolution.kind === "not_found") return HANDLE_TARGET_NOT_FOUND;
+
+    const authorization = await this.#authorizer.authorize({
+      actor: request.actor,
+      spaceId: resolution.spaceId,
+      capability: request.capability,
+      revisionMode: request.revisionMode,
+    });
+    if (authorization.kind === "denied") return HANDLE_TARGET_NOT_FOUND;
+
+    const value = await this.#targets.readResolvedSpace(resolution.spaceId);
+    if (value === null) return HANDLE_TARGET_NOT_FOUND;
+    return Object.freeze({
+      kind: "found",
+      spaceId: resolution.spaceId,
+      value,
+    });
+  }
 }
 
 function denied(
