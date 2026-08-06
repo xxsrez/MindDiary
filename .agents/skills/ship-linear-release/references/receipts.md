@@ -64,6 +64,7 @@ WORKERS: requested=<1|N|auto|auto(max=N)>; effective=<n>; reason=<bounded>
 CAPABILITIES: available=<bounded>; not_available=<bounded>
 CURRENT_BATCH: <batch_id or none>; generation=<n or none>
 OFFLINE_QUEUE: base_origin=<full>; local_head=<full>; batches=<ordered ids> | none
+LAST_REMOTE_ATTEMPT: at=<timestamp>; result=<success|technical-failure>; next_eligible=<timestamp>; reason=<bounded> | none
 QUEUE_FINGERPRINT: <hash>
 STARTED_AT: <timestamp>
 HEARTBEAT_AT: <timestamp>

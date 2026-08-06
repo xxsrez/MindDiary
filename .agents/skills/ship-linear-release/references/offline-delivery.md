@@ -41,35 +41,41 @@ publication, remote CI и зависящее от них доказательс�
 
 ## Лениво пытаться опубликовать
 
-1. Делай bounded неблокирующую попытку на содержательных checkpoints и по
-   согласованному recurring heartbeat. Не жди remote в foreground, не polling-и
-   чаще расписания и не создавай новую automation после каждой неудачи.
-2. Если remote ещё недоступен, запиши только изменившееся evidence и сразу
-   продолжи локальную очередь. Технический push/CI fail сам по себе не переводит
-   goal в `blocked`, пока остаётся локальная работа.
-3. Когда remote доступен, fetch-ни exact `origin/<default>`. Если он равен
+1. После каждого terminal local batch посмотри `LAST_REMOTE_ATTEMPT`. Если
+   предыдущая попытка завершилась technical failure менее часа назад, сразу
+   пропусти remote step и продолжи следующий batch. Если прошёл минимум час
+   либо попытки ещё не было, выполни ровно одну bounded push/CI попытку.
+2. Не создавай recurring automation, timer или отдельный polling loop. Throttle
+   привязан к естественным batch checkpoints, а не к wall-clock wakeups.
+3. Когда вся локальная работа goal исчерпана, выполни последнюю remote попытку
+   независимо от прошедшего интервала. При technical failure предупреди
+   пользователя и сохрани незапушенную очередь; не называй её доставленной.
+4. Если remote ещё недоступен, запиши изменившееся evidence и сразу продолжи
+   локальную очередь. Технический push/CI fail сам по себе не переводит goal в
+   `blocked`, пока остаётся безопасная локальная работа.
+5. Когда remote доступен, fetch-ни exact `origin/<default>`. Если он равен
    `base_origin`, потребуй ancestry `base_origin -> local_head` и выполни один
    fast-forward CAS push exact `local_head`.
-4. При remote drift ничего не переписывай. Создай aggregate generation от
+6. При remote drift ничего не переписывай. Создай aggregate generation от
    свежего origin, добавь offline chain и чужие commits обычным merge, проверь
    semantic conflicts, reseal и один раз выполни полный integrated gate нового
    tree. Затем fast-forward local default и push aggregate head без force.
-5. Дождись configured required CI exact published head. Один успешный run
+7. Дождись configured required CI exact published head. Один успешный run
    финального head покрывает накопленные ancestor batches только вместе с их
    собственными сохранёнными integrated gates; запиши head/run в
    `PUBLISHED_BY` каждого batch.
-6. После CI success обнови pending batch receipts до `integrated`, перечитай
+8. После CI success обнови pending batch receipts до `integrated`, перечитай
    live scope, переведи покрытые issue в `Done`, release их claims и выполни
    свежий milestone snapshot. `release` profile дополнительно проходит обычные
    Sites/live/tag gates; offline queue никогда их не заменяет.
-7. Очисти offline queue и отключи heartbeat только после проверки remote
-   default, terminal CI, Linear closure и отсутствия незаписанных commits.
+9. Очисти offline queue только после проверки remote default, terminal CI,
+   Linear closure и отсутствия незаписанных commits.
 
 ## Делать handoff при незапушенных commits
 
 Если turn, run или локальная реализация заканчиваются до успешной публикации,
 явно предупреди пользователя. Укажи exact `base_origin`, `local_head`, число
-неопубликованных commits, pending batch IDs, последнюю причину push/CI failure и
-время следующей ленивой попытки. Не называй такой state опубликованным,
+неопубликованных commits, pending batch IDs, время/причину последней remote
+ошибки и `next_eligible_at`. Не называй такой state опубликованным,
 доставленным или production-ready и не скрывай его только потому, что локальные
 checks прошли.
