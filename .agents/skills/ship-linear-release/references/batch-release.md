@@ -6,8 +6,10 @@ deployment и release tags.
 Workers владеют только своими worktree/branch, реализацией, commit и
 `FEATURE_RECEIPT`; они не меняют default branch, Linear, Sites и tags.
 
-Если Git hosting подтверждённо недоступен и пользователь явно разрешил
-local-only progress, применяй [offline-delivery.md](offline-delivery.md).
+При наблюдаемой аномалии GitHub используй
+[offline-delivery.md](offline-delivery.md) для component-scoped status context.
+В local-only mode входи только при недоступности Git publication/CAS и явном
+разрешении пользователя.
 
 ## Сформировать batch
 

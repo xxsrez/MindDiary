@@ -41,7 +41,7 @@ Root — единственный coordinator; issue workers реализуют 
 
 Нормальный путь — contract preflight, feature-only workers, sealed candidate,
 integrated gate, доступный pre-push CI и один default push; в `release` — один Sites deploy.
-При деградации Git hosting с local-only opt-in применяй [offline-delivery.md](references/offline-delivery.md).
+При аномалии GitHub добавь официальный component-scoped status как контекст; при недоступности Git publication с local-only opt-in применяй [offline-delivery.md](references/offline-delivery.md).
 
 ## Понять вызов
 
@@ -472,8 +472,7 @@ revert whole batch или issue в новом commit и выпусти его н
 
 ## Делать checkpoint и завершить goal
 
-За один goal-ход доводи один batch до terminal checkpoint: `integrated`,
-`locally-integrated`, `released`, `rolled-back`, `needs-input` или доказанного external wait. Не останавливайся
+За один goal-ход доводи один batch до terminal checkpoint: `integrated`, `locally-integrated`, `released`, `rolled-back`, `needs-input` или доказанного external wait. Не останавливайся
 после подготовки одной feature и не проси пользователя запустить следующий
 шаг; активный goal продолжает следующий batch автоматически.
 
@@ -489,8 +488,8 @@ Sites/live/tag/rollback -> defects/gaps -> remaining counts
 без активных claims/candidate/deployment artifacts и с полным ledger выбранного
 profile.
 
-`update_goal(status="blocked")` используй только после трёх последовательных goal-ходов
-с тем же внешним блокером. Offline queue с безопасной локальной работой не является
+`update_goal(status="blocked")` используй только после трёх последовательных goal-ходов с тем же
+внешним блокером. Offline queue с безопасной локальной работой не является
 блокером; автоматически исправимая/исключаемая/переоткрываемая проблема — тоже.
 
 После batch throttle-и remote attempts; перед завершением goal попробуй всегда. При любом

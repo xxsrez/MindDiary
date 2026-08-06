@@ -1,11 +1,61 @@
-# Локальная очередь при неполадках Git hosting
+# Деградация GitHub и локальная очередь
 
-Читай этот файл, когда Git hosting подтверждённо деградирован и пользователь
-разрешил продолжать local-only. Техническая неполадка remote не останавливает
-разработку, пока существует безопасная локальная работа; она лишь откладывает
-publication, remote CI и зависящее от них доказательство delivery.
+Читай этот файл при наблюдаемой аномалии GitHub: ошибках Git/API, отсутствии
+ожидаемого workflow run, задержке webhook, зависшем runner или сбое Pages. Для
+local-only частей дополнительно требуется явное разрешение пользователя.
+
+## Добавить официальный status как контекст
+
+1. После наблюдаемой внешней аномалии один раз прочитай официальный
+   [GitHub Status](https://www.githubstatus.com/),
+   [current status API](https://www.githubstatus.com/api/v2/status.json) и
+   [unresolved incidents API](https://www.githubstatus.com/api/v2/incidents/unresolved.json).
+   Не обращайся туда на каждом обычном batch и не используй сторонний пересказ
+   вместо официального источника.
+2. Всегда разделяй:
+   - фактическое evidence этого run: exact SHA, результат push/API, наличие и
+     состояние workflow/check, конкретную ошибку;
+   - внешний контекст: component, incident impact/status, время последнего
+     update, время проверки и incident URL.
+   Status не доказывает причину отдельного сбоя и не заменяет проверку exact
+   repo/SHA.
+3. Сопоставляй только затронутый component с текущей стадией. Например, outage
+   Actions или throttling Webhooks может объяснять отсутствие workflow после
+   успешного push, не означая отказ Git Operations. GitHub Pages не относится
+   к OpenAI Sites; Copilot incident не относится к локальному Codex run, если
+   соответствующая GitHub service фактически не используется.
+4. Классифицируй влияние на этот run, а не по одному глобальному banner:
+   - `blocking-current-gate` — matching incident мешает обязательной текущей
+     capability, например публикации ref или configured exact-SHA CI перед
+     `Done`;
+   - `degraded-nonblocking-now` — локальная/независимая работа продолжается или
+     затронута только более поздняя/необязательная capability;
+   - `unrelated` — incident не совпадает с наблюдаемой surface.
+   Даже `Major Outage` может быть нерелевантен этому release path, а частичная
+   деградация Actions — блокировать только Linear closure покрытых issue.
+5. Не меняй flow, acceptance или gates по status page: не ставь `pass`/`fail`,
+   не ослабляй required CI, не создавай fallback, не отменяй job и не добавляй
+   retries. Если matching incident нет, продолжай обычную repo-specific
+   диагностику. Оценку восстановления используй лишь как подсказку для handoff;
+   это не гарантия и не причина создавать timer/polling loop.
+6. Кратко сохрани контекст в `CAPABILITIES`/`GAPS`: observed symptom, official
+   component/impact/status, `updated_at`, `checked_at`, incident URL и влияние
+   на текущую стадию. Не копируй полную хронику incident. Перепроверяй status
+   только на естественном terminal checkpoint либо перед новым утверждением,
+   что incident всё ещё продолжается.
+7. Пользователю сообщай четырьмя частями: что наблюдалось в exact repo/SHA; что
+   официально сообщает GitHub и на какое UTC-время; что это реально блокирует
+   или не блокирует; какое действие основного flow идёт дальше.
 
 ## Войти в offline mode
+
+Входи сюда только когда недоступна Git publication/CAS и пользователь разрешил
+local-only progress. Component-scoped outage Actions сам по себе не делает весь
+Git hosting offline: если refs публикуются, сохраняй online Git path, отмечай
+exact-SHA CI как `pending-outage` и продолжай безопасную локальную работу.
+Техническая неполадка remote не останавливает разработку, пока существует
+безопасная локальная работа; она лишь откладывает publication, remote CI и
+зависящее от них доказательство delivery.
 
 1. Разрешай offline mode только существующему coordinator-у с восстановленным
    `run_id`. Не выполняй takeover с другой машины: remote CAS недоступен.
