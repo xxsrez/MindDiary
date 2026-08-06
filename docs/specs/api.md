@@ -95,6 +95,45 @@ surface первого прототипа — authenticated MCP. Если adapte
 Server повторно проверяет actor, scope и текущий доступ при использовании
 любого ID. Знание ID не даёт access.
 
+### MCP token secret и verifier
+
+Token secret первого прототипа имеет один bounded canonical format:
+
+```text
+mdp_v1_<43 base64url characters without padding>
+```
+
+- payload декодируется ровно в 32 random bytes (256 bits), полученных через
+  cryptographically secure random generator;
+- общая длина secret — ровно 50 ASCII characters; другой prefix, padding,
+  Unicode, лишние separators и oversized input отклоняются до storage lookup;
+- для list/UI сохраняется только `display_prefix` вида
+  `mdp_v1_<первые 6 payload characters>…`; он раскрывает не более 36 random
+  bits, поэтому у secret остаётся не менее 220 неизвестных bits;
+- lookup выполняется не по display prefix и не по raw/unkeyed secret hash, а по
+  exact 32-byte HMAC-SHA-256 verifier полного canonical secret. HMAC key —
+  отдельный deployment secret минимум 256 bits, не хранящийся рядом с token
+  records;
+- persisted verifier имеет versioned fixed-length encoding
+  `hmac-sha256:v1:<64 lowercase hex characters>` и служит unique indexed
+  lookup key. Это даёт один bounded lookup без scan/collision bucket;
+- server после lookup сравнивает вычисленный и persisted verifier как два
+  fixed-length byte arrays без data-dependent early exit. Для valid-format
+  unknown/denied lookup выполняется тот же comparison с dummy verifier;
+- различия malformed-format parsing и storage latency не считаются
+  cryptographically constant-time. Внешний auth response всё равно generic и
+  не раскрывает, найден ли record;
+- выпуск возвращает secret через consume-once boundary. Retry не может получить
+  прежний secret: он либо получает уже сохранённый safe результат без secret,
+  либо создаёт новый token record с новым independently generated secret.
+
+Медленный password KDF не применяется. При 256-bit random bearer secret
+offline guessing не является реалистичной атакой, а PBKDF2/scrypt/Argon2 на
+каждом MCP request увеличили бы latency и amplification для online DoS. Keyed
+HMAC дополнительно отделяет read-only compromise token table от verifier key.
+Решение и воспроизводимый benchmark зафиксированы в
+[ADR-0005](../decisions/0005-mcp-token-secret-verifier.md).
+
 ### Pagination
 
 List operations используют:
@@ -575,8 +614,8 @@ Rules:
 
 - `content:write` нормализуется в effective read + write;
 - write-only token не выпускается;
-- default expiry — 90 дней;
-- `expires_at` не может превышать server policy;
+- default и абсолютный server maximum expiry — 90 дней от server-assigned
+  `created_at`; клиент может запросить только более ранний срок;
 - token bound к principal, не Mind.
 
 Success `201` показывает secret ровно один раз:
@@ -593,14 +632,16 @@ Success `201` показывает secret ровно один раз:
       "expires_at": "2026-11-03T22:00:00Z",
       "revoked_at": null
     },
-    "secret": "shown-once-secret"
+    "secret": "<shown-once-mdp-v1-secret>"
   },
   "request_id": "req_opaque"
 }
 ```
 
-List never returns `secret`, `secret_hash` или full lookup material. Revoke
-идемпотентен и не удаляет audit metadata до account deletion policy.
+List never returns `secret`, verifier/HMAC, full lookup material или HMAC key.
+Issuance errors, retry responses, logs, traces и metrics также не содержат эти
+значения. Revoke идемпотентен и не удаляет audit metadata до account deletion
+policy.
 
 ## Internal application API
 
@@ -739,8 +780,13 @@ Mcp-Name: search
 ### MCP authentication
 
 - `Authorization: Bearer <personal-token>` обязателен на каждом POST.
-- Server хранит только secret hash, проверяет expiry/revocation constant-time и
-  строит `ActorContext`.
+- Server сначала применяет bounded `mdp_v1` parser, вычисляет keyed
+  HMAC-SHA-256 verifier, делает один exact indexed lookup и fixed-length
+  constant-time comparison. Только после cryptographic match проверяются
+  lifecycle metadata и строится `ActorContext`.
+- Persisted token record содержит только versioned verifier, safe
+  `display_prefix`, scopes и lifecycle metadata. Plain secret, recoverable
+  material и HMAC key в record отсутствуют.
 - Current role/visibility, exact Mind и revision access проверяются на каждом
   call; cached role claims не используются.
 - `401` используется для missing/invalid/expired/revoked token и содержит
@@ -1328,6 +1374,9 @@ authentication не раскрывает existence/metadata.
 - Не передавать incoming user token downstream; adapter преобразует его в
   trusted `ActorContext`.
 - Rate-limit token verification, resolve, search, export и commit отдельно.
+- Перед storage lookup отклонять token candidates, не совпадающие с exact
+  fixed-size `mdp_v1` grammar; valid-format unknown/denied candidates получают
+  тот же generic authentication failure, что cryptographic mismatch.
 - Ограничить query length, pagination, response budget, paths, file bytes,
   operation count и total changeset bytes. Exact numbers должны стать
   deployment constants и conformance fixtures до implementation release.
@@ -1377,7 +1426,6 @@ profile до заявления поддержки.
 - поддерживает ли target Codex build MCP Resources достаточно для optional
   resource path; tools остаются обязательным fallback;
 - exact opaque ID encoding, signing/lookup и retention;
-- token hash/KDF и lookup strategy;
 - request/file/changeset/search/export limits и rate policies;
 - search ranking details и threshold после lexical benchmark;
 - export archive container/filename/content-disposition при сохранении

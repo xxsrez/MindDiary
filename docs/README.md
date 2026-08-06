@@ -51,6 +51,9 @@ Mind Diary пока находится на стадии проектирова�
 - [ADR-0004: OpenAI Sites как production target MVP](decisions/0004-sites-only-mvp-production.md)
   — production release означает весь обязательный vertical slice на одном
   Site; AWS и отдельный MCP runtime отложены.
+- [ADR-0005: secret и verifier личного MCP token](decisions/0005-mcp-token-secret-verifier.md)
+  — принят fixed-size opaque secret, keyed HMAC-SHA-256 exact lookup,
+  consume-once issuance и 90-day maximum expiry.
 
 ## Исследования
 
