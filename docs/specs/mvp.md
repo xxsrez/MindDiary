@@ -94,7 +94,29 @@ storage и deployment ещё не реализованы.
 - Legacy 0.1 import/migration отложен и в будущем потребует explicit policy без
   silent reinterpretation версии или lifecycle/status полей.
 - Каждая committed revision содержит immutable manifest и SHA-256 entries.
-- Детерминированный export выбранной revision не содержит service metadata.
+- Детерминированный export фиксирует exact `revision_id`, materializes её
+  immutable manifest и canonical object bytes и до упаковки валидирует весь
+  полученный OKF bundle. Последующее продвижение HEAD не меняет уже выбранный
+  результат.
+- Archive contract первого прототипа — `MD-OKF-ZIP-1`: `application/zip`,
+  filename `mind-diary-okf-bundle.zip`, `Content-Disposition: attachment;
+  filename="mind-diary-okf-bundle.zip"`. Это только export container; он не
+  определяет ZIP/local import или migration behavior.
+- `MD-OKF-ZIP-1` содержит только canonical UTF-8 Markdown files выбранной
+  revision под исходными bundle-relative paths. Service manifest, revision
+  metadata, ACL, memberships, tokens, idempotency, audit, jobs и derived index
+  не записываются внутрь archive.
+- Entry names кодируются UTF-8 без Unicode/path rewrite и сортируются по
+  unsigned UTF-8 bytes. ZIP использует stored entries без compression,
+  UTF-8-name flag, fixed DOS timestamp `1980-01-01T00:00:00`, fixed regular-file
+  mode `0644`, пустые extra/comment fields и не создаёт directory entries.
+  CRC-32 считается для exact source bytes; ZIP64 не используется. Превышение
+  classic-ZIP limits завершает export стабильной ошибкой, а не меняет format.
+- Markdown bytes копируются из materialized revision без decode/encode или
+  frontmatter rendering, поэтому неизвестные OKF fields/types и исходные
+  newline/encoding bytes сохраняются. Для готового archive считаются SHA-256
+  всего ZIP и точный byte size. Одна exact revision при одной версии archive
+  contract всегда даёт одинаковые bytes, SHA-256 и size.
 - Full export доступен любому Reader/baseline Reader с `content:read`, фиксирует
   exact revision и выдаётся через short-lived download URL с повторной
   authorization; отдельные rate/size limits не являются новой ACL.
@@ -302,7 +324,9 @@ network, которого Sites пока не обещает. Если Streamabl
 22. Unknown OKF fields/types сохраняются при read-modify-write и deterministic
     export; conformance errors отделены от quality warnings.
 23. Reader и baseline Reader могут экспортировать exact разрешённую revision;
-    download повторно авторизуется и не раскрывает service metadata.
+    `MD-OKF-ZIP-1` повторяем byte-for-byte, проходит full-bundle validation,
+    сохраняет exact unknown OKF fields/types и не меняется после движения HEAD.
+    Download повторно авторизуется и не раскрывает service metadata.
 24. Search/fetch ограничены exact space/revision. Missing historical index не
     подмешивает HEAD.
 25. Target content не расширяет server scopes и не получает control-plane
