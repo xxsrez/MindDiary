@@ -343,6 +343,28 @@ test("intrinsic invalid operations fail after authorization but before reading c
       ],
       "invalid_operation",
     ],
+    [
+      [
+        {
+          type: "add_log_entry",
+          path: "log.md",
+          category: "Update\u2028Injected",
+          message: "No literal newline",
+        },
+      ],
+      "invalid_operation",
+    ],
+    [
+      [
+        {
+          type: "add_log_entry",
+          path: "log.md",
+          category: "Update",
+          message: "Paragraph\u2029Injected",
+        },
+      ],
+      "invalid_operation",
+    ],
   ];
 
   for (const [operations, code] of cases) {
@@ -384,6 +406,32 @@ test("operation, path, file, changeset and resulting bundle limits are enforced"
       limits: tiny({ maxChangesetBytes: 16 }),
       operations: [validCreate()],
       code: "changeset_size_limit_exceeded",
+      reads: false,
+    },
+    {
+      limits: tiny({ maxLogCategoryBytes: 3 }),
+      operations: [
+        {
+          type: "add_log_entry",
+          path: "log.md",
+          category: "Four",
+          message: "Bounded message",
+        },
+      ],
+      code: "log_category_size_limit_exceeded",
+      reads: false,
+    },
+    {
+      limits: tiny({ maxLogMessageBytes: 4 }),
+      operations: [
+        {
+          type: "add_log_entry",
+          path: "log.md",
+          category: "Ok",
+          message: "Large",
+        },
+      ],
+      code: "log_message_size_limit_exceeded",
       reads: false,
     },
     {

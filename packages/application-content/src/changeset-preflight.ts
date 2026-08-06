@@ -65,6 +65,8 @@ export interface ChangesetPreflightLimits {
   readonly maxOperations: number;
   readonly maxPathBytes: number;
   readonly maxFileBytes: number;
+  readonly maxLogCategoryBytes: number;
+  readonly maxLogMessageBytes: number;
   readonly maxChangesetBytes: number;
   readonly maxResultingFiles: number;
   readonly maxResultingBundleBytes: number;
@@ -75,6 +77,8 @@ export const DEFAULT_CHANGESET_PREFLIGHT_LIMITS: Readonly<ChangesetPreflightLimi
     maxOperations: 100,
     maxPathBytes: 1_024,
     maxFileBytes: 1_048_576,
+    maxLogCategoryBytes: 256,
+    maxLogMessageBytes: 16_384,
     maxChangesetBytes: 4_194_304,
     maxResultingFiles: 10_000,
     maxResultingBundleBytes: 67_108_864,
@@ -100,6 +104,8 @@ export type ChangesetValidationCode =
   | "invalid_utf8"
   | "path_size_limit_exceeded"
   | "file_size_limit_exceeded"
+  | "log_category_size_limit_exceeded"
+  | "log_message_size_limit_exceeded"
   | "changeset_size_limit_exceeded"
   | "resulting_file_limit_exceeded"
   | "resulting_bundle_size_limit_exceeded"
@@ -175,11 +181,13 @@ interface WorkingFile {
 
 const ENCODER = new TextEncoder();
 const DECODER = new TextDecoder("utf-8", { fatal: true });
-const SINGLE_LINE_CONTROL = /[\u0000-\u001f\u007f]/u;
+const SINGLE_LINE_FORBIDDEN = /[\p{Cc}\p{Zl}\p{Zp}]/u;
 const LIMIT_KEYS = [
   "maxOperations",
   "maxPathBytes",
   "maxFileBytes",
+  "maxLogCategoryBytes",
+  "maxLogMessageBytes",
   "maxChangesetBytes",
   "maxResultingFiles",
   "maxResultingBundleBytes",
@@ -346,6 +354,7 @@ function checkedLogField(
   label: "category" | "message",
   operationIndex: number,
   path: string,
+  maxBytes: number,
 ): { readonly value: string; readonly bytes: number } | Extract<
   ChangesetPreflightResult,
   { readonly kind: "invalid" }
@@ -353,7 +362,7 @@ function checkedLogField(
   if (
     typeof value !== "string" ||
     value.trim().length === 0 ||
-    SINGLE_LINE_CONTROL.test(value)
+    SINGLE_LINE_FORBIDDEN.test(value)
   ) {
     return invalid(
       "invalid_operation",
@@ -367,6 +376,15 @@ function checkedLogField(
       operationIndex,
       path,
     });
+  }
+  if (bytes.byteLength > maxBytes) {
+    return invalid(
+      label === "category"
+        ? "log_category_size_limit_exceeded"
+        : "log_message_size_limit_exceeded",
+      `add_log_entry ${label} exceeds its byte limit`,
+      { operationIndex, path },
+    );
   }
   return Object.freeze({ value, bytes: bytes.byteLength });
 }
@@ -518,9 +536,21 @@ function validateOperations(
           path,
         });
       }
-      const category = checkedLogField(candidate.category, "category", index, path);
+      const category = checkedLogField(
+        candidate.category,
+        "category",
+        index,
+        path,
+        limits.maxLogCategoryBytes,
+      );
       if ("kind" in category) return category;
-      const message = checkedLogField(candidate.message, "message", index, path);
+      const message = checkedLogField(
+        candidate.message,
+        "message",
+        index,
+        path,
+        limits.maxLogMessageBytes,
+      );
       if ("kind" in message) return message;
       totalBytes += category.bytes + message.bytes;
       operation = Object.freeze({
