@@ -1,9 +1,25 @@
 import type {
   CanonicalRevisionEnvelope,
+  CanonicalSpaceHandle,
+  HandleRegistry,
+  HandleReservationRequest,
+  HandleReservationResult,
+  HandleResolutionRequest,
+  HandleResolutionResult,
+  HandleRetirementRequest,
+  HandleRetirementResult,
+  HandleReservationSnapshot,
   MetadataStore,
+  RetiredHandleMarker,
   RevisionCommitRequest,
   RevisionCommitResult,
   RevisionMetadataStore,
+  VerifiedSpaceHost,
+} from "@mind-diary/application-ports";
+import {
+  isReservedTopLevelHandle,
+  isReservedTopLevelRoute,
+  parseCanonicalSpaceHandle,
 } from "@mind-diary/application-ports";
 
 export const METADATA_ADAPTER = "memory-revision-envelope" as const;
@@ -13,10 +29,150 @@ type Envelope = Readonly<CanonicalRevisionEnvelope>;
 type RevisionId = Envelope["revision"]["revisionId"];
 type SpaceId = Envelope["revision"]["spaceId"];
 type Digest = Envelope["revision"]["manifestHash"];
+type HandleSpaceId = HandleReservationSnapshot["spaceId"];
 
 interface SpaceState {
   head: RevisionId | null;
   revisions: Map<RevisionId, Envelope>;
+}
+
+export interface InMemoryHandleRegistrySnapshot {
+  readonly reservations: readonly Readonly<HandleReservationSnapshot>[];
+  readonly retiredMarkers: readonly Readonly<RetiredHandleMarker>[];
+}
+
+const HANDLE_UNAVAILABLE = Object.freeze({ kind: "handle_unavailable" } as const);
+const HANDLE_NOT_FOUND = Object.freeze({ kind: "not_found" } as const);
+
+function handleKey(
+  host: VerifiedSpaceHost,
+  handle: CanonicalSpaceHandle,
+): string {
+  return `${host}\u0000${handle}`;
+}
+
+function freezeReservation(
+  host: VerifiedSpaceHost,
+  canonicalHandle: CanonicalSpaceHandle,
+  spaceId: HandleSpaceId,
+): Readonly<HandleReservationSnapshot> {
+  return Object.freeze({ host, canonicalHandle, spaceId });
+}
+
+function freezeRetiredMarker(
+  host: VerifiedSpaceHost,
+  canonicalHandle: CanonicalSpaceHandle,
+): Readonly<RetiredHandleMarker> {
+  return Object.freeze({ host, canonicalHandle });
+}
+
+export class InMemoryHandleRegistry implements HandleRegistry {
+  readonly kind = "metadata-store" as const;
+  readonly #activeByHandle = new Map<string, Readonly<HandleReservationSnapshot>>();
+  readonly #activeBySpace = new Map<HandleSpaceId, Readonly<HandleReservationSnapshot>>();
+  readonly #retired = new Map<string, Readonly<RetiredHandleMarker>>();
+
+  async reserveHandle(
+    request: HandleReservationRequest,
+  ): Promise<HandleReservationResult> {
+    if (isReservedTopLevelRoute(request.handle)) return HANDLE_UNAVAILABLE;
+    const parsed = parseCanonicalSpaceHandle(request.handle);
+    if (parsed.kind === "invalid") {
+      return Object.freeze({
+        kind: "invalid_handle",
+        reason: parsed.reason,
+      });
+    }
+
+    const canonicalHandle = parsed.canonicalHandle;
+    const key = handleKey(request.host, canonicalHandle);
+    if (isReservedTopLevelHandle(canonicalHandle) || this.#retired.has(key)) {
+      return HANDLE_UNAVAILABLE;
+    }
+
+    const occupied = this.#activeByHandle.get(key);
+    if (occupied) {
+      if (occupied.spaceId === request.spaceId) {
+        return Object.freeze({
+          kind: "reserved",
+          reservation: occupied,
+          replayed: true,
+        });
+      }
+      return HANDLE_UNAVAILABLE;
+    }
+
+    const currentIdentity = this.#activeBySpace.get(request.spaceId);
+    if (currentIdentity) {
+      return Object.freeze({ kind: "immutable_handle" });
+    }
+
+    const reservation = freezeReservation(
+      request.host,
+      canonicalHandle,
+      request.spaceId,
+    );
+    // Adjacent synchronous writes are the in-memory transaction boundary.
+    this.#activeByHandle.set(key, reservation);
+    this.#activeBySpace.set(request.spaceId, reservation);
+    return Object.freeze({ kind: "reserved", reservation, replayed: false });
+  }
+
+  async resolveHandle(
+    request: HandleResolutionRequest,
+  ): Promise<HandleResolutionResult> {
+    const parsed = parseCanonicalSpaceHandle(request.handle);
+    if (parsed.kind === "invalid") return HANDLE_NOT_FOUND;
+    const reservation = this.#activeByHandle.get(
+      handleKey(request.host, parsed.canonicalHandle),
+    );
+    if (!reservation) return HANDLE_NOT_FOUND;
+    return Object.freeze({ kind: "resolved", spaceId: reservation.spaceId });
+  }
+
+  async retireHandle(
+    request: HandleRetirementRequest,
+  ): Promise<HandleRetirementResult> {
+    const parsed = parseCanonicalSpaceHandle(request.handle);
+    if (parsed.kind === "invalid") return HANDLE_NOT_FOUND;
+    const key = handleKey(request.host, parsed.canonicalHandle);
+    const reservation = this.#activeByHandle.get(key);
+    if (!reservation || reservation.spaceId !== request.spaceId) {
+      return HANDLE_NOT_FOUND;
+    }
+
+    const marker = freezeRetiredMarker(request.host, parsed.canonicalHandle);
+    // Remove every linkable identity before retaining the minimal marker.
+    this.#activeByHandle.delete(key);
+    this.#activeBySpace.delete(request.spaceId);
+    this.#retired.set(key, marker);
+    return Object.freeze({ kind: "retired", marker });
+  }
+
+  snapshot(): Readonly<InMemoryHandleRegistrySnapshot> {
+    const reservations = [...this.#activeByHandle.values()]
+      .map((reservation) => freezeReservation(
+        reservation.host,
+        reservation.canonicalHandle,
+        reservation.spaceId,
+      ))
+      .sort((left, right) =>
+        compareUnicodeScalarValues(
+          `${left.host}/${left.canonicalHandle}`,
+          `${right.host}/${right.canonicalHandle}`,
+        ));
+    const retiredMarkers = [...this.#retired.values()]
+      .map((marker) => freezeRetiredMarker(marker.host, marker.canonicalHandle))
+      .sort((left, right) =>
+        compareUnicodeScalarValues(
+          `${left.host}/${left.canonicalHandle}`,
+          `${right.host}/${right.canonicalHandle}`,
+        ));
+    return Object.freeze({
+      reservations: Object.freeze(reservations),
+      retiredMarkers: Object.freeze(retiredMarkers),
+    });
+  }
 }
 
 const SHA256_PATTERN = /^sha256:[0-9a-f]{64}$/u;

@@ -1,5 +1,6 @@
 export * from "./aggregates.js";
 export * from "./capabilities.js";
+export * from "./handles.js";
 export * from "./ids.js";
 export * from "./records.js";
 export * from "./revisions.js";
