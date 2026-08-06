@@ -4,8 +4,8 @@ import { COMPOSITION_SELECTION } from "@mind-diary/composition-root";
 
 test("composition root selects one boundary and only fixture adapters", () => {
   assert.equal(COMPOSITION_SELECTION.deployableServiceImplemented, false);
-  assert.equal(COMPOSITION_SELECTION.outbound.metadata, "memory-fixture-only");
-  assert.equal(COMPOSITION_SELECTION.outbound.objects, "memory-fixture-only");
+  assert.equal(COMPOSITION_SELECTION.outbound.metadata, "memory-revision-envelope");
+  assert.equal(COMPOSITION_SELECTION.outbound.objects, "memory-revision-envelope");
   assert.equal(COMPOSITION_SELECTION.outbound.search, "memory-fixture-only");
   assert.equal(COMPOSITION_SELECTION.outbound.audit, "memory-fixture-only");
   assert.equal(COMPOSITION_SELECTION.outbound.security, "webcrypto-contract-only");
