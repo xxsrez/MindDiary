@@ -53,6 +53,11 @@ export interface Clock {
   now(): UtcInstant;
 }
 
+/** Server-side source of opaque immutable revision identities. */
+export interface RevisionIdGenerator {
+  nextRevisionId(): RevisionId;
+}
+
 export interface MetadataStore {
   readonly kind: "metadata-store";
 }
@@ -224,6 +229,30 @@ export interface RevisionMetadataStore extends MetadataStore {
   commitRevision(request: RevisionCommitRequest): Promise<RevisionCommitResult>;
   /** Includes every historical revision, not only each Mind's current HEAD. */
   listReachableObjectDigests(): Promise<readonly Sha256Digest[]>;
+}
+
+/**
+ * Race-sensitive content commit view over one rollback-on-error metadata
+ * transaction. This boundary intentionally has no provisional audit/outbox
+ * hook; AND-66 can add explicit durable stage methods to the same transaction.
+ */
+export interface ContentCommitMetadataTransaction
+  extends AuthorizationTransaction {
+  readHead(spaceId: SpaceId): Promise<RevisionId | null>;
+  readRevision(
+    spaceId: SpaceId,
+    revisionId: RevisionId,
+  ): Promise<Readonly<CanonicalRevisionEnvelope> | null>;
+  commitRevision(request: RevisionCommitRequest): Promise<RevisionCommitResult>;
+}
+
+/** Atomic metadata boundary for one application-level content commit. */
+export interface ContentCommitMetadataStore extends RevisionMetadataStore {
+  runContentCommitTransaction<Result>(
+    operation: (
+      transaction: ContentCommitMetadataTransaction,
+    ) => Promise<Result>,
+  ): Promise<Result>;
 }
 
 export interface SearchIndex {
