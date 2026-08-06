@@ -13,6 +13,10 @@ import {
   tokenScopesAllowCapability,
   version,
   type AccessTokenState,
+  type AuditEvent,
+  type AuditEventId,
+  type AuditOutboxMessage,
+  type BackgroundJob,
   type Capability,
   type CanonicalRevisionEnvelope,
   type CanonicalSpaceHandle,
@@ -25,8 +29,11 @@ import {
   type IdempotencyRecord,
   type IdempotencyResult,
   type PrincipalId,
+  type JobId,
+  type OutboxMessageId,
   type PrincipalState,
   type RevisionId,
+  type RevisionIndexState,
   type RevisionMode,
   type Role,
   type Sha256Digest,
@@ -41,10 +48,16 @@ import {
 
 export type { CanonicalRevisionEnvelope } from "@mind-diary/domain";
 export type {
+  AuditEvent,
+  AuditOutboxMessage,
+  BackgroundJob,
   CommitChangesetIdempotencyResult,
   IdempotencyOperation,
   IdempotencyRecord,
   IdempotencyResult,
+  JobId,
+  OutboxMessageId,
+  RevisionIndexState,
   StartExportIdempotencyResult,
 } from "@mind-diary/domain";
 export {
@@ -67,6 +80,13 @@ export interface Clock {
 /** Server-side source of opaque immutable revision identities. */
 export interface RevisionIdGenerator {
   nextRevisionId(): RevisionId;
+}
+
+/** Server-owned IDs for effects staged with one successful content commit. */
+export interface CommitEffectIdGenerator {
+  nextAuditEventId(): AuditEventId;
+  nextOutboxMessageId(): OutboxMessageId;
+  nextIndexJobId(): JobId;
 }
 
 export interface MetadataStore {
@@ -316,10 +336,16 @@ export interface ContentCommitMetadataTransaction
     revisionId: RevisionId,
   ): Promise<Readonly<CanonicalRevisionEnvelope> | null>;
   commitRevision(request: RevisionCommitRequest): Promise<RevisionCommitResult>;
+  stageContentCommitEffects(
+    request: StageContentCommitEffectsRequest,
+  ): Promise<StageContentCommitEffectsResult>;
 }
 
 /** Atomic metadata boundary for one application-level content commit. */
-export interface ContentCommitMetadataStore extends RevisionMetadataStore {
+export interface ContentCommitMetadataStore
+  extends RevisionMetadataStore,
+    BackgroundWorkStore,
+    SpaceTargetRecordPurger {
   runContentCommitTransaction<Result>(
     operation: (
       transaction: ContentCommitMetadataTransaction,
@@ -327,8 +353,120 @@ export interface ContentCommitMetadataStore extends RevisionMetadataStore {
   ): Promise<Result>;
 }
 
+export interface ExactRevisionIndexDocument {
+  readonly path: string;
+  /** Derived searchable text. Implementations must never log it. */
+  readonly text: string;
+}
+
+export interface ReplaceExactRevisionIndexRequest {
+  readonly spaceId: SpaceId;
+  readonly revisionId: RevisionId;
+  readonly documents: readonly Readonly<ExactRevisionIndexDocument>[];
+}
+
+export type ReadExactRevisionIndexResult =
+  | {
+      readonly kind: "ready";
+      readonly spaceId: SpaceId;
+      readonly revisionId: RevisionId;
+      readonly documents: readonly Readonly<ExactRevisionIndexDocument>[];
+    }
+  | { readonly kind: "unavailable" };
+
+/** Revision-keyed derived index. There is deliberately no implicit HEAD API. */
 export interface SearchIndex {
   readonly kind: "search-index";
+  replaceExactRevision(
+    request: ReplaceExactRevisionIndexRequest,
+  ): Promise<void>;
+  readExactRevision(
+    spaceId: SpaceId,
+    revisionId: RevisionId,
+  ): Promise<ReadExactRevisionIndexResult>;
+  purgeSpace(spaceId: SpaceId): Promise<number>;
+}
+
+export interface StageContentCommitEffectsRequest {
+  readonly auditEvent: Readonly<AuditEvent>;
+  readonly auditOutbox: Readonly<AuditOutboxMessage>;
+  readonly indexJob: Readonly<BackgroundJob>;
+  readonly indexState: Readonly<RevisionIndexState>;
+}
+
+export type StageContentCommitEffectsResult =
+  | { readonly kind: "staged" }
+  | { readonly kind: "duplicate" }
+  | { readonly kind: "effect_id_collision" }
+  | { readonly kind: "invalid_effects" };
+
+export type ClaimIndexJobResult =
+  | {
+      readonly kind: "claimed";
+      readonly job: Readonly<BackgroundJob>;
+      readonly indexState: Readonly<RevisionIndexState>;
+    }
+  | { readonly kind: "not_found" | "not_available" | "completed" };
+
+export type ClaimAuditOutboxResult =
+  | {
+      readonly kind: "claimed";
+      readonly message: Readonly<AuditOutboxMessage>;
+      readonly event: Readonly<AuditEvent>;
+    }
+  | { readonly kind: "not_found" | "not_available" | "completed" };
+
+export interface BackgroundWorkStore extends MetadataStore {
+  claimIndexJob(
+    jobId: JobId,
+    now: UtcInstant,
+    claimExpiresAt: UtcInstant,
+  ): Promise<ClaimIndexJobResult>;
+  completeIndexJob(
+    jobId: JobId,
+    expectedClaimVersion: Version,
+    completedAt: UtcInstant,
+  ): Promise<boolean>;
+  failIndexJob(
+    jobId: JobId,
+    expectedClaimVersion: Version,
+    failureCode: string,
+    failedAt: UtcInstant,
+    retryAt: UtcInstant,
+  ): Promise<boolean>;
+  readRevisionIndexState(
+    spaceId: SpaceId,
+    revisionId: RevisionId,
+  ): Promise<Readonly<RevisionIndexState> | null>;
+  claimAuditOutbox(
+    outboxMessageId: OutboxMessageId,
+    now: UtcInstant,
+    claimExpiresAt: UtcInstant,
+  ): Promise<ClaimAuditOutboxResult>;
+  completeAuditOutbox(
+    outboxMessageId: OutboxMessageId,
+    expectedClaimVersion: Version,
+    completedAt: UtcInstant,
+  ): Promise<boolean>;
+  failAuditOutbox(
+    outboxMessageId: OutboxMessageId,
+    expectedClaimVersion: Version,
+    failedAt: UtcInstant,
+    retryAt: UtcInstant,
+  ): Promise<boolean>;
+}
+
+export interface SpaceTargetPurgeResult {
+  readonly backgroundJobs: number;
+  readonly indexStates: number;
+  readonly auditEvents: number;
+  readonly auditOutboxMessages: number;
+  readonly idempotencyRecords: number;
+}
+
+/** Explicit delete-all hook for target-linked durable service records. */
+export interface SpaceTargetRecordPurger {
+  purgeSpaceTargetRecords(spaceId: SpaceId): Promise<SpaceTargetPurgeResult>;
 }
 
 export interface CurrentAuthorizationMembership {
@@ -911,4 +1049,8 @@ export interface McpTokenStore
 
 export interface AuditSink {
   readonly kind: "audit-sink";
+  /** Delivery is idempotent by auditEventId. */
+  deliver(event: Readonly<AuditEvent>): Promise<"delivered" | "duplicate">;
+  /** Delete-all policy removes delivered events still linked to the target Space. */
+  purgeSpace(spaceId: SpaceId): Promise<number>;
 }

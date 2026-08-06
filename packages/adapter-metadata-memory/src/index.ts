@@ -2,10 +2,15 @@ import type {
   CanonicalRevisionEnvelope,
   CanonicalSpaceHandle,
   AuthorizationStateQuery,
+  AuditEvent,
+  AuditOutboxMessage,
+  BackgroundJob,
   CheckIdempotencyRequest,
   CheckIdempotencyResult,
   CompleteIdempotencyRequest,
   CompleteIdempotencyResult,
+  ClaimAuditOutboxResult,
+  ClaimIndexJobResult,
   ContentCommitMetadataStore,
   ContentCommitMetadataTransaction,
   CurrentAuthorizationState,
@@ -19,6 +24,7 @@ import type {
   HandleReservationSnapshot,
   IdempotencyNamespace,
   IdempotencyRecord,
+  JobId,
   McpTokenMetadata,
   McpTokenStore,
   MetadataStore,
@@ -30,8 +36,12 @@ import type {
   RevokePrincipalTokensForAccountDeletionRequest,
   RevokePrincipalTokensForAccountDeletionResult,
   RetiredHandleMarker,
+  RevisionIndexState,
   RevisionCommitRequest,
   RevisionCommitResult,
+  SpaceTargetPurgeResult,
+  StageContentCommitEffectsRequest,
+  StageContentCommitEffectsResult,
   VerifiedSpaceHost,
   TokenVerifier,
 } from "@mind-diary/application-ports";
@@ -50,6 +60,8 @@ type RevisionId = Envelope["revision"]["revisionId"];
 type SpaceId = Envelope["revision"]["spaceId"];
 type Digest = Envelope["revision"]["manifestHash"];
 type HandleSpaceId = HandleReservationSnapshot["spaceId"];
+type AuditEventId = AuditEvent["auditEventId"];
+type OutboxMessageId = AuditOutboxMessage["outboxMessageId"];
 
 interface SpaceState {
   head: RevisionId | null;
@@ -553,6 +565,160 @@ function cloneIdempotencyRecords(
   );
 }
 
+function cloneAuditEvent(event: Readonly<AuditEvent>): Readonly<AuditEvent> {
+  return Object.freeze({
+    ...event,
+    actor: Object.freeze({ ...event.actor }),
+    safeMetadata: Object.freeze({ ...event.safeMetadata }),
+  });
+}
+
+function cloneAuditOutbox(
+  message: Readonly<AuditOutboxMessage>,
+): Readonly<AuditOutboxMessage> {
+  return Object.freeze({ ...message });
+}
+
+function cloneBackgroundJob(job: Readonly<BackgroundJob>): Readonly<BackgroundJob> {
+  return Object.freeze({ ...job, target: Object.freeze({ ...job.target }) });
+}
+
+function cloneIndexState(
+  state: Readonly<RevisionIndexState>,
+): Readonly<RevisionIndexState> {
+  return Object.freeze({ ...state });
+}
+
+function indexStateKey(spaceId: SpaceId, revisionId: RevisionId): string {
+  return `${spaceId}\u0000${revisionId}`;
+}
+
+const COMMIT_AUDIT_METADATA_KEYS = [
+  "manifest_hash",
+  "previous_revision_id",
+  "revision_id",
+  "revision_number",
+] as const;
+const BOUNDED_OPAQUE_ID = /^[A-Za-z0-9._:-]{1,128}$/u;
+const MAX_CLAIM_LEASE_MS = 5 * 60 * 1_000;
+
+function validCommitAuditMetadata(
+  metadata: Readonly<Record<string, unknown>>,
+  envelope: Envelope,
+): boolean {
+  const keys = Object.keys(metadata).sort();
+  if (
+    keys.length !== COMMIT_AUDIT_METADATA_KEYS.length ||
+    keys.some((key, index) => key !== COMMIT_AUDIT_METADATA_KEYS[index])
+  ) {
+    return false;
+  }
+  const revision = envelope.revision;
+  const previous = metadata.previous_revision_id;
+  return (
+    metadata.revision_id === revision.revisionId &&
+    typeof metadata.revision_id === "string" &&
+    BOUNDED_OPAQUE_ID.test(metadata.revision_id) &&
+    previous === revision.parentRevisionId &&
+    (previous === null ||
+      (typeof previous === "string" && BOUNDED_OPAQUE_ID.test(previous))) &&
+    typeof metadata.revision_number === "number" &&
+    Number.isSafeInteger(metadata.revision_number) &&
+    metadata.revision_number > 0 &&
+    metadata.revision_number === revision.revisionNumber &&
+    typeof metadata.manifest_hash === "string" &&
+    SHA256_PATTERN.test(metadata.manifest_hash) &&
+    metadata.manifest_hash === revision.manifestHash
+  );
+}
+
+function validClaimLease(now: string, claimExpiresAt: string): boolean {
+  const start = Date.parse(now);
+  const end = Date.parse(claimExpiresAt);
+  return (
+    Number.isFinite(start) &&
+    Number.isFinite(end) &&
+    end > start &&
+    end - start <= MAX_CLAIM_LEASE_MS
+  );
+}
+
+function stageContentCommitEffectsAgainst(
+  request: StageContentCommitEffectsRequest,
+  auditEvents: Map<AuditEventId, Readonly<AuditEvent>>,
+  auditOutbox: Map<OutboxMessageId, Readonly<AuditOutboxMessage>>,
+  backgroundJobs: Map<JobId, Readonly<BackgroundJob>>,
+  indexStates: Map<string, Readonly<RevisionIndexState>>,
+  revisionsById: ReadonlyMap<RevisionId, Envelope>,
+): StageContentCommitEffectsResult {
+  const { auditEvent, auditOutbox: outbox, indexJob, indexState } = request;
+  const target = indexJob.target;
+  if (target.kind !== "revision_index") {
+    return Object.freeze({ kind: "invalid_effects" });
+  }
+  const exactRevision = revisionsById.get(target.revisionId);
+  if (!exactRevision || exactRevision.revision.spaceId !== target.spaceId) {
+    return Object.freeze({ kind: "invalid_effects" });
+  }
+  if (
+    auditEvent.spaceId === null ||
+    auditEvent.outcome !== "succeeded" ||
+    auditEvent.eventType !== "content.changeset_committed" ||
+    !validCommitAuditMetadata(auditEvent.safeMetadata, exactRevision) ||
+    outbox.auditEventId !== auditEvent.auditEventId ||
+    outbox.state !== "pending" ||
+    outbox.attempts !== 0 ||
+    outbox.claimExpiresAt !== null ||
+    target.spaceId !== auditEvent.spaceId ||
+    target.spaceId !== indexState.spaceId ||
+    target.revisionId !== indexState.revisionId ||
+    indexJob.state !== "queued" ||
+    indexJob.attempts !== 0 ||
+    indexJob.claimExpiresAt !== null ||
+    indexState.status !== "queued" ||
+    indexState.attempts !== 0
+  ) {
+    return Object.freeze({ kind: "invalid_effects" });
+  }
+  const indexKey = indexStateKey(indexState.spaceId, indexState.revisionId);
+  const existing = [
+    auditEvents.has(auditEvent.auditEventId),
+    auditOutbox.has(outbox.outboxMessageId),
+    backgroundJobs.has(indexJob.jobId),
+    indexStates.has(indexKey),
+  ];
+  if (existing.every(Boolean)) {
+    const same =
+      JSON.stringify(auditEvents.get(auditEvent.auditEventId)) ===
+        JSON.stringify(auditEvent) &&
+      JSON.stringify(auditOutbox.get(outbox.outboxMessageId)) ===
+        JSON.stringify(outbox) &&
+      JSON.stringify(backgroundJobs.get(indexJob.jobId)) ===
+        JSON.stringify(indexJob) &&
+      JSON.stringify(indexStates.get(indexKey)) === JSON.stringify(indexState);
+    return Object.freeze({ kind: same ? "duplicate" : "effect_id_collision" });
+  }
+  if (existing.some(Boolean)) return Object.freeze({ kind: "effect_id_collision" });
+  if (
+    [...auditOutbox.values()].some(
+      (candidate) => candidate.auditEventId === auditEvent.auditEventId,
+    ) ||
+    [...backgroundJobs.values()].some(
+      (candidate) =>
+        candidate.target.kind === "revision_index" &&
+        candidate.target.spaceId === target.spaceId &&
+        candidate.target.revisionId === target.revisionId,
+    )
+  ) {
+    return Object.freeze({ kind: "effect_id_collision" });
+  }
+  auditEvents.set(auditEvent.auditEventId, cloneAuditEvent(auditEvent));
+  auditOutbox.set(outbox.outboxMessageId, cloneAuditOutbox(outbox));
+  backgroundJobs.set(indexJob.jobId, cloneBackgroundJob(indexJob));
+  indexStates.set(indexKey, cloneIndexState(indexState));
+  return Object.freeze({ kind: "staged" });
+}
+
 function checkIdempotencyAgainst(
   request: CheckIdempotencyRequest,
   records: ReadonlyMap<string, CompletedIdempotencyRecord>,
@@ -613,6 +779,10 @@ export class InMemoryRevisionMetadataStore implements ContentCommitMetadataStore
   #spaces = new Map<SpaceId, SpaceState>();
   #revisionsById = new Map<RevisionId, Envelope>();
   #idempotencyRecords = new Map<string, CompletedIdempotencyRecord>();
+  #auditEvents = new Map<AuditEventId, Readonly<AuditEvent>>();
+  #auditOutbox = new Map<OutboxMessageId, Readonly<AuditOutboxMessage>>();
+  #backgroundJobs = new Map<JobId, Readonly<BackgroundJob>>();
+  #indexStates = new Map<string, Readonly<RevisionIndexState>>();
   readonly #authorizationStates = new Map<string, AuthorizationState>();
   #transactionTail: Promise<void> = Promise.resolve();
   #nextCommitFailure: Error | null = null;
@@ -652,6 +822,18 @@ export class InMemoryRevisionMetadataStore implements ContentCommitMetadataStore
       const spaces = cloneSpaces(this.#spaces);
       const revisionsById = new Map(this.#revisionsById);
       const idempotencyRecords = cloneIdempotencyRecords(this.#idempotencyRecords);
+      const auditEvents = new Map(
+        [...this.#auditEvents].map(([id, event]) => [id, cloneAuditEvent(event)]),
+      );
+      const auditOutbox = new Map(
+        [...this.#auditOutbox].map(([id, message]) => [id, cloneAuditOutbox(message)]),
+      );
+      const backgroundJobs = new Map(
+        [...this.#backgroundJobs].map(([id, job]) => [id, cloneBackgroundJob(job)]),
+      );
+      const indexStates = new Map(
+        [...this.#indexStates].map(([key, state]) => [key, cloneIndexState(state)]),
+      );
       const authorizationStates = new Map(
         [...this.#authorizationStates].map(([key, state]) => [
           key,
@@ -674,12 +856,27 @@ export class InMemoryRevisionMetadataStore implements ContentCommitMetadataStore
         completeIdempotency: async (
           request: CompleteIdempotencyRequest,
         ) => completeIdempotencyAgainst(request, idempotencyRecords),
+        stageContentCommitEffects: async (
+          request: StageContentCommitEffectsRequest,
+        ) =>
+          stageContentCommitEffectsAgainst(
+            request,
+            auditEvents,
+            auditOutbox,
+            backgroundJobs,
+            indexStates,
+            revisionsById,
+          ),
       });
 
       const result = await operation(transaction);
       this.#spaces = spaces;
       this.#revisionsById = revisionsById;
       this.#idempotencyRecords = idempotencyRecords;
+      this.#auditEvents = auditEvents;
+      this.#auditOutbox = auditOutbox;
+      this.#backgroundJobs = backgroundJobs;
+      this.#indexStates = indexStates;
       return result;
     });
   }
@@ -789,6 +986,314 @@ export class InMemoryRevisionMetadataStore implements ContentCommitMetadataStore
       for (const entry of revision.manifest.entries) reachable.add(entry.sha256);
     }
     return Object.freeze([...reachable].sort());
+  }
+
+  async claimIndexJob(
+    jobId: JobId,
+    now: RevisionIndexState["updatedAt"],
+    claimExpiresAt: RevisionIndexState["updatedAt"],
+  ): Promise<ClaimIndexJobResult> {
+    return this.#runExclusive(async () => {
+      if (!validClaimLease(now, claimExpiresAt)) {
+        return Object.freeze({ kind: "not_available" });
+      }
+      const current = this.#backgroundJobs.get(jobId);
+      if (!current || current.target.kind !== "revision_index") {
+        return Object.freeze({ kind: "not_found" });
+      }
+      if (current.state === "succeeded") return Object.freeze({ kind: "completed" });
+      const expiredRunningClaim =
+        current.state === "running" &&
+        current.claimExpiresAt !== null &&
+        Date.parse(current.claimExpiresAt) <= Date.parse(now);
+      if (
+        (current.state === "running" && !expiredRunningClaim) ||
+        (current.state !== "queued" &&
+          current.state !== "failed" &&
+          !expiredRunningClaim) ||
+        (!expiredRunningClaim && Date.parse(current.availableAt) > Date.parse(now))
+      ) {
+        return Object.freeze({ kind: "not_available" });
+      }
+      const attempts = current.attempts + 1;
+      const job = Object.freeze({
+        ...current,
+        state: "running" as const,
+        attempts,
+        version: version(current.version + 1),
+        updatedAt: now,
+        claimExpiresAt,
+      });
+      const key = indexStateKey(current.target.spaceId, current.target.revisionId);
+      const currentState = this.#indexStates.get(key);
+      if (!currentState) return Object.freeze({ kind: "not_found" });
+      const indexState = Object.freeze({
+        ...currentState,
+        status: "queued" as const,
+        attempts,
+        updatedAt: now,
+        readyAt: null,
+        lastFailureCode: null,
+      });
+      this.#backgroundJobs.set(jobId, job);
+      this.#indexStates.set(key, indexState);
+      return Object.freeze({
+        kind: "claimed",
+        job: cloneBackgroundJob(job),
+        indexState: cloneIndexState(indexState),
+      });
+    });
+  }
+
+  async completeIndexJob(
+    jobId: JobId,
+    expectedClaimVersion: BackgroundJob["version"],
+    completedAt: RevisionIndexState["updatedAt"],
+  ): Promise<boolean> {
+    return this.#runExclusive(async () => {
+      const current = this.#backgroundJobs.get(jobId);
+      if (!current || current.target.kind !== "revision_index") return false;
+      if (
+        current.state !== "running" ||
+        current.version !== expectedClaimVersion ||
+        current.claimExpiresAt === null ||
+        Date.parse(completedAt) >= Date.parse(current.claimExpiresAt)
+      ) return false;
+      const key = indexStateKey(current.target.spaceId, current.target.revisionId);
+      const state = this.#indexStates.get(key);
+      if (!state) return false;
+      this.#backgroundJobs.set(
+        jobId,
+        Object.freeze({
+          ...current,
+          state: "succeeded",
+          version: version(current.version + 1),
+          updatedAt: completedAt,
+          claimExpiresAt: null,
+        }),
+      );
+      this.#indexStates.set(
+        key,
+        Object.freeze({
+          ...state,
+          status: "ready",
+          updatedAt: completedAt,
+          readyAt: completedAt,
+          lastFailureCode: null,
+        }),
+      );
+      return true;
+    });
+  }
+
+  async failIndexJob(
+    jobId: JobId,
+    expectedClaimVersion: BackgroundJob["version"],
+    failureCode: string,
+    failedAt: RevisionIndexState["updatedAt"],
+    retryAt: RevisionIndexState["updatedAt"],
+  ): Promise<boolean> {
+    return this.#runExclusive(async () => {
+      const current = this.#backgroundJobs.get(jobId);
+      if (
+        !current ||
+        current.target.kind !== "revision_index" ||
+        current.state !== "running" ||
+        current.version !== expectedClaimVersion ||
+        current.claimExpiresAt === null ||
+        Date.parse(failedAt) >= Date.parse(current.claimExpiresAt) ||
+        typeof failureCode !== "string" ||
+        !/^[a-z0-9_]{1,64}$/u.test(failureCode)
+      ) {
+        return false;
+      }
+      const key = indexStateKey(current.target.spaceId, current.target.revisionId);
+      const state = this.#indexStates.get(key);
+      if (!state) return false;
+      this.#backgroundJobs.set(
+        jobId,
+        Object.freeze({
+          ...current,
+          state: "failed",
+          availableAt: retryAt,
+          version: version(current.version + 1),
+          updatedAt: failedAt,
+          claimExpiresAt: null,
+        }),
+      );
+      this.#indexStates.set(
+        key,
+        Object.freeze({
+          ...state,
+          status: "failed",
+          updatedAt: failedAt,
+          readyAt: null,
+          lastFailureCode: failureCode,
+        }),
+      );
+      return true;
+    });
+  }
+
+  async readRevisionIndexState(
+    spaceId: SpaceId,
+    revisionId: RevisionId,
+  ): Promise<Readonly<RevisionIndexState> | null> {
+    const state = this.#indexStates.get(indexStateKey(spaceId, revisionId));
+    return state ? cloneIndexState(state) : null;
+  }
+
+  async claimAuditOutbox(
+    outboxMessageId: OutboxMessageId,
+    now: AuditOutboxMessage["updatedAt"],
+    claimExpiresAt: AuditOutboxMessage["updatedAt"],
+  ): Promise<ClaimAuditOutboxResult> {
+    return this.#runExclusive(async () => {
+      if (!validClaimLease(now, claimExpiresAt)) {
+        return Object.freeze({ kind: "not_available" });
+      }
+      const current = this.#auditOutbox.get(outboxMessageId);
+      if (!current) return Object.freeze({ kind: "not_found" });
+      if (current.state === "delivered") return Object.freeze({ kind: "completed" });
+      const expiredDeliveryClaim =
+        current.state === "delivering" &&
+        current.claimExpiresAt !== null &&
+        Date.parse(current.claimExpiresAt) <= Date.parse(now);
+      if (
+        (current.state === "delivering" && !expiredDeliveryClaim) ||
+        (current.state !== "pending" &&
+          current.state !== "failed" &&
+          !expiredDeliveryClaim) ||
+        (!expiredDeliveryClaim && Date.parse(current.availableAt) > Date.parse(now))
+      ) {
+        return Object.freeze({ kind: "not_available" });
+      }
+      const event = this.#auditEvents.get(current.auditEventId);
+      if (!event) return Object.freeze({ kind: "not_found" });
+      const message = Object.freeze({
+        ...current,
+        state: "delivering" as const,
+        attempts: current.attempts + 1,
+        version: version(current.version + 1),
+        updatedAt: now,
+        claimExpiresAt,
+      });
+      this.#auditOutbox.set(outboxMessageId, message);
+      return Object.freeze({
+        kind: "claimed",
+        message: cloneAuditOutbox(message),
+        event: cloneAuditEvent(event),
+      });
+    });
+  }
+
+  async completeAuditOutbox(
+    outboxMessageId: OutboxMessageId,
+    expectedClaimVersion: AuditOutboxMessage["version"],
+    completedAt: AuditOutboxMessage["updatedAt"],
+  ): Promise<boolean> {
+    return this.#runExclusive(async () => {
+      const current = this.#auditOutbox.get(outboxMessageId);
+      if (!current) return false;
+      if (
+        current.state !== "delivering" ||
+        current.version !== expectedClaimVersion ||
+        current.claimExpiresAt === null ||
+        Date.parse(completedAt) >= Date.parse(current.claimExpiresAt)
+      ) return false;
+      this.#auditOutbox.set(
+        outboxMessageId,
+        Object.freeze({
+          ...current,
+          state: "delivered",
+          version: version(current.version + 1),
+          updatedAt: completedAt,
+          claimExpiresAt: null,
+        }),
+      );
+      return true;
+    });
+  }
+
+  async failAuditOutbox(
+    outboxMessageId: OutboxMessageId,
+    expectedClaimVersion: AuditOutboxMessage["version"],
+    failedAt: AuditOutboxMessage["updatedAt"],
+    retryAt: AuditOutboxMessage["updatedAt"],
+  ): Promise<boolean> {
+    return this.#runExclusive(async () => {
+      const current = this.#auditOutbox.get(outboxMessageId);
+      if (
+        !current ||
+        current.state !== "delivering" ||
+        current.version !== expectedClaimVersion ||
+        current.claimExpiresAt === null ||
+        Date.parse(failedAt) >= Date.parse(current.claimExpiresAt)
+      ) return false;
+      this.#auditOutbox.set(
+        outboxMessageId,
+        Object.freeze({
+          ...current,
+          state: "failed",
+          availableAt: retryAt,
+          version: version(current.version + 1),
+          updatedAt: failedAt,
+          claimExpiresAt: null,
+        }),
+      );
+      return true;
+    });
+  }
+
+  async purgeSpaceTargetRecords(spaceId: SpaceId): Promise<SpaceTargetPurgeResult> {
+    return this.#runExclusive(async () => {
+      const indexKeys = [...this.#indexStates]
+        .filter(([, state]) => state.spaceId === spaceId)
+        .map(([key]) => key);
+      const auditIds = [...this.#auditEvents]
+        .filter(([, event]) => event.spaceId === spaceId)
+        .map(([id]) => id);
+      const auditIdSet = new Set(auditIds);
+      const outboxIds = [...this.#auditOutbox]
+        .filter(([, message]) => auditIdSet.has(message.auditEventId))
+        .map(([id]) => id);
+      const outboxIdSet = new Set(outboxIds);
+      const jobIds = [...this.#backgroundJobs]
+        .filter(
+          ([, job]) =>
+            ("spaceId" in job.target && job.target.spaceId === spaceId) ||
+            (job.target.kind === "audit_delivery" &&
+              outboxIdSet.has(job.target.outboxMessageId)),
+        )
+        .map(([id]) => id);
+      const idempotencyKeys = [...this.#idempotencyRecords]
+        .filter(([, record]) => record.spaceId === spaceId)
+        .map(([key]) => key);
+      jobIds.forEach((id) => this.#backgroundJobs.delete(id));
+      indexKeys.forEach((key) => this.#indexStates.delete(key));
+      outboxIds.forEach((id) => this.#auditOutbox.delete(id));
+      auditIds.forEach((id) => this.#auditEvents.delete(id));
+      idempotencyKeys.forEach((key) => this.#idempotencyRecords.delete(key));
+      return Object.freeze({
+        backgroundJobs: jobIds.length,
+        indexStates: indexKeys.length,
+        auditEvents: auditIds.length,
+        auditOutboxMessages: outboxIds.length,
+        idempotencyRecords: idempotencyKeys.length,
+      });
+    });
+  }
+
+  async listAuditEventsForTest(): Promise<readonly Readonly<AuditEvent>[]> {
+    return Object.freeze([...this.#auditEvents.values()].map(cloneAuditEvent));
+  }
+
+  async listAuditOutboxForTest(): Promise<readonly Readonly<AuditOutboxMessage>[]> {
+    return Object.freeze([...this.#auditOutbox.values()].map(cloneAuditOutbox));
+  }
+
+  async listBackgroundJobsForTest(): Promise<readonly Readonly<BackgroundJob>[]> {
+    return Object.freeze([...this.#backgroundJobs.values()].map(cloneBackgroundJob));
   }
 
   failNextCommitForTest(
