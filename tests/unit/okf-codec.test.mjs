@@ -101,13 +101,35 @@ test("unknown type and nested extension survive read-modify-write without reinte
   assert.equal(reparsed.file?.kind, "concept");
   assert.equal(reparsed.file?.okfType, "Future Knowledge Type");
   assert.deepEqual(reparsed.file?.frontmatter.producer_extension, {
-    nested: ["one", { two: 2 }],
+    nested: ["one", { two: 2n }],
   });
   assert.equal(reparsed.file?.frontmatter.title, "Changed without migration");
   assert.deepEqual(source, {
     path: "concepts/future.md",
     text: source.text,
   });
+});
+
+test("arbitrary-size extension integers survive read-modify-write exactly", () => {
+  const exactInteger = "900719925474099312345";
+  const parsed = parseOkfFile({
+    path: "concepts/exact-integer.md",
+    text: `---\ntype: Numeric Extension\nstatus: stable\nbig: ${exactInteger}\n---\n\n# Exact integer\n`,
+  });
+  assert.equal(parsed.valid, true);
+  assert.equal(parsed.diagnostics.length, 0);
+  assert.equal(parsed.file?.kind, "concept");
+  assert.equal(parsed.file?.frontmatter.big, BigInt(exactInteger));
+
+  const rendered = updateOkfConcept(parsed.file, {
+    setFields: { title: "Changed without numeric coercion" },
+  });
+  assert.match(rendered.text, new RegExp(`^big: ${exactInteger}$`, "m"));
+
+  const reparsed = parseOkfFile(rendered);
+  assert.equal(reparsed.valid, true);
+  assert.equal(reparsed.file?.kind, "concept");
+  assert.equal(reparsed.file?.frontmatter.big, BigInt(exactInteger));
 });
 
 test("Attested Computation remains an opaque document contract", () => {
@@ -163,19 +185,37 @@ test("invalid UTF-8 and ZIP bytes are envelope failures with no parsed final sta
   ]);
 });
 
-test("service authority metadata is denied recursively while input remains unchanged", () => {
-  const source = {
+test("only top-level service metadata is denied; nested extension keys stay opaque", () => {
+  const deniedSource = {
     path: "concepts/denied.md",
-    text: `---\ntype: Reference\nproducer_extension:\n  acl: [reader]\nrevision_id: revision-secret\n---\n\n# Denied\n`,
+    text: `---\ntype: Reference\nacl: [reader]\nrevision_id: revision-secret\n---\n\n# Denied\n`,
   };
-  const before = structuredClone(source);
-  const result = validateOkfBundle([source]);
-  assert.equal(result.valid, false);
-  assert.equal(result.conforms, true);
-  assert.equal(result.envelopeErrors.length, 2);
+  const before = structuredClone(deniedSource);
+  const denied = validateOkfBundle([deniedSource]);
+  assert.equal(denied.valid, false);
+  assert.equal(denied.conforms, true);
+  assert.equal(denied.envelopeErrors.length, 2);
   assert.deepEqual(
-    result.envelopeErrors.map((issue) => issue.field).sort(),
-    ["producer_extension.acl", "revision_id"],
+    denied.envelopeErrors.map((issue) => issue.field).sort(),
+    ["acl", "revision_id"],
   );
-  assert.deepEqual(source, before);
+  assert.deepEqual(deniedSource, before);
+
+  const nested = parseOkfFile({
+    path: "concepts/domain-schema.md",
+    text: `---\ntype: Domain Schema\nproducer_extension:\n  role: narrator\n  visibility: public\n  acl: [reader]\n---\n\n# Domain schema\n`,
+  });
+  assert.equal(nested.valid, true);
+  assert.equal(nested.file?.kind, "concept");
+  const rendered = updateOkfConcept(nested.file, {
+    setFields: { title: "Opaque domain schema" },
+  });
+  const reparsed = parseOkfFile(rendered);
+  assert.equal(reparsed.valid, true);
+  assert.equal(reparsed.file?.kind, "concept");
+  assert.deepEqual(reparsed.file?.frontmatter.producer_extension, {
+    role: "narrator",
+    visibility: "public",
+    acl: ["reader"],
+  });
 });

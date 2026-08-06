@@ -53,6 +53,7 @@ export function parseFrontmatter(text: string): FrontmatterResult {
 
   try {
     const document = parseDocument(frontmatterSource, {
+      intAsBigInt: true,
       strict: true,
       uniqueKeys: true,
       version: "1.2",

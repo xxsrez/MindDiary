@@ -186,26 +186,13 @@ function validDate(value: unknown): value is string {
   );
 }
 
-function collectForbiddenMetadata(
-  value: unknown,
-  found: string[],
-  path: readonly string[] = [],
-  seen = new WeakSet<object>(),
-): void {
-  if (value === null || typeof value !== "object") return;
-  if (seen.has(value)) return;
-  seen.add(value);
-  if (Array.isArray(value)) {
-    value.forEach((entry, index) =>
-      collectForbiddenMetadata(entry, found, [...path, String(index)], seen),
-    );
-    return;
-  }
-  for (const [key, nested] of Object.entries(value)) {
-    const fieldPath = [...path, key];
-    if (FORBIDDEN_SERVICE_KEYS.has(key)) found.push(fieldPath.join("."));
-    collectForbiddenMetadata(nested, found, fieldPath, seen);
-  }
+function collectForbiddenTopLevelMetadata(
+  metadata: Readonly<Record<string, unknown>>,
+): readonly string[] {
+  // Only top-level keys are part of the Mind Diary service envelope boundary.
+  // Identically named keys nested in producer extensions are opaque content;
+  // the codec cannot infer authority from arbitrary domain schemas.
+  return Object.keys(metadata).filter((key) => FORBIDDEN_SERVICE_KEYS.has(key));
 }
 
 function validateOptionalFamilies(
@@ -370,8 +357,7 @@ function parseConcept(
     );
   }
 
-  const forbidden: string[] = [];
-  collectForbiddenMetadata(metadata, forbidden);
+  const forbidden = collectForbiddenTopLevelMetadata(metadata);
   for (const field of forbidden) {
     diagnostics.push(
       envelopeError(
