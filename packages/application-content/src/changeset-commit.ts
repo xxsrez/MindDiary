@@ -162,7 +162,6 @@ export class ChangesetCommitService {
   readonly #authorizer: Authorizer;
   readonly #metadata: ContentCommitMetadataStore;
   readonly #objects: ObjectStore;
-  readonly #clock: Clock;
   readonly #revisionIds: RevisionIdGenerator;
   readonly #effectIds: CommitEffectIdGenerator | null;
   readonly #preflight: ChangesetPreflightService;
@@ -173,7 +172,6 @@ export class ChangesetCommitService {
     this.#authorizer = dependencies.authorizer;
     this.#metadata = dependencies.metadata;
     this.#objects = dependencies.objects;
-    this.#clock = dependencies.clock;
     this.#revisionIds = dependencies.revisionIds;
     this.#effectIds = dependencies.effectIds ?? null;
     this.#preflightLimits =
@@ -184,6 +182,7 @@ export class ChangesetCommitService {
     this.#preflight = new ChangesetPreflightService({
       authorizer: dependencies.authorizer,
       revisions: dependencies.revisions,
+      clock: dependencies.clock,
       limits: this.#preflightLimits,
     });
   }
@@ -253,7 +252,7 @@ export class ChangesetCommitService {
     });
     if (preflight.kind !== "ready") return preflight;
 
-    const committedAt = this.#clock.now();
+    const committedAt = preflight.committedAt;
     const revisionId = this.#revisionIds.nextRevisionId();
     const entries = [];
     for (const file of preflight.candidateFiles) {

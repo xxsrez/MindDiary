@@ -2,6 +2,7 @@ import type { ActorContext } from "@mind-diary/application-contracts";
 import type {
   AuthorizationDecision,
   Authorizer,
+  Clock,
 } from "@mind-diary/application-ports";
 import {
   MARKDOWN_MEDIA_TYPE,
@@ -12,6 +13,7 @@ import {
   type RevisionMode,
   type Sha256Digest,
   type SpaceId,
+  type UtcInstant,
 } from "@mind-diary/domain";
 import {
   okfFileKind,
@@ -20,6 +22,7 @@ import {
   type OkfDiagnostic,
 } from "@mind-diary/okf-codec";
 import type { HeadRevisionReader } from "./index.js";
+import { materializeLogEntry } from "./reserved-content.js";
 
 export interface CreateFileOperation {
   readonly type: "create_file";
@@ -143,13 +146,7 @@ export type ChangesetPreflightResult =
       readonly operations: readonly Readonly<ChangesetOperation>[];
       readonly candidateFiles: readonly Readonly<ChangesetCandidateFile>[];
       readonly validation: OkfBundleValidation;
-    }
-  | {
-      /** No final candidate is exposed until AND-71 materializes add_log_entry. */
-      readonly kind: "requires_log_materialization";
-      readonly authorization: AllowedAuthorizationDecision;
-      readonly baseRevisionId: RevisionId | null;
-      readonly operations: readonly Readonly<ChangesetOperation>[];
+      readonly committedAt: UtcInstant;
     }
   | {
       readonly kind: "denied";
@@ -167,6 +164,7 @@ export type ChangesetPreflightResult =
 export interface ChangesetPreflightDependencies {
   readonly authorizer: Authorizer;
   readonly revisions: HeadRevisionReader;
+  readonly clock: Clock;
   readonly limits?: Readonly<ChangesetPreflightLimits>;
 }
 
@@ -608,11 +606,13 @@ function comparePaths(left: ChangesetCandidateFile, right: ChangesetCandidateFil
 export class ChangesetPreflightService {
   readonly #authorizer: Authorizer;
   readonly #revisions: HeadRevisionReader;
+  readonly #clock: Clock;
   readonly #limits: Readonly<ChangesetPreflightLimits>;
 
   constructor(dependencies: ChangesetPreflightDependencies) {
     this.#authorizer = dependencies.authorizer;
     this.#revisions = dependencies.revisions;
+    this.#clock = dependencies.clock;
     this.#limits = normalizeLimits(
       dependencies.limits ?? DEFAULT_CHANGESET_PREFLIGHT_LIMITS,
     );
@@ -662,6 +662,8 @@ export class ChangesetPreflightService {
       );
     }
 
+    const committedAt = this.#clock.now();
+
     for (let index = 0; index < operationSet.operations.length; index += 1) {
       const operation = operationSet.operations[index]!;
       const current = working.get(operation.path);
@@ -710,6 +712,46 @@ export class ChangesetPreflightService {
           });
         }
         working.delete(operation.path);
+      } else if (operation.type === "add_log_entry") {
+        if (!current) {
+          return invalid("file_not_found", "log target does not exist", {
+            operationIndex: index,
+            path: operation.path,
+          });
+        }
+        const materialized = materializeLogEntry({
+          path: operation.path,
+          text: current.text,
+          category: operation.category,
+          message: operation.message,
+          serverAssignedAt: committedAt,
+        });
+        if (materialized.kind === "invalid_log") {
+          return invalid(
+            "okf_validation_failed",
+            "existing log is not a canonical date-grouped OKF log",
+            {
+              operationIndex: index,
+              path: operation.path,
+              diagnostics: materialized.diagnostics,
+            },
+          );
+        }
+        if (ENCODER.encode(materialized.text).byteLength > this.#limits.maxFileBytes) {
+          return invalid(
+            "file_size_limit_exceeded",
+            "materialized log exceeds the Markdown file limit",
+            { operationIndex: index, path: operation.path },
+          );
+        }
+        working.set(
+          operation.path,
+          Object.freeze({
+            path: operation.path,
+            text: materialized.text,
+            sha256: null,
+          }),
+        );
       }
     }
 
@@ -748,19 +790,6 @@ export class ChangesetPreflightService {
       );
     }
 
-    if (
-      operationSet.operations.some(
-        (operation) => operation.type === "add_log_entry",
-      )
-    ) {
-      return Object.freeze({
-        kind: "requires_log_materialization",
-        authorization,
-        baseRevisionId: currentRevisionId,
-        operations: operationSet.operations,
-      });
-    }
-
     return Object.freeze({
       kind: "ready",
       authorization,
@@ -768,6 +797,7 @@ export class ChangesetPreflightService {
       operations: operationSet.operations,
       candidateFiles: Object.freeze(candidateFiles),
       validation,
+      committedAt,
     });
   }
 }
