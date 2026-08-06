@@ -1,5 +1,7 @@
 import type {
+  DeletedPrincipalId,
   PrincipalId,
+  RevisionAuthorReference,
   RevisionId,
   SpaceId,
   UtcInstant,
@@ -31,6 +33,17 @@ export const PRINCIPALS = Object.freeze({
     principalId: "principal_outsider_0001" as PrincipalId,
     displayName: "Fixture Outsider",
   },
+});
+
+export const REVISION_AUTHORS = Object.freeze({
+  active: {
+    kind: "principal",
+    principalId: PRINCIPALS.owner.principalId,
+  } satisfies RevisionAuthorReference,
+  deleted: {
+    kind: "deleted-principal",
+    tombstoneId: "deleted_principal_editor_0001" as DeletedPrincipalId,
+  } satisfies RevisionAuthorReference,
 });
 
 export const MINDS = Object.freeze({
