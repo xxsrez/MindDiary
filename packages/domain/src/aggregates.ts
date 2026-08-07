@@ -30,6 +30,7 @@ export type DomainInvariantCode =
   | "personal_invitation"
   | "duplicate_personal_binding"
   | "principal_binding_mismatch"
+  | "personal_profile_mismatch"
   | "principal_not_active"
   | "space_not_active"
   | "membership_not_active"
@@ -536,6 +537,12 @@ export class PrincipalAccount {
       throw new DomainInvariantError(
         "principal_binding_mismatch",
         "account must contain exactly one Personal Mind bound to its principal",
+      );
+    }
+    if (personal.space.name !== input.principal.displayName) {
+      throw new DomainInvariantError(
+        "personal_profile_mismatch",
+        "Personal Mind display name must match its principal profile",
       );
     }
     if (

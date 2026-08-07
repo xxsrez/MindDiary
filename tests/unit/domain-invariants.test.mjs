@@ -256,6 +256,16 @@ test("Personal Mind uses the ordinary space schema but is private and sole-owned
     personalMind: personal,
   });
   assert.equal(account.snapshot().personalMind.personalBinding.principalId, ownerId);
+  expectDomainError("personal_profile_mismatch", () =>
+    PrincipalAccount.restore({
+      principal: {
+        ...account.snapshot().principal,
+        displayName: "Split Brain Profile",
+      },
+      externalBindings: account.snapshot().externalBindings,
+      personalMind: personal,
+    }),
+  );
 });
 
 test("ownership transfer is atomic and stale/retry attempts cannot create two Owners", () => {
