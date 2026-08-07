@@ -189,6 +189,15 @@ expected-old CAS становится owner; остальные переходя
 не применяется к active owner, незавершённым workers/in-flight action или
 невыполненному machine-checkable resume predicate.
 
+На `route=takeover` первым и единственным model-level mutable call запускай
+`shipctl.py takeover`; не трать startup budget на Linear snapshot, ручной
+`commit-tree`, generic `transition` или повторное чтение ledger. Helper сам
+повторяет bounded preflight, берёт stable `CODEX_THREAD_ID`, создаёт прямого
+descendant старого coordinator tip и expected-old CAS-продвигает только
+repo-global coordinator ref. После `taken|already-owner` разрешён лишь recovery
+scope до fencing; `PROMOTION_HOLD` продолжает запрещать integration/default/
+deploy независимо от выигранного ownership.
+
 ## Менять limit немедленно и безопасно
 
 Только текущая owner-session меняет limit после отдельного fenced CAS action.

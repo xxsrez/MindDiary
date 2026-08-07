@@ -346,6 +346,21 @@ class PreflightTest(GitMixin, unittest.TestCase):
         self.assertTrue(resume["mutation_allowed"])
         self.assertIn("references/external-main.md", resume["required_references"])
 
+    def test_runtime_thread_identity_proves_resume_without_manual_digest(self) -> None:
+        thread_id = "019fdcce-1fee-71d0-8d5d-6566cdf2d94b"
+        proof = MODULE.hashlib.sha256(thread_id.encode()).hexdigest()
+        with tempfile.TemporaryDirectory(prefix="shipctl-") as directory:
+            repo, _ = self.fixture(Path(directory))
+            self.push_coordinator(
+                repo,
+                MODULE.CANONICAL_COORDINATOR_REF,
+                self.coordinator_message(repo, proof=proof),
+            )
+            with mock.patch.dict(MODULE.os.environ, {"CODEX_THREAD_ID": thread_id}):
+                code, result, _ = self.preflight(repo)
+        self.assertEqual((code, result["route"]), (0, "resume"))
+        self.assertTrue(result["mutation_allowed"])
+
     def test_matching_proof_cannot_resume_needs_input_handoff(self) -> None:
         with tempfile.TemporaryDirectory(prefix="shipctl-") as directory:
             repo, _ = self.fixture(Path(directory))
@@ -412,6 +427,63 @@ class PreflightTest(GitMixin, unittest.TestCase):
         self.assertEqual((code, result["route"]), (0, "recovery"))
         self.assertFalse(result["mutation_allowed"])
         self.assertEqual(result["mutation_scope"], "none")
+
+    def test_takeover_command_cas_claims_quiescent_handoff_and_is_idempotent(self) -> None:
+        thread_id = "019fdcce-1fee-71d0-8d5d-6566cdf2d94b"
+        with tempfile.TemporaryDirectory(prefix="shipctl-") as directory:
+            repo, _ = self.fixture(Path(directory))
+            head = self.git(repo, "rev-parse", "HEAD")
+            parent = self.push_coordinator(
+                repo,
+                MODULE.CANONICAL_COORDINATOR_REF,
+                self.coordinator_message(
+                    repo,
+                    state="needs-input",
+                    owner_state="handoff-ready",
+                    contract="1" * 40,
+                    extra=(
+                        "OWNER_ID: 07654254-e020-436b-9c04-6ca40f2f4a1e\n"
+                        "OWNER_PROOF_KIND: runtime-task-id\n"
+                        "RUN_ID: bc5fed70-55d9-4915-88d3-dc98de4d7013\n"
+                        "RUN_KEY: 05921543be0e05af2538d99ee2372769\n"
+                        "PROJECT_ID: 6c07eabb-e588-4184-8eaa-5974ad67fdda\n"
+                        "MILESTONE_ID: 4854655e-aebd-458d-8d6b-dd5be9c75be2\n"
+                        "EPOCH: 1\n"
+                        f"CONTRACT_SOURCE_SHA: {head}\n"
+                        "ACTION_KIND: handoff-owner\n"
+                        "ACTION_TARGET: codex-thread:control-task\n"
+                        "WORKERS: active_issue_lanes=none;executors=terminal\n"
+                        "PAUSE: state=handoff-ready;pending_external_action=none\n"
+                        "PROMOTION_HOLD: known-bad-default\n"
+                        "RECOVERY: generation=2;cause=resume;phase=complete\n"
+                    ),
+                ),
+            )
+            args = mock.Mock(repo=str(repo), remote="origin", default="main")
+            with mock.patch.dict(MODULE.os.environ, {"CODEX_THREAD_ID": thread_id}):
+                with io.StringIO() as output, redirect_stdout(output):
+                    code = MODULE.command_takeover(args)
+                    result = json.loads(output.getvalue())
+                with io.StringIO() as output, redirect_stdout(output):
+                    repeat_code = MODULE.command_takeover(args)
+                    repeat = json.loads(output.getvalue())
+                _, resumed, _ = self.preflight(repo)
+            observed = self.git(repo, "ls-remote", "origin", MODULE.CANONICAL_COORDINATOR_REF).split()[0]
+            observed_parent = self.git(repo, "rev-parse", f"{observed}^")
+            message = self.git(repo, "show", "-s", "--format=%B", observed)
+        self.assertEqual((code, result["status"]), (0, "taken"))
+        self.assertNotEqual(observed, parent)
+        self.assertEqual(observed_parent, parent)
+        metadata = MODULE.fields(message)
+        self.assertEqual(metadata["STATE"], "recovering")
+        self.assertEqual(metadata["OWNER_STATE"], "active")
+        self.assertEqual(metadata["EPOCH"], "2")
+        self.assertEqual(metadata["CONTRACT_SOURCE_SHA"], head)
+        self.assertEqual(metadata["ACTION_KIND"], "takeover-owner")
+        self.assertEqual(metadata["ACTION_STATUS"], "reconciled")
+        self.assertEqual((repeat_code, repeat["status"]), (0, "already-owner"))
+        self.assertEqual(resumed["route"], "recover-owner")
+        self.assertEqual(resumed["mutation_scope"], "recovery-only")
 
     def test_matching_proof_cannot_lift_active_pause(self) -> None:
         with tempfile.TemporaryDirectory(prefix="shipctl-") as directory:

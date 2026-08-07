@@ -1,17 +1,21 @@
 #!/usr/bin/env python3
 """Deterministic, bounded helpers for ship-linear-release.
 
-Policy remains in SKILL.md and references. This CLI collects compact evidence,
-validates repetitive inputs, and renders coordinator transitions. It never
-changes Git, Linear, or another external system.
+Policy remains in SKILL.md and references. Most commands are read-only. The
+explicit ``takeover`` command performs one narrowly fenced coordinator-ref CAS
+after revalidating a reconciled quiescent handoff; it never mutates Linear,
+worktrees, feature refs, default, deployment, or tags.
 """
 
 from __future__ import annotations
 
 import argparse
+from contextlib import redirect_stdout
 from datetime import datetime
 import hashlib
+import io
 import json
+import os
 import re
 import secrets
 import sys
@@ -418,6 +422,13 @@ def _handoff_takeover_ready(metadata: dict[str, str]) -> bool:
     )
 
 
+def _runtime_owner_proof() -> tuple[str | None, str | None]:
+    thread_id = os.environ.get("CODEX_THREAD_ID", "").strip().lower()
+    if UUID_TEXT.fullmatch(thread_id) is None:
+        return None, None
+    return thread_id, hashlib.sha256(thread_id.encode()).hexdigest()
+
+
 def coordinator_refs(
     observation_repo: Path, advertised: list[tuple[str, str]]
 ) -> tuple[str, list[dict[str, Any]]]:
@@ -444,6 +455,7 @@ def coordinator_refs(
                 "owner_state": owner_state,
                 "classification": _ref_classification(state, owner_state),
                 "owner_proof_digest": metadata.get("OWNER_PROOF_DIGEST", "unknown"),
+                "owner_proof_kind": metadata.get("OWNER_PROOF_KIND", "unknown"),
                 "contract_digest": metadata.get("CONTRACT_DIGEST", "unknown"),
                 "active_restrictions": _active_restrictions(metadata),
                 "handoff_takeover_ready": _handoff_takeover_ready(metadata),
@@ -753,7 +765,8 @@ def command_preflight(args: argparse.Namespace) -> int:
         active_canonical = [item for item in canonical if item["classification"] == "active"]
         if route != "blocked" and active_canonical:
             active = active_canonical[0]
-            proof = args.owner_proof_digest or ""
+            _, runtime_proof = _runtime_owner_proof()
+            proof = args.owner_proof_digest or runtime_proof or ""
             stored_proof = active["owner_proof_digest"]
             valid_proof = bool(LOWER_DIGEST.fullmatch(proof))
             proof_matches = valid_proof and bool(LOWER_DIGEST.fullmatch(stored_proof)) and proof == stored_proof
@@ -761,8 +774,16 @@ def command_preflight(args: argparse.Namespace) -> int:
             contract_matches = bool(GIT_OID.fullmatch(active_contract)) and active_contract == local_contract
             resumable_state = active["state"] == "running" and active["owner_state"] == "active"
             restrictions = active["active_restrictions"]
+            recoverable_owner = (
+                proof_matches
+                and contract_matches
+                and active["state"] == "recovering"
+                and active["owner_state"] == "active"
+            )
             if active["handoff_takeover_ready"]:
                 route = "takeover"
+            elif recoverable_owner:
+                route = "recover-owner"
             else:
                 route = (
                     "resume"
@@ -800,6 +821,8 @@ def command_preflight(args: argparse.Namespace) -> int:
                 "references/external-main.md",
             ],
             "takeover": [
+            ],
+            "recover-owner": [
                 "references/coordination.md",
                 "references/crash-recovery.md",
                 "references/external-main.md",
@@ -810,6 +833,7 @@ def command_preflight(args: argparse.Namespace) -> int:
             "normal": "run",
             "resume": "run",
             "takeover": "coordinator-claim-cas-only",
+            "recover-owner": "recovery-only",
             "recovery": "none",
             "blocked": "none",
         }[route]
@@ -817,7 +841,7 @@ def command_preflight(args: argparse.Namespace) -> int:
             "schema": 1,
             "status": "ok" if route != "blocked" else "blocked",
             "route": route,
-            "mutation_allowed": route in {"normal", "resume", "takeover"},
+            "mutation_allowed": route in {"normal", "resume", "takeover", "recover-owner"},
             "mutation_scope": mutation_scope,
             "reasons": reasons or ["clean-start"],
             "repo": str(repo),
@@ -1446,6 +1470,266 @@ def command_transition(args: argparse.Namespace) -> int:
     return 0
 
 
+def _capture_preflight(repo: Path, remote: str, default: str) -> tuple[int, dict[str, Any]]:
+    args = argparse.Namespace(
+        repo=str(repo),
+        remote=remote,
+        default=default,
+        skill_path=SKILL_PATH,
+        owner_proof_digest=None,
+    )
+    with io.StringIO() as output, redirect_stdout(output):
+        code = command_preflight(args)
+        try:
+            payload = json.loads(output.getvalue())
+        except json.JSONDecodeError:
+            return 3, {"status": "blocked", "reason": "preflight-output-invalid"}
+    return code, payload
+
+
+def _next_recovery_generation(value: str) -> int:
+    token = _structured_token(value, "generation")
+    return int(token) + 1 if token and token.isdigit() else 1
+
+
+def _render_takeover_message(
+    parent: str,
+    parent_message: str,
+    remote_main: str,
+    contract_digest: str,
+    primary: dict[str, Any],
+    thread_id: str,
+) -> tuple[str | None, dict[str, str] | None, list[str]]:
+    parent_fields = fields(parent_message)
+    errors, parent_seq, _ = _validate_transition_parent(parent_fields)
+    if errors:
+        return None, None, errors
+    assert parent_seq is not None
+    try:
+        old_epoch = int(parent_fields["EPOCH"])
+    except ValueError:
+        return None, None, ["invalid:parent-epoch"]
+    new_epoch = old_epoch + 1
+    owner_id = str(
+        uuid.uuid5(TRANSITION_NAMESPACE, f"takeover:{parent}:{thread_id}:{new_epoch}")
+    )
+    proof_digest = hashlib.sha256(thread_id.encode()).hexdigest()
+    action_payload = {
+        "parent": parent,
+        "owner_id": owner_id,
+        "epoch": new_epoch,
+        "thread_id": thread_id,
+        "contract_source_sha": remote_main,
+        "contract_digest": contract_digest,
+    }
+    payload_digest = hashlib.sha256(
+        json.dumps(action_payload, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    action_id = str(
+        uuid.uuid5(TRANSITION_NAMESPACE, f"takeover-action:{payload_digest}")
+    )
+    primary_fingerprint = primary.get("fingerprint") or "unknown"
+    core_values = {
+        "SCHEMA": parent_fields["SCHEMA"],
+        "KIND": parent_fields["KIND"],
+        "OWNER_ID": owner_id,
+        "OWNER_PROOF_KIND": "runtime-task-id",
+        "OWNER_PROOF_DIGEST": proof_digest,
+        "RUN_ID": parent_fields["RUN_ID"],
+        "RUN_KEY": parent_fields["RUN_KEY"],
+        "PROJECT_ID": parent_fields["PROJECT_ID"],
+        "MILESTONE_ID": parent_fields["MILESTONE_ID"],
+        "EPOCH": str(new_epoch),
+        "STATE": "recovering",
+        "OWNER_STATE": "active",
+        "GOAL_CURRENT": "none",
+        "GOAL_OBJECTIVE_DIGEST": "none",
+        "CONTRACT_SOURCE_SHA": remote_main,
+        "CONTRACT_DIGEST": contract_digest,
+    }
+    replaced = set(core_values) | set(ACTION_HEADERS) | {
+        "ACTION_STATUS",
+        "ACTION_RESULT",
+        "CONTRACT_MIGRATED_FROM",
+        "RECOVERY",
+        "PAUSE",
+        "DEFAULT_OBSERVED_SHA",
+        "PRIMARY_CHECKOUT",
+    }
+    ledger_lines: list[str] = []
+    for line in parent_message.splitlines():
+        key, separator, _ = line.partition(":")
+        if separator and re.fullmatch(r"[A-Z][A-Z0-9_]*", key) and key not in replaced:
+            ledger_lines.append(line)
+    recovery_generation = _next_recovery_generation(parent_fields.get("RECOVERY", ""))
+    extras = [
+        (
+            "CONTRACT_MIGRATED_FROM: "
+            f"source={parent_fields['CONTRACT_SOURCE_SHA']};"
+            f"digest={parent_fields['CONTRACT_DIGEST']}"
+        ),
+        (
+            "RECOVERY: "
+            f"generation={recovery_generation};cause=handoff;phase=fencing;"
+            f"previous_owner={parent_fields['OWNER_ID']}/{old_epoch};"
+            "inventory=none;reattached=none;adopted=none;requeued=none;"
+            "quarantined=none;unresolved=none"
+        ),
+        (
+            "PAUSE: state=lifted;reason=handoff-consumed;"
+            "confirmation=explicit-skill-invocation;pending_external_action=none"
+        ),
+        f"DEFAULT_OBSERVED_SHA: {remote_main}",
+        (
+            "PRIMARY_CHECKOUT: clean;relation=equal;"
+            f"fingerprint={primary_fingerprint}"
+        ),
+    ]
+    action = {
+        "ACTION_SEQ": str(parent_seq + 1),
+        "ACTION_ID": action_id,
+        "ACTION_KIND": "takeover-owner",
+        "ACTION_TARGET": f"{CANONICAL_COORDINATOR_REF}@{parent}",
+        "EXPECTED_BEFORE": (
+            f"owner={parent_fields['OWNER_ID']}/{old_epoch}:handoff-ready;"
+            f"coordinator={parent}"
+        ),
+        "EXTERNAL_REQUEST_KEY": "none",
+        "PROVIDER_SELECTOR": f"git:origin:{CANONICAL_COORDINATOR_REF}",
+        "PAYLOAD_DIGEST": payload_digest,
+        "EFFECT_IDENTITY": f"owner={owner_id};epoch={new_epoch};parent={parent}",
+    }
+    lines = ["ship-linear-release reconciled takeover owner", ""]
+    lines.extend(f"{name}: {value}" for name, value in core_values.items())
+    lines.extend(ledger_lines)
+    lines.extend(extras)
+    lines.extend(f"{name}: {action[name]}" for name in ACTION_HEADERS)
+    lines.append("ACTION_STATUS: reconciled")
+    return "\n".join(lines) + "\n", {
+        "owner_id": owner_id,
+        "owner_proof_digest": proof_digest,
+        "epoch": str(new_epoch),
+        "action_id": action_id,
+    }, []
+
+
+def command_takeover(args: argparse.Namespace) -> int:
+    repo = Path(args.repo).resolve()
+    thread_id, runtime_proof = _runtime_owner_proof()
+    if thread_id is None or runtime_proof is None:
+        emit({"schema": 1, "status": "blocked", "reason": "runtime-thread-id-unavailable"})
+        return 3
+    preflight_code, preflight = _capture_preflight(repo, args.remote, args.default)
+    if preflight_code != 0:
+        emit({"schema": 1, "status": "blocked", "reason": "preflight-blocked", "preflight": preflight})
+        return 3
+    active = next(
+        (
+            item
+            for item in preflight.get("coordinator_refs", [])
+            if item.get("kind") == "canonical" and item.get("classification") == "active"
+        ),
+        None,
+    )
+    if preflight.get("route") in {"resume", "recover-owner"} and active and active.get("owner_proof_digest") == runtime_proof:
+        emit(
+            {
+                "schema": 1,
+                "status": "already-owner",
+                "route": preflight["route"],
+                "coordinator": active["sha"],
+                "mutation_scope": preflight["mutation_scope"],
+            }
+        )
+        return 0
+    if preflight.get("route") != "takeover" or not active or not active.get("handoff_takeover_ready"):
+        emit({"schema": 1, "status": "blocked", "reason": "takeover-not-eligible", "route": preflight.get("route")})
+        return 3
+    parent = active["sha"]
+    fetch = foreign_main.run(
+        repo,
+        "fetch",
+        "--no-write-fetch-head",
+        "--no-tags",
+        args.remote,
+        parent,
+    )
+    if fetch.returncode != 0 or not foreign_main.object_exists(repo, parent):
+        emit({"schema": 1, "status": "blocked", "reason": "parent-materialization-failed"})
+        return 3
+    code, parent_message = git(repo, "show", "-s", "--format=%B", parent)
+    tree_code, tree = git(repo, "show", "-s", "--format=%T", parent)
+    remote_main = preflight.get("remote_sha")
+    contract_digest = preflight.get("contract_oid")
+    if (
+        code != 0
+        or tree_code != 0
+        or GIT_OID.fullmatch(tree) is None
+        or not isinstance(remote_main, str)
+        or GIT_OID.fullmatch(remote_main) is None
+        or not isinstance(contract_digest, str)
+        or GIT_OID.fullmatch(contract_digest) is None
+    ):
+        emit({"schema": 1, "status": "blocked", "reason": "takeover-input-invalid"})
+        return 3
+    message, identity, errors = _render_takeover_message(
+        parent,
+        parent_message,
+        remote_main,
+        contract_digest,
+        preflight.get("primary_checkout", {}),
+        thread_id,
+    )
+    if errors or message is None or identity is None:
+        emit({"schema": 1, "status": "blocked", "reason": "takeover-message-invalid", "errors": errors})
+        return 3
+    with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", prefix="shipctl-takeover-", delete=True) as handle:
+        handle.write(message)
+        handle.flush()
+        commit_result = foreign_main.run(repo, "commit-tree", tree, "-p", parent, "-F", handle.name)
+    commit = commit_result.stdout.decode("ascii", "replace").strip()
+    if commit_result.returncode != 0 or GIT_OID.fullmatch(commit) is None:
+        emit({"schema": 1, "status": "blocked", "reason": "takeover-commit-failed"})
+        return 3
+    parent_check = foreign_main.text(repo, "rev-parse", f"{commit}^")
+    tree_check = foreign_main.text(repo, "show", "-s", "--format=%T", commit)
+    if parent_check != parent or tree_check != tree:
+        emit({"schema": 1, "status": "blocked", "reason": "takeover-commit-verification-failed"})
+        return 3
+    push = foreign_main.run(
+        repo,
+        "push",
+        "--porcelain",
+        f"--force-with-lease={CANONICAL_COORDINATOR_REF}:{parent}",
+        args.remote,
+        f"{commit}:{CANONICAL_COORDINATOR_REF}",
+    )
+    if push.returncode != 0:
+        emit({"schema": 1, "status": "cas-lost", "reason": "coordinator-ref-changed", "expected": parent})
+        return 4
+    advertised_state, advertised = advertised_coordinator_refs(repo, args.remote)
+    observed = next((sha for sha, ref in advertised if ref == CANONICAL_COORDINATOR_REF), None)
+    if advertised_state != "observed" or observed != commit:
+        emit({"schema": 1, "status": "blocked", "reason": "takeover-delivery-unverified", "commit": commit})
+        return 3
+    emit(
+        {
+            "schema": 1,
+            "status": "taken",
+            "coordinator": commit,
+            "parent": parent,
+            "owner_id": identity["owner_id"],
+            "epoch": int(identity["epoch"]),
+            "owner_proof_kind": "runtime-task-id",
+            "action_id": identity["action_id"],
+            "state": "recovering",
+            "mutation_scope": "recovery-only",
+            "next": "fence-indexed-guards-then-recover",
+        }
+    )
+    return 0
+
+
 def parser() -> argparse.ArgumentParser:
     root = argparse.ArgumentParser(description=__doc__)
     sub = root.add_subparsers(dest="command", required=True)
@@ -1470,6 +1754,11 @@ def parser() -> argparse.ArgumentParser:
     transition.add_argument("--parent", required=True)
     transition.add_argument("--input", default="-")
     transition.set_defaults(handler=command_transition)
+    takeover = sub.add_parser("takeover")
+    takeover.add_argument("--repo", default=".")
+    takeover.add_argument("--remote", default="origin")
+    takeover.add_argument("--default", default="main")
+    takeover.set_defaults(handler=command_takeover)
     return root
 
 

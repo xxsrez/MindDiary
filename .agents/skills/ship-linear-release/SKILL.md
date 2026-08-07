@@ -136,6 +136,20 @@ rewrite, другой milestone/project, AWS fallback или новая infrastr
    `handoff-ready` не требует от пользователя ручной команды, magic phrase или
    самостоятельного Git takeover: fresh explicit вызов этого skill уже задаёт
    intent продолжить run.
+
+   При `route=takeover` не читай Linear snapshot и references вручную до CAS.
+   Сразу выполни один bounded helper, который повторяет preflight, связывает
+   proof с `CODEX_THREAD_ID`, создаёт descendant metadata commit и сам делает
+   expected-old push:
+
+   ```bash
+   python3 .agents/skills/ship-linear-release/scripts/shipctl.py takeover \
+     --repo "$PWD" --remote origin --default main
+   ```
+
+   Допустимы только `status=taken|already-owner`. После них загрузи выданные
+   recovery references, fence-ни guards и продолжай с `mutation_scope=recovery-only`.
+   `cas-lost` означает observer; другой результат запрещает дальнейшие мутации.
 4. Генерируй identities детерминированным helper, не JavaScript snippets:
 
    ```bash

@@ -98,6 +98,9 @@ owner, который lift-ит каждый scope только по его evid
    создаёт descendant owner с `epoch+1`. Запиши cause, previous/current owner,
    recovery generation и phase `fencing`. Shared integration/default/deploy/
    Linear-closure lane в этот момент заморожена.
+   Для `route=takeover` это делает `shipctl.py takeover` одним idempotent
+   bounded call. Не собирай takeover через generic `transition`: тот renderer
+   намеренно не меняет stable owner/epoch headers и не выполняет push.
 2. До dispatch прочитай `CLAIM_INDEX`, `EXECUTION_INDEX` и bounded namespace
    guard refs текущего `run_key`. `CLAIM_INDEX` определяет authority/recovery,
    `EXECUTION_INDEX` — occupancy; live ready claim не означает running slot.
