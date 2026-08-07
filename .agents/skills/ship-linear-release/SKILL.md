@@ -148,8 +148,8 @@ rewrite, другой milestone/project, AWS fallback или новая infrastr
    ```
 
    Допустимы только `status=taken|already-owner`. Затем, как и при fresh
-   `route=recover-owner; RECOVERY phase=fencing`, до Linear, ручного Git и
-   inventory сразу выполни второй bounded helper:
+   `route=recover-owner|recover-owner-upgrade; RECOVERY phase=fencing`, до
+   Linear, ручного Git и inventory сразу выполни второй bounded helper:
 
    ```bash
    python3 .agents/skills/ship-linear-release/scripts/shipctl.py fence-guards \
@@ -163,6 +163,10 @@ rewrite, другой milestone/project, AWS fallback или новая infrastr
    продолжай inventory/adoption с `mutation_scope=recovery-only`. `cas-lost`
    означает повторить ровно этот helper: он усыновляет свой pending intent и
    уже fenced tips. Другой результат запрещает дальнейшие мутации.
+   `recover-owner-upgrade` допустим только для того же runtime owner, coherent
+   старого contract и fast-forward `CONTRACT_SOURCE_SHA -> origin/main`; helper
+   одновременно pin-ит exact новый contract и сохраняет
+   `CONTRACT_MIGRATED_FROM`. Другой contract mismatch остаётся read-only.
 4. Генерируй identities детерминированным helper, не JavaScript snippets:
 
    ```bash

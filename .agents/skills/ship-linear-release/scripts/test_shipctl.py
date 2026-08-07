@@ -549,6 +549,15 @@ class PreflightTest(GitMixin, unittest.TestCase):
             with mock.patch.dict(MODULE.os.environ, {"CODEX_THREAD_ID": thread_id}):
                 with io.StringIO() as output, redirect_stdout(output):
                     self.assertEqual(MODULE.command_takeover(args), 0)
+                (repo / MODULE.SKILL_PATH / "SKILL.md").write_text(
+                    "---\nname: test\n---\n# recovery upgrade\n", encoding="utf-8"
+                )
+                self.git(repo, "add", MODULE.SKILL_PATH)
+                self.git(repo, "commit", "-m", "upgrade recovery contract")
+                upgraded_head = self.git(repo, "rev-parse", "HEAD")
+                upgraded_contract = self.git(repo, "rev-parse", f"HEAD:{MODULE.SKILL_PATH}")
+                self.git(repo, "push", "origin", "main")
+                _, upgrade_preflight, _ = self.preflight(repo)
                 with io.StringIO() as output, redirect_stdout(output):
                     fence_code = MODULE.command_fence_guards(args)
                     result = json.loads(output.getvalue())
@@ -562,6 +571,11 @@ class PreflightTest(GitMixin, unittest.TestCase):
             coordinator_message = self.git(repo, "show", "-s", "--format=%B", coordinator)
         self.assertEqual((fence_code, result["status"]), (0, "fenced"))
         self.assertEqual((repeat_code, repeat["status"]), (0, "already-fenced"))
+        self.assertEqual(upgrade_preflight["route"], "recover-owner-upgrade")
+        self.assertEqual(
+            upgrade_preflight["mutation_scope"],
+            "recovery-contract-upgrade-and-fencing-only",
+        )
         self.assertEqual(fenced_parent, guard)
         guard_metadata = MODULE.fields(guard_message)
         self.assertEqual(guard_metadata["STATE"], "fenced")
@@ -570,6 +584,9 @@ class PreflightTest(GitMixin, unittest.TestCase):
         coordinator_metadata = MODULE.fields(coordinator_message)
         self.assertEqual(coordinator_metadata["ACTION_KIND"], "fence-guards")
         self.assertEqual(coordinator_metadata["ACTION_STATUS"], "reconciled")
+        self.assertEqual(coordinator_metadata["CONTRACT_SOURCE_SHA"], upgraded_head)
+        self.assertEqual(coordinator_metadata["CONTRACT_DIGEST"], upgraded_contract)
+        self.assertIn(f"source={head};", coordinator_metadata["CONTRACT_MIGRATED_FROM"])
         self.assertEqual(MODULE._structured_token(coordinator_metadata["RECOVERY"], "phase"), "inventory")
 
     def test_matching_proof_cannot_lift_active_pause(self) -> None:

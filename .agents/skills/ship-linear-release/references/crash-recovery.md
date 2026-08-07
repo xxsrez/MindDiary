@@ -101,8 +101,10 @@ owner, который lift-ит каждый scope только по его evid
    Для `route=takeover` это делает `shipctl.py takeover` одним idempotent
    bounded call. Не собирай takeover через generic `transition`: тот renderer
    намеренно не меняет stable owner/epoch headers и не выполняет push.
-   Сразу после takeover (и на любом fresh `route=recover-owner` с
-   `RECOVERY phase=fencing`) вызови `shipctl.py fence-guards`. Helper сам
+   Сразу после takeover (и на любом fresh
+   `route=recover-owner|recover-owner-upgrade` с `RECOVERY phase=fencing`)
+   вызови `shipctl.py fence-guards`. Upgrade-route разрешён только тому же
+   runtime owner для coherent fast-forward contract migration. Helper сам
    durable-записывает exact vector intent, перечитывает raced tips, проверяет
    run/issue/generation, atomic CAS-fence-ит indexed guards и reconciles phase
    `inventory`. Не конструируй fencing shell/JavaScript snippets вручную.

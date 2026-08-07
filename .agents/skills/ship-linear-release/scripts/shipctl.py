@@ -456,6 +456,7 @@ def coordinator_refs(
                 "classification": _ref_classification(state, owner_state),
                 "owner_proof_digest": metadata.get("OWNER_PROOF_DIGEST", "unknown"),
                 "owner_proof_kind": metadata.get("OWNER_PROOF_KIND", "unknown"),
+                "contract_source_sha": metadata.get("CONTRACT_SOURCE_SHA", "unknown"),
                 "contract_digest": metadata.get("CONTRACT_DIGEST", "unknown"),
                 "active_restrictions": _active_restrictions(metadata),
                 "handoff_takeover_ready": _handoff_takeover_ready(metadata),
@@ -780,10 +781,28 @@ def command_preflight(args: argparse.Namespace) -> int:
                 and active["state"] == "recovering"
                 and active["owner_state"] == "active"
             )
+            contract_source = active["contract_source_sha"]
+            coherent_old_contract = (
+                bool(GIT_OID.fullmatch(contract_source))
+                and bool(GIT_OID.fullmatch(active_contract))
+                and foreign_main.object_exists(observation_repo, contract_source)
+                and tree_oid(observation_repo, contract_source, args.skill_path) == active_contract
+            )
+            safe_contract_upgrade = (
+                proof_matches
+                and not contract_matches
+                and coherent_old_contract
+                and remote_sha is not None
+                and git(observation_repo, "merge-base", "--is-ancestor", contract_source, remote_sha)[0] == 0
+                and active["state"] == "recovering"
+                and active["owner_state"] == "active"
+            )
             if active["handoff_takeover_ready"]:
                 route = "takeover"
             elif recoverable_owner:
                 route = "recover-owner"
+            elif safe_contract_upgrade:
+                route = "recover-owner-upgrade"
             else:
                 route = (
                     "resume"
@@ -795,6 +814,8 @@ def command_preflight(args: argparse.Namespace) -> int:
                 reasons.append("owner-proof-missing-invalid-or-mismatched")
             if not contract_matches:
                 reasons.append("active-contract-mismatch-or-unknown")
+            if safe_contract_upgrade:
+                reasons.append("active-contract-fast-forward-upgrade-safe")
             if active["state"] == "needs-input":
                 reasons.append("canonical-state-needs-input")
             elif active["state"] != "running":
@@ -827,6 +848,11 @@ def command_preflight(args: argparse.Namespace) -> int:
                 "references/crash-recovery.md",
                 "references/external-main.md",
             ],
+            "recover-owner-upgrade": [
+                "references/coordination.md",
+                "references/crash-recovery.md",
+                "references/external-main.md",
+            ],
             "blocked": [],
         }[route]
         mutation_scope = {
@@ -834,6 +860,7 @@ def command_preflight(args: argparse.Namespace) -> int:
             "resume": "run",
             "takeover": "coordinator-claim-cas-only",
             "recover-owner": "recovery-only",
+            "recover-owner-upgrade": "recovery-contract-upgrade-and-fencing-only",
             "recovery": "none",
             "blocked": "none",
         }[route]
@@ -841,7 +868,13 @@ def command_preflight(args: argparse.Namespace) -> int:
             "schema": 1,
             "status": "ok" if route != "blocked" else "blocked",
             "route": route,
-            "mutation_allowed": route in {"normal", "resume", "takeover", "recover-owner"},
+            "mutation_allowed": route in {
+                "normal",
+                "resume",
+                "takeover",
+                "recover-owner",
+                "recover-owner-upgrade",
+            },
             "mutation_scope": mutation_scope,
             "reasons": reasons or ["clean-start"],
             "repo": str(repo),
@@ -1631,7 +1664,7 @@ def command_takeover(args: argparse.Namespace) -> int:
         ),
         None,
     )
-    if preflight.get("route") in {"resume", "recover-owner"} and active and active.get("owner_proof_digest") == runtime_proof:
+    if preflight.get("route") in {"resume", "recover-owner", "recover-owner-upgrade"} and active and active.get("owner_proof_digest") == runtime_proof:
         emit(
             {
                 "schema": 1,
@@ -1938,7 +1971,10 @@ def command_fence_guards(args: argparse.Namespace) -> int:
         emit({"schema": 1, "status": "blocked", "reason": "runtime-thread-id-unavailable"})
         return 3
     preflight_code, preflight = _capture_preflight(repo, args.remote, args.default)
-    if preflight_code != 0 or preflight.get("route") != "recover-owner":
+    if preflight_code != 0 or preflight.get("route") not in {
+        "recover-owner",
+        "recover-owner-upgrade",
+    }:
         emit(
             {
                 "schema": 1,
@@ -2061,11 +2097,32 @@ def command_fence_guards(args: argparse.Namespace) -> int:
             "PAYLOAD_DIGEST": vector_digest,
             "EFFECT_IDENTITY": f"fenced-owner={owner_id};epoch={owner_epoch};count={len(guard_entries)}",
         }
+        intent_replacements = {"FENCE_VECTOR": vector}
+        if preflight.get("route") == "recover-owner-upgrade":
+            remote_sha = preflight.get("remote_sha")
+            contract_oid = preflight.get("contract_oid")
+            old_source = coordinator_fields.get("CONTRACT_SOURCE_SHA", "unknown")
+            old_digest = coordinator_fields.get("CONTRACT_DIGEST", "unknown")
+            if (
+                not isinstance(remote_sha, str)
+                or GIT_OID.fullmatch(remote_sha) is None
+                or not isinstance(contract_oid, str)
+                or GIT_OID.fullmatch(contract_oid) is None
+            ):
+                emit({"schema": 1, "status": "blocked", "reason": "contract-upgrade-target-invalid"})
+                return 3
+            intent_replacements.update(
+                {
+                    "CONTRACT_SOURCE_SHA": remote_sha,
+                    "CONTRACT_DIGEST": contract_oid,
+                    "CONTRACT_MIGRATED_FROM": f"source={old_source};digest={old_digest}",
+                }
+            )
         intent_message, render_errors = _render_coordinator_action(
             coordinator,
             coordinator_message,
             "ship-linear-release intent fence indexed guards",
-            {"FENCE_VECTOR": vector},
+            intent_replacements,
             action,
             "intent",
         )
