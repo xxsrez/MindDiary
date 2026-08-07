@@ -45,6 +45,8 @@ import type {
   McpTokenMetadata,
   McpTokenStore,
   MetadataStore,
+  MindRouteAuthorizationQuery,
+  MindRouteMetadataStore,
   CreateMcpTokenRequest,
   CreateMcpTokenResult,
   CurrentAuthorizationToken,
@@ -72,6 +74,7 @@ import type {
   CreateOrdinaryMindResult,
   OrdinaryMindMetadataTransaction,
   OrdinaryMindRecordSet,
+  OrdinaryMindRouteSnapshot,
   OrdinaryMindSnapshot,
   OrdinaryMindStore,
   RenameOrdinaryMindRequest,
@@ -1334,6 +1337,7 @@ export class InMemoryRevisionMetadataStore
   implements
     ContentCommitMetadataStore,
     ExportDownloadGrantStore,
+    MindRouteMetadataStore,
     PersonalMindStore,
     OrdinaryMindStore {
   readonly kind = "metadata-store" as const;
@@ -1437,6 +1441,74 @@ export class InMemoryRevisionMetadataStore
     } catch {
       return null;
     }
+  }
+
+  async listActiveMembershipMindIds(
+    principalId: Principal["principalId"],
+  ): Promise<readonly SpaceId[]> {
+    const principal = this.#principals.get(principalId);
+    if (!principal || principal.state !== "active") return Object.freeze([]);
+    const personalSpaceId = this.#personalBindings.get(principalId)?.spaceId;
+    return Object.freeze(
+      [...new Set(
+        [...this.#memberships.values()]
+          .filter(
+            (membership) =>
+              membership.principalId === principalId &&
+              membership.state === "active" &&
+              membership.spaceId !== personalSpaceId,
+          )
+          .map((membership) => membership.spaceId),
+      )].sort(),
+    );
+  }
+
+  async readResolvedSpace(
+    spaceId: SpaceId,
+  ): Promise<Readonly<OrdinaryMindRouteSnapshot> | null> {
+    return this.#ordinaryMindRouteSnapshot(spaceId);
+  }
+
+  #ordinaryMindRouteSnapshot(
+    spaceId: SpaceId,
+  ): Readonly<OrdinaryMindRouteSnapshot> | null {
+    const space = this.#knowledgeSpaces.get(spaceId);
+    if (
+      !space ||
+      space.state !== "active" ||
+      [...this.#personalBindings.values()].some(
+        (binding) => binding.spaceId === spaceId,
+      )
+    ) {
+      return null;
+    }
+    const parsedHandle = parseCanonicalSpaceHandle(space.spaceHandle);
+    const reservation = this.#activeHandlesBySpace.get(spaceId);
+    if (
+      parsedHandle.kind !== "valid" ||
+      isReservedTopLevelHandle(parsedHandle.canonicalHandle) ||
+      space.normalizedHandle !== parsedHandle.canonicalHandle ||
+      !reservation ||
+      reservation.spaceId !== spaceId ||
+      reservation.canonicalHandle !== parsedHandle.canonicalHandle ||
+      this.#activeHandlesByKey.get(
+        handleKey(reservation.host, reservation.canonicalHandle),
+      )?.spaceId !== spaceId ||
+      ordinaryMindSnapshotFromMaps(
+        spaceId,
+        this.#knowledgeSpaces,
+        this.#memberships,
+      ) === null ||
+      this.#spaces.get(spaceId)?.head !== space.headRevisionId ||
+      !this.#spaces.get(spaceId)?.revisions.has(space.headRevisionId)
+    ) {
+      return null;
+    }
+    return Object.freeze({
+      host: reservation.host,
+      canonicalHandle: parsedHandle.canonicalHandle,
+      space: freezeKnowledgeSpace(space),
+    });
   }
 
   async readPersonalMindProfile(
@@ -3071,6 +3143,27 @@ export class InMemoryRevisionMetadataStore
     });
   }
 
+  /** Test-only account-deletion interleaving for current authorization reads. */
+  async disablePrincipalForTest(
+    principalId: Principal["principalId"],
+    occurredAt: Principal["updatedAt"],
+  ): Promise<boolean> {
+    return this.#runExclusive(async () => {
+      const principal = this.#principals.get(principalId);
+      if (!principal || principal.state !== "active") return false;
+      this.#principals.set(
+        principalId,
+        freezePrincipal({
+          ...principal,
+          state: "deleted",
+          profileVersion: version(principal.profileVersion + 1),
+          updatedAt: occurredAt,
+        }),
+      );
+      return true;
+    });
+  }
+
   /** Test-only valid non-owner membership setup for current-state authorization races. */
   async grantOrdinaryMembershipForTest(
     membership: Readonly<SpaceMembership>,
@@ -3171,6 +3264,64 @@ export class InMemoryRevisionMetadataStore
       }
       this.#knowledgeSpaces.set(spaceId, updatedSpace);
       this.#memberships.set(revoked.membershipId, revoked);
+      return true;
+    });
+  }
+
+  /** Test-only current visibility transition with the same access-epoch effect. */
+  async changeOrdinaryVisibilityForTest(
+    spaceId: KnowledgeSpace["spaceId"],
+    visibility: KnowledgeSpace["visibility"],
+    occurredAt: KnowledgeSpace["updatedAt"],
+  ): Promise<boolean> {
+    return this.#runExclusive(async () => {
+      const space = this.#knowledgeSpaces.get(spaceId);
+      if (
+        !space ||
+        space.state !== "active" ||
+        !["private", "unlisted", "public"].includes(visibility) ||
+        [...this.#personalBindings.values()].some(
+          (binding) => binding.spaceId === spaceId,
+        )
+      ) {
+        return false;
+      }
+      if (space.visibility === visibility) return true;
+      this.#knowledgeSpaces.set(
+        spaceId,
+        freezeKnowledgeSpace({
+          ...space,
+          visibility,
+          metadataVersion: version(space.metadataVersion + 1),
+          accessVersion: version(space.accessVersion + 1),
+          updatedAt: occurredAt,
+        }),
+      );
+      return true;
+    });
+  }
+
+  /** Test-only corrupt aggregate fixture; the canonical registry is untouched. */
+  async corruptOrdinaryHandleForTest(
+    spaceId: KnowledgeSpace["spaceId"],
+  ): Promise<boolean> {
+    return this.#runExclusive(async () => {
+      const space = this.#knowledgeSpaces.get(spaceId);
+      if (
+        !space ||
+        [...this.#personalBindings.values()].some(
+          (binding) => binding.spaceId === spaceId,
+        )
+      ) {
+        return false;
+      }
+      this.#knowledgeSpaces.set(
+        spaceId,
+        freezeKnowledgeSpace({
+          ...space,
+          normalizedHandle: `${space.normalizedHandle}-corrupt` as KnowledgeSpace["normalizedHandle"],
+        }),
+      );
       return true;
     });
   }
@@ -3303,8 +3454,77 @@ export class InMemoryRevisionMetadataStore
   async readCurrentAuthorizationState(
     query: AuthorizationStateQuery,
   ): Promise<AuthorizationState | null> {
+    if (query.tokenId === null) {
+      const current = this.#currentSitesAuthorizationState(query);
+      if (current !== null) return current;
+    }
     const state = this.#authorizationStates.get(authorizationStateKey(query));
     return state ? cloneAuthorizationState(state) : null;
+  }
+
+  async readCurrentRouteAuthorizationState(
+    query: MindRouteAuthorizationQuery,
+  ): Promise<AuthorizationState | null> {
+    const parsed = parseCanonicalSpaceHandle(query.handle);
+    const snapshot = this.#ordinaryMindRouteSnapshot(query.spaceId);
+    if (
+      parsed.kind !== "valid" ||
+      isReservedTopLevelHandle(parsed.canonicalHandle) ||
+      !snapshot ||
+      snapshot.host !== query.host ||
+      snapshot.canonicalHandle !== parsed.canonicalHandle
+    ) {
+      return null;
+    }
+    return this.#currentSitesAuthorizationState({
+      principalId: query.principalId,
+      spaceId: query.spaceId,
+      tokenId: query.tokenId,
+    });
+  }
+
+  #currentSitesAuthorizationState(
+    query: AuthorizationStateQuery,
+  ): AuthorizationState | null {
+    if (query.tokenId !== null) return null;
+    const principal = this.#principals.get(query.principalId);
+    const space = this.#knowledgeSpaces.get(query.spaceId);
+    if (!principal || !space) return null;
+    const matchingMemberships = [...this.#memberships.values()]
+      .filter(
+        (membership) =>
+          membership.principalId === query.principalId &&
+          membership.spaceId === query.spaceId,
+      )
+      .sort((left, right) => right.version - left.version);
+    const activeMemberships = matchingMemberships.filter(
+      (membership) => membership.state === "active",
+    );
+    if (activeMemberships.length > 1) return null;
+    const membership = activeMemberships[0] ?? matchingMemberships[0] ?? null;
+    return Object.freeze({
+      principal: Object.freeze({
+        principalId: principal.principalId,
+        state: principal.state,
+      }),
+      space: Object.freeze({
+        spaceId: space.spaceId,
+        state: space.state,
+        visibility: space.visibility,
+        accessVersion: space.accessVersion,
+      }),
+      membership:
+        membership === null
+          ? null
+          : Object.freeze({
+              principalId: membership.principalId,
+              spaceId: membership.spaceId,
+              role: membership.role,
+              state: membership.state,
+              version: membership.version,
+            }),
+      token: null,
+    });
   }
 
   async #runExclusive<Result>(operation: () => Promise<Result>): Promise<Result> {

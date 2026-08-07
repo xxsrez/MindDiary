@@ -450,6 +450,37 @@ export interface OrdinaryMindStore extends HandleRegistry {
   ): Promise<Result>;
 }
 
+/** Safe ordinary metadata used only after current route authorization. */
+export interface OrdinaryMindRouteSnapshot {
+  readonly host: VerifiedSpaceHost;
+  readonly canonicalHandle: CanonicalSpaceHandle;
+  readonly space: Readonly<KnowledgeSpace>;
+}
+
+export interface MindRouteAuthorizationQuery extends AuthorizationStateQuery {
+  readonly host: VerifiedSpaceHost;
+  readonly handle: string;
+}
+
+/**
+ * Current metadata source for management routes and membership-only listing.
+ * Implementations must use the same principal, Space, membership, and handle
+ * records as lifecycle commands; derived indexes and fixture ACLs are not a
+ * routing source of truth.
+ */
+export interface MindRouteMetadataStore
+  extends PersonalMindStore,
+    HandleRegistry,
+    AuthorizationStateReader,
+    ResolvedSpaceReader<OrdinaryMindRouteSnapshot> {
+  listActiveMembershipMindIds(
+    principalId: PrincipalId,
+  ): Promise<readonly SpaceId[]>;
+  readCurrentRouteAuthorizationState(
+    query: MindRouteAuthorizationQuery,
+  ): Promise<CurrentAuthorizationState | null>;
+}
+
 export interface ImmutableObjectWriteRequest {
   readonly bytes: Uint8Array;
   readonly mediaType: MarkdownMediaType;
