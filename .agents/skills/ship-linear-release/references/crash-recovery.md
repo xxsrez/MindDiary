@@ -108,6 +108,10 @@ owner, который lift-ит каждый scope только по его evid
    durable-записывает exact vector intent, перечитывает raced tips, проверяет
    run/issue/generation, atomic CAS-fence-ит indexed guards и reconciles phase
    `inventory`. Не конструируй fencing shell/JavaScript snippets вручную.
+   Helper принимает canonical one-field-per-line guards и ранее опубликованный
+   compact layout (`RUN_ID; RUN_KEY; ISSUE`, `OWNER; CLAIM`, `FEATURE`), но
+   descendant fence всегда canonicalizes metadata; иная неоднозначная legacy
+   форма остаётся fail-closed.
 2. До dispatch прочитай `CLAIM_INDEX`, `EXECUTION_INDEX` и bounded namespace
    guard refs текущего `run_key`. `CLAIM_INDEX` определяет authority/recovery,
    `EXECUTION_INDEX` — occupancy; live ready claim не означает running slot.

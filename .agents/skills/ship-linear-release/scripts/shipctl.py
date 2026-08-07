@@ -1917,6 +1917,85 @@ def _update_structured(value: str, replacements: dict[str, str]) -> str:
     return ";".join(output)
 
 
+def _guard_metadata(message: str) -> dict[str, str]:
+    parsed = fields(message)
+
+    def colon_value(name: str, pattern: str) -> str | None:
+        direct = parsed.get(name, "")
+        if re.fullmatch(pattern, direct):
+            return direct
+        match = re.search(
+            rf"(?:^|;\s*){re.escape(name)}:\s*({pattern})(?=;|$)",
+            message,
+            re.MULTILINE,
+        )
+        return match.group(1) if match else None
+
+    normalized: dict[str, str] = {}
+    scalar_patterns = {
+        "SCHEMA": r"[1-9][0-9]*",
+        "KIND": r"[A-Z][A-Z0-9_]*",
+        "STATE": r"[a-z][a-z0-9-]*",
+        "RUN_ID": UUID_TEXT.pattern,
+        "RUN_KEY": r"[0-9a-f]{32}",
+        "ISSUE": ISSUE_IDENTIFIER.pattern,
+        "CLAIM_TOKEN_DIGEST": LOWER_DIGEST.pattern,
+        "FEATURE_REF": r"refs/heads/[^;\s]+",
+        "FEATURE_EXPECTED_OLD": r"[^;\s]+",
+        "FEATURE_HEAD": GIT_OID.pattern,
+        "CHECKS_DIGEST": LOWER_DIGEST.pattern,
+        "PREVIOUS_GUARD": rf"(?:{GIT_OID.pattern}|zero|none)",
+        "UPDATED_BY": r"[^;\r\n]+",
+        "TERMINAL_REASON": r"[^;\r\n]+",
+        "TERMINAL_EVIDENCE": r"[^;\r\n]+",
+    }
+    for name, pattern in scalar_patterns.items():
+        value = colon_value(name, pattern)
+        if value is not None:
+            normalized[name] = value
+
+    owner = re.search(
+        rf"(?:^|;\s*)OWNER:\s*id=({UUID_TEXT.pattern});\s*epoch=([1-9][0-9]*)(?=;|$)",
+        message,
+        re.MULTILINE,
+    )
+    owner_id = colon_value("OWNER_ID", UUID_TEXT.pattern)
+    owner_epoch = colon_value("OWNER_EPOCH", r"[1-9][0-9]*")
+    if owner_id is not None:
+        normalized["OWNER_ID"] = owner_id
+    elif owner:
+        normalized["OWNER_ID"] = owner.group(1)
+    if owner_epoch is not None:
+        normalized["OWNER_EPOCH"] = owner_epoch
+    elif owner:
+        normalized["OWNER_EPOCH"] = owner.group(2)
+
+    claim = re.search(
+        rf"(?:^|;\s*)CLAIM:\s*generation=([1-9][0-9]*);\s*token_digest=({LOWER_DIGEST.pattern})(?=;|$)",
+        message,
+        re.MULTILINE,
+    )
+    generation = colon_value("CLAIM_GENERATION", r"[1-9][0-9]*")
+    if generation is not None:
+        normalized["CLAIM_GENERATION"] = generation
+    elif claim:
+        normalized["CLAIM_GENERATION"] = claim.group(1)
+    if "CLAIM_TOKEN_DIGEST" not in normalized and claim:
+        normalized["CLAIM_TOKEN_DIGEST"] = claim.group(2)
+
+    feature = re.search(
+        rf"(?:^|;\s*)FEATURE:\s*ref=(refs/heads/[^;\s]+);\s*"
+        rf"expected_old=([^;\s]+);\s*head=({GIT_OID.pattern})(?=;|$)",
+        message,
+        re.MULTILINE,
+    )
+    if feature:
+        normalized.setdefault("FEATURE_REF", feature.group(1))
+        normalized.setdefault("FEATURE_EXPECTED_OLD", feature.group(2))
+        normalized.setdefault("FEATURE_HEAD", feature.group(3))
+    return normalized
+
+
 def _render_guard_fence_message(
     parent_message: str,
     issue: str,
@@ -1926,7 +2005,7 @@ def _render_guard_fence_message(
     owner_epoch: str,
     coordinator_intent: str,
 ) -> tuple[str | None, list[str]]:
-    metadata = fields(parent_message)
+    metadata = _guard_metadata(parent_message)
     if metadata.get("KIND") != "CLAIM_GUARD":
         return None, [f"invalid:guard-kind:{issue}"]
     if metadata.get("ISSUE") != issue or metadata.get("CLAIM_GENERATION") != str(generation):
@@ -1940,13 +2019,62 @@ def _render_guard_fence_message(
         "FENCED_BY": f"owner={owner_id};epoch={owner_epoch};coordinator={coordinator_intent}",
         "FENCE_REASON": "takeover-recovery",
     }
-    replaced = set(replacements)
+    semantic_keys = {
+        "SCHEMA",
+        "KIND",
+        "STATE",
+        "RUN_ID",
+        "RUN_KEY",
+        "ISSUE",
+        "OWNER",
+        "OWNER_ID",
+        "OWNER_EPOCH",
+        "CLAIM",
+        "CLAIM_GENERATION",
+        "CLAIM_TOKEN_DIGEST",
+        "FEATURE",
+        "FEATURE_REF",
+        "FEATURE_EXPECTED_OLD",
+        "FEATURE_HEAD",
+        "CHECKS_DIGEST",
+        "PREVIOUS_GUARD",
+        "UPDATED_BY",
+        "TERMINAL_REASON",
+        "TERMINAL_EVIDENCE",
+        "FENCED_BY",
+        "FENCE_REASON",
+    }
+    normalized = dict(metadata)
+    normalized.update(replacements)
     lines = [f"ship-linear-release {issue} fenced by recovery", ""]
     for line in parent_message.splitlines():
         key, separator, _ = line.partition(":")
-        if separator and re.fullmatch(r"[A-Z][A-Z0-9_]*", key) and key not in replaced:
+        if separator and re.fullmatch(r"[A-Z][A-Z0-9_]*", key) and key not in semantic_keys:
             lines.append(line)
-    lines.extend(f"{name}: {value}" for name, value in replacements.items())
+    for name in (
+        "SCHEMA",
+        "KIND",
+        "STATE",
+        "RUN_ID",
+        "RUN_KEY",
+        "ISSUE",
+        "OWNER_ID",
+        "OWNER_EPOCH",
+        "CLAIM_GENERATION",
+        "CLAIM_TOKEN_DIGEST",
+        "FEATURE_REF",
+        "FEATURE_EXPECTED_OLD",
+        "FEATURE_HEAD",
+        "CHECKS_DIGEST",
+        "PREVIOUS_GUARD",
+        "UPDATED_BY",
+        "TERMINAL_REASON",
+        "TERMINAL_EVIDENCE",
+        "FENCED_BY",
+        "FENCE_REASON",
+    ):
+        if name in normalized:
+            lines.append(f"{name}: {normalized[name]}")
     return "\n".join(lines) + "\n", []
 
 
@@ -2038,6 +2166,25 @@ def command_fence_guards(args: argparse.Namespace) -> int:
     action_kind = coordinator_fields.get("ACTION_KIND", "")
     action_status = coordinator_fields.get("ACTION_STATUS", "").lower()
     recovery_phase = _structured_token(recovery, "phase")
+    contract_replacements: dict[str, str] = {}
+    if preflight.get("route") == "recover-owner-upgrade":
+        remote_sha = preflight.get("remote_sha")
+        contract_oid = preflight.get("contract_oid")
+        old_source = coordinator_fields.get("CONTRACT_SOURCE_SHA", "unknown")
+        old_digest = coordinator_fields.get("CONTRACT_DIGEST", "unknown")
+        if (
+            not isinstance(remote_sha, str)
+            or GIT_OID.fullmatch(remote_sha) is None
+            or not isinstance(contract_oid, str)
+            or GIT_OID.fullmatch(contract_oid) is None
+        ):
+            emit({"schema": 1, "status": "blocked", "reason": "contract-upgrade-target-invalid"})
+            return 3
+        contract_replacements = {
+            "CONTRACT_SOURCE_SHA": remote_sha,
+            "CONTRACT_DIGEST": contract_oid,
+            "CONTRACT_MIGRATED_FROM": f"source={old_source};digest={old_digest}",
+        }
     if action_kind == "fence-guards" and action_status == "reconciled" and recovery_phase != "fencing":
         tips, tip_errors = _remote_ref_tips(repo, args.remote, [item[2] for item in guard_entries])
         if tip_errors or not _materialize_exact(repo, args.remote, list(tips.values())):
@@ -2046,7 +2193,7 @@ def command_fence_guards(args: argparse.Namespace) -> int:
         invalid = []
         for issue, generation, ref in guard_entries:
             message_code, message = git(repo, "show", "-s", "--format=%B", tips[ref])
-            metadata = fields(message) if message_code == 0 else {}
+            metadata = _guard_metadata(message) if message_code == 0 else {}
             if (
                 metadata.get("STATE") != "fenced"
                 or metadata.get("ISSUE") != issue
@@ -2097,27 +2244,7 @@ def command_fence_guards(args: argparse.Namespace) -> int:
             "PAYLOAD_DIGEST": vector_digest,
             "EFFECT_IDENTITY": f"fenced-owner={owner_id};epoch={owner_epoch};count={len(guard_entries)}",
         }
-        intent_replacements = {"FENCE_VECTOR": vector}
-        if preflight.get("route") == "recover-owner-upgrade":
-            remote_sha = preflight.get("remote_sha")
-            contract_oid = preflight.get("contract_oid")
-            old_source = coordinator_fields.get("CONTRACT_SOURCE_SHA", "unknown")
-            old_digest = coordinator_fields.get("CONTRACT_DIGEST", "unknown")
-            if (
-                not isinstance(remote_sha, str)
-                or GIT_OID.fullmatch(remote_sha) is None
-                or not isinstance(contract_oid, str)
-                or GIT_OID.fullmatch(contract_oid) is None
-            ):
-                emit({"schema": 1, "status": "blocked", "reason": "contract-upgrade-target-invalid"})
-                return 3
-            intent_replacements.update(
-                {
-                    "CONTRACT_SOURCE_SHA": remote_sha,
-                    "CONTRACT_DIGEST": contract_oid,
-                    "CONTRACT_MIGRATED_FROM": f"source={old_source};digest={old_digest}",
-                }
-            )
+        intent_replacements = {"FENCE_VECTOR": vector, **contract_replacements}
         intent_message, render_errors = _render_coordinator_action(
             coordinator,
             coordinator_message,
@@ -2158,7 +2285,7 @@ def command_fence_guards(args: argparse.Namespace) -> int:
     for issue, generation, ref in guard_entries:
         old_tip = current[ref]
         message_code, guard_message = git(repo, "show", "-s", "--format=%B", old_tip)
-        guard_fields = fields(guard_message) if message_code == 0 else {}
+        guard_fields = _guard_metadata(guard_message) if message_code == 0 else {}
         fenced_by = guard_fields.get("FENCED_BY", "")
         exact_fence = (
             guard_fields.get("STATE") == "fenced"
@@ -2214,7 +2341,11 @@ def command_fence_guards(args: argparse.Namespace) -> int:
         intent,
         coordinator_message,
         "ship-linear-release reconciled fence indexed guards",
-        {"RECOVERY": reconciled_recovery, "LIVE_GUARDS": live_guards},
+        {
+            "RECOVERY": reconciled_recovery,
+            "LIVE_GUARDS": live_guards,
+            **contract_replacements,
+        },
         {},
         "reconciled",
         f"fenced={len(guard_entries)};vector-sha256={result_digest}",

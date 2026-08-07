@@ -501,18 +501,15 @@ class PreflightTest(GitMixin, unittest.TestCase):
                     "SCHEMA: 1\n"
                     "KIND: CLAIM_GUARD\n"
                     "STATE: ready\n"
-                    f"RUN_ID: {run_id}\n"
-                    f"RUN_KEY: {run_key}\n"
-                    f"ISSUE: {issue}\n"
-                    "OWNER_ID: 07654254-e020-436b-9c04-6ca40f2f4a1e\n"
-                    "OWNER_EPOCH: 1\n"
-                    "CLAIM_GENERATION: 1\n"
-                    "CLAIM_TOKEN_DIGEST: " + "a" * 64 + "\n"
-                    "FEATURE_REF: refs/heads/codex/and-47-test/"
-                    f"r{run_key}-e1-c1\n"
-                    f"FEATURE_HEAD: {head}\n"
-                    "PREVIOUS_GUARD: zero\n"
-                    "UPDATED_BY: worker\n"
+                    f"RUN_ID: {run_id}; RUN_KEY: {run_key}; ISSUE: {issue}\n"
+                    "OWNER: id=07654254-e020-436b-9c04-6ca40f2f4a1e; "
+                    "epoch=1; CLAIM: generation=1; token_digest=" + "a" * 64 + "\n"
+                    "FEATURE: ref=refs/heads/codex/and-47-test/"
+                    f"r{run_key}-e1-c1; expected_old=zero; head={head}\n"
+                    "CHECKS_DIGEST: " + "c" * 64 + "\n"
+                    "PREVIOUS_GUARD: zero; UPDATED_BY: worker\n"
+                    "TERMINAL_REASON: none\n"
+                    "TERMINAL_EVIDENCE: none\n"
                 ),
                 head,
             )
@@ -554,10 +551,30 @@ class PreflightTest(GitMixin, unittest.TestCase):
                 )
                 self.git(repo, "add", MODULE.SKILL_PATH)
                 self.git(repo, "commit", "-m", "upgrade recovery contract")
+                intermediate_head = self.git(repo, "rev-parse", "HEAD")
+                self.git(repo, "push", "origin", "main")
+                _, upgrade_preflight, _ = self.preflight(repo)
+                original_run = MODULE.foreign_main.run
+
+                def fail_atomic_push(target: Path, *call_args: str) -> subprocess.CompletedProcess[bytes]:
+                    if call_args and call_args[0] == "push" and "--atomic" in call_args:
+                        return subprocess.CompletedProcess(call_args, 1, b"", b"synthetic atomic race")
+                    return original_run(target, *call_args)
+
+                with mock.patch.object(MODULE.foreign_main, "run", side_effect=fail_atomic_push):
+                    with io.StringIO() as output, redirect_stdout(output):
+                        interrupted_code = MODULE.command_fence_guards(args)
+                        interrupted = json.loads(output.getvalue())
+                (repo / MODULE.SKILL_PATH / "SKILL.md").write_text(
+                    "---\nname: test\n---\n# pending intent contract upgrade\n",
+                    encoding="utf-8",
+                )
+                self.git(repo, "add", MODULE.SKILL_PATH)
+                self.git(repo, "commit", "-m", "upgrade contract after pending intent")
                 upgraded_head = self.git(repo, "rev-parse", "HEAD")
                 upgraded_contract = self.git(repo, "rev-parse", f"HEAD:{MODULE.SKILL_PATH}")
                 self.git(repo, "push", "origin", "main")
-                _, upgrade_preflight, _ = self.preflight(repo)
+                _, pending_upgrade_preflight, _ = self.preflight(repo)
                 with io.StringIO() as output, redirect_stdout(output):
                     fence_code = MODULE.command_fence_guards(args)
                     result = json.loads(output.getvalue())
@@ -571,7 +588,9 @@ class PreflightTest(GitMixin, unittest.TestCase):
             coordinator_message = self.git(repo, "show", "-s", "--format=%B", coordinator)
         self.assertEqual((fence_code, result["status"]), (0, "fenced"))
         self.assertEqual((repeat_code, repeat["status"]), (0, "already-fenced"))
+        self.assertEqual((interrupted_code, interrupted["status"]), (4, "cas-lost"))
         self.assertEqual(upgrade_preflight["route"], "recover-owner-upgrade")
+        self.assertEqual(pending_upgrade_preflight["route"], "recover-owner-upgrade")
         self.assertEqual(
             upgrade_preflight["mutation_scope"],
             "recovery-contract-upgrade-and-fencing-only",
@@ -586,7 +605,10 @@ class PreflightTest(GitMixin, unittest.TestCase):
         self.assertEqual(coordinator_metadata["ACTION_STATUS"], "reconciled")
         self.assertEqual(coordinator_metadata["CONTRACT_SOURCE_SHA"], upgraded_head)
         self.assertEqual(coordinator_metadata["CONTRACT_DIGEST"], upgraded_contract)
-        self.assertIn(f"source={head};", coordinator_metadata["CONTRACT_MIGRATED_FROM"])
+        self.assertIn(
+            f"source={intermediate_head};",
+            coordinator_metadata["CONTRACT_MIGRATED_FROM"],
+        )
         self.assertEqual(MODULE._structured_token(coordinator_metadata["RECOVERY"], "phase"), "inventory")
 
     def test_matching_proof_cannot_lift_active_pause(self) -> None:
