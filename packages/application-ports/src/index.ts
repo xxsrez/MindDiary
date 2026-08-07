@@ -434,13 +434,58 @@ export type RenameOrdinaryMindResult =
         | "invalid_record";
     };
 
-export interface OrdinaryMindMetadataTransaction {
+/** Server-owned IDs for one committed visibility audit effect. */
+export interface VisibilityAuditIdGenerator {
+  nextAuditEventId(): AuditEventId;
+  nextOutboxMessageId(): OutboxMessageId;
+}
+
+export interface ChangeOrdinaryMindVisibilityRequest {
+  readonly principalId: PrincipalId;
+  readonly spaceId: SpaceId;
+  readonly visibility: Visibility;
+  readonly acknowledgeLiveHeadAndHistoryExposure: boolean;
+  readonly expectedMetadataVersion: Version;
+  readonly idempotencyKey: IdempotencyKey;
+  readonly canonicalRequestHash: Sha256Digest;
+  readonly occurredAt: UtcInstant;
+  readonly requestId: ActorContext["requestId"];
+  readonly auditEventId: AuditEventId;
+  readonly auditOutboxMessageId: OutboxMessageId;
+}
+
+export type ChangeOrdinaryMindVisibilityResult =
+  | {
+      readonly kind: "visibility_changed";
+      readonly mind: Readonly<OrdinaryMindSnapshot>;
+      readonly changed: boolean;
+      readonly replayed: boolean;
+    }
+  | {
+      readonly kind: "metadata_conflict";
+      readonly currentMetadataVersion: Version;
+    }
+  | {
+      readonly kind:
+        | "mind_not_found"
+        | "personal_mind"
+        | "forbidden"
+        | "exposure_acknowledgement_required"
+        | "idempotency_conflict"
+        | "effect_conflict"
+        | "invalid_record";
+    };
+
+export interface OrdinaryMindMetadataTransaction extends AuthorizationTransaction {
   createOrdinaryMind(
     records: Readonly<OrdinaryMindRecordSet>,
   ): Promise<CreateOrdinaryMindResult>;
   renameOrdinaryMind(
     request: Readonly<RenameOrdinaryMindRequest>,
   ): Promise<RenameOrdinaryMindResult>;
+  changeOrdinaryMindVisibility(
+    request: Readonly<ChangeOrdinaryMindVisibilityRequest>,
+  ): Promise<ChangeOrdinaryMindVisibilityResult>;
 }
 
 /** Atomic handle, metadata, Owner, revision/HEAD and idempotency boundary. */

@@ -72,6 +72,8 @@ import type {
   RenamePersonalProfileRequest,
   RenamePersonalProfileResult,
   CreateOrdinaryMindResult,
+  ChangeOrdinaryMindVisibilityRequest,
+  ChangeOrdinaryMindVisibilityResult,
   OrdinaryMindMetadataTransaction,
   OrdinaryMindRecordSet,
   OrdinaryMindRouteSnapshot,
@@ -1025,6 +1027,59 @@ function cloneRecordMap<Key, Value extends object>(
   return new Map([...source].map(([key, value]) => [key, clone(value)]));
 }
 
+function currentSitesAuthorizationStateFromMaps(
+  query: AuthorizationStateQuery,
+  principals: ReadonlyMap<Principal["principalId"], Readonly<Principal>>,
+  knowledgeSpaces: ReadonlyMap<
+    KnowledgeSpace["spaceId"],
+    Readonly<KnowledgeSpace>
+  >,
+  memberships: ReadonlyMap<
+    SpaceMembership["membershipId"],
+    Readonly<SpaceMembership>
+  >,
+): AuthorizationState | null {
+  if (query.tokenId !== null) return null;
+  const principal = principals.get(query.principalId);
+  const space = knowledgeSpaces.get(query.spaceId);
+  if (!principal || !space) return null;
+  const matchingMemberships = [...memberships.values()]
+    .filter(
+      (membership) =>
+        membership.principalId === query.principalId &&
+        membership.spaceId === query.spaceId,
+    )
+    .sort((left, right) => right.version - left.version);
+  const activeMemberships = matchingMemberships.filter(
+    (membership) => membership.state === "active",
+  );
+  if (activeMemberships.length > 1) return null;
+  const membership = activeMemberships[0] ?? matchingMemberships[0] ?? null;
+  return Object.freeze({
+    principal: Object.freeze({
+      principalId: principal.principalId,
+      state: principal.state,
+    }),
+    space: Object.freeze({
+      spaceId: space.spaceId,
+      state: space.state,
+      visibility: space.visibility,
+      accessVersion: space.accessVersion,
+    }),
+    membership:
+      membership === null
+        ? null
+        : Object.freeze({
+            principalId: membership.principalId,
+            spaceId: membership.spaceId,
+            role: membership.role,
+            state: membership.state,
+            version: membership.version,
+          }),
+    token: null,
+  });
+}
+
 function accountFromMaps(
   principalId: Principal["principalId"],
   principals: ReadonlyMap<Principal["principalId"], Readonly<Principal>>,
@@ -1196,6 +1251,15 @@ type OrdinaryMindIdempotencyRecord =
       readonly key: RenameOrdinaryMindRequest["idempotencyKey"];
       readonly canonicalRequestHash: RenameOrdinaryMindRequest["canonicalRequestHash"];
       readonly mind: Readonly<OrdinaryMindSnapshot>;
+    }
+  | {
+      readonly operation: "change_visibility";
+      readonly principalId: Principal["principalId"];
+      readonly spaceId: KnowledgeSpace["spaceId"];
+      readonly key: ChangeOrdinaryMindVisibilityRequest["idempotencyKey"];
+      readonly canonicalRequestHash: ChangeOrdinaryMindVisibilityRequest["canonicalRequestHash"];
+      readonly mind: Readonly<OrdinaryMindSnapshot>;
+      readonly changed: boolean;
     };
 
 function freezeOrdinaryMindSnapshot(
@@ -1257,6 +1321,14 @@ function ordinaryMindRenameIdempotencyKey(
   return `${principalId}\u0000${spaceId}\u0000rename_space\u0000${key}`;
 }
 
+function ordinaryMindVisibilityIdempotencyKey(
+  principalId: Principal["principalId"],
+  spaceId: KnowledgeSpace["spaceId"],
+  key: ChangeOrdinaryMindVisibilityRequest["idempotencyKey"],
+): string {
+  return `${principalId}\u0000${spaceId}\u0000change_visibility\u0000${key}`;
+}
+
 function cloneOrdinaryMindIdempotencyRecords(
   records: ReadonlyMap<string, Readonly<OrdinaryMindIdempotencyRecord>>,
 ): Map<string, Readonly<OrdinaryMindIdempotencyRecord>> {
@@ -1266,6 +1338,129 @@ function cloneOrdinaryMindIdempotencyRecords(
       Object.freeze({ ...record, mind: freezeOrdinaryMindSnapshot(record.mind) }),
     ]),
   );
+}
+
+const VISIBILITY_AUDIT_METADATA_KEYS = [
+  "access_version",
+  "from_visibility",
+  "metadata_version",
+  "to_visibility",
+] as const;
+
+function visibilityAuditEffects(
+  request: Readonly<ChangeOrdinaryMindVisibilityRequest>,
+  previous: Readonly<KnowledgeSpace>,
+  current: Readonly<KnowledgeSpace>,
+): Readonly<{
+  event: Readonly<AuditEvent>;
+  outbox: Readonly<AuditOutboxMessage>;
+}> {
+  return Object.freeze({
+    event: Object.freeze({
+      auditEventId: request.auditEventId,
+      actor: Object.freeze({
+        kind: "principal" as const,
+        principalId: request.principalId,
+      }),
+      requestId: request.requestId,
+      eventType: "space.visibility_changed",
+      outcome: "succeeded" as const,
+      spaceId: request.spaceId,
+      occurredAt: request.occurredAt,
+      safeMetadata: Object.freeze({
+        access_version: current.accessVersion,
+        from_visibility: previous.visibility,
+        metadata_version: current.metadataVersion,
+        to_visibility: current.visibility,
+      }),
+    }),
+    outbox: Object.freeze({
+      outboxMessageId: request.auditOutboxMessageId,
+      auditEventId: request.auditEventId,
+      state: "pending" as const,
+      version: version(1),
+      attempts: 0,
+      availableAt: request.occurredAt,
+      claimExpiresAt: null,
+      createdAt: request.occurredAt,
+      updatedAt: request.occurredAt,
+    }),
+  });
+}
+
+function validVisibilityAuditEffects(
+  request: Readonly<ChangeOrdinaryMindVisibilityRequest>,
+  previous: Readonly<KnowledgeSpace>,
+  current: Readonly<KnowledgeSpace>,
+  effects: ReturnType<typeof visibilityAuditEffects>,
+): boolean {
+  const { event, outbox } = effects;
+  const keys = Object.keys(event.safeMetadata).sort();
+  return (
+    typeof event.auditEventId === "string" &&
+    BOUNDED_OPAQUE_ID.test(event.auditEventId) &&
+    event.auditEventId === request.auditEventId &&
+    event.actor.kind === "principal" &&
+    BOUNDED_OPAQUE_ID.test(event.actor.principalId) &&
+    event.actor.principalId === request.principalId &&
+    BOUNDED_OPAQUE_ID.test(event.requestId) &&
+    event.requestId === request.requestId &&
+    event.eventType === "space.visibility_changed" &&
+    event.outcome === "succeeded" &&
+    event.spaceId !== null &&
+    BOUNDED_OPAQUE_ID.test(event.spaceId) &&
+    event.spaceId === request.spaceId &&
+    event.occurredAt === request.occurredAt &&
+    Number.isFinite(Date.parse(event.occurredAt)) &&
+    keys.length === VISIBILITY_AUDIT_METADATA_KEYS.length &&
+    keys.every((key, index) => key === VISIBILITY_AUDIT_METADATA_KEYS[index]) &&
+    event.safeMetadata.from_visibility === previous.visibility &&
+    event.safeMetadata.to_visibility === current.visibility &&
+    event.safeMetadata.metadata_version === current.metadataVersion &&
+    event.safeMetadata.access_version === current.accessVersion &&
+    previous.visibility !== current.visibility &&
+    current.metadataVersion === previous.metadataVersion + 1 &&
+    current.accessVersion === previous.accessVersion + 1 &&
+    typeof outbox.outboxMessageId === "string" &&
+    BOUNDED_OPAQUE_ID.test(outbox.outboxMessageId) &&
+    outbox.outboxMessageId === request.auditOutboxMessageId &&
+    outbox.auditEventId === event.auditEventId &&
+    outbox.state === "pending" &&
+    outbox.version === 1 &&
+    outbox.attempts === 0 &&
+    outbox.availableAt === request.occurredAt &&
+    outbox.claimExpiresAt === null &&
+    outbox.createdAt === request.occurredAt &&
+    outbox.updatedAt === request.occurredAt
+  );
+}
+
+function stageVisibilityAuditEffects(
+  request: Readonly<ChangeOrdinaryMindVisibilityRequest>,
+  previous: Readonly<KnowledgeSpace>,
+  current: Readonly<KnowledgeSpace>,
+  auditEvents: Map<AuditEventId, Readonly<AuditEvent>>,
+  auditOutbox: Map<OutboxMessageId, Readonly<AuditOutboxMessage>>,
+): boolean {
+  const effects = visibilityAuditEffects(request, previous, current);
+  if (!validVisibilityAuditEffects(request, previous, current, effects)) {
+    return false;
+  }
+  if (
+    auditEvents.has(effects.event.auditEventId) ||
+    auditOutbox.has(effects.outbox.outboxMessageId) ||
+    [...auditOutbox.values()].some(
+      (candidate) => candidate.auditEventId === effects.event.auditEventId,
+    )
+  ) {
+    return false;
+  }
+  auditEvents.set(effects.event.auditEventId, cloneAuditEvent(effects.event));
+  auditOutbox.set(
+    effects.outbox.outboxMessageId,
+    cloneAuditOutbox(effects.outbox),
+  );
+  return true;
 }
 
 function validateOrdinaryMindRecords(
@@ -1331,7 +1526,11 @@ export type OrdinaryMindFailureStage =
   | "create_before_commit"
   | "rename_after_space"
   | "rename_after_idempotency"
-  | "rename_before_commit";
+  | "rename_before_commit"
+  | "visibility_after_space"
+  | "visibility_after_audit"
+  | "visibility_after_idempotency"
+  | "visibility_before_commit";
 
 export class InMemoryRevisionMetadataStore
   implements
@@ -1591,6 +1790,11 @@ export class InMemoryRevisionMetadataStore
     operation: (transaction: OrdinaryMindMetadataTransaction) => Promise<Result>,
   ): Promise<Result> {
     return this.#runExclusive(async () => {
+      const principals = cloneRecordMap(this.#principals, freezePrincipal);
+      const personalBindings = cloneRecordMap(
+        this.#personalBindings,
+        freezePersonalBinding,
+      );
       let knowledgeSpaces = cloneRecordMap(
         this.#knowledgeSpaces,
         freezeKnowledgeSpace,
@@ -1604,8 +1808,25 @@ export class InMemoryRevisionMetadataStore
       let activeByHandle = new Map(this.#activeHandlesByKey);
       let activeBySpace = new Map(this.#activeHandlesBySpace);
       let retired = new Map(this.#retiredHandles);
+      let auditEvents = new Map(
+        [...this.#auditEvents].map(([id, event]) => [id, cloneAuditEvent(event)]),
+      );
+      let auditOutbox = new Map(
+        [...this.#auditOutbox].map(([id, message]) => [
+          id,
+          cloneAuditOutbox(message),
+        ]),
+      );
 
       const transaction: OrdinaryMindMetadataTransaction = Object.freeze({
+        kind: "authorization-transaction" as const,
+        readCurrentAuthorizationState: async (query: AuthorizationStateQuery) =>
+          currentSitesAuthorizationStateFromMaps(
+            query,
+            principals,
+            knowledgeSpaces,
+            memberships,
+          ),
         createOrdinaryMind: async (
           records: Readonly<OrdinaryMindRecordSet>,
         ): Promise<CreateOrdinaryMindResult> => {
@@ -1916,6 +2137,215 @@ export class InMemoryRevisionMetadataStore
           idempotencyRecords = candidateIdempotencyRecords;
           return Object.freeze({ kind: "renamed", mind: renamed, replayed: false });
         },
+
+        changeOrdinaryMindVisibility: async (
+          request: Readonly<ChangeOrdinaryMindVisibilityRequest>,
+        ): Promise<ChangeOrdinaryMindVisibilityResult> => {
+          const principal = principals.get(request.principalId);
+          if (!principal || principal.state !== "active") {
+            return Object.freeze({ kind: "forbidden" });
+          }
+          const space = knowledgeSpaces.get(request.spaceId);
+          if (!space || space.state !== "active") {
+            return Object.freeze({ kind: "mind_not_found" });
+          }
+          const personalBinding = [...personalBindings.values()].find(
+            (binding) => binding.spaceId === request.spaceId,
+          );
+          if (personalBinding) {
+            return Object.freeze({
+              kind:
+                personalBinding.principalId === request.principalId
+                  ? "personal_mind"
+                  : "mind_not_found",
+            });
+          }
+
+          const aggregateMemberships = [...memberships.values()].filter(
+            (membership) => membership.spaceId === request.spaceId,
+          );
+          let currentAggregate: ReturnType<typeof SpaceAggregate.restoreOrdinary>;
+          try {
+            currentAggregate = SpaceAggregate.restoreOrdinary({
+              space,
+              memberships: aggregateMemberships,
+            });
+          } catch {
+            return Object.freeze({ kind: "invalid_record" });
+          }
+          const currentOwner = currentAggregate
+            .snapshot()
+            .memberships.find(
+              (membership) =>
+                membership.principalId === request.principalId &&
+                membership.state === "active" &&
+                membership.role === "owner",
+            );
+          if (!currentOwner) return Object.freeze({ kind: "forbidden" });
+
+          const idempotencyRecordKey = ordinaryMindVisibilityIdempotencyKey(
+            request.principalId,
+            request.spaceId,
+            request.idempotencyKey,
+          );
+          const previous = idempotencyRecords.get(idempotencyRecordKey);
+          if (previous) {
+            if (
+              previous.operation !== "change_visibility" ||
+              previous.canonicalRequestHash !== request.canonicalRequestHash
+            ) {
+              return Object.freeze({ kind: "idempotency_conflict" });
+            }
+            return Object.freeze({
+              kind: "visibility_changed",
+              mind: freezeOrdinaryMindSnapshot(previous.mind),
+              changed: previous.changed,
+              replayed: true,
+            });
+          }
+          if (!SHA256_PATTERN.test(request.canonicalRequestHash)) {
+            return Object.freeze({ kind: "invalid_record" });
+          }
+          if (space.metadataVersion !== request.expectedMetadataVersion) {
+            return Object.freeze({
+              kind: "metadata_conflict",
+              currentMetadataVersion: space.metadataVersion,
+            });
+          }
+          if (space.visibility === request.visibility) {
+            const current = ordinaryMindSnapshotFromMaps(
+              request.spaceId,
+              knowledgeSpaces,
+              memberships,
+            );
+            if (current === null) return Object.freeze({ kind: "invalid_record" });
+            const candidateIdempotencyRecords =
+              cloneOrdinaryMindIdempotencyRecords(idempotencyRecords);
+            candidateIdempotencyRecords.set(
+              idempotencyRecordKey,
+              Object.freeze({
+                operation: "change_visibility" as const,
+                principalId: request.principalId,
+                spaceId: request.spaceId,
+                key: request.idempotencyKey,
+                canonicalRequestHash: request.canonicalRequestHash,
+                mind: freezeOrdinaryMindSnapshot(current),
+                changed: false,
+              }),
+            );
+            this.#failOrdinaryMindIfRequested("visibility_after_idempotency");
+            this.#failOrdinaryMindIfRequested("visibility_before_commit");
+            idempotencyRecords = candidateIdempotencyRecords;
+            return Object.freeze({
+              kind: "visibility_changed",
+              mind: current,
+              changed: false,
+              replayed: false,
+            });
+          }
+          if (
+            space.visibility === "private" &&
+            request.visibility !== "private" &&
+            !request.acknowledgeLiveHeadAndHistoryExposure
+          ) {
+            return Object.freeze({
+              kind: "exposure_acknowledgement_required",
+            });
+          }
+
+          let changedAggregate: ReturnType<typeof SpaceAggregate.restoreOrdinary>;
+          try {
+            changedAggregate = currentAggregate.changeVisibility({
+              actorPrincipalId: request.principalId,
+              visibility: request.visibility,
+              expectedMetadataVersion: request.expectedMetadataVersion,
+              occurredAt: request.occurredAt,
+            });
+          } catch (error) {
+            if (error instanceof DomainInvariantError) {
+              if (error.code === "stale_version") {
+                return Object.freeze({
+                  kind: "metadata_conflict",
+                  currentMetadataVersion: space.metadataVersion,
+                });
+              }
+              if (error.code === "owner_required") {
+                return Object.freeze({ kind: "forbidden" });
+              }
+              if (error.code === "space_not_active") {
+                return Object.freeze({ kind: "mind_not_found" });
+              }
+              if (error.code === "personal_visibility") {
+                return Object.freeze({ kind: "personal_mind" });
+              }
+            }
+            return Object.freeze({ kind: "invalid_record" });
+          }
+
+          const candidateKnowledgeSpaces = cloneRecordMap(
+            knowledgeSpaces,
+            freezeKnowledgeSpace,
+          );
+          const candidateIdempotencyRecords =
+            cloneOrdinaryMindIdempotencyRecords(idempotencyRecords);
+          const candidateAuditEvents = new Map(
+            [...auditEvents].map(([id, event]) => [id, cloneAuditEvent(event)]),
+          );
+          const candidateAuditOutbox = new Map(
+            [...auditOutbox].map(([id, message]) => [
+              id,
+              cloneAuditOutbox(message),
+            ]),
+          );
+          const changedSnapshot = changedAggregate.snapshot();
+          candidateKnowledgeSpaces.set(
+            request.spaceId,
+            freezeKnowledgeSpace(changedSnapshot.space),
+          );
+          this.#failOrdinaryMindIfRequested("visibility_after_space");
+          if (
+            !stageVisibilityAuditEffects(
+              request,
+              space,
+              changedSnapshot.space,
+              candidateAuditEvents,
+              candidateAuditOutbox,
+            )
+          ) {
+            return Object.freeze({ kind: "effect_conflict" });
+          }
+          this.#failOrdinaryMindIfRequested("visibility_after_audit");
+          const changed = ordinaryMindSnapshotFromMaps(
+            request.spaceId,
+            candidateKnowledgeSpaces,
+            memberships,
+          );
+          if (changed === null) return Object.freeze({ kind: "invalid_record" });
+          candidateIdempotencyRecords.set(
+            idempotencyRecordKey,
+            Object.freeze({
+              operation: "change_visibility" as const,
+              principalId: request.principalId,
+              spaceId: request.spaceId,
+              key: request.idempotencyKey,
+              canonicalRequestHash: request.canonicalRequestHash,
+              mind: freezeOrdinaryMindSnapshot(changed),
+              changed: true,
+            }),
+          );
+          this.#failOrdinaryMindIfRequested("visibility_after_idempotency");
+          this.#failOrdinaryMindIfRequested("visibility_before_commit");
+          knowledgeSpaces = candidateKnowledgeSpaces;
+          idempotencyRecords = candidateIdempotencyRecords;
+          auditEvents = candidateAuditEvents;
+          auditOutbox = candidateAuditOutbox;
+          return Object.freeze({
+            kind: "visibility_changed",
+            mind: changed,
+            changed: true,
+            replayed: false,
+          });
+        },
       });
 
       const result = await operation(transaction);
@@ -1927,6 +2357,8 @@ export class InMemoryRevisionMetadataStore
       this.#activeHandlesByKey = activeByHandle;
       this.#activeHandlesBySpace = activeBySpace;
       this.#retiredHandles = retired;
+      this.#auditEvents = auditEvents;
+      this.#auditOutbox = auditOutbox;
       return result;
     });
   }
@@ -3265,6 +3697,69 @@ export class InMemoryRevisionMetadataStore
       this.#knowledgeSpaces.set(spaceId, updatedSpace);
       this.#memberships.set(revoked.membershipId, revoked);
       return true;
+    });
+  }
+
+  /** Test-only atomic ownership transfer using the real aggregate records. */
+  async transferOrdinaryOwnershipForTest(
+    spaceId: KnowledgeSpace["spaceId"],
+    sourcePrincipalId: Principal["principalId"],
+    targetPrincipalId: Principal["principalId"],
+    occurredAt: KnowledgeSpace["updatedAt"],
+  ): Promise<boolean> {
+    return this.#runExclusive(async () => {
+      const space = this.#knowledgeSpaces.get(spaceId);
+      if (
+        !space ||
+        space.state !== "active" ||
+        [...this.#personalBindings.values()].some(
+          (binding) => binding.spaceId === spaceId,
+        )
+      ) {
+        return false;
+      }
+      const aggregateMemberships = [...this.#memberships.values()].filter(
+        (membership) => membership.spaceId === spaceId,
+      );
+      const source = aggregateMemberships.find(
+        (membership) =>
+          membership.principalId === sourcePrincipalId &&
+          membership.state === "active",
+      );
+      const target = aggregateMemberships.find(
+        (membership) =>
+          membership.principalId === targetPrincipalId &&
+          membership.state === "active",
+      );
+      if (!source || !target) return false;
+      try {
+        const transferred = SpaceAggregate.restoreOrdinary({
+          space,
+          memberships: aggregateMemberships,
+        })
+          .transferOwnership({
+            sourcePrincipalId,
+            targetPrincipalId,
+            expectedMetadataVersion: space.metadataVersion,
+            expectedSourceMembershipVersion: source.version,
+            expectedTargetMembershipVersion: target.version,
+            occurredAt,
+          })
+          .snapshot();
+        this.#knowledgeSpaces.set(
+          spaceId,
+          freezeKnowledgeSpace(transferred.space),
+        );
+        for (const membership of transferred.memberships) {
+          this.#memberships.set(
+            membership.membershipId,
+            freezeMembership(membership),
+          );
+        }
+        return true;
+      } catch {
+        return false;
+      }
     });
   }
 
