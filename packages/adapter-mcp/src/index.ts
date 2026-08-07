@@ -35,6 +35,338 @@ export const MCP_CONTENT_TOOLS = [
   "get_export_status",
 ] as const;
 
+const JSON_SCHEMA_2020_12 = "https://json-schema.org/draft/2020-12/schema";
+
+const NON_EMPTY_STRING_SCHEMA = Object.freeze({
+  type: "string",
+  minLength: 1,
+});
+
+const SHA256_SCHEMA = Object.freeze({
+  type: "string",
+  pattern: "^sha256:[0-9a-f]{64}$",
+});
+
+const REVISION_SELECTOR_SCHEMA = Object.freeze({
+  oneOf: Object.freeze([
+    Object.freeze({
+      type: "object",
+      additionalProperties: false,
+      required: Object.freeze(["kind"]),
+      properties: Object.freeze({ kind: Object.freeze({ const: "head" }) }),
+    }),
+    Object.freeze({
+      type: "object",
+      additionalProperties: false,
+      required: Object.freeze(["kind", "revision_id"]),
+      properties: Object.freeze({
+        kind: Object.freeze({ const: "revision" }),
+        revision_id: NON_EMPTY_STRING_SCHEMA,
+      }),
+    }),
+    Object.freeze({
+      type: "object",
+      additionalProperties: false,
+      required: Object.freeze(["kind", "as_of"]),
+      properties: Object.freeze({
+        kind: Object.freeze({ const: "as_of" }),
+        as_of: Object.freeze({ type: "string", format: "date-time" }),
+      }),
+    }),
+  ]),
+});
+
+const APPLICATION_ERROR_SCHEMA = Object.freeze({
+  type: "object",
+  additionalProperties: false,
+  required: Object.freeze(["code", "message", "retryable", "request_id"]),
+  properties: Object.freeze({
+    code: NON_EMPTY_STRING_SCHEMA,
+    message: NON_EMPTY_STRING_SCHEMA,
+    retryable: Object.freeze({ type: "boolean" }),
+    request_id: NON_EMPTY_STRING_SCHEMA,
+    details: Object.freeze({ type: "object" }),
+  }),
+});
+
+function toolOutputSchema(data: Readonly<Record<string, unknown>>) {
+  return Object.freeze({
+    $schema: JSON_SCHEMA_2020_12,
+    type: "object",
+    additionalProperties: false,
+    required: Object.freeze(["ok"]),
+    properties: Object.freeze({
+      ok: Object.freeze({ type: "boolean" }),
+      data,
+      error: APPLICATION_ERROR_SCHEMA,
+    }),
+    oneOf: Object.freeze([
+      Object.freeze({
+        required: Object.freeze(["ok", "data"]),
+        properties: Object.freeze({ ok: Object.freeze({ const: true }) }),
+        not: Object.freeze({ required: Object.freeze(["error"]) }),
+      }),
+      Object.freeze({
+        required: Object.freeze(["ok", "error"]),
+        properties: Object.freeze({ ok: Object.freeze({ const: false }) }),
+        not: Object.freeze({ required: Object.freeze(["data"]) }),
+      }),
+    ]),
+  });
+}
+
+const REVISION_DESCRIPTOR_SCHEMA = Object.freeze({
+  type: "object",
+  additionalProperties: true,
+  required: Object.freeze(["revision_id"]),
+  properties: Object.freeze({
+    revision_id: NON_EMPTY_STRING_SCHEMA,
+    revision_number: Object.freeze({ type: "integer", minimum: 1 }),
+    parent_revision_id: Object.freeze({
+      type: Object.freeze(["string", "null"]),
+    }),
+    committed_at: Object.freeze({ type: "string", format: "date-time" }),
+  }),
+});
+
+const EXPORT_JOB_STATE_SCHEMA = Object.freeze({
+  type: "string",
+  enum: Object.freeze(["queued", "running", "succeeded", "failed", "expired"]),
+});
+
+const EXPORT_JOB_STATUS_SCHEMA = Object.freeze({
+  type: "object",
+  additionalProperties: false,
+  required: Object.freeze(["job_id", "status", "revision_id"]),
+  properties: Object.freeze({
+    job_id: NON_EMPTY_STRING_SCHEMA,
+    status: EXPORT_JOB_STATE_SCHEMA,
+    revision_id: NON_EMPTY_STRING_SCHEMA,
+    created_at: Object.freeze({ type: "string", format: "date-time" }),
+    updated_at: Object.freeze({ type: "string", format: "date-time" }),
+    completed_at: Object.freeze({
+      type: Object.freeze(["string", "null"]),
+      format: "date-time",
+    }),
+    expires_at: Object.freeze({ type: "string", format: "date-time" }),
+    last_failure_code: Object.freeze({ type: Object.freeze(["string", "null"]) }),
+    archive_format: Object.freeze({ const: "MD-OKF-ZIP-1" }),
+    media_type: Object.freeze({ const: "application/zip" }),
+    filename: Object.freeze({ const: "mind-diary-okf-bundle.zip" }),
+    content_disposition: Object.freeze({
+      const: 'attachment; filename="mind-diary-okf-bundle.zip"',
+    }),
+    sha256: SHA256_SCHEMA,
+    size: Object.freeze({ type: "integer", minimum: 0 }),
+    download_url: Object.freeze({ type: "string", format: "uri" }),
+    download_expires_at: Object.freeze({ type: "string", format: "date-time" }),
+  }),
+});
+
+const CHANGESET_OPERATION_SCHEMA = Object.freeze({
+  oneOf: Object.freeze([
+    Object.freeze({
+      type: "object",
+      additionalProperties: false,
+      required: Object.freeze(["type", "path", "text"]),
+      properties: Object.freeze({
+        type: Object.freeze({ const: "create_file" }),
+        path: NON_EMPTY_STRING_SCHEMA,
+        text: Object.freeze({ type: "string" }),
+      }),
+    }),
+    Object.freeze({
+      type: "object",
+      additionalProperties: false,
+      required: Object.freeze(["type", "path", "text"]),
+      properties: Object.freeze({
+        type: Object.freeze({ const: "replace_file" }),
+        path: NON_EMPTY_STRING_SCHEMA,
+        text: Object.freeze({ type: "string" }),
+        expected_sha256: SHA256_SCHEMA,
+      }),
+    }),
+    Object.freeze({
+      type: "object",
+      additionalProperties: false,
+      required: Object.freeze(["type", "path"]),
+      properties: Object.freeze({
+        type: Object.freeze({ const: "delete_file" }),
+        path: NON_EMPTY_STRING_SCHEMA,
+        expected_sha256: SHA256_SCHEMA,
+      }),
+    }),
+    Object.freeze({
+      type: "object",
+      additionalProperties: false,
+      required: Object.freeze(["type", "path", "text"]),
+      properties: Object.freeze({
+        type: Object.freeze({ const: "replace_index" }),
+        path: Object.freeze({ type: "string", pattern: "(?:^|/)index\\.md$" }),
+        text: Object.freeze({ type: "string" }),
+        expected_sha256: SHA256_SCHEMA,
+      }),
+    }),
+    Object.freeze({
+      type: "object",
+      additionalProperties: false,
+      required: Object.freeze(["type", "path", "category", "message"]),
+      properties: Object.freeze({
+        type: Object.freeze({ const: "add_log_entry" }),
+        path: Object.freeze({ type: "string", pattern: "(?:^|/)log\\.md$" }),
+        category: NON_EMPTY_STRING_SCHEMA,
+        message: NON_EMPTY_STRING_SCHEMA,
+      }),
+    }),
+  ]),
+});
+
+const COMMIT_CHANGESET_INPUT_SCHEMA = Object.freeze({
+  $schema: JSON_SCHEMA_2020_12,
+  type: "object",
+  additionalProperties: false,
+  required: Object.freeze([
+    "mind",
+    "expected_revision",
+    "idempotency_key",
+    "summary",
+    "operations",
+  ]),
+  properties: Object.freeze({
+    mind: NON_EMPTY_STRING_SCHEMA,
+    expected_revision: NON_EMPTY_STRING_SCHEMA,
+    idempotency_key: NON_EMPTY_STRING_SCHEMA,
+    summary: Object.freeze({ type: "string" }),
+    operations: Object.freeze({
+      type: "array",
+      minItems: 1,
+      items: CHANGESET_OPERATION_SCHEMA,
+    }),
+  }),
+});
+
+const COMMIT_CHANGESET_OUTPUT_SCHEMA = toolOutputSchema(
+  Object.freeze({
+    type: "object",
+    additionalProperties: false,
+    required: Object.freeze([
+      "mind",
+      "previous_revision_id",
+      "revision",
+      "index_status",
+    ]),
+    properties: Object.freeze({
+      mind: Object.freeze({ type: "object" }),
+      previous_revision_id: Object.freeze({ type: Object.freeze(["string", "null"]) }),
+      revision: REVISION_DESCRIPTOR_SCHEMA,
+      index_status: Object.freeze({ const: "queued" }),
+    }),
+  }),
+);
+
+const START_EXPORT_INPUT_SCHEMA = Object.freeze({
+  $schema: JSON_SCHEMA_2020_12,
+  type: "object",
+  additionalProperties: false,
+  required: Object.freeze(["mind", "idempotency_key"]),
+  properties: Object.freeze({
+    mind: NON_EMPTY_STRING_SCHEMA,
+    revision_selector: REVISION_SELECTOR_SCHEMA,
+    idempotency_key: NON_EMPTY_STRING_SCHEMA,
+  }),
+});
+
+const START_EXPORT_OUTPUT_SCHEMA = toolOutputSchema(
+  Object.freeze({
+    type: "object",
+    additionalProperties: false,
+    required: Object.freeze(["job"]),
+    properties: Object.freeze({
+      job: Object.freeze({
+        type: "object",
+        additionalProperties: false,
+        required: Object.freeze(["job_id", "status", "revision_id", "created_at"]),
+        properties: Object.freeze({
+          job_id: NON_EMPTY_STRING_SCHEMA,
+          status: Object.freeze({ const: "queued" }),
+          revision_id: NON_EMPTY_STRING_SCHEMA,
+          created_at: Object.freeze({ type: "string", format: "date-time" }),
+        }),
+      }),
+    }),
+  }),
+);
+
+const GET_EXPORT_STATUS_INPUT_SCHEMA = Object.freeze({
+  $schema: JSON_SCHEMA_2020_12,
+  type: "object",
+  additionalProperties: false,
+  required: Object.freeze(["job_id"]),
+  properties: Object.freeze({ job_id: NON_EMPTY_STRING_SCHEMA }),
+});
+
+const GET_EXPORT_STATUS_OUTPUT_SCHEMA = toolOutputSchema(
+  Object.freeze({
+    type: "object",
+    additionalProperties: false,
+    required: Object.freeze(["job"]),
+    properties: Object.freeze({ job: EXPORT_JOB_STATUS_SCHEMA }),
+  }),
+);
+
+/** Canonical published definitions for immediate commit and asynchronous export. */
+export const MCP_COMMIT_EXPORT_TOOL_DEFINITIONS = Object.freeze([
+  Object.freeze({
+    name: "commit_changeset",
+    title: "Commit a Mind changeset",
+    description:
+      "Atomically apply a non-empty Markdown changeset to the current HEAD. The call immediately creates one immutable revision; it never creates a draft or approval artifact.",
+    inputSchema: COMMIT_CHANGESET_INPUT_SCHEMA,
+    outputSchema: COMMIT_CHANGESET_OUTPUT_SCHEMA,
+    annotations: Object.freeze({
+      readOnlyHint: false,
+      destructiveHint: true,
+      openWorldHint: false,
+    }),
+  }),
+  Object.freeze({
+    name: "start_export",
+    title: "Start an exact-revision OKF export",
+    description:
+      "Create an asynchronous export job fixed to one authorized immutable revision. The archive is never returned in this tool result.",
+    inputSchema: START_EXPORT_INPUT_SCHEMA,
+    outputSchema: START_EXPORT_OUTPUT_SCHEMA,
+    annotations: Object.freeze({
+      readOnlyHint: false,
+      destructiveHint: false,
+      openWorldHint: false,
+    }),
+  }),
+  Object.freeze({
+    name: "get_export_status",
+    title: "Get export status",
+    description:
+      "Reauthorize and read one export job. A succeeded job may return a new short-lived download grant, never archive bytes.",
+    inputSchema: GET_EXPORT_STATUS_INPUT_SCHEMA,
+    outputSchema: GET_EXPORT_STATUS_OUTPUT_SCHEMA,
+    annotations: Object.freeze({
+      readOnlyHint: true,
+      destructiveHint: false,
+      openWorldHint: false,
+    }),
+  }),
+] as const);
+
+const COMMIT_EXPORT_DEFINITION_BY_NAME: ReadonlyMap<
+  string,
+  Readonly<Record<string, unknown>>
+> = new Map(
+  MCP_COMMIT_EXPORT_TOOL_DEFINITIONS.map((definition) => [
+    definition.name,
+    definition,
+  ]),
+);
+
 export const MCP_RESOURCE_CAPABILITIES = [
   "resources/list",
   "resources/read",
@@ -394,6 +726,44 @@ function validateProtocolEnvelope(
   return null;
 }
 
+export function createMcpToolSuccessResult(
+  data: unknown,
+  message: string,
+): Readonly<Record<string, unknown>> {
+  return Object.freeze({
+    resultType: "complete",
+    content: Object.freeze([
+      Object.freeze({ type: "text" as const, text: message }),
+    ]),
+    structuredContent: Object.freeze({ ok: true, data }),
+    isError: false,
+  });
+}
+
+export function createMcpToolErrorResult(
+  requestId: McpRequestId,
+  code: string,
+  message: string,
+  retryable = false,
+  details?: Readonly<Record<string, unknown>>,
+): Readonly<Record<string, unknown>> {
+  const error = Object.freeze({
+    code,
+    message,
+    retryable,
+    request_id: requestId,
+    ...(details === undefined ? {} : { details }),
+  });
+  return Object.freeze({
+    resultType: "complete",
+    content: Object.freeze([
+      Object.freeze({ type: "text" as const, text: message }),
+    ]),
+    structuredContent: Object.freeze({ ok: false, error }),
+    isError: true,
+  });
+}
+
 function toolError(
   id: string | number | undefined,
   requestId: McpRequestId,
@@ -404,20 +774,7 @@ function toolError(
 ): Response {
   return jsonRpcResult(
     id,
-    {
-      resultType: "complete",
-      content: [{ type: "text", text: message }],
-      structuredContent: {
-        ok: false,
-        error: {
-          code,
-          message,
-          retryable,
-          request_id: requestId,
-        },
-      },
-      isError: true,
-    },
+    createMcpToolErrorResult(requestId, code, message, retryable),
     format,
   );
 }
@@ -480,11 +837,18 @@ function listedTools(
   definitions: readonly Readonly<Record<string, unknown>>[],
 ): readonly Readonly<Record<string, unknown>>[] {
   return Object.freeze(
-    definitions.filter(
-      (definition) =>
-        isToolName(definition.name) &&
-        (definition.name !== "commit_changeset" || tokenAllowsWrite(actor)),
-    ),
+    definitions
+      .map((definition) => {
+        const name = definition.name;
+        return typeof name === "string"
+          ? (COMMIT_EXPORT_DEFINITION_BY_NAME.get(name) ?? definition)
+          : definition;
+      })
+      .filter(
+        (definition) =>
+          isToolName(definition.name) &&
+          (definition.name !== "commit_changeset" || tokenAllowsWrite(actor)),
+      ),
   );
 }
 
