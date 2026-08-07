@@ -293,7 +293,68 @@ test("invalid, denied, expired, and changed previews never end the session", asy
   for (const controller of [invalid, denied, expired, changed]) controller.dispose();
 });
 
+test("a preview that expires before the first submit never sends deletion", async () => {
+  let currentNow = NOW;
+  let deletes = 0;
+  let sessionEnds = 0;
+  const controller = createAccountDeletionController({
+    async getAccountDeletionImpact() {
+      return impact();
+    },
+    async deleteAccount() {
+      deletes += 1;
+      return deletionResult();
+    },
+    endSessionAfterDeletion() {
+      sessionEnds += 1;
+    },
+  }, controllerOptions({ now: () => new Date(currentNow) }));
+
+  await controller.loadPreview();
+  assert.equal(controller.getState().kind, "preview");
+  currentNow = EXPIRY;
+  await controller.submitConfirmation("delete-account");
+
+  assert.deepEqual(controller.getState(), { kind: "stale", reason: "expired" });
+  assert.equal(deletes, 0);
+  assert.equal(sessionEnds, 0);
+  controller.dispose();
+});
+
+test("an ambiguous retry after preview expiry lets the server reject a new start", async () => {
+  let currentNow = NOW;
+  let deletes = 0;
+  let sessionEnds = 0;
+  const controller = createAccountDeletionController({
+    async getAccountDeletionImpact() {
+      return impact();
+    },
+    async deleteAccount() {
+      deletes += 1;
+      if (deletes === 1) throw new Error("synthetic lost response");
+      throw Object.assign(new Error("expired before commit"), {
+        code: "deletion_impact_expired",
+      });
+    },
+    endSessionAfterDeletion() {
+      sessionEnds += 1;
+    },
+  }, controllerOptions({ now: () => new Date(currentNow) }));
+
+  await controller.loadPreview();
+  await controller.submitConfirmation("delete-account");
+  assert.equal(controller.getState().kind, "retryable_failure");
+  currentNow = EXPIRY;
+  await controller.retryDeletion();
+
+  assert.deepEqual(controller.getState(), { kind: "stale", reason: "expired" });
+  assert.equal(deletes, 2);
+  assert.equal(sessionEnds, 0);
+  controller.dispose();
+});
+
 test("cleanup failure retries the exact command and reaches one final state", async () => {
+  let currentNow = NOW;
   const commands = [];
   let sessionEnds = 0;
   const adapter = {
@@ -313,13 +374,17 @@ test("cleanup failure retries the exact command and reaches one final state", as
       sessionEnds += 1;
     },
   };
-  const controller = createAccountDeletionController(adapter, controllerOptions());
+  const controller = createAccountDeletionController(
+    adapter,
+    controllerOptions({ now: () => new Date(currentNow) }),
+  );
 
   await controller.loadPreview();
   await controller.submitConfirmation("delete-account");
   assert.equal(controller.getState().kind, "retryable_failure");
   assert.equal(controller.getState().cleanupIncomplete, true);
   assert.equal(sessionEnds, 0);
+  currentNow = EXPIRY;
   await controller.retryDeletion();
 
   assert.equal(controller.getState().kind, "deleted");
