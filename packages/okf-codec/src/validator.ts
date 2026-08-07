@@ -610,7 +610,7 @@ function collectBrokenLinkWarnings(
           qualityWarning(
             file.path,
             "broken_cross_link",
-            `Markdown link target '${resolved}' is not present in this bundle.`,
+            "A Markdown link target is not present in this bundle.",
           ),
         );
       }

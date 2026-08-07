@@ -37,6 +37,7 @@ export * from "./mind-discovery.js";
 export * from "./mind-browse.js";
 export * from "./mind-history.js";
 export * from "./mind-search.js";
+export * from "./mind-validation.js";
 
 export const CONTENT_QUERIES = [
   "list_minds",
