@@ -575,6 +575,12 @@ export interface VisibilityAuditIdGenerator {
   nextOutboxMessageId(): OutboxMessageId;
 }
 
+/** Server-owned IDs for one committed ownership-transfer audit effect. */
+export interface OwnershipTransferAuditIdGenerator {
+  nextAuditEventId(): AuditEventId;
+  nextOutboxMessageId(): OutboxMessageId;
+}
+
 /** Server-owned locator for one short-lived destructive-action preview. */
 export interface OrdinaryMindDeletionIdGenerator {
   nextImpactId(): string;
@@ -732,6 +738,48 @@ export type ChangeOrdinaryMindVisibilityResult =
         | "invalid_record";
     };
 
+export interface TransferOrdinaryMindOwnershipRequest {
+  readonly principalId: PrincipalId;
+  readonly spaceId: SpaceId;
+  readonly targetMembershipId: MembershipId;
+  readonly expectedMetadataVersion: Version;
+  readonly idempotencyKey: IdempotencyKey;
+  readonly canonicalRequestHash: Sha256Digest;
+  readonly occurredAt: UtcInstant;
+  readonly requestId: ActorContext["requestId"];
+  readonly auditEventId: AuditEventId;
+  readonly auditOutboxMessageId: OutboxMessageId;
+}
+
+/** Exact post-transfer records persisted by one ownership transaction. */
+export interface OwnershipTransferSnapshot {
+  readonly mind: Readonly<OrdinaryMindSnapshot>;
+  readonly sourceMembership: Readonly<SpaceMembership>;
+  readonly targetMembership: Readonly<SpaceMembership>;
+}
+
+export type TransferOrdinaryMindOwnershipResult =
+  | {
+      readonly kind: "transferred";
+      readonly transfer: Readonly<OwnershipTransferSnapshot>;
+      readonly replayed: boolean;
+    }
+  | {
+      readonly kind: "metadata_conflict";
+      readonly currentMetadataVersion: Version;
+    }
+  | {
+      readonly kind:
+        | "mind_not_found"
+        | "personal_mind"
+        | "forbidden"
+        | "ownership_target_invalid"
+        | "ownership_state_changed"
+        | "idempotency_conflict"
+        | "effect_conflict"
+        | "invalid_record";
+    };
+
 export interface OrdinaryMindMetadataTransaction extends AuthorizationTransaction {
   /** Classifies own/foreign Personal Minds before any target-identity lookup. */
   classifyPersonalMindTarget(
@@ -759,6 +807,9 @@ export interface OrdinaryMindMetadataTransaction extends AuthorizationTransactio
   changeOrdinaryMindVisibility(
     request: Readonly<ChangeOrdinaryMindVisibilityRequest>,
   ): Promise<ChangeOrdinaryMindVisibilityResult>;
+  transferOrdinaryMindOwnership(
+    request: Readonly<TransferOrdinaryMindOwnershipRequest>,
+  ): Promise<TransferOrdinaryMindOwnershipResult>;
   createOrdinaryMindDeletionImpact(
     request: Readonly<CreateOrdinaryMindDeletionImpactRequest>,
   ): Promise<CreateOrdinaryMindDeletionImpactResult>;
