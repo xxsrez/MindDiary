@@ -1,0 +1,25 @@
+name: Engineering baseline
+
+on:
+  pull_request:
+  push:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v5
+      - name: Use pinned Node baseline
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22.13.0
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Run canonical full check
+        run: npm run check
