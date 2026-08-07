@@ -25,7 +25,7 @@ syncFixtureEvidence();
 
 function fixtureImpact() {
   return {
-    impactId: "impact_browser_fixture_1",
+    impactId: `impact_browser_fixture_${fixtureState.previewCalls}`,
     expiresAt: new Date(Date.now() + 15 * 60_000).toISOString(),
     personalMind: {
       route: "/me",
@@ -79,9 +79,20 @@ const adapter = {
     fixtureState.deletionCalls += 1;
     fixtureState.commands.push({ ...command });
     syncFixtureEvidence();
-    if (scenario === "changed") {
+    if (
+      (scenario === "changed" || scenario === "changed-then-success") &&
+      fixtureState.deletionCalls === 1
+    ) {
       throw Object.assign(new Error("Synthetic changed preview"), {
         code: "deletion_impact_changed",
+      });
+    }
+    if (
+      (scenario === "expired" || scenario === "expired-then-success") &&
+      fixtureState.deletionCalls === 1
+    ) {
+      throw Object.assign(new Error("Synthetic expired preview"), {
+        code: "deletion_impact_expired",
       });
     }
     if (scenario === "denied") {

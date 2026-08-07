@@ -89,7 +89,13 @@ const server = createServer(async (request, response) => {
 });
 
 server.listen(port, host, () => {
-  process.stdout.write(`Mind Diary account-deletion fixture: http://${host}:${port}/settings/account/delete\n`);
+  const address = server.address();
+  const listeningPort = typeof address === "object" && address !== null
+    ? address.port
+    : port;
+  process.stdout.write(
+    `Mind Diary account-deletion fixture: http://${host}:${listeningPort}/settings/account/delete\n`,
+  );
 });
 
 for (const signal of ["SIGINT", "SIGTERM"]) {
