@@ -386,6 +386,7 @@ Problem Details response:
 | `POST` | `/api/v1/minds/{mind_ref}/invitations` | Invite registered principal. |
 | `POST` | `/api/v1/invitations/{invitation_id}/accept` | Target accepts pending invitation. |
 | `POST` | `/api/v1/invitations/{invitation_id}/reject` | Target rejects pending invitation. |
+| `POST` | `/api/v1/invitations/{invitation_id}/reissue` | Current authorized sender atomically replaces an invitation. |
 | `DELETE` | `/api/v1/invitations/{invitation_id}` | Authorized sender cancels invitation. |
 | `GET` | `/api/v1/mcp-tokens` | Token metadata, never secrets/hashes. |
 | `POST` | `/api/v1/mcp-tokens` | Issue named personal MCP token once. |
@@ -695,6 +696,7 @@ create_invitation
 accept_invitation
 reject_invitation
 cancel_invitation
+reissue_invitation
 change_membership_role
 revoke_membership
 leave_space

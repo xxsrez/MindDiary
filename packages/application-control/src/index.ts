@@ -8,7 +8,7 @@ import type {
   ExternalIdentityBindingLookup,
   ExportArchiveStore,
   IssuedTokenSecret,
-  InvitationIdGenerator,
+  InvitationLifecycleIdGenerator,
   InvitationSnapshot,
   McpTokenMetadata,
   McpTokenStore,
@@ -83,6 +83,7 @@ export const CONTROL_COMMANDS = [
   "accept_invitation",
   "reject_invitation",
   "cancel_invitation",
+  "reissue_invitation",
   "change_membership_role",
   "revoke_membership",
   "leave_space",
@@ -2475,6 +2476,7 @@ export type InvitationControlFailureCode =
   | "invalid_target_verified_email"
   | "invalid_role"
   | "invalid_metadata_version"
+  | "invalid_invitation_version"
   | "invalid_idempotency_key"
   | "mind_not_found"
   | "personal_mind_operation_forbidden"
@@ -2485,7 +2487,29 @@ export type InvitationControlFailureCode =
   | "metadata_conflict"
   | "idempotency_conflict"
   | "invitation_conflict"
+  | "invitation_expired"
   | "invitation_unavailable";
+
+export interface InvitationLifecycleCommand {
+  readonly invitationId: string;
+  readonly expectedInvitationVersion: number;
+  readonly idempotencyKey: string;
+}
+
+export interface InvitationLifecycleDescriptor {
+  readonly invitationId: string;
+  readonly mindId: SpaceId;
+  readonly proposedRole: InvitationRole;
+  readonly state: "accepted" | "rejected" | "cancelled";
+  readonly invitationVersion: number;
+  readonly membershipId: string | null;
+  readonly replayed: boolean;
+}
+
+export interface ReissueInvitationDescriptor {
+  readonly previousInvitationId: string;
+  readonly invitation: Readonly<InvitationControlDescriptor>;
+}
 
 /** Safe failure that never includes a verified email or fuzzy alternatives. */
 export class InvitationControlFailure extends Error {
@@ -2515,7 +2539,7 @@ export interface InvitationControlSafeLogger {
 export interface InvitationControlDependencies {
   readonly invitations: OrdinaryMindStore;
   readonly objects: ObjectStore;
-  readonly ids: InvitationIdGenerator;
+  readonly ids: InvitationLifecycleIdGenerator;
   readonly logger?: InvitationControlSafeLogger;
 }
 
@@ -2659,7 +2683,7 @@ function invitationAuthorizationFailure(code: string): InvitationControlFailure 
 export class InvitationControlService {
   readonly #invitations: OrdinaryMindStore;
   readonly #objects: ObjectStore;
-  readonly #ids: InvitationIdGenerator;
+  readonly #ids: InvitationLifecycleIdGenerator;
   readonly #logger: InvitationControlSafeLogger | undefined;
 
   constructor(dependencies: InvitationControlDependencies) {
@@ -2776,6 +2800,7 @@ export class InvitationControlService {
             );
           }
           const invitationId = this.#ids.nextInvitationId();
+          const expiryJobId = this.#ids.nextInvitationExpiryJobId();
           return transaction.createInvitation({
             principalId: trustedActor.principalId,
             spaceId: command.mindId,
@@ -2797,6 +2822,17 @@ export class InvitationControlService {
             idempotencyKey: checkedIdempotencyKey,
             canonicalRequestHash,
             occurredAt: trustedActor.occurredAtUtc,
+            expiryJob: Object.freeze({
+              jobId: expiryJobId,
+              target: Object.freeze({ kind: "expire_invitation" as const, invitationId }),
+              state: "queued" as const,
+              version: version(1),
+              attempts: 0,
+              availableAt: expiresAt,
+              claimExpiresAt: null,
+              createdAt: trustedActor.occurredAtUtc,
+              updatedAt: trustedActor.occurredAtUtc,
+            }),
           });
         },
       );
@@ -2853,6 +2889,12 @@ export class InvitationControlService {
           "Invitation creation conflicted with current state.",
         );
       }
+      if (created.kind === "expiry_job_conflict") {
+        throw new InvitationControlFailure(
+          "invitation_conflict",
+          "Invitation expiry scheduling conflicted with current state.",
+        );
+      }
       throw new InvitationControlFailure(
         "invitation_unavailable",
         "Invitation creation is unavailable.",
@@ -2881,6 +2923,166 @@ export class InvitationControlService {
       }
       throw error;
     }
+  }
+
+  acceptInvitation(actor: ActorContext, command: InvitationLifecycleCommand) {
+    return this.#transitionInvitation(actor, command, "accept_invitation");
+  }
+
+  rejectInvitation(actor: ActorContext, command: InvitationLifecycleCommand) {
+    return this.#transitionInvitation(actor, command, "reject_invitation");
+  }
+
+  cancelInvitation(actor: ActorContext, command: InvitationLifecycleCommand) {
+    return this.#transitionInvitation(actor, command, "cancel_invitation");
+  }
+
+  async #transitionInvitation(
+    actor: ActorContext,
+    command: InvitationLifecycleCommand,
+    operation: "accept_invitation" | "reject_invitation" | "cancel_invitation",
+  ): Promise<Readonly<InvitationLifecycleDescriptor>> {
+    const trustedActor = ordinaryMindActor(actor);
+    if (trustedActor === null) {
+      throw new InvitationControlFailure(
+        "authentication_required",
+        "A registered Sites principal is required.",
+      );
+    }
+    if (
+      !command ||
+      typeof command.invitationId !== "string" ||
+      command.invitationId.length === 0 ||
+      command.invitationId.length > 128
+    ) {
+      throw new InvitationControlFailure("invitation_unavailable", "Invitation is unavailable.");
+    }
+    let expectedInvitationVersion;
+    try {
+      expectedInvitationVersion = version(command.expectedInvitationVersion);
+    } catch {
+      throw new InvitationControlFailure(
+        "invalid_invitation_version",
+        "A valid expected invitation version is required.",
+      );
+    }
+    const checkedKey = invitationIdempotencyKey(command.idempotencyKey);
+    const canonicalRequestHash = await this.#objects.calculateSha256(
+      PERSONAL_PROFILE_ENCODER.encode(`${JSON.stringify({
+        format: "mind-diary-invitation-transition-v1",
+        operation,
+        invitation_id: command.invitationId,
+        expected_invitation_version: expectedInvitationVersion,
+      })}\n`),
+    );
+    const membershipId = operation === "accept_invitation"
+      ? this.#ids.nextMembershipId()
+      : null;
+    const transitioned = await this.#invitations.runOrdinaryMindTransaction(
+      (transaction) => transaction.transitionInvitation({
+        operation,
+        principalId: trustedActor.principalId,
+        invitationId: command.invitationId as InvitationSnapshot["invitation"]["invitationId"],
+        expectedInvitationVersion,
+        membershipId,
+        idempotencyKey: checkedKey,
+        canonicalRequestHash,
+        occurredAt: trustedActor.occurredAtUtc,
+      }),
+    );
+    if (transitioned.kind !== "transitioned") {
+      const mapped = transitioned.kind === "invitation_expired"
+        ? "invitation_expired"
+        : transitioned.kind === "idempotency_conflict"
+          ? "idempotency_conflict"
+          : transitioned.kind === "invitation_version_conflict" ||
+              transitioned.kind === "record_conflict" ||
+              transitioned.kind === "active_membership_exists"
+            ? "invitation_conflict"
+            : transitioned.kind === "forbidden"
+              ? "forbidden"
+              : "invitation_unavailable";
+      throw new InvitationControlFailure(mapped, "Invitation transition was not applied.");
+    }
+    const result = transitioned.result;
+    return Object.freeze({
+      invitationId: result.invitation.invitation.invitationId,
+      mindId: result.invitation.invitation.spaceId,
+      proposedRole: result.invitation.invitation.proposedRole,
+      state: result.invitation.invitation.state as "accepted" | "rejected" | "cancelled",
+      invitationVersion: result.invitation.invitation.version,
+      membershipId: result.membership?.membershipId ?? null,
+      replayed: transitioned.replayed,
+    });
+  }
+
+  async reissueInvitation(
+    actor: ActorContext,
+    command: InvitationLifecycleCommand,
+  ): Promise<Readonly<ReissueInvitationDescriptor>> {
+    const trustedActor = ordinaryMindActor(actor);
+    if (trustedActor === null) {
+      throw new InvitationControlFailure(
+        "authentication_required",
+        "A registered Sites principal is required.",
+      );
+    }
+    if (!command || typeof command.invitationId !== "string" || command.invitationId.length === 0) {
+      throw new InvitationControlFailure("invitation_unavailable", "Invitation is unavailable.");
+    }
+    let expectedInvitationVersion;
+    try {
+      expectedInvitationVersion = version(command.expectedInvitationVersion);
+    } catch {
+      throw new InvitationControlFailure(
+        "invalid_invitation_version",
+        "A valid expected invitation version is required.",
+      );
+    }
+    const checkedKey = invitationIdempotencyKey(command.idempotencyKey);
+    const expiresAt = invitationExpiry(trustedActor.occurredAtUtc);
+    if (expiresAt === null) {
+      throw new InvitationControlFailure("invitation_unavailable", "Invitation is unavailable.");
+    }
+    const canonicalRequestHash = await this.#objects.calculateSha256(
+      PERSONAL_PROFILE_ENCODER.encode(`${JSON.stringify({
+        format: "mind-diary-reissue-invitation-v1",
+        invitation_id: command.invitationId,
+        expected_invitation_version: expectedInvitationVersion,
+      })}\n`),
+    );
+    const replacementInvitationId = this.#ids.nextInvitationId();
+    const expiryJobId = this.#ids.nextInvitationExpiryJobId();
+    const result = await this.#invitations.runOrdinaryMindTransaction(
+      (transaction) => transaction.reissueInvitation({
+        principalId: trustedActor.principalId,
+        invitationId: command.invitationId as InvitationSnapshot["invitation"]["invitationId"],
+        expectedInvitationVersion,
+        replacementInvitationId,
+        expiryJobId,
+        expiresAt,
+        idempotencyKey: checkedKey,
+        canonicalRequestHash,
+        occurredAt: trustedActor.occurredAtUtc,
+      }),
+    );
+    if (result.kind !== "reissued") {
+      const mapped = result.kind === "idempotency_conflict"
+        ? "idempotency_conflict"
+        : result.kind === "forbidden"
+          ? "forbidden"
+          : result.kind === "pending_invitation_exists" ||
+              result.kind === "invitation_version_conflict" ||
+              result.kind === "record_conflict" ||
+              result.kind === "expiry_job_conflict"
+            ? "invitation_conflict"
+            : "invitation_unavailable";
+      throw new InvitationControlFailure(mapped, "Invitation reissue was not applied.");
+    }
+    return Object.freeze({
+      previousInvitationId: command.invitationId,
+      invitation: invitationDescriptor(result.invitation, result.replayed),
+    });
   }
 }
 

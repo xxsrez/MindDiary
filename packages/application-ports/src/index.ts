@@ -377,6 +377,12 @@ export interface InvitationIdGenerator {
   nextInvitationId(): InvitationId;
 }
 
+/** Server-owned identities for invitation lifecycle effects. */
+export interface InvitationLifecycleIdGenerator extends InvitationIdGenerator {
+  nextMembershipId(): MembershipId;
+  nextInvitationExpiryJobId(): JobId;
+}
+
 /** Safe projection returned by exact registered-principal lookup. */
 export interface RegisteredPrincipalSnapshot {
   readonly principalId: PrincipalId;
@@ -392,6 +398,7 @@ export interface CreateInvitationRequest {
   readonly idempotencyKey: IdempotencyKey;
   readonly canonicalRequestHash: Sha256Digest;
   readonly occurredAt: UtcInstant;
+  readonly expiryJob: Readonly<BackgroundJob>;
 }
 
 export interface InvitationSnapshot {
@@ -417,6 +424,82 @@ export type CreateInvitationResult =
         | "active_membership_exists"
         | "pending_invitation_exists"
         | "idempotency_conflict"
+        | "expiry_job_conflict"
+        | "record_conflict"
+        | "invalid_record";
+    };
+
+export type InvitationLifecycleOperation =
+  | "accept_invitation"
+  | "reject_invitation"
+  | "cancel_invitation";
+
+export interface TransitionInvitationRequest {
+  readonly operation: InvitationLifecycleOperation;
+  readonly principalId: PrincipalId;
+  readonly invitationId: InvitationId;
+  readonly expectedInvitationVersion: Version;
+  /** Server-generated ID only; the authoritative store constructs the record. */
+  readonly membershipId: MembershipId | null;
+  readonly idempotencyKey: IdempotencyKey;
+  readonly canonicalRequestHash: Sha256Digest;
+  readonly occurredAt: UtcInstant;
+}
+
+export interface InvitationLifecycleSnapshot {
+  readonly invitation: Readonly<InvitationSnapshot>;
+  readonly membership: Readonly<SpaceMembership> | null;
+}
+
+export type TransitionInvitationResult =
+  | {
+      readonly kind: "transitioned";
+      readonly result: Readonly<InvitationLifecycleSnapshot>;
+      readonly replayed: boolean;
+    }
+  | {
+      readonly kind:
+        | "invitation_not_found"
+        | "personal_mind"
+        | "forbidden"
+        | "invitation_not_pending"
+        | "invitation_expired"
+        | "invitation_version_conflict"
+        | "active_membership_exists"
+        | "idempotency_conflict"
+        | "record_conflict"
+        | "invalid_record";
+    };
+
+export interface ReissueInvitationRequest {
+  readonly principalId: PrincipalId;
+  readonly invitationId: InvitationId;
+  readonly expectedInvitationVersion: Version;
+  readonly replacementInvitationId: InvitationId;
+  readonly expiryJobId: JobId;
+  readonly expiresAt: UtcInstant;
+  readonly idempotencyKey: IdempotencyKey;
+  readonly canonicalRequestHash: Sha256Digest;
+  readonly occurredAt: UtcInstant;
+}
+
+export type ReissueInvitationResult =
+  | {
+      readonly kind: "reissued";
+      readonly invitation: Readonly<InvitationSnapshot>;
+      readonly replayed: boolean;
+    }
+  | {
+      readonly kind:
+        | "invitation_not_found"
+        | "personal_mind"
+        | "forbidden"
+        | "accepted_invitation"
+        | "invitation_version_conflict"
+        | "active_membership_exists"
+        | "pending_invitation_exists"
+        | "idempotency_conflict"
+        | "expiry_job_conflict"
         | "record_conflict"
         | "invalid_record";
     };
@@ -661,6 +744,12 @@ export interface OrdinaryMindMetadataTransaction extends AuthorizationTransactio
   createInvitation(
     request: Readonly<CreateInvitationRequest>,
   ): Promise<CreateInvitationResult>;
+  transitionInvitation(
+    request: Readonly<TransitionInvitationRequest>,
+  ): Promise<TransitionInvitationResult>;
+  reissueInvitation(
+    request: Readonly<ReissueInvitationRequest>,
+  ): Promise<ReissueInvitationResult>;
   createOrdinaryMind(
     records: Readonly<OrdinaryMindRecordSet>,
   ): Promise<CreateOrdinaryMindResult>;
@@ -1184,6 +1273,34 @@ export interface BackgroundWorkStore extends MetadataStore {
   ): Promise<boolean>;
   failAuditOutbox(
     outboxMessageId: OutboxMessageId,
+    expectedClaimVersion: Version,
+    failedAt: UtcInstant,
+    retryAt: UtcInstant,
+  ): Promise<boolean>;
+}
+
+export type ClaimInvitationExpiryJobResult =
+  | { readonly kind: "claimed"; readonly job: Readonly<BackgroundJob> }
+  | { readonly kind: "not_found" | "not_available" | "completed" };
+
+export type CompleteInvitationExpiryJobResult =
+  | { readonly kind: "expired" | "already_terminal" }
+  | { readonly kind: "not_found" | "not_available" };
+
+/** Durable invitation expiry jobs carry only an invitation ID, never authority. */
+export interface InvitationExpiryJobStore extends MetadataStore {
+  claimInvitationExpiryJob(
+    jobId: JobId,
+    now: UtcInstant,
+    claimExpiresAt: UtcInstant,
+  ): Promise<ClaimInvitationExpiryJobResult>;
+  completeInvitationExpiryJob(
+    jobId: JobId,
+    expectedClaimVersion: Version,
+    completedAt: UtcInstant,
+  ): Promise<CompleteInvitationExpiryJobResult>;
+  failInvitationExpiryJob(
+    jobId: JobId,
     expectedClaimVersion: Version,
     failedAt: UtcInstant,
     retryAt: UtcInstant,

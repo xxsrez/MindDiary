@@ -70,8 +70,12 @@ function ordinaryIds() {
 
 function invitationIds() {
   let invitations = 0;
+  let memberships = 0;
+  let jobs = 0;
   return {
     nextInvitationId: () => `invitation_${++invitations}`,
+    nextMembershipId: () => `membership_invitation_target_${++memberships}`,
+    nextInvitationExpiryJobId: () => `job_invitation_expiry_${++jobs}`,
   };
 }
 
@@ -552,6 +556,7 @@ test("injected transaction failures roll back invitation and idempotency, then e
   for (const stage of [
     "invitation_after_record",
     "invitation_after_idempotency",
+    "invitation_after_expiry_job",
     "invitation_before_commit",
   ]) {
     const env = harness();
@@ -571,6 +576,7 @@ test("injected transaction failures roll back invitation and idempotency, then e
       /injected ordinary Mind transaction failure/u,
     );
     assert.deepEqual(await state(env, mind.mindId), before);
+    assert.deepEqual(await env.metadata.listBackgroundJobsForTest(), []);
 
     const recovered = await env.invitations.createInvitation(
       actor(owner.principalId, `request_recover_${stage}`),
@@ -581,6 +587,7 @@ test("injected transaction failures roll back invitation and idempotency, then e
     assert.equal(final.invitations.length, 1);
     assert.equal(final.memberships.length, 1);
     assert.equal(final.space.metadataVersion, 2);
+    assert.equal((await env.metadata.listBackgroundJobsForTest()).length, 1);
   }
 });
 

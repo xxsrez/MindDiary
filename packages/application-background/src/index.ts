@@ -6,6 +6,7 @@ import type {
   Clock,
   ExportArchiveStore,
   ExportJobStore,
+  InvitationExpiryJobStore,
   SearchIndex,
   SpaceTargetRecordPurger,
   SpaceTargetPurgeResult,
@@ -258,6 +259,57 @@ export class AuditOutboxDeliveryHandler {
         kind: "failed",
         failureCode: "audit_delivery_failed",
       });
+    }
+  }
+}
+
+/** Durable expiry handler; job payload carries only invitation_id. */
+export class InvitationExpiryJobHandler {
+  readonly #jobs: InvitationExpiryJobStore;
+  readonly #clock: Clock;
+  readonly #retryDelayMs: number;
+  readonly #claimLeaseMs: number;
+
+  constructor(dependencies: {
+    readonly jobs: InvitationExpiryJobStore;
+    readonly clock: Clock;
+    readonly retryDelayMs?: number;
+    readonly claimLeaseMs?: number;
+  }) {
+    this.#jobs = dependencies.jobs;
+    this.#clock = dependencies.clock;
+    this.#retryDelayMs = boundedDuration(dependencies.retryDelayMs ?? 1_000, "invitation retry delay", 24 * 60 * 60 * 1_000);
+    this.#claimLeaseMs = boundedDuration(dependencies.claimLeaseMs ?? DEFAULT_BACKGROUND_CLAIM_LEASE_MS, "invitation claim lease", MAX_BACKGROUND_CLAIM_LEASE_MS);
+  }
+
+  async handle(request: { readonly actor: ActorContext; readonly jobId: JobId }): Promise<BackgroundHandleResult> {
+    assertServiceActor(request.actor);
+    const claimedAt = this.#clock.now();
+    const claim = await this.#jobs.claimInvitationExpiryJob(
+      request.jobId,
+      claimedAt,
+      retryAt(claimedAt, this.#claimLeaseMs),
+    );
+    if (claim.kind !== "claimed") return mapClaim(claim.kind);
+    try {
+      const completed = await this.#jobs.completeInvitationExpiryJob(
+        request.jobId,
+        claim.job.version,
+        this.#clock.now(),
+      );
+      if (completed.kind === "expired" || completed.kind === "already_terminal") {
+        return Object.freeze({ kind: "completed" });
+      }
+      return Object.freeze({ kind: completed.kind });
+    } catch {
+      const failedAt = this.#clock.now();
+      await this.#jobs.failInvitationExpiryJob(
+        request.jobId,
+        claim.job.version,
+        failedAt,
+        retryAt(failedAt, this.#retryDelayMs),
+      );
+      return Object.freeze({ kind: "failed", failureCode: "invitation_expiry_failed" });
     }
   }
 }

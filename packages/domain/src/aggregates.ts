@@ -512,6 +512,9 @@ export class SpaceAggregate {
     readonly membership: SpaceMembership;
     readonly occurredAt: UtcInstant;
   }): SpaceAggregate {
+    if (this.#kind !== "ordinary" || this.#space.state !== "active") {
+      throw new DomainInvariantError("space_not_active", "Mind is not active");
+    }
     const invitation = this.#invitations.find(
       (candidate) => candidate.invitationId === input.invitationId,
     );
@@ -562,6 +565,186 @@ export class SpaceAggregate {
       },
       memberships: [...this.#memberships, input.membership],
       invitations,
+    });
+  }
+
+  rejectInvitation(input: {
+    readonly invitationId: SpaceInvitation["invitationId"];
+    readonly targetPrincipalId: PrincipalId;
+    readonly expectedInvitationVersion: Version;
+    readonly occurredAt: UtcInstant;
+  }): SpaceAggregate {
+    return this.#terminalInvitationTransition({
+      ...input,
+      actorPrincipalId: input.targetPrincipalId,
+      state: "rejected",
+      requireTarget: true,
+    });
+  }
+
+  cancelInvitation(input: {
+    readonly invitationId: SpaceInvitation["invitationId"];
+    readonly actorPrincipalId: PrincipalId;
+    readonly expectedInvitationVersion: Version;
+    readonly occurredAt: UtcInstant;
+  }): SpaceAggregate {
+    return this.#terminalInvitationTransition({
+      ...input,
+      state: "cancelled",
+      requireTarget: false,
+    });
+  }
+
+  expireInvitation(input: {
+    readonly invitationId: SpaceInvitation["invitationId"];
+    readonly expectedInvitationVersion: Version;
+    readonly occurredAt: UtcInstant;
+  }): SpaceAggregate {
+    const invitation = this.#invitations.find(
+      (candidate) => candidate.invitationId === input.invitationId,
+    );
+    if (invitation?.state !== "pending") {
+      throw new DomainInvariantError("invitation_not_pending", "invitation is not pending");
+    }
+    ensureVersion(invitation.version, input.expectedInvitationVersion, "invitation");
+    if (Date.parse(invitation.expiresAt) > Date.parse(input.occurredAt)) {
+      throw new DomainInvariantError("invitation_expired", "invitation is not due");
+    }
+    return this.#replaceInvitationState(invitation, "expired", invitation.createdBy, input.occurredAt);
+  }
+
+  reissueInvitation(input: {
+    readonly invitationId: SpaceInvitation["invitationId"];
+    readonly actorPrincipalId: PrincipalId;
+    readonly expectedInvitationVersion: Version;
+    readonly replacement: SpaceInvitation;
+    readonly occurredAt: UtcInstant;
+  }): SpaceAggregate {
+    const invitation = this.#invitations.find(
+      (candidate) => candidate.invitationId === input.invitationId,
+    );
+    if (!invitation) {
+      throw new DomainInvariantError("invitation_not_pending", "invitation was not found");
+    }
+    ensureVersion(invitation.version, input.expectedInvitationVersion, "invitation");
+    if (invitation.state === "accepted") {
+      throw new DomainInvariantError("invitation_not_pending", "accepted invitation cannot be reissued");
+    }
+    this.#assertInvitationSenderAuthority(invitation, input.actorPrincipalId);
+    if (
+      input.replacement.invitationId === invitation.invitationId ||
+      input.replacement.spaceId !== invitation.spaceId ||
+      input.replacement.targetPrincipalId !== invitation.targetPrincipalId ||
+      input.replacement.proposedRole !== invitation.proposedRole ||
+      input.replacement.state !== "pending"
+    ) {
+      throw new DomainInvariantError("invitation_role_mismatch", "replacement must preserve target and role");
+    }
+    const terminalState =
+      invitation.state === "pending"
+        ? Date.parse(invitation.expiresAt) <= Date.parse(input.occurredAt)
+          ? "expired"
+          : "cancelled"
+        : invitation.state;
+    const invitations = this.#invitations.map((candidate): SpaceInvitation =>
+      candidate.invitationId === invitation.invitationId
+        ? {
+            ...candidate,
+            state: terminalState,
+            version: version(candidate.version + 1),
+            updatedAt: input.occurredAt,
+            updatedBy: input.actorPrincipalId,
+          }
+        : candidate,
+    );
+    return SpaceAggregate.restoreOrdinary({
+      space: {
+        ...this.#space,
+        metadataVersion: version(this.#space.metadataVersion + 1),
+        updatedAt: input.occurredAt,
+      },
+      memberships: this.#memberships,
+      invitations: [...invitations, input.replacement],
+    });
+  }
+
+  #terminalInvitationTransition(input: {
+    readonly invitationId: SpaceInvitation["invitationId"];
+    readonly actorPrincipalId: PrincipalId;
+    readonly expectedInvitationVersion: Version;
+    readonly occurredAt: UtcInstant;
+    readonly state: "rejected" | "cancelled";
+    readonly requireTarget: boolean;
+  }): SpaceAggregate {
+    const invitation = this.#invitations.find(
+      (candidate) => candidate.invitationId === input.invitationId,
+    );
+    if (invitation?.state !== "pending") {
+      throw new DomainInvariantError("invitation_not_pending", "invitation is not pending");
+    }
+    ensureVersion(invitation.version, input.expectedInvitationVersion, "invitation");
+    if (Date.parse(invitation.expiresAt) <= Date.parse(input.occurredAt)) {
+      throw new DomainInvariantError("invitation_expired", "invitation has expired");
+    }
+    if (input.requireTarget) {
+      if (invitation.targetPrincipalId !== input.actorPrincipalId) {
+        throw new DomainInvariantError("invitation_target_mismatch", "only the invitation target may reject");
+      }
+    } else {
+      this.#assertInvitationSenderAuthority(invitation, input.actorPrincipalId);
+    }
+    return this.#replaceInvitationState(
+      invitation,
+      input.state,
+      input.actorPrincipalId,
+      input.occurredAt,
+    );
+  }
+
+  #assertInvitationSenderAuthority(
+    invitation: Readonly<SpaceInvitation>,
+    actorPrincipalId: PrincipalId,
+  ): void {
+    const actorMembership = activeMembershipForPrincipal(this.#memberships, actorPrincipalId);
+    const capability = invitation.proposedRole === "admin"
+      ? "members:manage-admin"
+      : "members:manage-basic";
+    if (
+      invitation.createdBy !== actorPrincipalId ||
+      actorMembership === undefined ||
+      !roleHasCapability(actorMembership.role, capability)
+    ) {
+      throw new DomainInvariantError(
+        "settings_permission_required",
+        "current authorized invitation sender is required",
+      );
+    }
+  }
+
+  #replaceInvitationState(
+    invitation: Readonly<SpaceInvitation>,
+    state: "rejected" | "cancelled" | "expired",
+    actorPrincipalId: PrincipalId,
+    occurredAt: UtcInstant,
+  ): SpaceAggregate {
+    return SpaceAggregate.restoreOrdinary({
+      space: {
+        ...this.#space,
+        metadataVersion: version(this.#space.metadataVersion + 1),
+        updatedAt: occurredAt,
+      },
+      memberships: this.#memberships,
+      invitations: this.#invitations.map((candidate): SpaceInvitation =>
+        candidate.invitationId === invitation.invitationId
+          ? {
+              ...candidate,
+              state,
+              version: version(candidate.version + 1),
+              updatedAt: occurredAt,
+              updatedBy: actorPrincipalId,
+            }
+          : candidate,
+      ),
     });
   }
 }

@@ -6,6 +6,13 @@ import type {
   CreateAccountBootstrapResult,
   CreateInvitationRequest,
   CreateInvitationResult,
+  TransitionInvitationRequest,
+  TransitionInvitationResult,
+  ReissueInvitationRequest,
+  ReissueInvitationResult,
+  InvitationLifecycleSnapshot,
+  ClaimInvitationExpiryJobResult,
+  CompleteInvitationExpiryJobResult,
   ExternalIdentityBinding,
   ExternalIdentityBindingLookup,
   KnowledgeSpace,
@@ -1060,6 +1067,15 @@ function freezeInvitationSnapshot(
   });
 }
 
+function freezeInvitationLifecycleSnapshot(
+  snapshot: Readonly<InvitationLifecycleSnapshot>,
+): Readonly<InvitationLifecycleSnapshot> {
+  return Object.freeze({
+    invitation: freezeInvitationSnapshot(snapshot.invitation),
+    membership: snapshot.membership === null ? null : freezeMembership(snapshot.membership),
+  });
+}
+
 function cloneRecordMap<Key, Value extends object>(
   source: ReadonlyMap<Key, Readonly<Value>>,
   clone: (value: Readonly<Value>) => Readonly<Value>,
@@ -1308,6 +1324,22 @@ type OrdinaryMindIdempotencyRecord =
       readonly key: CreateInvitationRequest["idempotencyKey"];
       readonly canonicalRequestHash: CreateInvitationRequest["canonicalRequestHash"];
       readonly invitation: Readonly<InvitationSnapshot>;
+    }
+  | {
+      readonly operation: "accept_invitation" | "reject_invitation" | "cancel_invitation";
+      readonly principalId: Principal["principalId"];
+      readonly spaceId: KnowledgeSpace["spaceId"];
+      readonly key: TransitionInvitationRequest["idempotencyKey"];
+      readonly canonicalRequestHash: TransitionInvitationRequest["canonicalRequestHash"];
+      readonly lifecycle: Readonly<InvitationLifecycleSnapshot>;
+    }
+  | {
+      readonly operation: "reissue_invitation";
+      readonly principalId: Principal["principalId"];
+      readonly spaceId: KnowledgeSpace["spaceId"];
+      readonly key: ReissueInvitationRequest["idempotencyKey"];
+      readonly canonicalRequestHash: ReissueInvitationRequest["canonicalRequestHash"];
+      readonly invitation: Readonly<InvitationSnapshot>;
     };
 
 type OrdinaryMindDeletionImpactMap = Map<
@@ -1435,6 +1467,43 @@ function invitationIdempotencyRecordKey(
   return `${principalId}\u0000${spaceId}\u0000create_invitation\u0000${key}`;
 }
 
+function invitationLifecycleIdempotencyRecordKey(
+  principalId: Principal["principalId"],
+  spaceId: KnowledgeSpace["spaceId"],
+  operation: "accept_invitation" | "reject_invitation" | "cancel_invitation" | "reissue_invitation",
+  key: TransitionInvitationRequest["idempotencyKey"],
+): string {
+  return `${principalId}\u0000${spaceId}\u0000${operation}\u0000${key}`;
+}
+
+function invitationLifecycleActorIsCurrentlyAuthorized(
+  operation: "accept_invitation" | "reject_invitation" | "cancel_invitation" | "reissue_invitation",
+  principalId: Principal["principalId"],
+  invitation: Readonly<SpaceInvitation>,
+  principals: ReadonlyMap<Principal["principalId"], Readonly<Principal>>,
+  memberships: ReadonlyMap<SpaceMembership["membershipId"], Readonly<SpaceMembership>>,
+): boolean {
+  const principal = principals.get(principalId);
+  if (!principal || principal.state !== "active") return false;
+  if (operation === "accept_invitation" || operation === "reject_invitation") {
+    return invitation.targetPrincipalId === principalId;
+  }
+  const membership = [...memberships.values()].find(
+    (candidate) =>
+      candidate.spaceId === invitation.spaceId &&
+      candidate.principalId === principalId &&
+      candidate.state === "active",
+  );
+  const capability = invitation.proposedRole === "admin"
+    ? "members:manage-admin"
+    : "members:manage-basic";
+  return (
+    invitation.createdBy === principalId &&
+    membership !== undefined &&
+    roleHasCapability(membership.role, capability)
+  );
+}
+
 function ordinaryMindIdempotencySpaceId(
   record: Readonly<OrdinaryMindIdempotencyRecord>,
 ): KnowledgeSpace["spaceId"] {
@@ -1446,20 +1515,33 @@ function ordinaryMindIdempotencySpaceId(
 function cloneOrdinaryMindIdempotencyRecords(
   records: ReadonlyMap<string, Readonly<OrdinaryMindIdempotencyRecord>>,
 ): Map<string, Readonly<OrdinaryMindIdempotencyRecord>> {
-  return new Map(
-    [...records].map(([key, record]) => [
-      key,
-      record.operation === "create_invitation"
-        ? Object.freeze({
-            ...record,
-            invitation: freezeInvitationSnapshot(record.invitation),
-          })
-        : Object.freeze({
-            ...record,
-            mind: freezeOrdinaryMindSnapshot(record.mind),
-          }),
-    ]),
-  );
+  const cloned = new Map<string, Readonly<OrdinaryMindIdempotencyRecord>>();
+  for (const [key, record] of records) {
+    if (record.operation === "create_invitation" || record.operation === "reissue_invitation") {
+      cloned.set(key, Object.freeze({
+        ...record,
+        invitation: freezeInvitationSnapshot(record.invitation),
+      }));
+      continue;
+    }
+    if (
+      record.operation === "accept_invitation" ||
+      record.operation === "reject_invitation" ||
+      record.operation === "cancel_invitation"
+    ) {
+      cloned.set(key, Object.freeze({
+        ...record,
+        lifecycle: freezeInvitationLifecycleSnapshot(record.lifecycle),
+      }));
+      continue;
+    }
+    if (!("mind" in record)) throw new TypeError("invalid ordinary idempotency record");
+    cloned.set(key, Object.freeze({
+      ...record,
+      mind: freezeOrdinaryMindSnapshot(record.mind),
+    }));
+  }
+  return cloned;
 }
 
 const VISIBILITY_AUDIT_METADATA_KEYS = [
@@ -1656,7 +1738,18 @@ export type OrdinaryMindFailureStage =
   | "visibility_before_commit"
   | "invitation_after_record"
   | "invitation_after_idempotency"
+  | "invitation_after_expiry_job"
   | "invitation_before_commit"
+  | "invitation_lifecycle_after_record"
+  | "invitation_lifecycle_after_membership"
+  | "invitation_lifecycle_after_idempotency"
+  | "invitation_lifecycle_before_commit"
+  | "invitation_reissue_after_record"
+  | "invitation_reissue_after_job"
+  | "invitation_reissue_after_idempotency"
+  | "invitation_reissue_before_commit"
+  | "invitation_expiry_after_record"
+  | "invitation_expiry_before_commit"
   | "deletion_impact_after_record"
   | "deletion_impact_before_commit"
   | "delete_after_handle_retirement"
@@ -1841,12 +1934,19 @@ function targetRecordSelection(
     .map(([id]) => id)
     .sort();
   const outboxIdSet = new Set(outboxIds);
+  const invitationIds = [...state.invitations]
+    .filter(([, invitation]) => invitation.spaceId === spaceId)
+    .map(([id]) => id)
+    .sort();
+  const invitationIdSet = new Set(invitationIds);
   const backgroundJobIds = [...state.backgroundJobs]
     .filter(
       ([, job]) =>
         ("spaceId" in job.target && job.target.spaceId === spaceId) ||
         (job.target.kind === "audit_delivery" &&
-          outboxIdSet.has(job.target.outboxMessageId)),
+          outboxIdSet.has(job.target.outboxMessageId)) ||
+        (job.target.kind === "expire_invitation" &&
+          invitationIdSet.has(job.target.invitationId)),
     )
     .map(([id]) => id)
     .sort();
@@ -1872,10 +1972,6 @@ function targetRecordSelection(
     .sort();
   const membershipIds = [...state.memberships]
     .filter(([, membership]) => membership.spaceId === spaceId)
-    .map(([id]) => id)
-    .sort();
-  const invitationIds = [...state.invitations]
-    .filter(([, invitation]) => invitation.spaceId === spaceId)
     .map(([id]) => id)
     .sort();
   const revisionIds = [...(state.revisionSpaces.get(spaceId)?.revisions.keys() ?? [])]
@@ -2553,6 +2649,25 @@ export class InMemoryRevisionMetadataStore
                 : "invalid_record",
             });
           }
+          const expiryJob = request.expiryJob;
+          if (
+            typeof expiryJob.jobId !== "string" ||
+            !BOUNDED_OPAQUE_ID.test(expiryJob.jobId) ||
+            expiryJob.target.kind !== "expire_invitation" ||
+            expiryJob.target.invitationId !== invitation.invitationId ||
+            expiryJob.state !== "queued" ||
+            expiryJob.version !== 1 ||
+            expiryJob.attempts !== 0 ||
+            expiryJob.availableAt !== invitation.expiresAt ||
+            expiryJob.claimExpiresAt !== null ||
+            expiryJob.createdAt !== request.occurredAt ||
+            expiryJob.updatedAt !== request.occurredAt
+          ) {
+            return Object.freeze({ kind: "invalid_record" });
+          }
+          if (backgroundJobs.has(expiryJob.jobId)) {
+            return Object.freeze({ kind: "expiry_job_conflict" });
+          }
 
           let updatedAggregate: ReturnType<typeof SpaceAggregate.restoreOrdinary>;
           try {
@@ -2614,6 +2729,8 @@ export class InMemoryRevisionMetadataStore
             persisted.invitationId,
             freezeInvitation(persisted),
           );
+          const candidateBackgroundJobs = new Map(backgroundJobs);
+          candidateBackgroundJobs.set(expiryJob.jobId, cloneBackgroundJob(expiryJob));
           this.#failOrdinaryMindIfRequested("invitation_after_record");
           const candidateIdempotencyRecords =
             cloneOrdinaryMindIdempotencyRecords(idempotencyRecords);
@@ -2633,15 +2750,329 @@ export class InMemoryRevisionMetadataStore
             }),
           );
           this.#failOrdinaryMindIfRequested("invitation_after_idempotency");
+          this.#failOrdinaryMindIfRequested("invitation_after_expiry_job");
           this.#failOrdinaryMindIfRequested("invitation_before_commit");
           knowledgeSpaces = candidateKnowledgeSpaces;
           invitations = candidateInvitations;
+          backgroundJobs = candidateBackgroundJobs;
           idempotencyRecords = candidateIdempotencyRecords;
           return Object.freeze({
             kind: "created",
             invitation: snapshot,
             replayed: false,
           });
+        },
+        transitionInvitation: async (
+          request: Readonly<TransitionInvitationRequest>,
+        ): Promise<TransitionInvitationResult> => {
+          if (
+            request.operation !== "accept_invitation" &&
+            request.operation !== "reject_invitation" &&
+            request.operation !== "cancel_invitation"
+          ) {
+            return Object.freeze({ kind: "invalid_record" });
+          }
+          const currentInvitation = invitations.get(request.invitationId);
+          if (!currentInvitation) return Object.freeze({ kind: "invitation_not_found" });
+          const space = knowledgeSpaces.get(currentInvitation.spaceId);
+          if (!space || space.state !== "active") {
+            return Object.freeze({ kind: "invitation_not_found" });
+          }
+          if ([...personalBindings.values()].some((binding) => binding.spaceId === space.spaceId)) {
+            return Object.freeze({ kind: "personal_mind" });
+          }
+          if (
+            !invitationLifecycleActorIsCurrentlyAuthorized(
+              request.operation,
+              request.principalId,
+              currentInvitation,
+              principals,
+              memberships,
+            )
+          ) {
+            return Object.freeze({ kind: "forbidden" });
+          }
+          const recordKey = invitationLifecycleIdempotencyRecordKey(
+            request.principalId,
+            space.spaceId,
+            request.operation,
+            request.idempotencyKey,
+          );
+          const previous = idempotencyRecords.get(recordKey);
+          if (previous) {
+            if (
+              previous.operation !== request.operation ||
+              previous.canonicalRequestHash !== request.canonicalRequestHash ||
+              !("lifecycle" in previous)
+            ) return Object.freeze({ kind: "idempotency_conflict" });
+            return Object.freeze({
+              kind: "transitioned",
+              result: freezeInvitationLifecycleSnapshot(previous.lifecycle),
+              replayed: true,
+            });
+          }
+          if (!SHA256_PATTERN.test(request.canonicalRequestHash)) {
+            return Object.freeze({ kind: "invalid_record" });
+          }
+          if (currentInvitation.version !== request.expectedInvitationVersion) {
+            return Object.freeze({ kind: "invitation_version_conflict" });
+          }
+          if (!Number.isFinite(Date.parse(request.occurredAt))) {
+            return Object.freeze({ kind: "invalid_record" });
+          }
+          const aggregateMemberships = [...memberships.values()].filter(
+            (membership) => membership.spaceId === space.spaceId,
+          );
+          const aggregateInvitations = [...invitations.values()].filter(
+            (invitation) => invitation.spaceId === space.spaceId,
+          );
+          let aggregate;
+          try {
+            aggregate = SpaceAggregate.restoreOrdinary({
+              space,
+              memberships: aggregateMemberships,
+              invitations: aggregateInvitations,
+            });
+          } catch {
+            return Object.freeze({ kind: "invalid_record" });
+          }
+          let acceptedMembership: Readonly<SpaceMembership> | null = null;
+          try {
+            if (request.operation === "accept_invitation") {
+              if (
+                request.membershipId === null ||
+                typeof request.membershipId !== "string" ||
+                !BOUNDED_OPAQUE_ID.test(request.membershipId)
+              ) return Object.freeze({ kind: "invalid_record" });
+              if (memberships.has(request.membershipId)) {
+                return Object.freeze({ kind: "record_conflict" });
+              }
+              acceptedMembership = freezeMembership({
+                membershipId: request.membershipId,
+                spaceId: currentInvitation.spaceId,
+                principalId: currentInvitation.targetPrincipalId,
+                role: currentInvitation.proposedRole,
+                state: "active",
+                version: version(1),
+                createdAt: request.occurredAt,
+                createdBy: request.principalId,
+                updatedAt: request.occurredAt,
+                updatedBy: request.principalId,
+              });
+              aggregate = aggregate.acceptInvitation({
+                invitationId: request.invitationId,
+                targetPrincipalId: request.principalId,
+                expectedInvitationVersion: request.expectedInvitationVersion,
+                membership: acceptedMembership,
+                occurredAt: request.occurredAt,
+              });
+            } else if (request.operation === "reject_invitation") {
+              if (request.membershipId !== null) return Object.freeze({ kind: "invalid_record" });
+              aggregate = aggregate.rejectInvitation({
+                invitationId: request.invitationId,
+                targetPrincipalId: request.principalId,
+                expectedInvitationVersion: request.expectedInvitationVersion,
+                occurredAt: request.occurredAt,
+              });
+            } else {
+              if (request.membershipId !== null) return Object.freeze({ kind: "invalid_record" });
+              aggregate = aggregate.cancelInvitation({
+                invitationId: request.invitationId,
+                actorPrincipalId: request.principalId,
+                expectedInvitationVersion: request.expectedInvitationVersion,
+                occurredAt: request.occurredAt,
+              });
+            }
+          } catch (error) {
+            if (!(error instanceof DomainInvariantError)) {
+              return Object.freeze({ kind: "invalid_record" });
+            }
+            if (error.code === "invitation_not_pending") {
+              return Object.freeze({ kind: "invitation_not_pending" });
+            }
+            if (error.code === "invitation_expired") {
+              return Object.freeze({ kind: "invitation_expired" });
+            }
+            if (error.code === "invitation_target_mismatch" || error.code === "settings_permission_required") {
+              return Object.freeze({ kind: "forbidden" });
+            }
+            if (error.code === "duplicate_active_membership" || error.code === "pending_invitation_for_active_member") {
+              return Object.freeze({ kind: "active_membership_exists" });
+            }
+            if (error.code === "stale_version") {
+              return Object.freeze({ kind: "invitation_version_conflict" });
+            }
+            return Object.freeze({ kind: "invalid_record" });
+          }
+          const updated = aggregate.snapshot();
+          const transitioned = updated.invitations.find((item) => item.invitationId === request.invitationId);
+          const target = principals.get(currentInvitation.targetPrincipalId);
+          if (!transitioned || !target) return Object.freeze({ kind: "invalid_record" });
+          const lifecycle = freezeInvitationLifecycleSnapshot({
+            invitation: {
+              invitation: transitioned,
+              target: { principalId: target.principalId, displayName: target.displayName },
+            },
+            membership: acceptedMembership,
+          });
+          const candidateSpaces = cloneRecordMap(knowledgeSpaces, freezeKnowledgeSpace);
+          const candidateInvitations = cloneRecordMap(invitations, freezeInvitation);
+          const candidateMemberships = cloneRecordMap(memberships, freezeMembership);
+          candidateSpaces.set(space.spaceId, freezeKnowledgeSpace(updated.space));
+          candidateInvitations.set(transitioned.invitationId, freezeInvitation(transitioned));
+          this.#failOrdinaryMindIfRequested("invitation_lifecycle_after_record");
+          if (acceptedMembership) candidateMemberships.set(acceptedMembership.membershipId, acceptedMembership);
+          this.#failOrdinaryMindIfRequested("invitation_lifecycle_after_membership");
+          const candidateIdempotency = cloneOrdinaryMindIdempotencyRecords(idempotencyRecords);
+          candidateIdempotency.set(recordKey, Object.freeze({
+            operation: request.operation,
+            principalId: request.principalId,
+            spaceId: space.spaceId,
+            key: request.idempotencyKey,
+            canonicalRequestHash: request.canonicalRequestHash,
+            lifecycle,
+          }));
+          this.#failOrdinaryMindIfRequested("invitation_lifecycle_after_idempotency");
+          this.#failOrdinaryMindIfRequested("invitation_lifecycle_before_commit");
+          knowledgeSpaces = candidateSpaces;
+          invitations = candidateInvitations;
+          memberships = candidateMemberships;
+          idempotencyRecords = candidateIdempotency;
+          return Object.freeze({ kind: "transitioned", result: lifecycle, replayed: false });
+        },
+        reissueInvitation: async (
+          request: Readonly<ReissueInvitationRequest>,
+        ): Promise<ReissueInvitationResult> => {
+          const current = invitations.get(request.invitationId);
+          if (!current) return Object.freeze({ kind: "invitation_not_found" });
+          const space = knowledgeSpaces.get(current.spaceId);
+          if (!space || space.state !== "active") return Object.freeze({ kind: "invitation_not_found" });
+          if ([...personalBindings.values()].some((binding) => binding.spaceId === space.spaceId)) {
+            return Object.freeze({ kind: "personal_mind" });
+          }
+          if (
+            !invitationLifecycleActorIsCurrentlyAuthorized(
+              "reissue_invitation",
+              request.principalId,
+              current,
+              principals,
+              memberships,
+            )
+          ) {
+            return Object.freeze({ kind: "forbidden" });
+          }
+          const recordKey = invitationLifecycleIdempotencyRecordKey(
+            request.principalId,
+            space.spaceId,
+            "reissue_invitation",
+            request.idempotencyKey,
+          );
+          const previous = idempotencyRecords.get(recordKey);
+          if (previous) {
+            if (previous.operation !== "reissue_invitation" || previous.canonicalRequestHash !== request.canonicalRequestHash) {
+              return Object.freeze({ kind: "idempotency_conflict" });
+            }
+            return Object.freeze({ kind: "reissued", invitation: freezeInvitationSnapshot(previous.invitation), replayed: true });
+          }
+          if (!SHA256_PATTERN.test(request.canonicalRequestHash)) return Object.freeze({ kind: "invalid_record" });
+          if (current.version !== request.expectedInvitationVersion) return Object.freeze({ kind: "invitation_version_conflict" });
+          if (current.state === "accepted") return Object.freeze({ kind: "accepted_invitation" });
+          const target = principals.get(current.targetPrincipalId);
+          if (!target || target.state !== "active") return Object.freeze({ kind: "invalid_record" });
+          const occurredAt = Date.parse(request.occurredAt);
+          const expiresAt = Date.parse(request.expiresAt);
+          if (
+            typeof request.replacementInvitationId !== "string" ||
+            !BOUNDED_OPAQUE_ID.test(request.replacementInvitationId) ||
+            typeof request.expiryJobId !== "string" ||
+            !BOUNDED_OPAQUE_ID.test(request.expiryJobId) ||
+            !Number.isFinite(occurredAt) ||
+            !Number.isFinite(expiresAt) ||
+            expiresAt - occurredAt !== 7 * 24 * 60 * 60 * 1_000
+          ) {
+            return Object.freeze({ kind: "invalid_record" });
+          }
+          if (
+            invitations.has(request.replacementInvitationId) ||
+            backgroundJobs.has(request.expiryJobId)
+          ) return Object.freeze({ kind: invitations.has(request.replacementInvitationId) ? "record_conflict" : "expiry_job_conflict" });
+          const aggregateMemberships = [...memberships.values()].filter((item) => item.spaceId === space.spaceId);
+          const aggregateInvitations = [...invitations.values()].filter((item) => item.spaceId === space.spaceId);
+          if (aggregateMemberships.some((item) => item.principalId === current.targetPrincipalId && item.state === "active")) {
+            return Object.freeze({ kind: "active_membership_exists" });
+          }
+          if (aggregateInvitations.some((item) => item.invitationId !== current.invitationId && item.targetPrincipalId === current.targetPrincipalId && item.state === "pending")) {
+            return Object.freeze({ kind: "pending_invitation_exists" });
+          }
+          const replacement = freezeInvitation({
+            invitationId: request.replacementInvitationId,
+            spaceId: current.spaceId,
+            targetPrincipalId: current.targetPrincipalId,
+            proposedRole: current.proposedRole,
+            state: "pending",
+            expiresAt: request.expiresAt,
+            version: version(1),
+            createdAt: request.occurredAt,
+            createdBy: request.principalId,
+            updatedAt: request.occurredAt,
+            updatedBy: request.principalId,
+          });
+          let aggregate;
+          try {
+            aggregate = SpaceAggregate.restoreOrdinary({ space, memberships: aggregateMemberships, invitations: aggregateInvitations })
+              .reissueInvitation({
+                invitationId: current.invitationId,
+                actorPrincipalId: request.principalId,
+                expectedInvitationVersion: request.expectedInvitationVersion,
+                replacement,
+                occurredAt: request.occurredAt,
+              });
+          } catch (error) {
+            if (error instanceof DomainInvariantError && error.code === "settings_permission_required") return Object.freeze({ kind: "forbidden" });
+            if (error instanceof DomainInvariantError && error.code === "stale_version") return Object.freeze({ kind: "invitation_version_conflict" });
+            if (error instanceof DomainInvariantError && error.code === "duplicate_pending_invitation") return Object.freeze({ kind: "pending_invitation_exists" });
+            if (error instanceof DomainInvariantError && error.code === "pending_invitation_for_active_member") return Object.freeze({ kind: "active_membership_exists" });
+            return Object.freeze({ kind: "invalid_record" });
+          }
+          const updated = aggregate.snapshot();
+          const persisted = updated.invitations.find((item) => item.invitationId === replacement.invitationId);
+          if (!persisted) return Object.freeze({ kind: "invalid_record" });
+          const expiryJob = cloneBackgroundJob({
+            jobId: request.expiryJobId,
+            target: { kind: "expire_invitation", invitationId: persisted.invitationId },
+            state: "queued",
+            version: version(1),
+            attempts: 0,
+            availableAt: persisted.expiresAt,
+            claimExpiresAt: null,
+            createdAt: request.occurredAt,
+            updatedAt: request.occurredAt,
+          });
+          const snapshot = freezeInvitationSnapshot({ invitation: persisted, target });
+          const candidateSpaces = cloneRecordMap(knowledgeSpaces, freezeKnowledgeSpace);
+          const candidateInvitations = cloneRecordMap(invitations, freezeInvitation);
+          const candidateJobs = new Map(backgroundJobs);
+          candidateSpaces.set(space.spaceId, freezeKnowledgeSpace(updated.space));
+          for (const item of updated.invitations) candidateInvitations.set(item.invitationId, freezeInvitation(item));
+          this.#failOrdinaryMindIfRequested("invitation_reissue_after_record");
+          candidateJobs.set(expiryJob.jobId, expiryJob);
+          this.#failOrdinaryMindIfRequested("invitation_reissue_after_job");
+          const candidateIdempotency = cloneOrdinaryMindIdempotencyRecords(idempotencyRecords);
+          candidateIdempotency.set(recordKey, Object.freeze({
+            operation: "reissue_invitation",
+            principalId: request.principalId,
+            spaceId: space.spaceId,
+            key: request.idempotencyKey,
+            canonicalRequestHash: request.canonicalRequestHash,
+            invitation: snapshot,
+          }));
+          this.#failOrdinaryMindIfRequested("invitation_reissue_after_idempotency");
+          this.#failOrdinaryMindIfRequested("invitation_reissue_before_commit");
+          knowledgeSpaces = candidateSpaces;
+          invitations = candidateInvitations;
+          backgroundJobs = candidateJobs;
+          idempotencyRecords = candidateIdempotency;
+          return Object.freeze({ kind: "reissued", invitation: snapshot, replayed: false });
         },
         createOrdinaryMind: async (
           records: Readonly<OrdinaryMindRecordSet>,
@@ -4092,6 +4523,121 @@ export class InMemoryRevisionMetadataStore
     return Object.freeze([...reachable].sort());
   }
 
+  async claimInvitationExpiryJob(
+    jobId: JobId,
+    now: SpaceInvitation["updatedAt"],
+    claimExpiresAt: SpaceInvitation["updatedAt"],
+  ): Promise<ClaimInvitationExpiryJobResult> {
+    return this.#runExclusive(async () => {
+      if (!validClaimLease(now, claimExpiresAt)) return Object.freeze({ kind: "not_available" });
+      const current = this.#backgroundJobs.get(jobId);
+      if (!current || current.target.kind !== "expire_invitation") return Object.freeze({ kind: "not_found" });
+      if (current.state === "succeeded") return Object.freeze({ kind: "completed" });
+      const expiredClaim = current.state === "running" && current.claimExpiresAt !== null && Date.parse(current.claimExpiresAt) <= Date.parse(now);
+      if (
+        (current.state === "running" && !expiredClaim) ||
+        (current.state !== "queued" && current.state !== "failed" && !expiredClaim) ||
+        (!expiredClaim && Date.parse(current.availableAt) > Date.parse(now))
+      ) return Object.freeze({ kind: "not_available" });
+      const claimed = cloneBackgroundJob({
+        ...current,
+        state: "running",
+        attempts: current.attempts + 1,
+        version: version(current.version + 1),
+        claimExpiresAt,
+        updatedAt: now,
+      });
+      this.#backgroundJobs.set(jobId, claimed);
+      return Object.freeze({ kind: "claimed", job: claimed });
+    });
+  }
+
+  async completeInvitationExpiryJob(
+    jobId: JobId,
+    expectedClaimVersion: BackgroundJob["version"],
+    completedAt: SpaceInvitation["updatedAt"],
+  ): Promise<CompleteInvitationExpiryJobResult> {
+    return this.#runExclusive(async () => {
+      const current = this.#backgroundJobs.get(jobId);
+      if (!current || current.target.kind !== "expire_invitation") return Object.freeze({ kind: "not_found" });
+      if (
+        current.state !== "running" ||
+        current.version !== expectedClaimVersion ||
+        current.claimExpiresAt === null ||
+        Date.parse(completedAt) >= Date.parse(current.claimExpiresAt)
+      ) return Object.freeze({ kind: "not_available" });
+      const invitation = this.#invitations.get(current.target.invitationId);
+      if (!invitation) return Object.freeze({ kind: "not_found" });
+      let result: "expired" | "already_terminal" = "already_terminal";
+      const candidateSpaces = cloneRecordMap(this.#knowledgeSpaces, freezeKnowledgeSpace);
+      const candidateInvitations = cloneRecordMap(this.#invitations, freezeInvitation);
+      if (invitation.state === "pending") {
+        if (Date.parse(invitation.expiresAt) > Date.parse(completedAt)) {
+          return Object.freeze({ kind: "not_available" });
+        }
+        const space = this.#knowledgeSpaces.get(invitation.spaceId);
+        if (!space || space.state !== "active") return Object.freeze({ kind: "not_found" });
+        try {
+          const updated = SpaceAggregate.restoreOrdinary({
+            space,
+            memberships: [...this.#memberships.values()].filter((item) => item.spaceId === space.spaceId),
+            invitations: [...this.#invitations.values()].filter((item) => item.spaceId === space.spaceId),
+          }).expireInvitation({
+            invitationId: invitation.invitationId,
+            expectedInvitationVersion: invitation.version,
+            occurredAt: completedAt,
+          }).snapshot();
+          const expired = updated.invitations.find((item) => item.invitationId === invitation.invitationId);
+          if (!expired) return Object.freeze({ kind: "not_found" });
+          candidateSpaces.set(space.spaceId, freezeKnowledgeSpace(updated.space));
+          candidateInvitations.set(expired.invitationId, freezeInvitation(expired));
+          result = "expired";
+        } catch {
+          return Object.freeze({ kind: "not_available" });
+        }
+      }
+      this.#failOrdinaryMindIfRequested("invitation_expiry_after_record");
+      const candidateJobs = new Map(this.#backgroundJobs);
+      candidateJobs.set(jobId, cloneBackgroundJob({
+        ...current,
+        state: "succeeded",
+        version: version(current.version + 1),
+        claimExpiresAt: null,
+        updatedAt: completedAt,
+      }));
+      this.#failOrdinaryMindIfRequested("invitation_expiry_before_commit");
+      this.#knowledgeSpaces = candidateSpaces;
+      this.#invitations = candidateInvitations;
+      this.#backgroundJobs = candidateJobs;
+      return Object.freeze({ kind: result });
+    });
+  }
+
+  async failInvitationExpiryJob(
+    jobId: JobId,
+    expectedClaimVersion: BackgroundJob["version"],
+    failedAt: SpaceInvitation["updatedAt"],
+    retryAt: SpaceInvitation["updatedAt"],
+  ): Promise<boolean> {
+    return this.#runExclusive(async () => {
+      const current = this.#backgroundJobs.get(jobId);
+      if (
+        !current || current.target.kind !== "expire_invitation" ||
+        current.state !== "running" || current.version !== expectedClaimVersion ||
+        current.claimExpiresAt === null || Date.parse(failedAt) >= Date.parse(current.claimExpiresAt)
+      ) return false;
+      this.#backgroundJobs.set(jobId, cloneBackgroundJob({
+        ...current,
+        state: "failed",
+        version: version(current.version + 1),
+        availableAt: retryAt,
+        claimExpiresAt: null,
+        updatedAt: failedAt,
+      }));
+      return true;
+    });
+  }
+
   async claimIndexJob(
     jobId: JobId,
     now: RevisionIndexState["updatedAt"],
@@ -4620,12 +5166,19 @@ export class InMemoryRevisionMetadataStore
         .filter(([, message]) => auditIdSet.has(message.auditEventId))
         .map(([id]) => id);
       const outboxIdSet = new Set(outboxIds);
+      const invitationIdSet = new Set(
+        [...this.#invitations.values()]
+          .filter((invitation) => invitation.spaceId === spaceId)
+          .map((invitation) => invitation.invitationId),
+      );
       const jobIds = [...this.#backgroundJobs]
         .filter(
           ([, job]) =>
             ("spaceId" in job.target && job.target.spaceId === spaceId) ||
             (job.target.kind === "audit_delivery" &&
-              outboxIdSet.has(job.target.outboxMessageId)),
+              outboxIdSet.has(job.target.outboxMessageId)) ||
+            (job.target.kind === "expire_invitation" &&
+              invitationIdSet.has(job.target.invitationId)),
         )
         .map(([id]) => id);
       const idempotencyKeys = [...this.#idempotencyRecords]
