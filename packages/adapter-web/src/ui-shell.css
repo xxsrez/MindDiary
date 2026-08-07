@@ -727,6 +727,215 @@ h3 {
   user-select: all;
 }
 
+.md-auth-page {
+  min-height: 100vh;
+  display: grid;
+  grid-template-rows: auto 1fr;
+  background:
+    radial-gradient(circle at 12% 86%, color-mix(in srgb, var(--mind-diary-living-coral, #eb6f64) 10%, transparent) 0 9rem, transparent 9.1rem),
+    radial-gradient(circle at 91% 9%, color-mix(in srgb, var(--mind-diary-memory-plum, #6c4bb6) 9%, transparent) 0 11rem, transparent 11.1rem),
+    var(--mind-diary-paper, #fff7e8);
+}
+
+.md-auth-header {
+  display: flex;
+  align-items: center;
+  min-height: 5.25rem;
+  padding: 0.8rem clamp(1rem, 4vw, 4rem);
+  border-block-end: 1px solid var(--mind-diary-border-subtle, #d9d2c8);
+  background: color-mix(in srgb, var(--mind-diary-paper, #fff7e8) 92%, white);
+}
+
+.md-auth-main {
+  width: min(58rem, 100%);
+  margin-inline: auto;
+  display: grid;
+  place-items: center;
+  padding: clamp(2rem, 7vw, 6rem) clamp(1rem, 4vw, 3rem);
+}
+
+.md-auth-main--wide {
+  width: min(72rem, 100%);
+  align-content: center;
+  place-items: stretch;
+  gap: clamp(2rem, 5vw, 4rem);
+}
+
+.md-auth-intro {
+  max-width: 52rem;
+}
+
+.md-auth-intro h1,
+.md-auth-card h1 {
+  max-width: 18ch;
+}
+
+.md-auth-intro > p:not(.md-eyebrow),
+.md-auth-card > p:not(.md-eyebrow),
+.md-auth-choice > p:not(.md-eyebrow),
+.md-personal-card > p,
+.md-profile-card > p {
+  max-width: 46rem;
+  margin-block: 1rem 0;
+}
+
+.md-auth-card,
+.md-auth-choice,
+.md-personal-card,
+.md-profile-card {
+  border: 1px solid var(--mind-diary-border-subtle, #d9d2c8);
+  border-radius: var(--mind-diary-radius-card, 20px);
+  background: var(--mind-diary-white, #fff);
+}
+
+.md-auth-card {
+  width: min(42rem, 100%);
+  padding: clamp(1.5rem, 5vw, 3.5rem);
+}
+
+.md-auth-card--entry {
+  text-align: center;
+}
+
+.md-auth-card--entry h1,
+.md-auth-card--entry > p {
+  margin-inline: auto;
+}
+
+.md-auth-card--entry .md-auth-entry {
+  margin-block-start: 1.75rem;
+}
+
+.md-auth-mark {
+  display: block;
+  width: 5.5rem;
+  height: 5.5rem;
+  margin: 0 auto 1.25rem;
+}
+
+.md-auth-note {
+  font-size: 0.92rem;
+}
+
+.md-auth-choice-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.85fr);
+  gap: 1.25rem;
+}
+
+.md-auth-choice {
+  padding: clamp(1.35rem, 3vw, 2.25rem);
+}
+
+.md-auth-choice--primary {
+  border-block-start: 0.35rem solid var(--mind-diary-memory-plum, #6c4bb6);
+}
+
+.md-auth-choice form {
+  display: grid;
+  align-items: start;
+  justify-items: start;
+  gap: 1rem;
+  margin-block-start: 1.5rem;
+}
+
+.md-auth-choice .md-field {
+  width: 100%;
+}
+
+.md-auth-card--progress .md-loading-mark,
+.md-auth-card--error .md-state__symbol {
+  margin-block-end: 1.5rem;
+}
+
+.md-auth-card--error {
+  border-inline-start: 0.4rem solid var(--mind-diary-living-coral, #eb6f64);
+}
+
+.md-auth-card--error .md-button {
+  margin-block-start: 1.25rem;
+}
+
+.md-my-mind-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.08fr) minmax(19rem, 0.92fr);
+  align-items: start;
+  gap: 1.25rem;
+}
+
+.md-personal-card,
+.md-profile-card {
+  padding: clamp(1.35rem, 3vw, 2.25rem);
+}
+
+.md-personal-card {
+  border-block-start: 0.35rem solid var(--mind-diary-memory-plum, #6c4bb6);
+}
+
+.md-personal-card h2,
+.md-profile-card h2 {
+  margin-block-start: 1.5rem;
+}
+
+.md-personal-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.75rem;
+  margin: 2rem 0 0;
+}
+
+.md-personal-summary div {
+  min-width: 0;
+  padding-block-start: 0.75rem;
+  border-block-start: 1px solid var(--mind-diary-border-subtle, #d9d2c8);
+}
+
+.md-personal-summary dt {
+  font-size: 0.78rem;
+  font-weight: 750;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.md-personal-summary dd {
+  margin: 0.25rem 0 0;
+  font-weight: 650;
+}
+
+.md-profile-card form {
+  display: grid;
+  align-items: start;
+  justify-items: start;
+  gap: 1rem;
+  margin-block-start: 1.5rem;
+}
+
+.md-profile-card .md-field {
+  width: 100%;
+}
+
+.md-inline-status {
+  width: 100%;
+  margin: 0;
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--mind-diary-border-subtle, #d9d2c8);
+  border-inline-start-width: 0.35rem;
+  border-radius: 0.75rem;
+  background: var(--mind-diary-paper, #fff7e8);
+}
+
+.md-inline-status--success {
+  border-inline-start-color: var(--mind-diary-quiet-sage, #9aae9d);
+}
+
+.md-inline-status--error {
+  border-inline-start-color: var(--mind-diary-living-coral, #eb6f64);
+}
+
+.md-inline-status > p {
+  margin-block: 0 0.75rem;
+}
+
 @media (max-width: 58rem) {
   .md-header {
     grid-template-columns: auto auto 1fr;
@@ -768,6 +977,11 @@ h3 {
   }
 
   .md-setup-card {
+    grid-template-columns: 1fr;
+  }
+
+  .md-auth-choice-grid,
+  .md-my-mind-layout {
     grid-template-columns: 1fr;
   }
 }
@@ -832,8 +1046,14 @@ h3 {
 
   .md-token-card__action .md-button,
   .md-token-card__action .md-token-card__final-state,
-  .md-token-form > .md-button {
+  .md-token-form > .md-button,
+  .md-auth-choice .md-button,
+  .md-profile-card .md-button {
     width: 100%;
+  }
+
+  .md-personal-summary {
+    grid-template-columns: 1fr;
   }
 }
 
@@ -855,6 +1075,11 @@ h3 {
   .md-token-card,
   .md-setup-card,
   .md-token-state,
+  .md-auth-card,
+  .md-auth-choice,
+  .md-personal-card,
+  .md-profile-card,
+  .md-inline-status,
   .md-dialog {
     border: 2px solid CanvasText;
   }
