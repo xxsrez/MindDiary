@@ -33,6 +33,7 @@ import {
   OrdinaryMindControlFailure,
   OrdinaryMindControlService,
   OrdinaryMindDeletionService,
+  OwnershipTransferFailure,
   OwnershipTransferService,
   VisibilityControlService,
 } from "@mind-diary/application-control";
@@ -550,11 +551,19 @@ test(
         },
       ),
     ]);
-    assert.equal(
-      visibilityOutcomes.filter((outcome) => outcome.status === "fulfilled")
-        .length,
-      1,
+    const visibilityWinners = visibilityOutcomes.filter(
+      (outcome) => outcome.status === "fulfilled",
     );
+    const visibilityLosers = visibilityOutcomes.filter(
+      (outcome) => outcome.status === "rejected",
+    );
+    assert.equal(visibilityWinners.length, 1);
+    assert.equal(visibilityLosers.length, 1);
+    assert.equal(
+      visibilityLosers[0].reason instanceof OrdinaryMindControlFailure,
+      true,
+    );
+    assert.equal(visibilityLosers[0].reason.code, "metadata_conflict");
     state = await inspectMind(env, mind.mindId);
     assert.ok(["public", "unlisted"].includes(state.space.visibility));
 
@@ -592,16 +601,19 @@ test(
         },
       ),
     ]);
-    assert.equal(
-      transferOutcomes.filter((outcome) => outcome.status === "fulfilled")
-        .length,
-      1,
+    const transferWinners = transferOutcomes.filter(
+      (outcome) => outcome.status === "fulfilled",
     );
-    assert.equal(
-      transferOutcomes.filter((outcome) => outcome.status === "rejected")
-        .length,
-      1,
+    const transferLosers = transferOutcomes.filter(
+      (outcome) => outcome.status === "rejected",
     );
+    assert.equal(transferWinners.length, 1);
+    assert.equal(transferLosers.length, 1);
+    assert.equal(
+      transferLosers[0].reason instanceof OwnershipTransferFailure,
+      true,
+    );
+    assert.equal(transferLosers[0].reason.code, "metadata_conflict");
     state = await inspectMind(env, mind.mindId);
     assert.equal(activeOwners(state).length, 1);
     assert.equal(
