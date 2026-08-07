@@ -485,6 +485,93 @@ class PreflightTest(GitMixin, unittest.TestCase):
         self.assertEqual(resumed["route"], "recover-owner")
         self.assertEqual(resumed["mutation_scope"], "recovery-only")
 
+    def test_fence_guards_atomically_advances_indexed_vector_and_is_idempotent(self) -> None:
+        thread_id = "019fdcce-1fee-71d0-8d5d-6566cdf2d94b"
+        run_id = "bc5fed70-55d9-4915-88d3-dc98de4d7013"
+        run_key = "05921543be0e05af2538d99ee2372769"
+        issue = "AND-47"
+        guard_ref = f"refs/heads/codex/release/claims/{run_key}/{issue}/c1"
+        with tempfile.TemporaryDirectory(prefix="shipctl-fence-") as directory:
+            repo, _ = self.fixture(Path(directory))
+            head = self.git(repo, "rev-parse", "HEAD")
+            guard = self.metadata_commit(
+                repo,
+                (
+                    "guard\n\n"
+                    "SCHEMA: 1\n"
+                    "KIND: CLAIM_GUARD\n"
+                    "STATE: ready\n"
+                    f"RUN_ID: {run_id}\n"
+                    f"RUN_KEY: {run_key}\n"
+                    f"ISSUE: {issue}\n"
+                    "OWNER_ID: 07654254-e020-436b-9c04-6ca40f2f4a1e\n"
+                    "OWNER_EPOCH: 1\n"
+                    "CLAIM_GENERATION: 1\n"
+                    "CLAIM_TOKEN_DIGEST: " + "a" * 64 + "\n"
+                    "FEATURE_REF: refs/heads/codex/and-47-test/"
+                    f"r{run_key}-e1-c1\n"
+                    f"FEATURE_HEAD: {head}\n"
+                    "PREVIOUS_GUARD: zero\n"
+                    "UPDATED_BY: worker\n"
+                ),
+                head,
+            )
+            self.git(repo, "push", "origin", f"{guard}:{guard_ref}")
+            self.push_coordinator(
+                repo,
+                MODULE.CANONICAL_COORDINATOR_REF,
+                self.coordinator_message(
+                    repo,
+                    state="needs-input",
+                    owner_state="handoff-ready",
+                    contract="1" * 40,
+                    extra=(
+                        "OWNER_ID: 07654254-e020-436b-9c04-6ca40f2f4a1e\n"
+                        "OWNER_PROOF_KIND: runtime-task-id\n"
+                        f"RUN_ID: {run_id}\n"
+                        f"RUN_KEY: {run_key}\n"
+                        f"PROJECT_ID: {uuid.uuid4()}\n"
+                        f"MILESTONE_ID: {uuid.uuid4()}\n"
+                        "EPOCH: 1\n"
+                        f"CONTRACT_SOURCE_SHA: {head}\n"
+                        "ACTION_KIND: handoff-owner\n"
+                        "ACTION_TARGET: codex-thread:control-task\n"
+                        "WORKERS: active_issue_lanes=none;executors=terminal\n"
+                        "PAUSE: state=handoff-ready;pending_external_action=none\n"
+                        "RECOVERY: generation=1;cause=handoff;phase=complete;inventory=none\n"
+                        f"CLAIM_INDEX: active={issue}:1;entries=1;digest={'b' * 64}\n"
+                        f"CLAIM_MAP: {issue}:1@origin:{guard_ref}@origin:refs/heads/codex/and-47-test/r{run_key}-e1-c1@token\n"
+                        f"LIVE_GUARDS: {issue}/c1={guard}:ready\n"
+                    ),
+                ),
+            )
+            args = mock.Mock(repo=str(repo), remote="origin", default="main")
+            with mock.patch.dict(MODULE.os.environ, {"CODEX_THREAD_ID": thread_id}):
+                with io.StringIO() as output, redirect_stdout(output):
+                    self.assertEqual(MODULE.command_takeover(args), 0)
+                with io.StringIO() as output, redirect_stdout(output):
+                    fence_code = MODULE.command_fence_guards(args)
+                    result = json.loads(output.getvalue())
+                with io.StringIO() as output, redirect_stdout(output):
+                    repeat_code = MODULE.command_fence_guards(args)
+                    repeat = json.loads(output.getvalue())
+            fenced_guard = self.git(repo, "ls-remote", "origin", guard_ref).split()[0]
+            fenced_parent = self.git(repo, "rev-parse", f"{fenced_guard}^")
+            guard_message = self.git(repo, "show", "-s", "--format=%B", fenced_guard)
+            coordinator = self.git(repo, "ls-remote", "origin", MODULE.CANONICAL_COORDINATOR_REF).split()[0]
+            coordinator_message = self.git(repo, "show", "-s", "--format=%B", coordinator)
+        self.assertEqual((fence_code, result["status"]), (0, "fenced"))
+        self.assertEqual((repeat_code, repeat["status"]), (0, "already-fenced"))
+        self.assertEqual(fenced_parent, guard)
+        guard_metadata = MODULE.fields(guard_message)
+        self.assertEqual(guard_metadata["STATE"], "fenced")
+        self.assertEqual(guard_metadata["OWNER_EPOCH"], "2")
+        self.assertEqual(guard_metadata["PREVIOUS_GUARD"], guard)
+        coordinator_metadata = MODULE.fields(coordinator_message)
+        self.assertEqual(coordinator_metadata["ACTION_KIND"], "fence-guards")
+        self.assertEqual(coordinator_metadata["ACTION_STATUS"], "reconciled")
+        self.assertEqual(MODULE._structured_token(coordinator_metadata["RECOVERY"], "phase"), "inventory")
+
     def test_matching_proof_cannot_lift_active_pause(self) -> None:
         with tempfile.TemporaryDirectory(prefix="shipctl-") as directory:
             repo, _ = self.fixture(Path(directory))

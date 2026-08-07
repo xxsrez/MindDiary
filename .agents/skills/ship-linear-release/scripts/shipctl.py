@@ -2,9 +2,9 @@
 """Deterministic, bounded helpers for ship-linear-release.
 
 Policy remains in SKILL.md and references. Most commands are read-only. The
-explicit ``takeover`` command performs one narrowly fenced coordinator-ref CAS
-after revalidating a reconciled quiescent handoff; it never mutates Linear,
-worktrees, feature refs, default, deployment, or tags.
+explicit ``takeover`` and ``fence-guards`` recovery commands perform narrowly
+fenced Git CAS transitions; they never mutate Linear, worktrees, feature refs,
+default, deployment, or tags.
 """
 
 from __future__ import annotations
@@ -1730,6 +1730,470 @@ def command_takeover(args: argparse.Namespace) -> int:
     return 0
 
 
+def _metadata_values(message: str, name: str) -> list[str]:
+    prefix = f"{name}:"
+    return [
+        line[len(prefix) :].strip()
+        for line in message.splitlines()
+        if line.startswith(prefix)
+    ]
+
+
+def _claim_guard_refs(
+    repo: Path, message: str, run_key: str, remote: str
+) -> tuple[list[tuple[str, int, str]], list[str]]:
+    entries: list[tuple[str, int, str]] = []
+    errors: list[str] = []
+    seen: set[str] = set()
+    for value in _metadata_values(message, "CLAIM_MAP"):
+        parts = value.split("@")
+        identity = parts[0].split(":")
+        if len(parts) != 4 or len(identity) != 2:
+            errors.append("invalid:claim-map-shape")
+            continue
+        issue, generation_text = identity
+        try:
+            generation = int(generation_text)
+        except ValueError:
+            generation = 0
+        remote_prefix = f"{remote}:"
+        guard_ref = parts[1][len(remote_prefix) :] if parts[1].startswith(remote_prefix) else ""
+        expected = (
+            f"refs/heads/codex/release/claims/{run_key}/{issue}/c{generation}"
+        )
+        if (
+            ISSUE_IDENTIFIER.fullmatch(issue) is None
+            or generation <= 0
+            or guard_ref != expected
+            or git(repo, "check-ref-format", guard_ref)[0] != 0
+        ):
+            errors.append(f"invalid:claim-map-guard:{issue or 'unknown'}")
+            continue
+        if guard_ref in seen:
+            errors.append(f"invalid:duplicate-claim-map-guard:{guard_ref}")
+            continue
+        seen.add(guard_ref)
+        entries.append((issue, generation, guard_ref))
+    entries.sort(key=lambda item: item[2])
+    return entries, errors
+
+
+def _remote_ref_tips(
+    repo: Path, remote: str, refs: list[str]
+) -> tuple[dict[str, str], list[str]]:
+    if not refs:
+        return {}, []
+    result = foreign_main.run(repo, "ls-remote", "--heads", remote, *refs)
+    if result.returncode != 0:
+        return {}, ["remote-guard-advertisement-unavailable"]
+    observed: dict[str, str] = {}
+    errors: list[str] = []
+    requested = set(refs)
+    for line in result.stdout.decode("ascii", "replace").splitlines():
+        parts = line.split(maxsplit=1)
+        if len(parts) != 2 or parts[1] not in requested or GIT_OID.fullmatch(parts[0]) is None:
+            errors.append("invalid:remote-guard-advertisement")
+            continue
+        if parts[1] in observed:
+            errors.append(f"invalid:duplicate-remote-guard:{parts[1]}")
+            continue
+        observed[parts[1]] = parts[0]
+    for ref in refs:
+        if ref not in observed:
+            errors.append(f"missing:remote-guard:{ref}")
+    return observed, errors
+
+
+def _metadata_commit(repo: Path, parent: str, message: str) -> str | None:
+    tree = foreign_main.text(repo, "show", "-s", "--format=%T", parent)
+    if tree is None or GIT_OID.fullmatch(tree) is None:
+        return None
+    with tempfile.NamedTemporaryFile(
+        mode="w", encoding="utf-8", prefix="shipctl-metadata-", delete=True
+    ) as handle:
+        handle.write(message)
+        handle.flush()
+        result = foreign_main.run(repo, "commit-tree", tree, "-p", parent, "-F", handle.name)
+    commit = result.stdout.decode("ascii", "replace").strip()
+    if result.returncode != 0 or GIT_OID.fullmatch(commit) is None:
+        return None
+    if foreign_main.text(repo, "rev-parse", f"{commit}^") != parent:
+        return None
+    if foreign_main.text(repo, "show", "-s", "--format=%T", commit) != tree:
+        return None
+    return commit
+
+
+def _render_coordinator_action(
+    parent: str,
+    parent_message: str,
+    subject: str,
+    replacements: dict[str, str],
+    action: dict[str, str],
+    status: str,
+    result: str | None = None,
+) -> tuple[str | None, list[str]]:
+    parent_fields = fields(parent_message)
+    errors, parent_seq, parent_status = _validate_transition_parent(parent_fields)
+    if errors:
+        return None, errors
+    assert parent_seq is not None and parent_status is not None
+    if status == "intent":
+        if parent_status != "reconciled":
+            return None, ["invalid:parent-action-not-reconciled"]
+        action = dict(action)
+        action["ACTION_SEQ"] = str(parent_seq + 1)
+        missing = [name for name in ACTION_HEADERS if name not in action]
+    elif status == "reconciled":
+        if parent_status not in {"intent", "planned"}:
+            return None, ["invalid:parent-action-not-pending"]
+        action = {name: parent_fields.get(name, "") for name in ACTION_HEADERS}
+        missing = [name for name in ACTION_HEADERS if not action[name]]
+    else:
+        return None, ["invalid:action-status"]
+    if missing:
+        return None, [f"missing:{name.lower()}" for name in missing]
+    if not UUID_TEXT.fullmatch(action["ACTION_ID"]):
+        return None, ["invalid:action-id"]
+    replaced = set(replacements) | set(ACTION_HEADERS) | {"ACTION_STATUS", "ACTION_RESULT"}
+    ledger_lines: list[str] = []
+    for line in parent_message.splitlines():
+        key, separator, _ = line.partition(":")
+        if separator and re.fullmatch(r"[A-Z][A-Z0-9_]*", key) and key not in replaced:
+            ledger_lines.append(line)
+    lines = [subject, "", *ledger_lines]
+    lines.extend(f"{name}: {value}" for name, value in replacements.items())
+    lines.extend(f"{name}: {action[name]}" for name in ACTION_HEADERS)
+    lines.append(f"ACTION_STATUS: {status}")
+    if result is not None:
+        lines.append(f"ACTION_RESULT: {result}")
+    return "\n".join(lines) + "\n", []
+
+
+def _update_structured(value: str, replacements: dict[str, str]) -> str:
+    remaining = dict(replacements)
+    output: list[str] = []
+    for part in value.split(";"):
+        key, separator, _ = part.partition("=")
+        normalized = key.strip().lower()
+        if separator and normalized in remaining:
+            output.append(f"{key.strip()}={remaining.pop(normalized)}")
+        elif part.strip():
+            output.append(part.strip())
+    output.extend(f"{key}={item}" for key, item in remaining.items())
+    return ";".join(output)
+
+
+def _render_guard_fence_message(
+    parent_message: str,
+    issue: str,
+    generation: int,
+    old_tip: str,
+    owner_id: str,
+    owner_epoch: str,
+    coordinator_intent: str,
+) -> tuple[str | None, list[str]]:
+    metadata = fields(parent_message)
+    if metadata.get("KIND") != "CLAIM_GUARD":
+        return None, [f"invalid:guard-kind:{issue}"]
+    if metadata.get("ISSUE") != issue or metadata.get("CLAIM_GENERATION") != str(generation):
+        return None, [f"invalid:guard-identity:{issue}"]
+    replacements = {
+        "STATE": "fenced",
+        "OWNER_ID": owner_id,
+        "OWNER_EPOCH": owner_epoch,
+        "PREVIOUS_GUARD": old_tip,
+        "UPDATED_BY": "coordinator-recovery",
+        "FENCED_BY": f"owner={owner_id};epoch={owner_epoch};coordinator={coordinator_intent}",
+        "FENCE_REASON": "takeover-recovery",
+    }
+    replaced = set(replacements)
+    lines = [f"ship-linear-release {issue} fenced by recovery", ""]
+    for line in parent_message.splitlines():
+        key, separator, _ = line.partition(":")
+        if separator and re.fullmatch(r"[A-Z][A-Z0-9_]*", key) and key not in replaced:
+            lines.append(line)
+    lines.extend(f"{name}: {value}" for name, value in replacements.items())
+    return "\n".join(lines) + "\n", []
+
+
+def _materialize_exact(repo: Path, remote: str, shas: list[str]) -> bool:
+    if not shas:
+        return True
+    result = foreign_main.run(
+        repo,
+        "fetch",
+        "--no-write-fetch-head",
+        "--no-tags",
+        remote,
+        *list(dict.fromkeys(shas)),
+    )
+    return result.returncode == 0 and all(foreign_main.object_exists(repo, sha) for sha in shas)
+
+
+def command_fence_guards(args: argparse.Namespace) -> int:
+    repo = Path(args.repo).resolve()
+    _, runtime_proof = _runtime_owner_proof()
+    if runtime_proof is None:
+        emit({"schema": 1, "status": "blocked", "reason": "runtime-thread-id-unavailable"})
+        return 3
+    preflight_code, preflight = _capture_preflight(repo, args.remote, args.default)
+    if preflight_code != 0 or preflight.get("route") != "recover-owner":
+        emit(
+            {
+                "schema": 1,
+                "status": "blocked",
+                "reason": "guard-fencing-not-eligible",
+                "preflight": preflight,
+            }
+        )
+        return 3
+    active = next(
+        (
+            item
+            for item in preflight.get("coordinator_refs", [])
+            if item.get("kind") == "canonical" and item.get("classification") == "active"
+        ),
+        None,
+    )
+    if active is None or active.get("owner_proof_digest") != runtime_proof:
+        emit({"schema": 1, "status": "blocked", "reason": "runtime-owner-proof-mismatch"})
+        return 3
+    coordinator = active["sha"]
+    if not _materialize_exact(repo, args.remote, [coordinator]):
+        emit({"schema": 1, "status": "blocked", "reason": "coordinator-materialization-failed"})
+        return 3
+    code, coordinator_message = git(repo, "show", "-s", "--format=%B", coordinator)
+    if code != 0:
+        emit({"schema": 1, "status": "blocked", "reason": "coordinator-message-unavailable"})
+        return 3
+    coordinator_fields = fields(coordinator_message)
+    run_key = coordinator_fields.get("RUN_KEY", "")
+    run_id = coordinator_fields.get("RUN_ID", "")
+    owner_id = coordinator_fields.get("OWNER_ID", "")
+    owner_epoch = coordinator_fields.get("EPOCH", "")
+    recovery = coordinator_fields.get("RECOVERY", "")
+    if (
+        re.fullmatch(r"[0-9a-f]{32}", run_key) is None
+        or UUID_TEXT.fullmatch(run_id) is None
+        or UUID_TEXT.fullmatch(owner_id) is None
+        or not owner_epoch.isdigit()
+        or int(owner_epoch) <= 0
+        or not recovery
+    ):
+        emit({"schema": 1, "status": "blocked", "reason": "coordinator-recovery-identity-invalid"})
+        return 3
+    guard_entries, entry_errors = _claim_guard_refs(
+        repo, coordinator_message, run_key, args.remote
+    )
+    claim_count = _structured_token(coordinator_fields.get("CLAIM_INDEX", ""), "entries")
+    if entry_errors or (claim_count and claim_count.isdigit() and int(claim_count) != len(guard_entries)):
+        emit(
+            {
+                "schema": 1,
+                "status": "blocked",
+                "reason": "claim-guard-index-invalid",
+                "errors": entry_errors,
+                "claim_count": claim_count,
+                "guard_count": len(guard_entries),
+            }
+        )
+        return 3
+    action_kind = coordinator_fields.get("ACTION_KIND", "")
+    action_status = coordinator_fields.get("ACTION_STATUS", "").lower()
+    recovery_phase = _structured_token(recovery, "phase")
+    if action_kind == "fence-guards" and action_status == "reconciled" and recovery_phase != "fencing":
+        tips, tip_errors = _remote_ref_tips(repo, args.remote, [item[2] for item in guard_entries])
+        if tip_errors or not _materialize_exact(repo, args.remote, list(tips.values())):
+            emit({"schema": 1, "status": "blocked", "reason": "fenced-guard-verification-failed", "errors": tip_errors})
+            return 3
+        invalid = []
+        for issue, generation, ref in guard_entries:
+            message_code, message = git(repo, "show", "-s", "--format=%B", tips[ref])
+            metadata = fields(message) if message_code == 0 else {}
+            if (
+                metadata.get("STATE") != "fenced"
+                or metadata.get("ISSUE") != issue
+                or metadata.get("CLAIM_GENERATION") != str(generation)
+                or metadata.get("RUN_ID") != run_id
+                or metadata.get("OWNER_ID") != owner_id
+                or metadata.get("OWNER_EPOCH") != owner_epoch
+            ):
+                invalid.append(ref)
+        if invalid:
+            emit({"schema": 1, "status": "blocked", "reason": "fenced-guard-drift", "refs": invalid})
+            return 3
+        emit(
+            {
+                "schema": 1,
+                "status": "already-fenced",
+                "coordinator": coordinator,
+                "guard_count": len(guard_entries),
+                "next": "inventory-and-adopt",
+            }
+        )
+        return 0
+    if action_status in {"intent", "planned"}:
+        if action_kind != "fence-guards":
+            emit({"schema": 1, "status": "blocked", "reason": "different-action-pending"})
+            return 3
+        intent = coordinator
+    else:
+        if action_status != "reconciled" or recovery_phase != "fencing":
+            emit({"schema": 1, "status": "blocked", "reason": "guard-fencing-phase-invalid"})
+            return 3
+        before, before_errors = _remote_ref_tips(
+            repo, args.remote, [item[2] for item in guard_entries]
+        )
+        if before_errors:
+            emit({"schema": 1, "status": "blocked", "reason": "guard-vector-unavailable", "errors": before_errors})
+            return 3
+        vector = ",".join(f"{ref}@{before[ref]}" for _, _, ref in guard_entries) or "none"
+        vector_digest = hashlib.sha256(vector.encode()).hexdigest()
+        action_id = str(uuid.uuid5(TRANSITION_NAMESPACE, f"fence-guards:{coordinator}:{vector_digest}"))
+        action = {
+            "ACTION_ID": action_id,
+            "ACTION_KIND": "fence-guards",
+            "ACTION_TARGET": f"refs/heads/codex/release/claims/{run_key}/*",
+            "EXPECTED_BEFORE": f"vector-sha256={vector_digest};count={len(guard_entries)}",
+            "EXTERNAL_REQUEST_KEY": "none",
+            "PROVIDER_SELECTOR": f"git:{args.remote}:guard-namespace:{run_key}",
+            "PAYLOAD_DIGEST": vector_digest,
+            "EFFECT_IDENTITY": f"fenced-owner={owner_id};epoch={owner_epoch};count={len(guard_entries)}",
+        }
+        intent_message, render_errors = _render_coordinator_action(
+            coordinator,
+            coordinator_message,
+            "ship-linear-release intent fence indexed guards",
+            {"FENCE_VECTOR": vector},
+            action,
+            "intent",
+        )
+        if render_errors or intent_message is None:
+            emit({"schema": 1, "status": "blocked", "reason": "fence-intent-invalid", "errors": render_errors})
+            return 3
+        intent = _metadata_commit(repo, coordinator, intent_message)
+        if intent is None:
+            emit({"schema": 1, "status": "blocked", "reason": "fence-intent-commit-failed"})
+            return 3
+        push = foreign_main.run(
+            repo,
+            "push",
+            "--porcelain",
+            f"--force-with-lease={CANONICAL_COORDINATOR_REF}:{coordinator}",
+            args.remote,
+            f"{intent}:{CANONICAL_COORDINATOR_REF}",
+        )
+        if push.returncode != 0:
+            emit({"schema": 1, "status": "cas-lost", "reason": "coordinator-ref-changed", "expected": coordinator})
+            return 4
+        coordinator_message = intent_message
+        coordinator_fields = fields(intent_message)
+
+    current, current_errors = _remote_ref_tips(
+        repo, args.remote, [item[2] for item in guard_entries]
+    )
+    if current_errors or not _materialize_exact(repo, args.remote, list(current.values())):
+        emit({"schema": 1, "status": "blocked", "reason": "guard-materialization-failed", "errors": current_errors})
+        return 3
+    updates: list[tuple[str, str, str]] = []
+    final_tips: dict[str, str] = {}
+    for issue, generation, ref in guard_entries:
+        old_tip = current[ref]
+        message_code, guard_message = git(repo, "show", "-s", "--format=%B", old_tip)
+        guard_fields = fields(guard_message) if message_code == 0 else {}
+        fenced_by = guard_fields.get("FENCED_BY", "")
+        exact_fence = (
+            guard_fields.get("STATE") == "fenced"
+            and guard_fields.get("OWNER_ID") == owner_id
+            and guard_fields.get("OWNER_EPOCH") == owner_epoch
+            and _structured_token(fenced_by, "coordinator") == intent
+        )
+        if exact_fence:
+            final_tips[ref] = old_tip
+            continue
+        if (
+            message_code != 0
+            or guard_fields.get("RUN_ID") != run_id
+            or guard_fields.get("RUN_KEY") != run_key
+        ):
+            emit({"schema": 1, "status": "blocked", "reason": "guard-run-identity-invalid", "ref": ref})
+            return 3
+        fence_message, fence_errors = _render_guard_fence_message(
+            guard_message, issue, generation, old_tip, owner_id, owner_epoch, intent
+        )
+        if fence_errors or fence_message is None:
+            emit({"schema": 1, "status": "blocked", "reason": "guard-fence-message-invalid", "ref": ref, "errors": fence_errors})
+            return 3
+        new_tip = _metadata_commit(repo, old_tip, fence_message)
+        if new_tip is None:
+            emit({"schema": 1, "status": "blocked", "reason": "guard-fence-commit-failed", "ref": ref})
+            return 3
+        updates.append((ref, old_tip, new_tip))
+        final_tips[ref] = new_tip
+    if updates:
+        leases = [f"--force-with-lease={ref}:{old}" for ref, old, _ in updates]
+        refspecs = [f"{new}:{ref}" for ref, _, new in updates]
+        push = foreign_main.run(repo, "push", "--porcelain", "--atomic", *leases, args.remote, *refspecs)
+        if push.returncode != 0:
+            emit({"schema": 1, "status": "cas-lost", "reason": "guard-ref-changed", "expected_count": len(updates)})
+            return 4
+    observed, observed_errors = _remote_ref_tips(
+        repo, args.remote, [item[2] for item in guard_entries]
+    )
+    if observed_errors or observed != final_tips:
+        emit({"schema": 1, "status": "blocked", "reason": "guard-fence-delivery-unverified", "errors": observed_errors})
+        return 3
+    live_guards = ";".join(
+        f"{issue}/c{generation}={observed[ref]}:fenced"
+        for issue, generation, ref in guard_entries
+    ) or "none"
+    result_digest = hashlib.sha256(live_guards.encode()).hexdigest()
+    reconciled_recovery = _update_structured(
+        coordinator_fields["RECOVERY"],
+        {"phase": "inventory", "inventory": result_digest, "unresolved": "none"},
+    )
+    reconcile_message, reconcile_errors = _render_coordinator_action(
+        intent,
+        coordinator_message,
+        "ship-linear-release reconciled fence indexed guards",
+        {"RECOVERY": reconciled_recovery, "LIVE_GUARDS": live_guards},
+        {},
+        "reconciled",
+        f"fenced={len(guard_entries)};vector-sha256={result_digest}",
+    )
+    if reconcile_errors or reconcile_message is None:
+        emit({"schema": 1, "status": "blocked", "reason": "fence-reconcile-invalid", "errors": reconcile_errors})
+        return 3
+    reconciled = _metadata_commit(repo, intent, reconcile_message)
+    if reconciled is None:
+        emit({"schema": 1, "status": "blocked", "reason": "fence-reconcile-commit-failed"})
+        return 3
+    push = foreign_main.run(
+        repo,
+        "push",
+        "--porcelain",
+        f"--force-with-lease={CANONICAL_COORDINATOR_REF}:{intent}",
+        args.remote,
+        f"{reconciled}:{CANONICAL_COORDINATOR_REF}",
+    )
+    if push.returncode != 0:
+        emit({"schema": 1, "status": "cas-lost", "reason": "coordinator-ref-changed-after-fencing", "expected": intent})
+        return 4
+    emit(
+        {
+            "schema": 1,
+            "status": "fenced",
+            "coordinator": reconciled,
+            "intent": intent,
+            "guard_count": len(guard_entries),
+            "guard_vector_digest": result_digest,
+            "next": "inventory-and-adopt",
+        }
+    )
+    return 0
+
+
 def parser() -> argparse.ArgumentParser:
     root = argparse.ArgumentParser(description=__doc__)
     sub = root.add_subparsers(dest="command", required=True)
@@ -1759,6 +2223,11 @@ def parser() -> argparse.ArgumentParser:
     takeover.add_argument("--remote", default="origin")
     takeover.add_argument("--default", default="main")
     takeover.set_defaults(handler=command_takeover)
+    fence_guards = sub.add_parser("fence-guards")
+    fence_guards.add_argument("--repo", default=".")
+    fence_guards.add_argument("--remote", default="origin")
+    fence_guards.add_argument("--default", default="main")
+    fence_guards.set_defaults(handler=command_fence_guards)
     return root
 
 

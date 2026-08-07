@@ -195,8 +195,10 @@ expected-old CAS становится owner; остальные переходя
 повторяет bounded preflight, берёт stable `CODEX_THREAD_ID`, создаёт прямого
 descendant старого coordinator tip и expected-old CAS-продвигает только
 repo-global coordinator ref. После `taken|already-owner` разрешён лишь recovery
-scope до fencing; `PROMOTION_HOLD` продолжает запрещать integration/default/
-deploy независимо от выигранного ownership.
+scope до fencing. На `RECOVERY phase=fencing` следующим mutable call запускай
+`shipctl.py fence-guards`; не собирай guard commits/refspecs через shell или
+JavaScript. `PROMOTION_HOLD` продолжает запрещать integration/default/deploy
+независимо от выигранного ownership.
 
 ## Менять limit немедленно и безопасно
 

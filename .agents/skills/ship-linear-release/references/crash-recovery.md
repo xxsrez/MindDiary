@@ -101,6 +101,11 @@ owner, который lift-ит каждый scope только по его evid
    Для `route=takeover` это делает `shipctl.py takeover` одним idempotent
    bounded call. Не собирай takeover через generic `transition`: тот renderer
    намеренно не меняет stable owner/epoch headers и не выполняет push.
+   Сразу после takeover (и на любом fresh `route=recover-owner` с
+   `RECOVERY phase=fencing`) вызови `shipctl.py fence-guards`. Helper сам
+   durable-записывает exact vector intent, перечитывает raced tips, проверяет
+   run/issue/generation, atomic CAS-fence-ит indexed guards и reconciles phase
+   `inventory`. Не конструируй fencing shell/JavaScript snippets вручную.
 2. До dispatch прочитай `CLAIM_INDEX`, `EXECUTION_INDEX` и bounded namespace
    guard refs текущего `run_key`. `CLAIM_INDEX` определяет authority/recovery,
    `EXECUTION_INDEX` — occupancy; live ready claim не означает running slot.
@@ -120,7 +125,8 @@ owner, который lift-ит каждый scope только по его evid
    publication action intent, публикует exact feature ref, проверяет effect и
    затем descendant `ready` guard; crash между шагами восстанавливается по
    intent/ref, а stale worker remote authority не имеет.
-5. При takeover продвинь каждый active guard descendant `fenced` commit-ом.
+5. При takeover продвинь каждый active guard descendant `fenced` commit-ом
+   через `shipctl.py fence-guards`.
    CAS race означает: перечитай guard и связанную feature ref, запиши появившийся
    exact artifact и повтори fence от нового tip. Не requeue issue, пока все
    известные и найденные run-scoped guards не fenced.

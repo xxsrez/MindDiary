@@ -147,9 +147,22 @@ rewrite, другой milestone/project, AWS fallback или новая infrastr
      --repo "$PWD" --remote origin --default main
    ```
 
-   Допустимы только `status=taken|already-owner`. После них загрузи выданные
-   recovery references, fence-ни guards и продолжай с `mutation_scope=recovery-only`.
-   `cas-lost` означает observer; другой результат запрещает дальнейшие мутации.
+   Допустимы только `status=taken|already-owner`. Затем, как и при fresh
+   `route=recover-owner; RECOVERY phase=fencing`, до Linear, ручного Git и
+   inventory сразу выполни второй bounded helper:
+
+   ```bash
+   python3 .agents/skills/ship-linear-release/scripts/shipctl.py fence-guards \
+     --repo "$PWD" --remote origin --default main
+   ```
+
+   Он durable-записывает intent, строит descendant `fenced` commits и одним
+   atomic expected-old multi-ref CAS продвигает весь indexed guard vector,
+   затем reconciles coordinator phase `inventory`. Допустимы только
+   `status=fenced|already-fenced`; после них загрузи recovery references и
+   продолжай inventory/adoption с `mutation_scope=recovery-only`. `cas-lost`
+   означает повторить ровно этот helper: он усыновляет свой pending intent и
+   уже fenced tips. Другой результат запрещает дальнейшие мутации.
 4. Генерируй identities детерминированным helper, не JavaScript snippets:
 
    ```bash
