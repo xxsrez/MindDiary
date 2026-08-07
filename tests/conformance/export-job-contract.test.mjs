@@ -3,6 +3,7 @@ import test from "node:test";
 import { createBackgroundServiceActor } from "@mind-diary/adapter-background";
 import { InMemoryRevisionMetadataStore } from "@mind-diary/adapter-metadata-memory";
 import { InMemoryObjectStore } from "@mind-diary/adapter-object-memory";
+import { createWebCryptoExportDownloadSecretCrypto } from "@mind-diary/adapter-security-webcrypto";
 import { ExportJobHandler } from "@mind-diary/application-background";
 import {
   CanonicalRevisionCoordinator,
@@ -83,12 +84,19 @@ test("durable export status contract contains safe metadata only and never embed
     { ...shared, token: null },
   );
   const clock = { now: () => FIXED_NOW };
+  const downloadSecretCrypto = await createWebCryptoExportDownloadSecretCrypto({
+    verifierKey: Uint8Array.from({ length: 32 }, (_, index) => index + 47),
+  });
   const application = new ExportJobApplicationService({
     authorizer: new CapabilityAuthorizer(metadata),
+    backgroundAuthorizer: new CurrentAccessBackgroundAuthorizer(metadata),
     metadata,
     digest: objects,
+    archives: objects,
     clock,
     jobIds: { nextExportJobId: () => "export_contract_job" },
+    downloadSecretCrypto,
+    downloadUrlBase: "https://downloads.invalid/export-grants",
   });
   const started = await application.start({
     actor,
@@ -145,7 +153,8 @@ test("durable export status contract contains safe metadata only and never embed
     "sha256",
     "size",
   ]);
-  const safeJson = JSON.stringify(status);
+  assert.match(status.download.url, /^https:\/\/downloads\.invalid\/export-grants\/mdg_v1_/u);
+  const safeJson = JSON.stringify(status.job);
   assert.doesNotMatch(
     safeJson,
     /objectKey|requestedByPrincipalId|idempotencyKey|download|bytes|token|role/iu,
@@ -156,4 +165,32 @@ test("durable export status contract contains safe metadata only and never embed
   assert.equal("downloadUrl" in stored, false);
   assert.equal("bytes" in stored, false);
   assert.equal((await objects.readExportArchive(stored.archive.objectKey)).byteLength > safeJson.length, true);
+
+  const secret = new URL(status.download.url).pathname.split("/").at(-1);
+  const [grant] = await metadata.listExportDownloadGrantsForTest();
+  assert.equal(grant.revisionId, REVISIONS.initial.revisionId);
+  assert.doesNotMatch(JSON.stringify(grant), /https:|mdg_v1_|download_url|downloadUrl/iu);
+  const download = await application.download({
+    actor: createBackgroundServiceActor({
+      serviceId: "export-contract-download",
+      requestId: "request_export_contract_download",
+      occurredAtUtc: FIXED_NOW,
+      deploymentCapabilities: ["content:export"],
+    }),
+    secret,
+  });
+  assert.equal(download.kind, "download");
+  assert.deepEqual(download.response.headers, {
+    "Content-Type": "application/zip",
+    "Content-Disposition": 'attachment; filename="mind-diary-okf-bundle.zip"',
+    "Content-Length": String(status.job.archive.size),
+    "Cache-Control": "no-store",
+    Pragma: "no-cache",
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "no-referrer",
+  });
+  assert.equal(
+    await objects.calculateSha256(download.response.bytes),
+    status.job.archive.sha256,
+  );
 });

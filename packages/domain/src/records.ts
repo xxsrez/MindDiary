@@ -21,10 +21,14 @@ import type {
 
 declare const versionBrand: unique symbol;
 declare const revisionNumberBrand: unique symbol;
+declare const exportDownloadSecretVerifierBrand: unique symbol;
 
 export type Version = number & { readonly [versionBrand]: "version" };
 export type RevisionNumber = number & {
   readonly [revisionNumberBrand]: "revision-number";
+};
+export type ExportDownloadSecretVerifier = string & {
+  readonly [exportDownloadSecretVerifierBrand]: "export-download-secret-verifier";
 };
 
 export const PRINCIPAL_STATES = ["active", "deleted"] as const;
@@ -250,6 +254,27 @@ export interface ExportJob {
   /** Metadata only. Archive bytes live exclusively in object storage. */
   readonly archive: Readonly<ExportArchiveRecord> | null;
   readonly archiveCleanedAt: UtcInstant | null;
+}
+
+export type ExportDownloadGrantState = "active" | "revoked" | "expired";
+
+/**
+ * Short-lived bearer locator for one already-built exact-revision archive.
+ * Only the one-way verifier is durable; the URL and secret are response-only.
+ * This record never replaces current access authorization.
+ */
+export interface ExportDownloadGrant {
+  readonly secretVerifier: ExportDownloadSecretVerifier;
+  readonly jobId: JobId;
+  readonly requestedByPrincipalId: PrincipalId;
+  readonly spaceId: SpaceId;
+  readonly revisionId: RevisionId;
+  /** Internal object-store locator. It is never part of safe status. */
+  readonly objectKey: string;
+  readonly state: ExportDownloadGrantState;
+  readonly createdAt: UtcInstant;
+  readonly expiresAt: UtcInstant;
+  readonly revokedAt: UtcInstant | null;
 }
 
 /** Durable exact-revision state; it must never be inferred from current HEAD. */

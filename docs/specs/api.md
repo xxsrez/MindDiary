@@ -1310,16 +1310,26 @@ Succeeded response:
 ```
 
 Server повторно проверяет current Mind access до выдачи нового download grant.
-URL не логируется и не возвращается после expiry без новой authorization.
+Каждый grant использует новый opaque bearer secret, живёт 5 минут по умолчанию
+и не может жить дольше server maximum 10 минут или самого export job. URL и
+secret являются consume-on-response material: они не сохраняются в export job,
+safe status projection, audit, logs или traces. После expiry новый URL требует
+новой authorization.
 Большой archive никогда не вкладывается в JSON-RPC response.
 
 Download response для успешного grant использует exact `media_type`,
-`filename` и `content_disposition` из job result. `MD-OKF-ZIP-1` — classic ZIP
-без compression: paths остаются bundle-relative UTF-8, entries отсортированы по
-unsigned UTF-8 bytes, DOS time фиксирован в `1980-01-01T00:00:00`, regular-file
-mode — `0644`, extra/comment/directory entries отсутствуют. CRC-32 считается по
-exact Markdown bytes, а `sha256` и `size` — по всему готовому ZIP. Archive не
-содержит отдельный manifest и не задаёт import behavior.
+`filename` и `content_disposition` из job result, точный `Content-Length`,
+`Cache-Control: no-store`, `Pragma: no-cache`,
+`X-Content-Type-Options: nosniff` и `Referrer-Policy: no-referrer`. Перед bytes
+server повторно проверяет current principal read access к exact revision и
+состояние job/grant. Revoked membership, public/unlisted → private для baseline
+Reader, expired job/grant, удалённый или повреждённый archive fail closed.
+`MD-OKF-ZIP-1` — classic ZIP без compression: paths остаются bundle-relative
+UTF-8, entries отсортированы по unsigned UTF-8 bytes, DOS time фиксирован в
+`1980-01-01T00:00:00`, regular-file mode — `0644`, extra/comment/directory
+entries отсутствуют. CRC-32 считается по exact Markdown bytes, а `sha256` и
+`size` — по всему готовому ZIP. Archive не содержит отдельный manifest и не
+задаёт import behavior.
 
 ## MCP Resources
 

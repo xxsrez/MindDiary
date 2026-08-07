@@ -22,6 +22,8 @@ import {
   type CanonicalSpaceHandle,
   type EffectiveTokenScopes,
   type ExportArchiveRecord,
+  type ExportDownloadGrant,
+  type ExportDownloadSecretVerifier,
   type ExportJob,
   type HandlePolicyFailureReason,
   type MarkdownMediaType,
@@ -59,6 +61,8 @@ export type {
   IdempotencyResult,
   JobId,
   ExportArchiveRecord,
+  ExportDownloadGrant,
+  ExportDownloadSecretVerifier,
   ExportJob,
   OutboxMessageId,
   RevisionIndexState,
@@ -96,6 +100,40 @@ export interface CommitEffectIdGenerator {
 /** Server-side source of opaque export job locators. */
 export interface ExportJobIdGenerator {
   nextExportJobId(): JobId;
+}
+
+/** Secret-bearing issuance result; the raw bearer can be consumed exactly once. */
+export interface IssuedExportDownloadSecret {
+  consumeSecret(): string | null;
+  verifier(): ExportDownloadSecretVerifier;
+}
+
+export type ExportDownloadVerifierLookupResult<Value> =
+  | {
+      readonly kind: "found";
+      readonly verifier: ExportDownloadSecretVerifier;
+      readonly value: Value;
+    }
+  | { readonly kind: "not_found" };
+
+export interface ExportDownloadVerifierLookup<Value> {
+  findByVerifier(
+    verifier: ExportDownloadSecretVerifier,
+  ): Promise<ExportDownloadVerifierLookupResult<Value>>;
+}
+
+export type ExportDownloadSecretVerificationResult<Value> =
+  | { readonly kind: "verified"; readonly value: Value }
+  | { readonly kind: "invalid" };
+
+/** Dedicated crypto boundary for canonical export-download bearer secrets. */
+export interface ExportDownloadSecretCrypto {
+  readonly kind: "export-download-secret-crypto";
+  issueSecret(): Promise<IssuedExportDownloadSecret>;
+  verifySecret<Value>(
+    candidate: unknown,
+    lookup: ExportDownloadVerifierLookup<Value>,
+  ): Promise<ExportDownloadSecretVerificationResult<Value>>;
 }
 
 export interface MetadataStore {
@@ -412,6 +450,39 @@ export interface ExportJobStore extends MetadataStore, AuthorizationStateReader 
     jobId: JobId,
     expectedVersion: Version,
     cleanedAt: UtcInstant,
+  ): Promise<boolean>;
+}
+
+export type CreateExportDownloadGrantResult =
+  | {
+      readonly kind: "created";
+      readonly grant: Readonly<ExportDownloadGrant>;
+    }
+  | { readonly kind: "secret_collision" | "invalid_grant" };
+
+export interface ExportDownloadGrantTransaction extends AuthorizationTransaction {
+  readExportJob(jobId: JobId): Promise<Readonly<ExportJob> | null>;
+  createExportDownloadGrant(
+    grant: Readonly<ExportDownloadGrant>,
+  ): Promise<CreateExportDownloadGrantResult>;
+}
+
+export type ReadExportDownloadGrantResult =
+  | { readonly kind: "active"; readonly grant: Readonly<ExportDownloadGrant> }
+  | { readonly kind: "not_found" | "expired" | "revoked" };
+
+/** Temporary download capabilities remain separate from durable export jobs. */
+export interface ExportDownloadGrantStore extends ExportJobStore {
+  runExportDownloadGrantTransaction<Result>(
+    operation: (transaction: ExportDownloadGrantTransaction) => Promise<Result>,
+  ): Promise<Result>;
+  readExportDownloadGrant(
+    secretVerifier: ExportDownloadSecretVerifier,
+    now: UtcInstant,
+  ): Promise<ReadExportDownloadGrantResult>;
+  revokeExportDownloadGrant(
+    secretVerifier: ExportDownloadSecretVerifier,
+    revokedAt: UtcInstant,
   ): Promise<boolean>;
 }
 

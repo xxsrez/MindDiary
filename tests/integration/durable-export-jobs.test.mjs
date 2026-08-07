@@ -5,6 +5,7 @@ import { InMemoryAuditSink } from "@mind-diary/adapter-audit-memory";
 import { InMemoryRevisionMetadataStore } from "@mind-diary/adapter-metadata-memory";
 import { InMemoryObjectStore } from "@mind-diary/adapter-object-memory";
 import { InMemoryExactRevisionSearchIndex } from "@mind-diary/adapter-search-memory";
+import { createWebCryptoExportDownloadSecretCrypto } from "@mind-diary/adapter-security-webcrypto";
 import {
   ExportJobExpiryHandler,
   ExportJobHandler,
@@ -32,6 +33,10 @@ import {
 
 const TOKEN_ID = "token_export_jobs";
 const TOKEN_EXPIRY = "2026-11-03T12:00:00.000Z";
+const EXPORT_DOWNLOAD_TEST_KEY = Uint8Array.from(
+  { length: 32 },
+  (_, index) => index + 31,
+);
 
 function at(offsetMs) {
   return new Date(Date.parse(FIXED_NOW) + offsetMs).toISOString();
@@ -122,21 +127,30 @@ async function harness(options = {}) {
     { ...state, token: null },
   );
   const authorizer = new CapabilityAuthorizer(metadata);
+  const backgroundAuthorizer = new CurrentAccessBackgroundAuthorizer(metadata);
+  const downloadSecretCrypto =
+    options.downloadSecretCrypto ??
+    await createWebCryptoExportDownloadSecretCrypto({
+      verifierKey: EXPORT_DOWNLOAD_TEST_KEY,
+    });
   let nextJob = 0;
   const ids = options.jobIds ?? ["export_job_1", "export_job_2", "export_job_3"];
   const application = () => new ExportJobApplicationService({
     authorizer,
+    backgroundAuthorizer,
     metadata,
     digest: objects,
+    archives: objects,
     clock,
     retentionMs: options.retentionMs ?? 60_000,
     jobIds: { nextExportJobId: () => ids[nextJob++] },
+    downloadSecretCrypto,
+    downloadUrlBase: "https://downloads.invalid/export-grants",
   });
   const builder = new DeterministicOkfExportService({
     materializer: revisions,
     digest: objects,
   });
-  const backgroundAuthorizer = new CurrentAccessBackgroundAuthorizer(metadata);
   const worker = (customBuilder = builder) => new ExportJobHandler({
     jobs: metadata,
     backgroundAuthorizer,
@@ -275,8 +289,10 @@ test("reconstructed worker builds the exact archive into object storage and stat
   assert.equal(status.job.archive.archiveFormat, "MD-OKF-ZIP-1");
   assert.equal(status.job.archive.mediaType, "application/zip");
   assert.equal(status.job.archive.size > 0, true);
+  assert.match(status.download.url, /^https:\/\/downloads\.invalid\/export-grants\/mdg_v1_/u);
+  assert.equal(status.download.expiresAt, at(60_000));
   assert.doesNotMatch(
-    JSON.stringify(status),
+    JSON.stringify(status.job),
     /requestedByPrincipalId|idempotencyKey|objectKey|download_url|downloadUrl|bytes/iu,
   );
 
@@ -466,6 +482,7 @@ test("expiry and cleanup are durable, observable and idempotent", async () => {
   assert.equal(status.kind, "found");
   assert.equal(status.job.status, "expired");
   assert.equal(status.job.archive, null);
+  assert.equal(status.download, null);
   assert.equal(status.job.archiveCleanedAt, at(5_000));
   assert.equal((await env.objects.listExportArchivesForTest()).length, 0);
 
