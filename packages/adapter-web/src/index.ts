@@ -5,6 +5,7 @@ import {
 } from "@mind-diary/application-control";
 
 export * from "./ui-shell.js";
+export * from "./onboarding.js";
 export * from "./token-management.js";
 export * from "./sites-identity-binding.js";
 

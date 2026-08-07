@@ -5,8 +5,12 @@ import test from "node:test";
 import {
   DEFAULT_UI_SHELL_MODEL,
   MIND_DIARY_FONT_DELIVERY,
+  MIND_DIARY_ISOLATED_ACCOUNT_ACTION,
+  MIND_DIARY_ONBOARDING_ASSETS,
   MIND_DIARY_UI_ASSETS,
   escapeUntrustedText,
+  renderAuthenticatedOnboarding,
+  renderAuthenticatedOnboardingDocument,
   renderMindDiaryUiShell,
   renderMindDiaryUiShellDocument,
 } from "../../packages/adapter-web/dist/index.js";
@@ -168,4 +172,169 @@ test("document and CSS provide responsive keyboard and high-contrast foundations
   assert.match(shellCss, /@media \(forced-colors: active\)/);
   assert.match(shellCss, /\.md-status__icon/);
   assert.match(shellCss, /\.md-state--error/);
+});
+
+test("anonymous onboarding exposes only the Sites auth entry, never the control plane", () => {
+  const html = renderAuthenticatedOnboarding({
+    kind: "anonymous",
+    authEntryPath: "/auth/sign-in?return_to=%2Fme",
+  });
+
+  assert.match(html, /data-session-state="anonymous"/);
+  assert.match(html, /data-sites-auth-entry/);
+  assert.match(html, />Sign in with ChatGPT</);
+  assert.match(html, /href="\/auth\/sign-in\?return_to=%2Fme"/);
+  assert.doesNotMatch(html, /data-control-plane|primary-navigation|data-personal-mind-card|data-profile-form/);
+
+  const unsafe = renderAuthenticatedOnboarding({
+    kind: "anonymous",
+    authEntryPath: `javascript:globalThis.pwned=1`,
+  });
+  assert.match(unsafe, /data-sites-auth-entry[^>]*href="#"|href="#"[^>]*data-sites-auth-entry/);
+  assert.doesNotMatch(unsafe, /javascript:|globalThis\.pwned/);
+});
+
+test("unknown identity offers explicit isolated creation and categorical manual recovery only", () => {
+  const html = renderAuthenticatedOnboarding({
+    kind: "registration_required",
+    suggestedDisplayName: "Andrey",
+    bootstrapIdempotencyKey: "bootstrap-attempt-0001",
+    manualRecoveryStatus: "available",
+  });
+
+  assert.equal(MIND_DIARY_ISOLATED_ACCOUNT_ACTION, "create_isolated_account");
+  assert.match(html, /data-session-state="registration_required"/);
+  assert.match(html, /Create a new isolated account/);
+  assert.match(html, /does not inherit, relink, or merge earlier access/i);
+  assert.match(html, /data-bootstrap-key="bootstrap-attempt-0001"/);
+  assert.match(html, /data-manual-recovery/);
+  assert.match(html, /Nothing is merged automatically/);
+  assert.doesNotMatch(html, /@[a-z0-9.-]+|verified[_ -]?email|data-control-plane/i);
+
+  for (const status of ["requested", "unavailable"]) {
+    const statusHtml = renderAuthenticatedOnboarding({
+      kind: "registration_required",
+      bootstrapIdempotencyKey: "bootstrap-attempt-0001",
+      manualRecoveryStatus: status,
+    });
+    assert.match(statusHtml, /role="status"/);
+    assert.doesNotMatch(statusHtml, /data-manual-recovery/);
+  }
+});
+
+test("bootstrap progress and retry keep one stable request identity and explicit final state", () => {
+  const progress = renderAuthenticatedOnboarding({ kind: "bootstrapping" });
+  const failure = renderAuthenticatedOnboarding({
+    kind: "bootstrap_error",
+    displayName: "Andrey",
+    bootstrapIdempotencyKey: "bootstrap-attempt-0001",
+    message: "Setup storage is temporarily unavailable.",
+    retryable: true,
+  });
+
+  assert.match(progress, /aria-busy="true"/);
+  assert.match(progress, /Account, private My Mind, and owner access are being created together/);
+  assert.match(failure, /role="alert"/);
+  assert.match(failure, /data-bootstrap-retry/);
+  assert.match(failure, /data-bootstrap-key="bootstrap-attempt-0001"/);
+  assert.match(failure, /cannot intentionally create a second account or My Mind/);
+
+  const invalidKey = renderAuthenticatedOnboarding({
+    kind: "bootstrap_error",
+    displayName: "Andrey",
+    bootstrapIdempotencyKey: `bad\" onmouseover=\"globalThis.pwned=1`,
+    message: "Unavailable.",
+    retryable: true,
+  });
+  assert.doesNotMatch(invalidKey, /data-bootstrap-retry|onmouseover|globalThis\.pwned/);
+});
+
+function authenticatedModel(profileUpdate = { kind: "idle", idempotencyKey: "profile-attempt-0001" }) {
+  return {
+    kind: "authenticated",
+    displayName: "Andrey",
+    profileVersion: 3,
+    personalMind: {
+      route: "/me",
+      name: "Andrey",
+      updatedLabel: "Updated today",
+    },
+    profileUpdate,
+  };
+}
+
+test("authenticated My Mind card exposes only /me and Personal-safe management", () => {
+  const html = renderAuthenticatedOnboarding(authenticatedModel());
+
+  assert.match(html, /data-session-state="authenticated"/);
+  assert.match(html, /data-control-plane/);
+  assert.match(html, /data-personal-mind-card/);
+  assert.match(html, /<a href="\/me">\/me<\/a>/);
+  assert.match(html, /Private — only you/);
+  assert.match(html, /Owner — only you/);
+  assert.match(html, /data-profile-form/);
+  assert.match(html, /data-profile-version="3"/);
+  assert.match(html, /does not edit Memories or create a content revision/i);
+  assert.doesNotMatch(html, /space_handle|hidden handle|data-(?:share|visibility|transfer|delete)/i);
+  assert.doesNotMatch(html, /<(?:textarea|iframe)\b|contenteditable|type="file"/i);
+  assert.doesNotMatch(html, /<button[^>]*>[^<]*(?:Share|Visibility|Transfer|Delete)/i);
+});
+
+test("profile states distinguish saving, success, transient failure, and stale conflict", () => {
+  const saving = renderAuthenticatedOnboarding(
+    authenticatedModel({ kind: "saving", idempotencyKey: "profile-attempt-0001" }),
+  );
+  const saved = renderAuthenticatedOnboarding(
+    authenticatedModel({ kind: "saved", message: "Profile name saved.", idempotencyKey: "profile-attempt-0001" }),
+  );
+  const error = renderAuthenticatedOnboarding(
+    authenticatedModel({ kind: "error", message: "Profile storage is unavailable.", retryable: true, idempotencyKey: "profile-attempt-0001" }),
+  );
+  const conflict = renderAuthenticatedOnboarding(
+    authenticatedModel({ kind: "conflict", message: "Your profile changed in another session." }),
+  );
+
+  assert.match(saving, /Saving your profile name…/);
+  assert.match(saving, /id="profile-display-name"[^>]+disabled/);
+  assert.match(saved, /Profile name saved\./);
+  assert.match(error, /role="alert"/);
+  assert.match(error, /submit the same change again/);
+  assert.match(conflict, /data-refresh-session/);
+  assert.match(conflict, /Reload account state/);
+  assert.doesNotMatch(conflict, /data-profile-key=/);
+});
+
+test("onboarding escapes all profile text and loads only a safe local client", () => {
+  const malicious = `<img src=x onerror="globalThis.pwned=1">`;
+  const html = renderAuthenticatedOnboarding({
+    ...authenticatedModel(),
+    displayName: malicious,
+    personalMind: {
+      route: "/me",
+      name: `<svg onload="globalThis.pwned=2">`,
+      updatedLabel: `<script>globalThis.pwned=3</script>`,
+    },
+  });
+
+  assert.doesNotMatch(html, /<(?:script|svg|img)\b[^>]*(?:onerror|onload|pwned)/i);
+  assert.doesNotMatch(html, /\son(?:error|load|mouseover)\s*=\s*["']/i);
+  assert.match(html, /&lt;svg onload=&quot;globalThis\.pwned=2&quot;&gt;/);
+
+  assert.deepEqual(MIND_DIARY_ONBOARDING_ASSETS, {
+    shellStyles: "/ui/mind-diary-shell.css",
+    client: "/ui/mind-diary-onboarding-client.js",
+  });
+  const safe = renderAuthenticatedOnboardingDocument(
+    authenticatedModel(),
+    "/fixture/onboarding-client.mjs",
+  );
+  const unsafe = renderAuthenticatedOnboardingDocument(
+    authenticatedModel(),
+    `javascript:globalThis.pwned=4`,
+  );
+  assert.match(safe, /src="\/fixture\/onboarding-client\.mjs"/);
+  assert.doesNotMatch(unsafe, /javascript:|globalThis\.pwned|<script type="module"/);
+  assert.match(shellCss, /\.md-auth-choice-grid/);
+  assert.match(shellCss, /\.md-my-mind-layout/);
+  assert.match(shellCss, /\.md-personal-summary/);
 });

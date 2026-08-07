@@ -4,7 +4,10 @@ import { createServer } from "node:http";
 import { extname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { renderMindDiaryUiShellDocument } from "../../../packages/adapter-web/dist/index.js";
+import {
+  renderAuthenticatedOnboardingDocument,
+  renderMindDiaryUiShellDocument,
+} from "../../../packages/adapter-web/dist/index.js";
 
 const fixtureDirectory = fileURLToPath(new URL(".", import.meta.url));
 const root = resolve(fixtureDirectory, "../../..");
@@ -14,6 +17,7 @@ const host = "127.0.0.1";
 const contentTypes = new Map([
   [".css", "text/css; charset=utf-8"],
   [".js", "text/javascript; charset=utf-8"],
+  [".mjs", "text/javascript; charset=utf-8"],
   [".svg", "image/svg+xml"],
 ]);
 
@@ -63,6 +67,53 @@ function fixtureModel(state) {
   };
 }
 
+function onboardingModel(pathname, state) {
+  if (pathname === "/sign-in") {
+    return {
+      kind: "anonymous",
+      authEntryPath: "/auth/sign-in?return_to=%2Fme",
+    };
+  }
+  if (pathname === "/welcome") {
+    if (state === "bootstrapping") return { kind: "bootstrapping" };
+    if (state === "error") {
+      return {
+        kind: "bootstrap_error",
+        displayName: "Fixture User",
+        bootstrapIdempotencyKey: "bootstrap-fixture-0001",
+        message: "Synthetic setup failure. No private data is included.",
+        retryable: true,
+      };
+    }
+    return {
+      kind: "registration_required",
+      suggestedDisplayName: "Fixture User",
+      bootstrapIdempotencyKey: "bootstrap-fixture-0001",
+      manualRecoveryStatus: state === "recovery-requested" ? "requested" : "available",
+    };
+  }
+  const profileUpdate = state === "saving"
+    ? { kind: "saving", idempotencyKey: "profile-fixture-0001" }
+    : state === "saved"
+      ? { kind: "saved", message: "Profile name saved.", idempotencyKey: "profile-fixture-0001" }
+      : state === "conflict"
+        ? { kind: "conflict", message: "Your profile changed in another session." }
+        : state === "error"
+          ? { kind: "error", message: "Synthetic profile failure.", retryable: true, idempotencyKey: "profile-fixture-0001" }
+          : { kind: "idle", idempotencyKey: "profile-fixture-0001" };
+  return {
+    kind: "authenticated",
+    displayName: `<img src=x onerror="globalThis.__mindDiaryInjected=true">Fixture User`,
+    profileVersion: 3,
+    personalMind: {
+      route: "/me",
+      name: `<svg onload="globalThis.__mindDiaryInjected=true">Fixture Mind`,
+      updatedLabel: "Updated at fixture time",
+    },
+    profileUpdate,
+  };
+}
+
 function resolveStaticPath(pathname) {
   if (pathname === "/brand/mind-diary-tokens.css") {
     return resolve(root, "docs/assets/brand/mind-diary-tokens.css");
@@ -81,6 +132,12 @@ function resolveStaticPath(pathname) {
   }
   if (pathname === "/ui/ui-shell.js") {
     return resolve(root, "packages/adapter-web/dist/ui-shell.js");
+  }
+  if (pathname === "/ui/onboarding.js") {
+    return resolve(root, "packages/adapter-web/dist/onboarding.js");
+  }
+  if (pathname === "/fixture/onboarding-client.mjs") {
+    return resolve(root, "tests/browser/ui-shell/onboarding-client.mjs");
   }
   return null;
 }
@@ -109,6 +166,23 @@ const server = createServer(async (request, response) => {
         "text/html; charset=utf-8",
         renderMindDiaryUiShellDocument(fixtureModel(state)),
       );
+      return;
+    }
+    if (["/sign-in", "/welcome", "/me"].includes(url.pathname)) {
+      const state = url.searchParams.get("state") ?? "ready";
+      sendText(
+        response,
+        200,
+        "text/html; charset=utf-8",
+        renderAuthenticatedOnboardingDocument(
+          onboardingModel(url.pathname, state),
+          "/fixture/onboarding-client.mjs",
+        ),
+      );
+      return;
+    }
+    if (url.pathname === "/auth/sign-in") {
+      sendText(response, 200, "text/html; charset=utf-8", "<!doctype html><title>Fixture auth entry</title><h1>Fixture auth entry</h1>");
       return;
     }
     const path = resolveStaticPath(url.pathname);
