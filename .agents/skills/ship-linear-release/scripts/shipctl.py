@@ -1974,22 +1974,57 @@ def _metadata_values(message: str, name: str) -> list[str]:
 
 
 def _claim_guard_refs(
-    repo: Path, message: str, run_key: str, remote: str
+    repo: Path, message: str, claim_index: str, run_key: str, remote: str
 ) -> tuple[list[tuple[str, int, str]], list[str]]:
+    """Resolve only live claim guards; terminal/history CLAIM_MAP rows are evidence.
+
+    New ledgers carry the complete binding in ``CLAIM_INDEX.active``.  Older
+    ledgers list only ``issue:generation`` there and require the matching
+    four-part ``CLAIM_MAP`` row.  ``CLAIM_INDEX.entries`` counts terminal and
+    quarantined history too, so it must never be compared to the live vector.
+    """
     entries: list[tuple[str, int, str]] = []
     errors: list[str] = []
     seen: set[str] = set()
+    maps: dict[tuple[str, int], str] = {}
     for value in _metadata_values(message, "CLAIM_MAP"):
+        # Terminal/historical rows use ``issue:g=terminal@...`` and are not
+        # fencing authority. They remain in the ledger for provenance.
+        terminal = re.match(
+            rf"^({ISSUE_IDENTIFIER.pattern}):([1-9][0-9]*)=([a-z][a-z0-9-]*)@",
+            value,
+        )
+        if terminal:
+            continue
         parts = value.split("@")
         identity = parts[0].split(":")
         if len(parts) != 4 or len(identity) != 2:
             errors.append("invalid:claim-map-shape")
             continue
         issue, generation_text = identity
-        try:
-            generation = int(generation_text)
-        except ValueError:
-            generation = 0
+        generation = int(generation_text) if generation_text.isdigit() else 0
+        key = (issue, generation)
+        if key in maps:
+            errors.append(f"invalid:duplicate-claim-map:{issue}:{generation}")
+        else:
+            maps[key] = value
+
+    index = _semicolon_fields(claim_index)
+    active_values = _list_value(index.get("active"))
+    for active_value in active_values:
+        active_parts = active_value.split("@")
+        identity = active_parts[0].split(":")
+        if len(identity) != 2:
+            errors.append("invalid:claim-index-active-shape")
+            continue
+        issue, generation_text = identity
+        generation = int(generation_text) if generation_text.isdigit() else 0
+        key = (issue, generation)
+        binding = active_value if len(active_parts) == 4 else maps.get(key, "")
+        parts = binding.split("@")
+        if len(parts) != 4:
+            errors.append(f"missing:active-claim-binding:{issue or 'unknown'}:{generation}")
+            continue
         remote_prefix = f"{remote}:"
         guard_ref = parts[1][len(remote_prefix) :] if parts[1].startswith(remote_prefix) else ""
         expected = (
@@ -2008,6 +2043,9 @@ def _claim_guard_refs(
             continue
         seen.add(guard_ref)
         entries.append((issue, generation, guard_ref))
+    declared = _positive_count(index.get("entries"))
+    if declared is None or declared < len(entries):
+        errors.append("invalid:claim-index-entry-count")
     entries.sort(key=lambda item: item[2])
     return entries, errors
 
@@ -2896,11 +2934,12 @@ def command_fence_guards(args: argparse.Namespace) -> int:
     ):
         emit({"schema": 1, "status": "blocked", "reason": "coordinator-recovery-identity-invalid"})
         return 3
+    claim_index = coordinator_fields.get("CLAIM_INDEX", "")
     guard_entries, entry_errors = _claim_guard_refs(
-        repo, coordinator_message, run_key, args.remote
+        repo, coordinator_message, claim_index, run_key, args.remote
     )
-    claim_count = _structured_token(coordinator_fields.get("CLAIM_INDEX", ""), "entries")
-    if entry_errors or (claim_count and claim_count.isdigit() and int(claim_count) != len(guard_entries)):
+    claim_count = _semicolon_fields(claim_index).get("entries")
+    if entry_errors:
         emit(
             {
                 "schema": 1,

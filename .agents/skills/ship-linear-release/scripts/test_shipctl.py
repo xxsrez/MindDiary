@@ -797,7 +797,8 @@ class PreflightTest(GitMixin, unittest.TestCase):
                         "WORKERS: active_issue_lanes=none;executors=terminal\n"
                         "PAUSE: state=handoff-ready;pending_external_action=none\n"
                         "RECOVERY: generation=1;cause=handoff;phase=complete;inventory=none\n"
-                        f"CLAIM_INDEX: active={issue}:1;entries=1;digest={'b' * 64}\n"
+                        f"CLAIM_INDEX: active={issue}:1;entries=2;digest={'b' * 64}\n"
+                        f"CLAIM_MAP: AND-147:2=terminal@refs/heads/codex/release/claims/{run_key}/AND-147/c2@{'d' * 40};feature={'e' * 40};batch=cutoff-1:g1\n"
                         f"CLAIM_MAP: {issue}:1@origin:{guard_ref}@origin:refs/heads/codex/and-47-test/r{run_key}-e1-c1@token\n"
                         f"LIVE_GUARDS: {issue}/c1={guard}:ready\n"
                     ),
@@ -871,6 +872,30 @@ class PreflightTest(GitMixin, unittest.TestCase):
             coordinator_metadata["CONTRACT_MIGRATED_FROM"],
         )
         self.assertEqual(MODULE._structured_token(coordinator_metadata["RECOVERY"], "phase"), "inventory")
+
+    def test_live_claim_index_fences_only_active_and_counts_history_separately(self) -> None:
+        run_key = "a" * 32
+        issue = "AND-47"
+        guard = f"refs/heads/codex/release/claims/{run_key}/{issue}/c2"
+        active = (
+            f"{issue}:2@origin:{guard}@origin:refs/heads/codex/and-47-test/"
+            f"r{run_key}-e2-c2@worktree-id"
+        )
+        claim_index = (
+            f"active={active};quarantined=AND-84:1@{'f' * 40};"
+            f"entries=3;digest={'b' * 64}"
+        )
+        message = (
+            f"CLAIM_MAP: AND-147:2=terminal@refs/heads/codex/release/claims/{run_key}/"
+            f"AND-147/c2@{'d' * 40};feature={'e' * 40};batch=cutoff-1:g1\n"
+        )
+        with tempfile.TemporaryDirectory(prefix="shipctl-claim-index-") as directory:
+            repo, _ = self.fixture(Path(directory))
+            entries, errors = MODULE._claim_guard_refs(
+                repo, message, claim_index, run_key, "origin"
+            )
+        self.assertEqual(errors, [])
+        self.assertEqual(entries, [(issue, 2, guard)])
 
     def test_matching_proof_cannot_lift_active_pause(self) -> None:
         with tempfile.TemporaryDirectory(prefix="shipctl-") as directory:

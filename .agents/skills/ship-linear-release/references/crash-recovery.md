@@ -121,6 +121,10 @@ takeover атомарно снимает только user PAUSE и его index
    compact layout (`RUN_ID; RUN_KEY; ISSUE`, `OWNER; CLAIM`, `FEATURE`), но
    descendant fence всегда canonicalizes metadata; иная неоднозначная legacy
    форма остаётся fail-closed.
+   Fence authority берётся только из live-вектора `CLAIM_INDEX.active`.
+   `CLAIM_INDEX.entries` считает также quarantined/terminal provenance, а
+   terminal `CLAIM_MAP` rows остаются историей: ни то ни другое не создаёт
+   guard для fencing и не должно сравниваться с числом active guards.
    Если coherent contract fast-forward появился уже после fencing, не повторяй
    fence: на `route=recover-owner-upgrade` вызови idempotent
    `shipctl.py sync-contract`, затем продолжай прежнюю recovery phase.
