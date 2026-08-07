@@ -3981,45 +3981,12 @@ export class InMemoryRevisionMetadataStore
   #currentSitesAuthorizationState(
     query: AuthorizationStateQuery,
   ): AuthorizationState | null {
-    if (query.tokenId !== null) return null;
-    const principal = this.#principals.get(query.principalId);
-    const space = this.#knowledgeSpaces.get(query.spaceId);
-    if (!principal || !space) return null;
-    const matchingMemberships = [...this.#memberships.values()]
-      .filter(
-        (membership) =>
-          membership.principalId === query.principalId &&
-          membership.spaceId === query.spaceId,
-      )
-      .sort((left, right) => right.version - left.version);
-    const activeMemberships = matchingMemberships.filter(
-      (membership) => membership.state === "active",
+    return currentSitesAuthorizationStateFromMaps(
+      query,
+      this.#principals,
+      this.#knowledgeSpaces,
+      this.#memberships,
     );
-    if (activeMemberships.length > 1) return null;
-    const membership = activeMemberships[0] ?? matchingMemberships[0] ?? null;
-    return Object.freeze({
-      principal: Object.freeze({
-        principalId: principal.principalId,
-        state: principal.state,
-      }),
-      space: Object.freeze({
-        spaceId: space.spaceId,
-        state: space.state,
-        visibility: space.visibility,
-        accessVersion: space.accessVersion,
-      }),
-      membership:
-        membership === null
-          ? null
-          : Object.freeze({
-              principalId: membership.principalId,
-              spaceId: membership.spaceId,
-              role: membership.role,
-              state: membership.state,
-              version: membership.version,
-            }),
-      token: null,
-    });
   }
 
   async #runExclusive<Result>(operation: () => Promise<Result>): Promise<Result> {
