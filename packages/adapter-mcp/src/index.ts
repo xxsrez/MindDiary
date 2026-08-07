@@ -1,6 +1,11 @@
 import {
   CONTENT_COMMANDS,
   CONTENT_QUERIES,
+  MindBrowseFailure,
+  MindDiscoveryFailure,
+  MindHistoryFailure,
+  MindSearchFailure,
+  MindValidationFailure,
   type McpBearerAuthenticationResult,
   type McpBearerAuthenticator,
 } from "@mind-diary/application-content";
@@ -40,6 +45,34 @@ const JSON_SCHEMA_2020_12 = "https://json-schema.org/draft/2020-12/schema";
 const NON_EMPTY_STRING_SCHEMA = Object.freeze({
   type: "string",
   minLength: 1,
+});
+
+const OPAQUE_ID_SCHEMA = Object.freeze({
+  type: "string",
+  minLength: 1,
+  maxLength: 512,
+  pattern: "^[^\\u0000-\\u001f\\u007f]+$",
+});
+
+const PAGE_LIMIT_SCHEMA = Object.freeze({
+  type: "integer",
+  minimum: 1,
+  maximum: 100,
+});
+
+const MIND_SELECTOR_SCHEMA = Object.freeze({
+  type: "string",
+  minLength: 1,
+  maxLength: 512,
+  description:
+    "Exactly one Mind: /me, an exact canonical handle, or a server-issued opaque mind_id.",
+});
+
+const HANDLE_SCHEMA = Object.freeze({
+  type: "string",
+  minLength: 3,
+  maxLength: 63,
+  pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$",
 });
 
 const SHA256_SCHEMA = Object.freeze({
@@ -117,17 +150,560 @@ function toolOutputSchema(data: Readonly<Record<string, unknown>>) {
 
 const REVISION_DESCRIPTOR_SCHEMA = Object.freeze({
   type: "object",
-  additionalProperties: true,
-  required: Object.freeze(["revision_id"]),
+  additionalProperties: false,
+  required: Object.freeze([
+    "revision_id",
+    "revision_number",
+    "parent_revision_id",
+    "committed_at",
+    "committed_by",
+    "summary",
+    "manifest_hash",
+    "is_head",
+  ]),
   properties: Object.freeze({
-    revision_id: NON_EMPTY_STRING_SCHEMA,
+    revision_id: OPAQUE_ID_SCHEMA,
     revision_number: Object.freeze({ type: "integer", minimum: 1 }),
     parent_revision_id: Object.freeze({
       type: Object.freeze(["string", "null"]),
     }),
     committed_at: Object.freeze({ type: "string", format: "date-time" }),
+    committed_by: Object.freeze({
+      type: "object",
+      additionalProperties: false,
+      required: Object.freeze(["kind", "id"]),
+      properties: Object.freeze({
+        kind: Object.freeze({
+          type: "string",
+          enum: Object.freeze(["principal", "deleted-principal"]),
+        }),
+        id: OPAQUE_ID_SCHEMA,
+        display_name: NON_EMPTY_STRING_SCHEMA,
+      }),
+    }),
+    summary: Object.freeze({ type: "string" }),
+    manifest_hash: SHA256_SCHEMA,
+    is_head: Object.freeze({ type: "boolean" }),
   }),
 });
+
+const CONTENT_CAPABILITY_SCHEMA = Object.freeze({
+  type: "string",
+  enum: Object.freeze(["content:read", "content:write"]),
+});
+
+const MIND_DESCRIPTOR_SCHEMA = Object.freeze({
+  type: "object",
+  additionalProperties: false,
+  required: Object.freeze([
+    "mind_id",
+    "route",
+    "handle",
+    "name",
+    "is_personal",
+    "visibility",
+    "discovery",
+    "access",
+    "metadata_version",
+    "head",
+  ]),
+  properties: Object.freeze({
+    mind_id: OPAQUE_ID_SCHEMA,
+    route: NON_EMPTY_STRING_SCHEMA,
+    handle: Object.freeze({ type: Object.freeze(["string", "null"]) }),
+    name: NON_EMPTY_STRING_SCHEMA,
+    is_personal: Object.freeze({ type: "boolean" }),
+    visibility: Object.freeze({
+      type: "string",
+      enum: Object.freeze(["private", "unlisted", "public"]),
+    }),
+    discovery: Object.freeze({
+      type: "string",
+      enum: Object.freeze([
+        "personal",
+        "membership",
+        "public_catalog",
+        "exact_handle",
+      ]),
+    }),
+    access: Object.freeze({
+      type: "object",
+      additionalProperties: false,
+      required: Object.freeze(["kind", "role", "capabilities"]),
+      properties: Object.freeze({
+        kind: Object.freeze({
+          type: "string",
+          enum: Object.freeze(["membership", "visibility"]),
+        }),
+        role: Object.freeze({
+          type: Object.freeze(["string", "null"]),
+          enum: Object.freeze(["reader", "editor", "admin", "owner", null]),
+        }),
+        capabilities: Object.freeze({
+          type: "array",
+          uniqueItems: true,
+          items: CONTENT_CAPABILITY_SCHEMA,
+        }),
+      }),
+    }),
+    metadata_version: Object.freeze({ type: "integer", minimum: 1 }),
+    head: REVISION_DESCRIPTOR_SCHEMA,
+  }),
+});
+
+const ENTRY_SUMMARY_SCHEMA = Object.freeze({
+  type: "object",
+  additionalProperties: false,
+  required: Object.freeze([
+    "entry_id",
+    "resource_uri",
+    "path",
+    "kind",
+    "title",
+    "description",
+    "tags",
+    "mime_type",
+    "revision_id",
+    "sha256",
+    "size",
+  ]),
+  properties: Object.freeze({
+    entry_id: OPAQUE_ID_SCHEMA,
+    resource_uri: Object.freeze({ type: "string", format: "uri" }),
+    path: NON_EMPTY_STRING_SCHEMA,
+    kind: Object.freeze({
+      type: "string",
+      enum: Object.freeze(["concept", "index", "log"]),
+    }),
+    title: Object.freeze({ type: "string" }),
+    description: Object.freeze({ type: Object.freeze(["string", "null"]) }),
+    tags: Object.freeze({ type: "array", items: Object.freeze({ type: "string" }) }),
+    mime_type: Object.freeze({ const: "text/markdown; charset=utf-8" }),
+    revision_id: OPAQUE_ID_SCHEMA,
+    sha256: SHA256_SCHEMA,
+    size: Object.freeze({ type: "integer", minimum: 0 }),
+    okf_type: Object.freeze({ type: Object.freeze(["string", "null"]) }),
+  }),
+});
+
+function strictInputSchema(
+  properties: Readonly<Record<string, unknown>>,
+  required: readonly string[] = [],
+) {
+  return Object.freeze({
+    $schema: JSON_SCHEMA_2020_12,
+    type: "object",
+    additionalProperties: false,
+    ...(required.length === 0 ? {} : { required: Object.freeze([...required]) }),
+    properties: Object.freeze(properties),
+  });
+}
+
+const LIST_MINDS_INPUT_SCHEMA = strictInputSchema({
+  cursor: OPAQUE_ID_SCHEMA,
+  limit: PAGE_LIMIT_SCHEMA,
+});
+
+const RESOLVE_MIND_INPUT_SCHEMA = strictInputSchema(
+  { handle: HANDLE_SCHEMA },
+  ["handle"],
+);
+
+const GET_MIND_INFO_INPUT_SCHEMA = strictInputSchema(
+  {
+    mind: MIND_SELECTOR_SCHEMA,
+    revision_selector: REVISION_SELECTOR_SCHEMA,
+  },
+  ["mind"],
+);
+
+const BROWSE_ENTRIES_INPUT_SCHEMA = strictInputSchema(
+  {
+    mind: MIND_SELECTOR_SCHEMA,
+    revision_selector: REVISION_SELECTOR_SCHEMA,
+    path: Object.freeze({ type: "string", maxLength: 1_024 }),
+    cursor: OPAQUE_ID_SCHEMA,
+    limit: PAGE_LIMIT_SCHEMA,
+  },
+  ["mind"],
+);
+
+const SEARCH_INPUT_SCHEMA = strictInputSchema(
+  {
+    mind: MIND_SELECTOR_SCHEMA,
+    revision_selector: REVISION_SELECTOR_SCHEMA,
+    query: Object.freeze({ type: "string", minLength: 1, maxLength: 1_024 }),
+    cursor: OPAQUE_ID_SCHEMA,
+    limit: PAGE_LIMIT_SCHEMA,
+  },
+  ["mind", "query"],
+);
+
+const FETCH_INPUT_SCHEMA = strictInputSchema({ id: OPAQUE_ID_SCHEMA }, ["id"]);
+
+const LIST_REVISIONS_INPUT_SCHEMA = strictInputSchema(
+  {
+    mind: MIND_SELECTOR_SCHEMA,
+    before: OPAQUE_ID_SCHEMA,
+    limit: PAGE_LIMIT_SCHEMA,
+  },
+  ["mind"],
+);
+
+const GET_REVISION_INPUT_SCHEMA = strictInputSchema(
+  { mind: MIND_SELECTOR_SCHEMA, revision_id: OPAQUE_ID_SCHEMA },
+  ["mind", "revision_id"],
+);
+
+const VALIDATE_MIND_INPUT_SCHEMA = strictInputSchema(
+  {
+    mind: MIND_SELECTOR_SCHEMA,
+    revision_selector: REVISION_SELECTOR_SCHEMA,
+  },
+  ["mind"],
+);
+
+const LIST_MINDS_OUTPUT_SCHEMA = toolOutputSchema(
+  Object.freeze({
+    type: "object",
+    additionalProperties: false,
+    required: Object.freeze(["minds", "next_cursor"]),
+    properties: Object.freeze({
+      minds: Object.freeze({ type: "array", items: MIND_DESCRIPTOR_SCHEMA }),
+      next_cursor: Object.freeze({ type: Object.freeze(["string", "null"]) }),
+    }),
+  }),
+);
+
+const RESOLVE_MIND_OUTPUT_SCHEMA = toolOutputSchema(
+  Object.freeze({
+    type: "object",
+    additionalProperties: false,
+    required: Object.freeze(["mind"]),
+    properties: Object.freeze({ mind: MIND_DESCRIPTOR_SCHEMA }),
+  }),
+);
+
+const GET_MIND_INFO_OUTPUT_SCHEMA = toolOutputSchema(
+  Object.freeze({
+    type: "object",
+    additionalProperties: false,
+    required: Object.freeze([
+      "mind",
+      "resolved_revision",
+      "revision_mode",
+      "content_capabilities",
+    ]),
+    properties: Object.freeze({
+      mind: MIND_DESCRIPTOR_SCHEMA,
+      resolved_revision: REVISION_DESCRIPTOR_SCHEMA,
+      revision_mode: Object.freeze({
+        type: "string",
+        enum: Object.freeze(["head", "historical"]),
+      }),
+      content_capabilities: Object.freeze({
+        type: "array",
+        uniqueItems: true,
+        items: Object.freeze({
+          type: "string",
+          enum: Object.freeze([
+            "browse",
+            "search",
+            "fetch",
+            "history",
+            "validate",
+            "export",
+            "commit",
+          ]),
+        }),
+      }),
+    }),
+  }),
+);
+
+const BROWSE_ENTRIES_OUTPUT_SCHEMA = toolOutputSchema(
+  Object.freeze({
+    type: "object",
+    additionalProperties: false,
+    required: Object.freeze([
+      "mind",
+      "resolved_revision",
+      "path",
+      "entries",
+      "next_cursor",
+    ]),
+    properties: Object.freeze({
+      mind: MIND_DESCRIPTOR_SCHEMA,
+      resolved_revision: REVISION_DESCRIPTOR_SCHEMA,
+      path: Object.freeze({ type: "string" }),
+      entries: Object.freeze({ type: "array", items: ENTRY_SUMMARY_SCHEMA }),
+      next_cursor: Object.freeze({ type: Object.freeze(["string", "null"]) }),
+    }),
+  }),
+);
+
+const SEARCH_OUTPUT_SCHEMA = toolOutputSchema(
+  Object.freeze({
+    type: "object",
+    additionalProperties: false,
+    required: Object.freeze([
+      "mind",
+      "resolved_revision",
+      "results",
+      "next_cursor",
+      "index_status",
+    ]),
+    properties: Object.freeze({
+      mind: MIND_DESCRIPTOR_SCHEMA,
+      resolved_revision: REVISION_DESCRIPTOR_SCHEMA,
+      results: Object.freeze({
+        type: "array",
+        items: Object.freeze({
+          type: "object",
+          additionalProperties: false,
+          required: Object.freeze(["entry", "score", "snippet", "matched_fields"]),
+          properties: Object.freeze({
+            entry: ENTRY_SUMMARY_SCHEMA,
+            score: Object.freeze({ type: "number" }),
+            snippet: Object.freeze({ type: "string" }),
+            matched_fields: Object.freeze({
+              type: "array",
+              uniqueItems: true,
+              items: Object.freeze({
+                type: "string",
+                enum: Object.freeze([
+                  "title",
+                  "description",
+                  "tags",
+                  "headings",
+                  "body",
+                ]),
+              }),
+            }),
+          }),
+        }),
+      }),
+      next_cursor: Object.freeze({ type: Object.freeze(["string", "null"]) }),
+      index_status: Object.freeze({ const: "ready" }),
+    }),
+  }),
+);
+
+const FETCH_OUTPUT_SCHEMA = toolOutputSchema(
+  Object.freeze({
+    type: "object",
+    additionalProperties: false,
+    required: Object.freeze(["fetched"]),
+    properties: Object.freeze({
+      fetched: Object.freeze({
+        type: "object",
+        additionalProperties: false,
+        required: Object.freeze([
+          "entry",
+          "text",
+          "truncated",
+          "continuation_id",
+        ]),
+        properties: Object.freeze({
+          entry: ENTRY_SUMMARY_SCHEMA,
+          text: Object.freeze({ type: "string" }),
+          truncated: Object.freeze({ type: "boolean" }),
+          continuation_id: Object.freeze({
+            type: Object.freeze(["string", "null"]),
+          }),
+        }),
+      }),
+    }),
+  }),
+);
+
+const REVISION_MANIFEST_SUMMARY_SCHEMA = Object.freeze({
+  type: "object",
+  additionalProperties: false,
+  required: Object.freeze(["file_count", "total_bytes"]),
+  properties: Object.freeze({
+    file_count: Object.freeze({ type: "integer", minimum: 0 }),
+    total_bytes: Object.freeze({ type: "integer", minimum: 0 }),
+  }),
+});
+
+const LIST_REVISIONS_OUTPUT_SCHEMA = toolOutputSchema(
+  Object.freeze({
+    type: "object",
+    additionalProperties: false,
+    required: Object.freeze(["mind", "revisions", "next_before"]),
+    properties: Object.freeze({
+      mind: MIND_DESCRIPTOR_SCHEMA,
+      revisions: Object.freeze({
+        type: "array",
+        items: Object.freeze({
+          type: "object",
+          additionalProperties: false,
+          required: Object.freeze(["revision", "manifest_summary"]),
+          properties: Object.freeze({
+            revision: REVISION_DESCRIPTOR_SCHEMA,
+            manifest_summary: REVISION_MANIFEST_SUMMARY_SCHEMA,
+          }),
+        }),
+      }),
+      next_before: Object.freeze({ type: Object.freeze(["string", "null"]) }),
+    }),
+  }),
+);
+
+const GET_REVISION_OUTPUT_SCHEMA = toolOutputSchema(
+  Object.freeze({
+    type: "object",
+    additionalProperties: false,
+    required: Object.freeze(["mind", "revision", "manifest_summary"]),
+    properties: Object.freeze({
+      mind: MIND_DESCRIPTOR_SCHEMA,
+      revision: REVISION_DESCRIPTOR_SCHEMA,
+      manifest_summary: REVISION_MANIFEST_SUMMARY_SCHEMA,
+    }),
+  }),
+);
+
+const VALIDATION_ISSUE_SCHEMA = Object.freeze({
+  type: "object",
+  additionalProperties: false,
+  required: Object.freeze(["severity", "class", "code", "path", "message"]),
+  properties: Object.freeze({
+    severity: Object.freeze({
+      type: "string",
+      enum: Object.freeze(["error", "warning"]),
+    }),
+    class: Object.freeze({
+      type: "string",
+      enum: Object.freeze(["conformance", "quality"]),
+    }),
+    code: NON_EMPTY_STRING_SCHEMA,
+    path: Object.freeze({ type: "string" }),
+    line: Object.freeze({ type: "integer", minimum: 1 }),
+    field: NON_EMPTY_STRING_SCHEMA,
+    message: NON_EMPTY_STRING_SCHEMA,
+  }),
+});
+
+const VALIDATE_MIND_OUTPUT_SCHEMA = toolOutputSchema(
+  Object.freeze({
+    type: "object",
+    additionalProperties: false,
+    required: Object.freeze([
+      "mind",
+      "resolved_revision",
+      "valid",
+      "conformance_errors",
+      "quality_warnings",
+      "validated_okf_version",
+    ]),
+    properties: Object.freeze({
+      mind: MIND_DESCRIPTOR_SCHEMA,
+      resolved_revision: REVISION_DESCRIPTOR_SCHEMA,
+      valid: Object.freeze({ type: "boolean" }),
+      conformance_errors: Object.freeze({
+        type: "array",
+        items: VALIDATION_ISSUE_SCHEMA,
+      }),
+      quality_warnings: Object.freeze({
+        type: "array",
+        items: VALIDATION_ISSUE_SCHEMA,
+      }),
+      validated_okf_version: Object.freeze({ const: "0.2" }),
+    }),
+  }),
+);
+
+const READ_ONLY_ANNOTATIONS = Object.freeze({
+  readOnlyHint: true,
+  destructiveHint: false,
+  openWorldHint: false,
+});
+
+/** Canonical deterministic definitions for read-only Mind content tools. */
+export const MCP_READ_TOOL_DEFINITIONS = Object.freeze([
+  Object.freeze({
+    name: "list_minds",
+    title: "List accessible Minds",
+    description:
+      "List the authenticated principal's Personal Mind, accepted memberships, and public catalog entries without enumerating private or unlisted Minds.",
+    inputSchema: LIST_MINDS_INPUT_SCHEMA,
+    outputSchema: LIST_MINDS_OUTPUT_SCHEMA,
+    annotations: READ_ONLY_ANNOTATIONS,
+  }),
+  Object.freeze({
+    name: "resolve_mind",
+    title: "Resolve an exact Mind handle",
+    description:
+      "Resolve one exact canonical handle to an authorized Mind descriptor; missing and private Minds remain indistinguishable.",
+    inputSchema: RESOLVE_MIND_INPUT_SCHEMA,
+    outputSchema: RESOLVE_MIND_OUTPUT_SCHEMA,
+    annotations: READ_ONLY_ANNOTATIONS,
+  }),
+  Object.freeze({
+    name: "get_mind_info",
+    title: "Get exact Mind revision info",
+    description:
+      "Resolve one explicit Mind and HEAD, exact revision, or as-of selector to a single immutable revision and its current content capabilities.",
+    inputSchema: GET_MIND_INFO_INPUT_SCHEMA,
+    outputSchema: GET_MIND_INFO_OUTPUT_SCHEMA,
+    annotations: READ_ONLY_ANNOTATIONS,
+  }),
+  Object.freeze({
+    name: "browse_entries",
+    title: "Browse one Mind revision",
+    description:
+      "Browse manifest and frontmatter summaries inside one explicit Mind and one resolved revision without loading every entry body.",
+    inputSchema: BROWSE_ENTRIES_INPUT_SCHEMA,
+    outputSchema: BROWSE_ENTRIES_OUTPUT_SCHEMA,
+    annotations: READ_ONLY_ANNOTATIONS,
+  }),
+  Object.freeze({
+    name: "search",
+    title: "Search one Mind revision",
+    description:
+      "Run lexical search only inside one explicit Mind and one resolved revision; this tool never performs implicit cross-Mind search or HEAD fallback.",
+    inputSchema: SEARCH_INPUT_SCHEMA,
+    outputSchema: SEARCH_OUTPUT_SCHEMA,
+    annotations: READ_ONLY_ANNOTATIONS,
+  }),
+  Object.freeze({
+    name: "fetch",
+    title: "Fetch an exact entry",
+    description:
+      "Fetch Markdown through a server-issued opaque entry or continuation ID fixed to one Mind, immutable revision, path, and byte range.",
+    inputSchema: FETCH_INPUT_SCHEMA,
+    outputSchema: FETCH_OUTPUT_SCHEMA,
+    annotations: READ_ONLY_ANNOTATIONS,
+  }),
+  Object.freeze({
+    name: "list_revisions",
+    title: "List Mind revisions",
+    description:
+      "List immutable revisions for one explicit Mind in descending revision order after checking current access.",
+    inputSchema: LIST_REVISIONS_INPUT_SCHEMA,
+    outputSchema: LIST_REVISIONS_OUTPUT_SCHEMA,
+    annotations: READ_ONLY_ANNOTATIONS,
+  }),
+  Object.freeze({
+    name: "get_revision",
+    title: "Get an exact Mind revision",
+    description:
+      "Read one exact immutable revision and safe manifest summary for one explicit Mind; historical reads remain read-only.",
+    inputSchema: GET_REVISION_INPUT_SCHEMA,
+    outputSchema: GET_REVISION_OUTPUT_SCHEMA,
+    annotations: READ_ONLY_ANNOTATIONS,
+  }),
+  Object.freeze({
+    name: "validate_mind",
+    title: "Validate one Mind revision",
+    description:
+      "Validate the complete OKF bundle for one explicit Mind and resolved revision, separating conformance errors from quality warnings.",
+    inputSchema: VALIDATE_MIND_INPUT_SCHEMA,
+    outputSchema: VALIDATE_MIND_OUTPUT_SCHEMA,
+    annotations: READ_ONLY_ANNOTATIONS,
+  }),
+] as const);
 
 const EXPORT_JOB_STATE_SCHEMA = Object.freeze({
   type: "string",
@@ -357,11 +933,17 @@ export const MCP_COMMIT_EXPORT_TOOL_DEFINITIONS = Object.freeze([
   }),
 ] as const);
 
-const COMMIT_EXPORT_DEFINITION_BY_NAME: ReadonlyMap<
+/** Complete canonical tool catalog in the exact order advertised by tools/list. */
+export const MCP_TOOL_DEFINITIONS = Object.freeze([
+  ...MCP_READ_TOOL_DEFINITIONS,
+  ...MCP_COMMIT_EXPORT_TOOL_DEFINITIONS,
+] as const);
+
+const CANONICAL_DEFINITION_BY_NAME: ReadonlyMap<
   string,
   Readonly<Record<string, unknown>>
 > = new Map(
-  MCP_COMMIT_EXPORT_TOOL_DEFINITIONS.map((definition) => [
+  MCP_TOOL_DEFINITIONS.map((definition) => [
     definition.name,
     definition,
   ]),
@@ -373,12 +955,143 @@ export const MCP_RESOURCE_CAPABILITIES = [
   "resources/templates/list-empty",
 ] as const;
 
+export const MCP_ADVERTISED_CAPABILITIES = Object.freeze({
+  tools: Object.freeze({}),
+  resources: Object.freeze({}),
+});
+
+/** Security/product assertions for the custom Mind-aware MCP profile. */
+export const MCP_CUSTOM_PROFILE_GUARDRAILS = Object.freeze({
+  profile: "mind-diary-custom-mind-aware",
+  companyKnowledgeCompatible: false,
+  fetchToolRequiredFallback: true,
+  resourceUrisAreCapabilities: false,
+  resourceTemplatesPublished: false,
+  implicitPersonalization: false,
+  corpusSelectsMind: false,
+  corpusSelectsScopes: false,
+  controlToolsPublished: false,
+  allowedWritePromptInjectionRisk: "residual-explicit",
+});
+
+export interface McpResourceDescriptor {
+  readonly uri: string;
+  readonly name: string;
+  readonly title?: string;
+  readonly description?: string;
+  readonly mimeType: "text/markdown; charset=utf-8";
+}
+
+export interface McpRootResourcePage {
+  readonly resources: readonly Readonly<McpResourceDescriptor>[];
+  readonly nextCursor: string | null;
+}
+
+export interface McpImmutableResourceRead {
+  readonly uri: string;
+  readonly mimeType: "text/markdown; charset=utf-8";
+  readonly text: string;
+}
+
+export interface ParsedMcpResourceUri {
+  readonly kind: "index" | "entry";
+  readonly spaceId: string;
+  readonly revisionId: string;
+  readonly path: string;
+}
+
+const MCP_RESOURCE_URI_PREFIX = "okf://spaces/";
+const MCP_RESOURCE_URI_MAX_CHARACTERS = 4_096;
+const RESOURCE_ENCODED_SEPARATOR = /%(?:2f|5c)/iu;
+const RESOURCE_CONTROL_CHARACTER = /[\u0000-\u001f\u007f]/u;
+
+function encodeRfc3986Segment(value: string): string {
+  return encodeURIComponent(value).replace(/[!'()*]/gu, (character) =>
+    `%${character.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
+}
+
+function decodeCanonicalResourceSegment(value: string): string | null {
+  if (value.length === 0 || RESOURCE_ENCODED_SEPARATOR.test(value)) return null;
+  try {
+    const decoded = decodeURIComponent(value);
+    if (
+      decoded.length === 0 ||
+      decoded === "." ||
+      decoded === ".." ||
+      decoded.includes("/") ||
+      decoded.includes("\\") ||
+      RESOURCE_ENCODED_SEPARATOR.test(decoded) ||
+      RESOURCE_CONTROL_CHARACTER.test(decoded) ||
+      encodeRfc3986Segment(decoded) !== value
+    ) {
+      return null;
+    }
+    return decoded;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Parses the one exact token-free resource URI grammar. Re-encoding every
+ * decoded segment prevents encoded-once, case, separator, and path ambiguity.
+ */
+export function parseMcpResourceUri(value: unknown): ParsedMcpResourceUri | null {
+  if (
+    typeof value !== "string" ||
+    value.length === 0 ||
+    value.length > MCP_RESOURCE_URI_MAX_CHARACTERS ||
+    !value.startsWith(MCP_RESOURCE_URI_PREFIX) ||
+    value.includes("?") ||
+    value.includes("#")
+  ) {
+    return null;
+  }
+  const segments = value.slice(MCP_RESOURCE_URI_PREFIX.length).split("/");
+  if (segments.length < 4 || segments[1] !== "revisions") return null;
+  const spaceId = decodeCanonicalResourceSegment(segments[0]!);
+  const revisionId = decodeCanonicalResourceSegment(segments[2]!);
+  if (spaceId === null || revisionId === null) return null;
+
+  if (segments.length === 4 && segments[3] === "index") {
+    return Object.freeze({
+      kind: "index",
+      spaceId,
+      revisionId,
+      path: "index.md",
+    });
+  }
+  if (segments[3] !== "entries" || segments.length < 5) return null;
+  const pathSegments = segments.slice(4).map(decodeCanonicalResourceSegment);
+  if (pathSegments.some((segment) => segment === null)) return null;
+  const path = (pathSegments as string[]).join("/");
+  if (
+    path === "index.md" ||
+    !path.endsWith(".md") ||
+    path.startsWith("/") ||
+    RESOURCE_ENCODED_SEPARATOR.test(path)
+  ) {
+    return null;
+  }
+  return Object.freeze({ kind: "entry", spaceId, revisionId, path });
+}
+
+function isRootIndexResourceUri(value: unknown): value is string {
+  return parseMcpResourceUri(value)?.kind === "index";
+}
+
 type McpAuthenticatedActor = Extract<
   McpBearerAuthenticationResult,
   { readonly kind: "authenticated" }
 >["actor"];
 type McpRequestId = Parameters<McpBearerAuthenticator["authenticate"]>[1];
 type McpToolName = (typeof MCP_CONTENT_TOOLS)[number];
+type McpReadToolName = (typeof MCP_READ_TOOL_DEFINITIONS)[number]["name"];
+
+const MCP_READ_TOOL_NAMES: ReadonlySet<string> = new Set(
+  MCP_READ_TOOL_DEFINITIONS.map((definition) => definition.name),
+);
 
 export interface McpRequestIdGenerator {
   nextRequestId(): McpRequestId;
@@ -397,6 +1110,16 @@ export interface McpContentApplication {
   listTools(request: {
     readonly actor: McpAuthenticatedActor;
   }): Promise<readonly Readonly<Record<string, unknown>>[]>;
+  /** Enumerates only authorized Personal/accepted-membership root index resources. */
+  listRootResources(request: {
+    readonly actor: McpAuthenticatedActor;
+    readonly cursor?: string;
+  }): Promise<Readonly<McpRootResourcePage>>;
+  /** Reauthorizes current access and reads one exact immutable Markdown resource. */
+  readResource(request: {
+    readonly actor: McpAuthenticatedActor;
+    readonly uri: string;
+  }): Promise<Readonly<McpImmutableResourceRead>>;
   /** Resolves the target and reads current Authorizer state for every call. */
   authorizeToolCall(request: {
     readonly actor: McpAuthenticatedActor;
@@ -764,6 +1487,127 @@ export function createMcpToolErrorResult(
   });
 }
 
+function isReadToolName(name: McpToolName): name is McpReadToolName {
+  return MCP_READ_TOOL_NAMES.has(name);
+}
+
+function readToolSuccessMessage(name: McpReadToolName): string {
+  switch (name) {
+    case "list_minds":
+      return "Listed accessible Minds.";
+    case "resolve_mind":
+      return "Resolved the Mind.";
+    case "get_mind_info":
+      return "Resolved the Mind and revision.";
+    case "browse_entries":
+      return "Browsed entries in the resolved Mind revision.";
+    case "search":
+      return "Searched the resolved Mind revision.";
+    case "fetch":
+      return "Fetched the exact entry revision.";
+    case "list_revisions":
+      return "Listed Mind revisions.";
+    case "get_revision":
+      return "Fetched the exact Mind revision.";
+    case "validate_mind":
+      return "Validated the complete Mind revision.";
+  }
+}
+
+function normalizeReadToolExecutionResult(
+  name: McpReadToolName,
+  value: unknown,
+): Readonly<Record<string, unknown>> {
+  if (
+    !isRecord(value) ||
+    value.resultType !== "complete" ||
+    !isRecord(value.structuredContent) ||
+    typeof value.isError !== "boolean"
+  ) {
+    return createMcpToolSuccessResult(value, readToolSuccessMessage(name));
+  }
+  if (Array.isArray(value.content)) return value;
+  return Object.freeze({
+    ...value,
+    content: Object.freeze([
+      Object.freeze({
+        type: "text" as const,
+        text: value.isError ? "The tool call failed." : readToolSuccessMessage(name),
+      }),
+    ]),
+  });
+}
+
+interface SafeReadToolFailure {
+  readonly code: string;
+  readonly message: string;
+  readonly retryable: boolean;
+}
+
+function readFailureMessage(code: string): string {
+  switch (code) {
+    case "authentication_required":
+      return "Authentication is required.";
+    case "forbidden":
+      return "The requested operation is not allowed.";
+    case "mind_not_found":
+      return "Mind was not found.";
+    case "revision_not_found":
+      return "Revision was not found.";
+    case "locator_not_found":
+    case "resource_not_found":
+      return "The requested entry was not found.";
+    case "search_index_unavailable":
+      return "Search is unavailable for the exact requested revision.";
+    case "discovery_unavailable":
+      return "Mind discovery is unavailable.";
+    case "revision_integrity_failure":
+      return "The exact revision could not be materialized safely.";
+    case "read_conflict":
+      return "The Mind changed while it was being read; retry the call.";
+    case "invalid_cursor":
+      return "The pagination cursor is invalid.";
+    case "invalid_limit":
+      return "The page limit is invalid.";
+    case "invalid_path":
+      return "The content path is invalid.";
+    case "invalid_fetch_budget":
+      return "The fetch response budget is invalid.";
+    case "invalid_mind_selector":
+      return "The Mind selector is invalid.";
+    case "invalid_revision_selector":
+      return "The revision selector is invalid.";
+    case "invalid_query":
+      return "The query is invalid.";
+    case "invalid_request":
+    default:
+      return "The tool arguments are invalid.";
+  }
+}
+
+function safeReadToolFailure(error: unknown): SafeReadToolFailure | null {
+  if (
+    !(
+      error instanceof MindDiscoveryFailure ||
+      error instanceof MindBrowseFailure ||
+      error instanceof MindHistoryFailure ||
+      error instanceof MindSearchFailure ||
+      error instanceof MindValidationFailure
+    )
+  ) {
+    return null;
+  }
+  const retryable =
+    "retryable" in error
+      ? error.retryable === true
+      : error.code === "discovery_unavailable";
+  return Object.freeze({
+    code: error.code,
+    message: readFailureMessage(error.code),
+    retryable,
+  });
+}
+
 function toolError(
   id: string | number | undefined,
   requestId: McpRequestId,
@@ -836,19 +1680,164 @@ function listedTools(
   actor: McpAuthenticatedActor,
   definitions: readonly Readonly<Record<string, unknown>>[],
 ): readonly Readonly<Record<string, unknown>>[] {
+  const available = new Set(
+    definitions.flatMap((definition) =>
+      typeof definition.name === "string" ? [definition.name] : [],
+    ),
+  );
   return Object.freeze(
-    definitions
-      .map((definition) => {
-        const name = definition.name;
-        return typeof name === "string"
-          ? (COMMIT_EXPORT_DEFINITION_BY_NAME.get(name) ?? definition)
-          : definition;
-      })
+    MCP_CONTENT_TOOLS
+      .filter((name) => available.has(name))
+      .map((name) => CANONICAL_DEFINITION_BY_NAME.get(name))
       .filter(
-        (definition) =>
-          isToolName(definition.name) &&
+        (definition): definition is Readonly<Record<string, unknown>> =>
+          definition !== undefined &&
           (definition.name !== "commit_changeset" || tokenAllowsWrite(actor)),
       ),
+  );
+}
+
+type ResourceListParameters =
+  | { readonly kind: "valid"; readonly cursor?: string }
+  | { readonly kind: "invalid" };
+
+function resourceListParameters(
+  params: Readonly<Record<string, unknown>>,
+): ResourceListParameters {
+  if (Object.keys(params).some((key) => key !== "_meta" && key !== "cursor")) {
+    return Object.freeze({ kind: "invalid" });
+  }
+  if (params.cursor === undefined) return Object.freeze({ kind: "valid" });
+  if (
+    typeof params.cursor !== "string" ||
+    params.cursor.length === 0 ||
+    params.cursor.length > 4_096 ||
+    RESOURCE_CONTROL_CHARACTER.test(params.cursor)
+  ) {
+    return Object.freeze({ kind: "invalid" });
+  }
+  return Object.freeze({ kind: "valid", cursor: params.cursor });
+}
+
+function exactResourceReadUri(
+  params: Readonly<Record<string, unknown>>,
+): string | null {
+  const keys = Object.keys(params).sort();
+  if (
+    keys.length !== 2 ||
+    keys[0] !== "_meta" ||
+    keys[1] !== "uri" ||
+    parseMcpResourceUri(params.uri) === null
+  ) {
+    return null;
+  }
+  return params.uri as string;
+}
+
+function validSafeResourceText(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= 1_024 &&
+    !RESOURCE_CONTROL_CHARACTER.test(value)
+  );
+}
+
+function normalizedRootResourcePage(
+  value: unknown,
+): Readonly<McpRootResourcePage> | null {
+  if (
+    !isRecord(value) ||
+    !Array.isArray(value.resources) ||
+    (value.nextCursor !== null &&
+      (typeof value.nextCursor !== "string" ||
+        value.nextCursor.length === 0 ||
+        value.nextCursor.length > 4_096 ||
+        RESOURCE_CONTROL_CHARACTER.test(value.nextCursor)))
+  ) {
+    return null;
+  }
+  const resources: McpResourceDescriptor[] = [];
+  const seen = new Set<string>();
+  for (const candidate of value.resources) {
+    if (
+      !isRecord(candidate) ||
+      !isRootIndexResourceUri(candidate.uri) ||
+      !validSafeResourceText(candidate.name) ||
+      candidate.mimeType !== "text/markdown; charset=utf-8" ||
+      (candidate.title !== undefined && !validSafeResourceText(candidate.title)) ||
+      (candidate.description !== undefined &&
+        !validSafeResourceText(candidate.description)) ||
+      seen.has(candidate.uri)
+    ) {
+      return null;
+    }
+    seen.add(candidate.uri);
+    resources.push(
+      Object.freeze({
+        uri: candidate.uri,
+        name: candidate.name,
+        ...(candidate.title === undefined ? {} : { title: candidate.title }),
+        ...(candidate.description === undefined
+          ? {}
+          : { description: candidate.description }),
+        mimeType: candidate.mimeType,
+      }),
+    );
+  }
+  resources.sort((left, right) =>
+    left.uri < right.uri ? -1 : left.uri > right.uri ? 1 : 0,
+  );
+  return Object.freeze({
+    resources: Object.freeze(resources),
+    nextCursor: value.nextCursor,
+  });
+}
+
+function normalizedResourceRead(
+  expectedUri: string,
+  value: unknown,
+): Readonly<McpImmutableResourceRead> | null {
+  if (
+    !isRecord(value) ||
+    value.uri !== expectedUri ||
+    parseMcpResourceUri(value.uri) === null ||
+    value.mimeType !== "text/markdown; charset=utf-8" ||
+    typeof value.text !== "string"
+  ) {
+    return null;
+  }
+  return Object.freeze({
+    uri: value.uri,
+    mimeType: value.mimeType,
+    text: value.text,
+  });
+}
+
+function resourceNotFoundResponse(
+  id: string | number | undefined,
+  format: McpResponseFormat,
+): Response {
+  const payload = {
+    jsonrpc: "2.0",
+    id: id ?? null,
+    error: { code: -32602, message: "Resource not found" },
+  };
+  if (format === "json") return jsonResponse(400, payload);
+  return new Response(`event: message\ndata: ${JSON.stringify(payload)}\n\n`, {
+    status: 400,
+    headers: {
+      "cache-control": "no-store",
+      "content-type": "text/event-stream; charset=utf-8",
+      "x-accel-buffering": "no",
+    },
+  });
+}
+
+function indistinguishableResourceNotFound(error: unknown): boolean {
+  return (
+    error instanceof MindBrowseFailure &&
+    error.code !== "revision_integrity_failure"
   );
 }
 
@@ -1020,6 +2009,147 @@ export function createMcpHttpHandler(
       return response;
     }
 
+    if (rpc.method === "resources/templates/list") {
+      if (
+        Object.keys(rpc.params).length !== 1 ||
+        !Object.hasOwn(rpc.params, "_meta")
+      ) {
+        const response = jsonRpcError(rpc.id, -32602, "Invalid params", 400);
+        await safeLog(
+          dependencies.logger,
+          request,
+          requestId,
+          response,
+          "protocol_error",
+        );
+        return response;
+      }
+      const response = jsonRpcResult(
+        rpc.id,
+        { resourceTemplates: Object.freeze([]) },
+        responseFormat,
+      );
+      await safeLog(
+        dependencies.logger,
+        request,
+        requestId,
+        response,
+        "authenticated",
+      );
+      return response;
+    }
+
+    if (rpc.method === "resources/list") {
+      const parameters = resourceListParameters(rpc.params);
+      if (parameters.kind === "invalid") {
+        const response = jsonRpcError(rpc.id, -32602, "Invalid params", 400);
+        await safeLog(
+          dependencies.logger,
+          request,
+          requestId,
+          response,
+          "protocol_error",
+        );
+        return response;
+      }
+      let response: Response;
+      try {
+        const listed = await dependencies.content.listRootResources({
+          actor,
+          ...(parameters.cursor === undefined
+            ? {}
+            : { cursor: parameters.cursor }),
+        });
+        const page = normalizedRootResourcePage(listed);
+        response =
+          page === null
+            ? jsonResponse(500, {
+                code: "internal_error",
+                request_id: requestId,
+              })
+            : jsonRpcResult(rpc.id, page, responseFormat);
+      } catch {
+        response = jsonResponse(500, {
+          code: "internal_error",
+          request_id: requestId,
+        });
+      }
+      await safeLog(
+        dependencies.logger,
+        request,
+        requestId,
+        response,
+        response.status === 200 || response.status === 202
+          ? "authenticated"
+          : "internal_error",
+      );
+      return response;
+    }
+
+    if (rpc.method === "resources/read") {
+      const uri = exactResourceReadUri(rpc.params);
+      if (uri === null) {
+        const response = resourceNotFoundResponse(rpc.id, responseFormat);
+        await safeLog(
+          dependencies.logger,
+          request,
+          requestId,
+          response,
+          "protocol_error",
+        );
+        return response;
+      }
+      let response: Response;
+      let outcome: McpSafeRequestLogEvent["outcome"];
+      try {
+        const read = normalizedResourceRead(
+          uri,
+          await dependencies.content.readResource({ actor, uri }),
+        );
+        if (read === null) {
+          response = jsonResponse(500, {
+            code: "internal_error",
+            request_id: requestId,
+          });
+          outcome = "internal_error";
+        } else {
+          response = jsonRpcResult(
+            rpc.id,
+            {
+              contents: Object.freeze([
+                Object.freeze({
+                  uri: read.uri,
+                  mimeType: read.mimeType,
+                  text: read.text,
+                }),
+              ]),
+            },
+            responseFormat,
+          );
+          outcome = "authenticated";
+        }
+      } catch (error) {
+        if (indistinguishableResourceNotFound(error)) {
+          response = resourceNotFoundResponse(rpc.id, responseFormat);
+          outcome = "protocol_error";
+        } else {
+          response = jsonResponse(500, {
+            code: "internal_error",
+            request_id: requestId,
+          });
+          outcome = "internal_error";
+        }
+      }
+      await safeLog(
+        dependencies.logger,
+        request,
+        requestId,
+        response,
+        outcome,
+      );
+      return response;
+    }
+
     if (rpc.method === "tools/list") {
       let response: Response;
       try {
@@ -1155,11 +2285,14 @@ export function createMcpHttpHandler(
     }
 
     try {
-      const result = await dependencies.content.executeToolCall({
+      const execution = await dependencies.content.executeToolCall({
         actor,
         name,
         arguments: toolArguments,
       });
+      const result = isReadToolName(name)
+        ? normalizeReadToolExecutionResult(name, execution)
+        : execution;
       const response = jsonRpcResult(rpc.id, result, responseFormat);
       await safeLog(
         dependencies.logger,
@@ -1169,7 +2302,28 @@ export function createMcpHttpHandler(
         "tool_completed",
       );
       return response;
-    } catch {
+    } catch (error) {
+      const safeFailure = isReadToolName(name)
+        ? safeReadToolFailure(error)
+        : null;
+      if (safeFailure !== null) {
+        const response = toolError(
+          rpc.id,
+          requestId,
+          safeFailure.code,
+          safeFailure.message,
+          responseFormat,
+          safeFailure.retryable,
+        );
+        await safeLog(
+          dependencies.logger,
+          request,
+          requestId,
+          response,
+          safeFailure.code === "forbidden" ? "tool_denied" : "tool_completed",
+        );
+        return response;
+      }
       const response = jsonResponse(500, {
         code: "internal_error",
         request_id: requestId,
