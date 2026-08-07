@@ -173,6 +173,7 @@ test("Owner exact-normalized invite creates one seven-day pending record without
   const env = harness();
   const owner = await createAccount(env, 1, "Owner Profile");
   const target = await createAccount(env, 2, "Registered Target");
+  await createAccount(env, 3, "Second Registered Target");
   const mind = await createMind(env, owner);
 
   const result = await env.invitations.createInvitation(
@@ -202,7 +203,34 @@ test("Owner exact-normalized invite creates one seven-day pending record without
   assert.equal(after.invitations.length, 1);
   assert.equal(after.invitations[0].targetPrincipalId, target.principalId);
   assert.equal(after.invitations[0].state, "pending");
-  assert.equal(after.space.metadataVersion, 1);
+  assert.equal(after.space.metadataVersion, 2);
+  assert.equal(after.space.accessVersion, 1);
+  assert.equal(after.space.updatedAt, INVITED_AT);
+  await assert.rejects(
+    env.invitations.createInvitation(
+      actor(owner.principalId, "request_stale_second_target"),
+      command(mind.mindId, 3, {
+        expectedMetadataVersion: 1,
+        idempotencyKey: "stale-second-target",
+      }),
+    ),
+    expectFailure("metadata_conflict"),
+  );
+  assert.deepEqual(await state(env, mind.mindId), after);
+  const deletionImpact = await env.metadata.runOrdinaryMindTransaction(
+    (transaction) =>
+      transaction.createOrdinaryMindDeletionImpact({
+        principalId: owner.principalId,
+        host: HOST,
+        handle: "shared-research",
+        impactId: "impact_invitation_visibility",
+        occurredAt: INVITED_AT,
+        expiresAt: "2026-08-07T05:20:00.000Z",
+      }),
+  );
+  assert.equal(deletionImpact.kind, "created");
+  assert.equal(deletionImpact.impact.invitationCount, 1);
+  assert.equal(deletionImpact.impact.metadataVersion, 2);
   assert.equal(
     await env.metadata.transferOrdinaryOwnershipForTest(
       mind.mindId,
@@ -222,6 +250,7 @@ test("Owner exact-normalized invite creates one seven-day pending record without
   assert.equal(targetAccess.code, "access_denied");
   assert.deepEqual(env.events, [
     { event: "invitation_created", requestId: "request_create_invitation" },
+    { event: "invitation_conflict", requestId: "request_stale_second_target" },
   ]);
 });
 
@@ -257,6 +286,7 @@ test("Admin can invite Reader or Editor, while Admin/Owner grants and non-admin 
       idempotencyKey: "admin-reader",
     }),
   );
+  current = await state(env, mind.mindId);
   const editorInvite = await env.invitations.createInvitation(
     actor(admin.principalId, "request_admin_editor"),
     command(mind.mindId, 4, {
@@ -265,6 +295,7 @@ test("Admin can invite Reader or Editor, while Admin/Owner grants and non-admin 
       idempotencyKey: "admin-editor",
     }),
   );
+  current = await state(env, mind.mindId);
   assert.equal(reader.proposedRole, "reader");
   assert.equal(editorInvite.proposedRole, "editor");
   const beforeDenied = await state(env, mind.mindId);
@@ -369,12 +400,13 @@ test("invalid or unknown exact emails, Personal Mind, active membership and dupl
       expectedMetadataVersion: withMember.space.metadataVersion,
     }),
   );
+  const afterInvited = await state(env, mind.mindId);
   await assert.rejects(
     env.invitations.createInvitation(
       actor(owner.principalId, "request_duplicate_pending"),
       command(mind.mindId, 2, {
         role: "editor",
-        expectedMetadataVersion: withMember.space.metadataVersion,
+        expectedMetadataVersion: afterInvited.space.metadataVersion,
         idempotencyKey: "different-pending-key",
       }),
     ),
@@ -387,12 +419,42 @@ test("invalid or unknown exact emails, Personal Mind, active membership and dupl
 
   const ownerAccount = await env.metadata.readAccount(owner.principalId);
   assert.ok(ownerAccount);
+  for (const [requestId, targetVerifiedEmail] of [
+    ["request_personal_existing_target", "private.target.2@example.com"],
+    ["request_personal_unknown_target", "unknown.registered@example.com"],
+  ]) {
+    await assert.rejects(
+      env.invitations.createInvitation(
+        actor(owner.principalId, requestId),
+        command(ownerAccount.personalMind.space.spaceId, 2, {
+          targetVerifiedEmail,
+          idempotencyKey: requestId,
+        }),
+      ),
+      expectFailure("personal_mind_operation_forbidden"),
+    );
+  }
+  assert.deepEqual(
+    await env.metadata.readAccount(owner.principalId),
+    ownerAccount,
+  );
   await assert.rejects(
     env.invitations.createInvitation(
-      actor(owner.principalId, "request_personal_invitation"),
-      command(ownerAccount.personalMind.space.spaceId, 2),
+      actor(owner.principalId, "request_foreign_personal"),
+      command(target.personalMind.mindId, 2, {
+        idempotencyKey: "foreign-personal",
+      }),
     ),
-    expectFailure("personal_mind_operation_forbidden"),
+    expectFailure("mind_not_found"),
+  );
+  await assert.rejects(
+    env.invitations.createInvitation(
+      actor(owner.principalId, "request_missing_mind"),
+      command("space_missing_invitation", 2, {
+        idempotencyKey: "missing-mind",
+      }),
+    ),
+    expectFailure("mind_not_found"),
   );
 });
 
@@ -451,20 +513,22 @@ test("stale metadata, idempotent retry and conflicting retry preserve one exact 
   assert.equal(final.invitations.length, 1);
   assert.equal(final.invitations[0].invitationId, created.invitationId);
   assert.equal(final.memberships.length, 1);
+  assert.equal(final.space.metadataVersion, 3);
 });
 
-test("concurrent duplicate-target invitations have one winner and no partial membership", async () => {
+test("concurrent distinct-target invitations at one metadata version have one CAS winner", async () => {
   const env = harness();
   const owner = await createAccount(env, 1);
   await createAccount(env, 2);
+  await createAccount(env, 3);
   const mind = await createMind(env, owner, "invitation-race");
 
   const outcomes = await Promise.allSettled(
-    Array.from({ length: 24 }, (_, index) =>
+    [2, 3].map((targetIndex) =>
       env.invitations.createInvitation(
-        actor(owner.principalId, `request_invitation_race_${index}`),
-        command(mind.mindId, 2, {
-          idempotencyKey: `invitation-race-${index}`,
+        actor(owner.principalId, `request_invitation_race_${targetIndex}`),
+        command(mind.mindId, targetIndex, {
+          idempotencyKey: `invitation-race-${targetIndex}`,
         }),
       ),
     ),
@@ -472,15 +536,16 @@ test("concurrent duplicate-target invitations have one winner and no partial mem
   const winners = outcomes.filter((outcome) => outcome.status === "fulfilled");
   const losers = outcomes.filter((outcome) => outcome.status === "rejected");
   assert.equal(winners.length, 1);
-  assert.equal(losers.length, 23);
+  assert.equal(losers.length, 1);
   for (const loser of losers) {
     assert.equal(loser.reason instanceof InvitationControlFailure, true);
-    assert.equal(loser.reason.code, "pending_invitation_exists");
+    assert.equal(loser.reason.code, "metadata_conflict");
   }
   const final = await state(env, mind.mindId);
   assert.equal(final.invitations.length, 1);
   assert.equal(final.invitations[0].invitationId, winners[0].value.invitationId);
   assert.equal(final.memberships.length, 1);
+  assert.equal(final.space.metadataVersion, 2);
 });
 
 test("injected transaction failures roll back invitation and idempotency, then exact retry succeeds", async () => {
@@ -515,6 +580,7 @@ test("injected transaction failures roll back invitation and idempotency, then e
     const final = await state(env, mind.mindId);
     assert.equal(final.invitations.length, 1);
     assert.equal(final.memberships.length, 1);
+    assert.equal(final.space.metadataVersion, 2);
   }
 });
 

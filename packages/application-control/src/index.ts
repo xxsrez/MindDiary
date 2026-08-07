@@ -2721,8 +2721,30 @@ export class InvitationControlService {
     }
 
     try {
+      const canonicalRequestHash = await this.#objects.calculateSha256(
+        PERSONAL_PROFILE_ENCODER.encode(`${JSON.stringify({
+          format: "mind-diary-create-invitation-v1",
+          mind_id: command.mindId,
+          target_verified_email: normalizedBinding,
+          proposed_role: proposedRole,
+          expected_metadata_version: expectedMetadataVersion,
+        })}\n`),
+      );
       const created = await this.#invitations.runOrdinaryMindTransaction(
         async (transaction) => {
+          const targetMind = await transaction.classifyPersonalMindTarget({
+            principalId: trustedActor.principalId,
+            spaceId: command.mindId,
+          });
+          if (targetMind.kind === "own_personal") {
+            throw new InvitationControlFailure(
+              "personal_mind_operation_forbidden",
+              "Personal Mind cannot have invitations.",
+            );
+          }
+          if (targetMind.kind === "not_found") {
+            throw new InvitationControlFailure("mind_not_found", "Mind was not found.");
+          }
           const authorization = await new CapabilityAuthorizer(
             transaction,
           ).authorize({
@@ -2753,15 +2775,6 @@ export class InvitationControlService {
               "Registered principal was not found.",
             );
           }
-          const canonicalRequestHash = await this.#objects.calculateSha256(
-            PERSONAL_PROFILE_ENCODER.encode(`${JSON.stringify({
-              format: "mind-diary-create-invitation-v1",
-              mind_id: command.mindId,
-              target_verified_email: normalizedBinding,
-              proposed_role: proposedRole,
-              expected_metadata_version: expectedMetadataVersion,
-            })}\n`),
-          );
           const invitationId = this.#ids.nextInvitationId();
           return transaction.createInvitation({
             principalId: trustedActor.principalId,

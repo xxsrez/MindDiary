@@ -24,6 +24,7 @@ export type DomainInvariantCode =
   | "invalid_record"
   | "duplicate_active_membership"
   | "duplicate_pending_invitation"
+  | "pending_invitation_for_active_member"
   | "ordinary_owner_count"
   | "personal_binding_mismatch"
   | "personal_visibility"
@@ -155,6 +156,12 @@ function validateCommon(
       );
     }
     if (invitation.state === "pending") {
+      if (activePrincipals.has(invitation.targetPrincipalId)) {
+        throw new DomainInvariantError(
+          "pending_invitation_for_active_member",
+          "an active Mind participant cannot also have a pending invitation",
+        );
+      }
       if (pendingTargets.has(invitation.targetPrincipalId)) {
         throw new DomainInvariantError(
           "duplicate_pending_invitation",
@@ -454,17 +461,47 @@ export class SpaceAggregate {
     });
   }
 
-  addInvitation(invitation: SpaceInvitation): SpaceAggregate {
+  addInvitation(input: {
+    readonly actorPrincipalId: PrincipalId;
+    readonly invitation: SpaceInvitation;
+    readonly expectedMetadataVersion: Version;
+    readonly occurredAt: UtcInstant;
+  }): SpaceAggregate {
     if (this.#kind !== "ordinary") {
       throw new DomainInvariantError(
         "personal_invitation",
         "Personal Mind cannot have invitations",
       );
     }
+    if (this.#space.state !== "active") {
+      throw new DomainInvariantError("space_not_active", "Mind is not active");
+    }
+    ensureVersion(this.#space.metadataVersion, input.expectedMetadataVersion, "Mind metadata");
+    const actorMembership = activeMembershipForPrincipal(
+      this.#memberships,
+      input.actorPrincipalId,
+    );
+    const capability =
+      input.invitation.proposedRole === "admin"
+        ? "members:manage-admin"
+        : "members:manage-basic";
+    if (
+      actorMembership === undefined ||
+      !roleHasCapability(actorMembership.role, capability)
+    ) {
+      throw new DomainInvariantError(
+        "settings_permission_required",
+        "current membership-management capability is required",
+      );
+    }
     return SpaceAggregate.restoreOrdinary({
-      space: this.#space,
+      space: {
+        ...this.#space,
+        metadataVersion: version(this.#space.metadataVersion + 1),
+        updatedAt: input.occurredAt,
+      },
       memberships: this.#memberships,
-      invitations: [...this.#invitations, invitation],
+      invitations: [...this.#invitations, input.invitation],
     });
   }
 

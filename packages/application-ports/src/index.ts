@@ -650,6 +650,10 @@ export type ChangeOrdinaryMindVisibilityResult =
     };
 
 export interface OrdinaryMindMetadataTransaction extends AuthorizationTransaction {
+  /** Classifies own/foreign Personal Minds before any target-identity lookup. */
+  classifyPersonalMindTarget(
+    request: PersonalMindTargetRequest,
+  ): Promise<PersonalMindTargetClassification>;
   /** Exact active binding lookup; implementations must not perform fuzzy search. */
   readRegisteredPrincipalByExternalBinding(
     lookup: Readonly<ExternalIdentityBindingLookup>,

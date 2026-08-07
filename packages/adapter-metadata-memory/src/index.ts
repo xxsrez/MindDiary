@@ -2352,6 +2352,42 @@ export class InMemoryRevisionMetadataStore
 
       const transaction: OrdinaryMindMetadataTransaction = Object.freeze({
         kind: "authorization-transaction" as const,
+        classifyPersonalMindTarget: async (
+          request: PersonalMindTargetRequest,
+        ): Promise<PersonalMindTargetClassification> => {
+          const target = knowledgeSpaces.get(request.spaceId);
+          if (!target || target.state !== "active") {
+            return Object.freeze({ kind: "not_found" });
+          }
+          const personalBinding = [...personalBindings.values()].find(
+            (binding) => binding.spaceId === request.spaceId,
+          );
+          if (!personalBinding) {
+            return Object.freeze({ kind: "ordinary", spaceId: request.spaceId });
+          }
+          if (personalBinding.principalId !== request.principalId) {
+            return Object.freeze({ kind: "not_found" });
+          }
+          try {
+            const account = accountFromMaps(
+              request.principalId,
+              principals,
+              externalBindings,
+              knowledgeSpaces,
+              personalBindings,
+              memberships,
+            );
+            if (
+              account === null ||
+              account.personalMind.personalBinding?.spaceId !== request.spaceId
+            ) {
+              return Object.freeze({ kind: "not_found" });
+            }
+          } catch {
+            return Object.freeze({ kind: "not_found" });
+          }
+          return Object.freeze({ kind: "own_personal", spaceId: request.spaceId });
+        },
         readCurrentAuthorizationState: async (query: AuthorizationStateQuery) =>
           currentSitesAuthorizationStateFromMaps(
             query,
@@ -2520,7 +2556,12 @@ export class InMemoryRevisionMetadataStore
 
           let updatedAggregate: ReturnType<typeof SpaceAggregate.restoreOrdinary>;
           try {
-            updatedAggregate = currentAggregate.addInvitation({ ...invitation });
+            updatedAggregate = currentAggregate.addInvitation({
+              actorPrincipalId: request.principalId,
+              invitation: { ...invitation },
+              expectedMetadataVersion: request.expectedMetadataVersion,
+              occurredAt: request.occurredAt,
+            });
           } catch (error) {
             if (
               error instanceof DomainInvariantError &&
@@ -2528,10 +2569,31 @@ export class InMemoryRevisionMetadataStore
             ) {
               return Object.freeze({ kind: "pending_invitation_exists" });
             }
+            if (
+              error instanceof DomainInvariantError &&
+              error.code === "pending_invitation_for_active_member"
+            ) {
+              return Object.freeze({ kind: "active_membership_exists" });
+            }
+            if (
+              error instanceof DomainInvariantError &&
+              error.code === "settings_permission_required"
+            ) {
+              return Object.freeze({ kind: "forbidden" });
+            }
+            if (
+              error instanceof DomainInvariantError &&
+              error.code === "stale_version"
+            ) {
+              return Object.freeze({
+                kind: "metadata_conflict",
+                currentMetadataVersion: space.metadataVersion,
+              });
+            }
             return Object.freeze({ kind: "invalid_record" });
           }
-          const persisted = updatedAggregate
-            .snapshot()
+          const updatedSnapshot = updatedAggregate.snapshot();
+          const persisted = updatedSnapshot
             .invitations.find(
               (candidate) => candidate.invitationId === invitation.invitationId,
             );
@@ -2539,6 +2601,14 @@ export class InMemoryRevisionMetadataStore
           const candidateInvitations = cloneRecordMap(
             invitations,
             freezeInvitation,
+          );
+          const candidateKnowledgeSpaces = cloneRecordMap(
+            knowledgeSpaces,
+            freezeKnowledgeSpace,
+          );
+          candidateKnowledgeSpaces.set(
+            updatedSnapshot.space.spaceId,
+            freezeKnowledgeSpace(updatedSnapshot.space),
           );
           candidateInvitations.set(
             persisted.invitationId,
@@ -2564,6 +2634,7 @@ export class InMemoryRevisionMetadataStore
           );
           this.#failOrdinaryMindIfRequested("invitation_after_idempotency");
           this.#failOrdinaryMindIfRequested("invitation_before_commit");
+          knowledgeSpaces = candidateKnowledgeSpaces;
           invitations = candidateInvitations;
           idempotencyRecords = candidateIdempotencyRecords;
           return Object.freeze({
