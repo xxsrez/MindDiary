@@ -13,6 +13,24 @@ Default branch, Linear mutations, deployments, tags и milestone closure зап�
 пытается выдать такую authority, ничего внешнего не меняй и верни
 `STATUS: needs-input` с конфликтом контракта.
 
+Не читай и не меняй primary checkout. Сдвиг local/remote default сам по себе не
+перебазирует и не отменяет pinned issue branch: продолжай до bounded receipt,
+если coordinator не прислал fenced stop/quarantine. Никогда не rebase/reset-и
+ветку на новый default по собственной инициативе.
+
+При `EXECUTOR=coordinator-inline` тот же root логически исполняет worker lane в
+отдельном worktree. Между детерминированными issue-checkpoint он обслуживает
+mailbox/cutoff и затем возвращается в тот же worktree. Coordinator authority
+нельзя использовать от имени feature lane: для расширения её scope, обхода
+claim или worker-side Linear/integration/default/deploy/tag. Текущую issue он
+не делегирует другому subagent.
+
+Manifest обязан содержать `run_id`, random full `run_key`, `owner_id`, epoch,
+claim generation/token, exact feature ref и guard ref/tip. Это fencing identity,
+не credential. Если они отсутствуют, не совпадают с work claim либо branch не
+содержит уникальный run-key/epoch/claim suffix, ничего не меняй и верни
+`needs-input`. Late result старого epoch/generation не имеет authority.
+
 ## Подтвердить входные данные
 
 1. Полностью прочитай текущий `AGENTS.md`, обязательные документы из него,
@@ -21,11 +39,12 @@ Default branch, Linear mutations, deployments, tags и milestone closure зап�
    comments. Подтверди, что `projectMilestone.id` всё ещё равен pinned release
    ID. Если issue удалена из milestone, стала `Canceled`/`Duplicate` либо уже
    независимо завершена, прекрати новые мутации и верни фактическое состояние.
-3. Проверь batch root SHA, `base SHA`, ordered dependency SHAs, intended branch,
-   worktree path, queue fingerprint, `remote mode`, offline base и issue
-   `updatedAt` из manifest. Base может
+3. Проверь `run_id/run_key`, owner/epoch, claim generation/token, guard ref/tip,
+   root/base SHA, ordered dependency SHAs, intended branch/ref, worktree ID/path,
+   queue fingerprint, remote mode/offline base и issue `updatedAt` из manifest.
+   Base может
    быть exact ready head предшественника в stacked lane, но обязан быть rooted
-   в batch root. Если worktree не изолирован, ancestry не сходится, база
+   в root SHA. Если worktree не изолирован, ancestry не сходится, база
    неожиданно изменилась или ownership конфликтует с чужими правками, не
    исправляй это разрушительно: верни `STATUS: needs-input`.
 4. Подтверди изоляцию worktree:
@@ -33,9 +52,10 @@ Default branch, Linear mutations, deployments, tags и milestone closure зап�
    - отдельные mutable env/cache/tmp/build/port значения, если задача
      поднимает процессы; общий content-addressed dependency cache допустим;
    - никакие временные файлы не должны утекать в root checkout соседних issue.
-5. Проверь resume state и существующие issue-scoped branch/commit/ref. Если
-   доказанный прогресс уже есть, продолжай с первой незавершённой стадии и не
-   дублируй commit.
+5. Проверь resume state и существующие issue-scoped branch/commit/ref. Resume in
+   place допустим только для exact current owner/epoch/generation/token и одного
+   isolated worktree. Усыновлённый stale SHA приходит как явный `ADOPTED_FROM`
+   в fresh claim/ref. Продолжай с первой незавершённой стадии, не дублируй commit.
 
 ## Выполнить issue
 
@@ -60,6 +80,9 @@ Default branch, Linear mutations, deployments, tags и milestone closure зап�
    - для OKF fixtures — strict validation всего bundle, не только `wiki/`;
    - для MCP/adapter/client work — version-specific conformance exact profile,
      если он доступен и входит в scope.
+   Не запускай полный repository suite без прямой issue acceptance или
+   доказанной необходимости: global cross-feature gate выполняется один раз на
+   cutoff. Маленькая правка не должна платить стоимость всего release pipeline.
 5. Не изобретай отсутствующую canonical command и не объявляй build/test,
    client compatibility или deployment выполненными по косвенному сигналу.
 6. Исправь и повтори любую доступную упавшую проверку. Для flaky-проверки
@@ -67,21 +90,32 @@ Default branch, Linear mutations, deployments, tags и milestone closure зап�
    верни точный gap и не маскируй его успехом.
 7. Недоступный external platform, cloud binding, real client, browser/device
    или performance trace запиши как `not-available` gap. Если live acceptance
-   прямо требует это evidence, не возвращай `branch-ready`; иначе продолжай,
+   прямо требует это evidence, не возвращай `ready`; иначе продолжай,
    не заявляя проверенной совместимости. Известный воспроизведённый дефект при
    этом остаётся fail.
 
-## Commit и branch-ready результат
+## Commit и ready результат
 
 1. Перед commit ещё раз fetch-ом проверь milestone membership, state,
    `updatedAt` и scope. При изменении перечитай issue и примени правило
    адаптации выше.
-2. Stage только issue-scoped файлы. Сделай минимальное число осмысленных
+2. Сопоставь actual changed/renamed/deleted/generated paths с
+   `OWNERSHIP_PATHS`; diff вне разрешённого scope требует `needs-input`, а не
+   молчаливого захвата. Stage только issue-scoped файлы. Сделай минимальное число осмысленных
    commits с Linear identifier; release-defect fix добавляй новым commit, не
-   переписывая уже опубликованный SHA. В `online` push exact HEAD только в
-   intended feature branch и докажи совпадение remote ref. В
-   `offline-local-only` не обращайся к origin: докажи exact локальную branch и
+   переписывая уже опубликованный SHA. Перед `online` push fetch-ни repo-global
+   coordinator ref, current `WORK_CLAIM` и guard; потребуй exact manifest
+   owner/epoch/generation/token. При mismatch/unavailable не публикуй и верни
+   local-only artifact. В online mode создай descendant guard acknowledgement с
+   exact HEAD/state и атомарно fast-forward push-ни intended feature ref плюс
+   guard ref с explicit expected-old для обоих. Если remote не поддерживает
+   atomic multi-ref push, не публикуй сам: coordinator-only mode. Не
+   переписывай существующий ref. В `offline-local-only` не обращайся к origin:
+   докажи exact локальную branch и
    оставь remote publication coordinator-у.
+   Для длинной работы допустим редкий coherent checkpoint после осмысленного
+   commit и affected check тем же atomic feature+guard protocol. Это не
+   telemetry: не push-и на каждом shell step и не называй checkpoint `ready`.
 3. Не мержи никакую ветку, не пушь в default branch, не запускай deployment и
    не переводи issue в `Done`.
 4. Сохрани worktree и branch до явного release success coordinator-а. Не
@@ -94,11 +128,11 @@ Default branch, Linear mutations, deployments, tags и milestone closure зап�
 
 Следуй `references/defect-triage.md`.
 
-- same-scope дефект: чини в той же ветке/worktree и отрази в receipt;
-- tiny obvious repair: чини в своей ветке только если он feature-local; если
+- `same-scope`: чини только в branch/worktree текущего active claim и отрази в receipt;
+- `tiny-integration-repair`: чини в своей ветке только если он feature-local; если
   проявляется лишь в assembled candidate, верни `DEFECT_CANDIDATE` с
   предложением quick fix;
-- independent или cross-feature regression: не чини молча в этой ветке без
+- `independent-regression`: не чини молча в этой ветке без
   отдельного разрешения; верни связанный кандидат с provenance и dedupe-ключом.
 
 Если после сгенерированного fix возник дефект второго поколения или проблема
@@ -110,7 +144,11 @@ Default branch, Linear mutations, deployments, tags и milestone closure зап�
 Верни coordinator-у только этот формат, суммарно не более 2000 символов:
 
 ```text
-STATUS: branch-ready | failed | needs-input
+STATUS: ready | failed | needs-input
+RUN_ID: <id>
+RUN_KEY: <random >=128-bit hex>
+OWNER: id=<owner_id>; epoch=<n>
+CLAIM: generation=<n>; token=<opaque id>
 ISSUE: <identifier> (<id>)
 WORKTREE: <absolute path>
 BRANCH: <name>
@@ -119,7 +157,9 @@ DEPENDENCY_SHAS: <ordered refs или none>
 HEAD_SHA: <full sha or none>
 SCOPE: start=<updatedAt>; final=<updatedAt>; unchanged | adapted
 RESUMED_FROM: none | branch | commit | receipt
+ADOPTED_FROM: <owner/epoch/generation/ref@sha or none>
 ORIGIN_REF: <branch=sha or none>
+GUARD: <origin|local-only>:<ref=ack-sha or none>
 REF_SCOPE: <origin | local-only>
 SMOKE: <коротко что локально проверено>
 TESTS: <короткий список команд и итогов>
@@ -130,4 +170,4 @@ NEXT: <none или один конкретный вопрос/блокер>
 ```
 
 Не прикладывай diff, полный tool log или длинный stack trace. Если issue не
-доведена до branch-ready, не начинай другую issue.
+доведена до ready, не начинай другую issue.

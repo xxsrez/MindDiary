@@ -4,12 +4,14 @@
 задержке webhook, зависшем runner или другом подозрении на внешний сбой GitHub.
 Нормальный Git/CI flow описан в `SKILL.md` и `batch-release.md`; здесь находится
 вся аварийная логика, включая terminal waiver для недоступного Actions evidence.
+Local checkout/index lock, dirty/ahead/diverged default и remote drift относятся
+к [external-main.md](external-main.md), а не к outage/waiver.
 
 ## Разделы
 
 - [Диагностировать затронутый component](#диагностировать-затронутый-component)
 - [Выбрать outcome](#выбрать-outcome)
-- [Завершить batch при outage Actions](#завершить-batch-при-outage-actions)
+- [Завершить cutoff при outage Actions](#завершить-cutoff-при-outage-actions)
 - [Сверить CI после восстановления](#сверить-ci-после-восстановления)
 - [Продолжать при недоступной Git publication](#продолжать-при-недоступной-git-publication)
 - [Сделать handoff](#сделать-handoff)
@@ -57,7 +59,7 @@
 Глобальные `Major Outage`/`Partial Outage` не определяют outcome сами по себе.
 Оценивай необходимую capability текущей стадии и exact observed evidence.
 
-## Завершить batch при outage Actions
+## Завершить cutoff при outage Actions
 
 Не удерживай issue в `In Review` только из-за отсутствующего GitHub Actions
 evidence, если одновременно доказаны все условия:
@@ -89,12 +91,12 @@ evidence, если одновременно доказаны все услови
    `CI.status=waived-external-outage`, `run/check=none|<infra-run-id>` и
    `CI_WAIVER` с exact head, observed symptom, incident component/id/URL,
    `updated_at`, `checked_at`, validation key и `catch_up=next-natural-run`.
-2. Для `design|build` переведи batch в `integrated`, закрой полностью доказанные
+2. Для `design|build` переведи cutoff в `integrated`, закрой полностью доказанные
    issue в Linear и release-ни их claims. Для `release` продолжай обычные
    Sites/live/tag gates и после их успеха разрешай `released`/`Done` с тем же
    явно сохранённым waiver.
 3. Один waiver финального опубликованного head может покрыть несколько ancestor
-   batches, только если каждый ancestor имеет собственный clean integrated gate
+   cutoffs, только если каждый ancestor имеет собственный clean integrated gate
    и достижим из этого head. Запиши одинаковый `PUBLISHED_BY`/`CI_WAIVER` в
    каждый покрытый receipt; не переиспользуй waiver для divergent ref/tree.
 4. Считай waiver terminal evidence, а не pending artifact. Он не удерживает
@@ -113,12 +115,12 @@ evidence, если одновременно доказаны все услови
    ради waiver. Goal может завершиться; catch-up не является скрытым blocker.
 2. На следующем естественном default-branch push либо новом delivery run найди
    обычный Actions result актуального head. Один successful full run reconciles
-   предыдущие ancestor waivers вместе с сохранёнными per-batch integrated gates.
+   предыдущие ancestor waivers вместе с сохранёнными per-cutoff integrated gates.
 3. Обнови ledger/receipts на `CI_WAIVER.reconciled=<run-id@head>` только при
    точной ancestry. Уже закрытые issue повторно не мутируй.
 4. Если catch-up run даёт project-command fail, не списывай его на старый
    outage: оформи defect, определи затронутый scope и переоткрой только реально
-   нарушенные issue либо создай linked cross-batch Bug. Не делай массовый reopen
+   нарушенные issue либо создай linked cross-cutoff Bug. Не делай массовый reopen
    без attribution.
 5. Если официальный incident resolved, но новые runs всё ещё не создаются,
    начни repo-specific diagnosis. Старые terminal waivers не отменяй задним
@@ -130,28 +132,32 @@ evidence, если одновременно доказаны все услови
 remote default/CAS не доказаны, issue не доставлена и `Done` запрещён.
 
 1. Входи в local-only mode только существующим coordinator с восстановленным
-   `run_id` и только при явном разрешении пользователя. Не выполняй takeover с
-   другой машины, когда remote CAS недоступен.
-2. Зафиксируй последний доказанный `origin/<default>` как `base_origin`, clean
-   local default как `local_head`, незавершённые remote jobs и ordered pending
-   batches в `RELEASE_RUN.OFFLINE_QUEUE`.
-3. Строй local-only batches от clean local default descendant `base_origin`.
-   Workers используют отдельные worktrees/local refs без обращения к origin;
-   coordinator единолично fast-forward продвигает local default.
+   `run_id`, `owner_id` и `owner_epoch` и только при явном разрешении
+   пользователя. Не запускай новый run/session и не выполняй takeover, когда
+   repo-global remote claim нельзя прочитать и CAS-продвинуть.
+2. Зафиксируй последний доказанный `origin/<default>` как `base_origin`,
+   task-owned aggregate ref/head, незавершённые remote jobs и ordered pending
+   cutoffs в `RELEASE_RUN.OFFLINE_QUEUE`.
+3. Строй local-only cutoffs в clean worktree от task-owned ref вида
+   `codex/release/offline/<run-key>/g<generation>`, rooted в `base_origin`.
+   Workers используют отдельные worktrees/local refs; local default и primary
+   checkout не обновляй.
 4. Выполняй обычные feature gates, sealing и один full integrated gate. Пиши
-   `STATUS=locally-integrated`, `MAIN.cas=pending`, `PUBLISHED_BY=none`,
+   `STATUS=locally-integrated`, `DEFAULT.cas=pending`, `PUBLISHED_BY=none`,
    `CI=pending-publication` и `LINEAR_DONE=none`.
-5. Удаляй только task-owned worktrees/refs, чьи commits достижимы из local
-   default и полностью описаны receipts. Не удаляй единственное доказательство
-   unpublished commit.
-6. Пытайся публиковать ровно один раз на естественном terminal batch checkpoint,
+5. Cleanup выполняй только по provenance/retirement rules
+   [crash-recovery.md](crash-recovery.md). Не удаляй единственное доказательство
+   unpublished commit или dirty/quarantined carrier.
+6. Пытайся публиковать ровно один раз на естественном terminal cutoff checkpoint,
    если последняя technical failure была не менее часа назад; всегда сделай
    одну последнюю bounded attempt после исчерпания локальной работы. Не создавай
    polling loop и не retry-и по одному wall-clock wakeup.
 7. При восстановлении fetch-ни exact origin. Если он равен `base_origin`, сделай
-   один fast-forward CAS push `local_head`. При drift собери новую aggregate
-   generation от свежего origin, merge-ни local chain без history rewrite,
-   reseal и один раз повтори full integrated gate.
+   publication action intent с base/aggregate heads, cutoff membership и effect
+   identity, затем один fast-forward CAS push `aggregate_head` и reconcile
+   origin до receipt update. При drift закрой intent фактическим state, собери
+   новую aggregate generation от свежего origin, merge-ни local chain без
+   history rewrite, reseal и один раз повтори full integrated gate.
 8. После публикации используй обычный CI path. Если publication прошла, но
    Actions всё ещё затронут matching incident, примени outage waiver выше вместо
    удержания issue в `In Review`.
@@ -162,6 +168,6 @@ remote default/CAS не доказаны, issue не доставлена и `Do
   incident URL/UTC context, отсутствие CI-pass claim и
   `catch_up=next-natural-run`.
 - При unpublished local queue предупреди, что работа не доставлена. Укажи exact
-  `base_origin`, `local_head`, число commits, pending batch IDs, время/причину
+  `base_origin`, aggregate ref/head, число commits, pending cutoff IDs, время/причину
   последней remote ошибки и следующую допустимую natural attempt.
 - Не называй local-only state опубликованным, delivered или production-ready.
