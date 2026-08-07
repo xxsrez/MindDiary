@@ -2417,16 +2417,23 @@ def command_soft_pause(args: argparse.Namespace) -> int:
         emit({"schema": 1, "status": "blocked", "reason": "owner-proof-mismatch"})
         return 3
     lifecycle = active["lifecycle"]
+    parent = active["sha"]
+    parent_message, parent_error = _materialize_coordinator_parent(
+        repo, args.remote, parent
+    )
+    if parent_error or parent_message is None:
+        emit({"schema": 1, "status": "blocked", "reason": parent_error})
+        return 3
+    metadata = fields(parent_message)
     if args.phase == "start" and route == "drain-owner":
         evidence = payload.get("evidence_digest")
-        parent_message, error = _materialize_coordinator_parent(repo, args.remote, active["sha"])
-        current_pause = fields(parent_message or "").get("PAUSE", "")
-        if error is None and _semicolon_fields(current_pause).get("evidence") == evidence:
+        current_pause = metadata.get("PAUSE", "")
+        if _semicolon_fields(current_pause).get("evidence") == evidence:
             emit(
                 {
                     "schema": 1,
                     "status": "already-started",
-                    "coordinator": active["sha"],
+                    "coordinator": parent,
                     "lifecycle": lifecycle,
                     "next": "soft-stop-running-workers",
                 }
@@ -2440,7 +2447,16 @@ def command_soft_pause(args: argparse.Namespace) -> int:
         "deploying",
         "stabilizing",
     }
-    start_eligible = route == "resume" or (
+    recovery_phase = _semicolon_fields(metadata.get("RECOVERY", "")).get("phase")
+    recovered_owner_eligible = (
+        route == "recover-owner"
+        and lifecycle.get("coherent") is True
+        and lifecycle.get("phase") == "recovering"
+        and lifecycle.get("pending_actions") == "none"
+        and active.get("action_status") == "reconciled"
+        and recovery_phase in {"inventory", "complete"}
+    )
+    start_eligible = route == "resume" or recovered_owner_eligible or (
         route == "recovery"
         and lifecycle.get("coherent") is True
         and lifecycle.get("phase") in start_operating_phases
@@ -2451,12 +2467,6 @@ def command_soft_pause(args: argparse.Namespace) -> int:
         emit({"schema": 1, "status": "blocked", "reason": "soft-pause-phase-not-eligible", "route": route})
         return 3
 
-    parent = active["sha"]
-    parent_message, parent_error = _materialize_coordinator_parent(repo, args.remote, parent)
-    if parent_error or parent_message is None:
-        emit({"schema": 1, "status": "blocked", "reason": parent_error})
-        return 3
-    metadata = fields(parent_message)
     timestamp = _utc_timestamp()
     target = f"run:{metadata.get('RUN_ID', 'unknown')}:soft-pause"
     replacements: dict[str, str]

@@ -47,7 +47,11 @@ Input:
 Helper требует current owner proof, coherent operating ledger и exact
 execution vector; одним expected-old CAS создаёт PAUSE и переводит lifecycle в
 `draining`, либо сразу в `settling`, если running executors уже нет. Повтор
-exact request идемпотентен. После success:
+exact request идемпотентен. Same owner может начать drain из
+`route=recover-owner` только после завершённого guard fencing: `RECOVERY.phase`
+равен `inventory|complete`, latest action reconciled и `PENDING_ACTIONS=none`.
+Фазы `fencing` и pending recovery action сначала доводи до безопасной границы;
+soft-pause не должен оставлять stale worker authority unfenced. После success:
 
 - не dispatch-и, не refill-и, не создавай новые claims/cutoffs;
 - сообщи каждому running worker soft-stop: закончить только текущую атомарную

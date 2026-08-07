@@ -411,6 +411,103 @@ class PreflightTest(GitMixin, unittest.TestCase):
         lifecycle = result["coordinator_refs"][0]["lifecycle"]
         self.assertEqual((lifecycle["coherent"], lifecycle["phase"]), (True, "validating"))
 
+    def test_same_owner_can_soft_pause_after_recovery_inventory_or_complete(self) -> None:
+        thread_id = "019fdcce-1fee-71d0-8d5d-6566cdf2d94b"
+        proof = MODULE.hashlib.sha256(thread_id.encode()).hexdigest()
+        for recovery_phase in ("inventory", "complete"):
+            with self.subTest(recovery_phase=recovery_phase), tempfile.TemporaryDirectory(
+                prefix="shipctl-recovery-pause-"
+            ) as directory:
+                repo, _ = self.fixture(Path(directory))
+                head = self.git(repo, "rev-parse", "HEAD")
+                self.push_coordinator(
+                    repo,
+                    MODULE.CANONICAL_COORDINATOR_REF,
+                    self.coordinator_message(
+                        repo,
+                        state="recovering",
+                        proof=proof,
+                        extra=(
+                            f"OWNER_ID: {uuid.uuid4()}\n"
+                            "OWNER_PROOF_KIND: runtime-task-id\n"
+                            f"RUN_ID: {uuid.uuid4()}\n"
+                            f"RUN_KEY: {'a' * 32}\n"
+                            f"PROJECT_ID: {uuid.uuid4()}\n"
+                            f"MILESTONE_ID: {uuid.uuid4()}\n"
+                            "EPOCH: 3\n"
+                            f"CONTRACT_SOURCE_SHA: {head}\n"
+                            f"LIFECYCLE: schema=1;phase=recovering;pause=none;transition={uuid.uuid4()}\n"
+                            "PAUSE: state=lifted;reason=handoff-consumed\n"
+                            "HOLD_PAUSE_INDEX: active=none;entries=0\n"
+                            "PENDING_ACTIONS: none\n"
+                            "PIPELINE: open_cutoff=none;active_cutoff=none\n"
+                            "GATE_INDEX: active=none;entries=0\n"
+                            "EXECUTION_INDEX: running_count=0;entries=AND-61:3@executor=stopped\n"
+                            "WORKERS: active_target=1;active_issue_lanes=none;stopped=AND-61;refill_blocker=none\n"
+                            f"RECOVERY: generation=4;cause=handoff;phase={recovery_phase};unresolved=none\n"
+                            "ACTION_KIND: recovery-checkpoint\n"
+                        ),
+                    ),
+                )
+                with mock.patch.dict(MODULE.os.environ, {"CODEX_THREAD_ID": thread_id}):
+                    _, before, _ = self.preflight(repo)
+                    code, result = self.soft_pause(
+                        repo, "start", {"evidence_digest": "1" * 64}
+                    )
+                    _, after, _ = self.preflight(repo)
+
+                self.assertEqual(before["route"], "recover-owner")
+                self.assertEqual((code, result["status"]), (0, "settling"))
+                self.assertEqual(after["route"], "drain-owner")
+                self.assertEqual(
+                    after["coordinator_refs"][0]["lifecycle"]["phase"], "settling"
+                )
+
+    def test_soft_pause_does_not_skip_recovery_fencing(self) -> None:
+        thread_id = "019fdcce-1fee-71d0-8d5d-6566cdf2d94b"
+        proof = MODULE.hashlib.sha256(thread_id.encode()).hexdigest()
+        with tempfile.TemporaryDirectory(prefix="shipctl-recovery-fencing-pause-") as directory:
+            repo, _ = self.fixture(Path(directory))
+            head = self.git(repo, "rev-parse", "HEAD")
+            parent = self.push_coordinator(
+                repo,
+                MODULE.CANONICAL_COORDINATOR_REF,
+                self.coordinator_message(
+                    repo,
+                    state="recovering",
+                    proof=proof,
+                    extra=(
+                        f"OWNER_ID: {uuid.uuid4()}\n"
+                        "OWNER_PROOF_KIND: runtime-task-id\n"
+                        f"RUN_ID: {uuid.uuid4()}\n"
+                        f"RUN_KEY: {'a' * 32}\n"
+                        f"PROJECT_ID: {uuid.uuid4()}\n"
+                        f"MILESTONE_ID: {uuid.uuid4()}\n"
+                        "EPOCH: 3\n"
+                        f"CONTRACT_SOURCE_SHA: {head}\n"
+                        f"LIFECYCLE: schema=1;phase=recovering;pause=none;transition={uuid.uuid4()}\n"
+                        "PAUSE: state=lifted;reason=handoff-consumed\n"
+                        "HOLD_PAUSE_INDEX: active=none;entries=0\n"
+                        "PENDING_ACTIONS: none\n"
+                        "EXECUTION_INDEX: running_count=0;entries=none\n"
+                        "WORKERS: active_target=0;active_issue_lanes=none\n"
+                        "RECOVERY: generation=4;cause=handoff;phase=fencing;unresolved=none\n"
+                        "ACTION_KIND: takeover-owner\n"
+                    ),
+                ),
+            )
+            with mock.patch.dict(MODULE.os.environ, {"CODEX_THREAD_ID": thread_id}):
+                code, result = self.soft_pause(
+                    repo, "start", {"evidence_digest": "1" * 64}
+                )
+            observed = self.git(
+                repo, "ls-remote", "origin", MODULE.CANONICAL_COORDINATOR_REF
+            ).split()[0]
+
+        self.assertEqual((code, result["status"]), (3, "blocked"))
+        self.assertEqual(result["reason"], "soft-pause-phase-not-eligible")
+        self.assertEqual(observed, parent)
+
     def test_matching_proof_cannot_resume_needs_input_handoff(self) -> None:
         with tempfile.TemporaryDirectory(prefix="shipctl-") as directory:
             repo, _ = self.fixture(Path(directory))
