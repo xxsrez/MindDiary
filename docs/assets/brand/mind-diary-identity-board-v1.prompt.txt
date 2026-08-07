@@ -1,0 +1,10 @@
+Use case: logo-brand
+Asset type: early brand identity exploration board for a mass-market digital product
+Primary request: Create a polished basic visual identity board for "Mind Diary", a friendly product where each knowledge base is called a Mind and each individual record is called a Memory.
+Core symbol: an open diary with two soft rounded pages that subtly form the letter M; one small circular dot or bookmark represents a Memory. The symbol should suggest reading, remembering, and conversation without showing a literal brain.
+Style/medium: original flat vector-like brand design, simple, warm, contemporary, approachable, consumer-friendly, memorable at app-icon size.
+Composition/framing: clean landscape brand board with one dominant primary symbol, the exact wordmark "Mind Diary" once, one small app-icon treatment, a few simple supporting page/dot motifs, and a restrained palette strip. Generous whitespace.
+Color palette: warm paper off-white, deep ink navy, memory violet, gentle coral, muted sage. Flat colors only.
+Text (verbatim): "Mind Diary"
+Constraints: render the name exactly once and exactly as written; strong silhouette; balanced negative space; friendly rounded geometry; no gradients; no mockup devices; no 3D; no watermark.
+Avoid: literal anatomical brain, neural-network nodes, circuitry, robot imagery, glossy AI glow, aggressive dark cyberpunk, childish cartoon diary, padlock, fountain pen, excessive detail, extra words.
