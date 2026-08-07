@@ -21,6 +21,7 @@ import {
   type CanonicalRevisionEnvelope,
   type CanonicalSpaceHandle,
   type EffectiveTokenScopes,
+  type DeletedPrincipalId,
   type ExternalBindingId,
   type InvitationId,
   type ExportArchiveRecord,
@@ -586,6 +587,137 @@ export interface OrdinaryMindDeletionIdGenerator {
   nextImpactId(): string;
 }
 
+/** Server-owned locators for an account preview and its irreversible author tombstone. */
+export interface AccountDeletionIdGenerator {
+  nextImpactId(): string;
+  nextDeletedPrincipalId(): DeletedPrincipalId;
+}
+
+export interface AccountDeletionOwnedMindSnapshot {
+  readonly spaceId: SpaceId;
+  readonly host: VerifiedSpaceHost;
+  readonly canonicalHandle: CanonicalSpaceHandle;
+  readonly name: string;
+  readonly revisionCount: number;
+}
+
+/**
+ * Exact metadata and token-state preview for one account cascade. Fingerprints
+ * contain only service IDs, versions and counts, never profile/content bytes.
+ */
+export interface AccountDeletionImpactSnapshot {
+  readonly impactId: string;
+  readonly principalId: PrincipalId;
+  readonly host: VerifiedSpaceHost;
+  readonly deletedPrincipalId: DeletedPrincipalId;
+  readonly expiresAt: UtcInstant;
+  readonly personalMind: Readonly<{
+    readonly spaceId: SpaceId;
+    readonly name: string;
+    readonly revisionCount: number;
+  }>;
+  readonly ownedMinds: readonly Readonly<AccountDeletionOwnedMindSnapshot>[];
+  readonly foreignMembershipCount: number;
+  readonly pendingInvitationCount: number;
+  readonly activeTokenCount: number;
+  readonly metadataStateFingerprint: string;
+  readonly tokenStateFingerprint: string;
+}
+
+export interface CreateAccountDeletionImpactRequest {
+  readonly principalId: PrincipalId;
+  readonly host: VerifiedSpaceHost;
+  readonly impactId: string;
+  readonly deletedPrincipalId: DeletedPrincipalId;
+  readonly occurredAt: UtcInstant;
+  readonly expiresAt: UtcInstant;
+  readonly activeTokenCount: number;
+  readonly tokenStateFingerprint: string;
+}
+
+export type CreateAccountDeletionImpactResult =
+  | {
+      readonly kind: "created";
+      readonly impact: Readonly<AccountDeletionImpactSnapshot>;
+    }
+  | {
+      readonly kind:
+        | "account_not_found"
+        | "impact_id_collision"
+        | "invalid_record";
+    };
+
+/** Temporary cleanup plan removed after every external delete/tombstone succeeds. */
+export interface AccountDeletionCleanupWorkItem {
+  readonly impactId: string;
+  readonly idempotencyKey: IdempotencyKey;
+  readonly principalId: PrincipalId;
+  readonly deletedPrincipalId: DeletedPrincipalId;
+  readonly deletedSpaceIds: readonly SpaceId[];
+  readonly objectDigests: readonly Sha256Digest[];
+  readonly foreignExportJobIds: readonly JobId[];
+  readonly tokenStateFingerprint: string;
+  readonly deleteBefore: UtcInstant;
+}
+
+export interface DeleteAccountCascadeRequest {
+  readonly principalId: PrincipalId;
+  readonly impactId: string;
+  readonly idempotencyKey: IdempotencyKey;
+  readonly deletedPrincipalId: DeletedPrincipalId;
+  readonly tokenStateFingerprint: string;
+  readonly occurredAt: UtcInstant;
+}
+
+export interface AccountDeletedRecordCounts {
+  readonly spaces: number;
+  readonly revisions: number;
+  readonly memberships: number;
+  readonly invitations: number;
+  readonly externalBindings: number;
+  readonly foreignRevisionAuthorsTombstoned: number;
+  readonly foreignAuditActorsTombstoned: number;
+  readonly foreignExportJobs: number;
+}
+
+export type DeleteAccountCascadeResult =
+  | {
+      readonly kind: "deleted";
+      readonly cleanup: Readonly<AccountDeletionCleanupWorkItem>;
+      readonly counts: Readonly<AccountDeletedRecordCounts>;
+    }
+  | {
+      readonly kind: "cleanup_pending";
+      readonly cleanup: Readonly<AccountDeletionCleanupWorkItem>;
+    }
+  | {
+      readonly kind:
+        | "account_not_found"
+        | "deletion_impact_expired"
+        | "deletion_impact_changed"
+        | "idempotency_conflict"
+        | "invalid_record";
+    };
+
+export interface CompleteAccountDeletionCleanupRequest {
+  readonly impactId: string;
+  readonly principalId: PrincipalId;
+}
+
+export type CompleteAccountDeletionCleanupResult =
+  | { readonly kind: "completed" }
+  | { readonly kind: "not_found" | "invalid_record" };
+
+export type AccountDeletionContext =
+  | {
+      readonly kind: "impact";
+      readonly impact: Readonly<AccountDeletionImpactSnapshot>;
+    }
+  | {
+      readonly kind: "cleanup";
+      readonly cleanup: Readonly<AccountDeletionCleanupWorkItem>;
+    };
+
 /**
  * Exact pre-delete snapshot. `stateFingerprint` contains only service metadata
  * identities/versions and counts; it must never contain canonical content.
@@ -819,6 +951,15 @@ export interface OrdinaryMindMetadataTransaction extends AuthorizationTransactio
   completeOrdinaryMindDeletionCleanup(
     request: Readonly<CompleteOrdinaryMindDeletionCleanupRequest>,
   ): Promise<CompleteOrdinaryMindDeletionCleanupResult>;
+  createAccountDeletionImpact(
+    request: Readonly<CreateAccountDeletionImpactRequest>,
+  ): Promise<CreateAccountDeletionImpactResult>;
+  deleteAccountCascade(
+    request: Readonly<DeleteAccountCascadeRequest>,
+  ): Promise<DeleteAccountCascadeResult>;
+  completeAccountDeletionCleanup(
+    request: Readonly<CompleteAccountDeletionCleanupRequest>,
+  ): Promise<CompleteAccountDeletionCleanupResult>;
 }
 
 /** Global canonical-object reachability across every retained revision. */
@@ -832,6 +973,19 @@ export interface OrdinaryMindStore
   extends HandleRegistry,
     CanonicalObjectReachabilityReader {
   runOrdinaryMindTransaction<Result>(
+    operation: (transaction: OrdinaryMindMetadataTransaction) => Promise<Result>,
+  ): Promise<Result>;
+}
+
+/** Serialized account cascade shares the same lifecycle transaction as Minds. */
+export interface AccountDeletionStore
+  extends OrdinaryMindStore,
+    AccountBootstrapStore {
+  readAccountDeletionContext(
+    principalId: PrincipalId,
+    impactId: string,
+  ): Promise<Readonly<AccountDeletionContext> | null>;
+  runAccountDeletionTransaction<Result>(
     operation: (transaction: OrdinaryMindMetadataTransaction) => Promise<Result>,
   ): Promise<Result>;
 }
@@ -2033,6 +2187,42 @@ export interface RevokePrincipalTokensForAccountDeletionResult {
   readonly replayed: boolean;
 }
 
+/** Safe exact token-table state used to bind an account deletion preview. */
+export interface PrincipalTokenDeletionSnapshot {
+  readonly principalId: PrincipalId;
+  readonly activeTokenCount: number;
+  readonly stateFingerprint: string;
+}
+
+export interface BeginPrincipalTokenDeletionRequest {
+  readonly principalId: PrincipalId;
+  readonly expectedStateFingerprint: string;
+  readonly occurredAt: UtcInstant;
+}
+
+export type BeginPrincipalTokenDeletionResult =
+  | { readonly kind: "reserved"; readonly replayed: boolean }
+  | { readonly kind: "state_changed" | "principal_deleted" };
+
+export interface CompletePrincipalTokenDeletionRequest {
+  readonly principalId: PrincipalId;
+  readonly expectedStateFingerprint: string;
+  readonly revokedAt: UtcInstant;
+}
+
+export type CompletePrincipalTokenDeletionResult =
+  | {
+      readonly kind: "completed";
+      readonly revokedCount: number;
+      readonly replayed: boolean;
+    }
+  | { readonly kind: "reservation_not_found" | "state_changed" };
+
+export interface CancelPrincipalTokenDeletionRequest {
+  readonly principalId: PrincipalId;
+  readonly expectedStateFingerprint: string;
+}
+
 /** Server-side generator; token IDs are never accepted from browser input. */
 export interface TokenIdGenerator {
   nextTokenId(): TokenId;
@@ -2056,6 +2246,19 @@ export interface McpTokenStore
   revokePrincipalTokensForAccountDeletion(
     request: RevokePrincipalTokensForAccountDeletionRequest,
   ): Promise<RevokePrincipalTokensForAccountDeletionResult>;
+  readPrincipalTokenDeletionSnapshot(
+    principalId: PrincipalId,
+    occurredAt: UtcInstant,
+  ): Promise<Readonly<PrincipalTokenDeletionSnapshot>>;
+  beginPrincipalTokenDeletion(
+    request: BeginPrincipalTokenDeletionRequest,
+  ): Promise<BeginPrincipalTokenDeletionResult>;
+  completePrincipalTokenDeletion(
+    request: CompletePrincipalTokenDeletionRequest,
+  ): Promise<CompletePrincipalTokenDeletionResult>;
+  cancelPrincipalTokenDeletion(
+    request: CancelPrincipalTokenDeletionRequest,
+  ): Promise<boolean>;
 }
 
 export interface AuditSink {
@@ -2064,4 +2267,9 @@ export interface AuditSink {
   deliver(event: Readonly<AuditEvent>): Promise<"delivered" | "duplicate">;
   /** Delete-all policy removes delivered events still linked to the target Space. */
   purgeSpace(spaceId: SpaceId): Promise<number>;
+  /** Retained foreign-Space events lose the deleted account's principal identity. */
+  tombstonePrincipal(
+    principalId: PrincipalId,
+    deletedPrincipalId: DeletedPrincipalId,
+  ): Promise<number>;
 }

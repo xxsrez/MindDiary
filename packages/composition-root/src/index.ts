@@ -1,4 +1,7 @@
-import { AUDIT_ADAPTER } from "@mind-diary/adapter-audit-memory";
+import {
+  AUDIT_ADAPTER,
+  InMemoryAuditSink,
+} from "@mind-diary/adapter-audit-memory";
 import { BACKGROUND_APPLICATION_BOUNDARY } from "@mind-diary/adapter-background";
 import {
   MCP_APPLICATION_BOUNDARY,
@@ -10,9 +13,16 @@ import {
 import {
   METADATA_ADAPTER,
   InMemoryMcpTokenStore,
+  InMemoryRevisionMetadataStore,
 } from "@mind-diary/adapter-metadata-memory";
-import { OBJECT_ADAPTER } from "@mind-diary/adapter-object-memory";
-import { SEARCH_ADAPTER } from "@mind-diary/adapter-search-memory";
+import {
+  OBJECT_ADAPTER,
+  InMemoryObjectStore,
+} from "@mind-diary/adapter-object-memory";
+import {
+  SEARCH_ADAPTER,
+  InMemoryExactRevisionSearchIndex,
+} from "@mind-diary/adapter-search-memory";
 import {
   SECURITY_ADAPTER,
   createWebCryptoTokenHasher,
@@ -26,8 +36,10 @@ import {
   type McpBearerAuthenticationDependencies,
 } from "@mind-diary/application-content";
 import {
+  AccountDeletionService,
   CONTROL_COMMANDS,
   CONTROL_QUERIES,
+  type AccountDeletionDependencies,
 } from "@mind-diary/application-control";
 
 export const COMPOSITION_SELECTION = {
@@ -82,4 +94,35 @@ export async function createLocalMcpHttpBoundary(
     ...(options.logger ? { logger: options.logger } : {}),
   });
   return Object.freeze({ handler, authenticator, tokenHasher, tokens });
+}
+
+export interface LocalAccountDeletionBoundaryOptions {
+  readonly ids: AccountDeletionDependencies["ids"];
+  readonly clock: AccountDeletionDependencies["clock"];
+  readonly host: AccountDeletionDependencies["host"];
+  readonly logger?: AccountDeletionDependencies["logger"];
+}
+
+/** Shared local adapters for the complete account-preview/cascade boundary. */
+export function createLocalAccountDeletionBoundary(
+  options: LocalAccountDeletionBoundaryOptions,
+) {
+  const metadata = new InMemoryRevisionMetadataStore();
+  const tokens = new InMemoryMcpTokenStore();
+  const objects = new InMemoryObjectStore();
+  const index = new InMemoryExactRevisionSearchIndex();
+  const audit = new InMemoryAuditSink();
+  const deletion = new AccountDeletionService({
+    accounts: metadata,
+    tokens,
+    objects,
+    index,
+    audit,
+    exportArchives: objects,
+    ids: options.ids,
+    clock: options.clock,
+    host: options.host,
+    ...(options.logger ? { logger: options.logger } : {}),
+  });
+  return Object.freeze({ metadata, tokens, objects, index, audit, deletion });
 }
