@@ -120,6 +120,17 @@ storage и deployment ещё не реализованы.
 - Full export доступен любому Reader/baseline Reader с `content:read`, фиксирует
   exact revision и выдаётся через short-lived download URL с повторной
   authorization; отдельные rate/size limits не являются новой ACL.
+- Каждый новый download grant требует свежей проверки current read access к
+  exact revision. Grant является opaque bearer locator, а не durable ACL:
+  URL/secret не записывается в export job, safe status, audit или logs. Default
+  lifetime grant — 5 минут, server maximum — 10 минут, и grant никогда не
+  переживает expiry самого export job.
+- Download повторно проверяет current principal access и состояние exact job,
+  поэтому revoke membership, перевод baseline-readable Mind в `private`,
+  expiry job/grant или удаление archive завершаются fail closed. Успешный ответ
+  использует canonical `Content-Type`/`Content-Disposition`, точный
+  `Content-Length`, `Cache-Control: no-store`, `Pragma: no-cache`,
+  `X-Content-Type-Options: nosniff` и `Referrer-Policy: no-referrer`.
 
 ### Retrieval и history
 
@@ -326,7 +337,10 @@ network, которого Sites пока не обещает. Если Streamabl
 23. Reader и baseline Reader могут экспортировать exact разрешённую revision;
     `MD-OKF-ZIP-1` повторяем byte-for-byte, проходит full-bundle validation,
     сохраняет exact unknown OKF fields/types и не меняется после движения HEAD.
-    Download повторно авторизуется и не раскрывает service metadata.
+    Каждый новый grant и сам download повторно авторизуются, имеют bounded
+    expiry, fail closed после revoke/private switch и не раскрывают URL/secret
+    через safe status, logs или durable job metadata. Download возвращает
+    `no-store`/`nosniff` headers и exact archive bytes.
 24. Search/fetch ограничены exact space/revision. Missing historical index не
     подмешивает HEAD.
 25. Target content не расширяет server scopes и не получает control-plane

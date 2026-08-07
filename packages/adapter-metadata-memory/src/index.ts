@@ -32,12 +32,17 @@ import type {
   CreateMcpTokenRequest,
   CreateMcpTokenResult,
   CurrentAuthorizationToken,
+  CreateExportDownloadGrantResult,
   CreateExportJobResult,
   ExpireExportJobResult,
   ExportArchiveRecord,
+  ExportDownloadGrant,
+  ExportDownloadGrantStore,
+  ExportDownloadGrantTransaction,
   ExportJob,
   ExportJobStore,
   ExportStartTransaction,
+  ReadExportDownloadGrantResult,
   RevokeMcpTokenRequest,
   RevokeMcpTokenResult,
   RevokePrincipalTokensForAccountDeletionRequest,
@@ -603,6 +608,20 @@ function cloneExportJobs(
   return new Map([...source].map(([id, job]) => [id, cloneExportJob(job)]));
 }
 
+function cloneExportDownloadGrant(
+  grant: Readonly<ExportDownloadGrant>,
+): Readonly<ExportDownloadGrant> {
+  return Object.freeze({ ...grant });
+}
+
+function cloneExportDownloadGrants(
+  source: ReadonlyMap<string, Readonly<ExportDownloadGrant>>,
+): Map<string, Readonly<ExportDownloadGrant>> {
+  return new Map(
+    [...source].map(([verifier, grant]) => [verifier, cloneExportDownloadGrant(grant)]),
+  );
+}
+
 function cloneIndexState(
   state: Readonly<RevisionIndexState>,
 ): Readonly<RevisionIndexState> {
@@ -676,6 +695,32 @@ function validExportArchive(archive: Readonly<ExportArchiveRecord>): boolean {
     SHA256_PATTERN.test(archive.sha256) &&
     Number.isSafeInteger(archive.size) &&
     archive.size >= 0
+  );
+}
+
+function validExportDownloadGrant(
+  grant: Readonly<ExportDownloadGrant>,
+  job: Readonly<ExportJob> | undefined,
+): boolean {
+  const createdAt = Date.parse(grant.createdAt);
+  const expiresAt = Date.parse(grant.expiresAt);
+  return (
+    SHA256_PATTERN.test(grant.secretVerifier) &&
+    job !== undefined &&
+    job.state === "succeeded" &&
+    job.archive !== null &&
+    grant.jobId === job.jobId &&
+    typeof grant.requestedByPrincipalId === "string" &&
+    grant.requestedByPrincipalId.length > 0 &&
+    grant.spaceId === job.spaceId &&
+    grant.revisionId === job.revisionId &&
+    grant.objectKey === job.archive.objectKey &&
+    grant.state === "active" &&
+    grant.revokedAt === null &&
+    Number.isFinite(createdAt) &&
+    Number.isFinite(expiresAt) &&
+    expiresAt > createdAt &&
+    expiresAt <= Date.parse(job.expiresAt)
   );
 }
 
@@ -842,7 +887,7 @@ function completeIdempotencyAgainst(
 }
 
 export class InMemoryRevisionMetadataStore
-  implements ContentCommitMetadataStore, ExportJobStore {
+  implements ContentCommitMetadataStore, ExportDownloadGrantStore {
   readonly kind = "metadata-store" as const;
   #spaces = new Map<SpaceId, SpaceState>();
   #revisionsById = new Map<RevisionId, Envelope>();
@@ -851,6 +896,7 @@ export class InMemoryRevisionMetadataStore
   #auditOutbox = new Map<OutboxMessageId, Readonly<AuditOutboxMessage>>();
   #backgroundJobs = new Map<JobId, Readonly<BackgroundJob>>();
   #exportJobs = new Map<JobId, Readonly<ExportJob>>();
+  #exportDownloadGrants = new Map<string, Readonly<ExportDownloadGrant>>();
   #indexStates = new Map<string, Readonly<RevisionIndexState>>();
   readonly #authorizationStates = new Map<string, AuthorizationState>();
   #transactionTail: Promise<void> = Promise.resolve();
@@ -1007,6 +1053,51 @@ export class InMemoryRevisionMetadataStore
       const result = await operation(transaction);
       this.#idempotencyRecords = idempotencyRecords;
       this.#exportJobs = exportJobs;
+      return result;
+    });
+  }
+
+  async runExportDownloadGrantTransaction<Result>(
+    operation: (transaction: ExportDownloadGrantTransaction) => Promise<Result>,
+  ): Promise<Result> {
+    return this.#runExclusive(async () => {
+      const exportJobs = cloneExportJobs(this.#exportJobs);
+      const exportDownloadGrants = cloneExportDownloadGrants(
+        this.#exportDownloadGrants,
+      );
+      const authorizationStates = new Map(
+        [...this.#authorizationStates].map(([key, state]) => [
+          key,
+          cloneAuthorizationState(state),
+        ]),
+      );
+      const transaction: ExportDownloadGrantTransaction = Object.freeze({
+        kind: "authorization-transaction" as const,
+        readCurrentAuthorizationState: async (query: AuthorizationStateQuery) => {
+          const state = authorizationStates.get(authorizationStateKey(query));
+          return state ? cloneAuthorizationState(state) : null;
+        },
+        readExportJob: async (jobId: JobId) => {
+          const job = exportJobs.get(jobId);
+          return job ? cloneExportJob(job) : null;
+        },
+        createExportDownloadGrant: async (
+          grant: Readonly<ExportDownloadGrant>,
+        ): Promise<CreateExportDownloadGrantResult> => {
+          if (exportDownloadGrants.has(grant.secretVerifier)) {
+            return Object.freeze({ kind: "secret_collision" });
+          }
+          if (!validExportDownloadGrant(grant, exportJobs.get(grant.jobId))) {
+            return Object.freeze({ kind: "invalid_grant" });
+          }
+          const stored = cloneExportDownloadGrant(grant);
+          exportDownloadGrants.set(grant.secretVerifier, stored);
+          return Object.freeze({ kind: "created", grant: stored });
+        },
+      });
+
+      const result = await operation(transaction);
+      this.#exportDownloadGrants = exportDownloadGrants;
       return result;
     });
   }
@@ -1375,6 +1466,66 @@ export class InMemoryRevisionMetadataStore
     });
   }
 
+  async readExportDownloadGrant(
+    secretVerifier: ExportDownloadGrant["secretVerifier"],
+    now: ExportDownloadGrant["createdAt"],
+  ): Promise<ReadExportDownloadGrantResult> {
+    return this.#runExclusive(async () => {
+      if (!SHA256_PATTERN.test(secretVerifier) || !Number.isFinite(Date.parse(now))) {
+        return Object.freeze({ kind: "not_found" });
+      }
+      const current = this.#exportDownloadGrants.get(secretVerifier);
+      if (!current) return Object.freeze({ kind: "not_found" });
+      if (current.state === "revoked") return Object.freeze({ kind: "revoked" });
+      if (current.state === "expired") return Object.freeze({ kind: "expired" });
+      const job = this.#exportJobs.get(current.jobId);
+      const expired =
+        Date.parse(now) >= Date.parse(current.expiresAt) ||
+        !job ||
+        job.state !== "succeeded" ||
+        job.archive === null ||
+        job.archive.objectKey !== current.objectKey ||
+        Date.parse(now) >= Date.parse(job.expiresAt);
+      if (expired) {
+        this.#exportDownloadGrants.set(
+          secretVerifier,
+          Object.freeze({ ...current, state: "expired" as const }),
+        );
+        return Object.freeze({ kind: "expired" });
+      }
+      return Object.freeze({
+        kind: "active",
+        grant: cloneExportDownloadGrant(current),
+      });
+    });
+  }
+
+  async revokeExportDownloadGrant(
+    secretVerifier: ExportDownloadGrant["secretVerifier"],
+    revokedAt: ExportDownloadGrant["createdAt"],
+  ): Promise<boolean> {
+    return this.#runExclusive(async () => {
+      if (
+        !SHA256_PATTERN.test(secretVerifier) ||
+        !Number.isFinite(Date.parse(revokedAt))
+      ) {
+        return false;
+      }
+      const current = this.#exportDownloadGrants.get(secretVerifier);
+      if (!current || current.state === "expired") return false;
+      if (current.state === "revoked") return true;
+      this.#exportDownloadGrants.set(
+        secretVerifier,
+        Object.freeze({
+          ...current,
+          state: "revoked" as const,
+          revokedAt,
+        }),
+      );
+      return true;
+    });
+  }
+
   async readExportJob(jobId: JobId): Promise<Readonly<ExportJob> | null> {
     const job = this.#exportJobs.get(jobId);
     return job ? cloneExportJob(job) : null;
@@ -1524,6 +1675,14 @@ export class InMemoryRevisionMetadataStore
         archiveCleanedAt: null,
       });
       this.#exportJobs.set(jobId, expired);
+      for (const [verifier, grant] of this.#exportDownloadGrants) {
+        if (grant.jobId === jobId && grant.state === "active") {
+          this.#exportDownloadGrants.set(
+            verifier,
+            Object.freeze({ ...grant, state: "expired" as const }),
+          );
+        }
+      }
       return Object.freeze({
         kind: "expired",
         job: cloneExportJob(expired),
@@ -1589,8 +1748,13 @@ export class InMemoryRevisionMetadataStore
       const exportJobIds = [...this.#exportJobs]
         .filter(([, job]) => job.spaceId === spaceId)
         .map(([id]) => id);
+      const exportGrantVerifiers = [...this.#exportDownloadGrants]
+        .filter(([, grant]) => grant.spaceId === spaceId)
+        .map(([verifier]) => verifier);
       jobIds.forEach((id) => this.#backgroundJobs.delete(id));
       exportJobIds.forEach((id) => this.#exportJobs.delete(id));
+      exportGrantVerifiers.forEach((verifier) =>
+        this.#exportDownloadGrants.delete(verifier));
       indexKeys.forEach((key) => this.#indexStates.delete(key));
       outboxIds.forEach((id) => this.#auditOutbox.delete(id));
       auditIds.forEach((id) => this.#auditEvents.delete(id));
@@ -1619,6 +1783,14 @@ export class InMemoryRevisionMetadataStore
 
   async listExportJobsForTest(): Promise<readonly Readonly<ExportJob>[]> {
     return Object.freeze([...this.#exportJobs.values()].map(cloneExportJob));
+  }
+
+  async listExportDownloadGrantsForTest(): Promise<
+    readonly Readonly<ExportDownloadGrant>[]
+  > {
+    return Object.freeze(
+      [...this.#exportDownloadGrants.values()].map(cloneExportDownloadGrant),
+    );
   }
 
   failNextCommitForTest(

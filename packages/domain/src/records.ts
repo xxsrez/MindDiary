@@ -252,6 +252,27 @@ export interface ExportJob {
   readonly archiveCleanedAt: UtcInstant | null;
 }
 
+export type ExportDownloadGrantState = "active" | "revoked" | "expired";
+
+/**
+ * Short-lived bearer locator for one already-built exact-revision archive.
+ * Only the one-way verifier is durable; the URL and secret are response-only.
+ * This record never replaces current access authorization.
+ */
+export interface ExportDownloadGrant {
+  readonly secretVerifier: Sha256Digest;
+  readonly jobId: JobId;
+  readonly requestedByPrincipalId: PrincipalId;
+  readonly spaceId: SpaceId;
+  readonly revisionId: RevisionId;
+  /** Internal object-store locator. It is never part of safe status. */
+  readonly objectKey: string;
+  readonly state: ExportDownloadGrantState;
+  readonly createdAt: UtcInstant;
+  readonly expiresAt: UtcInstant;
+  readonly revokedAt: UtcInstant | null;
+}
+
 /** Durable exact-revision state; it must never be inferred from current HEAD. */
 export interface RevisionIndexState {
   readonly spaceId: SpaceId;

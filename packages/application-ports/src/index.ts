@@ -22,6 +22,7 @@ import {
   type CanonicalSpaceHandle,
   type EffectiveTokenScopes,
   type ExportArchiveRecord,
+  type ExportDownloadGrant,
   type ExportJob,
   type HandlePolicyFailureReason,
   type MarkdownMediaType,
@@ -59,6 +60,7 @@ export type {
   IdempotencyResult,
   JobId,
   ExportArchiveRecord,
+  ExportDownloadGrant,
   ExportJob,
   OutboxMessageId,
   RevisionIndexState,
@@ -96,6 +98,11 @@ export interface CommitEffectIdGenerator {
 /** Server-side source of opaque export job locators. */
 export interface ExportJobIdGenerator {
   nextExportJobId(): JobId;
+}
+
+/** Creates a fresh canonical 256-bit opaque export-download bearer secret. */
+export interface ExportDownloadSecretGenerator {
+  nextExportDownloadSecret(): string;
 }
 
 export interface MetadataStore {
@@ -412,6 +419,39 @@ export interface ExportJobStore extends MetadataStore, AuthorizationStateReader 
     jobId: JobId,
     expectedVersion: Version,
     cleanedAt: UtcInstant,
+  ): Promise<boolean>;
+}
+
+export type CreateExportDownloadGrantResult =
+  | {
+      readonly kind: "created";
+      readonly grant: Readonly<ExportDownloadGrant>;
+    }
+  | { readonly kind: "secret_collision" | "invalid_grant" };
+
+export interface ExportDownloadGrantTransaction extends AuthorizationTransaction {
+  readExportJob(jobId: JobId): Promise<Readonly<ExportJob> | null>;
+  createExportDownloadGrant(
+    grant: Readonly<ExportDownloadGrant>,
+  ): Promise<CreateExportDownloadGrantResult>;
+}
+
+export type ReadExportDownloadGrantResult =
+  | { readonly kind: "active"; readonly grant: Readonly<ExportDownloadGrant> }
+  | { readonly kind: "not_found" | "expired" | "revoked" };
+
+/** Temporary download capabilities remain separate from durable export jobs. */
+export interface ExportDownloadGrantStore extends ExportJobStore {
+  runExportDownloadGrantTransaction<Result>(
+    operation: (transaction: ExportDownloadGrantTransaction) => Promise<Result>,
+  ): Promise<Result>;
+  readExportDownloadGrant(
+    secretVerifier: Sha256Digest,
+    now: UtcInstant,
+  ): Promise<ReadExportDownloadGrantResult>;
+  revokeExportDownloadGrant(
+    secretVerifier: Sha256Digest,
+    revokedAt: UtcInstant,
   ): Promise<boolean>;
 }
 

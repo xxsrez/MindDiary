@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { InMemoryObjectStore } from "@mind-diary/adapter-object-memory";
+import {
+  InMemoryObjectStore,
+  WebCryptoExportDownloadSecretGenerator,
+} from "@mind-diary/adapter-object-memory";
 import { CurrentAccessBackgroundAuthorizer } from "@mind-diary/application-ports";
 import { version } from "@mind-diary/domain";
 
@@ -119,4 +122,16 @@ test("export archives use claim-scoped immutable keys and job cleanup is repeata
   assert.equal((await objects.listExportArchivesForTest()).length, 2);
   assert.equal(await objects.deleteExportArchivesForJob(request.jobId), 2);
   assert.equal(await objects.deleteExportArchivesForJob(request.jobId), 0);
+});
+
+test("download grant generator returns fresh canonical 256-bit opaque secrets", () => {
+  const generator = new WebCryptoExportDownloadSecretGenerator();
+  const secrets = new Set(
+    Array.from({ length: 32 }, () => generator.nextExportDownloadSecret()),
+  );
+  assert.equal(secrets.size, 32);
+  for (const secret of secrets) {
+    assert.match(secret, /^mdg_v1_[A-Za-z0-9_-]{43}$/u);
+    assert.equal(secret.length, 50);
+  }
 });
