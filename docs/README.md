@@ -65,6 +65,9 @@ Mind Diary пока находится на стадии проектирова�
 - [Состояние платформенных предпосылок на 2026-08-05](reports/2026-08-05-platform-status.md)
   — актуальные MCP, OpenAI Sites/Plugins и AWS AgentCore факты, на которых
   основан proposal.
+- [OpenAI Sites + MCP capability gate на 2026-08-07](reports/2026-08-07-sites-mcp-capability-gate.md)
+  — локально проверенный non-product probe, repeatable redacted live procedure
+  и незаполненные release-blocking evidence fields.
 
 ## Статусы документов
 
