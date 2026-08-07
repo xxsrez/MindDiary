@@ -7,7 +7,7 @@ import type {
   Clock,
   ExportArchiveStore,
   ExportDownloadGrantStore,
-  ExportDownloadSecretGenerator,
+  ExportDownloadSecretCrypto,
   ExportJobIdGenerator,
   ExportStartTransaction,
   IdempotencyNamespace,
@@ -36,8 +36,6 @@ export const DEFAULT_EXPORT_JOB_RETENTION_MS = 24 * 60 * 60 * 1_000;
 export const MAX_EXPORT_JOB_RETENTION_MS = 30 * 24 * 60 * 60 * 1_000;
 export const DEFAULT_EXPORT_DOWNLOAD_GRANT_TTL_MS = 5 * 60 * 1_000;
 export const MAX_EXPORT_DOWNLOAD_GRANT_TTL_MS = 10 * 60 * 1_000;
-export const EXPORT_DOWNLOAD_SECRET_PREFIX = "mdg_v1_" as const;
-export const EXPORT_DOWNLOAD_SECRET_LENGTH = 50 as const;
 
 export type ExportRevisionSelector =
   | { readonly kind: "head" }
@@ -135,7 +133,6 @@ interface ParsedStart {
 
 const ENCODER = new TextEncoder();
 const CONTROL_CHARACTER = /[\u0000-\u001f\u007f]/u;
-const EXPORT_DOWNLOAD_SECRET_PATTERN = /^mdg_v1_[A-Za-z0-9_-]{43}$/u;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -162,14 +159,6 @@ function normalizeDownloadUrlBase(input: string): string {
     throw new TypeError("export download URL base must be a safe absolute HTTPS URL");
   }
   return parsed.toString().replace(/\/$/u, "");
-}
-
-function isCanonicalDownloadSecret(value: unknown): value is string {
-  return (
-    typeof value === "string" &&
-    value.length === EXPORT_DOWNLOAD_SECRET_LENGTH &&
-    EXPORT_DOWNLOAD_SECRET_PATTERN.test(value)
-  );
 }
 
 function sameAuthorizationStamp(
@@ -281,7 +270,7 @@ export class ExportJobApplicationService {
   readonly #archives: Pick<ExportArchiveStore, "readExportArchive">;
   readonly #clock: Clock;
   readonly #jobIds: ExportJobIdGenerator;
-  readonly #downloadSecrets: ExportDownloadSecretGenerator;
+  readonly #downloadSecretCrypto: ExportDownloadSecretCrypto;
   readonly #downloadUrlBase: string;
   readonly #retentionMs: number;
   readonly #downloadGrantTtlMs: number;
@@ -295,7 +284,7 @@ export class ExportJobApplicationService {
     readonly archives: Pick<ExportArchiveStore, "readExportArchive">;
     readonly clock: Clock;
     readonly jobIds: ExportJobIdGenerator;
-    readonly downloadSecrets: ExportDownloadSecretGenerator;
+    readonly downloadSecretCrypto: ExportDownloadSecretCrypto;
     readonly downloadUrlBase: string;
     readonly retentionMs?: number;
     readonly downloadGrantTtlMs?: number;
@@ -308,7 +297,7 @@ export class ExportJobApplicationService {
     this.#archives = dependencies.archives;
     this.#clock = dependencies.clock;
     this.#jobIds = dependencies.jobIds;
-    this.#downloadSecrets = dependencies.downloadSecrets;
+    this.#downloadSecretCrypto = dependencies.downloadSecretCrypto;
     this.#downloadUrlBase = normalizeDownloadUrlBase(dependencies.downloadUrlBase);
     this.#retentionMs = dependencies.retentionMs ?? DEFAULT_EXPORT_JOB_RETENTION_MS;
     if (
@@ -499,14 +488,25 @@ export class ExportJobApplicationService {
     readonly actor: ActorContext;
     readonly secret: unknown;
   }): Promise<DownloadExportResult> {
-    if (request.actor.kind !== "service" || !isCanonicalDownloadSecret(request.secret)) {
+    if (request.actor.kind !== "service") {
       return Object.freeze({ kind: "not_found" });
     }
-    const verifier = await this.#digest.calculateSha256(ENCODER.encode(request.secret));
     const now = this.#clock.now();
-    const located = await this.#metadata.readExportDownloadGrant(verifier, now);
-    if (located.kind !== "active") return Object.freeze({ kind: "not_found" });
-    const grant = located.grant;
+    const verified = await this.#downloadSecretCrypto.verifySecret(request.secret, {
+      findByVerifier: async (verifier) => {
+        const located = await this.#metadata.readExportDownloadGrant(verifier, now);
+        return located.kind === "active"
+          ? Object.freeze({
+              kind: "found" as const,
+              verifier: located.grant.secretVerifier,
+              value: located.grant,
+            })
+          : Object.freeze({ kind: "not_found" as const });
+      },
+    });
+    if (verified.kind !== "verified") return Object.freeze({ kind: "not_found" });
+    const grant = verified.value;
+    const verifier = grant.secretVerifier;
     const authorizationRequest = Object.freeze({
       actor: request.actor,
       principalId: grant.requestedByPrincipalId,
@@ -585,14 +585,8 @@ export class ExportJobApplicationService {
       revisionMode: "historical" as const,
     });
     for (let attempt = 0; attempt < 3; attempt += 1) {
-      const secret = this.#downloadSecrets.nextExportDownloadSecret();
-      if (!isCanonicalDownloadSecret(secret)) {
-        throw new ExportJobInvariantError(
-          "invalid_download_secret",
-          "download secret generator returned a non-canonical secret",
-        );
-      }
-      const secretVerifier = await this.#digest.calculateSha256(ENCODER.encode(secret));
+      const issuedSecret = await this.#downloadSecretCrypto.issueSecret();
+      const secretVerifier = issuedSecret.verifier();
       const createdAt = this.#clock.now();
       const expiresAt = new Date(
         Math.min(
@@ -665,6 +659,17 @@ export class ExportJobApplicationService {
           this.#clock.now(),
         );
         return Object.freeze({ kind: "not_found" });
+      }
+      const secret = issuedSecret.consumeSecret();
+      if (secret === null) {
+        await this.#metadata.revokeExportDownloadGrant(
+          secretVerifier,
+          this.#clock.now(),
+        );
+        throw new ExportJobInvariantError(
+          "invalid_download_secret",
+          "download secret was unavailable after successful grant creation",
+        );
       }
       return Object.freeze({
         kind: "found",

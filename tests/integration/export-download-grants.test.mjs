@@ -3,6 +3,7 @@ import test from "node:test";
 import { createBackgroundServiceActor } from "@mind-diary/adapter-background";
 import { InMemoryRevisionMetadataStore } from "@mind-diary/adapter-metadata-memory";
 import { InMemoryObjectStore } from "@mind-diary/adapter-object-memory";
+import { createWebCryptoExportDownloadSecretCrypto } from "@mind-diary/adapter-security-webcrypto";
 import { ExportJobHandler } from "@mind-diary/application-background";
 import {
   CanonicalRevisionCoordinator,
@@ -27,6 +28,10 @@ import {
 
 const TOKEN_ID = "token_export_download";
 const TOKEN_EXPIRY = "2026-11-03T12:00:00.000Z";
+const EXPORT_DOWNLOAD_TEST_KEY = Uint8Array.from(
+  { length: 32 },
+  (_, index) => index + 63,
+);
 
 function at(offsetMs) {
   return new Date(Date.parse(FIXED_NOW) + offsetMs).toISOString();
@@ -90,21 +95,29 @@ function authorizationState(currentActor, options = {}) {
 }
 
 function canonicalSecret(character) {
-  return `mdg_v1_${character.repeat(43)}`;
+  const bytes = Uint8Array.from(
+    { length: 32 },
+    () => character.codePointAt(0),
+  );
+  return `mdg_v1_${Buffer.from(bytes).toString("base64url")}`;
 }
 
 class SequenceSecrets {
   constructor(values) {
-    this.values = [...values];
+    this.values = values.map((value) =>
+      Uint8Array.from(Buffer.from(value.slice("mdg_v1_".length), "base64url"))
+    );
     this.onNext = null;
+    this.subtle = globalThis.crypto.subtle;
   }
 
-  nextExportDownloadSecret() {
+  getRandomValues(target) {
     this.onNext?.();
     this.onNext = null;
     const next = this.values.shift();
     if (!next) throw new Error("download secret fixture exhausted");
-    return next;
+    target.set(next);
+    return target;
   }
 }
 
@@ -174,15 +187,31 @@ async function harness(options = {}) {
     canonicalSecret("B"),
     canonicalSecret("C"),
   ]);
+  const downloadSecretCrypto = await createWebCryptoExportDownloadSecretCrypto({
+    verifierKey: EXPORT_DOWNLOAD_TEST_KEY,
+    crypto: secrets,
+  });
+  const applicationDigest = Object.freeze({
+    calculateSha256: async (bytes) => {
+      options.onApplicationDigest?.(new Uint8Array(bytes));
+      return objects.calculateSha256(bytes);
+    },
+  });
+  const archiveReader = Object.freeze({
+    readExportArchive: async (objectKey) => {
+      options.onArchiveRead?.(objectKey);
+      return objects.readExportArchive(objectKey);
+    },
+  });
   const application = new ExportJobApplicationService({
     authorizer,
     backgroundAuthorizer,
     metadata,
-    digest: objects,
-    archives: objects,
+    digest: applicationDigest,
+    archives: archiveReader,
     clock,
     jobIds: { nextExportJobId: () => "export_download_job" },
-    downloadSecrets: secrets,
+    downloadSecretCrypto,
     downloadUrlBase: "https://downloads.invalid/export-grants",
     retentionMs: options.retentionMs ?? 60_000,
     downloadGrantTtlMs: options.downloadGrantTtlMs ?? 5_000,
@@ -272,6 +301,39 @@ test("Reader and public/unlisted baseline Readers receive exact no-store downloa
       );
     });
   }
+});
+
+test("grant bearer material never crosses the application object digest or archive boundary", async () => {
+  const digestInputs = [];
+  const archiveReads = [];
+  const env = await harness({
+    onApplicationDigest: (bytes) => digestInputs.push(new TextDecoder().decode(bytes)),
+    onArchiveRead: (objectKey) => archiveReads.push(objectKey),
+  });
+  const status = await env.application.getStatus({
+    actor: env.currentActor,
+    jobId: env.jobId,
+  });
+  assert.equal(status.kind, "found");
+  const secret = secretFromUrl(status.download.url);
+  assert.match(secret, /^mdg_v1_[A-Za-z0-9_-]{43}$/u);
+
+  const downloaded = await env.application.download({
+    actor: serviceActor(),
+    secret,
+  });
+  assert.equal(downloaded.kind, "download");
+  assert.equal(digestInputs.length, 1);
+  assert.match(digestInputs[0], /mind-diary-start-export-request-v1/u);
+  assert.ok(digestInputs.every((input) => !input.includes(secret)));
+  assert.ok(digestInputs.every((input) => !input.includes("mdg_v1_")));
+  assert.equal(archiveReads.length, 1);
+  assert.ok(archiveReads.every((objectKey) => !objectKey.includes(secret)));
+  assert.ok(archiveReads.every((objectKey) => !objectKey.includes("mdg_v1_")));
+  assert.doesNotMatch(
+    JSON.stringify(await env.metadata.listExportDownloadGrantsForTest()),
+    /mdg_v1_/u,
+  );
 });
 
 test("invalid locators and denied exact-revision status never create a grant", async (t) => {
@@ -468,7 +530,7 @@ test("download grant configuration rejects unbounded TTL and unsafe URL bases", 
     archives: {},
     clock: {},
     jobIds: {},
-    downloadSecrets: {},
+    downloadSecretCrypto: {},
     downloadUrlBase: "https://downloads.invalid/export-grants",
   };
   for (const downloadGrantTtlMs of [0, MAX_EXPORT_DOWNLOAD_GRANT_TTL_MS + 1]) {

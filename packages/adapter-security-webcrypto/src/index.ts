@@ -1,4 +1,9 @@
 import type {
+  ExportDownloadSecretCrypto,
+  ExportDownloadSecretVerificationResult,
+  ExportDownloadSecretVerifier,
+  ExportDownloadVerifierLookup,
+  IssuedExportDownloadSecret,
   IssuedTokenSecret,
   PersistedTokenSecretMaterial,
   TokenHasher,
@@ -18,6 +23,15 @@ export const TOKEN_DISPLAY_RANDOM_CHARACTERS = 6 as const;
 export const TOKEN_VERIFIER_PREFIX = "hmac-sha256:v1:" as const;
 export const TOKEN_VERIFIER_HEX_LENGTH = 64 as const;
 export const TOKEN_VERIFIER_KEY_MINIMUM_BYTES = 32 as const;
+export const EXPORT_DOWNLOAD_SECRET_POLICY =
+  "webcrypto-export-download-secret-v1" as const;
+export const EXPORT_DOWNLOAD_SECRET_PREFIX = "mdg_v1_" as const;
+export const EXPORT_DOWNLOAD_SECRET_RANDOM_BYTES = 32 as const;
+export const EXPORT_DOWNLOAD_SECRET_BODY_LENGTH = 43 as const;
+export const EXPORT_DOWNLOAD_SECRET_LENGTH = 50 as const;
+export const EXPORT_DOWNLOAD_VERIFIER_PREFIX =
+  "hmac-sha256:export-download:v1:" as const;
+export const EXPORT_DOWNLOAD_VERIFIER_KEY_MINIMUM_BYTES = 32 as const;
 
 const BASE64URL_ALPHABET =
   "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
@@ -26,6 +40,11 @@ const TOKEN_VERIFIER_PATTERN = /^hmac-sha256:v1:[0-9a-f]{64}$/;
 const HMAC_DOMAIN = new TextEncoder().encode("mind-diary:mcp-token:v1\0");
 const DUMMY_VERIFIER_BYTES = new Uint8Array(32);
 const INVALID_RESULT = Object.freeze({ kind: "invalid" } as const);
+const EXPORT_DOWNLOAD_VERIFIER_PATTERN =
+  /^hmac-sha256:export-download:v1:[0-9a-f]{64}$/;
+const EXPORT_DOWNLOAD_HMAC_DOMAIN = new TextEncoder().encode(
+  "mind-diary:export-download-grant:v1\0",
+);
 
 export type TokenSecurityFailureCode =
   | "invalid_configuration"
@@ -107,6 +126,17 @@ function parseCanonicalSecret(candidate: unknown): Uint8Array | null {
   return decodeBase64Url32(candidate.slice(TOKEN_SECRET_PREFIX.length));
 }
 
+function parseCanonicalExportDownloadSecret(candidate: unknown): Uint8Array | null {
+  if (
+    typeof candidate !== "string" ||
+    candidate.length !== EXPORT_DOWNLOAD_SECRET_LENGTH ||
+    !candidate.startsWith(EXPORT_DOWNLOAD_SECRET_PREFIX)
+  ) {
+    return null;
+  }
+  return decodeBase64Url32(candidate.slice(EXPORT_DOWNLOAD_SECRET_PREFIX.length));
+}
+
 function bytesToHex(bytes: Uint8Array): string {
   let hex = "";
   for (const byte of bytes) hex += byte.toString(16).padStart(2, "0");
@@ -122,6 +152,26 @@ function verifierBytes(value: unknown): Uint8Array | null {
   for (let index = 0; index < bytes.length; index += 1) {
     const parsed = Number.parseInt(hex.slice(index * 2, index * 2 + 2), 16);
     if (!Number.isInteger(parsed)) return null;
+    bytes[index] = parsed;
+  }
+  return bytes;
+}
+
+function exportDownloadVerifierBytes(value: unknown): Uint8Array | null {
+  if (
+    typeof value !== "string" ||
+    !EXPORT_DOWNLOAD_VERIFIER_PATTERN.test(value)
+  ) {
+    return null;
+  }
+  const hex = value.slice(EXPORT_DOWNLOAD_VERIFIER_PREFIX.length);
+  const bytes = new Uint8Array(32);
+  for (let index = 0; index < bytes.length; index += 1) {
+    const parsed = Number.parseInt(hex.slice(index * 2, index * 2 + 2), 16);
+    if (!Number.isInteger(parsed)) {
+      bytes.fill(0);
+      return null;
+    }
     bytes[index] = parsed;
   }
   return bytes;
@@ -342,4 +392,187 @@ export async function createWebCryptoTokenHasher(
   }
 }
 
-export type SecurityAdapterContract = TokenHasher;
+class ConsumeOnceExportDownloadSecret implements IssuedExportDownloadSecret {
+  #secret: string | null;
+  readonly #verifier: ExportDownloadSecretVerifier;
+
+  constructor(secret: string, verifier: ExportDownloadSecretVerifier) {
+    this.#secret = secret;
+    this.#verifier = verifier;
+  }
+
+  consumeSecret(): string | null {
+    const secret = this.#secret;
+    this.#secret = null;
+    return secret;
+  }
+
+  verifier(): ExportDownloadSecretVerifier {
+    return this.#verifier;
+  }
+
+  toJSON(): Readonly<Record<string, never>> {
+    return Object.freeze({});
+  }
+}
+
+export type ExportDownloadSecurityFailureCode =
+  | "invalid_configuration"
+  | "security_unavailable"
+  | "verification_unavailable";
+
+/** Safe failure: messages and enumerable fields never include bearer inputs. */
+export class ExportDownloadSecurityFailure extends Error {
+  readonly code: ExportDownloadSecurityFailureCode;
+
+  constructor(code: ExportDownloadSecurityFailureCode, message: string) {
+    super(message);
+    this.name = "ExportDownloadSecurityFailure";
+    this.code = code;
+  }
+}
+
+export interface WebCryptoExportDownloadSecretCryptoOptions {
+  /** Deployment secret; copied for import and never retained as raw bytes. */
+  readonly verifierKey: Uint8Array;
+  /** Injectable only for compatible runtimes/tests; defaults to global Web Crypto. */
+  readonly crypto?: Crypto;
+}
+
+export class WebCryptoExportDownloadSecretCrypto
+  implements ExportDownloadSecretCrypto {
+  readonly kind = "export-download-secret-crypto" as const;
+  readonly #crypto: Crypto;
+  readonly #key: CryptoKey;
+
+  constructor(crypto: Crypto, key: CryptoKey) {
+    this.#crypto = crypto;
+    this.#key = key;
+  }
+
+  async issueSecret(): Promise<IssuedExportDownloadSecret> {
+    const randomBytes = new Uint8Array(EXPORT_DOWNLOAD_SECRET_RANDOM_BYTES);
+    let secret = "";
+    try {
+      this.#crypto.getRandomValues(randomBytes);
+      secret = `${EXPORT_DOWNLOAD_SECRET_PREFIX}${encodeBase64Url(randomBytes)}`;
+      const verifier = await this.#deriveVerifier(secret);
+      return new ConsumeOnceExportDownloadSecret(secret, verifier);
+    } catch {
+      secret = "";
+      throw new ExportDownloadSecurityFailure(
+        "security_unavailable",
+        "Export download security operation is unavailable.",
+      );
+    } finally {
+      randomBytes.fill(0);
+    }
+  }
+
+  async verifySecret<Value>(
+    candidate: unknown,
+    lookup: ExportDownloadVerifierLookup<Value>,
+  ): Promise<ExportDownloadSecretVerificationResult<Value>> {
+    const randomBytes = parseCanonicalExportDownloadSecret(candidate);
+    if (randomBytes === null) return INVALID_RESULT;
+    randomBytes.fill(0);
+
+    let verifier: ExportDownloadSecretVerifier;
+    let calculatedBytes: Uint8Array;
+    try {
+      verifier = await this.#deriveVerifier(candidate as string);
+      calculatedBytes = exportDownloadVerifierBytes(verifier)!;
+    } catch {
+      throw new ExportDownloadSecurityFailure(
+        "security_unavailable",
+        "Export download security operation is unavailable.",
+      );
+    }
+
+    let lookupResult;
+    try {
+      lookupResult = await lookup.findByVerifier(verifier);
+    } catch {
+      calculatedBytes.fill(0);
+      throw new ExportDownloadSecurityFailure(
+        "verification_unavailable",
+        "Export download verification is unavailable.",
+      );
+    }
+
+    const persistedBytes =
+      lookupResult.kind === "found"
+        ? exportDownloadVerifierBytes(lookupResult.verifier)
+        : null;
+    const matches = constantTimeEqual32(
+      calculatedBytes,
+      persistedBytes ?? DUMMY_VERIFIER_BYTES,
+    );
+    calculatedBytes.fill(0);
+    persistedBytes?.fill(0);
+
+    if (lookupResult.kind !== "found" || !matches) return INVALID_RESULT;
+    return Object.freeze({ kind: "verified", value: lookupResult.value });
+  }
+
+  async #deriveVerifier(secret: string): Promise<ExportDownloadSecretVerifier> {
+    const secretBytes = new TextEncoder().encode(secret);
+    const message = new Uint8Array(
+      EXPORT_DOWNLOAD_HMAC_DOMAIN.length + secretBytes.length,
+    );
+    message.set(EXPORT_DOWNLOAD_HMAC_DOMAIN);
+    message.set(secretBytes, EXPORT_DOWNLOAD_HMAC_DOMAIN.length);
+    let signatureBytes: Uint8Array | null = null;
+    try {
+      const signature = await this.#crypto.subtle.sign("HMAC", this.#key, message);
+      signatureBytes = new Uint8Array(signature);
+      return `${EXPORT_DOWNLOAD_VERIFIER_PREFIX}${bytesToHex(signatureBytes)}` as ExportDownloadSecretVerifier;
+    } finally {
+      secretBytes.fill(0);
+      message.fill(0);
+      signatureBytes?.fill(0);
+    }
+  }
+}
+
+export async function createWebCryptoExportDownloadSecretCrypto(
+  options: WebCryptoExportDownloadSecretCryptoOptions,
+): Promise<WebCryptoExportDownloadSecretCrypto> {
+  if (
+    !(options.verifierKey instanceof Uint8Array) ||
+    options.verifierKey.byteLength < EXPORT_DOWNLOAD_VERIFIER_KEY_MINIMUM_BYTES
+  ) {
+    throw new ExportDownloadSecurityFailure(
+      "invalid_configuration",
+      "Export download verifier key must contain at least 256 bits.",
+    );
+  }
+  const crypto = options.crypto ?? globalThis.crypto;
+  if (crypto?.subtle === undefined || typeof crypto.getRandomValues !== "function") {
+    throw new ExportDownloadSecurityFailure(
+      "invalid_configuration",
+      "Web Crypto is required for export download security.",
+    );
+  }
+
+  const keyBytes = new Uint8Array(options.verifierKey);
+  try {
+    const key = await crypto.subtle.importKey(
+      "raw",
+      keyBytes,
+      { name: "HMAC", hash: "SHA-256" },
+      false,
+      ["sign"],
+    );
+    return new WebCryptoExportDownloadSecretCrypto(crypto, key);
+  } catch {
+    throw new ExportDownloadSecurityFailure(
+      "invalid_configuration",
+      "Export download verifier key could not be initialized.",
+    );
+  } finally {
+    keyBytes.fill(0);
+  }
+}
+
+export type SecurityAdapterContract = TokenHasher | ExportDownloadSecretCrypto;

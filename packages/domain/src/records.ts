@@ -21,10 +21,14 @@ import type {
 
 declare const versionBrand: unique symbol;
 declare const revisionNumberBrand: unique symbol;
+declare const exportDownloadSecretVerifierBrand: unique symbol;
 
 export type Version = number & { readonly [versionBrand]: "version" };
 export type RevisionNumber = number & {
   readonly [revisionNumberBrand]: "revision-number";
+};
+export type ExportDownloadSecretVerifier = string & {
+  readonly [exportDownloadSecretVerifierBrand]: "export-download-secret-verifier";
 };
 
 export const PRINCIPAL_STATES = ["active", "deleted"] as const;
@@ -260,7 +264,7 @@ export type ExportDownloadGrantState = "active" | "revoked" | "expired";
  * This record never replaces current access authorization.
  */
 export interface ExportDownloadGrant {
-  readonly secretVerifier: Sha256Digest;
+  readonly secretVerifier: ExportDownloadSecretVerifier;
   readonly jobId: JobId;
   readonly requestedByPrincipalId: PrincipalId;
   readonly spaceId: SpaceId;

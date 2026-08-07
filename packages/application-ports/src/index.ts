@@ -23,6 +23,7 @@ import {
   type EffectiveTokenScopes,
   type ExportArchiveRecord,
   type ExportDownloadGrant,
+  type ExportDownloadSecretVerifier,
   type ExportJob,
   type HandlePolicyFailureReason,
   type MarkdownMediaType,
@@ -61,6 +62,7 @@ export type {
   JobId,
   ExportArchiveRecord,
   ExportDownloadGrant,
+  ExportDownloadSecretVerifier,
   ExportJob,
   OutboxMessageId,
   RevisionIndexState,
@@ -100,9 +102,38 @@ export interface ExportJobIdGenerator {
   nextExportJobId(): JobId;
 }
 
-/** Creates a fresh canonical 256-bit opaque export-download bearer secret. */
-export interface ExportDownloadSecretGenerator {
-  nextExportDownloadSecret(): string;
+/** Secret-bearing issuance result; the raw bearer can be consumed exactly once. */
+export interface IssuedExportDownloadSecret {
+  consumeSecret(): string | null;
+  verifier(): ExportDownloadSecretVerifier;
+}
+
+export type ExportDownloadVerifierLookupResult<Value> =
+  | {
+      readonly kind: "found";
+      readonly verifier: ExportDownloadSecretVerifier;
+      readonly value: Value;
+    }
+  | { readonly kind: "not_found" };
+
+export interface ExportDownloadVerifierLookup<Value> {
+  findByVerifier(
+    verifier: ExportDownloadSecretVerifier,
+  ): Promise<ExportDownloadVerifierLookupResult<Value>>;
+}
+
+export type ExportDownloadSecretVerificationResult<Value> =
+  | { readonly kind: "verified"; readonly value: Value }
+  | { readonly kind: "invalid" };
+
+/** Dedicated crypto boundary for canonical export-download bearer secrets. */
+export interface ExportDownloadSecretCrypto {
+  readonly kind: "export-download-secret-crypto";
+  issueSecret(): Promise<IssuedExportDownloadSecret>;
+  verifySecret<Value>(
+    candidate: unknown,
+    lookup: ExportDownloadVerifierLookup<Value>,
+  ): Promise<ExportDownloadSecretVerificationResult<Value>>;
 }
 
 export interface MetadataStore {
@@ -446,11 +477,11 @@ export interface ExportDownloadGrantStore extends ExportJobStore {
     operation: (transaction: ExportDownloadGrantTransaction) => Promise<Result>,
   ): Promise<Result>;
   readExportDownloadGrant(
-    secretVerifier: Sha256Digest,
+    secretVerifier: ExportDownloadSecretVerifier,
     now: UtcInstant,
   ): Promise<ReadExportDownloadGrantResult>;
   revokeExportDownloadGrant(
-    secretVerifier: Sha256Digest,
+    secretVerifier: ExportDownloadSecretVerifier,
     revokedAt: UtcInstant,
   ): Promise<boolean>;
 }

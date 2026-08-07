@@ -425,6 +425,8 @@ export class InMemoryMcpTokenStore implements McpTokenStore {
 }
 
 const SHA256_PATTERN = /^sha256:[0-9a-f]{64}$/u;
+const EXPORT_DOWNLOAD_VERIFIER_PATTERN =
+  /^hmac-sha256:export-download:v1:[0-9a-f]{64}$/u;
 const MARKDOWN_MEDIA_TYPE = "text/markdown; charset=utf-8";
 const CONTROL_CHARACTER = /[\u0000-\u001f\u007f]/u;
 const ENCODED_SEPARATOR = /%(?:2f|5c)/iu;
@@ -705,7 +707,7 @@ function validExportDownloadGrant(
   const createdAt = Date.parse(grant.createdAt);
   const expiresAt = Date.parse(grant.expiresAt);
   return (
-    SHA256_PATTERN.test(grant.secretVerifier) &&
+    EXPORT_DOWNLOAD_VERIFIER_PATTERN.test(grant.secretVerifier) &&
     job !== undefined &&
     job.state === "succeeded" &&
     job.archive !== null &&
@@ -1471,7 +1473,10 @@ export class InMemoryRevisionMetadataStore
     now: ExportDownloadGrant["createdAt"],
   ): Promise<ReadExportDownloadGrantResult> {
     return this.#runExclusive(async () => {
-      if (!SHA256_PATTERN.test(secretVerifier) || !Number.isFinite(Date.parse(now))) {
+      if (
+        !EXPORT_DOWNLOAD_VERIFIER_PATTERN.test(secretVerifier) ||
+        !Number.isFinite(Date.parse(now))
+      ) {
         return Object.freeze({ kind: "not_found" });
       }
       const current = this.#exportDownloadGrants.get(secretVerifier);
@@ -1506,7 +1511,7 @@ export class InMemoryRevisionMetadataStore
   ): Promise<boolean> {
     return this.#runExclusive(async () => {
       if (
-        !SHA256_PATTERN.test(secretVerifier) ||
+        !EXPORT_DOWNLOAD_VERIFIER_PATTERN.test(secretVerifier) ||
         !Number.isFinite(Date.parse(revokedAt))
       ) {
         return false;

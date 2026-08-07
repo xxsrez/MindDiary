@@ -11,7 +11,6 @@ import {
   type ExportArchivePutResult,
   type ExportArchiveStore,
   type ExportArchiveWriteRequest,
-  type ExportDownloadSecretGenerator,
   type StoredExportArchive,
 } from "@mind-diary/application-ports";
 
@@ -45,10 +44,6 @@ const SHA256_PATTERN = /^sha256:[0-9a-f]{64}$/u;
 const UTC_PATTERN =
   /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,9}))?Z$/u;
 const MARKDOWN_MEDIA_TYPE = "text/markdown; charset=utf-8";
-const EXPORT_DOWNLOAD_SECRET_PREFIX = "mdg_v1_";
-const EXPORT_DOWNLOAD_SECRET_RANDOM_BYTES = 32;
-const BASE64URL_ALPHABET =
-  "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 
 function assertDigest(value: string): asserts value is Digest {
   if (!SHA256_PATTERN.test(value)) {
@@ -141,42 +136,6 @@ async function webCryptoSha256(bytes: Uint8Array): Promise<string> {
   return `sha256:${[...new Uint8Array(result)]
     .map((value) => value.toString(16).padStart(2, "0"))
     .join("")}`;
-}
-
-function encodeBase64Url(bytes: Uint8Array): string {
-  let encoded = "";
-  for (let index = 0; index < bytes.length; index += 3) {
-    const first = bytes[index]!;
-    const second = bytes[index + 1];
-    const third = bytes[index + 2];
-    encoded += BASE64URL_ALPHABET[first >>> 2]!;
-    encoded += BASE64URL_ALPHABET[((first & 0x03) << 4) | ((second ?? 0) >>> 4)]!;
-    if (second === undefined) continue;
-    encoded += BASE64URL_ALPHABET[((second & 0x0f) << 2) | ((third ?? 0) >>> 6)]!;
-    if (third === undefined) continue;
-    encoded += BASE64URL_ALPHABET[third & 0x3f]!;
-  }
-  return encoded;
-}
-
-/** In-memory/Web Crypto source; it never retains or serializes issued secrets. */
-export class WebCryptoExportDownloadSecretGenerator
-  implements ExportDownloadSecretGenerator {
-  readonly #crypto: Crypto;
-
-  constructor(crypto: Crypto = globalThis.crypto) {
-    this.#crypto = crypto;
-  }
-
-  nextExportDownloadSecret(): string {
-    const random = new Uint8Array(EXPORT_DOWNLOAD_SECRET_RANDOM_BYTES);
-    try {
-      this.#crypto.getRandomValues(random);
-      return `${EXPORT_DOWNLOAD_SECRET_PREFIX}${encodeBase64Url(random)}`;
-    } finally {
-      random.fill(0);
-    }
-  }
 }
 
 export class InMemoryObjectStore implements ObjectStore, ExportArchiveStore {

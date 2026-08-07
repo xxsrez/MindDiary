@@ -3,11 +3,9 @@ import test from "node:test";
 import { createBackgroundServiceActor } from "@mind-diary/adapter-background";
 import { InMemoryAuditSink } from "@mind-diary/adapter-audit-memory";
 import { InMemoryRevisionMetadataStore } from "@mind-diary/adapter-metadata-memory";
-import {
-  InMemoryObjectStore,
-  WebCryptoExportDownloadSecretGenerator,
-} from "@mind-diary/adapter-object-memory";
+import { InMemoryObjectStore } from "@mind-diary/adapter-object-memory";
 import { InMemoryExactRevisionSearchIndex } from "@mind-diary/adapter-search-memory";
+import { createWebCryptoExportDownloadSecretCrypto } from "@mind-diary/adapter-security-webcrypto";
 import {
   ExportJobExpiryHandler,
   ExportJobHandler,
@@ -35,6 +33,10 @@ import {
 
 const TOKEN_ID = "token_export_jobs";
 const TOKEN_EXPIRY = "2026-11-03T12:00:00.000Z";
+const EXPORT_DOWNLOAD_TEST_KEY = Uint8Array.from(
+  { length: 32 },
+  (_, index) => index + 31,
+);
 
 function at(offsetMs) {
   return new Date(Date.parse(FIXED_NOW) + offsetMs).toISOString();
@@ -126,6 +128,11 @@ async function harness(options = {}) {
   );
   const authorizer = new CapabilityAuthorizer(metadata);
   const backgroundAuthorizer = new CurrentAccessBackgroundAuthorizer(metadata);
+  const downloadSecretCrypto =
+    options.downloadSecretCrypto ??
+    await createWebCryptoExportDownloadSecretCrypto({
+      verifierKey: EXPORT_DOWNLOAD_TEST_KEY,
+    });
   let nextJob = 0;
   const ids = options.jobIds ?? ["export_job_1", "export_job_2", "export_job_3"];
   const application = () => new ExportJobApplicationService({
@@ -137,8 +144,7 @@ async function harness(options = {}) {
     clock,
     retentionMs: options.retentionMs ?? 60_000,
     jobIds: { nextExportJobId: () => ids[nextJob++] },
-    downloadSecrets:
-      options.downloadSecrets ?? new WebCryptoExportDownloadSecretGenerator(),
+    downloadSecretCrypto,
     downloadUrlBase: "https://downloads.invalid/export-grants",
   });
   const builder = new DeterministicOkfExportService({

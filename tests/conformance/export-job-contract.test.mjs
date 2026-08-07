@@ -2,10 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createBackgroundServiceActor } from "@mind-diary/adapter-background";
 import { InMemoryRevisionMetadataStore } from "@mind-diary/adapter-metadata-memory";
-import {
-  InMemoryObjectStore,
-  WebCryptoExportDownloadSecretGenerator,
-} from "@mind-diary/adapter-object-memory";
+import { InMemoryObjectStore } from "@mind-diary/adapter-object-memory";
+import { createWebCryptoExportDownloadSecretCrypto } from "@mind-diary/adapter-security-webcrypto";
 import { ExportJobHandler } from "@mind-diary/application-background";
 import {
   CanonicalRevisionCoordinator,
@@ -86,6 +84,9 @@ test("durable export status contract contains safe metadata only and never embed
     { ...shared, token: null },
   );
   const clock = { now: () => FIXED_NOW };
+  const downloadSecretCrypto = await createWebCryptoExportDownloadSecretCrypto({
+    verifierKey: Uint8Array.from({ length: 32 }, (_, index) => index + 47),
+  });
   const application = new ExportJobApplicationService({
     authorizer: new CapabilityAuthorizer(metadata),
     backgroundAuthorizer: new CurrentAccessBackgroundAuthorizer(metadata),
@@ -94,7 +95,7 @@ test("durable export status contract contains safe metadata only and never embed
     archives: objects,
     clock,
     jobIds: { nextExportJobId: () => "export_contract_job" },
-    downloadSecrets: new WebCryptoExportDownloadSecretGenerator(),
+    downloadSecretCrypto,
     downloadUrlBase: "https://downloads.invalid/export-grants",
   });
   const started = await application.start({
