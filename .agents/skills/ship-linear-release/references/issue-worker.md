@@ -33,8 +33,19 @@ claim generation/token, exact feature ref и guard ref/tip. Это fencing ident
 
 ## Подтвердить входные данные
 
-1. Полностью прочитай текущий `AGENTS.md`, обязательные документы из него,
-   этот файл и `references/defect-triage.md`.
+1. Полностью прочитай текущий `AGENTS.md` и этот файл. Затем выполни из
+   worktree один routed read по exact `OWNERSHIP_PATHS`:
+
+   ```bash
+   PYTHONDONTWRITEBYTECODE=1 python3 \
+     .agents/skills/ship-linear-release/scripts/shipctl.py docs \
+     --path <ownership-path> [--path <ownership-path> ...]
+   ```
+
+   Полностью прочитай только документы из `documents`. При `fallback_all=true`
+   прочитай весь mandatory список из `AGENTS.md`; не угадывай новый surface.
+   `references/defect-triage.md` читай только при фактическом дефекте. Не
+   повторяй чтение документов, уже прочитанных в текущем worker turn.
 2. Прочитай live Linear issue с acceptance criteria, attachments и последними
    comments. Подтверди, что `projectMilestone.id` всё ещё равен pinned release
    ID. Если issue удалена из milestone, стала `Canceled`/`Duplicate` либо уже
@@ -70,6 +81,8 @@ claim generation/token, exact feature ref и guard ref/tip. Это fencing ident
    диапазоны, группируй независимые read-only проверки и не печатай полный
    diff, comment history или длинные логи. Для UI flow предпочитай один
    детерминированный script нескольким мелким interactive steps.
+   Не запускай scout/subagent: если ownership из manifest недостаточен, верни
+   `STATUS: needs-input` и `NEXT: SCOPE_REFINEMENT: <exact paths/reason>`.
 4. Feature gate на точном будущем дереве:
    - узкие тесты затронутой области;
    - один локальный smoke затронутого flow, если применимо;

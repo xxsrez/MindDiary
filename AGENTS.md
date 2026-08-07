@@ -23,18 +23,31 @@
 
 ## Что прочитать перед изменениями
 
-1. [Обзор продукта](docs/overview.md).
+Не загружайте весь список механически. Всегда полностью читайте этот файл, а
+затем документы затронутой surface. При неизвестной или cross-cutting surface
+прочитайте весь список. Для worker-а `ship-linear-release` точный fail-safe
+маршрут строит `.agents/skills/ship-linear-release/scripts/shipctl.py docs` из
+его ownership paths; coordinator,
+который не меняет product source, продуктовые документы не читает.
+
+1. [Обзор продукта](docs/overview.md) — перед любым изменением продукта.
 2. [Roadmap и стратегию проверки](docs/roadmap.md) — перед product/market
    analysis, планированием post-MVP функций или трактовкой MVP non-goals.
 3. [Базовую айдентику](docs/brand.md) — перед user-facing naming, UI или copy.
-4. [Доменную модель и доступ](docs/specs/domain-model.md).
-5. [URL-адресацию и персонализированное открытие](docs/specs/personalized-opening.md).
-6. [Архитектуру](docs/architecture.md).
-7. [Спецификацию первого прототипа](docs/specs/mvp.md).
+4. [Доменную модель и доступ](docs/specs/domain-model.md) — перед domain,
+   identity, membership, visibility или authorization changes.
+5. [URL-адресацию и персонализированное открытие](docs/specs/personalized-opening.md)
+   — перед routes, opening flow или соответствующим UI.
+6. [Архитектуру](docs/architecture.md) — перед cross-package, adapter,
+   persistence, runtime или deployment changes.
+7. [Спецификацию первого прототипа](docs/specs/mvp.md) — перед MVP behavior,
+   acceptance или implementation changes.
 8. [REST и MCP API](docs/specs/api.md) — перед изменением protocol surface,
    backend routes, schemas или error contracts.
-9. [Проверку текущего OKF](docs/reports/2026-08-05-okf-status.md).
-10. [Проверку платформенных предпосылок](docs/reports/2026-08-05-platform-status.md).
+9. [Проверку текущего OKF](docs/reports/2026-08-05-okf-status.md) — перед OKF
+   codec, fixtures или compatibility claims.
+10. [Проверку платформенных предпосылок](docs/reports/2026-08-05-platform-status.md)
+    — перед Sites/MCP platform или deployment claims.
 
 Архитектурные и specification-документы пока имеют статус proposal. Принятые
 product decisions отделяйте от ещё не выбранных деталей реализации; ни то ни

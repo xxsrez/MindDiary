@@ -10,6 +10,15 @@ Sites-процедуру. Чужие изменения primary/default обра
 Crash/restart, guard fencing и artifact adoption находятся в
 [crash-recovery.md](crash-recovery.md).
 
+## Startup fast path
+
+До первого issue executor coordinator следует bounded `shipctl.py preflight`
+из `SKILL.md`, а не повторяет Git discovery вручную. Не запускай scout,
+explorer или planning agent перед issue worker. Scope discovery выполняется
+compact Linear snapshot + `rg`; неоднозначность возвращается тем же worker-ом
+как `SCOPE_REFINEMENT`, после чего coordinator обновляет manifest этой issue.
+Это не новая issue lane и не повод перечитывать весь repository context.
+
 ## Содержание
 
 - [Считать workers по исполняемым issue](#считать-workers-по-исполняемым-issue)

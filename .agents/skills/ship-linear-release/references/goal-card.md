@@ -5,6 +5,10 @@ IDs и выбранный `delivery_profile`, затем передай objectiv
 `workers` — параметр исполнения, а не часть done criteria; сохраняй выбранный
 режим в run receipt.
 
+`run_id`, `run_key` и `owner_id` получай одним вызовом
+`scripts/shipctl.py identities`; не собирай UUID/randomness отдельными shell или
+JavaScript snippets. `create_goal` вызывай один раз после выигранного claim.
+
 ```text
 Objective: Автономно доставить все незавершённые issue Linear project
 <project_name> (<project_id>) из закреплённого milestone <milestone_name>
