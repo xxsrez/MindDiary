@@ -6,6 +6,7 @@ import {
 
 export * from "./ui-shell.js";
 export * from "./token-management.js";
+export * from "./sites-identity-binding.js";
 
 type WebActorContext = ControlBoundaryMarker["actor"];
 
