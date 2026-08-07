@@ -535,6 +535,34 @@ test("membership version CAS, concurrent writers, no-op and exact retry are dete
   assert.equal(env.memberships.state.audit.length, 2);
 });
 
+test("exact mutation replay refuses a stale target membership descriptor", async () => {
+  const env = harness();
+  const command = {
+    mindId: SPACE_ID,
+    memberId: "member_reader",
+    role: "editor",
+    expectedMembershipVersion: 1,
+    idempotencyKey: "membership-stale-replay-0001",
+  };
+
+  const changed = await env.service.changeMembershipRole(
+    actor("principal_owner", "request_stale_replay_initial"),
+    command,
+  );
+  assert.equal(changed.role, "editor");
+  env.memberships.forceRevoke("member_reader");
+
+  await assert.rejects(
+    env.service.changeMembershipRole(
+      actor("principal_owner", "request_stale_replay_retry"),
+      command,
+    ),
+    expectFailure("membership_state_changed"),
+  );
+  assert.equal(env.memberships.member("member_reader").state, "revoked");
+  assert.equal(env.memberships.state.audit.length, 1);
+});
+
 test("transaction failure and late authority loss fail closed; Personal Mind and audit data stay safe", async () => {
   const env = harness();
   const beforeFailure = env.memberships.snapshot();

@@ -2707,6 +2707,24 @@ function membershipDescriptor(
   });
 }
 
+function sameMembershipSnapshot(
+  current: Readonly<SpaceMembership>,
+  recorded: Readonly<SpaceMembership>,
+): boolean {
+  return (
+    current.membershipId === recorded.membershipId &&
+    current.spaceId === recorded.spaceId &&
+    current.principalId === recorded.principalId &&
+    current.role === recorded.role &&
+    current.state === recorded.state &&
+    current.version === recorded.version &&
+    current.createdAt === recorded.createdAt &&
+    current.createdBy === recorded.createdBy &&
+    current.updatedAt === recorded.updatedAt &&
+    current.updatedBy === recorded.updatedBy
+  );
+}
+
 function recordMembershipEvent(
   logger: MembershipControlSafeLogger | undefined,
   event: MembershipControlSafeEvent["event"],
@@ -2862,41 +2880,57 @@ export class MembershipControlService {
         );
       }
       if (prior.kind === "replayed") {
-        if (command.operation === "leave_space") {
-          if (
-            prior.membership.principalId !== trustedActor.principalId ||
-            prior.requiredCapability !== "content:browse"
-          ) {
-            throw new MembershipControlFailure(
-              "membership_control_unavailable",
-              "Membership control is unavailable.",
-            );
-          }
-        } else {
-          await this.#memberships.runMembershipControlTransaction(
-            async (transaction) => {
-              const authorization = await new CapabilityAuthorizer(
-                transaction,
-              ).authorize({
-                actor,
-                spaceId: command.mindId,
-                capability: prior.requiredCapability,
-                revisionMode: "head",
-              });
-              if (authorization.kind === "denied") {
-                throw membershipAuthorizationFailure(authorization.code);
-              }
-              if (authorization.grant.kind !== "membership") {
-                throw new MembershipControlFailure(
-                  "forbidden",
-                  "Current membership-management access is required.",
-                );
-              }
-            },
+        if (
+          command.operation === "leave_space" &&
+          (prior.membership.principalId !== trustedActor.principalId ||
+            prior.requiredCapability !== "content:browse")
+        ) {
+          throw new MembershipControlFailure(
+            "membership_control_unavailable",
+            "Membership control is unavailable.",
           );
         }
+        const replayedMembership =
+          await this.#memberships.runMembershipControlTransaction(
+            async (transaction): Promise<Readonly<SpaceMembership>> => {
+              if (command.operation !== "leave_space") {
+                const authorization = await new CapabilityAuthorizer(
+                  transaction,
+                ).authorize({
+                  actor,
+                  spaceId: command.mindId,
+                  capability: prior.requiredCapability,
+                  revisionMode: "head",
+                });
+                if (authorization.kind === "denied") {
+                  throw membershipAuthorizationFailure(authorization.code);
+                }
+                if (authorization.grant.kind !== "membership") {
+                  throw new MembershipControlFailure(
+                    "forbidden",
+                    "Current membership-management access is required.",
+                  );
+                }
+              }
+              const current = await transaction.readMembershipControlTarget({
+                spaceId: command.mindId,
+                memberId: prior.membership.membershipId,
+              });
+              if (
+                current.kind !== "found" ||
+                current.mindKind !== "ordinary" ||
+                !sameMembershipSnapshot(current.membership, prior.membership)
+              ) {
+                throw new MembershipControlFailure(
+                  "membership_state_changed",
+                  "Membership state changed; re-read before retrying.",
+                );
+              }
+              return current.membership;
+            },
+          );
         recordMembershipEvent(this.#logger, "membership_replayed", requestId);
-        return membershipDescriptor(prior.membership, prior.changed, true);
+        return membershipDescriptor(replayedMembership, prior.changed, true);
       }
 
       const result = await this.#memberships.runMembershipControlTransaction(
