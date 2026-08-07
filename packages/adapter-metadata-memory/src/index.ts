@@ -1,6 +1,18 @@
 import type {
   CanonicalRevisionEnvelope,
   CanonicalSpaceHandle,
+  AccountBootstrapRecordSet,
+  AccountBootstrapStore,
+  AccountBootstrapTransaction,
+  CreateAccountBootstrapResult,
+  ExternalIdentityBinding,
+  ExternalIdentityBindingLookup,
+  KnowledgeSpace,
+  PersonalMindResolution,
+  PersonalSpaceBinding,
+  Principal,
+  PrincipalAccountSnapshot,
+  SpaceMembership,
   AuthorizationStateQuery,
   AuditEvent,
   AuditOutboxMessage,
@@ -58,9 +70,12 @@ import type {
   TokenVerifier,
 } from "@mind-diary/application-ports";
 import {
+  PrincipalAccount,
+  SpaceAggregate,
   isReservedTopLevelHandle,
   isReservedTopLevelRoute,
   parseCanonicalSpaceHandle,
+  revisionEnvelopesEqual,
   version,
 } from "@mind-diary/application-ports";
 
@@ -888,8 +903,175 @@ function completeIdempotencyAgainst(
   });
 }
 
+type PrincipalMap = Map<Principal["principalId"], Readonly<Principal>>;
+type ExternalBindingMap = Map<string, Readonly<ExternalIdentityBinding>>;
+type KnowledgeSpaceMap = Map<KnowledgeSpace["spaceId"], Readonly<KnowledgeSpace>>;
+type PersonalBindingMap = Map<
+  PersonalSpaceBinding["principalId"],
+  Readonly<PersonalSpaceBinding>
+>;
+type MembershipMap = Map<
+  SpaceMembership["membershipId"],
+  Readonly<SpaceMembership>
+>;
+
+function externalBindingKey(
+  lookup: Readonly<ExternalIdentityBindingLookup>,
+): string {
+  return `${lookup.provider}\u0000${lookup.normalizedBinding}`;
+}
+
+function freezePrincipal(record: Readonly<Principal>): Readonly<Principal> {
+  return Object.freeze({ ...record });
+}
+
+function freezeExternalBinding(
+  record: Readonly<ExternalIdentityBinding>,
+): Readonly<ExternalIdentityBinding> {
+  return Object.freeze({ ...record });
+}
+
+function freezeKnowledgeSpace(
+  record: Readonly<KnowledgeSpace>,
+): Readonly<KnowledgeSpace> {
+  return Object.freeze({ ...record });
+}
+
+function freezePersonalBinding(
+  record: Readonly<PersonalSpaceBinding>,
+): Readonly<PersonalSpaceBinding> {
+  return Object.freeze({ ...record });
+}
+
+function freezeMembership(
+  record: Readonly<SpaceMembership>,
+): Readonly<SpaceMembership> {
+  return Object.freeze({ ...record });
+}
+
+function cloneRecordMap<Key, Value extends object>(
+  source: ReadonlyMap<Key, Readonly<Value>>,
+  clone: (value: Readonly<Value>) => Readonly<Value>,
+): Map<Key, Readonly<Value>> {
+  return new Map([...source].map(([key, value]) => [key, clone(value)]));
+}
+
+function accountFromMaps(
+  principalId: Principal["principalId"],
+  principals: ReadonlyMap<Principal["principalId"], Readonly<Principal>>,
+  externalBindings: ReadonlyMap<string, Readonly<ExternalIdentityBinding>>,
+  knowledgeSpaces: ReadonlyMap<KnowledgeSpace["spaceId"], Readonly<KnowledgeSpace>>,
+  personalBindings: ReadonlyMap<
+    PersonalSpaceBinding["principalId"],
+    Readonly<PersonalSpaceBinding>
+  >,
+  memberships: ReadonlyMap<
+    SpaceMembership["membershipId"],
+    Readonly<SpaceMembership>
+  >,
+): Readonly<PrincipalAccountSnapshot> | null {
+  const principal = principals.get(principalId);
+  const personalBinding = personalBindings.get(principalId);
+  if (!principal || !personalBinding) return null;
+  const personalSpace = knowledgeSpaces.get(personalBinding.spaceId);
+  if (!personalSpace) return null;
+  const accountBindings = [...externalBindings.values()].filter(
+    (binding) => binding.principalId === principalId,
+  );
+  const personalMemberships = [...memberships.values()].filter(
+    (membership) => membership.spaceId === personalSpace.spaceId,
+  );
+  if (personalMemberships.length !== 1) return null;
+  const personal = SpaceAggregate.restorePersonal({
+    space: personalSpace,
+    binding: personalBinding,
+    membership: personalMemberships[0]!,
+  });
+  return PrincipalAccount.restore({
+    principal,
+    externalBindings: accountBindings,
+    personalMind: personal,
+  }).snapshot();
+}
+
+function accountByBindingFromMaps(
+  lookup: Readonly<ExternalIdentityBindingLookup>,
+  principals: ReadonlyMap<Principal["principalId"], Readonly<Principal>>,
+  externalBindings: ReadonlyMap<string, Readonly<ExternalIdentityBinding>>,
+  knowledgeSpaces: ReadonlyMap<KnowledgeSpace["spaceId"], Readonly<KnowledgeSpace>>,
+  personalBindings: ReadonlyMap<
+    PersonalSpaceBinding["principalId"],
+    Readonly<PersonalSpaceBinding>
+  >,
+  memberships: ReadonlyMap<
+    SpaceMembership["membershipId"],
+    Readonly<SpaceMembership>
+  >,
+): Readonly<PrincipalAccountSnapshot> | null {
+  const binding = externalBindings.get(externalBindingKey(lookup));
+  if (!binding || binding.state !== "active") return null;
+  return accountFromMaps(
+    binding.principalId,
+    principals,
+    externalBindings,
+    knowledgeSpaces,
+    personalBindings,
+    memberships,
+  );
+}
+
+function validateAccountBootstrapRecords(
+  records: Readonly<AccountBootstrapRecordSet>,
+): Readonly<PrincipalAccountSnapshot> | null {
+  try {
+    const { principal, externalBinding, personalSpace, personalBinding } = records;
+    const ownerMembership = records.ownerMembership;
+    const revision = records.initialRevision.revision;
+    const parsedHandle = parseCanonicalSpaceHandle(personalSpace.spaceHandle);
+    if (
+      parsedHandle.kind !== "valid" ||
+      isReservedTopLevelHandle(parsedHandle.canonicalHandle) ||
+      personalSpace.normalizedHandle !== parsedHandle.canonicalHandle ||
+      externalBinding.principalId !== principal.principalId ||
+      personalBinding.principalId !== principal.principalId ||
+      personalBinding.spaceId !== personalSpace.spaceId ||
+      ownerMembership.spaceId !== personalSpace.spaceId ||
+      ownerMembership.principalId !== principal.principalId ||
+      revision.spaceId !== personalSpace.spaceId ||
+      revision.revisionId !== personalSpace.headRevisionId ||
+      revision.revisionNumber !== 1 ||
+      revision.parentRevisionId !== null ||
+      revision.committedBy.kind !== "principal" ||
+      revision.committedBy.principalId !== principal.principalId ||
+      records.initialRevision.manifest.entries.length === 0
+    ) {
+      return null;
+    }
+    const personal = SpaceAggregate.restorePersonal({
+      space: personalSpace,
+      binding: personalBinding,
+      membership: ownerMembership,
+    });
+    return PrincipalAccount.restore({
+      principal,
+      externalBindings: [externalBinding],
+      personalMind: personal,
+    }).snapshot();
+  } catch {
+    return null;
+  }
+}
+
+export type AccountBootstrapFailureStage =
+  | "after_principal"
+  | "after_binding"
+  | "after_space"
+  | "after_membership"
+  | "after_revision"
+  | "before_commit";
+
 export class InMemoryRevisionMetadataStore
-  implements ContentCommitMetadataStore, ExportDownloadGrantStore {
+  implements ContentCommitMetadataStore, ExportDownloadGrantStore, AccountBootstrapStore {
   readonly kind = "metadata-store" as const;
   #spaces = new Map<SpaceId, SpaceState>();
   #revisionsById = new Map<RevisionId, Envelope>();
@@ -900,9 +1082,15 @@ export class InMemoryRevisionMetadataStore
   #exportJobs = new Map<JobId, Readonly<ExportJob>>();
   #exportDownloadGrants = new Map<string, Readonly<ExportDownloadGrant>>();
   #indexStates = new Map<string, Readonly<RevisionIndexState>>();
+  #principals: PrincipalMap = new Map();
+  #externalBindings: ExternalBindingMap = new Map();
+  #knowledgeSpaces: KnowledgeSpaceMap = new Map();
+  #personalBindings: PersonalBindingMap = new Map();
+  #memberships: MembershipMap = new Map();
   readonly #authorizationStates = new Map<string, AuthorizationState>();
   #transactionTail: Promise<void> = Promise.resolve();
   #nextCommitFailure: Error | null = null;
+  #nextAccountBootstrapFailureStage: AccountBootstrapFailureStage | null = null;
 
   async readHead(spaceId: SpaceId): Promise<RevisionId | null> {
     return this.#spaces.get(spaceId)?.head ?? null;
@@ -922,6 +1110,193 @@ export class InMemoryRevisionMetadataStore
         left.revision.revisionNumber - right.revision.revisionNumber,
     );
     return Object.freeze(revisions);
+  }
+
+  async readAccount(
+    principalId: Principal["principalId"],
+  ): Promise<Readonly<PrincipalAccountSnapshot> | null> {
+    return accountFromMaps(
+      principalId,
+      this.#principals,
+      this.#externalBindings,
+      this.#knowledgeSpaces,
+      this.#personalBindings,
+      this.#memberships,
+    );
+  }
+
+  async readAccountByExternalBinding(
+    lookup: Readonly<ExternalIdentityBindingLookup>,
+  ): Promise<Readonly<PrincipalAccountSnapshot> | null> {
+    return accountByBindingFromMaps(
+      lookup,
+      this.#principals,
+      this.#externalBindings,
+      this.#knowledgeSpaces,
+      this.#personalBindings,
+      this.#memberships,
+    );
+  }
+
+  async resolvePersonalMind(
+    principalId: Principal["principalId"],
+  ): Promise<Readonly<PersonalMindResolution> | null> {
+    const binding = this.#personalBindings.get(principalId);
+    if (!binding) return null;
+    const space = this.#knowledgeSpaces.get(binding.spaceId);
+    if (!space || space.state !== "active") return null;
+    return Object.freeze({
+      spaceId: space.spaceId,
+      headRevisionId: space.headRevisionId,
+    });
+  }
+
+  async runAccountBootstrapTransaction<Result>(
+    operation: (transaction: AccountBootstrapTransaction) => Promise<Result>,
+  ): Promise<Result> {
+    return this.#runExclusive(async () => {
+      const principals = cloneRecordMap(this.#principals, freezePrincipal);
+      const externalBindings = cloneRecordMap(
+        this.#externalBindings,
+        freezeExternalBinding,
+      );
+      const knowledgeSpaces = cloneRecordMap(
+        this.#knowledgeSpaces,
+        freezeKnowledgeSpace,
+      );
+      const personalBindings = cloneRecordMap(
+        this.#personalBindings,
+        freezePersonalBinding,
+      );
+      const memberships = cloneRecordMap(this.#memberships, freezeMembership);
+      const revisionSpaces = cloneSpaces(this.#spaces);
+      const revisionsById = new Map(this.#revisionsById);
+      const transaction: AccountBootstrapTransaction = Object.freeze({
+        readAccountByExternalBinding: async (
+          lookup: Readonly<ExternalIdentityBindingLookup>,
+        ) =>
+          accountByBindingFromMaps(
+            lookup,
+            principals,
+            externalBindings,
+            knowledgeSpaces,
+            personalBindings,
+            memberships,
+          ),
+        createAccountBootstrap: async (
+          records: Readonly<AccountBootstrapRecordSet>,
+        ): Promise<CreateAccountBootstrapResult> => {
+          const lookup = Object.freeze({
+            provider: records.externalBinding.provider,
+            normalizedBinding: records.externalBinding.normalizedBinding,
+          });
+          const exactExisting = accountByBindingFromMaps(
+            lookup,
+            principals,
+            externalBindings,
+            knowledgeSpaces,
+            personalBindings,
+            memberships,
+          );
+          if (exactExisting !== null) {
+            return Object.freeze({
+              kind: "exact_binding_exists",
+              account: exactExisting,
+            });
+          }
+          const validated = validateAccountBootstrapRecords(records);
+          if (validated === null) {
+            return Object.freeze({ kind: "invalid_record" });
+          }
+          const { principal, externalBinding, personalSpace, personalBinding } =
+            records;
+          const ownerMembership = records.ownerMembership;
+          const hasCollision =
+            principals.has(principal.principalId) ||
+            [...externalBindings.values()].some(
+              (binding) => binding.bindingId === externalBinding.bindingId,
+            ) ||
+            knowledgeSpaces.has(personalSpace.spaceId) ||
+            [...knowledgeSpaces.values()].some(
+              (space) => space.normalizedHandle === personalSpace.normalizedHandle,
+            ) ||
+            personalBindings.has(personalBinding.principalId) ||
+            [...personalBindings.values()].some(
+              (binding) => binding.spaceId === personalBinding.spaceId,
+            ) ||
+            memberships.has(ownerMembership.membershipId) ||
+            revisionSpaces.has(personalSpace.spaceId) ||
+            revisionsById.has(records.initialRevision.revision.revisionId);
+          if (hasCollision) {
+            return Object.freeze({ kind: "record_conflict" });
+          }
+
+          const revisionResult = await this.#commitRevisionAgainst(
+            {
+              expectedHeadRevisionId: null,
+              envelope: records.initialRevision,
+            },
+            revisionSpaces,
+            revisionsById,
+          );
+          if (
+            revisionResult.kind !== "committed" ||
+            revisionResult.replayed ||
+            !revisionEnvelopesEqual(
+              revisionResult.envelope,
+              records.initialRevision,
+            )
+          ) {
+            return Object.freeze({ kind: "record_conflict" });
+          }
+          this.#failAccountBootstrapIfRequested("after_revision");
+          principals.set(principal.principalId, freezePrincipal(principal));
+          this.#failAccountBootstrapIfRequested("after_principal");
+          externalBindings.set(
+            externalBindingKey(lookup),
+            freezeExternalBinding(externalBinding),
+          );
+          this.#failAccountBootstrapIfRequested("after_binding");
+          knowledgeSpaces.set(
+            personalSpace.spaceId,
+            freezeKnowledgeSpace(personalSpace),
+          );
+          this.#failAccountBootstrapIfRequested("after_space");
+          personalBindings.set(
+            personalBinding.principalId,
+            freezePersonalBinding(personalBinding),
+          );
+          memberships.set(
+            ownerMembership.membershipId,
+            freezeMembership(ownerMembership),
+          );
+          this.#failAccountBootstrapIfRequested("after_membership");
+          const account = accountFromMaps(
+            principal.principalId,
+            principals,
+            externalBindings,
+            knowledgeSpaces,
+            personalBindings,
+            memberships,
+          );
+          if (account === null) {
+            throw new Error("account bootstrap aggregate could not be restored");
+          }
+          this.#failAccountBootstrapIfRequested("before_commit");
+          return Object.freeze({ kind: "created", account });
+        },
+      });
+
+      const result = await operation(transaction);
+      this.#principals = principals;
+      this.#externalBindings = externalBindings;
+      this.#knowledgeSpaces = knowledgeSpaces;
+      this.#personalBindings = personalBindings;
+      this.#memberships = memberships;
+      this.#spaces = revisionSpaces;
+      this.#revisionsById = revisionsById;
+      return result;
+    });
   }
 
   async commitRevision(request: RevisionCommitRequest): Promise<RevisionCommitResult> {
@@ -1804,6 +2179,31 @@ export class InMemoryRevisionMetadataStore
     this.#nextCommitFailure = error;
   }
 
+  failNextAccountBootstrapAtForTest(stage: AccountBootstrapFailureStage): void {
+    this.#nextAccountBootstrapFailureStage = stage;
+  }
+
+  async inspectAccountBootstrapStateForTest(): Promise<Readonly<{
+    principals: number;
+    bindings: number;
+    personalMinds: number;
+    memberships: number;
+    revisions: number;
+  }>> {
+    const personalSpaceIds = new Set(
+      [...this.#personalBindings.values()].map((binding) => binding.spaceId),
+    );
+    return Object.freeze({
+      principals: this.#principals.size,
+      bindings: this.#externalBindings.size,
+      personalMinds: this.#personalBindings.size,
+      memberships: this.#memberships.size,
+      revisions: [...this.#revisionsById.values()].filter((envelope) =>
+        personalSpaceIds.has(envelope.revision.spaceId),
+      ).length,
+    });
+  }
+
   /** Test/local fixture hook; production authorization mutations use metadata transactions. */
   setCurrentAuthorizationStateForTest(
     query: AuthorizationStateQuery,
@@ -1836,5 +2236,11 @@ export class InMemoryRevisionMetadataStore
     } finally {
       release();
     }
+  }
+
+  #failAccountBootstrapIfRequested(stage: AccountBootstrapFailureStage): void {
+    if (this.#nextAccountBootstrapFailureStage !== stage) return;
+    this.#nextAccountBootstrapFailureStage = null;
+    throw new Error(`injected account bootstrap transaction failure at ${stage}`);
   }
 }

@@ -21,17 +21,24 @@ import {
   type CanonicalRevisionEnvelope,
   type CanonicalSpaceHandle,
   type EffectiveTokenScopes,
+  type ExternalBindingId,
   type ExportArchiveRecord,
   type ExportDownloadGrant,
   type ExportDownloadSecretVerifier,
   type ExportJob,
   type HandlePolicyFailureReason,
   type MarkdownMediaType,
+  type MembershipId,
   type MembershipState,
   type IdempotencyKey,
   type IdempotencyOperation,
   type IdempotencyRecord,
   type IdempotencyResult,
+  type ExternalIdentityBinding,
+  type KnowledgeSpace,
+  type PersonalSpaceBinding,
+  type Principal,
+  type PrincipalAccountSnapshot,
   type PrincipalId,
   type JobId,
   type OutboxMessageId,
@@ -40,8 +47,10 @@ import {
   type RevisionIndexState,
   type RevisionMode,
   type Role,
+  type SensitiveExternalBinding,
   type Sha256Digest,
   type SpaceId,
+  type SpaceMembership,
   type SpaceLifecycleState,
   type TokenId,
   type UtcInstant,
@@ -69,16 +78,28 @@ export type {
   StartExportIdempotencyResult,
 } from "@mind-diary/domain";
 export {
+  PrincipalAccount,
   RESERVED_TOP_LEVEL_HANDLES,
+  SpaceAggregate,
   isReservedTopLevelHandle,
   isReservedTopLevelRoute,
   normalizeSpaceHandle,
   parseCanonicalSpaceHandle,
   version,
   verifiedSpaceHost,
+  revisionEnvelopesEqual,
   type CanonicalSpaceHandle,
   type HandlePolicyFailureReason,
   type VerifiedSpaceHost,
+} from "@mind-diary/domain";
+export type {
+  ExternalIdentityBinding,
+  KnowledgeSpace,
+  PersonalSpaceBinding,
+  Principal,
+  PrincipalAccountSnapshot,
+  SensitiveExternalBinding,
+  SpaceMembership,
 } from "@mind-diary/domain";
 
 export interface Clock {
@@ -88,6 +109,16 @@ export interface Clock {
 /** Server-side source of opaque immutable revision identities. */
 export interface RevisionIdGenerator {
   nextRevisionId(): RevisionId;
+}
+
+/** Server-owned identifiers and hidden handle for one isolated account. */
+export interface AccountBootstrapIdGenerator {
+  nextPrincipalId(): PrincipalId;
+  nextExternalBindingId(): ExternalBindingId;
+  nextSpaceId(): SpaceId;
+  nextMembershipId(): MembershipId;
+  nextRevisionId(): RevisionId;
+  nextPersonalSpaceHandle(): string;
 }
 
 /** Server-owned IDs for effects staged with one successful content commit. */
@@ -138,6 +169,67 @@ export interface ExportDownloadSecretCrypto {
 
 export interface MetadataStore {
   readonly kind: "metadata-store";
+}
+
+export interface ExternalIdentityBindingLookup {
+  readonly provider: string;
+  /** Sensitive exact-match material. It must never enter logs or public results. */
+  readonly normalizedBinding: SensitiveExternalBinding;
+}
+
+/**
+ * Complete metadata aggregate staged by account bootstrap. Canonical object
+ * bytes are prepared before this transaction and become reachable only through
+ * the initial revision committed with this record set.
+ */
+export interface AccountBootstrapRecordSet {
+  readonly principal: Readonly<Principal>;
+  readonly externalBinding: Readonly<ExternalIdentityBinding>;
+  readonly personalSpace: Readonly<KnowledgeSpace>;
+  readonly personalBinding: Readonly<PersonalSpaceBinding>;
+  readonly ownerMembership: Readonly<SpaceMembership>;
+  readonly initialRevision: Readonly<CanonicalRevisionEnvelope>;
+}
+
+export type CreateAccountBootstrapResult =
+  | {
+      readonly kind: "created";
+      readonly account: Readonly<PrincipalAccountSnapshot>;
+    }
+  | {
+      readonly kind: "exact_binding_exists";
+      readonly account: Readonly<PrincipalAccountSnapshot>;
+    }
+  | { readonly kind: "record_conflict" | "invalid_record" };
+
+export interface PersonalMindResolution {
+  readonly spaceId: SpaceId;
+  readonly headRevisionId: RevisionId;
+}
+
+/** Narrow rollback-on-error transaction for the indivisible account aggregate. */
+export interface AccountBootstrapTransaction {
+  readAccountByExternalBinding(
+    lookup: Readonly<ExternalIdentityBindingLookup>,
+  ): Promise<Readonly<PrincipalAccountSnapshot> | null>;
+  createAccountBootstrap(
+    records: Readonly<AccountBootstrapRecordSet>,
+  ): Promise<CreateAccountBootstrapResult>;
+}
+
+export interface AccountBootstrapStore extends MetadataStore {
+  runAccountBootstrapTransaction<Result>(
+    operation: (transaction: AccountBootstrapTransaction) => Promise<Result>,
+  ): Promise<Result>;
+  readAccount(
+    principalId: PrincipalId,
+  ): Promise<Readonly<PrincipalAccountSnapshot> | null>;
+  readAccountByExternalBinding(
+    lookup: Readonly<ExternalIdentityBindingLookup>,
+  ): Promise<Readonly<PrincipalAccountSnapshot> | null>;
+  resolvePersonalMind(
+    principalId: PrincipalId,
+  ): Promise<Readonly<PersonalMindResolution> | null>;
 }
 
 export interface HandleReservationSnapshot {
