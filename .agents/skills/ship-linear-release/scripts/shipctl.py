@@ -386,6 +386,38 @@ def _active_restrictions(metadata: dict[str, str]) -> list[str]:
     return active
 
 
+def _structured_token(value: str, name: str) -> str | None:
+    match = re.search(
+        rf"(?:^|[; ,]){re.escape(name.lower())}=([^; ,]+)(?:$|[; ,])",
+        value.strip().lower(),
+    )
+    return match.group(1) if match else None
+
+
+def _handoff_takeover_ready(metadata: dict[str, str]) -> bool:
+    """Recognize a fully reconciled, quiescent owner handoff.
+
+    The handoff target is provenance, not an exclusive capability: the next
+    explicitly invoked online coordinator still has to win the expected-old
+    coordinator-ref CAS. This permits recovery after an external control task
+    without asking the user to type a magic takeover phrase.
+    """
+    workers = metadata.get("WORKERS", "")
+    pause = metadata.get("PAUSE", "")
+    target = metadata.get("ACTION_TARGET", "").strip().lower()
+    return (
+        metadata.get("STATE", "").strip().lower() == "needs-input"
+        and metadata.get("OWNER_STATE", "").strip().lower() == "handoff-ready"
+        and metadata.get("ACTION_KIND", "").strip().lower() == "handoff-owner"
+        and metadata.get("ACTION_STATUS", "").strip().lower() == "reconciled"
+        and target not in {"", "none", "unknown"}
+        and _structured_token(workers, "executors") == "terminal"
+        and _structured_token(workers, "active_issue_lanes") == "none"
+        and _structured_token(pause, "state") == "handoff-ready"
+        and _structured_token(pause, "pending_external_action") == "none"
+    )
+
+
 def coordinator_refs(
     observation_repo: Path, advertised: list[tuple[str, str]]
 ) -> tuple[str, list[dict[str, Any]]]:
@@ -414,6 +446,9 @@ def coordinator_refs(
                 "owner_proof_digest": metadata.get("OWNER_PROOF_DIGEST", "unknown"),
                 "contract_digest": metadata.get("CONTRACT_DIGEST", "unknown"),
                 "active_restrictions": _active_restrictions(metadata),
+                "handoff_takeover_ready": _handoff_takeover_ready(metadata),
+                "action_kind": metadata.get("ACTION_KIND", "unknown"),
+                "action_status": metadata.get("ACTION_STATUS", "unknown"),
                 "migration_evidence": None,
             }
         )
@@ -726,11 +761,14 @@ def command_preflight(args: argparse.Namespace) -> int:
             contract_matches = bool(GIT_OID.fullmatch(active_contract)) and active_contract == local_contract
             resumable_state = active["state"] == "running" and active["owner_state"] == "active"
             restrictions = active["active_restrictions"]
-            route = (
-                "resume"
-                if proof_matches and contract_matches and resumable_state and not restrictions
-                else "recovery"
-            )
+            if active["handoff_takeover_ready"]:
+                route = "takeover"
+            else:
+                route = (
+                    "resume"
+                    if proof_matches and contract_matches and resumable_state and not restrictions
+                    else "recovery"
+                )
             reasons.append("active-canonical-coordinator")
             if not proof_matches:
                 reasons.append("owner-proof-missing-invalid-or-mismatched")
@@ -746,6 +784,8 @@ def command_preflight(args: argparse.Namespace) -> int:
                 reasons.append("canonical-owner-not-active")
             for restriction in restrictions:
                 reasons.append(f"active-durable-restriction:{restriction}")
+            if active["handoff_takeover_ready"]:
+                reasons.append("handoff-ready-takeover-eligible")
 
         required_refs = {
             "normal": ["references/coordination.md", "references/external-main.md"],
@@ -759,13 +799,26 @@ def command_preflight(args: argparse.Namespace) -> int:
                 "references/crash-recovery.md",
                 "references/external-main.md",
             ],
+            "takeover": [
+                "references/coordination.md",
+                "references/crash-recovery.md",
+                "references/external-main.md",
+            ],
             "blocked": [],
+        }[route]
+        mutation_scope = {
+            "normal": "run",
+            "resume": "run",
+            "takeover": "coordinator-claim-cas-only",
+            "recovery": "none",
+            "blocked": "none",
         }[route]
         payload = {
             "schema": 1,
             "status": "ok" if route != "blocked" else "blocked",
             "route": route,
-            "mutation_allowed": route in {"normal", "resume"},
+            "mutation_allowed": route in {"normal", "resume", "takeover"},
+            "mutation_scope": mutation_scope,
             "reasons": reasons or ["clean-start"],
             "repo": str(repo),
             "default": args.default,

@@ -130,6 +130,12 @@ rewrite, другой milestone/project, AWS fallback или новая infrastr
 3. При fresh work первое mutable действие — repo-global coordinator claim по
    [coordination.md](references/coordination.md). CAS loser остаётся read-only.
    Active чужой owner — `already-running`; timeout сам по себе не даёт takeover.
+   `route=takeover` означает ровно один разрешённый mutable шаг: expected-old
+   CAS repo-global claim с `epoch+1`; до его победы и fencing никакие другие
+   Git/Linear/worktree mutations не разрешены. Fully reconciled
+   `handoff-ready` не требует от пользователя ручной команды, magic phrase или
+   самостоятельного Git takeover: fresh explicit вызов этого skill уже задаёт
+   intent продолжить run.
 4. Генерируй identities детерминированным helper, не JavaScript snippets:
 
    ```bash

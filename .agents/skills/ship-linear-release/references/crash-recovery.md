@@ -46,6 +46,11 @@ owner.
 4. Если прежняя coordinator task authoritative terminal/archived, пользователь
    явно подтвердил её stop либо есть explicit `handoff-ready`, новая task может
    начать takeover. Старые child workers не становятся её subagents.
+   Для reconciled `handoff-ready` с terminal workers и отсутствующим pending
+   external action новый explicit online вызов skill является достаточным
+   resume intent: сразу выполни expected-old takeover CAS, не требуй от
+   пользователя magic phrase или ручных Git действий. Handoff target —
+   provenance; race между successors решает CAS.
 5. Неизвестная liveness старых workers допустима только если их manifest и
    guard refs доказывают feature-only authority. Тогда takeover сначала fence-ит
    все guards и не трогает их worktrees. Если старый contract позволял shared
@@ -81,6 +86,11 @@ checkpoint retire-ит exact legacy namespace для collision check, но не 
 Goal auto-continuation и новый model turn подтверждением не являются. Пока
 record active, recovery и read-only evidence допустимы, а affected mutation
 scope остаётся закрыта; независимые lanes продолжай только по доказанному scope.
+Fresh explicit вызов online `ship-linear-release` после pause считается таким
+confirmation для этого run и сохраняется как invocation turn/digest; отдельный
+предписанный текст не нужен. Он не заменяет невыполненный resume predicate и не
+снимает unrelated scoped HOLD/PROMOTION_HOLD: takeover переносит их новому
+owner, который lift-ит каждый scope только по его evidence.
 
 ## Войти в recovery и закрыть старые grants
 

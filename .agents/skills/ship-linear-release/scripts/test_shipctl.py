@@ -361,6 +361,58 @@ class PreflightTest(GitMixin, unittest.TestCase):
         self.assertIn("canonical-owner-handoff-ready", result["reasons"])
         self.assertIn("references/external-main.md", result["required_references"])
 
+    def test_reconciled_quiescent_handoff_routes_to_automatic_takeover(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="shipctl-") as directory:
+            repo, _ = self.fixture(Path(directory))
+            self.push_coordinator(
+                repo,
+                MODULE.CANONICAL_COORDINATOR_REF,
+                self.coordinator_message(
+                    repo,
+                    state="needs-input",
+                    owner_state="handoff-ready",
+                    contract="1" * 40,
+                    extra=(
+                        "ACTION_KIND: handoff-owner\n"
+                        "ACTION_TARGET: codex-thread:previous-control-task\n"
+                        "WORKERS: active_issue_lanes=none;executors=terminal\n"
+                        "PAUSE: state=handoff-ready;pending_external_action=none\n"
+                        "PROMOTION_HOLD: known-bad-default\n"
+                    ),
+                ),
+            )
+            code, result, _ = self.preflight(repo)
+        self.assertEqual((code, result["route"]), (0, "takeover"))
+        self.assertTrue(result["mutation_allowed"])
+        self.assertEqual(result["mutation_scope"], "coordinator-claim-cas-only")
+        self.assertIn("handoff-ready-takeover-eligible", result["reasons"])
+        self.assertIn("active-contract-mismatch-or-unknown", result["reasons"])
+        self.assertIn("active-durable-restriction:PAUSE", result["reasons"])
+        self.assertIn("active-durable-restriction:PROMOTION_HOLD", result["reasons"])
+
+    def test_incomplete_handoff_remains_read_only_recovery(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="shipctl-") as directory:
+            repo, _ = self.fixture(Path(directory))
+            self.push_coordinator(
+                repo,
+                MODULE.CANONICAL_COORDINATOR_REF,
+                self.coordinator_message(
+                    repo,
+                    state="needs-input",
+                    owner_state="handoff-ready",
+                    extra=(
+                        "ACTION_KIND: handoff-owner\n"
+                        "ACTION_TARGET: codex-thread:next\n"
+                        "WORKERS: active_issue_lanes=one;executors=running\n"
+                        "PAUSE: state=handoff-ready;pending_external_action=none\n"
+                    ),
+                ),
+            )
+            code, result, _ = self.preflight(repo)
+        self.assertEqual((code, result["route"]), (0, "recovery"))
+        self.assertFalse(result["mutation_allowed"])
+        self.assertEqual(result["mutation_scope"], "none")
+
     def test_matching_proof_cannot_lift_active_pause(self) -> None:
         with tempfile.TemporaryDirectory(prefix="shipctl-") as directory:
             repo, _ = self.fixture(Path(directory))

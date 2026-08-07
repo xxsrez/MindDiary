@@ -158,7 +158,7 @@ owner proof одного global ref не разрешают mutations.
 | `active`, caller != owner | Вторая session | Тот же milestone, `1/1`, `1/N`, `N/1` или `N/M` | Откажись от мутаций; только observer/read-only report. |
 | `active`, caller != owner | Вторая session | Другой milestone, любые limits | Откажись от мутаций; repo-global claim важнее milestone boundary. |
 | `active`, старый owner доказанно остановлен | Новая session | Тот же или другой milestone | Выполни takeover `epoch+1`, fence guards, затем recovery; до fencing не dispatch-и. |
-| `handoff-ready`, explicit target/reason, нет in-flight action/worker | Новая session | Тот же run | CAS-прими ownership с `epoch+1`, fence-ни guards и затем recovery. |
+| `handoff-ready`, reconciled target/reason, workers terminal, нет pending external action | Новая явно вызванная session | Тот же run | Без дополнительного вопроса CAS-прими ownership с `epoch+1`, fence-ни guards и затем recovery. Target сохраняет provenance, но не резервирует handoff одной session: concurrent successors разрешает expected-old CAS. |
 | `complete` | Любая session | Любой milestone/limit | CAS-создай descendant claim с новым owner и `epoch+1`; сохрани старый ledger. |
 | `aborted`, нет run effects | Любая session | Любой milestone/limit | CAS-создай descendant claim с новым owner и `epoch+1`; aborted не считать release success. |
 | Любой state | Любая session с `dry-run` | Любые | Разреши только read-only план; не создавай claim, receipt, worktree или action token. |
@@ -180,6 +180,14 @@ Takeover разрешай только после одного из доказа
 `handoff-ready` создаётся только отдельным explicit owner action с target/reason;
 goal conflict до первой run effect завершается owner state `aborted`, а не
 превращается в неявный handoff.
+
+Fresh user message, который явно вызывает online `ship-linear-release`, является
+resume intent для уже quiescent `handoff-ready` run. Не проси пользователя
+печатать специальную фразу, выполнять Git-команды или вручную делать takeover.
+Если несколько новых sessions вызваны одновременно, только победитель
+expected-old CAS становится owner; остальные переходят в observer. Это правило
+не применяется к active owner, незавершённым workers/in-flight action или
+невыполненному machine-checkable resume predicate.
 
 ## Менять limit немедленно и безопасно
 
