@@ -30,6 +30,9 @@ claim generation/token, exact feature ref и guard ref/tip. Это fencing ident
 не credential. Если они отсутствуют, не совпадают с work claim либо branch не
 содержит уникальный run-key/epoch/claim suffix, ничего не меняй и верни
 `needs-input`. Late result старого epoch/generation не имеет authority.
+`issue_id` может быть Linear UUID либо exact `issue_identifier`, когда
+установленный connector возвращает identifier в поле `id`; во втором случае
+они обязаны совпадать. Никогда не принимай выдуманный UUID.
 
 Требуй exact machine-checkable fragment:
 

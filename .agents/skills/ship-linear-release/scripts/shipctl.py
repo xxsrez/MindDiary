@@ -2,9 +2,9 @@
 """Deterministic, bounded helpers for ship-linear-release.
 
 Policy remains in SKILL.md and references. Most commands are read-only. The
-explicit ``takeover`` and ``fence-guards`` recovery commands perform narrowly
-fenced Git CAS transitions; they never mutate Linear, worktrees, feature refs,
-default, deployment, or tags.
+explicit ``takeover``, ``fence-guards``, and ``sync-contract`` recovery commands
+perform narrowly fenced Git CAS transitions; they never mutate Linear,
+worktrees, feature refs, default, deployment, or tags.
 """
 
 from __future__ import annotations
@@ -1089,7 +1089,7 @@ def validate_manifest(manifest: Any) -> tuple[list[str], list[str], list[str]]:
     for name in sorted(REQUIRED_MANIFEST_FIELDS - manifest.keys()):
         error(f"missing:{name}")
 
-    for name in ("run_id", "owner_id", "claim_token", "issue_id", "project_id", "milestone_id"):
+    for name in ("run_id", "owner_id", "claim_token", "project_id", "milestone_id"):
         value = manifest.get(name)
         if not isinstance(value, str) or UUID_TEXT.fullmatch(value) is None:
             error(f"invalid:{name}")
@@ -1103,6 +1103,11 @@ def validate_manifest(manifest: Any) -> tuple[list[str], list[str], list[str]]:
     issue_identifier = manifest.get("issue_identifier")
     if not isinstance(issue_identifier, str) or ISSUE_IDENTIFIER.fullmatch(issue_identifier) is None:
         error("invalid:issue_identifier")
+    issue_id = manifest.get("issue_id")
+    if not isinstance(issue_id, str) or (
+        UUID_TEXT.fullmatch(issue_id) is None and issue_id != issue_identifier
+    ):
+        error("invalid:issue_id")
     for name in ("guard_tip", "root_sha", "base_sha"):
         value = manifest.get(name)
         if not isinstance(value, str) or GIT_OID.fullmatch(value) is None:
@@ -2382,6 +2387,187 @@ def command_fence_guards(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_sync_contract(args: argparse.Namespace) -> int:
+    repo = Path(args.repo).resolve()
+    _, runtime_proof = _runtime_owner_proof()
+    if runtime_proof is None:
+        emit({"schema": 1, "status": "blocked", "reason": "runtime-thread-id-unavailable"})
+        return 3
+    preflight_code, preflight = _capture_preflight(repo, args.remote, args.default)
+    active = next(
+        (
+            item
+            for item in preflight.get("coordinator_refs", [])
+            if item.get("kind") == "canonical" and item.get("classification") == "active"
+        ),
+        None,
+    )
+    if (
+        preflight_code == 0
+        and preflight.get("route") == "recover-owner"
+        and active
+        and active.get("owner_proof_digest") == runtime_proof
+    ):
+        emit(
+            {
+                "schema": 1,
+                "status": "already-synced",
+                "coordinator": active["sha"],
+                "contract_source_sha": preflight.get("remote_sha"),
+                "contract_digest": preflight.get("contract_oid"),
+                "next": "continue-recovery",
+            }
+        )
+        return 0
+    if (
+        preflight_code != 0
+        or preflight.get("route") != "recover-owner-upgrade"
+        or active is None
+        or active.get("owner_proof_digest") != runtime_proof
+    ):
+        emit(
+            {
+                "schema": 1,
+                "status": "blocked",
+                "reason": "contract-sync-not-eligible",
+                "preflight": preflight,
+            }
+        )
+        return 3
+    coordinator = active["sha"]
+    remote_sha = preflight.get("remote_sha")
+    contract_oid = preflight.get("contract_oid")
+    if (
+        not isinstance(remote_sha, str)
+        or GIT_OID.fullmatch(remote_sha) is None
+        or not isinstance(contract_oid, str)
+        or GIT_OID.fullmatch(contract_oid) is None
+        or not _materialize_exact(repo, args.remote, [coordinator])
+    ):
+        emit({"schema": 1, "status": "blocked", "reason": "contract-sync-input-invalid"})
+        return 3
+    code, coordinator_message = git(repo, "show", "-s", "--format=%B", coordinator)
+    if code != 0:
+        emit({"schema": 1, "status": "blocked", "reason": "coordinator-message-unavailable"})
+        return 3
+    coordinator_fields = fields(coordinator_message)
+    action_kind = coordinator_fields.get("ACTION_KIND", "")
+    action_status = coordinator_fields.get("ACTION_STATUS", "").lower()
+    if action_status in {"intent", "planned"}:
+        if action_kind != "sync-contract":
+            emit({"schema": 1, "status": "blocked", "reason": "different-action-pending"})
+            return 3
+        intent = coordinator
+        intent_message = coordinator_message
+    else:
+        if action_status != "reconciled":
+            emit({"schema": 1, "status": "blocked", "reason": "contract-sync-action-invalid"})
+            return 3
+        old_source = coordinator_fields.get("CONTRACT_SOURCE_SHA", "unknown")
+        old_digest = coordinator_fields.get("CONTRACT_DIGEST", "unknown")
+        payload = {
+            "old_source": old_source,
+            "old_digest": old_digest,
+            "new_source": remote_sha,
+            "new_digest": contract_oid,
+        }
+        payload_digest = hashlib.sha256(
+            json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        action = {
+            "ACTION_ID": str(
+                uuid.uuid5(
+                    TRANSITION_NAMESPACE,
+                    f"sync-contract:{coordinator}:{payload_digest}",
+                )
+            ),
+            "ACTION_KIND": "sync-contract",
+            "ACTION_TARGET": f"{SKILL_PATH}@{remote_sha}",
+            "EXPECTED_BEFORE": f"source={old_source};digest={old_digest}",
+            "EXTERNAL_REQUEST_KEY": "none",
+            "PROVIDER_SELECTOR": f"git:{args.remote}:refs/heads/{args.default}:{SKILL_PATH}",
+            "PAYLOAD_DIGEST": payload_digest,
+            "EFFECT_IDENTITY": f"source={remote_sha};digest={contract_oid}",
+        }
+        intent_message, errors = _render_coordinator_action(
+            coordinator,
+            coordinator_message,
+            "ship-linear-release intent sync recovery contract",
+            {},
+            action,
+            "intent",
+        )
+        if errors or intent_message is None:
+            emit({"schema": 1, "status": "blocked", "reason": "contract-sync-intent-invalid", "errors": errors})
+            return 3
+        intent = _metadata_commit(repo, coordinator, intent_message)
+        if intent is None:
+            emit({"schema": 1, "status": "blocked", "reason": "contract-sync-intent-commit-failed"})
+            return 3
+        push = foreign_main.run(
+            repo,
+            "push",
+            "--porcelain",
+            f"--force-with-lease={CANONICAL_COORDINATOR_REF}:{coordinator}",
+            args.remote,
+            f"{intent}:{CANONICAL_COORDINATOR_REF}",
+        )
+        if push.returncode != 0:
+            emit({"schema": 1, "status": "cas-lost", "reason": "coordinator-ref-changed", "expected": coordinator})
+            return 4
+        coordinator_fields = fields(intent_message)
+    old_source = coordinator_fields.get("CONTRACT_SOURCE_SHA", "unknown")
+    old_digest = coordinator_fields.get("CONTRACT_DIGEST", "unknown")
+    reconcile_message, errors = _render_coordinator_action(
+        intent,
+        intent_message,
+        "ship-linear-release reconciled sync recovery contract",
+        {
+            "CONTRACT_SOURCE_SHA": remote_sha,
+            "CONTRACT_DIGEST": contract_oid,
+            "CONTRACT_MIGRATED_FROM": f"source={old_source};digest={old_digest}",
+        },
+        {},
+        "reconciled",
+        f"source={remote_sha};digest={contract_oid}",
+    )
+    if errors or reconcile_message is None:
+        emit({"schema": 1, "status": "blocked", "reason": "contract-sync-reconcile-invalid", "errors": errors})
+        return 3
+    reconciled = _metadata_commit(repo, intent, reconcile_message)
+    if reconciled is None:
+        emit({"schema": 1, "status": "blocked", "reason": "contract-sync-reconcile-commit-failed"})
+        return 3
+    push = foreign_main.run(
+        repo,
+        "push",
+        "--porcelain",
+        f"--force-with-lease={CANONICAL_COORDINATOR_REF}:{intent}",
+        args.remote,
+        f"{reconciled}:{CANONICAL_COORDINATOR_REF}",
+    )
+    if push.returncode != 0:
+        emit({"schema": 1, "status": "cas-lost", "reason": "coordinator-ref-changed-after-contract-sync", "expected": intent})
+        return 4
+    advertised_state, advertised = advertised_coordinator_refs(repo, args.remote)
+    observed = next((sha for sha, ref in advertised if ref == CANONICAL_COORDINATOR_REF), None)
+    if advertised_state != "observed" or observed != reconciled:
+        emit({"schema": 1, "status": "blocked", "reason": "contract-sync-delivery-unverified"})
+        return 3
+    emit(
+        {
+            "schema": 1,
+            "status": "synced",
+            "coordinator": reconciled,
+            "intent": intent,
+            "contract_source_sha": remote_sha,
+            "contract_digest": contract_oid,
+            "next": "continue-recovery",
+        }
+    )
+    return 0
+
+
 def parser() -> argparse.ArgumentParser:
     root = argparse.ArgumentParser(description=__doc__)
     sub = root.add_subparsers(dest="command", required=True)
@@ -2416,6 +2602,11 @@ def parser() -> argparse.ArgumentParser:
     fence_guards.add_argument("--remote", default="origin")
     fence_guards.add_argument("--default", default="main")
     fence_guards.set_defaults(handler=command_fence_guards)
+    sync_contract = sub.add_parser("sync-contract")
+    sync_contract.add_argument("--repo", default=".")
+    sync_contract.add_argument("--remote", default="origin")
+    sync_contract.add_argument("--default", default="main")
+    sync_contract.set_defaults(handler=command_sync_contract)
     return root
 
 
