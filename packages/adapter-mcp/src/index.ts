@@ -955,6 +955,132 @@ export const MCP_RESOURCE_CAPABILITIES = [
   "resources/templates/list-empty",
 ] as const;
 
+export const MCP_ADVERTISED_CAPABILITIES = Object.freeze({
+  tools: Object.freeze({}),
+  resources: Object.freeze({}),
+});
+
+/** Security/product assertions for the custom Mind-aware MCP profile. */
+export const MCP_CUSTOM_PROFILE_GUARDRAILS = Object.freeze({
+  profile: "mind-diary-custom-mind-aware",
+  companyKnowledgeCompatible: false,
+  fetchToolRequiredFallback: true,
+  resourceUrisAreCapabilities: false,
+  resourceTemplatesPublished: false,
+  implicitPersonalization: false,
+  corpusSelectsMind: false,
+  corpusSelectsScopes: false,
+  controlToolsPublished: false,
+  allowedWritePromptInjectionRisk: "residual-explicit",
+});
+
+export interface McpResourceDescriptor {
+  readonly uri: string;
+  readonly name: string;
+  readonly title?: string;
+  readonly description?: string;
+  readonly mimeType: "text/markdown; charset=utf-8";
+}
+
+export interface McpRootResourcePage {
+  readonly resources: readonly Readonly<McpResourceDescriptor>[];
+  readonly nextCursor: string | null;
+}
+
+export interface McpImmutableResourceRead {
+  readonly uri: string;
+  readonly mimeType: "text/markdown; charset=utf-8";
+  readonly text: string;
+}
+
+export interface ParsedMcpResourceUri {
+  readonly kind: "index" | "entry";
+  readonly spaceId: string;
+  readonly revisionId: string;
+  readonly path: string;
+}
+
+const MCP_RESOURCE_URI_PREFIX = "okf://spaces/";
+const MCP_RESOURCE_URI_MAX_CHARACTERS = 4_096;
+const RESOURCE_ENCODED_SEPARATOR = /%(?:2f|5c)/iu;
+const RESOURCE_CONTROL_CHARACTER = /[\u0000-\u001f\u007f]/u;
+
+function encodeRfc3986Segment(value: string): string {
+  return encodeURIComponent(value).replace(/[!'()*]/gu, (character) =>
+    `%${character.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
+}
+
+function decodeCanonicalResourceSegment(value: string): string | null {
+  if (value.length === 0 || RESOURCE_ENCODED_SEPARATOR.test(value)) return null;
+  try {
+    const decoded = decodeURIComponent(value);
+    if (
+      decoded.length === 0 ||
+      decoded === "." ||
+      decoded === ".." ||
+      decoded.includes("/") ||
+      decoded.includes("\\") ||
+      RESOURCE_ENCODED_SEPARATOR.test(decoded) ||
+      RESOURCE_CONTROL_CHARACTER.test(decoded) ||
+      encodeRfc3986Segment(decoded) !== value
+    ) {
+      return null;
+    }
+    return decoded;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Parses the one exact token-free resource URI grammar. Re-encoding every
+ * decoded segment prevents encoded-once, case, separator, and path ambiguity.
+ */
+export function parseMcpResourceUri(value: unknown): ParsedMcpResourceUri | null {
+  if (
+    typeof value !== "string" ||
+    value.length === 0 ||
+    value.length > MCP_RESOURCE_URI_MAX_CHARACTERS ||
+    !value.startsWith(MCP_RESOURCE_URI_PREFIX) ||
+    value.includes("?") ||
+    value.includes("#")
+  ) {
+    return null;
+  }
+  const segments = value.slice(MCP_RESOURCE_URI_PREFIX.length).split("/");
+  if (segments.length < 4 || segments[1] !== "revisions") return null;
+  const spaceId = decodeCanonicalResourceSegment(segments[0]!);
+  const revisionId = decodeCanonicalResourceSegment(segments[2]!);
+  if (spaceId === null || revisionId === null) return null;
+
+  if (segments.length === 4 && segments[3] === "index") {
+    return Object.freeze({
+      kind: "index",
+      spaceId,
+      revisionId,
+      path: "index.md",
+    });
+  }
+  if (segments[3] !== "entries" || segments.length < 5) return null;
+  const pathSegments = segments.slice(4).map(decodeCanonicalResourceSegment);
+  if (pathSegments.some((segment) => segment === null)) return null;
+  const path = (pathSegments as string[]).join("/");
+  if (
+    path === "index.md" ||
+    !path.endsWith(".md") ||
+    path.startsWith("/") ||
+    RESOURCE_ENCODED_SEPARATOR.test(path)
+  ) {
+    return null;
+  }
+  return Object.freeze({ kind: "entry", spaceId, revisionId, path });
+}
+
+function isRootIndexResourceUri(value: unknown): value is string {
+  return parseMcpResourceUri(value)?.kind === "index";
+}
+
 type McpAuthenticatedActor = Extract<
   McpBearerAuthenticationResult,
   { readonly kind: "authenticated" }
@@ -984,6 +1110,16 @@ export interface McpContentApplication {
   listTools(request: {
     readonly actor: McpAuthenticatedActor;
   }): Promise<readonly Readonly<Record<string, unknown>>[]>;
+  /** Enumerates only authorized Personal/accepted-membership root index resources. */
+  listRootResources(request: {
+    readonly actor: McpAuthenticatedActor;
+    readonly cursor?: string;
+  }): Promise<Readonly<McpRootResourcePage>>;
+  /** Reauthorizes current access and reads one exact immutable Markdown resource. */
+  readResource(request: {
+    readonly actor: McpAuthenticatedActor;
+    readonly uri: string;
+  }): Promise<Readonly<McpImmutableResourceRead>>;
   /** Resolves the target and reads current Authorizer state for every call. */
   authorizeToolCall(request: {
     readonly actor: McpAuthenticatedActor;
@@ -1561,6 +1697,150 @@ function listedTools(
   );
 }
 
+type ResourceListParameters =
+  | { readonly kind: "valid"; readonly cursor?: string }
+  | { readonly kind: "invalid" };
+
+function resourceListParameters(
+  params: Readonly<Record<string, unknown>>,
+): ResourceListParameters {
+  if (Object.keys(params).some((key) => key !== "_meta" && key !== "cursor")) {
+    return Object.freeze({ kind: "invalid" });
+  }
+  if (params.cursor === undefined) return Object.freeze({ kind: "valid" });
+  if (
+    typeof params.cursor !== "string" ||
+    params.cursor.length === 0 ||
+    params.cursor.length > 4_096 ||
+    RESOURCE_CONTROL_CHARACTER.test(params.cursor)
+  ) {
+    return Object.freeze({ kind: "invalid" });
+  }
+  return Object.freeze({ kind: "valid", cursor: params.cursor });
+}
+
+function exactResourceReadUri(
+  params: Readonly<Record<string, unknown>>,
+): string | null {
+  const keys = Object.keys(params).sort();
+  if (
+    keys.length !== 2 ||
+    keys[0] !== "_meta" ||
+    keys[1] !== "uri" ||
+    parseMcpResourceUri(params.uri) === null
+  ) {
+    return null;
+  }
+  return params.uri as string;
+}
+
+function validSafeResourceText(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= 1_024 &&
+    !RESOURCE_CONTROL_CHARACTER.test(value)
+  );
+}
+
+function normalizedRootResourcePage(
+  value: unknown,
+): Readonly<McpRootResourcePage> | null {
+  if (
+    !isRecord(value) ||
+    !Array.isArray(value.resources) ||
+    (value.nextCursor !== null &&
+      (typeof value.nextCursor !== "string" ||
+        value.nextCursor.length === 0 ||
+        value.nextCursor.length > 4_096 ||
+        RESOURCE_CONTROL_CHARACTER.test(value.nextCursor)))
+  ) {
+    return null;
+  }
+  const resources: McpResourceDescriptor[] = [];
+  const seen = new Set<string>();
+  for (const candidate of value.resources) {
+    if (
+      !isRecord(candidate) ||
+      !isRootIndexResourceUri(candidate.uri) ||
+      !validSafeResourceText(candidate.name) ||
+      candidate.mimeType !== "text/markdown; charset=utf-8" ||
+      (candidate.title !== undefined && !validSafeResourceText(candidate.title)) ||
+      (candidate.description !== undefined &&
+        !validSafeResourceText(candidate.description)) ||
+      seen.has(candidate.uri)
+    ) {
+      return null;
+    }
+    seen.add(candidate.uri);
+    resources.push(
+      Object.freeze({
+        uri: candidate.uri,
+        name: candidate.name,
+        ...(candidate.title === undefined ? {} : { title: candidate.title }),
+        ...(candidate.description === undefined
+          ? {}
+          : { description: candidate.description }),
+        mimeType: candidate.mimeType,
+      }),
+    );
+  }
+  resources.sort((left, right) =>
+    left.uri < right.uri ? -1 : left.uri > right.uri ? 1 : 0,
+  );
+  return Object.freeze({
+    resources: Object.freeze(resources),
+    nextCursor: value.nextCursor,
+  });
+}
+
+function normalizedResourceRead(
+  expectedUri: string,
+  value: unknown,
+): Readonly<McpImmutableResourceRead> | null {
+  if (
+    !isRecord(value) ||
+    value.uri !== expectedUri ||
+    parseMcpResourceUri(value.uri) === null ||
+    value.mimeType !== "text/markdown; charset=utf-8" ||
+    typeof value.text !== "string"
+  ) {
+    return null;
+  }
+  return Object.freeze({
+    uri: value.uri,
+    mimeType: value.mimeType,
+    text: value.text,
+  });
+}
+
+function resourceNotFoundResponse(
+  id: string | number | undefined,
+  format: McpResponseFormat,
+): Response {
+  const payload = {
+    jsonrpc: "2.0",
+    id: id ?? null,
+    error: { code: -32602, message: "Resource not found" },
+  };
+  if (format === "json") return jsonResponse(400, payload);
+  return new Response(`event: message\ndata: ${JSON.stringify(payload)}\n\n`, {
+    status: 400,
+    headers: {
+      "cache-control": "no-store",
+      "content-type": "text/event-stream; charset=utf-8",
+      "x-accel-buffering": "no",
+    },
+  });
+}
+
+function indistinguishableResourceNotFound(error: unknown): boolean {
+  return (
+    error instanceof MindBrowseFailure &&
+    error.code !== "revision_integrity_failure"
+  );
+}
+
 /**
  * Request-scoped Streamable HTTP boundary. It intentionally does not retain an
  * actor, token, role, authorization decision, request body, query, or result.
@@ -1725,6 +2005,147 @@ export function createMcpHttpHandler(
         requestId,
         response,
         "protocol_error",
+      );
+      return response;
+    }
+
+    if (rpc.method === "resources/templates/list") {
+      if (
+        Object.keys(rpc.params).length !== 1 ||
+        !Object.hasOwn(rpc.params, "_meta")
+      ) {
+        const response = jsonRpcError(rpc.id, -32602, "Invalid params", 400);
+        await safeLog(
+          dependencies.logger,
+          request,
+          requestId,
+          response,
+          "protocol_error",
+        );
+        return response;
+      }
+      const response = jsonRpcResult(
+        rpc.id,
+        { resourceTemplates: Object.freeze([]) },
+        responseFormat,
+      );
+      await safeLog(
+        dependencies.logger,
+        request,
+        requestId,
+        response,
+        "authenticated",
+      );
+      return response;
+    }
+
+    if (rpc.method === "resources/list") {
+      const parameters = resourceListParameters(rpc.params);
+      if (parameters.kind === "invalid") {
+        const response = jsonRpcError(rpc.id, -32602, "Invalid params", 400);
+        await safeLog(
+          dependencies.logger,
+          request,
+          requestId,
+          response,
+          "protocol_error",
+        );
+        return response;
+      }
+      let response: Response;
+      try {
+        const listed = await dependencies.content.listRootResources({
+          actor,
+          ...(parameters.cursor === undefined
+            ? {}
+            : { cursor: parameters.cursor }),
+        });
+        const page = normalizedRootResourcePage(listed);
+        response =
+          page === null
+            ? jsonResponse(500, {
+                code: "internal_error",
+                request_id: requestId,
+              })
+            : jsonRpcResult(rpc.id, page, responseFormat);
+      } catch {
+        response = jsonResponse(500, {
+          code: "internal_error",
+          request_id: requestId,
+        });
+      }
+      await safeLog(
+        dependencies.logger,
+        request,
+        requestId,
+        response,
+        response.status === 200 || response.status === 202
+          ? "authenticated"
+          : "internal_error",
+      );
+      return response;
+    }
+
+    if (rpc.method === "resources/read") {
+      const uri = exactResourceReadUri(rpc.params);
+      if (uri === null) {
+        const response = resourceNotFoundResponse(rpc.id, responseFormat);
+        await safeLog(
+          dependencies.logger,
+          request,
+          requestId,
+          response,
+          "protocol_error",
+        );
+        return response;
+      }
+      let response: Response;
+      let outcome: McpSafeRequestLogEvent["outcome"];
+      try {
+        const read = normalizedResourceRead(
+          uri,
+          await dependencies.content.readResource({ actor, uri }),
+        );
+        if (read === null) {
+          response = jsonResponse(500, {
+            code: "internal_error",
+            request_id: requestId,
+          });
+          outcome = "internal_error";
+        } else {
+          response = jsonRpcResult(
+            rpc.id,
+            {
+              contents: Object.freeze([
+                Object.freeze({
+                  uri: read.uri,
+                  mimeType: read.mimeType,
+                  text: read.text,
+                }),
+              ]),
+            },
+            responseFormat,
+          );
+          outcome = "authenticated";
+        }
+      } catch (error) {
+        if (indistinguishableResourceNotFound(error)) {
+          response = resourceNotFoundResponse(rpc.id, responseFormat);
+          outcome = "protocol_error";
+        } else {
+          response = jsonResponse(500, {
+            code: "internal_error",
+            request_id: requestId,
+          });
+          outcome = "internal_error";
+        }
+      }
+      await safeLog(
+        dependencies.logger,
+        request,
+        requestId,
+        response,
+        outcome,
       );
       return response;
     }
