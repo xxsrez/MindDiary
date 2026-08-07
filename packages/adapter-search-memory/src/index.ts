@@ -15,7 +15,11 @@ function key(spaceId: string, revisionId: string): string {
 function cloneDocuments(
   documents: readonly Readonly<ExactRevisionIndexDocument>[],
 ): readonly Readonly<ExactRevisionIndexDocument>[] {
-  return Object.freeze(documents.map((document) => Object.freeze({ ...document })));
+  return Object.freeze(
+    documents.map((document) =>
+      Object.freeze({ path: document.path, text: document.text }),
+    ),
+  );
 }
 
 /** Durable-process fixture whose only lookup key is Space + exact revision. */
@@ -80,6 +84,14 @@ export class InMemoryExactRevisionSearchIndex implements SearchIndex {
       revisionId: record.revisionId,
       documents: cloneDocuments(record.documents),
     });
+  }
+
+  /** Structural alias for application readers that require an exact ready snapshot. */
+  async read(
+    spaceId: ReplaceExactRevisionIndexRequest["spaceId"],
+    revisionId: ReplaceExactRevisionIndexRequest["revisionId"],
+  ): Promise<ReadExactRevisionIndexResult> {
+    return this.readExactRevision(spaceId, revisionId);
   }
 
   async purgeSpace(spaceId: ReplaceExactRevisionIndexRequest["spaceId"]): Promise<number> {
