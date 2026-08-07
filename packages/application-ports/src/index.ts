@@ -21,6 +21,8 @@ import {
   type CanonicalRevisionEnvelope,
   type CanonicalSpaceHandle,
   type EffectiveTokenScopes,
+  type ExportArchiveRecord,
+  type ExportJob,
   type HandlePolicyFailureReason,
   type MarkdownMediaType,
   type MembershipState,
@@ -56,6 +58,8 @@ export type {
   IdempotencyRecord,
   IdempotencyResult,
   JobId,
+  ExportArchiveRecord,
+  ExportJob,
   OutboxMessageId,
   RevisionIndexState,
   StartExportIdempotencyResult,
@@ -87,6 +91,11 @@ export interface CommitEffectIdGenerator {
   nextAuditEventId(): AuditEventId;
   nextOutboxMessageId(): OutboxMessageId;
   nextIndexJobId(): JobId;
+}
+
+/** Server-side source of opaque export job locators. */
+export interface ExportJobIdGenerator {
+  nextExportJobId(): JobId;
 }
 
 export interface MetadataStore {
@@ -222,6 +231,42 @@ export interface ObjectStore {
   deleteImmutableObject(request: ImmutableObjectDeleteRequest): Promise<boolean>;
 }
 
+export interface ExportArchiveWriteRequest {
+  readonly jobId: JobId;
+  readonly spaceId: SpaceId;
+  readonly claimVersion: Version;
+  readonly bytes: Uint8Array;
+  readonly sha256: Sha256Digest;
+  readonly createdAt: UtcInstant;
+}
+
+export interface StoredExportArchive extends ExportArchiveRecord {
+  readonly jobId: JobId;
+  readonly spaceId: SpaceId;
+  readonly claimVersion: Version;
+  readonly createdAt: UtcInstant;
+}
+
+export type ExportArchivePutResult =
+  | {
+      readonly kind: "stored" | "already_exists";
+      readonly archive: Readonly<StoredExportArchive>;
+    }
+  | { readonly kind: "digest_mismatch" | "object_key_collision" };
+
+/** Binary export namespace; it is intentionally separate from canonical Markdown. */
+export interface ExportArchiveStore {
+  readonly kind: "object-store";
+  putExportArchive(
+    request: ExportArchiveWriteRequest,
+  ): Promise<ExportArchivePutResult>;
+  readExportArchive(objectKey: string): Promise<Uint8Array | null>;
+  deleteExportArchive(objectKey: string): Promise<boolean>;
+  /** Idempotent cleanup of completed and orphaned claim-scoped archives. */
+  deleteExportArchivesForJob(jobId: JobId): Promise<number>;
+  deleteExportArchivesForSpace(spaceId: SpaceId): Promise<number>;
+}
+
 export type RevisionCommitResult =
   | {
       readonly kind: "committed";
@@ -305,6 +350,69 @@ export interface IdempotencyTransaction {
   completeIdempotency(
     request: CompleteIdempotencyRequest,
   ): Promise<CompleteIdempotencyResult>;
+}
+
+export type CreateExportJobResult =
+  | { readonly kind: "created"; readonly job: Readonly<ExportJob> }
+  | { readonly kind: "job_id_collision" | "invalid_job" };
+
+export interface ExportStartTransaction
+  extends AuthorizationTransaction,
+    IdempotencyTransaction {
+  readHead(spaceId: SpaceId): Promise<RevisionId | null>;
+  readRevision(
+    spaceId: SpaceId,
+    revisionId: RevisionId,
+  ): Promise<Readonly<CanonicalRevisionEnvelope> | null>;
+  listRevisions(
+    spaceId: SpaceId,
+  ): Promise<readonly Readonly<CanonicalRevisionEnvelope>[]>;
+  readExportJob(jobId: JobId): Promise<Readonly<ExportJob> | null>;
+  createExportJob(job: Readonly<ExportJob>): Promise<CreateExportJobResult>;
+}
+
+export type ClaimExportJobResult =
+  | { readonly kind: "claimed"; readonly job: Readonly<ExportJob> }
+  | { readonly kind: "not_found" | "not_available" | "completed" | "expired" };
+
+export type ExpireExportJobResult =
+  | {
+      readonly kind: "expired";
+      readonly job: Readonly<ExportJob>;
+      readonly replayed: boolean;
+    }
+  | { readonly kind: "not_found" | "not_due" };
+
+/** Durable export jobs and their lease/version-fenced state transitions. */
+export interface ExportJobStore extends MetadataStore, AuthorizationStateReader {
+  runExportStartTransaction<Result>(
+    operation: (transaction: ExportStartTransaction) => Promise<Result>,
+  ): Promise<Result>;
+  readExportJob(jobId: JobId): Promise<Readonly<ExportJob> | null>;
+  claimExportJob(
+    jobId: JobId,
+    now: UtcInstant,
+    claimExpiresAt: UtcInstant,
+  ): Promise<ClaimExportJobResult>;
+  completeExportJob(
+    jobId: JobId,
+    expectedClaimVersion: Version,
+    archive: Readonly<ExportArchiveRecord>,
+    completedAt: UtcInstant,
+  ): Promise<boolean>;
+  failExportJob(
+    jobId: JobId,
+    expectedClaimVersion: Version,
+    failureCode: string,
+    failedAt: UtcInstant,
+    retryAt: UtcInstant,
+  ): Promise<boolean>;
+  expireExportJob(jobId: JobId, now: UtcInstant): Promise<ExpireExportJobResult>;
+  completeExpiredExportCleanup(
+    jobId: JobId,
+    expectedVersion: Version,
+    cleanedAt: UtcInstant,
+  ): Promise<boolean>;
 }
 
 /** Transactional revision metadata and HEAD; object bytes remain in ObjectStore. */
@@ -580,6 +688,25 @@ export interface Authorizer {
     request: AuthorizationRequest,
     transaction: AuthorizationTransaction,
     expected: AuthorizationStamp,
+  ): Promise<AuthorizationDecision>;
+}
+
+export interface BackgroundAuthorizationRequest {
+  readonly actor: ActorContext;
+  /** Durable principal identity captured by the originating command. */
+  readonly principalId: PrincipalId;
+  readonly spaceId: SpaceId;
+  readonly capability: Capability;
+  readonly revisionMode: RevisionMode;
+}
+
+export interface BackgroundAuthorizer {
+  /**
+   * Rebuilds authority from trusted deployment context and current metadata.
+   * Serialized token, role, membership and visibility claims are not inputs.
+   */
+  authorize(
+    request: BackgroundAuthorizationRequest,
   ): Promise<AuthorizationDecision>;
 }
 
@@ -900,6 +1027,96 @@ export class CapabilityAuthorizer implements Authorizer {
         accessVersion: state.space.accessVersion,
         membershipVersion,
         tokenVersion,
+      }),
+    });
+  }
+}
+
+/** Current-access authorizer for trusted workers acting for a captured principal. */
+export class CurrentAccessBackgroundAuthorizer implements BackgroundAuthorizer {
+  readonly #states: AuthorizationStateReader;
+
+  constructor(states: AuthorizationStateReader) {
+    this.#states = states;
+  }
+
+  async authorize(
+    request: BackgroundAuthorizationRequest,
+  ): Promise<AuthorizationDecision> {
+    if (
+      request.actor.kind !== "service" ||
+      typeof request.actor.serviceId !== "string" ||
+      request.actor.serviceId.length === 0
+    ) {
+      return denied("authentication_required");
+    }
+    if (
+      !isKnownCapability(request.capability) ||
+      !isValidRevisionMode(request.revisionMode)
+    ) {
+      return denied("invalid_authorization_request");
+    }
+    if (!request.actor.deploymentCapabilities.includes(request.capability)) {
+      return denied("deployment_capability_disabled");
+    }
+    if (!revisionModeAllowsCapability(request.revisionMode, request.capability)) {
+      return denied("historical_read_only");
+    }
+
+    const state = await this.#states.readCurrentAuthorizationState({
+      principalId: request.principalId,
+      spaceId: request.spaceId,
+      tokenId: null,
+    });
+    if (
+      !isValidCurrentAuthorizationState(state) ||
+      state.principal.principalId !== request.principalId ||
+      state.space.spaceId !== request.spaceId ||
+      state.principal.state !== "active" ||
+      state.space.state !== "active"
+    ) {
+      return denied("authorization_state_unavailable");
+    }
+
+    const membership = state.membership;
+    if (
+      membership !== null &&
+      (membership.principalId !== request.principalId ||
+        membership.spaceId !== request.spaceId)
+    ) {
+      return denied("authorization_state_unavailable");
+    }
+    let grant: AuthorizationGrant;
+    let grantedCapabilities: readonly Capability[];
+    let membershipVersion: Version | null = null;
+    if (
+      membership !== null &&
+      membership.principalId === request.principalId &&
+      membership.spaceId === request.spaceId &&
+      membership.state === "active"
+    ) {
+      grant = Object.freeze({ kind: "membership", role: membership.role });
+      grantedCapabilities = capabilitiesForRole(membership.role);
+      membershipVersion = membership.version;
+    } else {
+      grantedCapabilities = capabilitiesForVisibilityGrant(state.space.visibility);
+      if (grantedCapabilities.length === 0) return denied("access_denied");
+      grant = Object.freeze({
+        kind: "baseline_visibility",
+        visibility: state.space.visibility,
+      }) as AuthorizationGrant;
+    }
+    if (!grantedCapabilities.includes(request.capability)) {
+      return denied("capability_denied");
+    }
+    return Object.freeze({
+      kind: "allowed",
+      capability: request.capability,
+      grant,
+      stamp: Object.freeze({
+        accessVersion: state.space.accessVersion,
+        membershipVersion,
+        tokenVersion: null,
       }),
     });
   }
