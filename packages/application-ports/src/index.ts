@@ -22,6 +22,7 @@ import {
   type CanonicalSpaceHandle,
   type EffectiveTokenScopes,
   type ExternalBindingId,
+  type InvitationId,
   type ExportArchiveRecord,
   type ExportDownloadGrant,
   type ExportDownloadSecretVerifier,
@@ -50,6 +51,7 @@ import {
   type SensitiveExternalBinding,
   type Sha256Digest,
   type SpaceId,
+  type SpaceInvitation,
   type SpaceMembership,
   type SpaceLifecycleState,
   type TokenId,
@@ -96,6 +98,7 @@ export {
 } from "@mind-diary/domain";
 export type {
   ExternalIdentityBinding,
+  SpaceInvitation,
   KnowledgeSpace,
   PersonalSpaceBinding,
   Principal,
@@ -369,6 +372,55 @@ export interface OrdinaryMindIdGenerator {
   nextRevisionId(): RevisionId;
 }
 
+/** Server-owned identity for one pending invitation. */
+export interface InvitationIdGenerator {
+  nextInvitationId(): InvitationId;
+}
+
+/** Safe projection returned by exact registered-principal lookup. */
+export interface RegisteredPrincipalSnapshot {
+  readonly principalId: PrincipalId;
+  readonly displayName: string;
+}
+
+export interface CreateInvitationRequest {
+  readonly principalId: PrincipalId;
+  readonly spaceId: SpaceId;
+  readonly target: Readonly<RegisteredPrincipalSnapshot>;
+  readonly invitation: Readonly<SpaceInvitation>;
+  readonly expectedMetadataVersion: Version;
+  readonly idempotencyKey: IdempotencyKey;
+  readonly canonicalRequestHash: Sha256Digest;
+  readonly occurredAt: UtcInstant;
+}
+
+export interface InvitationSnapshot {
+  readonly invitation: Readonly<SpaceInvitation>;
+  readonly target: Readonly<RegisteredPrincipalSnapshot>;
+}
+
+export type CreateInvitationResult =
+  | {
+      readonly kind: "created";
+      readonly invitation: Readonly<InvitationSnapshot>;
+      readonly replayed: boolean;
+    }
+  | {
+      readonly kind: "metadata_conflict";
+      readonly currentMetadataVersion: Version;
+    }
+  | {
+      readonly kind:
+        | "mind_not_found"
+        | "personal_mind"
+        | "forbidden"
+        | "active_membership_exists"
+        | "pending_invitation_exists"
+        | "idempotency_conflict"
+        | "record_conflict"
+        | "invalid_record";
+    };
+
 export interface OrdinaryMindSnapshot {
   readonly space: Readonly<KnowledgeSpace>;
   readonly ownerMembership: Readonly<SpaceMembership>;
@@ -598,6 +650,13 @@ export type ChangeOrdinaryMindVisibilityResult =
     };
 
 export interface OrdinaryMindMetadataTransaction extends AuthorizationTransaction {
+  /** Exact active binding lookup; implementations must not perform fuzzy search. */
+  readRegisteredPrincipalByExternalBinding(
+    lookup: Readonly<ExternalIdentityBindingLookup>,
+  ): Promise<Readonly<RegisteredPrincipalSnapshot> | null>;
+  createInvitation(
+    request: Readonly<CreateInvitationRequest>,
+  ): Promise<CreateInvitationResult>;
   createOrdinaryMind(
     records: Readonly<OrdinaryMindRecordSet>,
   ): Promise<CreateOrdinaryMindResult>;

@@ -4,6 +4,8 @@ import type {
   AccountBootstrapRecordSet,
   AccountBootstrapTransaction,
   CreateAccountBootstrapResult,
+  CreateInvitationRequest,
+  CreateInvitationResult,
   ExternalIdentityBinding,
   ExternalIdentityBindingLookup,
   KnowledgeSpace,
@@ -16,6 +18,8 @@ import type {
   PersonalSpaceBinding,
   Principal,
   PrincipalAccountSnapshot,
+  RegisteredPrincipalSnapshot,
+  SpaceInvitation,
   SpaceMembership,
   AuthorizationStateQuery,
   AuditEvent,
@@ -41,6 +45,7 @@ import type {
   HandleReservationSnapshot,
   IdempotencyNamespace,
   IdempotencyRecord,
+  InvitationSnapshot,
   JobId,
   McpTokenMetadata,
   McpTokenStore,
@@ -988,6 +993,10 @@ type MembershipMap = Map<
   SpaceMembership["membershipId"],
   Readonly<SpaceMembership>
 >;
+type InvitationMap = Map<
+  SpaceInvitation["invitationId"],
+  Readonly<SpaceInvitation>
+>;
 
 interface PersonalProfileIdempotencyRecord {
   readonly principalId: Principal["principalId"];
@@ -1028,6 +1037,27 @@ function freezeMembership(
   record: Readonly<SpaceMembership>,
 ): Readonly<SpaceMembership> {
   return Object.freeze({ ...record });
+}
+
+function freezeInvitation(
+  record: Readonly<SpaceInvitation>,
+): Readonly<SpaceInvitation> {
+  return Object.freeze({ ...record });
+}
+
+function freezeRegisteredPrincipalSnapshot(
+  principal: Readonly<RegisteredPrincipalSnapshot>,
+): Readonly<RegisteredPrincipalSnapshot> {
+  return Object.freeze({ ...principal });
+}
+
+function freezeInvitationSnapshot(
+  snapshot: Readonly<InvitationSnapshot>,
+): Readonly<InvitationSnapshot> {
+  return Object.freeze({
+    invitation: freezeInvitation(snapshot.invitation),
+    target: freezeRegisteredPrincipalSnapshot(snapshot.target),
+  });
 }
 
 function cloneRecordMap<Key, Value extends object>(
@@ -1270,6 +1300,14 @@ type OrdinaryMindIdempotencyRecord =
       readonly canonicalRequestHash: ChangeOrdinaryMindVisibilityRequest["canonicalRequestHash"];
       readonly mind: Readonly<OrdinaryMindSnapshot>;
       readonly changed: boolean;
+    }
+  | {
+      readonly operation: "create_invitation";
+      readonly principalId: Principal["principalId"];
+      readonly spaceId: KnowledgeSpace["spaceId"];
+      readonly key: CreateInvitationRequest["idempotencyKey"];
+      readonly canonicalRequestHash: CreateInvitationRequest["canonicalRequestHash"];
+      readonly invitation: Readonly<InvitationSnapshot>;
     };
 
 type OrdinaryMindDeletionImpactMap = Map<
@@ -1389,13 +1427,37 @@ function ordinaryMindVisibilityIdempotencyKey(
   return `${principalId}\u0000${spaceId}\u0000change_visibility\u0000${key}`;
 }
 
+function invitationIdempotencyRecordKey(
+  principalId: Principal["principalId"],
+  spaceId: KnowledgeSpace["spaceId"],
+  key: CreateInvitationRequest["idempotencyKey"],
+): string {
+  return `${principalId}\u0000${spaceId}\u0000create_invitation\u0000${key}`;
+}
+
+function ordinaryMindIdempotencySpaceId(
+  record: Readonly<OrdinaryMindIdempotencyRecord>,
+): KnowledgeSpace["spaceId"] {
+  return record.operation === "create_space_with_owner"
+    ? record.mind.space.spaceId
+    : record.spaceId;
+}
+
 function cloneOrdinaryMindIdempotencyRecords(
   records: ReadonlyMap<string, Readonly<OrdinaryMindIdempotencyRecord>>,
 ): Map<string, Readonly<OrdinaryMindIdempotencyRecord>> {
   return new Map(
     [...records].map(([key, record]) => [
       key,
-      Object.freeze({ ...record, mind: freezeOrdinaryMindSnapshot(record.mind) }),
+      record.operation === "create_invitation"
+        ? Object.freeze({
+            ...record,
+            invitation: freezeInvitationSnapshot(record.invitation),
+          })
+        : Object.freeze({
+            ...record,
+            mind: freezeOrdinaryMindSnapshot(record.mind),
+          }),
     ]),
   );
 }
@@ -1592,6 +1654,9 @@ export type OrdinaryMindFailureStage =
   | "visibility_after_audit"
   | "visibility_after_idempotency"
   | "visibility_before_commit"
+  | "invitation_after_record"
+  | "invitation_after_idempotency"
+  | "invitation_before_commit"
   | "deletion_impact_after_record"
   | "deletion_impact_before_commit"
   | "delete_after_handle_retirement"
@@ -1737,6 +1802,10 @@ interface OrdinaryMindDeletionState {
     SpaceMembership["membershipId"],
     Readonly<SpaceMembership>
   >;
+  readonly invitations: ReadonlyMap<
+    SpaceInvitation["invitationId"],
+    Readonly<SpaceInvitation>
+  >;
   readonly revisionSpaces: ReadonlyMap<SpaceId, SpaceState>;
   readonly ordinaryIdempotency: ReadonlyMap<
     string,
@@ -1798,11 +1867,15 @@ function targetRecordSelection(
     .map(([key]) => key)
     .sort();
   const ordinaryIdempotencyKeys = [...state.ordinaryIdempotency]
-    .filter(([, record]) => record.mind.space.spaceId === spaceId)
+    .filter(([, record]) => ordinaryMindIdempotencySpaceId(record) === spaceId)
     .map(([key]) => key)
     .sort();
   const membershipIds = [...state.memberships]
     .filter(([, membership]) => membership.spaceId === spaceId)
+    .map(([id]) => id)
+    .sort();
+  const invitationIds = [...state.invitations]
+    .filter(([, invitation]) => invitation.spaceId === spaceId)
     .map(([id]) => id)
     .sort();
   const revisionIds = [...(state.revisionSpaces.get(spaceId)?.revisions.keys() ?? [])]
@@ -1818,9 +1891,7 @@ function targetRecordSelection(
     ordinaryIdempotencyKeys: Object.freeze(ordinaryIdempotencyKeys),
     membershipIds: Object.freeze(membershipIds),
     revisionIds: Object.freeze(revisionIds),
-    // Invitation persistence is introduced by a later story. Keeping the
-    // explicit set here prevents its records from being silently omitted then.
-    invitationIds: Object.freeze([] as string[]),
+    invitationIds: Object.freeze(invitationIds),
   });
 }
 
@@ -1911,6 +1982,7 @@ export class InMemoryRevisionMetadataStore
   #knowledgeSpaces: KnowledgeSpaceMap = new Map();
   #personalBindings: PersonalBindingMap = new Map();
   #memberships: MembershipMap = new Map();
+  #invitations: InvitationMap = new Map();
   #personalProfileIdempotencyRecords = new Map<
     string,
     Readonly<PersonalProfileIdempotencyRecord>
@@ -2194,6 +2266,10 @@ export class InMemoryRevisionMetadataStore
   ): Promise<Result> {
     return this.#runExclusive(async () => {
       const principals = cloneRecordMap(this.#principals, freezePrincipal);
+      const externalBindings = cloneRecordMap(
+        this.#externalBindings,
+        freezeExternalBinding,
+      );
       const personalBindings = cloneRecordMap(
         this.#personalBindings,
         freezePersonalBinding,
@@ -2203,6 +2279,7 @@ export class InMemoryRevisionMetadataStore
         freezeKnowledgeSpace,
       );
       let memberships = cloneRecordMap(this.#memberships, freezeMembership);
+      let invitations = cloneRecordMap(this.#invitations, freezeInvitation);
       let revisionSpaces = cloneSpaces(this.#spaces);
       let revisionsById = new Map(this.#revisionsById);
       let idempotencyRecords = cloneOrdinaryMindIdempotencyRecords(
@@ -2260,6 +2337,7 @@ export class InMemoryRevisionMetadataStore
       const deletionState = (): OrdinaryMindDeletionState => ({
         knowledgeSpaces,
         memberships,
+        invitations,
         revisionSpaces,
         ordinaryIdempotency: idempotencyRecords,
         contentIdempotency: contentIdempotencyRecords,
@@ -2281,6 +2359,219 @@ export class InMemoryRevisionMetadataStore
             knowledgeSpaces,
             memberships,
           ),
+        readRegisteredPrincipalByExternalBinding: async (
+          lookup: Readonly<ExternalIdentityBindingLookup>,
+        ): Promise<Readonly<RegisteredPrincipalSnapshot> | null> => {
+          try {
+            const account = accountByBindingFromMaps(
+              lookup,
+              principals,
+              externalBindings,
+              knowledgeSpaces,
+              personalBindings,
+              memberships,
+            );
+            if (account === null || account.principal.state !== "active") {
+              return null;
+            }
+            return freezeRegisteredPrincipalSnapshot({
+              principalId: account.principal.principalId,
+              displayName: account.principal.displayName,
+            });
+          } catch {
+            return null;
+          }
+        },
+        createInvitation: async (
+          request: Readonly<CreateInvitationRequest>,
+        ): Promise<CreateInvitationResult> => {
+          const actorPrincipal = principals.get(request.principalId);
+          if (!actorPrincipal || actorPrincipal.state !== "active") {
+            return Object.freeze({ kind: "forbidden" });
+          }
+          const space = knowledgeSpaces.get(request.spaceId);
+          if (!space || space.state !== "active") {
+            return Object.freeze({ kind: "mind_not_found" });
+          }
+          const personalBinding = [...personalBindings.values()].find(
+            (binding) => binding.spaceId === request.spaceId,
+          );
+          if (personalBinding) {
+            return Object.freeze({
+              kind:
+                personalBinding.principalId === request.principalId
+                  ? "personal_mind"
+                  : "mind_not_found",
+            });
+          }
+          const targetPrincipal = principals.get(request.target.principalId);
+          if (
+            !targetPrincipal ||
+            targetPrincipal.state !== "active" ||
+            targetPrincipal.displayName !== request.target.displayName
+          ) {
+            return Object.freeze({ kind: "invalid_record" });
+          }
+          const aggregateMemberships = [...memberships.values()].filter(
+            (membership) => membership.spaceId === request.spaceId,
+          );
+          const aggregateInvitations = [...invitations.values()].filter(
+            (invitation) => invitation.spaceId === request.spaceId,
+          );
+          let currentAggregate: ReturnType<typeof SpaceAggregate.restoreOrdinary>;
+          try {
+            currentAggregate = SpaceAggregate.restoreOrdinary({
+              space,
+              memberships: aggregateMemberships,
+              invitations: aggregateInvitations,
+            });
+          } catch {
+            return Object.freeze({ kind: "invalid_record" });
+          }
+          const actorMembership = currentAggregate
+            .snapshot()
+            .memberships.find(
+              (membership) =>
+                membership.principalId === request.principalId &&
+                membership.state === "active",
+            );
+          if (
+            !actorMembership ||
+            (request.invitation.proposedRole === "admin"
+              ? actorMembership.role !== "owner"
+              : !["admin", "owner"].includes(actorMembership.role))
+          ) {
+            return Object.freeze({ kind: "forbidden" });
+          }
+
+          const recordKey = invitationIdempotencyRecordKey(
+            request.principalId,
+            request.spaceId,
+            request.idempotencyKey,
+          );
+          const previous = idempotencyRecords.get(recordKey);
+          if (previous) {
+            if (
+              previous.operation !== "create_invitation" ||
+              previous.canonicalRequestHash !== request.canonicalRequestHash
+            ) {
+              return Object.freeze({ kind: "idempotency_conflict" });
+            }
+            return Object.freeze({
+              kind: "created",
+              invitation: freezeInvitationSnapshot(previous.invitation),
+              replayed: true,
+            });
+          }
+          if (!SHA256_PATTERN.test(request.canonicalRequestHash)) {
+            return Object.freeze({ kind: "invalid_record" });
+          }
+          if (space.metadataVersion !== request.expectedMetadataVersion) {
+            return Object.freeze({
+              kind: "metadata_conflict",
+              currentMetadataVersion: space.metadataVersion,
+            });
+          }
+          if (
+            aggregateMemberships.some(
+              (membership) =>
+                membership.principalId === request.target.principalId &&
+                membership.state === "active",
+            )
+          ) {
+            return Object.freeze({ kind: "active_membership_exists" });
+          }
+          if (
+            aggregateInvitations.some(
+              (invitation) =>
+                invitation.targetPrincipalId === request.target.principalId &&
+                invitation.state === "pending",
+            )
+          ) {
+            return Object.freeze({ kind: "pending_invitation_exists" });
+          }
+
+          const invitation = request.invitation;
+          const occurredAt = Date.parse(request.occurredAt);
+          const expiresAt = Date.parse(invitation.expiresAt);
+          if (
+            typeof invitation.invitationId !== "string" ||
+            !BOUNDED_OPAQUE_ID.test(invitation.invitationId) ||
+            invitations.has(invitation.invitationId) ||
+            invitation.spaceId !== request.spaceId ||
+            invitation.targetPrincipalId !== request.target.principalId ||
+            !["reader", "editor", "admin"].includes(invitation.proposedRole) ||
+            invitation.state !== "pending" ||
+            invitation.version !== 1 ||
+            invitation.createdBy !== request.principalId ||
+            invitation.updatedBy !== request.principalId ||
+            invitation.createdAt !== request.occurredAt ||
+            invitation.updatedAt !== request.occurredAt ||
+            !Number.isFinite(occurredAt) ||
+            !Number.isFinite(expiresAt) ||
+            expiresAt - occurredAt !== 7 * 24 * 60 * 60 * 1_000
+          ) {
+            return Object.freeze({
+              kind: invitations.has(invitation.invitationId)
+                ? "record_conflict"
+                : "invalid_record",
+            });
+          }
+
+          let updatedAggregate: ReturnType<typeof SpaceAggregate.restoreOrdinary>;
+          try {
+            updatedAggregate = currentAggregate.addInvitation({ ...invitation });
+          } catch (error) {
+            if (
+              error instanceof DomainInvariantError &&
+              error.code === "duplicate_pending_invitation"
+            ) {
+              return Object.freeze({ kind: "pending_invitation_exists" });
+            }
+            return Object.freeze({ kind: "invalid_record" });
+          }
+          const persisted = updatedAggregate
+            .snapshot()
+            .invitations.find(
+              (candidate) => candidate.invitationId === invitation.invitationId,
+            );
+          if (!persisted) return Object.freeze({ kind: "invalid_record" });
+          const candidateInvitations = cloneRecordMap(
+            invitations,
+            freezeInvitation,
+          );
+          candidateInvitations.set(
+            persisted.invitationId,
+            freezeInvitation(persisted),
+          );
+          this.#failOrdinaryMindIfRequested("invitation_after_record");
+          const candidateIdempotencyRecords =
+            cloneOrdinaryMindIdempotencyRecords(idempotencyRecords);
+          const snapshot = freezeInvitationSnapshot({
+            invitation: persisted,
+            target: request.target,
+          });
+          candidateIdempotencyRecords.set(
+            recordKey,
+            Object.freeze({
+              operation: "create_invitation" as const,
+              principalId: request.principalId,
+              spaceId: request.spaceId,
+              key: request.idempotencyKey,
+              canonicalRequestHash: request.canonicalRequestHash,
+              invitation: snapshot,
+            }),
+          );
+          this.#failOrdinaryMindIfRequested("invitation_after_idempotency");
+          this.#failOrdinaryMindIfRequested("invitation_before_commit");
+          invitations = candidateInvitations;
+          idempotencyRecords = candidateIdempotencyRecords;
+          return Object.freeze({
+            kind: "created",
+            invitation: snapshot,
+            replayed: false,
+          });
+        },
         createOrdinaryMind: async (
           records: Readonly<OrdinaryMindRecordSet>,
         ): Promise<CreateOrdinaryMindResult> => {
@@ -3062,6 +3353,7 @@ export class InMemoryRevisionMetadataStore
 
           knowledgeSpaces.delete(spaceId);
           selected.membershipIds.forEach((id) => memberships.delete(id));
+          selected.invitationIds.forEach((id) => invitations.delete(id));
           revisionSpaces.delete(spaceId);
           selected.revisionIds.forEach((id) => revisionsById.delete(id));
           selected.ordinaryIdempotencyKeys.forEach((key) =>
@@ -3145,6 +3437,7 @@ export class InMemoryRevisionMetadataStore
       const result = await operation(transaction);
       this.#knowledgeSpaces = knowledgeSpaces;
       this.#memberships = memberships;
+      this.#invitations = invitations;
       this.#spaces = revisionSpaces;
       this.#revisionsById = revisionsById;
       this.#ordinaryMindIdempotencyRecords = idempotencyRecords;
@@ -4739,6 +5032,7 @@ export class InMemoryRevisionMetadataStore
   ): Promise<Readonly<{
     space: Readonly<KnowledgeSpace>;
     memberships: readonly Readonly<SpaceMembership>[];
+    invitations: readonly Readonly<SpaceInvitation>[];
     revisions: readonly Envelope[];
     reservation: Readonly<HandleReservationSnapshot>;
   }> | null> {
@@ -4755,10 +5049,14 @@ export class InMemoryRevisionMetadataStore
     const memberships = [...this.#memberships.values()]
       .filter((membership) => membership.spaceId === spaceId)
       .map(freezeMembership);
+    const invitations = [...this.#invitations.values()]
+      .filter((invitation) => invitation.spaceId === spaceId)
+      .map(freezeInvitation);
     const revisions = await this.listRevisions(spaceId);
     return Object.freeze({
       space: freezeKnowledgeSpace(space),
       memberships: Object.freeze(memberships),
+      invitations: Object.freeze(invitations),
       revisions,
       reservation: freezeReservation(
         reservation.host,
