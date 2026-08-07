@@ -69,6 +69,13 @@ import type {
   RevisionCommitResult,
   RenamePersonalProfileRequest,
   RenamePersonalProfileResult,
+  CreateOrdinaryMindResult,
+  OrdinaryMindMetadataTransaction,
+  OrdinaryMindRecordSet,
+  OrdinaryMindSnapshot,
+  OrdinaryMindStore,
+  RenameOrdinaryMindRequest,
+  RenameOrdinaryMindResult,
   SpaceTargetPurgeResult,
   StageContentCommitEffectsRequest,
   StageContentCommitEffectsResult,
@@ -76,12 +83,14 @@ import type {
   TokenVerifier,
 } from "@mind-diary/application-ports";
 import {
+  DomainInvariantError,
   PrincipalAccount,
   SpaceAggregate,
   isReservedTopLevelHandle,
   isReservedTopLevelRoute,
   parseCanonicalSpaceHandle,
   revisionEnvelopesEqual,
+  roleHasCapability,
   version,
 } from "@mind-diary/application-ports";
 
@@ -136,6 +145,99 @@ function freezeRetiredMarker(
   return Object.freeze({ host, canonicalHandle });
 }
 
+type ActiveHandleByKeyMap = Map<
+  string,
+  Readonly<HandleReservationSnapshot>
+>;
+type ActiveHandleBySpaceMap = Map<
+  HandleSpaceId,
+  Readonly<HandleReservationSnapshot>
+>;
+type RetiredHandleMap = Map<string, Readonly<RetiredHandleMarker>>;
+
+interface MutableHandleRegistryState {
+  readonly activeByHandle: ActiveHandleByKeyMap;
+  readonly activeBySpace: ActiveHandleBySpaceMap;
+  readonly retired: RetiredHandleMap;
+}
+
+function reserveHandleAgainst(
+  request: HandleReservationRequest,
+  state: MutableHandleRegistryState,
+): HandleReservationResult {
+  if (isReservedTopLevelRoute(request.handle)) return HANDLE_UNAVAILABLE;
+  const parsed = parseCanonicalSpaceHandle(request.handle);
+  if (parsed.kind === "invalid") {
+    return Object.freeze({
+      kind: "invalid_handle",
+      reason: parsed.reason,
+    });
+  }
+
+  const canonicalHandle = parsed.canonicalHandle;
+  const key = handleKey(request.host, canonicalHandle);
+  if (isReservedTopLevelHandle(canonicalHandle) || state.retired.has(key)) {
+    return HANDLE_UNAVAILABLE;
+  }
+
+  const occupied = state.activeByHandle.get(key);
+  if (occupied) {
+    if (occupied.spaceId === request.spaceId) {
+      return Object.freeze({
+        kind: "reserved",
+        reservation: occupied,
+        replayed: true,
+      });
+    }
+    return HANDLE_UNAVAILABLE;
+  }
+
+  const currentIdentity = state.activeBySpace.get(request.spaceId);
+  if (currentIdentity) return Object.freeze({ kind: "immutable_handle" });
+
+  const reservation = freezeReservation(
+    request.host,
+    canonicalHandle,
+    request.spaceId,
+  );
+  state.activeByHandle.set(key, reservation);
+  state.activeBySpace.set(request.spaceId, reservation);
+  return Object.freeze({ kind: "reserved", reservation, replayed: false });
+}
+
+function resolveHandleAgainst(
+  request: HandleResolutionRequest,
+  state: Pick<MutableHandleRegistryState, "activeByHandle">,
+): HandleResolutionResult {
+  const parsed = parseCanonicalSpaceHandle(request.handle);
+  if (parsed.kind === "invalid") return HANDLE_NOT_FOUND;
+  const reservation = state.activeByHandle.get(
+    handleKey(request.host, parsed.canonicalHandle),
+  );
+  return reservation
+    ? Object.freeze({ kind: "resolved", spaceId: reservation.spaceId })
+    : HANDLE_NOT_FOUND;
+}
+
+function retireHandleAgainst(
+  request: HandleRetirementRequest,
+  state: MutableHandleRegistryState,
+): HandleRetirementResult {
+  const parsed = parseCanonicalSpaceHandle(request.handle);
+  if (parsed.kind === "invalid") return HANDLE_NOT_FOUND;
+  const key = handleKey(request.host, parsed.canonicalHandle);
+  const reservation = state.activeByHandle.get(key);
+  if (!reservation || reservation.spaceId !== request.spaceId) {
+    return HANDLE_NOT_FOUND;
+  }
+
+  const marker = freezeRetiredMarker(request.host, parsed.canonicalHandle);
+  state.activeByHandle.delete(key);
+  state.activeBySpace.delete(request.spaceId);
+  state.retired.set(key, marker);
+  return Object.freeze({ kind: "retired", marker });
+}
+
 export class InMemoryHandleRegistry implements HandleRegistry {
   readonly kind = "metadata-store" as const;
   readonly #activeByHandle = new Map<string, Readonly<HandleReservationSnapshot>>();
@@ -145,78 +247,29 @@ export class InMemoryHandleRegistry implements HandleRegistry {
   async reserveHandle(
     request: HandleReservationRequest,
   ): Promise<HandleReservationResult> {
-    if (isReservedTopLevelRoute(request.handle)) return HANDLE_UNAVAILABLE;
-    const parsed = parseCanonicalSpaceHandle(request.handle);
-    if (parsed.kind === "invalid") {
-      return Object.freeze({
-        kind: "invalid_handle",
-        reason: parsed.reason,
-      });
-    }
-
-    const canonicalHandle = parsed.canonicalHandle;
-    const key = handleKey(request.host, canonicalHandle);
-    if (isReservedTopLevelHandle(canonicalHandle) || this.#retired.has(key)) {
-      return HANDLE_UNAVAILABLE;
-    }
-
-    const occupied = this.#activeByHandle.get(key);
-    if (occupied) {
-      if (occupied.spaceId === request.spaceId) {
-        return Object.freeze({
-          kind: "reserved",
-          reservation: occupied,
-          replayed: true,
-        });
-      }
-      return HANDLE_UNAVAILABLE;
-    }
-
-    const currentIdentity = this.#activeBySpace.get(request.spaceId);
-    if (currentIdentity) {
-      return Object.freeze({ kind: "immutable_handle" });
-    }
-
-    const reservation = freezeReservation(
-      request.host,
-      canonicalHandle,
-      request.spaceId,
-    );
-    // Adjacent synchronous writes are the in-memory transaction boundary.
-    this.#activeByHandle.set(key, reservation);
-    this.#activeBySpace.set(request.spaceId, reservation);
-    return Object.freeze({ kind: "reserved", reservation, replayed: false });
+    return reserveHandleAgainst(request, {
+      activeByHandle: this.#activeByHandle,
+      activeBySpace: this.#activeBySpace,
+      retired: this.#retired,
+    });
   }
 
   async resolveHandle(
     request: HandleResolutionRequest,
   ): Promise<HandleResolutionResult> {
-    const parsed = parseCanonicalSpaceHandle(request.handle);
-    if (parsed.kind === "invalid") return HANDLE_NOT_FOUND;
-    const reservation = this.#activeByHandle.get(
-      handleKey(request.host, parsed.canonicalHandle),
-    );
-    if (!reservation) return HANDLE_NOT_FOUND;
-    return Object.freeze({ kind: "resolved", spaceId: reservation.spaceId });
+    return resolveHandleAgainst(request, {
+      activeByHandle: this.#activeByHandle,
+    });
   }
 
   async retireHandle(
     request: HandleRetirementRequest,
   ): Promise<HandleRetirementResult> {
-    const parsed = parseCanonicalSpaceHandle(request.handle);
-    if (parsed.kind === "invalid") return HANDLE_NOT_FOUND;
-    const key = handleKey(request.host, parsed.canonicalHandle);
-    const reservation = this.#activeByHandle.get(key);
-    if (!reservation || reservation.spaceId !== request.spaceId) {
-      return HANDLE_NOT_FOUND;
-    }
-
-    const marker = freezeRetiredMarker(request.host, parsed.canonicalHandle);
-    // Remove every linkable identity before retaining the minimal marker.
-    this.#activeByHandle.delete(key);
-    this.#activeBySpace.delete(request.spaceId);
-    this.#retired.set(key, marker);
-    return Object.freeze({ kind: "retired", marker });
+    return retireHandleAgainst(request, {
+      activeByHandle: this.#activeByHandle,
+      activeBySpace: this.#activeBySpace,
+      retired: this.#retired,
+    });
   }
 
   snapshot(): Readonly<InMemoryHandleRegistrySnapshot> {
@@ -1125,6 +1178,134 @@ function validateAccountBootstrapRecords(
   }
 }
 
+type OrdinaryMindIdempotencyRecord =
+  | {
+      readonly operation: "create_space_with_owner";
+      readonly principalId: Principal["principalId"];
+      readonly key: OrdinaryMindRecordSet["idempotencyKey"];
+      readonly canonicalRequestHash: OrdinaryMindRecordSet["canonicalRequestHash"];
+      readonly mind: Readonly<OrdinaryMindSnapshot>;
+    }
+  | {
+      readonly operation: "rename_space";
+      readonly principalId: Principal["principalId"];
+      readonly spaceId: KnowledgeSpace["spaceId"];
+      readonly key: RenameOrdinaryMindRequest["idempotencyKey"];
+      readonly canonicalRequestHash: RenameOrdinaryMindRequest["canonicalRequestHash"];
+      readonly mind: Readonly<OrdinaryMindSnapshot>;
+    };
+
+function freezeOrdinaryMindSnapshot(
+  snapshot: Readonly<OrdinaryMindSnapshot>,
+): Readonly<OrdinaryMindSnapshot> {
+  return Object.freeze({
+    space: freezeKnowledgeSpace(snapshot.space),
+    ownerMembership: freezeMembership(snapshot.ownerMembership),
+  });
+}
+
+function ordinaryMindSnapshotFromMaps(
+  spaceId: KnowledgeSpace["spaceId"],
+  knowledgeSpaces: ReadonlyMap<
+    KnowledgeSpace["spaceId"],
+    Readonly<KnowledgeSpace>
+  >,
+  memberships: ReadonlyMap<
+    SpaceMembership["membershipId"],
+    Readonly<SpaceMembership>
+  >,
+): Readonly<OrdinaryMindSnapshot> | null {
+  const space = knowledgeSpaces.get(spaceId);
+  if (!space) return null;
+  try {
+    const aggregate = SpaceAggregate.restoreOrdinary({
+      space,
+      memberships: [...memberships.values()].filter(
+        (membership) => membership.spaceId === spaceId,
+      ),
+    }).snapshot();
+    const owner = aggregate.memberships.find(
+      (membership) =>
+        membership.state === "active" && membership.role === "owner",
+    );
+    return owner
+      ? freezeOrdinaryMindSnapshot({
+          space: aggregate.space,
+          ownerMembership: owner,
+        })
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function ordinaryMindCreateIdempotencyKey(
+  principalId: Principal["principalId"],
+  key: OrdinaryMindRecordSet["idempotencyKey"],
+): string {
+  return `${principalId}\u0000create_space_with_owner\u0000${key}`;
+}
+
+function ordinaryMindRenameIdempotencyKey(
+  principalId: Principal["principalId"],
+  spaceId: KnowledgeSpace["spaceId"],
+  key: RenameOrdinaryMindRequest["idempotencyKey"],
+): string {
+  return `${principalId}\u0000${spaceId}\u0000rename_space\u0000${key}`;
+}
+
+function cloneOrdinaryMindIdempotencyRecords(
+  records: ReadonlyMap<string, Readonly<OrdinaryMindIdempotencyRecord>>,
+): Map<string, Readonly<OrdinaryMindIdempotencyRecord>> {
+  return new Map(
+    [...records].map(([key, record]) => [
+      key,
+      Object.freeze({ ...record, mind: freezeOrdinaryMindSnapshot(record.mind) }),
+    ]),
+  );
+}
+
+function validateOrdinaryMindRecords(
+  records: Readonly<OrdinaryMindRecordSet>,
+): Readonly<OrdinaryMindSnapshot> | null {
+  try {
+    const parsedHandle = parseCanonicalSpaceHandle(records.space.spaceHandle);
+    const revision = records.initialRevision.revision;
+    if (
+      parsedHandle.kind !== "valid" ||
+      isReservedTopLevelHandle(parsedHandle.canonicalHandle) ||
+      records.space.normalizedHandle !== parsedHandle.canonicalHandle ||
+      records.space.visibility !== "private" ||
+      records.space.state !== "active" ||
+      records.space.metadataVersion !== 1 ||
+      records.space.accessVersion !== 1 ||
+      records.ownerMembership.spaceId !== records.space.spaceId ||
+      records.ownerMembership.role !== "owner" ||
+      records.ownerMembership.state !== "active" ||
+      revision.spaceId !== records.space.spaceId ||
+      revision.revisionId !== records.space.headRevisionId ||
+      revision.revisionNumber !== 1 ||
+      revision.parentRevisionId !== null ||
+      revision.committedBy.kind !== "principal" ||
+      revision.committedBy.principalId !== records.ownerMembership.principalId ||
+      records.initialRevision.manifest.entries.length === 0 ||
+      !SHA256_PATTERN.test(records.canonicalRequestHash)
+    ) {
+      return null;
+    }
+    const aggregate = SpaceAggregate.restoreOrdinary({
+      space: records.space,
+      memberships: [records.ownerMembership],
+    }).snapshot();
+    return freezeOrdinaryMindSnapshot({
+      space: aggregate.space,
+      ownerMembership: aggregate.memberships[0]!,
+    });
+  } catch {
+    return null;
+  }
+}
+
 export type AccountBootstrapFailureStage =
   | "after_principal"
   | "after_binding"
@@ -1138,8 +1319,23 @@ export type PersonalProfileFailureStage =
   | "after_space"
   | "before_commit";
 
+export type OrdinaryMindFailureStage =
+  | "create_after_handle"
+  | "create_after_revision"
+  | "create_after_space"
+  | "create_after_membership"
+  | "create_after_idempotency"
+  | "create_before_commit"
+  | "rename_after_space"
+  | "rename_after_idempotency"
+  | "rename_before_commit";
+
 export class InMemoryRevisionMetadataStore
-  implements ContentCommitMetadataStore, ExportDownloadGrantStore, PersonalMindStore {
+  implements
+    ContentCommitMetadataStore,
+    ExportDownloadGrantStore,
+    PersonalMindStore,
+    OrdinaryMindStore {
   readonly kind = "metadata-store" as const;
   #spaces = new Map<SpaceId, SpaceState>();
   #revisionsById = new Map<RevisionId, Envelope>();
@@ -1159,11 +1355,19 @@ export class InMemoryRevisionMetadataStore
     string,
     Readonly<PersonalProfileIdempotencyRecord>
   >();
+  #ordinaryMindIdempotencyRecords = new Map<
+    string,
+    Readonly<OrdinaryMindIdempotencyRecord>
+  >();
+  #activeHandlesByKey: ActiveHandleByKeyMap = new Map();
+  #activeHandlesBySpace: ActiveHandleBySpaceMap = new Map();
+  #retiredHandles: RetiredHandleMap = new Map();
   readonly #authorizationStates = new Map<string, AuthorizationState>();
   #transactionTail: Promise<void> = Promise.resolve();
   #nextCommitFailure: Error | null = null;
   #nextAccountBootstrapFailureStage: AccountBootstrapFailureStage | null = null;
   #nextPersonalProfileFailureStage: PersonalProfileFailureStage | null = null;
+  #nextOrdinaryMindFailureStage: OrdinaryMindFailureStage | null = null;
 
   async readHead(spaceId: SpaceId): Promise<RevisionId | null> {
     return this.#spaces.get(spaceId)?.head ?? null;
@@ -1277,6 +1481,382 @@ export class InMemoryRevisionMetadataStore
       return Object.freeze({ kind: "not_found" });
     }
     return Object.freeze({ kind: "own_personal", spaceId: request.spaceId });
+  }
+
+  async reserveHandle(
+    request: HandleReservationRequest,
+  ): Promise<HandleReservationResult> {
+    return this.#runExclusive(async () =>
+      reserveHandleAgainst(request, {
+        activeByHandle: this.#activeHandlesByKey,
+        activeBySpace: this.#activeHandlesBySpace,
+        retired: this.#retiredHandles,
+      }),
+    );
+  }
+
+  async resolveHandle(
+    request: HandleResolutionRequest,
+  ): Promise<HandleResolutionResult> {
+    return resolveHandleAgainst(request, {
+      activeByHandle: this.#activeHandlesByKey,
+    });
+  }
+
+  async retireHandle(
+    request: HandleRetirementRequest,
+  ): Promise<HandleRetirementResult> {
+    return this.#runExclusive(async () =>
+      retireHandleAgainst(request, {
+        activeByHandle: this.#activeHandlesByKey,
+        activeBySpace: this.#activeHandlesBySpace,
+        retired: this.#retiredHandles,
+      }),
+    );
+  }
+
+  async runOrdinaryMindTransaction<Result>(
+    operation: (transaction: OrdinaryMindMetadataTransaction) => Promise<Result>,
+  ): Promise<Result> {
+    return this.#runExclusive(async () => {
+      let knowledgeSpaces = cloneRecordMap(
+        this.#knowledgeSpaces,
+        freezeKnowledgeSpace,
+      );
+      let memberships = cloneRecordMap(this.#memberships, freezeMembership);
+      let revisionSpaces = cloneSpaces(this.#spaces);
+      let revisionsById = new Map(this.#revisionsById);
+      let idempotencyRecords = cloneOrdinaryMindIdempotencyRecords(
+        this.#ordinaryMindIdempotencyRecords,
+      );
+      let activeByHandle = new Map(this.#activeHandlesByKey);
+      let activeBySpace = new Map(this.#activeHandlesBySpace);
+      let retired = new Map(this.#retiredHandles);
+
+      const transaction: OrdinaryMindMetadataTransaction = Object.freeze({
+        createOrdinaryMind: async (
+          records: Readonly<OrdinaryMindRecordSet>,
+        ): Promise<CreateOrdinaryMindResult> => {
+          const principalId = records.ownerMembership.principalId;
+          const idempotencyRecordKey = ordinaryMindCreateIdempotencyKey(
+            principalId,
+            records.idempotencyKey,
+          );
+          const principal = this.#principals.get(principalId);
+          if (!principal || principal.state !== "active") {
+            return Object.freeze({ kind: "principal_not_found" });
+          }
+          const previous = idempotencyRecords.get(idempotencyRecordKey);
+          if (previous) {
+            if (
+              previous.operation !== "create_space_with_owner"
+            ) {
+              return Object.freeze({ kind: "idempotency_conflict" });
+            }
+            const currentSpace = knowledgeSpaces.get(previous.mind.space.spaceId);
+            const currentReservation = activeBySpace.get(
+              previous.mind.space.spaceId,
+            );
+            const currentMembership = [...memberships.values()].find(
+              (membership) =>
+                membership.spaceId === previous.mind.space.spaceId &&
+                membership.principalId === principalId &&
+                membership.state === "active",
+            );
+            const isPersonal = [...this.#personalBindings.values()].some(
+              (binding) => binding.spaceId === previous.mind.space.spaceId,
+            );
+            if (
+              !currentSpace ||
+              currentSpace.state !== "active" ||
+              !currentReservation ||
+              currentReservation.spaceId !== currentSpace.spaceId ||
+              currentReservation.canonicalHandle !== currentSpace.normalizedHandle ||
+              isPersonal ||
+              ordinaryMindSnapshotFromMaps(
+                currentSpace.spaceId,
+                knowledgeSpaces,
+                memberships,
+              ) === null
+            ) {
+              return Object.freeze({ kind: "mind_not_found" });
+            }
+            if (
+              !currentMembership ||
+              !roleHasCapability(currentMembership.role, "settings:configure")
+            ) {
+              return Object.freeze({ kind: "forbidden" });
+            }
+            if (previous.canonicalRequestHash !== records.canonicalRequestHash) {
+              return Object.freeze({ kind: "idempotency_conflict" });
+            }
+            return Object.freeze({
+              kind: "created",
+              mind: freezeOrdinaryMindSnapshot(previous.mind),
+              replayed: true,
+            });
+          }
+          const validated = validateOrdinaryMindRecords(records);
+          if (validated === null) return Object.freeze({ kind: "invalid_record" });
+
+          const space = records.space;
+          const membership = records.ownerMembership;
+          const revisionId = records.initialRevision.revision.revisionId;
+          if (
+            knowledgeSpaces.has(space.spaceId) ||
+            memberships.has(membership.membershipId) ||
+            revisionSpaces.has(space.spaceId) ||
+            revisionsById.has(revisionId)
+          ) {
+            return Object.freeze({ kind: "record_conflict" });
+          }
+          const candidateKnowledgeSpaces = cloneRecordMap(
+            knowledgeSpaces,
+            freezeKnowledgeSpace,
+          );
+          const candidateMemberships = cloneRecordMap(
+            memberships,
+            freezeMembership,
+          );
+          const candidateRevisionSpaces = cloneSpaces(revisionSpaces);
+          const candidateRevisionsById = new Map(revisionsById);
+          const candidateIdempotencyRecords =
+            cloneOrdinaryMindIdempotencyRecords(idempotencyRecords);
+          const candidateActiveByHandle = new Map(activeByHandle);
+          const candidateActiveBySpace = new Map(activeBySpace);
+          const candidateRetired = new Map(retired);
+
+          const reserved = reserveHandleAgainst(
+            {
+              host: records.host,
+              handle: space.spaceHandle,
+              spaceId: space.spaceId,
+            },
+            {
+              activeByHandle: candidateActiveByHandle,
+              activeBySpace: candidateActiveBySpace,
+              retired: candidateRetired,
+            },
+          );
+          if (reserved.kind !== "reserved") {
+            return Object.freeze({
+              kind:
+                reserved.kind === "handle_unavailable"
+                  ? "handle_unavailable"
+                  : "invalid_record",
+            });
+          }
+          if (reserved.replayed) {
+            return Object.freeze({ kind: "record_conflict" });
+          }
+          this.#failOrdinaryMindIfRequested("create_after_handle");
+
+          const revisionResult = await this.#commitRevisionAgainst(
+            {
+              expectedHeadRevisionId: null,
+              envelope: records.initialRevision,
+            },
+            candidateRevisionSpaces,
+            candidateRevisionsById,
+          );
+          if (
+            revisionResult.kind !== "committed" ||
+            revisionResult.replayed ||
+            !revisionEnvelopesEqual(
+              revisionResult.envelope,
+              records.initialRevision,
+            )
+          ) {
+            return Object.freeze({ kind: "record_conflict" });
+          }
+          this.#failOrdinaryMindIfRequested("create_after_revision");
+
+          candidateKnowledgeSpaces.set(
+            space.spaceId,
+            freezeKnowledgeSpace(space),
+          );
+          this.#failOrdinaryMindIfRequested("create_after_space");
+          candidateMemberships.set(
+            membership.membershipId,
+            freezeMembership(membership),
+          );
+          this.#failOrdinaryMindIfRequested("create_after_membership");
+          const created = ordinaryMindSnapshotFromMaps(
+            space.spaceId,
+            candidateKnowledgeSpaces,
+            candidateMemberships,
+          );
+          if (created === null) return Object.freeze({ kind: "invalid_record" });
+
+          candidateIdempotencyRecords.set(
+            idempotencyRecordKey,
+            Object.freeze({
+              operation: "create_space_with_owner" as const,
+              principalId,
+              key: records.idempotencyKey,
+              canonicalRequestHash: records.canonicalRequestHash,
+              mind: freezeOrdinaryMindSnapshot(created),
+            }),
+          );
+          this.#failOrdinaryMindIfRequested("create_after_idempotency");
+          this.#failOrdinaryMindIfRequested("create_before_commit");
+          knowledgeSpaces = candidateKnowledgeSpaces;
+          memberships = candidateMemberships;
+          revisionSpaces = candidateRevisionSpaces;
+          revisionsById = candidateRevisionsById;
+          idempotencyRecords = candidateIdempotencyRecords;
+          activeByHandle = candidateActiveByHandle;
+          activeBySpace = candidateActiveBySpace;
+          retired = candidateRetired;
+          return Object.freeze({ kind: "created", mind: created, replayed: false });
+        },
+
+        renameOrdinaryMind: async (
+          request: Readonly<RenameOrdinaryMindRequest>,
+        ): Promise<RenameOrdinaryMindResult> => {
+          const idempotencyRecordKey = ordinaryMindRenameIdempotencyKey(
+            request.principalId,
+            request.spaceId,
+            request.idempotencyKey,
+          );
+          const principal = this.#principals.get(request.principalId);
+          if (!principal || principal.state !== "active") {
+            return Object.freeze({ kind: "forbidden" });
+          }
+          const space = knowledgeSpaces.get(request.spaceId);
+          if (!space || space.state !== "active") {
+            return Object.freeze({ kind: "mind_not_found" });
+          }
+          const personalBinding = [...this.#personalBindings.values()].find(
+            (binding) => binding.spaceId === request.spaceId,
+          );
+          if (personalBinding) {
+            return Object.freeze({
+              kind:
+                personalBinding.principalId === request.principalId
+                  ? "personal_mind"
+                  : "mind_not_found",
+            });
+          }
+
+          const aggregateMemberships = [...memberships.values()].filter(
+            (membership) => membership.spaceId === request.spaceId,
+          );
+          let currentAggregate: ReturnType<typeof SpaceAggregate.restoreOrdinary>;
+          try {
+            currentAggregate = SpaceAggregate.restoreOrdinary({
+              space,
+              memberships: aggregateMemberships,
+            });
+          } catch {
+            return Object.freeze({ kind: "invalid_record" });
+          }
+          const currentMembership = currentAggregate
+            .snapshot()
+            .memberships.find(
+              (membership) =>
+                membership.principalId === request.principalId &&
+                membership.state === "active",
+            );
+          if (
+            !currentMembership ||
+            !roleHasCapability(currentMembership.role, "settings:configure")
+          ) {
+            return Object.freeze({ kind: "forbidden" });
+          }
+
+          const previous = idempotencyRecords.get(idempotencyRecordKey);
+          if (previous) {
+            if (
+              previous.operation !== "rename_space" ||
+              previous.canonicalRequestHash !== request.canonicalRequestHash
+            ) {
+              return Object.freeze({ kind: "idempotency_conflict" });
+            }
+            return Object.freeze({
+              kind: "renamed",
+              mind: freezeOrdinaryMindSnapshot(previous.mind),
+              replayed: true,
+            });
+          }
+          if (!SHA256_PATTERN.test(request.canonicalRequestHash)) {
+            return Object.freeze({ kind: "invalid_record" });
+          }
+
+          let renamedAggregate: ReturnType<typeof SpaceAggregate.restoreOrdinary>;
+          try {
+            renamedAggregate = currentAggregate.rename({
+              actorPrincipalId: request.principalId,
+              name: request.displayName,
+              expectedMetadataVersion: request.expectedMetadataVersion,
+              occurredAt: request.occurredAt,
+            });
+          } catch (error) {
+            if (error instanceof DomainInvariantError) {
+              if (error.code === "stale_version") {
+                return Object.freeze({
+                  kind: "metadata_conflict",
+                  currentMetadataVersion: space.metadataVersion,
+                });
+              }
+              if (error.code === "settings_permission_required") {
+                return Object.freeze({ kind: "forbidden" });
+              }
+              if (error.code === "space_not_active") {
+                return Object.freeze({ kind: "mind_not_found" });
+              }
+            }
+            return Object.freeze({ kind: "invalid_record" });
+          }
+
+          const candidateKnowledgeSpaces = cloneRecordMap(
+            knowledgeSpaces,
+            freezeKnowledgeSpace,
+          );
+          const candidateIdempotencyRecords =
+            cloneOrdinaryMindIdempotencyRecords(idempotencyRecords);
+          const renamedSnapshot = renamedAggregate.snapshot();
+          candidateKnowledgeSpaces.set(
+            request.spaceId,
+            freezeKnowledgeSpace(renamedSnapshot.space),
+          );
+          this.#failOrdinaryMindIfRequested("rename_after_space");
+          const renamed = ordinaryMindSnapshotFromMaps(
+            request.spaceId,
+            candidateKnowledgeSpaces,
+            memberships,
+          );
+          if (renamed === null) return Object.freeze({ kind: "invalid_record" });
+          candidateIdempotencyRecords.set(
+            idempotencyRecordKey,
+            Object.freeze({
+              operation: "rename_space" as const,
+              principalId: request.principalId,
+              spaceId: request.spaceId,
+              key: request.idempotencyKey,
+              canonicalRequestHash: request.canonicalRequestHash,
+              mind: freezeOrdinaryMindSnapshot(renamed),
+            }),
+          );
+          this.#failOrdinaryMindIfRequested("rename_after_idempotency");
+          this.#failOrdinaryMindIfRequested("rename_before_commit");
+          knowledgeSpaces = candidateKnowledgeSpaces;
+          idempotencyRecords = candidateIdempotencyRecords;
+          return Object.freeze({ kind: "renamed", mind: renamed, replayed: false });
+        },
+      });
+
+      const result = await operation(transaction);
+      this.#knowledgeSpaces = knowledgeSpaces;
+      this.#memberships = memberships;
+      this.#spaces = revisionSpaces;
+      this.#revisionsById = revisionsById;
+      this.#ordinaryMindIdempotencyRecords = idempotencyRecords;
+      this.#activeHandlesByKey = activeByHandle;
+      this.#activeHandlesBySpace = activeBySpace;
+      this.#retiredHandles = retired;
+      return result;
+    });
   }
 
   async runPersonalMindTransaction<Result>(
@@ -2438,6 +3018,10 @@ export class InMemoryRevisionMetadataStore
     this.#nextPersonalProfileFailureStage = stage;
   }
 
+  failNextOrdinaryMindAtForTest(stage: OrdinaryMindFailureStage): void {
+    this.#nextOrdinaryMindFailureStage = stage;
+  }
+
   /** Test-only concurrent metadata mutation; content HEAD/history are untouched. */
   async bumpPersonalMindMetadataVersionForTest(
     principalId: Principal["principalId"],
@@ -2457,6 +3041,228 @@ export class InMemoryRevisionMetadataStore
         }),
       );
       return true;
+    });
+  }
+
+  /** Test-only concurrent ordinary metadata mutation; access and revisions stay fixed. */
+  async bumpOrdinaryMindMetadataVersionForTest(
+    spaceId: KnowledgeSpace["spaceId"],
+    occurredAt: KnowledgeSpace["updatedAt"],
+  ): Promise<boolean> {
+    return this.#runExclusive(async () => {
+      if (
+        [...this.#personalBindings.values()].some(
+          (binding) => binding.spaceId === spaceId,
+        )
+      ) {
+        return false;
+      }
+      const space = this.#knowledgeSpaces.get(spaceId);
+      if (!space) return false;
+      this.#knowledgeSpaces.set(
+        spaceId,
+        freezeKnowledgeSpace({
+          ...space,
+          metadataVersion: version(space.metadataVersion + 1),
+          updatedAt: occurredAt,
+        }),
+      );
+      return true;
+    });
+  }
+
+  /** Test-only valid non-owner membership setup for current-state authorization races. */
+  async grantOrdinaryMembershipForTest(
+    membership: Readonly<SpaceMembership>,
+    occurredAt: KnowledgeSpace["updatedAt"],
+  ): Promise<boolean> {
+    return this.#runExclusive(async () => {
+      const space = this.#knowledgeSpaces.get(membership.spaceId);
+      const principal = this.#principals.get(membership.principalId);
+      if (
+        !space ||
+        space.state !== "active" ||
+        !principal ||
+        principal.state !== "active" ||
+        membership.state !== "active" ||
+        membership.role === "owner" ||
+        this.#memberships.has(membership.membershipId) ||
+        [...this.#personalBindings.values()].some(
+          (binding) => binding.spaceId === membership.spaceId,
+        ) ||
+        [...this.#memberships.values()].some(
+          (candidate) =>
+            candidate.spaceId === membership.spaceId &&
+            candidate.principalId === membership.principalId &&
+            candidate.state === "active",
+        )
+      ) {
+        return false;
+      }
+      const updatedSpace = freezeKnowledgeSpace({
+        ...space,
+        metadataVersion: version(space.metadataVersion + 1),
+        accessVersion: version(space.accessVersion + 1),
+        updatedAt: occurredAt,
+      });
+      const candidateMemberships = [
+        ...this.#memberships.values(),
+        freezeMembership(membership),
+      ].filter((candidate) => candidate.spaceId === space.spaceId);
+      try {
+        SpaceAggregate.restoreOrdinary({
+          space: updatedSpace,
+          memberships: candidateMemberships,
+        });
+      } catch {
+        return false;
+      }
+      this.#knowledgeSpaces.set(space.spaceId, updatedSpace);
+      this.#memberships.set(
+        membership.membershipId,
+        freezeMembership(membership),
+      );
+      return true;
+    });
+  }
+
+  /** Test-only access revocation while another active Owner preserves the aggregate. */
+  async revokeOrdinaryMembershipForTest(
+    spaceId: KnowledgeSpace["spaceId"],
+    principalId: Principal["principalId"],
+    occurredAt: KnowledgeSpace["updatedAt"],
+  ): Promise<boolean> {
+    return this.#runExclusive(async () => {
+      const space = this.#knowledgeSpaces.get(spaceId);
+      const current = [...this.#memberships.values()].find(
+        (membership) =>
+          membership.spaceId === spaceId &&
+          membership.principalId === principalId &&
+          membership.state === "active",
+      );
+      if (!space || !current || current.role === "owner") return false;
+      const revoked = freezeMembership({
+        ...current,
+        state: "revoked",
+        version: version(current.version + 1),
+        updatedAt: occurredAt,
+        updatedBy: principalId,
+      });
+      const updatedSpace = freezeKnowledgeSpace({
+        ...space,
+        metadataVersion: version(space.metadataVersion + 1),
+        accessVersion: version(space.accessVersion + 1),
+        updatedAt: occurredAt,
+      });
+      const candidateMemberships = [...this.#memberships.values()]
+        .filter((membership) => membership.spaceId === spaceId)
+        .map((membership) =>
+          membership.membershipId === revoked.membershipId
+            ? revoked
+            : membership,
+        );
+      try {
+        SpaceAggregate.restoreOrdinary({
+          space: updatedSpace,
+          memberships: candidateMemberships,
+        });
+      } catch {
+        return false;
+      }
+      this.#knowledgeSpaces.set(spaceId, updatedSpace);
+      this.#memberships.set(revoked.membershipId, revoked);
+      return true;
+    });
+  }
+
+  /** Test-only deletion-race state; the handle remains reserved until delete commits. */
+  async markOrdinaryMindDeletingForTest(
+    spaceId: KnowledgeSpace["spaceId"],
+    occurredAt: KnowledgeSpace["updatedAt"],
+  ): Promise<boolean> {
+    return this.#runExclusive(async () => {
+      const space = this.#knowledgeSpaces.get(spaceId);
+      if (
+        !space ||
+        [...this.#personalBindings.values()].some(
+          (binding) => binding.spaceId === spaceId,
+        )
+      ) {
+        return false;
+      }
+      const deleting = freezeKnowledgeSpace({
+        ...space,
+        state: "deleting",
+        metadataVersion: version(space.metadataVersion + 1),
+        accessVersion: version(space.accessVersion + 1),
+        updatedAt: occurredAt,
+      });
+      this.#knowledgeSpaces.set(spaceId, deleting);
+      return true;
+    });
+  }
+
+  async inspectOrdinaryMindStateForTest(
+    spaceId: KnowledgeSpace["spaceId"],
+  ): Promise<Readonly<{
+    space: Readonly<KnowledgeSpace>;
+    memberships: readonly Readonly<SpaceMembership>[];
+    revisions: readonly Envelope[];
+    reservation: Readonly<HandleReservationSnapshot>;
+  }> | null> {
+    if (
+      [...this.#personalBindings.values()].some(
+        (binding) => binding.spaceId === spaceId,
+      )
+    ) {
+      return null;
+    }
+    const space = this.#knowledgeSpaces.get(spaceId);
+    const reservation = this.#activeHandlesBySpace.get(spaceId);
+    if (!space || !reservation) return null;
+    const memberships = [...this.#memberships.values()]
+      .filter((membership) => membership.spaceId === spaceId)
+      .map(freezeMembership);
+    const revisions = await this.listRevisions(spaceId);
+    return Object.freeze({
+      space: freezeKnowledgeSpace(space),
+      memberships: Object.freeze(memberships),
+      revisions,
+      reservation: freezeReservation(
+        reservation.host,
+        reservation.canonicalHandle,
+        reservation.spaceId,
+      ),
+    });
+  }
+
+  async inspectOrdinaryMindTotalsForTest(): Promise<Readonly<{
+    minds: number;
+    reservations: number;
+    memberships: number;
+    revisions: number;
+    idempotencyRecords: number;
+  }>> {
+    const personalSpaceIds = new Set(
+      [...this.#personalBindings.values()].map((binding) => binding.spaceId),
+    );
+    const ordinarySpaceIds = new Set(
+      [...this.#knowledgeSpaces.keys()].filter(
+        (spaceId) => !personalSpaceIds.has(spaceId),
+      ),
+    );
+    return Object.freeze({
+      minds: ordinarySpaceIds.size,
+      reservations: [...this.#activeHandlesBySpace.keys()].filter((spaceId) =>
+        ordinarySpaceIds.has(spaceId),
+      ).length,
+      memberships: [...this.#memberships.values()].filter((membership) =>
+        ordinarySpaceIds.has(membership.spaceId),
+      ).length,
+      revisions: [...this.#revisionsById.values()].filter((envelope) =>
+        ordinarySpaceIds.has(envelope.revision.spaceId),
+      ).length,
+      idempotencyRecords: this.#ordinaryMindIdempotencyRecords.size,
     });
   }
 
@@ -2526,5 +3332,11 @@ export class InMemoryRevisionMetadataStore
     if (this.#nextPersonalProfileFailureStage !== stage) return;
     this.#nextPersonalProfileFailureStage = null;
     throw new Error(`injected Personal Mind profile transaction failure at ${stage}`);
+  }
+
+  #failOrdinaryMindIfRequested(stage: OrdinaryMindFailureStage): void {
+    if (this.#nextOrdinaryMindFailureStage !== stage) return;
+    this.#nextOrdinaryMindFailureStage = null;
+    throw new Error(`injected ordinary Mind transaction failure at ${stage}`);
   }
 }

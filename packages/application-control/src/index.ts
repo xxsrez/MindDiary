@@ -9,16 +9,21 @@ import type {
   McpTokenStore,
   MetadataStore,
   ObjectStore,
+  OrdinaryMindIdGenerator,
+  OrdinaryMindSnapshot,
+  OrdinaryMindStore,
   PersonalMindProfileSnapshot,
   PersonalMindStore,
   TokenHasher,
   TokenIdGenerator,
+  VerifiedSpaceHost,
 } from "@mind-diary/application-ports";
 import {
   MARKDOWN_MEDIA_TYPE,
   createCanonicalRevisionEnvelope,
   createRevisionManifest,
   isReservedTopLevelHandle,
+  isReservedTopLevelRoute,
   idempotencyKey,
   normalizeTokenScopes,
   parseCanonicalSpaceHandle,
@@ -86,6 +91,22 @@ export function createInitialPersonalMindFiles(
     Object.freeze({
       path: "log.md",
       text: `# Log\n\n## ${date}\n\n- **Create**: Created Personal Mind.\n`,
+    }),
+  ]);
+}
+
+export function createInitialOrdinaryMindFiles(
+  occurredAtUtc: UtcInstant,
+): readonly Readonly<{ readonly path: string; readonly text: string }>[] {
+  const date = occurredAtUtc.slice(0, 10);
+  return Object.freeze([
+    Object.freeze({
+      path: "index.md",
+      text: `---\nokf_version: "0.2"\n---\n\n# Mind\n\nAdd the first Memory.\n`,
+    }),
+    Object.freeze({
+      path: "log.md",
+      text: `# Log\n\n## ${date}\n\n- **Create**: Created Mind.\n`,
     }),
   ]);
 }
@@ -1224,5 +1245,508 @@ export class PersonalMindControlService {
       );
     }
     return Object.freeze({ kind: "ordinary", mindId: target.spaceId });
+  }
+}
+
+export type OrdinaryMindControlFailureCode =
+  | "authentication_required"
+  | "invalid_display_name"
+  | "invalid_handle"
+  | "invalid_metadata_version"
+  | "invalid_idempotency_key"
+  | "handle_unavailable"
+  | "mind_not_found"
+  | "personal_mind_operation_forbidden"
+  | "forbidden"
+  | "metadata_conflict"
+  | "idempotency_conflict"
+  | "ordinary_mind_conflict"
+  | "ordinary_mind_unavailable";
+
+/** Safe failure without private profile, hidden handle, content, or authority claims. */
+export class OrdinaryMindControlFailure extends Error {
+  readonly code: OrdinaryMindControlFailureCode;
+
+  constructor(code: OrdinaryMindControlFailureCode, message: string) {
+    super(message);
+    this.name = "OrdinaryMindControlFailure";
+    this.code = code;
+  }
+}
+
+export interface CreateOrdinaryMindCommand {
+  readonly name: string;
+  readonly handle: string;
+  readonly idempotencyKey: string;
+}
+
+export interface RenameOrdinaryMindCommand {
+  readonly mindId: SpaceId;
+  readonly name: string;
+  readonly expectedMetadataVersion: number;
+  readonly idempotencyKey: string;
+}
+
+export interface OrdinaryMindControlDescriptor {
+  readonly mindId: SpaceId;
+  readonly route: `/${string}`;
+  readonly handle: string;
+  readonly name: string;
+  readonly visibility: "private" | "unlisted" | "public";
+  readonly metadataVersion: number;
+  readonly accessVersion: number;
+  readonly headRevisionId: OrdinaryMindSnapshot["space"]["headRevisionId"];
+}
+
+export interface OrdinaryMindMutationResult extends OrdinaryMindControlDescriptor {
+  readonly replayed: boolean;
+}
+
+export interface OrdinaryMindControlSafeEvent {
+  readonly event:
+    | "ordinary_mind_created"
+    | "ordinary_mind_create_replayed"
+    | "ordinary_mind_renamed"
+    | "ordinary_mind_rename_replayed"
+    | "ordinary_mind_conflict"
+    | "ordinary_mind_denied"
+    | "ordinary_mind_failed";
+  readonly requestId: ActorContext["requestId"];
+}
+
+export interface OrdinaryMindControlSafeLogger {
+  record(event: Readonly<OrdinaryMindControlSafeEvent>): void | Promise<void>;
+}
+
+export interface OrdinaryMindControlDependencies {
+  readonly ordinaryMinds: OrdinaryMindStore;
+  readonly objects: ObjectStore;
+  readonly ids: OrdinaryMindIdGenerator;
+  readonly host: VerifiedSpaceHost;
+  readonly logger?: OrdinaryMindControlSafeLogger;
+}
+
+function ordinaryMindIdempotencyKey(value: unknown) {
+  try {
+    return personalProfileIdempotencyKey(value);
+  } catch (error) {
+    if (
+      error instanceof PersonalMindControlFailure &&
+      error.code === "invalid_idempotency_key"
+    ) {
+      throw new OrdinaryMindControlFailure(
+        "invalid_idempotency_key",
+        "A valid idempotency key is required.",
+      );
+    }
+    throw error;
+  }
+}
+
+function ordinaryMindMetadataVersion(value: unknown) {
+  try {
+    return version(value as number);
+  } catch {
+    throw new OrdinaryMindControlFailure(
+      "invalid_metadata_version",
+      "A valid expected metadata version is required.",
+    );
+  }
+}
+
+function ordinaryMindActor(actor: ActorContext): Readonly<{
+  principalId: PrincipalId;
+  occurredAtUtc: UtcInstant;
+}> | null {
+  const principalId = registeredSitesPrincipal(actor);
+  if (principalId === null || parseUtcInstant(actor.occurredAtUtc) === null) {
+    return null;
+  }
+  return Object.freeze({ principalId, occurredAtUtc: actor.occurredAtUtc });
+}
+
+function ordinaryMindDescriptor(
+  mind: Readonly<OrdinaryMindSnapshot>,
+): Readonly<OrdinaryMindControlDescriptor> {
+  const space = mind.space;
+  return Object.freeze({
+    mindId: space.spaceId,
+    route: `/${space.spaceHandle}`,
+    handle: space.spaceHandle,
+    name: space.name,
+    visibility: space.visibility,
+    metadataVersion: space.metadataVersion,
+    accessVersion: space.accessVersion,
+    headRevisionId: space.headRevisionId,
+  });
+}
+
+function recordOrdinaryMindEvent(
+  logger: OrdinaryMindControlSafeLogger | undefined,
+  event: OrdinaryMindControlSafeEvent["event"],
+  requestId: ActorContext["requestId"],
+): void {
+  if (!logger) return;
+  try {
+    const pending = logger.record(Object.freeze({ event, requestId }));
+    if (
+      typeof pending === "object" &&
+      pending !== null &&
+      "catch" in pending &&
+      typeof pending.catch === "function"
+    ) {
+      void pending.catch(() => undefined);
+    }
+  } catch {
+    // Safe observability remains outside the metadata transaction.
+  }
+}
+
+/** Ordinary Mind create/rename use cases for the trusted Sites control plane. */
+export class OrdinaryMindControlService {
+  readonly #ordinaryMinds: OrdinaryMindStore;
+  readonly #objects: ObjectStore;
+  readonly #ids: OrdinaryMindIdGenerator;
+  readonly #host: VerifiedSpaceHost;
+  readonly #logger: OrdinaryMindControlSafeLogger | undefined;
+
+  constructor(dependencies: OrdinaryMindControlDependencies) {
+    this.#ordinaryMinds = dependencies.ordinaryMinds;
+    this.#objects = dependencies.objects;
+    this.#ids = dependencies.ids;
+    this.#host = dependencies.host;
+    this.#logger = dependencies.logger;
+  }
+
+  async createSpaceWithOwner(
+    actor: ActorContext,
+    command: CreateOrdinaryMindCommand,
+  ): Promise<Readonly<OrdinaryMindMutationResult>> {
+    const requestId = safeBootstrapRequestId(actor?.requestId);
+    const trustedActor = ordinaryMindActor(actor);
+    if (trustedActor === null) {
+      recordOrdinaryMindEvent(this.#logger, "ordinary_mind_denied", requestId);
+      throw new OrdinaryMindControlFailure(
+        "authentication_required",
+        "A registered Sites principal is required.",
+      );
+    }
+    const displayName = normalizedDisplayName(command?.name);
+    if (displayName === null) {
+      throw new OrdinaryMindControlFailure(
+        "invalid_display_name",
+        "A valid display name is required.",
+      );
+    }
+    if (isReservedTopLevelRoute(command?.handle)) {
+      throw new OrdinaryMindControlFailure(
+        "handle_unavailable",
+        "The Mind handle is unavailable.",
+      );
+    }
+    const parsedHandle = parseCanonicalSpaceHandle(command?.handle);
+    if (parsedHandle.kind !== "valid") {
+      throw new OrdinaryMindControlFailure(
+        "invalid_handle",
+        "A canonical Mind handle is required.",
+      );
+    }
+    if (isReservedTopLevelHandle(parsedHandle.canonicalHandle)) {
+      throw new OrdinaryMindControlFailure(
+        "handle_unavailable",
+        "The Mind handle is unavailable.",
+      );
+    }
+    const checkedIdempotencyKey = ordinaryMindIdempotencyKey(
+      command?.idempotencyKey,
+    );
+
+    try {
+      const canonicalRequestHash = await this.#objects.calculateSha256(
+        PERSONAL_PROFILE_ENCODER.encode(`${JSON.stringify({
+          format: "mind-diary-ordinary-mind-create-v1",
+          host: this.#host,
+          handle: parsedHandle.canonicalHandle,
+          display_name: displayName,
+        })}\n`),
+      );
+      const spaceId = this.#ids.nextSpaceId();
+      const membershipId = this.#ids.nextMembershipId();
+      const revisionId = this.#ids.nextRevisionId();
+      const initialFiles = createInitialOrdinaryMindFiles(
+        trustedActor.occurredAtUtc,
+      );
+      const storedObjects = await Promise.all(
+        initialFiles.map(async (file) =>
+          this.#objects.putImmutable({
+            bytes: PERSONAL_PROFILE_ENCODER.encode(file.text),
+            mediaType: MARKDOWN_MEDIA_TYPE,
+            createdAt: trustedActor.occurredAtUtc,
+          }),
+        ),
+      );
+      const manifest = createRevisionManifest(
+        initialFiles.map((file, index) => {
+          const object = storedObjects[index]!.object;
+          return {
+            path: file.path,
+            sha256: object.sha256,
+            mediaType: MARKDOWN_MEDIA_TYPE,
+            size: object.size,
+          };
+        }),
+      );
+      const manifestHash = await this.#objects.calculateSha256(
+        PERSONAL_PROFILE_ENCODER.encode(serializeRevisionManifest(manifest)),
+      );
+      const initialRevision = createCanonicalRevisionEnvelope({
+        revisionId,
+        spaceId,
+        revisionNumber: 1,
+        parentRevisionId: null,
+        committedAt: trustedActor.occurredAtUtc,
+        committedBy: {
+          kind: "principal",
+          principalId: trustedActor.principalId,
+        },
+        manifest,
+        manifestHash,
+        summary: "Create Mind",
+      });
+      const records = Object.freeze({
+        host: this.#host,
+        space: Object.freeze({
+          spaceId,
+          spaceHandle: parsedHandle.canonicalHandle,
+          normalizedHandle: parsedHandle.canonicalHandle,
+          name: displayName,
+          visibility: "private" as const,
+          state: "active" as const,
+          metadataVersion: version(1),
+          accessVersion: version(1),
+          headRevisionId: revisionId,
+          createdAt: trustedActor.occurredAtUtc,
+          updatedAt: trustedActor.occurredAtUtc,
+        }),
+        ownerMembership: Object.freeze({
+          membershipId,
+          spaceId,
+          principalId: trustedActor.principalId,
+          role: "owner" as const,
+          state: "active" as const,
+          version: version(1),
+          createdAt: trustedActor.occurredAtUtc,
+          createdBy: trustedActor.principalId,
+          updatedAt: trustedActor.occurredAtUtc,
+          updatedBy: trustedActor.principalId,
+        }),
+        initialRevision,
+        idempotencyKey: checkedIdempotencyKey,
+        canonicalRequestHash,
+      });
+      const created = await this.#ordinaryMinds.runOrdinaryMindTransaction(
+        (transaction) => transaction.createOrdinaryMind(records),
+      );
+      if (created.kind === "created") {
+        recordOrdinaryMindEvent(
+          this.#logger,
+          created.replayed
+            ? "ordinary_mind_create_replayed"
+            : "ordinary_mind_created",
+          requestId,
+        );
+        return Object.freeze({
+          ...ordinaryMindDescriptor(created.mind),
+          replayed: created.replayed,
+        });
+      }
+      if (created.kind === "handle_unavailable") {
+        throw new OrdinaryMindControlFailure(
+          "handle_unavailable",
+          "The Mind handle is unavailable.",
+        );
+      }
+      if (created.kind === "idempotency_conflict") {
+        throw new OrdinaryMindControlFailure(
+          "idempotency_conflict",
+          "The idempotency key was already used for another request.",
+        );
+      }
+      if (created.kind === "principal_not_found") {
+        throw new OrdinaryMindControlFailure(
+          "authentication_required",
+          "A registered Sites principal is required.",
+        );
+      }
+      if (created.kind === "mind_not_found") {
+        throw new OrdinaryMindControlFailure(
+          "mind_not_found",
+          "Mind was not found.",
+        );
+      }
+      if (created.kind === "forbidden") {
+        throw new OrdinaryMindControlFailure(
+          "forbidden",
+          "Current Mind settings access is required.",
+        );
+      }
+      throw new OrdinaryMindControlFailure(
+        created.kind === "record_conflict"
+          ? "ordinary_mind_conflict"
+          : "ordinary_mind_unavailable",
+        "Mind creation is unavailable.",
+      );
+    } catch (error) {
+      if (error instanceof OrdinaryMindControlFailure) {
+        if (
+          error.code === "handle_unavailable" ||
+          error.code === "idempotency_conflict" ||
+          error.code === "ordinary_mind_conflict"
+        ) {
+          recordOrdinaryMindEvent(
+            this.#logger,
+            "ordinary_mind_conflict",
+            requestId,
+          );
+        }
+      } else {
+        recordOrdinaryMindEvent(this.#logger, "ordinary_mind_failed", requestId);
+      }
+      throw error;
+    }
+  }
+
+  async renameSpace(
+    actor: ActorContext,
+    command: RenameOrdinaryMindCommand,
+  ): Promise<Readonly<OrdinaryMindMutationResult>> {
+    const requestId = safeBootstrapRequestId(actor?.requestId);
+    const trustedActor = ordinaryMindActor(actor);
+    if (trustedActor === null) {
+      recordOrdinaryMindEvent(this.#logger, "ordinary_mind_denied", requestId);
+      throw new OrdinaryMindControlFailure(
+        "authentication_required",
+        "A registered Sites principal is required.",
+      );
+    }
+    if (
+      command === null ||
+      typeof command !== "object" ||
+      typeof command.mindId !== "string" ||
+      command.mindId.length === 0
+    ) {
+      throw new OrdinaryMindControlFailure(
+        "mind_not_found",
+        "Mind was not found.",
+      );
+    }
+    const displayName = normalizedDisplayName(command.name);
+    if (displayName === null) {
+      throw new OrdinaryMindControlFailure(
+        "invalid_display_name",
+        "A valid display name is required.",
+      );
+    }
+    const expectedMetadataVersion = ordinaryMindMetadataVersion(
+      command.expectedMetadataVersion,
+    );
+    const checkedIdempotencyKey = ordinaryMindIdempotencyKey(
+      command.idempotencyKey,
+    );
+
+    try {
+      const canonicalRequestHash = await this.#objects.calculateSha256(
+        PERSONAL_PROFILE_ENCODER.encode(`${JSON.stringify({
+          format: "mind-diary-ordinary-mind-rename-v1",
+          mind_id: command.mindId,
+          display_name: displayName,
+          expected_metadata_version: expectedMetadataVersion,
+        })}\n`),
+      );
+      const renamed = await this.#ordinaryMinds.runOrdinaryMindTransaction(
+        (transaction) =>
+          transaction.renameOrdinaryMind({
+            principalId: trustedActor.principalId,
+            spaceId: command.mindId,
+            displayName,
+            expectedMetadataVersion,
+            idempotencyKey: checkedIdempotencyKey,
+            canonicalRequestHash,
+            occurredAt: trustedActor.occurredAtUtc,
+          }),
+      );
+      if (renamed.kind === "renamed") {
+        recordOrdinaryMindEvent(
+          this.#logger,
+          renamed.replayed
+            ? "ordinary_mind_rename_replayed"
+            : "ordinary_mind_renamed",
+          requestId,
+        );
+        return Object.freeze({
+          ...ordinaryMindDescriptor(renamed.mind),
+          replayed: renamed.replayed,
+        });
+      }
+      if (renamed.kind === "metadata_conflict") {
+        throw new OrdinaryMindControlFailure(
+          "metadata_conflict",
+          "Mind metadata changed; re-read and retry.",
+        );
+      }
+      if (renamed.kind === "idempotency_conflict") {
+        throw new OrdinaryMindControlFailure(
+          "idempotency_conflict",
+          "The idempotency key was already used for another request.",
+        );
+      }
+      if (renamed.kind === "personal_mind") {
+        throw new OrdinaryMindControlFailure(
+          "personal_mind_operation_forbidden",
+          "This operation is unavailable for Personal Mind.",
+        );
+      }
+      if (renamed.kind === "mind_not_found") {
+        throw new OrdinaryMindControlFailure(
+          "mind_not_found",
+          "Mind was not found.",
+        );
+      }
+      if (renamed.kind === "forbidden") {
+        throw new OrdinaryMindControlFailure(
+          "forbidden",
+          "Current Mind settings access is required.",
+        );
+      }
+      throw new OrdinaryMindControlFailure(
+        "ordinary_mind_unavailable",
+        "Mind rename is unavailable.",
+      );
+    } catch (error) {
+      if (error instanceof OrdinaryMindControlFailure) {
+        if (
+          error.code === "metadata_conflict" ||
+          error.code === "idempotency_conflict"
+        ) {
+          recordOrdinaryMindEvent(
+            this.#logger,
+            "ordinary_mind_conflict",
+            requestId,
+          );
+        } else if (
+          error.code === "forbidden" ||
+          error.code === "personal_mind_operation_forbidden"
+        ) {
+          recordOrdinaryMindEvent(
+            this.#logger,
+            "ordinary_mind_denied",
+            requestId,
+          );
+        }
+      } else {
+        recordOrdinaryMindEvent(this.#logger, "ordinary_mind_failed", requestId);
+      }
+      throw error;
+    }
   }
 }

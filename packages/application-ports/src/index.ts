@@ -78,6 +78,7 @@ export type {
   StartExportIdempotencyResult,
 } from "@mind-diary/domain";
 export {
+  DomainInvariantError,
   PrincipalAccount,
   RESERVED_TOP_LEVEL_HANDLES,
   SpaceAggregate,
@@ -88,6 +89,7 @@ export {
   version,
   verifiedSpaceHost,
   revisionEnvelopesEqual,
+  roleHasCapability,
   type CanonicalSpaceHandle,
   type HandlePolicyFailureReason,
   type VerifiedSpaceHost,
@@ -358,6 +360,94 @@ export interface HandleRegistry extends MetadataStore {
   reserveHandle(request: HandleReservationRequest): Promise<HandleReservationResult>;
   resolveHandle(request: HandleResolutionRequest): Promise<HandleResolutionResult>;
   retireHandle(request: HandleRetirementRequest): Promise<HandleRetirementResult>;
+}
+
+/** Server-owned identifiers for one ordinary Mind aggregate. */
+export interface OrdinaryMindIdGenerator {
+  nextSpaceId(): SpaceId;
+  nextMembershipId(): MembershipId;
+  nextRevisionId(): RevisionId;
+}
+
+export interface OrdinaryMindSnapshot {
+  readonly space: Readonly<KnowledgeSpace>;
+  readonly ownerMembership: Readonly<SpaceMembership>;
+}
+
+/**
+ * Complete ordinary-Mind aggregate staged with its host-scoped handle and
+ * initial canonical revision. None of these records may become reachable
+ * independently.
+ */
+export interface OrdinaryMindRecordSet {
+  readonly host: VerifiedSpaceHost;
+  readonly space: Readonly<KnowledgeSpace>;
+  readonly ownerMembership: Readonly<SpaceMembership>;
+  readonly initialRevision: Readonly<CanonicalRevisionEnvelope>;
+  readonly idempotencyKey: IdempotencyKey;
+  readonly canonicalRequestHash: Sha256Digest;
+}
+
+export type CreateOrdinaryMindResult =
+  | {
+      readonly kind: "created";
+      readonly mind: Readonly<OrdinaryMindSnapshot>;
+      readonly replayed: boolean;
+    }
+  | {
+      readonly kind:
+        | "principal_not_found"
+        | "mind_not_found"
+        | "forbidden"
+        | "handle_unavailable"
+        | "idempotency_conflict"
+        | "record_conflict"
+        | "invalid_record";
+    };
+
+export interface RenameOrdinaryMindRequest {
+  readonly principalId: PrincipalId;
+  readonly spaceId: SpaceId;
+  readonly displayName: string;
+  readonly expectedMetadataVersion: Version;
+  readonly idempotencyKey: IdempotencyKey;
+  readonly canonicalRequestHash: Sha256Digest;
+  readonly occurredAt: UtcInstant;
+}
+
+export type RenameOrdinaryMindResult =
+  | {
+      readonly kind: "renamed";
+      readonly mind: Readonly<OrdinaryMindSnapshot>;
+      readonly replayed: boolean;
+    }
+  | {
+      readonly kind: "metadata_conflict";
+      readonly currentMetadataVersion: Version;
+    }
+  | {
+      readonly kind:
+        | "mind_not_found"
+        | "personal_mind"
+        | "forbidden"
+        | "idempotency_conflict"
+        | "invalid_record";
+    };
+
+export interface OrdinaryMindMetadataTransaction {
+  createOrdinaryMind(
+    records: Readonly<OrdinaryMindRecordSet>,
+  ): Promise<CreateOrdinaryMindResult>;
+  renameOrdinaryMind(
+    request: Readonly<RenameOrdinaryMindRequest>,
+  ): Promise<RenameOrdinaryMindResult>;
+}
+
+/** Atomic handle, metadata, Owner, revision/HEAD and idempotency boundary. */
+export interface OrdinaryMindStore extends HandleRegistry {
+  runOrdinaryMindTransaction<Result>(
+    operation: (transaction: OrdinaryMindMetadataTransaction) => Promise<Result>,
+  ): Promise<Result>;
 }
 
 export interface ImmutableObjectWriteRequest {

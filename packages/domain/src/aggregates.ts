@@ -17,6 +17,7 @@ import {
   VISIBILITIES,
   version,
 } from "./records.js";
+import { roleHasCapability } from "./capabilities.js";
 
 export type DomainInvariantCode =
   | "record_space_mismatch"
@@ -35,6 +36,7 @@ export type DomainInvariantCode =
   | "space_not_active"
   | "membership_not_active"
   | "owner_required"
+  | "settings_permission_required"
   | "ownership_target_invalid"
   | "invitation_not_pending"
   | "invitation_target_mismatch"
@@ -92,11 +94,24 @@ function validateCommon(
   memberships: readonly SpaceMembership[],
   invitations: readonly SpaceInvitation[],
 ): void {
+  let normalizedName: string;
+  try {
+    normalizedName = space.name.normalize("NFKC").trim();
+  } catch {
+    throw new DomainInvariantError("invalid_record", "Mind display name is invalid");
+  }
   if (
     !SPACE_LIFECYCLE_STATES.includes(space.state) ||
-    !VISIBILITIES.includes(space.visibility)
+    !VISIBILITIES.includes(space.visibility) ||
+    normalizedName !== space.name ||
+    normalizedName.length === 0 ||
+    [...normalizedName].length > 128 ||
+    /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/u.test(normalizedName)
   ) {
-    throw new DomainInvariantError("invalid_record", "Mind lifecycle or visibility is invalid");
+    throw new DomainInvariantError(
+      "invalid_record",
+      "Mind lifecycle, visibility, or display name is invalid",
+    );
   }
   assertVersion(space.metadataVersion, "Mind metadata");
   assertVersion(space.accessVersion, "Mind access");
@@ -355,6 +370,47 @@ export class SpaceAggregate {
         updatedAt: input.occurredAt,
       },
       memberships,
+      invitations: this.#invitations,
+    });
+  }
+
+  rename(input: {
+    readonly actorPrincipalId: PrincipalId;
+    readonly name: string;
+    readonly expectedMetadataVersion: Version;
+    readonly occurredAt: UtcInstant;
+  }): SpaceAggregate {
+    if (this.#kind !== "ordinary") {
+      throw new DomainInvariantError(
+        "settings_permission_required",
+        "Personal Mind name cannot be changed through ordinary Mind settings",
+      );
+    }
+    if (this.#space.state !== "active") {
+      throw new DomainInvariantError("space_not_active", "Mind is not active");
+    }
+    ensureVersion(this.#space.metadataVersion, input.expectedMetadataVersion, "Mind metadata");
+    const actorMembership = activeMembershipForPrincipal(
+      this.#memberships,
+      input.actorPrincipalId,
+    );
+    if (
+      actorMembership === undefined ||
+      !roleHasCapability(actorMembership.role, "settings:configure")
+    ) {
+      throw new DomainInvariantError(
+        "settings_permission_required",
+        "current settings capability is required",
+      );
+    }
+    return SpaceAggregate.restoreOrdinary({
+      space: {
+        ...this.#space,
+        name: input.name,
+        metadataVersion: version(this.#space.metadataVersion + 1),
+        updatedAt: input.occurredAt,
+      },
+      memberships: this.#memberships,
       invitations: this.#invitations,
     });
   }
