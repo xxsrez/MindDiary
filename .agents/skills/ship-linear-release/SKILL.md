@@ -40,8 +40,13 @@ tracked contract, dirty skill, delivery profile, coordinator refs, route и
 - `blocked` — не мутируй ничего; сообщи точную причину;
 - `recovery` — прочитай только выданные `required_references`, докажи owner и
   применяй [crash-recovery.md](references/crash-recovery.md);
+- `takeover` — не читай Linear/Goal/references и не проси ручного takeover;
+  первым mutable call выполни `shipctl.py takeover`, затем `fence-guards`;
 - `resume` — допустим только когда переданный stable owner-proof совпал; затем
   читай те же recovery references и продолжай сохранённый run;
+- `drain-owner` — прочитай [soft-pause.md](references/soft-pause.md) и продолжай
+  только checkpoint/settlement/finalize текущей мягкой остановки; normal
+  dispatch запрещён;
 - `recover-owner` — same runtime owner продолжает recovery по durable phase;
 - `recover-owner-upgrade` — до любых других мутаций синхронизируй coherent
   fast-forward contract через helper из startup-порядка ниже;
@@ -52,6 +57,8 @@ tracked contract, dirty skill, delivery profile, coordinator refs, route и
 
 - worker dispatch/receipt — [issue-worker.md](references/issue-worker.md);
 - первый новый goal — [goal-card.md](references/goal-card.md);
+- user/client pause или `drain-owner` —
+  [soft-pause.md](references/soft-pause.md);
 - ingest/cutoff/promotion — [batch-release.md](references/batch-release.md) и
   [receipts.md](references/receipts.md);
 - дефект — [defect-triage.md](references/defect-triage.md);
@@ -125,7 +132,11 @@ rewrite, другой milestone/project, AWS fallback или новая infrastr
 
 ## Claim, goal и live scope
 
-1. Вызови `get_goal` один раз. Active другой goal — `needs-input`, не заменяй.
+1. На fresh invocation и в начале каждого автоматически продолженного goal turn
+   вызови `get_goal` ровно один раз. Active другой goal — `needs-input`, не
+   заменяй. Если client status сообщает pause текущего run, до dispatch/shared
+   mutation немедленно начни `soft-pause`; `get_goal` остаётся read-only и сам
+   не заменяет lifecycle CAS.
 2. Одним Linear запросом разреши exact project/current milestone и получи
    compact snapshot: `id/identifier/title/state/priority/labels/createdAt/updatedAt`,
    milestone, dependencies и board tie-breaker. Полный текст/comments читай
@@ -138,7 +149,10 @@ rewrite, другой milestone/project, AWS fallback или новая infrastr
    Git/Linear/worktree mutations не разрешены. Fully reconciled
    `handoff-ready` не требует от пользователя ручной команды, magic phrase или
    самостоятельного Git takeover: fresh explicit вызов этого skill уже задаёт
-   intent продолжить run.
+   intent продолжить run. Eligibility — durable state, а не тип последнего
+   ledger action: descendant reconciled bookkeeping после quiescent handoff не
+   отменяет takeover, если PAUSE/index, zero-running workers и отсутствие
+   pending actions остаются согласованы.
 
    При `route=takeover` не читай Linear snapshot и references вручную до CAS.
    Сразу выполни один bounded helper, который повторяет preflight, связывает
@@ -307,6 +321,13 @@ deduplicated canonical plan: не запускай aggregate command вмест�
 снимается только отдельным CAS после явного подтверждения пользователя;
 автопродолжение, timeout или новый turn подтверждением не являются.
 
+Явная просьба пользователя мягко остановить run или client pause signal
+запускает [soft-pause.md](references/soft-pause.md): helper атомарно запрещает
+новый dispatch, workers доходят до bounded checkpoints, coordinator завершает
+только уже-ready work, а незавершённые refs/worktrees сохраняет. После
+quiescent handoff останови turn без `update_goal(blocked)`. Fresh explicit
+вызов skill сам выполняет takeover новым epoch.
+
 ## Gate, default и release
 
 На первом ingest прочитай [batch-release.md](references/batch-release.md) и
@@ -349,8 +370,12 @@ Issue переводится в completed-state только после terminal
 acceptance evidence. Goal завершается после двух fresh согласованных Linear
 snapshot без unfinished issue/active artifacts, healthy default и полного
 ledger; затем owner ref CAS-terminalize как `complete`. `blocked` допустим
-только после трёх последовательных goal-ходов с тем же внешним блокером и без
-безопасной независимой работы.
+только после трёх fresh последовательных goal-ходов с тем же устойчивым внешним
+блокером и без безопасной независимой работы. User pause, drain/handoff,
+running worker, pending CI/gate и recoverable CAS race не являются blocker.
+Быстрые auto-continuation с тем же fingerprint считаются одним наблюдением;
+transient dirty control surface дополнительно наблюдай не менее пяти минут по
+[soft-pause.md](references/soft-pause.md).
 
 Если пользователь меняет этот процесс, сначала обнови и проверь skill через
 `skill-creator`.

@@ -2,8 +2,8 @@
 """Deterministic, bounded helpers for ship-linear-release.
 
 Policy remains in SKILL.md and references. Most commands are read-only. The
-explicit ``takeover``, ``fence-guards``, and ``sync-contract`` recovery commands
-perform narrowly fenced Git CAS transitions; they never mutate Linear,
+explicit ``soft-pause``, ``takeover``, ``fence-guards``, and ``sync-contract``
+commands perform narrowly fenced Git CAS transitions; they never mutate Linear,
 worktrees, feature refs, default, deployment, or tags.
 """
 
@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import argparse
 from contextlib import redirect_stdout
-from datetime import datetime
+from datetime import datetime, timezone
 import hashlib
 import io
 import json
@@ -39,6 +39,7 @@ KNOWN_RUN_STATES = {
     "publishing",
     "deploying",
     "stabilizing",
+    "pausing",
     "checkpoint",
     "needs-input",
     "complete",
@@ -189,35 +190,7 @@ TEST_SURFACE_TOKENS: tuple[tuple[str, frozenset[str]], ...] = (
 )
 
 TRANSITION_NAMESPACE = uuid.UUID("d34453c7-5bd3-5362-a00d-04e8708c6f5a")
-STABLE_TRANSITION_HEADERS = (
-    "SCHEMA",
-    "KIND",
-    "OWNER_ID",
-    "OWNER_PROOF_KIND",
-    "OWNER_PROOF_DIGEST",
-    "RUN_ID",
-    "RUN_KEY",
-    "PROJECT_ID",
-    "MILESTONE_ID",
-    "EPOCH",
-    "STATE",
-    "OWNER_STATE",
-    "GOAL_CURRENT",
-    "GOAL_OBJECTIVE_DIGEST",
-    "CONTRACT_SOURCE_SHA",
-    "CONTRACT_DIGEST",
-    "CONTRACT_MIGRATED_FROM",
-    "COMMENT_INDEX",
-    "CLAIM_INDEX",
-    "EXECUTION_INDEX",
-    "PIPELINE",
-    "OPEN_CUTOFF",
-    "HEALTH",
-    "HOLD",
-    "PAUSE",
-    "QUEUE_FINGERPRINT",
-    "STARTED_AT",
-)
+REBUILDABLE_METADATA_HEADERS = {"COMMENT_MAP"}
 ACTION_HEADERS = (
     "ACTION_SEQ",
     "ACTION_ID",
@@ -398,28 +371,196 @@ def _structured_token(value: str, name: str) -> str | None:
     return match.group(1) if match else None
 
 
+def _semicolon_fields(value: str) -> dict[str, str]:
+    """Parse compact ``key=value;...`` fields without splitting comma values."""
+    parsed: dict[str, str] = {}
+    for part in value.split(";"):
+        key, separator, item = part.partition("=")
+        normalized = key.strip().lower()
+        if separator and normalized and normalized not in parsed:
+            parsed[normalized] = item.strip()
+    return parsed
+
+
+def _positive_count(value: str | None) -> int | None:
+    if value is None or re.fullmatch(r"0|[1-9][0-9]*", value) is None:
+        return None
+    return int(value)
+
+
+def _list_value(value: str | None) -> list[str]:
+    if value is None or value.strip().lower() in {"", "none", "0"}:
+        return []
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def _pause_index_value(metadata: dict[str, str]) -> str | None:
+    return _semicolon_fields(metadata.get("HOLD_PAUSE_INDEX", "")).get("active")
+
+
+def _hold_pause_entries(value: str | None) -> list[str]:
+    if value is None or value.strip().lower() in {"", "none", "0"}:
+        return []
+    return [item.strip() for item in value.split("|") if item.strip()]
+
+
+def _render_hold_pause_index(entries: list[str]) -> str:
+    unique = sorted(dict.fromkeys(entries), key=str.lower)
+    active = "|".join(unique) if unique else "none"
+    digest = hashlib.sha256(
+        json.dumps(unique, ensure_ascii=False, separators=(",", ":")).encode()
+    ).hexdigest()
+    return f"active={active};entries={len(unique)};digest={digest}"
+
+
+def _coordinator_lifecycle(metadata: dict[str, str]) -> dict[str, Any]:
+    """Decode and validate the coordinator lifecycle as one state vector.
+
+    ``STATE``, ``OWNER_STATE``, worker occupancy, pause/index and action status
+    are projections of this lifecycle.  Older ledgers do not have the explicit
+    ``LIFECYCLE`` field, so their two known handoff shapes remain readable, but
+    every new helper-written transition carries and validates that projection.
+    """
+    state = metadata.get("STATE", "").strip().lower()
+    owner_state = metadata.get("OWNER_STATE", "").strip().lower()
+    action_status = metadata.get("ACTION_STATUS", "").strip().lower()
+    pause = _semicolon_fields(metadata.get("PAUSE", ""))
+    workers = _semicolon_fields(metadata.get("WORKERS", ""))
+    execution = _semicolon_fields(metadata.get("EXECUTION_INDEX", ""))
+    lifecycle = _semicolon_fields(metadata.get("LIFECYCLE", ""))
+    canonical = bool(lifecycle)
+    errors: list[str] = []
+    phase = "unknown"
+
+    running_count = _positive_count(execution.get("running_count"))
+    active_lanes = _list_value(workers.get("active_issue_lanes"))
+    pause_id = pause.get("id")
+    pause_state = pause.get("state", "").lower()
+    pause_scope = pause.get("scope", "").lower()
+    pending_actions = metadata.get("PENDING_ACTIONS", "none").strip().lower()
+    index_entries = [item.lower() for item in _hold_pause_entries(_pause_index_value(metadata))]
+
+    def validate_pause(*, drained: bool) -> None:
+        if not pause_id or not pause_id.startswith("pause-"):
+            errors.append("pause-id-invalid")
+        if LOWER_DIGEST.fullmatch(pause.get("evidence", "")) is None:
+            errors.append("pause-evidence-invalid")
+        if UUID_TEXT.fullmatch(pause.get("after", "")) is None:
+            errors.append("pause-created-action-invalid")
+        if not pause.get("resume_predicate", "").startswith("fresh-explicit-user-launch-after-"):
+            errors.append("pause-resume-predicate-invalid")
+        if not _valid_timestamp(pause.get("created_at", "")):
+            errors.append("pause-created-at-invalid")
+        if drained and not _valid_timestamp(pause.get("drained_at", "")):
+            errors.append("pause-drained-at-invalid")
+
+    if action_status in {"intent", "planned"}:
+        phase = "pending-action"
+    elif state in TERMINAL_STATES and owner_state in TERMINAL_STATES:
+        phase = "terminal"
+    elif state == "running" and owner_state == "active":
+        phase = "running"
+        if canonical and pause_state not in {"", "lifted", "inactive", "cleared"}:
+            errors.append("running-with-active-pause")
+    elif state == "recovering" and owner_state == "active":
+        phase = "recovering"
+        if canonical and running_count not in {None, 0}:
+            errors.append("recovering-with-running-executors")
+    elif state == "pausing" and owner_state == "active":
+        phase = "settling" if running_count == 0 else "draining"
+        if pause_state != "active" or not pause_id:
+            errors.append("drain-without-active-pause")
+        expected_prefix = f"{pause_id}:pause@" if pause_id else ""
+        if not expected_prefix or not any(item.startswith(expected_prefix) for item in index_entries):
+            errors.append("pause-index-mismatch")
+        if running_count is None:
+            errors.append("drain-running-count-invalid")
+        elif len(active_lanes) != running_count:
+            errors.append("drain-worker-index-mismatch")
+        if pending_actions != "none":
+            errors.append("drain-has-pending-action")
+        validate_pause(drained=False)
+    elif state == "checkpoint" and owner_state == "handoff-ready":
+        phase = "quiescent"
+        if pause_state != "active" or not pause_id or pause_scope != "all-shared":
+            errors.append("quiescent-pause-invalid")
+        expected_index = f"{pause_id}:pause@all-shared" if pause_id else ""
+        if expected_index not in index_entries:
+            errors.append("quiescent-pause-index-mismatch")
+        if running_count != 0:
+            errors.append("quiescent-running-count-nonzero")
+        if active_lanes:
+            errors.append("quiescent-active-lanes-present")
+        if pending_actions != "none":
+            errors.append("quiescent-pending-actions-present")
+        if pause.get("confirmation_required") != "yes":
+            errors.append("quiescent-confirmation-not-required")
+        if not pause.get("resume_predicate"):
+            errors.append("quiescent-resume-predicate-missing")
+        validate_pause(drained=True)
+    elif state == "needs-input" and owner_state == "handoff-ready":
+        # Legacy explicit handoff emitted before the soft-pause state machine.
+        phase = "quiescent"
+        target = metadata.get("ACTION_TARGET", "").strip().lower()
+        if (
+            metadata.get("ACTION_KIND", "").strip().lower() != "handoff-owner"
+            or target in {"", "none", "unknown"}
+            or workers.get("executors") != "terminal"
+            or active_lanes
+            or pause_state != "handoff-ready"
+            or pause.get("pending_external_action") != "none"
+        ):
+            errors.append("legacy-handoff-incomplete")
+    elif owner_state == "active" and state in KNOWN_RUN_STATES - TERMINAL_STATES:
+        # Non-pause operating/recovery substates remain valid legacy vectors;
+        # their specific mutation scope is still decided by preflight.
+        phase = state
+    else:
+        errors.append("unsupported-state-vector")
+
+    if action_status not in {"intent", "planned", "reconciled"}:
+        errors.append("action-status-invalid")
+    if canonical:
+        if lifecycle.get("schema") != "1":
+            errors.append("lifecycle-schema-invalid")
+        projected = lifecycle.get("phase")
+        if phase != "pending-action" and projected != phase:
+            errors.append("lifecycle-phase-mismatch")
+        transition = lifecycle.get("transition")
+        if transition is None or UUID_TEXT.fullmatch(transition) is None:
+            errors.append("lifecycle-transition-invalid")
+        projected_pause = lifecycle.get("pause", "none")
+        expected_pause = pause_id if pause_state == "active" and pause_id else "none"
+        if projected_pause != expected_pause:
+            errors.append("lifecycle-pause-mismatch")
+
+    coherent = not errors
+    return {
+        "schema": 1 if canonical else "legacy",
+        "phase": phase,
+        "coherent": coherent,
+        "errors": errors,
+        "running_count": running_count,
+        "active_issue_lanes": active_lanes,
+        "pause_id": pause_id,
+        "pause_scope": pause_scope or None,
+        "pending_actions": pending_actions,
+        "takeover_ready": coherent and phase == "quiescent" and action_status == "reconciled",
+    }
+
+
 def _handoff_takeover_ready(metadata: dict[str, str]) -> bool:
     """Recognize a fully reconciled, quiescent owner handoff.
 
     The handoff target is provenance, not an exclusive capability: the next
     explicitly invoked online coordinator still has to win the expected-old
     coordinator-ref CAS. This permits recovery after an external control task
-    without asking the user to type a magic takeover phrase.
+    without asking the user to type a magic takeover phrase. A reconciled
+    bookkeeping descendant must not invalidate an already durable handoff, so
+    eligibility is derived from the current coherent ledger rather than only
+    from the latest ``ACTION_KIND``.
     """
-    workers = metadata.get("WORKERS", "")
-    pause = metadata.get("PAUSE", "")
-    target = metadata.get("ACTION_TARGET", "").strip().lower()
-    return (
-        metadata.get("STATE", "").strip().lower() == "needs-input"
-        and metadata.get("OWNER_STATE", "").strip().lower() == "handoff-ready"
-        and metadata.get("ACTION_KIND", "").strip().lower() == "handoff-owner"
-        and metadata.get("ACTION_STATUS", "").strip().lower() == "reconciled"
-        and target not in {"", "none", "unknown"}
-        and _structured_token(workers, "executors") == "terminal"
-        and _structured_token(workers, "active_issue_lanes") == "none"
-        and _structured_token(pause, "state") == "handoff-ready"
-        and _structured_token(pause, "pending_external_action") == "none"
-    )
+    return bool(_coordinator_lifecycle(metadata)["takeover_ready"])
 
 
 def _runtime_owner_proof() -> tuple[str | None, str | None]:
@@ -445,6 +586,13 @@ def coordinator_refs(
                 metadata_state = "message-unavailable"
         state = metadata.get("STATE", "unknown").lower()
         owner_state = metadata.get("OWNER_STATE", "unknown").lower()
+        lifecycle = _coordinator_lifecycle(metadata) if metadata_state == "observed" else {
+            "schema": "unknown",
+            "phase": "unknown",
+            "coherent": False,
+            "errors": ["metadata-unavailable"],
+            "takeover_ready": False,
+        }
         refs.append(
             {
                 "ref": ref,
@@ -459,7 +607,8 @@ def coordinator_refs(
                 "contract_source_sha": metadata.get("CONTRACT_SOURCE_SHA", "unknown"),
                 "contract_digest": metadata.get("CONTRACT_DIGEST", "unknown"),
                 "active_restrictions": _active_restrictions(metadata),
-                "handoff_takeover_ready": _handoff_takeover_ready(metadata),
+                "lifecycle": lifecycle,
+                "handoff_takeover_ready": lifecycle["takeover_ready"],
                 "action_kind": metadata.get("ACTION_KIND", "unknown"),
                 "action_status": metadata.get("ACTION_STATUS", "unknown"),
                 "migration_evidence": None,
@@ -773,13 +922,23 @@ def command_preflight(args: argparse.Namespace) -> int:
             proof_matches = valid_proof and bool(LOWER_DIGEST.fullmatch(stored_proof)) and proof == stored_proof
             active_contract = active["contract_digest"]
             contract_matches = bool(GIT_OID.fullmatch(active_contract)) and active_contract == local_contract
-            resumable_state = active["state"] == "running" and active["owner_state"] == "active"
+            lifecycle_phase = active["lifecycle"]["phase"]
+            lifecycle_coherent = bool(active["lifecycle"]["coherent"])
+            resumable_state = lifecycle_coherent and lifecycle_phase in {
+                "running",
+                "validating",
+                "offline-queue",
+                "publishing",
+                "deploying",
+                "stabilizing",
+            }
             restrictions = active["active_restrictions"]
             recoverable_owner = (
                 proof_matches
                 and contract_matches
                 and active["state"] == "recovering"
                 and active["owner_state"] == "active"
+                and lifecycle_coherent
             )
             contract_source = active["contract_source_sha"]
             coherent_old_contract = (
@@ -796,9 +955,12 @@ def command_preflight(args: argparse.Namespace) -> int:
                 and git(observation_repo, "merge-base", "--is-ancestor", contract_source, remote_sha)[0] == 0
                 and active["state"] == "recovering"
                 and active["owner_state"] == "active"
+                and lifecycle_coherent
             )
             if active["handoff_takeover_ready"]:
                 route = "takeover"
+            elif proof_matches and contract_matches and lifecycle_coherent and lifecycle_phase in {"draining", "settling"}:
+                route = "drain-owner"
             elif recoverable_owner:
                 route = "recover-owner"
             elif safe_contract_upgrade:
@@ -828,6 +990,10 @@ def command_preflight(args: argparse.Namespace) -> int:
                 reasons.append(f"active-durable-restriction:{restriction}")
             if active["handoff_takeover_ready"]:
                 reasons.append("handoff-ready-takeover-eligible")
+            if lifecycle_phase in {"draining", "settling"}:
+                reasons.append(f"soft-pause-{lifecycle_phase}")
+            for lifecycle_error in active["lifecycle"].get("errors", []):
+                reasons.append(f"coordinator-lifecycle:{lifecycle_error}")
 
         required_refs = {
             "normal": ["references/coordination.md", "references/external-main.md"],
@@ -842,6 +1008,11 @@ def command_preflight(args: argparse.Namespace) -> int:
                 "references/external-main.md",
             ],
             "takeover": [
+            ],
+            "drain-owner": [
+                "references/coordination.md",
+                "references/soft-pause.md",
+                "references/crash-recovery.md",
             ],
             "recover-owner": [
                 "references/coordination.md",
@@ -859,6 +1030,7 @@ def command_preflight(args: argparse.Namespace) -> int:
             "normal": "run",
             "resume": "run",
             "takeover": "coordinator-claim-cas-only",
+            "drain-owner": "soft-pause-drain-and-settlement-only",
             "recover-owner": "recovery-only",
             "recover-owner-upgrade": "recovery-contract-upgrade-and-fencing-only",
             "recovery": "none",
@@ -872,6 +1044,7 @@ def command_preflight(args: argparse.Namespace) -> int:
                 "normal",
                 "resume",
                 "takeover",
+                "drain-owner",
                 "recover-owner",
                 "recover-owner-upgrade",
             },
@@ -1485,9 +1658,16 @@ def command_transition(args: argparse.Namespace) -> int:
         status = "reconciled"
     subject = f"ship-linear-release {status} {action['ACTION_KIND']} {action['ACTION_TARGET']}"
     message_lines = [subject, ""]
-    for name in STABLE_TRANSITION_HEADERS:
-        if name in parent_fields:
-            message_lines.append(f"{name}: {parent_fields[name]}")
+    replaced = set(ACTION_HEADERS) | {"ACTION_STATUS", "ACTION_RESULT"}
+    for line in parent_message.splitlines():
+        key, separator, _ = line.partition(":")
+        if (
+            separator
+            and re.fullmatch(r"[A-Z][A-Z0-9_]*", key)
+            and key not in replaced
+            and key not in REBUILDABLE_METADATA_HEADERS
+        ):
+            message_lines.append(line)
     for name in ACTION_HEADERS:
         message_lines.append(f"{name}: {action[name]}")
     message_lines.append(f"ACTION_STATUS: {status}")
@@ -1566,6 +1746,14 @@ def _render_takeover_message(
     action_id = str(
         uuid.uuid5(TRANSITION_NAMESPACE, f"takeover-action:{payload_digest}")
     )
+    parent_lifecycle = _coordinator_lifecycle(parent_fields)
+    pause_id = parent_lifecycle.get("pause_id")
+    pause_prefix = f"{pause_id}:pause@" if pause_id else ""
+    remaining_holds = [
+        item
+        for item in _hold_pause_entries(_pause_index_value(parent_fields))
+        if not pause_prefix or not item.lower().startswith(pause_prefix)
+    ]
     primary_fingerprint = primary.get("fingerprint") or "unknown"
     core_values = {
         "SCHEMA": parent_fields["SCHEMA"],
@@ -1580,6 +1768,7 @@ def _render_takeover_message(
         "EPOCH": str(new_epoch),
         "STATE": "recovering",
         "OWNER_STATE": "active",
+        "LIFECYCLE": f"schema=1;phase=recovering;pause=none;transition={action_id}",
         "GOAL_CURRENT": "none",
         "GOAL_OBJECTIVE_DIGEST": "none",
         "CONTRACT_SOURCE_SHA": remote_main,
@@ -1591,13 +1780,19 @@ def _render_takeover_message(
         "CONTRACT_MIGRATED_FROM",
         "RECOVERY",
         "PAUSE",
+        "HOLD_PAUSE_INDEX",
         "DEFAULT_OBSERVED_SHA",
         "PRIMARY_CHECKOUT",
     }
     ledger_lines: list[str] = []
     for line in parent_message.splitlines():
         key, separator, _ = line.partition(":")
-        if separator and re.fullmatch(r"[A-Z][A-Z0-9_]*", key) and key not in replaced:
+        if (
+            separator
+            and re.fullmatch(r"[A-Z][A-Z0-9_]*", key)
+            and key not in replaced
+            and key not in REBUILDABLE_METADATA_HEADERS
+        ):
             ledger_lines.append(line)
     recovery_generation = _next_recovery_generation(parent_fields.get("RECOVERY", ""))
     extras = [
@@ -1614,9 +1809,10 @@ def _render_takeover_message(
             "quarantined=none;unresolved=none"
         ),
         (
-            "PAUSE: state=lifted;reason=handoff-consumed;"
+            f"PAUSE: id={pause_id or 'legacy-handoff'};state=lifted;reason=handoff-consumed;"
             "confirmation=explicit-skill-invocation;pending_external_action=none"
         ),
+        f"HOLD_PAUSE_INDEX: {_render_hold_pause_index(remaining_holds)}",
         f"DEFAULT_OBSERVED_SHA: {remote_main}",
         (
             "PRIMARY_CHECKOUT: clean;relation=equal;"
@@ -1897,7 +2093,12 @@ def _render_coordinator_action(
     ledger_lines: list[str] = []
     for line in parent_message.splitlines():
         key, separator, _ = line.partition(":")
-        if separator and re.fullmatch(r"[A-Z][A-Z0-9_]*", key) and key not in replaced:
+        if (
+            separator
+            and re.fullmatch(r"[A-Z][A-Z0-9_]*", key)
+            and key not in replaced
+            and key not in REBUILDABLE_METADATA_HEADERS
+        ):
             ledger_lines.append(line)
     lines = [subject, "", *ledger_lines]
     lines.extend(f"{name}: {value}" for name, value in replacements.items())
@@ -1920,6 +2121,549 @@ def _update_structured(value: str, replacements: dict[str, str]) -> str:
             output.append(part.strip())
     output.extend(f"{key}={item}" for key, item in remaining.items())
     return ";".join(output)
+
+
+EXECUTION_STATES = {
+    "running",
+    "coordinator-paused",
+    "feature_ready",
+    "failed",
+    "needs-input",
+    "stopped",
+}
+
+
+def _execution_vector(value: str) -> tuple[dict[tuple[str, int], str], list[str]]:
+    """Read both the canonical execution vector and bounded legacy lists."""
+    structured = _semicolon_fields(value)
+    entries: dict[tuple[str, int], str] = {}
+    errors: list[str] = []
+
+    def add(issue: str, generation_text: str, state: str) -> None:
+        generation = int(generation_text) if generation_text.isdigit() else 0
+        key = (issue, generation)
+        normalized = "stopped" if state == "terminal" else state
+        if (
+            ISSUE_IDENTIFIER.fullmatch(issue) is None
+            or generation <= 0
+            or normalized not in EXECUTION_STATES
+        ):
+            errors.append(f"invalid:execution-entry:{issue or 'unknown'}")
+        elif key in entries:
+            errors.append(f"invalid:duplicate-execution-entry:{issue}:{generation}")
+        else:
+            entries[key] = normalized
+
+    canonical = structured.get("entries")
+    if canonical and not canonical.isdigit():
+        for item in _list_value(canonical):
+            match = re.fullmatch(
+                rf"({ISSUE_IDENTIFIER.pattern}):([1-9][0-9]*)@executor=([a-z][a-z0-9_-]*)",
+                item,
+            )
+            if match is None:
+                errors.append("invalid:execution-entry-shape")
+            else:
+                add(match.group(1), match.group(2), match.group(3))
+    else:
+        for field, default_state in (
+            ("running", "running"),
+            ("draining", "running"),
+            ("stopped", "stopped"),
+            ("feature_ready", "feature_ready"),
+            ("failed", "failed"),
+            ("needs_input", "needs-input"),
+        ):
+            for item in _list_value(structured.get(field)):
+                match = re.match(
+                    rf"^({ISSUE_IDENTIFIER.pattern}):([1-9][0-9]*)(?::([a-z][a-z0-9_-]*))?(?:@.*)?$",
+                    item,
+                )
+                if match is None:
+                    errors.append(f"invalid:execution-{field}-shape")
+                else:
+                    add(match.group(1), match.group(2), match.group(3) or default_state)
+
+    running_count = _positive_count(structured.get("running_count"))
+    actual_running = sum(state == "running" for state in entries.values())
+    if running_count is None:
+        errors.append("invalid:execution-running-count")
+    elif running_count != actual_running:
+        errors.append("invalid:execution-running-count-mismatch")
+    declared_entries = structured.get("entries")
+    if declared_entries and declared_entries.isdigit() and int(declared_entries) != len(entries):
+        errors.append("invalid:execution-entry-count-mismatch")
+    return entries, errors
+
+
+def _render_execution_vector(entries: dict[tuple[str, int], str], timestamp: str) -> str:
+    ordered = [
+        f"{issue}:{generation}@executor={entries[(issue, generation)]}"
+        for issue, generation in sorted(entries)
+    ]
+    digest = hashlib.sha256(
+        json.dumps(ordered, ensure_ascii=False, separators=(",", ":")).encode()
+    ).hexdigest()
+    running_count = sum(state == "running" for state in entries.values())
+    return (
+        f"running_count={running_count};entries={','.join(ordered) if ordered else 'none'};"
+        f"digest={digest};transition_at={timestamp}"
+    )
+
+
+def _utc_timestamp() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def _direct_action_id(parent: str, kind: str, target: str, payload_digest: str) -> str:
+    return str(
+        uuid.uuid5(
+            TRANSITION_NAMESPACE,
+            f"direct:{parent}:{kind}:{target}:{payload_digest}",
+        )
+    )
+
+
+def _render_direct_coordinator_action(
+    parent: str,
+    parent_message: str,
+    subject: str,
+    replacements: dict[str, str],
+    kind: str,
+    target: str,
+    payload_digest: str,
+    effect_identity: str,
+) -> tuple[str | None, str | None, list[str]]:
+    parent_fields = fields(parent_message)
+    errors, parent_seq, parent_status = _validate_transition_parent(parent_fields)
+    if errors:
+        return None, None, errors
+    if parent_status != "reconciled":
+        return None, None, ["invalid:parent-action-not-reconciled"]
+    assert parent_seq is not None
+    action_id = _direct_action_id(parent, kind, target, payload_digest)
+    action = {
+        "ACTION_SEQ": str(parent_seq + 1),
+        "ACTION_ID": action_id,
+        "ACTION_KIND": kind,
+        "ACTION_TARGET": target,
+        "EXPECTED_BEFORE": f"coordinator={parent}",
+        "EXTERNAL_REQUEST_KEY": "none",
+        "PROVIDER_SELECTOR": f"git:origin:{CANONICAL_COORDINATOR_REF}",
+        "PAYLOAD_DIGEST": payload_digest,
+        "EFFECT_IDENTITY": effect_identity,
+    }
+    replaced = set(replacements) | set(ACTION_HEADERS) | {"ACTION_STATUS", "ACTION_RESULT"}
+    ledger_lines: list[str] = []
+    for line in parent_message.splitlines():
+        key, separator, _ = line.partition(":")
+        if (
+            separator
+            and re.fullmatch(r"[A-Z][A-Z0-9_]*", key)
+            and key not in replaced
+            and key not in REBUILDABLE_METADATA_HEADERS
+        ):
+            ledger_lines.append(line)
+    lines = [subject, "", *ledger_lines]
+    lines.extend(f"{name}: {value}" for name, value in replacements.items())
+    lines.extend(f"{name}: {action[name]}" for name in ACTION_HEADERS)
+    lines.append("ACTION_STATUS: reconciled")
+    return "\n".join(lines) + "\n", action_id, []
+
+
+def _push_coordinator_cas(
+    repo: Path, remote: str, parent: str, message: str
+) -> tuple[str, str | None]:
+    commit = _metadata_commit(repo, parent, message)
+    if commit is None:
+        return "commit-failed", None
+    push = foreign_main.run(
+        repo,
+        "push",
+        "--porcelain",
+        f"--force-with-lease={CANONICAL_COORDINATOR_REF}:{parent}",
+        remote,
+        f"{commit}:{CANONICAL_COORDINATOR_REF}",
+    )
+    if push.returncode != 0:
+        return "cas-lost", None
+    state, advertised = advertised_coordinator_refs(repo, remote)
+    observed = next((sha for sha, ref in advertised if ref == CANONICAL_COORDINATOR_REF), None)
+    if state != "observed" or observed != commit:
+        return "delivery-unverified", commit
+    return "pushed", commit
+
+
+def _active_canonical(preflight: dict[str, Any]) -> dict[str, Any] | None:
+    return next(
+        (
+            item
+            for item in preflight.get("coordinator_refs", [])
+            if item.get("kind") == "canonical" and item.get("classification") == "active"
+        ),
+        None,
+    )
+
+
+def _materialize_coordinator_parent(
+    repo: Path, remote: str, parent: str
+) -> tuple[str | None, str | None]:
+    fetch = foreign_main.run(
+        repo,
+        "fetch",
+        "--no-write-fetch-head",
+        "--no-tags",
+        remote,
+        parent,
+    )
+    if fetch.returncode != 0 or not foreign_main.object_exists(repo, parent):
+        return None, "parent-materialization-failed"
+    code, message = git(repo, "show", "-s", "--format=%B", parent)
+    return (message, None) if code == 0 else (None, "parent-message-unavailable")
+
+
+def _soft_pause_payload(args: argparse.Namespace) -> tuple[dict[str, Any] | None, str | None]:
+    payload, error = _read_json(args.input)
+    if error:
+        return None, error
+    if not isinstance(payload, dict):
+        return None, "invalid:soft-pause:not-object"
+    return payload, None
+
+
+def command_soft_pause(args: argparse.Namespace) -> int:
+    repo = Path(args.repo).resolve()
+    _, runtime_proof = _runtime_owner_proof()
+    if runtime_proof is None:
+        emit({"schema": 1, "status": "blocked", "reason": "runtime-thread-id-unavailable"})
+        return 3
+    payload, input_error = _soft_pause_payload(args)
+    if input_error or payload is None:
+        emit({"schema": 1, "status": "invalid", "errors": [input_error]})
+        return 2
+    allowed = {
+        "start": {"evidence_digest"},
+        "checkpoint": {"dispositions"},
+        "finish": {"settlement", "evidence_digest"},
+    }[args.phase]
+    unexpected = sorted(set(payload) - allowed)
+    missing = sorted(allowed - set(payload))
+    if unexpected or missing:
+        emit(
+            {
+                "schema": 1,
+                "status": "invalid",
+                "errors": [*[f"missing:{name}" for name in missing], *[f"unexpected:{name}" for name in unexpected]],
+            }
+        )
+        return 2
+
+    preflight_code, preflight = _capture_preflight(repo, args.remote, args.default)
+    active = _active_canonical(preflight)
+    route = preflight.get("route")
+    if args.phase == "finish" and route == "takeover" and active:
+        emit(
+            {
+                "schema": 1,
+                "status": "already-finished",
+                "coordinator": active["sha"],
+                "lifecycle": active["lifecycle"],
+                "next": "return-control;fresh-explicit-invocation-will-take-over",
+            }
+        )
+        return 0
+    if preflight_code != 0 or active is None:
+        emit({"schema": 1, "status": "blocked", "reason": "preflight-blocked", "preflight": preflight})
+        return 3
+    if active.get("owner_proof_digest") != runtime_proof:
+        emit({"schema": 1, "status": "blocked", "reason": "owner-proof-mismatch"})
+        return 3
+    lifecycle = active["lifecycle"]
+    if args.phase == "start" and route == "drain-owner":
+        evidence = payload.get("evidence_digest")
+        parent_message, error = _materialize_coordinator_parent(repo, args.remote, active["sha"])
+        current_pause = fields(parent_message or "").get("PAUSE", "")
+        if error is None and _semicolon_fields(current_pause).get("evidence") == evidence:
+            emit(
+                {
+                    "schema": 1,
+                    "status": "already-started",
+                    "coordinator": active["sha"],
+                    "lifecycle": lifecycle,
+                    "next": "soft-stop-running-workers",
+                }
+            )
+            return 0
+    start_operating_phases = {
+        "running",
+        "validating",
+        "offline-queue",
+        "publishing",
+        "deploying",
+        "stabilizing",
+    }
+    start_eligible = route == "resume" or (
+        route == "recovery"
+        and lifecycle.get("coherent") is True
+        and lifecycle.get("phase") in start_operating_phases
+        and active.get("contract_digest") == preflight.get("local_contract_oid")
+    )
+    phase_eligible = start_eligible if args.phase == "start" else route == "drain-owner"
+    if not phase_eligible:
+        emit({"schema": 1, "status": "blocked", "reason": "soft-pause-phase-not-eligible", "route": route})
+        return 3
+
+    parent = active["sha"]
+    parent_message, parent_error = _materialize_coordinator_parent(repo, args.remote, parent)
+    if parent_error or parent_message is None:
+        emit({"schema": 1, "status": "blocked", "reason": parent_error})
+        return 3
+    metadata = fields(parent_message)
+    timestamp = _utc_timestamp()
+    target = f"run:{metadata.get('RUN_ID', 'unknown')}:soft-pause"
+    replacements: dict[str, str]
+    effect_identity: str
+
+    if args.phase == "start":
+        evidence = payload.get("evidence_digest")
+        if not isinstance(evidence, str) or LOWER_DIGEST.fullmatch(evidence) is None:
+            emit({"schema": 1, "status": "invalid", "errors": ["invalid:evidence_digest"]})
+            return 2
+        execution, execution_errors = _execution_vector(metadata.get("EXECUTION_INDEX", ""))
+        running = sorted(key for key, state in execution.items() if state == "running")
+        active_lanes = _list_value(_semicolon_fields(metadata.get("WORKERS", "")).get("active_issue_lanes"))
+        if execution_errors or len(active_lanes) != len(running):
+            emit({"schema": 1, "status": "blocked", "reason": "execution-vector-incoherent", "errors": execution_errors})
+            return 3
+        payload_digest = hashlib.sha256(
+            json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        pause_uuid = str(uuid.uuid5(TRANSITION_NAMESPACE, f"pause:{parent}:{evidence}"))
+        pause_id = f"pause-{pause_uuid}"
+        target = f"run:{metadata['RUN_ID']}:{pause_id}"
+        action_id = _direct_action_id(parent, "start-soft-pause", target, payload_digest)
+        scope = "dispatch,new-work,new-claims,new-cutoffs"
+        pause_entry = f"{pause_id}:PAUSE@{scope}"
+        index_entries = _hold_pause_entries(_pause_index_value(metadata))
+        index_entries.append(pause_entry)
+        start_phase = "draining" if running else "settling"
+        replacements = {
+            "STATE": "pausing",
+            "OWNER_STATE": "active",
+            "LIFECYCLE": f"schema=1;phase={start_phase};pause={pause_id};transition={action_id}",
+            "PAUSE": (
+                f"id={pause_id};state=active;kind=PAUSE;scope={scope};"
+                f"reason=user-requested-soft-stop;evidence={evidence};"
+                f"resume_predicate=fresh-explicit-user-launch-after-{pause_uuid};"
+                f"confirmation_required=yes;after={action_id};created_at={timestamp}"
+            ),
+            "HOLD_PAUSE_INDEX": _render_hold_pause_index(index_entries),
+            "WORKERS": _update_structured(
+                metadata.get("WORKERS", ""),
+                {"active_target": "0", "refill_blocker": "user-pause"},
+            ),
+            "PENDING_ACTIONS": "none",
+        }
+        effect_identity = f"pause={pause_id};phase={start_phase};running={len(running)}"
+        next_step = (
+            "soft-stop-running-workers-at-bounded-checkpoints"
+            if running
+            else "settle-already-active-or-ready-work-then-finish"
+        )
+    elif args.phase == "checkpoint":
+        if lifecycle.get("phase") == "settling":
+            emit({"schema": 1, "status": "already-checkpointed", "coordinator": parent, "lifecycle": lifecycle, "next": "settle-ready-work-then-finish"})
+            return 0
+        if lifecycle.get("phase") != "draining":
+            emit({"schema": 1, "status": "blocked", "reason": "not-draining"})
+            return 3
+        dispositions = payload.get("dispositions")
+        if not isinstance(dispositions, list):
+            emit({"schema": 1, "status": "invalid", "errors": ["invalid:dispositions"]})
+            return 2
+        execution, execution_errors = _execution_vector(metadata.get("EXECUTION_INDEX", ""))
+        running_keys = {key for key, state in execution.items() if state == "running"}
+        parsed: dict[tuple[str, int], dict[str, str]] = {}
+        disposition_errors: list[str] = []
+        for item in dispositions:
+            if not isinstance(item, dict) or set(item) != {"issue", "generation", "state", "head", "evidence_digest"}:
+                disposition_errors.append("invalid:disposition-shape")
+                continue
+            issue = item.get("issue")
+            generation = item.get("generation")
+            state = item.get("state")
+            head = item.get("head")
+            evidence = item.get("evidence_digest")
+            key = (issue, generation)
+            if (
+                not isinstance(issue, str)
+                or ISSUE_IDENTIFIER.fullmatch(issue) is None
+                or not isinstance(generation, int)
+                or isinstance(generation, bool)
+                or generation <= 0
+                or state not in EXECUTION_STATES - {"running"}
+                or not isinstance(head, str)
+                or (head != "none" and GIT_OID.fullmatch(head) is None)
+                or (state == "feature_ready" and head == "none")
+                or not isinstance(evidence, str)
+                or LOWER_DIGEST.fullmatch(evidence) is None
+            ):
+                disposition_errors.append(f"invalid:disposition:{issue or 'unknown'}")
+            elif key in parsed:
+                disposition_errors.append(f"invalid:duplicate-disposition:{issue}:{generation}")
+            else:
+                parsed[key] = {"state": state, "head": head, "evidence": evidence}
+        if execution_errors or disposition_errors or set(parsed) != running_keys:
+            emit(
+                {
+                    "schema": 1,
+                    "status": "blocked",
+                    "reason": "checkpoint-vector-incomplete-or-invalid",
+                    "errors": [*execution_errors, *disposition_errors],
+                    "expected": [f"{issue}:{generation}" for issue, generation in sorted(running_keys)],
+                    "received": [f"{issue}:{generation}" for issue, generation in sorted(parsed)],
+                }
+            )
+            return 3
+        for key, item in parsed.items():
+            execution[key] = item["state"]
+        checkpoint_rows = [
+            f"{issue}:{generation}@state={parsed[(issue, generation)]['state']}"
+            f"@head={parsed[(issue, generation)]['head']}"
+            f"@evidence={parsed[(issue, generation)]['evidence']}"
+            for issue, generation in sorted(parsed)
+        ]
+        payload_digest = hashlib.sha256(
+            json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        pause_id = lifecycle.get("pause_id")
+        target = f"run:{metadata['RUN_ID']}:{pause_id}"
+        action_id = _direct_action_id(parent, "checkpoint-soft-pause", target, payload_digest)
+        stopped = [issue for (issue, _), state in sorted(execution.items()) if state in {"coordinator-paused", "failed", "needs-input", "stopped"}]
+        ready = [issue for (issue, _), state in sorted(execution.items()) if state == "feature_ready"]
+        replacements = {
+            "STATE": "pausing",
+            "OWNER_STATE": "active",
+            "LIFECYCLE": f"schema=1;phase=settling;pause={pause_id};transition={action_id}",
+            "EXECUTION_INDEX": _render_execution_vector(execution, timestamp),
+            "CHECKPOINTS": (
+                f"entries={','.join(checkpoint_rows) if checkpoint_rows else 'none'};"
+                f"digest={hashlib.sha256(json.dumps(checkpoint_rows, separators=(',', ':')).encode()).hexdigest()}"
+            ),
+            "WORKERS": _update_structured(
+                metadata.get("WORKERS", ""),
+                {
+                    "active_target": "0",
+                    "active_issue_lanes": "none",
+                    "stopped": ",".join(sorted(set(stopped))) or "none",
+                    "ready_preserved": ",".join(sorted(set(ready))) or "none",
+                    "refill_blocker": "user-pause",
+                },
+            ),
+            "PENDING_ACTIONS": "none",
+        }
+        effect_identity = f"pause={pause_id};phase=settling;running=0"
+        next_step = "settle-already-ready-work-without-new-dispatch-then-finish"
+    else:
+        settlement = payload.get("settlement")
+        evidence = payload.get("evidence_digest")
+        if settlement not in {"complete", "preserved-blocked"}:
+            emit({"schema": 1, "status": "invalid", "errors": ["invalid:settlement"]})
+            return 2
+        if not isinstance(evidence, str) or LOWER_DIGEST.fullmatch(evidence) is None:
+            emit({"schema": 1, "status": "invalid", "errors": ["invalid:evidence_digest"]})
+            return 2
+        if lifecycle.get("phase") != "settling" or lifecycle.get("running_count") != 0:
+            emit({"schema": 1, "status": "blocked", "reason": "pause-not-quiescent"})
+            return 3
+        pipeline = _semicolon_fields(metadata.get("PIPELINE", ""))
+        gate_index = _semicolon_fields(metadata.get("GATE_INDEX", ""))
+        active_cutoff = pipeline.get("active_cutoff", "none")
+        active_gate = gate_index.get("active", "none")
+        workers = _semicolon_fields(metadata.get("WORKERS", ""))
+        ready_preserved = _list_value(workers.get("ready_preserved"))
+        open_cutoff = pipeline.get("open_cutoff", "none")
+        blockers_present = bool(
+            metadata.get("PROMOTION_HOLD", "").strip().lower() not in {"", "none"}
+            or metadata.get("HOLD", "").strip().lower() not in {"", "none"}
+            or _semicolon_fields(metadata.get("HEALTH", "")).get("default") in {"known-bad", "drifted", "stabilizing"}
+        )
+        if active_cutoff != "none" or active_gate != "none":
+            emit({"schema": 1, "status": "blocked", "reason": "settlement-still-active", "active_cutoff": active_cutoff, "active_gate": active_gate})
+            return 3
+        if settlement == "complete" and (ready_preserved or open_cutoff != "none"):
+            emit({"schema": 1, "status": "blocked", "reason": "ready-work-not-settled"})
+            return 3
+        if settlement == "preserved-blocked" and not blockers_present:
+            emit({"schema": 1, "status": "blocked", "reason": "preserved-ready-work-without-durable-blocker"})
+            return 3
+        payload_digest = hashlib.sha256(
+            json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        pause_id = lifecycle.get("pause_id")
+        target = f"run:{metadata['RUN_ID']}:{pause_id}"
+        action_id = _direct_action_id(parent, "finish-soft-pause", target, payload_digest)
+        pause = _update_structured(
+            metadata.get("PAUSE", ""),
+            {"scope": "all-shared", "drained_at": timestamp, "settlement": settlement, "settlement_evidence": evidence},
+        )
+        old_pause_prefix = f"{pause_id}:pause@"
+        index_entries = [
+            item
+            for item in _hold_pause_entries(_pause_index_value(metadata))
+            if not item.lower().startswith(old_pause_prefix)
+        ]
+        index_entries.append(f"{pause_id}:PAUSE@all-shared")
+        replacements = {
+            "STATE": "checkpoint",
+            "OWNER_STATE": "handoff-ready",
+            "LIFECYCLE": f"schema=1;phase=quiescent;pause={pause_id};transition={action_id}",
+            "PAUSE": pause,
+            "HOLD_PAUSE_INDEX": _render_hold_pause_index(index_entries),
+            "WORKERS": _update_structured(
+                metadata.get("WORKERS", ""),
+                {"active_target": "0", "active_issue_lanes": "none", "refill_blocker": "user-pause"},
+            ),
+            "PENDING_ACTIONS": "none",
+        }
+        effect_identity = f"pause={pause_id};phase=quiescent;settlement={settlement}"
+        next_step = "return-control;fresh-explicit-invocation-will-take-over"
+
+    message, action_id, render_errors = _render_direct_coordinator_action(
+        parent,
+        parent_message,
+        f"ship-linear-release reconciled {args.phase} soft pause",
+        replacements,
+        f"{args.phase}-soft-pause",
+        target,
+        payload_digest,
+        effect_identity,
+    )
+    if render_errors or message is None or action_id is None:
+        emit({"schema": 1, "status": "blocked", "reason": "soft-pause-render-invalid", "errors": render_errors})
+        return 3
+    push_status, commit = _push_coordinator_cas(repo, args.remote, parent, message)
+    if push_status != "pushed" or commit is None:
+        code = 4 if push_status == "cas-lost" else 3
+        emit({"schema": 1, "status": push_status, "reason": "soft-pause-cas-not-confirmed", "expected": parent})
+        return code
+    result_message = git(repo, "show", "-s", "--format=%B", commit)[1]
+    result_lifecycle = _coordinator_lifecycle(fields(result_message))
+    if not result_lifecycle["coherent"]:
+        emit({"schema": 1, "status": "blocked", "reason": "written-lifecycle-incoherent", "errors": result_lifecycle["errors"]})
+        return 3
+    emit(
+        {
+            "schema": 1,
+            "status": "handoff-ready" if args.phase == "finish" else result_lifecycle["phase"],
+            "coordinator": commit,
+            "parent": parent,
+            "action_id": action_id,
+            "lifecycle": result_lifecycle,
+            "next": next_step,
+        }
+    )
+    return 0
 
 
 def _guard_metadata(message: str) -> dict[str, str]:
@@ -2592,6 +3336,13 @@ def parser() -> argparse.ArgumentParser:
     transition.add_argument("--parent", required=True)
     transition.add_argument("--input", default="-")
     transition.set_defaults(handler=command_transition)
+    soft_pause = sub.add_parser("soft-pause")
+    soft_pause.add_argument("--repo", default=".")
+    soft_pause.add_argument("--remote", default="origin")
+    soft_pause.add_argument("--default", default="main")
+    soft_pause.add_argument("--phase", choices=("start", "checkpoint", "finish"), required=True)
+    soft_pause.add_argument("--input", default="-")
+    soft_pause.set_defaults(handler=command_soft_pause)
     takeover = sub.add_parser("takeover")
     takeover.add_argument("--repo", default=".")
     takeover.add_argument("--remote", default="origin")

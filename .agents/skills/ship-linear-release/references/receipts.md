@@ -136,7 +136,7 @@ Key: `<release_id>`.
 
 ```text
 STATUS: claiming | recovering | running | validating | offline-queue |
-        publishing | deploying | stabilizing | checkpoint | complete |
+        publishing | deploying | stabilizing | pausing | checkpoint | complete |
         needs-input
 RUN_ID: <stable id>
 RUN_KEY: <random >=128-bit hex, never shortened>
@@ -145,6 +145,8 @@ CONTRACT: source_sha=<full>; digest=<hash>; migrated_from=<hash|none>
 OWNER: id=<uuid>; epoch=<n>; state=<active|handoff-ready|complete|aborted>;
        terminal_reason=<none|released|aborted-before-run:<reason>>;
        proof=<runtime-task-id|goal-bound|none>:<digest|none>
+LIFECYCLE: schema=1; phase=<running|draining|settling|quiescent|recovering|terminal>;
+           pause=<pause-id|none>; transition=<action-id>
 COORDINATOR_REF: refs/heads/codex/release/coordinator=<commit>
 ACTION: seq=<n>; id=<uuid>; kind=<bounded>; target=<exact>;
         expected_before=<exact>; request_key=<id|none>; selector=<bounded>;
@@ -287,6 +289,14 @@ LIFTED: action=<id|none>; at=<utc|none>; evidence=<bounded|none>
 полученное после `CREATED.action`. Goal auto-continuation, новый turn,
 compaction, timeout и same-owner resume не являются confirmation. Пока record
 active, запрещены только его scopes; unknown/contradictory index fail-closed.
+
+Для user/client soft pause `LIFECYCLE` является обязательной проверяемой
+projection. `draining` сохраняет прежний nonzero execution vector и блокирует
+новый dispatch; `settling` требует `running_count=0`; `quiescent` требует
+`OWNER.state=handoff-ready`, PAUSE scope `all-shared`, exact index entry и
+`PENDING_ACTIONS=none`. Эти поля пишет только `shipctl.py soft-pause`; generic
+action renderer обязан сохранить их неизменными. Exact machine flow описан в
+[soft-pause.md](soft-pause.md).
 
 ## WORK_CLAIM
 

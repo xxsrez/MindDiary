@@ -79,6 +79,10 @@ compact Linear snapshot + `rg`; неоднозначность возвраща�
    `issue/generation/executor/state`, `running_count`, entries digest и последним
    missed-refill blocker. `CLAIM_INDEX` отвечает только за authority/recovery,
    а integration queue — только за продвижение feature.
+9. `LIFECYCLE` — проверяемая projection единой state machine. `STATE`,
+   `OWNER_STATE`, execution/worker vector, PAUSE/index и pending actions обязаны
+   ей соответствовать. При user/client pause следуй только
+   [soft-pause.md](soft-pause.md); не собирай эти поля раздельными commits.
 
 ## Захватить один repo-global claim
 
@@ -158,7 +162,7 @@ owner proof одного global ref не разрешают mutations.
 | `active`, caller != owner | Вторая session | Тот же milestone, `1/1`, `1/N`, `N/1` или `N/M` | Откажись от мутаций; только observer/read-only report. |
 | `active`, caller != owner | Вторая session | Другой milestone, любые limits | Откажись от мутаций; repo-global claim важнее milestone boundary. |
 | `active`, старый owner доказанно остановлен | Новая session | Тот же или другой milestone | Выполни takeover `epoch+1`, fence guards, затем recovery; до fencing не dispatch-и. |
-| `handoff-ready`, reconciled target/reason, workers terminal, нет pending external action | Новая явно вызванная session | Тот же run | Без дополнительного вопроса CAS-прими ownership с `epoch+1`, fence-ни guards и затем recovery. Target сохраняет provenance, но не резервирует handoff одной session: concurrent successors разрешает expected-old CAS. |
+| `handoff-ready`, coherent `LIFECYCLE=quiescent`, zero running, нет pending action | Новая явно вызванная session | Тот же run | Без дополнительного вопроса CAS-прими ownership с `epoch+1`, fence-ни guards и затем recovery. Target сохраняет provenance, но не резервирует handoff одной session: concurrent successors разрешает expected-old CAS. |
 | `complete` | Любая session | Любой milestone/limit | CAS-создай descendant claim с новым owner и `epoch+1`; сохрани старый ledger. |
 | `aborted`, нет run effects | Любая session | Любой milestone/limit | CAS-создай descendant claim с новым owner и `epoch+1`; aborted не считать release success. |
 | Любой state | Любая session с `dry-run` | Любые | Разреши только read-only план; не создавай claim, receipt, worktree или action token. |
@@ -177,9 +181,17 @@ Takeover разрешай только после одного из доказа
 
 Не используй timeout, stale timestamp или предположение о crash как
 доказательство. При сомнении оставайся observer и верни `needs-input`.
-`handoff-ready` создаётся только отдельным explicit owner action с target/reason;
-goal conflict до первой run effect завершается owner state `aborted`, а не
-превращается в неявный handoff.
+`handoff-ready` создаётся только `shipctl.py soft-pause --phase finish` либо
+legacy explicit owner action с target/reason. Goal conflict до первой run effect
+завершается owner state `aborted`, а не превращается в неявный handoff.
+
+После создания quiescent `handoff-ready` разрешены descendant reconciled
+bookkeeping actions, например исправление exact PAUSE index. Они не отменяют
+takeover eligibility и не обязаны оставлять `handoff-owner` последним action.
+Preflight доказывает durable invariant: `OWNER_STATE=handoff-ready`, workers не
+running, active issue lanes отсутствуют, `PENDING_ACTIONS=none`, а PAUSE и его
+index согласованы. Любой revived worker, pending effect, несовпадающий index или
+неполный pause снова переводит route в read-only recovery.
 
 Fresh user message, который явно вызывает online `ship-linear-release`, является
 resume intent для уже quiescent `handoff-ready` run. Не проси пользователя
@@ -356,6 +368,11 @@ dispatch остаются `open|good-base-only|frozen` по доказанном
    независимости.
 5. `PROMOTION_HOLD` остаётся compact summary, но ссылается на exact durable hold
    ID. Unknown/contradictory hold index fail-closed для affected scopes.
+6. User/client pause — не generic HOLD transition. Выполни lifecycle
+   `running -> draining -> settling -> quiescent` строго через
+   [soft-pause.md](soft-pause.md). В drain запрещены новые dispatch/claim/cutoff,
+   но coordinator завершает уже-ready subset; incomplete refs/worktrees
+   сохраняются. Quiescent pause не переводит Goal в `blocked`.
 
 ## Выбирать действие по классу дефекта
 

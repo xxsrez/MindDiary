@@ -69,7 +69,12 @@ Restart/takeover сначала fence-ит guards и усыновляет exact 
 artifacts по [crash-recovery.md](crash-recovery.md); ambiguous external create
 не повторяется.
 
-Blocked when: Тот же внешний доступ, неустранимая неоднозначность или
-необходимое продуктовое решение не позволяют продвинуть ни active cutoff, ни
-безопасный независимый subset минимум три последовательных goal-хода.
+Blocked when: Тот же устойчивый внешний доступ, неустранимая неоднозначность
+или необходимое продуктовое решение не позволяют продвинуть ни active cutoff,
+ни безопасный независимый subset минимум три fresh последовательных goal-хода.
+User/client pause, soft drain/handoff, running worker, pending CI/gate и
+recoverable CAS race не являются blocker. Быстрые auto-continuation с одним
+fingerprint считаются одним наблюдением; transient dirty control surface
+требует также минимум пяти минут без progress. При pause используй
+references/soft-pause.md и не вызывай update_goal(blocked).
 ```

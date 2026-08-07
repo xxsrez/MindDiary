@@ -334,6 +334,20 @@ class PreflightTest(GitMixin, unittest.TestCase):
         self.git(repo, "push", "origin", f"{commit}:{ref}")
         return commit
 
+    def soft_pause(
+        self, repo: Path, phase: str, payload: object
+    ) -> tuple[int, dict[str, object]]:
+        args = mock.Mock(
+            repo=str(repo),
+            remote="origin",
+            default="main",
+            phase=phase,
+            input="-",
+        )
+        with mock.patch.object(sys, "stdin", io.StringIO(json.dumps(payload))), io.StringIO() as output, redirect_stdout(output):
+            code = MODULE.command_soft_pause(args)
+            return code, json.loads(output.getvalue())
+
     def test_clean_preflight_is_normal_build_and_bounded(self) -> None:
         with tempfile.TemporaryDirectory(prefix="shipctl-") as directory:
             repo, _ = self.fixture(Path(directory))
@@ -371,6 +385,31 @@ class PreflightTest(GitMixin, unittest.TestCase):
                 code, result, _ = self.preflight(repo)
         self.assertEqual((code, result["route"]), (0, "resume"))
         self.assertTrue(result["mutation_allowed"])
+
+    def test_same_owner_can_soft_pause_an_operating_gate_phase_without_workers(self) -> None:
+        thread_id = "019fdcce-1fee-71d0-8d5d-6566cdf2d94b"
+        proof = MODULE.hashlib.sha256(thread_id.encode()).hexdigest()
+        with tempfile.TemporaryDirectory(prefix="shipctl-") as directory:
+            repo, _ = self.fixture(Path(directory))
+            self.push_coordinator(
+                repo,
+                MODULE.CANONICAL_COORDINATOR_REF,
+                self.coordinator_message(
+                    repo,
+                    state="validating",
+                    proof=proof,
+                    extra=(
+                        "EXECUTION_INDEX: running_count=0;entries=none\n"
+                        "WORKERS: active_issue_lanes=none\n"
+                        "PENDING_ACTIONS: none\n"
+                    ),
+                ),
+            )
+            with mock.patch.dict(MODULE.os.environ, {"CODEX_THREAD_ID": thread_id}):
+                code, result, _ = self.preflight(repo)
+        self.assertEqual((code, result["route"]), (0, "resume"))
+        lifecycle = result["coordinator_refs"][0]["lifecycle"]
+        self.assertEqual((lifecycle["coherent"], lifecycle["phase"]), (True, "validating"))
 
     def test_matching_proof_cannot_resume_needs_input_handoff(self) -> None:
         with tempfile.TemporaryDirectory(prefix="shipctl-") as directory:
@@ -438,6 +477,217 @@ class PreflightTest(GitMixin, unittest.TestCase):
         self.assertEqual((code, result["route"]), (0, "recovery"))
         self.assertFalse(result["mutation_allowed"])
         self.assertEqual(result["mutation_scope"], "none")
+
+    def test_lifecycle_validates_current_quiescent_shape_independent_of_last_action(self) -> None:
+        pause_id = "pause-28cb9f4d-e177-4a23-aa8f-2c8323fbb238"
+        message = (
+            "STATE: checkpoint\n"
+            "OWNER_STATE: handoff-ready\n"
+            "ACTION_KIND: reconcile-pause-index\n"
+            "ACTION_STATUS: reconciled\n"
+            f"PAUSE: id={pause_id};state=active;kind=PAUSE;scope=all-shared;"
+            "confirmation_required=yes;resume_predicate=fresh-explicit-user-launch-after-test;"
+            f"evidence={'1' * 64};after=28cb9f4d-e177-4a23-aa8f-2c8323fbb238;"
+            "created_at=2026-08-07T17:31:29Z;drained_at=2026-08-07T17:33:30Z\n"
+            f"HOLD_PAUSE_INDEX: active={pause_id}:PAUSE@all-shared;entries=1\n"
+            "EXECUTION_INDEX: running_count=0;entries=4\n"
+            "WORKERS: active_issue_lanes=none\n"
+            "PENDING_ACTIONS: none\n"
+        )
+        lifecycle = MODULE._coordinator_lifecycle(MODULE.fields(message))
+        self.assertTrue(lifecycle["coherent"])
+        self.assertEqual(lifecycle["phase"], "quiescent")
+        self.assertTrue(lifecycle["takeover_ready"])
+
+        revived = message.replace("running_count=0", "running_count=1").replace(
+            "active_issue_lanes=none", "active_issue_lanes=AND-47"
+        )
+        invalid = MODULE._coordinator_lifecycle(MODULE.fields(revived))
+        self.assertFalse(invalid["coherent"])
+        self.assertFalse(invalid["takeover_ready"])
+        self.assertIn("quiescent-running-count-nonzero", invalid["errors"])
+
+    def test_lifecycle_phase_matrix_fails_closed_on_cross_projection_races(self) -> None:
+        pause_id = "pause-28cb9f4d-e177-4a23-aa8f-2c8323fbb238"
+        transition = "28cb9f4d-e177-4a23-aa8f-2c8323fbb238"
+        pause = (
+            f"id={pause_id};state=active;kind=PAUSE;scope=dispatch,new-work;"
+            f"evidence={'1' * 64};after={transition};"
+            "resume_predicate=fresh-explicit-user-launch-after-test;"
+            "confirmation_required=yes;created_at=2026-08-07T17:31:29Z"
+        )
+        base = {
+            "STATE": "pausing",
+            "OWNER_STATE": "active",
+            "ACTION_STATUS": "reconciled",
+            "PAUSE": pause,
+            "HOLD_PAUSE_INDEX": f"active={pause_id}:PAUSE@dispatch,new-work;entries=1",
+            "PENDING_ACTIONS": "none",
+        }
+        cases = (
+            (
+                "draining",
+                {
+                    **base,
+                    "EXECUTION_INDEX": "running_count=2;entries=AND-47:2@executor=running,AND-61:3@executor=running",
+                    "WORKERS": "active_issue_lanes=AND-47,AND-61",
+                    "LIFECYCLE": f"schema=1;phase=draining;pause={pause_id};transition={transition}",
+                },
+                True,
+            ),
+            (
+                "settling",
+                {
+                    **base,
+                    "EXECUTION_INDEX": "running_count=0;entries=none",
+                    "WORKERS": "active_issue_lanes=none",
+                    "LIFECYCLE": f"schema=1;phase=settling;pause={pause_id};transition={transition}",
+                },
+                True,
+            ),
+            (
+                "worker-index-race",
+                {
+                    **base,
+                    "EXECUTION_INDEX": "running_count=2;entries=AND-47:2@executor=running,AND-61:3@executor=running",
+                    "WORKERS": "active_issue_lanes=AND-47",
+                    "LIFECYCLE": f"schema=1;phase=draining;pause={pause_id};transition={transition}",
+                },
+                False,
+            ),
+            (
+                "phase-race",
+                {
+                    **base,
+                    "EXECUTION_INDEX": "running_count=0;entries=none",
+                    "WORKERS": "active_issue_lanes=none",
+                    "LIFECYCLE": f"schema=1;phase=draining;pause={pause_id};transition={transition}",
+                },
+                False,
+            ),
+        )
+        for name, metadata, coherent in cases:
+            with self.subTest(name=name):
+                result = MODULE._coordinator_lifecycle(metadata)
+                self.assertEqual(result["coherent"], coherent)
+                self.assertEqual(result["takeover_ready"], False)
+
+    def test_soft_pause_lifecycle_drains_checkpoints_handoffs_and_resumes_by_cas(self) -> None:
+        owner_thread = "019fdcce-1fee-71d0-8d5d-6566cdf2d94b"
+        successor_thread = "019fdd4b-37db-7123-830f-bc32654b5e2d"
+        proof = MODULE.hashlib.sha256(owner_thread.encode()).hexdigest()
+        with tempfile.TemporaryDirectory(prefix="shipctl-soft-pause-") as directory:
+            repo, _ = self.fixture(Path(directory))
+            head = self.git(repo, "rev-parse", "HEAD")
+            parent = self.push_coordinator(
+                repo,
+                MODULE.CANONICAL_COORDINATOR_REF,
+                self.coordinator_message(
+                    repo,
+                    proof=proof,
+                    extra=(
+                        f"OWNER_ID: {uuid.uuid4()}\n"
+                        "OWNER_PROOF_KIND: runtime-task-id\n"
+                        f"RUN_ID: {uuid.uuid4()}\n"
+                        f"RUN_KEY: {'a' * 32}\n"
+                        f"PROJECT_ID: {uuid.uuid4()}\n"
+                        f"MILESTONE_ID: {uuid.uuid4()}\n"
+                        "EPOCH: 1\n"
+                        f"CONTRACT_SOURCE_SHA: {head}\n"
+                        "PAUSE: state=lifted;reason=none\n"
+                        "HOLD: id=hold-known-bad;state=active;scope=default\n"
+                        "HOLD_PAUSE_INDEX: active=hold-known-bad:HOLD@default;entries=1\n"
+                        "PENDING_ACTIONS: none\n"
+                        "PIPELINE: open_cutoff=none;active_cutoff=none\n"
+                        "GATE_INDEX: active=none;entries=0\n"
+                        "EXECUTION_INDEX: running_count=2;"
+                        "entries=AND-47:2@executor=running,AND-61:3@executor=running\n"
+                        "WORKERS: active_target=2;active_issue_lanes=AND-47,AND-61;"
+                        "ready_preserved=none;refill_blocker=none\n"
+                        "ACTION_KIND: dispatch-workers\n"
+                    ),
+                ),
+            )
+            with mock.patch.dict(MODULE.os.environ, {"CODEX_THREAD_ID": owner_thread}):
+                start_code, started = self.soft_pause(
+                    repo, "start", {"evidence_digest": "1" * 64}
+                )
+                _, draining, _ = self.preflight(repo)
+                missing_code, missing = self.soft_pause(
+                    repo,
+                    "checkpoint",
+                    {
+                        "dispositions": [
+                            {
+                                "issue": "AND-47",
+                                "generation": 2,
+                                "state": "coordinator-paused",
+                                "head": "none",
+                                "evidence_digest": "2" * 64,
+                            }
+                        ]
+                    },
+                )
+                still_draining = self.git(
+                    repo, "ls-remote", "origin", MODULE.CANONICAL_COORDINATOR_REF
+                ).split()[0]
+                checkpoint_code, checkpointed = self.soft_pause(
+                    repo,
+                    "checkpoint",
+                    {
+                        "dispositions": [
+                            {
+                                "issue": "AND-47",
+                                "generation": 2,
+                                "state": "coordinator-paused",
+                                "head": "none",
+                                "evidence_digest": "2" * 64,
+                            },
+                            {
+                                "issue": "AND-61",
+                                "generation": 3,
+                                "state": "stopped",
+                                "head": "none",
+                                "evidence_digest": "3" * 64,
+                            },
+                        ]
+                    },
+                )
+                _, settling, _ = self.preflight(repo)
+                finish_code, finished = self.soft_pause(
+                    repo,
+                    "finish",
+                    {"settlement": "complete", "evidence_digest": "4" * 64},
+                )
+                _, takeover_ready, _ = self.preflight(repo)
+            takeover_args = mock.Mock(repo=str(repo), remote="origin", default="main")
+            with mock.patch.dict(MODULE.os.environ, {"CODEX_THREAD_ID": successor_thread}):
+                with io.StringIO() as output, redirect_stdout(output):
+                    takeover_code = MODULE.command_takeover(takeover_args)
+                    taken = json.loads(output.getvalue())
+                _, recovered, _ = self.preflight(repo)
+            final_tip = self.git(
+                repo, "ls-remote", "origin", MODULE.CANONICAL_COORDINATOR_REF
+            ).split()[0]
+            final_message = self.git(repo, "show", "-s", "--format=%B", final_tip)
+
+        self.assertEqual((start_code, started["status"]), (0, "draining"))
+        self.assertNotEqual(started["coordinator"], parent)
+        self.assertEqual(draining["route"], "drain-owner")
+        self.assertEqual(draining["coordinator_refs"][0]["lifecycle"]["phase"], "draining")
+        self.assertEqual((missing_code, missing["status"]), (3, "blocked"))
+        self.assertEqual(still_draining, started["coordinator"])
+        self.assertEqual((checkpoint_code, checkpointed["status"]), (0, "settling"))
+        self.assertEqual(settling["route"], "drain-owner")
+        self.assertEqual((finish_code, finished["status"]), (0, "handoff-ready"))
+        self.assertEqual(takeover_ready["route"], "takeover")
+        self.assertEqual((takeover_code, taken["status"]), (0, "taken"))
+        self.assertEqual(recovered["route"], "recover-owner")
+        final_fields = MODULE.fields(final_message)
+        self.assertEqual(
+            MODULE._pause_index_value(final_fields), "hold-known-bad:HOLD@default"
+        )
+        self.assertEqual(MODULE._coordinator_lifecycle(final_fields)["phase"], "recovering")
 
     def test_takeover_command_cas_claims_quiescent_handoff_and_is_idempotent(self) -> None:
         thread_id = "019fdcce-1fee-71d0-8d5d-6566cdf2d94b"
@@ -975,6 +1225,51 @@ class TransitionTest(GitMixin, unittest.TestCase):
         uuid.UUID(rendered["ACTION_ID"])
         self.assertEqual(result_a["parent"], parent)
         self.assertEqual(result_a["message_digest"], MODULE.hashlib.sha256(result_a["message"].encode()).hexdigest())
+
+    def test_transition_preserves_lifecycle_pause_and_execution_authority(self) -> None:
+        pause_id = "pause-28cb9f4d-e177-4a23-aa8f-2c8323fbb238"
+        with tempfile.TemporaryDirectory(prefix="shipctl-transition-") as directory:
+            repo, _ = self.fixture(Path(directory))
+            message = self.parent_message() + (
+                f"LIFECYCLE: schema=1;phase=settling;pause={pause_id};transition={uuid.uuid4()}\n"
+                "EXECUTION_INDEX: running_count=0;entries=none;digest=" + "1" * 64 + "\n"
+                "WORKERS: active_target=0;active_issue_lanes=none;refill_blocker=user-pause\n"
+                "PENDING_ACTIONS: none\n"
+                f"PAUSE: id={pause_id};state=active;scope=dispatch,new-work\n"
+                f"HOLD_PAUSE_INDEX: active={pause_id}:PAUSE@dispatch,new-work;entries=1\n"
+                "CLAIM_MAP: AND-47:2@origin:guard-47@origin:feature-47@token\n"
+                "CLAIM_MAP: AND-61:3@origin:guard-61@origin:feature-61@token\n"
+                "COMMENT_MAP: projection-only-1\n"
+                "COMMENT_MAP: projection-only-2\n"
+            )
+            parent = self.metadata_commit(repo, message)
+            code, result = self.invoke(
+                repo,
+                parent,
+                {
+                    "phase": "intent",
+                    "kind": "update-linear-state",
+                    "target": "linear:AND-56",
+                    "expected_before": "state=Backlog",
+                    "request_key": "issue:AND-56:in-progress",
+                    "selector": "linear:issue:AND-56",
+                    "payload_digest": "d" * 64,
+                    "effect_identity": "linear:AND-56@In Progress",
+                },
+            )
+        self.assertEqual(code, 0)
+        rendered = MODULE.fields(result["message"])
+        for key in (
+            "LIFECYCLE",
+            "EXECUTION_INDEX",
+            "WORKERS",
+            "PENDING_ACTIONS",
+            "PAUSE",
+            "HOLD_PAUSE_INDEX",
+        ):
+            self.assertEqual(rendered[key], MODULE.fields(message)[key])
+        self.assertEqual(result["message"].count("CLAIM_MAP:"), 2)
+        self.assertNotIn("COMMENT_MAP:", result["message"])
 
     def test_intent_rejects_pending_parent(self) -> None:
         with tempfile.TemporaryDirectory(prefix="shipctl-transition-") as directory:

@@ -46,11 +46,14 @@ owner.
 4. Если прежняя coordinator task authoritative terminal/archived, пользователь
    явно подтвердил её stop либо есть explicit `handoff-ready`, новая task может
    начать takeover. Старые child workers не становятся её subagents.
-   Для reconciled `handoff-ready` с terminal workers и отсутствующим pending
-   external action новый explicit online вызов skill является достаточным
+   Для coherent `LIFECYCLE=quiescent` с zero-running execution vector и
+   отсутствующим pending external action новый explicit online вызов skill является достаточным
    resume intent: сразу выполни expected-old takeover CAS, не требуй от
    пользователя magic phrase или ручных Git действий. Handoff target —
-   provenance; race между successors решает CAS.
+   provenance; race между successors решает CAS. Поздний reconciled bookkeeping
+   descendant не отменяет этот handoff: helper проверяет согласованный durable
+   PAUSE/index, zero-running execution state и `PENDING_ACTIONS=none`, а не
+   требует, чтобы `handoff-owner` оставался последним action.
 5. Неизвестная liveness старых workers допустима только если их manifest и
    guard refs доказывают feature-only authority. Тогда takeover сначала fence-ит
    все guards и не трогает их worktrees. Если старый contract позволял shared
@@ -91,6 +94,12 @@ confirmation для этого run и сохраняется как invocation t
 предписанный текст не нужен. Он не заменяет невыполненный resume predicate и не
 снимает unrelated scoped HOLD/PROMOTION_HOLD: takeover переносит их новому
 owner, который lift-ит каждый scope только по его evidence.
+
+`LIFECYCLE=draining|settling` не является takeover-ready. Matching same owner
+получает `route=drain-owner` и завершает только протокол из
+[soft-pause.md](soft-pause.md); другая session остаётся read-only. Quiescent
+takeover атомарно снимает только user PAUSE и его index entry. Unrelated HOLD и
+`PROMOTION_HOLD` сохраняются, даже если они перечислены в том же index.
 
 ## Войти в recovery и закрыть старые grants
 
