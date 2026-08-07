@@ -2609,7 +2609,20 @@ export class PublicMindCatalogService {
 
     // Prove that the actor still owns an active account before catalog state read,
     // including for an empty projection or a later-invalid cursor.
-    const profile = await this.#catalog.readPersonalMindProfile(principalId);
+    let profile: Readonly<PersonalMindProfileSnapshot> | null;
+    try {
+      profile = await this.#catalog.readPersonalMindProfile(principalId);
+    } catch {
+      recordPublicMindCatalogEvent(
+        this.#logger,
+        "public_minds_failed",
+        requestId,
+      );
+      throw new PublicMindCatalogFailure(
+        "catalog_unavailable",
+        "Public catalog is unavailable.",
+      );
+    }
     if (profile === null || profile.principalId !== principalId) {
       recordPublicMindCatalogEvent(this.#logger, "public_minds_denied", requestId);
       throw new PublicMindCatalogFailure(
@@ -2717,7 +2730,16 @@ export class PublicMindCatalogService {
         nextCursor: page.nextCursor,
       });
     } catch (error) {
-      if (error instanceof PublicMindCatalogFailure) throw error;
+      if (error instanceof PublicMindCatalogFailure) {
+        if (error.code === "catalog_unavailable") {
+          recordPublicMindCatalogEvent(
+            this.#logger,
+            "public_minds_failed",
+            requestId,
+          );
+        }
+        throw error;
+      }
       recordPublicMindCatalogEvent(
         this.#logger,
         "public_minds_failed",

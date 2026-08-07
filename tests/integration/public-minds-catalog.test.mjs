@@ -321,6 +321,81 @@ test("anonymous, MCP, service and inactive actors are denied before catalog read
   );
 });
 
+test("initial active-account read failures are normalized without leaking store context", async () => {
+  const env = harness();
+  const account = await createAccount(env, 1);
+  const sensitiveSentinel = "private-profile-row:catalog-owner-secret";
+  const events = [];
+  const store = new Proxy(env.metadata, {
+    get(target, property) {
+      if (property === "readPersonalMindProfile") {
+        return async () => {
+          throw new Error(sensitiveSentinel);
+        };
+      }
+      const value = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  const catalog = new PublicMindCatalogService({
+    catalog: store,
+    host: HOST,
+    logger: { record: (event) => events.push(event) },
+  });
+
+  await assert.rejects(
+    catalog.listPublicMinds(
+      {
+        kind: "anonymous",
+        requestId: "request_initial_profile_anonymous",
+        occurredAtUtc: CHANGED_AT,
+        deploymentCapabilities: CAPABILITIES,
+      },
+      {},
+    ),
+    expectCatalogFailure("authentication_required"),
+  );
+
+  let failure;
+  try {
+    await catalog.listPublicMinds(
+      registeredActor(
+        account.principalId,
+        "request_initial_profile_store_failure",
+      ),
+      {},
+    );
+    assert.fail("catalog call should fail");
+  } catch (error) {
+    failure = error;
+  }
+  assert.equal(failure instanceof PublicMindCatalogFailure, true);
+  assert.equal(failure.code, "catalog_unavailable");
+  assert.equal(failure.message, "Public catalog is unavailable.");
+  assert.deepEqual(events, [
+    {
+      event: "public_minds_denied",
+      requestId: "request_initial_profile_anonymous",
+    },
+    {
+      event: "public_minds_failed",
+      requestId: "request_initial_profile_store_failure",
+    },
+  ]);
+  assert.equal(
+    JSON.stringify({
+      error: {
+        name: failure.name,
+        code: failure.code,
+        message: failure.message,
+        stack: failure.stack,
+      },
+      events,
+    }).includes(sensitiveSentinel),
+    false,
+  );
+});
+
 test("query validation is stable and cursors are bounded, canonical, versioned and query-bound", async () => {
   const env = harness();
   const owner = await createAccount(env, 1);
@@ -555,6 +630,7 @@ test("malformed adapter pages fail with a stable safe catalog error", async () =
     { kind: "page", spaceIds: [], nextCursor: 7 },
   ];
   for (const malformed of malformedPages) {
+    const events = [];
     const store = new Proxy(env.metadata, {
       get(target, property) {
         if (property === "listPublicMindCatalogPage") {
@@ -564,11 +640,21 @@ test("malformed adapter pages fail with a stable safe catalog error", async () =
         return typeof value === "function" ? value.bind(target) : value;
       },
     });
-    const catalog = new PublicMindCatalogService({ catalog: store, host: HOST });
+    const catalog = new PublicMindCatalogService({
+      catalog: store,
+      host: HOST,
+      logger: { record: (event) => events.push(event) },
+    });
     await assert.rejects(
       catalog.listPublicMinds(actor, { limit: 1 }),
       expectCatalogFailure("catalog_unavailable"),
     );
+    assert.deepEqual(events, [
+      {
+        event: "public_minds_failed",
+        requestId: "request_malformed_page",
+      },
+    ]);
   }
 });
 
