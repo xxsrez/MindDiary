@@ -4801,6 +4801,10 @@ export class InMemoryRevisionMetadataStore
     return this.#runExclusive(async () => {
       const spaces = cloneSpaces(this.#spaces);
       const revisionsById = new Map(this.#revisionsById);
+      const knowledgeSpaces = cloneRecordMap(
+        this.#knowledgeSpaces,
+        freezeKnowledgeSpace,
+      );
       const idempotencyRecords = cloneIdempotencyRecords(this.#idempotencyRecords);
       const auditEvents = new Map(
         [...this.#auditEvents].map(([id, event]) => [id, cloneAuditEvent(event)]),
@@ -4831,8 +4835,44 @@ export class InMemoryRevisionMetadataStore
           spaces.get(spaceId)?.revisions.get(revisionId) ?? null,
         checkIdempotency: async (request: CheckIdempotencyRequest) =>
           checkIdempotencyAgainst(request, idempotencyRecords),
-        commitRevision: async (request: RevisionCommitRequest) =>
-          this.#commitRevisionAgainst(request, spaces, revisionsById),
+        commitRevision: async (request: RevisionCommitRequest) => {
+          const aggregate = knowledgeSpaces.get(request.envelope.revision.spaceId);
+          const existing = revisionsById.get(request.envelope.revision.revisionId);
+          const isExactReplay =
+            existing !== undefined && envelopesEqual(existing, request.envelope);
+          if (
+            aggregate &&
+            !isExactReplay &&
+            aggregate.headRevisionId !== request.expectedHeadRevisionId
+          ) {
+            return Object.freeze({
+              kind: "stale_head" as const,
+              currentHeadRevisionId: aggregate.headRevisionId,
+            });
+          }
+
+          const committed = await this.#commitRevisionAgainst(
+            request,
+            spaces,
+            revisionsById,
+          );
+          const committedRevisionId = request.envelope.revision.revisionId;
+          if (
+            committed.kind === "committed" &&
+            aggregate &&
+            spaces.get(aggregate.spaceId)?.head === committedRevisionId &&
+            aggregate.headRevisionId !== committedRevisionId
+          ) {
+            knowledgeSpaces.set(
+              aggregate.spaceId,
+              freezeKnowledgeSpace({
+                ...aggregate,
+                headRevisionId: committedRevisionId,
+              }),
+            );
+          }
+          return committed;
+        },
         completeIdempotency: async (
           request: CompleteIdempotencyRequest,
         ) => completeIdempotencyAgainst(request, idempotencyRecords),
@@ -4852,6 +4892,7 @@ export class InMemoryRevisionMetadataStore
       const result = await operation(transaction);
       this.#spaces = spaces;
       this.#revisionsById = revisionsById;
+      this.#knowledgeSpaces = knowledgeSpaces;
       this.#idempotencyRecords = idempotencyRecords;
       this.#auditEvents = auditEvents;
       this.#auditOutbox = auditOutbox;
