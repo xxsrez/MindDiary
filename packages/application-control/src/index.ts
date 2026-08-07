@@ -29,6 +29,9 @@ import type {
   OwnershipTransferAuditIdGenerator,
   PersonalMindProfileSnapshot,
   PersonalMindStore,
+  PilotCohort,
+  PrivacySafeObservabilityEvent,
+  PrivacySafeObservabilitySink,
   PublicMindCatalogStore,
   SearchIndex,
   TokenHasher,
@@ -305,11 +308,47 @@ export interface AccountTokenRevocationResult {
   readonly replayed: boolean;
 }
 
+export interface TokenLifecycleSafeEvent {
+  readonly event:
+    | "token_issued"
+    | "token_revoked"
+    | "token_revoke_replayed"
+    | "token_denied"
+    | "token_failed";
+  readonly requestId: ActorContext["requestId"];
+}
+
+export interface TokenLifecycleSafeLogger {
+  record(event: Readonly<TokenLifecycleSafeEvent>): void | Promise<void>;
+}
+
 export interface TokenLifecycleDependencies {
   readonly clock: Clock;
   readonly tokenHasher: TokenHasher;
   readonly tokenIds: TokenIdGenerator;
   readonly tokens: McpTokenStore;
+  readonly logger?: TokenLifecycleSafeLogger;
+}
+
+function recordTokenLifecycleEvent(
+  logger: TokenLifecycleSafeLogger | undefined,
+  event: TokenLifecycleSafeEvent["event"],
+  requestId: ActorContext["requestId"],
+): void {
+  if (!logger) return;
+  try {
+    const pending = logger.record(Object.freeze({ event, requestId }));
+    if (
+      typeof pending === "object" &&
+      pending !== null &&
+      "catch" in pending &&
+      typeof pending.catch === "function"
+    ) {
+      void pending.catch(() => undefined);
+    }
+  } catch {
+    // Token telemetry never changes issuance/revocation semantics.
+  }
 }
 
 function parseUtcInstant(value: unknown): number | null {
@@ -400,15 +439,39 @@ export class TokenLifecycleService {
   readonly #tokenHasher: TokenHasher;
   readonly #tokenIds: TokenIdGenerator;
   readonly #tokens: McpTokenStore;
+  readonly #logger: TokenLifecycleSafeLogger | undefined;
 
   constructor(dependencies: TokenLifecycleDependencies) {
     this.#clock = dependencies.clock;
     this.#tokenHasher = dependencies.tokenHasher;
     this.#tokenIds = dependencies.tokenIds;
     this.#tokens = dependencies.tokens;
+    this.#logger = dependencies.logger;
   }
 
   async issueMcpToken(
+    actor: ActorContext,
+    command: IssueMcpTokenCommand,
+  ): Promise<Readonly<IssueMcpTokenResult>> {
+    const requestId = safeBootstrapRequestId(actor?.requestId);
+    try {
+      const result = await this.#issueMcpToken(actor, command);
+      recordTokenLifecycleEvent(this.#logger, "token_issued", requestId);
+      return result;
+    } catch (error) {
+      recordTokenLifecycleEvent(
+        this.#logger,
+        error instanceof TokenLifecycleFailure &&
+          error.code === "authentication_required"
+          ? "token_denied"
+          : "token_failed",
+        requestId,
+      );
+      throw error;
+    }
+  }
+
+  async #issueMcpToken(
     actor: ActorContext,
     command: IssueMcpTokenCommand,
   ): Promise<Readonly<IssueMcpTokenResult>> {
@@ -504,6 +567,33 @@ export class TokenLifecycleService {
   }
 
   async revokeMcpToken(
+    actor: ActorContext,
+    tokenId: TokenId,
+  ): Promise<Readonly<RevokeMcpTokenControlResult>> {
+    const requestId = safeBootstrapRequestId(actor?.requestId);
+    try {
+      const result = await this.#revokeMcpToken(actor, tokenId);
+      recordTokenLifecycleEvent(
+        this.#logger,
+        result.replayed ? "token_revoke_replayed" : "token_revoked",
+        requestId,
+      );
+      return result;
+    } catch (error) {
+      recordTokenLifecycleEvent(
+        this.#logger,
+        error instanceof TokenLifecycleFailure &&
+          (error.code === "authentication_required" ||
+            error.code === "token_not_found")
+          ? "token_denied"
+          : "token_failed",
+        requestId,
+      );
+      throw error;
+    }
+  }
+
+  async #revokeMcpToken(
     actor: ActorContext,
     tokenId: TokenId,
   ): Promise<Readonly<RevokeMcpTokenControlResult>> {
@@ -5366,6 +5456,188 @@ export class PublicMindCatalogService {
         "catalog_unavailable",
         "Public catalog is unavailable.",
       );
+    }
+  }
+}
+
+export type ControlPrivacySafeEvent =
+  | AccountBootstrapSafeEvent
+  | PersonalMindControlSafeEvent
+  | OrdinaryMindControlSafeEvent
+  | AccountDeletionSafeEvent
+  | VisibilityControlSafeEvent
+  | OwnershipTransferSafeEvent
+  | MembershipControlSafeEvent
+  | InvitationControlSafeEvent
+  | MindRouteSafeEvent
+  | PublicMindCatalogSafeEvent
+  | TokenLifecycleSafeEvent;
+
+function controlOutcome(
+  event: ControlPrivacySafeEvent["event"],
+): PrivacySafeObservabilityEvent["outcome"] {
+  if (event.includes("denied")) return "denied";
+  if (event.includes("conflict")) return "conflict";
+  if (event.includes("replayed")) return "replayed";
+  if (event.includes("failed") || event.includes("incomplete")) return "failure";
+  return "success";
+}
+
+/**
+ * One logger for the existing control safe-event ports. It maps only the
+ * event enum and opaque request ID; service inputs never cross this boundary.
+ */
+export class ControlPrivacySafeObservability {
+  readonly #sink: PrivacySafeObservabilitySink;
+  readonly #clock: Clock;
+  readonly #cohort: PilotCohort;
+
+  constructor(dependencies: {
+    readonly sink: PrivacySafeObservabilitySink;
+    readonly clock: Clock;
+    readonly cohort: PilotCohort;
+  }) {
+    this.#sink = dependencies.sink;
+    this.#clock = dependencies.clock;
+    this.#cohort = dependencies.cohort;
+  }
+
+  record(event: Readonly<ControlPrivacySafeEvent>): void {
+    const occurredAtUtc = this.#clock.now();
+    const outcome = controlOutcome(event.event);
+    if (event.event.startsWith("invitation_")) {
+      this.#emit({
+        kind: "operational",
+        metric: "invitation_outcome",
+        surface: "control",
+        operation: "invitation",
+        outcome,
+        unit: "count",
+        value: 1,
+        occurredAtUtc,
+        requestId: event.requestId,
+        jobId: null,
+        cohort: null,
+      });
+    } else if (event.event.startsWith("token_")) {
+      this.#emit({
+        kind: "operational",
+        metric: "token_outcome",
+        surface: "control",
+        operation: "token",
+        outcome,
+        unit: "count",
+        value: 1,
+        occurredAtUtc,
+        requestId: event.requestId,
+        jobId: null,
+        cohort: null,
+      });
+    } else if (
+      event.event.includes("delete") ||
+      event.event.includes("deletion")
+    ) {
+      this.#emit({
+        kind: "operational",
+        metric: "deletion_outcome",
+        surface: "control",
+        operation: "deletion",
+        outcome,
+        unit: "count",
+        value: 1,
+        occurredAtUtc,
+        requestId: event.requestId,
+        jobId: null,
+        cohort: null,
+      });
+    } else if (
+      outcome === "failure" ||
+      outcome === "denied"
+    ) {
+      this.#emit({
+        kind: "operational",
+        metric: "request_error",
+        surface: "control",
+        operation: "request",
+        outcome,
+        unit: "count",
+        value: 1,
+        occurredAtUtc,
+        requestId: event.requestId,
+        jobId: null,
+        cohort: null,
+      });
+    }
+    if (outcome === "conflict") {
+      this.#emit({
+        kind: "operational",
+        metric: "cas_conflict",
+        surface: "control",
+        operation: "request",
+        outcome: "conflict",
+        unit: "count",
+        value: 1,
+        occurredAtUtc,
+        requestId: event.requestId,
+        jobId: null,
+        cohort: null,
+      });
+    }
+    if (
+      event.event === "account_bootstrap_succeeded" ||
+      event.event === "account_bootstrap_replayed"
+    ) {
+      this.#emit({
+        kind: "pilot",
+        metric: "setup_completion",
+        surface: "control",
+        operation: "setup",
+        outcome: event.event.endsWith("replayed") ? "replayed" : "completed",
+        unit: "count",
+        value: 1,
+        occurredAtUtc,
+        requestId: event.requestId,
+        jobId: null,
+        cohort: this.#cohort,
+      });
+    }
+  }
+
+  recordRetention(event: {
+    readonly requestId: ActorContext["requestId"];
+    readonly occurredAtUtc: UtcInstant;
+    readonly week: 1 | 4;
+    readonly retained: boolean;
+    readonly count: number;
+  }): void {
+    this.#emit({
+      kind: "pilot",
+      metric: "retention",
+      surface: "control",
+      operation: event.week === 1 ? "retention_week_1" : "retention_week_4",
+      outcome: event.retained ? "retained" : "unresolved",
+      unit: "count",
+      value: event.count,
+      occurredAtUtc: event.occurredAtUtc,
+      requestId: event.requestId,
+      jobId: null,
+      cohort: this.#cohort,
+    });
+  }
+
+  #emit(event: Readonly<PrivacySafeObservabilityEvent>): void {
+    try {
+      const pending = this.#sink.record(Object.freeze(event));
+      if (
+        typeof pending === "object" &&
+        pending !== null &&
+        "catch" in pending &&
+        typeof pending.catch === "function"
+      ) {
+        void pending.catch(() => undefined);
+      }
+    } catch {
+      // Telemetry is best-effort and never changes control outcomes.
     }
   }
 }

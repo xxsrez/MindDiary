@@ -7,6 +7,9 @@ import type {
   ExportArchiveStore,
   ExportJobStore,
   InvitationExpiryJobStore,
+  PilotCohort,
+  PrivacySafeObservabilityEvent,
+  PrivacySafeObservabilitySink,
   SearchIndex,
   SpaceTargetRecordPurger,
   SpaceTargetPurgeResult,
@@ -33,6 +36,105 @@ export const BACKGROUND_HANDLERS = [
   "expire_export_grants",
   "continue_deletion",
 ] as const;
+
+function recordBackgroundMetric(
+  sink: PrivacySafeObservabilitySink,
+  event: Readonly<PrivacySafeObservabilityEvent>,
+): void {
+  try {
+    const pending = sink.record(Object.freeze(event));
+    if (
+      typeof pending === "object" &&
+      pending !== null &&
+      "catch" in pending &&
+      typeof pending.catch === "function"
+    ) {
+      void pending.catch(() => undefined);
+    }
+  } catch {
+    // Background telemetry is best-effort and cannot affect durable jobs.
+  }
+}
+
+/** Safe job/cost boundary: job correlation is opaque and payload-free. */
+export class BackgroundPrivacySafeObservability {
+  readonly #sink: PrivacySafeObservabilitySink;
+  readonly #cohort: PilotCohort;
+
+  constructor(dependencies: {
+    readonly sink: PrivacySafeObservabilitySink;
+    readonly cohort: PilotCohort;
+  }) {
+    this.#sink = dependencies.sink;
+    this.#cohort = dependencies.cohort;
+  }
+
+  recordJob(event: {
+    readonly actor: Pick<ActorContext, "requestId">;
+    readonly jobId: JobId;
+    readonly occurredAtUtc: UtcInstant;
+    readonly job: "revision_index" | "export";
+    readonly outcome: "success" | "failure" | "retry" | "unavailable";
+    readonly lagMs: number;
+  }): void {
+    recordBackgroundMetric(this.#sink, {
+      kind: "operational",
+      metric: event.job === "revision_index" ? "index_lag_ms" : "export_lag_ms",
+      surface: "background",
+      operation: event.job,
+      outcome: event.outcome,
+      unit: "milliseconds",
+      value: event.lagMs,
+      occurredAtUtc: event.occurredAtUtc,
+      requestId: event.actor.requestId,
+      jobId: event.jobId,
+      cohort: null,
+    });
+  }
+
+  recordCost(event: {
+    readonly actor: Pick<ActorContext, "requestId">;
+    readonly jobId: JobId;
+    readonly occurredAtUtc: UtcInstant;
+    readonly metric: "storage_cost_bytes" | "query_cost_units";
+    readonly value: number;
+  }): void {
+    recordBackgroundMetric(this.#sink, {
+      kind: "operational",
+      metric: event.metric,
+      surface: "background",
+      operation: event.metric === "storage_cost_bytes" ? "storage" : "search",
+      outcome: "success",
+      unit: event.metric === "storage_cost_bytes" ? "bytes" : "query_units",
+      value: event.value,
+      occurredAtUtc: event.occurredAtUtc,
+      requestId: event.actor.requestId,
+      jobId: event.jobId,
+      cohort: null,
+    });
+  }
+
+  recordExportUsage(event: {
+    readonly actor: Pick<ActorContext, "requestId">;
+    readonly jobId: JobId;
+    readonly occurredAtUtc: UtcInstant;
+    readonly count: number;
+  }): void {
+    recordBackgroundMetric(this.#sink, {
+      kind: "pilot",
+      metric: "usage",
+      surface: "background",
+      operation: "export",
+      outcome: "completed",
+      unit: "count",
+      value: event.count,
+      occurredAtUtc: event.occurredAtUtc,
+      requestId: event.actor.requestId,
+      jobId: event.jobId,
+      cohort: this.#cohort,
+    });
+  }
+}
 
 export type ServiceActorContext = Extract<ActorContext, { kind: "service" }>;
 
