@@ -29,32 +29,56 @@ compact Linear snapshot + `rg`; неоднозначность возвраща�
 - [Вести OPEN_CUTOFF и один ACTIVE_CUTOFF](#вести-open_cutoff-и-один-active_cutoff)
 - [Срабатывать по точным cutoff triggers](#срабатывать-по-точным-cutoff-triggers)
 - [Хранить явное health state](#хранить-явное-health-state)
+- [Соблюдать durable HOLD и PAUSE](#соблюдать-durable-hold-и-pause)
 - [Выбирать действие по классу дефекта](#выбирать-действие-по-классу-дефекта)
 - [Восстанавливаться без двойной мутации](#восстанавливаться-без-двойной-мутации)
 - [Оставлять только минимальные receipts](#оставлять-только-минимальные-receipts)
 
 ## Считать workers по исполняемым issue
 
-1. Трактуй `workers=N` как limit одновременно исполняемых Linear issue, а не
-   как число subagents и не как общий budget orchestration.
-2. Не вычитай coordinator из `N`. Пока существуют `N` готовых совместимых
-   issue и среда даёт capacity, поддерживай ровно `N` активных issue.
-3. Снижай фактическое число только из-за меньшего ready-set, dependency/path
-   conflict или доказанного hard runtime limit. Назови конкретный ограничитель;
-   не переопределяй молча смысл `workers=N`.
-4. При `workers=1` используй fused режим: owner-session сама выполняет одну
-   issue inline в отдельном worktree по [issue-worker.md](issue-worker.md) и
-   между безопасными checkpoint выполняет coordinator duties. Не создавай
-   отдельного coordinator-only slot.
-5. При `N>1` предпочитай dedicated coordinator и `N` issue executors. Если
-   runtime slots иначе уменьшают issue capacity, используй hybrid: coordinator
-   выполняет ровно одну issue inline, остальные issue отдай workers. Inline
-   issue подчиняется тем же ownership paths, fence и receipt limits. Выбирай
-   для inline checkpointable issue; долгую/блокирующую работу отдавай child,
-   чтобы coordinator мог вовремя принять receipts и закрыть cutoff.
-6. Считай активной issue от успешного fenced dispatch до terminal worker
-   receipt `ready | failed | needs-input`. Не считай ожидание cutoff,
-   интеграцию или coordinator recovery активной issue.
+1. Трактуй `workers=N` как requested concurrency исполняемых Linear issue, а
+   не как число subagents или общий orchestration budget. Не выдавай requested
+   value за фактически доступную capacity.
+2. Durable-запиши пять независимых величин:
+
+   ```text
+   requested_workers; runtime_slots_total; delegated_capacity;
+   sustained_issue_capacity; opportunistic_inline
+   ```
+
+   `runtime_slots_total` включает root и все child agents. Dedicated root
+   оставляет issue только фактически доступную `delegated_capacity` (не больше
+   `runtime_slots_total - 1`). Для dedicated layout
+   `sustained_issue_capacity=min(requested_workers, delegated_capacity,
+   safe_resource_capacity)`; root в неё не входит. Отдельный `active_target`
+   равен минимуму sustained capacity и compatible ready-set. В fused
+   `workers=1` sustained capacity равна одной root-inline lane.
+3. При `workers=1` разрешён fused режим: owner-session исполняет одну issue в
+   отдельном worktree и обслуживает coordinator queue между bounded
+   checkpoint. При `N>1` предпочитай dedicated root и child executors.
+4. Hybrid inline разрешай только когда coordinator queue пуста: нет
+   необработанного ready receipt, просроченного refill, pending cutoff seal,
+   gate/default/deploy transition, recovery, hold/pause или user message.
+   При появлении coordinator work inline lane доходит до ближайшего bounded
+   checkpoint и уступает root. Храни её как `opportunistic_inline=1`, но не
+   прибавляй к `sustained_issue_capacity` и не называй устойчивой concurrent
+   lane.
+5. Разделяй три состояния одной issue:
+   - claim authority: current owner/epoch/generation/token и live guard;
+   - execution state: `running | coordinator-paused | feature_ready | failed |
+     needs-input | stopped`;
+   - integration state: `not-queued | queued | accepted | excluded | terminal`.
+6. Только `execution_state=running` занимает issue slot. Durable grant
+   переводится в `running` непосредственно перед spawn/inline start; failed
+   spawn сразу переводит его в `stopped`. `coordinator-paused` не считается
+   дополнительной concurrent lane.
+7. После валидированного durable `ready` guard немедленно переведи execution в
+   `feature_ready`: slot свободен, хотя claim/guard остаются live до terminal
+   integration disposition. Не вычисляй occupancy по `CLAIM_INDEX`.
+8. Храни bounded `EXECUTION_INDEX` в repo-global ledger с exact
+   `issue/generation/executor/state`, `running_count`, entries digest и последним
+   missed-refill blocker. `CLAIM_INDEX` отвечает только за authority/recovery,
+   а integration queue — только за продвижение feature.
 
 ## Захватить один repo-global claim
 
@@ -93,14 +117,21 @@ refs/heads/codex/release/coordinator
    queryable provider selector, external request/idempotency key и ожидаемой
    effect identity. Без этих полей ambiguous create не retry-и. Action не
    разрешает соседнее действие.
-7. Для worker создай fenced grant `<owner_id, epoch, claim_generation,
+7. Единственное batch-исключение — один bounded `projection-batch` intent для
+   независимых Linear comment/status projections и один item-wise reconcile.
+   Каждый item имеет собственные target, expected-before, selector,
+   request/idempotency key, payload digest, effect identity и result; partial
+   failure не делает остальные items unknown. Не включай в batch guard/feature/
+   train/cutoff/default refs, CI waiver authority, deploy, tag или Sites effect:
+   они сохраняют отдельные authoritative action tickets.
+8. Для worker создай fenced grant `<owner_id, epoch, claim_generation,
    claim_token, issue_id, base_sha, feature_ref, guard_ref, guard_tip>`. Online
    worker пишет feature+descendant guard acknowledgement одним atomic multi-ref
    expected-old push; без этой remote capability возвращает local-only commit.
    Полная race/restart процедура — в `crash-recovery.md`.
-8. При CAS reject ничего не мутируй. Fetch-ни победивший claim и стань
+9. При CAS reject ничего не мутируй. Fetch-ни победивший claim и стань
    observer. Не retry-и push поверх нового owner/epoch.
-9. Если remote ref нельзя прочитать или CAS-продвинуть, не начинай новую
+10. Если remote ref нельзя прочитать или CAS-продвинуть, не начинай новую
    мутацию. Разрешай read-only recovery/dry-run; уже выданный grant можно
    довести только до его точной bounded границы.
 
@@ -108,6 +139,14 @@ Claim не является lease по времени. `heartbeat`, возрас
 локального PID и длительное молчание сами по себе не освобождают ownership.
 Он также не блокирует процесс вне skill: такой процесс не получает authority,
 но его Git effects надо обнаружить, карантинить или reconciliate отдельно.
+
+Mixed legacy/global refs fail-closed. Любой nonterminal
+`refs/heads/codex/release/<milestone>/coordinator` блокирует normal/resume, кроме
+exact tip, для которого ancestry canonical repo-global ref содержит reconciled
+action `migrate-legacy-ledger` с target `<legacy-ref>@<legacy-full-SHA>` и durable
+stop evidence прежнего coordinator/workers. Только этот exact ref@SHA считается
+retired для collision check; новый SHA, другой legacy ref, missing reconcile или
+owner proof одного global ref не разрешают mutations.
 
 ## Разрешить комбинации sessions однозначно
 
@@ -146,12 +185,14 @@ goal conflict до первой run effect завершается owner state `a
 
 Только текущая owner-session меняет limit после отдельного fenced CAS action.
 
-- Increase `N->M`, `M>N`: сразу dispatch-и готовые совместимые issue до `M`.
-- Decrease `N->M`, `M<N`: не interrupt-и active issue; прекрати refill, пока
-  active count не станет меньше `M`, затем поддерживай новый limit.
+- Increase `N->M`, `M>N`: пересчитай truthful capacity и сразу dispatch-и
+  готовые совместимые issue до `sustained_issue_capacity`; opportunistic inline
+  остаётся отдельным временным режимом.
+- Decrease `N->M`, `M<N`: не interrupt-и running issue; прекрати refill, пока
+  `running_count` не станет меньше `M`, затем поддерживай новый limit.
 - Переход к `1`: после graceful drain работай fused coordinator-inline.
-- Переход от `1`: немедленно выбери dedicated либо hybrid layout и заполни
-  освободившуюся capacity.
+- Переход от `1`: немедленно выбери dedicated layout; hybrid inline включай
+  только при пустой coordinator queue и не прибавляй к sustained capacity.
 
 Не сдвигай deadline уже непустого `OPEN_CUTOFF` позже. При decrease уменьши
 его latched size, если новый size меньше; при increase новый size применяй со
@@ -160,16 +201,27 @@ goal conflict до первой run effect завершается owner state `a
 ## Поддерживать work-conserving pool
 
 1. Не создавай waves и barrier между workers.
-2. После каждого dispatch, terminal worker receipt, dependency unlock,
-   исключения feature или изменения limit немедленно пересчитай ready-set.
-3. Если active issue меньше limit, сразу отдай следующий совместимый ready
-   issue. Не жди завершения других workers и не жди наполнения cutoff.
-4. Используй priority/dependency/conflict ordering основного skill. Один
+2. После появления durable `ready` guard соблюдай один work-conserving порядок:
+   validate exact receipt -> durable `running -> feature_ready` в
+   `EXECUTION_INDEX` -> refill свободного slot -> enqueue feature для ingest ->
+   projection batch/bookkeeping. Claim/guard не terminalize-и до integration
+   disposition.
+3. Цель от наблюдения ready guard до нового spawn/inline start — `<=60s`. Если
+   compatible ready issue есть, а target пропущен, запиши один durable blocker:
+   exact interval, причина, evidence и resume predicate; очисти его при refill.
+   Не превращай это в heartbeat/telemetry.
+4. После каждого dispatch, execution terminal/feature-ready transition,
+   dependency unlock, исключения feature или изменения limit немедленно
+   пересчитай ready-set по `EXECUTION_INDEX`, не по live claims.
+5. Если `running_count < sustained_issue_capacity`, сразу отдай следующий
+   совместимый ready issue. Не жди завершения других workers, ingest или
+   наполнения cutoff.
+6. Используй priority/dependency/conflict ordering основного skill. Один
    same-path serial lane не должен оставлять свободным slot, если существует
    другая независимая issue.
-5. Продолжай worker pool, пока `ACTIVE_CUTOFF` проходит дорогой global gate или
+7. Продолжай worker pool, пока `ACTIVE_CUTOFF` проходит дорогой global gate или
    продвижение. Новые ready receipts направляй в `OPEN_CUTOFF`.
-6. При fused `workers=1` переключай coordinator между issue checkpoint и
+8. При fused `workers=1` переключай coordinator между issue checkpoint и
    cutoff duties; не оставляй issue worktree в недетерминированном состоянии.
 
 ## Вести OPEN_CUTOFF и один ACTIVE_CUTOFF
@@ -187,10 +239,15 @@ goal conflict до первой run effect завершается owner state `a
    [batch-release.md](batch-release.md).
 5. Не жди in-flight workers после sealing. Их receipts остаются для следующего
    `OPEN_CUTOFF`, даже если пришли через секунду.
-6. Пока active cutoff выполняется, продолжай cheap ingest. Если trigger уже
-   выполнен, durable-запиши pending boundary; после terminal active cutoff
-   немедленно активируй самый старый eligible prefix, не ожидая worker.
-7. Любая правка sealed source создаёт новую generation того же active cutoff.
+6. Пока active cutoff выполняется, продолжай cheap ingest. При первом trigger
+   durable-защёлкни pending boundary: exact train head, ordered membership
+   digest/count, reason и trigger time. Более поздние accepts принадлежат
+   successor suffix и не меняют boundary.
+7. После terminal active cutoff pending seal ticket имеет приоритет над late
+   ready receipt, ingest и projection. Сначала создай immutable cutoff ref exact
+   latched train head и membership; только затем обрабатывай late ingest. Если
+   latched head больше не доказанным ancestor current train, freeze sealing.
+8. Любая правка sealed source создаёт новую generation того же active cutoff.
    Не открывай второй global gate параллельно.
 
 ## Срабатывать по точным cutoff triggers
@@ -198,7 +255,7 @@ goal conflict до первой run effect завершается owner state `a
 При первом eligible ingest зафиксируй:
 
 ```text
-CUTOFF_SIZE = max(2, min(effective_workers, 4))
+CUTOFF_SIZE = max(2, min(sustained_issue_capacity, 4))
 MAX_WAIT = 5 minutes from first_eligible_at
 ```
 
@@ -212,13 +269,14 @@ restart/worker-limit change их не пересчитывает для уже �
 | --- | --- | --- |
 | `size` | Eligible dependency-closed ready count `>= CUTOFF_SIZE` | Активируй oldest ordered compatible prefix размером до `CUTOFF_SIZE`. |
 | `max_wait` | `now >= first_eligible_at + 5m` и OPEN непуст | Активируй все доступные compatible receipts, но не больше `CUTOFF_SIZE`; не жди остальных. |
-| `pool_idle` | Fresh scope показывает `active_issue_count=0` и `dispatchable_count=0`, OPEN непуст | Активируй сразу, без grace period. |
+| `pool_idle` | Fresh scope показывает `running_count=0` и `dispatchable_count=0`, OPEN непуст | Активируй сразу, без grace period. |
 | `urgent` | Ready Urgent issue, stabilization fix или rollback candidate | Активируй сразу минимальный dependency-closed urgent set; unrelated receipts оставь OPEN. |
 
-Если `ACTIVE_CUTOFF` занят, сохрани самый ранний trigger time/reason и исполни
-его сразу после terminal active state. Никогда не жди час, ожидаемый worker ETA
-или «полную волну». Dependency, которой ещё нет в ready receipts, не входит в
-cutoff и не задерживает независимый prefix.
+Если `ACTIVE_CUTOFF` занят, сохрани самый ранний trigger time/reason вместе с
+exact train head и membership digest/count. После terminal active state seal
+этот prefix раньше любого late ingest; поздний suffix остаётся новым OPEN.
+Никогда не жди час, ожидаемый worker ETA или «полную волну». Dependency, которой
+ещё нет в ready receipts, не входит в cutoff и не задерживает независимый prefix.
 
 ## Хранить явное health state
 
@@ -251,10 +309,30 @@ cutoff и не задерживает независимый prefix.
 
 Не называй default `healthy` по отсутствию сигнала. После `known-bad` верни
 его в `healthy` только по exact stabilization evidence из cutoff protocol.
-`PROMOTION_HOLD=foreign-main:*` запрещает integration ingest/seal/global gate,
+`PROMOTION_HOLD=<hold-id>:foreign-main:*` запрещает integration ingest/seal/global gate,
 default/deploy/tag/Done независимо от `HEALTH`; task-owned feature refs и
 dispatch остаются `open|good-base-only|frozen` по доказанному overlap из
 [external-main.md](external-main.md).
+
+## Соблюдать durable HOLD и PAUSE
+
+1. Любое временное ограничение shared либо issue lane записывай в repo-global
+   ledger до остановки как exact scoped record: `id`, `kind=HOLD|PAUSE`, scope,
+   reason, evidence, resume predicate, confirmation requirement, created action
+   и state. Linear comment — только projection этого record.
+2. `HOLD` снимается отдельным expected-old CAS только после machine-checkable
+   resume predicate и fresh evidence. Timeout, новый turn или отсутствие нового
+   сигнала predicate не доказывают.
+3. `PAUSE confirmation_required=yes` требует и predicate evidence, и явное
+   подтверждение пользователя после создания pause. Сохрани digest/ID этого
+   подтверждения в lift action. Goal auto-continuation, `get_goal`, compaction,
+   resume той же task и повторный preflight подтверждением не являются.
+4. В начале каждого turn и перед каждой shared mutation проверь активные scopes.
+   Не выполняй запрещённое действие и не создавай заменяющий action ticket до
+   durable lift. Незатронутые branch lanes продолжай только при доказанной
+   независимости.
+5. `PROMOTION_HOLD` остаётся compact summary, но ссылается на exact durable hold
+   ID. Unknown/contradictory hold index fail-closed для affected scopes.
 
 ## Выбирать действие по классу дефекта
 
@@ -266,17 +344,19 @@ dispatch остаются `open|good-base-only|frozen` по доказанном
 | Systemic, unattributed integration или second-generation | Зафиксируй evidence и recursion guard; не генерируй следующий fix автономно. | `integration=frozen`; dispatch оставь `good-base-only` лишь при доказанной независимости, иначе `frozen`; default push/deploy запрещены. |
 | Known-bad default/live | Поставь `default=known-bad`, затем собери минимальный urgent stabilization fix/revert. | Заморозь integration; разреши `good-base-only` branch work и один `stabilizing` cutoff по [batch-release.md](batch-release.md). |
 
-Flake повторяй ровно один раз на неизменённом SHA. Не превращай
-необъяснённый результат в pass и не маскируй известный fail как
-`not-available`.
+Targeted flake повторяй ровно один раз на неизменённом SHA. Terminal full-gate
+`GATE_RESULT` того же key не rerun-и: исправление/изменённая среда требует новой
+sealed generation/key. Не превращай необъяснённый результат в pass и не
+маскируй известный fail как `not-available`.
 
 ## Восстанавливаться без двойной мутации
 
-Полностью выполни [crash-recovery.md](crash-recovery.md). Сначала разреши owner
-и pending action, при takeover CAS-fence-ни все indexed/run-scoped guard refs,
-затем inventory/adoption. Новый epoch сам по себе не делает прошедший ранее
-worker precheck достаточным fence; terminal guard делает его atomic publication
-невозможной. Claim generation остаётся per-run/per-issue monotonic.
+Полностью выполни [crash-recovery.md](crash-recovery.md). Сначала разреши owner,
+durable HOLD/PAUSE, pending action/projection batch и terminal `GATE_RESULT`, при
+takeover CAS-fence-ни все indexed/run-scoped guard refs, затем inventory/
+adoption. Новый epoch сам по себе не делает прошедший ранее worker precheck
+достаточным fence; terminal guard делает его atomic publication невозможной.
+Claim generation остаётся per-run/per-issue monotonic.
 
 Если stale session обнаружила другой owner/epoch, она прекращает mutations и
 возвращает bounded handoff; локальный прогресс сохраняет без публикации.

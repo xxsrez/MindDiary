@@ -12,10 +12,13 @@ credentials, bearer tokens, authorization headers, secret/env values,
 - [Idempotent upsert](#idempotent-upsert)
 - [Repo-global coordinator claim](#repo-global-coordinator-claim)
 - [`RELEASE_RUN`](#release_run)
+- [`EXECUTION_INDEX`](#execution_index)
+- [`HOLD` / `PAUSE`](#hold--pause)
 - [`WORK_CLAIM`](#work_claim)
 - [`CLAIM_GUARD`](#claim_guard)
 - [`FEATURE_RECEIPT`](#feature_receipt)
 - [`DEFECT_CANDIDATE`](#defect_candidate)
+- [`GATE_RESULT`](#gate_result)
 - [`BATCH_RELEASE_RECEIPT`](#batch_release_receipt)
 - [Восстановление](#восстановить-после-прерывания)
 
@@ -55,6 +58,14 @@ updates каждого key. Не обновляй receipt для poll, нача�
 не перечитывай весь comment history без recovery-причины, scope change или
 ошибки update. Несколько полей одного checkpoint записывай одним upsert.
 
+Независимые Linear comment/status projections разрешено группировать одним
+`projection-batch` action intent и одним reconcile checkpoint. Это не
+provider-side transaction: каждый item хранит собственные `item_id`, target,
+expected-before, exact selector, request/idempotency key, payload digest,
+expected effect identity и terminal result. Reconcile выполняй item-wise;
+неизвестный/failed item не обесценивает доказанные соседние results и не
+повторяется вместе с ними.
+
 ## Repo-global coordinator claim
 
 Используй ровно один ref на весь repository, независимо от milestone и числа
@@ -89,6 +100,13 @@ provider selector, payload digest и expected effect identity; без них
 После interruption recovery сначала выясняет, был ли intent исполнен, и не
 повторяет external effect по предположению.
 
+Единственное неатомарное batch-исключение — bounded `projection-batch` только
+для независимых Linear comment/status updates. Один coordinator CAS сохраняет
+полный item vector до вызовов, один следующий CAS — item-wise results. Не
+добавляй туда feature/guard/train/cutoff/default Git refs, CI authority/waiver,
+deploy, Sites или tag: каждое такое действие сохраняет отдельный action ticket
+и exact expected-old/effect reconciliation.
+
 `owner_epoch` меняется только при новом owner/handoff/takeover. Старый owner,
 worker manifest, claim token или receipt другого epoch не имеют authority, но
 epoch сам по себе не закрывает race после worker precheck. Online publication
@@ -105,8 +123,12 @@ deploy/tag и Linear closure.
 При migration найди legacy refs вида
 `refs/heads/codex/release/<milestone>/coordinator`. Не создавай repo-global claim,
 пока любой legacy run может быть активен. После доказанного stop/terminal state
-перенеси его фактический ledger одним migration checkpoint; не объявляй старые
-artifacts недействительными и не позволяй двум namespaces владеть run.
+перенеси его фактический ledger action-ом `migrate-legacy-ledger`, exact target
+которого равен `<legacy-ref>@<legacy-full-SHA>`, добавь durable stop evidence и
+reconcile result в ancestry canonical ref. Только этот exact tip после reconcile
+игнорируется collision check; иной/продвинувшийся SHA снова блокирует. Не
+объявляй старые artifacts недействительными и не позволяй двум namespaces
+владеть run.
 
 ## RELEASE_RUN
 
@@ -127,9 +149,18 @@ COORDINATOR_REF: refs/heads/codex/release/coordinator=<commit>
 ACTION: seq=<n>; id=<uuid>; kind=<bounded>; target=<exact>;
         expected_before=<exact>; request_key=<id|none>; selector=<bounded>;
         payload_digest=<hash>; effect_identity=<exact>; status=<intent|reconciled>
+PROJECTION_BATCH: none | id=<uuid>; items=<n>; intent_digest=<hash>;
+                  results=<item-id:applied|absent|failed|ambiguous>; status=<intent|reconciled>
 COMMENT_INDEX: release_run=<comment id|none>; entries=<n>; digest=<hash>
-CLAIM_INDEX: active=<issue:g@guard-scope:guard@feature-scope:feature@worktree-id|none>;
+CLAIM_INDEX: live=<issue:g@guard-scope:guard@feature-scope:feature@worktree-id|none>;
              entries=<n>; digest=<hash>
+EXECUTION_INDEX: running_count=<n>;
+                 entries=<issue:g@executor=running|coordinator-paused|feature_ready|failed|needs-input|stopped>;
+                 digest=<hash>
+REFILL: target_seconds=60; pending_since=<ready-guard@utc|none>;
+        blocker=<none|reason>; evidence=<bounded|none>; resume_predicate=<bounded|none>
+HOLD_PAUSE_INDEX: active=<id:kind@scope|none>; entries=<n>; digest=<hash>
+GATE_INDEX: active=<gate-result-key|none>; entries=<n>; digest=<hash>
 RECOVERY: generation=<n>; cause=<resume|handoff|takeover|migration>;
           phase=<fencing|inventory|reconciling-actions|adopting|complete|needs-input>;
           previous_owner=<id/epoch|none>; inventory=<digest|none>;
@@ -150,8 +181,10 @@ INTERFERENCE: none | generation=<n>;
               remote=<expected>-><observed>/<same|ff|contains-candidate|non-ff|unknown>;
               action=<continue|quarantine|branches-only|freeze-shared|stop>;
               rebuild=<cutoff:generation@base|none>
-PROMOTION_HOLD: <none|foreign-main:<bounded reason>>
-WORKERS: requested=<1|N|auto|auto(max=N)>; effective=<n>;
+PROMOTION_HOLD: <none|hold-pause-id:foreign-main:<bounded reason>>
+WORKERS: requested_workers=<1|N|auto|auto(max=N)>; runtime_slots_total=<n>;
+         delegated_capacity=<n>; sustained_issue_capacity=<n>;
+         opportunistic_inline=<0|1>; active_target=<n>;
          coordination=<inline|dedicated|hybrid>; reason=<bounded>
 CAPABILITIES: available=<bounded>; not_available=<bounded>
 PIPELINE: open_cutoff=<id|none>; active_cutoff=<id|none>;
@@ -159,7 +192,8 @@ PIPELINE: open_cutoff=<id|none>; active_cutoff=<id|none>;
           cutoff_ref=<immutable ref=sha|none>
 OPEN_CUTOFF: none | id=<id>; generation=<n>; accepted_count=<n>;
              first_eligible_at=<utc>; cutoff_size=<n>; max_wait_at=<utc>;
-             pending_trigger=<none|reason@utc>
+             pending_trigger=<none|id:reason@utc>; pending_train_head=<sha|none>;
+             pending_membership=<count+digest|none>
 HEALTH: default=<unknown|healthy|pending|drifted|known-bad|stabilizing>;
         last_known_good=<sha>; known_bad=<sha|none>;
         dispatch=<open|good-base-only|stabilization-only|frozen>;
@@ -202,6 +236,58 @@ deadline. Детали — в [crash-recovery.md](crash-recovery.md).
 обновляй только при обнаружении/смене disposition, rebuild, reconciliation или
 terminal `needs-input`, не при неизменном snapshot. Не записывай file contents.
 
+`OPEN_CUTOFF.pending_*` — immutable boundary ticket, пока другой cutoff active.
+Защёлкни exact train head и ordered membership digest в момент первого trigger.
+После terminal active cutoff сначала seal-ни этот exact prefix, затем принимай
+late ingest; поздний suffix создаёт следующий OPEN и не меняет ticket.
+
+## EXECUTION_INDEX
+
+Это bounded authoritative index occupancy в repo-global coordinator ledger, а
+не Linear comment и не замена guard. Key каждой записи:
+`<run_id>:<issue_id>:<claim_generation>`.
+
+```text
+ISSUE: <identifier>; <id>; claim_generation=<n>
+EXECUTOR: kind=<agent|coordinator-inline>; task_id=<stable id|unknown>
+EXECUTION_STATE: running | coordinator-paused | feature_ready | failed |
+                 needs-input | stopped
+READY_GUARD: <ref@ack-sha|none>; FEATURE_SHA: <full|none>
+READY_GUARD_OBSERVED_AT: <utc|none>
+TRANSITION_AT: <utc>; EVIDENCE: <bounded>
+```
+
+Только `running` входит в `running_count` и занимает issue slot. После
+валидированного durable ready guard сначала запиши `feature_ready` и освободи
+slot; claim/guard остаются в `CLAIM_INDEX` до `integrated|excluded|retired`
+terminal disposition. Refilling использует этот index, а не число live claims.
+Нормальный missed-refill не записывай; если ready-compatible slot не заполнен
+за 60 секунд, обнови `REFILL.blocker/evidence/resume_predicate` одним переходом.
+
+## HOLD / PAUSE
+
+Key: `<run_id>:<hold_or_pause_id>`. Авторитетный record хранится в
+repo-global coordinator ledger; Linear — только необязательная projection.
+
+```text
+STATE: active | lifted
+KIND: HOLD | PAUSE
+SCOPE: <issue/ref/path|dispatch|integration|gate|default|deploy|tag|linear|all-shared>
+REASON: <bounded>
+EVIDENCE: <exact observation/receipt/action>
+RESUME_PREDICATE: <machine-checkable condition>
+CONFIRMATION: required=<yes|no>; after=<created-action-id>;
+              evidence=<user-message-id/digest|none>
+CREATED: action=<id>; at=<utc>
+LIFTED: action=<id|none>; at=<utc|none>; evidence=<bounded|none>
+```
+
+`HOLD` снимается отдельным expected-old CAS после fresh predicate evidence.
+`PAUSE` с `required=yes` дополнительно требует явное подтверждение пользователя,
+полученное после `CREATED.action`. Goal auto-continuation, новый turn,
+compaction, timeout и same-owner resume не являются confirmation. Пока record
+active, запрещены только его scopes; unknown/contradictory index fail-closed.
+
 ## WORK_CLAIM
 
 Key: `<run_id>:<issue_id>`.
@@ -217,9 +303,14 @@ RUN_ID: <id>; RUN_KEY: <random >=128-bit hex>; OWNER: id=<uuid>; epoch=<n>
 CLAIM: generation=<n>; token=<opaque non-secret id>
 PROJECT_ID: <id>
 RELEASE_ID: <id>
-ISSUE: <identifier>; <id>; updated_at=<timestamp>
+ISSUE: <identifier>; <id>; issue_updated_at=<operational timestamp>;
+       scope_fingerprint=<semantic digest>
 EXECUTOR: kind=<agent|coordinator-inline>; task_id=<stable id|unknown>;
-          runtime_state=<running|terminal|unknown>
+          runtime_liveness=<running|terminal|unknown>
+EXECUTION: state=<running|coordinator-paused|feature_ready|failed|needs-input|stopped>;
+           evidence=<execution-index key/transition>
+INTEGRATION: state=<not-queued|queued|accepted|excluded|terminal>;
+             cutoff=<id:generation|next-open|none>; evidence=<key|none>
 ROOT_BASE: sha=<full>; tree=<oid>; origin_default=<full>
 BASE: sha=<full>; class=<current-default|last-known-good|stabilization>;
       dependency_shas=<ordered refs или none>
@@ -229,6 +320,13 @@ FEATURE_REF: scope=<origin|local-only>; ref=<branch/ref или none>;
 GUARD_REF: scope=<origin|local-only>; ref=<exact>; tip=<sha>;
            publish=<atomic-online|coordinator-only>
 WORKTREE: id=<uuid>; branch=<exact>; path_hint=<basename>; head_at_dispatch=<sha>
+ISOLATION: mutable_build_dir=<absolute task-owned>; tmp_dir=<absolute task-owned>;
+           runtime_dir=<absolute task-owned>;
+           cache_mode=<content-addressed|isolated>; cache_dir=<absolute>;
+           ports=<unique integers|none>; env=<non-secret keys+digest|none>
+VALIDATION_CONTRACT: check_class=targeted-feature;
+                     targeted_checks=<exact commands/check ids>;
+                     full_gate=deferred-to-cutoff
 CHECKPOINT: state=<none|local-commit|origin-checkpoint|ready>;
             head=<sha|none>; ref=<exact|none>; at=<utc|none>
 RECOVERY: disposition=<none|reattach|adopt-ready|resume-origin|resume-local-commit|
@@ -251,6 +349,11 @@ run-key/epoch/claim suffix, например
 `RUN_ID + OWNER.id + OWNER.epoch + CLAIM.generation + CLAIM.token`. Старый result можно
 использовать лишь как неавторитетный artifact после recovery и повторной
 проверки exact SHA. Stale timestamp сам по себе не разрешает захват.
+
+`STATUS` и live guard выражают authority, `EXECUTION.state` — только occupancy,
+`INTEGRATION.state` — судьбу feature. `feature_ready` освобождает slot, но не
+переводит claim в `released`: release/supersede/retire допустимы лишь после
+terminal guard с exact integration/retirement evidence.
 
 ## CLAIM_GUARD
 
@@ -291,7 +394,9 @@ STATUS: ready | failed | needs-input | superseded | retired
 GENERATION: <n>
 RUN_ID: <id>; RUN_KEY: <random >=128-bit hex>; OWNER: id=<uuid>; epoch=<n>
 CLAIM: generation=<n>; token=<opaque non-secret id>
-ISSUE: <identifier>; <id>; scope_updated_at=<timestamp>
+ISSUE: <identifier>; <id>; issue_updated_at=<operational timestamp>
+SCOPE: fingerprint_start=<semantic digest>; fingerprint_final=<semantic digest>;
+       disposition=<unchanged|adapted>
 ROOT_BASE: sha=<full>; tree=<oid>
 BASE: sha=<full>; tree=<oid>
 DEPENDENCIES: <ordered issue=sha@origin_ref или none>
@@ -299,7 +404,9 @@ FEATURE: sha=<full>; tree=<oid>; ref=<origin|local-only>:<ref=sha>
 GUARD: scope=<origin|local-only>; ref=<exact>; acknowledgement=<sha|none>
 OWNERSHIP_PATHS: <компактный список>
 AFFECTED_SURFACES: <domain/ui/build/docs/...>
+CHECK_CLASS: targeted-feature
 CHECKS: <affected commands и pass/fail; без полного лога>
+FULL_GATE: deferred-to-cutoff
 RUNTIME: <проверенный local/UI/protocol flow или none>
 GAPS: <точная граница или none>
 DIRTY_REMAINDER: <сохранённые чужие paths или none>
@@ -312,6 +419,14 @@ UPDATED_AT: <timestamp>
 
 `ready` доказывает feature-scoped результат, но не full integrated gate,
 production readiness или право менять external state.
+
+`scope_fingerprint` вычисляй как SHA-256 compact UTF-8 JSON с sorted keys/arrays:
+milestone membership, title/description/acceptance, scope-bearing attachments/
+non-receipt comments и release-blocking relations с exact IDs. Исключай status,
+priority, assignee, `updatedAt` и comments с marker `ship-linear-release`.
+Изменение одного Linear `updatedAt` не делает artifact stale; изменение
+fingerprint требует adaptation либо нового claim. Worker и ingest выполняют
+только targeted checks: full repo suite всегда остаётся `deferred-to-cutoff`.
 
 `GAPS` различает `not-available` и известный fail. Недоступная external
 platform, cloud binding, real client/browser/device или trace остаётся честным
@@ -347,6 +462,48 @@ UPDATED_AT: <timestamp>
 Если feature исключена или reverted, её issue остаётся незавершённой, а
 независимый cutoff может продолжиться.
 
+## GATE_RESULT
+
+Key: `<run_id>:<cutoff_id>:g<generation>:<validation_key_digest>`.
+Авторитетный terminal result создаёт только
+`.agents/skills/ship-linear-release/scripts/gatectl.py`; `run` дедуплицирует
+execution lock-ом и атомарно пишет result, `status` читает тот же key после
+compaction/restart. Coordinator затем сохраняет key/artifact digest в
+repo-global ledger и проецирует его в batch receipt.
+
+```text
+STATUS: planned | running | passed | failed | interrupted
+RUN_ID: <id>; RUN_KEY: <hex>; OWNER: id=<uuid>; epoch=<n>
+CUTOFF: <id>; generation=<n>; cutoff_ref=<immutable exact ref@sha>
+CANDIDATE: sha=<full>; tree=<oid>
+VALIDATION_KEY: tree=<oid>; gate_contract=<hash>; environment=<hash>
+GATECTL_KEY: cutoff=<id>; generation=<n>; candidate=<full>;
+             environment=<hash>; plan_digest=<hash>
+CHECK_CLASS: full-cutoff
+PLAN: digest=<hash>; steps=<ordered non-shell argv vectors>;
+      coverage=<bounded>; duplicate_subcommands=<none>
+PROCESS: identity=<pid/task|none>; started_at=<utc|none>; terminal_at=<utc|none>
+RESULT_ARTIFACT: path=<task-owned exact|none>; digest=<hash|none>;
+                 atomic=<yes|none>
+RESULT: exit=<int|none>; outcome=<pass|fail|interrupted|none>;
+        failing_step=<bounded|none>; log_digest=<hash|none>
+ADOPTED_AFTER: <none|compaction|lost-handle|recovery>
+UPDATED_AT: <utc>
+```
+
+Для sealed generation сформируй ровно один canonical ordered full-gate plan.
+Каждый step — отдельный argv без shell; helper выполняет steps последовательно,
+останавливается на первом fail и сохраняет его index в terminal result.
+Используй существующий aggregate command, когда он покрывает required
+subcommands, и не добавляй их отдельно до/после него. Worker/ingest results с
+`CHECK_CLASS=targeted-*` не заменяют этот gate. При lost handle сначала вызови
+`gatectl.py status`: terminal
+`passed|failed` усынови без rerun, `running` не дублируй. `interrupted` можно
+продолжить только тем же exact request через `gatectl.py run`, когда `status`
+доказал отсутствие owner lock; unknown reconciliation fail-closed. Новый
+plan/key разрешён только новой sealed generation или доказанным изменением
+validation key; terminal fail того же key не обходи повторным `run`.
+
 ## BATCH_RELEASE_RECEIPT
 
 Key: `<run_id>:<cutoff_id>`.
@@ -368,7 +525,9 @@ FEATURES: <topological identifier=base/dependencies->feature_sha@origin_ref>
 EXCLUDED_FEATURES: <identifier=sha+reason или none>
 CANDIDATE: sha=<full>; tree=<oid>
 VALIDATION_KEY: tree=<oid>; gate=<hash>; env=<hash>
-VALIDATION: run=<pass/fail+timestamp> | reused=<receipt/key> | none
+GATE_RESULT: key=<exact>; status=<running|passed|failed|interrupted>;
+             artifact_digest=<hash|none>; adopted_after=<none|compaction|lost-handle|recovery>
+VALIDATION: gate_result=<key@passed|key@failed> | reused=<exact key> | none
 PREPUSH_CI: sha=<full>; run/check=<id|not-available>; status=<terminal|none|pending-outage>
 DEFAULT: expected_old=<full>; observed_before=<full>; published=<full|none>;
          observed_after=<full|unknown>; cas=<pass|fail|pending>
@@ -406,7 +565,7 @@ integrated gate и exact default плюс terminal CI outcome.
 всех условий протокола разрешает `integrated`/`released`, `LINEAR_DONE`, release
 claims и завершение goal. Не оставляй такой receipt в `pending-outage`.
 
-`STATUS: gate-passed` и `VALIDATION: run=pass` могут сосуществовать с
+`STATUS: gate-passed` и `VALIDATION: gate_result=<key@passed>` могут сосуществовать с
 `not-available` в `GAPS`, если все проверки capability boundary выполнены.
 Само отсутствие external path не переводит receipt в `failed`, если acceptance
 его не требует; требуемое, но недоступное evidence нельзя считать pass.
@@ -422,16 +581,20 @@ gate и достижим из task-owned offline aggregate ref, но remote push
 ## Восстановить после прерывания
 
 Выполни полный [crash-recovery.md](crash-recovery.md). Порядок источников:
-coordinator/action/indexes -> authoritative runtime liveness -> exact origin
-guard/feature/train/cutoff/default refs и tags -> foreign-main -> exact-SHA CI/
-Sites -> live Linear -> task-owned local artifacts. Внутри pipeline сначала
-разреши pending action, затем ACTIVE cutoff, OPEN cutoff и claims.
+coordinator/action/claim/execution/hold/gate indexes -> authoritative runtime
+liveness -> exact origin guard/feature/train/cutoff/default refs и tags ->
+foreign-main -> exact-SHA CI/Sites -> live Linear -> task-owned local artifacts.
+Внутри pipeline сначала сохрани active `HOLD/PAUSE`, затем разреши pending
+action/projection batch и `gatectl.py status`, ACTIVE cutoff, latched pending
+boundary, OPEN cutoff и claims. Confirmation-required pause не снимается
+автоматическим Goal continuation или recovery.
 
 Refs, CI и Sites facts авторитетнее пересказа в comment; Linear определяет
-актуальный scope, но не стирает run artifacts; foreign checkout не source of
-truth. Late receipt не продвигает pipeline без current authority. Exact stale
-SHA можно усыновить только новым monotonic claim generation с fresh guard/ref и
-повторной scope/ancestry/check проверкой. Никогда не восстанавливай secret из
+актуальный semantic scope, но не стирает run artifacts; operational `updatedAt`
+не заменяет `scope_fingerprint`, foreign checkout не source of truth. Late
+receipt не продвигает pipeline без current authority. Exact stale SHA можно
+усыновить только новым monotonic claim generation с fresh guard/ref и повторной
+scope/ancestry/targeted-check проверкой. Никогда не восстанавливай secret из
 receipt или лога.
 
 При несовпадении contract source/digest заморозь dispatch/integration, сохрани

@@ -88,17 +88,28 @@ dry-run                                   -> только read-only план
 
 Число должно быть положительным; не принимай число issue, batch, версии или
 budget за worker count. Несовместимые числа требуют одного короткого вопроса.
-`N` — число одновременно исполняемых issue; coordinator/cutoff/deploy не
-вычитаются. Вычисли `effective_workers` по runtime capacity и безопасным
-CPU/RAM/port limits, затем `active_target=min(effective_workers, compatible ready)`.
-При дефиците capacity сообщи requested/effective/reason и продолжай без
-подтверждения. `workers=1` — coordinator-inline в отдельном issue worktree.
+`N` — запрошенное число одновременно исполняемых issue, но не обещание
+несуществующих runtime slots. Зафиксируй отдельно:
+
+```text
+requested_workers; runtime_slots_total; delegated_capacity;
+sustained_issue_capacity; opportunistic_inline; active_target
+```
+
+`runtime_slots_total` включает root; dedicated coordinator использует только
+`delegated_capacity`. Hybrid inline допустим лишь при пустой coordinator queue,
+сразу уступает control-plane работе и никогда не учитывается как sustained
+concurrent lane. `active_target=min(sustained_issue_capacity, compatible ready)`.
+При дефиците capacity сообщи эти значения и конкретный
+limit; не называй time-sliced root ещё одним устойчивым worker. `workers=1`
+может быть fused coordinator-inline в отдельном issue worktree.
 
 До первой мутации дай одну строку:
 
 ```text
 mode=build-and-ship-milestone; profile=<design|build|release>; unfinished=<n>;
-ready=<n>; workers=<requested/effective>; owner=<new|same|other>; route=<route>;
+ready=<n>; workers=<requested/sustained>; runtime-slots=<total>;
+delegated=<n>; opportunistic-inline=<0|1>; owner=<new|same|other>; route=<route>;
 pipeline=<state>; foreign-main=<state>; gates=<available>; gaps=<unavailable>
 ```
 
@@ -135,8 +146,12 @@ rewrite, другой milestone/project, AWS fallback или новая infrastr
 
 Linear status/comment projection не должна задерживать worker после выигранного
 durable Git claim и валидного manifest. Сначала обеспечь fencing и dispatch;
-затем в том же bounded transition проецируй `In Progress`/receipt. Исключение —
-scope freshness, без которой worker мог бы реализовать уже отменённую issue.
+затем проецируй `In Progress`/receipt. Несколько независимых Linear comment/
+status updates можно провести одним projection-batch intent и одним item-wise
+reconcile с отдельными selectors, idempotency keys, payload digests и results.
+Никогда не включай в такой batch Git refs, train/cutoff/default, deploy или tag.
+Исключение fast path — scope freshness, без которой worker мог бы реализовать
+уже отменённую issue.
 
 ## Подготовить и запустить worker
 
@@ -160,8 +175,36 @@ python3 .agents/skills/ship-linear-release/scripts/shipctl.py docs \
 
 Manifest содержит как минимум run/owner/epoch, claim generation/token,
 issue/project/milestone IDs, repo/worktree/branch, feature+guard refs/tip,
-128-bit `run_key`, root/base/dependency SHAs, queue fingerprint, issue
-`updatedAt`, ownership paths, isolated env/cache/tmp/ports и remote mode.
+128-bit `run_key`, root/base/dependency SHAs, queue fingerprint, semantic
+`scope_fingerprint`, отдельный operational Linear `updatedAt`, ownership paths,
+isolated env/cache/tmp/ports и remote mode. Status/comment projections могут
+менять `updatedAt`, но не `scope_fingerprint`.
+
+Machine-checkable isolation/validation fragment обязателен:
+
+```json
+{
+  "issue_updated_at": "<operational timestamp>",
+  "scope_fingerprint": "<semantic digest>",
+  "isolation": {
+    "mutable_build_dir": "<absolute task-owned path>",
+    "tmp_dir": "<absolute task-owned path>",
+    "runtime_dir": "<absolute task-owned path>",
+    "cache_mode": "content-addressed|isolated",
+    "cache_dir": "<absolute path>",
+    "ports": [],
+    "env": {}
+  },
+  "validation": {
+    "check_class": "targeted-feature",
+    "targeted_checks": ["<exact command/check id>"],
+    "full_gate": "deferred-to-cutoff"
+  }
+}
+```
+
+`ports` содержит уникальные integer ports, `env` — только явные non-secret
+task-scoped values; `targeted_checks` не пуст и не включает full repo suite.
 
 Delegated lane запускай сразу как
 `spawn_agent(agent_type="worker", fork_turns="none")`; worker не создаёт
@@ -170,9 +213,13 @@ subagents и не переиспользуется для другой issue. П
 Coordinator-inline следует тому же протоколу в отдельном worktree. Worker не
 меняет default, Linear, Sites, tags или milestone state.
 
-Проверяй receipt только по exact identities, HEAD/ref/guard, scope freshness,
-ownership diff и заявленным checks. `ready` отправляй в ingest; failed остаётся
-unfinished. Slot освободи и немедленно заполни следующей compatible issue.
+Проверяй receipt только по exact identities, HEAD/ref/guard, semantic scope
+freshness, ownership diff и заявленным targeted checks. После durable `ready`
+guard соблюдай порядок: validate receipt -> перевести execution state из
+`running` в `feature_ready` и освободить slot -> refill compatible issue ->
+enqueue ingest -> batch projections/bookkeeping. Цель ready-guard -> refill —
+не более 60 секунд; при пропуске durable-запиши точный blocker/evidence. Claim и
+guard при `feature_ready` остаются live до terminal integration disposition.
 
 ## Continuous pool и cutoffs
 
@@ -183,6 +230,8 @@ unfinished. Slot освободи и немедленно заполни сле�
 - `OPEN_CUTOFF` принимает ready refs по одной feature после cheap ingest gate.
   Один `ACTIVE_CUTOFF` выполняет global gate/default/deploy. Поздние refs идут
   в следующий cutoff; cutoff не ждёт in-flight workers.
+- Trigger при занятом ACTIVE защёлкивает exact train head+membership digest;
+  после terminal ACTIVE этот prefix seal-ится раньше любого late ingest.
 - Worker использует exact ready ancestor только для code dependency; release
   dependency ждёт terminal release evidence.
 - Same-path descendant superseded feature получает fresh claim/branch.
@@ -191,11 +240,20 @@ unfinished. Slot освободи и немедленно заполни сле�
 - Общие dependency caches допускаются только content-addressed; mutable build,
   tmp, runtime и ports изолированы.
 
-На feature запускай только targeted checks, smoke и `git diff --check`; полный
-repository gate — один раз на validation key cutoff. Не poll-и tight loop:
-mailbox с bounded timeout; внешние jobs — compact status раз в 45–60 секунд,
-failing log один раз и только нужный range. Linear receipts — transitions, не
-telemetry.
+На worker/ingest запускай только targeted checks, smoke и `git diff --check`;
+full repository gate всегда принадлежит sealed cutoff. Для каждой
+`cutoff/generation/validation key` создай один durable `GATE_RESULT` и один
+deduplicated canonical plan: не запускай aggregate command вместе с уже
+покрытыми им subcommands. Terminal artifact после compaction/lost handle усынови,
+а не запускай gate снова. Не poll-и tight loop: mailbox с bounded timeout;
+внешние jobs — compact status раз в 45–60 секунд, failing log один раз и только
+нужный range. Linear receipts — transitions, не telemetry.
+
+Перед каждым новым/автоматически продолженным goal turn проверь durable scoped
+`HOLD`/`PAUSE`. Не выполняй запрещённую scope, пока записанный resume predicate
+не доказан. `PAUSE` с `confirmation_required` переживает Goal continuation и
+снимается только отдельным CAS после явного подтверждения пользователя;
+автопродолжение, timeout или новый turn подтверждением не являются.
 
 ## Gate, default и release
 
