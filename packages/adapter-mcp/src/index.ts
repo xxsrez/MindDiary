@@ -119,7 +119,10 @@ const SENSITIVE_HEADERS = new Set([
 const SAFE_PROTOCOL_HEADERS = new Set([
   "accept",
   "content-type",
+  "mcp-method",
+  "mcp-name",
   "mcp-protocol-version",
+  "mcp-session-id",
 ]);
 const SAFE_AUTHORIZATION_DENIALS = new Set([
   "access_denied",
@@ -203,25 +206,205 @@ function jsonRpcError(
   code: number,
   message: string,
   status: number,
+  headers: Readonly<Record<string, string>> = {},
 ): Response {
-  return jsonResponse(status, {
-    jsonrpc: "2.0",
-    id: id ?? null,
-    error: { code, message },
+  return jsonResponse(
+    status,
+    {
+      jsonrpc: "2.0",
+      id: id ?? null,
+      error: { code, message },
+    },
+    headers,
+  );
+}
+
+type McpResponseFormat = "json" | "sse";
+
+interface AcceptedRepresentation {
+  readonly format: McpResponseFormat;
+  readonly preference: number;
+  readonly position: number;
+}
+
+interface McpJsonRpcRequest {
+  readonly jsonrpc: "2.0";
+  readonly id?: string | number;
+  readonly method: string;
+  readonly params: Record<string, unknown>;
+}
+
+interface McpProtocolError {
+  readonly code: -32600 | -32020 | -32021 | -32022;
+  readonly message: string;
+}
+
+function noContentResponse(status: number): Response {
+  return new Response(null, {
+    status,
+    headers: { "cache-control": "no-store" },
   });
 }
 
+function jsonRpcResult(
+  id: string | number | undefined,
+  result: unknown,
+  format: McpResponseFormat,
+): Response {
+  if (id === undefined) return noContentResponse(202);
+  const payload = { jsonrpc: "2.0", id, result };
+  if (format === "json") return jsonResponse(200, payload);
+  return new Response(`event: message\ndata: ${JSON.stringify(payload)}\n\n`, {
+    status: 200,
+    headers: {
+      "cache-control": "no-store",
+      "content-type": "text/event-stream; charset=utf-8",
+      "x-accel-buffering": "no",
+    },
+  });
+}
+
+function acceptedResponseFormat(value: string | null): McpResponseFormat | null {
+  if (value === null) return null;
+  const supported = new Map<McpResponseFormat, AcceptedRepresentation>();
+  for (const [position, item] of value.split(",").entries()) {
+    const [rawMediaType, ...rawParameters] = item.split(";");
+    const mediaType = rawMediaType?.trim().toLowerCase();
+    const format =
+      mediaType === "application/json"
+        ? "json"
+        : mediaType === "text/event-stream"
+          ? "sse"
+          : null;
+    if (format === null) continue;
+
+    let preference = 1;
+    for (const rawParameter of rawParameters) {
+      const [rawName, rawValue] = rawParameter.split("=", 2);
+      if (rawName?.trim().toLowerCase() !== "q") continue;
+      const parsed = Number(rawValue?.trim());
+      preference = Number.isFinite(parsed) && parsed >= 0 && parsed <= 1 ? parsed : 0;
+    }
+    if (preference <= 0) continue;
+    const existing = supported.get(format);
+    if (
+      existing === undefined ||
+      preference > existing.preference ||
+      (preference === existing.preference && position < existing.position)
+    ) {
+      supported.set(format, { format, preference, position });
+    }
+  }
+
+  const json = supported.get("json");
+  const sse = supported.get("sse");
+  if (json === undefined || sse === undefined) return null;
+  if (sse.preference !== json.preference) {
+    return sse.preference > json.preference ? "sse" : "json";
+  }
+  return sse.position < json.position ? "sse" : "json";
+}
+
+function hasJsonContentType(value: string | null): boolean {
+  return value?.split(";", 1)[0]?.trim().toLowerCase() === "application/json";
+}
+
+function validRpcId(value: unknown): value is string | number | undefined {
+  return (
+    value === undefined ||
+    typeof value === "string" ||
+    (typeof value === "number" && Number.isFinite(value))
+  );
+}
+
+function parseJsonRpcRequest(value: unknown): McpJsonRpcRequest | null {
+  if (
+    !isRecord(value) ||
+    value.jsonrpc !== "2.0" ||
+    typeof value.method !== "string" ||
+    value.method.length === 0 ||
+    !validRpcId(value.id) ||
+    !isRecord(value.params)
+  ) {
+    return null;
+  }
+  return value as unknown as McpJsonRpcRequest;
+}
+
+function nonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0;
+}
+
+function expectedMcpName(request: McpJsonRpcRequest): unknown {
+  if (request.method === "tools/call") return request.params.name;
+  if (request.method === "resources/read") return request.params.uri;
+  return null;
+}
+
+function validateProtocolEnvelope(
+  request: McpJsonRpcRequest,
+  headers: Headers,
+): McpProtocolError | null {
+  const headerVersion = headers.get("mcp-protocol-version");
+  if (headerVersion === null) {
+    return { code: -32020, message: "MCP-Protocol-Version is required." };
+  }
+  if (headerVersion !== MCP_TARGET_PROTOCOL) {
+    return { code: -32022, message: "Unsupported MCP protocol version." };
+  }
+
+  const methodHeader = headers.get("mcp-method");
+  if (methodHeader === null || methodHeader !== request.method) {
+    return { code: -32020, message: "Mcp-Method does not match the request body." };
+  }
+
+  const expectedName = expectedMcpName(request);
+  const nameHeader = headers.get("mcp-name");
+  if (expectedName === null) {
+    if (nameHeader !== null) {
+      return { code: -32020, message: "Mcp-Name is not valid for this method." };
+    }
+  } else if (!nonEmptyString(expectedName) || nameHeader !== expectedName) {
+    return { code: -32020, message: "Mcp-Name does not match the request body." };
+  }
+
+  const meta = request.params._meta;
+  if (!isRecord(meta)) {
+    return { code: -32020, message: "Request protocol metadata is required." };
+  }
+  const metaVersion = meta["io.modelcontextprotocol/protocolVersion"];
+  if (typeof metaVersion !== "string") {
+    return { code: -32020, message: "Request protocol metadata is incomplete." };
+  }
+  if (metaVersion !== MCP_TARGET_PROTOCOL || metaVersion !== headerVersion) {
+    return { code: -32022, message: "Unsupported MCP protocol version." };
+  }
+
+  const clientInfo = meta["io.modelcontextprotocol/clientInfo"];
+  if (
+    !isRecord(clientInfo) ||
+    !nonEmptyString(clientInfo.name) ||
+    !nonEmptyString(clientInfo.version)
+  ) {
+    return { code: -32020, message: "Client information is required." };
+  }
+  if (!isRecord(meta["io.modelcontextprotocol/clientCapabilities"])) {
+    return { code: -32021, message: "Client capabilities are required." };
+  }
+  return null;
+}
+
 function toolError(
-  id: unknown,
+  id: string | number | undefined,
   requestId: McpRequestId,
   code: string,
   message: string,
+  format: McpResponseFormat,
   retryable = false,
 ): Response {
-  return jsonResponse(200, {
-    jsonrpc: "2.0",
-    id: id ?? null,
-    result: {
+  return jsonRpcResult(
+    id,
+    {
       resultType: "complete",
       content: [{ type: "text", text: message }],
       structuredContent: {
@@ -235,7 +418,8 @@ function toolError(
       },
       isError: true,
     },
-  });
+    format,
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -313,8 +497,25 @@ export function createMcpHttpHandler(
 ): (request: Request) => Promise<Response> {
   return async (request: Request): Promise<Response> => {
     const requestId = dependencies.requestIds.nextRequestId();
-    if (request.method !== "POST" || pathname(request) !== MCP_ENDPOINT) {
+    if (pathname(request) !== MCP_ENDPOINT) {
       const response = jsonRpcError(null, -32600, "Invalid request", 404);
+      await safeLog(
+        dependencies.logger,
+        request,
+        requestId,
+        response,
+        "protocol_error",
+      );
+      return response;
+    }
+    if (request.method !== "POST") {
+      const response = jsonRpcError(
+        null,
+        -32600,
+        "Stateless MCP accepts POST only.",
+        405,
+        { allow: "POST" },
+      );
       await safeLog(
         dependencies.logger,
         request,
@@ -356,13 +557,95 @@ export function createMcpHttpHandler(
     }
     const actor = authentication.actor;
 
-    let rpc: Record<string, unknown>;
+    if (request.headers.has("mcp-session-id")) {
+      const response = jsonRpcError(
+        null,
+        -32020,
+        "Mcp-Session-Id is not supported by the stateless profile.",
+        400,
+      );
+      await safeLog(
+        dependencies.logger,
+        request,
+        requestId,
+        response,
+        "protocol_error",
+      );
+      return response;
+    }
+
+    if (!hasJsonContentType(request.headers.get("content-type"))) {
+      const response = jsonRpcError(
+        null,
+        -32600,
+        "Content-Type must be application/json.",
+        400,
+      );
+      await safeLog(
+        dependencies.logger,
+        request,
+        requestId,
+        response,
+        "protocol_error",
+      );
+      return response;
+    }
+
+    const responseFormat = acceptedResponseFormat(request.headers.get("accept"));
+    if (responseFormat === null) {
+      const response = jsonRpcError(
+        null,
+        -32600,
+        "Accept must allow application/json and text/event-stream.",
+        400,
+      );
+      await safeLog(
+        dependencies.logger,
+        request,
+        requestId,
+        response,
+        "protocol_error",
+      );
+      return response;
+    }
+
+    let parsed: unknown;
     try {
-      const parsed: unknown = JSON.parse(await request.text());
-      if (!isRecord(parsed)) throw new TypeError("invalid request");
-      rpc = parsed;
+      parsed = JSON.parse(await request.text());
     } catch {
       const response = jsonRpcError(null, -32700, "Parse error", 400);
+      await safeLog(
+        dependencies.logger,
+        request,
+        requestId,
+        response,
+        "protocol_error",
+      );
+      return response;
+    }
+
+    const rpc = parseJsonRpcRequest(parsed);
+    if (rpc === null) {
+      const id = isRecord(parsed) && validRpcId(parsed.id) ? parsed.id : null;
+      const response = jsonRpcError(id, -32600, "Invalid request", 400);
+      await safeLog(
+        dependencies.logger,
+        request,
+        requestId,
+        response,
+        "protocol_error",
+      );
+      return response;
+    }
+
+    const protocolError = validateProtocolEnvelope(rpc, request.headers);
+    if (protocolError !== null) {
+      const response = jsonRpcError(
+        rpc.id,
+        protocolError.code,
+        protocolError.message,
+        400,
+      );
       await safeLog(
         dependencies.logger,
         request,
@@ -377,11 +660,11 @@ export function createMcpHttpHandler(
       let response: Response;
       try {
         const definitions = await dependencies.content.listTools({ actor });
-        response = jsonResponse(200, {
-          jsonrpc: "2.0",
-          id: rpc.id ?? null,
-          result: { tools: listedTools(actor, definitions) },
-        });
+        response = jsonRpcResult(
+          rpc.id,
+          { tools: listedTools(actor, definitions) },
+          responseFormat,
+        );
       } catch {
         response = jsonResponse(500, {
           code: "internal_error",
@@ -393,13 +676,19 @@ export function createMcpHttpHandler(
         request,
         requestId,
         response,
-        response.status === 200 ? "authenticated" : "internal_error",
+        response.status === 200 || response.status === 202
+          ? "authenticated"
+          : "internal_error",
       );
       return response;
     }
 
     if (rpc.method !== "tools/call" || !isRecord(rpc.params)) {
-      const response = jsonRpcError(rpc.id, -32601, "Method not found", 404);
+      const message =
+        rpc.method === "initialize"
+          ? "Method not found; initialize is not part of the stateless 2026-07-28 profile."
+          : "Method not found";
+      const response = jsonRpcError(rpc.id, -32601, message, 404);
       await safeLog(
         dependencies.logger,
         request,
@@ -431,6 +720,7 @@ export function createMcpHttpHandler(
         requestId,
         "insufficient_scope",
         "The token does not allow content writes.",
+        responseFormat,
       );
       await safeLog(
         dependencies.logger,
@@ -487,6 +777,7 @@ export function createMcpHttpHandler(
         requestId,
         code,
         "The requested operation is not allowed.",
+        responseFormat,
         authorization.retryable === true,
       );
       await safeLog(
@@ -505,11 +796,7 @@ export function createMcpHttpHandler(
         name,
         arguments: toolArguments,
       });
-      const response = jsonResponse(200, {
-        jsonrpc: "2.0",
-        id: rpc.id ?? null,
-        result,
-      });
+      const response = jsonRpcResult(rpc.id, result, responseFormat);
       await safeLog(
         dependencies.logger,
         request,

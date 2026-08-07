@@ -44,6 +44,17 @@ function rpcCall(id, name, args) {
   };
 }
 
+function protocolMeta() {
+  return {
+    "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+    "io.modelcontextprotocol/clientInfo": {
+      name: "mind-diary-tests",
+      version: "0.0.0",
+    },
+    "io.modelcontextprotocol/clientCapabilities": {},
+  };
+}
+
 function successfulToolResult(data) {
   return {
     resultType: "complete",
@@ -223,9 +234,27 @@ async function harness() {
   }
 
   async function post(rpc, secret, options = {}) {
+    const requestBody =
+      typeof rpc === "string"
+        ? rpc
+        : {
+            ...rpc,
+            params: {
+              ...(rpc.params ?? {}),
+              _meta: rpc.params?._meta ?? protocolMeta(),
+            },
+          };
+    const method = typeof requestBody === "string" ? "tools/call" : requestBody.method;
+    const name =
+      typeof requestBody === "string" || method !== "tools/call"
+        ? undefined
+        : requestBody.params?.name;
     const headers = new Headers({
+      accept: "application/json, text/event-stream",
       "content-type": "application/json",
+      "mcp-method": method,
       "mcp-protocol-version": "2026-07-28",
+      ...(typeof name === "string" ? { "mcp-name": name } : {}),
       ...(secret === undefined ? {} : { authorization: `Bearer ${secret}` }),
       ...(options.headers ?? {}),
     });
@@ -233,7 +262,7 @@ async function harness() {
       new Request(options.url ?? "https://mind-diary.invalid/mcp", {
         method: "POST",
         headers,
-        body: typeof rpc === "string" ? rpc : JSON.stringify(rpc),
+        body: typeof requestBody === "string" ? requestBody : JSON.stringify(requestBody),
       }),
     );
   }
@@ -492,7 +521,8 @@ test("structured request logs redact headers and omit token, private body/query,
       url: "https://mind-diary.invalid/mcp?query=url-private-query-marker",
       headers: {
         cookie: "cookie-private-marker",
-        "mcp-protocol-version": "protocol-header-private-marker",
+        accept:
+          "application/json, text/event-stream; marker=protocol-header-private-marker",
         "x-private-header": "header-private-marker",
       },
     },
