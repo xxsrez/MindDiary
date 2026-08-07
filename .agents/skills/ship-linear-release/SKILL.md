@@ -42,6 +42,9 @@ tracked contract, dirty skill, delivery profile, coordinator refs, route и
   применяй [crash-recovery.md](references/crash-recovery.md);
 - `resume` — допустим только когда переданный stable owner-proof совпал; затем
   читай те же recovery references и продолжай сохранённый run;
+- `recover-owner` — same runtime owner продолжает recovery по durable phase;
+- `recover-owner-upgrade` — до любых других мутаций синхронизируй coherent
+  fast-forward contract через helper из startup-порядка ниже;
 - `normal` — прочитай [coordination.md](references/coordination.md), выполни
   compact Linear snapshot и запускай реальные issue workers.
 
@@ -148,8 +151,8 @@ rewrite, другой milestone/project, AWS fallback или новая infrastr
    ```
 
    Допустимы только `status=taken|already-owner`. Затем, как и при fresh
-   `route=recover-owner|recover-owner-upgrade; RECOVERY phase=fencing`, до
-   Linear, ручного Git и inventory сразу выполни второй bounded helper:
+   `route=recover-owner; RECOVERY phase=fencing`, до Linear, ручного Git и
+   inventory сразу выполни второй bounded helper:
 
    ```bash
    python3 .agents/skills/ship-linear-release/scripts/shipctl.py fence-guards \
@@ -163,10 +166,19 @@ rewrite, другой milestone/project, AWS fallback или новая infrastr
    продолжай inventory/adoption с `mutation_scope=recovery-only`. `cas-lost`
    означает повторить ровно этот helper: он усыновляет свой pending intent и
    уже fenced tips. Другой результат запрещает дальнейшие мутации.
-   `recover-owner-upgrade` допустим только для того же runtime owner, coherent
-   старого contract и fast-forward `CONTRACT_SOURCE_SHA -> origin/main`; helper
-   одновременно pin-ит exact новый contract и сохраняет
-   `CONTRACT_MIGRATED_FROM`. Другой contract mismatch остаётся read-only.
+   При `route=recover-owner-upgrade` и pending/active fencing тот же
+   `fence-guards` одновременно pin-ит новый contract. После завершённого
+   fencing первым mutable call вместо него выполни:
+
+   ```bash
+   python3 .agents/skills/ship-linear-release/scripts/shipctl.py sync-contract \
+     --repo "$PWD" --remote origin --default main
+   ```
+
+   Допустимы `status=synced|already-synced`; helper усыновляет свой pending
+   intent и сохраняет `CONTRACT_MIGRATED_FROM`. Upgrade допустим только для
+   того же runtime owner, coherent старого contract и fast-forward
+   `CONTRACT_SOURCE_SHA -> origin/main`; другой mismatch остаётся read-only.
 4. Генерируй identities детерминированным helper, не JavaScript snippets:
 
    ```bash
@@ -216,6 +228,9 @@ issue/project/milestone IDs, repo/worktree/branch, feature+guard refs/tip,
 `scope_fingerprint`, отдельный operational Linear `updatedAt`, ownership paths,
 isolated env/cache/tmp/ports и remote mode. Status/comment projections могут
 менять `updatedAt`, но не `scope_fingerprint`.
+`issue_id` — Linear UUID, когда connector его реально выдаёт; если connector
+нормализует `id` до `AND-N`, используй этот exact provider identifier только
+при равенстве `issue_id == issue_identifier`. UUID не выдумывай.
 
 Machine-checkable isolation/validation fragment обязателен:
 

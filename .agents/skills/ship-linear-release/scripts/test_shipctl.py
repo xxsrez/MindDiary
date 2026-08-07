@@ -275,6 +275,17 @@ class ManifestTest(GitMixin, unittest.TestCase):
         self.assertIn("invalid:isolation.ports", result["errors"])
         self.assertIn("invalid:scope_fingerprint", result["errors"])
 
+    def test_accepts_connector_identifier_when_linear_uuid_is_not_exposed(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="shipctl-manifest-") as directory:
+            _, _, payload = self.manifest_fixture(Path(directory))
+            payload["issue_id"] = payload["issue_identifier"]
+            code, result = self.invoke(payload)
+            payload["issue_id"] = "AND-147"
+            mismatch_code, mismatch = self.invoke(payload)
+        self.assertEqual((code, result["status"]), (0, "valid"))
+        self.assertEqual(mismatch_code, 2)
+        self.assertIn("invalid:issue_id", mismatch["errors"])
+
 
 class PreflightTest(GitMixin, unittest.TestCase):
     PROOF = "a" * 64
@@ -654,6 +665,65 @@ class PreflightTest(GitMixin, unittest.TestCase):
             _, result, _ = self.preflight(repo, self.PROOF)
         self.assertEqual(result["route"], "recovery")
         self.assertIn("active-contract-mismatch-or-unknown", result["reasons"])
+
+    def test_sync_contract_upgrades_same_owner_recovery_and_is_idempotent(self) -> None:
+        thread_id = "019fdcce-1fee-71d0-8d5d-6566cdf2d94b"
+        proof = MODULE.hashlib.sha256(thread_id.encode()).hexdigest()
+        with tempfile.TemporaryDirectory(prefix="shipctl-sync-") as directory:
+            repo, _ = self.fixture(Path(directory))
+            old_head = self.git(repo, "rev-parse", "HEAD")
+            old_contract = self.git(repo, "rev-parse", f"HEAD:{MODULE.SKILL_PATH}")
+            parent = self.push_coordinator(
+                repo,
+                MODULE.CANONICAL_COORDINATOR_REF,
+                self.coordinator_message(
+                    repo,
+                    state="recovering",
+                    proof=proof,
+                    contract=old_contract,
+                    extra=(
+                        f"OWNER_ID: {uuid.uuid4()}\n"
+                        "OWNER_PROOF_KIND: runtime-task-id\n"
+                        f"RUN_ID: {uuid.uuid4()}\n"
+                        f"RUN_KEY: {'a' * 32}\n"
+                        f"PROJECT_ID: {uuid.uuid4()}\n"
+                        f"MILESTONE_ID: {uuid.uuid4()}\n"
+                        "EPOCH: 2\n"
+                        f"CONTRACT_SOURCE_SHA: {old_head}\n"
+                    ),
+                ),
+            )
+            (repo / MODULE.SKILL_PATH / "SKILL.md").write_text(
+                "---\nname: test\n---\n# synced\n", encoding="utf-8"
+            )
+            self.git(repo, "add", MODULE.SKILL_PATH)
+            self.git(repo, "commit", "-m", "new recovery contract")
+            new_head = self.git(repo, "rev-parse", "HEAD")
+            new_contract = self.git(repo, "rev-parse", f"HEAD:{MODULE.SKILL_PATH}")
+            self.git(repo, "push", "origin", "main")
+            args = mock.Mock(repo=str(repo), remote="origin", default="main")
+            with mock.patch.dict(MODULE.os.environ, {"CODEX_THREAD_ID": thread_id}):
+                _, before, _ = self.preflight(repo)
+                with io.StringIO() as output, redirect_stdout(output):
+                    code = MODULE.command_sync_contract(args)
+                    result = json.loads(output.getvalue())
+                with io.StringIO() as output, redirect_stdout(output):
+                    repeat_code = MODULE.command_sync_contract(args)
+                    repeat = json.loads(output.getvalue())
+                _, after, _ = self.preflight(repo)
+            observed = self.git(repo, "ls-remote", "origin", MODULE.CANONICAL_COORDINATOR_REF).split()[0]
+            message = self.git(repo, "show", "-s", "--format=%B", observed)
+            first_parent = self.git(repo, "rev-parse", f"{observed}^^")
+        self.assertEqual(before["route"], "recover-owner-upgrade")
+        self.assertEqual((code, result["status"]), (0, "synced"))
+        self.assertEqual((repeat_code, repeat["status"]), (0, "already-synced"))
+        self.assertEqual(after["route"], "recover-owner")
+        self.assertEqual(first_parent, parent)
+        metadata = MODULE.fields(message)
+        self.assertEqual(metadata["CONTRACT_SOURCE_SHA"], new_head)
+        self.assertEqual(metadata["CONTRACT_DIGEST"], new_contract)
+        self.assertEqual(metadata["ACTION_KIND"], "sync-contract")
+        self.assertEqual(metadata["ACTION_STATUS"], "reconciled")
 
     def test_dirty_skill_or_agents_blocks_dispatch(self) -> None:
         with tempfile.TemporaryDirectory(prefix="shipctl-") as directory:

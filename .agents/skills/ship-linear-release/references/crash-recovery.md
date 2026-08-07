@@ -112,6 +112,9 @@ owner, который lift-ит каждый scope только по его evid
    compact layout (`RUN_ID; RUN_KEY; ISSUE`, `OWNER; CLAIM`, `FEATURE`), но
    descendant fence всегда canonicalizes metadata; иная неоднозначная legacy
    форма остаётся fail-closed.
+   Если coherent contract fast-forward появился уже после fencing, не повторяй
+   fence: на `route=recover-owner-upgrade` вызови idempotent
+   `shipctl.py sync-contract`, затем продолжай прежнюю recovery phase.
 2. До dispatch прочитай `CLAIM_INDEX`, `EXECUTION_INDEX` и bounded namespace
    guard refs текущего `run_key`. `CLAIM_INDEX` определяет authority/recovery,
    `EXECUTION_INDEX` — occupancy; live ready claim не означает running slot.

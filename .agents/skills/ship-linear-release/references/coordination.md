@@ -197,11 +197,12 @@ descendant старого coordinator tip и expected-old CAS-продвигае
 repo-global coordinator ref. После `taken|already-owner` разрешён лишь recovery
 scope до fencing. На `RECOVERY phase=fencing` следующим mutable call запускай
 `shipctl.py fence-guards`; это же единственный mutable call при
-`route=recover-owner-upgrade`. Такой route требует same runtime owner,
-coherent pinned contract и fast-forward source до exact default, а intent
-сохраняет contract migration. Не собирай guard commits/refspecs через shell или
-JavaScript. `PROMOTION_HOLD` продолжает запрещать integration/default/deploy
-независимо от выигранного ownership.
+`route=recover-owner-upgrade` с pending/active fencing. После fencing такой
+route сначала запускает `shipctl.py sync-contract`. Оба пути требуют same
+runtime owner, coherent pinned contract и fast-forward source до exact default,
+а intent сохраняет contract migration. Не собирай guard commits/refspecs через
+shell или JavaScript. `PROMOTION_HOLD` продолжает запрещать
+integration/default/deploy независимо от выигранного ownership.
 
 ## Менять limit немедленно и безопасно
 
