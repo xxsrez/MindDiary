@@ -34,6 +34,7 @@ import {
 import type { OkfBundleFixture } from "@mind-diary/okf-codec";
 
 export * from "./mind-discovery.js";
+export * from "./mind-browse.js";
 
 export const CONTENT_QUERIES = [
   "list_minds",
