@@ -101,11 +101,14 @@ import type {
   OrdinaryMindRouteSnapshot,
   OrdinaryMindSnapshot,
   OrdinaryMindStore,
+  OwnershipTransferSnapshot,
   RenameOrdinaryMindRequest,
   RenameOrdinaryMindResult,
   SpaceTargetPurgeResult,
   StageContentCommitEffectsRequest,
   StageContentCommitEffectsResult,
+  TransferOrdinaryMindOwnershipRequest,
+  TransferOrdinaryMindOwnershipResult,
   VerifiedSpaceHost,
   TokenVerifier,
 } from "@mind-diary/application-ports";
@@ -1318,6 +1321,14 @@ type OrdinaryMindIdempotencyRecord =
       readonly changed: boolean;
     }
   | {
+      readonly operation: "transfer_ownership";
+      readonly principalId: Principal["principalId"];
+      readonly spaceId: KnowledgeSpace["spaceId"];
+      readonly key: TransferOrdinaryMindOwnershipRequest["idempotencyKey"];
+      readonly canonicalRequestHash: TransferOrdinaryMindOwnershipRequest["canonicalRequestHash"];
+      readonly transfer: Readonly<OwnershipTransferSnapshot>;
+    }
+  | {
       readonly operation: "create_invitation";
       readonly principalId: Principal["principalId"];
       readonly spaceId: KnowledgeSpace["spaceId"];
@@ -1401,6 +1412,68 @@ function freezeOrdinaryMindSnapshot(
   });
 }
 
+function freezeOwnershipTransferSnapshot(
+  snapshot: Readonly<OwnershipTransferSnapshot>,
+): Readonly<OwnershipTransferSnapshot> {
+  return Object.freeze({
+    mind: freezeOrdinaryMindSnapshot(snapshot.mind),
+    sourceMembership: freezeMembership(snapshot.sourceMembership),
+    targetMembership: freezeMembership(snapshot.targetMembership),
+  });
+}
+
+function sameKnowledgeSpaceRecord(
+  left: Readonly<KnowledgeSpace>,
+  right: Readonly<KnowledgeSpace>,
+): boolean {
+  return (
+    left.spaceId === right.spaceId &&
+    left.spaceHandle === right.spaceHandle &&
+    left.normalizedHandle === right.normalizedHandle &&
+    left.name === right.name &&
+    left.visibility === right.visibility &&
+    left.state === right.state &&
+    left.metadataVersion === right.metadataVersion &&
+    left.accessVersion === right.accessVersion &&
+    left.headRevisionId === right.headRevisionId &&
+    left.createdAt === right.createdAt &&
+    left.updatedAt === right.updatedAt
+  );
+}
+
+function sameMembershipRecord(
+  left: Readonly<SpaceMembership>,
+  right: Readonly<SpaceMembership>,
+): boolean {
+  return (
+    left.membershipId === right.membershipId &&
+    left.spaceId === right.spaceId &&
+    left.principalId === right.principalId &&
+    left.role === right.role &&
+    left.state === right.state &&
+    left.version === right.version &&
+    left.createdAt === right.createdAt &&
+    left.createdBy === right.createdBy &&
+    left.updatedAt === right.updatedAt &&
+    left.updatedBy === right.updatedBy
+  );
+}
+
+function sameOwnershipTransferSnapshot(
+  left: Readonly<OwnershipTransferSnapshot>,
+  right: Readonly<OwnershipTransferSnapshot>,
+): boolean {
+  return (
+    sameKnowledgeSpaceRecord(left.mind.space, right.mind.space) &&
+    sameMembershipRecord(
+      left.mind.ownerMembership,
+      right.mind.ownerMembership,
+    ) &&
+    sameMembershipRecord(left.sourceMembership, right.sourceMembership) &&
+    sameMembershipRecord(left.targetMembership, right.targetMembership)
+  );
+}
+
 function ordinaryMindSnapshotFromMaps(
   spaceId: KnowledgeSpace["spaceId"],
   knowledgeSpaces: ReadonlyMap<
@@ -1436,6 +1509,47 @@ function ordinaryMindSnapshotFromMaps(
   }
 }
 
+function ownershipTransferSnapshotFromMaps(
+  spaceId: KnowledgeSpace["spaceId"],
+  sourceMembershipId: SpaceMembership["membershipId"],
+  targetMembershipId: SpaceMembership["membershipId"],
+  knowledgeSpaces: ReadonlyMap<
+    KnowledgeSpace["spaceId"],
+    Readonly<KnowledgeSpace>
+  >,
+  memberships: ReadonlyMap<
+    SpaceMembership["membershipId"],
+    Readonly<SpaceMembership>
+  >,
+): Readonly<OwnershipTransferSnapshot> | null {
+  const mind = ordinaryMindSnapshotFromMaps(
+    spaceId,
+    knowledgeSpaces,
+    memberships,
+  );
+  const sourceMembership = memberships.get(sourceMembershipId);
+  const targetMembership = memberships.get(targetMembershipId);
+  if (
+    mind === null ||
+    !sourceMembership ||
+    !targetMembership ||
+    sourceMembership.spaceId !== spaceId ||
+    targetMembership.spaceId !== spaceId ||
+    sourceMembership.state !== "active" ||
+    sourceMembership.role !== "admin" ||
+    targetMembership.state !== "active" ||
+    targetMembership.role !== "owner" ||
+    mind.ownerMembership.membershipId !== targetMembership.membershipId
+  ) {
+    return null;
+  }
+  return freezeOwnershipTransferSnapshot({
+    mind,
+    sourceMembership,
+    targetMembership,
+  });
+}
+
 function ordinaryMindCreateIdempotencyKey(
   principalId: Principal["principalId"],
   key: OrdinaryMindRecordSet["idempotencyKey"],
@@ -1457,6 +1571,14 @@ function ordinaryMindVisibilityIdempotencyKey(
   key: ChangeOrdinaryMindVisibilityRequest["idempotencyKey"],
 ): string {
   return `${principalId}\u0000${spaceId}\u0000change_visibility\u0000${key}`;
+}
+
+function ownershipTransferIdempotencyKey(
+  principalId: Principal["principalId"],
+  spaceId: KnowledgeSpace["spaceId"],
+  key: TransferOrdinaryMindOwnershipRequest["idempotencyKey"],
+): string {
+  return `${principalId}\u0000${spaceId}\u0000transfer_ownership\u0000${key}`;
 }
 
 function invitationIdempotencyRecordKey(
@@ -1517,6 +1639,13 @@ function cloneOrdinaryMindIdempotencyRecords(
 ): Map<string, Readonly<OrdinaryMindIdempotencyRecord>> {
   const cloned = new Map<string, Readonly<OrdinaryMindIdempotencyRecord>>();
   for (const [key, record] of records) {
+    if (record.operation === "transfer_ownership") {
+      cloned.set(key, Object.freeze({
+        ...record,
+        transfer: freezeOwnershipTransferSnapshot(record.transfer),
+      }));
+      continue;
+    }
     if (record.operation === "create_invitation" || record.operation === "reissue_invitation") {
       cloned.set(key, Object.freeze({
         ...record,
@@ -1667,6 +1796,197 @@ function stageVisibilityAuditEffects(
   return true;
 }
 
+const OWNERSHIP_TRANSFER_AUDIT_METADATA_KEYS = [
+  "access_version",
+  "metadata_version",
+  "source_member_id",
+  "source_membership_version",
+  "target_member_id",
+  "target_membership_version",
+] as const;
+
+function ownershipTransferAuditEffects(
+  request: Readonly<TransferOrdinaryMindOwnershipRequest>,
+  previousSpace: Readonly<KnowledgeSpace>,
+  currentSpace: Readonly<KnowledgeSpace>,
+  previousSource: Readonly<SpaceMembership>,
+  currentSource: Readonly<SpaceMembership>,
+  previousTarget: Readonly<SpaceMembership>,
+  currentTarget: Readonly<SpaceMembership>,
+): Readonly<{
+  event: Readonly<AuditEvent>;
+  outbox: Readonly<AuditOutboxMessage>;
+}> {
+  return Object.freeze({
+    event: Object.freeze({
+      auditEventId: request.auditEventId,
+      actor: Object.freeze({
+        kind: "principal" as const,
+        principalId: request.principalId,
+      }),
+      requestId: request.requestId,
+      eventType: "space.ownership_transferred",
+      outcome: "succeeded" as const,
+      spaceId: request.spaceId,
+      occurredAt: request.occurredAt,
+      safeMetadata: Object.freeze({
+        access_version: currentSpace.accessVersion,
+        metadata_version: currentSpace.metadataVersion,
+        source_member_id: currentSource.membershipId,
+        source_membership_version: currentSource.version,
+        target_member_id: currentTarget.membershipId,
+        target_membership_version: currentTarget.version,
+      }),
+    }),
+    outbox: Object.freeze({
+      outboxMessageId: request.auditOutboxMessageId,
+      auditEventId: request.auditEventId,
+      state: "pending" as const,
+      version: version(1),
+      attempts: 0,
+      availableAt: request.occurredAt,
+      claimExpiresAt: null,
+      createdAt: request.occurredAt,
+      updatedAt: request.occurredAt,
+    }),
+  });
+}
+
+function validOwnershipTransferAuditEffects(
+  request: Readonly<TransferOrdinaryMindOwnershipRequest>,
+  previousSpace: Readonly<KnowledgeSpace>,
+  currentSpace: Readonly<KnowledgeSpace>,
+  previousSource: Readonly<SpaceMembership>,
+  currentSource: Readonly<SpaceMembership>,
+  previousTarget: Readonly<SpaceMembership>,
+  currentTarget: Readonly<SpaceMembership>,
+  effects: ReturnType<typeof ownershipTransferAuditEffects>,
+): boolean {
+  const { event, outbox } = effects;
+  const keys = Object.keys(event.safeMetadata).sort();
+  return (
+    previousSpace.spaceId === currentSpace.spaceId &&
+    previousSpace.spaceHandle === currentSpace.spaceHandle &&
+    previousSpace.normalizedHandle === currentSpace.normalizedHandle &&
+    previousSpace.name === currentSpace.name &&
+    previousSpace.visibility === currentSpace.visibility &&
+    previousSpace.state === currentSpace.state &&
+    previousSpace.headRevisionId === currentSpace.headRevisionId &&
+    previousSpace.createdAt === currentSpace.createdAt &&
+    currentSpace.metadataVersion === previousSpace.metadataVersion + 1 &&
+    currentSpace.accessVersion === previousSpace.accessVersion + 1 &&
+    currentSpace.updatedAt === request.occurredAt &&
+    previousSource.membershipId === currentSource.membershipId &&
+    previousSource.spaceId === currentSource.spaceId &&
+    previousSource.principalId === request.principalId &&
+    previousSource.principalId === currentSource.principalId &&
+    previousSource.role === "owner" &&
+    currentSource.role === "admin" &&
+    previousSource.state === "active" &&
+    currentSource.state === "active" &&
+    currentSource.version === previousSource.version + 1 &&
+    currentSource.createdAt === previousSource.createdAt &&
+    currentSource.createdBy === previousSource.createdBy &&
+    currentSource.updatedAt === request.occurredAt &&
+    currentSource.updatedBy === request.principalId &&
+    previousTarget.membershipId === request.targetMembershipId &&
+    previousTarget.membershipId === currentTarget.membershipId &&
+    previousTarget.spaceId === currentTarget.spaceId &&
+    previousTarget.principalId === currentTarget.principalId &&
+    previousTarget.principalId !== request.principalId &&
+    previousTarget.role !== "owner" &&
+    currentTarget.role === "owner" &&
+    previousTarget.state === "active" &&
+    currentTarget.state === "active" &&
+    currentTarget.version === previousTarget.version + 1 &&
+    currentTarget.createdAt === previousTarget.createdAt &&
+    currentTarget.createdBy === previousTarget.createdBy &&
+    currentTarget.updatedAt === request.occurredAt &&
+    currentTarget.updatedBy === request.principalId &&
+    typeof event.auditEventId === "string" &&
+    BOUNDED_OPAQUE_ID.test(event.auditEventId) &&
+    event.auditEventId === request.auditEventId &&
+    event.actor.kind === "principal" &&
+    event.actor.principalId === request.principalId &&
+    BOUNDED_OPAQUE_ID.test(event.actor.principalId) &&
+    BOUNDED_OPAQUE_ID.test(event.requestId) &&
+    event.requestId === request.requestId &&
+    event.eventType === "space.ownership_transferred" &&
+    event.outcome === "succeeded" &&
+    event.spaceId === request.spaceId &&
+    event.occurredAt === request.occurredAt &&
+    Number.isFinite(Date.parse(event.occurredAt)) &&
+    keys.length === OWNERSHIP_TRANSFER_AUDIT_METADATA_KEYS.length &&
+    keys.every(
+      (key, index) => key === OWNERSHIP_TRANSFER_AUDIT_METADATA_KEYS[index],
+    ) &&
+    event.safeMetadata.access_version === currentSpace.accessVersion &&
+    event.safeMetadata.metadata_version === currentSpace.metadataVersion &&
+    event.safeMetadata.source_member_id === currentSource.membershipId &&
+    event.safeMetadata.source_membership_version === currentSource.version &&
+    event.safeMetadata.target_member_id === currentTarget.membershipId &&
+    event.safeMetadata.target_membership_version === currentTarget.version &&
+    typeof outbox.outboxMessageId === "string" &&
+    BOUNDED_OPAQUE_ID.test(outbox.outboxMessageId) &&
+    outbox.outboxMessageId === request.auditOutboxMessageId &&
+    outbox.auditEventId === event.auditEventId &&
+    outbox.state === "pending" &&
+    outbox.version === 1 &&
+    outbox.attempts === 0 &&
+    outbox.availableAt === request.occurredAt &&
+    outbox.claimExpiresAt === null &&
+    outbox.createdAt === request.occurredAt &&
+    outbox.updatedAt === request.occurredAt
+  );
+}
+
+function stageOwnershipTransferAuditEffects(
+  request: Readonly<TransferOrdinaryMindOwnershipRequest>,
+  previousSpace: Readonly<KnowledgeSpace>,
+  currentSpace: Readonly<KnowledgeSpace>,
+  previousSource: Readonly<SpaceMembership>,
+  currentSource: Readonly<SpaceMembership>,
+  previousTarget: Readonly<SpaceMembership>,
+  currentTarget: Readonly<SpaceMembership>,
+  auditEvents: Map<AuditEventId, Readonly<AuditEvent>>,
+  auditOutbox: Map<OutboxMessageId, Readonly<AuditOutboxMessage>>,
+): boolean {
+  const effects = ownershipTransferAuditEffects(
+    request,
+    previousSpace,
+    currentSpace,
+    previousSource,
+    currentSource,
+    previousTarget,
+    currentTarget,
+  );
+  if (
+    !validOwnershipTransferAuditEffects(
+      request,
+      previousSpace,
+      currentSpace,
+      previousSource,
+      currentSource,
+      previousTarget,
+      currentTarget,
+      effects,
+    ) ||
+    auditEvents.has(effects.event.auditEventId) ||
+    auditOutbox.has(effects.outbox.outboxMessageId) ||
+    [...auditOutbox.values()].some(
+      (candidate) => candidate.auditEventId === effects.event.auditEventId,
+    )
+  ) {
+    return false;
+  }
+  auditEvents.set(effects.event.auditEventId, cloneAuditEvent(effects.event));
+  auditOutbox.set(
+    effects.outbox.outboxMessageId,
+    cloneAuditOutbox(effects.outbox),
+  );
+  return true;
+}
+
 function validateOrdinaryMindRecords(
   records: Readonly<OrdinaryMindRecordSet>,
 ): Readonly<OrdinaryMindSnapshot> | null {
@@ -1736,6 +2056,11 @@ export type OrdinaryMindFailureStage =
   | "visibility_after_audit"
   | "visibility_after_idempotency"
   | "visibility_before_commit"
+  | "ownership_after_space"
+  | "ownership_after_memberships"
+  | "ownership_after_audit"
+  | "ownership_after_idempotency"
+  | "ownership_before_commit"
   | "invitation_after_record"
   | "invitation_after_idempotency"
   | "invitation_after_expiry_job"
@@ -3608,6 +3933,232 @@ export class InMemoryRevisionMetadataStore
             kind: "visibility_changed",
             mind: changed,
             changed: true,
+            replayed: false,
+          });
+        },
+
+        transferOrdinaryMindOwnership: async (
+          request: Readonly<TransferOrdinaryMindOwnershipRequest>,
+        ): Promise<TransferOrdinaryMindOwnershipResult> => {
+          const principal = principals.get(request.principalId);
+          if (!principal || principal.state !== "active") {
+            return Object.freeze({ kind: "forbidden" });
+          }
+          const space = knowledgeSpaces.get(request.spaceId);
+          if (!space || space.state !== "active") {
+            return Object.freeze({ kind: "mind_not_found" });
+          }
+          const personalBinding = [...personalBindings.values()].find(
+            (binding) => binding.spaceId === request.spaceId,
+          );
+          if (personalBinding) {
+            return Object.freeze({
+              kind:
+                personalBinding.principalId === request.principalId
+                  ? "personal_mind"
+                  : "mind_not_found",
+            });
+          }
+
+          const recordKey = ownershipTransferIdempotencyKey(
+            request.principalId,
+            request.spaceId,
+            request.idempotencyKey,
+          );
+          const previous = idempotencyRecords.get(recordKey);
+          if (previous) {
+            if (
+              previous.operation !== "transfer_ownership" ||
+              previous.canonicalRequestHash !== request.canonicalRequestHash
+            ) {
+              return Object.freeze({ kind: "idempotency_conflict" });
+            }
+            const current = ownershipTransferSnapshotFromMaps(
+              request.spaceId,
+              previous.transfer.sourceMembership.membershipId,
+              previous.transfer.targetMembership.membershipId,
+              knowledgeSpaces,
+              memberships,
+            );
+            if (
+              current === null ||
+              !sameOwnershipTransferSnapshot(current, previous.transfer)
+            ) {
+              return Object.freeze({ kind: "ownership_state_changed" });
+            }
+            return Object.freeze({
+              kind: "transferred",
+              transfer: current,
+              replayed: true,
+            });
+          }
+          if (
+            !SHA256_PATTERN.test(request.canonicalRequestHash) ||
+            typeof request.targetMembershipId !== "string" ||
+            !BOUNDED_OPAQUE_ID.test(request.targetMembershipId) ||
+            typeof request.requestId !== "string" ||
+            !BOUNDED_OPAQUE_ID.test(request.requestId) ||
+            typeof request.auditEventId !== "string" ||
+            !BOUNDED_OPAQUE_ID.test(request.auditEventId) ||
+            typeof request.auditOutboxMessageId !== "string" ||
+            !BOUNDED_OPAQUE_ID.test(request.auditOutboxMessageId) ||
+            !Number.isFinite(Date.parse(request.occurredAt))
+          ) {
+            return Object.freeze({ kind: "invalid_record" });
+          }
+          if (space.metadataVersion !== request.expectedMetadataVersion) {
+            return Object.freeze({
+              kind: "metadata_conflict",
+              currentMetadataVersion: space.metadataVersion,
+            });
+          }
+
+          const aggregateMemberships = [...memberships.values()].filter(
+            (membership) => membership.spaceId === request.spaceId,
+          );
+          const aggregateInvitations = [...invitations.values()].filter(
+            (invitation) => invitation.spaceId === request.spaceId,
+          );
+          const source = aggregateMemberships.find(
+            (membership) =>
+              membership.principalId === request.principalId &&
+              membership.state === "active",
+          );
+          const target = memberships.get(request.targetMembershipId);
+          if (!source || source.role !== "owner") {
+            return Object.freeze({ kind: "forbidden" });
+          }
+          if (
+            !target ||
+            target.spaceId !== request.spaceId ||
+            target.state !== "active" ||
+            target.role === "owner" ||
+            target.principalId === request.principalId
+          ) {
+            return Object.freeze({ kind: "ownership_target_invalid" });
+          }
+
+          let transferredAggregate: ReturnType<
+            typeof SpaceAggregate.restoreOrdinary
+          >;
+          try {
+            transferredAggregate = SpaceAggregate.restoreOrdinary({
+              space,
+              memberships: aggregateMemberships,
+              invitations: aggregateInvitations,
+            }).transferOwnership({
+              sourcePrincipalId: request.principalId,
+              targetPrincipalId: target.principalId,
+              expectedMetadataVersion: request.expectedMetadataVersion,
+              expectedSourceMembershipVersion: source.version,
+              expectedTargetMembershipVersion: target.version,
+              occurredAt: request.occurredAt,
+            });
+          } catch (error) {
+            if (error instanceof DomainInvariantError) {
+              if (error.code === "stale_version") {
+                return Object.freeze({
+                  kind: "metadata_conflict",
+                  currentMetadataVersion: space.metadataVersion,
+                });
+              }
+              if (error.code === "owner_required") {
+                return Object.freeze({ kind: "forbidden" });
+              }
+              if (error.code === "ownership_target_invalid") {
+                return Object.freeze({ kind: "ownership_target_invalid" });
+              }
+              if (error.code === "space_not_active") {
+                return Object.freeze({ kind: "mind_not_found" });
+              }
+            }
+            return Object.freeze({ kind: "invalid_record" });
+          }
+
+          const updated = transferredAggregate.snapshot();
+          const candidateKnowledgeSpaces = cloneRecordMap(
+            knowledgeSpaces,
+            freezeKnowledgeSpace,
+          );
+          const candidateMemberships = cloneRecordMap(
+            memberships,
+            freezeMembership,
+          );
+          const candidateAuditEvents = new Map(
+            [...auditEvents].map(([id, event]) => [id, cloneAuditEvent(event)]),
+          );
+          const candidateAuditOutbox = new Map(
+            [...auditOutbox].map(([id, message]) => [
+              id,
+              cloneAuditOutbox(message),
+            ]),
+          );
+          const candidateIdempotencyRecords =
+            cloneOrdinaryMindIdempotencyRecords(idempotencyRecords);
+          candidateKnowledgeSpaces.set(
+            request.spaceId,
+            freezeKnowledgeSpace(updated.space),
+          );
+          this.#failOrdinaryMindIfRequested("ownership_after_space");
+          for (const membership of updated.memberships) {
+            candidateMemberships.set(
+              membership.membershipId,
+              freezeMembership(membership),
+            );
+          }
+          this.#failOrdinaryMindIfRequested("ownership_after_memberships");
+          const currentSource = candidateMemberships.get(source.membershipId);
+          const currentTarget = candidateMemberships.get(target.membershipId);
+          if (!currentSource || !currentTarget) {
+            return Object.freeze({ kind: "invalid_record" });
+          }
+          const transfer = ownershipTransferSnapshotFromMaps(
+            request.spaceId,
+            currentSource.membershipId,
+            currentTarget.membershipId,
+            candidateKnowledgeSpaces,
+            candidateMemberships,
+          );
+          if (transfer === null) {
+            return Object.freeze({ kind: "invalid_record" });
+          }
+          if (
+            !stageOwnershipTransferAuditEffects(
+              request,
+              space,
+              updated.space,
+              source,
+              currentSource,
+              target,
+              currentTarget,
+              candidateAuditEvents,
+              candidateAuditOutbox,
+            )
+          ) {
+            return Object.freeze({ kind: "effect_conflict" });
+          }
+          this.#failOrdinaryMindIfRequested("ownership_after_audit");
+          candidateIdempotencyRecords.set(
+            recordKey,
+            Object.freeze({
+              operation: "transfer_ownership" as const,
+              principalId: request.principalId,
+              spaceId: request.spaceId,
+              key: request.idempotencyKey,
+              canonicalRequestHash: request.canonicalRequestHash,
+              transfer: freezeOwnershipTransferSnapshot(transfer),
+            }),
+          );
+          this.#failOrdinaryMindIfRequested("ownership_after_idempotency");
+          this.#failOrdinaryMindIfRequested("ownership_before_commit");
+          knowledgeSpaces = candidateKnowledgeSpaces;
+          memberships = candidateMemberships;
+          auditEvents = candidateAuditEvents;
+          auditOutbox = candidateAuditOutbox;
+          idempotencyRecords = candidateIdempotencyRecords;
+          return Object.freeze({
+            kind: "transferred",
+            transfer,
             replayed: false,
           });
         },
