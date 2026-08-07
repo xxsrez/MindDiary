@@ -102,6 +102,11 @@ checkpoint digest и `LIFECYCLE.phase=settling`.
 5. если ready work нельзя закончить из-за durable known-bad/foreign-main/HOLD,
    сохранить его как `ready_preserved` с exact blocker.
 
+Ready authority определяется `EXECUTION_INDEX state=feature_ready`, а не
+одноимённым compatibility-полем `WORKERS.ready_preserved`: старые ledgers могли
+перечислять там quarantined/stopped artifacts, которые надо сохранить, но не
+надо завершать во время pause settlement.
+
 Не открывай новую issue ради освобождения cutoff и не считай паузу причиной
 обхода gate/CI. Когда active cutoff/gate и `PENDING_ACTIONS` отсутствуют, вызови
 `--phase finish`:

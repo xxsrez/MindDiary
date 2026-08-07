@@ -2628,8 +2628,24 @@ def command_soft_pause(args: argparse.Namespace) -> int:
         gate_index = _semicolon_fields(metadata.get("GATE_INDEX", ""))
         active_cutoff = pipeline.get("active_cutoff", "none")
         active_gate = gate_index.get("active", "none")
-        workers = _semicolon_fields(metadata.get("WORKERS", ""))
-        ready_preserved = _list_value(workers.get("ready_preserved"))
+        execution, execution_errors = _execution_vector(
+            metadata.get("EXECUTION_INDEX", "")
+        )
+        if execution_errors:
+            emit(
+                {
+                    "schema": 1,
+                    "status": "blocked",
+                    "reason": "execution-vector-incoherent",
+                    "errors": execution_errors,
+                }
+            )
+            return 3
+        ready_preserved = sorted(
+            issue
+            for (issue, _), state in execution.items()
+            if state == "feature_ready"
+        )
         open_cutoff = pipeline.get("open_cutoff", "none")
         blockers_present = bool(
             metadata.get("PROMOTION_HOLD", "").strip().lower() not in {"", "none"}

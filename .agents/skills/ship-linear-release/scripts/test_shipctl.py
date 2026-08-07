@@ -443,7 +443,8 @@ class PreflightTest(GitMixin, unittest.TestCase):
                             "PIPELINE: open_cutoff=none;active_cutoff=none\n"
                             "GATE_INDEX: active=none;entries=0\n"
                             "EXECUTION_INDEX: running_count=0;entries=AND-61:3@executor=stopped\n"
-                            "WORKERS: active_target=1;active_issue_lanes=none;stopped=AND-61;refill_blocker=none\n"
+                            "WORKERS: active_target=1;active_issue_lanes=none;stopped=AND-61;"
+                            "ready_preserved=AND-84,AND-87;refill_blocker=none\n"
                             f"RECOVERY: generation=4;cause=handoff;phase={recovery_phase};unresolved=none\n"
                             "ACTION_KIND: recovery-checkpoint\n"
                         ),
@@ -455,6 +456,12 @@ class PreflightTest(GitMixin, unittest.TestCase):
                         repo, "start", {"evidence_digest": "1" * 64}
                     )
                     _, after, _ = self.preflight(repo)
+                    finish_code, finished = self.soft_pause(
+                        repo,
+                        "finish",
+                        {"settlement": "complete", "evidence_digest": "2" * 64},
+                    )
+                    _, final, _ = self.preflight(repo)
 
                 self.assertEqual(before["route"], "recover-owner")
                 self.assertEqual((code, result["status"]), (0, "settling"))
@@ -462,6 +469,10 @@ class PreflightTest(GitMixin, unittest.TestCase):
                 self.assertEqual(
                     after["coordinator_refs"][0]["lifecycle"]["phase"], "settling"
                 )
+                self.assertEqual(
+                    (finish_code, finished["status"]), (0, "handoff-ready")
+                )
+                self.assertEqual(final["route"], "takeover")
 
     def test_soft_pause_does_not_skip_recovery_fencing(self) -> None:
         thread_id = "019fdcce-1fee-71d0-8d5d-6566cdf2d94b"
