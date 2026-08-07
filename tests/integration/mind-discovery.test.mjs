@@ -4,6 +4,7 @@ import test from "node:test";
 import { InMemoryRevisionMetadataStore } from "@mind-diary/adapter-metadata-memory";
 import { InMemoryObjectStore } from "@mind-diary/adapter-object-memory";
 import {
+  CanonicalRevisionCoordinator,
   MindDiscoveryFailure,
   MindDiscoveryService,
 } from "@mind-diary/application-content";
@@ -12,7 +13,12 @@ import {
   OrdinaryMindControlService,
   VisibilityControlService,
 } from "@mind-diary/application-control";
-import { CAPABILITIES, verifiedSpaceHost, version } from "@mind-diary/domain";
+import {
+  CAPABILITIES,
+  createCanonicalRevisionEnvelope,
+  verifiedSpaceHost,
+  version,
+} from "@mind-diary/domain";
 
 const CREATED_AT = "2026-08-07T08:00:00.000Z";
 const CHANGED_AT = "2026-08-07T08:01:00.000Z";
@@ -93,8 +99,20 @@ function harness() {
     objects,
     auditIds: auditIds(),
   });
+  const revisions = new CanonicalRevisionCoordinator({
+    objects,
+    revisions: metadata,
+  });
   const discovery = new MindDiscoveryService({ store: metadata, host: HOST });
-  return { metadata, objects, bootstrap, ordinary, visibility, discovery };
+  return {
+    metadata,
+    objects,
+    bootstrap,
+    ordinary,
+    visibility,
+    revisions,
+    discovery,
+  };
 }
 
 async function createAccount(env, index, displayName) {
@@ -289,6 +307,132 @@ test("get_mind_info pins one revision and removes commit from historical mode", 
       asOf: "2026-08-07T07:59:59.000Z",
     }),
     expectFailure("revision_not_found"),
+  );
+});
+
+test("content commit keeps ordinary metadata HEAD atomic and immediately discoverable", async () => {
+  const env = harness();
+  const owner = await createAccount(env, 1, "Owner");
+  const mind = await createMind(env, owner, "committed-notes", "Committed Notes");
+  const before = await env.revisions.readHeadRevision(mind.mindId);
+  assert.ok(before);
+
+  const rolledBackRevisionId = "revision_discovery_rolled_back";
+  const rolledBackEnvelope = createCanonicalRevisionEnvelope({
+    revisionId: rolledBackRevisionId,
+    spaceId: mind.mindId,
+    revisionNumber: before.envelope.revision.revisionNumber + 1,
+    parentRevisionId: before.envelope.revision.revisionId,
+    committedAt: "2026-08-07T08:01:30.000Z",
+    committedBy: before.envelope.revision.committedBy,
+    manifest: before.envelope.manifest,
+    manifestHash: before.envelope.revision.manifestHash,
+    summary: "Roll back projected HEAD",
+  });
+  await assert.rejects(
+    env.metadata.runContentCommitTransaction(async (transaction) => {
+      const staged = await transaction.commitRevision({
+        expectedHeadRevisionId: before.envelope.revision.revisionId,
+        envelope: rolledBackEnvelope,
+      });
+      assert.equal(staged.kind, "committed");
+      assert.equal(await transaction.readHead(mind.mindId), rolledBackRevisionId);
+      throw new Error("injected failure after projected HEAD");
+    }),
+    /injected failure after projected HEAD/u,
+  );
+  assert.equal(
+    await env.metadata.readHead(mind.mindId),
+    before.envelope.revision.revisionId,
+  );
+  assert.equal(
+    (await env.metadata.readResolvedSpace(mind.mindId)).space.headRevisionId,
+    before.envelope.revision.revisionId,
+  );
+
+  const firstRequest = {
+    spaceId: mind.mindId,
+    expectedRevisionId: before.envelope.revision.revisionId,
+    revisionId: "revision_discovery_committed",
+    committedAt: "2026-08-07T08:02:00.000Z",
+    committedBy: before.envelope.revision.committedBy,
+    summary: "Advance ordinary Mind HEAD",
+    files: before.files,
+  };
+  const first = await env.revisions.commit(firstRequest);
+  assert.equal(first.kind, "committed");
+  assert.equal(first.replayed, false);
+
+  const firstSnapshot = await env.metadata.readResolvedSpace(mind.mindId);
+  assert.ok(firstSnapshot);
+  assert.equal(firstSnapshot.space.headRevisionId, first.envelope.revision.revisionId);
+  assert.equal(await env.metadata.readHead(mind.mindId), firstSnapshot.space.headRevisionId);
+  const listed = await env.discovery.listMinds(actor(owner.principalId), { limit: 10 });
+  assert.equal(
+    listed.minds.find((candidate) => candidate.mindId === mind.mindId).head
+      .revisionId,
+    first.envelope.revision.revisionId,
+  );
+  assert.equal(
+    (await env.discovery.resolveMind(actor(owner.principalId), "committed-notes"))
+      .head.revisionId,
+    first.envelope.revision.revisionId,
+  );
+  assert.equal(
+    (
+      await env.discovery.getMindInfo(
+        actor(owner.principalId),
+        "committed-notes",
+        { kind: "head" },
+      )
+    ).resolvedRevision.revisionId,
+    first.envelope.revision.revisionId,
+  );
+  assert.equal(
+    (
+      await env.discovery.getMindInfo(actor(owner.principalId), mind.mindId, {
+        kind: "revision",
+        revisionId: first.envelope.revision.revisionId,
+      })
+    ).resolvedRevision.revisionId,
+    first.envelope.revision.revisionId,
+  );
+
+  const raceBase = await env.revisions.readHeadRevision(mind.mindId);
+  assert.ok(raceBase);
+  const raceRequest = (suffix) => ({
+    spaceId: mind.mindId,
+    expectedRevisionId: raceBase.envelope.revision.revisionId,
+    revisionId: `revision_discovery_race_${suffix}`,
+    committedAt: "2026-08-07T08:03:00.000Z",
+    committedBy: raceBase.envelope.revision.committedBy,
+    summary: `Race ${suffix}`,
+    files: raceBase.files,
+  });
+  const raceRequests = [raceRequest("a"), raceRequest("b")];
+  const raceResults = await Promise.all(
+    raceRequests.map((request) => env.revisions.commit(request)),
+  );
+  const winner = raceResults.find((result) => result.kind === "committed");
+  const loser = raceResults.find((result) => result.kind === "stale_head");
+  assert.ok(winner);
+  assert.ok(loser);
+  assert.equal(loser.currentHeadRevisionId, winner.envelope.revision.revisionId);
+  assert.equal(
+    (await env.metadata.readResolvedSpace(mind.mindId)).space.headRevisionId,
+    winner.envelope.revision.revisionId,
+  );
+  assert.equal(await env.metadata.readHead(mind.mindId), winner.envelope.revision.revisionId);
+
+  const winnerRequest = raceRequests.find(
+    (request) => request.revisionId === winner.envelope.revision.revisionId,
+  );
+  const replay = await env.revisions.commit(winnerRequest);
+  assert.equal(replay.kind, "committed");
+  assert.equal(replay.replayed, true);
+  assert.equal(
+    (await env.metadata.readResolvedSpace(mind.mindId)).space.headRevisionId,
+    winner.envelope.revision.revisionId,
   );
 });
 

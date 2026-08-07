@@ -3,13 +3,14 @@ import test from "node:test";
 
 import { InMemoryRevisionMetadataStore } from "@mind-diary/adapter-metadata-memory";
 import { InMemoryObjectStore } from "@mind-diary/adapter-object-memory";
+import { CanonicalRevisionCoordinator } from "@mind-diary/application-content";
 import {
   AccountBootstrapService,
   PERSONAL_MIND_FORBIDDEN_LIFECYCLE_OPERATIONS,
   PersonalMindControlFailure,
   PersonalMindControlService,
 } from "@mind-diary/application-control";
-import { CAPABILITIES } from "@mind-diary/domain";
+import { CAPABILITIES, createCanonicalRevisionEnvelope } from "@mind-diary/domain";
 
 const NOW = "2026-08-07T03:55:00.000Z";
 const LATER = "2026-08-07T03:56:00.000Z";
@@ -63,7 +64,11 @@ function harness({ digest, logger } = {}) {
     digest: digest ?? objects,
     logger,
   });
-  return { metadata, objects, bootstrap, personal };
+  const revisions = new CanonicalRevisionCoordinator({
+    objects,
+    revisions: metadata,
+  });
+  return { metadata, objects, bootstrap, personal, revisions };
 }
 
 async function createAccount(env, index, displayName = `Owner ${index}`) {
@@ -123,6 +128,79 @@ test("/me resolves only from the authenticated principal binding and foreign Per
       deploymentCapabilities: CAPABILITIES,
     }),
     expectControlFailure("authentication_required"),
+  );
+});
+
+test("content commit atomically advances the Personal Mind metadata HEAD", async () => {
+  const env = harness();
+  const created = await createAccount(env, 1, "Personal Owner");
+  const personalMindId = created.personalMind.mindId;
+  const before = await env.revisions.readHeadRevision(personalMindId);
+  assert.ok(before);
+
+  const rolledBackRevisionId = "revision_personal_content_rolled_back";
+  const rolledBackEnvelope = createCanonicalRevisionEnvelope({
+    revisionId: rolledBackRevisionId,
+    spaceId: personalMindId,
+    revisionNumber: before.envelope.revision.revisionNumber + 1,
+    parentRevisionId: before.envelope.revision.revisionId,
+    committedAt: "2026-08-07T03:55:30.000Z",
+    committedBy: before.envelope.revision.committedBy,
+    manifest: before.envelope.manifest,
+    manifestHash: before.envelope.revision.manifestHash,
+    summary: "Roll back Personal Mind projected HEAD",
+  });
+  await assert.rejects(
+    env.metadata.runContentCommitTransaction(async (transaction) => {
+      const staged = await transaction.commitRevision({
+        expectedHeadRevisionId: before.envelope.revision.revisionId,
+        envelope: rolledBackEnvelope,
+      });
+      assert.equal(staged.kind, "committed");
+      assert.equal(await transaction.readHead(personalMindId), rolledBackRevisionId);
+      throw new Error("injected Personal Mind content transaction failure");
+    }),
+    /injected Personal Mind content transaction failure/u,
+  );
+  assert.equal(
+    await env.metadata.readHead(personalMindId),
+    before.envelope.revision.revisionId,
+  );
+  assert.equal(
+    (await env.metadata.readAccount(created.principalId)).personalMind.space
+      .headRevisionId,
+    before.envelope.revision.revisionId,
+  );
+
+  const committed = await env.revisions.commit({
+    spaceId: personalMindId,
+    expectedRevisionId: before.envelope.revision.revisionId,
+    revisionId: "revision_personal_content_committed",
+    committedAt: "2026-08-07T03:56:00.000Z",
+    committedBy: before.envelope.revision.committedBy,
+    summary: "Advance Personal Mind HEAD",
+    files: before.files,
+  });
+  assert.equal(committed.kind, "committed");
+  assert.equal(committed.replayed, false);
+
+  const expectedHead = committed.envelope.revision.revisionId;
+  const account = await env.metadata.readAccount(created.principalId);
+  assert.ok(account);
+  assert.equal(account.personalMind.space.headRevisionId, expectedHead);
+  assert.equal(await env.metadata.readHead(personalMindId), expectedHead);
+  assert.equal(
+    (
+      await env.personal.resolveMyMind(
+        registeredActor(created.principalId, "request_personal_content_head"),
+      )
+    ).personalMind.headRevisionId,
+    expectedHead,
+  );
+  assert.equal(
+    (await env.revisions.materialize(personalMindId, expectedHead)).envelope.revision
+      .revisionId,
+    expectedHead,
   );
 });
 
