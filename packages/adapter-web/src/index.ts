@@ -8,12 +8,16 @@ export * from "./ui-shell.js";
 export * from "./onboarding.js";
 export * from "./token-management.js";
 export * from "./sites-identity-binding.js";
+export * from "./request-security.js";
+
+import { WEB_CONTROL_REQUEST_SECURITY_POLICY } from "./request-security.js";
 
 type WebActorContext = ControlBoundaryMarker["actor"];
 
 export const WEB_APPLICATION_BOUNDARY = {
   queries: CONTROL_QUERIES,
   commands: CONTROL_COMMANDS,
+  requestSecurity: WEB_CONTROL_REQUEST_SECURITY_POLICY,
 } as const;
 
 export const WEB_ACCEPTS_MCP_BEARER = false as const;

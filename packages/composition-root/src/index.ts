@@ -27,7 +27,11 @@ import {
   SECURITY_ADAPTER,
   createWebCryptoTokenHasher,
 } from "@mind-diary/adapter-security-webcrypto";
-import { WEB_APPLICATION_BOUNDARY } from "@mind-diary/adapter-web";
+import {
+  WEB_APPLICATION_BOUNDARY,
+  WebControlRequestSecurityBoundary,
+  type WebControlRequestSecurityOptions,
+} from "@mind-diary/adapter-web";
 import { BACKGROUND_HANDLERS } from "@mind-diary/application-background";
 import {
   CONTENT_COMMANDS,
@@ -94,6 +98,13 @@ export async function createLocalMcpHttpBoundary(
     ...(options.logger ? { logger: options.logger } : {}),
   });
   return Object.freeze({ handler, authenticator, tokenHasher, tokens });
+}
+
+/** Wires the concrete Origin + CSRF guard in front of one control executor. */
+export function createLocalWebControlRequestSecurityBoundary<Result>(
+  options: WebControlRequestSecurityOptions<Result>,
+) {
+  return new WebControlRequestSecurityBoundary(options);
 }
 
 export interface LocalAccountDeletionBoundaryOptions {

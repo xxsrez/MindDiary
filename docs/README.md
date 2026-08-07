@@ -68,6 +68,9 @@ Mind Diary пока находится на стадии проектирова�
 - [OpenAI Sites + MCP capability gate на 2026-08-07](reports/2026-08-07-sites-mcp-capability-gate.md)
   — локально проверенный non-product probe, repeatable redacted live procedure
   и незаполненные release-blocking evidence fields.
+- [Security, privacy и threat regression на 2026-08-07](reports/2026-08-07-security-privacy-regression.md)
+  — локальная fail-closed suite для identity, Origin/CSRF, token/ACL/locator
+  boundaries, safe rendering и privacy-redacted evidence; без live claim.
 
 ## Статусы документов
 
