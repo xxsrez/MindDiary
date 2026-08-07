@@ -1,6 +1,8 @@
 import {
   AUDIT_ADAPTER,
   InMemoryAuditSink,
+  InMemoryPrivacySafeObservabilitySink,
+  OBSERVABILITY_ADAPTER,
 } from "@mind-diary/adapter-audit-memory";
 import { BACKGROUND_APPLICATION_BOUNDARY } from "@mind-diary/adapter-background";
 import {
@@ -32,10 +34,14 @@ import {
   WebControlRequestSecurityBoundary,
   type WebControlRequestSecurityOptions,
 } from "@mind-diary/adapter-web";
-import { BACKGROUND_HANDLERS } from "@mind-diary/application-background";
+import {
+  BACKGROUND_HANDLERS,
+  BackgroundPrivacySafeObservability,
+} from "@mind-diary/application-background";
 import {
   CONTENT_COMMANDS,
   CONTENT_QUERIES,
+  ContentPrivacySafeObservability,
   McpBearerAuthenticationService,
   type McpBearerAuthenticationDependencies,
 } from "@mind-diary/application-content";
@@ -43,6 +49,7 @@ import {
   AccountDeletionService,
   CONTROL_COMMANDS,
   CONTROL_QUERIES,
+  ControlPrivacySafeObservability,
   type AccountDeletionDependencies,
 } from "@mind-diary/application-control";
 
@@ -73,6 +80,7 @@ export interface LocalMcpHttpBoundaryOptions {
   readonly requestIds: McpRequestIdGenerator;
   readonly content: McpContentApplication;
   readonly logger?: McpSafeLogger;
+  readonly observability?: ContentPrivacySafeObservability;
 }
 
 /**
@@ -91,12 +99,35 @@ export async function createLocalMcpHttpBoundary(
     tokenHasher,
     tokens,
   });
-  const handler = createMcpHttpHandler({
-    authenticator,
-    requestIds: options.requestIds,
-    content: options.content,
-    ...(options.logger ? { logger: options.logger } : {}),
-  });
+  const handler = options.observability
+    ? async (request: Request) => {
+        const startedAt = performance.now();
+        const requestId = options.requestIds.nextRequestId();
+        const logger: McpSafeLogger = {
+          async record(event) {
+            options.observability?.recordMcpRequest({
+              requestId: event.requestId,
+              occurredAtUtc: options.clock.now(),
+              durationMs: Math.max(0, performance.now() - startedAt),
+              status: event.status,
+              outcome: event.outcome,
+            });
+            await options.logger?.record(event);
+          },
+        };
+        return createMcpHttpHandler({
+          authenticator,
+          requestIds: { nextRequestId: () => requestId },
+          content: options.content,
+          logger,
+        })(request);
+      }
+    : createMcpHttpHandler({
+        authenticator,
+        requestIds: options.requestIds,
+        content: options.content,
+        ...(options.logger ? { logger: options.logger } : {}),
+      });
   return Object.freeze({ handler, authenticator, tokenHasher, tokens });
 }
 
@@ -105,6 +136,38 @@ export function createLocalWebControlRequestSecurityBoundary<Result>(
   options: WebControlRequestSecurityOptions<Result>,
 ) {
   return new WebControlRequestSecurityBoundary(options);
+}
+
+export interface LocalPrivacySafeObservabilityBoundaryOptions {
+  readonly clock: AccountDeletionDependencies["clock"];
+  readonly cohort: "close_circle" | "external";
+}
+
+/** Local dashboard/pilot composition; no deployable telemetry backend is claimed. */
+export function createLocalPrivacySafeObservabilityBoundary(
+  options: LocalPrivacySafeObservabilityBoundaryOptions,
+) {
+  const sink = new InMemoryPrivacySafeObservabilitySink();
+  const control = new ControlPrivacySafeObservability({
+    sink,
+    clock: options.clock,
+    cohort: options.cohort,
+  });
+  const content = new ContentPrivacySafeObservability({
+    sink,
+    cohort: options.cohort,
+  });
+  const background = new BackgroundPrivacySafeObservability({
+    sink,
+    cohort: options.cohort,
+  });
+  return Object.freeze({
+    adapter: OBSERVABILITY_ADAPTER,
+    sink,
+    control,
+    content,
+    background,
+  });
 }
 
 export interface LocalAccountDeletionBoundaryOptions {
