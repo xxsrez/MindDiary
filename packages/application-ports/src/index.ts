@@ -232,6 +232,77 @@ export interface AccountBootstrapStore extends MetadataStore {
   ): Promise<Readonly<PersonalMindResolution> | null>;
 }
 
+/** Safe metadata projection for Personal Mind control flows. Hidden handles are excluded. */
+export interface PersonalMindProfileSnapshot {
+  readonly principalId: PrincipalId;
+  readonly displayName: string;
+  readonly profileVersion: Version;
+  readonly personalMind: {
+    readonly spaceId: SpaceId;
+    readonly name: string;
+    readonly visibility: "private";
+    readonly metadataVersion: Version;
+    readonly headRevisionId: RevisionId;
+  };
+}
+
+export interface PersonalMindTargetRequest {
+  readonly principalId: PrincipalId;
+  readonly spaceId: SpaceId;
+}
+
+/**
+ * Server-side target classification for ordinary lifecycle commands. A foreign
+ * Personal Mind is deliberately indistinguishable from a missing target.
+ */
+export type PersonalMindTargetClassification =
+  | { readonly kind: "own_personal"; readonly spaceId: SpaceId }
+  | { readonly kind: "ordinary"; readonly spaceId: SpaceId }
+  | { readonly kind: "not_found" };
+
+export interface RenamePersonalProfileRequest {
+  readonly principalId: PrincipalId;
+  readonly displayName: string;
+  readonly expectedProfileVersion: Version;
+  readonly expectedPersonalMetadataVersion: Version;
+  readonly idempotencyKey: IdempotencyKey;
+  readonly canonicalRequestHash: Sha256Digest;
+  readonly occurredAt: UtcInstant;
+}
+
+export type RenamePersonalProfileResult =
+  | {
+      readonly kind: "renamed";
+      readonly profile: Readonly<PersonalMindProfileSnapshot>;
+      readonly replayed: boolean;
+    }
+  | {
+      readonly kind: "profile_conflict";
+      readonly currentProfileVersion: Version;
+      readonly currentPersonalMetadataVersion: Version;
+    }
+  | { readonly kind: "idempotency_conflict" }
+  | { readonly kind: "not_found" | "invalid_record" };
+
+export interface PersonalMindMetadataTransaction {
+  renamePersonalProfile(
+    request: RenamePersonalProfileRequest,
+  ): Promise<RenamePersonalProfileResult>;
+}
+
+/** Atomic metadata-only Personal Mind profile and invariant boundary. */
+export interface PersonalMindStore extends AccountBootstrapStore {
+  readPersonalMindProfile(
+    principalId: PrincipalId,
+  ): Promise<Readonly<PersonalMindProfileSnapshot> | null>;
+  classifyPersonalMindTarget(
+    request: PersonalMindTargetRequest,
+  ): Promise<PersonalMindTargetClassification>;
+  runPersonalMindTransaction<Result>(
+    operation: (transaction: PersonalMindMetadataTransaction) => Promise<Result>,
+  ): Promise<Result>;
+}
+
 export interface HandleReservationSnapshot {
   readonly host: VerifiedSpaceHost;
   readonly canonicalHandle: CanonicalSpaceHandle;

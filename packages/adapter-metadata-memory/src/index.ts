@@ -2,13 +2,17 @@ import type {
   CanonicalRevisionEnvelope,
   CanonicalSpaceHandle,
   AccountBootstrapRecordSet,
-  AccountBootstrapStore,
   AccountBootstrapTransaction,
   CreateAccountBootstrapResult,
   ExternalIdentityBinding,
   ExternalIdentityBindingLookup,
   KnowledgeSpace,
   PersonalMindResolution,
+  PersonalMindMetadataTransaction,
+  PersonalMindProfileSnapshot,
+  PersonalMindStore,
+  PersonalMindTargetClassification,
+  PersonalMindTargetRequest,
   PersonalSpaceBinding,
   Principal,
   PrincipalAccountSnapshot,
@@ -63,6 +67,8 @@ import type {
   RevisionIndexState,
   RevisionCommitRequest,
   RevisionCommitResult,
+  RenamePersonalProfileRequest,
+  RenamePersonalProfileResult,
   SpaceTargetPurgeResult,
   StageContentCommitEffectsRequest,
   StageContentCommitEffectsResult,
@@ -915,6 +921,13 @@ type MembershipMap = Map<
   Readonly<SpaceMembership>
 >;
 
+interface PersonalProfileIdempotencyRecord {
+  readonly principalId: Principal["principalId"];
+  readonly key: RenamePersonalProfileRequest["idempotencyKey"];
+  readonly canonicalRequestHash: RenamePersonalProfileRequest["canonicalRequestHash"];
+  readonly profile: Readonly<PersonalMindProfileSnapshot>;
+}
+
 function externalBindingKey(
   lookup: Readonly<ExternalIdentityBindingLookup>,
 ): string {
@@ -1020,6 +1033,56 @@ function accountByBindingFromMaps(
   );
 }
 
+function freezePersonalMindProfile(
+  profile: Readonly<PersonalMindProfileSnapshot>,
+): Readonly<PersonalMindProfileSnapshot> {
+  return Object.freeze({
+    principalId: profile.principalId,
+    displayName: profile.displayName,
+    profileVersion: profile.profileVersion,
+    personalMind: Object.freeze({ ...profile.personalMind }),
+  });
+}
+
+function personalMindProfileFromAccount(
+  account: Readonly<PrincipalAccountSnapshot>,
+): Readonly<PersonalMindProfileSnapshot> {
+  const space = account.personalMind.space;
+  return freezePersonalMindProfile({
+    principalId: account.principal.principalId,
+    displayName: account.principal.displayName,
+    profileVersion: account.principal.profileVersion,
+    personalMind: {
+      spaceId: space.spaceId,
+      name: space.name,
+      visibility: "private",
+      metadataVersion: space.metadataVersion,
+      headRevisionId: space.headRevisionId,
+    },
+  });
+}
+
+function personalProfileIdempotencyKey(
+  principalId: Principal["principalId"],
+  key: RenamePersonalProfileRequest["idempotencyKey"],
+): string {
+  return `${principalId}\u0000rename_account\u0000${key}`;
+}
+
+function clonePersonalProfileIdempotencyRecords(
+  records: ReadonlyMap<string, Readonly<PersonalProfileIdempotencyRecord>>,
+): Map<string, Readonly<PersonalProfileIdempotencyRecord>> {
+  return new Map(
+    [...records].map(([key, record]) => [
+      key,
+      Object.freeze({
+        ...record,
+        profile: freezePersonalMindProfile(record.profile),
+      }),
+    ]),
+  );
+}
+
 function validateAccountBootstrapRecords(
   records: Readonly<AccountBootstrapRecordSet>,
 ): Readonly<PrincipalAccountSnapshot> | null {
@@ -1070,8 +1133,13 @@ export type AccountBootstrapFailureStage =
   | "after_revision"
   | "before_commit";
 
+export type PersonalProfileFailureStage =
+  | "after_principal"
+  | "after_space"
+  | "before_commit";
+
 export class InMemoryRevisionMetadataStore
-  implements ContentCommitMetadataStore, ExportDownloadGrantStore, AccountBootstrapStore {
+  implements ContentCommitMetadataStore, ExportDownloadGrantStore, PersonalMindStore {
   readonly kind = "metadata-store" as const;
   #spaces = new Map<SpaceId, SpaceState>();
   #revisionsById = new Map<RevisionId, Envelope>();
@@ -1087,10 +1155,15 @@ export class InMemoryRevisionMetadataStore
   #knowledgeSpaces: KnowledgeSpaceMap = new Map();
   #personalBindings: PersonalBindingMap = new Map();
   #memberships: MembershipMap = new Map();
+  #personalProfileIdempotencyRecords = new Map<
+    string,
+    Readonly<PersonalProfileIdempotencyRecord>
+  >();
   readonly #authorizationStates = new Map<string, AuthorizationState>();
   #transactionTail: Promise<void> = Promise.resolve();
   #nextCommitFailure: Error | null = null;
   #nextAccountBootstrapFailureStage: AccountBootstrapFailureStage | null = null;
+  #nextPersonalProfileFailureStage: PersonalProfileFailureStage | null = null;
 
   async readHead(spaceId: SpaceId): Promise<RevisionId | null> {
     return this.#spaces.get(spaceId)?.head ?? null;
@@ -1141,13 +1214,191 @@ export class InMemoryRevisionMetadataStore
   async resolvePersonalMind(
     principalId: Principal["principalId"],
   ): Promise<Readonly<PersonalMindResolution> | null> {
-    const binding = this.#personalBindings.get(principalId);
-    if (!binding) return null;
-    const space = this.#knowledgeSpaces.get(binding.spaceId);
-    if (!space || space.state !== "active") return null;
-    return Object.freeze({
-      spaceId: space.spaceId,
-      headRevisionId: space.headRevisionId,
+    try {
+      const account = accountFromMaps(
+        principalId,
+        this.#principals,
+        this.#externalBindings,
+        this.#knowledgeSpaces,
+        this.#personalBindings,
+        this.#memberships,
+      );
+      if (account === null || account.personalMind.space.state !== "active") {
+        return null;
+      }
+      return Object.freeze({
+        spaceId: account.personalMind.space.spaceId,
+        headRevisionId: account.personalMind.space.headRevisionId,
+      });
+    } catch {
+      return null;
+    }
+  }
+
+  async readPersonalMindProfile(
+    principalId: Principal["principalId"],
+  ): Promise<Readonly<PersonalMindProfileSnapshot> | null> {
+    try {
+      const account = accountFromMaps(
+        principalId,
+        this.#principals,
+        this.#externalBindings,
+        this.#knowledgeSpaces,
+        this.#personalBindings,
+        this.#memberships,
+      );
+      return account === null ? null : personalMindProfileFromAccount(account);
+    } catch {
+      return null;
+    }
+  }
+
+  async classifyPersonalMindTarget(
+    request: PersonalMindTargetRequest,
+  ): Promise<PersonalMindTargetClassification> {
+    const target = this.#knowledgeSpaces.get(request.spaceId);
+    if (!target || target.state !== "active") {
+      return Object.freeze({ kind: "not_found" });
+    }
+    const personalBinding = [...this.#personalBindings.values()].find(
+      (binding) => binding.spaceId === request.spaceId,
+    );
+    if (!personalBinding) {
+      return Object.freeze({ kind: "ordinary", spaceId: request.spaceId });
+    }
+    if (personalBinding.principalId !== request.principalId) {
+      return Object.freeze({ kind: "not_found" });
+    }
+    const account = await this.readAccount(request.principalId);
+    if (
+      account === null ||
+      account.personalMind.personalBinding?.spaceId !== request.spaceId
+    ) {
+      return Object.freeze({ kind: "not_found" });
+    }
+    return Object.freeze({ kind: "own_personal", spaceId: request.spaceId });
+  }
+
+  async runPersonalMindTransaction<Result>(
+    operation: (transaction: PersonalMindMetadataTransaction) => Promise<Result>,
+  ): Promise<Result> {
+    return this.#runExclusive(async () => {
+      const principals = cloneRecordMap(this.#principals, freezePrincipal);
+      const knowledgeSpaces = cloneRecordMap(
+        this.#knowledgeSpaces,
+        freezeKnowledgeSpace,
+      );
+      const idempotencyRecords = clonePersonalProfileIdempotencyRecords(
+        this.#personalProfileIdempotencyRecords,
+      );
+      const transaction: PersonalMindMetadataTransaction = Object.freeze({
+        renamePersonalProfile: async (
+          request: RenamePersonalProfileRequest,
+        ): Promise<RenamePersonalProfileResult> => {
+          const idempotencyRecordKey = personalProfileIdempotencyKey(
+            request.principalId,
+            request.idempotencyKey,
+          );
+          let account: Readonly<PrincipalAccountSnapshot> | null;
+          try {
+            account = accountFromMaps(
+              request.principalId,
+              principals,
+              this.#externalBindings,
+              knowledgeSpaces,
+              this.#personalBindings,
+              this.#memberships,
+            );
+          } catch {
+            return Object.freeze({ kind: "invalid_record" });
+          }
+          if (account === null) return Object.freeze({ kind: "not_found" });
+          const previous = idempotencyRecords.get(idempotencyRecordKey);
+          if (previous) {
+            if (
+              previous.profile.principalId !== account.principal.principalId ||
+              previous.profile.personalMind.spaceId !==
+                account.personalMind.space.spaceId
+            ) {
+              return Object.freeze({ kind: "invalid_record" });
+            }
+            if (previous.canonicalRequestHash !== request.canonicalRequestHash) {
+              return Object.freeze({ kind: "idempotency_conflict" });
+            }
+            return Object.freeze({
+              kind: "renamed",
+              profile: freezePersonalMindProfile(previous.profile),
+              replayed: true,
+            });
+          }
+          const personalSpace = account.personalMind.space;
+          if (
+            account.principal.profileVersion !== request.expectedProfileVersion ||
+            personalSpace.metadataVersion !== request.expectedPersonalMetadataVersion
+          ) {
+            return Object.freeze({
+              kind: "profile_conflict",
+              currentProfileVersion: account.principal.profileVersion,
+              currentPersonalMetadataVersion: personalSpace.metadataVersion,
+            });
+          }
+
+          const updatedPrincipal = freezePrincipal({
+            ...account.principal,
+            displayName: request.displayName,
+            profileVersion: version(account.principal.profileVersion + 1),
+            updatedAt: request.occurredAt,
+          });
+          const updatedSpace = freezeKnowledgeSpace({
+            ...personalSpace,
+            name: request.displayName,
+            metadataVersion: version(personalSpace.metadataVersion + 1),
+            updatedAt: request.occurredAt,
+          });
+          const candidatePrincipals = new Map(principals);
+          candidatePrincipals.set(request.principalId, updatedPrincipal);
+          const candidateSpaces = new Map(knowledgeSpaces);
+          candidateSpaces.set(personalSpace.spaceId, updatedSpace);
+          let updatedAccount: Readonly<PrincipalAccountSnapshot> | null;
+          try {
+            updatedAccount = accountFromMaps(
+              request.principalId,
+              candidatePrincipals,
+              this.#externalBindings,
+              candidateSpaces,
+              this.#personalBindings,
+              this.#memberships,
+            );
+          } catch {
+            return Object.freeze({ kind: "invalid_record" });
+          }
+          if (updatedAccount === null) {
+            return Object.freeze({ kind: "invalid_record" });
+          }
+          principals.set(request.principalId, updatedPrincipal);
+          this.#failPersonalProfileIfRequested("after_principal");
+          knowledgeSpaces.set(personalSpace.spaceId, updatedSpace);
+          this.#failPersonalProfileIfRequested("after_space");
+          const profile = personalMindProfileFromAccount(updatedAccount);
+          idempotencyRecords.set(
+            idempotencyRecordKey,
+            Object.freeze({
+              principalId: request.principalId,
+              key: request.idempotencyKey,
+              canonicalRequestHash: request.canonicalRequestHash,
+              profile,
+            }),
+          );
+          this.#failPersonalProfileIfRequested("before_commit");
+          return Object.freeze({ kind: "renamed", profile, replayed: false });
+        },
+      });
+
+      const result = await operation(transaction);
+      this.#principals = principals;
+      this.#knowledgeSpaces = knowledgeSpaces;
+      this.#personalProfileIdempotencyRecords = idempotencyRecords;
+      return result;
     });
   }
 
@@ -2183,6 +2434,32 @@ export class InMemoryRevisionMetadataStore
     this.#nextAccountBootstrapFailureStage = stage;
   }
 
+  failNextPersonalProfileAtForTest(stage: PersonalProfileFailureStage): void {
+    this.#nextPersonalProfileFailureStage = stage;
+  }
+
+  /** Test-only concurrent metadata mutation; content HEAD/history are untouched. */
+  async bumpPersonalMindMetadataVersionForTest(
+    principalId: Principal["principalId"],
+    occurredAt: KnowledgeSpace["updatedAt"],
+  ): Promise<boolean> {
+    return this.#runExclusive(async () => {
+      const binding = this.#personalBindings.get(principalId);
+      if (!binding) return false;
+      const space = this.#knowledgeSpaces.get(binding.spaceId);
+      if (!space) return false;
+      this.#knowledgeSpaces.set(
+        space.spaceId,
+        freezeKnowledgeSpace({
+          ...space,
+          metadataVersion: version(space.metadataVersion + 1),
+          updatedAt: occurredAt,
+        }),
+      );
+      return true;
+    });
+  }
+
   async inspectAccountBootstrapStateForTest(): Promise<Readonly<{
     principals: number;
     bindings: number;
@@ -2242,5 +2519,12 @@ export class InMemoryRevisionMetadataStore
     if (this.#nextAccountBootstrapFailureStage !== stage) return;
     this.#nextAccountBootstrapFailureStage = null;
     throw new Error(`injected account bootstrap transaction failure at ${stage}`);
+  }
+
+
+  #failPersonalProfileIfRequested(stage: PersonalProfileFailureStage): void {
+    if (this.#nextPersonalProfileFailureStage !== stage) return;
+    this.#nextPersonalProfileFailureStage = null;
+    throw new Error(`injected Personal Mind profile transaction failure at ${stage}`);
   }
 }
