@@ -8,6 +8,10 @@ import {
   type ImmutableObjectPutResult,
   type ImmutableObjectWriteRequest,
   type ObjectStore,
+  type ExportArchivePutResult,
+  type ExportArchiveStore,
+  type ExportArchiveWriteRequest,
+  type StoredExportArchive,
 } from "@mind-diary/application-ports";
 
 export const OBJECT_ADAPTER = "memory-revision-envelope" as const;
@@ -29,6 +33,11 @@ type DigestComputer = (bytes: Uint8Array) => string | Promise<string>;
 interface StoredObject extends Omit<ImmutableObjectMetadata, "protectedAt"> {
   protectedAt: Utc;
   bytes: Uint8Array;
+}
+
+interface StoredArchive {
+  readonly metadata: Readonly<StoredExportArchive>;
+  readonly bytes: Uint8Array;
 }
 
 const SHA256_PATTERN = /^sha256:[0-9a-f]{64}$/u;
@@ -129,9 +138,10 @@ async function webCryptoSha256(bytes: Uint8Array): Promise<string> {
     .join("")}`;
 }
 
-export class InMemoryObjectStore implements ObjectStore {
+export class InMemoryObjectStore implements ObjectStore, ExportArchiveStore {
   readonly kind = "object-store" as const;
   readonly #objects = new Map<string, StoredObject>();
+  readonly #exportArchives = new Map<string, StoredArchive>();
   readonly #digestComputer: DigestComputer;
 
   constructor(options: { readonly digestComputer?: DigestComputer } = {}) {
@@ -238,6 +248,112 @@ export class InMemoryObjectStore implements ObjectStore {
       return false;
     }
     return this.#objects.delete(request.sha256);
+  }
+
+  async putExportArchive(
+    request: ExportArchiveWriteRequest,
+  ): Promise<ExportArchivePutResult> {
+    assertUtc(request.createdAt);
+    if (
+      typeof request.jobId !== "string" ||
+      request.jobId.length === 0 ||
+      request.jobId.length > 256 ||
+      /[\u0000-\u001f\u007f]/u.test(request.jobId) ||
+      typeof request.spaceId !== "string" ||
+      request.spaceId.length === 0 ||
+      request.spaceId.length > 256 ||
+      /[\u0000-\u001f\u007f]/u.test(request.spaceId) ||
+      !Number.isSafeInteger(request.claimVersion) ||
+      request.claimVersion < 1
+    ) {
+      return Object.freeze({ kind: "object_key_collision" });
+    }
+    assertDigest(request.sha256);
+    const bytes = new Uint8Array(request.bytes);
+    const actual = await this.calculateSha256(bytes);
+    if (actual !== request.sha256) {
+      return Object.freeze({ kind: "digest_mismatch" });
+    }
+    const objectKey = `exports/${encodeURIComponent(request.spaceId)}/${encodeURIComponent(
+      request.jobId,
+    )}/claim-${request.claimVersion}`;
+    const existing = this.#exportArchives.get(objectKey);
+    if (existing) {
+      const same =
+        existing.metadata.sha256 === actual &&
+        existing.metadata.size === bytes.byteLength &&
+        bytesEqual(existing.bytes, bytes);
+      return same
+        ? Object.freeze({
+            kind: "already_exists",
+            archive: Object.freeze({ ...existing.metadata }),
+          })
+        : Object.freeze({ kind: "object_key_collision" });
+    }
+    const metadata = Object.freeze({
+      objectKey,
+      jobId: request.jobId,
+      spaceId: request.spaceId,
+      claimVersion: request.claimVersion,
+      archiveFormat: "MD-OKF-ZIP-1" as const,
+      mediaType: "application/zip" as const,
+      filename: "mind-diary-okf-bundle.zip" as const,
+      contentDisposition:
+        'attachment; filename="mind-diary-okf-bundle.zip"' as const,
+      sha256: actual,
+      size: bytes.byteLength,
+      createdAt: request.createdAt,
+    });
+    this.#exportArchives.set(objectKey, { metadata, bytes });
+    return Object.freeze({ kind: "stored", archive: metadata });
+  }
+
+  async readExportArchive(objectKey: string): Promise<Uint8Array | null> {
+    const stored = this.#exportArchives.get(objectKey);
+    if (!stored) return null;
+    const actual = await this.calculateSha256(stored.bytes);
+    if (
+      actual !== stored.metadata.sha256 ||
+      stored.bytes.byteLength !== stored.metadata.size
+    ) {
+      throw new ObjectStoreIntegrityError(
+        "object_tampered",
+        "stored export archive no longer matches its digest and size",
+      );
+    }
+    return new Uint8Array(stored.bytes);
+  }
+
+  async deleteExportArchive(objectKey: string): Promise<boolean> {
+    return this.#exportArchives.delete(objectKey);
+  }
+
+  async deleteExportArchivesForJob(
+    jobId: ExportArchiveWriteRequest["jobId"],
+  ): Promise<number> {
+    const keys = [...this.#exportArchives]
+      .filter(([, archive]) => archive.metadata.jobId === jobId)
+      .map(([key]) => key);
+    keys.forEach((key) => this.#exportArchives.delete(key));
+    return keys.length;
+  }
+
+  async deleteExportArchivesForSpace(
+    spaceId: ExportArchiveWriteRequest["spaceId"],
+  ): Promise<number> {
+    const keys = [...this.#exportArchives]
+      .filter(([, archive]) => archive.metadata.spaceId === spaceId)
+      .map(([key]) => key);
+    keys.forEach((key) => this.#exportArchives.delete(key));
+    return keys.length;
+  }
+
+  async listExportArchivesForTest(): Promise<readonly Readonly<StoredExportArchive>[]> {
+    return Object.freeze(
+      [...this.#exportArchives.values()].map((archive) =>
+        Object.freeze({ ...archive.metadata }),
+      ),
+    );
   }
 
   /** Deliberate corruption hook for integrity tests of this in-memory adapter. */

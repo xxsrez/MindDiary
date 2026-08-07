@@ -1,8 +1,11 @@
 import type { ActorContext } from "@mind-diary/application-contracts";
 import type {
   AuditSink,
+  BackgroundAuthorizer,
   BackgroundWorkStore,
   Clock,
+  ExportArchiveStore,
+  ExportJobStore,
   SearchIndex,
   SpaceTargetRecordPurger,
   SpaceTargetPurgeResult,
@@ -10,11 +13,13 @@ import type {
 import type {
   JobId,
   OutboxMessageId,
+  PrincipalId,
   RevisionId,
   RevisionIndexState,
   Sha256Digest,
   SpaceId,
   UtcInstant,
+  Version,
 } from "@mind-diary/domain";
 import type { OkfBundleFixture } from "@mind-diary/okf-codec";
 
@@ -350,15 +355,18 @@ export class SpaceTargetRecordPurgeService {
   readonly #metadata: SpaceTargetRecordPurger;
   readonly #index: SearchIndex;
   readonly #audit: AuditSink;
+  readonly #exportArchives: ExportArchiveStore | null;
 
   constructor(dependencies: {
     readonly metadata: SpaceTargetRecordPurger;
     readonly index: SearchIndex;
     readonly audit: AuditSink;
+    readonly exportArchives?: ExportArchiveStore;
   }) {
     this.#metadata = dependencies.metadata;
     this.#index = dependencies.index;
     this.#audit = dependencies.audit;
+    this.#exportArchives = dependencies.exportArchives ?? null;
   }
 
   async purge(request: {
@@ -369,6 +377,7 @@ export class SpaceTargetRecordPurgeService {
       SpaceTargetPurgeResult & {
         readonly indexedRevisions: number;
         readonly deliveredAuditEvents: number;
+        readonly exportArchives: number;
       }
     >
   > {
@@ -376,7 +385,256 @@ export class SpaceTargetRecordPurgeService {
     const metadata = await this.#metadata.purgeSpaceTargetRecords(request.spaceId);
     const indexedRevisions = await this.#index.purgeSpace(request.spaceId);
     const deliveredAuditEvents = await this.#audit.purgeSpace(request.spaceId);
-    return Object.freeze({ ...metadata, indexedRevisions, deliveredAuditEvents });
+    const exportArchives = this.#exportArchives === null
+      ? 0
+      : await this.#exportArchives.deleteExportArchivesForSpace(request.spaceId);
+    return Object.freeze({
+      ...metadata,
+      indexedRevisions,
+      deliveredAuditEvents,
+      exportArchives,
+    });
+  }
+}
+
+export interface DeterministicExportBuilder {
+  exportExactRevision(request: {
+    readonly spaceId: SpaceId;
+    readonly revisionId: RevisionId;
+  }): Promise<{
+    readonly revisionId: RevisionId;
+    readonly archiveFormat: "MD-OKF-ZIP-1";
+    readonly mediaType: "application/zip";
+    readonly filename: "mind-diary-okf-bundle.zip";
+    readonly contentDisposition: 'attachment; filename="mind-diary-okf-bundle.zip"';
+    readonly bytes: Uint8Array;
+    readonly sha256: Sha256Digest;
+    readonly size: number;
+  }>;
+}
+
+const SAFE_EXPORT_FAILURE_CODES = new Set([
+  "revision_not_found",
+  "revision_integrity_failure",
+  "okf_validation_failed",
+  "archive_limit_exceeded",
+]);
+
+function safeExportFailureCode(error: unknown): string {
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    typeof error.code === "string" &&
+    SAFE_EXPORT_FAILURE_CODES.has(error.code)
+  ) {
+    return error.code;
+  }
+  return "export_build_failed";
+}
+
+/** Lease-fenced durable complete_export handler. */
+export class ExportJobHandler {
+  readonly #jobs: ExportJobStore;
+  readonly #backgroundAuthorizer: BackgroundAuthorizer;
+  readonly #builder: DeterministicExportBuilder;
+  readonly #archives: ExportArchiveStore;
+  readonly #clock: Clock;
+  readonly #retryDelayMs: number;
+  readonly #claimLeaseMs: number;
+
+  constructor(dependencies: {
+    readonly jobs: ExportJobStore;
+    readonly backgroundAuthorizer: BackgroundAuthorizer;
+    readonly builder: DeterministicExportBuilder;
+    readonly archives: ExportArchiveStore;
+    readonly clock: Clock;
+    readonly retryDelayMs?: number;
+    readonly claimLeaseMs?: number;
+  }) {
+    this.#jobs = dependencies.jobs;
+    this.#backgroundAuthorizer = dependencies.backgroundAuthorizer;
+    this.#builder = dependencies.builder;
+    this.#archives = dependencies.archives;
+    this.#clock = dependencies.clock;
+    this.#retryDelayMs = boundedDuration(
+      dependencies.retryDelayMs ?? 1_000,
+      "export retry delay",
+      24 * 60 * 60 * 1_000,
+    );
+    this.#claimLeaseMs = boundedDuration(
+      dependencies.claimLeaseMs ?? DEFAULT_BACKGROUND_CLAIM_LEASE_MS,
+      "export claim lease",
+      MAX_BACKGROUND_CLAIM_LEASE_MS,
+    );
+  }
+
+  async handle(request: {
+    readonly actor: ActorContext;
+    readonly jobId: JobId;
+  }): Promise<BackgroundHandleResult> {
+    assertServiceActor(request.actor);
+    const claimedAt = this.#clock.now();
+    const claim = await this.#jobs.claimExportJob(
+      request.jobId,
+      claimedAt,
+      retryAt(claimedAt, this.#claimLeaseMs),
+    );
+    if (claim.kind !== "claimed") {
+      if (claim.kind === "completed") return Object.freeze({ kind: "already_completed" });
+      if (claim.kind === "expired") return Object.freeze({ kind: "not_available" });
+      return Object.freeze({ kind: claim.kind });
+    }
+    const job = claim.job;
+    const authorized = await this.#authorizeCurrent(request.actor, job);
+    if (!authorized) {
+      return this.#failClaim(job.jobId, job.version, "export_access_denied");
+    }
+
+    let objectKey: string | null = null;
+    try {
+      const built = await this.#builder.exportExactRevision({
+        spaceId: job.spaceId,
+        revisionId: job.revisionId,
+      });
+      if (
+        built.revisionId !== job.revisionId ||
+        built.archiveFormat !== "MD-OKF-ZIP-1" ||
+        built.mediaType !== "application/zip" ||
+        built.filename !== "mind-diary-okf-bundle.zip" ||
+        built.contentDisposition !==
+          'attachment; filename="mind-diary-okf-bundle.zip"' ||
+        !(built.bytes instanceof Uint8Array) ||
+        built.bytes.byteLength !== built.size
+      ) {
+        throw Object.assign(new Error("invalid deterministic export result"), {
+          code: "revision_integrity_failure",
+        });
+      }
+      const put = await this.#archives.putExportArchive({
+        jobId: job.jobId,
+        spaceId: job.spaceId,
+        claimVersion: job.version,
+        bytes: built.bytes,
+        sha256: built.sha256,
+        createdAt: this.#clock.now(),
+      });
+      if (!("archive" in put)) {
+        throw new Error(`export archive object write rejected: ${put.kind}`);
+      }
+      const storedObjectKey = put.archive.objectKey;
+      objectKey = storedObjectKey;
+
+      // Current access is rebuilt again after the potentially long build.
+      if (!(await this.#authorizeCurrent(request.actor, job))) {
+        await this.#archives.deleteExportArchive(storedObjectKey);
+        objectKey = null;
+        return this.#failClaim(job.jobId, job.version, "export_access_denied");
+      }
+      const completed = await this.#jobs.completeExportJob(
+        job.jobId,
+        job.version,
+        Object.freeze({
+          objectKey: put.archive.objectKey,
+          archiveFormat: put.archive.archiveFormat,
+          mediaType: put.archive.mediaType,
+          filename: put.archive.filename,
+          contentDisposition: put.archive.contentDisposition,
+          sha256: put.archive.sha256,
+          size: put.archive.size,
+        }),
+        this.#clock.now(),
+      );
+      if (!completed) {
+        await this.#archives.deleteExportArchive(storedObjectKey);
+        return Object.freeze({ kind: "not_available" });
+      }
+      return Object.freeze({ kind: "completed" });
+    } catch (error) {
+      if (objectKey !== null) await this.#archives.deleteExportArchive(objectKey);
+      return this.#failClaim(
+        job.jobId,
+        job.version,
+        safeExportFailureCode(error),
+      );
+    }
+  }
+
+  async #authorizeCurrent(
+    actor: ServiceActorContext,
+    job: { readonly requestedByPrincipalId: PrincipalId; readonly spaceId: SpaceId },
+  ): Promise<boolean> {
+    const decision = await this.#backgroundAuthorizer.authorize({
+      actor,
+      principalId: job.requestedByPrincipalId,
+      spaceId: job.spaceId,
+      capability: "content:export",
+      revisionMode: "historical",
+    });
+    return decision.kind === "allowed";
+  }
+
+  async #failClaim(
+    jobId: JobId,
+    version: Version,
+    failureCode: string,
+  ): Promise<BackgroundHandleResult> {
+    const failedAt = this.#clock.now();
+    const failed = await this.#jobs.failExportJob(
+      jobId,
+      version,
+      failureCode,
+      failedAt,
+      retryAt(failedAt, this.#retryDelayMs),
+    );
+    return failed
+      ? Object.freeze({ kind: "failed", failureCode })
+      : Object.freeze({ kind: "not_available" });
+  }
+}
+
+/** Expiry and object cleanup remain repeatable after service reconstruction. */
+export class ExportJobExpiryHandler {
+  readonly #jobs: ExportJobStore;
+  readonly #archives: ExportArchiveStore;
+  readonly #clock: Clock;
+
+  constructor(dependencies: {
+    readonly jobs: ExportJobStore;
+    readonly archives: ExportArchiveStore;
+    readonly clock: Clock;
+  }) {
+    this.#jobs = dependencies.jobs;
+    this.#archives = dependencies.archives;
+    this.#clock = dependencies.clock;
+  }
+
+  async handle(request: {
+    readonly actor: ActorContext;
+    readonly jobId: JobId;
+  }): Promise<BackgroundHandleResult> {
+    assertServiceActor(request.actor);
+    const expired = await this.#jobs.expireExportJob(
+      request.jobId,
+      this.#clock.now(),
+    );
+    if (expired.kind !== "expired") {
+      return Object.freeze({ kind: expired.kind === "not_due" ? "not_available" : "not_found" });
+    }
+    if (expired.job.archiveCleanedAt !== null) {
+      // A stale crashed worker may have left a later claim-scoped orphan.
+      await this.#archives.deleteExportArchivesForJob(request.jobId);
+      return Object.freeze({ kind: "already_completed" });
+    }
+    await this.#archives.deleteExportArchivesForJob(request.jobId);
+    const completed = await this.#jobs.completeExpiredExportCleanup(
+      request.jobId,
+      expired.job.version,
+      this.#clock.now(),
+    );
+    return completed
+      ? Object.freeze({ kind: "completed" })
+      : Object.freeze({ kind: "not_available" });
   }
 }
 

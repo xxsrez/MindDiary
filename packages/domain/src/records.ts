@@ -214,6 +214,44 @@ export interface BackgroundJob {
   readonly updatedAt: UtcInstant;
 }
 
+/**
+ * Durable asynchronous export state. The request stores only stable authority
+ * inputs; token and role snapshots are deliberately absent so a worker must
+ * re-read current authorization before using the exact revision.
+ */
+export interface ExportArchiveRecord {
+  /** Internal object-store locator. Safe status projections must omit it. */
+  readonly objectKey: string;
+  readonly archiveFormat: "MD-OKF-ZIP-1";
+  readonly mediaType: "application/zip";
+  readonly filename: "mind-diary-okf-bundle.zip";
+  readonly contentDisposition: 'attachment; filename="mind-diary-okf-bundle.zip"';
+  readonly sha256: Sha256Digest;
+  readonly size: number;
+}
+
+export interface ExportJob {
+  readonly jobId: JobId;
+  readonly requestedByPrincipalId: PrincipalId;
+  readonly spaceId: SpaceId;
+  readonly revisionId: RevisionId;
+  readonly idempotencyKey: IdempotencyKey;
+  readonly state: JobState;
+  readonly version: Version;
+  readonly attempts: number;
+  readonly availableAt: UtcInstant;
+  readonly claimExpiresAt: UtcInstant | null;
+  readonly expiresAt: UtcInstant;
+  readonly createdAt: UtcInstant;
+  readonly updatedAt: UtcInstant;
+  readonly completedAt: UtcInstant | null;
+  /** Bounded machine code only; content and exception messages are forbidden. */
+  readonly lastFailureCode: string | null;
+  /** Metadata only. Archive bytes live exclusively in object storage. */
+  readonly archive: Readonly<ExportArchiveRecord> | null;
+  readonly archiveCleanedAt: UtcInstant | null;
+}
+
 /** Durable exact-revision state; it must never be inferred from current HEAD. */
 export interface RevisionIndexState {
   readonly spaceId: SpaceId;

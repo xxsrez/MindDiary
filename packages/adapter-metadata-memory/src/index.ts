@@ -10,6 +10,7 @@ import type {
   CompleteIdempotencyRequest,
   CompleteIdempotencyResult,
   ClaimAuditOutboxResult,
+  ClaimExportJobResult,
   ClaimIndexJobResult,
   ContentCommitMetadataStore,
   ContentCommitMetadataTransaction,
@@ -31,6 +32,12 @@ import type {
   CreateMcpTokenRequest,
   CreateMcpTokenResult,
   CurrentAuthorizationToken,
+  CreateExportJobResult,
+  ExpireExportJobResult,
+  ExportArchiveRecord,
+  ExportJob,
+  ExportJobStore,
+  ExportStartTransaction,
   RevokeMcpTokenRequest,
   RevokeMcpTokenResult,
   RevokePrincipalTokensForAccountDeletionRequest,
@@ -583,6 +590,19 @@ function cloneBackgroundJob(job: Readonly<BackgroundJob>): Readonly<BackgroundJo
   return Object.freeze({ ...job, target: Object.freeze({ ...job.target }) });
 }
 
+function cloneExportJob(job: Readonly<ExportJob>): Readonly<ExportJob> {
+  return Object.freeze({
+    ...job,
+    archive: job.archive === null ? null : Object.freeze({ ...job.archive }),
+  });
+}
+
+function cloneExportJobs(
+  source: ReadonlyMap<JobId, Readonly<ExportJob>>,
+): Map<JobId, Readonly<ExportJob>> {
+  return new Map([...source].map(([id, job]) => [id, cloneExportJob(job)]));
+}
+
 function cloneIndexState(
   state: Readonly<RevisionIndexState>,
 ): Readonly<RevisionIndexState> {
@@ -640,6 +660,53 @@ function validClaimLease(now: string, claimExpiresAt: string): boolean {
     Number.isFinite(end) &&
     end > start &&
     end - start <= MAX_CLAIM_LEASE_MS
+  );
+}
+
+function validExportArchive(archive: Readonly<ExportArchiveRecord>): boolean {
+  return (
+    typeof archive.objectKey === "string" &&
+    archive.objectKey.length > 0 &&
+    archive.objectKey.length <= 512 &&
+    archive.archiveFormat === "MD-OKF-ZIP-1" &&
+    archive.mediaType === "application/zip" &&
+    archive.filename === "mind-diary-okf-bundle.zip" &&
+    archive.contentDisposition ===
+      'attachment; filename="mind-diary-okf-bundle.zip"' &&
+    SHA256_PATTERN.test(archive.sha256) &&
+    Number.isSafeInteger(archive.size) &&
+    archive.size >= 0
+  );
+}
+
+function validInitialExportJob(
+  job: Readonly<ExportJob>,
+  revisionsById: ReadonlyMap<RevisionId, Envelope>,
+): boolean {
+  const createdAt = Date.parse(job.createdAt);
+  const expiresAt = Date.parse(job.expiresAt);
+  const revision = revisionsById.get(job.revisionId);
+  return (
+    typeof job.jobId === "string" &&
+    job.jobId.length > 0 &&
+    typeof job.requestedByPrincipalId === "string" &&
+    job.requestedByPrincipalId.length > 0 &&
+    typeof job.idempotencyKey === "string" &&
+    job.idempotencyKey.length > 0 &&
+    revision?.revision.spaceId === job.spaceId &&
+    job.state === "queued" &&
+    job.version === 1 &&
+    job.attempts === 0 &&
+    job.availableAt === job.createdAt &&
+    job.updatedAt === job.createdAt &&
+    job.claimExpiresAt === null &&
+    job.completedAt === null &&
+    job.lastFailureCode === null &&
+    job.archive === null &&
+    job.archiveCleanedAt === null &&
+    Number.isFinite(createdAt) &&
+    Number.isFinite(expiresAt) &&
+    expiresAt > createdAt
   );
 }
 
@@ -774,7 +841,8 @@ function completeIdempotencyAgainst(
   });
 }
 
-export class InMemoryRevisionMetadataStore implements ContentCommitMetadataStore {
+export class InMemoryRevisionMetadataStore
+  implements ContentCommitMetadataStore, ExportJobStore {
   readonly kind = "metadata-store" as const;
   #spaces = new Map<SpaceId, SpaceState>();
   #revisionsById = new Map<RevisionId, Envelope>();
@@ -782,6 +850,7 @@ export class InMemoryRevisionMetadataStore implements ContentCommitMetadataStore
   #auditEvents = new Map<AuditEventId, Readonly<AuditEvent>>();
   #auditOutbox = new Map<OutboxMessageId, Readonly<AuditOutboxMessage>>();
   #backgroundJobs = new Map<JobId, Readonly<BackgroundJob>>();
+  #exportJobs = new Map<JobId, Readonly<ExportJob>>();
   #indexStates = new Map<string, Readonly<RevisionIndexState>>();
   readonly #authorizationStates = new Map<string, AuthorizationState>();
   #transactionTail: Promise<void> = Promise.resolve();
@@ -877,6 +946,67 @@ export class InMemoryRevisionMetadataStore implements ContentCommitMetadataStore
       this.#auditOutbox = auditOutbox;
       this.#backgroundJobs = backgroundJobs;
       this.#indexStates = indexStates;
+      return result;
+    });
+  }
+
+  async runExportStartTransaction<Result>(
+    operation: (transaction: ExportStartTransaction) => Promise<Result>,
+  ): Promise<Result> {
+    return this.#runExclusive(async () => {
+      const spaces = cloneSpaces(this.#spaces);
+      const revisionsById = new Map(this.#revisionsById);
+      const idempotencyRecords = cloneIdempotencyRecords(this.#idempotencyRecords);
+      const exportJobs = cloneExportJobs(this.#exportJobs);
+      const authorizationStates = new Map(
+        [...this.#authorizationStates].map(([key, state]) => [
+          key,
+          cloneAuthorizationState(state),
+        ]),
+      );
+      const transaction: ExportStartTransaction = Object.freeze({
+        kind: "authorization-transaction" as const,
+        readCurrentAuthorizationState: async (query: AuthorizationStateQuery) => {
+          const state = authorizationStates.get(authorizationStateKey(query));
+          return state ? cloneAuthorizationState(state) : null;
+        },
+        readHead: async (spaceId: SpaceId) => spaces.get(spaceId)?.head ?? null,
+        readRevision: async (spaceId: SpaceId, revisionId: RevisionId) =>
+          spaces.get(spaceId)?.revisions.get(revisionId) ?? null,
+        listRevisions: async (spaceId: SpaceId) => {
+          const revisions = [...(spaces.get(spaceId)?.revisions.values() ?? [])]
+            .sort((left, right) =>
+              left.revision.revisionNumber - right.revision.revisionNumber,
+            );
+          return Object.freeze(revisions);
+        },
+        readExportJob: async (jobId: JobId) => {
+          const job = exportJobs.get(jobId);
+          return job ? cloneExportJob(job) : null;
+        },
+        checkIdempotency: async (request: CheckIdempotencyRequest) =>
+          checkIdempotencyAgainst(request, idempotencyRecords),
+        completeIdempotency: async (request: CompleteIdempotencyRequest) =>
+          completeIdempotencyAgainst(request, idempotencyRecords),
+        createExportJob: async (
+          job: Readonly<ExportJob>,
+        ): Promise<CreateExportJobResult> => {
+          const existing = exportJobs.get(job.jobId);
+          if (existing) {
+            return Object.freeze({ kind: "job_id_collision" });
+          }
+          if (!validInitialExportJob(job, revisionsById)) {
+            return Object.freeze({ kind: "invalid_job" });
+          }
+          const stored = cloneExportJob(job);
+          exportJobs.set(job.jobId, stored);
+          return Object.freeze({ kind: "created", job: stored });
+        },
+      });
+
+      const result = await operation(transaction);
+      this.#idempotencyRecords = idempotencyRecords;
+      this.#exportJobs = exportJobs;
       return result;
     });
   }
@@ -1245,6 +1375,193 @@ export class InMemoryRevisionMetadataStore implements ContentCommitMetadataStore
     });
   }
 
+  async readExportJob(jobId: JobId): Promise<Readonly<ExportJob> | null> {
+    const job = this.#exportJobs.get(jobId);
+    return job ? cloneExportJob(job) : null;
+  }
+
+  async claimExportJob(
+    jobId: JobId,
+    now: ExportJob["updatedAt"],
+    claimExpiresAt: ExportJob["updatedAt"],
+  ): Promise<ClaimExportJobResult> {
+    return this.#runExclusive(async () => {
+      if (!validClaimLease(now, claimExpiresAt)) {
+        return Object.freeze({ kind: "not_available" });
+      }
+      const current = this.#exportJobs.get(jobId);
+      if (!current) return Object.freeze({ kind: "not_found" });
+      if (current.state === "succeeded") {
+        return Object.freeze({ kind: "completed" });
+      }
+      if (current.state === "expired" || Date.parse(now) >= Date.parse(current.expiresAt)) {
+        return Object.freeze({ kind: "expired" });
+      }
+      const expiredClaim =
+        current.state === "running" &&
+        current.claimExpiresAt !== null &&
+        Date.parse(current.claimExpiresAt) <= Date.parse(now);
+      if (
+        (current.state === "running" && !expiredClaim) ||
+        (current.state !== "queued" && current.state !== "failed" && !expiredClaim) ||
+        (!expiredClaim && Date.parse(current.availableAt) > Date.parse(now))
+      ) {
+        return Object.freeze({ kind: "not_available" });
+      }
+      const claimed = Object.freeze({
+        ...current,
+        state: "running" as const,
+        version: version(current.version + 1),
+        attempts: current.attempts + 1,
+        claimExpiresAt,
+        updatedAt: now,
+        lastFailureCode: null,
+      });
+      this.#exportJobs.set(jobId, claimed);
+      return Object.freeze({ kind: "claimed", job: cloneExportJob(claimed) });
+    });
+  }
+
+  async completeExportJob(
+    jobId: JobId,
+    expectedClaimVersion: ExportJob["version"],
+    archive: Readonly<ExportArchiveRecord>,
+    completedAt: ExportJob["updatedAt"],
+  ): Promise<boolean> {
+    return this.#runExclusive(async () => {
+      const current = this.#exportJobs.get(jobId);
+      if (
+        !current ||
+        current.state !== "running" ||
+        current.version !== expectedClaimVersion ||
+        current.claimExpiresAt === null ||
+        Date.parse(completedAt) >= Date.parse(current.claimExpiresAt) ||
+        Date.parse(completedAt) >= Date.parse(current.expiresAt) ||
+        !validExportArchive(archive)
+      ) {
+        return false;
+      }
+      this.#exportJobs.set(
+        jobId,
+        Object.freeze({
+          ...current,
+          state: "succeeded",
+          version: version(current.version + 1),
+          updatedAt: completedAt,
+          completedAt,
+          claimExpiresAt: null,
+          lastFailureCode: null,
+          archive: Object.freeze({ ...archive }),
+        }),
+      );
+      return true;
+    });
+  }
+
+  async failExportJob(
+    jobId: JobId,
+    expectedClaimVersion: ExportJob["version"],
+    failureCode: string,
+    failedAt: ExportJob["updatedAt"],
+    retryAt: ExportJob["updatedAt"],
+  ): Promise<boolean> {
+    return this.#runExclusive(async () => {
+      const current = this.#exportJobs.get(jobId);
+      if (
+        !current ||
+        current.state !== "running" ||
+        current.version !== expectedClaimVersion ||
+        current.claimExpiresAt === null ||
+        Date.parse(failedAt) >= Date.parse(current.claimExpiresAt) ||
+        Date.parse(failedAt) >= Date.parse(current.expiresAt) ||
+        !/^[a-z0-9_]{1,64}$/u.test(failureCode) ||
+        Date.parse(retryAt) <= Date.parse(failedAt)
+      ) {
+        return false;
+      }
+      this.#exportJobs.set(
+        jobId,
+        Object.freeze({
+          ...current,
+          state: "failed",
+          version: version(current.version + 1),
+          availableAt: retryAt,
+          updatedAt: failedAt,
+          claimExpiresAt: null,
+          completedAt: null,
+          lastFailureCode: failureCode,
+          archive: null,
+        }),
+      );
+      return true;
+    });
+  }
+
+  async expireExportJob(
+    jobId: JobId,
+    now: ExportJob["updatedAt"],
+  ): Promise<ExpireExportJobResult> {
+    return this.#runExclusive(async () => {
+      const current = this.#exportJobs.get(jobId);
+      if (!current) return Object.freeze({ kind: "not_found" });
+      if (current.state === "expired") {
+        return Object.freeze({
+          kind: "expired",
+          job: cloneExportJob(current),
+          replayed: true,
+        });
+      }
+      if (Date.parse(now) < Date.parse(current.expiresAt)) {
+        return Object.freeze({ kind: "not_due" });
+      }
+      const expired = Object.freeze({
+        ...current,
+        state: "expired" as const,
+        version: version(current.version + 1),
+        updatedAt: now,
+        claimExpiresAt: null,
+        lastFailureCode: current.lastFailureCode,
+        archiveCleanedAt: null,
+      });
+      this.#exportJobs.set(jobId, expired);
+      return Object.freeze({
+        kind: "expired",
+        job: cloneExportJob(expired),
+        replayed: false,
+      });
+    });
+  }
+
+  async completeExpiredExportCleanup(
+    jobId: JobId,
+    expectedVersion: ExportJob["version"],
+    cleanedAt: ExportJob["updatedAt"],
+  ): Promise<boolean> {
+    return this.#runExclusive(async () => {
+      const current = this.#exportJobs.get(jobId);
+      if (
+        !current ||
+        current.state !== "expired" ||
+        current.version !== expectedVersion ||
+        current.archiveCleanedAt !== null ||
+        !Number.isFinite(Date.parse(cleanedAt))
+      ) {
+        return false;
+      }
+      this.#exportJobs.set(
+        jobId,
+        Object.freeze({
+          ...current,
+          version: version(current.version + 1),
+          updatedAt: cleanedAt,
+          archive: null,
+          archiveCleanedAt: cleanedAt,
+        }),
+      );
+      return true;
+    });
+  }
+
   async purgeSpaceTargetRecords(spaceId: SpaceId): Promise<SpaceTargetPurgeResult> {
     return this.#runExclusive(async () => {
       const indexKeys = [...this.#indexStates]
@@ -1269,13 +1586,17 @@ export class InMemoryRevisionMetadataStore implements ContentCommitMetadataStore
       const idempotencyKeys = [...this.#idempotencyRecords]
         .filter(([, record]) => record.spaceId === spaceId)
         .map(([key]) => key);
+      const exportJobIds = [...this.#exportJobs]
+        .filter(([, job]) => job.spaceId === spaceId)
+        .map(([id]) => id);
       jobIds.forEach((id) => this.#backgroundJobs.delete(id));
+      exportJobIds.forEach((id) => this.#exportJobs.delete(id));
       indexKeys.forEach((key) => this.#indexStates.delete(key));
       outboxIds.forEach((id) => this.#auditOutbox.delete(id));
       auditIds.forEach((id) => this.#auditEvents.delete(id));
       idempotencyKeys.forEach((key) => this.#idempotencyRecords.delete(key));
       return Object.freeze({
-        backgroundJobs: jobIds.length,
+        backgroundJobs: jobIds.length + exportJobIds.length,
         indexStates: indexKeys.length,
         auditEvents: auditIds.length,
         auditOutboxMessages: outboxIds.length,
@@ -1294,6 +1615,10 @@ export class InMemoryRevisionMetadataStore implements ContentCommitMetadataStore
 
   async listBackgroundJobsForTest(): Promise<readonly Readonly<BackgroundJob>[]> {
     return Object.freeze([...this.#backgroundJobs.values()].map(cloneBackgroundJob));
+  }
+
+  async listExportJobsForTest(): Promise<readonly Readonly<ExportJob>[]> {
+    return Object.freeze([...this.#exportJobs.values()].map(cloneExportJob));
   }
 
   failNextCommitForTest(
