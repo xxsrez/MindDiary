@@ -440,6 +440,127 @@ export interface VisibilityAuditIdGenerator {
   nextOutboxMessageId(): OutboxMessageId;
 }
 
+/** Server-owned locator for one short-lived destructive-action preview. */
+export interface OrdinaryMindDeletionIdGenerator {
+  nextImpactId(): string;
+}
+
+/**
+ * Exact pre-delete snapshot. `stateFingerprint` contains only service metadata
+ * identities/versions and counts; it must never contain canonical content.
+ */
+export interface OrdinaryMindDeletionImpactSnapshot {
+  readonly impactId: string;
+  readonly principalId: PrincipalId;
+  readonly spaceId: SpaceId;
+  readonly host: VerifiedSpaceHost;
+  readonly canonicalHandle: CanonicalSpaceHandle;
+  readonly name: string;
+  readonly expiresAt: UtcInstant;
+  readonly metadataVersion: Version;
+  readonly accessVersion: Version;
+  readonly headRevisionId: RevisionId;
+  readonly revisionCount: number;
+  readonly membershipCount: number;
+  readonly invitationCount: number;
+  readonly backgroundJobCount: number;
+  readonly exportJobCount: number;
+  readonly stateFingerprint: string;
+}
+
+export interface CreateOrdinaryMindDeletionImpactRequest {
+  readonly principalId: PrincipalId;
+  readonly host: VerifiedSpaceHost;
+  readonly handle: string;
+  readonly impactId: string;
+  readonly occurredAt: UtcInstant;
+  readonly expiresAt: UtcInstant;
+}
+
+export type CreateOrdinaryMindDeletionImpactResult =
+  | {
+      readonly kind: "created";
+      readonly impact: Readonly<OrdinaryMindDeletionImpactSnapshot>;
+    }
+  | {
+      readonly kind:
+        | "mind_not_found"
+        | "personal_mind"
+        | "forbidden"
+        | "impact_id_collision"
+        | "invalid_record";
+    };
+
+/**
+ * Temporary crash-resumable cleanup plan. It exists only between logical
+ * deletion and completed external cleanup and is not an audit/deletion receipt.
+ */
+export interface OrdinaryMindDeletionCleanupWorkItem {
+  readonly impactId: string;
+  readonly idempotencyKey: IdempotencyKey;
+  readonly principalId: PrincipalId;
+  readonly spaceId: SpaceId;
+  readonly host: VerifiedSpaceHost;
+  readonly canonicalHandle: CanonicalSpaceHandle;
+  readonly objectDigests: readonly Sha256Digest[];
+  readonly deleteBefore: UtcInstant;
+}
+
+export interface DeleteOrdinaryMindRequest {
+  readonly principalId: PrincipalId;
+  readonly host: VerifiedSpaceHost;
+  readonly handle: string;
+  readonly impactId: string;
+  readonly idempotencyKey: IdempotencyKey;
+  readonly occurredAt: UtcInstant;
+}
+
+export interface OrdinaryMindDeletedRecordCounts {
+  readonly revisions: number;
+  readonly memberships: number;
+  readonly invitations: number;
+  readonly backgroundJobs: number;
+  readonly exportJobs: number;
+  readonly exportDownloadGrants: number;
+  readonly indexStates: number;
+  readonly auditEvents: number;
+  readonly auditOutboxMessages: number;
+  readonly idempotencyRecords: number;
+}
+
+export type DeleteOrdinaryMindResult =
+  | {
+      readonly kind: "deleted";
+      readonly cleanup: Readonly<OrdinaryMindDeletionCleanupWorkItem>;
+      readonly counts: Readonly<OrdinaryMindDeletedRecordCounts>;
+    }
+  | {
+      readonly kind: "cleanup_pending";
+      readonly cleanup: Readonly<OrdinaryMindDeletionCleanupWorkItem>;
+    }
+  | { readonly kind: "already_absent" }
+  | {
+      readonly kind:
+        | "mind_not_found"
+        | "personal_mind"
+        | "forbidden"
+        | "deletion_impact_expired"
+        | "deletion_impact_changed"
+        | "idempotency_conflict"
+        | "invalid_record";
+    };
+
+export interface CompleteOrdinaryMindDeletionCleanupRequest {
+  readonly impactId: string;
+  readonly spaceId: SpaceId;
+  readonly host: VerifiedSpaceHost;
+  readonly handle: string;
+}
+
+export type CompleteOrdinaryMindDeletionCleanupResult =
+  | { readonly kind: "completed" }
+  | { readonly kind: "not_found" | "invalid_record" };
+
 export interface ChangeOrdinaryMindVisibilityRequest {
   readonly principalId: PrincipalId;
   readonly spaceId: SpaceId;
@@ -486,10 +607,27 @@ export interface OrdinaryMindMetadataTransaction extends AuthorizationTransactio
   changeOrdinaryMindVisibility(
     request: Readonly<ChangeOrdinaryMindVisibilityRequest>,
   ): Promise<ChangeOrdinaryMindVisibilityResult>;
+  createOrdinaryMindDeletionImpact(
+    request: Readonly<CreateOrdinaryMindDeletionImpactRequest>,
+  ): Promise<CreateOrdinaryMindDeletionImpactResult>;
+  deleteOrdinaryMind(
+    request: Readonly<DeleteOrdinaryMindRequest>,
+  ): Promise<DeleteOrdinaryMindResult>;
+  completeOrdinaryMindDeletionCleanup(
+    request: Readonly<CompleteOrdinaryMindDeletionCleanupRequest>,
+  ): Promise<CompleteOrdinaryMindDeletionCleanupResult>;
+}
+
+/** Global canonical-object reachability across every retained revision. */
+export interface CanonicalObjectReachabilityReader {
+  /** Includes every historical revision, not only each Mind's current HEAD. */
+  listReachableObjectDigests(): Promise<readonly Sha256Digest[]>;
 }
 
 /** Atomic handle, metadata, Owner, revision/HEAD and idempotency boundary. */
-export interface OrdinaryMindStore extends HandleRegistry {
+export interface OrdinaryMindStore
+  extends HandleRegistry,
+    CanonicalObjectReachabilityReader {
   runOrdinaryMindTransaction<Result>(
     operation: (transaction: OrdinaryMindMetadataTransaction) => Promise<Result>,
   ): Promise<Result>;
@@ -841,7 +979,9 @@ export interface ExportDownloadGrantStore extends ExportJobStore {
 }
 
 /** Transactional revision metadata and HEAD; object bytes remain in ObjectStore. */
-export interface RevisionMetadataStore extends MetadataStore {
+export interface RevisionMetadataStore
+  extends MetadataStore,
+    CanonicalObjectReachabilityReader {
   readHead(spaceId: SpaceId): Promise<RevisionId | null>;
   readRevision(
     spaceId: SpaceId,
@@ -851,8 +991,6 @@ export interface RevisionMetadataStore extends MetadataStore {
     spaceId: SpaceId,
   ): Promise<readonly Readonly<CanonicalRevisionEnvelope>[]>;
   commitRevision(request: RevisionCommitRequest): Promise<RevisionCommitResult>;
-  /** Includes every historical revision, not only each Mind's current HEAD. */
-  listReachableObjectDigests(): Promise<readonly Sha256Digest[]>;
 }
 
 /**

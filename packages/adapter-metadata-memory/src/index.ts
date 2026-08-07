@@ -76,6 +76,14 @@ import type {
   CreateOrdinaryMindResult,
   ChangeOrdinaryMindVisibilityRequest,
   ChangeOrdinaryMindVisibilityResult,
+  CompleteOrdinaryMindDeletionCleanupRequest,
+  CompleteOrdinaryMindDeletionCleanupResult,
+  CreateOrdinaryMindDeletionImpactRequest,
+  CreateOrdinaryMindDeletionImpactResult,
+  DeleteOrdinaryMindRequest,
+  DeleteOrdinaryMindResult,
+  OrdinaryMindDeletionCleanupWorkItem,
+  OrdinaryMindDeletionImpactSnapshot,
   OrdinaryMindMetadataTransaction,
   OrdinaryMindRecordSet,
   OrdinaryMindRouteSnapshot,
@@ -1264,6 +1272,56 @@ type OrdinaryMindIdempotencyRecord =
       readonly changed: boolean;
     };
 
+type OrdinaryMindDeletionImpactMap = Map<
+  OrdinaryMindDeletionImpactSnapshot["impactId"],
+  Readonly<OrdinaryMindDeletionImpactSnapshot>
+>;
+
+type OrdinaryMindDeletionCleanupMap = Map<
+  OrdinaryMindDeletionCleanupWorkItem["impactId"],
+  Readonly<OrdinaryMindDeletionCleanupWorkItem>
+>;
+
+function cloneOrdinaryMindDeletionImpact(
+  impact: Readonly<OrdinaryMindDeletionImpactSnapshot>,
+): Readonly<OrdinaryMindDeletionImpactSnapshot> {
+  return Object.freeze({ ...impact });
+}
+
+function cloneOrdinaryMindDeletionImpacts(
+  source: ReadonlyMap<
+    OrdinaryMindDeletionImpactSnapshot["impactId"],
+    Readonly<OrdinaryMindDeletionImpactSnapshot>
+  >,
+): OrdinaryMindDeletionImpactMap {
+  return new Map(
+    [...source].map(([impactId, impact]) => [
+      impactId,
+      cloneOrdinaryMindDeletionImpact(impact),
+    ]),
+  );
+}
+
+function cloneOrdinaryMindDeletionCleanup(
+  work: Readonly<OrdinaryMindDeletionCleanupWorkItem>,
+): Readonly<OrdinaryMindDeletionCleanupWorkItem> {
+  return Object.freeze({ ...work, objectDigests: Object.freeze([...work.objectDigests]) });
+}
+
+function cloneOrdinaryMindDeletionCleanups(
+  source: ReadonlyMap<
+    OrdinaryMindDeletionCleanupWorkItem["impactId"],
+    Readonly<OrdinaryMindDeletionCleanupWorkItem>
+  >,
+): OrdinaryMindDeletionCleanupMap {
+  return new Map(
+    [...source].map(([impactId, work]) => [
+      impactId,
+      cloneOrdinaryMindDeletionCleanup(work),
+    ]),
+  );
+}
+
 function freezeOrdinaryMindSnapshot(
   snapshot: Readonly<OrdinaryMindSnapshot>,
 ): Readonly<OrdinaryMindSnapshot> {
@@ -1533,7 +1591,15 @@ export type OrdinaryMindFailureStage =
   | "visibility_after_catalog"
   | "visibility_after_audit"
   | "visibility_after_idempotency"
-  | "visibility_before_commit";
+  | "visibility_before_commit"
+  | "deletion_impact_after_record"
+  | "deletion_impact_before_commit"
+  | "delete_after_handle_retirement"
+  | "delete_after_target_records"
+  | "delete_after_catalog"
+  | "delete_after_cleanup_work"
+  | "delete_before_commit"
+  | "delete_cleanup_before_commit";
 
 const PUBLIC_CATALOG_CURSOR_PREFIX = "mdc1_";
 const PUBLIC_CATALOG_CURSOR_QUERY = "public_minds";
@@ -1665,6 +1731,164 @@ function stagePublicCatalogSnapshot(
   }
 }
 
+interface OrdinaryMindDeletionState {
+  readonly knowledgeSpaces: ReadonlyMap<SpaceId, Readonly<KnowledgeSpace>>;
+  readonly memberships: ReadonlyMap<
+    SpaceMembership["membershipId"],
+    Readonly<SpaceMembership>
+  >;
+  readonly revisionSpaces: ReadonlyMap<SpaceId, SpaceState>;
+  readonly ordinaryIdempotency: ReadonlyMap<
+    string,
+    Readonly<OrdinaryMindIdempotencyRecord>
+  >;
+  readonly contentIdempotency: ReadonlyMap<string, CompletedIdempotencyRecord>;
+  readonly auditEvents: ReadonlyMap<AuditEventId, Readonly<AuditEvent>>;
+  readonly auditOutbox: ReadonlyMap<OutboxMessageId, Readonly<AuditOutboxMessage>>;
+  readonly backgroundJobs: ReadonlyMap<JobId, Readonly<BackgroundJob>>;
+  readonly exportJobs: ReadonlyMap<JobId, Readonly<ExportJob>>;
+  readonly exportDownloadGrants: ReadonlyMap<
+    string,
+    Readonly<ExportDownloadGrant>
+  >;
+  readonly indexStates: ReadonlyMap<string, Readonly<RevisionIndexState>>;
+  readonly activeBySpace: ReadonlyMap<
+    SpaceId,
+    Readonly<HandleReservationSnapshot>
+  >;
+}
+
+function targetRecordSelection(
+  spaceId: SpaceId,
+  state: OrdinaryMindDeletionState,
+) {
+  const auditIds = [...state.auditEvents]
+    .filter(([, event]) => event.spaceId === spaceId)
+    .map(([id]) => id)
+    .sort();
+  const auditIdSet = new Set(auditIds);
+  const outboxIds = [...state.auditOutbox]
+    .filter(([, message]) => auditIdSet.has(message.auditEventId))
+    .map(([id]) => id)
+    .sort();
+  const outboxIdSet = new Set(outboxIds);
+  const backgroundJobIds = [...state.backgroundJobs]
+    .filter(
+      ([, job]) =>
+        ("spaceId" in job.target && job.target.spaceId === spaceId) ||
+        (job.target.kind === "audit_delivery" &&
+          outboxIdSet.has(job.target.outboxMessageId)),
+    )
+    .map(([id]) => id)
+    .sort();
+  const exportJobIds = [...state.exportJobs]
+    .filter(([, job]) => job.spaceId === spaceId)
+    .map(([id]) => id)
+    .sort();
+  const exportGrantKeys = [...state.exportDownloadGrants]
+    .filter(([, grant]) => grant.spaceId === spaceId)
+    .map(([key]) => key)
+    .sort();
+  const indexKeys = [...state.indexStates]
+    .filter(([, indexState]) => indexState.spaceId === spaceId)
+    .map(([key]) => key)
+    .sort();
+  const contentIdempotencyKeys = [...state.contentIdempotency]
+    .filter(([, record]) => record.spaceId === spaceId)
+    .map(([key]) => key)
+    .sort();
+  const ordinaryIdempotencyKeys = [...state.ordinaryIdempotency]
+    .filter(([, record]) => record.mind.space.spaceId === spaceId)
+    .map(([key]) => key)
+    .sort();
+  const membershipIds = [...state.memberships]
+    .filter(([, membership]) => membership.spaceId === spaceId)
+    .map(([id]) => id)
+    .sort();
+  const revisionIds = [...(state.revisionSpaces.get(spaceId)?.revisions.keys() ?? [])]
+    .sort();
+  return Object.freeze({
+    auditIds: Object.freeze(auditIds),
+    outboxIds: Object.freeze(outboxIds),
+    backgroundJobIds: Object.freeze(backgroundJobIds),
+    exportJobIds: Object.freeze(exportJobIds),
+    exportGrantKeys: Object.freeze(exportGrantKeys),
+    indexKeys: Object.freeze(indexKeys),
+    contentIdempotencyKeys: Object.freeze(contentIdempotencyKeys),
+    ordinaryIdempotencyKeys: Object.freeze(ordinaryIdempotencyKeys),
+    membershipIds: Object.freeze(membershipIds),
+    revisionIds: Object.freeze(revisionIds),
+    // Invitation persistence is introduced by a later story. Keeping the
+    // explicit set here prevents its records from being silently omitted then.
+    invitationIds: Object.freeze([] as string[]),
+  });
+}
+
+function ordinaryMindDeletionFingerprint(
+  spaceId: SpaceId,
+  state: OrdinaryMindDeletionState,
+): string | null {
+  const space = state.knowledgeSpaces.get(spaceId);
+  const reservation = state.activeBySpace.get(spaceId);
+  const revisionState = state.revisionSpaces.get(spaceId);
+  if (!space || !reservation || !revisionState) return null;
+  const records = targetRecordSelection(spaceId, state);
+  return JSON.stringify({
+    format: "mind-diary-ordinary-mind-deletion-impact-v1",
+    space: {
+      space_id: space.spaceId,
+      state: space.state,
+      visibility: space.visibility,
+      metadata_version: space.metadataVersion,
+      access_version: space.accessVersion,
+      head_revision_id: space.headRevisionId,
+      updated_at: space.updatedAt,
+    },
+    handle: {
+      host: reservation.host,
+      canonical_handle: reservation.canonicalHandle,
+    },
+    memberships: records.membershipIds.map((id) => {
+      const membership = state.memberships.get(id)!;
+      return [
+        id,
+        membership.principalId,
+        membership.role,
+        membership.state,
+        membership.version,
+      ];
+    }),
+    revisions: records.revisionIds.map((id) => {
+      const envelope = revisionState.revisions.get(id)!;
+      return [
+        id,
+        envelope.revision.revisionNumber,
+        envelope.revision.parentRevisionId,
+        envelope.revision.manifestHash,
+      ];
+    }),
+    service_records: {
+      invitation_ids: records.invitationIds,
+      background_job_ids: records.backgroundJobIds,
+      export_job_ids: records.exportJobIds,
+      export_grants: records.exportGrantKeys.map((key) => {
+        const grant = state.exportDownloadGrants.get(key)!;
+        return [
+          grant.jobId,
+          grant.requestedByPrincipalId,
+          grant.state,
+          grant.expiresAt,
+        ];
+      }),
+      index_keys: records.indexKeys,
+      audit_ids: records.auditIds,
+      outbox_ids: records.outboxIds,
+      content_idempotency_keys: records.contentIdempotencyKeys,
+      ordinary_idempotency_keys: records.ordinaryIdempotencyKeys,
+    },
+  });
+}
+
 export class InMemoryRevisionMetadataStore
   implements
     ContentCommitMetadataStore,
@@ -1695,6 +1919,8 @@ export class InMemoryRevisionMetadataStore
     string,
     Readonly<OrdinaryMindIdempotencyRecord>
   >();
+  #ordinaryMindDeletionImpacts: OrdinaryMindDeletionImpactMap = new Map();
+  #ordinaryMindDeletionCleanup: OrdinaryMindDeletionCleanupMap = new Map();
   #activeHandlesByKey: ActiveHandleByKeyMap = new Map();
   #activeHandlesBySpace: ActiveHandleBySpaceMap = new Map();
   #retiredHandles: RetiredHandleMap = new Map();
@@ -1999,6 +2225,52 @@ export class InMemoryRevisionMetadataStore
           cloneAuditOutbox(message),
         ]),
       );
+      let contentIdempotencyRecords = cloneIdempotencyRecords(
+        this.#idempotencyRecords,
+      );
+      let backgroundJobs = new Map(
+        [...this.#backgroundJobs].map(([id, job]) => [
+          id,
+          cloneBackgroundJob(job),
+        ]),
+      );
+      let exportJobs = cloneExportJobs(this.#exportJobs);
+      let exportDownloadGrants = cloneExportDownloadGrants(
+        this.#exportDownloadGrants,
+      );
+      let indexStates = new Map(
+        [...this.#indexStates].map(([key, state]) => [
+          key,
+          cloneIndexState(state),
+        ]),
+      );
+      let deletionImpacts = cloneOrdinaryMindDeletionImpacts(
+        this.#ordinaryMindDeletionImpacts,
+      );
+      let deletionCleanup = cloneOrdinaryMindDeletionCleanups(
+        this.#ordinaryMindDeletionCleanup,
+      );
+      let authorizationStates = new Map(
+        [...this.#authorizationStates].map(([key, state]) => [
+          key,
+          cloneAuthorizationState(state),
+        ]),
+      );
+
+      const deletionState = (): OrdinaryMindDeletionState => ({
+        knowledgeSpaces,
+        memberships,
+        revisionSpaces,
+        ordinaryIdempotency: idempotencyRecords,
+        contentIdempotency: contentIdempotencyRecords,
+        auditEvents,
+        auditOutbox,
+        backgroundJobs,
+        exportJobs,
+        exportDownloadGrants,
+        indexStates,
+        activeBySpace,
+      });
 
       const transaction: OrdinaryMindMetadataTransaction = Object.freeze({
         kind: "authorization-transaction" as const,
@@ -2546,6 +2818,328 @@ export class InMemoryRevisionMetadataStore
             replayed: false,
           });
         },
+
+        createOrdinaryMindDeletionImpact: async (
+          request: Readonly<CreateOrdinaryMindDeletionImpactRequest>,
+        ): Promise<CreateOrdinaryMindDeletionImpactResult> => {
+          const parsed = parseCanonicalSpaceHandle(request.handle);
+          const occurredAt = Date.parse(request.occurredAt);
+          const expiresAt = Date.parse(request.expiresAt);
+          if (
+            parsed.kind !== "valid" ||
+            isReservedTopLevelHandle(parsed.canonicalHandle) ||
+            parsed.canonicalHandle !== request.handle ||
+            !BOUNDED_OPAQUE_ID.test(request.impactId) ||
+            !Number.isFinite(occurredAt) ||
+            !Number.isFinite(expiresAt) ||
+            expiresAt <= occurredAt
+          ) {
+            return Object.freeze({ kind: "invalid_record" });
+          }
+          for (const [impactId, candidate] of deletionImpacts) {
+            if (Date.parse(candidate.expiresAt) <= occurredAt) {
+              deletionImpacts.delete(impactId);
+            }
+          }
+          if (
+            deletionImpacts.has(request.impactId) ||
+            deletionCleanup.has(request.impactId)
+          ) {
+            return Object.freeze({ kind: "impact_id_collision" });
+          }
+          const principal = principals.get(request.principalId);
+          if (!principal || principal.state !== "active") {
+            return Object.freeze({ kind: "forbidden" });
+          }
+          const reservation = activeByHandle.get(
+            handleKey(request.host, parsed.canonicalHandle),
+          );
+          if (!reservation) return Object.freeze({ kind: "mind_not_found" });
+          const space = knowledgeSpaces.get(reservation.spaceId);
+          if (!space || space.state !== "active") {
+            return Object.freeze({ kind: "mind_not_found" });
+          }
+          const personal = [...personalBindings.values()].find(
+            (binding) => binding.spaceId === space.spaceId,
+          );
+          if (personal) {
+            return Object.freeze({
+              kind:
+                personal.principalId === request.principalId
+                  ? "personal_mind"
+                  : "mind_not_found",
+            });
+          }
+          const aggregate = ordinaryMindSnapshotFromMaps(
+            space.spaceId,
+            knowledgeSpaces,
+            memberships,
+          );
+          if (aggregate === null) return Object.freeze({ kind: "invalid_record" });
+          if (
+            aggregate.ownerMembership.principalId !== request.principalId ||
+            aggregate.ownerMembership.state !== "active" ||
+            aggregate.ownerMembership.role !== "owner"
+          ) {
+            return Object.freeze({ kind: "forbidden" });
+          }
+          const stateFingerprint = ordinaryMindDeletionFingerprint(
+            space.spaceId,
+            deletionState(),
+          );
+          const revisionState = revisionSpaces.get(space.spaceId);
+          if (stateFingerprint === null || !revisionState) {
+            return Object.freeze({ kind: "invalid_record" });
+          }
+          const selected = targetRecordSelection(space.spaceId, deletionState());
+          const impact = cloneOrdinaryMindDeletionImpact({
+            impactId: request.impactId,
+            principalId: request.principalId,
+            spaceId: space.spaceId,
+            host: request.host,
+            canonicalHandle: parsed.canonicalHandle,
+            name: space.name,
+            expiresAt: request.expiresAt,
+            metadataVersion: space.metadataVersion,
+            accessVersion: space.accessVersion,
+            headRevisionId: space.headRevisionId,
+            revisionCount: selected.revisionIds.length,
+            membershipCount: selected.membershipIds.length,
+            invitationCount: selected.invitationIds.length,
+            backgroundJobCount: selected.backgroundJobIds.length,
+            exportJobCount: selected.exportJobIds.length,
+            stateFingerprint,
+          });
+          deletionImpacts.set(impact.impactId, impact);
+          this.#failOrdinaryMindIfRequested("deletion_impact_after_record");
+          this.#failOrdinaryMindIfRequested("deletion_impact_before_commit");
+          return Object.freeze({ kind: "created", impact });
+        },
+
+        deleteOrdinaryMind: async (
+          request: Readonly<DeleteOrdinaryMindRequest>,
+        ): Promise<DeleteOrdinaryMindResult> => {
+          const parsed = parseCanonicalSpaceHandle(request.handle);
+          if (
+            parsed.kind !== "valid" ||
+            isReservedTopLevelHandle(parsed.canonicalHandle) ||
+            parsed.canonicalHandle !== request.handle ||
+            !BOUNDED_OPAQUE_ID.test(request.impactId) ||
+            !Number.isFinite(Date.parse(request.occurredAt))
+          ) {
+            return Object.freeze({ kind: "invalid_record" });
+          }
+          const reservation = activeByHandle.get(
+            handleKey(request.host, parsed.canonicalHandle),
+          );
+          if (!reservation) {
+            const pending = [...deletionCleanup.values()].find(
+              (work) =>
+                work.host === request.host &&
+                work.canonicalHandle === parsed.canonicalHandle,
+            );
+            if (!pending) return Object.freeze({ kind: "already_absent" });
+            if (
+              pending.impactId !== request.impactId ||
+              pending.principalId !== request.principalId
+            ) {
+              return Object.freeze({ kind: "mind_not_found" });
+            }
+            if (pending.idempotencyKey !== request.idempotencyKey) {
+              return Object.freeze({ kind: "idempotency_conflict" });
+            }
+            return Object.freeze({
+              kind: "cleanup_pending",
+              cleanup: cloneOrdinaryMindDeletionCleanup(pending),
+            });
+          }
+          const principal = principals.get(request.principalId);
+          if (!principal || principal.state !== "active") {
+            return Object.freeze({ kind: "forbidden" });
+          }
+          const spaceId = reservation.spaceId;
+          const space = knowledgeSpaces.get(spaceId);
+          if (!space || space.state !== "active") {
+            return Object.freeze({ kind: "mind_not_found" });
+          }
+          const personal = [...personalBindings.values()].find(
+            (binding) => binding.spaceId === spaceId,
+          );
+          if (personal) {
+            return Object.freeze({
+              kind:
+                personal.principalId === request.principalId
+                  ? "personal_mind"
+                  : "mind_not_found",
+            });
+          }
+          const aggregate = ordinaryMindSnapshotFromMaps(
+            spaceId,
+            knowledgeSpaces,
+            memberships,
+          );
+          if (aggregate === null) return Object.freeze({ kind: "invalid_record" });
+          if (
+            aggregate.ownerMembership.principalId !== request.principalId ||
+            aggregate.ownerMembership.state !== "active" ||
+            aggregate.ownerMembership.role !== "owner"
+          ) {
+            return Object.freeze({ kind: "forbidden" });
+          }
+          const impact = deletionImpacts.get(request.impactId);
+          if (
+            !impact ||
+            impact.principalId !== request.principalId ||
+            impact.spaceId !== spaceId ||
+            impact.host !== request.host ||
+            impact.canonicalHandle !== parsed.canonicalHandle
+          ) {
+            return Object.freeze({ kind: "deletion_impact_changed" });
+          }
+          if (Date.parse(request.occurredAt) >= Date.parse(impact.expiresAt)) {
+            deletionImpacts.delete(impact.impactId);
+            return Object.freeze({ kind: "deletion_impact_expired" });
+          }
+          const currentFingerprint = ordinaryMindDeletionFingerprint(
+            spaceId,
+            deletionState(),
+          );
+          if (
+            currentFingerprint === null ||
+            currentFingerprint !== impact.stateFingerprint
+          ) {
+            deletionImpacts.delete(impact.impactId);
+            return Object.freeze({ kind: "deletion_impact_changed" });
+          }
+          if (deletionCleanup.has(request.impactId)) {
+            return Object.freeze({ kind: "invalid_record" });
+          }
+          const selected = targetRecordSelection(spaceId, deletionState());
+          const targetRevisions = revisionSpaces.get(spaceId)?.revisions;
+          if (!targetRevisions) return Object.freeze({ kind: "invalid_record" });
+          const targetDigests = new Set<Digest>();
+          for (const envelope of targetRevisions.values()) {
+            for (const entry of envelope.manifest.entries) {
+              targetDigests.add(entry.sha256);
+            }
+          }
+          const remainingReachable = new Set<Digest>();
+          for (const [candidateSpaceId, state] of revisionSpaces) {
+            if (candidateSpaceId === spaceId) continue;
+            for (const envelope of state.revisions.values()) {
+              for (const entry of envelope.manifest.entries) {
+                remainingReachable.add(entry.sha256);
+              }
+            }
+          }
+          const cleanup = cloneOrdinaryMindDeletionCleanup({
+            impactId: request.impactId,
+            idempotencyKey: request.idempotencyKey,
+            principalId: request.principalId,
+            spaceId,
+            host: request.host,
+            canonicalHandle: parsed.canonicalHandle,
+            objectDigests: Object.freeze(
+              [...targetDigests]
+                .filter((digest) => !remainingReachable.has(digest))
+                .sort(),
+            ),
+            deleteBefore: request.occurredAt,
+          });
+
+          const retiredResult = retireHandleAgainst(
+            {
+              host: request.host,
+              handle: parsed.canonicalHandle,
+              spaceId,
+            },
+            { activeByHandle, activeBySpace, retired },
+          );
+          if (retiredResult.kind !== "retired") {
+            return Object.freeze({ kind: "invalid_record" });
+          }
+          this.#failOrdinaryMindIfRequested("delete_after_handle_retirement");
+
+          knowledgeSpaces.delete(spaceId);
+          selected.membershipIds.forEach((id) => memberships.delete(id));
+          revisionSpaces.delete(spaceId);
+          selected.revisionIds.forEach((id) => revisionsById.delete(id));
+          selected.ordinaryIdempotencyKeys.forEach((key) =>
+            idempotencyRecords.delete(key));
+          selected.contentIdempotencyKeys.forEach((key) =>
+            contentIdempotencyRecords.delete(key));
+          selected.backgroundJobIds.forEach((id) => backgroundJobs.delete(id));
+          selected.exportJobIds.forEach((id) => exportJobs.delete(id));
+          selected.exportGrantKeys.forEach((key) =>
+            exportDownloadGrants.delete(key));
+          selected.indexKeys.forEach((key) => indexStates.delete(key));
+          selected.outboxIds.forEach((id) => auditOutbox.delete(id));
+          selected.auditIds.forEach((id) => auditEvents.delete(id));
+          for (const [key, state] of authorizationStates) {
+            if (state.space.spaceId === spaceId) authorizationStates.delete(key);
+          }
+          for (const [impactId, candidate] of deletionImpacts) {
+            if (candidate.spaceId === spaceId) deletionImpacts.delete(impactId);
+          }
+          this.#failOrdinaryMindIfRequested("delete_after_target_records");
+
+          publicCatalogSpaceIds = derivePublicMindCatalogSpaceIds(
+            knowledgeSpaces,
+            personalBindings,
+          );
+          publicCatalogGeneration += 1;
+          stagePublicCatalogSnapshot(
+            publicCatalogGeneration,
+            publicCatalogSpaceIds,
+            publicCatalogSnapshots,
+          );
+          this.#failOrdinaryMindIfRequested("delete_after_catalog");
+          deletionCleanup.set(cleanup.impactId, cleanup);
+          this.#failOrdinaryMindIfRequested("delete_after_cleanup_work");
+          this.#failOrdinaryMindIfRequested("delete_before_commit");
+          return Object.freeze({
+            kind: "deleted",
+            cleanup,
+            counts: Object.freeze({
+              revisions: selected.revisionIds.length,
+              memberships: selected.membershipIds.length,
+              invitations: selected.invitationIds.length,
+              backgroundJobs: selected.backgroundJobIds.length,
+              exportJobs: selected.exportJobIds.length,
+              exportDownloadGrants: selected.exportGrantKeys.length,
+              indexStates: selected.indexKeys.length,
+              auditEvents: selected.auditIds.length,
+              auditOutboxMessages: selected.outboxIds.length,
+              idempotencyRecords:
+                selected.ordinaryIdempotencyKeys.length +
+                selected.contentIdempotencyKeys.length,
+            }),
+          });
+        },
+
+        completeOrdinaryMindDeletionCleanup: async (
+          request: Readonly<CompleteOrdinaryMindDeletionCleanupRequest>,
+        ): Promise<CompleteOrdinaryMindDeletionCleanupResult> => {
+          const parsed = parseCanonicalSpaceHandle(request.handle);
+          if (
+            parsed.kind !== "valid" ||
+            parsed.canonicalHandle !== request.handle
+          ) {
+            return Object.freeze({ kind: "invalid_record" });
+          }
+          const pending = deletionCleanup.get(request.impactId);
+          if (
+            !pending ||
+            pending.spaceId !== request.spaceId ||
+            pending.host !== request.host ||
+            pending.canonicalHandle !== parsed.canonicalHandle
+          ) {
+            return Object.freeze({ kind: "not_found" });
+          }
+          deletionCleanup.delete(request.impactId);
+          this.#failOrdinaryMindIfRequested("delete_cleanup_before_commit");
+          return Object.freeze({ kind: "completed" });
+        },
       });
 
       const result = await operation(transaction);
@@ -2562,6 +3156,16 @@ export class InMemoryRevisionMetadataStore
       this.#publicMindCatalogSnapshots = publicCatalogSnapshots;
       this.#auditEvents = auditEvents;
       this.#auditOutbox = auditOutbox;
+      this.#idempotencyRecords = contentIdempotencyRecords;
+      this.#backgroundJobs = backgroundJobs;
+      this.#exportJobs = exportJobs;
+      this.#exportDownloadGrants = exportDownloadGrants;
+      this.#indexStates = indexStates;
+      this.#ordinaryMindDeletionImpacts = deletionImpacts;
+      this.#ordinaryMindDeletionCleanup = deletionCleanup;
+      this.#authorizationStates.clear();
+      authorizationStates.forEach((state, key) =>
+        this.#authorizationStates.set(key, state));
       return result;
     });
   }
@@ -3739,6 +4343,40 @@ export class InMemoryRevisionMetadataStore
       spaceIds: Object.freeze([...this.#publicMindCatalogSpaceIds]),
       retainedSnapshots: this.#publicMindCatalogSnapshots.size,
     });
+  }
+
+  async inspectDeletionCleanupForTest(): Promise<
+    readonly Readonly<OrdinaryMindDeletionCleanupWorkItem>[]
+  > {
+    return Object.freeze(
+      [...this.#ordinaryMindDeletionCleanup.values()]
+        .map(cloneOrdinaryMindDeletionCleanup)
+        .sort((left, right) => left.impactId.localeCompare(right.impactId)),
+    );
+  }
+
+  async inspectDeletionImpactsForTest(): Promise<
+    readonly Readonly<OrdinaryMindDeletionImpactSnapshot>[]
+  > {
+    return Object.freeze(
+      [...this.#ordinaryMindDeletionImpacts.values()]
+        .map(cloneOrdinaryMindDeletionImpact)
+        .sort((left, right) => left.impactId.localeCompare(right.impactId)),
+    );
+  }
+
+  async inspectRetiredHandlesForTest(): Promise<
+    readonly Readonly<RetiredHandleMarker>[]
+  > {
+    return Object.freeze(
+      [...this.#retiredHandles.values()]
+        .map((marker) => Object.freeze({ ...marker }))
+        .sort((left, right) =>
+          `${left.host}\u0000${left.canonicalHandle}`.localeCompare(
+            `${right.host}\u0000${right.canonicalHandle}`,
+          ),
+        ),
+    );
   }
 
   /** Test-only derived projection corruption; canonical Mind state is untouched. */
