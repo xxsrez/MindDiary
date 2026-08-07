@@ -9,6 +9,9 @@ import {
   type CurrentAuthorizationToken,
   type McpTokenStore,
   type ObjectStore,
+  type PilotCohort,
+  type PrivacySafeObservabilityEvent,
+  type PrivacySafeObservabilitySink,
   type RevisionMetadataStore,
   type SearchIndex,
   type TokenHasher,
@@ -53,6 +56,202 @@ export const CONTENT_QUERIES = [
 ] as const;
 
 export const CONTENT_COMMANDS = ["commit_changeset", "start_export"] as const;
+
+export type McpObservabilityOutcome =
+  | "authenticated"
+  | "authentication_failed"
+  | "authentication_unavailable"
+  | "protocol_error"
+  | "tool_denied"
+  | "tool_completed"
+  | "internal_error";
+
+function recordContentMetric(
+  sink: PrivacySafeObservabilitySink,
+  event: Readonly<PrivacySafeObservabilityEvent>,
+): void {
+  try {
+    const pending = sink.record(Object.freeze(event));
+    if (
+      typeof pending === "object" &&
+      pending !== null &&
+      "catch" in pending &&
+      typeof pending.catch === "function"
+    ) {
+      void pending.catch(() => undefined);
+    }
+  } catch {
+    // Telemetry is best-effort and never changes content/auth outcomes.
+  }
+}
+
+/**
+ * Explicit content/MCP telemetry boundary. It accepts only controlled
+ * dimensions; callers cannot pass query text, corpus bodies, URLs, or tokens.
+ */
+export class ContentPrivacySafeObservability {
+  readonly #sink: PrivacySafeObservabilitySink;
+  readonly #cohort: PilotCohort;
+
+  constructor(dependencies: {
+    readonly sink: PrivacySafeObservabilitySink;
+    readonly cohort: PilotCohort;
+  }) {
+    this.#sink = dependencies.sink;
+    this.#cohort = dependencies.cohort;
+  }
+
+  recordMcpRequest(event: {
+    readonly requestId: RequestId;
+    readonly occurredAtUtc: UtcInstant;
+    readonly durationMs: number;
+    readonly status: number;
+    readonly outcome: McpObservabilityOutcome;
+  }): void {
+    recordContentMetric(this.#sink, {
+      kind: "operational",
+      metric: "request_latency_ms",
+      surface: "mcp",
+      operation: "request",
+      outcome: event.status >= 400 ? "failure" : "success",
+      unit: "milliseconds",
+      value: event.durationMs,
+      occurredAtUtc: event.occurredAtUtc,
+      requestId: event.requestId,
+      jobId: null,
+      cohort: null,
+    });
+    if (event.status >= 400 || event.outcome === "internal_error") {
+      recordContentMetric(this.#sink, {
+        kind: "operational",
+        metric: "request_error",
+        surface: "mcp",
+        operation: "request",
+        outcome: event.outcome === "tool_denied" ? "denied" : "failure",
+        unit: "count",
+        value: 1,
+        occurredAtUtc: event.occurredAtUtc,
+        requestId: event.requestId,
+        jobId: null,
+        cohort: null,
+      });
+    }
+    if (event.outcome.startsWith("authentication_")) {
+      recordContentMetric(this.#sink, {
+        kind: "operational",
+        metric: "authentication_outcome",
+        surface: "mcp",
+        operation: "authentication",
+        outcome:
+          event.outcome === "authentication_failed" ? "denied" : "failure",
+        unit: "count",
+        value: 1,
+        occurredAtUtc: event.occurredAtUtc,
+        requestId: event.requestId,
+        jobId: null,
+        cohort: null,
+      });
+    } else if (event.outcome === "authenticated") {
+      recordContentMetric(this.#sink, {
+        kind: "operational",
+        metric: "authentication_outcome",
+        surface: "mcp",
+        operation: "authentication",
+        outcome: "success",
+        unit: "count",
+        value: 1,
+        occurredAtUtc: event.occurredAtUtc,
+        requestId: event.requestId,
+        jobId: null,
+        cohort: null,
+      });
+    }
+    if (event.status === 429) {
+      recordContentMetric(this.#sink, {
+        kind: "operational",
+        metric: "rate_limit",
+        surface: "mcp",
+        operation: "rate_limit",
+        outcome: "rate_limited",
+        unit: "count",
+        value: 1,
+        occurredAtUtc: event.occurredAtUtc,
+        requestId: event.requestId,
+        jobId: null,
+        cohort: null,
+      });
+    }
+  }
+
+  recordCasConflict(actor: Pick<ActorContext, "requestId" | "occurredAtUtc">): void {
+    recordContentMetric(this.#sink, {
+      kind: "operational",
+      metric: "cas_conflict",
+      surface: "content",
+      operation: "commit_changeset",
+      outcome: "conflict",
+      unit: "count",
+      value: 1,
+      occurredAtUtc: actor.occurredAtUtc,
+      requestId: actor.requestId,
+      jobId: null,
+      cohort: null,
+    });
+  }
+
+  recordPilot(event: {
+    readonly actor: Pick<ActorContext, "requestId" | "occurredAtUtc">;
+    readonly metric:
+      | "time_to_first_useful_search_ms"
+      | "time_to_first_meaningful_commit_ms"
+      | "usage"
+      | "lexical_search_effectiveness"
+      | "citation_success";
+    readonly operation: "search" | "commit_changeset" | "read" | "write" | "history" | "export" | "citation";
+    readonly outcome: "completed" | "resolved" | "unresolved";
+    readonly value: number;
+  }): void {
+    const unit =
+      event.metric.endsWith("_ms")
+        ? "milliseconds"
+        : event.metric === "usage"
+          ? "count"
+          : "ratio";
+    recordContentMetric(this.#sink, {
+      kind: "pilot",
+      metric: event.metric,
+      surface: "content",
+      operation: event.operation,
+      outcome: event.outcome,
+      unit,
+      value: event.value,
+      occurredAtUtc: event.actor.occurredAtUtc,
+      requestId: event.actor.requestId,
+      jobId: null,
+      cohort: this.#cohort,
+    });
+  }
+
+  recordCost(event: {
+    readonly actor: Pick<ActorContext, "requestId" | "occurredAtUtc">;
+    readonly metric: "storage_cost_bytes" | "query_cost_units";
+    readonly value: number;
+  }): void {
+    recordContentMetric(this.#sink, {
+      kind: "operational",
+      metric: event.metric,
+      surface: "content",
+      operation: event.metric === "storage_cost_bytes" ? "storage" : "search",
+      outcome: "success",
+      unit: event.metric === "storage_cost_bytes" ? "bytes" : "query_units",
+      value: event.value,
+      occurredAtUtc: event.actor.occurredAtUtc,
+      requestId: event.actor.requestId,
+      jobId: null,
+      cohort: null,
+    });
+  }
+}
 
 export const MCP_CONTENT_DEPLOYMENT_CAPABILITIES = Object.freeze(
   CAPABILITIES.filter((capability) => capability.startsWith("content:")),

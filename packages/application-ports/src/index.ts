@@ -2273,3 +2273,122 @@ export interface AuditSink {
     deletedPrincipalId: DeletedPrincipalId,
   ): Promise<number>;
 }
+
+/**
+ * Closed telemetry vocabulary. Events intentionally have no free-form labels,
+ * payload, query, URL, email, token, principal, Space, or content fields.
+ */
+export const PRIVACY_SAFE_OPERATIONAL_METRICS = [
+  "request_latency_ms",
+  "request_error",
+  "authentication_outcome",
+  "cas_conflict",
+  "index_lag_ms",
+  "export_lag_ms",
+  "invitation_outcome",
+  "token_outcome",
+  "deletion_outcome",
+  "rate_limit",
+  "storage_cost_bytes",
+  "query_cost_units",
+] as const;
+
+export const PRIVACY_SAFE_PILOT_METRICS = [
+  "setup_completion",
+  "time_to_first_useful_search_ms",
+  "time_to_first_meaningful_commit_ms",
+  "usage",
+  "retention",
+  "lexical_search_effectiveness",
+  "citation_success",
+] as const;
+
+export const PRIVACY_SAFE_OBSERVABILITY_SURFACES = [
+  "control",
+  "content",
+  "background",
+  "mcp",
+] as const;
+
+export const PRIVACY_SAFE_OBSERVABILITY_OPERATIONS = [
+  "request",
+  "authentication",
+  "commit_changeset",
+  "revision_index",
+  "export",
+  "invitation",
+  "token",
+  "deletion",
+  "rate_limit",
+  "setup",
+  "retention_week_1",
+  "retention_week_4",
+  "search",
+  "read",
+  "write",
+  "history",
+  "storage",
+  "citation",
+] as const;
+
+export const PRIVACY_SAFE_OBSERVABILITY_OUTCOMES = [
+  "success",
+  "failure",
+  "denied",
+  "conflict",
+  "retry",
+  "replayed",
+  "rate_limited",
+  "unavailable",
+  "completed",
+  "retained",
+  "resolved",
+  "unresolved",
+] as const;
+
+export const PRIVACY_SAFE_OBSERVABILITY_UNITS = [
+  "count",
+  "milliseconds",
+  "bytes",
+  "query_units",
+  "ratio",
+] as const;
+
+export const PILOT_COHORTS = ["close_circle", "external"] as const;
+
+export type PrivacySafeOperationalMetric =
+  (typeof PRIVACY_SAFE_OPERATIONAL_METRICS)[number];
+export type PrivacySafePilotMetric =
+  (typeof PRIVACY_SAFE_PILOT_METRICS)[number];
+export type PrivacySafeObservabilityMetric =
+  | PrivacySafeOperationalMetric
+  | PrivacySafePilotMetric;
+export type PrivacySafeObservabilitySurface =
+  (typeof PRIVACY_SAFE_OBSERVABILITY_SURFACES)[number];
+export type PrivacySafeObservabilityOperation =
+  (typeof PRIVACY_SAFE_OBSERVABILITY_OPERATIONS)[number];
+export type PrivacySafeObservabilityOutcome =
+  (typeof PRIVACY_SAFE_OBSERVABILITY_OUTCOMES)[number];
+export type PrivacySafeObservabilityUnit =
+  (typeof PRIVACY_SAFE_OBSERVABILITY_UNITS)[number];
+export type PilotCohort = (typeof PILOT_COHORTS)[number];
+
+export interface PrivacySafeObservabilityEvent {
+  readonly kind: "operational" | "pilot";
+  readonly metric: PrivacySafeObservabilityMetric;
+  readonly surface: PrivacySafeObservabilitySurface;
+  readonly operation: PrivacySafeObservabilityOperation;
+  readonly outcome: PrivacySafeObservabilityOutcome;
+  readonly unit: PrivacySafeObservabilityUnit;
+  readonly value: number;
+  readonly occurredAtUtc: UtcInstant;
+  readonly requestId: ActorContext["requestId"] | null;
+  readonly jobId: JobId | null;
+  readonly cohort: PilotCohort | null;
+}
+
+/** Best-effort telemetry must never participate in an authoritative transaction. */
+export interface PrivacySafeObservabilitySink {
+  readonly kind: "privacy-safe-observability-sink";
+  record(event: Readonly<PrivacySafeObservabilityEvent>): void | Promise<void>;
+}
