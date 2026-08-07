@@ -9,9 +9,9 @@
 - JSON, request-scoped SSE и безопасные transport/auth errors.
 
 Probe не реализует account, Minds, OKF content, ACL, revisions или production
-service. `.openai/hosting.json` содержит только logical bindings `DB` и
-`PROBE_BUCKET`; реальный Sites `project_id` добавляет coordinator после
-`create_site`.
+service. `.openai/hosting.json` содержит logical bindings `DB` и
+`PROBE_BUCKET`, а также exact Sites `project_id`, добавленный coordinator
+после единственного `create_site`.
 
 Hosted runtime должен получить secret `SITES_PROBE_BEARER_TOKEN`. Secret не
 передаётся в repository, responses, logs или evidence. Локальные tests передают

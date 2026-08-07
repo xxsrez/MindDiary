@@ -1,9 +1,9 @@
 # OpenAI Sites + MCP capability gate на 2026-08-07
 
-Статус: **локальный probe готов; live gate не выполнен**. Этот report фиксирует
-локально проверенную поверхность AND-37 и repeatable live procedure. Он не
-подтверждает создание Site, deployment, доступность live URL или совместимость
-Codex с endpoint.
+Статус: **live gate выполнен с отрицательным результатом; release 0.1
+blocked**. Этот report фиксирует локально проверенную поверхность AND-37,
+exact production probe и воспроизводимый отказ Sites/Codex boundary. Он не
+подтверждает совместимость Codex с endpoint.
 
 ## Вывод
 
@@ -12,9 +12,16 @@ Codex с endpoint.
 stateless MCP `2026-07-28`, JSON и request-scoped SSE, per-request Bearer auth,
 CAS concurrency, idempotent retry и итоговое состояние после errors.
 
-Production release 0.1 остаётся blocked, пока coordinator не создаст Site и не
-заполнит live evidence ниже. Провал live gate не разрешает fallback в AWS,
-AgentCore или отдельный container.
+Exact production probe успешно собран и развёрнут owner-only в OpenAI Sites,
+но обязательный Codex MCP flow не проходит. Внешний `POST /mcp` с valid
+application Bearer получает dispatcher-level `404 Not found` и не достигает
+Worker. Реальный `codex-cli 0.146.1` дополнительно начинает transport с
+`initialize`, то есть не использует требуемый stateless
+`server/discover` profile `2026-07-28`.
+
+Поэтому production release 0.1 явно blocked. Live D1/R2 persistence, JSON/SSE
+и application challenge нельзя честно подтвердить через недостижимый endpoint.
+Провал gate не разрешает fallback в AWS, AgentCore или отдельный container.
 
 ## Граница probe
 
@@ -27,9 +34,8 @@ content, revisions, search, export или control plane. Его endpoints:
 | `GET\|POST /probe/state` | D1 counter/CAS и R2 object round-trip | bearer credential и object body |
 | `POST /mcp` | `2026-07-28` discovery, headers/body, tool call, JSON/SSE | credential, identity values и private data |
 
-`.openai/hosting.json` объявляет logical bindings `DB` и `PROBE_BUCKET` без
-`project_id`. Реальную связь с Sites project добавляет только coordinator после
-создания Site.
+`.openai/hosting.json` объявляет logical bindings `DB` и `PROBE_BUCKET` и
+фиксирует exact Sites `project_id`, созданный coordinator-ом один раз.
 
 ## Проверенные внешние контракты
 
@@ -75,12 +81,58 @@ idempotency conflict, concurrent CAS и восстановление после 
 failure без второго D1 increment. Identity canary values не появляются в
 response body. Это local evidence, не Sites или Codex conformance.
 
-## Repeatable live procedure
+## Выполненный live gate
+
+### Exact artifact и deployment
+
+- Git SHA: `bd277bd216a606df738f88a9a70552dc8cdddeee`;
+- source tree: `2956f894231ea3838382d02d9b5c6e65aebfc0a3`;
+- Sites project:
+  `appgprj_examplefedbece6fe98eb62`;
+- saved version: 1,
+  `appgprj_examplefedbece6fe98eb62~appgver_exampleb2c6f0fa7c77d94f`;
+- deployment:
+  `appgdep_example5d92ca2b94f7082e`, `succeeded`;
+- live URL:
+  `https://mind-diary-capability-probe.example.invalid`;
+- access: `custom`, owner-only, no external visitors или groups;
+- runtime env revision: 1; Bearer value хранится как Sites secret и в evidence
+  не записан.
+
+Deployment Worker log подтверждает успешный `GET /` и presence
+`oai-authenticated-user-email`,
+`oai-authenticated-user-full-name` и encoding header; значения были
+platform-redacted. `oai-authenticated-user-id` в наблюдаемом request
+отсутствовал. Это подтверждает identity header presence на deployment-owned
+authenticated request, но не обещает stable external subject.
+
+### Наблюдаемый отказ
+
+В 2026-08-07T02:27:33Z:
+
+- unauthenticated `GET /probe/identity` получил dispatcher-level `401`;
+- `POST /mcp` с valid probe Bearer, required MCP headers и body получил
+  dispatcher-level `404 Not found`;
+- в bounded Worker logs отсутствует `/mcp` invocation, поэтому Bearer не
+  достиг application auth boundary;
+- `codex-cli 0.146.1` с
+  `bearer_token_env_var = "MIND_DIARY_SITES_PROBE_TOKEN"` и
+  `required = true` завершился до session start: Streamable HTTP client
+  получил `HTTP 404: Not found` при попытке `initialize`;
+- credential, authorization header, identity values и private prompt/query в
+  evidence не сохранены.
+
+Это repeatable negative evidence двух независимых несовместимостей: текущий
+owner-only Sites dispatch не пропускает personal Bearer MCP request к Worker,
+а проверенный Codex build ещё использует initialize lifecycle вместо принятого
+stateless `2026-07-28` profile.
+
+## Repeatable live procedure после platform/client change
 
 ### 1. Зафиксировать deployment identity
 
-Coordinator создаёт Site из `apps/sites-probe`, сохраняет добавленный Sites
-`project_id` отдельным commit и до test записывает:
+Coordinator повторно использует tracked Site из `apps/sites-probe`; новый
+Site не создаётся. Для нового approved version/deployment до test записываются:
 
 - exact Git SHA и tree;
 - Sites `project_id`;
@@ -92,12 +144,13 @@ Coordinator создаёт Site из `apps/sites-probe`, сохраняет до
 
 Не использовать preview/UI-only success как доказательство MCP.
 
-### 2. Добавить runtime secret
+### 2. Проверить runtime secret
 
-В Sites settings добавить `SITES_PROBE_BEARER_TOKEN` как secret, не помещая
-значение в prompt, repository, report или shell history, затем redeploy
-одобренную saved version. На client установить то же значение только в
-`MIND_DIARY_SITES_PROBE_TOKEN`. Не включать shell tracing и verbose HTTP output.
+Убедиться, что Sites хранит `SITES_PROBE_BEARER_TOKEN` как secret, не помещая
+значение в prompt, repository, report или shell history. Не ротировать его без
+отдельной причины и разрешения. На client установить то же значение только в
+`MIND_DIARY_SITES_PROBE_TOKEN`. Не включать shell tracing и verbose HTTP
+output.
 
 ### 3. Проверить identity presence
 
@@ -158,7 +211,7 @@ approved Sites redeploy и запустить script снова. После rede
 
 ```toml
 [mcp_servers.mind_diary_sites_probe]
-url = "https://<pending-live-host>/mcp"
+url = "https://mind-diary-capability-probe.example.invalid/mcp"
 bearer_token_env_var = "MIND_DIARY_SITES_PROBE_TOKEN"
 required = true
 ```
@@ -168,24 +221,24 @@ required = true
 HTTP/result statuses и redacted result booleans. Не сохранять token, raw auth
 header, identity values, private prompt/query или client config с secret.
 
-## Live evidence — pending
+## Live evidence
 
 | Поле/capability | Фактическое evidence |
 |---|---|
-| Git SHA/tree | pending |
-| Sites project/version/deployment | pending |
-| Live HTTPS URL и access policy | pending |
-| Identity booleans | pending |
-| D1/R2 before/after request | pending |
-| D1/R2 after redeploy | pending |
-| JSON и request-scoped SSE | pending |
-| GET/DELETE/session negative cases | pending |
-| Bearer challenge/invalid/valid | pending |
-| Codex exact build + `bearer_token_env_var` | pending |
-| Domain/proxy/challenge behavior | pending |
+| Git SHA/tree | exact values above |
+| Sites project/version/deployment | version 1; deployment succeeded |
+| Live HTTPS URL и access policy | exact URL above; custom owner-only |
+| Identity booleans | email/full-name/encoding present in redacted Worker log; user ID absent |
+| D1/R2 before/after request | blocked before Worker; not verified live |
+| D1/R2 after redeploy | blocked before Worker; not verified live |
+| JSON и request-scoped SSE | blocked before Worker; not verified live |
+| GET/DELETE/session negative cases | local only; live endpoint unreachable |
+| Bearer challenge/invalid/valid | Sites dispatcher returns 404 before application challenge |
+| Codex exact build + `bearer_token_env_var` | `codex-cli 0.146.1`; required server failed on HTTP 404 during initialize |
+| Domain/proxy/challenge behavior | owner-only dispatcher: identity 401; MCP 404; no Worker invocation |
 
-Пока хотя бы одно обязательное поле pending, report не подтверждает Sites MCP
-capability и AND-37 не может служить release evidence 0.1.
+Этот report является release-blocking evidence AND-37, а не доказательством
+Sites MCP compatibility.
 
 ## Ограничения
 
@@ -199,4 +252,7 @@ capability и AND-37 не может служить release evidence 0.1.
   normative `2026-07-28` backward-compatibility guidance рекомендует modern
   server игнорировать legacy session header. Это различие нужно учитывать при
   проектировании product adapter и не выдавать probe behavior за conformance.
+- Повтор gate требует нового platform/client capability или явного
+  product/access решения. Нельзя автоматически делать Site public, создавать
+  SIWC bypass token либо менять target protocol ради зелёного результата.
 - Claude Code, OAuth/public plugin и company-knowledge profile не проверяются.
