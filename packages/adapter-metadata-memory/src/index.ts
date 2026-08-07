@@ -3,7 +3,20 @@ import type {
   CanonicalSpaceHandle,
   AccountBootstrapRecordSet,
   AccountBootstrapTransaction,
+  AccountDeletionCleanupWorkItem,
+  AccountDeletionContext,
+  AccountDeletionImpactSnapshot,
+  AccountDeletionStore,
+  BeginPrincipalTokenDeletionRequest,
+  BeginPrincipalTokenDeletionResult,
+  CancelPrincipalTokenDeletionRequest,
+  CompleteAccountDeletionCleanupRequest,
+  CompleteAccountDeletionCleanupResult,
+  CompletePrincipalTokenDeletionRequest,
+  CompletePrincipalTokenDeletionResult,
   CreateAccountBootstrapResult,
+  CreateAccountDeletionImpactRequest,
+  CreateAccountDeletionImpactResult,
   CreateInvitationRequest,
   CreateInvitationResult,
   TransitionInvitationRequest,
@@ -79,6 +92,7 @@ import type {
   RevokeMcpTokenResult,
   RevokePrincipalTokensForAccountDeletionRequest,
   RevokePrincipalTokensForAccountDeletionResult,
+  PrincipalTokenDeletionSnapshot,
   RetiredHandleMarker,
   RevisionIndexState,
   RevisionCommitRequest,
@@ -94,6 +108,8 @@ import type {
   CreateOrdinaryMindDeletionImpactResult,
   DeleteOrdinaryMindRequest,
   DeleteOrdinaryMindResult,
+  DeleteAccountCascadeRequest,
+  DeleteAccountCascadeResult,
   OrdinaryMindDeletionCleanupWorkItem,
   OrdinaryMindDeletionImpactSnapshot,
   OrdinaryMindMetadataTransaction,
@@ -395,12 +411,38 @@ function validTokenCreateRequest(request: CreateMcpTokenRequest): boolean {
   );
 }
 
+function principalTokenFingerprint(
+  tokens: ReadonlyMap<McpTokenMetadata["tokenId"], Readonly<StoredMcpToken>>,
+  principalId: McpTokenMetadata["principalId"],
+): string {
+  return JSON.stringify({
+    format: "mind-diary-principal-token-deletion-v1",
+    tokens: [...tokens.values()]
+      .filter((token) => token.principalId === principalId)
+      .sort((left, right) =>
+        compareUnicodeScalarValues(left.tokenId, right.tokenId),
+      )
+      .map((token) => [
+        token.tokenId,
+        token.state,
+        token.version,
+        token.createdAt,
+        token.expiresAt,
+        token.revokedAt,
+      ]),
+  });
+}
+
 /** Deterministic transactional token adapter for local/unit execution. */
 export class InMemoryMcpTokenStore implements McpTokenStore {
   readonly kind = "metadata-store" as const;
   readonly #tokensById = new Map<McpTokenMetadata["tokenId"], StoredMcpToken>();
   readonly #tokenIdByVerifier = new Map<TokenVerifier, McpTokenMetadata["tokenId"]>();
   readonly #deletedPrincipals = new Set<McpTokenMetadata["principalId"]>();
+  readonly #accountDeletionReservations = new Map<
+    McpTokenMetadata["principalId"],
+    string
+  >();
 
   async createMcpToken(
     request: CreateMcpTokenRequest,
@@ -408,7 +450,10 @@ export class InMemoryMcpTokenStore implements McpTokenStore {
     if (!validTokenCreateRequest(request)) {
       return Object.freeze({ kind: "invalid_record" });
     }
-    if (this.#deletedPrincipals.has(request.principalId)) {
+    if (
+      this.#deletedPrincipals.has(request.principalId) ||
+      this.#accountDeletionReservations.has(request.principalId)
+    ) {
       return Object.freeze({ kind: "principal_deleted" });
     }
     if (this.#tokensById.has(request.tokenId)) {
@@ -467,6 +512,9 @@ export class InMemoryMcpTokenStore implements McpTokenStore {
     const tokenId = this.#tokenIdByVerifier.get(verifier);
     const token = tokenId ? this.#tokensById.get(tokenId) : undefined;
     if (!token) return Object.freeze({ kind: "not_found" } as const);
+    if (this.#accountDeletionReservations.has(token.principalId)) {
+      return Object.freeze({ kind: "denied" } as const);
+    }
     return Object.freeze({
       kind: "found" as const,
       verifier: token.verifier,
@@ -477,6 +525,9 @@ export class InMemoryMcpTokenStore implements McpTokenStore {
   async revokeMcpToken(
     request: RevokeMcpTokenRequest,
   ): Promise<RevokeMcpTokenResult> {
+    if (this.#accountDeletionReservations.has(request.principalId)) {
+      return Object.freeze({ kind: "not_found" });
+    }
     const current = this.#tokensById.get(request.tokenId);
     if (!current || current.principalId !== request.principalId) {
       return Object.freeze({ kind: "not_found" });
@@ -507,6 +558,7 @@ export class InMemoryMcpTokenStore implements McpTokenStore {
   ): Promise<RevokePrincipalTokensForAccountDeletionResult> {
     const replayed = this.#deletedPrincipals.has(request.principalId);
     this.#deletedPrincipals.add(request.principalId);
+    this.#accountDeletionReservations.delete(request.principalId);
     let revokedCount = 0;
     for (const current of this.#tokensById.values()) {
       if (
@@ -525,6 +577,99 @@ export class InMemoryMcpTokenStore implements McpTokenStore {
       revokedCount += 1;
     }
     return Object.freeze({ revokedCount, replayed });
+  }
+
+  async readPrincipalTokenDeletionSnapshot(
+    principalId: McpTokenMetadata["principalId"],
+    occurredAt: BeginPrincipalTokenDeletionRequest["occurredAt"],
+  ): Promise<Readonly<PrincipalTokenDeletionSnapshot>> {
+    const now = Date.parse(occurredAt);
+    const activeTokenCount = [...this.#tokensById.values()].filter(
+      (token) =>
+        token.principalId === principalId &&
+        token.state === "active" &&
+        Number.isFinite(now) &&
+        Date.parse(token.expiresAt) > now,
+    ).length;
+    return Object.freeze({
+      principalId,
+      activeTokenCount,
+      stateFingerprint: principalTokenFingerprint(this.#tokensById, principalId),
+    });
+  }
+
+  async beginPrincipalTokenDeletion(
+    request: BeginPrincipalTokenDeletionRequest,
+  ): Promise<BeginPrincipalTokenDeletionResult> {
+    if (this.#deletedPrincipals.has(request.principalId)) {
+      return Object.freeze({ kind: "principal_deleted" });
+    }
+    const pending = this.#accountDeletionReservations.get(request.principalId);
+    if (pending !== undefined) {
+      return pending === request.expectedStateFingerprint
+        ? Object.freeze({ kind: "reserved", replayed: true })
+        : Object.freeze({ kind: "state_changed" });
+    }
+    if (
+      principalTokenFingerprint(this.#tokensById, request.principalId) !==
+      request.expectedStateFingerprint
+    ) {
+      return Object.freeze({ kind: "state_changed" });
+    }
+    this.#accountDeletionReservations.set(
+      request.principalId,
+      request.expectedStateFingerprint,
+    );
+    return Object.freeze({ kind: "reserved", replayed: false });
+  }
+
+  async completePrincipalTokenDeletion(
+    request: CompletePrincipalTokenDeletionRequest,
+  ): Promise<CompletePrincipalTokenDeletionResult> {
+    if (this.#deletedPrincipals.has(request.principalId)) {
+      return Object.freeze({ kind: "completed", revokedCount: 0, replayed: true });
+    }
+    const pending = this.#accountDeletionReservations.get(request.principalId);
+    if (pending === undefined) {
+      return Object.freeze({ kind: "reservation_not_found" });
+    }
+    if (pending !== request.expectedStateFingerprint) {
+      return Object.freeze({ kind: "state_changed" });
+    }
+    let revokedCount = 0;
+    for (const current of this.#tokensById.values()) {
+      if (
+        current.principalId !== request.principalId ||
+        current.state === "revoked"
+      ) {
+        continue;
+      }
+      this.#tokensById.set(
+        current.tokenId,
+        Object.freeze({
+          ...current,
+          state: "revoked" as const,
+          version: version(current.version + 1),
+          revokedAt: request.revokedAt,
+        }),
+      );
+      revokedCount += 1;
+    }
+    this.#accountDeletionReservations.delete(request.principalId);
+    this.#deletedPrincipals.add(request.principalId);
+    return Object.freeze({ kind: "completed", revokedCount, replayed: false });
+  }
+
+  async cancelPrincipalTokenDeletion(
+    request: CancelPrincipalTokenDeletionRequest,
+  ): Promise<boolean> {
+    if (
+      this.#accountDeletionReservations.get(request.principalId) !==
+      request.expectedStateFingerprint
+    ) {
+      return false;
+    }
+    return this.#accountDeletionReservations.delete(request.principalId);
   }
 }
 
@@ -1363,6 +1508,67 @@ type OrdinaryMindDeletionCleanupMap = Map<
   Readonly<OrdinaryMindDeletionCleanupWorkItem>
 >;
 
+type AccountDeletionImpactMap = Map<
+  AccountDeletionImpactSnapshot["impactId"],
+  Readonly<AccountDeletionImpactSnapshot>
+>;
+
+type AccountDeletionCleanupMap = Map<
+  AccountDeletionCleanupWorkItem["impactId"],
+  Readonly<AccountDeletionCleanupWorkItem>
+>;
+
+function cloneAccountDeletionImpact(
+  impact: Readonly<AccountDeletionImpactSnapshot>,
+): Readonly<AccountDeletionImpactSnapshot> {
+  return Object.freeze({
+    ...impact,
+    personalMind: Object.freeze({ ...impact.personalMind }),
+    ownedMinds: Object.freeze(
+      impact.ownedMinds.map((mind) => Object.freeze({ ...mind })),
+    ),
+  });
+}
+
+function cloneAccountDeletionImpacts(
+  source: ReadonlyMap<
+    AccountDeletionImpactSnapshot["impactId"],
+    Readonly<AccountDeletionImpactSnapshot>
+  >,
+): AccountDeletionImpactMap {
+  return new Map(
+    [...source].map(([impactId, impact]) => [
+      impactId,
+      cloneAccountDeletionImpact(impact),
+    ]),
+  );
+}
+
+function cloneAccountDeletionCleanup(
+  work: Readonly<AccountDeletionCleanupWorkItem>,
+): Readonly<AccountDeletionCleanupWorkItem> {
+  return Object.freeze({
+    ...work,
+    deletedSpaceIds: Object.freeze([...work.deletedSpaceIds]),
+    objectDigests: Object.freeze([...work.objectDigests]),
+    foreignExportJobIds: Object.freeze([...work.foreignExportJobIds]),
+  });
+}
+
+function cloneAccountDeletionCleanups(
+  source: ReadonlyMap<
+    AccountDeletionCleanupWorkItem["impactId"],
+    Readonly<AccountDeletionCleanupWorkItem>
+  >,
+): AccountDeletionCleanupMap {
+  return new Map(
+    [...source].map(([impactId, work]) => [
+      impactId,
+      cloneAccountDeletionCleanup(work),
+    ]),
+  );
+}
+
 function cloneOrdinaryMindDeletionImpact(
   impact: Readonly<OrdinaryMindDeletionImpactSnapshot>,
 ): Readonly<OrdinaryMindDeletionImpactSnapshot> {
@@ -2084,6 +2290,17 @@ export type OrdinaryMindFailureStage =
   | "delete_before_commit"
   | "delete_cleanup_before_commit";
 
+export type AccountDeletionFailureStage =
+  | "impact_after_record"
+  | "impact_before_commit"
+  | "delete_after_handle_retirement"
+  | "delete_after_target_records"
+  | "delete_after_foreign_tombstones"
+  | "delete_after_identity"
+  | "delete_after_cleanup_work"
+  | "delete_before_commit"
+  | "cleanup_before_commit";
+
 const PUBLIC_CATALOG_CURSOR_PREFIX = "mdc1_";
 const PUBLIC_CATALOG_CURSOR_QUERY = "public_minds";
 const PUBLIC_CATALOG_MAX_CURSOR_BYTES = 256;
@@ -2381,13 +2598,271 @@ function ordinaryMindDeletionFingerprint(
   });
 }
 
+interface AccountDeletionState extends OrdinaryMindDeletionState {
+  readonly principals: ReadonlyMap<Principal["principalId"], Readonly<Principal>>;
+  readonly externalBindings: ReadonlyMap<
+    string,
+    Readonly<ExternalIdentityBinding>
+  >;
+  readonly personalBindings: ReadonlyMap<
+    PersonalSpaceBinding["principalId"],
+    Readonly<PersonalSpaceBinding>
+  >;
+  readonly personalProfileIdempotency: ReadonlyMap<
+    string,
+    Readonly<PersonalProfileIdempotencyRecord>
+  >;
+}
+
+function accountDeletionSelection(
+  principalId: Principal["principalId"],
+  host: VerifiedSpaceHost,
+  state: AccountDeletionState,
+) {
+  const principal = state.principals.get(principalId);
+  const personalBinding = state.personalBindings.get(principalId);
+  const personalSpace = personalBinding
+    ? state.knowledgeSpaces.get(personalBinding.spaceId)
+    : undefined;
+  const personalRevisionState = personalSpace
+    ? state.revisionSpaces.get(personalSpace.spaceId)
+    : undefined;
+  if (
+    !principal ||
+    principal.state !== "active" ||
+    !personalBinding ||
+    !personalSpace ||
+    personalSpace.state !== "active" ||
+    !personalRevisionState
+  ) {
+    return null;
+  }
+
+  const personalSpaceIds = new Set(
+    [...state.personalBindings.values()].map((binding) => binding.spaceId),
+  );
+  const ownedSpaceIds = [...state.memberships.values()]
+    .filter(
+      (membership) =>
+        membership.principalId === principalId &&
+        membership.role === "owner" &&
+        membership.state === "active" &&
+        !personalSpaceIds.has(membership.spaceId) &&
+        state.knowledgeSpaces.get(membership.spaceId)?.state === "active",
+    )
+    .map((membership) => membership.spaceId)
+    .sort(compareUnicodeScalarValues);
+  const ownedMinds = ownedSpaceIds.map((spaceId) => {
+    const space = state.knowledgeSpaces.get(spaceId)!;
+    const reservation = state.activeBySpace.get(spaceId);
+    const revisions = state.revisionSpaces.get(spaceId);
+    if (!reservation || reservation.host !== host || !revisions) return null;
+    return Object.freeze({
+      spaceId,
+      host: reservation.host,
+      canonicalHandle: reservation.canonicalHandle,
+      name: space.name,
+      revisionCount: revisions.revisions.size,
+    });
+  });
+  if (ownedMinds.some((mind) => mind === null)) return null;
+
+  const deletedSpaceIds = Object.freeze([
+    personalSpace.spaceId,
+    ...ownedSpaceIds,
+  ]);
+  const deletedSpaceIdSet = new Set(deletedSpaceIds);
+  const foreignMembershipIds = [...state.memberships]
+    .filter(
+      ([, membership]) =>
+        membership.principalId === principalId &&
+        !deletedSpaceIdSet.has(membership.spaceId),
+    )
+    .map(([id]) => id)
+    .sort(compareUnicodeScalarValues);
+  const foreignActiveMembershipCount = foreignMembershipIds.filter(
+    (id) => state.memberships.get(id)?.state === "active",
+  ).length;
+  const targetInvitationIds = [...state.invitations]
+    .filter(
+      ([, invitation]) =>
+        invitation.targetPrincipalId === principalId &&
+        !deletedSpaceIdSet.has(invitation.spaceId),
+    )
+    .map(([id]) => id)
+    .sort(compareUnicodeScalarValues);
+  const pendingInvitationCount = targetInvitationIds.filter(
+    (id) => state.invitations.get(id)?.state === "pending",
+  ).length;
+  const foreignExportJobIds = [...state.exportJobs]
+    .filter(
+      ([, job]) =>
+        job.requestedByPrincipalId === principalId &&
+        !deletedSpaceIdSet.has(job.spaceId),
+    )
+    .map(([id]) => id)
+    .sort(compareUnicodeScalarValues);
+  return Object.freeze({
+    principal,
+    personalBinding,
+    personalSpace,
+    personalRevisionCount: personalRevisionState.revisions.size,
+    ownedMinds: Object.freeze(
+      ownedMinds as readonly NonNullable<(typeof ownedMinds)[number]>[],
+    ),
+    deletedSpaceIds,
+    deletedSpaceIdSet,
+    foreignMembershipIds: Object.freeze(foreignMembershipIds),
+    foreignActiveMembershipCount,
+    targetInvitationIds: Object.freeze(targetInvitationIds),
+    pendingInvitationCount,
+    foreignExportJobIds: Object.freeze(foreignExportJobIds),
+  });
+}
+
+function accountDeletionFingerprint(
+  principalId: Principal["principalId"],
+  host: VerifiedSpaceHost,
+  state: AccountDeletionState,
+): string | null {
+  const selected = accountDeletionSelection(principalId, host, state);
+  if (!selected) return null;
+  const targetSpaces = selected.deletedSpaceIds.map((spaceId) => {
+    const space = state.knowledgeSpaces.get(spaceId)!;
+    const records = targetRecordSelection(spaceId, state);
+    return {
+      space: [
+        space.spaceId,
+        space.state,
+        space.visibility,
+        space.metadataVersion,
+        space.accessVersion,
+        space.headRevisionId,
+        space.updatedAt,
+      ],
+      handle: state.activeBySpace.has(spaceId)
+        ? [
+            state.activeBySpace.get(spaceId)!.host,
+            state.activeBySpace.get(spaceId)!.canonicalHandle,
+          ]
+        : null,
+      memberships: records.membershipIds.map((id) => {
+        const membership = state.memberships.get(id)!;
+        return [
+          id,
+          membership.principalId,
+          membership.role,
+          membership.state,
+          membership.version,
+        ];
+      }),
+      revisions: records.revisionIds.map((id) => {
+        const revision = state.revisionSpaces.get(spaceId)!.revisions.get(id)!;
+        return [
+          id,
+          revision.revision.revisionNumber,
+          revision.revision.manifestHash,
+          revision.revision.committedBy,
+        ];
+      }),
+      records: {
+        invitations: records.invitationIds,
+        background_jobs: records.backgroundJobIds,
+        export_jobs: records.exportJobIds,
+        export_grants: records.exportGrantKeys,
+        indexes: records.indexKeys,
+        audit: records.auditIds,
+        outbox: records.outboxIds,
+        content_idempotency: records.contentIdempotencyKeys,
+        ordinary_idempotency: records.ordinaryIdempotencyKeys,
+      },
+    };
+  });
+  const foreignRevisionAuthors = [...state.revisionSpaces]
+    .filter(([spaceId]) => !selected.deletedSpaceIdSet.has(spaceId))
+    .flatMap(([spaceId, revisionState]) =>
+      [...revisionState.revisions.values()]
+        .filter(
+          (envelope) =>
+            envelope.revision.committedBy.kind === "principal" &&
+            envelope.revision.committedBy.principalId === principalId,
+        )
+        .map((envelope) => [
+          spaceId,
+          envelope.revision.revisionId,
+          envelope.revision.manifestHash,
+        ]),
+    )
+    .sort((left, right) =>
+      compareUnicodeScalarValues(String(left[1]), String(right[1])),
+    );
+  return JSON.stringify({
+    format: "mind-diary-account-deletion-impact-v1",
+    principal: [
+      selected.principal.principalId,
+      selected.principal.state,
+      selected.principal.profileVersion,
+      selected.principal.updatedAt,
+    ],
+    bindings: [...state.externalBindings.values()]
+      .filter((binding) => binding.principalId === principalId)
+      .sort((left, right) =>
+        compareUnicodeScalarValues(left.bindingId, right.bindingId),
+      )
+      .map((binding) => [
+        binding.bindingId,
+        binding.provider,
+        binding.state,
+        binding.version,
+        binding.updatedAt,
+      ]),
+    personal_binding: [
+      selected.personalBinding.spaceId,
+      selected.personalBinding.version,
+    ],
+    target_spaces: targetSpaces,
+    foreign_memberships: selected.foreignMembershipIds.map((id) => {
+      const membership = state.memberships.get(id)!;
+      return [id, membership.spaceId, membership.role, membership.state, membership.version];
+    }),
+    target_invitations: selected.targetInvitationIds.map((id) => {
+      const invitation = state.invitations.get(id)!;
+      return [id, invitation.spaceId, invitation.state, invitation.version];
+    }),
+    foreign_revision_authors: foreignRevisionAuthors,
+    foreign_audit_actor_ids: [...state.auditEvents]
+      .filter(
+        ([, event]) =>
+          event.actor.kind === "principal" &&
+          event.actor.principalId === principalId &&
+          (event.spaceId === null || !selected.deletedSpaceIdSet.has(event.spaceId)),
+      )
+      .map(([id]) => id)
+      .sort(compareUnicodeScalarValues),
+    foreign_export_job_ids: selected.foreignExportJobIds,
+    content_idempotency: [...state.contentIdempotency]
+      .filter(([, record]) => record.principalId === principalId)
+      .map(([key]) => key)
+      .sort(compareUnicodeScalarValues),
+    ordinary_idempotency: [...state.ordinaryIdempotency]
+      .filter(([, record]) => record.principalId === principalId)
+      .map(([key]) => key)
+      .sort(compareUnicodeScalarValues),
+    personal_profile_idempotency: [...state.personalProfileIdempotency]
+      .filter(([, record]) => record.principalId === principalId)
+      .map(([key]) => key)
+      .sort(compareUnicodeScalarValues),
+  });
+}
+
 export class InMemoryRevisionMetadataStore
   implements
     ContentCommitMetadataStore,
     ExportDownloadGrantStore,
     PublicMindCatalogStore,
     PersonalMindStore,
-    OrdinaryMindStore {
+    OrdinaryMindStore,
+    AccountDeletionStore {
   readonly kind = "metadata-store" as const;
   #spaces = new Map<SpaceId, SpaceState>();
   #revisionsById = new Map<RevisionId, Envelope>();
@@ -2414,6 +2889,8 @@ export class InMemoryRevisionMetadataStore
   >();
   #ordinaryMindDeletionImpacts: OrdinaryMindDeletionImpactMap = new Map();
   #ordinaryMindDeletionCleanup: OrdinaryMindDeletionCleanupMap = new Map();
+  #accountDeletionImpacts: AccountDeletionImpactMap = new Map();
+  #accountDeletionCleanup: AccountDeletionCleanupMap = new Map();
   #activeHandlesByKey: ActiveHandleByKeyMap = new Map();
   #activeHandlesBySpace: ActiveHandleBySpaceMap = new Map();
   #retiredHandles: RetiredHandleMap = new Map();
@@ -2428,6 +2905,7 @@ export class InMemoryRevisionMetadataStore
   #nextAccountBootstrapFailureStage: AccountBootstrapFailureStage | null = null;
   #nextPersonalProfileFailureStage: PersonalProfileFailureStage | null = null;
   #nextOrdinaryMindFailureStage: OrdinaryMindFailureStage | null = null;
+  #nextAccountDeletionFailureStage: AccountDeletionFailureStage | null = null;
 
   async readHead(spaceId: SpaceId): Promise<RevisionId | null> {
     return this.#spaces.get(spaceId)?.head ?? null;
@@ -2682,16 +3160,43 @@ export class InMemoryRevisionMetadataStore
     );
   }
 
+  async readAccountDeletionContext(
+    principalId: Principal["principalId"],
+    impactId: string,
+  ): Promise<Readonly<AccountDeletionContext> | null> {
+    const impact = this.#accountDeletionImpacts.get(impactId);
+    if (impact?.principalId === principalId) {
+      return Object.freeze({
+        kind: "impact",
+        impact: cloneAccountDeletionImpact(impact),
+      });
+    }
+    const cleanup = this.#accountDeletionCleanup.get(impactId);
+    if (cleanup?.principalId === principalId) {
+      return Object.freeze({
+        kind: "cleanup",
+        cleanup: cloneAccountDeletionCleanup(cleanup),
+      });
+    }
+    return null;
+  }
+
+  async runAccountDeletionTransaction<Result>(
+    operation: (transaction: OrdinaryMindMetadataTransaction) => Promise<Result>,
+  ): Promise<Result> {
+    return this.runOrdinaryMindTransaction(operation);
+  }
+
   async runOrdinaryMindTransaction<Result>(
     operation: (transaction: OrdinaryMindMetadataTransaction) => Promise<Result>,
   ): Promise<Result> {
     return this.#runExclusive(async () => {
-      const principals = cloneRecordMap(this.#principals, freezePrincipal);
-      const externalBindings = cloneRecordMap(
+      let principals = cloneRecordMap(this.#principals, freezePrincipal);
+      let externalBindings = cloneRecordMap(
         this.#externalBindings,
         freezeExternalBinding,
       );
-      const personalBindings = cloneRecordMap(
+      let personalBindings = cloneRecordMap(
         this.#personalBindings,
         freezePersonalBinding,
       );
@@ -2706,6 +3211,10 @@ export class InMemoryRevisionMetadataStore
       let idempotencyRecords = cloneOrdinaryMindIdempotencyRecords(
         this.#ordinaryMindIdempotencyRecords,
       );
+      let personalProfileIdempotencyRecords =
+        clonePersonalProfileIdempotencyRecords(
+          this.#personalProfileIdempotencyRecords,
+        );
       let activeByHandle = new Map(this.#activeHandlesByKey);
       let activeBySpace = new Map(this.#activeHandlesBySpace);
       let retired = new Map(this.#retiredHandles);
@@ -2748,6 +3257,12 @@ export class InMemoryRevisionMetadataStore
       let deletionCleanup = cloneOrdinaryMindDeletionCleanups(
         this.#ordinaryMindDeletionCleanup,
       );
+      let accountDeletionImpacts = cloneAccountDeletionImpacts(
+        this.#accountDeletionImpacts,
+      );
+      let accountDeletionCleanup = cloneAccountDeletionCleanups(
+        this.#accountDeletionCleanup,
+      );
       let authorizationStates = new Map(
         [...this.#authorizationStates].map(([key, state]) => [
           key,
@@ -2769,6 +3284,14 @@ export class InMemoryRevisionMetadataStore
         exportDownloadGrants,
         indexStates,
         activeBySpace,
+      });
+
+      const accountState = (): AccountDeletionState => ({
+        ...deletionState(),
+        principals,
+        externalBindings,
+        personalBindings,
+        personalProfileIdempotency: personalProfileIdempotencyRecords,
       });
 
       const transaction: OrdinaryMindMetadataTransaction = Object.freeze({
@@ -4239,8 +4762,8 @@ export class InMemoryRevisionMetadataStore
           const impact = cloneOrdinaryMindDeletionImpact({
             impactId: request.impactId,
             principalId: request.principalId,
-            spaceId: space.spaceId,
             host: request.host,
+            spaceId: space.spaceId,
             canonicalHandle: parsed.canonicalHandle,
             name: space.name,
             expiresAt: request.expiresAt,
@@ -4485,15 +5008,415 @@ export class InMemoryRevisionMetadataStore
           this.#failOrdinaryMindIfRequested("delete_cleanup_before_commit");
           return Object.freeze({ kind: "completed" });
         },
+
+        createAccountDeletionImpact: async (
+          request: Readonly<CreateAccountDeletionImpactRequest>,
+        ): Promise<CreateAccountDeletionImpactResult> => {
+          const occurredAt = Date.parse(request.occurredAt);
+          const expiresAt = Date.parse(request.expiresAt);
+          if (
+            !BOUNDED_OPAQUE_ID.test(request.impactId) ||
+            !BOUNDED_OPAQUE_ID.test(request.deletedPrincipalId) ||
+            !Number.isFinite(occurredAt) ||
+            !Number.isFinite(expiresAt) ||
+            expiresAt <= occurredAt ||
+            !Number.isSafeInteger(request.activeTokenCount) ||
+            request.activeTokenCount < 0 ||
+            typeof request.tokenStateFingerprint !== "string" ||
+            request.tokenStateFingerprint.length === 0
+          ) {
+            return Object.freeze({ kind: "invalid_record" });
+          }
+          for (const [impactId, candidate] of accountDeletionImpacts) {
+            if (Date.parse(candidate.expiresAt) <= occurredAt) {
+              accountDeletionImpacts.delete(impactId);
+            }
+          }
+          if (
+            accountDeletionImpacts.has(request.impactId) ||
+            accountDeletionCleanup.has(request.impactId)
+          ) {
+            return Object.freeze({ kind: "impact_id_collision" });
+          }
+          const selected = accountDeletionSelection(
+            request.principalId,
+            request.host,
+            accountState(),
+          );
+          const metadataStateFingerprint = accountDeletionFingerprint(
+            request.principalId,
+            request.host,
+            accountState(),
+          );
+          if (!selected || metadataStateFingerprint === null) {
+            return Object.freeze({ kind: "account_not_found" });
+          }
+          const impact = cloneAccountDeletionImpact({
+            impactId: request.impactId,
+            principalId: request.principalId,
+            host: request.host,
+            deletedPrincipalId: request.deletedPrincipalId,
+            expiresAt: request.expiresAt,
+            personalMind: Object.freeze({
+              spaceId: selected.personalSpace.spaceId,
+              name: selected.personalSpace.name,
+              revisionCount: selected.personalRevisionCount,
+            }),
+            ownedMinds: selected.ownedMinds,
+            foreignMembershipCount: selected.foreignActiveMembershipCount,
+            pendingInvitationCount: selected.pendingInvitationCount,
+            activeTokenCount: request.activeTokenCount,
+            metadataStateFingerprint,
+            tokenStateFingerprint: request.tokenStateFingerprint,
+          });
+          accountDeletionImpacts.set(impact.impactId, impact);
+          this.#failAccountDeletionIfRequested("impact_after_record");
+          this.#failAccountDeletionIfRequested("impact_before_commit");
+          return Object.freeze({ kind: "created", impact });
+        },
+
+        deleteAccountCascade: async (
+          request: Readonly<DeleteAccountCascadeRequest>,
+        ): Promise<DeleteAccountCascadeResult> => {
+          if (
+            !BOUNDED_OPAQUE_ID.test(request.impactId) ||
+            !BOUNDED_OPAQUE_ID.test(request.deletedPrincipalId) ||
+            typeof request.tokenStateFingerprint !== "string" ||
+            request.tokenStateFingerprint.length === 0 ||
+            !Number.isFinite(Date.parse(request.occurredAt))
+          ) {
+            return Object.freeze({ kind: "invalid_record" });
+          }
+          const pending = accountDeletionCleanup.get(request.impactId);
+          if (pending) {
+            if (pending.principalId !== request.principalId) {
+              return Object.freeze({ kind: "account_not_found" });
+            }
+            if (pending.idempotencyKey !== request.idempotencyKey) {
+              return Object.freeze({ kind: "idempotency_conflict" });
+            }
+            if (
+              pending.tokenStateFingerprint !== request.tokenStateFingerprint ||
+              pending.deletedPrincipalId !== request.deletedPrincipalId
+            ) {
+              return Object.freeze({ kind: "deletion_impact_changed" });
+            }
+            return Object.freeze({
+              kind: "cleanup_pending",
+              cleanup: cloneAccountDeletionCleanup(pending),
+            });
+          }
+          const impact = accountDeletionImpacts.get(request.impactId);
+          if (!impact || impact.principalId !== request.principalId) {
+            return Object.freeze({ kind: "account_not_found" });
+          }
+          if (Date.parse(request.occurredAt) >= Date.parse(impact.expiresAt)) {
+            accountDeletionImpacts.delete(impact.impactId);
+            return Object.freeze({ kind: "deletion_impact_expired" });
+          }
+          if (impact.tokenStateFingerprint !== request.tokenStateFingerprint) {
+            accountDeletionImpacts.delete(impact.impactId);
+            return Object.freeze({ kind: "deletion_impact_changed" });
+          }
+          const currentSelection = accountDeletionSelection(
+            request.principalId,
+            impact.host,
+            accountState(),
+          );
+          const currentFingerprint = accountDeletionFingerprint(
+            request.principalId,
+            impact.host,
+            accountState(),
+          );
+          if (
+            !currentSelection ||
+            currentFingerprint === null ||
+            currentFingerprint !== impact.metadataStateFingerprint
+          ) {
+            accountDeletionImpacts.delete(impact.impactId);
+            return Object.freeze({ kind: "deletion_impact_changed" });
+          }
+          if (
+            currentSelection.ownedMinds.length !== impact.ownedMinds.length ||
+            currentSelection.ownedMinds.some(
+              (mind, index) =>
+                mind.spaceId !== impact.ownedMinds[index]?.spaceId ||
+                mind.host !== impact.ownedMinds[index]?.host ||
+                mind.canonicalHandle !==
+                  impact.ownedMinds[index]?.canonicalHandle,
+            )
+          ) {
+            accountDeletionImpacts.delete(impact.impactId);
+            return Object.freeze({ kind: "deletion_impact_changed" });
+          }
+
+          const targetSelections = new Map(
+            currentSelection.deletedSpaceIds.map((spaceId) => [
+              spaceId,
+              targetRecordSelection(spaceId, deletionState()),
+            ]),
+          );
+          const targetDigests = new Set<Digest>();
+          for (const spaceId of currentSelection.deletedSpaceIds) {
+            const state = revisionSpaces.get(spaceId);
+            if (!state) return Object.freeze({ kind: "invalid_record" });
+            for (const envelope of state.revisions.values()) {
+              for (const entry of envelope.manifest.entries) {
+                targetDigests.add(entry.sha256);
+              }
+            }
+          }
+          const remainingReachable = new Set<Digest>();
+          for (const [spaceId, state] of revisionSpaces) {
+            if (currentSelection.deletedSpaceIdSet.has(spaceId)) continue;
+            for (const envelope of state.revisions.values()) {
+              for (const entry of envelope.manifest.entries) {
+                remainingReachable.add(entry.sha256);
+              }
+            }
+          }
+          const cleanup = cloneAccountDeletionCleanup({
+            impactId: request.impactId,
+            idempotencyKey: request.idempotencyKey,
+            principalId: request.principalId,
+            deletedPrincipalId: request.deletedPrincipalId,
+            deletedSpaceIds: currentSelection.deletedSpaceIds,
+            objectDigests: Object.freeze(
+              [...targetDigests]
+                .filter((digest) => !remainingReachable.has(digest))
+                .sort(compareUnicodeScalarValues),
+            ),
+            foreignExportJobIds: currentSelection.foreignExportJobIds,
+            tokenStateFingerprint: request.tokenStateFingerprint,
+            deleteBefore: request.occurredAt,
+          });
+
+          for (const mind of currentSelection.ownedMinds) {
+            const reservation = activeBySpace.get(mind.spaceId);
+            if (
+              !reservation ||
+              reservation.host !== mind.host ||
+              reservation.canonicalHandle !== mind.canonicalHandle
+            ) {
+              return Object.freeze({ kind: "deletion_impact_changed" });
+            }
+          }
+          for (const mind of currentSelection.ownedMinds) {
+            const retiredResult = retireHandleAgainst(
+              {
+                host: mind.host,
+                handle: mind.canonicalHandle,
+                spaceId: mind.spaceId,
+              },
+              { activeByHandle, activeBySpace, retired },
+            );
+            if (retiredResult.kind !== "retired") {
+              throw new Error("account deletion handle retirement changed");
+            }
+          }
+          this.#failAccountDeletionIfRequested("delete_after_handle_retirement");
+
+          let revisionsDeleted = 0;
+          let membershipsDeleted = 0;
+          let invitationsDeleted = 0;
+          for (const spaceId of currentSelection.deletedSpaceIds) {
+            const records = targetSelections.get(spaceId)!;
+            revisionsDeleted += records.revisionIds.length;
+            membershipsDeleted += records.membershipIds.length;
+            invitationsDeleted += records.invitationIds.length;
+            knowledgeSpaces.delete(spaceId);
+            revisionSpaces.delete(spaceId);
+            records.revisionIds.forEach((id) => revisionsById.delete(id));
+            records.membershipIds.forEach((id) => memberships.delete(id));
+            records.invitationIds.forEach((id) => invitations.delete(id));
+            records.ordinaryIdempotencyKeys.forEach((key) =>
+              idempotencyRecords.delete(key),
+            );
+            records.contentIdempotencyKeys.forEach((key) =>
+              contentIdempotencyRecords.delete(key),
+            );
+            records.backgroundJobIds.forEach((id) => backgroundJobs.delete(id));
+            records.exportJobIds.forEach((id) => exportJobs.delete(id));
+            records.exportGrantKeys.forEach((key) =>
+              exportDownloadGrants.delete(key),
+            );
+            records.indexKeys.forEach((key) => indexStates.delete(key));
+            records.outboxIds.forEach((id) => auditOutbox.delete(id));
+            records.auditIds.forEach((id) => auditEvents.delete(id));
+            for (const [impactId, candidate] of deletionImpacts) {
+              if (candidate.spaceId === spaceId) deletionImpacts.delete(impactId);
+            }
+          }
+          this.#failAccountDeletionIfRequested("delete_after_target_records");
+
+          let foreignRevisionAuthorsTombstoned = 0;
+          for (const [spaceId, state] of revisionSpaces) {
+            const revised = new Map<RevisionId, Envelope>();
+            for (const [revisionId, envelope] of state.revisions) {
+              let retained = envelope;
+              if (
+                envelope.revision.committedBy.kind === "principal" &&
+                envelope.revision.committedBy.principalId === request.principalId
+              ) {
+                retained = cloneEnvelope({
+                  ...envelope,
+                  revision: Object.freeze({
+                    ...envelope.revision,
+                    committedBy: Object.freeze({
+                      kind: "deleted-principal" as const,
+                      tombstoneId: request.deletedPrincipalId,
+                    }),
+                  }),
+                });
+                foreignRevisionAuthorsTombstoned += 1;
+              }
+              revised.set(revisionId, retained);
+              revisionsById.set(revisionId, retained);
+            }
+            revisionSpaces.set(spaceId, { head: state.head, revisions: revised });
+          }
+          let foreignAuditActorsTombstoned = 0;
+          for (const [auditEventId, event] of auditEvents) {
+            if (
+              event.actor.kind !== "principal" ||
+              event.actor.principalId !== request.principalId
+            ) {
+              continue;
+            }
+            auditEvents.set(
+              auditEventId,
+              cloneAuditEvent({
+                ...event,
+                actor: Object.freeze({
+                  kind: "deleted-principal" as const,
+                  opaqueId: request.deletedPrincipalId,
+                }),
+              }),
+            );
+            foreignAuditActorsTombstoned += 1;
+          }
+          this.#failAccountDeletionIfRequested(
+            "delete_after_foreign_tombstones",
+          );
+
+          for (const membershipId of currentSelection.foreignMembershipIds) {
+            if (memberships.delete(membershipId)) membershipsDeleted += 1;
+          }
+          const targetInvitationIdSet = new Set(
+            currentSelection.targetInvitationIds,
+          );
+          for (const invitationId of targetInvitationIdSet) {
+            if (invitations.delete(invitationId)) invitationsDeleted += 1;
+          }
+          for (const [jobId, job] of backgroundJobs) {
+            if (
+              job.target.kind === "expire_invitation" &&
+              targetInvitationIdSet.has(job.target.invitationId)
+            ) {
+              backgroundJobs.delete(jobId);
+            }
+          }
+          const foreignExportJobIdSet = new Set(
+            currentSelection.foreignExportJobIds,
+          );
+          foreignExportJobIdSet.forEach((id) => exportJobs.delete(id));
+          for (const [key, grant] of exportDownloadGrants) {
+            if (
+              grant.requestedByPrincipalId === request.principalId ||
+              foreignExportJobIdSet.has(grant.jobId)
+            ) {
+              exportDownloadGrants.delete(key);
+            }
+          }
+          for (const [key, record] of contentIdempotencyRecords) {
+            if (record.principalId === request.principalId) {
+              contentIdempotencyRecords.delete(key);
+            }
+          }
+          for (const [key, record] of idempotencyRecords) {
+            if (record.principalId === request.principalId) {
+              idempotencyRecords.delete(key);
+            }
+          }
+          for (const [key, record] of personalProfileIdempotencyRecords) {
+            if (record.principalId === request.principalId) {
+              personalProfileIdempotencyRecords.delete(key);
+            }
+          }
+          const externalBindingKeys = [...externalBindings]
+            .filter(([, binding]) => binding.principalId === request.principalId)
+            .map(([key]) => key);
+          externalBindingKeys.forEach((key) => externalBindings.delete(key));
+          personalBindings.delete(request.principalId);
+          principals.delete(request.principalId);
+          for (const [key, state] of authorizationStates) {
+            if (
+              state.principal.principalId === request.principalId ||
+              currentSelection.deletedSpaceIdSet.has(state.space.spaceId)
+            ) {
+              authorizationStates.delete(key);
+            }
+          }
+          this.#failAccountDeletionIfRequested("delete_after_identity");
+
+          publicCatalogSpaceIds = derivePublicMindCatalogSpaceIds(
+            knowledgeSpaces,
+            personalBindings,
+          );
+          publicCatalogGeneration += 1;
+          stagePublicCatalogSnapshot(
+            publicCatalogGeneration,
+            publicCatalogSpaceIds,
+            publicCatalogSnapshots,
+          );
+          for (const [impactId, candidate] of accountDeletionImpacts) {
+            if (candidate.principalId === request.principalId) {
+              accountDeletionImpacts.delete(impactId);
+            }
+          }
+          accountDeletionCleanup.set(cleanup.impactId, cleanup);
+          this.#failAccountDeletionIfRequested("delete_after_cleanup_work");
+          this.#failAccountDeletionIfRequested("delete_before_commit");
+          return Object.freeze({
+            kind: "deleted",
+            cleanup,
+            counts: Object.freeze({
+              spaces: currentSelection.deletedSpaceIds.length,
+              revisions: revisionsDeleted,
+              memberships: membershipsDeleted,
+              invitations: invitationsDeleted,
+              externalBindings: externalBindingKeys.length,
+              foreignRevisionAuthorsTombstoned,
+              foreignAuditActorsTombstoned,
+              foreignExportJobs: foreignExportJobIdSet.size,
+            }),
+          });
+        },
+
+        completeAccountDeletionCleanup: async (
+          request: Readonly<CompleteAccountDeletionCleanupRequest>,
+        ): Promise<CompleteAccountDeletionCleanupResult> => {
+          const pending = accountDeletionCleanup.get(request.impactId);
+          if (!pending || pending.principalId !== request.principalId) {
+            return Object.freeze({ kind: "not_found" });
+          }
+          accountDeletionCleanup.delete(request.impactId);
+          this.#failAccountDeletionIfRequested("cleanup_before_commit");
+          return Object.freeze({ kind: "completed" });
+        },
       });
 
       const result = await operation(transaction);
+      this.#principals = principals;
+      this.#externalBindings = externalBindings;
+      this.#personalBindings = personalBindings;
       this.#knowledgeSpaces = knowledgeSpaces;
       this.#memberships = memberships;
       this.#invitations = invitations;
       this.#spaces = revisionSpaces;
       this.#revisionsById = revisionsById;
       this.#ordinaryMindIdempotencyRecords = idempotencyRecords;
+      this.#personalProfileIdempotencyRecords = personalProfileIdempotencyRecords;
       this.#activeHandlesByKey = activeByHandle;
       this.#activeHandlesBySpace = activeBySpace;
       this.#retiredHandles = retired;
@@ -4509,6 +5432,8 @@ export class InMemoryRevisionMetadataStore
       this.#indexStates = indexStates;
       this.#ordinaryMindDeletionImpacts = deletionImpacts;
       this.#ordinaryMindDeletionCleanup = deletionCleanup;
+      this.#accountDeletionImpacts = accountDeletionImpacts;
+      this.#accountDeletionCleanup = accountDeletionCleanup;
       this.#authorizationStates.clear();
       authorizationStates.forEach((state, key) =>
         this.#authorizationStates.set(key, state));
@@ -5801,6 +6726,10 @@ export class InMemoryRevisionMetadataStore
     this.#nextOrdinaryMindFailureStage = stage;
   }
 
+  failNextAccountDeletionAtForTest(stage: AccountDeletionFailureStage): void {
+    this.#nextAccountDeletionFailureStage = stage;
+  }
+
   async inspectPublicMindCatalogForTest(): Promise<Readonly<{
     generation: number;
     spaceIds: readonly SpaceId[];
@@ -5829,6 +6758,26 @@ export class InMemoryRevisionMetadataStore
     return Object.freeze(
       [...this.#ordinaryMindDeletionImpacts.values()]
         .map(cloneOrdinaryMindDeletionImpact)
+        .sort((left, right) => left.impactId.localeCompare(right.impactId)),
+    );
+  }
+
+  async inspectAccountDeletionImpactsForTest(): Promise<
+    readonly Readonly<AccountDeletionImpactSnapshot>[]
+  > {
+    return Object.freeze(
+      [...this.#accountDeletionImpacts.values()]
+        .map(cloneAccountDeletionImpact)
+        .sort((left, right) => left.impactId.localeCompare(right.impactId)),
+    );
+  }
+
+  async inspectAccountDeletionCleanupForTest(): Promise<
+    readonly Readonly<AccountDeletionCleanupWorkItem>[]
+  > {
+    return Object.freeze(
+      [...this.#accountDeletionCleanup.values()]
+        .map(cloneAccountDeletionCleanup)
         .sort((left, right) => left.impactId.localeCompare(right.impactId)),
     );
   }
@@ -6379,5 +7328,11 @@ export class InMemoryRevisionMetadataStore
     if (this.#nextOrdinaryMindFailureStage !== stage) return;
     this.#nextOrdinaryMindFailureStage = null;
     throw new Error(`injected ordinary Mind transaction failure at ${stage}`);
+  }
+
+  #failAccountDeletionIfRequested(stage: AccountDeletionFailureStage): void {
+    if (this.#nextAccountDeletionFailureStage !== stage) return;
+    this.#nextAccountDeletionFailureStage = null;
+    throw new Error(`injected account deletion transaction failure at ${stage}`);
   }
 }

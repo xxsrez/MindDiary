@@ -36,6 +36,36 @@ export class InMemoryAuditSink implements AuditSink {
     return ids.length;
   }
 
+  async tombstonePrincipal(
+    principalId: Extract<AuditEvent["actor"], { kind: "principal" }>["principalId"],
+    deletedPrincipalId: Extract<
+      AuditEvent["actor"],
+      { kind: "deleted-principal" }
+    >["opaqueId"],
+  ): Promise<number> {
+    let changed = 0;
+    for (const [id, event] of this.#delivered) {
+      if (
+        event.actor.kind !== "principal" ||
+        event.actor.principalId !== principalId
+      ) {
+        continue;
+      }
+      this.#delivered.set(
+        id,
+        cloneEvent({
+          ...event,
+          actor: Object.freeze({
+            kind: "deleted-principal" as const,
+            opaqueId: deletedPrincipalId,
+          }),
+        }),
+      );
+      changed += 1;
+    }
+    return changed;
+  }
+
   deliveredForTest(): readonly Readonly<AuditEvent>[] {
     return Object.freeze([...this.#delivered.values()].map(cloneEvent));
   }
