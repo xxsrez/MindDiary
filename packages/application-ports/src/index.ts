@@ -526,6 +526,31 @@ export interface MindRouteMetadataStore
   ): Promise<CurrentAuthorizationState | null>;
 }
 
+export interface PublicMindCatalogPageRequest {
+  /** Opaque adapter-issued cursor; null starts a new immutable snapshot. */
+  readonly cursor: string | null;
+  readonly limit: number;
+}
+
+export type PublicMindCatalogPageResult =
+  | {
+      readonly kind: "page";
+      /** Opaque candidate identities only; callers must reauthorize every item. */
+      readonly spaceIds: readonly SpaceId[];
+      readonly nextCursor: string | null;
+    }
+  | { readonly kind: "invalid_cursor" };
+
+/**
+ * Derived public-discovery projection over the canonical route/auth records.
+ * Candidate IDs are not authorization evidence and contain no display metadata.
+ */
+export interface PublicMindCatalogStore extends MindRouteMetadataStore {
+  listPublicMindCatalogPage(
+    request: Readonly<PublicMindCatalogPageRequest>,
+  ): Promise<PublicMindCatalogPageResult>;
+}
+
 export interface ImmutableObjectWriteRequest {
   readonly bytes: Uint8Array;
   readonly mediaType: MarkdownMediaType;

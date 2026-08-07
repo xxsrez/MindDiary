@@ -46,7 +46,9 @@ import type {
   McpTokenStore,
   MetadataStore,
   MindRouteAuthorizationQuery,
-  MindRouteMetadataStore,
+  PublicMindCatalogPageRequest,
+  PublicMindCatalogPageResult,
+  PublicMindCatalogStore,
   CreateMcpTokenRequest,
   CreateMcpTokenResult,
   CurrentAuthorizationToken,
@@ -1528,15 +1530,146 @@ export type OrdinaryMindFailureStage =
   | "rename_after_idempotency"
   | "rename_before_commit"
   | "visibility_after_space"
+  | "visibility_after_catalog"
   | "visibility_after_audit"
   | "visibility_after_idempotency"
   | "visibility_before_commit";
+
+const PUBLIC_CATALOG_CURSOR_PREFIX = "mdc1_";
+const PUBLIC_CATALOG_CURSOR_QUERY = "public_minds";
+const PUBLIC_CATALOG_MAX_CURSOR_BYTES = 256;
+const PUBLIC_CATALOG_SNAPSHOT_RETENTION = 32;
+const PUBLIC_CATALOG_BASE64URL_PATTERN = /^[A-Za-z0-9_-]+$/u;
+
+interface PublicCatalogCursorPayload {
+  readonly v: 1;
+  readonly q: typeof PUBLIC_CATALOG_CURSOR_QUERY;
+  readonly g: number;
+  readonly o: number;
+}
+
+function encodePublicCatalogCursor(generation: number, offset: number): string {
+  const json = JSON.stringify({
+    v: 1,
+    q: PUBLIC_CATALOG_CURSOR_QUERY,
+    g: generation,
+    o: offset,
+  });
+  return `${PUBLIC_CATALOG_CURSOR_PREFIX}${btoa(json)
+    .replaceAll("+", "-")
+    .replaceAll("/", "_")
+    .replace(/=+$/u, "")}`;
+}
+
+function decodePublicCatalogCursor(
+  cursor: string,
+): Readonly<PublicCatalogCursorPayload> | null {
+  if (
+    cursor.length === 0 ||
+    new TextEncoder().encode(cursor).byteLength >
+      PUBLIC_CATALOG_MAX_CURSOR_BYTES ||
+    !cursor.startsWith(PUBLIC_CATALOG_CURSOR_PREFIX)
+  ) {
+    return null;
+  }
+  const encoded = cursor.slice(PUBLIC_CATALOG_CURSOR_PREFIX.length);
+  if (
+    encoded.length === 0 ||
+    encoded.length % 4 === 1 ||
+    !PUBLIC_CATALOG_BASE64URL_PATTERN.test(encoded)
+  ) {
+    return null;
+  }
+  try {
+    const padded = `${encoded}${"=".repeat((4 - (encoded.length % 4)) % 4)}`;
+    const json = atob(padded.replaceAll("-", "+").replaceAll("_", "/"));
+    const parsed: unknown = JSON.parse(json);
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      return null;
+    }
+    const record = parsed as Record<string, unknown>;
+    if (
+      Object.keys(record).length !== 4 ||
+      record.v !== 1 ||
+      record.q !== PUBLIC_CATALOG_CURSOR_QUERY ||
+      typeof record.g !== "number" ||
+      !Number.isSafeInteger(record.g) ||
+      record.g < 0 ||
+      typeof record.o !== "number" ||
+      !Number.isSafeInteger(record.o) ||
+      record.o < 0
+    ) {
+      return null;
+    }
+    const payload = Object.freeze({
+      v: 1 as const,
+      q: PUBLIC_CATALOG_CURSOR_QUERY,
+      g: record.g,
+      o: record.o,
+    });
+    return encodePublicCatalogCursor(payload.g, payload.o) === cursor
+      ? payload
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function clonePublicCatalogSnapshots(
+  source: ReadonlyMap<number, readonly SpaceId[]>,
+): Map<number, readonly SpaceId[]> {
+  return new Map(
+    [...source].map(([generation, spaceIds]) => [
+      generation,
+      Object.freeze([...spaceIds]),
+    ]),
+  );
+}
+
+function derivePublicMindCatalogSpaceIds(
+  knowledgeSpaces: ReadonlyMap<SpaceId, Readonly<KnowledgeSpace>>,
+  personalBindings: ReadonlyMap<
+    PersonalSpaceBinding["principalId"],
+    Readonly<PersonalSpaceBinding>
+  >,
+): Set<SpaceId> {
+  const personalSpaceIds = new Set(
+    [...personalBindings.values()].map((binding) => binding.spaceId),
+  );
+  return new Set(
+    [...knowledgeSpaces.values()]
+      .filter(
+        (space) =>
+          typeof space.spaceId === "string" &&
+          space.spaceId.length > 0 &&
+          space.state === "active" &&
+          space.visibility === "public" &&
+          !personalSpaceIds.has(space.spaceId),
+      )
+      .map((space) => space.spaceId),
+  );
+}
+
+function stagePublicCatalogSnapshot(
+  generation: number,
+  spaceIds: ReadonlySet<SpaceId>,
+  snapshots: Map<number, readonly SpaceId[]>,
+): void {
+  snapshots.set(
+    generation,
+    Object.freeze([...spaceIds].sort(compareUnicodeScalarValues)),
+  );
+  while (snapshots.size > PUBLIC_CATALOG_SNAPSHOT_RETENTION) {
+    const oldest = Math.min(...snapshots.keys());
+    snapshots.delete(oldest);
+  }
+}
 
 export class InMemoryRevisionMetadataStore
   implements
     ContentCommitMetadataStore,
     ExportDownloadGrantStore,
-    MindRouteMetadataStore,
+    PublicMindCatalogStore,
     PersonalMindStore,
     OrdinaryMindStore {
   readonly kind = "metadata-store" as const;
@@ -1565,6 +1698,11 @@ export class InMemoryRevisionMetadataStore
   #activeHandlesByKey: ActiveHandleByKeyMap = new Map();
   #activeHandlesBySpace: ActiveHandleBySpaceMap = new Map();
   #retiredHandles: RetiredHandleMap = new Map();
+  #publicMindCatalogGeneration = 0;
+  #publicMindCatalogSpaceIds = new Set<SpaceId>();
+  #publicMindCatalogSnapshots = new Map<number, readonly SpaceId[]>([
+    [0, Object.freeze([])],
+  ]);
   readonly #authorizationStates = new Map<string, AuthorizationState>();
   #transactionTail: Promise<void> = Promise.resolve();
   #nextCommitFailure: Error | null = null;
@@ -1660,6 +1798,45 @@ export class InMemoryRevisionMetadataStore
           .map((membership) => membership.spaceId),
       )].sort(),
     );
+  }
+
+  async listPublicMindCatalogPage(
+    request: Readonly<PublicMindCatalogPageRequest>,
+  ): Promise<PublicMindCatalogPageResult> {
+    if (
+      typeof request !== "object" ||
+      request === null ||
+      !Number.isSafeInteger(request.limit) ||
+      request.limit < 1 ||
+      request.limit > 100
+    ) {
+      return Object.freeze({ kind: "invalid_cursor" });
+    }
+    const decoded =
+      request.cursor === null
+        ? Object.freeze({
+            v: 1 as const,
+            q: PUBLIC_CATALOG_CURSOR_QUERY,
+            g: this.#publicMindCatalogGeneration,
+            o: 0,
+          })
+        : typeof request.cursor === "string"
+          ? decodePublicCatalogCursor(request.cursor)
+          : null;
+    if (decoded === null) return Object.freeze({ kind: "invalid_cursor" });
+    const snapshot = this.#publicMindCatalogSnapshots.get(decoded.g);
+    if (snapshot === undefined || decoded.o > snapshot.length) {
+      return Object.freeze({ kind: "invalid_cursor" });
+    }
+    const end = Math.min(decoded.o + request.limit, snapshot.length);
+    return Object.freeze({
+      kind: "page",
+      spaceIds: Object.freeze(snapshot.slice(decoded.o, end)),
+      nextCursor:
+        end < snapshot.length
+          ? encodePublicCatalogCursor(decoded.g, end)
+          : null,
+    });
   }
 
   async readResolvedSpace(
@@ -1808,6 +1985,11 @@ export class InMemoryRevisionMetadataStore
       let activeByHandle = new Map(this.#activeHandlesByKey);
       let activeBySpace = new Map(this.#activeHandlesBySpace);
       let retired = new Map(this.#retiredHandles);
+      let publicCatalogGeneration = this.#publicMindCatalogGeneration;
+      let publicCatalogSpaceIds = new Set(this.#publicMindCatalogSpaceIds);
+      let publicCatalogSnapshots = clonePublicCatalogSnapshots(
+        this.#publicMindCatalogSnapshots,
+      );
       let auditEvents = new Map(
         [...this.#auditEvents].map(([id, event]) => [id, cloneAuditEvent(event)]),
       );
@@ -2303,6 +2485,21 @@ export class InMemoryRevisionMetadataStore
             freezeKnowledgeSpace(changedSnapshot.space),
           );
           this.#failOrdinaryMindIfRequested("visibility_after_space");
+          const candidatePublicCatalogSpaceIds =
+            derivePublicMindCatalogSpaceIds(
+              candidateKnowledgeSpaces,
+              personalBindings,
+            );
+          const candidatePublicCatalogSnapshots = clonePublicCatalogSnapshots(
+            publicCatalogSnapshots,
+          );
+          const candidatePublicCatalogGeneration = publicCatalogGeneration + 1;
+          stagePublicCatalogSnapshot(
+            candidatePublicCatalogGeneration,
+            candidatePublicCatalogSpaceIds,
+            candidatePublicCatalogSnapshots,
+          );
+          this.#failOrdinaryMindIfRequested("visibility_after_catalog");
           if (
             !stageVisibilityAuditEffects(
               request,
@@ -2336,6 +2533,9 @@ export class InMemoryRevisionMetadataStore
           this.#failOrdinaryMindIfRequested("visibility_after_idempotency");
           this.#failOrdinaryMindIfRequested("visibility_before_commit");
           knowledgeSpaces = candidateKnowledgeSpaces;
+          publicCatalogGeneration = candidatePublicCatalogGeneration;
+          publicCatalogSpaceIds = candidatePublicCatalogSpaceIds;
+          publicCatalogSnapshots = candidatePublicCatalogSnapshots;
           idempotencyRecords = candidateIdempotencyRecords;
           auditEvents = candidateAuditEvents;
           auditOutbox = candidateAuditOutbox;
@@ -2357,6 +2557,9 @@ export class InMemoryRevisionMetadataStore
       this.#activeHandlesByKey = activeByHandle;
       this.#activeHandlesBySpace = activeBySpace;
       this.#retiredHandles = retired;
+      this.#publicMindCatalogGeneration = publicCatalogGeneration;
+      this.#publicMindCatalogSpaceIds = publicCatalogSpaceIds;
+      this.#publicMindCatalogSnapshots = publicCatalogSnapshots;
       this.#auditEvents = auditEvents;
       this.#auditOutbox = auditOutbox;
       return result;
@@ -3526,6 +3729,41 @@ export class InMemoryRevisionMetadataStore
     this.#nextOrdinaryMindFailureStage = stage;
   }
 
+  async inspectPublicMindCatalogForTest(): Promise<Readonly<{
+    generation: number;
+    spaceIds: readonly SpaceId[];
+    retainedSnapshots: number;
+  }>> {
+    return Object.freeze({
+      generation: this.#publicMindCatalogGeneration,
+      spaceIds: Object.freeze([...this.#publicMindCatalogSpaceIds]),
+      retainedSnapshots: this.#publicMindCatalogSnapshots.size,
+    });
+  }
+
+  /** Test-only derived projection corruption; canonical Mind state is untouched. */
+  async corruptPublicMindCatalogForTest(
+    candidateIds: readonly unknown[],
+  ): Promise<void> {
+    await this.#runExclusive(async () => {
+      this.#publicMindCatalogGeneration += 1;
+      this.#publicMindCatalogSpaceIds = new Set(
+        candidateIds as readonly SpaceId[],
+      );
+      this.#publicMindCatalogSnapshots.set(
+        this.#publicMindCatalogGeneration,
+        Object.freeze([...candidateIds]) as readonly SpaceId[],
+      );
+      while (
+        this.#publicMindCatalogSnapshots.size >
+        PUBLIC_CATALOG_SNAPSHOT_RETENTION
+      ) {
+        const oldest = Math.min(...this.#publicMindCatalogSnapshots.keys());
+        this.#publicMindCatalogSnapshots.delete(oldest);
+      }
+    });
+  }
+
   /** Test-only concurrent metadata mutation; content HEAD/history are untouched. */
   async bumpPersonalMindMetadataVersionForTest(
     principalId: Principal["principalId"],
@@ -3791,6 +4029,16 @@ export class InMemoryRevisionMetadataStore
           accessVersion: version(space.accessVersion + 1),
           updatedAt: occurredAt,
         }),
+      );
+      this.#publicMindCatalogSpaceIds = derivePublicMindCatalogSpaceIds(
+        this.#knowledgeSpaces,
+        this.#personalBindings,
+      );
+      this.#publicMindCatalogGeneration += 1;
+      stagePublicCatalogSnapshot(
+        this.#publicMindCatalogGeneration,
+        this.#publicMindCatalogSpaceIds,
+        this.#publicMindCatalogSnapshots,
       );
       return true;
     });
