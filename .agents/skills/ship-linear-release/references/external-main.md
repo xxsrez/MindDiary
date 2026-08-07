@@ -16,6 +16,7 @@ task-owned refs, expected-old CAS и проверке результата по�
 - [Не трогать primary checkout](#не-трогать-primary-checkout)
 - [Снять bounded snapshot](#снять-bounded-snapshot)
 - [Классифицировать состояние](#классифицировать-состояние)
+- [Зафиксировать HOLD или PAUSE](#зафиксировать-hold-или-pause)
 - [Реагировать по матрице](#реагировать-по-матрице)
 - [Обработать remote drift](#обработать-remote-drift)
 - [Сообщать только переходы](#сообщать-только-переходы)
@@ -120,17 +121,39 @@ action = continue | quarantine | branches-only | freeze-shared | stop
 `quarantine` — только scheduler state: не dispatch-и/не ingest-и affected
 paths, claims и refs. Никогда не перемещай и не меняй чужие файлы.
 
+## Зафиксировать HOLD или PAUSE
+
+В active run до остановки affected lane создай exact durable record из
+[receipts.md](receipts.md) и сохрани его ID в `HOLD_PAUSE_INDEX`/
+`PROMOTION_HOLD`. Scope перечисляет только затронутые issue/paths либо
+`integration|gate|default|deploy|tag|linear|all-shared`; reason и evidence
+ссылаются на bounded snapshot, resume predicate задаёт fresh проверяемое
+условие.
+
+- Для automatically verifiable safety condition используй `HOLD`; lift —
+  отдельный expected-old CAS только после predicate evidence.
+- Когда продолжение требует решения/подтверждения пользователя, используй
+  `PAUSE confirmation_required=yes`. Даже если snapshot позже выглядит чистым,
+  нужны и predicate evidence, и явное user confirmation после создания pause.
+- Goal auto-continuation, новый turn, compaction, timeout или same-owner resume
+  не снимают pause. В начале каждого turn прочитай active records до mutations.
+- До initial repo-global claim записать durable record нельзя: оставайся
+  read-only и сообщи preflight blocker, не создавая claim ради pause.
+
+Projection comment не является authority и не заменяет ledger CAS. Незатронутые
+branch lanes могут продолжаться только при доказанной независимости.
+
 ## Реагировать по матрице
 
 | Наблюдение | Shared lane | Issue pool |
 | --- | --- | --- |
 | Нет default checkout/local ref, remote default точно существует; либо checkout clean и refs ожидаемы | Продолжай normal path от exact remote. | Work-conserving refill. |
 | Stable dirty/untracked, local ref `equal|behind`, paths disjoint от claims, cutoffs и control | Продолжай exact clean-worktree gate/CAS; чужие bytes исключены. | Продолжай и сообщи один раз. |
-| Stable overlap только с active claims или `OPEN_CUTOFF` | Quarantine affected claims/refs; независимый cutoff можно продолжить. | Доведи affected worker до bounded receipt без ingest; refill только disjoint lanes. |
-| Overlap с `ACTIVE_CUTOFF` либо release/gate/control surface | Freeze seal/global gate/default/deploy/tag/Done. | Только доказанно disjoint branches от pinned good base; иначе drain. |
-| Local default `ahead` (включая clean committed work) | Не обходи вероятное unpushed intent: integration ingest/seal/global gate/default/deploy/tag/Done frozen. | `branches-only` от exact remote/good base; task-owned feature refs/receipts queued. |
-| Local default `diverged` или необъяснимо сдвинулся | Freeze shared actions; не merge/rebase/reset автоматически. | Не dispatch-и новое; proven-disjoint in-flight доведи до bounded receipt, затем `needs-input`. |
-| Snapshot меняется, discovery/status/ref/index/remote нельзя однозначно прочитать, remote missing либо paths truncated/unknown | `active-unknown`: stop all new mutations; не удаляй чужой lock. | In-flight workers только до bounded receipts; затем stop. |
+| Stable overlap только с active claims или `OPEN_CUTOFF` | Quarantine affected claims/refs; durable scoped `HOLD`, независимый cutoff можно продолжить. | Доведи affected worker до bounded receipt без ingest; refill только disjoint lanes. |
+| Overlap с `ACTIVE_CUTOFF` либо release/gate/control surface | Durable `HOLD`: freeze seal/global gate/default/deploy/tag/Done. | Только доказанно disjoint branches от pinned good base; иначе drain. |
+| Local default `ahead` (включая clean committed work) | `PAUSE confirmation_required=yes`; не обходи вероятное unpushed intent: shared lane frozen. | `branches-only` от exact remote/good base; task-owned feature refs/receipts queued. |
+| Local default `diverged` или необъяснимо сдвинулся | `PAUSE confirmation_required=yes`; freeze shared actions, не merge/rebase/reset автоматически. | Не dispatch-и новое; proven-disjoint in-flight доведи до bounded receipt, затем `needs-input`. |
+| Snapshot меняется, discovery/status/ref/index/remote нельзя однозначно прочитать, remote missing либо paths truncated/unknown | Durable `HOLD active-unknown`: stop all new mutations; не удаляй чужой lock. | In-flight workers только до bounded receipts; затем stop. |
 | Dirty invoked contract/instructions до claim | Никакого claim/action intent. | Не dispatch-и; сообщи, что нужен tracked contract. |
 
 `relation=behind` не отменяет run-level `EXPECTED_DEFAULT_SHA`: если remote
@@ -149,7 +172,8 @@ push недостаточно: default push всё равно требует exp
 
 ### Fast-forward до нашего push
 
-1. Поставь `default=drifted`, не выполняй старый action intent/push/deploy.
+1. Поставь `default=drifted`, создай scoped `HOLD` с predicate exact rebuild/
+   validation evidence, не выполняй старый action intent/push/deploy.
 2. Fetch-ни exact commit в task-owned observation/train namespace, не в local
    default ref, и классифицируй range/paths/control changes.
 3. Создай fresh train/cutoff generation от нового remote SHA. Переиграй
@@ -167,14 +191,17 @@ push недостаточно: default push всё равно требует exp
 
 Не force-push, не reset и не пытайся «починить» историю. Freeze shared
 mutations, сохрани exact expected/observed SHAs, drain workers до bounded
-receipts и верни `needs-input`. То же правило действует, если remote change
+receipts и durable-запиши `PAUSE confirmation_required=yes` с exact resolution
+predicate, затем верни `needs-input`. Goal continuation не снимает pause. То же
+правило действует, если remote change
 меняет contract/security/release semantics или его scope нельзя доказать.
 
 ### Drift после нашего push
 
 Если remote продвинулся после candidate push, но до deploy/tag/Linear `Done`,
 старый cutoff больше не доказывает exact current default. Не deploy-и, не
-тегируй и не закрывай issue: reconcile/reseal новую generation. Если deploy
+тегируй и не закрывай issue: создай scoped `HOLD`, reconcile/reseal новую
+generation и lift-ни его только по exact gate/current-head evidence. Если deploy
 уже случился, сохрани version/deployment evidence и не rollback-и только из-за
 Git drift; однако `Done`/completion запрещены до восстановления exact Git/live
 alignment.
@@ -189,19 +216,21 @@ foreign-main=isolated-dirty; relation=<equal|behind>; overlap=none;
 action=continue; mode=isolated; external checkout untouched/excluded; promotion=CAS
 
 foreign-main=overlap; scope=<paths/control/issues>; action=quarantine <items>;
-independent-pool=<continues|drains>; paused=<exact shared surfaces|none>
+hold=<id@exact-scopes>; independent-pool=<continues|drains>
 
 foreign-main=ahead; action=branches-only; integration=paused;
-workers=proven-disjoint-from-origin; required=finish/push/move/handoff local main
+pause=<id>; confirmation=required; workers=proven-disjoint-from-origin;
+required=finish/push/move/handoff local main + explicit confirm
 
 foreign-main=diverged; action=freeze-shared; result=needs-input; dispatch=stopped;
-workers=drain-proven-disjoint; required=resolve/handoff without altering checkout
+pause=<id>; confirmation=required; workers=drain-proven-disjoint;
+required=resolve/handoff without altering checkout + explicit confirm
 
 foreign-main=active-unknown; action=stop; new-mutations=none; workers=draining-only;
-required=stable readable snapshot; external checkout/lock untouched
+hold=<id>; required=stable readable snapshot; external checkout/lock untouched
 
 foreign-main=reconciled; remote=<old>-><new>; generation=<id>;
-reused=<refs>; rerun=affected+one-global-gate; action=continue
+reused=<refs>; rerun=targeted-affected+one-cutoff-gate; action=continue
 ```
 
 Не утверждай, кто автор изменений, если это не доказано. При successful remote
@@ -214,6 +243,8 @@ push из clean worktree отдельно скажи, что local primary check
 [crash-recovery.md](crash-recovery.md). Этот файл отвечает только за его
 foreign-main substep: после exact origin refs сними fresh primary-checkout
 snapshot, вычисли disposition и до CI/Sites/Linear зафиксируй affected hold.
+Сначала усынови уже active HOLD/PAUSE; не создавай новый ID для того же evidence
+и не lift-и confirmation-required pause без explicit user confirmation.
 
 Записывай `PRIMARY_CHECKOUT`, `INTERFERENCE` и `PROMOTION_HOLD` из
 [receipts.md](receipts.md) только при обнаружении, смене policy, rebuild,

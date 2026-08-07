@@ -31,6 +31,34 @@ claim generation/token, exact feature ref и guard ref/tip. Это fencing ident
 содержит уникальный run-key/epoch/claim suffix, ничего не меняй и верни
 `needs-input`. Late result старого epoch/generation не имеет authority.
 
+Требуй exact machine-checkable fragment:
+
+```json
+{
+  "issue_updated_at": "<operational timestamp>",
+  "scope_fingerprint": "<semantic digest>",
+  "isolation": {
+    "mutable_build_dir": "<absolute task-owned path>",
+    "tmp_dir": "<absolute task-owned path>",
+    "runtime_dir": "<absolute task-owned path>",
+    "cache_mode": "content-addressed|isolated",
+    "cache_dir": "<absolute path>",
+    "ports": [],
+    "env": {}
+  },
+  "validation": {
+    "check_class": "targeted-feature",
+    "targeted_checks": ["<exact command/check id>"],
+    "full_gate": "deferred-to-cutoff"
+  }
+}
+```
+
+`ports` — уникальные integer ports; `env` содержит только explicit non-secret
+task-scoped values; `targeted_checks` — непустой список. Missing/invalid
+isolation или validation field запрещает исполнение, а не разрешает worker-у
+подобрать значение самостоятельно.
+
 ## Подтвердить входные данные
 
 1. Полностью прочитай текущий `AGENTS.md` и этот файл. Затем выполни из
@@ -52,17 +80,23 @@ claim generation/token, exact feature ref и guard ref/tip. Это fencing ident
    независимо завершена, прекрати новые мутации и верни фактическое состояние.
 3. Проверь `run_id/run_key`, owner/epoch, claim generation/token, guard ref/tip,
    root/base SHA, ordered dependency SHAs, intended branch/ref, worktree ID/path,
-   queue fingerprint, remote mode/offline base и issue `updatedAt` из manifest.
-   Base может
-   быть exact ready head предшественника в stacked lane, но обязан быть rooted
+   queue fingerprint, remote mode/offline base, operational issue `updatedAt` и
+   semantic `scope_fingerprint` из manifest. Fingerprint включает milestone
+   membership, title/description/acceptance, scope-bearing attachments/
+   non-receipt comments и release-blocking relations, но не status, priority,
+   assignee, `updatedAt` или `ship-linear-release` receipt comments. Изменение
+   одного `updatedAt` после coordinator projection не делает manifest stale.
+   Base может быть exact ready head
+   предшественника в stacked lane, но обязан быть rooted
    в root SHA. Если worktree не изолирован, ancestry не сходится, база
    неожиданно изменилась или ownership конфликтует с чужими правками, не
    исправляй это разрушительно: верни `STATUS: needs-input`.
-4. Подтверди изоляцию worktree:
-   - отдельный checkout и branch только для этой issue;
-   - отдельные mutable env/cache/tmp/build/port значения, если задача
-     поднимает процессы; общий content-addressed dependency cache допустим;
-   - никакие временные файлы не должны утекать в root checkout соседних issue.
+4. Подтверди изоляцию worktree и exact manifest keys: отдельный checkout/branch;
+   absolute task-owned `mutable_build_dir`, `tmp_dir`, `runtime_dir`; declared
+   `cache_mode` и `cache_dir`; уникальные `ports`; explicit task-scoped `env`.
+   `content-addressed` cache можно разделять только по immutable content key,
+   `isolated` cache обязан быть task-owned. Временные файлы не должны утекать в
+   primary checkout или worktrees соседних issue.
 5. Проверь resume state и существующие issue-scoped branch/commit/ref. Resume in
    place допустим только для exact current owner/epoch/generation/token и одного
    isolated worktree. Усыновлённый stale SHA приходит как явный `ADOPTED_FROM`
@@ -83,19 +117,22 @@ claim generation/token, exact feature ref и guard ref/tip. Это fencing ident
    детерминированный script нескольким мелким interactive steps.
    Не запускай scout/subagent: если ownership из manifest недостаточен, верни
    `STATUS: needs-input` и `NEXT: SCOPE_REFINEMENT: <exact paths/reason>`.
-4. Feature gate на точном будущем дереве:
+4. Feature gate на точном будущем дереве имеет только
+   `CHECK_CLASS=targeted-feature`:
    - узкие тесты затронутой области;
    - один локальный smoke затронутого flow, если применимо;
    - `git diff --check`;
    - для Markdown/docs — project-docs validator из repo instructions;
-   - для code — только реально существующие canonical build/test/lint/security
-     commands из `AGENTS.md`, manifests или scripts;
+   - для code — только affected invocations реально существующих canonical
+     build/test/lint/security commands из `AGENTS.md`, manifests или scripts;
    - для OKF fixtures — strict validation всего bundle, не только `wiki/`;
    - для MCP/adapter/client work — version-specific conformance exact profile,
      если он доступен и входит в scope.
-   Не запускай полный repository suite без прямой issue acceptance или
-   доказанной необходимости: global cross-feature gate выполняется один раз на
-   cutoff. Маленькая правка не должна платить стоимость всего release pipeline.
+   Никогда не запускай full repository suite, aggregate release command или его
+   полный набор subcommands в feature lane. Даже если issue acceptance требует
+   full suite, запиши эту проверку как cutoff coverage и верни
+   `FULL_GATE=deferred-to-cutoff`; global gate выполняется только для sealed
+   cutoff.
 5. Не изобретай отсутствующую canonical command и не объявляй build/test,
    client compatibility или deployment выполненными по косвенному сигналу.
 6. Исправь и повтори любую доступную упавшую проверку. Для flaky-проверки
@@ -110,8 +147,9 @@ claim generation/token, exact feature ref и guard ref/tip. Это fencing ident
 ## Commit и ready результат
 
 1. Перед commit ещё раз fetch-ом проверь milestone membership, state,
-   `updatedAt` и scope. При изменении перечитай issue и примени правило
-   адаптации выше.
+   operational `updatedAt` и semantic `scope_fingerprint`. Один изменившийся
+   `updatedAt` не требует adaptation; при изменении fingerprint перечитай issue
+   и примени правило адаптации выше.
 2. Сопоставь actual changed/renamed/deleted/generated paths с
    `OWNERSHIP_PATHS`; diff вне разрешённого scope требует `needs-input`, а не
    молчаливого захвата. Stage только issue-scoped файлы. Сделай минимальное число осмысленных
@@ -168,14 +206,17 @@ BRANCH: <name>
 BASE_SHA: <sha>
 DEPENDENCY_SHAS: <ordered refs или none>
 HEAD_SHA: <full sha or none>
-SCOPE: start=<updatedAt>; final=<updatedAt>; unchanged | adapted
+SCOPE: start_fingerprint=<digest>; final_fingerprint=<digest>; unchanged | adapted
+LINEAR_UPDATED_AT: start=<timestamp>; final=<timestamp>
 RESUMED_FROM: none | branch | commit | receipt
 ADOPTED_FROM: <owner/epoch/generation/ref@sha or none>
 ORIGIN_REF: <branch=sha or none>
 GUARD: <origin|local-only>:<ref=ack-sha or none>
 REF_SCOPE: <origin | local-only>
 SMOKE: <коротко что локально проверено>
-TESTS: <короткий список команд и итогов>
+CHECK_CLASS: targeted-feature
+TARGETED_CHECKS: <короткий список exact команд/check IDs и итогов>
+FULL_GATE: deferred-to-cutoff
 GAPS: <none или точная граница>
 DIRTY_REMAINDER: <none или сохранённые paths внутри worktree>
 DEFECT_CANDIDATE: <none или короткий summary + defect_signature>

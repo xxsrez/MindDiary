@@ -237,10 +237,13 @@ product decisions отделяйте от ещё не выбранных дет�
 - После изменений документации запускайте project-docs validator и
   `git diff --check`.
 - Канонический toolchain baseline: Node.js `>=22.13.0`, npm lockfile и
-  TypeScript project references. После `npm ci` используйте `npm run build`,
-  `npm run test:unit`, `npm run test:integration`,
-  `npm run test:conformance`, `npm run check:docs` и полный `npm run check`.
-  Не называйте эти contract tests live Sites/MCP compatibility.
+  TypeScript project references. Полный repository gate — `npm ci`, затем один
+  `npm run check` и `git diff --check <base>..<candidate>`: aggregate уже
+  включает clean build, unit/integration/conformance, fixtures, architecture,
+  docs и secrets, поэтому не запускайте те же subcommands перед ним повторно.
+  В feature lane `ship-linear-release` выполняйте только targeted checks из
+  manifest и `git diff --check`; один полный gate выполняет sealed cutoff. Не
+  называйте эти contract tests live Sites/MCP compatibility.
 - После появления OKF fixtures валидируйте весь выбранный bundle, а не только
   `wiki/`, официальным или эквивалентным строгим validator.
 

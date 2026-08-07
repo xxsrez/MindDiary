@@ -11,6 +11,7 @@ takeover. Его цель — продолжить с первой реальн�
 ## Содержание
 
 - [Сначала определить вид restart](#сначала-определить-вид-restart)
+- [Сохранить durable HOLD и PAUSE](#сохранить-durable-hold-и-pause)
 - [Войти в recovery и закрыть старые grants](#войти-в-recovery-и-закрыть-старые-grants)
 - [Разрешить незавершённое external action](#разрешить-незавершённое-external-action)
 - [Собрать bounded inventory](#собрать-bounded-inventory)
@@ -45,6 +46,11 @@ owner.
 4. Если прежняя coordinator task authoritative terminal/archived, пользователь
    явно подтвердил её stop либо есть explicit `handoff-ready`, новая task может
    начать takeover. Старые child workers не становятся её subagents.
+   Для reconciled `handoff-ready` с terminal workers и отсутствующим pending
+   external action новый explicit online вызов skill является достаточным
+   resume intent: сразу выполни expected-old takeover CAS, не требуй от
+   пользователя magic phrase или ручных Git действий. Handoff target —
+   provenance; race между successors решает CAS.
 5. Неизвестная liveness старых workers допустима только если их manifest и
    guard refs доказывают feature-only authority. Тогда takeover сначала fence-ит
    все guards и не трогает их worktrees. Если старый contract позволял shared
@@ -61,19 +67,62 @@ receipts и shared effects, затем назначь fresh `run_key`, epoch и 
 generations. Старые branches остаются evidence; ни один worker не продолжает их
 remote publication по новому contract.
 
+Любой nonterminal legacy coordinator ref блокирует normal/resume как collision.
+Игнорируй только exact legacy tip, для которого ancestry canonical repo-global
+coordinator ref содержит reconciled action `migrate-legacy-ledger` с target
+`<legacy-ref>@<legacy-full-SHA>` и durable evidence доказанного stop прежнего
+coordinator/workers. Другой ref, иной либо продвинувшийся SHA, missing reconcile
+или одно лишь совпадение current owner proof снова блокируют mutations. Такой
+checkpoint retire-ит exact legacy namespace для collision check, но не удаляет
+его evidence.
+
+## Сохранить durable HOLD и PAUSE
+
+До reconciliation действий прочитай `HOLD_PAUSE_INDEX` и exact active records.
+Не снимай их из-за restart, compaction, same-owner proof или active Goal.
+`HOLD` можно lift-нуть отдельным expected-old CAS только после fresh evidence
+его machine-checkable resume predicate. `PAUSE confirmation_required=yes`
+требует дополнительно явное user confirmation, полученное после создания pause;
+Goal auto-continuation и новый model turn подтверждением не являются. Пока
+record active, recovery и read-only evidence допустимы, а affected mutation
+scope остаётся закрыта; независимые lanes продолжай только по доказанному scope.
+Fresh explicit вызов online `ship-linear-release` после pause считается таким
+confirmation для этого run и сохраняется как invocation turn/digest; отдельный
+предписанный текст не нужен. Он не заменяет невыполненный resume predicate и не
+снимает unrelated scoped HOLD/PROMOTION_HOLD: takeover переносит их новому
+owner, который lift-ит каждый scope только по его evidence.
+
 ## Войти в recovery и закрыть старые grants
 
 1. Same owner CAS-переводит run в `recovering` с прежним epoch; takeover CAS-
    создаёт descendant owner с `epoch+1`. Запиши cause, previous/current owner,
    recovery generation и phase `fencing`. Shared integration/default/deploy/
    Linear-closure lane в этот момент заморожена.
-2. До dispatch прочитай `CLAIM_INDEX` из coordinator ledger и bounded namespace
-   guard refs текущего `run_key`. Не полагайся только на Linear comments.
+   Для `route=takeover` это делает `shipctl.py takeover` одним idempotent
+   bounded call. Не собирай takeover через generic `transition`: тот renderer
+   намеренно не меняет stable owner/epoch headers и не выполняет push.
+   Сразу после takeover (и на любом fresh
+   `route=recover-owner|recover-owner-upgrade` с `RECOVERY phase=fencing`)
+   вызови `shipctl.py fence-guards`. Upgrade-route разрешён только тому же
+   runtime owner для coherent fast-forward contract migration. Helper сам
+   durable-записывает exact vector intent, перечитывает raced tips, проверяет
+   run/issue/generation, atomic CAS-fence-ит indexed guards и reconciles phase
+   `inventory`. Не конструируй fencing shell/JavaScript snippets вручную.
+   Helper принимает canonical one-field-per-line guards и ранее опубликованный
+   compact layout (`RUN_ID; RUN_KEY; ISSUE`, `OWNER; CLAIM`, `FEATURE`), но
+   descendant fence всегда canonicalizes metadata; иная неоднозначная legacy
+   форма остаётся fail-closed.
+2. До dispatch прочитай `CLAIM_INDEX`, `EXECUTION_INDEX` и bounded namespace
+   guard refs текущего `run_key`. `CLAIM_INDEX` определяет authority/recovery,
+   `EXECUTION_INDEX` — occupancy; live ready claim не означает running slot.
+   Сверь только entries со state `running` с authoritative runtime liveness.
+   Не полагайся на Linear comments.
 3. До dispatch coordinator action intent сохраняет issue, executor task ID,
    worktree ID/intended branch, exact feature/guard refs и expected tips; затем
-   expected-absent создаёт initial guard и reconciled claim index. Worktree и
-   worker появляются только после этого checkpoint, поэтому crash не оставляет
-   авторитетную работу без discovery key.
+   expected-absent создаёт initial guard и reconciled claim index. Перед spawn
+   тот же bounded transition создаёт `EXECUTION_INDEX state=running`; failed
+   spawn переводит entry в `stopped`. Worktree и worker появляются только после
+   discovery checkpoint, поэтому crash не оставляет авторитетную работу без key.
 4. Каждый online worker claim имеет отдельный guard ref, например
    `codex/release/claims/<run-key>/<issue-id>/c<generation>`. Worker публикует
    feature ref и descendant guard acknowledgement одним atomic multi-ref push с
@@ -82,7 +131,8 @@ remote publication по новому contract.
    publication action intent, публикует exact feature ref, проверяет effect и
    затем descendant `ready` guard; crash между шагами восстанавливается по
    intent/ref, а stale worker remote authority не имеет.
-5. При takeover продвинь каждый active guard descendant `fenced` commit-ом.
+5. При takeover продвинь каждый active guard descendant `fenced` commit-ом
+   через `shipctl.py fence-guards`.
    CAS race означает: перечитай guard и связанную feature ref, запиши появившийся
    exact artifact и повтори fence от нового tip. Не requeue issue, пока все
    известные и найденные run-scoped guards не fenced.
@@ -102,6 +152,13 @@ Pending action intent разрешается раньше adoption workers. Inte
 содержать `action_id`, kind, exact target, expected-before, payload digest,
 queryable provider selector, external request/idempotency key и ожидаемую effect
 identity. Если этих полей нет, provider-side create автоматически не retry-и.
+
+Для `projection-batch` прочитай полный item vector из intent и reconciliate
+каждый Linear comment/status item по его selector/idempotency key/digest. Одним
+CAS сохрани vector terminal results; не повторяй proven applied items вместе с
+failed/unknown. Feature/guard/train/cutoff/default Git refs, CI authority,
+deploy/Sites/tag не являются projection items и восстанавливаются отдельными
+authoritative action tickets.
 
 Для каждого intent выбери ровно одно:
 
@@ -134,14 +191,17 @@ version/deployment ID и target Site; tag — по immutable name+SHA.
 
 Собирай факты в таком порядке и сохрани один inventory digest:
 
-1. coordinator ledger, owner/epoch, claim/guard/comment indexes и pending action;
+1. coordinator ledger, owner/epoch, claim/execution/guard/comment/hold/gate
+   indexes и pending action/projection batch;
 2. authoritative runtime state exact coordinator/worker task IDs — только для
    liveness, не как доказательство кода;
 3. exact origin guard/feature/train/cutoff/default refs и annotated tags;
-4. fresh foreign-main snapshot по [external-main.md](external-main.md);
-5. CI/checks exact SHA и Sites artifact/version/deployment exact digest;
-6. live Linear milestone scope, issue `updatedAt`, states, comments и links;
-7. task-owned local refs/worktrees из `git worktree list --porcelain` и exact
+4. exact `gatectl.py status` для indexed `GATE_RESULT` keys и atomic artifacts;
+5. fresh foreign-main snapshot по [external-main.md](external-main.md);
+6. CI/checks exact SHA и Sites artifact/version/deployment exact digest;
+7. live Linear semantic `scope_fingerprint`, operational `updatedAt`, states,
+   comments и links;
+8. task-owned local refs/worktrees из `git worktree list --porcelain` и exact
    branch names; caches — только если они имеют проверяемый artifact ID.
 
 `run_key` — отдельный случайный минимум 128-bit non-secret hex identifier,
@@ -159,7 +219,10 @@ relation к train/default. Несколько несовместимых candida
 
 ## Классифицировать каждую issue
 
-После inventory каждой прежней active/ready issue назначь один disposition:
+После inventory каждой nonterminal claim назначь disposition, отдельно сверив
+`EXECUTION_INDEX` и integration state. Только verified `running` reattach-ится и
+занимает slot; `feature_ready` не получает нового executor и сразу остаётся в
+ingest queue, хотя guard/claim ещё live.
 
 | Disposition | Когда | Действие |
 | --- | --- | --- |
@@ -180,7 +243,9 @@ Claim generation монотонна внутри `run_id:issue_id` и никог
 1. Начни с exact feature ref и guard tip из claim ledger. Ref без matching
    receipt — checkpoint candidate, не готовая feature.
 2. Проверь full SHA/tree, expected base/dependency ancestry, actual diff против
-   ownership paths, live issue scope/`updatedAt` и отсутствие shared mutation.
+   ownership paths, live semantic `scope_fingerprint`, отдельно operational
+   `updatedAt` и отсутствие shared mutation. Изменение одного `updatedAt` из-за
+   projection не invalidates scope.
 3. Если owner/epoch/generation/token всё ещё current и terminal worker receipt
    согласован, можно принять exact SHA normal path один раз.
 4. После takeover либо supersede старого claim создай новый generation с fresh
@@ -188,7 +253,8 @@ Claim generation монотонна внутри `run_id:issue_id` и никог
    expected-absent; если работа ещё нужна, новый worker добавляет descendant
    commits. Не cherry-pick-и без необходимости: сохранение exact SHA упрощает
    provenance.
-5. Повтори scope-sensitive и реально недостающие feature checks. Результат
+5. Повтори только targeted scope-sensitive и реально недостающие feature checks;
+   full gate оставь `deferred-to-cutoff`. Результат
    старого validation можно reuse только при exact validation key и неизменной
    среде/acceptance. Новый `FEATURE_RECEIPT` указывает `ADOPTED_FROM` с old
    owner/epoch/generation/ref/SHA.
@@ -250,13 +316,24 @@ Feature ingest — двухфазный переход:
 Structured integration commit обязан хранить issue ID, original feature SHA/ref,
 claim generation, dependency SHAs и membership sequence. Поэтому recovery
 восстанавливает OPEN membership из train commits, ACTIVE boundary — из immutable
-cutoff ref, затем сверяет comments. Если exact local global-gate result не имеет
-durable validation receipt, безопасно повтори gate один раз; external CI/Sites
-effect усыновляй только по exact IDs/key.
+cutoff ref, затем сверяет comments. Latched pending trigger восстанавливай по
+exact train head и membership digest/count; после terminal ACTIVE cutoff seal-ни
+его раньше late ingest.
 
-Разрешай recovery в порядке: pending action -> ACTIVE cutoff -> OPEN cutoff ->
-claims. Pool можно снова наполнить после phase `adopting`, если shared action
-разрешён и branch scope независим; не жди полного завершения long workers.
+Для каждого indexed `GATE_RESULT` сначала вызови `gatectl.py status` по exact
+cutoff/generation/candidate/environment/ordered-plan key. Atomic terminal pass/fail
+усынови и запиши в coordinator ledger; running process не дублируй. Compaction
+или lost handle не разрешают rerun terminal result. `interrupted` продолжай тем
+же exact request только если `status` доказал отсутствие owner lock.
+Unknown/absent artifact при unknown process liveness freeze-ит gate до
+reconciliation; новый key создаётся только новой sealed generation/validation
+key. External CI/Sites effect усыновляй только по exact IDs/key.
+
+Разрешай recovery в порядке: active HOLD/PAUSE -> pending authoritative action
+или item-wise projection batch -> `GATE_RESULT` -> ACTIVE cutoff -> latched
+pending seal -> OPEN cutoff -> claims. Pool можно снова наполнить после phase
+`adopting`, если shared action разрешён и branch scope независим; occupancy бери
+только из verified `EXECUTION_INDEX state=running`.
 
 ## Обработать позднего worker
 
@@ -264,7 +341,8 @@ claims. Pool можно снова наполнить после phase `adopting
   возвращает local-only SHA/status. Его сообщение не двигает pipeline.
 - Если stale worker успел выполнить atomic publish до fence, recovery видит
   guard acknowledgement и exact SHA; artifact можно усыновить по обычной
-  процедуре.
+  процедуре. После validation переведи execution в `feature_ready`, освободи
+  slot и refill-ни до ingest; claim/guard оставь live до disposition.
 - Если он изменил feature ref без guard acknowledgement либо любую shared
   surface, заморозь affected lane и reconciliate факт. Не повторяй уже
   произошедший effect и не называй receipt нормальным.
@@ -276,6 +354,13 @@ claims. Pool можно снова наполнить после phase `adopting
 
 Live Linear определяет, надо ли issue продолжать, но не стирает Git/external
 evidence.
+
+Сравни semantic `scope_fingerprint` (milestone membership, title/description/
+acceptance, scope-bearing attachments/non-receipt comments и release-blocking
+relations) отдельно от operational `updatedAt`, status/priority/assignee и
+`ship-linear-release` receipt comments. Coordinator projections могут менять
+`updatedAt` без requeue; changed fingerprint требует adaptation, quarantine
+либо fresh claim.
 
 - `Canceled`/`Duplicate` или удаление из milestone запрещает новую интеграцию;
   supersede claim и сохрани artifact как retired evidence.
@@ -335,11 +420,12 @@ local-resume=<n>; requeued=<n>; quarantined=<n>
 artifact-adopted; issue=<id>; old=<epoch/generation/ref@sha>;
 new=<epoch/generation/ref@sha>; repeated-mutation=none
 
-recovery-paused; surface=<default|deploy|linear|worker>; reason=<exact>;
+recovery-paused; id=<hold/pause-id>; scope=<default|deploy|linear|worker|shared>;
+reason=<exact>; confirmation=<required|not-required>;
 independent-work=<continuing|paused>
 
-recovery-complete; epoch=<n>; pool=<active/effective>; open-cutoff=<id|none>;
-shared-lane=<open|held:reason>
+recovery-complete; epoch=<n>; pool=<running/sustained>; open-cutoff=<id|none>;
+pending-seal=<id@head|none>; shared-lane=<open|held:id:reason>
 ```
 
 Если current skill bundle untracked/dirty-only относительно сохранённого

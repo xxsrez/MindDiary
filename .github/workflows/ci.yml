@@ -3,6 +3,11 @@ name: Engineering baseline
 on:
   pull_request:
   push:
+    # Coordinator, claim, train, and feature refs carry orchestration metadata
+    # or targeted-check results. Only immutable cutoffs and main run this gate.
+    branches:
+      - main
+      - "codex/release/cutoff/**"
 
 permissions:
   contents: read

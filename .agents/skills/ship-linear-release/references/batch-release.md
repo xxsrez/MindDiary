@@ -54,35 +54,48 @@ train: создай новую generation от доказанного good base,
 
 ## Принять одну feature
 
-Обрабатывай каждый matching `FEATURE_RECEIPT ready` сразу после его получения;
-не жди cohort, wave или остальных workers.
+Обрабатывай каждый matching `FEATURE_RECEIPT ready` без cohort/wave. До
+integration work соблюдай scheduler order: validate receipt -> free execution
+slot -> refill -> enqueue ingest -> projections/bookkeeping.
 
-1. Подтверди exact `run_id/run_key`, owner epoch, claim generation/token, live
-   issue scope, feature ref и queue fingerprint. Online ref требует matching
-   `ready` remote guard; в coordinator-only mode coordinator сначала crash-safe
-   публикует ref и reconciliate-ит guard. Explicit offline mode принимает только
-   matching local guard/receipt и не разрешает default/Done.
+1. Валидируй exact `run_id/run_key`, owner epoch, claim generation/token,
+   semantic `scope_fingerprint`, feature SHA/ref/tree, queue fingerprint,
+   targeted checks и ownership diff. Operational Linear `updatedAt` проверяй
+   отдельно: его изменение из-за status/comment projection не делает scope
+   stale. Online ref требует matching durable `ready` remote guard;
+   coordinator-only mode сначала crash-safe публикует ref и reconciliate-ит
+   guard. Explicit offline mode принимает только matching local guard/receipt и
+   не разрешает default/Done.
 2. Проверь ancestry от записанного base, exact dependency SHAs и что actual
-   changed paths входят в declared ownership paths. Rename/delete/generated
-   paths учитывай по фактическому diff, а не только по manifest guess.
-3. Если direct dependency ещё не accepted, оставь feature в topological queue;
-   независимые refs продолжай принимать.
-4. Добавь exact feature SHA в train. После добавления выполни только ingest
-   guardrails:
+   changed/renamed/deleted/generated paths входят в declared ownership paths.
+   Receipt обязан иметь `CHECK_CLASS=targeted-feature` и
+   `FULL_GATE=deferred-to-cutoff`; full-suite worker result не принимай как
+   feature protocol success.
+3. Durable-переведи exact `EXECUTION_INDEX` entry `running -> feature_ready` и
+   освободи slot, не снимая claim/guard. Сначала refill compatible issue; target
+   от ready-guard observation до spawn — `<=60s`. При пропуске durable-запиши
+   blocker/evidence/resume predicate.
+4. После refill поставь integration state `queued`. Только затем выполняй ingest
+   и grouped Linear projections/bookkeeping. Если direct dependency ещё не
+   accepted, оставь feature в topological queue; независимые refs продолжай.
+5. Добавь exact feature SHA в train. Выполни только targeted ingest guardrails:
    - merge preflight и semantic conflict review;
    - `git diff --check`;
    - affected tests/validator/smoke, которых не было в feature gate либо которые
      проверяют взаимодействие с текущим train head;
    - bounded security/schema/migration invariant для затронутой поверхности.
-5. Не запускай полный suite, locked reinstall, все browser flows, MCP clients
-   или production smoke на каждую маленькую feature. Это работа global gate.
-6. До push CAS-запиши ingest action intent: expected/successor train SHA,
+6. Не запускай full repository suite, locked reinstall, aggregate release
+   command, все browser flows, MCP clients или production smoke на feature/
+   ingest. Full gate всегда принадлежит sealed cutoff.
+7. До push CAS-запиши отдельный ingest action intent: expected/successor train SHA,
    feature/claim, resulting membership digest и latched timer. Fast-forward
    push-ни train ref expected-old, перечитай origin и только после exact
-   successor upsert-ни `accepted` projections. Crash/partial update разрешай по
-   [crash-recovery.md](crash-recovery.md), не повторным cherry-pick. Затем
-   сначала refill освобождённый issue slot и только потом bookkeeping.
-7. При fail не добавляй плохой ref в accepted head. Классифицируй defect по
+   successor upsert-ни `accepted` projections. Git train action не включай в
+   projection batch. Независимые Linear comment/status updates можно выполнить
+   одним batch intent и item-wise reconcile после Git reconciliation.
+   Crash/partial update разрешай по [crash-recovery.md](crash-recovery.md), не
+   повторным cherry-pick.
+8. При fail не добавляй плохой ref в accepted head. Классифицируй defect по
    [defect-triage.md](defect-triage.md); независимые ready refs не задерживай,
    если integration state остаётся безопасным.
 
@@ -102,7 +115,7 @@ Cutoff — snapshot accepted prefix, а не ожидание тишины. Ко
 - resource/risk boundary требует проверить уже собранный prefix до продолжения.
 
 Если repo/user не задаёт значения, используй
-`CUTOFF_SIZE=max(2,min(effective_workers,4))` и `max_ready_wait=5m`. Не заводи
+`CUTOFF_SIZE=max(2,min(sustained_issue_capacity,4))` и `max_ready_wait=5m`. Не заводи
 отдельный polling timer: после каждого mailbox/ref/integration event проверяй
 условия, а ожидание worker event ограничивай ближайшим max-wait cutoff. Новая
 feature не сбрасывает deadline; часовая issue никогда не удерживает минутную
@@ -112,6 +125,14 @@ ready feature дольше этого окна.
 сверь `FEATURE_RECEIPT.INTEGRATION` и используй сохранённые `first_eligible_at`,
 `CUTOFF_SIZE`, `max_wait_at` и pending trigger. Противоречие freeze-ит sealing,
 а не сбрасывает deadline или membership.
+
+Если trigger сработал при занятом `ACTIVE_CUTOFF`, немедленно создай durable
+pending seal ticket с exact train head, ordered membership digest/count, reason
+и trigger time. Поздние feature могут продолжить successor train, но не меняют
+latched prefix. После terminal active cutoff этот ticket старше любого late
+receipt/ingest/projection: сначала создай immutable cutoff ref exact latched
+head и только потом обрабатывай новые accepts. Потеря ancestry latched head к
+current train freeze-ит sealing, а не пересчитывает boundary.
 
 Зафиксируй `cutoff_id`, `membership_closed_at`, ordered accepted feature SHAs,
 excluded/queued refs, exact candidate SHA/tree, expected default SHA,
@@ -132,32 +153,65 @@ freeze sealing по [external-main.md](external-main.md). Stable disjoint dirt
 ## Выполнить global gate
 
 Sealed source tree immutable. Любая source change, exclusion, fix или revert
-создаёт новую generation и новый validation key.
+создаёт новую generation и новый validation key. Full repository gate никогда
+не запускается на worker или OPEN ingest; он принадлежит exact sealed cutoff.
 
-Выполни один полный integrated gate для exact
-`tree OID + gate contract hash + environment fingerprint`:
+Сначала построи один deduplicated canonical ordered argv plan для exact
+`cutoff + generation + candidate SHA/tree + gate contract hash + environment
+fingerprint + plan`. Каждый step — отдельный non-shell argv; `gatectl` выполняет
+их последовательно под одним lock/result и останавливается на первом fail. Если
+aggregate command уже покрывает subcommands, включи только aggregate, не эти
+subcommands. Coverage plan и последующих exact external gates включает применимые:
 
 - обязательные правила current `AGENTS.md` и live acceptance вошедших issues;
 - clean locked install и canonical build/test/lint/security commands, если они
   существуют;
-- project-docs validator и `git diff --check` для docs;
+- project-docs validator и `git diff --check <base>..<candidate>` для docs;
 - strict full-bundle OKF validation для fixtures;
 - batch-wide integration/UI/protocol checks;
 - version-specific MCP/client/platform gates только при применимости.
+
+Запускай и восстанавливай plan только через
+`.agents/skills/ship-linear-release/scripts/gatectl.py run/status`. Helper
+использует exact key, execution lock и atomic terminal artifact; сохраняй его
+как durable `GATE_RESULT` из [receipts.md](receipts.md). После compaction или
+lost process handle сначала вызови `status`: terminal pass/fail усынови без
+rerun, running execution не дублируй. `interrupted` продолжай тем же exact
+request только когда helper доказал отсутствие owner lock; ambiguous state
+fail-closed до reconciliation.
+
+```text
+python3 .agents/skills/ship-linear-release/scripts/gatectl.py run \
+  --state-dir <absolute-task-owned> --validation-key <64-hex> \
+  --cutoff-id <id> --generation <n> --candidate-sha <full-sha> \
+  --environment-id <bounded-id> --cwd <absolute-clean-worktree> \
+  --plan-json '[["npm","ci"],["npm","run","check"],
+                ["git","diff","--check","<base>..<candidate>"]]'
+
+python3 .agents/skills/ship-linear-release/scripts/gatectl.py status \
+  --state-dir <absolute-task-owned> --validation-key <64-hex>
+```
 
 Global gate использует только task-owned clean worktree и отдельные mutable
 tmp/cache/build/runtime paths/ports; outputs primary checkout не являются cache
 hit или evidence.
 
-Переиспользуй pass только при exact validation key и durable evidence. Не
-подменяй требуемую live/client/cloud проверку локальным substitute. Один exact
-retry допустим только для suspected flake; необъяснённая нестабильность не pass.
+Переиспользуй pass только по exact `GATE_RESULT` key и durable terminal artifact.
+Targeted worker/ingest checks не заменяют full gate. Не подменяй требуемую
+live/client/cloud проверку локальным substitute. Terminal fail того же key не
+rerun-и; lost handle/compaction тем более не разрешают повтор. Исправление либо
+доказанное изменение contract/environment создаёт новую sealed generation/key;
+необъяснённая нестабильность не pass.
 
 До default branch используй существующий safe exact-SHA CI path, если он есть.
 Не создавай PR/CI/infrastructure только ради ускорения. Разделяй portable и
 platform-bound checks; несовместимый runner не доказывает parity.
 
 ## Продвинуть exact candidate
+
+Train/cutoff/default Git actions, CI authority/waiver, Sites deploy и tag имеют
+отдельные action tickets и reconciliation. Не включай их в Linear
+projection-batch и не выполняй вторую default/deploy lane параллельно.
 
 1. Потребуй `DEFAULT_HEALTH=healthy`, current owner epoch/action ticket, fresh
    `PROMOTION_HOLD=none` и remote default=`EXPECTED_DEFAULT_SHA`.
