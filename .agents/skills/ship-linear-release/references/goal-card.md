@@ -19,11 +19,14 @@ FEATURE_RECEIPT + Done. Для design/build deployment, live smoke и tag явн
 not-applicable и не заявляются. Для release production OpenAI Site имеет exact
 artifact/version/deployment, successful live web + MCP smoke, previous-stable
 rollback evidence и обязательный immutable tag по tracked version policy.
+Terminal `CI_WAIVER` по [github-outage.md](github-outage.md) не является активным CI
+artifact и не удерживает issue, batch или goal незавершёнными.
 
 Verify with: Feature branches проходят targeted gate; каждый sealed candidate
 проходит один integrated gate по validation key; default branch обновляется
 только fast-forward; доступный pre-push CI проверяет exact candidate; configured
-required CI проверяет exact default SHA. Gate берётся из текущего AGENTS.md,
+required CI проверяет exact default SHA либо получает terminal external-outage
+waiver строго по [github-outage.md](github-outage.md). Gate берётся из текущего AGENTS.md,
 live acceptance и реально существующих scripts/configs: project-docs validator
 и git diff --check для docs, canonical code/security checks после появления
 кода, strict full-bundle OKF validation и exact MCP/client profiles при

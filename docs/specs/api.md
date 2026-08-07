@@ -204,7 +204,9 @@ Application-layer error имеет стабильный machine code:
 | `invalid_path` | Path нарушает canonical path policy. |
 | `file_exists` | `create_file` направлен в существующий path. |
 | `file_not_found` | Replace/delete не находит path в expected revision. |
-| `okf_validation_failed` | Changeset не создаёт conformant OKF 0.2 bundle. |
+| `okf_validation_failed` | Resulting changeset либо exact export revision не образует valid OKF 0.2 bundle. |
+| `revision_integrity_failure` | Exact committed manifest/object bytes не прошли integrity materialization. |
+| `archive_limit_exceeded` | Exact bundle превышает classic-ZIP limits `MD-OKF-ZIP-1`; ZIP64 fallback отсутствует. |
 | `search_index_unavailable` | Exact revision index отсутствует/lag; HEAD не подмешивается. |
 | `export_not_ready` | Export ещё не завершён. |
 | `export_expired` | Job либо download grant больше не доступен. |
@@ -384,6 +386,7 @@ Problem Details response:
 | `POST` | `/api/v1/minds/{mind_ref}/invitations` | Invite registered principal. |
 | `POST` | `/api/v1/invitations/{invitation_id}/accept` | Target accepts pending invitation. |
 | `POST` | `/api/v1/invitations/{invitation_id}/reject` | Target rejects pending invitation. |
+| `POST` | `/api/v1/invitations/{invitation_id}/reissue` | Current authorized sender atomically replaces an invitation. |
 | `DELETE` | `/api/v1/invitations/{invitation_id}` | Authorized sender cancels invitation. |
 | `GET` | `/api/v1/mcp-tokens` | Token metadata, never secrets/hashes. |
 | `POST` | `/api/v1/mcp-tokens` | Issue named personal MCP token once. |
@@ -693,6 +696,7 @@ create_invitation
 accept_invitation
 reject_invitation
 cancel_invitation
+reissue_invitation
 change_membership_role
 revoke_membership
 leave_space
@@ -1271,6 +1275,11 @@ Output:
 
 Start фиксирует exact revision. Export deterministic, содержит только canonical
 OKF tree и не включает ACL, memberships, service manifest, audit или tokens.
+Exact bytes собираются application-level builder-ом `MD-OKF-ZIP-1` до
+background job/download-grant layer: materialized revision проходит
+full-bundle OKF validation, а Markdown objects копируются в archive без
+пересериализации. Реализация builder-а сама по себе не реализует asynchronous
+job, authorization или download grant.
 
 ### `get_export_status`
 
@@ -1290,6 +1299,10 @@ Succeeded response:
     "job_id": "export_opaque",
     "status": "succeeded",
     "revision_id": "rev_exact",
+    "archive_format": "MD-OKF-ZIP-1",
+    "media_type": "application/zip",
+    "filename": "mind-diary-okf-bundle.zip",
+    "content_disposition": "attachment; filename=\"mind-diary-okf-bundle.zip\"",
     "sha256": "sha256:...",
     "size": 123456,
     "download_url": "https://object-host.example/opaque-short-lived-grant",
@@ -1299,8 +1312,26 @@ Succeeded response:
 ```
 
 Server повторно проверяет current Mind access до выдачи нового download grant.
-URL не логируется и не возвращается после expiry без новой authorization.
+Каждый grant использует новый opaque bearer secret, живёт 5 минут по умолчанию
+и не может жить дольше server maximum 10 минут или самого export job. URL и
+secret являются consume-on-response material: они не сохраняются в export job,
+safe status projection, audit, logs или traces. После expiry новый URL требует
+новой authorization.
 Большой archive никогда не вкладывается в JSON-RPC response.
+
+Download response для успешного grant использует exact `media_type`,
+`filename` и `content_disposition` из job result, точный `Content-Length`,
+`Cache-Control: no-store`, `Pragma: no-cache`,
+`X-Content-Type-Options: nosniff` и `Referrer-Policy: no-referrer`. Перед bytes
+server повторно проверяет current principal read access к exact revision и
+состояние job/grant. Revoked membership, public/unlisted → private для baseline
+Reader, expired job/grant, удалённый или повреждённый archive fail closed.
+`MD-OKF-ZIP-1` — classic ZIP без compression: paths остаются bundle-relative
+UTF-8, entries отсортированы по unsigned UTF-8 bytes, DOS time фиксирован в
+`1980-01-01T00:00:00`, regular-file mode — `0644`, extra/comment/directory
+entries отсутствуют. CRC-32 считается по exact Markdown bytes, а `sha256` и
+`size` — по всему готовому ZIP. Archive не содержит отдельный manifest и не
+задаёт import behavior.
 
 ## MCP Resources
 
@@ -1428,8 +1459,6 @@ profile до заявления поддержки.
 - exact opaque ID encoding, signing/lookup и retention;
 - request/file/changeset/search/export limits и rate policies;
 - search ranking details и threshold после lexical benchmark;
-- export archive container/filename/content-disposition при сохранении
-  deterministic bytes;
 - manual identity recovery workflow;
 - OAuth 2.1 + PKCE profile polished/public integration.
 

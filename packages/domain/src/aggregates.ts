@@ -17,12 +17,14 @@ import {
   VISIBILITIES,
   version,
 } from "./records.js";
+import { roleHasCapability } from "./capabilities.js";
 
 export type DomainInvariantCode =
   | "record_space_mismatch"
   | "invalid_record"
   | "duplicate_active_membership"
   | "duplicate_pending_invitation"
+  | "pending_invitation_for_active_member"
   | "ordinary_owner_count"
   | "personal_binding_mismatch"
   | "personal_visibility"
@@ -30,10 +32,12 @@ export type DomainInvariantCode =
   | "personal_invitation"
   | "duplicate_personal_binding"
   | "principal_binding_mismatch"
+  | "personal_profile_mismatch"
   | "principal_not_active"
   | "space_not_active"
   | "membership_not_active"
   | "owner_required"
+  | "settings_permission_required"
   | "ownership_target_invalid"
   | "invitation_not_pending"
   | "invitation_target_mismatch"
@@ -91,11 +95,24 @@ function validateCommon(
   memberships: readonly SpaceMembership[],
   invitations: readonly SpaceInvitation[],
 ): void {
+  let normalizedName: string;
+  try {
+    normalizedName = space.name.normalize("NFKC").trim();
+  } catch {
+    throw new DomainInvariantError("invalid_record", "Mind display name is invalid");
+  }
   if (
     !SPACE_LIFECYCLE_STATES.includes(space.state) ||
-    !VISIBILITIES.includes(space.visibility)
+    !VISIBILITIES.includes(space.visibility) ||
+    normalizedName !== space.name ||
+    normalizedName.length === 0 ||
+    [...normalizedName].length > 128 ||
+    /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/u.test(normalizedName)
   ) {
-    throw new DomainInvariantError("invalid_record", "Mind lifecycle or visibility is invalid");
+    throw new DomainInvariantError(
+      "invalid_record",
+      "Mind lifecycle, visibility, or display name is invalid",
+    );
   }
   assertVersion(space.metadataVersion, "Mind metadata");
   assertVersion(space.accessVersion, "Mind access");
@@ -139,6 +156,12 @@ function validateCommon(
       );
     }
     if (invitation.state === "pending") {
+      if (activePrincipals.has(invitation.targetPrincipalId)) {
+        throw new DomainInvariantError(
+          "pending_invitation_for_active_member",
+          "an active Mind participant cannot also have a pending invitation",
+        );
+      }
       if (pendingTargets.has(invitation.targetPrincipalId)) {
         throw new DomainInvariantError(
           "duplicate_pending_invitation",
@@ -358,6 +381,47 @@ export class SpaceAggregate {
     });
   }
 
+  rename(input: {
+    readonly actorPrincipalId: PrincipalId;
+    readonly name: string;
+    readonly expectedMetadataVersion: Version;
+    readonly occurredAt: UtcInstant;
+  }): SpaceAggregate {
+    if (this.#kind !== "ordinary") {
+      throw new DomainInvariantError(
+        "settings_permission_required",
+        "Personal Mind name cannot be changed through ordinary Mind settings",
+      );
+    }
+    if (this.#space.state !== "active") {
+      throw new DomainInvariantError("space_not_active", "Mind is not active");
+    }
+    ensureVersion(this.#space.metadataVersion, input.expectedMetadataVersion, "Mind metadata");
+    const actorMembership = activeMembershipForPrincipal(
+      this.#memberships,
+      input.actorPrincipalId,
+    );
+    if (
+      actorMembership === undefined ||
+      !roleHasCapability(actorMembership.role, "settings:configure")
+    ) {
+      throw new DomainInvariantError(
+        "settings_permission_required",
+        "current settings capability is required",
+      );
+    }
+    return SpaceAggregate.restoreOrdinary({
+      space: {
+        ...this.#space,
+        name: input.name,
+        metadataVersion: version(this.#space.metadataVersion + 1),
+        updatedAt: input.occurredAt,
+      },
+      memberships: this.#memberships,
+      invitations: this.#invitations,
+    });
+  }
+
   changeVisibility(input: {
     readonly actorPrincipalId: PrincipalId;
     readonly visibility: Visibility;
@@ -397,17 +461,47 @@ export class SpaceAggregate {
     });
   }
 
-  addInvitation(invitation: SpaceInvitation): SpaceAggregate {
+  addInvitation(input: {
+    readonly actorPrincipalId: PrincipalId;
+    readonly invitation: SpaceInvitation;
+    readonly expectedMetadataVersion: Version;
+    readonly occurredAt: UtcInstant;
+  }): SpaceAggregate {
     if (this.#kind !== "ordinary") {
       throw new DomainInvariantError(
         "personal_invitation",
         "Personal Mind cannot have invitations",
       );
     }
+    if (this.#space.state !== "active") {
+      throw new DomainInvariantError("space_not_active", "Mind is not active");
+    }
+    ensureVersion(this.#space.metadataVersion, input.expectedMetadataVersion, "Mind metadata");
+    const actorMembership = activeMembershipForPrincipal(
+      this.#memberships,
+      input.actorPrincipalId,
+    );
+    const capability =
+      input.invitation.proposedRole === "admin"
+        ? "members:manage-admin"
+        : "members:manage-basic";
+    if (
+      actorMembership === undefined ||
+      !roleHasCapability(actorMembership.role, capability)
+    ) {
+      throw new DomainInvariantError(
+        "settings_permission_required",
+        "current membership-management capability is required",
+      );
+    }
     return SpaceAggregate.restoreOrdinary({
-      space: this.#space,
+      space: {
+        ...this.#space,
+        metadataVersion: version(this.#space.metadataVersion + 1),
+        updatedAt: input.occurredAt,
+      },
       memberships: this.#memberships,
-      invitations: [...this.#invitations, invitation],
+      invitations: [...this.#invitations, input.invitation],
     });
   }
 
@@ -418,6 +512,9 @@ export class SpaceAggregate {
     readonly membership: SpaceMembership;
     readonly occurredAt: UtcInstant;
   }): SpaceAggregate {
+    if (this.#kind !== "ordinary" || this.#space.state !== "active") {
+      throw new DomainInvariantError("space_not_active", "Mind is not active");
+    }
     const invitation = this.#invitations.find(
       (candidate) => candidate.invitationId === input.invitationId,
     );
@@ -468,6 +565,186 @@ export class SpaceAggregate {
       },
       memberships: [...this.#memberships, input.membership],
       invitations,
+    });
+  }
+
+  rejectInvitation(input: {
+    readonly invitationId: SpaceInvitation["invitationId"];
+    readonly targetPrincipalId: PrincipalId;
+    readonly expectedInvitationVersion: Version;
+    readonly occurredAt: UtcInstant;
+  }): SpaceAggregate {
+    return this.#terminalInvitationTransition({
+      ...input,
+      actorPrincipalId: input.targetPrincipalId,
+      state: "rejected",
+      requireTarget: true,
+    });
+  }
+
+  cancelInvitation(input: {
+    readonly invitationId: SpaceInvitation["invitationId"];
+    readonly actorPrincipalId: PrincipalId;
+    readonly expectedInvitationVersion: Version;
+    readonly occurredAt: UtcInstant;
+  }): SpaceAggregate {
+    return this.#terminalInvitationTransition({
+      ...input,
+      state: "cancelled",
+      requireTarget: false,
+    });
+  }
+
+  expireInvitation(input: {
+    readonly invitationId: SpaceInvitation["invitationId"];
+    readonly expectedInvitationVersion: Version;
+    readonly occurredAt: UtcInstant;
+  }): SpaceAggregate {
+    const invitation = this.#invitations.find(
+      (candidate) => candidate.invitationId === input.invitationId,
+    );
+    if (invitation?.state !== "pending") {
+      throw new DomainInvariantError("invitation_not_pending", "invitation is not pending");
+    }
+    ensureVersion(invitation.version, input.expectedInvitationVersion, "invitation");
+    if (Date.parse(invitation.expiresAt) > Date.parse(input.occurredAt)) {
+      throw new DomainInvariantError("invitation_expired", "invitation is not due");
+    }
+    return this.#replaceInvitationState(invitation, "expired", invitation.createdBy, input.occurredAt);
+  }
+
+  reissueInvitation(input: {
+    readonly invitationId: SpaceInvitation["invitationId"];
+    readonly actorPrincipalId: PrincipalId;
+    readonly expectedInvitationVersion: Version;
+    readonly replacement: SpaceInvitation;
+    readonly occurredAt: UtcInstant;
+  }): SpaceAggregate {
+    const invitation = this.#invitations.find(
+      (candidate) => candidate.invitationId === input.invitationId,
+    );
+    if (!invitation) {
+      throw new DomainInvariantError("invitation_not_pending", "invitation was not found");
+    }
+    ensureVersion(invitation.version, input.expectedInvitationVersion, "invitation");
+    if (invitation.state === "accepted") {
+      throw new DomainInvariantError("invitation_not_pending", "accepted invitation cannot be reissued");
+    }
+    this.#assertInvitationSenderAuthority(invitation, input.actorPrincipalId);
+    if (
+      input.replacement.invitationId === invitation.invitationId ||
+      input.replacement.spaceId !== invitation.spaceId ||
+      input.replacement.targetPrincipalId !== invitation.targetPrincipalId ||
+      input.replacement.proposedRole !== invitation.proposedRole ||
+      input.replacement.state !== "pending"
+    ) {
+      throw new DomainInvariantError("invitation_role_mismatch", "replacement must preserve target and role");
+    }
+    const terminalState =
+      invitation.state === "pending"
+        ? Date.parse(invitation.expiresAt) <= Date.parse(input.occurredAt)
+          ? "expired"
+          : "cancelled"
+        : invitation.state;
+    const invitations = this.#invitations.map((candidate): SpaceInvitation =>
+      candidate.invitationId === invitation.invitationId
+        ? {
+            ...candidate,
+            state: terminalState,
+            version: version(candidate.version + 1),
+            updatedAt: input.occurredAt,
+            updatedBy: input.actorPrincipalId,
+          }
+        : candidate,
+    );
+    return SpaceAggregate.restoreOrdinary({
+      space: {
+        ...this.#space,
+        metadataVersion: version(this.#space.metadataVersion + 1),
+        updatedAt: input.occurredAt,
+      },
+      memberships: this.#memberships,
+      invitations: [...invitations, input.replacement],
+    });
+  }
+
+  #terminalInvitationTransition(input: {
+    readonly invitationId: SpaceInvitation["invitationId"];
+    readonly actorPrincipalId: PrincipalId;
+    readonly expectedInvitationVersion: Version;
+    readonly occurredAt: UtcInstant;
+    readonly state: "rejected" | "cancelled";
+    readonly requireTarget: boolean;
+  }): SpaceAggregate {
+    const invitation = this.#invitations.find(
+      (candidate) => candidate.invitationId === input.invitationId,
+    );
+    if (invitation?.state !== "pending") {
+      throw new DomainInvariantError("invitation_not_pending", "invitation is not pending");
+    }
+    ensureVersion(invitation.version, input.expectedInvitationVersion, "invitation");
+    if (Date.parse(invitation.expiresAt) <= Date.parse(input.occurredAt)) {
+      throw new DomainInvariantError("invitation_expired", "invitation has expired");
+    }
+    if (input.requireTarget) {
+      if (invitation.targetPrincipalId !== input.actorPrincipalId) {
+        throw new DomainInvariantError("invitation_target_mismatch", "only the invitation target may reject");
+      }
+    } else {
+      this.#assertInvitationSenderAuthority(invitation, input.actorPrincipalId);
+    }
+    return this.#replaceInvitationState(
+      invitation,
+      input.state,
+      input.actorPrincipalId,
+      input.occurredAt,
+    );
+  }
+
+  #assertInvitationSenderAuthority(
+    invitation: Readonly<SpaceInvitation>,
+    actorPrincipalId: PrincipalId,
+  ): void {
+    const actorMembership = activeMembershipForPrincipal(this.#memberships, actorPrincipalId);
+    const capability = invitation.proposedRole === "admin"
+      ? "members:manage-admin"
+      : "members:manage-basic";
+    if (
+      invitation.createdBy !== actorPrincipalId ||
+      actorMembership === undefined ||
+      !roleHasCapability(actorMembership.role, capability)
+    ) {
+      throw new DomainInvariantError(
+        "settings_permission_required",
+        "current authorized invitation sender is required",
+      );
+    }
+  }
+
+  #replaceInvitationState(
+    invitation: Readonly<SpaceInvitation>,
+    state: "rejected" | "cancelled" | "expired",
+    actorPrincipalId: PrincipalId,
+    occurredAt: UtcInstant,
+  ): SpaceAggregate {
+    return SpaceAggregate.restoreOrdinary({
+      space: {
+        ...this.#space,
+        metadataVersion: version(this.#space.metadataVersion + 1),
+        updatedAt: occurredAt,
+      },
+      memberships: this.#memberships,
+      invitations: this.#invitations.map((candidate): SpaceInvitation =>
+        candidate.invitationId === invitation.invitationId
+          ? {
+              ...candidate,
+              state,
+              version: version(candidate.version + 1),
+              updatedAt: occurredAt,
+              updatedBy: actorPrincipalId,
+            }
+          : candidate,
+      ),
     });
   }
 }
@@ -536,6 +813,12 @@ export class PrincipalAccount {
       throw new DomainInvariantError(
         "principal_binding_mismatch",
         "account must contain exactly one Personal Mind bound to its principal",
+      );
+    }
+    if (personal.space.name !== input.principal.displayName) {
+      throw new DomainInvariantError(
+        "personal_profile_mismatch",
+        "Personal Mind display name must match its principal profile",
       );
     }
     if (

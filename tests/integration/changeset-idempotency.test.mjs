@@ -261,6 +261,49 @@ test("success stores a typed result and exact replay survives a later HEAD move"
   assert.match(final.idempotency[0].canonicalRequestHash, /^sha256:[0-9a-f]{64}$/u);
 });
 
+test("idempotent replay never duplicates a semantic log entry", async () => {
+  const env = await fixture();
+  await env.seed(SPACE_A, INITIAL_A);
+  const editor = actor(
+    PRINCIPALS.editor.principalId,
+    "token_log_idempotent_replay",
+    "request_log_idempotent_replay",
+  );
+  env.grant(editor, SPACE_A);
+  const service = env.service(["revision_log_idempotent"]);
+  const logRequest = {
+    actor: editor,
+    spaceId: SPACE_A,
+    expectedRevisionId: INITIAL_A,
+    idempotencyKey: "semantic_log_exact_replay",
+    summary: "Record semantic log entry",
+    operations: [
+      {
+        type: "add_log_entry",
+        path: "log.md",
+        category: "Update",
+        message: "Recorded exactly once.",
+      },
+    ],
+  };
+
+  const original = await service.commit(logRequest);
+  const replay = await service.commit(structuredClone(logRequest));
+  assert.equal(original.kind, "committed");
+  assert.equal(original.replayed, false);
+  assert.equal(replay.kind, "committed");
+  assert.equal(replay.replayed, true);
+  assert.equal(replay.envelope.revision.revisionId, original.envelope.revision.revisionId);
+
+  const materialized = await env.coordinator.materialize(
+    SPACE_A,
+    original.envelope.revision.revisionId,
+  );
+  const log = materialized.files.find((file) => file.path === "log.md").text;
+  assert.equal(log.match(/Recorded exactly once\./gu)?.length, 1);
+  assert.equal((await env.metadata.listRevisions(SPACE_A)).length, 2);
+});
+
 test("same namespace with a different canonical payload conflicts without effects", async () => {
   const env = await fixture();
   await env.seed(SPACE_A, INITIAL_A);

@@ -113,7 +113,7 @@ async function fixture(options = {}) {
     committedAt: REVISIONS.initial.committedAt,
     committedBy: REVISION_AUTHORS.active,
     summary: "Seed changeset preflight fixture",
-    files: BASE_FILES.map((file) => ({
+    files: (options.baseFiles ?? BASE_FILES).map((file) => ({
       path: file.path,
       mediaType: MARKDOWN_MEDIA_TYPE,
       bytes: ENCODER.encode(file.text),
@@ -137,6 +137,7 @@ async function fixture(options = {}) {
   const service = new ChangesetPreflightService({
     authorizer,
     revisions,
+    clock: { now: () => options.now ?? FIXED_NOW },
     ...(options.limits === undefined ? {} : { limits: options.limits }),
   });
   const request = (operations, overrides = {}) => ({
@@ -215,7 +216,7 @@ test("literal tagged operations produce a fully conformant candidate without wri
   assert.deepEqual(await env.snapshot(), before);
 });
 
-test("add_log_entry is validated but returns an explicit deferred plan without a candidate claim", async () => {
+test("add_log_entry semantically inserts newest-first in the server UTC date group", async () => {
   const env = await fixture();
   const before = await env.snapshot();
   const result = await env.service.preflight(
@@ -229,10 +230,59 @@ test("add_log_entry is validated but returns an explicit deferred plan without a
     ]),
   );
 
-  assert.equal(result.kind, "requires_log_materialization");
+  assert.equal(result.kind, "ready");
   assert.equal(result.operations[0].type, "add_log_entry");
+  assert.equal(result.validation.valid, true);
+  assert.equal(
+    result.candidateFiles.find((file) => file.path === "log.md").text,
+    "# Fixture Log\n\n## 2026-08-06\n\n- **Update**: Added the [new concept](concepts/new.md).\n- **Create**: Seeded fixture.\n",
+  );
+  assert.deepEqual(await env.snapshot(), before);
+});
+
+test("add_log_entry creates a server-dated group in descending date order", async () => {
+  const env = await fixture({ now: "2026-08-07T00:00:00.000Z" });
+  const result = await env.service.preflight(
+    env.request([
+      {
+        type: "add_log_entry",
+        path: "log.md",
+        category: "Update",
+        message: "Started the next UTC day.",
+      },
+    ]),
+  );
+
+  assert.equal(result.kind, "ready");
+  assert.equal(result.validation.valid, true);
+  assert.equal(
+    result.candidateFiles.find((file) => file.path === "log.md").text,
+    "# Fixture Log\n\n## 2026-08-07\n\n- **Update**: Started the next UTC day.\n\n## 2026-08-06\n\n- **Create**: Seeded fixture.\n",
+  );
+});
+
+test("add_log_entry rejects a non-canonical existing log without exposing a candidate", async () => {
+  const malformedFiles = BASE_FILES.map((file) =>
+    file.path === "log.md"
+      ? { ...file, text: "# Fixture Log\n\n## not-a-date\n\n- Broken.\n" }
+      : file,
+  );
+  const env = await fixture({ baseFiles: malformedFiles });
+  const before = await env.snapshot();
+  const result = await env.service.preflight(
+    env.request([
+      {
+        type: "add_log_entry",
+        path: "log.md",
+        category: "Update",
+        message: "Must not repair invalid input implicitly.",
+      },
+    ]),
+  );
+
+  assert.equal(result.kind, "invalid");
+  assert.equal(result.error.code, "okf_validation_failed");
   assert.equal("candidateFiles" in result, false);
-  assert.equal("validation" in result, false);
   assert.deepEqual(await env.snapshot(), before);
 });
 
@@ -328,6 +378,30 @@ test("intrinsic invalid operations fail after authorization but before reading c
           path: "concepts/replace.md",
           text: BASE_FILES[2].text,
           expected_sha256: "sha256:not-a-digest",
+        },
+      ],
+      "invalid_operation",
+    ],
+    [
+      [
+        {
+          type: "add_log_entry",
+          path: "log.md",
+          date: "2000-01-01",
+          category: "Update",
+          message: "Client dates are forbidden.",
+        },
+      ],
+      "invalid_operation",
+    ],
+    [
+      [
+        {
+          type: "add_log_entry",
+          path: "log.md",
+          category: "Update",
+          message: "Literal append payloads are forbidden.",
+          text: "## 2000-01-01",
         },
       ],
       "invalid_operation",
@@ -481,6 +555,15 @@ test("file existence and expected digest checks use the authorized exact HEAD", 
       {
         type: "delete_file",
         path: "concepts/delete.md",
+        expected_sha256: `sha256:${"0".repeat(64)}`,
+      },
+      "file_digest_mismatch",
+    ],
+    [
+      {
+        type: "replace_index",
+        path: "index.md",
+        text: BASE_FILES[3].text,
         expected_sha256: `sha256:${"0".repeat(64)}`,
       },
       "file_digest_mismatch",

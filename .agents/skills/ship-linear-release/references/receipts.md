@@ -186,8 +186,9 @@ VALIDATION_KEY: tree=<oid>; gate=<hash>; env=<hash>
 VALIDATION: run=<pass/fail+timestamp> | reused=<receipt/key> | none
 PREPUSH_CI: sha=<full>; run/check=<id|not-available>; status=<terminal|none|pending-outage>
 MAIN: origin/<default>=<full>; local/<default>=<full>; cas=<pass|fail|pending>
-CI: sha=<full>; run/check=<id|none>; status=<terminal|none|pending-outage>
-PUBLISHED_BY: head=<full>; run/check=<id>; status=<terminal> | none
+CI: sha=<full>; run/check=<id|none>; status=<terminal|none|pending-publication|waived-external-outage>
+CI_WAIVER: none | component=<name>; observed=<symptom>; incident=<id/url>; incident_updated_at=<utc>; checked_at=<utc>; validation_key=<key>; catch_up=next-natural-run; reconciled=<run@head|none>
+PUBLISHED_BY: head=<full>; run/check=<id|none>; status=<terminal|waived-external-outage> | none
 SITES: not-applicable(profile=<design|build>) |
        project=<id>; version=<number>; version_id=<id>; archive_sha256=<digest>
 DEPLOYMENT: not-applicable(profile=<design|build>) |
@@ -208,7 +209,12 @@ UPDATED_AT: <timestamp>
 `LINEAR_DONE` допустимы только после successful required live smoke. В
 `design|build` deployment/smoke/tag должны быть `not-applicable`, а
 `LINEAR_DONE` допустим только после доказательства live issue acceptance,
-integrated gate и exact default/CI state.
+integrated gate и exact default плюс terminal CI outcome.
+
+`CI_WAIVER` допустим только по [github-outage.md](github-outage.md). Он не
+является `pass`, но `waived-external-outage` — terminal outcome: при выполнении
+всех условий протокола разрешает `integrated`/`released`, `LINEAR_DONE`, release
+claims и завершение goal. Не оставляй такой receipt в `pending-outage`.
 
 `STATUS: gate-passed` и `VALIDATION: run=pass` могут сосуществовать с
 `not-available` в `GAPS`, если все проверки capability boundary выполнены.
@@ -216,11 +222,12 @@ integrated gate и exact default/CI state.
 его не требует; требуемое, но недоступное evidence нельзя считать pass.
 
 `STATUS: locally-integrated` означает, что exact candidate прошёл integrated
-gate и достижим из coordinator-owned local default, но remote push/CI ещё не
+gate и достижим из coordinator-owned local default, но remote push ещё не
 доказаны. В таком receipt `LINEAR_DONE: none`, `MAIN.cas: pending`,
 `PUBLISHED_BY: none`; issue остаётся незавершённой. После общей публикации
-offline queue укажи exact published head и required CI в `PUBLISHED_BY`, затем
-обнови каждый покрытый batch до `integrated` и только после этого закрывай issue.
+укажи exact published head и terminal CI outcome в `PUBLISHED_BY`, затем обнови
+каждый покрытый batch до `integrated` и закрой issue по normal path либо
+`github-outage.md`.
 
 ## Восстановить после прерывания
 

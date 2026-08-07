@@ -21,13 +21,25 @@ import {
   type CanonicalRevisionEnvelope,
   type CanonicalSpaceHandle,
   type EffectiveTokenScopes,
+  type ExternalBindingId,
+  type InvitationId,
+  type ExportArchiveRecord,
+  type ExportDownloadGrant,
+  type ExportDownloadSecretVerifier,
+  type ExportJob,
   type HandlePolicyFailureReason,
   type MarkdownMediaType,
+  type MembershipId,
   type MembershipState,
   type IdempotencyKey,
   type IdempotencyOperation,
   type IdempotencyRecord,
   type IdempotencyResult,
+  type ExternalIdentityBinding,
+  type KnowledgeSpace,
+  type PersonalSpaceBinding,
+  type Principal,
+  type PrincipalAccountSnapshot,
   type PrincipalId,
   type JobId,
   type OutboxMessageId,
@@ -36,8 +48,11 @@ import {
   type RevisionIndexState,
   type RevisionMode,
   type Role,
+  type SensitiveExternalBinding,
   type Sha256Digest,
   type SpaceId,
+  type SpaceInvitation,
+  type SpaceMembership,
   type SpaceLifecycleState,
   type TokenId,
   type UtcInstant,
@@ -56,21 +71,40 @@ export type {
   IdempotencyRecord,
   IdempotencyResult,
   JobId,
+  ExportArchiveRecord,
+  ExportDownloadGrant,
+  ExportDownloadSecretVerifier,
+  ExportJob,
   OutboxMessageId,
   RevisionIndexState,
   StartExportIdempotencyResult,
 } from "@mind-diary/domain";
 export {
+  DomainInvariantError,
+  PrincipalAccount,
   RESERVED_TOP_LEVEL_HANDLES,
+  SpaceAggregate,
   isReservedTopLevelHandle,
   isReservedTopLevelRoute,
   normalizeSpaceHandle,
   parseCanonicalSpaceHandle,
   version,
   verifiedSpaceHost,
+  revisionEnvelopesEqual,
+  roleHasCapability,
   type CanonicalSpaceHandle,
   type HandlePolicyFailureReason,
   type VerifiedSpaceHost,
+} from "@mind-diary/domain";
+export type {
+  ExternalIdentityBinding,
+  SpaceInvitation,
+  KnowledgeSpace,
+  PersonalSpaceBinding,
+  Principal,
+  PrincipalAccountSnapshot,
+  SensitiveExternalBinding,
+  SpaceMembership,
 } from "@mind-diary/domain";
 
 export interface Clock {
@@ -82,6 +116,16 @@ export interface RevisionIdGenerator {
   nextRevisionId(): RevisionId;
 }
 
+/** Server-owned identifiers and hidden handle for one isolated account. */
+export interface AccountBootstrapIdGenerator {
+  nextPrincipalId(): PrincipalId;
+  nextExternalBindingId(): ExternalBindingId;
+  nextSpaceId(): SpaceId;
+  nextMembershipId(): MembershipId;
+  nextRevisionId(): RevisionId;
+  nextPersonalSpaceHandle(): string;
+}
+
 /** Server-owned IDs for effects staged with one successful content commit. */
 export interface CommitEffectIdGenerator {
   nextAuditEventId(): AuditEventId;
@@ -89,8 +133,179 @@ export interface CommitEffectIdGenerator {
   nextIndexJobId(): JobId;
 }
 
+/** Server-side source of opaque export job locators. */
+export interface ExportJobIdGenerator {
+  nextExportJobId(): JobId;
+}
+
+/** Secret-bearing issuance result; the raw bearer can be consumed exactly once. */
+export interface IssuedExportDownloadSecret {
+  consumeSecret(): string | null;
+  verifier(): ExportDownloadSecretVerifier;
+}
+
+export type ExportDownloadVerifierLookupResult<Value> =
+  | {
+      readonly kind: "found";
+      readonly verifier: ExportDownloadSecretVerifier;
+      readonly value: Value;
+    }
+  | { readonly kind: "not_found" };
+
+export interface ExportDownloadVerifierLookup<Value> {
+  findByVerifier(
+    verifier: ExportDownloadSecretVerifier,
+  ): Promise<ExportDownloadVerifierLookupResult<Value>>;
+}
+
+export type ExportDownloadSecretVerificationResult<Value> =
+  | { readonly kind: "verified"; readonly value: Value }
+  | { readonly kind: "invalid" };
+
+/** Dedicated crypto boundary for canonical export-download bearer secrets. */
+export interface ExportDownloadSecretCrypto {
+  readonly kind: "export-download-secret-crypto";
+  issueSecret(): Promise<IssuedExportDownloadSecret>;
+  verifySecret<Value>(
+    candidate: unknown,
+    lookup: ExportDownloadVerifierLookup<Value>,
+  ): Promise<ExportDownloadSecretVerificationResult<Value>>;
+}
+
 export interface MetadataStore {
   readonly kind: "metadata-store";
+}
+
+export interface ExternalIdentityBindingLookup {
+  readonly provider: string;
+  /** Sensitive exact-match material. It must never enter logs or public results. */
+  readonly normalizedBinding: SensitiveExternalBinding;
+}
+
+/**
+ * Complete metadata aggregate staged by account bootstrap. Canonical object
+ * bytes are prepared before this transaction and become reachable only through
+ * the initial revision committed with this record set.
+ */
+export interface AccountBootstrapRecordSet {
+  readonly principal: Readonly<Principal>;
+  readonly externalBinding: Readonly<ExternalIdentityBinding>;
+  readonly personalSpace: Readonly<KnowledgeSpace>;
+  readonly personalBinding: Readonly<PersonalSpaceBinding>;
+  readonly ownerMembership: Readonly<SpaceMembership>;
+  readonly initialRevision: Readonly<CanonicalRevisionEnvelope>;
+}
+
+export type CreateAccountBootstrapResult =
+  | {
+      readonly kind: "created";
+      readonly account: Readonly<PrincipalAccountSnapshot>;
+    }
+  | {
+      readonly kind: "exact_binding_exists";
+      readonly account: Readonly<PrincipalAccountSnapshot>;
+    }
+  | { readonly kind: "record_conflict" | "invalid_record" };
+
+export interface PersonalMindResolution {
+  readonly spaceId: SpaceId;
+  readonly headRevisionId: RevisionId;
+}
+
+/** Narrow rollback-on-error transaction for the indivisible account aggregate. */
+export interface AccountBootstrapTransaction {
+  readAccountByExternalBinding(
+    lookup: Readonly<ExternalIdentityBindingLookup>,
+  ): Promise<Readonly<PrincipalAccountSnapshot> | null>;
+  createAccountBootstrap(
+    records: Readonly<AccountBootstrapRecordSet>,
+  ): Promise<CreateAccountBootstrapResult>;
+}
+
+export interface AccountBootstrapStore extends MetadataStore {
+  runAccountBootstrapTransaction<Result>(
+    operation: (transaction: AccountBootstrapTransaction) => Promise<Result>,
+  ): Promise<Result>;
+  readAccount(
+    principalId: PrincipalId,
+  ): Promise<Readonly<PrincipalAccountSnapshot> | null>;
+  readAccountByExternalBinding(
+    lookup: Readonly<ExternalIdentityBindingLookup>,
+  ): Promise<Readonly<PrincipalAccountSnapshot> | null>;
+  resolvePersonalMind(
+    principalId: PrincipalId,
+  ): Promise<Readonly<PersonalMindResolution> | null>;
+}
+
+/** Safe metadata projection for Personal Mind control flows. Hidden handles are excluded. */
+export interface PersonalMindProfileSnapshot {
+  readonly principalId: PrincipalId;
+  readonly displayName: string;
+  readonly profileVersion: Version;
+  readonly personalMind: {
+    readonly spaceId: SpaceId;
+    readonly name: string;
+    readonly visibility: "private";
+    readonly metadataVersion: Version;
+    readonly headRevisionId: RevisionId;
+  };
+}
+
+export interface PersonalMindTargetRequest {
+  readonly principalId: PrincipalId;
+  readonly spaceId: SpaceId;
+}
+
+/**
+ * Server-side target classification for ordinary lifecycle commands. A foreign
+ * Personal Mind is deliberately indistinguishable from a missing target.
+ */
+export type PersonalMindTargetClassification =
+  | { readonly kind: "own_personal"; readonly spaceId: SpaceId }
+  | { readonly kind: "ordinary"; readonly spaceId: SpaceId }
+  | { readonly kind: "not_found" };
+
+export interface RenamePersonalProfileRequest {
+  readonly principalId: PrincipalId;
+  readonly displayName: string;
+  readonly expectedProfileVersion: Version;
+  readonly expectedPersonalMetadataVersion: Version;
+  readonly idempotencyKey: IdempotencyKey;
+  readonly canonicalRequestHash: Sha256Digest;
+  readonly occurredAt: UtcInstant;
+}
+
+export type RenamePersonalProfileResult =
+  | {
+      readonly kind: "renamed";
+      readonly profile: Readonly<PersonalMindProfileSnapshot>;
+      readonly replayed: boolean;
+    }
+  | {
+      readonly kind: "profile_conflict";
+      readonly currentProfileVersion: Version;
+      readonly currentPersonalMetadataVersion: Version;
+    }
+  | { readonly kind: "idempotency_conflict" }
+  | { readonly kind: "not_found" | "invalid_record" };
+
+export interface PersonalMindMetadataTransaction {
+  renamePersonalProfile(
+    request: RenamePersonalProfileRequest,
+  ): Promise<RenamePersonalProfileResult>;
+}
+
+/** Atomic metadata-only Personal Mind profile and invariant boundary. */
+export interface PersonalMindStore extends AccountBootstrapStore {
+  readPersonalMindProfile(
+    principalId: PrincipalId,
+  ): Promise<Readonly<PersonalMindProfileSnapshot> | null>;
+  classifyPersonalMindTarget(
+    request: PersonalMindTargetRequest,
+  ): Promise<PersonalMindTargetClassification>;
+  runPersonalMindTransaction<Result>(
+    operation: (transaction: PersonalMindMetadataTransaction) => Promise<Result>,
+  ): Promise<Result>;
 }
 
 export interface HandleReservationSnapshot {
@@ -148,6 +363,482 @@ export interface HandleRegistry extends MetadataStore {
   reserveHandle(request: HandleReservationRequest): Promise<HandleReservationResult>;
   resolveHandle(request: HandleResolutionRequest): Promise<HandleResolutionResult>;
   retireHandle(request: HandleRetirementRequest): Promise<HandleRetirementResult>;
+}
+
+/** Server-owned identifiers for one ordinary Mind aggregate. */
+export interface OrdinaryMindIdGenerator {
+  nextSpaceId(): SpaceId;
+  nextMembershipId(): MembershipId;
+  nextRevisionId(): RevisionId;
+}
+
+/** Server-owned identity for one pending invitation. */
+export interface InvitationIdGenerator {
+  nextInvitationId(): InvitationId;
+}
+
+/** Server-owned identities for invitation lifecycle effects. */
+export interface InvitationLifecycleIdGenerator extends InvitationIdGenerator {
+  nextMembershipId(): MembershipId;
+  nextInvitationExpiryJobId(): JobId;
+}
+
+/** Safe projection returned by exact registered-principal lookup. */
+export interface RegisteredPrincipalSnapshot {
+  readonly principalId: PrincipalId;
+  readonly displayName: string;
+}
+
+export interface CreateInvitationRequest {
+  readonly principalId: PrincipalId;
+  readonly spaceId: SpaceId;
+  readonly target: Readonly<RegisteredPrincipalSnapshot>;
+  readonly invitation: Readonly<SpaceInvitation>;
+  readonly expectedMetadataVersion: Version;
+  readonly idempotencyKey: IdempotencyKey;
+  readonly canonicalRequestHash: Sha256Digest;
+  readonly occurredAt: UtcInstant;
+  readonly expiryJob: Readonly<BackgroundJob>;
+}
+
+export interface InvitationSnapshot {
+  readonly invitation: Readonly<SpaceInvitation>;
+  readonly target: Readonly<RegisteredPrincipalSnapshot>;
+}
+
+export type CreateInvitationResult =
+  | {
+      readonly kind: "created";
+      readonly invitation: Readonly<InvitationSnapshot>;
+      readonly replayed: boolean;
+    }
+  | {
+      readonly kind: "metadata_conflict";
+      readonly currentMetadataVersion: Version;
+    }
+  | {
+      readonly kind:
+        | "mind_not_found"
+        | "personal_mind"
+        | "forbidden"
+        | "active_membership_exists"
+        | "pending_invitation_exists"
+        | "idempotency_conflict"
+        | "expiry_job_conflict"
+        | "record_conflict"
+        | "invalid_record";
+    };
+
+export type InvitationLifecycleOperation =
+  | "accept_invitation"
+  | "reject_invitation"
+  | "cancel_invitation";
+
+export interface TransitionInvitationRequest {
+  readonly operation: InvitationLifecycleOperation;
+  readonly principalId: PrincipalId;
+  readonly invitationId: InvitationId;
+  readonly expectedInvitationVersion: Version;
+  /** Server-generated ID only; the authoritative store constructs the record. */
+  readonly membershipId: MembershipId | null;
+  readonly idempotencyKey: IdempotencyKey;
+  readonly canonicalRequestHash: Sha256Digest;
+  readonly occurredAt: UtcInstant;
+}
+
+export interface InvitationLifecycleSnapshot {
+  readonly invitation: Readonly<InvitationSnapshot>;
+  readonly membership: Readonly<SpaceMembership> | null;
+}
+
+export type TransitionInvitationResult =
+  | {
+      readonly kind: "transitioned";
+      readonly result: Readonly<InvitationLifecycleSnapshot>;
+      readonly replayed: boolean;
+    }
+  | {
+      readonly kind:
+        | "invitation_not_found"
+        | "personal_mind"
+        | "forbidden"
+        | "invitation_not_pending"
+        | "invitation_expired"
+        | "invitation_version_conflict"
+        | "active_membership_exists"
+        | "idempotency_conflict"
+        | "record_conflict"
+        | "invalid_record";
+    };
+
+export interface ReissueInvitationRequest {
+  readonly principalId: PrincipalId;
+  readonly invitationId: InvitationId;
+  readonly expectedInvitationVersion: Version;
+  readonly replacementInvitationId: InvitationId;
+  readonly expiryJobId: JobId;
+  readonly expiresAt: UtcInstant;
+  readonly idempotencyKey: IdempotencyKey;
+  readonly canonicalRequestHash: Sha256Digest;
+  readonly occurredAt: UtcInstant;
+}
+
+export type ReissueInvitationResult =
+  | {
+      readonly kind: "reissued";
+      readonly invitation: Readonly<InvitationSnapshot>;
+      readonly replayed: boolean;
+    }
+  | {
+      readonly kind:
+        | "invitation_not_found"
+        | "personal_mind"
+        | "forbidden"
+        | "accepted_invitation"
+        | "invitation_version_conflict"
+        | "active_membership_exists"
+        | "pending_invitation_exists"
+        | "idempotency_conflict"
+        | "expiry_job_conflict"
+        | "record_conflict"
+        | "invalid_record";
+    };
+
+export interface OrdinaryMindSnapshot {
+  readonly space: Readonly<KnowledgeSpace>;
+  readonly ownerMembership: Readonly<SpaceMembership>;
+}
+
+/**
+ * Complete ordinary-Mind aggregate staged with its host-scoped handle and
+ * initial canonical revision. None of these records may become reachable
+ * independently.
+ */
+export interface OrdinaryMindRecordSet {
+  readonly host: VerifiedSpaceHost;
+  readonly space: Readonly<KnowledgeSpace>;
+  readonly ownerMembership: Readonly<SpaceMembership>;
+  readonly initialRevision: Readonly<CanonicalRevisionEnvelope>;
+  readonly idempotencyKey: IdempotencyKey;
+  readonly canonicalRequestHash: Sha256Digest;
+}
+
+export type CreateOrdinaryMindResult =
+  | {
+      readonly kind: "created";
+      readonly mind: Readonly<OrdinaryMindSnapshot>;
+      readonly replayed: boolean;
+    }
+  | {
+      readonly kind:
+        | "principal_not_found"
+        | "mind_not_found"
+        | "forbidden"
+        | "handle_unavailable"
+        | "idempotency_conflict"
+        | "record_conflict"
+        | "invalid_record";
+    };
+
+export interface RenameOrdinaryMindRequest {
+  readonly principalId: PrincipalId;
+  readonly spaceId: SpaceId;
+  readonly displayName: string;
+  readonly expectedMetadataVersion: Version;
+  readonly idempotencyKey: IdempotencyKey;
+  readonly canonicalRequestHash: Sha256Digest;
+  readonly occurredAt: UtcInstant;
+}
+
+export type RenameOrdinaryMindResult =
+  | {
+      readonly kind: "renamed";
+      readonly mind: Readonly<OrdinaryMindSnapshot>;
+      readonly replayed: boolean;
+    }
+  | {
+      readonly kind: "metadata_conflict";
+      readonly currentMetadataVersion: Version;
+    }
+  | {
+      readonly kind:
+        | "mind_not_found"
+        | "personal_mind"
+        | "forbidden"
+        | "idempotency_conflict"
+        | "invalid_record";
+    };
+
+/** Server-owned IDs for one committed visibility audit effect. */
+export interface VisibilityAuditIdGenerator {
+  nextAuditEventId(): AuditEventId;
+  nextOutboxMessageId(): OutboxMessageId;
+}
+
+/** Server-owned locator for one short-lived destructive-action preview. */
+export interface OrdinaryMindDeletionIdGenerator {
+  nextImpactId(): string;
+}
+
+/**
+ * Exact pre-delete snapshot. `stateFingerprint` contains only service metadata
+ * identities/versions and counts; it must never contain canonical content.
+ */
+export interface OrdinaryMindDeletionImpactSnapshot {
+  readonly impactId: string;
+  readonly principalId: PrincipalId;
+  readonly spaceId: SpaceId;
+  readonly host: VerifiedSpaceHost;
+  readonly canonicalHandle: CanonicalSpaceHandle;
+  readonly name: string;
+  readonly expiresAt: UtcInstant;
+  readonly metadataVersion: Version;
+  readonly accessVersion: Version;
+  readonly headRevisionId: RevisionId;
+  readonly revisionCount: number;
+  readonly membershipCount: number;
+  readonly invitationCount: number;
+  readonly backgroundJobCount: number;
+  readonly exportJobCount: number;
+  readonly stateFingerprint: string;
+}
+
+export interface CreateOrdinaryMindDeletionImpactRequest {
+  readonly principalId: PrincipalId;
+  readonly host: VerifiedSpaceHost;
+  readonly handle: string;
+  readonly impactId: string;
+  readonly occurredAt: UtcInstant;
+  readonly expiresAt: UtcInstant;
+}
+
+export type CreateOrdinaryMindDeletionImpactResult =
+  | {
+      readonly kind: "created";
+      readonly impact: Readonly<OrdinaryMindDeletionImpactSnapshot>;
+    }
+  | {
+      readonly kind:
+        | "mind_not_found"
+        | "personal_mind"
+        | "forbidden"
+        | "impact_id_collision"
+        | "invalid_record";
+    };
+
+/**
+ * Temporary crash-resumable cleanup plan. It exists only between logical
+ * deletion and completed external cleanup and is not an audit/deletion receipt.
+ */
+export interface OrdinaryMindDeletionCleanupWorkItem {
+  readonly impactId: string;
+  readonly idempotencyKey: IdempotencyKey;
+  readonly principalId: PrincipalId;
+  readonly spaceId: SpaceId;
+  readonly host: VerifiedSpaceHost;
+  readonly canonicalHandle: CanonicalSpaceHandle;
+  readonly objectDigests: readonly Sha256Digest[];
+  readonly deleteBefore: UtcInstant;
+}
+
+export interface DeleteOrdinaryMindRequest {
+  readonly principalId: PrincipalId;
+  readonly host: VerifiedSpaceHost;
+  readonly handle: string;
+  readonly impactId: string;
+  readonly idempotencyKey: IdempotencyKey;
+  readonly occurredAt: UtcInstant;
+}
+
+export interface OrdinaryMindDeletedRecordCounts {
+  readonly revisions: number;
+  readonly memberships: number;
+  readonly invitations: number;
+  readonly backgroundJobs: number;
+  readonly exportJobs: number;
+  readonly exportDownloadGrants: number;
+  readonly indexStates: number;
+  readonly auditEvents: number;
+  readonly auditOutboxMessages: number;
+  readonly idempotencyRecords: number;
+}
+
+export type DeleteOrdinaryMindResult =
+  | {
+      readonly kind: "deleted";
+      readonly cleanup: Readonly<OrdinaryMindDeletionCleanupWorkItem>;
+      readonly counts: Readonly<OrdinaryMindDeletedRecordCounts>;
+    }
+  | {
+      readonly kind: "cleanup_pending";
+      readonly cleanup: Readonly<OrdinaryMindDeletionCleanupWorkItem>;
+    }
+  | { readonly kind: "already_absent" }
+  | {
+      readonly kind:
+        | "mind_not_found"
+        | "personal_mind"
+        | "forbidden"
+        | "deletion_impact_expired"
+        | "deletion_impact_changed"
+        | "idempotency_conflict"
+        | "invalid_record";
+    };
+
+export interface CompleteOrdinaryMindDeletionCleanupRequest {
+  readonly impactId: string;
+  readonly spaceId: SpaceId;
+  readonly host: VerifiedSpaceHost;
+  readonly handle: string;
+}
+
+export type CompleteOrdinaryMindDeletionCleanupResult =
+  | { readonly kind: "completed" }
+  | { readonly kind: "not_found" | "invalid_record" };
+
+export interface ChangeOrdinaryMindVisibilityRequest {
+  readonly principalId: PrincipalId;
+  readonly spaceId: SpaceId;
+  readonly visibility: Visibility;
+  readonly acknowledgeLiveHeadAndHistoryExposure: boolean;
+  readonly expectedMetadataVersion: Version;
+  readonly idempotencyKey: IdempotencyKey;
+  readonly canonicalRequestHash: Sha256Digest;
+  readonly occurredAt: UtcInstant;
+  readonly requestId: ActorContext["requestId"];
+  readonly auditEventId: AuditEventId;
+  readonly auditOutboxMessageId: OutboxMessageId;
+}
+
+export type ChangeOrdinaryMindVisibilityResult =
+  | {
+      readonly kind: "visibility_changed";
+      readonly mind: Readonly<OrdinaryMindSnapshot>;
+      readonly changed: boolean;
+      readonly replayed: boolean;
+    }
+  | {
+      readonly kind: "metadata_conflict";
+      readonly currentMetadataVersion: Version;
+    }
+  | {
+      readonly kind:
+        | "mind_not_found"
+        | "personal_mind"
+        | "forbidden"
+        | "exposure_acknowledgement_required"
+        | "idempotency_conflict"
+        | "effect_conflict"
+        | "invalid_record";
+    };
+
+export interface OrdinaryMindMetadataTransaction extends AuthorizationTransaction {
+  /** Classifies own/foreign Personal Minds before any target-identity lookup. */
+  classifyPersonalMindTarget(
+    request: PersonalMindTargetRequest,
+  ): Promise<PersonalMindTargetClassification>;
+  /** Exact active binding lookup; implementations must not perform fuzzy search. */
+  readRegisteredPrincipalByExternalBinding(
+    lookup: Readonly<ExternalIdentityBindingLookup>,
+  ): Promise<Readonly<RegisteredPrincipalSnapshot> | null>;
+  createInvitation(
+    request: Readonly<CreateInvitationRequest>,
+  ): Promise<CreateInvitationResult>;
+  transitionInvitation(
+    request: Readonly<TransitionInvitationRequest>,
+  ): Promise<TransitionInvitationResult>;
+  reissueInvitation(
+    request: Readonly<ReissueInvitationRequest>,
+  ): Promise<ReissueInvitationResult>;
+  createOrdinaryMind(
+    records: Readonly<OrdinaryMindRecordSet>,
+  ): Promise<CreateOrdinaryMindResult>;
+  renameOrdinaryMind(
+    request: Readonly<RenameOrdinaryMindRequest>,
+  ): Promise<RenameOrdinaryMindResult>;
+  changeOrdinaryMindVisibility(
+    request: Readonly<ChangeOrdinaryMindVisibilityRequest>,
+  ): Promise<ChangeOrdinaryMindVisibilityResult>;
+  createOrdinaryMindDeletionImpact(
+    request: Readonly<CreateOrdinaryMindDeletionImpactRequest>,
+  ): Promise<CreateOrdinaryMindDeletionImpactResult>;
+  deleteOrdinaryMind(
+    request: Readonly<DeleteOrdinaryMindRequest>,
+  ): Promise<DeleteOrdinaryMindResult>;
+  completeOrdinaryMindDeletionCleanup(
+    request: Readonly<CompleteOrdinaryMindDeletionCleanupRequest>,
+  ): Promise<CompleteOrdinaryMindDeletionCleanupResult>;
+}
+
+/** Global canonical-object reachability across every retained revision. */
+export interface CanonicalObjectReachabilityReader {
+  /** Includes every historical revision, not only each Mind's current HEAD. */
+  listReachableObjectDigests(): Promise<readonly Sha256Digest[]>;
+}
+
+/** Atomic handle, metadata, Owner, revision/HEAD and idempotency boundary. */
+export interface OrdinaryMindStore
+  extends HandleRegistry,
+    CanonicalObjectReachabilityReader {
+  runOrdinaryMindTransaction<Result>(
+    operation: (transaction: OrdinaryMindMetadataTransaction) => Promise<Result>,
+  ): Promise<Result>;
+}
+
+/** Safe ordinary metadata used only after current route authorization. */
+export interface OrdinaryMindRouteSnapshot {
+  readonly host: VerifiedSpaceHost;
+  readonly canonicalHandle: CanonicalSpaceHandle;
+  readonly space: Readonly<KnowledgeSpace>;
+}
+
+export interface MindRouteAuthorizationQuery extends AuthorizationStateQuery {
+  readonly host: VerifiedSpaceHost;
+  readonly handle: string;
+}
+
+/**
+ * Current metadata source for management routes and membership-only listing.
+ * Implementations must use the same principal, Space, membership, and handle
+ * records as lifecycle commands; derived indexes and fixture ACLs are not a
+ * routing source of truth.
+ */
+export interface MindRouteMetadataStore
+  extends PersonalMindStore,
+    HandleRegistry,
+    AuthorizationStateReader,
+    ResolvedSpaceReader<OrdinaryMindRouteSnapshot> {
+  listActiveMembershipMindIds(
+    principalId: PrincipalId,
+  ): Promise<readonly SpaceId[]>;
+  readCurrentRouteAuthorizationState(
+    query: MindRouteAuthorizationQuery,
+  ): Promise<CurrentAuthorizationState | null>;
+}
+
+export interface PublicMindCatalogPageRequest {
+  /** Opaque adapter-issued cursor; null starts a new immutable snapshot. */
+  readonly cursor: string | null;
+  readonly limit: number;
+}
+
+export type PublicMindCatalogPageResult =
+  | {
+      readonly kind: "page";
+      /** Opaque candidate identities only; callers must reauthorize every item. */
+      readonly spaceIds: readonly SpaceId[];
+      readonly nextCursor: string | null;
+    }
+  | { readonly kind: "invalid_cursor" };
+
+/**
+ * Derived public-discovery projection over the canonical route/auth records.
+ * Candidate IDs are not authorization evidence and contain no display metadata.
+ */
+export interface PublicMindCatalogStore extends MindRouteMetadataStore {
+  listPublicMindCatalogPage(
+    request: Readonly<PublicMindCatalogPageRequest>,
+  ): Promise<PublicMindCatalogPageResult>;
 }
 
 export interface ImmutableObjectWriteRequest {
@@ -220,6 +911,42 @@ export interface ObjectStore {
     request: ImmutableObjectListRequest,
   ): Promise<readonly Readonly<ImmutableObjectMetadata>[]>;
   deleteImmutableObject(request: ImmutableObjectDeleteRequest): Promise<boolean>;
+}
+
+export interface ExportArchiveWriteRequest {
+  readonly jobId: JobId;
+  readonly spaceId: SpaceId;
+  readonly claimVersion: Version;
+  readonly bytes: Uint8Array;
+  readonly sha256: Sha256Digest;
+  readonly createdAt: UtcInstant;
+}
+
+export interface StoredExportArchive extends ExportArchiveRecord {
+  readonly jobId: JobId;
+  readonly spaceId: SpaceId;
+  readonly claimVersion: Version;
+  readonly createdAt: UtcInstant;
+}
+
+export type ExportArchivePutResult =
+  | {
+      readonly kind: "stored" | "already_exists";
+      readonly archive: Readonly<StoredExportArchive>;
+    }
+  | { readonly kind: "digest_mismatch" | "object_key_collision" };
+
+/** Binary export namespace; it is intentionally separate from canonical Markdown. */
+export interface ExportArchiveStore {
+  readonly kind: "object-store";
+  putExportArchive(
+    request: ExportArchiveWriteRequest,
+  ): Promise<ExportArchivePutResult>;
+  readExportArchive(objectKey: string): Promise<Uint8Array | null>;
+  deleteExportArchive(objectKey: string): Promise<boolean>;
+  /** Idempotent cleanup of completed and orphaned claim-scoped archives. */
+  deleteExportArchivesForJob(jobId: JobId): Promise<number>;
+  deleteExportArchivesForSpace(spaceId: SpaceId): Promise<number>;
 }
 
 export type RevisionCommitResult =
@@ -307,8 +1034,106 @@ export interface IdempotencyTransaction {
   ): Promise<CompleteIdempotencyResult>;
 }
 
+export type CreateExportJobResult =
+  | { readonly kind: "created"; readonly job: Readonly<ExportJob> }
+  | { readonly kind: "job_id_collision" | "invalid_job" };
+
+export interface ExportStartTransaction
+  extends AuthorizationTransaction,
+    IdempotencyTransaction {
+  readHead(spaceId: SpaceId): Promise<RevisionId | null>;
+  readRevision(
+    spaceId: SpaceId,
+    revisionId: RevisionId,
+  ): Promise<Readonly<CanonicalRevisionEnvelope> | null>;
+  listRevisions(
+    spaceId: SpaceId,
+  ): Promise<readonly Readonly<CanonicalRevisionEnvelope>[]>;
+  readExportJob(jobId: JobId): Promise<Readonly<ExportJob> | null>;
+  createExportJob(job: Readonly<ExportJob>): Promise<CreateExportJobResult>;
+}
+
+export type ClaimExportJobResult =
+  | { readonly kind: "claimed"; readonly job: Readonly<ExportJob> }
+  | { readonly kind: "not_found" | "not_available" | "completed" | "expired" };
+
+export type ExpireExportJobResult =
+  | {
+      readonly kind: "expired";
+      readonly job: Readonly<ExportJob>;
+      readonly replayed: boolean;
+    }
+  | { readonly kind: "not_found" | "not_due" };
+
+/** Durable export jobs and their lease/version-fenced state transitions. */
+export interface ExportJobStore extends MetadataStore, AuthorizationStateReader {
+  runExportStartTransaction<Result>(
+    operation: (transaction: ExportStartTransaction) => Promise<Result>,
+  ): Promise<Result>;
+  readExportJob(jobId: JobId): Promise<Readonly<ExportJob> | null>;
+  claimExportJob(
+    jobId: JobId,
+    now: UtcInstant,
+    claimExpiresAt: UtcInstant,
+  ): Promise<ClaimExportJobResult>;
+  completeExportJob(
+    jobId: JobId,
+    expectedClaimVersion: Version,
+    archive: Readonly<ExportArchiveRecord>,
+    completedAt: UtcInstant,
+  ): Promise<boolean>;
+  failExportJob(
+    jobId: JobId,
+    expectedClaimVersion: Version,
+    failureCode: string,
+    failedAt: UtcInstant,
+    retryAt: UtcInstant,
+  ): Promise<boolean>;
+  expireExportJob(jobId: JobId, now: UtcInstant): Promise<ExpireExportJobResult>;
+  completeExpiredExportCleanup(
+    jobId: JobId,
+    expectedVersion: Version,
+    cleanedAt: UtcInstant,
+  ): Promise<boolean>;
+}
+
+export type CreateExportDownloadGrantResult =
+  | {
+      readonly kind: "created";
+      readonly grant: Readonly<ExportDownloadGrant>;
+    }
+  | { readonly kind: "secret_collision" | "invalid_grant" };
+
+export interface ExportDownloadGrantTransaction extends AuthorizationTransaction {
+  readExportJob(jobId: JobId): Promise<Readonly<ExportJob> | null>;
+  createExportDownloadGrant(
+    grant: Readonly<ExportDownloadGrant>,
+  ): Promise<CreateExportDownloadGrantResult>;
+}
+
+export type ReadExportDownloadGrantResult =
+  | { readonly kind: "active"; readonly grant: Readonly<ExportDownloadGrant> }
+  | { readonly kind: "not_found" | "expired" | "revoked" };
+
+/** Temporary download capabilities remain separate from durable export jobs. */
+export interface ExportDownloadGrantStore extends ExportJobStore {
+  runExportDownloadGrantTransaction<Result>(
+    operation: (transaction: ExportDownloadGrantTransaction) => Promise<Result>,
+  ): Promise<Result>;
+  readExportDownloadGrant(
+    secretVerifier: ExportDownloadSecretVerifier,
+    now: UtcInstant,
+  ): Promise<ReadExportDownloadGrantResult>;
+  revokeExportDownloadGrant(
+    secretVerifier: ExportDownloadSecretVerifier,
+    revokedAt: UtcInstant,
+  ): Promise<boolean>;
+}
+
 /** Transactional revision metadata and HEAD; object bytes remain in ObjectStore. */
-export interface RevisionMetadataStore extends MetadataStore {
+export interface RevisionMetadataStore
+  extends MetadataStore,
+    CanonicalObjectReachabilityReader {
   readHead(spaceId: SpaceId): Promise<RevisionId | null>;
   readRevision(
     spaceId: SpaceId,
@@ -318,8 +1143,6 @@ export interface RevisionMetadataStore extends MetadataStore {
     spaceId: SpaceId,
   ): Promise<readonly Readonly<CanonicalRevisionEnvelope>[]>;
   commitRevision(request: RevisionCommitRequest): Promise<RevisionCommitResult>;
-  /** Includes every historical revision, not only each Mind's current HEAD. */
-  listReachableObjectDigests(): Promise<readonly Sha256Digest[]>;
 }
 
 /**
@@ -456,6 +1279,34 @@ export interface BackgroundWorkStore extends MetadataStore {
   ): Promise<boolean>;
 }
 
+export type ClaimInvitationExpiryJobResult =
+  | { readonly kind: "claimed"; readonly job: Readonly<BackgroundJob> }
+  | { readonly kind: "not_found" | "not_available" | "completed" };
+
+export type CompleteInvitationExpiryJobResult =
+  | { readonly kind: "expired" | "already_terminal" }
+  | { readonly kind: "not_found" | "not_available" };
+
+/** Durable invitation expiry jobs carry only an invitation ID, never authority. */
+export interface InvitationExpiryJobStore extends MetadataStore {
+  claimInvitationExpiryJob(
+    jobId: JobId,
+    now: UtcInstant,
+    claimExpiresAt: UtcInstant,
+  ): Promise<ClaimInvitationExpiryJobResult>;
+  completeInvitationExpiryJob(
+    jobId: JobId,
+    expectedClaimVersion: Version,
+    completedAt: UtcInstant,
+  ): Promise<CompleteInvitationExpiryJobResult>;
+  failInvitationExpiryJob(
+    jobId: JobId,
+    expectedClaimVersion: Version,
+    failedAt: UtcInstant,
+    retryAt: UtcInstant,
+  ): Promise<boolean>;
+}
+
 export interface SpaceTargetPurgeResult {
   readonly backgroundJobs: number;
   readonly indexStates: number;
@@ -580,6 +1431,25 @@ export interface Authorizer {
     request: AuthorizationRequest,
     transaction: AuthorizationTransaction,
     expected: AuthorizationStamp,
+  ): Promise<AuthorizationDecision>;
+}
+
+export interface BackgroundAuthorizationRequest {
+  readonly actor: ActorContext;
+  /** Durable principal identity captured by the originating command. */
+  readonly principalId: PrincipalId;
+  readonly spaceId: SpaceId;
+  readonly capability: Capability;
+  readonly revisionMode: RevisionMode;
+}
+
+export interface BackgroundAuthorizer {
+  /**
+   * Rebuilds authority from trusted deployment context and current metadata.
+   * Serialized token, role, membership and visibility claims are not inputs.
+   */
+  authorize(
+    request: BackgroundAuthorizationRequest,
   ): Promise<AuthorizationDecision>;
 }
 
@@ -900,6 +1770,96 @@ export class CapabilityAuthorizer implements Authorizer {
         accessVersion: state.space.accessVersion,
         membershipVersion,
         tokenVersion,
+      }),
+    });
+  }
+}
+
+/** Current-access authorizer for trusted workers acting for a captured principal. */
+export class CurrentAccessBackgroundAuthorizer implements BackgroundAuthorizer {
+  readonly #states: AuthorizationStateReader;
+
+  constructor(states: AuthorizationStateReader) {
+    this.#states = states;
+  }
+
+  async authorize(
+    request: BackgroundAuthorizationRequest,
+  ): Promise<AuthorizationDecision> {
+    if (
+      request.actor.kind !== "service" ||
+      typeof request.actor.serviceId !== "string" ||
+      request.actor.serviceId.length === 0
+    ) {
+      return denied("authentication_required");
+    }
+    if (
+      !isKnownCapability(request.capability) ||
+      !isValidRevisionMode(request.revisionMode)
+    ) {
+      return denied("invalid_authorization_request");
+    }
+    if (!request.actor.deploymentCapabilities.includes(request.capability)) {
+      return denied("deployment_capability_disabled");
+    }
+    if (!revisionModeAllowsCapability(request.revisionMode, request.capability)) {
+      return denied("historical_read_only");
+    }
+
+    const state = await this.#states.readCurrentAuthorizationState({
+      principalId: request.principalId,
+      spaceId: request.spaceId,
+      tokenId: null,
+    });
+    if (
+      !isValidCurrentAuthorizationState(state) ||
+      state.principal.principalId !== request.principalId ||
+      state.space.spaceId !== request.spaceId ||
+      state.principal.state !== "active" ||
+      state.space.state !== "active"
+    ) {
+      return denied("authorization_state_unavailable");
+    }
+
+    const membership = state.membership;
+    if (
+      membership !== null &&
+      (membership.principalId !== request.principalId ||
+        membership.spaceId !== request.spaceId)
+    ) {
+      return denied("authorization_state_unavailable");
+    }
+    let grant: AuthorizationGrant;
+    let grantedCapabilities: readonly Capability[];
+    let membershipVersion: Version | null = null;
+    if (
+      membership !== null &&
+      membership.principalId === request.principalId &&
+      membership.spaceId === request.spaceId &&
+      membership.state === "active"
+    ) {
+      grant = Object.freeze({ kind: "membership", role: membership.role });
+      grantedCapabilities = capabilitiesForRole(membership.role);
+      membershipVersion = membership.version;
+    } else {
+      grantedCapabilities = capabilitiesForVisibilityGrant(state.space.visibility);
+      if (grantedCapabilities.length === 0) return denied("access_denied");
+      grant = Object.freeze({
+        kind: "baseline_visibility",
+        visibility: state.space.visibility,
+      }) as AuthorizationGrant;
+    }
+    if (!grantedCapabilities.includes(request.capability)) {
+      return denied("capability_denied");
+    }
+    return Object.freeze({
+      kind: "allowed",
+      capability: request.capability,
+      grant,
+      stamp: Object.freeze({
+        accessVersion: state.space.accessVersion,
+        membershipVersion,
+        tokenVersion: null,
       }),
     });
   }

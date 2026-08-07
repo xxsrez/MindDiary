@@ -156,6 +156,9 @@ test("active membership and pending invitation uniqueness is enforced per Mind/p
       ],
     }),
   );
+  expectDomainError("pending_invitation_for_active_member", () =>
+    ordinary({ invitations: [invitation(editorId)] }),
+  );
 
   const withHistoricalRecords = ordinary({
     memberships: [
@@ -175,6 +178,62 @@ test("active membership and pending invitation uniqueness is enforced per Mind/p
     ],
   });
   assert.equal(withHistoricalRecords.snapshot().memberships.length, 3);
+});
+
+test("adding an invitation enforces role policy and advances only Mind metadata", () => {
+  const aggregate = ordinary();
+  const updated = aggregate.addInvitation({
+    actorPrincipalId: ownerId,
+    invitation: invitation(outsiderId),
+    expectedMetadataVersion: version(1),
+    occurredAt: later,
+  });
+
+  assert.equal(aggregate.snapshot().space.metadataVersion, 1);
+  assert.equal(updated.snapshot().space.metadataVersion, 2);
+  assert.equal(updated.snapshot().space.accessVersion, 1);
+  assert.equal(updated.snapshot().space.updatedAt, later);
+  assert.equal(updated.snapshot().invitations.length, 1);
+  expectDomainError("stale_version", () =>
+    updated.addInvitation({
+      actorPrincipalId: ownerId,
+      invitation: invitation("principal_second_outsider"),
+      expectedMetadataVersion: version(1),
+      occurredAt: later,
+    }),
+  );
+  expectDomainError("settings_permission_required", () =>
+    aggregate.addInvitation({
+      actorPrincipalId: editorId,
+      invitation: invitation(outsiderId),
+      expectedMetadataVersion: version(1),
+      occurredAt: later,
+    }),
+  );
+
+  const withAdmin = ordinary({
+    memberships: [
+      membership(ownerId, "owner"),
+      membership(editorId, "admin"),
+    ],
+  });
+  assert.equal(
+    withAdmin.addInvitation({
+      actorPrincipalId: editorId,
+      invitation: invitation(outsiderId, { proposedRole: "reader" }),
+      expectedMetadataVersion: version(1),
+      occurredAt: later,
+    }).snapshot().space.metadataVersion,
+    2,
+  );
+  expectDomainError("settings_permission_required", () =>
+    withAdmin.addInvitation({
+      actorPrincipalId: editorId,
+      invitation: invitation(outsiderId, { proposedRole: "admin" }),
+      expectedMetadataVersion: version(1),
+      occurredAt: later,
+    }),
+  );
 });
 
 test("Personal Mind uses the ordinary space schema but is private and sole-owned", () => {
@@ -256,6 +315,16 @@ test("Personal Mind uses the ordinary space schema but is private and sole-owned
     personalMind: personal,
   });
   assert.equal(account.snapshot().personalMind.personalBinding.principalId, ownerId);
+  expectDomainError("personal_profile_mismatch", () =>
+    PrincipalAccount.restore({
+      principal: {
+        ...account.snapshot().principal,
+        displayName: "Split Brain Profile",
+      },
+      externalBindings: account.snapshot().externalBindings,
+      personalMind: personal,
+    }),
+  );
 });
 
 test("ownership transfer is atomic and stale/retry attempts cannot create two Owners", () => {
