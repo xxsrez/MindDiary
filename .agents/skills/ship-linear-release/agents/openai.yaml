@@ -1,0 +1,7 @@
+interface:
+  display_name: "Ship Linear Release"
+  short_description: "Непрерывно доставляет Linear milestone"
+  default_prompt: "Используй $ship-linear-release: непрерывно выполняй незавершённые Linear-задачи Mind Diary с заданным числом параллельных issue workers, интегрируй их по мере готовности и выпускай проверенными cutoff."
+
+policy:
+  allow_implicit_invocation: false
