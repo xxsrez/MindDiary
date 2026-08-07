@@ -419,6 +419,7 @@ interface NormalizedBrowseQuery {
 interface LoadedExactFile {
   readonly entry: Readonly<RevisionManifestEntry>;
   readonly bytes: Uint8Array;
+  readonly authorization: AllowedAuthorization;
 }
 
 interface ResourceTarget {
@@ -762,15 +763,6 @@ export class MindBrowseService {
         ),
       );
     }
-    await this.#requireSameAuthorization(
-      actor,
-      info.mind.mindId,
-      "content:browse",
-      info.revisionMode,
-      initialAuthorization,
-      "mind_not_found",
-    );
-
     const nextOffset = offset + page.length;
     const nextCursor =
       nextOffset < entries.length
@@ -787,6 +779,14 @@ export class MindBrowseService {
             }),
           )
         : null;
+    await this.#requireSameAuthorization(
+      actor,
+      info.mind.mindId,
+      "content:browse",
+      info.revisionMode,
+      initialAuthorization,
+      "mind_not_found",
+    );
     return Object.freeze({
       mind: info.mind,
       resolvedRevision: info.resolvedRevision,
@@ -845,7 +845,7 @@ export class MindBrowseService {
             }),
           )
         : null;
-    return Object.freeze({
+    const result = Object.freeze({
       entry: await this.#entrySummary(
         locator.spaceId,
         locator.revisionId,
@@ -862,6 +862,15 @@ export class MindBrowseService {
         total: locator.end,
       }),
     });
+    await this.#requireSameAuthorization(
+      actor,
+      locator.spaceId,
+      "content:fetch",
+      "historical",
+      loaded.authorization,
+      "locator_not_found",
+    );
+    return result;
   }
 
   async readResource(
@@ -888,7 +897,7 @@ export class MindBrowseService {
         "The exact revision could not be decoded safely.",
       );
     }
-    return Object.freeze({
+    const result = Object.freeze({
       uri: uri as string,
       mimeType: MARKDOWN_MEDIA_TYPE,
       text,
@@ -899,6 +908,15 @@ export class MindBrowseService {
         loaded.bytes,
       ),
     });
+    await this.#requireSameAuthorization(
+      actor,
+      target.spaceId,
+      "content:fetch",
+      "historical",
+      loaded.authorization,
+      "resource_not_found",
+    );
+    return result;
   }
 
   async #entrySummary(
@@ -1003,7 +1021,11 @@ export class MindBrowseService {
       initialAuthorization,
       notFoundCode,
     );
-    return Object.freeze({ entry, bytes });
+    return Object.freeze({
+      entry,
+      bytes,
+      authorization: initialAuthorization,
+    });
   }
 
   async #readVerifiedEnvelope(

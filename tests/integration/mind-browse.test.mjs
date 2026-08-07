@@ -87,6 +87,20 @@ function trackedObjects(delegate) {
   };
 }
 
+function locatorsWithRevocation(delegate, revokeAt, revoke) {
+  let encodes = 0;
+  return {
+    decode: (candidate) => delegate.decode(candidate),
+    encode: async (payload) => {
+      const encoded = await delegate.encode(payload);
+      encodes += 1;
+      if (encodes === revokeAt) await revoke();
+      return encoded;
+    },
+    encodes: () => encodes,
+  };
+}
+
 function harness() {
   const metadata = new InMemoryRevisionMetadataStore();
   const objects = new InMemoryObjectStore();
@@ -600,4 +614,88 @@ test("denial, access races, retry, and whole-Mind deletion authorize before obje
     await env.metadata.readRevision(mind.mindId, locator.revisionId),
     null,
   );
+});
+
+test("browse, fetch, and MCP resource reads reauthorize after response locators are materialized", async () => {
+  const env = harness();
+  const owner = await createAccount(env, 1, "Final Authorization Owner");
+  const viewer = await createAccount(env, 2, "Final Authorization Viewer");
+  const mind = await createMind(env, owner, "final-authorization");
+  const setVisibility = (visibility) =>
+    env.metadata.changeOrdinaryVisibilityForTest(
+      mind.mindId,
+      visibility,
+      CHANGED_AT,
+    );
+  assert.equal(await setVisibility("public"), true);
+
+  const discovered = await env.browse.browseEntries(actor(viewer.principalId), {
+    mind: mind.handle,
+    path: "concepts",
+    limit: 10,
+  });
+  const entry = discovered.entries.find(
+    (candidate) => candidate.path === "concepts/alpha.md",
+  );
+  assert.ok(entry);
+
+  const browseLocators = locatorsWithRevocation(env.locators, 2, async () => {
+    assert.equal(await setVisibility("private"), true);
+  });
+  const racingBrowse = new MindBrowseService({
+    store: env.metadata,
+    objects: env.observedObjects,
+    host: HOST,
+    locators: browseLocators,
+  });
+  env.observedObjects.reset();
+  await assert.rejects(
+    racingBrowse.browseEntries(actor(viewer.principalId), {
+      mind: mind.handle,
+      path: "concepts",
+      limit: 1,
+    }),
+    expectFailure("mind_not_found"),
+  );
+  assert.equal(browseLocators.encodes(), 2);
+  assert.equal(env.observedObjects.reads(), 1);
+
+  assert.equal(await setVisibility("public"), true);
+  const fetchLocators = locatorsWithRevocation(env.locators, 1, async () => {
+    assert.equal(await setVisibility("private"), true);
+  });
+  const racingFetch = new MindBrowseService({
+    store: env.metadata,
+    objects: env.observedObjects,
+    host: HOST,
+    locators: fetchLocators,
+  });
+  env.observedObjects.reset();
+  await assert.rejects(
+    racingFetch.fetch(actor(viewer.principalId), {
+      id: entry.entryId,
+      maxBytes: 1024,
+    }),
+    expectFailure("locator_not_found"),
+  );
+  assert.equal(fetchLocators.encodes(), 1);
+  assert.equal(env.observedObjects.reads(), 1);
+
+  assert.equal(await setVisibility("public"), true);
+  const resourceLocators = locatorsWithRevocation(env.locators, 1, async () => {
+    assert.equal(await setVisibility("private"), true);
+  });
+  const racingResources = new MindBrowseService({
+    store: env.metadata,
+    objects: env.observedObjects,
+    host: HOST,
+    locators: resourceLocators,
+  });
+  env.observedObjects.reset();
+  await assert.rejects(
+    racingResources.readResource(actor(viewer.principalId), entry.resourceUri),
+    expectFailure("resource_not_found"),
+  );
+  assert.equal(resourceLocators.encodes(), 1);
+  assert.equal(env.observedObjects.reads(), 1);
 });
