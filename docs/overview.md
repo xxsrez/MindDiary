@@ -1,7 +1,9 @@
 # Обзор Mind Diary
 
-Статус: proposal, 2026-08-05. Product behavior первого прототипа принято;
-сервисный код и deployment ещё не реализованы.
+Статус: proposal, обновлено 2026-08-08. Product behavior первого прототипа
+принято; локальные domain/application capabilities, in-memory adapters,
+web-control и MCP modules и automated suites реализованы. Deployable OpenAI
+Site, durable platform bindings и live production evidence ещё не подтверждены.
 
 ## Зачем проект существует
 
