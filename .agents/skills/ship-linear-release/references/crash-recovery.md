@@ -54,6 +54,11 @@ owner.
    descendant не отменяет этот handoff: helper проверяет согласованный durable
    PAUSE/index, zero-running execution state и `PENDING_ACTIONS=none`, а не
    требует, чтобы `handoff-owner` оставался последним action.
+   Для terminal/explicit-stop случая используй `shipctl.py
+   recover-stale-owner --proof-kind <task-terminal|user-confirmed-stop>
+   --proof-digest <sha256>`. Helper повторно доказывает zero-running,
+   no-pending, coherent owner state и делает expected-old descendant CAS;
+   timestamp/тишина/PID не являются допустимым proof-kind.
 5. Неизвестная liveness старых workers допустима только если их manifest и
    guard refs доказывают feature-only authority. Тогда takeover сначала fence-ит
    все guards и не трогает их worktrees. Если старый contract позволял shared
@@ -416,6 +421,15 @@ relations) отдельно от operational `updatedAt`, status/priority/assign
    ledger доказывает terminal disposition и отсутствие required unique work.
    Unresolved quarantine либо manual `Done` без delivery evidence не являются
    retirement и блокируют terminal release/goal.
+
+После всех disposition сначала вызови `shipctl.py cleanup-plan` и сохрани exact
+`plan_digest`. Передай неизменённый JSON в `cleanup-apply`: helper повторно
+читает coordinator/default/worktree state и применяет только совпадающий fresh
+plan. Он удаляет только clean task worktree с claim-bound `codex/*` branch и
+HEAD, достижимым из remote default, причём coordinator уже terminal и live
+claims отсутствуют; dirty, active, unmerged и unpublished carrier всегда
+остаются. Branch/ref deletion — отдельное fenced действие и не входит в
+worktree cleanup.
 
 ## Сообщать пользователю переходы
 

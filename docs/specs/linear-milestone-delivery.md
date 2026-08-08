@@ -42,7 +42,10 @@ gates или определение production.
 сообщает доступные числа. Меньшее число ready issue не является ошибкой: active
 target временно равен ready frontier, а свободный slot заполняется сразу после
 появления совместимой задачи. `auto` выбирает минимум runtime capacity,
-resource capacity, optional maximum и текущей ready frontier.
+resource capacity и optional maximum как `sustained_issue_capacity`; ready
+frontier ограничивает только текущий `active_target`, но не устойчивую
+capacity. Источники runtime/resource capacity передаются в `launch-check` явно
+и не выводятся из requested workers.
 
 ## 3. Роли и topology
 
@@ -101,6 +104,10 @@ issues и running generations, coordinator продолжает ждать их 
 `no-actionable-frontier` и объясняет конкретный cycle, unknown dependency или
 acceptance contradiction.
 
+Выбор project/current milestone, dependency graph и ready frontier выполняет
+typed `shipctl.py milestone-plan`. Malformed, ambiguous или structurally
+blocked snapshot запрещает claim; model не исправляет его догадкой.
+
 Отсутствующие исходники, тесты, config или deployment implementation внутри
 уже принятого scope не являются внешним blocker. Это work item: owning issue
 переоткрывается или создаётся связанная дедуплицированная issue.
@@ -146,6 +153,9 @@ scope либо завершить текущую работу. После при
 Sharing read-only sealed artifacts допустим только при exact provenance;
 изменяемые `node_modules`, caches, ports или generated outputs между worker-ами
 не разделяются.
+Для Node worktree coordinator использует `shipctl.py provision-worktree`:
+exact lockfile, task-owned `npm ci`, ignored `.codex-task` receipt и отсутствие
+symlink overlay являются dispatch prerequisite.
 
 ## 7. Goal contract
 
@@ -159,6 +169,8 @@ cutoff имеет exact-SHA gate/promotion evidence. Если acceptance или 
 release contract требует production, Goal дополнительно требует exact
 artifact/deployment, live web + MCP evidence и rollback proof. Если production
 не требуется, такие artifacts не создаются и не симулируются.
+До `update_goal(complete)` coordinator сначала terminalize-ит owner/guards,
+проверяет compact status и очищает только доказанно terminal clean worktrees.
 
 Goal отмечается `blocked` только по общему Goal protocol: один и тот же
 устойчивый blocker повторился минимум в трёх последовательных goal turns и
@@ -177,7 +189,7 @@ re-dispatch.
 Feature считается готовой к ingest только при наличии:
 
 - clean committed head и exact origin ref;
-- terminal publication guard той же generation;
+- durable `ready` publication guard той же generation;
 - unchanged issue fingerprint;
 - passing targeted checks;
 - scope/path proof и `git diff --check`;
@@ -186,6 +198,12 @@ Feature считается готовой к ingest только при нали
 Coordinator интегрирует только immutable ready refs, проверяет dependency order
 и не ждёт завершения всех in-flight задач. Conflict сериализует конкретные
 features, а не весь pool.
+Полный candidate/active manifest, coordinator SHA, dependency receipt,
+non-shell targeted argv, canonical manifest digest и fresh scope fingerprint
+проверяются `dispatch-check`; обрезанный resource-only entry недействителен.
+Worker receipt принимается только после `receipt-verify` exact refs/guard/scope/
+diff checks. `needs-coordinator` маршрутизирует scope и defect вопросы без
+преждевременного запроса пользователю.
 
 ## 9. Cutoff, общие проверки и default
 
@@ -198,6 +216,9 @@ Worker checks не заменяют общий gate. Coordinator в clean cutoff
 Diary это `npm ci`, затем один `npm run check` и `git diff --check
 <base>..<candidate>`, если текущий `AGENTS.md` не задаёт обновлённый contract.
 Aggregate command не дублируется отдельными subcommands.
+Gate имеет bounded step/total timeout, завершает process group и сохраняет
+immutable `failure_kind`; shell wrappers, duplicate steps и aggregate вместе с
+покрываемым subcommand отклоняются до запуска.
 
 Только terminal pass разрешает expected-old fast-forward CAS exact candidate в
 remote default. После push coordinator проверяет remote SHA и обязательный
@@ -280,3 +301,24 @@ Blocked итог должен человеческим языком ответи
 не получилось, какое требование это блокирует, что уже проверено/сделано и какое
 минимальное действие пользователя или внешней системы снимет blocker. Внутренние
 IDs и receipts приводятся после объяснения, а не вместо него.
+
+## 14. Исполняемые guardrails
+
+Нормативные prose-переходы имеют machine-checkable counterparts:
+
+- `goal-card` ограничивает и хеширует exact Goal objective;
+- `milestone-plan` валидирует current milestone и dependency frontier;
+- `manifest`, `provision-worktree`, `dispatch-check` и `receipt-verify`
+  ограждают issue lane;
+- `conveyor-next` допускает только ordered lifecycle с обязательным evidence;
+- `gatectl run/status` дедуплицирует один full gate exact generation;
+- `recover-stale-owner` принимает только terminal-task/user-confirmed-stop
+  proof и expected-old CAS;
+- `status`, `cleanup-plan` и `cleanup-apply` закрывают terminal run без удаления
+  dirty, active или unpublished carrier; cleanup требует coherent terminal
+  coordinator, zero occupancy, no live claims и claim-bound branch identity.
+
+Metadata ledger bounded по размеру, запрещает duplicate scalar headers и перед
+переполнением compacts только terminal history до count+digest. Primary/default
+snapshot пригоден, только если два чтения одной bounded операции совпали; torn
+snapshot запрещает shared mutation.

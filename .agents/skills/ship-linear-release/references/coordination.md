@@ -38,8 +38,10 @@ compact Linear snapshot + `rg`; неоднозначность возвраща�
 
 1. Трактуй `workers=N` как exact concurrency исполняемых Linear issue, а не как
    число subagents или общий orchestration budget. До claim обязательно запусти
-   `shipctl.py launch-check`: если устойчивой runtime/resource capacity меньше
-   `N`, остановись. Только `workers=auto` допускает уменьшенный target.
+   `shipctl.py launch-check` с явными `--runtime-source` и `--resource-source`:
+   если устойчивой runtime/resource capacity меньше `N`, остановись. Только
+   `workers=auto` допускает уменьшенный target. Число из user prompt или
+   ready-set не является доказательством runtime/resource capacity.
 2. Durable-запиши пять независимых величин:
 
    ```text
@@ -49,8 +51,8 @@ compact Linear snapshot + `rg`; неоднозначность возвраща�
 
    `runtime_slots_total` включает root и все child agents. Dedicated root
    оставляет issue только фактически доступную `delegated_capacity` (не больше
-   `runtime_slots_total - 1`). Для dedicated layout
-   Для exact mode все три capacity обязаны быть не меньше requested; нельзя
+   `runtime_slots_total - 1`). Для exact mode все три capacity обязаны быть не
+   меньше requested; нельзя
    молча подставлять их minimum. Для auto mode
    `sustained_issue_capacity=min(delegated_capacity,safe_resource_capacity)`;
    root в неё не входит. Отдельный `active_target`
@@ -187,6 +189,20 @@ Takeover разрешай только после одного из доказа
 
 Не используй timeout, stale timestamp или предположение о crash как
 доказательство. При сомнении оставайся observer и верни `needs-input`.
+Когда terminal task state или явное подтверждение пользователя уже получено,
+не собирай takeover commit вручную. Передай SHA-256 exact proof в bounded
+helper:
+
+```bash
+python3 .agents/skills/ship-linear-release/scripts/shipctl.py recover-stale-owner \
+  --repo <repo> --proof-kind <task-terminal|user-confirmed-stop> \
+  --proof-digest <sha256>
+```
+
+Helper повторно требует coherent zero-running/no-pending state и делает
+expected-old CAS descendant с `epoch+1`; иной результат оставляет caller
+observer. Proof digest не заменяет само наблюдение: его нельзя синтезировать из
+возраста claim или отсутствующего PID.
 `handoff-ready` создаётся только `shipctl.py soft-pause --phase finish` либо
 legacy explicit owner action с target/reason. Goal conflict до первой run effect
 завершается owner state `aborted`, а не превращается в неявный handoff.
@@ -249,6 +265,10 @@ integration/default/deploy независимо от выигранного owne
    executor lease блокирует dispatch. Новый issue всегда получает новый worker
    с `agent_type=worker`, `fork_turns=none`; не переиспользуй завершённого agent
    через `followup_task`.
+   Candidate передавай целиком вместе с canonical manifest digest и fresh
+   semantic scope fingerprint. Active entries тоже являются полными manifests;
+   обрезанный объект с несколькими resource fields всегда invalid и не доходит
+   до overlap анализа.
 3. После появления durable `ready` guard соблюдай один work-conserving порядок:
    validate exact receipt -> durable `running -> feature_ready` в
    `EXECUTION_INDEX` -> refill свободного slot -> enqueue feature для ingest ->
@@ -424,6 +444,15 @@ recovery contradiction и completion. Обновляй существующий 
 Не записывай poll, heartbeat loop, worker utilization, ETA, queue telemetry,
 полные logs или command-by-command history. Action commits в coordinator ref —
 fencing ledger, а не повод дублировать каждый action Linear comment-ом.
+
+Перед terminal отчётом вызови `shipctl.py status`. После terminal owner/guard
+state построй `cleanup-plan`, сохрани его digest и передай exact JSON в
+`cleanup-apply`; helper удаляет только clean `codex/*` worktrees, чьи HEAD уже
+достижимы из remote default, имеют claim-bound branch и не входят в active
+claims. План возможен только при coherent terminal coordinator, нулевой
+занятости и отсутствии live claims; exact coordinator SHA входит в digest.
+Branch deletion в эту операцию не входит. Goal завершай только после повторного
+compact status.
 
 При конфликте целей выбирай в этом порядке: **reliability**, затем
 **flexibility**, затем **performance**.

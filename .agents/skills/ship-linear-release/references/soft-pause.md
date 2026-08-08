@@ -8,6 +8,15 @@ Coordinator проверяет model-visible Goal status один раз в на
 client полностью не доставил model turn, выполнить drain до следующего turn
 технически невозможно; не заявляй фоновый watcher, которого runtime не даёт.
 
+## Содержание
+
+- [Единственная state machine](#единственная-state-machine)
+- [Начать drain](#начать-drain)
+- [Зафиксировать worker dispositions](#зафиксировать-worker-dispositions)
+- [Довести готовое и завершить pause](#довести-готовое-и-завершить-pause)
+- [Возобновить](#возобновить)
+- [Goal blocked не является pause](#goal-blocked-не-является-pause)
+
 ## Единственная state machine
 
 `STATE`, `OWNER_STATE`, `LIFECYCLE`, `EXECUTION_INDEX`, `WORKERS`, `PAUSE`,

@@ -1,7 +1,7 @@
 interface:
   display_name: "Ship Linear Release"
   short_description: "Реализует и доставляет текущий Linear milestone"
-  default_prompt: "Используй $ship-linear-release: реализуй все незавершённые задачи current Linear milestone; без worker count работай одним worker, workers=N соблюдай точно, workers=auto адаптируй к безопасной capacity; интегрируй rolling cutoffs, выполни общие gates и применимые production acceptance."
+  default_prompt: "Используй $ship-linear-release: начни с bounded preflight и проверки доступности Linear/Git/runtime операций; реализуй все незавершённые задачи exact current Linear milestone; без worker count работай одним worker, workers=N соблюдай точно, workers=auto адаптируй к доказанной безопасной capacity; интегрируй rolling cutoffs, выполни общие gates и production только когда его требует acceptance."
 
 policy:
   allow_implicit_invocation: false

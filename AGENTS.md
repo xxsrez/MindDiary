@@ -49,9 +49,12 @@
 10. [Проверку платформенных предпосылок](docs/reports/2026-08-05-platform-status.md)
     — перед Sites/MCP platform или deployment claims.
 
-Архитектурные и specification-документы пока имеют статус proposal. Принятые
-product decisions отделяйте от ещё не выбранных деталей реализации; ни то ни
-другое не выдавайте за реализованный либо развёрнутый сервис.
+Архитектурные и product specification-документы пока имеют статус proposal,
+если сам документ явно не отмечен как accepted. Operational specification
+`docs/specs/linear-milestone-delivery.md` и ADR-0006 — accepted execution
+contract, но не утверждение о реализованном либо развёрнутом product service.
+Принятые product decisions отделяйте от ещё не выбранных деталей реализации;
+ни то ни другое не выдавайте за реализованный либо развёрнутый сервис.
 
 ## Неизменные границы
 

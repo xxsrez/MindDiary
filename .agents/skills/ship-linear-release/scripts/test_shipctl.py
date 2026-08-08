@@ -50,7 +50,17 @@ class GitMixin:
         (skill / "SKILL.md").write_text("---\nname: test\n---\n", encoding="utf-8")
         (repo / "AGENTS.md").write_text("# test\n", encoding="utf-8")
         (repo / "package.json").write_text("{}\n", encoding="utf-8")
-        self.git(repo, "add", MODULE.SKILL_PATH, "AGENTS.md", "package.json")
+        (repo / "package-lock.json").write_text("{}\n", encoding="utf-8")
+        (repo / ".gitignore").write_text("node_modules/\n.codex-task/\n", encoding="utf-8")
+        self.git(
+            repo,
+            "add",
+            MODULE.SKILL_PATH,
+            "AGENTS.md",
+            "package.json",
+            "package-lock.json",
+            ".gitignore",
+        )
         self.git(repo, "commit", "-m", "base")
         self.git(repo, "remote", "add", "origin", str(remote))
         self.git(repo, "push", "-u", "origin", "main")
@@ -161,25 +171,69 @@ class ManifestTest(GitMixin, unittest.TestCase):
         guard_tip = self.metadata_commit(worktree, guard_message, base)
         guard_ref = f"refs/heads/codex/release/claims/{self.RUN_KEY}/AND-56/c1"
         self.git(repo, "update-ref", guard_ref, guard_tip)
-        for name in ("build-task", "tmp-task", "runtime-task", "cache-task"):
-            (worktree / name).mkdir()
+        self.git(repo, "push", "origin", f"{guard_tip}:{guard_ref}")
+        task_root = worktree / ".codex-task"
+        for name in ("build", "tmp", "runtime", "npm-cache"):
+            (task_root / name).mkdir(parents=True)
+        dependency_path = worktree / "node_modules"
+        dependency_path.mkdir()
+        lockfile_digest = MODULE.hashlib.sha256(
+            (worktree / "package-lock.json").read_bytes()
+        ).hexdigest()
+        (task_root / "provision.json").write_text(
+            json.dumps(
+                {
+                    "status": "installed",
+                    "lockfile_digest": lockfile_digest,
+                    "dependency_path": str(dependency_path.resolve()),
+                }
+            ),
+            encoding="utf-8",
+        )
+        owner_id = str(uuid.uuid4())
+        project_id = str(uuid.uuid4())
+        milestone_id = str(uuid.uuid4())
+        run_id = "019fdbbd-b0ed-77d1-80a4-f45a253c770f"
+        coordinator_message = (
+            "coordinator\n\n"
+            "SCHEMA: 1\n"
+            "KIND: COORDINATOR_CLAIM\n"
+            f"RUN_ID: {run_id}\n"
+            f"RUN_KEY: {self.RUN_KEY}\n"
+            f"OWNER_ID: {owner_id}\n"
+            "EPOCH: 1\n"
+            f"PROJECT_ID: {project_id}\n"
+            f"MILESTONE_ID: {milestone_id}\n"
+            "STATE: running\n"
+            "OWNER_STATE: active\n"
+            "ACTION_SEQ: 0\n"
+            "ACTION_STATUS: reconciled\n"
+        )
+        coordinator_sha = self.metadata_commit(repo, coordinator_message, base)
+        self.git(
+            repo,
+            "push",
+            "origin",
+            f"{coordinator_sha}:{MODULE.CANONICAL_COORDINATOR_REF}",
+        )
         manifest: dict[str, object] = {
-            "run_id": "019fdbbd-b0ed-77d1-80a4-f45a253c770f",
+            "run_id": run_id,
             "run_key": self.RUN_KEY,
-            "owner_id": str(uuid.uuid4()),
+            "owner_id": owner_id,
             "owner_epoch": 1,
             "claim_generation": 1,
             "claim_token": str(uuid.uuid4()),
             "issue_id": str(uuid.uuid4()),
             "issue_identifier": "AND-56",
-            "project_id": str(uuid.uuid4()),
-            "milestone_id": str(uuid.uuid4()),
+            "project_id": project_id,
+            "milestone_id": milestone_id,
             "repo": str(repo),
             "worktree": str(worktree),
             "branch": branch,
             "feature_ref": f"refs/heads/{branch}",
             "guard_ref": guard_ref,
             "guard_tip": guard_tip,
+            "coordinator_sha": coordinator_sha,
             "root_sha": base,
             "base_sha": base,
             "dependency_shas": [],
@@ -194,17 +248,30 @@ class ManifestTest(GitMixin, unittest.TestCase):
                 "fork_turns": "none",
             },
             "isolation": {
-                "mutable_build_dir": str(worktree / "build-task"),
-                "tmp_dir": str(worktree / "tmp-task"),
-                "runtime_dir": str(worktree / "runtime-task"),
+                "mutable_build_dir": str(task_root / "build"),
+                "tmp_dir": str(task_root / "tmp"),
+                "runtime_dir": str(task_root / "runtime"),
                 "cache_mode": "isolated",
-                "cache_dir": str(worktree / "cache-task"),
+                "cache_dir": str(task_root / "npm-cache"),
                 "cache_key": "none",
                 "ports": [43123, 43124],
-                "env": {"MIND_DIARY_TASK_TMP": str(worktree / "tmp-task")},
+                "env": {"MIND_DIARY_TASK_TMP": str(task_root / "tmp")},
+            },
+            "dependencies": {
+                "mode": "isolated",
+                "path": str(dependency_path.resolve()),
+                "lockfile_digest": lockfile_digest,
+                "cache_key": "none",
+                "read_only": False,
+                "provenance": f"npm-ci:{lockfile_digest}",
             },
             "validation": {
-                "targeted_checks": ["node --test tests/unit/domain-invariants.test.mjs"],
+                "targeted_checks": [
+                    {
+                        "id": "domain-invariants",
+                        "argv": ["node", "--test", "tests/unit/domain-invariants.test.mjs"],
+                    }
+                ],
                 "check_class": "targeted-feature",
                 "full_gate": "deferred-to-cutoff",
             },
@@ -213,7 +280,7 @@ class ManifestTest(GitMixin, unittest.TestCase):
         return repo, worktree, manifest
 
     def invoke(self, payload: object) -> tuple[int, dict[str, object]]:
-        args = mock.Mock(input="-")
+        args = MODULE.argparse.Namespace(input="-", phase="dispatch", remote="origin")
         with mock.patch.object(sys, "stdin", io.StringIO(json.dumps(payload))), io.StringIO() as output, redirect_stdout(output):
             code = MODULE.command_manifest(args)
             return code, json.loads(output.getvalue())
@@ -266,7 +333,9 @@ class ManifestTest(GitMixin, unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="shipctl-manifest-") as directory:
             _, _, payload = self.manifest_fixture(Path(directory))
             payload["isolation"]["tmp_dir"] = str(Path(directory) / "outside")  # type: ignore[index]
-            payload["validation"]["targeted_checks"] = ["npm run check"]  # type: ignore[index]
+            payload["validation"]["targeted_checks"] = [  # type: ignore[index]
+                {"id": "full", "argv": ["npm", "run", "check"]}
+            ]
             code, result = self.invoke(payload)
         self.assertEqual(code, 2)
         self.assertIn("invalid:isolation.tmp_dir:outside-worktree", result["errors"])
@@ -276,7 +345,9 @@ class ManifestTest(GitMixin, unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="shipctl-manifest-") as directory:
             _, _, payload = self.manifest_fixture(Path(directory))
             payload["executor"]["fork_turns"] = "all"  # type: ignore[index]
-            payload["validation"]["targeted_checks"] = ["npm ci"]  # type: ignore[index]
+            payload["validation"]["targeted_checks"] = [  # type: ignore[index]
+                {"id": "install", "argv": ["npm", "ci"]}
+            ]
             code, result = self.invoke(payload)
         self.assertEqual(code, 2)
         self.assertIn("invalid:executor.fork_turns", result["errors"])
@@ -304,6 +375,96 @@ class ManifestTest(GitMixin, unittest.TestCase):
         self.assertEqual((code, result["status"]), (0, "valid"))
         self.assertEqual(mismatch_code, 2)
         self.assertIn("invalid:issue_id", mismatch["errors"])
+
+    def test_receipt_verifier_binds_ready_feature_guard_scope_and_diff(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="shipctl-receipt-") as directory:
+            root = Path(directory)
+            repo, worktree, manifest = self.manifest_fixture(root)
+            source = worktree / "packages/domain/src/index.ts"
+            source.parent.mkdir(parents=True)
+            source.write_text("export const value = 1;\n", encoding="utf-8")
+            self.git(worktree, "add", "packages/domain/src/index.ts")
+            self.git(worktree, "commit", "-m", "AND-56 implement domain invariant")
+            head = self.git(worktree, "rev-parse", "HEAD")
+            self.git(worktree, "push", "origin", manifest["branch"])
+            checks_digest = "d" * 64
+            guard_message = (
+                "ready guard\n\n"
+                "SCHEMA: 1\n"
+                "KIND: CLAIM_GUARD\n"
+                "STATE: ready\n"
+                "ISSUE: AND-56\n"
+                "CLAIM_GENERATION: 1\n"
+                f"FEATURE_HEAD: {head}\n"
+                f"CHECKS_DIGEST: {checks_digest}\n"
+            )
+            ready_guard = self.metadata_commit(
+                repo, guard_message, str(manifest["guard_tip"])
+            )
+            self.git(repo, "update-ref", str(manifest["guard_ref"]), ready_guard)
+            self.git(
+                repo,
+                "push",
+                "origin",
+                f"{ready_guard}:{manifest['guard_ref']}",
+            )
+            manifest_path = root / "manifest.json"
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            receipt = "\n".join(
+                [
+                    "STATUS: ready",
+                    f"RUN_ID: {manifest['run_id']}",
+                    f"RUN_KEY: {manifest['run_key']}",
+                    f"OWNER: id={manifest['owner_id']}; epoch=1",
+                    f"CLAIM: generation=1; token={manifest['claim_token']}",
+                    f"ISSUE: AND-56 ({manifest['issue_id']})",
+                    f"WORKTREE: {worktree}",
+                    f"BRANCH: {manifest['branch']}",
+                    f"BASE_SHA: {manifest['base_sha']}",
+                    f"HEAD_SHA: {head}",
+                    f"SCOPE: start_fingerprint={manifest['scope_fingerprint']}; final_fingerprint={manifest['scope_fingerprint']}; unchanged",
+                    f"ORIGIN_REF: {manifest['branch']}={head}",
+                    f"GUARD: origin:{manifest['guard_ref']}={ready_guard}",
+                    "CHECK_CLASS: targeted-feature",
+                    "TARGETED_CHECKS: domain-invariants=pass",
+                    f"CHECKS_DIGEST: {checks_digest}",
+                    "FULL_GATE: deferred-to-cutoff",
+                    f"EXECUTOR: lease={manifest['executor']['lease_id']}; mode=delegated; fresh=yes",  # type: ignore[index]
+                    "GAPS: none",
+                    "DIRTY_REMAINDER: none",
+                    "DEFECT_CANDIDATE: none",
+                    "NEXT: none",
+                ]
+            ) + "\n"
+            args = MODULE.argparse.Namespace(
+                manifest=str(manifest_path),
+                input="-",
+                remote="origin",
+                current_scope_fingerprint=manifest["scope_fingerprint"],
+            )
+            with mock.patch.object(sys, "stdin", io.StringIO(receipt)), io.StringIO() as output, redirect_stdout(output):
+                code = MODULE.command_receipt_verify(args)
+                result = json.loads(output.getvalue())
+        self.assertEqual((code, result["status"], result["verified"]), (0, "ready", True))
+        self.assertEqual(result["head_sha"], head)
+
+    def test_receipt_verifier_rejects_duplicate_authoritative_header(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="shipctl-receipt-") as directory:
+            root = Path(directory)
+            _, _, manifest = self.manifest_fixture(root)
+            manifest_path = root / "manifest.json"
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            args = MODULE.argparse.Namespace(
+                manifest=str(manifest_path),
+                input="-",
+                remote="origin",
+                current_scope_fingerprint=manifest["scope_fingerprint"],
+            )
+            with mock.patch.object(sys, "stdin", io.StringIO("STATUS: failed\nSTATUS: ready\n")), io.StringIO() as output, redirect_stdout(output):
+                code = MODULE.command_receipt_verify(args)
+                result = json.loads(output.getvalue())
+        self.assertEqual((code, result["status"], result["verified"]), (2, "invalid", False))
+        self.assertIn("invalid:receipt-duplicate:STATUS", result["errors"])
 
 
 class InvocationTest(unittest.TestCase):
@@ -341,6 +502,121 @@ class InvocationTest(unittest.TestCase):
         self.assertEqual((zero_code, bad_code), (2, 2))
         self.assertIn("invalid:workers", zero["errors"])
         self.assertIn("invalid:workers", bad["errors"])
+
+
+class GoalAndMilestonePlanTest(unittest.TestCase):
+    def test_goal_card_is_bounded_and_contains_exact_contract_identity(self) -> None:
+        args = MODULE.argparse.Namespace(
+            repo="/repo/MindDiary",
+            project_name="Mind Diary",
+            project_id=str(uuid.uuid4()),
+            milestone_name="MVP",
+            milestone_id=str(uuid.uuid4()),
+            run_id=str(uuid.uuid4()),
+            run_key="a" * 32,
+            owner_id=str(uuid.uuid4()),
+            epoch=2,
+            contract_sha="b" * 40,
+        )
+        with io.StringIO() as output, redirect_stdout(output):
+            code = MODULE.command_goal_card(args)
+            result = json.loads(output.getvalue())
+        self.assertEqual((code, result["status"]), (0, "valid"))
+        self.assertLessEqual(result["characters"], MODULE.MAX_GOAL_CHARS)
+        self.assertIn(args.milestone_id, result["objective"])
+        self.assertIn(args.contract_sha, result["objective"])
+        self.assertNotIn("profile", result["objective"].lower())
+
+    def milestone(self, issues: list[dict[str, object]]) -> tuple[int, dict[str, object]]:
+        milestone_id = str(uuid.uuid4())
+        for issue in issues:
+            issue["milestone_id"] = milestone_id
+        payload = {
+            "project": {"id": str(uuid.uuid4()), "name": "Mind Diary"},
+            "milestones": [{"id": milestone_id, "name": "MVP", "current": True}],
+            "issues": issues,
+        }
+        with mock.patch.object(sys, "stdin", io.StringIO(json.dumps(payload))), io.StringIO() as output, redirect_stdout(output):
+            code = MODULE.command_milestone_plan(MODULE.argparse.Namespace(input="-"))
+            return code, json.loads(output.getvalue())
+
+    def test_milestone_plan_resolves_dependency_frontier(self) -> None:
+        code, result = self.milestone(
+            [
+                {
+                    "identifier": "AND-1",
+                    "state": "Done",
+                    "dependencies": [],
+                    "production_requirement": "not-required",
+                },
+                {
+                    "identifier": "AND-2",
+                    "state": "Todo",
+                    "dependencies": ["AND-1"],
+                    "production_requirement": "not-required",
+                },
+            ]
+        )
+        self.assertEqual((code, result["status"], result["ready"]), (0, "planned", ["AND-2"]))
+        self.assertEqual(result["production_requirement"], "not-required")
+
+    def test_milestone_plan_fails_early_on_cycle(self) -> None:
+        code, result = self.milestone(
+            [
+                {"identifier": "AND-1", "state": "Todo", "dependencies": ["AND-2"]},
+                {"identifier": "AND-2", "state": "Todo", "dependencies": ["AND-1"]},
+            ]
+        )
+        self.assertEqual((code, result["status"]), (3, "blocked"))
+        self.assertIn("dependency-cycle", result["structural_reasons"])
+
+
+class ConveyorStateMachineTest(unittest.TestCase):
+    def invoke(self, payload: object) -> tuple[int, dict[str, object]]:
+        with mock.patch.object(sys, "stdin", io.StringIO(json.dumps(payload))), io.StringIO() as output, redirect_stdout(output):
+            code = MODULE.command_conveyor_next(MODULE.argparse.Namespace(input="-"))
+            return code, json.loads(output.getvalue())
+
+    def event(self, state: str, event: str, evidence: dict[str, str]) -> dict[str, object]:
+        return {
+            "schema": 1,
+            "run_id": str(uuid.uuid4()),
+            "issue_identifier": "AND-56",
+            "generation": 1,
+            "state": state,
+            "event": event,
+            "event_id": str(uuid.uuid4()),
+            "evidence": evidence,
+        }
+
+    def test_happy_path_transition_is_deterministic(self) -> None:
+        payload = self.event(
+            "running",
+            "receipt-verified",
+            {
+                "receipt_digest": "a" * 64,
+                "head_sha": "b" * 40,
+                "checks_digest": "c" * 64,
+            },
+        )
+        code_a, first = self.invoke(payload)
+        code_b, second = self.invoke(payload)
+        self.assertEqual((code_a, code_b), (0, 0))
+        self.assertEqual(first, second)
+        self.assertEqual(first["state_after"], "feature_ready")
+
+    def test_wrong_event_and_incomplete_evidence_fail_closed(self) -> None:
+        code, result = self.invoke(
+            self.event("running", "gate-passed", {"head_sha": "b" * 40})
+        )
+        self.assertEqual((code, result["status"]), (2, "invalid"))
+        self.assertIn("invalid:event-for-state", result["errors"])
+        self.assertIn("missing:evidence.receipt_digest", result["errors"])
+
+    def test_terminal_state_cannot_advance(self) -> None:
+        code, result = self.invoke(self.event("terminal", "dispatch", {}))
+        self.assertEqual((code, result["status"]), (2, "invalid"))
+        self.assertIn("invalid:state", result["errors"])
 
 
 class DeliveryContractTest(unittest.TestCase):
@@ -390,7 +666,9 @@ class LaunchAndDispatchTest(unittest.TestCase):
             "workers": "6",
             "max_workers": None,
             "runtime_slots_total": 4,
+            "runtime_source": "system-capacity",
             "safe_resource_capacity": 3,
+            "resource_source": "provisioner",
             "compatible_ready": 10,
             "unfinished": 10,
             "running": 0,
@@ -403,7 +681,9 @@ class LaunchAndDispatchTest(unittest.TestCase):
 
     def dispatch(self, payload: object) -> tuple[int, dict[str, object]]:
         with mock.patch.object(sys, "stdin", io.StringIO(json.dumps(payload))), io.StringIO() as output, redirect_stdout(output):
-            code = MODULE.command_dispatch_check(mock.Mock(input="-"))
+            code = MODULE.command_dispatch_check(
+                MODULE.argparse.Namespace(input="-", remote="origin")
+            )
             return code, json.loads(output.getvalue())
 
     def entry(self, issue: str, path: str, lease: str | None = None) -> dict[str, object]:
@@ -469,17 +749,28 @@ class LaunchAndDispatchTest(unittest.TestCase):
         self.assertEqual((code, result["status"]), (0, "ok"))
         self.assertNotIn("no-actionable-frontier", result["reasons"])
 
-    def test_dispatch_serializes_ownership_overlap_and_rejects_reuse(self) -> None:
+    def test_dispatch_rejects_skeletal_manifests_before_overlap_analysis(self) -> None:
         active = self.entry("AND-86", "packages/composition-root")
         candidate = self.entry("AND-88", "packages/composition-root/src/index.ts")
         serial_code, serial = self.dispatch({"candidate": candidate, "active": [active], "executor_history": []})
         lease = candidate["executor"]["lease_id"]  # type: ignore[index]
         reuse_code, reuse = self.dispatch({"candidate": candidate, "active": [], "executor_history": [lease]})
-        self.assertEqual((serial_code, serial["status"]), (4, "serialized"))
+        self.assertEqual((serial_code, serial["status"]), (2, "invalid"))
         self.assertEqual((reuse_code, reuse["status"]), (2, "invalid"))
+        self.assertTrue(any(error.startswith("candidate:missing:") for error in serial["errors"]))
         self.assertIn("invalid:executor-reuse", reuse["errors"])
 
-    def test_dispatch_accepts_disjoint_fresh_issue(self) -> None:
+    def test_path_overlap_is_segment_aware(self) -> None:
+        self.assertTrue(
+            MODULE._paths_overlap(
+                "packages/composition-root", "packages/composition-root/src/index.ts"
+            )
+        )
+        self.assertFalse(
+            MODULE._paths_overlap("packages/adapter-mcp", "packages/composition-root")
+        )
+
+    def test_dispatch_never_accepts_a_disjoint_but_unbound_entry(self) -> None:
         code, result = self.dispatch(
             {
                 "candidate": self.entry("AND-88", "packages/adapter-mcp"),
@@ -487,7 +778,7 @@ class LaunchAndDispatchTest(unittest.TestCase):
                 "executor_history": [],
             }
         )
-        self.assertEqual((code, result["status"], result["dispatch_allowed"]), (0, "compatible", True))
+        self.assertEqual((code, result["status"], result["dispatch_allowed"]), (2, "invalid", False))
 
 
 class MetadataCommitTest(GitMixin, unittest.TestCase):
@@ -506,6 +797,138 @@ class MetadataCommitTest(GitMixin, unittest.TestCase):
         self.assertEqual((code, result["status"]), (0, "created"))
         self.assertEqual(result["tree_mode"], "empty-workflow-free")
         self.assertEqual((commit_tree, commit_parent), (empty_tree, parent))
+
+    def test_metadata_helper_rejects_duplicate_scalar_headers(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="shipctl-metadata-") as directory:
+            repo, _ = self.fixture(Path(directory))
+            parent = self.git(repo, "rev-parse", "HEAD")
+            message = "coordinator\n\nSTATE: running\nSTATE: complete\n"
+            args = MODULE.argparse.Namespace(
+                repo=str(repo), parent=parent, kind="coordinator", input="-"
+            )
+            with mock.patch.object(sys, "stdin", io.StringIO(message)), io.StringIO() as output, redirect_stdout(output):
+                code = MODULE.command_metadata_commit(args)
+                result = json.loads(output.getvalue())
+        self.assertEqual((code, result["status"]), (2, "invalid"))
+        self.assertEqual(
+            result["errors"], ["invalid:duplicate-authoritative-header:STATE"]
+        )
+
+
+class ProvisionAndCleanupTest(GitMixin, unittest.TestCase):
+    def terminal_coordinator(self, repo: Path) -> str:
+        parent = self.git(repo, "rev-parse", "HEAD")
+        message = (
+            "terminal coordinator\n\n"
+            "SCHEMA: 1\n"
+            "KIND: COORDINATOR_CLAIM\n"
+            "STATE: complete\n"
+            "OWNER_STATE: complete\n"
+            "ACTION_STATUS: reconciled\n"
+            "PENDING_ACTIONS: none\n"
+            f"CLAIM_INDEX: active=none;entries=0;digest={'1' * 64}\n"
+            f"EXECUTION_INDEX: running_count=0;entries=none;digest={'2' * 64}\n"
+            "WORKERS: active_issue_lanes=none\n"
+        )
+        coordinator = self.metadata_commit(repo, message, parent)
+        self.git(
+            repo,
+            "push",
+            "origin",
+            f"{coordinator}:{MODULE.CANONICAL_COORDINATOR_REF}",
+        )
+        return coordinator
+
+    def test_provision_prepares_and_adopts_exact_task_owned_environment(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="shipctl-provision-") as directory:
+            root = Path(directory)
+            repo, _ = self.fixture(root)
+            branch = "codex/and-56-provision/r" + "a" * 32 + "-e1-c1"
+            self.git(repo, "branch", branch)
+            worktree = root / "worker"
+            self.git(repo, "worktree", "add", str(worktree), branch)
+            args = MODULE.argparse.Namespace(
+                repo=str(repo),
+                worktree=str(worktree),
+                package_manager="npm",
+                install=False,
+                timeout_seconds=900,
+            )
+            with io.StringIO() as output, redirect_stdout(output):
+                prepared_code = MODULE.command_provision_worktree(args)
+                prepared = json.loads(output.getvalue())
+            dependency_path = Path(prepared["dependency_path"])
+            dependency_path.mkdir()
+            receipt = {
+                "status": "installed",
+                "environment_id": prepared["environment_id"],
+                "lockfile_digest": prepared["lockfile_digest"],
+                "dependency_path": str(dependency_path),
+            }
+            (worktree / ".codex-task/provision.json").write_text(
+                json.dumps(receipt), encoding="utf-8"
+            )
+            with io.StringIO() as output, redirect_stdout(output):
+                adopted_code = MODULE.command_provision_worktree(args)
+                adopted = json.loads(output.getvalue())
+        self.assertEqual((prepared_code, prepared["status"]), (4, "prepared"))
+        self.assertEqual((adopted_code, adopted["status"]), (0, "adopted"))
+        self.assertEqual(adopted["environment_id"], prepared["environment_id"])
+
+    def test_cleanup_requires_fresh_digest_and_removes_only_clean_merged_worktree(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="shipctl-cleanup-") as directory:
+            root = Path(directory)
+            repo, _ = self.fixture(root)
+            branch = "codex/and-56-clean/r" + "a" * 32 + "-e1-c1"
+            self.git(repo, "branch", branch)
+            worktree = root / "worker"
+            self.git(repo, "worktree", "add", str(worktree), branch)
+            unbound_branch = "codex/scratch"
+            self.git(repo, "branch", unbound_branch)
+            unbound_worktree = root / "unbound-worker"
+            self.git(repo, "worktree", "add", str(unbound_worktree), unbound_branch)
+            unbound_head = self.git(repo, "rev-parse", "HEAD")
+            plan_args = MODULE.argparse.Namespace(
+                repo=str(repo), remote="origin", default="main"
+            )
+            with io.StringIO() as output, redirect_stdout(output):
+                blocked_code = MODULE.command_cleanup_plan(plan_args)
+                blocked = json.loads(output.getvalue())
+            coordinator = self.terminal_coordinator(repo)
+            with io.StringIO() as output, redirect_stdout(output):
+                plan_code = MODULE.command_cleanup_plan(plan_args)
+                plan = json.loads(output.getvalue())
+            stale = dict(plan)
+            stale["plan_digest"] = "f" * 64
+            apply_args = MODULE.argparse.Namespace(
+                repo=str(repo), remote="origin", default="main", input="-"
+            )
+            with mock.patch.object(sys, "stdin", io.StringIO(json.dumps(stale))), io.StringIO() as output, redirect_stdout(output):
+                stale_code = MODULE.command_cleanup_apply(apply_args)
+                stale_result = json.loads(output.getvalue())
+            with mock.patch.object(sys, "stdin", io.StringIO(json.dumps(plan))), io.StringIO() as output, redirect_stdout(output):
+                apply_code = MODULE.command_cleanup_apply(apply_args)
+                applied = json.loads(output.getvalue())
+            unbound_path = str(unbound_worktree.resolve())
+            unbound_retained_after_apply = unbound_worktree.exists()
+        self.assertEqual(
+            (blocked_code, blocked["reason"]), (3, "terminal-coordinator-required")
+        )
+        self.assertEqual((plan_code, plan["status"]), (0, "planned"))
+        self.assertEqual(plan["coordinator_sha"], coordinator)
+        self.assertIn(
+            {
+                "path": unbound_path,
+                "branch": unbound_branch,
+                "head": unbound_head,
+                "reason": "unbound-codex-branch",
+            },
+            plan["retained"],
+        )
+        self.assertEqual((stale_code, stale_result["reason"]), (3, "cleanup-plan-stale"))
+        self.assertEqual((apply_code, applied["status"]), (0, "cleaned"))
+        self.assertIn(str(worktree.resolve()), applied["removed"])
+        self.assertTrue(unbound_retained_after_apply)
 
 
 class PreflightTest(GitMixin, unittest.TestCase):
@@ -755,6 +1178,54 @@ class PreflightTest(GitMixin, unittest.TestCase):
         self.assertIn("canonical-state-needs-input", result["reasons"])
         self.assertIn("canonical-owner-handoff-ready", result["reasons"])
         self.assertIn("references/external-main.md", result["required_references"])
+
+    def test_recover_stale_owner_requires_stop_proof_and_advances_epoch(self) -> None:
+        thread_id = "019fdcce-1fee-71d0-8d5d-6566cdf2d94b"
+        with tempfile.TemporaryDirectory(prefix="shipctl-stale-owner-") as directory:
+            repo, _ = self.fixture(Path(directory))
+            head = self.git(repo, "rev-parse", "HEAD")
+            parent = self.push_coordinator(
+                repo,
+                MODULE.CANONICAL_COORDINATOR_REF,
+                self.coordinator_message(
+                    repo,
+                    state="validating",
+                    proof="a" * 64,
+                    extra=(
+                        f"OWNER_ID: {uuid.uuid4()}\n"
+                        "OWNER_PROOF_KIND: runtime-task-id\n"
+                        f"RUN_ID: {uuid.uuid4()}\n"
+                        f"RUN_KEY: {'b' * 32}\n"
+                        f"PROJECT_ID: {uuid.uuid4()}\n"
+                        f"MILESTONE_ID: {uuid.uuid4()}\n"
+                        "EPOCH: 4\n"
+                        f"CONTRACT_SOURCE_SHA: {head}\n"
+                        "EXECUTION_INDEX: running_count=0;entries=none\n"
+                        "WORKERS: active_issue_lanes=none\n"
+                        "PENDING_ACTIONS: none\n"
+                    ),
+                ),
+            )
+            args = MODULE.argparse.Namespace(
+                repo=str(repo),
+                remote="origin",
+                default="main",
+                proof_kind="task-terminal",
+                proof_digest="f" * 64,
+            )
+            with mock.patch.dict(MODULE.os.environ, {"CODEX_THREAD_ID": thread_id}), io.StringIO() as output, redirect_stdout(output):
+                code = MODULE.command_recover_stale_owner(args)
+                result = json.loads(output.getvalue())
+            observed = self.git(
+                repo, "ls-remote", "origin", MODULE.CANONICAL_COORDINATOR_REF
+            ).split()[0]
+            message = self.git(repo, "show", "-s", "--format=%B", observed)
+        self.assertEqual((code, result["status"], result["epoch"]), (0, "taken", 5))
+        self.assertNotEqual(observed, parent)
+        self.assertIn(
+            "STALE_OWNER_PROOF: kind=task-terminal;digest=" + "f" * 64,
+            message,
+        )
 
     def test_reconciled_quiescent_handoff_routes_to_automatic_takeover(self) -> None:
         with tempfile.TemporaryDirectory(prefix="shipctl-") as directory:

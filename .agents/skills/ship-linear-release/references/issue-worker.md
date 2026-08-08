@@ -8,10 +8,18 @@ worktree. Ты не мержишь default branch, не
 coordinator-у только `FEATURE_RECEIPT` и при необходимости
 `DEFECT_CANDIDATE`. Не создавай subagents.
 
+## Содержание
+
+- [Подтвердить входные данные](#подтвердить-входные-данные)
+- [Выполнить issue](#выполнить-issue)
+- [Commit и ready результат](#commit-и-ready-результат)
+- [Дефекты во время работы](#дефекты-во-время-работы)
+- [Вернуть bounded receipt](#вернуть-bounded-receipt)
+
 Default branch, Linear mutations, deployments, tags и milestone closure запрещены даже
 если предыдущая версия flow или старый receipt делали иначе. Если manifest
 пытается выдать такую authority, ничего внешнего не меняй и верни
-`STATUS: needs-input` с конфликтом контракта.
+`STATUS: needs-coordinator` с конфликтом контракта.
 
 Не читай и не меняй primary checkout. Сдвиг local/remote default сам по себе не
 перебазирует и не отменяет pinned issue branch: продолжай до bounded receipt,
@@ -29,10 +37,10 @@ Manifest обязан содержать `run_id`, random full `run_key`, `owner
 claim generation/token, exact feature ref и guard ref/tip. Это fencing identity,
 не credential. Если они отсутствуют, не совпадают с work claim либо branch не
 содержит уникальный run-key/epoch/claim suffix, ничего не меняй и верни
-`needs-input`. Late result старого epoch/generation не имеет authority.
+`needs-coordinator`. Late result старого epoch/generation не имеет authority.
 Manifest также содержит fresh `executor.lease_id`, `mode`, `agent_type` и
 `fork_turns=none`. Если этот runtime agent уже исполнял другую issue/lease,
-ничего не меняй и верни `needs-input`: worker нельзя переиспользовать.
+ничего не меняй и верни `needs-coordinator`: worker нельзя переиспользовать.
 `issue_id` может быть Linear UUID либо exact `issue_identifier`, когда
 установленный connector возвращает identifier в поле `id`; во втором случае
 они обязаны совпадать. Никогда не принимай выдуманный UUID.
@@ -59,9 +67,19 @@ Manifest также содержит fresh `executor.lease_id`, `mode`, `agent_t
     "ports": [],
     "env": {}
   },
+  "dependencies": {
+    "mode": "isolated|content-addressed",
+    "path": "<absolute dependency tree>",
+    "lockfile_digest": "<sha256 package-lock.json>",
+    "cache_key": "none|<sha256>",
+    "read_only": false,
+    "provenance": "<verified provision receipt>"
+  },
   "validation": {
     "check_class": "targeted-feature",
-    "targeted_checks": ["<exact command/check id>"],
+    "targeted_checks": [
+      {"id": "<stable-id>", "argv": ["node", "--test", "<exact-file>"]}
+    ],
     "full_gate": "deferred-to-cutoff"
   }
 }
@@ -71,6 +89,10 @@ Manifest также содержит fresh `executor.lease_id`, `mode`, `agent_t
 task-scoped values; `targeted_checks` — непустой список. Missing/invalid
 isolation или validation field запрещает исполнение, а не разрешает worker-у
 подобрать значение самостоятельно.
+Для `dependencies.mode=isolated` требуется `read_only=false`, task-owned
+`<worktree>/node_modules` и exact `.codex-task/provision.json`; для
+`content-addressed` — `read_only=true`, immutable cache key и physically
+read-only path вне worktree.
 
 ## Подтвердить входные данные
 
@@ -87,6 +109,9 @@ isolation или validation field запрещает исполнение, а н
    прочитай весь mandatory список из `AGENTS.md`; не угадывай новый surface.
    `references/defect-triage.md` читай только при фактическом дефекте. Не
    повторяй чтение документов, уже прочитанных в текущем worker turn.
+   До source edit проверь manifest командой `shipctl.py manifest --phase active
+   --input <manifest.json>`. Любая ошибка возвращается coordinator-у; worker не
+   чинит coordinator SHA, refs, provision receipt или executor lease сам.
 2. Прочитай live Linear issue с acceptance criteria, attachments и последними
    comments. Подтверди, что `projectMilestone.id` всё ещё равен pinned release
    ID. Если issue удалена из milestone, стала `Canceled`/`Duplicate` либо уже
@@ -103,7 +128,7 @@ isolation или validation field запрещает исполнение, а н
    предшественника в stacked lane, но обязан быть rooted
    в root SHA. Если worktree не изолирован, ancestry не сходится, база
    неожиданно изменилась или ownership конфликтует с чужими правками, не
-   исправляй это разрушительно: верни `STATUS: needs-input`.
+   исправляй это разрушительно: верни `STATUS: needs-coordinator`.
 4. Подтверди изоляцию worktree и exact manifest keys: отдельный checkout/branch;
    absolute task-owned `mutable_build_dir`, `tmp_dir`, `runtime_dir`; declared
    `cache_mode` и `cache_dir`; уникальные `ports`; explicit task-scoped `env`.
@@ -125,7 +150,8 @@ isolation или validation field запрещает исполнение, а н
 1. Реализуй последний live scope, сохраняя детерминизм, границы domain и
    presentation, продуктовые ограничения и ownership paths. Если новый scope
    отменяет сделанное, конфликтует с ownership или требует нового
-   архитектурного решения, верни `needs-input`.
+   архитектурного решения, верни `needs-coordinator`; coordinator решит,
+   относится ли это к исходной issue, новой Bug или реальному user decision.
 2. Добавь соразмерные regression-тесты. Для механики используй seeded
    unit/property scenarios; для UI проверь затронутый flow локально в реальном
    браузере, если она затрагивает runtime/UI.
@@ -134,7 +160,7 @@ isolation или validation field запрещает исполнение, а н
    diff, comment history или длинные логи. Для UI flow предпочитай один
    детерминированный script нескольким мелким interactive steps.
    Не запускай scout/subagent: если ownership из manifest недостаточен, верни
-   `STATUS: needs-input` и `NEXT: SCOPE_REFINEMENT: <exact paths/reason>`.
+   `STATUS: needs-coordinator` и `NEXT: SCOPE_REFINEMENT: <exact paths/reason>`.
 4. Feature gate на точном будущем дереве имеет только
    `CHECK_CLASS=targeted-feature`:
    - узкие тесты затронутой области;
@@ -169,7 +195,7 @@ isolation или validation field запрещает исполнение, а н
    `updatedAt` не требует adaptation; при изменении fingerprint перечитай issue
    и примени правило адаптации выше.
 2. Сопоставь actual changed/renamed/deleted/generated paths с
-   `OWNERSHIP_PATHS`; diff вне разрешённого scope требует `needs-input`, а не
+   `OWNERSHIP_PATHS`; diff вне разрешённого scope требует `needs-coordinator`, а не
    молчаливого захвата. Stage только issue-scoped файлы. Сделай минимальное число осмысленных
    commits с Linear identifier; release-defect fix добавляй новым commit, не
    переписывая уже опубликованный SHA. Перед `online` push fetch-ни repo-global
@@ -207,14 +233,14 @@ isolation или validation field запрещает исполнение, а н
 
 Если после сгенерированного fix возник дефект второго поколения или проблема
 выглядит системной, сработал recursion guard: остановись и верни
-`STATUS: needs-input`.
+`STATUS: needs-coordinator`.
 
 ## Вернуть bounded receipt
 
 Верни coordinator-у только этот формат, суммарно не более 2000 символов:
 
 ```text
-STATUS: ready | failed | needs-input
+STATUS: ready | failed | needs-coordinator | needs-input
 RUN_ID: <id>
 RUN_KEY: <random >=128-bit hex>
 OWNER: id=<owner_id>; epoch=<n>
@@ -230,7 +256,7 @@ LINEAR_UPDATED_AT: start=<timestamp>; final=<timestamp>
 RESUMED_FROM: none | branch | commit | receipt
 ADOPTED_FROM: <owner/epoch/generation/ref@sha or none>
 ORIGIN_REF: <branch=sha or none>
-GUARD: <origin|local-only>:<ref=ack-sha or none>
+GUARD: origin:<ref=ack-sha or none>
 REF_SCOPE: <origin | local-only>
 SMOKE: <коротко что локально проверено>
 CHECK_CLASS: targeted-feature
@@ -244,4 +270,8 @@ NEXT: <none или один конкретный вопрос/блокер>
 ```
 
 Не прикладывай diff, полный tool log или длинный stack trace. Если issue не
-доведена до ready, не начинай другую issue.
+доведена до ready, не начинай другую issue. Coordinator обязан перед ingest
+пропустить receipt через `shipctl.py receipt-verify`; model-level визуальная
+проверка не заменяет exact ref/scope/diff verification. `needs-input` оставляй
+только для уже доказанного запроса к пользователю; обычные scope, environment,
+integration и defect вопросы всегда `needs-coordinator`.

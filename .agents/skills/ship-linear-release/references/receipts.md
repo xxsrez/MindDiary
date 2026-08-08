@@ -39,7 +39,7 @@ ID; не создавай второй основной comment. Только se
 coordinator epoch, пишет comments; проигравший initial CAS не пишет вообще.
 При новой generation обнови поля `GENERATION` и `SUPERSEDES`; отдельный дефект
 сохраняй своим `DEFECT_CANDIDATE`. Если connector не позволяет безопасный
-update, верни `needs-input`, а не размножай receipts.
+update, верни `needs-coordinator`, а не размножай receipts.
 
 `RELEASE_RUN` и `BATCH_RELEASE_RECEIPT` храни комментариями exact milestone;
 `WORK_CLAIM`, `FEATURE_RECEIPT` и issue-specific `DEFECT_CANDIDATE` —
@@ -51,6 +51,15 @@ exact-marker lookup по action selector: один match усыновляет, �
 разрешает новый create action, ambiguity fail-closed. Полная процедура — в
 [crash-recovery.md](crash-recovery.md).
 Remote ref и external exact IDs авторитетнее comment при расхождении.
+
+Authoritative metadata commit ограничен 49,152 bytes и не принимает NUL.
+Scalar header встречается ровно один раз; duplicate `OWNER_ID`, `RUN_ID`,
+`STATE`, action/lifecycle/index или другой authoritative header делает commit
+invalid. Повторяемы только явно индексированные `CLAIM_MAP` и rebuildable
+`COMMENT_MAP`. При приближении к limit coordinator сначала compacts terminal
+history до count+digest и проверяемых external refs; truncation active claim,
+pending action, hold/pause или gate запрещена. Проверяй форму через
+`shipctl.py metadata-commit`, не прямым `commit-tree`.
 
 Normal path допускает один create и только содержательные state-transition
 updates каждого key. Не обновляй receipt для poll, начала shell command,
@@ -156,7 +165,7 @@ ACTION: seq=<n>; id=<uuid>; kind=<bounded>; target=<exact>;
 PROJECTION_BATCH: none | id=<uuid>; items=<n>; intent_digest=<hash>;
                   results=<item-id:applied|absent|failed|ambiguous>; status=<intent|reconciled>
 COMMENT_INDEX: release_run=<comment id|none>; entries=<n>; digest=<hash>
-CLAIM_INDEX: live=<issue:g@guard-scope:guard@feature-scope:feature@worktree-id|none>;
+CLAIM_INDEX: active=<issue:g@guard-scope:guard@feature-scope:feature@worktree-id|none>;
              entries=<n>; digest=<hash>
 EXECUTION_INDEX: running_count=<n>;
                  entries=<issue:g@executor=running|coordinator-paused|feature_ready|failed|needs-input|stopped>;
@@ -220,6 +229,9 @@ Remote coordinator ref обеспечивает ownership; milestone comment т�
 `OWNER.state=complete` ставь terminal CAS commit-ом только после отсутствия
 in-flight action/worker/cutoff и полного done evidence. Ref не удаляй: он нужен
 как expected-old ledger следующему run.
+После terminal CAS повторно проверь `shipctl.py status`, cleanup clean merged
+worktrees и лишь затем заверши Codex Goal. Goal status не может служить
+доказательством terminal coordinator authority.
 
 `OWNER.state=aborted` не является release completion. Он допустим только после
 initial claim, когда не создан goal, Linear/worktree/worker/cutoff и не было
@@ -339,8 +351,11 @@ ISOLATION: mutable_build_dir=<absolute task-owned>; tmp_dir=<absolute task-owned
            cache_mode=<content-addressed|isolated>; cache_dir=<absolute>;
            cache_key=<sha256|none>;
            ports=<unique integers|none>; env=<non-secret keys+digest|none>
+DEPENDENCIES: mode=<isolated|content-addressed>; path=<absolute>;
+              lockfile_digest=<sha256>; cache_key=<sha256|none>;
+              read_only=<yes|no>; provenance=<verified receipt>
 VALIDATION_CONTRACT: check_class=targeted-feature;
-                     targeted_checks=<exact commands/check ids>;
+                     targeted_checks=<stable id + non-shell argv vectors>;
                      full_gate=deferred-to-cutoff
 CHECKPOINT: state=<none|local-commit|origin-checkpoint|ready>;
             head=<sha|none>; ref=<exact|none>; at=<utc|none>
@@ -409,7 +424,7 @@ commit повторяет exact feature head/checks digest и evidence key. CAS 
 Key: `<run_id>:<issue_id>:<claim_generation>`.
 
 ```text
-STATUS: ready | failed | needs-input | superseded | retired
+STATUS: ready | failed | needs-coordinator | needs-input | superseded | retired
 GENERATION: <n>
 RUN_ID: <id>; RUN_KEY: <random >=128-bit hex>; OWNER: id=<uuid>; epoch=<n>
 CLAIM: generation=<n>; token=<opaque non-secret id>
@@ -502,10 +517,13 @@ CHECK_CLASS: full-cutoff
 PLAN: digest=<hash>; steps=<ordered non-shell argv vectors>;
       coverage=<bounded>; duplicate_subcommands=<none>
 PROCESS: identity=<pid/task|none>; started_at=<utc|none>; terminal_at=<utc|none>
+TIMEOUTS: step_seconds=<n>; total_seconds=<n>
 RESULT_ARTIFACT: path=<task-owned exact|none>; digest=<hash|none>;
                  atomic=<yes|none>
 RESULT: exit=<int|none>; outcome=<pass|fail|interrupted|none>;
-        failing_step=<bounded|none>; log_digest=<hash|none>
+        failing_step=<bounded|none>;
+        failure_kind=<command-failed|spawn-failed|candidate-drift|step-timeout|total-timeout|none>;
+        log_digest=<hash|none>
 ADOPTED_AFTER: <none|compaction|lost-handle|recovery>
 UPDATED_AT: <utc>
 ```

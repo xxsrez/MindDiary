@@ -27,7 +27,8 @@ Skill не имеет build/release profile. Не нужно заранее со
 1. Read-only preflight проверит remote/default, tracked skill contract, текущий
    Goal, dirty checkout и существующий repo-global run.
 2. Invocation будет нормализован в `workers=1`, exact N или `auto`.
-3. Один compact Linear snapshot проверит milestone graph и ready frontier.
+3. Один compact Linear snapshot будет машинно проверен `milestone-plan` на
+   exact current milestone, graph и ready frontier.
 4. Fresh run попытается CAS-ом получить единственный coordinator claim.
 5. После победы будет создан один Goal и task-owned worktrees.
 6. Workers начнут ready issues; готовые features будут сразу поступать в
@@ -54,7 +55,9 @@ surface, определяющую выполнение. Тогда нужно я
 наборов mutable resources и при N>1 ещё один slot coordinator-а. При N=1 root
 совмещает обе роли. Не нужно заранее устанавливать зависимости во все
 worktrees: coordinator готовит bounded task-owned environment по tracked
-lockfile. Feature worker не выполняет самовольный `npm ci` или общий build.
+lockfile через `provision-worktree`. Feature worker не выполняет самовольный
+`npm ci`, не получает symlink на mutable dependency tree другого worktree и не
+запускает общий build.
 
 ## Одновременный запуск из другой сессии
 
@@ -89,6 +92,10 @@ checkout=clean; external-gates=pending
 После этого полезны только milestone-level события: issue dispatched/ready,
 cutoff sealed/passed/promoted, production gate, pause/recovery или настоящий
 blocker. Внутренний streaming telemetry не должен засорять ответ.
+Текущий state можно перепроверить `shipctl.py status`; terminal cleanup сначала
+строится `cleanup-plan`, затем применяется только при неизменном digest. Helper
+требует coherent terminal coordinator, zero occupancy, отсутствие live claims
+и удаляет только clean merged claim-bound task worktrees.
 
 ## Если тест или интеграция упали
 
@@ -96,8 +103,8 @@ Skill сначала локализует источник:
 
 - проблема исходной issue возвращается тому же worker через новую generation;
 - независимый сложный дефект становится дедуплицированной связанной Linear Bug;
-- маленькая integration-only правка выполняется coordinator-ом до seal нового
-  cutoff и проходит тот же full gate;
+- маленькая integration-only правка выполняется coordinator-inline в отдельном
+  worktree/branch/guard до seal нового cutoff и проходит тот же full gate;
 - systemic failure замораживает promotion и создаёт stabilization path, но
   независимые безопасные workers могут продолжить работу.
 
@@ -150,3 +157,5 @@ smoke; если не требовал — receipt явно говорит об �
 Если результат blocked, это должен быть короткий человеческий отчёт с
 минимальным необходимым действием, а не список внутренних token, guard или
 receipt идентификаторов.
+`update_goal(complete)` выполняется последним: после terminal owner/guards,
+compact status и cleanup доказанно terminal clean worktrees.

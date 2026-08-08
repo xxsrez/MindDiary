@@ -67,6 +67,10 @@ dirty файлов; stdin закрыт, interactive Git prompt запрещён,
 различают timeout/spawn/Git surface без утечки raw stderr. Untracked directory
 считай prefix всей subtree при overlap check; helper не разворачивает её ради
 экономии I/O.
+Helper читает checkout HEAD, local default ref и porcelain status дважды в
+одной bounded операции. `changed_during_probe=true` означает torn snapshot и
+всегда даёт `status=partial` и запрещает shared mutation; отдельный model-level
+«confirming read» не может превратить его в stable evidence.
 
 Поля helper отображаются в receipt так: `remote_sha -> observed_sha`,
 `local_default_ref -> local_default`, `fingerprint -> baseline/current`, а
@@ -157,9 +161,10 @@ branch lanes могут продолжаться только при доказ�
 | Dirty invoked contract/instructions до claim | Никакого claim/action intent. | Не dispatch-и; сообщи, что нужен tracked contract. |
 
 `relation=behind` не отменяет run-level `EXPECTED_DEFAULT_SHA`: если remote
-ушёл от него, сначала выполни drift/rebuild ниже. Dirty control surface до
-claim разрешает лишь provably disjoint branch work; если такой issue нет,
-остановись без claim/mutations.
+ушёл от него, сначала выполни drift/rebuild ниже. Dirty control/instruction
+surface до claim — полный read-only hard stop: нельзя создавать worktree,
+branch, claim или даже provably disjoint feature lane, пока contract не станет
+tracked и clean. Dirty non-control paths обрабатываются по матрице.
 
 Локальная Git/index lock не является GitHub outage и не разрешает waiver.
 Сделай один bounded retry на следующей natural boundary; затем сохрани evidence

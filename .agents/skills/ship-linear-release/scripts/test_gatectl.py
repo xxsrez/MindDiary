@@ -79,6 +79,8 @@ class GatectlTest(unittest.TestCase):
             "environment_id": "local-node22",
             "cwd": str(working_directory),
             "plan_json": json.dumps(normalized_plan),
+            "step_timeout_seconds": "1800",
+            "total_timeout_seconds": "3600",
         }
         values.update(overrides)
         return [
@@ -101,6 +103,10 @@ class GatectlTest(unittest.TestCase):
             values["cwd"],
             "--plan-json",
             values["plan_json"],
+            "--step-timeout-seconds",
+            values["step_timeout_seconds"],
+            "--total-timeout-seconds",
+            values["total_timeout_seconds"],
         ]
 
     def invoke(self, args: list[str], timeout: float = 10) -> tuple[int, dict[str, Any], str]:
@@ -170,6 +176,44 @@ class GatectlTest(unittest.TestCase):
             self.assertIsNone(result["failed_step"])
             manifest = json.loads((state.resolve() / KEY / "request.json").read_text())
             self.assertEqual(manifest["request"]["candidate_sha"], expected_head)
+
+    def test_step_timeout_is_terminal_and_kills_the_process_group(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="gatectl-") as directory:
+            root = Path(directory)
+            state, cwd = self.fixture(root)
+            code, result, _ = self.invoke(
+                self.run_args(
+                    state,
+                    cwd,
+                    [sys.executable, "-c", "import time; time.sleep(30)"],
+                    step_timeout_seconds="1",
+                    total_timeout_seconds="2",
+                ),
+                timeout=8,
+            )
+        self.assertEqual((code, result["status"], result["exit_code"]), (1, "failed", 124))
+        self.assertEqual(result["failure_kind"], "step-timeout")
+
+    def test_shell_wrappers_and_duplicate_aggregate_steps_are_rejected(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="gatectl-") as directory:
+            root = Path(directory)
+            first_state, first_cwd = self.fixture(root / "wrapper")
+            code, result, _ = self.invoke(
+                self.run_args(first_state, first_cwd, ["sh", "-c", "true"])
+            )
+            second_state, second_cwd = self.fixture(root / "aggregate")
+            aggregate_code, aggregate, _ = self.invoke(
+                self.run_args(
+                    second_state,
+                    second_cwd,
+                    [["npm", "run", "check"], ["node", "--test"]],
+                )
+            )
+        self.assertEqual((code, result["reason"], result["detail"]), (2, "invalid-plan-json", "shell-or-wrapper-command-forbidden"))
+        self.assertEqual(
+            (aggregate_code, aggregate["reason"], aggregate["detail"]),
+            (2, "invalid-plan-json", "aggregate-subcommand-duplicate"),
+        )
 
     def test_wrong_head_and_dirty_tracked_checkout_are_rejected(self) -> None:
         with tempfile.TemporaryDirectory(prefix="gatectl-") as directory:

@@ -16,6 +16,7 @@ import hashlib
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 import tempfile
@@ -41,6 +42,8 @@ REQUEST_FIELDS = {
     "state_dir",
     "cwd",
     "plan",
+    "step_timeout_seconds",
+    "total_timeout_seconds",
 }
 RESULT_FIELDS = {
     "schema",
@@ -56,6 +59,7 @@ RESULT_FIELDS = {
     "log_sha256",
     "result_sha256",
     "failed_step",
+    "failure_kind",
 }
 MANIFEST_FIELDS = {
     "schema",
@@ -71,6 +75,8 @@ MAX_ARGV_ITEMS = 256
 MAX_ARG_BYTES = 32_768
 MAX_GIT_OUTPUT_BYTES = 65_536
 GIT_TIMEOUT_SECONDS = 10
+SAFE_GATE_EXECUTABLES = {"git", "node", "npm", "python", "python3", "ruby"}
+FORBIDDEN_GATE_WRAPPERS = {"bash", "bunx", "env", "npx", "sh", "zsh"}
 
 
 class GatectlError(Exception):
@@ -276,6 +282,7 @@ def positive_integer(raw: str) -> int:
 def validate_plan(value: Any, reason: str) -> list[list[str]]:
     if not isinstance(value, list) or not value or len(value) > MAX_PLAN_STEPS:
         raise GatectlError(reason, "expected-nonempty-step-list")
+    normalized_steps: list[tuple[str, ...]] = []
     for step in value:
         if not isinstance(step, list) or not step or len(step) > MAX_ARGV_ITEMS:
             raise GatectlError(reason, "expected-nonempty-argv-list")
@@ -291,8 +298,32 @@ def validate_plan(value: Any, reason: str) -> list[list[str]]:
                 or len(encoded) > MAX_ARG_BYTES
             ):
                 raise GatectlError(reason, "invalid-argv-item")
+        executable = Path(step[0]).name.lower()
+        if executable in FORBIDDEN_GATE_WRAPPERS:
+            raise GatectlError(reason, "shell-or-wrapper-command-forbidden")
+        if executable not in SAFE_GATE_EXECUTABLES and re.fullmatch(
+            r"python3(?:\.\d+)?", executable
+        ) is None:
+            raise GatectlError(reason, "unknown-executable")
+        normalized = tuple(item.lower() for item in step)
+        if normalized in normalized_steps:
+            raise GatectlError(reason, "duplicate-step")
+        normalized_steps.append(normalized)
+        if len(normalized) >= 2 and normalized[0] == "npm" and normalized[1] in {"install", "i"}:
+            raise GatectlError(reason, "noncanonical-dependency-install")
     if len(canonical_bytes(value)) > MAX_PLAN_JSON_BYTES:
         raise GatectlError(reason, "input-too-large")
+    aggregate = any(step[:3] == ("npm", "run", "check") for step in normalized_steps)
+    if aggregate:
+        for step in normalized_steps:
+            if step[:3] == ("npm", "run", "check"):
+                continue
+            if step[:2] in {("npm", "test"), ("node", "--test")}:
+                raise GatectlError(reason, "aggregate-subcommand-duplicate")
+            if len(step) >= 3 and step[:2] == ("npm", "run") and (
+                step[2] == "build" or step[2].startswith("check:") or step[2].startswith("test:")
+            ):
+                raise GatectlError(reason, "aggregate-subcommand-duplicate")
     return value
 
 
@@ -358,6 +389,8 @@ def request_from_args(args: argparse.Namespace, paths: StatePaths) -> dict[str, 
         "state_dir": str(paths.root),
         "cwd": str(cwd),
         "plan": parse_plan(args.plan_json),
+        "step_timeout_seconds": args.step_timeout_seconds,
+        "total_timeout_seconds": args.total_timeout_seconds,
     }
 
 
@@ -378,6 +411,12 @@ def validate_stored_request(request: Any) -> dict[str, Any]:
         if not isinstance(raw, str) or not os.path.isabs(raw):
             raise GatectlError("invalid-request", f"invalid-{label}")
     validate_plan(request.get("plan"), "invalid-request")
+    step_timeout = request.get("step_timeout_seconds")
+    total_timeout = request.get("total_timeout_seconds")
+    if not isinstance(step_timeout, int) or isinstance(step_timeout, bool) or not 1 <= step_timeout <= 7200:
+        raise GatectlError("invalid-request", "invalid-step-timeout")
+    if not isinstance(total_timeout, int) or isinstance(total_timeout, bool) or not step_timeout <= total_timeout <= 43_200:
+        raise GatectlError("invalid-request", "invalid-total-timeout")
     return request
 
 
@@ -434,14 +473,25 @@ def validate_result(
     if (status == "passed") != (exit_code == 0):
         raise GatectlError("invalid-result", "status-exit-code-mismatch")
     failed_step = result.get("failed_step")
+    failure_kind = result.get("failure_kind")
     if status == "passed" and failed_step is not None:
         raise GatectlError("invalid-result", "unexpected-failed-step")
+    if status == "passed" and failure_kind is not None:
+        raise GatectlError("invalid-result", "unexpected-failure-kind")
     if status == "failed" and (
         not isinstance(failed_step, int)
         or isinstance(failed_step, bool)
         or not 1 <= failed_step <= plan_length
     ):
         raise GatectlError("invalid-result", "invalid-failed-step")
+    if status == "failed" and failure_kind not in {
+        "command-failed",
+        "spawn-failed",
+        "candidate-drift",
+        "step-timeout",
+        "total-timeout",
+    }:
+        raise GatectlError("invalid-result", "invalid-failure-kind")
     attempt = result.get("attempt")
     duration_ms = result.get("duration_ms")
     if not isinstance(attempt, int) or isinstance(attempt, bool) or attempt <= 0:
@@ -552,6 +602,36 @@ def return_for_terminal(result: dict[str, Any]) -> int:
     return 0 if result["status"] == "passed" else 1
 
 
+def terminate_process_group(process: subprocess.Popen[bytes]) -> None:
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    except PermissionError:
+        try:
+            process.terminate()
+        except (ProcessLookupError, PermissionError):
+            return
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline:
+        try:
+            os.killpg(process.pid, 0)
+        except ProcessLookupError:
+            return
+        except PermissionError:
+            break
+        time.sleep(0.05)
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        return
+    except PermissionError:
+        try:
+            process.kill()
+        except (ProcessLookupError, PermissionError):
+            pass
+
+
 def command_run(args: argparse.Namespace) -> int:
     validation_key = validate_validation_key(args.validation_key)
     paths = state_paths(args.state_dir, validation_key, create=True)
@@ -655,7 +735,9 @@ def command_run(args: argparse.Namespace) -> int:
         started_ns = time.monotonic_ns()
         exit_code = 0
         failed_step: int | None = None
+        failure_kind: str | None = None
         plan = request["plan"]
+        total_deadline = time.monotonic() + request["total_timeout_seconds"]
         with os.fdopen(log_descriptor, "wb", buffering=0) as log_stream:
             for step_number, step in enumerate(plan, start=1):
                 boundary = (
@@ -664,6 +746,22 @@ def command_run(args: argparse.Namespace) -> int:
                 )
                 log_stream.write(boundary.encode("ascii"))
                 os.fsync(log_stream.fileno())
+                remaining = total_deadline - time.monotonic()
+                if remaining <= 0:
+                    step_exit_code = 124
+                    failure_kind = "total-timeout"
+                    log_stream.write(b"gatectl: total timeout expired before step\n")
+                    candidate_verified = True
+                    boundary = (
+                        f"\ngatectl: step {step_number}/{len(plan)} end "
+                        f"exit_code={step_exit_code} candidate_verified=true\n"
+                    )
+                    log_stream.write(boundary.encode("ascii"))
+                    failed_step = step_number
+                    exit_code = step_exit_code
+                    break
+                timeout = min(float(request["step_timeout_seconds"]), remaining)
+                process: subprocess.Popen[bytes] | None = None
                 try:
                     process = subprocess.Popen(
                         step,
@@ -674,12 +772,27 @@ def command_run(args: argparse.Namespace) -> int:
                         shell=False,
                         close_fds=True,
                         pass_fds=(descriptor,),
+                        start_new_session=True,
                     )
-                    step_exit_code = process.wait()
+                    step_exit_code = process.wait(timeout=timeout)
+                    terminate_process_group(process)
+                except subprocess.TimeoutExpired:
+                    assert process is not None
+                    failure_kind = (
+                        "total-timeout" if time.monotonic() >= total_deadline else "step-timeout"
+                    )
+                    terminate_process_group(process)
+                    try:
+                        process.wait(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        pass
+                    step_exit_code = 124
+                    log_stream.write(f"gatectl: {failure_kind}\n".encode("ascii"))
                 except OSError as error:
                     step_exit_code = (
                         127 if isinstance(error, FileNotFoundError) else 126
                     )
+                    failure_kind = "spawn-failed"
                     message = (
                         "gatectl: step could not be started: "
                         f"{type(error).__name__}: {error}\n"
@@ -699,6 +812,7 @@ def command_run(args: argparse.Namespace) -> int:
                     log_stream.write(message.encode("utf-8"))
                     if step_exit_code == 0:
                         step_exit_code = 125
+                    failure_kind = "candidate-drift"
                 boundary = (
                     f"\ngatectl: step {step_number}/{len(plan)} end "
                     f"exit_code={step_exit_code} "
@@ -709,6 +823,8 @@ def command_run(args: argparse.Namespace) -> int:
                 if step_exit_code != 0:
                     exit_code = step_exit_code
                     failed_step = step_number
+                    if failure_kind is None:
+                        failure_kind = "command-failed"
                     break
 
         finished_ns = time.monotonic_ns()
@@ -727,6 +843,7 @@ def command_run(args: argparse.Namespace) -> int:
             "log_file": log_name,
             "log_sha256": log_sha,
             "failed_step": failed_step,
+            "failure_kind": failure_kind,
         }
         result["result_sha256"] = digest_json(result)
         atomic_write_json(paths.result, result)
@@ -815,6 +932,8 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--environment-id", required=True)
     run.add_argument("--cwd", required=True)
     run.add_argument("--plan-json", required=True)
+    run.add_argument("--step-timeout-seconds", type=positive_integer, default=1800)
+    run.add_argument("--total-timeout-seconds", type=positive_integer, default=3600)
     run.set_defaults(handler=command_run)
 
     status = subcommands.add_parser("status", help="verify state without executing")

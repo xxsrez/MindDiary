@@ -6,6 +6,14 @@ worker сам их не делает без manifest-инструкции. За�
 доказанно опасную lane, а не весь run, но при неизвестном blast radius выбирай
 fail closed.
 
+## Содержание
+
+- [Сначала классифицируй дефект](#сначала-классифицируй-дефект)
+- [Правила действий](#правила-действий)
+- [Применить scheduler effect](#применить-scheduler-effect)
+- [Dedupe и provenance](#dedupe-и-provenance)
+- [Ограничители](#ограничители)
+
 ## Сначала классифицируй дефект
 
 1. **`same-scope`**: дефект делает acceptance criteria текущей issue ложными или
@@ -35,7 +43,8 @@ fail closed.
    - если дефект найден до `FEATURE_RECEIPT` и относится к этой feature, worker
      может исправить его в текущей branch/worktree;
    - если дефект существует только в assembled candidate, coordinator делает
-     отдельный минимальный integration-fix commit;
+     отдельный coordinator-inline manifest, task worktree/branch/guard и
+     минимальный integration-fix commit;
    - не расширяй scope дальше минимально нужного; после code change всегда
      reseal candidate.
 3. `independent-regression`:
@@ -69,7 +78,7 @@ fail closed.
 | Класс | Issue work | Integration | Default / deploy |
 |---|---|---|---|
 | `same-scope` до promotion | Переоткрой исходную issue, новый claim generation, та же feature scope | Исключи bad ref и зависимые refs; независимые продолжай | Без freeze, пока default healthy |
-| `tiny-integration-repair` | Не создавай новую issue | Один минимальный coordinator fix, affected check, reseal | Продолжай только после нового global pass |
+| `tiny-integration-repair` | Не создавай новую issue | Один минимальный coordinator-inline fix в отдельном worktree, affected check, reseal | Продолжай только после нового global pass |
 | `independent-regression` | Создай deduplicated Bug; blocking bug отправь в приоритетный slot | Исключи culprit либо freeze только affected cutoff | Не deploy affected cutoff |
 | `systemic-or-second-generation` | Создай/переиспользуй stabilization Bug и fresh worker; независимые branches от good base продолжаются | `integration=frozen` только для affected scope | Никаких affected promotion/deploy до passing stabilization cutoff |
 | `known-bad-default` | `good-base-only` либо `stabilization-only` | Только stabilization lane | Rollback/revert/fix до healthy evidence |

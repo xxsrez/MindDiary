@@ -130,7 +130,9 @@ concurrent lane. `active_target=min(sustained_issue_capacity, compatible ready)`
 python3 .agents/skills/ship-linear-release/scripts/shipctl.py launch-check \
   --workers <N|auto> [--max-workers N] \
   --runtime-slots-total <including-root> \
+  --runtime-source <system-capacity|runtime-api> \
   --safe-resource-capacity <n> --compatible-ready <n> \
+  --resource-source <provisioner|explicit-safe-limit> \
   --unfinished <n> --running <n>
 ```
 
@@ -177,6 +179,16 @@ fast-forward default CAS и required configured production Sites deployment/tag.
    Missing implementation принятого scope классифицируй как work, а не внешний
    prerequisite. Если unfinished есть, но нет ready и running, `launch-check`
    обязан вернуть `no-actionable-frontier` с точной structural причиной.
+   Нормализуй snapshot до typed JSON и до claim проверь его машинно:
+
+   ```bash
+   python3 .agents/skills/ship-linear-release/scripts/shipctl.py milestone-plan \
+     --input <snapshot.json>
+   ```
+
+   Только `status=planned` разрешает claim. `blocked` обязан назвать cycle,
+   unknown dependency или другую structural причину; model не выбирает current
+   milestone и ready frontier повторно из prose.
 3. После snapshot и успешного `launch-check` при fresh work первое mutable
    действие — repo-global coordinator claim по
    [coordination.md](references/coordination.md). CAS loser остаётся read-only.
@@ -237,10 +249,12 @@ fast-forward default CAS и required configured production Sites deployment/tag.
    ```
 
 5. После выигранного claim создай milestone goal ровно один раз по
-   [goal-card.md](references/goal-card.md), без `token_budget`, если пользователь
-   явно не запросил положительный budget.
-6. Получи live statuses/labels команды без их создания. Если release-filter
-   пуст, фильтруй project issues по exact `projectMilestone.id`.
+   [goal-card.md](references/goal-card.md). Objective получи только helper-ом
+   `shipctl.py goal-card`, проверь `goal_allowed=true` и передай exact строку в
+   `create_goal` без `token_budget`, если пользователь явно не запросил
+   положительный budget.
+6. Получи live statuses/labels команды без их создания. Всегда фильтруй project
+   issues по exact `projectMilestone.id`; отдельного release-filter/profile нет.
 7. Сортируй ready: priority, подтверждённый Bug/regression, число
    разблокируемых, `createdAt`, board position, identifier.
 
@@ -260,8 +274,17 @@ issue + `rg`, создаёт отдельный worktree/branch от exact pinne
 JSON manifest с полями, требуемыми `shipctl manifest`. До dispatch проверь его:
 
 ```bash
+python3 .agents/skills/ship-linear-release/scripts/shipctl.py provision-worktree \
+  --repo <repo> --worktree <worker-worktree> --install
+```
+
+Только `installed|adopted` разрешает manifest. Helper выполняет exact `npm ci`
+по lockfile в task-owned `node_modules`, создаёт изолированные cache/tmp/runtime
+paths и receipt; symlink overlay между worktrees запрещён.
+
+```bash
 python3 .agents/skills/ship-linear-release/scripts/shipctl.py manifest \
-  --input <manifest.json>
+  --phase dispatch --input <manifest.json>
 ```
 
 `status=invalid` запрещает dispatch. `documents` — точный список product docs
@@ -275,7 +298,7 @@ python3 .agents/skills/ship-linear-release/scripts/shipctl.py docs \
 
 Manifest содержит как минимум run/owner/epoch, claim generation/token,
 issue/project/milestone IDs, repo/worktree/branch, feature+guard refs/tip,
-128-bit `run_key`, root/base/dependency SHAs, queue fingerprint, semantic
+exact coordinator SHA, 128-bit `run_key`, root/base/dependency SHAs, queue fingerprint, semantic
 `scope_fingerprint`, отдельный operational Linear `updatedAt`, ownership paths,
 fresh executor lease, isolated env/cache/tmp/ports и remote mode.
 Status/comment projections могут
@@ -306,9 +329,19 @@ Machine-checkable isolation/validation fragment обязателен:
     "ports": [],
     "env": {}
   },
+  "dependencies": {
+    "mode": "isolated|content-addressed",
+    "path": "<absolute dependency tree>",
+    "lockfile_digest": "<sha256>",
+    "cache_key": "none|<sha256>",
+    "read_only": false,
+    "provenance": "<installer/cache receipt>"
+  },
   "validation": {
     "check_class": "targeted-feature",
-    "targeted_checks": ["<exact command/check id>"],
+    "targeted_checks": [
+      {"id": "<stable-id>", "argv": ["node", "--test", "<exact-file>"]}
+    ],
     "full_gate": "deferred-to-cutoff"
   }
 }
@@ -328,6 +361,8 @@ python3 .agents/skills/ship-linear-release/scripts/shipctl.py dispatch-check \
   --input <dispatch.json>
 ```
 
+`dispatch.json` содержит полный candidate manifest, полные active manifests,
+`current_scope_fingerprint`, canonical `candidate_digest` и executor history.
 Только `status=compatible` разрешает spawn. `serialized` означает same-path
 lane: жди terminal/feature-ready владельца пересекающегося prefix. `invalid`
 запрещает dispatch из-за reuse executor или resource/isolation collision.
@@ -341,8 +376,18 @@ subagents и не переиспользуется для другой issue. О
 Coordinator-inline следует тому же протоколу в отдельном worktree. Worker не
 меняет default, Linear, Sites, tags или milestone state.
 
-Проверяй receipt только по exact identities, HEAD/ref/guard, semantic scope
-freshness, ownership diff и заявленным targeted checks. После durable `ready`
+Проверяй receipt только машинно по exact identities, HEAD/ref/guard, semantic
+scope freshness, ownership diff и заявленным targeted checks:
+
+```bash
+python3 .agents/skills/ship-linear-release/scripts/shipctl.py receipt-verify \
+  --manifest <manifest.json> --input <receipt.txt> \
+  --current-scope-fingerprint <fresh-semantic-digest>
+```
+
+`needs-coordinator` означает, что worker доказал defect/repair за пределами его
+ownership; coordinator классифицирует его, но worker не спрашивает пользователя
+и не расширяет scope сам. После durable `ready`
 guard соблюдай порядок: validate receipt -> перевести execution state из
 `running` в `feature_ready` и освободить slot -> refill compatible issue ->
 enqueue ingest -> batch projections/bookkeeping. Цель ready-guard -> refill —
@@ -372,6 +417,9 @@ guard при `feature_ready` остаются live до terminal integration dis
   `.github/workflows`; source/feature tree доказывается отдельными exact SHA.
   Не используй прямой `commit-tree` с source tree: stale workflow на metadata
   ref создаёт лишние Actions runs.
+- Каждый существенный issue transition сначала проверь через `shipctl.py
+  conveyor-next`; persisted ledger/projection обязаны использовать выданный
+  `transition_digest`. Неверный event order или неполное evidence fail closed.
 
 На worker/ingest запускай только targeted checks, smoke и `git diff --check`;
 full repository gate всегда принадлежит sealed cutoff. Для каждой
@@ -443,9 +491,12 @@ foreign-main/hold -> validation key -> production obligation/evidence -> gaps ->
 ```
 
 Issue переводится в completed-state только после terminal guard и полного
-acceptance evidence. Goal завершается после двух fresh согласованных Linear
-snapshot без unfinished issue/active artifacts, healthy default и полного
-ledger; затем owner ref CAS-terminalize как `complete`. `blocked` допустим
+acceptance evidence. После двух fresh согласованных Linear snapshot без
+unfinished issue/active artifacts, healthy default и полного ledger сначала
+CAS-terminalize owner ref и guards, затем проверь `shipctl.py status`, выполни
+`cleanup-plan`/`cleanup-apply` для clean merged claim-bound task worktrees;
+helper требует coherent terminal coordinator, zero occupancy и no live claims.
+Только после этого вызывай `update_goal(status=complete)`. `blocked` допустим
 только после трёх fresh последовательных goal-ходов с тем же устойчивым внешним
 блокером и без безопасной независимой работы. User pause, drain/handoff,
 running worker, pending CI/gate и recoverable CAS race не являются blocker.

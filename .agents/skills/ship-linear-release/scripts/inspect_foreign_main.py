@@ -257,6 +257,46 @@ def main() -> int:
             status_error = status_result.error
             dirty = "unknown"
 
+    # Stabilize the multi-command observation. A checkout/default/remote move
+    # during the probe must not be presented as one coherent snapshot.
+    changed_during_probe = False
+    if checkout is not None:
+        after_head_result = run(checkout, "rev-parse", "--verify", "HEAD")
+        after_head = (
+            after_head_result.stdout.decode("ascii", "replace").strip()
+            if after_head_result.returncode == 0
+            else None
+        )
+        after_status_result = run(
+            checkout,
+            "status",
+            "--porcelain=v1",
+            "-z",
+            "--untracked-files=normal",
+            "--ignored=no",
+        )
+        changed_during_probe = (
+            after_head != checkout_head
+            or after_status_result.returncode != 0
+            or after_status_result.stdout != raw_status
+        )
+    after_local_result = run(
+        repo, "rev-parse", "--verify", "--quiet", f"refs/heads/{args.default}"
+    )
+    after_local = (
+        after_local_result.stdout.decode("ascii", "replace").strip()
+        if after_local_result.returncode == 0
+        else None
+    )
+    after_remote, after_remote_status, _ = remote_sha(repo, args.remote, args.default)
+    changed_during_probe = changed_during_probe or after_local != local_ref
+    changed_during_probe = changed_during_probe or after_remote != observed_remote
+    changed_during_probe = changed_during_probe or after_remote_status != remote_status
+    if changed_during_probe:
+        status_state = "unavailable"
+        status_error = "changed-during-probe"
+        dirty = "unknown"
+
     digest = hashlib.sha256()
     for value in (
         str(checkout) if checkout is not None else "none",
@@ -284,6 +324,7 @@ def main() -> int:
         and checkout_head_status in ("observed", "not-applicable")
         and status_state in ("observed", "absent")
         and remote_status == "observed"
+        and not changed_during_probe
     )
     result = {
         "schema": 1,
@@ -316,6 +357,7 @@ def main() -> int:
         "path_count": len(paths),
         "paths": paths[: args.max_paths],
         "paths_truncated": len(paths) > args.max_paths,
+        "changed_during_probe": changed_during_probe,
         "fingerprint": digest.hexdigest(),
     }
     json.dump(result, sys.stdout, ensure_ascii=False, sort_keys=True)

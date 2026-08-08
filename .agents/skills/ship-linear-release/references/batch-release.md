@@ -33,7 +33,7 @@ policy здесь.
 - `OPEN_CUTOFF` — изменяемый integration train, куда coordinator по одной
   принимает готовые совместимые feature refs;
 - `ACTIVE_CUTOFF` — immutable prefix exact train SHA, который проходит global
-  gate, default promotion и при `release` deploy.
+  gate, default promotion и применимый по acceptance production deploy.
 
 Ровно один cutoff может быть active. Пока он проверяется или публикуется,
 worker pool продолжает работу, свободные slots немедленно заполняются, а новые
@@ -66,6 +66,8 @@ slot -> refill -> enqueue ingest -> projections/bookkeeping.
    coordinator-only mode сначала crash-safe публикует ref и reconciliate-ит
    guard. Explicit offline mode принимает только matching local guard/receipt и
    не разрешает default/Done.
+   Выполняй эту проверку только `shipctl.py receipt-verify`; `verified=false`
+   запрещает освобождать slot и ingest независимо от убедительности prose.
 2. Проверь ancestry от записанного base, exact dependency SHAs и что actual
    changed/renamed/deleted/generated paths входят в declared ownership paths.
    Receipt обязан иметь `CHECK_CLASS=targeted-feature` и
@@ -185,6 +187,7 @@ python3 .agents/skills/ship-linear-release/scripts/gatectl.py run \
   --state-dir <absolute-task-owned> --validation-key <64-hex> \
   --cutoff-id <id> --generation <n> --candidate-sha <full-sha> \
   --environment-id <bounded-id> --cwd <absolute-clean-worktree> \
+  --step-timeout-seconds <bounded> --total-timeout-seconds <bounded> \
   --plan-json '[["npm","ci"],["npm","run","check"],
                 ["git","diff","--check","<base>..<candidate>"]]'
 
@@ -195,6 +198,9 @@ python3 .agents/skills/ship-linear-release/scripts/gatectl.py status \
 Global gate использует только task-owned clean worktree и отдельные mutable
 tmp/cache/build/runtime paths/ports; outputs primary checkout не являются cache
 hit или evidence.
+Каждый timeout становится immutable terminal failure с `failure_kind`; helper
+завершает process group. Shell/wrapper argv, duplicate step и aggregate вместе
+с покрываемыми subcommands отклоняются до исполнения.
 
 Переиспользуй pass только по exact `GATE_RESULT` key и durable terminal artifact.
 Targeted worker/ingest checks не заменяют full gate. Не подменяй требуемую
@@ -249,6 +255,9 @@ projection-batch и не выполняй вторую default/deploy lane па�
    по terminal guard, exact provenance и retirement rules
    `crash-recovery.md`: original SHA после cherry-pick может быть не ancestor
    default, но обязан быть явно связан с reachable integration commit.
+   Каждый переход `claimed -> running -> feature_ready -> accepted -> sealed ->
+   gated -> promoted -> projected -> terminal` предварительно проверь через
+   `shipctl.py conveyor-next` и сохрани выданный transition digest.
 
 Default push и production deploy сериализованы по cutoff. Feature refs и train
 head публикуются по одной feature; это даёт durable progress без многократного
@@ -262,8 +271,10 @@ full gate/deploy.
 - feature-local до default — исключи feature и stacked descendants, верни
   исходную issue в `In Progress`, выдай новый claim generation и продолжай
   независимый train;
-- tiny candidate-only repair — сделай один минимальный coordinator fix commit,
-  affected check, reseal и один новый global gate;
+- tiny candidate-only repair — создай coordinator-inline manifest, отдельный
+  task worktree/branch/guard, сделай один минимальный fix commit и affected
+  check, затем reseal и один новый global gate; прямой непроверенный commit в
+  default запрещён;
 - independent/complex regression — создай deduplicated linked Bug, при
   blocking defect добавь его в milestone/priority queue; исключи виновный scope
   либо freeze promotion, но не останавливай безопасные issue branches;
@@ -296,7 +307,7 @@ INTEGRATION_MODE=frozen
 default. При production fail сначала redeploy exact saved `previous_stable` и
 проверь прежние критические flows. Затем создай explicit revert либо fix commit
 в stabilization lane, прогони affected + full global gate, exact default CI и,
-для `release`, новый artifact/deploy/smoke.
+при обязательном production, новый artifact/deploy/smoke.
 
 Обычная issue-работа может продолжаться только в изолированных branches от
 `LAST_KNOWN_GOOD_DEFAULT_SHA`, если она не зависит от сломанной поверхности.

@@ -19,6 +19,7 @@ import json
 import os
 import re
 import secrets
+import subprocess
 import sys
 import tempfile
 import uuid
@@ -67,6 +68,7 @@ REQUIRED_MANIFEST_FIELDS = {
     "issue_identifier",
     "project_id",
     "milestone_id",
+    "coordinator_sha",
     "repo",
     "worktree",
     "branch",
@@ -81,10 +83,16 @@ REQUIRED_MANIFEST_FIELDS = {
     "issue_updated_at",
     "ownership_paths",
     "executor",
+    "dependencies",
     "isolation",
     "validation",
     "remote_mode",
 }
+
+MAX_GOAL_CHARS = 4000
+MAX_METADATA_BYTES = 49_152
+SAFE_WORKER_EXECUTABLES = {"git", "node", "npm", "python", "python3", "ruby"}
+FORBIDDEN_WORKER_WRAPPERS = {"bash", "bunx", "env", "npx", "sh", "zsh"}
 
 DOCS = {
     "overview": "docs/overview.md",
@@ -193,6 +201,7 @@ TEST_SURFACE_TOKENS: tuple[tuple[str, frozenset[str]], ...] = (
 
 TRANSITION_NAMESPACE = uuid.UUID("d34453c7-5bd3-5362-a00d-04e8708c6f5a")
 REBUILDABLE_METADATA_HEADERS = {"COMMENT_MAP"}
+REPEATABLE_METADATA_HEADERS = {"COMMENT_MAP", "CLAIM_MAP"}
 ACTION_HEADERS = (
     "ACTION_SEQ",
     "ACTION_ID",
@@ -215,12 +224,22 @@ def git(repo: Path, *args: str) -> tuple[int, str]:
     return result.returncode, result.stdout.decode("utf-8", "surrogateescape").strip()
 
 
-def fields(message: str) -> dict[str, str]:
+def parse_fields(message: str) -> tuple[dict[str, str], list[str]]:
     parsed: dict[str, str] = {}
+    duplicates: list[str] = []
     for line in message.splitlines():
         key, separator, value = line.partition(":")
         if separator and re.fullmatch(r"[A-Z][A-Z0-9_]*", key):
+            if key in parsed and key not in REPEATABLE_METADATA_HEADERS:
+                duplicates.append(key)
             parsed[key] = value.strip()
+    return parsed, sorted(set(duplicates))
+
+
+def fields(message: str) -> dict[str, str]:
+    parsed, duplicates = parse_fields(message)
+    if duplicates:
+        parsed["__DUPLICATE_HEADERS__"] = ",".join(duplicates)
     return parsed
 
 
@@ -582,8 +601,8 @@ def coordinator_refs(
         if foreign_main.object_exists(observation_repo, sha):
             code, message = git(observation_repo, "show", "-s", "--format=%B", sha)
             if code == 0:
-                metadata = fields(message)
-                metadata_state = "observed"
+                metadata, duplicates = parse_fields(message)
+                metadata_state = "duplicate-authoritative-headers" if duplicates else "observed"
             else:
                 metadata_state = "message-unavailable"
         state = metadata.get("STATE", "unknown").lower()
@@ -719,6 +738,39 @@ def primary_checkout_snapshot(
         else:
             status_state = "unavailable"
 
+    second_local = foreign_main.run(
+        repo, "rev-parse", "--verify", "--quiet", f"refs/heads/{default}"
+    )
+    second_local_default = (
+        second_local.stdout.decode("ascii", "replace").strip()
+        if second_local.returncode == 0
+        else None
+    )
+    second_checkout_head = checkout_head
+    second_raw_status = raw_status
+    if checkout is not None:
+        second_head = foreign_main.run(checkout, "rev-parse", "--verify", "HEAD")
+        second_checkout_head = (
+            second_head.stdout.decode("ascii", "replace").strip()
+            if second_head.returncode == 0
+            else None
+        )
+        second_status = foreign_main.run(
+            checkout,
+            "status",
+            "--porcelain=v1",
+            "-z",
+            "--untracked-files=normal",
+            "--ignored=no",
+        )
+        second_raw_status = second_status.stdout if second_status.returncode == 0 else b""
+    changed_during_snapshot = (
+        second_local.returncode != local_result.returncode
+        or second_local_default != local_default
+        or second_checkout_head != checkout_head
+        or second_raw_status != raw_status
+    )
+
     relation = (
         foreign_main.relation(object_repo, local_default, remote_sha)
         if local_state in {"observed", "absent"}
@@ -743,6 +795,7 @@ def primary_checkout_snapshot(
         and relation != "unknown"
         and head_matches_ref
         and not truncated
+        and not changed_during_snapshot
     )
 
     if not complete:
@@ -771,6 +824,7 @@ def primary_checkout_snapshot(
         remote_sha or "none",
         relation,
         status_state,
+        "changed" if changed_during_snapshot else "stable",
     ):
         digest.update(value.encode("utf-8", "surrogateescape"))
         digest.update(b"\0")
@@ -799,6 +853,7 @@ def primary_checkout_snapshot(
         "paths": paths[:max_paths],
         "paths_truncated": truncated,
         "control_paths": control_paths[:max_paths],
+        "changed_during_snapshot": changed_during_snapshot,
         "fingerprint": digest.hexdigest(),
     }
 
@@ -1068,6 +1123,265 @@ def command_preflight(args: argparse.Namespace) -> int:
         return 0 if route != "blocked" else 3
 
 
+def _worktree_records(repo: Path) -> tuple[list[dict[str, str]], str | None]:
+    result = foreign_main.run(repo, "worktree", "list", "--porcelain", "-z")
+    if result.returncode != 0:
+        return [], result.error or "git-error"
+    records: list[dict[str, str]] = []
+    record: dict[str, str] = {}
+    for item in result.stdout.decode("utf-8", "surrogateescape").split("\0"):
+        if not item:
+            if record:
+                records.append(record)
+            record = {}
+            continue
+        key, _, value = item.partition(" ")
+        record[key] = value
+    if record:
+        records.append(record)
+    return records, None
+
+
+def command_status(args: argparse.Namespace) -> int:
+    repo = Path(args.repo).resolve()
+    preflight_code, preflight = _capture_preflight(repo, args.remote, args.default)
+    worktrees, worktree_error = _worktree_records(repo)
+    canonical = next(
+        (
+            item
+            for item in preflight.get("coordinator_refs", [])
+            if item.get("kind") == "canonical"
+        ),
+        None,
+    )
+    ledger_bytes = None
+    legacy_profile = False
+    if canonical and foreign_main.object_exists(repo, canonical["sha"]):
+        code, message = git(repo, "show", "-s", "--format=%B", canonical["sha"])
+        if code == 0:
+            ledger_bytes = len(message.encode("utf-8"))
+            legacy_profile = "PROFILE:" in message
+    emit(
+        {
+            "schema": 1,
+            "status": "ok" if preflight_code == 0 and worktree_error is None else "attention",
+            "route": preflight.get("route"),
+            "mutation_allowed": preflight.get("mutation_allowed", False),
+            "reasons": preflight.get("reasons", []),
+            "remote_sha": preflight.get("remote_sha"),
+            "checkout": preflight.get("primary_checkout", {}).get("observation"),
+            "coordinator": canonical,
+            "ledger_bytes": ledger_bytes,
+            "ledger_limit": MAX_METADATA_BYTES,
+            "ledger_compaction_recommended": bool(ledger_bytes and ledger_bytes >= 32_768),
+            "legacy_profile_detected": legacy_profile,
+            "worktree_count": len(worktrees),
+            "worktree_error": worktree_error,
+        }
+    )
+    return 0 if preflight_code == 0 and worktree_error is None else 3
+
+
+def _active_claim_pairs(repo: Path, coordinator: str | None) -> set[tuple[str, int]]:
+    if coordinator is None or not foreign_main.object_exists(repo, coordinator):
+        return set()
+    code, message = git(repo, "show", "-s", "--format=%B", coordinator)
+    if code != 0:
+        return set()
+    index = _semicolon_fields(fields(message).get("CLAIM_INDEX", ""))
+    active = index.get("active", "none")
+    pairs: set[tuple[str, int]] = set()
+    for item in active.split(","):
+        match = re.match(r"([A-Z][A-Z0-9]*-[1-9][0-9]*):([1-9][0-9]*)@", item.strip())
+        if match:
+            pairs.add((match.group(1), int(match.group(2))))
+    return pairs
+
+
+def _branch_claim_pair(branch: str) -> tuple[str, int] | None:
+    match = re.match(
+        r"codex/([a-z][a-z0-9]*-[1-9][0-9]*)-.+/r[0-9a-f]{32}-e[1-9][0-9]*-c([1-9][0-9]*)$",
+        branch,
+    )
+    if not match:
+        return None
+    return match.group(1).upper(), int(match.group(2))
+
+
+def _cleanup_coordinator_authority(
+    repo: Path, remote: str, advertised: list[tuple[str, str]]
+) -> tuple[str | None, str | None]:
+    """Require one coherent terminal ledger and no remaining run occupancy."""
+    if not advertised:
+        return None, "terminal-coordinator-required"
+    if not _materialize_exact(repo, remote, [sha for sha, _ in advertised]):
+        return None, "coordinator-object-unavailable"
+    refs_state, refs = coordinator_refs(repo, advertised)
+    if refs_state != "observed":
+        return None, "coordinator-metadata-unavailable"
+    canonical = [item for item in refs if item["kind"] == "canonical"]
+    if len(canonical) != 1:
+        return None, "exactly-one-canonical-coordinator-required"
+    if any(item["classification"] not in {"terminal", "migrated"} for item in refs):
+        return None, "nonterminal-coordinator-present"
+    authority = canonical[0]
+    if authority["classification"] != "terminal":
+        return None, "canonical-coordinator-not-terminal"
+    if authority["metadata_state"] != "observed":
+        return None, "canonical-coordinator-metadata-invalid"
+    code, message = git(repo, "show", "-s", "--format=%B", authority["sha"])
+    if code != 0:
+        return None, "canonical-coordinator-message-unavailable"
+    metadata, duplicates = parse_fields(message)
+    if duplicates:
+        return None, "canonical-coordinator-headers-ambiguous"
+    lifecycle = _coordinator_lifecycle(metadata)
+    claim_index = _semicolon_fields(metadata.get("CLAIM_INDEX", ""))
+    execution_index = _semicolon_fields(metadata.get("EXECUTION_INDEX", ""))
+    workers = _semicolon_fields(metadata.get("WORKERS", ""))
+    if metadata.get("KIND") != "COORDINATOR_CLAIM":
+        return None, "canonical-coordinator-kind-invalid"
+    if not lifecycle["coherent"] or lifecycle["phase"] != "terminal":
+        return None, "canonical-coordinator-lifecycle-invalid"
+    if metadata.get("ACTION_STATUS", "").lower() != "reconciled":
+        return None, "canonical-coordinator-action-pending"
+    if metadata.get("PENDING_ACTIONS", "").lower() != "none":
+        return None, "canonical-coordinator-pending-actions"
+    if claim_index.get("active") != "none":
+        return None, "canonical-coordinator-live-claims"
+    if execution_index.get("running_count") != "0":
+        return None, "canonical-coordinator-running-executors"
+    if _list_value(workers.get("active_issue_lanes")):
+        return None, "canonical-coordinator-active-lanes"
+    return authority["sha"], None
+
+
+def _cleanup_plan(repo: Path, remote_sha: str, coordinator: str | None) -> dict[str, Any]:
+    records, error = _worktree_records(repo)
+    if error:
+        raise ValueError(error)
+    active_pairs = _active_claim_pairs(repo, coordinator)
+    eligible: list[dict[str, str]] = []
+    retained: list[dict[str, str]] = []
+    for record in records:
+        raw_path = record.get("worktree")
+        if not raw_path:
+            continue
+        path = Path(raw_path).resolve()
+        if path == repo:
+            retained.append({"path": str(path), "reason": "primary"})
+            continue
+        branch_ref = record.get("branch")
+        branch = branch_ref.removeprefix("refs/heads/") if branch_ref else ""
+        head = record.get("HEAD", "")
+        reason = None
+        claim_pair = _branch_claim_pair(branch)
+        if not branch.startswith("codex/"):
+            reason = "non-codex-branch"
+        elif claim_pair is None:
+            reason = "unbound-codex-branch"
+        elif claim_pair in active_pairs:
+            reason = "active-claim"
+        elif GIT_OID.fullmatch(head) is None:
+            reason = "head-unavailable"
+        else:
+            status = foreign_main.run(
+                path, "status", "--porcelain=v1", "-z", "--untracked-files=all"
+            )
+            if status.returncode != 0:
+                reason = "status-unavailable"
+            elif status.stdout:
+                reason = "dirty"
+        if reason is None and git(repo, "merge-base", "--is-ancestor", head, remote_sha)[0] != 0:
+            reason = "not-merged-into-default"
+        if reason:
+            retained.append({"path": str(path), "branch": branch, "head": head, "reason": reason})
+        else:
+            eligible.append({"path": str(path), "branch": branch, "head": head})
+    core = {
+        "schema": 1,
+        "repo": str(repo),
+        "remote_default_sha": remote_sha,
+        "coordinator_sha": coordinator,
+        "eligible": eligible,
+        "retained": retained,
+    }
+    core["plan_digest"] = hashlib.sha256(
+        json.dumps(core, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    return core
+
+
+def command_cleanup_plan(args: argparse.Namespace) -> int:
+    repo = Path(args.repo).resolve()
+    remote_sha, state, _ = foreign_main.remote_sha(repo, args.remote, args.default)
+    if state != "observed" or remote_sha is None:
+        emit({"schema": 1, "status": "blocked", "reason": "remote-default-unavailable"})
+        return 3
+    advertised_state, advertised = advertised_coordinator_refs(repo, args.remote)
+    if advertised_state != "observed":
+        emit({"schema": 1, "status": "blocked", "reason": "coordinator-unavailable"})
+        return 3
+    coordinator, authority_error = _cleanup_coordinator_authority(
+        repo, args.remote, advertised
+    )
+    if authority_error:
+        emit({"schema": 1, "status": "blocked", "reason": authority_error})
+        return 3
+    try:
+        plan = _cleanup_plan(repo, remote_sha, coordinator)
+    except ValueError as error:
+        emit({"schema": 1, "status": "blocked", "reason": str(error)})
+        return 3
+    emit({"status": "planned", **plan})
+    return 0
+
+
+def command_cleanup_apply(args: argparse.Namespace) -> int:
+    payload, input_error = _read_json(args.input)
+    if input_error or not isinstance(payload, dict):
+        emit({"schema": 1, "status": "invalid", "errors": [input_error or "invalid:plan"]})
+        return 2
+    repo = Path(args.repo).resolve()
+    remote_sha, state, _ = foreign_main.remote_sha(repo, args.remote, args.default)
+    advertised_state, advertised = advertised_coordinator_refs(repo, args.remote)
+    if state != "observed" or remote_sha is None or advertised_state != "observed":
+        emit({"schema": 1, "status": "blocked", "reason": "cleanup-authority-unavailable"})
+        return 3
+    coordinator, authority_error = _cleanup_coordinator_authority(
+        repo, args.remote, advertised
+    )
+    if authority_error:
+        emit({"schema": 1, "status": "blocked", "reason": authority_error})
+        return 3
+    try:
+        fresh = _cleanup_plan(repo, remote_sha, coordinator)
+    except ValueError as error:
+        emit({"schema": 1, "status": "blocked", "reason": str(error)})
+        return 3
+    if payload.get("plan_digest") != fresh["plan_digest"] or payload.get("eligible") != fresh["eligible"]:
+        emit({"schema": 1, "status": "blocked", "reason": "cleanup-plan-stale"})
+        return 3
+    removed: list[str] = []
+    for entry in fresh["eligible"]:
+        path = Path(entry["path"])
+        result = foreign_main.run(repo, "worktree", "remove", str(path))
+        if result.returncode != 0:
+            emit(
+                {
+                    "schema": 1,
+                    "status": "partial",
+                    "reason": "worktree-remove-failed",
+                    "removed": removed,
+                    "failed": str(path),
+                }
+            )
+            return 5
+        removed.append(str(path))
+    emit({"schema": 1, "status": "cleaned", "removed": removed, "branches_deleted": []})
+    return 0
+
+
 def normalize_path(path: str) -> str:
     value = path.replace("\\", "/")
     while value.startswith("./"):
@@ -1145,6 +1459,67 @@ def command_identities(_: argparse.Namespace) -> int:
             "run_id": str(uuid.uuid4()),
             "owner_id": str(uuid.uuid4()),
             "run_key": secrets.token_hex(16),
+        }
+    )
+    return 0
+
+
+def _goal_objective(args: argparse.Namespace) -> str:
+    return f"""Objective: Реализовать и доставить все незавершённые Linear issues проекта {args.project_name} ({args.project_id}) из milestone {args.milestone_name} ({args.milestone_id}) в {args.repo}. Следовать tracked contract {args.repo}/.agents/skills/ship-linear-release/SKILL.md и {args.repo}/docs/specs/linear-milestone-delivery.md на SHA {args.contract_sha}. Run: id={args.run_id}; key={args.run_key}; owner={args.owner_id}/{args.epoch}.
+
+Done when: Два согласованных terminal snapshot после завершения projections не содержат unfinished issues кроме Canceled/Duplicate. Все feature, claim, cutoff, CI, deployment и rollback artifacts имеют terminal disposition; default healthy и равен проверенному cutoff. Каждая issue имеет exact feature/default evidence и Done. Production выполнен только когда его требует current acceptance/repository contract; тогда exact Sites deployment прошёл обязательные authenticated web/control, persistence и MCP live flows с rollback proof. Иначе receipt фиксирует not-required-by-current-milestone.
+
+Verify with: Issue-scoped targeted checks; один canonical full gate на immutable cutoff generation; expected-old default CAS и exact-SHA CI; применимые live/rollback checks. Terminal snapshots содержат scope digest и разделены завершённой external reconciliation boundary.
+
+Constraints: Один repo-global coordinator; CAS loser read-only. Каждая issue и coordinator repair используют отдельные worktree, branch, manifest, lease и guard. Worker не меняет Linear/default/Sites/tags. Не трогать user changes, не sharing mutable dependencies, не force-push, не ослаблять gates метаданными запуска, не выбирать AWS fallback и не раскрывать secrets. Missing implementation принятого scope является work, а не external blocker.
+
+Blocked when: Один и тот же доказанный внешний blocker, противоречие authoritative требований или необходимое новое product/security decision повторились минимум три последовательных Goal turns и не осталось безопасной независимой работы. Сложность, missing implementation, running worker, pending gate/CI, recoverable CAS, pause или handoff blocker-ом не являются."""
+
+
+def command_goal_card(args: argparse.Namespace) -> int:
+    errors: list[str] = []
+    for name in ("project_id", "milestone_id", "run_id", "owner_id"):
+        if UUID_TEXT.fullmatch(getattr(args, name)) is None:
+            errors.append(f"invalid:{name.replace('_', '-')}")
+    if re.fullmatch(r"[0-9a-f]{32}", args.run_key) is None:
+        errors.append("invalid:run-key")
+    if GIT_OID.fullmatch(args.contract_sha) is None:
+        errors.append("invalid:contract-sha")
+    if args.epoch <= 0:
+        errors.append("invalid:epoch")
+    repo = Path(args.repo)
+    if not repo.is_absolute():
+        errors.append("invalid:repo")
+    for name in ("project_name", "milestone_name"):
+        value = getattr(args, name)
+        if not value.strip() or "\0" in value or "\n" in value:
+            errors.append(f"invalid:{name.replace('_', '-')}")
+    if errors:
+        emit({"schema": 1, "status": "invalid", "goal_allowed": False, "errors": errors})
+        return 2
+    objective = _goal_objective(args)
+    characters = len(objective)
+    if characters > MAX_GOAL_CHARS:
+        emit(
+            {
+                "schema": 1,
+                "status": "blocked",
+                "goal_allowed": False,
+                "reason": "goal-objective-too-long",
+                "characters": characters,
+                "limit": MAX_GOAL_CHARS,
+            }
+        )
+        return 3
+    emit(
+        {
+            "schema": 1,
+            "status": "valid",
+            "goal_allowed": True,
+            "characters": characters,
+            "limit": MAX_GOAL_CHARS,
+            "objective_sha256": hashlib.sha256(objective.encode()).hexdigest(),
+            "objective": objective,
         }
     )
     return 0
@@ -1255,6 +1630,12 @@ def command_launch_check(args: argparse.Namespace) -> int:
         errors.append("invalid:running")
     if args.max_workers is not None and args.max_workers <= 0:
         errors.append("invalid:max-workers")
+    runtime_source = getattr(args, "runtime_source", None)
+    resource_source = getattr(args, "resource_source", None)
+    if runtime_source not in {"system-capacity", "runtime-api"}:
+        errors.append("invalid:runtime-source")
+    if resource_source not in {"provisioner", "explicit-safe-limit"}:
+        errors.append("invalid:resource-source")
     if requested is not None and args.max_workers is not None:
         errors.append("invalid:max-workers-with-exact")
 
@@ -1303,9 +1684,11 @@ def command_launch_check(args: argparse.Namespace) -> int:
             "worker_mode": "auto" if requested is None else "exact",
             "requested_workers": "auto" if requested is None else requested,
             "runtime_slots_total": args.runtime_slots_total,
+            "runtime_source": runtime_source,
             "layout": layout,
             "delegated_capacity": delegated_capacity,
             "safe_resource_capacity": safe_capacity,
+            "resource_source": resource_source,
             "sustained_issue_capacity": sustained,
             "compatible_ready": args.compatible_ready,
             "unfinished": args.unfinished,
@@ -1315,6 +1698,290 @@ def command_launch_check(args: argparse.Namespace) -> int:
         }
     )
     return 3 if reasons else 0
+
+
+def command_milestone_plan(args: argparse.Namespace) -> int:
+    payload, input_error = _read_json(args.input)
+    if input_error or not isinstance(payload, dict):
+        emit({"schema": 1, "status": "invalid", "errors": [input_error or "invalid:snapshot"]})
+        return 2
+    errors: list[str] = []
+    project = payload.get("project")
+    milestones = payload.get("milestones")
+    issues = payload.get("issues")
+    if not isinstance(project, dict) or UUID_TEXT.fullmatch(str(project.get("id", ""))) is None:
+        errors.append("invalid:project")
+    if not isinstance(milestones, list) or not all(isinstance(item, dict) for item in milestones):
+        errors.append("invalid:milestones")
+        milestones = []
+    current = [item for item in milestones if item.get("current") is True]
+    if len(current) != 1:
+        errors.append("invalid:current-milestone-not-unique")
+        milestone = None
+    else:
+        milestone = current[0]
+        if UUID_TEXT.fullmatch(str(milestone.get("id", ""))) is None:
+            errors.append("invalid:milestone-id")
+    if not isinstance(issues, list) or not all(isinstance(item, dict) for item in issues):
+        errors.append("invalid:issues")
+        issues = []
+    by_identifier: dict[str, dict[str, Any]] = {}
+    for issue in issues:
+        identifier = issue.get("identifier")
+        if not isinstance(identifier, str) or ISSUE_IDENTIFIER.fullmatch(identifier) is None:
+            errors.append("invalid:issue-identifier")
+            continue
+        if identifier in by_identifier:
+            errors.append(f"invalid:duplicate-issue:{identifier}")
+        by_identifier[identifier] = issue
+        if milestone is not None and issue.get("milestone_id") != milestone.get("id"):
+            errors.append(f"invalid:issue-milestone:{identifier}")
+        if issue.get("state") not in {
+            "Backlog",
+            "Todo",
+            "In Progress",
+            "In Review",
+            "Done",
+            "Canceled",
+            "Duplicate",
+        }:
+            errors.append(f"invalid:issue-state:{identifier}")
+        dependencies = issue.get("dependencies", [])
+        if not isinstance(dependencies, list) or not all(isinstance(value, str) for value in dependencies):
+            errors.append(f"invalid:issue-dependencies:{identifier}")
+        elif len(set(dependencies)) != len(dependencies):
+            errors.append(f"invalid:duplicate-issue-dependency:{identifier}")
+        if issue.get("production_requirement", "unknown") not in {
+            "required",
+            "not-required",
+            "unknown",
+        }:
+            errors.append(f"invalid:production-requirement:{identifier}")
+    terminal_states = {"Done", "Canceled", "Duplicate"}
+    unfinished = {
+        identifier: issue
+        for identifier, issue in by_identifier.items()
+        if issue.get("state") not in terminal_states
+    }
+    unknown_dependencies: list[str] = []
+    graph: dict[str, list[str]] = {}
+    for identifier, issue in unfinished.items():
+        graph[identifier] = []
+        for dependency in issue.get("dependencies", []):
+            if dependency not in by_identifier:
+                unknown_dependencies.append(f"{identifier}->{dependency}")
+            elif dependency in unfinished:
+                graph[identifier].append(dependency)
+    visit: dict[str, int] = {}
+    cycles: list[list[str]] = []
+
+    def walk(identifier: str, stack: list[str]) -> None:
+        state = visit.get(identifier, 0)
+        if state == 1:
+            start = stack.index(identifier) if identifier in stack else 0
+            cycles.append(stack[start:] + [identifier])
+            return
+        if state == 2:
+            return
+        visit[identifier] = 1
+        for dependency in graph.get(identifier, []):
+            walk(dependency, [*stack, identifier])
+        visit[identifier] = 2
+
+    for identifier in sorted(graph):
+        walk(identifier, [])
+    running = sorted(
+        identifier
+        for identifier, issue in unfinished.items()
+        if issue.get("state") in {"In Progress", "In Review"}
+    )
+    ready = sorted(
+        identifier
+        for identifier, issue in unfinished.items()
+        if identifier not in running
+        and all(by_identifier[dependency].get("state") in terminal_states for dependency in issue.get("dependencies", []) if dependency in by_identifier)
+        and all(dependency in by_identifier for dependency in issue.get("dependencies", []))
+    )
+    obligations = {
+        issue.get("production_requirement", "unknown") for issue in unfinished.values()
+    }
+    if not obligations or obligations == {"not-required"}:
+        production = "not-required"
+    elif "required" in obligations:
+        production = "required"
+    else:
+        production = "unknown"
+    structural = []
+    if unknown_dependencies:
+        structural.append("unknown-dependencies")
+    if cycles:
+        structural.append("dependency-cycle")
+    if unfinished and not ready and not running:
+        structural.append("no-actionable-frontier")
+    errors.extend(f"invalid:unknown-dependency:{item}" for item in sorted(unknown_dependencies))
+    errors.extend(f"invalid:dependency-cycle:{'->'.join(cycle)}" for cycle in cycles)
+    normalized = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    emit(
+        {
+            "schema": 1,
+            "status": "blocked" if errors or structural else "planned",
+            "claim_allowed": not errors and not structural,
+            "errors": list(dict.fromkeys(errors)),
+            "structural_reasons": structural,
+            "project": project,
+            "milestone": milestone,
+            "unfinished": len(unfinished),
+            "ready": ready,
+            "running": running,
+            "production_requirement": production,
+            "snapshot_digest": hashlib.sha256(normalized.encode()).hexdigest(),
+        }
+    )
+    return 3 if errors or structural else 0
+
+
+CONVEYOR_TRANSITIONS: dict[str, tuple[str, str, tuple[str, ...]]] = {
+    "claimed": (
+        "dispatch",
+        "running",
+        ("manifest_digest", "guard_tip", "executor_lease"),
+    ),
+    "running": (
+        "receipt-verified",
+        "feature_ready",
+        ("receipt_digest", "head_sha", "checks_digest"),
+    ),
+    "feature_ready": (
+        "ingest-accepted",
+        "accepted",
+        ("cutoff_id", "train_sha", "membership_digest"),
+    ),
+    "accepted": (
+        "cutoff-sealed",
+        "sealed",
+        ("cutoff_ref", "candidate_sha", "validation_key"),
+    ),
+    "sealed": (
+        "gate-passed",
+        "gated",
+        ("result_sha256", "candidate_sha"),
+    ),
+    "gated": (
+        "default-promoted",
+        "promoted",
+        ("previous_sha", "default_sha", "remote_observation"),
+    ),
+    "promoted": (
+        "linear-projected",
+        "projected",
+        ("issue_updated_at", "default_sha"),
+    ),
+    "projected": (
+        "artifact-terminalized",
+        "terminal",
+        ("guard_tip", "feature_ref", "disposition"),
+    ),
+}
+
+
+def command_conveyor_next(args: argparse.Namespace) -> int:
+    """Validate one deterministic lifecycle transition without mutating state."""
+
+    payload, input_error = _read_json(args.input)
+    if input_error or not isinstance(payload, dict):
+        emit(
+            {
+                "schema": 1,
+                "status": "invalid",
+                "errors": [input_error or "invalid:conveyor:not-object"],
+            }
+        )
+        return 2
+    required = {
+        "schema",
+        "run_id",
+        "issue_identifier",
+        "generation",
+        "state",
+        "event",
+        "event_id",
+        "evidence",
+    }
+    errors = [f"missing:{name}" for name in sorted(required - payload.keys())]
+    errors.extend(f"unexpected:{name}" for name in sorted(payload.keys() - required))
+    if payload.get("schema") != 1:
+        errors.append("invalid:schema")
+    if UUID_TEXT.fullmatch(str(payload.get("run_id", ""))) is None:
+        errors.append("invalid:run_id")
+    if ISSUE_IDENTIFIER.fullmatch(str(payload.get("issue_identifier", ""))) is None:
+        errors.append("invalid:issue_identifier")
+    if not _positive_int(payload.get("generation")):
+        errors.append("invalid:generation")
+    if UUID_TEXT.fullmatch(str(payload.get("event_id", ""))) is None:
+        errors.append("invalid:event_id")
+    state = payload.get("state")
+    transition = CONVEYOR_TRANSITIONS.get(state) if isinstance(state, str) else None
+    if transition is None:
+        errors.append("invalid:state")
+        expected_event = None
+        next_state = None
+        evidence_fields: tuple[str, ...] = ()
+    else:
+        expected_event, next_state, evidence_fields = transition
+        if payload.get("event") != expected_event:
+            errors.append("invalid:event-for-state")
+    evidence = payload.get("evidence")
+    if not isinstance(evidence, dict):
+        errors.append("invalid:evidence:not-object")
+        evidence = {}
+    else:
+        errors.extend(
+            f"missing:evidence.{name}" for name in evidence_fields if name not in evidence
+        )
+        errors.extend(
+            f"unexpected:evidence.{name}"
+            for name in sorted(evidence.keys() - set(evidence_fields))
+        )
+        for name in evidence_fields:
+            value = evidence.get(name)
+            if (
+                not isinstance(value, str)
+                or not value
+                or len(value.encode("utf-8")) > 1024
+                or "\n" in value
+                or "\0" in value
+            ):
+                errors.append(f"invalid:evidence.{name}")
+    errors = list(dict.fromkeys(errors))
+    if errors:
+        emit(
+            {
+                "schema": 1,
+                "status": "invalid",
+                "state": state,
+                "expected_event": expected_event,
+                "errors": errors,
+            }
+        )
+        return 2
+    canonical = json.dumps(
+        payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )
+    transition_digest = hashlib.sha256(canonical.encode()).hexdigest()
+    emit(
+        {
+            "schema": 1,
+            "status": "advanced",
+            "run_id": payload["run_id"],
+            "issue_identifier": payload["issue_identifier"],
+            "generation": payload["generation"],
+            "event_id": payload["event_id"],
+            "state_before": state,
+            "state_after": next_state,
+            "transition_digest": transition_digest,
+        }
+    )
+    return 0
 
 
 def _paths_overlap(left: str, right: str) -> bool:
@@ -1359,6 +2026,24 @@ def command_dispatch_check(args: argparse.Namespace) -> int:
     if not isinstance(history, list) or not all(isinstance(item, str) and item for item in history):
         errors.append("invalid:executor-history")
         history = []
+    candidate_validation, _, _ = validate_manifest(
+        candidate, phase="dispatch", remote=args.remote
+    )
+    errors.extend(f"candidate:{value}" for value in candidate_validation)
+    current_scope = payload.get("current_scope_fingerprint")
+    if current_scope != candidate.get("scope_fingerprint"):
+        errors.append("invalid:candidate.scope-fingerprint-stale")
+    normalized_candidate = json.dumps(
+        candidate, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )
+    candidate_digest = hashlib.sha256(normalized_candidate.encode()).hexdigest()
+    if payload.get("candidate_digest") != candidate_digest:
+        errors.append("invalid:candidate.digest")
+    for index, entry in enumerate(active):
+        active_validation, _, _ = validate_manifest(
+            entry, phase="active", remote=args.remote
+        )
+        errors.extend(f"active[{index}]:{value}" for value in active_validation)
     issue = candidate.get("issue_identifier")
     if not isinstance(issue, str) or ISSUE_IDENTIFIER.fullmatch(issue) is None:
         errors.append("invalid:candidate.issue-identifier")
@@ -1503,51 +2188,163 @@ def _common_git_dir(path: Path) -> Path | None:
     return (candidate if candidate.is_absolute() else path / candidate).resolve()
 
 
-def _broad_worker_check(command: str) -> bool:
-    normalized = " ".join(command.strip().lower().split())
-    exact = {
-        "npm test",
-        "npm run test",
-        "npm run test:unit",
-        "npm run test:integration",
-        "npm run test:conformance",
-        "npm run build",
-        "pytest",
-        "python -m pytest",
-        "python3 -m pytest",
-        "cargo test",
-        "dotnet test",
-        "mvn test",
-        "mvn verify",
-        "gradle test",
-        "./gradlew test",
-        "make test",
-        "make check",
-    }
+def _broad_worker_check(argv: list[str]) -> bool:
+    normalized = [item.lower() for item in argv]
+    if normalized[:3] in (["npm", "run", "check"], ["npm", "run", "build"]):
+        return True
+    if len(normalized) >= 3 and normalized[:2] == ["npm", "run"] and normalized[2].startswith("check:"):
+        return True
+    if normalized[:2] in (["npm", "test"], ["node", "--test"]):
+        return len(normalized) == 2
+    if normalized[:3] in (["python", "-m", "pytest"], ["python3", "-m", "pytest"]):
+        return len(normalized) == 3
+    if normalized[:3] in (["python", "-m", "unittest"], ["python3", "-m", "unittest"]):
+        return len(normalized) == 3
+    return any(item in {"full-gate", "full-suite"} for item in normalized)
+
+
+def _dependency_mutating_worker_check(argv: list[str]) -> bool:
+    normalized = [item.lower() for item in argv]
     return (
-        normalized in exact
-        or re.match(r"^npm run check(?:\s|$)", normalized) is not None
-        or normalized in {"node --test", "python -m unittest", "python3 -m unittest"}
-        or normalized in {"go test ./...", "go test ./…"}
-        or "full gate" in normalized
-        or normalized in {"full-gate", "full-suite"}
+        len(normalized) >= 2
+        and normalized[0] in {"npm", "pnpm", "yarn", "bun"}
+        and normalized[1] in {"ci", "install", "i", "add"}
     )
 
 
-def _dependency_mutating_worker_check(command: str) -> bool:
-    normalized = " ".join(command.strip().lower().split())
-    return any(
-        re.match(pattern, normalized) is not None
-        for pattern in (
-            r"^npm (?:ci|install|i)(?:\s|$)",
-            r"^pnpm (?:install|i)(?:\s|$)",
-            r"^yarn (?:install|add)(?:\s|$)",
-            r"^bun install(?:\s|$)",
-        )
-    )
+def _validate_targeted_checks(value: Any) -> list[str]:
+    errors: list[str] = []
+    if not isinstance(value, list) or not value:
+        return ["invalid:validation.targeted_checks"]
+    identifiers: set[str] = set()
+    for index, check in enumerate(value):
+        prefix = f"validation.targeted_checks[{index}]"
+        if not isinstance(check, dict) or set(check) != {"id", "argv"}:
+            errors.append(f"invalid:{prefix}:shape")
+            continue
+        identifier = check.get("id")
+        argv = check.get("argv")
+        if not isinstance(identifier, str) or re.fullmatch(r"[a-z][a-z0-9._-]{0,63}", identifier) is None:
+            errors.append(f"invalid:{prefix}:id")
+        elif identifier in identifiers:
+            errors.append("invalid:validation.targeted_checks:duplicate-id")
+        else:
+            identifiers.add(identifier)
+        if (
+            not isinstance(argv, list)
+            or not argv
+            or len(argv) > 128
+            or not all(
+                isinstance(item, str)
+                and item
+                and len(item.encode("utf-8")) <= 8192
+                and "\0" not in item
+                and "\n" not in item
+                for item in argv
+            )
+        ):
+            errors.append(f"invalid:{prefix}:argv")
+            continue
+        executable = Path(argv[0]).name.lower()
+        if executable in FORBIDDEN_WORKER_WRAPPERS:
+            errors.append(f"invalid:{prefix}:wrapper")
+        elif executable not in SAFE_WORKER_EXECUTABLES and re.fullmatch(
+            r"python3(?:\.\d+)?", executable
+        ) is None:
+            errors.append(f"invalid:{prefix}:executable")
+        if _broad_worker_check(argv):
+            errors.append("invalid:validation.targeted_checks:full-suite")
+        if _dependency_mutating_worker_check(argv):
+            errors.append("invalid:validation.targeted_checks:dependency-mutation")
+    return list(dict.fromkeys(errors))
 
 
-def validate_manifest(manifest: Any) -> tuple[list[str], list[str], list[str]]:
+def _remote_ref_tip(repo: Path, remote: str, ref: str) -> str | None:
+    result = foreign_main.run(repo, "ls-remote", "--refs", remote, ref)
+    if result.returncode != 0:
+        return None
+    lines = result.stdout.decode("ascii", "replace").splitlines()
+    if len(lines) != 1:
+        return None
+    parts = lines[0].split(maxsplit=1)
+    return parts[0] if len(parts) == 2 and parts[1] == ref and GIT_OID.fullmatch(parts[0]) else None
+
+
+def _dependency_environment_errors(
+    value: Any, worktree: Path | None
+) -> list[str]:
+    prefix = "dependencies"
+    required = {"mode", "path", "lockfile_digest", "cache_key", "read_only", "provenance"}
+    if not isinstance(value, dict):
+        return [f"invalid:{prefix}:not-object"]
+    errors = [f"missing:{prefix}.{name}" for name in sorted(required - value.keys())]
+    mode = value.get("mode")
+    if mode not in {"isolated", "content-addressed"}:
+        errors.append(f"invalid:{prefix}.mode")
+    raw_path = value.get("path")
+    path = Path(raw_path) if isinstance(raw_path, str) and Path(raw_path).is_absolute() else None
+    if path is None:
+        errors.append(f"invalid:{prefix}.path")
+    elif not path.exists() or not path.is_dir() or path.is_symlink():
+        errors.append(f"invalid:{prefix}.path:missing-or-linked")
+    elif mode == "isolated" and (worktree is None or path.resolve() != (worktree / "node_modules").resolve()):
+        errors.append(f"invalid:{prefix}.path:not-task-owned-node-modules")
+    elif mode == "content-addressed" and worktree is not None and (
+        path.resolve() == worktree or _is_within(path.resolve(), worktree)
+    ):
+        errors.append(f"invalid:{prefix}.path:cache-inside-worktree")
+    lockfile_digest = value.get("lockfile_digest")
+    if not isinstance(lockfile_digest, str) or LOWER_DIGEST.fullmatch(lockfile_digest) is None:
+        errors.append(f"invalid:{prefix}.lockfile_digest")
+    elif worktree is not None:
+        lockfile = worktree / "package-lock.json"
+        if not lockfile.is_file():
+            errors.append(f"invalid:{prefix}.lockfile:missing")
+        elif hashlib.sha256(lockfile.read_bytes()).hexdigest() != lockfile_digest:
+            errors.append(f"invalid:{prefix}.lockfile_digest:mismatch")
+    cache_key = value.get("cache_key")
+    read_only = value.get("read_only")
+    if mode == "isolated":
+        if cache_key != "none":
+            errors.append(f"invalid:{prefix}.cache_key:unexpected")
+        if read_only is not False:
+            errors.append(f"invalid:{prefix}.read_only")
+        if worktree is not None:
+            receipt = worktree / ".codex-task" / "provision.json"
+            try:
+                provision = json.loads(receipt.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                errors.append(f"invalid:{prefix}.provision_receipt")
+            else:
+                if (
+                    not isinstance(provision, dict)
+                    or provision.get("status") != "installed"
+                    or provision.get("lockfile_digest") != lockfile_digest
+                    or provision.get("dependency_path") != str((worktree / "node_modules").resolve())
+                ):
+                    errors.append(f"invalid:{prefix}.provision_receipt")
+    elif mode == "content-addressed":
+        if not isinstance(cache_key, str) or LOWER_DIGEST.fullmatch(cache_key) is None:
+            errors.append(f"invalid:{prefix}.cache_key")
+        if read_only is not True:
+            errors.append(f"invalid:{prefix}.read_only")
+        if path is not None and path.exists() and path.stat().st_mode & 0o222:
+            errors.append(f"invalid:{prefix}.path:writable")
+    provenance = value.get("provenance")
+    if (
+        not isinstance(provenance, str)
+        or not provenance
+        or len(provenance) > 512
+        or "\n" in provenance
+        or "\0" in provenance
+    ):
+        errors.append(f"invalid:{prefix}.provenance")
+    return errors
+
+
+def validate_manifest(
+    manifest: Any, *, phase: str = "dispatch", remote: str = "origin"
+) -> tuple[list[str], list[str], list[str]]:
     if not isinstance(manifest, dict):
         return ["invalid:manifest:not-object"], ["unknown"], list(ALL_DOCS)
     errors: list[str] = []
@@ -1578,7 +2375,7 @@ def validate_manifest(manifest: Any) -> tuple[list[str], list[str], list[str]]:
         UUID_TEXT.fullmatch(issue_id) is None and issue_id != issue_identifier
     ):
         error("invalid:issue_id")
-    for name in ("guard_tip", "root_sha", "base_sha"):
+    for name in ("coordinator_sha", "guard_tip", "root_sha", "base_sha"):
         value = manifest.get(name)
         if not isinstance(value, str) or GIT_OID.fullmatch(value) is None:
             error(f"invalid:{name}")
@@ -1667,6 +2464,9 @@ def validate_manifest(manifest: Any) -> tuple[list[str], list[str], list[str]]:
     if repo is not None and worktree is not None and repo == worktree:
         error("invalid:worktree-must-differ-from-repo")
 
+    for dependency_error in _dependency_environment_errors(manifest.get("dependencies"), worktree):
+        error(dependency_error)
+
     isolated_dirs: list[Path] = []
     for name in ("mutable_build_dir", "tmp_dir", "runtime_dir"):
         value = isolation.get(name)
@@ -1720,15 +2520,8 @@ def validate_manifest(manifest: Any) -> tuple[list[str], list[str], list[str]]:
         error("invalid:validation.check_class")
     if validation.get("full_gate") != "deferred-to-cutoff":
         error("invalid:validation.full_gate")
-    targeted = validation.get("targeted_checks")
-    if not isinstance(targeted, list) or not targeted or not all(
-        isinstance(check, str) and check.strip() and "\n" not in check and "\0" not in check for check in targeted
-    ) or len(set(targeted or [])) != len(targeted or []):
-        error("invalid:validation.targeted_checks")
-    elif any(_broad_worker_check(check) for check in targeted):
-        error("invalid:validation.targeted_checks:full-suite")
-    elif any(_dependency_mutating_worker_check(check) for check in targeted):
-        error("invalid:validation.targeted_checks:dependency-mutation")
+    for targeted_error in _validate_targeted_checks(validation.get("targeted_checks")):
+        error(targeted_error)
 
     branch = manifest.get("branch")
     feature_ref = manifest.get("feature_ref")
@@ -1767,8 +2560,18 @@ def validate_manifest(manifest: Any) -> tuple[list[str], list[str], list[str]]:
         if code != 0 or current_branch != branch:
             error("invalid:worktree-branch")
         code, head = git(worktree, "rev-parse", "--verify", "HEAD")
-        if code != 0 or head != manifest.get("base_sha"):
+        if code != 0 or GIT_OID.fullmatch(head) is None:
+            error("invalid:worktree-head")
+        elif phase == "dispatch" and head != manifest.get("base_sha"):
             error("invalid:worktree-head-vs-base")
+        if phase == "dispatch":
+            status = foreign_main.run(
+                worktree, "status", "--porcelain=v1", "-z", "--untracked-files=all"
+            )
+            if status.returncode != 0:
+                error("invalid:worktree-status-unavailable")
+            elif status.stdout:
+                error("invalid:worktree-dirty")
         if isinstance(branch, str) and git(worktree, "check-ref-format", "--branch", branch)[0] != 0:
             error("invalid:branch-ref-format")
         for name in ("root_sha", "base_sha", "guard_tip"):
@@ -1785,14 +2588,44 @@ def validate_manifest(manifest: Any) -> tuple[list[str], list[str], list[str]]:
                 error("invalid:dependency_shas:object-missing")
             elif isinstance(base_sha, str) and git(worktree, "merge-base", "--is-ancestor", dependency, base_sha)[0] != 0:
                 error("invalid:dependency_shas:not-ancestor-of-base")
-        if isinstance(feature_ref, str):
+        if phase == "dispatch" and isinstance(feature_ref, str):
             code, feature_tip = git(worktree, "rev-parse", "--verify", feature_ref)
             if code != 0 or feature_tip != manifest.get("base_sha"):
                 error("invalid:feature_ref-tip")
         if isinstance(guard_ref, str):
             code, guard_tip = git(worktree, "rev-parse", "--verify", guard_ref)
-            if code != 0 or guard_tip != manifest.get("guard_tip"):
+            if code != 0 or GIT_OID.fullmatch(guard_tip) is None:
                 error("invalid:guard_ref-tip")
+            elif phase == "dispatch" and guard_tip != manifest.get("guard_tip"):
+                error("invalid:guard_ref-tip")
+
+        coordinator_sha = manifest.get("coordinator_sha")
+        if isinstance(coordinator_sha, str) and GIT_OID.fullmatch(coordinator_sha):
+            if not foreign_main.object_exists(repo, coordinator_sha):
+                error("invalid:coordinator_sha:object-missing")
+            else:
+                message_code, message = git(repo, "show", "-s", "--format=%B", coordinator_sha)
+                coordinator, duplicates = parse_fields(message) if message_code == 0 else ({}, [])
+                if message_code != 0 or duplicates:
+                    error("invalid:coordinator_sha:metadata")
+                expected = {
+                    "RUN_ID": manifest.get("run_id"),
+                    "RUN_KEY": manifest.get("run_key"),
+                    "OWNER_ID": manifest.get("owner_id"),
+                    "EPOCH": str(manifest.get("owner_epoch")),
+                    "PROJECT_ID": manifest.get("project_id"),
+                    "MILESTONE_ID": manifest.get("milestone_id"),
+                }
+                if any(coordinator.get(name) != value for name, value in expected.items()):
+                    error("invalid:coordinator_sha:identity-mismatch")
+        if manifest.get("remote_mode") == "online" and isinstance(guard_ref, str):
+            if _remote_ref_tip(repo, remote, CANONICAL_COORDINATOR_REF) != manifest.get("coordinator_sha"):
+                error("invalid:remote-coordinator-tip")
+            remote_guard_tip = _remote_ref_tip(repo, remote, guard_ref)
+            if phase == "dispatch" and remote_guard_tip != manifest.get("guard_tip"):
+                error("invalid:remote-guard-tip")
+            elif phase != "dispatch" and remote_guard_tip is None:
+                error("invalid:remote-guard-missing")
 
     return errors, surfaces, list(documents)
 
@@ -1802,7 +2635,7 @@ def command_manifest(args: argparse.Namespace) -> int:
     if input_error:
         emit({"schema": 1, "status": "invalid", "errors": [input_error], "surfaces": ["unknown"], "documents": ALL_DOCS})
         return 2
-    errors, surfaces, docs = validate_manifest(manifest)
+    errors, surfaces, docs = validate_manifest(manifest, phase=args.phase, remote=args.remote)
     normalized = json.dumps(manifest, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     emit(
         {
@@ -1815,6 +2648,382 @@ def command_manifest(args: argparse.Namespace) -> int:
         }
     )
     return 0 if not errors else 2
+
+
+def _tool_version(executable: str) -> str | None:
+    try:
+        result = subprocess.run(
+            [executable, "--version"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            check=False,
+            timeout=10,
+            text=True,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    value = result.stdout.strip()
+    return value if result.returncode == 0 and value and len(value) <= 128 else None
+
+
+def _atomic_json(path: Path, value: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            descriptor = -1
+            json.dump(value, stream, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def command_provision_worktree(args: argparse.Namespace) -> int:
+    repo = Path(args.repo).resolve()
+    worktree = Path(args.worktree).resolve()
+    errors: list[str] = []
+    if repo == worktree:
+        errors.append("invalid:worktree-must-differ-from-repo")
+    repo_top = foreign_main.text(repo, "rev-parse", "--show-toplevel")
+    worktree_top = foreign_main.text(worktree, "rev-parse", "--show-toplevel")
+    if repo_top is None or Path(repo_top).resolve() != repo:
+        errors.append("invalid:repo")
+    if worktree_top is None or Path(worktree_top).resolve() != worktree:
+        errors.append("invalid:worktree")
+    if _common_git_dir(repo) != _common_git_dir(worktree):
+        errors.append("invalid:repo-worktree-common-dir")
+    status = foreign_main.run(
+        worktree, "status", "--porcelain=v1", "-z", "--untracked-files=all"
+    )
+    if status.returncode != 0:
+        errors.append("invalid:worktree-status-unavailable")
+    elif status.stdout:
+        errors.append("invalid:worktree-dirty-before-provision")
+    lockfile = worktree / "package-lock.json"
+    if not lockfile.is_file():
+        errors.append("invalid:package-lock-missing")
+    if args.package_manager != "npm":
+        errors.append("invalid:package-manager")
+    if not 30 <= args.timeout_seconds <= 3600:
+        errors.append("invalid:timeout-seconds")
+    if errors:
+        emit({"schema": 1, "status": "invalid", "errors": errors})
+        return 2
+
+    lockfile_digest = hashlib.sha256(lockfile.read_bytes()).hexdigest()
+    task_root = worktree / ".codex-task"
+    build_dir = task_root / "build"
+    tmp_dir = task_root / "tmp"
+    runtime_dir = task_root / "runtime"
+    cache_dir = task_root / "npm-cache"
+    for path in (build_dir, tmp_dir, runtime_dir, cache_dir):
+        path.mkdir(parents=True, exist_ok=True)
+    dependency_path = worktree / "node_modules"
+    receipt_path = task_root / "provision.json"
+    node_version = _tool_version("node")
+    npm_version = _tool_version("npm")
+    if node_version is None or npm_version is None:
+        emit({"schema": 1, "status": "blocked", "reason": "toolchain-unavailable"})
+        return 3
+    environment_id = hashlib.sha256(
+        f"npm-ci\0{lockfile_digest}\0{node_version}\0{npm_version}\0{sys.platform}".encode()
+    ).hexdigest()
+    if receipt_path.is_file() and dependency_path.is_dir() and not dependency_path.is_symlink():
+        try:
+            stored = json.loads(receipt_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            stored = None
+        if (
+            isinstance(stored, dict)
+            and stored.get("status") == "installed"
+            and stored.get("environment_id") == environment_id
+            and stored.get("lockfile_digest") == lockfile_digest
+            and stored.get("dependency_path") == str(dependency_path)
+        ):
+            emit({"schema": 1, **stored, "status": "adopted"})
+            return 0
+    if not args.install:
+        emit(
+            {
+                "schema": 1,
+                "status": "prepared",
+                "install_required": True,
+                "environment_id": environment_id,
+                "lockfile_digest": lockfile_digest,
+                "task_root": str(task_root.resolve()),
+                "dependency_path": str(dependency_path),
+                "command": ["npm", "ci"],
+            }
+        )
+        return 4
+
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "NPM_CONFIG_CACHE": str(cache_dir.resolve()),
+            "TMPDIR": str(tmp_dir.resolve()),
+        }
+    )
+    with tempfile.TemporaryFile() as output:
+        try:
+            completed = subprocess.run(
+                ["npm", "ci"],
+                cwd=worktree,
+                stdin=subprocess.DEVNULL,
+                stdout=output,
+                stderr=subprocess.STDOUT,
+                env=environment,
+                check=False,
+                timeout=args.timeout_seconds,
+            )
+        except subprocess.TimeoutExpired:
+            emit({"schema": 1, "status": "failed", "reason": "npm-ci-timeout"})
+            return 5
+        except OSError as error:
+            emit({"schema": 1, "status": "failed", "reason": f"npm-ci-{type(error).__name__}"})
+            return 5
+        if completed.returncode != 0:
+            emit(
+                {
+                    "schema": 1,
+                    "status": "failed",
+                    "reason": "npm-ci-failed",
+                    "exit_code": completed.returncode,
+                }
+            )
+            return 5
+    if not dependency_path.is_dir() or dependency_path.is_symlink():
+        emit({"schema": 1, "status": "failed", "reason": "dependency-tree-missing-or-linked"})
+        return 5
+    receipt = {
+        "status": "installed",
+        "environment_id": environment_id,
+        "lockfile_digest": lockfile_digest,
+        "dependency_path": str(dependency_path),
+        "node_version": node_version,
+        "npm_version": npm_version,
+        "provenance": f"npm-ci:{lockfile_digest}",
+    }
+    _atomic_json(receipt_path, receipt)
+    after = foreign_main.run(
+        worktree, "status", "--porcelain=v1", "-z", "--untracked-files=all"
+    )
+    if after.returncode != 0 or after.stdout:
+        emit({"schema": 1, "status": "failed", "reason": "provision-created-unignored-source-state"})
+        return 5
+    emit(
+        {
+            "schema": 1,
+            **receipt,
+            "isolation": {
+                "mutable_build_dir": str(build_dir.resolve()),
+                "tmp_dir": str(tmp_dir.resolve()),
+                "runtime_dir": str(runtime_dir.resolve()),
+                "cache_mode": "isolated",
+                "cache_dir": str(cache_dir.resolve()),
+                "cache_key": "none",
+                "ports": [],
+                "env": {
+                    "MIND_DIARY_TASK_TMP": str(tmp_dir.resolve()),
+                    "NPM_CONFIG_CACHE": str(cache_dir.resolve()),
+                },
+            },
+            "dependencies": {
+                "mode": "isolated",
+                "path": str(dependency_path),
+                "lockfile_digest": lockfile_digest,
+                "cache_key": "none",
+                "read_only": False,
+                "provenance": f"npm-ci:{lockfile_digest}",
+            },
+        }
+    )
+    return 0
+
+
+def _receipt_identity(value: str, pattern: str) -> tuple[str, ...] | None:
+    match = re.fullmatch(pattern, value)
+    return match.groups() if match else None
+
+
+def command_receipt_verify(args: argparse.Namespace) -> int:
+    manifest, manifest_error = _read_json(args.manifest)
+    if manifest_error:
+        emit({"schema": 1, "status": "invalid", "verified": False, "errors": [manifest_error]})
+        return 2
+    manifest_errors, _, _ = validate_manifest(manifest, phase="receipt", remote=args.remote)
+    try:
+        raw = sys.stdin.read() if args.input == "-" else Path(args.input).read_text(encoding="utf-8")
+    except OSError as error:
+        emit({"schema": 1, "status": "invalid", "verified": False, "errors": [f"input:{type(error).__name__}"]})
+        return 2
+    errors = [f"manifest:{value}" for value in manifest_errors]
+    if not raw.strip() or len(raw.encode("utf-8")) > 4096 or "\0" in raw:
+        errors.append("invalid:receipt-size")
+        receipt: dict[str, str] = {}
+    else:
+        receipt, duplicates = parse_fields(raw)
+        errors.extend(f"invalid:receipt-duplicate:{name}" for name in duplicates)
+    required = {
+        "STATUS",
+        "RUN_ID",
+        "RUN_KEY",
+        "OWNER",
+        "CLAIM",
+        "ISSUE",
+        "WORKTREE",
+        "BRANCH",
+        "BASE_SHA",
+        "HEAD_SHA",
+        "SCOPE",
+        "ORIGIN_REF",
+        "GUARD",
+        "CHECK_CLASS",
+        "TARGETED_CHECKS",
+        "CHECKS_DIGEST",
+        "FULL_GATE",
+        "EXECUTOR",
+        "GAPS",
+        "DIRTY_REMAINDER",
+        "DEFECT_CANDIDATE",
+        "NEXT",
+    }
+    errors.extend(f"missing:receipt.{name.lower()}" for name in sorted(required - receipt.keys()))
+    status = receipt.get("STATUS")
+    if status not in {"ready", "failed", "needs-coordinator", "needs-input"}:
+        errors.append("invalid:receipt.status")
+    expected_scalars = {
+        "RUN_ID": manifest.get("run_id"),
+        "RUN_KEY": manifest.get("run_key"),
+        "WORKTREE": manifest.get("worktree"),
+        "BRANCH": manifest.get("branch"),
+        "BASE_SHA": manifest.get("base_sha"),
+        "CHECK_CLASS": "targeted-feature",
+        "FULL_GATE": "deferred-to-cutoff",
+    }
+    for name, expected in expected_scalars.items():
+        if receipt.get(name) != expected:
+            errors.append(f"invalid:receipt.{name.lower()}")
+    issue = _receipt_identity(
+        receipt.get("ISSUE", ""), r"([A-Z][A-Z0-9]*-[1-9][0-9]*) \(([^()]+)\)"
+    )
+    if issue != (manifest.get("issue_identifier"), manifest.get("issue_id")):
+        errors.append("invalid:receipt.issue")
+    owner = _receipt_identity(
+        receipt.get("OWNER", ""),
+        rf"id=({UUID_TEXT.pattern}); epoch=([1-9][0-9]*)",
+    )
+    if owner != (manifest.get("owner_id"), str(manifest.get("owner_epoch"))):
+        errors.append("invalid:receipt.owner")
+    claim = _receipt_identity(
+        receipt.get("CLAIM", ""),
+        rf"generation=([1-9][0-9]*); token=({UUID_TEXT.pattern})",
+    )
+    if claim != (str(manifest.get("claim_generation")), manifest.get("claim_token")):
+        errors.append("invalid:receipt.claim")
+    executor = _receipt_identity(
+        receipt.get("EXECUTOR", ""),
+        rf"lease=({UUID_TEXT.pattern}); mode=(delegated|coordinator-inline); fresh=(yes)",
+    )
+    manifest_executor = manifest.get("executor", {}) if isinstance(manifest, dict) else {}
+    if executor != (
+        manifest_executor.get("lease_id"),
+        manifest_executor.get("mode"),
+        "yes",
+    ):
+        errors.append("invalid:receipt.executor")
+    checks_digest = receipt.get("CHECKS_DIGEST", "")
+    if LOWER_DIGEST.fullmatch(checks_digest) is None:
+        errors.append("invalid:receipt.checks-digest")
+    scope = _receipt_identity(
+        receipt.get("SCOPE", ""),
+        r"start_fingerprint=([0-9a-f]{64}); final_fingerprint=([0-9a-f]{64}); (unchanged|adapted)",
+    )
+    expected_scope = manifest.get("scope_fingerprint") if isinstance(manifest, dict) else None
+    if (
+        scope is None
+        or scope[0] != expected_scope
+        or scope[1] != args.current_scope_fingerprint
+        or scope[2] != "unchanged"
+    ):
+        errors.append("invalid:receipt.scope")
+    if status == "ready" and not errors:
+        repo = Path(manifest["repo"]).resolve()
+        worktree = Path(manifest["worktree"]).resolve()
+        head = receipt.get("HEAD_SHA", "")
+        if GIT_OID.fullmatch(head) is None or foreign_main.text(worktree, "rev-parse", "HEAD") != head:
+            errors.append("invalid:receipt.head")
+        feature = _receipt_identity(
+            receipt.get("ORIGIN_REF", ""), r"([^=\s]+)=([0-9a-f]{40}(?:[0-9a-f]{24})?)"
+        )
+        if feature != (manifest.get("branch"), head):
+            errors.append("invalid:receipt.origin-ref")
+        elif _remote_ref_tip(repo, args.remote, manifest["feature_ref"]) != head:
+            errors.append("invalid:receipt.remote-feature-tip")
+        guard = _receipt_identity(
+            receipt.get("GUARD", ""),
+            r"origin:(refs/heads/[^=\s]+)=([0-9a-f]{40}(?:[0-9a-f]{24})?)",
+        )
+        if guard is None or guard[0] != manifest.get("guard_ref"):
+            errors.append("invalid:receipt.guard")
+        elif _remote_ref_tip(repo, args.remote, guard[0]) != guard[1]:
+            errors.append("invalid:receipt.remote-guard-tip")
+        else:
+            fetch = foreign_main.run(
+                repo, "fetch", "--no-write-fetch-head", "--no-tags", args.remote, guard[1]
+            )
+            code, guard_message = git(repo, "show", "-s", "--format=%B", guard[1])
+            guard_metadata = _guard_metadata(guard_message) if fetch.returncode == 0 and code == 0 else {}
+            if (
+                guard_metadata.get("STATE") != "ready"
+                or guard_metadata.get("ISSUE") != manifest.get("issue_identifier")
+                or guard_metadata.get("CLAIM_GENERATION") != str(manifest.get("claim_generation"))
+                or guard_metadata.get("FEATURE_HEAD") != head
+                or guard_metadata.get("CHECKS_DIGEST") != checks_digest
+            ):
+                errors.append("invalid:receipt.guard-metadata")
+        worktree_status = foreign_main.run(
+            worktree, "status", "--porcelain=v1", "-z", "--untracked-files=all"
+        )
+        if worktree_status.returncode != 0 or worktree_status.stdout:
+            errors.append("invalid:receipt.worktree-dirty")
+        code, changed = git(
+            worktree, "diff", "--name-only", f"{manifest['base_sha']}..{head}"
+        )
+        ownership = manifest.get("ownership_paths", [])
+        if code != 0:
+            errors.append("invalid:receipt.diff-unavailable")
+        else:
+            for path in changed.splitlines():
+                if not any(_paths_overlap(path, owned) for owned in ownership):
+                    errors.append(f"invalid:receipt.path-outside-ownership:{path}")
+    if errors:
+        emit({"schema": 1, "status": "invalid", "verified": False, "errors": list(dict.fromkeys(errors))})
+        return 2
+    digest = hashlib.sha256(raw.encode()).hexdigest()
+    emit(
+        {
+            "schema": 1,
+            "status": status,
+            "verified": True,
+            "receipt_digest": digest,
+            "issue_identifier": manifest.get("issue_identifier"),
+            "head_sha": receipt.get("HEAD_SHA"),
+            "checks_digest": checks_digest,
+            "next": "execution-feature-ready" if status == "ready" else "coordinator-triage",
+        }
+    )
+    return 0
 
 
 def _transition_invalid(errors: list[str]) -> int:
@@ -1851,6 +3060,8 @@ def _validate_transition_parent(parent_fields: dict[str, str]) -> tuple[list[str
     if missing:
         return [f"missing:parent-{name.lower().replace('_', '-')}" for name in missing], None, None
     errors: list[str] = []
+    if parent_fields.get("__DUPLICATE_HEADERS__"):
+        errors.append("invalid:parent-duplicate-authoritative-headers")
     if parent_fields["SCHEMA"] != "1":
         errors.append("invalid:parent-schema")
     if parent_fields["KIND"] != "COORDINATOR_CLAIM":
@@ -2041,6 +3252,11 @@ def _render_takeover_message(
     contract_digest: str,
     primary: dict[str, Any],
     thread_id: str,
+    *,
+    cause: str = "handoff",
+    expected_owner_state: str = "handoff-ready",
+    stop_proof_kind: str = "none",
+    stop_proof_digest: str = "none",
 ) -> tuple[str | None, dict[str, str] | None, list[str]]:
     parent_fields = fields(parent_message)
     errors, parent_seq, _ = _validate_transition_parent(parent_fields)
@@ -2063,6 +3279,9 @@ def _render_takeover_message(
         "thread_id": thread_id,
         "contract_source_sha": remote_main,
         "contract_digest": contract_digest,
+        "cause": cause,
+        "stop_proof_kind": stop_proof_kind,
+        "stop_proof_digest": stop_proof_digest,
     }
     payload_digest = hashlib.sha256(
         json.dumps(action_payload, sort_keys=True, separators=(",", ":")).encode()
@@ -2107,6 +3326,8 @@ def _render_takeover_message(
         "HOLD_PAUSE_INDEX",
         "DEFAULT_OBSERVED_SHA",
         "PRIMARY_CHECKOUT",
+        "PROFILE",
+        "STALE_OWNER_PROOF",
     }
     ledger_lines: list[str] = []
     for line in parent_message.splitlines():
@@ -2127,15 +3348,16 @@ def _render_takeover_message(
         ),
         (
             "RECOVERY: "
-            f"generation={recovery_generation};cause=handoff;phase=fencing;"
+            f"generation={recovery_generation};cause={cause};phase=fencing;"
             f"previous_owner={parent_fields['OWNER_ID']}/{old_epoch};"
             "inventory=none;reattached=none;adopted=none;requeued=none;"
             "quarantined=none;unresolved=none"
         ),
         (
-            f"PAUSE: id={pause_id or 'legacy-handoff'};state=lifted;reason=handoff-consumed;"
+            f"PAUSE: id={pause_id or 'legacy-handoff'};state=lifted;reason={cause}-consumed;"
             "confirmation=explicit-skill-invocation;pending_external_action=none"
         ),
+        f"STALE_OWNER_PROOF: kind={stop_proof_kind};digest={stop_proof_digest}",
         f"HOLD_PAUSE_INDEX: {_render_hold_pause_index(remaining_holds)}",
         f"DEFAULT_OBSERVED_SHA: {remote_main}",
         (
@@ -2146,10 +3368,10 @@ def _render_takeover_message(
     action = {
         "ACTION_SEQ": str(parent_seq + 1),
         "ACTION_ID": action_id,
-        "ACTION_KIND": "takeover-owner",
+        "ACTION_KIND": "takeover-owner" if cause == "handoff" else "recover-stale-owner",
         "ACTION_TARGET": f"{CANONICAL_COORDINATOR_REF}@{parent}",
         "EXPECTED_BEFORE": (
-            f"owner={parent_fields['OWNER_ID']}/{old_epoch}:handoff-ready;"
+            f"owner={parent_fields['OWNER_ID']}/{old_epoch}:{expected_owner_state};"
             f"coordinator={parent}"
         ),
         "EXTERNAL_REQUEST_KEY": "none",
@@ -2268,6 +3490,125 @@ def command_takeover(args: argparse.Namespace) -> int:
             "epoch": int(identity["epoch"]),
             "owner_proof_kind": "runtime-task-id",
             "action_id": identity["action_id"],
+            "state": "recovering",
+            "mutation_scope": "recovery-only",
+            "next": "fence-indexed-guards-then-recover",
+        }
+    )
+    return 0
+
+
+def command_recover_stale_owner(args: argparse.Namespace) -> int:
+    """Take ownership only after exact external proof that the old task stopped."""
+    repo = Path(args.repo).resolve()
+    thread_id, runtime_proof = _runtime_owner_proof()
+    if thread_id is None or runtime_proof is None:
+        emit({"schema": 1, "status": "blocked", "reason": "runtime-thread-id-unavailable"})
+        return 3
+    if args.proof_kind not in {"task-terminal", "user-confirmed-stop"}:
+        emit({"schema": 1, "status": "invalid", "errors": ["invalid:proof-kind"]})
+        return 2
+    if LOWER_DIGEST.fullmatch(args.proof_digest) is None:
+        emit({"schema": 1, "status": "invalid", "errors": ["invalid:proof-digest"]})
+        return 2
+    preflight_code, preflight = _capture_preflight(repo, args.remote, args.default)
+    active = next(
+        (
+            item
+            for item in preflight.get("coordinator_refs", [])
+            if item.get("kind") == "canonical" and item.get("classification") == "active"
+        ),
+        None,
+    )
+    if preflight_code != 0 or preflight.get("route") != "recovery" or active is None:
+        emit(
+            {
+                "schema": 1,
+                "status": "blocked",
+                "reason": "stale-owner-recovery-not-eligible",
+                "route": preflight.get("route"),
+            }
+        )
+        return 3
+    lifecycle = active.get("lifecycle", {})
+    if (
+        not lifecycle.get("coherent")
+        or lifecycle.get("running_count") != 0
+        or lifecycle.get("pending_actions") != "none"
+    ):
+        emit(
+            {
+                "schema": 1,
+                "status": "blocked",
+                "reason": "old-owner-not-quiescent-enough-to-fence",
+                "lifecycle": lifecycle,
+            }
+        )
+        return 3
+    parent = active["sha"]
+    fetch = foreign_main.run(
+        repo, "fetch", "--no-write-fetch-head", "--no-tags", args.remote, parent
+    )
+    if fetch.returncode != 0 or not foreign_main.object_exists(repo, parent):
+        emit({"schema": 1, "status": "blocked", "reason": "parent-materialization-failed"})
+        return 3
+    code, parent_message = git(repo, "show", "-s", "--format=%B", parent)
+    remote_main = preflight.get("remote_sha")
+    contract_digest = preflight.get("contract_oid")
+    if (
+        code != 0
+        or not isinstance(remote_main, str)
+        or GIT_OID.fullmatch(remote_main) is None
+        or not isinstance(contract_digest, str)
+        or GIT_OID.fullmatch(contract_digest) is None
+    ):
+        emit({"schema": 1, "status": "blocked", "reason": "stale-owner-input-invalid"})
+        return 3
+    message, identity, errors = _render_takeover_message(
+        parent,
+        parent_message,
+        remote_main,
+        contract_digest,
+        preflight.get("primary_checkout", {}),
+        thread_id,
+        cause="stale-owner-stop",
+        expected_owner_state=active.get("owner_state", "active"),
+        stop_proof_kind=args.proof_kind,
+        stop_proof_digest=args.proof_digest,
+    )
+    if errors or message is None or identity is None:
+        emit({"schema": 1, "status": "blocked", "reason": "stale-owner-message-invalid", "errors": errors})
+        return 3
+    commit = _metadata_commit(repo, parent, message)
+    if commit is None:
+        emit({"schema": 1, "status": "blocked", "reason": "stale-owner-commit-failed"})
+        return 3
+    push = foreign_main.run(
+        repo,
+        "push",
+        "--porcelain",
+        f"--force-with-lease={CANONICAL_COORDINATOR_REF}:{parent}",
+        args.remote,
+        f"{commit}:{CANONICAL_COORDINATOR_REF}",
+    )
+    if push.returncode != 0:
+        emit({"schema": 1, "status": "cas-lost", "reason": "coordinator-ref-changed", "expected": parent})
+        return 4
+    advertised_state, advertised = advertised_coordinator_refs(repo, args.remote)
+    observed = next((sha for sha, ref in advertised if ref == CANONICAL_COORDINATOR_REF), None)
+    if advertised_state != "observed" or observed != commit:
+        emit({"schema": 1, "status": "blocked", "reason": "stale-owner-delivery-unverified", "commit": commit})
+        return 3
+    emit(
+        {
+            "schema": 1,
+            "status": "taken",
+            "coordinator": commit,
+            "parent": parent,
+            "owner_id": identity["owner_id"],
+            "epoch": int(identity["epoch"]),
+            "proof_kind": args.proof_kind,
+            "proof_digest": args.proof_digest,
             "state": "recovering",
             "mutation_scope": "recovery-only",
             "next": "fence-indexed-guards-then-recover",
@@ -2398,6 +3739,8 @@ def _metadata_tree(repo: Path) -> str | None:
 
 
 def _metadata_commit(repo: Path, parent: str, message: str) -> str | None:
+    if len(message.encode("utf-8")) > MAX_METADATA_BYTES or "\0" in message:
+        return None
     tree = _metadata_tree(repo)
     if tree is None:
         return None
@@ -2427,10 +3770,20 @@ def command_metadata_commit(args: argparse.Namespace) -> int:
     except OSError as error:
         emit({"schema": 1, "status": "invalid", "errors": [f"input:{type(error).__name__}"]})
         return 2
-    if not message.strip() or len(message.encode("utf-8")) > 65536 or "\0" in message:
+    message_bytes = len(message.encode("utf-8"))
+    if not message.strip() or message_bytes > MAX_METADATA_BYTES or "\0" in message:
         emit({"schema": 1, "status": "invalid", "errors": ["invalid:message"]})
         return 2
-    metadata = fields(message)
+    metadata, duplicates = parse_fields(message)
+    if duplicates:
+        emit(
+            {
+                "schema": 1,
+                "status": "invalid",
+                "errors": [f"invalid:duplicate-authoritative-header:{name}" for name in duplicates],
+            }
+        )
+        return 2
     expected_kind = "COORDINATOR_CLAIM" if args.kind == "coordinator" else "CLAIM_GUARD"
     if metadata.get("KIND") != expected_kind:
         emit({"schema": 1, "status": "invalid", "errors": [f"invalid:kind:expected-{expected_kind.lower()}"]})
@@ -2447,6 +3800,9 @@ def command_metadata_commit(args: argparse.Namespace) -> int:
             "parent": args.parent,
             "tree": _metadata_tree(repo),
             "tree_mode": "empty-workflow-free",
+            "message_bytes": message_bytes,
+            "message_limit": MAX_METADATA_BYTES,
+            "compaction_recommended": message_bytes >= 32_768,
         }
     )
     return 0
@@ -3743,12 +5099,29 @@ def parser() -> argparse.ArgumentParser:
     preflight.add_argument("--skill-path", default=SKILL_PATH)
     preflight.add_argument("--owner-proof-digest")
     preflight.set_defaults(handler=command_preflight)
+    status = sub.add_parser("status")
+    status.add_argument("--repo", default=".")
+    status.add_argument("--remote", default="origin")
+    status.add_argument("--default", default="main")
+    status.set_defaults(handler=command_status)
     docs = sub.add_parser("docs")
     docs.add_argument("--path", action="append", default=[])
     docs.add_argument("--surface", choices=sorted(SURFACE_DOCS))
     docs.set_defaults(handler=command_docs)
     identities = sub.add_parser("identities")
     identities.set_defaults(handler=command_identities)
+    goal_card = sub.add_parser("goal-card")
+    goal_card.add_argument("--repo", required=True)
+    goal_card.add_argument("--project-name", required=True)
+    goal_card.add_argument("--project-id", required=True)
+    goal_card.add_argument("--milestone-name", required=True)
+    goal_card.add_argument("--milestone-id", required=True)
+    goal_card.add_argument("--run-id", required=True)
+    goal_card.add_argument("--run-key", required=True)
+    goal_card.add_argument("--owner-id", required=True)
+    goal_card.add_argument("--epoch", type=int, required=True)
+    goal_card.add_argument("--contract-sha", required=True)
+    goal_card.set_defaults(handler=command_goal_card)
     invocation = sub.add_parser("invocation")
     invocation.add_argument("--text", required=True)
     invocation.set_defaults(handler=command_invocation)
@@ -3756,18 +5129,57 @@ def parser() -> argparse.ArgumentParser:
     launch_check.add_argument("--workers", required=True)
     launch_check.add_argument("--max-workers", type=int)
     launch_check.add_argument("--runtime-slots-total", type=int, required=True)
+    launch_check.add_argument(
+        "--runtime-source", choices=("system-capacity", "runtime-api"), required=True
+    )
     launch_check.add_argument("--safe-resource-capacity", type=int)
+    launch_check.add_argument(
+        "--resource-source", choices=("provisioner", "explicit-safe-limit"), required=True
+    )
     launch_check.add_argument("--compatible-ready", type=int, required=True)
     launch_check.add_argument("--unfinished", type=int, required=True)
     launch_check.add_argument("--running", type=int, default=0)
     launch_check.add_argument("--layout", choices=("auto", "dedicated", "fused"), default="auto")
     launch_check.set_defaults(handler=command_launch_check)
+    milestone_plan = sub.add_parser("milestone-plan")
+    milestone_plan.add_argument("--input", default="-")
+    milestone_plan.set_defaults(handler=command_milestone_plan)
+    conveyor_next = sub.add_parser("conveyor-next")
+    conveyor_next.add_argument("--input", default="-")
+    conveyor_next.set_defaults(handler=command_conveyor_next)
     dispatch_check = sub.add_parser("dispatch-check")
     dispatch_check.add_argument("--input", default="-")
+    dispatch_check.add_argument("--remote", default="origin")
     dispatch_check.set_defaults(handler=command_dispatch_check)
     manifest = sub.add_parser("manifest")
     manifest.add_argument("--input", default="-")
+    manifest.add_argument("--phase", choices=("dispatch", "active", "receipt"), default="dispatch")
+    manifest.add_argument("--remote", default="origin")
     manifest.set_defaults(handler=command_manifest)
+    provision = sub.add_parser("provision-worktree")
+    provision.add_argument("--repo", default=".")
+    provision.add_argument("--worktree", required=True)
+    provision.add_argument("--package-manager", default="npm")
+    provision.add_argument("--install", action="store_true")
+    provision.add_argument("--timeout-seconds", type=int, default=900)
+    provision.set_defaults(handler=command_provision_worktree)
+    receipt = sub.add_parser("receipt-verify")
+    receipt.add_argument("--manifest", required=True)
+    receipt.add_argument("--input", default="-")
+    receipt.add_argument("--remote", default="origin")
+    receipt.add_argument("--current-scope-fingerprint", required=True)
+    receipt.set_defaults(handler=command_receipt_verify)
+    cleanup_plan = sub.add_parser("cleanup-plan")
+    cleanup_plan.add_argument("--repo", default=".")
+    cleanup_plan.add_argument("--remote", default="origin")
+    cleanup_plan.add_argument("--default", default="main")
+    cleanup_plan.set_defaults(handler=command_cleanup_plan)
+    cleanup_apply = sub.add_parser("cleanup-apply")
+    cleanup_apply.add_argument("--repo", default=".")
+    cleanup_apply.add_argument("--remote", default="origin")
+    cleanup_apply.add_argument("--default", default="main")
+    cleanup_apply.add_argument("--input", default="-")
+    cleanup_apply.set_defaults(handler=command_cleanup_apply)
     metadata_commit = sub.add_parser("metadata-commit")
     metadata_commit.add_argument("--repo", default=".")
     metadata_commit.add_argument("--parent", required=True)
@@ -3791,6 +5203,15 @@ def parser() -> argparse.ArgumentParser:
     takeover.add_argument("--remote", default="origin")
     takeover.add_argument("--default", default="main")
     takeover.set_defaults(handler=command_takeover)
+    recover_stale = sub.add_parser("recover-stale-owner")
+    recover_stale.add_argument("--repo", default=".")
+    recover_stale.add_argument("--remote", default="origin")
+    recover_stale.add_argument("--default", default="main")
+    recover_stale.add_argument(
+        "--proof-kind", choices=("task-terminal", "user-confirmed-stop"), required=True
+    )
+    recover_stale.add_argument("--proof-digest", required=True)
+    recover_stale.set_defaults(handler=command_recover_stale_owner)
     fence_guards = sub.add_parser("fence-guards")
     fence_guards.add_argument("--repo", default=".")
     fence_guards.add_argument("--remote", default="origin")
