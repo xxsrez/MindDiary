@@ -15,16 +15,19 @@ MVP в OpenAI Sites. При подтверждённой пользовател�
 post-MVP infrastructure direction — AWS/AgentCore; это также самостоятельная
 учебная цель проекта, но не текущая release surface.
 
-Сейчас репозиторий содержит deployable source candidate продукта для OpenAI
-Sites: отдельное приложение `apps/mind-diary-site`, authenticated web/control
+Сейчас Mind Diary развёрнут owner-only в production OpenAI Sites по адресу
+<https://mind-diary.example.invalid>. Репозиторий содержит отдельное
+приложение `apps/mind-diary-site`, authenticated web/control
 routes, современный Streamable HTTP `POST /api/mcp`, изолированный Codex
 compatibility endpoint `POST /api/mcp/2025-11-25`, D1/R2 adapters и Worker
 background handlers. Перенос с `/mcp` необходим, потому что exact path
 перехватывается Sites до product Worker. Локальные build, contract/integration
-checks и воспроизводимый probe с `codex-cli 0.147.0` подтверждают source
-candidate на обоих profiles: default compatibility и opt-in
-`mcp_2026_07_28`. Но новая версия не публиковалась: production deployment, live
-URL, persistence-after-redeploy и live MCP Inspector ещё не подтверждены.
+checks дополнены production smoke: persisted authenticated web/control UI,
+raw modern discovery/list и реальный `codex-cli 0.147.0` прошли на обоих
+profiles — default compatibility и opt-in `mcp_2026_07_28`. Временный
+read-only token после проверки отозван; следующий request получил 401.
+История платформенной проблемы и доказательство исправления сохранены в
+[capability report](docs/reports/2026-08-07-sites-mcp-capability-gate.md).
 
 Важная оговорка: подключённая MCP-база не находится целиком в контексте модели.
 Она виртуально доступна через поиск и точечное чтение, а в контекст попадают
@@ -61,12 +64,13 @@ full-bundle OKF, documentation, architecture и secret/config checks. Она н�
 
 ## Статус
 
-Product Site source candidate соединяет принятые application use cases с
+Production Product Site соединяет принятые application use cases с
 Sites-compatible Vinext/Worker runtime, durable D1/R2 adapters и background
 jobs. Browser surface остаётся control plane и не рендерит raw Markdown;
 Bearer endpoints `/api/mcp` и `/api/mcp/2025-11-25` используют одну
 request-scoped authorization boundary и не публикуют membership/control tools.
-Это source/build/local-client evidence, а не production claim: следующий этап —
-sealed full gate exact candidate SHA, Sites publish и live web, persistence,
-MCP Inspector и Codex gates. ZIP import, producer-defined non-Markdown files и
-named checkpoints остаются вне MVP.
+Owner-only Sites audience gate и application Bearer остаются независимыми:
+Codex передаёт первый через `env_http_headers`, второй — через
+`bearer_token_env_var`. Следующий этап — расширять product workflows и
+automation поверх уже проверенного Sites/MCP контура. ZIP import,
+producer-defined non-Markdown files и named checkpoints остаются вне MVP.

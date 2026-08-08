@@ -1,10 +1,9 @@
 # Архитектура Mind Diary
 
-Статус: proposal, обновлено 2026-08-08. Product Site components, adapters и
-targeted tests реализованы как deployable source candidate. Direct local
-candidate дополнительно содержит route migration и isolated Codex bridge;
-production deployment этой версии и live compatibility evidence ещё
-отсутствуют.
+Статус: proposal, обновлено 2026-08-08. Product Site components, adapters,
+route migration и isolated Codex bridge реализованы и развёрнуты owner-only в
+production OpenAI Sites. Authenticated web/control, persistence-after-redeploy,
+raw modern discovery и оба профиля `codex-cli 0.147.0` проверены live.
 
 ## Драйверы и ограничения
 
@@ -138,18 +137,20 @@ composition и automated import graph checks реализованы; live Sites 
 
 Exact `/mcp` не принадлежит product router: live Sites probes показывают, что
 этот path перехватывается platform dispatcher до deployed Worker, тогда как
-`/api/mcp` достигает обычной Sites boundary. Поэтому source candidate не
+`/api/mcp` достигает обычной Sites boundary. Поэтому product router не
 redirect-ит credential-bearing requests с `/mcp`, а публикует два explicit
 non-reserved endpoint выше. Наблюдение и его ограничения сохранены в
 [датированном capability report](reports/2026-08-07-sites-mcp-capability-gate.md);
-исправление остаётся локальным до нового deployment.
+исправление подтверждено matching production Worker events и реальными Codex
+tool calls после redeploy.
 
 ### 4. Infrastructure adapters
 
 - Local: in-memory/filesystem и SQLite adapters для contract fixtures.
-- Sites MVP source candidate: D1 metadata/search/audit и R2 canonical
-  objects/export. Их production bindings, quotas и нужная transactional
-  semantics требуют live-проверки после deployment.
+- Sites MVP production: D1 metadata/search/audit и R2 canonical
+  objects/export. Bindings и сохранение account/Personal Mind после redeploy
+  проверены live; quota, recovery и большой export требуют отдельного
+  operational evidence по мере нагрузки.
 - Post-MVP AWS adapters: S3 canonical objects, DynamoDB transactional
   metadata/outbox и optional OpenSearch Serverless derived index.
 
@@ -212,7 +213,10 @@ expiry/revocation, строит `ActorContext` и затем на каждом t
 control-plane capabilities и не логируется. `content:write` включает
 `content:read`; write-only token не выпускается.
 
-Codex configuration использует `bearer_token_env_var`. Проверенный default
+Codex configuration использует `bearer_token_env_var`. Для owner-only Site
+отдельный `env_http_headers` передаёт `OAI-Sites-Authorization`, причём значение
+environment variable содержит полный `Bearer <secret>`, а не только secret.
+Проверенный default
 `codex-cli 0.147.0` направляется на compatibility URL
 `https://{site-host}/api/mcp/2025-11-25`; modern clients — на
 `https://{site-host}/api/mcp`. Для Claude Code и других clients support
@@ -429,19 +433,20 @@ explicit target Mind. General cross-Mind search/synthesis требует нов�
   разными security boundaries; browser не рендерит raw Markdown, MCP не
   публикует control tools.
 - Integration/transport checks подтверждают оба endpoint, negotiation,
-  request-scoped token/access reauthorization и local Codex tool flow в default
-  compatibility и opt-in modern modes; packaging checks подтверждают repository
-  contracts. Это не подтверждает routing, persistence или client compatibility
-  после production Sites publish.
+  request-scoped token/access reauthorization и Codex tool flow в default
+  compatibility и opt-in modern modes; production Worker events и persisted
+  web state подтверждают routing и persistence после Sites publish.
 
 ### OpenAI Sites MVP production
 
 - Sites — единственная production platform текущего MVP и подтверждённый host
   web/admin UI с Sign in with ChatGPT.
-- Source candidate использует D1/R2 bindings; их live availability, quotas и
-  atomicity нужных operations остаются release gate.
-- Streamable HTTP MCP реализован в том же Worker по non-reserved paths, но
-  Sites proxy/runtime compatibility новой версии ещё не подтверждена live.
+- Production Site использует D1/R2 bindings; их live availability и
+  persistence-after-redeploy проверены, а quota и recovery остаются
+  operational follow-up.
+- Streamable HTTP MCP реализован в том же Worker по non-reserved paths;
+  Sites proxy/runtime compatibility подтверждена raw modern и реальными Codex
+  flows.
 - Gate включает real Codex client, stable HTTPS endpoint, streaming, bearer
   forwarding/configuration, protocol lifecycle и persistence across deployments.
   Claude Code и другие clients получают собственную non-blocking gate до

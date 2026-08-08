@@ -2,10 +2,10 @@
 
 Статус: proposal для верификации, обновлено 2026-08-08. Документ уточняет
 wire-level контракты первого прототипа на основе принятых product decisions.
-Product API source candidate и direct MCP route/compatibility repair реализованы
-и проверены локально, но эта версия не развёрнута и документ не утверждает
-production или live compatibility. Machine-readable OpenAPI и MCP JSON Schemas
-проверяются на соответствие этому документу и реализации.
+Product API и direct MCP route/compatibility repair реализованы, развёрнуты
+owner-only в production OpenAI Sites и проверены raw modern calls и реальным
+`codex-cli 0.147.0` на обоих profiles. Machine-readable OpenAPI и MCP JSON
+Schemas проверяются на соответствие этому документу и реализации.
 
 ## Назначение и граница
 
@@ -751,11 +751,11 @@ Mind authorization вычисляются заново для каждого HTT
 только protocol framing; compatibility adapter не добавляет отдельную ACL,
 cached actor или tool surface.
 
-Route selection и оба profiles проверены локальными transport/integration
-tests. Настоящий `codex-cli 0.147.0` выполнил `tools/list`/`tools/call` и через
-default compatibility lifecycle, и через opt-in modern discovery. Новая версия
-не публиковалась, поэтому это не live Sites fix/conformance. Предыдущее
-отрицательное evidence exact `/mcp` остаётся в
+Route selection и оба profiles проверены transport/integration tests и
+production Sites smoke. Настоящий `codex-cli 0.147.0` выполнил
+`tools/list`/`tools/call` и через default compatibility lifecycle, и через
+opt-in modern discovery; matching Worker events завершились HTTP 200.
+Предыдущее отрицательное evidence exact `/mcp` остаётся в
 [датированном capability report](../reports/2026-08-07-sites-mcp-capability-gate.md).
 
 ### Modern stateless profile `2026-07-28`
@@ -858,6 +858,9 @@ lifecycle никогда не передаётся в `/api/mcp`.
 url = "https://<your-mind-diary-site>/api/mcp/2025-11-25"
 bearer_token_env_var = "MIND_DIARY_TOKEN"
 required = true
+
+[mcp_servers.mind_diary.env_http_headers]
+OAI-Sites-Authorization = "MIND_DIARY_SITES_AUTHORIZATION"
 ```
 
 Token value хранится только в `MIND_DIARY_TOKEN`. Для opt-in
@@ -867,11 +870,13 @@ compatibility URL. В `codex-cli 0.147.0` modern path ещё скрыт за
 under-development feature; default остаётся compatibility profile.
 
 Sites audience gate находится перед product Worker и не заменяет product
-authentication. Фрагмент выше предполагает, что MCP URL сетевым образом
-доступен client. Ограниченный audience требует отдельный
-platform-supported machine credential в `env_http_headers`; он не отменяет
-`Authorization: Bearer` Mind Diary. Выбор public audience или restricted
-audience с machine access остаётся deployment decision и проверяется live.
+authentication. В owner-only deployment переменная
+`MIND_DIARY_SITES_AUTHORIZATION` содержит полный текст
+`Bearer <Sites machine credential>`: Codex передаёт `env_http_headers` value
+буквально и не добавляет scheme сам. Отдельный
+`Authorization: Bearer <Mind Diary token>` формируется через
+`bearer_token_env_var`. Public audience может убрать Sites-specific table, но
+смена access policy остаётся отдельным deployment decision.
 
 ### MCP authentication
 

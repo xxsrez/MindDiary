@@ -1,8 +1,9 @@
 # Product Site source candidate на 2026-08-08
 
-Статус: repository evidence для `AND-149`; не deployment report и не live
-Sites/MCP claim. Exact release SHA и production artifacts фиксирует
-coordinator-owned sealed cutoff/release flow.
+Статус: исторический repository evidence для `AND-149`. Candidate впоследствии
+интегрирован, исправлен для Sites MCP routing и развёрнут owner-only в
+production; exact live evidence фиксирует
+[capability report](2026-08-07-sites-mcp-capability-gate.md).
 
 ## Результат
 
@@ -87,10 +88,10 @@ Sites или real-client conformance.
 bounded upgrade принадлежат отдельному dependency/security follow-up и не
 подменяют live release gate.
 
-## Что остаётся до production claim
+## Историческая граница candidate
 
-Coordinator должен на одном exact candidate SHA выполнить sealed full gate,
-опубликовать настоящий Sites project/version/deployment и зафиксировать:
+На момент создания этого отчёта оставалось выполнить full gate, опубликовать
+Sites project/version/deployment и зафиксировать:
 
 - authenticated web/control smoke (`W`);
 - persistence-after-redeploy (`P`);
@@ -99,12 +100,8 @@ Coordinator должен на одном exact candidate SHA выполнить 
 - release manifest с exact Git SHA, project, version, deployment и live URL
   (`R`).
 
-Пока эти artifacts отсутствуют, Product Site считается deployable source
-candidate, но не production deployment. Провал Sites/MCP capability gate
-блокирует release и не разрешает AWS/container fallback.
-
-Последняя проверка live owner-authenticated `/` и `/me` относится к ранее
-развёрнутой версии: source repair `AND-149:c2` ещё не публиковался coordinator-ом
-и потому не считается live. Sites dispatcher `POST /mcp` возвращает `404`; это
-отдельный blocker `AND-77`, который данный source repair не скрывает и не
-исправляет.
+Эта граница больше не является текущим status: production release выполнен
+наследником candidate. Exact `/mcp` действительно оказался platform-reserved
+до Worker; product MCP перенесён на `/api/mcp`, а default Codex получает
+изолированный `/api/mcp/2025-11-25`. Исторические сомнения и последующий
+положительный live gate сохранены в связанном capability report.

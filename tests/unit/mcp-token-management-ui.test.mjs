@@ -5,6 +5,8 @@ import test from "node:test";
 import {
   MIND_DIARY_CODEX_CONFIG,
   MIND_DIARY_CODEX_SAFE_ENVIRONMENT_SETUP,
+  MIND_DIARY_CODEX_SITES_AUTHORIZATION_ENVIRONMENT_VARIABLE,
+  MIND_DIARY_CODEX_SITES_SAFE_ENVIRONMENT_SETUP,
   MIND_DIARY_CODEX_TOKEN_ENVIRONMENT_VARIABLE,
   MIND_DIARY_MCP_ENDPOINT_PLACEHOLDER,
   renderMcpTokenManagement,
@@ -80,6 +82,10 @@ test("create form offers read-only or effective read-and-write, never write-only
 test("Codex instructions reference bearer_token_env_var without placing a token in config", () => {
   assert.equal(MIND_DIARY_CODEX_TOKEN_ENVIRONMENT_VARIABLE, "MIND_DIARY_TOKEN");
   assert.equal(
+    MIND_DIARY_CODEX_SITES_AUTHORIZATION_ENVIRONMENT_VARIABLE,
+    "MIND_DIARY_SITES_AUTHORIZATION",
+  );
+  assert.equal(
     MIND_DIARY_MCP_ENDPOINT_PLACEHOLDER,
     "https://<your-mind-diary-site>/api/mcp/2025-11-25",
   );
@@ -87,12 +93,22 @@ test("Codex instructions reference bearer_token_env_var without placing a token 
     MIND_DIARY_CODEX_SAFE_ENVIRONMENT_SETUP,
     "read -s MIND_DIARY_TOKEN && export MIND_DIARY_TOKEN",
   );
+  assert.match(
+    MIND_DIARY_CODEX_SITES_SAFE_ENVIRONMENT_SETUP,
+    /MIND_DIARY_SITES_AUTHORIZATION="Bearer \$\{MIND_DIARY_SITES_TOKEN\}"/,
+  );
   assert.match(MIND_DIARY_CODEX_CONFIG, /bearer_token_env_var = "MIND_DIARY_TOKEN"/);
+  assert.match(
+    MIND_DIARY_CODEX_CONFIG,
+    /OAI-Sites-Authorization = "MIND_DIARY_SITES_AUTHORIZATION"/,
+  );
   assert.doesNotMatch(MIND_DIARY_CODEX_CONFIG, /mdp_v1_[A-Za-z0-9_-]{20,}/);
 
   const html = renderMcpTokenManagement(model({ kind: "empty" }));
   assert.match(html, /Keep the secret outside your repository and Codex config/);
-  assert.match(html, /does not claim a live Sites deployment, OAuth\/PKCE, public plugin support, or verified client compatibility/);
+  assert.match(html, /complete <code>Bearer &lt;secret&gt;<\/code> header value/);
+  assert.match(html, /owner-only production Site passed default and opt-in modern/);
+  assert.match(html, /OAuth\/PKCE and public plugin support remain outside/);
 });
 
 test("loading, empty, and error states are explicit and retryable", () => {

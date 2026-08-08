@@ -2,20 +2,22 @@
 
 Статус: executable baseline, обновлено 2026-08-08. Документ связывает
 принятые критерии готовности с реализацией и обязательным evidence. Product Site
-source candidate и targeted repository tests существуют; это не утверждение о
-production OpenAI Site или live deployment.
+развёрнут owner-only в production OpenAI Sites; базовые web/persistence и оба
+Codex MCP profiles прошли live, но это не закрывает автоматически каждый
+расширенный criterion матрицы.
 
-Direct local candidate переносит MCP с platform-reserved `/mcp` на
+Production implementation переносит MCP с platform-reserved `/mcp` на
 `/api/mcp`, добавляет isolated `/api/mcp/2025-11-25` для default
 `codex-cli 0.147.0` и сохраняет одну per-request authorization boundary.
-Локальный pinned Codex прошёл tool flow на обоих profiles (modern через opt-in
-`mcp_2026_07_28`), но candidate ещё не опубликован и не создаёт `MI`, `CX` или
-`R` release evidence.
+Pinned `codex-cli 0.147.0` прошёл live `list_minds` на обоих profiles (modern
+через opt-in `mcp_2026_07_28`). Это создаёт базовое `CX`/`R` evidence, но не
+заменяет полную Inspector matrix и расширенные write/conflict/history/export
+сценарии ниже.
 
-Текущий состав source candidate и незакрытые live gates зафиксированы в
-[датированном report](../reports/2026-08-08-product-site-candidate.md). Этот
-report не меняет owning stories или обязательные `A<n>`, `W`, `P`, `MI`, `CX`
-и `R` artifacts.
+Исторический отказ, production resolution и границы доказанного зафиксированы в
+[датированном report](../reports/2026-08-07-sites-mcp-capability-gate.md). Этот
+report не меняет owning stories или полные `A<n>`, `W`, `P`, `MI`, `CX` и `R`
+artifacts.
 
 ## Как читать матрицу
 

@@ -7,11 +7,18 @@ export const MIND_DIARY_MCP_ENDPOINT_PLACEHOLDER =
   "https://<your-mind-diary-site>/api/mcp/2025-11-25" as const;
 export const MIND_DIARY_CODEX_TOKEN_ENVIRONMENT_VARIABLE =
   "MIND_DIARY_TOKEN" as const;
+export const MIND_DIARY_CODEX_SITES_AUTHORIZATION_ENVIRONMENT_VARIABLE =
+  "MIND_DIARY_SITES_AUTHORIZATION" as const;
 export const MIND_DIARY_CODEX_SAFE_ENVIRONMENT_SETUP =
   "read -s MIND_DIARY_TOKEN && export MIND_DIARY_TOKEN" as const;
+export const MIND_DIARY_CODEX_SITES_SAFE_ENVIRONMENT_SETUP =
+  'read -s MIND_DIARY_SITES_TOKEN && export MIND_DIARY_SITES_AUTHORIZATION="Bearer ${MIND_DIARY_SITES_TOKEN}" && unset MIND_DIARY_SITES_TOKEN' as const;
 export const MIND_DIARY_CODEX_CONFIG = `[mcp_servers.mind_diary]
 url = "${MIND_DIARY_MCP_ENDPOINT_PLACEHOLDER}"
-bearer_token_env_var = "${MIND_DIARY_CODEX_TOKEN_ENVIRONMENT_VARIABLE}"` as const;
+bearer_token_env_var = "${MIND_DIARY_CODEX_TOKEN_ENVIRONMENT_VARIABLE}"
+
+[mcp_servers.mind_diary.env_http_headers]
+OAI-Sites-Authorization = "${MIND_DIARY_CODEX_SITES_AUTHORIZATION_ENVIRONMENT_VARIABLE}"` as const;
 
 export type McpTokenUiState = "active" | "expired" | "revoked";
 export type McpTokenUiScope = "content:read" | "content:write";
@@ -243,12 +250,17 @@ function renderCodexSetup(): string {
         <p>Paste the secret only at the hidden prompt. For longer use, choose a trusted secret manager or a protected local profile outside the repository.</p>
       </li>
       <li>
+        <h3>Set the Sites audience credential for a restricted Site</h3>
+        <pre><code>${escapeUntrustedText(MIND_DIARY_CODEX_SITES_SAFE_ENVIRONMENT_SETUP)}</code></pre>
+        <p>Ask the Site owner or release coordinator for this separate credential. The environment variable must contain the complete <code>Bearer &lt;secret&gt;</code> header value; it never replaces the Mind Diary token.</p>
+      </li>
+      <li>
         <h3>Reference the environment variable in Codex</h3>
         <pre><code>${escapeUntrustedText(MIND_DIARY_CODEX_CONFIG)}</code></pre>
-        <p>Replace the endpoint placeholder only after you have the exact deployed Mind Diary URL. Never replace <code>bearer_token_env_var</code> with the token value.</p>
+        <p>Replace the endpoint placeholder with the exact deployed Mind Diary URL. Never replace either environment-variable name with a secret. A public Site may omit the <code>env_http_headers</code> table.</p>
       </li>
     </ol>
-    <p class="md-caveat"><strong>Release gate:</strong> this setup guide does not claim a live Sites deployment, OAuth/PKCE, public plugin support, or verified client compatibility.</p>
+    <p class="md-caveat"><strong>Verified release:</strong> the owner-only production Site passed default and opt-in modern <code>codex-cli 0.147.0</code> flows. OAuth/PKCE and public plugin support remain outside this personal-token release.</p>
   </section>`;
 }
 

@@ -1,12 +1,10 @@
 # OpenAI Sites + MCP capability gate на 2026-08-07
 
-Статус: **исторический live gate выполнен с отрицательным результатом; direct
-resolution candidate локально проверен 2026-08-08 и ожидает exact production
-redeploy/live recheck**. Этот report фиксирует локально проверенную поверхность
-AND-37, exact production probe, повторную проверку exact product deployment в
-AND-77, воспроизводимый отказ Sites/Codex boundary и последующий диагноз. До
-нового live evidence он не подтверждает совместимость Codex с production
-endpoint.
+Статус: **исторический отрицательный gate сохранён; production resolution
+положительно проверен 2026-08-08**. Этот report фиксирует локально проверенную
+поверхность AND-37, exact production probe, повторную проверку product
+deployment, воспроизводимый отказ Sites/Codex boundary, диагноз, исправление и
+последующее redacted live evidence.
 
 ## Вывод
 
@@ -15,8 +13,8 @@ endpoint.
 stateless MCP `2026-07-28`, JSON и request-scoped SSE, per-request Bearer auth,
 CAS concurrency, idempotent retry и итоговое состояние после errors.
 
-Exact production probe успешно собран и развёрнут owner-only в OpenAI Sites,
-но обязательный Codex MCP flow не проходит. Последняя product version 2
+Exact production probe был успешно собран и развёрнут owner-only в OpenAI
+Sites, но его обязательный Codex MCP flow не прошёл. Product version 2
 подтвердила authenticated web/control slice, включая account bootstrap,
 Personal Mind и lifecycle smoke для MCP token. При этом exact `POST /mcp`
 снова получил `404 Not found` без соответствующего Worker event; соседние
@@ -25,9 +23,10 @@ Personal Mind и lifecycle smoke для MCP token. При этом exact `POST /
 exact `/mcp` до deployed Worker, но не раскрывает недокументированное устройство
 платформы. Ранее проверенный `codex-cli 0.147.0` также не прошёл этот boundary.
 
-Поэтому production release 0.1 явно blocked. Live D1/R2 persistence, JSON/SSE
-и application challenge нельзя честно подтвердить через недостижимый endpoint.
-Провал gate не разрешает fallback в AWS, AgentCore или отдельный container.
+Production version 3 после route migration закрыла этот blocker: web/control,
+persisted account/Personal Mind, raw modern MCP и оба реальных Codex profiles
+прошли на том же owner-only Site. Провал historical gate не привёл к fallback в
+AWS, AgentCore или отдельный container.
 
 ## Граница probe
 
@@ -414,9 +413,9 @@ dispatcher-level отказом:
 - финальный deployable bundle: missing Bearer даёт application 401 на обоих
   active endpoint, exact `/mcp` даёт product 404, `GET /api/mcp` даёт 405.
 
-Это доказывает candidate/client compatibility локально, но ещё не доказывает,
-что новый `/api/mcp` проходит production Sites dispatcher и что D1/R2 bindings
-сохранили состояние при redeploy.
+На этом этапе evidence доказывало только candidate/client compatibility
+локально. Следующий раздел сохраняет критерии и фактический результат
+production recheck.
 
 ### Обязательный live acceptance после redeploy
 
@@ -439,6 +438,49 @@ version после следующих проверок:
 уровня: platform-supported `OAI-Sites-Authorization` проходит Sites audience
 gate, а обычный `Authorization: Bearer <Mind Diary token>` проходит product
 auth. Эти credentials нельзя смешивать, логировать или сохранять в report.
+
+### Выполненный production recheck 2026-08-08
+
+Live acceptance выполнен на owner-only Site
+<https://mind-diary.example.invalid>:
+
+- exact source commit `969f2c4f3b2b89ae1ef2b2e837bd1b275e5d92f0`, включающий
+  implementation commit `5d08d70d4389499a626e79f6ebb7242685f2257e`;
+- Sites project `appgprj_example1428fe59b5d8381c`, saved version
+  `3` (`appgprj_example1428fe59b5d8381c~appgver_exampled97db4d5890ec803`);
+- production deployment `appgdep_example2f1c8dec75aeb7f6`
+  завершён успешно в `2026-08-08T17:51:15.774333Z` с runtime environment
+  revision `1`;
+- authenticated `/` и `/settings/mcp` загрузились без повторного bootstrap;
+  созданные ранее account и Personal Mind сохранились после redeploy;
+- raw modern `server/discover` и `tools/list` на `/api/mcp` вернули HTTP 200,
+  server `mind-diary` и 11 tools;
+- реальный `codex-cli 0.147.0` в default profile прошёл
+  `initialize → initialized → tools/list → tools/call list_minds` через
+  `/api/mcp/2025-11-25`, exit 0;
+- тот же build с opt-in `mcp_2026_07_28` прошёл
+  `server/discover → tools/list → tools/call list_minds` через `/api/mcp`,
+  exit 0;
+- production Worker logs содержат matching POST events и HTTP 200 для обоих
+  endpoint; application `Authorization` редактирован платформой, private Mind
+  names/content в evidence не сохранены;
+- временный read-only token был выпущен через production UI, использован только
+  для gate, затем отозван; повторный modern request получил HTTP 401 и
+  `WWW-Authenticate: Bearer` challenge;
+- exact `/mcp` по-прежнему возвращает platform `404 text/plain Not found` без
+  Worker event. Это ожидаемое сохранённое ограничение, а не product endpoint.
+
+Для Codex `env_http_headers` передаёт environment value буквально. Поэтому
+`MIND_DIARY_SITES_AUTHORIZATION` должен содержать полный текст
+`Bearer <Sites machine credential>`, а не только secret. Отдельный
+`bearer_token_env_var` формирует application `Authorization` из Mind Diary
+token. Первый не даёт прав внутри продукта, второй не проходит Sites audience
+gate. Public access не включался, AWS/container fallback не использовался.
+
+Live Inspector отдельно не запускался: Inspector 2.1.0 прошёл оба exact
+exported handlers локально, а production wire был дополнительно проверен raw
+modern calls и обязательным реальным Codex client gate. Это ограничение не
+следует переписывать как live Inspector conformance.
 
 ## Repeatable live procedure после platform/client change
 
@@ -534,7 +576,7 @@ required = true
 HTTP/result statuses и redacted result booleans. Не сохранять token, raw auth
 header, identity values, private prompt/query или client config с secret.
 
-## Live evidence
+## Историческое live evidence version 1
 
 | Поле/capability | Фактическое evidence |
 |---|---|
@@ -550,8 +592,8 @@ header, identity values, private prompt/query или client config с secret.
 | Codex exact build + `bearer_token_env_var` | `codex-cli 0.146.1`; required server failed on HTTP 404 during initialize |
 | Domain/proxy/challenge behavior | owner-only dispatcher: identity 401; MCP 404; no Worker invocation |
 
-Этот report является release-blocking evidence AND-37, а не доказательством
-Sites MCP compatibility.
+Эта таблица сохраняет исходное release-blocking evidence AND-37 и не описывает
+production resolution version 3 выше.
 
 ## Ограничения
 

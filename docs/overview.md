@@ -1,8 +1,10 @@
 # Обзор Mind Diary
 
 Статус: proposal, обновлено 2026-08-08. Product behavior первого прототипа
-принято; deployable source candidate реализован и локально проверен, production
-deployment и live compatibility gates ещё не выполнены.
+принято; Product Site реализован, развёрнут owner-only в OpenAI Sites и прошёл
+authenticated web/control, persistence-after-redeploy и обязательные Codex MCP
+compatibility gates. Расширенные read/write/history/export сценарии остаются
+следующей product-validation стадией.
 
 ## Зачем проект существует
 
@@ -257,13 +259,13 @@ landing требуют отдельного принятого scope.
 
 ## Платформенный путь
 
-- **Product Site source candidate:** shared application core, authenticated
-  browser/control routes, Streamable HTTP MCP, D1/R2 adapters и Worker
-  background jobs собраны в отдельном Sites-compatible приложении. Это не live
-  deployment evidence.
-- **Sites MVP production:** единственный текущий production target. Один
-  production Site должен дать authenticated web/control UI, persistence и
-  Streamable HTTP MCP; провал compatibility gate блокирует release.
+- **Product Site:** shared application core, authenticated browser/control
+  routes, Streamable HTTP MCP, D1/R2 adapters и Worker background jobs собраны
+  в отдельном Sites-compatible приложении и развёрнуты owner-only в production.
+- **Sites MVP production:** обязательный Codex gate пройден на двух endpoint:
+  `/api/mcp/2025-11-25` для default lifecycle и `/api/mcp` для opt-in modern
+  profile. Exact `/mcp` остаётся platform-reserved path и не принадлежит
+  product router.
 - **Primary post-MVP AWS path:** Bedrock AgentCore Runtime, S3 canonical objects,
   DynamoDB transactional metadata и optional derived OpenSearch index. Это
   будущая основная infrastructure direction и учебная цель, не текущая release

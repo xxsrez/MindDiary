@@ -1,10 +1,10 @@
 # Спецификация первого прототипа
 
 Статус: proposal, обновлено 2026-08-08. Product requirements ниже приняты;
-deployable Product Site source candidate и его targeted contracts реализованы,
-включая direct route/compatibility repair. Repair проверен только локально:
-production deployment этой версии и обязательное live evidence ещё не
-получены.
+Product Site и direct route/compatibility repair реализованы и развёрнуты
+owner-only в production OpenAI Sites. Обязательные authenticated web/control,
+persistence-after-redeploy и default/modern Codex MCP gates пройдены live;
+расширенная product-validation matrix остаётся следующим этапом.
 
 ## Цель
 
@@ -397,10 +397,10 @@ Sites production MVP считается завершённым только по
 - D1/R2 либо выбранная persistence после нового deployment;
 - domain/challenge requirements реального OpenAI integration.
 
-Route migration, оба adapters и local Codex negotiation/tool call в default и
-opt-in modern modes уже покрыты source tests/experiments, но это не live Sites
-compatibility и не release evidence. Отрицательное evidence exact `/mcp`
-остаётся в
+Route migration и оба adapters покрыты source tests и положительным live Sites
+evidence: default и opt-in modern `codex-cli 0.147.0` выполнили
+`list_minds`, а matching Worker events завершились HTTP 200. Отрицательное
+историческое evidence exact `/mcp` остаётся в
 [historical capability report](../reports/2026-08-07-sites-mcp-capability-gate.md)
 и не переписывается задним числом.
 

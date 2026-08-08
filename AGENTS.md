@@ -4,14 +4,18 @@
 
 ## Текущее состояние
 
-- Mind Diary находится на стадии design-first bootstrap: reproducible
-  engineering baseline реализован, но исполняемый сервисный vertical slice ещё
-  не реализован и ни одно развёртывание не считается выполненным.
-- Репозиторий содержит принятый product baseline первого прототипа,
-  предложения по его реализации и проверку актуального Open Knowledge Format
-  (OKF).
-- Единственная целевая production platform текущего MVP — OpenAI Sites. Это
-  принятое направление, а не утверждение о уже выполненном deployment.
+- Mind Diary прошёл design-first bootstrap: reproducible engineering baseline
+  и исполняемый Product Site vertical slice реализованы. Owner-only production
+  deployment в OpenAI Sites подтверждён authenticated web/control,
+  persistence-after-redeploy и default/modern Codex MCP smoke; расширенная
+  read/write/history/export validation остаётся дальнейшей работой.
+- Репозиторий содержит принятый product baseline первого прототипа, его
+  исполняемую реализацию, production evidence и проверку актуального Open
+  Knowledge Format (OKF).
+- Единственная production platform текущего MVP — OpenAI Sites. Exact `/mcp`
+  перехватывается Sites до product Worker, поэтому активны `/api/mcp` и
+  `/api/mcp/2025-11-25`; подробный диагноз и live resolution сохранены в
+  датированном capability report.
 - MVP — дешёвая Codex-first проверка managed OKF workflow. Начальная аудитория
   умеет работать с Codex, но не обязательно умеет самостоятельно устанавливать
   skills, вести bundle, следить за OKF и собирать storage/access stack.

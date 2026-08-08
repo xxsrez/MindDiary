@@ -1,9 +1,9 @@
 # Локальная разработка и проверки
 
 Статус: engineering baseline, обновлено 2026-08-08. Команды, package graph и
-deployable Product Site source candidate реализованы. Sites project,
-production deployment и live evidence ещё не созданы; локальный build не
-доказывает совместимость с Sites или Codex.
+Product Site реализованы; owner-only production deployment и обязательный
+Codex smoke подтверждены отдельно. Локальный build по-прежнему не является
+заменой exact Sites/Codex release evidence.
 
 ## Toolchain
 
@@ -16,9 +16,9 @@ Baseline использует:
 
 Product application `apps/mind-diary-site` использует Node `>=22.13.0`, Vinext,
 Vite и Cloudflare Worker-compatible ESM. Собственный hosting manifest объявляет
-только D1 binding `DB` и R2 binding `MIND_DIARY_BUCKET`; Sites project identity
-и secrets в нём отсутствуют. Live compatibility существующего project всё ещё
-проверяется отдельным release gate.
+D1 binding `DB`, R2 binding `MIND_DIARY_BUCKET` и opaque Sites `project_id`;
+runtime secrets в repository отсутствуют. Каждый следующий publish снова
+проходит отдельный live compatibility gate.
 
 ## Clean-checkout path
 

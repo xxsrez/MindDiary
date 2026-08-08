@@ -1,9 +1,9 @@
 # Документация Mind Diary
 
-Mind Diary имеет локально проверенный deployable source candidate продукта, но
-ещё не имеет подтверждённого production deployment. Документы ниже разделяют
-проверенные внешние факты, реализованный repository behavior, предлагаемый
-дизайн и ещё не подтверждённое live-поведение.
+Mind Diary имеет owner-only production deployment в OpenAI Sites с проверенными
+authenticated web/control и Codex MCP flows. Документы ниже разделяют
+проверенные внешние факты, реализованный repository behavior, production
+evidence, предлагаемый дизайн и ещё не проверенные расширенные workflows.
 
 ## Начать отсюда
 
@@ -81,14 +81,14 @@ Mind Diary имеет локально проверенный deployable source 
   основан proposal.
 - [OpenAI Sites + MCP capability gate на 2026-08-07](reports/2026-08-07-sites-mcp-capability-gate.md)
   — исторический pre-Worker отказ exact `/mcp`, доказательство Sites dispatcher
-  reservation, исключённые гипотезы, direct resolution candidate и repeatable
-  redacted live procedure.
+  reservation, исключённые гипотезы, исправление и положительное production
+  evidence.
 - [Security, privacy и threat regression на 2026-08-07](reports/2026-08-07-security-privacy-regression.md)
   — локальная fail-closed suite для identity, Origin/CSRF, token/ACL/locator
   boundaries, safe rendering и privacy-redacted evidence; без live claim.
 - [Product Site source candidate на 2026-08-08](reports/2026-08-08-product-site-candidate.md)
-  — локально собранное Sites-compatible product application, targeted evidence
-  и остающиеся coordinator-owned live release gates.
+  — исторический repository candidate, впоследствии интегрированный в
+  production release.
 
 ## Статусы документов
 
@@ -136,7 +136,7 @@ High-level контур проекта закрыт следующими док�
   candidate report.
 
 Machine-readable OpenAPI/JSON Schemas, отдельный threat model, product
-deployment guide и changelog пока не созданы. Operations runbook описывает
-delivery orchestration, но не выдаёт ещё не выполненный release или deployment
-за существующий. До anonymous publication потребуется новая спецификация и
-отдельный threat model.
+deployment guide и changelog пока не созданы. Текущий production release и
+redacted live evidence зафиксированы в capability report; operations runbook
+остаётся общим delivery contract. До anonymous publication потребуется новая
+спецификация и отдельный threat model.
