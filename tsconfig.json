@@ -21,6 +21,7 @@
     { "path": "packages/adapter-audit-memory" },
     { "path": "packages/adapter-audit-sites" },
     { "path": "packages/composition-root" },
-    { "path": "packages/test-fixtures" }
+    { "path": "packages/test-fixtures" },
+    { "path": "apps/mind-diary-site" }
   ]
 }

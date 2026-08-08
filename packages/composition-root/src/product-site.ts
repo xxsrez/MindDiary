@@ -1,0 +1,548 @@
+import {
+  createSitesAuditSink,
+  type D1DatabaseLike as AuditD1DatabaseLike,
+} from "@mind-diary/adapter-audit-sites";
+import {
+  createBackgroundServiceActor,
+  createProductBackgroundDispatcher,
+} from "@mind-diary/adapter-background";
+import {
+  ProductMcpContentApplication,
+  createMcpHttpHandler,
+  type McpRequestIdGenerator,
+} from "@mind-diary/adapter-mcp";
+import {
+  createSitesMetadataStore,
+  type D1DatabaseLike as MetadataD1DatabaseLike,
+} from "@mind-diary/adapter-metadata-sites";
+import {
+  createSitesObjectStore,
+  type R2BucketLike,
+} from "@mind-diary/adapter-object-sites";
+import {
+  createSitesSearchIndex,
+  type D1DatabaseLike as SearchD1DatabaseLike,
+} from "@mind-diary/adapter-search-sites";
+import {
+  createWebCryptoExportDownloadSecretCrypto,
+  createWebCryptoTokenHasher,
+} from "@mind-diary/adapter-security-webcrypto";
+import {
+  createProductWebHttpHandler,
+  createProductExportDownloadHttpHandler,
+  resolveProductSitesIdentity,
+  type ProductSitesIdentityResolution,
+  type ProductWebActor,
+  type TrustedSitesIdentitySnapshot,
+} from "@mind-diary/adapter-web";
+import {
+  AuditOutboxDeliveryHandler,
+  ExportJobExpiryHandler,
+  ExportJobHandler,
+  InvitationExpiryJobHandler,
+  ReadyExactRevisionIndexService,
+  RevisionIndexJobHandler,
+} from "@mind-diary/application-background";
+import {
+  CanonicalRevisionCoordinator,
+  ChangesetCommitService,
+  DeterministicOkfExportService,
+  ExportJobApplicationService,
+  McpBearerAuthenticationService,
+  MindBrowseService,
+  MindDiscoveryService,
+  MindHistoryService,
+  MindSearchService,
+  MindValidationService,
+  WebCryptoMindLocatorCodec,
+} from "@mind-diary/application-content";
+import {
+  AccountBootstrapService,
+  AccountDeletionService,
+  ControlReadService,
+  InvitationControlService,
+  MembershipControlService,
+  MindRouteService,
+  OrdinaryMindControlService,
+  OrdinaryMindDeletionService,
+  OwnershipTransferService,
+  PersonalMindControlService,
+  PublicMindCatalogService,
+  TokenLifecycleService,
+  VisibilityControlService,
+} from "@mind-diary/application-control";
+import {
+  CapabilityAuthorizer,
+  CurrentAccessBackgroundAuthorizer,
+} from "@mind-diary/application-ports";
+import { verifiedSpaceHost } from "@mind-diary/domain";
+
+export interface ProductSiteTrustedIdentityReader {
+  readVerifiedIdentity(request: Request):
+    | TrustedSitesIdentitySnapshot
+    | Promise<TrustedSitesIdentitySnapshot>;
+}
+
+export interface ProductSiteRuntimeOptions {
+  readonly database: MetadataD1DatabaseLike & SearchD1DatabaseLike & AuditD1DatabaseLike;
+  readonly bucket: R2BucketLike;
+  readonly publicOrigin: string;
+  readonly identity: ProductSiteTrustedIdentityReader;
+  readonly tokenVerifierKey: Uint8Array;
+  readonly locatorKey: Uint8Array;
+  readonly exportDownloadVerifierKey: Uint8Array;
+  readonly csrfKey: Uint8Array;
+  readonly schedule: (work: Readonly<{ readonly kind: string; readonly id: string }>) => void | Promise<void>;
+}
+
+export interface ProductSiteRuntime {
+  readonly fetch: (request: Request) => Promise<Response | null>;
+  readonly dispatchBackground: (work: Readonly<
+    | { readonly kind: "revision_index"; readonly jobId: string }
+    | { readonly kind: "export"; readonly jobId: string }
+    | { readonly kind: "audit_outbox"; readonly messageId: string }
+    | { readonly kind: "invitation_expiry"; readonly jobId: string }
+    | { readonly kind: "export_expiry"; readonly jobId: string }
+  >) => Promise<unknown>;
+}
+
+function nextOpaque(prefix: string): never {
+  return `${prefix}_${crypto.randomUUID()}` as never;
+}
+
+function canonicalHost(origin: string) {
+  const url = new URL(origin);
+  if (url.protocol !== "https:" || url.origin !== origin || url.pathname !== "/") {
+    throw new TypeError("publicOrigin must be a canonical HTTPS origin");
+  }
+  return verifiedSpaceHost(url.host);
+}
+
+function ids(capture?: {
+  readonly indexJob?: (id: string) => void;
+  readonly auditOutbox?: (id: string) => void;
+  readonly invitationExpiry?: (id: string) => void;
+}) {
+  return Object.freeze({
+    nextPrincipalId: () => nextOpaque("principal"),
+    nextExternalBindingId: () => nextOpaque("binding"),
+    nextSpaceId: () => nextOpaque("space"),
+    nextMembershipId: () => nextOpaque("membership"),
+    nextRevisionId: () => nextOpaque("revision"),
+    nextPersonalSpaceHandle: () => `personal-${crypto.randomUUID()}`,
+    nextAuditEventId: () => nextOpaque("audit"),
+    nextOutboxMessageId: () => {
+      const id = nextOpaque("outbox");
+      capture?.auditOutbox?.(id);
+      return id;
+    },
+    nextIndexJobId: () => {
+      const id = nextOpaque("job-index");
+      capture?.indexJob?.(id);
+      return id;
+    },
+    nextExportJobId: () => nextOpaque("job-export"),
+    nextInvitationId: () => nextOpaque("invitation"),
+    nextInvitationExpiryJobId: () => {
+      const id = nextOpaque("job-invitation");
+      capture?.invitationExpiry?.(id);
+      return id;
+    },
+    nextImpactId: () => nextOpaque("impact"),
+    nextDeletedPrincipalId: () => nextOpaque("deleted-principal"),
+    nextTokenId: () => nextOpaque("token"),
+  });
+}
+
+function requestIds(): McpRequestIdGenerator {
+  return { nextRequestId: () => nextOpaque("request") };
+}
+
+function actorCsrfIdentity(actor: ProductWebActor): string {
+  return actor.kind === "registered_principal"
+    ? `principal:${actor.principalId}`
+    : `binding:${actor.provider}:${actor.normalizedBinding}`;
+}
+
+async function createCsrf(keyBytes: Uint8Array) {
+  if (!(keyBytes instanceof Uint8Array) || keyBytes.byteLength < 32) {
+    throw new TypeError("csrfKey must contain at least 256 bits");
+  }
+  const keyCopy = new Uint8Array(keyBytes);
+  const key = await crypto.subtle.importKey(
+    "raw",
+    keyCopy,
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  keyCopy.fill(0);
+  const issue = async (actor: ProductWebActor): Promise<string> => {
+    const message = new TextEncoder().encode(`mind-diary-csrf-v1\0${actorCsrfIdentity(actor)}`);
+    try {
+      const signature = new Uint8Array(await crypto.subtle.sign("HMAC", key, message));
+      return btoa(String.fromCharCode(...signature))
+        .replaceAll("+", "-")
+        .replaceAll("/", "_")
+        .replace(/=+$/u, "");
+    } finally {
+      message.fill(0);
+    }
+  };
+  return Object.freeze({
+    issue,
+    async verify(actor: ProductWebActor, candidate: string): Promise<boolean> {
+      const expected = await issue(actor);
+      if (candidate.length !== expected.length) return false;
+      let difference = 0;
+      for (let index = 0; index < expected.length; index += 1) {
+        difference |= expected.charCodeAt(index) ^ candidate.charCodeAt(index);
+      }
+      return difference === 0;
+    },
+  });
+}
+
+function asRecord(input: Readonly<Record<string, unknown>>, additions: Record<string, unknown> = {}) {
+  const { mind_ref: _mindRef, member_id: _memberId, invitation_id: _invitationId, token_id: _tokenId, ...rest } = input;
+  return Object.freeze({ ...rest, ...additions });
+}
+
+class ProductControlApplication {
+  constructor(
+    readonly services: {
+      readonly bootstrap: AccountBootstrapService;
+      readonly personal: PersonalMindControlService;
+      readonly ordinary: OrdinaryMindControlService;
+      readonly ordinaryDeletion: OrdinaryMindDeletionService;
+      readonly accountDeletion: AccountDeletionService;
+      readonly visibility: VisibilityControlService;
+      readonly ownership: OwnershipTransferService;
+      readonly membership: MembershipControlService;
+      readonly reads: ControlReadService;
+      readonly invitation: InvitationControlService;
+      readonly routes: MindRouteService;
+      readonly catalog: PublicMindCatalogService;
+      readonly tokens: TokenLifecycleService;
+    },
+  ) {}
+
+  async #mind(actor: ProductWebActor, input: Readonly<Record<string, unknown>>) {
+    const ref = input.mind_ref;
+    return this.services.routes.resolveRoute(actor as never, ref === "me" ? "/me" : `/${String(ref)}`);
+  }
+
+  async execute(request: {
+    readonly operation: string;
+    readonly actor: ProductWebActor;
+    readonly input: Readonly<Record<string, unknown>>;
+  }): Promise<unknown> {
+    const { actor, input } = request;
+    switch (request.operation) {
+      case "get_session":
+        return this.services.personal.resolveMyMind(actor as never);
+      case "bootstrap_account":
+        return this.services.bootstrap.bootstrapAccount(actor as never, asRecord(input) as never);
+      case "rename_account":
+        return this.services.personal.renameAccount(actor as never, asRecord(input) as never);
+      case "get_account_deletion_impact":
+        return this.services.accountDeletion.getAccountDeletionImpact(actor as never);
+      case "delete_account":
+        return this.services.accountDeletion.deleteAccount(actor as never, asRecord(input) as never);
+      case "list_minds":
+        return this.services.routes.listMinds(actor as never);
+      case "create_space_with_owner":
+        return this.services.ordinary.createSpaceWithOwner(actor as never, asRecord(input) as never);
+      case "get_mind_info":
+        return this.#mind(actor, input);
+      case "rename_space": {
+        const mind = await this.#mind(actor, input);
+        return this.services.ordinary.renameSpace(actor as never, asRecord(input, { mindId: mind.mindId }) as never);
+      }
+      case "get_mind_deletion_impact": {
+        const mind = await this.#mind(actor, input);
+        return this.services.ordinaryDeletion.getDeletionImpact(actor as never, { handle: mind.route.slice(1) });
+      }
+      case "delete_space": {
+        const mind = await this.#mind(actor, input);
+        return this.services.ordinaryDeletion.deleteSpace(actor as never, asRecord(input, { handle: mind.route.slice(1) }) as never);
+      }
+      case "list_public_minds":
+        return this.services.catalog.listPublicMinds(actor as never, asRecord(input));
+      case "change_visibility": {
+        const mind = await this.#mind(actor, input);
+        return this.services.visibility.changeVisibility(actor as never, asRecord(input, { mindId: mind.mindId }) as never);
+      }
+      case "change_membership_role":
+      case "revoke_membership":
+      case "leave_space": {
+        const mind = await this.#mind(actor, input);
+        const command = asRecord(input, { mindId: mind.mindId, memberId: input.member_id });
+        if (request.operation === "change_membership_role") return this.services.membership.changeMembershipRole(actor as never, command as never);
+        if (request.operation === "revoke_membership") return this.services.membership.revokeMembership(actor as never, command as never);
+        return this.services.membership.leaveSpace(actor as never, command as never);
+      }
+      case "transfer_ownership": {
+        const mind = await this.#mind(actor, input);
+        return this.services.ownership.transferOwnership(actor as never, asRecord(input, { mindId: mind.mindId }) as never);
+      }
+      case "create_invitation": {
+        const mind = await this.#mind(actor, input);
+        return this.services.invitation.createInvitation(actor as never, asRecord(input, { mindId: mind.mindId }) as never);
+      }
+      case "accept_invitation":
+      case "reject_invitation":
+      case "reissue_invitation":
+      case "cancel_invitation": {
+        const command = asRecord(input, { invitationId: input.invitation_id });
+        if (request.operation === "accept_invitation") return this.services.invitation.acceptInvitation(actor as never, command as never);
+        if (request.operation === "reject_invitation") return this.services.invitation.rejectInvitation(actor as never, command as never);
+        if (request.operation === "reissue_invitation") return this.services.invitation.reissueInvitation(actor as never, command as never);
+        return this.services.invitation.cancelInvitation(actor as never, command as never);
+      }
+      case "list_mcp_tokens":
+        return this.services.tokens.listMcpTokens(actor as never);
+      case "issue_mcp_token": {
+        const result = await this.services.tokens.issueMcpToken(actor as never, asRecord(input) as never);
+        return Object.freeze({ token: result.token, secret: result.secret.consumeSecret() });
+      }
+      case "revoke_mcp_token":
+        return this.services.tokens.revokeMcpToken(actor as never, asRecord(input, { tokenId: input.token_id }) as never);
+      case "list_members":
+      {
+        const mind = await this.#mind(actor, input);
+        return this.services.reads.listMembers(actor as never, mind.mindId);
+      }
+      case "list_invitations":
+        return this.services.reads.listInvitations(actor as never);
+      default:
+        throw Object.assign(new Error("Unknown control operation."), { code: "not_found" });
+    }
+  }
+}
+
+/** Creates the durable Sites-only product runtime. This function performs no deployment. */
+export async function createProductSiteRuntime(
+  options: ProductSiteRuntimeOptions,
+): Promise<Readonly<ProductSiteRuntime>> {
+  const host = canonicalHost(options.publicOrigin);
+  const clock = Object.freeze({ now: () => new Date().toISOString() as never });
+  const pendingIndexJobs: string[] = [];
+  const pendingAuditOutbox: string[] = [];
+  const pendingInvitationExpiry: string[] = [];
+  let capturedWorkTail: Promise<void> = Promise.resolve();
+  const generated = ids({
+    indexJob: (id) => pendingIndexJobs.push(id),
+    auditOutbox: (id) => pendingAuditOutbox.push(id),
+    invitationExpiry: (id) => pendingInvitationExpiry.push(id),
+  });
+  const scheduleCapturedWork = async () => {
+    const work = [
+      ...pendingIndexJobs.splice(0).map((id) => ({ kind: "revision_index", id } as const)),
+      ...pendingAuditOutbox.splice(0).map((id) => ({ kind: "audit_outbox", id } as const)),
+      ...pendingInvitationExpiry.splice(0).map((id) => ({ kind: "invitation_expiry", id } as const)),
+    ];
+    try {
+      await Promise.all(work.map(async (item) => options.schedule(item)));
+    } catch (error) {
+      for (const item of work) {
+        if (item.kind === "revision_index") pendingIndexJobs.push(item.id);
+        if (item.kind === "audit_outbox") pendingAuditOutbox.push(item.id);
+        if (item.kind === "invitation_expiry") pendingInvitationExpiry.push(item.id);
+      }
+      throw error;
+    }
+  };
+  const discardCapturedWork = () => {
+    pendingIndexJobs.splice(0);
+    pendingAuditOutbox.splice(0);
+    pendingInvitationExpiry.splice(0);
+  };
+  const runWithCapturedWork = async <Result>(
+    operation: () => Promise<Result>,
+    shouldSchedule: (result: Result) => boolean = () => true,
+  ): Promise<Result> => {
+    const previous = capturedWorkTail;
+    let release!: () => void;
+    capturedWorkTail = new Promise<void>((resolve) => { release = resolve; });
+    await previous;
+    let operationStarted = false;
+    let operationCompleted = false;
+    try {
+      if (
+        pendingIndexJobs.length > 0 ||
+        pendingAuditOutbox.length > 0 ||
+        pendingInvitationExpiry.length > 0
+      ) {
+        await scheduleCapturedWork();
+      }
+      operationStarted = true;
+      const result = await operation();
+      operationCompleted = true;
+      if (shouldSchedule(result)) await scheduleCapturedWork();
+      else discardCapturedWork();
+      return result;
+    } catch (error) {
+      if (operationStarted && !operationCompleted) discardCapturedWork();
+      throw error;
+    } finally {
+      release();
+    }
+  };
+  const [metadata, objects, index, audit, tokenHasher, downloadCrypto, csrf] = await Promise.all([
+    createSitesMetadataStore(options.database),
+    createSitesObjectStore(options.bucket),
+    createSitesSearchIndex(options.database),
+    createSitesAuditSink(options.database),
+    createWebCryptoTokenHasher({ verifierKey: options.tokenVerifierKey }),
+    createWebCryptoExportDownloadSecretCrypto({ verifierKey: options.exportDownloadVerifierKey }),
+    createCsrf(options.csrfKey),
+  ]);
+  const authorizer = new CapabilityAuthorizer(metadata);
+  const backgroundAuthorizer = new CurrentAccessBackgroundAuthorizer(metadata);
+  const revisions = new CanonicalRevisionCoordinator({ objects, revisions: metadata });
+  const readyIndex = new ReadyExactRevisionIndexService({ work: metadata, index });
+  const locators = new WebCryptoMindLocatorCodec(options.locatorKey);
+
+  const discovery = new MindDiscoveryService({ store: metadata, host });
+  const browse = new MindBrowseService({ store: metadata, objects, host, locators });
+  const search = new MindSearchService({ store: metadata, index: readyIndex, host, locators });
+  const history = new MindHistoryService({ store: metadata, host });
+  const validation = new MindValidationService({ store: metadata, objects, host });
+  const commits = new ChangesetCommitService({
+    authorizer,
+    metadata,
+    revisions,
+    objects,
+    clock,
+    revisionIds: generated,
+    effectIds: generated,
+  });
+  const exports = new ExportJobApplicationService({
+    authorizer,
+    backgroundAuthorizer,
+    metadata,
+    digest: objects,
+    archives: objects,
+    clock,
+    jobIds: generated,
+    downloadSecretCrypto: downloadCrypto,
+    downloadUrlBase: `${options.publicOrigin}/api/v1/exports`,
+  });
+  const mcpApplication = new ProductMcpContentApplication({
+    discovery,
+    browse,
+    search,
+    history,
+    validation,
+    commits: {
+      commit: (request) =>
+        runWithCapturedWork(
+          () => commits.commit(request),
+          (result) => result.kind === "committed",
+        ),
+    },
+    exports,
+    scheduleExport: async (jobId) => options.schedule({ kind: "export", id: jobId }),
+  });
+  const authenticator = new McpBearerAuthenticationService({ clock, tokenHasher, tokens: metadata });
+  const mcp = createMcpHttpHandler({ authenticator, requestIds: requestIds(), content: mcpApplication });
+
+  const commonAuditIds = generated;
+  const control = new ProductControlApplication({
+    bootstrap: new AccountBootstrapService({ accounts: metadata, objects, ids: generated }),
+    personal: new PersonalMindControlService({ personalMinds: metadata, digest: objects }),
+    ordinary: new OrdinaryMindControlService({ ordinaryMinds: metadata, objects, ids: generated, host }),
+    ordinaryDeletion: new OrdinaryMindDeletionService({ ordinaryMinds: metadata, objects, index, audit, exportArchives: objects, ids: generated, clock, host }),
+    accountDeletion: new AccountDeletionService({ accounts: metadata, tokens: metadata, objects, index, audit, exportArchives: objects, ids: generated, clock, host }),
+    visibility: new VisibilityControlService({ ordinaryMinds: metadata, objects, auditIds: commonAuditIds }),
+    ownership: new OwnershipTransferService({ ordinaryMinds: metadata, objects, auditIds: commonAuditIds }),
+    membership: new MembershipControlService({ memberships: metadata, digest: objects, auditIds: commonAuditIds }),
+    reads: new ControlReadService(metadata),
+    invitation: new InvitationControlService({ invitations: metadata, objects, ids: generated }),
+    routes: new MindRouteService({ routes: metadata, host }),
+    catalog: new PublicMindCatalogService({ catalog: metadata, host }),
+    tokens: new TokenLifecycleService({ clock, tokenHasher, tokenIds: generated, tokens: metadata }),
+  });
+
+  const web = createProductWebHttpHandler({
+    applicationOrigin: options.publicOrigin,
+    csrf,
+    control: {
+      async execute(request) {
+        return runWithCapturedWork(() => control.execute(request));
+      },
+    },
+    async resolveIdentity(request): Promise<ProductSitesIdentityResolution> {
+      const context = Object.freeze({
+        requestId: nextOpaque("request"),
+        occurredAtUtc: clock.now(),
+        deploymentCapabilities: Object.freeze([
+          "content:browse", "content:search", "content:fetch", "content:history",
+          "content:validate", "content:export", "content:write", "space:settings",
+          "members:manage-basic", "members:manage-admin", "ownership:transfer",
+        ] as never),
+      });
+      return resolveProductSitesIdentity({
+        snapshot: await options.identity.readVerifiedIdentity(request),
+        bindings: {
+          async readActiveBinding(lookup) {
+            const account = await metadata.readAccountByExternalBinding(lookup as never);
+            return account === null
+              ? Object.freeze({ kind: "unbound" as const })
+              : Object.freeze({
+                  kind: "bound" as const,
+                  provider: lookup.provider,
+                  normalizedBinding: lookup.normalizedBinding,
+                  principalId: account.principal.principalId,
+                });
+          },
+        },
+        context,
+      });
+    },
+  });
+  const exportDownload = createProductExportDownloadHttpHandler({
+    async download(secret) {
+      const actor = createBackgroundServiceActor({
+        serviceId: "mind-diary-export-download",
+        requestId: nextOpaque("download-request"),
+        occurredAtUtc: clock.now(),
+        deploymentCapabilities: Object.freeze(["content:export"]),
+      });
+      return exports.download({ actor, secret });
+    },
+  });
+
+  const indexJobs = new RevisionIndexJobHandler({ work: metadata, revisions, index, clock });
+  const exportJobs = new ExportJobHandler({
+    jobs: metadata,
+    backgroundAuthorizer,
+    builder: new DeterministicOkfExportService({ materializer: revisions, digest: objects }),
+    archives: objects,
+    clock,
+  });
+  const auditJobs = new AuditOutboxDeliveryHandler({ work: metadata, audit, clock });
+  const invitationJobs = new InvitationExpiryJobHandler({ jobs: metadata, clock });
+  const exportExpiry = new ExportJobExpiryHandler({ jobs: metadata, archives: objects, clock });
+  const dispatchBackground = createProductBackgroundDispatcher({
+    serviceId: "mind-diary-sites-background",
+    now: clock.now,
+    requestId: () => nextOpaque("background-request"),
+    handlers: {
+      revisionIndex: (actor, jobId) => indexJobs.handle({ actor, jobId: jobId as never }),
+      export: (actor, jobId) => exportJobs.handle({ actor: Object.freeze({ ...actor, deploymentCapabilities: Object.freeze(["content:export"] as never) }), jobId: jobId as never }),
+      auditOutbox: (actor, messageId) => auditJobs.handle({ actor, outboxMessageId: messageId as never }),
+      invitationExpiry: (actor, jobId) => invitationJobs.handle({ actor, jobId: jobId as never }),
+      exportExpiry: (actor, jobId) => exportExpiry.handle({ actor, jobId: jobId as never }),
+    },
+  });
+
+  return Object.freeze({
+    dispatchBackground,
+    async fetch(request: Request): Promise<Response | null> {
+      if (new URL(request.url).pathname === "/mcp") return mcp(request);
+      return (await exportDownload(request)) ?? web(request);
+    },
+  });
+}

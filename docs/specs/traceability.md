@@ -1,9 +1,14 @@
 # Traceability matrix MVP 0.1
 
-Статус: executable baseline, 2026-08-08. Документ связывает принятые критерии
-готовности с локальной реализацией и обязательным evidence. Локальные modules и
-automated tests существуют; deployable production Site, live client evidence и
-production deployment пока не подтверждены.
+Статус: executable baseline, обновлено 2026-08-08. Документ связывает
+принятые критерии готовности с реализацией и обязательным evidence. Product Site
+source candidate и targeted repository tests существуют; это не утверждение о
+production OpenAI Site или live deployment.
+
+Текущий состав source candidate и незакрытые live gates зафиксированы в
+[датированном report](../reports/2026-08-08-product-site-candidate.md). Этот
+report не меняет owning stories или обязательные `A<n>`, `W`, `P`, `MI`, `CX`
+и `R` artifacts.
 
 ## Как читать матрицу
 

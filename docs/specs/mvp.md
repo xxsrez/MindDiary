@@ -1,9 +1,8 @@
 # Спецификация первого прототипа
 
 Статус: proposal, обновлено 2026-08-08. Product requirements ниже приняты;
-локальные schemas, application flow, in-memory storage adapters и automated
-tests реализованы. Deployable Sites product, durable production storage и live
-release evidence ещё не подтверждены.
+deployable Product Site source candidate и его targeted contracts реализованы,
+но production deployment и обязательное live evidence ещё не получены.
 
 ## Цель
 

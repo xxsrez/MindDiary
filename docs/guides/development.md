@@ -1,8 +1,9 @@
 # Локальная разработка и проверки
 
-Статус: engineering baseline, 2026-08-06. Команды и package graph в этом
-документе реализованы. Исполняемый web/MCP service, Sites project и deployment
-ещё не созданы; локальный build не доказывает совместимость с Sites или Codex.
+Статус: engineering baseline, обновлено 2026-08-08. Команды, package graph и
+deployable Product Site source candidate реализованы. Sites project,
+production deployment и live evidence ещё не созданы; локальный build не
+доказывает совместимость с Sites или Codex.
 
 ## Toolchain
 
@@ -13,13 +14,11 @@ Baseline использует:
 - TypeScript `5.9.3`, strict project references и ESM output;
 - standard Web API types в service packages без Node runtime types.
 
-Node minimum и Worker-compatible ESM direction согласованы с текущим bundled
-Sites starter: он требует Node `>=22.13.0`, использует Vite и собирает
-Cloudflare Worker-compatible ESM. Mind Diary пока не копирует starter, `vinext`
-или Sites Vite plugin: deployable UI/runtime отсутствует, а platform binding
-должен появиться только после отдельной реализации и compatibility gate.
-Общая [документация Sites](https://learn.chatgpt.com/docs/sites) также требует
-сначала подтвердить совместимость существующего project.
+Product application `apps/mind-diary-site` использует Node `>=22.13.0`, Vinext,
+Vite и Cloudflare Worker-compatible ESM. Собственный hosting manifest объявляет
+только D1 binding `DB` и R2 binding `MIND_DIARY_BUCKET`; Sites project identity
+и secrets в нём отсутствуют. Live compatibility существующего project всё ещё
+проверяется отдельным release gate.
 
 ## Clean-checkout path
 
@@ -44,9 +43,11 @@ secret/config hygiene gates. Generated output остаётся в `packages/*/di
 | Protocol/exposure contract tests | `npm run test:conformance` |
 | Весь выбранный OKF fixture | `npm run validate:fixtures` |
 | Module/import/transitive graph | `npm run check:architecture` |
+| Product Site packaging contract | `npm run check:product-site` |
 | Markdown links и локальная структура | `npm run check:docs` |
 | Secrets и local config hygiene | `npm run check:secrets` |
 | Полный локальный gate | `npm run check` |
+| Product Site package/build | `cd apps/mind-diary-site && npm ci && npm run build` |
 
 `test:conformance` проверяет только repository contracts: разрешённый browser
 route manifest, custom Mind-aware MCP tool list, target version
@@ -78,8 +79,8 @@ test-fixtures -> domain + okf-codec
 `check:architecture` требует exact manifest edges, совпадающие TypeScript
 references, acyclic graph, отсутствие undeclared/cross-façade imports и
 запрещённых direct/transitive runtime dependencies у `domain`/`okf-codec`.
-Fixture adapters являются только contract markers: они не реализуют storage,
-security, application use cases или deployable service.
+Product composition выбирает D1/R2 и WebCrypto adapters; in-memory/local
+adapters остаются test fixtures и не считаются production persistence.
 
 ## Deterministic fixtures
 
@@ -92,11 +93,20 @@ user content.
 
 ## Local config и secrets
 
-`.env.example` содержит только non-secret defaults и пустой token key. Для
-локальных значений разрешён ignored `.env.local`; plaintext bearer token нельзя
-коммитить. Hosted values в будущем задаются через Sites settings, а не
-`.openai/hosting.json`. Последний намеренно отсутствует, пока реальный Sites
-project не создан.
+Root `.env.example` и product app `.env.example` содержат только non-secret
+defaults/пустые placeholders. Для локальных значений разрешён ignored
+`.env.local`; plaintext bearer token нельзя коммитить. Product hosting manifest
+объявляет bindings, но не project ID и не secrets. Hosted values задаются через
+Sites runtime settings:
+
+- `MIND_DIARY_TOKEN_VERIFIER_KEY`;
+- `MIND_DIARY_LOCATOR_KEY`;
+- `MIND_DIARY_EXPORT_DOWNLOAD_VERIFIER_KEY`;
+- `MIND_DIARY_CSRF_KEY`;
+- optional canonical HTTPS `MIND_DIARY_PUBLIC_ORIGIN`.
+
+Каждый cryptographic key — независимое 32-byte base64url значение; runtime
+fail-closed отклоняет отсутствующие или неверные значения.
 
 `check:secrets` отклоняет tracked `.env*`, private keys и основные token/key
 patterns. Это repository gate, а не доказательство отсутствия любого возможного
@@ -106,6 +116,7 @@ patterns. Это repository gate, а не доказательство отсу�
 ## CI и граница доказанного
 
 GitHub Actions повторяет `npm ci` и `npm run check` на Node `22.13.0`. Успех CI
-доказывает воспроизводимость engineering baseline на commit, но не создаёт
-production artifact. Sites project/version/deployment, live URL, persistence,
-MCP Inspector и Codex conformance остаются отдельными release gates.
+и отдельного Product Site build доказывает воспроизводимость source candidate
+на commit, но не создаёт production artifact. Sites
+project/version/deployment, live URL, persistence-after-redeploy, MCP Inspector
+и Codex conformance остаются отдельными release gates.

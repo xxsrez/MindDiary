@@ -7,6 +7,8 @@ import type {
   AccountDeletionContext,
   AccountDeletionImpactSnapshot,
   AccountDeletionStore,
+  ApplyMembershipMutationRequest,
+  ApplyMembershipMutationResult,
   BeginPrincipalTokenDeletionRequest,
   BeginPrincipalTokenDeletionResult,
   CancelPrincipalTokenDeletionRequest,
@@ -14,6 +16,9 @@ import type {
   CompleteAccountDeletionCleanupResult,
   CompletePrincipalTokenDeletionRequest,
   CompletePrincipalTokenDeletionResult,
+  ControlInvitationProjection,
+  ControlMemberProjection,
+  ControlReadStore,
   CreateAccountBootstrapResult,
   CreateAccountDeletionImpactRequest,
   CreateAccountDeletionImpactResult,
@@ -37,6 +42,7 @@ import type {
   PersonalMindTargetRequest,
   PersonalSpaceBinding,
   Principal,
+  PrincipalId,
   PrincipalAccountSnapshot,
   RegisteredPrincipalSnapshot,
   SpaceInvitation,
@@ -69,6 +75,11 @@ import type {
   JobId,
   McpTokenMetadata,
   McpTokenStore,
+  MembershipControlStore,
+  MembershipControlTargetQuery,
+  MembershipControlTransaction,
+  MembershipMutationReplayRequest,
+  MembershipMutationReplayResult,
   MetadataStore,
   MindRouteAuthorizationQuery,
   PublicMindCatalogPageRequest,
@@ -1879,6 +1890,61 @@ function cloneOrdinaryMindIdempotencyRecords(
   return cloned;
 }
 
+type MembershipMutationRecord = Readonly<{
+  canonicalRequestHash: MembershipMutationReplayRequest["canonicalRequestHash"];
+  membership: Readonly<SpaceMembership>;
+  changed: boolean;
+  requiredCapability: Extract<
+    MembershipMutationReplayResult,
+    { readonly kind: "replayed" }
+  >["requiredCapability"];
+}>;
+
+function membershipMutationKey(
+  request: Pick<
+    MembershipMutationReplayRequest,
+    "principalId" | "spaceId" | "operation" | "idempotencyKey"
+  >,
+): string {
+  return [
+    request.principalId,
+    request.spaceId,
+    request.operation,
+    request.idempotencyKey,
+  ].join("\u0000");
+}
+
+function cloneMembershipMutationRecords(
+  records: ReadonlyMap<string, MembershipMutationRecord>,
+): Map<string, MembershipMutationRecord> {
+  return new Map(
+    [...records].map(([key, record]) => [
+      key,
+      Object.freeze({
+        ...record,
+        membership: freezeMembership(record.membership),
+      }),
+    ]),
+  );
+}
+
+function readMembershipReplay(
+  records: ReadonlyMap<string, MembershipMutationRecord>,
+  request: Readonly<MembershipMutationReplayRequest>,
+): MembershipMutationReplayResult {
+  const record = records.get(membershipMutationKey(request));
+  if (!record) return Object.freeze({ kind: "not_found" });
+  if (record.canonicalRequestHash !== request.canonicalRequestHash) {
+    return Object.freeze({ kind: "idempotency_conflict" });
+  }
+  return Object.freeze({
+    kind: "replayed",
+    membership: freezeMembership(record.membership),
+    changed: record.changed,
+    requiredCapability: record.requiredCapability,
+  });
+}
+
 const VISIBILITY_AUDIT_METADATA_KEYS = [
   "access_version",
   "from_visibility",
@@ -2862,7 +2928,9 @@ export class InMemoryRevisionMetadataStore
     PublicMindCatalogStore,
     PersonalMindStore,
     OrdinaryMindStore,
-    AccountDeletionStore {
+    AccountDeletionStore,
+    MembershipControlStore,
+    ControlReadStore {
   readonly kind = "metadata-store" as const;
   #spaces = new Map<SpaceId, SpaceState>();
   #revisionsById = new Map<RevisionId, Envelope>();
@@ -2886,6 +2954,18 @@ export class InMemoryRevisionMetadataStore
   #ordinaryMindIdempotencyRecords = new Map<
     string,
     Readonly<OrdinaryMindIdempotencyRecord>
+  >();
+  #membershipMutationRecords = new Map<
+    string,
+    Readonly<{
+      canonicalRequestHash: MembershipMutationReplayRequest["canonicalRequestHash"];
+      membership: Readonly<SpaceMembership>;
+      changed: boolean;
+      requiredCapability: Extract<
+        MembershipMutationReplayResult,
+        { readonly kind: "replayed" }
+      >["requiredCapability"];
+    }>
   >();
   #ordinaryMindDeletionImpacts: OrdinaryMindDeletionImpactMap = new Map();
   #ordinaryMindDeletionCleanup: OrdinaryMindDeletionCleanupMap = new Map();
@@ -2994,6 +3074,91 @@ export class InMemoryRevisionMetadataStore
           )
           .map((membership) => membership.spaceId),
       )].sort(),
+    );
+  }
+
+  async readMembershipMutationReplay(
+    request: Readonly<MembershipMutationReplayRequest>,
+  ): Promise<MembershipMutationReplayResult> {
+    return readMembershipReplay(this.#membershipMutationRecords, request);
+  }
+
+  async runMembershipControlTransaction<Result>(
+    operation: (transaction: MembershipControlTransaction) => Promise<Result>,
+  ): Promise<Result> {
+    return this.runOrdinaryMindTransaction((transaction) => operation(transaction));
+  }
+
+  async listControlMembers(
+    spaceId: SpaceId,
+  ): Promise<readonly Readonly<ControlMemberProjection>[]> {
+    const space = this.#knowledgeSpaces.get(spaceId);
+    if (!space || space.state !== "active") return Object.freeze([]);
+    return Object.freeze(
+      [...this.#memberships.values()]
+        .filter((membership) => membership.spaceId === spaceId)
+        .map((membership) => {
+          const principal = this.#principals.get(membership.principalId);
+          if (!principal) return null;
+          return Object.freeze({
+            memberId: membership.membershipId,
+            principalId: membership.principalId,
+            displayName: principal.displayName,
+            role: membership.role,
+            state: membership.state,
+            membershipVersion: membership.version,
+          });
+        })
+        .filter(
+          (projection): projection is Readonly<ControlMemberProjection> =>
+            projection !== null,
+        )
+        .sort((left, right) =>
+          left.memberId.localeCompare(right.memberId, "en"),
+        ),
+    );
+  }
+
+  async listControlInvitations(
+    principalId: PrincipalId,
+  ): Promise<readonly Readonly<ControlInvitationProjection>[]> {
+    const principal = this.#principals.get(principalId);
+    if (!principal || principal.state !== "active") return Object.freeze([]);
+    return Object.freeze(
+      [...this.#invitations.values()]
+        .filter(
+          (invitation) =>
+            invitation.targetPrincipalId === principalId ||
+            invitation.createdBy === principalId,
+        )
+        .map((invitation) => {
+          const outgoing = invitation.createdBy === principalId;
+          const counterpartyId = outgoing
+            ? invitation.targetPrincipalId
+            : invitation.createdBy;
+          const counterparty = this.#principals.get(counterpartyId);
+          const mind = this.#knowledgeSpaces.get(invitation.spaceId);
+          if (!counterparty || !mind || mind.state !== "active") return null;
+          return Object.freeze({
+            invitationId: invitation.invitationId,
+            mindId: invitation.spaceId,
+            mindName: mind.name,
+            direction: outgoing ? ("outgoing" as const) : ("incoming" as const),
+            counterpartyPrincipalId: counterpartyId,
+            counterpartyDisplayName: counterparty.displayName,
+            proposedRole: invitation.proposedRole,
+            state: invitation.state,
+            invitationVersion: invitation.version,
+            expiresAt: invitation.expiresAt,
+          });
+        })
+        .filter(
+          (projection): projection is Readonly<ControlInvitationProjection> =>
+            projection !== null,
+        )
+        .sort((left, right) =>
+          left.invitationId.localeCompare(right.invitationId, "en"),
+        ),
     );
   }
 
@@ -3211,6 +3376,9 @@ export class InMemoryRevisionMetadataStore
       let idempotencyRecords = cloneOrdinaryMindIdempotencyRecords(
         this.#ordinaryMindIdempotencyRecords,
       );
+      let membershipMutationRecords = cloneMembershipMutationRecords(
+        this.#membershipMutationRecords,
+      );
       let personalProfileIdempotencyRecords =
         clonePersonalProfileIdempotencyRecords(
           this.#personalProfileIdempotencyRecords,
@@ -3296,6 +3464,201 @@ export class InMemoryRevisionMetadataStore
 
       const transaction: OrdinaryMindMetadataTransaction = Object.freeze({
         kind: "authorization-transaction" as const,
+        readMembershipControlTarget: async (
+          query: Readonly<MembershipControlTargetQuery>,
+        ) => {
+          const space = knowledgeSpaces.get(query.spaceId);
+          if (!space || space.state !== "active") {
+            return Object.freeze({ kind: "mind_not_found" as const });
+          }
+          const membership = [...memberships.values()].find(
+            (candidate) =>
+              candidate.spaceId === query.spaceId &&
+              (query.memberId !== undefined
+                ? candidate.membershipId === query.memberId
+                : candidate.principalId === query.principalId),
+          );
+          if (!membership) {
+            return Object.freeze({ kind: "membership_not_found" as const });
+          }
+          const personal = [...personalBindings.values()].some(
+            (binding) => binding.spaceId === query.spaceId,
+          );
+          return Object.freeze({
+            kind: "found" as const,
+            mindKind: personal ? ("personal" as const) : ("ordinary" as const),
+            membership: freezeMembership(membership),
+          });
+        },
+        applyMembershipMutation: async (
+          request: Readonly<ApplyMembershipMutationRequest>,
+        ): Promise<ApplyMembershipMutationResult> => {
+          const replay = readMembershipReplay(membershipMutationRecords, request);
+          if (replay.kind === "idempotency_conflict") return replay;
+          if (replay.kind === "replayed") {
+            return Object.freeze({
+              kind: "applied",
+              membership: replay.membership,
+              changed: replay.changed,
+              replayed: true,
+            });
+          }
+          if (
+            !SHA256_PATTERN.test(request.canonicalRequestHash) ||
+            !BOUNDED_OPAQUE_ID.test(request.requestId) ||
+            !BOUNDED_OPAQUE_ID.test(request.auditEventId) ||
+            !BOUNDED_OPAQUE_ID.test(request.auditOutboxMessageId) ||
+            !Number.isFinite(Date.parse(request.occurredAt))
+          ) {
+            return Object.freeze({ kind: "invalid_record" });
+          }
+          const principal = principals.get(request.principalId);
+          const space = knowledgeSpaces.get(request.spaceId);
+          if (!principal || principal.state !== "active") {
+            return Object.freeze({ kind: "forbidden" });
+          }
+          if (!space || space.state !== "active") {
+            return Object.freeze({ kind: "mind_not_found" });
+          }
+          if (
+            [...personalBindings.values()].some(
+              (binding) => binding.spaceId === request.spaceId,
+            )
+          ) {
+            return Object.freeze({ kind: "personal_mind" });
+          }
+          const source = [...memberships.values()].find(
+            (candidate) =>
+              candidate.spaceId === request.spaceId &&
+              candidate.principalId === request.principalId &&
+              candidate.state === "active",
+          );
+          const target = memberships.get(request.targetMembershipId);
+          if (
+            !source ||
+            !target ||
+            target.spaceId !== request.spaceId ||
+            target.state !== "active"
+          ) {
+            return Object.freeze({ kind: "membership_not_found" });
+          }
+          if (target.role === "owner") {
+            return Object.freeze({ kind: "owner_membership" });
+          }
+          if (target.version !== request.expectedMembershipVersion) {
+            return Object.freeze({ kind: "membership_version_conflict" });
+          }
+          if (
+            request.authorizationStamp.accessVersion !== space.accessVersion ||
+            request.authorizationStamp.membershipVersion !== source.version ||
+            request.authorizationStamp.tokenVersion !== null
+          ) {
+            return Object.freeze({ kind: "authorization_state_changed" });
+          }
+          if (!roleHasCapability(source.role, request.requiredCapability)) {
+            return Object.freeze({ kind: "forbidden" });
+          }
+          if (request.operation === "leave_space") {
+            if (source.membershipId !== target.membershipId) {
+              return Object.freeze({ kind: "forbidden" });
+            }
+          } else {
+            const required =
+              target.role === "admin" || request.role === "admin"
+                ? "members:manage-admin"
+                : "members:manage-basic";
+            if (request.requiredCapability !== required) {
+              return Object.freeze({ kind: "forbidden" });
+            }
+          }
+          const changed =
+            request.operation === "change_membership_role"
+              ? target.role !== request.role
+              : true;
+          if (
+            request.operation === "change_membership_role" &&
+            request.role !== "reader" &&
+            request.role !== "editor" &&
+            request.role !== "admin"
+          ) {
+            return Object.freeze({ kind: "invalid_record" });
+          }
+          if (
+            auditEvents.has(request.auditEventId) ||
+            auditOutbox.has(request.auditOutboxMessageId) ||
+            [...auditOutbox.values()].some(
+              (message) => message.auditEventId === request.auditEventId,
+            )
+          ) {
+            return Object.freeze({ kind: "effect_conflict" });
+          }
+          const updatedMembership = freezeMembership({
+            ...target,
+            ...(request.operation === "change_membership_role"
+              ? { role: request.role! }
+              : { state: "revoked" as const }),
+            version: changed ? version(target.version + 1) : target.version,
+            updatedAt: changed ? request.occurredAt : target.updatedAt,
+            updatedBy: changed ? request.principalId : target.updatedBy,
+          });
+          const updatedSpace = changed
+            ? freezeKnowledgeSpace({
+                ...space,
+                accessVersion: version(space.accessVersion + 1),
+                updatedAt: request.occurredAt,
+              })
+            : space;
+          const event = Object.freeze({
+            auditEventId: request.auditEventId,
+            actor: Object.freeze({
+              kind: "principal" as const,
+              principalId: request.principalId,
+            }),
+            requestId: request.requestId,
+            eventType: `membership.${request.operation}`,
+            outcome: "succeeded" as const,
+            spaceId: request.spaceId,
+            occurredAt: request.occurredAt,
+            safeMetadata: Object.freeze({
+              member_id: target.membershipId,
+              previous_role: target.role,
+              resulting_role: updatedMembership.role,
+              previous_state: target.state,
+              resulting_state: updatedMembership.state,
+              changed,
+            }),
+          });
+          const outbox = Object.freeze({
+            outboxMessageId: request.auditOutboxMessageId,
+            auditEventId: request.auditEventId,
+            state: "pending" as const,
+            version: version(1),
+            attempts: 0,
+            availableAt: request.occurredAt,
+            claimExpiresAt: null,
+            createdAt: request.occurredAt,
+            updatedAt: request.occurredAt,
+          });
+          memberships.set(target.membershipId, updatedMembership);
+          knowledgeSpaces.set(request.spaceId, updatedSpace);
+          auditEvents.set(event.auditEventId, cloneAuditEvent(event));
+          auditOutbox.set(outbox.outboxMessageId, cloneAuditOutbox(outbox));
+          membershipMutationRecords.set(
+            membershipMutationKey(request),
+            Object.freeze({
+              canonicalRequestHash: request.canonicalRequestHash,
+              membership: updatedMembership,
+              changed,
+              requiredCapability: request.requiredCapability,
+            }),
+          );
+          return Object.freeze({
+            kind: "applied",
+            membership: updatedMembership,
+            changed,
+            replayed: false,
+          });
+        },
         classifyPersonalMindTarget: async (
           request: PersonalMindTargetRequest,
         ): Promise<PersonalMindTargetClassification> => {
@@ -4936,6 +5299,11 @@ export class InMemoryRevisionMetadataStore
             idempotencyRecords.delete(key));
           selected.contentIdempotencyKeys.forEach((key) =>
             contentIdempotencyRecords.delete(key));
+          for (const key of membershipMutationRecords.keys()) {
+            if (key.split("\u0000")[1] === spaceId) {
+              membershipMutationRecords.delete(key);
+            }
+          }
           selected.backgroundJobIds.forEach((id) => backgroundJobs.delete(id));
           selected.exportJobIds.forEach((id) => exportJobs.delete(id));
           selected.exportGrantKeys.forEach((key) =>
@@ -5235,6 +5603,11 @@ export class InMemoryRevisionMetadataStore
             records.contentIdempotencyKeys.forEach((key) =>
               contentIdempotencyRecords.delete(key),
             );
+            for (const key of membershipMutationRecords.keys()) {
+              if (key.split("\u0000")[1] === spaceId) {
+                membershipMutationRecords.delete(key);
+              }
+            }
             records.backgroundJobIds.forEach((id) => backgroundJobs.delete(id));
             records.exportJobIds.forEach((id) => exportJobs.delete(id));
             records.exportGrantKeys.forEach((key) =>
@@ -5343,6 +5716,11 @@ export class InMemoryRevisionMetadataStore
               personalProfileIdempotencyRecords.delete(key);
             }
           }
+          for (const key of membershipMutationRecords.keys()) {
+            if (key.split("\u0000")[0] === request.principalId) {
+              membershipMutationRecords.delete(key);
+            }
+          }
           const externalBindingKeys = [...externalBindings]
             .filter(([, binding]) => binding.principalId === request.principalId)
             .map(([key]) => key);
@@ -5416,6 +5794,7 @@ export class InMemoryRevisionMetadataStore
       this.#spaces = revisionSpaces;
       this.#revisionsById = revisionsById;
       this.#ordinaryMindIdempotencyRecords = idempotencyRecords;
+      this.#membershipMutationRecords = membershipMutationRecords;
       this.#personalProfileIdempotencyRecords = personalProfileIdempotencyRecords;
       this.#activeHandlesByKey = activeByHandle;
       this.#activeHandlesBySpace = activeBySpace;

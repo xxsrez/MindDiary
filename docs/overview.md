@@ -1,9 +1,8 @@
 # Обзор Mind Diary
 
 Статус: proposal, обновлено 2026-08-08. Product behavior первого прототипа
-принято; локальные domain/application capabilities, in-memory adapters,
-web-control и MCP modules и automated suites реализованы. Deployable OpenAI
-Site, durable platform bindings и live production evidence ещё не подтверждены.
+принято; deployable source candidate реализован и локально проверен, production
+deployment и live compatibility gates ещё не выполнены.
 
 ## Зачем проект существует
 
@@ -258,8 +257,10 @@ landing требуют отдельного принятого scope.
 
 ## Платформенный путь
 
-- **Local vertical slice:** shared application core, filesystem/object adapter,
-  SQLite metadata/FTS и Streamable HTTP MCP.
+- **Product Site source candidate:** shared application core, authenticated
+  browser/control routes, Streamable HTTP MCP, D1/R2 adapters и Worker
+  background jobs собраны в отдельном Sites-compatible приложении. Это не live
+  deployment evidence.
 - **Sites MVP production:** единственный текущий production target. Один
   production Site должен дать authenticated web/control UI, persistence и
   Streamable HTTP MCP; провал compatibility gate блокирует release.

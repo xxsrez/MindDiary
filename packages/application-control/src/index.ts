@@ -10,6 +10,7 @@ import type {
   AccountDeletionIdGenerator,
   AccountDeletionStore,
   Clock,
+  ControlReadStore,
   ExternalIdentityBindingLookup,
   ExportArchiveStore,
   IssuedTokenSecret,
@@ -5487,6 +5488,106 @@ function controlOutcome(
  * One logger for the existing control safe-event ports. It maps only the
  * event enum and opaque request ID; service inputs never cross this boundary.
  */
+export type ControlReadFailureCode =
+  | "authentication_required"
+  | "mind_not_found"
+  | "control_projection_unavailable";
+
+export class ControlReadFailure extends Error {
+  readonly code: ControlReadFailureCode;
+
+  constructor(code: ControlReadFailureCode, message: string) {
+    super(message);
+    this.name = "ControlReadFailure";
+    this.code = code;
+  }
+}
+
+function sameAuthorizationStamp(
+  left: Readonly<AuthorizationStamp>,
+  right: Readonly<AuthorizationStamp>,
+): boolean {
+  return (
+    left.accessVersion === right.accessVersion &&
+    left.membershipVersion === right.membershipVersion &&
+    left.tokenVersion === right.tokenVersion
+  );
+}
+
+/** Current safe member/invitation projections for the trusted Sites UI. */
+export class ControlReadService {
+  readonly #store: ControlReadStore;
+  readonly #authorizer: CapabilityAuthorizer;
+
+  constructor(store: ControlReadStore) {
+    this.#store = store;
+    this.#authorizer = new CapabilityAuthorizer(store);
+  }
+
+  async listMembers(actor: ActorContext, mindId: unknown) {
+    const principalId = registeredSitesPrincipal(actor);
+    if (principalId === null) {
+      throw new ControlReadFailure(
+        "authentication_required",
+        "A registered Sites principal is required.",
+      );
+    }
+    if (typeof mindId !== "string" || mindId.length === 0 || mindId.length > 128) {
+      throw new ControlReadFailure("mind_not_found", "Mind was not found.");
+    }
+    const initial = await this.#authorizer.authorize({
+      actor,
+      spaceId: mindId as SpaceId,
+      capability: "content:browse",
+      revisionMode: "head",
+    });
+    if (initial.kind === "denied" || initial.grant.kind !== "membership") {
+      throw new ControlReadFailure("mind_not_found", "Mind was not found.");
+    }
+    const members = await this.#store.listControlMembers(mindId as SpaceId);
+    const final = await this.#authorizer.authorize({
+      actor,
+      spaceId: mindId as SpaceId,
+      capability: "content:browse",
+      revisionMode: "head",
+    });
+    if (
+      final.kind === "denied" ||
+      final.grant.kind !== "membership" ||
+      !sameAuthorizationStamp(initial.stamp, final.stamp)
+    ) {
+      throw new ControlReadFailure(
+        "control_projection_unavailable",
+        "Membership state changed; retry the request.",
+      );
+    }
+    return Object.freeze({
+      members: Object.freeze(
+        members
+          .filter((member) => member.state === "active")
+          .map(({ principalId: memberPrincipalId, ...member }) =>
+            Object.freeze({
+              ...member,
+              isSelf: memberPrincipalId === principalId,
+            }),
+          ),
+      ),
+    });
+  }
+
+  async listInvitations(actor: ActorContext) {
+    const principalId = registeredSitesPrincipal(actor);
+    if (principalId === null) {
+      throw new ControlReadFailure(
+        "authentication_required",
+        "A registered Sites principal is required.",
+      );
+    }
+    const invitations = await this.#store.listControlInvitations(principalId);
+    return Object.freeze({ invitations: Object.freeze([...invitations]) });
+  }
+}
+
 export class ControlPrivacySafeObservability {
   readonly #sink: PrivacySafeObservabilitySink;
   readonly #clock: Clock;

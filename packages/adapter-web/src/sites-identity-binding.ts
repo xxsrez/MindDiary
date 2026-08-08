@@ -169,7 +169,9 @@ function isValidRequestContext(
   );
 }
 
-function normalizeVerifiedEmail(input: unknown): SitesNormalizedBinding | null {
+export function normalizeSitesVerifiedEmail(
+  input: unknown,
+): SitesNormalizedBinding | null {
   if (typeof input !== "string" || input.length === 0 || input.length > 320) {
     return null;
   }
@@ -311,7 +313,7 @@ export class SitesIdentityResolver {
 
     let normalizedBinding: SitesNormalizedBinding | null;
     try {
-      normalizedBinding = normalizeVerifiedEmail(snapshot.verifiedEmail);
+      normalizedBinding = normalizeSitesVerifiedEmail(snapshot.verifiedEmail);
     } catch {
       normalizedBinding = null;
     }
