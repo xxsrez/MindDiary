@@ -81,9 +81,10 @@ evidence, если одновременно доказаны все услови
    официальным incident `Actions`/`Webhooks`, активным на момент симптома; это
    доказано сохранённым status/update, даже если incident уже resolved.
    Выполнена одна bounded проверка run/check state.
-6. Все остальные gates выбранного profile доступны и выполнены. Для `release`
-   outage waiver не заменяет Sites artifact/deployment, authenticated web,
-   persistence, MCP client smoke, rollback evidence или tag policy.
+6. Все остальные gates, требуемые current milestone и repository contract,
+   доступны и выполнены. Outage waiver не заменяет required Sites
+   artifact/deployment, authenticated web, persistence, MCP client smoke,
+   rollback evidence или tag policy.
 
 Если условия выполнены:
 
@@ -91,10 +92,10 @@ evidence, если одновременно доказаны все услови
    `CI.status=waived-external-outage`, `run/check=none|<infra-run-id>` и
    `CI_WAIVER` с exact head, observed symptom, incident component/id/URL,
    `updated_at`, `checked_at`, validation key и `catch_up=next-natural-run`.
-2. Для `design|build` переведи cutoff в `integrated`, закрой полностью доказанные
-   issue в Linear и release-ни их claims. Для `release` продолжай обычные
-   Sites/live/tag gates и после их успеха разрешай `released`/`Done` с тем же
-   явно сохранённым waiver.
+2. Если production не требуется current milestone, переведи cutoff в
+   `integrated`, закрой полностью доказанные issue в Linear и release-ни их
+   claims. Если production требуется, продолжай обычные Sites/live/tag gates и
+   после их успеха разрешай `released`/`Done` с тем же явно сохранённым waiver.
 3. Один waiver финального опубликованного head может покрыть несколько ancestor
    cutoffs, только если каждый ancestor имеет собственный clean integrated gate
    и достижим из этого head. Запиши одинаковый `PUBLISHED_BY`/`CI_WAIVER` в

@@ -30,6 +30,9 @@ claim generation/token, exact feature ref и guard ref/tip. Это fencing ident
 не credential. Если они отсутствуют, не совпадают с work claim либо branch не
 содержит уникальный run-key/epoch/claim suffix, ничего не меняй и верни
 `needs-input`. Late result старого epoch/generation не имеет authority.
+Manifest также содержит fresh `executor.lease_id`, `mode`, `agent_type` и
+`fork_turns=none`. Если этот runtime agent уже исполнял другую issue/lease,
+ничего не меняй и верни `needs-input`: worker нельзя переиспользовать.
 `issue_id` может быть Linear UUID либо exact `issue_identifier`, когда
 установленный connector возвращает identifier в поле `id`; во втором случае
 они обязаны совпадать. Никогда не принимай выдуманный UUID.
@@ -40,12 +43,19 @@ claim generation/token, exact feature ref и guard ref/tip. Это fencing ident
 {
   "issue_updated_at": "<operational timestamp>",
   "scope_fingerprint": "<semantic digest>",
+  "executor": {
+    "lease_id": "<fresh UUID>",
+    "mode": "delegated|coordinator-inline",
+    "agent_type": "worker|coordinator-inline",
+    "fork_turns": "none"
+  },
   "isolation": {
     "mutable_build_dir": "<absolute task-owned path>",
     "tmp_dir": "<absolute task-owned path>",
     "runtime_dir": "<absolute task-owned path>",
     "cache_mode": "content-addressed|isolated",
     "cache_dir": "<absolute path>",
+    "cache_key": "<sha256 for content-addressed, otherwise none>",
     "ports": [],
     "env": {}
   },
@@ -100,6 +110,11 @@ isolation или validation field запрещает исполнение, а н
    `content-addressed` cache можно разделять только по immutable content key,
    `isolated` cache обязан быть task-owned. Временные файлы не должны утекать в
    primary checkout или worktrees соседних issue.
+   Не создавай symlink/hardlink на mutable `node_modules`, tmp, cache или runtime
+   другого worktree. Не запускай dependency install (`npm ci/install`, `pnpm
+   install`, `yarn install` и аналоги) в feature lane: используй только заранее
+   подготовленную coordinator-ом task-owned dependency tree либо read-only
+   content-addressed cache с exact `cache_key`.
 5. Проверь resume state и существующие issue-scoped branch/commit/ref. Resume in
    place допустим только для exact current owner/epoch/generation/token и одного
    isolated worktree. Усыновлённый stale SHA приходит как явный `ADOPTED_FROM`
@@ -160,8 +175,9 @@ isolation или validation field запрещает исполнение, а н
    переписывая уже опубликованный SHA. Перед `online` push fetch-ни repo-global
    coordinator ref, current `WORK_CLAIM` и guard; потребуй exact manifest
    owner/epoch/generation/token. При mismatch/unavailable не публикуй и верни
-   local-only artifact. В online mode создай descendant guard acknowledgement с
-   exact HEAD/state и атомарно fast-forward push-ни intended feature ref плюс
+   local-only artifact. В online mode создай descendant guard acknowledgement
+   через `shipctl.py metadata-commit --kind guard`: пустой metadata tree не
+   содержит `.github/workflows`. Атомарно fast-forward push-ни exact feature ref плюс
    guard ref с explicit expected-old для обоих. Если remote не поддерживает
    atomic multi-ref push, не публикуй сам: coordinator-only mode. Не
    переписывай существующий ref. В `offline-local-only` не обращайся к origin:
@@ -220,6 +236,7 @@ SMOKE: <коротко что локально проверено>
 CHECK_CLASS: targeted-feature
 TARGETED_CHECKS: <короткий список exact команд/check IDs и итогов>
 FULL_GATE: deferred-to-cutoff
+EXECUTOR: lease=<uuid>; mode=<delegated|coordinator-inline>; fresh=yes
 GAPS: <none или точная граница>
 DIRTY_REMAINDER: <none или сохранённые paths внутри worktree>
 DEFECT_CANDIDATE: <none или короткий summary + defect_signature>

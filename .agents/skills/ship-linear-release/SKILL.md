@@ -4,8 +4,8 @@ description: >-
   Start or continue Mind Diary's autonomous delivery of the current Linear
   milestone. Coordinate a work-conserving pool of isolated issue workers,
   rolling integration cutoffs, exact-SHA verification, OpenAI Sites production
-  deployment when configured, rollback, and Linear closure. Parse workers=N or
-  free-form worker counts. Use only when the user explicitly invokes
+  deployment when required by current acceptance, rollback, and Linear closure.
+  Parse workers=N or free-form worker counts. Use only when the user explicitly invokes
   $ship-linear-release or asks to run this milestone-delivery skill; do not use
   for ordinary issue work, planning, or status reporting.
 ---
@@ -14,8 +14,12 @@ description: >-
 
 Доставляй текущий Linear milestone как continuous conveyor:
 issue workers -> rolling integration cutoff -> global gate -> default -> при
-`release` Sites -> `Done`. Репозиторий может быть на стадиях `design`, `build`
-или `release`; не выдумывай отсутствующий сервис, CI, deployment или live gate.
+применимом acceptance Sites -> `Done`. Единственные источники обязательных
+gates — current Linear acceptance, `AGENTS.md` и tracked repository contract.
+Не вводи target/delivery profiles. Отсутствующую реализацию внутри уже принятого
+scope создай как обычную работу, но не выдавай её за выполненный service,
+deployment или live gate. Нормативный contract —
+[linear-milestone-delivery.md](../../../docs/specs/linear-milestone-delivery.md).
 
 ## Главный fast path
 
@@ -29,7 +33,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 \
 ```
 
 Команда read-only: она одним компактным JSON фиксирует remote/default,
-tracked contract, dirty skill, delivery profile, coordinator refs, route и
+tracked contract, dirty skill, coordinator refs, route и
 нужные references. Не повторяй её отдельными Git-командами без конкретного
 расхождения. Никогда не dump-и `ALL_TOOLS`, полные MCP schemas или descriptions:
 найди/загрузи только точные Linear/Git/Sites операции, когда их стадия реально
@@ -77,8 +81,10 @@ duplicate Git/Linear/tool discovery = 0
 ```
 
 Это process invariant, не обещание wall-clock. Если безопасный dispatch не
-уместился, останови разрастание контекста и выведи, какой конкретный blocker
-съел budget. Не запускай временных scout/explorer для scope discovery: первым
+уместился, останови разрастание диагностики, сожми evidence и либо dispatch-и
+уже доказанную ready issue, либо верни точный `no-actionable-frontier`.
+Исчерпание diagnostic budget само по себе не blocker и не повод спрашивать
+пользователя. Не запускай временных scout/explorer для scope discovery: первым
 агентом по issue должен быть её worker. Если ownership нельзя определить из
 issue и `rg`, тот же worker возвращает `SCOPE_REFINEMENT`; coordinator сужает
 manifest и продолжает ту же issue, не создавая отдельного исследователя.
@@ -90,16 +96,24 @@ manifest и продолжает ту же issue, не создавая отде
 ```text
 без worker count                         -> 1
 workers=N / «три воркера» / «в 3 потока» -> N
-workers=auto / «всех доступных»           -> auto
+workers=auto / workers=out / «всех доступных» -> auto
 auto + «не больше N»                      -> auto(max=N)
 resume без нового count                   -> сохранённый WORKERS
 dry-run                                   -> только read-only план
 ```
 
+Нормализуй invocation одним helper до любых мутаций:
+
+```bash
+python3 .agents/skills/ship-linear-release/scripts/shipctl.py invocation \
+  --text '<полный текст вызова>'
+```
+
 Число должно быть положительным; не принимай число issue, batch, версии или
 budget за worker count. Несовместимые числа требуют одного короткого вопроса.
-`N` — запрошенное число одновременно исполняемых issue, но не обещание
-несуществующих runtime slots. Зафиксируй отдельно:
+`workers=N` — exact требование к устойчивому числу одновременно исполняемых
+issue. Не понижай его молча. `workers=auto` — единственный адаптивный режим.
+Зафиксируй отдельно:
 
 ```text
 requested_workers; runtime_slots_total; delegated_capacity;
@@ -110,25 +124,43 @@ sustained_issue_capacity; opportunistic_inline; active_target
 `delegated_capacity`. Hybrid inline допустим лишь при пустой coordinator queue,
 сразу уступает control-plane работе и никогда не учитывается как sustained
 concurrent lane. `active_target=min(sustained_issue_capacity, compatible ready)`.
-При дефиците capacity сообщи эти значения и конкретный
-limit; не называй time-sliced root ещё одним устойчивым worker. `workers=1`
-может быть fused coordinator-inline в отдельном issue worktree.
+До repo-global claim проверь capacity и actionable frontier детерминированно:
+
+```bash
+python3 .agents/skills/ship-linear-release/scripts/shipctl.py launch-check \
+  --workers <N|auto> [--max-workers N] \
+  --runtime-slots-total <including-root> \
+  --safe-resource-capacity <n> --compatible-ready <n> \
+  --unfinished <n> --running <n>
+```
+
+`status=blocked` запрещает claim, goal и dispatch. При exact `N` дефицит
+runtime/resource capacity требует остановки с числами, а не скрытого исполнения
+меньшим pool. Меньший ready frontier ограничивает только текущий `active_target`
+и не нарушает exact capacity. `no-actionable-frontier` при unfinished>0 и
+running=0 требует объяснить dependency cycle, unknown blocker или acceptance
+contradiction до мутаций; отсутствие ещё не реализованного service само по себе
+не blocker. При `auto` используй вычисленный target. Не называй time-sliced root
+ещё одним устойчивым worker. `workers=1` — fused coordinator-inline, но issue
+всё равно исполняется в отдельном worktree.
 
 До первой мутации дай одну строку:
 
 ```text
-mode=build-and-ship-milestone; profile=<design|build|release>; unfinished=<n>;
+mode=linear-milestone-delivery; unfinished=<n>;
 ready=<n>; workers=<requested/sustained>; runtime-slots=<total>;
 delegated=<n>; opportunistic-inline=<0|1>; owner=<new|same|other>; route=<route>;
-pipeline=<state>; foreign-main=<state>; gates=<available>; gaps=<unavailable>
+checkout=<clean|isolated-dirty>; pipeline=<state>; foreign-main=<state>;
+external-gates=<not-required|pending|ready|blocked>; gaps=<unavailable>
 ```
 
 `dry-run` запрещает `create_goal`, Git/Linear/deployment mutations, worktrees и
 dispatch. В обычном явно запущенном run разрешены task worktrees/branches,
 commits/refs, idempotent Linear receipts, deduplicated Bugs, expected-old
-fast-forward default CAS и — только при `release` — configured production Sites
-deployment/tag. Не разрешены product decisions, secrets, force-push/history
-rewrite, другой milestone/project, AWS fallback или новая infrastructure.
+fast-forward default CAS и required configured production Sites deployment/tag.
+Разрешена implementation уже принятого Sites MVP vertical slice. Не разрешены
+новые product decisions, чтение/раскрытие secrets, force-push/history rewrite,
+другой milestone/project, AWS fallback или не принятая infrastructure.
 
 ## Claim, goal и live scope
 
@@ -140,8 +172,13 @@ rewrite, другой milestone/project, AWS fallback или новая infrastr
 2. Одним Linear запросом разреши exact project/current milestone и получи
    compact snapshot: `id/identifier/title/state/priority/labels/createdAt/updatedAt`,
    milestone, dependencies и board tie-breaker. Полный текст/comments читай
-   только у issue, выбранных для немедленного dispatch.
-3. При fresh work первое mutable действие — repo-global coordinator claim по
+   только у issue, выбранных для немедленного dispatch. До claim проверь cycle,
+   unknown blockers, conflicting acceptance и наличие ready/running frontier.
+   Missing implementation принятого scope классифицируй как work, а не внешний
+   prerequisite. Если unfinished есть, но нет ready и running, `launch-check`
+   обязан вернуть `no-actionable-frontier` с точной structural причиной.
+3. После snapshot и успешного `launch-check` при fresh work первое mutable
+   действие — repo-global coordinator claim по
    [coordination.md](references/coordination.md). CAS loser остаётся read-only.
    Active чужой owner — `already-running`; timeout сам по себе не даёт takeover.
    `route=takeover` означает ровно один разрешённый mutable шаг: expected-old
@@ -240,7 +277,8 @@ Manifest содержит как минимум run/owner/epoch, claim generatio
 issue/project/milestone IDs, repo/worktree/branch, feature+guard refs/tip,
 128-bit `run_key`, root/base/dependency SHAs, queue fingerprint, semantic
 `scope_fingerprint`, отдельный operational Linear `updatedAt`, ownership paths,
-isolated env/cache/tmp/ports и remote mode. Status/comment projections могут
+fresh executor lease, isolated env/cache/tmp/ports и remote mode.
+Status/comment projections могут
 менять `updatedAt`, но не `scope_fingerprint`.
 `issue_id` — Linear UUID, когда connector его реально выдаёт; если connector
 нормализует `id` до `AND-N`, используй этот exact provider identifier только
@@ -252,12 +290,19 @@ Machine-checkable isolation/validation fragment обязателен:
 {
   "issue_updated_at": "<operational timestamp>",
   "scope_fingerprint": "<semantic digest>",
+  "executor": {
+    "lease_id": "<fresh UUID for this issue only>",
+    "mode": "delegated|coordinator-inline",
+    "agent_type": "worker|coordinator-inline",
+    "fork_turns": "none"
+  },
   "isolation": {
     "mutable_build_dir": "<absolute task-owned path>",
     "tmp_dir": "<absolute task-owned path>",
     "runtime_dir": "<absolute task-owned path>",
     "cache_mode": "content-addressed|isolated",
     "cache_dir": "<absolute path>",
+    "cache_key": "<sha256 for content-addressed, otherwise none>",
     "ports": [],
     "env": {}
   },
@@ -270,11 +315,28 @@ Machine-checkable isolation/validation fragment обязателен:
 ```
 
 `ports` содержит уникальные integer ports, `env` — только явные non-secret
-task-scoped values; `targeted_checks` не пуст и не включает full repo suite.
+task-scoped values; `targeted_checks` не пуст и не включает full repo suite или
+dependency install. Feature worker не запускает `npm ci/install`, `pnpm
+install`, `yarn install` или аналог: coordinator заранее предоставляет
+task-owned isolated dependency tree либо immutable content-addressed cache.
+
+Перед каждым dispatch передай candidate manifest, `EXECUTION_INDEX` active
+manifests и все уже использованные executor lease IDs в один read-only check:
+
+```bash
+python3 .agents/skills/ship-linear-release/scripts/shipctl.py dispatch-check \
+  --input <dispatch.json>
+```
+
+Только `status=compatible` разрешает spawn. `serialized` означает same-path
+lane: жди terminal/feature-ready владельца пересекающегося prefix. `invalid`
+запрещает dispatch из-за reuse executor или resource/isolation collision.
 
 Delegated lane запускай сразу как
 `spawn_agent(agent_type="worker", fork_turns="none")`; worker не создаёт
-subagents и не переиспользуется для другой issue. Передай только manifest,
+subagents и не переиспользуется для другой issue. Один runtime agent принимает
+ровно один executor lease за всю жизнь; `followup_task` для второй issue
+запрещён. Передай только manifest,
 выданные docs и ссылку на [issue-worker.md](references/issue-worker.md).
 Coordinator-inline следует тому же протоколу в отдельном worktree. Worker не
 меняет default, Linear, Sites, tags или milestone state.
@@ -305,6 +367,11 @@ guard при `feature_ready` остаются live до terminal integration dis
   affected scope, пока shared lane безопасно не доказана.
 - Общие dependency caches допускаются только content-addressed; mutable build,
   tmp, runtime и ports изолированы.
+- Coordinator/claim metadata refs создавай только через `shipctl.py
+  metadata-commit` или встроенные fenced helpers. Их tree пустой и не содержит
+  `.github/workflows`; source/feature tree доказывается отдельными exact SHA.
+  Не используй прямой `commit-tree` с source tree: stale workflow на metadata
+  ref создаёт лишние Actions runs.
 
 На worker/ingest запускай только targeted checks, smoke и `git diff --check`;
 full repository gate всегда принадлежит sealed cutoff. Для каждой
@@ -328,7 +395,7 @@ deduplicated canonical plan: не запускай aggregate command вмест�
 quiescent handoff останови turn без `update_goal(blocked)`. Fresh explicit
 вызов skill сам выполняет takeover новым epoch.
 
-## Gate, default и release
+## Gate, default и применимый production
 
 На первом ingest прочитай [batch-release.md](references/batch-release.md) и
 [receipts.md](references/receipts.md). Перед seal/promotion обнови compact
@@ -338,13 +405,19 @@ check-then-push недостаточен. После default push дождись
 [github-outage.md](references/github-outage.md); project-command failure нельзя
 waive.
 
-- `design`: docs/product gates; build/deploy/tag не применимы.
-- `build`: доступные build/test/security/conformance gates и default; Sites/tag
-  не применимы.
-- `release`: только tracked `.openai/hosting.json`/runbook позволяет exact-SHA
-  production OpenAI Sites artifact/deploy. Требуются authenticated web/control
-  и MCP smoke, saved previous stable + rollback evidence, затем immutable tag
-  по tracked version policy.
+Каждый cutoff получает gates из acceptance вошедших issues, current `AGENTS.md`
+и tracked commands. Никогда не ослабляй их метаданными запуска. Если current
+milestone не требует production, запиши
+`PRODUCTION_REQUIREMENT=not-required-by-current-milestone` и не придумывай
+deploy/tag. Если требует, отсутствие deployable service, Sites config,
+auth/persistence/MCP flow, test или automation — implementation gap: переоткрой
+owning issue либо создай deduplicated linked issue и продолжай conveyor.
+
+Production действие допустимо только через tracked `.openai/hosting.json` и
+runbook exact-SHA target. Для Mind Diary требуются authenticated web/control,
+persistence и MCP smoke, saved previous stable + rollback evidence, затем
+immutable tag только по tracked version policy. Один UI, локальный MCP или
+capability probe не заменяют этот contract.
 
 Недоступный client/platform gate — `not-available`, а не pass. Если его прямо
 требует acceptance/release contract, issue остаётся unfinished. Production
@@ -354,16 +427,19 @@ flows, поставь `DEFAULT_HEALTH=known-bad` и выпусти repair нов
 
 Дефекты маршрутизируй по [defect-triage.md](references/defect-triage.md):
 same-scope обратно в issue, независимый regression в deduplicated linked Bug,
-systemic/second-generation замораживает integration. Исключай виновную feature
-и её descendants, если независимый cutoff остаётся корректным.
+systemic/second-generation — в priority stabilization Bug с fresh worker и
+заморозкой affected integration. Две неуспешные generations не являются сами по
+себе поводом просить пользователя: bounded диагностика должна доказать внешний
+blocker, противоречие requirements либо необходимость нового decision. Исключай
+виновную feature и её descendants, если независимый cutoff остаётся корректным.
 
 ## Завершить
 
 Checkpoint — одна bounded строка:
 
 ```text
-pool -> cutoff -> health -> profile -> issues -> candidate/default SHA ->
-foreign-main/hold -> validation key -> Sites/live/tag/rollback -> gaps -> remaining
+pool -> cutoff -> health -> issues -> candidate/default SHA ->
+foreign-main/hold -> validation key -> production obligation/evidence -> gaps -> remaining
 ```
 
 Issue переводится в completed-state только после terminal guard и полного

@@ -135,7 +135,8 @@ takeover атомарно снимает только user PAUSE и его index
    Не полагайся на Linear comments.
 3. До dispatch coordinator action intent сохраняет issue, executor task ID,
    worktree ID/intended branch, exact feature/guard refs и expected tips; затем
-   expected-absent создаёт initial guard и reconciled claim index. Перед spawn
+   expected-absent создаёт initial guard через `shipctl.py metadata-commit
+   --kind guard` с пустым workflow-free tree и reconciled claim index. Перед spawn
    тот же bounded transition создаёт `EXECUTION_INDEX state=running`; failed
    spawn переводит entry в `stopped`. Worktree и worker появляются только после
    discovery checkpoint, поэтому crash не оставляет авторитетную работу без key.

@@ -1,80 +1,77 @@
 # Goal card
 
-Читай только при создании нового milestone-delivery goal. Подставь exact live
-IDs и выбранный `delivery_profile`, затем передай objective в `create_goal`.
-`workers` — параметр исполнения, а не часть done criteria; сохраняй выбранный
-режим в run receipt.
+Читай только при создании нового milestone-delivery Goal. Подставь exact live
+IDs и передай objective в `create_goal`. `workers` — параметр исполнения, а не
+done criterion; target/delivery profiles в Goal запрещены.
 
 `run_id`, `run_key` и `owner_id` получай одним вызовом
 `scripts/shipctl.py identities`; не собирай UUID/randomness отдельными shell или
-JavaScript snippets. `create_goal` вызывай один раз после выигранного claim.
+JavaScript snippets. `create_goal` вызывай ровно один раз после выигранного
+repo-global claim и не передавай `token_budget`, если пользователь явно не
+запросил положительный budget.
 
 ```text
-Objective: Автономно доставить все незавершённые issue Linear project
-<project_name> (<project_id>) из закреплённого milestone <milestone_name>
-(<milestone_id>) для <repo> по tracked контракту
-<repo>/.agents/skills/ship-linear-release/SKILL.md; delivery_profile=<profile>;
-run_id=<run_id>; run_key=<run_key>; owner_id=<owner_id>; owner_epoch=<epoch>.
+Objective: Автономно реализовать и доставить все незавершённые issue Linear
+project <project_name> (<project_id>) из закреплённого current milestone
+<milestone_name> (<milestone_id>) для <repo> по tracked контрактам
+<repo>/.agents/skills/ship-linear-release/SKILL.md и
+<repo>/docs/specs/linear-milestone-delivery.md; run_id=<run_id>;
+run_key=<run_key>; owner_id=<owner_id>; owner_epoch=<epoch>.
 
 Done when: Два свежих согласованных Linear snapshot exact milestone не содержат
-незавершённых issue, кроме Canceled/Duplicate; нет активных WORK_CLAIM,
-open/active cutoff, candidate, CI, deployment или rollback artifacts;
-`DEFAULT_HEALTH=healthy`; `PROMOTION_HOLD=none`; fresh remote/default snapshot
-совпадает с terminal evidence; каждый cutoff имеет BATCH_RELEASE_RECEIPT exact
-default-branch SHA, вошедшие issue имеют FEATURE_RECEIPT + Done, а любая issue
-с run artifact имеет terminal delivered/canceled/explicitly-retired
-disposition; unresolved quarantine отсутствует. Done, появившийся при active
-artifact без delivery evidence, не исчезает молча и удерживает goal. Для
-design/build deployment, live smoke и tag явно
-not-applicable и не заявляются. Для release production OpenAI Site имеет exact
-artifact/version/deployment, successful live web + MCP smoke, previous-stable
-rollback evidence и обязательный immutable tag по tracked version policy.
-Terminal `CI_WAIVER` по [github-outage.md](github-outage.md) не является активным CI
-artifact и не удерживает issue, cutoff или goal незавершёнными.
+unfinished issue, кроме Canceled/Duplicate; нет active WORK_CLAIM, cutoff,
+candidate, CI, deployment или rollback artifacts; DEFAULT_HEALTH=healthy и
+PROMOTION_HOLD=none; fresh remote/default snapshot совпадает с terminal
+evidence. Каждый cutoff имеет BATCH_RELEASE_RECEIPT exact default SHA; каждая
+вошедшая issue имеет FEATURE_RECEIPT и Done; любой run artifact имеет terminal
+delivered/canceled/explicitly-retired disposition; unresolved quarantine
+отсутствует. Если acceptance current milestone или repository release contract
+требует production, exact OpenAI Sites artifact/version/deployment прошёл
+обязательные authenticated web/control, persistence и MCP live flows, а
+previous-stable rollback evidence сохранён; immutable tag существует только
+когда его требует tracked version policy. Если production не требуется, он не
+выполняется и receipt фиксирует not-required-by-current-milestone. Done без
+delivery evidence при active artifact удерживает Goal. Terminal CI_WAIVER по
+references/github-outage.md не считается active CI artifact.
 
-Verify with: Feature branches проходят targeted gate; каждый sealed candidate
-проходит один integrated gate по validation key; default branch обновляется
-только remote expected-old CAS из clean worktree; local default/primary checkout
-не мутируется; доступный pre-push CI проверяет exact candidate; configured
-required CI проверяет exact default SHA либо получает terminal external-outage
-waiver строго по [github-outage.md](github-outage.md). Gate берётся из текущего AGENTS.md,
-live acceptance и реально существующих scripts/configs: project-docs validator
-и git diff --check для docs, canonical code/security checks после появления
-кода, strict full-bundle OKF validation и exact MCP/client profiles при
-применимости. Sites artifact соответствует exact SHA, web + MCP smoke
-выполняется до tag/Linear Done, rollback опирается на сохранённый
-previous-stable Sites receipt.
+Verify with: Каждая feature проходит issue-scoped targeted checks; каждый
+sealed candidate ровно один full integrated gate по immutable validation key;
+default обновляется только expected-old remote CAS из clean task-owned
+worktree; primary checkout/local default не мутируются. Required CI проверяет
+exact default SHA либо получает terminal external-outage waiver строго по
+references/github-outage.md. Gate выводится из current AGENTS.md, issue
+acceptance и tracked commands: docs validator и git diff --check для docs,
+canonical aggregate build/test/security gate для кода, strict full-bundle OKF
+validation и exact MCP/client compatibility там, где это действительно требует
+acceptance. Production artifact, live smoke и rollback proof связаны с exact
+validated SHA.
 
 Constraints: Один repo-global coordinator owner/epoch владеет
-Linear/integration/default/Sites/tags; чужая session только отказывает либо
-наблюдает read-only. `workers=N` означает до N одновременно исполняемых issues,
-не включая coordination overhead. При N=1 root работает coordinator-inline;
-при N>1 отдельный coordinator предпочтителен, а hybrid допустим ради issue
-capacity. Pool work-conserving: никаких waves/barriers, slot refill сразу.
-Каждая issue получает отдельные worktree, run/epoch/claim-scoped branch, свежий
-claim token и publication guard. Cheap feature/ingest guardrails выполняются по одной issue; full
-integrated gate, default push и применимый Sites deploy — один раз на immutable
-cutoff, не ожидающий всех in-flight workers. Не переписывать историю, не
-двигать tags и не трогать dirty checkout. Автоматически создавать
-deduplicated Bugs; same-scope возвращать в исходную issue; systemic/known-bad
-state замораживает integration и запускает stabilization, не обязательно всю
-изолированную работу. Contract digest должен быть tracked до dispatch; migration
-переиспользует доказанные artifacts. Worker никогда не меняет
-default/Linear/Sites/tags. Receipts обновляются только на содержательных
-переходах, без streaming telemetry.
-Stable disjoint foreign-main разрешает isolated continuation; overlap
-quarantine-ится, ahead/diverged/unknown замораживает shared lane, remote drift
-создаёт fresh generation по [external-main.md](external-main.md).
-Restart/takeover сначала fence-ит guards и усыновляет exact origin/local
-artifacts по [crash-recovery.md](crash-recovery.md); ambiguous external create
-не повторяется.
+Linear/integration/default/Sites/tags; чужая session остаётся read-only.
+workers=N означает exact N устойчивых issue lanes; при N>1 coordinator занимает
+отдельный runtime slot. workers=auto — единственный адаптивный режим. При N=1
+root совмещает роли, но issue выполняет в отдельном worktree. Pool
+work-conserving, slot refill немедленный. Каждая issue
+имеет отдельные worktree, branch, generation, claim и guard; worker никогда не
+меняет default/Linear/Sites/tags. Targeted gate выполняется на feature, full
+gate/default и применимый production — на immutable cutoff. Dirty user files не
+трогать; dirty control surface fail closed. Same-scope defect возвращать в
+исходную issue; сложный независимый создавать как deduplicated linked Bug;
+маленький integration repair проводить через новую cutoff generation и full
+gate, не непроверенным commit в main. Не переписывать историю, не двигать tags,
+не раскрывать secrets и не выбирать AWS/новую infrastructure без отдельного
+решения. Recovery сначала fence-ит guards и reconciles external actions.
 
-Blocked when: Тот же устойчивый внешний доступ, неустранимая неоднозначность
-или необходимое продуктовое решение не позволяют продвинуть ни active cutoff,
-ни безопасный независимый subset минимум три fresh последовательных goal-хода.
-User/client pause, soft drain/handoff, running worker, pending CI/gate и
-recoverable CAS race не являются blocker. Быстрые auto-continuation с одним
-fingerprint считаются одним наблюдением; transient dirty control surface
-требует также минимум пяти минут без progress. При pause используй
-references/soft-pause.md и не вызывай update_goal(blocked).
+Blocked when: Один и тот же устойчивый внешний blocker, неустранимая
+неоднозначность или необходимое продуктовое решение не позволяют продвинуть ни
+active cutoff, ни безопасный независимый subset минимум три fresh
+последовательных Goal turns. Отсутствующая реализация принятого scope, сложная
+задача, running worker, pending CI/gate, recoverable CAS race, user pause или
+soft handoff blocker-ом не являются. Быстрые continuations с одним fingerprint
+считаются одним наблюдением. При pause используй references/soft-pause.md и не
+вызывай update_goal(blocked).
 ```
+
+Goal не расширяет полномочия user request и не заменяет repo-global claim.
+Если `get_goal` показывает другой active Goal, остановись до мутаций и объясни
+конфликт; не заменяй его автоматически.

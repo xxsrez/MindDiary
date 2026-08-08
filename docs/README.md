@@ -30,12 +30,21 @@ Mind Diary пока находится на стадии проектирова�
 10. [Traceability matrix MVP 0.1](specs/traceability.md) — критерии 1–29,
    owning stories, executable/release evidence, обязательные live flows,
    post-MVP denylist и implementation decisions.
+11. [Автономная доставка Linear milestone](specs/linear-milestone-delivery.md) —
+   нормативный контракт `ship-linear-release`: worker modes, session ownership,
+   dirty checkout, guards, cutoffs, production gates и blocker policy.
 
 ## Руководства
 
 - [Локальная разработка и проверки](guides/development.md) — pinned toolchain,
   clean-checkout path, canonical commands, package graph, fixtures, CI и
   границы доказанного baseline.
+
+## Операции
+
+- [Runbook `ship-linear-release`](operations/ship-linear-release.md) — запуск с
+  одним, exact N или auto workers, параллельные сессии, status, recovery,
+  defect routing и понятная остановка на настоящем blocker.
 
 ## Принятые решения
 
@@ -54,6 +63,9 @@ Mind Diary пока находится на стадии проектирова�
 - [ADR-0005: secret и verifier личного MCP token](decisions/0005-mcp-token-secret-verifier.md)
   — принят fixed-size opaque secret, keyed HMAC-SHA-256 exact lookup,
   consume-once issuance и 90-day maximum expiry.
+- [ADR-0006: автономная доставка Linear milestone без профилей](decisions/0006-linear-milestone-delivery.md)
+  — принят единый acceptance-driven conveyor, exact/auto workers, один
+  repo-global coordinator и отказ от `design | build | release` profiles.
 
 ## Исследования
 
@@ -106,13 +118,17 @@ High-level контур проекта закрыт следующими док�
   dependency rules — в specification границ реализации;
 - критерии 1–29, их owning stories и обязательный release evidence — в
   traceability matrix;
+- автономная реализация Linear milestone, worker topology, integration cutoffs,
+  session fencing и blocker policy — в milestone delivery specification и
+  operations runbook;
 - актуальность внешнего формата данных — в датированном OKF report;
 - конкурентная среда, уточнённый ICP, риски и validation gates — в датированном
   market assessment;
 - текущие платформенные предпосылки и их ограничения — в датированном platform
   report.
 
-Machine-readable OpenAPI/JSON Schemas, отдельный threat model, production
-runbooks, deployment guide и changelog пока не созданы: сервисного кода,
-release и развёртывания нет. До anonymous publication потребуется новая
-спецификация и отдельный threat model.
+Machine-readable OpenAPI/JSON Schemas, отдельный threat model, product
+deployment guide и changelog пока не созданы. Operations runbook описывает
+delivery orchestration, но не выдаёт ещё не выполненный release или deployment
+за существующий. До anonymous publication потребуется новая спецификация и
+отдельный threat model.

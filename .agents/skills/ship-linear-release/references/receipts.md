@@ -79,8 +79,10 @@ refs/heads/codex/release/coordinator
 общих default branch, integration train, CI, Sites и Linear release state.
 Разные repositories координируются независимо.
 
-Первое mutable действие нового run — metadata commit с неизменённым source tree
-и его conditional push в этот ref. Commit содержит как минимум `run_id`,
+Первое mutable действие нового run — metadata commit через `shipctl.py
+metadata-commit --kind coordinator` с пустым workflow-free tree и его
+conditional push в этот ref. Exact source SHA/tree храни отдельно в полях
+ledger; прямой `commit-tree` с source tree запрещён. Commit содержит как минимум `run_id`,
 случайный минимум 128-bit `run_key`, exact `project_id`/`release_id`, случайный
 `owner_id`, owner-proof kind/digest, монотонный `owner_epoch`, contract source/
 digest, claim/comment indexes и полный текущий action intent. Если ref
@@ -171,7 +173,8 @@ RECOVERY: generation=<n>; cause=<resume|handoff|takeover|migration>;
 PROJECT_ID: <id>
 RELEASE_ID: <id>; name=<name>
 SCOPE_LEDGER: initial=<digest>; observed=<digest>; run_artifacts=<issue ids/count+digest>
-PROFILE: design | build | release; evidence=<tracked facts>
+PRODUCTION_REQUIREMENT: <not-required-by-current-milestone|required>;
+                        evidence=<issue acceptance+repo contract digest>
 DEFAULT_BRANCH: <name>; observed_sha=<full>
 PRIMARY_CHECKOUT: default_checked_out=<yes|no>; head=<sha|none>;
                   local_default=<sha|none>; baseline=<fingerprint>
@@ -316,6 +319,7 @@ RELEASE_ID: <id>
 ISSUE: <identifier>; <id>; issue_updated_at=<operational timestamp>;
        scope_fingerprint=<semantic digest>
 EXECUTOR: kind=<agent|coordinator-inline>; task_id=<stable id|unknown>;
+          lease_id=<fresh uuid>; fork_turns=none; reused=no;
           runtime_liveness=<running|terminal|unknown>
 EXECUTION: state=<running|coordinator-paused|feature_ready|failed|needs-input|stopped>;
            evidence=<execution-index key/transition>
@@ -333,6 +337,7 @@ WORKTREE: id=<uuid>; branch=<exact>; path_hint=<basename>; head_at_dispatch=<sha
 ISOLATION: mutable_build_dir=<absolute task-owned>; tmp_dir=<absolute task-owned>;
            runtime_dir=<absolute task-owned>;
            cache_mode=<content-addressed|isolated>; cache_dir=<absolute>;
+           cache_key=<sha256|none>;
            ports=<unique integers|none>; env=<non-secret keys+digest|none>
 VALIDATION_CONTRACT: check_class=targeted-feature;
                      targeted_checks=<exact commands/check ids>;
@@ -372,6 +377,8 @@ mode, task-owned local в explicit offline mode. Exact ref:
 `refs/heads/codex/release/claims/<run-key>/<issue-id>/c<generation>`.
 
 ```text
+SCHEMA: 1
+KIND: CLAIM_GUARD
 STATE: claimed | checkpoint | ready | fenced | terminal
 RUN_ID: <id>; RUN_KEY: <hex>; ISSUE: <id>
 OWNER: id=<uuid>; epoch=<n>; CLAIM: generation=<n>; token_digest=<hash>
@@ -383,8 +390,10 @@ TERMINAL_EVIDENCE: <batch/retirement key|none>
 ```
 
 Initial `claimed`, worker acknowledgement и coordinator `fenced|terminal`
-всегда являются descendant metadata commits с неизменным guard tree; guard ref
-не переписывается.
+всегда являются descendant metadata commits с пустым workflow-free tree,
+созданными `shipctl.py metadata-commit --kind guard` либо встроенным fenced
+helper; source feature tree связывается exact SHA из `FEATURE`. Guard ref не
+переписывается.
 Worker обновляет `feature ref + guard ref` одним atomic multi-ref expected-old
 push. `ready` acknowledgement не заменяет bounded worker receipt/check review,
 но делает published SHA discoverable. Takeover считает grant закрытым только
@@ -525,7 +534,8 @@ STATUS: assembling | sealed | gate-passed | locally-integrated | publishing |
 RUN_ID: <id>; RUN_KEY: <random >=128-bit hex>; OWNER: id=<uuid>; epoch=<n>
 PROJECT_ID: <Linear project id>
 RELEASE_ID: <id>; name=<name>
-PROFILE: design | build | release
+PRODUCTION_REQUIREMENT: <not-required-by-current-milestone|required>;
+                        evidence=<issue acceptance+repo contract digest>
 CUTOFF: <cutoff_id>; generation=<n>; queue_fingerprint=<hash>;
         opened_at=<utc>; membership_closed_at=<utc>; cutoff_reason=<bounded>
 EXPECTED_DEFAULT_SHA: <full>
@@ -547,14 +557,14 @@ FOREIGN_MAIN: observation=<clear|isolated-dirty|overlap|ahead|diverged|active-un
 CI: sha=<full>; run/check=<id|none>; status=<terminal|none|pending-publication|waived-external-outage>
 CI_WAIVER: none | component=<name>; observed=<symptom>; incident=<id/url>; incident_updated_at=<utc>; checked_at=<utc>; validation_key=<key>; catch_up=next-natural-run; reconciled=<run@head|none>
 PUBLISHED_BY: head=<full>; run/check=<id|none>; status=<terminal|waived-external-outage> | none
-SITES: not-applicable(profile=<design|build>) |
+SITES: not-required-by-current-milestone |
        project=<id>; version=<number>; version_id=<id>; archive_sha256=<digest>
-DEPLOYMENT: not-applicable(profile=<design|build>) |
+DEPLOYMENT: not-required-by-current-milestone |
             id=<id>; status=<terminal>; url=<url>
-LIVE_SMOKE: not-applicable(profile=<design|build>) |
+LIVE_SMOKE: not-required-by-current-milestone |
             web=<flows+timestamp+result>; mcp=<profiles+timestamp+result>
-PRODUCT: tag=<annotated tag@sha | not-applicable | none>
-PREVIOUS_STABLE: not-applicable(profile=<design|build>) |
+PRODUCT: tag=<annotated tag@sha | not-required-by-current-milestone | none>
+PREVIOUS_STABLE: not-required-by-current-milestone |
                  tag=<tag>; sha=<full>; sites_version_id=<id> | none
 DEFECTS: <DEFECT_CANDIDATE keys/signatures или none>
 SUPERSEDED_BY: <cutoff/generation или none>
@@ -564,11 +574,12 @@ NEXT: <одно действие или none>
 UPDATED_AT: <timestamp>
 ```
 
-Не заполняй downstream поля предположениями. В `release` tag и release-scoped
-`LINEAR_DONE` допустимы только после successful required live smoke. В
-`design|build` deployment/smoke/tag должны быть `not-applicable`, а
-`LINEAR_DONE` допустим только после доказательства live issue acceptance,
-integrated gate и exact default плюс terminal CI outcome.
+Не заполняй downstream поля предположениями. При
+`PRODUCTION_REQUIREMENT=required` tag и production-scoped `LINEAR_DONE`
+допустимы только после successful required live smoke. При
+`not-required-by-current-milestone` deployment/smoke/tag не выполняются, а
+`LINEAR_DONE` всё равно требует live issue acceptance, integrated gate, exact
+default и terminal CI outcome. Это факт об acceptance, не waiver и не profile.
 
 `CI_WAIVER` допустим только по [github-outage.md](github-outage.md). Он не
 является `pass`, но `waived-external-outage` — terminal outcome: при выполнении

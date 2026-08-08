@@ -225,14 +225,18 @@ projection-batch и не выполняй вторую default/deploy lane па�
 4. Дождись terminal required CI именно этого SHA, если CI настроен. Pre-push
    evidence не заменяет post-push required CI. Outage передай
    `github-outage.md`.
-5. Для `design|build` запиши Sites/deploy/tag как `not-applicable`. Закрывай
-   только issues с доказанным acceptance, integrated gate, exact default и
-   terminal CI outcome.
+5. Выведи `PRODUCTION_REQUIREMENT` из acceptance вошедших issues, current
+   `AGENTS.md` и tracked repository release contract. Если production не
+   требуется, запиши `not-required-by-current-milestone`; закрывай только issues
+   с доказанным acceptance, integrated gate, exact default и terminal CI
+   outcome. Не создавай deploy/tag ради самого conveyor.
 6. Непосредственно перед deploy, tag и Linear closure снова прочитай remote
    default. Drift после нашего push отменяет exact-head evidence до fresh
    generation/reconciliation по [external-main.md](external-main.md).
-7. Для `release` найди один configured production OpenAI Site из tracked
-   config/runbook. До deploy докажи exact `previous_stable` и rollback artifact.
+7. Если production требуется, найди один configured production OpenAI Site из
+   tracked config/runbook. Отсутствующие service/config/test/automation внутри
+   уже принятого scope маршрутизируй как implementation work, а не prerequisite
+   пользователя. До deploy докажи exact `previous_stable` и rollback artifact.
    Создай/найди artifact exact validated SHA, deploy один раз и проверь required
    authenticated web/control, persistence и MCP client flows.
 8. Только после live pass создай immutable annotated tag, если tracked version

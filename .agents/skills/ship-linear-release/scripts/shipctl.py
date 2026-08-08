@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Deterministic, bounded helpers for ship-linear-release.
 
-Policy remains in SKILL.md and references. Most commands are read-only. The
-explicit ``soft-pause``, ``takeover``, ``fence-guards``, and ``sync-contract``
-commands perform narrowly fenced Git CAS transitions; they never mutate Linear,
-worktrees, feature refs, default, deployment, or tags.
+Policy remains in SKILL.md and references. Most commands are read-only.
+``metadata-commit`` creates only an unreachable local metadata commit object.
+The explicit ``soft-pause``, ``takeover``, ``fence-guards``, and
+``sync-contract`` commands perform narrowly fenced Git CAS transitions; they
+never mutate Linear, worktrees, feature refs, default, deployment, or tags.
 """
 
 from __future__ import annotations
@@ -79,6 +80,7 @@ REQUIRED_MANIFEST_FIELDS = {
     "scope_fingerprint",
     "issue_updated_at",
     "ownership_paths",
+    "executor",
     "isolation",
     "validation",
     "remote_mode",
@@ -635,12 +637,6 @@ def tree_oid(repo: Path, sha: str | None, path: str) -> str | None:
     return value if code == 0 and GIT_OID.fullmatch(value) else None
 
 
-def tracked_at(repo: Path, sha: str | None, path: str) -> bool:
-    if not sha or not foreign_main.object_exists(repo, sha):
-        return False
-    return git(repo, "cat-file", "-e", f"{sha}:{path}")[0] == 0
-
-
 def dirty_path(repo: Path, path: str) -> tuple[str, int]:
     code, raw = git(repo, "status", "--porcelain=v1", "--untracked-files=normal", "--", path)
     if code != 0:
@@ -837,17 +833,10 @@ def command_preflight(args: argparse.Namespace) -> int:
             refs_state, refs = coordinator_refs(observation_repo, advertised_refs)
             remote_contract = tree_oid(observation_repo, remote_sha, args.skill_path)
             primary_remote_sha = remote_sha
-            if tracked_at(observation_repo, remote_sha, ".openai/hosting.json"):
-                profile = "release"
-            elif tracked_at(observation_repo, remote_sha, "package.json") or tracked_at(observation_repo, remote_sha, "packages"):
-                profile = "build"
-            else:
-                profile = "design"
         else:
             refs_state, refs = "unavailable", []
             remote_contract = None
             primary_remote_sha = None
-            profile = "design"
 
         contract_matches_head = remote_contract is not None and remote_contract == local_contract
         primary = primary_checkout_snapshot(
@@ -1070,7 +1059,6 @@ def command_preflight(args: argparse.Namespace) -> int:
             "skill_changes": skill_changes,
             "agents_state": agents_state,
             "agents_changes": agents_changes,
-            "delivery_profile": profile,
             "coordinator_refs_state": refs_state,
             "coordinator_refs": refs,
             "required_references": required_refs,
@@ -1162,6 +1150,302 @@ def command_identities(_: argparse.Namespace) -> int:
     return 0
 
 
+RUSSIAN_WORKER_COUNTS = {
+    "один": 1,
+    "одна": 1,
+    "два": 2,
+    "две": 2,
+    "три": 3,
+    "четыре": 4,
+    "пять": 5,
+    "шесть": 6,
+    "семь": 7,
+    "восемь": 8,
+    "девять": 9,
+    "десять": 10,
+}
+
+
+def command_invocation(args: argparse.Namespace) -> int:
+    """Normalize explicit worker syntax without guessing from issue/version numbers."""
+    value = args.text.strip().lower()
+    candidates: list[int | str] = []
+    assignment_matches = list(
+        re.finditer(r"\bworkers\s*=\s*(auto|out|-?[0-9]+)\b", value)
+    )
+    for match in assignment_matches:
+        token = match.group(1)
+        candidates.append("auto" if token in {"auto", "out"} else int(token))
+    if re.search(r"\bworkers\s*=", value) and not assignment_matches:
+        candidates.append("invalid")
+    for match in re.finditer(r"\b(-?[0-9]+)\s+(?:issue\s+)?workers?\b", value):
+        candidates.append(int(match.group(1)))
+    for match in re.finditer(
+        r"\b(-?[0-9]+)\s+(?:воркер(?:а|ов)?|поток(?:а|ов)?)\b", value
+    ):
+        candidates.append(int(match.group(1)))
+    words = "|".join(RUSSIAN_WORKER_COUNTS)
+    for match in re.finditer(
+        rf"\b({words})\s+(?:воркер(?:а|ов)?|поток(?:а|ов)?)\b", value
+    ):
+        candidates.append(RUSSIAN_WORKER_COUNTS[match.group(1)])
+    if re.search(r"\bworkers\s*=\s*auto\b|\bworkers\s*=\s*out\b|всех\s+доступных", value):
+        candidates.append("auto")
+
+    normalized = set(candidates)
+    errors: list[str] = []
+    if len(normalized) > 1:
+        errors.append("ambiguous:workers")
+    workers: int | str = next(iter(normalized)) if normalized else 1
+    if workers == "invalid" or (isinstance(workers, int) and workers <= 0):
+        errors.append("invalid:workers")
+
+    maximum_values = {
+        int(match.group(1))
+        for match in re.finditer(
+            r"(?:\bmax(?:-workers)?\s*=\s*|не\s+больше\s+)(-?[0-9]+)\b", value
+        )
+    }
+    if len(maximum_values) > 1:
+        errors.append("ambiguous:max-workers")
+    max_workers = next(iter(maximum_values)) if len(maximum_values) == 1 else None
+    if max_workers is not None and max_workers <= 0:
+        errors.append("invalid:max-workers")
+    if max_workers is not None and workers != "auto":
+        errors.append("invalid:max-workers-with-exact")
+
+    dry_run = bool(re.search(r"\bdry[- ]run\b|только\s+план", value))
+    status = "invalid" if errors else "ok"
+    emit(
+        {
+            "schema": 1,
+            "status": status,
+            "worker_mode": "auto" if workers == "auto" else "exact",
+            "workers": workers,
+            "max_workers": max_workers,
+            "dry_run": dry_run,
+            "errors": errors,
+        }
+    )
+    return 2 if errors else 0
+
+
+def command_launch_check(args: argparse.Namespace) -> int:
+    """Fail closed before claim when sustainable concurrency is impossible."""
+    errors: list[str] = []
+    requested: int | None
+    if args.workers == "auto":
+        requested = None
+    else:
+        try:
+            requested = int(args.workers)
+        except ValueError:
+            requested = 0
+        if requested <= 0:
+            errors.append("invalid:workers")
+    if args.runtime_slots_total <= 0:
+        errors.append("invalid:runtime-slots-total")
+    if args.safe_resource_capacity is not None and args.safe_resource_capacity < 0:
+        errors.append("invalid:safe-resource-capacity")
+    if args.compatible_ready < 0:
+        errors.append("invalid:compatible-ready")
+    if args.unfinished < 0:
+        errors.append("invalid:unfinished")
+    if args.running < 0:
+        errors.append("invalid:running")
+    if args.max_workers is not None and args.max_workers <= 0:
+        errors.append("invalid:max-workers")
+    if requested is not None and args.max_workers is not None:
+        errors.append("invalid:max-workers-with-exact")
+
+    if errors:
+        emit({"schema": 1, "status": "invalid", "claim_allowed": False, "errors": errors})
+        return 2
+
+    if args.layout == "auto":
+        layout = "fused" if requested == 1 or (requested is None and args.runtime_slots_total == 1) else "dedicated"
+    else:
+        layout = args.layout
+    if layout == "fused" and requested not in {None, 1}:
+        errors.append("invalid:fused-layout-requires-one-worker")
+    if errors:
+        emit({"schema": 1, "status": "invalid", "claim_allowed": False, "errors": errors})
+        return 2
+
+    delegated_capacity = max(args.runtime_slots_total - 1, 0) if layout == "dedicated" else 1
+    safe_capacity = min(
+        delegated_capacity,
+        args.safe_resource_capacity if args.safe_resource_capacity is not None else delegated_capacity,
+    )
+    configured_limit = requested if requested is not None else safe_capacity
+    if args.max_workers is not None:
+        configured_limit = min(configured_limit, args.max_workers)
+    sustained = min(configured_limit, safe_capacity)
+    active_target = min(sustained, args.compatible_ready)
+
+    reasons: list[str] = []
+    if requested is not None and requested > safe_capacity:
+        reasons.append(
+            f"exact-worker-capacity-unavailable:requested={requested};sustained={safe_capacity}"
+        )
+    if args.unfinished > 0 and sustained == 0 and args.running == 0:
+        reasons.append("no-sustainable-worker-capacity")
+    if args.unfinished > 0 and args.compatible_ready == 0 and args.running == 0:
+        reasons.append("no-actionable-frontier")
+    if errors:
+        reasons.extend(errors)
+    status = "blocked" if reasons else "ok"
+    emit(
+        {
+            "schema": 1,
+            "status": status,
+            "claim_allowed": not reasons,
+            "worker_mode": "auto" if requested is None else "exact",
+            "requested_workers": "auto" if requested is None else requested,
+            "runtime_slots_total": args.runtime_slots_total,
+            "layout": layout,
+            "delegated_capacity": delegated_capacity,
+            "safe_resource_capacity": safe_capacity,
+            "sustained_issue_capacity": sustained,
+            "compatible_ready": args.compatible_ready,
+            "unfinished": args.unfinished,
+            "running": args.running,
+            "active_target": active_target,
+            "reasons": reasons or (["ready-set-limited"] if active_target < sustained else ["capacity-satisfied"]),
+        }
+    )
+    return 3 if reasons else 0
+
+
+def _paths_overlap(left: str, right: str) -> bool:
+    left_path = PurePosixPath(left.rstrip("/"))
+    right_path = PurePosixPath(right.rstrip("/"))
+    return left_path == right_path or left_path in right_path.parents or right_path in left_path.parents
+
+
+def _dispatch_isolation(entry: dict[str, Any]) -> tuple[list[str], list[int], str | None, str | None]:
+    isolation = entry.get("isolation")
+    if not isinstance(isolation, dict):
+        return [], [], None, None
+    paths = [
+        value
+        for name in ("mutable_build_dir", "tmp_dir", "runtime_dir", "cache_dir")
+        if isinstance((value := isolation.get(name)), str) and value
+    ]
+    ports = isolation.get("ports")
+    return (
+        paths,
+        ports if isinstance(ports, list) and all(isinstance(port, int) for port in ports) else [],
+        isolation.get("cache_mode") if isinstance(isolation.get("cache_mode"), str) else None,
+        isolation.get("cache_key") if isinstance(isolation.get("cache_key"), str) else None,
+    )
+
+
+def command_dispatch_check(args: argparse.Namespace) -> int:
+    payload, input_error = _read_json(args.input)
+    if input_error:
+        emit({"schema": 1, "status": "invalid", "dispatch_allowed": False, "errors": [input_error]})
+        return 2
+    if not isinstance(payload, dict) or not isinstance(payload.get("candidate"), dict):
+        emit({"schema": 1, "status": "invalid", "dispatch_allowed": False, "errors": ["invalid:dispatch:not-object"]})
+        return 2
+    candidate = payload["candidate"]
+    active = payload.get("active", [])
+    history = payload.get("executor_history", [])
+    errors: list[str] = []
+    if not isinstance(active, list) or not all(isinstance(item, dict) for item in active):
+        errors.append("invalid:active")
+        active = []
+    if not isinstance(history, list) or not all(isinstance(item, str) and item for item in history):
+        errors.append("invalid:executor-history")
+        history = []
+    issue = candidate.get("issue_identifier")
+    if not isinstance(issue, str) or ISSUE_IDENTIFIER.fullmatch(issue) is None:
+        errors.append("invalid:candidate.issue-identifier")
+    executor = candidate.get("executor")
+    if not isinstance(executor, dict):
+        errors.append("invalid:candidate.executor")
+        executor = {}
+    lease_id = executor.get("lease_id")
+    if not isinstance(lease_id, str) or UUID_TEXT.fullmatch(lease_id) is None:
+        errors.append("invalid:candidate.executor.lease-id")
+    if executor.get("mode") == "delegated":
+        if executor.get("agent_type") != "worker":
+            errors.append("invalid:candidate.executor.agent-type")
+        if executor.get("fork_turns") != "none":
+            errors.append("invalid:candidate.executor.fork-turns")
+    elif executor.get("mode") == "coordinator-inline":
+        if executor.get("agent_type") != "coordinator-inline" or executor.get("fork_turns") != "none":
+            errors.append("invalid:candidate.executor.inline-contract")
+    else:
+        errors.append("invalid:candidate.executor.mode")
+    if lease_id in history:
+        errors.append("invalid:executor-reuse")
+
+    ownership = candidate.get("ownership_paths")
+    if not isinstance(ownership, list) or not ownership or not all(_valid_ownership_path(path) for path in ownership):
+        errors.append("invalid:candidate.ownership-paths")
+        ownership = []
+
+    conflicts: list[dict[str, Any]] = []
+    resource_conflicts: list[str] = []
+    candidate_paths, candidate_ports, candidate_cache_mode, candidate_cache_key = _dispatch_isolation(candidate)
+    for entry in active:
+        active_issue = entry.get("issue_identifier", "unknown")
+        active_executor = entry.get("executor")
+        if isinstance(active_executor, dict) and active_executor.get("lease_id") == lease_id:
+            errors.append(f"invalid:executor-active-reuse:{active_issue}")
+        active_ownership = entry.get("ownership_paths")
+        if not isinstance(active_ownership, list) or not all(_valid_ownership_path(path) for path in active_ownership):
+            errors.append(f"invalid:active.ownership-paths:{active_issue}")
+            continue
+        overlapping = sorted(
+            {f"{left}<->{right}" for left in ownership for right in active_ownership if _paths_overlap(left, right)}
+        )
+        if overlapping:
+            conflicts.append({"issue": active_issue, "paths": overlapping})
+        active_paths, active_ports, active_cache_mode, active_cache_key = _dispatch_isolation(entry)
+        if set(candidate_ports) & set(active_ports):
+            resource_conflicts.append(f"ports:{active_issue}")
+        for left in candidate_paths[:3]:
+            for right in active_paths[:3]:
+                if Path(left) == Path(right) or _is_within(Path(left), Path(right)) or _is_within(Path(right), Path(left)):
+                    resource_conflicts.append(f"mutable-path:{active_issue}")
+        if candidate_paths and active_paths and candidate_paths[-1] == active_paths[-1]:
+            shared_cache_valid = (
+                candidate_cache_mode == active_cache_mode == "content-addressed"
+                and candidate_cache_key is not None
+                and candidate_cache_key == active_cache_key
+            )
+            if not shared_cache_valid:
+                resource_conflicts.append(f"cache:{active_issue}")
+
+    if errors or resource_conflicts:
+        emit(
+            {
+                "schema": 1,
+                "status": "invalid",
+                "dispatch_allowed": False,
+                "errors": errors + sorted(set(resource_conflicts)),
+                "ownership_conflicts": conflicts,
+            }
+        )
+        return 2
+    if conflicts:
+        emit(
+            {
+                "schema": 1,
+                "status": "serialized",
+                "dispatch_allowed": False,
+                "reason": "active-ownership-overlap",
+                "ownership_conflicts": conflicts,
+            }
+        )
+        return 4
+    emit({"schema": 1, "status": "compatible", "dispatch_allowed": True, "ownership_conflicts": []})
+    return 0
+
+
 def _read_json(source: str) -> tuple[Any | None, str | None]:
     try:
         raw = sys.stdin.read() if source == "-" else Path(source).read_text(encoding="utf-8")
@@ -1250,6 +1534,19 @@ def _broad_worker_check(command: str) -> bool:
     )
 
 
+def _dependency_mutating_worker_check(command: str) -> bool:
+    normalized = " ".join(command.strip().lower().split())
+    return any(
+        re.match(pattern, normalized) is not None
+        for pattern in (
+            r"^npm (?:ci|install|i)(?:\s|$)",
+            r"^pnpm (?:install|i)(?:\s|$)",
+            r"^yarn (?:install|add)(?:\s|$)",
+            r"^bun install(?:\s|$)",
+        )
+    )
+
+
 def validate_manifest(manifest: Any) -> tuple[list[str], list[str], list[str]]:
     if not isinstance(manifest, dict):
         return ["invalid:manifest:not-object"], ["unknown"], list(ALL_DOCS)
@@ -1308,6 +1605,23 @@ def validate_manifest(manifest: Any) -> tuple[list[str], list[str], list[str]]:
     ):
         error("invalid:ownership_paths")
         ownership = []
+
+    executor = manifest.get("executor")
+    if not isinstance(executor, dict):
+        error("invalid:executor:not-object")
+        executor = {}
+    if not isinstance(executor.get("lease_id"), str) or UUID_TEXT.fullmatch(executor["lease_id"]) is None:
+        error("invalid:executor.lease_id")
+    if executor.get("fork_turns") != "none":
+        error("invalid:executor.fork_turns")
+    if executor.get("mode") == "delegated":
+        if executor.get("agent_type") != "worker":
+            error("invalid:executor.agent_type")
+    elif executor.get("mode") == "coordinator-inline":
+        if executor.get("agent_type") != "coordinator-inline":
+            error("invalid:executor.agent_type")
+    else:
+        error("invalid:executor.mode")
 
     if manifest.get("remote_mode") not in {"online", "offline-local-only"}:
         error("invalid:remote_mode")
@@ -1374,6 +1688,13 @@ def validate_manifest(manifest: Any) -> tuple[list[str], list[str], list[str]]:
         error("invalid:isolation.cache_dir")
     elif cache_mode == "isolated" and (worktree is None or not _is_within(cache_dir, worktree)):
         error("invalid:isolation.cache_dir:outside-worktree")
+    cache_key = isolation.get("cache_key")
+    if cache_mode == "content-addressed" and (
+        not isinstance(cache_key, str) or LOWER_DIGEST.fullmatch(cache_key) is None
+    ):
+        error("invalid:isolation.cache_key")
+    if cache_mode == "isolated" and cache_key not in {None, "none"}:
+        error("invalid:isolation.cache_key:unexpected")
     ports = isolation.get("ports")
     if not isinstance(ports, list) or not all(
         isinstance(port, int) and not isinstance(port, bool) and 1 <= port <= 65535 for port in ports
@@ -1406,6 +1727,8 @@ def validate_manifest(manifest: Any) -> tuple[list[str], list[str], list[str]]:
         error("invalid:validation.targeted_checks")
     elif any(_broad_worker_check(check) for check in targeted):
         error("invalid:validation.targeted_checks:full-suite")
+    elif any(_dependency_mutating_worker_check(check) for check in targeted):
+        error("invalid:validation.targeted_checks:dependency-mutation")
 
     branch = manifest.get("branch")
     feature_ref = manifest.get("feature_ref")
@@ -1597,8 +1920,8 @@ def command_transition(args: argparse.Namespace) -> int:
     if unexpected:
         return _transition_invalid([f"unexpected:{name}" for name in unexpected])
     code, parent_message = git(repo, "show", "-s", "--format=%B", parent)
-    tree_code, tree = git(repo, "show", "-s", "--format=%T", parent)
-    if code != 0 or tree_code != 0 or not GIT_OID.fullmatch(tree):
+    tree = _metadata_tree(repo)
+    if code != 0 or tree is None:
         return _transition_invalid(["invalid:parent-metadata"])
     parent_fields = fields(parent_message)
     parent_errors, parent_seq, parent_status = _validate_transition_parent(parent_fields)
@@ -1681,6 +2004,7 @@ def command_transition(args: argparse.Namespace) -> int:
             "phase": status,
             "parent": parent,
             "tree": tree,
+            "tree_mode": "empty-workflow-free",
             "message": message,
             "message_digest": hashlib.sha256(message.encode()).hexdigest(),
         }
@@ -1892,13 +2216,10 @@ def command_takeover(args: argparse.Namespace) -> int:
         emit({"schema": 1, "status": "blocked", "reason": "parent-materialization-failed"})
         return 3
     code, parent_message = git(repo, "show", "-s", "--format=%B", parent)
-    tree_code, tree = git(repo, "show", "-s", "--format=%T", parent)
     remote_main = preflight.get("remote_sha")
     contract_digest = preflight.get("contract_oid")
     if (
         code != 0
-        or tree_code != 0
-        or GIT_OID.fullmatch(tree) is None
         or not isinstance(remote_main, str)
         or GIT_OID.fullmatch(remote_main) is None
         or not isinstance(contract_digest, str)
@@ -1917,18 +2238,9 @@ def command_takeover(args: argparse.Namespace) -> int:
     if errors or message is None or identity is None:
         emit({"schema": 1, "status": "blocked", "reason": "takeover-message-invalid", "errors": errors})
         return 3
-    with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", prefix="shipctl-takeover-", delete=True) as handle:
-        handle.write(message)
-        handle.flush()
-        commit_result = foreign_main.run(repo, "commit-tree", tree, "-p", parent, "-F", handle.name)
-    commit = commit_result.stdout.decode("ascii", "replace").strip()
-    if commit_result.returncode != 0 or GIT_OID.fullmatch(commit) is None:
+    commit = _metadata_commit(repo, parent, message)
+    if commit is None:
         emit({"schema": 1, "status": "blocked", "reason": "takeover-commit-failed"})
-        return 3
-    parent_check = foreign_main.text(repo, "rev-parse", f"{commit}^")
-    tree_check = foreign_main.text(repo, "show", "-s", "--format=%T", commit)
-    if parent_check != parent or tree_check != tree:
-        emit({"schema": 1, "status": "blocked", "reason": "takeover-commit-verification-failed"})
         return 3
     push = foreign_main.run(
         repo,
@@ -2076,9 +2388,18 @@ def _remote_ref_tips(
     return observed, errors
 
 
+def _metadata_tree(repo: Path) -> str | None:
+    """Return an empty tree so metadata refs cannot carry runnable workflows."""
+    result = foreign_main.run(repo, "mktree")
+    tree = result.stdout.decode("ascii", "replace").strip()
+    if result.returncode != 0 or GIT_OID.fullmatch(tree) is None:
+        return None
+    return tree
+
+
 def _metadata_commit(repo: Path, parent: str, message: str) -> str | None:
-    tree = foreign_main.text(repo, "show", "-s", "--format=%T", parent)
-    if tree is None or GIT_OID.fullmatch(tree) is None:
+    tree = _metadata_tree(repo)
+    if tree is None:
         return None
     with tempfile.NamedTemporaryFile(
         mode="w", encoding="utf-8", prefix="shipctl-metadata-", delete=True
@@ -2094,6 +2415,41 @@ def _metadata_commit(repo: Path, parent: str, message: str) -> str | None:
     if foreign_main.text(repo, "show", "-s", "--format=%T", commit) != tree:
         return None
     return commit
+
+
+def command_metadata_commit(args: argparse.Namespace) -> int:
+    repo = Path(args.repo).resolve()
+    if GIT_OID.fullmatch(args.parent) is None or not foreign_main.object_exists(repo, args.parent):
+        emit({"schema": 1, "status": "invalid", "errors": ["invalid:parent"]})
+        return 2
+    try:
+        message = sys.stdin.read() if args.input == "-" else Path(args.input).read_text(encoding="utf-8")
+    except OSError as error:
+        emit({"schema": 1, "status": "invalid", "errors": [f"input:{type(error).__name__}"]})
+        return 2
+    if not message.strip() or len(message.encode("utf-8")) > 65536 or "\0" in message:
+        emit({"schema": 1, "status": "invalid", "errors": ["invalid:message"]})
+        return 2
+    metadata = fields(message)
+    expected_kind = "COORDINATOR_CLAIM" if args.kind == "coordinator" else "CLAIM_GUARD"
+    if metadata.get("KIND") != expected_kind:
+        emit({"schema": 1, "status": "invalid", "errors": [f"invalid:kind:expected-{expected_kind.lower()}"]})
+        return 2
+    commit = _metadata_commit(repo, args.parent, message)
+    if commit is None:
+        emit({"schema": 1, "status": "blocked", "reason": "metadata-commit-failed"})
+        return 3
+    emit(
+        {
+            "schema": 1,
+            "status": "created",
+            "commit": commit,
+            "parent": args.parent,
+            "tree": _metadata_tree(repo),
+            "tree_mode": "empty-workflow-free",
+        }
+    )
+    return 0
 
 
 def _render_coordinator_action(
@@ -3393,9 +3749,31 @@ def parser() -> argparse.ArgumentParser:
     docs.set_defaults(handler=command_docs)
     identities = sub.add_parser("identities")
     identities.set_defaults(handler=command_identities)
+    invocation = sub.add_parser("invocation")
+    invocation.add_argument("--text", required=True)
+    invocation.set_defaults(handler=command_invocation)
+    launch_check = sub.add_parser("launch-check")
+    launch_check.add_argument("--workers", required=True)
+    launch_check.add_argument("--max-workers", type=int)
+    launch_check.add_argument("--runtime-slots-total", type=int, required=True)
+    launch_check.add_argument("--safe-resource-capacity", type=int)
+    launch_check.add_argument("--compatible-ready", type=int, required=True)
+    launch_check.add_argument("--unfinished", type=int, required=True)
+    launch_check.add_argument("--running", type=int, default=0)
+    launch_check.add_argument("--layout", choices=("auto", "dedicated", "fused"), default="auto")
+    launch_check.set_defaults(handler=command_launch_check)
+    dispatch_check = sub.add_parser("dispatch-check")
+    dispatch_check.add_argument("--input", default="-")
+    dispatch_check.set_defaults(handler=command_dispatch_check)
     manifest = sub.add_parser("manifest")
     manifest.add_argument("--input", default="-")
     manifest.set_defaults(handler=command_manifest)
+    metadata_commit = sub.add_parser("metadata-commit")
+    metadata_commit.add_argument("--repo", default=".")
+    metadata_commit.add_argument("--parent", required=True)
+    metadata_commit.add_argument("--kind", choices=("coordinator", "guard"), required=True)
+    metadata_commit.add_argument("--input", default="-")
+    metadata_commit.set_defaults(handler=command_metadata_commit)
     transition = sub.add_parser("transition")
     transition.add_argument("--repo", default=".")
     transition.add_argument("--parent", required=True)

@@ -187,12 +187,19 @@ class ManifestTest(GitMixin, unittest.TestCase):
             "scope_fingerprint": "c" * 64,
             "issue_updated_at": "2026-08-07T14:00:00.123Z",
             "ownership_paths": ["packages/domain/src/index.ts"],
+            "executor": {
+                "lease_id": str(uuid.uuid4()),
+                "mode": "delegated",
+                "agent_type": "worker",
+                "fork_turns": "none",
+            },
             "isolation": {
                 "mutable_build_dir": str(worktree / "build-task"),
                 "tmp_dir": str(worktree / "tmp-task"),
                 "runtime_dir": str(worktree / "runtime-task"),
                 "cache_mode": "isolated",
                 "cache_dir": str(worktree / "cache-task"),
+                "cache_key": "none",
                 "ports": [43123, 43124],
                 "env": {"MIND_DIARY_TASK_TMP": str(worktree / "tmp-task")},
             },
@@ -265,6 +272,18 @@ class ManifestTest(GitMixin, unittest.TestCase):
         self.assertIn("invalid:isolation.tmp_dir:outside-worktree", result["errors"])
         self.assertIn("invalid:validation.targeted_checks:full-suite", result["errors"])
 
+    def test_rejects_executor_reuse_shape_and_dependency_install(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="shipctl-manifest-") as directory:
+            _, _, payload = self.manifest_fixture(Path(directory))
+            payload["executor"]["fork_turns"] = "all"  # type: ignore[index]
+            payload["validation"]["targeted_checks"] = ["npm ci"]  # type: ignore[index]
+            code, result = self.invoke(payload)
+        self.assertEqual(code, 2)
+        self.assertIn("invalid:executor.fork_turns", result["errors"])
+        self.assertIn(
+            "invalid:validation.targeted_checks:dependency-mutation", result["errors"]
+        )
+
     def test_rejects_duplicate_ports_and_scope_timestamp_confusion(self) -> None:
         with tempfile.TemporaryDirectory(prefix="shipctl-manifest-") as directory:
             _, _, payload = self.manifest_fixture(Path(directory))
@@ -285,6 +304,208 @@ class ManifestTest(GitMixin, unittest.TestCase):
         self.assertEqual((code, result["status"]), (0, "valid"))
         self.assertEqual(mismatch_code, 2)
         self.assertIn("invalid:issue_id", mismatch["errors"])
+
+
+class InvocationTest(unittest.TestCase):
+    def invoke(self, text: str) -> tuple[int, dict[str, object]]:
+        with io.StringIO() as output, redirect_stdout(output):
+            code = MODULE.command_invocation(mock.Mock(text=text))
+            return code, json.loads(output.getvalue())
+
+    def test_defaults_to_one_and_ignores_issue_numbers(self) -> None:
+        code, result = self.invoke("$ship-linear-release milestone AND-84 version 6")
+        self.assertEqual((code, result["workers"], result["worker_mode"]), (0, 1, "exact"))
+
+    def test_accepts_exact_numeric_and_russian_word_forms(self) -> None:
+        _, assignment = self.invoke("$ship-linear-release workers=6")
+        _, threads = self.invoke("запусти skill в 4 потока")
+        _, words = self.invoke("запусти три воркера")
+        self.assertEqual(
+            (assignment["workers"], threads["workers"], words["workers"]),
+            (6, 4, 3),
+        )
+
+    def test_accepts_auto_out_alias_maximum_and_dry_run(self) -> None:
+        code, result = self.invoke("workers=out, не больше 6, dry-run")
+        self.assertEqual((code, result["workers"], result["max_workers"]), (0, "auto", 6))
+        self.assertTrue(result["dry_run"])
+
+    def test_conflicting_worker_counts_fail_before_mutation(self) -> None:
+        code, result = self.invoke("workers=4 и 6 воркеров")
+        self.assertEqual((code, result["status"]), (2, "invalid"))
+        self.assertIn("ambiguous:workers", result["errors"])
+
+    def test_explicit_nonpositive_or_unknown_worker_value_is_invalid(self) -> None:
+        zero_code, zero = self.invoke("workers=0")
+        bad_code, bad = self.invoke("workers=many")
+        self.assertEqual((zero_code, bad_code), (2, 2))
+        self.assertIn("invalid:workers", zero["errors"])
+        self.assertIn("invalid:workers", bad["errors"])
+
+
+class DeliveryContractTest(unittest.TestCase):
+    def test_runtime_contract_contains_no_profile_or_intent_switches(self) -> None:
+        repo = SCRIPTS.parents[3]
+        paths = [
+            repo / ".agents/skills/ship-linear-release/SKILL.md",
+            repo / ".agents/skills/ship-linear-release/references/goal-card.md",
+            repo / ".agents/skills/ship-linear-release/references/batch-release.md",
+            repo / ".agents/skills/ship-linear-release/references/receipts.md",
+            repo / ".agents/skills/ship-linear-release/references/github-outage.md",
+            repo / ".agents/skills/ship-linear-release/scripts/shipctl.py",
+            repo / ".agents/skills/ship-linear-release/agents/openai.yaml",
+        ]
+        forbidden = (
+            "delivery_profile",
+            "target_profile",
+            "PROFILE_RANK",
+            "--profile",
+            "--intent",
+            "PROFILE: design | build | release",
+        )
+        for path in paths:
+            text = path.read_text(encoding="utf-8")
+            for marker in forbidden:
+                with self.subTest(path=path.name, marker=marker):
+                    self.assertNotIn(marker, text)
+
+    def test_metadata_and_defect_policy_match_autonomous_delivery(self) -> None:
+        repo = SCRIPTS.parents[3]
+        metadata = (
+            repo / ".agents/skills/ship-linear-release/agents/openai.yaml"
+        ).read_text(encoding="utf-8")
+        triage = (
+            repo / ".agents/skills/ship-linear-release/references/defect-triage.md"
+        ).read_text(encoding="utf-8")
+        self.assertIn("без worker count работай одним worker", metadata)
+        self.assertIn("workers=auto", metadata)
+        self.assertIn("stabilization Bug", triage)
+        self.assertIn("новый product/security decision", triage)
+        self.assertNotIn("верни `STATUS: needs-input`", triage)
+
+
+class LaunchAndDispatchTest(unittest.TestCase):
+    def launch(self, **overrides: object) -> tuple[int, dict[str, object]]:
+        values: dict[str, object] = {
+            "workers": "6",
+            "max_workers": None,
+            "runtime_slots_total": 4,
+            "safe_resource_capacity": 3,
+            "compatible_ready": 10,
+            "unfinished": 10,
+            "running": 0,
+            "layout": "auto",
+        }
+        values.update(overrides)
+        with io.StringIO() as output, redirect_stdout(output):
+            code = MODULE.command_launch_check(mock.Mock(**values))
+            return code, json.loads(output.getvalue())
+
+    def dispatch(self, payload: object) -> tuple[int, dict[str, object]]:
+        with mock.patch.object(sys, "stdin", io.StringIO(json.dumps(payload))), io.StringIO() as output, redirect_stdout(output):
+            code = MODULE.command_dispatch_check(mock.Mock(input="-"))
+            return code, json.loads(output.getvalue())
+
+    def entry(self, issue: str, path: str, lease: str | None = None) -> dict[str, object]:
+        suffix = issue.lower()
+        return {
+            "issue_identifier": issue,
+            "ownership_paths": [path],
+            "executor": {
+                "lease_id": lease or str(uuid.uuid4()),
+                "mode": "delegated",
+                "agent_type": "worker",
+                "fork_turns": "none",
+            },
+            "isolation": {
+                "mutable_build_dir": f"/tmp/{suffix}/build",
+                "tmp_dir": f"/tmp/{suffix}/tmp",
+                "runtime_dir": f"/tmp/{suffix}/runtime",
+                "cache_mode": "isolated",
+                "cache_dir": f"/tmp/{suffix}/cache",
+                "cache_key": "none",
+                "ports": [],
+            },
+        }
+
+    def test_exact_workers_fail_closed_when_runtime_capacity_is_smaller(self) -> None:
+        code, result = self.launch()
+        self.assertEqual((code, result["status"], result["claim_allowed"]), (3, "blocked", False))
+        self.assertEqual(result["sustained_issue_capacity"], 3)
+        self.assertIn("exact-worker-capacity-unavailable:requested=6;sustained=3", result["reasons"])
+
+    def test_auto_adapts_and_exact_capacity_is_ready_set_limited(self) -> None:
+        auto_code, auto = self.launch(workers="auto")
+        limited_code, limited = self.launch(
+            workers="3", runtime_slots_total=4, compatible_ready=1
+        )
+        self.assertEqual((auto_code, auto["sustained_issue_capacity"]), (0, 3))
+        self.assertEqual((limited_code, limited["active_target"]), (0, 1))
+        self.assertEqual(limited["reasons"], ["ready-set-limited"])
+
+    def test_unfinished_graph_without_ready_or_running_work_fails_early(self) -> None:
+        code, result = self.launch(workers="auto", compatible_ready=0, running=0)
+        self.assertEqual((code, result["status"]), (3, "blocked"))
+        self.assertIn("no-actionable-frontier", result["reasons"])
+
+    def test_running_generation_keeps_empty_frontier_recoverable(self) -> None:
+        code, result = self.launch(
+            workers="auto", compatible_ready=0, running=1
+        )
+        self.assertEqual((code, result["status"]), (0, "ok"))
+        self.assertNotIn("no-actionable-frontier", result["reasons"])
+
+    def test_zero_resource_capacity_is_a_blocker_not_invalid_input(self) -> None:
+        code, result = self.launch(
+            workers="auto", safe_resource_capacity=0, compatible_ready=1
+        )
+        self.assertEqual((code, result["status"]), (3, "blocked"))
+        self.assertIn("no-sustainable-worker-capacity", result["reasons"])
+
+    def test_complete_milestone_does_not_require_ready_frontier(self) -> None:
+        code, result = self.launch(
+            workers="auto", unfinished=0, compatible_ready=0, running=0
+        )
+        self.assertEqual((code, result["status"]), (0, "ok"))
+        self.assertNotIn("no-actionable-frontier", result["reasons"])
+
+    def test_dispatch_serializes_ownership_overlap_and_rejects_reuse(self) -> None:
+        active = self.entry("AND-86", "packages/composition-root")
+        candidate = self.entry("AND-88", "packages/composition-root/src/index.ts")
+        serial_code, serial = self.dispatch({"candidate": candidate, "active": [active], "executor_history": []})
+        lease = candidate["executor"]["lease_id"]  # type: ignore[index]
+        reuse_code, reuse = self.dispatch({"candidate": candidate, "active": [], "executor_history": [lease]})
+        self.assertEqual((serial_code, serial["status"]), (4, "serialized"))
+        self.assertEqual((reuse_code, reuse["status"]), (2, "invalid"))
+        self.assertIn("invalid:executor-reuse", reuse["errors"])
+
+    def test_dispatch_accepts_disjoint_fresh_issue(self) -> None:
+        code, result = self.dispatch(
+            {
+                "candidate": self.entry("AND-88", "packages/adapter-mcp"),
+                "active": [self.entry("AND-86", "packages/composition-root")],
+                "executor_history": [],
+            }
+        )
+        self.assertEqual((code, result["status"], result["dispatch_allowed"]), (0, "compatible", True))
+
+
+class MetadataCommitTest(GitMixin, unittest.TestCase):
+    def test_metadata_helper_uses_empty_workflow_free_tree(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="shipctl-metadata-") as directory:
+            repo, _ = self.fixture(Path(directory))
+            parent = self.git(repo, "rev-parse", "HEAD")
+            message = "guard\n\nKIND: CLAIM_GUARD\nSTATE: claimed\n"
+            args = MODULE.argparse.Namespace(repo=str(repo), parent=parent, kind="guard", input="-")
+            with mock.patch.object(sys, "stdin", io.StringIO(message)), io.StringIO() as output, redirect_stdout(output):
+                code = MODULE.command_metadata_commit(args)
+                result = json.loads(output.getvalue())
+            empty_tree = self.git(repo, "mktree")
+            commit_tree = self.git(repo, "show", "-s", "--format=%T", result["commit"])
+            commit_parent = self.git(repo, "rev-parse", f"{result['commit']}^")
+        self.assertEqual((code, result["status"]), (0, "created"))
+        self.assertEqual(result["tree_mode"], "empty-workflow-free")
+        self.assertEqual((commit_tree, commit_parent), (empty_tree, parent))
 
 
 class PreflightTest(GitMixin, unittest.TestCase):
@@ -348,11 +569,12 @@ class PreflightTest(GitMixin, unittest.TestCase):
             code = MODULE.command_soft_pause(args)
             return code, json.loads(output.getvalue())
 
-    def test_clean_preflight_is_normal_build_and_bounded(self) -> None:
+    def test_clean_preflight_is_normal_and_has_no_delivery_profile(self) -> None:
         with tempfile.TemporaryDirectory(prefix="shipctl-") as directory:
             repo, _ = self.fixture(Path(directory))
             code, result, size = self.preflight(repo)
-        self.assertEqual((code, result["route"], result["delivery_profile"]), (0, "normal", "build"))
+        self.assertEqual((code, result["route"]), (0, "normal"))
+        self.assertNotIn("delivery_profile", result)
         self.assertTrue(result["mutation_allowed"])
         self.assertIn("references/external-main.md", result["required_references"])
         self.assertLess(size, 9000)

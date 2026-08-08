@@ -36,9 +36,10 @@ compact Linear snapshot + `rg`; неоднозначность возвраща�
 
 ## Считать workers по исполняемым issue
 
-1. Трактуй `workers=N` как requested concurrency исполняемых Linear issue, а
-   не как число subagents или общий orchestration budget. Не выдавай requested
-   value за фактически доступную capacity.
+1. Трактуй `workers=N` как exact concurrency исполняемых Linear issue, а не как
+   число subagents или общий orchestration budget. До claim обязательно запусти
+   `shipctl.py launch-check`: если устойчивой runtime/resource capacity меньше
+   `N`, остановись. Только `workers=auto` допускает уменьшенный target.
 2. Durable-запиши пять независимых величин:
 
    ```text
@@ -49,8 +50,10 @@ compact Linear snapshot + `rg`; неоднозначность возвраща�
    `runtime_slots_total` включает root и все child agents. Dedicated root
    оставляет issue только фактически доступную `delegated_capacity` (не больше
    `runtime_slots_total - 1`). Для dedicated layout
-   `sustained_issue_capacity=min(requested_workers, delegated_capacity,
-   safe_resource_capacity)`; root в неё не входит. Отдельный `active_target`
+   Для exact mode все три capacity обязаны быть не меньше requested; нельзя
+   молча подставлять их minimum. Для auto mode
+   `sustained_issue_capacity=min(delegated_capacity,safe_resource_capacity)`;
+   root в неё не входит. Отдельный `active_target`
    равен минимуму sustained capacity и compatible ready-set. В fused
    `workers=1` sustained capacity равна одной root-inline lane.
 3. При `workers=1` разрешён fused режим: owner-session исполняет одну issue в
@@ -93,7 +96,10 @@ refs/heads/codex/release/coordinator
 ```
 
 1. До первой мутации fetch-ни ref. Если он отсутствует, создай metadata commit
-   с неизменным source tree и атомарно создай ref обычным non-force push.
+   через `shipctl.py metadata-commit --kind coordinator`: его пустой workflow-free
+   tree не запускает Actions, а exact source SHA/tree хранятся полями ledger.
+   Атомарно создай ref обычным non-force push. Прямой `commit-tree` от source
+   tree запрещён.
 2. Храни в каждом claim commit минимум:
 
    ```text
@@ -220,9 +226,10 @@ integration/default/deploy независимо от выигранного owne
 
 Только текущая owner-session меняет limit после отдельного fenced CAS action.
 
-- Increase `N->M`, `M>N`: пересчитай truthful capacity и сразу dispatch-и
-  готовые совместимые issue до `sustained_issue_capacity`; opportunistic inline
-  остаётся отдельным временным режимом.
+- Increase `N->M`, `M>N`: сначала повтори `launch-check`. В exact mode при
+  capacity меньше `M` не меняй durable limit и остановись; в auto mode сразу
+  dispatch-и готовые совместимые issue до вычисленного capacity. Opportunistic
+  inline остаётся отдельным временным режимом.
 - Decrease `N->M`, `M<N`: не interrupt-и running issue; прекрати refill, пока
   `running_count` не станет меньше `M`, затем поддерживай новый limit.
 - Переход к `1`: после graceful drain работай fused coordinator-inline.
@@ -236,27 +243,33 @@ integration/default/deploy независимо от выигранного owne
 ## Поддерживать work-conserving pool
 
 1. Не создавай waves и barrier между workers.
-2. После появления durable `ready` guard соблюдай один work-conserving порядок:
+2. Перед каждым spawn выполни `shipctl.py dispatch-check` по candidate, всем
+   active `EXECUTION_INDEX` manifests и executor history. Пересечение любого
+   ownership prefix образует serial lane; resource collision или повторный
+   executor lease блокирует dispatch. Новый issue всегда получает новый worker
+   с `agent_type=worker`, `fork_turns=none`; не переиспользуй завершённого agent
+   через `followup_task`.
+3. После появления durable `ready` guard соблюдай один work-conserving порядок:
    validate exact receipt -> durable `running -> feature_ready` в
    `EXECUTION_INDEX` -> refill свободного slot -> enqueue feature для ingest ->
    projection batch/bookkeeping. Claim/guard не terminalize-и до integration
    disposition.
-3. Цель от наблюдения ready guard до нового spawn/inline start — `<=60s`. Если
+4. Цель от наблюдения ready guard до нового spawn/inline start — `<=60s`. Если
    compatible ready issue есть, а target пропущен, запиши один durable blocker:
    exact interval, причина, evidence и resume predicate; очисти его при refill.
    Не превращай это в heartbeat/telemetry.
-4. После каждого dispatch, execution terminal/feature-ready transition,
+5. После каждого dispatch, execution terminal/feature-ready transition,
    dependency unlock, исключения feature или изменения limit немедленно
    пересчитай ready-set по `EXECUTION_INDEX`, не по live claims.
-5. Если `running_count < sustained_issue_capacity`, сразу отдай следующий
+6. Если `running_count < sustained_issue_capacity`, сразу отдай следующий
    совместимый ready issue. Не жди завершения других workers, ingest или
    наполнения cutoff.
-6. Используй priority/dependency/conflict ordering основного skill. Один
+7. Используй priority/dependency/conflict ordering основного skill. Один
    same-path serial lane не должен оставлять свободным slot, если существует
    другая независимая issue.
-7. Продолжай worker pool, пока `ACTIVE_CUTOFF` проходит дорогой global gate или
+8. Продолжай worker pool, пока `ACTIVE_CUTOFF` проходит дорогой global gate или
    продвижение. Новые ready receipts направляй в `OPEN_CUTOFF`.
-8. При fused `workers=1` переключай coordinator между issue checkpoint и
+9. При fused `workers=1` переключай coordinator между issue checkpoint и
    cutoff duties; не оставляй issue worktree в недетерминированном состоянии.
 
 ## Вести OPEN_CUTOFF и один ACTIVE_CUTOFF
@@ -381,7 +394,7 @@ dispatch остаются `open|good-base-only|frozen` по доказанном
 | Feature-local / same-scope | Верни исходную issue в тот же scope, создай descendant repair ref с новым claim generation, supersede receipt; не создавай Bug по умолчанию. | Исключи feature и зависимых descendants из cutoff; независимые workers и cutoff продолжай. |
 | Tiny integration repair | Coordinator делает один минимальный fenced integration-fix commit и affected check. | Reseal новой generation и выполни один новый global gate; не повторяй feature gates остальных refs. |
 | Independent или complex bug | Deduplicate и создай linked Bug по [defect-triage.md](defect-triage.md); отдай отдельному issue worker. | Блокируй только виновный scope/dependencies; исключи его и выпускай независимое. |
-| Systemic, unattributed integration или second-generation | Зафиксируй evidence и recursion guard; не генерируй следующий fix автономно. | `integration=frozen`; dispatch оставь `good-base-only` лишь при доказанной независимости, иначе `frozen`; default push/deploy запрещены. |
+| Systemic, unattributed integration или second-generation | Создай/переиспользуй priority stabilization Bug с bounded root-cause acceptance и fresh worker; одинаковые candidates deduplicate. | Заморозь affected integration; независимый `good-base-only` frontier продолжай. После двух одинаково неуспешных generations запрашивай пользователя только при доказанном внешнем/decision/contradiction blocker. |
 | Known-bad default/live | Поставь `default=known-bad`, затем собери минимальный urgent stabilization fix/revert. | Заморозь integration; разреши `good-base-only` branch work и один `stabilizing` cutoff по [batch-release.md](batch-release.md). |
 
 Targeted flake повторяй ровно один раз на неизменённом SHA. Terminal full-gate

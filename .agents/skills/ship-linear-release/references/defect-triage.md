@@ -17,7 +17,8 @@ fail closed.
    path, другая функциональная область или регрессия, которая может жить
    отдельно от текущей issue.
 4. **`systemic-or-second-generation`**: дефект возник после уже сгенерированного
-   исправления либо показывает повторяющийся шаблон шире текущей issue.
+   исправления либо показывает повторяющийся шаблон шире текущей issue; он
+   требует отдельной stabilization issue и root-cause scope.
 5. **`known-bad-default`**: post-push CI или live smoke доказал, что
    текущий default/release нельзя использовать как healthy base.
 
@@ -46,9 +47,17 @@ fail closed.
      заинтродуцирован текущим milestone; иначе оставь в backlog и продолжай
      независимую delivery.
 4. `systemic-or-second-generation`:
-   - если новый независимый defect возник после generated fix либо повторяется
-     системный паттерн, не продолжай автономную рекурсию;
-   - верни `STATUS: needs-input` и компактное объяснение root cause surface.
+   - deduplicate-и либо создай отдельную priority stabilization Bug с failing
+     signature, affected cutoffs, known-good base и bounded root-cause
+     acceptance;
+   - заморозь только affected integration/promotion и отдай Bug свежему worker,
+     а доказанно независимый frontier продолжай;
+   - не порождай бесконечную цепочку одинаковых generated fixes. После двух
+     неуспешных repair generations с тем же signature выполни bounded
+     classification: новый product/security decision, противоречивые
+     authoritative требования или недоступный внешний ресурс разрешают
+     `needs-input`; доказуемый implementation path остаётся обычной задачей и
+     продолжает work, даже если он сложный.
 5. `known-bad-default`:
    - запрети ordinary integration/default/deploy;
    - верни production на exact `previous_stable`, если live release сломан;
@@ -62,7 +71,7 @@ fail closed.
 | `same-scope` до promotion | Переоткрой исходную issue, новый claim generation, та же feature scope | Исключи bad ref и зависимые refs; независимые продолжай | Без freeze, пока default healthy |
 | `tiny-integration-repair` | Не создавай новую issue | Один минимальный coordinator fix, affected check, reseal | Продолжай только после нового global pass |
 | `independent-regression` | Создай deduplicated Bug; blocking bug отправь в приоритетный slot | Исключи culprit либо freeze только affected cutoff | Не deploy affected cutoff |
-| `systemic-or-second-generation` | Только доказанно независимые branches от good base; иначе freeze | `integration=frozen` | Никаких ordinary promotion/deploy |
+| `systemic-or-second-generation` | Создай/переиспользуй stabilization Bug и fresh worker; независимые branches от good base продолжаются | `integration=frozen` только для affected scope | Никаких affected promotion/deploy до passing stabilization cutoff |
 | `known-bad-default` | `good-base-only` либо `stabilization-only` | Только stabilization lane | Rollback/revert/fix до healthy evidence |
 
 Если attribution неизвестна, не называй defect feature-local. Поставь active
@@ -110,9 +119,10 @@ last known stable artifact при наличии и проверяемые accep
 
 1. Один повтор flaky-проверки на неизменённом SHA допустим; второй fail —
    это gap, а не успех.
-2. Ни worker, ни coordinator не должны автономно порождать цепочку
-   независимых исправлений второго поколения после generated-fix или
-   системного паттерна.
+2. Ни worker, ни coordinator не должны автономно порождать бесконечную цепочку
+   одинаковых исправлений. Один deduplicated stabilization Bug может получить
+   новые claim generations; запрос пользователя нужен только после bounded
+   диагностики, доказавшей настоящий blocker из Goal contract.
 3. Если не уверен между `same-scope` и `independent-regression`, предпочитай
    `DEFECT_CANDIDATE` coordinator-у вместо молчаливого расширения scope.
 4. Global guardrail не запускай повторно без source/evidence change, кроме
