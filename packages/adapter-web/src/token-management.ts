@@ -4,7 +4,7 @@ import {
 } from "./ui-shell.js";
 
 export const MIND_DIARY_MCP_ENDPOINT_PLACEHOLDER =
-  "https://<your-mind-diary-site>/mcp" as const;
+  "https://<your-mind-diary-site>/api/mcp/2025-11-25" as const;
 export const MIND_DIARY_CODEX_TOKEN_ENVIRONMENT_VARIABLE =
   "MIND_DIARY_TOKEN" as const;
 export const MIND_DIARY_CODEX_SAFE_ENVIRONMENT_SETUP =

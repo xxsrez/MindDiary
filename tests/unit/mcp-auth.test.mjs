@@ -259,7 +259,7 @@ async function harness() {
       ...(options.headers ?? {}),
     });
     return boundary.handler(
-      new Request(options.url ?? "https://mind-diary.invalid/mcp", {
+      new Request(options.url ?? "https://mind-diary.invalid/api/mcp", {
         method: "POST",
         headers,
         body: typeof requestBody === "string" ? requestBody : JSON.stringify(requestBody),
@@ -518,7 +518,7 @@ test("structured request logs redact headers and omit token, private body/query,
     }),
     token.secret,
     {
-      url: "https://mind-diary.invalid/mcp?query=url-private-query-marker",
+      url: "https://mind-diary.invalid/api/mcp?query=url-private-query-marker",
       headers: {
         cookie: "cookie-private-marker",
         accept:
@@ -546,7 +546,7 @@ test("structured request logs redact headers and omit token, private body/query,
     assert.equal(serializedLogs.includes(privateValue), false);
   }
   const event = fixture.logs.at(-1);
-  assert.equal(event.path, "/mcp");
+  assert.equal(event.path, "/api/mcp");
   assert.equal(event.headers.authorization, "[REDACTED]");
   assert.equal(event.headers.cookie, "[REDACTED]");
   assert.equal(event.headers["mcp-protocol-version"], "[PRESENT]");

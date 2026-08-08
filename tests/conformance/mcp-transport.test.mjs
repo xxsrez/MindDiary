@@ -3,6 +3,9 @@ import test from "node:test";
 
 import {
   MCP_CONTENT_TOOLS,
+  MCP_LEGACY_CODEX_ENDPOINT,
+  MCP_LEGACY_CODEX_PROTOCOL,
+  createLegacyCodexMcpHttpHandler,
   createMcpHttpHandler,
 } from "../../packages/adapter-mcp/dist/index.js";
 
@@ -54,7 +57,8 @@ function harness() {
     occurredAtUtc: "2026-08-07T02:40:00.000Z",
   });
 
-  const handler = createMcpHttpHandler({
+  const dependencies = {
+    allowedOrigin: "https://mind-diary.invalid",
     authenticator: {
       async authenticate(candidate) {
         authenticationCalls += 1;
@@ -129,12 +133,14 @@ function harness() {
         };
       },
     },
-  });
+  };
+  const handler = createMcpHttpHandler(dependencies);
+  const legacyCodexHandler = createLegacyCodexMcpHttpHandler(dependencies);
 
   async function send({
     body = rpcRequest("tools/list"),
     httpMethod = "POST",
-    path = "/mcp",
+    path = "/api/mcp",
     token = "valid-transport-token",
     headerOverrides = {},
   } = {}) {
@@ -162,8 +168,36 @@ function harness() {
     return handler(new Request(`https://mind-diary.invalid${path}`, requestInit));
   }
 
+  async function sendLegacyCodex({
+    body,
+    token = "valid-transport-token",
+    headerOverrides = {},
+    path = MCP_LEGACY_CODEX_ENDPOINT,
+  }) {
+    const headers = new Headers({
+      accept: "application/json, text/event-stream",
+      authorization: `Bearer ${token}`,
+      "content-type": "application/json; charset=utf-8",
+      ...(body.method === "initialize"
+        ? {}
+        : { "mcp-protocol-version": MCP_LEGACY_CODEX_PROTOCOL }),
+    });
+    for (const [header, value] of Object.entries(headerOverrides)) {
+      if (value === null) headers.delete(header);
+      else headers.set(header, value);
+    }
+    return legacyCodexHandler(
+      new Request(`https://mind-diary.invalid${path}`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(body),
+      }),
+    );
+  }
+
   return {
     send,
+    sendLegacyCodex,
     state: {
       authenticationCalls: () => authenticationCalls,
       listCalls: () => listCalls,
@@ -205,7 +239,7 @@ test("stateless POST negotiates JSON and one request-scoped SSE event", async ()
   assert.equal(fixture.state.executionCalls(), 1);
 });
 
-test("GET, DELETE, session state, and legacy initialize are rejected", async () => {
+test("GET, DELETE, and legacy initialize are rejected while obsolete session state is ignored", async () => {
   const fixture = harness();
   for (const httpMethod of ["GET", "DELETE"]) {
     const response = await fixture.send({ httpMethod });
@@ -218,14 +252,187 @@ test("GET, DELETE, session state, and legacy initialize are rejected", async () 
   const session = await fixture.send({
     headerOverrides: { "mcp-session-id": "legacy-session" },
   });
-  assert.equal(session.status, 400);
-  assert.equal((await jsonRpcBody(session)).error.code, -32020);
+  assert.equal(session.status, 200);
+  assert.equal((await jsonRpcBody(session)).result.resultType, "complete");
 
   const initialize = await fixture.send({ body: rpcRequest("initialize") });
   assert.equal(initialize.status, 404);
   assert.equal((await jsonRpcBody(initialize)).error.code, -32601);
+  assert.equal(fixture.state.listCalls(), 1);
+  assert.equal(fixture.state.executionCalls(), 0);
+});
+
+test("modern discovery advertises the isolated stateless profile", async () => {
+  const fixture = harness();
+  const response = await fixture.send({ body: rpcRequest("server/discover") });
+  assert.equal(response.status, 200);
+  const result = (await jsonRpcBody(response)).result;
+  assert.equal(result.resultType, "complete");
+  assert.deepEqual(result.supportedVersions, [PROTOCOL]);
+  assert.deepEqual(result.capabilities, { tools: {}, resources: {} });
+  assert.equal(result._meta["io.modelcontextprotocol/serverInfo"].name, "mind-diary");
+  assert.equal(result.cacheScope, "private");
   assert.equal(fixture.state.listCalls(), 0);
   assert.equal(fixture.state.executionCalls(), 0);
+});
+
+test("isolated Codex bridge negotiates 2025-11-25 and translates tools without a session", async () => {
+  const fixture = harness();
+  const initialize = await fixture.sendLegacyCodex({
+    body: {
+      jsonrpc: "2.0",
+      id: 0,
+      method: "initialize",
+      params: {
+        protocolVersion: "2025-06-18",
+        capabilities: { elicitation: { form: {}, url: {} } },
+        clientInfo: {
+          name: "codex-mcp-client",
+          title: "Codex",
+          version: "0.147.0",
+        },
+      },
+    },
+  });
+  assert.equal(initialize.status, 200);
+  assert.equal(initialize.headers.get("mcp-session-id"), null);
+  const initializedBody = await jsonRpcBody(initialize);
+  assert.equal(initializedBody.result.protocolVersion, MCP_LEGACY_CODEX_PROTOCOL);
+  assert.deepEqual(initializedBody.result.capabilities, { tools: {} });
+
+  const initialized = await fixture.sendLegacyCodex({
+    body: {
+      jsonrpc: "2.0",
+      method: "notifications/initialized",
+    },
+  });
+  assert.equal(initialized.status, 202);
+  assert.equal(await initialized.text(), "");
+
+  const listed = await fixture.sendLegacyCodex({
+    body: {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/list",
+      params: { _meta: { progressToken: 0 } },
+    },
+  });
+  assert.equal(listed.status, 200);
+  const listedResult = (await jsonRpcBody(listed)).result;
+  assert.equal(listedResult.tools.length, MCP_CONTENT_TOOLS.length);
+  assert.equal(listedResult.resultType, undefined);
+
+  const called = await fixture.sendLegacyCodex({
+    body: {
+      jsonrpc: "2.0",
+      id: 2,
+      method: "tools/call",
+      params: {
+        _meta: { progressToken: 1 },
+        name: "list_minds",
+        arguments: {},
+      },
+    },
+  });
+  assert.equal(called.status, 200);
+  const calledResult = (await jsonRpcBody(called)).result;
+  assert.equal(calledResult.isError, false);
+  assert.equal(calledResult.resultType, undefined);
+  assert.equal(fixture.state.authenticationCalls(), 4);
+  assert.equal(fixture.state.listCalls(), 1);
+  assert.equal(fixture.state.authorizationCalls(), 1);
+  assert.equal(fixture.state.executionCalls(), 1);
+});
+
+test("Codex bridge remains fail-closed and does not accept session or modern-profile framing", async () => {
+  const fixture = harness();
+  const malformedWithoutToken = await fixture.sendLegacyCodex({
+    body: "not-json",
+    token: "invalid-token",
+  });
+  assert.equal(malformedWithoutToken.status, 401);
+
+  const session = await fixture.sendLegacyCodex({
+    body: { jsonrpc: "2.0", id: 1, method: "tools/list", params: {} },
+    headerOverrides: { "mcp-session-id": "unexpected-session" },
+  });
+  assert.equal(session.status, 400);
+  assert.equal((await jsonRpcBody(session)).error.code, -32020);
+
+  const wrongVersion = await fixture.sendLegacyCodex({
+    body: { jsonrpc: "2.0", id: 1, method: "tools/list", params: {} },
+    headerOverrides: { "mcp-protocol-version": PROTOCOL },
+  });
+  assert.equal(wrongVersion.status, 400);
+  assert.equal((await jsonRpcBody(wrongVersion)).error.code, -32022);
+
+  const modernFramedInitialize = await fixture.sendLegacyCodex({
+    body: {
+      jsonrpc: "2.0",
+      id: 0,
+      method: "initialize",
+      params: {
+        protocolVersion: "2025-06-18",
+        capabilities: {},
+        clientInfo: { name: "codex-mcp-client", version: "0.147.0" },
+      },
+    },
+    headerOverrides: { "mcp-protocol-version": PROTOCOL },
+  });
+  assert.equal(modernFramedInitialize.status, 400);
+  assert.equal(
+    (await jsonRpcBody(modernFramedInitialize)).error.code,
+    -32022,
+  );
+
+  for (const method of ["server/discover", "resources/list"]) {
+    const unsupported = await fixture.sendLegacyCodex({
+      body: { jsonrpc: "2.0", id: 2, method, params: {} },
+    });
+    assert.equal(unsupported.status, 404);
+    assert.equal((await jsonRpcBody(unsupported)).error.code, -32601);
+  }
+
+  const wrongPath = await fixture.sendLegacyCodex({
+    body: {
+      jsonrpc: "2.0",
+      id: 0,
+      method: "initialize",
+      params: {
+        protocolVersion: "2025-06-18",
+        capabilities: {},
+        clientInfo: { name: "codex-mcp-client", version: "0.147.0" },
+      },
+    },
+    path: "/api/mcp",
+  });
+  assert.equal(wrongPath.status, 404);
+  assert.equal(fixture.state.listCalls(), 0);
+  assert.equal(fixture.state.executionCalls(), 0);
+});
+
+test("unsupported modern versions advertise the exact retry set", async () => {
+  const fixture = harness();
+  const response = await fixture.send({
+    body: rpcRequest("tools/list"),
+    headerOverrides: { "mcp-protocol-version": "2025-11-25" },
+  });
+  assert.equal(response.status, 400);
+  assert.deepEqual((await jsonRpcBody(response)).error.data, {
+    requested: "2025-11-25",
+    supported: [PROTOCOL],
+  });
+});
+
+test("modern routing decodes the protocol Base64 sentinel before comparing Mcp-Name", async () => {
+  const fixture = harness();
+  const response = await fixture.send({
+    body: rpcRequest("tools/call", { name: "search" }),
+    headerOverrides: { "mcp-name": "=?base64?c2VhcmNo?=" },
+  });
+  assert.equal(response.status, 200);
+  assert.equal((await jsonRpcBody(response)).result.isError, false);
+  assert.equal(fixture.state.executionCalls(), 1);
 });
 
 test("media types, version, headers, body metadata, and capabilities are exact", async () => {
@@ -334,6 +541,17 @@ test("authentication is a transport 401 before framing; authenticated framing er
   });
   assert.equal(invalidRequest.status, 400);
   assert.equal((await jsonRpcBody(invalidRequest)).error.code, -32600);
+  assert.equal(fixture.state.listCalls(), 0);
+});
+
+test("a supplied browser Origin must match before token authentication", async () => {
+  const fixture = harness();
+  const response = await fixture.send({
+    headerOverrides: { origin: "https://attacker.invalid" },
+  });
+  assert.equal(response.status, 403);
+  assert.equal((await jsonRpcBody(response)).error.message, "Invalid Origin");
+  assert.equal(fixture.state.authenticationCalls(), 0);
   assert.equal(fixture.state.listCalls(), 0);
 });
 

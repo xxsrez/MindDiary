@@ -2,6 +2,11 @@ import {
   InMemoryMcpTokenStore,
   InMemoryRevisionMetadataStore,
 } from "@mind-diary/adapter-metadata-memory";
+import type {
+  AuthorizationStateQuery,
+  CurrentAuthorizationState,
+  MindRouteAuthorizationQuery,
+} from "@mind-diary/application-ports";
 
 export const SITES_METADATA_ADAPTER = "sites-d1-fenced-event-log" as const;
 
@@ -182,6 +187,38 @@ interface LoadedState {
   readonly sequence: number;
 }
 
+async function currentAuthorizationStateWithToken(
+  metadata: Pick<InMemoryRevisionMetadataStore, "readCurrentAuthorizationState">,
+  tokens: Pick<InMemoryMcpTokenStore, "readMcpTokenForAuthorization">,
+  query: AuthorizationStateQuery,
+): Promise<Readonly<CurrentAuthorizationState> | null> {
+  const metadataState = await metadata.readCurrentAuthorizationState({
+    principalId: query.principalId,
+    spaceId: query.spaceId,
+    tokenId: null,
+  });
+  if (metadataState === null || query.tokenId === null) return metadataState;
+  const token = await tokens.readMcpTokenForAuthorization(query.tokenId);
+  return Object.freeze({ ...metadataState, token });
+}
+
+async function currentRouteAuthorizationStateWithToken(
+  metadata: Pick<InMemoryRevisionMetadataStore, "readCurrentRouteAuthorizationState">,
+  tokens: Pick<InMemoryMcpTokenStore, "readMcpTokenForAuthorization">,
+  query: MindRouteAuthorizationQuery,
+): Promise<Readonly<CurrentAuthorizationState> | null> {
+  const metadataState = await metadata.readCurrentRouteAuthorizationState({
+    principalId: query.principalId,
+    spaceId: query.spaceId,
+    tokenId: null,
+    host: query.host,
+    handle: query.handle,
+  });
+  if (metadataState === null || query.tokenId === null) return metadataState;
+  const token = await tokens.readMcpTokenForAuthorization(query.tokenId);
+  return Object.freeze({ ...metadataState, token });
+}
+
 /**
  * D1-backed adapter that reuses the already contract-tested deterministic
  * transition engine while making every committed transition durable. Each
@@ -238,6 +275,28 @@ export class SitesMetadataStore {
       await this.#refresh();
     });
     return this.#proxy;
+  }
+
+  async readCurrentAuthorizationState(
+    query: AuthorizationStateQuery,
+  ): Promise<Readonly<CurrentAuthorizationState> | null> {
+    return this.#exclusive(async () => {
+      await this.#refresh();
+      return currentAuthorizationStateWithToken(this.#metadata, this.#tokens, query);
+    });
+  }
+
+  async readCurrentRouteAuthorizationState(
+    query: MindRouteAuthorizationQuery,
+  ): Promise<Readonly<CurrentAuthorizationState> | null> {
+    return this.#exclusive(async () => {
+      await this.#refresh();
+      return currentRouteAuthorizationStateWithToken(
+        this.#metadata,
+        this.#tokens,
+        query,
+      );
+    });
   }
 
   async #migrate(): Promise<void> {
@@ -350,7 +409,8 @@ export class SitesMetadataStore {
       const loaded = await this.#load();
       const calls: DurableCall[] = [];
       const result = await methodOf(loaded.metadata, method)(
-        async (transaction: object) => operation(this.#captureTransaction(transaction, calls)),
+        async (transaction: object) =>
+          operation(this.#captureTransaction(transaction, loaded.tokens, calls)),
       );
       const event: DurableEvent = {
         v: 1,
@@ -371,19 +431,34 @@ export class SitesMetadataStore {
 
   #captureTransaction(
     transaction: object,
+    tokens: InMemoryMcpTokenStore,
     calls: DurableCall[],
   ): Readonly<Record<string, unknown>> {
     const wrapper: Record<string, unknown> = {};
     for (const property of Object.keys(transaction)) {
       const value = Reflect.get(transaction, property) as unknown;
-      wrapper[property] =
-        typeof value !== "function"
-          ? value
-          : async (...args: unknown[]) => {
-              const callResult = await methodOf(transaction, property)(...args);
-              calls.push({ method: property, args });
-              return callResult;
-            };
+      if (typeof value !== "function") {
+        wrapper[property] = value;
+        continue;
+      }
+      wrapper[property] = async (...args: unknown[]) => {
+        let callResult: unknown;
+        if (property === "readCurrentAuthorizationState") {
+          const query = args[0] as AuthorizationStateQuery;
+          callResult = await currentAuthorizationStateWithToken(
+            transaction as Pick<
+              InMemoryRevisionMetadataStore,
+              "readCurrentAuthorizationState"
+            >,
+            tokens,
+            query,
+          );
+        } else {
+          callResult = await methodOf(transaction, property)(...args);
+        }
+        calls.push({ method: property, args });
+        return callResult;
+      };
     }
     return Object.freeze(wrapper);
   }

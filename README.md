@@ -17,9 +17,14 @@ post-MVP infrastructure direction — AWS/AgentCore; это также само�
 
 Сейчас репозиторий содержит deployable source candidate продукта для OpenAI
 Sites: отдельное приложение `apps/mind-diary-site`, authenticated web/control
-routes, Streamable HTTP `/mcp`, D1/R2 adapters и Worker background handlers.
-Локальные build и contract checks пройдены, но production deployment, live URL,
-persistence-after-redeploy, MCP Inspector и real Codex ещё не подтверждены.
+routes, современный Streamable HTTP `POST /api/mcp`, изолированный Codex
+compatibility endpoint `POST /api/mcp/2025-11-25`, D1/R2 adapters и Worker
+background handlers. Перенос с `/mcp` необходим, потому что exact path
+перехватывается Sites до product Worker. Локальные build, contract/integration
+checks и воспроизводимый probe с `codex-cli 0.147.0` подтверждают source
+candidate на обоих profiles: default compatibility и opt-in
+`mcp_2026_07_28`. Но новая версия не публиковалась: production deployment, live
+URL, persistence-after-redeploy и live MCP Inspector ещё не подтверждены.
 
 Важная оговорка: подключённая MCP-база не находится целиком в контексте модели.
 Она виртуально доступна через поиск и точечное чтение, а в контекст попадают
@@ -59,7 +64,9 @@ full-bundle OKF, documentation, architecture и secret/config checks. Она н�
 Product Site source candidate соединяет принятые application use cases с
 Sites-compatible Vinext/Worker runtime, durable D1/R2 adapters и background
 jobs. Browser surface остаётся control plane и не рендерит raw Markdown;
-Bearer `/mcp` не публикует membership/control tools. Это source/build evidence,
-а не production claim: следующий этап — sealed full gate exact candidate SHA,
-Sites publish и live web, persistence, MCP Inspector и Codex gates. ZIP import,
-producer-defined non-Markdown files и named checkpoints остаются вне MVP.
+Bearer endpoints `/api/mcp` и `/api/mcp/2025-11-25` используют одну
+request-scoped authorization boundary и не публикуют membership/control tools.
+Это source/build/local-client evidence, а не production claim: следующий этап —
+sealed full gate exact candidate SHA, Sites publish и live web, persistence,
+MCP Inspector и Codex gates. ZIP import, producer-defined non-Markdown files и
+named checkpoints остаются вне MVP.

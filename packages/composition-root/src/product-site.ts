@@ -7,7 +7,11 @@ import {
   createProductBackgroundDispatcher,
 } from "@mind-diary/adapter-background";
 import {
+  MCP_ENDPOINT,
+  MCP_LEGACY_CODEX_ENDPOINT,
+  MCP_RETIRED_SITES_ENDPOINT,
   ProductMcpContentApplication,
+  createLegacyCodexMcpHttpHandler,
   createMcpHttpHandler,
   type McpRequestIdGenerator,
 } from "@mind-diary/adapter-mcp";
@@ -446,7 +450,14 @@ export async function createProductSiteRuntime(
     scheduleExport: async (jobId) => options.schedule({ kind: "export", id: jobId }),
   });
   const authenticator = new McpBearerAuthenticationService({ clock, tokenHasher, tokens: metadata });
-  const mcp = createMcpHttpHandler({ authenticator, requestIds: requestIds(), content: mcpApplication });
+  const mcpDependencies = {
+    authenticator,
+    requestIds: requestIds(),
+    content: mcpApplication,
+    allowedOrigin: options.publicOrigin,
+  };
+  const mcp = createMcpHttpHandler(mcpDependencies);
+  const legacyCodexMcp = createLegacyCodexMcpHttpHandler(mcpDependencies);
 
   const commonAuditIds = generated;
   const control = new ProductControlApplication({
@@ -541,7 +552,26 @@ export async function createProductSiteRuntime(
   return Object.freeze({
     dispatchBackground,
     async fetch(request: Request): Promise<Response | null> {
-      if (new URL(request.url).pathname === "/mcp") return mcp(request);
+      const path = new URL(request.url).pathname;
+      if (path === MCP_ENDPOINT) return mcp(request);
+      if (path === MCP_LEGACY_CODEX_ENDPOINT) return legacyCodexMcp(request);
+      if (path === MCP_RETIRED_SITES_ENDPOINT) {
+        return new Response(
+          JSON.stringify({
+            type: "about:blank",
+            title: "Not Found",
+            status: 404,
+            code: "route_not_found",
+          }),
+          {
+            status: 404,
+            headers: {
+              "cache-control": "no-store",
+              "content-type": "application/problem+json; charset=utf-8",
+            },
+          },
+        );
+      }
       return (await exportDownload(request)) ?? web(request);
     },
   });

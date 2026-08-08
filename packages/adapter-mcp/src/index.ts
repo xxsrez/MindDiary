@@ -11,7 +11,10 @@ import {
 } from "@mind-diary/application-content";
 
 export const MCP_TARGET_PROTOCOL = "2026-07-28" as const;
-export const MCP_ENDPOINT = "/mcp" as const;
+export const MCP_ENDPOINT = "/api/mcp" as const;
+export const MCP_LEGACY_CODEX_PROTOCOL = "2025-11-25" as const;
+export const MCP_LEGACY_CODEX_ENDPOINT = "/api/mcp/2025-11-25" as const;
+export const MCP_RETIRED_SITES_ENDPOINT = "/mcp" as const;
 export const MCP_WWW_AUTHENTICATE = 'Bearer realm="mind-diary"' as const;
 export const MCP_AUTHENTICATION_POLICY = Object.freeze({
   scheme: "Bearer",
@@ -1159,6 +1162,8 @@ export interface McpHttpHandlerDependencies {
   readonly authenticator: McpBearerAuthenticator;
   readonly requestIds: McpRequestIdGenerator;
   readonly content: McpContentApplication;
+  /** Canonical HTTPS origin allowed when a browser supplies an Origin header. */
+  readonly allowedOrigin?: string;
   readonly logger?: McpSafeLogger;
 }
 
@@ -1262,13 +1267,14 @@ function jsonRpcError(
   message: string,
   status: number,
   headers: Readonly<Record<string, string>> = {},
+  data?: Readonly<Record<string, unknown>>,
 ): Response {
   return jsonResponse(
     status,
     {
       jsonrpc: "2.0",
       id: id ?? null,
-      error: { code, message },
+      error: { code, message, ...(data === undefined ? {} : { data }) },
     },
     headers,
   );
@@ -1292,6 +1298,7 @@ interface McpJsonRpcRequest {
 interface McpProtocolError {
   readonly code: -32600 | -32020 | -32021 | -32022;
   readonly message: string;
+  readonly data?: Readonly<Record<string, unknown>>;
 }
 
 function noContentResponse(status: number): Response {
@@ -1364,6 +1371,14 @@ function hasJsonContentType(value: string | null): boolean {
   return value?.split(";", 1)[0]?.trim().toLowerCase() === "application/json";
 }
 
+function invalidRequestOrigin(
+  request: Request,
+  allowedOrigin: string | undefined,
+): boolean {
+  const origin = request.headers.get("origin");
+  return origin !== null && origin !== allowedOrigin;
+}
+
 function validRpcId(value: unknown): value is string | number | undefined {
   return (
     value === undefined ||
@@ -1396,6 +1411,20 @@ function expectedMcpName(request: McpJsonRpcRequest): unknown {
   return null;
 }
 
+function decodedMcpHeaderValue(value: string | null): string | null {
+  if (value === null) return null;
+  if (!value.startsWith("=?base64?") || !value.endsWith("?=")) return value;
+  const encoded = value.slice("=?base64?".length, -2);
+  if (encoded.length === 0) return null;
+  try {
+    const binary = atob(encoded);
+    const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    return null;
+  }
+}
+
 function validateProtocolEnvelope(
   request: McpJsonRpcRequest,
   headers: Headers,
@@ -1405,7 +1434,14 @@ function validateProtocolEnvelope(
     return { code: -32020, message: "MCP-Protocol-Version is required." };
   }
   if (headerVersion !== MCP_TARGET_PROTOCOL) {
-    return { code: -32022, message: "Unsupported MCP protocol version." };
+    return {
+      code: -32022,
+      message: "Unsupported MCP protocol version.",
+      data: Object.freeze({
+        requested: headerVersion,
+        supported: Object.freeze([MCP_TARGET_PROTOCOL]),
+      }),
+    };
   }
 
   const methodHeader = headers.get("mcp-method");
@@ -1415,11 +1451,15 @@ function validateProtocolEnvelope(
 
   const expectedName = expectedMcpName(request);
   const nameHeader = headers.get("mcp-name");
+  const decodedNameHeader = decodedMcpHeaderValue(nameHeader);
   if (expectedName === null) {
     if (nameHeader !== null) {
       return { code: -32020, message: "Mcp-Name is not valid for this method." };
     }
-  } else if (!nonEmptyString(expectedName) || nameHeader !== expectedName) {
+  } else if (
+    !nonEmptyString(expectedName) ||
+    decodedNameHeader !== expectedName
+  ) {
     return { code: -32020, message: "Mcp-Name does not match the request body." };
   }
 
@@ -1432,7 +1472,14 @@ function validateProtocolEnvelope(
     return { code: -32020, message: "Request protocol metadata is incomplete." };
   }
   if (metaVersion !== MCP_TARGET_PROTOCOL || metaVersion !== headerVersion) {
-    return { code: -32022, message: "Unsupported MCP protocol version." };
+    return {
+      code: -32022,
+      message: "Unsupported MCP protocol version.",
+      data: Object.freeze({
+        requested: metaVersion,
+        supported: Object.freeze([MCP_TARGET_PROTOCOL]),
+      }),
+    };
   }
 
   const clientInfo = meta["io.modelcontextprotocol/clientInfo"];
@@ -1845,12 +1892,13 @@ function indistinguishableResourceNotFound(error: unknown): boolean {
  * Request-scoped Streamable HTTP boundary. It intentionally does not retain an
  * actor, token, role, authorization decision, request body, query, or result.
  */
-export function createMcpHttpHandler(
+function createMcpHttpHandlerAtEndpoint(
   dependencies: McpHttpHandlerDependencies,
+  endpoint: string,
 ): (request: Request) => Promise<Response> {
   return async (request: Request): Promise<Response> => {
     const requestId = dependencies.requestIds.nextRequestId();
-    if (pathname(request) !== MCP_ENDPOINT) {
+    if (pathname(request) !== endpoint) {
       const response = jsonRpcError(null, -32600, "Invalid request", 404);
       await safeLog(
         dependencies.logger,
@@ -1869,6 +1917,18 @@ export function createMcpHttpHandler(
         405,
         { allow: "POST" },
       );
+      await safeLog(
+        dependencies.logger,
+        request,
+        requestId,
+        response,
+        "protocol_error",
+      );
+      return response;
+    }
+
+    if (invalidRequestOrigin(request, dependencies.allowedOrigin)) {
+      const response = jsonRpcError(null, -32600, "Invalid Origin", 403);
       await safeLog(
         dependencies.logger,
         request,
@@ -1909,23 +1969,6 @@ export function createMcpHttpHandler(
       return response;
     }
     const actor = authentication.actor;
-
-    if (request.headers.has("mcp-session-id")) {
-      const response = jsonRpcError(
-        null,
-        -32020,
-        "Mcp-Session-Id is not supported by the stateless profile.",
-        400,
-      );
-      await safeLog(
-        dependencies.logger,
-        request,
-        requestId,
-        response,
-        "protocol_error",
-      );
-      return response;
-    }
 
     if (!hasJsonContentType(request.headers.get("content-type"))) {
       const response = jsonRpcError(
@@ -1998,6 +2041,8 @@ export function createMcpHttpHandler(
         protocolError.code,
         protocolError.message,
         400,
+        {},
+        protocolError.data,
       );
       await safeLog(
         dependencies.logger,
@@ -2005,6 +2050,52 @@ export function createMcpHttpHandler(
         requestId,
         response,
         "protocol_error",
+      );
+      return response;
+    }
+
+    if (rpc.method === "server/discover") {
+      if (
+        rpc.id === undefined ||
+        Object.keys(rpc.params).length !== 1 ||
+        !Object.hasOwn(rpc.params, "_meta")
+      ) {
+        const response = jsonRpcError(rpc.id, -32602, "Invalid params", 400);
+        await safeLog(
+          dependencies.logger,
+          request,
+          requestId,
+          response,
+          "protocol_error",
+        );
+        return response;
+      }
+      const response = jsonRpcResult(
+        rpc.id,
+        Object.freeze({
+          resultType: "complete" as const,
+          supportedVersions: Object.freeze([MCP_TARGET_PROTOCOL]),
+          capabilities: MCP_ADVERTISED_CAPABILITIES,
+          _meta: Object.freeze({
+            "io.modelcontextprotocol/serverInfo": Object.freeze({
+              name: "mind-diary",
+              title: "Mind Diary",
+              version: "0.1.0",
+            }),
+          }),
+          instructions:
+            "Choose exactly one Mind for every content operation; use list_minds before working with content.",
+          ttlMs: 60_000,
+          cacheScope: "private" as const,
+        }),
+        responseFormat,
+      );
+      await safeLog(
+        dependencies.logger,
+        request,
+        requestId,
+        response,
+        "authenticated",
       );
       return response;
     }
@@ -2026,7 +2117,10 @@ export function createMcpHttpHandler(
       }
       const response = jsonRpcResult(
         rpc.id,
-        { resourceTemplates: Object.freeze([]) },
+        {
+          resultType: "complete",
+          resourceTemplates: Object.freeze([]),
+        },
         responseFormat,
       );
       await safeLog(
@@ -2067,7 +2161,11 @@ export function createMcpHttpHandler(
                 code: "internal_error",
                 request_id: requestId,
               })
-            : jsonRpcResult(rpc.id, page, responseFormat);
+            : jsonRpcResult(
+                rpc.id,
+                Object.freeze({ resultType: "complete", ...page }),
+                responseFormat,
+              );
       } catch {
         response = jsonResponse(500, {
           code: "internal_error",
@@ -2116,6 +2214,7 @@ export function createMcpHttpHandler(
           response = jsonRpcResult(
             rpc.id,
             {
+              resultType: "complete",
               contents: Object.freeze([
                 Object.freeze({
                   uri: read.uri,
@@ -2156,7 +2255,12 @@ export function createMcpHttpHandler(
         const definitions = await dependencies.content.listTools({ actor });
         response = jsonRpcResult(
           rpc.id,
-          { tools: listedTools(actor, definitions) },
+          {
+            resultType: "complete",
+            tools: listedTools(actor, definitions),
+            ttlMs: 60_000,
+            cacheScope: "private",
+          },
           responseFormat,
         );
       } catch {
@@ -2337,6 +2441,368 @@ export function createMcpHttpHandler(
       );
       return response;
     }
+  };
+}
+
+/** Current stateless MCP 2026-07-28 endpoint. */
+export function createMcpHttpHandler(
+  dependencies: McpHttpHandlerDependencies,
+): (request: Request) => Promise<Response> {
+  return createMcpHttpHandlerAtEndpoint(dependencies, MCP_ENDPOINT);
+}
+
+interface LegacyCodexJsonRpcMessage {
+  readonly jsonrpc: "2.0";
+  readonly id?: string | number;
+  readonly method: string;
+  readonly params?: Readonly<Record<string, unknown>>;
+}
+
+function parseLegacyCodexJsonRpcMessage(
+  value: unknown,
+): LegacyCodexJsonRpcMessage | null {
+  if (
+    !isRecord(value) ||
+    value.jsonrpc !== "2.0" ||
+    !nonEmptyString(value.method) ||
+    !validRpcId(value.id) ||
+    (value.params !== undefined && !isRecord(value.params))
+  ) {
+    return null;
+  }
+  return value as unknown as LegacyCodexJsonRpcMessage;
+}
+
+function validLegacyCodexInitialize(
+  rpc: LegacyCodexJsonRpcMessage,
+): boolean {
+  if (rpc.id === undefined || !isRecord(rpc.params)) return false;
+  const clientInfo = rpc.params.clientInfo;
+  return (
+    (rpc.params.protocolVersion === "2025-06-18" ||
+      rpc.params.protocolVersion === MCP_LEGACY_CODEX_PROTOCOL) &&
+    isRecord(rpc.params.capabilities) &&
+    isRecord(clientInfo) &&
+    nonEmptyString(clientInfo.name) &&
+    nonEmptyString(clientInfo.version)
+  );
+}
+
+function legacyCodexProtocolHeader(request: Request): McpProtocolError | null {
+  return request.headers.get("mcp-protocol-version") === MCP_LEGACY_CODEX_PROTOCOL
+    ? null
+    : { code: -32022, message: "Unsupported MCP protocol version." };
+}
+
+function modernizedLegacyCodexRequest(
+  request: Request,
+  rpc: LegacyCodexJsonRpcMessage,
+): Request {
+  const params: Readonly<Record<string, unknown>> =
+    rpc.params ?? Object.freeze({});
+  const existingMeta = isRecord(params._meta) ? params._meta : Object.freeze({});
+  const modernParams: Readonly<Record<string, unknown>> = Object.freeze({
+    ...params,
+    _meta: Object.freeze({
+      ...existingMeta,
+      "io.modelcontextprotocol/protocolVersion": MCP_TARGET_PROTOCOL,
+      "io.modelcontextprotocol/clientInfo": Object.freeze({
+        name: "codex-legacy-bridge",
+        version: MCP_LEGACY_CODEX_PROTOCOL,
+      }),
+      "io.modelcontextprotocol/clientCapabilities": Object.freeze({}),
+    }),
+  });
+  const headers = new Headers(request.headers);
+  headers.set("accept", "application/json, text/event-stream");
+  headers.set("mcp-protocol-version", MCP_TARGET_PROTOCOL);
+  headers.set("mcp-method", rpc.method);
+  headers.delete("mcp-session-id");
+  const name =
+    rpc.method === "tools/call"
+      ? modernParams.name
+      : rpc.method === "resources/read"
+        ? modernParams.uri
+        : null;
+  if (nonEmptyString(name)) headers.set("mcp-name", name);
+  else headers.delete("mcp-name");
+  return new Request(request.url, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      ...(rpc.id === undefined ? {} : { id: rpc.id }),
+      method: rpc.method,
+      params: modernParams,
+    }),
+  });
+}
+
+async function legacyCodexResponse(response: Response): Promise<Response> {
+  if (
+    response.status !== 200 ||
+    !response.headers
+      .get("content-type")
+      ?.toLowerCase()
+      .startsWith("application/json")
+  ) {
+    return response;
+  }
+  let payload: unknown;
+  try {
+    payload = await response.json();
+  } catch {
+    return jsonRpcError(null, -32603, "Internal error", 500);
+  }
+  if (!isRecord(payload) || !isRecord(payload.result)) {
+    return jsonResponse(response.status, payload);
+  }
+  const {
+    resultType: _resultType,
+    ttlMs: _ttlMs,
+    cacheScope: _cacheScope,
+    ...result
+  } = payload.result;
+  return jsonResponse(response.status, { ...payload, result });
+}
+
+/**
+ * Isolated Streamable HTTP 2025-11-25 lifecycle bridge for Codex 0.147.
+ *
+ * It deliberately does not create protocol sessions. Authentication and all
+ * content authorization still run per request, while operational messages are
+ * translated into the current stateless application boundary.
+ */
+export function createLegacyCodexMcpHttpHandler(
+  dependencies: McpHttpHandlerDependencies,
+): (request: Request) => Promise<Response> {
+  return async (request: Request): Promise<Response> => {
+    const requestId = dependencies.requestIds.nextRequestId();
+    if (pathname(request) !== MCP_LEGACY_CODEX_ENDPOINT) {
+      const response = jsonRpcError(null, -32600, "Invalid request", 404);
+      await safeLog(dependencies.logger, request, requestId, response, "protocol_error");
+      return response;
+    }
+    if (request.method !== "POST") {
+      const response = jsonRpcError(
+        null,
+        -32600,
+        "Legacy Codex MCP accepts POST only.",
+        405,
+        { allow: "POST" },
+      );
+      await safeLog(dependencies.logger, request, requestId, response, "protocol_error");
+      return response;
+    }
+
+    if (invalidRequestOrigin(request, dependencies.allowedOrigin)) {
+      const response = jsonRpcError(null, -32600, "Invalid Origin", 403);
+      await safeLog(
+        dependencies.logger,
+        request,
+        requestId,
+        response,
+        "protocol_error",
+      );
+      return response;
+    }
+
+    let authentication: McpBearerAuthenticationResult;
+    try {
+      authentication = await authenticateRequest(
+        request,
+        dependencies.authenticator,
+        requestId,
+      );
+    } catch {
+      const response = authenticationUnavailableResponse(requestId);
+      await safeLog(
+        dependencies.logger,
+        request,
+        requestId,
+        response,
+        "authentication_unavailable",
+      );
+      return response;
+    }
+    if (authentication.kind !== "authenticated") {
+      const response = authenticationResponse(requestId);
+      await safeLog(
+        dependencies.logger,
+        request,
+        requestId,
+        response,
+        "authentication_failed",
+      );
+      return response;
+    }
+
+    if (request.headers.has("mcp-session-id")) {
+      const response = jsonRpcError(
+        null,
+        -32020,
+        "Mcp-Session-Id is not used by the stateless Codex compatibility profile.",
+        400,
+      );
+      await safeLog(dependencies.logger, request, requestId, response, "protocol_error");
+      return response;
+    }
+    if (!hasJsonContentType(request.headers.get("content-type"))) {
+      const response = jsonRpcError(
+        null,
+        -32600,
+        "Content-Type must be application/json.",
+        400,
+      );
+      await safeLog(dependencies.logger, request, requestId, response, "protocol_error");
+      return response;
+    }
+    const responseFormat = acceptedResponseFormat(request.headers.get("accept"));
+    if (responseFormat === null) {
+      const response = jsonRpcError(
+        null,
+        -32600,
+        "Accept must allow application/json and text/event-stream.",
+        400,
+      );
+      await safeLog(dependencies.logger, request, requestId, response, "protocol_error");
+      return response;
+    }
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(await request.text());
+    } catch {
+      const response = jsonRpcError(null, -32700, "Parse error", 400);
+      await safeLog(dependencies.logger, request, requestId, response, "protocol_error");
+      return response;
+    }
+    const rpc = parseLegacyCodexJsonRpcMessage(parsed);
+    if (rpc === null) {
+      const id = isRecord(parsed) && validRpcId(parsed.id) ? parsed.id : null;
+      const response = jsonRpcError(id, -32600, "Invalid request", 400);
+      await safeLog(dependencies.logger, request, requestId, response, "protocol_error");
+      return response;
+    }
+
+    if (rpc.method === "initialize") {
+      const initializationVersionHeader = request.headers.get(
+        "mcp-protocol-version",
+      );
+      const response =
+        initializationVersionHeader !== null
+          ? jsonRpcError(
+              rpc.id,
+              -32022,
+              "MCP-Protocol-Version is not valid before legacy negotiation.",
+              400,
+            )
+          : validLegacyCodexInitialize(rpc)
+            ? jsonResponse(200, {
+                jsonrpc: "2.0",
+                id: rpc.id,
+                result: {
+                  protocolVersion: MCP_LEGACY_CODEX_PROTOCOL,
+                  capabilities: {
+                    tools: Object.freeze({}),
+                  },
+                  serverInfo: {
+                    name: "mind-diary",
+                    title: "Mind Diary",
+                    version: "0.1.0",
+                  },
+                  instructions:
+                    "Choose exactly one Mind for every content operation; use list_minds before working with content.",
+                },
+              })
+            : jsonRpcError(rpc.id, -32602, "Invalid params", 400);
+      await safeLog(
+        dependencies.logger,
+        request,
+        requestId,
+        response,
+        response.status === 200 ? "authenticated" : "protocol_error",
+      );
+      return response;
+    }
+
+    const protocolError = legacyCodexProtocolHeader(request);
+    if (protocolError !== null) {
+      const response = jsonRpcError(
+        rpc.id,
+        protocolError.code,
+        protocolError.message,
+        400,
+      );
+      await safeLog(dependencies.logger, request, requestId, response, "protocol_error");
+      return response;
+    }
+
+    if (rpc.method === "notifications/initialized") {
+      const valid =
+        rpc.id === undefined &&
+        (rpc.params === undefined || Object.keys(rpc.params).length === 0);
+      const response = valid
+        ? noContentResponse(202)
+        : jsonRpcError(rpc.id, -32602, "Invalid params", 400);
+      await safeLog(
+        dependencies.logger,
+        request,
+        requestId,
+        response,
+        valid ? "authenticated" : "protocol_error",
+      );
+      return response;
+    }
+
+    if (rpc.method === "ping") {
+      const response =
+        rpc.id !== undefined &&
+        (rpc.params === undefined || Object.keys(rpc.params).length === 0)
+          ? jsonRpcResult(rpc.id, Object.freeze({}), responseFormat)
+          : jsonRpcError(rpc.id, -32602, "Invalid params", 400);
+      await safeLog(
+        dependencies.logger,
+        request,
+        requestId,
+        response,
+        response.status === 200 ? "authenticated" : "protocol_error",
+      );
+      return response;
+    }
+
+    if (rpc.method !== "tools/list" && rpc.method !== "tools/call") {
+      const response = jsonRpcError(rpc.id, -32601, "Method not found", 404);
+      await safeLog(
+        dependencies.logger,
+        request,
+        requestId,
+        response,
+        "protocol_error",
+      );
+      return response;
+    }
+
+    const translated = modernizedLegacyCodexRequest(request, rpc);
+    const authenticatedDependencies: McpHttpHandlerDependencies = {
+      ...dependencies,
+      authenticator: {
+        async authenticate() {
+          return authentication;
+        },
+      },
+      requestIds: {
+        nextRequestId() {
+          return requestId;
+        },
+      },
+    };
+    return legacyCodexResponse(
+      await createMcpHttpHandlerAtEndpoint(
+        authenticatedDependencies,
+        MCP_LEGACY_CODEX_ENDPOINT,
+      )(translated),
+    );
   };
 }
 

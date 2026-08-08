@@ -82,7 +82,7 @@ function targetMind(argumentsValue: Readonly<Record<string, unknown>>): unknown 
   return argumentsValue.mind;
 }
 
-/** Complete custom Mind-aware content application behind stateless POST /mcp. */
+/** Complete custom Mind-aware content application behind the MCP HTTP adapters. */
 export class ProductMcpContentApplication implements McpContentApplication {
   readonly #dependencies: ProductMcpApplicationDependencies;
 
@@ -187,7 +187,7 @@ export class ProductMcpContentApplication implements McpContentApplication {
         const result = await this.#dependencies.commits.commit({
           actor: request.actor,
           spaceId: info.mind.mindId,
-          expectedRevisionId: input.expectedRevisionId as never,
+          expectedRevisionId: input.expectedRevision as never,
           idempotencyKey: input.idempotencyKey as never,
           summary: input.summary as never,
           operations: input.operations as never,

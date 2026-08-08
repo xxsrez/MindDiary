@@ -5,6 +5,13 @@
 source candidate и targeted repository tests существуют; это не утверждение о
 production OpenAI Site или live deployment.
 
+Direct local candidate переносит MCP с platform-reserved `/mcp` на
+`/api/mcp`, добавляет isolated `/api/mcp/2025-11-25` для default
+`codex-cli 0.147.0` и сохраняет одну per-request authorization boundary.
+Локальный pinned Codex прошёл tool flow на обоих profiles (modern через opt-in
+`mcp_2026_07_28`), но candidate ещё не опубликован и не создаёт `MI`, `CX` или
+`R` release evidence.
+
 Текущий состав source candidate и незакрытые live gates зафиксированы в
 [датированном report](../reports/2026-08-08-product-site-candidate.md). Этот
 report не меняет owning stories или обязательные `A<n>`, `W`, `P`, `MI`, `CX`
@@ -76,7 +83,7 @@ secret и download URL.
 | 24 | Search/fetch фильтруются по exact space/revision; missing historical index не подмешивает HEAD. | `AND-63` | `U/P, I, F, S, M`: seeded two-space/two-revision corpus, lag/missing index и result provenance. | `A24 + MI + CX + R` |
 | 25 | Corpus не расширяет scopes и не получает control-plane tools; allowed-write prompt injection остаётся явно residual risk. | `AND-76` | `C, I, S, M`: adversarial corpus, direct tool calls, tool catalog and state/telemetry assertions. | `A25 + MI + CX + R` |
 | 26 | MCP публикует custom Mind-aware profile без company-knowledge claim или user-openable content URLs. | `AND-76` | `C, S, M`: deterministic tool/resource catalog, absent standard/control surfaces и URI checks. | `A26 + MI + CX + R` |
-| 27 | MCP Inspector и real Codex проходят declared `2026-07-28` adapter/client pair; Claude support без отдельного test не заявляется. | `AND-77` | `M, L`: pinned client versions, Inspector suite и redacted Codex read/write/conflict/history/export flow. | `A27 + MI + CX + R` |
+| 27 | MCP Inspector проходит `/api/mcp` `2026-07-28`; pinned Codex проходит modern opt-in и default isolated `/api/mcp/2025-11-25` lifecycle. Claude support без отдельного test не заявляется. | `AND-77` | `M, L`: pinned client versions, discovery/initialize negotiation, Inspector suite и redacted Codex read/write/conflict/history/export flow с current authorization. | `A27 + MI + CX + R` |
 | 28 | Validators, fixtures and docs checks проходят на одном commit; deployment не считается завершённым без live evidence. | `AND-85` | `C, I, S, F`: canonical full check и generated criterion→test/evidence report exact SHA. | `A28 + R` |
 | 29 | Production release связывает exact SHA с одним Sites deployment/live URL и на нём проходит полный authenticated web/control+persistence+MCP flow. | `AND-90` | `L`: same-deployment web/control, persistence, Inspector and Codex probes after publish/redeploy. | `A29 + W + P + MI + CX + R` |
 
@@ -165,7 +172,7 @@ failure; отсутствующий receipt остаётся pending.
     "audit-index-jobs": { "title": "Index lag, audit, outbox and failure recovery", "command": ["node", "--test", "tests/integration/audit-outbox-index-jobs.test.mjs"], "paths": ["tests/integration/audit-outbox-index-jobs.test.mjs"] },
     "exposure-contract": { "title": "No unsupported browser, MCP or background surface", "command": ["node", "--test", "tests/conformance/exposure-contract.test.mjs"], "paths": ["tests/conformance/exposure-contract.test.mjs"] },
     "mcp-tools": { "title": "Custom Mind-aware JSON Schemas and tool catalog", "command": ["node", "--test", "tests/conformance/mcp-tools.test.mjs"], "paths": ["tests/conformance/mcp-tools.test.mjs"] },
-    "mcp-transport": { "title": "Stateless MCP 2026-07-28 transport profile", "command": ["node", "--test", "tests/conformance/mcp-transport.test.mjs"], "paths": ["tests/conformance/mcp-transport.test.mjs"] },
+    "mcp-transport": { "title": "Modern MCP 2026-07-28 and isolated Codex 2025-11-25 transport profiles", "command": ["node", "--test", "tests/conformance/mcp-transport.test.mjs"], "paths": ["tests/conformance/mcp-transport.test.mjs"] },
     "canonical-tests": { "title": "All unit, integration and conformance schemas", "command": ["node", "--test", "tests/unit/*.test.mjs", "tests/integration/*.test.mjs", "tests/conformance/*.test.mjs"], "paths": ["package.json"] },
     "fixture-validator": { "title": "Strict checked-in OKF bundle validator", "command": ["npm", "run", "validate:fixtures"], "paths": ["scripts/validate-okf-fixtures.mjs", "tests/fixtures/okf/basic/index.md", "tests/fixtures/okf/round-trip/index.md"] },
     "architecture-check": { "title": "Architecture import-boundary check", "command": ["npm", "run", "check:architecture"], "paths": ["scripts/check-architecture.mjs"] },
@@ -228,20 +235,26 @@ atomicity должны быть названы в evidence; process memory не 
 
 ### MCP Inspector
 
-На declared profile `2026-07-28` проверяются `POST /mcp`, matching headers и
-body `_meta`, JSON и request-scoped SSE, transport auth и application errors,
+На declared modern profile `2026-07-28` проверяются `POST /api/mcp`,
+`server/discover`, matching headers и body `_meta`, current result/cache
+metadata, JSON и request-scoped SSE, transport auth и application errors,
 deterministic `tools/list`, JSON Schemas/annotations, all read/commit/export
 tools, immutable Resources, read-only/denied cases, exact revision binding и
 отсутствие session/legacy lifecycle assumptions.
 
 ### Codex
 
-Один реальный Codex build подключается к deployed URL через
-`bearer_token_env_var`: list/resolve multiple allowed Minds; browse, search,
-fetch и validate exact revision; immediate controlled commit; stale conflict с
+Один реальный pinned Codex build подключается через `bearer_token_env_var` к
+обоим deployed URL. Для default `codex-cli 0.147.0` это
+`/api/mcp/2025-11-25`: client предлагает `2025-06-18`, server выбирает
+`2025-11-25`, затем проходят initialized/list/call без session. Для opt-in
+`mcp_2026_07_28` тот же build проходит `/api/mcp` через `server/discover`.
+Далее проверяются list/resolve multiple allowed Minds; browse, search, fetch и
+validate exact revision; immediate controlled commit; stale conflict с
 неизменным state; historical read after HEAD move; deterministic async export;
-revocation/current-access denial. Каждый content call остаётся single-Mind,
-tools fallback работает независимо от Resources UX.
+revocation/current-access denial. Каждый HTTP request заново проходит Bearer и
+current authorization, каждый content call остаётся single-Mind, tools fallback
+работает независимо от Resources UX.
 
 ## Post-MVP denylist
 
@@ -272,7 +285,7 @@ Schema/route/tool, который делает любой пункт дости�
 | Decision | Linear owner | Required evidence |
 |---|---|---|
 | Trusted Sites identity/session/CSRF, доступные D1/R2 bindings и их transaction semantics в одном Site | `AND-37` (Spike) | Redacted live probe exact Site version/deployment; failure блокирует Sites-specific implementation. |
-| Stateless MCP `2026-07-28` headers, SSE/proxy behavior и Codex bearer forwarding на Sites | `AND-37` (Spike) | Live JSON/SSE/error probes и pinned Codex build; без automatic fallback. |
+| Non-reserved `/api/mcp` modern `2026-07-28`, isolated `/api/mcp/2025-11-25`, SSE/proxy behavior и Codex Bearer forwarding на Sites | `AND-37` (Spike) | Live JSON/SSE/error probes и pinned Codex build на обоих profiles; exact `/mcp` остаётся pre-Worker platform route, без automatic fallback. |
 | Runtime/toolchain, package/module layout и canonical build/test/check commands | `AND-38` | Clean-checkout reproducibility и CI/dependency evidence. |
 | Opaque entry/continuation ID encoding, signing/lookup и retention | `AND-61` | Threat analysis plus cross-space/revision, tamper, expiry/deletion contract fixtures. |
 | Token format, lookup strategy, hash/KDF, max expiry и verification latency | `AND-57` (Spike) | Reproducible threat analysis/benchmark; secret-storage and constant-time tests; ADR при значимом выборе. |

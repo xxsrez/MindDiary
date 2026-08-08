@@ -159,7 +159,7 @@ test("privacy-safe operational and pilot metrics retain only closed dimensions",
     observability: telemetry.content,
   });
   const response = await boundary.handler(
-    new Request("https://mind-diary.example/mcp", {
+    new Request("https://mind-diary.example/api/mcp", {
       method: "POST",
       headers: {
         accept: "application/json, text/event-stream",

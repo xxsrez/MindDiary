@@ -79,7 +79,10 @@ test("create form offers read-only or effective read-and-write, never write-only
 
 test("Codex instructions reference bearer_token_env_var without placing a token in config", () => {
   assert.equal(MIND_DIARY_CODEX_TOKEN_ENVIRONMENT_VARIABLE, "MIND_DIARY_TOKEN");
-  assert.equal(MIND_DIARY_MCP_ENDPOINT_PLACEHOLDER, "https://<your-mind-diary-site>/mcp");
+  assert.equal(
+    MIND_DIARY_MCP_ENDPOINT_PLACEHOLDER,
+    "https://<your-mind-diary-site>/api/mcp/2025-11-25",
+  );
   assert.equal(
     MIND_DIARY_CODEX_SAFE_ENVIRONMENT_SETUP,
     "read -s MIND_DIARY_TOKEN && export MIND_DIARY_TOKEN",

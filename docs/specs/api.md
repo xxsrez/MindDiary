@@ -1,10 +1,11 @@
 # REST и MCP API Mind Diary
 
-Статус: proposal для верификации, 2026-08-05. Документ уточняет wire-level
-контракты первого прототипа на основе принятых product decisions, но не
-утверждает, что API, server или deployment уже реализованы. После принятия
-контракта machine-readable OpenAPI и MCP JSON Schemas должны проверяться на
-соответствие этому документу и реализации.
+Статус: proposal для верификации, обновлено 2026-08-08. Документ уточняет
+wire-level контракты первого прототипа на основе принятых product decisions.
+Product API source candidate и direct MCP route/compatibility repair реализованы
+и проверены локально, но эта версия не развёрнута и документ не утверждает
+production или live compatibility. Machine-readable OpenAPI и MCP JSON Schemas
+проверяются на соответствие этому документу и реализации.
 
 ## Назначение и граница
 
@@ -15,7 +16,7 @@ flowchart LR
     Browser["Authenticated Sites browser"]
     Agent["Codex MCP client"]
     Rest["First-party REST control API\n/api/v1"]
-    Mcp["Content MCP\n/mcp"]
+    Mcp["Content MCP\n/api/mcp\n/api/mcp/2025-11-25"]
     Core["Application API\ncommands + queries"]
 
     Browser --> Rest --> Core
@@ -57,6 +58,7 @@ surface первого прототипа — authenticated MCP. Если adapte
 - конкретный набор first-party REST routes;
 - общие JSON-типы descriptors, selectors и errors;
 - точные input/output shapes MCP tools;
+- non-reserved modern endpoint и isolated Codex compatibility endpoint;
 - tagged union для `commit_changeset.operations`;
 - ограниченная MCP Resources surface для exact immutable files;
 - tool annotations и разделение protocol/tool execution errors.
@@ -729,10 +731,36 @@ domain semantics.
 
 ## Content MCP
 
-### Protocol profile
+### Endpoint selection
 
-- Endpoint: `POST /mcp` over HTTPS Streamable HTTP.
-- Target protocol: `2026-07-28`.
+Sites live probes установили платформенную границу: exact `/mcp` получает
+dispatcher-level `404` и не достигает product Worker, тогда как `/api/mcp`
+попадает в обычную Sites boundary. Поэтому `/mcp` не является alias, и server
+не redirect-ит с него request с `Authorization` header.
+
+Product source candidate публикует два намеренно раздельных endpoint:
+
+| Endpoint | Protocol/lifecycle | Client gate |
+|---|---|---|
+| `POST /api/mcp` | stateless `2026-07-28`, начиная с `server/discover` | MCP Inspector, modern clients и `codex-cli 0.147.0` с opt-in `mcp_2026_07_28` |
+| `POST /api/mcp/2025-11-25` | isolated initialize lifecycle `2025-11-25` без server session | default `codex-cli 0.147.0` |
+
+Оба endpoint требуют один и тот же principal Bearer token и вызывают одну
+content application boundary. Authentication, token lifecycle/scopes и current
+Mind authorization вычисляются заново для каждого HTTP request. Различается
+только protocol framing; compatibility adapter не добавляет отдельную ACL,
+cached actor или tool surface.
+
+Route selection и оба profiles проверены локальными transport/integration
+tests. Настоящий `codex-cli 0.147.0` выполнил `tools/list`/`tools/call` и через
+default compatibility lifecycle, и через opt-in modern discovery. Новая версия
+не публиковалась, поэтому это не live Sites fix/conformance. Предыдущее
+отрицательное evidence exact `/mcp` остаётся в
+[датированном capability report](../reports/2026-08-07-sites-mcp-capability-gate.md).
+
+### Modern stateless profile `2026-07-28`
+
+- Endpoint: `POST /api/mcp` over HTTPS Streamable HTTP.
 - Каждый JSON-RPC request — отдельный HTTP POST.
 - Protocol state не выводится из connection/session. Каждый request несёт
   protocol version и client capabilities в `_meta`.
@@ -740,16 +768,41 @@ domain semantics.
   `Mcp-Name` должны совпадать с body.
 - Client посылает `Accept: application/json, text/event-stream`.
 - Server отвечает одним JSON object либо request-scoped SSE stream.
-- `GET /mcp`, `DELETE /mcp`, `Mcp-Session-Id`, resumable stream и обязательный
-  `initialize` не входят в profile `2026-07-28`.
-- Legacy `2025-11-25` реализуется только отдельным adapter/profile после
-  conformance evidence конкретного client; lifecycle двух профилей не
-  смешивается.
+- `server/discover` возвращает `supportedVersions`, capabilities, server info,
+  `resultType: "complete"`, bounded `ttlMs` и `cacheScope: "private"`.
+- Operational results также используют current `resultType`/cache metadata,
+  где оно предусмотрено method contract.
+- `GET /api/mcp`, `DELETE /api/mcp`, `Mcp-Session-Id`, resumable stream и
+  обязательный `initialize` не входят в profile `2026-07-28`.
 
-Пример skeleton request:
+Discovery result:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "resultType": "complete",
+    "supportedVersions": ["2026-07-28"],
+    "capabilities": { "tools": {}, "resources": {} },
+    "_meta": {
+      "io.modelcontextprotocol/serverInfo": {
+        "name": "mind-diary",
+        "title": "Mind Diary",
+        "version": "0.1.0"
+      }
+    },
+    "instructions": "Choose exactly one Mind for every content operation; use list_minds before working with content.",
+    "ttlMs": 60000,
+    "cacheScope": "private"
+  }
+}
+```
+
+Пример operational request:
 
 ```http
-POST /mcp
+POST /api/mcp
 Authorization: Bearer ${MIND_DIARY_TOKEN}
 Content-Type: application/json
 Accept: application/json, text/event-stream
@@ -772,7 +825,7 @@ Mcp-Name: search
     "_meta": {
       "io.modelcontextprotocol/protocolVersion": "2026-07-28",
       "io.modelcontextprotocol/clientInfo": {
-        "name": "codex",
+        "name": "modern-client",
         "version": "client-version"
       },
       "io.modelcontextprotocol/clientCapabilities": {}
@@ -781,9 +834,49 @@ Mcp-Name: search
 }
 ```
 
+### Isolated Codex compatibility profile `2025-11-25`
+
+Default `codex-cli 0.147.0` ещё использует initialize lifecycle. На
+`POST /api/mcp/2025-11-25` проверена последовательность:
+
+1. Codex посылает `initialize` с `protocolVersion: "2025-06-18"`.
+2. Server выбирает и возвращает `protocolVersion: "2025-11-25"`,
+   рекламируя только проверенную `tools` capability; Resources для
+   compatibility profile пока не заявляются.
+3. Codex посылает `notifications/initialized`, затем `tools/list` и
+   `tools/call` с `MCP-Protocol-Version: 2025-11-25`.
+
+Server не выдаёт и не требует `Mcp-Session-Id`. Adapter переводит только
+operational messages во внутренний stateless contract и возвращает legacy
+result shapes без modern `resultType`, `ttlMs` и `cacheScope`; initialize
+lifecycle никогда не передаётся в `/api/mcp`.
+
+Текущий secret-free Codex config:
+
+```toml
+[mcp_servers.mind_diary]
+url = "https://<your-mind-diary-site>/api/mcp/2025-11-25"
+bearer_token_env_var = "MIND_DIARY_TOKEN"
+required = true
+```
+
+Token value хранится только в `MIND_DIARY_TOKEN`. Для opt-in
+`mcp_2026_07_28` в том же Codex build либо другого подтверждённого modern client
+config должен использовать `https://<your-mind-diary-site>/api/mcp`, а не
+compatibility URL. В `codex-cli 0.147.0` modern path ещё скрыт за
+under-development feature; default остаётся compatibility profile.
+
+Sites audience gate находится перед product Worker и не заменяет product
+authentication. Фрагмент выше предполагает, что MCP URL сетевым образом
+доступен client. Ограниченный audience требует отдельный
+platform-supported machine credential в `env_http_headers`; он не отменяет
+`Authorization: Bearer` Mind Diary. Выбор public audience или restricted
+audience с machine access остаётся deployment decision и проверяется live.
+
 ### MCP authentication
 
-- `Authorization: Bearer <personal-token>` обязателен на каждом POST.
+- `Authorization: Bearer <personal-token>` обязателен на каждом POST обоих
+  endpoint; protocol bridge не является authentication bypass.
 - Server сначала применяет bounded `mdp_v1` parser, вычисляет keyed
   HMAC-SHA-256 verifier, делает один exact indexed lookup и fixed-length
   constant-time comparison. Только после cryptographic match проверяются
@@ -792,7 +885,8 @@ Mcp-Name: search
   `display_prefix`, scopes и lifecycle metadata. Plain secret, recoverable
   material и HMAC key в record отсутствуют.
 - Current role/visibility, exact Mind и revision access проверяются на каждом
-  call; cached role claims не используются.
+  HTTP request/call; cached role claims и authorization из initialize/discovery
+  не используются.
 - `401` используется для missing/invalid/expired/revoked token и содержит
   безопасный `WWW-Authenticate: Bearer` challenge.
 - `403` используется для invalid `Origin` и transport-level policy denial.
@@ -802,7 +896,8 @@ Mcp-Name: search
 
 ### Advertised capabilities
 
-Prototype server объявляет:
+Профили объявляют только проверенные capabilities. Modern profile в
+`server/discover` публикует tools и Resources:
 
 ```json
 {
@@ -813,9 +908,20 @@ Prototype server объявляет:
 }
 ```
 
+Compatibility profile в `initialize` публикует только:
+
+```json
+{
+  "capabilities": {
+    "tools": {}
+  }
+}
+```
+
 - `tools/list` обязателен и возвращает tools в deterministic order.
 - `listChanged` не объявляется: tool set не меняется внутри deployed version.
-- `resources` используется для exact immutable Markdown resources.
+- `resources` modern profile используется для exact immutable Markdown
+  resources; compatibility profile его не рекламирует и не обслуживает.
 - `subscribe` и resource `listChanged` не объявляются: immutable URI не
   обновляется, а смена HEAD создаёт новые URIs.
 - Prompts, sampling, elicitation, roots и skills extension не требуются MVP.
@@ -833,7 +939,7 @@ Server всё равно проверяет scope при прямом `tools/cal
 - accurate `readOnlyHint`, `destructiveHint`, `openWorldHint`;
 - никаких secrets, private bodies или hidden authority в metadata.
 
-Success:
+Modern `2026-07-28` success:
 
 ```json
 {
@@ -875,7 +981,9 @@ Recoverable application error:
 ```
 
 Для backward-compatible clients `content` содержит короткое text summary,
-даже когда основной contract находится в `structuredContent`.
+даже когда основной contract находится в `structuredContent`. Isolated
+`2025-11-25` adapter сохраняет тот же tool payload, но удаляет только modern
+transport metadata (`resultType`, `ttlMs`, `cacheScope`) из внешнего result.
 
 ### Tool catalog
 
@@ -1429,18 +1537,24 @@ authentication не раскрывает existence/metadata.
 4. Generic private/missing responses без enumeration metadata.
 5. Idempotency replay и conflict для каждого command.
 6. Metadata version CAS, ownership invariant и invitation lifecycle.
-7. MCP `2026-07-28` headers/body metadata и отсутствие session assumptions.
-8. Deterministic `tools/list`, JSON Schema 2020-12 и annotations.
-9. Read-only token не получает effective content mutation.
-10. Каждый tool на representative, invalid, denied и out-of-scope inputs.
-11. Exact Mind/revision filtering и отсутствие cross-Mind leakage.
-12. `fetch`/`resources/read` остаются на exact revision после HEAD move.
-13. Historical access использует current ACL/visibility.
-14. Atomic multi-file changeset, stale HEAD и idempotent retry.
-15. Full-bundle OKF validation и preservation unknown fields/types.
-16. Missing historical index не подмешивает HEAD.
-17. Export exact revision, reauthorization и expiring download URL.
-18. MCP Inspector и реальный Codex client на exact deployed version.
+7. `/api/mcp`: `server/discover`, MCP `2026-07-28` headers/body metadata,
+   current result/cache metadata и отсутствие session assumptions.
+8. `/api/mcp/2025-11-25`: Codex offer `2025-06-18`, server selection
+   `2025-11-25`, initialized/list/call lifecycle без session и без смешивания с
+   modern endpoint.
+9. Оба profiles выполняют новый Bearer/current-access check на каждом request и
+   публикуют deterministic `tools/list`, JSON Schema 2020-12 и annotations.
+10. Read-only token не получает effective content mutation.
+11. Каждый tool на representative, invalid, denied и out-of-scope inputs.
+12. Exact Mind/revision filtering и отсутствие cross-Mind leakage.
+13. `fetch`/`resources/read` остаются на exact revision после HEAD move.
+14. Historical access использует current ACL/visibility.
+15. Atomic multi-file changeset, stale HEAD и idempotent retry.
+16. Full-bundle OKF validation и preservation unknown fields/types.
+17. Missing historical index не подмешивает HEAD.
+18. Export exact revision, reauthorization и expiring download URL.
+19. MCP Inspector на modern endpoint и реальный pinned Codex на обоих profiles
+   exact deployed version.
 
 Claude Code и любой другой client получают отдельный adapter/client conformance
 profile до заявления поддержки.
@@ -1451,8 +1565,9 @@ profile до заявления поддержки.
 честно принять без platform spike или benchmark:
 
 - exact Sites session/CSRF mechanism и доступность trusted identity context на
-  `/api/v1` и `/mcp` в одном deployment;
-- пройдёт ли Sites Streamable HTTP MCP `2026-07-28`, включая required headers и
+  `/api/v1`, `/api/mcp` и `/api/mcp/2025-11-25` в одном deployment;
+- пройдут ли Sites Streamable HTTP MCP `2026-07-28` и isolated Codex
+  compatibility profile, включая required headers, Bearer forwarding и
   request-scoped SSE без proxy buffering;
 - поддерживает ли target Codex build MCP Resources достаточно для optional
   resource path; tools остаются обязательным fallback;
@@ -1476,9 +1591,12 @@ transport без нового принятого решения.
 - [ADR-0003: user-scoped MCP и immediate commits](../decisions/0003-user-scoped-mcp-and-direct-commits.md)
 - [Состояние платформенных предпосылок](../reports/2026-08-05-platform-status.md)
 - [MCP 2026-07-28: base protocol](https://modelcontextprotocol.io/specification/2026-07-28/basic)
+- [MCP 2026-07-28: discovery](https://modelcontextprotocol.io/specification/2026-07-28/server/discover)
 - [MCP 2026-07-28: Streamable HTTP](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/streamable-http)
 - [MCP 2026-07-28: tools](https://modelcontextprotocol.io/specification/2026-07-28/server/tools)
 - [MCP 2026-07-28: resources](https://modelcontextprotocol.io/specification/2026-07-28/server/resources)
+- [MCP 2025-11-25: lifecycle](https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle)
+- [MCP 2025-11-25: Streamable HTTP](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports)
 - [OpenAI: build an MCP server](https://developers.openai.com/plugins/build/mcp-server)
 - [OpenAI: MCP authentication](https://developers.openai.com/plugins/build/auth)
 - [OpenAI Codex: MCP](https://developers.openai.com/codex/mcp)

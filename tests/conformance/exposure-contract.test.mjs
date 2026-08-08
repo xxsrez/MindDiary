@@ -6,6 +6,8 @@ import {
 import {
   MCP_CONTENT_TOOLS,
   MCP_ENDPOINT,
+  MCP_LEGACY_CODEX_ENDPOINT,
+  MCP_LEGACY_CODEX_PROTOCOL,
   MCP_RESOURCE_CAPABILITIES,
   MCP_TARGET_PROTOCOL,
 } from "@mind-diary/adapter-mcp";
@@ -44,8 +46,10 @@ test("browser contract exposes control metadata and no raw content routes", () =
 });
 
 test("MCP contract exposes only custom Mind-aware content tools", () => {
-  assert.equal(MCP_ENDPOINT, "/mcp");
+  assert.equal(MCP_ENDPOINT, "/api/mcp");
   assert.equal(MCP_TARGET_PROTOCOL, "2026-07-28");
+  assert.equal(MCP_LEGACY_CODEX_ENDPOINT, "/api/mcp/2025-11-25");
+  assert.equal(MCP_LEGACY_CODEX_PROTOCOL, "2025-11-25");
   assert.deepEqual(MCP_CONTENT_TOOLS, expectedMcpTools);
   const forbiddenControlTools = [
     "bootstrap_account",

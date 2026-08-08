@@ -17,6 +17,7 @@ import {
   COMPOSITION_SELECTION,
   createSitesPersistenceBoundary,
 } from "@mind-diary/composition-root";
+import { CapabilityAuthorizer } from "@mind-diary/application-ports";
 
 import {
   createSitesMetadataStore,
@@ -504,6 +505,82 @@ test("Sites composition persists account, invitation, ownership, HEAD CAS, idemp
     (await (await createSitesMetadataStore(database)).listMcpTokenMetadata(owner.principalId)).length,
     1,
   );
+
+  const currentAuthorization = await tokenStore.readCurrentAuthorizationState({
+    principalId: owner.principalId,
+    spaceId: mind.mindId,
+    tokenId: "token_sites_durable",
+  });
+  assert.equal(currentAuthorization?.token?.tokenId, "token_sites_durable");
+  assert.equal(currentAuthorization?.membership?.principalId, owner.principalId);
+  const routeAuthorization = await tokenStore.readCurrentRouteAuthorizationState({
+    principalId: owner.principalId,
+    spaceId: mind.mindId,
+    tokenId: "token_sites_durable",
+    host: HOST,
+    handle: mind.handle,
+  });
+  assert.equal(routeAuthorization?.token?.tokenId, "token_sites_durable");
+
+  const mcpActor = {
+    kind: "registered_principal",
+    principalId: owner.principalId,
+    authentication: {
+      kind: "mcp_token",
+      tokenId: "token_sites_durable",
+      effectiveScopes: ["content:read", "content:write"],
+    },
+    deploymentCapabilities: CAPABILITIES,
+    requestId: "request_sites_mcp_authorization",
+    occurredAtUtc: T5,
+  };
+  const authorizationRequest = {
+    actor: mcpActor,
+    spaceId: mind.mindId,
+    capability: "content:browse",
+    revisionMode: "head",
+  };
+  const authorizer = new CapabilityAuthorizer(tokenStore);
+  const authorized = await authorizer.authorize(authorizationRequest);
+  assert.equal(authorized.kind, "allowed");
+  const transactionAuthorization = await tokenStore.runContentCommitTransaction(
+    (transaction) =>
+      authorizer.reauthorizeInTransaction(
+        authorizationRequest,
+        transaction,
+        authorized.stamp,
+      ),
+  );
+  assert.equal(transactionAuthorization.kind, "allowed");
+
+  const concurrentRevoker = await createSitesMetadataStore(database);
+  let authorizationAttempts = 0;
+  const revokedDuringTransaction = await tokenStore.runContentCommitTransaction(
+    async (transaction) => {
+      authorizationAttempts += 1;
+      const decision = await authorizer.reauthorizeInTransaction(
+        authorizationRequest,
+        transaction,
+        authorized.stamp,
+      );
+      if (authorizationAttempts === 1) {
+        assert.equal(decision.kind, "allowed");
+        const revocation = await concurrentRevoker.revokeMcpToken({
+          principalId: owner.principalId,
+          tokenId: "token_sites_durable",
+          revokedAt: "2026-08-08T08:26:00.000Z",
+        });
+        assert.equal(revocation.kind, "revoked");
+      }
+      return decision;
+    },
+  );
+  assert.equal(authorizationAttempts, 2);
+  assert.deepEqual(revokedDuringTransaction, {
+    kind: "denied",
+    code: "token_inactive",
+    retryable: false,
+  });
 
   const winning = await tokenStore.readRevision(mind.mindId, winningRevision);
   assert.ok(winning);

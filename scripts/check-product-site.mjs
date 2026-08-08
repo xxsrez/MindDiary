@@ -20,9 +20,14 @@ if (/SECRET|TOKEN|KEY|PASSWORD/iu.test(serializedHosting)) errors.push("hosting 
 
 const worker = await readFile(resolve(app, "worker/index.ts"), "utf8");
 const composition = await readFile(resolve(root, "packages/composition-root/src/product-site.ts"), "utf8");
+const mcp = await readFile(resolve(root, "packages/adapter-mcp/src/index.ts"), "utf8");
+const tokenUi = await readFile(resolve(root, "packages/adapter-web/src/token-management.ts"), "utf8");
 if (!worker.includes("createProductSiteRuntime")) errors.push("Worker does not use product composition");
 if (!composition.includes("createSitesMetadataStore") || !composition.includes("createSitesObjectStore")) errors.push("composition does not select durable Sites adapters");
 if (!composition.includes("createMcpHttpHandler") || !composition.includes("createProductWebHttpHandler")) errors.push("composition is missing web or MCP inbound boundary");
+if (!mcp.includes('MCP_ENDPOINT = "/api/mcp"') || !mcp.includes('MCP_LEGACY_CODEX_ENDPOINT = "/api/mcp/2025-11-25"')) errors.push("MCP adapters do not expose the Sites-safe modern and Codex compatibility endpoints");
+if (!composition.includes("path === MCP_ENDPOINT") || !composition.includes("path === MCP_LEGACY_CODEX_ENDPOINT")) errors.push("product dispatcher does not route both exact MCP endpoints");
+if (!tokenUi.includes("/api/mcp/2025-11-25")) errors.push("Codex token instructions do not use the verified compatibility endpoint");
 if (/sites-probe|PROBE_BUCKET|@aws-sdk|AgentCore|DynamoDB|OpenSearch/iu.test(`${worker}\n${composition}`)) errors.push("product Site contains a probe or forbidden production fallback");
 
 const manifest = JSON.parse(await readFile(resolve(app, "package.json"), "utf8"));

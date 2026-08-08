@@ -209,7 +209,7 @@ function harness() {
       ...(token === null ? {} : { authorization: `Bearer ${token}` }),
     });
     return handler(
-      new Request("https://mind-diary.invalid/mcp", {
+      new Request("https://mind-diary.invalid/api/mcp", {
         method: "POST",
         headers,
         body: JSON.stringify(body),

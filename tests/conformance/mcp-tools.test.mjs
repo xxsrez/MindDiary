@@ -126,7 +126,7 @@ function harness() {
   async function send(body) {
     const name = body.method === "tools/call" ? body.params.name : undefined;
     return handler(
-      new Request("https://mind-diary.invalid/mcp", {
+      new Request("https://mind-diary.invalid/api/mcp", {
         method: "POST",
         headers: {
           accept: "application/json, text/event-stream",

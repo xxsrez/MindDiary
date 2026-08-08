@@ -31,6 +31,21 @@ test("runtime package is product composition, not capability probe or fallback",
   assert.doesNotMatch(await readFile(resolve(app, ".openai/hosting.json"), "utf8"), /VERIFIER|SECRET|TOKEN/);
 });
 
+test("product composition routes the Sites-safe modern and versioned Codex MCP endpoints", async () => {
+  const [mcp, composition, tokenUi] = await Promise.all([
+    readFile(resolve(root, "packages/adapter-mcp/src/index.ts"), "utf8"),
+    readFile(resolve(root, "packages/composition-root/src/product-site.ts"), "utf8"),
+    readFile(resolve(root, "packages/adapter-web/src/token-management.ts"), "utf8"),
+  ]);
+  assert.match(mcp, /MCP_ENDPOINT = "\/api\/mcp"/u);
+  assert.match(mcp, /MCP_LEGACY_CODEX_ENDPOINT = "\/api\/mcp\/2025-11-25"/u);
+  assert.match(mcp, /MCP_RETIRED_SITES_ENDPOINT = "\/mcp"/u);
+  assert.match(composition, /path === MCP_ENDPOINT/u);
+  assert.match(composition, /path === MCP_LEGACY_CODEX_ENDPOINT/u);
+  assert.match(composition, /path === MCP_RETIRED_SITES_ENDPOINT/u);
+  assert.match(tokenUi, /\/api\/mcp\/2025-11-25/u);
+});
+
 test("product Worker owns the operable onboarding, shell, and MCP-token UI assets", async () => {
   const [http, assets, composition] = await Promise.all([
     readFile(resolve(root, "packages/adapter-web/src/product-http.ts"), "utf8"),

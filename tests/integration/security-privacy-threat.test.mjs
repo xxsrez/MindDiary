@@ -334,7 +334,7 @@ async function mcpHarness() {
       "x-private-email": PRIVATE_EMAIL,
     });
     const response = await boundary.handler(new Request(
-      `https://mind-diary.invalid/mcp?query=${PRIVATE_QUERY}`,
+      `https://mind-diary.invalid/api/mcp?query=${PRIVATE_QUERY}`,
       { method: "POST", headers, body: JSON.stringify(body) },
     ));
     return { status: response.status, body: await response.json() };

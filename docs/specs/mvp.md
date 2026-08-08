@@ -2,7 +2,9 @@
 
 Статус: proposal, обновлено 2026-08-08. Product requirements ниже приняты;
 deployable Product Site source candidate и его targeted contracts реализованы,
-но production deployment и обязательное live evidence ещё не получены.
+включая direct route/compatibility repair. Repair проверен только локально:
+production deployment этой версии и обязательное live evidence ещё не
+получены.
 
 ## Цель
 
@@ -191,6 +193,15 @@ commit_changeset(
 - `Authorization: Bearer <token>` передаётся MCP client через environment
   variable, а не сохраняется в repository/config plaintext;
 - role, visibility и token status проверяются на каждом request;
+- современный stateless MCP `2026-07-28` обслуживается по
+  `POST /api/mcp` и проверен с opt-in `mcp_2026_07_28`; isolated compatibility
+  profile для проверенного default `codex-cli 0.147.0` — по
+  `POST /api/mcp/2025-11-25`;
+- в compatibility profile Codex предлагает `2025-06-18`, server выбирает
+  `2025-11-25`; session state не создаётся, а lifecycle translation не
+  попадает в modern adapter;
+- оба endpoint используют тот же Bearer authenticator и тот же per-request
+  current authorization для выбранного Mind/revision;
 - token не даёт control-plane operations и не логируется;
 - account deletion отзывает все tokens.
 
@@ -349,9 +360,12 @@ network, которого Sites пока не обещает. Если Streamabl
     writes, а не заявляют его полное устранение.
 26. MCP публикует custom Mind-aware tools и не заявляет company-knowledge
     compatibility или user-openable content URLs.
-27. MCP Inspector и Codex conformance tests проходят для заявленной MCP версии.
-    Claude Code не блокирует первый production MVP и объявляется supported
-    только после отдельной проверки своего adapter/client pair.
+27. MCP Inspector проходит modern `2026-07-28` adapter по `/api/mcp`, а
+    проверенный `codex-cli 0.147.0` проходит этот же adapter с opt-in
+    `mcp_2026_07_28` и isolated default `2025-11-25` adapter по
+    `/api/mcp/2025-11-25`; оба используют один content contract и current
+    authorization. Claude Code не блокирует первый production MVP и объявляется
+    supported только после отдельной проверки своего adapter/client pair.
 28. Все validators, fixtures и docs checks проходят на одном commit; никакой
     deployment не объявляется завершённым без live evidence.
 29. Production release связывает exact Git SHA с одним Sites
@@ -364,13 +378,31 @@ network, которого Sites пока не обещает. Если Streamabl
 Sites production MVP считается завершённым только после live-проверки:
 
 - authenticated Sites headers и устойчивый account binding;
-- stable HTTPS Streamable HTTP `/mcp`;
-- lifecycle целевого MCP profile, `tools/list` и все обязательные tools;
-- Bearer token через environment configuration Codex; Claude Code проверяется
+- stable HTTPS Streamable HTTP `POST /api/mcp` для modern `2026-07-28` и
+  `POST /api/mcp/2025-11-25` для pinned default `codex-cli 0.147.0`; exact
+  `/mcp` не используется, потому что Sites перехватывает его до product Worker;
+- `server/discover`, stateless metadata/results, `tools/list` и все обязательные
+  tools modern profile, включая pinned Codex с opt-in `mcp_2026_07_28`;
+- isolated initialize flow, где Codex предлагает `2025-06-18`, а server
+  выбирает `2025-11-25`, затем `notifications/initialized`, `tools/list` и все
+  обязательные tools без session state;
+- Bearer token через environment configuration Codex и свежая current
+  authorization на каждом request обоих profiles; Claude Code проверяется
   отдельной non-blocking gate до заявления его поддержки;
+- Sites audience gate пропускает machine client к endpoint либо через
+  public reachability, либо через отдельный platform-supported machine
+  credential; внешний gate не заменяет product Bearer и не расширяет
+  права;
 - streaming/error behavior без proxy buffering;
 - D1/R2 либо выбранная persistence после нового deployment;
 - domain/challenge requirements реального OpenAI integration.
+
+Route migration, оба adapters и local Codex negotiation/tool call в default и
+opt-in modern modes уже покрыты source tests/experiments, но это не live Sites
+compatibility и не release evidence. Отрицательное evidence exact `/mcp`
+остаётся в
+[historical capability report](../reports/2026-08-07-sites-mcp-capability-gate.md)
+и не переписывается задним числом.
 
 Если endpoint не проходит gate, production release MVP блокируется. Отдельный
 portable container и AWS/AgentCore не используются без нового принятого

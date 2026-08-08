@@ -6109,6 +6109,8 @@ export class InMemoryRevisionMetadataStore
         this.#knowledgeSpaces,
         freezeKnowledgeSpace,
       );
+      const principals = this.#principals;
+      const memberships = this.#memberships;
       const idempotencyRecords = cloneIdempotencyRecords(this.#idempotencyRecords);
       const auditEvents = new Map(
         [...this.#auditEvents].map(([id, event]) => [id, cloneAuditEvent(event)]),
@@ -6131,6 +6133,13 @@ export class InMemoryRevisionMetadataStore
       const transaction: ContentCommitMetadataTransaction = Object.freeze({
         kind: "authorization-transaction" as const,
         readCurrentAuthorizationState: async (query: AuthorizationStateQuery) => {
+          const current = currentSitesAuthorizationStateFromMaps(
+            query,
+            principals,
+            knowledgeSpaces,
+            memberships,
+          );
+          if (current !== null) return current;
           const state = authorizationStates.get(authorizationStateKey(query));
           return state ? cloneAuthorizationState(state) : null;
         },
@@ -6212,6 +6221,9 @@ export class InMemoryRevisionMetadataStore
     return this.#runExclusive(async () => {
       const spaces = cloneSpaces(this.#spaces);
       const revisionsById = new Map(this.#revisionsById);
+      const principals = this.#principals;
+      const knowledgeSpaces = this.#knowledgeSpaces;
+      const memberships = this.#memberships;
       const idempotencyRecords = cloneIdempotencyRecords(this.#idempotencyRecords);
       const exportJobs = cloneExportJobs(this.#exportJobs);
       const authorizationStates = new Map(
@@ -6223,6 +6235,13 @@ export class InMemoryRevisionMetadataStore
       const transaction: ExportStartTransaction = Object.freeze({
         kind: "authorization-transaction" as const,
         readCurrentAuthorizationState: async (query: AuthorizationStateQuery) => {
+          const current = currentSitesAuthorizationStateFromMaps(
+            query,
+            principals,
+            knowledgeSpaces,
+            memberships,
+          );
+          if (current !== null) return current;
           const state = authorizationStates.get(authorizationStateKey(query));
           return state ? cloneAuthorizationState(state) : null;
         },
@@ -6272,6 +6291,9 @@ export class InMemoryRevisionMetadataStore
   ): Promise<Result> {
     return this.#runExclusive(async () => {
       const exportJobs = cloneExportJobs(this.#exportJobs);
+      const principals = this.#principals;
+      const knowledgeSpaces = this.#knowledgeSpaces;
+      const memberships = this.#memberships;
       const exportDownloadGrants = cloneExportDownloadGrants(
         this.#exportDownloadGrants,
       );
@@ -6284,6 +6306,13 @@ export class InMemoryRevisionMetadataStore
       const transaction: ExportDownloadGrantTransaction = Object.freeze({
         kind: "authorization-transaction" as const,
         readCurrentAuthorizationState: async (query: AuthorizationStateQuery) => {
+          const current = currentSitesAuthorizationStateFromMaps(
+            query,
+            principals,
+            knowledgeSpaces,
+            memberships,
+          );
+          if (current !== null) return current;
           const state = authorizationStates.get(authorizationStateKey(query));
           return state ? cloneAuthorizationState(state) : null;
         },

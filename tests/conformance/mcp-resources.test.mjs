@@ -126,7 +126,7 @@ function harness({ invalidListResource = false } = {}) {
   async function send(body) {
     const name = body.method === "resources/read" ? body.params.uri : undefined;
     return handler(
-      new Request("https://mind-diary.invalid/mcp", {
+      new Request("https://mind-diary.invalid/api/mcp", {
         method: "POST",
         headers: {
           accept: "application/json, text/event-stream",
@@ -223,7 +223,10 @@ test("resources/templates/list is empty and does not enter content application",
   const fixture = harness();
   const response = await fixture.send(rpc("resources/templates/list"));
   assert.equal(response.status, 200);
-  assert.deepEqual((await json(response)).result, { resourceTemplates: [] });
+  assert.deepEqual((await json(response)).result, {
+    resultType: "complete",
+    resourceTemplates: [],
+  });
   assert.equal(fixture.rootCalls.length, 0);
   assert.equal(fixture.readCalls.length, 0);
 });
@@ -259,6 +262,7 @@ test("resources/read reauthorizes and returns one exact Markdown revision", asyn
   const first = await fixture.send(rpc("resources/read", { uri: EXACT_ENTRY }));
   assert.equal(first.status, 200);
   assert.deepEqual((await json(first)).result, {
+    resultType: "complete",
     contents: [
       {
         uri: EXACT_ENTRY,

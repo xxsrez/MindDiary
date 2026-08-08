@@ -1,8 +1,10 @@
 # Архитектура Mind Diary
 
 Статус: proposal, обновлено 2026-08-08. Product Site components, adapters и
-targeted tests реализованы как deployable source candidate; production
-deployment и live compatibility evidence ещё отсутствуют.
+targeted tests реализованы как deployable source candidate. Direct local
+candidate дополнительно содержит route migration и isolated Codex bridge;
+production deployment этой версии и live compatibility evidence ещё
+отсутствуют.
 
 ## Драйверы и ограничения
 
@@ -123,10 +125,24 @@ composition и automated import graph checks реализованы; live Sites 
 - **Web adapter** принимает Sites identity context и обслуживает control-plane
   pages/commands. Raw OKF file editing не входит в browser UI.
 - **MCP adapter** предоставляет user-scoped content tools через Streamable HTTP.
-  Целевой protocol profile — current stable `2026-07-28`; legacy
-  `2025-11-25` изолируется только для конкретного проверенного client.
+  Целевой stateless profile `2026-07-28` доступен по `POST /api/mcp`, начинает
+  negotiation с `server/discover` и использует current result metadata;
+  `codex-cli 0.147.0` проходит его при opt-in `mcp_2026_07_28`.
+  Отдельный `POST /api/mcp/2025-11-25` изолирует lifecycle compatibility для
+  проверенного `codex-cli 0.147.0`: client предлагает `2025-06-18`, server
+  выбирает `2025-11-25`. Оба adapters вызывают одну content application
+  boundary и заново проверяют Bearer token, scope, current membership и
+  visibility на каждом HTTP request.
 - **Background adapter** выполняет идемпотентную индексацию, outbox delivery и
   safe garbage collection incomplete/unreachable objects.
+
+Exact `/mcp` не принадлежит product router: live Sites probes показывают, что
+этот path перехватывается platform dispatcher до deployed Worker, тогда как
+`/api/mcp` достигает обычной Sites boundary. Поэтому source candidate не
+redirect-ит credential-bearing requests с `/mcp`, а публикует два explicit
+non-reserved endpoint выше. Наблюдение и его ограничения сохранены в
+[датированном capability report](reports/2026-08-07-sites-mcp-capability-gate.md);
+исправление остаётся локальным до нового deployment.
 
 ### 4. Infrastructure adapters
 
@@ -196,10 +212,13 @@ expiry/revocation, строит `ActorContext` и затем на каждом t
 control-plane capabilities и не логируется. `content:write` включает
 `content:read`; write-only token не выпускается.
 
-Codex configuration использует `bearer_token_env_var`. Для Claude Code и других
-clients support объявляется только после conformance test. OAuth 2.1 + PKCE и
-authorization-server metadata остаются target для production/public plugin, но
-не нужны для personal prototype.
+Codex configuration использует `bearer_token_env_var`. Проверенный default
+`codex-cli 0.147.0` направляется на compatibility URL
+`https://{site-host}/api/mcp/2025-11-25`; modern clients — на
+`https://{site-host}/api/mcp`. Для Claude Code и других clients support
+объявляется только после conformance test. OAuth 2.1 + PKCE и
+authorization-server metadata остаются target для production/public plugin,
+но не нужны для personal prototype.
 
 ## Mind identity, `/me` и visibility
 
@@ -400,13 +419,20 @@ explicit target Mind. General cross-Mind search/synthesis требует нов�
 
 - Отдельное приложение `apps/mind-diary-site` собирает Vinext UI и Worker с Web,
   API, MCP и background adapters.
+- Exact `/mcp` исключён из product surface из-за pre-Worker Sites reservation.
+  Modern `2026-07-28` adapter обслуживает `/api/mcp`; isolated compatibility
+  adapter для default `codex-cli 0.147.0` обслуживает
+  `/api/mcp/2025-11-25` и не создаёт session state.
 - D1 event log сохраняет metadata transactions и восстанавливает state после
   нового runtime instance; R2 хранит canonical objects и export archives.
 - Trusted Sites identity, browser CSRF/Origin и Bearer content MCP остаются
   разными security boundaries; browser не рендерит raw Markdown, MCP не
   публикует control tools.
-- Integration/packaging checks подтверждают repository contracts, но не live
-  Sites routing, persistence или client compatibility.
+- Integration/transport checks подтверждают оба endpoint, negotiation,
+  request-scoped token/access reauthorization и local Codex tool flow в default
+  compatibility и opt-in modern modes; packaging checks подтверждают repository
+  contracts. Это не подтверждает routing, persistence или client compatibility
+  после production Sites publish.
 
 ### OpenAI Sites MVP production
 
@@ -414,8 +440,8 @@ explicit target Mind. General cross-Mind search/synthesis требует нов�
   web/admin UI с Sign in with ChatGPT.
 - Source candidate использует D1/R2 bindings; их live availability, quotas и
   atomicity нужных operations остаются release gate.
-- Streamable HTTP MCP реализован в том же Worker, но его Sites proxy/runtime
-  compatibility ещё не подтверждена live.
+- Streamable HTTP MCP реализован в том же Worker по non-reserved paths, но
+  Sites proxy/runtime compatibility новой версии ещё не подтверждена live.
 - Gate включает real Codex client, stable HTTPS endpoint, streaming, bearer
   forwarding/configuration, protocol lifecycle и persistence across deployments.
   Claude Code и другие clients получают собственную non-blocking gate до
@@ -470,9 +496,9 @@ audit log.
 
 - Даст ли Sites stable external identifier, позволяющий позже заменить ручной
   fail-closed account recovery безопасным automatic relink?
-- Пройдёт ли Sites реальный Streamable HTTP MCP gate? До положительного
-  evidence это blocker MVP production release, а не основание автоматически
-  выбрать отдельный runtime.
+- Пройдут ли migrated `/api/mcp`, isolated `/api/mcp/2025-11-25` и Bearer
+  forwarding реальный Sites gate? До положительного evidence это blocker MVP
+  production release, а не основание автоматически выбрать отдельный runtime.
 - Как реализовать immediate full deletion и доказать удаление replicated/index
   data до появления production retention model?
 - Нужны ли позже soft delete/recovery и formal privacy-retention policy?
