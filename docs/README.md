@@ -1,7 +1,9 @@
 # Документация Mind Diary
 
-Mind Diary пока находится на стадии проектирования. Документы ниже разделяют
-проверенные внешние факты, предлагаемый дизайн и ещё не реализованное поведение.
+Mind Diary имеет локально проверенный deployable source candidate продукта, но
+ещё не имеет подтверждённого production deployment. Документы ниже разделяют
+проверенные внешние факты, реализованный repository behavior, предлагаемый
+дизайн и ещё не подтверждённое live-поведение.
 
 ## Начать отсюда
 
@@ -83,6 +85,9 @@ Mind Diary пока находится на стадии проектирова�
 - [Security, privacy и threat regression на 2026-08-07](reports/2026-08-07-security-privacy-regression.md)
   — локальная fail-closed suite для identity, Origin/CSRF, token/ACL/locator
   boundaries, safe rendering и privacy-redacted evidence; без live claim.
+- [Product Site source candidate на 2026-08-08](reports/2026-08-08-product-site-candidate.md)
+  — локально собранное Sites-compatible product application, targeted evidence
+  и остающиеся coordinator-owned live release gates.
 
 ## Статусы документов
 
@@ -125,7 +130,9 @@ High-level контур проекта закрыт следующими док�
 - конкурентная среда, уточнённый ICP, риски и validation gates — в датированном
   market assessment;
 - текущие платформенные предпосылки и их ограничения — в датированном platform
-  report.
+  report;
+- состав и граница доказанного Product Site source candidate — в датированном
+  candidate report.
 
 Machine-readable OpenAPI/JSON Schemas, отдельный threat model, product
 deployment guide и changelog пока не созданы. Operations runbook описывает

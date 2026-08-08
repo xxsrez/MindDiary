@@ -79,6 +79,8 @@ const expectedDependencies = new Map(
       "@mind-diary/application-background",
       "@mind-diary/application-content",
       "@mind-diary/application-control",
+      "@mind-diary/application-ports",
+      "@mind-diary/domain",
     ],
     "@mind-diary/test-fixtures": [
       "@mind-diary/domain",

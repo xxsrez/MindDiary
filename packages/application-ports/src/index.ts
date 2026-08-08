@@ -103,6 +103,7 @@ export type {
   KnowledgeSpace,
   PersonalSpaceBinding,
   Principal,
+  PrincipalId,
   PrincipalAccountSnapshot,
   SensitiveExternalBinding,
   SpaceMembership,
@@ -912,7 +913,134 @@ export type TransferOrdinaryMindOwnershipResult =
         | "invalid_record";
     };
 
-export interface OrdinaryMindMetadataTransaction extends AuthorizationTransaction {
+export type MembershipControlOperation =
+  | "change_membership_role"
+  | "revoke_membership"
+  | "leave_space";
+export type MembershipMutationRole = "reader" | "editor" | "admin";
+
+export interface MembershipControlTargetQuery {
+  readonly spaceId: SpaceId;
+  readonly memberId?: MembershipId;
+  readonly principalId?: PrincipalId;
+}
+
+export type MembershipControlTargetResult =
+  | {
+      readonly kind: "found";
+      readonly mindKind: "ordinary" | "personal";
+      readonly membership: Readonly<SpaceMembership>;
+    }
+  | { readonly kind: "mind_not_found" }
+  | { readonly kind: "membership_not_found" };
+
+export interface MembershipMutationReplayRequest {
+  readonly operation: MembershipControlOperation;
+  readonly principalId: PrincipalId;
+  readonly spaceId: SpaceId;
+  readonly idempotencyKey: IdempotencyKey;
+  readonly canonicalRequestHash: Sha256Digest;
+}
+
+export type MembershipMutationReplayResult =
+  | { readonly kind: "not_found" }
+  | { readonly kind: "idempotency_conflict" }
+  | {
+      readonly kind: "replayed";
+      readonly membership: Readonly<SpaceMembership>;
+      readonly changed: boolean;
+      readonly requiredCapability:
+        | "content:browse"
+        | "members:manage-basic"
+        | "members:manage-admin";
+    };
+
+export interface ApplyMembershipMutationRequest
+  extends MembershipMutationReplayRequest {
+  readonly targetMembershipId: MembershipId;
+  readonly role: MembershipMutationRole | null;
+  readonly expectedMembershipVersion: SpaceMembership["version"];
+  readonly requiredCapability:
+    | "content:browse"
+    | "members:manage-basic"
+    | "members:manage-admin";
+  readonly authorizationStamp: Readonly<AuthorizationStamp>;
+  readonly occurredAt: UtcInstant;
+  readonly requestId: ActorContext["requestId"];
+  readonly auditEventId: AuditEventId;
+  readonly auditOutboxMessageId: OutboxMessageId;
+}
+
+export type ApplyMembershipMutationResult =
+  | {
+      readonly kind: "applied";
+      readonly membership: Readonly<SpaceMembership>;
+      readonly changed: boolean;
+      readonly replayed: boolean;
+    }
+  | {
+      readonly kind:
+        | "mind_not_found"
+        | "membership_not_found"
+        | "personal_mind"
+        | "forbidden"
+        | "owner_membership"
+        | "membership_version_conflict"
+        | "authorization_state_changed"
+        | "idempotency_conflict"
+        | "effect_conflict"
+        | "invalid_record";
+    };
+
+export interface MembershipControlTransaction extends AuthorizationTransaction {
+  readMembershipControlTarget(
+    query: Readonly<MembershipControlTargetQuery>,
+  ): Promise<MembershipControlTargetResult>;
+  applyMembershipMutation(
+    request: Readonly<ApplyMembershipMutationRequest>,
+  ): Promise<ApplyMembershipMutationResult>;
+}
+
+export interface MembershipControlStore extends AuthorizationStateReader {
+  readMembershipMutationReplay(
+    request: Readonly<MembershipMutationReplayRequest>,
+  ): Promise<MembershipMutationReplayResult>;
+  runMembershipControlTransaction<Result>(
+    operation: (transaction: MembershipControlTransaction) => Promise<Result>,
+  ): Promise<Result>;
+}
+
+export interface ControlMemberProjection {
+  readonly memberId: MembershipId;
+  readonly principalId: PrincipalId;
+  readonly displayName: string;
+  readonly role: Role;
+  readonly state: MembershipState;
+  readonly membershipVersion: Version;
+}
+
+export interface ControlInvitationProjection {
+  readonly invitationId: InvitationId;
+  readonly mindId: SpaceId;
+  readonly mindName: string;
+  readonly direction: "incoming" | "outgoing";
+  readonly counterpartyPrincipalId: PrincipalId;
+  readonly counterpartyDisplayName: string;
+  readonly proposedRole: "reader" | "editor" | "admin";
+  readonly state: SpaceInvitation["state"];
+  readonly invitationVersion: Version;
+  readonly expiresAt: UtcInstant;
+}
+
+/** Canonical control-plane projections; adapters must join current metadata. */
+export interface ControlReadStore extends AuthorizationStateReader {
+  listControlMembers(spaceId: SpaceId): Promise<readonly Readonly<ControlMemberProjection>[]>;
+  listControlInvitations(principalId: PrincipalId): Promise<readonly Readonly<ControlInvitationProjection>[]>;
+}
+
+export interface OrdinaryMindMetadataTransaction
+  extends AuthorizationTransaction,
+    MembershipControlTransaction {
   /** Classifies own/foreign Personal Minds before any target-identity lookup. */
   classifyPersonalMindTarget(
     request: PersonalMindTargetRequest,

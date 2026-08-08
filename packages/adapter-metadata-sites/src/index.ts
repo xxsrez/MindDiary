@@ -80,6 +80,7 @@ const TRANSACTION_METHODS = new Set([
   "runAccountBootstrapTransaction",
   "runPersonalMindTransaction",
   "runOrdinaryMindTransaction",
+  "runMembershipControlTransaction",
   "runAccountDeletionTransaction",
   "runContentCommitTransaction",
   "runExportStartTransaction",

@@ -73,6 +73,8 @@ import {
   type AccountDeletionDependencies,
 } from "@mind-diary/application-control";
 
+export * from "./product-site.js";
+
 export const COMPOSITION_SELECTION = {
   applications: {
     control: { queries: CONTROL_QUERIES, commands: CONTROL_COMMANDS },
@@ -97,7 +99,7 @@ export const COMPOSITION_SELECTION = {
     search: SITES_SEARCH_ADAPTER,
     audit: SITES_AUDIT_ADAPTER,
   },
-  deployableServiceImplemented: false,
+  deployableServiceImplemented: true,
 } as const;
 
 export interface SitesPersistenceBoundaryOptions {

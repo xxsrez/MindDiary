@@ -15,9 +15,11 @@ MVP в OpenAI Sites. При подтверждённой пользовател�
 post-MVP infrastructure direction — AWS/AgentCore; это также самостоятельная
 учебная цель проекта, но не текущая release surface.
 
-Сейчас репозиторий содержит design bootstrap и воспроизводимый engineering
-baseline с package boundaries, deterministic fixtures и automated checks.
-Исполняемый MCP server, UI и облачная инфраструктура ещё не реализованы.
+Сейчас репозиторий содержит deployable source candidate продукта для OpenAI
+Sites: отдельное приложение `apps/mind-diary-site`, authenticated web/control
+routes, Streamable HTTP `/mcp`, D1/R2 adapters и Worker background handlers.
+Локальные build и contract checks пройдены, но production deployment, live URL,
+persistence-after-redeploy, MCP Inspector и real Codex ещё не подтверждены.
 
 Важная оговорка: подключённая MCP-база не находится целиком в контексте модели.
 Она виртуально доступна через поиск и точечное чтение, а в контекст попадают
@@ -36,6 +38,7 @@ baseline с package boundaries, deterministic fixtures и automated checks.
 - [REST и MCP API](docs/specs/api.md)
 - [Проверка актуальности OKF](docs/reports/2026-08-05-okf-status.md)
 - [Проверка платформенных предпосылок](docs/reports/2026-08-05-platform-status.md)
+- [Product Site source candidate](docs/reports/2026-08-08-product-site-candidate.md)
 - [Локальная разработка и проверки](docs/guides/development.md)
 
 ## Локальная проверка
@@ -53,15 +56,10 @@ full-bundle OKF, documentation, architecture и secret/config checks. Она н�
 
 ## Статус
 
-Базовый фичасет первого прототипа зафиксирован в ADR и спецификациях; подробный
-REST/MCP contract подготовлен как proposal для верификации. Engineering
-baseline уже фиксирует module graph и canonical checks. Следующий этап —
-реализовать local vertical slice:
-authenticated account bootstrap, `/me`, roles/visibility, user-scoped
-Streamable HTTP MCP с custom Mind-aware tools, atomic content commits, history и
-deterministic OKF 0.2 export, после чего весь обязательный slice должен пройти
-production gate в Sites. ZIP import и transport producer-defined non-Markdown
-files в этот scope не входят, но imports и named checkpoints явно планируются
-post-MVP; support
-non-Markdown files/assets остаётся отдельным открытым решением. Команды
-build/check работают только для baseline; команды запуска сервиса пока нет.
+Product Site source candidate соединяет принятые application use cases с
+Sites-compatible Vinext/Worker runtime, durable D1/R2 adapters и background
+jobs. Browser surface остаётся control plane и не рендерит raw Markdown;
+Bearer `/mcp` не публикует membership/control tools. Это source/build evidence,
+а не production claim: следующий этап — sealed full gate exact candidate SHA,
+Sites publish и live web, persistence, MCP Inspector и Codex gates. ZIP import,
+producer-defined non-Markdown files и named checkpoints остаются вне MVP.

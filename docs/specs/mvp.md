@@ -1,7 +1,8 @@
 # Спецификация первого прототипа
 
-Статус: proposal, 2026-08-05. Product requirements ниже приняты; schemas,
-storage и deployment ещё не реализованы.
+Статус: proposal, обновлено 2026-08-08. Product requirements ниже приняты;
+deployable Product Site source candidate и его targeted contracts реализованы,
+но production deployment и обязательное live evidence ещё не получены.
 
 ## Цель
 

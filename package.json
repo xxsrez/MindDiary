@@ -2,7 +2,7 @@
   "name": "mind-diary",
   "version": "0.0.0",
   "private": true,
-  "description": "Mind Diary engineering baseline; no deployable service is implemented yet.",
+  "description": "Mind Diary deployable OpenAI Sites product source candidate and engineering baseline.",
   "type": "module",
   "packageManager": "npm@10.9.2",
   "engines": {
@@ -20,9 +20,10 @@
     "test": "npm run test:unit && npm run test:integration && npm run test:conformance",
     "validate:fixtures": "npm run build --silent && node scripts/validate-okf-fixtures.mjs",
     "check:architecture": "node scripts/check-architecture.mjs",
+    "check:product-site": "node scripts/check-product-site.mjs",
     "check:docs": "node scripts/check-docs.mjs",
     "check:secrets": "node scripts/check-secrets.mjs",
-    "check": "npm run clean && npm run build && node --test tests/unit/*.test.mjs tests/integration/*.test.mjs tests/conformance/*.test.mjs && npm run validate:fixtures && npm run check:architecture && npm run check:docs && npm run check:secrets"
+    "check": "npm run clean && npm run build && node --test tests/unit/*.test.mjs tests/integration/*.test.mjs tests/conformance/*.test.mjs && npm run validate:fixtures && npm run check:architecture && npm run check:product-site && npm run check:docs && npm run check:secrets"
   },
   "dependencies": {
     "yaml": "2.9.0"

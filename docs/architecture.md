@@ -1,7 +1,8 @@
 # Архитектура Mind Diary
 
-Статус: proposal, 2026-08-05. Документ описывает целевую форму первого
-прототипа; components, schemas, tests и deployment ещё не реализованы.
+Статус: proposal, обновлено 2026-08-08. Product Site components, adapters и
+targeted tests реализованы как deployable source candidate; production
+deployment и live compatibility evidence ещё отсутствуют.
 
 ## Драйверы и ограничения
 
@@ -113,9 +114,9 @@ Core первого прототипа зависит от `MetadataStore`, `Obj
 Точная форма trusted context, обязанности каждого port, отдельные control,
 content и background façades, transaction boundaries и обязательные dependency
 rules зафиксированы в
-[specification границ реализации](specs/implementation-boundaries.md). Пока
-runtime и automated import graph checks не созданы, это архитектурный contract,
-а не подтверждённая compile-time изоляция.
+[specification границ реализации](specs/implementation-boundaries.md). Runtime
+composition и automated import graph checks реализованы; live Sites semantics
+проверяются отдельно и не выводятся из compile-time изоляции.
 
 ### 3. Protocol adapters
 
@@ -129,9 +130,10 @@ runtime и automated import graph checks не созданы, это архит�
 
 ### 4. Infrastructure adapters
 
-- Local: filesystem/object directory, SQLite transactional metadata/FTS.
-- Sites MVP target: platform persistence, включая D1/R2 где применимо, только
-  после live-проверки bindings, quotas и нужной transactional semantics.
+- Local: in-memory/filesystem и SQLite adapters для contract fixtures.
+- Sites MVP source candidate: D1 metadata/search/audit и R2 canonical
+  objects/export. Их production bindings, quotas и нужная transactional
+  semantics требуют live-проверки после deployment.
 - Post-MVP AWS adapters: S3 canonical objects, DynamoDB transactional
   metadata/outbox и optional OpenSearch Serverless derived index.
 
@@ -394,24 +396,26 @@ explicit target Mind. General cross-Mind search/synthesis требует нов�
 
 ## Deployment profiles
 
-### Local vertical slice
+### Product Site source candidate
 
-- Один portable process с Web/API и MCP adapters.
-- SQLite хранит principals, external bindings, handles, Personal Mind binding,
-  memberships, invitations, tokens, revisions, HEAD, idempotency, audit/outbox
-  и FTS index.
-- Filesystem/object directory хранит content-addressed canonical objects.
-- Integration suite проверяет account, roles/visibility, history, concurrent
-  commits, export и MCP lifecycle.
+- Отдельное приложение `apps/mind-diary-site` собирает Vinext UI и Worker с Web,
+  API, MCP и background adapters.
+- D1 event log сохраняет metadata transactions и восстанавливает state после
+  нового runtime instance; R2 хранит canonical objects и export archives.
+- Trusted Sites identity, browser CSRF/Origin и Bearer content MCP остаются
+  разными security boundaries; browser не рендерит raw Markdown, MCP не
+  публикует control tools.
+- Integration/packaging checks подтверждают repository contracts, но не live
+  Sites routing, persistence или client compatibility.
 
 ### OpenAI Sites MVP production
 
 - Sites — единственная production platform текущего MVP и подтверждённый host
   web/admin UI с Sign in with ChatGPT.
-- D1/R2 используются только после проверки bindings, quotas и atomicity нужных
-  operations.
-- Streamable HTTP MCP в том же Sites deployment остаётся compatibility
-  experiment, а не подтверждённой возможностью.
+- Source candidate использует D1/R2 bindings; их live availability, quotas и
+  atomicity нужных operations остаются release gate.
+- Streamable HTTP MCP реализован в том же Worker, но его Sites proxy/runtime
+  compatibility ещё не подтверждена live.
 - Gate включает real Codex client, stable HTTPS endpoint, streaming, bearer
   forwarding/configuration, protocol lifecycle и persistence across deployments.
   Claude Code и другие clients получают собственную non-blocking gate до

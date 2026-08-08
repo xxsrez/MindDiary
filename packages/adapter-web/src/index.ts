@@ -9,6 +9,12 @@ export * from "./onboarding.js";
 export * from "./token-management.js";
 export * from "./sites-identity-binding.js";
 export * from "./request-security.js";
+export * from "./product-http.js";
+export * from "./export-download-http.js";
+export * from "./ordinary-minds-management.js";
+export * from "./account-deletion.js";
+export * from "./invitations-membership.js";
+export * from "./visibility-catalog.js";
 
 import { WEB_CONTROL_REQUEST_SECURITY_POLICY } from "./request-security.js";
 
@@ -58,6 +64,7 @@ export const WEB_CONTROL_ROUTES = [
   ["POST", "/api/v1/minds/{mind_ref}/invitations"],
   ["POST", "/api/v1/invitations/{invitation_id}/accept"],
   ["POST", "/api/v1/invitations/{invitation_id}/reject"],
+  ["POST", "/api/v1/invitations/{invitation_id}/reissue"],
   ["DELETE", "/api/v1/invitations/{invitation_id}"],
   ["GET", "/api/v1/mcp-tokens"],
   ["POST", "/api/v1/mcp-tokens"],

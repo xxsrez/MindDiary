@@ -21,6 +21,8 @@
     { "path": "../adapter-web" },
     { "path": "../application-background" },
     { "path": "../application-content" },
-    { "path": "../application-control" }
+    { "path": "../application-control" },
+    { "path": "../application-ports" },
+    { "path": "../domain" }
   ]
 }

@@ -2339,3 +2339,5 @@ export function createMcpHttpHandler(
     }
   };
 }
+
+export * from "./product-application.js";
