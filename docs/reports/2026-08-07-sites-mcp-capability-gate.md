@@ -14,11 +14,14 @@ stateless MCP `2026-07-28`, JSON и request-scoped SSE, per-request Bearer auth,
 CAS concurrency, idempotent retry и итоговое состояние после errors.
 
 Exact production probe успешно собран и развёрнут owner-only в OpenAI Sites,
-но обязательный Codex MCP flow не проходит. Внешний `POST /mcp` с valid
-application Bearer получает dispatcher-level `404 Not found` и не достигает
-Worker. Реальный `codex-cli 0.146.1` дополнительно начинает transport с
-`initialize`, то есть не использует требуемый stateless
-`server/discover` profile `2026-07-28`.
+но обязательный Codex MCP flow не проходит. Последняя product version 2
+подтвердила authenticated web/control slice, включая account bootstrap,
+Personal Mind и lifecycle smoke для MCP token. При этом exact `POST /mcp`
+снова получил `404 Not found` без соответствующего Worker event; соседние
+не-exact paths прошли через обычную Sites authentication boundary с HTTP 401.
+Эта совокупность наблюдений поддерживает inference о специальной обработке
+exact `/mcp` до deployed Worker, но не раскрывает недокументированное устройство
+платформы. Ранее проверенный `codex-cli 0.147.0` также не прошёл этот boundary.
 
 Поэтому production release 0.1 явно blocked. Live D1/R2 persistence, JSON/SSE
 и application challenge нельзя честно подтвердить через недостижимый endpoint.
@@ -58,6 +61,12 @@ Durable authorization identity будущего сервиса по-прежне
 Sites также документирует D1/R2 logical bindings, добавление `project_id` после
 provisioning и отдельные saved version/deployment stages. Наличие bindings в
 manifest само по себе не доказывает persistence.
+
+По состоянию на 2026-08-08 актуальная официальная страница Sites описывает
+hosting websites, web apps и games, D1/R2, identity, access, secrets, versions
+и deployments. Она не документирует hosting внешнего MCP endpoint или особое
+поведение `/mcp`. Это граница опубликованного контракта, а не доказательство
+внутреннего устройства Sites dispatcher.
 
 Первичные источники:
 
@@ -129,6 +138,8 @@ owner-only Sites dispatch не пропускает personal Bearer MCP request 
 stateless `2026-07-28` profile.
 
 ## Повторная проверка product deployment в AND-77
+
+### Product version 1: исходная проверка
 
 Проверка выполнена 2026-08-08 на exact product candidate, а не на раннем
 non-product probe:
@@ -223,15 +234,78 @@ env -u MIND_DIARY_MCP_TOKEN codex exec \
 инициализировался. Таким образом, обновление с проверенного ранее 0.146.1 до
 0.147.0 не дало positive resolution lifecycle gap.
 
-### Итог AND-77
+### Итог version 1
 
-AND-77 не готова к закрытию. Positive resolution dispatcher и lifecycle gaps
-отсутствует; Inspector и authenticated product conformance не пройдены.
+Этот recheck не дал основания закрыть AND-77. Positive resolution dispatcher и
+lifecycle gaps отсутствовал; Inspector и authenticated product conformance не
+были пройдены.
 Без account bootstrap и product token нельзя честно проверить discovery,
 tools/resources, list/resolve, browse/search/fetch, history, validation,
 controlled commit, stale conflict, export, denials, revocation и post-state.
 Story остаётся open/blocked. AWS/container fallback, bypass tokens, SIWC
 bypass, cookies и выдуманные bearer secrets не использовались.
+
+### Product version 2: текущее release evidence
+
+Последний recheck выполнен на exact production Site Mind Diary:
+
+- source/main Git SHA:
+  `0a060ad85e4f8ecb075dea548213b11543b934a7`;
+- Sites project:
+  `appgprj_example1428fe59b5d8381c`;
+- saved version 2:
+  `appgprj_example1428fe59b5d8381c~appgver_examplebe9740dff0987eb0`;
+- deployment:
+  `appgdep_examplebdfbef1311c64261`;
+- owner-only URL: `https://mind-diary.example.invalid`.
+
+Authenticated browser/control smoke прошёл без console errors. Подтверждены
+account bootstrap, private Personal Mind `/me`, выпуск named MCP token с
+show-once secret и его revoke. После smoke активного smoke token не осталось;
+secret, identity values, cookies, CSRF и private content в report не записаны.
+
+#### Exact route-boundary probe
+
+В `2026-08-08T15:04:50Z` один и тот же redacted non-private raw POST probe дал
+следующую матрицу:
+
+| Request | Наблюдаемый ответ |
+|---|---|
+| `POST /mcp` | HTTP 404, `text/plain; charset=utf-8`, 9 bytes, body `Not found`, SHA-256 `e3ebaa16dd9d9b9fc107c42183fb6cf9d22927e1af03dbbdfa0ccc38e4e4ac31` |
+| `POST /mcp?route_probe=1` | тот же HTTP 404, content type, length, body и digest |
+| `POST /mcp/` | HTTP 401, `text/html`, обычная Sites authentication boundary |
+| `POST /api/mcp` | HTTP 401, `text/html`, обычная Sites authentication boundary |
+| `POST /__mind_diary_route_probe` | HTTP 401, `text/html`, обычная Sites authentication boundary |
+
+Bounded Worker logs не содержат matching exact `POST /mcp`, тогда как
+authenticated web/control requests достигают Worker. Это не доказывает
+конкретную реализацию Sites dispatcher, но вместе с отличием exact `/mcp` от
+соседних paths поддерживает inference: exact route перехватывается или иначе
+специально обрабатывается до deployed product Worker.
+
+Repository-owned path не объясняет наблюдаемый 404. Product
+[Worker entry](../../apps/mind-diary-site/worker/index.ts) вызывает shared
+runtime до Vinext fallback, а
+[composition root](../../packages/composition-root/src/product-site.ts)
+перехватывает pathname `/mcp` до web handler. В tracked Sites hosting config
+есть project и D1/R2 bindings, но нет отдельной repository-owned route map;
+проверка source/config не нашла пропущенного правила, которое должно было бы
+доставить exact `/mcp` в Worker.
+
+Ограничение evidence существенно: authenticated raw `POST /mcp` на version 2
+не доказан. Использованная browser automation могла пройти web/control UI, но
+не могла отправить такой raw authenticated request; создавать SIWC bypass для
+этого запрещено release contract. Поэтому 404 нельзя выдавать за результат
+application Bearer auth, а web smoke — за MCP conformance.
+
+#### Итог version 2 и статус AND-77
+
+Positive MCP Inspector + Codex conformance gate остаётся blocked: route boundary
+не даёт positive evidence, что external client достигает product MCP adapter,
+а protocol operations и required positive/negative/post-state matrix на этом
+deployment не пройдены. AND-77 остаётся open. Отрицательный route probe не
+закрывает story и не разрешает fallback в AWS, AgentCore, отдельный container,
+public access или SIWC bypass.
 
 ## Repeatable live procedure после platform/client change
 
