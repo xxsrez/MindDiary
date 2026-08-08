@@ -1,5 +1,0 @@
-# Keep repository text deterministic across operating systems.
-* text=auto eol=lf
-
-# Preserve binary brand assets byte-for-byte.
-*.png binary
