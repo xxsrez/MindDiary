@@ -2,8 +2,9 @@
 
 Статус: **live gate выполнен с отрицательным результатом; release 0.1
 blocked**. Этот report фиксирует локально проверенную поверхность AND-37,
-exact production probe и воспроизводимый отказ Sites/Codex boundary. Он не
-подтверждает совместимость Codex с endpoint.
+exact production probe, повторную проверку exact product deployment в AND-77
+и воспроизводимый отказ Sites/Codex boundary. Он не подтверждает совместимость
+Codex с endpoint.
 
 ## Вывод
 
@@ -126,6 +127,111 @@ authenticated request, но не обещает stable external subject.
 owner-only Sites dispatch не пропускает personal Bearer MCP request к Worker,
 а проверенный Codex build ещё использует initialize lifecycle вместо принятого
 stateless `2026-07-28` profile.
+
+## Повторная проверка product deployment в AND-77
+
+Проверка выполнена 2026-08-08 на exact product candidate, а не на раннем
+non-product probe:
+
+- Git/main: `31bd5b8c2770ec0d954ce48674987678274591dc`;
+- Sites project:
+  `appgprj_example1428fe59b5d8381c`;
+- saved version 1:
+  `appgprj_example1428fe59b5d8381c~appgver_example55fdbe7d5526298f`;
+- deployment:
+  `appgdep_example3c6fb0a6d8d6580f`;
+- owner-only URL: `https://mind-diary.example.invalid`;
+- runtime env revision: 1.
+
+Authenticated browser открыл `/` с HTTP 200 без console errors. Product
+response сообщил только безопасный для report факт
+`registration_required=true`; account bootstrap не выполнялся, поэтому
+product MCP bearer token отсутствовал. Identity values, cookies и request IDs
+не сохранялись.
+
+### Достигает ли `POST /mcp` product Worker
+
+Нет. В `2026-08-08T13:24:07Z` POST с application Bearer header получил до
+Worker HTTP 404, `text/plain`, body `Not found`. Bounded Worker logs примерно в
+13:33Z содержали только два authenticated GET event (`/` и `/me`) и не
+содержали соответствующего `POST /mcp`.
+
+Независимый credential-free recheck отправил корректно размеченный
+`server/discover` request принятого profile, чтобы отсутствие product token не
+подменять выдуманным secret:
+
+```bash
+curl --request POST 'https://mind-diary.example.invalid/mcp' \
+  --header 'content-type: application/json' \
+  --header 'accept: application/json, text/event-stream' \
+  --header 'MCP-Protocol-Version: 2026-07-28' \
+  --header 'Mcp-Method: server/discover' \
+  --data '<redacted non-private server/discover JSON>'
+```
+
+В `2026-08-08T13:35:16Z` результат снова был HTTP 404,
+`text/plain; charset=utf-8`, 9 bytes, body `Not found`, SHA-256
+`e3ebaa16dd9d9b9fc107c42183fb6cf9d22927e1af03dbbdfa0ccc38e4e4ac31`.
+Следующая bounded выборка Worker logs за пять минут вернула
+`event_count=0`. Если бы request достиг application auth boundary, отсутствие
+Bearer должно было проверяться Worker-ом; фактические 404 и zero Worker events
+классифицируют отказ как dispatcher-level.
+
+### Текущие клиенты
+
+Проверенные version commands и результаты:
+
+```text
+$ npm view @modelcontextprotocol/inspector version bin --json
+{"version":"2.1.0","bin":{"mcp-inspector":"clients/launcher/build/index.js"}}
+
+$ codex --version
+codex-cli 0.147.0
+```
+
+Current MCP Inspector 2.1.0 был запущен ephemeral из task-owned npm cache без
+изменения repository `package.json` или lockfile. Credential-free bounded CLI
+probe против exact product URL:
+
+```bash
+npm exec --yes --package @modelcontextprotocol/inspector@2.1.0 -- \
+  mcp-inspector --cli \
+  --server-url 'https://mind-diary.example.invalid/mcp' \
+  --transport http --method tools/list \
+  --connect-timeout 15000 --format json
+```
+
+В 2026-08-08T13:40Z Inspector завершился с
+`{"error":{"message":"Error POSTing to endpoint: Not found","status":404}}`.
+Он не достиг protocol discovery или tools list; это fail, а не conformance
+pass.
+
+Для current Codex выполнен ephemeral credential-free startup только против
+exact product URL, без записи server config и без private prompt/query:
+
+```bash
+env -u MIND_DIARY_MCP_TOKEN codex exec \
+  --ephemeral --ignore-user-config --ignore-rules \
+  --skip-git-repo-check --sandbox read-only \
+  -c 'mcp_servers.mind_diary_product.url="https://mind-diary.example.invalid/mcp"' \
+  -c 'mcp_servers.mind_diary_product.required=true' \
+  '<non-private readiness prompt>'
+```
+
+В `2026-08-08T13:35:50Z` `codex-cli 0.147.0` отправил legacy
+`initialize` и завершил startup с `HTTP 404: Not found`; required MCP server не
+инициализировался. Таким образом, обновление с проверенного ранее 0.146.1 до
+0.147.0 не дало positive resolution lifecycle gap.
+
+### Итог AND-77
+
+AND-77 не готова к закрытию. Positive resolution dispatcher и lifecycle gaps
+отсутствует; Inspector и authenticated product conformance не пройдены.
+Без account bootstrap и product token нельзя честно проверить discovery,
+tools/resources, list/resolve, browse/search/fetch, history, validation,
+controlled commit, stale conflict, export, denials, revocation и post-state.
+Story остаётся open/blocked. AWS/container fallback, bypass tokens, SIWC
+bypass, cookies и выдуманные bearer secrets не использовались.
 
 ## Repeatable live procedure после platform/client change
 
