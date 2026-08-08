@@ -42,6 +42,7 @@ class GitMixin:
         remote = root / "remote.git"
         repo = root / "repo"
         self.git(root, "init", "--bare", str(remote))
+        self.git(remote, "symbolic-ref", "HEAD", "refs/heads/main")
         self.git(root, "init", "-b", "main", str(repo))
         self.git(repo, "config", "user.name", "test")
         self.git(repo, "config", "user.email", "test@example.invalid")
