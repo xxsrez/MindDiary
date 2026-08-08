@@ -39,7 +39,8 @@ const secretPatterns = [
 for (const relativePath of listed) {
   if (
     forbiddenTrackedConfig.test(relativePath) &&
-    relativePath !== ".env.example"
+    relativePath !== ".env.example" &&
+    !relativePath.endsWith("/.env.example")
   ) {
     errors.push(`${relativePath}: local environment file must not be tracked`);
   }
@@ -52,11 +53,15 @@ for (const relativePath of listed) {
   }
 }
 
-const envExample = await readFile(resolve(root, ".env.example"), "utf8");
-for (const line of envExample.split("\n")) {
-  const match = line.match(/^([A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|KEY)[A-Z0-9_]*)=(.*)$/);
-  if (match && match[2].trim() !== "") {
-    errors.push(`.env.example: ${match[1]} must be empty or a documented placeholder`);
+for (const relativePath of listed.filter(
+  (path) => path === ".env.example" || path.endsWith("/.env.example"),
+)) {
+  const envExample = await readFile(resolve(root, relativePath), "utf8");
+  for (const line of envExample.split("\n")) {
+    const match = line.match(/^([A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|KEY)[A-Z0-9_]*)=(.*)$/);
+    if (match && match[2].trim() !== "") {
+      errors.push(`${relativePath}: ${match[1]} must be empty or a documented placeholder`);
+    }
   }
 }
 
