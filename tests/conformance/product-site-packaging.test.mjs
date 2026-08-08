@@ -6,10 +6,13 @@ import { resolve } from "node:path";
 const root = resolve(import.meta.dirname, "../..");
 const app = resolve(root, "apps/mind-diary-site");
 
-test("product Site owns deployable Sites packaging and no project identity claim", async () => {
+test("product Site packaging binds only the created project and durable resources", async () => {
   const hosting = JSON.parse(await readFile(resolve(app, ".openai/hosting.json"), "utf8"));
-  assert.deepEqual(hosting, { d1: "DB", r2: "MIND_DIARY_BUCKET" });
-  assert.equal("project_id" in hosting, false);
+  assert.deepEqual(hosting, {
+    project_id: "appgprj_example1428fe59b5d8381c",
+    d1: "DB",
+    r2: "MIND_DIARY_BUCKET",
+  });
   await stat(resolve(app, "worker/index.ts"));
   await stat(resolve(app, "drizzle/0000_product_site.sql"));
   await stat(resolve(app, "package-lock.json"));
