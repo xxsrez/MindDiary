@@ -2,7 +2,7 @@
   "name": "mind-diary",
   "version": "0.0.0",
   "private": true,
-  "description": "Mind Diary deployable OpenAI Sites source candidate; production deployment is not yet verified.",
+  "description": "Mind Diary deployable OpenAI Sites MVP; owner-only production web, persistence, and Codex MCP gates are verified.",
   "type": "module",
   "packageManager": "npm@10.9.2",
   "engines": {
