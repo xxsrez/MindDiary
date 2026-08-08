@@ -1,5 +1,0 @@
-.next/
-dist/
-.wrangler/
-.env*
-!.env.example
