@@ -4,6 +4,11 @@ import {
   InMemoryPrivacySafeObservabilitySink,
   OBSERVABILITY_ADAPTER,
 } from "@mind-diary/adapter-audit-memory";
+import {
+  SITES_AUDIT_ADAPTER,
+  createSitesAuditSink,
+  type D1DatabaseLike as AuditD1DatabaseLike,
+} from "../../adapter-audit-sites/dist/index.js";
 import { BACKGROUND_APPLICATION_BOUNDARY } from "@mind-diary/adapter-background";
 import {
   MCP_APPLICATION_BOUNDARY,
@@ -18,13 +23,28 @@ import {
   InMemoryRevisionMetadataStore,
 } from "@mind-diary/adapter-metadata-memory";
 import {
+  SITES_METADATA_ADAPTER,
+  createSitesMetadataStore,
+  type D1DatabaseLike as MetadataD1DatabaseLike,
+} from "../../adapter-metadata-sites/dist/index.js";
+import {
   OBJECT_ADAPTER,
   InMemoryObjectStore,
 } from "@mind-diary/adapter-object-memory";
 import {
+  SITES_OBJECT_ADAPTER,
+  createSitesObjectStore,
+  type R2BucketLike,
+} from "../../adapter-object-sites/dist/index.js";
+import {
   SEARCH_ADAPTER,
   InMemoryExactRevisionSearchIndex,
 } from "@mind-diary/adapter-search-memory";
+import {
+  SITES_SEARCH_ADAPTER,
+  createSitesSearchIndex,
+  type D1DatabaseLike as SearchD1DatabaseLike,
+} from "../../adapter-search-sites/dist/index.js";
 import {
   SECURITY_ADAPTER,
   createWebCryptoTokenHasher,
@@ -71,8 +91,44 @@ export const COMPOSITION_SELECTION = {
     security: SECURITY_ADAPTER,
     audit: AUDIT_ADAPTER,
   },
+  productionOutbound: {
+    metadata: SITES_METADATA_ADAPTER,
+    objects: SITES_OBJECT_ADAPTER,
+    search: SITES_SEARCH_ADAPTER,
+    audit: SITES_AUDIT_ADAPTER,
+  },
   deployableServiceImplemented: false,
 } as const;
+
+export interface SitesPersistenceBoundaryOptions {
+  readonly database: MetadataD1DatabaseLike &
+    SearchD1DatabaseLike &
+    AuditD1DatabaseLike;
+  readonly bucket: R2BucketLike;
+}
+
+/**
+ * Durable outbound boundary for the future product Site composition. It does
+ * not create a deployable Site or claim live binding compatibility.
+ */
+export async function createSitesPersistenceBoundary(
+  options: SitesPersistenceBoundaryOptions,
+) {
+  const [metadata, objects, index, audit] = await Promise.all([
+    createSitesMetadataStore(options.database),
+    createSitesObjectStore(options.bucket),
+    createSitesSearchIndex(options.database),
+    createSitesAuditSink(options.database),
+  ]);
+  return Object.freeze({
+    metadata,
+    tokens: metadata,
+    objects,
+    exportArchives: objects,
+    index,
+    audit,
+  });
+}
 
 export interface LocalMcpHttpBoundaryOptions {
   readonly verifierKey: Uint8Array;
