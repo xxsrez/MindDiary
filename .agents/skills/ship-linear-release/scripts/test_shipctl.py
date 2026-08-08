@@ -167,7 +167,7 @@ class ManifestTest(GitMixin, unittest.TestCase):
         worktree = root / "worker"
         self.git(repo, "worktree", "add", str(worktree), branch)
         base = self.git(worktree, "rev-parse", "HEAD")
-        guard_message = "guard\n\nSTATE: claimed\n"
+        guard_message = "guard\n\nKIND: CLAIM_GUARD\nSTATE: claimed\n"
         guard_tip = self.metadata_commit(worktree, guard_message, base)
         guard_ref = f"refs/heads/codex/release/claims/{self.RUN_KEY}/AND-56/c1"
         self.git(repo, "update-ref", guard_ref, guard_tip)
@@ -194,6 +194,7 @@ class ManifestTest(GitMixin, unittest.TestCase):
         project_id = str(uuid.uuid4())
         milestone_id = str(uuid.uuid4())
         run_id = "019fdbbd-b0ed-77d1-80a4-f45a253c770f"
+        claim_token = str(uuid.uuid4())
         coordinator_message = (
             "coordinator\n\n"
             "SCHEMA: 1\n"
@@ -208,6 +209,7 @@ class ManifestTest(GitMixin, unittest.TestCase):
             "OWNER_STATE: active\n"
             "ACTION_SEQ: 0\n"
             "ACTION_STATUS: reconciled\n"
+            f"CLAIM_INDEX: active=AND-56:1@origin:{guard_ref}@origin:refs/heads/{branch}@{claim_token};entries=1;digest={'1' * 64}\n"
         )
         coordinator_sha = self.metadata_commit(repo, coordinator_message, base)
         self.git(
@@ -222,7 +224,7 @@ class ManifestTest(GitMixin, unittest.TestCase):
             "owner_id": owner_id,
             "owner_epoch": 1,
             "claim_generation": 1,
-            "claim_token": str(uuid.uuid4()),
+            "claim_token": claim_token,
             "issue_id": str(uuid.uuid4()),
             "issue_identifier": "AND-56",
             "project_id": project_id,
@@ -279,8 +281,10 @@ class ManifestTest(GitMixin, unittest.TestCase):
         }
         return repo, worktree, manifest
 
-    def invoke(self, payload: object) -> tuple[int, dict[str, object]]:
-        args = MODULE.argparse.Namespace(input="-", phase="dispatch", remote="origin")
+    def invoke(
+        self, payload: object, *, phase: str = "dispatch"
+    ) -> tuple[int, dict[str, object]]:
+        args = MODULE.argparse.Namespace(input="-", phase=phase, remote="origin")
         with mock.patch.object(sys, "stdin", io.StringIO(json.dumps(payload))), io.StringIO() as output, redirect_stdout(output):
             code = MODULE.command_manifest(args)
             return code, json.loads(output.getvalue())
@@ -375,6 +379,127 @@ class ManifestTest(GitMixin, unittest.TestCase):
         self.assertEqual((code, result["status"]), (0, "valid"))
         self.assertEqual(mismatch_code, 2)
         self.assertIn("invalid:issue_id", mismatch["errors"])
+
+    def test_active_manifest_accepts_same_run_coordinator_descendant_with_live_claim(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="shipctl-manifest-") as directory:
+            root = Path(directory)
+            repo, _, payload = self.manifest_fixture(root)
+            descendant_message = (
+                "coordinator advanced\n\n"
+                "SCHEMA: 1\n"
+                "KIND: COORDINATOR_CLAIM\n"
+                f"RUN_ID: {payload['run_id']}\n"
+                f"RUN_KEY: {payload['run_key']}\n"
+                f"OWNER_ID: {payload['owner_id']}\n"
+                f"EPOCH: {payload['owner_epoch']}\n"
+                f"PROJECT_ID: {payload['project_id']}\n"
+                f"MILESTONE_ID: {payload['milestone_id']}\n"
+                "STATE: running\n"
+                "OWNER_STATE: active\n"
+                "ACTION_SEQ: 1\n"
+                "ACTION_STATUS: reconciled\n"
+                f"CLAIM_INDEX: active=AND-56:1@origin:{payload['guard_ref']}@origin:{payload['feature_ref']}@{payload['claim_token']};entries=1;digest={'1' * 64}\n"
+            )
+            descendant = self.metadata_commit(
+                repo, descendant_message, str(payload["coordinator_sha"])
+            )
+            self.git(
+                repo,
+                "push",
+                "origin",
+                f"{descendant}:{MODULE.CANONICAL_COORDINATOR_REF}",
+            )
+            code, result = self.invoke(payload, phase="active")
+        self.assertEqual((code, result["status"]), (0, "valid"))
+
+    def test_manifest_rejects_claim_token_not_bound_by_coordinator(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="shipctl-manifest-") as directory:
+            _, _, payload = self.manifest_fixture(Path(directory))
+            payload["claim_token"] = str(uuid.uuid4())
+            code, result = self.invoke(payload, phase="active")
+        self.assertEqual(code, 2)
+        self.assertTrue(
+            any("claim-token-binding" in error for error in result["errors"])
+        )
+
+    def test_active_manifest_rejects_descendant_that_retired_its_claim(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="shipctl-manifest-") as directory:
+            root = Path(directory)
+            repo, _, payload = self.manifest_fixture(root)
+            descendant_message = (
+                "coordinator advanced\n\n"
+                "SCHEMA: 1\n"
+                "KIND: COORDINATOR_CLAIM\n"
+                f"RUN_ID: {payload['run_id']}\n"
+                f"RUN_KEY: {payload['run_key']}\n"
+                f"OWNER_ID: {payload['owner_id']}\n"
+                f"EPOCH: {payload['owner_epoch']}\n"
+                f"PROJECT_ID: {payload['project_id']}\n"
+                f"MILESTONE_ID: {payload['milestone_id']}\n"
+                "STATE: running\n"
+                "OWNER_STATE: active\n"
+                "ACTION_SEQ: 1\n"
+                "ACTION_STATUS: reconciled\n"
+                f"CLAIM_INDEX: active=none;entries=0;digest={'1' * 64}\n"
+            )
+            descendant = self.metadata_commit(
+                repo, descendant_message, str(payload["coordinator_sha"])
+            )
+            self.git(
+                repo,
+                "push",
+                "origin",
+                f"{descendant}:{MODULE.CANONICAL_COORDINATOR_REF}",
+            )
+            code, result = self.invoke(payload, phase="active")
+        self.assertEqual(code, 2)
+        self.assertTrue(
+            any("remote-coordinator-claim" in error for error in result["errors"])
+        )
+
+    def test_active_manifest_rejects_exact_current_tip_without_live_claim(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="shipctl-manifest-") as directory:
+            root = Path(directory)
+            repo, _, payload = self.manifest_fixture(root)
+            message = (
+                "coordinator retired claim\n\n"
+                "SCHEMA: 1\n"
+                "KIND: COORDINATOR_CLAIM\n"
+                f"RUN_ID: {payload['run_id']}\n"
+                f"RUN_KEY: {payload['run_key']}\n"
+                f"OWNER_ID: {payload['owner_id']}\n"
+                f"EPOCH: {payload['owner_epoch']}\n"
+                f"PROJECT_ID: {payload['project_id']}\n"
+                f"MILESTONE_ID: {payload['milestone_id']}\n"
+                "STATE: running\n"
+                "OWNER_STATE: active\n"
+                "ACTION_SEQ: 2\n"
+                "ACTION_STATUS: reconciled\n"
+                f"CLAIM_INDEX: active=none;entries=1;digest={'1' * 64}\n"
+            )
+            current = self.metadata_commit(
+                repo, message, str(payload["coordinator_sha"])
+            )
+            self.git(
+                repo,
+                "push",
+                "origin",
+                f"{current}:{MODULE.CANONICAL_COORDINATOR_REF}",
+            )
+            payload["coordinator_sha"] = current
+            code, result = self.invoke(payload, phase="active")
+        self.assertEqual(code, 2)
+        self.assertTrue(any("claim" in error for error in result["errors"]))
+
+    def test_non_object_provision_receipt_is_bounded_invalid(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="shipctl-manifest-") as directory:
+            _, worktree, payload = self.manifest_fixture(Path(directory))
+            (worktree / ".codex-task/provision.json").write_text(
+                "[]\n", encoding="utf-8"
+            )
+            code, result = self.invoke(payload)
+        self.assertEqual((code, result["status"]), (2, "invalid"))
+        self.assertIn("invalid:dependencies.provision_receipt", result["errors"])
 
     def test_receipt_verifier_binds_ready_feature_guard_scope_and_diff(self) -> None:
         with tempfile.TemporaryDirectory(prefix="shipctl-receipt-") as directory:
@@ -476,6 +601,7 @@ class InvocationTest(unittest.TestCase):
     def test_defaults_to_one_and_ignores_issue_numbers(self) -> None:
         code, result = self.invoke("$ship-linear-release milestone AND-84 version 6")
         self.assertEqual((code, result["workers"], result["worker_mode"]), (0, 1, "exact"))
+        self.assertFalse(result["workers_explicit"])
 
     def test_accepts_exact_numeric_and_russian_word_forms(self) -> None:
         _, assignment = self.invoke("$ship-linear-release workers=6")
@@ -485,6 +611,7 @@ class InvocationTest(unittest.TestCase):
             (assignment["workers"], threads["workers"], words["workers"]),
             (6, 4, 3),
         )
+        self.assertTrue(assignment["workers_explicit"])
 
     def test_accepts_auto_out_alias_maximum_and_dry_run(self) -> None:
         code, result = self.invoke("workers=out, не больше 6, dry-run")
@@ -529,13 +656,29 @@ class GoalAndMilestonePlanTest(unittest.TestCase):
 
     def milestone(self, issues: list[dict[str, object]]) -> tuple[int, dict[str, object]]:
         milestone_id = str(uuid.uuid4())
-        for issue in issues:
+        for index, issue in enumerate(issues):
             issue["milestone_id"] = milestone_id
+            issue.setdefault("id", issue.get("identifier"))
+            issue.setdefault("title", f"Issue {issue.get('identifier')}")
+            issue.setdefault("priority", 0)
+            issue.setdefault("labels", [])
+            if "createdAt" not in issue and "created_at" not in issue:
+                issue["createdAt"] = "2026-08-08T12:00:00Z"
+            if "updatedAt" not in issue and "updated_at" not in issue:
+                issue["updatedAt"] = "2026-08-08T13:00:00Z"
+            if "boardPosition" not in issue and "board_position" not in issue:
+                issue["boardPosition"] = index
+            issue.setdefault("production_requirement", "unknown")
         payload = {
             "project": {"id": str(uuid.uuid4()), "name": "Mind Diary"},
             "milestones": [{"id": milestone_id, "name": "MVP", "current": True}],
             "issues": issues,
         }
+        with mock.patch.object(sys, "stdin", io.StringIO(json.dumps(payload))), io.StringIO() as output, redirect_stdout(output):
+            code = MODULE.command_milestone_plan(MODULE.argparse.Namespace(input="-"))
+            return code, json.loads(output.getvalue())
+
+    def snapshot(self, payload: dict[str, object]) -> tuple[int, dict[str, object]]:
         with mock.patch.object(sys, "stdin", io.StringIO(json.dumps(payload))), io.StringIO() as output, redirect_stdout(output):
             code = MODULE.command_milestone_plan(MODULE.argparse.Namespace(input="-"))
             return code, json.loads(output.getvalue())
@@ -569,6 +712,166 @@ class GoalAndMilestonePlanTest(unittest.TestCase):
         )
         self.assertEqual((code, result["status"]), (3, "blocked"))
         self.assertIn("dependency-cycle", result["structural_reasons"])
+
+    def test_malformed_dependencies_fail_closed_without_a_traceback(self) -> None:
+        code, result = self.milestone(
+            [
+                {
+                    "identifier": "AND-1",
+                    "state": "Todo",
+                    "dependencies": [{"identifier": "AND-2"}],
+                }
+            ]
+        )
+        self.assertEqual((code, result["status"]), (3, "blocked"))
+        self.assertIn("invalid:issue-dependencies:AND-1", result["errors"])
+
+    def test_null_timestamp_and_nonfinite_board_position_fail_closed(self) -> None:
+        timestamp_code, timestamp = self.milestone(
+            [
+                {
+                    "identifier": "AND-1",
+                    "state": "Todo",
+                    "dependencies": [],
+                    "createdAt": None,
+                },
+                {"identifier": "AND-2", "state": "Todo", "dependencies": []},
+            ]
+        )
+        board_code, board = self.milestone(
+            [
+                {
+                    "identifier": "AND-1",
+                    "state": "Todo",
+                    "dependencies": [],
+                    "boardPosition": float("nan"),
+                }
+            ]
+        )
+        self.assertEqual((timestamp_code, timestamp["status"]), (3, "blocked"))
+        self.assertIn("invalid:issue-created-at:AND-1", timestamp["errors"])
+        self.assertEqual((board_code, board["status"]), (3, "blocked"))
+        self.assertIn("invalid:issue-board-position:AND-1", board["errors"])
+
+    def test_created_at_order_is_chronological_across_fractional_precision(self) -> None:
+        code, result = self.milestone(
+            [
+                {
+                    "identifier": "AND-1",
+                    "state": "Todo",
+                    "dependencies": [],
+                    "createdAt": "2026-08-08T12:00:00.100Z",
+                },
+                {
+                    "identifier": "AND-2",
+                    "state": "Todo",
+                    "dependencies": [],
+                    "createdAt": "2026-08-08T12:00:00Z",
+                },
+            ]
+        )
+        self.assertEqual(code, 0)
+        self.assertEqual(result["ready"], ["AND-2", "AND-1"])
+
+    def test_snapshot_digest_is_independent_of_issue_dependency_and_label_order(self) -> None:
+        project_id = str(uuid.uuid4())
+        milestone_id = str(uuid.uuid4())
+        issues = [
+            {
+                "id": "AND-1",
+                "identifier": "AND-1",
+                "title": "First",
+                "milestone_id": milestone_id,
+                "state": "Done",
+                "dependencies": [],
+                "priority": 0,
+                "labels": ["Backend", "Bug"],
+                "createdAt": "2026-08-08T12:00:00Z",
+                "updatedAt": "2026-08-08T13:00:00Z",
+                "boardPosition": 1,
+                "production_requirement": "unknown",
+            },
+            {
+                "id": "AND-2",
+                "identifier": "AND-2",
+                "title": "Second",
+                "milestone_id": milestone_id,
+                "state": "Todo",
+                "dependencies": ["AND-4", "AND-1"],
+                "priority": 0,
+                "labels": ["Control", "Bug"],
+                "createdAt": "2026-08-08T12:00:00Z",
+                "updatedAt": "2026-08-08T13:00:00Z",
+                "boardPosition": 2,
+                "production_requirement": "unknown",
+            },
+            {
+                "id": "AND-4",
+                "identifier": "AND-4",
+                "title": "Fourth",
+                "milestone_id": milestone_id,
+                "state": "Done",
+                "dependencies": [],
+                "priority": 0,
+                "labels": [],
+                "createdAt": "2026-08-08T12:00:00Z",
+                "updatedAt": "2026-08-08T13:00:00Z",
+                "boardPosition": 4,
+                "production_requirement": "unknown",
+            },
+        ]
+        payload = {
+            "project": {"id": project_id, "name": "Mind Diary"},
+            "milestones": [{"id": milestone_id, "name": "MVP", "current": True}],
+            "issues": issues,
+        }
+        _, first = self.snapshot(payload)
+        reversed_payload = json.loads(json.dumps(payload))
+        reversed_payload["issues"].reverse()
+        reversed_payload["issues"][1]["dependencies"].reverse()
+        reversed_payload["issues"][1]["labels"].reverse()
+        _, second = self.snapshot(reversed_payload)
+        self.assertEqual(first["snapshot_digest"], second["snapshot_digest"])
+
+    def test_ready_frontier_uses_priority_bug_and_unblock_order(self) -> None:
+        code, result = self.milestone(
+            [
+                {
+                    "identifier": "AND-10",
+                    "state": "Todo",
+                    "dependencies": [],
+                    "priority": 2,
+                    "labels": [],
+                    "created_at": "2026-08-08T12:00:00Z",
+                },
+                {
+                    "identifier": "AND-11",
+                    "state": "Todo",
+                    "dependencies": [],
+                    "priority": 1,
+                    "labels": [],
+                    "created_at": "2026-08-08T12:00:00Z",
+                },
+                {
+                    "identifier": "AND-12",
+                    "state": "Todo",
+                    "dependencies": [],
+                    "priority": 2,
+                    "labels": ["Bug"],
+                    "created_at": "2026-08-08T12:00:00Z",
+                },
+                {
+                    "identifier": "AND-13",
+                    "state": "Todo",
+                    "dependencies": ["AND-12"],
+                    "priority": 3,
+                    "labels": [],
+                    "created_at": "2026-08-08T12:00:00Z",
+                },
+            ]
+        )
+        self.assertEqual(code, 0)
+        self.assertEqual(result["ready"], ["AND-11", "AND-12", "AND-10"])
 
 
 class ConveyorStateMachineTest(unittest.TestCase):
@@ -617,6 +920,470 @@ class ConveyorStateMachineTest(unittest.TestCase):
         code, result = self.invoke(self.event("terminal", "dispatch", {}))
         self.assertEqual((code, result["status"]), (2, "invalid"))
         self.assertIn("invalid:state", result["errors"])
+
+
+class ProjectionPlanTest(GitMixin, unittest.TestCase):
+    RUN_ID = "019fdbbd-b0ed-77d1-80a4-f45a253c770f"
+
+    def invoke(self, payload: object) -> tuple[int, dict[str, object]]:
+        with mock.patch.object(sys, "stdin", io.StringIO(json.dumps(payload))), io.StringIO() as output, redirect_stdout(output):
+            code = MODULE.command_projection_plan(MODULE.argparse.Namespace(input="-"))
+            return code, json.loads(output.getvalue())
+
+    def item(self, issue: str, kind: str, status: str) -> dict[str, object]:
+        return {
+            "issue_identifier": issue,
+            "issue_id": issue,
+            "receipt_kind": kind,
+            "receipt_key": f"{issue}:g1",
+            "generation": 1,
+            "status": status,
+            "summary": f"Статус {issue} обновлён.",
+            "changes": ["Изменения сохранены в feature branch."],
+            "evidence": ["Targeted checks passed."],
+            "next": "Координатор продолжит conveyor.",
+            "updated_at": "2026-08-08T15:00:00Z",
+        }
+
+    def test_plan_is_deterministic_human_readable_and_can_include_status_cas(self) -> None:
+        claim = self.item("AND-2", "WORK_CLAIM", "active")
+        claim["state_update"] = {"expected": "Todo", "desired": "In Progress"}
+        ready = self.item("AND-1", "FEATURE_RECEIPT", "ready")
+        first_code, first = self.invoke(
+            {"run_id": self.RUN_ID, "items": [claim, ready]}
+        )
+        second_code, second = self.invoke(
+            {"run_id": self.RUN_ID, "items": [ready, claim]}
+        )
+        self.assertEqual((first_code, second_code), (0, 0))
+        self.assertEqual(first, second)
+        self.assertEqual(first["item_count"], 3)
+        comment = first["items"][0]
+        self.assertEqual(comment["operation"], "create-comment")
+        self.assertIn("### Изменения готовы", comment["payload"]["body"])
+        self.assertIn("Что изменилось:", comment["payload"]["body"])
+        self.assertIn("Проверка:", comment["payload"]["body"])
+        self.assertIn(
+            f"<!-- ship-linear-release:{self.RUN_ID}:FEATURE_RECEIPT:AND-1:g1 -->",
+            comment["payload"]["body"],
+        )
+        self.assertEqual(first["items"][-1]["operation"], "update-status")
+        self.assertEqual(first["items"][-1]["expected_before"], "state=Todo")
+        _, later_run = self.invoke(
+            {"run_id": str(uuid.uuid4()), "items": [claim, ready]}
+        )
+        self.assertNotEqual(
+            [item["request_key"] for item in first["items"]],
+            [item["request_key"] for item in later_run["items"]],
+        )
+
+    def test_existing_comment_is_updated_and_secret_like_text_is_rejected(self) -> None:
+        item = self.item("AND-2", "WORK_CLAIM", "active")
+        item["comment_id"] = "comment-123"
+        code, result = self.invoke({"run_id": self.RUN_ID, "items": [item]})
+        item["summary"] = "Authorization: Bearer should-not-appear"
+        bad_code, bad = self.invoke({"run_id": self.RUN_ID, "items": [item]})
+        self.assertEqual((code, result["items"][0]["operation"]), (0, "update-comment"))
+        self.assertEqual(bad_code, 2)
+        self.assertIn("invalid:items[0].summary", bad["errors"])
+
+    def test_projection_rejects_unhashable_kind_wrong_issue_and_duplicate_status_target(self) -> None:
+        malformed = self.item("AND-1", "WORK_CLAIM", "active")
+        malformed["receipt_kind"] = []
+        malformed_code, malformed_result = self.invoke(
+            {"run_id": self.RUN_ID, "items": [malformed]}
+        )
+        mismatch = self.item("AND-1", "WORK_CLAIM", "active")
+        mismatch["issue_id"] = "AND-2"
+        mismatch_code, mismatch_result = self.invoke(
+            {"run_id": self.RUN_ID, "items": [mismatch]}
+        )
+        first = self.item("AND-1", "WORK_CLAIM", "active")
+        first["state_update"] = {"expected": "Todo", "desired": "In Progress"}
+        second = self.item("AND-1", "WORK_CLAIM", "released")
+        second["receipt_key"] = "AND-1:g1:released"
+        second["state_update"] = {"expected": "In Progress", "desired": "Done"}
+        duplicate_code, duplicate_result = self.invoke(
+            {"run_id": self.RUN_ID, "items": [first, second]}
+        )
+        self.assertEqual(malformed_code, 2)
+        self.assertIn("invalid:items[0].receipt_kind", malformed_result["errors"])
+        self.assertEqual(mismatch_code, 2)
+        self.assertIn("invalid:items[0].issue_id-mismatch", mismatch_result["errors"])
+        self.assertEqual(duplicate_code, 2)
+        self.assertIn("invalid:duplicate-status-target:AND-1", duplicate_result["errors"])
+
+    def test_projection_rejects_noncontract_receipt_status_and_api_key(self) -> None:
+        integrated = self.item("AND-1", "FEATURE_RECEIPT", "integrated")
+        integrated_code, integrated_result = self.invoke(
+            {"run_id": self.RUN_ID, "items": [integrated]}
+        )
+        secret = self.item("AND-1", "FEATURE_RECEIPT", "ready")
+        secret["evidence"] = ["api_key=sk-live-example"]
+        secret_code, secret_result = self.invoke(
+            {"run_id": self.RUN_ID, "items": [secret]}
+        )
+        self.assertEqual(integrated_code, 2)
+        self.assertIn("invalid:items[0].status", integrated_result["errors"])
+        self.assertEqual(secret_code, 2)
+        self.assertIn("invalid:items[0].evidence", secret_result["errors"])
+
+    def test_projection_rejects_comment_that_exceeds_durable_provider_envelope(self) -> None:
+        item = self.item("AND-1", "FEATURE_RECEIPT", "ready")
+        item["changes"] = ["я" * 500] * 8
+        item["evidence"] = ["д" * 500] * 8
+        code, result = self.invoke({"run_id": self.RUN_ID, "items": [item]})
+        self.assertEqual((code, result["status"]), (2, "invalid"))
+        self.assertIn(
+            "invalid:item[AND-1].rendered-comment-too-large", result["errors"]
+        )
+
+    def test_projection_batch_cas_persists_full_intent_and_itemwise_results(self) -> None:
+        thread_id = str(uuid.uuid4())
+        proof = MODULE.hashlib.sha256(thread_id.encode()).hexdigest()
+        with tempfile.TemporaryDirectory(prefix="shipctl-projection-cas-") as directory:
+            root = Path(directory)
+            repo, _ = self.fixture(root)
+            base = self.git(repo, "rev-parse", "HEAD")
+            contract = MODULE.tree_oid(repo, base, MODULE.SKILL_PATH)
+            parent_message = (
+                "running coordinator\n\n"
+                "SCHEMA: 1\n"
+                "KIND: COORDINATOR_CLAIM\n"
+                f"OWNER_ID: {uuid.uuid4()}\n"
+                "OWNER_PROOF_KIND: runtime-task-id\n"
+                f"OWNER_PROOF_DIGEST: {proof}\n"
+                f"RUN_ID: {self.RUN_ID}\n"
+                f"RUN_KEY: {'a' * 32}\n"
+                f"PROJECT_ID: {uuid.uuid4()}\n"
+                f"MILESTONE_ID: {uuid.uuid4()}\n"
+                "EPOCH: 1\n"
+                "STATE: running\n"
+                "OWNER_STATE: active\n"
+                f"CONTRACT_SOURCE_SHA: {base}\n"
+                f"CONTRACT_DIGEST: {contract}\n"
+                "ACTION_SEQ: 4\n"
+                "ACTION_STATUS: reconciled\n"
+            )
+            parent = self.metadata_commit(repo, parent_message, base)
+            self.git(
+                repo,
+                "push",
+                "origin",
+                f"{parent}:{MODULE.CANONICAL_COORDINATOR_REF}",
+            )
+            item = self.item("AND-1", "FEATURE_RECEIPT", "ready")
+            _, plan = self.invoke({"run_id": self.RUN_ID, "items": [item]})
+            intent_args = MODULE.argparse.Namespace(
+                repo=str(repo),
+                remote="origin",
+                default="main",
+                phase="intent",
+                expected_coordinator_sha=parent,
+                input="-",
+            )
+            with mock.patch.dict(MODULE.os.environ, {"CODEX_THREAD_ID": thread_id}, clear=False), mock.patch.object(sys, "stdin", io.StringIO(json.dumps(plan))), io.StringIO() as output, redirect_stdout(output):
+                intent_code = MODULE.command_projection_batch_cas(intent_args)
+                intent = json.loads(output.getvalue())
+            wrong_args = MODULE.argparse.Namespace(
+                repo=str(repo),
+                remote="origin",
+                default="main",
+                phase="reconcile",
+                expected_coordinator_sha=parent,
+                input="-",
+            )
+            result_payload = {
+                "batch_id": plan["batch_id"],
+                "results": [
+                    {
+                        "item_id": plan["items"][0]["item_id"],
+                        "status": "applied",
+                        "result": "comment_id=comment-123",
+                    }
+                ],
+            }
+            with mock.patch.dict(MODULE.os.environ, {"CODEX_THREAD_ID": thread_id}, clear=False), mock.patch.object(sys, "stdin", io.StringIO(json.dumps(result_payload))), io.StringIO() as output, redirect_stdout(output):
+                wrong_code = MODULE.command_projection_batch_cas(wrong_args)
+                wrong = json.loads(output.getvalue())
+            reconcile_args = MODULE.argparse.Namespace(
+                repo=str(repo),
+                remote="origin",
+                default="main",
+                phase="reconcile",
+                expected_coordinator_sha=intent["coordinator"],
+                input="-",
+            )
+            with mock.patch.dict(MODULE.os.environ, {"CODEX_THREAD_ID": thread_id}, clear=False), mock.patch.object(sys, "stdin", io.StringIO(json.dumps(result_payload))), io.StringIO() as output, redirect_stdout(output):
+                reconcile_code = MODULE.command_projection_batch_cas(reconcile_args)
+                reconciled = json.loads(output.getvalue())
+            message = self.git(
+                repo, "show", "-s", "--format=%B", reconciled["coordinator"]
+            )
+        self.assertEqual((intent_code, intent["status"]), (0, "intent"))
+        self.assertEqual((wrong_code, wrong["status"]), (3, "blocked"))
+        self.assertEqual((reconcile_code, reconciled["status"]), (0, "reconciled"))
+        self.assertIn("PROJECTION_BATCH:", message)
+        self.assertIn("status=reconciled", message)
+        self.assertIn("PROJECTION_ITEM:", message)
+        self.assertIn("PROJECTION_RESULT:", message)
+        self.assertIn("ACTION_STATUS: reconciled", message)
+
+
+class RefillCheckTest(unittest.TestCase):
+    def invoke(self, **overrides: object) -> tuple[int, dict[str, object]]:
+        payload: dict[str, object] = {
+            "ready_observed_at": "2026-08-08T15:00:00Z",
+            "evaluated_at": "2026-08-08T15:01:00Z",
+            "target_seconds": 60,
+            "sustained_capacity": 6,
+            "running_count": 2,
+            "compatible_ready": 1,
+        }
+        payload.update(overrides)
+        with mock.patch.object(sys, "stdin", io.StringIO(json.dumps(payload))), io.StringIO() as output, redirect_stdout(output):
+            code = MODULE.command_refill_check(MODULE.argparse.Namespace(input="-"))
+            return code, json.loads(output.getvalue())
+
+    def test_sixty_second_boundary_is_pending_and_late_observation_needs_evidence(self) -> None:
+        boundary_code, boundary = self.invoke()
+        late_code, late = self.invoke(evaluated_at="2026-08-08T15:01:00.001Z")
+        self.assertEqual((boundary_code, boundary["status"]), (0, "pending"))
+        self.assertEqual(boundary["remaining_seconds"], 0)
+        self.assertEqual((late_code, late["status"]), (3, "needs-evidence"))
+
+    def test_fractional_boundary_and_future_spawn_fail_closed(self) -> None:
+        within_code, within = self.invoke(
+            evaluated_at="2026-08-08T15:00:59.999Z"
+        )
+        future_code, future = self.invoke(
+            evaluated_at="2026-08-08T15:00:10Z",
+            spawned_at="2026-08-08T15:00:30Z",
+        )
+        self.assertEqual((within_code, within["status"]), (0, "pending"))
+        self.assertEqual(within["interval_seconds"], 59.999)
+        self.assertEqual(future_code, 2)
+        self.assertIn("invalid:spawned_after_evaluated", future["errors"])
+
+    def test_missed_refill_produces_canonical_blocker_record(self) -> None:
+        code, result = self.invoke(
+            evaluated_at="2026-08-08T15:01:01Z",
+            blocker="no-compatible-dependent-work",
+            evidence="ready_frontier=AND-77-only-conflicts-with-running-lane",
+            resume_predicate="ownership-paths-disjoint-and-dependencies-done",
+        )
+        self.assertEqual((code, result["status"]), (0, "missed"))
+        self.assertIn("target_seconds=60", result["record"])
+        self.assertIn("blocker=no-compatible-dependent-work", result["record"])
+
+    def test_spawn_within_target_clears_record_and_late_spawn_preserves_violation(self) -> None:
+        met_code, met = self.invoke(spawned_at="2026-08-08T15:00:59Z")
+        late_code, late = self.invoke(
+            evaluated_at="2026-08-08T15:01:01Z",
+            spawned_at="2026-08-08T15:01:01Z",
+        )
+        self.assertEqual((met_code, met["status"]), (0, "met"))
+        self.assertIn("pending_since=none", met["record"])
+        self.assertEqual((late_code, late["status"]), (0, "missed"))
+        self.assertIn("blocker=late-spawn", late["record"])
+
+    def test_placeholder_missed_evidence_is_rejected(self) -> None:
+        code, result = self.invoke(
+            evaluated_at="2026-08-08T15:01:01Z",
+            blocker="none",
+            evidence="   ",
+            resume_predicate="unknown",
+        )
+        self.assertEqual((code, result["status"]), (3, "needs-evidence"))
+        self.assertEqual(len(result["errors"]), 3)
+
+
+class StartupPlanTest(GitMixin, unittest.TestCase):
+    def test_startup_plan_combines_preflight_snapshot_and_capacity(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="shipctl-startup-") as directory:
+            root = Path(directory)
+            repo, _ = self.fixture(root)
+            milestone_id = str(uuid.uuid4())
+            payload = {
+                "invocation": "запусти шесть воркеров",
+                "snapshot": {
+                    "project": {"id": str(uuid.uuid4()), "name": "Mind Diary"},
+                    "milestones": [
+                        {"id": milestone_id, "name": "MVP", "current": True}
+                    ],
+                    "issues": [
+                        {
+                            "id": "AND-1",
+                            "identifier": "AND-1",
+                            "title": "First",
+                            "milestone_id": milestone_id,
+                            "state": "Todo",
+                            "dependencies": [],
+                            "priority": 1,
+                            "labels": [],
+                            "createdAt": "2026-08-08T12:00:00Z",
+                            "updatedAt": "2026-08-08T13:00:00Z",
+                            "boardPosition": 1,
+                            "production_requirement": "unknown",
+                        },
+                        {
+                            "id": "AND-2",
+                            "identifier": "AND-2",
+                            "title": "Second",
+                            "milestone_id": milestone_id,
+                            "state": "Todo",
+                            "dependencies": [],
+                            "priority": 2,
+                            "labels": [],
+                            "createdAt": "2026-08-08T12:00:00Z",
+                            "updatedAt": "2026-08-08T13:00:00Z",
+                            "boardPosition": 2,
+                            "production_requirement": "unknown",
+                        },
+                        {
+                            "id": "AND-3",
+                            "identifier": "AND-3",
+                            "title": "Third",
+                            "milestone_id": milestone_id,
+                            "state": "Todo",
+                            "dependencies": [],
+                            "priority": 3,
+                            "labels": [],
+                            "createdAt": "2026-08-08T12:00:00Z",
+                            "updatedAt": "2026-08-08T13:00:00Z",
+                            "boardPosition": 3,
+                            "production_requirement": "unknown",
+                        },
+                    ],
+                },
+                "capacity": {
+                    "runtime_slots_total": 7,
+                    "runtime_source": "system-capacity",
+                    "safe_resource_capacity": 6,
+                    "resource_source": "provisioner",
+                    "layout": "auto",
+                },
+            }
+            args = MODULE.argparse.Namespace(
+                repo=str(repo), remote="origin", default="main", input="-"
+            )
+            with mock.patch.object(sys, "stdin", io.StringIO(json.dumps(payload))), io.StringIO() as output, redirect_stdout(output):
+                code = MODULE.command_startup_plan(args)
+                result = json.loads(output.getvalue())
+        self.assertEqual((code, result["status"], result["route"]), (0, "planned", "normal"))
+        self.assertEqual(result["launch"]["running"], 0)
+        self.assertEqual(result["launch"]["refill_count"], 3)
+        self.assertEqual(result["launch"]["active_target"], 3)
+        self.assertRegex(result["plan_digest"], r"^[0-9a-f]{64}$")
+
+    def test_resume_uses_execution_index_instead_of_linear_occupancy(self) -> None:
+        thread_id = str(uuid.uuid4())
+        proof = MODULE.hashlib.sha256(thread_id.encode()).hexdigest()
+        with tempfile.TemporaryDirectory(prefix="shipctl-startup-") as directory:
+            root = Path(directory)
+            repo, _ = self.fixture(root)
+            base = self.git(repo, "rev-parse", "HEAD")
+            contract = MODULE.tree_oid(repo, base, MODULE.SKILL_PATH)
+            milestone_id = str(uuid.uuid4())
+            message = (
+                "running coordinator\n\n"
+                "SCHEMA: 1\n"
+                "KIND: COORDINATOR_CLAIM\n"
+                f"RUN_ID: {uuid.uuid4()}\n"
+                f"RUN_KEY: {'a' * 32}\n"
+                f"OWNER_ID: {uuid.uuid4()}\n"
+                "OWNER_PROOF_KIND: runtime-task-id\n"
+                f"OWNER_PROOF_DIGEST: {proof}\n"
+                "EPOCH: 1\n"
+                f"PROJECT_ID: {uuid.uuid4()}\n"
+                f"MILESTONE_ID: {milestone_id}\n"
+                "STATE: running\n"
+                "OWNER_STATE: active\n"
+                f"CONTRACT_SOURCE_SHA: {base}\n"
+                f"CONTRACT_DIGEST: {contract}\n"
+                "ACTION_SEQ: 2\n"
+                "ACTION_STATUS: reconciled\n"
+                f"CLAIM_INDEX: active=AND-1:1@guard@feature@worker;entries=1;digest={'1' * 64}\n"
+                f"EXECUTION_INDEX: running_count=1;entries=AND-1:1@executor=running;digest={'2' * 64}\n"
+                "WORKERS: requested_workers=3;active_issue_lanes=AND-1\n"
+            )
+            coordinator = self.metadata_commit(repo, message, base)
+            self.git(
+                repo,
+                "push",
+                "origin",
+                f"{coordinator}:{MODULE.CANONICAL_COORDINATOR_REF}",
+            )
+            def issue(identifier: str, state: str, position: int) -> dict[str, object]:
+                return {
+                    "id": identifier,
+                    "identifier": identifier,
+                    "title": identifier,
+                    "milestone_id": milestone_id,
+                    "state": state,
+                    "dependencies": [],
+                    "priority": position,
+                    "labels": [],
+                    "createdAt": "2026-08-08T12:00:00Z",
+                    "updatedAt": "2026-08-08T13:00:00Z",
+                    "boardPosition": position,
+                    "production_requirement": "unknown",
+                }
+            payload = {
+                "invocation": "$ship-linear-release resume",
+                "snapshot": {
+                    "project": {"id": str(uuid.uuid4()), "name": "Mind Diary"},
+                    "milestones": [
+                        {"id": milestone_id, "name": "MVP", "current": True}
+                    ],
+                    "issues": [issue("AND-1", "Todo", 1), issue("AND-2", "Todo", 2)],
+                },
+                "capacity": {
+                    "runtime_slots_total": 4,
+                    "runtime_source": "system-capacity",
+                    "safe_resource_capacity": 3,
+                    "resource_source": "provisioner",
+                    "layout": "auto",
+                },
+            }
+            args = MODULE.argparse.Namespace(
+                repo=str(repo), remote="origin", default="main", input="-"
+            )
+            with mock.patch.dict(MODULE.os.environ, {"CODEX_THREAD_ID": thread_id}, clear=False), mock.patch.object(sys, "stdin", io.StringIO(json.dumps(payload))), io.StringIO() as output, redirect_stdout(output):
+                code = MODULE.command_startup_plan(args)
+                result = json.loads(output.getvalue())
+            payload["invocation"] = "workers=2"
+            with mock.patch.dict(MODULE.os.environ, {"CODEX_THREAD_ID": thread_id}, clear=False), mock.patch.object(sys, "stdin", io.StringIO(json.dumps(payload))), io.StringIO() as output, redirect_stdout(output):
+                explicit_code = MODULE.command_startup_plan(args)
+                explicit_result = json.loads(output.getvalue())
+            payload["invocation"] = "$ship-linear-release resume"
+            orphan_message = message.replace(
+                "active=AND-1:1@guard@feature@worker;entries=1",
+                "active=AND-1:1@guard@feature@worker,"
+                "AND-2:1@guard-2@feature-2@worker-2;entries=2",
+            )
+            orphan = self.metadata_commit(repo, orphan_message, coordinator)
+            self.git(
+                repo,
+                "push",
+                "origin",
+                f"{orphan}:{MODULE.CANONICAL_COORDINATOR_REF}",
+            )
+            with mock.patch.dict(MODULE.os.environ, {"CODEX_THREAD_ID": thread_id}, clear=False), mock.patch.object(sys, "stdin", io.StringIO(json.dumps(payload))), io.StringIO() as output, redirect_stdout(output):
+                orphan_code = MODULE.command_startup_plan(args)
+                orphan_result = json.loads(output.getvalue())
+        self.assertEqual((code, result["status"], result["route"]), (0, "planned", "resume"))
+        self.assertEqual(result["milestone"]["authoritative_running"], ["AND-1:1"])
+        self.assertEqual(result["launch"]["running"], 1)
+        self.assertEqual(result["launch"]["requested_workers"], 3)
+        self.assertEqual(result["launch"]["refill_count"], 1)
+        self.assertEqual(result["launch"]["active_target"], 2)
+        self.assertEqual((explicit_code, explicit_result["status"]), (0, "planned"))
+        self.assertEqual(explicit_result["launch"]["requested_workers"], 2)
+        self.assertEqual((orphan_code, orphan_result["status"]), (3, "blocked"))
+        self.assertIn(
+            "live-claim-without-execution-entry", orphan_result["errors"]
+        )
 
 
 class DeliveryContractTest(unittest.TestCase):
@@ -734,6 +1501,33 @@ class LaunchAndDispatchTest(unittest.TestCase):
         )
         self.assertEqual((code, result["status"]), (0, "ok"))
         self.assertNotIn("no-actionable-frontier", result["reasons"])
+
+    def test_running_generations_count_toward_active_target(self) -> None:
+        code, result = self.launch(
+            workers="3",
+            runtime_slots_total=4,
+            safe_resource_capacity=3,
+            compatible_ready=1,
+            running=2,
+        )
+        self.assertEqual((code, result["status"]), (0, "ok"))
+        self.assertEqual(result["available_slots"], 1)
+        self.assertEqual(result["refill_count"], 1)
+        self.assertEqual(result["active_target"], 3)
+
+    def test_running_above_sustained_capacity_blocks_resume(self) -> None:
+        code, result = self.launch(
+            workers="auto",
+            runtime_slots_total=2,
+            safe_resource_capacity=1,
+            compatible_ready=0,
+            running=2,
+        )
+        self.assertEqual((code, result["status"], result["claim_allowed"]), (3, "blocked", False))
+        self.assertIn(
+            "running-above-sustained-capacity:running=2;sustained=1",
+            result["reasons"],
+        )
 
     def test_zero_resource_capacity_is_a_blocker_not_invalid_input(self) -> None:
         code, result = self.launch(
@@ -893,6 +1687,80 @@ class ProvisionAndCleanupTest(GitMixin, unittest.TestCase):
         self.assertEqual((adopted_code, adopted["status"]), (0, "adopted"))
         self.assertEqual(adopted["environment_id"], prepared["environment_id"])
 
+    def test_provision_includes_nested_lockfile_selected_by_ownership_path(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="shipctl-provision-") as directory:
+            root = Path(directory)
+            repo, _ = self.fixture(root)
+            nested = repo / "apps/widget"
+            nested.mkdir(parents=True)
+            (nested / "package.json").write_text('{"name":"widget"}\n', encoding="utf-8")
+            (nested / "package-lock.json").write_text(
+                '{"name":"widget","lockfileVersion":3}\n', encoding="utf-8"
+            )
+            self.git(repo, "add", "apps/widget/package.json", "apps/widget/package-lock.json")
+            self.git(repo, "commit", "-m", "add nested application lockfile")
+            self.git(repo, "push", "origin", "main")
+            branch = "codex/and-56-nested/r" + "a" * 32 + "-e1-c1"
+            self.git(repo, "branch", branch)
+            worktree = root / "worker"
+            self.git(repo, "worktree", "add", str(worktree), branch)
+            args = MODULE.argparse.Namespace(
+                repo=str(repo),
+                worktree=str(worktree),
+                path=["apps"],
+                package_manager="npm",
+                install=False,
+                timeout_seconds=900,
+            )
+            with io.StringIO() as output, redirect_stdout(output):
+                prepared_code = MODULE.command_provision_worktree(args)
+                prepared = json.loads(output.getvalue())
+            for installation in prepared["installations"]:
+                Path(installation["dependency_path"]).mkdir()
+            receipt = {
+                "status": "installed",
+                "environment_id": prepared["environment_id"],
+                "lockfile_digest": prepared["lockfile_digest"],
+                "dependency_path": prepared["dependency_path"],
+                "provisioning_digest": prepared["provisioning_digest"],
+                "installations": prepared["installations"],
+            }
+            (worktree / ".codex-task/provision.json").write_text(
+                json.dumps(receipt), encoding="utf-8"
+            )
+            with io.StringIO() as output, redirect_stdout(output):
+                adopted_code = MODULE.command_provision_worktree(args)
+                adopted = json.loads(output.getvalue())
+            (worktree / "apps/widget/package-lock.json").write_text(
+                '{"name":"widget","lockfileVersion":3,"changed":true}\n',
+                encoding="utf-8",
+            )
+            self.git(worktree, "add", "apps/widget/package-lock.json")
+            self.git(worktree, "commit", "-m", "change nested lockfile")
+            with io.StringIO() as output, redirect_stdout(output):
+                changed_code = MODULE.command_provision_worktree(args)
+                changed = json.loads(output.getvalue())
+        self.assertEqual((prepared_code, prepared["status"]), (4, "prepared"))
+        self.assertEqual(
+            [item["root"] for item in prepared["installations"]],
+            [".", "apps/widget"],
+        )
+        self.assertEqual(len(prepared["commands"]), 2)
+        self.assertEqual((adopted_code, adopted["status"]), (0, "adopted"))
+        self.assertEqual((changed_code, changed["status"]), (4, "prepared"))
+        self.assertNotEqual(changed["environment_id"], prepared["environment_id"])
+
+    def test_untracked_nested_lockfile_is_not_selected_as_dependency_authority(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="shipctl-provision-") as directory:
+            root = Path(directory)
+            repo, _ = self.fixture(root)
+            scratch = repo / "scratch"
+            scratch.mkdir()
+            (scratch / "package-lock.json").write_text("{}\n", encoding="utf-8")
+            roots, errors = MODULE._required_package_roots(repo, ["scratch"])
+        self.assertEqual(errors, [])
+        self.assertEqual(roots, [repo.resolve()])
+
     def test_cleanup_requires_fresh_digest_and_removes_only_clean_merged_worktree(self) -> None:
         with tempfile.TemporaryDirectory(prefix="shipctl-cleanup-") as directory:
             root = Path(directory)
@@ -947,6 +1815,97 @@ class ProvisionAndCleanupTest(GitMixin, unittest.TestCase):
         self.assertEqual((apply_code, applied["status"]), (0, "cleaned"))
         self.assertIn(str(worktree.resolve()), applied["removed"])
         self.assertTrue(unbound_retained_after_apply)
+
+
+class PoolStatusTest(GitMixin, unittest.TestCase):
+    def test_pool_status_explains_why_six_worker_capacity_is_not_filled(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="shipctl-pool-") as directory:
+            root = Path(directory)
+            repo, _ = self.fixture(root)
+            base = self.git(repo, "rev-parse", "HEAD")
+            contract = MODULE.tree_oid(repo, base, MODULE.SKILL_PATH)
+            message = (
+                "running coordinator\n\n"
+                "SCHEMA: 1\n"
+                "KIND: COORDINATOR_CLAIM\n"
+                f"RUN_ID: {uuid.uuid4()}\n"
+                f"RUN_KEY: {'a' * 32}\n"
+                f"OWNER_ID: {uuid.uuid4()}\n"
+                "OWNER_PROOF_KIND: runtime-task-id\n"
+                f"OWNER_PROOF_DIGEST: {'e' * 64}\n"
+                "EPOCH: 1\n"
+                f"PROJECT_ID: {uuid.uuid4()}\n"
+                f"MILESTONE_ID: {uuid.uuid4()}\n"
+                "STATE: running\n"
+                "OWNER_STATE: active\n"
+                f"CONTRACT_SOURCE_SHA: {base}\n"
+                f"CONTRACT_DIGEST: {contract}\n"
+                "ACTION_SEQ: 3\n"
+                "ACTION_STATUS: reconciled\n"
+                f"CLAIM_INDEX: active=AND-1:1@guard-1@feature-1@worker-1,AND-2:1@guard-2@feature-2@worker-2;entries=2;digest={'2' * 64}\n"
+                f"EXECUTION_INDEX: running_count=1;entries=AND-1:1@executor=running,AND-2:1@executor=feature_ready;digest={'1' * 64}\n"
+                "WORKERS: requested_workers=6;runtime_slots_total=21;"
+                "sustained_issue_capacity=6;active_target=1;active_issue_lanes=AND-1;"
+                "refill_blocker=no-compatible-dependent-work\n"
+                "REFILL: target_seconds=60;pending_since=none;"
+                "blocker=no-compatible-dependent-work;evidence=ready_frontier_empty;"
+                "resume_predicate=dependency-terminal\n"
+            )
+            coordinator = self.metadata_commit(repo, message, base)
+            self.git(
+                repo,
+                "push",
+                "origin",
+                f"{coordinator}:{MODULE.CANONICAL_COORDINATOR_REF}",
+            )
+            args = MODULE.argparse.Namespace(
+                repo=str(repo), remote="origin", default="main"
+            )
+            with io.StringIO() as output, redirect_stdout(output):
+                code = MODULE.command_pool_status(args)
+                result = json.loads(output.getvalue())
+            zero_message = message.replace(
+                f"CLAIM_INDEX: active=AND-1:1@guard-1@feature-1@worker-1,AND-2:1@guard-2@feature-2@worker-2;entries=2;digest={'2' * 64}",
+                f"CLAIM_INDEX: active=none;entries=0;digest={'2' * 64}",
+            ).replace(
+                f"EXECUTION_INDEX: running_count=1;entries=AND-1:1@executor=running,AND-2:1@executor=feature_ready;digest={'1' * 64}",
+                f"EXECUTION_INDEX: running_count=0;entries=none;digest={'1' * 64}",
+            ).replace(
+                "requested_workers=6;runtime_slots_total=21;sustained_issue_capacity=6;active_target=1;active_issue_lanes=AND-1;refill_blocker=no-compatible-dependent-work",
+                "requested_workers=0;runtime_slots_total=21;sustained_issue_capacity=0;active_target=0;active_issue_lanes=none;refill_blocker=user-requested-direct-investigation",
+            ).replace(
+                "blocker=no-compatible-dependent-work;evidence=ready_frontier_empty;resume_predicate=dependency-terminal",
+                "blocker=user-requested-direct-investigation;evidence=explicit-user-override;resume_predicate=explicit-new-release-request",
+            )
+            zero = self.metadata_commit(repo, zero_message, coordinator)
+            self.git(
+                repo,
+                "push",
+                "origin",
+                f"{zero}:{MODULE.CANONICAL_COORDINATOR_REF}",
+            )
+            with io.StringIO() as output, redirect_stdout(output):
+                zero_code = MODULE.command_pool_status(args)
+                zero_result = json.loads(output.getvalue())
+        self.assertEqual((code, result["status"]), (0, "ok"))
+        self.assertEqual(result["running"], 1)
+        self.assertEqual(result["sustained_issue_capacity"], 6)
+        self.assertEqual(result["feature_ready"], 1)
+        self.assertTrue(result["underfilled"])
+        self.assertEqual(result["refill"]["blocker"], "no-compatible-dependent-work")
+        self.assertIn("running=1/6", result["summary"])
+        self.assertEqual((zero_code, zero_result["status"]), (0, "ok"))
+        self.assertEqual(
+            zero_result["capacity_reason"], "user-requested-direct-investigation"
+        )
+
+    def test_compact_field_parser_reports_duplicate_authority(self) -> None:
+        parsed, duplicates, malformed = MODULE._compact_fields(
+            "active_target=6;active_target=1;broken"
+        )
+        self.assertEqual(parsed["active_target"], "6")
+        self.assertEqual(duplicates, ["active_target"])
+        self.assertEqual(malformed, ["broken"])
 
 
 class PreflightTest(GitMixin, unittest.TestCase):
@@ -2188,6 +3147,40 @@ class TransitionTest(GitMixin, unittest.TestCase):
             code, result = self.invoke(repo, parent, [])
         self.assertEqual(code, 2)
         self.assertIn("invalid:transition:not-object", result["errors"])
+
+
+class ParserSmokeTest(unittest.TestCase):
+    def test_new_commands_are_cli_reachable_and_repeated_paths_are_preserved(self) -> None:
+        cases = {
+            "pool-status": ["pool-status"],
+            "startup-plan": ["startup-plan", "--input", "snapshot.json"],
+            "projection-plan": ["projection-plan", "--input", "projection.json"],
+            "projection-batch-cas": [
+                "projection-batch-cas",
+                "--phase",
+                "intent",
+                "--expected-coordinator-sha",
+                "a" * 40,
+            ],
+            "refill-check": ["refill-check", "--input", "refill.json"],
+        }
+        for command, argv in cases.items():
+            with self.subTest(command=command):
+                parsed = MODULE.parser().parse_args(argv)
+                self.assertEqual(parsed.command, command)
+                self.assertTrue(callable(parsed.handler))
+        provision = MODULE.parser().parse_args(
+            [
+                "provision-worktree",
+                "--worktree",
+                "/tmp/worker",
+                "--path",
+                "apps/one",
+                "--path",
+                "apps/two",
+            ]
+        )
+        self.assertEqual(provision.path, ["apps/one", "apps/two"])
 
 
 if __name__ == "__main__":

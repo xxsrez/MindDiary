@@ -39,9 +39,12 @@ gates или определение production.
 
 `workers=N` — точное требование к устойчивой issue capacity. Если runtime или
 безопасные ресурсы не позволяют поддерживать N, run не начинает claim и
-сообщает доступные числа. Меньшее число ready issue не является ошибкой: active
-target временно равен ready frontier, а свободный slot заполняется сразу после
-появления совместимой задачи. `auto` выбирает минимум runtime capacity,
+сообщает доступные числа. Меньшее число ready issue не является ошибкой:
+`refill_count=min(max(sustained-running,0), compatible ready)`, а текущий
+`active_target=running+refill_count`. Состояние
+`running > sustained_issue_capacity` означает capacity drift и блокирует новый
+dispatch; свободный slot заполняется сразу после появления совместимой задачи.
+`auto` выбирает минимум runtime capacity,
 resource capacity и optional maximum как `sustained_issue_capacity`; ready
 frontier ограничивает только текущий `active_target`, но не устойчивую
 capacity. Источники runtime/resource capacity передаются в `launch-check` явно
@@ -106,7 +109,10 @@ acceptance contradiction.
 
 Выбор project/current milestone, dependency graph и ready frontier выполняет
 typed `shipctl.py milestone-plan`. Malformed, ambiguous или structurally
-blocked snapshot запрещает claim; model не исправляет его догадкой.
+blocked snapshot запрещает claim; model не исправляет его догадкой. Snapshot
+обязан содержать typed поля `id`, `identifier`, `title`, `state`, `priority`,
+`labels`, `createdAt`, `updatedAt`, milestone, dependencies и finite board
+position; digest и ready ordering не зависят от порядка входных массивов.
 
 Отсутствующие исходники, тесты, config или deployment implementation внутри
 уже принятого scope не являются внешним blocker. Это work item: owning issue
@@ -155,7 +161,11 @@ Sharing read-only sealed artifacts допустим только при exact pr
 не разделяются.
 Для Node worktree coordinator использует `shipctl.py provision-worktree`:
 exact lockfile, task-owned `npm ci`, ignored `.codex-task` receipt и отсутствие
-symlink overlay являются dispatch prerequisite.
+symlink overlay являются dispatch prerequisite. Все ownership paths передаются
+повторяемым `--path`; helper устанавливает root и каждый tracked nested
+`package-lock.json`, затронутый owned directory/file. Untracked lockfile не
+является dependency authority, а изменение любого выбранного lockfile меняет
+provisioning digest и запрещает adoption старого receipt.
 
 ## 7. Goal contract
 
@@ -204,6 +214,22 @@ non-shell targeted argv, canonical manifest digest и fresh scope fingerprint
 Worker receipt принимается только после `receipt-verify` exact refs/guard/scope/
 diff checks. `needs-coordinator` маршрутизирует scope и defect вопросы без
 преждевременного запроса пользователю.
+Manifest dispatch обязан совпадать с exact live claim binding. В active/receipt
+phase более новый coordinator SHA допустим только как descendant исходного при
+том же run/owner/epoch и пока exact issue generation, guard и feature binding
+остаются live; current guard обязан быть descendant dispatch guard и не быть
+`fenced|terminal` (для receipt — ровно `ready`).
+
+Linear status/comment — projection durable Git facts. `projection-plan` создаёт
+run/generation-scoped items и короткий читаемый comment со статусом, изменениями,
+проверкой и следующим шагом. До provider calls `projection-batch-cas` сохраняет
+под exact expected coordinator SHA полный identity vector, после calls — полный
+item-wise `applied|absent|failed|ambiguous` vector. Частичный failure не стирает
+успешные соседние results и не разрешает повторить их вслепую.
+
+После `running -> feature_ready` slot освобождается. Refill target `<=60s`
+считается `refill-check` без усечения fractional seconds; невозможные timestamps,
+placeholder evidence и late spawn fail closed либо сохраняют missed evidence.
 
 ## 9. Cutoff, общие проверки и default
 
@@ -308,6 +334,12 @@ IDs и receipts приводятся после объяснения, а не в
 
 - `goal-card` ограничивает и хеширует exact Goal objective;
 - `milestone-plan` валидирует current milestone и dependency frontier;
+- `startup-plan` объединяет invocation/frontier/capacity, но на resume берёт
+  occupancy только из authoritative `EXECUTION_INDEX` и live claims, а при
+  отсутствии нового count сохраняет durable worker request;
+- `pool-status` объясняет фактическую загрузку и unused capacity без UI subagents;
+- `projection-plan` и `projection-batch-cas` дают двухфазную crash-safe Linear
+  projection; `refill-check` фиксирует точную 60-second boundary;
 - `manifest`, `provision-worktree`, `dispatch-check` и `receipt-verify`
   ограждают issue lane;
 - `conveyor-next` допускает только ordered lifecycle с обязательным evidence;
@@ -316,7 +348,10 @@ IDs и receipts приводятся после объяснения, а не в
   proof и expected-old CAS;
 - `status`, `cleanup-plan` и `cleanup-apply` закрывают terminal run без удаления
   dirty, active или unpublished carrier; cleanup требует coherent terminal
-  coordinator, zero occupancy, no live claims и claim-bound branch identity.
+coordinator, zero occupancy, no live claims и claim-bound branch identity.
+
+Canonical `npm run check` включает Python orchestration suites; изменение helper
+без этих tests не может пройти repository gate.
 
 Metadata ledger bounded по размеру, запрещает duplicate scalar headers и перед
 переполнением compacts только terminal history до count+digest. Primary/default

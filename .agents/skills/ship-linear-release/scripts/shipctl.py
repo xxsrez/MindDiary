@@ -3,9 +3,10 @@
 
 Policy remains in SKILL.md and references. Most commands are read-only.
 ``metadata-commit`` creates only an unreachable local metadata commit object.
-The explicit ``soft-pause``, ``takeover``, ``fence-guards``, and
-``sync-contract`` commands perform narrowly fenced Git CAS transitions; they
-never mutate Linear, worktrees, feature refs, default, deployment, or tags.
+The explicit ``soft-pause``, ``takeover``, ``fence-guards``,
+``sync-contract``, and ``projection-batch-cas`` commands perform narrowly
+fenced Git CAS transitions. They never mutate Linear, worktrees, feature refs,
+default, deployment, or tags; projection provider calls remain external.
 """
 
 from __future__ import annotations
@@ -16,12 +17,14 @@ from datetime import datetime, timezone
 import hashlib
 import io
 import json
+import math
 import os
 import re
 import secrets
 import subprocess
 import sys
 import tempfile
+import time
 import uuid
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -201,7 +204,13 @@ TEST_SURFACE_TOKENS: tuple[tuple[str, frozenset[str]], ...] = (
 
 TRANSITION_NAMESPACE = uuid.UUID("d34453c7-5bd3-5362-a00d-04e8708c6f5a")
 REBUILDABLE_METADATA_HEADERS = {"COMMENT_MAP"}
-REPEATABLE_METADATA_HEADERS = {"COMMENT_MAP", "CLAIM_MAP", "LINEAR_DONE"}
+REPEATABLE_METADATA_HEADERS = {
+    "COMMENT_MAP",
+    "CLAIM_MAP",
+    "LINEAR_DONE",
+    "PROJECTION_ITEM",
+    "PROJECTION_RESULT",
+}
 ACTION_HEADERS = (
     "ACTION_SEQ",
     "ACTION_ID",
@@ -392,14 +401,28 @@ def _structured_token(value: str, name: str) -> str | None:
     return match.group(1) if match else None
 
 
-def _semicolon_fields(value: str) -> dict[str, str]:
-    """Parse compact ``key=value;...`` fields without splitting comma values."""
+def _compact_fields(value: str) -> tuple[dict[str, str], list[str], list[str]]:
+    """Parse compact ``key=value;...`` fields and surface ambiguous records."""
     parsed: dict[str, str] = {}
+    duplicates: list[str] = []
+    malformed: list[str] = []
     for part in value.split(";"):
         key, separator, item = part.partition("=")
         normalized = key.strip().lower()
-        if separator and normalized and normalized not in parsed:
+        if not part.strip():
+            continue
+        if not separator or not normalized:
+            malformed.append(part.strip())
+        elif normalized in parsed:
+            duplicates.append(normalized)
+        else:
             parsed[normalized] = item.strip()
+    return parsed, sorted(set(duplicates)), malformed
+
+
+def _semicolon_fields(value: str) -> dict[str, str]:
+    """Parse compact ``key=value;...`` fields without splitting comma values."""
+    parsed, _, _ = _compact_fields(value)
     return parsed
 
 
@@ -1182,6 +1205,151 @@ def command_status(args: argparse.Namespace) -> int:
     return 0 if preflight_code == 0 and worktree_error is None else 3
 
 
+def command_pool_status(args: argparse.Namespace) -> int:
+    """Report worker occupancy and refill state from the canonical ledger."""
+    repo = Path(args.repo).resolve()
+    preflight_code, preflight = _capture_preflight(repo, args.remote, args.default)
+    canonical = next(
+        (
+            item
+            for item in preflight.get("coordinator_refs", [])
+            if item.get("kind") == "canonical"
+        ),
+        None,
+    )
+    if canonical is None:
+        emit(
+            {
+                "schema": 1,
+                "status": "idle" if preflight_code == 0 else "blocked",
+                "route": preflight.get("route"),
+                "running": 0,
+                "feature_ready": 0,
+                "summary": "worker pool: no canonical run",
+                "reasons": preflight.get("reasons", []),
+            }
+        )
+        return 0 if preflight_code == 0 else 3
+    sha = canonical.get("sha")
+    if not isinstance(sha, str):
+        emit({"schema": 1, "status": "blocked", "reason": "coordinator-sha-invalid"})
+        return 3
+    message, materialization_error = _materialize_coordinator_parent(repo, args.remote, sha)
+    if materialization_error or message is None:
+        emit(
+            {
+                "schema": 1,
+                "status": "blocked",
+                "reason": materialization_error or "coordinator-message-unavailable",
+            }
+        )
+        return 3
+    metadata, header_duplicates = parse_fields(message)
+    workers, worker_duplicates, worker_malformed = _compact_fields(
+        metadata.get("WORKERS", "")
+    )
+    refill, refill_duplicates, refill_malformed = _compact_fields(
+        metadata.get("REFILL", "")
+    )
+    execution, execution_errors = _execution_vector(metadata.get("EXECUTION_INDEX", ""))
+    live_claims, claim_errors = _strict_active_claim_pairs(message)
+    errors = [
+        *[f"duplicate-header:{name}" for name in header_duplicates],
+        *[f"duplicate-workers-field:{name}" for name in worker_duplicates],
+        *[f"malformed-workers-field:{name}" for name in worker_malformed],
+        *[f"duplicate-refill-field:{name}" for name in refill_duplicates],
+        *[f"malformed-refill-field:{name}" for name in refill_malformed],
+        *execution_errors,
+        *claim_errors,
+    ]
+    sustained = _positive_count(workers.get("sustained_issue_capacity"))
+    active_target = _positive_count(workers.get("active_target"))
+    running = sum(state == "running" for state in execution.values())
+    feature_ready = sum(state == "feature_ready" for state in execution.values())
+    active_lanes = _list_value(workers.get("active_issue_lanes"))
+    if sustained is None:
+        errors.append("invalid:workers.sustained_issue_capacity")
+    if active_target is None:
+        errors.append("invalid:workers.active_target")
+    running_pairs = {key for key, state in execution.items() if state == "running"}
+    occupied_pairs = {
+        key
+        for key, state in execution.items()
+        if state in {"running", "coordinator-paused", "feature_ready"}
+    }
+    if len(active_lanes) != len(set(active_lanes)) or sorted(active_lanes) != sorted(
+        issue for issue, _ in running_pairs
+    ):
+        errors.append("invalid:workers.active_issue_lanes")
+    if not occupied_pairs.issubset(live_claims):
+        errors.append("invalid:execution-without-live-claim")
+    if not live_claims.issubset(set(execution)):
+        errors.append("invalid:live-claim-without-execution-entry")
+    if sustained is not None and active_target is not None and active_target > sustained:
+        errors.append("invalid:workers.active_target-above-sustained")
+    refill_blocker = refill.get("blocker", workers.get("refill_blocker", "unknown"))
+    available_slots = max((sustained or 0) - running, 0)
+    underfilled = sustained is not None and running < sustained
+    target_gap = max((active_target or 0) - running, 0)
+    pending_since = refill.get("pending_since", "unknown")
+    unexplained_target_gap = (
+        target_gap > 0
+        and refill_blocker in {"", "none", "unknown"}
+        and pending_since in {"", "none", "unknown"}
+    )
+    if unexplained_target_gap:
+        errors.append("active-target-gap-without-refill-state")
+    capacity_reason = (
+        refill_blocker
+        if sustained == 0 and refill_blocker not in {"", "none", "unknown"}
+        else "no-sustained-capacity"
+        if sustained == 0
+        else "capacity-full"
+        if not underfilled
+        else refill_blocker
+        if refill_blocker not in {"", "none", "unknown"}
+        else "ready-set-limited"
+        if active_target is not None and active_target < (sustained or 0)
+        else "refill-pending"
+    )
+    summary = (
+        f"worker pool: running={running}/{sustained if sustained is not None else '?'}; "
+        f"target={active_target if active_target is not None else '?'}; "
+        f"feature_ready={feature_ready}; refill_blocker={refill_blocker}"
+    )
+    emit(
+        {
+            "schema": 1,
+            "status": "attention" if errors or preflight_code != 0 else "ok",
+            "route": preflight.get("route"),
+            "coordinator": sha,
+            "run_id": metadata.get("RUN_ID"),
+            "requested_workers": workers.get("requested_workers", "unknown"),
+            "runtime_slots_total": _positive_count(workers.get("runtime_slots_total")),
+            "sustained_issue_capacity": sustained,
+            "active_target": active_target,
+            "running": running,
+            "available_slots": available_slots,
+            "feature_ready": feature_ready,
+            "active_issue_lanes": active_lanes,
+            "underfilled": underfilled,
+            "target_gap": target_gap,
+            "target_satisfied": target_gap == 0,
+            "capacity_reason": capacity_reason,
+            "refill": {
+                "target_seconds": _positive_count(refill.get("target_seconds")),
+                "pending_since": pending_since,
+                "blocker": refill_blocker,
+                "evidence": refill.get("evidence", "unknown"),
+                "resume_predicate": refill.get("resume_predicate", "unknown"),
+            },
+            "errors": list(dict.fromkeys(errors)),
+            "summary": summary,
+        }
+    )
+    return 3 if errors or preflight_code != 0 else 0
+
+
 def _active_claim_pairs(repo: Path, coordinator: str | None) -> set[tuple[str, int]]:
     if coordinator is None or not foreign_main.object_exists(repo, coordinator):
         return set()
@@ -1196,6 +1364,82 @@ def _active_claim_pairs(repo: Path, coordinator: str | None) -> set[tuple[str, i
         if match:
             pairs.add((match.group(1), int(match.group(2))))
     return pairs
+
+
+def _strict_active_claim_pairs(
+    message: str,
+) -> tuple[set[tuple[str, int]], list[str]]:
+    metadata, header_duplicates = parse_fields(message)
+    index, duplicates, malformed = _compact_fields(metadata.get("CLAIM_INDEX", ""))
+    errors = [
+        *[f"duplicate-header:{name}" for name in header_duplicates],
+        *[f"duplicate-claim-index-field:{name}" for name in duplicates],
+        *[f"malformed-claim-index-field:{name}" for name in malformed],
+    ]
+    pairs: set[tuple[str, int]] = set()
+    active_values = _list_value(index.get("active"))
+    for value in active_values:
+        match = re.fullmatch(
+            rf"({ISSUE_IDENTIFIER.pattern}):([1-9][0-9]*)@.+", value
+        )
+        if match is None:
+            errors.append("invalid:claim-index-active-shape")
+            continue
+        pair = (match.group(1), int(match.group(2)))
+        if pair in pairs:
+            errors.append(f"invalid:duplicate-active-claim:{pair[0]}:{pair[1]}")
+        pairs.add(pair)
+    declared = _positive_count(index.get("entries"))
+    if declared is None or declared < len(active_values):
+        errors.append("invalid:claim-index-entry-count")
+    return pairs, list(dict.fromkeys(errors))
+
+
+def _active_claim_binding(
+    message: str, issue: str, generation: int
+) -> tuple[dict[str, str] | None, list[str]]:
+    metadata, header_duplicates = parse_fields(message)
+    index, index_duplicates, index_malformed = _compact_fields(
+        metadata.get("CLAIM_INDEX", "")
+    )
+    errors = [
+        *[f"duplicate-header:{name}" for name in header_duplicates],
+        *[f"duplicate-claim-index-field:{name}" for name in index_duplicates],
+        *[f"malformed-claim-index-field:{name}" for name in index_malformed],
+    ]
+    key = f"{issue}:{generation}"
+    matching = [
+        value
+        for value in _list_value(index.get("active"))
+        if value.split("@", 1)[0] == key
+    ]
+    if len(matching) != 1:
+        errors.append(f"active-claim-binding-count:{key}:{len(matching)}")
+        return None, errors
+    value = matching[0]
+    parts = value.split("@")
+    if len(parts) != 4:
+        fallbacks = [
+            item
+            for item in _metadata_values(message, "CLAIM_MAP")
+            if item.split("@", 1)[0] == key
+        ]
+        if len(fallbacks) != 1:
+            errors.append(f"active-claim-map-count:{key}:{len(fallbacks)}")
+            return None, errors
+        parts = fallbacks[0].split("@")
+    if len(parts) != 4:
+        errors.append(f"active-claim-binding-shape:{key}")
+        return None, errors
+    declared = _positive_count(index.get("entries"))
+    if declared is None or declared < len(_list_value(index.get("active"))):
+        errors.append("invalid:claim-index-entry-count")
+    return {
+        "identity": parts[0],
+        "guard": parts[1],
+        "feature": parts[2],
+        "claim_token": parts[3],
+    }, errors
 
 
 def _branch_claim_pair(branch: str) -> tuple[str, int] | None:
@@ -1598,6 +1842,7 @@ def command_invocation(args: argparse.Namespace) -> int:
             "worker_mode": "auto" if workers == "auto" else "exact",
             "workers": workers,
             "max_workers": max_workers,
+            "workers_explicit": bool(candidates),
             "dry_run": dry_run,
             "errors": errors,
         }
@@ -1662,12 +1907,18 @@ def command_launch_check(args: argparse.Namespace) -> int:
     if args.max_workers is not None:
         configured_limit = min(configured_limit, args.max_workers)
     sustained = min(configured_limit, safe_capacity)
-    active_target = min(sustained, args.compatible_ready)
+    available_slots = max(sustained - args.running, 0)
+    refill_count = min(available_slots, args.compatible_ready)
+    active_target = min(sustained, args.running + refill_count)
 
     reasons: list[str] = []
     if requested is not None and requested > safe_capacity:
         reasons.append(
             f"exact-worker-capacity-unavailable:requested={requested};sustained={safe_capacity}"
+        )
+    if args.running > sustained:
+        reasons.append(
+            f"running-above-sustained-capacity:running={args.running};sustained={sustained}"
         )
     if args.unfinished > 0 and sustained == 0 and args.running == 0:
         reasons.append("no-sustainable-worker-capacity")
@@ -1693,6 +1944,8 @@ def command_launch_check(args: argparse.Namespace) -> int:
             "compatible_ready": args.compatible_ready,
             "unfinished": args.unfinished,
             "running": args.running,
+            "available_slots": available_slots,
+            "refill_count": refill_count,
             "active_target": active_target,
             "reasons": reasons or (["ready-set-limited"] if active_target < sustained else ["capacity-satisfied"]),
         }
@@ -1726,6 +1979,7 @@ def command_milestone_plan(args: argparse.Namespace) -> int:
         errors.append("invalid:issues")
         issues = []
     by_identifier: dict[str, dict[str, Any]] = {}
+    normalized_issues: list[dict[str, Any]] = []
     for issue in issues:
         identifier = issue.get("identifier")
         if not isinstance(identifier, str) or ISSUE_IDENTIFIER.fullmatch(identifier) is None:
@@ -1733,10 +1987,27 @@ def command_milestone_plan(args: argparse.Namespace) -> int:
             continue
         if identifier in by_identifier:
             errors.append(f"invalid:duplicate-issue:{identifier}")
-        by_identifier[identifier] = issue
+            continue
         if milestone is not None and issue.get("milestone_id") != milestone.get("id"):
             errors.append(f"invalid:issue-milestone:{identifier}")
-        if issue.get("state") not in {
+        issue_id = issue.get("id")
+        if not isinstance(issue_id, str) or not (
+            ISSUE_IDENTIFIER.fullmatch(issue_id) or UUID_TEXT.fullmatch(issue_id)
+        ):
+            errors.append(f"invalid:issue-id:{identifier}")
+        elif ISSUE_IDENTIFIER.fullmatch(issue_id) and issue_id != identifier:
+            errors.append(f"invalid:issue-id-mismatch:{identifier}")
+        title = issue.get("title")
+        if (
+            not isinstance(title, str)
+            or not title.strip()
+            or len(title) > 500
+            or any(character in title for character in ("\0", "\n", "\r"))
+        ):
+            errors.append(f"invalid:issue-title:{identifier}")
+            title = "Invalid"
+        state = issue.get("state")
+        if not isinstance(state, str) or state not in {
             "Backlog",
             "Todo",
             "In Progress",
@@ -1746,17 +2017,82 @@ def command_milestone_plan(args: argparse.Namespace) -> int:
             "Duplicate",
         }:
             errors.append(f"invalid:issue-state:{identifier}")
-        dependencies = issue.get("dependencies", [])
+            state = "Invalid"
+        dependencies = issue.get("dependencies")
         if not isinstance(dependencies, list) or not all(isinstance(value, str) for value in dependencies):
             errors.append(f"invalid:issue-dependencies:{identifier}")
+            dependencies = []
         elif len(set(dependencies)) != len(dependencies):
             errors.append(f"invalid:duplicate-issue-dependency:{identifier}")
-        if issue.get("production_requirement", "unknown") not in {
+        production_requirement = issue.get("production_requirement")
+        if not isinstance(production_requirement, str) or production_requirement not in {
             "required",
             "not-required",
             "unknown",
         }:
             errors.append(f"invalid:production-requirement:{identifier}")
+            production_requirement = "unknown"
+        priority = issue.get("priority")
+        if not isinstance(priority, int) or isinstance(priority, bool) or priority not in range(5):
+            errors.append(f"invalid:issue-priority:{identifier}")
+            priority = 0
+        labels = issue.get("labels")
+        if not isinstance(labels, list) or not all(
+            isinstance(value, str)
+            and value
+            and len(value) <= 100
+            and not any(character in value for character in ("\0", "\n", "\r"))
+            for value in labels
+        ):
+            errors.append(f"invalid:issue-labels:{identifier}")
+            labels = []
+        if "createdAt" in issue and "created_at" in issue:
+            errors.append(f"invalid:duplicate-issue-created-at:{identifier}")
+        created_at = issue.get("createdAt", issue.get("created_at"))
+        created_datetime = _utc_datetime(created_at)
+        if created_datetime is None:
+            errors.append(f"invalid:issue-created-at:{identifier}")
+            created_at = ""
+        else:
+            created_at = _utc_text(created_datetime)
+        if "updatedAt" in issue and "updated_at" in issue:
+            errors.append(f"invalid:duplicate-issue-updated-at:{identifier}")
+        updated_at = issue.get("updatedAt", issue.get("updated_at"))
+        updated_datetime = _utc_datetime(updated_at)
+        if updated_datetime is None:
+            errors.append(f"invalid:issue-updated-at:{identifier}")
+            updated_at = ""
+        else:
+            updated_at = _utc_text(updated_datetime)
+        if "boardPosition" in issue and "board_position" in issue:
+            errors.append(f"invalid:duplicate-issue-board-position:{identifier}")
+        board_position = issue.get("boardPosition", issue.get("board_position"))
+        if (
+            not isinstance(board_position, (int, float))
+            or isinstance(board_position, bool)
+            or not math.isfinite(board_position)
+        ):
+            errors.append(f"invalid:issue-board-position:{identifier}")
+            board_position = 0
+        normalized_issue = {
+            **issue,
+            "id": issue_id,
+            "identifier": identifier,
+            "title": title,
+            "state": state,
+            "dependencies": sorted(dependencies),
+            "production_requirement": production_requirement,
+            "priority": priority,
+            "labels": sorted(labels, key=str.casefold),
+            "created_at": created_at,
+            "updated_at": updated_at,
+            "board_position": board_position,
+        }
+        normalized_issue.pop("createdAt", None)
+        normalized_issue.pop("updatedAt", None)
+        normalized_issue.pop("boardPosition", None)
+        by_identifier[identifier] = normalized_issue
+        normalized_issues.append(normalized_issue)
     terminal_states = {"Done", "Canceled", "Duplicate"}
     unfinished = {
         identifier: issue
@@ -1795,12 +2131,57 @@ def command_milestone_plan(args: argparse.Namespace) -> int:
         for identifier, issue in unfinished.items()
         if issue.get("state") in {"In Progress", "In Review"}
     )
+    dependent_count = {
+        identifier: sum(
+            identifier in dependent.get("dependencies", [])
+            and all(
+                dependency == identifier
+                or (
+                    dependency in by_identifier
+                    and by_identifier[dependency].get("state") in terminal_states
+                )
+                for dependency in dependent.get("dependencies", [])
+            )
+            for dependent in unfinished.values()
+        )
+        for identifier in unfinished
+    }
+
+    def ready_order(identifier: str) -> tuple[Any, ...]:
+        issue = unfinished[identifier]
+        priority = issue.get("priority", 0)
+        priority_rank = priority if priority in {1, 2, 3, 4} else 5
+        labels = {value.casefold() for value in issue.get("labels", [])}
+        bug_rank = 0 if labels.intersection({"bug", "regression"}) else 1
+        return (
+            priority_rank,
+            bug_rank,
+            -dependent_count[identifier],
+            (
+                _utc_datetime(issue.get("created_at")).timestamp()
+                if _utc_datetime(issue.get("created_at")) is not None
+                else math.inf
+            ),
+            issue.get("board_position", 0),
+            identifier,
+        )
+
     ready = sorted(
-        identifier
-        for identifier, issue in unfinished.items()
-        if identifier not in running
-        and all(by_identifier[dependency].get("state") in terminal_states for dependency in issue.get("dependencies", []) if dependency in by_identifier)
-        and all(dependency in by_identifier for dependency in issue.get("dependencies", []))
+        (
+            identifier
+            for identifier, issue in unfinished.items()
+            if identifier not in running
+            and all(
+                by_identifier[dependency].get("state") in terminal_states
+                for dependency in issue.get("dependencies", [])
+                if dependency in by_identifier
+            )
+            and all(
+                dependency in by_identifier
+                for dependency in issue.get("dependencies", [])
+            )
+        ),
+        key=ready_order,
     )
     obligations = {
         issue.get("production_requirement", "unknown") for issue in unfinished.values()
@@ -1820,7 +2201,17 @@ def command_milestone_plan(args: argparse.Namespace) -> int:
         structural.append("no-actionable-frontier")
     errors.extend(f"invalid:unknown-dependency:{item}" for item in sorted(unknown_dependencies))
     errors.extend(f"invalid:dependency-cycle:{'->'.join(cycle)}" for cycle in cycles)
-    normalized = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    normalized_payload = {
+        **payload,
+        "milestones": sorted(milestones, key=lambda item: (str(item.get("id", "")), str(item.get("name", "")))),
+        "issues": sorted(normalized_issues, key=lambda item: item["identifier"]),
+    }
+    normalized = json.dumps(
+        normalized_payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
     emit(
         {
             "schema": 1,
@@ -1838,6 +2229,1003 @@ def command_milestone_plan(args: argparse.Namespace) -> int:
         }
     )
     return 3 if errors or structural else 0
+
+
+def _capture_emitted(handler: Any, args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
+    with io.StringIO() as output, redirect_stdout(output):
+        code = handler(args)
+        try:
+            payload = json.loads(output.getvalue())
+        except json.JSONDecodeError:
+            return 3, {"schema": 1, "status": "blocked", "reason": "helper-output-invalid"}
+    return code, payload
+
+
+def _capture_json_handler(
+    handler: Any, payload: dict[str, Any]
+) -> tuple[int, dict[str, Any]]:
+    descriptor, name = tempfile.mkstemp(prefix="shipctl-input-", suffix=".json")
+    path = Path(name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            descriptor = -1
+            json.dump(payload, stream, ensure_ascii=False, sort_keys=True)
+        return _capture_emitted(handler, argparse.Namespace(input=str(path)))
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def command_startup_plan(args: argparse.Namespace) -> int:
+    """Collapse preflight, invocation, milestone and capacity planning."""
+    payload, input_error = _read_json(args.input)
+    allowed = {"invocation", "snapshot", "capacity"}
+    if input_error or not isinstance(payload, dict):
+        emit(
+            {
+                "schema": 1,
+                "status": "invalid",
+                "errors": [input_error or "invalid:startup:not-object"],
+            }
+        )
+        return 2
+    errors = [
+        *[f"missing:{name}" for name in sorted(allowed - set(payload))],
+        *[f"unexpected:{name}" for name in sorted(set(payload) - allowed)],
+    ]
+    invocation_text = payload.get("invocation")
+    snapshot = payload.get("snapshot")
+    capacity = payload.get("capacity")
+    capacity_fields = {
+        "runtime_slots_total",
+        "runtime_source",
+        "safe_resource_capacity",
+        "resource_source",
+        "layout",
+    }
+    if not isinstance(invocation_text, str) or not invocation_text.strip():
+        errors.append("invalid:invocation")
+    if not isinstance(snapshot, dict):
+        errors.append("invalid:snapshot")
+    if not isinstance(capacity, dict):
+        errors.append("invalid:capacity")
+        capacity = {}
+    else:
+        errors.extend(
+            f"missing:capacity.{name}"
+            for name in sorted(capacity_fields - set(capacity))
+        )
+        errors.extend(
+            f"unexpected:capacity.{name}"
+            for name in sorted(set(capacity) - capacity_fields)
+        )
+    if errors:
+        emit({"schema": 1, "status": "invalid", "errors": errors})
+        return 2
+
+    repo = Path(args.repo).resolve()
+    preflight_code, preflight = _capture_preflight(repo, args.remote, args.default)
+    route = preflight.get("route")
+    if preflight_code != 0 or route not in {"normal", "resume"}:
+        next_steps = {
+            "takeover": "run-takeover",
+            "drain-owner": "continue-soft-pause",
+            "recover-owner": "continue-recovery",
+            "recover-owner-upgrade": "run-sync-contract",
+            "recovery": "observe-active-run-read-only",
+            "blocked": "resolve-preflight-blocker",
+        }
+        emit(
+            {
+                "schema": 1,
+                "status": "routed" if preflight_code == 0 else "blocked",
+                "route": route,
+                "mutation_allowed": preflight.get("mutation_allowed", False),
+                "reasons": preflight.get("reasons", []),
+                "next": next_steps.get(str(route), "follow-preflight-route"),
+            }
+        )
+        return 0 if preflight_code == 0 else 3
+
+    invocation_code, invocation = _capture_emitted(
+        command_invocation, argparse.Namespace(text=invocation_text)
+    )
+    assert isinstance(snapshot, dict)
+    milestone_code, milestone = _capture_json_handler(command_milestone_plan, snapshot)
+    if invocation_code != 0 or milestone.get("status") == "invalid":
+        emit(
+            {
+                "schema": 1,
+                "status": "invalid",
+                "route": route,
+                "invocation": invocation,
+                "milestone": milestone,
+            }
+        )
+        return 2
+    unfinished = milestone.get("unfinished")
+    ready = milestone.get("ready")
+    running = milestone.get("running")
+    if not isinstance(unfinished, int) or not isinstance(ready, list) or not isinstance(running, list):
+        emit(
+            {
+                "schema": 1,
+                "status": "blocked",
+                "route": route,
+                "reason": "milestone-plan-incomplete",
+                "milestone": milestone,
+            }
+        )
+        return 3
+    if milestone_code != 0 or milestone.get("claim_allowed") is not True:
+        emit(
+            {
+                "schema": 1,
+                "status": "blocked",
+                "route": route,
+                "reason": "milestone-frontier-blocked",
+                "milestone": milestone,
+            }
+        )
+        return 3
+    linear_running = list(running)
+    authoritative_running: list[str] = []
+    occupied_issues: set[str] = set()
+    occupancy_sha: str | None = None
+    if route == "resume":
+        active = _active_canonical(preflight)
+        occupancy_sha = active.get("sha") if active else None
+        if not isinstance(occupancy_sha, str):
+            emit(
+                {
+                    "schema": 1,
+                    "status": "blocked",
+                    "route": route,
+                    "reason": "coordinator-occupancy-unavailable",
+                }
+            )
+            return 3
+        message, materialization_error = _materialize_coordinator_parent(
+            repo, args.remote, occupancy_sha
+        )
+        if materialization_error or message is None:
+            emit(
+                {
+                    "schema": 1,
+                    "status": "blocked",
+                    "route": route,
+                    "reason": materialization_error or "coordinator-message-unavailable",
+                }
+            )
+            return 3
+        metadata, header_duplicates = parse_fields(message)
+        workers, worker_duplicates, worker_malformed = _compact_fields(
+            metadata.get("WORKERS", "")
+        )
+        execution, execution_errors = _execution_vector(
+            metadata.get("EXECUTION_INDEX", "")
+        )
+        running_entries = {
+            key for key, state in execution.items() if state == "running"
+        }
+        live_claims, claim_errors = _strict_active_claim_pairs(message)
+        active_lanes = _list_value(workers.get("active_issue_lanes"))
+        occupancy_errors = [
+            *[f"duplicate-header:{name}" for name in header_duplicates],
+            *[f"duplicate-workers-field:{name}" for name in worker_duplicates],
+            *[f"malformed-workers-field:{name}" for name in worker_malformed],
+            *execution_errors,
+            *claim_errors,
+        ]
+        if invocation.get("workers_explicit") is not True:
+            saved_keys = [
+                name for name in ("requested_workers", "requested") if name in workers
+            ]
+            saved_request = workers.get(saved_keys[0], "") if len(saved_keys) == 1 else ""
+            if len(saved_keys) != 1:
+                occupancy_errors.append("saved-worker-request-ambiguous")
+            saved_match = re.fullmatch(
+                r"auto(?:\(max=([1-9][0-9]*)\))?", saved_request
+            )
+            if saved_request.isdigit() and int(saved_request) > 0:
+                invocation["worker_mode"] = "exact"
+                invocation["workers"] = int(saved_request)
+                invocation["max_workers"] = None
+            elif saved_match is not None:
+                invocation["worker_mode"] = "auto"
+                invocation["workers"] = "auto"
+                invocation["max_workers"] = (
+                    int(saved_match.group(1)) if saved_match.group(1) else None
+                )
+            else:
+                if len(saved_keys) == 1:
+                    occupancy_errors.append("saved-worker-request-unavailable")
+        authority_bound_entries = {
+            key
+            for key, state in execution.items()
+            if state in {"running", "coordinator-paused", "feature_ready"}
+        }
+        if not authority_bound_entries.issubset(live_claims):
+            occupancy_errors.append("active-execution-without-live-claim")
+        if not live_claims.issubset(set(execution)):
+            occupancy_errors.append("live-claim-without-execution-entry")
+        if sorted(active_lanes) != sorted(issue for issue, _ in running_entries):
+            occupancy_errors.append("active-lanes-do-not-match-execution-index")
+        if occupancy_errors:
+            emit(
+                {
+                    "schema": 1,
+                    "status": "blocked",
+                    "route": route,
+                    "reason": "coordinator-occupancy-incoherent",
+                    "errors": list(dict.fromkeys(occupancy_errors)),
+                }
+            )
+            return 3
+        authoritative_running = [
+            f"{issue}:{generation}" for issue, generation in sorted(running_entries)
+        ]
+        occupied_issues = {
+            issue
+            for (issue, _), state in execution.items()
+            if state in {"running", "coordinator-paused", "feature_ready"}
+        }
+        occupied_issues.update(issue for issue, _ in live_claims)
+    elif linear_running:
+        emit(
+            {
+                "schema": 1,
+                "status": "blocked",
+                "route": route,
+                "reason": "linear-running-without-execution-authority",
+                "linear_running": linear_running,
+                "next": "reconcile-linear-state-before-claim",
+            }
+        )
+        return 3
+    compatible_ready = [identifier for identifier in ready if identifier not in occupied_issues]
+    launch_args = argparse.Namespace(
+        workers=str(invocation["workers"]),
+        max_workers=invocation.get("max_workers"),
+        runtime_slots_total=capacity.get("runtime_slots_total"),
+        runtime_source=capacity.get("runtime_source"),
+        safe_resource_capacity=capacity.get("safe_resource_capacity"),
+        resource_source=capacity.get("resource_source"),
+        compatible_ready=len(compatible_ready),
+        unfinished=unfinished,
+        running=len(authoritative_running),
+        layout=capacity.get("layout"),
+    )
+    launch_code, launch = _capture_emitted(command_launch_check, launch_args)
+    result = {
+            "schema": 1,
+            "status": "planned" if launch_code == 0 else "blocked",
+            "route": route,
+            "dry_run": invocation.get("dry_run", False),
+            "snapshot_digest": milestone.get("snapshot_digest"),
+            "milestone": {
+                "id": (
+                    milestone.get("milestone", {}).get("id")
+                    if isinstance(milestone.get("milestone"), dict)
+                    else None
+                ),
+                "unfinished": unfinished,
+                "ready": compatible_ready,
+                "linear_running": linear_running,
+                "authoritative_running": authoritative_running,
+                "production_requirement": milestone.get("production_requirement"),
+            },
+            "occupancy_coordinator": occupancy_sha,
+            "launch": launch,
+            "next": (
+                "dispatch-refill-count"
+                if launch_code == 0 and launch.get("refill_count", 0) > 0
+                else "continue-running-work"
+                if launch_code == 0 and authoritative_running
+                else "terminal-reconciliation"
+                if launch_code == 0 and unfinished == 0
+                else "resolve-launch-blocker"
+            ),
+        }
+    result["plan_digest"] = hashlib.sha256(
+        json.dumps(result, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    emit(result)
+    return launch_code
+
+
+def _bounded_projection_text(value: Any, *, maximum: int = 500) -> bool:
+    if (
+        not isinstance(value, str)
+        or not value
+        or len(value) > maximum
+        or any(character in value for character in ("\0", "\n", "\r"))
+    ):
+        return False
+    return re.search(
+        r"(?:authorization\s*[:=]|\bbearer\s+[a-z0-9._-]+|"
+        r"(?:password|secret|token|api[_-]?key|access[_-]?key)\s*[:=])",
+        value,
+        re.IGNORECASE,
+    ) is None
+
+
+PROJECTION_STATUSES: dict[str, set[str]] = {
+    "WORK_CLAIM": {"active", "released", "superseded", "retired"},
+    "FEATURE_RECEIPT": {
+        "ready",
+        "failed",
+        "needs-coordinator",
+        "needs-input",
+        "superseded",
+        "retired",
+    },
+    "DEFECT_CANDIDATE": {
+        "open",
+        "fixing",
+        "excluded",
+        "reverted",
+        "resolved",
+        "rolled-back",
+    },
+}
+
+PROJECTION_HEADLINES = {
+    "active": "Работа начата",
+    "ready": "Изменения готовы",
+    "failed": "Проверка не прошла",
+    "needs-coordinator": "Нужна проверка координатора",
+    "needs-input": "Работа заблокирована",
+    "released": "Работа завершена",
+    "superseded": "Запущена новая версия работы",
+    "retired": "Работа остановлена",
+    "open": "Обнаружена проблема",
+    "fixing": "Исправление выполняется",
+    "excluded": "Изменение исключено из candidate",
+    "reverted": "Изменение отменено",
+    "resolved": "Проблема устранена",
+    "rolled-back": "Выполнен rollback",
+}
+
+
+def _projection_item_id(seed: dict[str, Any]) -> str:
+    canonical = json.dumps(
+        seed, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )
+    return str(uuid.uuid5(TRANSITION_NAMESPACE, f"projection:{canonical}"))
+
+
+def command_projection_plan(args: argparse.Namespace) -> int:
+    payload, input_error = _read_json(args.input)
+    if input_error or not isinstance(payload, dict):
+        emit(
+            {
+                "schema": 1,
+                "status": "invalid",
+                "errors": [input_error or "invalid:projection:not-object"],
+            }
+        )
+        return 2
+    if set(payload) != {"run_id", "items"}:
+        errors = [
+            *[f"missing:{name}" for name in sorted({"run_id", "items"} - set(payload))],
+            *[f"unexpected:{name}" for name in sorted(set(payload) - {"run_id", "items"})],
+        ]
+        emit({"schema": 1, "status": "invalid", "errors": errors})
+        return 2
+    run_id = payload.get("run_id")
+    source_items = payload.get("items")
+    errors: list[str] = []
+    if not isinstance(run_id, str) or UUID_TEXT.fullmatch(run_id) is None:
+        errors.append("invalid:run_id")
+    if (
+        not isinstance(source_items, list)
+        or not source_items
+        or len(source_items) > 12
+        or not all(isinstance(item, dict) for item in source_items)
+    ):
+        errors.append("invalid:items")
+        source_items = []
+    normalized: list[dict[str, Any]] = []
+    markers: set[str] = set()
+    status_targets: set[str] = set()
+    allowed_fields = {
+        "issue_identifier",
+        "issue_id",
+        "receipt_kind",
+        "receipt_key",
+        "generation",
+        "status",
+        "summary",
+        "changes",
+        "evidence",
+        "next",
+        "updated_at",
+        "comment_id",
+        "state_update",
+    }
+    for index, item in enumerate(source_items):
+        prefix = f"items[{index}]"
+        unexpected = sorted(set(item) - allowed_fields)
+        if unexpected:
+            errors.extend(f"unexpected:{prefix}.{name}" for name in unexpected)
+        required = allowed_fields - {"comment_id", "state_update"}
+        errors.extend(
+            f"missing:{prefix}.{name}" for name in sorted(required - set(item))
+        )
+        issue_identifier = item.get("issue_identifier")
+        issue_id = item.get("issue_id")
+        receipt_kind = item.get("receipt_kind")
+        receipt_key = item.get("receipt_key")
+        generation = item.get("generation")
+        status = item.get("status")
+        if not isinstance(issue_identifier, str) or ISSUE_IDENTIFIER.fullmatch(issue_identifier) is None:
+            errors.append(f"invalid:{prefix}.issue_identifier")
+        if not isinstance(issue_id, str) or not (
+            ISSUE_IDENTIFIER.fullmatch(issue_id) or UUID_TEXT.fullmatch(issue_id)
+        ):
+            errors.append(f"invalid:{prefix}.issue_id")
+        elif (
+            ISSUE_IDENTIFIER.fullmatch(issue_id) is not None
+            and isinstance(issue_identifier, str)
+            and issue_id != issue_identifier
+        ):
+            errors.append(f"invalid:{prefix}.issue_id-mismatch")
+        if not isinstance(receipt_kind, str) or receipt_kind not in PROJECTION_STATUSES:
+            errors.append(f"invalid:{prefix}.receipt_kind")
+        if (
+            not isinstance(receipt_key, str)
+            or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9:._/-]{0,255}", receipt_key) is None
+        ):
+            errors.append(f"invalid:{prefix}.receipt_key")
+        if not _positive_int(generation):
+            errors.append(f"invalid:{prefix}.generation")
+        if not isinstance(status, str) or status not in PROJECTION_STATUSES.get(str(receipt_kind), set()):
+            errors.append(f"invalid:{prefix}.status")
+        for name in ("summary", "next"):
+            if not _bounded_projection_text(item.get(name)):
+                errors.append(f"invalid:{prefix}.{name}")
+        for name in ("changes", "evidence"):
+            values = item.get(name)
+            if (
+                not isinstance(values, list)
+                or len(values) > 8
+                or not all(_bounded_projection_text(value) for value in values)
+            ):
+                errors.append(f"invalid:{prefix}.{name}")
+        updated_at = item.get("updated_at")
+        if not _valid_timestamp(updated_at):
+            errors.append(f"invalid:{prefix}.updated_at")
+        comment_id = item.get("comment_id")
+        if comment_id is not None and not _bounded_projection_text(comment_id, maximum=256):
+            errors.append(f"invalid:{prefix}.comment_id")
+        state_update = item.get("state_update")
+        if state_update is not None:
+            if not isinstance(state_update, dict) or set(state_update) != {"expected", "desired"}:
+                errors.append(f"invalid:{prefix}.state_update")
+            elif not all(
+                _bounded_projection_text(state_update.get(name), maximum=100)
+                for name in ("expected", "desired")
+            ) or state_update["expected"] == state_update["desired"]:
+                errors.append(f"invalid:{prefix}.state_update")
+        if errors and any(value.startswith((f"invalid:{prefix}", f"missing:{prefix}", f"unexpected:{prefix}")) for value in errors):
+            continue
+        if state_update is not None:
+            assert isinstance(issue_id, str)
+            if issue_id in status_targets:
+                errors.append(f"invalid:duplicate-status-target:{issue_id}")
+                continue
+            status_targets.add(issue_id)
+        marker = f"<!-- ship-linear-release:{run_id}:{receipt_kind}:{receipt_key} -->"
+        if marker in markers:
+            errors.append(f"invalid:duplicate-marker:{receipt_kind}:{receipt_key}")
+            continue
+        markers.add(marker)
+        normalized.append(
+            {
+                **item,
+                "marker": marker,
+                "changes": list(item["changes"]),
+                "evidence": list(item["evidence"]),
+            }
+        )
+    if errors:
+        emit(
+            {
+                "schema": 1,
+                "status": "invalid",
+                "errors": list(dict.fromkeys(errors)),
+            }
+        )
+        return 2
+
+    projection_items: list[dict[str, Any]] = []
+    for item in sorted(
+        normalized,
+        key=lambda value: (
+            value["issue_identifier"],
+            value["receipt_kind"],
+            value["receipt_key"],
+        ),
+    ):
+        changes = item["changes"] or ["Содержательных изменений пока нет."]
+        evidence = item["evidence"] or ["Проверки ещё не завершены."]
+        machine_lines = [
+            "<details><summary>Служебные данные</summary>",
+            "",
+            "```text",
+            "SCHEMA: 1",
+            f"KIND: {item['receipt_kind']}",
+            f"KEY: {item['receipt_key']}",
+            f"RUN_ID: {run_id}",
+            f"ISSUE: {item['issue_identifier']}",
+            f"GENERATION: {item['generation']}",
+            f"STATUS: {item['status']}",
+            f"UPDATED_AT: {item['updated_at']}",
+            "```",
+            "</details>",
+        ]
+        body = "\n".join(
+            [
+                item["marker"],
+                f"### {PROJECTION_HEADLINES[item['status']]}",
+                "",
+                item["summary"],
+                "",
+                "Что изменилось:",
+                *[f"- {value}" for value in changes],
+                "",
+                "Проверка:",
+                *[f"- {value}" for value in evidence],
+                "",
+                f"Дальше: {item['next']}",
+                "",
+                *machine_lines,
+            ]
+        )
+        if len(body.encode("utf-8")) > 8_192:
+            emit(
+                {
+                    "schema": 1,
+                    "status": "invalid",
+                    "errors": [
+                        f"invalid:item[{item['issue_identifier']}].rendered-comment-too-large"
+                    ],
+                }
+            )
+            return 2
+        body_digest = hashlib.sha256(body.encode()).hexdigest()
+        comment_operation = "update-comment" if item.get("comment_id") else "create-comment"
+        comment_seed = {
+            "run_id": run_id,
+            "generation": item["generation"],
+            "operation": comment_operation,
+            "issue_id": item["issue_id"],
+            "marker": item["marker"],
+            "comment_id": item.get("comment_id"),
+            "payload_digest": body_digest,
+        }
+        comment_item_id = _projection_item_id(comment_seed)
+        projection_items.append(
+            {
+                "item_id": comment_item_id,
+                "operation": comment_operation,
+                "target": f"linear:issue:{item['issue_id']}:comment",
+                "expected_before": (
+                    f"comment_id={item['comment_id']}"
+                    if item.get("comment_id")
+                    else "marker=absent"
+                ),
+                "request_key": f"projection:{comment_item_id}",
+                "selector": f"issue={item['issue_id']};marker={item['marker']}",
+                "payload_digest": body_digest,
+                "effect_identity": f"comment:{item['marker']}@{body_digest}",
+                "payload": {
+                    "comment_id": item.get("comment_id"),
+                    "body": body,
+                },
+            }
+        )
+        if item.get("state_update") is not None:
+            state_update = item["state_update"]
+            state_payload = {"state": state_update["desired"]}
+            state_digest = hashlib.sha256(
+                json.dumps(
+                    state_payload,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode()
+            ).hexdigest()
+            state_seed = {
+                "run_id": run_id,
+                "generation": item["generation"],
+                "operation": "update-status",
+                "issue_id": item["issue_id"],
+                "expected": state_update["expected"],
+                "payload_digest": state_digest,
+            }
+            state_item_id = _projection_item_id(state_seed)
+            projection_items.append(
+                {
+                    "item_id": state_item_id,
+                    "operation": "update-status",
+                    "target": f"linear:issue:{item['issue_id']}:status",
+                    "expected_before": f"state={state_update['expected']}",
+                    "request_key": f"projection:{state_item_id}",
+                    "selector": f"issue={item['issue_id']}",
+                    "payload_digest": state_digest,
+                    "effect_identity": (
+                        f"linear:{item['issue_id']}@{state_update['desired']}"
+                        f"/run={run_id}/generation={item['generation']}"
+                    ),
+                    "payload": state_payload,
+                }
+            )
+    intent_digest = hashlib.sha256(
+        json.dumps(
+            projection_items,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
+    emit(
+        {
+            "schema": 1,
+            "status": "planned",
+            "kind": "projection-batch",
+            "batch_id": str(
+                uuid.uuid5(TRANSITION_NAMESPACE, f"projection-batch:{intent_digest}")
+            ),
+            "intent_digest": intent_digest,
+            "item_count": len(projection_items),
+            "items": projection_items,
+        }
+    )
+    return 0
+
+
+def _validate_projection_plan(
+    payload: Any,
+) -> tuple[list[dict[str, str]], list[str]]:
+    required = {
+        "schema",
+        "status",
+        "kind",
+        "batch_id",
+        "intent_digest",
+        "item_count",
+        "items",
+    }
+    if not isinstance(payload, dict) or set(payload) != required:
+        return [], ["invalid:projection-plan-shape"]
+    errors: list[str] = []
+    items = payload.get("items")
+    if (
+        payload.get("schema") != 1
+        or payload.get("status") != "planned"
+        or payload.get("kind") != "projection-batch"
+        or not isinstance(items, list)
+        or not items
+        or len(items) > 24
+        or payload.get("item_count") != len(items)
+    ):
+        errors.append("invalid:projection-plan-header")
+        items = []
+    expected_item_fields = {
+        "item_id",
+        "operation",
+        "target",
+        "expected_before",
+        "request_key",
+        "selector",
+        "payload_digest",
+        "effect_identity",
+        "payload",
+    }
+    durable: list[dict[str, str]] = []
+    seen_ids: set[str] = set()
+    seen_requests: set[str] = set()
+    for index, item in enumerate(items):
+        prefix = f"items[{index}]"
+        if not isinstance(item, dict) or set(item) != expected_item_fields:
+            errors.append(f"invalid:{prefix}:shape")
+            continue
+        item_id = item.get("item_id")
+        operation = item.get("operation")
+        request_key = item.get("request_key")
+        if not isinstance(item_id, str) or UUID_TEXT.fullmatch(item_id) is None:
+            errors.append(f"invalid:{prefix}.item_id")
+        elif item_id in seen_ids:
+            errors.append(f"invalid:{prefix}.duplicate-item_id")
+        else:
+            seen_ids.add(item_id)
+        if operation not in {"create-comment", "update-comment", "update-status"}:
+            errors.append(f"invalid:{prefix}.operation")
+        for name in (
+            "target",
+            "expected_before",
+            "request_key",
+            "selector",
+            "effect_identity",
+        ):
+            if not _bounded_text(item.get(name)):
+                errors.append(f"invalid:{prefix}.{name}")
+        if isinstance(request_key, str):
+            if request_key in seen_requests:
+                errors.append(f"invalid:{prefix}.duplicate-request_key")
+            seen_requests.add(request_key)
+        digest = item.get("payload_digest")
+        if not isinstance(digest, str) or LOWER_DIGEST.fullmatch(digest) is None:
+            errors.append(f"invalid:{prefix}.payload_digest")
+        provider_payload = item.get("payload")
+        actual_digest: str | None = None
+        if operation in {"create-comment", "update-comment"}:
+            if (
+                not isinstance(provider_payload, dict)
+                or set(provider_payload) != {"comment_id", "body"}
+                or not isinstance(provider_payload.get("body"), str)
+                or len(provider_payload["body"].encode("utf-8")) > 8_192
+            ):
+                errors.append(f"invalid:{prefix}.payload")
+            else:
+                comment_id = provider_payload.get("comment_id")
+                if (
+                    operation == "create-comment" and comment_id is not None
+                ) or (
+                    operation == "update-comment"
+                    and not _bounded_projection_text(comment_id, maximum=256)
+                ):
+                    errors.append(f"invalid:{prefix}.payload.comment_id")
+                actual_digest = hashlib.sha256(
+                    provider_payload["body"].encode()
+                ).hexdigest()
+        elif operation == "update-status":
+            if (
+                not isinstance(provider_payload, dict)
+                or set(provider_payload) != {"state"}
+                or not _bounded_projection_text(provider_payload.get("state"), maximum=100)
+            ):
+                errors.append(f"invalid:{prefix}.payload")
+            else:
+                actual_digest = hashlib.sha256(
+                    json.dumps(
+                        provider_payload,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ).encode()
+                ).hexdigest()
+        if actual_digest is not None and actual_digest != digest:
+            errors.append(f"invalid:{prefix}.payload_digest-mismatch")
+        if not any(error.startswith(f"invalid:{prefix}") for error in errors):
+            durable.append(
+                {
+                    name: item[name]
+                    for name in (
+                        "item_id",
+                        "operation",
+                        "target",
+                        "expected_before",
+                        "request_key",
+                        "selector",
+                        "payload_digest",
+                        "effect_identity",
+                    )
+                }
+            )
+    canonical = json.dumps(
+        items, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )
+    intent_digest = hashlib.sha256(canonical.encode()).hexdigest()
+    batch_id = payload.get("batch_id")
+    if payload.get("intent_digest") != intent_digest:
+        errors.append("invalid:projection-plan-intent-digest")
+    expected_batch = str(
+        uuid.uuid5(TRANSITION_NAMESPACE, f"projection-batch:{intent_digest}")
+    )
+    if not isinstance(batch_id, str) or batch_id != expected_batch:
+        errors.append("invalid:projection-plan-batch-id")
+    durable_size = sum(
+        len(json.dumps(item, ensure_ascii=False, sort_keys=True).encode())
+        for item in durable
+    )
+    if durable_size > 32_768:
+        errors.append("invalid:projection-plan-durable-vector-too-large")
+    return durable, list(dict.fromkeys(errors))
+
+
+def _bounded_refill_value(value: Any) -> bool:
+    return (
+        isinstance(value, str)
+        and 0 < len(value.strip()) <= 300
+        and value.strip().lower() not in {"none", "unknown", "n/a", "na"}
+        and not any(character in value for character in ("\0", "\n", "\r", ";"))
+    )
+
+
+def _elapsed_seconds(start: datetime, end: datetime) -> int | float:
+    value = (end - start).total_seconds()
+    return int(value) if value.is_integer() else round(value, 6)
+
+
+def _utc_text(value: datetime) -> str:
+    utc = value.astimezone(timezone.utc)
+    if utc.microsecond == 0:
+        return utc.isoformat(timespec="seconds").replace("+00:00", "Z")
+    rendered = utc.isoformat(timespec="microseconds").replace("+00:00", "Z")
+    head, suffix = rendered[:-1], "Z"
+    return head.rstrip("0") + suffix
+
+
+def command_refill_check(args: argparse.Namespace) -> int:
+    payload, input_error = _read_json(args.input)
+    if input_error or not isinstance(payload, dict):
+        emit(
+            {
+                "schema": 1,
+                "status": "invalid",
+                "errors": [input_error or "invalid:refill:not-object"],
+            }
+        )
+        return 2
+    allowed = {
+        "ready_observed_at",
+        "evaluated_at",
+        "spawned_at",
+        "target_seconds",
+        "sustained_capacity",
+        "running_count",
+        "compatible_ready",
+        "blocker",
+        "evidence",
+        "resume_predicate",
+    }
+    required = allowed - {"spawned_at", "blocker", "evidence", "resume_predicate"}
+    errors = [
+        *[f"missing:{name}" for name in sorted(required - set(payload))],
+        *[f"unexpected:{name}" for name in sorted(set(payload) - allowed)],
+    ]
+    observed = _utc_datetime(payload.get("ready_observed_at"))
+    evaluated = _utc_datetime(payload.get("evaluated_at"))
+    spawned = (
+        _utc_datetime(payload.get("spawned_at"))
+        if payload.get("spawned_at") is not None
+        else None
+    )
+    if observed is None:
+        errors.append("invalid:ready_observed_at")
+    if evaluated is None:
+        errors.append("invalid:evaluated_at")
+    if payload.get("spawned_at") is not None and spawned is None:
+        errors.append("invalid:spawned_at")
+    target = payload.get("target_seconds")
+    if target != 60:
+        errors.append("invalid:target_seconds")
+    for name in ("sustained_capacity", "running_count", "compatible_ready"):
+        value = payload.get(name)
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            errors.append(f"invalid:{name}")
+    if (
+        isinstance(payload.get("sustained_capacity"), int)
+        and not isinstance(payload.get("sustained_capacity"), bool)
+        and isinstance(payload.get("running_count"), int)
+        and not isinstance(payload.get("running_count"), bool)
+        and payload["running_count"] > payload["sustained_capacity"]
+    ):
+        errors.append("invalid:running_count_above_sustained_capacity")
+    if observed is not None and evaluated is not None and evaluated < observed:
+        errors.append("invalid:evaluated_before_ready")
+    if observed is not None and spawned is not None and spawned < observed:
+        errors.append("invalid:spawned_before_ready")
+    if evaluated is not None and spawned is not None and spawned > evaluated:
+        errors.append("invalid:spawned_after_evaluated")
+    if errors:
+        emit({"schema": 1, "status": "invalid", "errors": list(dict.fromkeys(errors))})
+        return 2
+    assert observed is not None and evaluated is not None and isinstance(target, int)
+    sustained = payload["sustained_capacity"]
+    running = payload["running_count"]
+    compatible_ready = payload["compatible_ready"]
+    deadline = observed.timestamp() + target
+    deadline_text = _utc_text(datetime.fromtimestamp(deadline, timezone.utc))
+    clear_record = (
+        f"target_seconds={target};pending_since=none;blocker=none;"
+        "evidence=none;resume_predicate=none"
+    )
+    if spawned is not None:
+        interval = _elapsed_seconds(observed, spawned)
+        met = interval <= target
+        emit(
+            {
+                "schema": 1,
+                "status": "met" if met else "missed",
+                "interval_seconds": interval,
+                "deadline": deadline_text,
+                "record": (
+                    clear_record
+                    if met
+                    else (
+                        f"target_seconds={target};pending_since={payload['ready_observed_at']};"
+                        f"blocker=late-spawn;evidence=spawned_after={interval}s;"
+                        "resume_predicate=none"
+                    )
+                ),
+                "record_required": not met,
+                "blocker_cleared": met,
+            }
+        )
+        return 0
+    if sustained == 0 or running >= sustained or compatible_ready == 0:
+        emit(
+            {
+                "schema": 1,
+                "status": "not-required",
+                "reason": (
+                    "no-sustainable-capacity"
+                    if sustained == 0
+                    else "capacity-full"
+                    if running >= sustained
+                    else "no-compatible-ready"
+                ),
+                "deadline": deadline_text,
+                "record": clear_record,
+            }
+        )
+        return 0
+    interval = _elapsed_seconds(observed, evaluated)
+    if interval <= target:
+        emit(
+            {
+                "schema": 1,
+                "status": "pending",
+                "interval_seconds": interval,
+                "remaining_seconds": target - interval,
+                "deadline": deadline_text,
+                "record": (
+                    f"target_seconds={target};pending_since={payload['ready_observed_at']};"
+                    "blocker=none;evidence=none;resume_predicate=spawn-compatible-ready"
+                ),
+            }
+        )
+        return 0
+    evidence_fields = ("blocker", "evidence", "resume_predicate")
+    missing_evidence = [
+        name for name in evidence_fields if not _bounded_refill_value(payload.get(name))
+    ]
+    if missing_evidence:
+        emit(
+            {
+                "schema": 1,
+                "status": "needs-evidence",
+                "interval_seconds": interval,
+                "deadline": deadline_text,
+                "errors": [f"missing-or-invalid:{name}" for name in missing_evidence],
+                "record_required": True,
+            }
+        )
+        return 3
+    record = (
+        f"target_seconds={target};pending_since={payload['ready_observed_at']};"
+        f"blocker={payload['blocker']};evidence=interval={interval}s,{payload['evidence']};"
+        f"resume_predicate={payload['resume_predicate']}"
+    )
+    emit(
+        {
+            "schema": 1,
+            "status": "missed",
+            "interval_seconds": interval,
+            "deadline": deadline_text,
+            "record_required": True,
+            "record": record,
+        }
+    )
+    return 0
 
 
 CONVEYOR_TRANSITIONS: dict[str, tuple[str, str, tuple[str, ...]]] = {
@@ -2143,14 +3531,20 @@ def _positive_int(value: Any) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value > 0
 
 
-def _valid_timestamp(value: Any) -> bool:
+def _utc_datetime(value: Any) -> datetime | None:
     if not isinstance(value, str) or not value.endswith("Z"):
-        return False
+        return None
     try:
         parsed = datetime.fromisoformat(value[:-1] + "+00:00")
     except ValueError:
-        return False
-    return parsed.tzinfo is not None and parsed.utcoffset().total_seconds() == 0
+        return None
+    if parsed.tzinfo is None or parsed.utcoffset().total_seconds() != 0:
+        return None
+    return parsed
+
+
+def _valid_timestamp(value: Any) -> bool:
+    return _utc_datetime(value) is not None
 
 
 def _valid_ownership_path(value: Any) -> bool:
@@ -2270,8 +3664,88 @@ def _remote_ref_tip(repo: Path, remote: str, ref: str) -> str | None:
     return parts[0] if len(parts) == 2 and parts[1] == ref and GIT_OID.fullmatch(parts[0]) else None
 
 
+def _required_package_roots(
+    worktree: Path, ownership_paths: list[str]
+) -> tuple[list[Path], list[str]]:
+    worktree = worktree.resolve()
+    roots = {worktree}
+    errors: list[str] = []
+    tracked = foreign_main.run(worktree, "ls-files", "-z")
+    if tracked.returncode != 0:
+        return [worktree], ["invalid:tracked-package-locks-unavailable"]
+    tracked_lock_roots = {
+        (worktree / PurePosixPath(path)).parent.resolve()
+        for path in tracked.stdout.decode("utf-8", "surrogateescape").split("\0")
+        if path and PurePosixPath(path).name == "package-lock.json"
+    }
+    if worktree not in tracked_lock_roots:
+        errors.append("invalid:root-package-lock-untracked")
+    for value in ownership_paths:
+        if not _valid_ownership_path(value):
+            errors.append(f"invalid:provision-path:{value or 'empty'}")
+            continue
+        candidate = (worktree / PurePosixPath(value)).resolve()
+        if not _is_within(candidate, worktree):
+            errors.append(f"invalid:provision-path-outside-worktree:{value}")
+            continue
+        cursor = candidate if candidate.is_dir() else candidate.parent
+        selected = worktree
+        while cursor != worktree and _is_within(cursor, worktree):
+            if cursor in tracked_lock_roots:
+                selected = cursor
+                break
+            cursor = cursor.parent
+        roots.add(selected)
+        if candidate.is_dir():
+            roots.update(
+                package_root
+                for package_root in tracked_lock_roots
+                if package_root == candidate or _is_within(package_root, candidate)
+            )
+    ordered = sorted(
+        roots,
+        key=lambda path: (
+            path != worktree,
+            path.relative_to(worktree).as_posix() if path != worktree else ".",
+        ),
+    )
+    return ordered, list(dict.fromkeys(errors))
+
+
+def _provision_installations(
+    worktree: Path, ownership_paths: list[str]
+) -> tuple[list[dict[str, str]], list[str]]:
+    roots, errors = _required_package_roots(worktree, ownership_paths)
+    installations: list[dict[str, str]] = []
+    for root in roots:
+        lockfile = root / "package-lock.json"
+        if not lockfile.is_file():
+            relative = "." if root == worktree else root.relative_to(worktree).as_posix()
+            errors.append(f"invalid:package-lock-missing:{relative}")
+            continue
+        installations.append(
+            {
+                "root": "." if root == worktree else root.relative_to(worktree).as_posix(),
+                "lockfile_digest": hashlib.sha256(lockfile.read_bytes()).hexdigest(),
+                "dependency_path": str((root / "node_modules").resolve()),
+            }
+        )
+    return installations, list(dict.fromkeys(errors))
+
+
+def _provisioning_digest(installations: list[dict[str, str]]) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            installations,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
+
+
 def _dependency_environment_errors(
-    value: Any, worktree: Path | None
+    value: Any, worktree: Path | None, ownership_paths: list[str]
 ) -> list[str]:
     prefix = "dependencies"
     required = {"mode", "path", "lockfile_digest", "cache_key", "read_only", "provenance"}
@@ -2323,6 +3797,31 @@ def _dependency_environment_errors(
                     or provision.get("dependency_path") != str((worktree / "node_modules").resolve())
                 ):
                     errors.append(f"invalid:{prefix}.provision_receipt")
+                if not isinstance(provision, dict):
+                    provision = {}
+                expected_installations, installation_errors = _provision_installations(
+                    worktree, ownership_paths
+                )
+                errors.extend(
+                    f"invalid:{prefix}.provision_receipt:{item}"
+                    for item in installation_errors
+                )
+                stored_installations = provision.get("installations")
+                if len(expected_installations) > 1:
+                    if stored_installations != expected_installations:
+                        errors.append(f"invalid:{prefix}.provision_receipt:installations")
+                    elif provision.get("provisioning_digest") != _provisioning_digest(
+                        expected_installations
+                    ):
+                        errors.append(f"invalid:{prefix}.provision_receipt:digest")
+                elif stored_installations is not None and stored_installations != expected_installations:
+                    errors.append(f"invalid:{prefix}.provision_receipt:installations")
+                for installation in expected_installations:
+                    dependency = Path(installation["dependency_path"])
+                    if not dependency.is_dir() or dependency.is_symlink():
+                        errors.append(
+                            f"invalid:{prefix}.provision_receipt:dependency-tree:{installation['root']}"
+                        )
     elif mode == "content-addressed":
         if not isinstance(cache_key, str) or LOWER_DIGEST.fullmatch(cache_key) is None:
             errors.append(f"invalid:{prefix}.cache_key")
@@ -2464,7 +3963,9 @@ def validate_manifest(
     if repo is not None and worktree is not None and repo == worktree:
         error("invalid:worktree-must-differ-from-repo")
 
-    for dependency_error in _dependency_environment_errors(manifest.get("dependencies"), worktree):
+    for dependency_error in _dependency_environment_errors(
+        manifest.get("dependencies"), worktree, ownership
+    ):
         error(dependency_error)
 
     isolated_dirs: list[Path] = []
@@ -2618,14 +4119,145 @@ def validate_manifest(
                 }
                 if any(coordinator.get(name) != value for name, value in expected.items()):
                     error("invalid:coordinator_sha:identity-mismatch")
+                if (
+                    message_code == 0
+                    and not duplicates
+                    and isinstance(issue_identifier, str)
+                    and _positive_int(generation)
+                ):
+                    binding, binding_errors = _active_claim_binding(
+                        message, issue_identifier, generation
+                    )
+                    for binding_error in binding_errors:
+                        error(f"invalid:coordinator_sha:claim:{binding_error}")
+                    if binding is None:
+                        error("invalid:coordinator_sha:claim-not-active")
+                    else:
+                        if binding.get("guard") != f"{remote}:{guard_ref}":
+                            error("invalid:coordinator_sha:claim-guard-binding")
+                        if binding.get("feature") != f"{remote}:{feature_ref}":
+                            error("invalid:coordinator_sha:claim-feature-binding")
+                        if binding.get("claim_token") != manifest.get("claim_token"):
+                            error("invalid:coordinator_sha:claim-token-binding")
         if manifest.get("remote_mode") == "online" and isinstance(guard_ref, str):
-            if _remote_ref_tip(repo, remote, CANONICAL_COORDINATOR_REF) != manifest.get("coordinator_sha"):
-                error("invalid:remote-coordinator-tip")
+            remote_coordinator = _remote_ref_tip(repo, remote, CANONICAL_COORDINATOR_REF)
+            dispatched_coordinator = manifest.get("coordinator_sha")
+            if remote_coordinator is None:
+                error("invalid:remote-coordinator-missing")
+            else:
+                materialized = foreign_main.run(
+                    repo,
+                    "fetch",
+                    "--no-write-fetch-head",
+                    "--no-tags",
+                    remote,
+                    remote_coordinator,
+                )
+                if materialized.returncode != 0 or not foreign_main.object_exists(repo, remote_coordinator):
+                    error("invalid:remote-coordinator-materialization")
+                elif (
+                    phase == "dispatch" and remote_coordinator != dispatched_coordinator
+                ):
+                    error("invalid:remote-coordinator-tip")
+                elif (
+                    phase != "dispatch"
+                    and (
+                        not isinstance(dispatched_coordinator, str)
+                        or git(
+                            repo,
+                            "merge-base",
+                            "--is-ancestor",
+                            dispatched_coordinator,
+                            remote_coordinator,
+                        )[0]
+                        != 0
+                    )
+                ):
+                    error("invalid:remote-coordinator-not-descendant")
+                else:
+                    current_code, current_message = git(
+                        repo, "show", "-s", "--format=%B", remote_coordinator
+                    )
+                    current, current_duplicates = (
+                        parse_fields(current_message) if current_code == 0 else ({}, [])
+                    )
+                    expected = {
+                        "RUN_ID": manifest.get("run_id"),
+                        "RUN_KEY": manifest.get("run_key"),
+                        "OWNER_ID": manifest.get("owner_id"),
+                        "EPOCH": str(manifest.get("owner_epoch")),
+                        "PROJECT_ID": manifest.get("project_id"),
+                        "MILESTONE_ID": manifest.get("milestone_id"),
+                    }
+                    if current_code != 0 or current_duplicates:
+                        error("invalid:remote-coordinator-metadata")
+                    elif any(current.get(name) != value for name, value in expected.items()):
+                        error("invalid:remote-coordinator-identity-mismatch")
+                    elif isinstance(issue_identifier, str) and _positive_int(generation):
+                        binding, binding_errors = _active_claim_binding(
+                            current_message, issue_identifier, generation
+                        )
+                        for binding_error in binding_errors:
+                            error(f"invalid:remote-coordinator-claim:{binding_error}")
+                        if binding is None:
+                            error("invalid:remote-coordinator-claim-not-active")
+                        else:
+                            if binding.get("guard") != f"{remote}:{guard_ref}":
+                                error("invalid:remote-coordinator-claim-guard-binding")
+                            if binding.get("feature") != f"{remote}:{feature_ref}":
+                                error("invalid:remote-coordinator-claim-feature-binding")
+                            if binding.get("claim_token") != manifest.get("claim_token"):
+                                error("invalid:remote-coordinator-claim-token-binding")
             remote_guard_tip = _remote_ref_tip(repo, remote, guard_ref)
-            if phase == "dispatch" and remote_guard_tip != manifest.get("guard_tip"):
-                error("invalid:remote-guard-tip")
-            elif phase != "dispatch" and remote_guard_tip is None:
+            if remote_guard_tip is None:
                 error("invalid:remote-guard-missing")
+            elif phase == "dispatch" and remote_guard_tip != manifest.get("guard_tip"):
+                error("invalid:remote-guard-tip")
+            else:
+                materialized_guard = foreign_main.run(
+                    repo,
+                    "fetch",
+                    "--no-write-fetch-head",
+                    "--no-tags",
+                    remote,
+                    remote_guard_tip,
+                )
+                dispatched_guard = manifest.get("guard_tip")
+                if (
+                    materialized_guard.returncode != 0
+                    or not foreign_main.object_exists(repo, remote_guard_tip)
+                ):
+                    error("invalid:remote-guard-materialization")
+                elif (
+                    not isinstance(dispatched_guard, str)
+                    or git(
+                        repo,
+                        "merge-base",
+                        "--is-ancestor",
+                        dispatched_guard,
+                        remote_guard_tip,
+                    )[0]
+                    != 0
+                ):
+                    error("invalid:remote-guard-not-descendant")
+                else:
+                    guard_code, guard_message = git(
+                        repo, "show", "-s", "--format=%B", remote_guard_tip
+                    )
+                    guard_metadata, guard_duplicates = (
+                        parse_fields(guard_message) if guard_code == 0 else ({}, [])
+                    )
+                    allowed_guard_states = {
+                        "dispatch": {"claimed", "checkpoint"},
+                        "active": {"claimed", "checkpoint", "ready"},
+                        "receipt": {"ready"},
+                    }[phase]
+                    if guard_code != 0 or guard_duplicates:
+                        error("invalid:remote-guard-metadata")
+                    elif guard_metadata.get("STATE", "").lower() not in allowed_guard_states:
+                        error("invalid:remote-guard-state")
+                    elif guard_metadata.get("KIND") not in {None, "CLAIM_GUARD"}:
+                        error("invalid:remote-guard-kind")
 
     return errors, surfaces, list(documents)
 
@@ -2709,9 +4341,11 @@ def command_provision_worktree(args: argparse.Namespace) -> int:
         errors.append("invalid:worktree-status-unavailable")
     elif status.stdout:
         errors.append("invalid:worktree-dirty-before-provision")
-    lockfile = worktree / "package-lock.json"
-    if not lockfile.is_file():
-        errors.append("invalid:package-lock-missing")
+    ownership_paths = list(getattr(args, "path", []) or [])
+    installations, installation_errors = _provision_installations(
+        worktree, ownership_paths
+    )
+    errors.extend(installation_errors)
     if args.package_manager != "npm":
         errors.append("invalid:package-manager")
     if not 30 <= args.timeout_seconds <= 3600:
@@ -2720,7 +4354,11 @@ def command_provision_worktree(args: argparse.Namespace) -> int:
         emit({"schema": 1, "status": "invalid", "errors": errors})
         return 2
 
-    lockfile_digest = hashlib.sha256(lockfile.read_bytes()).hexdigest()
+    if not installations or installations[0]["root"] != ".":
+        emit({"schema": 1, "status": "invalid", "errors": ["invalid:root-package-lock-missing"]})
+        return 2
+    lockfile_digest = installations[0]["lockfile_digest"]
+    provisioning_digest = _provisioning_digest(installations)
     task_root = worktree / ".codex-task"
     build_dir = task_root / "build"
     tmp_dir = task_root / "tmp"
@@ -2736,23 +4374,49 @@ def command_provision_worktree(args: argparse.Namespace) -> int:
         emit({"schema": 1, "status": "blocked", "reason": "toolchain-unavailable"})
         return 3
     environment_id = hashlib.sha256(
-        f"npm-ci\0{lockfile_digest}\0{node_version}\0{npm_version}\0{sys.platform}".encode()
+        f"npm-ci\0{provisioning_digest}\0{node_version}\0{npm_version}\0{sys.platform}".encode()
     ).hexdigest()
-    if receipt_path.is_file() and dependency_path.is_dir() and not dependency_path.is_symlink():
+    dependency_trees_valid = all(
+        Path(item["dependency_path"]).is_dir()
+        and not Path(item["dependency_path"]).is_symlink()
+        for item in installations
+    )
+    if receipt_path.is_file() and dependency_trees_valid:
         try:
             stored = json.loads(receipt_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             stored = None
+        stored_installations = stored.get("installations") if isinstance(stored, dict) else None
+        installation_match = (
+            stored_installations == installations
+            or (len(installations) == 1 and stored_installations is None)
+        )
         if (
             isinstance(stored, dict)
             and stored.get("status") == "installed"
             and stored.get("environment_id") == environment_id
             and stored.get("lockfile_digest") == lockfile_digest
             and stored.get("dependency_path") == str(dependency_path)
+            and installation_match
+            and (
+                len(installations) == 1
+                or stored.get("provisioning_digest") == provisioning_digest
+            )
         ):
             emit({"schema": 1, **stored, "status": "adopted"})
             return 0
     if not args.install:
+        commands = [
+            {
+                "cwd": str(
+                    worktree
+                    if item["root"] == "."
+                    else worktree / PurePosixPath(item["root"])
+                ),
+                "argv": ["npm", "ci"],
+            }
+            for item in installations
+        ]
         emit(
             {
                 "schema": 1,
@@ -2760,9 +4424,12 @@ def command_provision_worktree(args: argparse.Namespace) -> int:
                 "install_required": True,
                 "environment_id": environment_id,
                 "lockfile_digest": lockfile_digest,
+                "provisioning_digest": provisioning_digest,
+                "installations": installations,
                 "task_root": str(task_root.resolve()),
                 "dependency_path": str(dependency_path),
-                "command": ["npm", "ci"],
+                "command": commands[0],
+                "commands": commands,
             }
         )
         return 4
@@ -2774,45 +4441,93 @@ def command_provision_worktree(args: argparse.Namespace) -> int:
             "TMPDIR": str(tmp_dir.resolve()),
         }
     )
-    with tempfile.TemporaryFile() as output:
-        try:
-            completed = subprocess.run(
-                ["npm", "ci"],
-                cwd=worktree,
-                stdin=subprocess.DEVNULL,
-                stdout=output,
-                stderr=subprocess.STDOUT,
-                env=environment,
-                check=False,
-                timeout=args.timeout_seconds,
-            )
-        except subprocess.TimeoutExpired:
-            emit({"schema": 1, "status": "failed", "reason": "npm-ci-timeout"})
-            return 5
-        except OSError as error:
-            emit({"schema": 1, "status": "failed", "reason": f"npm-ci-{type(error).__name__}"})
-            return 5
-        if completed.returncode != 0:
+    deadline = time.monotonic() + args.timeout_seconds
+    for installation in installations:
+        install_root = (
+            worktree
+            if installation["root"] == "."
+            else worktree / PurePosixPath(installation["root"])
+        )
+        remaining = max(deadline - time.monotonic(), 0)
+        if remaining == 0:
             emit(
                 {
                     "schema": 1,
                     "status": "failed",
-                    "reason": "npm-ci-failed",
-                    "exit_code": completed.returncode,
+                    "reason": "npm-ci-timeout",
+                    "install_root": installation["root"],
                 }
             )
             return 5
-    if not dependency_path.is_dir() or dependency_path.is_symlink():
-        emit({"schema": 1, "status": "failed", "reason": "dependency-tree-missing-or-linked"})
+        with tempfile.TemporaryFile() as output:
+            try:
+                completed = subprocess.run(
+                    ["npm", "ci"],
+                    cwd=install_root,
+                    stdin=subprocess.DEVNULL,
+                    stdout=output,
+                    stderr=subprocess.STDOUT,
+                    env=environment,
+                    check=False,
+                    timeout=remaining,
+                )
+            except subprocess.TimeoutExpired:
+                emit(
+                    {
+                        "schema": 1,
+                        "status": "failed",
+                        "reason": "npm-ci-timeout",
+                        "install_root": installation["root"],
+                    }
+                )
+                return 5
+            except OSError as error:
+                emit(
+                    {
+                        "schema": 1,
+                        "status": "failed",
+                        "reason": f"npm-ci-{type(error).__name__}",
+                        "install_root": installation["root"],
+                    }
+                )
+                return 5
+            if completed.returncode != 0:
+                emit(
+                    {
+                        "schema": 1,
+                        "status": "failed",
+                        "reason": "npm-ci-failed",
+                        "install_root": installation["root"],
+                        "exit_code": completed.returncode,
+                    }
+                )
+                return 5
+    invalid_trees = [
+        item["root"]
+        for item in installations
+        if not Path(item["dependency_path"]).is_dir()
+        or Path(item["dependency_path"]).is_symlink()
+    ]
+    if invalid_trees:
+        emit(
+            {
+                "schema": 1,
+                "status": "failed",
+                "reason": "dependency-tree-missing-or-linked",
+                "install_roots": invalid_trees,
+            }
+        )
         return 5
     receipt = {
         "status": "installed",
         "environment_id": environment_id,
         "lockfile_digest": lockfile_digest,
         "dependency_path": str(dependency_path),
+        "provisioning_digest": provisioning_digest,
+        "installations": installations,
         "node_version": node_version,
         "npm_version": npm_version,
-        "provenance": f"npm-ci:{lockfile_digest}",
+        "provenance": f"npm-ci-set:{provisioning_digest}",
     }
     _atomic_json(receipt_path, receipt)
     after = foreign_main.run(
@@ -2844,7 +4559,9 @@ def command_provision_worktree(args: argparse.Namespace) -> int:
                 "lockfile_digest": lockfile_digest,
                 "cache_key": "none",
                 "read_only": False,
-                "provenance": f"npm-ci:{lockfile_digest}",
+                "provenance": f"npm-ci-set:{provisioning_digest}",
+                "installations": installations,
+                "provisioning_digest": provisioning_digest,
             },
         }
     )
@@ -4064,6 +5781,312 @@ def _active_canonical(preflight: dict[str, Any]) -> dict[str, Any] | None:
     )
 
 
+def _projection_message_base(parent_message: str) -> list[str]:
+    replaced = (
+        set(ACTION_HEADERS)
+        | {
+            "ACTION_STATUS",
+            "ACTION_RESULT",
+            "PROJECTION_BATCH",
+            "PROJECTION_ITEM",
+            "PROJECTION_RESULT",
+        }
+    )
+    lines: list[str] = []
+    for line in parent_message.splitlines():
+        key, separator, _ = line.partition(":")
+        if (
+            separator
+            and re.fullmatch(r"[A-Z][A-Z0-9_]*", key)
+            and key not in replaced
+            and key not in REBUILDABLE_METADATA_HEADERS
+        ):
+            lines.append(line)
+    return lines
+
+
+def command_projection_batch_cas(args: argparse.Namespace) -> int:
+    """Persist or reconcile one exact Linear projection batch under owner CAS."""
+    repo = Path(args.repo).resolve()
+    expected_parent = args.expected_coordinator_sha
+    if GIT_OID.fullmatch(expected_parent) is None:
+        emit({"schema": 1, "status": "invalid", "errors": ["invalid:expected-coordinator-sha"]})
+        return 2
+    payload, input_error = _read_json(args.input)
+    if input_error or not isinstance(payload, dict):
+        emit(
+            {
+                "schema": 1,
+                "status": "invalid",
+                "errors": [input_error or "invalid:projection-batch:not-object"],
+            }
+        )
+        return 2
+    _, runtime_proof = _runtime_owner_proof()
+    if runtime_proof is None:
+        emit({"schema": 1, "status": "blocked", "reason": "runtime-thread-id-unavailable"})
+        return 3
+    preflight_code, preflight = _capture_preflight(repo, args.remote, args.default)
+    active = _active_canonical(preflight)
+    if (
+        preflight_code != 0
+        or active is None
+        or active.get("sha") != expected_parent
+        or active.get("owner_proof_digest") != runtime_proof
+        or active.get("contract_digest") != preflight.get("local_contract_oid")
+    ):
+        emit(
+            {
+                "schema": 1,
+                "status": "blocked",
+                "reason": "projection-owner-or-expected-parent-mismatch",
+                "route": preflight.get("route"),
+                "observed_coordinator": active.get("sha") if active else None,
+            }
+        )
+        return 3
+    parent_message, parent_error = _materialize_coordinator_parent(
+        repo, args.remote, expected_parent
+    )
+    if parent_error or parent_message is None:
+        emit({"schema": 1, "status": "blocked", "reason": parent_error})
+        return 3
+    parent_fields = fields(parent_message)
+    parent_errors, parent_seq, parent_status = _validate_transition_parent(parent_fields)
+    if parent_errors or parent_seq is None or parent_status is None:
+        emit(
+            {
+                "schema": 1,
+                "status": "blocked",
+                "reason": "projection-parent-invalid",
+                "errors": parent_errors,
+            }
+        )
+        return 3
+
+    if args.phase == "intent":
+        if preflight.get("route") != "resume" or parent_status != "reconciled":
+            emit(
+                {
+                    "schema": 1,
+                    "status": "blocked",
+                    "reason": "projection-intent-requires-reconciled-resume",
+                    "route": preflight.get("route"),
+                }
+            )
+            return 3
+        durable_items, plan_errors = _validate_projection_plan(payload)
+        if plan_errors:
+            emit({"schema": 1, "status": "invalid", "errors": plan_errors})
+            return 2
+        batch_id = payload["batch_id"]
+        intent_digest = payload["intent_digest"]
+        action_seed = json.dumps(
+            {
+                "parent": expected_parent,
+                "seq": parent_seq + 1,
+                "batch_id": batch_id,
+                "intent_digest": intent_digest,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        action = {
+            "ACTION_SEQ": str(parent_seq + 1),
+            "ACTION_ID": str(uuid.uuid5(TRANSITION_NAMESPACE, action_seed)),
+            "ACTION_KIND": "projection-batch",
+            "ACTION_TARGET": f"linear:projection-batch:{batch_id}",
+            "EXPECTED_BEFORE": "projection-batch=none",
+            "EXTERNAL_REQUEST_KEY": f"projection-batch:{batch_id}",
+            "PROVIDER_SELECTOR": f"linear:projection-batch:{batch_id}",
+            "PAYLOAD_DIGEST": intent_digest,
+            "EFFECT_IDENTITY": f"projection-batch:{batch_id}@{intent_digest}",
+        }
+        result_vector = ",".join(
+            f"{item['item_id']}:pending" for item in durable_items
+        )
+        lines = ["ship-linear-release intent projection batch", ""]
+        lines.extend(_projection_message_base(parent_message))
+        lines.append(
+            f"PROJECTION_BATCH: id={batch_id};items={len(durable_items)};"
+            f"intent_digest={intent_digest};results={result_vector};status=intent"
+        )
+        lines.extend(
+            "PROJECTION_ITEM: "
+            + json.dumps(
+                item, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+            )
+            for item in durable_items
+        )
+        lines.extend(f"{name}: {action[name]}" for name in ACTION_HEADERS)
+        lines.append("ACTION_STATUS: intent")
+        message = "\n".join(lines) + "\n"
+        batch_status = "intent"
+        result_digest = None
+    else:
+        if (
+            parent_status not in {"intent", "planned"}
+            or parent_fields.get("ACTION_KIND") != "projection-batch"
+        ):
+            emit(
+                {
+                    "schema": 1,
+                    "status": "blocked",
+                    "reason": "projection-reconcile-requires-pending-batch",
+                }
+            )
+            return 3
+        batch, batch_duplicates, batch_malformed = _compact_fields(
+            parent_fields.get("PROJECTION_BATCH", "")
+        )
+        stored_items: list[dict[str, str]] = []
+        item_errors: list[str] = [
+            *[f"duplicate-projection-batch-field:{name}" for name in batch_duplicates],
+            *[f"malformed-projection-batch-field:{name}" for name in batch_malformed],
+        ]
+        if set(batch) != {"id", "items", "intent_digest", "results", "status"}:
+            item_errors.append("invalid:projection-batch-fields")
+        if (
+            LOWER_DIGEST.fullmatch(batch.get("intent_digest", "")) is None
+            or batch.get("intent_digest") != parent_fields.get("PAYLOAD_DIGEST")
+        ):
+            item_errors.append("invalid:projection-batch-intent-digest")
+        for value in _metadata_values(parent_message, "PROJECTION_ITEM"):
+            try:
+                item = json.loads(value)
+            except json.JSONDecodeError:
+                item_errors.append("invalid:projection-item-json")
+                continue
+            if not isinstance(item, dict) or not isinstance(item.get("item_id"), str):
+                item_errors.append("invalid:projection-item-shape")
+            else:
+                stored_items.append(item)
+        batch_id = payload.get("batch_id")
+        source_results = payload.get("results")
+        if set(payload) != {"batch_id", "results"}:
+            item_errors.append("invalid:projection-results-shape")
+        if (
+            not isinstance(batch_id, str)
+            or UUID_TEXT.fullmatch(batch_id) is None
+            or batch.get("id") != batch_id
+            or batch.get("status") != "intent"
+            or parent_fields.get("ACTION_TARGET") != f"linear:projection-batch:{batch_id}"
+        ):
+            item_errors.append("invalid:projection-results-batch")
+        if not isinstance(source_results, list) or not all(
+            isinstance(item, dict) for item in source_results
+        ):
+            item_errors.append("invalid:projection-results")
+            source_results = []
+        results: dict[str, dict[str, str]] = {}
+        allowed_results = {"applied", "absent", "failed", "ambiguous"}
+        for index, item in enumerate(source_results):
+            if set(item) != {"item_id", "status", "result"}:
+                item_errors.append(f"invalid:results[{index}]:shape")
+                continue
+            item_id = item.get("item_id")
+            status = item.get("status")
+            result = item.get("result")
+            if (
+                not isinstance(item_id, str)
+                or UUID_TEXT.fullmatch(item_id) is None
+                or status not in allowed_results
+                or not _bounded_projection_text(result, maximum=500)
+            ):
+                item_errors.append(f"invalid:results[{index}]")
+            elif item_id in results:
+                item_errors.append(f"invalid:duplicate-result:{item_id}")
+            else:
+                results[item_id] = item
+        expected_ids = {item["item_id"] for item in stored_items}
+        if set(results) != expected_ids:
+            item_errors.append("invalid:projection-result-vector-incomplete")
+        if batch.get("items") != str(len(stored_items)):
+            item_errors.append("invalid:projection-item-count")
+        if item_errors:
+            emit(
+                {
+                    "schema": 1,
+                    "status": "invalid",
+                    "errors": list(dict.fromkeys(item_errors)),
+                }
+            )
+            return 2
+        ordered_results = [results[item_id] for item_id in sorted(results)]
+        result_digest = hashlib.sha256(
+            json.dumps(
+                ordered_results,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+        ).hexdigest()
+        result_vector = ",".join(
+            f"{item['item_id']}:{item['status']}" for item in ordered_results
+        )
+        action_result = (
+            f"batch={batch_id};results_digest={result_digest};"
+            f"failed={sum(item['status'] == 'failed' for item in ordered_results)};"
+            f"ambiguous={sum(item['status'] == 'ambiguous' for item in ordered_results)}"
+        )
+        lines = ["ship-linear-release reconciled projection batch", ""]
+        lines.extend(_projection_message_base(parent_message))
+        lines.append(
+            f"PROJECTION_BATCH: id={batch_id};items={len(stored_items)};"
+            f"intent_digest={batch['intent_digest']};results={result_vector};status=reconciled"
+        )
+        lines.extend(
+            "PROJECTION_ITEM: "
+            + json.dumps(
+                item, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+            )
+            for item in stored_items
+        )
+        lines.extend(
+            "PROJECTION_RESULT: "
+            + json.dumps(
+                item, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+            )
+            for item in ordered_results
+        )
+        lines.extend(f"{name}: {parent_fields[name]}" for name in ACTION_HEADERS)
+        lines.append("ACTION_STATUS: reconciled")
+        lines.append(f"ACTION_RESULT: {action_result}")
+        message = "\n".join(lines) + "\n"
+        batch_status = "reconciled"
+    delivery, coordinator = _push_coordinator_cas(
+        repo, args.remote, expected_parent, message
+    )
+    if delivery != "pushed":
+        emit(
+            {
+                "schema": 1,
+                "status": delivery,
+                "expected_coordinator": expected_parent,
+                "candidate": coordinator,
+                "batch_id": batch_id,
+            }
+        )
+        return 4 if delivery == "cas-lost" else 3
+    emit(
+        {
+            "schema": 1,
+            "status": batch_status,
+            "batch_id": batch_id,
+            "parent": expected_parent,
+            "coordinator": coordinator,
+            "item_count": len(durable_items) if args.phase == "intent" else len(stored_items),
+            "result_digest": result_digest,
+            "next": (
+                "execute-items-with-item-idempotency"
+                if args.phase == "intent"
+                else "continue-conveyor-or-triage-terminal-item-results"
+            ),
+        }
+    )
+    return 0
+
+
 def _materialize_coordinator_parent(
     repo: Path, remote: str, parent: str
 ) -> tuple[str | None, str | None]:
@@ -5113,6 +7136,11 @@ def parser() -> argparse.ArgumentParser:
     status.add_argument("--remote", default="origin")
     status.add_argument("--default", default="main")
     status.set_defaults(handler=command_status)
+    pool_status = sub.add_parser("pool-status")
+    pool_status.add_argument("--repo", default=".")
+    pool_status.add_argument("--remote", default="origin")
+    pool_status.add_argument("--default", default="main")
+    pool_status.set_defaults(handler=command_pool_status)
     docs = sub.add_parser("docs")
     docs.add_argument("--path", action="append", default=[])
     docs.add_argument("--surface", choices=sorted(SURFACE_DOCS))
@@ -5153,6 +7181,28 @@ def parser() -> argparse.ArgumentParser:
     milestone_plan = sub.add_parser("milestone-plan")
     milestone_plan.add_argument("--input", default="-")
     milestone_plan.set_defaults(handler=command_milestone_plan)
+    startup_plan = sub.add_parser("startup-plan")
+    startup_plan.add_argument("--repo", default=".")
+    startup_plan.add_argument("--remote", default="origin")
+    startup_plan.add_argument("--default", default="main")
+    startup_plan.add_argument("--input", default="-")
+    startup_plan.set_defaults(handler=command_startup_plan)
+    projection_plan = sub.add_parser("projection-plan")
+    projection_plan.add_argument("--input", default="-")
+    projection_plan.set_defaults(handler=command_projection_plan)
+    projection_batch = sub.add_parser("projection-batch-cas")
+    projection_batch.add_argument("--repo", default=".")
+    projection_batch.add_argument("--remote", default="origin")
+    projection_batch.add_argument("--default", default="main")
+    projection_batch.add_argument(
+        "--phase", choices=("intent", "reconcile"), required=True
+    )
+    projection_batch.add_argument("--expected-coordinator-sha", required=True)
+    projection_batch.add_argument("--input", default="-")
+    projection_batch.set_defaults(handler=command_projection_batch_cas)
+    refill_check = sub.add_parser("refill-check")
+    refill_check.add_argument("--input", default="-")
+    refill_check.set_defaults(handler=command_refill_check)
     conveyor_next = sub.add_parser("conveyor-next")
     conveyor_next.add_argument("--input", default="-")
     conveyor_next.set_defaults(handler=command_conveyor_next)
@@ -5168,6 +7218,7 @@ def parser() -> argparse.ArgumentParser:
     provision = sub.add_parser("provision-worktree")
     provision.add_argument("--repo", default=".")
     provision.add_argument("--worktree", required=True)
+    provision.add_argument("--path", action="append", default=[])
     provision.add_argument("--package-manager", default="npm")
     provision.add_argument("--install", action="store_true")
     provision.add_argument("--timeout-seconds", type=int, default=900)

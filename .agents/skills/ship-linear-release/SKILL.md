@@ -123,7 +123,9 @@ sustained_issue_capacity; opportunistic_inline; active_target
 `runtime_slots_total` включает root; dedicated coordinator использует только
 `delegated_capacity`. Hybrid inline допустим лишь при пустой coordinator queue,
 сразу уступает control-plane работе и никогда не учитывается как sustained
-concurrent lane. `active_target=min(sustained_issue_capacity, compatible ready)`.
+concurrent lane. `refill_count=min(sustained-running, compatible ready)`, а
+`active_target=running+refill_count`: capacity и фактическая загрузка не
+смешиваются.
 До repo-global claim проверь capacity и actionable frontier детерминированно:
 
 ```bash
@@ -189,6 +191,16 @@ fast-forward default CAS и required configured production Sites deployment/tag.
    Только `status=planned` разрешает claim. `blocked` обязан назвать cycle,
    unknown dependency или другую structural причину; model не выбирает current
    milestone и ready frontier повторно из prose.
+   На normal/resume предпочитай один `shipctl.py startup-plan --input
+   <startup.json>` вместо отдельных `invocation + milestone-plan + launch-check`:
+   helper повторно проверяет route, на resume берёт occupancy только из
+   `EXECUTION_INDEX` и возвращает `refill_count`, `active_target` и plan digest.
+   Input:
+   ```text
+   {"invocation":"<полный текст>","snapshot":<typed Linear snapshot>,
+    "capacity":{"runtime_slots_total":N,"runtime_source":"system-capacity|runtime-api",
+    "safe_resource_capacity":N,"resource_source":"provisioner|explicit-safe-limit","layout":"auto|dedicated|fused"}}
+   ```
 3. После snapshot и успешного `launch-check` при fresh work первое mutable
    действие — repo-global coordinator claim по
    [coordination.md](references/coordination.md). CAS loser остаётся read-only.
@@ -263,6 +275,11 @@ durable Git claim и валидного manifest. Сначала обеспеч�
 затем проецируй `In Progress`/receipt. Несколько независимых Linear comment/
 status updates можно провести одним projection-batch intent и одним item-wise
 reconcile с отдельными selectors, idempotency keys, payload digests и results.
+Построй batch через `projection-plan`; до Linear-вызовов durable-сохрани его
+`projection-batch-cas --phase intent --expected-coordinator-sha <exact>`, после
+вызовов тем же helper выполни `--phase reconcile` с результатом каждого item.
+Comment body обязан кратко объяснять статус, изменения, проверку и следующий шаг.
+Exact input/result JSON см. в [receipts.md](references/receipts.md#linear-projection-json).
 Никогда не включай в такой batch Git refs, train/cutoff/default, deploy или tag.
 Исключение fast path — scope freshness, без которой worker мог бы реализовать
 уже отменённую issue.
@@ -275,7 +292,8 @@ JSON manifest с полями, требуемыми `shipctl manifest`. До dis
 
 ```bash
 python3 .agents/skills/ship-linear-release/scripts/shipctl.py provision-worktree \
-  --repo <repo> --worktree <worker-worktree> --install
+  --repo <repo> --worktree <worker-worktree> \
+  --path <ownership-path> [--path <ownership-path> ...] --install
 ```
 
 Только `installed|adopted` разрешает manifest. Helper выполняет exact `npm ci`
@@ -307,51 +325,10 @@ Status/comment projections могут
 нормализует `id` до `AND-N`, используй этот exact provider identifier только
 при равенстве `issue_id == issue_identifier`. UUID не выдумывай.
 
-Machine-checkable isolation/validation fragment обязателен:
-
-```json
-{
-  "issue_updated_at": "<operational timestamp>",
-  "scope_fingerprint": "<semantic digest>",
-  "executor": {
-    "lease_id": "<fresh UUID for this issue only>",
-    "mode": "delegated|coordinator-inline",
-    "agent_type": "worker|coordinator-inline",
-    "fork_turns": "none"
-  },
-  "isolation": {
-    "mutable_build_dir": "<absolute task-owned path>",
-    "tmp_dir": "<absolute task-owned path>",
-    "runtime_dir": "<absolute task-owned path>",
-    "cache_mode": "content-addressed|isolated",
-    "cache_dir": "<absolute path>",
-    "cache_key": "<sha256 for content-addressed, otherwise none>",
-    "ports": [],
-    "env": {}
-  },
-  "dependencies": {
-    "mode": "isolated|content-addressed",
-    "path": "<absolute dependency tree>",
-    "lockfile_digest": "<sha256>",
-    "cache_key": "none|<sha256>",
-    "read_only": false,
-    "provenance": "<installer/cache receipt>"
-  },
-  "validation": {
-    "check_class": "targeted-feature",
-    "targeted_checks": [
-      {"id": "<stable-id>", "argv": ["node", "--test", "<exact-file>"]}
-    ],
-    "full_gate": "deferred-to-cutoff"
-  }
-}
-```
-
-`ports` содержит уникальные integer ports, `env` — только явные non-secret
-task-scoped values; `targeted_checks` не пуст и не включает full repo suite или
-dependency install. Feature worker не запускает `npm ci/install`, `pnpm
-install`, `yarn install` или аналог: coordinator заранее предоставляет
-task-owned isolated dependency tree либо immutable content-addressed cache.
+Exact machine schema принадлежит `shipctl manifest` и
+[issue-worker.md](references/issue-worker.md): fresh lease, `fork_turns=none`,
+task-owned mutable dirs/ports/env, provision receipt и только targeted checks.
+Worker не выполняет dependency install и не запускает full repository suite.
 
 Перед каждым dispatch передай candidate manifest, `EXECUTION_INDEX` active
 manifests и все уже использованные executor lease IDs в один read-only check:
@@ -393,6 +370,8 @@ guard соблюдай порядок: validate receipt -> перевести ex
 enqueue ingest -> batch projections/bookkeeping. Цель ready-guard -> refill —
 не более 60 секунд; при пропуске durable-запиши точный blocker/evidence. Claim и
 guard при `feature_ready` остаются live до terminal integration disposition.
+Границу и канонический `REFILL` record считай только `shipctl.py refill-check`;
+`spawned_at` позже observation не очищает доказательство пропущенного SLA.
 
 ## Continuous pool и cutoffs
 
@@ -489,6 +468,10 @@ Checkpoint — одна bounded строка:
 pool -> cutoff -> health -> issues -> candidate/default SHA ->
 foreign-main/hold -> validation key -> production obligation/evidence -> gaps -> remaining
 ```
+
+Для наблюдаемого пользователем статуса сначала используй `shipctl.py
+pool-status`: он показывает `running/sustained`, `active_target`, ready artifacts
+и точную причину незаполненной capacity без чтения экранов subagents.
 
 Issue переводится в completed-state только после terminal guard и полного
 acceptance evidence. После двух fresh согласованных Linear snapshot без

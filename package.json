@@ -17,6 +17,7 @@
     "test:unit": "npm run build --silent && node --test tests/unit/*.test.mjs",
     "test:integration": "npm run build --silent && node --test tests/integration/*.test.mjs",
     "test:conformance": "npm run build --silent && node --test tests/conformance/*.test.mjs && npm run validate:fixtures --silent",
+    "test:orchestration": "python3 -B -m unittest discover -s .agents/skills/ship-linear-release/scripts -p 'test_*.py'",
     "test": "npm run test:unit && npm run test:integration && npm run test:conformance",
     "validate:fixtures": "npm run build --silent && node scripts/validate-okf-fixtures.mjs",
     "check:architecture": "node scripts/check-architecture.mjs",
@@ -24,7 +25,7 @@
     "check:docs": "node scripts/check-docs.mjs",
     "check:secrets": "node scripts/check-secrets.mjs",
     "readiness:report": "node scripts/generate-readiness-report.mjs --sha HEAD --output build/readiness-report.json",
-    "check": "npm run clean && npm run build && node --test tests/unit/*.test.mjs tests/integration/*.test.mjs tests/conformance/*.test.mjs && npm run validate:fixtures && npm run check:architecture && npm run check:product-site && npm run check:docs && npm run check:secrets && node scripts/generate-readiness-report.mjs --sha HEAD --output build/readiness-report.json --local-gate-status passed"
+    "check": "npm run clean && npm run build && node --test tests/unit/*.test.mjs tests/integration/*.test.mjs tests/conformance/*.test.mjs && npm run test:orchestration && npm run validate:fixtures && npm run check:architecture && npm run check:product-site && npm run check:docs && npm run check:secrets && node scripts/generate-readiness-report.mjs --sha HEAD --output build/readiness-report.json --local-gate-status passed"
   },
   "dependencies": {
     "yaml": "2.9.0"

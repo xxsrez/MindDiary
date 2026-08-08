@@ -55,8 +55,8 @@ compact Linear snapshot + `rg`; неоднозначность возвраща�
    меньше requested; нельзя
    молча подставлять их minimum. Для auto mode
    `sustained_issue_capacity=min(delegated_capacity,safe_resource_capacity)`;
-   root в неё не входит. Отдельный `active_target`
-   равен минимуму sustained capacity и compatible ready-set. В fused
+   root в неё не входит. `refill_count=min(max(sustained-running,0),
+   compatible ready-set)`, а `active_target=running+refill_count`. В fused
    `workers=1` sustained capacity равна одной root-inline lane.
 3. При `workers=1` разрешён fused режим: owner-session исполняет одну issue в
    отдельном worktree и обслуживает coordinator queue между bounded
@@ -136,6 +136,9 @@ refs/heads/codex/release/coordinator
    failure не делает остальные items unknown. Не включай в batch guard/feature/
    train/cutoff/default refs, CI waiver authority, deploy, tag или Sites effect:
    они сохраняют отдельные authoritative action tickets.
+   Формируй vector только `shipctl.py projection-plan`; до provider calls
+   сохраняй его `projection-batch-cas --phase intent` с exact expected
+   coordinator SHA, после них тем же helper сохраняй полный result vector.
 8. Для worker создай fenced grant `<owner_id, epoch, claim_generation,
    claim_token, issue_id, base_sha, feature_ref, guard_ref, guard_tip>`. Online
    worker пишет feature+descendant guard acknowledgement одним atomic multi-ref
@@ -277,7 +280,8 @@ integration/default/deploy независимо от выигранного owne
 4. Цель от наблюдения ready guard до нового spawn/inline start — `<=60s`. Если
    compatible ready issue есть, а target пропущен, запиши один durable blocker:
    exact interval, причина, evidence и resume predicate; очисти его при refill.
-   Не превращай это в heartbeat/telemetry.
+   Границу и record вычисляй `shipctl.py refill-check`; future/late spawn не
+   может стереть missed evidence. Не превращай это в heartbeat/telemetry.
 5. После каждого dispatch, execution terminal/feature-ready transition,
    dependency unlock, исключения feature или изменения limit немедленно
    пересчитай ready-set по `EXECUTION_INDEX`, не по live claims.

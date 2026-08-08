@@ -27,12 +27,15 @@ Skill не имеет build/release profile. Не нужно заранее со
 1. Read-only preflight проверит remote/default, tracked skill contract, текущий
    Goal, dirty checkout и существующий repo-global run.
 2. Invocation будет нормализован в `workers=1`, exact N или `auto`.
-3. Один compact Linear snapshot будет машинно проверен `milestone-plan` на
-   exact current milestone, graph и ready frontier.
+3. Один compact Linear snapshot вместе с измеренной capacity будет передан в
+   `startup-plan`: helper повторно проверит preflight, типы snapshot, graph,
+   ready frontier и authoritative occupancy действующего run. На resume без
+   нового count он берёт сохранённый request из `WORKERS`, а не default `1`.
 4. Fresh run попытается CAS-ом получить единственный coordinator claim.
 5. После победы будет создан один Goal и task-owned worktrees.
 6. Workers начнут ready issues; готовые features будут сразу поступать в
-   rolling integration train.
+   rolling integration train. `running > sustained_issue_capacity`, orphan
+   live claim или execution без claim блокируют dispatch как incoherent state.
 7. Coordinator закроет небольшие immutable cutoffs, выполнит full gate и
    продвинет exact SHA в main.
 8. Если acceptance требует production, coordinator выполнит deployment и live
@@ -55,7 +58,17 @@ surface, определяющую выполнение. Тогда нужно я
 наборов mutable resources и при N>1 ещё один slot coordinator-а. При N=1 root
 совмещает обе роли. Не нужно заранее устанавливать зависимости во все
 worktrees: coordinator готовит bounded task-owned environment по tracked
-lockfile через `provision-worktree`. Feature worker не выполняет самовольный
+lockfile через `provision-worktree`. Все ownership paths передаются повторяемым
+`--path`; helper сам выбирает корневой и затронутые tracked nested
+`package-lock.json`, например:
+
+```bash
+python3 .agents/skills/ship-linear-release/scripts/shipctl.py \
+  provision-worktree --repo . --worktree "$WORKTREE" \
+  --path packages/domain --path apps/product-site --install
+```
+
+Feature worker не выполняет самовольный
 `npm ci`, не получает symlink на mutable dependency tree другого worktree и не
 запускает общий build.
 
@@ -92,10 +105,44 @@ checkout=clean; external-gates=pending
 После этого полезны только milestone-level события: issue dispatched/ready,
 cutoff sealed/passed/promoted, production gate, pause/recovery или настоящий
 blocker. Внутренний streaming telemetry не должен засорять ответ.
-Текущий state можно перепроверить `shipctl.py status`; terminal cleanup сначала
-строится `cleanup-plan`, затем применяется только при неизменном digest. Helper
-требует coherent terminal coordinator, zero occupancy, отсутствие live claims
+Текущий state можно перепроверить `shipctl.py status`. Фактическую загрузку
+пула без открытия UI subagents показывает `shipctl.py pool-status`: отдельно
+выводятся `running/sustained`, текущий `active_target`, `feature_ready`,
+свободные slots и durable refill blocker. Поэтому `running < 6` само по себе не
+дефект: нормальные причины — меньший ready frontier, ownership conflict,
+dependency wait или уже готовые features в integration queue.
+
+Terminal cleanup сначала строится `cleanup-plan`, затем применяется только при
+неизменном digest. Helper требует coherent terminal coordinator, zero occupancy,
+отсутствие live claims
 и удаляет только clean merged claim-bound task worktrees.
+
+## Как отражается работа в Linear
+
+Linear не является источником истины для claim, integration или release, но
+каждый существенный durable transition проецируется в issue понятным
+комментарием: текущий статус, что изменилось, какие проверки есть и что будет
+дальше. Если transition меняет состояние issue, status update выполняется с
+expected-before CAS.
+
+1. Соберите bounded JSON vector и передайте его в `projection-plan`.
+2. До Linear API сохраните весь exact vector:
+   `projection-batch-cas --phase intent --expected-coordinator-sha <sha>`.
+3. Выполните только выданные `create-comment`, `update-comment` и
+   `update-status` операции с их `request_key`.
+4. Сохраните item-wise outcomes через `projection-batch-cas --phase reconcile`
+   от exact intent SHA.
+
+Marker и idempotency key включают `run_id` и generation. После crash helper
+позволяет проверить каждый item и продолжить reconcile, не повторяя вслепую
+весь batch. Слишком большой comment и secret-like текст отклоняются до provider
+call.
+
+После валидированного ready receipt worker slot освобождается до интеграции.
+Границу refill проверяет `shipctl.py refill-check`: до 60 секунд состояние
+`pending`, после неё coordinator обязан либо доказать spawn, либо записать
+конкретные blocker, evidence и resume predicate. Fractional seconds не
+усекаются, а поздний spawn не стирает уже случившийся miss.
 
 ## Если тест или интеграция упали
 
@@ -147,6 +194,12 @@ terminal `paused`/`handoff-ready`; простое закрытие сессии 
 artifacts.
 
 ## Ожидаемый финальный результат
+
+Перед promotion exact candidate проходит канонический repository gate:
+`npm ci`, один `npm run check` и `git diff --check <base>..<candidate>`.
+`npm run check` включает Python orchestration suites `shipctl`, `gatectl` и
+foreign-main inspector; повторять его составные команды перед aggregate gate
+не нужно.
 
 Нормальный успех — все задачи current milestone реализованы и `Done`, main
 указывает на exact проверенный cutoff, общие CI/gates terminal, Goal завершён,

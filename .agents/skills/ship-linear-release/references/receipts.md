@@ -74,6 +74,43 @@ expected-before, exact selector, request/idempotency key, payload digest,
 expected effect identity и terminal result. Reconcile выполняй item-wise;
 неизвестный/failed item не обесценивает доказанные соседние results и не
 повторяется вместе с ними.
+`projection-plan` создаёт run/generation-scoped idempotency keys и человекочитаемый
+comment (`статус -> изменения -> проверка -> следующий шаг`).
+`projection-batch-cas` до provider calls сохраняет exact full item vector под
+expected coordinator SHA, а после calls принимает только полный item-wise result
+vector; generic action helper этот протокол не заменяет.
+
+### Linear projection JSON
+
+`projection-plan --input` принимает:
+
+```json
+{
+  "run_id": "<UUID>",
+  "items": [{
+    "issue_identifier": "AND-N", "issue_id": "<AND-N или UUID>",
+    "receipt_kind": "WORK_CLAIM|FEATURE_RECEIPT|DEFECT_CANDIDATE",
+    "receipt_key": "<stable key>", "generation": 1, "status": "<contract status>",
+    "summary": "<одна строка>", "changes": ["<одна строка>"],
+    "evidence": ["<одна строка>"], "next": "<одна строка>",
+    "updated_at": "<UTC>",
+    "comment_id": "<existing id, optional>",
+    "state_update": {"expected": "Todo", "desired": "In Progress"}
+  }]
+}
+```
+
+Перед `--phase intent` передай helper-у output `projection-plan` без изменений.
+Provider выполняет выданные items. `--phase reconcile` принимает полный vector:
+
+```json
+{"batch_id":"<UUID>","results":[
+  {"item_id":"<UUID>","status":"applied|absent|failed|ambiguous","result":"<одна строка>"}
+]}
+```
+
+`comment_id` и `state_update` optional и при отсутствии удаляются из item, а не
+передаются как `null`. Все строки bounded; credential-like данные запрещены.
 
 ## Repo-global coordinator claim
 
@@ -163,9 +200,12 @@ ACTION: seq=<n>; id=<uuid>; kind=<bounded>; target=<exact>;
         expected_before=<exact>; request_key=<id|none>; selector=<bounded>;
         payload_digest=<hash>; effect_identity=<exact>; status=<intent|reconciled>
 PROJECTION_BATCH: none | id=<uuid>; items=<n>; intent_digest=<hash>;
-                  results=<item-id:applied|absent|failed|ambiguous>; status=<intent|reconciled>
+                  results=<item-id:pending|applied|absent|failed|ambiguous>;
+                  status=<intent|reconciled>
+PROJECTION_ITEM: <canonical JSON identity vector; one per item>
+PROJECTION_RESULT: <canonical JSON terminal result; one per item>
 COMMENT_INDEX: release_run=<comment id|none>; entries=<n>; digest=<hash>
-CLAIM_INDEX: active=<issue:g@guard-scope:guard@feature-scope:feature@worktree-id|none>;
+CLAIM_INDEX: active=<issue:g@guard-scope:guard@feature-scope:feature@claim-token|none>;
              entries=<n>; digest=<hash>
 EXECUTION_INDEX: running_count=<n>;
                  entries=<issue:g@executor=running|coordinator-paused|feature_ready|failed|needs-input|stopped>;
@@ -220,6 +260,11 @@ STARTED_AT: <timestamp>
 LAST_TRANSITION_AT: <timestamp>
 NEXT: <одно действие или none>
 ```
+
+Последний компонент active binding — exact UUID `claim_token` из dispatch
+manifest. Это не path и не display-name worktree: token позволяет worker-у
+доказать, что coordinator всё ещё признаёт именно его generation после
+продвижения coordinator ledger.
 
 Remote coordinator ref обеспечивает ownership; milestone comment только
 объясняет его. После `complete` сохрани ref как ledger; новый run или milestone
