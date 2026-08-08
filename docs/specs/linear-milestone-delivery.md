@@ -2,6 +2,12 @@
 
 Статус: accepted для repo-local skill `ship-linear-release`, 2026-08-08.
 
+Concurrency topology, interference policy, batch validation и optional release
+lock уточнены [ADR-0007](../decisions/0007-linear-delivery-concurrency.md).
+На 2026-08-08 эти уточнения приняты как целевой контракт, но ещё не реализованы
+в `SKILL.md`, helper scripts и orchestration tests. До отдельной реализации
+нельзя заявлять, что текущий исполняемый skill им соответствует.
+
 ## 1. Назначение и источники истины
 
 Явный запуск `$ship-linear-release` означает: реализовать, проверить,
@@ -54,23 +60,34 @@ capacity. Источники runtime/resource capacity передаются в `
 
 ### 3.1 Один worker
 
-Root совмещает coordinator и issue executor. Он выполняет задачи
-последовательно, но каждая задача всё равно получает отдельные worktree,
-feature branch, claim generation и receipt. Integration и full gate не
-выполняются в dirty primary checkout.
+Root совмещает coordinator и issue executor и выполняет задачи последовательно.
+Каждая задача получает отдельные feature branch, claim generation и receipt,
+но отдельный worktree не создаётся: root работает в primary checkout. Перед
+началом задачи coordinator переключает clean primary checkout с `main` на её
+feature branch, а после targeted checks и commit возвращается на `main` и
+интегрирует feature.
+
+Отсутствие worktree — единственное отличие issue lifecycle в single-worker
+режиме. Ownership manifest, targeted validation, Linear projection, conflict
+resolution, batch accumulation и release evidence остаются обязательными.
+Coordinator не использует primary checkout, если initial или текущий
+repository snapshot не доказанно clean относительно всех зарегистрированных
+действий run.
 
 ### 3.2 Несколько worker-ов
 
 Root остаётся dedicated coordinator; одновременно исполняются до N issue
-workers. Каждый worker владеет ровно одной issue generation и не меняет Linear,
-default branch, Sites, release tags, coordinator ledger или чужие worktrees.
+workers. Каждая задача получает отдельные feature branch и worktree, а каждый
+worker владеет ровно одной issue generation. Worker не меняет Linear, `main`,
+Sites, release tags, coordinator ledger или чужие worktrees.
 
 Coordinator:
 
 - выбирает ready frontier и выдаёт fenced claims;
 - поддерживает work-conserving pool без искусственных waves;
-- проверяет receipts и принимает feature refs в integration train;
-- закрывает rolling immutable cutoffs;
+- проверяет receipts и последовательно merge-ит feature branches в `main`;
+- сам разрешает merge conflicts и повторяет только затронутые targeted checks;
+- закрывает rolling immutable release batches;
 - выполняет общие gates, default CAS, release actions и Linear projection;
 - классифицирует дефекты и сохраняет durable recovery state.
 
@@ -81,6 +98,10 @@ Worker:
 - коммитит целостную реализацию в task-owned branch;
 - выполняет targeted checks и `git diff --check`;
 - публикует feature receipt либо точный blocker/defect candidate.
+
+Технический writer `main` всегда один — coordinator. Формулировка «worker
+вливает задачу» означает доставку его feature branch через coordinator, а не
+право worker самостоятельно выполнять merge или push в `main`.
 
 `workers` не включает coordinator. Root может временно исполнить issue inline
 только когда control-plane queue пуста; это не увеличивает объявленную
@@ -126,36 +147,64 @@ mutable действие fresh run — expected-old CAS этого claim.
 
 - CAS winner становится единственным writer control plane.
 - CAS loser не создаёт Goal, Linear changes, worktrees, branches, guards,
-  cutoffs, deploy или tags; он сообщает `already-running` и может дать только
-  read-only status.
-- Timeout сам по себе не передаёт ownership.
-- Takeover разрешён только из доказанного quiescent handoff/recovery state,
-  увеличивает epoch и сначала fence-ит все guards.
+  batches, deploy или tags. Он повторно читает выигравший claim и выбирает
+  observer либо recovery path.
+- Claim не является бессрочной блокировкой. Fresh explicit invocation может
+  без доказательства runtime liveness атомарно забрать `active` claim, если
+  durable state когерентно доказывает quiescence: `running_count=0`, нет active
+  issue lanes/live claims, pending external action, nonterminal либо ambiguous
+  gate/batch/deploy, а repository snapshot совпадает с ожидаемым. Terminal
+  reconciled batch record не удерживает owner. Takeover увеличивает epoch и до
+  любой новой работы fence-ит все известные guards.
+- Timeout, старый timestamp и отсутствие PID сами по себе не передают
+  ownership. Они также не нужны для quiescent reclaim: authority даёт полный
+  machine-checkable state vector и expected-old CAS.
+- Если есть running worker, live claim, pending external effect либо
+  неоднозначный state, автоматический reclaim запрещён. Нужны authoritative
+  terminal evidence или явное подтверждение пользователя об остановке старого
+  owner, после чего новый coordinator всё равно сначала выполняет fencing и
+  reconciliation.
 - Concurrent runs разных repositories независимы.
 
 Вторая сессия не присоединяется к worker pool активного run: межсессионный
 mailbox и shared runtime identity не входят в контракт. Нужную параллельность
 задаёт один coordinator через `workers=N|auto`.
 
+Repo-global claim синхронизирует repository вместе со всеми его worktrees. Он
+не синхронизирует разные repositories. Optional production lock из раздела 10
+— отдельная узкая защита одного Site target и не расширяет Git ownership.
+
 ## 6. Primary checkout и изоляция
 
-Preflight классифицирует checkout до claim:
+Preflight до claim проверяет весь repository, включая primary checkout и
+зарегистрированные worktrees. Любой path, который виден в `git status` как
+staged, unstaged, untracked, renamed, deleted, conflicted либо otherwise dirty,
+входит в snapshot. Ignored build/cache files не считаются source dirt, но
+проверяются отдельными isolation rules.
 
-- `clean` — обычный запуск;
-- `isolated-dirty` — несвязанные пользовательские изменения сохранены, skill
-  работает только в новых clean task-owned worktrees;
-- `blocked-control-dirty` — изменены `AGENTS.md`, skill, package/lock/toolchain,
-  CI/deployment config, migrations или другая execution control surface;
-- `blocked-diverged` — primary/default ahead, diverged либо origin identity не
-  доказана.
+До fresh normal claim единственный безопасный state — `clean`. Исключение —
+dirty task worktree, уже полностью связанный с durable claim прежнего run: он
+маршрутизируется только в recovery/adoption и не разрешает normal dispatch до
+fencing и reconciliation. Skill не присваивает себе иной ранее существовавший
+dirt, не делает stash/reset/clean и не пытается угадать автора. Он
+останавливается до мутаций и понятным языком предлагает пользователю завершить,
+закоммитить либо отдельно передать эту работу. После решения preflight
+полностью повторяется на новом exact SHA и clean status.
 
-Skill никогда не выполняет `git add -A`, reset, checkout или cleanup
-пользовательских файлов. Dirty control surface можно продолжить только после
-явного решения пользователя: включить и закоммитить изменения, убрать их из
-scope либо завершить текущую работу. После принятого commit preflight
-повторяется на новом exact contract SHA.
+После claim coordinator сохраняет baseline `HEAD + refs + git status` каждого
+checkout. Изменения допустимы только если они соответствуют зарегистрированному
+действию текущего coordinator или active worker, его branch/worktree и
+ownership paths. Любое иное новое отличие в primary checkout, task worktree,
+local `main` или tracked ref считается внешним вмешательством, даже если Git не
+позволяет доказать конкретного автора.
 
-Все worktrees имеют отдельные mutable dependency/cache/build/runtime paths.
+При таком вмешательстве coordinator немедленно запрещает новые edits, commits,
+merges, gates и release actions, останавливает workers на ближайшей безопасной
+границе и возвращает critical error. Он не пытается молча включить, отменить,
+stash-нуть или исправить сторонние изменения.
+
+В multi-worker режиме все worktrees имеют отдельные mutable
+dependency/cache/build/runtime paths.
 Sharing read-only sealed artifacts допустим только при exact provenance;
 изменяемые `node_modules`, caches, ports или generated outputs между worker-ами
 не разделяются.
@@ -167,6 +216,10 @@ symlink overlay являются dispatch prerequisite. Все ownership paths �
 является dependency authority, а изменение любого выбранного lockfile меняет
 provisioning digest и запрещает adoption старого receipt.
 
+В single-worker режиме task-owned paths располагаются внутри primary checkout,
+но не разделяются с другим процессом. Появление второго writer немедленно
+переводит run в critical stop по правилам выше.
+
 ## 7. Goal contract
 
 Fresh run после выигранного claim создаёт ровно один Goal без token budget, если
@@ -175,7 +228,7 @@ repo, run identity и tracked skill/spec SHA, но не profiles.
 
 Goal завершён, когда два свежих согласованных snapshot не содержат unfinished
 issue, все run artifacts terminal, default branch healthy и каждый принятый
-cutoff имеет exact-SHA gate/promotion evidence. Если acceptance или repository
+batch имеет exact-SHA gate/promotion evidence. Если acceptance или repository
 release contract требует production, Goal дополнительно требует exact
 artifact/deployment, live web + MCP evidence и rollback proof. Если production
 не требуется, такие artifacts не создаются и не симулируются.
@@ -206,8 +259,10 @@ Feature считается готовой к ingest только при нали
 - явных gaps без завышенных live/conformance claims.
 
 Coordinator интегрирует только immutable ready refs, проверяет dependency order
-и не ждёт завершения всех in-flight задач. Conflict сериализует конкретные
-features, а не весь pool.
+и не ждёт завершения всех in-flight задач. Он один последовательно merge-ит их
+в local `main` с expected base. Conflict сериализует конкретные features, а не
+весь pool; coordinator разрешает его в integration context и сохраняет
+исходную feature provenance.
 Полный candidate/active manifest, coordinator SHA, dependency receipt,
 non-shell targeted argv, canonical manifest digest и fresh scope fingerprint
 проверяются `dispatch-check`; обрезанный resource-only entry недействителен.
@@ -231,41 +286,80 @@ item-wise `applied|absent|failed|ambiguous` vector. Частичный failure �
 считается `refill-check` без усечения fractional seconds; невозможные timestamps,
 placeholder evidence и late spawn fail closed либо сохраняют missed evidence.
 
-## 9. Cutoff, общие проверки и default
+## 9. Накопление в `main` и общие проверки
 
-Cutoff фиксирует ordered accepted prefix integration train. После seal его
-membership и source tree immutable. Любая source change, fix, exclusion или
-revert создаёт новую generation и validation key.
+Каждая готовая задача после targeted validation отдельным merge попадает в
+local `main`. Merge commit либо fast-forward сохраняет issue ID, feature SHA и
+claim generation. После каждого merge coordinator выполняет только дешёвые
+проверки потенциально затронутой поверхности: conflict review,
+`git diff --check`, affected tests/validator/smoke и необходимые security/schema
+invariants. Полный repository gate после каждой маленькой задачи запрещён.
 
-Worker checks не заменяют общий gate. Coordinator в clean cutoff worktree один
-раз выполняет canonical full repository gate для exact validation key. В Mind
-Diary это `npm ci`, затем один `npm run check` и `git diff --check
-<base>..<candidate>`, если текущий `AGENTS.md` не задаёт обновлённый contract.
-Aggregate command не дублируется отдельными subcommands.
+Coordinator периодически закрывает release batch — exact immutable snapshot
+накопленного `main`. Контракт намеренно не задаёт механический размер либо
+таймер. Boundary выбирается по связности изменений, риску, стоимости gate,
+размеру накопленного результата и состоянию очереди. При устойчивом потоке
+мелких задач следует ждать заметного, осмысленного unit; urgent fix, исчерпание
+ready work или иной risk boundary могут закрыть batch раньше.
+
+Worker checks не заменяют batch gate. Coordinator один раз выполняет canonical
+full repository gate для exact batch SHA и validation key. В Mind Diary это
+`npm ci`, затем один `npm run check` и `git diff --check
+<previous-released>..<candidate>`, если текущий `AGENTS.md` не задаёт
+обновлённый contract. Aggregate command не дублируется отдельными subcommands.
 Gate имеет bounded step/total timeout, завершает process group и сохраняет
 immutable `failure_kind`; shell wrappers, duplicate steps и aggregate вместе с
 покрываемым subcommand отклоняются до запуска.
 
-Только terminal pass разрешает expected-old fast-forward CAS exact candidate в
-remote default. После push coordinator проверяет remote SHA и обязательный
-post-push CI exact SHA. Primary checkout и local default ref не используются
-как release evidence.
+Только terminal pass разрешает expected-old CAS exact candidate в remote
+`main`. После push coordinator проверяет remote SHA и обязательный post-push CI
+exact SHA. Любая source change, fix, exclusion или revert после batch snapshot
+создаёт новую generation и validation key.
 
-## 10. Production batches
+Перед завершением skill обязан закрыть финальный batch, выполнить полный gate и
+применимый production release даже для одной маленькой оставшейся задачи.
+Наличие недавно успешного предыдущего batch не покрывает новый patch.
 
-Каждый проверенный cutoff может быть продвинут в default независимо от
-production. Нужно ли затем выпускать production batch, определяется
-acceptance текущего milestone и repository release contract.
+## 10. Production batches и release lock
+
+После successful full gate и продвижения exact batch SHA в remote `main`
+coordinator выполняет применимый production release. При потоке задач это
+происходит на batch boundaries, а не после каждой feature. Финальный release
+обязателен перед успешным завершением skill, если repository release contract
+определяет production как часть delivery.
 
 Если production требуется, coordinator:
 
 1. доказывает configured production target и previous stable artifact;
-2. связывает artifact/version/deployment с exact validated default SHA;
-3. deploy-ит один раз через durable action ticket;
-4. проверяет обязательные live authenticated web/control, persistence и MCP
+2. проверяет наличие atomic release-lock capability для exact Site/environment;
+3. связывает artifact/version/deployment с exact validated `main` SHA;
+4. deploy-ит один раз через durable action ticket;
+5. проверяет обязательные live authenticated web/control, persistence и MCP
    flows на точном target;
-5. создаёт immutable tag только если его требует tracked version policy;
-6. закрывает Linear issue после terminal release evidence.
+6. создаёт immutable tag только если его требует tracked version policy;
+7. закрывает Linear issue после terminal release evidence.
+
+Release lock используется только когда фактический provider предоставляет
+проверяемые atomic acquire/conditional release либо эквивалентный CAS. Lock
+scope — exact Site project + environment; record содержит `owner_run_id`,
+`acquired_at` и, если provider поддерживает, monotonic fencing epoch/expiry.
+Захват выполняется до первой publish mutation, освобождение — только после
+terminal deploy/reconciliation и только matching owner/epoch.
+
+Отсутствие такой capability не блокирует release: шаг пропускается, а evidence
+явно записывает `release_lock=unsupported/skipped`. Обычный файл, comment,
+environment variable без CAS или marker в опубликованном Site lock-ом не
+считается. На 2026-08-08 доступный Sites connector не предоставляет отдельной
+atomic lock operation; это observation текущей tool surface, а не обещание
+платформы навсегда.
+
+Если failure оставил настоящий lock, coordinator не удаляет его автоматически.
+Он сначала reconciles deployment status и объясняет пользователю owner, target,
+последний доказанный этап и риск повторного publish. `force-unlock` допустим
+только после явного подтверждения пользователя; при доступном fencing он также
+увеличивает epoch, чтобы прежний publisher потерял authority. Если provider не
+умеет fence-ить уже начатый publish, отчёт прямо предупреждает об остаточном
+риске overlap.
 
 Для Mind Diary фраза «production release» означает полный Sites vertical slice
 из `AGENTS.md`; локальный MCP, один UI или probe не заменяют release. Если этого
@@ -274,7 +368,8 @@ slice ещё нет, coordinator создаёт/переоткрывает imple
 после того, как exact deployable product и reproducible gate уже существуют, а
 проверка действительно требует недоступного внешнего действия.
 
-Если milestone не требует production, receipt пишет
+Если authoritative repository contract для конкретного milestone не требует
+production, receipt пишет
 `PRODUCTION_REQUIREMENT=not-required-by-current-milestone`; это наблюдение об
 acceptance, а не profile и не waiver.
 
@@ -284,10 +379,11 @@ acceptance, а не profile и не waiver.
 |---|---|
 | Дефект относится к acceptance текущей issue | Переоткрыть/оставить issue `In Progress`, создать новую claim generation и отправить на переделку |
 | Сложный независимый дефект | Найти duplicate либо создать связанную Linear Bug с evidence и dependencies; продолжить независимый frontier |
-| Маленький integration repair | Coordinator исправляет в integration worktree, создаёт новую cutoff generation и повторяет полный gate; непроверенного commit прямо в main нет |
+| Маленький integration repair | Coordinator создаёт отдельную feature branch, исправляет её в primary checkout при single-worker либо отдельном worktree при multi-worker, merge-ит в `main` и создаёт новую batch generation; release без повторного полного gate запрещён |
 | Default содержит известный bad change | Заморозить promotion, создать stabilization cutoff или rollback по exact evidence |
 | Нужен новый product/security decision | Сохранить безопасный state, продолжить независимые задачи и запросить решение пользователя |
 | Обязательный внешний ресурс недоступен | Выполнить все локально доказуемые prerequisites, зафиксировать точный resource/operation/error и остановиться только если больше нет safe progress |
+| В repository появился незарегистрированный `git status`/HEAD/ref delta | Немедленно остановить новые мутации и release, довести workers только до безопасной границы, сохранить чужие bytes нетронутыми и выдать critical error overview |
 
 Повторный или системный дефект получает одну дедуплицированную stabilization
 issue и fresh claim generations; affected promotion замораживается, независимый
@@ -298,12 +394,12 @@ coordinator обязан классифицировать root cause. Сложн
 product/security decision.
 
 Линейная задача не закрывается по факту commit. `Done` требует feature receipt,
-integrated cutoff, default evidence и все применимые acceptance/release gates.
+integrated batch, `main` evidence и все применимые acceptance/release gates.
 
 ## 12. Pause, crash и recovery
 
 Pause сначала запрещает новые dispatch, затем дренирует workers, завершает или
-безопасно останавливает активный cutoff, reconciles pending actions и оставляет
+безопасно останавливает активный batch, reconciles pending actions и оставляет
 durable `handoff-ready` либо `paused` receipt. Убийство coordinator process не
 является корректной остановкой.
 
@@ -312,13 +408,19 @@ durable `handoff-ready` либо `paused` receipt. Убийство coordinator 
 artifacts, затем усыновляет exact result либо fence-ит старый epoch. Ambiguous
 external create fail closed до reconciliation.
 
+Coherent quiescent `active` owner не может навсегда заблокировать repository.
+Fresh explicit invocation выполняет expected-old takeover с `epoch+1` и fencing
+без требования доказать состояние старой Codex task. Это разрешено только для
+полного zero-work/no-pending/no-nonterminal-batch predicate из раздела 5. Любой
+running либо внешний pending effect сохраняет conservative recovery path.
+
 ## 13. Terminal отчёт
 
 Успешный итог сообщает кратко:
 
 - milestone и число доставленных/переоткрытых/созданных issues;
 - worker mode и фактическую peak concurrency;
-- cutoff/default exact SHAs и результаты full gates;
+- batch/`main` exact SHAs и результаты full gates;
 - production evidence либо `not-required-by-current-milestone`;
 - remaining gaps, если они не удерживают acceptance;
 - состояние Goal и отсутствие активных run artifacts.
@@ -328,7 +430,19 @@ Blocked итог должен человеческим языком ответи
 минимальное действие пользователя или внешней системы снимет blocker. Внутренние
 IDs и receipts приводятся после объяснения, а не вместо него.
 
-## 14. Исполняемые guardrails
+При critical error coordinator дополнительно сообщает, на каком этапе
+остановился run, какие изменения уже были сделаны, в каком состоянии остались
+`main`, feature branches/worktrees, Linear и release target. Он самостоятельно
+сводит worker/subagent evidence в короткий понятный overview. Raw сообщение
+subagent, stack trace, guard vector или tool JSON не являются пользовательским
+объяснением и могут приводиться только как вторичное evidence.
+
+## 14. Требуемые исполняемые guardrails
+
+Список ниже включает существующие helpers и требования ADR-0007, которые ещё
+нужно реализовать. Пока `SKILL.md`, scripts и tests не обновлены отдельным
+изменением, этот раздел задаёт acceptance будущей реализации, а не доказывает
+текущее соответствие.
 
 Нормативные prose-переходы имеют machine-checkable counterparts:
 
@@ -340,15 +454,29 @@ IDs и receipts приводятся после объяснения, а не в
 - `pool-status` объясняет фактическую загрузку и unused capacity без UI subagents;
 - `projection-plan` и `projection-batch-cas` дают двухфазную crash-safe Linear
   projection; `refill-check` фиксирует точную 60-second boundary;
-- `manifest`, `provision-worktree`, `dispatch-check` и `receipt-verify`
-  ограждают issue lane;
+- `manifest`, multi-worker `provision-worktree`, `dispatch-check` и
+  `receipt-verify` ограждают issue lane;
 - `conveyor-next` допускает только ordered lifecycle с обязательным evidence;
 - `gatectl run/status` дедуплицирует один full gate exact generation;
-- `recover-stale-owner` принимает только terminal-task/user-confirmed-stop
-  proof и expected-old CAS;
+- `recover-stale-owner` сохраняется для непустого state и принимает только
+  terminal-task/user-confirmed-stop proof; отдельный quiescent path не требует
+  runtime proof, но требует полного zero-work predicate и expected-old CAS;
 - `status`, `cleanup-plan` и `cleanup-apply` закрывают terminal run без удаления
   dirty, active или unpublished carrier; cleanup требует coherent terminal
-coordinator, zero occupancy, no live claims и claim-bound branch identity.
+  coordinator, zero occupancy, no live claims и claim-bound branch identity.
+- preflight снимает один coherent repo-wide snapshot всех worktrees и
+  классифицирует любое видимое `git status` отличие;
+- single-worker helper безопасно управляет task feature branch в primary
+  checkout, а multi-worker integration допускает merge в `main` только
+  coordinator-у;
+- quiescent reclaim атомарно проверяет zero-work/no-pending predicate,
+  увеличивает epoch и fence-ит guards без runtime-liveness proof;
+- batch planner выбирает и сохраняет осмысленную boundary без full gate на
+  каждую feature и принудительно закрывает финальный batch;
+- release capability probe либо использует atomic Site lock, либо сохраняет
+  terminal `unsupported/skipped` evidence без выдуманного marker lock;
+- critical-stop renderer строит human overview из coordinator/worker evidence
+  и не возвращает сырой subagent output как итог.
 
 Canonical `npm run check` включает Python orchestration suites; изменение helper
 без этих tests не может пройти repository gate.

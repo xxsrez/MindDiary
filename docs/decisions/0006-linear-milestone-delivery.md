@@ -2,6 +2,11 @@
 
 Статус: accepted, 2026-08-08.
 
+Частично superseded
+[ADR-0007](0007-linear-delivery-concurrency.md): новый ADR заменяет topology
+single-worker, isolated-dirty policy, active-owner liveness и fixed small-cutoff
+rules. Остальные решения этого ADR остаются в силе.
+
 ## Контекст
 
 Mind Diary использует repo-local skill `ship-linear-release`, чтобы разбирать

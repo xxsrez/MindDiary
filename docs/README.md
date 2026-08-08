@@ -34,7 +34,7 @@ evidence, предлагаемый дизайн и ещё не проверен�
    post-MVP denylist и implementation decisions.
 11. [Автономная доставка Linear milestone](specs/linear-milestone-delivery.md) —
    нормативный контракт `ship-linear-release`: worker modes, session ownership,
-   dirty checkout, guards, cutoffs, production gates и blocker policy.
+   dirty checkout, guards, batches, production gates и blocker policy.
 
 ## Руководства
 
@@ -68,6 +68,9 @@ evidence, предлагаемый дизайн и ещё не проверен�
 - [ADR-0006: автономная доставка Linear milestone без профилей](decisions/0006-linear-milestone-delivery.md)
   — принят единый acceptance-driven conveyor, exact/auto workers, один
   repo-global coordinator и отказ от `design | build | release` profiles.
+- [ADR-0007: repository-scoped concurrency и batch release](decisions/0007-linear-delivery-concurrency.md)
+  — приняты single-worker primary branch, coordinator-only merge, clean-start,
+  quiescent reclaim, осмысленные batches и optional Site release lock.
 
 ## Исследования
 

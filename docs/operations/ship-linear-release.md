@@ -3,6 +3,12 @@
 Статус: operational companion к
 [спецификации доставки Linear milestone](../specs/linear-milestone-delivery.md).
 
+Topology и recovery правила
+[ADR-0007](../decisions/0007-linear-delivery-concurrency.md) приняты, но на
+2026-08-08 ещё не реализованы в самом skill и helpers. Этот runbook описывает
+целевой порядок; до отдельного implementation change текущий skill нельзя
+считать conformant новым разделам.
+
 ## Когда использовать
 
 Запускайте skill явно, когда нужно не спланировать, а реализовать и доставить
@@ -32,31 +38,37 @@ Skill не имеет build/release profile. Не нужно заранее со
    ready frontier и authoritative occupancy действующего run. На resume без
    нового count он берёт сохранённый request из `WORKERS`, а не default `1`.
 4. Fresh run попытается CAS-ом получить единственный coordinator claim.
-5. После победы будет создан один Goal и task-owned worktrees.
-6. Workers начнут ready issues; готовые features будут сразу поступать в
-   rolling integration train. `running > sustained_issue_capacity`, orphan
-   live claim или execution без claim блокируют dispatch как incoherent state.
-7. Coordinator закроет небольшие immutable cutoffs, выполнит full gate и
-   продвинет exact SHA в main.
-8. Если acceptance требует production, coordinator выполнит deployment и live
-   gates. В противном случае он завершит milestone без выдуманного deploy.
+5. После победы будет создан один Goal. При одном worker root создаст feature
+   branch в primary checkout; при нескольких — task-owned worktrees.
+6. Workers начнут ready issues; coordinator будет один последовательно
+   merge-ить готовые features в local `main`. `running >
+   sustained_issue_capacity`, orphan live claim или execution без claim
+   блокируют dispatch как incoherent state.
+7. Coordinator накопит осмысленный batch, выполнит один full gate на exact
+   `main` SHA и expected-old продвинет remote `main`.
+8. Если acceptance/repository contract требует production, coordinator
+   выполнит deployment и live gates. В противном случае он завершит milestone
+   без выдуманного deploy.
 9. Linear issues станут `Done` только после соответствующего evidence.
 
-При `workers=1` эти роли исполняет root последовательно. При `workers>1` root
-не считается одним из issue workers и остаётся responsive coordinator.
+При `workers=1` эти роли исполняет root последовательно без отдельного
+worktree. При `workers>1` root не считается одним из issue workers, остаётся
+responsive coordinator и является единственным writer `main`.
 
 ## До запуска
 
-Предпочтителен clean checkout, но несвязанные незакоммиченные изменения не
-требуют stash/reset. Skill должен оставить их на месте и работать через clean
-worktrees. Он остановится, если dirty changes затрагивают сам skill,
-`AGENTS.md`, package/lock/toolchain, CI/deployment config, migrations или другую
-surface, определяющую выполнение. Тогда нужно явно выбрать: включить эти
-изменения в новый contract commit, завершить их отдельно или отменить запуск.
+Repository должен быть clean во всех checkout, которые видит Git. Любой staged,
+unstaged, untracked, renamed/deleted либо conflicted path из `git status`
+блокирует fresh normal start. Полностью связанный с durable claim прежнего run
+dirty task worktree обрабатывается только через recovery/adoption после
+fencing; это не разрешает новый normal dispatch. Skill не выполняет
+stash/reset/clean и не присваивает остальные изменения себе. Нужно явно
+выбрать: завершить и закоммитить их, перенести в отдельную task branch либо
+отменить запуск, после чего повторить preflight.
 
 Для exact N должны быть доступны N устойчивых issue slots, N изолированных
 наборов mutable resources и при N>1 ещё один slot coordinator-а. При N=1 root
-совмещает обе роли. Не нужно заранее устанавливать зависимости во все
+совмещает обе роли. При N>1 не нужно заранее устанавливать зависимости во все
 worktrees: coordinator готовит bounded task-owned environment по tracked
 lockfile через `provision-worktree`. Все ownership paths передаются повторяемым
 `--path`; helper сам выбирает корневой и затронутые tracked nested
@@ -72,17 +84,28 @@ Feature worker не выполняет самовольный
 `npm ci`, не получает symlink на mutable dependency tree другого worktree и не
 запускает общий build.
 
+После claim coordinator сверяет status/HEAD/refs с реестром собственных и
+worker actions. Любое новое неучтённое отличие — critical stop. Не продолжайте
+merge или release до человеческого отчёта и явного устранения вмешательства.
+
 ## Одновременный запуск из другой сессии
 
-Ожидаемый результат для того же repository — `already-running` с read-only
-status. Это не ошибка и не зависание: один coordinator уже владеет Linear,
-main, cutoffs и deploy. Чтобы увеличить параллельность активного run, меняется
-его worker pool, а не запускается второй writer.
+Если active claim содержит running workers, live claims, pending external
+effect либо неоднозначный state, ожидаемый результат — `already-running` с
+read-only status. Чтобы увеличить параллельность такого run, меняется его worker
+pool, а не запускается второй writer.
 
-Если прежняя сессия корректно оставила `handoff-ready`, новый явный запуск может
-автоматически выполнить fenced takeover. Если owner жив или state неоднозначен,
-takeover запрещён. Для другого repository действует отдельный claim, поэтому
-обе сессии могут работать одновременно.
+Если claim `handoff-ready` либо даже `active`, но полный durable vector
+когерентно доказывает zero running, no live claims, no pending action, no
+nonterminal/ambiguous gate/batch/deploy и stable repository snapshot, новый
+явный запуск сам делает expected-old takeover с `epoch+1` и fence-ит guards.
+Terminal reconciled batch record этому не мешает. Доказывать, что старая Codex
+task физически перестала исполняться, не требуется. При непустом либо
+неоднозначном state нужны terminal evidence или явное подтверждение
+пользователя, затем fencing и reconciliation.
+
+Для другого repository действует отдельный claim, поэтому обе сессии могут
+работать одновременно.
 
 ## Как читать status
 
@@ -96,14 +119,16 @@ checkout=clean; external-gates=pending
 
 - `workers=requested/sustained` показывает запрос и реальную устойчивую
   capacity, не мгновенное число ready issues;
-- `owner=other` и `already-running` означают безопасный отказ второй сессии;
-- `checkout=isolated-dirty` означает, что изменения пользователя не трогаются;
+- `owner=other` и `already-running` означают, что durable state пока не даёт
+  безопасного reclaim;
+- любой `checkout=dirty` блокирует normal start; skill не stash-ит и не
+  присваивает эти изменения;
 - `external-gates` описывает фактические milestone obligations, не profile;
 - `no-actionable-frontier` означает structural problem graph, а не отсутствие
   уже реализованного production.
 
 После этого полезны только milestone-level события: issue dispatched/ready,
-cutoff sealed/passed/promoted, production gate, pause/recovery или настоящий
+batch closed/passed/promoted, production gate, pause/recovery или настоящий
 blocker. Внутренний streaming telemetry не должен засорять ответ.
 Текущий state можно перепроверить `shipctl.py status`. Фактическую загрузку
 пула без открытия UI subagents показывает `shipctl.py pool-status`: отдельно
@@ -113,9 +138,9 @@ blocker. Внутренний streaming telemetry не должен засоря
 dependency wait или уже готовые features в integration queue.
 
 Terminal cleanup сначала строится `cleanup-plan`, затем применяется только при
-неизменном digest. Helper требует coherent terminal coordinator, zero occupancy,
-отсутствие live claims
-и удаляет только clean merged claim-bound task worktrees.
+неизменном digest. Helper требует coherent terminal coordinator, zero
+occupancy, отсутствие live claims и удаляет только существующие clean merged
+claim-bound task worktrees.
 
 ## Как отражается работа в Linear
 
@@ -144,20 +169,42 @@ call.
 конкретные blocker, evidence и resume predicate. Fractional seconds не
 усекаются, а поздний spawn не стирает уже случившийся miss.
 
+## Batch validation и production lock
+
+После каждой feature выполняются только affected checks. Coordinator собирает
+несколько merge в осмысленный batch и запускает full gate один раз на exact
+`main` SHA. Fixed batch size нет; в стабильном потоке мелких задач не следует
+релизить каждую отдельно. Перед завершением skill финальный batch обязателен
+даже для одного patch.
+
+Перед Sites publish coordinator проверяет текущую tool/provider surface. Если
+она предоставляет atomic lock/CAS для exact Site и environment, lock
+захватывается до publish и conditional-освобождается после terminal deployment.
+Если нет — release продолжается, а receipt явно содержит
+`release_lock=unsupported/skipped`; marker или обычный файл lock не заменяют.
+
+Оставшийся после failure настоящий lock автоматически не удаляется. Сначала
+проверяются deployment status и owner, затем пользователю сообщаются этап,
+последний доказанный effect и риск overlap. `force-unlock` выполняется только
+после явного подтверждения пользователя и по возможности одновременно fence-ит
+старого publisher новым epoch.
+
 ## Если тест или интеграция упали
 
 Skill сначала локализует источник:
 
 - проблема исходной issue возвращается тому же worker через новую generation;
 - независимый сложный дефект становится дедуплицированной связанной Linear Bug;
-- маленькая integration-only правка выполняется coordinator-inline в отдельном
-  worktree/branch/guard до seal нового cutoff и проходит тот же full gate;
+- маленькая integration-only правка получает отдельную feature branch; в
+  single-worker режиме она выполняется в primary checkout, в multi-worker — в
+  отдельном worktree, после чего попадает в новый batch и проходит full gate;
 - systemic failure замораживает promotion и создаёт stabilization path, но
   независимые безопасные workers могут продолжить работу.
 
-Ни один из вариантов не разрешает непроверенный commit непосредственно в main.
-Повтор terminal failure с тем же validation key запрещён: нужен source fix либо
-доказанное изменение environment/contract и новая cutoff generation.
+Ни один из вариантов не разрешает считать merge в `main` готовым к release без
+batch gate. Повтор terminal failure с тем же validation key запрещён: нужен
+source fix либо доказанное изменение environment/contract и новая batch
+generation.
 
 ## Если production gate невозможен
 
@@ -193,17 +240,33 @@ terminal `paused`/`handoff-ready`; простое закрытие сессии 
 мусор. После reconciliation skill сам retire-ит только доказанно terminal
 artifacts.
 
+## Как сообщать critical error
+
+При внешнем Git-вмешательстве, неоднозначном recovery или другой критической
+ошибке coordinator сначала прекращает новые мутации, а затем самостоятельно
+сводит evidence. Пользовательский итог должен объяснить:
+
+1. что произошло и почему продолжать небезопасно;
+2. на каком этапе остановился run;
+3. что уже успело измениться;
+4. состояние `main`, feature branches/worktrees, Linear и release target;
+5. минимальное действие для продолжения.
+
+Raw JSON helper-а, stack trace или ответ worker/subagent можно приложить после
+этого overview, но нельзя использовать вместо него.
+
 ## Ожидаемый финальный результат
 
-Перед promotion exact candidate проходит канонический repository gate:
-`npm ci`, один `npm run check` и `git diff --check <base>..<candidate>`.
+Перед promotion exact batch candidate проходит канонический repository gate:
+`npm ci`, один `npm run check` и
+`git diff --check <previous-released>..<candidate>`.
 `npm run check` включает Python orchestration suites `shipctl`, `gatectl` и
 foreign-main inspector; повторять его составные команды перед aggregate gate
 не нужно.
 
-Нормальный успех — все задачи current milestone реализованы и `Done`, main
-указывает на exact проверенный cutoff, общие CI/gates terminal, Goal завершён,
-а активных claims/cutoffs/deploy actions не осталось. Если milestone требовал
+Нормальный успех — все задачи current milestone реализованы и `Done`, `main`
+указывает на exact проверенный batch, общие CI/gates terminal, Goal завершён, а
+активных claims/batches/deploy actions не осталось. Если milestone требовал
 production, дополнительно существует подтверждённый exact deployment и live
 smoke; если не требовал — receipt явно говорит об этом без профилей и waiver.
 
