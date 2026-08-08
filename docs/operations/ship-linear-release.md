@@ -4,10 +4,9 @@
 [спецификации доставки Linear milestone](../specs/linear-milestone-delivery.md).
 
 Topology и recovery правила
-[ADR-0007](../decisions/0007-linear-delivery-concurrency.md) приняты, но на
-2026-08-08 ещё не реализованы в самом skill и helpers. Этот runbook описывает
-целевой порядок; до отдельного implementation change текущий skill нельзя
-считать conformant новым разделам.
+[ADR-0007](../decisions/0007-linear-delivery-concurrency.md) реализованы в
+tracked skill/helpers/tests. Перед операционным использованием всё равно
+проверяется exact tracked contract и passing gate текущего commit.
 
 ## Когда использовать
 
@@ -87,6 +86,8 @@ Feature worker не выполняет самовольный
 После claim coordinator сверяет status/HEAD/refs с реестром собственных и
 worker actions. Любое новое неучтённое отличие — critical stop. Не продолжайте
 merge или release до человеческого отчёта и явного устранения вмешательства.
+На каждой shared boundary это выполняет `shipctl.py repo-guard --input
+<registered-actions.json>`.
 
 ## Одновременный запуск из другой сессии
 
@@ -103,6 +104,19 @@ Terminal reconciled batch record этому не мешает. Доказыва�
 task физически перестала исполняться, не требуется. При непустом либо
 неоднозначном state нужны terminal evidence или явное подтверждение
 пользователя, затем fencing и reconciliation.
+
+Quiescent reclaim исполняется строго bounded chain, без Linear warm-up между
+шагами:
+
+```bash
+python3 .agents/skills/ship-linear-release/scripts/shipctl.py takeover --repo .
+python3 .agents/skills/ship-linear-release/scripts/shipctl.py fence-guards --repo .
+python3 .agents/skills/ship-linear-release/scripts/shipctl.py resume-recovery --repo .
+```
+
+При contract upgrade между fencing и resume вызывается `sync-contract`.
+`resume-recovery` повторно требует clean repo-wide snapshot, zero claims/guards/
+pending actions и terminal либо отсутствующий pipeline.
 
 Для другого repository действует отдельный claim, поэтому обе сессии могут
 работать одновременно.
@@ -175,13 +189,15 @@ call.
 несколько merge в осмысленный batch и запускает full gate один раз на exact
 `main` SHA. Fixed batch size нет; в стабильном потоке мелких задач не следует
 релизить каждую отдельно. Перед завершением skill финальный batch обязателен
-даже для одного patch.
+даже для одного patch. Typed решение валидирует `shipctl.py batch-boundary
+--input <boundary.json>`; helper запрещает keep-open для urgent/idle/final state.
 
 Перед Sites publish coordinator проверяет текущую tool/provider surface. Если
 она предоставляет atomic lock/CAS для exact Site и environment, lock
 захватывается до publish и conditional-освобождается после terminal deployment.
 Если нет — release продолжается, а receipt явно содержит
 `release_lock=unsupported/skipped`; marker или обычный файл lock не заменяют.
+Fact-vector проверяется `shipctl.py release-lock-plan --input <lock.json>`.
 
 Оставшийся после failure настоящий lock автоматически не удаляется. Сначала
 проверяются deployment status и owner, затем пользователю сообщаются этап,
@@ -253,7 +269,8 @@ artifacts.
 5. минимальное действие для продолжения.
 
 Raw JSON helper-а, stack trace или ответ worker/subagent можно приложить после
-этого overview, но нельзя использовать вместо него.
+этого overview, но нельзя использовать вместо него. Bounded поля сводит
+`shipctl.py critical-overview --input <critical.json>`.
 
 ## Ожидаемый финальный результат
 

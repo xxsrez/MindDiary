@@ -130,10 +130,11 @@ artifacts и какое минимальное действие требуетс
 
 ## Статус реализации
 
-Этот ADR и связанная спецификация фиксируют принятое поведение. На 2026-08-08
-`SKILL.md`, reference protocols, scripts и orchestration tests ещё реализуют
-предыдущий контракт. Их обновление и forward test выполняются отдельной
-feature; до этого conformance новому ADR не заявляется.
+На 2026-08-08 решение реализовано в repo-local `SKILL.md`, reference protocols,
+`shipctl.py` и forward/regression tests. Главный liveness test проходит полный
+путь clean preflight -> quiescent active takeover -> fencing ->
+`resume-recovery` -> normal resume. Conformance конкретного commit подтверждает
+только repository gate этого commit.
 
 ## Заменённые части ADR-0006
 

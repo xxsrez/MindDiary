@@ -18,6 +18,11 @@ explorer или planning agent перед issue worker. Scope discovery выпо
 compact Linear snapshot + `rg`; неоднозначность возвращается тем же worker-ом
 как `SCOPE_REFINEMENT`, после чего coordinator обновляет manifest этой issue.
 Это не новая issue lane и не повод перечитывать весь repository context.
+Preflight снимает один coherent snapshot primary checkout и всех linked
+worktrees. После claim каждую shared boundary проверяет `shipctl.py repo-guard`
+по exact зарегистрированным action/branch/HEAD/ownership/ref bindings. Любой
+необъяснённый delta означает `critical-stop`, а разные repositories друг друга
+не блокируют.
 
 ## Содержание
 
@@ -27,7 +32,7 @@ compact Linear snapshot + `rg`; неоднозначность возвраща�
 - [Менять limit немедленно и безопасно](#менять-limit-немедленно-и-безопасно)
 - [Поддерживать work-conserving pool](#поддерживать-work-conserving-pool)
 - [Вести OPEN_CUTOFF и один ACTIVE_CUTOFF](#вести-open_cutoff-и-один-active_cutoff)
-- [Срабатывать по точным cutoff triggers](#срабатывать-по-точным-cutoff-triggers)
+- [Выбирать осмысленную batch boundary](#выбирать-осмысленную-batch-boundary)
 - [Хранить явное health state](#хранить-явное-health-state)
 - [Соблюдать durable HOLD и PAUSE](#соблюдать-durable-hold-и-pause)
 - [Выбирать действие по классу дефекта](#выбирать-действие-по-классу-дефекта)
@@ -58,9 +63,10 @@ compact Linear snapshot + `rg`; неоднозначность возвраща�
    root в неё не входит. `refill_count=min(max(sustained-running,0),
    compatible ready-set)`, а `active_target=running+refill_count`. В fused
    `workers=1` sustained capacity равна одной root-inline lane.
-3. При `workers=1` разрешён fused режим: owner-session исполняет одну issue в
-   отдельном worktree и обслуживает coordinator queue между bounded
-   checkpoint. При `N>1` предпочитай dedicated root и child executors.
+3. При `workers=1` owner-session исполняет одну issue в feature branch clean
+   primary checkout и обслуживает coordinator queue между bounded checkpoint;
+   дополнительный worktree не создаётся. При `N>1` root dedicated, а каждый
+   child executor получает отдельный worktree.
 4. Hybrid inline разрешай только когда coordinator queue пуста: нет
    необработанного ready receipt, просроченного refill, pending cutoff seal,
    gate/default/deploy transition, recovery, hold/pause или user message.
@@ -170,8 +176,8 @@ owner proof одного global ref не разрешают mutations.
 | Claim отсутствует | Две sessions race | Любые | Обе делают create-CAS; победитель становится owner, проигравшая — observer. |
 | `active`, caller = owner proof | Та же session | Тот же milestone, `1->1`, `1->N`, `N->1`, `N->M` | Resume run; изменение limit примени по следующему разделу. |
 | `active`, caller = owner | Та же session | Другой milestone, любые limits | Не запускай второй run; сначала terminal checkpoint и release текущего claim, затем новый epoch. |
-| `active`, caller != owner | Вторая session | Тот же milestone, `1/1`, `1/N`, `N/1` или `N/M` | Откажись от мутаций; только observer/read-only report. |
-| `active`, caller != owner | Вторая session | Другой milestone, любые limits | Откажись от мутаций; repo-global claim важнее milestone boundary. |
+| `active`, caller != owner, durable vector nonquiescent/ambiguous | Вторая session | Любой milestone/limit | Откажись от мутаций; только observer/read-only recovery report. |
+| `active`, caller != owner, clean repository и coherent zero-running/live-claims/pending/nonterminal-pipeline | Новая явно вызванная session | Любой milestone/limit | Без runtime stop-proof выполни expected-old takeover `epoch+1`, fence guards и resume empty recovery. |
 | `active`, старый owner доказанно остановлен | Новая session | Тот же или другой milestone | Выполни takeover `epoch+1`, fence guards, затем recovery; до fencing не dispatch-и. |
 | `handoff-ready`, coherent `LIFECYCLE=quiescent`, zero running, нет pending action | Новая явно вызванная session | Тот же run | Без дополнительного вопроса CAS-прими ownership с `epoch+1`, fence-ни guards и затем recovery. Target сохраняет provenance, но не резервирует handoff одной session: concurrent successors разрешает expected-old CAS. |
 | `complete` | Любая session | Любой milestone/limit | CAS-создай descendant claim с новым owner и `epoch+1`; сохрани старый ledger. |
@@ -182,7 +188,8 @@ owner proof одного global ref не разрешают mutations.
 меняет limit owner-session и не «помогает» внешними mutations; при необходимости
 передай owner только read-only observation.
 
-Takeover разрешай только после одного из доказательств:
+Для непустого либо неоднозначного durable state takeover разрешай только после
+одного из доказательств:
 
 - пользователь явно подтвердил, что названная старая Codex task остановлена;
 - authoritative task/thread state доказывает terminal/archived old coordinator.
@@ -191,7 +198,10 @@ Takeover разрешай только после одного из доказа
   подтверждения остановки children либо reconciliation shared effects.
 
 Не используй timeout, stale timestamp или предположение о crash как
-доказательство. При сомнении оставайся observer и верни `needs-input`.
+доказательство. Это ограничение не относится к отдельному clean
+durable-quiescent path из таблицы: там runtime proof не нужен, потому что
+machine-checkable state уже доказывает отсутствие работы/effects. При сомнении
+в любом поле оставайся observer и верни `needs-input`.
 Когда terminal task state или явное подтверждение пользователя уже получено,
 не собирай takeover commit вручную. Передай SHA-256 exact proof в bounded
 helper:
@@ -219,12 +229,12 @@ index согласованы. Любой revived worker, pending effect, нес�
 неполный pause снова переводит route в read-only recovery.
 
 Fresh user message, который явно вызывает online `ship-linear-release`, является
-resume intent для уже quiescent `handoff-ready` run. Не проси пользователя
+resume intent для coherent quiescent `handoff-ready` либо `active` run. Не проси пользователя
 печатать специальную фразу, выполнять Git-команды или вручную делать takeover.
 Если несколько новых sessions вызваны одновременно, только победитель
 expected-old CAS становится owner; остальные переходят в observer. Это правило
-не применяется к active owner, незавершённым workers/in-flight action или
-невыполненному machine-checkable resume predicate.
+не применяется к незавершённым workers/live claims/in-flight action,
+nonterminal batch/gate/deploy или невыполненному machine-checkable predicate.
 
 На `route=takeover` первым и единственным model-level mutable call запускай
 `shipctl.py takeover`; не трать startup budget на Linear snapshot, ручной
@@ -241,6 +251,12 @@ runtime owner, coherent pinned contract и fast-forward source до exact defaul
 shell или JavaScript. `PROMOTION_HOLD` продолжает запрещать
 integration/default/deploy независимо от выигранного ownership.
 
+После `fence-guards`/`sync-contract`, когда inventory содержит zero claims,
+zero guards, no unresolved action и terminal/absent pipeline, сразу вызови
+`shipctl.py resume-recovery`. Helper повторно требует clean repo-wide snapshot
+и CAS-переводит state в `running`; не оставляй пустой run в recovery и не
+проси пользователя о дополнительном разрешении.
+
 ## Менять limit немедленно и безопасно
 
 Только текущая owner-session меняет limit после отдельного fenced CAS action.
@@ -255,9 +271,9 @@ integration/default/deploy независимо от выигранного owne
 - Переход от `1`: немедленно выбери dedicated layout; hybrid inline включай
   только при пустой coordinator queue и не прибавляй к sustained capacity.
 
-Не сдвигай deadline уже непустого `OPEN_CUTOFF` позже. При decrease уменьши
-его latched size, если новый size меньше; при increase новый size применяй со
-следующего пустого `OPEN_CUTOFF`.
+Изменение worker limit не обязано закрывать уже непустой `OPEN_CUTOFF`.
+Batch boundary выбирается по cohesion/risk/size/gate cost/queue state, а не по
+арифметике capacity.
 
 ## Поддерживать work-conserving pool
 
@@ -294,7 +310,7 @@ integration/default/deploy независимо от выигранного owne
 8. Продолжай worker pool, пока `ACTIVE_CUTOFF` проходит дорогой global gate или
    продвижение. Новые ready receipts направляй в `OPEN_CUTOFF`.
 9. При fused `workers=1` переключай coordinator между issue checkpoint и
-   cutoff duties; не оставляй issue worktree в недетерминированном состоянии.
+   batch duties; не оставляй primary checkout с незарегистрированным dirt.
 
 ## Вести OPEN_CUTOFF и один ACTIVE_CUTOFF
 
@@ -303,9 +319,9 @@ integration/default/deploy независимо от выигранного owne
 2. На ingest выполняй только дешёвые gates: merge preflight, conflict review,
    `git diff --check` и affected tests. Не запускай full suite, global CI или
    deploy на каждую feature.
-3. После pass одним fenced checkpoint продвинь train ref и запиши
-   `OPEN_CUTOFF` timer/size/count плюс feature integration state по
-   [receipts.md](receipts.md); порядок восстанавливается из train commits.
+3. После pass coordinator одним fenced checkpoint merge-ит feature в local
+   `main` и записывает `OPEN_CUTOFF` membership плюс integration state по
+   [receipts.md](receipts.md); порядок восстанавливается из integration commits.
 4. Держи не более одного immutable `ACTIVE_CUTOFF`. При trigger и отсутствии
    active cutoff запечатай точный dependency-closed состав и сразу начни
    [batch-release.md](batch-release.md).
@@ -322,33 +338,24 @@ integration/default/deploy независимо от выигранного owne
 8. Любая правка sealed source создаёт новую generation того же active cutoff.
    Не открывай второй global gate параллельно.
 
-## Срабатывать по точным cutoff triggers
+## Выбирать осмысленную batch boundary
 
-При первом eligible ingest зафиксируй:
+Не задавай механический `CUTOFF_SIZE`, пяти минутный timer или full gate после
+каждой feature. После каждого integration/pool event оцени compact facts:
 
-```text
-CUTOFF_SIZE = max(2, min(sustained_issue_capacity, 4))
-MAX_WAIT = 5 minutes from first_eligible_at
-```
+- изменения образуют связный пользовательский либо архитектурный unit;
+- размер/риск накопленного `main` оправдывает один дорогой gate;
+- urgent stabilization, rollback или иной risk boundary требует ранней проверки;
+- ready frontier исчерпан/idle и ждать следующую работу невыгодно;
+- run заканчивается: финальный batch обязателен даже для одного patch.
 
-Сохрани эти latched значения и `max_wait_at` в `RELEASE_RUN.OPEN_CUTOFF`;
-restart/worker-limit change их не пересчитывает для уже непустого cutoff.
-
-Проверяй triggers после каждого pool/cutoff event. Срабатывай по первому
-истинному условию; timer не сбрасывай новым receipt и никогда не продлевай.
-
-| Trigger | Точное условие | Состав и действие |
-| --- | --- | --- |
-| `size` | Eligible dependency-closed ready count `>= CUTOFF_SIZE` | Активируй oldest ordered compatible prefix размером до `CUTOFF_SIZE`. |
-| `max_wait` | `now >= first_eligible_at + 5m` и OPEN непуст | Активируй все доступные compatible receipts, но не больше `CUTOFF_SIZE`; не жди остальных. |
-| `pool_idle` | Fresh scope показывает `running_count=0` и `dispatchable_count=0`, OPEN непуст | Активируй сразу, без grace period. |
-| `urgent` | Ready Urgent issue, stabilization fix или rollback candidate | Активируй сразу минимальный dependency-closed urgent set; unrelated receipts оставь OPEN. |
-
-Если `ACTIVE_CUTOFF` занят, сохрани самый ранний trigger time/reason вместе с
-exact train head и membership digest/count. После terminal active state seal
-этот prefix раньше любого late ingest; поздний suffix остаётся новым OPEN.
-Никогда не жди час, ожидаемый worker ETA или «полную волну». Dependency, которой
-ещё нет в ready receipts, не входит в cutoff и не задерживает независимый prefix.
+При устойчивом потоке мелких задач предпочитай заметный unit. Не жди in-flight
+issue только ради размера batch: зависимость, которой ещё нет в ready receipts,
+не удерживает независимый prefix. Если `ACTIVE_CUTOFF` занят, зафиксируй exact
+pending boundary (local main head, ordered membership digest/count, reason) и
+seal-ни её сразу после terminal ACTIVE раньше позднего suffix.
+Typed decision проверяет `shipctl.py batch-boundary`; model не пересчитывает
+границу из фиксированного count либо wall-clock deadline.
 
 ## Хранить явное health state
 

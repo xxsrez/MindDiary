@@ -36,18 +36,19 @@ owner.
    `run_id + owner_id`. Скопированный из remote UUID или текст goal не является
    доказательством.
 2. Если initial claim выигран, но coordinator упал до создания goal и runtime
-   не имеет stable task identity, автоматического `same-owner` пути нет. Claim
-   не потерян: новая task использует обычный proven-stop takeover. Не выдавай
-   прочитанный `owner_id` за resume token.
-3. Если прежняя coordinator task ещё `running` либо её состояние неизвестно,
-   новая session остаётся observer: никаких worktrees, worker joins, limit
-   changes или external mutations. Timeout, старый timestamp, тишина mailbox и
-   отсутствие PID не доказывают stop.
+   не имеет stable task identity, автоматического `same-owner` пути нет. При
+   полном durable-quiescent predicate новая task использует quiescent reclaim;
+   иначе нужен proven-stop takeover. Не выдавай remote `owner_id` за resume token.
+3. Если прежняя coordinator task ещё `running` либо её состояние неизвестно и
+   durable state содержит running/live/pending/nonterminal или ambiguous
+   элементы, новая session остаётся observer: никаких worktrees, worker joins,
+   limit changes или external mutations. Timeout, старый timestamp, тишина
+   mailbox и отсутствие PID не доказывают stop.
 4. Если прежняя coordinator task authoritative terminal/archived, пользователь
-   явно подтвердил её stop либо есть explicit `handoff-ready`, новая task может
+   явно подтвердил её stop либо durable owner quiescent, новая task может
    начать takeover. Старые child workers не становятся её subagents.
-   Для coherent `LIFECYCLE=quiescent` с zero-running execution vector и
-   отсутствующим pending external action новый explicit online вызов skill является достаточным
+   Для coherent zero-running execution vector, zero live claims и отсутствующих
+   pending/nonterminal batch/gate/deploy новый explicit online вызов skill является достаточным
    resume intent: сразу выполни expected-old takeover CAS, не требуй от
    пользователя magic phrase или ручных Git действий. Handoff target —
    provenance; race между successors решает CAS. Поздний reconciled bookkeeping
@@ -133,6 +134,11 @@ takeover атомарно снимает только user PAUSE и его index
    Если coherent contract fast-forward появился уже после fencing, не повторяй
    fence: на `route=recover-owner-upgrade` вызови idempotent
    `shipctl.py sync-contract`, затем продолжай прежнюю recovery phase.
+   Если после fencing/sync inventory содержит zero live claims/guards,
+   `unresolved=none`, terminal/absent pipeline и repo-wide snapshot clean,
+   немедленно вызови `shipctl.py resume-recovery`. Только его CAS переводит
+   пустой recovery обратно в normal `running`; отсутствие runtime liveness API
+   не является причиной оставить run зависшим.
 2. До dispatch прочитай `CLAIM_INDEX`, `EXECUTION_INDEX` и bounded namespace
    guard refs текущего `run_key`. `CLAIM_INDEX` определяет authority/recovery,
    `EXECUTION_INDEX` — occupancy; live ready claim не означает running slot.
@@ -290,7 +296,9 @@ Claim generation монотонна внутри `run_id:issue_id` и никог
 незаконченной работы.
 
 1. Ищи только worktree/branch/worktree ID из claim action ledger либо exact
-   `run_key` namespace. Не сканируй весь диск и не используй primary checkout.
+   `run_key` namespace. Не сканируй весь диск. Primary checkout допустим как
+   carrier только для exact claim-bound single-worker `checkout_mode=primary`;
+   любой другой dirt в нём — critical stop, а не recovery artifact.
 2. Clean committed SHA защити task-owned local recovery ref-ом до любых branch
    changes. Проверь object existence, ancestry, diff/path ownership и отсутствие
    незаписанных изменений. Новый owner переносит SHA в fresh generation; old
@@ -312,34 +320,34 @@ Claim generation монотонна внутри `run_id:issue_id` и никог
    task-owned worktree. Если не осталось ни ref, ни commit, progress недоказан —
    `requeue-clean`, а не broad reflog/fsck search.
 
-## Восстановить train и cutoffs
+## Восстановить integration head и cutoffs
 
 Каждый sealed cutoff имеет immutable ref
 `codex/release/cutoff/<run-key>/<cutoff-id>/g<generation>` на exact candidate:
 remote online либо task-owned local при explicit offline mode. Создай его
 expected-absent до global gate. Existing same-name/same-SHA ref усынови;
 existing different SHA замораживает cutoff. Local cutoff остаётся
-`locally-integrated` и не разрешает default/Done. Moving train ref не является
+`locally-integrated` и не разрешает default/Done. Moving local `main` не является
 границей active cutoff.
 
 Feature ingest — двухфазный переход:
 
-1. coordinator action intent до train push хранит expected train head, prepared
-   successor SHA, feature/ref/claim, resulting ordered membership digest и
-   latched `first_eligible_at/max_wait_at`;
-2. expected-old fast-forward train push выполняет Git effect;
-3. coordinator перечитывает origin. Successor head означает accepted feature,
+1. coordinator action intent до integration ref/main update хранит expected
+   head, prepared successor SHA, feature/ref/claim, resulting ordered membership
+   digest и выбранную meaningful batch boundary;
+2. registered exact-HEAD merge в local `main` выполняет Git effect;
+3. coordinator перечитывает integration head. Successor означает accepted feature,
    даже если Linear update не случился; old head означает, что push не случился;
    другой head требует ordered structured-commit reconciliation;
 4. только после Git reconciliation upsert-ни projections в `RELEASE_RUN`,
-   `FEATURE_RECEIPT` и cutoff comment. Missing comment не откатывает train и не
-   сбрасывает timer.
+   `FEATURE_RECEIPT` и cutoff comment. Missing comment не откатывает merge и не
+   меняет membership.
 
 Structured integration commit обязан хранить issue ID, original feature SHA/ref,
 claim generation, dependency SHAs и membership sequence. Поэтому recovery
-восстанавливает OPEN membership из train commits, ACTIVE boundary — из immutable
+восстанавливает OPEN membership из integration commits, ACTIVE boundary — из immutable
 cutoff ref, затем сверяет comments. Latched pending trigger восстанавливай по
-exact train head и membership digest/count; после terminal ACTIVE cutoff seal-ни
+exact local main head и membership digest/count; после terminal ACTIVE cutoff seal-ни
 его раньше late ingest.
 
 Для каждого indexed `GATE_RESULT` сначала вызови `gatectl.py status` по exact
@@ -458,6 +466,11 @@ independent-work=<continuing|paused>
 recovery-complete; epoch=<n>; pool=<running/sustained>; open-cutoff=<id|none>;
 pending-seal=<id@head|none>; shared-lane=<open|held:id:reason>
 ```
+
+При critical stop сначала сведи факты в пользовательский overview: причина и
+опасность продолжения, текущая recovery stage, уже сделанные effects, состояние
+`main`/feature branches/worktrees/Linear/release и минимальное действие дальше.
+Raw worker/helper output — только приложение, не итоговое объяснение.
 
 Если current skill bundle untracked/dirty-only относительно сохранённого
 contract source, normal preflight остаётся fail-closed: эта recovery procedure

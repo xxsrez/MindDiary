@@ -4,9 +4,9 @@
 
 Concurrency topology, interference policy, batch validation и optional release
 lock уточнены [ADR-0007](../decisions/0007-linear-delivery-concurrency.md).
-На 2026-08-08 эти уточнения приняты как целевой контракт, но ещё не реализованы
-в `SKILL.md`, helper scripts и orchestration tests. До отдельной реализации
-нельзя заявлять, что текущий исполняемый skill им соответствует.
+На 2026-08-08 они реализованы в tracked `SKILL.md`, reference protocols,
+`shipctl.py` и orchestration tests. Conformance конкретного checkout всё равно
+требует passing repository gate на его exact commit.
 
 ## 1. Назначение и источники истины
 
@@ -169,6 +169,12 @@ mutable действие fresh run — expected-old CAS этого claim.
 Вторая сессия не присоединяется к worker pool активного run: межсессионный
 mailbox и shared runtime identity не входят в контракт. Нужную параллельность
 задаёт один coordinator через `workers=N|auto`.
+
+Обязательный forward invariant: explicit invocation при clean repository и
+coherent `active` zero-work/no-pending state возвращает `route=takeover`, CAS-
+поднимает epoch, fence-ит zero-or-more guards и через `resume-recovery` доходит
+до `route=resume`. Ни manual phrase, ни доказательство смерти старой task в
+этом сценарии не допускаются как prerequisite.
 
 Repo-global claim синхронизирует repository вместе со всеми его worktrees. Он
 не синхронизирует разные repositories. Optional production lock из раздела 10
@@ -439,11 +445,6 @@ subagent, stack trace, guard vector или tool JSON не являются по�
 
 ## 14. Требуемые исполняемые guardrails
 
-Список ниже включает существующие helpers и требования ADR-0007, которые ещё
-нужно реализовать. Пока `SKILL.md`, scripts и tests не обновлены отдельным
-изменением, этот раздел задаёт acceptance будущей реализации, а не доказывает
-текущее соответствие.
-
 Нормативные prose-переходы имеют machine-checkable counterparts:
 
 - `goal-card` ограничивает и хеширует exact Goal objective;
@@ -466,16 +467,20 @@ subagent, stack trace, guard vector или tool JSON не являются по�
   coordinator, zero occupancy, no live claims и claim-bound branch identity.
 - preflight снимает один coherent repo-wide snapshot всех worktrees и
   классифицирует любое видимое `git status` отличие;
+- `repo-guard` сверяет полный exact worktree/path/branch/HEAD vector, допускает
+  active-run dirt только по action/ownership/ref bindings и иначе возвращает
+  `critical-stop`;
 - single-worker helper безопасно управляет task feature branch в primary
   checkout, а multi-worker integration допускает merge в `main` только
   coordinator-у;
 - quiescent reclaim атомарно проверяет zero-work/no-pending predicate,
-  увеличивает epoch и fence-ит guards без runtime-liveness proof;
-- batch planner выбирает и сохраняет осмысленную boundary без full gate на
-  каждую feature и принудительно закрывает финальный batch;
-- release capability probe либо использует atomic Site lock, либо сохраняет
+  увеличивает epoch и fence-ит guards без runtime-liveness proof, а
+  `resume-recovery` нормализует terminal stale pipeline и возвращает normal run;
+- `batch-boundary` валидирует осмысленную boundary без fixed size/timer и
+  принудительно закрывает urgent/idle/final batch;
+- `release-lock-plan` либо требует реальную atomic Site lock operation, либо сохраняет
   terminal `unsupported/skipped` evidence без выдуманного marker lock;
-- critical-stop renderer строит human overview из coordinator/worker evidence
+- `critical-overview` строит human overview из coordinator/worker evidence
   и не возвращает сырой subagent output как итог.
 
 Canonical `npm run check` включает Python orchestration suites; изменение helper

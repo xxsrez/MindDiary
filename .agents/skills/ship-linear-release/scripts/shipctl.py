@@ -4,7 +4,7 @@
 Policy remains in SKILL.md and references. Most commands are read-only.
 ``metadata-commit`` creates only an unreachable local metadata commit object.
 The explicit ``soft-pause``, ``takeover``, ``fence-guards``,
-``sync-contract``, and ``projection-batch-cas`` commands perform narrowly
+``sync-contract``, ``resume-recovery``, and ``projection-batch-cas`` commands perform narrowly
 fenced Git CAS transitions. They never mutate Linear, worktrees, feature refs,
 default, deployment, or tags; projection provider calls remain external.
 """
@@ -53,6 +53,25 @@ KNOWN_RUN_STATES = {
 }
 KNOWN_OWNER_STATES = {"active", "handoff-ready", "complete", "aborted", "retired"}
 TERMINAL_STATES = {"complete", "aborted", "retired"}
+TERMINAL_BATCH_STATES = {
+    "deployed",
+    "failed",
+    "integrated",
+    "integrated-doc-only",
+    "released",
+    "rolled-back",
+    "terminal",
+}
+TERMINAL_DEPLOYMENT_STATES = {
+    "cancelled",
+    "canceled",
+    "completed",
+    "deployed",
+    "failed",
+    "rolled-back",
+    "succeeded",
+    "terminal",
+}
 LOWER_DIGEST = re.compile(r"[0-9a-f]{64}")
 GIT_OID = re.compile(r"[0-9a-f]{40}(?:[0-9a-f]{24})?")
 UUID_TEXT = re.compile(
@@ -74,6 +93,7 @@ REQUIRED_MANIFEST_FIELDS = {
     "coordinator_sha",
     "repo",
     "worktree",
+    "checkout_mode",
     "branch",
     "feature_ref",
     "guard_ref",
@@ -607,6 +627,136 @@ def _handoff_takeover_ready(metadata: dict[str, str]) -> bool:
     return bool(_coordinator_lifecycle(metadata)["takeover_ready"])
 
 
+def _terminal_pipeline(metadata: dict[str, str]) -> tuple[bool, list[str]]:
+    """Prove that no nonterminal batch, gate, or deployment still owns a lane.
+
+    Older ledgers sometimes retain ``PIPELINE.active_cutoff`` after the exact
+    cutoff has already reached a reconciled terminal result.  That historical
+    pointer must not become a permanent ownership lock, but it is safe to
+    ignore only when the matching terminal records are complete.
+    """
+    errors: list[str] = []
+    pipeline, pipeline_duplicates, pipeline_malformed = _compact_fields(
+        metadata.get("PIPELINE", "")
+    )
+    gate, gate_duplicates, gate_malformed = _compact_fields(
+        metadata.get("GATE_INDEX", "")
+    )
+    errors.extend(f"duplicate-pipeline-field:{name}" for name in pipeline_duplicates)
+    errors.extend(f"malformed-pipeline-field:{name}" for name in pipeline_malformed)
+    errors.extend(f"duplicate-gate-field:{name}" for name in gate_duplicates)
+    errors.extend(f"malformed-gate-field:{name}" for name in gate_malformed)
+
+    open_cutoff = pipeline.get("open_cutoff", "none").lower()
+    active_cutoff = pipeline.get("active_cutoff", "none").lower()
+    active_gate = gate.get("active", "none").lower()
+    if open_cutoff not in {"", "none"}:
+        errors.append("open-cutoff-present")
+    if active_gate not in {"", "none"}:
+        errors.append("active-gate-present")
+
+    active_record, active_duplicates, active_malformed = _compact_fields(
+        metadata.get("ACTIVE_CUTOFF", "")
+    )
+    result_record, result_duplicates, result_malformed = _compact_fields(
+        metadata.get("CUTOFF_RESULT", "")
+    )
+    if metadata.get("ACTIVE_CUTOFF", "").strip().lower() not in {"", "none"}:
+        errors.extend(
+            f"duplicate-active-cutoff-field:{name}" for name in active_duplicates
+        )
+        errors.extend(
+            f"malformed-active-cutoff-field:{name}" for name in active_malformed
+        )
+        active_status = active_record.get("status", "").lower()
+        if active_status not in TERMINAL_BATCH_STATES:
+            errors.append("active-cutoff-not-terminal")
+    if metadata.get("CUTOFF_RESULT", "").strip().lower() not in {"", "none"}:
+        errors.extend(
+            f"duplicate-cutoff-result-field:{name}" for name in result_duplicates
+        )
+        errors.extend(
+            f"malformed-cutoff-result-field:{name}" for name in result_malformed
+        )
+        result_status = result_record.get("status", "").lower()
+        if result_status not in TERMINAL_BATCH_STATES:
+            errors.append("cutoff-result-not-terminal")
+
+    if active_cutoff not in {"", "none"}:
+        match = re.fullmatch(r"([^:;,]+):g([1-9][0-9]*)", active_cutoff)
+        if match is None:
+            errors.append("active-cutoff-identity-invalid")
+        else:
+            cutoff_id, generation = match.groups()
+            if (
+                active_record.get("cutoff", "").lower() != cutoff_id
+                or active_record.get("generation") != generation
+                or active_record.get("status", "").lower()
+                not in TERMINAL_BATCH_STATES
+            ):
+                errors.append("active-cutoff-not-terminal")
+            result_identity = result_record.get("cutoff", "").lower()
+            if (
+                result_identity != active_cutoff
+                or result_record.get("status", "").lower()
+                not in TERMINAL_BATCH_STATES
+            ):
+                errors.append("cutoff-result-not-terminal")
+
+    for header in ("DEPLOYMENT", "SITES_DEPLOYMENT"):
+        value = metadata.get(header, "").strip()
+        normalized = value.lower()
+        if normalized in {"", "none"} or normalized.startswith("not-required"):
+            continue
+        status = _semicolon_fields(value).get("status", "").lower()
+        if not status:
+            errors.append(f"{header.lower()}-status-missing")
+        elif status not in TERMINAL_DEPLOYMENT_STATES:
+            errors.append(f"{header.lower()}-not-terminal")
+
+    return not errors, list(dict.fromkeys(errors))
+
+
+def _durable_quiescent_reclaim(metadata: dict[str, str]) -> tuple[bool, list[str]]:
+    """Decide ownership from durable state without runtime liveness proof."""
+    lifecycle = _coordinator_lifecycle(metadata)
+    errors: list[str] = []
+    if not lifecycle.get("coherent"):
+        errors.extend(f"lifecycle:{item}" for item in lifecycle.get("errors", []))
+    if lifecycle.get("phase") not in {"running", "recovering"}:
+        errors.append("lifecycle-not-operating-or-recovering")
+    if lifecycle.get("running_count") != 0:
+        errors.append("running-executors-present-or-unknown")
+    if lifecycle.get("active_issue_lanes"):
+        errors.append("active-issue-lanes-present")
+    if lifecycle.get("pending_actions") != "none":
+        errors.append("pending-actions-present")
+    if metadata.get("ACTION_STATUS", "").strip().lower() != "reconciled":
+        errors.append("latest-action-not-reconciled")
+
+    claim_index, claim_duplicates, claim_malformed = _compact_fields(
+        metadata.get("CLAIM_INDEX", "")
+    )
+    errors.extend(f"duplicate-claim-index-field:{name}" for name in claim_duplicates)
+    errors.extend(f"malformed-claim-index-field:{name}" for name in claim_malformed)
+    if not claim_index:
+        errors.append("claim-index-missing")
+    elif _list_value(claim_index.get("active")):
+        errors.append("active-claims-present")
+
+    if _list_value(metadata.get("LIVE_GUARDS")):
+        errors.append("live-guards-present")
+
+    recovery = _semicolon_fields(metadata.get("RECOVERY", ""))
+    if recovery and recovery.get("unresolved", "none").lower() not in {"", "none"}:
+        errors.append("recovery-unresolved")
+
+    terminal_pipeline, pipeline_errors = _terminal_pipeline(metadata)
+    if not terminal_pipeline:
+        errors.extend(pipeline_errors)
+    return not errors, list(dict.fromkeys(errors))
+
+
 def _runtime_owner_proof() -> tuple[str | None, str | None]:
     thread_id = os.environ.get("CODEX_THREAD_ID", "").strip().lower()
     if UUID_TEXT.fullmatch(thread_id) is None:
@@ -637,6 +787,11 @@ def coordinator_refs(
             "errors": ["metadata-unavailable"],
             "takeover_ready": False,
         }
+        quiescent_reclaim_ready, quiescent_reclaim_blockers = (
+            _durable_quiescent_reclaim(metadata)
+            if metadata_state == "observed"
+            else (False, ["metadata-unavailable"])
+        )
         refs.append(
             {
                 "ref": ref,
@@ -653,6 +808,8 @@ def coordinator_refs(
                 "active_restrictions": _active_restrictions(metadata),
                 "lifecycle": lifecycle,
                 "handoff_takeover_ready": lifecycle["takeover_ready"],
+                "quiescent_reclaim_ready": quiescent_reclaim_ready,
+                "quiescent_reclaim_blockers": quiescent_reclaim_blockers,
                 "action_kind": metadata.get("ACTION_KIND", "unknown"),
                 "action_status": metadata.get("ACTION_STATUS", "unknown"),
                 "migration_evidence": None,
@@ -827,10 +984,8 @@ def primary_checkout_snapshot(
         observation, action, block_reason = "ahead", "stop", "primary-default-ahead"
     elif relation == "diverged":
         observation, action, block_reason = "diverged", "stop", "primary-default-diverged"
-    elif control_paths:
-        observation, action, block_reason = "overlap", "stop", "primary-control-surface-dirty"
     elif dirty != "clean":
-        observation, action, block_reason = "isolated-dirty", "continue", None
+        observation, action, block_reason = "dirty", "stop", "repository-dirty"
     else:
         observation, action, block_reason = "clear", "continue", None
 
@@ -895,6 +1050,7 @@ def command_preflight(args: argparse.Namespace) -> int:
     agents_state, agents_changes = dirty_path(repo, "AGENTS.md")
     head = foreign_main.text(repo, "rev-parse", "HEAD")
     local_contract = tree_oid(repo, head, args.skill_path)
+    repository_snapshot = repository_worktree_snapshot(repo)
     with tempfile.TemporaryDirectory(prefix="shipctl-observation-") as directory:
         observation_repo = Path(directory)
         if remote_state == "observed" and remote_sha is not None and advertised_state == "observed":
@@ -946,8 +1102,10 @@ def command_preflight(args: argparse.Namespace) -> int:
             block("remote-observation-materialization-failed")
         if checkout_state not in {"observed", "absent"}:
             block("default-checkout-ambiguous-or-unavailable")
-        if primary["block_reason"] is not None:
+        if primary["block_reason"] not in {None, "repository-dirty"}:
             block(primary["block_reason"])
+        if repository_snapshot["status"] != "ok":
+            block("repository-worktree-snapshot-incomplete")
         if refs_state != "observed":
             block("coordinator-refs-unavailable")
         if skill_state != "clean":
@@ -980,6 +1138,8 @@ def command_preflight(args: argparse.Namespace) -> int:
             block("multiple-nonterminal-coordinator-refs")
 
         active_canonical = [item for item in canonical if item["classification"] == "active"]
+        if route != "blocked" and not active_canonical and repository_snapshot["observation"] != "clear":
+            block("repository-dirty")
         if route != "blocked" and active_canonical:
             active = active_canonical[0]
             _, runtime_proof = _runtime_owner_proof()
@@ -1024,7 +1184,14 @@ def command_preflight(args: argparse.Namespace) -> int:
                 and active["owner_state"] == "active"
                 and lifecycle_coherent
             )
+            repository_clean = repository_snapshot["observation"] == "clear"
             if active["handoff_takeover_ready"]:
+                route = "takeover"
+            elif (
+                not proof_matches
+                and active.get("quiescent_reclaim_ready")
+                and repository_clean
+            ):
                 route = "takeover"
             elif proof_matches and contract_matches and lifecycle_coherent and lifecycle_phase in {"draining", "settling"}:
                 route = "drain-owner"
@@ -1057,6 +1224,13 @@ def command_preflight(args: argparse.Namespace) -> int:
                 reasons.append(f"active-durable-restriction:{restriction}")
             if active["handoff_takeover_ready"]:
                 reasons.append("handoff-ready-takeover-eligible")
+            if active.get("quiescent_reclaim_ready"):
+                reasons.append("durable-quiescent-reclaim-eligible")
+            else:
+                for blocker in active.get("quiescent_reclaim_blockers", []):
+                    reasons.append(f"quiescent-reclaim:{blocker}")
+            if not repository_clean:
+                reasons.append("repository-dirty-requires-authority-check")
             if lifecycle_phase in {"draining", "settling"}:
                 reasons.append(f"soft-pause-{lifecycle_phase}")
             for lifecycle_error in active["lifecycle"].get("errors", []):
@@ -1130,6 +1304,7 @@ def command_preflight(args: argparse.Namespace) -> int:
             "default_checkout_error": checkout_error,
             "default_checkout_count": checkout_count,
             "primary_checkout": primary,
+            "repository_snapshot": repository_snapshot,
             "contract_oid": remote_contract,
             "local_contract_oid": local_contract,
             "contract_matches_head": contract_matches_head,
@@ -1165,6 +1340,103 @@ def _worktree_records(repo: Path) -> tuple[list[dict[str, str]], str | None]:
     return records, None
 
 
+def repository_worktree_snapshot(repo: Path, max_paths: int = 80) -> dict[str, Any]:
+    """Read one stable, content-free status vector for every linked worktree."""
+    records, discovery_error = _worktree_records(repo)
+    entries: list[dict[str, Any]] = []
+    errors: list[str] = []
+    total_paths = 0
+    digest = hashlib.sha256()
+    if discovery_error is not None:
+        errors.append(f"worktree-discovery:{discovery_error}")
+
+    for record in sorted(records, key=lambda item: item.get("worktree", "")):
+        raw_path = record.get("worktree", "")
+        path = Path(raw_path).resolve() if raw_path else None
+        if path is None or not path.is_dir():
+            errors.append(f"worktree-unavailable:{raw_path or 'unknown'}")
+            continue
+        head_first = foreign_main.text(path, "rev-parse", "--verify", "HEAD")
+        branch_first = foreign_main.text(
+            path, "symbolic-ref", "--quiet", "--short", "HEAD"
+        )
+        status_first = foreign_main.run(
+            path,
+            "status",
+            "--porcelain=v1",
+            "-z",
+            "--untracked-files=all",
+            "--ignored=no",
+        )
+        head_second = foreign_main.text(path, "rev-parse", "--verify", "HEAD")
+        branch_second = foreign_main.text(
+            path, "symbolic-ref", "--quiet", "--short", "HEAD"
+        )
+        status_second = foreign_main.run(
+            path,
+            "status",
+            "--porcelain=v1",
+            "-z",
+            "--untracked-files=all",
+            "--ignored=no",
+        )
+        if (
+            head_first is None
+            or status_first.returncode != 0
+            or status_second.returncode != 0
+        ):
+            errors.append(f"worktree-status-unavailable:{path}")
+            continue
+        stable = (
+            head_first == head_second
+            and branch_first == branch_second
+            and status_first.stdout == status_second.stdout
+        )
+        if not stable:
+            errors.append(f"worktree-changed-during-snapshot:{path}")
+        paths, staged, unstaged, untracked, dirty = foreign_main.parse_status(
+            status_first.stdout
+        )
+        total_paths += len(paths)
+        entry = {
+            "path": str(path),
+            "branch": branch_first,
+            "head": head_first,
+            "dirty": dirty,
+            "staged_count": staged,
+            "unstaged_count": unstaged,
+            "untracked_count": untracked,
+            "path_count": len(paths),
+            "paths": paths[:max_paths],
+            "paths_truncated": len(paths) > max_paths,
+            "stable": stable,
+        }
+        entries.append(entry)
+        digest.update(
+            json.dumps(entry, sort_keys=True, separators=(",", ":")).encode(
+                "utf-8", "surrogateescape"
+            )
+        )
+        digest.update(b"\0")
+    if total_paths > max_paths:
+        errors.append("repository-status-paths-truncated")
+    dirty_entries = [entry for entry in entries if entry["dirty"] != "clean"]
+    complete = not errors and len(entries) == len(records)
+    return {
+        "schema": 1,
+        "status": "ok" if complete else "partial",
+        "observation": "active-unknown" if not complete else "dirty" if dirty_entries else "clear",
+        "worktree_count": len(records),
+        "observed_count": len(entries),
+        "dirty_worktree_count": len(dirty_entries),
+        "dirty_path_count": total_paths,
+        "worktrees": entries,
+        "dirty_worktrees": dirty_entries,
+        "errors": errors,
+        "fingerprint": digest.hexdigest(),
+    }
+
+
 def command_status(args: argparse.Namespace) -> int:
     repo = Path(args.repo).resolve()
     preflight_code, preflight = _capture_preflight(repo, args.remote, args.default)
@@ -1193,6 +1465,8 @@ def command_status(args: argparse.Namespace) -> int:
             "reasons": preflight.get("reasons", []),
             "remote_sha": preflight.get("remote_sha"),
             "checkout": preflight.get("primary_checkout", {}).get("observation"),
+            "repository": preflight.get("repository_snapshot", {}).get("observation"),
+            "dirty_worktree_count": preflight.get("repository_snapshot", {}).get("dirty_worktree_count"),
             "coordinator": canonical,
             "ledger_bytes": ledger_bytes,
             "ledger_limit": MAX_METADATA_BYTES,
@@ -1203,6 +1477,235 @@ def command_status(args: argparse.Namespace) -> int:
         }
     )
     return 0 if preflight_code == 0 and worktree_error is None else 3
+
+
+def command_repo_guard(args: argparse.Namespace) -> int:
+    """Verify that every visible Git delta belongs to an exact registered action."""
+    repo = Path(args.repo).resolve()
+    payload, input_error = _read_json(args.input)
+    if input_error or not isinstance(payload, dict):
+        emit(
+            {
+                "schema": 1,
+                "status": "invalid",
+                "errors": [input_error or "invalid:repo-guard:not-object"],
+            }
+        )
+        return 2
+    required_payload = {"authorizations", "expected_worktrees", "refs"}
+    if set(payload) != required_payload:
+        emit(
+            {
+                "schema": 1,
+                "status": "invalid",
+                "errors": [
+                    *[f"missing:{name}" for name in sorted(required_payload - set(payload))],
+                    *[f"unexpected:{name}" for name in sorted(set(payload) - required_payload)],
+                ],
+            }
+        )
+        return 2
+    authorizations = payload.get("authorizations", [])
+    expected_worktrees = payload.get("expected_worktrees", [])
+    refs = payload.get("refs", [])
+    errors: list[str] = []
+    by_worktree: dict[str, dict[str, Any]] = {}
+    expected_by_worktree: dict[str, dict[str, Any]] = {}
+    if not isinstance(expected_worktrees, list) or not expected_worktrees:
+        errors.append("invalid:repo-guard.expected_worktrees")
+        expected_worktrees = []
+    for index, item in enumerate(expected_worktrees):
+        prefix = f"expected_worktrees[{index}]"
+        if not isinstance(item, dict) or set(item) != {"worktree", "branch", "head"}:
+            errors.append(f"invalid:{prefix}:shape")
+            continue
+        raw_worktree = item.get("worktree")
+        branch = item.get("branch")
+        head = item.get("head")
+        if not isinstance(raw_worktree, str) or not Path(raw_worktree).is_absolute():
+            errors.append(f"invalid:{prefix}.worktree")
+            continue
+        worktree = str(Path(raw_worktree).resolve())
+        if worktree in expected_by_worktree:
+            errors.append(f"invalid:{prefix}.duplicate-worktree")
+        if branch is not None and (
+            not isinstance(branch, str) or not branch or branch.startswith("refs/")
+        ):
+            errors.append(f"invalid:{prefix}.branch")
+        if not isinstance(head, str) or GIT_OID.fullmatch(head) is None:
+            errors.append(f"invalid:{prefix}.head")
+        expected_by_worktree[worktree] = item
+    if not isinstance(authorizations, list):
+        errors.append("invalid:repo-guard.authorizations")
+        authorizations = []
+    for index, item in enumerate(authorizations):
+        prefix = f"authorizations[{index}]"
+        if not isinstance(item, dict) or set(item) != {
+            "worktree",
+            "branch",
+            "head",
+            "ownership_paths",
+            "action_id",
+        }:
+            errors.append(f"invalid:{prefix}:shape")
+            continue
+        raw_worktree = item.get("worktree")
+        branch = item.get("branch")
+        head = item.get("head")
+        ownership = item.get("ownership_paths")
+        action_id = item.get("action_id")
+        if not isinstance(raw_worktree, str) or not Path(raw_worktree).is_absolute():
+            errors.append(f"invalid:{prefix}.worktree")
+            continue
+        worktree = str(Path(raw_worktree).resolve())
+        if worktree in by_worktree:
+            errors.append(f"invalid:{prefix}.duplicate-worktree")
+        if not isinstance(branch, str) or not branch or branch.startswith("refs/"):
+            errors.append(f"invalid:{prefix}.branch")
+        if not isinstance(head, str) or GIT_OID.fullmatch(head) is None:
+            errors.append(f"invalid:{prefix}.head")
+        if (
+            not isinstance(ownership, list)
+            or not ownership
+            or not all(_valid_ownership_path(path) for path in ownership)
+        ):
+            errors.append(f"invalid:{prefix}.ownership_paths")
+        if not isinstance(action_id, str) or UUID_TEXT.fullmatch(action_id) is None:
+            errors.append(f"invalid:{prefix}.action_id")
+        by_worktree[worktree] = item
+
+    if not isinstance(refs, list):
+        errors.append("invalid:repo-guard.refs")
+        refs = []
+    expected_refs: list[tuple[str, str]] = []
+    for index, item in enumerate(refs):
+        prefix = f"refs[{index}]"
+        if not isinstance(item, dict) or set(item) != {"ref", "sha"}:
+            errors.append(f"invalid:{prefix}:shape")
+            continue
+        ref = item.get("ref")
+        sha = item.get("sha")
+        if (
+            not isinstance(ref, str)
+            or not ref.startswith("refs/")
+            or git(repo, "check-ref-format", ref)[0] != 0
+        ):
+            errors.append(f"invalid:{prefix}.ref")
+        if not isinstance(sha, str) or GIT_OID.fullmatch(sha) is None:
+            errors.append(f"invalid:{prefix}.sha")
+        if isinstance(ref, str) and isinstance(sha, str):
+            expected_refs.append((ref, sha))
+    if errors:
+        emit({"schema": 1, "status": "invalid", "errors": list(dict.fromkeys(errors))})
+        return 2
+
+    snapshot = repository_worktree_snapshot(repo)
+    violations: list[dict[str, Any]] = []
+    if snapshot["status"] != "ok":
+        violations.append(
+            {"kind": "snapshot-incomplete", "errors": snapshot["errors"]}
+        )
+    observed_by_worktree = {entry["path"]: entry for entry in snapshot["worktrees"]}
+    for worktree in sorted(expected_by_worktree.keys() - observed_by_worktree.keys()):
+        violations.append({"kind": "expected-worktree-missing", "worktree": worktree})
+    for worktree in sorted(observed_by_worktree.keys() - expected_by_worktree.keys()):
+        violations.append({"kind": "unexpected-worktree", "worktree": worktree})
+    for worktree in sorted(expected_by_worktree.keys() & observed_by_worktree.keys()):
+        expected = expected_by_worktree[worktree]
+        observed = observed_by_worktree[worktree]
+        if expected["branch"] != observed["branch"]:
+            violations.append(
+                {
+                    "kind": "worktree-branch-mismatch",
+                    "worktree": worktree,
+                    "expected": expected["branch"],
+                    "observed": observed["branch"],
+                }
+            )
+        if expected["head"] != observed["head"]:
+            violations.append(
+                {
+                    "kind": "worktree-head-mismatch",
+                    "worktree": worktree,
+                    "expected": expected["head"],
+                    "observed": observed["head"],
+                }
+            )
+    for worktree, authorization in by_worktree.items():
+        entry = observed_by_worktree.get(worktree)
+        if entry is None:
+            violations.append({"kind": "authorized-worktree-missing", "worktree": worktree})
+        elif entry["branch"] != authorization["branch"] or entry["head"] != authorization["head"]:
+            violations.append({"kind": "authorization-binding-mismatch", "worktree": worktree})
+
+    for entry in snapshot["dirty_worktrees"]:
+        authorization = by_worktree.get(entry["path"])
+        if authorization is None:
+            violations.append(
+                {
+                    "kind": "unregistered-dirty-worktree",
+                    "worktree": entry["path"],
+                    "paths": entry["paths"],
+                }
+            )
+            continue
+        ownership = authorization["ownership_paths"]
+        outside = [
+            path
+            for path in entry["paths"]
+            if not any(_paths_overlap(path, owned) for owned in ownership)
+        ]
+        if entry["branch"] != authorization["branch"]:
+            violations.append(
+                {
+                    "kind": "branch-mismatch",
+                    "worktree": entry["path"],
+                    "expected": authorization["branch"],
+                    "observed": entry["branch"],
+                }
+            )
+        if entry["head"] != authorization["head"]:
+            violations.append(
+                {
+                    "kind": "head-mismatch",
+                    "worktree": entry["path"],
+                    "expected": authorization["head"],
+                    "observed": entry["head"],
+                }
+            )
+        if outside:
+            violations.append(
+                {
+                    "kind": "paths-outside-ownership",
+                    "worktree": entry["path"],
+                    "paths": outside,
+                }
+            )
+    for ref, expected in expected_refs:
+        observed = foreign_main.text(repo, "rev-parse", "--verify", ref)
+        if observed != expected:
+            violations.append(
+                {
+                    "kind": "ref-mismatch",
+                    "ref": ref,
+                    "expected": expected,
+                    "observed": observed,
+                }
+            )
+
+    emit(
+        {
+            "schema": 1,
+            "status": "critical-stop" if violations else "clear",
+            "mutation_allowed": not violations,
+            "snapshot_fingerprint": snapshot["fingerprint"],
+            "dirty_worktree_count": snapshot["dirty_worktree_count"],
+            "authorization_count": len(by_worktree),
+            "expected_worktree_count": len(expected_by_worktree),
+            "violations": violations,
+        }
+    )
+    return 3 if violations else 0
 
 
 def command_pool_status(args: argparse.Namespace) -> int:
@@ -1713,9 +2216,9 @@ def _goal_objective(args: argparse.Namespace) -> str:
 
 Done when: Два согласованных terminal snapshot после завершения projections не содержат unfinished issues кроме Canceled/Duplicate. Все feature, claim, cutoff, CI, deployment и rollback artifacts имеют terminal disposition; default healthy и равен проверенному cutoff. Каждая issue имеет exact feature/default evidence и Done. Production выполнен только когда его требует current acceptance/repository contract; тогда exact Sites deployment прошёл обязательные authenticated web/control, persistence и MCP live flows с rollback proof. Иначе receipt фиксирует not-required-by-current-milestone.
 
-Verify with: Issue-scoped targeted checks; один canonical full gate на immutable cutoff generation; expected-old default CAS и exact-SHA CI; применимые live/rollback checks. Terminal snapshots содержат scope digest и разделены завершённой external reconciliation boundary.
+Verify with: Issue-scoped targeted checks; один canonical full gate на каждую immutable batch generation и обязательный финальный main SHA; expected-old default CAS и exact-SHA CI; применимые live/rollback checks. Terminal snapshots содержат scope digest и разделены завершённой external reconciliation boundary.
 
-Constraints: Один repo-global coordinator; CAS loser read-only. Каждая issue и coordinator repair используют отдельные worktree, branch, manifest, lease и guard. Worker не меняет Linear/default/Sites/tags. Не трогать user changes, не sharing mutable dependencies, не force-push, не ослаблять gates метаданными запуска, не выбирать AWS fallback и не раскрывать secrets. Missing implementation принятого scope является work, а не external blocker.
+Constraints: Один repo-global coordinator; CAS loser read-only. Каждая issue и coordinator repair используют отдельные branch, manifest, lease и guard; при workers=1 coordinator-inline работает в primary checkout, при workers>1 delegated issues изолированы по worktrees. Только coordinator merge-ит main. Worker не меняет Linear/default/Sites/tags. Не трогать user changes, не sharing mutable dependencies, не force-push, не ослаблять gates метаданными запуска, не выбирать AWS fallback и не раскрывать secrets. Missing implementation принятого scope является work, а не external blocker.
 
 Blocked when: Один и тот же доказанный внешний blocker, противоречие authoritative требований или необходимое новое product/security decision повторились минимум три последовательных Goal turns и не осталось безопасной независимой работы. Сложность, missing implementation, running worker, pending gate/CI, recoverable CAS, pause или handoff blocker-ом не являются."""
 
@@ -3954,13 +4457,21 @@ def validate_manifest(
 
     repo_value = manifest.get("repo")
     worktree_value = manifest.get("worktree")
+    checkout_mode = manifest.get("checkout_mode", "worktree")
     repo = Path(repo_value).resolve() if isinstance(repo_value, str) and Path(repo_value).is_absolute() else None
     worktree = Path(worktree_value).resolve() if isinstance(worktree_value, str) and Path(worktree_value).is_absolute() else None
     if repo is None or not repo.is_dir():
         error("invalid:repo")
     if worktree is None or not worktree.is_dir():
         error("invalid:worktree")
-    if repo is not None and worktree is not None and repo == worktree:
+    if checkout_mode not in {"primary", "worktree"}:
+        error("invalid:checkout_mode")
+    elif checkout_mode == "primary":
+        if repo is not None and worktree is not None and repo != worktree:
+            error("invalid:primary-checkout-must-equal-repo")
+        if executor.get("mode") != "coordinator-inline":
+            error("invalid:primary-checkout-requires-coordinator-inline")
+    elif repo is not None and worktree is not None and repo == worktree:
         error("invalid:worktree-must-differ-from-repo")
 
     for dependency_error in _dependency_environment_errors(
@@ -4323,9 +4834,12 @@ def _atomic_json(path: Path, value: dict[str, Any]) -> None:
 def command_provision_worktree(args: argparse.Namespace) -> int:
     repo = Path(args.repo).resolve()
     worktree = Path(args.worktree).resolve()
+    checkout_mode = getattr(args, "checkout_mode", "worktree")
     errors: list[str] = []
-    if repo == worktree:
+    if checkout_mode == "worktree" and repo == worktree:
         errors.append("invalid:worktree-must-differ-from-repo")
+    elif checkout_mode == "primary" and repo != worktree:
+        errors.append("invalid:primary-checkout-must-equal-repo")
     repo_top = foreign_main.text(repo, "rev-parse", "--show-toplevel")
     worktree_top = foreign_main.text(worktree, "rev-parse", "--show-toplevel")
     if repo_top is None or Path(repo_top).resolve() != repo:
@@ -4397,6 +4911,7 @@ def command_provision_worktree(args: argparse.Namespace) -> int:
             and stored.get("environment_id") == environment_id
             and stored.get("lockfile_digest") == lockfile_digest
             and stored.get("dependency_path") == str(dependency_path)
+            and stored.get("checkout_mode", "worktree") == checkout_mode
             and installation_match
             and (
                 len(installations) == 1
@@ -4421,6 +4936,7 @@ def command_provision_worktree(args: argparse.Namespace) -> int:
             {
                 "schema": 1,
                 "status": "prepared",
+                "checkout_mode": checkout_mode,
                 "install_required": True,
                 "environment_id": environment_id,
                 "lockfile_digest": lockfile_digest,
@@ -4520,6 +5036,7 @@ def command_provision_worktree(args: argparse.Namespace) -> int:
         return 5
     receipt = {
         "status": "installed",
+        "checkout_mode": checkout_mode,
         "environment_id": environment_id,
         "lockfile_digest": lockfile_digest,
         "dependency_path": str(dependency_path),
@@ -4968,6 +5485,7 @@ def _render_takeover_message(
     remote_main: str,
     contract_digest: str,
     primary: dict[str, Any],
+    repository: dict[str, Any],
     thread_id: str,
     *,
     cause: str = "handoff",
@@ -5015,6 +5533,8 @@ def _render_takeover_message(
         if not pause_prefix or not item.lower().startswith(pause_prefix)
     ]
     primary_fingerprint = primary.get("fingerprint") or "unknown"
+    primary_observation = primary.get("observation") or "unknown"
+    repository_fingerprint = repository.get("fingerprint") or "unknown"
     core_values = {
         "SCHEMA": parent_fields["SCHEMA"],
         "KIND": parent_fields["KIND"],
@@ -5043,6 +5563,7 @@ def _render_takeover_message(
         "HOLD_PAUSE_INDEX",
         "DEFAULT_OBSERVED_SHA",
         "PRIMARY_CHECKOUT",
+        "REPOSITORY_SNAPSHOT",
         "PROFILE",
         "STALE_OWNER_PROOF",
     }
@@ -5078,14 +5599,27 @@ def _render_takeover_message(
         f"HOLD_PAUSE_INDEX: {_render_hold_pause_index(remaining_holds)}",
         f"DEFAULT_OBSERVED_SHA: {remote_main}",
         (
-            "PRIMARY_CHECKOUT: clean;relation=equal;"
+            f"PRIMARY_CHECKOUT: observation={primary_observation};relation={primary.get('relation') or 'unknown'};"
             f"fingerprint={primary_fingerprint}"
+        ),
+        (
+            "REPOSITORY_SNAPSHOT: "
+            f"status={repository.get('observation') or 'unknown'};"
+            f"worktrees={repository.get('worktree_count', 'unknown')};"
+            f"dirty_worktrees={repository.get('dirty_worktree_count', 'unknown')};"
+            f"fingerprint={repository_fingerprint}"
         ),
     ]
     action = {
         "ACTION_SEQ": str(parent_seq + 1),
         "ACTION_ID": action_id,
-        "ACTION_KIND": "takeover-owner" if cause == "handoff" else "recover-stale-owner",
+        "ACTION_KIND": (
+            "takeover-owner"
+            if cause == "handoff"
+            else "reclaim-quiescent-owner"
+            if cause == "quiescent-reclaim"
+            else "recover-stale-owner"
+        ),
         "ACTION_TARGET": f"{CANONICAL_COORDINATOR_REF}@{parent}",
         "EXPECTED_BEFORE": (
             f"owner={parent_fields['OWNER_ID']}/{old_epoch}:{expected_owner_state};"
@@ -5139,7 +5673,14 @@ def command_takeover(args: argparse.Namespace) -> int:
             }
         )
         return 0
-    if preflight.get("route") != "takeover" or not active or not active.get("handoff_takeover_ready"):
+    takeover_kind = (
+        "handoff"
+        if active and active.get("handoff_takeover_ready")
+        else "quiescent-reclaim"
+        if active and active.get("quiescent_reclaim_ready")
+        else None
+    )
+    if preflight.get("route") != "takeover" or not active or takeover_kind is None:
         emit({"schema": 1, "status": "blocked", "reason": "takeover-not-eligible", "route": preflight.get("route")})
         return 3
     parent = active["sha"]
@@ -5172,7 +5713,12 @@ def command_takeover(args: argparse.Namespace) -> int:
         remote_main,
         contract_digest,
         preflight.get("primary_checkout", {}),
+        preflight.get("repository_snapshot", {}),
         thread_id,
+        cause=takeover_kind,
+        expected_owner_state=(
+            "handoff-ready" if takeover_kind == "handoff" else "active"
+        ),
     )
     if errors or message is None or identity is None:
         emit({"schema": 1, "status": "blocked", "reason": "takeover-message-invalid", "errors": errors})
@@ -5287,6 +5833,7 @@ def command_recover_stale_owner(args: argparse.Namespace) -> int:
         remote_main,
         contract_digest,
         preflight.get("primary_checkout", {}),
+        preflight.get("repository_snapshot", {}),
         thread_id,
         cause="stale-owner-stop",
         expected_owner_state=active.get("owner_state", "active"),
@@ -6372,6 +6919,7 @@ def command_soft_pause(args: argparse.Namespace) -> int:
         gate_index = _semicolon_fields(metadata.get("GATE_INDEX", ""))
         active_cutoff = pipeline.get("active_cutoff", "none")
         active_gate = gate_index.get("active", "none")
+        terminal_pipeline, terminal_pipeline_errors = _terminal_pipeline(metadata)
         execution, execution_errors = _execution_vector(
             metadata.get("EXECUTION_INDEX", "")
         )
@@ -6396,8 +6944,8 @@ def command_soft_pause(args: argparse.Namespace) -> int:
             or metadata.get("HOLD", "").strip().lower() not in {"", "none"}
             or _semicolon_fields(metadata.get("HEALTH", "")).get("default") in {"known-bad", "drifted", "stabilizing"}
         )
-        if active_cutoff != "none" or active_gate != "none":
-            emit({"schema": 1, "status": "blocked", "reason": "settlement-still-active", "active_cutoff": active_cutoff, "active_gate": active_gate})
+        if not terminal_pipeline:
+            emit({"schema": 1, "status": "blocked", "reason": "settlement-still-active", "active_cutoff": active_cutoff, "active_gate": active_gate, "errors": terminal_pipeline_errors})
             return 3
         if settlement == "complete" and (ready_preserved or open_cutoff != "none"):
             emit({"schema": 1, "status": "blocked", "reason": "ready-work-not-settled"})
@@ -6433,6 +6981,11 @@ def command_soft_pause(args: argparse.Namespace) -> int:
                 {"active_target": "0", "active_issue_lanes": "none", "refill_blocker": "user-pause"},
             ),
             "PENDING_ACTIONS": "none",
+            "PIPELINE": _update_structured(
+                metadata.get("PIPELINE", ""),
+                {"open_cutoff": "none", "active_cutoff": "none", "cutoff_ref": "none"},
+            ),
+            "ACTIVE_CUTOFF": "none",
         }
         effect_identity = f"pause={pause_id};phase=quiescent;settlement={settlement}"
         next_step = "return-control;fresh-explicit-invocation-will-take-over"
@@ -7121,6 +7674,352 @@ def command_sync_contract(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_resume_recovery(args: argparse.Namespace) -> int:
+    """CAS-resume an empty, reconciled recovery without requiring runtime proof elsewhere."""
+    repo = Path(args.repo).resolve()
+    _, runtime_proof = _runtime_owner_proof()
+    if runtime_proof is None:
+        emit({"schema": 1, "status": "blocked", "reason": "runtime-thread-id-unavailable"})
+        return 3
+    preflight_code, preflight = _capture_preflight(repo, args.remote, args.default)
+    active = _active_canonical(preflight)
+    if (
+        preflight_code != 0
+        or preflight.get("route") != "recover-owner"
+        or active is None
+        or active.get("owner_proof_digest") != runtime_proof
+        or preflight.get("repository_snapshot", {}).get("observation") != "clear"
+    ):
+        emit(
+            {
+                "schema": 1,
+                "status": "blocked",
+                "reason": "recovery-resume-not-eligible",
+                "route": preflight.get("route"),
+                "repository": preflight.get("repository_snapshot", {}).get("observation"),
+            }
+        )
+        return 3
+    parent = active["sha"]
+    parent_message, materialization_error = _materialize_coordinator_parent(
+        repo, args.remote, parent
+    )
+    if materialization_error or parent_message is None:
+        emit(
+            {
+                "schema": 1,
+                "status": "blocked",
+                "reason": materialization_error or "coordinator-message-unavailable",
+            }
+        )
+        return 3
+    metadata = fields(parent_message)
+    quiescent, quiescent_errors = _durable_quiescent_reclaim(metadata)
+    recovery = _semicolon_fields(metadata.get("RECOVERY", ""))
+    if (
+        not quiescent
+        or metadata.get("STATE", "").lower() != "recovering"
+        or recovery.get("phase") not in {"inventory", "complete"}
+        or recovery.get("unresolved", "none").lower() not in {"", "none"}
+        or metadata.get("LIVE_GUARDS", "none").strip().lower() not in {"", "none"}
+    ):
+        emit(
+            {
+                "schema": 1,
+                "status": "blocked",
+                "reason": "recovery-not-quiescent",
+                "errors": quiescent_errors,
+                "recovery_phase": recovery.get("phase"),
+            }
+        )
+        return 3
+
+    timestamp = _utc_timestamp()
+    target = f"run:{metadata.get('RUN_ID', 'unknown')}:resume-recovery"
+    payload = {
+        "parent": parent,
+        "repository_fingerprint": preflight["repository_snapshot"]["fingerprint"],
+        "terminal_pipeline": True,
+    }
+    payload_digest = hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    action_id = _direct_action_id(parent, "resume-recovery", target, payload_digest)
+    pipeline = _update_structured(
+        metadata.get("PIPELINE", ""),
+        {"open_cutoff": "none", "active_cutoff": "none", "cutoff_ref": "none"},
+    )
+    completed_recovery = _update_structured(
+        metadata.get("RECOVERY", ""),
+        {"phase": "complete", "unresolved": "none"},
+    )
+    replacements = {
+        "STATE": "running",
+        "OWNER_STATE": "active",
+        "LIFECYCLE": f"schema=1;phase=running;pause=none;transition={action_id}",
+        "RECOVERY": completed_recovery,
+        "PIPELINE": pipeline,
+        "ACTIVE_CUTOFF": "none",
+        "PENDING_ACTIONS": "none",
+        "PRIMARY_CHECKOUT": (
+            "clean;relation=equal;fingerprint="
+            f"{preflight['repository_snapshot']['fingerprint']}"
+        ),
+        "REPOSITORY_SNAPSHOT": (
+            "status=clear;"
+            f"worktrees={preflight['repository_snapshot']['worktree_count']};"
+            "dirty_worktrees=0;"
+            f"fingerprint={preflight['repository_snapshot']['fingerprint']}"
+        ),
+    }
+    message, rendered_action_id, render_errors = _render_direct_coordinator_action(
+        parent,
+        parent_message,
+        "ship-linear-release resumed reconciled recovery",
+        replacements,
+        "resume-recovery",
+        target,
+        payload_digest,
+        "state=running;running=0;claims=0;pending=none",
+    )
+    if render_errors or message is None or rendered_action_id != action_id:
+        emit(
+            {
+                "schema": 1,
+                "status": "blocked",
+                "reason": "recovery-resume-render-invalid",
+                "errors": render_errors,
+            }
+        )
+        return 3
+    push_status, commit = _push_coordinator_cas(repo, args.remote, parent, message)
+    if push_status != "pushed" or commit is None:
+        emit(
+            {
+                "schema": 1,
+                "status": push_status,
+                "reason": "recovery-resume-cas-not-confirmed",
+                "expected": parent,
+            }
+        )
+        return 4 if push_status == "cas-lost" else 3
+    emit(
+        {
+            "schema": 1,
+            "status": "resumed",
+            "coordinator": commit,
+            "parent": parent,
+            "action_id": action_id,
+            "state": "running",
+            "mutation_scope": "run",
+            "next": "take-one-linear-snapshot-and-dispatch",
+        }
+    )
+    return 0
+
+
+def command_batch_boundary(args: argparse.Namespace) -> int:
+    """Validate one meaningful batch decision without inventing a size or timer."""
+    payload, input_error = _read_json(args.input)
+    allowed = {
+        "candidate_sha",
+        "features",
+        "cohesion",
+        "risk",
+        "gate_cost",
+        "queue_state",
+        "urgent",
+        "decision",
+        "reason",
+        "rationale",
+    }
+    if input_error or not isinstance(payload, dict):
+        emit({"schema": 1, "status": "invalid", "errors": [input_error or "invalid:batch-boundary:not-object"]})
+        return 2
+    errors = [
+        *[f"missing:{name}" for name in sorted(allowed - set(payload))],
+        *[f"unexpected:{name}" for name in sorted(set(payload) - allowed)],
+    ]
+    candidate = payload.get("candidate_sha")
+    features = payload.get("features")
+    cohesion = payload.get("cohesion")
+    risk = payload.get("risk")
+    gate_cost = payload.get("gate_cost")
+    queue_state = payload.get("queue_state")
+    urgent = payload.get("urgent")
+    decision = payload.get("decision")
+    reason = payload.get("reason")
+    rationale = payload.get("rationale")
+    if not isinstance(candidate, str) or GIT_OID.fullmatch(candidate) is None:
+        errors.append("invalid:candidate_sha")
+    if (
+        not isinstance(features, list)
+        or not features
+        or len(features) > 64
+        or not all(isinstance(item, str) and ISSUE_IDENTIFIER.fullmatch(item) for item in features)
+        or len(features) != len(set(features))
+    ):
+        errors.append("invalid:features")
+    if cohesion not in {"cohesive", "mixed"}:
+        errors.append("invalid:cohesion")
+    if risk not in {"low", "medium", "high"}:
+        errors.append("invalid:risk")
+    if gate_cost not in {"low", "medium", "high"}:
+        errors.append("invalid:gate_cost")
+    if queue_state not in {"active", "idle", "finishing"}:
+        errors.append("invalid:queue_state")
+    if not isinstance(urgent, bool):
+        errors.append("invalid:urgent")
+    if decision not in {"keep-open", "seal"}:
+        errors.append("invalid:decision")
+    allowed_reasons = {"cohesion", "risk", "size", "gate-cost", "idle", "urgent", "final"}
+    if reason not in allowed_reasons:
+        errors.append("invalid:reason")
+    if not _bounded_projection_text(rationale, maximum=600):
+        errors.append("invalid:rationale")
+    mandatory_reason = "urgent" if urgent is True else "final" if queue_state == "finishing" else "idle" if queue_state == "idle" else None
+    if mandatory_reason and (decision != "seal" or reason != mandatory_reason):
+        errors.append(f"invalid:mandatory-boundary:{mandatory_reason}")
+    if decision == "keep-open" and reason in {"idle", "urgent", "final"}:
+        errors.append("invalid:keep-open-terminal-reason")
+    if errors:
+        emit({"schema": 1, "status": "invalid", "errors": list(dict.fromkeys(errors))})
+        return 2
+    normalized = {
+        "candidate_sha": candidate,
+        "features": features,
+        "cohesion": cohesion,
+        "risk": risk,
+        "gate_cost": gate_cost,
+        "queue_state": queue_state,
+        "urgent": urgent,
+        "decision": decision,
+        "reason": reason,
+        "rationale": rationale,
+    }
+    digest = hashlib.sha256(
+        json.dumps(normalized, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    emit(
+        {
+            "schema": 1,
+            "status": "validated",
+            "action": decision,
+            "reason": reason,
+            "candidate_sha": candidate,
+            "feature_count": len(features),
+            "boundary_digest": digest,
+            "fixed_size_or_timer": False,
+            "next": "seal-and-run-one-full-gate" if decision == "seal" else "continue-targeted-ingest",
+        }
+    )
+    return 0
+
+
+def command_release_lock_plan(args: argparse.Namespace) -> int:
+    """Classify a real provider lock capability; never synthesize marker locks."""
+    payload, input_error = _read_json(args.input)
+    allowed = {"production_required", "target", "owner", "capability"}
+    if input_error or not isinstance(payload, dict):
+        emit({"schema": 1, "status": "invalid", "errors": [input_error or "invalid:release-lock:not-object"]})
+        return 2
+    errors = [
+        *[f"missing:{name}" for name in sorted(allowed - set(payload))],
+        *[f"unexpected:{name}" for name in sorted(set(payload) - allowed)],
+    ]
+    production_required = payload.get("production_required")
+    target = payload.get("target")
+    owner = payload.get("owner")
+    capability = payload.get("capability")
+    if not isinstance(production_required, bool):
+        errors.append("invalid:production_required")
+    if not _bounded_projection_text(target, maximum=300):
+        errors.append("invalid:target")
+    if not isinstance(owner, dict) or set(owner) != {"run_id", "epoch"}:
+        errors.append("invalid:owner")
+    elif UUID_TEXT.fullmatch(str(owner.get("run_id", ""))) is None or not _positive_int(owner.get("epoch")):
+        errors.append("invalid:owner")
+    capability_fields = {"atomic_acquire", "conditional_release", "fencing", "provider_operation"}
+    if not isinstance(capability, dict) or set(capability) != capability_fields:
+        errors.append("invalid:capability")
+    else:
+        for name in ("atomic_acquire", "conditional_release", "fencing"):
+            if not isinstance(capability.get(name), bool):
+                errors.append(f"invalid:capability.{name}")
+        operation = capability.get("provider_operation")
+        if operation != "none" and not _bounded_projection_text(operation, maximum=300):
+            errors.append("invalid:capability.provider_operation")
+    if errors:
+        emit({"schema": 1, "status": "invalid", "errors": list(dict.fromkeys(errors))})
+        return 2
+    supported = bool(
+        capability["atomic_acquire"]
+        and capability["conditional_release"]
+        and capability["provider_operation"] != "none"
+    )
+    status = "not-required" if not production_required else "acquire-required" if supported else "unsupported/skipped"
+    emit(
+        {
+            "schema": 1,
+            "status": status,
+            "target": target,
+            "owner": owner,
+            "acquire_before_publish": production_required and supported,
+            "conditional_release_after_terminal": production_required and supported,
+            "fencing_available": capability["fencing"] if supported else False,
+            "provider_operation": capability["provider_operation"] if supported else None,
+            "simulated_marker_allowed": False,
+            "force_unlock_requires_user_confirmation": supported,
+        }
+    )
+    return 0
+
+
+def command_critical_overview(args: argparse.Namespace) -> int:
+    """Render a bounded human overview instead of forwarding raw worker/tool output."""
+    payload, input_error = _read_json(args.input)
+    text_fields = (
+        "reason",
+        "safety_impact",
+        "stage",
+        "changed",
+        "git_state",
+        "linear_state",
+        "release_state",
+        "next_action",
+    )
+    allowed = {*text_fields, "evidence"}
+    if input_error or not isinstance(payload, dict):
+        emit({"schema": 1, "status": "invalid", "errors": [input_error or "invalid:critical-overview:not-object"]})
+        return 2
+    errors = [
+        *[f"missing:{name}" for name in sorted(allowed - set(payload))],
+        *[f"unexpected:{name}" for name in sorted(set(payload) - allowed)],
+    ]
+    for name in text_fields:
+        if not _bounded_projection_text(payload.get(name), maximum=700):
+            errors.append(f"invalid:{name}")
+    evidence = payload.get("evidence")
+    if (
+        not isinstance(evidence, list)
+        or len(evidence) > 12
+        or not all(_bounded_projection_text(item, maximum=240) for item in evidence)
+    ):
+        errors.append("invalid:evidence")
+    if errors:
+        emit({"schema": 1, "status": "invalid", "errors": list(dict.fromkeys(errors))})
+        return 2
+    overview = (
+        f"Критическая остановка: {payload['reason']}. Продолжать небезопасно: "
+        f"{payload['safety_impact']}. Этап: {payload['stage']}. Уже изменено: "
+        f"{payload['changed']}. Git: {payload['git_state']}. Linear: "
+        f"{payload['linear_state']}. Release: {payload['release_state']}. "
+        f"Для продолжения: {payload['next_action']}."
+    )
+    emit({"schema": 1, "status": "rendered", "overview": overview, "evidence": evidence})
+    return 0
+
+
 def parser() -> argparse.ArgumentParser:
     root = argparse.ArgumentParser(description=__doc__)
     sub = root.add_subparsers(dest="command", required=True)
@@ -7136,6 +8035,19 @@ def parser() -> argparse.ArgumentParser:
     status.add_argument("--remote", default="origin")
     status.add_argument("--default", default="main")
     status.set_defaults(handler=command_status)
+    repo_guard = sub.add_parser("repo-guard")
+    repo_guard.add_argument("--repo", default=".")
+    repo_guard.add_argument("--input", default="-")
+    repo_guard.set_defaults(handler=command_repo_guard)
+    batch_boundary = sub.add_parser("batch-boundary")
+    batch_boundary.add_argument("--input", default="-")
+    batch_boundary.set_defaults(handler=command_batch_boundary)
+    release_lock = sub.add_parser("release-lock-plan")
+    release_lock.add_argument("--input", default="-")
+    release_lock.set_defaults(handler=command_release_lock_plan)
+    critical_overview = sub.add_parser("critical-overview")
+    critical_overview.add_argument("--input", default="-")
+    critical_overview.set_defaults(handler=command_critical_overview)
     pool_status = sub.add_parser("pool-status")
     pool_status.add_argument("--repo", default=".")
     pool_status.add_argument("--remote", default="origin")
@@ -7218,6 +8130,9 @@ def parser() -> argparse.ArgumentParser:
     provision = sub.add_parser("provision-worktree")
     provision.add_argument("--repo", default=".")
     provision.add_argument("--worktree", required=True)
+    provision.add_argument(
+        "--checkout-mode", choices=("primary", "worktree"), default="worktree"
+    )
     provision.add_argument("--path", action="append", default=[])
     provision.add_argument("--package-manager", default="npm")
     provision.add_argument("--install", action="store_true")
@@ -7282,6 +8197,11 @@ def parser() -> argparse.ArgumentParser:
     sync_contract.add_argument("--remote", default="origin")
     sync_contract.add_argument("--default", default="main")
     sync_contract.set_defaults(handler=command_sync_contract)
+    resume_recovery = sub.add_parser("resume-recovery")
+    resume_recovery.add_argument("--repo", default=".")
+    resume_recovery.add_argument("--remote", default="origin")
+    resume_recovery.add_argument("--default", default="main")
+    resume_recovery.set_defaults(handler=command_resume_recovery)
     return root
 
 

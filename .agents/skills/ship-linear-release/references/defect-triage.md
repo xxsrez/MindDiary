@@ -43,8 +43,9 @@ fail closed.
    - если дефект найден до `FEATURE_RECEIPT` и относится к этой feature, worker
      может исправить его в текущей branch/worktree;
    - если дефект существует только в assembled candidate, coordinator делает
-     отдельный coordinator-inline manifest, task worktree/branch/guard и
-     минимальный integration-fix commit;
+     отдельный coordinator-inline manifest и feature branch: primary checkout
+     при single-worker либо task worktree при multi-worker; затем минимальный
+     integration-fix commit;
    - не расширяй scope дальше минимально нужного; после code change всегда
      reseal candidate.
 3. `independent-regression`:
@@ -78,7 +79,7 @@ fail closed.
 | Класс | Issue work | Integration | Default / deploy |
 |---|---|---|---|
 | `same-scope` до promotion | Переоткрой исходную issue, новый claim generation, та же feature scope | Исключи bad ref и зависимые refs; независимые продолжай | Без freeze, пока default healthy |
-| `tiny-integration-repair` | Не создавай новую issue | Один минимальный coordinator-inline fix в отдельном worktree, affected check, reseal | Продолжай только после нового global pass |
+| `tiny-integration-repair` | Не создавай новую issue | Один минимальный coordinator-inline fix: primary checkout при single-worker, отдельный worktree при multi-worker; affected check, reseal | Продолжай только после нового global pass |
 | `independent-regression` | Создай deduplicated Bug; blocking bug отправь в приоритетный slot | Исключи culprit либо freeze только affected cutoff | Не deploy affected cutoff |
 | `systemic-or-second-generation` | Создай/переиспользуй stabilization Bug и fresh worker; независимые branches от good base продолжаются | `integration=frozen` только для affected scope | Никаких affected promotion/deploy до passing stabilization cutoff |
 | `known-bad-default` | `good-base-only` либо `stabilization-only` | Только stabilization lane | Rollback/revert/fix до healthy evidence |

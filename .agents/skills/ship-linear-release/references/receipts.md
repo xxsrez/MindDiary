@@ -160,11 +160,11 @@ worker manifest, claim token или receipt другого epoch не имеют
 epoch сам по себе не закрывает race после worker precheck. Online publication
 feature ref обязана атомарно продвинуть отдельный claim guard; takeover сначала
 fence-ит indexed/run-scoped guards по [crash-recovery.md](crash-recovery.md).
-Heartbeat/stale timestamp сам по себе никогда не разрешает takeover: Git,
-Linear и Sites не умеют отклонять уже начатый effect по fencing token. Новая
-session может CAS-войти в `recovering` только после явного handoff либо
-подтверждения пользователя, что прежняя task остановлена; если runtime умеет
-проверить task state, сначала подтверди, что она больше не running. До
+Heartbeat/stale timestamp сам по себе никогда не разрешает takeover. Для
+nonquiescent/ambiguous state нужны explicit handoff, authoritative terminal
+task либо user-confirmed stop. Отдельный clean durable-quiescent path допускает
+expected-old reclaim без runtime proof только при zero running/live claims,
+no pending effect и terminal/absent batch/gate/deploy. До
 reconciliation из `recovering` запрещены dispatch, integration, default,
 deploy/tag и Linear closure.
 
@@ -227,13 +227,16 @@ PRODUCTION_REQUIREMENT: <not-required-by-current-milestone|required>;
 DEFAULT_BRANCH: <name>; observed_sha=<full>
 PRIMARY_CHECKOUT: default_checked_out=<yes|no>; head=<sha|none>;
                   local_default=<sha|none>; baseline=<fingerprint>
+REPOSITORY_SNAPSHOT: status=<clear|dirty|partial>; worktrees=<n>;
+                     dirty_worktrees=<n>; paths=<count>; fingerprint=<hash>;
+                     errors=<none|bounded>
 INTERFERENCE: none | generation=<n>;
-              observation=<isolated-dirty|overlap|ahead|diverged|active-unknown|unknown>;
+              observation=<registered|dirty|ahead|diverged|active-unknown|unknown>;
               relation=<absent|equal|behind|ahead|diverged|unknown>;
               dirty=<clean|tracked|untracked|both|unknown>; fingerprint=<hash>;
               paths=<bounded list|count+digest>; overlap=<none|claims/issues/control/unknown>;
               remote=<expected>-><observed>/<same|ff|contains-candidate|non-ff|unknown>;
-              action=<continue|quarantine|branches-only|freeze-shared|stop>;
+              action=<continue|critical-stop|branches-only|freeze-shared|stop>;
               rebuild=<cutoff:generation@base|none>
 PROMOTION_HOLD: <none|hold-pause-id:foreign-main:<bounded reason>>
 WORKERS: requested_workers=<1|N|auto|auto(max=N)>; runtime_slots_total=<n>;
@@ -245,7 +248,7 @@ PIPELINE: open_cutoff=<id|none>; active_cutoff=<id|none>;
           train_ref=<ref|none>; train_head=<sha|none>;
           cutoff_ref=<immutable ref=sha|none>
 OPEN_CUTOFF: none | id=<id>; generation=<n>; accepted_count=<n>;
-             first_eligible_at=<utc>; cutoff_size=<n>; max_wait_at=<utc>;
+             opened_at=<utc>; boundary_reason=<cohesion|risk|size|gate-cost|idle|urgent|final|none>;
              pending_trigger=<none|id:reason@utc>; pending_train_head=<sha|none>;
              pending_membership=<count+digest|none>
 HEALTH: default=<unknown|healthy|pending|drifted|known-bad|stabilizing>;
@@ -288,18 +291,19 @@ lane. `HEALTH` управляет независимо issue dispatch и integra
 integration не обязан останавливать безопасную работу в изолированных branches.
 
 Feature ingest — двухфазный cross-system переход: coordinator action intent
-сначала фиксирует expected/successor train heads, membership и latched timer;
-после expected-old train push origin определяет, случился ли Git effect, а
+сначала фиксирует expected/successor local-main/integration heads и membership;
+после exact registered merge integration head определяет, случился ли Git effect, а
 Linear receipts становятся projection. Ordered membership восстанавливается из
-structured train commits; missing comment не откатывает train и не сбрасывает
-deadline. Детали — в [crash-recovery.md](crash-recovery.md).
+structured integration commits; missing comment не откатывает merge и не меняет
+membership. Детали — в [crash-recovery.md](crash-recovery.md).
 
-`PRIMARY_CHECKOUT` — read-only baseline, не recovery artifact. `INTERFERENCE`
-обновляй только при обнаружении/смене disposition, rebuild, reconciliation или
-terminal `needs-input`, не при неизменном snapshot. Не записывай file contents.
+`PRIMARY_CHECKOUT` — task surface только для registered single-worker/coordinator
+action; в остальных случаях это baseline. `REPOSITORY_SNAPSHOT` охватывает все
+linked worktrees. `INTERFERENCE` обновляй только при смене disposition, rebuild,
+reconciliation или terminal `needs-input`; contents не записывай.
 
 `OPEN_CUTOFF.pending_*` — immutable boundary ticket, пока другой cutoff active.
-Защёлкни exact train head и ordered membership digest в момент первого trigger.
+Защёлкни exact local main head и ordered membership digest в момент boundary.
 После terminal active cutoff сначала seal-ни этот exact prefix, затем принимай
 late ingest; поздний suffix создаёт следующий OPEN и не меняет ticket.
 
@@ -386,11 +390,12 @@ ROOT_BASE: sha=<full>; tree=<oid>; origin_default=<full>
 BASE: sha=<full>; class=<current-default|last-known-good|stabilization>;
       dependency_shas=<ordered refs или none>
 REMOTE_MODE: <online|offline-local-only>
+CHECKOUT_MODE: <primary|worktree>
 FEATURE_REF: scope=<origin|local-only>; ref=<branch/ref или none>;
              expected_old=<zero|sha>
 GUARD_REF: scope=<origin|local-only>; ref=<exact>; tip=<sha>;
            publish=<atomic-online|coordinator-only>
-WORKTREE: id=<uuid>; branch=<exact>; path_hint=<basename>; head_at_dispatch=<sha>
+WORKTREE: id=<uuid>; branch=<exact>; path=<absolute>; head_at_dispatch=<sha>
 ISOLATION: mutable_build_dir=<absolute task-owned>; tmp_dir=<absolute task-owned>;
            runtime_dir=<absolute task-owned>;
            cache_mode=<content-addressed|isolated>; cache_dir=<absolute>;
@@ -614,12 +619,17 @@ VALIDATION: gate_result=<key@passed|key@failed> | reused=<exact key> | none
 PREPUSH_CI: sha=<full>; run/check=<id|not-available>; status=<terminal|none|pending-outage>
 DEFAULT: expected_old=<full>; observed_before=<full>; published=<full|none>;
          observed_after=<full|unknown>; cas=<pass|fail|pending>
-FOREIGN_MAIN: observation=<clear|isolated-dirty|overlap|ahead|diverged|active-unknown|unknown>;
+REPOSITORY_SNAPSHOT: status=<clear|registered|dirty|partial>; fingerprint=<hash>;
+                     worktrees=<n>; dirty_worktrees=<n>; action=<continue|critical-stop>
+FOREIGN_MAIN: observation=<clear|ahead|diverged|active-unknown|unknown>;
               relation=<absent|equal|behind|ahead|diverged|unknown>;
               fingerprint=<hash>; action=<continue|quarantine|branches-only|freeze-shared|stop>
 CI: sha=<full>; run/check=<id|none>; status=<terminal|none|pending-publication|waived-external-outage>
 CI_WAIVER: none | component=<name>; observed=<symptom>; incident=<id/url>; incident_updated_at=<utc>; checked_at=<utc>; validation_key=<key>; catch_up=next-natural-run; reconciled=<run@head|none>
 PUBLISHED_BY: head=<full>; run/check=<id|none>; status=<terminal|waived-external-outage> | none
+RELEASE_LOCK: status=<acquired|released|unsupported/skipped|left-after-failure|not-required>;
+              target=<site+environment|none>; owner=<run/epoch|none>;
+              provider_lock_id=<id|none>; evidence=<bounded>
 SITES: not-required-by-current-milestone |
        project=<id>; version=<number>; version_id=<id>; archive_sha256=<digest>
 DEPLOYMENT: not-required-by-current-milestone |
@@ -656,7 +666,8 @@ claims и завершение goal. Не оставляй такой receipt в
 
 `STATUS: locally-integrated` означает, что exact candidate прошёл integrated
 gate и достижим из task-owned offline aggregate ref, но remote push ещё не
-доказан. Local default ref не двигается. В таком receipt `LINEAR_DONE: none`,
+доказан. Local `main` может быть этим exact aggregate head, но remote default не
+двигается. В таком receipt `LINEAR_DONE: none`,
 `DEFAULT.cas: pending`, `PUBLISHED_BY: none`; issue остаётся незавершённой. После общей публикации
 укажи exact published head и terminal CI outcome в `PUBLISHED_BY`, затем обнови
 каждый покрытый cutoff до `integrated` и закрой issue по normal path либо

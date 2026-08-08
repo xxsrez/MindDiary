@@ -117,8 +117,9 @@ Ready authority определяется `EXECUTION_INDEX state=feature_ready`, 
 надо завершать во время pause settlement.
 
 Не открывай новую issue ради освобождения cutoff и не считай паузу причиной
-обхода gate/CI. Когда active cutoff/gate и `PENDING_ACTIONS` отсутствуют, вызови
-`--phase finish`:
+обхода gate/CI. Когда `PENDING_ACTIONS` отсутствуют, а pipeline либо пуст, либо
+stale active pointer полностью подтверждён matching terminal
+`ACTIVE_CUTOFF+CUTOFF_RESULT`, вызови `--phase finish`:
 
 ```json
 {"settlement":"complete","evidence_digest":"<sha256 settlement evidence>"}
@@ -147,6 +148,9 @@ resume confirmation. Preflight возвращает `route=takeover`; первы
 epoch, атомарно снимает только user PAUSE/index entry и переводит lifecycle в
 `recovering`. Остальные HOLD/PROMOTION_HOLD сохраняются. Затем fence guards,
 inventory и обычный crash recovery.
+Если после fencing inventory пуст и pipeline terminal/absent, вызови
+`shipctl.py resume-recovery`; helper нормализует stale terminal pointers и
+возвращает run в `running` без дополнительного user proof.
 
 Если phase всё ещё `draining|settling`, чужая session остаётся read-only. Same
 owner получает только `soft-pause-drain-and-settlement-only`; он не может

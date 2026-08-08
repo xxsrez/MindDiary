@@ -139,10 +139,10 @@ remote default/CAS не доказаны, issue не доставлена и `Do
 2. Зафиксируй последний доказанный `origin/<default>` как `base_origin`,
    task-owned aggregate ref/head, незавершённые remote jobs и ordered pending
    cutoffs в `RELEASE_RUN.OFFLINE_QUEUE`.
-3. Строй local-only cutoffs в clean worktree от task-owned ref вида
-   `codex/release/offline/<run-key>/g<generation>`, rooted в `base_origin`.
-   Workers используют отдельные worktrees/local refs; local default и primary
-   checkout не обновляй.
+3. Строй local-only cutoffs от exact `base_origin`. При `workers=1` feature и
+   local `main` живут последовательно в clean primary checkout; при
+   `workers>1` workers используют отдельные worktrees, а coordinator один
+   интегрирует refs в local `main`. Remote default не обновляй.
 4. Выполняй обычные feature gates, sealing и один full integrated gate. Пиши
    `STATUS=locally-integrated`, `DEFAULT.cas=pending`, `PUBLISHED_BY=none`,
    `CI=pending-publication` и `LINEAR_DONE=none`.

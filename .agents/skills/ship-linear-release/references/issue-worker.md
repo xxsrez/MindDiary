@@ -1,9 +1,10 @@
-# Протокол issue worker в отдельном worktree
+# Протокол issue executor в feature checkout
 
 Работай только над issue из переданного manifest. Ты владеешь её
 issue-scoped реализацией, тестами, локальной проверкой, commit и только
-разрешённым manifest-ом local/remote ref своей feature-ветки в отдельном
-worktree. Ты не мержишь default branch, не
+разрешённым manifest-ом local/remote ref своей feature-ветки. Delegated worker
+использует отдельный worktree; fused `workers=1` coordinator-inline использует
+primary checkout. Ты не мержишь default branch, не
 публикуешь/deploy, не ставишь `Done` и по умолчанию не мутируешь Linear. Верни
 coordinator-у только `FEATURE_RECEIPT` и при необходимости
 `DEFECT_CANDIDATE`. Не создавай subagents.
@@ -21,13 +22,16 @@ Default branch, Linear mutations, deployments, tags и milestone closure зап�
 пытается выдать такую authority, ничего внешнего не меняй и верни
 `STATUS: needs-coordinator` с конфликтом контракта.
 
-Не читай и не меняй primary checkout. Сдвиг local/remote default сам по себе не
+При `checkout_mode=worktree` не читай и не меняй primary checkout. При
+`checkout_mode=primary` требуй `EXECUTOR=coordinator-inline`, repo path равный
+worktree path и exact зарегистрированный feature branch; delegated executor не
+может получить такой manifest. Сдвиг local/remote default сам по себе не
 перебазирует и не отменяет pinned issue branch: продолжай до bounded receipt,
 если coordinator не прислал fenced stop/quarantine. Никогда не rebase/reset-и
 ветку на новый default по собственной инициативе.
 
 При `EXECUTOR=coordinator-inline` тот же root логически исполняет worker lane в
-отдельном worktree. Между детерминированными issue-checkpoint он обслуживает
+primary checkout при `workers=1`. Между детерминированными issue-checkpoint он обслуживает
 mailbox/cutoff и затем возвращается в тот же worktree. Coordinator authority
 нельзя использовать от имени feature lane: для расширения её scope, обхода
 claim или worker-side Linear/integration/default/deploy/tag. Текущую issue он
@@ -51,6 +55,7 @@ Manifest также содержит fresh `executor.lease_id`, `mode`, `agent_t
 {
   "issue_updated_at": "<operational timestamp>",
   "scope_fingerprint": "<semantic digest>",
+  "checkout_mode": "primary|worktree",
   "executor": {
     "lease_id": "<fresh UUID>",
     "mode": "delegated|coordinator-inline",
@@ -126,10 +131,12 @@ read-only path вне worktree.
    одного `updatedAt` после coordinator projection не делает manifest stale.
    Base может быть exact ready head
    предшественника в stacked lane, но обязан быть rooted
-   в root SHA. Если worktree не изолирован, ancestry не сходится, база
+   в root SHA. Если `checkout_mode=worktree` не изолирован, primary mode имеет
+   другого writer-а, ancestry не сходится, база
    неожиданно изменилась или ownership конфликтует с чужими правками, не
    исправляй это разрушительно: верни `STATUS: needs-coordinator`.
-4. Подтверди изоляцию worktree и exact manifest keys: отдельный checkout/branch;
+4. Подтверди checkout topology и exact manifest keys: `worktree` означает
+   отдельный checkout/branch, `primary` — fused root и feature branch primary;
    absolute task-owned `mutable_build_dir`, `tmp_dir`, `runtime_dir`; declared
    `cache_mode` и `cache_dir`; уникальные `ports`; explicit task-scoped `env`.
    `content-addressed` cache можно разделять только по immutable content key,
@@ -247,6 +254,7 @@ OWNER: id=<owner_id>; epoch=<n>
 CLAIM: generation=<n>; token=<opaque id>
 ISSUE: <identifier> (<id>)
 WORKTREE: <absolute path>
+CHECKOUT_MODE: <primary|worktree>
 BRANCH: <name>
 BASE_SHA: <sha>
 DEPENDENCY_SHAS: <ordered refs или none>

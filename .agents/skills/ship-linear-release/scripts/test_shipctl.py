@@ -232,6 +232,7 @@ class ManifestTest(GitMixin, unittest.TestCase):
             "milestone_id": milestone_id,
             "repo": str(repo),
             "worktree": str(worktree),
+            "checkout_mode": "worktree",
             "branch": branch,
             "feature_ref": f"refs/heads/{branch}",
             "guard_ref": guard_ref,
@@ -297,6 +298,60 @@ class ManifestTest(GitMixin, unittest.TestCase):
         self.assertEqual((code, result["status"]), (0, "valid"))
         self.assertEqual(result["surfaces"], ["control"])
         self.assertIn("docs/specs/domain-model.md", result["documents"])
+
+    def test_validates_single_worker_manifest_in_primary_checkout(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="shipctl-primary-manifest-") as directory:
+            root = Path(directory)
+            repo, worker, payload = self.manifest_fixture(root)
+            self.git(repo, "worktree", "remove", str(worker))
+            self.git(repo, "switch", payload["branch"])
+            task_root = repo / ".codex-task"
+            for name in ("build", "tmp", "runtime", "npm-cache"):
+                (task_root / name).mkdir(parents=True)
+            dependency_path = repo / "node_modules"
+            dependency_path.mkdir()
+            lockfile_digest = MODULE.hashlib.sha256(
+                (repo / "package-lock.json").read_bytes()
+            ).hexdigest()
+            (task_root / "provision.json").write_text(
+                json.dumps(
+                    {
+                        "status": "installed",
+                        "checkout_mode": "primary",
+                        "lockfile_digest": lockfile_digest,
+                        "dependency_path": str(dependency_path.resolve()),
+                    }
+                ),
+                encoding="utf-8",
+            )
+            payload["checkout_mode"] = "primary"
+            payload["worktree"] = str(repo)
+            payload["executor"] = {
+                "lease_id": str(uuid.uuid4()),
+                "mode": "coordinator-inline",
+                "agent_type": "coordinator-inline",
+                "fork_turns": "none",
+            }
+            payload["isolation"] = {
+                "mutable_build_dir": str((task_root / "build").resolve()),
+                "tmp_dir": str((task_root / "tmp").resolve()),
+                "runtime_dir": str((task_root / "runtime").resolve()),
+                "cache_mode": "isolated",
+                "cache_dir": str((task_root / "npm-cache").resolve()),
+                "cache_key": "none",
+                "ports": [],
+                "env": {},
+            }
+            payload["dependencies"] = {
+                "mode": "isolated",
+                "path": str(dependency_path.resolve()),
+                "lockfile_digest": lockfile_digest,
+                "cache_key": "none",
+                "read_only": False,
+                "provenance": "primary-npm-ci",
+            }
+            code, result = self.invoke(payload)
+        self.assertEqual((code, result["status"]), (0, "valid"))
 
     def test_non_object_is_a_clean_validation_error(self) -> None:
         code, result = self.invoke(["not", "an", "object"])
@@ -1387,6 +1442,71 @@ class StartupPlanTest(GitMixin, unittest.TestCase):
         )
 
 
+class BoundaryAutomationTest(unittest.TestCase):
+    def test_final_batch_is_mandatory_without_fixed_size_or_timer(self) -> None:
+        payload = {
+            "candidate_sha": "a" * 40,
+            "features": ["AND-1"],
+            "cohesion": "cohesive",
+            "risk": "low",
+            "gate_cost": "high",
+            "queue_state": "finishing",
+            "urgent": False,
+            "decision": "seal",
+            "reason": "final",
+            "rationale": "Финальный patch обязан пройти один общий gate.",
+        }
+        code, result = MODULE._capture_json_handler(MODULE.command_batch_boundary, payload)
+        self.assertEqual((code, result["status"], result["action"]), (0, "validated", "seal"))
+        self.assertFalse(result["fixed_size_or_timer"])
+        payload.update({"decision": "keep-open", "reason": "size"})
+        code, result = MODULE._capture_json_handler(MODULE.command_batch_boundary, payload)
+        self.assertEqual((code, result["status"]), (2, "invalid"))
+        self.assertIn("invalid:mandatory-boundary:final", result["errors"])
+
+    def test_release_lock_is_skipped_when_provider_has_no_atomic_capability(self) -> None:
+        payload = {
+            "production_required": True,
+            "target": "mind-diary:production",
+            "owner": {"run_id": str(uuid.uuid4()), "epoch": 3},
+            "capability": {
+                "atomic_acquire": False,
+                "conditional_release": False,
+                "fencing": False,
+                "provider_operation": "none",
+            },
+        }
+        code, result = MODULE._capture_json_handler(MODULE.command_release_lock_plan, payload)
+        self.assertEqual((code, result["status"]), (0, "unsupported/skipped"))
+        self.assertFalse(result["simulated_marker_allowed"])
+        payload["capability"] = {
+            "atomic_acquire": True,
+            "conditional_release": True,
+            "fencing": True,
+            "provider_operation": "sites.releaseLock.compareAndSwap",
+        }
+        code, result = MODULE._capture_json_handler(MODULE.command_release_lock_plan, payload)
+        self.assertEqual((code, result["status"]), (0, "acquire-required"))
+        self.assertTrue(result["force_unlock_requires_user_confirmation"])
+
+    def test_critical_overview_synthesizes_user_facing_state(self) -> None:
+        payload = {
+            "reason": "появилось незарегистрированное изменение",
+            "safety_impact": "неизвестен единственный writer main",
+            "stage": "перед batch gate",
+            "changed": "одна feature уже merge-нута локально",
+            "git_state": "main clean, worker path dirty",
+            "linear_state": "AND-1 остаётся In Progress",
+            "release_state": "publish не начинался",
+            "next_action": "убрать либо передать стороннее изменение и повторить preflight",
+            "evidence": ["repo-guard:critical-stop", "worktree=/tmp/worker"],
+        }
+        code, result = MODULE._capture_json_handler(MODULE.command_critical_overview, payload)
+        self.assertEqual((code, result["status"]), (0, "rendered"))
+        self.assertIn("Критическая остановка", result["overview"])
+        self.assertIn("Linear: AND-1", result["overview"])
+
+
 class DeliveryContractTest(unittest.TestCase):
     def test_runtime_contract_contains_no_profile_or_intent_switches(self) -> None:
         repo = SCRIPTS.parents[3]
@@ -1421,7 +1541,9 @@ class DeliveryContractTest(unittest.TestCase):
         triage = (
             repo / ".agents/skills/ship-linear-release/references/defect-triage.md"
         ).read_text(encoding="utf-8")
-        self.assertIn("без worker count работай одним worker", metadata)
+        self.assertIn("без count работай одним coordinator-inline worker", metadata)
+        self.assertIn("primary feature branch", metadata)
+        self.assertIn("merge выполняет только coordinator", metadata)
         self.assertIn("workers=auto", metadata)
         self.assertIn("stabilization Bug", triage)
         self.assertIn("новый product/security decision", triage)
@@ -1687,6 +1809,40 @@ class ProvisionAndCleanupTest(GitMixin, unittest.TestCase):
         self.assertEqual((prepared_code, prepared["status"]), (4, "prepared"))
         self.assertEqual((adopted_code, adopted["status"]), (0, "adopted"))
         self.assertEqual(adopted["environment_id"], prepared["environment_id"])
+
+    def test_provision_supports_single_worker_primary_checkout(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="shipctl-primary-provision-") as directory:
+            repo, _ = self.fixture(Path(directory))
+            args = MODULE.argparse.Namespace(
+                repo=str(repo),
+                worktree=str(repo),
+                checkout_mode="primary",
+                package_manager="npm",
+                install=False,
+                timeout_seconds=900,
+            )
+            with io.StringIO() as output, redirect_stdout(output):
+                prepared_code = MODULE.command_provision_worktree(args)
+                prepared = json.loads(output.getvalue())
+            dependency_path = Path(prepared["dependency_path"])
+            dependency_path.mkdir()
+            receipt = {
+                "status": "installed",
+                "checkout_mode": "primary",
+                "environment_id": prepared["environment_id"],
+                "lockfile_digest": prepared["lockfile_digest"],
+                "dependency_path": str(dependency_path),
+            }
+            (repo / ".codex-task/provision.json").write_text(
+                json.dumps(receipt), encoding="utf-8"
+            )
+            with io.StringIO() as output, redirect_stdout(output):
+                adopted_code = MODULE.command_provision_worktree(args)
+                adopted = json.loads(output.getvalue())
+        self.assertEqual((prepared_code, prepared["status"]), (4, "prepared"))
+        self.assertEqual(prepared["checkout_mode"], "primary")
+        self.assertEqual((adopted_code, adopted["status"]), (0, "adopted"))
+        self.assertEqual(adopted["checkout_mode"], "primary")
 
     def test_provision_includes_nested_lockfile_selected_by_ownership_path(self) -> None:
         with tempfile.TemporaryDirectory(prefix="shipctl-provision-") as directory:
@@ -2204,6 +2360,108 @@ class PreflightTest(GitMixin, unittest.TestCase):
             "STALE_OWNER_PROOF: kind=task-terminal;digest=" + "f" * 64,
             message,
         )
+
+    def test_clean_single_invocation_reclaims_quiescent_active_owner_without_stop_proof(self) -> None:
+        thread_id = "019fdcce-1fee-71d0-8d5d-6566cdf2d94b"
+        with tempfile.TemporaryDirectory(prefix="shipctl-quiescent-reclaim-") as directory:
+            repo, _ = self.fixture(Path(directory))
+            head = self.git(repo, "rev-parse", "HEAD")
+            old_owner = uuid.uuid4()
+            parent = self.push_coordinator(
+                repo,
+                MODULE.CANONICAL_COORDINATOR_REF,
+                self.coordinator_message(
+                    repo,
+                    state="recovering",
+                    proof="a" * 64,
+                    extra=(
+                        f"OWNER_ID: {old_owner}\n"
+                        "OWNER_PROOF_KIND: runtime-task-id\n"
+                        f"RUN_ID: {uuid.uuid4()}\n"
+                        f"RUN_KEY: {'b' * 32}\n"
+                        f"PROJECT_ID: {uuid.uuid4()}\n"
+                        f"MILESTONE_ID: {uuid.uuid4()}\n"
+                        "EPOCH: 7\n"
+                        f"CONTRACT_SOURCE_SHA: {head}\n"
+                        f"LIFECYCLE: schema=1;phase=recovering;pause=none;transition={uuid.uuid4()}\n"
+                        "PAUSE: state=lifted;reason=none\n"
+                        "HOLD_PAUSE_INDEX: active=none;entries=0\n"
+                        "PENDING_ACTIONS: none\n"
+                        f"CLAIM_INDEX: active=none;entries=0;digest={'1' * 64}\n"
+                        f"EXECUTION_INDEX: running_count=0;entries=none;digest={'2' * 64}\n"
+                        "WORKERS: active_target=0;active_issue_lanes=none\n"
+                        "PIPELINE: open_cutoff=none;active_cutoff=cutoff-016:g1;"
+                        "train_ref=refs/heads/codex/train;cutoff_ref=refs/heads/codex/cutoff\n"
+                        "ACTIVE_CUTOFF: cutoff=cutoff-016;generation=1;status=integrated-doc-only\n"
+                        "CUTOFF_RESULT: cutoff=cutoff-016:g1;status=integrated-doc-only\n"
+                        "GATE_INDEX: active=none;entries=1\n"
+                        "RECOVERY: generation=8;cause=stale-owner-stop;phase=inventory;unresolved=none\n"
+                        "LIVE_GUARDS: none\n"
+                        "ACTION_KIND: recovery-checkpoint\n"
+                    ),
+                ),
+            )
+            takeover_args = MODULE.argparse.Namespace(
+                repo=str(repo), remote="origin", default="main"
+            )
+            with mock.patch.dict(MODULE.os.environ, {"CODEX_THREAD_ID": thread_id}):
+                before_code, before, _ = self.preflight(repo)
+                with io.StringIO() as output, redirect_stdout(output):
+                    takeover_code = MODULE.command_takeover(takeover_args)
+                    taken = json.loads(output.getvalue())
+                with io.StringIO() as output, redirect_stdout(output):
+                    fence_code = MODULE.command_fence_guards(takeover_args)
+                    fenced = json.loads(output.getvalue())
+                with io.StringIO() as output, redirect_stdout(output):
+                    resume_code = MODULE.command_resume_recovery(takeover_args)
+                    resumed = json.loads(output.getvalue())
+                final_code, final, _ = self.preflight(repo)
+            observed = self.git(
+                repo, "ls-remote", "origin", MODULE.CANONICAL_COORDINATOR_REF
+            ).split()[0]
+            message = self.git(repo, "show", "-s", "--format=%B", observed)
+
+        self.assertEqual((before_code, before["route"]), (0, "takeover"))
+        self.assertTrue(before["coordinator_refs"][0]["quiescent_reclaim_ready"])
+        self.assertEqual((takeover_code, taken["status"], taken["epoch"]), (0, "taken", 8))
+        self.assertNotEqual(taken["coordinator"], parent)
+        self.assertEqual((fence_code, fenced["status"], fenced["guard_count"]), (0, "fenced", 0))
+        self.assertEqual((resume_code, resumed["status"]), (0, "resumed"))
+        self.assertEqual((final_code, final["route"]), (0, "resume"))
+        self.assertIn("PIPELINE: open_cutoff=none;active_cutoff=none", message)
+        self.assertIn("ACTIVE_CUTOFF: none", message)
+        self.assertIn("ACTION_KIND: resume-recovery", message)
+
+    def test_quiescent_reclaim_rejects_nonterminal_batch_live_guard_and_pause_drain(self) -> None:
+        metadata = {
+            "STATE": "recovering",
+            "OWNER_STATE": "active",
+            "ACTION_STATUS": "reconciled",
+            "LIFECYCLE": f"schema=1;phase=recovering;pause=none;transition={uuid.uuid4()}",
+            "PENDING_ACTIONS": "none",
+            "CLAIM_INDEX": f"active=none;entries=0;digest={'1' * 64}",
+            "EXECUTION_INDEX": f"running_count=0;entries=none;digest={'2' * 64}",
+            "WORKERS": "active_target=0;active_issue_lanes=none",
+            "PIPELINE": "open_cutoff=none;active_cutoff=cutoff-1:g1",
+            "ACTIVE_CUTOFF": "cutoff=cutoff-1;generation=1;status=validating",
+            "CUTOFF_RESULT": "cutoff=cutoff-1:g1;status=running",
+            "GATE_INDEX": "active=none;entries=1",
+            "LIVE_GUARDS": "AND-1/c1=refs/heads/guard:ready",
+        }
+        ready, blockers = MODULE._durable_quiescent_reclaim(metadata)
+        self.assertFalse(ready)
+        self.assertIn("active-cutoff-not-terminal", blockers)
+        self.assertIn("live-guards-present", blockers)
+
+        metadata.update(
+            {
+                "STATE": "pausing",
+                "LIFECYCLE": f"schema=1;phase=settling;pause=pause-1;transition={uuid.uuid4()}",
+            }
+        )
+        ready, blockers = MODULE._durable_quiescent_reclaim(metadata)
+        self.assertFalse(ready)
+        self.assertIn("lifecycle-not-operating-or-recovering", blockers)
 
     def test_reconciled_quiescent_handoff_routes_to_automatic_takeover(self) -> None:
         with tempfile.TemporaryDirectory(prefix="shipctl-") as directory:
@@ -2795,18 +3053,105 @@ class PreflightTest(GitMixin, unittest.TestCase):
             (repo / "package.json").write_text('{"dirty":true}\n', encoding="utf-8")
             code, result, _ = self.preflight(repo)
         self.assertEqual((code, result["route"]), (3, "blocked"))
-        self.assertIn("primary-control-surface-dirty", result["reasons"])
-        self.assertEqual(result["primary_checkout"]["observation"], "overlap")
+        self.assertIn("repository-dirty", result["reasons"])
+        self.assertEqual(result["primary_checkout"]["observation"], "dirty")
 
-    def test_dirty_disjoint_primary_is_reported_and_allowed(self) -> None:
+    def test_any_dirty_primary_blocks_fresh_normal_start(self) -> None:
         with tempfile.TemporaryDirectory(prefix="shipctl-") as directory:
             repo, _ = self.fixture(Path(directory))
             (repo / "personal-notes.txt").write_text("unrelated\n", encoding="utf-8")
             code, result, _ = self.preflight(repo)
-        self.assertEqual((code, result["route"]), (0, "normal"))
-        self.assertEqual(result["primary_checkout"]["observation"], "isolated-dirty")
-        self.assertEqual(result["primary_checkout"]["action"], "continue")
+        self.assertEqual((code, result["route"]), (3, "blocked"))
+        self.assertIn("repository-dirty", result["reasons"])
+        self.assertEqual(result["primary_checkout"]["observation"], "dirty")
+        self.assertEqual(result["primary_checkout"]["action"], "stop")
         self.assertEqual(result["primary_checkout"]["paths"], ["personal-notes.txt"])
+
+    def test_dirty_linked_worktree_blocks_fresh_normal_start(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="shipctl-dirty-worktree-") as directory:
+            root = Path(directory)
+            repo, _ = self.fixture(root)
+            branch = "codex/and-56-dirty/r" + "a" * 32 + "-e1-c1"
+            self.git(repo, "branch", branch)
+            worktree = root / "worker"
+            self.git(repo, "worktree", "add", str(worktree), branch)
+            (worktree / "untracked.txt").write_text("dirty\n", encoding="utf-8")
+            code, result, _ = self.preflight(repo)
+        self.assertEqual((code, result["route"]), (3, "blocked"))
+        self.assertIn("repository-dirty", result["reasons"])
+        self.assertEqual(result["repository_snapshot"]["dirty_worktree_count"], 1)
+        self.assertEqual(
+            result["repository_snapshot"]["dirty_worktrees"][0]["paths"],
+            ["untracked.txt"],
+        )
+
+    def test_repo_guard_accepts_only_exact_registered_dirty_action(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="shipctl-repo-guard-") as directory:
+            repo, _ = self.fixture(Path(directory))
+            branch = "codex/and-56-guard/r" + "a" * 32 + "-e1-c1"
+            self.git(repo, "switch", "-c", branch)
+            path = repo / "packages/domain/src/index.ts"
+            path.parent.mkdir(parents=True)
+            path.write_text("export const value = 1;\n", encoding="utf-8")
+            head = self.git(repo, "rev-parse", "HEAD")
+            args = MODULE.argparse.Namespace(repo=str(repo), input="-")
+            expected_worktrees = [
+                {"worktree": str(repo), "branch": branch, "head": head}
+            ]
+            with mock.patch.object(
+                sys,
+                "stdin",
+                io.StringIO(
+                    json.dumps(
+                        {
+                            "authorizations": [],
+                            "expected_worktrees": expected_worktrees,
+                            "refs": [],
+                        }
+                    )
+                ),
+            ), io.StringIO() as output, redirect_stdout(output):
+                blocked_code = MODULE.command_repo_guard(args)
+                blocked = json.loads(output.getvalue())
+            payload = {
+                "authorizations": [
+                    {
+                        "worktree": str(repo),
+                        "branch": branch,
+                        "head": head,
+                        "ownership_paths": ["packages/domain"],
+                        "action_id": str(uuid.uuid4()),
+                    }
+                ],
+                "expected_worktrees": expected_worktrees,
+                "refs": [{"ref": f"refs/heads/{branch}", "sha": head}],
+            }
+            with mock.patch.object(sys, "stdin", io.StringIO(json.dumps(payload))), io.StringIO() as output, redirect_stdout(output):
+                clear_code = MODULE.command_repo_guard(args)
+                clear = json.loads(output.getvalue())
+            self.git(repo, "add", "packages/domain/src/index.ts")
+            self.git(repo, "commit", "-m", "registered action moved head")
+            with mock.patch.object(sys, "stdin", io.StringIO(json.dumps(payload))), io.StringIO() as output, redirect_stdout(output):
+                moved_code = MODULE.command_repo_guard(args)
+                moved = json.loads(output.getvalue())
+            payload["expected_worktrees"][0]["head"] = self.git(repo, "rev-parse", "HEAD")
+            payload["authorizations"][0]["head"] = payload["expected_worktrees"][0]["head"]
+            payload["refs"][0]["sha"] = payload["expected_worktrees"][0]["head"]
+            path.unlink()
+            outside = repo / "outside.txt"
+            outside.write_text("unexpected\n", encoding="utf-8")
+            with mock.patch.object(sys, "stdin", io.StringIO(json.dumps(payload))), io.StringIO() as output, redirect_stdout(output):
+                outside_code = MODULE.command_repo_guard(args)
+                outside_result = json.loads(output.getvalue())
+
+        self.assertEqual((blocked_code, blocked["status"]), (3, "critical-stop"))
+        self.assertEqual((clear_code, clear["status"]), (0, "clear"))
+        self.assertEqual((moved_code, moved["status"]), (3, "critical-stop"))
+        self.assertEqual(moved["violations"][0]["kind"], "worktree-head-mismatch")
+        self.assertEqual((outside_code, outside_result["status"]), (3, "critical-stop"))
+        self.assertEqual(
+            outside_result["violations"][0]["kind"], "paths-outside-ownership"
+        )
 
     def test_clean_ahead_primary_blocks(self) -> None:
         with tempfile.TemporaryDirectory(prefix="shipctl-") as directory:

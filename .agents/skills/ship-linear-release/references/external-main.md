@@ -1,257 +1,154 @@
-# Чужие изменения в primary checkout и default branch
+# Repository state, primary checkout и remote default
 
-Читай этот файл на preflight/recovery и при любом необъяснённом изменении
-checkout, local default ref или remote default. Цель — не определить «какой
-агент виноват» (Git этого надёжно не доказывает), а не затронуть чужую работу,
-сохранить безопасный параллелизм и остановить shared release lane там, где
-намерение либо blast radius неизвестны.
+Читай этот файл на preflight/recovery и при необъяснённом изменении status,
+HEAD, local/remote ref. Единица coordination — один Git repository вместе со
+всеми linked worktrees. Другие repositories независимы. Цель проверки — не
+угадать автора изменения, а допустить только effects, заранее связанные с
+coordinator/worker action текущего run.
 
-Coordinator ref ограждает только sessions, соблюдающие этот skill. Он не
-является блокировкой для другого процесса. Не добавляй PID/heartbeat lock,
-watcher или polling loop: защита строится на отдельных worktrees, pinned SHAs,
-task-owned refs, expected-old CAS и проверке результата после действия.
+Repo-global claim ограждает sessions этого skill, но не блокирует сторонний
+процесс. Поэтому safety строится на repo-wide snapshots, exact manifests,
+ownership paths, task branches, fenced refs и expected-old CAS. PID, heartbeat,
+watcher либо polling lock этого не заменяют.
 
-## Разделы
+## Topology primary checkout
 
-- [Не трогать primary checkout](#не-трогать-primary-checkout)
-- [Снять bounded snapshot](#снять-bounded-snapshot)
-- [Классифицировать состояние](#классифицировать-состояние)
-- [Зафиксировать HOLD или PAUSE](#зафиксировать-hold-или-pause)
-- [Реагировать по матрице](#реагировать-по-матрице)
-- [Обработать remote drift](#обработать-remote-drift)
-- [Сообщать только переходы](#сообщать-только-переходы)
-- [Восстановиться](#восстановиться)
+- При `workers=1` primary checkout является task surface: coordinator
+  переключает доказанно clean `main` на feature branch, исполняет issue inline,
+  коммитит, возвращается на `main` и единолично интегрирует feature.
+- При `workers>1` каждый issue worker использует отдельный worktree. Primary
+  checkout может использовать только coordinator как зарегистрированную
+  integration surface; worker его не читает и не меняет.
+- В любом режиме единственный writer `main` — coordinator. Worker не merge-ит и
+  не push-ит default.
+- Mutable dependency/cache/build/tmp/runtime paths и ports между worktrees не
+  разделяются. Разрешены только immutable content-addressed artifacts с exact
+  provenance.
 
-## Не трогать primary checkout
+## Fresh preflight: только clean
 
-Primary checkout — worktree, в котором checked out local default branch. Он
-может принадлежать пользователю или другому агенту. Coordinator никогда не
-делает в нём `checkout`, `switch`, `pull`, `merge`, `rebase`, `stash`, `reset`,
-`clean`, `add`, `commit`, install/build/test или исправление index lock.
+`shipctl.py preflight` снимает два согласованных чтения primary checkout и всех
+linked worktrees: path, branch, HEAD и porcelain status со staged, unstaged,
+untracked, rename/delete и conflicts. Ignored outputs не являются source dirt,
+но остаются предметом isolation checks.
 
-Issue work, integration train, global gate и offline aggregate выполняй только
-в task-owned clean worktrees с отдельными mutable tmp/cache/build/runtime
-paths и ports. Не используй artifacts, index или uncommitted bytes primary
-checkout как source, cache hit либо validation evidence.
-
-Base — exact свежепрочитанный `origin/<default>` либо доказанный task-owned
-descendant. Local `<default>` не является base и не обязан двигаться вместе с
-remote. Default публикуй прямо из clean coordinator worktree explicit
-expected-old server-side CAS; успешный push может оставить primary checkout
-чистым или dirty и просто `behind` — это нормально и требует сообщения, а не
-`pull`.
-
-## Снять bounded snapshot
-
-На preflight сохрани branch/HEAD/local default ref, remote default SHA,
-porcelain status без contents и fingerprint primary checkout. Для повторяемой
-read-only диагностики используй:
+Fresh normal start разрешён только при:
 
 ```text
-python3 .agents/skills/ship-linear-release/scripts/inspect_foreign_main.py \
-  --repo <repo> --remote origin --default <default>
+repository_snapshot.status = clear
+dirty_worktrees = 0
+snapshot_errors = none
 ```
 
-После изменения helper прогони:
+Любой видимый `git status` dirt блокирует initial claim. Skill не делает
+stash/reset/clean, не коммитит его и не объявляет своим. Claim-bound dirty task
+worktree старого run маршрутизируется только в recovery/adoption после fencing;
+это не normal-start exception. Torn/unreadable/truncated snapshot также
+fail-closed.
+
+Dirty invoked skill/`AGENTS.md`/manifest/lockfile/workflow/schema/release config
+особенно критичен: run не может pin-нуть непроверенный contract. Пользователю
+нужно завершить, закоммитить либо отдельно передать изменения, затем полностью
+повторить preflight на новом SHA.
+
+## Active run: только зарегистрированные deltas
+
+После claim coordinator сохраняет baseline. Перед dispatch, issue checkpoint,
+ingest/merge, gate, default push, deploy/tag/Linear Done и terminal completion
+он вызывает один bounded guard:
+
+```bash
+python3 .agents/skills/ship-linear-release/scripts/shipctl.py repo-guard \
+  --repo <repo> --input <registered-actions.json>
+```
+
+`registered-actions.json` содержит `expected_worktrees` с exact path/branch/HEAD
+для каждого linked checkout, а для каждого разрешённого dirty checkout —
+absolute path, exact branch/HEAD, action UUID и ownership paths; при shared Git
+boundary — exact expected local refs. Разрешение не
+переносится на следующий action, branch, HEAD либо соседний path.
+
+Guard допускает dirt только когда одновременно:
+
+1. worktree зарегистрирован действующим coordinator/worker action;
+2. branch и HEAD совпадают exactly;
+3. каждый dirty path входит в ownership prefixes;
+4. expected refs не сдвинулись;
+5. весь repo-wide snapshot coherent.
+
+`status=critical-stop` означает: немедленно прекратить новые edits, commits,
+merges, gates и release actions; не менять неизвестные bytes; active workers
+довести только до ближайшего bounded safe receipt, если это не расширяет
+опасный scope. В active run это critical error, а не повод продолжить
+«независимую» lane: контракт ожидает, что все изменения делает только текущий
+coordinator или его executors.
+
+Один fresh snapshot обслуживает одну natural boundary. Не опрашивай status в
+tight loop. После unexpected CAS/Git failure сними один новый snapshot; два
+разных чтения внутри probe означают torn state и stop.
+
+## Remote default
+
+Repo dirt и remote drift — разные факты. Для compact remote/default observation
+используй `inspect_foreign_main.py`; helper не читает contents dirty files и не
+двигает refs. Перед irreversible boundary всё равно требуется свежий exact
+remote SHA и expected-old server-side CAS: check-then-push недостаточно.
+
+### Remote fast-forward до нашего push
+
+1. Поставь `default=drifted`, запрети старый promotion intent.
+2. Получи exact remote commit в coordinator-owned namespace и классифицируй
+   range/paths/control changes.
+3. Пересобери local `main`/batch generation от нового remote SHA, переиграв
+   topologically только compatible feature refs. Overlap получает new claim
+   generation либо quarantine.
+4. Новое tree получает новый validation key и один full gate. Не повторяй
+   unchanged feature-local checks.
+5. Только exact rebuilt candidate и passing gates снова разрешают promotion.
+
+Если remote уже равен candidate, reconciliate фактический push вместо повтора.
+Если он содержит candidate плюс новые commits, старый evidence сохраняется как
+provenance, но deploy/tag/Done требуют свежей exact-head generation.
+
+### Non-fast-forward, rewrite либо deletion
+
+Не force-push, reset, rebase и не исправляй историю автоматически. Freeze shared
+mutations, сохрани expected/observed SHAs, доведи workers до bounded receipts и
+верни `needs-input` с точным resolution predicate. То же правило действует,
+если drift меняет contract/security/release semantics либо scope неизвестен.
+
+### Drift после candidate push
+
+До deploy/tag/Done старый cutoff больше не доказывает current default: создай
+новую generation и exact-head gate. Если deploy уже произошёл, сохрани его
+version/deployment evidence и не rollback-и только из-за Git drift; terminal
+closure всё равно ждёт восстановления Git/live alignment.
+
+## Recovery carrier
+
+Dirty carrier можно открыть только по exact claim/run-key/branch/worktree ID.
+Для single-worker это может быть primary checkout с
+`checkout_mode=primary`; для multi-worker — claim-bound task worktree. Нужны
+fenced старый guard, доказанно остановленный executor, exact ownership paths,
+отсутствие unmerged entries и стабильный fingerprint. Иначе carrier остаётся
+нетронутым и quarantined. Не используй broad disk scan, reflog/fsck, stash или
+clean.
+
+После reconciliation повтори `repo-guard`. Normal/shared work возобновляется
+только когда все текущие deltas имеют exact action bindings; quiescent reclaim
+дополнительно требует полностью clean repo-wide snapshot.
+
+## Пользовательский critical overview
+
+Не утверждай автора недоказанного изменения. Сообщи:
 
 ```text
-PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover \
-  -s .agents/skills/ship-linear-release/scripts -p 'test_*.py'
+repository-interference; stage=<stage>; new-mutations=stopped;
+worktrees=<affected>; paths=<bounded>; main=<sha/state>;
+linear=<last-projected-state>; release=<not-started|state>;
+required=<minimal cleanup/handoff/reconciliation action>
 ```
 
-Helper использует `GIT_OPTIONAL_LOCKS=0`, не fetch-ит и не читает содержимое
-dirty файлов; stdin закрыт, interactive Git prompt запрещён, каждая команда
-имеет default timeout 30 секунд (`--timeout-seconds` меняет bounded limit).
-`status=partial`, `relation=unknown` либо `paths_truncated=true` не разрешают
-оптимистически считать scope независимым. `remote_error` и `status_error`
-различают timeout/spawn/Git surface без утечки raw stderr. Untracked directory
-считай prefix всей subtree при overlap check; helper не разворачивает её ради
-экономии I/O.
-Helper читает checkout HEAD, local default ref и porcelain status дважды в
-одной bounded операции. `changed_during_probe=true` означает torn snapshot и
-всегда даёт `status=partial` и запрещает shared mutation; отдельный model-level
-«confirming read» не может превратить его в stable evidence.
-
-Поля helper отображаются в receipt так: `remote_sha -> observed_sha`,
-`local_default_ref -> local_default`, `fingerprint -> baseline/current`, а
-`checkout_discovery + status_state + relation + dirty` дают observation/action.
-`remote_status=missing`, ambiguous checkout discovery или отсутствующий remote
-SHA — `unknown/stop`, не нормальный empty repository.
-
-Helper сознательно не materialize-ит новый remote object. Если `remote_sha`
-ещё отсутствует локально и relation=`unknown`, один раз получи advertised SHA
-в isolated temporary object database (до claim) либо task-owned observation
-namespace (после claim), не обновляя local default/remote-tracking ref, затем
-докажи ancestry. Не удалось — оставь `unknown` и stop/freeze; не угадывай
-`behind|ahead|diverged`.
-
-Перепроверяй snapshot только на естественных границах:
-
-1. preflight и recovery;
-2. перед dispatch/refill, если внешний state изменился или ownership может
-   пересечься;
-3. перед ingest/seal и global gate;
-4. непосредственно перед default action intent/CAS и сразу после push;
-5. перед deploy, tag, Linear `Done` и terminal owner completion;
-6. после неожиданного Git/CAS failure или явного сигнала о другой работе.
-
-Один свежий snapshot обслуживает все действия одной границы. При новом
-fingerprint сними ровно один confirming snapshot и один remote read. Если два
-local snapshot различаются, это `active-unknown`; не опрашивай в цикле.
-
-## Классифицировать состояние
-
-Сравни paths, включая rename/delete и non-ignored untracked, с actual feature
-diffs, ownership paths, `OPEN_CUTOFF`, `ACTIVE_CUTOFF` и control surfaces:
-
-- invoked skill bundle и `AGENTS.md`;
-- manifests/lockfiles/toolchain и scripts/workflows, определяющие gates;
-- schemas/migrations либо generated source, влияющие на несколько lanes;
-- `.openai/hosting.json`, release runbook, version/deploy/rollback config.
-
-До первого claim dirty/untracked invoked skill contract — существующий hard
-stop; dirty instruction surface тоже запрещает claim. Не коммить и не
-откатывай эти файлы за пользователя. В active run изменение contract/instruction
-surface останавливает новый dispatch и shared actions до tracked migration.
-
-Храни наблюдение отдельно от решения:
-
-```text
-observation = clear | isolated-dirty | overlap | ahead | diverged |
-              active-unknown | unknown
-action = continue | quarantine | branches-only | freeze-shared | stop
-```
-
-`quarantine` — только scheduler state: не dispatch-и/не ingest-и affected
-paths, claims и refs. Никогда не перемещай и не меняй чужие файлы.
-
-## Зафиксировать HOLD или PAUSE
-
-В active run до остановки affected lane создай exact durable record из
-[receipts.md](receipts.md) и сохрани его ID в `HOLD_PAUSE_INDEX`/
-`PROMOTION_HOLD`. Scope перечисляет только затронутые issue/paths либо
-`integration|gate|default|deploy|tag|linear|all-shared`; reason и evidence
-ссылаются на bounded snapshot, resume predicate задаёт fresh проверяемое
-условие.
-
-- Для automatically verifiable safety condition используй `HOLD`; lift —
-  отдельный expected-old CAS только после predicate evidence.
-- Когда продолжение требует решения/подтверждения пользователя, используй
-  `PAUSE confirmation_required=yes`. Даже если snapshot позже выглядит чистым,
-  нужны и predicate evidence, и явное user confirmation после создания pause.
-- Goal auto-continuation, новый turn, compaction, timeout или same-owner resume
-  не снимают pause. В начале каждого turn прочитай active records до mutations.
-- До initial repo-global claim записать durable record нельзя: оставайся
-  read-only и сообщи preflight blocker, не создавая claim ради pause.
-
-Projection comment не является authority и не заменяет ledger CAS. Незатронутые
-branch lanes могут продолжаться только при доказанной независимости.
-
-## Реагировать по матрице
-
-| Наблюдение | Shared lane | Issue pool |
-| --- | --- | --- |
-| Нет default checkout/local ref, remote default точно существует; либо checkout clean и refs ожидаемы | Продолжай normal path от exact remote. | Work-conserving refill. |
-| Stable dirty/untracked, local ref `equal|behind`, paths disjoint от claims, cutoffs и control | Продолжай exact clean-worktree gate/CAS; чужие bytes исключены. | Продолжай и сообщи один раз. |
-| Stable overlap только с active claims или `OPEN_CUTOFF` | Quarantine affected claims/refs; durable scoped `HOLD`, независимый cutoff можно продолжить. | Доведи affected worker до bounded receipt без ingest; refill только disjoint lanes. |
-| Overlap с `ACTIVE_CUTOFF` либо release/gate/control surface | Durable `HOLD`: freeze seal/global gate/default/deploy/tag/Done. | Только доказанно disjoint branches от pinned good base; иначе drain. |
-| Local default `ahead` (включая clean committed work) | `PAUSE confirmation_required=yes`; не обходи вероятное unpushed intent: shared lane frozen. | `branches-only` от exact remote/good base; task-owned feature refs/receipts queued. |
-| Local default `diverged` или необъяснимо сдвинулся | `PAUSE confirmation_required=yes`; freeze shared actions, не merge/rebase/reset автоматически. | Не dispatch-и новое; proven-disjoint in-flight доведи до bounded receipt, затем `needs-input`. |
-| Snapshot меняется, discovery/status/ref/index/remote нельзя однозначно прочитать, remote missing либо paths truncated/unknown | Durable `HOLD active-unknown`: stop all new mutations; не удаляй чужой lock. | In-flight workers только до bounded receipts; затем stop. |
-| Dirty invoked contract/instructions до claim | Никакого claim/action intent. | Не dispatch-и; сообщи, что нужен tracked contract. |
-
-`relation=behind` не отменяет run-level `EXPECTED_DEFAULT_SHA`: если remote
-ушёл от него, сначала выполни drift/rebuild ниже. Dirty control/instruction
-surface до claim — полный read-only hard stop: нельзя создавать worktree,
-branch, claim или даже provably disjoint feature lane, пока contract не станет
-tracked и clean. Dirty non-control paths обрабатываются по матрице.
-
-Локальная Git/index lock не является GitHub outage и не разрешает waiver.
-Сделай один bounded retry на следующей natural boundary; затем сохрани evidence
-и stop/`needs-input`. Не убивай процесс и не удаляй lock другого checkout.
-
-## Обработать remote drift
-
-Перед каждой irreversible boundary прочитай exact remote default. Check-then-
-push недостаточно: default push всё равно требует expected-old CAS.
-
-### Fast-forward до нашего push
-
-1. Поставь `default=drifted`, создай scoped `HOLD` с predicate exact rebuild/
-   validation evidence, не выполняй старый action intent/push/deploy.
-2. Fetch-ни exact commit в task-owned observation/train namespace, не в local
-   default ref, и классифицируй range/paths/control changes.
-3. Создай fresh train/cutoff generation от нового remote SHA. Переиграй
-   topologically exact non-overlapping feature refs; overlapping refs
-   quarantine/supersede и requeue с новой claim generation.
-4. Изменившееся tree получает новый validation key и ровно один новый global
-   gate. Не повторяй неизменённые feature-local checks.
-5. Если drift disjoint и gates проходят — сообщи reconciliation и продолжай.
-
-Если remote уже равен candidate, reconcile фактический push вместо повтора.
-Если remote содержит candidate плюс чужие commits, candidate evidence можно
-сохранить, но release/Done требуют новой exact-head generation и global gate.
-
-### Non-fast-forward, rewrite или удаление ref
-
-Не force-push, не reset и не пытайся «починить» историю. Freeze shared
-mutations, сохрани exact expected/observed SHAs, drain workers до bounded
-receipts и durable-запиши `PAUSE confirmation_required=yes` с exact resolution
-predicate, затем верни `needs-input`. Goal continuation не снимает pause. То же
-правило действует, если remote change
-меняет contract/security/release semantics или его scope нельзя доказать.
-
-### Drift после нашего push
-
-Если remote продвинулся после candidate push, но до deploy/tag/Linear `Done`,
-старый cutoff больше не доказывает exact current default. Не deploy-и, не
-тегируй и не закрывай issue: создай scoped `HOLD`, reconcile/reseal новую
-generation и lift-ни его только по exact gate/current-head evidence. Если deploy
-уже случился, сохрани version/deployment evidence и не rollback-и только из-за
-Git drift; однако `Done`/completion запрещены до восстановления exact Git/live
-alignment.
-
-## Сообщать только переходы
-
-Никакой telemetry на каждый snapshot. Сообщай пользователю сразу при смене
-disposition и один раз при продолжении:
-
-```text
-foreign-main=isolated-dirty; relation=<equal|behind>; overlap=none;
-action=continue; mode=isolated; external checkout untouched/excluded; promotion=CAS
-
-foreign-main=overlap; scope=<paths/control/issues>; action=quarantine <items>;
-hold=<id@exact-scopes>; independent-pool=<continues|drains>
-
-foreign-main=ahead; action=branches-only; integration=paused;
-pause=<id>; confirmation=required; workers=proven-disjoint-from-origin;
-required=finish/push/move/handoff local main + explicit confirm
-
-foreign-main=diverged; action=freeze-shared; result=needs-input; dispatch=stopped;
-pause=<id>; confirmation=required; workers=drain-proven-disjoint;
-required=resolve/handoff without altering checkout + explicit confirm
-
-foreign-main=active-unknown; action=stop; new-mutations=none; workers=draining-only;
-hold=<id>; required=stable readable snapshot; external checkout/lock untouched
-
-foreign-main=reconciled; remote=<old>-><new>; generation=<id>;
-reused=<refs>; rerun=targeted-affected+one-cutoff-gate; action=continue
-```
-
-Не утверждай, кто автор изменений, если это не доказано. При successful remote
-push из clean worktree отдельно скажи, что local primary checkout оставлен
-нетронутым и теперь может быть `behind`.
-
-## Восстановиться
-
-Используй canonical order и fencing из
-[crash-recovery.md](crash-recovery.md). Этот файл отвечает только за его
-foreign-main substep: после exact origin refs сними fresh primary-checkout
-snapshot, вычисли disposition и до CI/Sites/Linear зафиксируй affected hold.
-Сначала усынови уже active HOLD/PAUSE; не создавай новый ID для того же evidence
-и не lift-и confirmation-required pause без explicit user confirmation.
-
-Записывай `PRIMARY_CHECKOUT`, `INTERFERENCE` и `PROMOTION_HOLD` из
-[receipts.md](receipts.md) только при обнаружении, смене policy, rebuild,
-reconciliation или terminal `needs-input`; неизменный snapshot не порождает
-comment. Чужой checkout никогда не является recovery source of truth.
+Сначала объясни обычным языком, что изменилось и почему продолжать небезопасно,
+что skill уже успел сделать и в каком состоянии остались Git/Linear/release.
+Raw status/helper JSON — только вторичное evidence.

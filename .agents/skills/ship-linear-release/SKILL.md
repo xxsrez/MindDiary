@@ -41,11 +41,13 @@ tracked contract, dirty skill, coordinator refs, route и
 
 Следуй `route`:
 
-- `blocked` — не мутируй ничего; сообщи точную причину;
+- `blocked` — не мутируй ничего; сформируй человеческий critical-error overview,
+  а не пересылай raw helper/subagent output;
 - `recovery` — прочитай только выданные `required_references`, докажи owner и
   применяй [crash-recovery.md](references/crash-recovery.md);
-- `takeover` — не читай Linear/Goal/references и не проси ручного takeover;
-  первым mutable call выполни `shipctl.py takeover`, затем `fence-guards`;
+- `takeover` — coherent `handoff-ready` либо чужой `active`, но durable-quiescent
+  owner; не читай Linear/Goal/references и не проси stop-proof. Первым mutable
+  call выполни `shipctl.py takeover`, затем `fence-guards`;
 - `resume` — допустим только когда переданный stable owner-proof совпал; затем
   читай те же recovery references и продолжай сохранённый run;
 - `drain-owner` — прочитай [soft-pause.md](references/soft-pause.md) и продолжай
@@ -88,6 +90,10 @@ duplicate Git/Linear/tool discovery = 0
 агентом по issue должен быть её worker. Если ownership нельзя определить из
 issue и `rg`, тот же worker возвращает `SCOPE_REFINEMENT`; coordinator сужает
 manifest и продолжает ту же issue, не создавая отдельного исследователя.
+Чистый explicit запуск не может закончить warm-up сообщением
+`already-running`, если durable state одновременно показывает zero running,
+zero live claims, no pending effect и terminal либо отсутствующие batch/gate/
+deploy. Отсутствие runtime liveness API в этом случае не является blocker.
 
 ## Разобрать запуск и capacity
 
@@ -145,8 +151,9 @@ runtime/resource capacity требует остановки с числами, �
 running=0 требует объяснить dependency cycle, unknown blocker или acceptance
 contradiction до мутаций; отсутствие ещё не реализованного service само по себе
 не blocker. При `auto` используй вычисленный target. Не называй time-sliced root
-ещё одним устойчивым worker. `workers=1` — fused coordinator-inline, но issue
-всё равно исполняется в отдельном worktree.
+ещё одним устойчивым worker. `workers=1` — fused coordinator-inline в feature
+branch primary checkout без дополнительного worktree. При `workers>1` root
+остаётся dedicated coordinator, а каждая issue получает отдельный worktree.
 
 До первой мутации дай одну строку:
 
@@ -154,7 +161,7 @@ contradiction до мутаций; отсутствие ещё не реализ
 mode=linear-milestone-delivery; unfinished=<n>;
 ready=<n>; workers=<requested/sustained>; runtime-slots=<total>;
 delegated=<n>; opportunistic-inline=<0|1>; owner=<new|same|other>; route=<route>;
-checkout=<clean|isolated-dirty>; pipeline=<state>; foreign-main=<state>;
+checkout=<clean>; pipeline=<state>; foreign-main=<state>;
 external-gates=<not-required|pending|ready|blocked>; gaps=<unavailable>
 ```
 
@@ -204,7 +211,10 @@ fast-forward default CAS и required configured production Sites deployment/tag.
 3. После snapshot и успешного `launch-check` при fresh work первое mutable
    действие — repo-global coordinator claim по
    [coordination.md](references/coordination.md). CAS loser остаётся read-only.
-   Active чужой owner — `already-running`; timeout сам по себе не даёт takeover.
+   Active чужой owner с running/live/pending/ambiguous state —
+   `already-running`. Но coherent durable-quiescent active owner при clean
+   repository автоматически даёт `route=takeover`; runtime stop-proof и timeout
+   для этого пути не нужны.
    `route=takeover` означает ровно один разрешённый mutable шаг: expected-old
    CAS repo-global claim с `epoch+1`; до его победы и fencing никакие другие
    Git/Linear/worktree mutations не разрешены. Fully reconciled
@@ -254,6 +264,16 @@ fast-forward default CAS и required configured production Sites deployment/tag.
    intent и сохраняет `CONTRACT_MIGRATED_FROM`. Upgrade допустим только для
    того же runtime owner, coherent старого contract и fast-forward
    `CONTRACT_SOURCE_SHA -> origin/main`; другой mismatch остаётся read-only.
+   После fencing/sync, если inventory доказывает `CLAIM_INDEX.active=none`,
+   `LIVE_GUARDS=none`, `RECOVERY.unresolved=none`, terminal/absent pipeline и
+   clean repo-wide snapshot, не оставляй run в пустом recovery:
+
+   ```bash
+   python3 .agents/skills/ship-linear-release/scripts/shipctl.py resume-recovery \
+     --repo "$PWD" --remote origin --default main
+   ```
+
+   Только `status=resumed|already-running` разрешает normal snapshot/dispatch.
 4. Генерируй identities детерминированным helper, не JavaScript snippets:
 
    ```bash
@@ -287,12 +307,15 @@ Exact input/result JSON см. в [receipts.md](references/receipts.md#linear-pro
 ## Подготовить и запустить worker
 
 Coordinator не читает продуктовые документы. Он строит ownership paths из
-issue + `rg`, создаёт отдельный worktree/branch от exact pinned base и формирует
-JSON manifest с полями, требуемыми `shipctl manifest`. До dispatch проверь его:
+issue + `rg` и формирует JSON manifest с полями, требуемыми `shipctl manifest`.
+При `workers=1` переключи clean primary checkout с `main` на feature branch и
+используй `checkout_mode=primary`; при `workers>1` создай отдельный worktree и
+используй `checkout_mode=worktree`. Подготовь checkout до dispatch:
 
 ```bash
 python3 .agents/skills/ship-linear-release/scripts/shipctl.py provision-worktree \
   --repo <repo> --worktree <worker-worktree> \
+  --checkout-mode <primary|worktree> \
   --path <ownership-path> [--path <ownership-path> ...] --install
 ```
 
@@ -315,7 +338,7 @@ python3 .agents/skills/ship-linear-release/scripts/shipctl.py docs \
 ```
 
 Manifest содержит как минимум run/owner/epoch, claim generation/token,
-issue/project/milestone IDs, repo/worktree/branch, feature+guard refs/tip,
+issue/project/milestone IDs, repo/worktree/branch, `checkout_mode`, feature+guard refs/tip,
 exact coordinator SHA, 128-bit `run_key`, root/base/dependency SHAs, queue fingerprint, semantic
 `scope_fingerprint`, отдельный operational Linear `updatedAt`, ownership paths,
 fresh executor lease, isolated env/cache/tmp/ports и remote mode.
@@ -350,8 +373,10 @@ subagents и не переиспользуется для другой issue. О
 ровно один executor lease за всю жизнь; `followup_task` для второй issue
 запрещён. Передай только manifest,
 выданные docs и ссылку на [issue-worker.md](references/issue-worker.md).
-Coordinator-inline следует тому же протоколу в отдельном worktree. Worker не
-меняет default, Linear, Sites, tags или milestone state.
+Coordinator-inline следует тому же протоколу в primary checkout только при
+`workers=1`; delegated worker всегда использует отдельный worktree. Worker не
+меняет default, Linear, Sites, tags или milestone state; feature в `main`
+всегда интегрирует coordinator.
 
 Проверяй receipt только машинно по exact identities, HEAD/ref/guard, semantic
 scope freshness, ownership diff и заявленным targeted checks:
@@ -373,15 +398,29 @@ guard при `feature_ready` остаются live до terminal integration dis
 Границу и канонический `REFILL` record считай только `shipctl.py refill-check`;
 `spawned_at` позже observation не очищает доказательство пропущенного SLA.
 
-## Continuous pool и cutoffs
+Перед dispatch, ingest/merge, gate, default push, deploy/tag/Linear Done и
+terminal completion выполни один fresh repo-wide guard. Передай exact текущие
+`expected_worktrees` для всех linked checkout, dirty ownership/action bindings
+и, когда применимо, expected refs:
+
+```bash
+python3 .agents/skills/ship-linear-release/scripts/shipctl.py repo-guard \
+  --repo "$PWD" --input <registered-actions.json>
+```
+
+`critical-stop` немедленно запрещает новые edits/commits/merges/release actions;
+не stash/reset/clean чужие bytes. Один snapshot обслуживает одну boundary.
+
+## Continuous pool и batches
 
 Полные fencing/CAS правила — в [coordination.md](references/coordination.md).
 
 - Никаких waves/barrier. Same-path conflict образует serial lane, но не
   останавливает независимые issue.
-- `OPEN_CUTOFF` принимает ready refs по одной feature после cheap ingest gate.
-  Один `ACTIVE_CUTOFF` выполняет global gate/default/deploy. Поздние refs идут
-  в следующий cutoff; cutoff не ждёт in-flight workers.
+- Coordinator после cheap ingest gate последовательно merge-ит ready feature в
+  local `main`; `OPEN_CUTOFF` описывает ещё не запечатанный prefix. Один
+  `ACTIVE_CUTOFF` выполняет global gate/default/deploy. Поздние refs идут в
+  следующий batch; batch не ждёт in-flight workers.
 - Trigger при занятом ACTIVE защёлкивает exact train head+membership digest;
   после terminal ACTIVE этот prefix seal-ится раньше любого late ingest.
 - Worker использует exact ready ancestor только для code dependency; release
@@ -400,8 +439,12 @@ guard при `feature_ready` остаются live до terminal integration dis
   conveyor-next`; persisted ledger/projection обязаны использовать выданный
   `transition_digest`. Неверный event order или неполное evidence fail closed.
 
-На worker/ingest запускай только targeted checks, smoke и `git diff --check`;
-full repository gate всегда принадлежит sealed cutoff. Для каждой
+На worker/merge запускай только targeted checks, smoke и `git diff --check`;
+full repository gate всегда принадлежит sealed batch. Boundary не имеет fixed
+size/timer: выбирай заметный unit по связности, риску, размеру, цене gate и
+состоянию очереди; urgent/idle/final закрывают batch раньше. Проверь один typed
+fact-vector через `shipctl.py batch-boundary --input <boundary.json>`; только
+`status=validated` разрешает seal либо keep-open. Для каждой
 `cutoff/generation/validation key` создай один durable `GATE_RESULT` и один
 deduplicated canonical plan: не запускай aggregate command вместе с уже
 покрытыми им subcommands. Terminal artifact после compaction/lost handle усынови,
@@ -446,6 +489,14 @@ persistence и MCP smoke, saved previous stable + rollback evidence, затем
 immutable tag только по tracked version policy. Один UI, локальный MCP или
 capability probe не заменяют этот contract.
 
+Перед publish передай capability vector в `shipctl.py release-lock-plan --input
+<lock.json>`. Если helper требует acquire, используй только выданную реальную
+provider operation. Если
+она есть, acquire выполняется до publish, conditional release — matching owner
+после terminal reconcile. Если её нет, продолжай с evidence
+`release_lock=unsupported/skipped`; файл/comment/marker lock-ом не является.
+Оставшийся настоящий lock не force-unlock-и без явного подтверждения пользователя.
+
 Недоступный client/platform gate — `not-available`, а не pass. Если его прямо
 требует acceptance/release contract, issue остаётся unfinished. Production
 smoke failure: не ставь `Done`, redeploy exact previous stable, проверь rollback
@@ -474,7 +525,9 @@ pool-status`: он показывает `running/sustained`, `active_target`, re
 и точную причину незаполненной capacity без чтения экранов subagents.
 
 Issue переводится в completed-state только после terminal guard и полного
-acceptance evidence. После двух fresh согласованных Linear snapshot без
+acceptance evidence. Перед успешным завершением всегда запечатай финальный
+batch и выполни один full gate exact финального `main` SHA; применимый production
+release обязателен даже для маленького остатка. После двух fresh согласованных Linear snapshot без
 unfinished issue/active artifacts, healthy default и полного ledger сначала
 CAS-terminalize owner ref и guards, затем проверь `shipctl.py status`, выполни
 `cleanup-plan`/`cleanup-apply` для clean merged claim-bound task worktrees;
@@ -486,6 +539,13 @@ running worker, pending CI/gate и recoverable CAS race не являются bl
 Быстрые auto-continuation с тем же fingerprint считаются одним наблюдением;
 transient dirty control surface дополнительно наблюдай не менее пяти минут по
 [soft-pause.md](references/soft-pause.md).
+
+Любой critical/blocked итог сначала синтезируй человеческим языком: что
+произошло и почему продолжать нельзя, стадия run, уже сделанные изменения,
+состояние `main`/branches/worktrees/Linear/release и минимальное следующее
+действие. Проверь bounded fact-vector через `shipctl.py critical-overview
+--input <critical.json>` и используй его `overview`. Raw helper JSON, worker message или stack trace допустимы только как
+вторичное evidence.
 
 Если пользователь меняет этот процесс, сначала обнови и проверь skill через
 `skill-creator`.

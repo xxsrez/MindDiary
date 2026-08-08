@@ -39,18 +39,17 @@ policy здесь.
 worker pool продолжает работу, свободные slots немедленно заполняются, а новые
 ready refs поступают в open cutoff. Не жди завершения уже работающих issues.
 
-Integration train использует отдельный clean worktree и generation ref вида
-`codex/release/train/<run-key>/g<generation>`. Каждый принятый feature SHA
-добавляй отдельным merge/cherry-pick commit с issue ID, claim generation,
-feature SHA/ref и dependency SHAs, затем fast-forward push ref. Поэтому
-ordered membership восстановим по одной feature, но default остаётся за global
-gate. Никогда не собирай train в пользовательском либо dirty checkout.
-Local default ref не является train/aggregate ref и coordinator его не двигает.
+Integration head — coordinator-owned local `main`. При `workers=1` это clean
+primary checkout; при `workers>1` — зарегистрированная coordinator integration
+surface, отдельная от worker worktrees. Каждый принятый feature SHA добавляй
+отдельным merge/cherry-pick commit с issue ID, claim generation, feature SHA/ref
+и dependency SHAs. Ordered membership восстанавливается по integration commits,
+а remote `main` остаётся неизменным до global gate и expected-old promotion.
 
-Sealed active SHA может оставаться immutable ancestor движущегося train ref.
-Если active prefix позднее оказался плохим, не force-rewrite опубликованный
-train: создай новую generation от доказанного good base, перенеси только
-разрешённые refs и supersede старый open cutoff.
+Sealed active SHA может оставаться immutable ancestor движущегося local `main`.
+Если active prefix позднее оказался плохим, не reset/rewrite `main`: добавь
+explicit revert/fix integration commit, создай новую generation и supersede
+старый open cutoff.
 
 ## Принять одну feature
 
@@ -89,10 +88,10 @@ slot -> refill -> enqueue ingest -> projections/bookkeeping.
 6. Не запускай full repository suite, locked reinstall, aggregate release
    command, все browser flows, MCP clients или production smoke на feature/
    ingest. Full gate всегда принадлежит sealed cutoff.
-7. До push CAS-запиши отдельный ingest action intent: expected/successor train SHA,
-   feature/claim, resulting membership digest и latched timer. Fast-forward
-   push-ни train ref expected-old, перечитай origin и только после exact
-   successor upsert-ни `accepted` projections. Git train action не включай в
+7. До merge CAS-запиши отдельный ingest action intent: expected/successor local
+   main SHA, feature/claim и resulting membership digest. Выполни registered
+   merge только от exact expected HEAD, проверь successor и лишь после этого
+   upsert-ни `accepted` projections. Git integration action не включай в
    projection batch. Независимые Linear comment/status updates можно выполнить
    одним batch intent и item-wise reconcile после Git reconciliation.
    Crash/partial update разрешай по [crash-recovery.md](crash-recovery.md), не
@@ -108,25 +107,26 @@ wave. Downstream ref со старым dependency SHA становится `supe
 ## Закрыть cutoff
 
 Cutoff — snapshot accepted prefix, а не ожидание тишины. Когда нет другого
-`ACTIVE_CUTOFF`, закрой `OPEN_CUTOFF` по первому условию:
+`ACTIVE_CUTOFF`, закрой `OPEN_CUTOFF`, когда compact evidence показывает:
 
-- accepted count достиг `CUTOFF_SIZE`;
-- oldest accepted feature ждёт `max_ready_wait`;
+- накопился заметный cohesive unit с оправданной ценой одного full gate;
 - pool стал idle, а open cutoff не пуст;
 - urgent stabilization/regression/hotfix требует fast lane;
 - resource/risk boundary требует проверить уже собранный prefix до продолжения.
+- run заканчивается и нужен обязательный финальный batch.
 
-Если repo/user не задаёт значения, используй
-`CUTOFF_SIZE=max(2,min(sustained_issue_capacity,4))` и `max_ready_wait=5m`. Не заводи
-отдельный polling timer: после каждого mailbox/ref/integration event проверяй
-условия, а ожидание worker event ограничивай ближайшим max-wait cutoff. Новая
-feature не сбрасывает deadline; часовая issue никогда не удерживает минутную
-ready feature дольше этого окна.
+Не задавай default size или timer. Boundary выбирай по cohesion, risk, накопленному
+size, стоимости gate и queue state. В стабильном потоке мелких задач не закрывай
+batch после каждой карты; в то же время не жди долгую in-flight issue только
+ради размера, если готовый prefix уже осмыслен либо pool idle.
+Перед seal/keep-open передай один typed fact-vector в `shipctl.py
+batch-boundary --input <boundary.json>`. Helper не выбирает продуктовую
+cohesion за coordinator-а, но запрещает fixed timer/count semantics и требует
+seal для urgent, idle и final state.
 
-После recovery восстанови ordered accepted set из exact train-ref commits,
-сверь `FEATURE_RECEIPT.INTEGRATION` и используй сохранённые `first_eligible_at`,
-`CUTOFF_SIZE`, `max_wait_at` и pending trigger. Противоречие freeze-ит sealing,
-а не сбрасывает deadline или membership.
+После recovery восстанови ordered accepted set из exact local-main/integration
+commits, сверь `FEATURE_RECEIPT.INTEGRATION` и сохранённую pending boundary.
+Противоречие freeze-ит sealing, а не пересчитывает membership.
 
 Если trigger сработал при занятом `ACTIVE_CUTOFF`, немедленно создай durable
 pending seal ticket с exact train head, ordered membership digest/count, reason
@@ -147,10 +147,9 @@ expected-absent создай immutable ref
 `locally-integrated` без default/Done. Новые ready refs относятся только к
 следующему open cutoff.
 
-Перед sealing сними foreign-main/remote snapshot. Overlap с membership либо
-control surface не попадает в immutable cutoff: quarantine affected refs или
-freeze sealing по [external-main.md](external-main.md). Stable disjoint dirt
-не входит в candidate и не мешает sealing из clean worktree.
+Перед sealing выполни repo-wide guard и сними remote snapshot. Любой
+незарегистрированный dirt/HEAD/ref delta даёт critical stop по
+[external-main.md](external-main.md); он не исключается оптимистически из candidate.
 
 ## Выполнить global gate
 
@@ -195,9 +194,9 @@ python3 .agents/skills/ship-linear-release/scripts/gatectl.py status \
   --state-dir <absolute-task-owned> --validation-key <64-hex>
 ```
 
-Global gate использует только task-owned clean worktree и отдельные mutable
-tmp/cache/build/runtime paths/ports; outputs primary checkout не являются cache
-hit или evidence.
+Global gate использует exact clean coordinator checkout и отдельные mutable
+tmp/cache/build/runtime paths/ports. В single-worker это clean primary `main`;
+в multi-worker — coordinator integration surface, никогда worker worktree.
 Каждый timeout становится immutable terminal failure с `failure_kind`; helper
 завершает process group. Shell/wrapper argv, duplicate step и aggregate вместе
 с покрываемыми subcommands отклоняются до исполнения.
@@ -226,8 +225,8 @@ projection-batch и не выполняй вторую default/deploy lane па�
    недостаточно. Lease разрешён только как CAS для доказанного fast-forward и
    никогда не разрешает history rewrite.
 3. После push поставь `DEFAULT_HEALTH=pending`, независимо прочитай remote ref
-   и foreign-main snapshot, потребуй exact candidate SHA. Local default ref и
-   primary checkout не обновляй. До terminal результата второй push запрещён.
+   и repo-wide snapshot, потребуй exact candidate SHA. Local `main` уже обязан
+   равняться candidate; до terminal результата второй push запрещён.
 4. Дождись terminal required CI именно этого SHA, если CI настроен. Pre-push
    evidence не заменяет post-push required CI. Outage передай
    `github-outage.md`.
@@ -243,7 +242,11 @@ projection-batch и не выполняй вторую default/deploy lane па�
    tracked config/runbook. Отсутствующие service/config/test/automation внутри
    уже принятого scope маршрутизируй как implementation work, а не prerequisite
    пользователя. До deploy докажи exact `previous_stable` и rollback artifact.
-   Создай/найди artifact exact validated SHA, deploy один раз и проверь required
+   Проверь capability через `shipctl.py release-lock-plan --input <lock.json>`.
+   При наличии
+   acquire-ни lock с run/fencing identity до publish; при отсутствии запиши
+   `release_lock=unsupported/skipped` и не симулируй marker. Создай/найди
+   artifact exact validated SHA, deploy один раз и проверь required
    authenticated web/control, persistence и MCP client flows.
 8. Только после live pass создай immutable annotated tag, если tracked version
    policy его требует. Не выводи version из произвольного milestone name и не
@@ -259,6 +262,12 @@ projection-batch и не выполняй вторую default/deploy lane па�
    gated -> promoted -> projected -> terminal` предварительно проверь через
    `shipctl.py conveyor-next` и сохрани выданный transition digest.
 
+Настоящий release lock conditional-освобождается только matching owner после
+terminal deploy/reconciliation. Оставшийся после failure lock не удаляй: сначала
+объясни owner/target/stage/risk и выполняй `force-unlock` только после явного
+подтверждения пользователя. Plain file/comment/environment marker lock-ом не
+является.
+
 Default push и production deploy сериализованы по cutoff. Feature refs и train
 head публикуются по одной feature; это даёт durable progress без многократного
 full gate/deploy.
@@ -271,8 +280,9 @@ full gate/deploy.
 - feature-local до default — исключи feature и stacked descendants, верни
   исходную issue в `In Progress`, выдай новый claim generation и продолжай
   независимый train;
-- tiny candidate-only repair — создай coordinator-inline manifest, отдельный
-  task worktree/branch/guard, сделай один минимальный fix commit и affected
+- tiny candidate-only repair — создай coordinator-inline manifest и отдельную
+  feature branch: primary checkout при single-worker, task worktree при
+  multi-worker. Сделай один минимальный fix commit и affected
   check, затем reseal и один новый global gate; прямой непроверенный commit в
   default запрещён;
 - independent/complex regression — создай deduplicated linked Bug, при
