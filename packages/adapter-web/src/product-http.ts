@@ -9,6 +9,27 @@ import {
   type SitesIdentityRequestContext,
   type TrustedSitesIdentitySnapshot,
 } from "./sites-identity-binding.js";
+import {
+  renderAuthenticatedOnboardingDocument,
+  type AuthenticatedOnboardingModel,
+} from "./onboarding.js";
+import {
+  renderMindDiaryUiShellDocument,
+  type MindDiaryUiShellModel,
+  type UiMindCard,
+} from "./ui-shell.js";
+import {
+  renderMcpTokenManagementDocument,
+  type McpTokenManagementModel,
+  type McpTokenUiToken,
+} from "./token-management.js";
+import {
+  PRODUCT_UI_CLIENT_JAVASCRIPT,
+  PRODUCT_UI_LOCKUP_SVG,
+  PRODUCT_UI_MARK_SVG,
+  PRODUCT_UI_SHELL_CSS,
+  PRODUCT_UI_TOKENS_CSS,
+} from "./product-ui-assets.js";
 
 type RegisteredSitesActor = Extract<
   ControlBoundaryMarker["actor"],
@@ -127,7 +148,7 @@ const MAX_JSON_BYTES = 64 * 1024;
 const SAFE_HEADERS = Object.freeze({
   "cache-control": "no-store",
   "content-security-policy":
-    "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+    "default-src 'none'; style-src 'self'; img-src 'self'; script-src 'self'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
   "referrer-policy": "no-referrer",
   "x-content-type-options": "nosniff",
   "x-frame-options": "DENY",
@@ -224,29 +245,213 @@ function snakeOutput(value: unknown): unknown {
   );
 }
 
-function page(input: {
-  readonly title: string;
-  readonly subtitle: string;
-  readonly csrfToken: string;
-  readonly route: string;
-  readonly registrationRequired: boolean;
-}): Response {
-  const body = `<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${escapeHtml(input.title)} · Mind Diary</title>
-<style>:root{color-scheme:light;--ink:#17221d;--leaf:#255b45;--paper:#f6f0e5;--sun:#e5a94d}*{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:16px/1.55 ui-sans-serif,system-ui,sans-serif}header,main{max-width:72rem;margin:auto;padding:1.25rem}header{display:flex;align-items:center;justify-content:space-between}a{color:var(--leaf)}.brand{font:700 1.15rem Georgia,serif}.hero{padding:7vh 0 3rem;max-width:48rem}h1{font:700 clamp(2.5rem,7vw,5.5rem)/.98 Georgia,serif;margin:.3rem 0 1rem}p{max-width:42rem}.card{background:#fffaf2;border:1px solid #d8cfbf;border-radius:1rem;padding:1.25rem;box-shadow:0 12px 35px #45372212}.button{display:inline-block;border:0;border-radius:999px;background:var(--leaf);color:white;padding:.75rem 1.1rem;text-decoration:none}.eyebrow{color:var(--leaf);font-weight:700;letter-spacing:.08em;text-transform:uppercase;font-size:.75rem}</style></head>
-<body><header><a class="brand" href="/">Mind Diary</a><nav><a href="/me">My Mind</a></nav></header><main>
-<section class="hero"><div class="eyebrow">Your shared, versioned memory</div><h1>${escapeHtml(input.title)}</h1><p>${escapeHtml(input.subtitle)}</p></section>
-<section class="card" data-route="${escapeHtml(input.route)}" data-registration-required="${String(input.registrationRequired)}"><p>${input.registrationRequired ? "Create an isolated account to begin. Existing access is never inferred from a similar identity." : "Open your Mind, browse exact immutable history, or manage collaboration from this authenticated control surface."}</p></section>
-<script type="application/json" id="mind-diary-session">${JSON.stringify({ csrf_token: input.csrfToken }).replaceAll("<", "\\u003c")}</script>
-</main></body></html>`;
-  return new Response(body, {
+function html(document: string): Response {
+  return new Response(document, {
     status: 200,
-    headers: {
-      ...SAFE_HEADERS,
-      "content-type": "text/html; charset=utf-8",
-    },
+    headers: { ...SAFE_HEADERS, "content-type": "text/html; charset=utf-8" },
   });
+}
+
+function withCsrfMeta(document: string, csrfToken: string): string {
+  return document.replace(
+    "</head>",
+    `  <meta name="mind-diary-csrf-token" content="${escapeHtml(csrfToken)}">\n</head>`,
+  );
+}
+
+function record(value: unknown): Readonly<Record<string, unknown>> | null {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? value as Readonly<Record<string, unknown>>
+    : null;
+}
+
+function requiredString(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function positiveInteger(value: unknown): number | null {
+  return Number.isSafeInteger(value) && Number(value) > 0 ? Number(value) : null;
+}
+
+interface ProductUiSession {
+  readonly displayName: string;
+  readonly profileVersion: number;
+  readonly personalMindName: string;
+}
+
+function uiSession(value: unknown): ProductUiSession | null {
+  const source = record(value);
+  const principal = record(source?.principal);
+  const personalMind = record(source?.personalMind);
+  const displayName = requiredString(principal?.displayName);
+  const profileVersion = positiveInteger(principal?.profileVersion);
+  const personalMindName = requiredString(personalMind?.name);
+  return displayName === null || profileVersion === null || personalMindName === null
+    ? null
+    : Object.freeze({ displayName, profileVersion, personalMindName });
+}
+
+function roleLabel(value: unknown): UiMindCard["role"] {
+  if (value === "editor") return "Editor";
+  if (value === "admin") return "Admin";
+  if (value === "owner") return "Owner";
+  return "Reader";
+}
+
+function uiMind(value: unknown): UiMindCard | null {
+  const source = record(value);
+  const access = record(source?.access);
+  const route = requiredString(source?.route);
+  const name = requiredString(source?.name);
+  const visibility = source?.visibility;
+  if (
+    route === null || name === null ||
+    !/^\/(?:me|[a-z0-9]+(?:-[a-z0-9]+)*)$/u.test(route) ||
+    !(visibility === "private" || visibility === "unlisted" || visibility === "public")
+  ) return null;
+  const isPersonal = source?.isPersonal === true;
+  return Object.freeze({
+    id: requiredString(source?.mindId) ?? route,
+    name,
+    route,
+    description: isPersonal
+      ? "Your private place for personal Memories."
+      : "A versioned Mind available through your current access.",
+    visibility,
+    role: roleLabel(access?.role),
+    updatedLabel: "Current HEAD is ready",
+    ...(isPersonal ? { isPersonal: true } : {}),
+  });
+}
+
+function uiToken(value: unknown): McpTokenUiToken | null {
+  const source = record(value);
+  const tokenId = requiredString(source?.tokenId);
+  const name = requiredString(source?.name);
+  const displayPrefix = requiredString(source?.displayPrefix);
+  const createdAt = requiredString(source?.createdAt);
+  const expiresAt = requiredString(source?.expiresAt);
+  const state = source?.state;
+  const rawScopes = source?.scopes;
+  if (
+    tokenId === null || name === null || displayPrefix === null ||
+    createdAt === null || expiresAt === null ||
+    !(state === "active" || state === "expired" || state === "revoked") ||
+    !Array.isArray(rawScopes)
+  ) return null;
+  const scopes = rawScopes.filter(
+    (scope): scope is "content:read" | "content:write" =>
+      scope === "content:read" || scope === "content:write",
+  );
+  if (scopes.length === 0) return null;
+  return Object.freeze({
+    tokenId,
+    name,
+    displayPrefix,
+    scopes: Object.freeze(scopes),
+    state,
+    createdAt,
+    expiresAt,
+    lastUsedAt: requiredString(source?.lastUsedAt),
+    revokedAt: requiredString(source?.revokedAt),
+  });
+}
+
+function staticAsset(pathname: string): { readonly body: string; readonly type: string } | null {
+  if (pathname === "/brand/mind-diary-tokens.css") return { body: PRODUCT_UI_TOKENS_CSS, type: "text/css; charset=utf-8" };
+  if (pathname === "/ui/mind-diary-shell.css") return { body: PRODUCT_UI_SHELL_CSS, type: "text/css; charset=utf-8" };
+  if (pathname === "/brand/mind-diary-lockup.svg") return { body: PRODUCT_UI_LOCKUP_SVG, type: "image/svg+xml; charset=utf-8" };
+  if (pathname === "/brand/mind-diary-mark.svg") return { body: PRODUCT_UI_MARK_SVG, type: "image/svg+xml; charset=utf-8" };
+  if (
+    pathname === "/ui/mind-diary-onboarding-client.js" ||
+    pathname === "/ui/mind-diary-shell-client.js" ||
+    pathname === "/ui/mind-diary-token-client.js"
+  ) return { body: PRODUCT_UI_CLIENT_JAVASCRIPT, type: "text/javascript; charset=utf-8" };
+  return null;
+}
+
+async function productUiDocument(input: {
+  readonly pathname: string;
+  readonly identity: Exclude<ProductSitesIdentityResolution, { readonly kind: "denied" | "unavailable" }>;
+  readonly csrfToken: string;
+  readonly control: ProductWebControlApplication;
+}): Promise<string> {
+  if (input.identity.kind === "registration_required") {
+    const model: AuthenticatedOnboardingModel = {
+      kind: "registration_required",
+      ...(input.identity.actor.suggestedDisplayName === undefined
+        ? {}
+        : { suggestedDisplayName: input.identity.actor.suggestedDisplayName }),
+      bootstrapIdempotencyKey: `bootstrap:${crypto.randomUUID()}`,
+      manualRecoveryStatus: "unavailable",
+    };
+    return withCsrfMeta(renderAuthenticatedOnboardingDocument(model), input.csrfToken);
+  }
+  const session = uiSession(await input.control.execute({
+    operation: "get_session",
+    actor: input.identity.actor,
+    input: Object.freeze({}),
+  }));
+  if (session === null) throw new TypeError("safe session projection is unavailable");
+
+  if (input.pathname === "/me") {
+    return withCsrfMeta(renderAuthenticatedOnboardingDocument({
+      kind: "authenticated",
+      displayName: session.displayName,
+      profileVersion: session.profileVersion,
+      personalMind: {
+        route: "/me",
+        name: session.personalMindName,
+        updatedLabel: "Current HEAD is ready",
+      },
+      profileUpdate: { kind: "idle", idempotencyKey: `profile:${crypto.randomUUID()}` },
+    }), input.csrfToken);
+  }
+
+  if (input.pathname === "/settings/mcp") {
+    let collection: McpTokenManagementModel["collection"];
+    try {
+      const listed = await input.control.execute({
+        operation: "list_mcp_tokens",
+        actor: input.identity.actor,
+        input: Object.freeze({}),
+      });
+      const tokens = Array.isArray(listed)
+        ? listed.map(uiToken).filter((token): token is McpTokenUiToken => token !== null)
+        : [];
+      collection = tokens.length === 0
+        ? { kind: "empty" }
+        : { kind: "ready", tokens: Object.freeze(tokens) };
+    } catch {
+      collection = { kind: "error", message: "Token metadata is unavailable. Try again." };
+    }
+    return withCsrfMeta(renderMcpTokenManagementDocument({
+      displayName: session.displayName,
+      collection,
+    }, "/ui/mind-diary-token-client.js"), input.csrfToken);
+  }
+
+  let collection: MindDiaryUiShellModel["collection"];
+  try {
+    const listed = await input.control.execute({
+      operation: "list_minds",
+      actor: input.identity.actor,
+      input: Object.freeze({}),
+    });
+    const minds = Array.isArray(listed)
+      ? listed.map(uiMind).filter((mind): mind is UiMindCard => mind !== null)
+      : [];
+    collection = minds.length === 0
+      ? { kind: "empty" }
+      : { kind: "ready", minds: Object.freeze(minds) };
+  } catch {
+    collection = { kind: "error", message: "Mind summaries are unavailable. Try again." };
+  }
+  return withCsrfMeta(renderMindDiaryUiShellDocument({
+    displayName: session.displayName,
+    activeNavigation: "minds",
+    collection,
+  }), input.csrfToken);
 }
 
 async function readInput(request: Request): Promise<Readonly<Record<string, unknown>>> {
@@ -359,8 +564,22 @@ export function createProductWebHttpHandler(
   const origin = canonicalOrigin(dependencies.applicationOrigin);
   return async (request) => {
     const url = new URL(request.url);
+    const asset = staticAsset(url.pathname);
+    if (asset !== null) {
+      if (request.method !== "GET" && request.method !== "HEAD") {
+        return errorResponse(405, "method_not_allowed", "asset_request");
+      }
+      return new Response(request.method === "HEAD" ? null : asset.body, {
+        status: 200,
+        headers: { ...SAFE_HEADERS, "content-type": asset.type },
+      });
+    }
     const isApi = url.pathname === "/api/v1" || url.pathname.startsWith("/api/v1/");
-    const isUi = url.pathname === "/" || url.pathname === "/me" || /^\/[a-z0-9][a-z0-9-]{0,62}$/u.test(url.pathname);
+    const isUi =
+      url.pathname === "/" ||
+      url.pathname === "/me" ||
+      url.pathname === "/settings/mcp" ||
+      /^\/[a-z0-9][a-z0-9-]{0,62}$/u.test(url.pathname);
     if (!isApi && !isUi) return null;
 
     let identity: ProductSitesIdentityResolution;
@@ -375,15 +594,17 @@ export function createProductWebHttpHandler(
 
     if (isUi) {
       if (request.method !== "GET" && request.method !== "HEAD") return errorResponse(405, "method_not_allowed", requestId);
-      const token = await dependencies.csrf.issue(identity.actor);
-      const title = url.pathname === "/" ? "A home for what you know." : url.pathname === "/me" ? "My Mind" : `Mind ${url.pathname}`;
-      const response = page({
-        title,
-        subtitle: "Private by default. Shared deliberately. Every committed change stays addressable.",
-        csrfToken: token,
-        route: url.pathname,
-        registrationRequired: identity.kind === "registration_required",
-      });
+      let response: Response;
+      try {
+        response = html(await productUiDocument({
+          pathname: url.pathname,
+          identity,
+          csrfToken: await dependencies.csrf.issue(identity.actor),
+          control: dependencies.control,
+        }));
+      } catch {
+        response = errorResponse(503, "operation_failed", requestId, true);
+      }
       return request.method === "HEAD" ? new Response(null, response) : response;
     }
 

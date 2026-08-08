@@ -31,6 +31,22 @@ test("runtime package is product composition, not capability probe or fallback",
   assert.doesNotMatch(await readFile(resolve(app, ".openai/hosting.json"), "utf8"), /VERIFIER|SECRET|TOKEN/);
 });
 
+test("product Worker owns the operable onboarding, shell, and MCP-token UI assets", async () => {
+  const [http, assets, composition] = await Promise.all([
+    readFile(resolve(root, "packages/adapter-web/src/product-http.ts"), "utf8"),
+    readFile(resolve(root, "packages/adapter-web/src/product-ui-assets.ts"), "utf8"),
+    readFile(resolve(root, "packages/composition-root/src/product-site.ts"), "utf8"),
+  ]);
+  assert.match(http, /renderAuthenticatedOnboardingDocument/);
+  assert.match(http, /renderMindDiaryUiShellDocument/);
+  assert.match(http, /renderMcpTokenManagementDocument/);
+  assert.match(http, /\/settings\/mcp/);
+  assert.match(assets, /\/api\/v1\/account/);
+  assert.match(assets, /\/api\/v1\/mcp-tokens/);
+  assert.doesNotMatch(assets, /Authorization|Bearer/);
+  assert.match(composition, /revokeMcpToken\(actor as never, input\.token_id as never\)/);
+});
+
 test("standalone lock describes the exact product package dependencies", async () => {
   const manifest = JSON.parse(await readFile(resolve(app, "package.json"), "utf8"));
   const lock = JSON.parse(await readFile(resolve(app, "package-lock.json"), "utf8"));

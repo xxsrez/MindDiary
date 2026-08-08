@@ -22,6 +22,22 @@ Production composition соединяет:
 - D1 metadata/search/audit, R2 canonical objects/export и durable background
   work для index, export, audit, invitation и expiry flows.
 
+Source repair `AND-149:c2` заменяет статическую product-страницу в exact Worker
+handler на operable server-rendered control UI. Handler теперь использует уже
+существующие onboarding, shell и MCP token-management renderers, сам отдаёт
+fixed same-origin CSS/SVG/client assets и поддерживает:
+
+- явное создание нового isolated account и Personal Mind для verified, но ещё
+  не зарегистрированного Sites identity без relink/merge прежнего доступа;
+- authenticated `/`, `/me` и `/settings/mcp` с server-owned safe projections;
+- выпуск named MCP token, показ секрета ровно один раз и последующее отображение
+  только безопасной metadata;
+- отзыв token через существующий control operation.
+
+Browser mutations сохраняют exact-Origin, principal-bound CSRF и idempotency
+boundaries. Browser client не использует `Authorization`/Bearer, а content MCP
+по-прежнему не публикует account, membership или token control tools.
+
 Browser UI не читает и не рендерит raw Markdown. Incoming user token не
 передаётся downstream. AWS, AgentCore и отдельный container не используются как
 fallback.
@@ -44,19 +60,27 @@ request origin.
 На source candidate выполнены:
 
 ```bash
-npm exec -- tsc -b apps/mind-diary-site packages/adapter-web packages/adapter-mcp packages/adapter-background packages/adapter-metadata-memory packages/adapter-metadata-sites packages/application-control packages/application-ports packages/composition-root
-node --test tests/integration/product-site.test.mjs tests/conformance/product-site-packaging.test.mjs tests/integration/membership-control.test.mjs tests/integration/invitation-control.test.mjs tests/integration/control-read-services.test.mjs
+npm exec -- tsc -b apps/mind-diary-site packages/adapter-web packages/composition-root
+node --test tests/unit/ui-shell.test.mjs tests/unit/onboarding-client.test.mjs tests/unit/mcp-token-management-ui.test.mjs tests/integration/product-site.test.mjs tests/conformance/product-site-packaging.test.mjs
 node scripts/check-product-site.mjs
-node scripts/check-architecture.mjs
 node scripts/check-docs.mjs
+git diff --check
+cd apps/mind-diary-site && npm run build
 ```
 
-Targeted tests проверяют packaging boundaries, browser authentication/CSRF,
-registration-only bootstrap, отсутствие control tools в MCP, durable D1
-reconstruction membership/invitation state и safe member/invitation read
-projections. Отдельный `npm run build` в `apps/mind-diary-site` прошёл все пять
-Vinext stages. Эти проверки являются repository evidence, не live Sites или
-real-client conformance.
+32 targeted tests проверяют production-handler wiring и packaging boundaries,
+browser authentication/CSRF, registration-only bootstrap, safe control read
+failures, show-once token response, scalar revoke routing и отсутствие control
+tools в MCP. Отдельный `npm run build` в `apps/mind-diary-site` прошёл все пять
+Vinext stages.
+
+Real-browser smoke запускал скомпилированный `createProductWebHttpHandler` и его
+production client asset через локальный synthetic identity/control fixture. Он
+подтвердил bootstrap до `/me`, переход в `/settings/mcp`, show-once secret,
+отсутствие secret после reload, metadata-only token list и revoke до empty
+state без browser console errors. Fixture не использовал живую identity,
+приватный content или настоящий credential. Это repository evidence, не live
+Sites или real-client conformance.
 
 Во время isolated `npm ci` product app npm audit сообщил 20 advisories: 1 low,
 4 moderate и 15 high. Automatic dependency rewrite не выполнялся; оценка и
@@ -78,3 +102,9 @@ Coordinator должен на одном exact candidate SHA выполнить 
 Пока эти artifacts отсутствуют, Product Site считается deployable source
 candidate, но не production deployment. Провал Sites/MCP capability gate
 блокирует release и не разрешает AWS/container fallback.
+
+Последняя проверка live owner-authenticated `/` и `/me` относится к ранее
+развёрнутой версии: source repair `AND-149:c2` ещё не публиковался coordinator-ом
+и потому не считается live. Sites dispatcher `POST /mcp` возвращает `404`; это
+отдельный blocker `AND-77`, который данный source repair не скрывает и не
+исправляет.
