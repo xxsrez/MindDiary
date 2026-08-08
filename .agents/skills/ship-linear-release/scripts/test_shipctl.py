@@ -814,6 +814,24 @@ class MetadataCommitTest(GitMixin, unittest.TestCase):
             result["errors"], ["invalid:duplicate-authoritative-header:STATE"]
         )
 
+    def test_metadata_helper_accepts_repeatable_linear_done_history(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="shipctl-metadata-") as directory:
+            repo, _ = self.fixture(Path(directory))
+            parent = self.git(repo, "rev-parse", "HEAD")
+            message = (
+                "coordinator\n\n"
+                "KIND: COORDINATOR_CLAIM\n"
+                "LINEAR_DONE: AND-47@2026-08-07T23:29:03Z\n"
+                "LINEAR_DONE: AND-82@2026-08-07T23:29:01Z\n"
+            )
+            args = MODULE.argparse.Namespace(
+                repo=str(repo), parent=parent, kind="coordinator", input="-"
+            )
+            with mock.patch.object(sys, "stdin", io.StringIO(message)), io.StringIO() as output, redirect_stdout(output):
+                code = MODULE.command_metadata_commit(args)
+                result = json.loads(output.getvalue())
+        self.assertEqual((code, result["status"]), (0, "created"))
+
 
 class ProvisionAndCleanupTest(GitMixin, unittest.TestCase):
     def terminal_coordinator(self, repo: Path) -> str:
@@ -1900,7 +1918,17 @@ class PreflightTest(GitMixin, unittest.TestCase):
                     ),
                 ),
             )
-            canonical = self.metadata_commit(repo, self.coordinator_message(repo), migration)
+            canonical = self.metadata_commit(
+                repo,
+                self.coordinator_message(
+                    repo,
+                    extra=(
+                        "LINEAR_DONE: AND-47@2026-08-07T23:29:03Z\n"
+                        "LINEAR_DONE: AND-82@2026-08-07T23:29:01Z\n"
+                    ),
+                ),
+                migration,
+            )
             self.git(repo, "push", "origin", f"{canonical}:{MODULE.CANONICAL_COORDINATOR_REF}")
             code, result, _ = self.preflight(repo, self.PROOF)
         self.assertEqual((code, result["route"]), (0, "resume"))
