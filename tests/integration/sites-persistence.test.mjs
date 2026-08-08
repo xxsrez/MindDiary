@@ -1003,7 +1003,7 @@ test("production outbound selection contains no process-memory adapter", () => {
     Object.values(COMPOSITION_SELECTION.productionOutbound).some((value) => value.includes("memory")),
     false,
   );
-  assert.equal(COMPOSITION_SELECTION.deployableServiceImplemented, false);
+  assert.equal(COMPOSITION_SELECTION.deployableServiceImplemented, true);
 });
 
 test("memory audit contract baseline remains idempotent", async () => {

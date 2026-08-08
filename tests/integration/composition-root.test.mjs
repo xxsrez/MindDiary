@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { COMPOSITION_SELECTION } from "@mind-diary/composition-root";
 
-test("composition root selects one boundary and local in-memory adapters", () => {
-  assert.equal(COMPOSITION_SELECTION.deployableServiceImplemented, false);
+test("composition root preserves local adapters and declares the product Site boundary", () => {
+  assert.equal(COMPOSITION_SELECTION.deployableServiceImplemented, true);
   assert.equal(COMPOSITION_SELECTION.outbound.metadata, "memory-revision-envelope");
   assert.equal(COMPOSITION_SELECTION.outbound.objects, "memory-revision-envelope");
   assert.equal(COMPOSITION_SELECTION.outbound.search, "memory-exact-revision");

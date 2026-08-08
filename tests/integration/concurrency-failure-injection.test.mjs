@@ -874,7 +874,7 @@ test(
       security: "webcrypto-contract-only",
       audit: "memory-idempotent-delivery",
     });
-    assert.equal(COMPOSITION_SELECTION.deployableServiceImplemented, false);
+    assert.equal(COMPOSITION_SELECTION.deployableServiceImplemented, true);
 
     const env = createHarness();
     const owner = await bootstrap(env, 1);
