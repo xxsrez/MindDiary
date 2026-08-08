@@ -50,13 +50,30 @@ const expectedDependencies = new Map(
     "@mind-diary/adapter-audit-memory": [
       "@mind-diary/application-ports",
     ],
+    "@mind-diary/adapter-audit-sites": [
+      "@mind-diary/application-ports",
+    ],
+    "@mind-diary/adapter-metadata-sites": [
+      "@mind-diary/adapter-metadata-memory",
+      "@mind-diary/application-ports",
+    ],
+    "@mind-diary/adapter-object-sites": [
+      "@mind-diary/application-ports",
+    ],
+    "@mind-diary/adapter-search-sites": [
+      "@mind-diary/application-ports",
+    ],
     "@mind-diary/composition-root": [
       "@mind-diary/adapter-audit-memory",
+      "@mind-diary/adapter-audit-sites",
       "@mind-diary/adapter-background",
       "@mind-diary/adapter-mcp",
       "@mind-diary/adapter-metadata-memory",
+      "@mind-diary/adapter-metadata-sites",
       "@mind-diary/adapter-object-memory",
+      "@mind-diary/adapter-object-sites",
       "@mind-diary/adapter-search-memory",
+      "@mind-diary/adapter-search-sites",
       "@mind-diary/adapter-security-webcrypto",
       "@mind-diary/adapter-web",
       "@mind-diary/application-background",
