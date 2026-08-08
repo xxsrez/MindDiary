@@ -9,8 +9,8 @@ coordinator-owned sealed cutoff/release flow.
 Реализовано отдельное deployable приложение `apps/mind-diary-site`, а не
 расширение `sites-probe`. Оно содержит собственные Vinext/Worker entrypoints,
 D1 migration, package lock и `.openai/hosting.json`. Hosting manifest объявляет
-только D1 `DB` и R2 `MIND_DIARY_BUCKET`; project ID и secrets в repository не
-записываются.
+созданный coordinator-owned Sites project, D1 `DB` и R2
+`MIND_DIARY_BUCKET`; runtime secrets в repository не записываются.
 
 Production composition соединяет:
 

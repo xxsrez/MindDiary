@@ -14,7 +14,7 @@ for (const path of required) {
 
 const hosting = JSON.parse(await readFile(resolve(app, ".openai/hosting.json"), "utf8"));
 if (hosting.d1 !== "DB" || hosting.r2 !== "MIND_DIARY_BUCKET") errors.push("hosting bindings differ from product contract");
-if ("project_id" in hosting) errors.push("source candidate must not claim a coordinator-owned Sites project");
+if (typeof hosting.project_id !== "string" || !/^appgprj_[a-z0-9]+$/u.test(hosting.project_id)) errors.push("hosting metadata is missing the coordinator-owned Sites project identity");
 const serializedHosting = JSON.stringify(hosting);
 if (/SECRET|TOKEN|KEY|PASSWORD/iu.test(serializedHosting)) errors.push("hosting metadata contains secret-like configuration");
 
