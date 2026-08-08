@@ -1707,6 +1707,7 @@ class PreflightTest(GitMixin, unittest.TestCase):
         message = (
             f"CLAIM_MAP: AND-147:2=terminal@refs/heads/codex/release/claims/{run_key}/"
             f"AND-147/c2@{'d' * 40};feature={'e' * 40};batch=cutoff-1:g1\n"
+            "CLAIM_MAP: AND-86:1=terminal/heads/codex/release/claims/legacy-malformed\n"
         )
         with tempfile.TemporaryDirectory(prefix="shipctl-claim-index-") as directory:
             repo, _ = self.fixture(Path(directory))

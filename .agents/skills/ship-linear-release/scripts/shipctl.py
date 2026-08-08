@@ -3640,30 +3640,39 @@ def _claim_guard_refs(
     errors: list[str] = []
     seen: set[str] = set()
     maps: dict[tuple[str, int], str] = {}
-    for value in _metadata_values(message, "CLAIM_MAP"):
-        # Terminal/historical rows use ``issue:g=terminal@...`` and are not
-        # fencing authority. They remain in the ledger for provenance.
-        terminal = re.match(
-            rf"^({ISSUE_IDENTIFIER.pattern}):([1-9][0-9]*)=([a-z][a-z0-9-]*)@",
-            value,
-        )
-        if terminal:
-            continue
-        parts = value.split("@")
-        identity = parts[0].split(":")
-        if len(parts) != 4 or len(identity) != 2:
-            errors.append("invalid:claim-map-shape")
-            continue
-        issue, generation_text = identity
-        generation = int(generation_text) if generation_text.isdigit() else 0
-        key = (issue, generation)
-        if key in maps:
-            errors.append(f"invalid:duplicate-claim-map:{issue}:{generation}")
-        else:
-            maps[key] = value
-
     index = _semicolon_fields(claim_index)
     active_values = _list_value(index.get("active"))
+    fallback_keys: set[tuple[str, int]] = set()
+    for active_value in active_values:
+        active_parts = active_value.split("@")
+        identity = active_parts[0].split(":")
+        if len(identity) == 2 and len(active_parts) != 4:
+            issue, generation_text = identity
+            generation = int(generation_text) if generation_text.isdigit() else 0
+            fallback_keys.add((issue, generation))
+    if fallback_keys:
+        for value in _metadata_values(message, "CLAIM_MAP"):
+            # Terminal/historical rows are provenance, never fencing authority.
+            terminal = re.match(
+                rf"^({ISSUE_IDENTIFIER.pattern}):([1-9][0-9]*)=([a-z][a-z0-9-]*)@",
+                value,
+            )
+            if terminal:
+                continue
+            parts = value.split("@")
+            identity = parts[0].split(":")
+            if len(parts) != 4 or len(identity) != 2:
+                continue
+            issue, generation_text = identity
+            generation = int(generation_text) if generation_text.isdigit() else 0
+            key = (issue, generation)
+            if key not in fallback_keys:
+                continue
+            if key in maps:
+                errors.append(f"invalid:duplicate-claim-map:{issue}:{generation}")
+            else:
+                maps[key] = value
+
     for active_value in active_values:
         active_parts = active_value.split("@")
         identity = active_parts[0].split(":")
