@@ -2163,7 +2163,15 @@ function createMcpHttpHandlerAtEndpoint(
               })
             : jsonRpcResult(
                 rpc.id,
-                Object.freeze({ resultType: "complete", ...page }),
+                Object.freeze({
+                  resultType: "complete",
+                  resources: page.resources,
+                  ...(page.nextCursor === null
+                    ? {}
+                    : { nextCursor: page.nextCursor }),
+                  ttlMs: 60_000,
+                  cacheScope: "private",
+                }),
                 responseFormat,
               );
       } catch {

@@ -24,6 +24,12 @@ import {
   type McpTokenUiToken,
 } from "./token-management.js";
 import {
+  renderOrdinaryMindsManagementDocument,
+  type OrdinaryMindUiMind,
+  type OrdinaryMindsManagementModel,
+} from "./ordinary-minds-management.js";
+import {
+  PRODUCT_ORDINARY_MINDS_CLIENT_JAVASCRIPT,
   PRODUCT_UI_CLIENT_JAVASCRIPT,
   PRODUCT_UI_LOCKUP_SVG,
   PRODUCT_UI_MARK_SVG,
@@ -324,6 +330,40 @@ function uiMind(value: unknown): UiMindCard | null {
   });
 }
 
+function ordinaryUiMind(value: unknown): OrdinaryMindUiMind | null {
+  const source = record(value);
+  const access = record(source?.access);
+  const mindId = requiredString(source?.mindId);
+  const handle = requiredString(source?.handle);
+  const name = requiredString(source?.name);
+  const route = requiredString(source?.route);
+  const metadataVersion = positiveInteger(source?.metadataVersion);
+  const visibility = source?.visibility;
+  const role = access?.role;
+  if (
+    source?.isPersonal === true ||
+    mindId === null ||
+    handle === null ||
+    name === null ||
+    route !== `/${handle}` ||
+    handle.length < 3 ||
+    handle.length > 63 ||
+    !/^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(handle) ||
+    metadataVersion === null ||
+    !(visibility === "private" || visibility === "unlisted" || visibility === "public") ||
+    !(role === null || role === "reader" || role === "editor" || role === "admin" || role === "owner")
+  ) return null;
+  return Object.freeze({
+    mindId,
+    handle,
+    name,
+    visibility,
+    role: role ?? "reader",
+    metadataVersion,
+    updatedLabel: "Current HEAD is ready",
+  });
+}
+
 function uiToken(value: unknown): McpTokenUiToken | null {
   const source = record(value);
   const tokenId = requiredString(source?.tokenId);
@@ -367,6 +407,12 @@ function staticAsset(pathname: string): { readonly body: string; readonly type: 
     pathname === "/ui/mind-diary-shell-client.js" ||
     pathname === "/ui/mind-diary-token-client.js"
   ) return { body: PRODUCT_UI_CLIENT_JAVASCRIPT, type: "text/javascript; charset=utf-8" };
+  if (pathname === "/ui/mind-diary-ordinary-minds-client.js") {
+    return {
+      body: PRODUCT_ORDINARY_MINDS_CLIENT_JAVASCRIPT,
+      type: "text/javascript; charset=utf-8",
+    };
+  }
   return null;
 }
 
@@ -429,6 +475,58 @@ async function productUiDocument(input: {
       displayName: session.displayName,
       collection,
     }, "/ui/mind-diary-token-client.js"), input.csrfToken);
+  }
+
+  if (input.pathname === "/minds") {
+    let collection: Extract<
+      OrdinaryMindsManagementModel["view"],
+      { readonly kind: "list" }
+    >["collection"];
+    try {
+      const listed = await input.control.execute({
+        operation: "list_minds",
+        actor: input.identity.actor,
+        input: Object.freeze({}),
+      });
+      const minds = Array.isArray(listed)
+        ? listed.map(ordinaryUiMind).filter((mind): mind is OrdinaryMindUiMind => mind !== null)
+        : [];
+      collection = minds.length === 0
+        ? { kind: "empty" }
+        : { kind: "ready", minds: Object.freeze(minds) };
+    } catch {
+      collection = { kind: "error", message: "Mind metadata is unavailable. Try again." };
+    }
+    return withCsrfMeta(renderOrdinaryMindsManagementDocument({
+      displayName: session.displayName,
+      view: { kind: "list", collection },
+    }, "/ui/mind-diary-ordinary-minds-client.js"), input.csrfToken);
+  }
+
+  const routeMatch = /^\/([a-z0-9]+(?:-[a-z0-9]+)*)$/u.exec(input.pathname);
+  const reservedUiRoute = routeMatch === null ||
+    routeMatch[1] === "minds" ||
+    routeMatch[1] === "invitations" ||
+    routeMatch[1] === "help";
+  if (!reservedUiRoute && routeMatch !== null) {
+    const handle = routeMatch[1]!;
+    let view: OrdinaryMindsManagementModel["view"];
+    try {
+      const resolved = ordinaryUiMind(await input.control.execute({
+        operation: "get_mind_info",
+        actor: input.identity.actor,
+        input: Object.freeze({ mind_ref: handle }),
+      }));
+      view = resolved === null
+        ? { kind: "route_error", handle, message: "Mind settings are unavailable." }
+        : { kind: "detail", mind: resolved };
+    } catch {
+      view = { kind: "route_error", handle, message: "Mind settings are unavailable." };
+    }
+    return withCsrfMeta(renderOrdinaryMindsManagementDocument({
+      displayName: session.displayName,
+      view,
+    }, "/ui/mind-diary-ordinary-minds-client.js"), input.csrfToken);
   }
 
   let collection: MindDiaryUiShellModel["collection"];

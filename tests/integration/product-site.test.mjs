@@ -48,6 +48,19 @@ const personalRoute = Object.freeze({
   headRevisionId: "revision_personal",
 });
 
+const ordinaryOwnerRoute = Object.freeze({
+  mindId: "space_research",
+  route: "/research-notes",
+  handle: "research-notes",
+  name: "Research Notes",
+  isPersonal: false,
+  visibility: "private",
+  discovery: "membership",
+  access: Object.freeze({ kind: "membership", role: "owner", capabilities: ["content:read", "content:write"] }),
+  metadataVersion: 7,
+  headRevisionId: "revision_research",
+});
+
 test("product web authenticates UI and fail-closes browser mutations", async () => {
   const calls = [];
   const handler = createProductWebHttpHandler({
@@ -148,6 +161,75 @@ test("product root and MCP setup render live control projections and fixed same-
   const wrongAssetMethod = await handler(new Request(`${origin}/ui/mind-diary-shell.css`, { method: "POST" }));
   assert.equal(wrongAssetMethod.status, 405);
   assert.deepEqual(calls, ["get_session", "list_minds", "get_session", "list_mcp_tokens"]);
+});
+
+test("ordinary Mind list and exact route wire the production management and deletion controls", async () => {
+  const calls = [];
+  const handler = createProductWebHttpHandler({
+    applicationOrigin: origin,
+    resolveIdentity: () => ({ kind: "authenticated", actor: registeredActor }),
+    csrf: { issue: () => "csrf-ui", verify: (_actor, token) => token === "csrf-ui" },
+    control: { execute(request) {
+      calls.push(request);
+      if (request.operation === "get_session") return sessionProjection;
+      if (request.operation === "list_minds") return [personalRoute, ordinaryOwnerRoute];
+      if (request.operation === "get_mind_info") return ordinaryOwnerRoute;
+      if (request.operation === "get_mind_deletion_impact") return {
+        impactId: "impact_research",
+        expiresAt: "2026-08-08T00:05:00.000Z",
+        mind: { route: "/research-notes", name: "Research Notes" },
+        revisionCount: 3,
+        membershipCount: 1,
+        pendingInvitationCount: 0,
+        backgroundJobCount: 0,
+        exportJobCount: 0,
+        irreversible: true,
+        recoveryAvailable: false,
+        forensicReceiptRetained: false,
+        confirmation: "delete-mind:research-notes",
+      };
+      if (request.operation === "delete_space") return { replayed: false };
+      throw Object.assign(new Error("unexpected operation"), { code: "not_found" });
+    } },
+  });
+
+  const list = await handler(new Request(`${origin}/minds`));
+  assert.equal(list.status, 200);
+  const listHtml = await list.text();
+  assert.match(listHtml, /data-ordinary-minds-management/);
+  assert.match(listHtml, /data-mind-card="research-notes"/);
+  assert.match(listHtml, /href="\/research-notes"[^>]*data-manage-mind/);
+  assert.doesNotMatch(listHtml, /data-mind-card="me"/);
+
+  const detail = await handler(new Request(`${origin}/research-notes`));
+  assert.equal(detail.status, 200);
+  const detailHtml = await detail.text();
+  assert.match(detailHtml, /data-mind-route data-mind-handle="research-notes"/);
+  assert.match(detailHtml, /data-owner-delete-controls/);
+  assert.match(detailHtml, /mind-diary-ordinary-minds-client\.js/);
+  assert.doesNotMatch(detailHtml, /revision_research/);
+
+  const asset = await handler(new Request(`${origin}/ui/mind-diary-ordinary-minds-client.js`));
+  assert.equal(asset.status, 200);
+  const assetBody = await asset.text();
+  assert.match(assetBody, /deletion-impact/);
+  assert.match(assetBody, /delete-mind:/);
+
+  const impact = await handler(new Request(`${origin}/api/v1/minds/research-notes/deletion-impact`));
+  assert.equal(impact.status, 200);
+  assert.equal((await impact.json()).data.confirmation, "delete-mind:research-notes");
+
+  const deleted = await handler(new Request(`${origin}/api/v1/minds/research-notes`, {
+    method: "DELETE",
+    headers: { origin, "x-csrf-token": "csrf-ui", "content-type": "application/json", "idempotency-key": "delete:12345678" },
+    body: JSON.stringify({ impact_id: "impact_research", confirmation: "delete-mind:research-notes" }),
+  }));
+  assert.equal(deleted.status, 200);
+  const deleteCall = calls.at(-1);
+  assert.equal(deleteCall.operation, "delete_space");
+  assert.equal(deleteCall.input.mind_ref, "research-notes");
+  assert.equal(deleteCall.input.impactId, "impact_research");
+  assert.equal(deleteCall.input.idempotencyKey, "delete:12345678");
 });
 
 test("token controls preserve CSRF and expose a one-time secret only in the issuance response", async () => {

@@ -61,7 +61,7 @@ function resource(uri, name) {
   };
 }
 
-function harness({ invalidListResource = false } = {}) {
+function harness({ invalidListResource = false, nextCursor = null } = {}) {
   let nextRequestId = 0;
   let accessAllowed = true;
   let head = "rev_member";
@@ -96,7 +96,7 @@ function harness({ invalidListResource = false } = {}) {
                 resource(MEMBER_ROOT, "Member Mind"),
                 resource(PERSONAL_ROOT, "Personal Mind"),
               ],
-          nextCursor: null,
+          nextCursor,
         };
       },
       async readResource(request) {
@@ -240,11 +240,24 @@ test("resources/list returns only deterministic authorized root indexes", async 
     result.resources.map(({ uri }) => uri),
     [MEMBER_ROOT, PERSONAL_ROOT],
   );
-  assert.equal(result.nextCursor, null);
+  assert.equal(Object.hasOwn(result, "nextCursor"), false);
+  assert.equal(result.resultType, "complete");
+  assert.equal(result.ttlMs, 60_000);
+  assert.equal(result.cacheScope, "private");
   assert.equal(fixture.rootCalls.length, 1);
   assert.equal(fixture.rootCalls[0].cursor, "page_1");
   assert.equal(fixture.rootCalls[0].actor.principalId, "principal_resources");
   assert.equal(JSON.stringify(result).includes("token_read"), false);
+});
+
+test("resources/list preserves an opaque continuation cursor only when present", async () => {
+  const fixture = harness({ nextCursor: "page_2" });
+  const response = await fixture.send(rpc("resources/list"));
+  assert.equal(response.status, 200);
+  const result = (await json(response)).result;
+  assert.equal(result.nextCursor, "page_2");
+  assert.equal(result.ttlMs, 60_000);
+  assert.equal(result.cacheScope, "private");
 });
 
 test("resources/list fails closed if the application expands enumeration", async () => {
