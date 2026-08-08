@@ -1,8 +1,9 @@
 # Traceability matrix MVP 0.1
 
-Статус: baseline для планирования, 2026-08-06. Документ связывает принятые критерии
-готовности с реализацией и обязательным evidence, но не утверждает, что сервис,
-tests, OpenAI Site или deployment уже существуют.
+Статус: executable baseline, 2026-08-08. Документ связывает принятые критерии
+готовности с локальной реализацией и обязательным evidence. Локальные modules и
+automated tests существуют; deployable production Site, live client evidence и
+production deployment пока не подтверждены.
 
 ## Как читать матрицу
 
@@ -73,6 +74,121 @@ secret и download URL.
 | 27 | MCP Inspector и real Codex проходят declared `2026-07-28` adapter/client pair; Claude support без отдельного test не заявляется. | `AND-77` | `M, L`: pinned client versions, Inspector suite и redacted Codex read/write/conflict/history/export flow. | `A27 + MI + CX + R` |
 | 28 | Validators, fixtures and docs checks проходят на одном commit; deployment не считается завершённым без live evidence. | `AND-85` | `C, I, S, F`: canonical full check и generated criterion→test/evidence report exact SHA. | `A28 + R` |
 | 29 | Production release связывает exact SHA с одним Sites deployment/live URL и на нём проходит полный authenticated web/control+persistence+MCP flow. | `AND-90` | `L`: same-deployment web/control, persistence, Inspector and Codex probes after publish/redeploy. | `A29 + W + P + MI + CX + R` |
+
+## Machine-readable evidence registry
+
+Блок ниже — authoritative input для
+`node scripts/generate-readiness-report.mjs`. Generator читает его из exact
+candidate commit, сверяет с human-readable matrix, проверяет tracked paths и
+canonical commands и выпускает один reproducible JSON report. `pending` local
+gate или отсутствующий live receipt никогда не превращается в `passed`.
+
+Live receipts сохраняются по указанным candidate-scoped paths и используют
+schema `mind-diary/readiness-evidence/v1`. Каждый receipt содержит exact
+`candidate_sha`, `slot`, `status` и одну deployment identity:
+`site_project_id`, `site_version_id`, `deployment_id`, `live_url`. Receipt с
+другим SHA, malformed contract или identity, не совпадающей с `R`, является
+failure; отсутствующий receipt остаётся pending.
+
+<!-- readiness-registry:start -->
+```json
+{
+  "schema": "mind-diary/readiness-registry/v1",
+  "criteria": [
+    { "id": 1, "owner": "AND-45", "local_evidence": ["account-bootstrap", "sites-identity-binding"], "live_evidence": ["W", "P"], "release_evidence": "R" },
+    { "id": 2, "owner": "AND-46", "local_evidence": ["personal-mind-control"], "live_evidence": ["W"], "release_evidence": "R" },
+    { "id": 3, "owner": "AND-46", "local_evidence": ["personal-mind-control"], "live_evidence": ["W", "P"], "release_evidence": "R" },
+    { "id": 4, "owner": "AND-48", "local_evidence": ["ordinary-mind-control", "handle-registry"], "live_evidence": ["W", "P"], "release_evidence": "R" },
+    { "id": 5, "owner": "AND-56", "local_evidence": ["ownership-transfer"], "live_evidence": ["W", "P"], "release_evidence": "R" },
+    { "id": 6, "owner": "AND-55", "local_evidence": ["membership-control"], "live_evidence": ["W", "P"], "release_evidence": "R" },
+    { "id": 7, "owner": "AND-54", "local_evidence": ["invitation-control", "invitation-lifecycle"], "live_evidence": ["W", "P"], "release_evidence": "R" },
+    { "id": 8, "owner": "AND-50", "local_evidence": ["mind-routes", "security-privacy-threat"], "live_evidence": ["W", "CX"], "release_evidence": "R" },
+    { "id": 9, "owner": "AND-81", "local_evidence": ["public-minds-catalog", "visibility-catalog-ui"], "live_evidence": ["W", "P"], "release_evidence": "R" },
+    { "id": 10, "owner": "AND-60", "local_evidence": ["mind-discovery"], "live_evidence": ["MI", "CX"], "release_evidence": "R" },
+    { "id": 11, "owner": "AND-74", "local_evidence": ["mind-discovery", "security-privacy-threat"], "live_evidence": ["MI", "CX"], "release_evidence": "R" },
+    { "id": 12, "owner": "AND-58", "local_evidence": ["mcp-auth", "token-security"], "live_evidence": ["MI", "CX"], "release_evidence": "R" },
+    { "id": 13, "owner": "AND-65", "local_evidence": ["changeset-preflight", "mcp-commit-export"], "live_evidence": ["MI", "CX"], "release_evidence": "R" },
+    { "id": 14, "owner": "AND-67", "local_evidence": ["changeset-commit", "concurrency-failure"], "live_evidence": ["CX", "P"], "release_evidence": "R" },
+    { "id": 15, "owner": "AND-69", "local_evidence": ["changeset-idempotency"], "live_evidence": ["CX", "P"], "release_evidence": "R" },
+    { "id": 16, "owner": "AND-71", "local_evidence": ["changeset-preflight", "changeset-commit", "okf-conformance"], "live_evidence": ["CX", "P"], "release_evidence": "R" },
+    { "id": 17, "owner": "AND-61", "local_evidence": ["mind-browse", "mcp-resources"], "live_evidence": ["MI", "CX"], "release_evidence": "R" },
+    { "id": 18, "owner": "AND-62", "local_evidence": ["mind-history"], "live_evidence": ["MI", "CX"], "release_evidence": "R" },
+    { "id": 19, "owner": "AND-52", "local_evidence": ["ordinary-mind-deletion"], "live_evidence": ["W", "P"], "release_evidence": "R" },
+    { "id": 20, "owner": "AND-47", "local_evidence": ["account-deletion"], "live_evidence": ["W", "P"], "release_evidence": "R" },
+    { "id": 21, "owner": "AND-41", "local_evidence": ["okf-unit", "okf-conformance", "changeset-preflight"], "live_evidence": ["CX"], "release_evidence": "R" },
+    { "id": 22, "owner": "AND-41", "local_evidence": ["okf-unit", "okf-conformance", "export-contract"], "live_evidence": ["CX"], "release_evidence": "R" },
+    { "id": 23, "owner": "AND-72", "local_evidence": ["export-download-grants", "export-contract"], "live_evidence": ["CX", "P"], "release_evidence": "R" },
+    { "id": 24, "owner": "AND-63", "local_evidence": ["mind-search", "mind-browse", "audit-index-jobs"], "live_evidence": ["MI", "CX"], "release_evidence": "R" },
+    { "id": 25, "owner": "AND-76", "local_evidence": ["security-privacy-threat", "exposure-contract"], "live_evidence": ["MI", "CX"], "release_evidence": "R" },
+    { "id": 26, "owner": "AND-76", "local_evidence": ["exposure-contract", "mcp-tools", "mcp-resources"], "live_evidence": ["MI", "CX"], "release_evidence": "R" },
+    { "id": 27, "owner": "AND-77", "local_evidence": ["mcp-transport"], "live_evidence": ["MI", "CX"], "release_evidence": "R" },
+    { "id": 28, "owner": "AND-85", "local_evidence": ["canonical-tests", "fixture-validator", "architecture-check", "docs-check", "secrets-check", "readiness-report"], "live_evidence": [], "release_evidence": "R" },
+    { "id": 29, "owner": "AND-90", "local_evidence": [], "live_evidence": ["W", "P", "MI", "CX"], "release_evidence": "R" }
+  ],
+  "local_evidence": {
+    "account-bootstrap": { "title": "Atomic account and Personal Mind bootstrap", "command": ["node", "--test", "tests/integration/account-bootstrap.test.mjs"], "paths": ["tests/integration/account-bootstrap.test.mjs"] },
+    "sites-identity-binding": { "title": "Fail-closed Sites identity binding", "command": ["node", "--test", "tests/unit/sites-identity-binding.test.mjs"], "paths": ["tests/unit/sites-identity-binding.test.mjs"] },
+    "personal-mind-control": { "title": "Personal Mind invariants and profile rename", "command": ["node", "--test", "tests/integration/personal-mind-control.test.mjs"], "paths": ["tests/integration/personal-mind-control.test.mjs"] },
+    "ordinary-mind-control": { "title": "Ordinary Mind create and rename", "command": ["node", "--test", "tests/integration/ordinary-mind-control.test.mjs"], "paths": ["tests/integration/ordinary-mind-control.test.mjs"] },
+    "handle-registry": { "title": "Handle reservation, race and retirement", "command": ["node", "--test", "tests/integration/handle-registry.test.mjs"], "paths": ["tests/integration/handle-registry.test.mjs"] },
+    "ownership-transfer": { "title": "Atomic ownership transfer", "command": ["node", "--test", "tests/integration/ownership-transfer.test.mjs"], "paths": ["tests/integration/ownership-transfer.test.mjs"] },
+    "membership-control": { "title": "Role, revoke and leave capability matrix", "command": ["node", "--test", "tests/integration/membership-control.test.mjs"], "paths": ["tests/integration/membership-control.test.mjs"] },
+    "invitation-control": { "title": "Invitation creation and authorization", "command": ["node", "--test", "tests/integration/invitation-control.test.mjs"], "paths": ["tests/integration/invitation-control.test.mjs"] },
+    "invitation-lifecycle": { "title": "Invitation retry, expiry and races", "command": ["node", "--test", "tests/integration/invitation-lifecycle.test.mjs"], "paths": ["tests/integration/invitation-lifecycle.test.mjs"] },
+    "mind-routes": { "title": "Authenticated routes and visibility grants", "command": ["node", "--test", "tests/integration/mind-routes.test.mjs"], "paths": ["tests/integration/mind-routes.test.mjs"] },
+    "security-privacy-threat": { "title": "Security and privacy threat regression", "command": ["node", "--test", "tests/integration/security-privacy-threat.test.mjs"], "paths": ["tests/integration/security-privacy-threat.test.mjs"] },
+    "public-minds-catalog": { "title": "Public catalog and visibility races", "command": ["node", "--test", "tests/integration/public-minds-catalog.test.mjs"], "paths": ["tests/integration/public-minds-catalog.test.mjs"] },
+    "visibility-catalog-ui": { "title": "Visibility disclosure UI contract", "command": ["node", "--test", "tests/unit/visibility-catalog-ui.test.mjs"], "paths": ["tests/unit/visibility-catalog-ui.test.mjs"] },
+    "mind-discovery": { "title": "Single-Mind discovery and exact resolve", "command": ["node", "--test", "tests/integration/mind-discovery.test.mjs"], "paths": ["tests/integration/mind-discovery.test.mjs"] },
+    "mcp-auth": { "title": "Per-request MCP token lifecycle and scope", "command": ["node", "--test", "tests/unit/mcp-auth.test.mjs"], "paths": ["tests/unit/mcp-auth.test.mjs"] },
+    "token-security": { "title": "Token verifier and non-disclosure", "command": ["node", "--test", "tests/unit/token-security.test.mjs"], "paths": ["tests/unit/token-security.test.mjs"] },
+    "changeset-preflight": { "title": "Changeset authorization, limits and full-bundle validation", "command": ["node", "--test", "tests/unit/changeset-preflight.test.mjs"], "paths": ["tests/unit/changeset-preflight.test.mjs"] },
+    "mcp-commit-export": { "title": "Immediate MCP commit and asynchronous export contract", "command": ["node", "--test", "tests/conformance/mcp-commit-export-tools.test.mjs"], "paths": ["tests/conformance/mcp-commit-export-tools.test.mjs"] },
+    "changeset-commit": { "title": "Atomic commit and HEAD CAS", "command": ["node", "--test", "tests/integration/changeset-commit.test.mjs"], "paths": ["tests/integration/changeset-commit.test.mjs"] },
+    "concurrency-failure": { "title": "Seeded concurrency and failure injection", "command": ["node", "--test", "tests/integration/concurrency-failure-injection.test.mjs"], "paths": ["tests/integration/concurrency-failure-injection.test.mjs"] },
+    "changeset-idempotency": { "title": "Changeset replay, isolation and conflict", "command": ["node", "--test", "tests/integration/changeset-idempotency.test.mjs"], "paths": ["tests/integration/changeset-idempotency.test.mjs"] },
+    "okf-conformance": { "title": "Strict full-bundle OKF conformance fixtures", "command": ["node", "--test", "tests/conformance/okf-codec.test.mjs"], "paths": ["tests/conformance/okf-codec.test.mjs", "tests/fixtures/okf/basic/index.md", "tests/fixtures/okf/round-trip/index.md"] },
+    "mind-browse": { "title": "Exact-revision browse, fetch and locator isolation", "command": ["node", "--test", "tests/integration/mind-browse.test.mjs"], "paths": ["tests/integration/mind-browse.test.mjs"] },
+    "mcp-resources": { "title": "Immutable MCP Resources authorization", "command": ["node", "--test", "tests/conformance/mcp-resources.test.mjs"], "paths": ["tests/conformance/mcp-resources.test.mjs"] },
+    "mind-history": { "title": "Snapshot selectors and current-access history", "command": ["node", "--test", "tests/integration/mind-history.test.mjs"], "paths": ["tests/integration/mind-history.test.mjs"] },
+    "ordinary-mind-deletion": { "title": "Whole-Mind deletion and retired handle", "command": ["node", "--test", "tests/integration/ordinary-mind-deletion.test.mjs"], "paths": ["tests/integration/ordinary-mind-deletion.test.mjs"] },
+    "account-deletion": { "title": "Account cascade, retry and PII-negative scan", "command": ["node", "--test", "tests/integration/account-deletion.test.mjs"], "paths": ["tests/integration/account-deletion.test.mjs"] },
+    "okf-unit": { "title": "OKF 0.2 paths, UTF-8 and unknown field round-trip", "command": ["node", "--test", "tests/unit/okf-codec.test.mjs"], "paths": ["tests/unit/okf-codec.test.mjs"] },
+    "export-contract": { "title": "Deterministic MD-OKF-ZIP-1 contract", "command": ["node", "--test", "tests/conformance/export-contract.test.mjs"], "paths": ["tests/conformance/export-contract.test.mjs"] },
+    "export-download-grants": { "title": "Reauthorized short-lived export downloads", "command": ["node", "--test", "tests/integration/export-download-grants.test.mjs"], "paths": ["tests/integration/export-download-grants.test.mjs"] },
+    "mind-search": { "title": "Exact-space and exact-revision search", "command": ["node", "--test", "tests/integration/mind-search.test.mjs"], "paths": ["tests/integration/mind-search.test.mjs"] },
+    "audit-index-jobs": { "title": "Index lag, audit, outbox and failure recovery", "command": ["node", "--test", "tests/integration/audit-outbox-index-jobs.test.mjs"], "paths": ["tests/integration/audit-outbox-index-jobs.test.mjs"] },
+    "exposure-contract": { "title": "No unsupported browser, MCP or background surface", "command": ["node", "--test", "tests/conformance/exposure-contract.test.mjs"], "paths": ["tests/conformance/exposure-contract.test.mjs"] },
+    "mcp-tools": { "title": "Custom Mind-aware JSON Schemas and tool catalog", "command": ["node", "--test", "tests/conformance/mcp-tools.test.mjs"], "paths": ["tests/conformance/mcp-tools.test.mjs"] },
+    "mcp-transport": { "title": "Stateless MCP 2026-07-28 transport profile", "command": ["node", "--test", "tests/conformance/mcp-transport.test.mjs"], "paths": ["tests/conformance/mcp-transport.test.mjs"] },
+    "canonical-tests": { "title": "All unit, integration and conformance schemas", "command": ["node", "--test", "tests/unit/*.test.mjs", "tests/integration/*.test.mjs", "tests/conformance/*.test.mjs"], "paths": ["package.json"] },
+    "fixture-validator": { "title": "Strict checked-in OKF bundle validator", "command": ["npm", "run", "validate:fixtures"], "paths": ["scripts/validate-okf-fixtures.mjs", "tests/fixtures/okf/basic/index.md", "tests/fixtures/okf/round-trip/index.md"] },
+    "architecture-check": { "title": "Architecture import-boundary check", "command": ["npm", "run", "check:architecture"], "paths": ["scripts/check-architecture.mjs"] },
+    "docs-check": { "title": "Documentation topology and link check", "command": ["npm", "run", "check:docs"], "paths": ["scripts/check-docs.mjs"] },
+    "secrets-check": { "title": "Secrets and unsafe configuration check", "command": ["npm", "run", "check:secrets"], "paths": ["scripts/check-secrets.mjs"] },
+    "readiness-report": { "title": "Exact-SHA acceptance report contract", "command": ["node", "--test", "tests/conformance/readiness-report.test.mjs"], "paths": ["scripts/generate-readiness-report.mjs", "tests/conformance/readiness-report.test.mjs", "docs/specs/traceability.md"] }
+  },
+  "live_evidence": {
+    "W": { "owner": "AND-89", "artifact_path": "docs/evidence/releases/{candidate_sha}/W.json" },
+    "P": { "owner": "AND-89", "artifact_path": "docs/evidence/releases/{candidate_sha}/P.json" },
+    "MI": { "owner": "AND-77", "artifact_path": "docs/evidence/releases/{candidate_sha}/MI.json" },
+    "CX": { "owner": "AND-77", "artifact_path": "docs/evidence/releases/{candidate_sha}/CX.json" },
+    "R": { "owner": "AND-90", "artifact_path": "docs/evidence/releases/{candidate_sha}/R.json" }
+  },
+  "post_mvp_denylist": [
+    { "id": "aws-runtime", "claim": "AWS, AgentCore and a separate production runtime are not the Sites MVP fallback.", "evidence": ["architecture-check"] },
+    { "id": "imports", "claim": "ZIP/local import and legacy migration are absent.", "evidence": ["okf-unit", "changeset-preflight"] },
+    { "id": "checkpoints", "claim": "Branches, merge, moving tags and named checkpoints are absent.", "evidence": ["mind-history"] },
+    { "id": "non-markdown-assets", "claim": "Non-Markdown Asset transport is absent.", "evidence": ["okf-unit", "changeset-preflight"] },
+    { "id": "personalization", "claim": "Personalized landing and website AI are not exposed.", "evidence": ["exposure-contract"] },
+    { "id": "oauth-company-knowledge", "claim": "OAuth/public-plugin and company-knowledge profiles are not claimed.", "evidence": ["mcp-transport", "mcp-tools"] },
+    { "id": "claude-support", "claim": "Claude Code is not a supported client without its own conformance evidence.", "evidence": ["mcp-transport"] },
+    { "id": "anonymous-access", "claim": "Anonymous access and publication remain absent.", "evidence": ["mind-routes"] },
+    { "id": "draft-approval", "claim": "Server drafts and approval artifacts are absent from immediate commits.", "evidence": ["changeset-preflight", "mcp-commit-export"] }
+  ]
+}
+```
+<!-- readiness-registry:end -->
 
 ## Обязательные live flows
 

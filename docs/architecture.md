@@ -1,7 +1,9 @@
 # Архитектура Mind Diary
 
-Статус: proposal, 2026-08-05. Документ описывает целевую форму первого
-прототипа; components, schemas, tests и deployment ещё не реализованы.
+Статус: proposal, обновлено 2026-08-08. Документ описывает архитектурный
+contract первого прототипа. Локальные components, contracts, in-memory adapters
+и automated tests реализованы; Sites composition, durable platform adapters и
+проверенный production deployment ещё отсутствуют.
 
 ## Драйверы и ограничения
 

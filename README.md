@@ -15,9 +15,12 @@ MVP в OpenAI Sites. При подтверждённой пользовател�
 post-MVP infrastructure direction — AWS/AgentCore; это также самостоятельная
 учебная цель проекта, но не текущая release surface.
 
-Сейчас репозиторий содержит design bootstrap и воспроизводимый engineering
-baseline с package boundaries, deterministic fixtures и automated checks.
-Исполняемый MCP server, UI и облачная инфраструктура ещё не реализованы.
+Сейчас репозиторий содержит реализованные локальные domain/application
+capabilities первого vertical slice, in-memory adapters, web control-plane UI
+modules, MCP transport/tools/resources, deterministic OKF export, fixtures и
+automated checks. Это ещё не deployable production Site: durable Sites
+persistence/composition, production binding и live web/MCP evidence не
+подтверждены.
 
 Важная оговорка: подключённая MCP-база не находится целиком в контексте модели.
 Она виртуально доступна через поиск и точечное чтение, а в контекст попадают
@@ -54,14 +57,15 @@ full-bundle OKF, documentation, architecture и secret/config checks. Она н�
 ## Статус
 
 Базовый фичасет первого прототипа зафиксирован в ADR и спецификациях; подробный
-REST/MCP contract подготовлен как proposal для верификации. Engineering
-baseline уже фиксирует module graph и canonical checks. Следующий этап —
-реализовать local vertical slice:
-authenticated account bootstrap, `/me`, roles/visibility, user-scoped
-Streamable HTTP MCP с custom Mind-aware tools, atomic content commits, history и
-deterministic OKF 0.2 export, после чего весь обязательный slice должен пройти
-production gate в Sites. ZIP import и transport producer-defined non-Markdown
-files в этот scope не входят, но imports и named checkpoints явно планируются
-post-MVP; support
-non-Markdown files/assets остаётся отдельным открытым решением. Команды
-build/check работают только для baseline; команды запуска сервиса пока нет.
+REST/MCP contract остаётся proposal для проверки на production platform.
+Локальная реализация уже покрывает account bootstrap, `/me`, roles/visibility,
+custom Mind-aware MCP transport и tools, atomic content commits, history,
+search, validation и deterministic OKF 0.2 export автоматизированными unit,
+integration, conformance, security и failure-injection tests. Следующий этап —
+собрать deployable product Site с durable platform adapters и пройти на одном
+exact SHA live Sites, MCP Inspector и Codex gates. ZIP import и transport
+producer-defined non-Markdown files в этот scope не входят, но imports и named
+checkpoints явно планируются post-MVP; support non-Markdown files/assets
+остаётся отдельным открытым решением. Команды build/check подтверждают только
+локальное evidence; команды запуска production service и подтверждённого live
+deployment пока нет.
