@@ -482,6 +482,55 @@ exported handlers локально, а production wire был дополните
 modern calls и обязательным реальным Codex client gate. Это ограничение не
 следует переписывать как live Inspector conformance.
 
+### Расширенная live-матрица version 4
+
+Повторная проверка 2026-08-08T22:40Z–23:30Z выполнялась на том же owner-only
+Site, но уже на saved version `4`
+(`appgprj_example1428fe59b5d8381c~appgver_example9dce30ded078821f`),
+source commit `b7da48719d984e5328847e937a2cdfc6e7b811bb` и production deployment
+`appgdep_example827b4272dcbb8517`. Deployment завершён успешно;
+live URL и runtime environment revision `1` не изменились. Этот commit является
+предком собранного AND-149 candidate `ca01a2a1e57bd187c67d3f85a47d6057433ed215`,
+но не равен ему, поэтому version 4 нельзя выдавать за deployment exact
+AND-149 candidate.
+
+| Проверка | Live результат |
+| --- | --- |
+| Raw `server/discover`, `tools/list` | HTTP 200; modern `2026-07-28`; 12 tools с read/write token |
+| Raw `resources/list`, `resources/read` | HTTP 200; два root resources; exact Markdown read прошёл |
+| JSON / request-scoped SSE | Оба response mode прошли; SSE вернул один корректно завершённый frame |
+| Protocol negatives | metadata/header mismatch — `400/-32020`; wrong version — `400/-32022` |
+| Auth negatives | invalid и отозванный application Bearer — HTTP 401 с Bearer challenge |
+| Current Inspector `2.1.0`, `protocolEra=modern`, `tools/list` | exit 0; 11 read-only-visible tools |
+| Current Inspector `2.1.0`, `protocolEra=modern`, `resources/list` | exit 1: response не прошёл client schema |
+| Real `codex-cli 0.147.0`, modern read flow | list/resolve/info/browse/search/fetch/history/validation — пройдены |
+| Real `codex-cli 0.147.0`, modern write flow | controlled commit и export start/status — пройдены, exit 0 |
+| Mutation negatives | invalid OKF rejected; idempotent replay вернул ту же revision; stale HEAD дал retryable conflict; read-only token получил `insufficient_scope` |
+
+Первый Inspector attempt без per-server `protocolEra=modern` использовал его
+default legacy negotiation и потому не был доказательством modern
+несовместимости. После корректного pin `tools/list` прошёл live. Оставшийся
+Inspector blocker точнее: production `resources/list` возвращает
+`nextCursor: null` и не добавляет обязательные для complete result `ttlMs` и
+`cacheScope`; Inspector ожидает optional string cursor либо отсутствие поля,
+числовой TTL и `public | private` cache scope. Raw HTTP 200 не заменяет эту
+schema validation.
+
+Для матрицы был создан отдельный synthetic private ordinary Mind без
+персональных данных. MCP подтверждает owner membership, immutable history,
+поиск после commit, validation и export. Production web/control UI при этом не
+проецирует ordinary Minds в библиотеку и не открывает штатный owner deletion
+flow, поэтому тестовый Mind пока нельзя безопасно удалить через продуктовый
+интерфейс. Все завершившие проверку токены отозваны; cleanup Mind, current-access
+denial после deletion и private non-member denial остаются открытыми. Второй
+зарегистрированный principal для последней проверки не создавался.
+
+Следовательно, positive resolution для dispatcher, modern lifecycle, tools,
+Codex read/write и application auth уже есть, но AND-77 пока не выполнена:
+нужно исправить modern resources result shape, восстановить ordinary-Mind
+control UI, развернуть exact candidate и повторить Inspector/resources,
+deletion/current-access и private non-member cases на одном deployment.
+
 ## Repeatable live procedure после platform/client change
 
 ### 1. Зафиксировать deployment identity
