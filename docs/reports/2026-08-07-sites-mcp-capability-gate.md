@@ -1,10 +1,12 @@
 # OpenAI Sites + MCP capability gate на 2026-08-07
 
-Статус: **live gate выполнен с отрицательным результатом; release 0.1
-blocked**. Этот report фиксирует локально проверенную поверхность AND-37,
-exact production probe, повторную проверку exact product deployment в AND-77
-и воспроизводимый отказ Sites/Codex boundary. Он не подтверждает совместимость
-Codex с endpoint.
+Статус: **исторический live gate выполнен с отрицательным результатом; direct
+resolution candidate локально проверен 2026-08-08 и ожидает exact production
+redeploy/live recheck**. Этот report фиксирует локально проверенную поверхность
+AND-37, exact production probe, повторную проверку exact product deployment в
+AND-77, воспроизводимый отказ Sites/Codex boundary и последующий диагноз. До
+нового live evidence он не подтверждает совместимость Codex с production
+endpoint.
 
 ## Вывод
 
@@ -306,6 +308,137 @@ Positive MCP Inspector + Codex conformance gate остаётся blocked: route 
 deployment не пройдены. AND-77 остаётся open. Отрицательный route probe не
 закрывает story и не разрешает fallback в AWS, AgentCore, отдельный container,
 public access или SIWC bypass.
+
+## Direct diagnosis и resolution candidate на 2026-08-08
+
+Этот раздел сохраняет результат отдельного прямого расследования после version
+2. Он не переписывает отрицательное evidence выше и не выдаёт локальную
+совместимость за production release.
+
+### Что именно сломалось
+
+Проблема была не в product Worker route, Vinext packaging, application Bearer
+auth или owner-only access как таковых. OpenAI Sites специально обрабатывает
+**точный lowercase pathname `/mcp` до вызова deployed Worker**. Это
+недокументированное наблюдаемое поведение платформы; публичная документация
+Sites не обещает ни такую резервацию, ни возможность использовать exact `/mcp`
+для произвольного hosted application.
+
+Диагноз опирается не на один HTTP 404, а на сочетание response fingerprint и
+отсутствия matching Worker event:
+
+| Контроль | Наблюдение |
+|---|---|
+| `GET`, `POST`, `OPTIONS /mcp` | HTTP 404, `text/plain`, 9 bytes, `Not found`; matching Worker event отсутствует |
+| `/mcp?query=1`, иной `Accept`, invalid application `Authorization` | тот же platform fingerprint; Worker не вызывается |
+| `/mcp/` | request достигает Worker и получает application/runtime redirect на `/mcp` |
+| `/api/mcp` и произвольный non-reserved path | request достигает Worker; ответ определяется текущим application runtime |
+| Sites SIWC bypass header | снимает audience gate, но exact `/mcp` всё равно перехватывается до Worker |
+| Три другие public Sites того же workspace | exact `/mcp` даёт тот же pre-Worker fingerprint; public access не устраняет special-case |
+
+Один unmarked 404 сам по себе не считается достаточным evidence: например,
+старый runtime мог вернуть собственный 404 на `/api/mcp`, но matching Worker log
+показывал, что request дошёл до application. Классификация pre-Worker требует
+одновременно известный platform fingerprint и отсутствие соответствующего
+Worker event после bounded задержки.
+
+### Почему repository route не мог вернуть этот ответ
+
+Artifact audit exact version 2 подтвердил:
+
+- uploaded Worker bundle содержит exact `/mcp` dispatch до web/Vinext fallback;
+- прямой вызов default `worker.fetch` этого bundle с D1/R2 bindings возвращает
+  application `401 application/problem+json` и Bearer challenge;
+- bundle не содержит repository-owned route map, способной выборочно заменить
+  только exact `/mcp` на `text/plain Not found` до application auth;
+- source tree и packaged `dist/server/index.js` совпадают по проверенному
+  content digest.
+
+Следовательно, старый deployment действительно публиковал требуемый route, но
+Sites dispatcher не передавал exact `/mcp` этому route. Переключение Site в
+public, изменение application Bearer или повторная упаковка того же pathname не
+устраняют причину.
+
+### Независимый client lifecycle gap
+
+После обхода reserved route остаётся отдельная несовместимость клиента.
+Проверенный `codex-cli 0.147.0` в default mode начинает legacy `initialize` и
+предлагает `2025-06-18`; при включённом `mcp_2026_07_28` тот же build начинает
+modern flow с `server/discover`. Поэтому один modern-only endpoint не покрывает
+фактический default Codex, а возврат всего продукта на старую версию нарушил бы
+принятый target profile.
+
+### Принятое исправление
+
+Implementation commit `5d08d70d4389499a626e79f6ebb7242685f2257e`
+делает migration явной и не redirect-ит credential-bearing requests:
+
+- `POST /api/mcp` — stateless MCP `2026-07-28`, начиная с обязательного
+  `server/discover`;
+- `POST /api/mcp/2025-11-25` — изолированный stateless bridge для default
+  `codex-cli 0.147.0`: `initialize`, `notifications/initialized`, `ping`,
+  `tools/list` и `tools/call`, без server session;
+- exact `/mcp` исключён из product surface и при достижении Worker получает
+  детерминированный product 404, а не redirect;
+- оба active endpoint используют одну content application и заново проверяют
+  application Bearer, token state, scope и текущий ACL на каждом request.
+
+Расследование также выявило два product defect, которые маскировались
+dispatcher-level отказом:
+
+1. D1 Sites metadata и MCP token state восстанавливались раздельно, поэтому
+   bearer мог пройти cryptographic lookup, но current authorization возвращал
+   `authorization_state_unavailable`. Adapter теперь объединяет principal,
+   Mind/membership и token state на одном durable event snapshot; конкурентный
+   revoke перед append проигрывает CAS, заставляет reload и закрывает retry с
+   `token_inactive`.
+2. MCP `commit_changeset` после canonical snake-to-camel conversion создавал
+   `expectedRevision`, а application adapter читал `expectedRevisionId`.
+   Исправленный mapping передаёт реальный `expected_revision` в HEAD CAS.
+
+### Локальное доказательство candidate
+
+На exact implementation candidate выполнено:
+
+- canonical repository gate: TypeScript clean build, `431/431` product tests,
+  `138/138` orchestration tests, fixtures, architecture, Product Site, docs и
+  secret hygiene — pass;
+- Vinext production build: `5/5` stages — pass;
+- MCP Inspector `2.1.0`: modern и legacy profiles выполнили
+  `list_minds`, exit 0;
+- реальный `codex-cli 0.147.0`: default legacy и opt-in modern profiles
+  завершили настоящий `mcp_tool_call list_minds`, exit 0;
+- full product runtime: verified Sites identity → account bootstrap → issuance
+  реального hashed write token → legacy `commit_changeset` → HEAD advance →
+  web revoke → следующий MCP request получает 401;
+- финальный deployable bundle: missing Bearer даёт application 401 на обоих
+  active endpoint, exact `/mcp` даёт product 404, `GET /api/mcp` даёт 405.
+
+Это доказывает candidate/client compatibility локально, но ещё не доказывает,
+что новый `/api/mcp` проходит production Sites dispatcher и что D1/R2 bindings
+сохранили состояние при redeploy.
+
+### Обязательный live acceptance после redeploy
+
+Production resolution можно заявлять только для exact pushed SHA и saved Site
+version после следующих проверок:
+
+1. authenticated web/control smoke на том же Site без повторного account
+   bootstrap;
+2. raw modern `server/discover` и `tools/list` через `/api/mcp`;
+3. default Codex lifecycle и `list_minds` через
+   `/api/mcp/2025-11-25`;
+4. matching Worker events для обоих endpoint и отсутствие raw credentials,
+   identity values или private content в evidence;
+5. persisted Personal Mind/token metadata и ранее записанные D1/R2 records
+   доступны после redeploy;
+6. revoked/missing/invalid application Bearer остаются generic 401, а Site
+   audience gate не подменяется application authorization.
+
+Для owner-only Site identity-less client request использует два независимых
+уровня: platform-supported `OAI-Sites-Authorization` проходит Sites audience
+gate, а обычный `Authorization: Bearer <Mind Diary token>` проходит product
+auth. Эти credentials нельзя смешивать, логировать или сохранять в report.
 
 ## Repeatable live procedure после platform/client change
 
