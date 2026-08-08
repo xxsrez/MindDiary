@@ -307,7 +307,7 @@ class ProductControlApplication {
         return Object.freeze({ token: result.token, secret: result.secret.consumeSecret() });
       }
       case "revoke_mcp_token":
-        return this.services.tokens.revokeMcpToken(actor as never, asRecord(input, { tokenId: input.token_id }) as never);
+        return this.services.tokens.revokeMcpToken(actor as never, input.token_id as never);
       case "list_members":
       {
         const mind = await this.#mind(actor, input);
