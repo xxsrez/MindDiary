@@ -13,6 +13,13 @@ Batch — связанный проверяемый product increment, а не �
 - накопился заметный набор небольших изменений;
 - следующая задача существенно увеличивает risk surface.
 
+Boundary не означает, что batch существует. До gate сначала проверь
+current-run eligibility: есть хотя бы одна feature с подтверждённой цепочкой
+`claim -> feature-ready -> integrate -> task-done` либо resolved forward-fix
+уже зарегистрированного prerelease/UAT defect. Исторические Done, пустой ready
+frontier, новый invocation и изменение самого release tooling не проходят эту
+проверку. При пустом milestone верни `no-work` без gate, dev, CI и UAT.
+
 ## Gate
 
 Для MindDiary exact candidate выполняй установленный `AGENTS.md` contract:
@@ -24,7 +31,8 @@ git diff --check '<previous-candidate>..<candidate>'
 ```
 
 Не повторяй subcommands, уже входящие в aggregate. Local gate не является UAT
-evidence.
+evidence. Не запускай aggregate «на всякий случай»: сначала должен существовать
+eligible current-run batch.
 
 ## UAT
 

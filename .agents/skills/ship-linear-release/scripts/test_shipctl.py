@@ -83,6 +83,40 @@ class ShipctlTest(unittest.TestCase):
             encoding="utf-8",
         )
 
+    def inventory(
+        self,
+        path: Path,
+        issues: list[dict[str, object]],
+    ) -> None:
+        path.write_text(
+            json.dumps(
+                {
+                    "schema": MODULE.INVENTORY_SCHEMA,
+                    "project_id": "project-1",
+                    "milestone_id": "milestone-1",
+                    "has_next_page": False,
+                    "issues": issues,
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    def inventory_issue(
+        self,
+        issue_id: str,
+        *,
+        state: str = "Done",
+        status_type: str = "completed",
+    ) -> dict[str, object]:
+        return {
+            "id": issue_id,
+            "identifier": issue_id,
+            "title": f"Task {issue_id}",
+            "state": state,
+            "status_type": status_type,
+            "priority": 2,
+        }
+
     def issue(
         self,
         issue_id: str,
@@ -224,6 +258,130 @@ class ShipctlTest(unittest.TestCase):
                 ["worker-1", "worker-2", "worker-3"],
             )
 
+    def test_terminal_only_preflight_is_no_work_and_creates_no_journal(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            repo = self.repo_fixture(root)
+            inventory = root / "inventory.json"
+            self.inventory(
+                inventory,
+                [self.inventory_issue(f"AND-{index}") for index in range(1, 72)],
+            )
+            result = self.invoke(
+                "preflight", "--repo", str(repo),
+                "--project-id", "project-1", "--milestone-id", "milestone-1",
+                "--invocation", "$ship-linear-release workers=3", "--input", str(inventory),
+            )
+            self.assertEqual(result["disposition"], "no-work")
+            self.assertEqual(result["workers"], 3)
+            self.assertEqual(result["linear"]["issue_count"], 71)
+            self.assertEqual(result["linear"]["unfinished_count"], 0)
+            self.assertFalse(result["linear"]["relations_required"])
+            self.assertFalse(result["release_required"])
+            self.assertFalse(MODULE.runs_dir(repo).exists())
+
+    def test_zero_work_forward_path_uses_two_cli_calls_and_stops(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            repo = self.repo_fixture(root)
+            raw = root / "linear.json"
+            inventory = root / "inventory.json"
+            raw.write_text(
+                json.dumps(
+                    {
+                        "issues": [
+                            {
+                                "id": f"AND-{index}",
+                                "title": f"Task {index}",
+                                "status": "Done",
+                                "statusType": "completed",
+                                "priority": {"value": 2},
+                                "projectId": "project-1",
+                                "projectMilestone": {"id": "milestone-1", "name": "0.1"},
+                            }
+                            for index in range(1, 72)
+                        ],
+                        "hasNextPage": False,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            normalized = subprocess.run(
+                [
+                    sys.executable, str(SCRIPTS / "linear_inventory.py"),
+                    "--input", str(raw), "--output", str(inventory),
+                    "--project-id", "project-1", "--milestone-id", "milestone-1",
+                ],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            self.assertEqual(json.loads(normalized.stdout)["disposition"], "no-work")
+            preflight = subprocess.run(
+                [
+                    sys.executable, str(SCRIPTS / "shipctl.py"), "preflight",
+                    "--repo", str(repo), "--project-id", "project-1",
+                    "--milestone-id", "milestone-1", "--invocation", "$ship-linear-release",
+                    "--input", str(inventory),
+                ],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            result = json.loads(preflight.stdout)
+            self.assertEqual(result["disposition"], "no-work")
+            self.assertEqual(result["next_action"], "report and stop")
+            self.assertFalse(MODULE.runs_dir(repo).exists())
+
+    def test_preflight_requires_details_only_for_unfinished_and_blocks_dirty_start(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            repo = self.repo_fixture(root)
+            inventory = root / "inventory.json"
+            self.inventory(
+                inventory,
+                [
+                    self.inventory_issue("AND-1"),
+                    self.inventory_issue("AND-2", state="Todo", status_type="unstarted"),
+                ],
+            )
+            (repo / "dirty.txt").write_text("dirty\n", encoding="utf-8")
+            result = self.invoke(
+                "preflight", "--repo", str(repo),
+                "--project-id", "project-1", "--milestone-id", "milestone-1",
+                "--invocation", "$ship-linear-release", "--input", str(inventory),
+            )
+            self.assertEqual(result["disposition"], "blocked")
+            self.assertEqual(result["reason"], "REPOSITORY_DIRTY")
+            self.assertEqual(result["linear"]["unfinished_issue_ids"], ["AND-2"])
+            self.assertTrue(result["linear"]["relations_required"])
+            self.assertFalse(MODULE.runs_dir(repo).exists())
+
+    def test_preflight_recognizes_an_existing_empty_run_as_no_work(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            repo = self.repo_fixture(root)
+            run = self.init_run(repo)
+            inventory = root / "inventory.json"
+            self.inventory(inventory, [self.inventory_issue("AND-1")])
+            result = self.invoke(
+                "preflight", "--repo", str(repo),
+                "--project-id", "project-1", "--milestone-id", "milestone-1",
+                "--invocation", "$ship-linear-release", "--input", str(inventory),
+            )
+            self.assertEqual(result["disposition"], "no-work")
+            self.assertEqual(result["active_run_id"], run["run_id"])
+            self.assertIn("complete existing no-op run", result["next_action"])
+
+    def test_snapshot_templates_are_machine_readable_and_closed(self) -> None:
+        inventory = self.invoke("snapshot-template", "--kind", "inventory")
+        plan = self.invoke("snapshot-template", "--kind", "plan")
+        self.assertEqual(inventory["schema"], MODULE.INVENTORY_SCHEMA)
+        self.assertEqual(plan["schema"], MODULE.SNAPSHOT_SCHEMA)
+        self.assertEqual(set(plan), {"schema", "issues", "completed_dependency_ids"})
+
     def test_exact_init_is_reused_but_worker_drift_conflicts(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             repo = self.repo_fixture(Path(temporary))
@@ -271,6 +429,40 @@ class ShipctlTest(unittest.TestCase):
             self.assertIn("d", external["ready"])
             state = self.invoke("status", "--repo", str(repo), "--run", run["run_id"])["run"]
             self.assertEqual(state["completed_dependency_ids"], ["external-done"])
+
+    def test_historical_done_is_dependency_only_and_noop_completion_needs_no_uat(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            repo = self.repo_fixture(root)
+            run = self.init_run(repo)
+            historical = self.issue("a", "AND-1")
+            historical["state"] = "Done"
+            dependent = self.issue("b", "AND-2", dependencies=["a"])
+            result = self.plan(repo, run["run_id"], root, [historical, dependent])
+            self.assertEqual(result["ready"], ["b"])
+            state = self.invoke("status", "--repo", str(repo), "--run", run["run_id"])["run"]
+            self.assertNotIn("a", state["tasks"])
+            self.assertIn("a", state["completed_dependency_ids"])
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            repo = self.repo_fixture(root)
+            run = self.init_run(repo)
+            historical = self.issue("a", "AND-1")
+            historical["state"] = "Done"
+            result = self.plan(repo, run["run_id"], root, [historical])
+            self.assertEqual(result["disposition"], "no-work")
+            batch = self.invoke(
+                "batch-create", "--repo", str(repo), "--run", run["run_id"],
+                "--candidate", self.git(repo, "rev-parse", "main"), "--gate", "passed", expected=2,
+            )
+            self.assertEqual(batch["code"], "BATCH_EMPTY")
+            completed = self.invoke(
+                "complete", "--repo", str(repo), "--run", run["run_id"],
+                "--main-sha", self.git(repo, "rev-parse", "main"),
+            )
+            self.assertEqual(completed["disposition"], "no-work")
+            self.assertFalse(completed["release_required"])
 
     def test_three_worker_claims_use_distinct_worktrees_and_reject_scope_overlap(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -508,6 +700,28 @@ class ShipctlTest(unittest.TestCase):
             repo = self.repo_fixture(root)
             run = self.init_run(repo)
             run_id = run["run_id"]
+            rejected = self.invoke(
+                "defect", "--repo", str(repo), "--run", run_id,
+                "--route", "coordinator", "--summary", "invented", expected=2,
+            )
+            self.assertEqual(rejected["code"], "DEFECT_REQUIRES_CURRENT_WORK")
+            self.plan(repo, run_id, root, [self.issue("a", "AND-1")])
+            branch = "codex/and-1-defect-routes"
+            self.git(repo, "switch", "-c", branch)
+            self.claim(repo, run_id, "a", "coordinator", branch, repo, "src/a")
+            head = self.commit_change(repo, "src/a/result.txt", "candidate\n")
+            self.invoke(
+                "feature-ready", "--repo", str(repo), "--run", run_id,
+                "--issue", "a", "--head", head, "--check", "targeted=passed",
+            )
+            self.git(repo, "switch", "main")
+            self.git(repo, "merge", "--ff-only", branch)
+            main_sha = self.git(repo, "rev-parse", "main")
+            self.invoke(
+                "integrate", "--repo", str(repo), "--run", run_id,
+                "--issue", "a", "--main-sha", main_sha,
+            )
+            self.invoke("task-done", "--repo", str(repo), "--run", run_id, "--issue", "a")
             for route in ("reopen", "new-bug"):
                 result = self.invoke(
                     "defect", "--repo", str(repo), "--run", run_id,

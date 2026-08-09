@@ -18,7 +18,8 @@ runtime-протоколом этой версии. Расхождение ни�
 3. интегрировать готовые feature branches в `main`;
 4. периодически выпускать осмысленные batches в UAT;
 5. исправлять prerelease и UAT defects с повышенным приоритетом;
-6. завершить milestone только после проверки repository state, Linear и UAT.
+6. завершить milestone после проверки repository state и Linear, а для
+   созданного в этом run meaningful candidate — также UAT.
 
 Skill не выполняет production release. Production всегда требует отдельного
 ручного workflow и явного запроса пользователя.
@@ -117,7 +118,28 @@ effect.
 
 ## 6. Планирование и dispatch
 
-Перед работой coordinator получает bounded snapshot milestone и строит
+До создания journal и проверки worker capacity coordinator делает дешёвый
+read-only inventory:
+
+1. одним paginated `list_issues` получает все issue exact milestone;
+2. проверяет, что выборка полная и milestone identity exact;
+3. отделяет terminal issue от незавершённых;
+4. запускает repo-local `preflight`.
+
+Если незавершённых issue нет, active run с реальной текущей работой отсутствует
+и нет уже зарегистрированного failed UAT defect, результат равен `no-work`.
+Coordinator немедленно завершает invocation отчётом о Linear и Git state. В
+этом пути запрещены `init`, relations/acceptance reads для исторических Done,
+worker/subagent allocation, repository gate, local dev, CI wait, batch creation,
+UAT deployment и product changes. Предыдущий UAT можно назвать только
+датированным историческим evidence; он не становится evidence нового release.
+
+Если незавершённые issue есть, coordinator запрашивает relations и полную
+acceptance только для них и необходимых boundary dependencies. Исторические
+terminal issue не становятся tasks текущего run: их stable IDs используются
+только как `completed_dependency_ids`.
+
+После этого coordinator получает bounded snapshot milestone и строит
 dependency-aware ready frontier. Issue готова, если:
 
 - она незавершённая и входит в exact milestone;
@@ -163,6 +185,13 @@ Coordinator закрывает batch, когда накоплен осмысле
 либо возникла естественная risk boundary: завершённая связанная группа задач,
 важный fix, исчерпание ready frontier или необходимость быстро проверить UAT.
 
+`Ready frontier исчерпан` является boundary только когда в текущем run уже
+есть новый интегрированный результат. Batch обязан содержать хотя бы одну
+feature, реально прошедшую `claim -> feature-ready -> integrate -> task-done` в
+этом run, либо зарегистрированный forward-fix реального prerelease/UAT defect.
+Исторические Done, пустой milestone, изменение самого release tooling и простой
+факт нового invocation не создают batch и не требуют UAT.
+
 Для exact candidate coordinator:
 
 1. запускает канонический repository gate;
@@ -183,6 +212,11 @@ fragment. Secret-bearing и signed URLs не являются допустимы
 Failed prerelease guardrail или сломанный UAT имеет приоритет над новой обычной
 работой. Новые dispatch временно приостанавливаются, пока coordinator не
 классифицирует проблему.
+
+Defect flow можно открыть только для candidate, созданного текущей работой:
+после интегрированной feature, failed prerelease gate такого candidate либо
+failed UAT batch. Нельзя превращать отсутствие работы или ошибочное ожидание
+skill-а в product defect и затем чинить продукт под это ожидание.
 
 Failed UAT блокирует ordinary dispatch сразу после записи результата, ещё до
 создания defect record. Блокировка снимается только после нового passing
@@ -224,10 +258,18 @@ Run завершён, когда:
 
 - в exact milestone нет незавершённых in-scope issue и unresolved UAT defects;
 - все lanes освобождены, feature branches интегрированы либо явно abandoned;
-- `main` clean и прошёл финальный repository gate;
-- последний обязательный meaningful batch выпущен в UAT и smoke проверен;
+- `main` clean; если run создал candidate, он прошёл финальный repository gate;
+- последний обязательный meaningful batch, если он существует, выпущен в UAT и
+  smoke проверен;
 - Linear отражает verified state без ложных completion claims;
 - journal помечен `completed`.
+
+Для `no-work` invocation journal обычно вообще не создаётся. Если пустой
+journal уже был создан прежним/прерванным запуском и не содержит tasks,
+batches или defects, его можно закрыть как `completed` без repository gate и
+UAT. Это no-op completion, а не release claim. Во всех остальных случаях
+repository gate и passing UAT требуются только для фактически созданного
+meaningful batch exact candidate.
 
 Production evidence и production deployment в completion не входят.
 
@@ -257,6 +299,10 @@ gates и fail-closed поведение при необъяснимом конф
 - parallel flow с тремя lanes/worktrees и непересекающимися scopes;
 - dependency ordering, scope conflict и worker failure;
 - coordinator-only merge и batch creation;
+- terminal-only milestone fast path без journal, relations, gate и UAT;
+- historical Done не попадают в current-run batch;
+- no-op completion не требует UAT, а реальная integrated feature требует;
+- defect нельзя открыть без current-run candidate;
 - default continuous UAT и production refusal;
 - три repair-first маршрута без rollback;
 - crash/resume из каждого durable checkpoint;

@@ -12,21 +12,47 @@ contract, но не runtime checklist.
 
 ## Начать
 
-1. Полностью прочитай `AGENTS.md` и упрощённую спецификацию.
-2. Проверь Git root, current `main`, clean status и зарегистрированные worktrees.
-   Не исправляй чужой dirt через reset, clean или stash.
-3. Прочитай exact Linear project/current milestone, issue dependencies и
-   acceptance. Не выбирай milestone по догадке.
-4. Нормализуй invocation:
+Сначала выполняй дешёвый read-only fast path. Не загружай relations, product
+docs, release reference и Sites tooling, пока не доказано наличие работы.
+
+1. Полностью прочитай `AGENTS.md` и этот файл.
+2. Одним project/milestone lookup определи exact Linear project и current
+   milestone. Не выбирай milestone по догадке.
+3. Одним полностью paginated `list_issues(limit=250)` прочитай issue project-а.
+   Сохрани exact JSON tool result во временный файл вне repository и нормализуй
+   только inventory:
 
    ```bash
-   python3 .agents/skills/ship-linear-release/scripts/shipctl.py invocation \
-     '<полный invocation пользователя>'
+   python3 .agents/skills/ship-linear-release/scripts/linear_inventory.py \
+     --input '<raw-linear-list.json>' --output '<inventory.json>' \
+     --project-id '<linear-project-id>' --milestone-id '<linear-milestone-id>'
    ```
 
-5. Для `workers=N`, `N > 1`, до Git/Linear/UAT work проверь, что runtime имеет
+   Если ответ имеет следующую страницу, сначала дочитай все страницы; helper
+   отклоняет неполную выборку.
+4. Одной командой проверь invocation, Git и наличие работы:
+
+   ```bash
+   python3 .agents/skills/ship-linear-release/scripts/shipctl.py preflight \
+     --repo "$PWD" --project-id '<linear-project-id>' \
+     --milestone-id '<linear-milestone-id>' \
+     --invocation '<полный invocation пользователя>' \
+     --input '<inventory.json>'
+   ```
+
+5. Если `disposition=no-work`, немедленно остановись. Не вызывай `init`, не
+   читай relations/acceptance исторических Done, не создавай workers/worktrees,
+   не запускай gate/dev/CI и не создавай batch/UAT/defect/product changes.
+   Если preflight вернул пустой `active_run_id`, просто отчитай exact Linear и
+   Git state. Если он вернул существующий no-op run, закрой его обычным
+   `complete` и отчитай `disposition=no-work`; UAT для этого не требуется.
+6. Только для `start` или `resume` полностью прочитай
+   [упрощённую спецификацию](../../../docs/specs/ship-linear-release-v1.md),
+   проверь Git dirt/worktrees из preflight и запроси relations/acceptance только
+   для `unfinished_issue_ids` и их boundary dependencies.
+7. Для `workers=N`, `N > 1`, до Git/Linear/UAT writes проверь, что runtime имеет
    N свободных subagent slots. Не заменяй malformed или недоступный `N` на 1.
-6. Создай либо найди run journal:
+8. Создай либо найди run journal:
 
    ```bash
    python3 .agents/skills/ship-linear-release/scripts/shipctl.py init \
@@ -56,16 +82,28 @@ contract, но не runtime checklist.
 
 ## Спланировать milestone
 
-Сохрани bounded Linear snapshot в JSON и передай его journal helper-у:
+Не угадывай JSON schema и не читай для этого исходник helper-а. Получи exact
+template:
+
+```bash
+python3 .agents/skills/ship-linear-release/scripts/shipctl.py snapshot-template \
+  --kind plan
+```
+
+Сохрани bounded snapshot только незавершённых issue в JSON; IDs исторических
+terminal blockers положи в `completed_dependency_ids`. Затем передай snapshot
+journal helper-у:
 
 ```bash
 python3 .agents/skills/ship-linear-release/scripts/shipctl.py plan \
   --repo "$PWD" --run '<run-id>' --input '<snapshot.json>'
 ```
 
-Snapshot содержит `issues[]` с `id`, `identifier`, `title`, `state`,
-`priority`, `dependencies`. Dispatch только `ready` issue; обновляй snapshot
-после Linear drift, reopen или появления defect.
+Snapshot содержит `issues[]` с `id`, `identifier`, `title`, `state`, `priority`,
+`dependencies`. Исторические Done не являются tasks текущего run и никогда не
+попадают из-за одного нового invocation в release batch. Dispatch только
+`ready` issue; обновляй snapshot после Linear drift, reopen или появления
+defect.
 
 Перед каждой issue запиши claim:
 
@@ -114,6 +152,11 @@ UAT включён по умолчанию. Не связывай batch size с 
 первым cut прочитай
 [references/batch-release.md](references/batch-release.md).
 
+Не создавай batch, если в текущем run нет ни реально интегрированной feature,
+ни resolved forward-fix зарегистрированного prerelease/UAT defect. Пустой
+frontier, исторические Done и изменение release tooling сами по себе не являются
+release candidate. Не запускай gate/dev/CI до этой проверки.
+
 После canonical repository gate создай batch exact current `main`:
 
 ```bash
@@ -142,8 +185,9 @@ Journal помогает найти checkpoint, но не доказывает �
 
 - Linear milestone не содержит незавершённых in-scope issue/defects;
 - все lanes свободны;
-- `main` clean и прошёл final repository gate;
-- current `main` выпущен meaningful UAT batch и smoke прошёл;
+- для run с реальными интегрированными изменениями `main` clean, прошёл final
+  repository gate и выпущен meaningful UAT batch с passing smoke;
+- для no-work run достаточно exact clean `main`; gate и UAT не запускаются;
 - Linear отражает verified state.
 
 Затем:

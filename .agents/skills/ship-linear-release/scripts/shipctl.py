@@ -22,9 +22,12 @@ from typing import Any, Iterator
 from urllib.parse import urlsplit
 import uuid
 
+from linear_inventory import INVENTORY_SCHEMA, TERMINAL_STATUS_TYPES
+
 
 SCHEMA = "ship-linear-release/run/v1"
 SNAPSHOT_SCHEMA = "ship-linear-release/linear-snapshot/v1"
+PREFLIGHT_SCHEMA = "ship-linear-release/preflight/v1"
 SHA_RE = re.compile(r"[0-9a-f]{40}(?:[0-9a-f]{24})?")
 WORKERS_KEY_RE = re.compile(r"(?<![A-Za-z0-9_-])workers\s*=", re.I)
 WORKERS_VALUE_RE = re.compile(r"(?<![A-Za-z0-9_-])workers\s*=\s*([^\s,;]+)", re.I)
@@ -253,9 +256,9 @@ def refresh_frontier(state: dict[str, Any]) -> None:
         )
 
 
-def command_invocation(args: argparse.Namespace) -> int:
-    keys = WORKERS_KEY_RE.findall(args.text)
-    values = WORKERS_VALUE_RE.findall(args.text)
+def parse_invocation(text: str) -> dict[str, Any]:
+    keys = WORKERS_KEY_RE.findall(text)
+    values = WORKERS_VALUE_RE.findall(text)
     if not keys:
         workers = 1
     else:
@@ -264,7 +267,195 @@ def command_invocation(args: argparse.Namespace) -> int:
         if not re.fullmatch(r"[1-9][0-9]*", values[0]):
             raise ShipError("WORKERS_INVALID", "workers must be a positive integer")
         workers = int(values[0])
-    return emit({"workers": workers, "mode": "single" if workers == 1 else "parallel"})
+    return {"workers": workers, "mode": "single" if workers == 1 else "parallel"}
+
+
+def command_invocation(args: argparse.Namespace) -> int:
+    return emit(parse_invocation(args.text))
+
+
+def read_input(path: str, *, code: str) -> dict[str, Any]:
+    try:
+        if path == "-":
+            value = json.load(sys.stdin)
+        else:
+            value = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ShipError(code, str(exc)) from exc
+    if not isinstance(value, dict):
+        raise ShipError(code, "input must be an object")
+    return value
+
+
+def parse_inventory(value: dict[str, Any], *, project_id: str, milestone_id: str) -> list[dict[str, Any]]:
+    if value.get("schema") != INVENTORY_SCHEMA or set(value) != {
+        "schema", "project_id", "milestone_id", "has_next_page", "issues"
+    }:
+        raise ShipError("INVENTORY_INVALID", "unsupported or open inventory schema")
+    if value["project_id"] != project_id or value["milestone_id"] != milestone_id:
+        raise ShipError("LINEAR_SCOPE_MISMATCH", "inventory does not match exact project/milestone")
+    if value["has_next_page"] is not False or not isinstance(value["issues"], list):
+        raise ShipError("INVENTORY_INCOMPLETE", "inventory must contain the final page")
+    parsed: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    fields = {"id", "identifier", "title", "state", "status_type", "priority"}
+    for raw in value["issues"]:
+        if not isinstance(raw, dict) or set(raw) != fields:
+            raise ShipError("INVENTORY_INVALID", "inventory issue fields are not closed")
+        if not all(
+            isinstance(raw[field], str) and raw[field]
+            for field in ("id", "identifier", "title", "state", "status_type")
+        ) or not isinstance(raw["priority"], int):
+            raise ShipError("INVENTORY_INVALID", "inventory issue fields are invalid")
+        if raw["id"] in seen:
+            raise ShipError("INVENTORY_INVALID", f"duplicate issue: {raw['id']}")
+        seen.add(raw["id"])
+        parsed.append(dict(raw))
+    return parsed
+
+
+def current_run_has_candidate(state: dict[str, Any]) -> bool:
+    return bool(state["batches"] or state["defects"] or any(
+        value.get("feature_sha") is not None and value["status"] in {"integrated", "done"}
+        for value in state["tasks"].values()
+    ))
+
+
+def journal_is_noop(state: dict[str, Any]) -> bool:
+    return (
+        not state["batches"]
+        and not state["defects"]
+        and not any(value["active_issue"] for value in state["lanes"])
+        and all(value["status"] in TERMINAL_TASK_STATES for value in state["tasks"].values())
+        and not any(value.get("feature_sha") is not None for value in state["tasks"].values())
+    )
+
+
+def command_preflight(args: argparse.Namespace) -> int:
+    repo = repo_root(args.repo)
+    inventory = parse_inventory(
+        read_input(args.input, code="INVENTORY_INVALID"),
+        project_id=args.project_id,
+        milestone_id=args.milestone_id,
+    )
+    invocation = parse_invocation(args.invocation)
+    unfinished = sorted(
+        (issue["id"] for issue in inventory if issue["status_type"] not in TERMINAL_STATUS_TYPES),
+        key=lambda value: value.encode(),
+    )
+    terminal_count = len(inventory) - len(unfinished)
+    active = active_runs(repo)
+    same = [
+        state for state in active
+        if state["project_id"] == args.project_id and state["milestone_id"] == args.milestone_id
+    ]
+    branch = git(repo, "branch", "--show-current")
+    main_sha = full_sha(git(repo, "rev-parse", args.main_branch), "main sha")
+    clean = not bool(git(repo, "status", "--porcelain=v1", "--untracked-files=all"))
+    worktree_count = git(repo, "worktree", "list", "--porcelain").count("worktree ")
+    active_run_id: str | None = None
+    release_required = False
+    if len(same) == 1 and len(active) == 1:
+        active_run_id = same[0]["run_id"]
+        if same[0]["workers"] != invocation["workers"]:
+            disposition = "blocked"
+            reason = "ACTIVE_RUN_CONFLICT"
+            next_action = "inspect active run"
+        elif not unfinished and journal_is_noop(same[0]):
+            disposition = "no-work"
+            reason = None
+            next_action = "complete existing no-op run, then report and stop"
+        else:
+            disposition = "resume"
+            reason = None
+            next_action = "status"
+            release_required = current_run_has_candidate(same[0])
+    elif active:
+        disposition = "blocked"
+        reason = "ACTIVE_RUN_CONFLICT"
+        next_action = "inspect active run"
+    elif not unfinished:
+        disposition = "no-work"
+        reason = None
+        next_action = "report and stop"
+    elif branch != args.main_branch:
+        disposition = "blocked"
+        reason = "MAIN_BRANCH_REQUIRED"
+        next_action = f"switch to {args.main_branch} without discarding changes"
+    elif not clean:
+        disposition = "blocked"
+        reason = "REPOSITORY_DIRTY"
+        next_action = "resolve repository ownership before init"
+    else:
+        disposition = "start"
+        reason = None
+        next_action = "check worker capacity, then init"
+    return emit(
+        {
+            "schema": PREFLIGHT_SCHEMA,
+            "disposition": disposition,
+            "reason": reason,
+            "workers": invocation["workers"],
+            "mode": invocation["mode"],
+            "repository": {
+                "root": str(repo),
+                "branch": branch,
+                "main_sha": main_sha,
+                "clean": clean,
+                "worktree_count": worktree_count,
+            },
+            "linear": {
+                "project_id": args.project_id,
+                "milestone_id": args.milestone_id,
+                "issue_count": len(inventory),
+                "terminal_count": terminal_count,
+                "unfinished_count": len(unfinished),
+                "unfinished_issue_ids": unfinished,
+                "relations_required": bool(unfinished),
+            },
+            "active_run_id": active_run_id,
+            "release_required": release_required,
+            "next_action": next_action,
+        }
+    )
+
+
+def command_snapshot_template(args: argparse.Namespace) -> int:
+    if args.kind == "inventory":
+        return emit(
+            {
+                "schema": INVENTORY_SCHEMA,
+                "project_id": "<linear-project-id>",
+                "milestone_id": "<linear-milestone-id>",
+                "has_next_page": False,
+                "issues": [
+                    {
+                        "id": "<issue-id>",
+                        "identifier": "AND-123",
+                        "title": "<title>",
+                        "state": "Todo",
+                        "status_type": "unstarted",
+                        "priority": 2,
+                    }
+                ],
+            }
+        )
+    return emit(
+        {
+            "schema": SNAPSHOT_SCHEMA,
+            "issues": [
+                {
+                    "id": "<issue-id>",
+                    "identifier": "AND-123",
+                    "title": "<title>",
+                    "state": "Todo",
+                    "priority": 2,
+                    "dependencies": [],
+                }
+            ],
+            "completed_dependency_ids": [],
+        }
+    )
 
 
 def command_init(args: argparse.Namespace) -> int:
@@ -333,10 +524,7 @@ def command_init(args: argparse.Namespace) -> int:
 
 def command_plan(args: argparse.Namespace) -> int:
     repo = repo_root(args.repo)
-    try:
-        snapshot = json.loads(Path(args.input).read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise ShipError("SNAPSHOT_INVALID", str(exc)) from exc
+    snapshot = read_input(args.input, code="SNAPSHOT_INVALID")
     if not isinstance(snapshot, dict) or snapshot.get("schema") != SNAPSHOT_SCHEMA:
         raise ShipError("SNAPSHOT_INVALID", "unsupported snapshot schema")
     issues = snapshot.get("issues")
@@ -376,11 +564,25 @@ def command_plan(args: argparse.Namespace) -> int:
         )
         if missing_active:
             raise ShipError("SNAPSHOT_INCOMPLETE", f"active issues missing from snapshot: {', '.join(missing_active)}")
+        historical_terminal = {
+            issue_id
+            for issue_id, raw in parsed.items()
+            if raw["state"].lower() in COMPLETED_LINEAR_STATES
+            and issue_id not in state["tasks"]
+        }
         state["completed_dependency_ids"] = sorted(
-            completed_external, key=lambda value: value.encode()
+            set(completed_external) | historical_terminal,
+            key=lambda value: value.encode(),
         )
         for issue_id, raw in parsed.items():
             existing = state["tasks"].get(issue_id)
+            if raw["state"].lower() in COMPLETED_LINEAR_STATES:
+                if existing is None or existing["status"] == "done":
+                    continue
+                raise ShipError(
+                    "ISSUE_DRIFT",
+                    f"Linear marks an unfinished current-run issue terminal: {issue_id}",
+                )
             if existing and existing["status"] in ACTIVE_TASK_STATES | {"integrated"}:
                 if any(existing[field] != raw[field] for field in ("identifier", "title", "dependencies")):
                     raise ShipError("ISSUE_DRIFT", f"active issue changed: {issue_id}")
@@ -394,10 +596,9 @@ def command_plan(args: argparse.Namespace) -> int:
                 )
                 if not reopened:
                     raise ShipError("ISSUE_DRIFT", f"completed issue reopened without a registered defect: {issue_id}")
-            status = "done" if raw["state"].lower() in COMPLETED_LINEAR_STATES else "blocked"
             state["tasks"][issue_id] = {
                 **raw,
-                "status": status,
+                "status": "blocked",
                 "lane": None,
                 "branch": None,
                 "worktree": None,
@@ -415,7 +616,13 @@ def command_plan(args: argparse.Namespace) -> int:
             (value for value in state["tasks"].values() if value["status"] == "ready"),
             key=lambda value: (value["priority"], value["identifier"].encode()),
         )
-        response = {"run_id": state["run_id"], "ready": [value["id"] for value in ready]}
+        response = {
+            "run_id": state["run_id"],
+            "disposition": "no-work" if not state["tasks"] else "planned",
+            "ready": [value["id"] for value in ready],
+            "task_count": len(state["tasks"]),
+            "historical_terminal_count": len(historical_terminal),
+        }
     return emit(response)
 
 
@@ -611,7 +818,9 @@ def command_batch_create(args: argparse.Namespace) -> int:
         items = sorted(
             issue_id
             for issue_id, value in state["tasks"].items()
-            if value["status"] == "done" and value["batch_id"] is None
+            if value["status"] == "done"
+            and value["batch_id"] is None
+            and value.get("feature_sha") is not None
         )
         defects = sorted(
             value["id"]
@@ -696,6 +905,11 @@ def command_defect(args: argparse.Namespace) -> int:
         raise ShipError("DEFECT_SUMMARY_INVALID", "defect summary must be one bounded line")
     with edit_run(repo, args.run) as state:
         require_active(state)
+        if not current_run_has_candidate(state):
+            raise ShipError(
+                "DEFECT_REQUIRES_CURRENT_WORK",
+                "a prerelease/UAT defect requires an integrated current-run candidate",
+            )
         if args.route in {"reopen", "new-bug"} and not args.linear_issue_id:
             raise ShipError("LINEAR_ISSUE_REQUIRED", f"{args.route} requires --linear-issue-id")
         candidate_sha = state["uat"]["last_attempt_sha"] or state["current_main_sha"]
@@ -788,11 +1002,18 @@ def command_complete(args: argparse.Namespace) -> int:
         observed = full_sha(git(repo, "rev-parse", state["main_branch"]), "main sha")
         if observed != main_sha or git(repo, "status", "--porcelain=v1", "--untracked-files=all"):
             raise ShipError("MAIN_NOT_CLEAN", "completion requires exact clean main")
-        if state["uat"]["last_good_sha"] != main_sha:
+        release_required = current_run_has_candidate(state)
+        if release_required and state["uat"]["last_good_sha"] != main_sha:
             raise ShipError("UAT_NOT_CURRENT", "current main has no passing UAT batch")
         state["current_main_sha"] = main_sha
         state["status"] = "completed"
-        response = {"run_id": state["run_id"], "status": "completed", "main_sha": main_sha}
+        response = {
+            "run_id": state["run_id"],
+            "status": "completed",
+            "disposition": "released" if release_required else "no-work",
+            "release_required": release_required,
+            "main_sha": main_sha,
+        }
     return emit(response)
 
 
@@ -807,6 +1028,19 @@ def parser() -> argparse.ArgumentParser:
     invocation = commands.add_parser("invocation")
     invocation.add_argument("text")
     invocation.set_defaults(handler=command_invocation)
+
+    template = commands.add_parser("snapshot-template")
+    template.add_argument("--kind", choices=("inventory", "plan"), default="inventory")
+    template.set_defaults(handler=command_snapshot_template)
+
+    preflight = commands.add_parser("preflight")
+    preflight.add_argument("--repo", required=True)
+    preflight.add_argument("--project-id", required=True)
+    preflight.add_argument("--milestone-id", required=True)
+    preflight.add_argument("--invocation", required=True)
+    preflight.add_argument("--input", required=True)
+    preflight.add_argument("--main-branch", default="main")
+    preflight.set_defaults(handler=command_preflight)
 
     init = commands.add_parser("init")
     init.add_argument("--repo", required=True)
