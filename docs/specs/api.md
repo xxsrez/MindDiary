@@ -313,6 +313,10 @@ Rules:
 - Mutating browser requests требуют valid same-origin `Origin` и CSRF
   protection. Предлагаемый wire field — `X-CSRF-Token`, полученный из
   `GET /api/v1/session`; exact Sites integration остаётся compatibility gate.
+- Hosted `applicationOrigin` остаётся canonical HTTPS origin. Только full dev
+  runtime принимает canonical loopback HTTP origin (`localhost`, `127.0.0.1`
+  или `::1`); non-loopback HTTP fail-closed отклоняется на тех же Web/control и
+  export boundaries.
 - Secret, CSRF token, authenticated/account email, private query/body и
   deletion download grants не логируются.
 

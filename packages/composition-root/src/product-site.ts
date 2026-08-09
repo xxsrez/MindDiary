@@ -132,10 +132,12 @@ function nextOpaque(prefix: string): never {
 
 function canonicalHost(origin: string) {
   const url = new URL(origin);
-  if (url.protocol !== "https:" || url.origin !== origin || url.pathname !== "/") {
-    throw new TypeError("publicOrigin must be a canonical HTTPS origin");
+  const loopbackHttp = url.protocol === "http:"
+    && (url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "[::1]");
+  if ((url.protocol !== "https:" && !loopbackHttp) || url.origin !== origin || url.pathname !== "/") {
+    throw new TypeError("publicOrigin must be a canonical HTTPS or loopback HTTP origin");
   }
-  return verifiedSpaceHost(url.host);
+  return verifiedSpaceHost(url.hostname);
 }
 
 function ids(capture?: {

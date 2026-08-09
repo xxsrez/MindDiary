@@ -546,7 +546,11 @@ test("download grant configuration rejects unbounded TTL and unsafe URL bases", 
   ]) {
     assert.throws(
       () => new ExportJobApplicationService({ ...dependencies, downloadUrlBase }),
-      /safe absolute HTTPS URL|absolute HTTPS URL/u,
+      /safe absolute HTTPS or loopback HTTP URL|absolute HTTPS or loopback HTTP URL/u,
     );
   }
+  assert.doesNotThrow(() => new ExportJobApplicationService({
+    ...dependencies,
+    downloadUrlBase: "http://localhost:3000/api/v1/exports",
+  }));
 });

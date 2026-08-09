@@ -19,6 +19,10 @@ const serializedHosting = JSON.stringify(hosting);
 if (/SECRET|TOKEN|KEY|PASSWORD/iu.test(serializedHosting)) errors.push("hosting metadata contains secret-like configuration");
 
 const worker = await readFile(resolve(app, "worker/index.ts"), "utf8");
+const runtimeConfig = await readFile(resolve(app, "worker/runtime-config.ts"), "utf8");
+const rootManifest = JSON.parse(await readFile(resolve(root, "package.json"), "utf8"));
+const viteConfig = await readFile(resolve(app, "vite.config.ts"), "utf8");
+const sitesPlugin = await readFile(resolve(app, "tools/sites-vite-plugin.ts"), "utf8");
 const composition = await readFile(resolve(root, "packages/composition-root/src/product-site.ts"), "utf8");
 const mcp = await readFile(resolve(root, "packages/adapter-mcp/src/index.ts"), "utf8");
 const tokenUi = await readFile(resolve(root, "packages/adapter-web/src/token-management.ts"), "utf8");
@@ -29,6 +33,10 @@ if (!mcp.includes('MCP_ENDPOINT = "/api/mcp"') || !mcp.includes('MCP_LEGACY_CODE
 if (!composition.includes("path === MCP_ENDPOINT") || !composition.includes("path === MCP_LEGACY_CODEX_ENDPOINT")) errors.push("product dispatcher does not route both exact MCP endpoints");
 if (!tokenUi.includes("/api/mcp/2025-11-25")) errors.push("Codex token instructions do not use the verified compatibility endpoint");
 if (/sites-probe|PROBE_BUCKET|@aws-sdk|AgentCore|DynamoDB|OpenSearch/iu.test(`${worker}\n${composition}`)) errors.push("product Site contains a probe or forbidden production fallback");
+if (rootManifest.scripts?.dev !== "npm --prefix apps/mind-diary-site run dev") errors.push("root dev launcher does not start the exact Product Site package");
+if (!viteConfig.includes("devReady({ d1: hostingConfig.d1, r2: hostingConfig.r2 })")) errors.push("Product Site dev server does not install the release-profile readiness plugin");
+if (!sitesPlugin.includes('schema: "ship-work-release/dev-ready/v1"') || !sitesPlugin.includes("configuration_fingerprint")) errors.push("Product Site dev server does not emit the required machine-readable readiness event");
+if (!runtimeConfig.includes('origin.hostname === "localhost"') || !runtimeConfig.includes('origin.protocol === "https:"')) errors.push("runtime origin policy does not preserve HTTPS hosting with isolated loopback HTTP dev");
 
 const manifest = JSON.parse(await readFile(resolve(app, "package.json"), "utf8"));
 const lock = JSON.parse(await readFile(resolve(app, "package-lock.json"), "utf8"));

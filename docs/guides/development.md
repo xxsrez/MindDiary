@@ -63,8 +63,11 @@ Codex test и не Sites compatibility evidence.
 npm run dev
 ```
 
-Он должен поднимать на `localhost` полный применимый web/control, persistence и
-MCP runtime с изолированными local/test данными. Перед каждым UAT cut
+Он поднимает на `http://localhost:3000` полный применимый web/control,
+persistence и MCP runtime с изолированными local/test данными и печатает один
+machine-readable `ship-work-release/dev-ready/v1` event с loopback URL и
+non-secret configuration fingerprint. HTTP разрешён только для exact loopback
+dev origin; hosted runtime остаётся HTTPS-only. Перед каждым UAT cut
 `ship-work-release` запускает этот runtime, дожидается readiness и проверяет
 все flows, которые можно надёжно выполнить локально. В UAT уходят только exact
 candidate и dev receipt с URL, configuration fingerprint и результатами smoke.
@@ -109,8 +112,9 @@ user content.
 ## Local config и secrets
 
 Root `.env.example` и product app `.env.example` содержат только non-secret
-defaults/пустые placeholders. Для локальных значений разрешён ignored
-`.env.local`; plaintext bearer token нельзя коммитить. Product hosting manifest
+defaults/пустые placeholders. Для локальных Cloudflare Worker values используйте
+ignored `apps/mind-diary-site/.dev.vars`; plaintext bearer token нельзя
+коммитить. Product hosting manifest
 объявляет D1/R2 bindings и opaque Sites `project_id`, но не secrets. Hosted
 secret values задаются через Sites runtime settings:
 
@@ -118,7 +122,8 @@ secret values задаются через Sites runtime settings:
 - `MIND_DIARY_LOCATOR_KEY`;
 - `MIND_DIARY_EXPORT_DOWNLOAD_VERIFIER_KEY`;
 - `MIND_DIARY_CSRF_KEY`;
-- optional canonical HTTPS `MIND_DIARY_PUBLIC_ORIGIN`.
+- canonical HTTPS `MIND_DIARY_PUBLIC_ORIGIN` для hosted runtime либо exact
+  loopback HTTP origin для dev.
 
 Каждый cryptographic key — независимое 32-byte base64url значение; runtime
 fail-closed отклоняет отсутствующие или неверные значения.

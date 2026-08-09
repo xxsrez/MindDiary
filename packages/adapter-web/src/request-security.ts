@@ -70,15 +70,17 @@ const SAFE_DOWNSTREAM_HEADERS = Object.freeze([
 ] as const);
 const CONTROL_CHARACTER = /[\u0000-\u001f\u007f]/u;
 
-function canonicalHttpsOrigin(value: string): string {
+function canonicalApplicationOrigin(value: string): string {
   let parsed: URL;
   try {
     parsed = new URL(value);
   } catch {
-    throw new TypeError("applicationOrigin must be a canonical HTTPS origin");
+    throw new TypeError("applicationOrigin must be a canonical HTTPS or loopback HTTP origin");
   }
+  const loopbackHttp = parsed.protocol === "http:"
+    && (parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1" || parsed.hostname === "[::1]");
   if (
-    parsed.protocol !== "https:" ||
+    (parsed.protocol !== "https:" && !loopbackHttp) ||
     parsed.username !== "" ||
     parsed.password !== "" ||
     parsed.pathname !== "/" ||
@@ -86,7 +88,7 @@ function canonicalHttpsOrigin(value: string): string {
     parsed.hash !== "" ||
     parsed.origin !== value
   ) {
-    throw new TypeError("applicationOrigin must be a canonical HTTPS origin");
+    throw new TypeError("applicationOrigin must be a canonical HTTPS or loopback HTTP origin");
   }
   return parsed.origin;
 }
@@ -136,7 +138,7 @@ export class WebControlRequestSecurityBoundary<Result> {
   readonly #executor: WebControlMutationExecutor<Result>;
 
   constructor(options: WebControlRequestSecurityOptions<Result>) {
-    this.#applicationOrigin = canonicalHttpsOrigin(options.applicationOrigin);
+    this.#applicationOrigin = canonicalApplicationOrigin(options.applicationOrigin);
     if (typeof options.csrf?.verify !== "function") {
       throw new TypeError("csrf verifier is required");
     }

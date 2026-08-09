@@ -19,12 +19,18 @@ function decodeKey(value: string | undefined, name: string): Uint8Array {
   return bytes;
 }
 
+function isAllowedPublicOrigin(origin: URL): boolean {
+  if (origin.protocol === "https:") return true;
+  return origin.protocol === "http:"
+    && (origin.hostname === "localhost" || origin.hostname === "127.0.0.1" || origin.hostname === "[::1]");
+}
+
 export function readRuntimeConfig(request: Request, env: ProductEnv) {
   const requestOrigin = new URL(request.url).origin;
   const publicOrigin = env.MIND_DIARY_PUBLIC_ORIGIN ?? requestOrigin;
   const parsed = new URL(publicOrigin);
-  if (parsed.protocol !== "https:" || parsed.origin !== publicOrigin || parsed.pathname !== "/") {
-    throw new Error("MIND_DIARY_PUBLIC_ORIGIN must be a canonical HTTPS origin");
+  if (!isAllowedPublicOrigin(parsed) || parsed.origin !== publicOrigin || parsed.pathname !== "/") {
+    throw new Error("MIND_DIARY_PUBLIC_ORIGIN must be a canonical HTTPS or loopback HTTP origin");
   }
   if (requestOrigin !== publicOrigin) throw new Error("request origin does not match configured public origin");
   return Object.freeze({

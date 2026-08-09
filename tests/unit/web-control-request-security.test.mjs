@@ -99,7 +99,7 @@ test("composition root wires the concrete fail-closed Origin and CSRF policy", (
       csrf: { verify: () => true },
       executor: { execute: () => null },
     }),
-    /canonical HTTPS origin/u,
+    /canonical HTTPS or loopback HTTP origin/u,
   );
   assert.throws(
     () => new WebControlRequestSecurityBoundary({
@@ -107,8 +107,13 @@ test("composition root wires the concrete fail-closed Origin and CSRF policy", (
       csrf: { verify: () => true },
       executor: { execute: () => null },
     }),
-    /canonical HTTPS origin/u,
+    /canonical HTTPS or loopback HTTP origin/u,
   );
+  assert.doesNotThrow(() => new WebControlRequestSecurityBoundary({
+    applicationOrigin: "http://localhost:3000",
+    csrf: { verify: () => true },
+    executor: { execute: () => null },
+  }));
 });
 
 test("all declared mutation methods execute only after exact Origin and CSRF", async () => {
