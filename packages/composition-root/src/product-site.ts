@@ -79,7 +79,23 @@ import {
   CapabilityAuthorizer,
   CurrentAccessBackgroundAuthorizer,
 } from "@mind-diary/application-ports";
-import { verifiedSpaceHost } from "@mind-diary/domain";
+import { type Capability, verifiedSpaceHost } from "@mind-diary/domain";
+
+const PRODUCT_SITES_DEPLOYMENT_CAPABILITIES = Object.freeze([
+  "content:browse",
+  "content:search",
+  "content:fetch",
+  "content:history",
+  "content:validate",
+  "content:export",
+  "content:write",
+  "members:manage-basic",
+  "settings:configure",
+  "members:manage-admin",
+  "visibility:change",
+  "ownership:transfer",
+  "space:delete",
+] satisfies readonly Capability[]);
 
 export interface ProductSiteTrustedIdentityReader {
   readVerifiedIdentity(request: Request):
@@ -488,11 +504,7 @@ export async function createProductSiteRuntime(
       const context = Object.freeze({
         requestId: nextOpaque("request"),
         occurredAtUtc: clock.now(),
-        deploymentCapabilities: Object.freeze([
-          "content:browse", "content:search", "content:fetch", "content:history",
-          "content:validate", "content:export", "content:write", "space:settings",
-          "members:manage-basic", "members:manage-admin", "ownership:transfer",
-        ] as never),
+        deploymentCapabilities: PRODUCT_SITES_DEPLOYMENT_CAPABILITIES,
       });
       return resolveProductSitesIdentity({
         snapshot: await options.identity.readVerifiedIdentity(request),

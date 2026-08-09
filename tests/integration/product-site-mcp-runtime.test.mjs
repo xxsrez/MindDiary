@@ -268,9 +268,11 @@ async function modernMcp(runtime, secret, body) {
 }
 
 test("durable product runtime carries a Sites account token through Codex MCP and revokes it", async () => {
-  const runtime = await createProductSiteRuntime({
-    database: new FakeD1Database(),
-    bucket: new FakeR2Bucket(),
+  const database = new FakeD1Database();
+  const bucket = new FakeR2Bucket();
+  const runtimeOptions = {
+    database,
+    bucket,
     publicOrigin: ORIGIN,
     identity: {
       readVerifiedIdentity() {
@@ -286,7 +288,8 @@ test("durable product runtime carries a Sites account token through Codex MCP an
     exportDownloadVerifierKey: key(81),
     csrfKey: key(121),
     schedule() {},
-  });
+  };
+  let runtime = await createProductSiteRuntime(runtimeOptions);
 
   const registration = await responseFrom(runtime, new Request(`${ORIGIN}/`));
   assert.equal(registration.status, 200);
@@ -321,6 +324,36 @@ test("durable product runtime carries a Sites account token through Codex MCP an
   const settings = await responseFrom(runtime, new Request(`${ORIGIN}/settings/mcp`));
   assert.equal(settings.status, 200);
   const registeredCsrf = csrfFromHtml(await settings.text());
+
+  const createdMind = await responseFrom(runtime, new Request(`${ORIGIN}/api/v1/minds`, {
+    method: "POST",
+    headers: {
+      origin: ORIGIN,
+      "content-type": "application/json",
+      "x-csrf-token": registeredCsrf,
+      "idempotency-key": "mind:product-runtime-e2e",
+    },
+    body: JSON.stringify({ name: "Runtime Shared", handle: "runtime-shared" }),
+  }));
+  assert.equal(createdMind.status, 200);
+  assert.equal((await createdMind.json()).data.route, "/runtime-shared");
+
+  runtime = await createProductSiteRuntime(runtimeOptions);
+  const reconstructedMinds = await responseFrom(
+    runtime,
+    new Request(`${ORIGIN}/api/v1/minds`),
+  );
+  assert.equal(reconstructedMinds.status, 200);
+  assert.deepEqual(
+    (await reconstructedMinds.json()).data.map(({ route }) => route),
+    ["/me", "/runtime-shared"],
+  );
+  const reconstructedExact = await responseFrom(
+    runtime,
+    new Request(`${ORIGIN}/api/v1/minds/runtime-shared`),
+  );
+  assert.equal(reconstructedExact.status, 200);
+  assert.equal((await reconstructedExact.json()).data.access.role, "owner");
 
   const issued = await responseFrom(runtime, new Request(`${ORIGIN}/api/v1/mcp-tokens`, {
     method: "POST",
@@ -421,8 +454,11 @@ test("durable product runtime carries a Sites account token through Codex MCP an
   const listedBody = await listed.json();
   assert.equal(listedBody.result.isError, false);
   assert.equal(listedBody.result.structuredContent.ok, true);
-  assert.equal(listedBody.result.structuredContent.data.minds.length, 1);
-  const personalMind = listedBody.result.structuredContent.data.minds[0];
+  assert.equal(listedBody.result.structuredContent.data.minds.length, 2);
+  const personalMind = listedBody.result.structuredContent.data.minds.find(
+    ({ route }) => route === "/me",
+  );
+  assert.ok(personalMind);
   assert.equal(personalMind.route, "/me");
   assert.equal(personalMind.discovery, "personal");
   assert.equal(
@@ -471,7 +507,10 @@ test("durable product runtime carries a Sites account token through Codex MCP an
   assert.equal(listedAfterCommit.status, 200);
   const listedAfterCommitBody = await listedAfterCommit.json();
   assert.equal(listedAfterCommitBody.result.isError, false);
-  const advancedMind = listedAfterCommitBody.result.structuredContent.data.minds[0];
+  const advancedMind = listedAfterCommitBody.result.structuredContent.data.minds.find(
+    ({ route }) => route === "/me",
+  );
+  assert.ok(advancedMind);
   assert.notEqual(advancedMind.head.revision_id, previousRevisionId);
   assert.equal(
     advancedMind.head.revision_id,
