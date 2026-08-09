@@ -1,9 +1,9 @@
 # Локальная разработка и проверки
 
-Статус: engineering baseline, обновлено 2026-08-08. Команды, package graph и
-Product Site реализованы; owner-only production deployment и обязательный
-Codex smoke подтверждены отдельно. Локальный build по-прежнему не является
-заменой exact Sites/Codex release evidence.
+Статус: engineering baseline, обновлено 2026-08-09. Команды, package graph и
+Product Site реализованы; single-principal UAT deployment и обязательный Codex
+smoke подтверждены отдельно. Локальный build по-прежнему не является заменой
+exact Sites/Codex UAT evidence.
 
 ## Toolchain
 
@@ -54,6 +54,21 @@ route manifest, custom Mind-aware MCP tool list, target version
 `2026-07-28` и отсутствие control tools в MCP. Это не MCP Inspector, не реальный
 Codex test и не Sites compatibility evidence.
 
+## Full dev runtime на localhost
+
+[Project delivery profile](../operations/ship-work-release-profile.md)
+задаёт канонический launcher:
+
+```bash
+npm run dev
+```
+
+Он должен поднимать на `localhost` полный применимый web/control, persistence и
+MCP runtime с изолированными local/test данными. Перед каждым UAT cut
+`ship-work-release` запускает этот runtime, дожидается readiness и проверяет
+все flows, которые можно надёжно выполнить локально. В UAT уходят только exact
+candidate и dev receipt с URL, configuration fingerprint и результатами smoke.
+
 ## Package graph
 
 Package manifests и TypeScript references кодируют направленность из
@@ -80,7 +95,7 @@ test-fixtures -> domain + okf-codec
 references, acyclic graph, отсутствие undeclared/cross-façade imports и
 запрещённых direct/transitive runtime dependencies у `domain`/`okf-codec`.
 Product composition выбирает D1/R2 и WebCrypto adapters; in-memory/local
-adapters остаются test fixtures и не считаются production persistence.
+adapters остаются test fixtures и не считаются UAT или production persistence.
 
 ## Deterministic fixtures
 
@@ -110,13 +125,13 @@ fail-closed отклоняет отсутствующие или неверны�
 
 `check:secrets` отклоняет tracked `.env*`, private keys и основные token/key
 patterns. Это repository gate, а не доказательство отсутствия любого возможного
-секрета; перед production release потребуется platform/repository scanning с
-реальными policies.
+секрета; перед UAT release требуется применимый scan, а перед production —
+отдельная platform/repository проверка с production policies.
 
 ## CI и граница доказанного
 
 GitHub Actions повторяет `npm ci` и `npm run check` на Node `22.13.0`. Успех CI
 и отдельного Product Site build доказывает воспроизводимость source candidate
-на commit, но не создаёт production artifact. Sites
+на commit, но не создаёт UAT или production artifact. Sites
 project/version/deployment, live URL, persistence-after-redeploy, MCP Inspector
 и Codex conformance остаются отдельными release gates.

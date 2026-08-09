@@ -1,14 +1,14 @@
 # Спецификация первого прототипа
 
-Статус: proposal, обновлено 2026-08-08. Product requirements ниже приняты;
-Product Site и direct route/compatibility repair реализованы и развёрнуты
-owner-only в production OpenAI Sites. Обязательные authenticated web/control,
+Статус: proposal, обновлено 2026-08-09. Product requirements ниже приняты;
+Product Site и direct route/compatibility repair реализованы и развёрнуты как
+single-principal UAT в OpenAI Sites. Обязательные authenticated web/control,
 persistence-after-redeploy и default/modern Codex MCP gates пройдены live;
 расширенная product-validation matrix остаётся следующим этапом.
 
 ## Цель
 
-Доказать на production OpenAI Site end-to-end сценарий: authenticated
+Доказать на prod-like UAT OpenAI Site end-to-end сценарий: authenticated
 пользователь получает Personal Mind, создаёт и настраивает другие Minds,
 подключает user-scoped MCP к Codex, читает разрешённые OKF files
 и сразу commit-ит atomic changeset в выбранный Mind. Несколько Editors не
@@ -283,10 +283,10 @@ residual risk ограничивается explicit write scope, current ACL, hi
 - **background:** index jobs, garbage collection недостижимых incomplete
   objects, audit delivery.
 
-Физически production MVP держит Web adapter, MCP adapter и core в одном OpenAI
+Физически UAT MVP держит Web adapter, MCP adapter и core в одном OpenAI
 Site. Это сохраняет внутреннюю границу без предположения о private service
 network, которого Sites пока не обещает. Если Streamable HTTP MCP не проходит
-реальную compatibility gate, MVP production release остаётся незавершённым до
+реальную compatibility gate, MVP UAT release остаётся незавершённым до
 нового решения; автоматического fallback в portable runtime нет.
 
 ## Критерии готовности
@@ -364,18 +364,18 @@ network, которого Sites пока не обещает. Если Streamabl
     проверенный `codex-cli 0.147.0` проходит этот же adapter с opt-in
     `mcp_2026_07_28` и isolated default `2025-11-25` adapter по
     `/api/mcp/2025-11-25`; оба используют один content contract и current
-    authorization. Claude Code не блокирует первый production MVP и объявляется
+    authorization. Claude Code не блокирует первый UAT MVP и объявляется
     supported только после отдельной проверки своего adapter/client pair.
 28. Все validators, fixtures и docs checks проходят на одном commit; никакой
     deployment не объявляется завершённым без live evidence.
-29. Production release связывает exact Git SHA с одним Sites
+29. UAT release связывает exact Git SHA с одним Sites
     version/deployment и live URL; на нём проходят authenticated web/control и
     required MCP client flows. Local, preview или UI-only deployment не
     засчитывается.
 
 ## Compatibility gate для Sites и MCP
 
-Sites production MVP считается завершённым только после live-проверки:
+Sites UAT MVP считается завершённым только после live-проверки:
 
 - authenticated Sites headers и устойчивый account binding;
 - stable HTTPS Streamable HTTP `POST /api/mcp` для modern `2026-07-28` и
@@ -404,7 +404,7 @@ evidence: default и opt-in modern `codex-cli 0.147.0` выполнили
 [historical capability report](../reports/2026-08-07-sites-mcp-capability-gate.md)
 и не переписывается задним числом.
 
-Если endpoint не проходит gate, production release MVP блокируется. Отдельный
+Если endpoint не проходит gate, UAT release MVP блокируется. Отдельный
 portable container и AWS/AgentCore не используются без нового принятого
 решения. OAuth discovery/PKCE остаётся отдельной gate polished public plugin и
 не блокирует personal-token MVP.

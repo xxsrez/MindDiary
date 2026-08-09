@@ -1,6 +1,6 @@
 # Roadmap и стратегия проверки Mind Diary
 
-Статус: зафиксированная product direction владельца проекта, 2026-08-05.
+Статус: зафиксированная product direction владельца проекта, 2026-08-09.
 Документ определяет последовательность проверки и развития продукта, но не
 является implementation specification, календарным обещанием или свидетельством
 реализованных функций.
@@ -10,7 +10,7 @@
 Границы первого прототипа намеренно узкие. Отсутствие функции в MVP нельзя
 автоматически трактовать как отказ от неё в конечном продукте. В частности:
 
-- Sites-only относится только к production release текущего MVP;
+- Sites-only относится только к prod-like UAT текущего MVP;
 - внешний Codex через MCP — первая дешёвая пользовательская поверхность, а не
   единственный долгосрочный способ работы с Mind Diary;
 - imports и named checkpoints отложены из MVP, но явно планируются после него;
@@ -60,7 +60,7 @@ Mind Diary должен сделать работу с OKF заметно про
 - canonical data остаются переносимыми через deterministic export.
 
 Пользователь уже оплачивает inference своего Codex client, поэтому Mind Diary
-не несёт LLM API cost в первой фазе. Sites-only production выбран как дешёвый
+не несёт LLM API cost в первой фазе. Sites-only UAT выбран как дешёвый
 способ проверить end-to-end service и реальное использование, а не как
 долгосрочная привязка всей платформы к Sites.
 
@@ -165,7 +165,8 @@ OCR/transcription, authorization и short-lived download URLs. Canonical bytes
 - Не считать начальную аудиторию экспертами по Git, deployment или OKF только
   потому, что они используют Codex.
 - Не считать отсутствие imports/checkpoints в MVP отказом от них в roadmap.
-- Не считать Sites-only MVP долгосрочным отказом от AWS.
+- Не считать Sites-only UAT MVP долгосрочным отказом от AWS или выбором
+  будущей production platform.
 - Не переносить сигнал ближнего круга на массовый рынок без внешней cohort.
 - Разделять product evidence, engineering/learning value и коммерческий спрос.
 

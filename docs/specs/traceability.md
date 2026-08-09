@@ -1,12 +1,12 @@
 # Traceability matrix MVP 0.1
 
-Статус: executable baseline, обновлено 2026-08-08. Документ связывает
+Статус: executable baseline, обновлено 2026-08-09. Документ связывает
 принятые критерии готовности с реализацией и обязательным evidence. Product Site
-развёрнут owner-only в production OpenAI Sites; базовые web/persistence и оба
+развёрнут как single-principal UAT в OpenAI Sites; базовые web/persistence и оба
 Codex MCP profiles прошли live, но это не закрывает автоматически каждый
 расширенный criterion матрицы.
 
-Production implementation переносит MCP с platform-reserved `/mcp` на
+UAT implementation переносит MCP с platform-reserved `/mcp` на
 `/api/mcp`, добавляет isolated `/api/mcp/2025-11-25` для default
 `codex-cli 0.147.0` и сохраняет одну per-request authorization boundary.
 Pinned `codex-cli 0.147.0` прошёл live `list_minds` на обоих profiles (modern
@@ -14,7 +14,7 @@ Pinned `codex-cli 0.147.0` прошёл live `list_minds` на обоих profil
 заменяет полную Inspector matrix и расширенные write/conflict/history/export
 сценарии ниже.
 
-Исторический отказ, production resolution и границы доказанного зафиксированы в
+Исторический отказ, UAT resolution и границы доказанного зафиксированы в
 [датированном report](../reports/2026-08-07-sites-mcp-capability-gate.md). Этот
 report не меняет owning stories или полные `A<n>`, `W`, `P`, `MI`, `CX` и `R`
 artifacts.
@@ -37,7 +37,7 @@ evidence. Сквозные stories `AND-85`–`AND-90` проверяют и с�
 - `S` — security/privacy regression;
 - `F` — concurrency/failure-injection;
 - `M` — MCP Inspector или real-client conformance;
-- `L` — repeatable redacted live probe production candidate.
+- `L` — repeatable redacted live probe UAT candidate.
 
 Release evidence использует один набор ссылок:
 
@@ -87,7 +87,7 @@ secret и download URL.
 | 26 | MCP публикует custom Mind-aware profile без company-knowledge claim или user-openable content URLs. | `AND-76` | `C, S, M`: deterministic tool/resource catalog, absent standard/control surfaces и URI checks. | `A26 + MI + CX + R` |
 | 27 | MCP Inspector проходит `/api/mcp` `2026-07-28`; pinned Codex проходит modern opt-in и default isolated `/api/mcp/2025-11-25` lifecycle. Claude support без отдельного test не заявляется. | `AND-77` | `M, L`: pinned client versions, discovery/initialize negotiation, Inspector suite и redacted Codex read/write/conflict/history/export flow с current authorization. | `A27 + MI + CX + R` |
 | 28 | Validators, fixtures and docs checks проходят на одном commit; deployment не считается завершённым без live evidence. | `AND-85` | `C, I, S, F`: canonical full check и generated criterion→test/evidence report exact SHA. | `A28 + R` |
-| 29 | Production release связывает exact SHA с одним Sites deployment/live URL и на нём проходит полный authenticated web/control+persistence+MCP flow. | `AND-90` | `L`: same-deployment web/control, persistence, Inspector and Codex probes after publish/redeploy. | `A29 + W + P + MI + CX + R` |
+| 29 | UAT release связывает exact SHA с одним Sites deployment/live URL и на нём проходит полный authenticated web/control+persistence+MCP flow. | `AND-90` | `L`: same-deployment web/control, persistence, Inspector and Codex probes after publish/redeploy. | `A29 + W + P + MI + CX + R` |
 
 ## Machine-readable evidence registry
 
@@ -207,7 +207,7 @@ failure; отсутствующий receipt остаётся pending.
 ## Обязательные live flows
 
 Ни один отдельный flow не является release сам по себе. Все flows выполняются
-на одном exact production candidate и затем связываются через `R`.
+на одном exact UAT candidate и затем связываются через `R`.
 
 ### Web/control
 

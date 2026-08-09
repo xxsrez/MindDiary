@@ -68,7 +68,7 @@ flowchart LR
 Доступ к системе имеет только зарегистрированный и аутентифицированный
 principal. Anonymous access отсутствует во всех visibility modes.
 
-Production MVP на Sites получает проверенный account context от Sites и создаёт
+UAT MVP на Sites получает проверенный account context от Sites и создаёт
 собственный immutable `principal_id`. Начальный external binding использует
 server-normalized verified email. Exact match открывает существующий principal.
 Текущая документация Sites не фиксирует стабильный внешний subject identifier,

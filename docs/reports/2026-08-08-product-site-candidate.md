@@ -1,8 +1,9 @@
 # Product Site source candidate на 2026-08-08
 
 Статус: исторический repository evidence для `AND-149`. Candidate впоследствии
-интегрирован, исправлен для Sites MCP routing и развёрнут owner-only в
-production; exact live evidence фиксирует
+интегрирован, исправлен для Sites MCP routing и развёрнут на Site, который с
+2026-08-09 официально классифицируется как **UAT**. Слова production/owner-only
+ниже сохранены в их исходном историческом смысле; exact live evidence фиксирует
 [capability report](2026-08-07-sites-mcp-capability-gate.md).
 
 ## Результат

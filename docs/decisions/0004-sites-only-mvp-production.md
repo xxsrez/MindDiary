@@ -1,6 +1,11 @@
 # ADR-0004: OpenAI Sites как production target MVP
 
-Статус: accepted, 2026-08-05.
+Статус: superseded в части environment/release semantics
+[ADR-0008](0008-dev-uat-production-delivery.md), 2026-08-09.
+
+Историческая заметка: названный ниже production Site теперь классифицируется
+как UAT. Этот ADR сохраняет контекст первоначального Sites-only решения, но не
+является current release contract.
 
 ## Контекст
 

@@ -1,8 +1,10 @@
 # OpenAI Sites + MCP capability gate на 2026-08-07
 
-Статус: **исторический отрицательный gate сохранён; production resolution
-положительно проверен 2026-08-08**. Этот report фиксирует локально проверенную
-поверхность AND-37, exact production probe, повторную проверку product
+Статус: **исторический отрицательный gate сохранён; тогдашний production
+resolution положительно проверен 2026-08-08**. С 2026-08-09 проверенный Site
+официально классифицируется как **UAT**, а не production; старые термины ниже
+сохранены как часть датированного evidence. Этот report фиксирует локально
+проверенную поверхность AND-37, exact production probe, повторную проверку product
 deployment, воспроизводимый отказ Sites/Codex boundary, диагноз, исправление и
 последующее redacted live evidence.
 

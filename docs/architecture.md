@@ -1,8 +1,9 @@
 # Архитектура Mind Diary
 
-Статус: proposal, обновлено 2026-08-08. Product Site components, adapters,
-route migration и isolated Codex bridge реализованы и развёрнуты owner-only в
-production OpenAI Sites. Authenticated web/control, persistence-after-redeploy,
+Статус: proposal, обновлено 2026-08-09. Product Site components, adapters,
+route migration и isolated Codex bridge реализованы и развёрнуты как
+single-principal UAT в OpenAI Sites. Authenticated web/control,
+persistence-after-redeploy,
 raw modern discovery и оба профиля `codex-cli 0.147.0` проверены live.
 
 ## Драйверы и ограничения
@@ -15,7 +16,7 @@ raw modern discovery и оба профиля `codex-cli 0.147.0` провере
 - individual-file UTF-8 Markdown access и переносимый deterministic export;
 - immediate multi-file commits с immutable history и optimistic concurrency;
 - public/unlisted live-HEAD reads только для authenticated users;
-- Sites-only MVP production и post-MVP AWS portability без AWS SDK в domain
+- Sites-only MVP UAT и post-MVP AWS portability без AWS SDK в domain
   core;
 - future path к bounded PersonalContext без передачи личного corpus target
   Mind.
@@ -141,13 +142,15 @@ Exact `/mcp` не принадлежит product router: live Sites probes по�
 redirect-ит credential-bearing requests с `/mcp`, а публикует два explicit
 non-reserved endpoint выше. Наблюдение и его ограничения сохранены в
 [датированном capability report](reports/2026-08-07-sites-mcp-capability-gate.md);
-исправление подтверждено matching production Worker events и реальными Codex
+исправление подтверждено matching UAT Worker events и реальными Codex
 tool calls после redeploy.
 
 ### 4. Infrastructure adapters
 
-- Local: in-memory/filesystem и SQLite adapters для contract fixtures.
-- Sites MVP production: D1 metadata/search/audit и R2 canonical
+- Dev: localhost runtime с isolated local/test data; in-memory/filesystem и
+  SQLite adapters остаются contract fixtures, пока full launcher не выберет
+  exact composition.
+- Sites MVP UAT: D1 metadata/search/audit и R2 canonical
   objects/export. Bindings и сохранение account/Personal Mind после redeploy
   проверены live; quota, recovery и большой export требуют отдельного
   operational evidence по мере нагрузки.
@@ -213,7 +216,7 @@ expiry/revocation, строит `ActorContext` и затем на каждом t
 control-plane capabilities и не логируется. `content:write` включает
 `content:read`; write-only token не выпускается.
 
-Codex configuration использует `bearer_token_env_var`. Для owner-only Site
+Codex configuration использует `bearer_token_env_var`. Для single-principal UAT Site
 отдельный `env_http_headers` передаёт `OAI-Sites-Authorization`, причём значение
 environment variable содержит полный `Bearer <secret>`, а не только secret.
 Проверенный default
@@ -398,9 +401,9 @@ list/create/rename, catalog, visibility, invitations, roles, transfer, deletion
 Предлагаемые REST routes, internal command/query boundary и exact MCP
 tools/resources schemas зафиксированы в [API specification](specs/api.md).
 
-Production deployment MVP размещает Web adapter, MCP adapter и core в одном
+UAT deployment MVP размещает Web adapter, MCP adapter и core в одном
 OpenAI Site. Внутренние use-case routes при этом не публикуются. Если Sites не
-поддержит required Streamable HTTP или persistence semantics, production
+поддержит required Streamable HTTP или persistence semantics, UAT
 release блокируется до нового архитектурного решения; split deployment не
 включается как автоматический fallback.
 
@@ -434,14 +437,16 @@ explicit target Mind. General cross-Mind search/synthesis требует нов�
   публикует control tools.
 - Integration/transport checks подтверждают оба endpoint, negotiation,
   request-scoped token/access reauthorization и Codex tool flow в default
-  compatibility и opt-in modern modes; production Worker events и persisted
+  compatibility и opt-in modern modes; UAT Worker events и persisted
   web state подтверждают routing и persistence после Sites publish.
 
-### OpenAI Sites MVP production
+### Dev, OpenAI Sites UAT и production
 
-- Sites — единственная production platform текущего MVP и подтверждённый host
-  web/admin UI с Sign in with ChatGPT.
-- Production Site использует D1/R2 bindings; их live availability и
+- Dev поднимает полный применимый runtime на `localhost` с изолированными
+  данными и проверяет максимум flows до hosted release.
+- Sites — текущая UAT platform MVP и подтверждённый host web/admin UI с Sign in
+  with ChatGPT.
+- UAT Site использует D1/R2 bindings; их live availability и
   persistence-after-redeploy проверены, а quota и recovery остаются
   operational follow-up.
 - Streamable HTTP MCP реализован в том же Worker по non-reserved paths;
@@ -451,9 +456,16 @@ explicit target Mind. General cross-Mind search/synthesis требует нов�
   forwarding/configuration, protocol lifecycle и persistence across deployments.
   Claude Code и другие clients получают собственную non-blocking gate до
   заявления их поддержки.
-- Production release требует успешных web/control и MCP flows одного exact
+- UAT release требует успешных web/control и MCP flows одного exact
   Sites version/deployment. При провале gate релиз блокируется; отдельный
   portable runtime не создаётся без нового решения.
+- Production — отдельный, пока не provisioned target для живых пользователей.
+  `ship-work-release` его не deploy-ит; публикация возможна только отдельным
+  ручным workflow после явного prompt и подтверждения exact artifact/target.
+
+Canonical branch, commands, UAT URL/provider, smoke matrix и production
+configuration зафиксированы в
+[project delivery profile](operations/ship-work-release-profile.md).
 
 ### Post-MVP AWS path
 
@@ -503,7 +515,7 @@ audit log.
   fail-closed account recovery безопасным automatic relink?
 - Пройдут ли migrated `/api/mcp`, isolated `/api/mcp/2025-11-25` и Bearer
   forwarding реальный Sites gate? До положительного evidence это blocker MVP
-  production release, а не основание автоматически выбрать отдельный runtime.
+  UAT release, а не основание автоматически выбрать отдельный runtime.
 - Как реализовать immediate full deletion и доказать удаление replicated/index
   data до появления production retention model?
 - Нужны ли позже soft delete/recovery и formal privacy-retention policy?

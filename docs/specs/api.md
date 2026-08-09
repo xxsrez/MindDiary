@@ -1,9 +1,9 @@
 # REST и MCP API Mind Diary
 
-Статус: proposal для верификации, обновлено 2026-08-08. Документ уточняет
+Статус: proposal для верификации, обновлено 2026-08-09. Документ уточняет
 wire-level контракты первого прототипа на основе принятых product decisions.
-Product API и direct MCP route/compatibility repair реализованы, развёрнуты
-owner-only в production OpenAI Sites и проверены raw modern calls и реальным
+Product API и direct MCP route/compatibility repair реализованы, развёрнуты как
+single-principal UAT в OpenAI Sites и проверены raw modern calls и реальным
 `codex-cli 0.147.0` на обоих profiles. Machine-readable OpenAPI и MCP JSON
 Schemas проверяются на соответствие этому документу и реализации.
 
@@ -752,7 +752,7 @@ Mind authorization вычисляются заново для каждого HTT
 cached actor или tool surface.
 
 Route selection и оба profiles проверены transport/integration tests и
-production Sites smoke. Настоящий `codex-cli 0.147.0` выполнил
+UAT Sites smoke. Настоящий `codex-cli 0.147.0` выполнил
 `tools/list`/`tools/call` и через default compatibility lifecycle, и через
 opt-in modern discovery; matching Worker events завершились HTTP 200.
 Предыдущее отрицательное evidence exact `/mcp` остаётся в
@@ -870,7 +870,7 @@ compatibility URL. В `codex-cli 0.147.0` modern path ещё скрыт за
 under-development feature; default остаётся compatibility profile.
 
 Sites audience gate находится перед product Worker и не заменяет product
-authentication. В owner-only deployment переменная
+authentication. В single-principal UAT deployment переменная
 `MIND_DIARY_SITES_AUTHORIZATION` содержит полный текст
 `Bearer <Sites machine credential>`: Codex передаёт `env_http_headers` value
 буквально и не добавляет scheme сам. Отдельный

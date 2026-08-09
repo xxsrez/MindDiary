@@ -5,14 +5,14 @@
 ## Текущее состояние
 
 - Mind Diary прошёл design-first bootstrap: reproducible engineering baseline
-  и исполняемый Product Site vertical slice реализованы. Owner-only production
+  и исполняемый Product Site vertical slice реализованы. Single-principal UAT
   deployment в OpenAI Sites подтверждён authenticated web/control,
   persistence-after-redeploy и default/modern Codex MCP smoke; расширенная
   read/write/history/export validation остаётся дальнейшей работой.
 - Репозиторий содержит принятый product baseline первого прототипа, его
-  исполняемую реализацию, production evidence и проверку актуального Open
+  исполняемую реализацию, UAT evidence и проверку актуального Open
   Knowledge Format (OKF).
-- Единственная production platform текущего MVP — OpenAI Sites. Exact `/mcp`
+- Текущий OpenAI Site Mind Diary — UAT, а не production. Exact `/mcp`
   перехватывается Sites до product Worker, поэтому активны `/api/mcp` и
   `/api/mcp/2025-11-25`; подробный диагноз и live resolution сохранены в
   датированном capability report.
@@ -29,8 +29,8 @@
 
 Не загружайте весь список механически. Всегда полностью читайте этот файл, а
 затем документы затронутой surface. При неизвестной или cross-cutting surface
-прочитайте весь список. Для worker-а `ship-linear-release` точный fail-safe
-маршрут строит `.agents/skills/ship-linear-release/scripts/shipctl.py docs` из
+прочитайте весь список. Для worker-а `ship-work-release` точный fail-safe
+маршрут строит `.agents/skills/ship-work-release/scripts/shipctl.py docs` из
 его ownership paths; coordinator,
 который не меняет product source, продуктовые документы не читает.
 
@@ -52,11 +52,17 @@
    codec, fixtures или compatibility claims.
 10. [Проверку платформенных предпосылок](docs/reports/2026-08-05-platform-status.md)
     — перед Sites/MCP platform или deployment claims.
+11. [Профиль доставки Mind Diary](docs/operations/ship-work-release-profile.md)
+    — перед dev launch, UAT cut, release evidence или production handoff.
+12. [Linear adapter доставки](docs/specs/ship-work-release-linear.md) — перед
+    разрешением Linear scope, чтением acceptance/dependencies или projection
+    статусов и evidence обратно в Linear.
 
 Архитектурные и product specification-документы пока имеют статус proposal,
 если сам документ явно не отмечен как accepted. Operational specification
-`docs/specs/linear-milestone-delivery.md` и ADR-0006 — accepted execution
-contract, но не утверждение о реализованном либо развёрнутом product service.
+`docs/specs/ship-work-release.md`, выбранный task-manager adapter, project
+delivery profile и ADR-0008/ADR-0009
+— accepted execution contract, но не утверждение о развёрнутом product service.
 Принятые product decisions отделяйте от ещё не выбранных деталей реализации;
 ни то ни другое не выдавайте за реализованный либо развёрнутый сервис.
 
@@ -195,11 +201,22 @@ contract, но не утверждение о реализованном либ�
   проверенного клиента, который ещё требует legacy initialize/session flow.
   Не смешивайте lifecycle двух версий и не заявляйте поддержку без conformance
   tests на конкретном adapter/client pair.
-- OpenAI Sites — единственный production target MVP для web/admin UI,
-  application core, persistence и Streamable HTTP MCP. Размещение MCP в Sites
-  остаётся непроверенной platform capability до реального compatibility gate;
-  провал gate блокирует production release, а не разрешает молчаливый fallback
-  в отдельный container или AWS.
+- `dev` — полный локальный запуск приложения на `localhost` с изолированными
+  local/test данными. Перед UAT skill обязан проверить на нём все применимые
+  web/control, persistence и MCP flows; локальный smoke не является hosted
+  evidence.
+- `UAT` — текущий prod-like OpenAI Site Mind Diary для web/admin UI,
+  application core, persistence и Streamable HTTP MCP. Это default hosted
+  release target `ship-work-release`; каждый cut связывает exact artifact с
+  Site deployment и применимым live evidence.
+- `production` — отдельная среда для живых пользователей. Она не является
+  алиасом текущего Site, пока не provisioned, и никогда не deploy-ится skill-ом
+  `ship-work-release`. Нужны отдельный ручной workflow, явный prompt
+  пользователя и финальное подтверждение exact target/artifact.
+- Exact commands, integration branch, CI, UAT URL/provider, evidence matrix и
+  production configuration берите только из
+  `docs/operations/ship-work-release-profile.md`. Не дублируйте эти values
+  внутри универсальной specification/runbook skill.
 - AWS, включая Bedrock AgentCore Runtime, S3, DynamoDB и OpenSearch, — основная
   planned infrastructure direction и самостоятельная учебная цель после
   подтверждения MVP. Это не текущая release surface и не автоматический
@@ -212,21 +229,27 @@ contract, но не утверждение о реализованном либ�
 
 ## Релизный контракт
 
+- Без явного слова `production` обычный release и запуск
+  `ship-work-release` означают UAT release: targeted checks, exact candidate,
+  полный gate, project-profile dev smoke, configured remote/CI, publish в UAT
+  target и declared live evidence.
 - Фразы «зарелизить на продакшн», «зарелизить на прод» и `release to
-  production` без дополнительного уточнения означают: собрать и проверить
-  exact commit, опубликовать его в production OpenAI Site Mind Diary и
-  подтвердить live-состояние этого Site.
-- Production release MVP охватывает весь обязательный vertical slice на Sites:
+  production` означают отдельную manual-only операцию. Не трактуйте их как UAT
+  release и не передавайте production deploy этому skill. Перед действием
+  нужны provisioned production target, явный prompt пользователя, exact
+  artifact, полный acceptance, rollback target и отдельное финальное
+  подтверждение.
+- UAT release охватывает весь применимый vertical slice на Sites:
   authenticated web/control UI, persistence и доступный клиентам content MCP.
   Обязательный client gate первого release — Codex. Claude Code и другие clients
-  не блокируют MVP и не называются supported до отдельного conformance test.
-  Успех только UI или локального MCP не является production release.
-- До появления проверенного Sites project/config deployment не считается
-  существующим. После появления release evidence должен связывать exact Git
-  SHA, Sites project/version/deployment, live URL и smoke web + MCP flows.
+  не называются supported до отдельного conformance test. Успех только UI или
+  локального MCP не является UAT release.
+- UAT evidence связывает exact Git SHA с profile-declared target/deployment,
+  live URL и smoke matrix. При `production.configured=false` production
+  release считается невозможным и fail closed.
 - Не deploy-те текущий MVP в AWS, AgentCore или отдельный portable runtime без
   нового явного решения пользователя. AWS portability — архитектурное
-  ограничение, а не текущая production surface.
+  ограничение, а не текущая UAT или production surface.
 
 ## Документация и качество
 
@@ -248,9 +271,10 @@ contract, но не утверждение о реализованном либ�
   `npm run check` и `git diff --check <base>..<candidate>`: aggregate уже
   включает clean build, unit/integration/conformance, fixtures, architecture,
   docs и secrets, поэтому не запускайте те же subcommands перед ним повторно.
-  В feature lane `ship-linear-release` выполняйте только targeted checks из
-  manifest и `git diff --check`; один полный gate выполняет sealed cutoff. Не
-  называйте эти contract tests live Sites/MCP compatibility.
+  В feature lane `ship-work-release` выполняйте только targeted checks из
+  manifest и `git diff --check`; один полный gate выполняет sealed cutoff перед
+  dev/UAT boundary. Не называйте эти contract tests live Sites/MCP
+  compatibility.
 - После появления OKF fixtures валидируйте весь выбранный bundle, а не только
   `wiki/`, официальным или эквивалентным строгим validator.
 

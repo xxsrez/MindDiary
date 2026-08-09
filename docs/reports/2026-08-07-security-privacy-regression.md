@@ -2,7 +2,7 @@
 
 Статус: **локальный automated regression evidence для AND-86**. Отчёт
 фиксирует проверенное поведение application/adapters на feature tree, но не
-подтверждает production deployment, live OpenAI Sites boundary или совместимость
+подтверждает UAT/production deployment, live OpenAI Sites boundary или совместимость
 реального MCP client.
 
 ## Вывод

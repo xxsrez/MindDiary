@@ -10,19 +10,20 @@ Mind Diary — проект совместных облачных Minds (`Knowle
 user-scoped MCP даёт агенту доступ ко всем разрешённым Minds, но каждый вызов
 явно работает с одним corpus. Изменения сразу создают immutable revision через
 optimistic HEAD CAS.
-Практическая цель проекта — пройти путь от local vertical slice до production
-MVP в OpenAI Sites. При подтверждённой пользовательской ценности основной
+Практическая цель проекта — пройти путь от local vertical slice через prod-like
+UAT в OpenAI Sites до отдельно управляемого production. При подтверждённой
+пользовательской ценности основной
 post-MVP infrastructure direction — AWS/AgentCore; это также самостоятельная
 учебная цель проекта, но не текущая release surface.
 
-Сейчас Mind Diary развёрнут owner-only в production OpenAI Sites по адресу
+Сейчас Mind Diary развёрнут single-principal в UAT OpenAI Sites по адресу
 <https://mind-diary.example.invalid>. Репозиторий содержит отдельное
 приложение `apps/mind-diary-site`, authenticated web/control
 routes, современный Streamable HTTP `POST /api/mcp`, изолированный Codex
 compatibility endpoint `POST /api/mcp/2025-11-25`, D1/R2 adapters и Worker
 background handlers. Перенос с `/mcp` необходим, потому что exact path
 перехватывается Sites до product Worker. Локальные build, contract/integration
-checks дополнены production smoke: persisted authenticated web/control UI,
+checks дополнены UAT smoke: persisted authenticated web/control UI,
 raw modern discovery/list и реальный `codex-cli 0.147.0` прошли на обоих
 profiles — default compatibility и opt-in `mcp_2026_07_28`. Временный
 read-only token после проверки отозван; следующий request получил 401.
@@ -48,8 +49,12 @@ read-only token после проверки отозван; следующий r
 - [Проверка платформенных предпосылок](docs/reports/2026-08-05-platform-status.md)
 - [Product Site source candidate](docs/reports/2026-08-08-product-site-candidate.md)
 - [Локальная разработка и проверки](docs/guides/development.md)
+- [Контракт `ship-work-release`](docs/specs/ship-work-release.md)
+- [Linear adapter доставки](docs/specs/ship-work-release-linear.md)
+- [Операторский runbook](docs/operations/ship-work-release.md)
+- [Профиль dev/UAT/production доставки](docs/operations/ship-work-release-profile.md)
 
-## Локальная проверка
+## Dev и локальная проверка
 
 Требуется Node.js `>=22.13.0`:
 
@@ -61,16 +66,21 @@ npm run check
 Команда собирает package graph и запускает unit, integration, contract,
 full-bundle OKF, documentation, architecture и secret/config checks. Она не
 запускает service и не является Sites deployment или live MCP conformance.
+Перед UAT release exact candidate запускается на `localhost` через
+`npm run dev` и проходит declared dev smoke.
 
 ## Статус
 
-Production Product Site соединяет принятые application use cases с
+UAT Product Site соединяет принятые application use cases с
 Sites-compatible Vinext/Worker runtime, durable D1/R2 adapters и background
 jobs. Browser surface остаётся control plane и не рендерит raw Markdown;
 Bearer endpoints `/api/mcp` и `/api/mcp/2025-11-25` используют одну
 request-scoped authorization boundary и не публикуют membership/control tools.
-Owner-only Sites audience gate и application Bearer остаются независимыми:
+Single-principal Sites audience gate и application Bearer остаются независимыми:
 Codex передаёт первый через `env_http_headers`, второй — через
 `bearer_token_env_var`. Следующий этап — расширять product workflows и
-automation поверх уже проверенного Sites/MCP контура. ZIP import,
+automation поверх уже проверенного UAT Sites/MCP контура. Production является
+отдельной средой для живых пользователей, пока не provisioned и deploy-ится
+только вручную после явного запроса и подтверждения — никогда не через
+`ship-work-release`. ZIP import,
 producer-defined non-Markdown files и named checkpoints остаются вне MVP.

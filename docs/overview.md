@@ -1,7 +1,8 @@
 # Обзор Mind Diary
 
-Статус: proposal, обновлено 2026-08-08. Product behavior первого прототипа
-принято; Product Site реализован, развёрнут owner-only в OpenAI Sites и прошёл
+Статус: proposal, обновлено 2026-08-09. Product behavior первого прототипа
+принято; Product Site реализован, развёрнут как single-principal UAT в OpenAI
+Sites и прошёл
 authenticated web/control, persistence-after-redeploy и обязательные Codex MCP
 compatibility gates. Расширенные read/write/history/export сценарии остаются
 следующей product-validation стадией.
@@ -52,7 +53,7 @@ concurrency. Ответы агента и персонализированная
 ## Account и Personal Mind
 
 Система доступна только зарегистрированным authenticated пользователям. Первый
-production MVP на Sites связывает проверенную ChatGPT/Sites identity с внутренним
+hosted UAT MVP на Sites связывает проверенную ChatGPT/Sites identity с внутренним
 `principal_id`. Initial verified-email binding нормализуется server-side;
 exact match возвращает существующий account. Неизвестный email явно создаёт
 новый изолированный account без прежних прав либо запускает ручной recovery с
@@ -261,8 +262,8 @@ landing требуют отдельного принятого scope.
 
 - **Product Site:** shared application core, authenticated browser/control
   routes, Streamable HTTP MCP, D1/R2 adapters и Worker background jobs собраны
-  в отдельном Sites-compatible приложении и развёрнуты owner-only в production.
-- **Sites MVP production:** обязательный Codex gate пройден на двух endpoint:
+  в отдельном Sites-compatible приложении и развёрнуты как UAT.
+- **Sites MVP UAT:** обязательный Codex gate пройден на двух endpoint:
   `/api/mcp/2025-11-25` для default lifecycle и `/api/mcp` для opt-in modern
   profile. Exact `/mcp` остаётся platform-reserved path и не принадлежит
   product router.
@@ -271,10 +272,13 @@ landing требуют отдельного принятого scope.
   будущая основная infrastructure direction и учебная цель, не текущая release
   surface.
 
-В текущем проектном языке «зарелизить на продакшн» означает опубликовать exact
-проверенный commit в production OpenAI Site Mind Diary и подтвердить live web +
-MCP flows. Local run, preview, Sites UI без required MCP или отдельный container
-не считаются production release MVP.
+Текущий environment contract разделяет три поверхности. `dev` — полный
+локальный запуск на `localhost`; `UAT` — prod-like OpenAI Site Mind Diary и
+default hosted release target; `production` — отдельная среда для живых
+пользователей. Обычный delivery run публикует exact проверенный commit только в
+UAT и подтверждает live web + MCP flows. Production release выполняется вне
+`ship-work-release`, только после явного prompt и отдельного подтверждения;
+пока production target не provisioned, такой release невозможен.
 
 ## Что означает успех
 
