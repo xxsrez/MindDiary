@@ -29,10 +29,10 @@
 
 Не загружайте весь список механически. Всегда полностью читайте этот файл, а
 затем документы затронутой surface. При неизвестной или cross-cutting surface
-прочитайте весь список. Для worker-а `ship-work-release` точный fail-safe
-маршрут строит `.agents/skills/ship-work-release/scripts/shipctl.py docs` из
-его ownership paths; coordinator,
-который не меняет product source, продуктовые документы не читает.
+прочитайте весь список. Для worker-а `ship-linear-release` coordinator явно
+передаёт exact ownership paths и список относящихся к ним документов; worker не
+читает весь project bootstrap. Coordinator, который не меняет product source,
+продуктовые документы не читает.
 
 1. [Обзор продукта](docs/overview.md) — перед любым изменением продукта.
 2. [Roadmap и стратегию проверки](docs/roadmap.md) — перед product/market
@@ -57,11 +57,15 @@
 12. [Linear adapter доставки](docs/specs/ship-work-release-linear.md) — перед
     разрешением Linear scope, чтением acceptance/dependencies или projection
     статусов и evidence обратно в Linear.
+13. [Упрощённая доставка Linear milestone](docs/specs/ship-linear-release-v1.md)
+    — перед запуском или изменением исполнимого repo-local skill
+    `ship-linear-release`.
 
 Архитектурные и product specification-документы пока имеют статус proposal,
 если сам документ явно не отмечен как accepted. Operational specification
 `docs/specs/ship-work-release.md`, выбранный task-manager adapter, project
-delivery profile и ADR-0008/ADR-0009
+delivery profile, упрощённый executable profile `ship-linear-release v1` и
+ADR-0008/ADR-0009
 — accepted execution contract, но не утверждение о развёрнутом product service.
 Принятые product decisions отделяйте от ещё не выбранных деталей реализации;
 ни то ни другое не выдавайте за реализованный либо развёрнутый сервис.
@@ -211,11 +215,11 @@ delivery profile и ADR-0008/ADR-0009
   evidence.
 - `UAT` — текущий prod-like OpenAI Site Mind Diary для web/admin UI,
   application core, persistence и Streamable HTTP MCP. Это default hosted
-  release target `ship-work-release`; каждый cut связывает exact artifact с
-  Site deployment и применимым live evidence.
+  release target исполнимого `ship-linear-release`; каждый cut связывает exact
+  artifact с Site deployment и применимым live evidence.
 - `production` — отдельная среда для живых пользователей. Она не является
   алиасом текущего Site, пока не provisioned, и никогда не deploy-ится skill-ом
-  `ship-work-release`. Нужны отдельный ручной workflow, явный prompt
+  `ship-linear-release`. Нужны отдельный ручной workflow, явный prompt
   пользователя и финальное подтверждение exact target/artifact.
 - Exact commands, integration branch, CI, UAT URL/provider, evidence matrix и
   production configuration берите только из
@@ -234,7 +238,7 @@ delivery profile и ADR-0008/ADR-0009
 ## Релизный контракт
 
 - Без явного слова `production` обычный release и запуск
-  `ship-work-release` означают UAT release: targeted checks, exact candidate,
+  `ship-linear-release` означают UAT release: targeted checks, exact candidate,
   полный gate, project-profile dev smoke, configured remote/CI, publish в UAT
   target и declared live evidence.
 - Фразы «зарелизить на продакшн», «зарелизить на прод» и `release to
@@ -275,8 +279,9 @@ delivery profile и ADR-0008/ADR-0009
   `npm run check` и `git diff --check <base>..<candidate>`: aggregate уже
   включает clean build, unit/integration/conformance, fixtures, architecture,
   docs и secrets, поэтому не запускайте те же subcommands перед ним повторно.
-  В feature lane `ship-work-release` выполняйте только targeted checks из
-  manifest и `git diff --check`; один полный gate выполняет sealed cutoff перед
+  В feature lane `ship-linear-release` выполняйте только явно переданные
+  targeted checks и `git diff --check`; один полный gate выполняет coordinator
+  для exact batch cutoff перед
   dev/UAT boundary. Не называйте эти contract tests live Sites/MCP
   compatibility.
 - После появления OKF fixtures валидируйте весь выбранный bundle, а не только

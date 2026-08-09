@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { extname, resolve } from "node:path";
 
 const root = resolve(import.meta.dirname, "..");
@@ -12,6 +12,14 @@ const listed = execFileSync(
   .split("\0")
   .filter(Boolean);
 const errors = [];
+const existing = [];
+for (const relativePath of listed) {
+  try {
+    if ((await stat(resolve(root, relativePath))).isFile()) existing.push(relativePath);
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+  }
+}
 const forbiddenTrackedConfig = /(^|\/)\.env(?:\..+)?$/;
 const textExtensions = new Set([
   "",
@@ -36,7 +44,7 @@ const secretPatterns = [
   [/(?:api[_-]?key|password|secret|token)\s*[:=]\s*["']?[A-Za-z0-9+/=_]{24,}["']?/i, "credential-like assignment"],
 ];
 
-for (const relativePath of listed) {
+for (const relativePath of existing) {
   if (
     forbiddenTrackedConfig.test(relativePath) &&
     relativePath !== ".env.example" &&
@@ -53,7 +61,7 @@ for (const relativePath of listed) {
   }
 }
 
-for (const relativePath of listed.filter(
+for (const relativePath of existing.filter(
   (path) => path === ".env.example" || path.endsWith("/.env.example"),
 )) {
   const envExample = await readFile(resolve(root, relativePath), "utf8");
@@ -84,4 +92,4 @@ if (errors.length > 0) {
   process.exit(1);
 }
 
-console.log(`Secret/config hygiene check passed (${listed.length} files inspected).`);
+console.log(`Secret/config hygiene check passed (${existing.length} files inspected).`);

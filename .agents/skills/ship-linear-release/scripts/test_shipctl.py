@@ -2,21 +2,19 @@
 
 from __future__ import annotations
 
+from contextlib import redirect_stderr, redirect_stdout
 import importlib.util
 import io
 import json
+from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import unittest
-import uuid
-from contextlib import redirect_stdout
-from pathlib import Path
 from unittest import mock
 
 
 SCRIPTS = Path(__file__).parent
-sys.path.insert(0, str(SCRIPTS))
 SPEC = importlib.util.spec_from_file_location("shipctl", SCRIPTS / "shipctl.py")
 assert SPEC is not None and SPEC.loader is not None
 MODULE = importlib.util.module_from_spec(SPEC)
@@ -24,3509 +22,462 @@ sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
 
 
-class GitMixin:
-    def git(self, repo: Path, *args: str, input_text: str | None = None) -> str:
-        options: dict[str, object] = {
-            "check": True,
-            "stdout": subprocess.PIPE,
-            "stderr": subprocess.PIPE,
-            "text": True,
-        }
-        if input_text is None:
-            options["stdin"] = subprocess.DEVNULL
-        else:
-            options["input"] = input_text
-        return subprocess.run(["git", "-C", str(repo), *args], **options).stdout.strip()
+class ShipctlTest(unittest.TestCase):
+    def git(self, repo: Path, *args: str) -> str:
+        return subprocess.run(
+            ["git", "-C", str(repo), *args],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        ).stdout.strip()
 
-    def fixture(self, root: Path) -> tuple[Path, Path]:
-        remote = root / "remote.git"
+    def repo_fixture(self, root: Path) -> Path:
         repo = root / "repo"
-        self.git(root, "init", "--bare", str(remote))
-        self.git(remote, "symbolic-ref", "HEAD", "refs/heads/main")
         self.git(root, "init", "-b", "main", str(repo))
         self.git(repo, "config", "user.name", "test")
         self.git(repo, "config", "user.email", "test@example.invalid")
-        skill = repo / MODULE.SKILL_PATH
-        skill.mkdir(parents=True)
-        (skill / "SKILL.md").write_text("---\nname: test\n---\n", encoding="utf-8")
-        (repo / "AGENTS.md").write_text("# test\n", encoding="utf-8")
-        (repo / "package.json").write_text("{}\n", encoding="utf-8")
-        (repo / "package-lock.json").write_text("{}\n", encoding="utf-8")
-        (repo / ".gitignore").write_text("node_modules/\n.codex-task/\n", encoding="utf-8")
-        self.git(
-            repo,
-            "add",
-            MODULE.SKILL_PATH,
-            "AGENTS.md",
-            "package.json",
-            "package-lock.json",
-            ".gitignore",
-        )
+        (repo / "src").mkdir()
+        (repo / "src" / "base.txt").write_text("base\n", encoding="utf-8")
+        self.git(repo, "add", "src/base.txt")
         self.git(repo, "commit", "-m", "base")
-        self.git(repo, "remote", "add", "origin", str(remote))
-        self.git(repo, "push", "-u", "origin", "main")
-        return repo, remote
+        return repo
 
-    def metadata_commit(self, repo: Path, message: str, parent: str | None = None) -> str:
-        tree = self.git(repo, "rev-parse", "HEAD^{tree}")
-        args = ["commit-tree", tree]
-        if parent is not None:
-            args.extend(["-p", parent])
-        return self.git(repo, *args, input_text=message)
+    def invoke(self, *args: str, expected: int = 0) -> dict[str, object]:
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with redirect_stdout(stdout), redirect_stderr(stderr):
+            result = MODULE.main(list(args))
+        self.assertEqual(result, expected, stderr.getvalue())
+        stream = stdout if result == 0 else stderr
+        return json.loads(stream.getvalue())
 
-
-class DocsRoutingTest(unittest.TestCase):
-    def test_skill_change_loads_no_product_documents(self) -> None:
-        surfaces, docs = MODULE.route_docs(
-            [".agents/skills/ship-linear-release/SKILL.md"], None
+    def init_run(self, repo: Path, workers: int = 1) -> dict[str, object]:
+        result = self.invoke(
+            "init",
+            "--repo",
+            str(repo),
+            "--project-id",
+            "project-1",
+            "--milestone-id",
+            "milestone-1",
+            "--workers",
+            str(workers),
         )
-        self.assertEqual(surfaces, ["skill"])
-        self.assertEqual(docs, [])
+        return result["run"]  # type: ignore[return-value]
 
-    def test_mcp_and_ui_union_is_bounded(self) -> None:
-        surfaces, docs = MODULE.route_docs(
-            ["packages/adapter-mcp/src/index.ts", "packages/adapter-web/src/ui-shell.ts"],
-            None,
-        )
-        self.assertEqual(surfaces, ["mcp", "ui"])
-        self.assertIn("docs/specs/api.md", docs)
-        self.assertIn("docs/brand.md", docs)
-        self.assertLess(len(docs), len(MODULE.ALL_DOCS))
-
-    def test_unknown_or_ambiguous_path_fails_safe_to_all_documents(self) -> None:
-        surfaces, docs = MODULE.route_docs(
-            ["packages/domain/src/index.ts", "new-surface/file.ts"], None
-        )
-        self.assertEqual(surfaces, ["control", "unknown"])
-        self.assertEqual(docs, MODULE.ALL_DOCS)
-
-    def test_substrings_do_not_misroute(self) -> None:
-        self.assertEqual(MODULE.infer_surface("build/output.ts"), "unknown")
-        self.assertEqual(MODULE.infer_surface("packages/adapter-webish/file.ts"), "unknown")
-        self.assertEqual(MODULE.infer_surface("lib/sites-helper.ts"), "unknown")
-
-    def test_all_real_package_roots_have_explicit_routes(self) -> None:
-        package_roots = {
-            "adapter-audit-memory",
-            "adapter-background",
-            "adapter-mcp",
-            "adapter-metadata-memory",
-            "adapter-object-memory",
-            "adapter-search-memory",
-            "adapter-security-webcrypto",
-            "adapter-web",
-            "application-background",
-            "application-content",
-            "application-contracts",
-            "application-control",
-            "application-ports",
-            "composition-root",
-            "domain",
-            "okf-codec",
-            "test-fixtures",
-        }
-        for name in package_roots:
-            with self.subTest(name=name):
-                self.assertNotEqual(
-                    MODULE.infer_surface(f"packages/{name}/src/index.ts"), "unknown"
-                )
-
-    def test_relevant_test_roots_route_without_substrings(self) -> None:
-        self.assertEqual(MODULE.infer_surface("tests/conformance/mcp-transport.test.mjs"), "mcp")
-        self.assertEqual(MODULE.infer_surface("tests/unit/okf-codec.test.mjs"), "okf")
-        self.assertEqual(MODULE.infer_surface("tests/integration/membership-control.test.mjs"), "control")
-        self.assertEqual(MODULE.infer_surface("tests/integration/changeset-commit.test.mjs"), "content")
-
-    def test_one_cross_surface_test_routes_union(self) -> None:
-        surfaces, docs = MODULE.route_docs(
-            ["tests/unit/mcp-token-management-ui.test.mjs"], None
-        )
-        self.assertEqual(surfaces, ["mcp", "ui", "control"])
-        self.assertIn("docs/specs/api.md", docs)
-        self.assertIn("docs/brand.md", docs)
-
-
-class IdentityTest(unittest.TestCase):
-    def test_identities_are_valid_and_unique(self) -> None:
-        values = []
-        for _ in range(2):
-            with io.StringIO() as output, redirect_stdout(output):
-                MODULE.command_identities(mock.Mock())
-                values.append(json.loads(output.getvalue()))
-        self.assertRegex(values[0]["run_key"], r"^[0-9a-f]{32}$")
-        self.assertNotEqual(values[0]["run_key"], values[1]["run_key"])
-        self.assertNotEqual(values[0]["run_id"], values[1]["run_id"])
-
-
-class ManifestTest(GitMixin, unittest.TestCase):
-    RUN_KEY = "a" * 32
-
-    def manifest_fixture(self, root: Path) -> tuple[Path, Path, dict[str, object]]:
-        repo, _ = self.fixture(root)
-        branch = f"codex/and-56-domain/r{self.RUN_KEY}-e1-c1"
-        self.git(repo, "branch", branch)
-        worktree = root / "worker"
-        self.git(repo, "worktree", "add", str(worktree), branch)
-        base = self.git(worktree, "rev-parse", "HEAD")
-        guard_message = "guard\n\nKIND: CLAIM_GUARD\nSTATE: claimed\n"
-        guard_tip = self.metadata_commit(worktree, guard_message, base)
-        guard_ref = f"refs/heads/codex/release/claims/{self.RUN_KEY}/AND-56/c1"
-        self.git(repo, "update-ref", guard_ref, guard_tip)
-        self.git(repo, "push", "origin", f"{guard_tip}:{guard_ref}")
-        task_root = worktree / ".codex-task"
-        for name in ("build", "tmp", "runtime", "npm-cache"):
-            (task_root / name).mkdir(parents=True)
-        dependency_path = worktree / "node_modules"
-        dependency_path.mkdir()
-        lockfile_digest = MODULE.hashlib.sha256(
-            (worktree / "package-lock.json").read_bytes()
-        ).hexdigest()
-        (task_root / "provision.json").write_text(
+    def snapshot(self, path: Path, issues: list[dict[str, object]]) -> None:
+        path.write_text(
             json.dumps(
                 {
-                    "status": "installed",
-                    "lockfile_digest": lockfile_digest,
-                    "dependency_path": str(dependency_path.resolve()),
+                    "schema": MODULE.SNAPSHOT_SCHEMA,
+                    "issues": issues,
+                    "completed_dependency_ids": [],
                 }
             ),
             encoding="utf-8",
         )
-        owner_id = str(uuid.uuid4())
-        project_id = str(uuid.uuid4())
-        milestone_id = str(uuid.uuid4())
-        run_id = "019fdbbd-b0ed-77d1-80a4-f45a253c770f"
-        claim_token = str(uuid.uuid4())
-        coordinator_message = (
-            "coordinator\n\n"
-            "SCHEMA: 1\n"
-            "KIND: COORDINATOR_CLAIM\n"
-            f"RUN_ID: {run_id}\n"
-            f"RUN_KEY: {self.RUN_KEY}\n"
-            f"OWNER_ID: {owner_id}\n"
-            "EPOCH: 1\n"
-            f"PROJECT_ID: {project_id}\n"
-            f"MILESTONE_ID: {milestone_id}\n"
-            "STATE: running\n"
-            "OWNER_STATE: active\n"
-            "ACTION_SEQ: 0\n"
-            "ACTION_STATUS: reconciled\n"
-            f"CLAIM_INDEX: active=AND-56:1@origin:{guard_ref}@origin:refs/heads/{branch}@{claim_token};entries=1;digest={'1' * 64}\n"
-        )
-        coordinator_sha = self.metadata_commit(repo, coordinator_message, base)
-        self.git(
-            repo,
-            "push",
-            "origin",
-            f"{coordinator_sha}:{MODULE.CANONICAL_COORDINATOR_REF}",
-        )
-        manifest: dict[str, object] = {
-            "run_id": run_id,
-            "run_key": self.RUN_KEY,
-            "owner_id": owner_id,
-            "owner_epoch": 1,
-            "claim_generation": 1,
-            "claim_token": claim_token,
-            "issue_id": str(uuid.uuid4()),
-            "issue_identifier": "AND-56",
-            "project_id": project_id,
-            "milestone_id": milestone_id,
-            "repo": str(repo),
-            "worktree": str(worktree),
-            "checkout_mode": "worktree",
-            "branch": branch,
-            "feature_ref": f"refs/heads/{branch}",
-            "guard_ref": guard_ref,
-            "guard_tip": guard_tip,
-            "coordinator_sha": coordinator_sha,
-            "root_sha": base,
-            "base_sha": base,
-            "dependency_shas": [],
-            "queue_fingerprint": "b" * 64,
-            "scope_fingerprint": "c" * 64,
-            "issue_updated_at": "2026-08-07T14:00:00.123Z",
-            "ownership_paths": ["packages/domain/src/index.ts"],
-            "executor": {
-                "lease_id": str(uuid.uuid4()),
-                "mode": "delegated",
-                "agent_type": "worker",
-                "fork_turns": "none",
-            },
-            "isolation": {
-                "mutable_build_dir": str(task_root / "build"),
-                "tmp_dir": str(task_root / "tmp"),
-                "runtime_dir": str(task_root / "runtime"),
-                "cache_mode": "isolated",
-                "cache_dir": str(task_root / "npm-cache"),
-                "cache_key": "none",
-                "ports": [43123, 43124],
-                "env": {"MIND_DIARY_TASK_TMP": str(task_root / "tmp")},
-            },
-            "dependencies": {
-                "mode": "isolated",
-                "path": str(dependency_path.resolve()),
-                "lockfile_digest": lockfile_digest,
-                "cache_key": "none",
-                "read_only": False,
-                "provenance": f"npm-ci:{lockfile_digest}",
-            },
-            "validation": {
-                "targeted_checks": [
-                    {
-                        "id": "domain-invariants",
-                        "argv": ["node", "--test", "tests/unit/domain-invariants.test.mjs"],
-                    }
-                ],
-                "check_class": "targeted-feature",
-                "full_gate": "deferred-to-cutoff",
-            },
-            "remote_mode": "online",
-        }
-        return repo, worktree, manifest
 
-    def invoke(
-        self, payload: object, *, phase: str = "dispatch"
-    ) -> tuple[int, dict[str, object]]:
-        args = MODULE.argparse.Namespace(input="-", phase=phase, remote="origin")
-        with mock.patch.object(sys, "stdin", io.StringIO(json.dumps(payload))), io.StringIO() as output, redirect_stdout(output):
-            code = MODULE.command_manifest(args)
-            return code, json.loads(output.getvalue())
-
-    def test_validates_git_bound_manifest_and_routes(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="shipctl-manifest-") as directory:
-            _, _, payload = self.manifest_fixture(Path(directory))
-            code, result = self.invoke(payload)
-        self.assertEqual((code, result["status"]), (0, "valid"))
-        self.assertEqual(result["surfaces"], ["control"])
-        self.assertIn("docs/specs/domain-model.md", result["documents"])
-
-    def test_validates_single_worker_manifest_in_primary_checkout(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="shipctl-primary-manifest-") as directory:
-            root = Path(directory)
-            repo, worker, payload = self.manifest_fixture(root)
-            self.git(repo, "worktree", "remove", str(worker))
-            self.git(repo, "switch", payload["branch"])
-            task_root = repo / ".codex-task"
-            for name in ("build", "tmp", "runtime", "npm-cache"):
-                (task_root / name).mkdir(parents=True)
-            dependency_path = repo / "node_modules"
-            dependency_path.mkdir()
-            lockfile_digest = MODULE.hashlib.sha256(
-                (repo / "package-lock.json").read_bytes()
-            ).hexdigest()
-            (task_root / "provision.json").write_text(
-                json.dumps(
-                    {
-                        "status": "installed",
-                        "checkout_mode": "primary",
-                        "lockfile_digest": lockfile_digest,
-                        "dependency_path": str(dependency_path.resolve()),
-                    }
-                ),
-                encoding="utf-8",
-            )
-            payload["checkout_mode"] = "primary"
-            payload["worktree"] = str(repo)
-            payload["executor"] = {
-                "lease_id": str(uuid.uuid4()),
-                "mode": "coordinator-inline",
-                "agent_type": "coordinator-inline",
-                "fork_turns": "none",
-            }
-            payload["isolation"] = {
-                "mutable_build_dir": str((task_root / "build").resolve()),
-                "tmp_dir": str((task_root / "tmp").resolve()),
-                "runtime_dir": str((task_root / "runtime").resolve()),
-                "cache_mode": "isolated",
-                "cache_dir": str((task_root / "npm-cache").resolve()),
-                "cache_key": "none",
-                "ports": [],
-                "env": {},
-            }
-            payload["dependencies"] = {
-                "mode": "isolated",
-                "path": str(dependency_path.resolve()),
-                "lockfile_digest": lockfile_digest,
-                "cache_key": "none",
-                "read_only": False,
-                "provenance": "primary-npm-ci",
-            }
-            code, result = self.invoke(payload)
-        self.assertEqual((code, result["status"]), (0, "valid"))
-
-    def test_non_object_is_a_clean_validation_error(self) -> None:
-        code, result = self.invoke(["not", "an", "object"])
-        self.assertEqual((code, result["status"]), (2, "invalid"))
-        self.assertEqual(result["errors"], ["invalid:manifest:not-object"])
-
-    def test_rejects_missing_and_weak_identity(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="shipctl-manifest-") as directory:
-            _, _, payload = self.manifest_fixture(Path(directory))
-            del payload["claim_token"]
-            payload["run_key"] = "SHORT"
-            code, result = self.invoke(payload)
-        self.assertIn("missing:claim_token", result["errors"])
-        self.assertIn("invalid:claim_token", result["errors"])
-        self.assertIn("invalid:run_key", result["errors"])
-        self.assertEqual(code, 2)
-
-    def test_rejects_wrong_issue_branch_binding(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="shipctl-manifest-") as directory:
-            _, _, payload = self.manifest_fixture(Path(directory))
-            payload["issue_identifier"] = "AND-57"
-            payload["guard_ref"] = f"refs/heads/codex/release/claims/{self.RUN_KEY}/AND-57/c1"
-            code, result = self.invoke(payload)
-        self.assertEqual(code, 2)
-        self.assertIn("invalid:branch-issue-run-binding", result["errors"])
-
-    def test_rejects_path_traversal_and_declared_surface_narrowing(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="shipctl-manifest-") as directory:
-            _, _, payload = self.manifest_fixture(Path(directory))
-            payload["ownership_paths"] = ["packages/domain/../adapter-web/src/index.ts"]
-            payload["surface"] = "control"
-            code, result = self.invoke(payload)
-        self.assertEqual(code, 2)
-        self.assertIn("invalid:ownership_paths", result["errors"])
-        self.assertIn("invalid:surface-does-not-match-ownership", result["errors"])
-        self.assertEqual(result["documents"], MODULE.ALL_DOCS)
-
-    def test_rejects_isolation_escape_and_full_suite(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="shipctl-manifest-") as directory:
-            _, _, payload = self.manifest_fixture(Path(directory))
-            payload["isolation"]["tmp_dir"] = str(Path(directory) / "outside")  # type: ignore[index]
-            payload["validation"]["targeted_checks"] = [  # type: ignore[index]
-                {"id": "full", "argv": ["npm", "run", "check"]}
-            ]
-            code, result = self.invoke(payload)
-        self.assertEqual(code, 2)
-        self.assertIn("invalid:isolation.tmp_dir:outside-worktree", result["errors"])
-        self.assertIn("invalid:validation.targeted_checks:full-suite", result["errors"])
-
-    def test_rejects_executor_reuse_shape_and_dependency_install(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="shipctl-manifest-") as directory:
-            _, _, payload = self.manifest_fixture(Path(directory))
-            payload["executor"]["fork_turns"] = "all"  # type: ignore[index]
-            payload["validation"]["targeted_checks"] = [  # type: ignore[index]
-                {"id": "install", "argv": ["npm", "ci"]}
-            ]
-            code, result = self.invoke(payload)
-        self.assertEqual(code, 2)
-        self.assertIn("invalid:executor.fork_turns", result["errors"])
-        self.assertIn(
-            "invalid:validation.targeted_checks:dependency-mutation", result["errors"]
-        )
-
-    def test_rejects_duplicate_ports_and_scope_timestamp_confusion(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="shipctl-manifest-") as directory:
-            _, _, payload = self.manifest_fixture(Path(directory))
-            payload["isolation"]["ports"] = [43123, 43123]  # type: ignore[index]
-            payload["scope_fingerprint"] = payload["issue_updated_at"]
-            code, result = self.invoke(payload)
-        self.assertEqual(code, 2)
-        self.assertIn("invalid:isolation.ports", result["errors"])
-        self.assertIn("invalid:scope_fingerprint", result["errors"])
-
-    def test_accepts_connector_identifier_when_linear_uuid_is_not_exposed(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="shipctl-manifest-") as directory:
-            _, _, payload = self.manifest_fixture(Path(directory))
-            payload["issue_id"] = payload["issue_identifier"]
-            code, result = self.invoke(payload)
-            payload["issue_id"] = "AND-147"
-            mismatch_code, mismatch = self.invoke(payload)
-        self.assertEqual((code, result["status"]), (0, "valid"))
-        self.assertEqual(mismatch_code, 2)
-        self.assertIn("invalid:issue_id", mismatch["errors"])
-
-    def test_active_manifest_accepts_same_run_coordinator_descendant_with_live_claim(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="shipctl-manifest-") as directory:
-            root = Path(directory)
-            repo, _, payload = self.manifest_fixture(root)
-            descendant_message = (
-                "coordinator advanced\n\n"
-                "SCHEMA: 1\n"
-                "KIND: COORDINATOR_CLAIM\n"
-                f"RUN_ID: {payload['run_id']}\n"
-                f"RUN_KEY: {payload['run_key']}\n"
-                f"OWNER_ID: {payload['owner_id']}\n"
-                f"EPOCH: {payload['owner_epoch']}\n"
-                f"PROJECT_ID: {payload['project_id']}\n"
-                f"MILESTONE_ID: {payload['milestone_id']}\n"
-                "STATE: running\n"
-                "OWNER_STATE: active\n"
-                "ACTION_SEQ: 1\n"
-                "ACTION_STATUS: reconciled\n"
-                f"CLAIM_INDEX: active=AND-56:1@origin:{payload['guard_ref']}@origin:{payload['feature_ref']}@{payload['claim_token']};entries=1;digest={'1' * 64}\n"
-            )
-            descendant = self.metadata_commit(
-                repo, descendant_message, str(payload["coordinator_sha"])
-            )
-            self.git(
-                repo,
-                "push",
-                "origin",
-                f"{descendant}:{MODULE.CANONICAL_COORDINATOR_REF}",
-            )
-            code, result = self.invoke(payload, phase="active")
-        self.assertEqual((code, result["status"]), (0, "valid"))
-
-    def test_manifest_rejects_claim_token_not_bound_by_coordinator(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="shipctl-manifest-") as directory:
-            _, _, payload = self.manifest_fixture(Path(directory))
-            payload["claim_token"] = str(uuid.uuid4())
-            code, result = self.invoke(payload, phase="active")
-        self.assertEqual(code, 2)
-        self.assertTrue(
-            any("claim-token-binding" in error for error in result["errors"])
-        )
-
-    def test_active_manifest_rejects_descendant_that_retired_its_claim(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="shipctl-manifest-") as directory:
-            root = Path(directory)
-            repo, _, payload = self.manifest_fixture(root)
-            descendant_message = (
-                "coordinator advanced\n\n"
-                "SCHEMA: 1\n"
-                "KIND: COORDINATOR_CLAIM\n"
-                f"RUN_ID: {payload['run_id']}\n"
-                f"RUN_KEY: {payload['run_key']}\n"
-                f"OWNER_ID: {payload['owner_id']}\n"
-                f"EPOCH: {payload['owner_epoch']}\n"
-                f"PROJECT_ID: {payload['project_id']}\n"
-                f"MILESTONE_ID: {payload['milestone_id']}\n"
-                "STATE: running\n"
-                "OWNER_STATE: active\n"
-                "ACTION_SEQ: 1\n"
-                "ACTION_STATUS: reconciled\n"
-                f"CLAIM_INDEX: active=none;entries=0;digest={'1' * 64}\n"
-            )
-            descendant = self.metadata_commit(
-                repo, descendant_message, str(payload["coordinator_sha"])
-            )
-            self.git(
-                repo,
-                "push",
-                "origin",
-                f"{descendant}:{MODULE.CANONICAL_COORDINATOR_REF}",
-            )
-            code, result = self.invoke(payload, phase="active")
-        self.assertEqual(code, 2)
-        self.assertTrue(
-            any("remote-coordinator-claim" in error for error in result["errors"])
-        )
-
-    def test_active_manifest_rejects_exact_current_tip_without_live_claim(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="shipctl-manifest-") as directory:
-            root = Path(directory)
-            repo, _, payload = self.manifest_fixture(root)
-            message = (
-                "coordinator retired claim\n\n"
-                "SCHEMA: 1\n"
-                "KIND: COORDINATOR_CLAIM\n"
-                f"RUN_ID: {payload['run_id']}\n"
-                f"RUN_KEY: {payload['run_key']}\n"
-                f"OWNER_ID: {payload['owner_id']}\n"
-                f"EPOCH: {payload['owner_epoch']}\n"
-                f"PROJECT_ID: {payload['project_id']}\n"
-                f"MILESTONE_ID: {payload['milestone_id']}\n"
-                "STATE: running\n"
-                "OWNER_STATE: active\n"
-                "ACTION_SEQ: 2\n"
-                "ACTION_STATUS: reconciled\n"
-                f"CLAIM_INDEX: active=none;entries=1;digest={'1' * 64}\n"
-            )
-            current = self.metadata_commit(
-                repo, message, str(payload["coordinator_sha"])
-            )
-            self.git(
-                repo,
-                "push",
-                "origin",
-                f"{current}:{MODULE.CANONICAL_COORDINATOR_REF}",
-            )
-            payload["coordinator_sha"] = current
-            code, result = self.invoke(payload, phase="active")
-        self.assertEqual(code, 2)
-        self.assertTrue(any("claim" in error for error in result["errors"]))
-
-    def test_non_object_provision_receipt_is_bounded_invalid(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="shipctl-manifest-") as directory:
-            _, worktree, payload = self.manifest_fixture(Path(directory))
-            (worktree / ".codex-task/provision.json").write_text(
-                "[]\n", encoding="utf-8"
-            )
-            code, result = self.invoke(payload)
-        self.assertEqual((code, result["status"]), (2, "invalid"))
-        self.assertIn("invalid:dependencies.provision_receipt", result["errors"])
-
-    def test_receipt_verifier_binds_ready_feature_guard_scope_and_diff(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="shipctl-receipt-") as directory:
-            root = Path(directory)
-            repo, worktree, manifest = self.manifest_fixture(root)
-            source = worktree / "packages/domain/src/index.ts"
-            source.parent.mkdir(parents=True)
-            source.write_text("export const value = 1;\n", encoding="utf-8")
-            self.git(worktree, "add", "packages/domain/src/index.ts")
-            self.git(worktree, "commit", "-m", "AND-56 implement domain invariant")
-            head = self.git(worktree, "rev-parse", "HEAD")
-            self.git(worktree, "push", "origin", manifest["branch"])
-            checks_digest = "d" * 64
-            guard_message = (
-                "ready guard\n\n"
-                "SCHEMA: 1\n"
-                "KIND: CLAIM_GUARD\n"
-                "STATE: ready\n"
-                "ISSUE: AND-56\n"
-                "CLAIM_GENERATION: 1\n"
-                f"FEATURE_HEAD: {head}\n"
-                f"CHECKS_DIGEST: {checks_digest}\n"
-            )
-            ready_guard = self.metadata_commit(
-                repo, guard_message, str(manifest["guard_tip"])
-            )
-            self.git(repo, "update-ref", str(manifest["guard_ref"]), ready_guard)
-            self.git(
-                repo,
-                "push",
-                "origin",
-                f"{ready_guard}:{manifest['guard_ref']}",
-            )
-            manifest_path = root / "manifest.json"
-            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
-            receipt = "\n".join(
-                [
-                    "STATUS: ready",
-                    f"RUN_ID: {manifest['run_id']}",
-                    f"RUN_KEY: {manifest['run_key']}",
-                    f"OWNER: id={manifest['owner_id']}; epoch=1",
-                    f"CLAIM: generation=1; token={manifest['claim_token']}",
-                    f"ISSUE: AND-56 ({manifest['issue_id']})",
-                    f"WORKTREE: {worktree}",
-                    f"BRANCH: {manifest['branch']}",
-                    f"BASE_SHA: {manifest['base_sha']}",
-                    f"HEAD_SHA: {head}",
-                    f"SCOPE: start_fingerprint={manifest['scope_fingerprint']}; final_fingerprint={manifest['scope_fingerprint']}; unchanged",
-                    f"ORIGIN_REF: {manifest['branch']}={head}",
-                    f"GUARD: origin:{manifest['guard_ref']}={ready_guard}",
-                    "CHECK_CLASS: targeted-feature",
-                    "TARGETED_CHECKS: domain-invariants=pass",
-                    f"CHECKS_DIGEST: {checks_digest}",
-                    "FULL_GATE: deferred-to-cutoff",
-                    f"EXECUTOR: lease={manifest['executor']['lease_id']}; mode=delegated; fresh=yes",  # type: ignore[index]
-                    "GAPS: none",
-                    "DIRTY_REMAINDER: none",
-                    "DEFECT_CANDIDATE: none",
-                    "NEXT: none",
-                ]
-            ) + "\n"
-            args = MODULE.argparse.Namespace(
-                manifest=str(manifest_path),
-                input="-",
-                remote="origin",
-                current_scope_fingerprint=manifest["scope_fingerprint"],
-            )
-            with mock.patch.object(sys, "stdin", io.StringIO(receipt)), io.StringIO() as output, redirect_stdout(output):
-                code = MODULE.command_receipt_verify(args)
-                result = json.loads(output.getvalue())
-        self.assertEqual((code, result["status"], result["verified"]), (0, "ready", True))
-        self.assertEqual(result["head_sha"], head)
-
-    def test_receipt_verifier_rejects_duplicate_authoritative_header(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="shipctl-receipt-") as directory:
-            root = Path(directory)
-            _, _, manifest = self.manifest_fixture(root)
-            manifest_path = root / "manifest.json"
-            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
-            args = MODULE.argparse.Namespace(
-                manifest=str(manifest_path),
-                input="-",
-                remote="origin",
-                current_scope_fingerprint=manifest["scope_fingerprint"],
-            )
-            with mock.patch.object(sys, "stdin", io.StringIO("STATUS: failed\nSTATUS: ready\n")), io.StringIO() as output, redirect_stdout(output):
-                code = MODULE.command_receipt_verify(args)
-                result = json.loads(output.getvalue())
-        self.assertEqual((code, result["status"], result["verified"]), (2, "invalid", False))
-        self.assertIn("invalid:receipt-duplicate:STATUS", result["errors"])
-
-
-class InvocationTest(unittest.TestCase):
-    def invoke(self, text: str) -> tuple[int, dict[str, object]]:
-        with io.StringIO() as output, redirect_stdout(output):
-            code = MODULE.command_invocation(mock.Mock(text=text))
-            return code, json.loads(output.getvalue())
-
-    def test_defaults_to_one_and_ignores_issue_numbers(self) -> None:
-        code, result = self.invoke("$ship-linear-release milestone AND-84 version 6")
-        self.assertEqual((code, result["workers"], result["worker_mode"]), (0, 1, "exact"))
-        self.assertFalse(result["workers_explicit"])
-
-    def test_accepts_exact_numeric_and_russian_word_forms(self) -> None:
-        _, assignment = self.invoke("$ship-linear-release workers=6")
-        _, threads = self.invoke("запусти skill в 4 потока")
-        _, words = self.invoke("запусти три воркера")
-        self.assertEqual(
-            (assignment["workers"], threads["workers"], words["workers"]),
-            (6, 4, 3),
-        )
-        self.assertTrue(assignment["workers_explicit"])
-
-    def test_accepts_auto_out_alias_maximum_and_dry_run(self) -> None:
-        code, result = self.invoke("workers=out, не больше 6, dry-run")
-        self.assertEqual((code, result["workers"], result["max_workers"]), (0, "auto", 6))
-        self.assertTrue(result["dry_run"])
-
-    def test_conflicting_worker_counts_fail_before_mutation(self) -> None:
-        code, result = self.invoke("workers=4 и 6 воркеров")
-        self.assertEqual((code, result["status"]), (2, "invalid"))
-        self.assertIn("ambiguous:workers", result["errors"])
-
-    def test_explicit_nonpositive_or_unknown_worker_value_is_invalid(self) -> None:
-        zero_code, zero = self.invoke("workers=0")
-        bad_code, bad = self.invoke("workers=many")
-        self.assertEqual((zero_code, bad_code), (2, 2))
-        self.assertIn("invalid:workers", zero["errors"])
-        self.assertIn("invalid:workers", bad["errors"])
-
-
-class GoalAndMilestonePlanTest(unittest.TestCase):
-    def test_goal_card_is_bounded_and_contains_exact_contract_identity(self) -> None:
-        args = MODULE.argparse.Namespace(
-            repo="/repo/MindDiary",
-            project_name="Mind Diary",
-            project_id=str(uuid.uuid4()),
-            milestone_name="MVP",
-            milestone_id=str(uuid.uuid4()),
-            run_id=str(uuid.uuid4()),
-            run_key="a" * 32,
-            owner_id=str(uuid.uuid4()),
-            epoch=2,
-            contract_sha="b" * 40,
-        )
-        with io.StringIO() as output, redirect_stdout(output):
-            code = MODULE.command_goal_card(args)
-            result = json.loads(output.getvalue())
-        self.assertEqual((code, result["status"]), (0, "valid"))
-        self.assertLessEqual(result["characters"], MODULE.MAX_GOAL_CHARS)
-        self.assertIn(args.milestone_id, result["objective"])
-        self.assertIn(args.contract_sha, result["objective"])
-        self.assertNotIn("profile", result["objective"].lower())
-
-    def milestone(self, issues: list[dict[str, object]]) -> tuple[int, dict[str, object]]:
-        milestone_id = str(uuid.uuid4())
-        for index, issue in enumerate(issues):
-            issue["milestone_id"] = milestone_id
-            issue.setdefault("id", issue.get("identifier"))
-            issue.setdefault("title", f"Issue {issue.get('identifier')}")
-            issue.setdefault("priority", 0)
-            issue.setdefault("labels", [])
-            if "createdAt" not in issue and "created_at" not in issue:
-                issue["createdAt"] = "2026-08-08T12:00:00Z"
-            if "updatedAt" not in issue and "updated_at" not in issue:
-                issue["updatedAt"] = "2026-08-08T13:00:00Z"
-            if "boardPosition" not in issue and "board_position" not in issue:
-                issue["boardPosition"] = index
-            issue.setdefault("production_requirement", "unknown")
-        payload = {
-            "project": {"id": str(uuid.uuid4()), "name": "Mind Diary"},
-            "milestones": [{"id": milestone_id, "name": "MVP", "current": True}],
-            "issues": issues,
-        }
-        with mock.patch.object(sys, "stdin", io.StringIO(json.dumps(payload))), io.StringIO() as output, redirect_stdout(output):
-            code = MODULE.command_milestone_plan(MODULE.argparse.Namespace(input="-"))
-            return code, json.loads(output.getvalue())
-
-    def snapshot(self, payload: dict[str, object]) -> tuple[int, dict[str, object]]:
-        with mock.patch.object(sys, "stdin", io.StringIO(json.dumps(payload))), io.StringIO() as output, redirect_stdout(output):
-            code = MODULE.command_milestone_plan(MODULE.argparse.Namespace(input="-"))
-            return code, json.loads(output.getvalue())
-
-    def test_milestone_plan_resolves_dependency_frontier(self) -> None:
-        code, result = self.milestone(
-            [
-                {
-                    "identifier": "AND-1",
-                    "state": "Done",
-                    "dependencies": [],
-                    "production_requirement": "not-required",
-                },
-                {
-                    "identifier": "AND-2",
-                    "state": "Todo",
-                    "dependencies": ["AND-1"],
-                    "production_requirement": "not-required",
-                },
-            ]
-        )
-        self.assertEqual((code, result["status"], result["ready"]), (0, "planned", ["AND-2"]))
-        self.assertEqual(result["production_requirement"], "not-required")
-
-    def test_milestone_plan_fails_early_on_cycle(self) -> None:
-        code, result = self.milestone(
-            [
-                {"identifier": "AND-1", "state": "Todo", "dependencies": ["AND-2"]},
-                {"identifier": "AND-2", "state": "Todo", "dependencies": ["AND-1"]},
-            ]
-        )
-        self.assertEqual((code, result["status"]), (3, "blocked"))
-        self.assertIn("dependency-cycle", result["structural_reasons"])
-
-    def test_malformed_dependencies_fail_closed_without_a_traceback(self) -> None:
-        code, result = self.milestone(
-            [
-                {
-                    "identifier": "AND-1",
-                    "state": "Todo",
-                    "dependencies": [{"identifier": "AND-2"}],
-                }
-            ]
-        )
-        self.assertEqual((code, result["status"]), (3, "blocked"))
-        self.assertIn("invalid:issue-dependencies:AND-1", result["errors"])
-
-    def test_null_timestamp_and_nonfinite_board_position_fail_closed(self) -> None:
-        timestamp_code, timestamp = self.milestone(
-            [
-                {
-                    "identifier": "AND-1",
-                    "state": "Todo",
-                    "dependencies": [],
-                    "createdAt": None,
-                },
-                {"identifier": "AND-2", "state": "Todo", "dependencies": []},
-            ]
-        )
-        board_code, board = self.milestone(
-            [
-                {
-                    "identifier": "AND-1",
-                    "state": "Todo",
-                    "dependencies": [],
-                    "boardPosition": float("nan"),
-                }
-            ]
-        )
-        self.assertEqual((timestamp_code, timestamp["status"]), (3, "blocked"))
-        self.assertIn("invalid:issue-created-at:AND-1", timestamp["errors"])
-        self.assertEqual((board_code, board["status"]), (3, "blocked"))
-        self.assertIn("invalid:issue-board-position:AND-1", board["errors"])
-
-    def test_created_at_order_is_chronological_across_fractional_precision(self) -> None:
-        code, result = self.milestone(
-            [
-                {
-                    "identifier": "AND-1",
-                    "state": "Todo",
-                    "dependencies": [],
-                    "createdAt": "2026-08-08T12:00:00.100Z",
-                },
-                {
-                    "identifier": "AND-2",
-                    "state": "Todo",
-                    "dependencies": [],
-                    "createdAt": "2026-08-08T12:00:00Z",
-                },
-            ]
-        )
-        self.assertEqual(code, 0)
-        self.assertEqual(result["ready"], ["AND-2", "AND-1"])
-
-    def test_snapshot_digest_is_independent_of_issue_dependency_and_label_order(self) -> None:
-        project_id = str(uuid.uuid4())
-        milestone_id = str(uuid.uuid4())
-        issues = [
-            {
-                "id": "AND-1",
-                "identifier": "AND-1",
-                "title": "First",
-                "milestone_id": milestone_id,
-                "state": "Done",
-                "dependencies": [],
-                "priority": 0,
-                "labels": ["Backend", "Bug"],
-                "createdAt": "2026-08-08T12:00:00Z",
-                "updatedAt": "2026-08-08T13:00:00Z",
-                "boardPosition": 1,
-                "production_requirement": "unknown",
-            },
-            {
-                "id": "AND-2",
-                "identifier": "AND-2",
-                "title": "Second",
-                "milestone_id": milestone_id,
-                "state": "Todo",
-                "dependencies": ["AND-4", "AND-1"],
-                "priority": 0,
-                "labels": ["Control", "Bug"],
-                "createdAt": "2026-08-08T12:00:00Z",
-                "updatedAt": "2026-08-08T13:00:00Z",
-                "boardPosition": 2,
-                "production_requirement": "unknown",
-            },
-            {
-                "id": "AND-4",
-                "identifier": "AND-4",
-                "title": "Fourth",
-                "milestone_id": milestone_id,
-                "state": "Done",
-                "dependencies": [],
-                "priority": 0,
-                "labels": [],
-                "createdAt": "2026-08-08T12:00:00Z",
-                "updatedAt": "2026-08-08T13:00:00Z",
-                "boardPosition": 4,
-                "production_requirement": "unknown",
-            },
-        ]
-        payload = {
-            "project": {"id": project_id, "name": "Mind Diary"},
-            "milestones": [{"id": milestone_id, "name": "MVP", "current": True}],
-            "issues": issues,
-        }
-        _, first = self.snapshot(payload)
-        reversed_payload = json.loads(json.dumps(payload))
-        reversed_payload["issues"].reverse()
-        reversed_payload["issues"][1]["dependencies"].reverse()
-        reversed_payload["issues"][1]["labels"].reverse()
-        _, second = self.snapshot(reversed_payload)
-        self.assertEqual(first["snapshot_digest"], second["snapshot_digest"])
-
-    def test_ready_frontier_uses_priority_bug_and_unblock_order(self) -> None:
-        code, result = self.milestone(
-            [
-                {
-                    "identifier": "AND-10",
-                    "state": "Todo",
-                    "dependencies": [],
-                    "priority": 2,
-                    "labels": [],
-                    "created_at": "2026-08-08T12:00:00Z",
-                },
-                {
-                    "identifier": "AND-11",
-                    "state": "Todo",
-                    "dependencies": [],
-                    "priority": 1,
-                    "labels": [],
-                    "created_at": "2026-08-08T12:00:00Z",
-                },
-                {
-                    "identifier": "AND-12",
-                    "state": "Todo",
-                    "dependencies": [],
-                    "priority": 2,
-                    "labels": ["Bug"],
-                    "created_at": "2026-08-08T12:00:00Z",
-                },
-                {
-                    "identifier": "AND-13",
-                    "state": "Todo",
-                    "dependencies": ["AND-12"],
-                    "priority": 3,
-                    "labels": [],
-                    "created_at": "2026-08-08T12:00:00Z",
-                },
-            ]
-        )
-        self.assertEqual(code, 0)
-        self.assertEqual(result["ready"], ["AND-11", "AND-12", "AND-10"])
-
-
-class ConveyorStateMachineTest(unittest.TestCase):
-    def invoke(self, payload: object) -> tuple[int, dict[str, object]]:
-        with mock.patch.object(sys, "stdin", io.StringIO(json.dumps(payload))), io.StringIO() as output, redirect_stdout(output):
-            code = MODULE.command_conveyor_next(MODULE.argparse.Namespace(input="-"))
-            return code, json.loads(output.getvalue())
-
-    def event(self, state: str, event: str, evidence: dict[str, str]) -> dict[str, object]:
+    def issue(
+        self,
+        issue_id: str,
+        identifier: str,
+        *,
+        dependencies: list[str] | None = None,
+        priority: int = 1,
+    ) -> dict[str, object]:
         return {
-            "schema": 1,
-            "run_id": str(uuid.uuid4()),
-            "issue_identifier": "AND-56",
-            "generation": 1,
-            "state": state,
-            "event": event,
-            "event_id": str(uuid.uuid4()),
-            "evidence": evidence,
+            "id": issue_id,
+            "identifier": identifier,
+            "title": f"Task {identifier}",
+            "state": "Todo",
+            "priority": priority,
+            "dependencies": dependencies or [],
         }
 
-    def test_happy_path_transition_is_deterministic(self) -> None:
-        payload = self.event(
-            "running",
-            "receipt-verified",
-            {
-                "receipt_digest": "a" * 64,
-                "head_sha": "b" * 40,
-                "checks_digest": "c" * 64,
-            },
-        )
-        code_a, first = self.invoke(payload)
-        code_b, second = self.invoke(payload)
-        self.assertEqual((code_a, code_b), (0, 0))
-        self.assertEqual(first, second)
-        self.assertEqual(first["state_after"], "feature_ready")
-
-    def test_wrong_event_and_incomplete_evidence_fail_closed(self) -> None:
-        code, result = self.invoke(
-            self.event("running", "gate-passed", {"head_sha": "b" * 40})
-        )
-        self.assertEqual((code, result["status"]), (2, "invalid"))
-        self.assertIn("invalid:event-for-state", result["errors"])
-        self.assertIn("missing:evidence.receipt_digest", result["errors"])
-
-    def test_terminal_state_cannot_advance(self) -> None:
-        code, result = self.invoke(self.event("terminal", "dispatch", {}))
-        self.assertEqual((code, result["status"]), (2, "invalid"))
-        self.assertIn("invalid:state", result["errors"])
-
-
-class ProjectionPlanTest(GitMixin, unittest.TestCase):
-    RUN_ID = "019fdbbd-b0ed-77d1-80a4-f45a253c770f"
-
-    def invoke(self, payload: object) -> tuple[int, dict[str, object]]:
-        with mock.patch.object(sys, "stdin", io.StringIO(json.dumps(payload))), io.StringIO() as output, redirect_stdout(output):
-            code = MODULE.command_projection_plan(MODULE.argparse.Namespace(input="-"))
-            return code, json.loads(output.getvalue())
-
-    def item(self, issue: str, kind: str, status: str) -> dict[str, object]:
-        return {
-            "issue_identifier": issue,
-            "issue_id": issue,
-            "receipt_kind": kind,
-            "receipt_key": f"{issue}:g1",
-            "generation": 1,
-            "status": status,
-            "summary": f"Статус {issue} обновлён.",
-            "changes": ["Изменения сохранены в feature branch."],
-            "evidence": ["Targeted checks passed."],
-            "next": "Координатор продолжит conveyor.",
-            "updated_at": "2026-08-08T15:00:00Z",
-        }
-
-    def test_plan_is_deterministic_human_readable_and_can_include_status_cas(self) -> None:
-        claim = self.item("AND-2", "WORK_CLAIM", "active")
-        claim["state_update"] = {"expected": "Todo", "desired": "In Progress"}
-        ready = self.item("AND-1", "FEATURE_RECEIPT", "ready")
-        first_code, first = self.invoke(
-            {"run_id": self.RUN_ID, "items": [claim, ready]}
-        )
-        second_code, second = self.invoke(
-            {"run_id": self.RUN_ID, "items": [ready, claim]}
-        )
-        self.assertEqual((first_code, second_code), (0, 0))
-        self.assertEqual(first, second)
-        self.assertEqual(first["item_count"], 3)
-        comment = first["items"][0]
-        self.assertEqual(comment["operation"], "create-comment")
-        self.assertIn("### Изменения готовы", comment["payload"]["body"])
-        self.assertIn("Что изменилось:", comment["payload"]["body"])
-        self.assertIn("Проверка:", comment["payload"]["body"])
-        self.assertIn(
-            f"<!-- ship-linear-release:{self.RUN_ID}:FEATURE_RECEIPT:AND-1:g1 -->",
-            comment["payload"]["body"],
-        )
-        self.assertEqual(first["items"][-1]["operation"], "update-status")
-        self.assertEqual(first["items"][-1]["expected_before"], "state=Todo")
-        _, later_run = self.invoke(
-            {"run_id": str(uuid.uuid4()), "items": [claim, ready]}
-        )
-        self.assertNotEqual(
-            [item["request_key"] for item in first["items"]],
-            [item["request_key"] for item in later_run["items"]],
-        )
-
-    def test_existing_comment_is_updated_and_secret_like_text_is_rejected(self) -> None:
-        item = self.item("AND-2", "WORK_CLAIM", "active")
-        item["comment_id"] = "comment-123"
-        code, result = self.invoke({"run_id": self.RUN_ID, "items": [item]})
-        item["summary"] = "Authorization: Bearer should-not-appear"
-        bad_code, bad = self.invoke({"run_id": self.RUN_ID, "items": [item]})
-        self.assertEqual((code, result["items"][0]["operation"]), (0, "update-comment"))
-        self.assertEqual(bad_code, 2)
-        self.assertIn("invalid:items[0].summary", bad["errors"])
-
-    def test_projection_rejects_unhashable_kind_wrong_issue_and_duplicate_status_target(self) -> None:
-        malformed = self.item("AND-1", "WORK_CLAIM", "active")
-        malformed["receipt_kind"] = []
-        malformed_code, malformed_result = self.invoke(
-            {"run_id": self.RUN_ID, "items": [malformed]}
-        )
-        mismatch = self.item("AND-1", "WORK_CLAIM", "active")
-        mismatch["issue_id"] = "AND-2"
-        mismatch_code, mismatch_result = self.invoke(
-            {"run_id": self.RUN_ID, "items": [mismatch]}
-        )
-        first = self.item("AND-1", "WORK_CLAIM", "active")
-        first["state_update"] = {"expected": "Todo", "desired": "In Progress"}
-        second = self.item("AND-1", "WORK_CLAIM", "released")
-        second["receipt_key"] = "AND-1:g1:released"
-        second["state_update"] = {"expected": "In Progress", "desired": "Done"}
-        duplicate_code, duplicate_result = self.invoke(
-            {"run_id": self.RUN_ID, "items": [first, second]}
-        )
-        self.assertEqual(malformed_code, 2)
-        self.assertIn("invalid:items[0].receipt_kind", malformed_result["errors"])
-        self.assertEqual(mismatch_code, 2)
-        self.assertIn("invalid:items[0].issue_id-mismatch", mismatch_result["errors"])
-        self.assertEqual(duplicate_code, 2)
-        self.assertIn("invalid:duplicate-status-target:AND-1", duplicate_result["errors"])
-
-    def test_projection_rejects_noncontract_receipt_status_and_api_key(self) -> None:
-        integrated = self.item("AND-1", "FEATURE_RECEIPT", "integrated")
-        integrated_code, integrated_result = self.invoke(
-            {"run_id": self.RUN_ID, "items": [integrated]}
-        )
-        secret = self.item("AND-1", "FEATURE_RECEIPT", "ready")
-        secret["evidence"] = ["api_key=sk-live-example"]
-        secret_code, secret_result = self.invoke(
-            {"run_id": self.RUN_ID, "items": [secret]}
-        )
-        self.assertEqual(integrated_code, 2)
-        self.assertIn("invalid:items[0].status", integrated_result["errors"])
-        self.assertEqual(secret_code, 2)
-        self.assertIn("invalid:items[0].evidence", secret_result["errors"])
-
-    def test_projection_rejects_comment_that_exceeds_durable_provider_envelope(self) -> None:
-        item = self.item("AND-1", "FEATURE_RECEIPT", "ready")
-        item["changes"] = ["я" * 500] * 8
-        item["evidence"] = ["д" * 500] * 8
-        code, result = self.invoke({"run_id": self.RUN_ID, "items": [item]})
-        self.assertEqual((code, result["status"]), (2, "invalid"))
-        self.assertIn(
-            "invalid:item[AND-1].rendered-comment-too-large", result["errors"]
-        )
-
-    def test_projection_batch_cas_persists_full_intent_and_itemwise_results(self) -> None:
-        thread_id = str(uuid.uuid4())
-        proof = MODULE.hashlib.sha256(thread_id.encode()).hexdigest()
-        with tempfile.TemporaryDirectory(prefix="shipctl-projection-cas-") as directory:
-            root = Path(directory)
-            repo, _ = self.fixture(root)
-            base = self.git(repo, "rev-parse", "HEAD")
-            contract = MODULE.tree_oid(repo, base, MODULE.SKILL_PATH)
-            parent_message = (
-                "running coordinator\n\n"
-                "SCHEMA: 1\n"
-                "KIND: COORDINATOR_CLAIM\n"
-                f"OWNER_ID: {uuid.uuid4()}\n"
-                "OWNER_PROOF_KIND: runtime-task-id\n"
-                f"OWNER_PROOF_DIGEST: {proof}\n"
-                f"RUN_ID: {self.RUN_ID}\n"
-                f"RUN_KEY: {'a' * 32}\n"
-                f"PROJECT_ID: {uuid.uuid4()}\n"
-                f"MILESTONE_ID: {uuid.uuid4()}\n"
-                "EPOCH: 1\n"
-                "STATE: running\n"
-                "OWNER_STATE: active\n"
-                f"CONTRACT_SOURCE_SHA: {base}\n"
-                f"CONTRACT_DIGEST: {contract}\n"
-                "ACTION_SEQ: 4\n"
-                "ACTION_STATUS: reconciled\n"
-            )
-            parent = self.metadata_commit(repo, parent_message, base)
-            self.git(
-                repo,
-                "push",
-                "origin",
-                f"{parent}:{MODULE.CANONICAL_COORDINATOR_REF}",
-            )
-            item = self.item("AND-1", "FEATURE_RECEIPT", "ready")
-            _, plan = self.invoke({"run_id": self.RUN_ID, "items": [item]})
-            intent_args = MODULE.argparse.Namespace(
-                repo=str(repo),
-                remote="origin",
-                default="main",
-                phase="intent",
-                expected_coordinator_sha=parent,
-                input="-",
-            )
-            with mock.patch.dict(MODULE.os.environ, {"CODEX_THREAD_ID": thread_id}, clear=False), mock.patch.object(sys, "stdin", io.StringIO(json.dumps(plan))), io.StringIO() as output, redirect_stdout(output):
-                intent_code = MODULE.command_projection_batch_cas(intent_args)
-                intent = json.loads(output.getvalue())
-            wrong_args = MODULE.argparse.Namespace(
-                repo=str(repo),
-                remote="origin",
-                default="main",
-                phase="reconcile",
-                expected_coordinator_sha=parent,
-                input="-",
-            )
-            result_payload = {
-                "batch_id": plan["batch_id"],
-                "results": [
-                    {
-                        "item_id": plan["items"][0]["item_id"],
-                        "status": "applied",
-                        "result": "comment_id=comment-123",
-                    }
-                ],
-            }
-            with mock.patch.dict(MODULE.os.environ, {"CODEX_THREAD_ID": thread_id}, clear=False), mock.patch.object(sys, "stdin", io.StringIO(json.dumps(result_payload))), io.StringIO() as output, redirect_stdout(output):
-                wrong_code = MODULE.command_projection_batch_cas(wrong_args)
-                wrong = json.loads(output.getvalue())
-            reconcile_args = MODULE.argparse.Namespace(
-                repo=str(repo),
-                remote="origin",
-                default="main",
-                phase="reconcile",
-                expected_coordinator_sha=intent["coordinator"],
-                input="-",
-            )
-            with mock.patch.dict(MODULE.os.environ, {"CODEX_THREAD_ID": thread_id}, clear=False), mock.patch.object(sys, "stdin", io.StringIO(json.dumps(result_payload))), io.StringIO() as output, redirect_stdout(output):
-                reconcile_code = MODULE.command_projection_batch_cas(reconcile_args)
-                reconciled = json.loads(output.getvalue())
-            message = self.git(
-                repo, "show", "-s", "--format=%B", reconciled["coordinator"]
-            )
-        self.assertEqual((intent_code, intent["status"]), (0, "intent"))
-        self.assertEqual((wrong_code, wrong["status"]), (3, "blocked"))
-        self.assertEqual((reconcile_code, reconciled["status"]), (0, "reconciled"))
-        self.assertIn("PROJECTION_BATCH:", message)
-        self.assertIn("status=reconciled", message)
-        self.assertIn("PROJECTION_ITEM:", message)
-        self.assertIn("PROJECTION_RESULT:", message)
-        self.assertIn("ACTION_STATUS: reconciled", message)
-
-
-class RefillCheckTest(unittest.TestCase):
-    def invoke(self, **overrides: object) -> tuple[int, dict[str, object]]:
-        payload: dict[str, object] = {
-            "ready_observed_at": "2026-08-08T15:00:00Z",
-            "evaluated_at": "2026-08-08T15:01:00Z",
-            "target_seconds": 60,
-            "sustained_capacity": 6,
-            "running_count": 2,
-            "compatible_ready": 1,
-        }
-        payload.update(overrides)
-        with mock.patch.object(sys, "stdin", io.StringIO(json.dumps(payload))), io.StringIO() as output, redirect_stdout(output):
-            code = MODULE.command_refill_check(MODULE.argparse.Namespace(input="-"))
-            return code, json.loads(output.getvalue())
-
-    def test_sixty_second_boundary_is_pending_and_late_observation_needs_evidence(self) -> None:
-        boundary_code, boundary = self.invoke()
-        late_code, late = self.invoke(evaluated_at="2026-08-08T15:01:00.001Z")
-        self.assertEqual((boundary_code, boundary["status"]), (0, "pending"))
-        self.assertEqual(boundary["remaining_seconds"], 0)
-        self.assertEqual((late_code, late["status"]), (3, "needs-evidence"))
-
-    def test_fractional_boundary_and_future_spawn_fail_closed(self) -> None:
-        within_code, within = self.invoke(
-            evaluated_at="2026-08-08T15:00:59.999Z"
-        )
-        future_code, future = self.invoke(
-            evaluated_at="2026-08-08T15:00:10Z",
-            spawned_at="2026-08-08T15:00:30Z",
-        )
-        self.assertEqual((within_code, within["status"]), (0, "pending"))
-        self.assertEqual(within["interval_seconds"], 59.999)
-        self.assertEqual(future_code, 2)
-        self.assertIn("invalid:spawned_after_evaluated", future["errors"])
-
-    def test_missed_refill_produces_canonical_blocker_record(self) -> None:
-        code, result = self.invoke(
-            evaluated_at="2026-08-08T15:01:01Z",
-            blocker="no-compatible-dependent-work",
-            evidence="ready_frontier=AND-77-only-conflicts-with-running-lane",
-            resume_predicate="ownership-paths-disjoint-and-dependencies-done",
-        )
-        self.assertEqual((code, result["status"]), (0, "missed"))
-        self.assertIn("target_seconds=60", result["record"])
-        self.assertIn("blocker=no-compatible-dependent-work", result["record"])
-
-    def test_spawn_within_target_clears_record_and_late_spawn_preserves_violation(self) -> None:
-        met_code, met = self.invoke(spawned_at="2026-08-08T15:00:59Z")
-        late_code, late = self.invoke(
-            evaluated_at="2026-08-08T15:01:01Z",
-            spawned_at="2026-08-08T15:01:01Z",
-        )
-        self.assertEqual((met_code, met["status"]), (0, "met"))
-        self.assertIn("pending_since=none", met["record"])
-        self.assertEqual((late_code, late["status"]), (0, "missed"))
-        self.assertIn("blocker=late-spawn", late["record"])
-
-    def test_placeholder_missed_evidence_is_rejected(self) -> None:
-        code, result = self.invoke(
-            evaluated_at="2026-08-08T15:01:01Z",
-            blocker="none",
-            evidence="   ",
-            resume_predicate="unknown",
-        )
-        self.assertEqual((code, result["status"]), (3, "needs-evidence"))
-        self.assertEqual(len(result["errors"]), 3)
-
-
-class StartupPlanTest(GitMixin, unittest.TestCase):
-    def test_startup_plan_combines_preflight_snapshot_and_capacity(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="shipctl-startup-") as directory:
-            root = Path(directory)
-            repo, _ = self.fixture(root)
-            milestone_id = str(uuid.uuid4())
-            payload = {
-                "invocation": "запусти шесть воркеров",
-                "snapshot": {
-                    "project": {"id": str(uuid.uuid4()), "name": "Mind Diary"},
-                    "milestones": [
-                        {"id": milestone_id, "name": "MVP", "current": True}
-                    ],
-                    "issues": [
-                        {
-                            "id": "AND-1",
-                            "identifier": "AND-1",
-                            "title": "First",
-                            "milestone_id": milestone_id,
-                            "state": "Todo",
-                            "dependencies": [],
-                            "priority": 1,
-                            "labels": [],
-                            "createdAt": "2026-08-08T12:00:00Z",
-                            "updatedAt": "2026-08-08T13:00:00Z",
-                            "boardPosition": 1,
-                            "production_requirement": "unknown",
-                        },
-                        {
-                            "id": "AND-2",
-                            "identifier": "AND-2",
-                            "title": "Second",
-                            "milestone_id": milestone_id,
-                            "state": "Todo",
-                            "dependencies": [],
-                            "priority": 2,
-                            "labels": [],
-                            "createdAt": "2026-08-08T12:00:00Z",
-                            "updatedAt": "2026-08-08T13:00:00Z",
-                            "boardPosition": 2,
-                            "production_requirement": "unknown",
-                        },
-                        {
-                            "id": "AND-3",
-                            "identifier": "AND-3",
-                            "title": "Third",
-                            "milestone_id": milestone_id,
-                            "state": "Todo",
-                            "dependencies": [],
-                            "priority": 3,
-                            "labels": [],
-                            "createdAt": "2026-08-08T12:00:00Z",
-                            "updatedAt": "2026-08-08T13:00:00Z",
-                            "boardPosition": 3,
-                            "production_requirement": "unknown",
-                        },
-                    ],
-                },
-                "capacity": {
-                    "runtime_slots_total": 7,
-                    "runtime_source": "system-capacity",
-                    "safe_resource_capacity": 6,
-                    "resource_source": "provisioner",
-                    "layout": "auto",
-                },
-            }
-            args = MODULE.argparse.Namespace(
-                repo=str(repo), remote="origin", default="main", input="-"
-            )
-            with mock.patch.object(sys, "stdin", io.StringIO(json.dumps(payload))), io.StringIO() as output, redirect_stdout(output):
-                code = MODULE.command_startup_plan(args)
-                result = json.loads(output.getvalue())
-        self.assertEqual((code, result["status"], result["route"]), (0, "planned", "normal"))
-        self.assertEqual(result["launch"]["running"], 0)
-        self.assertEqual(result["launch"]["refill_count"], 3)
-        self.assertEqual(result["launch"]["active_target"], 3)
-        self.assertRegex(result["plan_digest"], r"^[0-9a-f]{64}$")
-
-    def test_resume_uses_execution_index_instead_of_linear_occupancy(self) -> None:
-        thread_id = str(uuid.uuid4())
-        proof = MODULE.hashlib.sha256(thread_id.encode()).hexdigest()
-        with tempfile.TemporaryDirectory(prefix="shipctl-startup-") as directory:
-            root = Path(directory)
-            repo, _ = self.fixture(root)
-            base = self.git(repo, "rev-parse", "HEAD")
-            contract = MODULE.tree_oid(repo, base, MODULE.SKILL_PATH)
-            milestone_id = str(uuid.uuid4())
-            message = (
-                "running coordinator\n\n"
-                "SCHEMA: 1\n"
-                "KIND: COORDINATOR_CLAIM\n"
-                f"RUN_ID: {uuid.uuid4()}\n"
-                f"RUN_KEY: {'a' * 32}\n"
-                f"OWNER_ID: {uuid.uuid4()}\n"
-                "OWNER_PROOF_KIND: runtime-task-id\n"
-                f"OWNER_PROOF_DIGEST: {proof}\n"
-                "EPOCH: 1\n"
-                f"PROJECT_ID: {uuid.uuid4()}\n"
-                f"MILESTONE_ID: {milestone_id}\n"
-                "STATE: running\n"
-                "OWNER_STATE: active\n"
-                f"CONTRACT_SOURCE_SHA: {base}\n"
-                f"CONTRACT_DIGEST: {contract}\n"
-                "ACTION_SEQ: 2\n"
-                "ACTION_STATUS: reconciled\n"
-                f"CLAIM_INDEX: active=AND-1:1@guard@feature@worker;entries=1;digest={'1' * 64}\n"
-                f"EXECUTION_INDEX: running_count=1;entries=AND-1:1@executor=running;digest={'2' * 64}\n"
-                "WORKERS: requested_workers=3;active_issue_lanes=AND-1\n"
-            )
-            coordinator = self.metadata_commit(repo, message, base)
-            self.git(
-                repo,
-                "push",
-                "origin",
-                f"{coordinator}:{MODULE.CANONICAL_COORDINATOR_REF}",
-            )
-            def issue(identifier: str, state: str, position: int) -> dict[str, object]:
-                return {
-                    "id": identifier,
-                    "identifier": identifier,
-                    "title": identifier,
-                    "milestone_id": milestone_id,
-                    "state": state,
-                    "dependencies": [],
-                    "priority": position,
-                    "labels": [],
-                    "createdAt": "2026-08-08T12:00:00Z",
-                    "updatedAt": "2026-08-08T13:00:00Z",
-                    "boardPosition": position,
-                    "production_requirement": "unknown",
-                }
-            payload = {
-                "invocation": "$ship-linear-release resume",
-                "snapshot": {
-                    "project": {"id": str(uuid.uuid4()), "name": "Mind Diary"},
-                    "milestones": [
-                        {"id": milestone_id, "name": "MVP", "current": True}
-                    ],
-                    "issues": [issue("AND-1", "Todo", 1), issue("AND-2", "Todo", 2)],
-                },
-                "capacity": {
-                    "runtime_slots_total": 4,
-                    "runtime_source": "system-capacity",
-                    "safe_resource_capacity": 3,
-                    "resource_source": "provisioner",
-                    "layout": "auto",
-                },
-            }
-            args = MODULE.argparse.Namespace(
-                repo=str(repo), remote="origin", default="main", input="-"
-            )
-            with mock.patch.dict(MODULE.os.environ, {"CODEX_THREAD_ID": thread_id}, clear=False), mock.patch.object(sys, "stdin", io.StringIO(json.dumps(payload))), io.StringIO() as output, redirect_stdout(output):
-                code = MODULE.command_startup_plan(args)
-                result = json.loads(output.getvalue())
-            payload["invocation"] = "workers=2"
-            with mock.patch.dict(MODULE.os.environ, {"CODEX_THREAD_ID": thread_id}, clear=False), mock.patch.object(sys, "stdin", io.StringIO(json.dumps(payload))), io.StringIO() as output, redirect_stdout(output):
-                explicit_code = MODULE.command_startup_plan(args)
-                explicit_result = json.loads(output.getvalue())
-            payload["invocation"] = "$ship-linear-release resume"
-            orphan_message = message.replace(
-                "active=AND-1:1@guard@feature@worker;entries=1",
-                "active=AND-1:1@guard@feature@worker,"
-                "AND-2:1@guard-2@feature-2@worker-2;entries=2",
-            )
-            orphan = self.metadata_commit(repo, orphan_message, coordinator)
-            self.git(
-                repo,
-                "push",
-                "origin",
-                f"{orphan}:{MODULE.CANONICAL_COORDINATOR_REF}",
-            )
-            with mock.patch.dict(MODULE.os.environ, {"CODEX_THREAD_ID": thread_id}, clear=False), mock.patch.object(sys, "stdin", io.StringIO(json.dumps(payload))), io.StringIO() as output, redirect_stdout(output):
-                orphan_code = MODULE.command_startup_plan(args)
-                orphan_result = json.loads(output.getvalue())
-        self.assertEqual((code, result["status"], result["route"]), (0, "planned", "resume"))
-        self.assertEqual(result["milestone"]["authoritative_running"], ["AND-1:1"])
-        self.assertEqual(result["launch"]["running"], 1)
-        self.assertEqual(result["launch"]["requested_workers"], 3)
-        self.assertEqual(result["launch"]["refill_count"], 1)
-        self.assertEqual(result["launch"]["active_target"], 2)
-        self.assertEqual((explicit_code, explicit_result["status"]), (0, "planned"))
-        self.assertEqual(explicit_result["launch"]["requested_workers"], 2)
-        self.assertEqual((orphan_code, orphan_result["status"]), (3, "blocked"))
-        self.assertIn(
-            "live-claim-without-execution-entry", orphan_result["errors"]
-        )
-
-
-class BoundaryAutomationTest(unittest.TestCase):
-    def test_final_batch_is_mandatory_without_fixed_size_or_timer(self) -> None:
-        payload = {
-            "candidate_sha": "a" * 40,
-            "features": ["AND-1"],
-            "cohesion": "cohesive",
-            "risk": "low",
-            "gate_cost": "high",
-            "queue_state": "finishing",
-            "urgent": False,
-            "decision": "seal",
-            "reason": "final",
-            "rationale": "Финальный patch обязан пройти один общий gate.",
-        }
-        code, result = MODULE._capture_json_handler(MODULE.command_batch_boundary, payload)
-        self.assertEqual((code, result["status"], result["action"]), (0, "validated", "seal"))
-        self.assertFalse(result["fixed_size_or_timer"])
-        payload.update({"decision": "keep-open", "reason": "size"})
-        code, result = MODULE._capture_json_handler(MODULE.command_batch_boundary, payload)
-        self.assertEqual((code, result["status"]), (2, "invalid"))
-        self.assertIn("invalid:mandatory-boundary:final", result["errors"])
-
-    def test_release_lock_is_skipped_when_provider_has_no_atomic_capability(self) -> None:
-        payload = {
-            "production_required": True,
-            "target": "mind-diary:production",
-            "owner": {"run_id": str(uuid.uuid4()), "epoch": 3},
-            "capability": {
-                "atomic_acquire": False,
-                "conditional_release": False,
-                "fencing": False,
-                "provider_operation": "none",
-            },
-        }
-        code, result = MODULE._capture_json_handler(MODULE.command_release_lock_plan, payload)
-        self.assertEqual((code, result["status"]), (0, "unsupported/skipped"))
-        self.assertFalse(result["simulated_marker_allowed"])
-        payload["capability"] = {
-            "atomic_acquire": True,
-            "conditional_release": True,
-            "fencing": True,
-            "provider_operation": "sites.releaseLock.compareAndSwap",
-        }
-        code, result = MODULE._capture_json_handler(MODULE.command_release_lock_plan, payload)
-        self.assertEqual((code, result["status"]), (0, "acquire-required"))
-        self.assertTrue(result["force_unlock_requires_user_confirmation"])
-
-    def test_critical_overview_synthesizes_user_facing_state(self) -> None:
-        payload = {
-            "reason": "появилось незарегистрированное изменение",
-            "safety_impact": "неизвестен единственный writer main",
-            "stage": "перед batch gate",
-            "changed": "одна feature уже merge-нута локально",
-            "git_state": "main clean, worker path dirty",
-            "linear_state": "AND-1 остаётся In Progress",
-            "release_state": "publish не начинался",
-            "next_action": "убрать либо передать стороннее изменение и повторить preflight",
-            "evidence": ["repo-guard:critical-stop", "worktree=/tmp/worker"],
-        }
-        code, result = MODULE._capture_json_handler(MODULE.command_critical_overview, payload)
-        self.assertEqual((code, result["status"]), (0, "rendered"))
-        self.assertIn("Критическая остановка", result["overview"])
-        self.assertIn("Linear: AND-1", result["overview"])
-
-
-class DeliveryContractTest(unittest.TestCase):
-    def test_runtime_contract_contains_no_profile_or_intent_switches(self) -> None:
-        repo = SCRIPTS.parents[3]
-        paths = [
-            repo / ".agents/skills/ship-linear-release/SKILL.md",
-            repo / ".agents/skills/ship-linear-release/references/goal-card.md",
-            repo / ".agents/skills/ship-linear-release/references/batch-release.md",
-            repo / ".agents/skills/ship-linear-release/references/receipts.md",
-            repo / ".agents/skills/ship-linear-release/references/github-outage.md",
-            repo / ".agents/skills/ship-linear-release/scripts/shipctl.py",
-            repo / ".agents/skills/ship-linear-release/agents/openai.yaml",
-        ]
-        forbidden = (
-            "delivery_profile",
-            "target_profile",
-            "PROFILE_RANK",
-            "--profile",
-            "--intent",
-            "PROFILE: design | build | release",
-        )
-        for path in paths:
-            text = path.read_text(encoding="utf-8")
-            for marker in forbidden:
-                with self.subTest(path=path.name, marker=marker):
-                    self.assertNotIn(marker, text)
-
-    def test_metadata_and_defect_policy_match_autonomous_delivery(self) -> None:
-        repo = SCRIPTS.parents[3]
-        metadata = (
-            repo / ".agents/skills/ship-linear-release/agents/openai.yaml"
-        ).read_text(encoding="utf-8")
-        triage = (
-            repo / ".agents/skills/ship-linear-release/references/defect-triage.md"
-        ).read_text(encoding="utf-8")
-        self.assertIn("без count работай одним coordinator-inline worker", metadata)
-        self.assertIn("primary feature branch", metadata)
-        self.assertIn("merge выполняет только coordinator", metadata)
-        self.assertIn("workers=auto", metadata)
-        self.assertIn("stabilization Bug", triage)
-        self.assertIn("новый product/security decision", triage)
-        self.assertNotIn("верни `STATUS: needs-input`", triage)
-
-
-class LaunchAndDispatchTest(unittest.TestCase):
-    def launch(self, **overrides: object) -> tuple[int, dict[str, object]]:
-        values: dict[str, object] = {
-            "workers": "6",
-            "max_workers": None,
-            "runtime_slots_total": 4,
-            "runtime_source": "system-capacity",
-            "safe_resource_capacity": 3,
-            "resource_source": "provisioner",
-            "compatible_ready": 10,
-            "unfinished": 10,
-            "running": 0,
-            "layout": "auto",
-        }
-        values.update(overrides)
-        with io.StringIO() as output, redirect_stdout(output):
-            code = MODULE.command_launch_check(mock.Mock(**values))
-            return code, json.loads(output.getvalue())
-
-    def dispatch(self, payload: object) -> tuple[int, dict[str, object]]:
-        with mock.patch.object(sys, "stdin", io.StringIO(json.dumps(payload))), io.StringIO() as output, redirect_stdout(output):
-            code = MODULE.command_dispatch_check(
-                MODULE.argparse.Namespace(input="-", remote="origin")
-            )
-            return code, json.loads(output.getvalue())
-
-    def entry(self, issue: str, path: str, lease: str | None = None) -> dict[str, object]:
-        suffix = issue.lower()
-        return {
-            "issue_identifier": issue,
-            "ownership_paths": [path],
-            "executor": {
-                "lease_id": lease or str(uuid.uuid4()),
-                "mode": "delegated",
-                "agent_type": "worker",
-                "fork_turns": "none",
-            },
-            "isolation": {
-                "mutable_build_dir": f"/tmp/{suffix}/build",
-                "tmp_dir": f"/tmp/{suffix}/tmp",
-                "runtime_dir": f"/tmp/{suffix}/runtime",
-                "cache_mode": "isolated",
-                "cache_dir": f"/tmp/{suffix}/cache",
-                "cache_key": "none",
-                "ports": [],
-            },
-        }
-
-    def test_exact_workers_fail_closed_when_runtime_capacity_is_smaller(self) -> None:
-        code, result = self.launch()
-        self.assertEqual((code, result["status"], result["claim_allowed"]), (3, "blocked", False))
-        self.assertEqual(result["sustained_issue_capacity"], 3)
-        self.assertIn("exact-worker-capacity-unavailable:requested=6;sustained=3", result["reasons"])
-
-    def test_auto_adapts_and_exact_capacity_is_ready_set_limited(self) -> None:
-        auto_code, auto = self.launch(workers="auto")
-        limited_code, limited = self.launch(
-            workers="3", runtime_slots_total=4, compatible_ready=1
-        )
-        self.assertEqual((auto_code, auto["sustained_issue_capacity"]), (0, 3))
-        self.assertEqual((limited_code, limited["active_target"]), (0, 1))
-        self.assertEqual(limited["reasons"], ["ready-set-limited"])
-
-    def test_unfinished_graph_without_ready_or_running_work_fails_early(self) -> None:
-        code, result = self.launch(workers="auto", compatible_ready=0, running=0)
-        self.assertEqual((code, result["status"]), (3, "blocked"))
-        self.assertIn("no-actionable-frontier", result["reasons"])
-
-    def test_running_generation_keeps_empty_frontier_recoverable(self) -> None:
-        code, result = self.launch(
-            workers="auto", compatible_ready=0, running=1
-        )
-        self.assertEqual((code, result["status"]), (0, "ok"))
-        self.assertNotIn("no-actionable-frontier", result["reasons"])
-
-    def test_running_generations_count_toward_active_target(self) -> None:
-        code, result = self.launch(
-            workers="3",
-            runtime_slots_total=4,
-            safe_resource_capacity=3,
-            compatible_ready=1,
-            running=2,
-        )
-        self.assertEqual((code, result["status"]), (0, "ok"))
-        self.assertEqual(result["available_slots"], 1)
-        self.assertEqual(result["refill_count"], 1)
-        self.assertEqual(result["active_target"], 3)
-
-    def test_running_above_sustained_capacity_blocks_resume(self) -> None:
-        code, result = self.launch(
-            workers="auto",
-            runtime_slots_total=2,
-            safe_resource_capacity=1,
-            compatible_ready=0,
-            running=2,
-        )
-        self.assertEqual((code, result["status"], result["claim_allowed"]), (3, "blocked", False))
-        self.assertIn(
-            "running-above-sustained-capacity:running=2;sustained=1",
-            result["reasons"],
-        )
-
-    def test_zero_resource_capacity_is_a_blocker_not_invalid_input(self) -> None:
-        code, result = self.launch(
-            workers="auto", safe_resource_capacity=0, compatible_ready=1
-        )
-        self.assertEqual((code, result["status"]), (3, "blocked"))
-        self.assertIn("no-sustainable-worker-capacity", result["reasons"])
-
-    def test_complete_milestone_does_not_require_ready_frontier(self) -> None:
-        code, result = self.launch(
-            workers="auto", unfinished=0, compatible_ready=0, running=0
-        )
-        self.assertEqual((code, result["status"]), (0, "ok"))
-        self.assertNotIn("no-actionable-frontier", result["reasons"])
-
-    def test_dispatch_rejects_skeletal_manifests_before_overlap_analysis(self) -> None:
-        active = self.entry("AND-86", "packages/composition-root")
-        candidate = self.entry("AND-88", "packages/composition-root/src/index.ts")
-        serial_code, serial = self.dispatch({"candidate": candidate, "active": [active], "executor_history": []})
-        lease = candidate["executor"]["lease_id"]  # type: ignore[index]
-        reuse_code, reuse = self.dispatch({"candidate": candidate, "active": [], "executor_history": [lease]})
-        self.assertEqual((serial_code, serial["status"]), (2, "invalid"))
-        self.assertEqual((reuse_code, reuse["status"]), (2, "invalid"))
-        self.assertTrue(any(error.startswith("candidate:missing:") for error in serial["errors"]))
-        self.assertIn("invalid:executor-reuse", reuse["errors"])
-
-    def test_path_overlap_is_segment_aware(self) -> None:
-        self.assertTrue(
-            MODULE._paths_overlap(
-                "packages/composition-root", "packages/composition-root/src/index.ts"
-            )
-        )
-        self.assertFalse(
-            MODULE._paths_overlap("packages/adapter-mcp", "packages/composition-root")
-        )
-
-    def test_dispatch_never_accepts_a_disjoint_but_unbound_entry(self) -> None:
-        code, result = self.dispatch(
-            {
-                "candidate": self.entry("AND-88", "packages/adapter-mcp"),
-                "active": [self.entry("AND-86", "packages/composition-root")],
-                "executor_history": [],
-            }
-        )
-        self.assertEqual((code, result["status"], result["dispatch_allowed"]), (2, "invalid", False))
-
-
-class MetadataCommitTest(GitMixin, unittest.TestCase):
-    def test_metadata_helper_uses_empty_workflow_free_tree(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="shipctl-metadata-") as directory:
-            repo, _ = self.fixture(Path(directory))
-            parent = self.git(repo, "rev-parse", "HEAD")
-            message = "guard\n\nKIND: CLAIM_GUARD\nSTATE: claimed\n"
-            args = MODULE.argparse.Namespace(repo=str(repo), parent=parent, kind="guard", input="-")
-            with mock.patch.object(sys, "stdin", io.StringIO(message)), io.StringIO() as output, redirect_stdout(output):
-                code = MODULE.command_metadata_commit(args)
-                result = json.loads(output.getvalue())
-            empty_tree = self.git(repo, "mktree")
-            commit_tree = self.git(repo, "show", "-s", "--format=%T", result["commit"])
-            commit_parent = self.git(repo, "rev-parse", f"{result['commit']}^")
-        self.assertEqual((code, result["status"]), (0, "created"))
-        self.assertEqual(result["tree_mode"], "empty-workflow-free")
-        self.assertEqual((commit_tree, commit_parent), (empty_tree, parent))
-
-    def test_metadata_helper_rejects_duplicate_scalar_headers(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="shipctl-metadata-") as directory:
-            repo, _ = self.fixture(Path(directory))
-            parent = self.git(repo, "rev-parse", "HEAD")
-            message = "coordinator\n\nSTATE: running\nSTATE: complete\n"
-            args = MODULE.argparse.Namespace(
-                repo=str(repo), parent=parent, kind="coordinator", input="-"
-            )
-            with mock.patch.object(sys, "stdin", io.StringIO(message)), io.StringIO() as output, redirect_stdout(output):
-                code = MODULE.command_metadata_commit(args)
-                result = json.loads(output.getvalue())
-        self.assertEqual((code, result["status"]), (2, "invalid"))
-        self.assertEqual(
-            result["errors"], ["invalid:duplicate-authoritative-header:STATE"]
-        )
-
-    def test_metadata_helper_accepts_repeatable_linear_done_history(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="shipctl-metadata-") as directory:
-            repo, _ = self.fixture(Path(directory))
-            parent = self.git(repo, "rev-parse", "HEAD")
-            message = (
-                "coordinator\n\n"
-                "KIND: COORDINATOR_CLAIM\n"
-                "LINEAR_DONE: AND-47@2026-08-07T23:29:03Z\n"
-                "LINEAR_DONE: AND-82@2026-08-07T23:29:01Z\n"
-            )
-            args = MODULE.argparse.Namespace(
-                repo=str(repo), parent=parent, kind="coordinator", input="-"
-            )
-            with mock.patch.object(sys, "stdin", io.StringIO(message)), io.StringIO() as output, redirect_stdout(output):
-                code = MODULE.command_metadata_commit(args)
-                result = json.loads(output.getvalue())
-        self.assertEqual((code, result["status"]), (0, "created"))
-
-
-class ProvisionAndCleanupTest(GitMixin, unittest.TestCase):
-    def terminal_coordinator(self, repo: Path) -> str:
-        parent = self.git(repo, "rev-parse", "HEAD")
-        message = (
-            "terminal coordinator\n\n"
-            "SCHEMA: 1\n"
-            "KIND: COORDINATOR_CLAIM\n"
-            "STATE: complete\n"
-            "OWNER_STATE: complete\n"
-            "ACTION_STATUS: reconciled\n"
-            "PENDING_ACTIONS: none\n"
-            f"CLAIM_INDEX: active=none;entries=0;digest={'1' * 64}\n"
-            f"EXECUTION_INDEX: running_count=0;entries=none;digest={'2' * 64}\n"
-            "WORKERS: active_issue_lanes=none\n"
-        )
-        coordinator = self.metadata_commit(repo, message, parent)
-        self.git(
-            repo,
-            "push",
-            "origin",
-            f"{coordinator}:{MODULE.CANONICAL_COORDINATOR_REF}",
-        )
-        return coordinator
-
-    def test_provision_prepares_and_adopts_exact_task_owned_environment(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="shipctl-provision-") as directory:
-            root = Path(directory)
-            repo, _ = self.fixture(root)
-            branch = "codex/and-56-provision/r" + "a" * 32 + "-e1-c1"
-            self.git(repo, "branch", branch)
-            worktree = root / "worker"
-            self.git(repo, "worktree", "add", str(worktree), branch)
-            args = MODULE.argparse.Namespace(
-                repo=str(repo),
-                worktree=str(worktree),
-                package_manager="npm",
-                install=False,
-                timeout_seconds=900,
-            )
-            with io.StringIO() as output, redirect_stdout(output):
-                prepared_code = MODULE.command_provision_worktree(args)
-                prepared = json.loads(output.getvalue())
-            dependency_path = Path(prepared["dependency_path"])
-            dependency_path.mkdir()
-            receipt = {
-                "status": "installed",
-                "environment_id": prepared["environment_id"],
-                "lockfile_digest": prepared["lockfile_digest"],
-                "dependency_path": str(dependency_path),
-            }
-            (worktree / ".codex-task/provision.json").write_text(
-                json.dumps(receipt), encoding="utf-8"
-            )
-            with io.StringIO() as output, redirect_stdout(output):
-                adopted_code = MODULE.command_provision_worktree(args)
-                adopted = json.loads(output.getvalue())
-        self.assertEqual((prepared_code, prepared["status"]), (4, "prepared"))
-        self.assertEqual((adopted_code, adopted["status"]), (0, "adopted"))
-        self.assertEqual(adopted["environment_id"], prepared["environment_id"])
-
-    def test_provision_supports_single_worker_primary_checkout(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="shipctl-primary-provision-") as directory:
-            repo, _ = self.fixture(Path(directory))
-            args = MODULE.argparse.Namespace(
-                repo=str(repo),
-                worktree=str(repo),
-                checkout_mode="primary",
-                package_manager="npm",
-                install=False,
-                timeout_seconds=900,
-            )
-            with io.StringIO() as output, redirect_stdout(output):
-                prepared_code = MODULE.command_provision_worktree(args)
-                prepared = json.loads(output.getvalue())
-            dependency_path = Path(prepared["dependency_path"])
-            dependency_path.mkdir()
-            receipt = {
-                "status": "installed",
-                "checkout_mode": "primary",
-                "environment_id": prepared["environment_id"],
-                "lockfile_digest": prepared["lockfile_digest"],
-                "dependency_path": str(dependency_path),
-            }
-            (repo / ".codex-task/provision.json").write_text(
-                json.dumps(receipt), encoding="utf-8"
-            )
-            with io.StringIO() as output, redirect_stdout(output):
-                adopted_code = MODULE.command_provision_worktree(args)
-                adopted = json.loads(output.getvalue())
-        self.assertEqual((prepared_code, prepared["status"]), (4, "prepared"))
-        self.assertEqual(prepared["checkout_mode"], "primary")
-        self.assertEqual((adopted_code, adopted["status"]), (0, "adopted"))
-        self.assertEqual(adopted["checkout_mode"], "primary")
-
-    def test_provision_includes_nested_lockfile_selected_by_ownership_path(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="shipctl-provision-") as directory:
-            root = Path(directory)
-            repo, _ = self.fixture(root)
-            nested = repo / "apps/widget"
-            nested.mkdir(parents=True)
-            (nested / "package.json").write_text('{"name":"widget"}\n', encoding="utf-8")
-            (nested / "package-lock.json").write_text(
-                '{"name":"widget","lockfileVersion":3}\n', encoding="utf-8"
-            )
-            self.git(repo, "add", "apps/widget/package.json", "apps/widget/package-lock.json")
-            self.git(repo, "commit", "-m", "add nested application lockfile")
-            self.git(repo, "push", "origin", "main")
-            branch = "codex/and-56-nested/r" + "a" * 32 + "-e1-c1"
-            self.git(repo, "branch", branch)
-            worktree = root / "worker"
-            self.git(repo, "worktree", "add", str(worktree), branch)
-            args = MODULE.argparse.Namespace(
-                repo=str(repo),
-                worktree=str(worktree),
-                path=["apps"],
-                package_manager="npm",
-                install=False,
-                timeout_seconds=900,
-            )
-            with io.StringIO() as output, redirect_stdout(output):
-                prepared_code = MODULE.command_provision_worktree(args)
-                prepared = json.loads(output.getvalue())
-            for installation in prepared["installations"]:
-                Path(installation["dependency_path"]).mkdir()
-            receipt = {
-                "status": "installed",
-                "environment_id": prepared["environment_id"],
-                "lockfile_digest": prepared["lockfile_digest"],
-                "dependency_path": prepared["dependency_path"],
-                "provisioning_digest": prepared["provisioning_digest"],
-                "installations": prepared["installations"],
-            }
-            (worktree / ".codex-task/provision.json").write_text(
-                json.dumps(receipt), encoding="utf-8"
-            )
-            with io.StringIO() as output, redirect_stdout(output):
-                adopted_code = MODULE.command_provision_worktree(args)
-                adopted = json.loads(output.getvalue())
-            (worktree / "apps/widget/package-lock.json").write_text(
-                '{"name":"widget","lockfileVersion":3,"changed":true}\n',
-                encoding="utf-8",
-            )
-            self.git(worktree, "add", "apps/widget/package-lock.json")
-            self.git(worktree, "commit", "-m", "change nested lockfile")
-            with io.StringIO() as output, redirect_stdout(output):
-                changed_code = MODULE.command_provision_worktree(args)
-                changed = json.loads(output.getvalue())
-        self.assertEqual((prepared_code, prepared["status"]), (4, "prepared"))
-        self.assertEqual(
-            [item["root"] for item in prepared["installations"]],
-            [".", "apps/widget"],
-        )
-        self.assertEqual(len(prepared["commands"]), 2)
-        self.assertEqual((adopted_code, adopted["status"]), (0, "adopted"))
-        self.assertEqual((changed_code, changed["status"]), (4, "prepared"))
-        self.assertNotEqual(changed["environment_id"], prepared["environment_id"])
-
-    def test_untracked_nested_lockfile_is_not_selected_as_dependency_authority(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="shipctl-provision-") as directory:
-            root = Path(directory)
-            repo, _ = self.fixture(root)
-            scratch = repo / "scratch"
-            scratch.mkdir()
-            (scratch / "package-lock.json").write_text("{}\n", encoding="utf-8")
-            roots, errors = MODULE._required_package_roots(repo, ["scratch"])
-        self.assertEqual(errors, [])
-        self.assertEqual(roots, [repo.resolve()])
-
-    def test_cleanup_requires_fresh_digest_and_removes_only_clean_merged_worktree(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="shipctl-cleanup-") as directory:
-            root = Path(directory)
-            repo, _ = self.fixture(root)
-            branch = "codex/and-56-clean/r" + "a" * 32 + "-e1-c1"
-            self.git(repo, "branch", branch)
-            worktree = root / "worker"
-            self.git(repo, "worktree", "add", str(worktree), branch)
-            unbound_branch = "codex/scratch"
-            self.git(repo, "branch", unbound_branch)
-            unbound_worktree = root / "unbound-worker"
-            self.git(repo, "worktree", "add", str(unbound_worktree), unbound_branch)
-            unbound_head = self.git(repo, "rev-parse", "HEAD")
-            plan_args = MODULE.argparse.Namespace(
-                repo=str(repo), remote="origin", default="main"
-            )
-            with io.StringIO() as output, redirect_stdout(output):
-                blocked_code = MODULE.command_cleanup_plan(plan_args)
-                blocked = json.loads(output.getvalue())
-            coordinator = self.terminal_coordinator(repo)
-            with io.StringIO() as output, redirect_stdout(output):
-                plan_code = MODULE.command_cleanup_plan(plan_args)
-                plan = json.loads(output.getvalue())
-            stale = dict(plan)
-            stale["plan_digest"] = "f" * 64
-            apply_args = MODULE.argparse.Namespace(
-                repo=str(repo), remote="origin", default="main", input="-"
-            )
-            with mock.patch.object(sys, "stdin", io.StringIO(json.dumps(stale))), io.StringIO() as output, redirect_stdout(output):
-                stale_code = MODULE.command_cleanup_apply(apply_args)
-                stale_result = json.loads(output.getvalue())
-            with mock.patch.object(sys, "stdin", io.StringIO(json.dumps(plan))), io.StringIO() as output, redirect_stdout(output):
-                apply_code = MODULE.command_cleanup_apply(apply_args)
-                applied = json.loads(output.getvalue())
-            unbound_path = str(unbound_worktree.resolve())
-            unbound_retained_after_apply = unbound_worktree.exists()
-        self.assertEqual(
-            (blocked_code, blocked["reason"]), (3, "terminal-coordinator-required")
-        )
-        self.assertEqual((plan_code, plan["status"]), (0, "planned"))
-        self.assertEqual(plan["coordinator_sha"], coordinator)
-        self.assertIn(
-            {
-                "path": unbound_path,
-                "branch": unbound_branch,
-                "head": unbound_head,
-                "reason": "unbound-codex-branch",
-            },
-            plan["retained"],
-        )
-        self.assertEqual((stale_code, stale_result["reason"]), (3, "cleanup-plan-stale"))
-        self.assertEqual((apply_code, applied["status"]), (0, "cleaned"))
-        self.assertIn(str(worktree.resolve()), applied["removed"])
-        self.assertTrue(unbound_retained_after_apply)
-
-
-class PoolStatusTest(GitMixin, unittest.TestCase):
-    def test_pool_status_explains_why_six_worker_capacity_is_not_filled(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="shipctl-pool-") as directory:
-            root = Path(directory)
-            repo, _ = self.fixture(root)
-            base = self.git(repo, "rev-parse", "HEAD")
-            contract = MODULE.tree_oid(repo, base, MODULE.SKILL_PATH)
-            message = (
-                "running coordinator\n\n"
-                "SCHEMA: 1\n"
-                "KIND: COORDINATOR_CLAIM\n"
-                f"RUN_ID: {uuid.uuid4()}\n"
-                f"RUN_KEY: {'a' * 32}\n"
-                f"OWNER_ID: {uuid.uuid4()}\n"
-                "OWNER_PROOF_KIND: runtime-task-id\n"
-                f"OWNER_PROOF_DIGEST: {'e' * 64}\n"
-                "EPOCH: 1\n"
-                f"PROJECT_ID: {uuid.uuid4()}\n"
-                f"MILESTONE_ID: {uuid.uuid4()}\n"
-                "STATE: running\n"
-                "OWNER_STATE: active\n"
-                f"CONTRACT_SOURCE_SHA: {base}\n"
-                f"CONTRACT_DIGEST: {contract}\n"
-                "ACTION_SEQ: 3\n"
-                "ACTION_STATUS: reconciled\n"
-                f"CLAIM_INDEX: active=AND-1:1@guard-1@feature-1@worker-1,AND-2:1@guard-2@feature-2@worker-2;entries=2;digest={'2' * 64}\n"
-                f"EXECUTION_INDEX: running_count=1;entries=AND-1:1@executor=running,AND-2:1@executor=feature_ready;digest={'1' * 64}\n"
-                "WORKERS: requested_workers=6;runtime_slots_total=21;"
-                "sustained_issue_capacity=6;active_target=1;active_issue_lanes=AND-1;"
-                "refill_blocker=no-compatible-dependent-work\n"
-                "REFILL: target_seconds=60;pending_since=none;"
-                "blocker=no-compatible-dependent-work;evidence=ready_frontier_empty;"
-                "resume_predicate=dependency-terminal\n"
-            )
-            coordinator = self.metadata_commit(repo, message, base)
-            self.git(
-                repo,
-                "push",
-                "origin",
-                f"{coordinator}:{MODULE.CANONICAL_COORDINATOR_REF}",
-            )
-            args = MODULE.argparse.Namespace(
-                repo=str(repo), remote="origin", default="main"
-            )
-            with io.StringIO() as output, redirect_stdout(output):
-                code = MODULE.command_pool_status(args)
-                result = json.loads(output.getvalue())
-            zero_message = message.replace(
-                f"CLAIM_INDEX: active=AND-1:1@guard-1@feature-1@worker-1,AND-2:1@guard-2@feature-2@worker-2;entries=2;digest={'2' * 64}",
-                f"CLAIM_INDEX: active=none;entries=0;digest={'2' * 64}",
-            ).replace(
-                f"EXECUTION_INDEX: running_count=1;entries=AND-1:1@executor=running,AND-2:1@executor=feature_ready;digest={'1' * 64}",
-                f"EXECUTION_INDEX: running_count=0;entries=none;digest={'1' * 64}",
-            ).replace(
-                "requested_workers=6;runtime_slots_total=21;sustained_issue_capacity=6;active_target=1;active_issue_lanes=AND-1;refill_blocker=no-compatible-dependent-work",
-                "requested_workers=0;runtime_slots_total=21;sustained_issue_capacity=0;active_target=0;active_issue_lanes=none;refill_blocker=user-requested-direct-investigation",
-            ).replace(
-                "blocker=no-compatible-dependent-work;evidence=ready_frontier_empty;resume_predicate=dependency-terminal",
-                "blocker=user-requested-direct-investigation;evidence=explicit-user-override;resume_predicate=explicit-new-release-request",
-            )
-            zero = self.metadata_commit(repo, zero_message, coordinator)
-            self.git(
-                repo,
-                "push",
-                "origin",
-                f"{zero}:{MODULE.CANONICAL_COORDINATOR_REF}",
-            )
-            with io.StringIO() as output, redirect_stdout(output):
-                zero_code = MODULE.command_pool_status(args)
-                zero_result = json.loads(output.getvalue())
-        self.assertEqual((code, result["status"]), (0, "ok"))
-        self.assertEqual(result["running"], 1)
-        self.assertEqual(result["sustained_issue_capacity"], 6)
-        self.assertEqual(result["feature_ready"], 1)
-        self.assertTrue(result["underfilled"])
-        self.assertEqual(result["refill"]["blocker"], "no-compatible-dependent-work")
-        self.assertIn("running=1/6", result["summary"])
-        self.assertEqual((zero_code, zero_result["status"]), (0, "ok"))
-        self.assertEqual(
-            zero_result["capacity_reason"], "user-requested-direct-investigation"
-        )
-
-    def test_compact_field_parser_reports_duplicate_authority(self) -> None:
-        parsed, duplicates, malformed = MODULE._compact_fields(
-            "active_target=6;active_target=1;broken"
-        )
-        self.assertEqual(parsed["active_target"], "6")
-        self.assertEqual(duplicates, ["active_target"])
-        self.assertEqual(malformed, ["broken"])
-
-
-class PreflightTest(GitMixin, unittest.TestCase):
-    PROOF = "a" * 64
-
-    def preflight(self, repo: Path, proof: str | None = None) -> tuple[int, dict[str, object], int]:
-        args = mock.Mock(
-            repo=str(repo),
-            remote="origin",
-            default="main",
-            skill_path=MODULE.SKILL_PATH,
-            owner_proof_digest=proof,
-        )
-        with io.StringIO() as output, redirect_stdout(output):
-            code = MODULE.command_preflight(args)
-            raw = output.getvalue()
-        return code, json.loads(raw), len(raw)
-
-    def coordinator_message(
+    def plan(
         self,
         repo: Path,
+        run_id: str,
+        root: Path,
+        issues: list[dict[str, object]],
         *,
-        state: str = "running",
-        owner_state: str = "active",
-        proof: str = PROOF,
-        contract: str | None = None,
-        extra: str = "",
+        expected: int = 0,
+    ) -> dict[str, object]:
+        path = root / "snapshot.json"
+        self.snapshot(path, issues)
+        return self.invoke(
+            "plan", "--repo", str(repo), "--run", run_id,
+            "--input", str(path), expected=expected,
+        )
+
+    def add_worktree(self, repo: Path, root: Path, lane: int, identifier: str) -> tuple[Path, str]:
+        branch = f"codex/{identifier.lower()}-w{lane}"
+        worktree = root / f"worker-{lane}"
+        self.git(repo, "worktree", "add", "-b", branch, str(worktree), "main")
+        return worktree, branch
+
+    def commit_change(self, worktree: Path, relative: str, text: str) -> str:
+        path = worktree / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+        self.git(worktree, "add", relative)
+        self.git(worktree, "commit", "-m", f"change {relative}")
+        return self.git(worktree, "rev-parse", "HEAD")
+
+    def claim(
+        self,
+        repo: Path,
+        run_id: str,
+        issue_id: str,
+        lane: str,
+        branch: str,
+        worktree: Path,
+        path: str,
+        *,
+        expected: int = 0,
+    ) -> dict[str, object]:
+        return self.invoke(
+            "claim",
+            "--repo",
+            str(repo),
+            "--run",
+            run_id,
+            "--issue",
+            issue_id,
+            "--lane",
+            lane,
+            "--branch",
+            branch,
+            "--worktree",
+            str(worktree),
+            "--path",
+            path,
+            expected=expected,
+        )
+
+    def finish_feature(
+        self,
+        repo: Path,
+        run_id: str,
+        issue_id: str,
+        branch: str,
+        worktree: Path,
+        relative: str,
     ) -> str:
-        contract = contract or self.git(repo, "rev-parse", f"HEAD:{MODULE.SKILL_PATH}")
-        return (
-            "coordinator\n\n"
-            "SCHEMA: 1\n"
-            "KIND: COORDINATOR_CLAIM\n"
-            f"STATE: {state}\n"
-            f"OWNER_STATE: {owner_state}\n"
-            f"OWNER_PROOF_DIGEST: {proof}\n"
-            f"CONTRACT_DIGEST: {contract}\n"
-            "ACTION_SEQ: 0\n"
-            "ACTION_STATUS: reconciled\n"
-            f"{extra}"
+        head = self.commit_change(worktree, relative, f"{issue_id}\n")
+        self.invoke(
+            "feature-ready",
+            "--repo",
+            str(repo),
+            "--run",
+            run_id,
+            "--issue",
+            issue_id,
+            "--head",
+            head,
+            "--check",
+            "targeted=passed",
+            "--check",
+            "diff=passed",
         )
+        self.git(repo, "merge", "--ff-only", branch)
+        main_sha = self.git(repo, "rev-parse", "main")
+        self.invoke("integrate", "--repo", str(repo), "--run", run_id, "--issue", issue_id, "--main-sha", main_sha)
+        self.invoke("task-done", "--repo", str(repo), "--run", run_id, "--issue", issue_id)
+        return main_sha
 
-    def push_coordinator(
-        self, repo: Path, ref: str, message: str, parent: str | None = None
-    ) -> str:
-        commit = self.metadata_commit(repo, message, parent)
-        self.git(repo, "push", "origin", f"{commit}:{ref}")
-        return commit
-
-    def soft_pause(
-        self, repo: Path, phase: str, payload: object
-    ) -> tuple[int, dict[str, object]]:
-        args = mock.Mock(
-            repo=str(repo),
-            remote="origin",
-            default="main",
-            phase=phase,
-            input="-",
-        )
-        with mock.patch.object(sys, "stdin", io.StringIO(json.dumps(payload))), io.StringIO() as output, redirect_stdout(output):
-            code = MODULE.command_soft_pause(args)
-            return code, json.loads(output.getvalue())
-
-    def test_clean_preflight_is_normal_and_has_no_delivery_profile(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="shipctl-") as directory:
-            repo, _ = self.fixture(Path(directory))
-            code, result, size = self.preflight(repo)
-        self.assertEqual((code, result["route"]), (0, "normal"))
-        self.assertNotIn("delivery_profile", result)
-        self.assertTrue(result["mutation_allowed"])
-        self.assertIn("references/external-main.md", result["required_references"])
-        self.assertLess(size, 9000)
-
-    def test_active_claim_routes_to_recovery_or_proven_resume(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="shipctl-") as directory:
-            repo, _ = self.fixture(Path(directory))
-            self.push_coordinator(repo, MODULE.CANONICAL_COORDINATOR_REF, self.coordinator_message(repo))
-            _, recovery, _ = self.preflight(repo)
-            _, invalid_case, _ = self.preflight(repo, self.PROOF.upper())
-            _, resume, _ = self.preflight(repo, self.PROOF)
-        self.assertEqual(recovery["route"], "recovery")
-        self.assertFalse(recovery["mutation_allowed"])
-        self.assertEqual(invalid_case["route"], "recovery")
-        self.assertEqual(resume["route"], "resume")
-        self.assertTrue(resume["mutation_allowed"])
-        self.assertIn("references/external-main.md", resume["required_references"])
-
-    def test_runtime_thread_identity_proves_resume_without_manual_digest(self) -> None:
-        thread_id = "019fdcce-1fee-71d0-8d5d-6566cdf2d94b"
-        proof = MODULE.hashlib.sha256(thread_id.encode()).hexdigest()
-        with tempfile.TemporaryDirectory(prefix="shipctl-") as directory:
-            repo, _ = self.fixture(Path(directory))
-            self.push_coordinator(
-                repo,
-                MODULE.CANONICAL_COORDINATOR_REF,
-                self.coordinator_message(repo, proof=proof),
-            )
-            with mock.patch.dict(MODULE.os.environ, {"CODEX_THREAD_ID": thread_id}):
-                code, result, _ = self.preflight(repo)
-        self.assertEqual((code, result["route"]), (0, "resume"))
-        self.assertTrue(result["mutation_allowed"])
-
-    def test_same_owner_can_soft_pause_an_operating_gate_phase_without_workers(self) -> None:
-        thread_id = "019fdcce-1fee-71d0-8d5d-6566cdf2d94b"
-        proof = MODULE.hashlib.sha256(thread_id.encode()).hexdigest()
-        with tempfile.TemporaryDirectory(prefix="shipctl-") as directory:
-            repo, _ = self.fixture(Path(directory))
-            self.push_coordinator(
-                repo,
-                MODULE.CANONICAL_COORDINATOR_REF,
-                self.coordinator_message(
-                    repo,
-                    state="validating",
-                    proof=proof,
-                    extra=(
-                        "EXECUTION_INDEX: running_count=0;entries=none\n"
-                        "WORKERS: active_issue_lanes=none\n"
-                        "PENDING_ACTIONS: none\n"
-                    ),
-                ),
-            )
-            with mock.patch.dict(MODULE.os.environ, {"CODEX_THREAD_ID": thread_id}):
-                code, result, _ = self.preflight(repo)
-        self.assertEqual((code, result["route"]), (0, "resume"))
-        lifecycle = result["coordinator_refs"][0]["lifecycle"]
-        self.assertEqual((lifecycle["coherent"], lifecycle["phase"]), (True, "validating"))
-
-    def test_same_owner_can_soft_pause_after_recovery_inventory_or_complete(self) -> None:
-        thread_id = "019fdcce-1fee-71d0-8d5d-6566cdf2d94b"
-        proof = MODULE.hashlib.sha256(thread_id.encode()).hexdigest()
-        for recovery_phase in ("inventory", "complete"):
-            with self.subTest(recovery_phase=recovery_phase), tempfile.TemporaryDirectory(
-                prefix="shipctl-recovery-pause-"
-            ) as directory:
-                repo, _ = self.fixture(Path(directory))
-                head = self.git(repo, "rev-parse", "HEAD")
-                self.push_coordinator(
-                    repo,
-                    MODULE.CANONICAL_COORDINATOR_REF,
-                    self.coordinator_message(
-                        repo,
-                        state="recovering",
-                        proof=proof,
-                        extra=(
-                            f"OWNER_ID: {uuid.uuid4()}\n"
-                            "OWNER_PROOF_KIND: runtime-task-id\n"
-                            f"RUN_ID: {uuid.uuid4()}\n"
-                            f"RUN_KEY: {'a' * 32}\n"
-                            f"PROJECT_ID: {uuid.uuid4()}\n"
-                            f"MILESTONE_ID: {uuid.uuid4()}\n"
-                            "EPOCH: 3\n"
-                            f"CONTRACT_SOURCE_SHA: {head}\n"
-                            f"LIFECYCLE: schema=1;phase=recovering;pause=none;transition={uuid.uuid4()}\n"
-                            "PAUSE: state=lifted;reason=handoff-consumed\n"
-                            "HOLD_PAUSE_INDEX: active=none;entries=0\n"
-                            "PENDING_ACTIONS: none\n"
-                            "PIPELINE: open_cutoff=none;active_cutoff=none\n"
-                            "GATE_INDEX: active=none;entries=0\n"
-                            "EXECUTION_INDEX: running_count=0;entries=AND-61:3@executor=stopped\n"
-                            "WORKERS: active_target=1;active_issue_lanes=none;stopped=AND-61;"
-                            "ready_preserved=AND-84,AND-87;refill_blocker=none\n"
-                            f"RECOVERY: generation=4;cause=handoff;phase={recovery_phase};unresolved=none\n"
-                            "ACTION_KIND: recovery-checkpoint\n"
-                        ),
-                    ),
-                )
-                with mock.patch.dict(MODULE.os.environ, {"CODEX_THREAD_ID": thread_id}):
-                    _, before, _ = self.preflight(repo)
-                    code, result = self.soft_pause(
-                        repo, "start", {"evidence_digest": "1" * 64}
-                    )
-                    _, after, _ = self.preflight(repo)
-                    finish_code, finished = self.soft_pause(
-                        repo,
-                        "finish",
-                        {"settlement": "complete", "evidence_digest": "2" * 64},
-                    )
-                    _, final, _ = self.preflight(repo)
-
-                self.assertEqual(before["route"], "recover-owner")
-                self.assertEqual((code, result["status"]), (0, "settling"))
-                self.assertEqual(after["route"], "drain-owner")
-                self.assertEqual(
-                    after["coordinator_refs"][0]["lifecycle"]["phase"], "settling"
-                )
-                self.assertEqual(
-                    (finish_code, finished["status"]), (0, "handoff-ready")
-                )
-                self.assertEqual(final["route"], "takeover")
-
-    def test_soft_pause_does_not_skip_recovery_fencing(self) -> None:
-        thread_id = "019fdcce-1fee-71d0-8d5d-6566cdf2d94b"
-        proof = MODULE.hashlib.sha256(thread_id.encode()).hexdigest()
-        with tempfile.TemporaryDirectory(prefix="shipctl-recovery-fencing-pause-") as directory:
-            repo, _ = self.fixture(Path(directory))
-            head = self.git(repo, "rev-parse", "HEAD")
-            parent = self.push_coordinator(
-                repo,
-                MODULE.CANONICAL_COORDINATOR_REF,
-                self.coordinator_message(
-                    repo,
-                    state="recovering",
-                    proof=proof,
-                    extra=(
-                        f"OWNER_ID: {uuid.uuid4()}\n"
-                        "OWNER_PROOF_KIND: runtime-task-id\n"
-                        f"RUN_ID: {uuid.uuid4()}\n"
-                        f"RUN_KEY: {'a' * 32}\n"
-                        f"PROJECT_ID: {uuid.uuid4()}\n"
-                        f"MILESTONE_ID: {uuid.uuid4()}\n"
-                        "EPOCH: 3\n"
-                        f"CONTRACT_SOURCE_SHA: {head}\n"
-                        f"LIFECYCLE: schema=1;phase=recovering;pause=none;transition={uuid.uuid4()}\n"
-                        "PAUSE: state=lifted;reason=handoff-consumed\n"
-                        "HOLD_PAUSE_INDEX: active=none;entries=0\n"
-                        "PENDING_ACTIONS: none\n"
-                        "EXECUTION_INDEX: running_count=0;entries=none\n"
-                        "WORKERS: active_target=0;active_issue_lanes=none\n"
-                        "RECOVERY: generation=4;cause=handoff;phase=fencing;unresolved=none\n"
-                        "ACTION_KIND: takeover-owner\n"
-                    ),
-                ),
-            )
-            with mock.patch.dict(MODULE.os.environ, {"CODEX_THREAD_ID": thread_id}):
-                code, result = self.soft_pause(
-                    repo, "start", {"evidence_digest": "1" * 64}
-                )
-            observed = self.git(
-                repo, "ls-remote", "origin", MODULE.CANONICAL_COORDINATOR_REF
-            ).split()[0]
-
-        self.assertEqual((code, result["status"]), (3, "blocked"))
-        self.assertEqual(result["reason"], "soft-pause-phase-not-eligible")
-        self.assertEqual(observed, parent)
-
-    def test_matching_proof_cannot_resume_needs_input_handoff(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="shipctl-") as directory:
-            repo, _ = self.fixture(Path(directory))
-            self.push_coordinator(
-                repo,
-                MODULE.CANONICAL_COORDINATOR_REF,
-                self.coordinator_message(repo, state="needs-input", owner_state="handoff-ready"),
-            )
-            code, result, _ = self.preflight(repo, self.PROOF)
-        self.assertEqual((code, result["route"]), (0, "recovery"))
-        self.assertFalse(result["mutation_allowed"])
-        self.assertIn("canonical-state-needs-input", result["reasons"])
-        self.assertIn("canonical-owner-handoff-ready", result["reasons"])
-        self.assertIn("references/external-main.md", result["required_references"])
-
-    def test_recover_stale_owner_requires_stop_proof_and_advances_epoch(self) -> None:
-        thread_id = "019fdcce-1fee-71d0-8d5d-6566cdf2d94b"
-        with tempfile.TemporaryDirectory(prefix="shipctl-stale-owner-") as directory:
-            repo, _ = self.fixture(Path(directory))
-            head = self.git(repo, "rev-parse", "HEAD")
-            parent = self.push_coordinator(
-                repo,
-                MODULE.CANONICAL_COORDINATOR_REF,
-                self.coordinator_message(
-                    repo,
-                    state="validating",
-                    proof="a" * 64,
-                    extra=(
-                        f"OWNER_ID: {uuid.uuid4()}\n"
-                        "OWNER_PROOF_KIND: runtime-task-id\n"
-                        f"RUN_ID: {uuid.uuid4()}\n"
-                        f"RUN_KEY: {'b' * 32}\n"
-                        f"PROJECT_ID: {uuid.uuid4()}\n"
-                        f"MILESTONE_ID: {uuid.uuid4()}\n"
-                        "EPOCH: 4\n"
-                        f"CONTRACT_SOURCE_SHA: {head}\n"
-                        "EXECUTION_INDEX: running_count=0;entries=none\n"
-                        "WORKERS: active_issue_lanes=none\n"
-                        "PENDING_ACTIONS: none\n"
-                    ),
-                ),
-            )
-            args = MODULE.argparse.Namespace(
-                repo=str(repo),
-                remote="origin",
-                default="main",
-                proof_kind="task-terminal",
-                proof_digest="f" * 64,
-            )
-            with mock.patch.dict(MODULE.os.environ, {"CODEX_THREAD_ID": thread_id}), io.StringIO() as output, redirect_stdout(output):
-                code = MODULE.command_recover_stale_owner(args)
-                result = json.loads(output.getvalue())
-            observed = self.git(
-                repo, "ls-remote", "origin", MODULE.CANONICAL_COORDINATOR_REF
-            ).split()[0]
-            message = self.git(repo, "show", "-s", "--format=%B", observed)
-        self.assertEqual((code, result["status"], result["epoch"]), (0, "taken", 5))
-        self.assertNotEqual(observed, parent)
-        self.assertIn(
-            "STALE_OWNER_PROOF: kind=task-terminal;digest=" + "f" * 64,
-            message,
-        )
-
-    def test_clean_single_invocation_reclaims_quiescent_active_owner_without_stop_proof(self) -> None:
-        thread_id = "019fdcce-1fee-71d0-8d5d-6566cdf2d94b"
-        with tempfile.TemporaryDirectory(prefix="shipctl-quiescent-reclaim-") as directory:
-            repo, _ = self.fixture(Path(directory))
-            head = self.git(repo, "rev-parse", "HEAD")
-            old_owner = uuid.uuid4()
-            parent = self.push_coordinator(
-                repo,
-                MODULE.CANONICAL_COORDINATOR_REF,
-                self.coordinator_message(
-                    repo,
-                    state="recovering",
-                    proof="a" * 64,
-                    extra=(
-                        f"OWNER_ID: {old_owner}\n"
-                        "OWNER_PROOF_KIND: runtime-task-id\n"
-                        f"RUN_ID: {uuid.uuid4()}\n"
-                        f"RUN_KEY: {'b' * 32}\n"
-                        f"PROJECT_ID: {uuid.uuid4()}\n"
-                        f"MILESTONE_ID: {uuid.uuid4()}\n"
-                        "EPOCH: 7\n"
-                        f"CONTRACT_SOURCE_SHA: {head}\n"
-                        f"LIFECYCLE: schema=1;phase=recovering;pause=none;transition={uuid.uuid4()}\n"
-                        "PAUSE: state=lifted;reason=none\n"
-                        "HOLD_PAUSE_INDEX: active=none;entries=0\n"
-                        "PENDING_ACTIONS: none\n"
-                        f"CLAIM_INDEX: active=none;entries=0;digest={'1' * 64}\n"
-                        f"EXECUTION_INDEX: running_count=0;entries=none;digest={'2' * 64}\n"
-                        "WORKERS: active_target=0;active_issue_lanes=none\n"
-                        "PIPELINE: open_cutoff=none;active_cutoff=cutoff-016:g1;"
-                        "train_ref=refs/heads/codex/train;cutoff_ref=refs/heads/codex/cutoff\n"
-                        "ACTIVE_CUTOFF: cutoff=cutoff-016;generation=1;status=integrated-doc-only\n"
-                        "CUTOFF_RESULT: cutoff=cutoff-016:g1;status=integrated-doc-only\n"
-                        "GATE_INDEX: active=none;entries=1\n"
-                        "RECOVERY: generation=8;cause=stale-owner-stop;phase=inventory;unresolved=none\n"
-                        "LIVE_GUARDS: none\n"
-                        "ACTION_KIND: recovery-checkpoint\n"
-                    ),
-                ),
-            )
-            takeover_args = MODULE.argparse.Namespace(
-                repo=str(repo), remote="origin", default="main"
-            )
-            with mock.patch.dict(MODULE.os.environ, {"CODEX_THREAD_ID": thread_id}):
-                before_code, before, _ = self.preflight(repo)
-                with io.StringIO() as output, redirect_stdout(output):
-                    takeover_code = MODULE.command_takeover(takeover_args)
-                    taken = json.loads(output.getvalue())
-                with io.StringIO() as output, redirect_stdout(output):
-                    fence_code = MODULE.command_fence_guards(takeover_args)
-                    fenced = json.loads(output.getvalue())
-                with io.StringIO() as output, redirect_stdout(output):
-                    resume_code = MODULE.command_resume_recovery(takeover_args)
-                    resumed = json.loads(output.getvalue())
-                final_code, final, _ = self.preflight(repo)
-            observed = self.git(
-                repo, "ls-remote", "origin", MODULE.CANONICAL_COORDINATOR_REF
-            ).split()[0]
-            message = self.git(repo, "show", "-s", "--format=%B", observed)
-
-        self.assertEqual((before_code, before["route"]), (0, "takeover"))
-        self.assertTrue(before["coordinator_refs"][0]["quiescent_reclaim_ready"])
-        self.assertEqual((takeover_code, taken["status"], taken["epoch"]), (0, "taken", 8))
-        self.assertNotEqual(taken["coordinator"], parent)
-        self.assertEqual((fence_code, fenced["status"], fenced["guard_count"]), (0, "fenced", 0))
-        self.assertEqual((resume_code, resumed["status"]), (0, "resumed"))
-        self.assertEqual((final_code, final["route"]), (0, "resume"))
-        self.assertIn("PIPELINE: open_cutoff=none;active_cutoff=none", message)
-        self.assertIn("ACTIVE_CUTOFF: none", message)
-        self.assertIn("ACTION_KIND: resume-recovery", message)
-
-    def test_quiescent_reclaim_rejects_nonterminal_batch_live_guard_and_pause_drain(self) -> None:
-        metadata = {
-            "STATE": "recovering",
-            "OWNER_STATE": "active",
-            "ACTION_STATUS": "reconciled",
-            "LIFECYCLE": f"schema=1;phase=recovering;pause=none;transition={uuid.uuid4()}",
-            "PENDING_ACTIONS": "none",
-            "CLAIM_INDEX": f"active=none;entries=0;digest={'1' * 64}",
-            "EXECUTION_INDEX": f"running_count=0;entries=none;digest={'2' * 64}",
-            "WORKERS": "active_target=0;active_issue_lanes=none",
-            "PIPELINE": "open_cutoff=none;active_cutoff=cutoff-1:g1",
-            "ACTIVE_CUTOFF": "cutoff=cutoff-1;generation=1;status=validating",
-            "CUTOFF_RESULT": "cutoff=cutoff-1:g1;status=running",
-            "GATE_INDEX": "active=none;entries=1",
-            "LIVE_GUARDS": "AND-1/c1=refs/heads/guard:ready",
-        }
-        ready, blockers = MODULE._durable_quiescent_reclaim(metadata)
-        self.assertFalse(ready)
-        self.assertIn("active-cutoff-not-terminal", blockers)
-        self.assertIn("live-guards-present", blockers)
-
-        metadata.update(
-            {
-                "STATE": "pausing",
-                "LIFECYCLE": f"schema=1;phase=settling;pause=pause-1;transition={uuid.uuid4()}",
-            }
-        )
-        ready, blockers = MODULE._durable_quiescent_reclaim(metadata)
-        self.assertFalse(ready)
-        self.assertIn("lifecycle-not-operating-or-recovering", blockers)
-
-    def test_reconciled_quiescent_handoff_routes_to_automatic_takeover(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="shipctl-") as directory:
-            repo, _ = self.fixture(Path(directory))
-            self.push_coordinator(
-                repo,
-                MODULE.CANONICAL_COORDINATOR_REF,
-                self.coordinator_message(
-                    repo,
-                    state="needs-input",
-                    owner_state="handoff-ready",
-                    contract="1" * 40,
-                    extra=(
-                        "ACTION_KIND: handoff-owner\n"
-                        "ACTION_TARGET: codex-thread:previous-control-task\n"
-                        "WORKERS: active_issue_lanes=none;executors=terminal\n"
-                        "PAUSE: state=handoff-ready;pending_external_action=none\n"
-                        "PROMOTION_HOLD: known-bad-default\n"
-                    ),
-                ),
-            )
-            code, result, _ = self.preflight(repo)
-        self.assertEqual((code, result["route"]), (0, "takeover"))
-        self.assertTrue(result["mutation_allowed"])
-        self.assertEqual(result["mutation_scope"], "coordinator-claim-cas-only")
-        self.assertIn("handoff-ready-takeover-eligible", result["reasons"])
-        self.assertIn("active-contract-mismatch-or-unknown", result["reasons"])
-        self.assertIn("active-durable-restriction:PAUSE", result["reasons"])
-        self.assertIn("active-durable-restriction:PROMOTION_HOLD", result["reasons"])
-
-    def test_incomplete_handoff_remains_read_only_recovery(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="shipctl-") as directory:
-            repo, _ = self.fixture(Path(directory))
-            self.push_coordinator(
-                repo,
-                MODULE.CANONICAL_COORDINATOR_REF,
-                self.coordinator_message(
-                    repo,
-                    state="needs-input",
-                    owner_state="handoff-ready",
-                    extra=(
-                        "ACTION_KIND: handoff-owner\n"
-                        "ACTION_TARGET: codex-thread:next\n"
-                        "WORKERS: active_issue_lanes=one;executors=running\n"
-                        "PAUSE: state=handoff-ready;pending_external_action=none\n"
-                    ),
-                ),
-            )
-            code, result, _ = self.preflight(repo)
-        self.assertEqual((code, result["route"]), (0, "recovery"))
-        self.assertFalse(result["mutation_allowed"])
-        self.assertEqual(result["mutation_scope"], "none")
-
-    def test_lifecycle_validates_current_quiescent_shape_independent_of_last_action(self) -> None:
-        pause_id = "pause-28cb9f4d-e177-4a23-aa8f-2c8323fbb238"
-        message = (
-            "STATE: checkpoint\n"
-            "OWNER_STATE: handoff-ready\n"
-            "ACTION_KIND: reconcile-pause-index\n"
-            "ACTION_STATUS: reconciled\n"
-            f"PAUSE: id={pause_id};state=active;kind=PAUSE;scope=all-shared;"
-            "confirmation_required=yes;resume_predicate=fresh-explicit-user-launch-after-test;"
-            f"evidence={'1' * 64};after=28cb9f4d-e177-4a23-aa8f-2c8323fbb238;"
-            "created_at=2026-08-07T17:31:29Z;drained_at=2026-08-07T17:33:30Z\n"
-            f"HOLD_PAUSE_INDEX: active={pause_id}:PAUSE@all-shared;entries=1\n"
-            "EXECUTION_INDEX: running_count=0;entries=4\n"
-            "WORKERS: active_issue_lanes=none\n"
-            "PENDING_ACTIONS: none\n"
-        )
-        lifecycle = MODULE._coordinator_lifecycle(MODULE.fields(message))
-        self.assertTrue(lifecycle["coherent"])
-        self.assertEqual(lifecycle["phase"], "quiescent")
-        self.assertTrue(lifecycle["takeover_ready"])
-
-        revived = message.replace("running_count=0", "running_count=1").replace(
-            "active_issue_lanes=none", "active_issue_lanes=AND-47"
-        )
-        invalid = MODULE._coordinator_lifecycle(MODULE.fields(revived))
-        self.assertFalse(invalid["coherent"])
-        self.assertFalse(invalid["takeover_ready"])
-        self.assertIn("quiescent-running-count-nonzero", invalid["errors"])
-
-    def test_lifecycle_phase_matrix_fails_closed_on_cross_projection_races(self) -> None:
-        pause_id = "pause-28cb9f4d-e177-4a23-aa8f-2c8323fbb238"
-        transition = "28cb9f4d-e177-4a23-aa8f-2c8323fbb238"
-        pause = (
-            f"id={pause_id};state=active;kind=PAUSE;scope=dispatch,new-work;"
-            f"evidence={'1' * 64};after={transition};"
-            "resume_predicate=fresh-explicit-user-launch-after-test;"
-            "confirmation_required=yes;created_at=2026-08-07T17:31:29Z"
-        )
-        base = {
-            "STATE": "pausing",
-            "OWNER_STATE": "active",
-            "ACTION_STATUS": "reconciled",
-            "PAUSE": pause,
-            "HOLD_PAUSE_INDEX": f"active={pause_id}:PAUSE@dispatch,new-work;entries=1",
-            "PENDING_ACTIONS": "none",
-        }
-        cases = (
-            (
-                "draining",
-                {
-                    **base,
-                    "EXECUTION_INDEX": "running_count=2;entries=AND-47:2@executor=running,AND-61:3@executor=running",
-                    "WORKERS": "active_issue_lanes=AND-47,AND-61",
-                    "LIFECYCLE": f"schema=1;phase=draining;pause={pause_id};transition={transition}",
-                },
-                True,
-            ),
-            (
-                "settling",
-                {
-                    **base,
-                    "EXECUTION_INDEX": "running_count=0;entries=none",
-                    "WORKERS": "active_issue_lanes=none",
-                    "LIFECYCLE": f"schema=1;phase=settling;pause={pause_id};transition={transition}",
-                },
-                True,
-            ),
-            (
-                "worker-index-race",
-                {
-                    **base,
-                    "EXECUTION_INDEX": "running_count=2;entries=AND-47:2@executor=running,AND-61:3@executor=running",
-                    "WORKERS": "active_issue_lanes=AND-47",
-                    "LIFECYCLE": f"schema=1;phase=draining;pause={pause_id};transition={transition}",
-                },
-                False,
-            ),
-            (
-                "phase-race",
-                {
-                    **base,
-                    "EXECUTION_INDEX": "running_count=0;entries=none",
-                    "WORKERS": "active_issue_lanes=none",
-                    "LIFECYCLE": f"schema=1;phase=draining;pause={pause_id};transition={transition}",
-                },
-                False,
-            ),
-        )
-        for name, metadata, coherent in cases:
-            with self.subTest(name=name):
-                result = MODULE._coordinator_lifecycle(metadata)
-                self.assertEqual(result["coherent"], coherent)
-                self.assertEqual(result["takeover_ready"], False)
-
-    def test_soft_pause_lifecycle_drains_checkpoints_handoffs_and_resumes_by_cas(self) -> None:
-        owner_thread = "019fdcce-1fee-71d0-8d5d-6566cdf2d94b"
-        successor_thread = "019fdd4b-37db-7123-830f-bc32654b5e2d"
-        proof = MODULE.hashlib.sha256(owner_thread.encode()).hexdigest()
-        with tempfile.TemporaryDirectory(prefix="shipctl-soft-pause-") as directory:
-            repo, _ = self.fixture(Path(directory))
-            head = self.git(repo, "rev-parse", "HEAD")
-            parent = self.push_coordinator(
-                repo,
-                MODULE.CANONICAL_COORDINATOR_REF,
-                self.coordinator_message(
-                    repo,
-                    proof=proof,
-                    extra=(
-                        f"OWNER_ID: {uuid.uuid4()}\n"
-                        "OWNER_PROOF_KIND: runtime-task-id\n"
-                        f"RUN_ID: {uuid.uuid4()}\n"
-                        f"RUN_KEY: {'a' * 32}\n"
-                        f"PROJECT_ID: {uuid.uuid4()}\n"
-                        f"MILESTONE_ID: {uuid.uuid4()}\n"
-                        "EPOCH: 1\n"
-                        f"CONTRACT_SOURCE_SHA: {head}\n"
-                        "PAUSE: state=lifted;reason=none\n"
-                        "HOLD: id=hold-known-bad;state=active;scope=default\n"
-                        "HOLD_PAUSE_INDEX: active=hold-known-bad:HOLD@default;entries=1\n"
-                        "PENDING_ACTIONS: none\n"
-                        "PIPELINE: open_cutoff=none;active_cutoff=none\n"
-                        "GATE_INDEX: active=none;entries=0\n"
-                        "EXECUTION_INDEX: running_count=2;"
-                        "entries=AND-47:2@executor=running,AND-61:3@executor=running\n"
-                        "WORKERS: active_target=2;active_issue_lanes=AND-47,AND-61;"
-                        "ready_preserved=none;refill_blocker=none\n"
-                        "ACTION_KIND: dispatch-workers\n"
-                    ),
-                ),
-            )
-            with mock.patch.dict(MODULE.os.environ, {"CODEX_THREAD_ID": owner_thread}):
-                start_code, started = self.soft_pause(
-                    repo, "start", {"evidence_digest": "1" * 64}
-                )
-                _, draining, _ = self.preflight(repo)
-                missing_code, missing = self.soft_pause(
-                    repo,
-                    "checkpoint",
-                    {
-                        "dispositions": [
-                            {
-                                "issue": "AND-47",
-                                "generation": 2,
-                                "state": "coordinator-paused",
-                                "head": "none",
-                                "evidence_digest": "2" * 64,
-                            }
-                        ]
-                    },
-                )
-                still_draining = self.git(
-                    repo, "ls-remote", "origin", MODULE.CANONICAL_COORDINATOR_REF
-                ).split()[0]
-                checkpoint_code, checkpointed = self.soft_pause(
-                    repo,
-                    "checkpoint",
-                    {
-                        "dispositions": [
-                            {
-                                "issue": "AND-47",
-                                "generation": 2,
-                                "state": "coordinator-paused",
-                                "head": "none",
-                                "evidence_digest": "2" * 64,
-                            },
-                            {
-                                "issue": "AND-61",
-                                "generation": 3,
-                                "state": "stopped",
-                                "head": "none",
-                                "evidence_digest": "3" * 64,
-                            },
-                        ]
-                    },
-                )
-                _, settling, _ = self.preflight(repo)
-                finish_code, finished = self.soft_pause(
-                    repo,
-                    "finish",
-                    {"settlement": "complete", "evidence_digest": "4" * 64},
-                )
-                _, takeover_ready, _ = self.preflight(repo)
-            takeover_args = mock.Mock(repo=str(repo), remote="origin", default="main")
-            with mock.patch.dict(MODULE.os.environ, {"CODEX_THREAD_ID": successor_thread}):
-                with io.StringIO() as output, redirect_stdout(output):
-                    takeover_code = MODULE.command_takeover(takeover_args)
-                    taken = json.loads(output.getvalue())
-                _, recovered, _ = self.preflight(repo)
-            final_tip = self.git(
-                repo, "ls-remote", "origin", MODULE.CANONICAL_COORDINATOR_REF
-            ).split()[0]
-            final_message = self.git(repo, "show", "-s", "--format=%B", final_tip)
-
-        self.assertEqual((start_code, started["status"]), (0, "draining"))
-        self.assertNotEqual(started["coordinator"], parent)
-        self.assertEqual(draining["route"], "drain-owner")
-        self.assertEqual(draining["coordinator_refs"][0]["lifecycle"]["phase"], "draining")
-        self.assertEqual((missing_code, missing["status"]), (3, "blocked"))
-        self.assertEqual(still_draining, started["coordinator"])
-        self.assertEqual((checkpoint_code, checkpointed["status"]), (0, "settling"))
-        self.assertEqual(settling["route"], "drain-owner")
-        self.assertEqual((finish_code, finished["status"]), (0, "handoff-ready"))
-        self.assertEqual(takeover_ready["route"], "takeover")
-        self.assertEqual((takeover_code, taken["status"]), (0, "taken"))
-        self.assertEqual(recovered["route"], "recover-owner")
-        final_fields = MODULE.fields(final_message)
+    def test_invocation_defaults_to_coordinator_and_preserves_exact_workers(self) -> None:
+        self.assertEqual(self.invoke("invocation", "$ship-linear-release"), {"mode": "single", "workers": 1})
         self.assertEqual(
-            MODULE._pause_index_value(final_fields), "hold-known-bad:HOLD@default"
+            self.invoke("invocation", "$ship-linear-release workers=3"),
+            {"mode": "parallel", "workers": 3},
         )
-        self.assertEqual(MODULE._coordinator_lifecycle(final_fields)["phase"], "recovering")
+        error = self.invoke("invocation", "workers=2 workers=3", expected=2)
+        self.assertEqual(error["code"], "WORKERS_AMBIGUOUS")
 
-    def test_takeover_command_cas_claims_quiescent_handoff_and_is_idempotent(self) -> None:
-        thread_id = "019fdcce-1fee-71d0-8d5d-6566cdf2d94b"
-        with tempfile.TemporaryDirectory(prefix="shipctl-") as directory:
-            repo, _ = self.fixture(Path(directory))
-            head = self.git(repo, "rev-parse", "HEAD")
-            parent = self.push_coordinator(
-                repo,
-                MODULE.CANONICAL_COORDINATOR_REF,
-                self.coordinator_message(
-                    repo,
-                    state="needs-input",
-                    owner_state="handoff-ready",
-                    contract="1" * 40,
-                    extra=(
-                        "OWNER_ID: 07654254-e020-436b-9c04-6ca40f2f4a1e\n"
-                        "OWNER_PROOF_KIND: runtime-task-id\n"
-                        "RUN_ID: bc5fed70-55d9-4915-88d3-dc98de4d7013\n"
-                        "RUN_KEY: 05921543be0e05af2538d99ee2372769\n"
-                        "PROJECT_ID: 6c07eabb-e588-4184-8eaa-5974ad67fdda\n"
-                        "MILESTONE_ID: 4854655e-aebd-458d-8d6b-dd5be9c75be2\n"
-                        "EPOCH: 1\n"
-                        f"CONTRACT_SOURCE_SHA: {head}\n"
-                        "ACTION_KIND: handoff-owner\n"
-                        "ACTION_TARGET: codex-thread:control-task\n"
-                        "WORKERS: active_issue_lanes=none;executors=terminal\n"
-                        "PAUSE: state=handoff-ready;pending_external_action=none\n"
-                        "PROMOTION_HOLD: known-bad-default\n"
-                        "RECOVERY: generation=2;cause=resume;phase=complete\n"
-                    ),
-                ),
-            )
-            args = mock.Mock(repo=str(repo), remote="origin", default="main")
-            with mock.patch.dict(MODULE.os.environ, {"CODEX_THREAD_ID": thread_id}):
-                with io.StringIO() as output, redirect_stdout(output):
-                    code = MODULE.command_takeover(args)
-                    result = json.loads(output.getvalue())
-                with io.StringIO() as output, redirect_stdout(output):
-                    repeat_code = MODULE.command_takeover(args)
-                    repeat = json.loads(output.getvalue())
-                _, resumed, _ = self.preflight(repo)
-            observed = self.git(repo, "ls-remote", "origin", MODULE.CANONICAL_COORDINATOR_REF).split()[0]
-            observed_parent = self.git(repo, "rev-parse", f"{observed}^")
-            message = self.git(repo, "show", "-s", "--format=%B", observed)
-        self.assertEqual((code, result["status"]), (0, "taken"))
-        self.assertNotEqual(observed, parent)
-        self.assertEqual(observed_parent, parent)
-        metadata = MODULE.fields(message)
-        self.assertEqual(metadata["STATE"], "recovering")
-        self.assertEqual(metadata["OWNER_STATE"], "active")
-        self.assertEqual(metadata["EPOCH"], "2")
-        self.assertEqual(metadata["CONTRACT_SOURCE_SHA"], head)
-        self.assertEqual(metadata["ACTION_KIND"], "takeover-owner")
-        self.assertEqual(metadata["ACTION_STATUS"], "reconciled")
-        self.assertEqual((repeat_code, repeat["status"]), (0, "already-owner"))
-        self.assertEqual(resumed["route"], "recover-owner")
-        self.assertEqual(resumed["mutation_scope"], "recovery-only")
+    def test_init_builds_exact_single_and_three_worker_topologies(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            repo = self.repo_fixture(Path(temporary))
+            single = self.init_run(repo, 1)
+            self.assertEqual(single["mode"], "single")
+            self.assertEqual([value["id"] for value in single["lanes"]], ["coordinator"])
 
-    def test_fence_guards_atomically_advances_indexed_vector_and_is_idempotent(self) -> None:
-        thread_id = "019fdcce-1fee-71d0-8d5d-6566cdf2d94b"
-        run_id = "bc5fed70-55d9-4915-88d3-dc98de4d7013"
-        run_key = "05921543be0e05af2538d99ee2372769"
-        issue = "AND-47"
-        guard_ref = f"refs/heads/codex/release/claims/{run_key}/{issue}/c1"
-        with tempfile.TemporaryDirectory(prefix="shipctl-fence-") as directory:
-            repo, _ = self.fixture(Path(directory))
-            head = self.git(repo, "rev-parse", "HEAD")
-            guard = self.metadata_commit(
-                repo,
-                (
-                    "guard\n\n"
-                    "SCHEMA: 1\n"
-                    "KIND: CLAIM_GUARD\n"
-                    "STATE: ready\n"
-                    f"RUN_ID: {run_id}; RUN_KEY: {run_key}; ISSUE: {issue}\n"
-                    "OWNER: id=07654254-e020-436b-9c04-6ca40f2f4a1e; "
-                    "epoch=1; CLAIM: generation=1; token_digest=" + "a" * 64 + "\n"
-                    "FEATURE: ref=refs/heads/codex/and-47-test/"
-                    f"r{run_key}-e1-c1; expected_old=zero; head={head}\n"
-                    "CHECKS_DIGEST: " + "c" * 64 + "\n"
-                    "PREVIOUS_GUARD: zero; UPDATED_BY: worker\n"
-                    "TERMINAL_REASON: none\n"
-                    "TERMINAL_EVIDENCE: none\n"
-                ),
-                head,
+        with tempfile.TemporaryDirectory() as temporary:
+            repo = self.repo_fixture(Path(temporary))
+            parallel = self.init_run(repo, 3)
+            self.assertEqual(parallel["mode"], "parallel")
+            self.assertEqual(
+                [value["id"] for value in parallel["lanes"]],
+                ["worker-1", "worker-2", "worker-3"],
             )
-            self.git(repo, "push", "origin", f"{guard}:{guard_ref}")
-            self.push_coordinator(
-                repo,
-                MODULE.CANONICAL_COORDINATOR_REF,
-                self.coordinator_message(
-                    repo,
-                    state="needs-input",
-                    owner_state="handoff-ready",
-                    contract="1" * 40,
-                    extra=(
-                        "OWNER_ID: 07654254-e020-436b-9c04-6ca40f2f4a1e\n"
-                        "OWNER_PROOF_KIND: runtime-task-id\n"
-                        f"RUN_ID: {run_id}\n"
-                        f"RUN_KEY: {run_key}\n"
-                        f"PROJECT_ID: {uuid.uuid4()}\n"
-                        f"MILESTONE_ID: {uuid.uuid4()}\n"
-                        "EPOCH: 1\n"
-                        f"CONTRACT_SOURCE_SHA: {head}\n"
-                        "ACTION_KIND: handoff-owner\n"
-                        "ACTION_TARGET: codex-thread:control-task\n"
-                        "WORKERS: active_issue_lanes=none;executors=terminal\n"
-                        "PAUSE: state=handoff-ready;pending_external_action=none\n"
-                        "RECOVERY: generation=1;cause=handoff;phase=complete;inventory=none\n"
-                        f"CLAIM_INDEX: active={issue}:1;entries=2;digest={'b' * 64}\n"
-                        f"CLAIM_MAP: AND-147:2=terminal@refs/heads/codex/release/claims/{run_key}/AND-147/c2@{'d' * 40};feature={'e' * 40};batch=cutoff-1:g1\n"
-                        f"CLAIM_MAP: {issue}:1@origin:{guard_ref}@origin:refs/heads/codex/and-47-test/r{run_key}-e1-c1@token\n"
-                        f"LIVE_GUARDS: {issue}/c1={guard}:ready\n"
-                    ),
-                ),
+
+    def test_exact_init_is_reused_but_worker_drift_conflicts(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            repo = self.repo_fixture(Path(temporary))
+            first = self.init_run(repo, 3)
+            reused = self.invoke(
+                "init", "--repo", str(repo), "--project-id", "project-1",
+                "--milestone-id", "milestone-1", "--workers", "3",
             )
-            args = mock.Mock(repo=str(repo), remote="origin", default="main")
-            with mock.patch.dict(MODULE.os.environ, {"CODEX_THREAD_ID": thread_id}):
-                with io.StringIO() as output, redirect_stdout(output):
-                    self.assertEqual(MODULE.command_takeover(args), 0)
-                (repo / MODULE.SKILL_PATH / "SKILL.md").write_text(
-                    "---\nname: test\n---\n# recovery upgrade\n", encoding="utf-8"
+            self.assertEqual(reused["disposition"], "reused")
+            self.assertEqual(reused["run"]["run_id"], first["run_id"])
+            conflict = self.invoke(
+                "init", "--repo", str(repo), "--project-id", "project-1",
+                "--milestone-id", "milestone-1", "--workers", "2", expected=2,
+            )
+            self.assertEqual(conflict["code"], "ACTIVE_RUN_CONFLICT")
+
+    def test_plan_respects_dependencies_and_rejects_unknown_dependency(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            repo = self.repo_fixture(root)
+            run = self.init_run(repo)
+            result = self.plan(
+                repo,
+                run["run_id"],
+                root,
+                [self.issue("a", "AND-1"), self.issue("b", "AND-2", dependencies=["a"])],
+            )
+            self.assertEqual(result["ready"], ["a"])
+            error = self.plan(
+                repo,
+                run["run_id"],
+                root,
+                [self.issue("c", "AND-3", dependencies=["missing"])],
+                expected=2,
+            )
+            self.assertEqual(error["code"], "SNAPSHOT_INVALID")
+
+    def test_three_worker_claims_use_distinct_worktrees_and_reject_scope_overlap(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            repo = self.repo_fixture(root)
+            run = self.init_run(repo, 3)
+            run_id = run["run_id"]
+            self.plan(repo, run_id, root, [self.issue("a", "AND-1"), self.issue("b", "AND-2"), self.issue("c", "AND-3")])
+            worktrees = [self.add_worktree(repo, root, index, f"AND-{index}") for index in (1, 2, 3)]
+            self.claim(repo, run_id, "a", "worker-1", worktrees[0][1], worktrees[0][0], "src/a")
+            overlap = self.claim(repo, run_id, "b", "worker-2", worktrees[1][1], worktrees[1][0], "src/a/nested", expected=2)
+            self.assertEqual(overlap["code"], "SCOPE_CONFLICT")
+            self.claim(repo, run_id, "b", "worker-2", worktrees[1][1], worktrees[1][0], "src/b")
+            self.claim(repo, run_id, "c", "worker-3", worktrees[2][1], worktrees[2][0], "src/c")
+            state = self.invoke("status", "--repo", str(repo), "--run", run_id)["run"]
+            self.assertEqual({value["active_issue"] for value in state["lanes"]}, {"a", "b", "c"})
+
+    def test_three_parallel_features_integrate_serially_into_one_batch(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            repo = self.repo_fixture(root)
+            run = self.init_run(repo, 3)
+            run_id = run["run_id"]
+            issues = [self.issue(letter, f"AND-{index}") for index, letter in enumerate(("a", "b", "c"), 1)]
+            self.plan(repo, run_id, root, issues)
+            features: list[tuple[str, str, Path, str]] = []
+            for index, letter in enumerate(("a", "b", "c"), 1):
+                worktree, branch = self.add_worktree(repo, root, index, f"AND-{index}")
+                owned = f"src/{letter}"
+                self.claim(repo, run_id, letter, f"worker-{index}", branch, worktree, owned)
+                head = self.commit_change(worktree, f"{owned}/result.txt", f"{letter}\n")
+                self.invoke(
+                    "feature-ready", "--repo", str(repo), "--run", run_id,
+                    "--issue", letter, "--head", head, "--check", "targeted=passed",
                 )
-                self.git(repo, "add", MODULE.SKILL_PATH)
-                self.git(repo, "commit", "-m", "upgrade recovery contract")
-                intermediate_head = self.git(repo, "rev-parse", "HEAD")
-                self.git(repo, "push", "origin", "main")
-                _, upgrade_preflight, _ = self.preflight(repo)
-                original_run = MODULE.foreign_main.run
-
-                def fail_atomic_push(target: Path, *call_args: str) -> subprocess.CompletedProcess[bytes]:
-                    if call_args and call_args[0] == "push" and "--atomic" in call_args:
-                        return subprocess.CompletedProcess(call_args, 1, b"", b"synthetic atomic race")
-                    return original_run(target, *call_args)
-
-                with mock.patch.object(MODULE.foreign_main, "run", side_effect=fail_atomic_push):
-                    with io.StringIO() as output, redirect_stdout(output):
-                        interrupted_code = MODULE.command_fence_guards(args)
-                        interrupted = json.loads(output.getvalue())
-                (repo / MODULE.SKILL_PATH / "SKILL.md").write_text(
-                    "---\nname: test\n---\n# pending intent contract upgrade\n",
-                    encoding="utf-8",
+                features.append((letter, branch, worktree, head))
+            for index, (letter, branch, _worktree, _head) in enumerate(features):
+                if index == 0:
+                    self.git(repo, "merge", "--ff-only", branch)
+                else:
+                    self.git(repo, "merge", "--no-edit", branch)
+                main_sha = self.git(repo, "rev-parse", "main")
+                self.invoke(
+                    "integrate", "--repo", str(repo), "--run", run_id,
+                    "--issue", letter, "--main-sha", main_sha,
                 )
-                self.git(repo, "add", MODULE.SKILL_PATH)
-                self.git(repo, "commit", "-m", "upgrade contract after pending intent")
-                upgraded_head = self.git(repo, "rev-parse", "HEAD")
-                upgraded_contract = self.git(repo, "rev-parse", f"HEAD:{MODULE.SKILL_PATH}")
-                self.git(repo, "push", "origin", "main")
-                _, pending_upgrade_preflight, _ = self.preflight(repo)
-                with io.StringIO() as output, redirect_stdout(output):
-                    fence_code = MODULE.command_fence_guards(args)
-                    result = json.loads(output.getvalue())
-                with io.StringIO() as output, redirect_stdout(output):
-                    repeat_code = MODULE.command_fence_guards(args)
-                    repeat = json.loads(output.getvalue())
-            fenced_guard = self.git(repo, "ls-remote", "origin", guard_ref).split()[0]
-            fenced_parent = self.git(repo, "rev-parse", f"{fenced_guard}^")
-            guard_message = self.git(repo, "show", "-s", "--format=%B", fenced_guard)
-            coordinator = self.git(repo, "ls-remote", "origin", MODULE.CANONICAL_COORDINATOR_REF).split()[0]
-            coordinator_message = self.git(repo, "show", "-s", "--format=%B", coordinator)
-        self.assertEqual((fence_code, result["status"]), (0, "fenced"))
-        self.assertEqual((repeat_code, repeat["status"]), (0, "already-fenced"))
-        self.assertEqual((interrupted_code, interrupted["status"]), (4, "cas-lost"))
-        self.assertEqual(upgrade_preflight["route"], "recover-owner-upgrade")
-        self.assertEqual(pending_upgrade_preflight["route"], "recover-owner-upgrade")
-        self.assertEqual(
-            upgrade_preflight["mutation_scope"],
-            "recovery-contract-upgrade-and-fencing-only",
-        )
-        self.assertEqual(fenced_parent, guard)
-        guard_metadata = MODULE.fields(guard_message)
-        self.assertEqual(guard_metadata["STATE"], "fenced")
-        self.assertEqual(guard_metadata["OWNER_EPOCH"], "2")
-        self.assertEqual(guard_metadata["PREVIOUS_GUARD"], guard)
-        coordinator_metadata = MODULE.fields(coordinator_message)
-        self.assertEqual(coordinator_metadata["ACTION_KIND"], "fence-guards")
-        self.assertEqual(coordinator_metadata["ACTION_STATUS"], "reconciled")
-        self.assertEqual(coordinator_metadata["CONTRACT_SOURCE_SHA"], upgraded_head)
-        self.assertEqual(coordinator_metadata["CONTRACT_DIGEST"], upgraded_contract)
-        self.assertIn(
-            f"source={intermediate_head};",
-            coordinator_metadata["CONTRACT_MIGRATED_FROM"],
-        )
-        self.assertEqual(MODULE._structured_token(coordinator_metadata["RECOVERY"], "phase"), "inventory")
+                self.invoke("task-done", "--repo", str(repo), "--run", run_id, "--issue", letter)
+            batch = self.invoke(
+                "batch-create", "--repo", str(repo), "--run", run_id,
+                "--candidate", self.git(repo, "rev-parse", "main"), "--gate", "passed",
+            )["batch"]
+            self.assertEqual(batch["issue_ids"], ["a", "b", "c"])
 
-    def test_live_claim_index_fences_only_active_and_counts_history_separately(self) -> None:
-        run_key = "a" * 32
-        issue = "AND-47"
-        guard = f"refs/heads/codex/release/claims/{run_key}/{issue}/c2"
-        active = (
-            f"{issue}:2@origin:{guard}@origin:refs/heads/codex/and-47-test/"
-            f"r{run_key}-e2-c2@worktree-id"
-        )
-        claim_index = (
-            f"active={active};quarantined=AND-84:1@{'f' * 40};"
-            f"entries=3;digest={'b' * 64}"
-        )
-        message = (
-            f"CLAIM_MAP: AND-147:2=terminal@refs/heads/codex/release/claims/{run_key}/"
-            f"AND-147/c2@{'d' * 40};feature={'e' * 40};batch=cutoff-1:g1\n"
-            "CLAIM_MAP: AND-86:1=terminal/heads/codex/release/claims/legacy-malformed\n"
-        )
-        with tempfile.TemporaryDirectory(prefix="shipctl-claim-index-") as directory:
-            repo, _ = self.fixture(Path(directory))
-            entries, errors = MODULE._claim_guard_refs(
-                repo, message, claim_index, run_key, "origin"
+    def test_feature_scope_and_integration_are_verified(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            repo = self.repo_fixture(root)
+            run = self.init_run(repo, 3)
+            run_id = run["run_id"]
+            self.plan(repo, run_id, root, [self.issue("a", "AND-1")])
+            worktree, branch = self.add_worktree(repo, root, 1, "AND-1")
+            self.claim(repo, run_id, "a", "worker-1", branch, worktree, "src/a")
+            head = self.commit_change(worktree, "src/outside.txt", "bad\n")
+            error = self.invoke(
+                "feature-ready", "--repo", str(repo), "--run", run_id,
+                "--issue", "a", "--head", head, "--check", "targeted=passed", expected=2,
             )
-        self.assertEqual(errors, [])
-        self.assertEqual(entries, [(issue, 2, guard)])
+            self.assertEqual(error["code"], "SCOPE_VIOLATION")
 
-    def test_matching_proof_cannot_lift_active_pause(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="shipctl-") as directory:
-            repo, _ = self.fixture(Path(directory))
-            self.push_coordinator(
-                repo,
-                MODULE.CANONICAL_COORDINATOR_REF,
-                self.coordinator_message(
-                    repo,
-                    extra="PAUSE: id=pause-1;confirmation_required=yes;scope=all-shared\n",
-                ),
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            repo = self.repo_fixture(root)
+            run = self.init_run(repo, 3)
+            run_id = run["run_id"]
+            self.plan(repo, run_id, root, [self.issue("a", "AND-1")])
+            worktree, branch = self.add_worktree(repo, root, 1, "AND-1")
+            self.claim(repo, run_id, "a", "worker-1", branch, worktree, "src/a")
+            main_sha = self.finish_feature(repo, run_id, "a", branch, worktree, "src/a/result.txt")
+            state = self.invoke("status", "--repo", str(repo), "--run", run_id)["run"]
+            self.assertEqual(state["tasks"]["a"]["status"], "done")
+            self.assertEqual(state["current_main_sha"], main_sha)
+            self.assertIsNone(state["lanes"][0]["active_issue"])
+
+    def test_failed_worker_releases_lane_for_retry(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            repo = self.repo_fixture(root)
+            run = self.init_run(repo, 3)
+            run_id = run["run_id"]
+            self.plan(repo, run_id, root, [self.issue("a", "AND-1")])
+            worktree, branch = self.add_worktree(repo, root, 1, "AND-1")
+            self.claim(repo, run_id, "a", "worker-1", branch, worktree, "src/a")
+            result = self.invoke(
+                "task-failed", "--repo", str(repo), "--run", run_id,
+                "--issue", "a", "--reason", "targeted check failed",
             )
-            code, result, _ = self.preflight(repo, self.PROOF)
-        self.assertEqual((code, result["route"]), (0, "recovery"))
-        self.assertFalse(result["mutation_allowed"])
-        self.assertIn("active-durable-restriction:PAUSE", result["reasons"])
+            self.assertEqual(result["status"], "ready")
+            state = self.invoke("status", "--repo", str(repo), "--run", run_id)["run"]
+            self.assertIsNone(state["lanes"][0]["active_issue"])
 
-    def test_lifted_pause_is_not_an_active_restriction(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="shipctl-") as directory:
-            repo, _ = self.fixture(Path(directory))
-            self.push_coordinator(
-                repo,
-                MODULE.CANONICAL_COORDINATOR_REF,
-                self.coordinator_message(
-                    repo,
-                    extra="PAUSE: id=pause-1;state=lifted;confirmation_required=yes\n",
-                ),
-            )
-            code, result, _ = self.preflight(repo, self.PROOF)
-        self.assertEqual((code, result["route"]), (0, "resume"))
-        self.assertTrue(result["mutation_allowed"])
-        self.assertFalse(any(reason.startswith("active-durable-restriction:") for reason in result["reasons"]))
-
-    def test_active_contract_mismatch_routes_recovery(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="shipctl-") as directory:
-            repo, _ = self.fixture(Path(directory))
-            self.push_coordinator(
-                repo,
-                MODULE.CANONICAL_COORDINATOR_REF,
-                self.coordinator_message(repo, contract="1" * 40),
-            )
-            _, result, _ = self.preflight(repo, self.PROOF)
-        self.assertEqual(result["route"], "recovery")
-        self.assertIn("active-contract-mismatch-or-unknown", result["reasons"])
-
-    def test_sync_contract_upgrades_same_owner_recovery_and_is_idempotent(self) -> None:
-        thread_id = "019fdcce-1fee-71d0-8d5d-6566cdf2d94b"
-        proof = MODULE.hashlib.sha256(thread_id.encode()).hexdigest()
-        with tempfile.TemporaryDirectory(prefix="shipctl-sync-") as directory:
-            repo, _ = self.fixture(Path(directory))
-            old_head = self.git(repo, "rev-parse", "HEAD")
-            old_contract = self.git(repo, "rev-parse", f"HEAD:{MODULE.SKILL_PATH}")
-            parent = self.push_coordinator(
-                repo,
-                MODULE.CANONICAL_COORDINATOR_REF,
-                self.coordinator_message(
-                    repo,
-                    state="recovering",
-                    proof=proof,
-                    contract=old_contract,
-                    extra=(
-                        f"OWNER_ID: {uuid.uuid4()}\n"
-                        "OWNER_PROOF_KIND: runtime-task-id\n"
-                        f"RUN_ID: {uuid.uuid4()}\n"
-                        f"RUN_KEY: {'a' * 32}\n"
-                        f"PROJECT_ID: {uuid.uuid4()}\n"
-                        f"MILESTONE_ID: {uuid.uuid4()}\n"
-                        "EPOCH: 2\n"
-                        f"CONTRACT_SOURCE_SHA: {old_head}\n"
-                    ),
-                ),
-            )
-            (repo / MODULE.SKILL_PATH / "SKILL.md").write_text(
-                "---\nname: test\n---\n# synced\n", encoding="utf-8"
-            )
-            self.git(repo, "add", MODULE.SKILL_PATH)
-            self.git(repo, "commit", "-m", "new recovery contract")
-            new_head = self.git(repo, "rev-parse", "HEAD")
-            new_contract = self.git(repo, "rev-parse", f"HEAD:{MODULE.SKILL_PATH}")
-            self.git(repo, "push", "origin", "main")
-            args = mock.Mock(repo=str(repo), remote="origin", default="main")
-            with mock.patch.dict(MODULE.os.environ, {"CODEX_THREAD_ID": thread_id}):
-                _, before, _ = self.preflight(repo)
-                with io.StringIO() as output, redirect_stdout(output):
-                    code = MODULE.command_sync_contract(args)
-                    result = json.loads(output.getvalue())
-                with io.StringIO() as output, redirect_stdout(output):
-                    repeat_code = MODULE.command_sync_contract(args)
-                    repeat = json.loads(output.getvalue())
-                _, after, _ = self.preflight(repo)
-            observed = self.git(repo, "ls-remote", "origin", MODULE.CANONICAL_COORDINATOR_REF).split()[0]
-            message = self.git(repo, "show", "-s", "--format=%B", observed)
-            first_parent = self.git(repo, "rev-parse", f"{observed}^^")
-        self.assertEqual(before["route"], "recover-owner-upgrade")
-        self.assertEqual((code, result["status"]), (0, "synced"))
-        self.assertEqual((repeat_code, repeat["status"]), (0, "already-synced"))
-        self.assertEqual(after["route"], "recover-owner")
-        self.assertEqual(first_parent, parent)
-        metadata = MODULE.fields(message)
-        self.assertEqual(metadata["CONTRACT_SOURCE_SHA"], new_head)
-        self.assertEqual(metadata["CONTRACT_DIGEST"], new_contract)
-        self.assertEqual(metadata["ACTION_KIND"], "sync-contract")
-        self.assertEqual(metadata["ACTION_STATUS"], "reconciled")
-
-    def test_dirty_skill_or_agents_blocks_dispatch(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="shipctl-") as directory:
-            repo, _ = self.fixture(Path(directory))
-            (repo / "AGENTS.md").write_text("dirty\n", encoding="utf-8")
-            code, result, _ = self.preflight(repo)
-        self.assertEqual((code, result["route"]), (3, "blocked"))
-        self.assertIn("agents-instructions-dirty", result["reasons"])
-        self.assertFalse(result["mutation_allowed"])
-
-    def test_dirty_primary_control_surface_blocks(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="shipctl-") as directory:
-            repo, _ = self.fixture(Path(directory))
-            (repo / "package.json").write_text('{"dirty":true}\n', encoding="utf-8")
-            code, result, _ = self.preflight(repo)
-        self.assertEqual((code, result["route"]), (3, "blocked"))
-        self.assertIn("repository-dirty", result["reasons"])
-        self.assertEqual(result["primary_checkout"]["observation"], "dirty")
-
-    def test_any_dirty_primary_blocks_fresh_normal_start(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="shipctl-") as directory:
-            repo, _ = self.fixture(Path(directory))
-            (repo / "personal-notes.txt").write_text("unrelated\n", encoding="utf-8")
-            code, result, _ = self.preflight(repo)
-        self.assertEqual((code, result["route"]), (3, "blocked"))
-        self.assertIn("repository-dirty", result["reasons"])
-        self.assertEqual(result["primary_checkout"]["observation"], "dirty")
-        self.assertEqual(result["primary_checkout"]["action"], "stop")
-        self.assertEqual(result["primary_checkout"]["paths"], ["personal-notes.txt"])
-
-    def test_dirty_linked_worktree_blocks_fresh_normal_start(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="shipctl-dirty-worktree-") as directory:
-            root = Path(directory)
-            repo, _ = self.fixture(root)
-            branch = "codex/and-56-dirty/r" + "a" * 32 + "-e1-c1"
-            self.git(repo, "branch", branch)
-            worktree = root / "worker"
-            self.git(repo, "worktree", "add", str(worktree), branch)
-            (worktree / "untracked.txt").write_text("dirty\n", encoding="utf-8")
-            code, result, _ = self.preflight(repo)
-        self.assertEqual((code, result["route"]), (3, "blocked"))
-        self.assertIn("repository-dirty", result["reasons"])
-        self.assertEqual(result["repository_snapshot"]["dirty_worktree_count"], 1)
-        self.assertEqual(
-            result["repository_snapshot"]["dirty_worktrees"][0]["paths"],
-            ["untracked.txt"],
-        )
-
-    def test_repo_guard_accepts_only_exact_registered_dirty_action(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="shipctl-repo-guard-") as directory:
-            repo, _ = self.fixture(Path(directory))
-            branch = "codex/and-56-guard/r" + "a" * 32 + "-e1-c1"
+    def test_coordinator_only_end_to_end_has_no_extra_worktree(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            repo = self.repo_fixture(root)
+            run = self.init_run(repo, 1)
+            run_id = run["run_id"]
+            self.plan(repo, run_id, root, [self.issue("a", "AND-1")])
+            branch = "codex/and-1-single"
             self.git(repo, "switch", "-c", branch)
-            path = repo / "packages/domain/src/index.ts"
-            path.parent.mkdir(parents=True)
-            path.write_text("export const value = 1;\n", encoding="utf-8")
-            head = self.git(repo, "rev-parse", "HEAD")
-            args = MODULE.argparse.Namespace(repo=str(repo), input="-")
-            expected_worktrees = [
-                {"worktree": str(repo), "branch": branch, "head": head}
-            ]
-            with mock.patch.object(
-                sys,
-                "stdin",
-                io.StringIO(
-                    json.dumps(
-                        {
-                            "authorizations": [],
-                            "expected_worktrees": expected_worktrees,
-                            "refs": [],
-                        }
+            self.claim(repo, run_id, "a", "coordinator", branch, repo, "src/a")
+            head = self.commit_change(repo, "src/a/result.txt", "single\n")
+            self.invoke(
+                "feature-ready", "--repo", str(repo), "--run", run_id,
+                "--issue", "a", "--head", head, "--check", "targeted=passed",
+            )
+            self.git(repo, "switch", "main")
+            self.git(repo, "merge", "--ff-only", branch)
+            main_sha = self.git(repo, "rev-parse", "main")
+            self.invoke("integrate", "--repo", str(repo), "--run", run_id, "--issue", "a", "--main-sha", main_sha)
+            self.invoke("task-done", "--repo", str(repo), "--run", run_id, "--issue", "a")
+            batch = self.invoke(
+                "batch-create", "--repo", str(repo), "--run", run_id,
+                "--candidate", main_sha, "--gate", "passed",
+            )["batch"]
+            self.invoke(
+                "batch-uat", "--repo", str(repo), "--run", run_id,
+                "--batch", batch["id"], "--deployment", "uat-1",
+                "--url", "https://uat.example.invalid", "--result", "passed",
+            )
+            complete = self.invoke("complete", "--repo", str(repo), "--run", run_id, "--main-sha", main_sha)
+            self.assertEqual(complete["status"], "completed")
+            worktrees = self.git(repo, "worktree", "list", "--porcelain")
+            self.assertEqual(worktrees.count("worktree "), 1)
+
+    def test_failed_uat_uses_forward_repair_and_blocks_ordinary_dispatch(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            repo = self.repo_fixture(root)
+            run = self.init_run(repo, 3)
+            run_id = run["run_id"]
+            self.plan(repo, run_id, root, [self.issue("a", "AND-1"), self.issue("b", "AND-2")])
+            worktree, branch = self.add_worktree(repo, root, 1, "AND-1")
+            self.claim(repo, run_id, "a", "worker-1", branch, worktree, "src/a")
+            main_sha = self.finish_feature(repo, run_id, "a", branch, worktree, "src/a/result.txt")
+            batch = self.invoke(
+                "batch-create", "--repo", str(repo), "--run", run_id,
+                "--candidate", main_sha, "--gate", "passed",
+            )["batch"]
+            self.invoke(
+                "batch-uat", "--repo", str(repo), "--run", run_id,
+                "--batch", batch["id"], "--deployment", "uat-broken",
+                "--url", "https://uat.example.invalid", "--result", "failed",
+            )
+            defect = self.invoke(
+                "defect", "--repo", str(repo), "--run", run_id,
+                "--route", "coordinator", "--summary", "smoke failed",
+            )["defect"]
+            worktree2, branch2 = self.add_worktree(repo, root, 2, "AND-2")
+            blocked = self.claim(repo, run_id, "b", "worker-2", branch2, worktree2, "src/b", expected=2)
+            self.assertEqual(blocked["code"], "REPAIR_FIRST")
+            (repo / "src" / "uat-fix.txt").write_text("forward fix\n", encoding="utf-8")
+            self.git(repo, "add", "src/uat-fix.txt")
+            self.git(repo, "commit", "-m", "fix UAT forward")
+            fixed_sha = self.git(repo, "rev-parse", "main")
+            self.invoke(
+                "defect-resolve", "--repo", str(repo), "--run", run_id,
+                "--defect", defect["id"], "--fixed-sha", fixed_sha,
+            )
+            repaired_batch = self.invoke(
+                "batch-create", "--repo", str(repo), "--run", run_id,
+                "--candidate", fixed_sha, "--gate", "passed",
+            )["batch"]
+            self.assertEqual(repaired_batch["issue_ids"], [])
+            self.assertEqual(repaired_batch["defect_ids"], [defect["id"]])
+            self.invoke(
+                "batch-uat", "--repo", str(repo), "--run", run_id,
+                "--batch", repaired_batch["id"], "--deployment", "uat-fixed",
+                "--url", "https://uat.example.invalid", "--result", "passed",
+            )
+            self.claim(repo, run_id, "b", "worker-2", branch2, worktree2, "src/b")
+            state = self.invoke("status", "--repo", str(repo), "--run", run_id)["run"]
+            self.assertEqual(state["uat"]["current_sha"], fixed_sha)
+            self.assertEqual(state["uat"]["last_good_sha"], fixed_sha)
+
+    def test_all_defect_routes_and_production_refusal_are_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            repo = self.repo_fixture(root)
+            run = self.init_run(repo)
+            run_id = run["run_id"]
+            for route in ("reopen", "new-bug"):
+                result = self.invoke(
+                    "defect", "--repo", str(repo), "--run", run_id,
+                    "--route", route, "--linear-issue-id", f"linear-{route}",
+                    "--summary", route,
+                )
+                self.assertEqual(result["defect"]["route"], route)
+            error = self.invoke("production", expected=2)
+            self.assertEqual(error["code"], "PRODUCTION_FORBIDDEN")
+
+    def test_atomic_write_keeps_old_journal_when_replace_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "state.json"
+            path.write_text('{"old": true}\n', encoding="utf-8")
+            with mock.patch.object(MODULE.os, "replace", side_effect=OSError("crash")):
+                with self.assertRaises(OSError):
+                    MODULE.atomic_write(path, {"new": True})
+            self.assertEqual(json.loads(path.read_text(encoding="utf-8")), {"old": True})
+            self.assertEqual(list(path.parent.glob(".state.json.*")), [])
+
+    def test_failed_journal_commit_never_emits_success_or_changes_state(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            repo = self.repo_fixture(root)
+            run = self.init_run(repo)
+            run_id = run["run_id"]
+            snapshot = root / "snapshot.json"
+            self.snapshot(snapshot, [self.issue("a", "AND-1")])
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            with mock.patch.object(MODULE, "atomic_write", side_effect=OSError("disk full")):
+                with redirect_stdout(stdout), redirect_stderr(stderr):
+                    result = MODULE.main(
+                        ["plan", "--repo", str(repo), "--run", run_id, "--input", str(snapshot)]
                     )
-                ),
-            ), io.StringIO() as output, redirect_stdout(output):
-                blocked_code = MODULE.command_repo_guard(args)
-                blocked = json.loads(output.getvalue())
-            payload = {
-                "authorizations": [
-                    {
-                        "worktree": str(repo),
-                        "branch": branch,
-                        "head": head,
-                        "ownership_paths": ["packages/domain"],
-                        "action_id": str(uuid.uuid4()),
-                    }
-                ],
-                "expected_worktrees": expected_worktrees,
-                "refs": [{"ref": f"refs/heads/{branch}", "sha": head}],
-            }
-            with mock.patch.object(sys, "stdin", io.StringIO(json.dumps(payload))), io.StringIO() as output, redirect_stdout(output):
-                clear_code = MODULE.command_repo_guard(args)
-                clear = json.loads(output.getvalue())
-            self.git(repo, "add", "packages/domain/src/index.ts")
-            self.git(repo, "commit", "-m", "registered action moved head")
-            with mock.patch.object(sys, "stdin", io.StringIO(json.dumps(payload))), io.StringIO() as output, redirect_stdout(output):
-                moved_code = MODULE.command_repo_guard(args)
-                moved = json.loads(output.getvalue())
-            payload["expected_worktrees"][0]["head"] = self.git(repo, "rev-parse", "HEAD")
-            payload["authorizations"][0]["head"] = payload["expected_worktrees"][0]["head"]
-            payload["refs"][0]["sha"] = payload["expected_worktrees"][0]["head"]
-            path.unlink()
-            outside = repo / "outside.txt"
-            outside.write_text("unexpected\n", encoding="utf-8")
-            with mock.patch.object(sys, "stdin", io.StringIO(json.dumps(payload))), io.StringIO() as output, redirect_stdout(output):
-                outside_code = MODULE.command_repo_guard(args)
-                outside_result = json.loads(output.getvalue())
-
-        self.assertEqual((blocked_code, blocked["status"]), (3, "critical-stop"))
-        self.assertEqual((clear_code, clear["status"]), (0, "clear"))
-        self.assertEqual((moved_code, moved["status"]), (3, "critical-stop"))
-        self.assertEqual(moved["violations"][0]["kind"], "worktree-head-mismatch")
-        self.assertEqual((outside_code, outside_result["status"]), (3, "critical-stop"))
-        self.assertEqual(
-            outside_result["violations"][0]["kind"], "paths-outside-ownership"
-        )
-
-    def test_clean_ahead_primary_blocks(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="shipctl-") as directory:
-            repo, _ = self.fixture(Path(directory))
-            (repo / "local.txt").write_text("ahead\n", encoding="utf-8")
-            self.git(repo, "add", "local.txt")
-            self.git(repo, "commit", "-m", "local ahead")
-            code, result, _ = self.preflight(repo)
-        self.assertEqual((code, result["route"]), (3, "blocked"))
-        self.assertIn("primary-default-ahead", result["reasons"])
-        self.assertEqual(result["primary_checkout"]["relation"], "ahead")
-
-    def test_clean_diverged_primary_blocks(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="shipctl-") as directory:
-            root = Path(directory)
-            repo, remote = self.fixture(root)
-            other = root / "other"
-            self.git(root, "clone", str(remote), str(other))
-            self.git(other, "config", "user.name", "other")
-            self.git(other, "config", "user.email", "other@example.invalid")
-            (repo / "local.txt").write_text("local\n", encoding="utf-8")
-            self.git(repo, "add", "local.txt")
-            self.git(repo, "commit", "-m", "local change")
-            (other / "remote.txt").write_text("remote\n", encoding="utf-8")
-            self.git(other, "add", "remote.txt")
-            self.git(other, "commit", "-m", "remote change")
-            self.git(other, "push", "origin", "main")
-            code, result, _ = self.preflight(repo)
-        self.assertEqual((code, result["route"]), (3, "blocked"))
-        self.assertIn("primary-default-diverged", result["reasons"])
-        self.assertEqual(result["primary_checkout"]["relation"], "diverged")
-
-    def test_stale_committed_contract_blocks(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="shipctl-") as directory:
-            repo, _ = self.fixture(Path(directory))
-            (repo / MODULE.SKILL_PATH / "SKILL.md").write_text("changed\n", encoding="utf-8")
-            self.git(repo, "add", MODULE.SKILL_PATH)
-            self.git(repo, "commit", "-m", "local contract change")
-            code, result, _ = self.preflight(repo)
-        self.assertEqual(code, 3)
-        self.assertIn("invoked-contract-stale-vs-remote-default", result["reasons"])
-
-    def test_unknown_legacy_ref_blocks(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="shipctl-") as directory:
-            repo, _ = self.fixture(Path(directory))
-            self.push_coordinator(
-                repo,
-                "refs/heads/codex/release/0.1/coordinator",
-                "unstructured legacy checkpoint\n",
-            )
-            code, result, _ = self.preflight(repo)
-        self.assertEqual(code, 3)
-        self.assertTrue(any(reason.startswith("legacy-coordinator-not-terminal:") for reason in result["reasons"]))
-
-    def test_exact_ancestral_migration_evidence_retires_legacy(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="shipctl-") as directory:
-            repo, _ = self.fixture(Path(directory))
-            legacy_ref = "refs/heads/codex/release/0.1/coordinator"
-            legacy = self.push_coordinator(repo, legacy_ref, "legacy checkpoint\n")
-            target = f"{legacy_ref}@{legacy}"
-            migration = self.metadata_commit(
-                repo,
-                self.coordinator_message(
-                    repo,
-                    extra=(
-                        "ACTION_KIND: migrate-legacy-ledger\n"
-                        f"ACTION_TARGET: {target}\n"
-                        "ACTION_STATUS: reconciled\n"
-                        "LEGACY_STOP_EVIDENCE: task-terminal-and-ledger-imported\n"
-                    ),
-                ),
-            )
-            canonical = self.metadata_commit(
-                repo,
-                self.coordinator_message(
-                    repo,
-                    extra=(
-                        "LINEAR_DONE: AND-47@2026-08-07T23:29:03Z\n"
-                        "LINEAR_DONE: AND-82@2026-08-07T23:29:01Z\n"
-                    ),
-                ),
-                migration,
-            )
-            self.git(repo, "push", "origin", f"{canonical}:{MODULE.CANONICAL_COORDINATOR_REF}")
-            code, result, _ = self.preflight(repo, self.PROOF)
-        self.assertEqual((code, result["route"]), (0, "resume"))
-        legacy_result = next(item for item in result["coordinator_refs"] if item["kind"] == "legacy")
-        self.assertEqual(legacy_result["classification"], "migrated")
-        self.assertEqual(legacy_result["migration_evidence"], migration)
-
-    def test_wrong_sha_migration_evidence_does_not_retire_legacy(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="shipctl-") as directory:
-            repo, _ = self.fixture(Path(directory))
-            legacy_ref = "refs/heads/codex/release/0.1/coordinator"
-            self.push_coordinator(repo, legacy_ref, "legacy checkpoint\n")
-            migration = self.metadata_commit(
-                repo,
-                self.coordinator_message(
-                    repo,
-                    extra=(
-                        "ACTION_KIND: migrate-legacy-ledger\n"
-                        f"ACTION_TARGET: {legacy_ref}@{'f' * 40}\n"
-                        "ACTION_STATUS: reconciled\n"
-                        "LEGACY_STOP_EVIDENCE: wrong-target\n"
-                    ),
-                ),
-            )
-            self.git(repo, "push", "origin", f"{migration}:{MODULE.CANONICAL_COORDINATOR_REF}")
-            code, result, _ = self.preflight(repo, self.PROOF)
-        self.assertEqual(code, 3)
-        self.assertEqual(result["route"], "blocked")
-
-    def test_non_ancestor_migration_evidence_does_not_retire_legacy(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="shipctl-") as directory:
-            repo, _ = self.fixture(Path(directory))
-            legacy_ref = "refs/heads/codex/release/0.1/coordinator"
-            legacy = self.push_coordinator(repo, legacy_ref, "legacy checkpoint\n")
-            evidence = self.metadata_commit(
-                repo,
-                self.coordinator_message(
-                    repo,
-                    extra=(
-                        "ACTION_KIND: migrate-legacy-ledger\n"
-                        f"ACTION_TARGET: {legacy_ref}@{legacy}\n"
-                        "ACTION_STATUS: reconciled\n"
-                        "LEGACY_STOP_EVIDENCE: detached-evidence\n"
-                    ),
-                ),
-            )
-            self.git(repo, "update-ref", "refs/heads/detached-evidence", evidence)
-            canonical = self.metadata_commit(repo, self.coordinator_message(repo))
-            self.git(repo, "push", "origin", f"{canonical}:{MODULE.CANONICAL_COORDINATOR_REF}")
-            code, result, _ = self.preflight(repo, self.PROOF)
-        self.assertEqual(code, 3)
-        self.assertEqual(result["route"], "blocked")
-
-    def test_materializes_remote_advance_without_fetch_head(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="shipctl-") as directory:
-            root = Path(directory)
-            repo, remote = self.fixture(root)
-            other = root / "other"
-            self.git(root, "clone", str(remote), str(other))
-            self.git(other, "config", "user.name", "other")
-            self.git(other, "config", "user.email", "other@example.invalid")
-            (other / "package.json").write_text('{"advanced":true}\n', encoding="utf-8")
-            self.git(other, "add", "package.json")
-            self.git(other, "commit", "-m", "remote advance")
-            advanced = self.git(other, "rev-parse", "HEAD")
-            self.git(other, "push", "origin", "main")
-            self.assertFalse(MODULE.foreign_main.object_exists(repo, advanced))
-            fetch_head = repo / ".git" / "FETCH_HEAD"
-            if fetch_head.exists():
-                fetch_head.unlink()
-            code, result, _ = self.preflight(repo)
-            self.assertFalse(MODULE.foreign_main.object_exists(repo, advanced))
-            self.assertFalse(fetch_head.exists())
-            self.assertTrue(result["contract_matches_head"])
-        self.assertEqual(code, 0)
-        self.assertEqual(result["remote_sha"], advanced)
-        self.assertIsNotNone(result["contract_oid"])
-        self.assertEqual(result["primary_checkout"]["relation"], "behind")
-        self.assertEqual(result["primary_checkout"]["action"], "continue")
-
-
-class TransitionTest(GitMixin, unittest.TestCase):
-    def invoke(self, repo: Path, parent: str, payload: object) -> tuple[int, dict[str, object]]:
-        args = MODULE.argparse.Namespace(repo=str(repo), parent=parent, input="-")
-        with mock.patch.object(sys, "stdin", io.StringIO(json.dumps(payload))), io.StringIO() as output, redirect_stdout(output):
-            code = MODULE.command_transition(args)
-            return code, json.loads(output.getvalue())
-
-    def parent_message(self, status: str | None = "reconciled", seq: int = 7, action_id: str | None = None) -> str:
-        lines = [
-            "coordinator",
-            "",
-            "SCHEMA: 1",
-            "KIND: COORDINATOR_CLAIM",
-            f"OWNER_ID: {uuid.uuid4()}",
-            "OWNER_PROOF_KIND: runtime-task-id",
-            "OWNER_PROOF_DIGEST: " + "e" * 64,
-            f"RUN_ID: {uuid.uuid4()}",
-            "RUN_KEY: " + "a" * 32,
-            f"PROJECT_ID: {uuid.uuid4()}",
-            f"MILESTONE_ID: {uuid.uuid4()}",
-            "EPOCH: 1",
-            "STATE: running",
-            "OWNER_STATE: active",
-            "CONTRACT_SOURCE_SHA: " + "1" * 40,
-            "CONTRACT_DIGEST: " + "2" * 40,
-            f"ACTION_SEQ: {seq}",
-        ]
-        if status in {"intent", "planned"}:
-            lines.extend(
-                [
-                    f"ACTION_ID: {action_id or uuid.uuid4()}",
-                    "ACTION_KIND: update-linear-state",
-                    "ACTION_TARGET: linear:AND-56",
-                    "EXPECTED_BEFORE: state=Backlog",
-                    "EXTERNAL_REQUEST_KEY: issue:AND-56:in-progress",
-                    "PROVIDER_SELECTOR: linear:issue:AND-56",
-                    "PAYLOAD_DIGEST: " + "d" * 64,
-                    "EFFECT_IDENTITY: linear:AND-56@In Progress",
-                ]
-            )
-        if status is not None:
-            lines.append(f"ACTION_STATUS: {status}")
-        return "\n".join(lines) + "\n"
-
-    def test_intent_is_deterministic_read_only_and_increments_seq(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="shipctl-transition-") as directory:
-            repo, _ = self.fixture(Path(directory))
-            parent = self.metadata_commit(repo, self.parent_message())
-            payload = {
-                "phase": "intent",
-                "kind": "update-linear-state",
-                "target": "linear:AND-56",
-                "expected_before": "state=Backlog",
-                "request_key": "issue:AND-56:in-progress",
-                "selector": "linear:issue:AND-56",
-                "payload_digest": "d" * 64,
-                "effect_identity": "linear:AND-56@In Progress",
-            }
-            code_a, result_a = self.invoke(repo, parent, payload)
-            code_b, result_b = self.invoke(repo, parent, payload)
-            self.assertEqual(self.git(repo, "rev-parse", "HEAD"), self.git(repo, "rev-parse", "main"))
-        self.assertEqual((code_a, code_b), (0, 0))
-        self.assertEqual(result_a, result_b)
-        rendered = MODULE.fields(result_a["message"])
-        self.assertEqual(rendered["ACTION_SEQ"], "8")
-        self.assertEqual(rendered["ACTION_STATUS"], "intent")
-        uuid.UUID(rendered["ACTION_ID"])
-        self.assertEqual(result_a["parent"], parent)
-        self.assertEqual(result_a["message_digest"], MODULE.hashlib.sha256(result_a["message"].encode()).hexdigest())
-
-    def test_transition_preserves_lifecycle_pause_and_execution_authority(self) -> None:
-        pause_id = "pause-28cb9f4d-e177-4a23-aa8f-2c8323fbb238"
-        with tempfile.TemporaryDirectory(prefix="shipctl-transition-") as directory:
-            repo, _ = self.fixture(Path(directory))
-            message = self.parent_message() + (
-                f"LIFECYCLE: schema=1;phase=settling;pause={pause_id};transition={uuid.uuid4()}\n"
-                "EXECUTION_INDEX: running_count=0;entries=none;digest=" + "1" * 64 + "\n"
-                "WORKERS: active_target=0;active_issue_lanes=none;refill_blocker=user-pause\n"
-                "PENDING_ACTIONS: none\n"
-                f"PAUSE: id={pause_id};state=active;scope=dispatch,new-work\n"
-                f"HOLD_PAUSE_INDEX: active={pause_id}:PAUSE@dispatch,new-work;entries=1\n"
-                "CLAIM_MAP: AND-47:2@origin:guard-47@origin:feature-47@token\n"
-                "CLAIM_MAP: AND-61:3@origin:guard-61@origin:feature-61@token\n"
-                "COMMENT_MAP: projection-only-1\n"
-                "COMMENT_MAP: projection-only-2\n"
-            )
-            parent = self.metadata_commit(repo, message)
-            code, result = self.invoke(
-                repo,
-                parent,
-                {
-                    "phase": "intent",
-                    "kind": "update-linear-state",
-                    "target": "linear:AND-56",
-                    "expected_before": "state=Backlog",
-                    "request_key": "issue:AND-56:in-progress",
-                    "selector": "linear:issue:AND-56",
-                    "payload_digest": "d" * 64,
-                    "effect_identity": "linear:AND-56@In Progress",
-                },
-            )
-        self.assertEqual(code, 0)
-        rendered = MODULE.fields(result["message"])
-        for key in (
-            "LIFECYCLE",
-            "EXECUTION_INDEX",
-            "WORKERS",
-            "PENDING_ACTIONS",
-            "PAUSE",
-            "HOLD_PAUSE_INDEX",
-        ):
-            self.assertEqual(rendered[key], MODULE.fields(message)[key])
-        self.assertEqual(result["message"].count("CLAIM_MAP:"), 2)
-        self.assertNotIn("COMMENT_MAP:", result["message"])
-
-    def test_intent_rejects_pending_parent(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="shipctl-transition-") as directory:
-            repo, _ = self.fixture(Path(directory))
-            parent = self.metadata_commit(repo, self.parent_message("intent"))
-            code, result = self.invoke(repo, parent, {"phase": "intent"})
-        self.assertEqual(code, 2)
-        self.assertIn("invalid:parent-action-not-reconciled", result["errors"])
-
-    def test_missing_or_unknown_parent_action_status_fails_closed(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="shipctl-transition-") as directory:
-            repo, _ = self.fixture(Path(directory))
-            missing = self.metadata_commit(repo, self.parent_message(None))
-            code_missing, result_missing = self.invoke(repo, missing, {"phase": "intent"})
-            unknown = self.metadata_commit(repo, self.parent_message("mystery"))
-            code_unknown, result_unknown = self.invoke(repo, unknown, {"phase": "intent"})
-        self.assertEqual((code_missing, code_unknown), (2, 2))
-        self.assertIn("missing:parent-action-status", result_missing["errors"])
-        self.assertIn("invalid:parent-action-status", result_unknown["errors"])
-
-    def test_malformed_stable_parent_identity_fails_closed(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="shipctl-transition-") as directory:
-            repo, _ = self.fixture(Path(directory))
-            malformed = self.parent_message().replace("EPOCH: 1", "EPOCH: zero")
-            parent = self.metadata_commit(repo, malformed)
-            code, result = self.invoke(repo, parent, {"phase": "intent"})
-        self.assertEqual(code, 2)
-        self.assertIn("invalid:parent-epoch", result["errors"])
-
-    def test_phase_specific_unexpected_fields_are_rejected(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="shipctl-transition-") as directory:
-            repo, _ = self.fixture(Path(directory))
-            parent = self.metadata_commit(repo, self.parent_message())
-            code, result = self.invoke(
-                repo,
-                parent,
-                {"phase": "intent", "result": "must-not-be-accepted"},
-            )
-        self.assertEqual(code, 2)
-        self.assertEqual(result["errors"], ["unexpected:result"])
-
-    def test_reconcile_preserves_action_identity_and_accepts_legacy_planned(self) -> None:
-        action_id = str(uuid.uuid4())
-        with tempfile.TemporaryDirectory(prefix="shipctl-transition-") as directory:
-            repo, _ = self.fixture(Path(directory))
-            parent = self.metadata_commit(repo, self.parent_message("planned", 9, action_id))
-            code, result = self.invoke(
-                repo, parent, {"phase": "reconciled", "result": "updatedAt=2026-08-07T14:10:00Z"}
-            )
-        self.assertEqual(code, 0)
-        rendered = MODULE.fields(result["message"])
-        self.assertEqual(rendered["ACTION_SEQ"], "9")
-        self.assertEqual(rendered["ACTION_ID"], action_id)
-        self.assertEqual(rendered["ACTION_STATUS"], "reconciled")
-        self.assertEqual(rendered["ACTION_RESULT"], "updatedAt=2026-08-07T14:10:00Z")
-
-    def test_transition_rejects_non_object_and_non_coordinator(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="shipctl-transition-") as directory:
-            repo, _ = self.fixture(Path(directory))
-            parent = self.metadata_commit(repo, "ordinary commit\n")
-            code, result = self.invoke(repo, parent, [])
-        self.assertEqual(code, 2)
-        self.assertIn("invalid:transition:not-object", result["errors"])
-
-
-class ParserSmokeTest(unittest.TestCase):
-    def test_new_commands_are_cli_reachable_and_repeated_paths_are_preserved(self) -> None:
-        cases = {
-            "pool-status": ["pool-status"],
-            "startup-plan": ["startup-plan", "--input", "snapshot.json"],
-            "projection-plan": ["projection-plan", "--input", "projection.json"],
-            "projection-batch-cas": [
-                "projection-batch-cas",
-                "--phase",
-                "intent",
-                "--expected-coordinator-sha",
-                "a" * 40,
-            ],
-            "refill-check": ["refill-check", "--input", "refill.json"],
-        }
-        for command, argv in cases.items():
-            with self.subTest(command=command):
-                parsed = MODULE.parser().parse_args(argv)
-                self.assertEqual(parsed.command, command)
-                self.assertTrue(callable(parsed.handler))
-        provision = MODULE.parser().parse_args(
-            [
-                "provision-worktree",
-                "--worktree",
-                "/tmp/worker",
-                "--path",
-                "apps/one",
-                "--path",
-                "apps/two",
-            ]
-        )
-        self.assertEqual(provision.path, ["apps/one", "apps/two"])
+            self.assertEqual(result, 2)
+            self.assertEqual(stdout.getvalue(), "")
+            self.assertEqual(json.loads(stderr.getvalue())["code"], "IO_FAILED")
+            state = self.invoke("status", "--repo", str(repo), "--run", run_id)["run"]
+            self.assertEqual(state["tasks"], {})
 
 
 if __name__ == "__main__":

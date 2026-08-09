@@ -1,7 +1,4 @@
 interface:
   display_name: "Ship Linear Release"
-  short_description: "Реализует и доставляет текущий Linear milestone"
-  default_prompt: "Используй $ship-linear-release: начни с bounded repo-wide preflight; clean durable-quiescent owner reclaim-и автоматически; реализуй все незавершённые задачи exact current Linear milestone; без count работай одним coordinator-inline worker в primary feature branch, workers=N соблюдай точно в отдельных worktrees, workers=auto адаптируй к доказанной capacity; merge выполняет только coordinator; копи meaningful batches без fixed timer/size, обязательно проверь финальный main и release только когда его требует acceptance."
-
-policy:
-  allow_implicit_invocation: false
+  short_description: "Linear milestone в main и UAT batches"
+  default_prompt: "Используй $ship-linear-release, чтобы доставить текущий Linear milestone через coordinator-only либо exact N изолированных workers, meaningful UAT batches и forward-only repair без production."

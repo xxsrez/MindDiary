@@ -45,6 +45,10 @@ evidence, предлагаемый дизайн и ещё не проверен�
 14. [Linear adapter для `ship-work-release`](specs/ship-work-release-linear.md) —
    отдельное отображение Linear projects, milestones, issues, relations,
    statuses и updates в универсальную модель work collection/scope/item.
+15. [Упрощённая доставка Linear milestone](specs/ship-linear-release-v1.md) —
+   исполнимый compromise profile `ship-linear-release`: один coordinator,
+   coordinator-only либо exact N worker-субагентов, простой JSON journal,
+   meaningful UAT batches и forward-only repair.
 
 ## Руководства
 
