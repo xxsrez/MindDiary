@@ -147,18 +147,16 @@ function normalizeDownloadUrlBase(input: string): string {
   try {
     parsed = new URL(input);
   } catch {
-    throw new TypeError("export download URL base must be an absolute HTTPS or loopback HTTP URL");
+    throw new TypeError("export download URL base must be an absolute HTTPS URL");
   }
-  const loopbackHttp = parsed.protocol === "http:"
-    && (parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1" || parsed.hostname === "[::1]");
   if (
-    (parsed.protocol !== "https:" && !loopbackHttp) ||
+    parsed.protocol !== "https:" ||
     parsed.username !== "" ||
     parsed.password !== "" ||
     parsed.search !== "" ||
     parsed.hash !== ""
   ) {
-    throw new TypeError("export download URL base must be a safe absolute HTTPS or loopback HTTP URL");
+    throw new TypeError("export download URL base must be a safe absolute HTTPS URL");
   }
   return parsed.toString().replace(/\/$/u, "");
 }
