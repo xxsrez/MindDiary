@@ -24,7 +24,9 @@ contract, но не runtime checklist.
      '<полный invocation пользователя>'
    ```
 
-5. Создай либо найди run journal:
+5. Для `workers=N`, `N > 1`, до Git/Linear/UAT work проверь, что runtime имеет
+   N свободных subagent slots. Не заменяй malformed или недоступный `N` на 1.
+6. Создай либо найди run journal:
 
    ```bash
    python3 .agents/skills/ship-linear-release/scripts/shipctl.py init \
@@ -40,7 +42,9 @@ contract, но не runtime checklist.
 - `workers=1` или workers отсутствует: не создавай subagent/worktree.
   Coordinator сам выполняет по одной issue в primary checkout.
 - `workers=N`, `N > 1`: запусти ровно N worker-субагентов и сохрани coordinator
-  отдельным. Не считай coordinator одним из N.
+  отдельным. Не считай coordinator одним из N. Создавай workers с
+  `fork_turns=none`, не разрешай им порождать вложенных subagents и переиспользуй
+  каждого worker-а в его lane для следующих issue.
 - Не уменьшай requested N молча. Если runtime capacity недостаточна, остановись
   до dispatch и сообщи доступное число.
 
@@ -121,7 +125,9 @@ python3 .agents/skills/ship-linear-release/scripts/shipctl.py batch-create \
 После deployment и smoke запиши факт через `batch-uat`. Failed smoke не делает
 rollback. Сначала прочитай
 [references/defect-triage.md](references/defect-triage.md), зарегистрируй
-дефект и выпусти forward fix новым batch.
+дефект и выпусти forward fix новым batch. С момента failed smoke helper уже
+блокирует ordinary claims — окно до triage не разрешает продолжать обычную
+работу.
 
 Никогда не выполняй production release. Команда `production` существует
 только как исполнимая проверка отказа.

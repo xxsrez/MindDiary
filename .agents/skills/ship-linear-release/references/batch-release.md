@@ -33,6 +33,10 @@ UAT release разрешён и является default cadence skill. Deployme
 references: deployment ID/URL, observed SHA, result и timestamp; не сохраняй
 tokens, cookies, private content или response bodies.
 
+Передавай в journal только HTTPS live URL без userinfo, query и fragment.
+Ссылки с credentials или signed query helper отклоняет: сохраняй отдельный
+нечувствительный canonical URL и redacted deployment ID.
+
 Failed smoke оставляет batch failed и открывает repair-first flow. Не откатывай
 UAT: следующий valid fix становится новым candidate и новым batch.
 

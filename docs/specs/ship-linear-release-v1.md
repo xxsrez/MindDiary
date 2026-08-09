@@ -104,6 +104,7 @@ atomic replace. Достаточный state:
 - lanes с worker, branch, worktree и active issue;
 - tasks со status `ready | running | feature-ready | integrated | done |
   blocked`, ownership paths, branch, feature SHA и checks;
+- stable IDs уже завершённых внешних dependencies текущего snapshot;
 - batches с candidate SHA, issue/defect IDs, gate и UAT result;
 - current UAT SHA и unresolved defects;
 - timestamps и last error.
@@ -146,6 +147,10 @@ Coordinator проверяет feature SHA и интегрирует branch пр
 `main`, чтобы перенести конфликт из integration checkout. Конфликт разрешает
 coordinator; worker может помочь только в своём scope.
 
+При таком обновлении ownership проверяется по изменениям feature относительно
+merge-base с текущим `main`: уже принятые main-изменения не считаются работой
+worker-а, но собственные commits worker-а не могут выйти за выданный scope.
+
 После merge запускаются затронутые проверки. Полный repository gate не
 повторяется после каждой маленькой issue; он выполняется для закрытого batch.
 Linear issue становится Done только после интеграции и достаточной проверки, а
@@ -170,11 +175,18 @@ Coordinator закрывает batch, когда накоплен осмысле
 Следующий batch строится поверх текущего `main`; workers не обязаны ждать UAT,
 если их новые задачи независимы от обнаруженного дефекта.
 
+Journal принимает только bounded HTTPS live URL без credentials, query или
+fragment. Secret-bearing и signed URLs не являются допустимым evidence.
+
 ## 9. Repair-first policy
 
 Failed prerelease guardrail или сломанный UAT имеет приоритет над новой обычной
 работой. Новые dispatch временно приостанавливаются, пока coordinator не
 классифицирует проблему.
+
+Failed UAT блокирует ordinary dispatch сразу после записи результата, ещё до
+создания defect record. Блокировка снимается только после нового passing
+forward batch, а не после одного локального fix commit.
 
 Используются три рекомендуемых маршрута:
 

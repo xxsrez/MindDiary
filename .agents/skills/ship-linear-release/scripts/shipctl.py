@@ -19,13 +19,15 @@ import subprocess
 import sys
 import tempfile
 from typing import Any, Iterator
+from urllib.parse import urlsplit
 import uuid
 
 
 SCHEMA = "ship-linear-release/run/v1"
 SNAPSHOT_SCHEMA = "ship-linear-release/linear-snapshot/v1"
 SHA_RE = re.compile(r"[0-9a-f]{40}(?:[0-9a-f]{24})?")
-WORKERS_RE = re.compile(r"(?<![A-Za-z0-9_-])workers\s*=\s*([1-9][0-9]*)", re.I)
+WORKERS_KEY_RE = re.compile(r"(?<![A-Za-z0-9_-])workers\s*=", re.I)
+WORKERS_VALUE_RE = re.compile(r"(?<![A-Za-z0-9_-])workers\s*=\s*([^\s,;]+)", re.I)
 TERMINAL_TASK_STATES = {"done", "excluded"}
 ACTIVE_TASK_STATES = {"running", "feature-ready"}
 COMPLETED_LINEAR_STATES = {"done", "completed", "canceled", "cancelled"}
@@ -139,6 +141,7 @@ def validate_state(state: dict[str, Any]) -> None:
         "current_main_sha",
         "lanes",
         "tasks",
+        "completed_dependency_ids",
         "batches",
         "defects",
         "uat",
@@ -166,6 +169,13 @@ def validate_state(state: dict[str, Any]) -> None:
         raise ShipError("JOURNAL_INVALID", "one issue is assigned to multiple lanes")
     if state["status"] not in {"active", "paused", "completed", "failed"}:
         raise ShipError("JOURNAL_INVALID", "unknown run status")
+    completed_dependency_ids = state["completed_dependency_ids"]
+    if (
+        not isinstance(completed_dependency_ids, list)
+        or not all(isinstance(value, str) and value for value in completed_dependency_ids)
+        or len(completed_dependency_ids) != len(set(completed_dependency_ids))
+    ):
+        raise ShipError("JOURNAL_INVALID", "completed dependency ids are invalid")
 
 
 @contextmanager
@@ -230,7 +240,7 @@ def task(state: dict[str, Any], issue_id: str) -> dict[str, Any]:
 
 
 def refresh_frontier(state: dict[str, Any]) -> None:
-    completed = {
+    completed = set(state["completed_dependency_ids"]) | {
         issue_id
         for issue_id, value in state["tasks"].items()
         if value["status"] in TERMINAL_TASK_STATES | {"integrated"}
@@ -244,10 +254,16 @@ def refresh_frontier(state: dict[str, Any]) -> None:
 
 
 def command_invocation(args: argparse.Namespace) -> int:
-    values = {int(value) for value in WORKERS_RE.findall(args.text)}
-    if len(values) > 1:
-        raise ShipError("WORKERS_AMBIGUOUS", "conflicting workers values")
-    workers = next(iter(values), 1)
+    keys = WORKERS_KEY_RE.findall(args.text)
+    values = WORKERS_VALUE_RE.findall(args.text)
+    if not keys:
+        workers = 1
+    else:
+        if len(keys) != 1 or len(values) != 1:
+            raise ShipError("WORKERS_AMBIGUOUS", "workers must be specified exactly once")
+        if not re.fullmatch(r"[1-9][0-9]*", values[0]):
+            raise ShipError("WORKERS_INVALID", "workers must be a positive integer")
+        workers = int(values[0])
     return emit({"workers": workers, "mode": "single" if workers == 1 else "parallel"})
 
 
@@ -298,6 +314,7 @@ def command_init(args: argparse.Namespace) -> int:
                 for lane_id in lane_ids
             ],
             "tasks": {},
+            "completed_dependency_ids": [],
             "batches": [],
             "defects": [],
             "uat": {
@@ -359,6 +376,9 @@ def command_plan(args: argparse.Namespace) -> int:
         )
         if missing_active:
             raise ShipError("SNAPSHOT_INCOMPLETE", f"active issues missing from snapshot: {', '.join(missing_active)}")
+        state["completed_dependency_ids"] = sorted(
+            completed_external, key=lambda value: value.encode()
+        )
         for issue_id, raw in parsed.items():
             existing = state["tasks"].get(issue_id)
             if existing and existing["status"] in ACTIVE_TASK_STATES | {"integrated"}:
@@ -421,8 +441,12 @@ def command_claim(args: argparse.Namespace) -> int:
     with edit_run(repo, args.run) as state:
         require_active(state)
         unresolved = [value for value in state["defects"] if value["status"] == "open"]
+        uat_repair_required = (
+            state["uat"]["last_attempt_sha"] is not None
+            and state["uat"]["last_attempt_sha"] != state["uat"]["last_good_sha"]
+        )
         allowed_repairs = {value.get("linear_issue_id") for value in unresolved if value.get("linear_issue_id")}
-        if unresolved and args.issue not in allowed_repairs:
+        if (unresolved or uat_repair_required) and args.issue not in allowed_repairs:
             raise ShipError("REPAIR_FIRST", "resolve the active guardrail/UAT defect before ordinary dispatch")
         item = task(state, args.issue)
         if item["status"] != "ready":
@@ -499,9 +523,11 @@ def command_feature_ready(args: argparse.Namespace) -> int:
             stderr=subprocess.DEVNULL,
         ).returncode != 0:
             raise ShipError("FEATURE_NOT_DESCENDANT", "feature is not based on recorded main")
+        current_main = full_sha(git(repo, "rev-parse", state["main_branch"]), "main sha")
+        scope_base = full_sha(git(worktree, "merge-base", current_main, head), "scope base")
         changed = [
             normalized_path(value)
-            for value in git(worktree, "diff", "--name-only", f"{item['base_sha']}..{head}").splitlines()
+            for value in git(worktree, "diff", "--name-only", f"{scope_base}..{head}").splitlines()
             if value
         ]
         if not changed:
@@ -621,6 +647,24 @@ def command_batch_create(args: argparse.Namespace) -> int:
 
 def command_batch_uat(args: argparse.Namespace) -> int:
     repo = repo_root(args.repo)
+    try:
+        live_url = urlsplit(args.url)
+        port = live_url.port
+    except ValueError as exc:
+        raise ShipError("UAT_URL_INVALID", "UAT URL is malformed") from exc
+    if (
+        len(args.url) > 2048
+        or live_url.scheme != "https"
+        or not live_url.hostname
+        or live_url.username is not None
+        or live_url.password is not None
+        or live_url.query
+        or live_url.fragment
+        or port is not None and not 1 <= port <= 65535
+    ):
+        raise ShipError("UAT_URL_INVALID", "UAT URL must be bounded HTTPS without credentials, query, or fragment")
+    if not args.deployment.strip() or len(args.deployment) > 256 or any(char in args.deployment for char in "\r\n"):
+        raise ShipError("DEPLOYMENT_REF_INVALID", "deployment reference is invalid")
     with edit_run(repo, args.run) as state:
         require_active(state)
         batch = next((value for value in state["batches"] if value["id"] == args.batch), None)
@@ -647,25 +691,52 @@ def command_batch_uat(args: argparse.Namespace) -> int:
 
 def command_defect(args: argparse.Namespace) -> int:
     repo = repo_root(args.repo)
+    summary = args.summary.strip()
+    if not summary or len(summary) > 1000 or any(char in summary for char in "\r\n"):
+        raise ShipError("DEFECT_SUMMARY_INVALID", "defect summary must be one bounded line")
     with edit_run(repo, args.run) as state:
         require_active(state)
-        defect_id = f"defect-{len(state['defects']) + 1:03d}"
         if args.route in {"reopen", "new-bug"} and not args.linear_issue_id:
             raise ShipError("LINEAR_ISSUE_REQUIRED", f"{args.route} requires --linear-issue-id")
-        value = {
-            "id": defect_id,
-            "route": args.route,
-            "linear_issue_id": args.linear_issue_id,
-            "candidate_sha": state["uat"]["last_attempt_sha"] or state["current_main_sha"],
-            "summary": args.summary,
-            "status": "open",
-            "fixed_sha": None,
-            "batch_id": None,
-            "created_at": utc_now(),
-            "resolved_at": None,
+        candidate_sha = state["uat"]["last_attempt_sha"] or state["current_main_sha"]
+        value = next(
+            (
+                item
+                for item in state["defects"]
+                if item["status"] == "open"
+                and item["route"] == args.route
+                and item["candidate_sha"] == candidate_sha
+                and (
+                    item["linear_issue_id"] == args.linear_issue_id
+                    if args.linear_issue_id
+                    else item["summary"] == summary
+                )
+            ),
+            None,
+        )
+        disposition = "reused"
+        if value is None:
+            defect_id = f"defect-{len(state['defects']) + 1:03d}"
+            value = {
+                "id": defect_id,
+                "route": args.route,
+                "linear_issue_id": args.linear_issue_id,
+                "candidate_sha": candidate_sha,
+                "summary": summary,
+                "status": "open",
+                "fixed_sha": None,
+                "batch_id": None,
+                "created_at": utc_now(),
+                "resolved_at": None,
+            }
+            state["defects"].append(value)
+            disposition = "created"
+        response = {
+            "run_id": state["run_id"],
+            "disposition": disposition,
+            "defect": value,
+            "ordinary_dispatch": "paused",
         }
-        state["defects"].append(value)
-        response = {"run_id": state["run_id"], "defect": value, "ordinary_dispatch": "paused"}
     return emit(response)
 
 
@@ -682,6 +753,12 @@ def command_defect_resolve(args: argparse.Namespace) -> int:
         observed = full_sha(git(repo, "rev-parse", state["main_branch"]), "main sha")
         if observed != fixed_sha:
             raise ShipError("SHA_MISMATCH", "fixed SHA is not current main")
+        if subprocess.run(
+            ["git", "-C", str(repo), "merge-base", "--is-ancestor", value["candidate_sha"], fixed_sha],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        ).returncode != 0:
+            raise ShipError("FORWARD_FIX_REQUIRED", "fixed SHA must descend from the affected candidate")
         value.update({"status": "resolved", "fixed_sha": fixed_sha, "resolved_at": utc_now()})
         response = {"run_id": state["run_id"], "defect": value}
     return emit(response)

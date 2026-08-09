@@ -50,6 +50,11 @@ Coordinator проверяет clean feature head и выполненные chec
 - сначала merge актуальный `main` в feature, повторить затронутые checks и
   затем интегрировать.
 
+Если worker branch уже содержит актуальный `main`, scope verification сравнивает
+feature head с их merge-base. Поэтому чужие изменения, пришедшие из `main`, не
+приписываются worker-у, а собственные изменения worker-а всё равно обязаны
+оставаться внутри ownership paths.
+
 Только descendant/merged feature SHA принимается `integrate`. После merge
 запусти затронутые проверки и только потом помечай Linear issue Done.
 

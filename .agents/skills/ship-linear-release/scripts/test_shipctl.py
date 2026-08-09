@@ -66,13 +66,18 @@ class ShipctlTest(unittest.TestCase):
         )
         return result["run"]  # type: ignore[return-value]
 
-    def snapshot(self, path: Path, issues: list[dict[str, object]]) -> None:
+    def snapshot(
+        self,
+        path: Path,
+        issues: list[dict[str, object]],
+        completed_dependency_ids: list[str] | None = None,
+    ) -> None:
         path.write_text(
             json.dumps(
                 {
                     "schema": MODULE.SNAPSHOT_SCHEMA,
                     "issues": issues,
-                    "completed_dependency_ids": [],
+                    "completed_dependency_ids": completed_dependency_ids or [],
                 }
             ),
             encoding="utf-8",
@@ -102,10 +107,11 @@ class ShipctlTest(unittest.TestCase):
         root: Path,
         issues: list[dict[str, object]],
         *,
+        completed_dependency_ids: list[str] | None = None,
         expected: int = 0,
     ) -> dict[str, object]:
         path = root / "snapshot.json"
-        self.snapshot(path, issues)
+        self.snapshot(path, issues, completed_dependency_ids)
         return self.invoke(
             "plan", "--repo", str(repo), "--run", run_id,
             "--input", str(path), expected=expected,
@@ -195,6 +201,12 @@ class ShipctlTest(unittest.TestCase):
         )
         error = self.invoke("invocation", "workers=2 workers=3", expected=2)
         self.assertEqual(error["code"], "WORKERS_AMBIGUOUS")
+        self.assertEqual(self.invoke("invocation", "workers=auto", expected=2)["code"], "WORKERS_INVALID")
+        self.assertEqual(self.invoke("invocation", "workers=0", expected=2)["code"], "WORKERS_INVALID")
+        self.assertEqual(
+            self.invoke("invocation", "workers=3 workers=3", expected=2)["code"],
+            "WORKERS_AMBIGUOUS",
+        )
 
     def test_init_builds_exact_single_and_three_worker_topologies(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -248,6 +260,17 @@ class ShipctlTest(unittest.TestCase):
                 expected=2,
             )
             self.assertEqual(error["code"], "SNAPSHOT_INVALID")
+
+            external = self.plan(
+                repo,
+                run["run_id"],
+                root,
+                [self.issue("d", "AND-4", dependencies=["external-done"])],
+                completed_dependency_ids=["external-done"],
+            )
+            self.assertIn("d", external["ready"])
+            state = self.invoke("status", "--repo", str(repo), "--run", run["run_id"])["run"]
+            self.assertEqual(state["completed_dependency_ids"], ["external-done"])
 
     def test_three_worker_claims_use_distinct_worktrees_and_reject_scope_overlap(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -331,6 +354,27 @@ class ShipctlTest(unittest.TestCase):
             self.assertEqual(state["current_main_sha"], main_sha)
             self.assertIsNone(state["lanes"][0]["active_issue"])
 
+    def test_feature_scope_allows_merging_current_main_into_worker_branch(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            repo = self.repo_fixture(root)
+            run = self.init_run(repo, 3)
+            run_id = run["run_id"]
+            self.plan(repo, run_id, root, [self.issue("a", "AND-1")])
+            worktree, branch = self.add_worktree(repo, root, 1, "AND-1")
+            self.claim(repo, run_id, "a", "worker-1", branch, worktree, "src/a")
+
+            (repo / "src" / "integration.txt").write_text("main\n", encoding="utf-8")
+            self.git(repo, "add", "src/integration.txt")
+            self.git(repo, "commit", "-m", "advance main")
+            self.git(worktree, "merge", "--no-edit", "main")
+            head = self.commit_change(worktree, "src/a/result.txt", "feature\n")
+            ready = self.invoke(
+                "feature-ready", "--repo", str(repo), "--run", run_id,
+                "--issue", "a", "--head", head, "--check", "targeted=passed",
+            )
+            self.assertEqual(ready["changed_paths"], ["src/a/result.txt"])
+
     def test_failed_worker_releases_lane_for_retry(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -401,11 +445,33 @@ class ShipctlTest(unittest.TestCase):
                 "--batch", batch["id"], "--deployment", "uat-broken",
                 "--url", "https://uat.example.invalid", "--result", "failed",
             )
+            worktree2, branch2 = self.add_worktree(repo, root, 2, "AND-2")
+            blocked_before_triage = self.claim(
+                repo, run_id, "b", "worker-2", branch2, worktree2, "src/b", expected=2,
+            )
+            self.assertEqual(blocked_before_triage["code"], "REPAIR_FIRST")
             defect = self.invoke(
                 "defect", "--repo", str(repo), "--run", run_id,
                 "--route", "coordinator", "--summary", "smoke failed",
             )["defect"]
-            worktree2, branch2 = self.add_worktree(repo, root, 2, "AND-2")
+            tree = self.git(repo, "write-tree")
+            unrelated = subprocess.run(
+                ["git", "-C", str(repo), "commit-tree", tree],
+                input="unrelated root\n",
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            ).stdout.strip()
+            self.git(repo, "update-ref", "refs/heads/main", unrelated)
+            self.git(repo, "reset", "--hard", "main")
+            not_forward = self.invoke(
+                "defect-resolve", "--repo", str(repo), "--run", run_id,
+                "--defect", defect["id"], "--fixed-sha", unrelated, expected=2,
+            )
+            self.assertEqual(not_forward["code"], "FORWARD_FIX_REQUIRED")
+            self.git(repo, "update-ref", "refs/heads/main", main_sha)
+            self.git(repo, "reset", "--hard", "main")
             blocked = self.claim(repo, run_id, "b", "worker-2", branch2, worktree2, "src/b", expected=2)
             self.assertEqual(blocked["code"], "REPAIR_FIRST")
             (repo / "src" / "uat-fix.txt").write_text("forward fix\n", encoding="utf-8")
@@ -416,6 +482,10 @@ class ShipctlTest(unittest.TestCase):
                 "defect-resolve", "--repo", str(repo), "--run", run_id,
                 "--defect", defect["id"], "--fixed-sha", fixed_sha,
             )
+            blocked_until_restored = self.claim(
+                repo, run_id, "b", "worker-2", branch2, worktree2, "src/b", expected=2,
+            )
+            self.assertEqual(blocked_until_restored["code"], "REPAIR_FIRST")
             repaired_batch = self.invoke(
                 "batch-create", "--repo", str(repo), "--run", run_id,
                 "--candidate", fixed_sha, "--gate", "passed",
@@ -445,8 +515,110 @@ class ShipctlTest(unittest.TestCase):
                     "--summary", route,
                 )
                 self.assertEqual(result["defect"]["route"], route)
+                replay = self.invoke(
+                    "defect", "--repo", str(repo), "--run", run_id,
+                    "--route", route, "--linear-issue-id", f"linear-{route}",
+                    "--summary", f"changed wording for {route}",
+                )
+                self.assertEqual(replay["disposition"], "reused")
+                self.assertEqual(replay["defect"]["id"], result["defect"]["id"])
             error = self.invoke("production", expected=2)
             self.assertEqual(error["code"], "PRODUCTION_FORBIDDEN")
+
+    def test_uat_url_rejects_credentials_query_and_fragment(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            repo = self.repo_fixture(root)
+            run = self.init_run(repo)
+            run_id = run["run_id"]
+            self.plan(repo, run_id, root, [self.issue("a", "AND-1")])
+            branch = "codex/and-1-url"
+            self.git(repo, "switch", "-c", branch)
+            self.claim(repo, run_id, "a", "coordinator", branch, repo, "src/a")
+            head = self.commit_change(repo, "src/a/result.txt", "url\n")
+            self.invoke(
+                "feature-ready", "--repo", str(repo), "--run", run_id,
+                "--issue", "a", "--head", head, "--check", "targeted=passed",
+            )
+            self.git(repo, "switch", "main")
+            self.git(repo, "merge", "--ff-only", branch)
+            main_sha = self.git(repo, "rev-parse", "main")
+            self.invoke("integrate", "--repo", str(repo), "--run", run_id, "--issue", "a", "--main-sha", main_sha)
+            self.invoke("task-done", "--repo", str(repo), "--run", run_id, "--issue", "a")
+            batch = self.invoke(
+                "batch-create", "--repo", str(repo), "--run", run_id,
+                "--candidate", main_sha, "--gate", "passed",
+            )["batch"]
+            for unsafe in (
+                "https://user:secret@uat.example.invalid/path",
+                "https://uat.example.invalid/path?token=secret",
+                "https://uat.example.invalid/path#private",
+            ):
+                error = self.invoke(
+                    "batch-uat", "--repo", str(repo), "--run", run_id,
+                    "--batch", batch["id"], "--deployment", "uat-1",
+                    "--url", unsafe, "--result", "passed", expected=2,
+                )
+                self.assertEqual(error["code"], "UAT_URL_INVALID")
+
+    def test_every_durable_checkpoint_is_readable_by_a_fresh_process(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            repo = self.repo_fixture(root)
+            run = self.init_run(repo)
+            run_id = run["run_id"]
+
+            def fresh_status() -> dict[str, object]:
+                completed = subprocess.run(
+                    [
+                        sys.executable,
+                        str(SCRIPTS / "shipctl.py"),
+                        "status",
+                        "--repo",
+                        str(repo),
+                        "--run",
+                        run_id,
+                    ],
+                    check=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                )
+                return json.loads(completed.stdout)["run"]
+
+            self.assertEqual(fresh_status()["tasks"], {})
+            self.plan(repo, run_id, root, [self.issue("a", "AND-1")])
+            self.assertEqual(fresh_status()["tasks"]["a"]["status"], "ready")
+            branch = "codex/and-1-resume"
+            self.git(repo, "switch", "-c", branch)
+            self.claim(repo, run_id, "a", "coordinator", branch, repo, "src/a")
+            self.assertEqual(fresh_status()["tasks"]["a"]["status"], "running")
+            head = self.commit_change(repo, "src/a/result.txt", "resume\n")
+            self.invoke(
+                "feature-ready", "--repo", str(repo), "--run", run_id,
+                "--issue", "a", "--head", head, "--check", "targeted=passed",
+            )
+            self.assertEqual(fresh_status()["tasks"]["a"]["status"], "feature-ready")
+            self.git(repo, "switch", "main")
+            self.git(repo, "merge", "--ff-only", branch)
+            main_sha = self.git(repo, "rev-parse", "main")
+            self.invoke("integrate", "--repo", str(repo), "--run", run_id, "--issue", "a", "--main-sha", main_sha)
+            self.assertEqual(fresh_status()["tasks"]["a"]["status"], "integrated")
+            self.invoke("task-done", "--repo", str(repo), "--run", run_id, "--issue", "a")
+            self.assertEqual(fresh_status()["tasks"]["a"]["status"], "done")
+            batch = self.invoke(
+                "batch-create", "--repo", str(repo), "--run", run_id,
+                "--candidate", main_sha, "--gate", "passed",
+            )["batch"]
+            self.assertEqual(fresh_status()["batches"][0]["state"], "validated")
+            self.invoke(
+                "batch-uat", "--repo", str(repo), "--run", run_id,
+                "--batch", batch["id"], "--deployment", "uat-resume",
+                "--url", "https://uat.example.invalid", "--result", "passed",
+            )
+            self.assertEqual(fresh_status()["batches"][0]["state"], "uat-passed")
+            self.invoke("complete", "--repo", str(repo), "--run", run_id, "--main-sha", main_sha)
+            self.assertEqual(fresh_status()["status"], "completed")
 
     def test_atomic_write_keeps_old_journal_when_replace_fails(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

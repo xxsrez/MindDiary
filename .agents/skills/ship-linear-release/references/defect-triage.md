@@ -12,8 +12,13 @@
      bug issue.
 4. Если свободного worker нет, coordinator берёт repair сам. Восстановление UAT
    и prerelease guardrails важнее новой обычной работы.
+   В parallel mode такой coordinator repair не создаёт дополнительный worker
+   lane: coordinator делает bounded fix прямо в `main`, запускает checks,
+   обновляет exact Linear issue/bug и затем refresh-ит `plan`.
 5. После fix повтори затронутые checks, canonical batch gate и UAT deployment.
 6. Закрой defect только по проверенному forward-fix evidence.
 
 UAT defect всегда входит в текущий milestone scope. Rollback не выполняется.
 Failed UAT — рабочая среда для обнаружения дефектов, а не terminal failure run.
+Повторная регистрация того же open Linear defect возвращает существующую
+journal запись; не создавай дублирующую bug issue.
