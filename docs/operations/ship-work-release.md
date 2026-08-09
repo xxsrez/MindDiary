@@ -44,6 +44,13 @@ instructions.
 $ship-work-release
 ```
 
+`$ship-work-release` — invocation skill-а в текущем Codex task. Это не
+plain-text control уже идущего run, не slash-command Codex и не кнопка Goal в
+Desktop. Один invocation создаёт или однозначно находит один `run_id`; повторно
+запускать skill для того же scope вместо `status`, `resume`, `handoff` или
+`recover` нельзя. Исключение — документированные invocation forms для принятия
+handoff или подготовки recovery в новом task.
+
 Он означает:
 
 - начать с одного связного writer lane;
@@ -82,16 +89,78 @@ lanes, когда такая frontier существует.
 
 `workers=3` является compatibility alias `lanes=3`.
 
+### 1.1 Выбор scope без привязки к task manager
+
+Default scope берётся из project delivery profile:
+
+```text
+$ship-work-release scope=profile-default
+```
+
+Для явного выбора используется provider-neutral selector, а выбранный adapter
+разрешает opaque stable refs в свои entities:
+
+```text
+$ship-work-release scope=work-scope:<stable-ref>
+$ship-work-release scope=items:<stable-ref-1>,<stable-ref-2>
+```
+
+Display name или приблизительный поиск не являются stable ref. Если selector
+разрешается неоднозначно, adapter fail closed и показывает допустимые exact
+refs без начала mutation. Run card всегда повторяет исходный selector,
+нормализованный collection ref и полный resolved item count. Dependencies или
+parent entities вне bounded selector не добавляются молча: coordinator
+показывает closure gap и просит новый exact scope.
+
+### 1.2 Четыре разные control surfaces
+
+| Surface | Для чего она нужна | Чего она не делает |
+| --- | --- | --- |
+| `$ship-work-release ...` | Запускает новый run либо явно принимает handoff/recovery в новом task. | Не является командой pause/status уже идущего run. |
+| Plain-text controls `status`, `pause=...`, `resume`, `config ...` | Управляют exact `run_id` через coordinator в основном task. | Не являются slash-commands приложения. |
+| Slash-command `/side`, когда он доступен в клиенте | Открывает отдельный side task для read-only snapshot или объяснения. | Не pause-ит Goal и не передаёт authority. |
+| Goal progress row и кнопки Pause/Resume/Edit/Clear | Управляют lifecycle самого Codex Goal в Desktop. | Не заменяют graceful delivery controls и не меняют canonical run state. |
+
+В частности, plain-text `status run=<run_id>` — это status delivery flow.
+Встроенный `/status` относится к Codex task/context и **не** показывает batches,
+lanes, UAT cuts или pending effects.
+
+### 1.3 Goal при запуске
+
+Если invocation отправлен внутри Goal, созданного через `/goal` или
+соответствующее действие Desktop, приложение показывает Goal progress row для
+всего work scope. Skill сам не создаёт эту UI-строку: invocation в обычном task
+остаётся обычным task и всё равно управляется plain-text controls.
+
+До первой mutation run card обязан показать одно из значений `goal: active`,
+`goal: not-active` или `goal: unknown`. Если progress row не появилась:
+
+1. не запускайте `$ship-work-release` повторно;
+2. отправьте в том же task `status run=<run_id>`;
+3. если status показывает `goal: not-active`, продолжайте plain-text controls
+   либо сначала доведите run до `QUIESCENT` и сделайте явный handoff в новый
+   Goal;
+4. если status показывает `goal: active`, но row не видна, delivery state всё
+   равно читается через plain `status`; `/status` можно использовать только для
+   диагностики самого Codex task, не как подтверждение состояния run.
+
+Если сама run card потеряна и `run_id` неизвестен, read-only `status runs` в
+том же task возвращает bounded список найденных active/quiescent run IDs. После
+этого все controls снова адресуются одному exact ID.
+
 ## 2. Что должно появиться сразу после запуска
 
 До первой write mutation coordinator показывает run card:
 
 ```text
-work scope: 0.2
-task management: example-adapter / example-collection
+run: run-7f31
+goal: active
+work scope: selector work-scope:ws-02 / resolved ws-02
+task management: example-adapter / collection col-01
 contract: 7b1d4a2 / cohort c01
 router: single writer + scouts on demand
 durability: durable before first external effect
+deadline capability: active-callback
 work items: 18 total, 7 unfinished, 3 ready
 release: continuous-uat
 review: manual
@@ -115,11 +184,49 @@ Default cadence показывает project delivery profile. `manual-uat` и
 run начал mutation. Например:
 
 ```text
-config lanes=1
-config release=manual-uat
+config run=run-7f31 lanes=1 control_id=cfg-001
+config run=run-7f31 release=manual-uat control_id=cfg-002
 ```
 
-Coordinator должен подтвердить новое нормализованное значение.
+Coordinator должен подтвердить новое нормализованное значение и `control_id`.
+
+### 2.1 Адресация и acknowledgement controls
+
+Каждый plain-text control, который может изменить run, адресуется точному
+`run=<run_id>` и получает уникальный внутри run `control_id`. Достаточно
+короткого понятного ID вроде `pause-uat-1`; UUID вручную не требуется. Если ID
+не указан, coordinator обязан получить устойчивый ID из входящего сообщения и
+сохранить его до первого effect, но для operator-critical commands явный ID
+предпочтителен.
+
+Первый ответ на control — короткий acknowledgement:
+
+```text
+control: pause-uat-1
+run: run-7f31
+normalized: pause=uat grace=5m
+result: accepted
+state revision: 184
+next: draining 2 writers
+```
+
+Одинаковый `control_id` с тем же нормализованным payload идемпотентен: duplicate
+не запускает второй drain, deploy, rollback или upgrade, а возвращает
+сохранённый acknowledgement/result. Тот же ID с другим payload отклоняется как
+conflict. Новый ID означает новое намерение пользователя.
+
+Если acknowledgement потерялся, не отправляйте команду заново с новым ID.
+Сначала запросите:
+
+```text
+status run=run-7f31 control=pause-uat-1
+```
+
+Если явного ID не было, используйте `status run=run-7f31 controls=recent`.
+Повтор допустим только с прежним ID; если authoritative status подтверждает,
+что control не был принят, следующая попытка получает новый ID. Такой
+lost-ack protocol особенно обязателен для publish, UAT, rollback, authority и
+task-manager mutations.
 
 ## 3. Как следить за работой
 
@@ -146,28 +253,42 @@ verbosity поэтому остаётся спокойной, но не прев
 В основной task отправьте отдельной строкой:
 
 ```text
-status
+status run=run-7f31
 ```
 
 Ожидаемый ответ:
 
 ```text
-run: work scope 0.2 / cohort c03 / contract abc1234
+run: run-7f31 / state revision 184
+snapshot: 2026-08-09T12:34:08Z / age 8s / authoritative
+goal: active / task codex-task-91
+work scope: ws-02 / cohort c03 / contract abc1234
 mode: parallel, 2 lanes / durable / review=manual
 work items: 18 total, 7 unfinished, 3 ready
 lanes: 2 running, 0 feature-ready, 1 available
-batch: u04 open, 2 work items, candidate none
+batch: batch-u04 open, 2 work items, candidate none
 gate: idle
-UAT: 0.2-u03 live, exact 4ac91e2, observation=pending-owner-observation
+UAT: cut-0.2-u03 live, exact 4ac91e2
+observations: cut-0.2-u03=pending-owner-observation
 pause: none
+holds: none
+deadline capability: active-callback
+phase deadline: none
+controls: last applied cfg-002 / pending none
 pending external effects: none
 next safe boundary: 2 writer checkpoints
 ```
 
+`snapshot` показывает время наблюдения и age, а не только время печати ответа.
+Side task может вернуть `authoritative`, `cached` или `unavailable`; cached
+snapshot всегда содержит исходную state revision и возраст. `goal` описывает
+известное coordinator-у состояние Goal (`active`, `paused`, `not-active` или
+`unknown`), но не подменяет UI приложения.
+
 Для диагностики можно запросить:
 
 ```text
-status verbose
+status run=run-7f31 verbose
 ```
 
 Verbose status остаётся bounded: он не должен выгружать полный ledger,
@@ -177,7 +298,12 @@ transcript или неограниченные logs.
 
 Codex Desktop позволяет открыть side task командой `/side`. Это удобно, если
 вы хотите прочитать snapshot и не перебивать основной ход работы. В side task
-следует просить только `status` или объяснение текущего state.
+следует просить только plain-text `status run=<run_id>` или объяснение текущего
+state. `/side` открывает side task; он сам не является delivery status.
+
+Доступность `/side` зависит от клиента и текущего режима. Если command нет,
+это не ошибка delivery run: запросите plain `status` в основном task. Не
+создавайте второй coordinator только ради отдельного status window.
 
 Side task:
 
@@ -188,8 +314,17 @@ Side task:
 - читает только доступный durable snapshot.
 
 Если run ephemeral или durable snapshot этой session недоступен, side task
-должен сообщить ограничение; authoritative `status` тогда запрашивается в
-основном task.
+должен ответить без догадок:
+
+```text
+snapshot: unavailable
+authority change: none
+fallback: in the coordinator task send status run=run-7f31
+```
+
+Authoritative `status` тогда запрашивается в основном task. Если основной task
+утрачен, side task всё равно не делает takeover: в новом основном task
+используется двухфазный `recover` из раздела 9.2.
 
 Управляющие сообщения всегда отправляются в основной task. Возможности Goal,
 follow-up steering и side tasks описаны в официальной документации
@@ -201,7 +336,7 @@ follow-up steering и side tasks описаны в официальной док
 Каноническая команда:
 
 ```text
-pause=checkpoint grace=5m
+pause=checkpoint run=run-7f31 grace=5m control_id=pause-checkpoint-1
 ```
 
 Её смысл:
@@ -217,13 +352,34 @@ pause=checkpoint grace=5m
 Сразу после команды вы должны увидеть acknowledgement:
 
 ```text
+control: pause-checkpoint-1
+run: run-7f31
 pause accepted: checkpoint
 dispatch: closed
 running lanes: 2
 grace deadline: 12:35:00Z
-deadline enforcement: active
+deadline enforcement: active-callback
 next update: first checkpoint or deadline
 ```
+
+`grace` ограничивает только drain уже работающих writers. Закрытие dispatch
+происходит сразу, а scouts, full gate, CI, dev smoke, deploy и live smoke не
+получают из `grace` общий timeout.
+
+Acknowledgement обязан показать одну из capability:
+
+- `active-callback` — wall-clock deadline действительно будет применён;
+- `turn-bound` — dispatch уже закрыт, но fence/checkpoint может примениться
+  только на следующем model turn; это best-effort target, а не bounded pause;
+- `unavailable` — coordinator не способен безопасно сохранить request и
+  команда отклоняется без изменения run.
+
+Без active callback нельзя молча обещать пяти минут. Если пользователь добавил
+`require_deadline=true`, отсутствие `active-callback` отклоняет control. Без
+этого флага безопасно сохранённая команда может быть принята как
+`accepted-degraded` с `deadline enforcement: turn-bound`; `PAUSE_READY`
+появляется только после фактически наблюдаемого checkpoint/fencing, не по
+истечении таймера.
 
 Финальный ответ для такой остановки:
 
@@ -244,7 +400,7 @@ resume action: preflight + adopt preserved lane-2
 Команда:
 
 ```text
-pause=batch grace=5m
+pause=batch run=run-7f31 grace=5m control_id=pause-batch-1
 ```
 
 Coordinator:
@@ -283,7 +439,7 @@ status должен показывать их отдельную phase/deadline.
 Команда:
 
 ```text
-pause=uat grace=5m
+pause=uat run=run-7f31 grace=5m control_id=pause-uat-1
 ```
 
 Она включает путь `pause=batch`, затем:
@@ -300,11 +456,12 @@ pause=uat grace=5m
 В status будет одновременно видно:
 
 ```text
+run: run-7f31
 environment: uat
 profile: example-project
 target: configured-uat-class
 evidence class: uat-live
-cut: 0.2-u04
+cut: cut-0.2-u04 / label 0.2-u04
 observation: pending-owner-observation
 work scope: still in progress
 ```
@@ -314,7 +471,16 @@ matrix. Он не завершает work scope автоматически.
 
 Automated smoke не означает, что вы уже посмотрели UAT. После
 `pause=uat` skill останавливается в `pending-owner-observation`; после осмотра
-можно отправить `uat verdict=observed` или `uat verdict=rejected`.
+verdict всегда адресуется exact cut, а не «текущей live версии»:
+
+```text
+uat verdict=observed run=run-7f31 cut=cut-0.2-u04 control_id=verdict-u04
+uat verdict=rejected run=run-7f31 cut=cut-0.2-u04 control_id=reject-u04
+```
+
+Это обязательно и в paused run: continuous UAT мог успеть опубликовать более
+новый cut. Verdict для superseded cut остаётся привязан к его receipt и не
+меняет observation более новой версии.
 
 Здесь `grace` также относится только к writers. Deployment и live smoke имеют
 отдельные bounded timeouts, поэтому для самой быстрой остановки выбирайте
@@ -325,7 +491,7 @@ Automated smoke не означает, что вы уже посмотрели U
 Если останавливаться не нужно:
 
 ```text
-uat=now
+uat=now run=run-7f31 control_id=uat-now-1
 ```
 
 Skill фиксирует текущий meaningful batch, проверяет и публикует его, затем
@@ -335,7 +501,7 @@ Skill фиксирует текущий meaningful batch, проверяет и 
 При policy:
 
 ```text
-release=continuous-uat
+config run=run-7f31 release=continuous-uat control_id=release-policy-1
 ```
 
 skill сам делает cuts на meaningful boundaries. Meaningful — это наблюдаемый
@@ -365,7 +531,7 @@ target.
 Команда:
 
 ```text
-pause=scope
+pause=scope run=run-7f31 control_id=pause-scope-1
 ```
 
 Название означает «остановись после work scope», а не немедленный drain.
@@ -379,6 +545,9 @@ Coordinator продолжает normal dispatch, batches и UAT cuts, пока 
 - claims и pending effects отсутствуют.
 
 Только после этого он объявляет scope UAT release и становится quiescent.
+Если cadence сейчас `manual-uat`, `pause=scope` остаётся явной one-shot
+авторизацией именно этого финального scope cut. Промежуточные hosted cuts в той
+же cadence по-прежнему требуют отдельного `uat=now`.
 
 Если remaining frontier реально blocked, он остановится раньше и объяснит
 blocker; `pause=scope` не разрешает обходить security или release gates.
@@ -401,7 +570,7 @@ Project delivery profile сообщает, configured ли production и где 
 После graceful pause в основном task отправьте:
 
 ```text
-resume
+resume run=run-7f31 control_id=resume-1
 ```
 
 Перед новым dispatch skill:
@@ -414,19 +583,104 @@ resume
 6. снимет только user pause.
 
 Technical blocker, known-bad hold или rejected UAT не исчезают от `resume`.
-Если предыдущий run был ephemeral и task/session потеряна, cross-session resume
-не гарантируется.
+Если run ephemeral и task/session потеряна, cross-session recovery невозможно:
+новый task только сообщает это ограничение и не реконструирует authority из
+task-manager prose.
 
-## 10. Goal Pause в Codex Desktop
+### 9.1 Явный handoff в другой основной task
 
-Goal Pause — hard client pause, а не надёжная команда graceful drain.
+Handoff нужен, если старый основной task ещё доступен, но coordinator следует
+перенести в новый Goal/task. Сначала доведите run до `QUIESCENT`, затем в старом
+task отправьте:
+
+```text
+handoff prepare run=run-7f31 control_id=handoff-prepare-1
+```
+
+Ответ содержит exact `handoff_id`, state revision, текущий owner epoch и
+перечень pending effects. Plan создаётся только при zero live writers; он не
+передаёт authority сам по себе. Новый task сначала запускается как Goal, если
+нужна Goal progress row, и принимает handoff через явный skill invocation:
+
+```text
+$ship-work-release handoff accept run=run-7f31 handoff=ho-19 \
+  control_id=handoff-accept-1
+```
+
+Accept повторно reconciles state, атомарно меняет owner epoch, fence-ит прежний
+coordinator и только затем разрешает dispatch. Старый task после accept остаётся
+read-only. Повтор того же accept с тем же `control_id` возвращает прежний
+результат; stale или уже использованный handoff с новым payload отклоняется.
+
+### 9.2 Recovery, если основной task потерян
+
+Для durable run новый основной task сначала вызывает skill только для
+read-only plan:
+
+```text
+$ship-work-release recover prepare run=run-7f31
+```
+
+Plan показывает `recovery_id`, observed owner epoch/heartbeat, state revision,
+preserved lanes и pending/ambiguous effects. Если takeover безопасен,
+пользователь подтверждает exact snapshot:
+
+```text
+recover confirm run=run-7f31 recovery=rec-22 \
+  expected_owner_epoch=7 control_id=recover-confirm-1
+```
+
+Перед authority mutation coordinator снова проверяет expected epoch и state
+revision. Любое изменение делает plan stale и требует нового `recover prepare`.
+`recover confirm` не выполняется из side task, не обходит unresolved external
+effects и не доступен для ephemeral run.
+
+### 9.3 Прервать run без ложного completion
+
+Если work scope больше не нужно продолжать, run завершается двухфазно:
+
+```text
+abort prepare run=run-7f31 control_id=abort-prepare-1
+```
+
+Preparation сразу закрывает dispatch, сохраняет или fence-ит все lane artifacts,
+reconcile-ит начатые external effects и показывает exact plan: что останется в
+Git/task manager/UAT, какие holds или ambiguous effects сохраняются и какие
+cleanup actions безопасны. Она не меняет terminal state.
+
+После проверки плана:
+
+```text
+abort confirm run=run-7f31 plan=abort-17 control_id=abort-confirm-1
+```
+
+Confirmation повторно проверяет state revision/owner epoch и переводит run в
+`aborted`. Это не `completed`, не scope acceptance и не release claim. Abort не
+удаляет unknown worktrees/bytes, не откатывает UAT автоматически и не закрывает
+product items как Done. Для потенциально применившегося внешнего effect сначала
+нужны reconciliation, explicit quarantine либо отдельный rollback path.
+
+## 10. Goal UI в Codex Desktop
+
+Goal progress row принадлежит Codex Desktop, а не delivery protocol. Она
+появляется только у task, действительно запущенного как Goal; `$ship-work-release`
+в обычном task сам по себе её не создаёт. Один Goal охватывает весь work scope,
+а не отдельный lane, batch, UAT cut или cohort.
+
+### 10.1 Pause и Resume
+
+Goal Pause — client-level pause request. С точки зрения delivery protocol это
+hard pause, потому что он не гарантирует, что coordinator успеет закрыть
+dispatch, дождаться writer checkpoint и записать receipts. UI Pause также не
+доказывает, что уже начатый tool call или subprocess был отменён; это выясняет
+последующий recovery.
 
 Предпочтительная последовательность:
 
 ```text
-1. Отправить pause=checkpoint|batch|uat
-2. Дождаться QUIESCENT
-3. Нажать Goal Pause, если нужно освободить/закрыть task
+1. Отправить pause=checkpoint|batch|uat run=<run_id> control_id=<unique-id>
+2. Дождаться PAUSE_READY / QUIESCENT
+3. Нажать Goal Pause, если нужно остановить automatic continuation
 ```
 
 После drain coordinator показывает `PAUSE_READY`. Skill не может сам нажать UI
@@ -434,11 +688,12 @@ Pause: это отдельное действие владельца в Desktop.
 automatic continuation turn между `PAUSE_READY` и кликом, он обязан остаться
 read-only в canonical `QUIESCENT`, без повторного settlement или dispatch.
 
-Если нужно остановить Codex немедленно, Goal Pause допустим. Но coordinator
-может не получить нового model turn и не увидеть request. После Resume такой
-run сначала считается recovery case: skill не dispatch-ит новое, пока не
-проверит worktrees, claims, integration branch, contract и начатые внешние
-effects.
+Если нужно остановить Codex немедленно, Goal Pause допустим. Coordinator может
+не получить нового model turn и не увидеть request. Goal Resume в таком случае
+не равен plain-text `resume`: сначала run входит в recovery и сверяет
+worktrees, claims, integration branch, contract и начатые внешние effects.
+Только после coherent recovery пользователь снимает delivery pause отдельной
+командой `resume run=<run_id> control_id=<unique-id>`.
 
 Если grace deadline прошёл, но runtime был полностью остановлен, status должен
 честно сказать:
@@ -448,8 +703,37 @@ deadline passed; enforcement pending next model turn
 ```
 
 Документация не обещает скрытый persistent daemon. Bounded grace считается
-гарантией только когда acknowledgement показывает active coordinator
-timer/runtime callback; иначе run не может заявить graceful `QUIESCENT`.
+гарантией только когда acknowledgement показывает `active-callback`; иначе run
+не может заявить graceful `QUIESCENT` до фактического reconciliation.
+
+### 10.2 Edit и Clear
+
+Goal Edit меняет формулировку objective для следующих continuation turns, но не
+переписывает pinned scope, acceptance, contract, release target или safety
+policy. Capacity, UAT cadence и review policy меняются через exact `config`;
+contract — через `flow upgrade`; pinned scope/acceptance и release target не
+переназначаются через Edit. Свободный текст в Goal Edit считается
+steering/context, а не approval внешнего effect.
+
+Goal Clear убирает Goal-level continuation, но не отменяет delivery run, не
+очищает claims/effects и не передаёт authority. Перед Clear используйте
+graceful pause и дождитесь `PAUSE_READY`. Если Goal уже очищен во время active
+run, plain `status` в том же task сначала переводит run в recovery; для нового
+task используйте handoff или recovery, а не повторный обычный skill invocation.
+
+Если заранее ожидается потеря подключения или закрытие task, сначала выполните
+graceful pause. Goal Pause/Clear после `PAUSE_READY` не требует от coordinator-а
+угадывать, успел ли последний external effect завершиться.
+
+### 10.3 Prevent sleep
+
+Включайте Desktop `Prevent sleep`, когда важно, чтобы Mac не уснул во время
+writer grace, full gate, CI wait, dev/UAT smoke или deploy. Это повышает шанс
+получить непрерывный wall-clock progress, но не создаёт coordinator callback,
+не заменяет durable state и не доказывает `active-callback`. Источник истины —
+поле `deadline capability` в run card/status. При выключенном Prevent sleep run
+остаётся корректным, но после сна может потребовать recovery и не должен
+заявлять, что deadline был применён в реальном времени.
 
 ## 11. Как cohorts выглядят технически
 
@@ -478,30 +762,61 @@ batch.
 
 ## 12. Быстро обновить orchestration между cohorts
 
-После подготовки новой tracked версии flow:
+Обычный fast path для tracked policy/telemetry или compatible execution change:
 
 ```text
-flow=upgrade 5d6e7f8
+flow upgrade run=run-7f31 source=5d6e7f8 control_id=flow-upgrade-4
 ```
 
-Skill должен:
+Coordinator текущим pinned contract:
 
 - закрыть dispatch;
 - достичь quiescent boundary;
 - проверить отсутствие pending external effects;
 - классифицировать diff как telemetry/policy, execution protocol или
   authority/state change;
-- выполнить соответствующий smoke/migration;
+- выполнить соответствующий smoke;
 - разрешить полный bundle, сохранить его content identity `contract_sha` и
   source commit `contract_source_sha`;
-- начать новый cohort;
+- для compatible change начать новый cohort;
 - продолжить product delivery, только если upgrade был запрошен из running
   state.
 
+Если classification — `authority/state`, fast path **не** меняет authority или
+schema. Он превращается только в preparation и возвращает exact plan:
+
+```text
+upgrade: up-42 / confirmation-required
+source: 5d6e7f8
+class: authority-state
+expected state revision: 184
+expected owner epoch: 7
+dry-run: passed
+confirm with: flow upgrade confirm run=run-7f31 upgrade=up-42 \
+  expected_state_revision=184 expected_owner_epoch=7 control_id=<unique-id>
+```
+
+Если заранее известно, что меняется authority/state contract, используйте
+явную prepare форму:
+
+```text
+flow upgrade prepare run=run-7f31 source=5d6e7f8 \
+  control_id=flow-prepare-4
+```
+
+`prepare` может quiesce run и выполнить isolated dry-run, но не записывает
+новую schema/version и не передаёт authority. Только exact `confirm` повторно
+проверяет zero live writers/effects, expected state revision и owner epoch,
+после чего применяет plan. Изменившийся snapshot делает `upgrade_id` stale.
+Duplicate `confirm` с тем же `control_id` возвращает сохранённый result, а не
+повторяет migration.
+
 Если вы сначала сделали `pause=checkpoint`, user pause сохраняется после
-upgrade и снимается только отдельным `resume`. Если `flow=upgrade` отправлен во
-время running, skill сам делает временную quiescent boundary и возвращается к
-прежнему running intent после успешной проверки.
+upgrade и снимается только отдельным `resume`. Если fast-path `flow upgrade`
+отправлен во время running, skill сам делает временную quiescent boundary и
+возвращается к прежнему running intent после успешной проверки. Authority/state
+upgrade после `confirm` также возвращается к прежнему intent, если plan явно
+сохранил `resume_after_apply=true`; иначе остаётся `QUIESCENT`.
 
 Не требуется замораживать orchestration на весь work scope. Также не требуется
 обязательный review после каждого маленького cohort. Ограничение другое:
@@ -543,7 +858,7 @@ Work item может получить normalized status `done` после про
 Default:
 
 ```text
-review=manual
+config run=run-7f31 review=manual control_id=review-policy-1
 ```
 
 Это значит: ни cohort, ни batch сами по себе не запускают reviewer-а. Tests,
@@ -553,9 +868,9 @@ full gate, CI и release evidence остаются обязательными; r
 Варианты:
 
 ```text
-review=on-anomaly
-review=uat
-review=final
+config run=run-7f31 review=on-anomaly control_id=review-policy-2
+config run=run-7f31 review=uat control_id=review-policy-3
+config run=run-7f31 review=final control_id=review-policy-4
 ```
 
 `on-anomaly` должен иметь заранее видимые triggers: unexpected cross-cutting
@@ -568,23 +883,25 @@ surface, state incoherence или failed live smoke.
 Разовый review запускается без смены policy:
 
 ```text
-review=now scope=batch
-review=now scope=item:WI-203
-review=now scope=sha:4ac91e2
+review=now run=run-7f31 target=batch:6b592d35-1534-41f9-b5af-3462d8152f11 control_id=review-u04
+review=now run=run-7f31 target=item:72ef4fe4-6004-48aa-b8fb-1f0b9bd08591 control_id=review-item-1
+review=now run=run-7f31 target=sha:4ac91e2c4bb0ae9f7dc828f18c7a3dbe449d0bc1 control_id=review-sha-1
 ```
 
 Reviewer читает exact snapshot и возвращает findings. Он не получает mutation
-authority, а исправления выполняет обычный writer lane.
+authority, а исправления выполняет обычный writer lane. Значения после
+`batch:` и `item:` — exact canonical IDs, не display name, task key или alias;
+`sha:` содержит полный object ID.
 
 ## 15. Настройка работающего run
 
 Некоторые policies можно менять follow-up сообщением без нового Goal:
 
 ```text
-config lanes=1
-config lanes=auto max=2
-config release=continuous-uat
-config review=on-anomaly
+config run=run-7f31 lanes=1 control_id=lanes-1
+config run=run-7f31 lanes=auto max=2 control_id=lanes-auto-2
+config run=run-7f31 release=continuous-uat control_id=release-continuous
+config run=run-7f31 review=on-anomaly control_id=review-anomaly
 ```
 
 Capacity меняется на checkpoint: сокращение drains лишние lanes, расширение
@@ -619,18 +936,28 @@ UAT environment и evidence class — разные поля. Частые UAT de
 Если live smoke или ваше наблюдение провалилось:
 
 ```text
-uat verdict=rejected
-rollback=last-stable
+uat verdict=rejected run=run-7f31 cut=cut-0.2-u04 \
+  control_id=reject-u04
+rollback prepare run=run-7f31 cut=cut-0.2-u04 target=last-stable \
+  control_id=rollback-prepare-u04
 ```
 
-Первая rollback-команда ничего не меняет. Skill сначала устанавливает
+Rejected verdict создаёт exact release hold, например `hold-31`, привязанный к
+cut и его live deployment. `resume` такой hold не снимает. Status показывает
+hold ID, reason, cut и допустимые resolution paths.
+
+`rollback prepare` ничего не меняет. Skill сначала устанавливает
 фактический current deployment и показывает exact from/to plan:
 
 ```text
 rollback plan: rb-017
+run: run-7f31
+hold: hold-31
 from: UAT deployment d104 / SHA bad1234
 to: UAT deployment d103 / SHA good987
-confirm with: rollback=confirm rb-017
+expected current deployment: d104
+confirm with: rollback confirm run=run-7f31 plan=rb-017 \
+  control_id=<unique-id>
 ```
 
 Только explicit confirmation выполняет повторный reconciliation, продвижение
@@ -646,7 +973,22 @@ Rollback:
 - сохраняет from/to deployment IDs и причину;
 - создаёт defect/blocker routing для исправления.
 
-Вслепую повторять deploy после потерянного acknowledgement запрещено.
+После проверенного rollback или replacement cut hold снимается отдельным exact
+control:
+
+```text
+hold clear run=run-7f31 hold=hold-31 resolution=rollback:rb-017 \
+  defect=WI-244 control_id=hold-clear-31
+
+hold clear run=run-7f31 hold=hold-31 resolution=cut:cut-0.2-u05 \
+  defect=WI-244 control_id=hold-clear-31b
+```
+
+Coordinator проверяет referenced receipt, live deployment, required smoke и
+durable defect routing. Stale, failed или unrelated resolution отклоняется.
+`hold clear` снимает только названный release hold, но не technical/security
+blocker. Вслепую повторять deploy или confirmation после потерянного
+acknowledgement запрещено; применяется общий `control_id` protocol из §2.1.
 
 ## 18. Типовые сценарии
 
@@ -654,8 +996,8 @@ Rollback:
 
 ```text
 $ship-work-release lanes=1 release=continuous-uat
-status
-pause=uat grace=5m
+status run=<run_id>
+pause=uat run=<run_id> grace=5m control_id=pause-uat-1
 ```
 
 Результат: один writer, несколько связных work items, один meaningful UAT cut и
@@ -674,7 +1016,7 @@ Router показывает admission rationale. Если ready work перес�
 ### Быстрая остановка без дорогого gate
 
 ```text
-pause=checkpoint grace=3m
+pause=checkpoint run=<run_id> grace=3m control_id=pause-fast-1
 ```
 
 Результат: dispatch закрыт, хвосты committed/preserved, gate и deploy не
@@ -683,7 +1025,7 @@ pause=checkpoint grace=3m
 ### Посмотреть candidate до UAT
 
 ```text
-pause=batch
+pause=batch run=<run_id> control_id=pause-batch-1
 ```
 
 Результат: exact candidate + full gate/CI, но live Site не меняется.
@@ -691,9 +1033,9 @@ pause=batch
 ### Обновить сам flow внутри work scope
 
 ```text
-pause=checkpoint
-flow=upgrade 5d6e7f8
-resume
+pause=checkpoint run=<run_id> control_id=pause-flow-1
+flow upgrade run=<run_id> source=5d6e7f8 control_id=flow-upgrade-1
+resume run=<run_id> control_id=resume-flow-1
 ```
 
 Результат: новый cohort с preserved product progress, без scope-long

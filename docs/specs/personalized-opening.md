@@ -79,8 +79,9 @@ Mind. При переводе public/unlisted Mind в private baseline grants п
 также открывает всю immutable history; возврат в private не отменяет уже
 состоявшееся раскрытие.
 
-Initial Sites binding использует normalized verified email, но internal access
-всегда опирается на immutable `principal_id`. Exact match возвращает existing
+Initial Sites binding использует normalized platform-authenticated email из
+server-side request context, но internal access всегда опирается на immutable
+`principal_id`. Exact match возвращает existing
 account; unknown email явно создаёт новый изолированный account без прежних прав
 либо запускает manual recovery с независимой проверкой identity. Automatic
 relink/merge запрещён.

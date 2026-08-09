@@ -18,8 +18,9 @@ production является отдельным manual-only target.
 
 Это не доказывает, что ChatGPT или AgentCore уже одинаково поддерживают все
 семантические изменения MCP `2026-07-28`. Поэтому protocol lifecycle остаётся
-за adapter boundary: `2026-07-28` — target, а `2025-11-25` — явный legacy
-compatibility profile только для клиента, на котором он реально потребовался.
+за adapter boundary: `2026-07-28` — target, а предыдущая stable revision
+`2025-11-25` — явный compatibility profile только для клиента, на котором он
+реально потребовался.
 
 Для первого прототипа документально подтверждён practicable путь с bearer
 token в Codex, но не end-to-end совместимость готового Mind Diary MCP с Codex
@@ -66,11 +67,12 @@ capability. Напротив, реальный Sites + MCP compatibility gate с
   settings. Sites документирует durable D1/R2 bindings, server-side identity,
   project linkage через `.openai/hosting.json` и custom domains там, где они
   доступны.
-- Sites передаёт server-side verified email в
+- Sites передаёт server-side authenticated email address в
   `oai-authenticated-user-email` и optional full name в
-  `oai-authenticated-user-full-name`. В проверенной документации не найдено
-  обещания стабильного external subject, поэтому durable account key и email
-  relink нельзя считать закрытым platform contract.
+  `oai-authenticated-user-full-name`. Официальная формулировка не является
+  отдельным provider-level `verified` claim; в проверенной документации также
+  не найдено обещания immutable external subject. Поэтому durable account key
+  и email relink нельзя считать закрытым platform contract.
 - Sites documentation не обещает, что произвольный Site является совместимым
   Streamable HTTP MCP host. Совместное размещение остаётся compatibility spike.
 
@@ -94,7 +96,8 @@ capability. Напротив, реальный Sites + MCP compatibility gate с
 
 ## Изменения в проектной документации
 
-- Current MCP target исправлен на `2026-07-28`; legacy `2025-11-25` изолирован.
+- Current MCP target исправлен на `2026-07-28`; compatibility profile
+  предыдущей stable revision `2025-11-25` изолирован.
 - Compatibility gates стали version-aware вместо безусловного требования
   `initialize`.
 - Sites availability приведена к текущей официальной формулировке.
@@ -103,9 +106,10 @@ capability. Напротив, реальный Sites + MCP compatibility gate с
 - Первый prototype auth зафиксирован как revocable personal bearer token;
   OAuth 2.1 + PKCE оставлен production target.
 - Sites identity binding отделён от internal immutable `principal_id`, потому
-  что текущая документация не фиксирует stable external subject. Initial email
-  binding нормализуется server-side; unknown email явно создаёт isolated account
-  без прежних прав либо идёт в manual recovery, без automatic relink/merge.
+  что текущая документация фиксирует authenticated email header, но не stable
+  external subject. Initial email binding нормализуется server-side; unknown
+  email явно создаёт isolated account без прежних прав либо идёт в manual
+  recovery, без automatic relink/merge.
 - MCP первого прототипа зафиксирован как custom Mind-aware tool profile;
   company-knowledge compatibility отложена до отдельного решения.
 - Production target MVP зафиксирован как Sites-only; AWS и отдельный MCP runtime
@@ -121,6 +125,7 @@ deployment.
 ## Первичные источники
 
 - [MCP specification 2026-07-28](https://modelcontextprotocol.io/specification/2026-07-28/basic)
+- [MCP: final release announcement 2026-07-28](https://blog.modelcontextprotocol.io/posts/2026-07-28/)
 - [MCP specification 2025-11-25](https://modelcontextprotocol.io/specification/2025-11-25/basic)
 - [OpenAI: build an MCP server](https://developers.openai.com/plugins/build/mcp-server)
 - [OpenAI: authenticate an MCP server](https://developers.openai.com/plugins/build/auth)

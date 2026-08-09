@@ -1,8 +1,10 @@
 # Доменная модель и доступ
 
-Статус: proposal, 2026-08-05. Product decisions в этом документе приняты для
-первого прототипа; точные API schemas и storage implementation ещё не
-реализованы.
+Статус: proposal, обновлено 2026-08-09. Product decisions в этом документе
+приняты для первого прототипа. Точные wire schemas принадлежат
+[API specification](api.md); repository baseline уже содержит domain,
+application, memory/Sites storage adapters и tests, а их live UAT evidence
+учитывается отдельно от нормативной модели.
 
 ## Терминология
 
@@ -68,9 +70,10 @@ flowchart LR
 Доступ к системе имеет только зарегистрированный и аутентифицированный
 principal. Anonymous access отсутствует во всех visibility modes.
 
-UAT MVP на Sites получает проверенный account context от Sites и создаёт
+UAT MVP на Sites получает platform-authenticated account context и создаёт
 собственный immutable `principal_id`. Начальный external binding использует
-server-normalized verified email. Exact match открывает существующий principal.
+server-normalized email из этого context. Exact match открывает существующий
+principal, но email не считается стабильным внешним subject.
 Текущая документация Sites не фиксирует стабильный внешний subject identifier,
 поэтому неизвестный email невозможно автоматически отличить от смены email:
 пользователь явно создаёт новый изолированный account без унаследованных прав
@@ -78,8 +81,8 @@ server-normalized verified email. Exact match открывает существ�
 проверки identity и никогда не выполняются автоматически. Email не становится
 internal authorization ID.
 
-`Principal.display_name` инициализируется из verified full name, если он есть;
-иначе пользователь задаёт его при первом входе. Дальнейшее изменение profile
+`Principal.display_name` инициализируется из optional platform-provided full
+name, если он есть; иначе пользователь задаёт его при первом входе. Дальнейшее изменение profile
 name атомарно обновляет display name Personal Mind, но не его content revision.
 
 Account bootstrap — одна атомарная операция:

@@ -14,9 +14,10 @@ D1 migration, package lock и `.openai/hosting.json`. Hosting manifest объя�
 созданный coordinator-owned Sites project, D1 `DB` и R2
 `MIND_DIARY_BUCKET`; runtime secrets в repository не записываются.
 
-Production composition соединяет:
+Candidate composition соединяет:
 
-- trusted Sites verified identity с account bootstrap и authenticated `/`,
+- platform-authenticated Sites email identity с account bootstrap и
+  authenticated `/`,
   `/me`, `/{space_handle}` и `/api/v1` control routes;
 - exact-Origin и principal-bound CSRF для browser mutations;
 - Bearer-authenticated Streamable HTTP `POST /mcp` с custom Mind-aware content
@@ -101,7 +102,7 @@ Sites project/version/deployment и зафиксировать:
 - release manifest с exact Git SHA, project, version, deployment и live URL
   (`R`).
 
-Эта граница больше не является текущим status: production release выполнен
+Эта граница больше не является текущим status: UAT deployment выполнен
 наследником candidate. Exact `/mcp` действительно оказался platform-reserved
 до Worker; product MCP перенесён на `/api/mcp`, а default Codex получает
 изолированный `/api/mcp/2025-11-25`. Исторические сомнения и последующий

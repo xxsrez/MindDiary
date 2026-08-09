@@ -36,7 +36,13 @@ evidence, предлагаемый дизайн и ещё не проверен�
    принятый контракт `ship-work-release`: task-manager adapters, один mutable
    writer по умолчанию, selective lanes и scouts, cohorts, control API,
    dev/UAT promotion и ручная production boundary.
-12. [Linear adapter для `ship-work-release`](specs/ship-work-release-linear.md) —
+12. [Контракт project profile](specs/ship-work-release-project-profile.md) —
+   versioned provider-neutral schema обязательных project-specific commands,
+   runtime capabilities, gates, environments и evidence rows.
+13. [Контракт task-management adapter](specs/ship-work-release-task-manager.md) —
+   versioned provider-neutral schema identity, snapshots, mutations,
+   reconciliation и capability negotiation task-management backend-а.
+14. [Linear adapter для `ship-work-release`](specs/ship-work-release-linear.md) —
    отдельное отображение Linear projects, milestones, issues, relations,
    statuses и updates в универсальную модель work collection/scope/item.
 
@@ -101,14 +107,66 @@ evidence, предлагаемый дизайн и ещё не проверен�
   — исторический repository candidate, впоследствии интегрированный в
   deployment, который теперь классифицируется как UAT.
 
-## Статусы документов
+## Статусы и проверяемые claims
 
-- `report` фиксирует наблюдения на указанную дату и не обещает реализацию.
-- `proposal` описывает рекомендуемое направление, которое ещё можно менять.
-- `baseline` фиксирует рабочую основу для прототипов, но не окончательный
-  production-стандарт.
-- `accepted` используется для явно принятого нормативного контракта или ADR;
-  значимые изменения решения фиксируются новым или superseding ADR.
+Тип документа (`specification`, `ADR`, `guide`, `runbook`, `report`) описывает
+его назначение, но не заменяет lifecycle status. В частности, `report` — это
+датированный тип evidence-документа, а не нормативный статус. Для документов,
+которые одновременно описывают требования, реализацию и результаты проверок,
+используются три независимые оси: `normative_status`,
+`implementation_status` и датированные записи `evidence[]`.
+Если один файл охватывает несколько независимо меняющихся surfaces, статусы
+указываются для конкретного раздела или claim, а не сворачиваются в один
+оптимистичный статус всего документа.
+
+### Нормативный статус
+
+- `proposal` — рекомендуемая модель, которая ещё не является обязательным
+  контрактом;
+- `baseline` — выбранная рабочая основа для прототипирования и совместимости;
+  она нормативна в заявленном scope, но допускает пересмотр без утверждения,
+  что это окончательный production-стандарт;
+- `accepted` — действующий нормативный контракт или принятое решение; его
+  значимые изменения требуют явного нового решения либо superseding ADR;
+- `superseded` — оставленный в активном дереве исторический документ, который
+  больше не является источником текущих требований. Он сохраняет rationale и
+  evidence своего периода и обязан ссылаться на заменивший его документ;
+- `not_applicable` — документ не устанавливает требований, например
+  датированный report с одними наблюдениями.
+
+Нормативный статус ничего не утверждает о наличии кода, deployment или live
+verification. Устаревший документ не требуется сохранять в активном дереве
+только ради статуса `superseded`: если его rationale не нужен для текущей
+навигации, достаточным архивом остаётся Git history.
+
+### Статус реализации
+
+- `not_started` — требование ещё не реализовано;
+- `partial` — реализована только явно перечисленная часть заявленного scope;
+- `implemented` — заявленный scope присутствует в exact repository artifact и
+  прошёл указанные repository checks;
+- `unknown` — текущая реализация не проверялась либо доступных данных
+  недостаточно;
+- `not_applicable` — документ не задаёт реализуемого поведения.
+
+Implementation claim всегда указывает свой scope и artifact или Git SHA.
+Нельзя выводить `implemented` только из `accepted`, из статуса task manager или
+из наличия deployment.
+
+### Evidence и время наблюдения
+
+Каждый внешний, CI, deployment или live claim указывает:
+
+- что именно проверено и каким probe;
+- environment/target и exact artifact или Git SHA;
+- результат и ссылку на redacted evidence;
+- `observed_at` в UTC.
+
+Evidence подтверждает только перечисленную surface в момент `observed_at`:
+local check не доказывает CI, CI не доказывает deployment, а deployment без
+live probe не доказывает работоспособность. Более позднее evidence не
+переписывает датированный report задним числом; current-документ ссылается на
+новое наблюдение отдельно.
 
 ## Полнота design bootstrap
 
@@ -135,9 +193,10 @@ High-level контур проекта закрыт следующими док�
   dependency rules — в specification границ реализации;
 - критерии 1–29, их owning stories и обязательный release evidence — в
   traceability matrix;
-- автономная реализация work scope, task-manager adapter contract, worker
-  topology, integration cutoffs, session fencing и blocker policy — в delivery
-  specification, provider adapter и operations runbook;
+- автономная реализация work scope, project profile, task-manager adapter
+  contract, worker topology, integration cutoffs, session fencing и blocker
+  policy — в delivery specification, supporting contracts, provider adapter и
+  operations runbook;
 - актуальность внешнего формата данных — в датированном OKF report;
 - конкурентная среда, уточнённый ICP, риски и validation gates — в датированном
   market assessment;

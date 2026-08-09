@@ -53,8 +53,9 @@ concurrency. Ответы агента и персонализированная
 ## Account и Personal Mind
 
 Система доступна только зарегистрированным authenticated пользователям. Первый
-hosted UAT MVP на Sites связывает проверенную ChatGPT/Sites identity с внутренним
-`principal_id`. Initial verified-email binding нормализуется server-side;
+hosted UAT MVP на Sites связывает platform-authenticated ChatGPT/Sites context с
+внутренним `principal_id`. Initial email binding из server-side context
+нормализуется;
 exact match возвращает существующий account. Неизвестный email явно создаёт
 новый изолированный account без прежних прав либо запускает ручной recovery с
 независимой проверкой identity; automatic relink/merge запрещён.

@@ -26,7 +26,12 @@ OKF, MCP, knowledge graphs или архитектурой хранения. П�
 |---|---|
 | `Mind` | `KnowledgeSpace` / короткое техническое `Space` |
 | `Memory` | `KnowledgeEntry` как пользовательский umbrella term |
-| `Memories` | Набор entries; `Source`, `Asset`, `Index` и `Log` сохраняют отдельные технические правила |
+| `Memories` | Набор entries; `Source`, `Index` и `Log` сохраняют отдельные технические правила |
+
+OKF 0.2 не задаёт нормативную entity `Asset`. Будущие non-Markdown files могут
+получить producer-defined технические типы вроде `BundleFile`/`OpaqueAsset`
+только после отдельной specification; пользовательский umbrella term
+`Memories` сам по себе их не вводит.
 
 В пользовательском тексте `Mind` и `Memory` пишутся с заглавной буквы, когда
 обозначают сущности продукта. Обычные значения слов mind и memory оформляются

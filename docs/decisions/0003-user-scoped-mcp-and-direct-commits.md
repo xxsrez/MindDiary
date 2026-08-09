@@ -17,10 +17,15 @@ workflow.
 - Каждый content tool явно выбирает ровно один Mind и revision. General implicit
   cross-Mind search/synthesis отсутствует.
 - Первый MCP auth использует named revocable opaque bearer token, bound к
-  principal. Secret имеет не менее 256 random bits, показывается один раз, на
-  server хранится hash; default expiry 90 дней; scopes — `content:read` и
-  `content:write`, причём write scope включает read и write-only token не
-  выпускается.
+  principal. Canonical secret — `mdp_v1_` + 43 unpadded base64url characters,
+  которые декодируются ровно в 32 CSPRNG bytes; он показывается один раз. Server
+  хранит только safe display prefix, lifecycle/scopes и exact indexed keyed
+  HMAC-SHA-256 verifier `hmac-sha256:v1:<64 lowercase hex>`; plain secret,
+  recoverable material и unkeyed hash отсутствуют. HMAC key содержит минимум
+  256 random bits и хранится отдельно от token table. Default и maximum
+  expiry — 90 дней; scopes — `content:read` и `content:write`, причём write
+  scope включает read и write-only token не выпускается. Полный cryptographic
+  contract зафиксирован в [ADR-0005](0005-mcp-token-secret-verifier.md).
 - MCP content mutations commit-ятся сразу. `commit_changeset` принимает
   `expected_revision`, `idempotency_key` и atomic file operations; persisted
   draft, diff approval и approval artifact отсутствуют.

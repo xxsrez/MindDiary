@@ -12,7 +12,8 @@ raw modern discovery и оба профиля `codex-cli 0.147.0` провере
 
 - authenticated Sites account и автоматически созданный Personal Mind;
 - ordinary Minds с single Owner, invitations, roles и visibility;
-- user-scoped MCP для Codex/Claude Code без загрузки всего corpus;
+- user-scoped MCP для Codex без загрузки всего corpus; другие clients, включая
+  Claude Code, требуют отдельного adapter/client conformance evidence;
 - individual-file UTF-8 Markdown access и переносимый deterministic export;
 - immediate multi-file commits с immutable history и optimistic concurrency;
 - public/unlisted live-HEAD reads только для authenticated users;
@@ -147,9 +148,10 @@ tool calls после redeploy.
 
 ### 4. Infrastructure adapters
 
-- Dev: localhost runtime с isolated local/test data; in-memory/filesystem и
-  SQLite adapters остаются contract fixtures, пока full launcher не выберет
-  exact composition.
+- Dev: project-profile launcher поднимает `apps/mind-diary-site` как
+  Web/API/MCP Worker на localhost через Vinext/Cloudflare-compatible runtime с
+  локальными D1/R2 bindings. In-memory adapters остаются deterministic contract
+  fixtures и не заменяют этот dev runtime.
 - Sites MVP UAT: D1 metadata/search/audit и R2 canonical
   objects/export. Bindings и сохранение account/Personal Mind после redeploy
   проверены live; quota, recovery и большой export требуют отдельного
@@ -161,13 +163,15 @@ tool calls после redeploy.
 
 ### Sites account
 
-Web adapter принимает только platform-verified identity context. Первый
-prototype создаёт свой opaque immutable `principal_id` и binding к verified
-external identity. Email/display name не передаются клиентом как authority.
+Web adapter принимает только platform-authenticated identity context. Первый
+prototype создаёт свой opaque immutable `principal_id` и binding к
+authenticated platform identity. Email/display name не передаются клиентом как
+authority.
 
-Документация Sites сейчас описывает verified email header и optional full-name
-header, но не обещает стабильный external subject. Initial binding использует
-server-normalized verified email, exact match возвращает existing principal.
+Документация Sites сейчас описывает authenticated email и optional full-name
+request context, но не обещает стабильный external subject. Initial binding
+использует server-normalized email из этого context; exact match возвращает
+existing principal.
 Unknown email нельзя отличить от смены email: explicit create получает новый
 изолированный principal без прежних прав, а recovery требует отдельной ручной
 проверки identity. Сервис никогда автоматически не relink/merge-ит accounts и
@@ -175,8 +179,9 @@ Unknown email нельзя отличить от смены email: explicit crea
 
 Account bootstrap transaction создаёт principal, Personal Mind и owner binding.
 Retry использует external-binding idempotency и возвращает существующий account.
-Display name инициализируется из verified full name либо вводится при первом
-входе; его последующая смена обновляет metadata Personal Mind, а не content HEAD.
+Display name инициализируется из optional platform-provided full name либо
+вводится при первом входе; его последующая смена обновляет metadata Personal
+Mind, а не content HEAD.
 
 ### MCP personal access tokens
 
@@ -486,7 +491,7 @@ configuration зафиксированы в
 Metrics: request latency/errors, auth failures, CAS conflicts, index lag,
 invitation outcomes, token issuance/revocation и deletion counts. Logs/traces не
 содержат concept/source bodies, PersonalContext, raw email where avoidable,
-token secret/hash, presigned URL или private search query.
+token secret/verifier, presigned URL или private search query.
 
 Каждая account, ownership, membership, visibility и successful content commit
 operation создаёт audit event с opaque actor/subject IDs, target `space_id`,
@@ -513,11 +518,14 @@ audit log.
 
 - Даст ли Sites stable external identifier, позволяющий позже заменить ручной
   fail-closed account recovery безопасным automatic relink?
-- Пройдут ли migrated `/api/mcp`, isolated `/api/mcp/2025-11-25` и Bearer
-  forwarding реальный Sites gate? До положительного evidence это blocker MVP
-  UAT release, а не основание автоматически выбрать отдельный runtime.
-- Как реализовать immediate full deletion и доказать удаление replicated/index
-  data до появления production retention model?
+- Сохранят ли `/api/mcp`, isolated `/api/mcp/2025-11-25` и Bearer forwarding
+  проверенную совместимость при изменениях Sites runtime или target Codex?
+  Базовый UAT gate уже пройден; каждый новый release и platform/client upgrade
+  должны повторно проверить exact paths и lifecycle, а regression блокирует
+  новый UAT cut без автоматического fallback в отдельный runtime.
+- Как доказать physical erasure replicated/index data на exact UAT deployment
+  для уже реализованного restartable deletion lifecycle до появления
+  production retention model?
 - Нужны ли позже soft delete/recovery и formal privacy-retention policy?
 - Когда сложности конфликтов оправдают structured index merge вместо current
   HEAD CAS/retry?

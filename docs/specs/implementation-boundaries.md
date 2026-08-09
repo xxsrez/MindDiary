@@ -1,9 +1,12 @@
 # Границы реализации domain, application и adapters
 
-Статус: proposal, 2026-08-06. Документ фиксирует обязательную форму будущей
-реализации первого прототипа. Runtime packages, dependency checks, tests и
-deployment ещё не созданы; описанные ниже правила нельзя считать уже
-автоматически обеспеченными.
+Статус: proposal, обновлено 2026-08-09. Документ фиксирует обязательные
+границы реализации первого прототипа. В репозитории уже существуют TypeScript
+packages, application/adapters, dependency checks, tests и Product Site
+composition, следующие этой карте. Это executable repository evidence, но не
+автоматическое доказательство каждого поведенческого требования или live UAT
+semantics: такие утверждения требуют соответствующего test либо release
+evidence на exact candidate.
 
 ## Назначение
 
@@ -94,8 +97,8 @@ ActorContext:
 
 Правила построения:
 
-1. Web adapter принимает identity только из проверенного server-side Sites
-   binding. Он нормализует verified email в sensitive binding value и не
+1. Web adapter принимает identity только из platform-authenticated server-side
+   Sites context. Он нормализует email из этого context в sensitive binding value и не
    позволяет body/header подменить его. До регистрации допустим только
    `sites_identity_before_registration`; после exact binding lookup core
    использует immutable `principal_id`.
@@ -178,11 +181,19 @@ Port не принимает client role как authority. Для private missin
 
 ### `TokenHasher`
 
-Изолирует cryptographic token handling: создаёт secret с минимум 256 random
-bits, вычисляет non-recoverable stored verifier и constant-time проверяет
-candidate. Raw secret не возвращается после issue response и не проходит в
-`MetadataStore` либо audit. Exact KDF/lookup scheme остаётся implementation
-choice и требует отдельной проверки.
+Изолирует cryptographic token handling по принятому
+[ADR-0005](../decisions/0005-mcp-token-secret-verifier.md): создаёт canonical
+secret `mdp_v1_` + 43 unpadded base64url characters из ровно 32 random bytes и
+вычисляет versioned keyed HMAC-SHA-256 verifier `hmac-sha256:v1` под отдельным
+deployment key. Persisted verifier служит exact lookup key; raw secret
+показывается только через consume-once issue response и не проходит в
+`MetadataStore`, audit или logs.
+
+Malformed или oversized candidate отклоняется до storage. Canonical candidate
+требует одной HMAC, одного indexed lookup и constant-time сравнения двух
+32-byte verifier values. Медленный password KDF для high-entropy
+server-generated token не используется; deployment key хранится отдельно от
+token records и не экспортируется через application boundary.
 
 ### `AuditSink`
 
@@ -216,14 +227,14 @@ errors разрешены, но application modules не вызывают сос
 
 ```text
 queries:
-  get_session, get_account_deletion_impact
+  get_session, get_account_deletion_impact, get_mind_deletion_impact
   list_minds, resolve_mind_metadata, get_mind_info, list_public_minds
   list_members, list_invitations, list_mcp_tokens
 
 commands:
   bootstrap_account, rename_account, delete_account
   create_space_with_owner, rename_space, change_visibility, delete_space
-  create/accept/reject/cancel_invitation
+  create/accept/reject/cancel/reissue_invitation
   change/revoke_membership, leave_space, transfer_ownership
   issue_mcp_token, revoke_mcp_token
 ```
@@ -369,8 +380,10 @@ browse/fetch сразу после metadata commit; search честно сооб
    же operation продолжает deletion; восстановить доступ или отменить процесс
    нельзя.
 
-Этот proposal требует отдельной реализации и failure-injection tests; он не
-является доказательством physical erasure на Sites storage.
+Текущий repository baseline реализует restartable deletion lifecycle и
+failure-injection tests. Они доказывают application/adapter contract на
+проверенном commit, но сами по себе не являются доказательством physical
+erasure на Sites storage; для этого требуется отдельное redacted live evidence.
 
 ### Audit delivery
 
@@ -380,8 +393,8 @@ retry не повторяет business command, а deduplicate-ится по `ev
 
 ## Enforceable dependency rules
 
-Следующие правила должны быть представлены не только prose, но и manifests,
-import graph checks и compile/test targets после появления runtime:
+Следующие правила представлены не только prose, но и package manifests,
+TypeScript references, import graph checks и compile/test targets:
 
 1. `domain` не импортирует `okf-codec`, application, adapters или
    composition-root. Разрешены только standard library и отдельно одобренные
@@ -407,23 +420,23 @@ import graph checks и compile/test targets после появления runtim
    test helper, generated client или shared «common» module. Test fixtures для
    domain/codec также компилируются без infrastructure graph.
 
-Минимальный automated gate будущего baseline:
+Минимальный automated gate текущего baseline:
 
 - отдельные package/workspace manifests для leaf и application modules;
 - compile/typecheck `domain` и `okf-codec` с их собственными dependency graphs;
 - forbidden-import и forbidden-transitive-dependency check;
 - architecture tests на allowed edges и absence cross-façade imports;
-- contract tests, запускаемые одинаково против local и будущих Sites adapters;
+- contract tests для local/in-memory и Sites adapters;
 - один canonical command, запускающий эти проверки на exact commit.
 
-Эти manifests и checks относятся к следующей runtime/toolchain story AND-38.
-В текущем design-first repository их нет, поэтому AND-36 фиксирует contract,
-но не заявляет выполнение compile/dependency acceptance criteria. До появления
-и прохождения automated gate runtime boundary остаётся batch-level gap.
+Эти manifests и checks находятся в `packages/*`, TypeScript project references,
+`scripts/check-architecture.mjs` и canonical `npm run check`. Их прохождение
+подтверждает repository boundary только на exact commit: оно не заменяет
+Product Site build и live Sites/Codex release gates.
 
 ## Verification contract реализации
 
-После появления code acceptance этой границы требует:
+Acceptance и дальнейшее сохранение этой границы требуют:
 
 - positive/invalid/denied/stale/retry/race tests для каждой transaction выше;
 - проверку итогового state после failure, включая отсутствие partial HEAD,
@@ -446,5 +459,5 @@ Live Sites/MCP compatibility, physical storage semantics и Codex conformance
 - raw browser content surface или control-plane MCP tools;
 - imports, checkpoints, non-Markdown assets, personalized landing, anonymous
   access, company-knowledge profile, drafts/approval и Claude Code support;
-- утверждение, что описанные modules, ports, transactions или checks уже
-  реализованы.
+- утверждение, что наличие modules, ports и local checks само по себе доказывает
+  physical storage semantics, live Sites compatibility или client conformance.

@@ -58,8 +58,9 @@ prod-like validation surface, и будущую live environment реальны�
 - Пока production target не provisioned, любой production release fail closed.
 
 Project-specific commands, targets и evidence matrix принадлежат
-[delivery profile](../operations/ship-work-release-profile.md), а не
-универсальной specification skill.
+[delivery profile](../operations/ship-work-release-profile.md), который следует
+[универсальному profile contract](../specs/ship-work-release-project-profile.md),
+а не базовой specification skill.
 
 ### Семантика слов
 
@@ -98,6 +99,7 @@ Project-specific commands, targets и evidence matrix принадлежат
 
 Связанные документы:
 [delivery specification](../specs/ship-work-release.md),
+[project profile contract](../specs/ship-work-release-project-profile.md),
 [operator runbook](../operations/ship-work-release.md),
 [MVP specification](../specs/mvp.md) и
 [architecture](../architecture.md).

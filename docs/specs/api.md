@@ -185,6 +185,11 @@ Application-layer error имеет стабильный machine code:
 
 `message` пригоден для человека и модели, но клиенты ветвятся только по
 `code`. `details` не раскрывает private metadata при denied/not-found cases.
+Все строковые codes ниже определены продуктом Mind Diary и не являются
+зарегистрированными числовыми JSON-RPC/MCP error codes. REST adapter переносит
+их в Problem Details, а MCP adapter — в tool execution result; protocol error
+используется только в случаях, прямо отделённых в разделе
+[MCP protocol и application errors](#mcp-protocol-и-application-errors).
 
 Базовая taxonomy:
 
@@ -308,8 +313,16 @@ Rules:
 - Mutating browser requests требуют valid same-origin `Origin` и CSRF
   protection. Предлагаемый wire field — `X-CSRF-Token`, полученный из
   `GET /api/v1/session`; exact Sites integration остаётся compatibility gate.
-- Secret, CSRF token, verified email, private query/body и deletion download
-  grants не логируются.
+- Secret, CSRF token, authenticated/account email, private query/body и
+  deletion download grants не логируются.
+
+Официальный Sites contract на момент обновления документирует
+`oai-authenticated-user-email` как authenticated email address и optional
+`oai-authenticated-user-full-name`, но не обещает immutable external subject
+или отдельный provider-level `verified` claim. Initial normalized-email binding
+— принятый project profile поверх trusted header; после bootstrap authority
+задаёт immutable internal `principal_id`. Изменение platform semantics требует
+повторной compatibility проверки, а не automatic relink.
 
 ### REST response envelope
 
@@ -390,7 +403,7 @@ Problem Details response:
 | `POST` | `/api/v1/invitations/{invitation_id}/reject` | Target rejects pending invitation. |
 | `POST` | `/api/v1/invitations/{invitation_id}/reissue` | Current authorized sender atomically replaces an invitation. |
 | `DELETE` | `/api/v1/invitations/{invitation_id}` | Authorized sender cancels invitation. |
-| `GET` | `/api/v1/mcp-tokens` | Token metadata, never secrets/hashes. |
+| `GET` | `/api/v1/mcp-tokens` | Token metadata, never secrets/verifiers. |
 | `POST` | `/api/v1/mcp-tokens` | Issue named personal MCP token once. |
 | `DELETE` | `/api/v1/mcp-tokens/{token_id}` | Revoke token. |
 
@@ -414,7 +427,7 @@ Problem Details response:
 ```
 
 Для active account response содержит safe principal metadata и Personal Mind
-descriptor. Full verified email возвращать не требуется.
+descriptor. Full authenticated/account email возвращать не требуется.
 
 `POST /api/v1/account`:
 
@@ -560,9 +573,12 @@ Invitation descriptor:
 }
 ```
 
-Verified email возвращается только там, где он нужен exact invite workflow и
+Account email возвращается только там, где он нужен exact invite workflow и
 caller уже имеет право его видеть; list/member responses по умолчанию используют
-opaque ID и display name.
+opaque ID и display name. Wire field `target_verified_email` — исторически
+принятое product name для exact email, уже сохранённого в registered account;
+оно не является утверждением об immutable или independently verified Sites
+subject.
 
 Create invitation:
 
@@ -577,6 +593,14 @@ Create invitation:
 Server выполняет exact lookup зарегистрированного principal. Неизвестный email
 возвращает `registered_principal_not_found` без fuzzy alternatives. Success
 создаёт pending invitation с `expires_at` через семь дней, но не membership.
+
+`POST /api/v1/invitations/{invitation_id}/reissue` вызывает internal command
+`reissue_invitation` с `expected_invitation_version` и `Idempotency-Key`.
+Command atomically завершает прежнюю invitation, создаёт replacement с новым
+opaque ID и новым seven-day expiry и никогда не оставляет две pending
+invitations для одной lifecycle transition. Replay того же canonical request
+возвращает тот же replacement; другой payload с тем же key получает
+`idempotency_conflict`.
 
 Role mutation:
 
@@ -631,7 +655,7 @@ Success `201` показывает secret ровно один раз:
     "token": {
       "token_id": "tok_opaque",
       "name": "Codex on Mac",
-      "display_prefix": "mdp_7H3…",
+      "display_prefix": "mdp_v1_7H3k9Q…",
       "scopes": ["content:read", "content:write"],
       "created_at": "2026-08-05T22:00:00Z",
       "expires_at": "2026-11-03T22:00:00Z",
@@ -669,7 +693,9 @@ Client-supplied identity fields не копируются в `ActorContext`.
 ```text
 get_session
 get_account_deletion_impact
+get_mind_deletion_impact
 list_minds
+resolve_mind_metadata
 resolve_mind
 get_mind_info
 list_public_minds
@@ -733,17 +759,20 @@ domain semantics.
 
 ### Endpoint selection
 
-Sites live probes установили платформенную границу: exact `/mcp` получает
-dispatcher-level `404` и не достигает product Worker, тогда как `/api/mcp`
-попадает в обычную Sites boundary. Поэтому `/mcp` не является alias, и server
-не redirect-ит с него request с `Authorization` header.
+В конкретном Mind Diary UAT deployment live probes 2026-08-07 наблюдали такую
+границу: exact `/mcp` получал dispatcher-level `404` и не достигал product
+Worker, тогда как `/api/mcp` попадал в обычную Sites boundary. Это датированное
+deployment evidence, а не универсальный Sites platform contract; каждый новый
+target/deployment обязан повторить route probe. В текущем project profile
+`/mcp` не является alias, и server не redirect-ит с него request с
+`Authorization` header.
 
 Product source candidate публикует два намеренно раздельных endpoint:
 
 | Endpoint | Protocol/lifecycle | Client gate |
 |---|---|---|
-| `POST /api/mcp` | stateless `2026-07-28`, начиная с `server/discover` | MCP Inspector, modern clients и `codex-cli 0.147.0` с opt-in `mcp_2026_07_28` |
-| `POST /api/mcp/2025-11-25` | isolated initialize lifecycle `2025-11-25` без server session | default `codex-cli 0.147.0` |
+| `POST /api/mcp` | pinned final `2026-07-28`, stateless и начиная с `server/discover` | MCP Inspector, modern clients и `codex-cli 0.147.0` с opt-in `mcp_2026_07_28` |
+| `POST /api/mcp/2025-11-25` | isolated initialize lifecycle предыдущей stable revision `2025-11-25` без server session | default `codex-cli 0.147.0` |
 
 Оба endpoint требуют один и тот же principal Bearer token и вызывают одну
 content application boundary. Authentication, token lifecycle/scopes и current
@@ -870,13 +899,17 @@ compatibility URL. В `codex-cli 0.147.0` modern path ещё скрыт за
 under-development feature; default остаётся compatibility profile.
 
 Sites audience gate находится перед product Worker и не заменяет product
-authentication. В single-principal UAT deployment переменная
+authentication. В наблюдавшемся 2026-08-07 single-principal UAT deployment
+project-specific header `OAI-Sites-Authorization` и переменная
 `MIND_DIARY_SITES_AUTHORIZATION` содержит полный текст
 `Bearer <Sites machine credential>`: Codex передаёт `env_http_headers` value
 буквально и не добавляет scheme сам. Отдельный
 `Authorization: Bearer <Mind Diary token>` формируется через
 `bearer_token_env_var`. Public audience может убрать Sites-specific table, но
-смена access policy остаётся отдельным deployment decision.
+смена access policy остаётся отдельным deployment decision. Официальная Sites
+documentation не задаёт `OAI-Sites-Authorization` как общий стабильный API;
+поэтому его availability и exact forwarding повторно проверяются на каждом
+target deployment и не переносятся на другой Site по аналогии.
 
 ### MCP authentication
 
@@ -1483,27 +1516,35 @@ internal IDs/path повышает enumeration risk и не нужна при н
 resource links.
 
 `resources/read` invalid/unauthorized URI возвращает indistinguishable JSON-RPC
-`-32602` (`Resource not found`) без Mind metadata, как требует target MCP
-profile. Historical resource read заново проверяет current membership или
-baseline visibility.
+`-32602` (`Invalid Params`) с sanitized message `Resource not found` и без Mind
+metadata. Именно numeric code и класс `Invalid Params` задаёт final target MCP
+`2026-07-28`; indistinguishable authorization treatment и отсутствие private
+metadata — дополнительная product security policy Mind Diary. Historical
+resource read заново проверяет current membership или baseline visibility.
 
 ## MCP protocol и application errors
 
-Ошибки request framing относятся к JSON-RPC protocol errors:
+Ошибки framing, MCP method/resource selection и version/capability negotiation
+относятся к JSON-RPC/MCP protocol errors. Их numeric codes принадлежат JSON-RPC
+или final MCP `2026-07-28`, а не product taxonomy Mind Diary:
 
 | Condition | HTTP | JSON-RPC |
 |---|---:|---:|
 | Invalid JSON | `400` | `-32700` |
 | Invalid request | `400` | `-32600` |
-| Unknown MCP method/tool request shape | `400/404` по protocol | `-32601/-32602` |
+| Unknown MCP method | `404` | `-32601` |
+| Unknown tool либо malformed tool arguments | `400` | `-32602` |
+| Missing resource | `400` | `-32602` с `Resource not found` |
 | Missing/mismatched required MCP headers | `400` | `-32020` |
 | Missing client capability | `400` | `-32021` |
 | Unsupported protocol version | `400` | `-32022` |
 
-Domain/business failures well-formed tool call возвращает HTTP `200` с
-JSON-RPC result, `resultType: "complete"`, `isError: true` и stable
-`structuredContent.error`. Например: stale HEAD, invalid OKF, missing file,
-denied role, unavailable historical index.
+Product-defined validation/domain/business failure внутри well-formed
+`tools/call` возвращает HTTP `200` с JSON-RPC result,
+`resultType: "complete"`, `isError: true` и stable string code в
+`structuredContent.error`. Например: stale HEAD, invalid OKF, missing content
+file, denied role, unavailable historical index. Эти codes не занимают MCP
+numeric namespace и не должны ошибочно возвращаться как JSON-RPC errors.
 
 Authentication failure до tool execution возвращает HTTP `401`, не маскируется
 как successful JSON-RPC tool result. Private target denial после valid
@@ -1524,8 +1565,8 @@ authentication не раскрывает existence/metadata.
 - Ограничить query length, pagination, response budget, paths, file bytes,
   operation count и total changeset bytes. Exact numbers должны стать
   deployment constants и conformance fixtures до implementation release.
-- Не логировать private search query, content body, token secret/hash, CSRF
-  token, verified email или download URL.
+- Не логировать private search query, content body, token secret/verifier,
+  CSRF token, authenticated/account email или download URL.
 - Sanitize all human/model-facing error text; private denial generic.
 - Tool annotations — UX hint, не authorization boundary.
 - Corpus text недоверенно и не может выбрать Mind, scopes, control tools или
@@ -1564,16 +1605,19 @@ authentication не раскрывает existence/metadata.
 Claude Code и любой другой client получают отдельный adapter/client conformance
 profile до заявления поддержки.
 
-## Открытые решения перед реализацией
+## Открытые решения перед расширением UAT
 
-Эта specification намеренно оставляет implementation choices, которые нельзя
-честно принять без platform spike или benchmark:
+Route reachability, Bearer forwarding и default/modern Codex profiles уже
+прошли live gate на зафиксированном single-principal UAT deployment. Открыты
+следующие implementation/product choices, которые нельзя честно принять без
+следующего platform spike, rollout evidence или benchmark:
 
-- exact Sites session/CSRF mechanism и доступность trusted identity context на
-  `/api/v1`, `/api/mcp` и `/api/mcp/2025-11-25` в одном deployment;
-- пройдут ли Sites Streamable HTTP MCP `2026-07-28` и isolated Codex
-  compatibility profile, включая required headers, Bearer forwarding и
-  request-scoped SSE без proxy buffering;
+- exact browser session/CSRF mechanism для multi-principal Sites UI и правила
+  revalidation accepted normalized-email binding при изменении platform
+  identity semantics;
+- будет ли project-specific `OAI-Sites-Authorization` forwarding доступен на
+  следующем target deployment; он остаётся повторяемым deployment probe, а не
+  универсальной Sites guarantee;
 - поддерживает ли target Codex build MCP Resources достаточно для optional
   resource path; tools остаются обязательным fallback;
 - exact opaque ID encoding, signing/lookup и retention;
@@ -1595,6 +1639,7 @@ transport без нового принятого решения.
 - [Спецификация первого прототипа](mvp.md)
 - [ADR-0003: user-scoped MCP и immediate commits](../decisions/0003-user-scoped-mcp-and-direct-commits.md)
 - [Состояние платформенных предпосылок](../reports/2026-08-05-platform-status.md)
+- [MCP 2026-07-28: final release announcement](https://blog.modelcontextprotocol.io/posts/2026-07-28/)
 - [MCP 2026-07-28: base protocol](https://modelcontextprotocol.io/specification/2026-07-28/basic)
 - [MCP 2026-07-28: discovery](https://modelcontextprotocol.io/specification/2026-07-28/server/discover)
 - [MCP 2026-07-28: Streamable HTTP](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/streamable-http)

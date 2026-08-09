@@ -278,28 +278,31 @@ notes или live evidence 0.1 как частично поддержанные:
 Schema/route/tool, который делает любой пункт достижимым, — regression scope,
 а не «подготовка на будущее».
 
-## Implementation decisions до кода
+## Implementation decisions и оставшееся evidence
 
-Это implementation choices, а не новые product capabilities. Owner обязан
-сохранить benchmark/spike evidence и обновить specification; значимое принятое
-решение требует ADR только после выбора.
+Эти choices не являются новыми product capabilities. Большинство уже принято
+и представлено в executable repository baseline, поэтому таблица различает
+текущее repository behavior, датированное UAT evidence и ещё не закрытые
+operational проверки. `Реализовано` означает только наличие code/tests на
+проверяемом commit; `UAT baseline подтверждён` относится только к явно
+зафиксированному live artifact и не расширяет его scope.
 
-| Decision | Linear owner | Required evidence |
-|---|---|---|
-| Trusted Sites identity/session/CSRF, доступные D1/R2 bindings и их transaction semantics в одном Site | `AND-37` (Spike) | Redacted live probe exact Site version/deployment; failure блокирует Sites-specific implementation. |
-| Non-reserved `/api/mcp` modern `2026-07-28`, isolated `/api/mcp/2025-11-25`, SSE/proxy behavior и Codex Bearer forwarding на Sites | `AND-37` (Spike) | Live JSON/SSE/error probes и pinned Codex build на обоих profiles; exact `/mcp` остаётся pre-Worker platform route, без automatic fallback. |
-| Runtime/toolchain, package/module layout и canonical build/test/check commands | `AND-38` | Clean-checkout reproducibility и CI/dependency evidence. |
-| Opaque entry/continuation ID encoding, signing/lookup и retention | `AND-61` | Threat analysis plus cross-space/revision, tamper, expiry/deletion contract fixtures. |
-| Token format, lookup strategy, hash/KDF, max expiry и verification latency | `AND-57` (Spike) | Reproducible threat analysis/benchmark; secret-storage and constant-time tests; ADR при значимом выборе. |
-| MCP request/header/response limits and rate policies | `AND-73` | Transport abuse fixtures and representative payload/stream measurements; constants fixed before conformance. |
-| File/operation/total-changeset limits | `AND-65` | Boundary fixtures prove invalid/oversized commands leave no visible objects/revision. |
-| Lexical ranking, threshold и pagination behavior | `AND-63` | Seeded benchmark with relevance, exact-revision isolation and no-HEAD-fallback cases. |
-| Deterministic export container, filename and `Content-Disposition` | `AND-68` | Byte-for-byte fixtures across repeated builds, full-bundle validation and archive safety review. |
-| Export size/rate/expiry and durable job cleanup policies | `AND-70` | Restart/retry/load fixtures with observable failed/expired/cleanup state; no archive in JSON-RPC. |
-| Availability/quality of optional MCP Resources UX in target Codex | `AND-77` | Pinned real-client result; required tools fallback remains release-blocking path. |
-| Manual identity recovery handoff | `AND-44` | Fail-closed threat review and tests proving no automatic relink/merge/access transfer. |
-| Immediate replicated/index deletion and proof of whole-Mind erasure | `AND-52` | Failure-injection, retry and post-delete object/index/job scan; no forensic receipt. |
-| Account-wide cascade ordering and proof of PII removal with foreign commit tombstones | `AND-47` | Cross-aggregate failure-injection, reconciliation and negative PII scan. |
+| Decision | Состояние | Linear owner | Следующее или обязательное evidence |
+|---|---|---|---|
+| Trusted Sites identity/session/CSRF и D1/R2 bindings в одном Site | Реализовано; базовые identity, persistence-after-redeploy и UAT composition подтверждены | `AND-37` (Spike) | Каждый release повторяет redacted probe exact Site version/deployment; расширенные transaction/failure cases остаются criterion-specific gates. |
+| Non-reserved `/api/mcp` modern `2026-07-28`, isolated `/api/mcp/2025-11-25`, SSE/proxy behavior и Codex Bearer forwarding | Реализовано; оба профиля прошли базовый UAT Codex gate | `AND-37` (Spike) | Повторный live JSON/SSE/error probe и pinned Codex на exact candidate; `/mcp` остаётся pre-Worker platform route без automatic fallback. |
+| Runtime/toolchain, package/module layout и canonical build/test/check commands | Реализовано в package graph, TypeScript references и root scripts | `AND-38` | Clean-checkout reproducibility, CI и dependency evidence на exact commit. |
+| Opaque entry/continuation locators | Реализован versioned confidential/tamper-resistant exact-revision locator и current-access recheck | `AND-61` | Сохранять cross-space/revision, tamper, deletion и reauthorization fixtures; отдельную expiry/retention policy принимать только при изменении contract. |
+| MCP token secret и verifier | Принято [ADR-0005](../decisions/0005-mcp-token-secret-verifier.md) и реализовано: exact 32-byte random secret, keyed HMAC-SHA-256 lookup verifier, 90-day maximum, без password KDF | `AND-57` (Spike) | Сохранять benchmark, exact grammar, secret-storage, rotation-boundary и constant-time regression tests. |
+| MCP request/header/response limits и rate policies | Частично реализованы bounded parsing/payload limits; operational quotas требуют отдельного release/load evidence | `AND-73` | Transport abuse fixtures, representative payload/stream measurements и exact UAT rate policy до заявления production readiness. |
+| File/operation/total-changeset limits | Реализованы и покрыты boundary fixtures | `AND-65` | Invalid/oversized commands должны по-прежнему оставлять no visible objects/revision на exact candidate. |
+| Lexical ranking и pagination behavior | Реализованы в exact-revision search baseline | `AND-63` | Seeded relevance/isolation benchmark; изменение scoring/threshold считается contract change и требует новых fixtures. |
+| Deterministic export container, filename и `Content-Disposition` | Реализованы как `MD-OKF-ZIP-1` с фиксированным filename | `AND-68` | Сохранять byte-for-byte repeatability, full-bundle validation и archive-safety fixtures. |
+| Export size/expiry и durable job cleanup | Реализованы в repository baseline; representative load/UAT recovery ещё не выводится из local tests | `AND-70` | Restart/retry/load evidence с failed/expired/cleanup state; archive никогда не передаётся в JSON-RPC. |
+| Optional MCP Resources UX в target Codex | Resources surface реализована; tools остаются обязательным fallback | `AND-77` | Pinned real-client evidence отдельно подтверждает UX; отсутствие Resources UX не может ломать required tools flow. |
+| Manual identity recovery handoff | Fail-closed product boundary принят; полный operator workflow остаётся открытым | `AND-44` | Threat review и tests, доказывающие отсутствие automatic relink/merge/access transfer. |
+| Immediate replicated/index deletion и whole-Mind erasure | Restartable repository lifecycle и failure-injection реализованы; physical UAT erasure требует live proof | `AND-52` | Retry и post-delete object/index/job scan на exact deployment; forensic receipt по принятой MVP policy отсутствует. |
+| Account-wide cascade и foreign-commit tombstones | Repository lifecycle и PII-negative fixtures реализованы; расширенное live evidence остаётся release gate | `AND-47` | Cross-aggregate reconciliation и negative PII scan на exact candidate. |
 
 OAuth/company-knowledge, personalization, assets, imports, checkpoints, AWS и
 Claude support не являются open implementation decisions 0.1: это denylist,

@@ -44,8 +44,9 @@ revision, из-за чего bootstrap, transfer, visibility и deletion не и
 - Account deletion удаляет external identity, email, profile, memberships и
   tokens. Commits в Minds других Owners остаются и ссылаются только на
   необратимый `deleted-principal` tombstone без PII.
-- Initial Sites binding использует normalized verified email; exact match
-  возвращает existing principal. Unknown email явно создаёт новый изолированный
+- Initial Sites binding использует normalized platform-authenticated email из
+  server-side request context; exact match возвращает existing principal.
+  Unknown email явно создаёт новый изолированный
   account без прежних прав либо запускает manual recovery. Смена email, merge,
   access transfer и relink никогда не выполняются автоматически.
 

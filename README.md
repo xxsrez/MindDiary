@@ -50,6 +50,8 @@ read-only token после проверки отозван; следующий r
 - [Product Site source candidate](docs/reports/2026-08-08-product-site-candidate.md)
 - [Локальная разработка и проверки](docs/guides/development.md)
 - [Контракт `ship-work-release`](docs/specs/ship-work-release.md)
+- [Контракт project delivery profile](docs/specs/ship-work-release-project-profile.md)
+- [Контракт task-management adapter](docs/specs/ship-work-release-task-manager.md)
 - [Linear adapter доставки](docs/specs/ship-work-release-linear.md)
 - [Операторский runbook](docs/operations/ship-work-release.md)
 - [Профиль dev/UAT/production доставки](docs/operations/ship-work-release-profile.md)

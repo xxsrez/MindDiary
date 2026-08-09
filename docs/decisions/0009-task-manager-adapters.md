@@ -25,16 +25,18 @@ entity types, status catalog, relations, pagination, comment format и retry
   задаёт provider-specific collection/scope selector.
 - Каждый provider реализует единый adapter contract: resolve collection/scope,
   полный bounded snapshot, item normalization, ready frontier, expected-old
-  projection и reconcile-before-retry.
+  projection и reconcile-before-retry. Нормативный interface задан в
+  [общем adapter contract](../specs/ship-work-release-task-manager.md).
 - Provider-specific entities, statuses, relations, permissions, pagination,
-  update format и API/tool behavior описываются в отдельном lazy-loaded
-  `references/task-manager-<provider>.md`.
+  update format и API/tool behavior описываются в отдельном tracked adapter
+  document и производном lazy-loaded
+  `references/task-manager-<provider>.md` внутри skill.
 - Linear semantics задаёт отдельная
-  [adapter specification](../specs/ship-work-release-linear.md) и skill reference
-  `references/task-manager-linear.md`.
+  [adapter specification](../specs/ship-work-release-linear.md) и производный
+  skill reference `references/task-manager-linear.md`.
 - `SKILL.md` остаётся thin router: читает adapter ID из profile, загружает общий
-  task-management contract, ровно один provider adapter и только references
-  выбранного execution path.
+  task-management contract и ровно один provider adapter выбранного execution
+  path.
 - Добавление нового task-management provider-а не меняет lanes, worktrees,
   pause, batches, cohorts, dev/UAT или production boundary.
 - Unsupported, missing или ambiguous adapter configuration блокирует run до
@@ -51,7 +53,7 @@ entity types, status catalog, relations, pagination, comment format и retry
   recovery conformance tests.
 - Canonical run state хранит stable adapter/collection/scope/item refs, а remote
   comments или statuses остаются projections, не workflow database.
-- Миграция между providers требует explicit scope mapping и reconciliation;
+- Cross-provider перенос scope требует explicit mapping и reconciliation;
   одинаковые display names или human-readable item keys не считаются identity.
 
 ## Рассмотренные варианты
@@ -69,5 +71,7 @@ entity types, status catalog, relations, pagination, comment format и retry
 
 Связанные документы:
 [operator runbook](../operations/ship-work-release.md),
+[project profile contract](../specs/ship-work-release-project-profile.md),
+[task-management adapter contract](../specs/ship-work-release-task-manager.md),
 [Mind Diary delivery profile](../operations/ship-work-release-profile.md) и
 [ADR-0008](0008-dev-uat-production-delivery.md).

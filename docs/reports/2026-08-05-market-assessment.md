@@ -1,5 +1,8 @@
 # Mind Diary: самостоятельная рыночная оценка
 
+Статус: датированный decision report на 2026-08-05. Описания repository и
+deployment state ниже являются снимком на дату оценки, а не текущим status.
+
 ## Executive Summary
 
 - **Узкий Codex-first pilot делать стоит.** Есть конкретный initial ICP и

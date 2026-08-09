@@ -1,10 +1,10 @@
 # OpenAI Sites + MCP capability gate на 2026-08-07
 
-Статус: **исторический отрицательный gate сохранён; тогдашний production
+Статус: **исторический отрицательный gate сохранён; тогдашний live
 resolution положительно проверен 2026-08-08**. С 2026-08-09 проверенный Site
 официально классифицируется как **UAT**, а не production; старые термины ниже
 сохранены как часть датированного evidence. Этот report фиксирует локально
-проверенную поверхность AND-37, exact production probe, повторную проверку product
+проверенную поверхность AND-37, exact probe (тогда называвшийся production), повторную проверку product
 deployment, воспроизводимый отказ Sites/Codex boundary, диагноз, исправление и
 последующее redacted live evidence.
 
@@ -15,8 +15,8 @@ deployment, воспроизводимый отказ Sites/Codex boundary, ди
 stateless MCP `2026-07-28`, JSON и request-scoped SSE, per-request Bearer auth,
 CAS concurrency, idempotent retry и итоговое состояние после errors.
 
-Exact production probe был успешно собран и развёрнут owner-only в OpenAI
-Sites, но его обязательный Codex MCP flow не прошёл. Product version 2
+Exact probe был успешно собран и развёрнут owner-only в OpenAI Sites, который
+теперь классифицируется как UAT, но обязательный Codex MCP flow не прошёл. Product version 2
 подтвердила authenticated web/control slice, включая account bootstrap,
 Personal Mind и lifecycle smoke для MCP token. При этом exact `POST /mcp`
 снова получил `404 Not found` без соответствующего Worker event; соседние
@@ -25,7 +25,7 @@ Personal Mind и lifecycle smoke для MCP token. При этом exact `POST /
 exact `/mcp` до deployed Worker, но не раскрывает недокументированное устройство
 платформы. Ранее проверенный `codex-cli 0.147.0` также не прошёл этот boundary.
 
-Production version 3 после route migration закрыла этот blocker: web/control,
+Version 3 после route migration закрыла этот blocker: web/control,
 persisted account/Personal Mind, raw modern MCP и оба реальных Codex profiles
 прошли на том же owner-only Site. Провал historical gate не привёл к fallback в
 AWS, AgentCore или отдельный container.
@@ -248,9 +248,10 @@ controlled commit, stale conflict, export, denials, revocation и post-state.
 Story остаётся open/blocked. AWS/container fallback, bypass tokens, SIWC
 bypass, cookies и выдуманные bearer secrets не использовались.
 
-### Product version 2: текущее release evidence
+### Product version 2: историческое release evidence
 
-Последний recheck выполнен на exact production Site Mind Diary:
+Recheck выполнен на exact Site Mind Diary, который теперь классифицируется как
+UAT:
 
 - source/main Git SHA:
   `0a060ad85e4f8ecb075dea548213b11543b934a7`;
@@ -314,7 +315,7 @@ public access или SIWC bypass.
 
 Этот раздел сохраняет результат отдельного прямого расследования после version
 2. Он не переписывает отрицательное evidence выше и не выдаёт локальную
-совместимость за production release.
+совместимость за подтверждённый live release.
 
 ### Что именно сломалось
 
@@ -441,7 +442,7 @@ version после следующих проверок:
 gate, а обычный `Authorization: Bearer <Mind Diary token>` проходит product
 auth. Эти credentials нельзя смешивать, логировать или сохранять в report.
 
-### Выполненный production recheck 2026-08-08
+### Выполненный live recheck 2026-08-08
 
 Live acceptance выполнен на owner-only Site
 <https://mind-diary.example.invalid>:
@@ -450,7 +451,8 @@ Live acceptance выполнен на owner-only Site
   implementation commit `5d08d70d4389499a626e79f6ebb7242685f2257e`;
 - Sites project `appgprj_example1428fe59b5d8381c`, saved version
   `3` (`appgprj_example1428fe59b5d8381c~appgver_exampled97db4d5890ec803`);
-- production deployment `appgdep_example2f1c8dec75aeb7f6`
+- Sites platform `production deployment`
+  `appgdep_example2f1c8dec75aeb7f6` (product environment теперь UAT)
   завершён успешно в `2026-08-08T17:51:15.774333Z` с runtime environment
   revision `1`;
 - authenticated `/` и `/settings/mcp` загрузились без повторного bootstrap;
@@ -463,10 +465,10 @@ Live acceptance выполнен на owner-only Site
 - тот же build с opt-in `mcp_2026_07_28` прошёл
   `server/discover → tools/list → tools/call list_minds` через `/api/mcp`,
   exit 0;
-- production Worker logs содержат matching POST events и HTTP 200 для обоих
+- deployed Worker logs содержат matching POST events и HTTP 200 для обоих
   endpoint; application `Authorization` редактирован платформой, private Mind
   names/content в evidence не сохранены;
-- временный read-only token был выпущен через production UI, использован только
+- временный read-only token был выпущен через deployed UAT UI, использован только
   для gate, затем отозван; повторный modern request получил HTTP 401 и
   `WWW-Authenticate: Bearer` challenge;
 - exact `/mcp` по-прежнему возвращает platform `404 text/plain Not found` без
@@ -480,7 +482,7 @@ token. Первый не даёт прав внутри продукта, вто
 gate. Public access не включался, AWS/container fallback не использовался.
 
 Live Inspector отдельно не запускался: Inspector 2.1.0 прошёл оба exact
-exported handlers локально, а production wire был дополнительно проверен raw
+exported handlers локально, а hosted UAT wire был дополнительно проверен raw
 modern calls и обязательным реальным Codex client gate. Это ограничение не
 следует переписывать как live Inspector conformance.
 
@@ -489,7 +491,8 @@ modern calls и обязательным реальным Codex client gate. Э�
 Повторная проверка 2026-08-08T22:40Z–23:30Z выполнялась на том же owner-only
 Site, но уже на saved version `4`
 (`appgprj_example1428fe59b5d8381c~appgver_example9dce30ded078821f`),
-source commit `b7da48719d984e5328847e937a2cdfc6e7b811bb` и production deployment
+source commit `b7da48719d984e5328847e937a2cdfc6e7b811bb` и Sites platform
+`production deployment` (product environment теперь UAT)
 `appgdep_example827b4272dcbb8517`. Deployment завершён успешно;
 live URL и runtime environment revision `1` не изменились. Этот commit является
 предком собранного AND-149 candidate `ca01a2a1e57bd187c67d3f85a47d6057433ed215`,
@@ -533,7 +536,12 @@ Codex read/write и application auth уже есть, но AND-77 пока не 
 control UI, развернуть exact candidate и повторить Inspector/resources,
 deletion/current-access и private non-member cases на одном deployment.
 
-## Repeatable live procedure после platform/client change
+## Историческая repeatable live procedure
+
+Ниже зафиксирована процедура, которой получено evidence этого отчёта. Она не
+является current release runbook: текущие dev/UAT/production semantics задают
+[project delivery profile](../operations/ship-work-release-profile.md) и
+[operator runbook](../operations/ship-work-release.md).
 
 ### 1. Зафиксировать deployment identity
 

@@ -22,11 +22,18 @@ persistence-after-redeploy и default/modern Codex MCP gates пройдены li
 ### Account bootstrap и Personal Mind
 
 - Любой запрос к системе требует authenticated registered principal.
-- Authenticated Sites bootstrap связывает проверенную external identity с immutable
-  internal `principal_id`: exact normalized verified email возобновляет binding.
-  Для неизвестного email пользователь явно создаёт новый изолированный account
-  без прежних прав либо выбирает manual recovery. Автоматического relink/merge
-  или переноса access нет.
+- Authenticated Sites bootstrap получает из trusted server boundary
+  `oai-authenticated-user-email`. Sites документирует это значение как
+  authenticated email address, но не обещает immutable external subject или
+  отдельный provider-level `verified` claim. Поэтому normalized email служит
+  только принятым initial binding profile: exact match возобновляет существующий
+  binding, а authorization после bootstrap опирается на immutable internal
+  `principal_id`.
+- Для неизвестного normalized authenticated email пользователь явно создаёт
+  новый изолированный account без прежних прав либо выбирает manual recovery.
+  Автоматического relink/merge или переноса access нет. Изменение semantics или
+  lifecycle Sites identity header требует повторной compatibility проверки и
+  нового binding decision.
 - Account, Personal Mind и sole-owner binding создаются атомарно.
 - Personal Mind доступен по `/me`, всегда private, имеет ровно одного
   participant-owner и не допускает invitation, transfer, publication или
@@ -58,7 +65,7 @@ persistence-after-redeploy и default/modern Codex MCP gates пройдены li
 ### Invitations и roles
 
 - Invite target должен быть уже зарегистрирован; lookup в baseline — exact
-  verified email.
+  normalized account email, сохранённый initial Sites binding profile.
 - Admin может предложить `reader`/`editor`; Owner также `admin`.
 - Invitation требует accept/reject внутри Mind Diary, истекает через семь дней,
   может быть cancelled/reissued и не даёт access до acceptance.
@@ -185,17 +192,25 @@ commit_changeset(
 - token выпускается в authenticated Sites UI и связан с `principal_id`, не с
   конкретным Mind;
 - пользователь может иметь несколько named tokens, например `Codex on Mac`;
-- secret — не менее 256 random bits, показывается один раз;
-- server хранит только cryptographic hash, short prefix и metadata;
-- default expiry — 90 дней; token можно отозвать в любой момент;
+- canonical secret имеет единственную форму `mdp_v1_` + 43 unpadded base64url
+  characters; payload декодируется ровно в 32 CSPRNG bytes (256 random bits),
+  а весь token содержит ровно 50 ASCII characters и показывается один раз;
+- server хранит только safe `display_prefix`, scopes/lifecycle metadata и
+  unique indexed keyed HMAC-SHA-256 verifier полного canonical token в форме
+  `hmac-sha256:v1:<64 lowercase hex>`; plain/recoverable secret и unkeyed hash
+  не сохраняются, HMAC key хранится отдельно от token table;
+- default и absolute maximum expiry — 90 дней от server-assigned issuance
+  time; token можно выпустить на меньший срок и отозвать в любой момент;
 - scopes первого прототипа: `content:read` и `content:write`; write включает
   read, write-only token не существует;
 - `Authorization: Bearer <token>` передаётся MCP client через environment
   variable, а не сохраняется в repository/config plaintext;
 - role, visibility и token status проверяются на каждом request;
-- современный stateless MCP `2026-07-28` обслуживается по
+- pinned final MCP specification `2026-07-28` обслуживается современным
+  stateless profile по
   `POST /api/mcp` и проверен с opt-in `mcp_2026_07_28`; isolated compatibility
-  profile для проверенного default `codex-cli 0.147.0` — по
+  profile предыдущей stable revision `2025-11-25` для проверенного default
+  `codex-cli 0.147.0` — по
   `POST /api/mcp/2025-11-25`;
 - в compatibility profile Codex предлагает `2025-06-18`, server выбирает
   `2025-11-25`; session state не создаётся, а lifecycle translation не
@@ -243,7 +258,7 @@ list_revisions(mind, before?, limit?)
 get_revision(mind, revision_id)
 validate_mind(mind, revision_selector?)
 commit_changeset(mind, expected_revision, idempotency_key, operations[])
-start_export(mind, revision_selector?)
+start_export(mind, revision_selector?, idempotency_key)
 get_export_status(job_id)
 ```
 
@@ -293,9 +308,10 @@ network, которого Sites пока не обещает. Если Streamabl
 
 1. Первое explicit account creation после authenticated Sites entry атомарно
    создаёт principal, `/me` и sole-owner binding; retry не создаёт второй
-   Personal Mind. Unknown verified email не наследует прежний principal: explicit
-   create даёт новый изолированный account, а relink/merge возможен только через
-   manual recovery.
+   Personal Mind. Unknown normalized Sites-authenticated email не наследует
+   прежний principal: explicit create даёт новый изолированный account, а
+   relink/merge возможен только через manual recovery. Email header не считается
+   immutable external subject после создания internal `principal_id`.
 2. Personal Mind нельзя открыть чужому principal, расшарить, transfer-нуть,
    сделать public/unlisted или удалить отдельно.
 3. Rename user display name обновляет Personal Mind name, не меняя `space_id`,
@@ -378,9 +394,12 @@ network, которого Sites пока не обещает. Если Streamabl
 Sites UAT MVP считается завершённым только после live-проверки:
 
 - authenticated Sites headers и устойчивый account binding;
-- stable HTTPS Streamable HTTP `POST /api/mcp` для modern `2026-07-28` и
+- stable HTTPS Streamable HTTP `POST /api/mcp` для pinned final
+  `2026-07-28` и
   `POST /api/mcp/2025-11-25` для pinned default `codex-cli 0.147.0`; exact
-  `/mcp` не используется, потому что Sites перехватывает его до product Worker;
+  `/mcp` не используется, потому что в проверенном UAT deployment 2026-08-07
+  Sites перехватывал его до product Worker; это датированное deployment
+  evidence, а не универсальная гарантия маршрутизации Sites;
 - `server/discover`, stateless metadata/results, `tools/list` и все обязательные
   tools modern profile, включая pinned Codex с opt-in `mcp_2026_07_28`;
 - isolated initialize flow, где Codex предлагает `2025-06-18`, а server
@@ -433,8 +452,9 @@ portable container и AWS/AgentCore не используются без нов�
 Этот список ограничивает только первый prototype release. Product roadmap явно
 сохраняет imports и named checkpoints как запланированные post-MVP функции,
 website AI — как отдельную фазу расширения аудитории, а AWS — как основную
-post-MVP infrastructure direction. Модель non-Markdown files/assets остаётся
-открытым решением. См. [roadmap](../roadmap.md).
+post-MVP infrastructure direction. Модель producer-defined non-Markdown
+`BundleFile`/`OpaqueAsset` остаётся открытым решением; эти имена не являются
+нормативными OKF 0.2 entities. См. [roadmap](../roadmap.md).
 
 ## Измерения перед следующими решениями
 

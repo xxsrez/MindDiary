@@ -111,8 +111,8 @@ user content.
 Root `.env.example` и product app `.env.example` содержат только non-secret
 defaults/пустые placeholders. Для локальных значений разрешён ignored
 `.env.local`; plaintext bearer token нельзя коммитить. Product hosting manifest
-объявляет bindings, но не project ID и не secrets. Hosted values задаются через
-Sites runtime settings:
+объявляет D1/R2 bindings и opaque Sites `project_id`, но не secrets. Hosted
+secret values задаются через Sites runtime settings:
 
 - `MIND_DIARY_TOKEN_VERIFIER_KEY`;
 - `MIND_DIARY_LOCATOR_KEY`;

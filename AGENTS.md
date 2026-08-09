@@ -102,10 +102,12 @@ delivery profile и ADR-0008/ADR-0009
   storage schema, но с жёсткими service invariants: один participant-owner,
   route `/me`, service-managed handle, отсутствие transfer, publication и
   отдельного delete. Display name следует за именем principal.
-- Initial Sites binding использует normalized verified email, но authorization
-  опирается на immutable `principal_id`. Exact match возвращает existing account;
-  unknown email явно создаёт новый isolated account без прежних прав либо идёт
-  в manual identity recovery. Automatic relink/merge/access transfer запрещён.
+- Initial Sites binding использует normalized platform-authenticated email из
+  Sites request context, но не считает email immutable external subject:
+  authorization опирается на внутренний immutable `principal_id`. Exact match
+  возвращает existing account; unknown email явно создаёт новый isolated account
+  без прежних прав либо идёт в manual identity recovery. Automatic
+  relink/merge/access transfer запрещён.
 - Обычные Minds поддерживают `private`, `unlisted` и `public`. Authenticated
   non-member получает reader-equivalent доступ к live HEAD и истории в
   `unlisted` по точному URL, а в `public` также через каталог. Это baseline
@@ -162,8 +164,10 @@ delivery profile и ADR-0008/ADR-0009
   является membership и не может получить ownership. Admin приглашает только
   Reader/Editor, Owner также Admin.
 - Первый MCP auth использует revocable named opaque bearer tokens principal:
-  secret не менее 256 random bits показывается один раз, хранится только hash,
-  default expiry 90 дней, scopes `content:read`/`content:write`.
+  canonical `mdp_v1_` secret содержит ровно 32 random bytes, показывается один
+  раз, а для exact lookup хранится только keyed HMAC-SHA-256 verifier по
+  ADR-0005. Default expiry — 90 дней, scopes —
+  `content:read`/`content:write`.
   `content:write` всегда включает `content:read`; write-only token запрещён.
   Token не даёт control-plane capabilities и не привязан к одному Mind.
 - Membership management остаётся в trusted Sites control plane и не
