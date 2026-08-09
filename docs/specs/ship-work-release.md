@@ -301,15 +301,29 @@ $ship-work-release scope=items:<stable-ref-1>,<stable-ref-2>
 $ship-work-release dry-run
 ```
 
-`workers=` является alias `lanes=`. Canonical status использует термин
-`lane`, потому что один lane может последовательно выполнить несколько work items.
+`workers=` является user-facing alias `lanes=`. Canonical status
+использует термин `lane`, потому что один lane может
+последовательно выполнить несколько work items. Capacity имеет
+точную agent semantics:
+
+- без capacity или при `workers=1` coordinator сам является
+  единственным writer/worker; worker-субагент и дополнительный
+  worker worktree не создаются;
+- при `workers=N`, где `N > 1`, runtime запускает ровно `N`
+  worker-субагентов и выделяет каждому отдельный writable worktree;
+- coordinator не входит в эти `N` workers: он остаётся
+  отдельным integrator и single writer canonical state/task-manager
+  projection;
+- repair-first может временно сделать coordinator-а ещё одним
+  product writer-ом; эта emergency работа не меняет запрошенное
+  `workers=N` и показывается в status отдельно.
 
 Нормализация поддерживает natural-language aliases:
 
 | Ввод | Нормализованное значение |
 |---|---|
-| без capacity | router начинает с `lanes=1`, дальнейшее расширение только по admission gate |
-| `lanes=3`, `workers=3`, «3 воркера» | exact sustainable capacity `lanes=3` |
+| без capacity | exact coordinator-only `lanes=1`; automatic writable expansion запрещён |
+| `lanes=3`, `workers=3`, «3 воркера» | три worker-субагента плюс отдельный coordinator |
 | `lanes=auto`, `workers=auto`, `workers=out`, «всех доступных» | adaptive capacity |
 | `auto, не больше 3`, `lanes=auto max=3` | adaptive capacity с hard maximum |
 
@@ -317,9 +331,11 @@ $ship-work-release dry-run
 Несовместимые явные capacity values требуют одного короткого вопроса до любой
 mutation. Count и maximum должны быть положительными.
 
-Без параметров router начинает с одного writer lane. Он может подключить
-read-only scouts, а writable parallelism — только после admission gate из
-раздела 7. `lanes=1` запрещает расширение write capacity. `lanes=N` задаёт
+Без параметров router работает в coordinator-only `lanes=1`. Он может
+подключать read-only scouts, но не расширяет writable capacity без
+явного `workers=N | lanes=N | workers=auto | lanes=auto`. Любой явный
+parallel request дополнительно проходит admission gate из раздела 7.
+`lanes=1` запрещает расширение write capacity. `lanes=N` задаёт
 exact устойчивую resource capacity и fail-closed проверяется до write claims;
 ready frontier всё равно может временно дать меньше N активных lanes.
 
@@ -1706,8 +1722,10 @@ Conformance suite содержит automated и scenario tests как миним
 
 - одинаковый deterministic router result для одинакового typed input независимо
   от model rationale и parallel rejection при любом `false | unknown`;
-- `workers=` alias и exact/auto lane semantics;
-- single lane без лишнего worktree;
+- `workers=` alias, exact/auto lane semantics и отдельный coordinator count;
+- default/`workers=1` coordinator-only без субагента и лишнего worktree;
+- `workers=3` как ровно три worker-субагента с тремя isolated
+  worktrees плюс отдельный coordinator;
 - reusable lanes и повторный profile install только при изменении dependency
   digest/declared invalidation;
 - scout read-only/no-takeover behavior;

@@ -53,10 +53,11 @@ handoff или подготовки recovery в новом task.
 
 Он означает:
 
-- начать с одного связного writer lane;
+- работать в coordinator-only режиме: coordinator сам является
+  единственным worker-ом, субагент и отдельный worker worktree
+  не создаются;
 - при необходимости использовать read-only scouts;
-- подключать дополнительные writable lanes только после проверки реальной
-  независимости;
+- не подключать writable субагентов без явного capacity request;
 - сохранить acceptance из task manager и repository contracts;
 - перед каждым UAT cut запустить exact candidate через project-profile dev
   launcher и выполнить declared local smoke;
@@ -87,7 +88,13 @@ Dependency graph может оставить только одну-две сов
 требует лишь, чтобы runtime и локальные ресурсы могли устойчиво обслуживать три
 lanes, когда такая frontier существует.
 
-`workers=3` является compatibility alias `lanes=3`.
+`workers=3` является compatibility alias `lanes=3` и означает
+ровно три worker-субагента плюс отдельный coordinator.
+Каждый активный worker-субагент получает свой isolated writable
+worktree. Coordinator не уменьшает это число; он отвечает за
+интеграцию, canonical state и task-manager writes. Исключение —
+default/`workers=1`: coordinator сам является единственным worker-ом без
+субагента и без лишнего worktree.
 
 ### 1.1 Выбор scope без привязки к task manager
 
