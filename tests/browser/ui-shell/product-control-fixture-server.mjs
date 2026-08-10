@@ -139,7 +139,7 @@ const server = createServer(async (request, response) => {
 });
 
 server.listen(port, host, () => {
-  process.stdout.write(`Mind Diary production control fixture: ${browserOrigin}/\n`);
+  process.stdout.write(`Mind Diary UAT control fixture: ${browserOrigin}/\n`);
 });
 
 for (const signal of ["SIGINT", "SIGTERM"]) {

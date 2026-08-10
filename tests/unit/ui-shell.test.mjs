@@ -13,6 +13,7 @@ import {
   renderAuthenticatedOnboardingDocument,
   renderMindDiaryUiShell,
   renderMindDiaryUiShellDocument,
+  renderMindDiaryRoutePage,
 } from "../../packages/adapter-web/dist/index.js";
 
 const shellCss = await readFile(
@@ -125,6 +126,10 @@ test("ready shell has semantic navigation, product language, form and modal cont
   assert.match(html, /aria-current="page"/);
   assert.match(html, />My Mind</);
   assert.match(html, />Minds</);
+  assert.match(html, /Public Minds<\/a>/);
+  assert.match(html, /href="\/settings\/account"/);
+  assert.match(html, /Hosted environment: UAT/);
+  assert.match(html, /<strong>Mind Diary UAT<\/strong>/);
   assert.match(html, /Memories/);
   assert.match(html, /Create a Mind/);
   assert.match(html, /<dialog[^>]+aria-labelledby="create-mind-title"[^>]+aria-describedby=/);
@@ -133,6 +138,54 @@ test("ready shell has semantic navigation, product language, form and modal cont
   assert.match(html, /role="status" aria-live="polite"/);
   assert.doesNotMatch(html, /<(?:textarea|iframe)\b|contenteditable|type="file"/i);
   assert.doesNotMatch(html, /\b(?:brain|robot|neon|train your mind|knows everything)\b/i);
+});
+
+test("pilot route shell keeps exact links, active state, safe route states, and UAT wording", () => {
+  const routes = [
+    ["home", "/"],
+    ["my-mind", "/me"],
+    ["minds", "/minds"],
+    ["public", "/public"],
+    ["invitations", "/invitations"],
+    ["account", "/settings/account"],
+    ["tokens", "/settings/mcp"],
+    ["help", "/help"],
+  ];
+  for (const [activeNavigation, expectedRoute] of routes) {
+    const html = renderMindDiaryRoutePage({
+      displayName: "Pilot User",
+      activeNavigation,
+      eyebrow: "Pilot route",
+      title: "Safe page",
+      description: "Server-rendered control state.",
+      state: { kind: "ready", message: "No private content is rendered." },
+      links: [{ href: expectedRoute, label: "Current route" }],
+    });
+    assert.equal((html.match(/aria-current="page"/g) ?? []).length, 1, activeNavigation);
+    assert.match(html, new RegExp(`href="${expectedRoute.replaceAll("/", "\\/")}"`));
+    assert.match(html, /Hosted environment: UAT/);
+    assert.match(html, /href="\/public"/);
+    assert.match(html, /href="\/settings\/account"/);
+    assert.match(html, /href="\/help"/);
+  }
+
+  for (const kind of ["loading", "empty", "error", "forbidden"]) {
+    const html = renderMindDiaryRoutePage({
+      displayName: "Pilot User",
+      activeNavigation: "help",
+      eyebrow: "Pilot route",
+      title: "Safe page",
+      description: "Server-rendered control state.",
+      state: { kind, message: `<script>globalThis.pwned=true</script>` },
+      links: [{ href: "javascript:globalThis.pwned=true", label: `<img src=x>` }],
+    });
+    assert.match(html, /data-mind-diary-shell/);
+    assert.match(html, new RegExp(`data-route-state="${kind}"`));
+    assert.doesNotMatch(html, /<script\b|href="javascript:/i);
+    assert.doesNotMatch(html, /aria-label="Page actions">.*<img\b/is);
+    assert.match(html, /&lt;script&gt;globalThis\.pwned=true&lt;\/script&gt;/);
+    assert.match(html, /href="#"/);
+  }
 });
 
 test("loading, empty and error views communicate state without color alone", () => {
@@ -172,6 +225,8 @@ test("document and CSS provide responsive keyboard and high-contrast foundations
   assert.match(shellCss, /@media \(forced-colors: active\)/);
   assert.match(shellCss, /\.md-status__icon/);
   assert.match(shellCss, /\.md-state--error/);
+  assert.match(shellCss, /\.md-environment/);
+  assert.match(shellCss, /\.md-profile\[aria-current="page"\]/);
 });
 
 test("anonymous onboarding exposes only the Sites auth entry, never the control plane", () => {

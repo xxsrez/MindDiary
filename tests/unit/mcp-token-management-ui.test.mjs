@@ -107,7 +107,8 @@ test("Codex instructions reference bearer_token_env_var without placing a token 
   const html = renderMcpTokenManagement(model({ kind: "empty" }));
   assert.match(html, /Keep the secret outside your repository and Codex config/);
   assert.match(html, /complete <code>Bearer &lt;secret&gt;<\/code> header value/);
-  assert.match(html, /owner-only production Site passed default and opt-in modern/);
+  assert.match(html, /Historical UAT baseline/);
+  assert.match(html, /hosted environment is UAT, not production/);
   assert.match(html, /OAuth\/PKCE and public plugin support remain outside/);
 });
 

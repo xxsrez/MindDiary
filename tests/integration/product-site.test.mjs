@@ -163,7 +163,62 @@ test("product root and MCP setup render live control projections and fixed same-
   assert.deepEqual(calls, ["get_session", "list_minds", "get_session", "list_mcp_tokens"]);
 });
 
-test("ordinary Mind list and exact route wire the production management and deletion controls", async () => {
+test("pilot Product Site route map keeps one UAT shell, exact active navigation, and fail-closed deep links", async () => {
+  const handler = createProductWebHttpHandler({
+    applicationOrigin: origin,
+    resolveIdentity: () => ({ kind: "authenticated", actor: registeredActor }),
+    csrf: { issue: () => "csrf-pilot", verify: () => true },
+    control: { execute(request) {
+      if (request.operation === "get_session") return sessionProjection;
+      if (request.operation === "list_minds") return [personalRoute, ordinaryOwnerRoute];
+      if (request.operation === "list_mcp_tokens") return [];
+      if (request.operation === "get_mind_info" && request.input.mind_ref === "research-notes") {
+        return ordinaryOwnerRoute;
+      }
+      throw Object.assign(new Error("not found"), { code: "not_found" });
+    } },
+  });
+
+  const routeMap = [
+    ["/", /<title>Home — Mind Diary UAT<\/title>/],
+    ["/me", /<h1>My Mind<\/h1>/],
+    ["/minds", /data-management-view="list"/],
+    ["/research-notes", /data-mind-handle="research-notes"/],
+    ["/public", /data-route-page="public"/],
+    ["/invitations", /data-route-page="invitations"/],
+    ["/settings/account", /data-route-page="account"/],
+    ["/settings/mcp", /data-mind-diary-token-management/],
+    ["/help", /data-route-page="help"/],
+  ];
+  for (const [path, marker] of routeMap) {
+    const response = await handler(new Request(`${origin}${path}`));
+    assert.equal(response.status, 200, path);
+    const html = await response.text();
+    assert.match(html, marker, path);
+    assert.match(html, /data-mind-diary-shell/, path);
+    assert.match(html, /Hosted environment: UAT/, path);
+    assert.match(html, /href="\/me"/, path);
+    assert.match(html, /href="\/minds"/, path);
+    assert.match(html, /href="\/public"/, path);
+    assert.match(html, /href="\/invitations"/, path);
+    assert.match(html, /href="\/settings\/account"/, path);
+    assert.match(html, /href="\/settings\/mcp"/, path);
+    assert.match(html, /href="\/help"/, path);
+    assert.equal((html.match(/aria-current="page"/g) ?? []).length, 1, path);
+    assert.doesNotMatch(html, /owner-only production Site|current Site is production/i, path);
+  }
+
+  for (const path of ["/api", "/mcp", "/settings", "/settings/unknown", "/minds/extra"]) {
+    assert.equal(await handler(new Request(`${origin}${path}`)), null, path);
+  }
+  const missingMind = await handler(new Request(`${origin}/unknown-handle`));
+  assert.equal(missingMind.status, 200);
+  const missingHtml = await missingMind.text();
+  assert.match(missingHtml, /Mind settings unavailable/);
+  assert.doesNotMatch(missingHtml, /not found|principal_one|space_research/i);
+});
+
+test("ordinary Mind list and exact route wire the UAT management and deletion controls", async () => {
   const calls = [];
   const handler = createProductWebHttpHandler({
     applicationOrigin: origin,

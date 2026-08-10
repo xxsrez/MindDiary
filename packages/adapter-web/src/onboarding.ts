@@ -2,6 +2,8 @@ import {
   MIND_DIARY_UI_ASSETS,
   escapeUntrustedText,
   installMindDiaryUiShell,
+  renderMindDiaryAuthenticatedFooter,
+  renderMindDiaryAuthenticatedHeader,
 } from "./ui-shell.js";
 
 export const MIND_DIARY_ONBOARDING_ASSETS = Object.freeze({
@@ -84,9 +86,12 @@ function safeIdempotencyKey(value: string): string | null {
 
 function renderBrandHeader(): string {
   return `<header class="md-auth-header">
-    <a class="md-brand" href="/" aria-label="Mind Diary home">
-      <img src="${MIND_DIARY_UI_ASSETS.lockup}" alt="Mind Diary" width="204" height="48">
-    </a>
+    <div class="md-brand-lockup">
+      <a class="md-brand" href="/" aria-label="Mind Diary home">
+        <img src="${MIND_DIARY_UI_ASSETS.lockup}" alt="Mind Diary" width="204" height="48">
+      </a>
+      <span class="md-environment" aria-label="Hosted environment: UAT">UAT</span>
+    </div>
   </header>`;
 }
 
@@ -237,22 +242,7 @@ function renderAuthenticated(
     : ` data-profile-key="${escapeUntrustedText(key)}"`;
   return `<div class="md-shell" data-mind-diary-shell data-authenticated-onboarding data-session-state="authenticated" data-control-plane data-nav-open="false">
     <a class="md-skip-link" href="#main-content">Skip to main content</a>
-    <header class="md-header">
-      <a class="md-brand" href="/" aria-label="Mind Diary home">
-        <img src="${MIND_DIARY_UI_ASSETS.lockup}" alt="Mind Diary" width="204" height="48">
-      </a>
-      <button class="md-menu-button" type="button" aria-expanded="false" aria-controls="primary-navigation" data-menu-button><span aria-hidden="true">Menu</span><span>Navigation</span></button>
-      <nav id="primary-navigation" class="md-navigation" aria-label="Primary" data-navigation>
-        <a href="/me" aria-current="page"><span aria-hidden="true">●</span> My Mind</a>
-        <a href="/minds"><span aria-hidden="true">▤</span> Minds</a>
-        <a href="/invitations"><span aria-hidden="true">✉</span> Invitations</a>
-        <a href="/settings/mcp"><span aria-hidden="true">⌁</span> MCP setup</a>
-      </nav>
-      <span class="md-profile" aria-label="Signed in account: ${escapeUntrustedText(model.displayName)}">
-        <span class="md-profile__initial" aria-hidden="true">${escapeUntrustedText(model.displayName.slice(0, 1).toUpperCase())}</span>
-        <span>${escapeUntrustedText(model.displayName)}</span>
-      </span>
-    </header>
+    ${renderMindDiaryAuthenticatedHeader(model.displayName, "my-mind")}
     <main id="main-content" class="md-main" tabindex="-1">
       <div class="md-page-heading">
         <div>
@@ -291,7 +281,7 @@ function renderAuthenticated(
         </section>
       </div>
     </main>
-    <footer class="md-footer"><p><strong>Mind Diary</strong> keeps the knowledge you choose in versioned Minds.</p><a href="/help">Help and accessibility</a></footer>
+    ${renderMindDiaryAuthenticatedFooter("my-mind")}
   </div>`;
 }
 

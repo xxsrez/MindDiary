@@ -19,6 +19,29 @@ Pinned `codex-cli 0.147.0` прошёл live `list_minds` на обоих profil
 report не меняет owning stories или полные `A<n>`, `W`, `P`, `MI`, `CX` и `R`
 artifacts.
 
+## Pilot-ready extension 2026-08-10
+
+Историческая матрица критериев 1–29 и release 2026-08-09 сохраняются без
+переписывания. Повторно открытый milestone добавляет dependency-aware
+pilot-readiness слой; завершённый local owner не доказывает live UAT соседних
+flows или финальный join-gate.
+
+| ID | Наблюдаемый результат | Owner | Local evidence | UAT evidence |
+|---|---|---|---|---|
+| P1 | Все route из accepted Product Site map открывают правильный authenticated shell; header/footer, mobile/keyboard navigation, active state, UAT label и direct deep links согласованы; reserved/unknown routes fail closed и не падают в home. | `AND-150` | `product-site-navigation`: unit + product integration + browser route/navigation suite | `AND-161`: same-deployment authenticated Web smoke |
+| P2 | Ordinary Mind проходит create/list/exact route/rename/delete и сохраняется после restart/redeploy. | `AND-151` | ordinary Mind integration/browser/persistence suite | `AND-161`: exact-candidate Web + persistence |
+| P3 | Invitations, participants, roles, revoke/leave работают для двух principals. | `AND-157` | invitation/membership integration + browser suite | `AND-158` + `AND-161` |
+| P4 | Visibility, catalog и ownership transfer применяют current access без metadata leakage. | `AND-154` | visibility/catalog/ownership integration + browser suite | `AND-158` + `AND-161` |
+| P5 | Account/profile/delete и manual recovery handoff fail closed без PII leakage или automatic relink. | `AND-153` | account/identity integration + browser + PII-negative suite | `AND-158` + `AND-161` |
+| P6 | MCP token setup и redacted diagnostics воспроизводимы для current modern и legacy Codex profiles. | `AND-152` | token/setup/diagnostic tests + real Codex smoke | `AND-161` |
+| P7-P10 | Starter value, safe history/restore/export, UAT operations и pilot protocol дают исполнимый пользовательский и operational path. | `AND-155`, `AND-156`, `AND-159`, `AND-160` | issue-owned executable checks and durable docs | `AND-161` join-gate |
+| P11 | Один exact candidate проходит canonical gate и two-principal Web/persistence/MCP UAT matrix на одном deployment. | `AND-161` | canonical repository gate exact SHA | new `W`, `P`, `MI`, `CX`, `R` receipts exact deployment |
+
+Accepted route map и security boundary находятся в
+[MVP specification](mvp.md#sites-control-plane). Для P1 page shell не считается
+evidence P2-P6: соответствующий owner обязан подключить real use case, оставить
+targeted tests и затем войти в P11 live matrix.
+
 ## Как читать матрицу
 
 Источник критериев — раздел

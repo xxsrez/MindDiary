@@ -1,6 +1,8 @@
 import {
   MIND_DIARY_UI_ASSETS,
   escapeUntrustedText,
+  renderMindDiaryAuthenticatedFooter,
+  renderMindDiaryAuthenticatedHeader,
 } from "./ui-shell.js";
 
 export const MIND_DIARY_MCP_ENDPOINT_PLACEHOLDER =
@@ -180,28 +182,6 @@ function renderTokenCollection(collection: McpTokenCollectionState): string {
   }
 }
 
-function renderPageHeader(displayName: string): string {
-  const safeName = escapeUntrustedText(displayName);
-  return `<header class="md-header">
-    <a class="md-brand" href="/" aria-label="Mind Diary home">
-      <img src="${MIND_DIARY_UI_ASSETS.lockup}" alt="Mind Diary" width="204" height="48">
-    </a>
-    <button class="md-menu-button" type="button" aria-expanded="false" aria-controls="primary-navigation" data-menu-button>
-      <span aria-hidden="true">Menu</span><span>Navigation</span>
-    </button>
-    <nav id="primary-navigation" class="md-navigation" aria-label="Primary" data-navigation>
-      <a href="/me"><span aria-hidden="true">●</span> My Mind</a>
-      <a href="/minds"><span aria-hidden="true">▤</span> Minds</a>
-      <a href="/invitations"><span aria-hidden="true">✉</span> Invitations</a>
-      <a href="/settings/mcp" aria-current="page"><span aria-hidden="true">⌁</span> MCP setup</a>
-    </nav>
-    <button class="md-profile" type="button" aria-label="Open account menu for ${safeName}">
-      <span class="md-profile__initial" aria-hidden="true">${escapeUntrustedText(displayName.slice(0, 1).toUpperCase())}</span>
-      <span>${safeName}</span>
-    </button>
-  </header>`;
-}
-
 function renderCreateForm(): string {
   return `<section class="md-setup-card" id="create-token" aria-labelledby="create-token-heading">
     <div>
@@ -260,7 +240,7 @@ function renderCodexSetup(): string {
         <p>Replace the endpoint placeholder with the exact deployed Mind Diary URL. Never replace either environment-variable name with a secret. A public Site may omit the <code>env_http_headers</code> table.</p>
       </li>
     </ol>
-    <p class="md-caveat"><strong>Verified release:</strong> the owner-only production Site passed default and opt-in modern <code>codex-cli 0.147.0</code> flows. OAuth/PKCE and public plugin support remain outside this personal-token release.</p>
+    <p class="md-caveat"><strong>Historical UAT baseline:</strong> the owner-only Site deployment passed default and opt-in modern <code>codex-cli 0.147.0</code> flows. This hosted environment is UAT, not production; OAuth/PKCE and public plugin support remain outside this personal-token release.</p>
   </section>`;
 }
 
@@ -312,9 +292,9 @@ export function renderMcpTokenManagement(
   const announcement = model.announcement
     ? `<p class="md-announcement" role="status" aria-live="polite" data-page-announcement><span aria-hidden="true">✓</span> ${escapeUntrustedText(model.announcement)}</p>`
     : `<p class="md-announcement" role="status" aria-live="polite" data-page-announcement hidden></p>`;
-  return `<div class="md-shell md-token-shell" data-mind-diary-token-management data-nav-open="false">
+  return `<div class="md-shell md-token-shell" data-mind-diary-shell data-mind-diary-token-management data-nav-open="false">
     <a class="md-skip-link" href="#main-content">Skip to main content</a>
-    ${renderPageHeader(model.displayName)}
+    ${renderMindDiaryAuthenticatedHeader(model.displayName, "tokens")}
     <main id="main-content" class="md-main" tabindex="-1">
       <div class="md-page-heading">
         <div>
@@ -330,10 +310,7 @@ export function renderMcpTokenManagement(
         ${renderCodexSetup()}
       </div>
     </main>
-    <footer class="md-footer">
-      <p><strong>Mind Diary</strong> stores token metadata, never a recoverable secret.</p>
-      <a href="/help">Help and accessibility</a>
-    </footer>
+    ${renderMindDiaryAuthenticatedFooter("tokens")}
     ${renderSecretDialog()}
     ${renderRevokeDialog()}
   </div>`;

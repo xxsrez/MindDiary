@@ -40,14 +40,24 @@ export type UiCollectionState =
 
 export interface MindDiaryUiShellModel {
   readonly displayName: string;
-  readonly activeNavigation: "my-mind" | "minds" | "invitations" | "tokens";
+  readonly activeNavigation: MindDiaryNavigationTarget;
   readonly collection: UiCollectionState;
   readonly announcement?: string;
 }
 
+export type MindDiaryNavigationTarget =
+  | "home"
+  | "my-mind"
+  | "minds"
+  | "public"
+  | "invitations"
+  | "account"
+  | "tokens"
+  | "help";
+
 export const DEFAULT_UI_SHELL_MODEL: MindDiaryUiShellModel = Object.freeze({
   displayName: "Andrey",
-  activeNavigation: "minds",
+  activeNavigation: "home",
   announcement: "Your Minds are ready.",
   collection: {
     kind: "ready",
@@ -90,10 +100,51 @@ export function escapeUntrustedText(value: string): string {
 }
 
 function activeAttribute(
-  current: MindDiaryUiShellModel["activeNavigation"],
-  item: MindDiaryUiShellModel["activeNavigation"],
+  current: MindDiaryNavigationTarget,
+  item: MindDiaryNavigationTarget,
 ): string {
   return current === item ? ' aria-current="page"' : "";
+}
+
+/** Shared authenticated Product Site header for the accepted pilot route map. */
+export function renderMindDiaryAuthenticatedHeader(
+  displayName: string,
+  activeNavigation: MindDiaryNavigationTarget,
+): string {
+  const safeName = escapeUntrustedText(displayName);
+  const initial = escapeUntrustedText(displayName.slice(0, 1).toUpperCase());
+  return `<header class="md-header">
+    <div class="md-brand-lockup">
+      <a class="md-brand" href="/" aria-label="Mind Diary home"${activeAttribute(activeNavigation, "home")}>
+        <img src="${MIND_DIARY_UI_ASSETS.lockup}" alt="Mind Diary" width="204" height="48">
+      </a>
+      <span class="md-environment" aria-label="Hosted environment: UAT">UAT</span>
+    </div>
+    <button class="md-menu-button" type="button" aria-expanded="false" aria-controls="primary-navigation" data-menu-button>
+      <span aria-hidden="true">Menu</span><span>Navigation</span>
+    </button>
+    <nav id="primary-navigation" class="md-navigation" aria-label="Primary" data-navigation>
+      <a href="/me"${activeAttribute(activeNavigation, "my-mind")}><span aria-hidden="true">●</span> My Mind</a>
+      <a href="/minds"${activeAttribute(activeNavigation, "minds")}><span aria-hidden="true">▤</span> Minds</a>
+      <a href="/public"${activeAttribute(activeNavigation, "public")}><span aria-hidden="true">◎</span> Public Minds</a>
+      <a href="/invitations"${activeAttribute(activeNavigation, "invitations")}><span aria-hidden="true">✉</span> Invitations</a>
+      <a href="/settings/mcp"${activeAttribute(activeNavigation, "tokens")}><span aria-hidden="true">⌁</span> MCP setup</a>
+    </nav>
+    <a class="md-profile" href="/settings/account" aria-label="Account settings for ${safeName}"${activeAttribute(activeNavigation, "account")}>
+      <span class="md-profile__initial" aria-hidden="true">${initial}</span>
+      <span>${safeName}</span>
+    </a>
+  </header>`;
+}
+
+/** Shared footer keeps Help reachable and names the hosted surface as UAT. */
+export function renderMindDiaryAuthenticatedFooter(
+  activeNavigation: MindDiaryNavigationTarget,
+): string {
+  return `<footer class="md-footer">
+    <p><strong>Mind Diary UAT</strong> keeps the knowledge you choose in versioned Minds.</p>
+    <a href="/help"${activeAttribute(activeNavigation, "help")}>Help and accessibility</a>
+  </footer>`;
 }
 
 const VISIBILITY_COPY: Readonly<
@@ -175,24 +226,7 @@ export function renderMindDiaryUiShell(model: MindDiaryUiShellModel): string {
 
   return `<div class="md-shell" data-mind-diary-shell data-nav-open="false">
     <a class="md-skip-link" href="#main-content">Skip to main content</a>
-    <header class="md-header">
-      <a class="md-brand" href="/" aria-label="Mind Diary home">
-        <img src="${MIND_DIARY_UI_ASSETS.lockup}" alt="Mind Diary" width="204" height="48">
-      </a>
-      <button class="md-menu-button" type="button" aria-expanded="false" aria-controls="primary-navigation" data-menu-button>
-        <span aria-hidden="true">Menu</span><span>Navigation</span>
-      </button>
-      <nav id="primary-navigation" class="md-navigation" aria-label="Primary" data-navigation>
-        <a href="/me"${activeAttribute(model.activeNavigation, "my-mind")}><span aria-hidden="true">●</span> My Mind</a>
-        <a href="/minds"${activeAttribute(model.activeNavigation, "minds")}><span aria-hidden="true">▤</span> Minds</a>
-        <a href="/invitations"${activeAttribute(model.activeNavigation, "invitations")}><span aria-hidden="true">✉</span> Invitations</a>
-        <a href="/settings/mcp"${activeAttribute(model.activeNavigation, "tokens")}><span aria-hidden="true">⌁</span> MCP setup</a>
-      </nav>
-      <button class="md-profile" type="button" aria-label="Open account menu for ${escapeUntrustedText(model.displayName)}">
-        <span class="md-profile__initial" aria-hidden="true">${escapeUntrustedText(model.displayName.slice(0, 1).toUpperCase())}</span>
-        <span>${escapeUntrustedText(model.displayName)}</span>
-      </button>
-    </header>
+    ${renderMindDiaryAuthenticatedHeader(model.displayName, model.activeNavigation)}
 
     <main id="main-content" class="md-main" tabindex="-1">
       <div class="md-page-heading">
@@ -206,10 +240,7 @@ export function renderMindDiaryUiShell(model: MindDiaryUiShellModel): string {
       ${renderCollection(model.collection)}
     </main>
 
-    <footer class="md-footer">
-      <p><strong>Mind Diary</strong> keeps the knowledge you choose in versioned Minds.</p>
-      <a href="/help">Help and accessibility</a>
-    </footer>
+    ${renderMindDiaryAuthenticatedFooter(model.activeNavigation)}
 
     <dialog class="md-dialog" id="create-mind-dialog" aria-labelledby="create-mind-title" aria-describedby="create-mind-description">
       <form class="md-form" method="dialog" data-create-mind-form>
@@ -242,18 +273,92 @@ export function renderMindDiaryUiShell(model: MindDiaryUiShellModel): string {
 }
 
 export function renderMindDiaryUiShellDocument(model: MindDiaryUiShellModel): string {
+  const title = model.activeNavigation === "home" ? "Home" : "Minds";
   return `<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
-  <title>Minds — Mind Diary</title>
+  <title>${title} — Mind Diary UAT</title>
   <link rel="stylesheet" href="${MIND_DIARY_UI_ASSETS.tokens}">
   <link rel="stylesheet" href="${MIND_DIARY_UI_ASSETS.shellStyles}">
 </head>
 <body>
   ${renderMindDiaryUiShell(model)}
+  <script type="module" src="${MIND_DIARY_UI_ASSETS.shellClient}"></script>
+</body>
+</html>`;
+}
+
+export type MindDiaryRoutePageState =
+  | { readonly kind: "ready"; readonly message: string }
+  | { readonly kind: "loading"; readonly message: string }
+  | { readonly kind: "empty"; readonly message: string }
+  | { readonly kind: "error"; readonly message: string }
+  | { readonly kind: "forbidden"; readonly message: string };
+
+export interface MindDiaryRoutePageModel {
+  readonly displayName: string;
+  readonly activeNavigation: MindDiaryNavigationTarget;
+  readonly eyebrow: string;
+  readonly title: string;
+  readonly description: string;
+  readonly state: MindDiaryRoutePageState;
+  readonly links?: readonly Readonly<{ readonly href: string; readonly label: string }>[];
+}
+
+function safeProductRoute(value: string): string {
+  return value === "/" || /^\/(?:me|minds|public|invitations|help|settings\/(?:account|mcp)|[a-z0-9]+(?:-[a-z0-9]+)*)$/u.test(value)
+    ? value
+    : "#";
+}
+
+function renderRoutePageState(state: MindDiaryRoutePageState): string {
+  const message = escapeUntrustedText(state.message);
+  switch (state.kind) {
+    case "ready":
+      return `<section class="md-state" data-route-state="ready"><span class="md-state__symbol" aria-hidden="true">✓</span><h2>Ready in this UAT workspace</h2><p>${message}</p></section>`;
+    case "loading":
+      return `<section class="md-state md-state--loading" aria-busy="true" data-route-state="loading"><div class="md-loading-mark" aria-hidden="true"><span></span><span></span><span></span></div><h2>Loading current state</h2><p role="status" aria-live="polite">${message}</p></section>`;
+    case "empty":
+      return `<section class="md-state md-state--empty" data-route-state="empty"><span class="md-state__symbol" aria-hidden="true">○</span><h2>Nothing to show yet</h2><p>${message}</p></section>`;
+    case "error":
+      return `<section class="md-state md-state--error" role="alert" data-route-state="error"><span class="md-state__symbol" aria-hidden="true">!</span><h2>Current state is unavailable</h2><p>${message}</p></section>`;
+    case "forbidden":
+      return `<section class="md-state md-state--error" role="alert" data-route-state="forbidden"><span class="md-state__symbol" aria-hidden="true">Lock</span><h2>This route is not available to your account</h2><p>${message}</p></section>`;
+  }
+}
+
+export function renderMindDiaryRoutePage(model: MindDiaryRoutePageModel): string {
+  const links = model.links?.length
+    ? `<nav class="md-route-links" aria-label="Page actions">${model.links.map((link) => `<a class="md-button md-button--secondary" href="${safeProductRoute(link.href)}">${escapeUntrustedText(link.label)}</a>`).join("")}</nav>`
+    : "";
+  return `<div class="md-shell" data-mind-diary-shell data-mind-diary-route-page data-route-page="${escapeUntrustedText(model.activeNavigation)}" data-nav-open="false">
+    <a class="md-skip-link" href="#main-content">Skip to main content</a>
+    ${renderMindDiaryAuthenticatedHeader(model.displayName, model.activeNavigation)}
+    <main id="main-content" class="md-main" tabindex="-1">
+      <div class="md-page-heading"><div><p class="md-eyebrow">${escapeUntrustedText(model.eyebrow)}</p><h1>${escapeUntrustedText(model.title)}</h1><p>${escapeUntrustedText(model.description)}</p></div></div>
+      ${renderRoutePageState(model.state)}
+      ${links}
+    </main>
+    ${renderMindDiaryAuthenticatedFooter(model.activeNavigation)}
+  </div>`;
+}
+
+export function renderMindDiaryRoutePageDocument(model: MindDiaryRoutePageModel): string {
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>${escapeUntrustedText(model.title)} — Mind Diary UAT</title>
+  <link rel="stylesheet" href="${MIND_DIARY_UI_ASSETS.tokens}">
+  <link rel="stylesheet" href="${MIND_DIARY_UI_ASSETS.shellStyles}">
+</head>
+<body>
+  ${renderMindDiaryRoutePage(model)}
   <script type="module" src="${MIND_DIARY_UI_ASSETS.shellClient}"></script>
 </body>
 </html>`;

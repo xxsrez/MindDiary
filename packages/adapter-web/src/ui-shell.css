@@ -82,6 +82,24 @@ a {
   align-items: center;
 }
 
+.md-brand-lockup {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  min-width: 0;
+}
+
+.md-environment {
+  padding: 0.2rem 0.5rem;
+  border: 1px solid var(--mind-diary-memory-plum, #6c4bb6);
+  border-radius: 999px;
+  color: var(--mind-diary-memory-plum, #6c4bb6);
+  background: var(--mind-diary-white, #fff);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+
 .md-brand img {
   display: block;
   width: min(12.75rem, 34vw);
@@ -90,6 +108,7 @@ a {
 
 .md-navigation {
   display: flex;
+  flex-wrap: wrap;
   justify-content: center;
   gap: 0.35rem;
 }
@@ -146,7 +165,13 @@ a {
   padding: 0.35rem 0.65rem 0.35rem 0.35rem;
   border-radius: 999px;
   font-weight: 650;
+  text-decoration: none;
   overflow: hidden;
+}
+
+.md-profile[aria-current="page"] {
+  background: color-mix(in srgb, var(--mind-diary-memory-plum, #6c4bb6) 14%, var(--mind-diary-paper, #fff7e8));
+  box-shadow: inset 0 -3px var(--mind-diary-memory-plum, #6c4bb6);
 }
 
 .md-profile__initial {
@@ -171,6 +196,13 @@ a {
   width: min(74rem, 100%);
   margin-inline: auto;
   padding: clamp(2rem, 5vw, 4.75rem) clamp(1rem, 4vw, 3rem) 5rem;
+}
+
+.md-route-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-block-start: 1.25rem;
 }
 
 .md-page-heading {
@@ -942,7 +974,7 @@ h3 {
     gap: 0.65rem;
   }
 
-  .md-brand {
+  .md-brand-lockup {
     grid-column: 1;
   }
 

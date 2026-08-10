@@ -1,6 +1,8 @@
 import {
   MIND_DIARY_UI_ASSETS,
   escapeUntrustedText,
+  renderMindDiaryAuthenticatedFooter,
+  renderMindDiaryAuthenticatedHeader,
 } from "./ui-shell.js";
 
 export type OrdinaryMindUiRole = "reader" | "editor" | "admin" | "owner";
@@ -152,28 +154,6 @@ export function suggestOrdinaryMindHandle(name: string): string {
   if (normalized.length >= 3) return normalized;
   if (normalized.length > 0) return `${normalized}-mind`.slice(0, 63);
   return "new-mind";
-}
-
-function renderHeader(displayName: string): string {
-  const safeName = escapeUntrustedText(displayName);
-  return `<header class="md-header">
-    <a class="md-brand" href="/" aria-label="Mind Diary home">
-      <img src="${MIND_DIARY_UI_ASSETS.lockup}" alt="Mind Diary" width="204" height="48">
-    </a>
-    <button class="md-menu-button" type="button" aria-expanded="false" aria-controls="primary-navigation" data-menu-button>
-      <span aria-hidden="true">Menu</span><span>Navigation</span>
-    </button>
-    <nav id="primary-navigation" class="md-navigation" aria-label="Primary" data-navigation>
-      <a href="/me"><span aria-hidden="true">●</span> My Mind</a>
-      <a href="/minds" aria-current="page"><span aria-hidden="true">▤</span> Minds</a>
-      <a href="/invitations"><span aria-hidden="true">✉</span> Invitations</a>
-      <a href="/settings/mcp"><span aria-hidden="true">⌁</span> MCP setup</a>
-    </nav>
-    <button class="md-profile" type="button" aria-label="Open account menu for ${safeName}">
-      <span class="md-profile__initial" aria-hidden="true">${escapeUntrustedText(displayName.slice(0, 1).toUpperCase())}</span>
-      <span>${safeName}</span>
-    </button>
-  </header>`;
 }
 
 function visibilityLabel(value: OrdinaryMindUiVisibility): string {
@@ -445,11 +425,11 @@ export function renderOrdinaryMindsManagement(model: OrdinaryMindsManagementMode
     : model.view.kind === "detail"
       ? renderDetailView(model.view.mind, model.announcement)
       : renderRouteState(model.view, model.announcement);
-  return `<div class="md-shell" data-ordinary-minds-management data-nav-open="false" data-management-view="${model.view.kind}">
+  return `<div class="md-shell" data-mind-diary-shell data-ordinary-minds-management data-nav-open="false" data-management-view="${model.view.kind}">
     <a class="md-skip-link" href="#main-content">Skip to main content</a>
-    ${renderHeader(model.displayName)}
+    ${renderMindDiaryAuthenticatedHeader(model.displayName, "minds")}
     ${body}
-    <footer class="md-footer"><p><strong>Mind Diary</strong> keeps browser management separate from canonical knowledge.</p><a href="/help">Help and accessibility</a></footer>
+    ${renderMindDiaryAuthenticatedFooter("minds")}
   </div>`;
 }
 

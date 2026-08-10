@@ -15,7 +15,9 @@ import {
 } from "./onboarding.js";
 import {
   renderMindDiaryUiShellDocument,
+  renderMindDiaryRoutePageDocument,
   type MindDiaryUiShellModel,
+  type MindDiaryRoutePageModel,
   type UiMindCard,
 } from "./ui-shell.js";
 import {
@@ -150,6 +152,28 @@ export interface ProductWebHttpHandlerDependencies {
 }
 
 const MUTATION_METHODS = new Set(["POST", "PATCH", "PUT", "DELETE"]);
+const PRODUCT_UI_ROUTES = new Set([
+  "/",
+  "/me",
+  "/minds",
+  "/public",
+  "/invitations",
+  "/settings/account",
+  "/settings/mcp",
+  "/help",
+]);
+const RESERVED_UI_HANDLES = new Set([
+  "api",
+  "brand",
+  "help",
+  "invitations",
+  "mcp",
+  "me",
+  "minds",
+  "public",
+  "settings",
+  "ui",
+]);
 const MAX_JSON_BYTES = 64 * 1024;
 const SAFE_HEADERS = Object.freeze({
   "cache-control": "no-store",
@@ -159,6 +183,16 @@ const SAFE_HEADERS = Object.freeze({
   "x-content-type-options": "nosniff",
   "x-frame-options": "DENY",
 });
+const PRODUCT_UI_PILOT_SHELL_CSS = `
+.md-brand-lockup{display:inline-flex;align-items:center;gap:.55rem;min-width:0}
+.md-environment{padding:.2rem .5rem;border:1px solid var(--mind-diary-memory-plum);border-radius:999px;color:var(--mind-diary-memory-plum);background:#fff;font-size:.72rem;font-weight:800;letter-spacing:.08em}
+.md-navigation{flex-wrap:wrap}
+.md-profile{text-decoration:none}
+.md-profile[aria-current=page]{background:#eee5fa;box-shadow:inset 0 -3px var(--mind-diary-memory-plum)}
+.md-route-links{display:flex;flex-wrap:wrap;gap:.75rem;margin-top:1.25rem}
+@media(max-width:52rem){.md-header{grid-template-columns:1fr auto auto}.md-menu-button{grid-column:2}.md-profile{display:inline-flex;grid-column:3}.md-navigation{grid-column:1/-1}}
+@media(max-width:36rem){.md-header{grid-template-columns:1fr auto}.md-brand-lockup{grid-column:1}.md-menu-button{grid-column:2}.md-profile{display:inline-flex;grid-column:1/-1;justify-self:stretch;justify-content:center}}
+`;
 
 function canonicalOrigin(value: string): string {
   const parsed = new URL(value);
@@ -285,6 +319,72 @@ interface ProductUiSession {
   readonly personalMindName: string;
 }
 
+function pilotRoutePage(
+  pathname: string,
+  displayName: string,
+): MindDiaryRoutePageModel | null {
+  if (pathname === "/public") {
+    return {
+      displayName,
+      activeNavigation: "public",
+      eyebrow: "Authenticated discovery",
+      title: "Public Minds",
+      description: "Discover Minds their Owners made visible to signed-in people.",
+      state: {
+        kind: "ready",
+        message: "This route uses the pilot shell and exposes no private or unlisted metadata while its server-authorized catalog projection is unavailable.",
+      },
+      links: [{ href: "/minds", label: "Open your Minds" }],
+    };
+  }
+  if (pathname === "/invitations") {
+    return {
+      displayName,
+      activeNavigation: "invitations",
+      eyebrow: "People and access",
+      title: "Invitations",
+      description: "Review incoming invitations and collaboration access from one signed-in page.",
+      state: {
+        kind: "ready",
+        message: "The route is isolated from Mind content and waits for its issue-owned current invitation projection before showing any account-specific state.",
+      },
+      links: [{ href: "/minds", label: "Open your Minds" }],
+    };
+  }
+  if (pathname === "/settings/account") {
+    return {
+      displayName,
+      activeNavigation: "account",
+      eyebrow: "Account settings",
+      title: "Account and profile",
+      description: "Manage your profile, identity recovery boundary, and account lifecycle.",
+      state: {
+        kind: "ready",
+        message: "My Mind already provides the current safe profile view. Destructive account actions remain unavailable until a fresh server impact can be rendered here.",
+      },
+      links: [{ href: "/me", label: "Open My Mind and profile" }],
+    };
+  }
+  if (pathname === "/help") {
+    return {
+      displayName,
+      activeNavigation: "help",
+      eyebrow: "Pilot help",
+      title: "Help and accessibility",
+      description: "Mind Diary is hosted in UAT for a restricted authenticated pilot, not production.",
+      state: {
+        kind: "ready",
+        message: "Use My Mind for your private space, Minds for collaboration, and MCP setup for Codex. Keyboard users can skip to content and open the same navigation from every page.",
+      },
+      links: [
+        { href: "/minds", label: "Open Minds" },
+        { href: "/settings/mcp", label: "Open MCP setup" },
+      ],
+    };
+  }
+  return null;
+}
+
 function uiSession(value: unknown): ProductUiSession | null {
   const source = record(value);
   const principal = record(source?.principal);
@@ -399,7 +499,7 @@ function uiToken(value: unknown): McpTokenUiToken | null {
 
 function staticAsset(pathname: string): { readonly body: string; readonly type: string } | null {
   if (pathname === "/brand/mind-diary-tokens.css") return { body: PRODUCT_UI_TOKENS_CSS, type: "text/css; charset=utf-8" };
-  if (pathname === "/ui/mind-diary-shell.css") return { body: PRODUCT_UI_SHELL_CSS, type: "text/css; charset=utf-8" };
+  if (pathname === "/ui/mind-diary-shell.css") return { body: `${PRODUCT_UI_SHELL_CSS}\n${PRODUCT_UI_PILOT_SHELL_CSS}`, type: "text/css; charset=utf-8" };
   if (pathname === "/brand/mind-diary-lockup.svg") return { body: PRODUCT_UI_LOCKUP_SVG, type: "image/svg+xml; charset=utf-8" };
   if (pathname === "/brand/mind-diary-mark.svg") return { body: PRODUCT_UI_MARK_SVG, type: "image/svg+xml; charset=utf-8" };
   if (
@@ -439,6 +539,11 @@ async function productUiDocument(input: {
     input: Object.freeze({}),
   }));
   if (session === null) throw new TypeError("safe session projection is unavailable");
+
+  const routePage = pilotRoutePage(input.pathname, session.displayName);
+  if (routePage !== null) {
+    return withCsrfMeta(renderMindDiaryRoutePageDocument(routePage), input.csrfToken);
+  }
 
   if (input.pathname === "/me") {
     return withCsrfMeta(renderAuthenticatedOnboardingDocument({
@@ -504,10 +609,7 @@ async function productUiDocument(input: {
   }
 
   const routeMatch = /^\/([a-z0-9]+(?:-[a-z0-9]+)*)$/u.exec(input.pathname);
-  const reservedUiRoute = routeMatch === null ||
-    routeMatch[1] === "minds" ||
-    routeMatch[1] === "invitations" ||
-    routeMatch[1] === "help";
+  const reservedUiRoute = routeMatch === null || RESERVED_UI_HANDLES.has(routeMatch[1]!);
   if (!reservedUiRoute && routeMatch !== null) {
     const handle = routeMatch[1]!;
     let view: OrdinaryMindsManagementModel["view"];
@@ -547,7 +649,7 @@ async function productUiDocument(input: {
   }
   return withCsrfMeta(renderMindDiaryUiShellDocument({
     displayName: session.displayName,
-    activeNavigation: "minds",
+    activeNavigation: "home",
     collection,
   }), input.csrfToken);
 }
@@ -673,11 +775,10 @@ export function createProductWebHttpHandler(
       });
     }
     const isApi = url.pathname === "/api/v1" || url.pathname.startsWith("/api/v1/");
-    const isUi =
-      url.pathname === "/" ||
-      url.pathname === "/me" ||
-      url.pathname === "/settings/mcp" ||
-      /^\/[a-z0-9][a-z0-9-]{0,62}$/u.test(url.pathname);
+    const detailMatch = /^\/([a-z0-9]+(?:-[a-z0-9]+)*)$/u.exec(url.pathname);
+    const isUi = PRODUCT_UI_ROUTES.has(url.pathname) || (
+      detailMatch !== null && !RESERVED_UI_HANDLES.has(detailMatch[1]!)
+    );
     if (!isApi && !isUi) return null;
 
     let identity: ProductSitesIdentityResolution;

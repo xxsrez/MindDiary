@@ -235,11 +235,44 @@ Sites UI поддерживает:
 - named MCP token create/list/revoke;
 - management links и destructive-action warnings.
 
+Pilot-ready Product Site использует один authenticated navigation shell и
+следующую route map:
+
+| Route | Назначение |
+|---|---|
+| `/` | server-rendered onboarding либо authenticated home |
+| `/me` | Personal Mind и profile entrypoint |
+| `/minds` | ordinary Minds list/create |
+| `/{space_handle}` | management exact ordinary Mind после authorization |
+| `/public` | authenticated Public Minds catalog |
+| `/invitations` | incoming invitations и collaboration entrypoint |
+| `/settings/account` | profile, recovery handoff и account lifecycle |
+| `/settings/mcp` | MCP tokens, setup и diagnostics |
+| `/help` | pilot help, environment и support boundaries |
+
+Authenticated pages используют согласованные header/footer links, keyboard
+navigation и active state. Profile entrypoint ведёт на `/settings/account`, а
+Help остаётся достижимым из footer. Hosted environment явно маркируется как
+`UAT`; историческое live evidence 2026-08-09 не делает его production.
+Initial HTML строится server-side только из safe control-plane projection и
+выдаёт session-bound CSRF metadata для mutations. Неизвестный multi-segment
+route, reserved handle или неавторизованный exact Mind не падает в home shell и
+не раскрывает target metadata: router возвращает bounded not-found/forbidden
+state. Loading, empty, retryable error и forbidden states сохраняют тот же
+navigation shell и не подменяются unrelated page.
+
 Browser UI не получает raw content file editor/API. Web и MCP adapters вызывают
 общий application core/internal API. Если их позже разделят на services,
 internal REST получает service authentication и не становится customer API.
 Routes `/me` и `/{space_handle}` в этом slice служат адресации и management;
 revision-bound personalized content landing не входит в prototype scope.
+
+Полная pilot-ready acceptance route-specific flows выполняется dependency-aware:
+shell и routing принадлежат `AND-150`; ordinary Minds — `AND-151`; MCP setup —
+`AND-152`; account/recovery — `AND-153`; visibility/catalog/ownership —
+`AND-154`; invitations/roles — `AND-157`. Само наличие ссылки или route shell не
+считается доказательством соответствующего live workflow; join-gate exact UAT
+candidate принадлежит `AND-161`.
 
 ## Первая MCP-поверхность
 
