@@ -1,6 +1,6 @@
 # Traceability matrix MVP 0.1
 
-Статус: executable baseline, обновлено 2026-08-09. Документ связывает
+Статус: executable baseline, обновлено 2026-08-10. Документ связывает
 принятые критерии готовности с реализацией и обязательным evidence. Product Site
 развёрнут как single-principal UAT в OpenAI Sites; базовые web/persistence и оба
 Codex MCP profiles прошли live, но это не закрывает автоматически каждый
@@ -30,7 +30,7 @@ flows или финальный join-gate.
 |---|---|---|---|---|
 | P1 | Все route из accepted Product Site map открывают правильный authenticated shell; header/footer, mobile/keyboard navigation, active state, UAT label и direct deep links согласованы; reserved/unknown routes fail closed и не падают в home. | `AND-150` | `product-site-navigation`: unit + product integration + browser route/navigation suite | `AND-161`: same-deployment authenticated Web smoke |
 | P2 | Ordinary Mind проходит create/list/exact route/rename/delete и сохраняется после restart/redeploy; occupied, reserved и retired handle используют один `handle_unavailable` conflict. | `AND-151` | composed Product Site runtime create → restart → rename → restart → MCP discovery → deletion preview/delete → restart/retired-handle regression; ordinary Mind application/deletion and browser suites | `AND-161`: exact-candidate Web + persistence |
-| P3 | Invitations, participants, roles, revoke/leave работают для двух principals. | `AND-157` | invitation/membership integration + browser suite | `AND-158` + `AND-161` |
+| P3 | `/invitations` и canonical ordinary-Mind route показывают только safe access metadata; exact registered-email invitation не даёт access до accept, retry создаёт одну membership, role CAS/revoke/leave немедленно меняют current Web/MCP/history access и сохраняются после runtime reconstruction. | `AND-157` | durable composed Product Site с двумя principals: unknown exact email, create/accept replay, pending denial, role stale conflict, restart, revoke и immediate Web/MCP denial; invitation lifecycle, membership capability matrix, product HTTP mapping и browser stale/escaping suite | `AND-158` + `AND-161`: same-deployment second-principal Web/persistence/MCP |
 | P4 | Visibility, catalog и ownership transfer применяют current access без metadata leakage; `public` discoverable только authenticated catalog, `unlisted` открывается только по exact handle, возврат в `private` немедленно снимает baseline Web/MCP/history grant. | `AND-154` | durable composed Product Site с тремя principals: public → unlisted → public, MCP baseline read, invitation acceptance, atomic transfer, private revoke и runtime reconstruction; visibility/catalog/ownership/history integration и browser suite | `AND-158` + `AND-161` |
 | P5 | Account/profile/delete и manual recovery handoff fail closed без PII leakage или automatic relink. | `AND-153` | account/identity integration + browser + PII-negative suite | `AND-158` + `AND-161` |
 | P6 | MCP token setup и redacted diagnostics воспроизводимы для current modern и legacy Codex profiles. | `AND-152` | token/setup/diagnostic tests + real Codex smoke | `AND-161` |

@@ -189,6 +189,7 @@ test("pilot Product Site route map keeps one UAT shell, exact active navigation,
       if (request.operation === "get_session") return sessionProjection;
       if (request.operation === "list_minds") return [personalRoute, ordinaryOwnerRoute];
       if (request.operation === "list_mcp_tokens") return [];
+      if (request.operation === "list_invitations") return { invitations: [] };
       if (request.operation === "list_public_minds") {
         return { minds: [{ ...ordinaryOwnerRoute, visibility: "public", discovery: "public_catalog", access: { kind: "visibility", role: null, capabilities: ["content:read"] } }], nextCursor: null };
       }
@@ -208,7 +209,7 @@ test("pilot Product Site route map keeps one UAT shell, exact active navigation,
     ["/minds", /data-management-view="list"/],
     ["/research-notes", /data-mind-handle="research-notes"/],
     ["/public", /data-mind-diary-visibility-catalog/],
-    ["/invitations", /data-route-page="invitations"/],
+    ["/invitations", /data-global-invitations/],
     ["/settings/account", /data-route-page="account"/],
     ["/settings/mcp", /data-mind-diary-token-management/],
     ["/help", /data-route-page="help"/],
@@ -258,6 +259,7 @@ test("ordinary Mind list and exact route wire the UAT management and deletion co
           { memberId: "membership_editor", displayName: "Editor Person", role: "editor", membershipVersion: 1, isSelf: false },
         ],
       };
+      if (request.operation === "list_invitations") return { invitations: [] };
       if (request.operation === "get_mind_deletion_impact") return {
         impactId: "impact_research",
         expiresAt: "2026-08-08T00:05:00.000Z",
@@ -292,6 +294,10 @@ test("ordinary Mind list and exact route wire the UAT management and deletion co
   assert.match(detailHtml, /data-owner-delete-controls/);
   assert.match(detailHtml, /data-owner-visibility-controls/);
   assert.match(detailHtml, /data-owner-transfer-controls/);
+  assert.match(detailHtml, /data-invitations-membership-root/);
+  assert.match(detailHtml, /Participants and invitations/);
+  assert.match(detailHtml, /data-invitation-form/);
+  assert.match(detailHtml, /data-member-role-form/);
   assert.match(detailHtml, /value="membership_editor">Editor Person — Editor/);
   assert.match(detailHtml, /mind-diary-ordinary-minds-client\.js/);
   assert.doesNotMatch(detailHtml, /revision_research/);
@@ -303,6 +309,8 @@ test("ordinary Mind list and exact route wire the UAT management and deletion co
   assert.match(assetBody, /delete-mind:/);
   assert.match(assetBody, /ownership-transfer/);
   assert.match(assetBody, /acknowledge_live_head_and_history_exposure/);
+  assert.match(assetBody, /expected_invitation_version/);
+  assert.match(assetBody, /expected_membership_version/);
 
   const impact = await handler(new Request(`${origin}/api/v1/minds/research-notes/deletion-impact`));
   assert.equal(impact.status, 200);
@@ -319,6 +327,116 @@ test("ordinary Mind list and exact route wire the UAT management and deletion co
   assert.equal(deleteCall.input.mind_ref, "research-notes");
   assert.equal(deleteCall.input.impactId, "impact_research");
   assert.equal(deleteCall.input.idempotencyKey, "delete:12345678");
+});
+
+test("collaboration pages expose safe invitation metadata and map every browser action to server-owned commands", async () => {
+  const calls = [];
+  const handler = createProductWebHttpHandler({
+    applicationOrigin: origin,
+    resolveIdentity: () => ({ kind: "authenticated", actor: registeredActor }),
+    csrf: { issue: () => "csrf-collaboration", verify: (_actor, token) => token === "csrf-collaboration" },
+    control: { execute(request) {
+      calls.push(request);
+      if (request.operation === "get_session") return sessionProjection;
+      if (request.operation === "list_minds") return [personalRoute, ordinaryOwnerRoute];
+      if (request.operation === "list_invitations") return {
+        invitations: [
+          {
+            invitationId: "invitation_incoming",
+            mindId: "space_external",
+            mindName: "External Collaboration",
+            direction: "incoming",
+            counterpartyDisplayName: "External Owner",
+            proposedRole: "editor",
+            state: "pending",
+            expiresAt: "2026-08-17T00:00:00.000Z",
+            invitationVersion: 2,
+            targetVerifiedEmail: "must-not-render@example.com",
+            principalId: "principal_must_not_render",
+          },
+          {
+            invitationId: "invitation_outgoing",
+            mindId: "space_research",
+            mindName: "Research Notes",
+            direction: "outgoing",
+            counterpartyDisplayName: "Invited Person",
+            proposedRole: "reader",
+            state: "expired",
+            expiresAt: "2026-08-09T00:00:00.000Z",
+            invitationVersion: 3,
+          },
+        ],
+      };
+      return { applied: true };
+    } },
+  });
+
+  const page = await handler(new Request(`${origin}/invitations`));
+  assert.equal(page.status, 200);
+  const html = await page.text();
+  assert.match(html, /data-global-invitations/);
+  assert.match(html, /External Collaboration/);
+  assert.match(html, /Research Notes/);
+  assert.match(html, /href="\/research-notes"/);
+  assert.match(html, /data-invitation-action="accept"/);
+  assert.match(html, /data-invitation-action="reject"/);
+  assert.match(html, /data-invitation-action="reissue"/);
+  assert.doesNotMatch(html, /must-not-render@example\.com|principal_must_not_render/);
+
+  const asset = await handler(new Request(`${origin}/ui/mind-diary-collaboration-client.js`));
+  assert.equal(asset.status, 200);
+  assert.match(await asset.text(), /registered_principal_not_found/);
+
+  const cases = [
+    ["POST", "/api/v1/minds/research-notes/invitations", {
+      target_verified_email: "person@example.com",
+      role: "editor",
+      expected_metadata_version: 7,
+    }, "create_invitation"],
+    ["POST", "/api/v1/invitations/invitation_incoming/accept", {
+      expected_invitation_version: 2,
+    }, "accept_invitation"],
+    ["POST", "/api/v1/invitations/invitation_incoming/reject", {
+      expected_invitation_version: 2,
+    }, "reject_invitation"],
+    ["DELETE", "/api/v1/invitations/invitation_outgoing", {
+      expected_invitation_version: 3,
+    }, "cancel_invitation"],
+    ["POST", "/api/v1/invitations/invitation_outgoing/reissue", {
+      expected_invitation_version: 3,
+    }, "reissue_invitation"],
+    ["PATCH", "/api/v1/minds/research-notes/members/membership_editor", {
+      role: "reader",
+      expected_membership_version: 4,
+    }, "change_membership_role"],
+    ["DELETE", "/api/v1/minds/research-notes/members/membership_editor", {
+      expected_membership_version: 5,
+    }, "revoke_membership"],
+    ["POST", "/api/v1/minds/research-notes/leave", {
+      expected_membership_version: 6,
+    }, "leave_space"],
+  ];
+  for (const [method, path, body, operation] of cases) {
+    const response = await handler(new Request(`${origin}${path}`, {
+      method,
+      headers: {
+        origin,
+        "content-type": "application/json",
+        "x-csrf-token": "csrf-collaboration",
+        "idempotency-key": `collaboration:${operation}`,
+      },
+      body: JSON.stringify(body),
+    }));
+    assert.equal(response.status, 200, operation);
+    const call = calls.at(-1);
+    assert.equal(call.operation, operation);
+    assert.equal(call.input.idempotencyKey, `collaboration:${operation}`);
+  }
+  assert.deepEqual(calls.at(-1).input, {
+    expectedMembershipVersion: 6,
+    idempotencyKey: "collaboration:leave_space",
+    mind_ref: "research-notes",
+  });
 });
 
 test("token controls preserve CSRF and expose a one-time secret only in the issuance response", async () => {

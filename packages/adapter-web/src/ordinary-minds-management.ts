@@ -4,6 +4,10 @@ import {
   renderMindDiaryAuthenticatedFooter,
   renderMindDiaryAuthenticatedHeader,
 } from "./ui-shell.js";
+import {
+  renderInvitationsMembershipPanel,
+  type InvitationMembershipSnapshot,
+} from "./invitations-membership.js";
 
 export type OrdinaryMindUiRole = "reader" | "editor" | "admin" | "owner";
 export type OrdinaryMindUiVisibility = "private" | "unlisted" | "public";
@@ -33,6 +37,10 @@ export type OrdinaryMindOwnershipCandidates =
   | { readonly kind: "ready"; readonly members: readonly OrdinaryMindUiMember[] }
   | { readonly kind: "error" };
 
+export type OrdinaryMindCollaboration =
+  | { readonly kind: "ready"; readonly snapshot: InvitationMembershipSnapshot }
+  | { readonly kind: "error" };
+
 export type OrdinaryMindsUiCollectionState =
   | { readonly kind: "ready"; readonly minds: readonly OrdinaryMindUiMind[] }
   | { readonly kind: "loading" }
@@ -48,6 +56,7 @@ export type OrdinaryMindsManagementView =
       readonly kind: "detail";
       readonly mind: OrdinaryMindUiMind;
       readonly ownership?: OrdinaryMindOwnershipCandidates;
+      readonly collaboration?: OrdinaryMindCollaboration;
     }
   | { readonly kind: "route_loading"; readonly handle: string }
   | { readonly kind: "route_error"; readonly handle: string; readonly message: string };
@@ -437,6 +446,18 @@ function renderOwnershipPanel(
   </section>`;
 }
 
+function renderCollaborationPanel(
+  collaboration: OrdinaryMindCollaboration | undefined,
+): string {
+  if (collaboration?.kind === "ready") {
+    return renderInvitationsMembershipPanel(collaboration.snapshot);
+  }
+  return `<section class="md-setup-card" aria-labelledby="collaboration-unavailable-heading" data-collaboration-unavailable>
+    <div><p class="md-eyebrow">People and access</p><h2 id="collaboration-unavailable-heading">Participants and invitations unavailable</h2><p>No access controls are shown until current participant and invitation state can be read together.</p></div>
+    <a class="md-button md-button--secondary" href="/invitations">Open global invitations</a>
+  </section>`;
+}
+
 function renderDeleteDialog(mind: OrdinaryMindUiMind, handle: string): string {
   if (safeRole(mind.role) !== "owner") return "";
   return `<dialog class="md-dialog" id="delete-ordinary-mind-dialog" aria-labelledby="delete-ordinary-mind-title" aria-describedby="delete-ordinary-mind-description" data-delete-mind-dialog>
@@ -475,6 +496,7 @@ function renderDeleteDialog(mind: OrdinaryMindUiMind, handle: string): string {
 function renderDetailView(
   mind: OrdinaryMindUiMind,
   ownership: OrdinaryMindOwnershipCandidates | undefined,
+  collaboration: OrdinaryMindCollaboration | undefined,
   announcement: string | undefined,
 ): string {
   const handle = safeHandle(mind.handle);
@@ -510,6 +532,7 @@ function renderDetailView(
         ${renderRenamePanel(mind, handle)}
       </div>
       ${renderVisibilityPanel(mind, handle)}
+      ${renderCollaborationPanel(collaboration)}
       ${renderOwnershipPanel(mind, ownership)}
       ${renderDeletePanel(mind, handle)}
     </div>
@@ -521,7 +544,12 @@ export function renderOrdinaryMindsManagement(model: OrdinaryMindsManagementMode
   const body = model.view.kind === "list"
     ? renderListView(model.view, model.announcement)
     : model.view.kind === "detail"
-      ? renderDetailView(model.view.mind, model.view.ownership, model.announcement)
+      ? renderDetailView(
+          model.view.mind,
+          model.view.ownership,
+          model.view.collaboration,
+          model.announcement,
+        )
       : renderRouteState(model.view, model.announcement);
   return `<div class="md-shell" data-mind-diary-shell data-ordinary-minds-management data-nav-open="false" data-management-view="${model.view.kind}">
     <a class="md-skip-link" href="#main-content">Skip to main content</a>

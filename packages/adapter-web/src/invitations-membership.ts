@@ -1,6 +1,8 @@
 import {
   MIND_DIARY_UI_ASSETS,
   escapeUntrustedText,
+  renderMindDiaryAuthenticatedFooter,
+  renderMindDiaryAuthenticatedHeader,
 } from "./ui-shell.js";
 
 export type InvitationMembershipRole = "reader" | "editor" | "admin" | "owner";
@@ -43,6 +45,15 @@ export interface InvitationMembershipInvitation {
   readonly state: InvitationUiState;
   readonly expiresAt: string;
   readonly invitationVersion: number;
+  /** Current server role may narrow outgoing lifecycle controls. */
+  readonly canManage?: boolean;
+}
+
+export interface InvitationMembershipGlobalInvitation
+  extends InvitationMembershipInvitation {
+  readonly mindId: string;
+  readonly mindName: string;
+  readonly mindRoute: string;
 }
 
 export interface InvitationMembershipSnapshot {
@@ -54,6 +65,10 @@ export interface InvitationMembershipSnapshot {
 
 export type InvitationMembershipLoadedState =
   | { readonly kind: "ready"; readonly snapshot: InvitationMembershipSnapshot }
+  | {
+      readonly kind: "global_ready";
+      readonly invitations: readonly InvitationMembershipGlobalInvitation[];
+    }
   | { readonly kind: "unavailable"; readonly message: string };
 
 export type InvitationMembershipCollectionState =
@@ -213,15 +228,62 @@ function renderInvitationAction(invitation: InvitationMembershipInvitation): str
     </div>`;
   }
   if (invitation.direction === "outgoing" && state === "pending") {
+    if (invitation.canManage === false) {
+      return `<span class="md-token-card__final-state">Current role cannot manage this invitation.</span>`;
+    }
     return `<button class="md-button md-button--danger" type="button" data-invitation-action="cancel" ${attributes}>Cancel invitation</button>`;
   }
   if (
     invitation.direction === "outgoing" &&
     (state === "expired" || state === "cancelled")
   ) {
+    if (invitation.canManage === false) {
+      return `<span class="md-token-card__final-state">Current role cannot reissue this invitation.</span>`;
+    }
     return `<button class="md-button md-button--secondary" type="button" data-invitation-action="reissue" ${attributes}>Reissue for 7 days</button>`;
   }
   return `<span class="md-token-card__final-state">${stateLabel(state)}</span>`;
+}
+
+function renderGlobalInvitationCard(
+  invitation: InvitationMembershipGlobalInvitation,
+): string {
+  const card = renderInvitationCard(invitation);
+  const route = safeMindRoute(invitation.mindRoute);
+  const mind = `<p class="md-caveat"><strong>Mind:</strong> ${
+    route === "#"
+      ? escapeUntrustedText(invitation.mindName)
+      : `<a href="${route}">${escapeUntrustedText(invitation.mindName)}</a>`
+  }</p>`;
+  return card.replace('<div class="md-token-card__action">', `${mind}<div class="md-token-card__action">`);
+}
+
+function renderGlobalInvitationGroup(
+  invitations: readonly InvitationMembershipGlobalInvitation[],
+  direction: InvitationDirection,
+): string {
+  const selected = invitations.filter((invitation) => invitation.direction === direction);
+  const heading = direction === "incoming" ? "Incoming invitations" : "Sent invitations";
+  const empty = direction === "incoming"
+    ? "No incoming invitations."
+    : "No sent invitations.";
+  return `<section aria-labelledby="global-${direction}-invitations-heading">
+    <div class="md-section-heading"><div><p class="md-eyebrow">${direction === "incoming" ? "Your decisions" : "Invitation lifecycle"}</p><h2 id="global-${direction}-invitations-heading">${heading}</h2></div></div>
+    ${selected.length === 0 ? `<p>${empty}</p>` : `<div class="md-token-grid">${selected.map(renderGlobalInvitationCard).join("")}</div>`}
+  </section>`;
+}
+
+function renderGlobalInvitations(
+  invitations: readonly InvitationMembershipGlobalInvitation[],
+): string {
+  return `<div class="md-token-layout" data-global-invitations>
+    ${renderGlobalInvitationGroup(invitations, "incoming")}
+    ${renderGlobalInvitationGroup(invitations, "outgoing")}
+    <section class="md-setup-card" aria-labelledby="global-invitation-help">
+      <div><p class="md-eyebrow">Per-Mind controls</p><h2 id="global-invitation-help">Invite and manage participants from a Mind</h2><p>Open an ordinary Mind to invite an exact registered account, change roles, revoke access, or leave. This page contains access metadata only.</p></div>
+      <a class="md-button md-button--secondary" href="/minds">Open your Minds</a>
+    </section>
+  </div>`;
 }
 
 function renderInvitationCard(invitation: InvitationMembershipInvitation): string {
@@ -424,6 +486,35 @@ function renderReady(snapshot: InvitationMembershipSnapshot): string {
   </div>`;
 }
 
+/** Per-Mind access controls embedded in the canonical ordinary-Mind route. */
+export function renderInvitationsMembershipPanel(
+  snapshot: InvitationMembershipSnapshot,
+): string {
+  const route = safeMindRoute(snapshot.mind.route);
+  const handle = route === "/me" || route === "#" ? null : route.slice(1);
+  if (handle === null) {
+    return `<section class="md-setup-card" data-collaboration-unavailable>
+      <div><p class="md-eyebrow">People and access</p><h2>Collaboration controls unavailable</h2><p>Current Mind identity could not be verified safely.</p></div>
+    </section>`;
+  }
+  const actorRole = safeRole(snapshot.actor.role) ?? "reader";
+  return `<section class="md-token-layout" aria-labelledby="collaboration-heading" data-invitations-membership-root data-mind-handle="${escapeUntrustedText(handle)}">
+    <div class="md-section-heading">
+      <div><p class="md-eyebrow">People and access</p><h2 id="collaboration-heading">Participants and invitations</h2><p>Pending invitations grant no access. Every successful action reloads current server state.</p></div>
+      <span class="md-token-state md-token-state--active">You are ${roleLabel(actorRole)}</span>
+    </div>
+    ${renderInvitationGroup(snapshot.invitations, "incoming")}
+    ${renderInvitationGroup(snapshot.invitations, "outgoing")}
+    ${renderInvitationForm(snapshot)}
+    <section aria-labelledby="members-heading">
+      <div class="md-section-heading"><div><p class="md-eyebrow">Active access</p><h2 id="members-heading">Participants</h2></div></div>
+      <div class="md-token-grid">${snapshot.members.map((member) => renderMemberCard(member, actorRole)).join("")}</div>
+    </section>
+    ${renderLeave(snapshot)}
+    <p><a href="/invitations">Review invitations across all Minds</a></p>
+  </section>`;
+}
+
 function renderCollection(collection: InvitationMembershipCollectionState): string {
   switch (collection.kind) {
     case "loading":
@@ -446,24 +537,11 @@ function renderCollection(collection: InvitationMembershipCollectionState): stri
         <p>${escapeUntrustedText(collection.message)}</p>
         <a class="md-button md-button--secondary" href="/minds">Back to Minds</a>
       </section>`;
+    case "global_ready":
+      return `<section data-people-collection data-invitations-membership-root>${renderGlobalInvitations(collection.invitations)}</section>`;
     case "ready":
       return `<section data-people-collection>${renderReady(collection.snapshot)}</section>`;
   }
-}
-
-function renderHeader(displayName: string): string {
-  const safeName = escapeUntrustedText(displayName);
-  return `<header class="md-header">
-    <a class="md-brand" href="/" aria-label="Mind Diary home"><img src="${MIND_DIARY_UI_ASSETS.lockup}" alt="Mind Diary" width="204" height="48"></a>
-    <button class="md-menu-button" type="button" aria-expanded="false" aria-controls="primary-navigation" data-menu-button><span aria-hidden="true">Menu</span><span>Navigation</span></button>
-    <nav id="primary-navigation" class="md-navigation" aria-label="Primary" data-navigation>
-      <a href="/me"><span aria-hidden="true">●</span> My Mind</a>
-      <a href="/minds"><span aria-hidden="true">▤</span> Minds</a>
-      <a href="/invitations" aria-current="page"><span aria-hidden="true">✉</span> Invitations</a>
-      <a href="/settings/mcp"><span aria-hidden="true">⌁</span> MCP setup</a>
-    </nav>
-    <button class="md-profile" type="button" aria-label="Open account menu for ${safeName}"><span class="md-profile__initial" aria-hidden="true">${escapeUntrustedText(displayName.slice(0, 1).toUpperCase())}</span><span>${safeName}</span></button>
-  </header>`;
 }
 
 export function renderInvitationsMembership(
@@ -472,14 +550,14 @@ export function renderInvitationsMembership(
   const announcement = model.announcement
     ? `<p class="md-announcement" role="status" aria-live="polite" data-page-announcement>${escapeUntrustedText(model.announcement)}</p>`
     : `<p class="md-announcement" role="status" aria-live="polite" data-page-announcement hidden></p>`;
-  return `<div class="md-shell" data-invitations-membership-shell data-nav-open="false">
+  return `<div class="md-shell" data-mind-diary-shell data-invitations-membership-shell data-nav-open="false">
     <a class="md-skip-link" href="#main-content">Skip to main content</a>
-    ${renderHeader(model.displayName)}
+    ${renderMindDiaryAuthenticatedHeader(model.displayName, "invitations")}
     <main id="main-content" class="md-main" tabindex="-1">
       <div class="md-page-heading"><div><p class="md-eyebrow">People and access</p><h1>Invitations and participants</h1><p>Invite registered people, respond to invitations, and manage current access without exposing Mind content.</p></div>${announcement}</div>
       ${renderCollection(model.collection)}
     </main>
-    <footer class="md-footer"><p><strong>Mind Diary</strong> applies every access change to current server state.</p><a href="/help">Help and accessibility</a></footer>
+    ${renderMindDiaryAuthenticatedFooter("invitations")}
   </div>`;
 }
 
@@ -621,7 +699,11 @@ export function installInvitationsMembership(
   const loadAuthoritativeState = async (): Promise<boolean> => {
     try {
       const loaded = await adapter.loadPage();
-      if (loaded.kind !== "ready" && loaded.kind !== "unavailable") {
+      if (
+        loaded.kind !== "ready" &&
+        loaded.kind !== "global_ready" &&
+        loaded.kind !== "unavailable"
+      ) {
         throw new Error("Authoritative state is unavailable.");
       }
       replaceCollection(shell, loaded);

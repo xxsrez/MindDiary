@@ -1007,3 +1007,287 @@ test("durable Product Site enforces public baseline access, atomic ownership tra
   assert.equal(durableOwnerBody.data.access.role, "owner");
   assert.equal(durableOwnerBody.data.visibility, "private");
 });
+
+test("durable collaboration accepts exactly once, rejects stale role state, and revokes Web and MCP access immediately", async () => {
+  const database = new FakeD1Database();
+  const bucket = new FakeR2Bucket();
+  let currentIdentity = {
+    verifiedEmail: "collaboration.owner@example.com",
+    verifiedFullName: "Collaboration Owner",
+  };
+  const runtimeOptions = {
+    database,
+    bucket,
+    publicOrigin: ORIGIN,
+    identity: {
+      readVerifiedIdentity() {
+        return { kind: "authenticated", ...currentIdentity };
+      },
+    },
+    tokenVerifierKey: key(3),
+    locatorKey: key(43),
+    exportDownloadVerifierKey: key(83),
+    csrfKey: key(123),
+    schedule() {},
+  };
+  let runtime = await createProductSiteRuntime(runtimeOptions);
+  const switchIdentity = (verifiedEmail, verifiedFullName) => {
+    currentIdentity = { verifiedEmail, verifiedFullName };
+  };
+  const csrf = async (path = "/minds") => {
+    const response = await responseFrom(runtime, new Request(`${ORIGIN}${path}`));
+    assert.equal(response.status, 200, path);
+    return csrfFromHtml(await response.text());
+  };
+  const mutation = async (path, method, token, idempotencyKey, body) =>
+    responseFrom(runtime, new Request(`${ORIGIN}${path}`, {
+      method,
+      headers: {
+        origin: ORIGIN,
+        "content-type": "application/json",
+        "x-csrf-token": token,
+        "idempotency-key": idempotencyKey,
+      },
+      body: JSON.stringify(body),
+    }));
+  const registerCurrent = async () => {
+    const token = await csrf("/");
+    const response = await mutation(
+      "/api/v1/account",
+      "POST",
+      token,
+      `bootstrap:${currentIdentity.verifiedEmail}`,
+      { action: "create_isolated_account" },
+    );
+    assert.equal(response.status, 200, await response.text());
+  };
+
+  await registerCurrent();
+  const ownerCsrf = await csrf();
+  const created = await mutation(
+    "/api/v1/minds",
+    "POST",
+    ownerCsrf,
+    "mind:collaboration-runtime",
+    { name: "Collaboration Runtime", handle: "collaboration-runtime" },
+  );
+  assert.equal(created.status, 200, await created.text());
+
+  switchIdentity("collaboration.member@example.com", "Collaboration Member");
+  await registerCurrent();
+  switchIdentity("collaboration.owner@example.com", "Collaboration Owner");
+
+  const ownerMind = await responseFrom(
+    runtime,
+    new Request(`${ORIGIN}/api/v1/minds/collaboration-runtime`),
+  );
+  assert.equal(ownerMind.status, 200);
+  const ownerMindBody = await ownerMind.json();
+  const freshOwnerCsrf = await csrf("/collaboration-runtime");
+
+  const unknown = await mutation(
+    "/api/v1/minds/collaboration-runtime/invitations",
+    "POST",
+    freshOwnerCsrf,
+    "invite:collaboration-unknown",
+    {
+      target_verified_email: "unknown.collaboration@example.com",
+      role: "reader",
+      expected_metadata_version: ownerMindBody.data.metadata_version,
+    },
+  );
+  assert.equal(unknown.status, 404);
+  const unknownBody = await unknown.json();
+  assert.equal(unknownBody.error.code, "registered_principal_not_found");
+  assert.equal(JSON.stringify(unknownBody).includes("collaboration.member@example.com"), false);
+
+  const inviteBody = {
+    target_verified_email: "collaboration.member@example.com",
+    role: "editor",
+    expected_metadata_version: ownerMindBody.data.metadata_version,
+  };
+  const invited = await mutation(
+    "/api/v1/minds/collaboration-runtime/invitations",
+    "POST",
+    freshOwnerCsrf,
+    "invite:collaboration-member",
+    inviteBody,
+  );
+  assert.equal(invited.status, 200, await invited.clone().text());
+  const invitedBody = await invited.json();
+  assert.equal(invitedBody.data.replayed, false);
+  const replayedInvite = await mutation(
+    "/api/v1/minds/collaboration-runtime/invitations",
+    "POST",
+    freshOwnerCsrf,
+    "invite:collaboration-member",
+    inviteBody,
+  );
+  assert.equal(replayedInvite.status, 200, await replayedInvite.clone().text());
+  assert.equal((await replayedInvite.json()).data.replayed, true);
+
+  switchIdentity("collaboration.member@example.com", "Collaboration Member");
+  const pendingExact = await responseFrom(
+    runtime,
+    new Request(`${ORIGIN}/api/v1/minds/collaboration-runtime`),
+  );
+  assert.equal(pendingExact.status, 404);
+  const invitationPage = await responseFrom(runtime, new Request(`${ORIGIN}/invitations`));
+  assert.equal(invitationPage.status, 200);
+  const invitationPageHtml = await invitationPage.text();
+  assert.match(invitationPageHtml, /Collaboration Runtime/);
+  assert.match(invitationPageHtml, /data-invitation-action="accept"/);
+  assert.doesNotMatch(invitationPageHtml, /collaboration\.owner@example\.com/);
+
+  const memberCsrf = csrfFromHtml(invitationPageHtml);
+  const incoming = await responseFrom(runtime, new Request(`${ORIGIN}/api/v1/invitations`));
+  assert.equal(incoming.status, 200);
+  const incomingBody = await incoming.json();
+  const pendingInvitation = incomingBody.data.invitations.find(
+    ({ direction, mind_name: mindName }) => direction === "incoming" && mindName === "Collaboration Runtime",
+  );
+  assert.ok(pendingInvitation);
+  const acceptBody = {
+    expected_invitation_version: pendingInvitation.invitation_version,
+  };
+  const accepted = await mutation(
+    `/api/v1/invitations/${encodeURIComponent(pendingInvitation.invitation_id)}/accept`,
+    "POST",
+    memberCsrf,
+    "accept:collaboration-member",
+    acceptBody,
+  );
+  assert.equal(accepted.status, 200, await accepted.clone().text());
+  assert.equal((await accepted.json()).data.replayed, false);
+  const replayedAccept = await mutation(
+    `/api/v1/invitations/${encodeURIComponent(pendingInvitation.invitation_id)}/accept`,
+    "POST",
+    memberCsrf,
+    "accept:collaboration-member",
+    acceptBody,
+  );
+  assert.equal(replayedAccept.status, 200, await replayedAccept.clone().text());
+  assert.equal((await replayedAccept.json()).data.replayed, true);
+
+  const acceptedExact = await responseFrom(
+    runtime,
+    new Request(`${ORIGIN}/api/v1/minds/collaboration-runtime`),
+  );
+  assert.equal(acceptedExact.status, 200);
+  assert.equal((await acceptedExact.json()).data.access.role, "editor");
+  const memberSettingsCsrf = await csrf("/settings/mcp");
+  const issued = await mutation(
+    "/api/v1/mcp-tokens",
+    "POST",
+    memberSettingsCsrf,
+    "token:collaboration-member",
+    { name: "Collaboration member access", scopes: ["content:read"] },
+  );
+  assert.equal(issued.status, 200, await issued.clone().text());
+  const memberSecret = (await issued.json()).data.secret;
+  const mcpBeforeRevoke = await modernMcp(runtime, memberSecret, {
+    jsonrpc: "2.0",
+    id: 81,
+    method: "tools/call",
+    params: {
+      _meta: {
+        "io.modelcontextprotocol/protocolVersion": MCP_TARGET_PROTOCOL,
+        "io.modelcontextprotocol/clientInfo": { name: "collaboration-runtime-e2e", version: "0.0.0" },
+        "io.modelcontextprotocol/clientCapabilities": {},
+      },
+      name: "list_minds",
+      arguments: {},
+    },
+  });
+  assert.equal(mcpBeforeRevoke.status, 200, await mcpBeforeRevoke.clone().text());
+  assert.equal(
+    (await mcpBeforeRevoke.json()).result.structuredContent.data.minds
+      .some(({ route }) => route === "/collaboration-runtime"),
+    true,
+  );
+
+  switchIdentity("collaboration.owner@example.com", "Collaboration Owner");
+  const ownerMembersCsrf = await csrf("/collaboration-runtime");
+  const members = await responseFrom(
+    runtime,
+    new Request(`${ORIGIN}/api/v1/minds/collaboration-runtime/members`),
+  );
+  assert.equal(members.status, 200);
+  const membersBody = await members.json();
+  const targetMembers = membersBody.data.members.filter(
+    ({ display_name: displayName }) => displayName === "Collaboration Member",
+  );
+  assert.equal(targetMembers.length, 1);
+  const targetMember = targetMembers[0];
+  const roleChanged = await mutation(
+    `/api/v1/minds/collaboration-runtime/members/${encodeURIComponent(targetMember.member_id)}`,
+    "PATCH",
+    ownerMembersCsrf,
+    "role:collaboration-member-reader",
+    { role: "reader", expected_membership_version: targetMember.membership_version },
+  );
+  assert.equal(roleChanged.status, 200, await roleChanged.clone().text());
+  const roleChangedBody = await roleChanged.json();
+  assert.equal(roleChangedBody.data.role, "reader");
+
+  const staleRole = await mutation(
+    `/api/v1/minds/collaboration-runtime/members/${encodeURIComponent(targetMember.member_id)}`,
+    "PATCH",
+    ownerMembersCsrf,
+    "role:collaboration-member-stale",
+    { role: "editor", expected_membership_version: targetMember.membership_version },
+  );
+  assert.equal(staleRole.status, 409);
+  assert.equal((await staleRole.json()).error.code, "membership_version_conflict");
+
+  runtime = await createProductSiteRuntime(runtimeOptions);
+  const durableMembers = await responseFrom(
+    runtime,
+    new Request(`${ORIGIN}/api/v1/minds/collaboration-runtime/members`),
+  );
+  assert.equal(durableMembers.status, 200);
+  const durableTarget = (await durableMembers.json()).data.members.find(
+    ({ display_name: displayName }) => displayName === "Collaboration Member",
+  );
+  assert.ok(durableTarget);
+  assert.equal(durableTarget.role, "reader");
+  const durableOwnerCsrf = await csrf("/collaboration-runtime");
+  const revoked = await mutation(
+    `/api/v1/minds/collaboration-runtime/members/${encodeURIComponent(durableTarget.member_id)}`,
+    "DELETE",
+    durableOwnerCsrf,
+    "revoke:collaboration-member",
+    { expected_membership_version: durableTarget.membership_version },
+  );
+  assert.equal(revoked.status, 200, await revoked.text());
+
+  switchIdentity("collaboration.member@example.com", "Collaboration Member");
+  const revokedExact = await responseFrom(
+    runtime,
+    new Request(`${ORIGIN}/api/v1/minds/collaboration-runtime`),
+  );
+  assert.equal(revokedExact.status, 404);
+  const revokedPage = await responseFrom(runtime, new Request(`${ORIGIN}/collaboration-runtime`));
+  assert.equal(revokedPage.status, 200);
+  assert.match(await revokedPage.text(), /Mind settings unavailable/);
+  const mcpAfterRevoke = await modernMcp(runtime, memberSecret, {
+    jsonrpc: "2.0",
+    id: 82,
+    method: "tools/call",
+    params: {
+      _meta: {
+        "io.modelcontextprotocol/protocolVersion": MCP_TARGET_PROTOCOL,
+        "io.modelcontextprotocol/clientInfo": { name: "collaboration-runtime-e2e", version: "0.0.0" },
+        "io.modelcontextprotocol/clientCapabilities": {},
+      },
+      name: "list_minds",
+      arguments: {},
+    },
+  });
+  assert.equal(mcpAfterRevoke.status, 200, await mcpAfterRevoke.clone().text());
+  assert.equal(
+    (await mcpAfterRevoke.json()).result.structuredContent.data.minds
+      .some(({ route }) => route === "/collaboration-runtime"),
+    false,
+  );
+});
