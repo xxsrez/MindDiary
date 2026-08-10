@@ -225,13 +225,38 @@ forward batch, а не после одного локального fix commit.
 Используются три рекомендуемых маршрута:
 
 1. **Мелкий локальный дефект.** Coordinator исправляет прямо в `main`, запускает
-   затронутые проверки и выпускает новый UAT batch.
+   затронутые проверки и выпускает новый UAT batch. При регистрации он обязан
+   задать не более четырёх непересекающихся repository-relative repair paths.
 2. **Дефект одной задачи.** Coordinator reopen-ит исходную Linear issue,
    повышает её приоритет и направляет на обычный feature flow. При отсутствии
    свободного worker coordinator может взять её сам.
 3. **Крупный integration defect.** Coordinator создаёт отдельную
    дедуплицированную bug issue с высоким приоритетом и чинит её первым
    доступным исполнителем, включая самого coordinator-а.
+
+Маршрут `coordinator` является только ограниченным repair budget, а не
+предварительной бессрочной классификацией. Helper вычисляет changed paths от
+affected candidate, число файлов, implementation components и failed repair
+attempts. После каждого failed repair check и при любом расширении diff
+coordinator обязан выполнить `defect-assess`. Перед `defect-resolve` helper
+повторяет оценку по committed forward-fix SHA.
+
+Coordinator repair требует переклассификации, если выполнено хотя бы одно
+условие:
+
+- diff вышел за объявленные repair paths;
+- изменено больше 12 файлов;
+- затронуто больше двух implementation components (support-only `.agents`,
+  `docs`, `test` и `tests` в этот счётчик не входят);
+- получен третий failed repair attempt.
+
+После срабатывания границы дефект остаётся open и `defect-resolve` fail closed.
+Coordinator сначала reopen-ит исходную Linear issue либо создаёт
+дедуплицированную high-priority bug, затем записывает её exact stable ID через
+`defect-reclassify`. Только после этого forward fix можно закрыть. Уменьшение
+последующего diff не сбрасывает уже сработавшую переклассификацию.
+Pre-existing open `coordinator` defect без recorded repair paths считается
+unbounded и также требует `reopen`/`new-bug`, а не получает legacy bypass.
 
 UAT defect входит в текущий milestone scope. После failed UAT smoke rollback не
 делается: применяется forward fix и выпускается новый candidate. UAT не обязан
@@ -304,7 +329,8 @@ gates и fail-closed поведение при необъяснимом конф
 - no-op completion не требует UAT, а реальная integrated feature требует;
 - defect нельзя открыть без current-run candidate;
 - default continuous UAT и production refusal;
-- три repair-first маршрута без rollback;
+- три repair-first маршрута без rollback, bounded coordinator assessment и
+  обязательная Linear reclassification при расширении scope/resource budget;
 - crash/resume из каждого durable checkpoint;
 - один реальный forward test с coordinator-only;
 - один реальный forward test с coordinator + 3 worker-субагентами.

@@ -645,6 +645,7 @@ class ShipctlTest(unittest.TestCase):
             defect = self.invoke(
                 "defect", "--repo", str(repo), "--run", run_id,
                 "--route", "coordinator", "--summary", "smoke failed",
+                "--path", "src/uat-fix.txt",
             )["defect"]
             tree = self.git(repo, "write-tree")
             unrelated = subprocess.run(
@@ -702,7 +703,8 @@ class ShipctlTest(unittest.TestCase):
             run_id = run["run_id"]
             rejected = self.invoke(
                 "defect", "--repo", str(repo), "--run", run_id,
-                "--route", "coordinator", "--summary", "invented", expected=2,
+                "--route", "coordinator", "--summary", "invented",
+                "--path", "src/fix", expected=2,
             )
             self.assertEqual(rejected["code"], "DEFECT_REQUIRES_CURRENT_WORK")
             self.plan(repo, run_id, root, [self.issue("a", "AND-1")])
@@ -722,6 +724,35 @@ class ShipctlTest(unittest.TestCase):
                 "--issue", "a", "--main-sha", main_sha,
             )
             self.invoke("task-done", "--repo", str(repo), "--run", run_id, "--issue", "a")
+            legacy = self.invoke(
+                "defect", "--repo", str(repo), "--run", run_id,
+                "--route", "coordinator", "--summary", "legacy unbounded repair",
+                "--path", "src/legacy-fix",
+            )["defect"]
+            journal = MODULE.journal_path(repo, run_id)
+            state = MODULE.read_json(journal)
+            legacy_record = next(item for item in state["defects"] if item["id"] == legacy["id"])
+            for field in (
+                "repair_paths", "assessment", "failed_attempts", "reclassification_required",
+                "reclassified_from", "reclassified_at",
+            ):
+                legacy_record.pop(field)
+            MODULE.atomic_write(journal, state)
+            legacy_fix_sha = self.commit_change(repo, "src/legacy-fix/runtime.py", "fixed\n")
+            legacy_blocked = self.invoke(
+                "defect-resolve", "--repo", str(repo), "--run", run_id,
+                "--defect", legacy["id"], "--fixed-sha", legacy_fix_sha, expected=2,
+            )
+            self.assertEqual(legacy_blocked["code"], "DEFECT_RECLASSIFICATION_REQUIRED")
+            self.invoke(
+                "defect-reclassify", "--repo", str(repo), "--run", run_id,
+                "--defect", legacy["id"], "--route", "reopen",
+                "--linear-issue-id", "linear-legacy",
+            )
+            self.invoke(
+                "defect-resolve", "--repo", str(repo), "--run", run_id,
+                "--defect", legacy["id"], "--fixed-sha", legacy_fix_sha,
+            )
             for route in ("reopen", "new-bug"):
                 result = self.invoke(
                     "defect", "--repo", str(repo), "--run", run_id,
@@ -738,6 +769,107 @@ class ShipctlTest(unittest.TestCase):
                 self.assertEqual(replay["defect"]["id"], result["defect"]["id"])
             error = self.invoke("production", expected=2)
             self.assertEqual(error["code"], "PRODUCTION_FORBIDDEN")
+
+    def test_expanded_coordinator_repair_requires_linear_reclassification(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            repo = self.repo_fixture(root)
+            run = self.init_run(repo)
+            run_id = run["run_id"]
+            self.plan(repo, run_id, root, [self.issue("a", "AND-1")])
+            branch = "codex/and-1-reclassification"
+            self.git(repo, "switch", "-c", branch)
+            self.claim(repo, run_id, "a", "coordinator", branch, repo, "src/a")
+            head = self.commit_change(repo, "src/a/result.txt", "candidate\n")
+            self.invoke(
+                "feature-ready", "--repo", str(repo), "--run", run_id,
+                "--issue", "a", "--head", head, "--check", "targeted=passed",
+            )
+            self.git(repo, "switch", "main")
+            self.git(repo, "merge", "--ff-only", branch)
+            candidate = self.git(repo, "rev-parse", "main")
+            self.invoke(
+                "integrate", "--repo", str(repo), "--run", run_id,
+                "--issue", "a", "--main-sha", candidate,
+            )
+            self.invoke("task-done", "--repo", str(repo), "--run", run_id, "--issue", "a")
+            defect = self.invoke(
+                "defect", "--repo", str(repo), "--run", run_id,
+                "--route", "coordinator", "--summary", "small runtime fix",
+                "--path", "src/fix", "--path", "tests/fix",
+            )["defect"]
+            (repo / "src" / "fix").mkdir(parents=True)
+            (repo / "src" / "fix" / "runtime.py").write_text("fixed = True\n", encoding="utf-8")
+            (repo / "apps" / "web").mkdir(parents=True)
+            (repo / "apps" / "web" / "origin.py").write_text("origin = True\n", encoding="utf-8")
+            (repo / "packages" / "export").mkdir(parents=True)
+            (repo / "packages" / "export" / "archive.py").write_text("archive = True\n", encoding="utf-8")
+            self.git(repo, "add", "src/fix/runtime.py", "apps/web/origin.py", "packages/export/archive.py")
+            self.git(repo, "commit", "-m", "expand repair across systems")
+            fixed_sha = self.git(repo, "rev-parse", "main")
+            assessment = self.invoke(
+                "defect-assess", "--repo", str(repo), "--run", run_id,
+                "--defect", defect["id"], "--head", fixed_sha, "--result", "failed",
+            )
+            self.assertTrue(assessment["defect"]["reclassification_required"])
+            self.assertEqual(assessment["next_action"], "reclassify-in-linear")
+            self.assertEqual(
+                assessment["defect"]["assessment"]["out_of_scope_paths"],
+                ["apps/web/origin.py", "packages/export/archive.py"],
+            )
+            blocked = self.invoke(
+                "defect-resolve", "--repo", str(repo), "--run", run_id,
+                "--defect", defect["id"], "--fixed-sha", fixed_sha, expected=2,
+            )
+            self.assertEqual(blocked["code"], "DEFECT_RECLASSIFICATION_REQUIRED")
+            reclassified = self.invoke(
+                "defect-reclassify", "--repo", str(repo), "--run", run_id,
+                "--defect", defect["id"], "--route", "new-bug",
+                "--linear-issue-id", "linear-bug-1",
+            )["defect"]
+            self.assertEqual(reclassified["linear_issue_id"], "linear-bug-1")
+            resolved = self.invoke(
+                "defect-resolve", "--repo", str(repo), "--run", run_id,
+                "--defect", defect["id"], "--fixed-sha", fixed_sha,
+            )["defect"]
+            self.assertEqual(resolved["status"], "resolved")
+
+    def test_third_failed_coordinator_repair_attempt_requires_reclassification(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            repo = self.repo_fixture(root)
+            run = self.init_run(repo)
+            run_id = run["run_id"]
+            self.plan(repo, run_id, root, [self.issue("a", "AND-1")])
+            branch = "codex/and-1-repair-budget"
+            self.git(repo, "switch", "-c", branch)
+            self.claim(repo, run_id, "a", "coordinator", branch, repo, "src/a")
+            head = self.commit_change(repo, "src/a/result.txt", "candidate\n")
+            self.invoke(
+                "feature-ready", "--repo", str(repo), "--run", run_id,
+                "--issue", "a", "--head", head, "--check", "targeted=passed",
+            )
+            self.git(repo, "switch", "main")
+            self.git(repo, "merge", "--ff-only", branch)
+            candidate = self.git(repo, "rev-parse", "main")
+            self.invoke(
+                "integrate", "--repo", str(repo), "--run", run_id,
+                "--issue", "a", "--main-sha", candidate,
+            )
+            self.invoke("task-done", "--repo", str(repo), "--run", run_id, "--issue", "a")
+            defect = self.invoke(
+                "defect", "--repo", str(repo), "--run", run_id,
+                "--route", "coordinator", "--summary", "bounded repair keeps failing",
+                "--path", "src/fix",
+            )["defect"]
+            for attempt in range(1, 4):
+                assessment = self.invoke(
+                    "defect-assess", "--repo", str(repo), "--run", run_id,
+                    "--defect", defect["id"], "--result", "failed",
+                )["defect"]
+                self.assertEqual(assessment["failed_attempts"], attempt)
+            self.assertTrue(assessment["reclassification_required"])
+            self.assertIn("repair reached 3 failed attempts", assessment["assessment"]["reasons"])
 
     def test_uat_url_rejects_credentials_query_and_fragment(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

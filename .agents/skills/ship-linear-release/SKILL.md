@@ -168,7 +168,11 @@ python3 .agents/skills/ship-linear-release/scripts/shipctl.py batch-create \
 После deployment и smoke запиши факт через `batch-uat`. Failed smoke не делает
 rollback. Сначала прочитай
 [references/defect-triage.md](references/defect-triage.md), зарегистрируй
-дефект и выпусти forward fix новым batch. С момента failed smoke helper уже
+дефект и выпусти forward fix новым batch. Для `coordinator` сразу задай bounded
+repair paths, после каждого failed check или расширения diff обязательно вызови
+`defect-assess`; если helper требует reclassification, реально reopen/create
+Linear issue и запиши её stable ID через `defect-reclassify` до resolve. С
+момента failed smoke helper уже
 блокирует ordinary claims — окно до triage не разрешает продолжать обычную
 работу.
 

@@ -34,6 +34,10 @@ WORKERS_VALUE_RE = re.compile(r"(?<![A-Za-z0-9_-])workers\s*=\s*([^\s,;]+)", re.
 TERMINAL_TASK_STATES = {"done", "excluded"}
 ACTIVE_TASK_STATES = {"running", "feature-ready"}
 COMPLETED_LINEAR_STATES = {"done", "completed", "canceled", "cancelled"}
+MAX_COORDINATOR_REPAIR_SCOPES = 4
+MAX_COORDINATOR_REPAIR_FILES = 12
+MAX_COORDINATOR_REPAIR_COMPONENTS = 2
+MAX_COORDINATOR_REPAIR_FAILURES = 3
 
 
 class ShipError(RuntimeError):
@@ -226,6 +230,97 @@ def normalized_path(value: str) -> str:
 
 def path_overlap(left: str, right: str) -> bool:
     return left == right or left.startswith(right + "/") or right.startswith(left + "/")
+
+
+def git_changed_paths(repo: Path, candidate_sha: str, head_sha: str | None) -> list[str]:
+    outputs = [git(repo, "diff", "--name-only", "-z", f"{candidate_sha}..{head_sha or 'HEAD'}")]
+    if head_sha is None:
+        outputs.extend(
+            (
+                git(repo, "diff", "--name-only", "-z"),
+                git(repo, "diff", "--cached", "--name-only", "-z"),
+                git(repo, "ls-files", "--others", "--exclude-standard", "-z"),
+            )
+        )
+    return sorted(
+        {
+            normalized_path(value)
+            for output in outputs
+            for value in output.split("\0")
+            if value
+        },
+        key=lambda value: value.encode(),
+    )
+
+
+def repair_component(path: str) -> str | None:
+    parts = PurePosixPath(path).parts
+    if parts[0] in {".agents", "docs", "test", "tests"}:
+        return None
+    if parts[0] in {"apps", "packages", "services", "modules"} and len(parts) > 1:
+        return "/".join(parts[:2])
+    if parts[0] == "src":
+        return "src"
+    if len(parts) == 1:
+        return "repository-root"
+    return parts[0]
+
+
+def coordinator_assessment(
+    repo: Path,
+    defect: dict[str, Any],
+    *,
+    head_sha: str | None,
+    result: str,
+) -> dict[str, Any]:
+    repair_paths = defect.get("repair_paths")
+    if not isinstance(repair_paths, list) or not repair_paths:
+        raise ShipError(
+            "DEFECT_SCOPE_REQUIRED",
+            "coordinator defect predates bounded repair scope; reclassify it before assessment",
+        )
+    changed_paths = git_changed_paths(repo, defect["candidate_sha"], head_sha)
+    observed_sha = head_sha or full_sha(git(repo, "rev-parse", "HEAD"), "observed sha")
+    out_of_scope_paths = [
+        path
+        for path in changed_paths
+        if not any(path == scope or path.startswith(scope + "/") for scope in repair_paths)
+    ]
+    components = sorted(
+        {component for path in changed_paths if (component := repair_component(path)) is not None},
+        key=lambda value: value.encode(),
+    )
+    failed_attempts = int(defect.get("failed_attempts", 0)) + (1 if result == "failed" else 0)
+    reasons: list[str] = []
+    if out_of_scope_paths:
+        reasons.append("repair escaped declared paths")
+    if len(changed_paths) > MAX_COORDINATOR_REPAIR_FILES:
+        reasons.append(f"repair changed more than {MAX_COORDINATOR_REPAIR_FILES} files")
+    if len(components) > MAX_COORDINATOR_REPAIR_COMPONENTS:
+        reasons.append(f"repair crossed more than {MAX_COORDINATOR_REPAIR_COMPONENTS} components")
+    if failed_attempts >= MAX_COORDINATOR_REPAIR_FAILURES:
+        reasons.append(f"repair reached {MAX_COORDINATOR_REPAIR_FAILURES} failed attempts")
+    defect["failed_attempts"] = failed_attempts
+    return {
+        "observed_ref": head_sha or "WORKTREE",
+        "observed_sha": observed_sha,
+        "includes_worktree": head_sha is None,
+        "result": result,
+        "repair_paths": repair_paths,
+        "changed_paths": changed_paths,
+        "out_of_scope_paths": out_of_scope_paths,
+        "components": components,
+        "file_count": len(changed_paths),
+        "failed_attempts": failed_attempts,
+        "limits": {
+            "files": MAX_COORDINATOR_REPAIR_FILES,
+            "components": MAX_COORDINATOR_REPAIR_COMPONENTS,
+            "failed_attempts": MAX_COORDINATOR_REPAIR_FAILURES,
+        },
+        "reasons": reasons,
+        "requires_reclassification": bool(reasons),
+        "observed_at": utc_now(),
+    }
 
 
 def lane(state: dict[str, Any], lane_id: str) -> dict[str, Any]:
@@ -903,6 +998,23 @@ def command_defect(args: argparse.Namespace) -> int:
     summary = args.summary.strip()
     if not summary or len(summary) > 1000 or any(char in summary for char in "\r\n"):
         raise ShipError("DEFECT_SUMMARY_INVALID", "defect summary must be one bounded line")
+    repair_paths = sorted({normalized_path(value) for value in args.path}, key=lambda value: value.encode())
+    if args.route == "coordinator":
+        if not repair_paths:
+            raise ShipError("DEFECT_SCOPE_REQUIRED", "coordinator repair requires at least one --path")
+        if len(repair_paths) > MAX_COORDINATOR_REPAIR_SCOPES:
+            raise ShipError(
+                "DEFECT_SCOPE_TOO_BROAD",
+                f"coordinator repair accepts at most {MAX_COORDINATOR_REPAIR_SCOPES} paths",
+            )
+        if any(
+            path_overlap(left, right)
+            for index, left in enumerate(repair_paths)
+            for right in repair_paths[index + 1 :]
+        ):
+            raise ShipError("DEFECT_SCOPE_INVALID", "coordinator repair paths must not overlap")
+    elif repair_paths:
+        raise ShipError("DEFECT_SCOPE_INVALID", "--path is only valid for coordinator repair")
     with edit_run(repo, args.run) as state:
         require_active(state)
         if not current_run_has_candidate(state):
@@ -937,6 +1049,12 @@ def command_defect(args: argparse.Namespace) -> int:
                 "linear_issue_id": args.linear_issue_id,
                 "candidate_sha": candidate_sha,
                 "summary": summary,
+                "repair_paths": repair_paths,
+                "assessment": None,
+                "failed_attempts": 0,
+                "reclassification_required": False,
+                "reclassified_from": None,
+                "reclassified_at": None,
                 "status": "open",
                 "fixed_sha": None,
                 "batch_id": None,
@@ -945,6 +1063,21 @@ def command_defect(args: argparse.Namespace) -> int:
             }
             state["defects"].append(value)
             disposition = "created"
+        elif args.route == "coordinator":
+            existing_paths = value.get("repair_paths")
+            if existing_paths is None:
+                value.update(
+                    {
+                        "repair_paths": repair_paths,
+                        "assessment": None,
+                        "failed_attempts": 0,
+                        "reclassification_required": False,
+                        "reclassified_from": None,
+                        "reclassified_at": None,
+                    }
+                )
+            elif existing_paths != repair_paths:
+                raise ShipError("DEFECT_SCOPE_MISMATCH", "replayed coordinator defect changed repair paths")
         response = {
             "run_id": state["run_id"],
             "disposition": disposition,
@@ -954,9 +1087,68 @@ def command_defect(args: argparse.Namespace) -> int:
     return emit(response)
 
 
+def command_defect_assess(args: argparse.Namespace) -> int:
+    repo = repo_root(args.repo)
+    head_sha = None
+    if args.head:
+        head_sha = full_sha(git(repo, "rev-parse", "--verify", f"{args.head}^{{commit}}"), "head sha")
+    with edit_run(repo, args.run) as state:
+        require_active(state)
+        value = next((item for item in state["defects"] if item["id"] == args.defect), None)
+        if value is None:
+            raise ShipError("DEFECT_UNKNOWN", f"unknown defect: {args.defect}")
+        if value["status"] != "open":
+            raise ShipError("DEFECT_NOT_OPEN", f"defect status is {value['status']}")
+        if value["route"] != "coordinator":
+            raise ShipError("DEFECT_ROUTE_INVALID", "only coordinator defects require scope assessment")
+        assessment = coordinator_assessment(repo, value, head_sha=head_sha, result=args.result)
+        value["assessment"] = assessment
+        value["reclassification_required"] = bool(
+            value.get("reclassification_required") or assessment["requires_reclassification"]
+        )
+        response = {
+            "run_id": state["run_id"],
+            "defect": value,
+            "next_action": (
+                "reclassify-in-linear"
+                if value["reclassification_required"]
+                else "continue-bounded-repair"
+            ),
+        }
+    return emit(response)
+
+
+def command_defect_reclassify(args: argparse.Namespace) -> int:
+    repo = repo_root(args.repo)
+    linear_issue_id = args.linear_issue_id.strip()
+    if not linear_issue_id or len(linear_issue_id) > 256 or any(char in linear_issue_id for char in "\r\n"):
+        raise ShipError("LINEAR_ISSUE_REQUIRED", "reclassification requires a bounded Linear issue ID")
+    with edit_run(repo, args.run) as state:
+        require_active(state)
+        value = next((item for item in state["defects"] if item["id"] == args.defect), None)
+        if value is None:
+            raise ShipError("DEFECT_UNKNOWN", f"unknown defect: {args.defect}")
+        if value["status"] != "open":
+            raise ShipError("DEFECT_NOT_OPEN", f"defect status is {value['status']}")
+        if value["route"] != "coordinator":
+            raise ShipError("DEFECT_ROUTE_INVALID", "only coordinator defects can be reclassified")
+        value.update(
+            {
+                "route": args.route,
+                "linear_issue_id": linear_issue_id,
+                "reclassification_required": False,
+                "reclassified_from": "coordinator",
+                "reclassified_at": utc_now(),
+            }
+        )
+        response = {"run_id": state["run_id"], "defect": value, "ordinary_dispatch": "paused"}
+    return emit(response)
+
+
 def command_defect_resolve(args: argparse.Namespace) -> int:
     repo = repo_root(args.repo)
     fixed_sha = full_sha(args.fixed_sha, "fixed sha")
+    reclassification_required = False
     with edit_run(repo, args.run) as state:
         require_active(state)
         value = next((item for item in state["defects"] if item["id"] == args.defect), None)
@@ -973,8 +1165,32 @@ def command_defect_resolve(args: argparse.Namespace) -> int:
             stderr=subprocess.DEVNULL,
         ).returncode != 0:
             raise ShipError("FORWARD_FIX_REQUIRED", "fixed SHA must descend from the affected candidate")
-        value.update({"status": "resolved", "fixed_sha": fixed_sha, "resolved_at": utc_now()})
+        if value["route"] == "coordinator":
+            if value.get("repair_paths"):
+                assessment = coordinator_assessment(repo, value, head_sha=fixed_sha, result="passed")
+                value["assessment"] = assessment
+                value["reclassification_required"] = bool(
+                    value.get("reclassification_required") or assessment["requires_reclassification"]
+                )
+            else:
+                value["assessment"] = {
+                    "observed_ref": fixed_sha,
+                    "observed_sha": fixed_sha,
+                    "includes_worktree": False,
+                    "reasons": ["coordinator repair has no declared paths"],
+                    "requires_reclassification": True,
+                    "observed_at": utc_now(),
+                }
+                value["reclassification_required"] = True
+        reclassification_required = bool(value.get("reclassification_required"))
+        if not reclassification_required:
+            value.update({"status": "resolved", "fixed_sha": fixed_sha, "resolved_at": utc_now()})
         response = {"run_id": state["run_id"], "defect": value}
+    if reclassification_required:
+        raise ShipError(
+            "DEFECT_RECLASSIFICATION_REQUIRED",
+            "coordinator repair exceeded its boundary; reopen or create a Linear issue before resolution",
+        )
     return emit(response)
 
 
@@ -1121,7 +1337,24 @@ def parser() -> argparse.ArgumentParser:
     defect.add_argument("--route", choices=("coordinator", "reopen", "new-bug"), required=True)
     defect.add_argument("--linear-issue-id")
     defect.add_argument("--summary", required=True)
+    defect.add_argument("--path", action="append", default=[])
     defect.set_defaults(handler=command_defect)
+
+    assessed = commands.add_parser("defect-assess")
+    assessed.add_argument("--repo", required=True)
+    assessed.add_argument("--run", required=True)
+    assessed.add_argument("--defect", required=True)
+    assessed.add_argument("--head")
+    assessed.add_argument("--result", choices=("pending", "failed", "passed"), default="pending")
+    assessed.set_defaults(handler=command_defect_assess)
+
+    reclassified = commands.add_parser("defect-reclassify")
+    reclassified.add_argument("--repo", required=True)
+    reclassified.add_argument("--run", required=True)
+    reclassified.add_argument("--defect", required=True)
+    reclassified.add_argument("--route", choices=("reopen", "new-bug"), required=True)
+    reclassified.add_argument("--linear-issue-id", required=True)
+    reclassified.set_defaults(handler=command_defect_reclassify)
 
     resolved = commands.add_parser("defect-resolve")
     resolved.add_argument("--repo", required=True)
