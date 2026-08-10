@@ -168,6 +168,7 @@ test("product root and MCP setup render live control projections and fixed same-
     ["/ui/mind-diary-shell.css", "text/css; charset=utf-8", "md-token-grid"],
     ["/brand/mind-diary-lockup.svg", "image/svg+xml; charset=utf-8", "Mind Diary logo"],
     ["/ui/mind-diary-onboarding-client.js", "text/javascript; charset=utf-8", "/api/v1/account"],
+    ["/ui/mind-diary-visibility-client.js", "text/javascript; charset=utf-8", "data-public-catalog-retry"],
   ]) {
     const response = await handler(new Request(`${origin}${path}`));
     assert.equal(response.status, 200);
@@ -188,6 +189,12 @@ test("pilot Product Site route map keeps one UAT shell, exact active navigation,
       if (request.operation === "get_session") return sessionProjection;
       if (request.operation === "list_minds") return [personalRoute, ordinaryOwnerRoute];
       if (request.operation === "list_mcp_tokens") return [];
+      if (request.operation === "list_public_minds") {
+        return { minds: [{ ...ordinaryOwnerRoute, visibility: "public", discovery: "public_catalog", access: { kind: "visibility", role: null, capabilities: ["content:read"] } }], nextCursor: null };
+      }
+      if (request.operation === "list_members") {
+        return { members: [{ memberId: "membership_owner", displayName: "Product Owner", role: "owner", membershipVersion: 1, isSelf: true }] };
+      }
       if (request.operation === "get_mind_info" && request.input.mind_ref === "research-notes") {
         return ordinaryOwnerRoute;
       }
@@ -200,7 +207,7 @@ test("pilot Product Site route map keeps one UAT shell, exact active navigation,
     ["/me", /<h1>My Mind<\/h1>/],
     ["/minds", /data-management-view="list"/],
     ["/research-notes", /data-mind-handle="research-notes"/],
-    ["/public", /data-route-page="public"/],
+    ["/public", /data-mind-diary-visibility-catalog/],
     ["/invitations", /data-route-page="invitations"/],
     ["/settings/account", /data-route-page="account"/],
     ["/settings/mcp", /data-mind-diary-token-management/],
@@ -245,6 +252,12 @@ test("ordinary Mind list and exact route wire the UAT management and deletion co
       if (request.operation === "get_session") return sessionProjection;
       if (request.operation === "list_minds") return [personalRoute, ordinaryOwnerRoute];
       if (request.operation === "get_mind_info") return ordinaryOwnerRoute;
+      if (request.operation === "list_members") return {
+        members: [
+          { memberId: "membership_owner", displayName: "Product Owner", role: "owner", membershipVersion: 1, isSelf: true },
+          { memberId: "membership_editor", displayName: "Editor Person", role: "editor", membershipVersion: 1, isSelf: false },
+        ],
+      };
       if (request.operation === "get_mind_deletion_impact") return {
         impactId: "impact_research",
         expiresAt: "2026-08-08T00:05:00.000Z",
@@ -277,6 +290,9 @@ test("ordinary Mind list and exact route wire the UAT management and deletion co
   const detailHtml = await detail.text();
   assert.match(detailHtml, /data-mind-route data-mind-handle="research-notes"/);
   assert.match(detailHtml, /data-owner-delete-controls/);
+  assert.match(detailHtml, /data-owner-visibility-controls/);
+  assert.match(detailHtml, /data-owner-transfer-controls/);
+  assert.match(detailHtml, /value="membership_editor">Editor Person — Editor/);
   assert.match(detailHtml, /mind-diary-ordinary-minds-client\.js/);
   assert.doesNotMatch(detailHtml, /revision_research/);
 
@@ -285,6 +301,8 @@ test("ordinary Mind list and exact route wire the UAT management and deletion co
   const assetBody = await asset.text();
   assert.match(assetBody, /deletion-impact/);
   assert.match(assetBody, /delete-mind:/);
+  assert.match(assetBody, /ownership-transfer/);
+  assert.match(assetBody, /acknowledge_live_head_and_history_exposure/);
 
   const impact = await handler(new Request(`${origin}/api/v1/minds/research-notes/deletion-impact`));
   assert.equal(impact.status, 200);

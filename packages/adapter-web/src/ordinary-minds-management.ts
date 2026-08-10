@@ -17,7 +17,21 @@ export interface OrdinaryMindUiMind {
   readonly role: OrdinaryMindUiRole;
   readonly metadataVersion: number;
   readonly updatedLabel: string;
+  readonly accessKind?: "membership" | "visibility";
+  readonly discovery?: "membership" | "exact_handle" | "public_catalog";
 }
+
+export interface OrdinaryMindUiMember {
+  readonly memberId: string;
+  readonly displayName: string;
+  readonly role: OrdinaryMindUiRole;
+  readonly membershipVersion: number;
+  readonly isSelf: boolean;
+}
+
+export type OrdinaryMindOwnershipCandidates =
+  | { readonly kind: "ready"; readonly members: readonly OrdinaryMindUiMember[] }
+  | { readonly kind: "error" };
 
 export type OrdinaryMindsUiCollectionState =
   | { readonly kind: "ready"; readonly minds: readonly OrdinaryMindUiMind[] }
@@ -30,7 +44,11 @@ export type OrdinaryMindsManagementView =
       readonly kind: "list";
       readonly collection: OrdinaryMindsUiCollectionState;
     }
-  | { readonly kind: "detail"; readonly mind: OrdinaryMindUiMind }
+  | {
+      readonly kind: "detail";
+      readonly mind: OrdinaryMindUiMind;
+      readonly ownership?: OrdinaryMindOwnershipCandidates;
+    }
   | { readonly kind: "route_loading"; readonly handle: string }
   | { readonly kind: "route_error"; readonly handle: string; readonly message: string };
 
@@ -342,6 +360,83 @@ function renderDeletePanel(mind: OrdinaryMindUiMind, handle: string): string {
   </section>`;
 }
 
+function renderVisibilityPanel(mind: OrdinaryMindUiMind, handle: string): string {
+  const visibility = safeVisibility(mind.visibility);
+  const role = safeRole(mind.role);
+  if (role !== "owner" || mind.accessKind === "visibility") {
+    const baseline = mind.accessKind === "visibility"
+      ? "This signed-in baseline access is read-only and does not create membership."
+      : "Only the current Owner can change visibility.";
+    return `<section class="md-setup-card" aria-labelledby="visibility-heading" data-visibility-readonly>
+      <div><p class="md-eyebrow">Visibility</p><h2 id="visibility-heading">${visibilityLabel(visibility)}</h2><p>${baseline}</p></div>
+      ${visibility === "unlisted" ? '<p class="md-caveat"><strong>The exact URL is not a secret.</strong> Signed-in non-members who learn it can read live HEAD and the entire immutable history.</p>' : ""}
+      ${visibility === "public" ? '<p class="md-caveat"><strong>Authenticated readers only.</strong> Public does not mean anonymous access or membership.</p>' : ""}
+    </section>`;
+  }
+  return `<section class="md-setup-card" aria-labelledby="visibility-heading" data-owner-visibility-controls>
+    <div>
+      <p class="md-eyebrow">Owner control</p>
+      <h2 id="visibility-heading">Choose who can find and read this Mind</h2>
+      <p>Visibility never creates membership or write access. Public and unlisted both require a signed-in account.</p>
+    </div>
+    <form data-visibility-form data-current-visibility="${visibility}" data-metadata-version="${mind.metadataVersion}">
+      <div class="md-field">
+        <label for="ordinary-mind-visibility">Visibility</label>
+        <select id="ordinary-mind-visibility" name="visibility" data-visibility-selector>
+          <option value="private"${visibility === "private" ? " selected" : ""}>Private — participants only</option>
+          <option value="unlisted"${visibility === "unlisted" ? " selected" : ""}>Unlisted — exact URL, not catalogued</option>
+          <option value="public"${visibility === "public" ? " selected" : ""}>Public — listed for signed-in people</option>
+        </select>
+      </div>
+      <section class="md-caveat" data-visibility-exposure hidden style="display:none">
+        <h3>Live HEAD and all immutable history become readable</h3>
+        <p>New successful commits become visible immediately. Unlisted removes catalog discovery, but /${escapeUntrustedText(handle)} is not a secret.</p>
+        <label><input type="checkbox" data-visibility-ack disabled> I understand that signed-in non-members will be able to read live HEAD and the entire history.</label>
+      </section>
+      <section class="md-caveat" data-visibility-private hidden style="display:none">
+        <h3>Private stops future access only</h3>
+        <p>Returning to private immediately revokes baseline Web, MCP, and history access, but cannot undo disclosure that already happened.</p>
+      </section>
+      <p class="md-form__status" role="status" aria-live="polite" data-visibility-status></p>
+      <button class="md-button md-button--primary" type="submit" data-save-visibility disabled>Save visibility</button>
+    </form>
+  </section>`;
+}
+
+function renderOwnershipPanel(
+  mind: OrdinaryMindUiMind,
+  ownership: OrdinaryMindOwnershipCandidates | undefined,
+): string {
+  if (safeRole(mind.role) !== "owner") return "";
+  if (ownership?.kind !== "ready") {
+    return `<section class="md-setup-card" aria-labelledby="ownership-heading" data-ownership-unavailable>
+      <div><p class="md-eyebrow">Single Owner</p><h2 id="ownership-heading">Transfer ownership</h2><p>Current participants are unavailable. Nothing can be transferred until this page is reloaded.</p></div>
+    </section>`;
+  }
+  const candidates = ownership.members.filter((member) => !member.isSelf && member.role !== "owner");
+  const options = candidates.map((member) =>
+    `<option value="${escapeUntrustedText(member.memberId)}">${escapeUntrustedText(member.displayName)} — ${titleCase(member.role)}</option>`,
+  ).join("");
+  return `<section class="md-setup-card" aria-labelledby="ownership-heading" data-owner-transfer-controls>
+    <div>
+      <p class="md-eyebrow">Single Owner</p>
+      <h2 id="ownership-heading">Transfer ownership</h2>
+      <p>Only active participants appear here. Pending invitations cannot receive ownership. After transfer, you become Admin and exactly one Owner remains.</p>
+    </div>
+    <form data-ownership-transfer-form data-metadata-version="${mind.metadataVersion}">
+      <div class="md-field">
+        <label for="ordinary-mind-ownership-target">New Owner</label>
+        <select id="ordinary-mind-ownership-target" name="target_member_id" required${candidates.length === 0 ? " disabled" : ""}>
+          <option value="">${candidates.length === 0 ? "No eligible participants" : "Choose an active participant"}</option>${options}
+        </select>
+      </div>
+      <p><label><input type="checkbox" required data-ownership-confirmation${candidates.length === 0 ? " disabled" : ""}> I understand that I will become Admin and the selected participant will become the sole Owner.</label></p>
+      <p class="md-form__status" role="status" aria-live="assertive" data-ownership-status></p>
+      <button class="md-button md-button--danger" type="submit" data-transfer-ownership disabled>Transfer ownership</button>
+    </form>
+  </section>`;
+}
+
 function renderDeleteDialog(mind: OrdinaryMindUiMind, handle: string): string {
   if (safeRole(mind.role) !== "owner") return "";
   return `<dialog class="md-dialog" id="delete-ordinary-mind-dialog" aria-labelledby="delete-ordinary-mind-title" aria-describedby="delete-ordinary-mind-description" data-delete-mind-dialog>
@@ -379,6 +474,7 @@ function renderDeleteDialog(mind: OrdinaryMindUiMind, handle: string): string {
 
 function renderDetailView(
   mind: OrdinaryMindUiMind,
+  ownership: OrdinaryMindOwnershipCandidates | undefined,
   announcement: string | undefined,
 ): string {
   const handle = safeHandle(mind.handle);
@@ -413,6 +509,8 @@ function renderDetailView(
         </article>
         ${renderRenamePanel(mind, handle)}
       </div>
+      ${renderVisibilityPanel(mind, handle)}
+      ${renderOwnershipPanel(mind, ownership)}
       ${renderDeletePanel(mind, handle)}
     </div>
   </main>
@@ -423,7 +521,7 @@ export function renderOrdinaryMindsManagement(model: OrdinaryMindsManagementMode
   const body = model.view.kind === "list"
     ? renderListView(model.view, model.announcement)
     : model.view.kind === "detail"
-      ? renderDetailView(model.view.mind, model.announcement)
+      ? renderDetailView(model.view.mind, model.view.ownership, model.announcement)
       : renderRouteState(model.view, model.announcement);
   return `<div class="md-shell" data-mind-diary-shell data-ordinary-minds-management data-nav-open="false" data-management-view="${model.view.kind}">
     <a class="md-skip-link" href="#main-content">Skip to main content</a>

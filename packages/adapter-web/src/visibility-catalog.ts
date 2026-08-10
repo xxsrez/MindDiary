@@ -1,6 +1,8 @@
 import {
   MIND_DIARY_UI_ASSETS,
   escapeUntrustedText,
+  renderMindDiaryAuthenticatedFooter,
+  renderMindDiaryAuthenticatedHeader,
 } from "./ui-shell.js";
 
 export type VisibilityCatalogVisibility = "private" | "unlisted" | "public";
@@ -143,10 +145,6 @@ function safeMetadataVersion(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 1;
 }
 
-function activeAttribute(active: "minds" | "public", item: "minds" | "public"): string {
-  return active === item ? ' aria-current="page"' : "";
-}
-
 function titleCase(value: string): string {
   return `${value.slice(0, 1).toUpperCase()}${value.slice(1)}`;
 }
@@ -255,30 +253,6 @@ export function publicMindsForCatalog(
   return Object.freeze(visible);
 }
 
-function renderHeader(displayName: string, active: "minds" | "public"): string {
-  const safeName = escapeUntrustedText(displayName);
-  const initial = escapeUntrustedText(displayName.slice(0, 1).toUpperCase());
-  return `<header class="md-header">
-    <a class="md-brand" href="/" aria-label="Mind Diary home">
-      <img src="${MIND_DIARY_UI_ASSETS.lockup}" alt="Mind Diary" width="204" height="48">
-    </a>
-    <button class="md-menu-button" type="button" aria-expanded="false" aria-controls="primary-navigation" data-menu-button>
-      <span aria-hidden="true">Menu</span><span>Navigation</span>
-    </button>
-    <nav id="primary-navigation" class="md-navigation" aria-label="Primary" data-navigation>
-      <a href="/me"><span aria-hidden="true">●</span> My Mind</a>
-      <a href="/minds"${activeAttribute(active, "minds")}><span aria-hidden="true">▤</span> Minds</a>
-      <a href="/public"${activeAttribute(active, "public")}><span aria-hidden="true">◎</span> Public Minds</a>
-      <a href="/invitations"><span aria-hidden="true">✉</span> Invitations</a>
-      <a href="/settings/mcp"><span aria-hidden="true">⌁</span> MCP setup</a>
-    </nav>
-    <button class="md-profile" type="button" aria-label="Open account menu for ${safeName}">
-      <span class="md-profile__initial" aria-hidden="true">${initial}</span>
-      <span>${safeName}</span>
-    </button>
-  </header>`;
-}
-
 function renderAnnouncement(announcement: string | undefined): string {
   return announcement
     ? `<p class="md-announcement" role="status" aria-live="polite" data-page-announcement><span aria-hidden="true">✓</span> ${escapeUntrustedText(announcement)}</p>`
@@ -350,9 +324,9 @@ function renderMindPage(model: VisibilityMindRoutePage): string {
     visibility === "unlisted" &&
     mind.discovery === "exact_handle";
   const canMutate = hasOwnerVisibilityAuthority(mind);
-  return `<div class="md-shell" data-mind-diary-visibility-catalog data-nav-open="false" data-page-kind="mind">
+  return `<div class="md-shell" data-mind-diary-shell data-mind-diary-visibility-catalog data-nav-open="false" data-page-kind="mind">
     <a class="md-skip-link" href="#main-content">Skip to main content</a>
-    ${renderHeader(model.displayName, "minds")}
+    ${renderMindDiaryAuthenticatedHeader(model.displayName, "minds")}
     <main id="main-content" class="md-main" tabindex="-1">
       <div class="md-page-heading">
         <div>
@@ -372,10 +346,7 @@ function renderMindPage(model: VisibilityMindRoutePage): string {
       </section>
       ${canMutate ? renderOwnerVisibilityControls(mind) : renderReadOnlyVisibility(mind)}
     </main>
-    <footer class="md-footer">
-      <p><strong>Mind Diary</strong> makes access boundaries explicit before they change.</p>
-      <a href="/help">Help and accessibility</a>
-    </footer>
+    ${renderMindDiaryAuthenticatedFooter("minds")}
   </div>`;
 }
 
@@ -432,9 +403,9 @@ function renderCatalogPage(model: PublicMindCatalogPage): string {
         <h2>Sign in to open Public Minds</h2>
         <p>Public Minds are available to registered, signed-in people. Anonymous access is not available.</p>
       </section>`;
-  return `<div class="md-shell" data-mind-diary-visibility-catalog data-nav-open="false" data-page-kind="catalog">
+  return `<div class="md-shell" data-mind-diary-shell data-mind-diary-visibility-catalog data-nav-open="false" data-page-kind="catalog">
     <a class="md-skip-link" href="#main-content">Skip to main content</a>
-    ${renderHeader(model.displayName, "public")}
+    ${renderMindDiaryAuthenticatedHeader(model.displayName, "public")}
     <main id="main-content" class="md-main" tabindex="-1">
       <div class="md-page-heading">
         <div>
@@ -446,10 +417,7 @@ function renderCatalogPage(model: PublicMindCatalogPage): string {
       </div>
       ${collection}
     </main>
-    <footer class="md-footer">
-      <p><strong>Mind Diary</strong> never lists private, unlisted, or Personal Minds here.</p>
-      <a href="/help">Help and accessibility</a>
-    </footer>
+    ${renderMindDiaryAuthenticatedFooter("public")}
   </div>`;
 }
 

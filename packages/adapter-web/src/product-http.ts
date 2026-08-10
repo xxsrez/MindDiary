@@ -27,11 +27,19 @@ import {
 } from "./token-management.js";
 import {
   renderOrdinaryMindsManagementDocument,
+  type OrdinaryMindOwnershipCandidates,
+  type OrdinaryMindUiMember,
   type OrdinaryMindUiMind,
   type OrdinaryMindsManagementModel,
 } from "./ordinary-minds-management.js";
 import {
+  renderVisibilityCatalogDocument,
+  type PublicMindCatalogCollection,
+  type PublicMindCatalogItem,
+} from "./visibility-catalog.js";
+import {
   PRODUCT_ORDINARY_MINDS_CLIENT_JAVASCRIPT,
+  PRODUCT_VISIBILITY_CATALOG_CLIENT_JAVASCRIPT,
   PRODUCT_UI_CLIENT_JAVASCRIPT,
   PRODUCT_UI_LOCKUP_SVG,
   PRODUCT_UI_MARK_SVG,
@@ -325,20 +333,6 @@ function pilotRoutePage(
   pathname: string,
   displayName: string,
 ): MindDiaryRoutePageModel | null {
-  if (pathname === "/public") {
-    return {
-      displayName,
-      activeNavigation: "public",
-      eyebrow: "Authenticated discovery",
-      title: "Public Minds",
-      description: "Discover Minds their Owners made visible to signed-in people.",
-      state: {
-        kind: "ready",
-        message: "This route uses the pilot shell and exposes no private or unlisted metadata while its server-authorized catalog projection is unavailable.",
-      },
-      links: [{ href: "/minds", label: "Open your Minds" }],
-    };
-  }
   if (pathname === "/invitations") {
     return {
       displayName,
@@ -463,6 +457,46 @@ function ordinaryUiMind(value: unknown): OrdinaryMindUiMind | null {
     role: role ?? "reader",
     metadataVersion,
     updatedLabel: "Current HEAD is ready",
+    accessKind: access?.kind === "visibility" ? "visibility" : "membership",
+    discovery: source?.discovery === "exact_handle" || source?.discovery === "public_catalog"
+      ? source.discovery
+      : "membership",
+  });
+}
+
+function ordinaryUiMember(value: unknown): OrdinaryMindUiMember | null {
+  const source = record(value);
+  const memberId = requiredString(source?.memberId);
+  const displayName = requiredString(source?.displayName);
+  const membershipVersion = positiveInteger(source?.membershipVersion);
+  const role = source?.role;
+  if (
+    memberId === null || displayName === null || membershipVersion === null ||
+    !(role === "reader" || role === "editor" || role === "admin" || role === "owner") ||
+    typeof source?.isSelf !== "boolean"
+  ) return null;
+  return Object.freeze({ memberId, displayName, membershipVersion, role, isSelf: source.isSelf });
+}
+
+function publicUiMind(value: unknown): PublicMindCatalogItem | null {
+  const source = record(value);
+  const mindId = requiredString(source?.mindId);
+  const route = requiredString(source?.route);
+  const name = requiredString(source?.name);
+  if (
+    mindId === null || route === null || name === null ||
+    !/^\/[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(route) ||
+    source?.isPersonal !== false || source?.visibility !== "public" ||
+    source?.discovery !== "public_catalog"
+  ) return null;
+  return Object.freeze({
+    mindId,
+    route,
+    name,
+    summary: "A versioned Mind shared by its Owner.",
+    visibility: "public",
+    isPersonal: false,
+    discovery: "public_catalog",
   });
 }
 
@@ -515,6 +549,12 @@ function staticAsset(pathname: string): { readonly body: string; readonly type: 
       type: "text/javascript; charset=utf-8",
     };
   }
+  if (pathname === "/ui/mind-diary-visibility-client.js") {
+    return {
+      body: PRODUCT_VISIBILITY_CATALOG_CLIENT_JAVASCRIPT,
+      type: "text/javascript; charset=utf-8",
+    };
+  }
   return null;
 }
 
@@ -541,6 +581,31 @@ async function productUiDocument(input: {
     input: Object.freeze({}),
   }));
   if (session === null) throw new TypeError("safe session projection is unavailable");
+
+  if (input.pathname === "/public") {
+    let collection: PublicMindCatalogCollection;
+    try {
+      const result = record(await input.control.execute({
+        operation: "list_public_minds",
+        actor: input.identity.actor,
+        input: Object.freeze({}),
+      }));
+      const minds = Array.isArray(result?.minds)
+        ? result.minds.map(publicUiMind).filter((mind): mind is PublicMindCatalogItem => mind !== null)
+        : [];
+      collection = minds.length === 0
+        ? { kind: "empty" }
+        : { kind: "ready", minds: Object.freeze(minds) };
+    } catch {
+      collection = { kind: "error", message: "Public Minds are unavailable. No private metadata was returned." };
+    }
+    return withCsrfMeta(renderVisibilityCatalogDocument({
+      kind: "catalog",
+      displayName: session.displayName,
+      authenticated: true,
+      collection,
+    }, "/ui/mind-diary-visibility-client.js"), input.csrfToken);
+  }
 
   const routePage = pilotRoutePage(input.pathname, session.displayName);
   if (routePage !== null) {
@@ -621,9 +686,27 @@ async function productUiDocument(input: {
         actor: input.identity.actor,
         input: Object.freeze({ mind_ref: handle }),
       }));
-      view = resolved === null
-        ? { kind: "route_error", handle, message: "Mind settings are unavailable." }
-        : { kind: "detail", mind: resolved };
+      if (resolved === null) {
+        view = { kind: "route_error", handle, message: "Mind settings are unavailable." };
+      } else {
+        let ownership: OrdinaryMindOwnershipCandidates | undefined;
+        if (resolved.role === "owner" && resolved.accessKind !== "visibility") {
+          try {
+            const result = record(await input.control.execute({
+              operation: "list_members",
+              actor: input.identity.actor,
+              input: Object.freeze({ mind_ref: handle }),
+            }));
+            const members = Array.isArray(result?.members)
+              ? result.members.map(ordinaryUiMember).filter((member): member is OrdinaryMindUiMember => member !== null)
+              : [];
+            ownership = { kind: "ready", members: Object.freeze(members) };
+          } catch {
+            ownership = { kind: "error" };
+          }
+        }
+        view = { kind: "detail", mind: resolved, ...(ownership === undefined ? {} : { ownership }) };
+      }
     } catch {
       view = { kind: "route_error", handle, message: "Mind settings are unavailable." };
     }
@@ -768,6 +851,7 @@ function applicationErrorStatus(code: string): number {
     code === "handle_unavailable" ||
     code === "deletion_impact_changed" ||
     code === "deletion_impact_expired" ||
+    code === "ownership_state_changed" ||
     code.includes("conflict")
   ) return 409;
   if (code.includes("not_found") || code.endsWith("_unavailable")) return 404;

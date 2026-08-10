@@ -262,6 +262,9 @@ async function modernMcp(runtime, secret, body) {
       "content-type": "application/json; charset=utf-8",
       "mcp-method": body.method,
       "mcp-protocol-version": MCP_TARGET_PROTOCOL,
+      ...(body.method === "tools/call" && typeof body.params?.name === "string"
+        ? { "mcp-name": body.params.name }
+        : {}),
     },
     body: JSON.stringify(body),
   }));
@@ -671,4 +674,336 @@ test("durable product runtime carries a Sites account token through Codex MCP an
   const recreateRetiredHandleBody = await recreateRetiredHandle.json();
   assert.equal(recreateRetiredHandle.status, 409, JSON.stringify(recreateRetiredHandleBody));
   assert.equal(recreateRetiredHandleBody.error.code, "handle_unavailable");
+});
+
+test("durable Product Site enforces public baseline access, atomic ownership transfer, and immediate private revoke", async () => {
+  const database = new FakeD1Database();
+  const bucket = new FakeR2Bucket();
+  let currentIdentity = {
+    verifiedEmail: "visibility.owner@example.com",
+    verifiedFullName: "Visibility Owner",
+  };
+  const runtimeOptions = {
+    database,
+    bucket,
+    publicOrigin: ORIGIN,
+    identity: {
+      readVerifiedIdentity() {
+        return { kind: "authenticated", ...currentIdentity };
+      },
+    },
+    tokenVerifierKey: key(2),
+    locatorKey: key(42),
+    exportDownloadVerifierKey: key(82),
+    csrfKey: key(122),
+    schedule() {},
+  };
+  let runtime = await createProductSiteRuntime(runtimeOptions);
+
+  const switchIdentity = (verifiedEmail, verifiedFullName) => {
+    currentIdentity = { verifiedEmail, verifiedFullName };
+  };
+  const pageCsrf = async (path = "/minds") => {
+    const response = await responseFrom(runtime, new Request(`${ORIGIN}${path}`));
+    assert.equal(response.status, 200);
+    return csrfFromHtml(await response.text());
+  };
+  const registerCurrent = async () => {
+    const csrf = await pageCsrf("/");
+    const response = await responseFrom(runtime, new Request(`${ORIGIN}/api/v1/account`, {
+      method: "POST",
+      headers: {
+        origin: ORIGIN,
+        "content-type": "application/json",
+        "x-csrf-token": csrf,
+        "idempotency-key": `bootstrap:${currentIdentity.verifiedEmail}`,
+      },
+      body: JSON.stringify({ action: "create_isolated_account" }),
+    }));
+    assert.equal(response.status, 200, await response.text());
+  };
+
+  await registerCurrent();
+  const ownerCsrf = await pageCsrf();
+  const created = await responseFrom(runtime, new Request(`${ORIGIN}/api/v1/minds`, {
+    method: "POST",
+    headers: {
+      origin: ORIGIN,
+      "content-type": "application/json",
+      "x-csrf-token": ownerCsrf,
+      "idempotency-key": "mind:visibility-runtime",
+    },
+    body: JSON.stringify({ name: "Visibility Runtime", handle: "visibility-runtime" }),
+  }));
+  assert.equal(created.status, 200);
+
+  const madePublic = await responseFrom(runtime, new Request(
+    `${ORIGIN}/api/v1/minds/visibility-runtime/visibility`,
+    {
+      method: "PUT",
+      headers: {
+        origin: ORIGIN,
+        "content-type": "application/json",
+        "x-csrf-token": ownerCsrf,
+        "idempotency-key": "visibility:public-runtime",
+      },
+      body: JSON.stringify({
+        visibility: "public",
+        acknowledge_live_head_and_history_exposure: true,
+        expected_metadata_version: 1,
+      }),
+    },
+  ));
+  assert.equal(madePublic.status, 200, await madePublic.text());
+
+  switchIdentity("visibility.target@example.com", "Target Owner");
+  await registerCurrent();
+  switchIdentity("visibility.outsider@example.com", "Baseline Reader");
+  await registerCurrent();
+
+  const outsiderCsrf = await pageCsrf("/settings/mcp");
+  const publicCatalog = await responseFrom(runtime, new Request(`${ORIGIN}/public`));
+  assert.equal(publicCatalog.status, 200);
+  const publicCatalogHtml = await publicCatalog.text();
+  assert.match(publicCatalogHtml, /data-public-mind-card/);
+  assert.match(publicCatalogHtml, /Visibility Runtime/);
+  assert.doesNotMatch(publicCatalogHtml, /private|unlisted Mind metadata is unavailable/iu);
+
+  const baselineExact = await responseFrom(runtime, new Request(`${ORIGIN}/api/v1/minds/visibility-runtime`));
+  assert.equal(baselineExact.status, 200);
+  const baselineExactBody = await baselineExact.json();
+  assert.equal(baselineExactBody.data.access.kind, "visibility");
+  assert.equal(baselineExactBody.data.access.role, null);
+  const baselinePage = await responseFrom(runtime, new Request(`${ORIGIN}/visibility-runtime`));
+  assert.equal(baselinePage.status, 200);
+  const baselineHtml = await baselinePage.text();
+  assert.match(baselineHtml, /data-visibility-readonly/);
+  assert.doesNotMatch(baselineHtml, /data-owner-visibility-controls|data-owner-transfer-controls/);
+
+  switchIdentity("visibility.owner@example.com", "Visibility Owner");
+  const unlistedOwnerCsrf = await pageCsrf();
+  const publicOwnerMind = await responseFrom(runtime, new Request(`${ORIGIN}/api/v1/minds/visibility-runtime`));
+  const publicOwnerMindBody = await publicOwnerMind.json();
+  const madeUnlisted = await responseFrom(runtime, new Request(
+    `${ORIGIN}/api/v1/minds/visibility-runtime/visibility`,
+    {
+      method: "PUT",
+      headers: {
+        origin: ORIGIN,
+        "content-type": "application/json",
+        "x-csrf-token": unlistedOwnerCsrf,
+        "idempotency-key": "visibility:unlisted-runtime",
+      },
+      body: JSON.stringify({
+        visibility: "unlisted",
+        acknowledge_live_head_and_history_exposure: false,
+        expected_metadata_version: publicOwnerMindBody.data.metadata_version,
+      }),
+    },
+  ));
+  assert.equal(madeUnlisted.status, 200, await madeUnlisted.text());
+
+  switchIdentity("visibility.outsider@example.com", "Baseline Reader");
+  const unlistedCatalog = await responseFrom(runtime, new Request(`${ORIGIN}/public`));
+  assert.doesNotMatch(await unlistedCatalog.text(), /Visibility Runtime/);
+  const unlistedExact = await responseFrom(runtime, new Request(`${ORIGIN}/api/v1/minds/visibility-runtime`));
+  assert.equal(unlistedExact.status, 200);
+  const unlistedExactBody = await unlistedExact.json();
+  assert.equal(unlistedExactBody.data.visibility, "unlisted");
+  assert.equal(unlistedExactBody.data.discovery, "exact_handle");
+
+  switchIdentity("visibility.owner@example.com", "Visibility Owner");
+  const republishCsrf = await pageCsrf();
+  const republished = await responseFrom(runtime, new Request(
+    `${ORIGIN}/api/v1/minds/visibility-runtime/visibility`,
+    {
+      method: "PUT",
+      headers: {
+        origin: ORIGIN,
+        "content-type": "application/json",
+        "x-csrf-token": republishCsrf,
+        "idempotency-key": "visibility:republish-runtime",
+      },
+      body: JSON.stringify({
+        visibility: "public",
+        acknowledge_live_head_and_history_exposure: false,
+        expected_metadata_version: unlistedExactBody.data.metadata_version,
+      }),
+    },
+  ));
+  assert.equal(republished.status, 200, await republished.text());
+  switchIdentity("visibility.outsider@example.com", "Baseline Reader");
+
+  const tokenIssued = await responseFrom(runtime, new Request(`${ORIGIN}/api/v1/mcp-tokens`, {
+    method: "POST",
+    headers: {
+      origin: ORIGIN,
+      "content-type": "application/json",
+      "x-csrf-token": outsiderCsrf,
+      "idempotency-key": "token:visibility-outsider",
+    },
+    body: JSON.stringify({
+      name: "Visibility outsider",
+      scopes: ["content:read"],
+      expires_at: "2026-09-01T00:00:00.000Z",
+    }),
+  }));
+  assert.equal(tokenIssued.status, 200);
+  const outsiderSecret = (await tokenIssued.json()).data.secret;
+  const mcpBeforePrivate = await modernMcp(runtime, outsiderSecret, {
+    jsonrpc: "2.0",
+    id: 71,
+    method: "tools/call",
+    params: {
+      _meta: {
+        "io.modelcontextprotocol/protocolVersion": MCP_TARGET_PROTOCOL,
+        "io.modelcontextprotocol/clientInfo": { name: "visibility-runtime-e2e", version: "0.0.0" },
+        "io.modelcontextprotocol/clientCapabilities": {},
+      },
+      name: "list_minds",
+      arguments: {},
+    },
+  });
+  assert.equal(mcpBeforePrivate.status, 200, await mcpBeforePrivate.clone().text());
+  const mcpBeforePrivateBody = await mcpBeforePrivate.json();
+  assert.equal(
+    mcpBeforePrivateBody.result.structuredContent.data.minds.some(({ route }) => route === "/visibility-runtime"),
+    true,
+  );
+
+  switchIdentity("visibility.owner@example.com", "Visibility Owner");
+  const ownerControlCsrf = await pageCsrf();
+  const currentOwnerMind = await responseFrom(runtime, new Request(`${ORIGIN}/api/v1/minds/visibility-runtime`));
+  const currentOwnerMindBody = await currentOwnerMind.json();
+  const invitation = await responseFrom(runtime, new Request(`${ORIGIN}/api/v1/minds/visibility-runtime/invitations`, {
+    method: "POST",
+    headers: {
+      origin: ORIGIN,
+      "content-type": "application/json",
+      "x-csrf-token": ownerControlCsrf,
+      "idempotency-key": "invite:visibility-target",
+    },
+    body: JSON.stringify({
+      target_verified_email: "visibility.target@example.com",
+      role: "editor",
+      expected_metadata_version: currentOwnerMindBody.data.metadata_version,
+    }),
+  }));
+  assert.equal(invitation.status, 200, await invitation.text());
+
+  switchIdentity("visibility.target@example.com", "Target Owner");
+  const targetCsrf = await pageCsrf("/invitations");
+  const incoming = await responseFrom(runtime, new Request(`${ORIGIN}/api/v1/invitations`));
+  assert.equal(incoming.status, 200);
+  const incomingBody = await incoming.json();
+  const incomingInvitation = incomingBody.data.invitations.find(({ direction }) => direction === "incoming");
+  assert.ok(incomingInvitation);
+  const accepted = await responseFrom(runtime, new Request(
+    `${ORIGIN}/api/v1/invitations/${encodeURIComponent(incomingInvitation.invitation_id)}/accept`,
+    {
+      method: "POST",
+      headers: {
+        origin: ORIGIN,
+        "content-type": "application/json",
+        "x-csrf-token": targetCsrf,
+        "idempotency-key": "accept:visibility-target",
+      },
+      body: JSON.stringify({ expected_invitation_version: incomingInvitation.invitation_version }),
+    },
+  ));
+  assert.equal(accepted.status, 200, await accepted.text());
+
+  switchIdentity("visibility.owner@example.com", "Visibility Owner");
+  const transferCsrf = await pageCsrf();
+  const beforeTransfer = await responseFrom(runtime, new Request(`${ORIGIN}/api/v1/minds/visibility-runtime`));
+  const beforeTransferBody = await beforeTransfer.json();
+  const members = await responseFrom(runtime, new Request(`${ORIGIN}/api/v1/minds/visibility-runtime/members`));
+  assert.equal(members.status, 200);
+  const membersBody = await members.json();
+  const targetMember = membersBody.data.members.find(({ display_name }) => display_name === "Target Owner");
+  assert.ok(targetMember);
+  const transferred = await responseFrom(runtime, new Request(
+    `${ORIGIN}/api/v1/minds/visibility-runtime/ownership-transfer`,
+    {
+      method: "POST",
+      headers: {
+        origin: ORIGIN,
+        "content-type": "application/json",
+        "x-csrf-token": transferCsrf,
+        "idempotency-key": "ownership:visibility-target",
+      },
+      body: JSON.stringify({
+        target_member_id: targetMember.member_id,
+        expected_metadata_version: beforeTransferBody.data.metadata_version,
+        confirmation: "transfer-ownership",
+      }),
+    },
+  ));
+  assert.equal(transferred.status, 200, await transferred.clone().text());
+  const transferredBody = await transferred.json();
+  assert.equal(transferredBody.data.source_role, "admin");
+  assert.equal(transferredBody.data.target_role, "owner");
+
+  const sourceAfterTransfer = await responseFrom(runtime, new Request(`${ORIGIN}/api/v1/minds/visibility-runtime`));
+  assert.equal((await sourceAfterTransfer.json()).data.access.role, "admin");
+  switchIdentity("visibility.target@example.com", "Target Owner");
+  const targetOwnerCsrf = await pageCsrf();
+  const targetAfterTransfer = await responseFrom(runtime, new Request(`${ORIGIN}/api/v1/minds/visibility-runtime`));
+  const targetAfterTransferBody = await targetAfterTransfer.json();
+  assert.equal(targetAfterTransferBody.data.access.role, "owner");
+
+  const madePrivate = await responseFrom(runtime, new Request(
+    `${ORIGIN}/api/v1/minds/visibility-runtime/visibility`,
+    {
+      method: "PUT",
+      headers: {
+        origin: ORIGIN,
+        "content-type": "application/json",
+        "x-csrf-token": targetOwnerCsrf,
+        "idempotency-key": "visibility:private-runtime",
+      },
+      body: JSON.stringify({
+        visibility: "private",
+        acknowledge_live_head_and_history_exposure: false,
+        expected_metadata_version: targetAfterTransferBody.data.metadata_version,
+      }),
+    },
+  ));
+  assert.equal(madePrivate.status, 200, await madePrivate.text());
+
+  runtime = await createProductSiteRuntime(runtimeOptions);
+  switchIdentity("visibility.outsider@example.com", "Baseline Reader");
+  const privateExact = await responseFrom(runtime, new Request(`${ORIGIN}/api/v1/minds/visibility-runtime`));
+  assert.equal(privateExact.status, 404);
+  assert.equal((await privateExact.json()).error.code, "mind_not_found");
+  const privateCatalog = await responseFrom(runtime, new Request(`${ORIGIN}/public`));
+  const privateCatalogHtml = await privateCatalog.text();
+  assert.doesNotMatch(privateCatalogHtml, /Visibility Runtime/);
+  const mcpAfterPrivate = await modernMcp(runtime, outsiderSecret, {
+    jsonrpc: "2.0",
+    id: 72,
+    method: "tools/call",
+    params: {
+      _meta: {
+        "io.modelcontextprotocol/protocolVersion": MCP_TARGET_PROTOCOL,
+        "io.modelcontextprotocol/clientInfo": { name: "visibility-runtime-e2e", version: "0.0.0" },
+        "io.modelcontextprotocol/clientCapabilities": {},
+      },
+      name: "list_minds",
+      arguments: {},
+    },
+  });
+  assert.equal(mcpAfterPrivate.status, 200, await mcpAfterPrivate.clone().text());
+  const mcpAfterPrivateBody = await mcpAfterPrivate.json();
+  assert.equal(
+    mcpAfterPrivateBody.result.structuredContent.data.minds.some(({ route }) => route === "/visibility-runtime"),
+    false,
+  );
+
+  switchIdentity("visibility.target@example.com", "Target Owner");
+  const durableOwner = await responseFrom(runtime, new Request(`${ORIGIN}/api/v1/minds/visibility-runtime`));
+  assert.equal(durableOwner.status, 200);
+  const durableOwnerBody = await durableOwner.json();
+  assert.equal(durableOwnerBody.data.access.role, "owner");
+  assert.equal(durableOwnerBody.data.visibility, "private");
 });
