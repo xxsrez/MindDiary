@@ -623,6 +623,7 @@ function staticAsset(pathname: string): { readonly body: string; readonly type: 
 
 async function productUiDocument(input: {
   readonly pathname: string;
+  readonly siteOrigin: string;
   readonly identity: Exclude<ProductSitesIdentityResolution, { readonly kind: "denied" | "unavailable" }>;
   readonly csrfToken: string;
   readonly control: ProductWebControlApplication;
@@ -778,6 +779,7 @@ async function productUiDocument(input: {
     return withCsrfMeta(renderMcpTokenManagementDocument({
       displayName: session.displayName,
       collection,
+      siteOrigin: input.siteOrigin,
     }, "/ui/mind-diary-token-client.js"), input.csrfToken);
   }
 
@@ -1090,6 +1092,7 @@ export function createProductWebHttpHandler(
       try {
         response = html(await productUiDocument({
           pathname: url.pathname,
+          siteOrigin: url.origin,
           identity,
           csrfToken: await dependencies.csrf.issue(identity.actor),
           control: dependencies.control,

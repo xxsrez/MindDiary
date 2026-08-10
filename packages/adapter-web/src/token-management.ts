@@ -7,6 +7,8 @@ import {
 
 export const MIND_DIARY_MCP_ENDPOINT_PLACEHOLDER =
   "https://<your-mind-diary-site>/api/mcp/2025-11-25" as const;
+export const MIND_DIARY_MCP_MODERN_PATH = "/api/mcp" as const;
+export const MIND_DIARY_MCP_COMPATIBILITY_PATH = "/api/mcp/2025-11-25" as const;
 export const MIND_DIARY_CODEX_TOKEN_ENVIRONMENT_VARIABLE =
   "MIND_DIARY_TOKEN" as const;
 export const MIND_DIARY_CODEX_SITES_AUTHORIZATION_ENVIRONMENT_VARIABLE =
@@ -15,9 +17,50 @@ export const MIND_DIARY_CODEX_SAFE_ENVIRONMENT_SETUP =
   "read -s MIND_DIARY_TOKEN && export MIND_DIARY_TOKEN" as const;
 export const MIND_DIARY_CODEX_SITES_SAFE_ENVIRONMENT_SETUP =
   'read -s MIND_DIARY_SITES_TOKEN && export MIND_DIARY_SITES_AUTHORIZATION="Bearer ${MIND_DIARY_SITES_TOKEN}" && unset MIND_DIARY_SITES_TOKEN' as const;
+export type MindDiaryMcpClientProfile = "modern" | "compatibility";
+
+function canonicalSiteOrigin(value: string): string {
+  const candidate = new URL(value);
+  const localhost = candidate.hostname === "localhost" || candidate.hostname === "127.0.0.1";
+  if (
+    candidate.origin !== value ||
+    candidate.username.length > 0 ||
+    candidate.password.length > 0 ||
+    candidate.search.length > 0 ||
+    candidate.hash.length > 0 ||
+    !(candidate.protocol === "https:" || (candidate.protocol === "http:" && localhost))
+  ) {
+    throw new TypeError("site origin must be canonical HTTPS or loopback HTTP");
+  }
+  return candidate.origin;
+}
+
+export function mindDiaryMcpEndpoint(
+  siteOrigin: string,
+  profile: MindDiaryMcpClientProfile,
+): string {
+  return `${canonicalSiteOrigin(siteOrigin)}${profile === "modern"
+    ? MIND_DIARY_MCP_MODERN_PATH
+    : MIND_DIARY_MCP_COMPATIBILITY_PATH}`;
+}
+
+export function mindDiaryCodexConfig(
+  siteOrigin: string,
+  profile: MindDiaryMcpClientProfile,
+): string {
+  return `[mcp_servers.mind_diary]
+url = "${mindDiaryMcpEndpoint(siteOrigin, profile)}"
+bearer_token_env_var = "${MIND_DIARY_CODEX_TOKEN_ENVIRONMENT_VARIABLE}"
+required = true
+
+[mcp_servers.mind_diary.env_http_headers]
+OAI-Sites-Authorization = "${MIND_DIARY_CODEX_SITES_AUTHORIZATION_ENVIRONMENT_VARIABLE}"`;
+}
+
 export const MIND_DIARY_CODEX_CONFIG = `[mcp_servers.mind_diary]
 url = "${MIND_DIARY_MCP_ENDPOINT_PLACEHOLDER}"
 bearer_token_env_var = "${MIND_DIARY_CODEX_TOKEN_ENVIRONMENT_VARIABLE}"
+required = true
 
 [mcp_servers.mind_diary.env_http_headers]
 OAI-Sites-Authorization = "${MIND_DIARY_CODEX_SITES_AUTHORIZATION_ENVIRONMENT_VARIABLE}"` as const;
@@ -47,6 +90,7 @@ export type McpTokenCollectionState =
 export interface McpTokenManagementModel {
   readonly displayName: string;
   readonly collection: McpTokenCollectionState;
+  readonly siteOrigin?: string;
   readonly announcement?: string;
 }
 
@@ -216,7 +260,30 @@ function renderCreateForm(): string {
   </section>`;
 }
 
-function renderCodexSetup(): string {
+function setupOrigin(value: string | undefined): string | null {
+  if (value === undefined) return null;
+  try {
+    return canonicalSiteOrigin(value);
+  } catch {
+    return null;
+  }
+}
+
+function setupConfig(
+  origin: string | null,
+  profile: MindDiaryMcpClientProfile,
+): string {
+  if (origin !== null) return mindDiaryCodexConfig(origin, profile);
+  const endpoint = profile === "modern"
+    ? "https://<your-mind-diary-site>/api/mcp"
+    : MIND_DIARY_MCP_ENDPOINT_PLACEHOLDER;
+  return MIND_DIARY_CODEX_CONFIG.replace(MIND_DIARY_MCP_ENDPOINT_PLACEHOLDER, endpoint);
+}
+
+function renderCodexSetup(siteOrigin: string | undefined): string {
+  const origin = setupOrigin(siteOrigin);
+  const compatibility = setupConfig(origin, "compatibility");
+  const modern = setupConfig(origin, "modern");
   return `<section class="md-setup-card" aria-labelledby="codex-setup-heading">
     <div>
       <p class="md-eyebrow">Setup guide</p>
@@ -235,11 +302,20 @@ function renderCodexSetup(): string {
         <p>Ask the Site owner or release coordinator for this separate credential. The environment variable must contain the complete <code>Bearer &lt;secret&gt;</code> header value; it never replaces the Mind Diary token.</p>
       </li>
       <li>
-        <h3>Reference the environment variable in Codex</h3>
-        <pre><code>${escapeUntrustedText(MIND_DIARY_CODEX_CONFIG)}</code></pre>
-        <p>Replace the endpoint placeholder with the exact deployed Mind Diary URL. Never replace either environment-variable name with a secret. A public Site may omit the <code>env_http_headers</code> table.</p>
+        <h3>Default Codex 0.147 compatibility profile</h3>
+        <pre><code id="mind-diary-compatibility-config" tabindex="-1" data-code-value>${escapeUntrustedText(compatibility)}</code></pre>
+        <button class="md-button md-button--secondary" type="button" data-copy-code="mind-diary-compatibility-config">Copy compatibility config</button>
+        <p>This profile uses isolated MCP <code>2025-11-25</code> lifecycle at the exact compatibility endpoint.</p>
+      </li>
+      <li>
+        <h3>Modern MCP 2026-07-28 profile</h3>
+        <pre><code id="mind-diary-modern-config" tabindex="-1" data-code-value>${escapeUntrustedText(modern)}</code></pre>
+        <button class="md-button md-button--secondary" type="button" data-copy-code="mind-diary-modern-config">Copy modern config</button>
+        <p>Codex 0.147 requires opt-in <code>--enable mcp_2026_07_28</code> for this endpoint. Do not enable it while using the compatibility URL.</p>
       </li>
     </ol>
+    <p class="md-form__status" role="status" aria-live="polite" data-code-copy-status></p>
+    <p>Both configurations contain only endpoint and environment-variable names. Never replace either variable name with a secret. A public Site may omit the <code>env_http_headers</code> table.</p>
     <p class="md-caveat"><strong>Historical UAT baseline:</strong> the owner-only Site deployment passed default and opt-in modern <code>codex-cli 0.147.0</code> flows. This hosted environment is UAT, not production; OAuth/PKCE and public plugin support remain outside this personal-token release.</p>
   </section>`;
 }
@@ -257,6 +333,15 @@ function renderSecretDialog(): string {
       <p id="token-secret-description">After you close this window, Mind Diary cannot show or recover this secret.</p>
       <code class="md-secret-value" tabindex="-1" data-secret-value>Secret is not available.</code>
       <p class="md-form__status" role="status" aria-live="polite" data-copy-status></p>
+      <section class="md-setup-card" aria-labelledby="mcp-self-check-title" data-mcp-self-check data-diagnostic-state="idle">
+        <div>
+          <p class="md-eyebrow">Redacted connection check</p>
+          <h3 id="mcp-self-check-title">Test this token before closing</h3>
+          <p>The check uses the current authenticated account, modern discovery and read-only <code>list_minds</code> on both profiles. It never renders or retains email, Mind names, IDs, queries, content, credentials or raw responses.</p>
+        </div>
+        <button class="md-button md-button--secondary" type="button" data-run-mcp-self-check disabled>Run redacted self-check</button>
+        <p class="md-form__status" role="status" aria-live="polite" data-mcp-self-check-status>Available only while the one-time secret is visible.</p>
+      </section>
       <div class="md-dialog__actions">
         <button class="md-button md-button--secondary" type="button" data-close-secret>Close permanently</button>
         <button class="md-button md-button--primary" type="button" data-copy-secret>Copy token</button>
@@ -307,7 +392,7 @@ export function renderMcpTokenManagement(
       <div class="md-token-layout">
         ${renderTokenCollection(model.collection)}
         ${renderCreateForm()}
-        ${renderCodexSetup()}
+        ${renderCodexSetup(model.siteOrigin)}
       </div>
     </main>
     ${renderMindDiaryAuthenticatedFooter("tokens")}
@@ -430,6 +515,24 @@ export function installMcpTokenManagement(
     });
   }
 
+  const codeCopyStatus = shell.querySelector<HTMLElement>("[data-code-copy-status]");
+  for (const button of Array.from(shell.querySelectorAll<HTMLButtonElement>("[data-copy-code]"))) {
+    on<MouseEvent>(button, "click", async () => {
+      const codeId = button.dataset.copyCode ?? "";
+      const code = codeId.length > 0
+        ? shell.querySelector<HTMLElement>(`#${CSS.escape(codeId)}[data-code-value]`)
+        : null;
+      if (!code || !codeCopyStatus) return;
+      try {
+        await navigator.clipboard.writeText(code.textContent ?? "");
+        codeCopyStatus.textContent = "Configuration copied. It contains no token or Site credential.";
+      } catch {
+        codeCopyStatus.textContent = "Copy was blocked. Select the configuration and copy it manually.";
+        code.focus();
+      }
+    });
+  }
+
   const now = options.now ?? (() => new Date());
   const form = shell.querySelector<HTMLFormElement>("[data-token-form]");
   const formStatus = shell.querySelector<HTMLElement>("[data-token-form-status]");
@@ -438,6 +541,9 @@ export function installMcpTokenManagement(
   const secretValueNode = shell.querySelector<HTMLElement>("[data-secret-value]");
   const copyStatus = shell.querySelector<HTMLElement>("[data-copy-status]");
   const copyButton = shell.querySelector<HTMLButtonElement>("[data-copy-secret]");
+  const selfCheck = shell.querySelector<HTMLElement>("[data-mcp-self-check]");
+  const selfCheckButton = shell.querySelector<HTMLButtonElement>("[data-run-mcp-self-check]");
+  const selfCheckStatus = shell.querySelector<HTMLElement>("[data-mcp-self-check-status]");
   let revealedSecret = "";
   let secretInvoker: HTMLElement | null = null;
 
@@ -446,6 +552,11 @@ export function installMcpTokenManagement(
     if (secretValueNode) secretValueNode.textContent = "Secret removed. It cannot be recovered.";
     if (copyStatus) copyStatus.textContent = "";
     if (copyButton) copyButton.disabled = true;
+    if (selfCheck) selfCheck.dataset.diagnosticState = "idle";
+    if (selfCheckButton) selfCheckButton.disabled = true;
+    if (selfCheckStatus) {
+      selfCheckStatus.textContent = "Available only while the one-time secret is visible.";
+    }
   };
   const closeSecret = () => {
     wipeSecret();
@@ -512,6 +623,10 @@ export function installMcpTokenManagement(
         revealedSecret = secret;
         secretValueNode.textContent = revealedSecret;
         copyButton.disabled = false;
+        if (selfCheckButton) selfCheckButton.disabled = false;
+        if (selfCheckStatus) {
+          selfCheckStatus.textContent = "Use the deployed UI to run the redacted connection check.";
+        }
         formStatus.textContent = "Token created. Copy the secret before closing the window.";
         form.reset();
         secretInvoker = submit;

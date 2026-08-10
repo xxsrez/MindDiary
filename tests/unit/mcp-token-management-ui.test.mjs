@@ -8,10 +8,15 @@ import {
   MIND_DIARY_CODEX_SITES_AUTHORIZATION_ENVIRONMENT_VARIABLE,
   MIND_DIARY_CODEX_SITES_SAFE_ENVIRONMENT_SETUP,
   MIND_DIARY_CODEX_TOKEN_ENVIRONMENT_VARIABLE,
+  MIND_DIARY_MCP_COMPATIBILITY_PATH,
   MIND_DIARY_MCP_ENDPOINT_PLACEHOLDER,
+  MIND_DIARY_MCP_MODERN_PATH,
+  mindDiaryCodexConfig,
+  mindDiaryMcpEndpoint,
   renderMcpTokenManagement,
   renderMcpTokenManagementDocument,
 } from "../../packages/adapter-web/dist/index.js";
+import { PRODUCT_UI_CLIENT_JAVASCRIPT } from "../../packages/adapter-web/dist/product-ui-assets.js";
 
 const implementation = await readFile(
   new URL("../../packages/adapter-web/src/token-management.ts", import.meta.url),
@@ -51,6 +56,7 @@ function model(collection) {
   return {
     displayName: "Andrey",
     collection,
+    siteOrigin: "https://mind-diary.example",
   };
 }
 
@@ -98,6 +104,8 @@ test("Codex instructions reference bearer_token_env_var without placing a token 
     /MIND_DIARY_SITES_AUTHORIZATION="Bearer \$\{MIND_DIARY_SITES_TOKEN\}"/,
   );
   assert.match(MIND_DIARY_CODEX_CONFIG, /bearer_token_env_var = "MIND_DIARY_TOKEN"/);
+  assert.equal(MIND_DIARY_MCP_MODERN_PATH, "/api/mcp");
+  assert.equal(MIND_DIARY_MCP_COMPATIBILITY_PATH, "/api/mcp/2025-11-25");
   assert.match(
     MIND_DIARY_CODEX_CONFIG,
     /OAI-Sites-Authorization = "MIND_DIARY_SITES_AUTHORIZATION"/,
@@ -105,11 +113,48 @@ test("Codex instructions reference bearer_token_env_var without placing a token 
   assert.doesNotMatch(MIND_DIARY_CODEX_CONFIG, /mdp_v1_[A-Za-z0-9_-]{20,}/);
 
   const html = renderMcpTokenManagement(model({ kind: "empty" }));
+  assert.match(html, /https:\/\/mind-diary\.example\/api\/mcp\/2025-11-25/);
+  assert.match(html, /https:\/\/mind-diary\.example\/api\/mcp/);
+  assert.doesNotMatch(html, /&lt;your-mind-diary-site&gt;/);
+  assert.equal((html.match(/required = true/gu) ?? []).length, 2);
+  assert.match(html, /data-copy-code="mind-diary-compatibility-config"/);
+  assert.match(html, /data-copy-code="mind-diary-modern-config"/);
   assert.match(html, /Keep the secret outside your repository and Codex config/);
   assert.match(html, /complete <code>Bearer &lt;secret&gt;<\/code> header value/);
   assert.match(html, /Historical UAT baseline/);
   assert.match(html, /hosted environment is UAT, not production/);
   assert.match(html, /OAuth\/PKCE and public plugin support remain outside/);
+});
+
+test("exact-origin Codex configs keep modern and compatibility lifecycles separate", () => {
+  assert.equal(
+    mindDiaryMcpEndpoint("https://mind-diary.example", "modern"),
+    "https://mind-diary.example/api/mcp",
+  );
+  assert.equal(
+    mindDiaryMcpEndpoint("http://localhost:3000", "compatibility"),
+    "http://localhost:3000/api/mcp/2025-11-25",
+  );
+  const modern = mindDiaryCodexConfig("https://mind-diary.example", "modern");
+  const compatibility = mindDiaryCodexConfig(
+    "https://mind-diary.example",
+    "compatibility",
+  );
+  assert.match(modern, /url = "https:\/\/mind-diary\.example\/api\/mcp"/);
+  assert.doesNotMatch(modern, /2025-11-25/);
+  assert.match(compatibility, /api\/mcp\/2025-11-25/);
+  for (const config of [modern, compatibility]) {
+    assert.match(config, /required = true/);
+    assert.match(config, /bearer_token_env_var = "MIND_DIARY_TOKEN"/);
+    assert.doesNotMatch(config, /mdp_v1_[A-Za-z0-9_-]{20,}/);
+  }
+  for (const unsafe of [
+    "http://mind-diary.example",
+    "https://mind-diary.example/path",
+    "https://user:password@mind-diary.example",
+  ]) {
+    assert.throws(() => mindDiaryCodexConfig(unsafe, "modern"), /canonical HTTPS/u);
+  }
 });
 
 test("loading, empty, and error states are explicit and retryable", () => {
@@ -161,6 +206,9 @@ test("show-once and revoke dialogs have confirmation, live status, and keyboard-
   assert.match(html, /tabindex="-1" data-secret-value/);
   assert.match(html, /Close permanently/);
   assert.match(html, /data-copy-status/);
+  assert.match(html, /data-mcp-self-check/);
+  assert.match(html, /data-run-mcp-self-check disabled/);
+  assert.match(html, /never renders or retains email, Mind names, IDs, queries, content, credentials or raw responses/i);
   assert.match(html, /<dialog[^>]+data-revoke-dialog/);
   assert.match(html, /Revoke this token\?/);
   assert.match(html, /will stop working immediately/);
@@ -171,6 +219,28 @@ test("show-once and revoke dialogs have confirmation, live status, and keyboard-
     implementation,
     /console\.|analytics\.|dataLayer|localStorage|sessionStorage|sendBeacon/i,
   );
+});
+
+test("production redacted self-check covers both auth boundaries and both MCP profiles without telemetry or raw output", () => {
+  assert.match(PRODUCT_UI_CLIENT_JAVASCRIPT, /fetch\("\/api\/v1\/session"/);
+  assert.match(PRODUCT_UI_CLIENT_JAVASCRIPT, /server\/discover/);
+  assert.match(PRODUCT_UI_CLIENT_JAVASCRIPT, /\/api\/mcp\/2025-11-25/);
+  assert.match(PRODUCT_UI_CLIENT_JAVASCRIPT, /name:"list_minds"/);
+  assert.match(PRODUCT_UI_CLIENT_JAVASCRIPT, /notifications\/initialized/);
+  assert.match(PRODUCT_UI_CLIENT_JAVASCRIPT, /method:"tools\/list"/);
+  assert.match(PRODUCT_UI_CLIENT_JAVASCRIPT, /Site audience access failed before Mind Diary/);
+  assert.match(PRODUCT_UI_CLIENT_JAVASCRIPT, /Token authentication failed/);
+  assert.match(PRODUCT_UI_CLIENT_JAVASCRIPT, /Token is missing content:read/);
+  assert.match(PRODUCT_UI_CLIENT_JAVASCRIPT, /Wrong MCP endpoint/);
+  assert.match(PRODUCT_UI_CLIENT_JAVASCRIPT, /AbortController/);
+  assert.match(PRODUCT_UI_CLIENT_JAVASCRIPT, /payload=null/);
+  assert.match(PRODUCT_UI_CLIENT_JAVASCRIPT, /insufficient_scope/);
+  assert.match(PRODUCT_UI_CLIENT_JAVASCRIPT, /cache:"no-store"/);
+  assert.doesNotMatch(
+    PRODUCT_UI_CLIENT_JAVASCRIPT,
+    /console\.|localStorage|sessionStorage|sendBeacon|response\.text\(|analytics\.|dataLayer/i,
+  );
+  assert.doesNotMatch(PRODUCT_UI_CLIENT_JAVASCRIPT, /name:"(?:search|fetch|commit_changeset)"/);
 });
 
 test("document loads only an explicitly safe local fixture client and CSS covers responsive token controls", () => {

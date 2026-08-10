@@ -162,12 +162,17 @@ test("product root and MCP setup render live control projections and fixed same-
   assert.match(tokenHtml, /Codex on Mac/);
   assert.match(tokenHtml, /mdp_v1_Abc123…/);
   assert.match(tokenHtml, /mind-diary-token-client\.js/);
+  assert.match(tokenHtml, /https:\/\/mind-diary\.example\/api\/mcp\/2025-11-25/);
+  assert.match(tokenHtml, /https:\/\/mind-diary\.example\/api\/mcp/);
+  assert.match(tokenHtml, /data-run-mcp-self-check disabled/);
+  assert.doesNotMatch(tokenHtml, /&lt;your-mind-diary-site&gt;/);
   assert.doesNotMatch(tokenHtml, /synthetic-show-once-value|verifier|principal_one/i);
 
   for (const [path, contentType, marker] of [
     ["/ui/mind-diary-shell.css", "text/css; charset=utf-8", "md-token-grid"],
     ["/brand/mind-diary-lockup.svg", "image/svg+xml; charset=utf-8", "Mind Diary logo"],
     ["/ui/mind-diary-onboarding-client.js", "text/javascript; charset=utf-8", "/api/v1/account"],
+    ["/ui/mind-diary-token-client.js", "text/javascript; charset=utf-8", "/api/mcp/2025-11-25"],
     ["/ui/mind-diary-visibility-client.js", "text/javascript; charset=utf-8", "data-public-catalog-retry"],
   ]) {
     const response = await handler(new Request(`${origin}${path}`));

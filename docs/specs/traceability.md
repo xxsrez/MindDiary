@@ -33,7 +33,7 @@ flows или финальный join-gate.
 | P3 | `/invitations` и canonical ordinary-Mind route показывают только safe access metadata; exact registered-email invitation не даёт access до accept, retry создаёт одну membership, role CAS/revoke/leave немедленно меняют current Web/MCP/history access и сохраняются после runtime reconstruction. | `AND-157` | durable composed Product Site с двумя principals: unknown exact email, create/accept replay, pending denial, role stale conflict, restart, revoke и immediate Web/MCP denial; invitation lifecycle, membership capability matrix, product HTTP mapping и browser stale/escaping suite | `AND-158` + `AND-161`: same-deployment second-principal Web/persistence/MCP |
 | P4 | Visibility, catalog и ownership transfer применяют current access без metadata leakage; `public` discoverable только authenticated catalog, `unlisted` открывается только по exact handle, возврат в `private` немедленно снимает baseline Web/MCP/history grant. | `AND-154` | durable composed Product Site с тремя principals: public → unlisted → public, MCP baseline read, invitation acceptance, atomic transfer, private revoke и runtime reconstruction; visibility/catalog/ownership/history integration и browser suite | `AND-158` + `AND-161` |
 | P5 | Account/profile/delete и manual recovery handoff fail closed без PII leakage или automatic relink. | `AND-153` | `account-deletion` foreign-tombstone/PII suite; `personal-mind-control`; `sites-identity-binding`; Product Site handler + durable runtime rename/fresh-impact/delete/reconstruction scenarios; account lifecycle UI/controller and browser fixture | `AND-158` + `AND-161` |
-| P6 | MCP token setup и redacted diagnostics воспроизводимы для current modern и legacy Codex profiles. | `AND-152` | token/setup/diagnostic tests + real Codex smoke | `AND-161` |
+| P6 | `/settings/mcp` выдаёт два exact-origin secret-free Codex config; one-time redacted self-check проверяет current account, modern discovery/read-only `list_minds` и isolated compatibility lifecycle/read-only `list_minds`, различает Sites audience и product Bearer boundaries и после закрытия не сохраняет secret или raw/private response. | `AND-152` | `mcp-token-management-ui`, Product Site handler/runtime setup/diagnostic regression, negative status/redaction fixtures + real `codex-cli 0.147.0` smoke обоих profiles | `AND-161`: exact-candidate Web + default/modern Codex |
 | P7-P10 | Starter value, safe history/restore/export, UAT operations и pilot protocol дают исполнимый пользовательский и operational path. | `AND-155`, `AND-156`, `AND-159`, `AND-160` | issue-owned executable checks and durable docs | `AND-161` join-gate |
 | P11 | Один exact candidate проходит canonical gate и two-principal Web/persistence/MCP UAT matrix на одном deployment. | `AND-161` | canonical repository gate exact SHA | new `W`, `P`, `MI`, `CX`, `R` receipts exact deployment |
 
@@ -244,8 +244,10 @@ failure; отсутствующий receipt остаётся pending.
    mutation, revoke/leave и ownership transfer показывают только разрешённые
    actions и итоговый state.
 5. Named MCP token показывается один раз, list не раскрывает secret, revoke
-   действует немедленно; UI даёт `bearer_token_env_var` setup без plaintext в
-   repository/config.
+   действует немедленно; UI даёт два exact-origin `bearer_token_env_var` config
+   без plaintext в repository/config и, пока secret виден, redacted self-check
+   current account + modern/default `list_minds`. DOM/evidence не содержит
+   verified email, Mind metadata/content/query, credential или raw response.
 6. Whole-Mind и account deletion используют свежий impact, strong confirmation
    и проверяемый irreversible post-state без обещания recovery/receipt.
 

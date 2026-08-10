@@ -217,6 +217,21 @@ commit_changeset(
   попадает в modern adapter;
 - оба endpoint используют тот же Bearer authenticator и тот же per-request
   current authorization для выбранного Mind/revision;
+- `/settings/mcp` строит два copy-ready secret-free Codex config из origin
+  текущего deployment: default `codex-cli 0.147.0` использует exact
+  `/api/mcp/2025-11-25`, а opt-in `mcp_2026_07_28` — exact `/api/mcp`;
+- сразу после issuance и по явному retry, пока one-time secret ещё виден,
+  browser выполняет redacted read-only self-check: current Sites account,
+  modern `server/discover` + `list_minds` и isolated compatibility
+  `initialize`/`notifications/initialized` + `list_minds`;
+- self-check не принимает search query, не выводит и не сохраняет verified
+  email, principal/Mind/revision IDs, Mind names, content, credentials или raw
+  response. UI показывает только фиксированные статусы для success, Sites
+  audience boundary, expired/revoked/invalid Bearer, missing read scope, wrong
+  endpoint, unregistered account, protocol mismatch и generic unavailable;
+- закрытие one-time dialog стирает secret из page state, отменяет активную
+  диагностику и делает повторный check невозможным; новый check требует нового
+  token, а revoke остаётся отдельным немедленным lifecycle action;
 - token не даёт control-plane operations и не логируется;
 - account deletion отзывает все tokens.
 

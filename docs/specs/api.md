@@ -780,6 +780,25 @@ Mind authorization вычисляются заново для каждого HTT
 только protocol framing; compatibility adapter не добавляет отдельную ACL,
 cached actor или tool surface.
 
+Authenticated `/settings/mcp` получает canonical origin из server-side request
+и показывает два точных secret-free Codex config; endpoint placeholder не
+остаётся в hosted HTML. Browser self-check использует текущую Sites session
+только для `GET /api/v1/session`, а one-time Mind Diary Bearer — только для
+обоих content MCP endpoint. Он выполняет modern `server/discover` и read-only
+`list_minds`, затем isolated compatibility initialize/initialized и тот же
+read-only `list_minds`. Ответы проверяются внутри page и отбрасываются; DOM
+получает только allowlisted status без email, names, IDs, query, content,
+credential или raw response. Закрытие show-once dialog отменяет pending fetch,
+стирает Bearer и запрещает retry; никакой отдельный diagnostic endpoint,
+persisted diagnostic record или control-plane MCP tool не добавляется.
+
+Диагностика различает две authentication boundaries: отсутствие текущей Sites
+session/audience access не называется ошибкой product token, а Bearer challenge
+не называется Sites failure. Product `401`, scope `403`, dispatcher `404`,
+unregistered account, lifecycle mismatch и unavailable state отображаются
+только фиксированным безопасным текстом; server error message не переносится в
+DOM.
+
 Route selection и оба profiles проверены transport/integration tests и
 UAT Sites smoke. Настоящий `codex-cli 0.147.0` выполнил
 `tools/list`/`tools/call` и через default compatibility lifecycle, и через

@@ -326,7 +326,12 @@ test("durable product runtime carries a Sites account token through Codex MCP an
 
   const settings = await responseFrom(runtime, new Request(`${ORIGIN}/settings/mcp`));
   assert.equal(settings.status, 200);
-  const registeredCsrf = csrfFromHtml(await settings.text());
+  const settingsHtml = await settings.text();
+  assert.match(settingsHtml, new RegExp(`${ORIGIN.replaceAll(".", "\\.")}\\/api\\/mcp\\/2025-11-25`, "u"));
+  assert.match(settingsHtml, new RegExp(`${ORIGIN.replaceAll(".", "\\.")}\\/api\\/mcp`, "u"));
+  assert.match(settingsHtml, /data-run-mcp-self-check disabled/u);
+  assert.doesNotMatch(settingsHtml, /&lt;your-mind-diary-site&gt;/u);
+  const registeredCsrf = csrfFromHtml(settingsHtml);
 
   const createdMind = await responseFrom(runtime, new Request(`${ORIGIN}/api/v1/minds`, {
     method: "POST",
