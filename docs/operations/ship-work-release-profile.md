@@ -373,6 +373,23 @@ uat:
   source:
     kind: repository_directory
     path: apps/mind-diary-site
+  artifact_build:
+    schema: ship-work-release/command/v1
+    id: uat.artifact.build
+    timing: after-repository-gate-before-version-save
+    argv: [npm, --prefix, apps/mind-diary-site, run, build]
+    cwd: .
+    stdin: closed
+    timeout_seconds: 900
+    output:
+      directory: apps/mind-diary-site/dist
+      required_entries:
+        - server/index.js
+        - .openai/hosting.json
+      freshness: built-for-exact-candidate-after-gate
+    save_semantics:
+      candidate_version: immutable
+      stale_or_wrong_saved_artifact: fail-batch-and-forward-fix
   audience:
     class: restricted-test-principals
     baseline_actor_class: single-principal-owner

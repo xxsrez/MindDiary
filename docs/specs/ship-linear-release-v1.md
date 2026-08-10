@@ -225,10 +225,19 @@ feature, реально прошедшую `claim -> feature-ready -> integrate 
 
 1. запускает канонический repository gate;
 2. запускает локальный dev/smoke, если это требует repository contract;
-3. публикует exact candidate в UAT;
-4. выполняет обязательный UAT smoke;
-5. записывает candidate SHA, deployment reference и результат в journal;
-6. обновляет Linear только проверенными фактами.
+3. после gate отдельно строит deployment output профильной UAT surface из
+   exact candidate и проверяет deployable entrypoints до упаковки;
+4. сохраняет Sites version только из свежего deployment output exact candidate
+   и публикует именно эту version в UAT;
+5. выполняет обязательный UAT smoke;
+6. записывает candidate SHA, deployment reference и результат в journal;
+7. обновляет Linear только проверенными фактами.
+
+Saved Sites version для одного candidate SHA считается immutable. Если version
+была сохранена из stale либо неверного deployment output, coordinator не
+повторяет save с тем же SHA и не deploy-ит эту version: batch становится failed,
+открывается repair-first flow, а исправленная сборка получает новый
+forward-fix candidate SHA и новый batch.
 
 Следующий batch строится поверх текущего `main`; workers не обязаны ждать UAT,
 если их новые задачи независимы от обнаруженного дефекта.

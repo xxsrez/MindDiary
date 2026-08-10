@@ -41,6 +41,23 @@ UAT release разрешён и является default cadence skill. Deployme
 references: deployment ID/URL, observed SHA, result и timestamp; не сохраняй
 tokens, cookies, private content или response bodies.
 
+После canonical gate и до упаковки обязательно выполни profile-declared build
+deployment surface из exact candidate. Для текущего MindDiary profile это:
+
+```bash
+npm --prefix apps/mind-diary-site run build
+```
+
+Проверь profile-declared deployable entrypoints в свежем `dist`, затем упакуй
+именно этот output. Прохождение root aggregate само по себе не доказывает, что
+Sites `dist` был пересобран. Не сохраняй version из ранее существовавшего
+deployment output.
+
+Saved Sites version для candidate SHA immutable. Если по этому SHA уже
+сохранена version из stale либо неверного output, не пытайся заменить её новым
+archive и не deploy-и её. Немедленно отметь batch failed, открой repair-first
+flow и выпусти исправленную сборку под новым forward-fix candidate SHA.
+
 Передавай в journal только HTTPS live URL без userinfo, query и fragment.
 Ссылки с credentials или signed query helper отклоняет: сохраняй отдельный
 нечувствительный canonical URL и redacted deployment ID.

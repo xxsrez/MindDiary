@@ -14,8 +14,14 @@ class SkillGoalContractTests(unittest.TestCase):
         cls.goal = (SKILL_DIR / "references" / "goal-lifecycle.md").read_text(
             encoding="utf-8"
         )
+        cls.batch = (SKILL_DIR / "references" / "batch-release.md").read_text(
+            encoding="utf-8"
+        )
         cls.spec = (
             REPO_ROOT / "docs" / "specs" / "ship-linear-release-v1.md"
+        ).read_text(encoding="utf-8")
+        cls.profile = (
+            REPO_ROOT / "docs" / "operations" / "ship-work-release-profile.md"
         ).read_text(encoding="utf-8")
 
     def test_skill_routes_non_empty_work_through_goal_lifecycle(self) -> None:
@@ -53,6 +59,30 @@ class SkillGoalContractTests(unittest.TestCase):
         self.assertIn("fully paginated exact Linear inventory", self.spec)
         self.assertIn('update_goal({"status":"complete"})', self.spec)
         self.assertIn("Git/Linear/UAT evidence", self.spec)
+
+    def test_batch_builds_fresh_immutable_sites_artifact(self) -> None:
+        normalized_batch = " ".join(self.batch.split())
+        normalized_spec = " ".join(self.spec.split())
+        for required in (
+            "npm --prefix apps/mind-diary-site run build",
+            "root aggregate",
+            "Saved Sites version",
+            "forward-fix candidate SHA",
+        ):
+            self.assertIn(required, normalized_batch)
+        for required in (
+            "deployment output",
+            "Saved Sites version",
+            "forward-fix candidate SHA",
+        ):
+            self.assertIn(required, normalized_spec)
+        for required in (
+            "id: uat.artifact.build",
+            "timing: after-repository-gate-before-version-save",
+            "argv: [npm, --prefix, apps/mind-diary-site, run, build]",
+            "stale_or_wrong_saved_artifact: fail-batch-and-forward-fix",
+        ):
+            self.assertIn(required, self.profile)
 
 
 if __name__ == "__main__":
