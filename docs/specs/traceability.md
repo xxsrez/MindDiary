@@ -151,7 +151,7 @@ failure; отсутствующий receipt остаётся pending.
     { "id": 13, "owner": "AND-65", "local_evidence": ["changeset-preflight", "mcp-commit-export"], "live_evidence": ["MI", "CX"], "release_evidence": "R" },
     { "id": 14, "owner": "AND-67", "local_evidence": ["changeset-commit", "concurrency-failure"], "live_evidence": ["CX", "P"], "release_evidence": "R" },
     { "id": 15, "owner": "AND-69", "local_evidence": ["changeset-idempotency"], "live_evidence": ["CX", "P"], "release_evidence": "R" },
-    { "id": 16, "owner": "AND-71", "local_evidence": ["changeset-preflight", "changeset-commit", "okf-conformance"], "live_evidence": ["CX", "P"], "release_evidence": "R" },
+    { "id": 16, "owner": "AND-71", "local_evidence": ["changeset-preflight", "changeset-commit", "okf-conformance", "starter-mind"], "live_evidence": ["CX", "P"], "release_evidence": "R" },
     { "id": 17, "owner": "AND-61", "local_evidence": ["mind-browse", "mcp-resources"], "live_evidence": ["MI", "CX"], "release_evidence": "R" },
     { "id": 18, "owner": "AND-62", "local_evidence": ["mind-history"], "live_evidence": ["MI", "CX"], "release_evidence": "R" },
     { "id": 19, "owner": "AND-52", "local_evidence": ["ordinary-mind-deletion"], "live_evidence": ["W", "P"], "release_evidence": "R" },
