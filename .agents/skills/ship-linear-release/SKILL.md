@@ -1,6 +1,6 @@
 ---
 name: ship-linear-release
-description: "Deliver the exact current Linear milestone in MindDiary: plan dependency-aware work, run either coordinator-only or exactly N isolated worker subagents, integrate feature branches into main, release meaningful batches continuously to UAT, and repair guardrail or UAT defects forward. Use only when the user explicitly invokes $ship-linear-release or asks to execute this repository's Linear milestone delivery workflow. Never release production."
+description: "Deliver the exact current Linear milestone in MindDiary as one outcome-driven Codex Goal: complete every in-scope issue and defect, integrate verified work into main, and release meaningful batches continuously to UAT through coordinator-only or exactly N isolated worker subagents. Use only when the user explicitly invokes $ship-linear-release or asks to execute this repository's Linear milestone delivery workflow. Never release production."
 ---
 
 # Ship Linear Release
@@ -40,19 +40,28 @@ docs, release reference и Sites tooling, пока не доказано нал�
      --input '<inventory.json>'
    ```
 
-5. Если `disposition=no-work`, немедленно остановись. Не вызывай `init`, не
+5. После preflight прочитай
+   [Goal lifecycle](references/goal-lifecycle.md). Если
+   `disposition=no-work`, не создавай новый Goal: выполни только описанную там
+   сверку уже существующего Goal и немедленно остановись. Не вызывай `init`, не
    читай relations/acceptance исторических Done, не создавай workers/worktrees,
    не запускай gate/dev/CI и не создавай batch/UAT/defect/product changes.
    Если preflight вернул пустой `active_run_id`, просто отчитай exact Linear и
    Git state. Если он вернул существующий no-op run, закрой его обычным
    `complete` и отчитай `disposition=no-work`; UAT для этого не требуется.
-6. Только для `start` или `resume` полностью прочитай
+6. Если `unfinished_count > 0`, до любых Git, Linear, journal или UAT writes
+   вызови `get_goal` и создай либо переиспользуй exact-scope Goal по
+   [Goal lifecycle](references/goal-lifecycle.md). Invocation этого skill явно
+   авторизует Goal только для одного найденного repository/project/milestone.
+   Недоступные Goal tools или чужой unfinished Goal означают fail-closed stop,
+   а не fallback на plan или journal.
+7. Только для `start` или `resume` полностью прочитай
    [упрощённую спецификацию](../../../docs/specs/ship-linear-release-v1.md),
    проверь Git dirt/worktrees из preflight и запроси relations/acceptance только
    для `unfinished_issue_ids` и их boundary dependencies.
-7. Для `workers=N`, `N > 1`, до Git/Linear/UAT writes проверь, что runtime имеет
+8. Для `workers=N`, `N > 1`, до Git/Linear/UAT writes проверь, что runtime имеет
    N свободных subagent slots. Не заменяй malformed или недоступный `N` на 1.
-8. Создай либо найди run journal:
+9. Создай либо найди run journal:
 
    ```bash
    python3 .agents/skills/ship-linear-release/scripts/shipctl.py init \
@@ -181,8 +190,9 @@ Linear issue и запиши её stable ID через `defect-reclassify` до 
 
 ## Resume и завершение
 
-Для resume сначала вызови `status`, затем сверь journal с Git, Linear и UAT.
-Journal помогает найти checkpoint, но не доказывает внешний effect. При
+Для resume сначала вызови `get_goal`, затем `status` и сверь Goal/journal с Git,
+Linear и UAT. Goal хранит terminal outcome между turns, journal — durable
+execution checkpoint; ни один из них не доказывает внешний effect. При
 необъяснимом drift останови затронутый lane; независимые lanes можно продолжать.
 
 Перед `complete` проверь:
@@ -200,6 +210,13 @@ Journal помогает найти checkpoint, но не доказывает �
 python3 .agents/skills/ship-linear-release/scripts/shipctl.py complete \
   --repo "$PWD" --run '<run-id>' --main-sha '<full-main-sha>'
 ```
+
+После успешного `shipctl.py complete` повторно получи полностью paginated exact
+Linear inventory, проверь terminal journal и актуальное UAT evidence, затем
+вызови `update_goal({"status":"complete"})`. Не закрывай Goal после одной issue,
+wave, batch, gate или deployment. Обычный failure запускает repair/resume и не
+является `blocked`; строгий blocker threshold и no-work reconciliation заданы в
+[Goal lifecycle](references/goal-lifecycle.md).
 
 Отчитывай отдельно exact Git SHA, Linear state, repository gate и UAT evidence.
 Не называй один вид evidence доказательством другого.

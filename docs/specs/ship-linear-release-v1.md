@@ -21,6 +21,12 @@ runtime-протоколом этой версии. Расхождение ни�
 6. завершить milestone после проверки repository state и Linear, а для
    созданного в этом run meaningful candidate — также UAT.
 
+Непустой invocation выполняется как один exact-scope Codex Goal. Его terminal
+outcome — все незавершённые in-scope issue и обнаруженные defects exact
+milestone завершены, интегрированы и проверены; отдельная issue, wave, batch или
+успешный deployment являются только прогрессом. `workers=N` задаёт topology, а
+не уменьшает результат до N задач.
+
 Skill не выполняет production release. Production всегда требует отдельного
 ручного workflow и явного запроса пользователя.
 
@@ -110,6 +116,17 @@ atomic replace. Достаточный state:
 - current UAT SHA и unresolved defects;
 - timestamps и last error.
 
+Codex Goal, execution plan и journal имеют разные роли:
+
+- Goal хранит terminal outcome между Goal turns и не разрешает добровольно
+  закончить работу после промежуточного результата;
+- plan отражает текущую исполнимую последовательность и меняется вместе с
+  ready frontier;
+- journal хранит durable checkpoints, lanes и evidence для crash/resume.
+
+Ни один из них не доказывает внешний effect и не расширяет sandbox, approvals
+или scope пользователя.
+
 Не нужны SQLite, generic reducer, CAS revision protocol, signed receipts,
 content-addressed objects, provider broker или schema migration framework.
 После crash coordinator перечитывает Git, Linear и UAT, сверяет их с journal и
@@ -134,10 +151,22 @@ worker/subagent allocation, repository gate, local dev, CI wait, batch creation,
 UAT deployment и product changes. Предыдущий UAT можно назвать только
 датированным историческим evidence; он не становится evidence нового release.
 
+No-work path не создаёт новый Codex Goal. Если уже существует unfinished Goal
+того же exact repository/project/milestone, coordinator выполняет terminal
+reconciliation и закрывает его только при наличии полного evidence. Чужой Goal
+не изменяется.
+
 Если незавершённые issue есть, coordinator запрашивает relations и полную
 acceptance только для них и необходимых boundary dependencies. Исторические
 terminal issue не становятся tasks текущего run: их stable IDs используются
 только как `completed_dependency_ids`.
+
+До первой mutation coordinator вызывает `get_goal`. Exact-scope unfinished Goal
+переиспользуется; при его отсутствии явный invocation этого skill авторизует
+`create_goal` с self-contained repository/project/milestone identity и done
+criteria. Чужой active Goal или отсутствие Goal tools останавливают run до
+mutation. `token_budget` не передаётся без отдельного явного положительного
+числового бюджета пользователя.
 
 После этого coordinator получает bounded snapshot milestone и строит
 dependency-aware ready frontier. Issue готова, если:
@@ -289,6 +318,19 @@ Run завершён, когда:
 - Linear отражает verified state без ложных completion claims;
 - journal помечен `completed`.
 
+Сначала coordinator повторно получает fully paginated exact Linear inventory и
+успешно выполняет journal `complete`. Затем он ещё раз связывает terminal
+journal, clean exact `main`, final gate, Linear projection и обязательное UAT
+evidence с одним SHA. Только после этого вызывается
+`update_goal({"status":"complete"})`. `update_goal` нельзя вызывать после одной
+issue, batch, gate или UAT deployment.
+
+Обычная ошибка проверки, worker crash, merge conflict, CI/UAT failure,
+медленная работа или неполный результат требуют repair/resume и не являются
+Goal blocker. `update_goal({"status":"blocked"})` допустим только после одного
+и того же точного blocker в трёх последовательных Goal turns, когда без user
+input либо изменения внешнего state meaningful progress невозможен.
+
 Для `no-work` invocation journal обычно вообще не создаётся. Если пустой
 journal уже был создан прежним/прерванным запуском и не содержит tasks,
 batches или defects, его можно закрыть как `completed` без repository gate и
@@ -325,6 +367,9 @@ gates и fail-closed поведение при необъяснимом конф
 - dependency ordering, scope conflict и worker failure;
 - coordinator-only merge и batch creation;
 - terminal-only milestone fast path без journal, relations, gate и UAT;
+- Goal contract: no-work не создаёт Goal, непустой run создаёт или exact-scope
+  переиспользует Goal, а completion требует zero unfinished work и полный
+  Git/Linear/UAT evidence;
 - historical Done не попадают в current-run batch;
 - no-op completion не требует UAT, а реальная integrated feature требует;
 - defect нельзя открыть без current-run candidate;
