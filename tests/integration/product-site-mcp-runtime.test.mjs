@@ -353,7 +353,51 @@ test("durable product runtime carries a Sites account token through Codex MCP an
     new Request(`${ORIGIN}/api/v1/minds/runtime-shared`),
   );
   assert.equal(reconstructedExact.status, 200);
-  assert.equal((await reconstructedExact.json()).data.access.role, "owner");
+  const reconstructedExactBody = await reconstructedExact.json();
+  assert.equal(reconstructedExactBody.data.access.role, "owner");
+
+  const renamedMind = await responseFrom(runtime, new Request(
+    `${ORIGIN}/api/v1/minds/runtime-shared`,
+    {
+      method: "PATCH",
+      headers: {
+        origin: ORIGIN,
+        "content-type": "application/json",
+        "x-csrf-token": registeredCsrf,
+        "idempotency-key": "rename:product-runtime-e2e",
+      },
+      body: JSON.stringify({
+        name: "Runtime Library",
+        expected_metadata_version: reconstructedExactBody.data.metadata_version,
+      }),
+    },
+  ));
+  assert.equal(renamedMind.status, 200);
+  const renamedMindBody = await renamedMind.json();
+  assert.equal(renamedMindBody.data.name, "Runtime Library");
+  assert.equal(renamedMindBody.data.route, "/runtime-shared");
+  assert.equal(renamedMindBody.data.head_revision_id, reconstructedExactBody.data.head_revision_id);
+
+  runtime = await createProductSiteRuntime(runtimeOptions);
+  const renamedAfterRestart = await responseFrom(
+    runtime,
+    new Request(`${ORIGIN}/api/v1/minds/runtime-shared`),
+  );
+  assert.equal(renamedAfterRestart.status, 200);
+  const renamedAfterRestartBody = await renamedAfterRestart.json();
+  assert.equal(renamedAfterRestartBody.data.name, "Runtime Library");
+  assert.equal(renamedAfterRestartBody.data.route, "/runtime-shared");
+  assert.equal(renamedAfterRestartBody.data.head_revision_id, reconstructedExactBody.data.head_revision_id);
+
+  const exactManagementPage = await responseFrom(
+    runtime,
+    new Request(`${ORIGIN}/runtime-shared`),
+  );
+  assert.equal(exactManagementPage.status, 200);
+  const exactManagementHtml = await exactManagementPage.text();
+  assert.match(exactManagementHtml, /data-mind-handle="runtime-shared"/u);
+  assert.match(exactManagementHtml, /Runtime Library/u);
+  assert.doesNotMatch(exactManagementHtml, /Runtime Shared/u);
 
   const issued = await responseFrom(runtime, new Request(`${ORIGIN}/api/v1/mcp-tokens`, {
     method: "POST",
@@ -455,6 +499,11 @@ test("durable product runtime carries a Sites account token through Codex MCP an
   assert.equal(listedBody.result.isError, false);
   assert.equal(listedBody.result.structuredContent.ok, true);
   assert.equal(listedBody.result.structuredContent.data.minds.length, 2);
+  const ordinaryMind = listedBody.result.structuredContent.data.minds.find(
+    ({ route }) => route === "/runtime-shared",
+  );
+  assert.ok(ordinaryMind);
+  assert.equal(ordinaryMind.name, "Runtime Library");
   const personalMind = listedBody.result.structuredContent.data.minds.find(
     ({ route }) => route === "/me",
   );
@@ -539,4 +588,87 @@ test("durable product runtime carries a Sites account token through Codex MCP an
   });
   assert.equal(afterRevoke.status, 401);
   assert.equal((await afterRevoke.json()).code, "authentication_required");
+
+  const deletionImpact = await responseFrom(runtime, new Request(
+    `${ORIGIN}/api/v1/minds/runtime-shared/deletion-impact`,
+  ));
+  assert.equal(deletionImpact.status, 200);
+  const deletionImpactBody = await deletionImpact.json();
+  assert.equal(deletionImpactBody.data.mind.route, "/runtime-shared");
+  assert.equal(deletionImpactBody.data.irreversible, true);
+  assert.equal(deletionImpactBody.data.recovery_available, false);
+  assert.equal(deletionImpactBody.data.forensic_receipt_retained, false);
+  assert.equal(deletionImpactBody.data.confirmation, "delete-mind:runtime-shared");
+
+  const deletedMind = await responseFrom(runtime, new Request(
+    `${ORIGIN}/api/v1/minds/runtime-shared`,
+    {
+      method: "DELETE",
+      headers: {
+        origin: ORIGIN,
+        "content-type": "application/json",
+        "x-csrf-token": registeredCsrf,
+        "idempotency-key": "delete:product-runtime-e2e",
+      },
+      body: JSON.stringify({
+        impact_id: deletionImpactBody.data.impact_id,
+        confirmation: deletionImpactBody.data.confirmation,
+      }),
+    },
+  ));
+  assert.equal(deletedMind.status, 200);
+  assert.equal((await deletedMind.json()).data.replayed, false);
+
+  runtime = await createProductSiteRuntime(runtimeOptions);
+  const mindsAfterDeletion = await responseFrom(
+    runtime,
+    new Request(`${ORIGIN}/api/v1/minds`),
+  );
+  assert.equal(mindsAfterDeletion.status, 200);
+  assert.deepEqual(
+    (await mindsAfterDeletion.json()).data.map(({ route }) => route),
+    ["/me"],
+  );
+
+  const retiredExact = await responseFrom(
+    runtime,
+    new Request(`${ORIGIN}/api/v1/minds/runtime-shared`),
+  );
+  assert.equal(retiredExact.status, 404);
+  const retiredExactBody = await retiredExact.json();
+  assert.equal(retiredExactBody.error.code, "mind_not_found");
+  assert.equal("name" in retiredExactBody.error, false);
+
+  const retiredManagementPage = await responseFrom(
+    runtime,
+    new Request(`${ORIGIN}/runtime-shared`),
+  );
+  assert.equal(retiredManagementPage.status, 200);
+  const retiredManagementHtml = await retiredManagementPage.text();
+  assert.match(retiredManagementHtml, /Mind settings unavailable/u);
+  assert.doesNotMatch(retiredManagementHtml, /Runtime Library|Runtime Shared/u);
+
+  const postDeletionMindsPage = await responseFrom(
+    runtime,
+    new Request(`${ORIGIN}/minds`),
+  );
+  assert.equal(postDeletionMindsPage.status, 200);
+  const postDeletionCsrf = csrfFromHtml(await postDeletionMindsPage.text());
+
+  const recreateRetiredHandle = await responseFrom(runtime, new Request(
+    `${ORIGIN}/api/v1/minds`,
+    {
+      method: "POST",
+      headers: {
+        origin: ORIGIN,
+        "content-type": "application/json",
+        "x-csrf-token": postDeletionCsrf,
+        "idempotency-key": "mind:recreate-retired-runtime-e2e",
+      },
+      body: JSON.stringify({ name: "Reused Route", handle: "runtime-shared" }),
+    },
+  ));
+  const recreateRetiredHandleBody = await recreateRetiredHandle.json();
+  assert.equal(recreateRetiredHandle.status, 409, JSON.stringify(recreateRetiredHandleBody));
+  assert.equal(recreateRetiredHandleBody.error.code, "handle_unavailable");
 });

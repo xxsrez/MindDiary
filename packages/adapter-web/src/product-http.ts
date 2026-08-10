@@ -759,6 +759,22 @@ function failureCode(error: unknown): string {
   return "operation_failed";
 }
 
+function applicationErrorStatus(code: string): number {
+  if (code === "authentication_required") return 401;
+  if (code === "rate_limited") return 429;
+  if (code === "search_index_unavailable") return 503;
+  if (code === "okf_validation_failed") return 422;
+  if (
+    code === "handle_unavailable" ||
+    code === "deletion_impact_changed" ||
+    code === "deletion_impact_expired" ||
+    code.includes("conflict")
+  ) return 409;
+  if (code.includes("not_found") || code.endsWith("_unavailable")) return 404;
+  if (code.startsWith("invalid_")) return 400;
+  return 403;
+}
+
 /** Authenticated web/control handler. It deliberately never reads Bearer auth. */
 export function createProductWebHttpHandler(
   dependencies: ProductWebHttpHandlerDependencies,
@@ -854,8 +870,7 @@ export function createProductWebHttpHandler(
       return json(200, { ok: true, data: snakeOutput(data) });
     } catch (error) {
       const code = failureCode(error);
-      const status = code.includes("not_found") ? 404 : code.includes("conflict") ? 409 : code.includes("authentication") ? 401 : code.includes("invalid") ? 400 : 403;
-      return errorResponse(status, code, requestId);
+      return errorResponse(applicationErrorStatus(code), code, requestId);
     }
   };
 }
