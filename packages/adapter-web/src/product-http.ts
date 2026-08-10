@@ -26,6 +26,8 @@ import {
   type UiMindCard,
 } from "./ui-shell.js";
 import {
+  MIND_DIARY_CODEX_CONCIERGE_PLAYBOOK,
+  MIND_DIARY_CODEX_STARTER_PLAYBOOK,
   renderMcpTokenManagementDocument,
   type McpTokenManagementModel,
   type McpTokenUiToken,
@@ -374,6 +376,22 @@ function pilotRoutePage(
       links: [
         { href: "/minds", label: "Open Minds" },
         { href: "/settings/mcp", label: "Open MCP setup" },
+      ],
+      guides: [
+        {
+          id: "mind-diary-help-starter-playbook",
+          title: "Create and prove one starter Mind",
+          description: "Copy this into Codex after MCP setup. You choose Personal or ordinary Mind without constructing wire schemas.",
+          prompt: MIND_DIARY_CODEX_STARTER_PLAYBOOK,
+          copyLabel: "Copy starter playbook",
+        },
+        {
+          id: "mind-diary-help-concierge-playbook",
+          title: "Convert a bounded Markdown set",
+          description: "This assisted path composes existing tools and remains distinct from productized import.",
+          prompt: MIND_DIARY_CODEX_CONCIERGE_PLAYBOOK,
+          copyLabel: "Copy concierge playbook",
+        },
       ],
     };
   }

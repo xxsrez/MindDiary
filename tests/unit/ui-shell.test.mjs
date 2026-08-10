@@ -333,6 +333,11 @@ test("authenticated My Mind card exposes only /me and Personal-safe management",
   assert.match(html, /data-profile-form/);
   assert.match(html, /data-profile-version="3"/);
   assert.match(html, /does not edit Memories or create a content revision/i);
+  assert.match(html, /Create your first useful Memory/u);
+  assert.match(html, /data-copy-code="mind-diary-onboarding-starter-playbook"/u);
+  assert.match(html, /data-copy-code="mind-diary-onboarding-concierge-playbook"/u);
+  assert.match(html, /only UTF-8 Markdown/u);
+  assert.match(html, /Never store a token in a repository/u);
   assert.doesNotMatch(html, /space_handle|hidden handle|data-(?:share|visibility|transfer|delete)/i);
   assert.doesNotMatch(html, /<(?:textarea|iframe)\b|contenteditable|type="file"/i);
   assert.doesNotMatch(html, /<button[^>]*>[^<]*(?:Share|Visibility|Transfer|Delete)/i);

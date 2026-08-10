@@ -5,6 +5,10 @@ import {
   renderMindDiaryAuthenticatedFooter,
   renderMindDiaryAuthenticatedHeader,
 } from "./ui-shell.js";
+import {
+  MIND_DIARY_CODEX_CONCIERGE_PLAYBOOK,
+  MIND_DIARY_CODEX_STARTER_PLAYBOOK,
+} from "./token-management.js";
 
 export const MIND_DIARY_ONBOARDING_ASSETS = Object.freeze({
   shellStyles: MIND_DIARY_UI_ASSETS.shellStyles,
@@ -293,6 +297,21 @@ function renderAuthenticated(
           </form>
         </section>
       </div>
+      <section class="md-setup-card" aria-labelledby="first-result-title" data-starter-mind-guide>
+        <p class="md-eyebrow">About 15 minutes</p>
+        <h2 id="first-result-title">Create your first useful Memory</h2>
+        <p>Connect Codex, then copy this prompt. It selects exactly one Personal or ordinary Mind, creates only UTF-8 Markdown, validates the complete OKF 0.2 bundle, and proves the result with index, search, and fetch.</p>
+        <pre><code id="mind-diary-onboarding-starter-playbook" tabindex="-1" data-code-value>${escapeUntrustedText(MIND_DIARY_CODEX_STARTER_PLAYBOOK)}</code></pre>
+        <button class="md-button md-button--primary" type="button" data-copy-code="mind-diary-onboarding-starter-playbook">Copy starter playbook</button>
+        <p class="md-form__status" role="status" aria-live="polite" data-code-copy-status></p>
+        <details>
+          <summary>Have existing Markdown?</summary>
+          <p>Use assisted conversion without treating it as a product import. ZIP, assets, crawling, legacy migration, and cross-Mind merge remain unavailable.</p>
+          <pre><code id="mind-diary-onboarding-concierge-playbook" tabindex="-1" data-code-value>${escapeUntrustedText(MIND_DIARY_CODEX_CONCIERGE_PLAYBOOK)}</code></pre>
+          <button class="md-button md-button--secondary" type="button" data-copy-code="mind-diary-onboarding-concierge-playbook">Copy concierge playbook</button>
+        </details>
+        <p><a href="/settings/mcp">Open MCP setup</a> for token and endpoint instructions. Never store a token in a repository or paste the full canonical corpus into a prompt.</p>
+      </section>
     </main>
     ${renderMindDiaryAuthenticatedFooter("my-mind")}
   </div>`;

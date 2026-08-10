@@ -168,6 +168,9 @@ test("product root and MCP setup render live control projections and fixed same-
   assert.match(tokenHtml, /Preview, restore and export with Codex/);
   assert.match(tokenHtml, /data-copy-code="mind-diary-safe-write-playbook"/);
   assert.match(tokenHtml, /data-copy-code="mind-diary-restore-export-playbook"/);
+  assert.match(tokenHtml, /data-copy-code="mind-diary-starter-playbook"/);
+  assert.match(tokenHtml, /data-copy-code="mind-diary-concierge-playbook"/);
+  assert.match(tokenHtml, /Start one valid Mind with Codex/);
   assert.match(tokenHtml, /A restore is an ordinary confirmed changeset that creates a new HEAD/);
   assert.match(tokenHtml, /Download URLs and credentials are bearer material/);
   assert.doesNotMatch(tokenHtml, /&lt;your-mind-diary-site&gt;/);
@@ -393,6 +396,10 @@ test("pilot Product Site route map keeps one UAT shell, exact active navigation,
   assert.match(helpHtml, /no production SLA or guaranteed recovery/u);
   assert.match(helpHtml, /Keep your own export before risky work/u);
   assert.match(helpHtml, /Report only the symptom, UTC time, and safe request ID/u);
+  assert.match(helpHtml, /data-copy-ready-guide="mind-diary-help-starter-playbook"/u);
+  assert.match(helpHtml, /data-copy-code="mind-diary-help-concierge-playbook"/u);
+  assert.match(helpHtml, /exactly one target/u);
+  assert.match(helpHtml, /concierge work, not a product import/u);
 
   for (const path of ["/api", "/mcp", "/settings", "/settings/unknown", "/minds/extra"]) {
     assert.equal(await handler(new Request(`${origin}${path}`)), null, path);

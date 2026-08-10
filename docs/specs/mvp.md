@@ -537,6 +537,41 @@ portable container и AWS/AgentCore не используются без нов�
 решения. OAuth discovery/PKCE остаётся отдельной gate polished public plugin и
 не блокирует personal-token MVP.
 
+## Starter Mind и первый полезный результат
+
+Account bootstrap и создание ordinary Mind продолжают атомарно создавать
+минимальную valid OKF 0.2 revision с `index.md` и `log.md`. Accepted starter
+поверх неё — один bounded changeset из трёх UTF-8 Markdown files:
+`concepts/first-memory.md`, обновлённого `index.md` и обновлённого `log.md`.
+Strict checked-in template является reproducible fixture, а не автоматически
+записываемым private content и не import format.
+
+Copy-ready Codex playbook доступен после onboarding на `/me`, на `/help` и в
+`/settings/mcp`. Пользователь выбирает ровно один Personal либо ordinary Mind,
+даёт один конкретный факт, решение или заметку, видит bounded path-level
+preview и подтверждает обычный `commit_changeset` против fresh exact HEAD.
+Codex сам использует published tool schemas; пользователю не нужно собирать
+wire JSON. После commit flow обязан выполнить `validate_mind`, fetch
+`index.md`, lexical `search` по отличительной фразе и exact `fetch` найденной
+Memory. Если index ещё не ready, canonical fetch остаётся доступным, а search
+не подменяется stale данными.
+
+Assisted conversion существующего Markdown остаётся concierge workflow:
+явно выбираются один target Mind и bounded set UTF-8 Markdown sources, затем
+используются те же preview/CAS/validation/search/fetch операции. Этот путь не
+добавляет ZIP/import/upload/crawl API, assets, legacy migration либо cross-Mind
+merge. Canonical corpus не помещается в prompt целиком; клиент fetch-ит только
+нужные exact-revision files. Token, Sites credential, email, private query и
+download URL не попадают в prompt, log или evidence.
+
+Privacy-safe telemetry пишет `setup_completion` и один
+`time_to_first_useful_search_ms` на первый непустой search result в пределах
+runtime observation. Duration вычисляется от server-owned account creation
+time; principal identifier используется только для in-runtime deduplication и
+не записывается в event. Query, result path, snippet и content отсутствуют в
+closed telemetry schema. Restart может начать новое observation window; это
+pilot measurement, а не durable user analytics state.
+
 ## Не входит в первый прототип
 
 - anonymous access и anonymous KnowledgeSite publication;

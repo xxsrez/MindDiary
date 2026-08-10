@@ -4,7 +4,9 @@ import test from "node:test";
 
 import {
   MIND_DIARY_CODEX_CONFIG,
+  MIND_DIARY_CODEX_CONCIERGE_PLAYBOOK,
   MIND_DIARY_CODEX_SAFE_ENVIRONMENT_SETUP,
+  MIND_DIARY_CODEX_STARTER_PLAYBOOK,
   MIND_DIARY_CODEX_SAFE_WRITE_PLAYBOOK,
   MIND_DIARY_CODEX_RESTORE_EXPORT_PLAYBOOK,
   MIND_DIARY_CODEX_SITES_AUTHORIZATION_ENVIRONMENT_VARIABLE,
@@ -177,6 +179,21 @@ test("Codex recovery playbooks require preview, confirmation, fresh CAS, immutab
   assert.match(html, /Index unavailable[\s\S]*canonical browse\/fetch/u);
   assert.match(html, /Export expired[\s\S]*fresh authorized status\/grant/u);
   assert.match(html, /Access revoked[\s\S]*Fail closed/u);
+  assert.doesNotMatch(html, /mdp_v1_[A-Za-z0-9_-]{20,}/u);
+});
+
+test("starter and concierge playbooks render as secret-free copy-ready guidance", () => {
+  const html = renderMcpTokenManagement(model({ kind: "empty" }));
+
+  assert.match(MIND_DIARY_CODEX_STARTER_PLAYBOOK, /choose exactly one target/u);
+  assert.match(MIND_DIARY_CODEX_STARTER_PLAYBOOK, /validate_mind/u);
+  assert.match(MIND_DIARY_CODEX_STARTER_PLAYBOOK, /search for a distinctive phrase/u);
+  assert.match(MIND_DIARY_CODEX_CONCIERGE_PLAYBOOK, /not a product import/u);
+  assert.match(MIND_DIARY_CODEX_CONCIERGE_PLAYBOOK, /ZIP\/import\/upload\/crawl API/u);
+  assert.match(html, /Start one valid Mind with Codex/u);
+  assert.match(html, /data-copy-code="mind-diary-starter-playbook"/u);
+  assert.match(html, /data-copy-code="mind-diary-concierge-playbook"/u);
+  assert.match(html, /one selected Mind/u);
   assert.doesNotMatch(html, /mdp_v1_[A-Za-z0-9_-]{20,}/u);
 });
 

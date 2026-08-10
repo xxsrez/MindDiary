@@ -31,6 +31,34 @@ export const MIND_DIARY_CODEX_RESTORE_EXPORT_PLAYBOOK = `Restore and export one 
 4. Start export with the exact new revision selector. Poll get_export_status until succeeded or a stable failure.
 5. Download before expiry without logging or repeating the URL. Verify the returned byte size and SHA-256, then validate the complete OKF bundle.
 For export_expired request a fresh authorized status/grant. Revoked access or a private switch must fail closed; do not work around them.` as const;
+export const MIND_DIARY_STARTER_OKF_TEMPLATE = Object.freeze([
+  Object.freeze({
+    path: "concepts/first-memory.md",
+    text: `---\ntype: Reference\ntitle: First useful Memory\ndescription: One concrete fact or decision worth finding again.\nstatus: draft\n---\n\n# First useful Memory\n\nReplace this sentence with one concrete fact, decision, or reusable note.\n`,
+  }),
+  Object.freeze({
+    path: "index.md",
+    text: `---\nokf_version: "0.2"\n---\n\n# Starter Mind\n\n- [First useful Memory](concepts/first-memory.md) - One concrete fact or decision worth finding again.\n`,
+  }),
+  Object.freeze({
+    path: "log.md",
+    text: `# Log\n\n## 2026-08-10\n\n- **Create**: Added [First useful Memory](concepts/first-memory.md).\n`,
+  }),
+] as const);
+export const MIND_DIARY_CODEX_STARTER_PLAYBOOK = `Help me reach the first useful result in Mind Diary through the connected MCP tools.
+1. Call list_minds and ask me to choose exactly one target: /me or one ordinary Mind I can access. Do not combine Minds.
+2. Resolve that Mind and its current HEAD. Browse and fetch only index.md, log.md, and the files needed for this starter; do not place the whole canonical corpus in the prompt.
+3. Ask me for one concrete fact, decision, or reusable note and a short title. Prepare one UTF-8 Markdown Memory at concepts/<safe-slug>.md with OKF 0.2 frontmatter: type Reference, title, description, and status draft. Memory is the user-facing umbrella term, not a fixed OKF entity type.
+4. Prepare the matching index.md link with replace_index and one dated log.md entry with add_log_entry as the same bounded changeset. Show the selected Mind, exact HEAD, paths, and operations. Do not call commit_changeset yet.
+5. After my explicit confirmation, re-read HEAD. If it changed, stop and rebuild the preview. Otherwise commit once with that exact expected_revision and a fresh idempotency key.
+6. Run validate_mind on the new revision, fetch index.md, search for a distinctive phrase from the new Memory, and fetch the returned entry. Report the exact revision and whether all four checks passed.
+Use the tool schemas yourself; do not ask me to construct wire JSON. Never request or repeat a token, authorization header, Site credential, private email, or download URL. If search indexing is not ready, say so, verify with canonical fetch, and retry search only after the index is ready.` as const;
+export const MIND_DIARY_CODEX_CONCIERGE_PLAYBOOK = `Assist me with a bounded conversion of existing Markdown into one Mind. This is concierge work, not a product import.
+1. Ask me to choose exactly one accessible target Mind and a small explicit set of source Markdown files. Accept UTF-8 Markdown only.
+2. Do not create or imply a ZIP/import/upload/crawl API, asset support, legacy migration, or cross-Mind merge. Never put the target Mind's whole canonical corpus into the prompt.
+3. Resolve current HEAD and fetch only the target index/log and paths that may change. Map the selected source into ordinary create/replace Markdown operations, preserving unknown OKF fields when present.
+4. Show a bounded path-level preview and ask for explicit confirmation. After confirmation, re-read HEAD and commit with exact CAS plus a fresh idempotency key; stop on conflict.
+5. Validate the complete resulting bundle, then search and fetch one converted Memory as evidence. Keep tokens, credentials, email, private queries, content not selected for conversion, and download URLs out of the report.` as const;
 export type MindDiaryMcpClientProfile = "modern" | "compatibility";
 
 function canonicalSiteOrigin(value: string): string {
@@ -366,6 +394,30 @@ function renderRecoveryPlaybooks(): string {
   </section>`;
 }
 
+function renderStarterPlaybooks(): string {
+  return `<section class="md-setup-card" aria-labelledby="starter-playbooks-heading" data-starter-mind-guide>
+    <div>
+      <p class="md-eyebrow">First useful result</p>
+      <h2 id="starter-playbooks-heading">Start one valid Mind with Codex</h2>
+      <p>The strict starter is three UTF-8 Markdown files: one Memory, <code>index.md</code>, and <code>log.md</code>. Choose Personal or ordinary Mind; every operation stays in that one selected Mind.</p>
+    </div>
+    <ol class="md-setup-steps">
+      <li>
+        <h3>Create and prove the starter</h3>
+        <pre><code id="mind-diary-starter-playbook" tabindex="-1" data-code-value>${escapeUntrustedText(MIND_DIARY_CODEX_STARTER_PLAYBOOK)}</code></pre>
+        <button class="md-button md-button--secondary" type="button" data-copy-code="mind-diary-starter-playbook">Copy starter playbook</button>
+      </li>
+      <li>
+        <h3>Convert a bounded existing Markdown set</h3>
+        <pre><code id="mind-diary-concierge-playbook" tabindex="-1" data-code-value>${escapeUntrustedText(MIND_DIARY_CODEX_CONCIERGE_PLAYBOOK)}</code></pre>
+        <button class="md-button md-button--secondary" type="button" data-copy-code="mind-diary-concierge-playbook">Copy concierge playbook</button>
+      </li>
+    </ol>
+    <p class="md-form__status" role="status" aria-live="polite" data-code-copy-status></p>
+    <p class="md-caveat">This composes existing MCP read, write, validate, search, and fetch tools. It does not add productized import, non-Markdown files, or server-paid AI.</p>
+  </section>`;
+}
+
 function renderSecretDialog(): string {
   return `<dialog class="md-dialog md-secret-dialog" id="mcp-token-secret-dialog" aria-labelledby="token-secret-title" aria-describedby="token-secret-description" data-secret-dialog>
     <div class="md-form">
@@ -439,6 +491,7 @@ export function renderMcpTokenManagement(
         ${renderTokenCollection(model.collection)}
         ${renderCreateForm()}
         ${renderCodexSetup(model.siteOrigin)}
+        ${renderStarterPlaybooks()}
         ${renderRecoveryPlaybooks()}
       </div>
     </main>

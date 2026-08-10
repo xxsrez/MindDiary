@@ -9,6 +9,7 @@ import {
   MCP_RETIRED_SITES_ENDPOINT,
   MCP_TARGET_PROTOCOL,
 } from "../../packages/adapter-mcp/dist/index.js";
+import { MIND_DIARY_STARTER_OKF_TEMPLATE } from "../../packages/adapter-web/dist/index.js";
 import { createProductSiteRuntime } from "../../packages/composition-root/dist/index.js";
 
 const ORIGIN = "https://mind-diary.example";
@@ -271,6 +272,221 @@ async function modernMcp(runtime, secret, body) {
   }));
 }
 
+async function modernTool(runtime, secret, id, name, args) {
+  const response = await modernMcp(runtime, secret, {
+    jsonrpc: "2.0",
+    id,
+    method: "tools/call",
+    params: {
+      name,
+      arguments: args,
+      _meta: {
+        "io.modelcontextprotocol/protocolVersion": MCP_TARGET_PROTOCOL,
+        "io.modelcontextprotocol/clientInfo": {
+          name: "mind-diary-starter-e2e",
+          version: "0.0.0",
+        },
+        "io.modelcontextprotocol/clientCapabilities": {},
+      },
+    },
+  });
+  assert.equal(response.status, 200, name);
+  const body = await response.json();
+  assert.equal(body.result?.isError, false, `${name}: ${JSON.stringify(body)}`);
+  assert.equal(body.result?.structuredContent?.ok, true, name);
+  return body.result.structuredContent.data;
+}
+
+test("empty account reaches a strict starter commit and first useful search/fetch with safe timing", async () => {
+  const database = new FakeD1Database();
+  const bucket = new FakeR2Bucket();
+  const scheduled = [];
+  const telemetryLines = [];
+  const runtime = await createProductSiteRuntime({
+    database,
+    bucket,
+    publicOrigin: ORIGIN,
+    identity: {
+      readVerifiedIdentity() {
+        return {
+          kind: "authenticated",
+          verifiedEmail: "starter.e2e@example.com",
+          verifiedFullName: "Starter E2E",
+        };
+      },
+    },
+    tokenVerifierKey: key(11),
+    locatorKey: key(51),
+    exportDownloadVerifierKey: key(91),
+    csrfKey: key(131),
+    observabilityWriter: { write(line) { telemetryLines.push(line); } },
+    schedule(work) { scheduled.push(work); },
+  });
+
+  const registration = await responseFrom(runtime, new Request(`${ORIGIN}/`));
+  assert.equal(registration.status, 200);
+  const registrationCsrf = csrfFromHtml(await registration.text());
+  const bootstrapped = await responseFrom(runtime, new Request(`${ORIGIN}/api/v1/account`, {
+    method: "POST",
+    headers: {
+      origin: ORIGIN,
+      "content-type": "application/json",
+      "x-csrf-token": registrationCsrf,
+      "idempotency-key": "bootstrap:starter-e2e",
+    },
+    body: JSON.stringify({ action: "create_isolated_account" }),
+  }));
+  assert.equal(bootstrapped.status, 200);
+
+  const settings = await responseFrom(runtime, new Request(`${ORIGIN}/settings/mcp`));
+  assert.equal(settings.status, 200);
+  const settingsCsrf = csrfFromHtml(await settings.text());
+  const issued = await responseFrom(runtime, new Request(`${ORIGIN}/api/v1/mcp-tokens`, {
+    method: "POST",
+    headers: {
+      origin: ORIGIN,
+      "content-type": "application/json",
+      "x-csrf-token": settingsCsrf,
+      "idempotency-key": "token:starter-e2e",
+    },
+    body: JSON.stringify({
+      name: "Starter E2E",
+      scopes: ["content:write"],
+    }),
+  }));
+  assert.equal(issued.status, 200);
+  const secret = (await issued.json()).data.secret;
+
+  const minds = await modernTool(runtime, secret, "starter-list", "list_minds", {});
+  const personal = minds.minds.find(({ route }) => route === "/me");
+  assert.ok(personal);
+  const initialRevisionId = personal.head.revision_id;
+  const operations = MIND_DIARY_STARTER_OKF_TEMPLATE.map((file) => {
+    if (file.path === "index.md") {
+      return { type: "replace_index", path: file.path, text: file.text };
+    }
+    if (file.path === "log.md") {
+      return {
+        type: "add_log_entry",
+        path: file.path,
+        category: "Create",
+        message: "Added [First useful Memory](concepts/first-memory.md).",
+      };
+    }
+    return { type: "create_file", path: file.path, text: file.text };
+  });
+  const committed = await modernTool(
+    runtime,
+    secret,
+    "starter-commit",
+    "commit_changeset",
+    {
+      mind: "/me",
+      expected_revision: initialRevisionId,
+      idempotency_key: "commit:starter-e2e",
+      summary: "Create strict starter Mind",
+      operations,
+    },
+  );
+  assert.equal(committed.previous_revision_id, initialRevisionId);
+  const starterRevisionId = committed.revision.revision_id;
+  const indexWork = scheduled.findLast((work) => work.kind === "revision_index");
+  assert.ok(indexWork);
+  await runtime.dispatchBackground({ kind: "revision_index", jobId: indexWork.id });
+
+  const validation = await modernTool(
+    runtime,
+    secret,
+    "starter-validate",
+    "validate_mind",
+    { mind: "/me", revision_selector: { kind: "revision", revision_id: starterRevisionId } },
+  );
+  assert.equal(validation.valid, true, JSON.stringify(validation));
+  assert.deepEqual(validation.conformance_errors, []);
+  assert.deepEqual(validation.quality_warnings, []);
+
+  const browsed = await modernTool(
+    runtime,
+    secret,
+    "starter-browse-index",
+    "browse_entries",
+    { mind: "/me", revision_selector: { kind: "revision", revision_id: starterRevisionId } },
+  );
+  const indexEntry = browsed.entries.find(({ path }) => path === "index.md");
+  assert.ok(indexEntry);
+  const fetchedIndex = await modernTool(
+    runtime,
+    secret,
+    "starter-fetch-index",
+    "fetch",
+    { id: indexEntry.entry_id },
+  );
+  assert.match(fetchedIndex.text, /First useful Memory/u);
+
+  const usefulSearch = await modernTool(
+    runtime,
+    secret,
+    "starter-search",
+    "search",
+    { mind: "/me", query: "concrete reusable note" },
+  );
+  assert.equal(usefulSearch.index_status, "ready");
+  assert.equal(usefulSearch.results.length, 1);
+  assert.equal(usefulSearch.results[0].entry.path, "concepts/first-memory.md");
+  const fetchedMemory = await modernTool(
+    runtime,
+    secret,
+    "starter-fetch-memory",
+    "fetch",
+    { id: usefulSearch.results[0].entry.entry_id },
+  );
+  assert.match(fetchedMemory.text, /one concrete fact, decision, or reusable note/u);
+
+  await modernTool(
+    runtime,
+    secret,
+    "starter-search-again",
+    "search",
+    { mind: "/me", query: "concrete reusable note" },
+  );
+  const telemetry = telemetryLines.map((line) => JSON.parse(line));
+  assert.equal(telemetry.filter(({ metric }) => metric === "setup_completion").length, 1);
+  const firstUseful = telemetry.filter(
+    ({ metric }) => metric === "time_to_first_useful_search_ms",
+  );
+  assert.equal(firstUseful.length, 1);
+  assert.equal(firstUseful[0].unit, "milliseconds");
+  assert.equal(firstUseful[0].operation, "search");
+  assert.equal(firstUseful[0].outcome, "resolved");
+  assert.equal(Number.isSafeInteger(firstUseful[0].value), true);
+  assert.ok(firstUseful[0].value >= 0);
+  assert.deepEqual(Object.keys(firstUseful[0]).sort(), [
+    "cohort",
+    "event",
+    "jobId",
+    "kind",
+    "metric",
+    "occurredAtUtc",
+    "operation",
+    "outcome",
+    "requestId",
+    "schema",
+    "surface",
+    "unit",
+    "value",
+  ]);
+  const serializedTelemetry = JSON.stringify(telemetry);
+  for (const forbidden of [
+    "starter.e2e@example.com",
+    secret,
+    "concrete reusable note",
+    "concepts/first-memory.md",
+    "First useful Memory",
+  ]) {
+    assert.equal(serializedTelemetry.includes(forbidden), false, forbidden);
+  }
+});
+
 test("durable product runtime carries a Sites account token through Codex MCP and revokes it", async () => {
   const database = new FakeD1Database();
   const bucket = new FakeR2Bucket();
@@ -337,6 +553,8 @@ test("durable product runtime carries a Sites account token through Codex MCP an
   assert.match(settingsHtml, /Preview, restore and export with Codex/u);
   assert.match(settingsHtml, /data-copy-code="mind-diary-safe-write-playbook"/u);
   assert.match(settingsHtml, /data-copy-code="mind-diary-restore-export-playbook"/u);
+  assert.match(settingsHtml, /data-copy-code="mind-diary-starter-playbook"/u);
+  assert.match(settingsHtml, /data-copy-code="mind-diary-concierge-playbook"/u);
   assert.match(settingsHtml, /Revoked access[\s\S]*Fail closed/u);
   assert.doesNotMatch(settingsHtml, /&lt;your-mind-diary-site&gt;/u);
   const registeredCsrf = csrfFromHtml(settingsHtml);

@@ -306,6 +306,13 @@ export interface MindDiaryRoutePageModel {
   readonly description: string;
   readonly state: MindDiaryRoutePageState;
   readonly links?: readonly Readonly<{ readonly href: string; readonly label: string }>[];
+  readonly guides?: readonly Readonly<{
+    readonly id: string;
+    readonly title: string;
+    readonly description: string;
+    readonly prompt: string;
+    readonly copyLabel: string;
+  }>[];
 }
 
 function safeProductRoute(value: string): string {
@@ -330,6 +337,23 @@ function renderRoutePageState(state: MindDiaryRoutePageState): string {
   }
 }
 
+function renderRoutePageGuides(model: MindDiaryRoutePageModel): string {
+  if (!model.guides?.length) return "";
+  const guides = model.guides.map((guide) => {
+    const id = /^[a-z][a-z0-9-]{0,63}$/u.test(guide.id)
+      ? guide.id
+      : "unavailable-guide";
+    return `<section class="md-setup-card" aria-labelledby="${id}-title" data-copy-ready-guide="${id}">
+      <h2 id="${id}-title">${escapeUntrustedText(guide.title)}</h2>
+      <p>${escapeUntrustedText(guide.description)}</p>
+      <pre><code id="${id}" tabindex="-1" data-code-value>${escapeUntrustedText(guide.prompt)}</code></pre>
+      <button class="md-button md-button--secondary" type="button" data-copy-code="${id}">${escapeUntrustedText(guide.copyLabel)}</button>
+      <p class="md-form__status" role="status" aria-live="polite" data-code-copy-status></p>
+    </section>`;
+  }).join("");
+  return `<div class="md-token-layout" data-route-guides>${guides}</div>`;
+}
+
 export function renderMindDiaryRoutePage(model: MindDiaryRoutePageModel): string {
   const links = model.links?.length
     ? `<nav class="md-route-links" aria-label="Page actions">${model.links.map((link) => `<a class="md-button md-button--secondary" href="${safeProductRoute(link.href)}">${escapeUntrustedText(link.label)}</a>`).join("")}</nav>`
@@ -340,6 +364,7 @@ export function renderMindDiaryRoutePage(model: MindDiaryRoutePageModel): string
     <main id="main-content" class="md-main" tabindex="-1">
       <div class="md-page-heading"><div><p class="md-eyebrow">${escapeUntrustedText(model.eyebrow)}</p><h1>${escapeUntrustedText(model.title)}</h1><p>${escapeUntrustedText(model.description)}</p></div></div>
       ${renderRoutePageState(model.state)}
+      ${renderRoutePageGuides(model)}
       ${links}
     </main>
     ${renderMindDiaryAuthenticatedFooter(model.activeNavigation)}

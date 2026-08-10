@@ -479,6 +479,46 @@ export async function createProductSiteRuntime(
   const discovery = new MindDiscoveryService({ store: metadata, host });
   const browse = new MindBrowseService({ store: metadata, objects, host, locators });
   const search = new MindSearchService({ store: metadata, index: readyIndex, host, locators });
+  const principalsWithObservedUsefulSearch = new Set<string>();
+  const observedSearch = {
+    async searchEntries(
+      actor: Parameters<MindSearchService["searchEntries"]>[0],
+      query: Parameters<MindSearchService["searchEntries"]>[1],
+    ) {
+      const result = await search.searchEntries(actor, query);
+      if (
+        actor.kind === "registered_principal" &&
+        result.results.length > 0 &&
+        !principalsWithObservedUsefulSearch.has(actor.principalId)
+      ) {
+        principalsWithObservedUsefulSearch.add(actor.principalId);
+        try {
+          const account = await metadata.readAccount(actor.principalId);
+          const startedAt = Date.parse(account?.principal.createdAt ?? "");
+          const completedAt = Date.parse(actor.occurredAtUtc);
+          const durationMs = completedAt - startedAt;
+          if (
+            account === null ||
+            !Number.isSafeInteger(durationMs) ||
+            durationMs < 0
+          ) {
+            principalsWithObservedUsefulSearch.delete(actor.principalId);
+          } else {
+            contentObservability.recordPilot({
+              actor,
+              metric: "time_to_first_useful_search_ms",
+              operation: "search",
+              outcome: "resolved",
+              value: durationMs,
+            });
+          }
+        } catch {
+          principalsWithObservedUsefulSearch.delete(actor.principalId);
+        }
+      }
+      return result;
+    },
+  };
   const history = new MindHistoryService({ store: metadata, host });
   const validation = new MindValidationService({ store: metadata, objects, host });
   const commits = new ChangesetCommitService({
@@ -504,7 +544,7 @@ export async function createProductSiteRuntime(
   const mcpApplication = new ProductMcpContentApplication({
     discovery,
     browse,
-    search,
+    search: observedSearch,
     history,
     validation,
     commits: {
