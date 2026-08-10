@@ -46,7 +46,7 @@ test("product composition routes the Sites-safe modern and versioned Codex MCP e
   assert.match(tokenUi, /\/api\/mcp\/2025-11-25/u);
 });
 
-test("product Worker owns the operable onboarding, shell, and MCP-token UI assets", async () => {
+test("product Worker owns the operable UI and scopes the one-time Bearer to MCP self-check", async () => {
   const [http, assets, composition] = await Promise.all([
     readFile(resolve(root, "packages/adapter-web/src/product-http.ts"), "utf8"),
     readFile(resolve(root, "packages/adapter-web/src/product-ui-assets.ts"), "utf8"),
@@ -58,7 +58,14 @@ test("product Worker owns the operable onboarding, shell, and MCP-token UI asset
   assert.match(http, /\/settings\/mcp/);
   assert.match(assets, /\/api\/v1\/account/);
   assert.match(assets, /\/api\/v1\/mcp-tokens/);
-  assert.doesNotMatch(assets, /Authorization|Bearer/);
+  assert.equal((assets.match(/authorization:"Bearer "\+token/gu) ?? []).length, 1);
+  assert.doesNotMatch(assets, /authorization:"Bearer mdp_v1_/u);
+  assert.doesNotMatch(
+    assets,
+    /console\.|localStorage|sessionStorage|sendBeacon|analytics\.|dataLayer/iu,
+  );
+  assert.match(assets, /diagnosticAbort\?\.abort\(\)/u);
+  assert.match(assets, /token=""/u);
   assert.match(composition, /revokeMcpToken\(actor as never, input\.token_id as never\)/);
 });
 
