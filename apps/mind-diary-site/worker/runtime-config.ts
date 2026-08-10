@@ -19,14 +19,47 @@ function decodeKey(value: string | undefined, name: string): Uint8Array {
   return bytes;
 }
 
-export function readRuntimeConfig(request: Request, env: ProductEnv) {
-  const requestOrigin = new URL(request.url).origin;
-  const publicOrigin = env.MIND_DIARY_PUBLIC_ORIGIN ?? requestOrigin;
-  const parsed = new URL(publicOrigin);
-  if (parsed.protocol !== "https:" || parsed.origin !== publicOrigin || parsed.pathname !== "/") {
+function isCanonicalOrigin(value: string, protocol: "http:" | "https:"): boolean {
+  const parsed = new URL(value);
+  return parsed.protocol === protocol && parsed.origin === value && parsed.pathname === "/";
+}
+
+function isLoopbackHostname(hostname: string): boolean {
+  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]";
+}
+
+export function resolveRuntimePublicOrigin(
+  requestOrigin: string,
+  configuredOrigin: string | undefined,
+): string {
+  if (isCanonicalOrigin(requestOrigin, "https:")) {
+    const publicOrigin = configuredOrigin ?? requestOrigin;
+    if (!isCanonicalOrigin(publicOrigin, "https:")) {
+      throw new Error("MIND_DIARY_PUBLIC_ORIGIN must be a canonical HTTPS origin");
+    }
+    if (requestOrigin !== publicOrigin) throw new Error("request origin does not match configured public origin");
+    return publicOrigin;
+  }
+
+  const request = new URL(requestOrigin);
+  if (!isCanonicalOrigin(requestOrigin, "http:") || !isLoopbackHostname(request.hostname)) {
     throw new Error("MIND_DIARY_PUBLIC_ORIGIN must be a canonical HTTPS origin");
   }
-  if (requestOrigin !== publicOrigin) throw new Error("request origin does not match configured public origin");
+  if (configuredOrigin !== undefined) {
+    const configured = new URL(configuredOrigin);
+    const localPlaceholder = isCanonicalOrigin(configuredOrigin, "https:") &&
+      isLoopbackHostname(configured.hostname) &&
+      configured.hostname === request.hostname;
+    if (configuredOrigin !== requestOrigin && !localPlaceholder) {
+      throw new Error("request origin does not match configured public origin");
+    }
+  }
+  return requestOrigin;
+}
+
+export function readRuntimeConfig(request: Request, env: ProductEnv) {
+  const requestOrigin = new URL(request.url).origin;
+  const publicOrigin = resolveRuntimePublicOrigin(requestOrigin, env.MIND_DIARY_PUBLIC_ORIGIN);
   return Object.freeze({
     publicOrigin,
     tokenVerifierKey: decodeKey(env.MIND_DIARY_TOKEN_VERIFIER_KEY, "MIND_DIARY_TOKEN_VERIFIER_KEY"),

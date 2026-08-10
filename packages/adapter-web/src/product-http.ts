@@ -196,14 +196,16 @@ const PRODUCT_UI_PILOT_SHELL_CSS = `
 
 function canonicalOrigin(value: string): string {
   const parsed = new URL(value);
+  const loopbackHttp = parsed.protocol === "http:" &&
+    (parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1" || parsed.hostname === "[::1]");
   if (
-    parsed.protocol !== "https:" ||
+    (parsed.protocol !== "https:" && !loopbackHttp) ||
     parsed.origin !== value ||
     parsed.pathname !== "/" ||
     parsed.search !== "" ||
     parsed.hash !== ""
   ) {
-    throw new TypeError("applicationOrigin must be one canonical HTTPS origin");
+    throw new TypeError("applicationOrigin must be one canonical HTTPS or loopback HTTP origin");
   }
   return value;
 }

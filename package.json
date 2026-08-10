@@ -12,6 +12,7 @@
     "packages/*"
   ],
   "scripts": {
+    "dev": "node scripts/run-dev.mjs",
     "clean": "tsc -b --clean && node scripts/clean-output.mjs",
     "build": "tsc -b",
     "test:unit": "npm run build --silent && node --test tests/unit/*.test.mjs",

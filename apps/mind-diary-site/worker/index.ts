@@ -16,8 +16,10 @@ function decodeFullName(headers: Headers): string | undefined {
 
 const worker = {
   async fetch(request: Request, env: ProductEnv, ctx: ExecutionContext): Promise<Response> {
+    let failureStage = "runtime-config";
     try {
       const config = readRuntimeConfig(request, env);
+      failureStage = "composition";
       let runtimePromise: ReturnType<typeof createProductSiteRuntime>;
       runtimePromise = createProductSiteRuntime({
         database: env.DB,
@@ -48,9 +50,15 @@ const worker = {
         },
       });
       const runtime = await runtimePromise;
+      failureStage = "product-fetch";
       const response = await runtime.fetch(request);
+      failureStage = "vinext-fetch";
       return response ?? handler.fetch(request, env, ctx);
     } catch {
+      console.error(JSON.stringify({
+        event: "mind-diary.runtime-unavailable",
+        stage: failureStage,
+      }));
       return Response.json(
         { ok: false, error: { code: "runtime_unavailable", message: "Mind Diary is temporarily unavailable.", retryable: true } },
         { status: 503, headers: { "cache-control": "no-store", "x-content-type-options": "nosniff" } },

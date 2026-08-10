@@ -151,7 +151,10 @@ tool calls после redeploy.
 - Dev: project-profile launcher поднимает `apps/mind-diary-site` как
   Web/API/MCP Worker на localhost через Vinext/Cloudflare-compatible runtime с
   локальными D1/R2 bindings. In-memory adapters остаются deterministic contract
-  fixtures и не заменяют этот dev runtime.
+  fixtures и не заменяют этот dev runtime. Exact loopback origin из
+  `dev-ready/v1` может использовать HTTP только внутри этого local runtime;
+  hosted UAT/production origin остаётся canonical HTTPS, а Origin/CSRF checks в
+  обоих случаях сравнивают exact origin без wildcard или forwarded-host trust.
 - Sites MVP UAT: D1 metadata/search/audit и R2 canonical
   objects/export. Bindings и сохранение account/Personal Mind после redeploy
   проверены live; quota, recovery и большой export требуют отдельного

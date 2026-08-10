@@ -11,6 +11,22 @@ import {
 } from "../../packages/adapter-mcp/dist/index.js";
 
 const origin = "https://mind-diary.example";
+
+test("product web origin accepts exact loopback dev without weakening hosted HTTPS", async () => {
+  const local = createProductWebHttpHandler({
+    applicationOrigin: "http://localhost:3000",
+    resolveIdentity: () => ({ kind: "denied" }),
+    csrf: { issue: () => "unused", verify: () => false },
+    control: { execute: () => { throw new Error("must not execute"); } },
+  });
+  assert.equal((await local(new Request("http://localhost:3000/"))).status, 401);
+  assert.throws(() => createProductWebHttpHandler({
+    applicationOrigin: "http://mind-diary.example",
+    resolveIdentity: () => ({ kind: "denied" }),
+    csrf: { issue: () => "unused", verify: () => false },
+    control: { execute: () => { throw new Error("must not execute"); } },
+  }), /canonical HTTPS or loopback HTTP origin/u);
+});
 const registeredActor = Object.freeze({
   kind: "registered_principal",
   principalId: "principal_one",

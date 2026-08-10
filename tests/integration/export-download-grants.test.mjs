@@ -539,6 +539,10 @@ test("download grant configuration rejects unbounded TTL and unsafe URL bases", 
       /lifetime must be positive and bounded/u,
     );
   }
+  assert.doesNotThrow(() => new ExportJobApplicationService({
+    ...dependencies,
+    downloadUrlBase: "http://localhost:3000/api/v1/exports",
+  }));
   for (const downloadUrlBase of [
     "http://downloads.invalid/grants",
     "https://user:secret@downloads.invalid/grants",
@@ -546,7 +550,7 @@ test("download grant configuration rejects unbounded TTL and unsafe URL bases", 
   ]) {
     assert.throws(
       () => new ExportJobApplicationService({ ...dependencies, downloadUrlBase }),
-      /safe absolute HTTPS URL|absolute HTTPS URL/u,
+      /safe absolute HTTPS or loopback HTTP URL|absolute HTTPS URL/u,
     );
   }
 });
