@@ -180,6 +180,152 @@ test("product root and MCP setup render live control projections and fixed same-
   assert.deepEqual(calls, ["get_session", "list_minds", "get_session", "list_mcp_tokens"]);
 });
 
+test("account settings wires profile CAS, fresh deletion impact, same-key retry client, and privacy-safe recovery", async () => {
+  const calls = [];
+  const deletionImpact = {
+    impactId: "impact_account_product_1",
+    expiresAt: "2099-08-10T20:00:00.000Z",
+    personalMind: { route: "/me", name: "Product Owner" },
+    ownedMinds: [{ route: "/research-notes", name: "Research Notes" }],
+    foreignMembershipCount: 2,
+    pendingInvitationCount: 1,
+    activeMcpTokenCount: 3,
+    irreversible: true,
+    recoveryAvailable: false,
+    forensicReceiptRetained: false,
+    confirmation: "delete-account",
+    verifiedEmail: "must-not-render@example.com",
+    privateContent: "PRIVATE ACCOUNT CONTENT MUST NOT RENDER",
+  };
+  const handler = createProductWebHttpHandler({
+    applicationOrigin: origin,
+    resolveIdentity: () => ({ kind: "authenticated", actor: registeredActor }),
+    csrf: { issue: () => "csrf-account", verify: (_actor, token) => token === "csrf-account" },
+    control: { execute(request) {
+      calls.push(request);
+      if (request.operation === "get_session") return sessionProjection;
+      if (request.operation === "get_account_deletion_impact") return deletionImpact;
+      if (request.operation === "rename_account") return { replayed: false };
+      if (request.operation === "delete_account") {
+        return {
+          replayed: false,
+          spacesDeleted: 2,
+          tokensRevoked: 3,
+          canonicalObjectsDeleted: 4,
+          canonicalObjectsRetained: 1,
+          indexedRevisionsDeleted: 4,
+          deliveredAuditEventsDeleted: 2,
+          deliveredAuditActorsTombstoned: 1,
+          exportArchivesDeleted: 0,
+        };
+      }
+      throw Object.assign(new Error("unexpected operation"), { code: "not_found" });
+    } },
+  });
+
+  const page = await handler(new Request(`${origin}/settings/account`));
+  assert.equal(page.status, 200);
+  const html = await page.text();
+  assert.match(html, /<title>Account and profile — Mind Diary UAT<\/title>/);
+  assert.match(html, /data-profile-form data-profile-version="3"/);
+  assert.match(html, /data-identity-recovery-handoff/);
+  assert.match(html, /same trusted channel that admitted you/);
+  assert.match(html, /data-account-deletion-impact/);
+  assert.match(html, /Research Notes/);
+  assert.match(html, /Memberships[\s\S]*<h3>2<\/h3>/);
+  assert.match(html, /Pending invitations[\s\S]*<h3>1<\/h3>/);
+  assert.match(html, /Active MCP tokens[\s\S]*<h3>3<\/h3>/);
+  assert.match(html, /mind-diary-account-client\.js/);
+  assert.equal((html.match(/aria-current="page"/g) ?? []).length, 1);
+  assert.doesNotMatch(html, /must-not-render@example\.com|PRIVATE ACCOUNT CONTENT|principal_one|revision_personal/);
+
+  const asset = await handler(new Request(`${origin}/ui/mind-diary-account-client.js`));
+  assert.equal(asset.status, 200);
+  const assetBody = await asset.text();
+  assert.match(assetBody, /DELETE","\/api\/v1\/account"/);
+  assert.match(assetBody, /deletion_impact_changed/);
+  assert.match(assetBody, /Retry sends the exact same deletion command/);
+  assert.match(assetBody, /location\.replace\("\/"\)/);
+
+  const renamed = await handler(new Request(`${origin}/api/v1/account`, {
+    method: "PATCH",
+    headers: {
+      origin,
+      "content-type": "application/json",
+      "x-csrf-token": "csrf-account",
+      "idempotency-key": "profile:product-account",
+    },
+    body: JSON.stringify({ display_name: "Renamed Owner", expected_profile_version: 3 }),
+  }));
+  assert.equal(renamed.status, 200);
+  assert.deepEqual(calls.at(-1).input, {
+    displayName: "Renamed Owner",
+    expectedProfileVersion: 3,
+    idempotencyKey: "profile:product-account",
+  });
+
+  const deleted = await handler(new Request(`${origin}/api/v1/account`, {
+    method: "DELETE",
+    headers: {
+      origin,
+      "content-type": "application/json",
+      "x-csrf-token": "csrf-account",
+      "idempotency-key": "account-delete:product-account",
+    },
+    body: JSON.stringify({
+      impact_id: deletionImpact.impactId,
+      confirmation: deletionImpact.confirmation,
+    }),
+  }));
+  assert.equal(deleted.status, 200);
+  assert.deepEqual(calls.at(-1).input, {
+    impactId: deletionImpact.impactId,
+    confirmation: "delete-account",
+    idempotencyKey: "account-delete:product-account",
+  });
+
+  deletionImpact.expiresAt = "2000-01-01T00:00:00.000Z";
+  const stalePage = await handler(new Request(`${origin}/settings/account`));
+  assert.equal(stalePage.status, 200);
+  const staleHtml = await stalePage.text();
+  assert.match(staleHtml, /A fresh deletion preview is required/);
+  assert.match(staleHtml, /data-refresh-deletion-impact/);
+  assert.doesNotMatch(staleHtml, /data-account-deletion-form/);
+});
+
+test("an unlinked authenticated identity gets only isolated creation or a non-secret manual recovery handoff", async () => {
+  let controlCalls = 0;
+  const handler = createProductWebHttpHandler({
+    applicationOrigin: origin,
+    resolveIdentity: () => ({
+      kind: "registration_required",
+      actor: {
+        kind: "sites_identity_before_registration",
+        authentication: { kind: "sites_identity", verifiedByPlatform: true },
+        provider: "openai_sites",
+        normalizedBinding: "must-not-render@example.com",
+        suggestedDisplayName: "Unknown Person",
+        deploymentCapabilities: [],
+        requestId: "request_unknown_identity",
+        occurredAtUtc: "2026-08-10T00:00:00.000Z",
+      },
+    }),
+    csrf: { issue: () => "csrf-unlinked", verify: () => true },
+    control: { execute() { controlCalls += 1; throw new Error("must not read earlier account state"); } },
+  });
+
+  const page = await handler(new Request(`${origin}/settings/account`));
+  assert.equal(page.status, 200);
+  const html = await page.text();
+  assert.match(html, /Create a new isolated account/);
+  assert.match(html, /do not create an isolated account/i);
+  assert.match(html, /same trusted channel that admitted you/);
+  assert.match(html, /Nothing is relinked, merged, or transferred automatically/);
+  assert.match(html, /Never send an MCP token, private Mind content, query, export URL, or download URL/);
+  assert.doesNotMatch(html, /must-not-render@example\.com|principal_one|space_personal/);
+  assert.equal(controlCalls, 0);
+});
+
 test("pilot Product Site route map keeps one UAT shell, exact active navigation, and fail-closed deep links", async () => {
   const handler = createProductWebHttpHandler({
     applicationOrigin: origin,
@@ -210,7 +356,7 @@ test("pilot Product Site route map keeps one UAT shell, exact active navigation,
     ["/research-notes", /data-mind-handle="research-notes"/],
     ["/public", /data-mind-diary-visibility-catalog/],
     ["/invitations", /data-global-invitations/],
-    ["/settings/account", /data-route-page="account"/],
+    ["/settings/account", /data-mind-diary-account-deletion/],
     ["/settings/mcp", /data-mind-diary-token-management/],
     ["/help", /data-route-page="help"/],
   ];

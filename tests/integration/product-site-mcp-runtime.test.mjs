@@ -674,6 +674,99 @@ test("durable product runtime carries a Sites account token through Codex MCP an
   const recreateRetiredHandleBody = await recreateRetiredHandle.json();
   assert.equal(recreateRetiredHandle.status, 409, JSON.stringify(recreateRetiredHandleBody));
   assert.equal(recreateRetiredHandleBody.error.code, "handle_unavailable");
+
+  const beforeProfileRename = await responseFrom(
+    runtime,
+    new Request(`${ORIGIN}/api/v1/session`),
+  );
+  assert.equal(beforeProfileRename.status, 200);
+  const beforeProfileRenameBody = await beforeProfileRename.json();
+  const stablePersonalMindId = beforeProfileRenameBody.data.personal_mind.mind_id;
+  const stablePersonalHead = beforeProfileRenameBody.data.personal_mind.head_revision_id;
+  const renamedAccount = await responseFrom(runtime, new Request(
+    `${ORIGIN}/api/v1/account`,
+    {
+      method: "PATCH",
+      headers: {
+        origin: ORIGIN,
+        "content-type": "application/json",
+        "x-csrf-token": postDeletionCsrf,
+        "idempotency-key": "profile:product-runtime-account",
+      },
+      body: JSON.stringify({
+        display_name: "Runtime Owner Renamed",
+        expected_profile_version: beforeProfileRenameBody.data.principal.profile_version,
+      }),
+    },
+  ));
+  assert.equal(renamedAccount.status, 200);
+  const renamedAccountBody = await renamedAccount.json();
+  assert.equal(renamedAccountBody.data.principal.display_name, "Runtime Owner Renamed");
+  assert.equal(renamedAccountBody.data.personal_mind.route, "/me");
+  assert.equal(renamedAccountBody.data.personal_mind.mind_id, stablePersonalMindId);
+  assert.equal(renamedAccountBody.data.personal_mind.head_revision_id, stablePersonalHead);
+
+  runtime = await createProductSiteRuntime(runtimeOptions);
+  const accountPage = await responseFrom(
+    runtime,
+    new Request(`${ORIGIN}/settings/account`),
+  );
+  assert.equal(accountPage.status, 200);
+  const accountPageHtml = await accountPage.text();
+  assert.match(accountPageHtml, /data-mind-diary-account-deletion/u);
+  assert.match(accountPageHtml, /Runtime Owner Renamed/u);
+  assert.match(accountPageHtml, /data-account-deletion-impact/u);
+  assert.match(accountPageHtml, /Type <code>delete-account<\/code> exactly/u);
+  assert.match(accountPageHtml, /same trusted channel that admitted you/u);
+  assert.doesNotMatch(accountPageHtml, /Runtime\.Owner@Example\.COM|runtime\.owner@example\.com/u);
+  const accountCsrf = csrfFromHtml(accountPageHtml);
+
+  const accountImpact = await responseFrom(
+    runtime,
+    new Request(`${ORIGIN}/api/v1/account/deletion-impact`),
+  );
+  assert.equal(accountImpact.status, 200);
+  const accountImpactBody = await accountImpact.json();
+  assert.equal(accountImpactBody.data.personal_mind.route, "/me");
+  assert.equal(accountImpactBody.data.owned_minds.length, 0);
+  assert.equal(accountImpactBody.data.active_mcp_token_count, 0);
+  assert.equal(accountImpactBody.data.confirmation, "delete-account");
+
+  const deletedAccount = await responseFrom(runtime, new Request(
+    `${ORIGIN}/api/v1/account`,
+    {
+      method: "DELETE",
+      headers: {
+        origin: ORIGIN,
+        "content-type": "application/json",
+        "x-csrf-token": accountCsrf,
+        "idempotency-key": "account-delete:product-runtime-e2e",
+      },
+      body: JSON.stringify({
+        impact_id: accountImpactBody.data.impact_id,
+        confirmation: "delete-account",
+      }),
+    },
+  ));
+  assert.equal(deletedAccount.status, 200);
+  assert.equal((await deletedAccount.json()).data.replayed, false);
+
+  runtime = await createProductSiteRuntime(runtimeOptions);
+  const sessionAfterAccountDeletion = await responseFrom(
+    runtime,
+    new Request(`${ORIGIN}/api/v1/session`),
+  );
+  assert.equal(sessionAfterAccountDeletion.status, 409);
+  assert.equal((await sessionAfterAccountDeletion.json()).error.code, "registration_required");
+  const pageAfterAccountDeletion = await responseFrom(
+    runtime,
+    new Request(`${ORIGIN}/settings/account`),
+  );
+  assert.equal(pageAfterAccountDeletion.status, 200);
+  const pageAfterAccountDeletionHtml = await pageAfterAccountDeletion.text();
+  assert.match(pageAfterAccountDeletionHtml, /Create a new isolated account/u);
+  assert.match(pageAfterAccountDeletionHtml, /same trusted channel that admitted you/u);
+  assert.doesNotMatch(pageAfterAccountDeletionHtml, /data-account-deletion-impact|Runtime Owner Renamed/u);
 });
 
 test("durable Product Site enforces public baseline access, atomic ownership transfer, and immediate private revoke", async () => {

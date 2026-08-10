@@ -129,8 +129,10 @@ function renderRecovery(status: ManualRecoveryUiStatus): string {
   return `<section class="md-auth-choice" aria-labelledby="recovery-title">
     <p class="md-eyebrow">Recognize an older account?</p>
     <h2 id="recovery-title">Request account recovery</h2>
-    <p>Recovery verifies identity before any account link or access change. Nothing is merged automatically.</p>
-    <button class="md-button md-button--secondary" type="button" data-manual-recovery>Request recovery review</button>
+    <p>If you expect earlier access, do not create an isolated account. Contact the pilot operator through the same trusted channel that admitted you.</p>
+    <p data-recovery-safety>Say only that this authenticated identity is unlinked. Never send an MCP token, private Mind content, query, export URL, or download URL.</p>
+    <p>Recovery verifies identity independently before any operator action. Nothing is relinked, merged, or transferred automatically, and access remains unchanged during review.</p>
+    <button class="md-button md-button--secondary" type="button" data-manual-recovery>Acknowledge recovery instructions</button>
     <p class="md-form__status" role="status" aria-live="polite" data-recovery-status></p>
   </section>`;
 }

@@ -7,6 +7,8 @@ import type {
 import {
   MIND_DIARY_UI_ASSETS,
   escapeUntrustedText,
+  renderMindDiaryAuthenticatedFooter,
+  renderMindDiaryAuthenticatedHeader,
 } from "./ui-shell.js";
 
 export const MIND_DIARY_ACCOUNT_DELETION_CONFIRMATION =
@@ -69,6 +71,11 @@ export type AccountDeletionViewState =
 
 export interface AccountDeletionPageModel {
   readonly displayName: string;
+  readonly profile?: {
+    readonly profileVersion: number;
+    readonly personalMindName: string;
+    readonly idempotencyKey: string;
+  };
   readonly state: AccountDeletionViewState;
 }
 
@@ -245,26 +252,6 @@ function formatExpiry(value: string): string {
   }).format(date);
 }
 
-function renderPageHeader(displayName: string): string {
-  const name = escapeUntrustedText(displayName);
-  return `<header class="md-header">
-    <a class="md-brand" href="/" aria-label="Mind Diary home">
-      <img src="${MIND_DIARY_UI_ASSETS.lockup}" alt="Mind Diary" width="204" height="48">
-    </a>
-    <button class="md-menu-button" type="button" aria-expanded="false" aria-controls="primary-navigation" data-menu-button><span aria-hidden="true">Menu</span><span>Navigation</span></button>
-    <nav id="primary-navigation" class="md-navigation" aria-label="Primary" data-navigation>
-      <a href="/me"><span aria-hidden="true">●</span> My Mind</a>
-      <a href="/minds"><span aria-hidden="true">▤</span> Minds</a>
-      <a href="/invitations"><span aria-hidden="true">✉</span> Invitations</a>
-      <a href="/settings/mcp"><span aria-hidden="true">⌁</span> MCP setup</a>
-    </nav>
-    <span class="md-profile" aria-label="Signed in account: ${name}">
-      <span class="md-profile__initial" aria-hidden="true">${escapeUntrustedText(displayName.slice(0, 1).toUpperCase())}</span>
-      <span>${name}</span>
-    </span>
-  </header>`;
-}
-
 function renderLoading(): string {
   return `<section class="md-state md-state--loading" aria-labelledby="deletion-state-title" aria-busy="true">
     <div class="md-loading-mark" aria-hidden="true"><span></span><span></span><span></span></div>
@@ -335,7 +322,7 @@ function renderImpactPreview(
         <p class="md-form__status" role="status" aria-live="polite" data-account-deletion-status>${deleting ? operationStatus : ""}</p>
         <button class="md-button md-button--danger" type="submit" data-confirm-account-deletion disabled>${deleting ? "Deleting account…" : "Delete account permanently"}</button>
       </form>`;
-  return `<div class="md-token-layout" data-impact-id="${escapeUntrustedText(impact.impactId)}">
+  return `<div class="md-token-layout" data-account-deletion-impact data-impact-id="${escapeUntrustedText(impact.impactId)}" data-impact-expires-at="${escapeUntrustedText(impact.expiresAt)}" data-idempotency-key="${escapeUntrustedText(state.idempotencyKey)}">
     <section class="md-setup-card" aria-labelledby="cascade-heading">
       <div>
         <p class="md-eyebrow">Exact, expiring preview</p>
@@ -367,6 +354,51 @@ function renderImpactPreview(
       </div>
     </section>
   </div>`;
+}
+
+function renderAccountProfile(
+  model: AccountDeletionPageModel,
+): string {
+  const profile = model.profile;
+  if (
+    profile === undefined ||
+    !Number.isSafeInteger(profile.profileVersion) ||
+    profile.profileVersion < 1 ||
+    safeName(profile.personalMindName) === null ||
+    !IDEMPOTENCY_KEY.test(profile.idempotencyKey)
+  ) {
+    return `<section class="md-profile-card md-state--error" aria-labelledby="account-profile-title">
+      <p class="md-eyebrow">Account profile</p>
+      <h2 id="account-profile-title">Profile state is unavailable</h2>
+      <p role="alert">Reload this page before changing the display name. No profile command is available from incomplete state.</p>
+    </section>`;
+  }
+  return `<section class="md-profile-card" aria-labelledby="account-profile-title">
+    <p class="md-eyebrow">Account profile</p>
+    <h2 id="account-profile-title">Display name</h2>
+    <p>This name is also shown on <strong>${escapeUntrustedText(profile.personalMindName)}</strong> at <a href="/me">/me</a>. Renaming it does not change the Mind address, identity, history, or content HEAD.</p>
+    <form data-profile-form data-profile-version="${profile.profileVersion}" data-profile-key="${escapeUntrustedText(profile.idempotencyKey)}">
+      <div class="md-field">
+        <label for="profile-display-name">Display name</label>
+        <input id="profile-display-name" name="display_name" type="text" required minlength="1" maxlength="80" autocomplete="name" value="${escapeUntrustedText(model.displayName)}">
+      </div>
+      <button class="md-button md-button--primary" type="submit">Save profile name</button>
+      <p class="md-form__status" role="status" aria-live="polite" data-profile-status></p>
+    </form>
+  </section>`;
+}
+
+function renderRecoveryHandoff(): string {
+  return `<section class="md-profile-card" aria-labelledby="identity-recovery-title" data-identity-recovery-handoff>
+    <p class="md-eyebrow">Fail-closed identity recovery</p>
+    <h2 id="identity-recovery-title">If a later sign-in is not linked</h2>
+    <ol>
+      <li>Do not create an isolated account if you expect access from an earlier account.</li>
+      <li>Contact the pilot operator through the same trusted channel that admitted you.</li>
+      <li>Say only that the authenticated identity is unlinked. Never send an MCP token, private Mind content, query, export URL, or download URL.</li>
+    </ol>
+    <p>The operator must verify identity independently. Mind Diary does not relink, merge, or transfer access automatically, and access remains unchanged during review.</p>
+  </section>`;
 }
 
 function renderStale(
@@ -432,20 +464,33 @@ export function renderAccountDeletionPanel(
 export function renderAccountDeletion(
   model: AccountDeletionPageModel,
 ): string {
-  return `<div class="md-shell" data-mind-diary-account-deletion data-deletion-state="${model.state.kind}" data-nav-open="false">
+  return `<div class="md-shell" data-mind-diary-shell data-mind-diary-account-deletion data-deletion-state="${model.state.kind}" data-nav-open="false">
     <a class="md-skip-link" href="#main-content">Skip to main content</a>
-    ${renderPageHeader(model.displayName)}
+    ${renderMindDiaryAuthenticatedHeader(model.displayName, "account")}
     <main id="main-content" class="md-main" tabindex="-1">
       <div class="md-page-heading">
         <div>
           <p class="md-eyebrow">Account settings</p>
-          <h1>Delete account</h1>
-          <p>Review the server’s current cascade before authorizing this irreversible action.</p>
+          <h1>Account and profile</h1>
+          <p>Manage the profile attached to My Mind, review the recovery boundary, and inspect the exact deletion cascade.</p>
         </div>
       </div>
-      <div data-account-deletion-panel>${renderAccountDeletionPanel(model.state)}</div>
+      <div class="md-my-mind-layout" data-account-lifecycle>
+        ${renderAccountProfile(model)}
+        ${renderRecoveryHandoff()}
+      </div>
+      <section aria-labelledby="delete-account-title">
+        <div class="md-section-heading">
+          <div>
+            <p class="md-eyebrow">Danger zone</p>
+            <h2 id="delete-account-title">Delete account</h2>
+            <p>Review the server’s current cascade before authorizing this irreversible action.</p>
+          </div>
+        </div>
+        <div data-account-deletion-panel>${renderAccountDeletionPanel(model.state)}</div>
+      </section>
     </main>
-    <footer class="md-footer"><p><strong>Mind Diary</strong> shows record names and counts here, never private Mind content.</p><a href="/help">Help and accessibility</a></footer>
+    ${renderMindDiaryAuthenticatedFooter("account")}
   </div>`;
 }
 
@@ -467,7 +512,7 @@ export function renderAccountDeletionDocument(
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
-  <title>Delete account — Mind Diary</title>
+  <title>Account and profile — Mind Diary UAT</title>
   <link rel="stylesheet" href="${MIND_DIARY_UI_ASSETS.tokens}">
   <link rel="stylesheet" href="${MIND_DIARY_UI_ASSETS.shellStyles}">
 </head>

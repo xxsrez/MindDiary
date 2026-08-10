@@ -263,7 +263,10 @@ test("unknown identity offers explicit isolated creation and categorical manual 
   assert.match(html, /does not inherit, relink, or merge earlier access/i);
   assert.match(html, /data-bootstrap-key="bootstrap-attempt-0001"/);
   assert.match(html, /data-manual-recovery/);
-  assert.match(html, /Nothing is merged automatically/);
+  assert.match(html, /Nothing is relinked, merged, or transferred automatically/);
+  assert.match(html, /same trusted channel that admitted you/);
+  assert.match(html, /Never send an MCP token, private Mind content, query, export URL, or download URL/);
+  assert.match(html, /access remains unchanged during review/);
   assert.doesNotMatch(html, /@[a-z0-9.-]+|verified[_ -]?email|data-control-plane/i);
 
   for (const status of ["requested", "unavailable"]) {

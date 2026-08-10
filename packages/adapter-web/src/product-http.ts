@@ -14,6 +14,11 @@ import {
   type AuthenticatedOnboardingModel,
 } from "./onboarding.js";
 import {
+  normalizeAccountDeletionImpact,
+  renderAccountDeletionDocument,
+  type AccountDeletionViewState,
+} from "./account-deletion.js";
+import {
   renderMindDiaryUiShellDocument,
   renderMindDiaryRoutePageDocument,
   type MindDiaryUiShellModel,
@@ -355,20 +360,6 @@ function pilotRoutePage(
       links: [{ href: "/minds", label: "Open your Minds" }],
     };
   }
-  if (pathname === "/settings/account") {
-    return {
-      displayName,
-      activeNavigation: "account",
-      eyebrow: "Account settings",
-      title: "Account and profile",
-      description: "Manage your profile, identity recovery boundary, and account lifecycle.",
-      state: {
-        kind: "ready",
-        message: "My Mind already provides the current safe profile view. Destructive account actions remain unavailable until a fresh server impact can be rendered here.",
-      },
-      links: [{ href: "/me", label: "Open My Mind and profile" }],
-    };
-  }
   if (pathname === "/help") {
     return {
       displayName,
@@ -606,7 +597,8 @@ function staticAsset(pathname: string): { readonly body: string; readonly type: 
   if (
     pathname === "/ui/mind-diary-onboarding-client.js" ||
     pathname === "/ui/mind-diary-shell-client.js" ||
-    pathname === "/ui/mind-diary-token-client.js"
+    pathname === "/ui/mind-diary-token-client.js" ||
+    pathname === "/ui/mind-diary-account-client.js"
   ) return { body: PRODUCT_UI_CLIENT_JAVASCRIPT, type: "text/javascript; charset=utf-8" };
   if (pathname === "/ui/mind-diary-ordinary-minds-client.js") {
     return {
@@ -642,7 +634,7 @@ async function productUiDocument(input: {
         ? {}
         : { suggestedDisplayName: input.identity.actor.suggestedDisplayName }),
       bootstrapIdempotencyKey: `bootstrap:${crypto.randomUUID()}`,
-      manualRecoveryStatus: "unavailable",
+      manualRecoveryStatus: "available",
     };
     return withCsrfMeta(renderAuthenticatedOnboardingDocument(model), input.csrfToken);
   }
@@ -714,6 +706,37 @@ async function productUiDocument(input: {
       displayName: session.displayName,
       collection,
     }, "/ui/mind-diary-collaboration-client.js"), input.csrfToken);
+  }
+
+  if (input.pathname === "/settings/account") {
+    let state: AccountDeletionViewState;
+    try {
+      const impact = normalizeAccountDeletionImpact(await input.control.execute({
+        operation: "get_account_deletion_impact",
+        actor: input.identity.actor,
+        input: Object.freeze({}),
+      }));
+      state = impact === null
+        ? { kind: "load_error", reason: "invalid" }
+        : Date.parse(impact.expiresAt) <= Date.now()
+          ? { kind: "stale", reason: "expired" }
+          : {
+              kind: "preview",
+              impact,
+              idempotencyKey: `account-delete:${crypto.randomUUID()}`,
+            };
+    } catch {
+      state = { kind: "load_error", reason: "unavailable" };
+    }
+    return withCsrfMeta(renderAccountDeletionDocument({
+      displayName: session.displayName,
+      profile: {
+        profileVersion: session.profileVersion,
+        personalMindName: session.personalMindName,
+        idempotencyKey: `profile:${crypto.randomUUID()}`,
+      },
+      state,
+    }, "/ui/mind-diary-account-client.js"), input.csrfToken);
   }
 
   const routePage = pilotRoutePage(input.pathname, session.displayName);

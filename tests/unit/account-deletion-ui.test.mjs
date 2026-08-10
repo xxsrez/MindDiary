@@ -93,6 +93,11 @@ test("preview renders the exact safe cascade and no private content", () => {
 
   const html = renderAccountDeletion({
     displayName: "Andrey",
+    profile: {
+      profileVersion: 3,
+      personalMindName: "Andrey",
+      idempotencyKey: "profile-attempt-0001",
+    },
     state: {
       kind: "preview",
       impact: normalized,
@@ -101,7 +106,16 @@ test("preview renders the exact safe cascade and no private content", () => {
   });
 
   assert.match(html, /Exact, expiring preview/);
+  assert.match(html, /<h1>Account and profile<\/h1>/);
+  assert.match(html, /data-profile-form data-profile-version="3"/);
+  assert.match(html, /Renaming it does not change the Mind address, identity, history, or content HEAD/);
+  assert.match(html, /data-identity-recovery-handoff/);
+  assert.match(html, /same trusted channel that admitted you/);
+  assert.match(html, /does not relink, merge, or transfer access automatically/);
+  assert.match(html, /Never send an MCP token, private Mind content, query, export URL, or download URL/);
   assert.match(html, /datetime="2026-08-07T14:15:00\.000Z"/);
+  assert.match(html, /data-account-deletion-impact/);
+  assert.match(html, /data-idempotency-key="account-delete-attempt-0001"/);
   assert.match(html, /<strong>Andrey<\/strong> <code>\/me<\/code>/);
   assert.match(html, /Owned Minds \(2\)/);
   assert.match(html, /Research Notes/);
@@ -153,6 +167,11 @@ test("all names are escaped and the document loads only a safe local client", ()
 
   const model = {
     displayName: malicious,
+    profile: {
+      profileVersion: 3,
+      personalMindName: malicious,
+      idempotencyKey: "profile-attempt-0001",
+    },
     state: {
       kind: "preview",
       impact: normalized,

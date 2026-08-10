@@ -30,10 +30,11 @@ const bootstrapActor = Object.freeze({
 
 let registered = false;
 let displayName = "Browser Fixture";
+let profileVersion = 1;
 let issued = false;
 
 const session = () => ({
-  principal: { principalId: registeredActor.principalId, displayName, profileVersion: 1 },
+  principal: { principalId: registeredActor.principalId, displayName, profileVersion },
   personalMind: {
     mindId: "space_browser_fixture",
     route: "/me",
@@ -58,9 +59,58 @@ const handler = createProductWebHttpHandler({
       if (request.operation === "bootstrap_account") {
         registered = true;
         displayName = String(request.input.displayName ?? "Browser Fixture");
+        profileVersion = 1;
         return session();
       }
       if (request.operation === "get_session") return session();
+      if (request.operation === "rename_account") {
+        if (request.input.expectedProfileVersion !== profileVersion) {
+          throw Object.assign(new Error("Synthetic stale profile"), { code: "profile_conflict" });
+        }
+        displayName = String(request.input.displayName ?? displayName);
+        profileVersion += 1;
+        return session();
+      }
+      if (request.operation === "get_account_deletion_impact") {
+        return {
+          impactId: "impact_browser_account_1",
+          expiresAt: new Date(Date.now() + 15 * 60_000).toISOString(),
+          personalMind: { route: "/me", name: displayName },
+          ownedMinds: [{ route: "/browser-shared", name: "Browser Shared" }],
+          foreignMembershipCount: 2,
+          pendingInvitationCount: 1,
+          activeMcpTokenCount: issued ? 1 : 0,
+          irreversible: true,
+          recoveryAvailable: false,
+          forensicReceiptRetained: false,
+          confirmation: "delete-account",
+          verifiedEmail: "must-not-render@example.invalid",
+          privateContent: "PRIVATE BROWSER FIXTURE CONTENT",
+        };
+      }
+      if (request.operation === "delete_account") {
+        if (
+          request.input.impactId !== "impact_browser_account_1" ||
+          request.input.confirmation !== "delete-account"
+        ) {
+          throw Object.assign(new Error("Synthetic stale deletion impact"), {
+            code: "deletion_impact_changed",
+          });
+        }
+        registered = false;
+        issued = false;
+        return {
+          replayed: false,
+          spacesDeleted: 2,
+          tokensRevoked: 1,
+          canonicalObjectsDeleted: 2,
+          canonicalObjectsRetained: 1,
+          indexedRevisionsDeleted: 2,
+          deliveredAuditEventsDeleted: 1,
+          deliveredAuditActorsTombstoned: 1,
+          exportArchivesDeleted: 0,
+        };
+      }
       if (request.operation === "list_minds") {
         return [{
           mindId: "space_browser_fixture",

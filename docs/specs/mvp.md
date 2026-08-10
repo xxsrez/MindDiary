@@ -254,6 +254,15 @@ Authenticated pages используют согласованные header/foote
 navigation и active state. Profile entrypoint ведёт на `/settings/account`, а
 Help остаётся достижимым из footer. Hosted environment явно маркируется как
 `UAT`; историческое live evidence 2026-08-09 не делает его production.
+`/settings/account` server-side загружает current profile и fresh expiring
+account-deletion impact. Delete command связывает exact impact, exact
+`delete-account` confirmation и один idempotency key; changed/expired impact
+требует новой загрузки, ambiguous failure повторяет тот же command, а успешный
+cascade удаляет binding и возвращает следующий request в isolated-account /
+manual-recovery choice. Неизвестная authenticated identity видит проверяемую
+fail-closed инструкцию обратиться к pilot operator через исходный trusted
+channel без передачи token, private content или download URL; UI не создаёт
+recovery record, не relink-ит, не merge-ит и не переносит access автоматически.
 Initial HTML строится server-side только из safe control-plane projection и
 выдаёт session-bound CSRF metadata для mutations. Неизвестный multi-segment
 route, reserved handle или неавторизованный exact Mind не падает в home shell и
