@@ -192,11 +192,24 @@ export class ProductMcpContentApplication implements McpContentApplication {
           summary: input.summary as never,
           operations: input.operations as never,
         });
-        const output = snakeOutput(result);
         if (result.kind === "committed") {
           await this.#dependencies.scheduleCommitEffects?.();
-          return createMcpToolSuccessResult(output, "Committed one immutable Mind revision.");
+          const committedInfo = await this.#dependencies.discovery.getMindInfo(
+            request.actor,
+            input.mind,
+            { kind: "revision", revisionId: result.envelope.revision.revisionId },
+          );
+          return createMcpToolSuccessResult(
+            snakeOutput({
+              mind: committedInfo.mind,
+              previousRevisionId: result.previousRevisionId,
+              revision: committedInfo.resolvedRevision,
+              indexStatus: "queued",
+            }),
+            "Committed one immutable Mind revision.",
+          );
         }
+        const output = snakeOutput(result);
         return createMcpToolErrorResult(request.actor.requestId, result.kind, "The changeset was not committed.", result.kind === "revision_conflict", output as Readonly<Record<string, unknown>>);
       }
       case "start_export": {
@@ -209,7 +222,17 @@ export class ProductMcpContentApplication implements McpContentApplication {
         });
         if (result.kind === "started") {
           await this.#dependencies.scheduleExport?.(result.job.jobId);
-          return createMcpToolSuccessResult(snakeOutput(result), "Started an exact-revision export.");
+          return createMcpToolSuccessResult(
+            snakeOutput({
+              job: {
+                jobId: result.job.jobId,
+                status: result.job.status,
+                revisionId: result.job.revisionId,
+                createdAt: result.job.createdAt,
+              },
+            }),
+            "Started an exact-revision export.",
+          );
         }
         return createMcpToolErrorResult(request.actor.requestId, result.kind, "The export was not started.", false, snakeOutput(result) as Readonly<Record<string, unknown>>);
       }
@@ -219,9 +242,47 @@ export class ProductMcpContentApplication implements McpContentApplication {
           actor: request.actor,
           jobId: (jobId ?? "") as never,
         });
-        return result.kind === "found"
-          ? createMcpToolSuccessResult(snakeOutput(result), "Read the exact-revision export status.")
-          : createMcpToolErrorResult(request.actor.requestId, result.kind, "Export job was not found.", false);
+        if (result.kind !== "found") {
+          return createMcpToolErrorResult(
+            request.actor.requestId,
+            result.kind,
+            "Export job was not found.",
+            false,
+          );
+        }
+        const archive = result.job.archive;
+        const download = result.download;
+        return createMcpToolSuccessResult(
+          snakeOutput({
+            job: {
+              jobId: result.job.jobId,
+              status: result.job.status,
+              revisionId: result.job.revisionId,
+              createdAt: result.job.createdAt,
+              updatedAt: result.job.updatedAt,
+              completedAt: result.job.completedAt,
+              expiresAt: result.job.expiresAt,
+              lastFailureCode: result.job.lastFailureCode,
+              ...(archive === null
+                ? {}
+                : {
+                    archiveFormat: archive.archiveFormat,
+                    mediaType: archive.mediaType,
+                    filename: archive.filename,
+                    contentDisposition: archive.contentDisposition,
+                    sha256: archive.sha256,
+                    size: archive.size,
+                  }),
+              ...(download === null
+                ? {}
+                : {
+                    downloadUrl: download.url,
+                    downloadExpiresAt: download.expiresAt,
+                  }),
+            },
+          }),
+          "Read the exact-revision export status.",
+        );
       }
     }
   }

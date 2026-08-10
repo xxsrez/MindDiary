@@ -555,7 +555,11 @@ test("durable product runtime carries a Sites account token through Codex MCP an
   const committedBody = await committed.json();
   assert.equal(committedBody.result.isError, false, JSON.stringify(committedBody));
   assert.equal(committedBody.result.structuredContent.ok, true);
-  assert.equal(committedBody.result.structuredContent.data.kind, "committed");
+  assert.equal(
+    committedBody.result.structuredContent.data.previous_revision_id,
+    previousRevisionId,
+  );
+  assert.equal(committedBody.result.structuredContent.data.index_status, "queued");
 
   const listedAfterCommit = await legacyMcp(runtime, secret, {
     jsonrpc: "2.0",
@@ -577,7 +581,7 @@ test("durable product runtime carries a Sites account token through Codex MCP an
   assert.notEqual(advancedMind.head.revision_id, previousRevisionId);
   assert.equal(
     advancedMind.head.revision_id,
-    committedBody.result.structuredContent.data.envelope.revision.revision_id,
+    committedBody.result.structuredContent.data.revision.revision_id,
   );
 
   const revisions = await legacyMcp(runtime, secret, {
@@ -665,7 +669,7 @@ test("durable product runtime carries a Sites account token through Codex MCP an
   const restoredBody = await restored.json();
   assert.equal(restoredBody.result.isError, false, JSON.stringify(restoredBody));
   const restoredRevisionId =
-    restoredBody.result.structuredContent.data.envelope.revision.revision_id;
+    restoredBody.result.structuredContent.data.revision.revision_id;
   assert.notEqual(restoredRevisionId, previousRevisionId);
   assert.notEqual(restoredRevisionId, advancedMind.head.revision_id);
 

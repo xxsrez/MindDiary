@@ -562,19 +562,21 @@ export function installMcpTokenManagement(
     });
   }
 
-  const codeCopyStatus = shell.querySelector<HTMLElement>("[data-code-copy-status]");
   for (const button of Array.from(shell.querySelectorAll<HTMLButtonElement>("[data-copy-code]"))) {
     on<MouseEvent>(button, "click", async () => {
       const codeId = button.dataset.copyCode ?? "";
       const code = codeId.length > 0
         ? shell.querySelector<HTMLElement>(`#${CSS.escape(codeId)}[data-code-value]`)
         : null;
+      const codeCopyStatus = button
+        .closest<HTMLElement>("section")
+        ?.querySelector<HTMLElement>("[data-code-copy-status]");
       if (!code || !codeCopyStatus) return;
       try {
         await navigator.clipboard.writeText(code.textContent ?? "");
-        codeCopyStatus.textContent = "Configuration copied. It contains no token or Site credential.";
+        codeCopyStatus.textContent = "Copied. This text contains no token or Site credential.";
       } catch {
-        codeCopyStatus.textContent = "Copy was blocked. Select the configuration and copy it manually.";
+        codeCopyStatus.textContent = "Copy was blocked. Select the text and copy it manually.";
         code.focus();
       }
     });
