@@ -366,10 +366,10 @@ function pilotRoutePage(
       activeNavigation: "help",
       eyebrow: "Pilot help",
       title: "Help and accessibility",
-      description: "Mind Diary is hosted in UAT for a restricted authenticated pilot, not production.",
+      description: "Mind Diary is hosted in UAT for a restricted authenticated pilot, not production. It has no production SLA or guaranteed recovery.",
       state: {
         kind: "ready",
-        message: "Use My Mind for your private space, Minds for collaboration, and MCP setup for Codex. Keyboard users can skip to content and open the same navigation from every page.",
+        message: "Keep your own export before risky work; Mind and account deletion are immediate and irreversible. Never share an MCP token, Sites credential, authorization header, private content, raw query, email, or export/download URL with support. Report only the symptom, UTC time, and safe request ID. Keyboard users can skip to content and open the same navigation from every page.",
       },
       links: [
         { href: "/minds", label: "Open Minds" },

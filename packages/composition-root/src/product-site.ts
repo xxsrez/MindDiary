@@ -1,6 +1,8 @@
 import {
   createSitesAuditSink,
+  createSitesPrivacySafeObservabilitySink,
   type D1DatabaseLike as AuditD1DatabaseLike,
+  type SitesObservabilityWriter,
 } from "@mind-diary/adapter-audit-sites";
 import {
   createBackgroundServiceActor,
@@ -41,6 +43,7 @@ import {
 } from "@mind-diary/adapter-web";
 import {
   AuditOutboxDeliveryHandler,
+  BackgroundPrivacySafeObservability,
   ExportJobExpiryHandler,
   ExportJobHandler,
   InvitationExpiryJobHandler,
@@ -50,6 +53,7 @@ import {
 import {
   CanonicalRevisionCoordinator,
   ChangesetCommitService,
+  ContentPrivacySafeObservability,
   DeterministicOkfExportService,
   ExportJobApplicationService,
   McpBearerAuthenticationService,
@@ -64,6 +68,7 @@ import {
   AccountBootstrapService,
   AccountDeletionService,
   ControlReadService,
+  ControlPrivacySafeObservability,
   InvitationControlService,
   MembershipControlService,
   MindRouteService,
@@ -78,6 +83,8 @@ import {
 import {
   CapabilityAuthorizer,
   CurrentAccessBackgroundAuthorizer,
+  type PrivacySafeObservabilityEvent,
+  type PrivacySafeObservabilitySink,
 } from "@mind-diary/application-ports";
 import { type Capability, verifiedSpaceHost } from "@mind-diary/domain";
 
@@ -112,6 +119,7 @@ export interface ProductSiteRuntimeOptions {
   readonly locatorKey: Uint8Array;
   readonly exportDownloadVerifierKey: Uint8Array;
   readonly csrfKey: Uint8Array;
+  readonly observabilityWriter?: SitesObservabilityWriter;
   readonly schedule: (work: Readonly<{ readonly kind: string; readonly id: string }>) => void | Promise<void>;
 }
 
@@ -187,6 +195,25 @@ function ids(capture?: {
 
 function requestIds(): McpRequestIdGenerator {
   return { nextRequestId: () => nextOpaque("request") };
+}
+
+function recordRuntimeMetric(
+  sink: PrivacySafeObservabilitySink,
+  event: Readonly<PrivacySafeObservabilityEvent>,
+): void {
+  try {
+    const pending = sink.record(Object.freeze(event));
+    if (
+      typeof pending === "object" &&
+      pending !== null &&
+      "catch" in pending &&
+      typeof pending.catch === "function"
+    ) {
+      void pending.catch(() => undefined);
+    }
+  } catch {
+    // Operational telemetry is best-effort and cannot change product behavior.
+  }
 }
 
 function actorCsrfIdentity(actor: ProductWebActor): string {
@@ -429,6 +456,20 @@ export async function createProductSiteRuntime(
     createWebCryptoExportDownloadSecretCrypto({ verifierKey: options.exportDownloadVerifierKey }),
     createCsrf(options.csrfKey),
   ]);
+  const telemetry = createSitesPrivacySafeObservabilitySink(options.observabilityWriter);
+  const controlObservability = new ControlPrivacySafeObservability({
+    sink: telemetry,
+    clock,
+    cohort: "close_circle",
+  });
+  const contentObservability = new ContentPrivacySafeObservability({
+    sink: telemetry,
+    cohort: "close_circle",
+  });
+  const backgroundObservability = new BackgroundPrivacySafeObservability({
+    sink: telemetry,
+    cohort: "close_circle",
+  });
   const authorizer = new CapabilityAuthorizer(metadata);
   const backgroundAuthorizer = new CurrentAccessBackgroundAuthorizer(metadata);
   const revisions = new CanonicalRevisionCoordinator({ objects, revisions: metadata });
@@ -467,11 +508,16 @@ export async function createProductSiteRuntime(
     history,
     validation,
     commits: {
-      commit: (request) =>
-        runWithCapturedWork(
+      commit: async (request) => {
+        const result = await runWithCapturedWork(
           () => commits.commit(request),
           (result) => result.kind === "committed",
-        ),
+        );
+        if (result.kind === "revision_conflict") {
+          contentObservability.recordCasConflict(request.actor);
+        }
+        return result;
+      },
     },
     exports,
     scheduleExport: async (jobId) => options.schedule({ kind: "export", id: jobId }),
@@ -479,28 +525,61 @@ export async function createProductSiteRuntime(
   const authenticator = new McpBearerAuthenticationService({ clock, tokenHasher, tokens: metadata });
   const mcpDependencies = {
     authenticator,
-    requestIds: requestIds(),
     content: mcpApplication,
     allowedOrigin: options.publicOrigin,
   };
-  const mcp = createMcpHttpHandler(mcpDependencies);
-  const legacyCodexMcp = createLegacyCodexMcpHttpHandler(mcpDependencies);
+  const handleMcp = async (
+    request: Request,
+    profile: "modern" | "compatibility",
+  ): Promise<Response> => {
+    const startedAt = Date.now();
+    const requestId = requestIds().nextRequestId();
+    const dependencies = {
+      ...mcpDependencies,
+      requestIds: { nextRequestId: () => requestId },
+      logger: {
+        record(event: {
+          readonly requestId: typeof requestId;
+          readonly status: number;
+          readonly outcome:
+            | "authenticated"
+            | "authentication_failed"
+            | "authentication_unavailable"
+            | "protocol_error"
+            | "tool_denied"
+            | "tool_completed"
+            | "internal_error";
+        }): void {
+          contentObservability.recordMcpRequest({
+            requestId: event.requestId,
+            occurredAtUtc: clock.now(),
+            durationMs: Math.max(0, Date.now() - startedAt),
+            status: event.status,
+            outcome: event.outcome,
+          });
+        },
+      },
+    };
+    return profile === "modern"
+      ? createMcpHttpHandler(dependencies)(request)
+      : createLegacyCodexMcpHttpHandler(dependencies)(request);
+  };
 
   const commonAuditIds = generated;
   const control = new ProductControlApplication({
-    bootstrap: new AccountBootstrapService({ accounts: metadata, objects, ids: generated }),
-    personal: new PersonalMindControlService({ personalMinds: metadata, digest: objects }),
-    ordinary: new OrdinaryMindControlService({ ordinaryMinds: metadata, objects, ids: generated, host }),
-    ordinaryDeletion: new OrdinaryMindDeletionService({ ordinaryMinds: metadata, objects, index, audit, exportArchives: objects, ids: generated, clock, host }),
-    accountDeletion: new AccountDeletionService({ accounts: metadata, tokens: metadata, objects, index, audit, exportArchives: objects, ids: generated, clock, host }),
-    visibility: new VisibilityControlService({ ordinaryMinds: metadata, objects, auditIds: commonAuditIds }),
-    ownership: new OwnershipTransferService({ ordinaryMinds: metadata, objects, auditIds: commonAuditIds }),
-    membership: new MembershipControlService({ memberships: metadata, digest: objects, auditIds: commonAuditIds }),
+    bootstrap: new AccountBootstrapService({ accounts: metadata, objects, ids: generated, logger: controlObservability }),
+    personal: new PersonalMindControlService({ personalMinds: metadata, digest: objects, logger: controlObservability }),
+    ordinary: new OrdinaryMindControlService({ ordinaryMinds: metadata, objects, ids: generated, host, logger: controlObservability }),
+    ordinaryDeletion: new OrdinaryMindDeletionService({ ordinaryMinds: metadata, objects, index, audit, exportArchives: objects, ids: generated, clock, host, logger: controlObservability }),
+    accountDeletion: new AccountDeletionService({ accounts: metadata, tokens: metadata, objects, index, audit, exportArchives: objects, ids: generated, clock, host, logger: controlObservability }),
+    visibility: new VisibilityControlService({ ordinaryMinds: metadata, objects, auditIds: commonAuditIds, logger: controlObservability }),
+    ownership: new OwnershipTransferService({ ordinaryMinds: metadata, objects, auditIds: commonAuditIds, logger: controlObservability }),
+    membership: new MembershipControlService({ memberships: metadata, digest: objects, auditIds: commonAuditIds, logger: controlObservability }),
     reads: new ControlReadService(metadata),
-    invitation: new InvitationControlService({ invitations: metadata, objects, ids: generated }),
-    routes: new MindRouteService({ routes: metadata, host }),
-    catalog: new PublicMindCatalogService({ catalog: metadata, host }),
-    tokens: new TokenLifecycleService({ clock, tokenHasher, tokenIds: generated, tokens: metadata }),
+    invitation: new InvitationControlService({ invitations: metadata, objects, ids: generated, logger: controlObservability }),
+    routes: new MindRouteService({ routes: metadata, host, logger: controlObservability }),
+    catalog: new PublicMindCatalogService({ catalog: metadata, host, logger: controlObservability }),
+    tokens: new TokenLifecycleService({ clock, tokenHasher, tokenIds: generated, tokens: metadata, logger: controlObservability }),
   });
 
   const web = createProductWebHttpHandler({
@@ -564,8 +643,81 @@ export async function createProductSiteRuntime(
     now: clock.now,
     requestId: () => nextOpaque("background-request"),
     handlers: {
-      revisionIndex: (actor, jobId) => indexJobs.handle({ actor, jobId: jobId as never }),
-      export: (actor, jobId) => exportJobs.handle({ actor: Object.freeze({ ...actor, deploymentCapabilities: Object.freeze(["content:export"] as never) }), jobId: jobId as never }),
+      revisionIndex: async (actor, jobId) => {
+        const startedAt = Date.now();
+        try {
+          const result = await indexJobs.handle({ actor, jobId: jobId as never });
+          backgroundObservability.recordJob({
+            actor,
+            jobId: jobId as never,
+            occurredAtUtc: clock.now(),
+            job: "revision_index",
+            outcome: result.kind === "completed" || result.kind === "already_completed"
+              ? "success"
+              : result.kind === "failed"
+                ? "failure"
+                : result.kind === "not_available"
+                  ? "unavailable"
+                  : "retry",
+            lagMs: Math.max(0, Date.now() - startedAt),
+          });
+          return result;
+        } catch (error) {
+          backgroundObservability.recordJob({
+            actor,
+            jobId: jobId as never,
+            occurredAtUtc: clock.now(),
+            job: "revision_index",
+            outcome: "failure",
+            lagMs: Math.max(0, Date.now() - startedAt),
+          });
+          throw error;
+        }
+      },
+      export: async (actor, jobId) => {
+        const startedAt = Date.now();
+        const exportActor = Object.freeze({
+          ...actor,
+          deploymentCapabilities: Object.freeze(["content:export"] as never),
+        });
+        try {
+          const result = await exportJobs.handle({ actor: exportActor, jobId: jobId as never });
+          const succeeded = result.kind === "completed" || result.kind === "already_completed";
+          backgroundObservability.recordJob({
+            actor,
+            jobId: jobId as never,
+            occurredAtUtc: clock.now(),
+            job: "export",
+            outcome: succeeded
+              ? "success"
+              : result.kind === "failed"
+                ? "failure"
+                : result.kind === "not_available"
+                  ? "unavailable"
+                  : "retry",
+            lagMs: Math.max(0, Date.now() - startedAt),
+          });
+          if (succeeded) {
+            backgroundObservability.recordExportUsage({
+              actor,
+              jobId: jobId as never,
+              occurredAtUtc: clock.now(),
+              count: 1,
+            });
+          }
+          return result;
+        } catch (error) {
+          backgroundObservability.recordJob({
+            actor,
+            jobId: jobId as never,
+            occurredAtUtc: clock.now(),
+            job: "export",
+            outcome: "failure",
+            lagMs: Math.max(0, Date.now() - startedAt),
+          });
+          throw error;
+        }
+      },
       auditOutbox: (actor, messageId) => auditJobs.handle({ actor, outboxMessageId: messageId as never }),
       invitationExpiry: (actor, jobId) => invitationJobs.handle({ actor, jobId: jobId as never }),
       exportExpiry: (actor, jobId) => exportExpiry.handle({ actor, jobId: jobId as never }),
@@ -576,8 +728,8 @@ export async function createProductSiteRuntime(
     dispatchBackground,
     async fetch(request: Request): Promise<Response | null> {
       const path = new URL(request.url).pathname;
-      if (path === MCP_ENDPOINT) return mcp(request);
-      if (path === MCP_LEGACY_CODEX_ENDPOINT) return legacyCodexMcp(request);
+      if (path === MCP_ENDPOINT) return handleMcp(request, "modern");
+      if (path === MCP_LEGACY_CODEX_ENDPOINT) return handleMcp(request, "compatibility");
       if (path === MCP_RETIRED_SITES_ENDPOINT) {
         return new Response(
           JSON.stringify({
@@ -595,7 +747,74 @@ export async function createProductSiteRuntime(
           },
         );
       }
-      return (await exportDownload(request)) ?? web(request);
+      const startedAt = Date.now();
+      const exportRequest = path.startsWith("/api/v1/exports/");
+      try {
+        const response = (await exportDownload(request)) ?? await web(request);
+        if (response !== null) {
+          const surface = exportRequest ? "content" as const : "control" as const;
+          const operation = exportRequest ? "export" as const : "request" as const;
+          recordRuntimeMetric(telemetry, {
+            kind: "operational",
+            metric: "request_latency_ms",
+            surface,
+            operation,
+            outcome: response.status >= 400 ? "failure" : "success",
+            unit: "milliseconds",
+            value: Math.max(0, Date.now() - startedAt),
+            occurredAtUtc: clock.now(),
+            requestId: null,
+            jobId: null,
+            cohort: null,
+          });
+          if (response.status === 401) {
+            recordRuntimeMetric(telemetry, {
+              kind: "operational",
+              metric: "authentication_outcome",
+              surface,
+              operation: "authentication",
+              outcome: "denied",
+              unit: "count",
+              value: 1,
+              occurredAtUtc: clock.now(),
+              requestId: null,
+              jobId: null,
+              cohort: null,
+            });
+          }
+          if (response.status >= 500) {
+            recordRuntimeMetric(telemetry, {
+              kind: "operational",
+              metric: "request_error",
+              surface,
+              operation: response.status === 503 ? "storage" : operation,
+              outcome: response.status === 503 ? "unavailable" : "failure",
+              unit: "count",
+              value: 1,
+              occurredAtUtc: clock.now(),
+              requestId: null,
+              jobId: null,
+              cohort: null,
+            });
+          }
+        }
+        return response;
+      } catch (error) {
+        recordRuntimeMetric(telemetry, {
+          kind: "operational",
+          metric: "request_error",
+          surface: exportRequest ? "content" : "control",
+          operation: "storage",
+          outcome: "unavailable",
+          unit: "count",
+          value: 1,
+          occurredAtUtc: clock.now(),
+          requestId: null,
+          jobId: null,
+          cohort: null,
+        });
+        throw error;
+      }
     },
   });
 }

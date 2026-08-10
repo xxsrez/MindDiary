@@ -388,6 +388,12 @@ test("pilot Product Site route map keeps one UAT shell, exact active navigation,
     assert.doesNotMatch(html, /owner-only production Site|current Site is production/i, path);
   }
 
+  const help = await handler(new Request(`${origin}/help`));
+  const helpHtml = await help.text();
+  assert.match(helpHtml, /no production SLA or guaranteed recovery/u);
+  assert.match(helpHtml, /Keep your own export before risky work/u);
+  assert.match(helpHtml, /Report only the symptom, UTC time, and safe request ID/u);
+
   for (const path of ["/api", "/mcp", "/settings", "/settings/unknown", "/minds/extra"]) {
     assert.equal(await handler(new Request(`${origin}${path}`)), null, path);
   }
@@ -693,6 +699,10 @@ test("unbound verified Sites identity is bootstrap-only and remains server-owned
   assert.equal(registration.status, 200);
   const registrationHtml = await registration.text();
   assert.match(registrationHtml, /data-isolated-account-form/);
+  assert.match(registrationHtml, /data-uat-pilot-boundaries/);
+  assert.match(registrationHtml, /no production SLA, guaranteed recovery/u);
+  assert.match(registrationHtml, /Export an exact revision before risky changes/u);
+  assert.match(registrationHtml, /Never share an MCP token, Sites credential/u);
   assert.match(registrationHtml, /Create isolated account/);
   assert.match(registrationHtml, /mind-diary-onboarding-client\.js/);
   assert.doesNotMatch(registrationHtml, /person@example\.com/);

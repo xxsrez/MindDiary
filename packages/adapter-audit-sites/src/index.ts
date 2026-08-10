@@ -1,7 +1,191 @@
-import type {
-  AuditEvent,
-  AuditSink,
+import {
+  PILOT_COHORTS,
+  PRIVACY_SAFE_OBSERVABILITY_OPERATIONS,
+  PRIVACY_SAFE_OBSERVABILITY_OUTCOMES,
+  PRIVACY_SAFE_OBSERVABILITY_SURFACES,
+  PRIVACY_SAFE_OBSERVABILITY_UNITS,
+  PRIVACY_SAFE_OPERATIONAL_METRICS,
+  PRIVACY_SAFE_PILOT_METRICS,
+  type PrivacySafeObservabilityEvent,
+  type PrivacySafeObservabilityMetric,
+  type PrivacySafeObservabilitySink,
+  type PrivacySafeObservabilityUnit,
+  type AuditEvent,
+  type AuditSink,
 } from "@mind-diary/application-ports";
+
+export const SITES_OBSERVABILITY_ADAPTER =
+  "sites-worker-privacy-safe-observability" as const;
+export const SITES_OBSERVABILITY_EVENT =
+  "mind-diary.privacy-safe-observability" as const;
+export const SITES_OBSERVABILITY_SCHEMA =
+  "mind-diary/privacy-safe-observability/v1" as const;
+
+const OBSERVABILITY_EVENT_KEYS = Object.freeze([
+  "kind",
+  "metric",
+  "surface",
+  "operation",
+  "outcome",
+  "unit",
+  "value",
+  "occurredAtUtc",
+  "requestId",
+  "jobId",
+  "cohort",
+] as const);
+const OBSERVABILITY_EVENT_KEY_SET = new Set<string>(OBSERVABILITY_EVENT_KEYS);
+const OPERATIONAL_METRICS = new Set<string>(PRIVACY_SAFE_OPERATIONAL_METRICS);
+const PILOT_METRICS = new Set<string>(PRIVACY_SAFE_PILOT_METRICS);
+const OBSERVABILITY_SURFACES = new Set<string>(PRIVACY_SAFE_OBSERVABILITY_SURFACES);
+const OBSERVABILITY_OPERATIONS = new Set<string>(PRIVACY_SAFE_OBSERVABILITY_OPERATIONS);
+const OBSERVABILITY_OUTCOMES = new Set<string>(PRIVACY_SAFE_OBSERVABILITY_OUTCOMES);
+const OBSERVABILITY_UNITS = new Set<string>(PRIVACY_SAFE_OBSERVABILITY_UNITS);
+const OBSERVABILITY_COHORTS = new Set<string>(PILOT_COHORTS);
+const SAFE_REQUEST_ID = /^(?:req|request|background-request|download-request)[_-][A-Za-z0-9][A-Za-z0-9._:-]{0,119}$/u;
+const SAFE_JOB_ID = /^(?:(?:job(?:-[a-z]+)?)|export|index|audit|invitation|deletion)[_-][A-Za-z0-9][A-Za-z0-9._:-]{0,119}$/u;
+const SAFE_UTC_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/u;
+
+const OBSERVABILITY_METRIC_UNITS: Readonly<
+  Record<PrivacySafeObservabilityMetric, PrivacySafeObservabilityUnit>
+> = Object.freeze({
+  request_latency_ms: "milliseconds",
+  request_error: "count",
+  authentication_outcome: "count",
+  cas_conflict: "count",
+  index_lag_ms: "milliseconds",
+  export_lag_ms: "milliseconds",
+  invitation_outcome: "count",
+  token_outcome: "count",
+  deletion_outcome: "count",
+  rate_limit: "count",
+  storage_cost_bytes: "bytes",
+  query_cost_units: "query_units",
+  setup_completion: "count",
+  time_to_first_useful_search_ms: "milliseconds",
+  time_to_first_meaningful_commit_ms: "milliseconds",
+  usage: "count",
+  retention: "count",
+  lexical_search_effectiveness: "ratio",
+  citation_success: "ratio",
+});
+
+export class UnsafeSitesObservabilityEventError extends TypeError {
+  constructor() {
+    super("privacy-safe Sites observability event rejected");
+    this.name = "UnsafeSitesObservabilityEventError";
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isSafeCorrelation(value: unknown, pattern: RegExp): value is string | null {
+  return value === null || (typeof value === "string" && pattern.test(value));
+}
+
+function validateObservabilityEvent(
+  value: unknown,
+): asserts value is PrivacySafeObservabilityEvent {
+  if (!isRecord(value)) throw new UnsafeSitesObservabilityEventError();
+  const keys = Object.keys(value);
+  if (
+    keys.length !== OBSERVABILITY_EVENT_KEYS.length ||
+    keys.some((key) => !OBSERVABILITY_EVENT_KEY_SET.has(key))
+  ) {
+    throw new UnsafeSitesObservabilityEventError();
+  }
+  const metric = value.metric;
+  const operational = typeof metric === "string" && OPERATIONAL_METRICS.has(metric);
+  const pilot = typeof metric === "string" && PILOT_METRICS.has(metric);
+  if (
+    (value.kind !== "operational" && value.kind !== "pilot") ||
+    (value.kind === "operational" && !operational) ||
+    (value.kind === "pilot" && !pilot) ||
+    typeof metric !== "string" ||
+    !OBSERVABILITY_SURFACES.has(String(value.surface)) ||
+    !OBSERVABILITY_OPERATIONS.has(String(value.operation)) ||
+    !OBSERVABILITY_OUTCOMES.has(String(value.outcome)) ||
+    !OBSERVABILITY_UNITS.has(String(value.unit)) ||
+    OBSERVABILITY_METRIC_UNITS[metric as PrivacySafeObservabilityMetric] !== value.unit ||
+    typeof value.value !== "number" ||
+    !Number.isFinite(value.value) ||
+    value.value < 0 ||
+    value.value > Number.MAX_SAFE_INTEGER ||
+    (value.unit === "ratio" && value.value > 1) ||
+    typeof value.occurredAtUtc !== "string" ||
+    !SAFE_UTC_INSTANT.test(value.occurredAtUtc) ||
+    !Number.isFinite(Date.parse(value.occurredAtUtc)) ||
+    !isSafeCorrelation(value.requestId, SAFE_REQUEST_ID) ||
+    !isSafeCorrelation(value.jobId, SAFE_JOB_ID) ||
+    (value.kind === "operational" && value.cohort !== null) ||
+    (value.kind === "pilot" &&
+      (typeof value.cohort !== "string" || !OBSERVABILITY_COHORTS.has(value.cohort)))
+  ) {
+    throw new UnsafeSitesObservabilityEventError();
+  }
+}
+
+function safeObservabilityProjection(
+  event: Readonly<PrivacySafeObservabilityEvent>,
+): Readonly<PrivacySafeObservabilityEvent> {
+  return Object.freeze({
+    kind: event.kind,
+    metric: event.metric,
+    surface: event.surface,
+    operation: event.operation,
+    outcome: event.outcome,
+    unit: event.unit,
+    value: event.value,
+    occurredAtUtc: event.occurredAtUtc,
+    requestId: event.requestId,
+    jobId: event.jobId,
+    cohort: event.cohort,
+  });
+}
+
+export interface SitesObservabilityWriter {
+  write(serializedEvent: string): void | Promise<void>;
+}
+
+const DEFAULT_SITES_OBSERVABILITY_WRITER: SitesObservabilityWriter = Object.freeze({
+  write(serializedEvent: string): void {
+    console.info(serializedEvent);
+  },
+});
+
+/**
+ * Deployable Sites sink. It accepts only the closed event projection and emits
+ * one bounded JSON line; request inputs and application payloads are impossible
+ * to pass through its typed/runtime-validated boundary.
+ */
+export class SitesPrivacySafeObservabilitySink implements PrivacySafeObservabilitySink {
+  readonly kind = "privacy-safe-observability-sink" as const;
+  readonly #writer: SitesObservabilityWriter;
+
+  constructor(writer: SitesObservabilityWriter = DEFAULT_SITES_OBSERVABILITY_WRITER) {
+    this.#writer = writer;
+  }
+
+  record(event: Readonly<PrivacySafeObservabilityEvent>): void | Promise<void> {
+    validateObservabilityEvent(event);
+    const safe = safeObservabilityProjection(event);
+    return this.#writer.write(JSON.stringify({
+      event: SITES_OBSERVABILITY_EVENT,
+      schema: SITES_OBSERVABILITY_SCHEMA,
+      ...safe,
+    }));
+  }
+}
+
+export function createSitesPrivacySafeObservabilitySink(
+  writer?: SitesObservabilityWriter,
+): SitesPrivacySafeObservabilitySink {
+  return writer === undefined
+    ? new SitesPrivacySafeObservabilitySink()
+    : new SitesPrivacySafeObservabilitySink(writer);
+}
 
 export const SITES_AUDIT_ADAPTER = "sites-d1-privacy-safe-audit" as const;
 

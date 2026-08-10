@@ -315,6 +315,41 @@ shell и routing принадлежат `AND-150`; ordinary Minds — `AND-151`;
 считается доказательством соответствующего live workflow; join-gate exact UAT
 candidate принадлежит `AND-161`.
 
+### Privacy-safe UAT operations
+
+Bounded pilot начинается только после показа участнику следующих границ:
+
+- UAT принимает только данные, для которых участник сохранил собственный
+  допустимый backup/export; production SLA, guaranteed recovery и legal
+  retention не обещаются;
+- MCP token, Sites credential и download URL индивидуальны и не передаются
+  другим участникам или operator-у; suspected leak требует немедленного revoke;
+- export фиксирует exact revision и является рекомендуемой резервной копией до
+  рискованного изменения; whole-Mind/account delete остаётся немедленным и
+  необратимым и не создаёт recovery/forensic receipt;
+- support/recovery идёт только через исходный trusted pilot channel и никогда
+  не просит private corpus, raw query, verified email в operational evidence,
+  token, authorization header или signed/download URL.
+
+Deployable UAT telemetry использует closed privacy-safe event projection:
+`metric`, `surface`, `operation`, `outcome`, unit/value, UTC timestamp и только
+opaque bounded request/job correlation. Она классифицирует setup,
+authentication/MCP request failures, request latency, CAS conflicts, index/export
+lag, token/invitation/deletion outcomes и storage/runtime unavailability. Sink
+fail closed отклоняет дополнительные поля; application outcome не зависит от
+успеха telemetry. Query, content/body/path/name, email, principal/space/revision
+identity, credentials, headers и URLs не записываются.
+
+Operator использует bounded recent logs, exact current deployment и заранее
+зафиксированный compatible rollback target. Incident path сначала ограничивает
+impact через token revoke либо Sites audience revoke, затем классифицирует
+auth/MCP/storage surface, при необходимости возвращает exact last-good UAT
+version и повторяет redacted Web/MCP smoke. Backup/restore readiness доказывается
+только на non-sensitive fixture corpus: deterministic exact-revision export,
+restore как новая HEAD revision и повторная validation/export. Cohort execution,
+production SLA/retention, billing/analytics и outbound notifications в этот
+operational slice не входят.
+
 ## Первая MCP-поверхность
 
 Все Mind-specific content calls принимают explicit `mind` selector (`/me`,

@@ -153,6 +153,17 @@ function renderRegistration(
         <h1>Choose how to continue</h1>
         <p>This verified sign-in is not linked to a Mind Diary account. For safety, Mind Diary will never guess which earlier account might be yours.</p>
       </div>
+      <section class="md-auth-choice" aria-labelledby="uat-pilot-boundaries-title" data-uat-pilot-boundaries>
+        <p class="md-eyebrow">Restricted UAT pilot</p>
+        <h2 id="uat-pilot-boundaries-title">Keep your own recoverable copy</h2>
+        <ul>
+          <li>Use only data you are willing to place in this restricted UAT; do not keep the only copy here.</li>
+          <li>This is not production and has no production SLA, guaranteed recovery, or accepted legal-retention promise.</li>
+          <li>Export an exact revision before risky changes. Mind and account deletion are immediate and irreversible.</li>
+          <li>Never share an MCP token, Sites credential, authorization header, or export/download URL — including with the pilot operator.</li>
+        </ul>
+        <p>Support needs only the symptom, UTC time, and a safe request ID. Never send private content, a raw query, email, credential, or download URL.</p>
+      </section>
       <div class="md-auth-choice-grid">
         <section class="md-auth-choice md-auth-choice--primary" aria-labelledby="isolated-account-title">
           <p class="md-eyebrow">Start separately</p>

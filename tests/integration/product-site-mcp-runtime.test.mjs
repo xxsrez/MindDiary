@@ -275,6 +275,7 @@ test("durable product runtime carries a Sites account token through Codex MCP an
   const database = new FakeD1Database();
   const bucket = new FakeR2Bucket();
   const scheduled = [];
+  const telemetryLines = [];
   const runtimeOptions = {
     database,
     bucket,
@@ -292,6 +293,7 @@ test("durable product runtime carries a Sites account token through Codex MCP an
     locatorKey: key(41),
     exportDownloadVerifierKey: key(81),
     csrfKey: key(121),
+    observabilityWriter: { write(line) { telemetryLines.push(line); } },
     schedule(work) { scheduled.push(work); },
   };
   let runtime = await createProductSiteRuntime(runtimeOptions);
@@ -560,6 +562,12 @@ test("durable product runtime carries a Sites account token through Codex MCP an
     previousRevisionId,
   );
   assert.equal(committedBody.result.structuredContent.data.index_status, "queued");
+  const committedIndexWork = scheduled.findLast((work) => work.kind === "revision_index");
+  assert.ok(committedIndexWork);
+  await runtime.dispatchBackground({
+    kind: "revision_index",
+    jobId: committedIndexWork.id,
+  });
 
   const listedAfterCommit = await legacyMcp(runtime, secret, {
     jsonrpc: "2.0",
@@ -952,6 +960,37 @@ test("durable product runtime carries a Sites account token through Codex MCP an
   assert.match(pageAfterAccountDeletionHtml, /Create a new isolated account/u);
   assert.match(pageAfterAccountDeletionHtml, /same trusted channel that admitted you/u);
   assert.doesNotMatch(pageAfterAccountDeletionHtml, /data-account-deletion-impact|Runtime Owner Renamed/u);
+
+  const telemetry = telemetryLines.map((line) => JSON.parse(line));
+  assert.ok(telemetry.length > 0);
+  assert.ok(telemetry.every((event) =>
+    event.event === "mind-diary.privacy-safe-observability" &&
+    event.schema === "mind-diary/privacy-safe-observability/v1"
+  ));
+  const metrics = new Set(telemetry.map((event) => event.metric));
+  for (const metric of [
+    "setup_completion",
+    "request_latency_ms",
+    "authentication_outcome",
+    "token_outcome",
+    "deletion_outcome",
+    "cas_conflict",
+    "index_lag_ms",
+    "export_lag_ms",
+  ]) {
+    assert.ok(metrics.has(metric), `missing deployable telemetry metric ${metric}`);
+  }
+  const serializedTelemetry = JSON.stringify(telemetry);
+  for (const forbidden of [
+    "Runtime.Owner@Example.COM",
+    "runtime.owner@example.com",
+    secret,
+    completedExport.download_url,
+    "concepts/runtime-proof.md",
+    "Runtime proof",
+  ]) {
+    assert.equal(serializedTelemetry.includes(forbidden), false, forbidden);
+  }
 });
 
 test("durable Product Site enforces public baseline access, atomic ownership transfer, and immediate private revoke", async () => {
@@ -974,6 +1013,7 @@ test("durable Product Site enforces public baseline access, atomic ownership tra
     locatorKey: key(42),
     exportDownloadVerifierKey: key(82),
     csrfKey: key(122),
+    observabilityWriter: { write() {} },
     schedule() {},
   };
   let runtime = await createProductSiteRuntime(runtimeOptions);
@@ -1306,6 +1346,7 @@ test("durable collaboration accepts exactly once, rejects stale role state, and 
     locatorKey: key(43),
     exportDownloadVerifierKey: key(83),
     csrfKey: key(123),
+    observabilityWriter: { write() {} },
     schedule() {},
   };
   let runtime = await createProductSiteRuntime(runtimeOptions);

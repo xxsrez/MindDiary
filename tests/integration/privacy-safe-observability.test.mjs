@@ -6,6 +6,12 @@ import {
   UnsafeObservabilityEventError,
 } from "@mind-diary/adapter-audit-memory";
 import {
+  SITES_OBSERVABILITY_EVENT,
+  SITES_OBSERVABILITY_SCHEMA,
+  SitesPrivacySafeObservabilitySink,
+  UnsafeSitesObservabilityEventError,
+} from "@mind-diary/adapter-audit-sites";
+import {
   createLocalMcpHttpBoundary,
   createLocalPrivacySafeObservabilityBoundary,
 } from "@mind-diary/composition-root";
@@ -251,4 +257,57 @@ test("redaction contract rejects extra payload fields and unsafe correlations", 
   }
   assert.deepEqual(sink.eventsForTest(), []);
   assert.deepEqual(sink.dashboard().metrics, []);
+});
+
+test("deployable Sites telemetry emits one closed JSON projection and rejects private dimensions", () => {
+  const lines = [];
+  const sink = new SitesPrivacySafeObservabilitySink({
+    write(serializedEvent) {
+      lines.push(serializedEvent);
+    },
+  });
+  sink.record(validEvent({
+    requestId: "request_sites_observability_1",
+    jobId: "job-export_fixture_1",
+  }));
+  assert.equal(lines.length, 1);
+  const event = JSON.parse(lines[0]);
+  assert.equal(event.event, SITES_OBSERVABILITY_EVENT);
+  assert.equal(event.schema, SITES_OBSERVABILITY_SCHEMA);
+  assert.deepEqual(Object.keys(event).sort(), [
+    "cohort",
+    "event",
+    "jobId",
+    "kind",
+    "metric",
+    "occurredAtUtc",
+    "operation",
+    "outcome",
+    "requestId",
+    "schema",
+    "surface",
+    "unit",
+    "value",
+  ]);
+
+  for (const unsafe of [
+    { ...validEvent(), privateQuery: PRIVATE_QUERY },
+    { ...validEvent(), body: PRIVATE_BODY },
+    { ...validEvent(), email: VERIFIED_EMAIL },
+    { ...validEvent(), token: TOKEN },
+    { ...validEvent(), downloadUrl: DOWNLOAD_URL },
+    validEvent({ requestId: VERIFIED_EMAIL }),
+    validEvent({ jobId: DOWNLOAD_URL }),
+  ]) {
+    assert.throws(
+      () => sink.record(unsafe),
+      (error) => error instanceof UnsafeSitesObservabilityEventError &&
+        !JSON.stringify(error).includes(PRIVATE_QUERY) &&
+        !JSON.stringify(error).includes(PRIVATE_BODY) &&
+        !JSON.stringify(error).includes(VERIFIED_EMAIL) &&
+        !JSON.stringify(error).includes(TOKEN) &&
+        !JSON.stringify(error).includes(DOWNLOAD_URL),
+    );
+  }
+  assert.equal(lines.length, 1);
 });
