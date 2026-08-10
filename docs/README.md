@@ -66,6 +66,12 @@ evidence, предлагаемый дизайн и ещё не проверен�
   project-specific commands, integration branch, CI, dev launcher, UAT
   URL/evidence и production configuration.
 
+## Активные планы
+
+- [План запуска MVP 0.1 и сверки token estimate](tasks/2026-08-10-mvp-01-pilot-readiness-estimate.md)
+  — две сохранённые token baselines, planning allocation `AND-150`–`AND-161`
+  и protocol измерения фактического расхода следующего `ship-linear-release`.
+
 ## Принятые решения
 
 - [ADR-0001: название продукта и пользовательская лексика](decisions/0001-product-name-and-language.md)
