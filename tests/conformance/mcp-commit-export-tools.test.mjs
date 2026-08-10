@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   MCP_COMMIT_EXPORT_TOOL_DEFINITIONS,
+  MCP_READ_TOOL_DEFINITIONS,
   createMcpHttpHandler,
   createMcpToolErrorResult,
   createMcpToolSuccessResult,
@@ -273,23 +274,42 @@ test("publishes strict commit/export schemas and truthful annotations", () => {
     destructiveHint: true,
     openWorldHint: false,
   });
+  assert.match(commit.description, /preview exact paths and visibility impact/u);
+  assert.match(commit.description, /obtain explicit confirmation/u);
+  assert.match(commit.description, /re-read HEAD/u);
+  assert.match(commit.description, /revision_conflict/u);
 
-  assert.deepEqual(definitions.get("start_export").annotations, {
+  const startExport = definitions.get("start_export");
+  assert.deepEqual(startExport.annotations, {
     readOnlyHint: false,
     destructiveHint: false,
     openWorldHint: false,
   });
-  assert.deepEqual(definitions.get("get_export_status").annotations, {
+  assert.match(startExport.description, /exact revision/u);
+  const exportStatus = definitions.get("get_export_status");
+  assert.deepEqual(exportStatus.annotations, {
     readOnlyHint: true,
     destructiveHint: false,
     openWorldHint: false,
   });
+  assert.match(exportStatus.description, /exact SHA-256 and size/u);
+  assert.match(exportStatus.description, /Keep the URL out of logs and prompts/u);
   assert.equal(
     "bytes" in
-      definitions.get("get_export_status").outputSchema.properties.data.properties.job
+      exportStatus.outputSchema.properties.data.properties.job
         .properties,
     false,
   );
+});
+
+test("history tool descriptions keep historical restore read-only and require a fresh confirmed commit", () => {
+  const definitions = new Map(
+    MCP_READ_TOOL_DEFINITIONS.map((definition) => [definition.name, definition]),
+  );
+  assert.match(definitions.get("list_revisions").description, /restore preview/u);
+  assert.match(definitions.get("list_revisions").description, /never makes history writable/u);
+  assert.match(definitions.get("get_revision").description, /Historical reads remain read-only/u);
+  assert.match(definitions.get("get_revision").description, /confirmed commit_changeset against a fresh current HEAD/u);
 });
 
 test("tools/list replaces placeholders with canonical definitions and hides commit from read-only tokens", async () => {

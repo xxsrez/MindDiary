@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import test from "node:test";
 
 import {
@@ -273,6 +274,7 @@ async function modernMcp(runtime, secret, body) {
 test("durable product runtime carries a Sites account token through Codex MCP and revokes it", async () => {
   const database = new FakeD1Database();
   const bucket = new FakeR2Bucket();
+  const scheduled = [];
   const runtimeOptions = {
     database,
     bucket,
@@ -290,7 +292,7 @@ test("durable product runtime carries a Sites account token through Codex MCP an
     locatorKey: key(41),
     exportDownloadVerifierKey: key(81),
     csrfKey: key(121),
-    schedule() {},
+    schedule(work) { scheduled.push(work); },
   };
   let runtime = await createProductSiteRuntime(runtimeOptions);
 
@@ -330,6 +332,10 @@ test("durable product runtime carries a Sites account token through Codex MCP an
   assert.match(settingsHtml, new RegExp(`${ORIGIN.replaceAll(".", "\\.")}\\/api\\/mcp\\/2025-11-25`, "u"));
   assert.match(settingsHtml, new RegExp(`${ORIGIN.replaceAll(".", "\\.")}\\/api\\/mcp`, "u"));
   assert.match(settingsHtml, /data-run-mcp-self-check disabled/u);
+  assert.match(settingsHtml, /Preview, restore and export with Codex/u);
+  assert.match(settingsHtml, /data-copy-code="mind-diary-safe-write-playbook"/u);
+  assert.match(settingsHtml, /data-copy-code="mind-diary-restore-export-playbook"/u);
+  assert.match(settingsHtml, /Revoked access[\s\S]*Fail closed/u);
   assert.doesNotMatch(settingsHtml, /&lt;your-mind-diary-site&gt;/u);
   const registeredCsrf = csrfFromHtml(settingsHtml);
 
@@ -572,6 +578,176 @@ test("durable product runtime carries a Sites account token through Codex MCP an
   assert.equal(
     advancedMind.head.revision_id,
     committedBody.result.structuredContent.data.envelope.revision.revision_id,
+  );
+
+  const revisions = await legacyMcp(runtime, secret, {
+    jsonrpc: "2.0",
+    id: "history-after-write",
+    method: "tools/call",
+    params: {
+      _meta: { progressToken: "history" },
+      name: "list_revisions",
+      arguments: { mind: "/me", limit: 10 },
+    },
+  });
+  assert.equal(revisions.status, 200);
+  const revisionsBody = await revisions.json();
+  assert.equal(revisionsBody.result.isError, false, JSON.stringify(revisionsBody));
+  const revisionRows = revisionsBody.result.structuredContent.data.revisions;
+  assert.deepEqual(
+    revisionRows.slice(0, 2).map(({ revision }) => revision.revision_id),
+    [advancedMind.head.revision_id, previousRevisionId],
+  );
+
+  const historical = await legacyMcp(runtime, secret, {
+    jsonrpc: "2.0",
+    id: "exact-history-before-restore",
+    method: "tools/call",
+    params: {
+      _meta: { progressToken: "historical" },
+      name: "get_revision",
+      arguments: { mind: "/me", revision_id: previousRevisionId },
+    },
+  });
+  assert.equal(historical.status, 200);
+  const historicalBody = await historical.json();
+  assert.equal(historicalBody.result.isError, false, JSON.stringify(historicalBody));
+  assert.equal(
+    historicalBody.result.structuredContent.data.revision.revision_id,
+    previousRevisionId,
+  );
+
+  const staleRestore = await legacyMcp(runtime, secret, {
+    jsonrpc: "2.0",
+    id: "stale-restore",
+    method: "tools/call",
+    params: {
+      _meta: { progressToken: "stale-restore" },
+      name: "commit_changeset",
+      arguments: {
+        mind: "/me",
+        expected_revision: previousRevisionId,
+        idempotency_key: "restore-stale:product-runtime-e2e",
+        summary: "Attempt stale historical restore",
+        operations: [{ type: "delete_file", path: "concepts/runtime-proof.md" }],
+      },
+    },
+  });
+  assert.equal(staleRestore.status, 200);
+  const staleRestoreBody = await staleRestore.json();
+  assert.equal(staleRestoreBody.result.isError, true);
+  assert.equal(
+    staleRestoreBody.result.structuredContent.error.code,
+    "revision_conflict",
+  );
+  assert.equal(
+    staleRestoreBody.result.structuredContent.error.details.current_revision_id,
+    advancedMind.head.revision_id,
+  );
+
+  const restored = await legacyMcp(runtime, secret, {
+    jsonrpc: "2.0",
+    id: "confirmed-restore",
+    method: "tools/call",
+    params: {
+      _meta: { progressToken: "confirmed-restore" },
+      name: "commit_changeset",
+      arguments: {
+        mind: "/me",
+        expected_revision: advancedMind.head.revision_id,
+        idempotency_key: "restore-fresh:product-runtime-e2e",
+        summary: "Restore the selected historical state as a new revision",
+        operations: [{ type: "delete_file", path: "concepts/runtime-proof.md" }],
+      },
+    },
+  });
+  assert.equal(restored.status, 200);
+  const restoredBody = await restored.json();
+  assert.equal(restoredBody.result.isError, false, JSON.stringify(restoredBody));
+  const restoredRevisionId =
+    restoredBody.result.structuredContent.data.envelope.revision.revision_id;
+  assert.notEqual(restoredRevisionId, previousRevisionId);
+  assert.notEqual(restoredRevisionId, advancedMind.head.revision_id);
+
+  const validatedRestore = await legacyMcp(runtime, secret, {
+    jsonrpc: "2.0",
+    id: "validate-restored-revision",
+    method: "tools/call",
+    params: {
+      _meta: { progressToken: "validate-restored" },
+      name: "validate_mind",
+      arguments: {
+        mind: "/me",
+        revision_selector: { kind: "revision", revision_id: restoredRevisionId },
+      },
+    },
+  });
+  assert.equal(validatedRestore.status, 200);
+  const validatedRestoreBody = await validatedRestore.json();
+  assert.equal(validatedRestoreBody.result.isError, false);
+  assert.equal(validatedRestoreBody.result.structuredContent.data.valid, true);
+
+  const exportStarted = await legacyMcp(runtime, secret, {
+    jsonrpc: "2.0",
+    id: "export-restored-revision",
+    method: "tools/call",
+    params: {
+      _meta: { progressToken: "export-start" },
+      name: "start_export",
+      arguments: {
+        mind: "/me",
+        revision_selector: { kind: "revision", revision_id: restoredRevisionId },
+        idempotency_key: "export-restored:product-runtime-e2e",
+      },
+    },
+  });
+  assert.equal(exportStarted.status, 200);
+  const exportStartedBody = await exportStarted.json();
+  assert.equal(exportStartedBody.result.isError, false, JSON.stringify(exportStartedBody));
+  const exportJob = exportStartedBody.result.structuredContent.data.job;
+  assert.equal(exportJob.revision_id, restoredRevisionId);
+  const exportWork = scheduled.findLast(
+    (work) => work.kind === "export" && work.id === exportJob.job_id,
+  );
+  assert.ok(exportWork);
+  await runtime.dispatchBackground({ kind: "export", jobId: exportWork.id });
+
+  const exportStatus = await legacyMcp(runtime, secret, {
+    jsonrpc: "2.0",
+    id: "status-restored-export",
+    method: "tools/call",
+    params: {
+      _meta: { progressToken: "export-status" },
+      name: "get_export_status",
+      arguments: { job_id: exportJob.job_id },
+    },
+  });
+  assert.equal(exportStatus.status, 200);
+  const exportStatusBody = await exportStatus.json();
+  assert.equal(exportStatusBody.result.isError, false, JSON.stringify(exportStatusBody));
+  const completedExport = exportStatusBody.result.structuredContent.data.job;
+  assert.equal(completedExport.status, "succeeded");
+  assert.equal(completedExport.revision_id, restoredRevisionId);
+  assert.equal(completedExport.archive_format, "MD-OKF-ZIP-1");
+
+  const downloaded = await responseFrom(runtime, new Request(completedExport.download_url));
+  assert.equal(downloaded.status, 200);
+  assert.equal(downloaded.headers.get("content-type"), "application/zip");
+  assert.equal(downloaded.headers.get("cache-control"), "no-store");
+  assert.equal(
+    downloaded.headers.get("content-disposition"),
+    'attachment; filename="mind-diary-okf-bundle.zip"',
+  );
+  const archive = new Uint8Array(await downloaded.arrayBuffer());
+  assert.equal(archive.byteLength, completedExport.size);
+  assert.equal(
+    `sha256:${createHash("sha256").update(archive).digest("hex")}`,
+    completedExport.sha256,
+  );
+  const archiveText = new TextDecoder().decode(archive);
+  assert.doesNotMatch(
+    archiveText,
+    /principal_|token_|membership|audit|idempotency|runtime-proof/u,
   );
 
   const revoked = await responseFrom(runtime, new Request(

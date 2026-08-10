@@ -165,6 +165,11 @@ test("product root and MCP setup render live control projections and fixed same-
   assert.match(tokenHtml, /https:\/\/mind-diary\.example\/api\/mcp\/2025-11-25/);
   assert.match(tokenHtml, /https:\/\/mind-diary\.example\/api\/mcp/);
   assert.match(tokenHtml, /data-run-mcp-self-check disabled/);
+  assert.match(tokenHtml, /Preview, restore and export with Codex/);
+  assert.match(tokenHtml, /data-copy-code="mind-diary-safe-write-playbook"/);
+  assert.match(tokenHtml, /data-copy-code="mind-diary-restore-export-playbook"/);
+  assert.match(tokenHtml, /A restore is an ordinary confirmed changeset that creates a new HEAD/);
+  assert.match(tokenHtml, /Download URLs and credentials are bearer material/);
   assert.doesNotMatch(tokenHtml, /&lt;your-mind-diary-site&gt;/);
   assert.doesNotMatch(tokenHtml, /synthetic-show-once-value|verifier|principal_one/i);
 

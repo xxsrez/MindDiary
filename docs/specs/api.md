@@ -1413,6 +1413,24 @@ Stale HEAD возвращает tool execution error `revision_conflict` с
 `details.current_revision`. Никаких objects/revision, достижимых из HEAD, не
 публикуется.
 
+Codex-first preflight перед substantial delete/replace либо изменением
+`public`/`unlisted` HEAD состоит из `get_mind_info` current HEAD, bounded
+`browse_entries`/`fetch` затронутых paths, user-visible preview operations и
+явного подтверждения. После подтверждения client повторно проверяет HEAD и
+передаёт exact `expected_revision`. Этот preflight не является новым server
+draft/approval contract: окончательная authority остаётся у current ACL,
+token scope, full-bundle validation, CAS и idempotency.
+
+Restore использует только существующие tools. Client выбирает exact historical
+revision через `list_revisions`/`get_revision`, читает её canonical files в
+read-only mode, показывает current → target preview, затем обычным
+`commit_changeset` создаёт новую HEAD revision с выбранным состоянием. Старую
+revision нельзя изменить или сделать writable selector. При
+`revision_conflict` client не повторяет stale payload: он перечитывает HEAD,
+перестраивает preview и после нового confirmation использует новый
+idempotency key. Unavailable derived index не разрешает fallback на stale
+chunks; canonical browse/fetch остаются source of truth.
+
 ### `start_export`
 
 Input:
@@ -1497,6 +1515,14 @@ UTF-8, entries отсортированы по unsigned UTF-8 bytes, DOS time ф
 entries отсутствуют. CRC-32 считается по exact Markdown bytes, а `sha256` и
 `size` — по всему готовому ZIP. Archive не содержит отдельный manifest и не
 задаёт import behavior.
+
+Client recovery flow сохраняет returned exact `revision_id`, скачивает grant
+до `download_expires_at`, сравнивает exact byte size и SHA-256 всего archive и
+валидирует весь распакованный OKF bundle. `export_expired` означает новый
+authorized `get_export_status`/grant, но не повторное использование URL.
+Revoked membership/token или private switch не обходятся retry: сначала должен
+быть восстановлен current access. Download URL и bearer secret не попадают в
+prompt transcript, config, issue, logs или analytics.
 
 ## MCP Resources
 

@@ -17,6 +17,20 @@ export const MIND_DIARY_CODEX_SAFE_ENVIRONMENT_SETUP =
   "read -s MIND_DIARY_TOKEN && export MIND_DIARY_TOKEN" as const;
 export const MIND_DIARY_CODEX_SITES_SAFE_ENVIRONMENT_SETUP =
   'read -s MIND_DIARY_SITES_TOKEN && export MIND_DIARY_SITES_AUTHORIZATION="Bearer ${MIND_DIARY_SITES_TOKEN}" && unset MIND_DIARY_SITES_TOKEN' as const;
+export const MIND_DIARY_CODEX_SAFE_WRITE_PLAYBOOK = `Before any substantial replace, delete, or change visible to current readers:
+1. Resolve one explicit Mind and read its current HEAD with get_mind_info.
+2. Browse and fetch only the affected canonical files from that exact revision.
+3. Show me a bounded preview: Mind, current revision, paths, create/replace/delete operations, and immediate visibility effect. Do not call commit_changeset yet.
+4. Ask for my explicit confirmation.
+5. After confirmation, re-read HEAD. If it changed, stop and rebuild the preview. Otherwise call commit_changeset with that exact expected_revision and one idempotency key.
+Treat revision_conflict as a stop-and-rebuild result. Never retry a changed payload with the same idempotency key. If the derived index is unavailable, use canonical browse/fetch and say that search is unavailable.` as const;
+export const MIND_DIARY_CODEX_RESTORE_EXPORT_PLAYBOOK = `Restore and export one exact Mind without changing history:
+1. Use list_revisions and get_revision to identify the exact historical revision. Historical mode is read-only.
+2. Fetch the selected historical files and compare them with the current HEAD. Show me the current-to-target paths and ask for explicit confirmation.
+3. Re-read current HEAD, then use ordinary commit_changeset to create a new revision matching the selected state. Never write to the historical selector. On revision_conflict, stop, rebuild, and reconfirm.
+4. Start export with the exact new revision selector. Poll get_export_status until succeeded or a stable failure.
+5. Download before expiry without logging or repeating the URL. Verify the returned byte size and SHA-256, then validate the complete OKF bundle.
+For export_expired request a fresh authorized status/grant. Revoked access or a private switch must fail closed; do not work around them.` as const;
 export type MindDiaryMcpClientProfile = "modern" | "compatibility";
 
 function canonicalSiteOrigin(value: string): string {
@@ -320,6 +334,38 @@ function renderCodexSetup(siteOrigin: string | undefined): string {
   </section>`;
 }
 
+function renderRecoveryPlaybooks(): string {
+  return `<section class="md-setup-card" aria-labelledby="recovery-playbooks-heading">
+    <div>
+      <p class="md-eyebrow">Safe recovery</p>
+      <h2 id="recovery-playbooks-heading">Preview, restore and export with Codex</h2>
+      <p>These prompts compose the existing MCP tools. They do not create a server draft, approval artifact, writable history or a new restore tool.</p>
+    </div>
+    <ol class="md-setup-steps">
+      <li>
+        <h3>Preview and confirm an immediate write</h3>
+        <pre><code id="mind-diary-safe-write-playbook" tabindex="-1" data-code-value>${escapeUntrustedText(MIND_DIARY_CODEX_SAFE_WRITE_PLAYBOOK)}</code></pre>
+        <button class="md-button md-button--secondary" type="button" data-copy-code="mind-diary-safe-write-playbook">Copy safe-write playbook</button>
+        <p>Confirmation guides the client. Current ACL, token scope, full-bundle validation, HEAD CAS and idempotency remain the server authority.</p>
+      </li>
+      <li>
+        <h3>Restore as a new revision and export it</h3>
+        <pre><code id="mind-diary-restore-export-playbook" tabindex="-1" data-code-value>${escapeUntrustedText(MIND_DIARY_CODEX_RESTORE_EXPORT_PLAYBOOK)}</code></pre>
+        <button class="md-button md-button--secondary" type="button" data-copy-code="mind-diary-restore-export-playbook">Copy restore and export playbook</button>
+        <p>The selected historical revision stays immutable. A restore is an ordinary confirmed changeset that creates a new HEAD.</p>
+      </li>
+    </ol>
+    <p class="md-form__status" role="status" aria-live="polite" data-code-copy-status></p>
+    <dl class="md-card__metadata">
+      <div><dt>Stale HEAD</dt><dd>Stop, re-read, rebuild and reconfirm.</dd></div>
+      <div><dt>Index unavailable</dt><dd>Use canonical browse/fetch; never substitute stale search results.</dd></div>
+      <div><dt>Export expired</dt><dd>Request a fresh authorized status/grant; never reuse the URL.</dd></div>
+      <div><dt>Access revoked</dt><dd>Fail closed. Do not retry around current authorization.</dd></div>
+    </dl>
+    <p class="md-caveat">Download URLs and credentials are bearer material. Keep them out of prompts, repositories, issues, screenshots, logs and telemetry sinks.</p>
+  </section>`;
+}
+
 function renderSecretDialog(): string {
   return `<dialog class="md-dialog md-secret-dialog" id="mcp-token-secret-dialog" aria-labelledby="token-secret-title" aria-describedby="token-secret-description" data-secret-dialog>
     <div class="md-form">
@@ -393,6 +439,7 @@ export function renderMcpTokenManagement(
         ${renderTokenCollection(model.collection)}
         ${renderCreateForm()}
         ${renderCodexSetup(model.siteOrigin)}
+        ${renderRecoveryPlaybooks()}
       </div>
     </main>
     ${renderMindDiaryAuthenticatedFooter("tokens")}

@@ -683,7 +683,7 @@ export const MCP_READ_TOOL_DEFINITIONS = Object.freeze([
     name: "list_revisions",
     title: "List Mind revisions",
     description:
-      "List immutable revisions for one explicit Mind in descending revision order after checking current access.",
+      "List immutable revisions for one explicit Mind in descending revision order after checking current access. Use an exact result for inspection or restore preview; this never makes history writable.",
     inputSchema: LIST_REVISIONS_INPUT_SCHEMA,
     outputSchema: LIST_REVISIONS_OUTPUT_SCHEMA,
     annotations: READ_ONLY_ANNOTATIONS,
@@ -692,7 +692,7 @@ export const MCP_READ_TOOL_DEFINITIONS = Object.freeze([
     name: "get_revision",
     title: "Get an exact Mind revision",
     description:
-      "Read one exact immutable revision and safe manifest summary for one explicit Mind; historical reads remain read-only.",
+      "Read one exact immutable revision and safe manifest summary for one explicit Mind. Historical reads remain read-only; restoring selected content requires a separately previewed and confirmed commit_changeset against a fresh current HEAD.",
     inputSchema: GET_REVISION_INPUT_SCHEMA,
     outputSchema: GET_REVISION_OUTPUT_SCHEMA,
     annotations: READ_ONLY_ANNOTATIONS,
@@ -899,7 +899,7 @@ export const MCP_COMMIT_EXPORT_TOOL_DEFINITIONS = Object.freeze([
     name: "commit_changeset",
     title: "Commit a Mind changeset",
     description:
-      "Atomically apply a non-empty Markdown changeset to the current HEAD. The call immediately creates one immutable revision; it never creates a draft or approval artifact.",
+      "Atomically apply a non-empty Markdown changeset to the current HEAD. Before a substantial, deleting, or currently visible write, preview exact paths and visibility impact to the user and obtain explicit confirmation; then re-read HEAD and use its exact expected_revision. The call immediately creates one immutable revision and never creates a server draft or approval artifact. On revision_conflict, stop and rebuild instead of retrying a changed payload with the same idempotency key.",
     inputSchema: COMMIT_CHANGESET_INPUT_SCHEMA,
     outputSchema: COMMIT_CHANGESET_OUTPUT_SCHEMA,
     annotations: Object.freeze({
@@ -912,7 +912,7 @@ export const MCP_COMMIT_EXPORT_TOOL_DEFINITIONS = Object.freeze([
     name: "start_export",
     title: "Start an exact-revision OKF export",
     description:
-      "Create an asynchronous export job fixed to one authorized immutable revision. The archive is never returned in this tool result.",
+      "Create an asynchronous export job fixed to one authorized immutable revision. Preserve the returned exact revision for integrity verification; the archive and download bearer URL are never returned by this call.",
     inputSchema: START_EXPORT_INPUT_SCHEMA,
     outputSchema: START_EXPORT_OUTPUT_SCHEMA,
     annotations: Object.freeze({
@@ -925,7 +925,7 @@ export const MCP_COMMIT_EXPORT_TOOL_DEFINITIONS = Object.freeze([
     name: "get_export_status",
     title: "Get export status",
     description:
-      "Reauthorize and read one export job. A succeeded job may return a new short-lived download grant, never archive bytes.",
+      "Reauthorize and read one export job. A succeeded job may return a new short-lived download grant plus exact SHA-256 and size, never archive bytes. Keep the URL out of logs and prompts, download before expiry, and request a fresh grant only while current access remains valid.",
     inputSchema: GET_EXPORT_STATUS_INPUT_SCHEMA,
     outputSchema: GET_EXPORT_STATUS_OUTPUT_SCHEMA,
     annotations: Object.freeze({

@@ -162,6 +162,11 @@ persistence-after-redeploy и default/modern Codex MCP gates пройдены li
 ### Immediate mutation
 
 - MCP не создаёт отдельный server draft и не требует diff/approval artifact.
+- Codex-first client перед существенным, удаляющим либо немедленно видимым
+  текущим читателям изменением сначала разрешает explicit Mind и current HEAD,
+  читает затронутые canonical files, показывает пользователю bounded preview
+  paths/operations и visibility impact и получает явное подтверждение. Это
+  client guidance, а не server authority или persisted approval artifact.
 - Editor/Admin/Owner вызывает одну atomic command:
 
 ```text
@@ -184,6 +189,18 @@ commit_changeset(
   дублирует log; тот же key с другим payload получает `409 Idempotency Conflict`.
 - Derived search index либо соответствует requested revision, либо сообщает
   lag/unavailable; старые chunks не выдаются как текущие.
+- Restore не меняет historical revision: client фиксирует выбранный exact
+  `revision_id`, читает его в historical read-only mode, сравнивает с новой
+  current HEAD и после preview/confirmation вызывает обычный
+  `commit_changeset`. Успех создаёт новую immutable HEAD revision. При stale
+  HEAD client останавливается, перечитывает current state и строит новый
+  payload с новым idempotency key; скрытый merge и retry изменённого payload с
+  прежним key запрещены.
+- Reproducible recovery flow завершает export exact восстановленной revision:
+  `start_export` фиксирует selector, `get_export_status` повторно авторизует
+  access и выдаёт bounded download grant, а client проверяет заявленные
+  SHA-256/size и весь OKF bundle. Expired grant требует нового authorized
+  status request; revoked access или private switch остаются fail closed.
 
 ### MCP authentication
 

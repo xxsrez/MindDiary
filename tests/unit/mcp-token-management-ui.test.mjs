@@ -5,6 +5,8 @@ import test from "node:test";
 import {
   MIND_DIARY_CODEX_CONFIG,
   MIND_DIARY_CODEX_SAFE_ENVIRONMENT_SETUP,
+  MIND_DIARY_CODEX_SAFE_WRITE_PLAYBOOK,
+  MIND_DIARY_CODEX_RESTORE_EXPORT_PLAYBOOK,
   MIND_DIARY_CODEX_SITES_AUTHORIZATION_ENVIRONMENT_VARIABLE,
   MIND_DIARY_CODEX_SITES_SAFE_ENVIRONMENT_SETUP,
   MIND_DIARY_CODEX_TOKEN_ENVIRONMENT_VARIABLE,
@@ -157,6 +159,27 @@ test("exact-origin Codex configs keep modern and compatibility lifecycles separa
   }
 });
 
+test("Codex recovery playbooks require preview, confirmation, fresh CAS, immutable restore, and verified export", () => {
+  const html = renderMcpTokenManagement(model({ kind: "empty" }));
+
+  assert.match(MIND_DIARY_CODEX_SAFE_WRITE_PLAYBOOK, /Show me a bounded preview/u);
+  assert.match(MIND_DIARY_CODEX_SAFE_WRITE_PLAYBOOK, /Ask for my explicit confirmation/u);
+  assert.match(MIND_DIARY_CODEX_SAFE_WRITE_PLAYBOOK, /re-read HEAD/u);
+  assert.match(MIND_DIARY_CODEX_SAFE_WRITE_PLAYBOOK, /Never retry a changed payload with the same idempotency key/u);
+  assert.match(MIND_DIARY_CODEX_RESTORE_EXPORT_PLAYBOOK, /Historical mode is read-only/u);
+  assert.match(MIND_DIARY_CODEX_RESTORE_EXPORT_PLAYBOOK, /create a new revision/u);
+  assert.match(MIND_DIARY_CODEX_RESTORE_EXPORT_PLAYBOOK, /Verify the returned byte size and SHA-256/u);
+  assert.match(MIND_DIARY_CODEX_RESTORE_EXPORT_PLAYBOOK, /Revoked access or a private switch must fail closed/u);
+  assert.match(html, /Preview, restore and export with Codex/u);
+  assert.match(html, /data-copy-code="mind-diary-safe-write-playbook"/u);
+  assert.match(html, /data-copy-code="mind-diary-restore-export-playbook"/u);
+  assert.match(html, /Stale HEAD[\s\S]*Stop, re-read, rebuild and reconfirm/u);
+  assert.match(html, /Index unavailable[\s\S]*canonical browse\/fetch/u);
+  assert.match(html, /Export expired[\s\S]*fresh authorized status\/grant/u);
+  assert.match(html, /Access revoked[\s\S]*Fail closed/u);
+  assert.doesNotMatch(html, /mdp_v1_[A-Za-z0-9_-]{20,}/u);
+});
+
 test("loading, empty, and error states are explicit and retryable", () => {
   const loading = renderMcpTokenManagement(model({ kind: "loading" }));
   const empty = renderMcpTokenManagement(model({ kind: "empty" }));
@@ -241,6 +264,8 @@ test("production redacted self-check covers both auth boundaries and both MCP pr
     /console\.|localStorage|sessionStorage|sendBeacon|response\.text\(|analytics\.|dataLayer/i,
   );
   assert.doesNotMatch(PRODUCT_UI_CLIENT_JAVASCRIPT, /name:"(?:search|fetch|commit_changeset)"/);
+  assert.match(PRODUCT_UI_CLIENT_JAVASCRIPT, /button\.closest\("section"\)/u);
+  assert.match(PRODUCT_UI_CLIENT_JAVASCRIPT, /This text contains no token or Site credential/u);
 });
 
 test("document loads only an explicitly safe local fixture client and CSS covers responsive token controls", () => {
