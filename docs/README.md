@@ -68,6 +68,10 @@ evidence, предлагаемый дизайн и ещё не проверен�
 - [Privacy-safe операции UAT pilot](operations/uat-pilot-operations.md) —
   participant boundaries, closed-schema telemetry, bounded diagnostics,
   token/audience revoke, exact rollback и fixture export/restore drill.
+- [Protocol assisted UAT pilot и feedback loop](operations/uat-pilot-protocol.md)
+  — последовательные assisted/external cohorts, один feedback channel,
+  privacy-safe metrics, cadence, feedback template, decision review и
+  offboarding без private corpus.
 
 ## Активные планы
 

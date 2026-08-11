@@ -13,9 +13,10 @@ access, вернуть exact last-good UAT version и проверить export/
 `apps/mind-diary-site/.openai/hosting.json`.
 
 `production.configured=false`: текущий Site — product UAT, даже если Sites
-называет publish deployment production deployment. Cohort execution, production
-SLA/recovery/retention, billing, analytics и outbound notifications не входят в
-этот runbook.
+называет publish deployment production deployment. Cohort execution описан в
+[отдельном protocol](uat-pilot-protocol.md); этот runbook не является его
+результатом. Production SLA/recovery/retention, billing, broad analytics и
+outbound notifications не входят в этот runbook.
 
 ## Notice участнику до старта
 
@@ -64,8 +65,9 @@ cookie, signed/download URL и raw request/response. Telemetry best-effort:
 | Recovery | `cas_conflict`, export/index outcome, token/deletion outcome | stale HEAD, delayed job или lifecycle action |
 
 Это operational telemetry, а не product analytics. Pilot metrics из closed
-schema используются только protocol-ом `AND-160`; inference, profiling и
-content-derived dimensions отсутствуют.
+schema используются только
+[protocol-ом `AND-160`](uat-pilot-protocol.md#privacy-safe-определения);
+inference, profiling и content-derived dimensions отсутствуют.
 
 ## Bounded monitoring и диагностика
 
@@ -155,6 +157,9 @@ Exact-candidate live drill принадлежит финальному `AND-161`
 
 ## Checklist admission
 
+- cohort, cadence, feedback channel и decision criteria берутся из
+  [pilot protocol](uat-pilot-protocol.md), а не выбираются заново для каждого
+  участника;
 - notice подтверждён через trusted channel;
 - Sites access mode остаётся `custom`; добавлен ровно выбранный principal без
   shared credential;

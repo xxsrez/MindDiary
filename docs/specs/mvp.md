@@ -350,6 +350,33 @@ restore как новая HEAD revision и повторная validation/export.
 production SLA/retention, billing/analytics и outbound notifications в этот
 operational slice не входят.
 
+### Assisted pilot protocol и feedback loop
+
+После passing exact-candidate join-gate bounded pilot последовательно проводит
+assisted cohort из 6–8 Codex users и отдельную external cohort из 3–5
+participants того же initial ICP. Владелец проекта является единственным pilot
+owner и feedback queue owner; feedback идёт только через исходный one-to-one
+trusted admission channel. Добавление каждого Sites principal остаётся
+отдельным явным owner action и не авторизуется самим protocol.
+
+Participant выполняет один реальный workflow: isolated account/MCP setup,
+strict starter либо bounded Markdown conversion, search/fetch, meaningful
+confirmed write, history/restore и deterministic export. Activation, first
+useful result, week-1/week-4 return usage, operational friction, willingness to
+continue и willingness to pay определяются заранее. Evidence хранит только
+actor class, случайный opaque participant fingerprint, exact release identity,
+UTC windows, bounded outcomes и safe request ID. Raw query, content/path/name,
+email, credential, signed/download URL, payment data и screenshots запрещены.
+
+Assisted и external results не объединяются в один retention rate. Friendly
+user bias, owner assistance, Codex-only sample и restricted UAT reliability
+фиксируются отдельно. Safety breach немедленно останавливает cohort и запускает
+revoke/incident flow. `Go` означает только основание для следующего Codex-first
+validation experiment; он не доказывает массовый спрос, pricing, website AI,
+production readiness или AWS economics. Exact cadence, feedback template,
+thresholds и offboarding находятся в
+[accepted pilot protocol](../operations/uat-pilot-protocol.md).
+
 ## Первая MCP-поверхность
 
 Все Mind-specific content calls принимают explicit `mind` selector (`/me`,
