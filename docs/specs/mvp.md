@@ -377,6 +377,16 @@ production readiness или AWS economics. Exact cadence, feedback template,
 thresholds и offboarding находятся в
 [accepted pilot protocol](../operations/uat-pilot-protocol.md).
 
+### Multi-principal UAT boundary
+
+Pilot-ready acceptance выполняет accepted двухфазный
+[multi-principal UAT probe](../operations/uat-multi-principal-runbook.md) на
+двух deployments одного exact candidate. Дополнительный actor приходит только
+из `explicit-test-principal-reference`, использует отдельные Sites session и
+MCP token, а release evidence сохраняет только actor class и случайный opaque
+fingerprint. Single-principal smoke, shared credential или два локально
+подменённых identity не закрывают P9.
+
 ## Первая MCP-поверхность
 
 Все Mind-specific content calls принимают explicit `mind` selector (`/me`,

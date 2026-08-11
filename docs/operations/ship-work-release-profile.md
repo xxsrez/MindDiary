@@ -825,6 +825,11 @@ evidence:
       probe:
         kind: runtime_capability
         capability: mind-diary/uat-multi-principal-smoke/v1
+        implementation:
+          command: [npm, run, uat:multi-principal, "--"]
+          runbook: docs/operations/uat-multi-principal-runbook.md
+          phases: [setup, verify, cleanup]
+          redeploy_boundary: required-between-setup-and-verify
         inputs:
           base_url: { literal: "https://mind-diary.example.invalid" }
           deployment_id: { value_from: run.uat_deployment_id }
