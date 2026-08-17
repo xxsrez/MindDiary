@@ -479,7 +479,6 @@ export async function createSitesOAuthConnector(
     grant_types_supported: Object.freeze(["authorization_code", "refresh_token"]),
     code_challenge_methods_supported: Object.freeze(["S256"]),
     token_endpoint_auth_methods_supported: Object.freeze(["none"]),
-    client_id_metadata_document_supported: true,
     scopes_supported: OAUTH_SCOPES,
     resource_parameter_supported: true,
   });

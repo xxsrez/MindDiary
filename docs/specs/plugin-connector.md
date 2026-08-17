@@ -18,7 +18,8 @@ personal/OAuth MCP authentication, write step-up и connected-app revocation
 Repository candidate уже содержит:
 
 - OAuth discovery и protected-resource metadata;
-- public-client DCR и optional allowlisted Client ID Metadata Document;
+- public-client DCR; allowlisted Client ID Metadata Document parser остаётся
+  не рекламируемым compatibility path до отдельного live conformance;
 - authorization code + PKCE `S256`, exact redirect/resource validation;
 - 15-minute access token, rotating 30-day refresh token и grant-family revoke
   при refresh reuse;
@@ -221,8 +222,10 @@ semantics.
 
 Нужны authorization code flow и только PKCE `S256`. Для первого connector
 следует поддержать Dynamic Client Registration: именно этот путь доказан
-текущей интеграцией Task Manager. Client ID Metadata Documents можно добавить
-после отдельного conformance test, но они не являются prerequisite pilot-а.
+текущей интеграцией Task Manager. Pilot metadata не публикует
+`client_id_metadata_document_supported`, поэтому ChatGPT выбирает DCR. Client
+ID Metadata Documents можно рекламировать только после отдельного conformance
+test; они не являются prerequisite pilot-а.
 
 Authorization и token requests обязаны передавать один и тот же exact
 `resource`; access token получает такую же audience. Redirect URI сравнивается

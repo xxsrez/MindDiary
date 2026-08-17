@@ -327,6 +327,7 @@ test("OAuth discovery, DCR, PKCE, read grant, step-up, and revoke are durable", 
   );
   const serverMetadataBody = await serverMetadata.json();
   assert.equal(serverMetadataBody.code_challenge_methods_supported[0], "S256");
+  assert.equal("client_id_metadata_document_supported" in serverMetadataBody, false);
   const openIdCompatibilityMetadata = await connector.fetch(
     new Request(`${ORIGIN}/.well-known/openid-configuration`),
   );

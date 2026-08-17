@@ -726,8 +726,11 @@ Pilot DCR принимает только public clients, response type `code`, 
 `authorization_code` и `refresh_token`, exact non-empty HTTPS redirect URIs
 (loopback development profile допускается только test/dev configuration) и
 token endpoint authentication method `none`. Client secret не выдаётся.
-Optional Client ID Metadata Document загружается только через отдельный
-allowlisted HTTPS policy; arbitrary server-side URL fetch запрещён.
+Pilot metadata намеренно не рекламирует
+`client_id_metadata_document_supported`: ChatGPT должен использовать
+проверенный public-client DCR. Внутренний allowlisted parser Client ID Metadata
+Document не является заявленной connector capability до отдельного live
+conformance; arbitrary server-side URL fetch запрещён.
 
 Authorization request обязан передать exact resource
 `https://{current-host}/api/mcp`, registered `redirect_uri`, unpredictable
