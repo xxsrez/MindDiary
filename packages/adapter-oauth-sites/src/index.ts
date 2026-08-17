@@ -395,6 +395,7 @@ function consentPage(input: {
   readonly requestId: string;
   readonly clientName: string;
   readonly scopes: readonly OAuthScope[];
+  readonly redirectOrigin: string;
 }): Response {
   const access = input.scopes.includes("content:write")
     ? "Read and write Memory content in the Minds you can currently access. Writes commit a new immutable revision immediately."
@@ -405,7 +406,7 @@ function consentPage(input: {
     headers: {
       "cache-control": "no-store",
       "content-type": "text/html; charset=utf-8",
-      "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
+      "content-security-policy": `default-src 'none'; style-src 'unsafe-inline'; form-action 'self' ${input.redirectOrigin}; frame-ancestors 'none'; base-uri 'none'`,
       "referrer-policy": "no-referrer",
       "x-content-type-options": "nosniff",
     },
@@ -732,7 +733,12 @@ export async function createSitesOAuthConnector(
         createdAt.toISOString(),
       )
       .run();
-    return consentPage({ requestId, clientName: client.clientName, scopes });
+    return consentPage({
+      requestId,
+      clientName: client.clientName,
+      scopes,
+      redirectOrigin: new URL(redirectUri).origin,
+    });
   };
 
   const mergeScopes = (

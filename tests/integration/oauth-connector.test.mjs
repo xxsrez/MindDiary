@@ -287,6 +287,10 @@ async function authorize(connector, clientId, scopes = "content:read") {
   }).toString();
   const consent = await connector.fetch(new Request(url));
   assert.equal(consent.status, 200);
+  assert.equal(
+    consent.headers.get("content-security-policy"),
+    "default-src 'none'; style-src 'unsafe-inline'; form-action 'self' https://chatgpt.com; frame-ancestors 'none'; base-uri 'none'",
+  );
   const requestId = /name="request_id" value="([^"]+)"/u.exec(await consent.text())?.[1];
   assert.ok(requestId);
   const completed = await connector.fetch(new Request(`${ORIGIN}/oauth/authorize`, {

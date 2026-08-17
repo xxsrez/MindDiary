@@ -229,8 +229,11 @@ test; они не являются prerequisite pilot-а.
 
 Authorization и token requests обязаны передавать один и тот же exact
 `resource`; access token получает такую же audience. Redirect URI сравнивается
-с зарегистрированным exact value. DCR разрешает только public clients с
-`token_endpoint_auth_method=none`; shared client secret не вводится.
+с зарегистрированным exact value. CSP consent page разрешает `form-action`
+только для собственного authorization endpoint и origin уже проверенного
+`redirect_uri`, чтобы браузер не блокировал финальный code redirect. DCR
+разрешает только public clients с `token_endpoint_auth_method=none`; shared
+client secret не вводится.
 
 ### Challenges и tool metadata
 
