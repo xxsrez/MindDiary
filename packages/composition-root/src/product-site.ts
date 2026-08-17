@@ -18,6 +18,12 @@ import {
   type McpRequestIdGenerator,
 } from "@mind-diary/adapter-mcp";
 import {
+  OAUTH_ACCESS_RECORD_PREFIX,
+  OAUTH_ACCESS_TOKEN_PREFIX,
+  createSitesOAuthConnector,
+  type D1DatabaseLike as OAuthD1DatabaseLike,
+} from "@mind-diary/adapter-oauth-sites";
+import {
   createSitesMetadataStore,
   type D1DatabaseLike as MetadataD1DatabaseLike,
 } from "@mind-diary/adapter-metadata-sites";
@@ -63,6 +69,7 @@ import {
   MindSearchService,
   MindValidationService,
   WebCryptoMindLocatorCodec,
+  type McpBearerAuthenticator,
 } from "@mind-diary/application-content";
 import {
   AccountBootstrapService,
@@ -111,7 +118,7 @@ export interface ProductSiteTrustedIdentityReader {
 }
 
 export interface ProductSiteRuntimeOptions {
-  readonly database: MetadataD1DatabaseLike & SearchD1DatabaseLike & AuditD1DatabaseLike;
+  readonly database: MetadataD1DatabaseLike & SearchD1DatabaseLike & AuditD1DatabaseLike & OAuthD1DatabaseLike;
   readonly bucket: R2BucketLike;
   readonly publicOrigin: string;
   readonly identity: ProductSiteTrustedIdentityReader;
@@ -359,7 +366,9 @@ class ProductControlApplication {
         return this.services.invitation.cancelInvitation(actor as never, command as never);
       }
       case "list_mcp_tokens":
-        return this.services.tokens.listMcpTokens(actor as never);
+        return (await this.services.tokens.listMcpTokens(actor as never)).filter(
+          (token) => !String(token.tokenId).startsWith(OAUTH_ACCESS_RECORD_PREFIX),
+        );
       case "issue_mcp_token": {
         const result = await this.services.tokens.issueMcpToken(actor as never, asRecord(input) as never);
         return Object.freeze({ token: result.token, secret: result.secret.consumeSecret() });
@@ -562,11 +571,69 @@ export async function createProductSiteRuntime(
     exports,
     scheduleExport: async (jobId) => options.schedule({ kind: "export", id: jobId }),
   });
-  const authenticator = new McpBearerAuthenticationService({ clock, tokenHasher, tokens: metadata });
+  const resolveIdentity = async (
+    request: Request,
+  ): Promise<ProductSitesIdentityResolution> => {
+    const context = Object.freeze({
+      requestId: nextOpaque("request"),
+      occurredAtUtc: clock.now(),
+      deploymentCapabilities: PRODUCT_SITES_DEPLOYMENT_CAPABILITIES,
+    });
+    return resolveProductSitesIdentity({
+      snapshot: await options.identity.readVerifiedIdentity(request),
+      bindings: {
+        async readActiveBinding(lookup) {
+          const account = await metadata.readAccountByExternalBinding(lookup as never);
+          return account === null
+            ? Object.freeze({ kind: "unbound" as const })
+            : Object.freeze({
+                kind: "bound" as const,
+                provider: lookup.provider,
+                normalizedBinding: lookup.normalizedBinding,
+                principalId: account.principal.principalId,
+              });
+        },
+      },
+      context,
+    });
+  };
+  const oauth = await createSitesOAuthConnector({
+    database: options.database,
+    publicOrigin: options.publicOrigin,
+    verifierKey: options.tokenVerifierKey,
+    authorizationTokens: metadata,
+    async resolveIdentity(request) {
+      const identity = await resolveIdentity(request);
+      return identity.kind === "authenticated"
+        ? Object.freeze({
+            kind: "authenticated" as const,
+            principalId: String(identity.actor.principalId),
+          })
+        : Object.freeze({ kind: identity.kind });
+    },
+  });
+  const personalTokenAuthenticator = new McpBearerAuthenticationService({
+    clock,
+    tokenHasher,
+    tokens: metadata,
+  });
+  const authenticator: McpBearerAuthenticator = Object.freeze({
+    authenticate(
+      candidate: unknown,
+      requestId: Parameters<McpBearerAuthenticator["authenticate"]>[1],
+    ) {
+      return typeof candidate === "string" && candidate.startsWith(OAUTH_ACCESS_TOKEN_PREFIX)
+        ? oauth.authenticator.authenticate(candidate, requestId)
+        : personalTokenAuthenticator.authenticate(candidate, requestId);
+    },
+  });
   const mcpDependencies = {
     authenticator,
     content: mcpApplication,
     allowedOrigin: options.publicOrigin,
+    oauth: Object.freeze({
+      protectedResourceMetadataUrl: oauth.protectedResourceMetadataUrl,
+    }),
   };
   const handleMcp = async (
     request: Request,
@@ -627,32 +694,29 @@ export async function createProductSiteRuntime(
     csrf,
     control: {
       async execute(request) {
-        return runWithCapturedWork(() => control.execute(request));
+        const result = await runWithCapturedWork(() => control.execute(request));
+        if (
+          request.operation === "delete_account" &&
+          request.actor.kind === "registered_principal"
+        ) {
+          try {
+            await oauth.revokePrincipalConnections(String(request.actor.principalId));
+          } catch {
+            // The authoritative account cascade already revoked mirrored MCP
+            // authorization records; normalized OAuth cleanup is best effort.
+          }
+        }
+        return result;
       },
     },
-    async resolveIdentity(request): Promise<ProductSitesIdentityResolution> {
-      const context = Object.freeze({
-        requestId: nextOpaque("request"),
-        occurredAtUtc: clock.now(),
-        deploymentCapabilities: PRODUCT_SITES_DEPLOYMENT_CAPABILITIES,
-      });
-      return resolveProductSitesIdentity({
-        snapshot: await options.identity.readVerifiedIdentity(request),
-        bindings: {
-          async readActiveBinding(lookup) {
-            const account = await metadata.readAccountByExternalBinding(lookup as never);
-            return account === null
-              ? Object.freeze({ kind: "unbound" as const })
-              : Object.freeze({
-                  kind: "bound" as const,
-                  provider: lookup.provider,
-                  normalizedBinding: lookup.normalizedBinding,
-                  principalId: account.principal.principalId,
-                });
-          },
-        },
-        context,
-      });
+    resolveIdentity,
+    oauthConnections: {
+      list(principalId) {
+        return oauth.listConnections(principalId);
+      },
+      revoke(principalId, grantId) {
+        return oauth.revokeConnection(principalId, grantId);
+      },
     },
   });
   const exportDownload = createProductExportDownloadHttpHandler({
@@ -768,6 +832,8 @@ export async function createProductSiteRuntime(
     dispatchBackground,
     async fetch(request: Request): Promise<Response | null> {
       const path = new URL(request.url).pathname;
+      const oauthResponse = await oauth.fetch(request);
+      if (oauthResponse !== null) return oauthResponse;
       if (path === MCP_ENDPOINT) return handleMcp(request, "modern");
       if (path === MCP_LEGACY_CODEX_ENDPOINT) return handleMcp(request, "compatibility");
       if (path === MCP_RETIRED_SITES_ENDPOINT) {

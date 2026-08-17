@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   MCP_CONTENT_TOOLS,
+  createMcpHttpHandler,
 } from "../../packages/adapter-mcp/dist/index.js";
 import {
   WEB_ACCEPTS_MCP_BEARER,
@@ -431,7 +432,7 @@ test("read-only tokens cannot reach commit and MCP actors are rejected by the RE
     "request_control_probe",
   );
 
-  assert.equal(listedNames.includes("commit_changeset"), false);
+  assert.equal(listedNames.includes("commit_changeset"), true);
   assert.equal(listedNames.includes("search"), true);
   assert.equal(denied.status, 200);
   assert.equal(deniedBody.result.isError, true);
@@ -450,6 +451,57 @@ test("read-only tokens cannot reach commit and MCP actors are rejected by the RE
     false,
   );
   assert.equal(isTrustedSitesControlActor(sitesActor("principal_mcp")), true);
+});
+
+test("OAuth-aware MCP responses advertise discovery and write step-up without weakening enforcement", async () => {
+  const fixture = await harness();
+  const metadataUrl = "https://mind-diary.invalid/.well-known/oauth-protected-resource/api/mcp";
+  let requestId = 0;
+  const handler = createMcpHttpHandler({
+    authenticator: fixture.boundary.authenticator,
+    content: fixture.content,
+    requestIds: { nextRequestId: () => `request_oauth_${++requestId}` },
+    oauth: { protectedResourceMetadataUrl: metadataUrl },
+  });
+  const headers = (method, name, secret) => ({
+    accept: "application/json, text/event-stream",
+    "content-type": "application/json",
+    "mcp-method": method,
+    "mcp-protocol-version": "2026-07-28",
+    ...(name ? { "mcp-name": name } : {}),
+    ...(secret ? { authorization: `Bearer ${secret}` } : {}),
+  });
+  const missing = await handler(new Request("https://mind-diary.invalid/api/mcp", {
+    method: "POST",
+    headers: headers("tools/list"),
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: { _meta: protocolMeta() } }),
+  }));
+  assert.equal(missing.status, 401);
+  assert.equal(
+    missing.headers.get("www-authenticate"),
+    `Bearer resource_metadata="${metadataUrl}", scope="content:read"`,
+  );
+
+  const readToken = await fixture.issueToken(["content:read"]);
+  const denied = await handler(new Request("https://mind-diary.invalid/api/mcp", {
+    method: "POST",
+    headers: headers("tools/call", "commit_changeset", readToken.secret),
+    body: JSON.stringify({
+      ...rpcCall(2, "commit_changeset", { mind: "space_one", idempotency_key: "step-up" }),
+      params: {
+        ...rpcCall(2, "commit_changeset", { mind: "space_one", idempotency_key: "step-up" }).params,
+        _meta: protocolMeta(),
+      },
+    }),
+  }));
+  const deniedBody = await denied.json();
+  assert.equal(deniedBody.result.structuredContent.error.code, "insufficient_scope");
+  assert.deepEqual(deniedBody.result._meta, {
+    "mcp/www_authenticate": [
+      `Bearer resource_metadata="${metadataUrl}", scope="content:write"`,
+    ],
+  });
+  assert.equal(fixture.state.authorizationCalls(), 0);
 });
 
 test("current role and token state are re-read without reconnect, including a revocation race", async () => {

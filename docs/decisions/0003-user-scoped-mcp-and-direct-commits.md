@@ -59,8 +59,9 @@ workflow.
 - User оплачивает inference своего agent client; Mind Diary предоставляет MCP,
   storage и deterministic server operations без собственного LLM call в этом
   пути.
-- OAuth 2.1 + PKCE остаётся production target для polished plugin integration,
-  но не блокирует personal-token prototype.
+- OAuth 2.1 + PKCE позже принят отдельным
+  [ADR-0010](0010-oauth-marketplace-connector.md) для private UAT connector
+  pilot; personal-token profile остаётся независимым direct-client path.
 
 ## Отклонённые варианты
 

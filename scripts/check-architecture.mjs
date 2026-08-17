@@ -32,6 +32,11 @@ const expectedDependencies = new Map(
     ],
     "@mind-diary/adapter-web": ["@mind-diary/application-control"],
     "@mind-diary/adapter-mcp": ["@mind-diary/application-content"],
+    "@mind-diary/adapter-oauth-sites": [
+      "@mind-diary/application-content",
+      "@mind-diary/application-ports",
+      "@mind-diary/domain",
+    ],
     "@mind-diary/adapter-background": [
       "@mind-diary/application-background",
     ],
@@ -70,6 +75,7 @@ const expectedDependencies = new Map(
       "@mind-diary/adapter-mcp",
       "@mind-diary/adapter-metadata-memory",
       "@mind-diary/adapter-metadata-sites",
+      "@mind-diary/adapter-oauth-sites",
       "@mind-diary/adapter-object-memory",
       "@mind-diary/adapter-object-sites",
       "@mind-diary/adapter-search-memory",

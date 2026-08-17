@@ -129,9 +129,23 @@ export type McpTokenCollectionState =
   | { readonly kind: "empty" }
   | { readonly kind: "error"; readonly message: string };
 
+export interface OAuthConnectionUiItem {
+  readonly grantId: string;
+  readonly clientName: string;
+  readonly scopes: readonly McpTokenUiScope[];
+  readonly createdAt: string;
+  readonly lastUsedAt: string | null;
+}
+
+export type OAuthConnectionCollectionState =
+  | { readonly kind: "ready"; readonly connections: readonly OAuthConnectionUiItem[] }
+  | { readonly kind: "empty" }
+  | { readonly kind: "error"; readonly message: string };
+
 export interface McpTokenManagementModel {
   readonly displayName: string;
   readonly collection: McpTokenCollectionState;
+  readonly oauthConnections?: OAuthConnectionCollectionState;
   readonly siteOrigin?: string;
   readonly announcement?: string;
 }
@@ -230,6 +244,26 @@ function renderTokenCard(token: McpTokenUiToken): string {
     </dl>
     <div class="md-token-card__action">${action}</div>
   </article>`;
+}
+
+function renderOAuthConnections(
+  collection: OAuthConnectionCollectionState | undefined,
+): string {
+  if (collection === undefined) return "";
+  if (collection.kind === "error") {
+    return `<section class="md-setup-card" aria-labelledby="connected-apps-heading"><h2 id="connected-apps-heading">Connected apps</h2><p role="alert">${escapeUntrustedText(collection.message)}</p></section>`;
+  }
+  if (collection.kind === "empty") {
+    return `<section class="md-setup-card" aria-labelledby="connected-apps-heading"><h2 id="connected-apps-heading">Connected apps</h2><p>No OAuth apps are connected. Installing Mind Diary from your marketplace will add one here after consent.</p></section>`;
+  }
+  const cards = collection.connections.map((connection) => {
+    const grantId = /^md_oauth_grant_[0-9a-f-]{36}$/iu.test(connection.grantId)
+      ? connection.grantId
+      : null;
+    const access = connection.scopes.includes("content:write") ? "Read and write" : "Read only";
+    return `<article class="md-token-card" data-oauth-connection="${escapeUntrustedText(grantId ?? "invalid")}"><div class="md-token-card__heading"><div><h3>${escapeUntrustedText(connection.clientName)}</h3><p>${escapeUntrustedText(access)}</p></div><span class="md-token-state md-token-state--active">● Connected</span></div><dl class="md-token-card__metadata"><div><dt>Connected</dt><dd>${escapeUntrustedText(dateLabel(connection.createdAt))}</dd></div><div><dt>Last used</dt><dd>${escapeUntrustedText(dateLabel(connection.lastUsedAt))}</dd></div></dl><div class="md-token-card__action">${grantId === null ? "" : `<button class="md-button md-button--danger" type="button" data-revoke-oauth="${escapeUntrustedText(grantId)}">Revoke connection</button>`}<p class="md-form__status" role="status" aria-live="polite" data-oauth-revoke-status></p></div></article>`;
+  }).join("");
+  return `<section class="md-setup-card" aria-labelledby="connected-apps-heading"><div class="md-section-heading"><div><p class="md-eyebrow">OAuth</p><h2 id="connected-apps-heading">Connected apps</h2></div></div><p>Connections use short-lived access tokens and rotating refresh tokens. Revoking stops the app immediately.</p><div class="md-token-grid">${cards}</div></section>`;
 }
 
 function renderTokenCollection(collection: McpTokenCollectionState): string {
@@ -358,7 +392,7 @@ function renderCodexSetup(siteOrigin: string | undefined): string {
     </ol>
     <p class="md-form__status" role="status" aria-live="polite" data-code-copy-status></p>
     <p>Both configurations contain only endpoint and environment-variable names. Never replace either variable name with a secret. A public Site may omit the <code>env_http_headers</code> table.</p>
-    <p class="md-caveat"><strong>Historical UAT baseline:</strong> the owner-only Site deployment passed default and opt-in modern <code>codex-cli 0.147.0</code> flows. This hosted environment is UAT, not production; OAuth/PKCE and public plugin support remain outside this personal-token release.</p>
+    <p class="md-caveat"><strong>UAT connector baseline:</strong> marketplace connections use OAuth Authorization Code with PKCE and short-lived tokens. Personal tokens remain available for direct Codex setup and recovery. This hosted environment is UAT, not production.</p>
   </section>`;
 }
 
@@ -488,6 +522,7 @@ export function renderMcpTokenManagement(
         ${announcement}
       </div>
       <div class="md-token-layout">
+        ${renderOAuthConnections(model.oauthConnections)}
         ${renderTokenCollection(model.collection)}
         ${renderCreateForm()}
         ${renderCodexSetup(model.siteOrigin)}

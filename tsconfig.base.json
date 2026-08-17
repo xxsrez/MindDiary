@@ -25,6 +25,7 @@
       "@mind-diary/application-background": ["packages/application-background/src/index.ts"],
       "@mind-diary/adapter-web": ["packages/adapter-web/src/index.ts"],
       "@mind-diary/adapter-mcp": ["packages/adapter-mcp/src/index.ts"],
+      "@mind-diary/adapter-oauth-sites": ["packages/adapter-oauth-sites/src/index.ts"],
       "@mind-diary/adapter-background": ["packages/adapter-background/src/index.ts"],
       "@mind-diary/adapter-metadata-memory": ["packages/adapter-metadata-memory/src/index.ts"],
       "@mind-diary/adapter-object-memory": ["packages/adapter-object-memory/src/index.ts"],

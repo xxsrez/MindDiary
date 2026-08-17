@@ -1,10 +1,11 @@
 # Спецификация первого прототипа
 
-Статус: proposal, обновлено 2026-08-09. Product requirements ниже приняты;
+Статус: proposal, обновлено 2026-08-17. Product requirements ниже приняты;
 Product Site и direct route/compatibility repair реализованы и развёрнуты как
 single-principal UAT в OpenAI Sites. Обязательные authenticated web/control,
 persistence-after-redeploy и default/modern Codex MCP gates пройдены live;
-расширенная product-validation matrix остаётся следующим этапом.
+OAuth connector реализован в repository candidate, но registered app,
+Marketplace package и fresh UAT connector gate ещё не завершены.
 
 ## Цель
 
@@ -204,7 +205,12 @@ commit_changeset(
 
 ### MCP authentication
 
-Первый прототип использует revocable opaque personal access token:
+Content MCP принимает два revocable bearer profiles:
+
+1. personal access token для direct Codex/CLI setup;
+2. OAuth access token для registered Marketplace connector.
+
+Personal access token имеет следующий contract:
 
 - token выпускается в authenticated Sites UI и связан с `principal_id`, не с
   конкретным Mind;
@@ -252,8 +258,24 @@ commit_changeset(
 - token не даёт control-plane operations и не логируется;
 - account deletion отзывает все tokens.
 
-OAuth 2.1 + PKCE остаётся целевой production authentication для polished plugin
-integration, но собственный authorization server не входит в первый прототип.
+OAuth connector profile использует тот же Sites-bound `principal_id` и
+добавляет discovery, public-client DCR, authorization code + PKCE `S256`, exact
+redirect/resource checks, 15-minute access tokens, rotating 30-day refresh
+tokens и revocation. Первый consent выдаёт `content:read`; write требует
+отдельного `content:write` step-up. OAuth token не даёт control-plane
+capabilities и на каждом content call проходит current scope и Mind ACL.
+
+Каждый OAuth access token создаёт скрытую authorization mirror record в
+существующем token store. Поэтому текущая application authorization повторно
+проверяет OAuth status/scopes внутри ACL/CAS/commit transaction, а revoke,
+refresh reuse и account deletion fail closed. Mirror не отображается как
+personal token. `/settings/mcp` отдельно показывает connected apps и позволяет
+немедленно отозвать grant.
+
+Этот профиль считается repository implementation, но не live UAT evidence до
+registration connector, exact-SHA deployment и fresh
+install/read/write-step-up/revoke/reconnect smoke. Production/public plugin
+остаётся отдельной release boundary.
 
 ### Sites control plane
 
@@ -265,6 +287,7 @@ Sites UI поддерживает:
 - invitations, acceptance/rejection, member list и role mutations;
 - ownership transfer;
 - named MCP token create/list/revoke;
+- OAuth connected-app list/revoke;
 - management links и destructive-action warnings.
 
 Pilot-ready Product Site использует один authenticated navigation shell и
@@ -279,7 +302,7 @@ Pilot-ready Product Site использует один authenticated navigation 
 | `/public` | authenticated Public Minds catalog |
 | `/invitations` | incoming invitations и collaboration entrypoint |
 | `/settings/account` | profile, recovery handoff и account lifecycle |
-| `/settings/mcp` | MCP tokens, setup и diagnostics |
+| `/settings/mcp` | Connected apps, personal MCP tokens, setup и diagnostics |
 | `/help` | pilot help, environment и support boundaries |
 
 Authenticated pages используют согласованные header/footer links, keyboard
@@ -571,8 +594,11 @@ evidence: default и opt-in modern `codex-cli 0.147.0` выполнили
 
 Если endpoint не проходит gate, UAT release MVP блокируется. Отдельный
 portable container и AWS/AgentCore не используются без нового принятого
-решения. OAuth discovery/PKCE остаётся отдельной gate polished public plugin и
-не блокирует personal-token MVP.
+решения. Connector extension дополнительно требует OAuth discovery/PKCE,
+registration, read, write step-up, revoke/reconnect и existing personal-token
+regression evidence; его failure блокирует connector release, но не
+переписывает уже доказанный personal-token MVP. Production/public plugin
+требует отдельного target и решения.
 
 ## Starter Mind и первый полезный результат
 

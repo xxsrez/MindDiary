@@ -10,6 +10,7 @@
     { "path": "packages/application-background" },
     { "path": "packages/adapter-web" },
     { "path": "packages/adapter-mcp" },
+    { "path": "packages/adapter-oauth-sites" },
     { "path": "packages/adapter-background" },
     { "path": "packages/adapter-metadata-memory" },
     { "path": "packages/adapter-metadata-sites" },

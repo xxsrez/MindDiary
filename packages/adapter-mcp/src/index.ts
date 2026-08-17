@@ -623,6 +623,13 @@ const READ_ONLY_ANNOTATIONS = Object.freeze({
   openWorldHint: false,
 });
 
+const READ_SECURITY_SCHEMES = Object.freeze([
+  Object.freeze({ type: "oauth2" as const, scopes: Object.freeze(["content:read"]) }),
+]);
+const WRITE_SECURITY_SCHEMES = Object.freeze([
+  Object.freeze({ type: "oauth2" as const, scopes: Object.freeze(["content:write"]) }),
+]);
+
 /** Canonical deterministic definitions for read-only Mind content tools. */
 export const MCP_READ_TOOL_DEFINITIONS = Object.freeze([
   Object.freeze({
@@ -632,6 +639,7 @@ export const MCP_READ_TOOL_DEFINITIONS = Object.freeze([
       "List the authenticated principal's Personal Mind, accepted memberships, and public catalog entries without enumerating private or unlisted Minds.",
     inputSchema: LIST_MINDS_INPUT_SCHEMA,
     outputSchema: LIST_MINDS_OUTPUT_SCHEMA,
+    securitySchemes: READ_SECURITY_SCHEMES,
     annotations: READ_ONLY_ANNOTATIONS,
   }),
   Object.freeze({
@@ -641,6 +649,7 @@ export const MCP_READ_TOOL_DEFINITIONS = Object.freeze([
       "Resolve one exact canonical handle to an authorized Mind descriptor; missing and private Minds remain indistinguishable.",
     inputSchema: RESOLVE_MIND_INPUT_SCHEMA,
     outputSchema: RESOLVE_MIND_OUTPUT_SCHEMA,
+    securitySchemes: READ_SECURITY_SCHEMES,
     annotations: READ_ONLY_ANNOTATIONS,
   }),
   Object.freeze({
@@ -650,6 +659,7 @@ export const MCP_READ_TOOL_DEFINITIONS = Object.freeze([
       "Resolve one explicit Mind and HEAD, exact revision, or as-of selector to a single immutable revision and its current content capabilities.",
     inputSchema: GET_MIND_INFO_INPUT_SCHEMA,
     outputSchema: GET_MIND_INFO_OUTPUT_SCHEMA,
+    securitySchemes: READ_SECURITY_SCHEMES,
     annotations: READ_ONLY_ANNOTATIONS,
   }),
   Object.freeze({
@@ -659,6 +669,7 @@ export const MCP_READ_TOOL_DEFINITIONS = Object.freeze([
       "Browse manifest and frontmatter summaries inside one explicit Mind and one resolved revision without loading every entry body.",
     inputSchema: BROWSE_ENTRIES_INPUT_SCHEMA,
     outputSchema: BROWSE_ENTRIES_OUTPUT_SCHEMA,
+    securitySchemes: READ_SECURITY_SCHEMES,
     annotations: READ_ONLY_ANNOTATIONS,
   }),
   Object.freeze({
@@ -668,6 +679,7 @@ export const MCP_READ_TOOL_DEFINITIONS = Object.freeze([
       "Run lexical search only inside one explicit Mind and one resolved revision; this tool never performs implicit cross-Mind search or HEAD fallback.",
     inputSchema: SEARCH_INPUT_SCHEMA,
     outputSchema: SEARCH_OUTPUT_SCHEMA,
+    securitySchemes: READ_SECURITY_SCHEMES,
     annotations: READ_ONLY_ANNOTATIONS,
   }),
   Object.freeze({
@@ -677,6 +689,7 @@ export const MCP_READ_TOOL_DEFINITIONS = Object.freeze([
       "Fetch Markdown through a server-issued opaque entry or continuation ID fixed to one Mind, immutable revision, path, and byte range.",
     inputSchema: FETCH_INPUT_SCHEMA,
     outputSchema: FETCH_OUTPUT_SCHEMA,
+    securitySchemes: READ_SECURITY_SCHEMES,
     annotations: READ_ONLY_ANNOTATIONS,
   }),
   Object.freeze({
@@ -686,6 +699,7 @@ export const MCP_READ_TOOL_DEFINITIONS = Object.freeze([
       "List immutable revisions for one explicit Mind in descending revision order after checking current access. Use an exact result for inspection or restore preview; this never makes history writable.",
     inputSchema: LIST_REVISIONS_INPUT_SCHEMA,
     outputSchema: LIST_REVISIONS_OUTPUT_SCHEMA,
+    securitySchemes: READ_SECURITY_SCHEMES,
     annotations: READ_ONLY_ANNOTATIONS,
   }),
   Object.freeze({
@@ -695,6 +709,7 @@ export const MCP_READ_TOOL_DEFINITIONS = Object.freeze([
       "Read one exact immutable revision and safe manifest summary for one explicit Mind. Historical reads remain read-only; restoring selected content requires a separately previewed and confirmed commit_changeset against a fresh current HEAD.",
     inputSchema: GET_REVISION_INPUT_SCHEMA,
     outputSchema: GET_REVISION_OUTPUT_SCHEMA,
+    securitySchemes: READ_SECURITY_SCHEMES,
     annotations: READ_ONLY_ANNOTATIONS,
   }),
   Object.freeze({
@@ -704,6 +719,7 @@ export const MCP_READ_TOOL_DEFINITIONS = Object.freeze([
       "Validate the complete OKF bundle for one explicit Mind and resolved revision, separating conformance errors from quality warnings.",
     inputSchema: VALIDATE_MIND_INPUT_SCHEMA,
     outputSchema: VALIDATE_MIND_OUTPUT_SCHEMA,
+    securitySchemes: READ_SECURITY_SCHEMES,
     annotations: READ_ONLY_ANNOTATIONS,
   }),
 ] as const);
@@ -902,6 +918,7 @@ export const MCP_COMMIT_EXPORT_TOOL_DEFINITIONS = Object.freeze([
       "Atomically apply a non-empty Markdown changeset to the current HEAD. Before a substantial, deleting, or currently visible write, preview exact paths and visibility impact to the user and obtain explicit confirmation; then re-read HEAD and use its exact expected_revision. The call immediately creates one immutable revision and never creates a server draft or approval artifact. On revision_conflict, stop and rebuild instead of retrying a changed payload with the same idempotency key.",
     inputSchema: COMMIT_CHANGESET_INPUT_SCHEMA,
     outputSchema: COMMIT_CHANGESET_OUTPUT_SCHEMA,
+    securitySchemes: WRITE_SECURITY_SCHEMES,
     annotations: Object.freeze({
       readOnlyHint: false,
       destructiveHint: true,
@@ -915,6 +932,7 @@ export const MCP_COMMIT_EXPORT_TOOL_DEFINITIONS = Object.freeze([
       "Create an asynchronous export job fixed to one authorized immutable revision. Preserve the returned exact revision for integrity verification; the archive and download bearer URL are never returned by this call.",
     inputSchema: START_EXPORT_INPUT_SCHEMA,
     outputSchema: START_EXPORT_OUTPUT_SCHEMA,
+    securitySchemes: READ_SECURITY_SCHEMES,
     annotations: Object.freeze({
       readOnlyHint: false,
       destructiveHint: false,
@@ -928,6 +946,7 @@ export const MCP_COMMIT_EXPORT_TOOL_DEFINITIONS = Object.freeze([
       "Reauthorize and read one export job. A succeeded job may return a new short-lived download grant plus exact SHA-256 and size, never archive bytes. Keep the URL out of logs and prompts, download before expiry, and request a fresh grant only while current access remains valid.",
     inputSchema: GET_EXPORT_STATUS_INPUT_SCHEMA,
     outputSchema: GET_EXPORT_STATUS_OUTPUT_SCHEMA,
+    securitySchemes: READ_SECURITY_SCHEMES,
     annotations: Object.freeze({
       readOnlyHint: true,
       destructiveHint: false,
@@ -1164,6 +1183,9 @@ export interface McpHttpHandlerDependencies {
   readonly content: McpContentApplication;
   /** Canonical HTTPS origin allowed when a browser supplies an Origin header. */
   readonly allowedOrigin?: string;
+  readonly oauth?: Readonly<{
+    readonly protectedResourceMetadataUrl: string;
+  }>;
   readonly logger?: McpSafeLogger;
 }
 
@@ -1230,7 +1252,19 @@ function jsonResponse(
   });
 }
 
-function authenticationResponse(requestId: McpRequestId): Response {
+function oauthChallenge(
+  oauth: McpHttpHandlerDependencies["oauth"],
+  scope: "content:read" | "content:write" = "content:read",
+): string {
+  return oauth === undefined
+    ? MCP_WWW_AUTHENTICATE
+    : `Bearer resource_metadata="${oauth.protectedResourceMetadataUrl}", scope="${scope}"`;
+}
+
+function authenticationResponse(
+  requestId: McpRequestId,
+  oauth?: McpHttpHandlerDependencies["oauth"],
+): Response {
   return jsonResponse(
     401,
     {
@@ -1242,7 +1276,7 @@ function authenticationResponse(requestId: McpRequestId): Response {
     },
     {
       "content-type": "application/problem+json; charset=utf-8",
-      "www-authenticate": MCP_WWW_AUTHENTICATE,
+      "www-authenticate": oauthChallenge(oauth),
     },
   );
 }
@@ -1516,6 +1550,7 @@ export function createMcpToolErrorResult(
   message: string,
   retryable = false,
   details?: Readonly<Record<string, unknown>>,
+  meta?: Readonly<Record<string, unknown>>,
 ): Readonly<Record<string, unknown>> {
   const error = Object.freeze({
     code,
@@ -1531,6 +1566,7 @@ export function createMcpToolErrorResult(
     ]),
     structuredContent: Object.freeze({ ok: false, error }),
     isError: true,
+    ...(meta === undefined ? {} : { _meta: meta }),
   });
 }
 
@@ -1662,10 +1698,11 @@ function toolError(
   message: string,
   format: McpResponseFormat,
   retryable = false,
+  meta?: Readonly<Record<string, unknown>>,
 ): Response {
   return jsonRpcResult(
     id,
-    createMcpToolErrorResult(requestId, code, message, retryable),
+    createMcpToolErrorResult(requestId, code, message, retryable, undefined, meta),
     format,
   );
 }
@@ -1738,8 +1775,7 @@ function listedTools(
       .map((name) => CANONICAL_DEFINITION_BY_NAME.get(name))
       .filter(
         (definition): definition is Readonly<Record<string, unknown>> =>
-          definition !== undefined &&
-          (definition.name !== "commit_changeset" || tokenAllowsWrite(actor)),
+          definition !== undefined,
       ),
   );
 }
@@ -1958,7 +1994,7 @@ function createMcpHttpHandlerAtEndpoint(
       return response;
     }
     if (authentication.kind !== "authenticated") {
-      const response = authenticationResponse(requestId);
+      const response = authenticationResponse(requestId, dependencies.oauth);
       await safeLog(
         dependencies.logger,
         request,
@@ -2321,12 +2357,15 @@ function createMcpHttpHandlerAtEndpoint(
     const toolArguments = Object.freeze({ ...argumentsValue });
 
     if (name === "commit_changeset" && !tokenAllowsWrite(actor)) {
+      const challenge = oauthChallenge(dependencies.oauth, "content:write");
       const response = toolError(
         rpc.id,
         requestId,
         "insufficient_scope",
         "The token does not allow content writes.",
         responseFormat,
+        false,
+        Object.freeze({ "mcp/www_authenticate": Object.freeze([challenge]) }),
       );
       await safeLog(
         dependencies.logger,
@@ -2365,7 +2404,7 @@ function createMcpHttpHandlerAtEndpoint(
         authorization.code === "authentication_required" ||
         authorization.code === "token_inactive"
       ) {
-        const response = authenticationResponse(requestId);
+        const response = authenticationResponse(requestId, dependencies.oauth);
         await safeLog(
           dependencies.logger,
           request,
@@ -2634,7 +2673,7 @@ export function createLegacyCodexMcpHttpHandler(
       return response;
     }
     if (authentication.kind !== "authenticated") {
-      const response = authenticationResponse(requestId);
+      const response = authenticationResponse(requestId, dependencies.oauth);
       await safeLog(
         dependencies.logger,
         request,

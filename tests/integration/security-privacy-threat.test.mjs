@@ -386,7 +386,7 @@ test("token lifecycle, scopes and corpus prompt injection preserve server author
     readOnly.secret,
   );
   const names = list.body.result.tools.map((tool) => tool.name);
-  assert.equal(names.includes("commit_changeset"), false);
+  assert.equal(names.includes("commit_changeset"), true);
   assert.equal(names.includes("delete_space"), false);
 
   const write = await env.issue(["content:write"]);

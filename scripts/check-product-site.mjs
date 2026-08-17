@@ -6,6 +6,7 @@ const app = resolve(root, "apps/mind-diary-site");
 const required = [
   ".openai/hosting.json", "package.json", "package-lock.json", "vite.config.ts",
   "worker/index.ts", "worker/runtime-config.ts", "drizzle/0000_product_site.sql",
+  "drizzle/0001_oauth_connector.sql",
 ];
 const errors = [];
 for (const path of required) {

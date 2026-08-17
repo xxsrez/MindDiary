@@ -165,6 +165,17 @@ export interface ProductWebControlApplication {
   }): unknown | Promise<unknown>;
 }
 
+export interface ProductWebOAuthConnections {
+  list(principalId: string): Promise<readonly {
+    readonly grantId: string;
+    readonly clientName: string;
+    readonly scopes: readonly ("content:read" | "content:write")[];
+    readonly createdAt: string;
+    readonly lastUsedAt: string | null;
+  }[]>;
+  revoke(principalId: string, grantId: string): Promise<boolean>;
+}
+
 export interface ProductWebHttpHandlerDependencies {
   readonly applicationOrigin: string;
   readonly resolveIdentity: (
@@ -172,6 +183,7 @@ export interface ProductWebHttpHandlerDependencies {
   ) => ProductSitesIdentityResolution | Promise<ProductSitesIdentityResolution>;
   readonly csrf: ProductWebCsrf;
   readonly control: ProductWebControlApplication;
+  readonly oauthConnections?: ProductWebOAuthConnections;
 }
 
 const MUTATION_METHODS = new Set(["POST", "PATCH", "PUT", "DELETE"]);
@@ -645,6 +657,7 @@ async function productUiDocument(input: {
   readonly identity: Exclude<ProductSitesIdentityResolution, { readonly kind: "denied" | "unavailable" }>;
   readonly csrfToken: string;
   readonly control: ProductWebControlApplication;
+  readonly oauthConnections?: ProductWebOAuthConnections;
 }): Promise<string> {
   if (input.identity.kind === "registration_required") {
     const model: AuthenticatedOnboardingModel = {
@@ -794,9 +807,21 @@ async function productUiDocument(input: {
     } catch {
       collection = { kind: "error", message: "Token metadata is unavailable. Try again." };
     }
+    let oauthConnections: McpTokenManagementModel["oauthConnections"];
+    if (input.oauthConnections !== undefined) {
+      try {
+        const connections = await input.oauthConnections.list(input.identity.actor.principalId);
+        oauthConnections = connections.length === 0
+          ? { kind: "empty" }
+          : { kind: "ready", connections };
+      } catch {
+        oauthConnections = { kind: "error", message: "Connected apps are unavailable. Try again." };
+      }
+    }
     return withCsrfMeta(renderMcpTokenManagementDocument({
       displayName: session.displayName,
       collection,
+      ...(oauthConnections === undefined ? {} : { oauthConnections }),
       siteOrigin: input.siteOrigin,
     }, "/ui/mind-diary-token-client.js"), input.csrfToken);
   }
@@ -1039,6 +1064,9 @@ function apiOperation(method: string, pathname: string): {
     if (tail.length === 1 && method === "POST") return { operation: "issue_mcp_token", path: {} };
     if (two !== null && tail.length === 2 && method === "DELETE") return { operation: "revoke_mcp_token", path: { token_id: two } };
   }
+  if (one === "oauth-connections" && two !== null && tail.length === 2 && method === "DELETE") {
+    return { operation: "revoke_oauth_connection", path: { grant_id: two } };
+  }
   return null;
 }
 
@@ -1114,6 +1142,9 @@ export function createProductWebHttpHandler(
           identity,
           csrfToken: await dependencies.csrf.issue(identity.actor),
           control: dependencies.control,
+          ...(dependencies.oauthConnections === undefined
+            ? {}
+            : { oauthConnections: dependencies.oauthConnections }),
         }));
       } catch {
         response = errorResponse(503, "operation_failed", requestId, true);
@@ -1158,6 +1189,18 @@ export function createProductWebHttpHandler(
       return errorResponse(400, "invalid_request", requestId);
     }
     try {
+      if (matched.operation === "revoke_oauth_connection") {
+        if (identity.kind !== "authenticated" || dependencies.oauthConnections === undefined) {
+          return errorResponse(404, "not_found", requestId);
+        }
+        const revoked = await dependencies.oauthConnections.revoke(
+          identity.actor.principalId,
+          String(matched.path.grant_id ?? ""),
+        );
+        return revoked
+          ? json(200, { ok: true, data: { revoked: true } })
+          : errorResponse(404, "not_found", requestId);
+      }
       const data = await dependencies.control.execute({
         operation: matched.operation,
         actor: identity.actor,

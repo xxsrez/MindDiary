@@ -64,6 +64,9 @@ class FakeD1Database {
     if (sql.includes("migration*/")) {
       return { success: true, meta: { changes: 1 } };
     }
+    if (sql.includes("/*md-oauth-principal-")) {
+      return { success: true, meta: { changes: 0 } };
+    }
     if (sql.includes("/*md-metadata-append*/")) {
       const expected = Number(values[5]);
       const current = this.metadataEvents.at(-1)?.sequence ?? 0;

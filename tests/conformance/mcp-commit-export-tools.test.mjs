@@ -312,7 +312,7 @@ test("history tool descriptions keep historical restore read-only and require a 
   assert.match(definitions.get("get_revision").description, /confirmed commit_changeset against a fresh current HEAD/u);
 });
 
-test("tools/list replaces placeholders with canonical definitions and hides commit from read-only tokens", async () => {
+test("tools/list advertises write scope for step-up while enforcing read-only tokens", async () => {
   const fixture = harness();
   const writable = await result(await fixture.send(rpc("tools/list")));
   assert.deepEqual(
@@ -326,8 +326,11 @@ test("tools/list replaces placeholders with canonical definitions and hides comm
   );
   assert.deepEqual(
     readable.tools.map((definition) => definition.name),
-    ["start_export", "get_export_status"],
+    ["commit_changeset", "start_export", "get_export_status"],
   );
+  assert.deepEqual(readable.tools[0].securitySchemes, [
+    { type: "oauth2", scopes: ["content:write"] },
+  ]);
 
   const denied = await fixture.send(
     rpc("tools/call", {

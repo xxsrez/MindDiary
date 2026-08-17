@@ -26,9 +26,9 @@ evidence, предлагаемый дизайн и ещё не проверен�
    slice и его критерии готовности.
 8. [REST и MCP API](specs/api.md) — предлагаемый wire-level contract control
    REST, internal application API, MCP tools/resources, schemas и errors.
-9. [Plugin и OAuth-коннектор](specs/plugin-connector.md) — proposal установки
-   Mind Diary из Srez Marketplace, registered MCP connector, OAuth 2.1 + PKCE,
-   identity binding, UAT pilot и production/public границы.
+9. [Plugin и OAuth-коннектор](specs/plugin-connector.md) — принятый профиль
+   установки Mind Diary из Srez Marketplace: registered MCP connector,
+   OAuth 2.1 + PKCE, identity binding, UAT pilot и production/public границы.
 10. [Границы реализации](specs/implementation-boundaries.md) — trusted
    `ActorContext`, application ports/façades, transaction boundaries и
    enforceable dependency rules для будущего runtime.
@@ -109,6 +109,9 @@ evidence, предлагаемый дизайн и ещё не проверен�
 - [ADR-0009: универсальный delivery skill и task-manager adapters](decisions/0009-task-manager-adapters.md)
   — принято имя `ship-work-release`, provider-neutral core и отдельные
   lazy-loaded adapter references, включая Linear.
+- [ADR-0010: OAuth-коннектор и Marketplace pilot](decisions/0010-oauth-marketplace-connector.md)
+  — приняты dual personal/OAuth authentication, PKCE/DCR, read-first consent,
+  rotating refresh и отдельная UAT-граница registered connector.
 
 ## Исследования
 

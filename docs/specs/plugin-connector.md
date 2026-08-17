@@ -1,15 +1,38 @@
 # Plugin и OAuth-коннектор Mind Diary
 
-Статус: proposal, 2026-08-17. Документ проектирует установку Mind Diary из
-Srez Marketplace и OAuth-подключение к content MCP. Он не утверждает, что OAuth,
-registered connector или Marketplace plugin уже реализованы либо развёрнуты.
-Текущее поведение остаётся прежним: single-principal UAT и personal
-`mdp_v1_` bearer tokens.
+Статус: accepted, обновлено 2026-08-17. OAuth Authorization Server, dual
+personal/OAuth MCP authentication, write step-up и connected-app revocation
+реализованы в repository candidate. Registered connector, Marketplace package
+и live UAT acceptance ещё не завершены; текущий deployed Site по-прежнему
+обслуживает только прежний single-principal UAT и personal `mdp_v1_` tokens.
 
 Связанные документы: [архитектура](../architecture.md),
 [MVP](mvp.md), [API](api.md),
 [доменная модель](domain-model.md) и
-[профиль доставки](../operations/ship-work-release-profile.md).
+[профиль доставки](../operations/ship-work-release-profile.md). Принятое
+решение зафиксировано в
+[ADR-0010](../decisions/0010-oauth-marketplace-connector.md).
+
+## Текущий implementation checkpoint
+
+Repository candidate уже содержит:
+
+- OAuth discovery и protected-resource metadata;
+- public-client DCR и optional allowlisted Client ID Metadata Document;
+- authorization code + PKCE `S256`, exact redirect/resource validation;
+- 15-minute access token, rotating 30-day refresh token и grant-family revoke
+  при refresh reuse;
+- read-first grant и `content:write` step-up;
+- dual `mdp_v1_`/`mdo_access_` MCP authentication, tool
+  `securitySchemes` и OAuth challenges;
+- internal authorization mirror, благодаря которому application ACL/CAS/commit
+  повторно проверяют OAuth token внутри текущих transaction boundaries;
+- connected-app list/revoke на `/settings/mcp` и account-deletion cleanup;
+- D1 migration и repository tests для positive и negative OAuth paths.
+
+Этот checkpoint — доказательство реализации, не deployment. App registration,
+реальный `.app.json`, Marketplace validation, exact-SHA UAT release и fresh
+install/read/write/revoke/reconnect smoke остаются обязательными этапами.
 
 ## Решение
 
@@ -44,7 +67,7 @@ catalog policy `installation: AVAILABLE` и `authentication: ON_INSTALL`.
 
 Текущая интеграция Task Manager подтверждает пригодность следующего шаблона:
 
-| Слой | Task Manager сейчас | Mind Diary proposal |
+| Слой | Task Manager сейчас | Mind Diary accepted profile |
 | --- | --- | --- |
 | Marketplace | `srez-marketplace` | тот же Marketplace |
 | Plugin package | `plugins/task-manager` | новый `plugins/mind-diary` |
@@ -427,4 +450,3 @@ version, Marketplace plugin version и fresh-chat smoke.
 - [OpenAI Plugins: package structure](https://developers.openai.com/plugins/build/plugins)
 - [OpenAI Plugins: connect from ChatGPT](https://developers.openai.com/plugins/deploy/connect-chatgpt)
 - [OpenAI Plugins: public submission](https://developers.openai.com/plugins/deploy/submission)
-

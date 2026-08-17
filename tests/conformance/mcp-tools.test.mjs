@@ -219,11 +219,15 @@ test("tools/list ignores provider order, duplicates, and undeclared tools", asyn
   const result = await rpcResult(await fixture.send(rpc("tools/list")));
   assert.deepEqual(
     result.tools.map(({ name }) => name),
-    MCP_CONTENT_TOOLS.filter((name) => name !== "commit_changeset"),
+    MCP_CONTENT_TOOLS,
   );
   for (const tool of result.tools) {
     assert.equal(tool.inputSchema.$schema, "https://json-schema.org/draft/2020-12/schema");
     assert.equal(tool.outputSchema.$schema, "https://json-schema.org/draft/2020-12/schema");
+    assert.deepEqual(
+      tool.securitySchemes,
+      [{ type: "oauth2", scopes: [tool.name === "commit_changeset" ? "content:write" : "content:read"] }],
+    );
   }
 });
 

@@ -1,34 +1,43 @@
 # REST и MCP API Mind Diary
 
-Статус: proposal для верификации, обновлено 2026-08-09. Документ уточняет
+Статус: proposal для верификации, обновлено 2026-08-17. Документ уточняет
 wire-level контракты первого прототипа на основе принятых product decisions.
 Product API и direct MCP route/compatibility repair реализованы, развёрнуты как
 single-principal UAT в OpenAI Sites и проверены raw modern calls и реальным
-`codex-cli 0.147.0` на обоих profiles. Machine-readable OpenAPI и MCP JSON
-Schemas проверяются на соответствие этому документу и реализации.
+`codex-cli 0.147.0` на обоих profiles. OAuth connector surface реализована в
+repository candidate, но ещё не развёрнута и не проверена registered connector
+live. Machine-readable OpenAPI и MCP JSON Schemas проверяются на соответствие
+этому документу и реализации.
 
 ## Назначение и граница
 
-Mind Diary имеет три разные API-границы:
+Mind Diary имеет четыре разные API-границы:
 
 ```mermaid
 flowchart LR
     Browser["Authenticated Sites browser"]
     Agent["Codex MCP client"]
+    OAuthClient["Registered connector"]
     Rest["First-party REST control API\n/api/v1"]
+    OAuth["OAuth Authorization Server\n/.well-known + /oauth"]
     Mcp["Content MCP\n/api/mcp\n/api/mcp/2025-11-25"]
     Core["Application API\ncommands + queries"]
 
     Browser --> Rest --> Core
+    OAuthClient --> OAuth --> Core
+    OAuthClient --> Mcp
     Agent --> Mcp --> Core
 ```
 
 1. **First-party REST control API** обслуживает Sites UI: account, metadata
    Minds, visibility, invitations, memberships, ownership, deletion и MCP
    tokens. Это не публичный developer API.
-2. **Content MCP** даёт агенту browse/search/fetch/history/validate/export и
+2. **OAuth Authorization Server** связывает registered connector с тем же
+   Sites-authenticated principal и выпускает scoped content tokens. Он не даёт
+   control-plane capabilities.
+3. **Content MCP** даёт агенту browse/search/fetch/history/validate/export и
    immediate content commits. Control-plane tools в нём отсутствуют.
-3. **Internal application API** — типизированная граница use cases, которую
+4. **Internal application API** — типизированная граница use cases, которую
    вызывают REST и MCP adapters. В первом Sites deployment это не обязательно
    отдельная сеть или HTTP service.
 
@@ -59,6 +68,7 @@ surface первого прототипа — authenticated MCP. Если adapte
 - общие JSON-типы descriptors, selectors и errors;
 - точные input/output shapes MCP tools;
 - non-reserved modern endpoint и isolated Codex compatibility endpoint;
+- OAuth discovery, DCR, PKCE/token/revoke и protected-resource challenges;
 - tagged union для `commit_changeset.operations`;
 - ограниченная MCP Resources surface для exact immutable files;
 - tool annotations и разделение protocol/tool execution errors.
@@ -135,6 +145,32 @@ offline guessing не является реалистичной атакой, а
 HMAC дополнительно отделяет read-only compromise token table от verifier key.
 Решение и воспроизводимый benchmark зафиксированы в
 [ADR-0005](../decisions/0005-mcp-token-secret-verifier.md).
+
+### OAuth secrets, grants и verifier
+
+Registered connector использует отдельные bounded opaque secrets:
+
+```text
+mdo_code_<43 base64url characters without padding>
+mdo_access_<43 base64url characters without padding>
+mdo_refresh_<43 base64url characters without padding>
+```
+
+Каждый payload содержит ровно 32 CSPRNG bytes. Server хранит только
+domain-separated keyed HMAC-SHA-256 verifier и lifecycle metadata; один secret
+нельзя принять в роли другого. Authorization code живёт 5 минут и потребляется
+один раз, access token — 15 минут, rotating refresh token — не более 30 дней.
+Повторное использование уже заменённого refresh token отзывает весь grant и
+его active authorization records.
+
+OAuth grant связан с `principal_id + client_id + resource`, а не с одним Mind.
+Allowed resource для pilot — exact canonical modern MCP URL `/api/mcp`.
+Поддерживаются scopes `content:read` и `content:write`; write всегда включает
+read. Access token получает internal authorization mirror в существующем MCP
+token store. Mirror не является user-visible personal token, но позволяет
+application authorizer заново проверить token status, expiry и scopes внутри
+ACL/CAS/commit transaction. Grant revoke и account deletion отзывают mirror до
+best-effort cleanup OAuth normalized records.
 
 ### Pagination
 
@@ -406,6 +442,7 @@ Problem Details response:
 | `GET` | `/api/v1/mcp-tokens` | Token metadata, never secrets/verifiers. |
 | `POST` | `/api/v1/mcp-tokens` | Issue named personal MCP token once. |
 | `DELETE` | `/api/v1/mcp-tokens/{token_id}` | Revoke token. |
+| `DELETE` | `/api/v1/oauth-connections/{grant_id}` | Sites-authenticated principal отзывает свой connected app grant. |
 
 `mind_ref` в REST — `me` или canonical `space_handle`. Adapter разрешает его
 в internal `space_id` и только затем authorizes request.
@@ -672,6 +709,46 @@ Issuance errors, retry responses, logs, traces и metrics также не сод
 значения. Revoke идемпотентен и не удаляет audit metadata до account deletion
 policy.
 
+## OAuth connector surface
+
+| Method | Route | Contract |
+|---|---|---|
+| `GET` | `/.well-known/oauth-protected-resource/api/mcp` | RFC 9728 metadata exact MCP resource; generic `/.well-known/oauth-protected-resource` возвращает тот же pilot document. |
+| `GET` | `/.well-known/oauth-authorization-server` | Authorization server metadata. |
+| `POST` | `/oauth/register` | Public-client DCR с exact redirect URIs; authorization code + refresh token. |
+| `GET` | `/oauth/authorize` | Проверка client, redirect, resource, state, scope и PKCE `S256`; затем Sites-authenticated consent. |
+| `POST` | `/oauth/authorize` | Однократное approve/deny pending request и redirect с code/state либо OAuth error. |
+| `POST` | `/oauth/token` | Authorization-code exchange либо rotating refresh. |
+| `POST` | `/oauth/revoke` | Idempotent grant/access/refresh revoke. |
+
+Pilot DCR принимает только public clients, response type `code`, grant types
+`authorization_code` и `refresh_token`, exact non-empty HTTPS redirect URIs
+(loopback development profile допускается только test/dev configuration) и
+token endpoint authentication method `none`. Client secret не выдаётся.
+Optional Client ID Metadata Document загружается только через отдельный
+allowlisted HTTPS policy; arbitrary server-side URL fetch запрещён.
+
+Authorization request обязан передать exact resource
+`https://{current-host}/api/mcp`, registered `redirect_uri`, unpredictable
+client `state`, `code_challenge_method=S256` и поддерживаемые scopes. Pending
+request связан с текущим client/resource/redirect/challenge и живёт 10 минут.
+Consent page не принимает `principal_id`, role или membership от клиента:
+principal разрешается только через trusted Sites request context.
+
+Token response имеет стандартные `token_type: Bearer`, `expires_in`, `scope`,
+`access_token` и `refresh_token`. Refresh может сохранить либо сузить scopes,
+но не расширить их; write step-up проходит новый authorization flow. Wrong
+redirect, PKCE verifier, resource, client, expired/consumed code или revoked
+grant возвращают generic OAuth error без private principal/grant details.
+
+Protected-resource metadata URL также публикуется в MCP
+`WWW-Authenticate` challenge. Read/export tools объявляют OAuth2
+`content:read`; `commit_changeset` объявляет `content:write`. Missing,
+malformed, expired и revoked bearer получают `401`. Valid read-only bearer при
+вызове commit получает `insufficient_scope` и
+`_meta["mcp/www_authenticate"]` с write challenge, чтобы host мог начать native
+step-up.
+
 ## Internal application API
 
 Internal API — не generic CRUD. Adapter создаёт trusted `ActorContext` и
@@ -932,24 +1009,31 @@ target deployment и не переносятся на другой Site по а�
 
 ### MCP authentication
 
-- `Authorization: Bearer <personal-token>` обязателен на каждом POST обоих
-  endpoint; protocol bridge не является authentication bypass.
-- Server сначала применяет bounded `mdp_v1` parser, вычисляет keyed
+- `Authorization: Bearer <token>` обязателен на каждом POST обоих endpoint;
+  protocol bridge не является authentication bypass. Adapter принимает
+  personal `mdp_v1_` и OAuth `mdo_access_`, но никакие другие bearer formats.
+- Для personal token server применяет bounded parser, вычисляет keyed
   HMAC-SHA-256 verifier, делает один exact indexed lookup и fixed-length
-  constant-time comparison. Только после cryptographic match проверяются
-  lifecycle metadata и строится `ActorContext`.
-- Persisted token record содержит только versioned verifier, safe
-  `display_prefix`, scopes и lifecycle metadata. Plain secret, recoverable
-  material и HMAC key в record отсутствуют.
+  constant-time comparison. Для OAuth access token используется отдельный
+  domain-separated verifier и active grant check, после чего application
+  authorizer повторно читает internal authorization mirror.
+- Persisted records содержат только versioned verifier, scopes и lifecycle
+  metadata; personal token дополнительно имеет safe `display_prefix`. Plain
+  secret, recoverable material и HMAC key в records отсутствуют.
 - Current role/visibility, exact Mind и revision access проверяются на каждом
   HTTP request/call; cached role claims и authorization из initialize/discovery
   не используются.
 - `401` используется для missing/invalid/expired/revoked token и содержит
-  безопасный `WWW-Authenticate: Bearer` challenge.
+  безопасный `WWW-Authenticate: Bearer resource_metadata="..."` challenge с
+  `content:read`.
+- Read-only OAuth grant может discover/list tools, включая write tool для
+  native step-up, но вызов `commit_changeset` fail closed с
+  `insufficient_scope` и write challenge. Visibility tool не заменяет scope
+  enforcement.
 - `403` используется для invalid `Origin` и transport-level policy denial.
-- Prototype personal-token profile не заявляет polished public plugin auth.
-  OAuth 2.1 + PKCE, protected-resource metadata и authorization-server
-  discovery остаются отдельным production integration profile.
+- Repository candidate реализует private UAT connector profile. Он не считается
+  deployed/live compatible до exact-SHA UAT release и fresh registered
+  connector smoke; production/public plugin остаётся отдельной границей.
 
 ### Advertised capabilities
 
@@ -1669,7 +1753,10 @@ Route reachability, Bearer forwarding и default/modern Codex profiles уже
 - request/file/changeset/search/export limits и rate policies;
 - search ranking details и threshold после lexical benchmark;
 - manual identity recovery workflow;
-- OAuth 2.1 + PKCE profile polished/public integration.
+- exact registered connector/app version и результаты fresh UAT
+  install/read/write-step-up/revoke/reconnect conformance;
+- production OAuth issuer/resource, client migration и public directory policy
+  после отдельного provisioned production target.
 
 Ни один из этих вопросов не разрешает расширить MVP в AWS, отдельный runtime,
 anonymous publication, raw browser content API, imports или non-Markdown

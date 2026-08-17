@@ -15,6 +15,7 @@ test("product Site packaging binds only the created project and durable resource
   });
   await stat(resolve(app, "worker/index.ts"));
   await stat(resolve(app, "drizzle/0000_product_site.sql"));
+  await stat(resolve(app, "drizzle/0001_oauth_connector.sql"));
   await stat(resolve(app, "package-lock.json"));
 });
 

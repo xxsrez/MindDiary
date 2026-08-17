@@ -11,6 +11,7 @@
     { "path": "../adapter-audit-sites" },
     { "path": "../adapter-background" },
     { "path": "../adapter-mcp" },
+    { "path": "../adapter-oauth-sites" },
     { "path": "../adapter-metadata-memory" },
     { "path": "../adapter-metadata-sites" },
     { "path": "../adapter-object-memory" },

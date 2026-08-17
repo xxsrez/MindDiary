@@ -1,10 +1,12 @@
 # Архитектура Mind Diary
 
-Статус: proposal, обновлено 2026-08-09. Product Site components, adapters,
+Статус: proposal, обновлено 2026-08-17. Product Site components, adapters,
 route migration и isolated Codex bridge реализованы и развёрнуты как
 single-principal UAT в OpenAI Sites. Authenticated web/control,
 persistence-after-redeploy,
-raw modern discovery и оба профиля `codex-cli 0.147.0` проверены live.
+raw modern discovery и оба профиля `codex-cli 0.147.0` проверены live. OAuth
+connector adapter реализован в repository candidate, но registered connector и
+live UAT flow ещё не подтверждены.
 
 ## Драйверы и ограничения
 
@@ -30,7 +32,8 @@ OKF не определяет transactions, locks, ACL, revisions, query API и�
 ```mermaid
 flowchart LR
     Browser["Authenticated Sites browser"]
-    Agent["Codex / Claude Code"]
+    Agent["Codex / ChatGPT / Claude Code"]
+    OAuth["OAuth connector adapter"]
     Web["Web control adapter"]
     MCP["Streamable HTTP MCP adapter"]
     Core["Application core"]
@@ -41,7 +44,10 @@ flowchart LR
     Worker["Background worker"]
 
     Browser -->|"account and metadata operations"| Web
-    Agent -->|"Bearer token + content tools"| MCP
+    Agent -->|"Authenticate / PKCE"| OAuth
+    OAuth -->|"scoped bearer"| MCP
+    Agent -->|"personal bearer + content tools"| MCP
+    OAuth --> Meta
     Web --> Core
     MCP --> Core
     Core --> Codec
@@ -125,6 +131,10 @@ composition и automated import graph checks реализованы; live Sites 
 
 - **Web adapter** принимает Sites identity context и обслуживает control-plane
   pages/commands. Raw OKF file editing не входит в browser UI.
+- **OAuth connector adapter** публикует discovery, public-client DCR,
+  authorization code + PKCE `S256`, rotating refresh и revocation. Consent
+  использует тот же trusted Sites identity resolver, что и Web adapter, и не
+  принимает client-supplied principal/role/membership как authority.
 - **MCP adapter** предоставляет user-scoped content tools через Streamable HTTP.
   Целевой stateless profile `2026-07-28` доступен по `POST /api/mcp`, начинает
   negotiation с `server/discover` и использует current result metadata;
@@ -231,9 +241,45 @@ environment variable содержит полный `Bearer <secret>`, а не т
 `codex-cli 0.147.0` направляется на compatibility URL
 `https://{site-host}/api/mcp/2025-11-25`; modern clients — на
 `https://{site-host}/api/mcp`. Для Claude Code и других clients support
-объявляется только после conformance test. OAuth 2.1 + PKCE и
-authorization-server metadata остаются target для production/public plugin,
-но не нужны для personal prototype.
+объявляется только после conformance test.
+
+### OAuth connector authentication
+
+Private Marketplace pilot добавляет отдельный OAuth 2.1 profile поверх той же
+principal и content authorization model:
+
+```text
+Sites identity --> principal_id
+registered client + PKCE --> OAuth grant
+OAuth access token --> internal authorization mirror --> ActorContext
+ActorContext + current ACL + exact Mind/revision --> content use case
+```
+
+Authorization Server и protected resource живут на одном canonical UAT origin.
+Public-client DCR не выдаёт client secret. Authorization request привязывает
+exact redirect URI, resource `/api/mcp`, scopes, state и PKCE `S256`; consent
+разрешает current principal только из Sites request context. Read-first grant
+получает `content:read`, а `content:write` добавляется отдельным step-up.
+
+OAuth tables хранят normalized clients, pending requests, grants, one-time
+codes, access и refresh lifecycle. Opaque code/access/refresh secrets
+сохраняются только как domain-separated keyed HMAC-SHA-256 verifiers. Access
+token короткоживущий; refresh token rotation с reuse detection отзывает grant.
+
+Application core уже повторно проверяет current MCP token внутри ACL/CAS/commit
+transaction. Чтобы OAuth adapter не обходил эту boundary, каждому active OAuth
+access token соответствует скрытая authorization mirror record в существующем
+token store с теми же principal, scopes и expiry. Revocation сначала отзывает
+mirror, затем OAuth lifecycle records; account deletion authoritative cascade
+также отзывает mirrors. Поэтому недоступность best-effort OAuth cleanup после
+account deletion не сохраняет content access.
+
+Web `/settings/mcp` показывает connected apps и немедленный revoke отдельно от
+personal tokens. OAuth bearer не даёт membership/account control plane. UAT
+registered connector и Marketplace package проверяются отдельным fresh-host
+gate; production issuer/resource и public directory остаются нерешённой
+release boundary. Детали зафиксированы в
+[ADR-0010](decisions/0010-oauth-marketplace-connector.md).
 
 ## Mind identity, `/me` и visibility
 

@@ -125,9 +125,30 @@ test("Codex instructions reference bearer_token_env_var without placing a token 
   assert.match(html, /data-copy-code="mind-diary-modern-config"/);
   assert.match(html, /Keep the secret outside your repository and Codex config/);
   assert.match(html, /complete <code>Bearer &lt;secret&gt;<\/code> header value/);
-  assert.match(html, /Historical UAT baseline/);
+  assert.match(html, /UAT connector baseline/);
   assert.match(html, /hosted environment is UAT, not production/);
-  assert.match(html, /OAuth\/PKCE and public plugin support remain outside/);
+  assert.match(html, /OAuth Authorization Code with PKCE/);
+});
+
+test("connected apps show effective OAuth access and an immediate revoke control", () => {
+  const html = renderMcpTokenManagement({
+    ...model({ kind: "empty" }),
+    oauthConnections: {
+      kind: "ready",
+      connections: [{
+        grantId: "md_oauth_grant_12345678-1234-1234-1234-123456789abc",
+        clientName: "ChatGPT Mind Diary <unsafe>",
+        scopes: ["content:read", "content:write"],
+        createdAt: "2026-08-17T20:00:00.000Z",
+        lastUsedAt: null,
+      }],
+    },
+  });
+  assert.match(html, /Connected apps/);
+  assert.match(html, /ChatGPT Mind Diary &lt;unsafe&gt;/);
+  assert.match(html, /Read and write/);
+  assert.match(html, /data-revoke-oauth="md_oauth_grant_12345678-1234-1234-1234-123456789abc"/);
+  assert.match(PRODUCT_UI_CLIENT_JAVASCRIPT, /\/api\/v1\/oauth-connections\//);
 });
 
 test("exact-origin Codex configs keep modern and compatibility lifecycles separate", () => {
