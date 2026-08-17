@@ -26,26 +26,29 @@ evidence, предлагаемый дизайн и ещё не проверен�
    slice и его критерии готовности.
 8. [REST и MCP API](specs/api.md) — предлагаемый wire-level contract control
    REST, internal application API, MCP tools/resources, schemas и errors.
-9. [Границы реализации](specs/implementation-boundaries.md) — trusted
+9. [Plugin и OAuth-коннектор](specs/plugin-connector.md) — proposal установки
+   Mind Diary из Srez Marketplace, registered MCP connector, OAuth 2.1 + PKCE,
+   identity binding, UAT pilot и production/public границы.
+10. [Границы реализации](specs/implementation-boundaries.md) — trusted
    `ActorContext`, application ports/façades, transaction boundaries и
    enforceable dependency rules для будущего runtime.
-10. [Traceability matrix MVP 0.1](specs/traceability.md) — критерии 1–29,
+11. [Traceability matrix MVP 0.1](specs/traceability.md) — критерии 1–29,
    owning stories, executable/release evidence, обязательные live flows,
    post-MVP denylist и implementation decisions.
-11. [Автономная доставка work scope](specs/ship-work-release.md) — универсальный
+12. [Автономная доставка work scope](specs/ship-work-release.md) — универсальный
    принятый контракт `ship-work-release`: task-manager adapters, один mutable
    writer по умолчанию, selective lanes и scouts, cohorts, control API,
    dev/UAT promotion и ручная production boundary.
-12. [Контракт project profile](specs/ship-work-release-project-profile.md) —
+13. [Контракт project profile](specs/ship-work-release-project-profile.md) —
    versioned provider-neutral schema обязательных project-specific commands,
    runtime capabilities, gates, environments и evidence rows.
-13. [Контракт task-management adapter](specs/ship-work-release-task-manager.md) —
+14. [Контракт task-management adapter](specs/ship-work-release-task-manager.md) —
    versioned provider-neutral schema identity, snapshots, mutations,
    reconciliation и capability negotiation task-management backend-а.
-14. [Linear adapter для `ship-work-release`](specs/ship-work-release-linear.md) —
+15. [Linear adapter для `ship-work-release`](specs/ship-work-release-linear.md) —
    отдельное отображение Linear projects, milestones, issues, relations,
    statuses и updates в универсальную модель work collection/scope/item.
-15. [Упрощённая доставка Linear milestone](specs/ship-linear-release-v1.md) —
+16. [Упрощённая доставка Linear milestone](specs/ship-linear-release-v1.md) —
    исполнимый compromise profile `ship-linear-release`: один coordinator,
    coordinator-only либо exact N worker-субагентов, простой JSON journal,
    meaningful UAT batches и forward-only repair.
