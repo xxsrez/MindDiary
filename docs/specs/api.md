@@ -715,6 +715,7 @@ policy.
 |---|---|---|
 | `GET` | `/.well-known/oauth-protected-resource/api/mcp` | RFC 9728 metadata exact MCP resource; generic `/.well-known/oauth-protected-resource` возвращает тот же pilot document. |
 | `GET` | `/.well-known/oauth-authorization-server` | Authorization server metadata. |
+| `GET` | `/.well-known/openid-configuration` | ChatGPT compatibility alias того же authorization-server metadata; не заявляет OpenID Connect identity scopes или ID tokens. |
 | `POST` | `/oauth/register` | Public-client DCR с exact redirect URIs; authorization code + refresh token. |
 | `GET` | `/oauth/authorize` | Проверка client, redirect, resource, state, scope и PKCE `S256`; затем Sites-authenticated consent. |
 | `POST` | `/oauth/authorize` | Однократное approve/deny pending request и redirect с code/state либо OAuth error. |

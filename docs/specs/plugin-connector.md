@@ -207,11 +207,17 @@ MCP resource. Authorization Server публикует metadata и endpoints:
 ```text
 GET  /.well-known/oauth-protected-resource/<exact-mcp-path>
 GET  /.well-known/oauth-authorization-server
+GET  /.well-known/openid-configuration
 GET  /oauth/authorize
 POST /oauth/register
 POST /oauth/token
 POST /oauth/revoke
 ```
+
+`/.well-known/openid-configuration` возвращает тот же authorization-server
+metadata как compatibility alias для ChatGPT discovery. Pilot не выдаёт
+`id_token`, не публикует identity scopes и не заявляет OpenID Connect provider
+semantics.
 
 Нужны authorization code flow и только PKCE `S256`. Для первого connector
 следует поддержать Dynamic Client Registration: именно этот путь доказан

@@ -325,7 +325,12 @@ test("OAuth discovery, DCR, PKCE, read grant, step-up, and revoke are durable", 
   const serverMetadata = await connector.fetch(
     new Request(`${ORIGIN}/.well-known/oauth-authorization-server`),
   );
-  assert.equal((await serverMetadata.json()).code_challenge_methods_supported[0], "S256");
+  const serverMetadataBody = await serverMetadata.json();
+  assert.equal(serverMetadataBody.code_challenge_methods_supported[0], "S256");
+  const openIdCompatibilityMetadata = await connector.fetch(
+    new Request(`${ORIGIN}/.well-known/openid-configuration`),
+  );
+  assert.deepEqual(await openIdCompatibilityMetadata.json(), serverMetadataBody);
 
   const client = await register(connector);
   const readTokens = await authorize(connector, client.client_id);

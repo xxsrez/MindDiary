@@ -1294,7 +1294,11 @@ export async function createSitesOAuthConnector(
       ) {
         return json(200, protectedResourceMetadata());
       }
-      if (request.method === "GET" && url.pathname === "/.well-known/oauth-authorization-server") {
+      if (
+        request.method === "GET" &&
+        (url.pathname === "/.well-known/oauth-authorization-server" ||
+          url.pathname === "/.well-known/openid-configuration")
+      ) {
         return json(200, authorizationServerMetadata());
       }
       if (request.method === "POST" && url.pathname === "/oauth/register") {
