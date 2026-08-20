@@ -396,9 +396,13 @@ Blocking matrix:
 8. Existing personal-token modern и compatibility flows остаются рабочими.
 9. Access-token expiry, refresh rotation, refresh reuse, wrong resource,
    redirect mismatch и revoked client имеют negative tests.
-10. Fresh temporary Codex/plugin context проходит skill/tool discovery,
-    representative read, write, revoke и reconnect на exact package/candidate;
-    package snapshot, client/version и routes входят в redacted receipt.
+10. Fresh temporary Codex/plugin context проходит skill/tool discovery:
+    `codex debug prompt-input` без model/network call показывает exact installed
+    `mind-diary` skill в model-visible index, а `codex mcp list` разрешает exact
+    transport. Одного чтения cached `SKILL.md` недостаточно. Representative
+    read, write, revoke и reconnect выполняются на exact package/candidate;
+    package snapshot, client/version и routes входят в redacted receipt, raw
+    prompt input не сохраняется.
 11. Test identity seam нельзя активировать product route/header/body/query/
     env/job/`NODE_ENV`; normal token, current ACL, CAS и MCP authorization не
     обходятся.

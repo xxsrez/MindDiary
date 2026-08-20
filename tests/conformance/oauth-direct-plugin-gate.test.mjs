@@ -13,9 +13,26 @@ import {
 } from "../../scripts/lib/fake-sites-storage.mjs";
 import {
   OAUTH_DIRECT_PLUGIN_ASSERTION_IDS,
+  assertCodexClientVersion,
   createEvidence,
   parseCli,
+  parseCodexSkillDiscovery,
+  readCodexPromptInput,
 } from "../../scripts/run-oauth-direct-plugin-probe.mjs";
+
+const SKILL_DESCRIPTION = "Use Mind Diary through its connected content MCP.";
+const INSTALLED_ROOT = "/private/tmp/fresh/plugins/cache/marketplace/mind-diary/version";
+
+function promptInputFixture(line) {
+  return [{
+    type: "message",
+    role: "developer",
+    content: [{
+      type: "input_text",
+      text: `<skills_instructions>\n## Skills\n${line}\n</skills_instructions>`,
+    }],
+  }];
+}
 
 test("OAuth direct-plugin receipt is closed, redacted, and canonically hashed", () => {
   const input = {
@@ -65,6 +82,60 @@ test("OAuth direct-plugin UI canary fields are allowed by the release evidence p
   for (const field of ["external_ui_canary", "requirement", "claim"]) {
     assert.match(policy, new RegExp(`^\\s+- ${field}$`, "mu"));
   }
+});
+
+test("Codex prompt-input parser proves the installed skill is model-visible", () => {
+  const path = `${INSTALLED_ROOT}/skills/mind-diary/SKILL.md`;
+  const line = `- mind-diary:mind-diary: ${SKILL_DESCRIPTION} (file: ${path})`;
+  assert.deepEqual(
+    parseCodexSkillDiscovery(promptInputFixture(line), {
+      installedRoot: INSTALLED_ROOT,
+      description: SKILL_DESCRIPTION,
+    }),
+    {
+      name: "mind-diary:mind-diary",
+      description: SKILL_DESCRIPTION,
+      source: "file",
+      path,
+    },
+  );
+});
+
+test("Codex prompt-input discovery fails closed for cache-only, wrong-source, and duplicate evidence", () => {
+  const expected = {
+    installedRoot: INSTALLED_ROOT,
+    description: SKILL_DESCRIPTION,
+  };
+  const exactLine = `- mind-diary:mind-diary: ${SKILL_DESCRIPTION} (file: ${INSTALLED_ROOT}/skills/mind-diary/SKILL.md)`;
+  const wrongLine = `- mind-diary:mind-diary: ${SKILL_DESCRIPTION} (file: /tmp/untrusted/SKILL.md)`;
+  for (const fixture of [
+    [{ role: "user", content: [{ type: "input_text", text: exactLine }] }],
+    promptInputFixture(wrongLine),
+    promptInputFixture(`${exactLine}\n${exactLine}`),
+    { not: "a prompt input list" },
+  ]) {
+    assert.throws(
+      () => parseCodexSkillDiscovery(fixture, expected),
+      (error) => error instanceof ProbeFailure && [
+        "installed_skill_not_model_visible",
+        "invalid_codex_prompt_input",
+      ].includes(error.code),
+    );
+  }
+});
+
+test("Codex client version and prompt-input command availability fail closed", async () => {
+  assertCodexClientVersion("codex-cli 0.147.0\n");
+  assert.throws(
+    () => assertCodexClientVersion("codex-cli 0.148.0\n"),
+    (error) => error instanceof ProbeFailure && error.code === "codex_version_mismatch",
+  );
+  await assert.rejects(
+    readCodexPromptInput("/tmp/fresh-codex-home", async () => {
+      throw new Error("raw subprocess failure must not escape");
+    }),
+    (error) => error instanceof ProbeFailure && error.code === "codex_prompt_input_unavailable",
+  );
 });
 
 test("OAuth direct-plugin CLI exposes no identity, scope, token, route, or runtime switch", () => {

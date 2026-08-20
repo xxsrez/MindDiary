@@ -46,6 +46,9 @@ const EVIDENCE_SCHEMA = "mind-diary/oauth-direct-plugin-evidence/v1";
 const BINDING_NAMESPACE = "synthetic-test";
 const CLIENT = "codex-cli";
 const CLIENT_VERSION = "0.147.0";
+const CODEX_SKILL_DISCOVERY_PROMPT =
+  "Check whether the installed Mind Diary skill is available. Do not call tools.";
+const MAX_CODEX_PROMPT_INPUT_BYTES = 2 * 1024 * 1024;
 const MODERN_PROTOCOL = "2026-07-28";
 const COMPAT_PROTOCOL = "2025-11-25";
 
@@ -283,6 +286,65 @@ async function codexJson(codexHome, args, code) {
   return safeJson(result.stdout, code);
 }
 
+export function assertCodexClientVersion(stdout) {
+  if (typeof stdout !== "string" || stdout.trim() !== `${CLIENT} ${CLIENT_VERSION}`) {
+    fail("codex_version_mismatch");
+  }
+}
+
+export async function readCodexPromptInput(codexHome, execute = execFileAsync) {
+  let result;
+  try {
+    result = await execute(
+      "codex",
+      ["debug", "prompt-input", CODEX_SKILL_DISCOVERY_PROMPT],
+      {
+        cwd: ROOT,
+        encoding: "utf8",
+        maxBuffer: MAX_CODEX_PROMPT_INPUT_BYTES,
+        env: { ...process.env, CODEX_HOME: codexHome },
+      },
+    );
+  } catch {
+    fail("codex_prompt_input_unavailable");
+  }
+  return safeJson(result.stdout, "invalid_codex_prompt_input");
+}
+
+export function parseCodexSkillDiscovery(promptInput, { installedRoot, description }) {
+  if (!Array.isArray(promptInput)) fail("invalid_codex_prompt_input");
+  const root = requiredString(installedRoot, "missing_installed_plugin_root");
+  const expectedDescription = requiredString(description, "missing_installed_skill_description");
+  const expectedPath = join(root, "skills", "mind-diary", "SKILL.md");
+  const prefix = "- mind-diary:mind-diary: ";
+  const expected = `${prefix}${expectedDescription} (file: ${expectedPath})`;
+  const entries = [];
+  for (const message of promptInput) {
+    if (!isRecord(message) || message.role !== "developer" || !Array.isArray(message.content)) {
+      continue;
+    }
+    for (const block of message.content) {
+      if (
+        !isRecord(block) ||
+        block.type !== "input_text" ||
+        typeof block.text !== "string" ||
+        !block.text.startsWith("<skills_instructions>\n") ||
+        !block.text.endsWith("\n</skills_instructions>")
+      ) continue;
+      entries.push(...block.text.split("\n").filter((line) => line.startsWith(prefix)));
+    }
+  }
+  if (entries.length !== 1 || entries[0] !== expected) {
+    fail("installed_skill_not_model_visible");
+  }
+  return Object.freeze({
+    name: "mind-diary:mind-diary",
+    description: expectedDescription,
+    source: "file",
+    path: expectedPath,
+  });
+}
+
 async function verifyFreshPluginContext(snapshot, assertions) {
   const codexHome = await mkdtemp(join(tmpdir(), "mind-diary-oauth-plugin-gate-"));
   try {
@@ -291,9 +353,7 @@ async function verifyFreshPluginContext(snapshot, assertions) {
       encoding: "utf8",
       env: { ...process.env, CODEX_HOME: codexHome },
     }).catch(() => fail("codex_version_unavailable"));
-    if (version.stdout.trim() !== `${CLIENT} ${CLIENT_VERSION}`) {
-      fail("codex_version_mismatch");
-    }
+    assertCodexClientVersion(version.stdout);
     const added = await codexJson(
       codexHome,
       ["plugin", "marketplace", "add", snapshot.root, "--json"],
@@ -341,8 +401,14 @@ async function verifyFreshPluginContext(snapshot, assertions) {
     }
     const skill = await readFile(join(installedRoot, "skills", "mind-diary", "SKILL.md"), "utf8");
     if (!/^---[\s\S]*?^name:\s*mind-diary\s*$/mu.test(skill)) {
-      fail("installed_skill_not_discovered");
+      fail("installed_skill_manifest_invalid");
     }
+    const description = /^description:\s*(.+)$/mu.exec(skill)?.[1]?.trim();
+    if (!description || description.includes("\n")) fail("installed_skill_manifest_invalid");
+    parseCodexSkillDiscovery(
+      await readCodexPromptInput(codexHome),
+      { installedRoot, description },
+    );
     assertions.add("package.skill-discovery");
 
     const installedList = await codexJson(

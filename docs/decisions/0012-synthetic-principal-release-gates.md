@@ -69,7 +69,9 @@ Harness вызывает normal application commands и protocol adapters. Он 
 
 - `dev.oauth-direct-plugin` — обязательный automated gate. Он проверяет direct
   package shape (`AVAILABLE + ON_USE`, без `apps`/`.app.json`, exact
-  `.mcp.json`), fresh temporary Codex/plugin context, discovery/DCR, PKCE
+  `.mcp.json`), fresh temporary Codex/plugin context, model-visible skill
+  discovery через non-model `codex debug prompt-input` (не только cached
+  `SKILL.md`), discovery/DCR, PKCE
   `S256`, exact redirect/resource/state, read grant, write step-up, expiry,
   refresh rotation/reuse detection, revoke/reconnect, modern/compatibility MCP
   и personal-token regression. Synthetic identity допускается только на
