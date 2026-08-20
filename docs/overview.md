@@ -185,11 +185,11 @@ files через browser UI не читаются и не редактируют
 используют общий application core/internal API; raw REST не является
 пользовательской поверхностью.
 
-Для первого прототипа MCP authentication — revocable personal bearer token,
-который пользователь выпускает на сайте и передаёт клиенту через environment
-variable. Token связан с principal, а не Mind; default lifetime 90 дней, secret
-показывается один раз, на сервере хранится hash. OAuth 2.1 + PKCE остаётся
-следующим шагом для polished plugin integration.
+Первый прототип сохраняет revocable personal bearer token как advanced direct-
+client path и поддерживает OAuth 2.1 + PKCE для Marketplace plugin. В Codex
+Desktop/CLI pilot package устанавливается без private registered app, а OAuth
+начинается при первом MCP use. Оба bearer profile связаны с principal, а не
+Mind, и не меняют current ACL, scope, CAS или idempotency boundaries.
 
 Пользователь оплачивает inference своего Codex/Claude client. Mind Diary в этом
 пути предоставляет MCP, storage и server-side operations, но не вызывает LLM от
@@ -202,8 +202,9 @@ variable. Token связан с principal, а не Mind; default lifetime 90 д�
    его и становится единственным Owner.
 3. Owner/Admin приглашает зарегистрированных пользователей как Reader/Editor;
    Owner также может пригласить Admin.
-4. Пользователь выпускает named MCP token и подключает Codex; Claude Code
-   становится поддерживаемым client только после отдельного conformance test.
+4. Пользователь устанавливает direct MCP plugin и проходит OAuth при первом
+   use либо выпускает named personal token для advanced setup; другие clients
+   становятся supported только после отдельного conformance test.
 5. Агент вызывает `list_minds`, выбирает `/me` или другой доступный Mind,
    просматривает index/search/fetch.
 6. Editor/Admin/Owner отправляет atomic changeset с current HEAD revision.

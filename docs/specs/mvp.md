@@ -1,11 +1,12 @@
 # Спецификация первого прототипа
 
-Статус: proposal, обновлено 2026-08-17. Product requirements ниже приняты;
+Статус: proposal, обновлено 2026-08-20. Product requirements ниже приняты;
 Product Site и direct route/compatibility repair реализованы и развёрнуты как
 single-principal UAT в OpenAI Sites. Обязательные authenticated web/control,
 persistence-after-redeploy и default/modern Codex MCP gates пройдены live;
-OAuth connector реализован в repository candidate, но registered app,
-Marketplace package и fresh UAT connector gate ещё не завершены.
+OAuth profile реализован в repository candidate. Для Codex Desktop/CLI pilot
+0.1 принят direct Marketplace MCP package с OAuth при первом использовании;
+package cut и fresh external-account gate ещё не завершены.
 
 ## Цель
 
@@ -208,7 +209,7 @@ commit_changeset(
 Content MCP принимает два revocable bearer profiles:
 
 1. personal access token для direct Codex/CLI setup;
-2. OAuth access token для registered Marketplace connector.
+2. OAuth access token для direct Marketplace MCP connection.
 
 Personal access token имеет следующий contract:
 

@@ -1,13 +1,14 @@
 # REST и MCP API Mind Diary
 
-Статус: proposal для верификации, обновлено 2026-08-17. Документ уточняет
+Статус: proposal для верификации, обновлено 2026-08-20. Документ уточняет
 wire-level контракты первого прототипа на основе принятых product decisions.
 Product API и direct MCP route/compatibility repair реализованы, развёрнуты как
 single-principal UAT в OpenAI Sites и проверены raw modern calls и реальным
-`codex-cli 0.147.0` на обоих profiles. OAuth connector surface реализована в
-repository candidate, но ещё не развёрнута и не проверена registered connector
-live. Machine-readable OpenAPI и MCP JSON Schemas проверяются на соответствие
-этому документу и реализации.
+`codex-cli 0.147.0` на обоих profiles. OAuth server/client surface реализована в
+repository candidate. Для Codex Desktop/CLI pilot 0.1 принят direct MCP package
+с OAuth при первом использовании; fresh external-account lifecycle ещё не
+является release evidence. Machine-readable OpenAPI и MCP JSON Schemas
+проверяются на соответствие этому документу и реализации.
 
 ## Назначение и граница
 
@@ -17,7 +18,7 @@ Mind Diary имеет четыре разные API-границы:
 flowchart LR
     Browser["Authenticated Sites browser"]
     Agent["Codex MCP client"]
-    OAuthClient["Registered connector"]
+    OAuthClient["Direct OAuth MCP client"]
     Rest["First-party REST control API\n/api/v1"]
     OAuth["OAuth Authorization Server\n/.well-known + /oauth"]
     Mcp["Content MCP\n/api/mcp\n/api/mcp/2025-11-25"]
@@ -32,7 +33,7 @@ flowchart LR
 1. **First-party REST control API** обслуживает Sites UI: account, metadata
    Minds, visibility, invitations, memberships, ownership, deletion и MCP
    tokens. Это не публичный developer API.
-2. **OAuth Authorization Server** связывает registered connector с тем же
+2. **OAuth Authorization Server** связывает DCR client с тем же
    Sites-authenticated principal и выпускает scoped content tokens. Он не даёт
    control-plane capabilities.
 3. **Content MCP** даёт агенту browse/search/fetch/history/validate/export и
@@ -148,7 +149,7 @@ HMAC дополнительно отделяет read-only compromise token tabl
 
 ### OAuth secrets, grants и verifier
 
-Registered connector использует отдельные bounded opaque secrets:
+OAuth client flow использует отдельные bounded opaque secrets:
 
 ```text
 mdo_code_<43 base64url characters without padding>
@@ -1757,8 +1758,10 @@ Route reachability, Bearer forwarding и default/modern Codex profiles уже
 - request/file/changeset/search/export limits и rate policies;
 - search ranking details и threshold после lexical benchmark;
 - manual identity recovery workflow;
-- exact registered connector/app version и результаты fresh UAT
-  install/read/write-step-up/revoke/reconnect conformance;
+- exact Marketplace plugin version/cache snapshot и результаты fresh UAT
+  install-before-OAuth/read/write-step-up/revoke/reconnect conformance;
+- отдельный future ChatGPT Web connector/app profile после OpenAI verification,
+  если он потребуется;
 - production OAuth issuer/resource, client migration и public directory policy
   после отдельного provisioned production target.
 

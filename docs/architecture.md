@@ -1,12 +1,13 @@
 # Архитектура Mind Diary
 
-Статус: proposal, обновлено 2026-08-17. Product Site components, adapters,
+Статус: proposal, обновлено 2026-08-20. Product Site components, adapters,
 route migration и isolated Codex bridge реализованы и развёрнуты как
 single-principal UAT в OpenAI Sites. Authenticated web/control,
 persistence-after-redeploy,
 raw modern discovery и оба профиля `codex-cli 0.147.0` проверены live. OAuth
-connector adapter реализован в repository candidate, но registered connector и
-live UAT flow ещё не подтверждены.
+adapter реализован в repository candidate. Для Codex Desktop/CLI pilot 0.1
+принят direct MCP package с OAuth при первом использовании; fresh external-
+account install/OAuth lifecycle ещё не подтверждён как release evidence.
 
 ## Драйверы и ограничения
 
@@ -32,8 +33,8 @@ OKF не определяет transactions, locks, ACL, revisions, query API и�
 ```mermaid
 flowchart LR
     Browser["Authenticated Sites browser"]
-    Agent["Codex / ChatGPT / Claude Code"]
-    OAuth["OAuth connector adapter"]
+    Agent["Codex; другие clients после conformance"]
+    OAuth["OAuth authorization adapter"]
     Web["Web control adapter"]
     MCP["Streamable HTTP MCP adapter"]
     Core["Application core"]
@@ -243,14 +244,15 @@ environment variable содержит полный `Bearer <secret>`, а не т
 `https://{site-host}/api/mcp`. Для Claude Code и других clients support
 объявляется только после conformance test.
 
-### OAuth connector authentication
+### OAuth authentication
 
-Private Marketplace pilot добавляет отдельный OAuth 2.1 profile поверх той же
-principal и content authorization model:
+Marketplace pilot добавляет отдельный OAuth 2.1 profile поверх той же principal
+и content authorization model. Codex Desktop/CLI получает exact resource из
+direct `.mcp.json`; private registered app для pilot 0.1 не требуется:
 
 ```text
 Sites identity --> principal_id
-registered client + PKCE --> OAuth grant
+public DCR client + PKCE --> OAuth grant
 OAuth access token --> internal authorization mirror --> ActorContext
 ActorContext + current ACL + exact Mind/revision --> content use case
 ```
@@ -275,11 +277,13 @@ mirror, затем OAuth lifecycle records; account deletion authoritative casca
 account deletion не сохраняет content access.
 
 Web `/settings/mcp` показывает connected apps и немедленный revoke отдельно от
-personal tokens. OAuth bearer не даёт membership/account control plane. UAT
-registered connector и Marketplace package проверяются отдельным fresh-host
-gate; production issuer/resource и public directory остаются нерешённой
-release boundary. Детали зафиксированы в
-[ADR-0010](decisions/0010-oauth-marketplace-connector.md).
+personal tokens. OAuth bearer не даёт membership/account control plane. Direct
+UAT package использует `AVAILABLE + ON_USE` и проверяется отдельным fresh
+external-account gate; production issuer/resource, ChatGPT Web connector и
+public directory остаются нерешённой release boundary. Server-side профиль
+зафиксирован в [ADR-0010](decisions/0010-oauth-marketplace-connector.md), а
+distribution boundary — в
+[ADR-0011](decisions/0011-direct-mcp-plugin-oauth-on-use.md).
 
 ## Mind identity, `/me` и visibility
 

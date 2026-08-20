@@ -1,6 +1,6 @@
 # Traceability matrix MVP 0.1
 
-Статус: executable baseline, обновлено 2026-08-10. Документ связывает
+Статус: executable baseline, обновлено 2026-08-20. Документ связывает
 принятые критерии готовности с реализацией и обязательным evidence. Product Site
 развёрнут как single-principal UAT в OpenAI Sites; базовые web/persistence и оба
 Codex MCP profiles прошли live, но это не закрывает автоматически каждый
@@ -223,7 +223,7 @@ failure; отсутствующий receipt остаётся pending.
     { "id": "checkpoints", "claim": "Branches, merge, moving tags and named checkpoints are absent.", "evidence": ["mind-history"] },
     { "id": "non-markdown-assets", "claim": "Non-Markdown Asset transport is absent.", "evidence": ["okf-unit", "changeset-preflight"] },
     { "id": "personalization", "claim": "Personalized landing and website AI are not exposed.", "evidence": ["exposure-contract"] },
-    { "id": "oauth-company-knowledge", "claim": "OAuth/public-plugin and company-knowledge profiles are not claimed.", "evidence": ["mcp-transport", "mcp-tools"] },
+    { "id": "oauth-company-knowledge", "claim": "ChatGPT Web/public-directory and company-knowledge profiles are not claimed by the direct Codex UAT plugin.", "evidence": ["mcp-transport", "mcp-tools"] },
     { "id": "claude-support", "claim": "Claude Code is not a supported client without its own conformance evidence.", "evidence": ["mcp-transport"] },
     { "id": "anonymous-access", "claim": "Anonymous access and publication remain absent.", "evidence": ["mind-routes"] },
     { "id": "draft-approval", "claim": "Server drafts and approval artifacts are absent from immediate commits.", "evidence": ["changeset-preflight", "mcp-commit-export"] }
@@ -300,7 +300,7 @@ notes или live evidence 0.1 как частично поддержанные:
 | Named checkpoints/moving tags/branches/merge | История 0.1 использует только immutable revision IDs и `as_of`. |
 | `Asset`/`BundleFile`/`OpaqueAsset`, non-Markdown upload/fetch | Модель, manifest, safety и transport не приняты; 0.1 создаёт только Markdown. |
 | Personalized landing/`PersonalContext`/website AI | Отдельный будущий trusted use case; `/me` и handle routes в 0.1 — management. |
-| OAuth 2.1 + PKCE, public plugin, company-knowledge profile | Не часть personal-token custom MCP; нельзя заявлять compatibility. |
+| ChatGPT Web registered connector, public Plugin Directory, company-knowledge profile | Direct Codex UAT plugin с OAuth не доказывает эти profiles; нужна отдельная verification/review. |
 | Claude Code support | Не release gate и не supported client без отдельного adapter/client conformance test. |
 | Anonymous publication/access | Все visibility modes 0.1 требуют registered authenticated principal. |
 | Server drafts/diff/approval artifacts | Content MCP immediate commit-ит под scope, ACL, CAS и idempotency. |
@@ -334,9 +334,10 @@ operational проверки. `Реализовано` означает толь
 | Immediate replicated/index deletion и whole-Mind erasure | Restartable repository lifecycle и failure-injection реализованы; physical UAT erasure требует live proof | `AND-52` | Retry и post-delete object/index/job scan на exact deployment; forensic receipt по принятой MVP policy отсутствует. |
 | Account-wide cascade и foreign-commit tombstones | Repository lifecycle и PII-negative fixtures реализованы; расширенное live evidence остаётся release gate | `AND-47` | Cross-aggregate reconciliation и negative PII scan на exact candidate. |
 
-OAuth/company-knowledge, personalization, assets, imports, checkpoints, AWS и
-Claude support не являются open implementation decisions 0.1: это denylist,
-которому понадобится новый explicit product/specification scope.
+ChatGPT Web/public-directory/company-knowledge, personalization, assets,
+imports, checkpoints, AWS и support других clients не являются open
+implementation decisions 0.1: это denylist, которому понадобится новый
+explicit product/specification scope.
 
 ## Правило обновления
 

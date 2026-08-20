@@ -1,6 +1,15 @@
 # ADR-0010: OAuth-коннектор и Marketplace pilot
 
-Статус: accepted, 2026-08-17.
+Статус: accepted server-side OAuth baseline, 2026-08-17; distribution-часть
+для Codex Desktop/CLI pilot 0.1 частично заменена
+[ADR-0011](0011-direct-mcp-plugin-oauth-on-use.md) 2026-08-20.
+
+Историческое решение ниже требовало private registered connector и
+`ON_INSTALL`. Оно сохраняет rationale и все server-side OAuth, identity,
+scope, revoke, ACL, CAS и idempotency boundaries, но больше не задаёт package
+distribution для Codex pilot 0.1. Текущий package использует direct MCP и
+OAuth при первом использовании; registered connector остаётся возможным
+будущим ChatGPT Web/public-directory path.
 
 ## Контекст
 
@@ -25,7 +34,9 @@ platform-authenticated identity к immutable внутреннему `principal_i
   immutable `principal_id`, что и Web control plane. Unknown identity создаёт
   только новый isolated account через существующий bootstrap; automatic
   relink, merge и access transfer запрещены.
-- Registered connector получает `content:read` при первом подключении.
+- Исторический distribution choice: registered connector получал бы
+  `content:read` при первом подключении. Для Codex pilot 0.1 этот carrier
+  superseded ADR-0011; direct DCR client сохраняет тот же read-first grant.
   `content:write` запрашивается отдельным step-up consent; write включает read,
   write-only grant запрещён.
 - Access token живёт не более 15 минут, authorization code — 5 минут,
@@ -45,8 +56,10 @@ platform-authenticated identity к immutable внутреннему `principal_i
   fail closed. Mirror records скрыты от personal-token UI.
 - `/settings/mcp` показывает connected apps и позволяет немедленно отозвать
   grant. Personal tokens остаются отдельным advanced/direct-client path.
-- Marketplace plugin использует новый registered app ID. Srez Marketplace,
-  Task Manager plugin и его app ID не переиспользуются.
+- Исторический distribution choice: Marketplace plugin использовал бы новый
+  registered app ID. Для Codex pilot 0.1 этот пункт superseded ADR-0011:
+  package не содержит `apps`/`.app.json`; Srez Marketplace и Task Manager
+  connection всё равно не переиспользуются.
 - Первый release — private `Mind Diary UAT` pilot. Production connector,
   публичный Plugin Directory и смена production access policy требуют
   отдельного provisioned target и явного решения пользователя.

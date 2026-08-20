@@ -1,17 +1,21 @@
-# Plugin и OAuth-коннектор Mind Diary
+# Plugin и OAuth Mind Diary
 
-Статус: accepted, обновлено 2026-08-17. OAuth Authorization Server, dual
+Статус: accepted, обновлено 2026-08-20. OAuth Authorization Server, dual
 personal/OAuth MCP authentication, write step-up и connected-app revocation
-реализованы в repository candidate. Registered connector, Marketplace package
-и live UAT acceptance ещё не завершены; текущий deployed Site по-прежнему
-обслуживает только прежний single-principal UAT и personal `mdp_v1_` tokens.
+реализованы. Для Codex Desktop/CLI pilot 0.1 принят direct MCP package с OAuth
+при первом использовании; package update и fresh external-account acceptance
+ещё не являются завершённым live evidence. Registered connector не входит в
+этот release path и остаётся возможным будущим ChatGPT Web/public-directory
+вариантом.
 
 Связанные документы: [архитектура](../architecture.md),
 [MVP](mvp.md), [API](api.md),
 [доменная модель](domain-model.md) и
 [профиль доставки](../operations/ship-work-release-profile.md). Принятое
-решение зафиксировано в
-[ADR-0010](../decisions/0010-oauth-marketplace-connector.md).
+server-side OAuth решение зафиксировано в
+[ADR-0010](../decisions/0010-oauth-marketplace-connector.md), а текущая
+distribution boundary — в
+[ADR-0011](../decisions/0011-direct-mcp-plugin-oauth-on-use.md).
 
 ## Текущий implementation checkpoint
 
@@ -31,38 +35,37 @@ Repository candidate уже содержит:
 - connected-app list/revoke на `/settings/mcp` и account-deletion cleanup;
 - D1 migration и repository tests для positive и negative OAuth paths.
 
-Этот checkpoint — доказательство реализации, не deployment. App registration,
-реальный `.app.json`, Marketplace validation, exact-SHA UAT release и fresh
+Этот checkpoint — доказательство реализации, не полный release evidence.
+Direct package validation, exact-SHA UAT lineage и fresh external-account
 install/read/write/revoke/reconnect smoke остаются обязательными этапами.
 
 ## Решение
 
-Mind Diary можно добавить в уже существующий Srez Marketplace вторым plugin
-рядом с Task Manager. Рекомендуемый путь:
+Mind Diary добавляется в существующий Srez Marketplace вторым plugin рядом с
+Task Manager. Для Codex Desktop/CLI pilot 0.1 принят следующий путь:
 
-1. Сначала подтвердить живую совместимость registered connector с одним из
-   существующих MCP profiles Mind Diary и доступность OAuth discovery через
-   внешнюю Sites boundary.
-2. Добавить в Mind Diary OAuth 2.1 Authorization Server, связанный с той же
-   внутренней principal identity, что и Sites UI.
-3. Научить content MCP принимать OAuth access tokens и возвращать стандартные
-   OAuth discovery/challenge metadata, сохранив personal tokens как advanced
-   compatibility path.
-4. Создать registered MCP connector и только затем положить
-   `plugins/mind-diary` в Srez Marketplace.
-5. Сначала выпустить явно обозначенный personal UAT pilot. Публичный каталог и
-   production plugin требуют отдельной provisioned production environment и
-   отдельного решения о выпуске.
+1. Package распространяет thin skill и exact direct MCP resource `/api/mcp`.
+2. Установка с policy `AVAILABLE + ON_USE` завершается без product OAuth и без
+   чтения private registered app.
+3. Первый content tool call запускает native OAuth discovery, DCR и PKCE к
+   Mind Diary UAT.
+4. Content MCP принимает OAuth access tokens и возвращает standard discovery/
+   challenge metadata; personal tokens сохраняются как advanced compatibility
+   path.
+5. Pilot остаётся restricted UAT. Public directory, ChatGPT Web connector и
+   production plugin требуют отдельных verification, provisioned production
+   environment и решения о выпуске.
 
-Это даст простой пользовательский flow без ручного MCP URL, client secret и
-копирования bearer token. Marketplace, plugin package и registered connector
-при этом остаются отдельными объектами.
+Это даёт простой пользовательский flow без ручного MCP URL, client secret и
+копирования bearer token. Marketplace package и OAuth-protected MCP resource
+остаются отдельными объектами; private registered connector package не нужен.
 
 Наличие Srez Marketplace в аккаунте автоматически делает новую карточку Mind
 Diary доступной после обновления каталога. Оно не должно автоматически
 устанавливать plugin или предоставлять доступ к данным: пользователь явно
-нажимает `Install` и проходит OAuth consent. Для plugin следует использовать
-catalog policy `installation: AVAILABLE` и `authentication: ON_INSTALL`.
+нажимает `Install`; OAuth consent начинается при первом MCP use. Plugin
+использует catalog policy `installation: AVAILABLE` и
+`authentication: ON_USE`.
 
 ## Что взято из Task Manager
 
@@ -72,9 +75,9 @@ catalog policy `installation: AVAILABLE` и `authentication: ON_INSTALL`.
 | --- | --- | --- |
 | Marketplace | `srez-marketplace` | тот же Marketplace |
 | Plugin package | `plugins/task-manager` | новый `plugins/mind-diary` |
-| Registered app | ID `asdk_app_*` в `.app.json` | новый отдельный ID, создаваемый после регистрации connector |
+| Connection | direct production MCP в `.mcp.json` | exact direct UAT MCP resource в `.mcp.json` |
 | Transport fallback | public MCP URL в `.mcp.json` | exact Mind Diary UAT MCP resource |
-| Installation | `AVAILABLE` + `ON_INSTALL` | то же поведение |
+| Installation | `AVAILABLE` + `ON_USE` | то же поведение |
 | OAuth | authorization code + PKCE, DCR | тот же protocol profile, но Mind Diary scopes и identity rules |
 | Data authorization | internal Task Manager user | internal immutable Mind Diary `principal_id` |
 | Tool surface | task operations | один principal-wide content MCP для доступных Minds |
@@ -87,9 +90,8 @@ catalog policy `installation: AVAILABLE` и `authentication: ON_INSTALL`.
   OAuth secrets, а не ослабляет существующий secret-storage baseline;
 - implicit user creation: неизвестная Sites identity не связывается и не
   объединяется автоматически с существующим principal;
-- production endpoint Task Manager: у Mind Diary сейчас есть только UAT;
-- MCP lifecycle: совместимость registered connector с текущим modern profile
-  `2026-07-28` должна быть доказана отдельно.
+- production endpoint Task Manager нельзя переносить в Mind Diary; exact
+  resource остаётся UAT `/api/mcp` до отдельного production release.
 
 ## Целевой пользовательский flow
 
@@ -99,8 +101,9 @@ catalog policy `installation: AVAILABLE` и `authentication: ON_INSTALL`.
 2. После обновления Marketplace он видит карточку `Mind Diary` или, на pilot
    стадии, `Mind Diary UAT`.
 3. Пользователь нажимает `Install`.
-4. Host открывает native `Authenticate` flow без запроса MCP URL, client ID,
-   client secret или personal token.
+4. Установка завершается до OAuth. При первом content tool call host открывает
+   native `Authenticate` flow без запроса MCP URL, client ID, client secret или
+   personal token.
 5. Mind Diary authorization page использует текущую authenticated Sites
    identity, разрешает её в immutable `principal_id` и показывает запрошенные
    scopes.
@@ -118,7 +121,7 @@ revisions выдаётся явно и только когда она нужна
 
 Если fresh-host validation покажет, что incremental scopes в installed plugin
 не дают надёжного UX, допустим pilot-компромисс: запросить оба scopes при
-`ON_INSTALL`, но показать отдельное ясное предупреждение об immediate commits.
+первом OAuth flow, но показать отдельное ясное предупреждение об immediate commits.
 Этот fallback требует отдельного принятия product/security trade-off.
 
 ### Повторное подключение и отзыв
@@ -136,23 +139,22 @@ revisions выдаётся явно и только когда она нужна
 flowchart LR
     User["Пользователь"] --> Market["Srez Marketplace"]
     Market --> Plugin["Mind Diary plugin package"]
-    Plugin --> App["OpenAI registered MCP connector"]
-    App --> Resource["Mind Diary MCP resource"]
+    Plugin --> Resource["Direct Mind Diary MCP resource"]
     Resource --> Authn["OAuth access-token verifier"]
     Authn --> Actor["trusted ActorContext"]
     Actor --> Content["content application"]
     Content --> ACL["current Mind ACL + revision CAS"]
 
-    App --> Browser["browser authorization flow"]
+    Resource --> Browser["first-use browser authorization flow"]
     Browser --> Authz["Mind Diary OAuth Authorization Server"]
     Authz --> Binding["Sites identity binding"]
     Binding --> Principal["immutable principal_id"]
     Principal --> Authz
 ```
 
-Marketplace не получает данные Mind Diary. Plugin package описывает connector,
-skills и assets, registered app хранит connection metadata, а server остаётся
-единственным authority для identity, scopes и Mind ACL.
+Marketplace не получает данные Mind Diary. Plugin package описывает direct MCP
+resource, skills и assets, а server остаётся единственным authority для
+identity, scopes и Mind ACL.
 
 ## Marketplace package
 
@@ -164,7 +166,6 @@ plugins/
 └── mind-diary/
     ├── .codex-plugin/
     │   └── plugin.json
-    ├── .app.json
     ├── .mcp.json
     ├── assets/
     │   ├── icon.png
@@ -179,14 +180,12 @@ plugins/
 - package name `mind-diary`;
 - user-facing name `Mind Diary`, а для private pilot — ясный UAT marker;
 - начальную version `0.1.0`;
-- apps, skills, MCP server и existing brand assets;
+- skills, MCP server и existing brand assets; поле `apps` отсутствует;
 - категорию `Productivity`, пока каталог не подтвердит более точную knowledge
   category.
 
-`.app.json` ссылается на новый registered app ID. Его нельзя подставлять до
-фактического создания connector. `.mcp.json` содержит exact HTTPS MCP resource
-и такой же `oauth_resource`; это transport fallback и reviewable source, но не
-замена registered app.
+`.app.json` отсутствует. `.mcp.json` содержит exact HTTPS UAT MCP resource и
+такой же `oauth_resource`; это canonical Codex Desktop/CLI connection source.
 
 Skill остаётся тонким interaction adapter. Он должен объяснять progressive
 disclosure, явный выбор одного Mind/revision, read-before-write,
@@ -196,7 +195,7 @@ content MCP.
 
 Marketplace catalog получает вторую запись с local source
 `./plugins/mind-diary`, `installation: AVAILABLE` и
-`authentication: ON_INSTALL`. Добавление plugin не меняет Task Manager package.
+`authentication: ON_USE`. Добавление plugin не меняет Task Manager package.
 
 ## OAuth protocol profile
 
@@ -313,21 +312,13 @@ internal `principal_id`.
 
 ## MCP endpoint decision
 
-Product-preferred resource — existing `POST /api/mcp` с profile
-`2026-07-28`. Однако registered connector нельзя считать совместимым с этим
-profile только по repository tests: перед реализацией OAuth нужен live
-read-only spike с draft registered app.
-
-Решение spike-а:
-
-1. Если host проходит discovery, tool listing и representative read call на
-   `2026-07-28`, registered connector фиксирует exact resource `/api/mcp`.
-2. Если host всё ещё требует initialize lifecycle, pilot временно использует
-   доказанный compatibility resource `/api/mcp/2025-11-25`.
-3. Modern и compatibility lifecycle не смешиваются внутри одного request.
-4. Смена exact OAuth resource позднее считается connector migration: новый
-   registered-app version, повторный consent и fresh-chat validation, а не
-   незаметная замена URL.
+Codex pilot resource — existing `POST /api/mcp` с profile `2026-07-28`.
+`.mcp.json` фиксирует этот exact URL и OAuth audience. Compatibility resource
+`/api/mcp/2025-11-25` сохраняется для доказанного personal-token client
+profile, но не подменяет package resource. Modern и compatibility lifecycle не
+смешиваются внутри одного request. Смена exact OAuth resource позднее считается
+package/client migration: новая plugin version, повторный consent и fresh-task
+validation, а не незаметная замена URL.
 
 Оба adapters вызывают существующий content application contract. OAuth меняет
 authentication boundary и discovery, но не tool payload, ACL или revision
@@ -339,7 +330,7 @@ semantics.
 начальный plugin допустим только как personal/private pilot и должен явно
 указывать UAT status.
 
-До регистрации connector нужно проверить внешний access path. OAuth discovery,
+Перед external pilot нужно проверить внешний access path. OAuth discovery,
 authorization callbacks и MCP requests host-а не могут зависеть от ручного
 `OAI-Sites-Authorization` secret в пользовательской конфигурации. Возможные
 решения — поддержанный Sites connector path либо публично достижимая UAT edge
@@ -379,8 +370,9 @@ MCP curl либо повторном использовании старого c
 
 1. Existing Srez Marketplace показывает новую карточку после refresh/update;
    Task Manager продолжает устанавливаться отдельно.
-2. `Install` запускает native Authenticate без ручного URL, client secret или
-   personal token.
+2. `Install` завершается до OAuth и не обращается к private registered app;
+   первый content tool call запускает native Authenticate без ручного URL,
+   client secret или personal token.
 3. Unknown identity не получает старые права и проходит explicit onboarding
    либо recovery.
 4. Read-only grant разрешает `list_minds`, `resolve_mind`, browse, search,
@@ -394,22 +386,22 @@ MCP curl либо повторном использовании старого c
 8. Existing personal-token modern и compatibility flows остаются рабочими.
 9. Access-token expiry, refresh rotation, refresh reuse, wrong resource,
    redirect mismatch и revoked client имеют negative tests.
-10. Fresh Codex/ChatGPT chat после установки проходит discovery, representative
-    read, write, revoke и reconnect smoke на exact deployed candidate.
+10. Fresh Codex task после установки проходит direct discovery,
+    representative read, write, revoke и reconnect smoke на exact deployed
+    candidate. ChatGPT Web требует отдельного connector conformance.
 
 Repository tests должны покрывать OAuth state machines, persistence, verifier,
 scope enforcement, challenge metadata, identity binding и оба MCP profiles.
-UAT evidence отдельно связывает exact Git SHA, Site deployment, registered app
-version, Marketplace plugin version и fresh-chat smoke.
+UAT evidence отдельно связывает exact Git SHA, Site deployment, Marketplace
+plugin version/cache snapshot и fresh-task smoke.
 
 ## Этапы реализации
 
-### 0. Read-only connector spike
+### 0. Read-only resource spike
 
-- Создать draft registered app без публикации Marketplace package.
-- Проверить Sites reachability, callback URI и оба existing MCP profiles.
-- Выбрать exact pilot resource и зафиксировать необходимость access-policy
-  change до schema/code work.
+- Проверить Sites reachability, discovery и exact `/api/mcp` resource.
+- Проверить callback URI и DCR без private registered app dependency.
+- Зафиксировать необходимость access-policy change отдельно от package work.
 
 ### 1. OAuth foundation
 
@@ -426,9 +418,9 @@ version, Marketplace plugin version и fresh-chat smoke.
 
 ### 3. Marketplace package
 
-- Зарегистрировать connector и записать реальный app ID в `.app.json`.
-- Добавить plugin package, assets, thin skill и catalog entry в Srez
-  Marketplace.
+- Добавить direct `.mcp.json`, assets, thin skill и catalog entry в Srez
+  Marketplace без `apps`/`.app.json`.
+- Использовать `AVAILABLE + ON_USE` и новую immutable plugin version.
 - Проверить package locally; не изменять Task Manager package.
 
 ### 4. Private UAT pilot
@@ -448,12 +440,12 @@ version, Marketplace plugin version и fresh-chat smoke.
 
 | Вопрос | Почему важен | Как закрыть |
 | --- | --- | --- |
-| Поддерживает ли registered connector MCP `2026-07-28` | определяет exact OAuth resource и lifecycle | Stage 0 live spike |
+| Проходит ли direct MCP OAuth в target Codex build | определяет фактический install/use lifecycle | fresh external-account smoke |
 | Пропускает ли Sites boundary host без ручного audience secret | иначе OAuth discovery не начнётся | read-only reachability test и отдельное access-policy решение |
-| Надёжен ли incremental write consent в installed plugin | влияет на безопасность и число dialogs | fresh-host UX test; fallback к read+write on install только по принятому решению |
+| Надёжен ли incremental write consent в installed plugin | влияет на безопасность и число dialogs | fresh-host UX test; fallback к read+write в первом OAuth flow только по принятому решению |
 | DCR или CIMD | неверный client profile ломает linking | DCR для pilot; CIMD только после conformance |
 | UAT или production branding | нельзя выдавать pilot за live service | `Mind Diary UAT` до provisioned production |
-| Как мигрировать exact MCP resource | resource — token audience | новый connector version и reconnect, без silent URL swap |
+| Как мигрировать exact MCP resource | resource — token audience | новая plugin version и reconnect, без silent URL swap |
 
 ## Внешние protocol references
 

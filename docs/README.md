@@ -26,9 +26,10 @@ evidence, предлагаемый дизайн и ещё не проверен�
    slice и его критерии готовности.
 8. [REST и MCP API](specs/api.md) — предлагаемый wire-level contract control
    REST, internal application API, MCP tools/resources, schemas и errors.
-9. [Plugin и OAuth-коннектор](specs/plugin-connector.md) — принятый профиль
-   установки Mind Diary из Srez Marketplace: registered MCP connector,
-   OAuth 2.1 + PKCE, identity binding, UAT pilot и production/public границы.
+9. [Plugin и OAuth](specs/plugin-connector.md) — принятый профиль установки
+   Mind Diary из Srez Marketplace: direct MCP package, OAuth 2.1 + PKCE при
+   первом использовании, identity binding, UAT pilot и production/public
+   границы.
 10. [Границы реализации](specs/implementation-boundaries.md) — trusted
    `ActorContext`, application ports/façades, transaction boundaries и
    enforceable dependency rules для будущего runtime.
@@ -111,7 +112,11 @@ evidence, предлагаемый дизайн и ещё не проверен�
   lazy-loaded adapter references, включая Linear.
 - [ADR-0010: OAuth-коннектор и Marketplace pilot](decisions/0010-oauth-marketplace-connector.md)
   — приняты dual personal/OAuth authentication, PKCE/DCR, read-first consent,
-  rotating refresh и отдельная UAT-граница registered connector.
+  rotating refresh и server-side UAT OAuth boundary; distribution-часть для
+  Codex pilot частично заменена ADR-0011.
+- [ADR-0011: direct MCP plugin и OAuth при первом использовании](decisions/0011-direct-mcp-plugin-oauth-on-use.md)
+  — принят package без private registered app, `AVAILABLE + ON_USE` и future-
+  only граница ChatGPT Web/public-directory connector.
 
 ## Исследования
 
