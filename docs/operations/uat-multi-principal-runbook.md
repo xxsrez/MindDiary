@@ -1,12 +1,17 @@
-# Multi-principal UAT probe
+# Multi-principal Sites canary
 
-Статус: accepted operational procedure для restricted Mind Diary UAT.
+Статус: accepted informational operational procedure для restricted Mind
+Diary UAT. С 2026-08-20 blocking P9 перенесён в
+[synthetic multi-principal gate](synthetic-multi-principal-runbook.md) по
+[ADR-0012](../decisions/0012-synthetic-principal-release-gates.md).
 
 Этот runbook исполняет capability `mind-diary/uat-multi-principal-smoke/v1`
-для `AND-158` и финального `AND-161`. Он не разрешает добавлять audience сам по
-себе: второй Sites principal должен быть заранее явно назван и авторизован
-владельцем. Shared browser, machine credential, придуманная identity и
-production audience запрещены.
+как `P9-Sites-Canary` для MD-158 и финального MD-161. Отсутствие human session
+или failure этого canary не блокирует release 0.1, но до passing observation
+нельзя утверждать, что real two-account Sites behavior проверено на candidate.
+Runbook не разрешает добавлять audience сам по себе: второй Sites principal
+должен быть заранее явно назван и авторизован владельцем. Shared browser,
+machine credential, придуманная identity и production audience запрещены.
 
 ## Предусловия
 
@@ -97,6 +102,10 @@ Passing artifact имеет schema `mind-diary/multi-principal-evidence/v1`, exa
 candidate/deployment, actor class, fingerprints, bounded assertion IDs и
 content hash. Он не содержит email, `principal_id`, `space_id`, token ID,
 credentials, cookies, private content или response bodies.
+
+Эта historical/live schema не переименовывается в
+`mind-diary/synthetic-multi-principal-evidence/v1` и не удовлетворяет blocking
+synthetic row: carriers проверяют разные boundaries.
 
 ## Recovery и emergency revoke
 

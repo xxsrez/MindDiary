@@ -6,7 +6,8 @@ single-principal UAT в OpenAI Sites. Обязательные authenticated web
 persistence-after-redeploy и default/modern Codex MCP gates пройдены live;
 OAuth profile реализован в repository candidate. Для Codex Desktop/CLI pilot
 0.1 принят direct Marketplace MCP package с OAuth при первом использовании;
-package cut и fresh external-account gate ещё не завершены.
+blocking synthetic/OAuth/package automation ещё не реализована, а fresh
+external-account flow остаётся informational canary, не release gate.
 
 ## Цель
 
@@ -401,15 +402,29 @@ production readiness или AWS economics. Exact cadence, feedback template,
 thresholds и offboarding находятся в
 [accepted pilot protocol](../operations/uat-pilot-protocol.md).
 
-### Multi-principal UAT boundary
+### Multi-principal release boundary
 
-Pilot-ready acceptance выполняет accepted двухфазный
-[multi-principal UAT probe](../operations/uat-multi-principal-runbook.md) на
-двух deployments одного exact candidate. Дополнительный actor приходит только
-из `explicit-test-principal-reference`, использует отдельные Sites session и
-MCP token, а release evidence сохраняет только actor class и случайный opaque
-fingerprint. Single-principal smoke, shared credential или два локально
-подменённых identity не закрывают P9.
+Blocking `P9-Synthetic` выполняет
+[synthetic multi-principal gate](../operations/synthetic-multi-principal-runbook.md)
+на exact candidate в отдельной trusted test composition. `SyntheticPrincipal`
+— только actor label receipt: normal bootstrap создаёт обычные internal
+principals/Personal Minds, а harness использует normal control/content
+commands, current ACL, CAS, revoke и cleanup без storage seed.
+
+Только test composition может создать
+`ActorContext.actor.synthetic_test_identity` в binding namespace
+`synthetic-test`. Product UAT/production не имеют synthetic provider, login,
+route/header/body/query/env/job/`NODE_ENV` switch или client-selected
+principal. Passing artifact использует отдельную schema
+`mind-diary/synthetic-multi-principal-evidence/v1`.
+
+Accepted двухфазный
+[real multi-principal Sites probe](../operations/uat-multi-principal-runbook.md)
+сохраняется как `P9-Sites-Canary`: два platform-authenticated principals,
+отдельные Sites sessions/tokens, redeploy и current-access revoke. Это
+informational canary platform identity/audience behavior, не blocking gate
+релиза 0.1. Historical `mind-diary/multi-principal-evidence/v1` receipts не
+переименовываются и не подменяют synthetic evidence.
 
 ## Первая MCP-поверхность
 
@@ -595,11 +610,15 @@ evidence: default и opt-in modern `codex-cli 0.147.0` выполнили
 
 Если endpoint не проходит gate, UAT release MVP блокируется. Отдельный
 portable container и AWS/AgentCore не используются без нового принятого
-решения. Connector extension дополнительно требует OAuth discovery/PKCE,
-registration, read, write step-up, revoke/reconnect и existing personal-token
-regression evidence; его failure блокирует connector release, но не
-переписывает уже доказанный personal-token MVP. Production/public plugin
-требует отдельного target и решения.
+решения. Connector extension блокирует automated exact-candidate gate:
+package shape и fresh temporary plugin context, OAuth discovery/DCR/PKCE,
+exact redirect/resource/state, read, write step-up, expiry, refresh rotation/
+reuse, revoke/reconnect, modern/compatibility transport и existing personal-
+token regression. Synthetic identity допустима только на trusted authorize/
+consent boundary; password grant, admin mint и client-selected principal
+запрещены. Real external Marketplace/Codex OAuth UI остаётся informational
+canary и не переписывает уже доказанный personal-token MVP. Production/public
+plugin требует отдельного target и решения.
 
 ## Starter Mind и первый полезный результат
 

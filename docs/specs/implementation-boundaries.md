@@ -123,6 +123,34 @@ Application entry point принимает только подходящий var
 pre-registration Sites identity может вызвать только session/bootstrap use
 cases.
 
+### Test-only extension `synthetic_test_identity`
+
+Отдельная test composition, не входящая в product dependency graph, расширяет
+pre-registration actor одним variant:
+
+```text
+TestActorContext.actor.synthetic_test_identity:
+  binding_namespace: synthetic-test
+  opaque_subject
+  suggested_display_name?
+```
+
+`SyntheticPrincipal` — только label run/evidence, не имя этого value и не
+persisted domain discriminator. Test identity factory передаёт variant только
+normal session/bootstrap или trusted OAuth authorize/consent adapter. После
+binding resolution application использует обычный `registered_principal`.
+
+Factory доступна только через direct test-harness import. Она не читает route,
+header, cookie, body/query, environment, `NODE_ENV`, deployment configuration
+или job payload. Product composition roots и their transitive dependencies не
+могут импортировать factory/resolver; architecture gate проверяет это negative
+правило.
+
+Namespace `synthetic-test` допустим только в isolated test `MetadataStore`.
+Harness создаёт records обычными commands и не вызывает storage seed/direct
+write. Он не подменяет role/scopes/current ACL и завершает normal revoke/delete
+с negative state scan.
+
 ## Outbound ports
 
 Ports используют domain/application types и typed failures. Они не возвращают
@@ -285,6 +313,7 @@ Handler принимает explicit job/aggregate ID, перечитывает c
 | Authenticated Sites Web | Только Control application | Raw content read/write, MCP bearer auth, background handlers |
 | Streamable HTTP MCP | Только Content application и MCP authentication | Accounts, invitations, members, roles, visibility, ownership, deletion, token management |
 | Background runner | Только Background application | User-facing HTTP/MCP operations и synthetic principal authority |
+| Synthetic test harness | Test-only composition над normal Control/Content/OAuth contracts | Product route/login, direct storage seed, UAT/production bindings и client-selected authority |
 
 Web route `/me` и `/{space_handle}` — management addressing. Browser может
 получить safe descriptor, counts, current status и destructive-action preview,
@@ -448,6 +477,13 @@ Acceptance и дальнейшее сохранение этой границы 
 - adapter contract suite на том же exact commit;
 - redacted evidence без tokens, content/query bodies, verified email, CSRF
   secret или download URL.
+
+Отдельный blocking gate дополнительно доказывает normal multi-principal
+bootstrap/access lifecycle через `synthetic_test_identity`, отсутствие
+test-identity import в product compositions и receipt
+`mind-diary/synthetic-multi-principal-evidence/v1`. Automated OAuth/package
+gate использует тот же trusted seam только для authorize/consent и отдельно
+проверяет, что transport/token/ACL/CAS paths остаются обычными.
 
 Live Sites/MCP compatibility, physical storage semantics и Codex conformance
 проверяются отдельными release gates и не следуют из этой specification.

@@ -96,6 +96,29 @@ Account bootstrap — одна атомарная операция:
 provisioning не используется: первый пользовательский сценарий сразу работает
 с Personal Mind.
 
+### Test-only identity boundary
+
+`SyntheticPrincipal` не является сущностью этой модели, subtype `Principal`,
+login account, persisted actor kind или service principal. Это только actor
+class автоматического release probe из
+[ADR-0012](../decisions/0012-synthetic-principal-release-gates.md). После
+обычного account bootstrap probe получает тот же `Principal`, Personal Mind,
+memberships и tokens, что любой другой isolated account; synthetic label в них
+не сохраняется.
+
+Отдельная test composition может до bootstrap построить trusted
+`ActorContext.actor.synthetic_test_identity` и разрешить его в изолированном
+external-binding namespace `synthetic-test`. Эта возможность отсутствует в
+ordinary Web/OAuth/MCP/background compositions UAT и production и не
+активируется route, header, body/query, cookie, environment variable,
+serialized job, deployment flag или `NODE_ENV`.
+
+Harness обязан использовать normal bootstrap, invitation, membership, token,
+OAuth, ACL, CAS, revoke и deletion commands. Direct storage seed, client-
+selected principal/role/scopes и authorization bypass запрещены. Поэтому
+synthetic gate проверяет обычную доменную модель, а не параллельную test-only
+модель доступа.
+
 ## Identity и адресация Mind
 
 Обычный Mind имеет независимые internal, URL и display identities:

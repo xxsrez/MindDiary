@@ -3,6 +3,10 @@
 Статус: accepted, 2026-08-20. Частично заменяет distribution-решение
 [ADR-0010](0010-oauth-marketplace-connector.md) для Codex Desktop/CLI pilot
 релиза 0.1. Server-side OAuth и security boundaries ADR-0010 сохраняются.
+Validation carrier fresh external account уточнён
+[ADR-0012](0012-synthetic-principal-release-gates.md): blocking стала
+automated package/OAuth/transport matrix, а real external Desktop UI —
+informational canary.
 
 ## Контекст
 
@@ -46,9 +50,11 @@ OAuth непосредственно при первом обращении к M
   Sites audience, product OAuth и текущими Mind ACL.
 - Plugin version/cache snapshot становится частью exact cross-repository
   evidence наряду с MindDiary SHA и Sites deployment.
-- Fresh external-account acceptance обязана раздельно доказать install-before-
-  OAuth, first-use OAuth, skill/tool discovery в новой session, bounded read и
-  revoke/reconnect. Install success сам по себе не доказывает OAuth lifecycle.
+- Blocking automated acceptance обязана раздельно доказать install-before-
+  OAuth, first-use OAuth, skill/tool discovery в fresh temporary context,
+  bounded read и revoke/reconnect. Real external-account flow сохраняет эти
+  наблюдения как informational UX canary. Install success сам по себе не
+  доказывает OAuth lifecycle.
 - Write smoke допустим только в явно выбранном UAT test Mind с
   `content:write`, fresh `expected_revision`, idempotency и отдельным
   подтверждением тестового изменения.
@@ -71,5 +77,6 @@ OAuth непосредственно при первом обращении к M
 [API](../specs/api.md),
 [архитектура](../architecture.md),
 [MVP](../specs/mvp.md),
-[ADR-0010](0010-oauth-marketplace-connector.md) и
+[ADR-0010](0010-oauth-marketplace-connector.md),
+[ADR-0012](0012-synthetic-principal-release-gates.md) и
 [ADR-0008](0008-dev-uat-production-delivery.md).

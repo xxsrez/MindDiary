@@ -1,6 +1,6 @@
 # Профиль `ship-work-release` для Mind Diary
 
-Статус: accepted project configuration, 2026-08-09.
+Статус: accepted project configuration, revision 2, 2026-08-20.
 
 Документ задаёт project-specific параметры Mind Diary по
 [provider-neutral profile contract](../specs/ship-work-release-project-profile.md).
@@ -14,7 +14,7 @@
 ~~~yaml
 schema: ship-work-release/project-profile/v1
 profile_id: mind-diary
-profile_revision: 1
+profile_revision: 2
 
 context:
   schema: ship-work-release/context-bindings/v1
@@ -349,6 +349,8 @@ dev:
     - dev.persistence-restart
     - dev.mcp-modern
     - dev.mcp-compat
+    - dev.synthetic-multi-principal
+    - dev.oauth-direct-plugin
     - dev.changed-surface
 
 uat:
@@ -508,6 +510,7 @@ uat:
     - uat.mcp-compat
     - uat.changed-surface
     - uat.multi-principal
+    - uat.oauth-direct-plugin-canary
 
 production:
   configured: false
@@ -556,9 +559,13 @@ evidence:
         - deployment_id
         - resolved_url
         - actor_class
+        - binding_namespace
         - credential_fingerprint
         - client
         - client_version
+        - marketplace_candidate_sha
+        - plugin_version
+        - plugin_snapshot_sha256
         - protocol_version
         - route
         - assertions
@@ -680,6 +687,54 @@ evidence:
         storage: content-addressed-reference
         max_bytes: 2097152
         required_fields: [status, candidate_sha, assertions, artifact_sha256]
+      redaction_policy: release-evidence-default
+    - id: dev.synthetic-multi-principal
+      stage: dev
+      requirement: required
+      when: { always: true }
+      probe:
+        kind: runtime_capability
+        capability: mind-diary/synthetic-multi-principal-smoke/v1
+        implementation:
+          runbook: docs/operations/synthetic-multi-principal-runbook.md
+          composition: isolated-test-only
+          storage_seed: forbidden
+        inputs:
+          candidate_sha: { value_from: run.candidate_sha }
+          actor_class: { literal: synthetic-principal }
+          binding_namespace: { literal: synthetic-test }
+      success: { path: /status, operator: eq, value: passed }
+      artifact:
+        schema: mind-diary/synthetic-multi-principal-evidence/v1
+        media_type: application/json
+        storage: content-addressed-reference
+        max_bytes: 2097152
+        required_fields: [status, candidate_sha, actor_class, binding_namespace, assertions, artifact_sha256]
+      redaction_policy: release-evidence-default
+    - id: dev.oauth-direct-plugin
+      stage: dev
+      requirement: required
+      when: { always: true }
+      probe:
+        kind: runtime_capability
+        capability: mind-diary/oauth-direct-plugin-smoke/v1
+        implementation:
+          specification: docs/specs/plugin-connector.md
+          decision: docs/decisions/0012-synthetic-principal-release-gates.md
+          context: fresh-temporary-codex-plugin
+        inputs:
+          candidate_sha: { value_from: run.candidate_sha }
+          route: { literal: /api/mcp }
+          installation: { literal: AVAILABLE }
+          authentication: { literal: ON_USE }
+          binding_namespace: { literal: synthetic-test }
+      success: { path: /status, operator: eq, value: passed }
+      artifact:
+        schema: mind-diary/oauth-direct-plugin-evidence/v1
+        media_type: application/json
+        storage: content-addressed-reference
+        max_bytes: 2097152
+        required_fields: [status, candidate_sha, marketplace_candidate_sha, plugin_version, plugin_snapshot_sha256, client, client_version, assertions, artifact_sha256]
       redaction_policy: release-evidence-default
     - id: uat.exact-artifact-lineage
       stage: uat
@@ -818,10 +873,8 @@ evidence:
       redaction_policy: release-evidence-default
     - id: uat.multi-principal
       stage: uat
-      requirement: conditional
-      when:
-        all:
-          - { fact: run.scope_required_capabilities, operator: contains, value: multi-principal }
+      requirement: informational
+      when: { always: true }
       probe:
         kind: runtime_capability
         capability: mind-diary/uat-multi-principal-smoke/v1
@@ -842,6 +895,27 @@ evidence:
         storage: content-addressed-reference
         max_bytes: 2097152
         required_fields: [status, candidate_sha, deployment_id, actor_class, assertions, artifact_sha256]
+      redaction_policy: release-evidence-default
+    - id: uat.oauth-direct-plugin-canary
+      stage: uat
+      requirement: informational
+      when: { always: true }
+      probe:
+        kind: runtime_capability
+        capability: mind-diary/uat-oauth-direct-plugin-canary/v1
+        inputs:
+          scenario: { literal: real-external-codex-install-oauth-ui }
+          base_url: { literal: "https://mind-diary.example.invalid" }
+          deployment_id: { value_from: run.uat_deployment_id }
+          actor_source: { literal: explicit-test-principal-reference }
+          route: { literal: /api/mcp }
+      success: { path: /status, operator: eq, value: passed }
+      artifact:
+        schema: mind-diary/oauth-direct-plugin-canary-evidence/v1
+        media_type: application/json
+        storage: content-addressed-reference
+        max_bytes: 2097152
+        required_fields: [status, candidate_sha, deployment_id, plugin_version, client, client_version, assertions, artifact_sha256]
       redaction_policy: release-evidence-default
     - id: rollback.authenticated-web-control
       stage: rollback
@@ -983,11 +1057,17 @@ manual workflow с новым prompt и финальным подтвержде�
 ## Evidence interpretation
 
 Required rows доказывают только перечисленные assertions exact environment и
-candidate. Compatibility, changed-surface, persistence-after-redeploy и
-multi-principal rows становятся обязательными по machine condition. Значение
-`not-applicable` допустимо только при false condition; отсутствие runtime
-capability, actor reference или artifact является failure, а не основанием
-пропустить проверку.
+candidate. `dev.synthetic-multi-principal` и `dev.oauth-direct-plugin` всегда
+blocking; compatibility, changed-surface и persistence-after-redeploy rows
+становятся обязательными по machine condition. Значение `not-applicable`
+допустимо только при false condition; отсутствие required runtime capability
+или artifact является failure, а не основанием пропустить проверку.
+
+`uat.multi-principal` и `uat.oauth-direct-plugin-canary` — informational real-
+platform observations. Missing actor reference, unavailable external UI или
+failed canary сохраняются как non-passing observation и запрещают claim о
+проверенной canary surface, но не блокируют UAT cut 0.1. Они не удовлетворяют
+blocking dev rows и не переименовывают historical receipt schemas.
 
 Automated UAT smoke оставляет owner observation в
 `pending-owner-observation`. Никакая evidence row не сохраняет token, cookie,

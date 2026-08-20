@@ -2,7 +2,10 @@
 
 Статус: accepted server-side OAuth baseline, 2026-08-17; distribution-часть
 для Codex Desktop/CLI pilot 0.1 частично заменена
-[ADR-0011](0011-direct-mcp-plugin-oauth-on-use.md) 2026-08-20.
+[ADR-0011](0011-direct-mcp-plugin-oauth-on-use.md) 2026-08-20. Обязательный
+validation carrier fresh external account заменён automated gate, а real
+external flow сохранён informational canary в
+[ADR-0012](0012-synthetic-principal-release-gates.md).
 
 Историческое решение ниже требовало private registered connector и
 `ON_INSTALL`. Оно сохраняет rationale и все server-side OAuth, identity,
@@ -74,9 +77,12 @@ platform-authenticated identity к immutable внутреннему `principal_i
   сначала выполняет authoritative product cascade, включая authorization
   mirrors, а затем best-effort удаляет уже не способные авторизоваться OAuth
   records.
-- Fresh installation, read, write step-up, revoke/reconnect и оба existing
-  personal-token MCP profiles остаются обязательным UAT evidence. Repository
-  tests и direct curl не заменяют fresh connector smoke.
+- Исторически fresh external installation, read, write step-up,
+  revoke/reconnect и оба personal-token MCP profiles считались обязательным
+  UAT evidence. ADR-0012 сохраняет те же protocol/package assertions в
+  blocking automated gate, а real external installation переводит в
+  informational canary; repository tests или direct curl сами по себе всё ещё
+  не закрывают automated package/transport receipt.
 
 ## Рассмотренные варианты
 

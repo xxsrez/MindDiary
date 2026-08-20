@@ -7,7 +7,9 @@ persistence-after-redeploy,
 raw modern discovery и оба профиля `codex-cli 0.147.0` проверены live. OAuth
 adapter реализован в repository candidate. Для Codex Desktop/CLI pilot 0.1
 принят direct MCP package с OAuth при первом использовании; fresh external-
-account install/OAuth lifecycle ещё не подтверждён как release evidence.
+account install/OAuth lifecycle остаётся informational canary. Blocking release
+evidence теперь дают отдельные synthetic multi-principal и automated
+OAuth/package gates по ADR-0012; их harness implementation ещё не завершена.
 
 ## Драйверы и ограничения
 
@@ -173,6 +175,23 @@ tool calls после redeploy.
 - Post-MVP AWS adapters: S3 canonical objects, DynamoDB transactional
   metadata/outbox и optional OpenSearch Serverless derived index.
 
+### 5. Test-only identity composition
+
+Release automation использует отдельный composition root, который не входит в
+Product Site/UAT/production bundle. Только он может создать
+`ActorContext.actor.synthetic_test_identity` и resolver external binding
+namespace `synthetic-test`. `SyntheticPrincipal` остаётся label тестового run,
+а normal bootstrap создаёт обычные domain `Principal`, Personal Mind и
+membership records.
+
+Composition активируется прямым test entry point, а не route/header/body/query,
+cookie, environment variable, serialized job, feature flag или
+`NODE_ENV=test`. Product Web/OAuth/MCP/background adapters не импортируют test
+identity factory. Harness использует normal application commands и protocol
+adapters без storage seed, client-selected principal, ACL/scope bypass или
+privileged cleanup. Exact scenario и redacted receipt заданы в
+[synthetic runbook](operations/synthetic-multi-principal-runbook.md).
+
 ## Identity и authentication
 
 ### Sites account
@@ -278,12 +297,21 @@ account deletion не сохраняет content access.
 
 Web `/settings/mcp` показывает connected apps и немедленный revoke отдельно от
 personal tokens. OAuth bearer не даёт membership/account control plane. Direct
-UAT package использует `AVAILABLE + ON_USE` и проверяется отдельным fresh
-external-account gate; production issuer/resource, ChatGPT Web connector и
-public directory остаются нерешённой release boundary. Server-side профиль
+UAT package использует `AVAILABLE + ON_USE`; blocking protocol/package/
+transport automation отделена от informational fresh external-account canary.
+Production issuer/resource, ChatGPT Web connector и public directory остаются
+нерешённой release boundary. Server-side профиль
 зафиксирован в [ADR-0010](decisions/0010-oauth-marketplace-connector.md), а
 distribution boundary — в
 [ADR-0011](decisions/0011-direct-mcp-plugin-oauth-on-use.md).
+
+Blocking OAuth/package conformance может подать `synthetic_test_identity`
+только в trusted authorize/consent adapter test composition. DCR, PKCE, exact
+redirect/resource/state, token/refresh lifecycle, authorization mirror,
+current ACL/CAS и MCP transport проходят normal product contracts. Ни OAuth
+client, ни request fields не выбирают synthetic actor; password grant и admin
+token mint отсутствуют. Real external Codex/Desktop OAuth UI остаётся
+informational canary, а не release gate 0.1.
 
 ## Mind identity, `/me` и visibility
 

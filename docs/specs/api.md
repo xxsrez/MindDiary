@@ -7,7 +7,9 @@ single-principal UAT в OpenAI Sites и проверены raw modern calls и �
 `codex-cli 0.147.0` на обоих profiles. OAuth server/client surface реализована в
 repository candidate. Для Codex Desktop/CLI pilot 0.1 принят direct MCP package
 с OAuth при первом использовании; fresh external-account lifecycle ещё не
-является release evidence. Machine-readable OpenAPI и MCP JSON Schemas
+является blocking release evidence и остаётся informational canary. Blocking
+multi-principal и OAuth/package automation принята ADR-0012, но её harness
+implementation ещё не завершена. Machine-readable OpenAPI и MCP JSON Schemas
 проверяются на соответствие этому документу и реализации.
 
 ## Назначение и граница
@@ -769,6 +771,22 @@ ActorContext
 ```
 
 Client-supplied identity fields не копируются в `ActorContext`.
+
+### Test-only identity seam — не wire API
+
+Отдельная test composition может построить
+`ActorContext.actor.synthetic_test_identity` с binding namespace
+`synthetic-test` и передать его normal session/bootstrap либо OAuth
+authorize/consent adapter. `SyntheticPrincipal` при этом является только actor
+label test evidence: после bootstrap application работает с обычным internal
+`Principal`.
+
+Ни один REST/OAuth/MCP route, header, cookie, body/query field, token format,
+job payload, environment variable или `NODE_ENV` не кодирует этот variant.
+Product OpenAPI/MCP schemas его не публикуют, а UAT/production compositions не
+содержат resolver. Harness не seed-ит storage и не принимает client-selected
+principal/role/scopes. Полный contract находится в
+[ADR-0012](../decisions/0012-synthetic-principal-release-gates.md).
 
 ### Queries
 
@@ -1735,6 +1753,13 @@ authentication не раскрывает existence/metadata.
 18. Export exact revision, reauthorization и expiring download URL.
 19. MCP Inspector на modern endpoint и реальный pinned Codex на обоих profiles
    exact deployed version.
+20. Blocking synthetic composition проходит normal two-principal bootstrap,
+    ACL/collaboration/restart/revoke/cleanup без product test-login surface,
+    storage seed или client-selected authority.
+21. Blocking direct-plugin OAuth automation проходит package shape, fresh
+    temporary context, DCR/PKCE/read/write-step-up/refresh/reuse/revoke/
+    reconnect и personal-token regression; synthetic identity входит только в
+    trusted authorize/consent seam.
 
 Claude Code и любой другой client получают отдельный adapter/client conformance
 profile до заявления поддержки.
@@ -1758,8 +1783,10 @@ Route reachability, Bearer forwarding и default/modern Codex profiles уже
 - request/file/changeset/search/export limits и rate policies;
 - search ranking details и threshold после lexical benchmark;
 - manual identity recovery workflow;
-- exact Marketplace plugin version/cache snapshot и результаты fresh UAT
-  install-before-OAuth/read/write-step-up/revoke/reconnect conformance;
+- exact Marketplace plugin version/cache snapshot для blocking automated
+  package/protocol gate; real external UAT install-before-OAuth/read/write-
+  step-up/revoke/reconnect остаётся informational canary и требуется только
+  для claim о проверенном external-host UX;
 - отдельный future ChatGPT Web connector/app profile после OpenAI verification,
   если он потребуется;
 - production OAuth issuer/resource, client migration и public directory policy

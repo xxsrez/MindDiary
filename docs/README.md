@@ -73,8 +73,11 @@ evidence, предлагаемый дизайн и ещё не проверен�
   participant boundaries, closed-schema telemetry, bounded diagnostics,
   token/audience revoke, exact rollback и fixture export/restore drill.
 - [Multi-principal UAT probe](operations/uat-multi-principal-runbook.md) —
-  двухфазная exact-candidate проверка двух отдельных principals, redeploy
+  informational Sites canary двух отдельных real principals, redeploy
   persistence, immediate revoke, redacted receipt и cleanup.
+- [Synthetic multi-principal release gate](operations/synthetic-multi-principal-runbook.md)
+  — blocking test-only composition без human credentials, storage seed,
+  product login surface или ACL bypass.
 - [Protocol assisted UAT pilot и feedback loop](operations/uat-pilot-protocol.md)
   — последовательные assisted/external cohorts, один feedback channel,
   privacy-safe metrics, cadence, feedback template, decision review и
@@ -117,6 +120,10 @@ evidence, предлагаемый дизайн и ещё не проверен�
 - [ADR-0011: direct MCP plugin и OAuth при первом использовании](decisions/0011-direct-mcp-plugin-oauth-on-use.md)
   — принят package без private registered app, `AVAILABLE + ON_USE` и future-
   only граница ChatGPT Web/public-directory connector.
+- [ADR-0012: SyntheticPrincipal и автоматические release gates](decisions/0012-synthetic-principal-release-gates.md)
+  — приняты blocking synthetic multi-principal и OAuth/package automation,
+  informational real Sites/Desktop canaries и запрет product test-login
+  surface.
 
 ## Исследования
 

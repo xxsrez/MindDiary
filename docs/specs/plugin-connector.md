@@ -3,10 +3,10 @@
 Статус: accepted, обновлено 2026-08-20. OAuth Authorization Server, dual
 personal/OAuth MCP authentication, write step-up и connected-app revocation
 реализованы. Для Codex Desktop/CLI pilot 0.1 принят direct MCP package с OAuth
-при первом использовании; package update и fresh external-account acceptance
-ещё не являются завершённым live evidence. Registered connector не входит в
-этот release path и остаётся возможным будущим ChatGPT Web/public-directory
-вариантом.
+при первом использовании. Blocking package/OAuth automation из ADR-0012 ещё не
+реализована; fresh external-account acceptance остаётся informational canary,
+а не release gate. Registered connector не входит в этот release path и
+остаётся возможным будущим ChatGPT Web/public-directory вариантом.
 
 Связанные документы: [архитектура](../architecture.md),
 [MVP](mvp.md), [API](api.md),
@@ -15,7 +15,9 @@ personal/OAuth MCP authentication, write step-up и connected-app revocation
 server-side OAuth решение зафиксировано в
 [ADR-0010](../decisions/0010-oauth-marketplace-connector.md), а текущая
 distribution boundary — в
-[ADR-0011](../decisions/0011-direct-mcp-plugin-oauth-on-use.md).
+[ADR-0011](../decisions/0011-direct-mcp-plugin-oauth-on-use.md). Validation
+carrier релиза 0.1 уточнён
+[ADR-0012](../decisions/0012-synthetic-principal-release-gates.md).
 
 ## Текущий implementation checkpoint
 
@@ -36,8 +38,11 @@ Repository candidate уже содержит:
 - D1 migration и repository tests для positive и negative OAuth paths.
 
 Этот checkpoint — доказательство реализации, не полный release evidence.
-Direct package validation, exact-SHA UAT lineage и fresh external-account
-install/read/write/revoke/reconnect smoke остаются обязательными этапами.
+Blocking evidence требует direct package validation и automated OAuth/
+transport lifecycle на exact SHA; exact-SHA single-owner UAT lineage остаётся
+обязательной hosted проверкой. Fresh external-account install/read/write/
+revoke/reconnect — отдельный informational canary и prerequisite только для
+claim о проверенном external-host UX.
 
 ## Решение
 
@@ -363,10 +368,13 @@ resource audience и token rotation остаются implementation details.
 
 ## Проверка и acceptance
 
-Pilot считается доказанным только при fresh installation, а не при прямом
-MCP curl либо повторном использовании старого chat snapshot.
+Release 0.1 блокирует automated exact-candidate matrix в fresh temporary
+Codex/plugin context. Она не ограничивается прямым MCP curl и не переиспользует
+старый chat/cache snapshot. Synthetic identity может входить только через
+trusted authorize/consent seam test composition; package, OAuth client и MCP
+requests не выбирают principal.
 
-Минимальная матрица:
+Blocking matrix:
 
 1. Existing Srez Marketplace показывает новую карточку после refresh/update;
    Task Manager продолжает устанавливаться отдельно.
@@ -386,14 +394,24 @@ MCP curl либо повторном использовании старого c
 8. Existing personal-token modern и compatibility flows остаются рабочими.
 9. Access-token expiry, refresh rotation, refresh reuse, wrong resource,
    redirect mismatch и revoked client имеют negative tests.
-10. Fresh Codex task после установки проходит direct discovery,
-    representative read, write, revoke и reconnect smoke на exact deployed
-    candidate. ChatGPT Web требует отдельного connector conformance.
+10. Fresh temporary Codex/plugin context проходит skill/tool discovery,
+    representative read, write, revoke и reconnect на exact package/candidate;
+    package snapshot, client/version и routes входят в redacted receipt.
+11. Test identity seam нельзя активировать product route/header/body/query/
+    env/job/`NODE_ENV`; normal token, current ACL, CAS и MCP authorization не
+    обходятся.
+
+Real external Marketplace/Codex installation и OAuth UI на exact UAT
+deployment выполняются отдельно как informational canary. Его failure или
+недоступный human account не блокирует release 0.1, но до passing canary нельзя
+утверждать, что external-host install/auth UX проверен. ChatGPT Web требует
+отдельного connector conformance.
 
 Repository tests должны покрывать OAuth state machines, persistence, verifier,
 scope enforcement, challenge metadata, identity binding и оба MCP profiles.
 UAT evidence отдельно связывает exact Git SHA, Site deployment, Marketplace
-plugin version/cache snapshot и fresh-task smoke.
+plugin version/cache snapshot и automated receipt; external canary сохраняется
+как отдельное owner observation и не подменяет automated gate.
 
 ## Этапы реализации
 
@@ -440,9 +458,9 @@ plugin version/cache snapshot и fresh-task smoke.
 
 | Вопрос | Почему важен | Как закрыть |
 | --- | --- | --- |
-| Проходит ли direct MCP OAuth в target Codex build | определяет фактический install/use lifecycle | fresh external-account smoke |
+| Проходит ли direct MCP OAuth в target Codex build | определяет protocol/package compatibility | blocking fresh temporary-context automation; real external-account smoke остаётся UX canary |
 | Пропускает ли Sites boundary host без ручного audience secret | иначе OAuth discovery не начнётся | read-only reachability test и отдельное access-policy решение |
-| Надёжен ли incremental write consent в installed plugin | влияет на безопасность и число dialogs | fresh-host UX test; fallback к read+write в первом OAuth flow только по принятому решению |
+| Надёжен ли incremental write consent в installed plugin | влияет на безопасность и число dialogs | automated step-up gate + informational fresh-host UX canary; fallback к read+write в первом OAuth flow только по принятому решению |
 | DCR или CIMD | неверный client profile ломает linking | DCR для pilot; CIMD только после conformance |
 | UAT или production branding | нельзя выдавать pilot за live service | `Mind Diary UAT` до provisioned production |
 | Как мигрировать exact MCP resource | resource — token audience | новая plugin version и reconnect, без silent URL swap |
