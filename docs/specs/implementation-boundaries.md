@@ -123,28 +123,24 @@ Application entry point принимает только подходящий var
 pre-registration Sites identity может вызвать только session/bootstrap use
 cases.
 
-### Test-only extension `synthetic_test_identity`
+### Test-only trusted binding provider
 
-Отдельная test composition, не входящая в product dependency graph, расширяет
-pre-registration actor одним variant:
-
-```text
-TestActorContext.actor.synthetic_test_identity:
-  binding_namespace: synthetic-test
-  opaque_subject
-  suggested_display_name?
-```
+Отдельный harness, не входящий в product dependency graph, подаёт ephemeral
+trusted identity snapshot через существующий `ProductSiteTrustedIdentityReader`
+и выбирает constructor-only generic binding provider `synthetic-test`.
+Pre-registration actor остаётся обычным `sites_identity_before_registration`;
+отдельного test/domain variant нет.
 
 `SyntheticPrincipal` — только label run/evidence, не имя этого value и не
-persisted domain discriminator. Test identity factory передаёт variant только
-normal session/bootstrap или trusted OAuth authorize/consent adapter. После
-binding resolution application использует обычный `registered_principal`.
+persisted domain discriminator. Harness передаёт snapshot только normal
+session/bootstrap или trusted OAuth authorize/consent adapter. После binding
+resolution application использует обычный `registered_principal`.
 
-Factory доступна только через direct test-harness import. Она не читает route,
+Harness доступен только через direct test entry point. Generic provider
+dependency default-ится на `openai-sites`; Product Worker не задаёт её. Route,
 header, cookie, body/query, environment, `NODE_ENV`, deployment configuration
-или job payload. Product composition roots и their transitive dependencies не
-могут импортировать factory/resolver; architecture gate проверяет это negative
-правило.
+или job payload не могут выбрать provider; architecture gate проверяет это
+negative правило.
 
 Namespace `synthetic-test` допустим только в isolated test `MetadataStore`.
 Harness создаёт records обычными commands и не вызывает storage seed/direct
@@ -479,8 +475,9 @@ Acceptance и дальнейшее сохранение этой границы 
   secret или download URL.
 
 Отдельный blocking gate дополнительно доказывает normal multi-principal
-bootstrap/access lifecycle через `synthetic_test_identity`, отсутствие
-test-identity import в product compositions и receipt
+bootstrap/access lifecycle через ephemeral trusted snapshots и persisted
+provider `synthetic-test`, отсутствие harness/provider import или override в
+product compositions и receipt
 `mind-diary/synthetic-multi-principal-evidence/v1`. Automated OAuth/package
 gate использует тот же trusted seam только для authorize/consent и отдельно
 проверяет, что transport/token/ACL/CAS paths остаются обычными.

@@ -28,17 +28,19 @@ transport. При этом test carrier не должен создавать pro
 получает обычный внутренний `Principal`, обычный Personal Mind и обычные
 memberships/tokens.
 
-Отдельная trusted test composition может создать только test-only variant
-`ActorContext.actor.synthetic_test_identity`. Он существует до normal binding
-resolution/bootstrap, использует изолированный namespace external binding
-`synthetic-test` и никогда не входит в product Web/OAuth/MCP/background
-composition.
+Отдельная trusted test composition подаёт ephemeral identity snapshot через
+существующий `ProductSiteTrustedIdentityReader` и constructor-only generic
+binding-provider dependency со значением `synthetic-test`. До bootstrap это
+обычный trusted pre-registration identity context; отдельного domain actor kind
+нет. Normal binding resolution сохраняет provider `synthetic-test`, после чего
+создаётся обычный `Principal`.
 
 Test composition активируется только прямым import/entry point отдельного test
 harness. Её нельзя включить route, header, body, query, cookie, environment
 variable, serialized job, deployment setting, `NODE_ENV=test` или другим
-runtime flag. Ordinary UAT и production bundles не содержат provider, resolver
-или endpoint, способный построить `synthetic_test_identity`.
+runtime flag. Generic dependency default-ится в composition root на
+`openai-sites`; ordinary Product Worker не задаёт её и не содержит synthetic
+provider, resolver, import или endpoint.
 
 Harness вызывает normal application commands и protocol adapters. Он не seed-ит
 `Principal`, binding, membership, token, grant или ACL напрямую в storage, не
@@ -126,8 +128,8 @@ Marketplace/package snapshot, plugin version, client/version, protocol routes
 - Synthetic gate доказывает application/protocol invariants, но не Sites или
   Desktop UI behavior; canaries сохраняют этот signal с честной
   `informational` классификацией.
-- Пока MD-237 и MD-238 не реализовали capabilities, новые required profile rows
-  fail closed. Documentation acceptance не является passing evidence.
+- MD-237 реализует synthetic multi-principal capability; пока MD-238 не
+  реализовал OAuth/package capability, соответствующая required row fail closed.
 - Historical readiness criteria 1–29 и live slots `W/P/MI/CX/R` сохраняются до
   implementation change; их нельзя молча заменить synthetic receipt.
 

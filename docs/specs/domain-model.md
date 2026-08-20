@@ -106,12 +106,12 @@ class автоматического release probe из
 memberships и tokens, что любой другой isolated account; synthetic label в них
 не сохраняется.
 
-Отдельная test composition может до bootstrap построить trusted
-`ActorContext.actor.synthetic_test_identity` и разрешить его в изолированном
-external-binding namespace `synthetic-test`. Эта возможность отсутствует в
-ordinary Web/OAuth/MCP/background compositions UAT и production и не
-активируется route, header, body/query, cookie, environment variable,
-serialized job, deployment flag или `NODE_ENV`.
+Отдельная test composition может до bootstrap подать ephemeral trusted identity
+snapshot через существующий reader и выбрать constructor-only external-binding
+provider `synthetic-test`. Отдельного domain actor kind нет. Generic provider
+dependency default-ится на `openai-sites`; Product Worker не меняет default, а
+route, header, body/query, cookie, environment variable, serialized job,
+deployment flag или `NODE_ENV` не могут выбрать provider.
 
 Harness обязан использовать normal bootstrap, invitation, membership, token,
 OAuth, ACL, CAS, revoke и deletion commands. Direct storage seed, client-

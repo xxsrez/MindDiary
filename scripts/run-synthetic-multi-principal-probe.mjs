@@ -132,6 +132,7 @@ function createHarness({ database, bucket, identities, scheduled }) {
         return identities.get(request) ?? { kind: "unauthenticated" };
       },
     },
+    identityBindingProvider: BINDING_NAMESPACE,
     tokenVerifierKey: deterministicKey(11),
     locatorKey: deterministicKey(51),
     exportDownloadVerifierKey: deterministicKey(91),
@@ -143,6 +144,30 @@ function createHarness({ database, bucket, identities, scheduled }) {
     options,
     createRuntime: () => createProductSiteRuntime(options),
   });
+}
+
+function backgroundPayload(work) {
+  if (work.kind === "audit_outbox") {
+    return Object.freeze({ kind: work.kind, messageId: work.id });
+  }
+  return Object.freeze({ kind: work.kind, jobId: work.id });
+}
+
+async function drainScheduled({ runtimeRef, scheduled, kinds }) {
+  const allowed = kinds === undefined ? null : new Set(kinds);
+  let drained = 0;
+  while (true) {
+    const index = scheduled.findIndex((work) => allowed === null || allowed.has(work.kind));
+    if (index < 0) break;
+    const [work] = scheduled.splice(index, 1);
+    const result = await runtimeRef.current.dispatchBackground(backgroundPayload(work));
+    if (result?.kind === "failed") {
+      fail("background_work_failed", { kind: safeCode(work.kind) });
+    }
+    drained += 1;
+    if (drained > 10_000) fail("background_work_did_not_quiesce");
+  }
+  return drained;
 }
 
 function createActors({ runtimeRef, identities, ownerAlias, participantAlias }) {
@@ -254,6 +279,25 @@ async function runScenario({ candidate, evidenceOut, randomBytesImpl, now }) {
     ids(await actors.participant.session()).principal !== participantIds.principal
   ) fail("bootstrap_replay_changed_identity");
   assertions.add("bootstrap.idempotent-replay");
+  const bootstrapInspection = await createSitesMetadataStore(database);
+  const ownerSyntheticBinding = await bootstrapInspection.readAccountByExternalBinding({
+    provider: BINDING_NAMESPACE,
+    normalizedBinding: ownerAlias,
+  });
+  const participantSyntheticBinding = await bootstrapInspection.readAccountByExternalBinding({
+    provider: BINDING_NAMESPACE,
+    normalizedBinding: participantAlias,
+  });
+  const ownerSitesBinding = await bootstrapInspection.readAccountByExternalBinding({
+    provider: "openai-sites",
+    normalizedBinding: ownerAlias,
+  });
+  if (
+    ownerSyntheticBinding?.principal.principalId !== ownerIds.principal ||
+    participantSyntheticBinding?.principal.principalId !== participantIds.principal ||
+    ownerSitesBinding !== null
+  ) fail("synthetic_binding_namespace_not_persisted");
+  assertions.add("bootstrap.synthetic-binding-namespace");
 
   await actors.owner.issueMcpToken({
     name: "Synthetic owner gate",
@@ -467,6 +511,22 @@ async function runScenario({ candidate, evidenceOut, randomBytesImpl, now }) {
   }
   assertions.add("role-transition.stale-head-no-partial-state");
 
+  const materializedWork = await drainScheduled({
+    runtimeRef,
+    scheduled,
+    kinds: ["revision_index", "audit_outbox"],
+  });
+  if (
+    materializedWork === 0 ||
+    database.search.size === 0 ||
+    database.audit.size === 0
+  ) fail("background_state_not_materialized", {
+    materializedWork,
+    searchCount: database.search.size,
+    auditCount: database.audit.size,
+  });
+  assertions.add("background.search-and-audit-materialized");
+
   const ownerMind = data(await actors.owner.api(`/api/v1/minds/${handle}`));
   const editor = data(await actors.owner.api(`/api/v1/minds/${handle}/members`))
     .members?.find((member) => member.role === "editor" && !member.is_self);
@@ -569,6 +629,9 @@ async function runScenario({ candidate, evidenceOut, randomBytesImpl, now }) {
   await deleteAccount(actors.owner, nonce, "owner");
   await deleteAccount(actors.participant, nonce, "participant");
   assertions.add("cleanup.accounts-deleted");
+  await drainScheduled({ runtimeRef, scheduled });
+  if (scheduled.length !== 0) fail("background_cleanup_queue_not_drained");
+  assertions.add("cleanup.background-work-drained");
 
   const inspection = await createSitesMetadataStore(database);
   const accountTotals = await inspection.inspectAccountBootstrapStateForTest();
@@ -578,11 +641,11 @@ async function runScenario({ candidate, evidenceOut, randomBytesImpl, now }) {
     actors.participant.mcpTokenId,
   );
   const ownerBinding = await inspection.readAccountByExternalBinding({
-    provider: "openai-sites",
+    provider: BINDING_NAMESPACE,
     normalizedBinding: ownerAlias,
   });
   const participantBinding = await inspection.readAccountByExternalBinding({
-    provider: "openai-sites",
+    provider: BINDING_NAMESPACE,
     normalizedBinding: participantAlias,
   });
   if (

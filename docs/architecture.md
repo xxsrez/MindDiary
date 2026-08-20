@@ -178,19 +178,20 @@ tool calls после redeploy.
 
 ### 5. Test-only identity composition
 
-Release automation использует отдельный composition root, который не входит в
-Product Site/UAT/production bundle. Только он может создать
-`ActorContext.actor.synthetic_test_identity` и resolver external binding
-namespace `synthetic-test`. `SyntheticPrincipal` остаётся label тестового run,
-а normal bootstrap создаёт обычные domain `Principal`, Personal Mind и
-membership records.
+Release automation использует отдельный harness, который не входит в Product
+Site/UAT/production bundle. Harness подаёт ephemeral trusted snapshots через
+существующий `ProductSiteTrustedIdentityReader` и выбирает constructor-only
+generic external-binding provider `synthetic-test`. Отдельного domain actor kind
+нет; `SyntheticPrincipal` остаётся label тестового run, а normal bootstrap
+создаёт обычные domain `Principal`, Personal Mind и membership records.
 
 Composition активируется прямым test entry point, а не route/header/body/query,
 cookie, environment variable, serialized job, feature flag или
-`NODE_ENV=test`. Product Web/OAuth/MCP/background adapters не импортируют test
-identity factory. Harness использует normal application commands и protocol
-adapters без storage seed, client-selected principal, ACL/scope bypass или
-privileged cleanup. Exact scenario и redacted receipt заданы в
+`NODE_ENV=test`. Generic dependency default-ится на `openai-sites`, Product
+Worker её не задаёт, а product packages не содержат synthetic provider/import.
+Harness использует normal application commands и protocol adapters без storage
+seed, client-selected principal, ACL/scope bypass или privileged cleanup. Exact
+scenario и redacted receipt заданы в
 [synthetic runbook](operations/synthetic-multi-principal-runbook.md).
 
 ## Identity и authentication
@@ -306,8 +307,9 @@ Production issuer/resource, ChatGPT Web connector и public directory остаю
 distribution boundary — в
 [ADR-0011](decisions/0011-direct-mcp-plugin-oauth-on-use.md).
 
-Blocking OAuth/package conformance может подать `synthetic_test_identity`
-только в trusted authorize/consent adapter test composition. DCR, PKCE, exact
+Blocking OAuth/package conformance может подать тот же ephemeral trusted
+identity snapshot только в authorize/consent adapter test composition. DCR,
+PKCE, exact
 redirect/resource/state, token/refresh lifecycle, authorization mirror,
 current ACL/CAS и MCP transport проходят normal product contracts. Ни OAuth
 client, ни request fields не выбирают synthetic actor; password grant и admin

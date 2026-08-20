@@ -774,12 +774,12 @@ Client-supplied identity fields не копируются в `ActorContext`.
 
 ### Test-only identity seam — не wire API
 
-Отдельная test composition может построить
-`ActorContext.actor.synthetic_test_identity` с binding namespace
-`synthetic-test` и передать его normal session/bootstrap либо OAuth
-authorize/consent adapter. `SyntheticPrincipal` при этом является только actor
-label test evidence: после bootstrap application работает с обычным internal
-`Principal`.
+Отдельная test composition может подать ephemeral trusted identity snapshot
+через существующий reader и выбрать constructor-only binding provider
+`synthetic-test` для normal session/bootstrap либо OAuth authorize/consent
+adapter. Отдельного domain actor kind нет; `SyntheticPrincipal` является только
+actor label test evidence, а после bootstrap application работает с обычным
+internal `Principal`.
 
 Ни один REST/OAuth/MCP route, header, cookie, body/query field, token format,
 job payload, environment variable или `NODE_ENV` не кодирует этот variant.

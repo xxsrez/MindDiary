@@ -43,6 +43,7 @@ import {
   createProductWebHttpHandler,
   createProductExportDownloadHttpHandler,
   resolveProductSitesIdentity,
+  SITES_IDENTITY_PROVIDER,
   type ProductSitesIdentityResolution,
   type ProductWebActor,
   type TrustedSitesIdentitySnapshot,
@@ -122,6 +123,8 @@ export interface ProductSiteRuntimeOptions {
   readonly bucket: R2BucketLike;
   readonly publicOrigin: string;
   readonly identity: ProductSiteTrustedIdentityReader;
+  /** Constructor-only trusted binding namespace; product composition defaults to OpenAI Sites. */
+  readonly identityBindingProvider?: string;
   readonly tokenVerifierKey: Uint8Array;
   readonly locatorKey: Uint8Array;
   readonly exportDownloadVerifierKey: Uint8Array;
@@ -393,6 +396,10 @@ export async function createProductSiteRuntime(
   options: ProductSiteRuntimeOptions,
 ): Promise<Readonly<ProductSiteRuntime>> {
   const host = canonicalHost(options.publicOrigin);
+  const identityBindingProvider = options.identityBindingProvider ?? SITES_IDENTITY_PROVIDER;
+  if (!/^[a-z][a-z0-9-]{0,63}$/u.test(identityBindingProvider)) {
+    throw new TypeError("identityBindingProvider must be a bounded provider name");
+  }
   const clock = Object.freeze({ now: () => new Date().toISOString() as never });
   const pendingIndexJobs: string[] = [];
   const pendingAuditOutbox: string[] = [];
@@ -581,6 +588,7 @@ export async function createProductSiteRuntime(
     });
     return resolveProductSitesIdentity({
       snapshot: await options.identity.readVerifiedIdentity(request),
+      bindingProvider: identityBindingProvider,
       bindings: {
         async readActiveBinding(lookup) {
           const account = await metadata.readAccountByExternalBinding(lookup as never);
@@ -683,7 +691,13 @@ export async function createProductSiteRuntime(
     ownership: new OwnershipTransferService({ ordinaryMinds: metadata, objects, auditIds: commonAuditIds, logger: controlObservability }),
     membership: new MembershipControlService({ memberships: metadata, digest: objects, auditIds: commonAuditIds, logger: controlObservability }),
     reads: new ControlReadService(metadata),
-    invitation: new InvitationControlService({ invitations: metadata, objects, ids: generated, logger: controlObservability }),
+    invitation: new InvitationControlService({
+      invitations: metadata,
+      objects,
+      ids: generated,
+      identityProvider: identityBindingProvider,
+      logger: controlObservability,
+    }),
     routes: new MindRouteService({ routes: metadata, host, logger: controlObservability }),
     catalog: new PublicMindCatalogService({ catalog: metadata, host, logger: controlObservability }),
     tokens: new TokenLifecycleService({ clock, tokenHasher, tokenIds: generated, tokens: metadata, logger: controlObservability }),

@@ -7,6 +7,7 @@ export const SYNTHETIC_ASSERTION_IDS = Object.freeze([
   "bootstrap.distinct-ordinary-principals",
   "bootstrap.distinct-personal-minds",
   "bootstrap.idempotent-replay",
+  "bootstrap.synthetic-binding-namespace",
   "personal-isolation.cross-account-denied",
   "tokens.distinct-principal-bound",
   "private.web-non-enumeration",
@@ -21,6 +22,7 @@ export const SYNTHETIC_ASSERTION_IDS = Object.freeze([
   "role-transition.reader-read-only",
   "role-transition.editor-controlled-commit",
   "role-transition.stale-head-no-partial-state",
+  "background.search-and-audit-materialized",
   "ownership-transfer.exactly-one-owner",
   "restart-persistence.accounts-personal-minds",
   "restart-persistence.owner-head-history-tokens",
@@ -30,6 +32,7 @@ export const SYNTHETIC_ASSERTION_IDS = Object.freeze([
   "cleanup.ordinary-mind-deleted",
   "cleanup.tokens-revoked",
   "cleanup.accounts-deleted",
+  "cleanup.background-work-drained",
   "cleanup.negative-state-scan",
   "production-negative.no-synthetic-authority",
 ]);

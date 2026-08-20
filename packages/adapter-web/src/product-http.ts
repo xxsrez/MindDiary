@@ -83,6 +83,7 @@ export async function resolveProductSitesIdentity(input: {
   readonly snapshot: TrustedSitesIdentitySnapshot;
   readonly bindings: SitesIdentityBindingReader;
   readonly context: SitesIdentityRequestContext;
+  readonly bindingProvider?: string;
 }): Promise<Readonly<ProductSitesIdentityResolution>> {
   if (input.snapshot.kind !== "authenticated") {
     return Object.freeze({ kind: "denied" as const });
@@ -93,8 +94,15 @@ export async function resolveProductSitesIdentity(input: {
   if (normalizedBinding === null) {
     return Object.freeze({ kind: "denied" as const });
   }
+  const bindingProvider = input.bindingProvider ?? SITES_IDENTITY_PROVIDER;
+  if (
+    typeof bindingProvider !== "string" ||
+    !/^[a-z][a-z0-9-]{0,63}$/u.test(bindingProvider)
+  ) {
+    return Object.freeze({ kind: "unavailable" as const });
+  }
   const binding = await input.bindings.readActiveBinding({
-    provider: SITES_IDENTITY_PROVIDER,
+    provider: bindingProvider,
     normalizedBinding,
   });
   if (binding.kind === "unavailable") {
@@ -102,7 +110,7 @@ export async function resolveProductSitesIdentity(input: {
   }
   if (binding.kind === "bound") {
     if (
-      binding.provider !== SITES_IDENTITY_PROVIDER ||
+      binding.provider !== bindingProvider ||
       binding.normalizedBinding !== normalizedBinding ||
       typeof binding.principalId !== "string" ||
       binding.principalId.length === 0
@@ -137,7 +145,7 @@ export async function resolveProductSitesIdentity(input: {
         kind: "sites_identity" as const,
         verifiedByPlatform: true as const,
       }),
-      provider: SITES_IDENTITY_PROVIDER,
+      provider: bindingProvider,
       normalizedBinding:
         normalizedBinding as unknown as SitesIdentityBeforeRegistration["normalizedBinding"],
       ...(input.snapshot.verifiedFullName === undefined

@@ -412,11 +412,11 @@ Blocking `P9-Synthetic` выполняет
 principals/Personal Minds, а harness использует normal control/content
 commands, current ACL, CAS, revoke и cleanup без storage seed.
 
-Только test composition может создать
-`ActorContext.actor.synthetic_test_identity` в binding namespace
-`synthetic-test`. Product UAT/production не имеют synthetic provider, login,
-route/header/body/query/env/job/`NODE_ENV` switch или client-selected
-principal. Passing artifact использует отдельную schema
+Только test composition подаёт ephemeral trusted identity snapshots и выбирает
+constructor-only binding provider `synthetic-test`. Generic dependency
+default-ится на `openai-sites`, Product Worker её не задаёт; UAT/production не
+имеют synthetic provider, login, route/header/body/query/env/job/`NODE_ENV`
+switch или client-selected principal. Passing artifact использует отдельную schema
 `mind-diary/synthetic-multi-principal-evidence/v1`.
 
 Accepted двухфазный

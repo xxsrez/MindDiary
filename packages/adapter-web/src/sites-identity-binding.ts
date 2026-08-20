@@ -39,14 +39,14 @@ export type SitesNormalizedBinding = string & {
 };
 
 export interface SitesIdentityBindingLookup {
-  readonly provider: typeof SITES_IDENTITY_PROVIDER;
+  readonly provider: string;
   readonly normalizedBinding: SitesNormalizedBinding;
 }
 
 export type SitesIdentityBindingLookupResult =
   | {
       readonly kind: "bound";
-      readonly provider: typeof SITES_IDENTITY_PROVIDER;
+      readonly provider: string;
       readonly normalizedBinding: SitesNormalizedBinding;
       readonly principalId: PrincipalId;
     }

@@ -44,9 +44,9 @@ runtime instance.
 
 ```text
 synthetic harness
-  -> trusted test identity factory
-     -> ActorContext.actor.synthetic_test_identity
-        -> binding namespace synthetic-test
+  -> per-Request trusted snapshot map
+     -> existing ProductSiteTrustedIdentityReader
+        -> constructor-only binding provider synthetic-test
   -> normal session/bootstrap/control commands
   -> normal token issuance and MCP authentication
   -> normal Authorizer, ACL, CAS, history and deletion
@@ -68,9 +68,15 @@ production composition roots. Единственная activation boundary — d
 - специальный issue/revoke/delete command, недоступный ordinary actor.
 
 Architecture/import gate обязан доказать, что production Web/OAuth/MCP/
-background composition не импортирует test identity factory или synthetic
-binding resolver. Negative runtime check должен показать, что ordinary UAT/
-production config не способен разрешить namespace `synthetic-test`.
+background composition не импортирует harness и не содержит synthetic provider.
+Generic provider dependency должна default-иться на `openai-sites`; Product
+Worker не задаёт её, а ordinary UAT/production config не может выбрать
+`synthetic-test`.
+
+Harness использует exact schema statements, экспортированные текущими D1
+adapters metadata/search/audit/OAuth. Fake D1 отклоняет неизвестный `CREATE`,
+неполную migration group и data operation до полного schema contract. Это
+проверяет SQL contract adapters, но не заявляет physical Cloudflare D1 parity.
 
 ## Ephemeral identities и данные
 
@@ -82,11 +88,11 @@ identity subjects: Owner и Participant. Человекочитаемые aliase
 двух distinct opaque values в stable actor order. Они не являются aliases,
 emails или service IDs и не кодируют их.
 
-Test identity factory строит `synthetic_test_identity` с namespace
-`synthetic-test`; normal `bootstrap_account` создаёт для каждого отдельный
-ordinary `Principal`, отдельный Personal Mind и sole-owner binding. Harness
-сравнивает internal IDs только в памяти и немедленно отбрасывает их после
-assertion.
+Harness создаёт trusted snapshot и выбирает provider `synthetic-test`; normal
+`bootstrap_account` создаёт для каждого отдельный ordinary `Principal`,
+отдельный Personal Mind и sole-owner binding. Harness читает isolated metadata
+только для assertion, что binding действительно сохранён с `synthetic-test`, а
+`openai-sites` binding отсутствует. Internal IDs сравниваются только в памяти.
 
 Все canonical content — non-sensitive deterministic fixture. Store namespace,
 object keys, handles, idempotency keys и OAuth clients получают run nonce, чтобы
@@ -97,8 +103,8 @@ UAT или production bindings.
 
 Targeted capability выполняет одну последовательность без ручного input:
 
-1. Создать clean isolated composition и два distinct
-   `synthetic_test_identity`.
+1. Создать clean isolated composition и два distinct ephemeral trusted
+   identity snapshots в provider namespace `synthetic-test`.
 2. Через normal session/bootstrap commands создать два accounts; доказать
    разные principals, Personal Minds и отсутствие duplicate bootstrap при
    replay.
@@ -115,6 +121,8 @@ Targeted capability выполняет одну последовательнос
    не commit-ит.
 7. Owner меняет Participant на Editor; fresh token/current ACL разрешает
    controlled fixture commit, stale HEAD получает conflict без partial state.
+   Scheduled revision-index и audit-outbox work исполняются normal background
+   dispatcher; до cleanup оба materialized stores обязаны быть non-empty.
 8. Owner передаёт ownership Participant: остаётся ровно один Owner, прежний
    Owner становится Admin.
 9. Reconstruct composition над тем же isolated durable adapters, не seed-я
@@ -128,7 +136,8 @@ Targeted capability выполняет одну последовательнос
 12. Выполнить negative scan isolated metadata/object/index/audit state:
     credentials и identity mappings отсутствуют, ordinary cleanup завершён,
     остались только разрешённые lifecycle markers вроде non-linkable retired
-    handle. Затем уничтожить весь isolated test store.
+    handle. Перед scan повторно drain-ить normal background dispatcher и
+    доказать пустую scheduled queue. Затем уничтожить весь isolated test store.
 
 Любой skipped assertion, unexpected partial state, unresolved cleanup или
 отсутствующая runtime capability делает row failed. Retry не создаёт новый
@@ -173,6 +182,7 @@ activation.test-only-composition
 bootstrap.distinct-ordinary-principals
 bootstrap.distinct-personal-minds
 bootstrap.idempotent-replay
+bootstrap.synthetic-binding-namespace
 personal-isolation.cross-account-denied
 tokens.distinct-principal-bound
 private.web-non-enumeration
@@ -187,6 +197,7 @@ invitation.accept-replay-single-membership
 role-transition.reader-read-only
 role-transition.editor-controlled-commit
 role-transition.stale-head-no-partial-state
+background.search-and-audit-materialized
 ownership-transfer.exactly-one-owner
 restart-persistence.accounts-personal-minds
 restart-persistence.owner-head-history-tokens
@@ -196,6 +207,7 @@ history-revoke.next-request-denied
 cleanup.ordinary-mind-deleted
 cleanup.tokens-revoked
 cleanup.accounts-deleted
+cleanup.background-work-drained
 cleanup.negative-state-scan
 production-negative.no-synthetic-authority
 ```
@@ -224,9 +236,9 @@ ACL/CAS и revoke идут через normal package/protocol surface.
 
 Synthetic actor нельзя передать в `/oauth/authorize` через URL, form, header,
 cookie или client metadata. Test harness связывает pending authorization с
-`synthetic_test_identity` внутри trusted adapter так же, как Product Site
-composition связала бы её с trusted Sites identity. Password grant, admin token
-mint и pre-seeded OAuth records запрещены.
+ephemeral trusted snapshot внутри authorize/consent adapter так же, как Product
+Site composition связала бы её с trusted Sites identity. Password grant, admin
+token mint и pre-seeded OAuth records запрещены.
 
 OAuth/package gate выпускает отдельный receipt; synthetic multi-principal
 receipt не делает OAuth row passing и наоборот.

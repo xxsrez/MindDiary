@@ -4197,6 +4197,7 @@ export interface InvitationControlDependencies {
   readonly invitations: OrdinaryMindStore;
   readonly objects: ObjectStore;
   readonly ids: InvitationLifecycleIdGenerator;
+  readonly identityProvider?: string;
   readonly logger?: InvitationControlSafeLogger;
 }
 
@@ -4341,12 +4342,18 @@ export class InvitationControlService {
   readonly #invitations: OrdinaryMindStore;
   readonly #objects: ObjectStore;
   readonly #ids: InvitationLifecycleIdGenerator;
+  readonly #identityProvider: string;
   readonly #logger: InvitationControlSafeLogger | undefined;
 
   constructor(dependencies: InvitationControlDependencies) {
     this.#invitations = dependencies.invitations;
     this.#objects = dependencies.objects;
     this.#ids = dependencies.ids;
+    this.#identityProvider =
+      dependencies.identityProvider ?? INVITATION_SITES_IDENTITY_PROVIDER;
+    if (!/^[a-z][a-z0-9-]{0,63}$/u.test(this.#identityProvider)) {
+      throw new TypeError("identity provider is invalid");
+    }
     this.#logger = dependencies.logger;
   }
 
@@ -4447,7 +4454,7 @@ export class InvitationControlService {
             );
           }
           const target = await transaction.readRegisteredPrincipalByExternalBinding({
-            provider: INVITATION_SITES_IDENTITY_PROVIDER,
+            provider: this.#identityProvider,
             normalizedBinding,
           });
           if (target === null) {
