@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import {
@@ -50,6 +51,20 @@ test("OAuth direct-plugin receipt is closed, redacted, and canonically hashed", 
     "space_private",
     "revision_private",
   ]) assert.equal(serialized.includes(forbidden), false, forbidden);
+});
+
+test("OAuth direct-plugin UI canary fields are allowed by the release evidence policy", async () => {
+  const profile = await readFile(
+    new URL("../../docs/operations/ship-work-release-profile.md", import.meta.url),
+    "utf8",
+  );
+  const policy = profile.match(
+    /- id: release-evidence-default\n(?<body>[\s\S]*?)\n\s+never_store:/u,
+  )?.groups?.body;
+  assert.ok(policy, "release-evidence-default policy must exist");
+  for (const field of ["external_ui_canary", "requirement", "claim"]) {
+    assert.match(policy, new RegExp(`^\\s+- ${field}$`, "mu"));
+  }
 });
 
 test("OAuth direct-plugin CLI exposes no identity, scope, token, route, or runtime switch", () => {

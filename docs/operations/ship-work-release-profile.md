@@ -573,6 +573,8 @@ evidence:
         - route
         - assertions
         - external_ui_canary
+        - requirement
+        - claim
         - artifact_sha256
         - screenshot_ref
         - failure_class
