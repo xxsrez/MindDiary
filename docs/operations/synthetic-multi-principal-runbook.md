@@ -1,9 +1,8 @@
 # Synthetic multi-principal release gate
 
-Статус: accepted operational contract, 2026-08-20; capability implementation
-принадлежит MD-237. Этот runbook задаёт blocking row
-`dev.synthetic-multi-principal`, но не утверждает, что harness уже реализован
-или прошёл на текущем candidate.
+Статус: accepted operational contract и executable repository gate,
+2026-08-20; capability implementation принадлежит MD-237. Passing evidence
+всегда относится только к exact candidate, на котором выполнена команда ниже.
 
 ## Назначение и граница доказательства
 
@@ -22,6 +21,24 @@ surfaces наблюдает отдельный informational
 и storage после bootstrap существуют обычные `Principal`, Personal Mind,
 membership и token records. Label не сохраняется в этих records и не даёт
 capabilities.
+
+## Запуск
+
+Из clean exact candidate:
+
+```bash
+npm run gate:synthetic-multi-principal -- \
+  --candidate-sha <exact-HEAD-sha> \
+  --evidence-out <private-temp-path>/synthetic-multi-principal-evidence.json
+```
+
+Runner отклоняет SHA, отличный от текущего `HEAD`, и любые CLI inputs identity,
+role, token, route или runtime switch. Evidence создаётся с mode `0600`; path
+должен находиться во временном private каталоге вне repository. Команда сначала
+собирает product packages, затем выполняет one-shot scenario над изолированными
+D1/R2 test adapters. В середине scenario Product Site runtime создаётся заново
+над теми же adapters, поэтому restart assertions не опираются на in-memory
+runtime instance.
 
 ## Test-only composition
 
@@ -148,6 +165,46 @@ Passing document:
 `visibility-baseline`, `invitation`, `role-transition`, `ownership-transfer`,
 `restart-persistence`, `web-revoke`, `mcp-revoke`, `history-revoke`, `cleanup`
 и `production-negative`.
+
+Executable registry в `scripts/lib/multi-principal-probe-core.mjs`:
+
+```text
+activation.test-only-composition
+bootstrap.distinct-ordinary-principals
+bootstrap.distinct-personal-minds
+bootstrap.idempotent-replay
+personal-isolation.cross-account-denied
+tokens.distinct-principal-bound
+private.web-non-enumeration
+private.list-non-enumeration
+private.history-non-enumeration
+visibility.public-baseline-read-only
+visibility.public-catalog-only
+visibility.unlisted-exact-only
+visibility.private-immediate-revoke
+invitation.pending-access-denied
+invitation.accept-replay-single-membership
+role-transition.reader-read-only
+role-transition.editor-controlled-commit
+role-transition.stale-head-no-partial-state
+ownership-transfer.exactly-one-owner
+restart-persistence.accounts-personal-minds
+restart-persistence.owner-head-history-tokens
+web-revoke.next-request-denied
+mcp-revoke.next-request-denied
+history-revoke.next-request-denied
+cleanup.ordinary-mind-deleted
+cleanup.tokens-revoked
+cleanup.accounts-deleted
+cleanup.negative-state-scan
+production-negative.no-synthetic-authority
+```
+
+`tests/integration/synthetic-multi-principal-probe.test.mjs` исполняет весь
+scenario, а `tests/conformance/synthetic-principal-packaging.test.mjs`
+проверяет closed receipt/hash/CLI и отсутствие synthetic authority в product
+source/package surface. Historical UAT schema и CLI отдельно защищает
+`tests/conformance/uat-multi-principal-probe.test.mjs`.
 
 `run_fingerprint` — единственный persisted opaque locator тестового run.
 `actor_fingerprints` содержит минимум два distinct values и сохраняет только

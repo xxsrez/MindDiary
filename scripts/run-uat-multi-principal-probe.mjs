@@ -1,8 +1,19 @@
 #!/usr/bin/env node
 
-import { createHash, randomBytes } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
+import {
+  ProbeFailure,
+  assertRedactedDocument,
+  canonical,
+  digest,
+  fail,
+  isRecord,
+  required,
+} from "./lib/multi-principal-probe-core.mjs";
+
+export { ProbeFailure, assertRedactedDocument };
 
 const STATE_SCHEMA = "mind-diary/uat-multi-principal-state/v1";
 const EVIDENCE_SCHEMA = "mind-diary/multi-principal-evidence/v1";
@@ -34,21 +45,6 @@ const ASSERTIONS = Object.freeze([
   "ephemeral_probe_cleanup",
 ]);
 
-export class ProbeFailure extends Error {
-  constructor(code, details = {}) {
-    super(code);
-    this.name = "ProbeFailure";
-    this.code = code;
-    this.details = Object.freeze({ ...details });
-  }
-}
-
-function fail(code, details) { throw new ProbeFailure(code, details); }
-function isRecord(value) { return typeof value === "object" && value !== null && !Array.isArray(value); }
-function required(value, code) {
-  if (typeof value !== "string" || value.length === 0) fail(code);
-  return value;
-}
 function safeCode(value) {
   return typeof value === "string" && /^[a-z][a-z0-9_]{0,63}$/u.test(value) ? value : "unexpected_response";
 }
@@ -71,34 +67,6 @@ function baseUrl(value) {
   parsed.pathname = parsed.pathname.replace(/\/+$/u, "");
   return parsed.toString().replace(/\/$/u, "");
 }
-function canonical(value) {
-  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
-  if (isRecord(value)) return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonical(value[key])}`).join(",")}}`;
-  return JSON.stringify(value);
-}
-function digest(value) { return `sha256:${createHash("sha256").update(value).digest("hex")}`; }
-
-export function assertRedactedDocument(value) {
-  const text = JSON.stringify(value);
-  for (const pattern of [
-    /mdp_v1_/iu,
-    /OAI-Sites-Authorization/iu,
-    /authorization["']?\s*:/iu,
-    /cookie["']?\s*:/iu,
-    /@[a-z0-9.-]+\.[a-z]{2,}/iu,
-  ]) if (pattern.test(text)) fail("unsafe_evidence_document");
-  const pending = [value];
-  while (pending.length > 0) {
-    const current = pending.pop();
-    if (typeof current === "string" && /^(?:principal|space|token)_[a-z0-9]/iu.test(current)) {
-      fail("unsafe_evidence_document");
-    }
-    if (Array.isArray(current)) pending.push(...current);
-    else if (isRecord(current)) pending.push(...Object.values(current));
-  }
-  return value;
-}
-
 export function createEvidence(input) {
   const unsigned = Object.freeze({
     schema: EVIDENCE_SCHEMA,

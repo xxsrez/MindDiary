@@ -698,6 +698,7 @@ evidence:
         kind: runtime_capability
         capability: mind-diary/synthetic-multi-principal-smoke/v1
         implementation:
+          command: [npm, run, gate:synthetic-multi-principal, "--", --candidate-sha, "{candidate_sha}", --evidence-out, "{private-temp-evidence-path}"]
           runbook: docs/operations/synthetic-multi-principal-runbook.md
           composition: isolated-test-only
           storage_seed: forbidden

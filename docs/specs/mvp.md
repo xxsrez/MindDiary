@@ -6,8 +6,9 @@ single-principal UAT в OpenAI Sites. Обязательные authenticated web
 persistence-after-redeploy и default/modern Codex MCP gates пройдены live;
 OAuth profile реализован в repository candidate. Для Codex Desktop/CLI pilot
 0.1 принят direct Marketplace MCP package с OAuth при первом использовании;
-blocking synthetic/OAuth/package automation ещё не реализована, а fresh
-external-account flow остаётся informational canary, не release gate.
+blocking synthetic multi-principal automation реализована; OAuth/package
+automation ещё не реализована, а fresh external-account flow остаётся
+informational canary, не release gate.
 
 ## Цель
 

@@ -1,5 +1,6 @@
 import { readFile, stat } from "node:fs/promises";
 import { resolve } from "node:path";
+import { findSyntheticProductAuthority } from "./lib/synthetic-product-negative.mjs";
 
 const root = resolve(import.meta.dirname, "..");
 const app = resolve(root, "apps/mind-diary-site");
@@ -30,6 +31,9 @@ if (!mcp.includes('MCP_ENDPOINT = "/api/mcp"') || !mcp.includes('MCP_LEGACY_CODE
 if (!composition.includes("path === MCP_ENDPOINT") || !composition.includes("path === MCP_LEGACY_CODEX_ENDPOINT")) errors.push("product dispatcher does not route both exact MCP endpoints");
 if (!tokenUi.includes("/api/mcp/2025-11-25")) errors.push("Codex token instructions do not use the verified compatibility endpoint");
 if (/sites-probe|PROBE_BUCKET|@aws-sdk|AgentCore|DynamoDB|OpenSearch/iu.test(`${worker}\n${composition}`)) errors.push("product Site contains a probe or forbidden production fallback");
+for (const finding of await findSyntheticProductAuthority(root)) {
+  errors.push(`product packaging contains ${finding.label}: ${finding.path}`);
+}
 
 const manifest = JSON.parse(await readFile(resolve(app, "package.json"), "utf8"));
 const lock = JSON.parse(await readFile(resolve(app, "package-lock.json"), "utf8"));
