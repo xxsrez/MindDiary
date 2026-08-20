@@ -68,8 +68,8 @@ non-enumeration, public и exact-unlisted baseline без membership, немед
 ownership transfer с одним Owner.
 
 State содержит только exact candidate/deployment, случайный run nonce,
-ephemeral Mind handle и actor fingerprints. PII, service principal IDs,
-credentials и content в него не записываются. Успех setup возвращает
+ephemeral Mind handle и transient `actor_fingerprints`. PII, service principal
+IDs, credentials и content в него не записываются. Успех setup возвращает
 `awaiting_redeploy`.
 
 ## Redeploy boundary
@@ -99,8 +99,10 @@ Admin membership; следующий Web request получает private non-en
 dedicated MCP token и проверяет `401` для обоих secret.
 
 Passing artifact имеет schema `mind-diary/multi-principal-evidence/v1`, exact
-candidate/deployment, actor class, fingerprints, bounded assertion IDs и
-content hash. Он не содержит email, `principal_id`, `space_id`, token ID,
+candidate/deployment, actor class, `actor_fingerprints` array из двух distinct
+opaque values в stable Owner/Participant order, bounded assertion IDs и content
+hash. Array не содержит alias/email/internal ID и не кодирует их. Artifact не
+содержит email, `principal_id`, `space_id`, token ID,
 credentials, cookies, private content или response bodies.
 
 Эта historical/live schema не переименовывается в

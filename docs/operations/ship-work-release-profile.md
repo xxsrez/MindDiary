@@ -559,6 +559,8 @@ evidence:
         - deployment_id
         - resolved_url
         - actor_class
+        - run_fingerprint
+        - actor_fingerprints
         - binding_namespace
         - credential_fingerprint
         - client
@@ -709,7 +711,7 @@ evidence:
         media_type: application/json
         storage: content-addressed-reference
         max_bytes: 2097152
-        required_fields: [status, candidate_sha, actor_class, binding_namespace, assertions, artifact_sha256]
+        required_fields: [status, candidate_sha, actor_class, binding_namespace, run_fingerprint, actor_fingerprints, assertions, artifact_sha256]
       redaction_policy: release-evidence-default
     - id: dev.oauth-direct-plugin
       stage: dev
@@ -894,7 +896,7 @@ evidence:
         media_type: application/json
         storage: content-addressed-reference
         max_bytes: 2097152
-        required_fields: [status, candidate_sha, deployment_id, actor_class, assertions, artifact_sha256]
+        required_fields: [status, candidate_sha, deployment_id, actor_class, actor_fingerprints, assertions, artifact_sha256]
       redaction_policy: release-evidence-default
     - id: uat.oauth-direct-plugin-canary
       stage: uat

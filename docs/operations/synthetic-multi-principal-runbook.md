@@ -60,8 +60,10 @@ production config не способен разрешить namespace `synthetic-
 Harness создаёт cryptographically random run nonce и минимум два distinct
 identity subjects: Owner и Participant. Человекочитаемые aliases при
 необходимости exact-email invitation используют reserved `.invalid` domain и
-живут только в памяти test process. Evidence сохраняет только actor class и
-случайные opaque fingerprints.
+живут только в памяти test process. Для persisted evidence harness независимо
+создаёт один opaque `run_fingerprint` и `actor_fingerprints` — array минимум
+двух distinct opaque values в stable actor order. Они не являются aliases,
+emails или service IDs и не кодируют их.
 
 Test identity factory строит `synthetic_test_identity` с namespace
 `synthetic-test`; normal `bootstrap_account` создаёт для каждого отдельный
@@ -127,6 +129,11 @@ Passing document:
   "candidate_sha": "<exact-40-char-sha>",
   "actor_class": "synthetic-principal",
   "binding_namespace": "synthetic-test",
+  "run_fingerprint": "run-<opaque-random>",
+  "actor_fingerprints": [
+    "actor-<opaque-random-owner>",
+    "actor-<opaque-random-participant>"
+  ],
   "started_at": "<utc>",
   "completed_at": "<utc>",
   "assertions": [
@@ -141,6 +148,11 @@ Passing document:
 `visibility-baseline`, `invitation`, `role-transition`, `ownership-transfer`,
 `restart-persistence`, `web-revoke`, `mcp-revoke`, `history-revoke`, `cleanup`
 и `production-negative`.
+
+`run_fingerprint` — единственный persisted opaque locator тестового run.
+`actor_fingerprints` содержит минимум два distinct values и сохраняет только
+stable actor order, необходимый assertions; aliases, emails, internal IDs и
+actor mapping в него не кодируются.
 
 Receipt запрещает alias/email, internal principal/Mind/revision/token/grant ID,
 credential/verifier, cookie/header, content/path/query, raw request/response,

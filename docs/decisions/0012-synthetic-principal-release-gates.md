@@ -98,11 +98,17 @@ deploy и не делает external canary production evidence.
 
 `mind-diary/synthetic-multi-principal-evidence/v1` содержит только:
 
-- exact `candidate_sha`, UTC window и random run nonce/fingerprint;
+- exact `candidate_sha`, UTC window и один opaque `run_fingerprint`;
 - actor class `synthetic-principal` и binding namespace `synthetic-test`;
+- `actor_fingerprints` — array минимум двух distinct opaque values в stable
+  actor order;
 - bounded assertion IDs/statuses для normal bootstrap, isolation, ACL,
   collaboration, restart, revoke и cleanup;
 - hash exact redacted receipt.
+
+`run_fingerprint` и каждый element `actor_fingerprints` генерируются независимо
+для evidence correlation, не кодируют alias/email/internal ID и не позволяют
+восстановить actor mapping вне transient test process.
 
 Receipt не содержит alias/email, `principal_id`, `space_id`, Personal Mind ID,
 token/grant/client secret, authorization header, cookie, content/query,
