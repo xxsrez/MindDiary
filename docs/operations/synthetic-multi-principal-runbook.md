@@ -91,8 +91,9 @@ emails или service IDs и не кодируют их.
 Harness создаёт trusted snapshot и выбирает provider `synthetic-test`; normal
 `bootstrap_account` создаёт для каждого отдельный ordinary `Principal`,
 отдельный Personal Mind и sole-owner binding. Harness читает isolated metadata
-только для assertion, что binding действительно сохранён с `synthetic-test`, а
-`openai-sites` binding отсутствует. Internal IDs сравниваются только в памяти.
+только для assertion, что оба bindings действительно сохранены с
+`synthetic-test`, а оба соответствующих `openai-sites` bindings отсутствуют.
+Internal IDs сравниваются только в памяти.
 
 Все canonical content — non-sensitive deterministic fixture. Store namespace,
 object keys, handles, idempotency keys и OAuth clients получают run nonce, чтобы
@@ -223,9 +224,13 @@ source/package surface. Historical UAT schema и CLI отдельно защищ
 stable actor order, необходимый assertions; aliases, emails, internal IDs и
 actor mapping в него не кодируются.
 
-Receipt запрещает alias/email, internal principal/Mind/revision/token/grant ID,
+Receipt запрещает alias/email, internal principal/space/Mind/revision/token/
+grant/invitation/membership/account/binding/audit/outbox/job/request/impact ID,
+OAuth record IDs, Personal Mind handles, content cursors/locators, object keys,
 credential/verifier, cookie/header, content/path/query, raw request/response,
-storage row и actor-to-principal mapping. Hash считается после redaction.
+storage row и actor-to-principal mapping. Только closed assertion IDs и opaque
+`run-…`/`actor-…` fingerprints исключены из prefix rejection. Hash считается
+после redaction.
 
 ## OAuth authorize/consent seam
 

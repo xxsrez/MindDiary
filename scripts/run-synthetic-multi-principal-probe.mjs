@@ -292,10 +292,15 @@ async function runScenario({ candidate, evidenceOut, randomBytesImpl, now }) {
     provider: "openai-sites",
     normalizedBinding: ownerAlias,
   });
+  const participantSitesBinding = await bootstrapInspection.readAccountByExternalBinding({
+    provider: "openai-sites",
+    normalizedBinding: participantAlias,
+  });
   if (
     ownerSyntheticBinding?.principal.principalId !== ownerIds.principal ||
     participantSyntheticBinding?.principal.principalId !== participantIds.principal ||
-    ownerSitesBinding !== null
+    ownerSitesBinding !== null ||
+    participantSitesBinding !== null
   ) fail("synthetic_binding_namespace_not_persisted");
   assertions.add("bootstrap.synthetic-binding-namespace");
 

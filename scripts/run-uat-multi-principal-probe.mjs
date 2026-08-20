@@ -5,6 +5,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 import {
   ProbeFailure,
+  UAT_ASSERTION_IDS,
   assertRedactedDocument,
   canonical,
   digest,
@@ -29,21 +30,7 @@ const ENVIRONMENT = Object.freeze({
   ownerMcpTokenId: ["MIND_DIARY_UAT_OWNER", "MCP_TOKEN_ID"].join("_"),
   participantMcpTokenId: ["MIND_DIARY_UAT_PARTICIPANT", "MCP_TOKEN_ID"].join("_"),
 });
-const ASSERTIONS = Object.freeze([
-  "isolated_account_bootstrap",
-  "distinct_principal_and_personal_mind",
-  "cross_session_isolation",
-  "private_metadata_non_enumeration",
-  "public_baseline_without_membership",
-  "unlisted_exact_without_catalog_membership",
-  "private_visibility_immediate_web_mcp_revoke",
-  "invitation_accept_reader_access",
-  "editor_role_current_access",
-  "single_owner_atomic_transfer",
-  "persistence_after_redeploy",
-  "membership_revoke_next_request_web_mcp_history",
-  "ephemeral_probe_cleanup",
-]);
+const ASSERTIONS = UAT_ASSERTION_IDS;
 
 function safeCode(value) {
   return typeof value === "string" && /^[a-z][a-z0-9_]{0,63}$/u.test(value) ? value : "unexpected_response";

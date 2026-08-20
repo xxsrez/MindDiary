@@ -2,6 +2,22 @@ import { createHash } from "node:crypto";
 
 export const MCP_PROTOCOL = "2026-07-28";
 
+export const UAT_ASSERTION_IDS = Object.freeze([
+  "isolated_account_bootstrap",
+  "distinct_principal_and_personal_mind",
+  "cross_session_isolation",
+  "private_metadata_non_enumeration",
+  "public_baseline_without_membership",
+  "unlisted_exact_without_catalog_membership",
+  "private_visibility_immediate_web_mcp_revoke",
+  "invitation_accept_reader_access",
+  "editor_role_current_access",
+  "single_owner_atomic_transfer",
+  "persistence_after_redeploy",
+  "membership_revoke_next_request_web_mcp_history",
+  "ephemeral_probe_cleanup",
+]);
+
 export const SYNTHETIC_ASSERTION_IDS = Object.freeze([
   "activation.test-only-composition",
   "bootstrap.distinct-ordinary-principals",
@@ -35,6 +51,20 @@ export const SYNTHETIC_ASSERTION_IDS = Object.freeze([
   "cleanup.background-work-drained",
   "cleanup.negative-state-scan",
   "production-negative.no-synthetic-authority",
+]);
+
+const EVIDENCE_ASSERTION_IDS = new Set([
+  ...UAT_ASSERTION_IDS,
+  ...SYNTHETIC_ASSERTION_IDS,
+]);
+
+const INTERNAL_ID_PATTERNS = Object.freeze([
+  /^(?:principal|space|mind|revision|token|grant|invitation|membership|account|binding|audit|outbox|impact|request|job)_[a-z0-9]/iu,
+  /^(?:job-(?:index|export|invitation)|deleted-principal|background-request|download-request)_[a-z0-9]/iu,
+  /^md_oauth_(?:client|request|grant|code|family|access_record|refresh_record)_[a-z0-9]/iu,
+  /^personal-[0-9a-f]{8}-[0-9a-f-]{27}$/iu,
+  /^(?:mdc1_|mdl1_|mdm1_)[a-z0-9_-]/iu,
+  /^(?:canonical\/sha256\/|exports\/)/iu,
 ]);
 
 export class ProbeFailure extends Error {
@@ -84,7 +114,9 @@ export function assertRedactedDocument(value) {
   const text = JSON.stringify(value);
   for (const pattern of [
     /mdp_v1_/iu,
+    /mdg_v1_/iu,
     /mdo_(?:code|access|refresh)_/iu,
+    /hmac-sha256:/iu,
     /OAI-Sites-Authorization/iu,
     /authorization["']?\s*:/iu,
     /cookie["']?\s*:/iu,
@@ -97,7 +129,8 @@ export function assertRedactedDocument(value) {
     const current = pending.pop();
     if (
       typeof current === "string" &&
-      /^(?:principal|space|token)_[a-z0-9]/iu.test(current)
+      !EVIDENCE_ASSERTION_IDS.has(current) &&
+      INTERNAL_ID_PATTERNS.some((pattern) => pattern.test(current))
     ) {
       fail("unsafe_evidence_document");
     }

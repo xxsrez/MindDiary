@@ -159,3 +159,66 @@ test("shared receipt guard rejects aliases, credentials, and internal identifier
     );
   }
 });
+
+test("shared receipt guard rejects every supported durable identifier category", async (t) => {
+  const forbidden = [
+    ["principal", "principal_private"],
+    ["space", "space_private"],
+    ["mind", "mind_private"],
+    ["revision", "revision_private"],
+    ["token", "token_private"],
+    ["grant", "grant_private"],
+    ["invitation", "invitation_private"],
+    ["membership", "membership_private"],
+    ["account", "account_private"],
+    ["binding", "binding_private"],
+    ["audit", "audit_private"],
+    ["outbox", "outbox_private"],
+    ["impact", "impact_private"],
+    ["request", "request_private"],
+    ["generic job", "job_private"],
+    ["index job", "job-index_private"],
+    ["export job", "job-export_private"],
+    ["invitation job", "job-invitation_private"],
+    ["deleted principal", "deleted-principal_private"],
+    ["background request", "background-request_private"],
+    ["download request", "download-request_private"],
+    ["OAuth client", "md_oauth_client_private"],
+    ["OAuth request", "md_oauth_request_private"],
+    ["OAuth grant", "md_oauth_grant_private"],
+    ["OAuth code record", "md_oauth_code_private"],
+    ["OAuth token family", "md_oauth_family_private"],
+    ["OAuth access record", "md_oauth_access_record_private"],
+    ["OAuth refresh record", "md_oauth_refresh_record_private"],
+    ["Personal Mind handle", "personal-12345678-1234-1234-1234-123456789abc"],
+    ["catalog cursor", "mdc1_private"],
+    ["content locator", "mdl1_private"],
+    ["Mind cursor", "mdm1_private"],
+    ["canonical object key", "canonical/sha256/private"],
+    ["export object key", "exports/private/object"],
+    ["export bearer", "mdg_v1_private"],
+    ["token verifier", "hmac-sha256:v1:private"],
+  ];
+  for (const [label, value] of forbidden) {
+    await t.test(label, () => {
+      assert.throws(
+        () => assertRedactedDocument({ value }),
+        (error) => error instanceof ProbeFailure && error.code === "unsafe_evidence_document",
+      );
+    });
+  }
+});
+
+test("shared receipt guard permits only the closed assertion IDs and opaque evidence fingerprints", () => {
+  assert.doesNotThrow(() => assertRedactedDocument({
+    run_fingerprint: `run-${"1".repeat(32)}`,
+    actor_fingerprints: [
+      `actor-${"2".repeat(32)}`,
+      `actor-${"3".repeat(32)}`,
+    ],
+    assertions: [
+      { id: "membership_revoke_next_request_web_mcp_history", status: "passed" },
+      { id: "bootstrap.synthetic-binding-namespace", status: "passed" },
+    ],
+  }));
+});

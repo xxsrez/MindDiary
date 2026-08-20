@@ -112,9 +112,13 @@ deploy и не делает external canary production evidence.
 для evidence correlation, не кодируют alias/email/internal ID и не позволяют
 восстановить actor mapping вне transient test process.
 
-Receipt не содержит alias/email, `principal_id`, `space_id`, Personal Mind ID,
-token/grant/client secret, authorization header, cookie, content/query,
-storage row, raw request/response или mapping actor → internal identity.
+Receipt не содержит alias/email, internal principal/space/Mind/revision/token/
+grant/invitation/membership/account/binding/audit/outbox/job/request/impact ID,
+OAuth record ID, Personal Mind handle, content locator, object key,
+token/grant/client secret или verifier, authorization header, cookie,
+content/query, storage row, raw request/response или mapping actor → internal
+identity. Closed assertion IDs и independent `run-…`/`actor-…` fingerprints не
+считаются internal IDs.
 
 Automated OAuth/package receipt отдельно фиксирует exact MindDiary SHA, exact
 Marketplace/package snapshot, plugin version, client/version, protocol routes
