@@ -3,7 +3,7 @@
 Статус: accepted, обновлено 2026-08-20. OAuth Authorization Server, dual
 personal/OAuth MCP authentication, write step-up и connected-app revocation
 реализованы. Для Codex Desktop/CLI pilot 0.1 принят direct MCP package с OAuth
-при первом использовании. Blocking package/OAuth automation из ADR-0012 ещё не
+при первом использовании. Blocking package/OAuth automation из ADR-0012
 реализована; fresh external-account acceptance остаётся informational canary,
 а не release gate. Registered connector не входит в этот release path и
 остаётся возможным будущим ChatGPT Web/public-directory вариантом.
@@ -37,9 +37,9 @@ Repository candidate уже содержит:
 - connected-app list/revoke на `/settings/mcp` и account-deletion cleanup;
 - D1 migration и repository tests для positive и negative OAuth paths.
 
-Этот checkpoint — доказательство реализации, не полный release evidence.
-Blocking evidence требует direct package validation и automated OAuth/
-transport lifecycle на exact SHA; exact-SHA single-owner UAT lineage остаётся
+Этот checkpoint и executable gate — доказательство repository implementation,
+но не hosted release evidence. Blocking run требует direct package validation
+и automated OAuth/transport lifecycle на exact SHA; exact-SHA single-owner UAT lineage остаётся
 обязательной hosted проверкой. Fresh external-account install/read/write/
 revoke/reconnect — отдельный informational canary и prerequisite только для
 claim о проверенном external-host UX.
@@ -368,7 +368,9 @@ resource audience и token rotation остаются implementation details.
 
 ## Проверка и acceptance
 
-Release 0.1 блокирует automated exact-candidate matrix в fresh temporary
+Release 0.1 блокирует реализованная команда
+`npm run gate:oauth-direct-plugin -- --candidate-sha <exact-HEAD-sha>
+--evidence-out <private-temp-path>/evidence.json` в fresh temporary
 Codex/plugin context. Она не ограничивается прямым MCP curl и не переиспользует
 старый chat/cache snapshot. Synthetic identity может входить только через
 trusted authorize/consent seam test composition; package, OAuth client и MCP

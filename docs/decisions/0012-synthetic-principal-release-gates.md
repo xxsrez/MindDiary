@@ -132,8 +132,9 @@ Marketplace/package snapshot, plugin version, client/version, protocol routes
 - Synthetic gate доказывает application/protocol invariants, но не Sites или
   Desktop UI behavior; canaries сохраняют этот signal с честной
   `informational` классификацией.
-- MD-237 реализует synthetic multi-principal capability; пока MD-238 не
-  реализовал OAuth/package capability, соответствующая required row fail closed.
+- MD-237 реализует synthetic multi-principal capability, а MD-238 — отдельную
+  OAuth/package capability; обе required rows fail closed при unavailable,
+  failed либо неполном exact-candidate receipt.
 - Historical readiness criteria 1–29 и live slots `W/P/MI/CX/R` сохраняются до
   implementation change; их нельзя молча заменить synthetic receipt.
 

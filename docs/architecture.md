@@ -9,8 +9,8 @@ adapter реализован в repository candidate. Для Codex Desktop/CLI p
 принят direct MCP package с OAuth при первом использовании; fresh external-
 account install/OAuth lifecycle остаётся informational canary. Blocking release
 evidence теперь дают отдельные synthetic multi-principal и automated
-OAuth/package gates по ADR-0012; synthetic harness реализован, OAuth/package
-harness ещё не завершён.
+OAuth/package gates по ADR-0012; оба harness реализованы. Fresh external
+Codex/Desktop OAuth UI остаётся informational canary, а не blocking evidence.
 
 ## Драйверы и ограничения
 

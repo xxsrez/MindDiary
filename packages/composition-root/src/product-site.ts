@@ -129,6 +129,8 @@ export interface ProductSiteRuntimeOptions {
   readonly locatorKey: Uint8Array;
   readonly exportDownloadVerifierKey: Uint8Array;
   readonly csrfKey: Uint8Array;
+  /** Constructor-only clock dependency; Product Worker uses the system clock. */
+  readonly now?: () => Date;
   readonly observabilityWriter?: SitesObservabilityWriter;
   readonly schedule: (work: Readonly<{ readonly kind: string; readonly id: string }>) => void | Promise<void>;
 }
@@ -400,7 +402,8 @@ export async function createProductSiteRuntime(
   if (!/^[a-z][a-z0-9-]{0,63}$/u.test(identityBindingProvider)) {
     throw new TypeError("identityBindingProvider must be a bounded provider name");
   }
-  const clock = Object.freeze({ now: () => new Date().toISOString() as never });
+  const now = options.now ?? (() => new Date());
+  const clock = Object.freeze({ now: () => now().toISOString() as never });
   const pendingIndexJobs: string[] = [];
   const pendingAuditOutbox: string[] = [];
   const pendingInvitationExpiry: string[] = [];
@@ -610,6 +613,7 @@ export async function createProductSiteRuntime(
     publicOrigin: options.publicOrigin,
     verifierKey: options.tokenVerifierKey,
     authorizationTokens: metadata,
+    now,
     async resolveIdentity(request) {
       const identity = await resolveIdentity(request);
       return identity.kind === "authenticated"

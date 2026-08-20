@@ -566,11 +566,13 @@ evidence:
         - client
         - client_version
         - marketplace_candidate_sha
+        - marketplace_tree_sha
         - plugin_version
         - plugin_snapshot_sha256
         - protocol_version
         - route
         - assertions
+        - external_ui_canary
         - artifact_sha256
         - screenshot_ref
         - failure_class
@@ -722,9 +724,11 @@ evidence:
         kind: runtime_capability
         capability: mind-diary/oauth-direct-plugin-smoke/v1
         implementation:
+          command: [npm, run, gate:oauth-direct-plugin, "--", --candidate-sha, "{candidate_sha}", --evidence-out, "{private-temp-evidence-path}"]
           specification: docs/specs/plugin-connector.md
           decision: docs/decisions/0012-synthetic-principal-release-gates.md
           context: fresh-temporary-codex-plugin
+          marketplace_source: clean-sibling-checkout
         inputs:
           candidate_sha: { value_from: run.candidate_sha }
           route: { literal: /api/mcp }
@@ -737,7 +741,7 @@ evidence:
         media_type: application/json
         storage: content-addressed-reference
         max_bytes: 2097152
-        required_fields: [status, candidate_sha, marketplace_candidate_sha, plugin_version, plugin_snapshot_sha256, client, client_version, assertions, artifact_sha256]
+        required_fields: [status, candidate_sha, marketplace_candidate_sha, marketplace_tree_sha, plugin_version, plugin_snapshot_sha256, client, client_version, route, binding_namespace, external_ui_canary, assertions, artifact_sha256]
       redaction_policy: release-evidence-default
     - id: uat.exact-artifact-lineage
       stage: uat

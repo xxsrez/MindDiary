@@ -9,7 +9,7 @@ repository candidate. Для Codex Desktop/CLI pilot 0.1 принят direct MCP
 с OAuth при первом использовании; fresh external-account lifecycle ещё не
 является blocking release evidence и остаётся informational canary. Blocking
 multi-principal и OAuth/package automation принята ADR-0012, но её harness
-implementation ещё не завершена. Machine-readable OpenAPI и MCP JSON Schemas
+implementation теперь завершена. Machine-readable OpenAPI и MCP JSON Schemas
 проверяются на соответствие этому документу и реализации.
 
 ## Назначение и граница

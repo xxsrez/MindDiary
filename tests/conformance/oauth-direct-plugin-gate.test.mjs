@@ -1,0 +1,97 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import {
+  ProbeFailure,
+  canonical,
+  digest,
+} from "../../scripts/lib/multi-principal-probe-core.mjs";
+import {
+  EXPECTED_D1_SCHEMA_GROUPS,
+  FakeD1Database,
+} from "../../scripts/lib/fake-sites-storage.mjs";
+import {
+  OAUTH_DIRECT_PLUGIN_ASSERTION_IDS,
+  createEvidence,
+  parseCli,
+} from "../../scripts/run-oauth-direct-plugin-probe.mjs";
+
+test("OAuth direct-plugin receipt is closed, redacted, and canonically hashed", () => {
+  const input = {
+    candidate: "a".repeat(40),
+    marketplace: {
+      head: "b".repeat(40),
+      tree: "c".repeat(40),
+      pluginVersion: "0.1.0+fixture",
+      snapshotSha256: `sha256:${"d".repeat(64)}`,
+    },
+    startedAt: "2026-08-20T00:00:00.000Z",
+    completedAt: "2026-08-20T00:00:01.000Z",
+    passed: new Set(OAUTH_DIRECT_PLUGIN_ASSERTION_IDS),
+  };
+  const receipt = createEvidence(input);
+  const { artifact_sha256: artifact, ...unsigned } = receipt;
+  assert.equal(artifact, digest(canonical(unsigned)));
+  assert.equal(receipt.external_ui_canary.status, "not-run");
+  assert.equal(receipt.external_ui_canary.requirement, "informational");
+  assert.deepEqual(
+    receipt.assertions.map(({ id, status }) => [id, status]),
+    OAUTH_DIRECT_PLUGIN_ASSERTION_IDS.map((id) => [id, "passed"]),
+  );
+  const serialized = JSON.stringify(receipt);
+  for (const forbidden of [
+    "https://",
+    "@synthetic.invalid",
+    "mdo_access_",
+    "mdo_refresh_",
+    "mdo_code_",
+    "mdp_v1_",
+    "principal_private",
+    "space_private",
+    "revision_private",
+  ]) assert.equal(serialized.includes(forbidden), false, forbidden);
+});
+
+test("OAuth direct-plugin CLI exposes no identity, scope, token, route, or runtime switch", () => {
+  assert.deepEqual(parseCli([
+    "--evidence-out",
+    "/tmp/evidence.json",
+    "--marketplace-root",
+    "/tmp/marketplace",
+  ]), {
+    evidence_out: "/tmp/evidence.json",
+    marketplace_root: "/tmp/marketplace",
+  });
+  for (const option of [
+    "--email",
+    "--principal-id",
+    "--scope",
+    "--token",
+    "--route",
+    "--enable-oauth-test-user",
+  ]) {
+    assert.throws(
+      () => parseCli(["--evidence-out", "/tmp/evidence.json", option, "value"]),
+      (error) => error instanceof ProbeFailure && error.code === "unsupported_cli_argument",
+    );
+  }
+});
+
+test("shared Fake D1 fails closed for incomplete and unknown OAuth SQL", async () => {
+  const incomplete = new FakeD1Database();
+  await incomplete.prepare(EXPECTED_D1_SCHEMA_GROUPS.oauth[0]).run();
+  await assert.rejects(
+    incomplete
+      .prepare("/*md-oauth-client-read*/ SELECT * FROM md_oauth_registered_clients WHERE id = ?")
+      .bind("fixture")
+      .all(),
+    /FakeD1 oauth schema is incomplete/u,
+  );
+
+  const complete = new FakeD1Database();
+  await complete.batch(EXPECTED_D1_SCHEMA_GROUPS.oauth.map((sql) => complete.prepare(sql)));
+  await assert.rejects(
+    complete.prepare("/*md-oauth-unknown*/ SELECT 1").all(),
+    /unsupported FakeD1 all statement/u,
+  );
+});
