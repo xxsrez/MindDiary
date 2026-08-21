@@ -1,4 +1,5 @@
 import {
+  MIND_DIARY_FAVICON_LINKS,
   MIND_DIARY_UI_ASSETS,
   escapeUntrustedText,
   installMindDiaryUiShell,
@@ -348,6 +349,7 @@ export function renderAuthenticatedOnboardingDocument(
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
+  ${MIND_DIARY_FAVICON_LINKS}
   <title>${title} — Mind Diary</title>
   <link rel="stylesheet" href="${MIND_DIARY_UI_ASSETS.tokens}">
   <link rel="stylesheet" href="${MIND_DIARY_ONBOARDING_ASSETS.shellStyles}">

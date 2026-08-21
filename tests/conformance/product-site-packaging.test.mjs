@@ -57,6 +57,11 @@ test("product Worker owns the operable UI and scopes the one-time Bearer to MCP 
   assert.match(http, /renderMindDiaryUiShellDocument/);
   assert.match(http, /renderMcpTokenManagementDocument/);
   assert.match(http, /\/settings\/mcp/);
+  assert.match(http, /pathname === "\/favicon\.ico"/u);
+  assert.match(http, /pathname === "\/favicon\.svg"/u);
+  assert.match(http, /pathname === "\/favicon-32x32\.png"/u);
+  assert.match(http, /pathname === "\/apple-touch-icon\.png"/u);
+  assert.match(assets, /docs\/assets\/brand\/mind-diary-app-icon\.svg/u);
   assert.match(assets, /\/api\/v1\/account/);
   assert.match(assets, /\/api\/v1\/mcp-tokens/);
   assert.equal((assets.match(/authorization:"Bearer "\+token/gu) ?? []).length, 1);

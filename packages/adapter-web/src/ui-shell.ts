@@ -1,10 +1,19 @@
 export const MIND_DIARY_UI_ASSETS = Object.freeze({
   lockup: "/brand/mind-diary-lockup.svg",
   mark: "/brand/mind-diary-mark.svg",
+  faviconIco: "/favicon.ico",
+  faviconSvg: "/favicon.svg",
+  faviconPng: "/favicon-32x32.png",
+  appleTouchIcon: "/apple-touch-icon.png",
   tokens: "/brand/mind-diary-tokens.css",
   shellStyles: "/ui/mind-diary-shell.css",
   shellClient: "/ui/mind-diary-shell-client.js",
 });
+
+export const MIND_DIARY_FAVICON_LINKS = `<link rel="icon" href="${MIND_DIARY_UI_ASSETS.faviconIco}" sizes="16x16 32x32">
+  <link rel="icon" href="${MIND_DIARY_UI_ASSETS.faviconSvg}" type="image/svg+xml" sizes="any">
+  <link rel="icon" href="${MIND_DIARY_UI_ASSETS.faviconPng}" type="image/png" sizes="32x32">
+  <link rel="apple-touch-icon" href="${MIND_DIARY_UI_ASSETS.appleTouchIcon}" type="image/png" sizes="180x180">` as const;
 
 /**
  * Fraunces and Inter files are not shipped by the current repository. The UI
@@ -280,6 +289,7 @@ export function renderMindDiaryUiShellDocument(model: MindDiaryUiShellModel): st
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
+  ${MIND_DIARY_FAVICON_LINKS}
   <title>${title} — Mind Diary UAT</title>
   <link rel="stylesheet" href="${MIND_DIARY_UI_ASSETS.tokens}">
   <link rel="stylesheet" href="${MIND_DIARY_UI_ASSETS.shellStyles}">
@@ -378,6 +388,7 @@ export function renderMindDiaryRoutePageDocument(model: MindDiaryRoutePageModel)
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
+  ${MIND_DIARY_FAVICON_LINKS}
   <title>${escapeUntrustedText(model.title)} — Mind Diary UAT</title>
   <link rel="stylesheet" href="${MIND_DIARY_UI_ASSETS.tokens}">
   <link rel="stylesheet" href="${MIND_DIARY_UI_ASSETS.shellStyles}">

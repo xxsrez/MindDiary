@@ -289,9 +289,12 @@ async function authorize(connector, clientId, scopes = "content:read") {
   assert.equal(consent.status, 200);
   assert.equal(
     consent.headers.get("content-security-policy"),
-    "default-src 'none'; style-src 'unsafe-inline'; form-action 'self' https://chatgpt.com; frame-ancestors 'none'; base-uri 'none'",
+    "default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; form-action 'self' https://chatgpt.com; frame-ancestors 'none'; base-uri 'none'",
   );
-  const requestId = /name="request_id" value="([^"]+)"/u.exec(await consent.text())?.[1];
+  const consentBody = await consent.text();
+  assert.match(consentBody, /rel="icon" href="\/favicon\.svg" type="image\/svg\+xml" sizes="any"/u);
+  assert.match(consentBody, /rel="apple-touch-icon" href="\/apple-touch-icon\.png" type="image\/png" sizes="180x180"/u);
+  const requestId = /name="request_id" value="([^"]+)"/u.exec(consentBody)?.[1];
   assert.ok(requestId);
   const completed = await connector.fetch(new Request(`${ORIGIN}/oauth/authorize`, {
     method: "POST",

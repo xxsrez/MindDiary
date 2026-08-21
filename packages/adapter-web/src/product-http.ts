@@ -54,8 +54,12 @@ import {
 import {
   PRODUCT_COLLABORATION_CLIENT_JAVASCRIPT,
   PRODUCT_ORDINARY_MINDS_CLIENT_JAVASCRIPT,
+  PRODUCT_UI_APPLE_TOUCH_ICON_PNG,
   PRODUCT_VISIBILITY_CATALOG_CLIENT_JAVASCRIPT,
   PRODUCT_UI_CLIENT_JAVASCRIPT,
+  PRODUCT_UI_FAVICON_ICO,
+  PRODUCT_UI_FAVICON_PNG,
+  PRODUCT_UI_FAVICON_SVG,
   PRODUCT_UI_LOCKUP_SVG,
   PRODUCT_UI_MARK_SVG,
   PRODUCT_UI_SHELL_CSS,
@@ -627,7 +631,11 @@ function uiToken(value: unknown): McpTokenUiToken | null {
   });
 }
 
-function staticAsset(pathname: string): { readonly body: string; readonly type: string } | null {
+function staticAsset(pathname: string): { readonly body: BodyInit; readonly type: string } | null {
+  if (pathname === "/favicon.ico") return { body: PRODUCT_UI_FAVICON_ICO, type: "image/x-icon" };
+  if (pathname === "/favicon.svg") return { body: PRODUCT_UI_FAVICON_SVG, type: "image/svg+xml; charset=utf-8" };
+  if (pathname === "/favicon-32x32.png") return { body: PRODUCT_UI_FAVICON_PNG, type: "image/png" };
+  if (pathname === "/apple-touch-icon.png") return { body: PRODUCT_UI_APPLE_TOUCH_ICON_PNG, type: "image/png" };
   if (pathname === "/brand/mind-diary-tokens.css") return { body: PRODUCT_UI_TOKENS_CSS, type: "text/css; charset=utf-8" };
   if (pathname === "/ui/mind-diary-shell.css") return { body: `${PRODUCT_UI_SHELL_CSS}\n${PRODUCT_UI_PILOT_SHELL_CSS}`, type: "text/css; charset=utf-8" };
   if (pathname === "/brand/mind-diary-lockup.svg") return { body: PRODUCT_UI_LOCKUP_SVG, type: "image/svg+xml; charset=utf-8" };

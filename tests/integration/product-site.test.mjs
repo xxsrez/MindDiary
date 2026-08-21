@@ -12,6 +12,12 @@ import {
 
 const origin = "https://mind-diary.example";
 
+function pngDimensions(bytes) {
+  assert.deepEqual([...bytes.subarray(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10]);
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  return [view.getUint32(16), view.getUint32(20)];
+}
+
 test("product web origin accepts exact loopback dev without weakening hosted HTTPS", async () => {
   const local = createProductWebHttpHandler({
     applicationOrigin: "http://localhost:3000",
@@ -153,6 +159,10 @@ test("product root and MCP setup render live control projections and fixed same-
   assert.match(rootHtml, /data-mind-diary-shell/);
   assert.match(rootHtml, /Product Owner/);
   assert.match(rootHtml, /href="\/settings\/mcp"/);
+  assert.match(rootHtml, /rel="icon" href="\/favicon\.ico" sizes="16x16 32x32"/);
+  assert.match(rootHtml, /rel="icon" href="\/favicon\.svg" type="image\/svg\+xml" sizes="any"/);
+  assert.match(rootHtml, /rel="icon" href="\/favicon-32x32\.png" type="image\/png" sizes="32x32"/);
+  assert.match(rootHtml, /rel="apple-touch-icon" href="\/apple-touch-icon\.png" type="image\/png" sizes="180x180"/);
   assert.doesNotMatch(rootHtml, /principal_one|revision_personal/);
 
   const tokens = await handler(new Request(`${origin}/settings/mcp`));
@@ -177,6 +187,7 @@ test("product root and MCP setup render live control projections and fixed same-
   assert.doesNotMatch(tokenHtml, /synthetic-show-once-value|verifier|principal_one/i);
 
   for (const [path, contentType, marker] of [
+    ["/favicon.svg", "image/svg+xml; charset=utf-8", "#6C4BB6"],
     ["/ui/mind-diary-shell.css", "text/css; charset=utf-8", "md-token-grid"],
     ["/brand/mind-diary-lockup.svg", "image/svg+xml; charset=utf-8", "Mind Diary logo"],
     ["/ui/mind-diary-onboarding-client.js", "text/javascript; charset=utf-8", "/api/v1/account"],
@@ -188,6 +199,29 @@ test("product root and MCP setup render live control projections and fixed same-
     assert.equal(response.headers.get("content-type"), contentType);
     assert.match(await response.text(), new RegExp(marker.replaceAll("/", "\\/")));
   }
+  for (const [path, contentType, expectedDimensions] of [
+    ["/favicon-32x32.png", "image/png", [32, 32]],
+    ["/apple-touch-icon.png", "image/png", [180, 180]],
+  ]) {
+    const response = await handler(new Request(`${origin}${path}`));
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("content-type"), contentType);
+    assert.deepEqual(pngDimensions(new Uint8Array(await response.arrayBuffer())), expectedDimensions);
+    const hardRefresh = await handler(new Request(`${origin}${path}`, {
+      headers: { "cache-control": "no-cache" },
+    }));
+    assert.equal(hardRefresh.status, 200);
+  }
+  const icon = await handler(new Request(`${origin}/favicon.ico`, {
+    headers: { "cache-control": "no-cache" },
+  }));
+  assert.equal(icon.status, 200);
+  assert.equal(icon.headers.get("content-type"), "image/x-icon");
+  const iconBytes = new Uint8Array(await icon.arrayBuffer());
+  assert.deepEqual([...iconBytes.subarray(0, 6)], [0, 0, 1, 0, 2, 0]);
+  const iconHead = await handler(new Request(`${origin}/favicon.ico`, { method: "HEAD" }));
+  assert.equal(iconHead.status, 200);
+  assert.equal((await iconHead.arrayBuffer()).byteLength, 0);
   const wrongAssetMethod = await handler(new Request(`${origin}/ui/mind-diary-shell.css`, { method: "POST" }));
   assert.equal(wrongAssetMethod.status, 405);
   assert.deepEqual(calls, ["get_session", "list_minds", "get_session", "list_mcp_tokens"]);

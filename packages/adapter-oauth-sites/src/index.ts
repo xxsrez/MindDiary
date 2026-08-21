@@ -391,6 +391,8 @@ function escapeHtml(value: string): string {
     .replaceAll("'", "&#39;");
 }
 
+const MIND_DIARY_FAVICON_LINKS = `<link rel="icon" href="/favicon.ico" sizes="16x16 32x32"><link rel="icon" href="/favicon.svg" type="image/svg+xml" sizes="any"><link rel="icon" href="/favicon-32x32.png" type="image/png" sizes="32x32"><link rel="apple-touch-icon" href="/apple-touch-icon.png" type="image/png" sizes="180x180">` as const;
+
 function consentPage(input: {
   readonly requestId: string;
   readonly clientName: string;
@@ -400,13 +402,13 @@ function consentPage(input: {
   const access = input.scopes.includes("content:write")
     ? "Read and write Memory content in the Minds you can currently access. Writes commit a new immutable revision immediately."
     : "Read Memory content in the Minds you can currently access. This connection cannot write.";
-  const body = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Connect Mind Diary</title><style>body{margin:0;background:#fffaf2;color:#182642;font:16px/1.5 system-ui,sans-serif}main{width:min(38rem,calc(100% - 2rem));margin:8vh auto;padding:2rem;border:1px solid #c9c0b6;border-radius:1rem;background:white}h1{font:700 2rem/1.1 Georgia,serif}p{margin:1rem 0}.scope{padding:1rem;border-radius:.75rem;background:#f3edf9}.actions{display:flex;gap:.75rem;justify-content:flex-end;margin-top:2rem}button{min-height:2.75rem;padding:.6rem 1rem;border:2px solid #182642;border-radius:.65rem;font:inherit;font-weight:700;background:white;cursor:pointer}.approve{color:white;background:#6e3b8f;border-color:#6e3b8f}</style></head><body><main><p>Mind Diary connector</p><h1>Connect ${escapeHtml(input.clientName)}?</h1><p class="scope">${escapeHtml(access)}</p><p>You can revoke this connection later from <strong>MCP setup</strong>. Membership and account settings are never granted.</p><form method="post" action="/oauth/authorize"><input type="hidden" name="request_id" value="${escapeHtml(input.requestId)}"><div class="actions"><button name="decision" value="deny">Cancel</button><button class="approve" name="decision" value="approve">Connect</button></div></form></main></body></html>`;
+  const body = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">${MIND_DIARY_FAVICON_LINKS}<title>Connect Mind Diary</title><style>body{margin:0;background:#fffaf2;color:#182642;font:16px/1.5 system-ui,sans-serif}main{width:min(38rem,calc(100% - 2rem));margin:8vh auto;padding:2rem;border:1px solid #c9c0b6;border-radius:1rem;background:white}h1{font:700 2rem/1.1 Georgia,serif}p{margin:1rem 0}.scope{padding:1rem;border-radius:.75rem;background:#f3edf9}.actions{display:flex;gap:.75rem;justify-content:flex-end;margin-top:2rem}button{min-height:2.75rem;padding:.6rem 1rem;border:2px solid #182642;border-radius:.65rem;font:inherit;font-weight:700;background:white;cursor:pointer}.approve{color:white;background:#6e3b8f;border-color:#6e3b8f}</style></head><body><main><p>Mind Diary connector</p><h1>Connect ${escapeHtml(input.clientName)}?</h1><p class="scope">${escapeHtml(access)}</p><p>You can revoke this connection later from <strong>MCP setup</strong>. Membership and account settings are never granted.</p><form method="post" action="/oauth/authorize"><input type="hidden" name="request_id" value="${escapeHtml(input.requestId)}"><div class="actions"><button name="decision" value="deny">Cancel</button><button class="approve" name="decision" value="approve">Connect</button></div></form></main></body></html>`;
   return new Response(body, {
     status: 200,
     headers: {
       "cache-control": "no-store",
       "content-type": "text/html; charset=utf-8",
-      "content-security-policy": `default-src 'none'; style-src 'unsafe-inline'; form-action 'self' ${input.redirectOrigin}; frame-ancestors 'none'; base-uri 'none'`,
+      "content-security-policy": `default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; form-action 'self' ${input.redirectOrigin}; frame-ancestors 'none'; base-uri 'none'`,
       "referrer-policy": "no-referrer",
       "x-content-type-options": "nosniff",
     },
