@@ -239,13 +239,14 @@ test("document and CSS provide responsive keyboard and high-contrast foundations
 test("anonymous onboarding exposes only the Sites auth entry, never the control plane", () => {
   const html = renderAuthenticatedOnboarding({
     kind: "anonymous",
-    authEntryPath: "/auth/sign-in?return_to=%2Fme",
+    authEntryPath: "/signin-with-chatgpt",
   });
 
   assert.match(html, /data-session-state="anonymous"/);
   assert.match(html, /data-sites-auth-entry/);
   assert.match(html, />Sign in with ChatGPT</);
-  assert.match(html, /href="\/auth\/sign-in\?return_to=%2Fme"/);
+  assert.match(html, /href="\/signin-with-chatgpt"/);
+  assert.doesNotMatch(html, /return_to|\/auth\/sign-in/u);
   assert.doesNotMatch(html, /data-control-plane|primary-navigation|data-personal-mind-card|data-profile-form/);
 
   const unsafe = renderAuthenticatedOnboarding({

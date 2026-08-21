@@ -212,6 +212,7 @@ const PRODUCT_UI_ROUTES = new Set([
 const RESERVED_UI_HANDLES = new Set([
   "api",
   "brand",
+  "callback",
   "help",
   "invitations",
   "mcp",
@@ -219,8 +220,11 @@ const RESERVED_UI_HANDLES = new Set([
   "minds",
   "public",
   "settings",
+  "signin-with-chatgpt",
+  "signout-with-chatgpt",
   "ui",
 ]);
+const SITES_SIGN_IN_PATH = "/signin-with-chatgpt";
 const MAX_JSON_BYTES = 64 * 1024;
 const SAFE_HEADERS = Object.freeze({
   "cache-control": "no-store",
@@ -1149,7 +1153,16 @@ export function createProductWebHttpHandler(
       identity = { kind: "unavailable" };
     }
     const requestId = safeRequestId(identity);
-    if (identity.kind === "denied") return errorResponse(401, "authentication_required", requestId);
+    if (identity.kind === "denied") {
+      if (isUi && (request.method === "GET" || request.method === "HEAD")) {
+        const response = html(renderAuthenticatedOnboardingDocument({
+          kind: "anonymous",
+          authEntryPath: SITES_SIGN_IN_PATH,
+        }));
+        return request.method === "HEAD" ? new Response(null, response) : response;
+      }
+      return errorResponse(401, "authentication_required", requestId);
+    }
     if (identity.kind === "unavailable") return errorResponse(503, "identity_binding_unavailable", requestId, true);
 
     if (isUi) {

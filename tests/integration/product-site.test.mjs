@@ -25,13 +25,75 @@ test("product web origin accepts exact loopback dev without weakening hosted HTT
     csrf: { issue: () => "unused", verify: () => false },
     control: { execute: () => { throw new Error("must not execute"); } },
   });
-  assert.equal((await local(new Request("http://localhost:3000/"))).status, 401);
+  assert.equal((await local(new Request("http://localhost:3000/"))).status, 200);
   assert.throws(() => createProductWebHttpHandler({
     applicationOrigin: "http://mind-diary.example",
     resolveIdentity: () => ({ kind: "denied" }),
     csrf: { issue: () => "unused", verify: () => false },
     control: { execute: () => { throw new Error("must not execute"); } },
   }), /canonical HTTPS or loopback HTTP origin/u);
+});
+
+test("signed-out UI gets one safe Sites entry while REST and identity outages remain machine errors", async () => {
+  let csrfIssues = 0;
+  let controlCalls = 0;
+  const denied = createProductWebHttpHandler({
+    applicationOrigin: origin,
+    resolveIdentity: () => ({ kind: "denied" }),
+    csrf: {
+      issue: () => { csrfIssues += 1; return "must-not-be-issued"; },
+      verify: () => false,
+    },
+    control: { execute: () => { controlCalls += 1; throw new Error("must not execute"); } },
+  });
+
+  let canonicalShell;
+  for (const path of ["/", "/me", "/minds", "/public", "/invitations", "/settings/account", "/settings/mcp", "/help", "/unknown-handle"]) {
+    const response = await denied(new Request(`${origin}${path}`));
+    assert.equal(response.status, 200, path);
+    assert.equal(response.headers.get("content-type"), "text/html; charset=utf-8", path);
+    assert.equal(response.headers.get("cache-control"), "no-store", path);
+    assert.match(response.headers.get("content-security-policy"), /form-action 'self'/u, path);
+    const body = await response.text();
+    canonicalShell ??= body;
+    assert.equal(body, canonicalShell, path);
+    assert.match(body, /data-session-state="anonymous"/u, path);
+    assert.match(body, /href="\/signin-with-chatgpt"/u, path);
+    assert.doesNotMatch(body, /mind-diary-csrf-token|data-control-plane|principal_one|revision_personal|unknown-handle|return_to|\/auth\/sign-in/u, path);
+
+    const head = await denied(new Request(`${origin}${path}`, { method: "HEAD" }));
+    assert.equal(head.status, 200, `${path} HEAD`);
+    assert.equal(head.headers.get("content-type"), "text/html; charset=utf-8", `${path} HEAD`);
+    assert.equal(await head.text(), "", `${path} HEAD`);
+  }
+
+  const api = await denied(new Request(`${origin}/api/v1/session`));
+  assert.equal(api.status, 401);
+  assert.equal(api.headers.get("content-type"), "application/json; charset=utf-8");
+  assert.equal((await api.json()).error.code, "authentication_required");
+
+  const deniedUiMutation = await denied(new Request(`${origin}/me`, { method: "POST" }));
+  assert.equal(deniedUiMutation.status, 401);
+  assert.equal((await deniedUiMutation.json()).error.code, "authentication_required");
+  assert.equal(csrfIssues, 0);
+  assert.equal(controlCalls, 0);
+
+  for (const platformPath of ["/signin-with-chatgpt", "/signout-with-chatgpt", "/callback", "/auth/sign-in"]) {
+    assert.equal(await denied(new Request(`${origin}${platformPath}`)), null, platformPath);
+  }
+
+  const unavailable = createProductWebHttpHandler({
+    applicationOrigin: origin,
+    resolveIdentity: () => ({ kind: "unavailable" }),
+    csrf: { issue: () => "unused", verify: () => false },
+    control: { execute: () => { throw new Error("must not execute"); } },
+  });
+  for (const path of ["/", "/api/v1/session"]) {
+    const response = await unavailable(new Request(`${origin}${path}`));
+    assert.equal(response.status, 503, path);
+    assert.equal(response.headers.get("content-type"), "application/json; charset=utf-8", path);
+    assert.equal((await response.json()).error.code, "identity_binding_unavailable", path);
+  }
 });
 const registeredActor = Object.freeze({
   kind: "registered_principal",

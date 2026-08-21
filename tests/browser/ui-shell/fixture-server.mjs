@@ -71,7 +71,7 @@ function onboardingModel(pathname, state) {
   if (pathname === "/sign-in") {
     return {
       kind: "anonymous",
-      authEntryPath: "/auth/sign-in?return_to=%2Fme",
+      authEntryPath: "/signin-with-chatgpt",
     };
   }
   if (pathname === "/welcome") {
@@ -181,7 +181,7 @@ const server = createServer(async (request, response) => {
       );
       return;
     }
-    if (url.pathname === "/auth/sign-in") {
+    if (url.pathname === "/signin-with-chatgpt") {
       sendText(response, 200, "text/html; charset=utf-8", "<!doctype html><title>Fixture auth entry</title><h1>Fixture auth entry</h1>");
       return;
     }
