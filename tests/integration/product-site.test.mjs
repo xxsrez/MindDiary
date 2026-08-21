@@ -199,6 +199,11 @@ test("product root and MCP setup render live control projections and fixed same-
     assert.equal(response.headers.get("content-type"), contentType);
     assert.match(await response.text(), new RegExp(marker.replaceAll("/", "\\/")));
   }
+  const hostedShellCss = await (await handler(new Request(`${origin}/ui/mind-diary-shell.css`))).text();
+  assert.match(hostedShellCss, /\.md-setup-card--single\{grid-template-columns:minmax\(0,1fr\)\}/u);
+  assert.match(hostedShellCss, /\.md-setup-card pre\{[^}]*max-width:100%[^}]*overflow:auto[^}]*white-space:pre-wrap[^}]*overflow-wrap:anywhere/u);
+  assert.match(hostedShellCss, /@media\(max-width:52rem\)/u);
+  assert.match(hostedShellCss, /\.md-setup-card\{grid-template-columns:minmax\(0,1fr\)\}/u);
   for (const [path, contentType, expectedDimensions] of [
     ["/favicon-32x32.png", "image/png", [32, 32]],
     ["/apple-touch-icon.png", "image/png", [180, 180]],

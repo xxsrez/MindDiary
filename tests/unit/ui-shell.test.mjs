@@ -341,6 +341,7 @@ test("authenticated My Mind card exposes only /me and Personal-safe management",
   assert.match(html, /data-profile-version="3"/);
   assert.match(html, /does not edit Memories or create a content revision/i);
   assert.match(html, /Create your first useful Memory/u);
+  assert.match(html, /class="md-setup-card md-setup-card--single"/u);
   assert.match(html, /data-copy-code="mind-diary-onboarding-starter-playbook"/u);
   assert.match(html, /data-copy-code="mind-diary-onboarding-concierge-playbook"/u);
   assert.match(html, /only UTF-8 Markdown/u);
@@ -348,6 +349,11 @@ test("authenticated My Mind card exposes only /me and Personal-safe management",
   assert.doesNotMatch(html, /space_handle|hidden handle|data-(?:share|visibility|transfer|delete)/i);
   assert.doesNotMatch(html, /<(?:textarea|iframe)\b|contenteditable|type="file"/i);
   assert.doesNotMatch(html, /<button[^>]*>[^<]*(?:Share|Visibility|Transfer|Delete)/i);
+
+  assert.match(shellCss, /\.md-setup-card > \*\s*\{\s*min-width:\s*0;/u);
+  assert.match(shellCss, /\.md-setup-card--single\s*\{\s*grid-template-columns:\s*minmax\(0, 1fr\)/u);
+  assert.match(shellCss, /\.md-setup-card pre\s*\{[^}]*max-width:\s*100%[^}]*overflow:\s*auto[^}]*white-space:\s*pre-wrap[^}]*overflow-wrap:\s*anywhere/su);
+  assert.match(shellCss, /@media \(max-width: 58rem\)[\s\S]*?\.md-setup-card\s*\{\s*grid-template-columns:\s*minmax\(0, 1fr\)/u);
 });
 
 test("profile states distinguish saving, success, transient failure, and stale conflict", () => {

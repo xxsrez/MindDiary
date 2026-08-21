@@ -298,7 +298,7 @@ function renderAuthenticated(
           </form>
         </section>
       </div>
-      <section class="md-setup-card" aria-labelledby="first-result-title" data-starter-mind-guide>
+      <section class="md-setup-card md-setup-card--single" aria-labelledby="first-result-title" data-starter-mind-guide>
         <p class="md-eyebrow">About 15 minutes</p>
         <h2 id="first-result-title">Create your first useful Memory</h2>
         <p>Connect Codex, then copy this prompt. It selects exactly one Personal or ordinary Mind, creates only UTF-8 Markdown, validates the complete OKF 0.2 bundle, and proves the result with index, search, and fetch.</p>

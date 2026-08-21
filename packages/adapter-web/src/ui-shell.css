@@ -689,6 +689,14 @@ h3 {
   gap: clamp(1.25rem, 4vw, 3rem);
 }
 
+.md-setup-card > * {
+  min-width: 0;
+}
+
+.md-setup-card--single {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .md-setup-card > div > p:not(.md-eyebrow) {
   max-width: 36rem;
 }
@@ -722,7 +730,8 @@ h3 {
   font-size: 1rem;
 }
 
-.md-setup-steps pre {
+.md-setup-card pre {
+  min-width: 0;
   max-width: 100%;
   padding: 0.85rem;
   border: 1px solid var(--mind-diary-border-subtle, #d9d2c8);
@@ -731,6 +740,12 @@ h3 {
   background: var(--mind-diary-paper, #fff7e8);
   overflow: auto;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.md-setup-card pre code {
+  white-space: inherit;
+  overflow-wrap: anywhere;
 }
 
 .md-caveat {
@@ -1009,7 +1024,7 @@ h3 {
   }
 
   .md-setup-card {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .md-auth-choice-grid,
