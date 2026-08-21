@@ -28,6 +28,7 @@ flows или финальный join-gate.
 
 | ID | Наблюдаемый результат | Owner | Local evidence | UAT evidence |
 |---|---|---|---|---|
+| P0-SignedOut | Public Sites audience показывает signed-out `GET`/`HEAD` распознанного UI route как одинаковый safe HTML sign-in shell с exact `/signin-with-chatgpt`, без CSRF/product data или handle enumeration; REST/MCP остаются denied, identity outage остаётся `503`. | `MD-242` (contract `MD-241`) | Product HTTP integration + onboarding/unit + browser wide/mobile regression; exact status/content-type/header/body assertions для UI, REST и identity outage | `MD-243`: exact-candidate signed-out shell, signed-in return, anonymous REST/MCP denial и physical Telegram in-app browser canary |
 | P1 | Все route из accepted Product Site map открывают правильный authenticated shell; header/footer, mobile/keyboard navigation, active state, UAT label и direct deep links согласованы; reserved/unknown routes fail closed и не падают в home. | `AND-150` | `product-site-navigation`: unit + product integration + browser route/navigation suite | `AND-161`: same-deployment authenticated Web smoke |
 | P2 | Ordinary Mind проходит create/list/exact route/rename/delete и сохраняется после restart/redeploy; occupied, reserved и retired handle используют один `handle_unavailable` conflict. | `AND-151` | composed Product Site runtime create → restart → rename → restart → MCP discovery → deletion preview/delete → restart/retired-handle regression; ordinary Mind application/deletion and browser suites | `AND-161`: exact-candidate Web + persistence |
 | P3 | `/invitations` и canonical ordinary-Mind route показывают только safe access metadata; exact registered-email invitation не даёт access до accept, retry создаёт одну membership, role CAS/revoke/leave немедленно меняют current Web/MCP/history access и сохраняются после runtime reconstruction. | `AND-157` | durable composed Product Site с двумя principals: unknown exact email, create/accept replay, pending denial, role stale conflict, restart, revoke и immediate Web/MCP denial; invitation lifecycle, membership capability matrix, product HTTP mapping и browser stale/escaping suite | Blocking P9-Synthetic; real second-principal Sites flow — informational P9-Sites-Canary |
@@ -248,21 +249,28 @@ failure; отсутствующий receipt остаётся pending.
 
 ### Web/control
 
-1. Authenticated entry показывает registration state; explicit isolated-account
+1. Signed-out `GET`/`HEAD` каждого распознанного UI class показывает один safe
+   sign-in shell с exact `/signin-with-chatgpt`, no-store headers и без CSRF,
+   account/Mind/catalog/revision data или handle enumeration; anonymous REST
+   и MCP остаются `401`, identity outage — `503`. После platform sign-in тот же
+   UAT deployment показывает registration либо authenticated state. Отдельный
+   physical Telegram in-app browser canary подтверждает реальный mobile entry;
+   desktop/mobile emulation не заменяет его.
+2. Authenticated entry показывает registration state; explicit isolated-account
    action создаёт account и единственный `/me`, retry возвращает тот же state.
-2. Profile rename сохраняет `/me`; ordinary Mind create/rename показывает
+3. Profile rename сохраняет `/me`; ordinary Mind create/rename показывает
    editable handle, private default и generic unavailable behavior.
-3. Owner переключает visibility с обязательным disclosure; authenticated
+4. Owner переключает visibility с обязательным disclosure; authenticated
    catalog и exact unlisted opening соответствуют server grants.
-4. Registered-principal invitation проходит accept/reject/expiry path; role
+5. Registered-principal invitation проходит accept/reject/expiry path; role
    mutation, revoke/leave и ownership transfer показывают только разрешённые
    actions и итоговый state.
-5. Named MCP token показывается один раз, list не раскрывает secret, revoke
+6. Named MCP token показывается один раз, list не раскрывает secret, revoke
    действует немедленно; UI даёт два exact-origin `bearer_token_env_var` config
    без plaintext в repository/config и, пока secret виден, redacted self-check
    current account + modern/default `list_minds`. DOM/evidence не содержит
    verified email, Mind metadata/content/query, credential или raw response.
-6. Whole-Mind и account deletion используют свежий impact, strong confirmation
+7. Whole-Mind и account deletion используют свежий impact, strong confirmation
    и проверяемый irreversible post-state без обещания recovery/receipt.
 
 ### Persistence

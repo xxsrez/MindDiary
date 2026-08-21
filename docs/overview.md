@@ -218,7 +218,10 @@ Mind, и не меняют current ACL, scope, CAS или idempotency boundaries
 ## Product principles
 
 - **Authenticated only.** Visibility расширяет доступ зарегистрированным
-  пользователям, но не создаёт anonymous surface.
+  пользователям, но не создаёт anonymous доступ к Mind data, catalog, history
+  или control operations. Public Sites audience может показать signed-out
+  посетителю только статическую страницу входа без product data; это entry
+  surface, а не anonymous product session.
 - **Private by default.** Новый Mind и Personal Mind начинаются private.
 - **Portable by construction.** OKF 0.2 representation и deterministic export —
   основной контракт данных.

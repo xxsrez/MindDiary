@@ -355,6 +355,26 @@ Rules:
 - Secret, CSRF token, authenticated/account email, private query/body и
   deletion download grants не логируются.
 
+### Signed-out browser entry
+
+Public reachability OpenAI Site не является anonymous REST или Mind access.
+Adapter различает human UI entry и machine endpoints до product data access:
+
+| Request | Signed-out result |
+|---|---|
+| `GET`/`HEAD` распознанного UI route (`/`, `/me`, `/minds`, `/public`, `/invitations`, `/settings/account`, `/settings/mcp`, `/help`, canonical `/{handle}`) | `200 text/html`; одинаковый static sign-in shell со ссылкой exact `/signin-with-chatgpt`, `Cache-Control: no-store`, без CSRF и product projections. `HEAD` возвращает те же status/headers без body. |
+| Любой `/api/v1/**` без trusted Sites identity | JSON `401 authentication_required`; HTML не возвращается. |
+| UI или REST при недоступном trusted identity provider/binding | JSON `503 identity_binding_unavailable`; sign-in shell не маскирует outage. |
+| `/api/mcp`, `/api/mcp/2025-11-25` без valid product Bearer | Existing MCP `401` + `WWW-Authenticate` contract; Sites sign-in shell не участвует. |
+| OAuth routes | Existing authorization-server contract; product Web adapter не реализует `/signin-with-chatgpt`, `/signout-with-chatgpt` или callback. |
+
+Signed-out UI shell route-agnostic: он не отражает handle или target metadata,
+поэтому response на `/{handle}` не подтверждает существование Mind и не
+создаёт enumeration channel. После platform sign-in следующий request заново
+разрешает trusted identity и authorization. Никакой client-supplied identity,
+account association, ACL, Origin/CSRF или scope rule этим entry contract не
+ослабляется.
+
 Официальный Sites contract на момент обновления документирует
 `oai-authenticated-user-email` как authenticated email address и optional
 `oai-authenticated-user-full-name`, но не обещает immutable external subject

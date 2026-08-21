@@ -312,6 +312,25 @@ Authenticated pages используют согласованные header/foote
 navigation и active state. Profile entrypoint ведёт на `/settings/account`, а
 Help остаётся достижимым из footer. Hosted environment явно маркируется как
 `UAT`; историческое live evidence 2026-08-09 не делает его production.
+
+Public Sites audience означает только достижимость Site до входа и не меняет
+authenticated-only product boundary. Для распознанных Product Site UI routes
+signed-out `GET` и `HEAD` возвращают один и тот же безопасный HTML sign-in
+shell со ссылкой на platform-owned exact path `/signin-with-chatgpt`. Shell не
+содержит account, Mind, membership, catalog, revision или route-target data, не
+выдаёт CSRF metadata и не подтверждает существование `/{space_handle}`. Он не
+принимает самодельный `return_to` и не реализует application callback. После
+platform sign-in новый request проходит обычное server-side identity
+resolution и только затем получает registration либо authenticated page.
+
+Эта human entry surface не меняет machine boundaries: signed-out
+`/api/v1/**` возвращает JSON `401 authentication_required`; недоступный
+identity provider/binding возвращает `503 identity_binding_unavailable`, а не
+sign-in shell; OAuth authorization и оба MCP endpoint сохраняют собственные
+authentication, challenge, scope и current-access contracts. Private-by-
+default, authorization-before-read, Origin/CSRF для browser mutations и
+server-owned identity остаются без изменений.
+
 `/settings/account` server-side загружает current profile и fresh expiring
 account-deletion impact. Delete command связывает exact impact, exact
 `delete-account` confirmation и один idempotency key; changed/expired impact
@@ -511,7 +530,9 @@ network, которого Sites пока не обещает. Если Streamabl
    visibility. Non-owner leave не оставляет stale access.
 7. Invitation зарегистрированному principal не даёт access до acceptance,
    expires через семь дней и не создаёт duplicate membership при retry.
-8. Anonymous request не получает system access. Authenticated public,
+8. Anonymous request не получает system access или product data. Signed-out
+   `GET`/`HEAD` распознанного UI route может получить только одинаковый
+   статический sign-in shell с `/signin-with-chatgpt`; authenticated public,
    unlisted-by-exact-handle и private member получают строго описанные rights.
 9. Public catalog содержит public, но не unlisted/private Minds. Переключение в
    private немедленно закрывает baseline reads; UI заранее объясняет, что
@@ -574,7 +595,6 @@ network, которого Sites пока не обещает. Если Streamabl
     version/deployment и live URL; на нём проходят authenticated web/control и
     required MCP client flows. Local, preview или UI-only deployment не
     засчитывается.
-
 ## Compatibility gate для Sites и MCP
 
 Sites UAT MVP считается завершённым только после live-проверки:
