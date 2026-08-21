@@ -52,6 +52,10 @@ test("shell uses canonical brand assets and an honest no-network font fallback",
   assert.deepEqual(MIND_DIARY_UI_ASSETS, {
     lockup: "/brand/mind-diary-lockup.svg",
     mark: "/brand/mind-diary-mark.svg",
+    faviconIco: "/favicon.ico",
+    faviconSvg: "/favicon.svg",
+    faviconPng: "/favicon-32x32.png",
+    appleTouchIcon: "/apple-touch-icon.png",
     tokens: "/brand/mind-diary-tokens.css",
     shellStyles: "/ui/mind-diary-shell.css",
     shellClient: "/ui/mind-diary-shell-client.js",
@@ -214,6 +218,9 @@ test("document and CSS provide responsive keyboard and high-contrast foundations
   assert.match(document, /<meta name="viewport" content="width=device-width, initial-scale=1">/);
   assert.match(document, /<html lang="en">/);
   assert.match(document, /mind-diary-lockup\.svg/);
+  assert.match(document, /rel="icon" href="\/favicon\.ico" sizes="16x16 32x32"/);
+  assert.match(document, /rel="icon" href="\/favicon\.svg" type="image\/svg\+xml" sizes="any"/);
+  assert.match(document, /rel="apple-touch-icon" href="\/apple-touch-icon\.png" type="image\/png" sizes="180x180"/);
   assert.match(document, /mind-diary-tokens\.css/);
   assert.match(document, /<script type="module" src="\/ui\/mind-diary-shell-client\.js"><\/script>/);
 
