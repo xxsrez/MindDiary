@@ -16,6 +16,7 @@ import {
   tokenScopesAllowCapability,
   version,
   type AccessTokenState,
+  type AutomaticCaptureMode,
   type AuditEvent,
   type AuditEventId,
   type AuditOutboxMessage,
@@ -110,6 +111,7 @@ export {
 } from "@mind-diary/domain";
 export type {
   ExternalIdentityBinding,
+  AutomaticCaptureMode,
   BindingVersion,
   SpaceInvitation,
   KnowledgeSpace,
@@ -1780,6 +1782,20 @@ export type ApplyWriteMindBindingRequest =
       readonly writeBindingId: null;
     });
 
+export type ApplyAutomaticCapturePolicyRequest =
+  | (MindBindingMutationRequestBase & {
+      readonly action: "enable";
+      readonly spaceId: SpaceId;
+      readonly writeBindingId: WriteMindBindingId;
+      readonly mode: "routine_non_sensitive";
+    })
+  | (MindBindingMutationRequestBase & {
+      readonly action: "disable";
+      readonly spaceId: SpaceId | null;
+      readonly writeBindingId: null;
+      readonly mode: "disabled";
+    });
+
 export type ApplyMindBindingMutationResult =
   | {
       readonly kind: "applied";
@@ -1833,6 +1849,9 @@ export interface MindBindingTransaction extends AuthorizationTransaction {
   applyWriteMindBinding(
     request: Readonly<ApplyWriteMindBindingRequest>,
   ): Promise<ApplyMindBindingMutationResult>;
+  applyAutomaticCapturePolicy(
+    request: Readonly<ApplyAutomaticCapturePolicyRequest>,
+  ): Promise<ApplyMindBindingMutationResult>;
 }
 
 export interface MindBindingStore
@@ -1860,8 +1879,13 @@ export interface AuthorizationRequest {
   readonly bindingRequirement?:
     | { readonly kind: "read" }
     | {
-        readonly kind: "write";
+      readonly kind: "write";
+      readonly writeBindingId: WriteMindBindingId;
+    }
+    | {
+        readonly kind: "automatic_capture";
         readonly writeBindingId: WriteMindBindingId;
+        readonly expectedBindingVersion: BindingVersion;
       };
 }
 

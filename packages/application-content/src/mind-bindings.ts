@@ -63,6 +63,13 @@ export type MutateWriteMindBindingRequest =
       readonly idempotencyKey: unknown;
     };
 
+export interface MutateAutomaticCapturePolicyRequest {
+  readonly actor: McpTokenActorContext;
+  readonly action: "enable" | "disable";
+  readonly expectedBindingVersion: unknown;
+  readonly idempotencyKey: unknown;
+}
+
 export type ReadMindBindingsResult =
   | {
       readonly kind: "ready";
@@ -72,6 +79,12 @@ export type ReadMindBindingsResult =
 
 export type MindBindingCommandResult =
   | ApplyMindBindingMutationResult
+  | {
+      readonly kind:
+        | "capture_target_visibility_blocked"
+        | "write_binding_required"
+        | "write_binding_stale";
+    }
   | {
       readonly kind: "denied";
       readonly decision: Extract<
@@ -119,7 +132,13 @@ function validSpaceId(value: unknown): value is SpaceId {
 }
 
 function canonicalMutationSource(input: {
-  readonly operation: "attach_read" | "detach_read" | "bind_write" | "unbind_write";
+  readonly operation:
+    | "attach_read"
+    | "detach_read"
+    | "bind_write"
+    | "unbind_write"
+    | "enable_capture"
+    | "disable_capture";
   readonly bindingOwnerId: MindBindingOwnerId;
   readonly principalId: PrincipalId;
   readonly spaceId: SpaceId | null;
@@ -327,6 +346,110 @@ export class MindBindingApplicationService {
     });
   }
 
+  async mutateAutomaticCapture(
+    request: Readonly<MutateAutomaticCapturePolicyRequest>,
+  ): Promise<MindBindingCommandResult> {
+    const validated = this.#validateMutation(request);
+    if ("kind" in validated) return validated;
+    if (request.action !== "enable" && request.action !== "disable") {
+      return Object.freeze({ kind: "invalid", code: "invalid_action" });
+    }
+    const current = await this.#bindings.readMindBindingSet(
+      validated.bindingOwnerId,
+      validated.principalId,
+      request.actor.occurredAtUtc,
+    );
+    if (current === null) {
+      return Object.freeze({ kind: "invalid", code: "invalid_actor" });
+    }
+    const active = current.writeBinding;
+    if (request.action === "enable" && active === null) {
+      return Object.freeze({ kind: "write_binding_required" });
+    }
+    if (
+      request.action === "enable" &&
+      (active?.state !== "active" || active.bindingOwnerId !== validated.bindingOwnerId)
+    ) {
+      return Object.freeze({ kind: "write_binding_stale" });
+    }
+    const spaceId = active?.spaceId ?? null;
+    const operation = request.action === "enable" ? "enable_capture" : "disable_capture";
+    const canonicalRequestHash = await this.#digest.calculateSha256(
+      ENCODER.encode(
+        canonicalMutationSource({
+          operation,
+          bindingOwnerId: validated.bindingOwnerId,
+          principalId: validated.principalId,
+          spaceId,
+          expectedBindingVersion: validated.expectedBindingVersion,
+        }),
+      ),
+    );
+    const auditEventId = this.#ids.nextMindBindingAuditEventId();
+    const auditOutboxMessageId = this.#ids.nextMindBindingOutboxMessageId();
+    if (request.action === "disable") {
+      return this.#bindings.runMindBindingTransaction((transaction) =>
+        transaction.applyAutomaticCapturePolicy({
+          ...validated,
+          action: "disable",
+          mode: "disabled",
+          spaceId,
+          writeBindingId: null,
+          canonicalRequestHash,
+          requestId: request.actor.requestId,
+          auditEventId,
+          auditOutboxMessageId,
+          occurredAt: request.actor.occurredAtUtc,
+        }),
+      );
+    }
+    if (active === null) return Object.freeze({ kind: "write_binding_required" });
+    const authorizationState = await this.#bindings.readCurrentAuthorizationState({
+      principalId: validated.principalId,
+      spaceId: active.spaceId,
+      tokenId: request.actor.authentication.tokenId,
+    });
+    if (authorizationState?.space.visibility !== "private") {
+      return Object.freeze({ kind: "capture_target_visibility_blocked" });
+    }
+    const authorizationRequest = Object.freeze({
+      actor: request.actor,
+      spaceId: active.spaceId,
+      capability: "content:write" as const,
+      revisionMode: "head" as const,
+      bindingRequirement: Object.freeze({
+        kind: "write" as const,
+        writeBindingId: active.writeBindingId,
+      }),
+    });
+    const initial = await this.#authorizer.authorize(authorizationRequest);
+    if (initial.kind === "denied") {
+      return Object.freeze({ kind: "denied", decision: initial });
+    }
+    return this.#bindings.runMindBindingTransaction(async (transaction) => {
+      const fresh = await this.#authorizer.reauthorizeInTransaction(
+        authorizationRequest,
+        transaction,
+        initial.stamp,
+      );
+      if (fresh.kind === "denied") {
+        return Object.freeze({ kind: "denied", decision: fresh });
+      }
+      return transaction.applyAutomaticCapturePolicy({
+        ...validated,
+        action: "enable",
+        mode: "routine_non_sensitive",
+        spaceId: active.spaceId,
+        writeBindingId: active.writeBindingId,
+        canonicalRequestHash,
+        requestId: request.actor.requestId,
+        auditEventId,
+        auditOutboxMessageId,
+        occurredAt: request.actor.occurredAtUtc,
+      });
+    });
+  }
+
   #validateMutation(request: {
     readonly actor: McpTokenActorContext;
     readonly expectedBindingVersion: unknown;
@@ -465,7 +588,10 @@ export class MindBindingContentAuthorizer implements Authorizer {
 
     if (request.capability === "content:write") {
       const requirement = request.bindingRequirement;
-      if (requirement?.kind !== "write") {
+      if (
+        requirement?.kind !== "write" &&
+        requirement?.kind !== "automatic_capture"
+      ) {
         return bindingDenied("write_binding_required");
       }
       const active = snapshot.writeBinding;
@@ -477,6 +603,15 @@ export class MindBindingContentAuthorizer implements Authorizer {
         active.writeBindingId !== requirement.writeBindingId
       ) {
         return bindingDenied("write_binding_stale");
+      }
+      if (requirement.kind === "automatic_capture") {
+        if (
+          snapshot.bindingSet.bindingVersion !== requirement.expectedBindingVersion ||
+          snapshot.bindingSet.automaticCaptureMode !== "routine_non_sensitive" ||
+          snapshot.bindingSet.captureWriteBindingId !== requirement.writeBindingId
+        ) {
+          return bindingDenied("authorization_state_changed", true);
+        }
       }
     } else {
       const readIsActive = snapshot.readBindings.some(

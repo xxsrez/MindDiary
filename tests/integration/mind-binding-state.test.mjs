@@ -307,6 +307,120 @@ test("revoking a binding owner invalidates all active records and is terminal", 
   assert.equal((await metadata.listAuditEventsForTest()).length, 3);
 });
 
+test("automatic capture is explicit, private-only and pinned to one write generation", async () => {
+  const { metadata, service } = applicationHarness();
+  const currentActor = actor();
+  const empty = await service.read({ actor: currentActor });
+  assert.equal(empty.bindings.bindingSet.automaticCaptureMode, "disabled");
+  assert.equal(empty.bindings.bindingSet.captureWriteBindingId, null);
+
+  assert.deepEqual(
+    await service.mutateAutomaticCapture({
+      actor: currentActor,
+      action: "enable",
+      expectedBindingVersion: 0,
+      idempotencyKey: "capture-without-write",
+    }),
+    { kind: "write_binding_required" },
+  );
+  const bound = await service.mutateWrite({
+    actor: currentActor,
+    action: "bind",
+    spaceId: SPACE_A,
+    expectedBindingVersion: 0,
+    idempotencyKey: "capture-bind-alpha",
+  });
+  assert.equal(bound.kind, "applied");
+  const firstWriteId = bound.bindings.writeBinding.writeBindingId;
+
+  metadata.setCurrentAuthorizationStateForTest(
+    { principalId: PRINCIPAL_ID, spaceId: SPACE_A, tokenId: TOKEN_ID },
+    authorizationState(SPACE_A, {
+      space: {
+        ...authorizationState(SPACE_A).space,
+        visibility: "unlisted",
+      },
+    }),
+  );
+  assert.deepEqual(
+    await service.mutateAutomaticCapture({
+      actor: currentActor,
+      action: "enable",
+      expectedBindingVersion: 1,
+      idempotencyKey: "capture-enable-visible",
+    }),
+    { kind: "capture_target_visibility_blocked" },
+  );
+
+  metadata.setCurrentAuthorizationStateForTest(
+    { principalId: PRINCIPAL_ID, spaceId: SPACE_A, tokenId: TOKEN_ID },
+    authorizationState(SPACE_A),
+  );
+  const enabled = await service.mutateAutomaticCapture({
+    actor: currentActor,
+    action: "enable",
+    expectedBindingVersion: 1,
+    idempotencyKey: "capture-enable-private",
+  });
+  assert.equal(enabled.kind, "applied");
+  assert.equal(enabled.bindings.bindingSet.bindingVersion, 2);
+  assert.equal(enabled.bindings.bindingSet.automaticCaptureMode, "routine_non_sensitive");
+  assert.equal(enabled.bindings.bindingSet.captureWriteBindingId, firstWriteId);
+
+  const replay = await service.mutateAutomaticCapture({
+    actor: currentActor,
+    action: "enable",
+    expectedBindingVersion: 1,
+    idempotencyKey: "capture-enable-private",
+  });
+  assert.equal(replay.kind, "applied");
+  assert.equal(replay.replayed, true);
+  assert.equal(replay.bindings.bindingSet.bindingVersion, 2);
+
+  const rebound = await service.mutateWrite({
+    actor: currentActor,
+    action: "bind",
+    spaceId: SPACE_B,
+    expectedBindingVersion: 2,
+    idempotencyKey: "capture-rebind-beta",
+  });
+  assert.equal(rebound.kind, "applied");
+  assert.notEqual(rebound.bindings.writeBinding.writeBindingId, firstWriteId);
+  assert.equal(rebound.bindings.bindingSet.automaticCaptureMode, "disabled");
+  assert.equal(rebound.bindings.bindingSet.captureWriteBindingId, null);
+
+  const enabledAgain = await service.mutateAutomaticCapture({
+    actor: currentActor,
+    action: "enable",
+    expectedBindingVersion: 3,
+    idempotencyKey: "capture-enable-beta",
+  });
+  assert.equal(enabledAgain.kind, "applied");
+  assert.equal(enabledAgain.bindings.bindingSet.bindingVersion, 4);
+  assert.equal(
+    enabledAgain.bindings.bindingSet.captureWriteBindingId,
+    rebound.bindings.writeBinding.writeBindingId,
+  );
+
+  const disabled = await service.mutateAutomaticCapture({
+    actor: currentActor,
+    action: "disable",
+    expectedBindingVersion: 4,
+    idempotencyKey: "capture-disable-beta",
+  });
+  assert.equal(disabled.kind, "applied");
+  assert.equal(disabled.bindings.bindingSet.bindingVersion, 5);
+  assert.equal(disabled.bindings.bindingSet.automaticCaptureMode, "disabled");
+  assert.equal(disabled.bindings.bindingSet.captureWriteBindingId, null);
+
+  const audits = await metadata.listAuditEventsForTest();
+  assert.equal(
+    audits.filter((event) => event.eventType.includes("capture")).length,
+    3,
+  );
+  assert.equal(JSON.stringify(audits).includes("capture-enable-private"), false);
+});
+
 test("Sites event-log persistence reconciles unknown outcomes and serializes concurrent CAS", async () => {
   const database = new FakeD1Database();
   const first = await createSitesMetadataStore(database);

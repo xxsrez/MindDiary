@@ -52,6 +52,7 @@ export const INVITATION_STATES = [
 export const ACCESS_TOKEN_STATES = ["active", "revoked", "expired"] as const;
 export const MIND_BINDING_SET_STATES = ["active", "revoked", "deleted"] as const;
 export const MIND_BINDING_STATES = ["active", "invalidated"] as const;
+export const AUTOMATIC_CAPTURE_MODES = ["disabled", "routine_non_sensitive"] as const;
 export const JOB_STATES = [
   "queued",
   "running",
@@ -89,6 +90,7 @@ export type InvitationState = (typeof INVITATION_STATES)[number];
 export type AccessTokenState = (typeof ACCESS_TOKEN_STATES)[number];
 export type MindBindingSetState = (typeof MIND_BINDING_SET_STATES)[number];
 export type MindBindingState = (typeof MIND_BINDING_STATES)[number];
+export type AutomaticCaptureMode = (typeof AUTOMATIC_CAPTURE_MODES)[number];
 export type JobState = (typeof JOB_STATES)[number];
 export type IdempotencyState = (typeof IDEMPOTENCY_STATES)[number];
 export type OutboxState = (typeof OUTBOX_STATES)[number];
@@ -212,6 +214,9 @@ export interface MindBindingSet {
   readonly principalId: PrincipalId;
   readonly state: MindBindingSetState;
   readonly bindingVersion: BindingVersion;
+  readonly automaticCaptureMode: AutomaticCaptureMode;
+  readonly captureWriteBindingId: WriteMindBindingId | null;
+  readonly captureUpdatedAt: UtcInstant | null;
   readonly createdAt: UtcInstant;
   readonly updatedAt: UtcInstant;
 }

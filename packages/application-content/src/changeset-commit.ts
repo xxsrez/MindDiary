@@ -16,6 +16,7 @@ import {
   opaqueId,
   serializeRevisionManifest,
   version,
+  type BindingVersion,
   type CanonicalRevisionEnvelope,
   type IdempotencyKey,
   type RevisionId,
@@ -46,8 +47,24 @@ export interface CommitChangesetRequest {
   readonly expectedRevisionId: RevisionId | null;
   readonly idempotencyKey: unknown;
   readonly summary: string;
+  /** Trusted application-only context; never projected from commit_changeset input. */
+  readonly automaticCapture?: Readonly<AutomaticCaptureCommitContext>;
   /** Untrusted adapter input is validated by changeset preflight. */
   readonly operations: unknown;
+}
+
+export interface AutomaticCaptureCommitContext {
+  readonly expectedBindingVersion: BindingVersion;
+  readonly captureKey: string;
+  readonly path: string;
+  readonly sourceRefs: readonly Readonly<
+    | { readonly kind: "user_statement" }
+    | {
+        readonly kind: "target_entry";
+        readonly revisionId: RevisionId;
+        readonly path: string;
+      }
+  >[];
 }
 
 type NonReadyPreflightResult = Exclude<
@@ -100,6 +117,7 @@ interface ValidatedCommitPayload {
   readonly idempotencyKey: IdempotencyKey;
   readonly writeBindingId: WriteMindBindingId | null;
   readonly operations: readonly Readonly<ChangesetOperation>[];
+  readonly automaticCapture: Readonly<AutomaticCaptureCommitContext> | null;
 }
 
 type InvalidResult = Extract<
@@ -158,18 +176,29 @@ function canonicalRequestSource(
     expected_revision_id: request.expectedRevisionId,
     summary: request.summary,
     operations: validated.operations.map(canonicalOperation),
+    automatic_capture: validated.automaticCapture,
   })}\n`;
 }
 
-function writeBindingRequirement(writeBindingId: unknown) {
-  return typeof writeBindingId === "string" && writeBindingId.length > 0
-    ? Object.freeze({
-        bindingRequirement: Object.freeze({
+function writeBindingRequirement(
+  writeBindingId: unknown,
+  automaticCapture: Readonly<AutomaticCaptureCommitContext> | undefined | null,
+) {
+  if (typeof writeBindingId !== "string" || writeBindingId.length === 0) {
+    return Object.freeze({});
+  }
+  return Object.freeze({
+    bindingRequirement: automaticCapture === undefined || automaticCapture === null
+      ? Object.freeze({
           kind: "write" as const,
           writeBindingId: writeBindingId as WriteMindBindingId,
+        })
+      : Object.freeze({
+          kind: "automatic_capture" as const,
+          writeBindingId: writeBindingId as WriteMindBindingId,
+          expectedBindingVersion: automaticCapture.expectedBindingVersion,
         }),
-      })
-    : Object.freeze({});
+  });
 }
 
 /** Application-level immediate commit_changeset use case. */
@@ -208,7 +237,7 @@ export class ChangesetCommitService {
       spaceId: request.spaceId,
       capability: "content:write",
       revisionMode: "head",
-      ...writeBindingRequirement(request.writeBindingId),
+      ...writeBindingRequirement(request.writeBindingId, request.automaticCapture),
     });
     if (initialAuthorization.kind === "denied") {
       return Object.freeze({ kind: "denied", decision: initialAuthorization });
@@ -243,7 +272,10 @@ export class ChangesetCommitService {
             spaceId: request.spaceId,
             capability: "content:write",
             revisionMode: "head",
-            ...writeBindingRequirement(validated.writeBindingId),
+            ...writeBindingRequirement(
+              validated.writeBindingId,
+              validated.automaticCapture,
+            ),
           },
           transaction,
           initialAuthorization.stamp,
@@ -267,7 +299,15 @@ export class ChangesetCommitService {
       expectedRevisionId: request.expectedRevisionId,
       ...(validated.writeBindingId === null
         ? {}
-        : { writeBindingId: validated.writeBindingId }),
+        : {
+            writeBindingId: validated.writeBindingId,
+            ...(validated.automaticCapture === null
+              ? {}
+              : {
+                  automaticCaptureExpectedBindingVersion:
+                    validated.automaticCapture.expectedBindingVersion,
+                }),
+          }),
       operations: validated.operations,
     });
     if (preflight.kind !== "ready") return preflight;
@@ -300,7 +340,10 @@ export class ChangesetCommitService {
           spaceId: request.spaceId,
           capability: "content:write",
           revisionMode: "head",
-          ...writeBindingRequirement(validated.writeBindingId),
+          ...writeBindingRequirement(
+            validated.writeBindingId,
+            validated.automaticCapture,
+          ),
         },
         transaction,
         preflight.authorization.stamp,
@@ -404,6 +447,16 @@ export class ChangesetCommitService {
               previous_revision_id: preflight.baseRevisionId,
               revision_number: committed.envelope.revision.revisionNumber,
               manifest_hash: committed.envelope.revision.manifestHash,
+              ...(validated.automaticCapture === null
+                ? {}
+                : {
+                    capture_mode: "routine_non_sensitive",
+                    capture_key: validated.automaticCapture.captureKey,
+                    capture_path: validated.automaticCapture.path,
+                    capture_source_refs: JSON.stringify(
+                      validated.automaticCapture.sourceRefs,
+                    ),
+                  }),
             }),
           }),
           auditOutbox: Object.freeze({
@@ -531,6 +584,7 @@ export class ChangesetCommitService {
           ? null
           : (request.writeBindingId as WriteMindBindingId),
       operations: operations.operations,
+      automaticCapture: request.automaticCapture ?? null,
     });
   }
 

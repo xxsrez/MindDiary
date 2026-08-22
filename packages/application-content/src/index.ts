@@ -41,6 +41,7 @@ export * from "./mind-discovery.js";
 export * from "./mind-browse.js";
 export * from "./mind-history.js";
 export * from "./mind-bindings.js";
+export * from "./automatic-capture.js";
 export * from "./mind-search.js";
 export * from "./mind-validation.js";
 
@@ -61,6 +62,7 @@ export const CONTENT_QUERIES = [
 export const CONTENT_COMMANDS = [
   "set_read_mind_binding",
   "set_write_mind_binding",
+  "capture_knowledge",
   "commit_changeset",
   "start_export",
 ] as const;

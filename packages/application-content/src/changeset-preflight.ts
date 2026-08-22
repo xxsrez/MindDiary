@@ -11,6 +11,7 @@ import {
   sha256Digest,
   type RevisionId,
   type RevisionMode,
+  type BindingVersion,
   type Sha256Digest,
   type SpaceId,
   type UtcInstant,
@@ -94,6 +95,7 @@ export interface ChangesetPreflightRequest {
   readonly revisionMode: RevisionMode;
   readonly expectedRevisionId: RevisionId | null;
   readonly writeBindingId?: WriteMindBindingId;
+  readonly automaticCaptureExpectedBindingVersion?: BindingVersion;
   /** Untrusted adapter input is deliberately validated inside the service. */
   readonly operations: unknown;
 }
@@ -631,8 +633,17 @@ export class ChangesetPreflightService {
         ? {}
         : {
             bindingRequirement: Object.freeze({
-              kind: "write" as const,
-              writeBindingId: request.writeBindingId,
+              ...(request.automaticCaptureExpectedBindingVersion === undefined
+                ? {
+                    kind: "write" as const,
+                    writeBindingId: request.writeBindingId,
+                  }
+                : {
+                    kind: "automatic_capture" as const,
+                    writeBindingId: request.writeBindingId,
+                    expectedBindingVersion:
+                      request.automaticCaptureExpectedBindingVersion,
+                  }),
             }),
           }),
     });

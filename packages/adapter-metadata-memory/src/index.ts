@@ -10,6 +10,7 @@ import type {
   ApplyMembershipMutationRequest,
   ApplyMembershipMutationResult,
   ApplyMindBindingMutationResult,
+  ApplyAutomaticCapturePolicyRequest,
   ApplyReadMindBindingRequest,
   ApplyWriteMindBindingRequest,
   BeginPrincipalTokenDeletionRequest,
@@ -915,18 +916,53 @@ const COMMIT_AUDIT_METADATA_KEYS = [
   "revision_id",
   "revision_number",
 ] as const;
+const CAPTURE_COMMIT_AUDIT_METADATA_KEYS = [
+  "capture_key",
+  "capture_mode",
+  "capture_path",
+  "capture_source_refs",
+  ...COMMIT_AUDIT_METADATA_KEYS,
+] as const;
 const BOUNDED_OPAQUE_ID = /^[A-Za-z0-9._:-]{1,128}$/u;
+const CAPTURE_KEY_PATTERN = /^[a-z0-9](?:[a-z0-9-]{1,62}[a-z0-9])?$/u;
+const CAPTURE_SOURCE_PATH_PATTERN = /^(?!\/)(?!.*(?:^|\/)\.\.?\/)(?:[^\u0000-\u001f\u007f\\]+\/)*[^\u0000-\u001f\u007f\\]+\.md$/u;
 const MAX_CLAIM_LEASE_MS = 5 * 60 * 1_000;
+
+function validCaptureAuditSourceRefs(value: unknown): boolean {
+  if (typeof value !== "string" || value.length > 2_048) return false;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    return false;
+  }
+  if (!Array.isArray(parsed) || parsed.length < 1 || parsed.length > 8) return false;
+  return parsed.every((item) => {
+    if (typeof item !== "object" || item === null || Array.isArray(item)) return false;
+    const record = item as Readonly<Record<string, unknown>>;
+    if (record.kind === "user_statement") return Object.keys(record).length === 1;
+    return (
+      record.kind === "target_entry" &&
+      Object.keys(record).sort().join(",") === "kind,path,revisionId" &&
+      typeof record.revisionId === "string" &&
+      BOUNDED_OPAQUE_ID.test(record.revisionId) &&
+      typeof record.path === "string" &&
+      record.path.length <= 512 &&
+      CAPTURE_SOURCE_PATH_PATTERN.test(record.path)
+    );
+  });
+}
 
 function validCommitAuditMetadata(
   metadata: Readonly<Record<string, unknown>>,
   envelope: Envelope,
 ): boolean {
   const keys = Object.keys(metadata).sort();
-  if (
-    keys.length !== COMMIT_AUDIT_METADATA_KEYS.length ||
-    keys.some((key, index) => key !== COMMIT_AUDIT_METADATA_KEYS[index])
-  ) {
+  const capture = keys.length === CAPTURE_COMMIT_AUDIT_METADATA_KEYS.length &&
+    keys.every((key, index) => key === CAPTURE_COMMIT_AUDIT_METADATA_KEYS[index]);
+  const ordinary = keys.length === COMMIT_AUDIT_METADATA_KEYS.length &&
+    keys.every((key, index) => key === COMMIT_AUDIT_METADATA_KEYS[index]);
+  if (!ordinary && !capture) {
     return false;
   }
   const revision = envelope.revision;
@@ -944,7 +980,14 @@ function validCommitAuditMetadata(
     metadata.revision_number === revision.revisionNumber &&
     typeof metadata.manifest_hash === "string" &&
     SHA256_PATTERN.test(metadata.manifest_hash) &&
-    metadata.manifest_hash === revision.manifestHash
+    metadata.manifest_hash === revision.manifestHash &&
+    (!capture || (
+      metadata.capture_mode === "routine_non_sensitive" &&
+      typeof metadata.capture_key === "string" &&
+      CAPTURE_KEY_PATTERN.test(metadata.capture_key) &&
+      metadata.capture_path === `concepts/captured/${metadata.capture_key}.md` &&
+      validCaptureAuditSourceRefs(metadata.capture_source_refs)
+    ))
   );
 }
 
@@ -2940,6 +2983,11 @@ type AppliedMindBindingMutation = Readonly<
   Extract<ApplyMindBindingMutationResult, { readonly kind: "applied" }>
 >;
 
+type MindBindingMutationRequest =
+  | ApplyReadMindBindingRequest
+  | ApplyWriteMindBindingRequest
+  | ApplyAutomaticCapturePolicyRequest;
+
 interface StoredMindBindingMutation {
   readonly canonicalRequestHash: ApplyReadMindBindingRequest["canonicalRequestHash"];
   readonly spaceId: SpaceId | null;
@@ -3043,6 +3091,9 @@ function emptyMindBindingOwnerState(
       principalId,
       state: "active" as const,
       bindingVersion: bindingVersion(0),
+      automaticCaptureMode: "disabled" as const,
+      captureWriteBindingId: null,
+      captureUpdatedAt: null,
       createdAt: occurredAt,
       updatedAt: occurredAt,
     }),
@@ -3077,7 +3128,7 @@ function mindBindingSnapshot(
 }
 
 function validMindBindingMutationBase(
-  request: Readonly<ApplyReadMindBindingRequest | ApplyWriteMindBindingRequest>,
+  request: Readonly<MindBindingMutationRequest>,
 ): boolean {
   return (
     BOUNDED_OPAQUE_ID.test(request.bindingOwnerId) &&
@@ -3096,16 +3147,16 @@ function validMindBindingMutationBase(
 }
 
 function mindBindingIdempotencyKey(
-  operation: "read" | "write",
-  request: Readonly<ApplyReadMindBindingRequest | ApplyWriteMindBindingRequest>,
+  operation: "read" | "write" | "capture",
+  request: Readonly<MindBindingMutationRequest>,
 ): string {
   return `${operation}\u0000${request.idempotencyKey}`;
 }
 
 function replayMindBindingMutation(
   state: MutableMindBindingOwnerState,
-  operation: "read" | "write",
-  request: Readonly<ApplyReadMindBindingRequest | ApplyWriteMindBindingRequest>,
+  operation: "read" | "write" | "capture",
+  request: Readonly<MindBindingMutationRequest>,
 ): ApplyMindBindingMutationResult | null {
   const record = state.idempotency.get(
     mindBindingIdempotencyKey(operation, request),
@@ -3122,8 +3173,8 @@ function replayMindBindingMutation(
 
 function recordMindBindingMutation(
   state: MutableMindBindingOwnerState,
-  operation: "read" | "write",
-  request: Readonly<ApplyReadMindBindingRequest | ApplyWriteMindBindingRequest>,
+  operation: "read" | "write" | "capture",
+  request: Readonly<MindBindingMutationRequest>,
   result: AppliedMindBindingMutation,
 ): void {
   state.idempotency.set(mindBindingIdempotencyKey(operation, request), {
@@ -3149,7 +3200,7 @@ function mindBindingEffectsAvailable(
 }
 
 function stageMindBindingAudit(
-  request: Readonly<ApplyReadMindBindingRequest | ApplyWriteMindBindingRequest>,
+  request: Readonly<MindBindingMutationRequest>,
   result: AppliedMindBindingMutation,
   spaceId: SpaceId | null,
   auditEvents: Map<AuditEventId, Readonly<AuditEvent>>,
@@ -3162,7 +3213,11 @@ function stageMindBindingAudit(
         ? "detach_read"
         : request.action === "bind"
           ? "bind_write"
-          : "unbind_write";
+          : request.action === "unbind"
+            ? "unbind_write"
+            : request.action === "enable"
+              ? "enable_capture"
+              : "disable_capture";
   const event = Object.freeze({
     auditEventId: request.auditEventId,
     actor: Object.freeze({
@@ -3254,6 +3309,15 @@ function purgeMindBindingsForSpace(
       const active = state.writeBindingsById.get(state.activeWriteBindingId);
       if (active?.spaceId === spaceId) {
         state.activeWriteBindingId = null;
+        state.bindingSet = Object.freeze({
+          ...state.bindingSet,
+          automaticCaptureMode: "disabled" as const,
+          captureWriteBindingId: null,
+          captureUpdatedAt:
+            state.bindingSet.automaticCaptureMode === "disabled"
+              ? state.bindingSet.captureUpdatedAt
+              : occurredAt,
+        });
         activeChanged = true;
       }
     }
@@ -3396,7 +3460,7 @@ export class InMemoryRevisionMetadataStore
         ]),
       );
       const getOwner = (
-        request: Readonly<ApplyReadMindBindingRequest | ApplyWriteMindBindingRequest>,
+        request: Readonly<MindBindingMutationRequest>,
       ): MutableMindBindingOwnerState | ApplyMindBindingMutationResult => {
         if (!validMindBindingMutationBase(request)) {
           return Object.freeze({ kind: "invalid_record" });
@@ -3625,6 +3689,12 @@ export class InMemoryRevisionMetadataStore
               selected.bindingSet = Object.freeze({
                 ...selected.bindingSet,
                 bindingVersion: nextVersion,
+                automaticCaptureMode: "disabled" as const,
+                captureWriteBindingId: null,
+                captureUpdatedAt:
+                  selected.bindingSet.automaticCaptureMode === "disabled"
+                    ? selected.bindingSet.captureUpdatedAt
+                    : request.occurredAt,
                 updatedAt: request.occurredAt,
               });
               changed = true;
@@ -3642,6 +3712,12 @@ export class InMemoryRevisionMetadataStore
               bindingVersion: bindingVersion(
                 selected.bindingSet.bindingVersion + 1,
               ),
+              automaticCaptureMode: "disabled" as const,
+              captureWriteBindingId: null,
+              captureUpdatedAt:
+                selected.bindingSet.automaticCaptureMode === "disabled"
+                  ? selected.bindingSet.captureUpdatedAt
+                  : request.occurredAt,
               updatedAt: request.occurredAt,
             });
             changed = true;
@@ -3662,6 +3738,86 @@ export class InMemoryRevisionMetadataStore
             auditOutbox,
           );
           recordMindBindingMutation(selected, "write", request, result);
+          return result;
+        },
+        applyAutomaticCapturePolicy: async (
+          request: Readonly<ApplyAutomaticCapturePolicyRequest>,
+        ): Promise<ApplyMindBindingMutationResult> => {
+          if (
+            (request.action !== "enable" && request.action !== "disable") ||
+            (request.action === "enable" &&
+              (request.mode !== "routine_non_sensitive" ||
+                !BOUNDED_OPAQUE_ID.test(request.spaceId) ||
+                !BOUNDED_OPAQUE_ID.test(request.writeBindingId))) ||
+            (request.action === "disable" &&
+              (request.mode !== "disabled" || request.writeBindingId !== null ||
+                (request.spaceId !== null && !BOUNDED_OPAQUE_ID.test(request.spaceId))))
+          ) {
+            return Object.freeze({ kind: "invalid_record" });
+          }
+          const selected = getOwner(request);
+          if (!("bindingSet" in selected)) return selected;
+          const replay = replayMindBindingMutation(selected, "capture", request);
+          if (replay) return replay;
+          if (selected.bindingSet.bindingVersion !== request.expectedBindingVersion) {
+            return Object.freeze({
+              kind: "binding_version_conflict",
+              currentBindingVersion: selected.bindingSet.bindingVersion,
+            });
+          }
+          if (
+            !mindBindingEffectsAvailable(
+              request.auditEventId,
+              request.auditOutboxMessageId,
+              auditEvents,
+              auditOutbox,
+            )
+          ) {
+            return Object.freeze({ kind: "effect_conflict" });
+          }
+          const active = selected.activeWriteBindingId === null
+            ? null
+            : selected.writeBindingsById.get(selected.activeWriteBindingId) ?? null;
+          if (
+            request.action === "enable" &&
+            (active?.state !== "active" ||
+              active.spaceId !== request.spaceId ||
+              active.writeBindingId !== request.writeBindingId)
+          ) {
+            return Object.freeze({ kind: "invalid_record" });
+          }
+          if (!owners.has(request.bindingOwnerId)) owners.set(request.bindingOwnerId, selected);
+          const changed = request.action === "enable"
+            ? selected.bindingSet.automaticCaptureMode !== request.mode ||
+              selected.bindingSet.captureWriteBindingId !== request.writeBindingId
+            : selected.bindingSet.automaticCaptureMode !== "disabled" ||
+              selected.bindingSet.captureWriteBindingId !== null;
+          if (changed) {
+            selected.bindingSet = Object.freeze({
+              ...selected.bindingSet,
+              bindingVersion: bindingVersion(selected.bindingSet.bindingVersion + 1),
+              automaticCaptureMode: request.mode,
+              captureWriteBindingId:
+                request.action === "enable" ? request.writeBindingId : null,
+              captureUpdatedAt: request.occurredAt,
+              updatedAt: request.occurredAt,
+            });
+          }
+          const result = Object.freeze({
+            kind: "applied" as const,
+            bindings: mindBindingSnapshot(selected),
+            previousWriteBinding: null,
+            changed,
+            replayed: false,
+          });
+          stageMindBindingAudit(
+            request,
+            result,
+            request.spaceId,
+            auditEvents,
+            auditOutbox,
+          );
+          recordMindBindingMutation(selected, "capture", request, result);
           return result;
         },
       });
@@ -3746,6 +3902,12 @@ export class InMemoryRevisionMetadataStore
         ...state.bindingSet,
         state: "revoked" as const,
         bindingVersion: bindingVersion(state.bindingSet.bindingVersion + 1),
+        automaticCaptureMode: "disabled" as const,
+        captureWriteBindingId: null,
+        captureUpdatedAt:
+          state.bindingSet.automaticCaptureMode === "disabled"
+            ? state.bindingSet.captureUpdatedAt
+            : request.occurredAt,
         updatedAt: request.occurredAt,
       });
       stageMindBindingRevokeAudit(
