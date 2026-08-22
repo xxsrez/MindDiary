@@ -448,6 +448,14 @@ export class ProductMcpContentApplication implements McpContentApplication {
         return snakeOutput(await this.#dependencies.validation.validateMind(request.actor, input));
       case "commit_changeset": {
         const info = await this.#dependencies.discovery.getMindInfo(request.actor, input.mind, { kind: "head" });
+        if (!info.contentCapabilities.includes("commit")) {
+          return createMcpToolErrorResult(
+            request.actor.requestId,
+            "forbidden",
+            "The requested operation is not allowed.",
+            false,
+          );
+        }
         const result = await this.#dependencies.commits.commit({
           actor: request.actor,
           spaceId: info.mind.mindId,
@@ -508,6 +516,14 @@ export class ProductMcpContentApplication implements McpContentApplication {
           input.mind,
           { kind: "head" },
         );
+        if (!info.contentCapabilities.includes("commit")) {
+          return createMcpToolErrorResult(
+            request.actor.requestId,
+            "forbidden",
+            "The requested operation is not allowed.",
+            false,
+          );
+        }
         const result = await this.#dependencies.capture.capture({
           actor: request.actor,
           spaceId: info.mind.mindId,
@@ -574,6 +590,14 @@ export class ProductMcpContentApplication implements McpContentApplication {
       }
       case "start_export": {
         const info = await this.#dependencies.discovery.getMindInfo(request.actor, input.mind, input.revisionSelector);
+        if (!info.contentCapabilities.includes("export")) {
+          return createMcpToolErrorResult(
+            request.actor.requestId,
+            "forbidden",
+            "The requested operation is not allowed.",
+            false,
+          );
+        }
         const result = await this.#dependencies.exports.start({
           actor: request.actor,
           spaceId: info.mind.mindId,

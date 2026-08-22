@@ -153,6 +153,13 @@ function backgroundPayload(work) {
   return Object.freeze({ kind: work.kind, jobId: work.id });
 }
 
+function searchProjectionCount(database) {
+  return database.search.size +
+    database.searchDocuments.size +
+    database.searchMemberships.size +
+    database.searchLexical.size;
+}
+
 async function drainScheduled({ runtimeRef, scheduled, kinds }) {
   const allowed = kinds === undefined ? null : new Set(kinds);
   let drained = 0;
@@ -757,11 +764,11 @@ async function runScenario({ candidate, evidenceOut, randomBytesImpl, now }) {
   });
   if (
     materializedWork === 0 ||
-    database.search.size === 0 ||
+    searchProjectionCount(database) === 0 ||
     database.audit.size === 0
   ) fail("background_state_not_materialized", {
     materializedWork,
-    searchCount: database.search.size,
+    searchCount: searchProjectionCount(database),
     auditCount: database.audit.size,
   });
   assertions.add("background.search-and-audit-materialized");
@@ -1084,7 +1091,7 @@ async function runScenario({ candidate, evidenceOut, randomBytesImpl, now }) {
     participantBinding !== null ||
     !deletedParticipantBindingsAreEmpty ||
     bucket.records.size !== 0 ||
-    database.search.size !== 0 ||
+    searchProjectionCount(database) !== 0 ||
     !retainedAuditTombstonesAreSafe
   ) fail("negative_state_scan_failed", {
     accountTotals,
@@ -1095,7 +1102,7 @@ async function runScenario({ candidate, evidenceOut, randomBytesImpl, now }) {
     bindingsRemoved: ownerBinding === null && participantBinding === null,
     deletedParticipantBindingsAreEmpty,
     objectCount: bucket.records.size,
-    searchCount: database.search.size,
+    searchCount: searchProjectionCount(database),
     auditCount: database.audit.size,
     retainedAuditTombstonesAreSafe,
   });

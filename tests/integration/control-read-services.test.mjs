@@ -21,12 +21,13 @@ class Statement {
   constructor(database, sql) { this.database = database; this.sql = sql; }
   bind(...values) { this.values = values; return this; }
   run() { return this.database.run(this.sql, this.values); }
-  all() { return this.database.all(this.sql); }
+  all() { return this.database.all(this.sql, this.values); }
   async first() { return (await this.all()).results?.[0] ?? null; }
 }
 
 class EventLogD1 {
   events = [];
+  snapshot = null;
   prepare(sql) { return new Statement(this, sql); }
   async batch(statements) {
     const results = [];
@@ -47,9 +48,30 @@ class EventLogD1 {
       });
       return { meta: { changes: 1 } };
     }
+    if (sql.includes("/*md-metadata-snapshot-write*/")) {
+      const sequence = Number(values[0]);
+      if (this.snapshot !== null && this.snapshot.sequence >= sequence) {
+        return { meta: { changes: 0 } };
+      }
+      this.snapshot = { sequence, payload_json: values[1] };
+      return { meta: { changes: 1 } };
+    }
     throw new Error(`unsupported statement: ${sql}`);
   }
-  async all(sql) {
+  async all(sql, values) {
+    if (sql.includes("/*md-metadata-snapshot-read*/")) {
+      return { results: this.snapshot === null ? [] : [{ ...this.snapshot }] };
+    }
+    if (sql.includes("/*md-metadata-events-tail*/")) {
+      return {
+        results: this.events
+          .filter((event) => event.sequence > Number(values[0]))
+          .map((event) => ({ ...event })),
+      };
+    }
+    if (sql.includes("/*md-metadata-events-migration*/")) {
+      return { results: this.events.map((event) => ({ ...event })) };
+    }
     if (sql.includes("/*md-metadata-events*/")) {
       return { results: this.events.map((event) => ({ ...event })) };
     }

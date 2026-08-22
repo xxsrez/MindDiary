@@ -18,6 +18,11 @@ export const EXPECTED_D1_SCHEMA_GROUPS = Object.freeze({
   oauth: Object.freeze(SITES_OAUTH_SCHEMA.map(canonicalSql)),
 });
 
+const EXPECTED_METADATA_SCHEMA_BATCHES = Object.freeze(
+  SITES_METADATA_MIGRATIONS.map((migration) =>
+    Object.freeze(migration.statements.map(canonicalSql))),
+);
+
 const EXPECTED_D1_SCHEMA = new Set(Object.values(EXPECTED_D1_SCHEMA_GROUPS).flat());
 
 class FakeD1Statement {
@@ -76,9 +81,16 @@ export class FakeD1Database {
   async batch(statements) {
     const sql = statements.map((statement) => statement.schemaSql());
     for (const [group, expected] of Object.entries(EXPECTED_D1_SCHEMA_GROUPS)) {
+      if (group === "metadata") continue;
       const present = expected.filter((statement) => sql.includes(statement));
       if (present.length > 0 && present.length !== expected.length) {
         throw new Error(`incomplete FakeD1 ${group} schema batch`);
+      }
+    }
+    for (const expected of EXPECTED_METADATA_SCHEMA_BATCHES) {
+      const present = expected.filter((statement) => sql.includes(statement));
+      if (present.length > 0 && present.length !== expected.length) {
+        throw new Error("incomplete FakeD1 metadata schema batch");
       }
     }
     const results = [];
@@ -96,7 +108,6 @@ export class FakeD1Database {
       return { success: true, meta: { changes: 0 } };
     }
     if (sql.includes("/*md-metadata-migration*/")) {
-      this.#assertSchema("metadata");
       return { success: true, meta: { changes: 1 } };
     }
     if (sql.includes("/*md-locator-create*/")) {
@@ -641,6 +652,13 @@ export class FakeD1Database {
       };
     }
     if (sql.includes("/*md-metadata-events-migration*/")) {
+      this.#assertSchema("metadata");
+      return {
+        success: true,
+        results: this.metadataEvents.map((row) => ({ ...row })),
+      };
+    }
+    if (sql.includes("/*md-metadata-events*/")) {
       this.#assertSchema("metadata");
       return {
         success: true,
