@@ -151,6 +151,67 @@ test("connected apps show effective OAuth access and an immediate revoke control
   assert.match(PRODUCT_UI_CLIENT_JAVASCRIPT, /\/api\/v1\/oauth-connections\//);
 });
 
+test("binding UI separates attached read-only Minds from one writable Mind without leaking inaccessible metadata", () => {
+  const html = renderMcpTokenManagement({
+    ...model({ kind: "ready", tokens: TOKENS }),
+    bindingOwners: [{
+      kind: "ready",
+      ownerId: "tok_active",
+      bindingVersion: 4,
+      state: "active",
+      readBindings: [
+        {
+          readBindingId: "read-binding-safe",
+          mind: { name: "Personal Notes", route: "/me", visibility: "private", canWrite: true },
+        },
+        { readBindingId: "read-binding-hidden", mind: null },
+      ],
+      writeBinding: {
+        writeBindingId: "write-binding-safe",
+        mind: { name: "Shared Research", route: "/research", visibility: "unlisted", canWrite: true },
+      },
+      eligibleMinds: [
+        { name: "Personal Notes", route: "/me", visibility: "private", canWrite: true },
+        { name: "Shared Research", route: "/research", visibility: "unlisted", canWrite: true },
+        { name: "Public Reader", route: "/public-reader", visibility: "public", canWrite: false },
+      ],
+    }],
+  });
+
+  assert.match(html, /Attached Minds are read-only/);
+  assert.match(html, /Active writable Mind/);
+  assert.match(html, /Version 4/);
+  assert.match(html, /Personal Notes[\s\S]*\/me[\s\S]*private/);
+  assert.match(html, /Shared Research[\s\S]*\/research[\s\S]*unlisted/);
+  assert.match(html, /Access unavailable/);
+  assert.match(html, /Mind metadata is hidden because current access no longer permits it/);
+  assert.match(html, /data-binding-action="detach_read"/);
+  assert.match(html, /data-binding-action="unbind_write"/);
+  assert.match(html, /data-binding-form="attach_read"/);
+  assert.match(html, /data-binding-form="bind_write"/);
+  assert.match(html, /Switching makes the previous Mind no longer writable/);
+  assert.match(html, /Unlisted\/public readers see committed live HEAD and history immediately/);
+  assert.doesNotMatch(html, /principal_|space_|private@example\.com/);
+});
+
+test("revoked credentials expose recovery guidance but no binding mutation controls", () => {
+  const html = renderMcpTokenManagement({
+    ...model({ kind: "ready", tokens: [TOKENS[1]] }),
+    bindingOwners: [{
+      kind: "ready",
+      ownerId: "tok_revoked",
+      bindingVersion: 7,
+      state: "revoked",
+      readBindings: [],
+      writeBinding: null,
+      eligibleMinds: [],
+    }],
+  });
+  assert.match(html, /expired or revoked/);
+  assert.match(html, /choose bindings explicitly/);
+  assert.doesNotMatch(html, /data-binding-form|data-binding-action/);
+});
+
 test("exact-origin Codex configs keep modern and compatibility lifecycles separate", () => {
   assert.equal(
     mindDiaryMcpEndpoint("https://mind-diary.example", "modern"),
@@ -210,6 +271,12 @@ test("starter and concierge playbooks render as secret-free copy-ready guidance"
   assert.match(MIND_DIARY_CODEX_STARTER_PLAYBOOK, /validate_mind/u);
   assert.match(MIND_DIARY_CODEX_STARTER_PLAYBOOK, /search for a distinctive phrase/u);
   assert.match(MIND_DIARY_CODEX_CONCIERGE_PLAYBOOK, /not a product import/u);
+  assert.match(MIND_DIARY_CODEX_STARTER_PLAYBOOK, /Call get_mind_bindings before any other content operation/u);
+  assert.match(MIND_DIARY_CODEX_STARTER_PLAYBOOK, /Never infer a target/u);
+  assert.match(MIND_DIARY_CODEX_STARTER_PLAYBOOK, /Rebind only after my explicit trusted instruction/u);
+  assert.match(MIND_DIARY_CODEX_STARTER_PLAYBOOK, /opaque write_binding_id/u);
+  assert.match(MIND_DIARY_CODEX_SAFE_WRITE_PLAYBOOK, /Other attached Minds remain read-only/u);
+  assert.match(MIND_DIARY_CODEX_SAFE_WRITE_PLAYBOOK, /stale\/changed binding state/u);
   assert.match(MIND_DIARY_CODEX_CONCIERGE_PLAYBOOK, /ZIP\/import\/upload\/crawl API/u);
   assert.match(html, /Start one valid Mind with Codex/u);
   assert.match(html, /data-copy-code="mind-diary-starter-playbook"/u);
@@ -304,6 +371,9 @@ test("production redacted self-check covers both auth boundaries and both MCP pr
   assert.doesNotMatch(PRODUCT_UI_CLIENT_JAVASCRIPT, /name:"(?:search|fetch|commit_changeset)"/);
   assert.match(PRODUCT_UI_CLIENT_JAVASCRIPT, /button\.closest\("section"\)/u);
   assert.match(PRODUCT_UI_CLIENT_JAVASCRIPT, /This text contains no token or Site credential/u);
+  assert.match(PRODUCT_UI_CLIENT_JAVASCRIPT, /\/api\/v1\/mind-bindings\//u);
+  assert.match(PRODUCT_UI_CLIENT_JAVASCRIPT, /expected_binding_version/u);
+  assert.match(PRODUCT_UI_CLIENT_JAVASCRIPT, /nothing was transferred automatically/u);
 });
 
 test("document loads only an explicitly safe local fixture client and CSS covers responsive token controls", () => {
@@ -322,6 +392,7 @@ test("document loads only an explicitly safe local fixture client and CSS covers
   assert.match(shellCss, /\.md-token-grid/);
   assert.match(shellCss, /\.md-secret-value/);
   assert.match(shellCss, /\.md-button--danger/);
+  assert.match(shellCss, /\.md-binding-controls/);
   assert.match(shellCss, /@media \(max-width: 36rem\)/);
   assert.match(shellCss, /@media \(forced-colors: active\)/);
 });

@@ -1,6 +1,6 @@
 # Архитектура Mind Diary
 
-Статус: proposal, обновлено 2026-08-20. Product Site components, adapters,
+Статус: proposal, обновлено 2026-08-22. Product Site components, adapters,
 route migration и isolated Codex bridge реализованы и развёрнуты как
 single-principal UAT в OpenAI Sites. Authenticated web/control,
 persistence-after-redeploy,
@@ -307,9 +307,16 @@ mirror, затем OAuth lifecycle records; account deletion authoritative casca
 account deletion не сохраняет content access.
 
 Web `/settings/mcp` показывает connected apps и немедленный revoke отдельно от
-personal tokens. OAuth bearer не даёт membership/account control plane. Direct
-UAT package использует `AVAILABLE + ON_USE`; blocking protocol/package/
-transport automation отделена от informational fresh external-account canary.
+personal tokens, а внутри каждой credential card — `0..N` read bindings и один
+write binding. Browser не получает credential Bearer: trusted Web adapter
+сначала заново подтверждает Sites principal → exact token/grant ownership,
+active lifecycle и scope, затем вызывает тот же `MindBindingApplicationService`
+с binding CAS. Accessible targets проецируются из current control metadata;
+утративший доступ target redacted без name/route/`space_id`. Success всегда
+заканчивается server-rendered read-back. OAuth bearer не даёт
+membership/account control plane. Direct UAT package использует
+`AVAILABLE + ON_USE`; blocking protocol/package/transport automation отделена
+от informational fresh external-account canary.
 Production issuer/resource, ChatGPT Web connector и public directory остаются
 нерешённой release boundary. Server-side профиль
 зафиксирован в [ADR-0010](decisions/0010-oauth-marketplace-connector.md), а

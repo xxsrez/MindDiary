@@ -753,6 +753,121 @@ test("token controls preserve CSRF and expose a one-time secret only in the issu
   assert.equal(calls[1].input.token_id, "tok_created");
 });
 
+test("Product Site projects and mutates exact credential bindings with CSRF, CAS, and inaccessible-Mind redaction", async () => {
+  const bindingCalls = [];
+  let conflict = false;
+  const handler = createProductWebHttpHandler({
+    applicationOrigin: origin,
+    resolveIdentity: () => ({ kind: "authenticated", actor: registeredActor }),
+    csrf: { issue: () => "csrf-bindings", verify: (_actor, token) => token === "csrf-bindings" },
+    control: { execute(request) {
+      if (request.operation === "get_session") return sessionProjection;
+      if (request.operation === "list_mcp_tokens") return [{
+        tokenId: "tok_binding",
+        name: "Bound Codex",
+        displayPrefix: "mdp_v1_Abc123…",
+        scopes: ["content:read", "content:write"],
+        state: "active",
+        createdAt: "2026-08-08T00:00:00.000Z",
+        expiresAt: "2026-11-06T00:00:00.000Z",
+        lastUsedAt: null,
+        revokedAt: null,
+      }];
+      if (request.operation === "list_minds") return [personalRoute, {
+        ...ordinaryOwnerRoute,
+        visibility: "unlisted",
+      }];
+      throw Object.assign(new Error("unexpected operation"), { code: "not_found" });
+    } },
+    mindBindings: {
+      async list(actor, ownerIds) {
+        assert.equal(actor, registeredActor);
+        assert.deepEqual(ownerIds, ["tok_binding"]);
+        return [{
+          ownerId: "tok_binding",
+          bindingVersion: 8,
+          state: "active",
+          readBindings: [
+            { readBindingId: "read-binding-personal", mindId: "space_personal" },
+            { readBindingId: "read-binding-hidden", mindId: "space_hidden" },
+          ],
+          writeBinding: { writeBindingId: "write-binding-research", mindId: "space_research" },
+        }];
+      },
+      async mutate(actor, input) {
+        bindingCalls.push({ actor, input });
+        if (conflict) {
+          throw Object.assign(new Error("stale"), { code: "binding_version_conflict" });
+        }
+        return { changed: true, replayed: false, bindingVersion: 9 };
+      },
+    },
+  });
+
+  const page = await handler(new Request(`${origin}/settings/mcp`));
+  assert.equal(page.status, 200);
+  const html = await page.text();
+  assert.match(html, /Bound Codex/);
+  assert.match(html, /Version 8/);
+  assert.match(html, /Product Owner[\s\S]*\/me[\s\S]*private/);
+  assert.match(html, /Research Notes[\s\S]*\/research-notes[\s\S]*unlisted/);
+  assert.match(html, /Access unavailable/);
+  assert.match(html, /data-binding-action="detach_read"/);
+  assert.match(html, /data-binding-form="bind_write"/);
+  assert.doesNotMatch(html, /space_hidden|space_personal|space_research/);
+
+  const denied = await handler(new Request(`${origin}/api/v1/mind-bindings/tok_binding`, {
+    method: "PATCH",
+    headers: { origin, "x-csrf-token": "wrong", "content-type": "application/json" },
+    body: JSON.stringify({ action: "bind_write", mind_ref: "/research-notes", expected_binding_version: 8 }),
+  }));
+  assert.equal(denied.status, 403);
+  assert.equal(bindingCalls.length, 0);
+
+  const applied = await handler(new Request(`${origin}/api/v1/mind-bindings/tok_binding`, {
+    method: "PATCH",
+    headers: {
+      origin,
+      "x-csrf-token": "csrf-bindings",
+      "content-type": "application/json",
+      "idempotency-key": "binding:product-site",
+    },
+    body: JSON.stringify({
+      action: "bind_write",
+      mind_ref: "/research-notes",
+      expected_binding_version: 8,
+    }),
+  }));
+  assert.equal(applied.status, 200);
+  assert.deepEqual((await applied.json()).data, {
+    changed: true,
+    replayed: false,
+    binding_version: 9,
+  });
+  assert.equal(bindingCalls[0].actor, registeredActor);
+  assert.deepEqual(bindingCalls[0].input, {
+    action: "bind_write",
+    mindRef: "/research-notes",
+    expectedBindingVersion: 8,
+    idempotencyKey: "binding:product-site",
+    binding_owner_id: "tok_binding",
+  });
+
+  conflict = true;
+  const stale = await handler(new Request(`${origin}/api/v1/mind-bindings/tok_binding`, {
+    method: "PATCH",
+    headers: {
+      origin,
+      "x-csrf-token": "csrf-bindings",
+      "content-type": "application/json",
+      "idempotency-key": "binding:stale",
+    },
+    body: JSON.stringify({ action: "unbind_write", expected_binding_version: 8 }),
+  }));
+  assert.equal(stale.status, 409);
+  assert.equal((await stale.json()).error.code, "binding_version_conflict");
+});
+
 test("product UI keeps control read failures generic and still offers bounded retry states", async () => {
   const tokenListFailure = createProductWebHttpHandler({
     applicationOrigin: origin,

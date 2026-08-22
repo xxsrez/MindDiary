@@ -29,6 +29,8 @@ import {
   MIND_DIARY_CODEX_CONCIERGE_PLAYBOOK,
   MIND_DIARY_CODEX_STARTER_PLAYBOOK,
   renderMcpTokenManagementDocument,
+  type MindBindingOwnerUiState,
+  type MindBindingUiMind,
   type McpTokenManagementModel,
   type McpTokenUiToken,
 } from "./token-management.js";
@@ -188,6 +190,31 @@ export interface ProductWebOAuthConnections {
   revoke(principalId: string, grantId: string): Promise<boolean>;
 }
 
+export interface ProductWebMindBindingOwner {
+  readonly ownerId: string;
+  readonly bindingVersion: number;
+  readonly state: "active" | "revoked" | "deleted";
+  readonly readBindings: readonly {
+    readonly readBindingId: string;
+    readonly mindId: string;
+  }[];
+  readonly writeBinding: {
+    readonly writeBindingId: string;
+    readonly mindId: string;
+  } | null;
+}
+
+export interface ProductWebMindBindings {
+  list(
+    actor: RegisteredSitesActor,
+    ownerIds: readonly string[],
+  ): Promise<readonly ProductWebMindBindingOwner[]>;
+  mutate(
+    actor: RegisteredSitesActor,
+    request: Readonly<Record<string, unknown>>,
+  ): Promise<unknown>;
+}
+
 export interface ProductWebHttpHandlerDependencies {
   readonly applicationOrigin: string;
   readonly resolveIdentity: (
@@ -196,6 +223,7 @@ export interface ProductWebHttpHandlerDependencies {
   readonly csrf: ProductWebCsrf;
   readonly control: ProductWebControlApplication;
   readonly oauthConnections?: ProductWebOAuthConnections;
+  readonly mindBindings?: ProductWebMindBindings;
 }
 
 const MUTATION_METHODS = new Set(["POST", "PATCH", "PUT", "DELETE"]);
@@ -245,8 +273,15 @@ const PRODUCT_UI_PILOT_SHELL_CSS = `
 .md-setup-card--single{grid-template-columns:minmax(0,1fr)}
 .md-setup-card pre{min-width:0;max-width:100%;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere}
 .md-setup-card pre code{white-space:inherit;overflow-wrap:anywhere}
+.md-binding-panel{display:grid;gap:.9rem;margin-top:1rem;padding-top:1rem;border-top:1px solid var(--mind-diary-border-subtle);min-width:0}
+.md-binding-panel__heading,.md-binding-write{display:flex;align-items:flex-start;justify-content:space-between;gap:.75rem;flex-wrap:wrap}
+.md-binding-panel h4{margin:0;font-family:var(--mind-diary-font-display);font-size:1.2rem}
+.md-binding-list{display:grid;gap:.75rem;margin:0;padding:0;list-style:none}
+.md-binding-list li{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:.75rem;padding:.75rem;border:1px solid var(--mind-diary-border-subtle);border-radius:.75rem}
+.md-binding-target{display:grid;gap:.2rem;min-width:0}.md-binding-target code,.md-binding-target span{overflow-wrap:anywhere}.md-binding-target--unavailable{color:#5b6473}
+.md-binding-controls{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,17rem),1fr));gap:.9rem}.md-binding-controls form{display:grid;align-content:start;gap:.65rem;padding:.85rem;border:1px solid var(--mind-diary-border-subtle);border-radius:.75rem}.md-binding-controls label{display:grid;gap:.35rem;font-weight:750}.md-binding-controls select{width:100%;min-width:0;min-height:2.9rem;padding:.55rem;border:2px solid #7c8492;border-radius:var(--mind-diary-radius-control);background:#fff}.md-binding-controls .md-caveat{grid-column:1/-1}
 @media(max-width:52rem){.md-header{grid-template-columns:1fr auto auto}.md-menu-button{grid-column:2}.md-profile{display:inline-flex;grid-column:3}.md-navigation{grid-column:1/-1}.md-setup-card{grid-template-columns:minmax(0,1fr)}}
-@media(max-width:36rem){.md-header{grid-template-columns:1fr auto}.md-brand-lockup{grid-column:1}.md-menu-button{grid-column:2}.md-profile{display:inline-flex;grid-column:1/-1;justify-self:stretch;justify-content:center}}
+@media(max-width:36rem){.md-header{grid-template-columns:1fr auto}.md-brand-lockup{grid-column:1}.md-menu-button{grid-column:2}.md-profile{display:inline-flex;grid-column:1/-1;justify-self:stretch;justify-content:center}.md-binding-list li{grid-template-columns:minmax(0,1fr)}.md-binding-list .md-button,.md-binding-controls .md-button{width:100%}}
 `;
 
 function canonicalOrigin(value: string): string {
@@ -368,6 +403,10 @@ function requiredString(value: unknown): string | null {
 
 function positiveInteger(value: unknown): number | null {
   return Number.isSafeInteger(value) && Number(value) > 0 ? Number(value) : null;
+}
+
+function nonnegativeInteger(value: unknown): number | null {
+  return Number.isSafeInteger(value) && Number(value) >= 0 ? Number(value) : null;
 }
 
 interface ProductUiSession {
@@ -639,6 +678,79 @@ function uiToken(value: unknown): McpTokenUiToken | null {
   });
 }
 
+interface ProductBindingUiCandidate {
+  readonly mindId: string;
+  readonly mind: MindBindingUiMind;
+}
+
+function bindingUiCandidate(value: unknown): ProductBindingUiCandidate | null {
+  const source = record(value);
+  const access = record(source?.access);
+  const mindId = requiredString(source?.mindId);
+  const route = requiredString(source?.route);
+  const name = requiredString(source?.name);
+  const visibility = source?.visibility;
+  const role = access?.role;
+  if (
+    mindId === null || route === null || name === null ||
+    !/^\/(?:me|[a-z0-9]+(?:-[a-z0-9]+)*)$/u.test(route) ||
+    !(visibility === "private" || visibility === "unlisted" || visibility === "public")
+  ) return null;
+  return Object.freeze({
+    mindId,
+    mind: Object.freeze({
+      name,
+      route,
+      visibility,
+      canWrite: role === "editor" || role === "admin" || role === "owner",
+    }),
+  });
+}
+
+function bindingOwnerUi(
+  value: unknown,
+  candidates: ReadonlyMap<string, MindBindingUiMind>,
+): MindBindingOwnerUiState | null {
+  const source = record(value);
+  const ownerId = requiredString(source?.ownerId);
+  const bindingVersion = nonnegativeInteger(source?.bindingVersion);
+  if (
+    ownerId === null || bindingVersion === null ||
+    !(source?.state === "active" || source?.state === "revoked" || source?.state === "deleted") ||
+    !Array.isArray(source.readBindings)
+  ) return null;
+  const readBindings = source.readBindings.map((value) => {
+    const binding = record(value);
+    const readBindingId = requiredString(binding?.readBindingId);
+    const mindId = requiredString(binding?.mindId);
+    return readBindingId === null || mindId === null
+      ? null
+      : Object.freeze({
+          readBindingId,
+          mind: candidates.get(mindId) ?? null,
+        });
+  });
+  if (readBindings.some((binding) => binding === null)) return null;
+  const writeSource = source.writeBinding === null ? null : record(source.writeBinding);
+  const writeBindingId = writeSource === null ? null : requiredString(writeSource.writeBindingId);
+  const writeMindId = writeSource === null ? null : requiredString(writeSource.mindId);
+  if (writeSource !== null && (writeBindingId === null || writeMindId === null)) return null;
+  return Object.freeze({
+    kind: "ready" as const,
+    ownerId,
+    bindingVersion,
+    state: source.state === "active" ? "active" : "revoked",
+    readBindings: Object.freeze(readBindings as Exclude<(typeof readBindings)[number], null>[]),
+    writeBinding: writeSource === null
+      ? null
+      : Object.freeze({
+          writeBindingId: writeBindingId!,
+          mind: candidates.get(writeMindId!) ?? null,
+        }),
+    eligibleMinds: Object.freeze([...candidates.values()]),
+  });
+}
+
 function staticAsset(pathname: string): { readonly body: BodyInit; readonly type: string } | null {
   if (pathname === "/favicon.ico") return { body: PRODUCT_UI_FAVICON_ICO, type: "image/x-icon" };
   if (pathname === "/favicon.svg") return { body: PRODUCT_UI_FAVICON_SVG, type: "image/svg+xml; charset=utf-8" };
@@ -682,6 +794,7 @@ async function productUiDocument(input: {
   readonly csrfToken: string;
   readonly control: ProductWebControlApplication;
   readonly oauthConnections?: ProductWebOAuthConnections;
+  readonly mindBindings?: ProductWebMindBindings;
 }): Promise<string> {
   if (input.identity.kind === "registration_required") {
     const model: AuthenticatedOnboardingModel = {
@@ -842,10 +955,48 @@ async function productUiDocument(input: {
         oauthConnections = { kind: "error", message: "Connected apps are unavailable. Try again." };
       }
     }
+    let bindingOwners: McpTokenManagementModel["bindingOwners"];
+    if (input.mindBindings !== undefined) {
+      const tokenOwnerIds = collection.kind === "ready"
+        ? collection.tokens.map((token) => token.tokenId)
+        : [];
+      const oauthOwnerIds = oauthConnections?.kind === "ready"
+        ? oauthConnections.connections.map((connection) => connection.grantId)
+        : [];
+      const ownerIds = Object.freeze([...tokenOwnerIds, ...oauthOwnerIds]);
+      try {
+        const [listedMinds, listedBindings] = await Promise.all([
+          input.control.execute({
+            operation: "list_minds",
+            actor: input.identity.actor,
+            input: Object.freeze({}),
+          }),
+          input.mindBindings.list(input.identity.actor, ownerIds),
+        ]);
+        const candidates = new Map<string, MindBindingUiMind>();
+        if (Array.isArray(listedMinds)) {
+          for (const value of listedMinds) {
+            const candidate = bindingUiCandidate(value);
+            if (candidate !== null) candidates.set(candidate.mindId, candidate.mind);
+          }
+        }
+        const projected = listedBindings
+          .map((owner) => bindingOwnerUi(owner, candidates))
+          .filter((owner): owner is MindBindingOwnerUiState => owner !== null);
+        bindingOwners = Object.freeze(projected);
+      } catch {
+        bindingOwners = Object.freeze(ownerIds.map((ownerId) => Object.freeze({
+          kind: "error" as const,
+          ownerId,
+          message: "Binding state is unavailable. Reload before using this credential for content.",
+        })));
+      }
+    }
     return withCsrfMeta(renderMcpTokenManagementDocument({
       displayName: session.displayName,
       collection,
       ...(oauthConnections === undefined ? {} : { oauthConnections }),
+      ...(bindingOwners === undefined ? {} : { bindingOwners }),
       siteOrigin: input.siteOrigin,
     }, "/ui/mind-diary-token-client.js"), input.csrfToken);
   }
@@ -1091,6 +1242,9 @@ function apiOperation(method: string, pathname: string): {
   if (one === "oauth-connections" && two !== null && tail.length === 2 && method === "DELETE") {
     return { operation: "revoke_oauth_connection", path: { grant_id: two } };
   }
+  if (one === "mind-bindings" && two !== null && tail.length === 2 && method === "PATCH") {
+    return { operation: "mutate_mind_binding", path: { binding_owner_id: two } };
+  }
   return null;
 }
 
@@ -1109,6 +1263,7 @@ function applicationErrorStatus(code: string): number {
   if (code === "authentication_required") return 401;
   if (code === "rate_limited") return 429;
   if (code === "search_index_unavailable") return 503;
+  if (code === "binding_state_unavailable") return 503;
   if (code === "okf_validation_failed") return 422;
   if (
     code === "handle_unavailable" ||
@@ -1178,6 +1333,9 @@ export function createProductWebHttpHandler(
           ...(dependencies.oauthConnections === undefined
             ? {}
             : { oauthConnections: dependencies.oauthConnections }),
+          ...(dependencies.mindBindings === undefined
+            ? {}
+            : { mindBindings: dependencies.mindBindings }),
         }));
       } catch {
         response = errorResponse(503, "operation_failed", requestId, true);
@@ -1233,6 +1391,13 @@ export function createProductWebHttpHandler(
         return revoked
           ? json(200, { ok: true, data: { revoked: true } })
           : errorResponse(404, "not_found", requestId);
+      }
+      if (matched.operation === "mutate_mind_binding") {
+        if (identity.kind !== "authenticated" || dependencies.mindBindings === undefined) {
+          return errorResponse(404, "not_found", requestId);
+        }
+        const data = await dependencies.mindBindings.mutate(identity.actor, input);
+        return json(200, { ok: true, data: snakeOutput(data) });
       }
       const data = await dependencies.control.execute({
         operation: matched.operation,

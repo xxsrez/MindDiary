@@ -1,6 +1,6 @@
 # REST и MCP API Mind Diary
 
-Статус: proposal для верификации, обновлено 2026-08-20. Документ уточняет
+Статус: proposal для верификации, обновлено 2026-08-22. Документ уточняет
 wire-level контракты первого прототипа на основе принятых product decisions.
 Product API и direct MCP route/compatibility repair реализованы, развёрнуты как
 single-principal UAT в OpenAI Sites и проверены raw modern calls и реальным
@@ -108,7 +108,7 @@ surface первого прототипа — authenticated MCP. Если adapte
 | `entry_id` | Exact locator, как минимум bound к `space_id + revision_id + path`. |
 | `job_id` | Export job locator. |
 | `token_id` | Metadata ID MCP token; никогда не secret. |
-| `binding_owner_id` | Server-derived OAuth-grant/personal-token owner; не принимается от client. |
+| `binding_owner_id` | Server-derived OAuth-grant/personal-token owner; first-party UI может передать его только как opaque locator собственного credential, после чего server заново проверяет ownership/state/scopes. Он никогда не является authority claim. |
 | `read_binding_id` | Immutable service record одного attached read target. |
 | `write_binding_id` | Immutable active generation singleton write target. |
 | `request_id` | Correlation ID безопасного request log. |
@@ -483,6 +483,7 @@ Problem Details response:
 | `POST` | `/api/v1/mcp-tokens` | Issue named personal MCP token once. |
 | `DELETE` | `/api/v1/mcp-tokens/{token_id}` | Revoke token. |
 | `DELETE` | `/api/v1/oauth-connections/{grant_id}` | Sites-authenticated principal отзывает свой connected app grant. |
+| `PATCH` | `/api/v1/mind-bindings/{binding_owner_id}` | Sites-authenticated principal меняет binding set exact собственного active credential с CAS и server read-back. |
 
 `mind_ref` в REST — `me` или canonical `space_handle`. Adapter разрешает его
 в internal `space_id` и только затем authorizes request.
@@ -749,6 +750,65 @@ Issuance errors, retry responses, logs, traces и metrics также не сод
 значения. Revoke идемпотентен и не удаляет audit metadata до account deletion
 policy.
 
+### Product Site Mind bindings
+
+`/settings/mcp` показывает binding state отдельно для каждого personal token и
+connected OAuth grant. Browser получает только current доступные name, route,
+visibility и write eligibility. Если ACL/visibility больше не разрешают
+metadata target, UI показывает `Access unavailable` без `mind_id`, `space_id`,
+name или route; собственный opaque `read_binding_id` может использоваться
+только для удаления stale binding.
+
+Mutation использует exact credential locator в route, same-origin `Origin`,
+CSRF и `Idempotency-Key`:
+
+```http
+PATCH /api/v1/mind-bindings/token_opaque
+Content-Type: application/json
+Idempotency-Key: binding:opaque
+X-CSRF-Token: ...
+```
+
+Bind/switch одного writable Mind:
+
+```json
+{
+  "action": "bind_write",
+  "mind_ref": "/research-notes",
+  "expected_binding_version": 7
+}
+```
+
+Attach read использует `action: "attach_read"` и тот же `mind_ref`. Detach
+доступного target использует `action: "detach_read" + mind_ref`; после потери
+доступа вместо Mind locator передаётся exact собственный `read_binding_id`.
+Unbind использует только `action: "unbind_write"` и version. Unknown fields,
+оба target selector одновременно, missing target и отрицательная version
+отклоняются.
+
+Server не доверяет route owner: он заново подтверждает, что token/grant
+принадлежит текущему Sites principal, active и имеет required scope. Затем
+`mind_ref` разрешается server-side, проверяется current ACL, а mutation
+повторяет обычный transactional binding contract. Revoke/expiry/disconnect
+fail closed; stale version возвращает `409 binding_version_conflict` и никогда
+не переносит writable target автоматически.
+
+Success возвращает только:
+
+```json
+{
+  "changed": true,
+  "replayed": false,
+  "binding_version": 8
+}
+```
+
+После success browser перезагружает `/settings/mcp` и читает authoritative
+server projection. UI явно разделяет attached read-only Minds и ровно один
+`Active writable Mind` либо `Not bound`, предупреждает, что switch лишает
+previous target write authority, и показывает immediate live-HEAD/history
+эффект `unlisted`/`public`. Binding не меняет visibility, membership или ACL.
+
 ## OAuth connector surface
 
 | Method | Route | Contract |
@@ -932,6 +992,13 @@ read-only `list_minds`. Ответы проверяются внутри page и
 credential или raw response. Закрытие show-once dialog отменяет pending fetch,
 стирает Bearer и запрещает retry; никакой отдельный diagnostic endpoint,
 persisted diagnostic record или control-plane MCP tool не добавляется.
+
+Та же page получает credential-scoped binding projection через trusted
+first-party control boundary. Browser никогда не использует personal/OAuth
+Bearer secret для binding UI: server строит content actor только после fresh
+Sites-principal ownership/state/scope check exact token/grant. Product UI
+mutation и MCP `set_*_mind_binding` вызывают один application contract и
+одинаковую CAS/lifecycle semantics.
 
 Диагностика различает две authentication boundaries: отсутствие текущей Sites
 session/audience access не называется ошибкой product token, а Bearer challenge
@@ -1881,6 +1948,9 @@ authentication не раскрывает existence/metadata.
     temporary context, DCR/PKCE/read/write-step-up/refresh/reuse/revoke/
     reconnect и personal-token regression; synthetic identity входит только в
     trusted authorize/consent seam.
+22. Product Site binding UI разделяет ACL и selection, redacts inaccessible
+    target metadata, требует CSRF + exact credential ownership + binding CAS,
+    перечитывает server state после success и fail closed после revoke.
 
 Claude Code и любой другой client получают отдельный adapter/client conformance
 profile до заявления поддержки.

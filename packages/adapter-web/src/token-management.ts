@@ -19,16 +19,17 @@ export const MIND_DIARY_CODEX_SAFE_ENVIRONMENT_SETUP =
 export const MIND_DIARY_CODEX_SITES_SAFE_ENVIRONMENT_SETUP =
   'read -s MIND_DIARY_SITES_TOKEN && export MIND_DIARY_SITES_AUTHORIZATION="Bearer ${MIND_DIARY_SITES_TOKEN}" && unset MIND_DIARY_SITES_TOKEN' as const;
 export const MIND_DIARY_CODEX_SAFE_WRITE_PLAYBOOK = `Before any substantial replace, delete, or change visible to current readers:
-1. Resolve one explicit Mind and read its current HEAD with get_mind_info.
-2. Browse and fetch only the affected canonical files from that exact revision.
-3. Show me a bounded preview: Mind, current revision, paths, create/replace/delete operations, and immediate visibility effect. Do not call commit_changeset yet.
-4. Ask for my explicit confirmation.
-5. After confirmation, re-read HEAD. If it changed, stop and rebuild the preview. Otherwise call commit_changeset with that exact expected_revision and one idempotency key.
-Treat revision_conflict as a stop-and-rebuild result. Never retry a changed payload with the same idempotency key. If the derived index is unavailable, use canonical browse/fetch and say that search is unavailable.` as const;
+1. Call get_mind_bindings first. Treat its current read bindings and single write binding as authoritative; never infer a target from the previous search, conversation, model memory, a similar name, or content.
+2. Require one active write binding, then resolve that exact Mind and read its current HEAD with get_mind_info. Other attached Minds remain read-only.
+3. Browse and fetch only the affected canonical files from that exact revision.
+4. Show me a bounded preview: exact Mind name and route, visibility, current revision, binding_version, opaque write_binding_id, paths, create/replace/delete operations, and immediate visibility effect. Do not show principal, token, grant, email, or internal Mind IDs. Do not call commit_changeset yet.
+5. Ask for my explicit confirmation.
+6. After confirmation, re-read get_mind_bindings, then re-read HEAD. If the binding version, write_binding_id, target or HEAD changed, stop and rebuild the preview. Otherwise call commit_changeset with that exact expected_revision, write_binding_id and one idempotency key.
+Treat stale/changed binding state and revision_conflict as stop-and-re-read results. Never transfer a write target automatically. Never retry a changed payload with the same idempotency key. If the derived index is unavailable, use canonical browse/fetch and say that search is unavailable.` as const;
 export const MIND_DIARY_CODEX_RESTORE_EXPORT_PLAYBOOK = `Restore and export one exact Mind without changing history:
-1. Use list_revisions and get_revision to identify the exact historical revision. Historical mode is read-only.
+1. Read get_mind_bindings first and require that this exact Mind is the active write binding. Other attached Minds remain read-only. Use list_revisions and get_revision to identify the exact historical revision. Historical mode is read-only.
 2. Fetch the selected historical files and compare them with the current HEAD. Show me the current-to-target paths and ask for explicit confirmation.
-3. Re-read current HEAD, then use ordinary commit_changeset to create a new revision matching the selected state. Never write to the historical selector. On revision_conflict, stop, rebuild, and reconfirm.
+3. Re-read current bindings and current HEAD, then use ordinary commit_changeset with the unchanged opaque write_binding_id to create a new revision matching the selected state. Never write to the historical selector. On stale binding or revision_conflict, stop, rebuild, and reconfirm; never rebind automatically.
 4. Start export with the exact new revision selector. Poll get_export_status until succeeded or a stable failure.
 5. Download before expiry without logging or repeating the URL. Verify the returned byte size and SHA-256, then validate the complete OKF bundle.
 For export_expired request a fresh authorized status/grant. Revoked access or a private switch must fail closed; do not work around them.` as const;
@@ -47,18 +48,19 @@ export const MIND_DIARY_STARTER_OKF_TEMPLATE = Object.freeze([
   }),
 ] as const);
 export const MIND_DIARY_CODEX_STARTER_PLAYBOOK = `Help me reach the first useful result in Mind Diary through the connected MCP tools.
-1. Call list_minds and ask me to choose exactly one target: /me or one ordinary Mind I can access. Do not combine Minds.
-2. Resolve that Mind and its current HEAD. Browse and fetch only index.md, log.md, and the files needed for this starter; do not place the whole canonical corpus in the prompt.
-3. Ask me for one concrete fact, decision, or reusable note and a short title. Prepare one UTF-8 Markdown Memory at concepts/<safe-slug>.md with OKF 0.2 frontmatter: type Reference, title, description, and status draft. Memory is the user-facing umbrella term, not a fixed OKF entity type.
-4. Prepare the matching index.md link with replace_index and one dated log.md entry with add_log_entry as the same bounded changeset. Show the selected Mind, exact HEAD, paths, and operations. Do not call commit_changeset yet.
-5. After my explicit confirmation, re-read HEAD. If it changed, stop and rebuild the preview. Otherwise commit once with that exact expected_revision and a fresh idempotency key.
-6. Run validate_mind on the new revision, fetch index.md, search for a distinctive phrase from the new Memory, and fetch the returned entry. Report the exact revision and whether all four checks passed.
+1. Call get_mind_bindings before any other content operation. Never infer a target from an earlier chat, search result, model memory, similar name, or content.
+2. If no writable Mind is bound, call list_minds and ask me to choose exactly one target: /me or one ordinary Mind I can write. Rebind only after my explicit trusted instruction. Read bindings never authorize writes.
+3. Re-read get_mind_bindings, report the exact writable Mind name, route, visibility, binding_version and opaque write_binding_id without showing principal, token, grant, email or internal Mind IDs, then resolve that Mind and its current HEAD. Browse and fetch only index.md, log.md, and the files needed for this starter; do not place the whole canonical corpus in the prompt.
+4. Ask me for one concrete fact, decision, or reusable note and a short title. Prepare one UTF-8 Markdown Memory at concepts/<safe-slug>.md with OKF 0.2 frontmatter: type Reference, title, description, and status draft. Memory is the user-facing umbrella term, not a fixed OKF entity type.
+5. Prepare the matching index.md link with replace_index and one dated log.md entry with add_log_entry as the same bounded changeset. Show the selected Mind, exact HEAD, paths, and operations. Do not call commit_changeset yet.
+6. After my explicit confirmation, re-read bindings and HEAD. If either changed, stop and rebuild the preview. Otherwise commit once with that exact expected_revision, unchanged write_binding_id and a fresh idempotency key.
+7. Run validate_mind on the new revision, fetch index.md, search for a distinctive phrase from the new Memory, and fetch the returned entry. Report the exact revision and whether all four checks passed.
 Use the tool schemas yourself; do not ask me to construct wire JSON. Never request or repeat a token, authorization header, Site credential, private email, or download URL. If search indexing is not ready, say so, verify with canonical fetch, and retry search only after the index is ready.` as const;
 export const MIND_DIARY_CODEX_CONCIERGE_PLAYBOOK = `Assist me with a bounded conversion of existing Markdown into one Mind. This is concierge work, not a product import.
-1. Ask me to choose exactly one accessible target Mind and a small explicit set of source Markdown files. Accept UTF-8 Markdown only.
+1. Read get_mind_bindings first. Ask me to choose exactly one writable target Mind and a small explicit set of source Markdown files. Rebind only after explicit trusted intent; never infer the target from previous activity. Accept UTF-8 Markdown only.
 2. Do not create or imply a ZIP/import/upload/crawl API, asset support, legacy migration, or cross-Mind merge. Never put the target Mind's whole canonical corpus into the prompt.
 3. Resolve current HEAD and fetch only the target index/log and paths that may change. Map the selected source into ordinary create/replace Markdown operations, preserving unknown OKF fields when present.
-4. Show a bounded path-level preview and ask for explicit confirmation. After confirmation, re-read HEAD and commit with exact CAS plus a fresh idempotency key; stop on conflict.
+4. Show a bounded path-level preview with exact target name, route, visibility, binding_version and privacy-safe opaque write_binding_id, then ask for explicit confirmation. After confirmation, re-read bindings and HEAD and commit with unchanged write_binding_id, exact CAS plus a fresh idempotency key; stop on stale binding or conflict and never rebind automatically.
 5. Validate the complete resulting bundle, then search and fetch one converted Memory as evidence. Keep tokens, credentials, email, private queries, content not selected for conversion, and download URLs out of the report.` as const;
 export type MindDiaryMcpClientProfile = "modern" | "compatibility";
 
@@ -138,6 +140,43 @@ export interface OAuthConnectionUiItem {
   readonly lastUsedAt: string | null;
 }
 
+export type MindBindingUiVisibility = "private" | "unlisted" | "public";
+
+export interface MindBindingUiMind {
+  readonly name: string;
+  readonly route: string;
+  readonly visibility: MindBindingUiVisibility;
+  readonly canWrite: boolean;
+}
+
+export interface MindBindingUiReadTarget {
+  readonly readBindingId: string;
+  /** Null means current access no longer permits any Mind metadata disclosure. */
+  readonly mind: MindBindingUiMind | null;
+}
+
+export interface MindBindingUiWriteTarget {
+  readonly writeBindingId: string;
+  /** Null means current access no longer permits any Mind metadata disclosure. */
+  readonly mind: MindBindingUiMind | null;
+}
+
+export type MindBindingOwnerUiState =
+  | {
+      readonly kind: "ready";
+      readonly ownerId: string;
+      readonly bindingVersion: number;
+      readonly state: "active" | "revoked";
+      readonly readBindings: readonly MindBindingUiReadTarget[];
+      readonly writeBinding: MindBindingUiWriteTarget | null;
+      readonly eligibleMinds: readonly MindBindingUiMind[];
+    }
+  | {
+      readonly kind: "error";
+      readonly ownerId: string;
+      readonly message: string;
+    };
+
 export type OAuthConnectionCollectionState =
   | { readonly kind: "ready"; readonly connections: readonly OAuthConnectionUiItem[] }
   | { readonly kind: "empty" }
@@ -147,6 +186,7 @@ export interface McpTokenManagementModel {
   readonly displayName: string;
   readonly collection: McpTokenCollectionState;
   readonly oauthConnections?: OAuthConnectionCollectionState;
+  readonly bindingOwners?: readonly MindBindingOwnerUiState[];
   readonly siteOrigin?: string;
   readonly announcement?: string;
 }
@@ -222,7 +262,112 @@ function dateLabel(value: string | null): string {
   }).format(date);
 }
 
-function renderTokenCard(token: McpTokenUiToken): string {
+function safeOwnerId(value: string): string | null {
+  return TOKEN_ID_PATTERN.test(value) ? value : null;
+}
+
+function safeBindingId(value: string): string | null {
+  return /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/u.test(value) ? value : null;
+}
+
+function safeMindRoute(value: string): string | null {
+  return /^\/(?:me|[a-z0-9]+(?:-[a-z0-9]+)*)$/u.test(value) ? value : null;
+}
+
+function bindingState(
+  owners: readonly MindBindingOwnerUiState[] | undefined,
+  ownerId: string,
+): MindBindingOwnerUiState | undefined {
+  return owners?.find((owner) => owner.ownerId === ownerId);
+}
+
+function visibilityWarning(visibility: MindBindingUiVisibility): string {
+  if (visibility === "private") return "Private: current ACL still controls every request.";
+  if (visibility === "unlisted") return "Unlisted: authenticated visitors with the exact route can read live HEAD and history.";
+  return "Public: authenticated visitors can discover and read live HEAD and history.";
+}
+
+function renderBindingMind(mind: MindBindingUiMind | null): string {
+  if (mind === null) {
+    return `<span class="md-binding-target md-binding-target--unavailable"><strong>Access unavailable</strong><span>Mind metadata is hidden because current access no longer permits it.</span></span>`;
+  }
+  const route = safeMindRoute(mind.route);
+  if (route === null) return renderBindingMind(null);
+  return `<span class="md-binding-target"><strong>${escapeUntrustedText(mind.name)}</strong><code>${escapeUntrustedText(route)}</code><span>${escapeUntrustedText(mind.visibility)} · ${escapeUntrustedText(visibilityWarning(mind.visibility))}</span></span>`;
+}
+
+function renderMindOptions(
+  minds: readonly MindBindingUiMind[],
+  writableOnly: boolean,
+): string {
+  return minds
+    .filter((mind) => !writableOnly || mind.canWrite)
+    .map((mind) => {
+      const route = safeMindRoute(mind.route);
+      if (route === null) return "";
+      return `<option value="${escapeUntrustedText(route)}" data-visibility="${escapeUntrustedText(mind.visibility)}">${escapeUntrustedText(mind.name)} — ${escapeUntrustedText(route)} — ${escapeUntrustedText(mind.visibility)}</option>`;
+    })
+    .join("");
+}
+
+function renderBindingPanel(
+  ownerId: string,
+  scopes: readonly McpTokenUiScope[],
+  credentialActive: boolean,
+  owners: readonly MindBindingOwnerUiState[] | undefined,
+): string {
+  const safeOwner = safeOwnerId(ownerId);
+  const state = bindingState(owners, ownerId);
+  if (safeOwner === null || state === undefined) {
+    return `<section class="md-binding-panel" aria-label="Mind bindings"><h4>Mind bindings</h4><p role="status">Binding state is unavailable. Reload before using this credential for content.</p></section>`;
+  }
+  if (state.kind === "error") {
+    return `<section class="md-binding-panel" aria-label="Mind bindings"><h4>Mind bindings</h4><p role="alert">${escapeUntrustedText(state.message)}</p></section>`;
+  }
+  const actionable = credentialActive && state.state === "active";
+  const readRows = state.readBindings.length === 0
+    ? `<li class="md-binding-empty">No attached read-only Minds.</li>`
+    : state.readBindings.map((binding) => {
+        const bindingId = safeBindingId(binding.readBindingId);
+        const route = binding.mind === null ? null : safeMindRoute(binding.mind.route);
+        const target = route === null
+          ? (bindingId === null ? "" : ` data-read-binding-id="${escapeUntrustedText(bindingId)}"`)
+          : ` data-mind-ref="${escapeUntrustedText(route)}"`;
+        return `<li>${renderBindingMind(binding.mind)}${actionable && target.length > 0 ? `<button class="md-button md-button--secondary" type="button" data-binding-action="detach_read" data-binding-owner="${escapeUntrustedText(safeOwner)}" data-binding-version="${state.bindingVersion}"${target}>Detach</button>` : ""}</li>`;
+      }).join("");
+  const readOptions = renderMindOptions(state.eligibleMinds, false);
+  const writeOptions = renderMindOptions(state.eligibleMinds, true);
+  const write = state.writeBinding === null
+    ? `<p class="md-binding-empty"><strong>Active writable Mind:</strong> Not bound.</p>`
+    : `<div class="md-binding-write"><p><strong>Active writable Mind</strong></p>${renderBindingMind(state.writeBinding.mind)}${actionable ? `<button class="md-button md-button--secondary" type="button" data-binding-action="unbind_write" data-binding-owner="${escapeUntrustedText(safeOwner)}" data-binding-version="${state.bindingVersion}">Unbind</button>` : ""}</div>`;
+  const controls = !actionable
+    ? `<p class="md-caveat">This credential is expired or revoked. Its bindings cannot be restored or changed; create or reconnect a credential, then choose bindings explicitly.</p>`
+    : `<div class="md-binding-controls">
+        <form data-binding-form="attach_read" data-binding-owner="${escapeUntrustedText(safeOwner)}" data-binding-version="${state.bindingVersion}">
+          <label>Attach a read-only Mind<select name="mind_ref" required><option value="">Choose a current Mind</option>${readOptions}</select></label>
+          <button class="md-button md-button--secondary" type="submit"${readOptions.length === 0 ? " disabled" : ""}>Attach read-only</button>
+        </form>
+        <form data-binding-form="bind_write" data-binding-owner="${escapeUntrustedText(safeOwner)}" data-binding-version="${state.bindingVersion}">
+          <label>Choose the single writable Mind<select name="mind_ref" required${scopes.includes("content:write") ? "" : " disabled"}><option value="">Choose a writable Mind</option>${writeOptions}</select></label>
+          <p>Switching makes the previous Mind no longer writable. It remains readable only when separately attached.</p>
+          <button class="md-button md-button--primary" type="submit"${!scopes.includes("content:write") || writeOptions.length === 0 ? " disabled" : ""}>${state.writeBinding === null ? "Bind writable Mind" : "Switch writable Mind"}</button>
+        </form>
+        <p class="md-caveat" data-binding-visibility-warning>Private, unlisted and public are visibility states, not binding permissions. Unlisted/public readers see committed live HEAD and history immediately.</p>
+      </div>`;
+  return `<section class="md-binding-panel" aria-label="Mind bindings" data-binding-panel="${escapeUntrustedText(safeOwner)}" data-binding-version="${state.bindingVersion}">
+    <div class="md-binding-panel__heading"><h4>Mind bindings</h4><span>Version ${state.bindingVersion}</span></div>
+    <p>Attached Minds are read-only. Only the single active writable Mind can receive commits.</p>
+    <ul class="md-binding-list">${readRows}</ul>
+    ${write}
+    ${controls}
+    <p class="md-form__status" role="status" aria-live="polite" data-binding-status></p>
+  </section>`;
+}
+
+function renderTokenCard(
+  token: McpTokenUiToken,
+  owners?: readonly MindBindingOwnerUiState[],
+): string {
   const tokenId = safeTokenId(token.tokenId);
   const safeState = safeTokenState(token.state);
   const state = stateLabel(safeState);
@@ -243,12 +388,14 @@ function renderTokenCard(token: McpTokenUiToken): string {
       <div><dt>Expires</dt><dd>${dateLabel(token.expiresAt)}</dd></div>
       <div><dt>Last used</dt><dd>${dateLabel(token.lastUsedAt)}</dd></div>
     </dl>
+    ${renderBindingPanel(token.tokenId, token.scopes, safeState === "active", owners)}
     <div class="md-token-card__action">${action}</div>
   </article>`;
 }
 
 function renderOAuthConnections(
   collection: OAuthConnectionCollectionState | undefined,
+  owners?: readonly MindBindingOwnerUiState[],
 ): string {
   if (collection === undefined) return "";
   if (collection.kind === "error") {
@@ -262,12 +409,15 @@ function renderOAuthConnections(
       ? connection.grantId
       : null;
     const access = connection.scopes.includes("content:write") ? "Read and write" : "Read only";
-    return `<article class="md-token-card" data-oauth-connection="${escapeUntrustedText(grantId ?? "invalid")}"><div class="md-token-card__heading"><div><h3>${escapeUntrustedText(connection.clientName)}</h3><p>${escapeUntrustedText(access)}</p></div><span class="md-token-state md-token-state--active">● Connected</span></div><dl class="md-token-card__metadata"><div><dt>Connected</dt><dd>${escapeUntrustedText(dateLabel(connection.createdAt))}</dd></div><div><dt>Last used</dt><dd>${escapeUntrustedText(dateLabel(connection.lastUsedAt))}</dd></div></dl><div class="md-token-card__action">${grantId === null ? "" : `<button class="md-button md-button--danger" type="button" data-revoke-oauth="${escapeUntrustedText(grantId)}">Revoke connection</button>`}<p class="md-form__status" role="status" aria-live="polite" data-oauth-revoke-status></p></div></article>`;
+    return `<article class="md-token-card" data-oauth-connection="${escapeUntrustedText(grantId ?? "invalid")}"><div class="md-token-card__heading"><div><h3>${escapeUntrustedText(connection.clientName)}</h3><p>${escapeUntrustedText(access)}</p></div><span class="md-token-state md-token-state--active">● Connected</span></div><dl class="md-token-card__metadata"><div><dt>Connected</dt><dd>${escapeUntrustedText(dateLabel(connection.createdAt))}</dd></div><div><dt>Last used</dt><dd>${escapeUntrustedText(dateLabel(connection.lastUsedAt))}</dd></div></dl>${grantId === null ? "" : renderBindingPanel(grantId, connection.scopes, true, owners)}<div class="md-token-card__action">${grantId === null ? "" : `<button class="md-button md-button--danger" type="button" data-revoke-oauth="${escapeUntrustedText(grantId)}">Revoke connection</button>`}<p class="md-form__status" role="status" aria-live="polite" data-oauth-revoke-status></p></div></article>`;
   }).join("");
   return `<section class="md-setup-card" aria-labelledby="connected-apps-heading"><div class="md-section-heading"><div><p class="md-eyebrow">OAuth</p><h2 id="connected-apps-heading">Connected apps</h2></div></div><p>Connections use short-lived access tokens and rotating refresh tokens. Revoking stops the app immediately.</p><div class="md-token-grid">${cards}</div></section>`;
 }
 
-function renderTokenCollection(collection: McpTokenCollectionState): string {
+function renderTokenCollection(
+  collection: McpTokenCollectionState,
+  owners?: readonly MindBindingOwnerUiState[],
+): string {
   switch (collection.kind) {
     case "loading":
       return `<section class="md-state md-state--loading" aria-labelledby="tokens-heading" aria-busy="true" data-token-collection>
@@ -298,7 +448,7 @@ function renderTokenCollection(collection: McpTokenCollectionState): string {
           </div>
           <a class="md-button md-button--primary" href="#create-token">Create a token</a>
         </div>
-        <div class="md-token-grid" data-token-list>${collection.tokens.map(renderTokenCard).join("")}</div>
+        <div class="md-token-grid" data-token-list>${collection.tokens.map((token) => renderTokenCard(token, owners)).join("")}</div>
       </section>`;
   }
 }
@@ -518,13 +668,13 @@ export function renderMcpTokenManagement(
         <div>
           <p class="md-eyebrow">Codex-first access</p>
           <h1>MCP setup</h1>
-          <p>Create and revoke personal tokens. Tokens follow your current access across Minds and never grant account or membership controls.</p>
+          <p>Create and revoke personal tokens, then attach explicit read-only Minds and choose at most one writable Mind per credential. Current ACL and visibility remain authoritative.</p>
         </div>
         ${announcement}
       </div>
       <div class="md-token-layout">
-        ${renderOAuthConnections(model.oauthConnections)}
-        ${renderTokenCollection(model.collection)}
+        ${renderOAuthConnections(model.oauthConnections, model.bindingOwners)}
+        ${renderTokenCollection(model.collection, model.bindingOwners)}
         ${renderCreateForm()}
         ${renderCodexSetup(model.siteOrigin)}
         ${renderStarterPlaybooks()}

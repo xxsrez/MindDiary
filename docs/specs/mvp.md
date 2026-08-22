@@ -1,6 +1,6 @@
 # Спецификация первого прототипа
 
-Статус: proposal, обновлено 2026-08-20. Product requirements ниже приняты;
+Статус: proposal, обновлено 2026-08-22. Product requirements ниже приняты;
 Product Site и direct route/compatibility repair реализованы и развёрнуты как
 single-principal UAT в OpenAI Sites. Обязательные authenticated web/control,
 persistence-after-redeploy и default/modern Codex MCP gates пройдены live;
@@ -299,6 +299,8 @@ Sites UI поддерживает:
 - ownership transfer;
 - named MCP token create/list/revoke;
 - OAuth connected-app list/revoke;
+- per-credential attached read-only Minds и один exact writable Mind с
+  attach/detach/bind/switch/unbind, binding CAS и server read-back;
 - management links и destructive-action warnings.
 
 Pilot-ready Product Site использует один authenticated navigation shell и
@@ -313,7 +315,7 @@ Pilot-ready Product Site использует один authenticated navigation 
 | `/public` | authenticated Public Minds catalog |
 | `/invitations` | incoming invitations и collaboration entrypoint |
 | `/settings/account` | profile, recovery handoff и account lifecycle |
-| `/settings/mcp` | Connected apps, personal MCP tokens, setup и diagnostics |
+| `/settings/mcp` | Connected apps, personal MCP tokens, explicit read/write Mind bindings, setup и diagnostics |
 | `/help` | pilot help, environment и support boundaries |
 
 Authenticated pages используют согласованные header/footer links, keyboard
@@ -668,9 +670,13 @@ Strict checked-in template является reproducible fixture, а не авт
 записываемым private content и не import format.
 
 Copy-ready Codex playbook доступен после onboarding на `/me`, на `/help` и в
-`/settings/mcp`. Пользователь выбирает ровно один Personal либо ordinary Mind,
-даёт один конкретный факт, решение или заметку, видит bounded path-level
-preview и подтверждает обычный `commit_changeset` против fresh exact HEAD.
+`/settings/mcp`. Client сначала читает authoritative `get_mind_bindings` и не
+выводит target из предыдущего chat/search/model state. Пользователь явно
+выбирает ровно один writable Personal либо ordinary Mind; rebind допустим
+только по trusted intent. Затем пользователь даёт один конкретный факт,
+решение или заметку, видит bounded path-level preview с exact route,
+visibility, binding version и privacy-safe opaque write ID и подтверждает
+обычный `commit_changeset` против fresh exact binding + HEAD.
 Codex сам использует published tool schemas; пользователю не нужно собирать
 wire JSON. После commit flow обязан выполнить `validate_mind`, fetch
 `index.md`, lexical `search` по отличительной фразе и exact `fetch` найденной

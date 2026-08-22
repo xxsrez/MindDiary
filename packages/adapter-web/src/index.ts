@@ -69,4 +69,5 @@ export const WEB_CONTROL_ROUTES = [
   ["GET", "/api/v1/mcp-tokens"],
   ["POST", "/api/v1/mcp-tokens"],
   ["DELETE", "/api/v1/mcp-tokens/{token_id}"],
+  ["PATCH", "/api/v1/mind-bindings/{binding_owner_id}"],
 ] as const;

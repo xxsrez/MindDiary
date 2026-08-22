@@ -205,6 +205,19 @@ disclosure, явный выбор одного Mind/revision, read-before-write,
 расширять OAuth scopes, обходить ACL или переносить control-plane operations в
 content MCP.
 
+До любого content read/write skill обязан вызвать `get_mind_bindings` и
+считать только его fresh response authoritative. Он не выводит target из
+предыдущего search, chat, model memory, похожего name или corpus text. Другие
+attached Minds остаются read-only; отсутствие write binding останавливает
+commit. Rebind допустим только после explicit trusted user intent.
+
+Перед capture/commit skill privacy-safe сообщает exact target name, route,
+visibility, `binding_version` и opaque `write_binding_id`, но не показывает
+principal/token/grant/email/internal Mind IDs. После confirmation он повторно
+читает bindings и HEAD; stale version/ID/target останавливает operation без
+automatic transfer. `commit_changeset` передаёт unchanged `write_binding_id`,
+exact `expected_revision` и fresh idempotency key.
+
 Marketplace catalog получает вторую запись с local source
 `./plugins/mind-diary`, `installation: AVAILABLE` и
 `authentication: ON_USE`. Добавление plugin не меняет Task Manager package.
@@ -364,14 +377,22 @@ OAuth и ACL. Изменение Site access policy является отдел�
 
 ## Product UI
 
-`/settings/mcp` следует превратить из primarily manual-token page в две явно
-разделённые области:
+Repository source `/settings/mcp` теперь содержит две явно разделённые
+credential области и общий binding control contract:
 
 1. `Connected apps` — client name, granted scopes, created/last-used times,
    revoke/reconnect status, attached read Minds и отдельный exact active
    writable Mind либо `Not bound`.
 2. `Advanced: personal tokens` — существующие `mdp_v1_` create/list/revoke для
    CLI, compatibility и диагностики.
+
+Каждая credential card отделяет attached read-only Minds от единственного
+`Active writable Mind`/`Not bound`, поддерживает attach/detach/bind/switch/
+unbind с server read-back, redacts inaccessible target metadata и блокирует
+controls после revoke/expiry. Switch copy объясняет, что previous target больше
+не writable; visibility copy отдельно предупреждает об immediate
+`unlisted`/`public` live HEAD/history exposure. Это source-candidate evidence,
+не claim о уже развёрнутом UAT UI.
 
 В onboarding следует объяснять только пользовательские действия: установить
 Mind Diary из Srez Marketplace, пройти Authenticate, подключить read Minds и

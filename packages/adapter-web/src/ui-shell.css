@@ -983,6 +983,98 @@ h3 {
   margin-block: 0 0.75rem;
 }
 
+.md-binding-panel {
+  display: grid;
+  gap: 0.9rem;
+  min-width: 0;
+  margin-block-start: 1rem;
+  padding-block-start: 1rem;
+  border-block-start: 1px solid var(--mind-diary-border-subtle);
+}
+
+.md-binding-panel__heading,
+.md-binding-write {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.md-binding-panel h4 {
+  margin: 0;
+  font-family: var(--mind-diary-font-display);
+  font-size: 1.2rem;
+}
+
+.md-binding-list {
+  display: grid;
+  gap: 0.75rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.md-binding-list li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem;
+  border: 1px solid var(--mind-diary-border-subtle);
+  border-radius: 0.75rem;
+}
+
+.md-binding-target {
+  display: grid;
+  gap: 0.2rem;
+  min-width: 0;
+}
+
+.md-binding-target code,
+.md-binding-target span {
+  overflow-wrap: anywhere;
+}
+
+.md-binding-target--unavailable {
+  color: #5b6473;
+}
+
+.md-binding-controls {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 17rem), 1fr));
+  gap: 0.9rem;
+}
+
+.md-binding-controls form {
+  display: grid;
+  align-content: start;
+  gap: 0.65rem;
+  padding: 0.85rem;
+  border: 1px solid var(--mind-diary-border-subtle);
+  border-radius: 0.75rem;
+}
+
+.md-binding-controls label {
+  display: grid;
+  gap: 0.35rem;
+  font-weight: 750;
+}
+
+.md-binding-controls select {
+  width: 100%;
+  min-width: 0;
+  min-height: 2.9rem;
+  padding: 0.55rem;
+  border: 2px solid #7c8492;
+  border-radius: var(--mind-diary-radius-control);
+  background: #fff;
+}
+
+.md-binding-controls .md-caveat {
+  grid-column: 1 / -1;
+}
+
 @media (max-width: 58rem) {
   .md-header {
     grid-template-columns: auto auto 1fr;
@@ -1101,6 +1193,15 @@ h3 {
 
   .md-personal-summary {
     grid-template-columns: 1fr;
+  }
+
+  .md-binding-list li {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .md-binding-list .md-button,
+  .md-binding-controls .md-button {
+    width: 100%;
   }
 }
 

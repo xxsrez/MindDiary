@@ -71,6 +71,7 @@ import {
   MindHistoryService,
   MindSearchService,
   MindValidationService,
+  MCP_CONTENT_DEPLOYMENT_CAPABILITIES,
   WebCryptoMindLocatorCodec,
   type McpBearerAuthenticator,
 } from "@mind-diary/application-content";
@@ -96,7 +97,13 @@ import {
   type PrivacySafeObservabilityEvent,
   type PrivacySafeObservabilitySink,
 } from "@mind-diary/application-ports";
-import { type Capability, verifiedSpaceHost } from "@mind-diary/domain";
+import {
+  type Capability,
+  type EffectiveTokenScopes,
+  type MindBindingOwnerId,
+  type TokenId,
+  verifiedSpaceHost,
+} from "@mind-diary/domain";
 
 const PRODUCT_SITES_DEPLOYMENT_CAPABILITIES = Object.freeze([
   "content:browse",
@@ -788,6 +795,227 @@ export async function createProductSiteRuntime(
       },
       revoke(principalId, grantId) {
         return oauth.revokeConnection(principalId, grantId);
+      },
+    },
+    mindBindings: {
+      async list(actor, ownerIds) {
+        const requested = new Set(ownerIds);
+        if (requested.size === 0) return Object.freeze([]);
+        const personalTokens = await control.services.tokens.listMcpTokens(actor as never);
+        const oauthConnections = ownerIds.some((ownerId) => ownerId.startsWith("md_oauth_grant_"))
+          ? await oauth.listConnections(String(actor.principalId))
+          : Object.freeze([]);
+        const credentials = [
+          ...personalTokens
+            .filter((token) => !String(token.tokenId).startsWith(OAUTH_ACCESS_RECORD_PREFIX))
+            .map((token) => Object.freeze({
+              ownerId: String(token.tokenId),
+              tokenId: String(token.tokenId),
+              scopes: token.scopes,
+              state: token.state,
+            })),
+          ...oauthConnections.map((connection) => Object.freeze({
+            ownerId: connection.grantId,
+            tokenId: connection.grantId,
+            scopes: connection.scopes,
+            state: "active" as const,
+          })),
+        ].filter((credential) => requested.has(credential.ownerId));
+        const snapshots = await Promise.all(credentials.map(async (credential) => {
+          const bindingActor = Object.freeze({
+            kind: "registered_principal" as const,
+            principalId: actor.principalId,
+            authentication: Object.freeze({
+              kind: "mcp_token" as const,
+              tokenId: credential.tokenId as TokenId,
+              bindingOwnerId: credential.ownerId as MindBindingOwnerId,
+              effectiveScopes: Object.freeze([...credential.scopes]) as EffectiveTokenScopes,
+            }),
+            deploymentCapabilities: MCP_CONTENT_DEPLOYMENT_CAPABILITIES,
+            requestId: actor.requestId,
+            occurredAtUtc: actor.occurredAtUtc,
+          });
+          const result = await bindings.read({ actor: bindingActor });
+          if (result.kind !== "ready") return null;
+          return Object.freeze({
+            ownerId: credential.ownerId,
+            bindingVersion: Number(result.bindings.bindingSet.bindingVersion),
+            state: credential.state === "active"
+              ? result.bindings.bindingSet.state
+              : "revoked",
+            readBindings: Object.freeze(result.bindings.readBindings.map((binding) => Object.freeze({
+              readBindingId: String(binding.readBindingId),
+              mindId: String(binding.spaceId),
+            }))),
+            writeBinding: result.bindings.writeBinding === null
+              ? null
+              : Object.freeze({
+                  writeBindingId: String(result.bindings.writeBinding.writeBindingId),
+                  mindId: String(result.bindings.writeBinding.spaceId),
+                }),
+          });
+        }));
+        return Object.freeze(snapshots.filter((snapshot): snapshot is NonNullable<typeof snapshot> => snapshot !== null));
+      },
+      async mutate(actor, input) {
+        const ownerId = typeof input.binding_owner_id === "string"
+          ? input.binding_owner_id
+          : null;
+        const action = input.action;
+        if (
+          ownerId === null ||
+          !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u.test(ownerId) ||
+          !(action === "attach_read" || action === "detach_read" ||
+            action === "bind_write" || action === "unbind_write")
+        ) {
+          throw Object.assign(new Error("Invalid binding mutation."), { code: "invalid_binding_request" });
+        }
+        const baseKeys = [
+          "action",
+          "binding_owner_id",
+          "expectedBindingVersion",
+          "idempotencyKey",
+        ];
+        const allowedKeys = new Set([
+          ...baseKeys,
+          ...(action === "attach_read" || action === "bind_write"
+            ? ["mindRef"]
+            : action === "detach_read"
+              ? ["mindRef", "readBindingId"]
+              : []),
+        ]);
+        if (Object.keys(input).some((key) => !allowedKeys.has(key))) {
+          throw Object.assign(new Error("Unknown binding mutation field."), { code: "invalid_binding_request" });
+        }
+        if (
+          !Number.isSafeInteger(input.expectedBindingVersion) ||
+          Number(input.expectedBindingVersion) < 0 ||
+          typeof input.idempotencyKey !== "string" ||
+          input.idempotencyKey.length === 0
+        ) {
+          throw Object.assign(new Error("Invalid binding mutation concurrency fields."), { code: "invalid_binding_request" });
+        }
+        const personalTokens = await control.services.tokens.listMcpTokens(actor as never);
+        const personal = personalTokens.find((token) =>
+          !String(token.tokenId).startsWith(OAUTH_ACCESS_RECORD_PREFIX) &&
+          String(token.tokenId) === ownerId);
+        const oauthConnections = personal === undefined
+          ? await oauth.listConnections(String(actor.principalId))
+          : Object.freeze([]);
+        const connection = oauthConnections.find((item) => item.grantId === ownerId);
+        if (personal === undefined && connection === undefined) {
+          throw Object.assign(new Error("Binding owner not found."), { code: "binding_owner_not_found" });
+        }
+        if (personal !== undefined && personal.state !== "active") {
+          throw Object.assign(new Error("Binding owner is not active."), { code: "binding_owner_revoked" });
+        }
+        const scopes = personal?.scopes ?? connection!.scopes;
+        if (
+          (action === "bind_write" || action === "unbind_write") &&
+          !scopes.includes("content:write")
+        ) {
+          throw Object.assign(new Error("Write scope is required."), { code: "insufficient_scope" });
+        }
+        const bindingActor = Object.freeze({
+          kind: "registered_principal" as const,
+          principalId: actor.principalId,
+          authentication: Object.freeze({
+            kind: "mcp_token" as const,
+            tokenId: ownerId as TokenId,
+            bindingOwnerId: ownerId as MindBindingOwnerId,
+            effectiveScopes: Object.freeze([...scopes]) as EffectiveTokenScopes,
+          }),
+          deploymentCapabilities: MCP_CONTENT_DEPLOYMENT_CAPABILITIES,
+          requestId: actor.requestId,
+          occurredAtUtc: actor.occurredAtUtc,
+        });
+        const expectedBindingVersion = input.expectedBindingVersion;
+        const idempotencyKey = input.idempotencyKey;
+        let spaceId: unknown = null;
+        if (action === "attach_read" || action === "bind_write") {
+          const mindRef = typeof input.mindRef === "string" ? input.mindRef : null;
+          if (mindRef === null || !/^\/(?:me|[a-z0-9]+(?:-[a-z0-9]+)*)$/u.test(mindRef)) {
+            throw Object.assign(new Error("Invalid binding target."), { code: "invalid_mind_ref" });
+          }
+          const resolved = await control.execute({
+            operation: "get_mind_info",
+            actor,
+            input: Object.freeze({ mind_ref: mindRef.slice(1) }),
+          });
+          spaceId = (resolved as { readonly mindId?: unknown }).mindId;
+        }
+        if (action === "detach_read") {
+          const mindRef = typeof input.mindRef === "string" ? input.mindRef : null;
+          const readBindingId = typeof input.readBindingId === "string"
+            ? input.readBindingId
+            : null;
+          if ((mindRef === null) === (readBindingId === null)) {
+            throw Object.assign(new Error("Exactly one detach target is required."), { code: "invalid_binding_request" });
+          }
+          if (mindRef !== null) {
+            if (!/^\/(?:me|[a-z0-9]+(?:-[a-z0-9]+)*)$/u.test(mindRef)) {
+              throw Object.assign(new Error("Invalid binding target."), { code: "invalid_mind_ref" });
+            }
+            const resolved = await control.execute({
+              operation: "get_mind_info",
+              actor,
+              input: Object.freeze({ mind_ref: mindRef.slice(1) }),
+            });
+            spaceId = (resolved as { readonly mindId?: unknown }).mindId;
+          } else {
+            const current = await bindings.read({ actor: bindingActor });
+            const selected = current.kind === "ready" && readBindingId !== null
+              ? current.bindings.readBindings.find((binding) =>
+                  String(binding.readBindingId) === readBindingId)
+              : undefined;
+            if (selected === undefined) {
+              throw Object.assign(new Error("Binding target not found."), { code: "binding_target_not_found" });
+            }
+            spaceId = selected.spaceId;
+          }
+        }
+        const result = await runWithCapturedWork(
+          () => action === "attach_read" || action === "detach_read"
+            ? bindings.mutateRead({
+                actor: bindingActor,
+                action: action === "attach_read" ? "attach" : "detach",
+                spaceId: spaceId as never,
+                expectedBindingVersion,
+                idempotencyKey,
+              })
+            : bindings.mutateWrite(action === "bind_write"
+              ? {
+                  actor: bindingActor,
+                  action: "bind",
+                  spaceId: spaceId as never,
+                  expectedBindingVersion,
+                  idempotencyKey,
+                }
+              : {
+                  actor: bindingActor,
+                  action: "unbind",
+                  expectedBindingVersion,
+                  idempotencyKey,
+                }),
+          (value) => value.kind === "applied" && !value.replayed,
+        );
+        if (result.kind === "applied") {
+          return Object.freeze({
+            changed: result.changed,
+            replayed: result.replayed,
+            bindingVersion: Number(result.bindings.bindingSet.bindingVersion),
+          });
+        }
+        if (result.kind === "denied") {
+          throw Object.assign(new Error("Binding mutation was denied."), { code: result.decision.code });
+        }
+        if (result.kind === "invalid") {
+          throw Object.assign(new Error("Binding mutation is invalid."), { code: result.code });
+        }
+        const code = result.kind === "owner_mismatch"
+          ? "binding_owner_not_found"
+          : result.kind;
+        throw Object.assign(new Error("Binding mutation was not applied."), { code });
       },
     },
   });

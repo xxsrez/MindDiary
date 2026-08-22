@@ -3,8 +3,8 @@
 Статус: accepted product/domain/API contract, 2026-08-22. Локальные durable
 state/application/persistence (`MD-231`), одинаковый binding tool surface для
 modern/compatibility MCP (`MD-230`) и hard content enforcement (`MD-232`)
-подтверждены. Product UI/plugin guidance и UAT evidence остаются отдельными
-задачами; документ не утверждает, что bindings уже доступны в deployed product.
+подтверждены. Product UI и exact Marketplace plugin guidance (`MD-233`)
+подтверждены локально; UAT evidence остаётся отдельным шагом (`MD-235`).
 
 ## Назначение
 
@@ -184,6 +184,37 @@ Discovery `list_minds`, `resolve_mind` и safe `get_mind_info` по-прежне
 history, validation, Resources и export требуют active read binding либо exact
 write binding. Discovery не считается attach. Arbitrary `mind` selector не
 является write authority.
+
+## Product Site control projection
+
+Authenticated `/settings/mcp` показывает тот же authoritative binding set для
+каждого visible personal token и connected OAuth grant:
+
+- `Attached read-only Minds` — `0..N` current read bindings;
+- `Active writable Mind` — один exact target либо `Not bound`;
+- current `binding_version`, name, route и visibility только для Minds, которые
+  current Sites principal ещё вправе видеть;
+- `Access unavailable` без `space_id`, name или route после ACL/visibility
+  loss; credential-owned opaque read binding остаётся removable;
+- revoked/expired/disconnected credential получает только recovery guidance,
+  без mutation controls.
+
+Browser mutation идёт через
+`PATCH /api/v1/mind-bindings/{binding_owner_id}` с same-origin CSRF,
+`Idempotency-Key`, exact action и `expected_binding_version`. Route parameter —
+только locator: server заново подтверждает ownership, active lifecycle и
+effective scope exact credential. `mind_ref` разрешается server-side; browser
+не передаёт `space_id`, principal, role или grant claim. Attach/bind повторяют
+fresh ACL authorization; detach/unbind не требуют сохранившегося target ACL,
+но остаются bound к exact current owner/version.
+
+Success возвращает safe changed/replayed/version projection, после чего page
+делает full server read-back. `binding_version_conflict`, revoke, scope/ACL
+loss и storage unavailable не приводят к automatic rebind или переносу
+payload. UI отдельно предупреждает: switch немедленно снимает write authority
+с previous target; `unlisted`/`public` visibility делает новые commits
+доступными соответствующим authenticated readers, а binding не меняет этот
+visibility effect.
 
 ## Errors
 

@@ -669,6 +669,236 @@ test("empty account reaches a strict starter commit and first useful search/fetc
   );
 });
 
+test("durable Product Site controls one token binding with ownership, CAS, read-back, and revoke fencing", async () => {
+  let currentTime = new Date("2026-08-22T11:00:00.000Z");
+  const runtime = await createProductSiteRuntime({
+    database: new FakeD1Database(),
+    bucket: new FakeR2Bucket(),
+    publicOrigin: ORIGIN,
+    identity: {
+      readVerifiedIdentity() {
+        return {
+          kind: "authenticated",
+          verifiedEmail: "web.binding.e2e@example.com",
+          verifiedFullName: "Web Binding E2E",
+        };
+      },
+    },
+    tokenVerifierKey: key(17),
+    locatorKey: key(57),
+    exportDownloadVerifierKey: key(97),
+    csrfKey: key(137),
+    now: () => currentTime,
+    observabilityWriter: { write() {} },
+    schedule() {},
+  });
+
+  const registration = await responseFrom(runtime, new Request(`${ORIGIN}/`));
+  const registrationCsrf = csrfFromHtml(await registration.text());
+  const bootstrapped = await responseFrom(runtime, new Request(`${ORIGIN}/api/v1/account`, {
+    method: "POST",
+    headers: {
+      origin: ORIGIN,
+      "content-type": "application/json",
+      "x-csrf-token": registrationCsrf,
+      "idempotency-key": "bootstrap:web-binding-e2e",
+    },
+    body: JSON.stringify({ action: "create_isolated_account" }),
+  }));
+  assert.equal(bootstrapped.status, 200);
+
+  const settings = await responseFrom(runtime, new Request(`${ORIGIN}/settings/mcp`));
+  const csrf = csrfFromHtml(await settings.text());
+  const issued = await responseFrom(runtime, new Request(`${ORIGIN}/api/v1/mcp-tokens`, {
+    method: "POST",
+    headers: {
+      origin: ORIGIN,
+      "content-type": "application/json",
+      "x-csrf-token": csrf,
+      "idempotency-key": "token:web-binding-e2e",
+    },
+    body: JSON.stringify({ name: "Web binding token", scopes: ["content:write"] }),
+  }));
+  assert.equal(issued.status, 200);
+  const issuedBody = await issued.json();
+  const tokenId = issuedBody.data.token.token_id;
+  const secret = issuedBody.data.secret;
+
+  const emptyPage = await responseFrom(runtime, new Request(`${ORIGIN}/settings/mcp`));
+  const emptyHtml = await emptyPage.text();
+  assert.match(emptyHtml, /Web binding token/u);
+  assert.match(emptyHtml, /Version 0/u);
+  assert.match(emptyHtml, /No attached read-only Minds/u);
+  assert.match(emptyHtml, /Active writable Mind:<\/strong> Not bound/u);
+
+  const mutate = (body, idempotencyKey) => responseFrom(runtime, new Request(
+    `${ORIGIN}/api/v1/mind-bindings/${encodeURIComponent(tokenId)}`,
+    {
+      method: "PATCH",
+      headers: {
+        origin: ORIGIN,
+        "content-type": "application/json",
+        "x-csrf-token": csrf,
+        "idempotency-key": idempotencyKey,
+      },
+      body: JSON.stringify(body),
+    },
+  ));
+
+  const bound = await mutate({
+    action: "bind_write",
+    mind_ref: "/me",
+    expected_binding_version: 0,
+  }, "binding:web-bind-write");
+  assert.equal(bound.status, 200, await bound.clone().text());
+  assert.equal((await bound.json()).data.binding_version, 1);
+
+  const boundPage = await responseFrom(runtime, new Request(`${ORIGIN}/settings/mcp`));
+  const boundHtml = await boundPage.text();
+  assert.match(boundHtml, /Version 1/u);
+  assert.match(boundHtml, /Active writable Mind[\s\S]*Web Binding E2E[\s\S]*\/me[\s\S]*private/u);
+  assert.doesNotMatch(boundHtml, /principal_|space_personal/u);
+
+  const bindingReadResponse = await modernMcp(runtime, secret, {
+    jsonrpc: "2.0",
+    id: "web-binding-read-back",
+    method: "tools/call",
+    params: {
+      name: "get_mind_bindings",
+      arguments: {},
+      _meta: {
+        "io.modelcontextprotocol/protocolVersion": MCP_TARGET_PROTOCOL,
+        "io.modelcontextprotocol/clientInfo": { name: "web-binding-runtime-e2e", version: "0.0.0" },
+        "io.modelcontextprotocol/clientCapabilities": {},
+      },
+    },
+  });
+  assert.equal(bindingReadResponse.status, 200, await bindingReadResponse.clone().text());
+  const bindingReadBody = await bindingReadResponse.json();
+  assert.equal(bindingReadBody.result?.isError, false, JSON.stringify(bindingReadBody));
+  const bindings = bindingReadBody.result.structuredContent.data;
+  assert.equal(bindings.binding_version, 1);
+  assert.equal(bindings.write_binding.mind.route, "/me");
+  assert.equal(typeof bindings.write_binding.write_binding_id, "string");
+
+  const stale = await mutate({
+    action: "unbind_write",
+    expected_binding_version: 0,
+  }, "binding:web-stale");
+  assert.equal(stale.status, 409);
+  assert.equal((await stale.json()).error.code, "binding_version_conflict");
+  const afterStale = await modernTool(runtime, secret, "web-binding-after-stale", "get_mind_bindings", {});
+  assert.equal(afterStale.binding_version, 1);
+  assert.equal(afterStale.write_binding.mind.route, "/me");
+
+  const unknownField = await mutate({
+    action: "unbind_write",
+    expected_binding_version: 1,
+    principal_id: "must-not-be-accepted",
+  }, "binding:web-unknown-field");
+  assert.equal(unknownField.status, 400);
+  assert.equal((await unknownField.json()).error.code, "invalid_binding_request");
+
+  const readOnlyIssued = await responseFrom(runtime, new Request(`${ORIGIN}/api/v1/mcp-tokens`, {
+    method: "POST",
+    headers: {
+      origin: ORIGIN,
+      "content-type": "application/json",
+      "x-csrf-token": csrf,
+      "idempotency-key": "token:web-binding-read-only",
+    },
+    body: JSON.stringify({ name: "Read-only binding token", scopes: ["content:read"] }),
+  }));
+  assert.equal(readOnlyIssued.status, 200);
+  const readOnlyTokenId = (await readOnlyIssued.json()).data.token.token_id;
+  const readOnlyWrite = await responseFrom(runtime, new Request(
+    `${ORIGIN}/api/v1/mind-bindings/${encodeURIComponent(readOnlyTokenId)}`,
+    {
+      method: "PATCH",
+      headers: {
+        origin: ORIGIN,
+        "content-type": "application/json",
+        "x-csrf-token": csrf,
+        "idempotency-key": "binding:web-read-only-write",
+      },
+      body: JSON.stringify({
+        action: "bind_write",
+        mind_ref: "/me",
+        expected_binding_version: 0,
+      }),
+    },
+  ));
+  assert.equal(readOnlyWrite.status, 403);
+  assert.equal((await readOnlyWrite.json()).error.code, "insufficient_scope");
+  const readOnlyPage = await responseFrom(runtime, new Request(`${ORIGIN}/settings/mcp`));
+  const readOnlyHtml = await readOnlyPage.text();
+  const panelFor = (html, bindingOwnerId) => {
+    const marker = `data-binding-panel="${bindingOwnerId}"`;
+    const markerStart = html.indexOf(marker);
+    assert.notEqual(markerStart, -1, `missing binding panel for ${bindingOwnerId}`);
+    const sectionStart = html.lastIndexOf("<section", markerStart);
+    const sectionEnd = html.indexOf("</section>", markerStart);
+    assert.notEqual(sectionStart, -1);
+    assert.notEqual(sectionEnd, -1);
+    return html.slice(sectionStart, sectionEnd + "</section>".length);
+  };
+  const readOnlyPanel = panelFor(readOnlyHtml, readOnlyTokenId);
+  assert.match(readOnlyPanel, /data-binding-form="attach_read"/u);
+  assert.match(readOnlyPanel, /data-binding-form="bind_write"[\s\S]*disabled/u);
+
+  const revoked = await responseFrom(runtime, new Request(
+    `${ORIGIN}/api/v1/mcp-tokens/${encodeURIComponent(tokenId)}`,
+    {
+      method: "DELETE",
+      headers: {
+        origin: ORIGIN,
+        "x-csrf-token": csrf,
+        "idempotency-key": "revoke:web-binding-e2e",
+      },
+    },
+  ));
+  assert.equal(revoked.status, 200);
+  const revokedPage = await responseFrom(runtime, new Request(`${ORIGIN}/settings/mcp`));
+  const revokedHtml = await revokedPage.text();
+  assert.match(revokedHtml, /This credential is expired or revoked/u);
+  const revokedPanel = panelFor(revokedHtml, tokenId);
+  assert.doesNotMatch(revokedPanel, /data-binding-form|data-binding-action/u);
+
+  const afterRevoke = await mutate({
+    action: "bind_write",
+    mind_ref: "/me",
+    expected_binding_version: 2,
+  }, "binding:web-after-revoke");
+  assert.equal(afterRevoke.status, 403);
+  assert.equal((await afterRevoke.json()).error.code, "binding_owner_revoked");
+
+  currentTime = new Date("2027-01-22T11:00:00.000Z");
+  const expiredPage = await responseFrom(runtime, new Request(`${ORIGIN}/settings/mcp`));
+  const expiredHtml = await expiredPage.text();
+  const expiredReadOnlyPanel = panelFor(expiredHtml, readOnlyTokenId);
+  assert.match(expiredReadOnlyPanel, /expired or revoked/u);
+  assert.doesNotMatch(expiredReadOnlyPanel, /data-binding-form|data-binding-action/u);
+  const expiredMutation = await responseFrom(runtime, new Request(
+    `${ORIGIN}/api/v1/mind-bindings/${encodeURIComponent(readOnlyTokenId)}`,
+    {
+      method: "PATCH",
+      headers: {
+        origin: ORIGIN,
+        "content-type": "application/json",
+        "x-csrf-token": csrf,
+        "idempotency-key": "binding:web-expired-read",
+      },
+      body: JSON.stringify({
+        action: "attach_read",
+        mind_ref: "/me",
+        expected_binding_version: 0,
+      }),
+    },
+  ));
+  assert.equal(expiredMutation.status, 403);
+  assert.equal((await expiredMutation.json()).error.code, "binding_owner_revoked");
+});
+
 test("durable product runtime carries a Sites account token through Codex MCP and revokes it", async () => {
   const database = new FakeD1Database();
   const bucket = new FakeR2Bucket();

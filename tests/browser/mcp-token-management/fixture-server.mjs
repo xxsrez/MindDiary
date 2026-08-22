@@ -42,6 +42,53 @@ function fixtureModel(state) {
     ...base,
     announcement: "Synthetic browser fixture ready.",
     collection: { kind: "ready", tokens: [fixtureToken] },
+    bindingOwners: [{
+      kind: "ready",
+      ownerId: fixtureToken.tokenId,
+      bindingVersion: 4,
+      state: "active",
+      readBindings: [
+        {
+          readBindingId: "read_fixture_personal",
+          mind: {
+            name: "Personal notes with a deliberately long mobile label",
+            route: "/me",
+            visibility: "private",
+            canWrite: true,
+          },
+        },
+        { readBindingId: "read_fixture_hidden", mind: null },
+      ],
+      writeBinding: {
+        writeBindingId: "write_fixture_research",
+        mind: {
+          name: "Shared research",
+          route: "/research",
+          visibility: "unlisted",
+          canWrite: true,
+        },
+      },
+      eligibleMinds: [
+        {
+          name: "Personal notes with a deliberately long mobile label",
+          route: "/me",
+          visibility: "private",
+          canWrite: true,
+        },
+        {
+          name: "Shared research",
+          route: "/research",
+          visibility: "unlisted",
+          canWrite: true,
+        },
+        {
+          name: "Public reader",
+          route: "/public-reader",
+          visibility: "public",
+          canWrite: false,
+        },
+      ],
+    }],
   };
 }
 
