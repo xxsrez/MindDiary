@@ -61,15 +61,16 @@ failed или неполном evidence. Historical registry критериев 
 [ADR-0013](../decisions/0013-multiple-read-single-write-mind-bindings.md) и
 [binding specification](mind-bindings.md) изменяют future content-access
 contract, не переписывая historical release evidence. Contract (`MD-229`) и
-локальный durable state slice (`MD-231`) и MCP binding tools (`MD-230`)
-подтверждены; content enforcement и hosted claims остаются в последующих rows.
+локальный durable state slice (`MD-231`), MCP binding tools (`MD-230`) и hard
+content enforcement (`MD-232`) подтверждены; UI/capture и hosted claims
+остаются в последующих rows.
 
 | ID | Наблюдаемый результат | Owner | Local evidence | UAT evidence |
 |---|---|---|---|---|
 | B0-Contract | OAuth grant/personal token — authoritative binding owner; `0..N` read, `0..1` write, exact lifecycle/CAS/errors и fail-closed migration согласованы. | `MD-229` | docs topology/link validation + `git diff --check`; это contract evidence, не runtime | not-applicable до implementation |
 | B1-State | Durable binding state переживает restart, atomic rebind invalidates previous ID, revoke/delete fail closed. | `MD-231` | `mind-binding-state` application/CAS/idempotency/Sites-reconstruction/audit suite; `ordinary-mind-deletion` и `account-deletion` orphan-negative cases; architecture check | `MD-235`, pending |
 | B2-Tools | Оба MCP profiles публикуют deterministic inspection/read/write binding tools с current authorization. | `MD-230` | `mcp-binding-tools` strict schemas, redaction, step-up, cross-profile replay и modern/compatibility lifecycle; `mcp-tools`, `mcp-transport`, Product MCP runtime regressions | `MD-235`, pending |
-| B3-Enforcement | Bound reads и exact active write ID являются hard server boundary без wrong-Mind side effects. | `MD-232` | pending | `MD-235`, pending |
+| B3-Enforcement | Bound reads и exact active write ID являются hard server boundary без wrong-Mind side effects. | `MD-232` | `mind-binding-enforcement`: unbound/detached read, locator/job reuse, exact write ID и concurrent rebind fencing; 133-test content/MCP/persistence regression slice | `MD-235`, pending |
 | B4-UX | Product Site/plugin показывают current reads/exact write target и не infer-ят его из content/model state. | `MD-233` | pending | `MD-235`, pending |
 | B5-Capture | Отдельная opt-in capture policy пишет только в active target с provenance/privacy constraints. | `MD-234` | pending; binding сам capture не включает | `MD-235`, pending |
 | B6-Join | Один exact candidate проходит concurrency/security/persistence/plugin/UAT matrix. | `MD-235` | pending | pending |
@@ -124,9 +125,9 @@ secret и download URL.
 | 8 | Anonymous доступ отсутствует; authenticated private member, public и exact-handle unlisted caller получают только свои rights. | `AND-50` | `U/P, I, S, B`: visibility matrix, non-enumeration, anonymous denial и baseline read-only post-state. | `A8 + W + CX + R` |
 | 9 | Catalog содержит только public Minds; private switch закрывает baseline reads; UI объясняет live HEAD/history exposure и что unlisted URL не secret. | `AND-81` | `C, I, B`: catalog/transition contract, disclosure acknowledgement, stale cache/access regression. | `A9 + W + P + R` |
 | 10 | `list_minds` показывает `/me`, memberships и public catalog; private скрыт, unlisted без membership требует exact resolve. | `AND-60` | `C, I, M`: pagination/discovery fixtures, private/missing indistinguishability и exact resolve. | `A10 + MI + CX + R` |
-| 11 | Один principal token discover-ит несколько allowed Minds; content разрешает только bound target и ровно один Mind/revision без cross-Mind leakage. | historical `AND-74`; amended by `MD-229`–`MD-235` | Historical explicit-selector evidence сохраняется; binding enforcement pending в B1–B3. | Historical `A11 + MI + CX + R`; новый hosted claim только B6 |
+| 11 | Один principal token discover-ит несколько allowed Minds; content разрешает только bound target и ровно один Mind/revision без cross-Mind leakage. | historical `AND-74`; amended by `MD-229`–`MD-235` | Historical explicit-selector evidence сохраняется; local binding enforcement подтверждён в B1–B3. | Historical `A11 + MI + CX + R`; новый hosted claim только B6 |
 | 12 | Expired/revoked token denied; issuance replay не раскрывает secret; write включает read, read-only не пишет; telemetry не содержит secret/body. | `AND-58` | `U/P, C, I, S, M`: expiry/revoke/scope/replay plus automated log redaction. | `A12 + MI + CX + R` |
-| 13 | Reader/baseline Reader не commit-ит; Editor/Admin/Owner immediate commit-ит только при `content:write` и exact active write binding, без draft/approval. | historical `AND-65`; amended by `MD-229`–`MD-235` | Historical role/scope evidence сохраняется; binding no-side-effect matrix pending в B3. | Historical `A13 + MI + CX + R`; новый hosted claim только B6 |
+| 13 | Reader/baseline Reader не commit-ит; Editor/Admin/Owner immediate commit-ит только при `content:write` и exact active write binding, без draft/approval. | historical `AND-65`; amended by `MD-229`–`MD-235` | Historical role/scope evidence сохраняется; local binding no-side-effect matrix подтверждена в B3. | Historical `A13 + MI + CX + R`; новый hosted claim только B6 |
 | 14 | Current `expected_revision` создаёт одну new HEAD; stale revision возвращает conflict без reachable partial objects/revision. | `AND-67` | `U/P, I, F, M`: two-writer race, injected object-put→CAS fault и HEAD/object post-state. | `A14 + CX + P + R` |
 | 15 | Same namespaced key/payload возвращает тот же revision и не дублирует log; другой payload даёт idempotency conflict. | `AND-69` | `U/P, I, F, M`: same/different payload replay, cross-principal/space isolation и concurrent retries. | `A15 + CX + P + R` |
 | 16 | Concept, `index.md` и `log.md` появляются all-or-nothing; log остаётся valid newest-first/date-grouped OKF. | `AND-71` | `U/P, C, I, F, M`: clock-based log fixtures, invalid/stale operations и full-bundle post-validation. | `A16 + CX + P + R` |
@@ -211,6 +212,7 @@ failure; отсутствующий receipt остаётся pending.
     "mind-discovery": { "title": "Single-Mind discovery and exact resolve", "command": ["node", "--test", "tests/integration/mind-discovery.test.mjs"], "paths": ["tests/integration/mind-discovery.test.mjs"] },
     "mind-binding-state": { "title": "Durable versioned Mind binding state, audit and Sites CAS", "command": ["node", "--test", "tests/integration/mind-binding-state.test.mjs"], "paths": ["tests/integration/mind-binding-state.test.mjs"] },
     "mcp-binding-tools": { "title": "Modern and compatibility MCP binding tools", "command": ["node", "--test", "tests/conformance/mcp-binding-tools.test.mjs"], "paths": ["tests/conformance/mcp-binding-tools.test.mjs"] },
+    "mind-binding-enforcement": { "title": "Hard read and exact-generation write binding enforcement", "command": ["node", "--test", "tests/integration/changeset-commit.test.mjs", "tests/integration/product-site-mcp-runtime.test.mjs"], "paths": ["packages/application-content/src/mind-bindings.ts", "packages/composition-root/src/product-site.ts", "tests/integration/changeset-commit.test.mjs", "tests/integration/product-site-mcp-runtime.test.mjs"] },
     "mcp-auth": { "title": "Per-request MCP token lifecycle and scope", "command": ["node", "--test", "tests/unit/mcp-auth.test.mjs"], "paths": ["tests/unit/mcp-auth.test.mjs"] },
     "token-security": { "title": "Token verifier and non-disclosure", "command": ["node", "--test", "tests/unit/token-security.test.mjs"], "paths": ["tests/unit/token-security.test.mjs"] },
     "changeset-preflight": { "title": "Changeset authorization, limits and full-bundle validation", "command": ["node", "--test", "tests/unit/changeset-preflight.test.mjs"], "paths": ["tests/unit/changeset-preflight.test.mjs"] },

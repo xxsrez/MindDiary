@@ -14,6 +14,7 @@ import {
   type Sha256Digest,
   type SpaceId,
   type UtcInstant,
+  type WriteMindBindingId,
 } from "@mind-diary/domain";
 import {
   okfFileKind,
@@ -92,12 +93,14 @@ export interface ChangesetPreflightRequest {
   readonly spaceId: SpaceId;
   readonly revisionMode: RevisionMode;
   readonly expectedRevisionId: RevisionId | null;
+  readonly writeBindingId?: WriteMindBindingId;
   /** Untrusted adapter input is deliberately validated inside the service. */
   readonly operations: unknown;
 }
 
 export type ChangesetValidationCode =
   | "invalid_expected_revision"
+  | "invalid_write_binding_id"
   | "invalid_idempotency_key"
   | "invalid_summary"
   | "operations_required"
@@ -624,6 +627,14 @@ export class ChangesetPreflightService {
       spaceId: request.spaceId,
       capability: "content:write",
       revisionMode: request.revisionMode,
+      ...(request.writeBindingId === undefined
+        ? {}
+        : {
+            bindingRequirement: Object.freeze({
+              kind: "write" as const,
+              writeBindingId: request.writeBindingId,
+            }),
+          }),
     });
     if (authorization.kind === "denied") {
       return Object.freeze({ kind: "denied", decision: authorization });

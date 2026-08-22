@@ -125,22 +125,46 @@ export class ProductMcpContentApplication implements McpContentApplication {
     readonly actor: AuthenticatedActor;
     readonly cursor?: string;
   }): Promise<Readonly<McpRootResourcePage>> {
-    const result = await this.#dependencies.discovery.listMinds(request.actor, {
-      ...(request.cursor === undefined ? {} : { cursor: request.cursor }),
-      limit: 100,
-    });
-    const resources = result.minds
-      .filter((mind) => mind.discovery === "personal" || mind.discovery === "membership")
-      .map((mind) =>
-        Object.freeze({
-          uri: rootUri(mind.mindId, mind.head.revisionId),
-          name: mind.name,
-          title: `${mind.name} · index.md`,
-          description: "Authorized immutable root index of this Mind revision.",
-          mimeType: "text/markdown; charset=utf-8" as const,
-        }),
-      );
-    return Object.freeze({ resources: Object.freeze(resources), nextCursor: result.nextCursor });
+    if (request.cursor !== undefined) {
+      return Object.freeze({ resources: Object.freeze([]), nextCursor: null });
+    }
+    const current = await this.#dependencies.bindings.read({ actor: request.actor });
+    if (
+      current.kind !== "ready" ||
+      current.bindings.bindingSet.state !== "active"
+    ) {
+      return Object.freeze({ resources: Object.freeze([]), nextCursor: null });
+    }
+    const spaceIds = new Set(
+      current.bindings.readBindings
+        .filter((binding) => binding.state === "active")
+        .map((binding) => binding.spaceId),
+    );
+    if (current.bindings.writeBinding?.state === "active") {
+      spaceIds.add(current.bindings.writeBinding.spaceId);
+    }
+    const resources = [];
+    for (const spaceId of [...spaceIds].sort()) {
+      try {
+        const info = await this.#dependencies.discovery.getMindInfo(
+          request.actor,
+          spaceId,
+          { kind: "head" },
+        );
+        resources.push(
+          Object.freeze({
+            uri: rootUri(info.mind.mindId, info.resolvedRevision.revisionId),
+            name: info.mind.name,
+            title: `${info.mind.name} · index.md`,
+            description: "Bound immutable root index of this Mind revision.",
+            mimeType: "text/markdown; charset=utf-8" as const,
+          }),
+        );
+      } catch {
+        // Current ACL loss redacts the stale target instead of leaking metadata.
+      }
+    }
+    return Object.freeze({ resources: Object.freeze(resources), nextCursor: null });
   }
 
   async readResource(request: {
@@ -363,6 +387,7 @@ export class ProductMcpContentApplication implements McpContentApplication {
         const result = await this.#dependencies.commits.commit({
           actor: request.actor,
           spaceId: info.mind.mindId,
+          writeBindingId: input.writeBindingId,
           expectedRevisionId: input.expectedRevision as never,
           idempotencyKey: input.idempotencyKey as never,
           summary: input.summary as never,
@@ -386,7 +411,20 @@ export class ProductMcpContentApplication implements McpContentApplication {
           );
         }
         const output = snakeOutput(result);
-        return createMcpToolErrorResult(request.actor.requestId, result.kind, "The changeset was not committed.", result.kind === "revision_conflict", output as Readonly<Record<string, unknown>>);
+        const code =
+          result.kind === "denied" ? result.decision.code : result.kind;
+        return createMcpToolErrorResult(
+          request.actor.requestId,
+          code,
+          code === "write_binding_required"
+            ? "Select exactly one writable Mind before committing."
+            : code === "write_binding_stale"
+              ? "The writable Mind changed; inspect current bindings and rebuild the commit."
+              : "The changeset was not committed.",
+          result.kind === "revision_conflict" ||
+            (result.kind === "denied" && result.decision.retryable),
+          output as Readonly<Record<string, unknown>>,
+        );
       }
       case "start_export": {
         const info = await this.#dependencies.discovery.getMindInfo(request.actor, input.mind, input.revisionSelector);
@@ -410,7 +448,17 @@ export class ProductMcpContentApplication implements McpContentApplication {
             "Started an exact-revision export.",
           );
         }
-        return createMcpToolErrorResult(request.actor.requestId, result.kind, "The export was not started.", false, snakeOutput(result) as Readonly<Record<string, unknown>>);
+        const code =
+          result.kind === "denied" ? result.decision.code : result.kind;
+        return createMcpToolErrorResult(
+          request.actor.requestId,
+          code,
+          code === "mind_binding_required"
+            ? "Attach this Mind for reading or select it as the writable target first."
+            : "The export was not started.",
+          result.kind === "denied" && result.decision.retryable,
+          snakeOutput(result) as Readonly<Record<string, unknown>>,
+        );
       }
       case "get_export_status": {
         const jobId = stringValue(input.jobId);

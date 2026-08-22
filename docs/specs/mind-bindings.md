@@ -1,10 +1,10 @@
 # Multiple-read/single-write Mind bindings
 
 Статус: accepted product/domain/API contract, 2026-08-22. Локальные durable
-state/application/persistence (`MD-231`) и одинаковый binding tool surface для
-modern/compatibility MCP (`MD-230`) подтверждены. Enforcement на всех content
-operations и UAT evidence остаются отдельными задачами; документ не утверждает,
-что bindings уже доступны в deployed product.
+state/application/persistence (`MD-231`), одинаковый binding tool surface для
+modern/compatibility MCP (`MD-230`) и hard content enforcement (`MD-232`)
+подтверждены. Product UI/plugin guidance и UAT evidence остаются отдельными
+задачами; документ не утверждает, что bindings уже доступны в deployed product.
 
 ## Назначение
 

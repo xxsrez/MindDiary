@@ -363,6 +363,109 @@ test("empty account reaches a strict starter commit and first useful search/fetc
   const minds = await modernTool(runtime, secret, "starter-list", "list_minds", {});
   const personal = minds.minds.find(({ route }) => route === "/me");
   assert.ok(personal);
+  const unboundRead = await modernMcp(runtime, secret, {
+    jsonrpc: "2.0",
+    id: "starter-unbound-read",
+    method: "tools/call",
+    params: {
+      name: "browse_entries",
+      arguments: { mind: "/me" },
+      _meta: {
+        "io.modelcontextprotocol/protocolVersion": MCP_TARGET_PROTOCOL,
+        "io.modelcontextprotocol/clientInfo": {
+          name: "mind-diary-starter-e2e",
+          version: "0.0.0",
+        },
+        "io.modelcontextprotocol/clientCapabilities": {},
+      },
+    },
+  });
+  assert.equal(unboundRead.status, 200);
+  const unboundReadBody = await unboundRead.json();
+  assert.equal(unboundReadBody.result.isError, true);
+  assert.equal(
+    unboundReadBody.result.structuredContent.error.code,
+    "mind_binding_required",
+  );
+  const unboundCommit = await modernMcp(runtime, secret, {
+    jsonrpc: "2.0",
+    id: "starter-unbound-commit",
+    method: "tools/call",
+    params: {
+      name: "commit_changeset",
+      arguments: {
+        mind: "/me",
+        write_binding_id: "write_binding_not_active",
+        expected_revision: personal.head.revision_id,
+        idempotency_key: "commit:starter-unbound",
+        summary: "Must not commit without a binding",
+        operations: [{
+          type: "create_file",
+          path: "concepts/must-not-exist.md",
+          text: "---\ntype: Reference\n---\n\nMust not exist.\n",
+        }],
+      },
+      _meta: {
+        "io.modelcontextprotocol/protocolVersion": MCP_TARGET_PROTOCOL,
+        "io.modelcontextprotocol/clientInfo": {
+          name: "mind-diary-starter-e2e",
+          version: "0.0.0",
+        },
+        "io.modelcontextprotocol/clientCapabilities": {},
+      },
+    },
+  });
+  assert.equal(unboundCommit.status, 200);
+  const unboundCommitBody = await unboundCommit.json();
+  assert.equal(unboundCommitBody.result.isError, true);
+  assert.equal(
+    unboundCommitBody.result.structuredContent.error.code,
+    "write_binding_required",
+  );
+  const unboundExport = await modernMcp(runtime, secret, {
+    jsonrpc: "2.0",
+    id: "starter-unbound-export",
+    method: "tools/call",
+    params: {
+      name: "start_export",
+      arguments: {
+        mind: "/me",
+        revision_selector: {
+          kind: "revision",
+          revision_id: personal.head.revision_id,
+        },
+        idempotency_key: "export:starter-unbound",
+      },
+      _meta: {
+        "io.modelcontextprotocol/protocolVersion": MCP_TARGET_PROTOCOL,
+        "io.modelcontextprotocol/clientInfo": {
+          name: "mind-diary-starter-e2e",
+          version: "0.0.0",
+        },
+        "io.modelcontextprotocol/clientCapabilities": {},
+      },
+    },
+  });
+  assert.equal(unboundExport.status, 200);
+  const unboundExportBody = await unboundExport.json();
+  assert.equal(unboundExportBody.result.isError, true);
+  assert.equal(
+    unboundExportBody.result.structuredContent.error.code,
+    "mind_binding_required",
+  );
+  const writeBinding = await modernTool(
+    runtime,
+    secret,
+    "starter-bind-write",
+    "set_write_mind_binding",
+    {
+      action: "bind",
+      mind: "/me",
+      expected_binding_version: 0,
+      idempotency_key: "binding:starter-e2e",
+    },
+  );
+  const writeBindingId = writeBinding.current.write_binding_id;
   const initialRevisionId = personal.head.revision_id;
   const operations = MIND_DIARY_STARTER_OKF_TEMPLATE.map((file) => {
     if (file.path === "index.md") {
@@ -385,6 +488,7 @@ test("empty account reaches a strict starter commit and first useful search/fetc
     "commit_changeset",
     {
       mind: "/me",
+      write_binding_id: writeBindingId,
       expected_revision: initialRevisionId,
       idempotency_key: "commit:starter-e2e",
       summary: "Create strict starter Mind",
@@ -488,6 +592,81 @@ test("empty account reaches a strict starter commit and first useful search/fetc
   ]) {
     assert.equal(serializedTelemetry.includes(forbidden), false, forbidden);
   }
+
+  const exportStarted = await modernTool(
+    runtime,
+    secret,
+    "starter-export-before-unbind",
+    "start_export",
+    {
+      mind: "/me",
+      revision_selector: {
+        kind: "revision",
+        revision_id: starterRevisionId,
+      },
+      idempotency_key: "export:starter-before-unbind",
+    },
+  );
+
+  await modernTool(
+    runtime,
+    secret,
+    "starter-unbind-write",
+    "set_write_mind_binding",
+    {
+      action: "unbind",
+      expected_binding_version: 1,
+      idempotency_key: "binding:starter-unbind",
+    },
+  );
+  const detachedFetch = await modernMcp(runtime, secret, {
+    jsonrpc: "2.0",
+    id: "starter-fetch-after-unbind",
+    method: "tools/call",
+    params: {
+      name: "fetch",
+      arguments: { id: usefulSearch.results[0].entry.entry_id },
+      _meta: {
+        "io.modelcontextprotocol/protocolVersion": MCP_TARGET_PROTOCOL,
+        "io.modelcontextprotocol/clientInfo": {
+          name: "mind-diary-starter-e2e",
+          version: "0.0.0",
+        },
+        "io.modelcontextprotocol/clientCapabilities": {},
+      },
+    },
+  });
+  assert.equal(detachedFetch.status, 200);
+  const detachedFetchBody = await detachedFetch.json();
+  assert.equal(detachedFetchBody.result.isError, true);
+  assert.equal(
+    detachedFetchBody.result.structuredContent.error.code,
+    "mind_binding_required",
+  );
+  const detachedExportStatus = await modernMcp(runtime, secret, {
+    jsonrpc: "2.0",
+    id: "starter-export-status-after-unbind",
+    method: "tools/call",
+    params: {
+      name: "get_export_status",
+      arguments: { job_id: exportStarted.job.job_id },
+      _meta: {
+        "io.modelcontextprotocol/protocolVersion": MCP_TARGET_PROTOCOL,
+        "io.modelcontextprotocol/clientInfo": {
+          name: "mind-diary-starter-e2e",
+          version: "0.0.0",
+        },
+        "io.modelcontextprotocol/clientCapabilities": {},
+      },
+    },
+  });
+  assert.equal(detachedExportStatus.status, 200);
+  const detachedExportStatusBody = await detachedExportStatus.json();
+  assert.equal(detachedExportStatusBody.result.isError, true);
+  assert.equal(
+    detachedExportStatusBody.result.structuredContent.error.code,
+    "not_found",
+  );
 });
 
 test("durable product runtime carries a Sites account token through Codex MCP and revokes it", async () => {
@@ -754,6 +933,26 @@ test("durable product runtime carries a Sites account token through Codex MCP an
   );
 
   const previousRevisionId = personalMind.head.revision_id;
+  const boundWrite = await legacyMcp(runtime, secret, {
+    jsonrpc: "2.0",
+    id: "bind-write",
+    method: "tools/call",
+    params: {
+      _meta: { progressToken: "bind-write" },
+      name: "set_write_mind_binding",
+      arguments: {
+        action: "bind",
+        mind: "/me",
+        expected_binding_version: 0,
+        idempotency_key: "binding:product-runtime-e2e",
+      },
+    },
+  });
+  assert.equal(boundWrite.status, 200);
+  const boundWriteBody = await boundWrite.json();
+  assert.equal(boundWriteBody.result.isError, false, JSON.stringify(boundWriteBody));
+  const writeBindingId =
+    boundWriteBody.result.structuredContent.data.current.write_binding_id;
   const committed = await legacyMcp(runtime, secret, {
     jsonrpc: "2.0",
     id: 3,
@@ -763,6 +962,7 @@ test("durable product runtime carries a Sites account token through Codex MCP an
       name: "commit_changeset",
       arguments: {
         mind: "/me",
+        write_binding_id: writeBindingId,
         expected_revision: previousRevisionId,
         idempotency_key: "commit:product-runtime-e2e",
         summary: "Prove production transaction authorization",
@@ -859,6 +1059,7 @@ test("durable product runtime carries a Sites account token through Codex MCP an
       name: "commit_changeset",
       arguments: {
         mind: "/me",
+        write_binding_id: writeBindingId,
         expected_revision: previousRevisionId,
         idempotency_key: "restore-stale:product-runtime-e2e",
         summary: "Attempt stale historical restore",
@@ -887,6 +1088,7 @@ test("durable product runtime carries a Sites account token through Codex MCP an
       name: "commit_changeset",
       arguments: {
         mind: "/me",
+        write_binding_id: writeBindingId,
         expected_revision: advancedMind.head.revision_id,
         idempotency_key: "restore-fresh:product-runtime-e2e",
         summary: "Restore the selected historical state as a new revision",

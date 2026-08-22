@@ -258,6 +258,7 @@ test("publishes strict commit/export schemas and truthful annotations", () => {
   assert.equal(commit.inputSchema.additionalProperties, false);
   assert.deepEqual(commit.inputSchema.required, [
     "mind",
+    "write_binding_id",
     "expected_revision",
     "idempotency_key",
     "summary",

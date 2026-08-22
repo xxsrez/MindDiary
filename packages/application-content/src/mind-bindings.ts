@@ -1,6 +1,10 @@
 import type { McpTokenActorContext } from "@mind-diary/application-contracts";
 import {
   type ApplyMindBindingMutationResult,
+  type AuthorizationDecision,
+  type AuthorizationRequest,
+  type AuthorizationStamp,
+  type AuthorizationTransaction,
   type Authorizer,
   type MindBindingIdGenerator,
   type MindBindingSetSnapshot,
@@ -352,6 +356,160 @@ export class MindBindingApplicationService {
         request.expectedBindingVersion as number,
       ),
       idempotencyKey: key.key,
+    });
+  }
+}
+
+type AllowedAuthorization = Extract<
+  AuthorizationDecision,
+  { readonly kind: "allowed" }
+>;
+
+function bindingDenied(
+  code: Extract<
+    AuthorizationDecision,
+    { readonly kind: "denied" }
+  >["code"],
+  retryable = false,
+): Extract<AuthorizationDecision, { readonly kind: "denied" }> {
+  return Object.freeze({ kind: "denied", code, retryable });
+}
+
+/**
+ * Enforces the binding owned by the authenticated MCP credential before any
+ * Mind content authorization. Transactional rechecks fence rebind from commit
+ * and export-start effects without turning discovery into an implicit attach.
+ */
+export class MindBindingContentAuthorizer implements Authorizer {
+  readonly #delegate: Authorizer;
+  readonly #bindings: MindBindingStore;
+
+  constructor(dependencies: {
+    readonly delegate: Authorizer;
+    readonly bindings: MindBindingStore;
+  }) {
+    this.#delegate = dependencies.delegate;
+    this.#bindings = dependencies.bindings;
+  }
+
+  async authorize(request: AuthorizationRequest): Promise<AuthorizationDecision> {
+    const binding = await this.#authorizeBinding(this.#bindings, request);
+    if (binding.kind === "denied") return binding;
+    const authorization = await this.#delegate.authorize(request);
+    return authorization.kind === "denied"
+      ? authorization
+      : this.#withBindingStamp(authorization, binding.bindingVersion);
+  }
+
+  async reauthorizeInTransaction(
+    request: AuthorizationRequest,
+    transaction: AuthorizationTransaction,
+    expected: AuthorizationStamp,
+  ): Promise<AuthorizationDecision> {
+    if (transaction.readMindBindingSet === undefined) {
+      return bindingDenied("binding_state_unavailable", true);
+    }
+    const readMindBindingSet = transaction.readMindBindingSet.bind(transaction);
+    const binding = await this.#authorizeBinding(
+      { readMindBindingSet },
+      request,
+    );
+    if (binding.kind === "denied") return binding;
+    if (
+      expected.bindingVersion === undefined ||
+      binding.bindingVersion !== expected.bindingVersion
+    ) {
+      return bindingDenied("authorization_state_changed", true);
+    }
+    const authorization = await this.#delegate.reauthorizeInTransaction(
+      request,
+      transaction,
+      expected,
+    );
+    return authorization.kind === "denied"
+      ? authorization
+      : this.#withBindingStamp(authorization, binding.bindingVersion);
+  }
+
+  async #authorizeBinding(
+    reader: Pick<MindBindingStore, "readMindBindingSet">,
+    request: AuthorizationRequest,
+  ): Promise<
+    | { readonly kind: "allowed"; readonly bindingVersion: BindingVersion }
+    | Extract<AuthorizationDecision, { readonly kind: "denied" }>
+  > {
+    const actor = request.actor;
+    if (
+      actor.kind !== "registered_principal" ||
+      actor.authentication.kind !== "mcp_token"
+    ) {
+      return bindingDenied("authentication_required");
+    }
+    const bindingOwnerId = actor.authentication.bindingOwnerId;
+    const snapshot = await reader.readMindBindingSet(
+      bindingOwnerId,
+      actor.principalId,
+      actor.occurredAtUtc,
+    );
+    if (
+      snapshot === null ||
+      snapshot.bindingSet.bindingOwnerId !==
+        bindingOwnerId ||
+      snapshot.bindingSet.principalId !== actor.principalId
+    ) {
+      return bindingDenied("binding_state_unavailable", true);
+    }
+    if (snapshot.bindingSet.state !== "active") {
+      return bindingDenied("binding_owner_revoked");
+    }
+
+    if (request.capability === "content:write") {
+      const requirement = request.bindingRequirement;
+      if (requirement?.kind !== "write") {
+        return bindingDenied("write_binding_required");
+      }
+      const active = snapshot.writeBinding;
+      if (active === null) return bindingDenied("write_binding_required");
+      if (
+        active.state !== "active" ||
+        active.bindingOwnerId !== bindingOwnerId ||
+        active.spaceId !== request.spaceId ||
+        active.writeBindingId !== requirement.writeBindingId
+      ) {
+        return bindingDenied("write_binding_stale");
+      }
+    } else {
+      const readIsActive = snapshot.readBindings.some(
+        (binding) =>
+          binding.state === "active" &&
+          binding.bindingOwnerId === bindingOwnerId &&
+          binding.spaceId === request.spaceId,
+      );
+      const writeIsActive =
+        snapshot.writeBinding !== null &&
+        snapshot.writeBinding.state === "active" &&
+        snapshot.writeBinding.bindingOwnerId === bindingOwnerId &&
+        snapshot.writeBinding.spaceId === request.spaceId;
+      if (!readIsActive && !writeIsActive) {
+        return bindingDenied("mind_binding_required");
+      }
+    }
+    return Object.freeze({
+      kind: "allowed" as const,
+      bindingVersion: snapshot.bindingSet.bindingVersion,
+    });
+  }
+
+  #withBindingStamp(
+    authorization: AllowedAuthorization,
+    bindingVersionValue: BindingVersion,
+  ): AuthorizationDecision {
+    return Object.freeze({
+      ...authorization,
+      stamp: Object.freeze({
+        ...authorization.stamp,
+        bindingVersion: bindingVersionValue,
+      }),
     });
   }
 }

@@ -3,6 +3,7 @@ import {
   CapabilityAuthorizer,
   ObjectStoreFailure,
   type AuthorizationDecision,
+  type Authorizer,
   type ObjectStore,
 } from "@mind-diary/application-ports";
 import {
@@ -58,7 +59,10 @@ export type MindBrowseFailureCode =
   | "locator_not_found"
   | "resource_not_found"
   | "revision_integrity_failure"
-  | "read_conflict";
+  | "read_conflict"
+  | "mind_binding_required"
+  | "binding_owner_revoked"
+  | "binding_state_unavailable";
 
 /** Safe content-read failure. It never embeds a locator payload or private content. */
 export class MindBrowseFailure extends Error {
@@ -405,6 +409,7 @@ export interface MindBrowseDependencies {
   readonly objects: ObjectStore;
   readonly host: VerifiedSpaceHost;
   readonly locators: MindLocatorCodec;
+  readonly authorizer?: Authorizer;
 }
 
 interface NormalizedBrowseQuery {
@@ -668,7 +673,7 @@ export class MindBrowseService {
   readonly #objects: ObjectStore;
   readonly #locators: MindLocatorCodec;
   readonly #discovery: MindDiscoveryService;
-  readonly #authorizer: CapabilityAuthorizer;
+  readonly #authorizer: Authorizer;
 
   constructor(dependencies: MindBrowseDependencies) {
     this.#store = dependencies.store;
@@ -678,7 +683,8 @@ export class MindBrowseService {
       store: dependencies.store,
       host: dependencies.host,
     });
-    this.#authorizer = new CapabilityAuthorizer(dependencies.store);
+    this.#authorizer =
+      dependencies.authorizer ?? new CapabilityAuthorizer(dependencies.store);
   }
 
   async browseEntries(
@@ -1105,6 +1111,17 @@ export class MindBrowseService {
       revisionMode,
     });
     if (decision.kind === "denied") {
+      if (
+        decision.code === "mind_binding_required" ||
+        decision.code === "binding_owner_revoked" ||
+        decision.code === "binding_state_unavailable"
+      ) {
+        throw new MindBrowseFailure(
+          decision.code,
+          "The current MCP credential cannot use this Mind binding.",
+          decision.retryable,
+        );
+      }
       throw new MindBrowseFailure(
         denialCode,
         denialCode === "mind_not_found" ? "Mind was not found." : "Entry was not found.",
@@ -1128,6 +1145,24 @@ export class MindBrowseService {
       revisionMode,
     });
     if (decision.kind === "denied") {
+      if (decision.code === "authorization_state_changed") {
+        throw new MindBrowseFailure(
+          "read_conflict",
+          "Mind binding changed during the read; retry from a fresh descriptor.",
+          true,
+        );
+      }
+      if (
+        decision.code === "mind_binding_required" ||
+        decision.code === "binding_owner_revoked" ||
+        decision.code === "binding_state_unavailable"
+      ) {
+        throw new MindBrowseFailure(
+          decision.code,
+          "The current MCP credential cannot use this Mind binding.",
+          decision.retryable,
+        );
+      }
       throw new MindBrowseFailure(
         denialCode,
         denialCode === "mind_not_found" ? "Mind was not found." : "Entry was not found.",

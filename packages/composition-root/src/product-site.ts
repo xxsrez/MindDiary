@@ -66,6 +66,7 @@ import {
   McpBearerAuthenticationService,
   MindBrowseService,
   MindBindingApplicationService,
+  MindBindingContentAuthorizer,
   MindDiscoveryService,
   MindHistoryService,
   MindSearchService,
@@ -511,8 +512,24 @@ export async function createProductSiteRuntime(
     ids: generated,
     digest: objects,
   });
-  const browse = new MindBrowseService({ store: metadata, objects, host, locators });
-  const search = new MindSearchService({ store: metadata, index: readyIndex, host, locators });
+  const contentAuthorizer = new MindBindingContentAuthorizer({
+    delegate: authorizer,
+    bindings: metadata,
+  });
+  const browse = new MindBrowseService({
+    store: metadata,
+    objects,
+    host,
+    locators,
+    authorizer: contentAuthorizer,
+  });
+  const search = new MindSearchService({
+    store: metadata,
+    index: readyIndex,
+    host,
+    locators,
+    authorizer: contentAuthorizer,
+  });
   const principalsWithObservedUsefulSearch = new Set<string>();
   const observedSearch = {
     async searchEntries(
@@ -553,10 +570,19 @@ export async function createProductSiteRuntime(
       return result;
     },
   };
-  const history = new MindHistoryService({ store: metadata, host });
-  const validation = new MindValidationService({ store: metadata, objects, host });
+  const history = new MindHistoryService({
+    store: metadata,
+    host,
+    authorizer: contentAuthorizer,
+  });
+  const validation = new MindValidationService({
+    store: metadata,
+    objects,
+    host,
+    authorizer: contentAuthorizer,
+  });
   const commits = new ChangesetCommitService({
-    authorizer,
+    authorizer: contentAuthorizer,
     metadata,
     revisions,
     objects,
@@ -565,7 +591,7 @@ export async function createProductSiteRuntime(
     effectIds: generated,
   });
   const exports = new ExportJobApplicationService({
-    authorizer,
+    authorizer: contentAuthorizer,
     backgroundAuthorizer,
     metadata,
     digest: objects,

@@ -1730,6 +1730,12 @@ export interface AuthorizationStateReader {
 /** A state reader whose reads participate in the caller's metadata transaction. */
 export interface AuthorizationTransaction extends AuthorizationStateReader {
   readonly kind: "authorization-transaction";
+  /** Optional binding snapshot available to binding-aware content transactions. */
+  readMindBindingSet?(
+    bindingOwnerId: MindBindingOwnerId,
+    principalId: PrincipalId,
+    occurredAt: UtcInstant,
+  ): Promise<Readonly<MindBindingSetSnapshot> | null>;
 }
 
 export interface MindBindingSetSnapshot {
@@ -1850,12 +1856,21 @@ export interface AuthorizationRequest {
   readonly spaceId: SpaceId;
   readonly capability: Capability;
   readonly revisionMode: RevisionMode;
+  /** Exact immutable generation required by a binding-aware write boundary. */
+  readonly bindingRequirement?:
+    | { readonly kind: "read" }
+    | {
+        readonly kind: "write";
+        readonly writeBindingId: WriteMindBindingId;
+      };
 }
 
 export interface AuthorizationStamp {
   readonly accessVersion: Version;
   readonly membershipVersion: Version | null;
   readonly tokenVersion: Version | null;
+  /** Present only on the MCP binding-aware content boundary. */
+  readonly bindingVersion?: BindingVersion;
 }
 
 export type AuthorizationGrant =
@@ -1875,7 +1890,12 @@ export type AuthorizationDenialCode =
   | "insufficient_scope"
   | "deployment_capability_disabled"
   | "historical_read_only"
-  | "authorization_state_changed";
+  | "authorization_state_changed"
+  | "mind_binding_required"
+  | "write_binding_required"
+  | "write_binding_stale"
+  | "binding_owner_revoked"
+  | "binding_state_unavailable";
 
 export type AuthorizationDecision =
   | {

@@ -21,6 +21,7 @@ import {
   type RevisionId,
   type Sha256Digest,
   type SpaceId,
+  type WriteMindBindingId,
 } from "@mind-diary/domain";
 import {
   ChangesetPreflightService,
@@ -41,6 +42,7 @@ import type { HeadRevisionReader } from "./index.js";
 export interface CommitChangesetRequest {
   readonly actor: ActorContext;
   readonly spaceId: SpaceId;
+  readonly writeBindingId?: unknown;
   readonly expectedRevisionId: RevisionId | null;
   readonly idempotencyKey: unknown;
   readonly summary: string;
@@ -96,6 +98,7 @@ export interface ChangesetCommitDependencies {
 
 interface ValidatedCommitPayload {
   readonly idempotencyKey: IdempotencyKey;
+  readonly writeBindingId: WriteMindBindingId | null;
   readonly operations: readonly Readonly<ChangesetOperation>[];
 }
 
@@ -147,14 +150,26 @@ function canonicalOperation(operation: Readonly<ChangesetOperation>): object {
 
 function canonicalRequestSource(
   request: CommitChangesetRequest,
-  operations: readonly Readonly<ChangesetOperation>[],
+  validated: ValidatedCommitPayload,
 ): string {
   return `${JSON.stringify({
     format: "mind-diary-commit-changeset-request-v1",
+    write_binding_id: validated.writeBindingId,
     expected_revision_id: request.expectedRevisionId,
     summary: request.summary,
-    operations: operations.map(canonicalOperation),
+    operations: validated.operations.map(canonicalOperation),
   })}\n`;
+}
+
+function writeBindingRequirement(writeBindingId: unknown) {
+  return typeof writeBindingId === "string" && writeBindingId.length > 0
+    ? Object.freeze({
+        bindingRequirement: Object.freeze({
+          kind: "write" as const,
+          writeBindingId: writeBindingId as WriteMindBindingId,
+        }),
+      })
+    : Object.freeze({});
 }
 
 /** Application-level immediate commit_changeset use case. */
@@ -193,6 +208,7 @@ export class ChangesetCommitService {
       spaceId: request.spaceId,
       capability: "content:write",
       revisionMode: "head",
+      ...writeBindingRequirement(request.writeBindingId),
     });
     if (initialAuthorization.kind === "denied") {
       return Object.freeze({ kind: "denied", decision: initialAuthorization });
@@ -208,7 +224,7 @@ export class ChangesetCommitService {
     const validated = this.#validatePayload(request);
     if ("kind" in validated) return validated;
     const canonicalRequestHash = await this.#objects.calculateSha256(
-      ENCODER.encode(canonicalRequestSource(request, validated.operations)),
+      ENCODER.encode(canonicalRequestSource(request, validated)),
     );
     const namespace: Readonly<
       IdempotencyNamespace & { readonly operation: "commit_changeset" }
@@ -227,6 +243,7 @@ export class ChangesetCommitService {
             spaceId: request.spaceId,
             capability: "content:write",
             revisionMode: "head",
+            ...writeBindingRequirement(validated.writeBindingId),
           },
           transaction,
           initialAuthorization.stamp,
@@ -248,6 +265,9 @@ export class ChangesetCommitService {
       spaceId: request.spaceId,
       revisionMode: "head",
       expectedRevisionId: request.expectedRevisionId,
+      ...(validated.writeBindingId === null
+        ? {}
+        : { writeBindingId: validated.writeBindingId }),
       operations: validated.operations,
     });
     if (preflight.kind !== "ready") return preflight;
@@ -280,6 +300,7 @@ export class ChangesetCommitService {
           spaceId: request.spaceId,
           capability: "content:write",
           revisionMode: "head",
+          ...writeBindingRequirement(validated.writeBindingId),
         },
         transaction,
         preflight.authorization.stamp,
@@ -493,8 +514,22 @@ export class ChangesetCommitService {
       this.#preflightLimits,
     );
     if (operations.kind === "invalid") return operations;
+    if (
+      request.writeBindingId !== undefined &&
+      (typeof request.writeBindingId !== "string" ||
+        request.writeBindingId.length === 0)
+    ) {
+      return invalid(
+        "invalid_write_binding_id",
+        "write binding ID must be a non-empty opaque ID",
+      );
+    }
     return Object.freeze({
       idempotencyKey: checkedKey.key,
+      writeBindingId:
+        request.writeBindingId === undefined
+          ? null
+          : (request.writeBindingId as WriteMindBindingId),
       operations: operations.operations,
     });
   }

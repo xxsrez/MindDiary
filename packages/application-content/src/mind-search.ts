@@ -2,6 +2,7 @@ import type { ActorContext } from "@mind-diary/application-contracts";
 import {
   CapabilityAuthorizer,
   type AuthorizationDecision,
+  type Authorizer,
   type ReadExactRevisionIndexResult,
   type SearchIndex,
 } from "@mind-diary/application-ports";
@@ -58,7 +59,10 @@ export type MindSearchFailureCode =
   | "invalid_limit"
   | "invalid_cursor"
   | "search_index_unavailable"
-  | "read_conflict";
+  | "read_conflict"
+  | "mind_binding_required"
+  | "binding_owner_revoked"
+  | "binding_state_unavailable";
 
 /** Safe exact-revision search failure; it never carries query or indexed text. */
 export class MindSearchFailure extends Error {
@@ -110,6 +114,7 @@ export interface MindSearchDependencies {
   readonly index: ReadyExactRevisionIndexReader | SearchIndex;
   readonly host: VerifiedSpaceHost;
   readonly locators: MindLocatorCodec;
+  readonly authorizer?: Authorizer;
 }
 
 interface NormalizedSearchQuery {
@@ -376,7 +381,7 @@ export class MindSearchService {
   readonly #index: ReadyExactRevisionIndexReader | SearchIndex;
   readonly #locators: MindLocatorCodec;
   readonly #discovery: MindDiscoveryService;
-  readonly #authorizer: CapabilityAuthorizer;
+  readonly #authorizer: Authorizer;
 
   constructor(dependencies: MindSearchDependencies) {
     this.#store = dependencies.store;
@@ -386,7 +391,8 @@ export class MindSearchService {
       store: dependencies.store,
       host: dependencies.host,
     });
-    this.#authorizer = new CapabilityAuthorizer(dependencies.store);
+    this.#authorizer =
+      dependencies.authorizer ?? new CapabilityAuthorizer(dependencies.store);
   }
 
   async searchEntries(
@@ -653,6 +659,17 @@ export class MindSearchService {
       revisionMode,
     });
     if (decision.kind === "denied") {
+      if (
+        decision.code === "mind_binding_required" ||
+        decision.code === "binding_owner_revoked" ||
+        decision.code === "binding_state_unavailable"
+      ) {
+        throw new MindSearchFailure(
+          decision.code,
+          "The current MCP credential cannot use this Mind binding.",
+          decision.retryable,
+        );
+      }
       throw new MindSearchFailure("mind_not_found", "Mind was not found.");
     }
     return decision;
@@ -671,6 +688,24 @@ export class MindSearchService {
       revisionMode,
     });
     if (decision.kind === "denied") {
+      if (decision.code === "authorization_state_changed") {
+        throw new MindSearchFailure(
+          "read_conflict",
+          "Mind binding changed during the search; retry from a fresh descriptor.",
+          true,
+        );
+      }
+      if (
+        decision.code === "mind_binding_required" ||
+        decision.code === "binding_owner_revoked" ||
+        decision.code === "binding_state_unavailable"
+      ) {
+        throw new MindSearchFailure(
+          decision.code,
+          "The current MCP credential cannot use this Mind binding.",
+          decision.retryable,
+        );
+      }
       throw new MindSearchFailure("mind_not_found", "Mind was not found.");
     }
     if (!sameAuthorization(expected, decision)) {

@@ -872,7 +872,32 @@ test("product MCP facade advertises only canonical content tools and membership 
         };
       },
       async resolveMind() { return {}; },
-      async getMindInfo() { return { mind: { mindId: "space_one" }, contentCapabilities: ["browse", "commit", "export"] }; },
+      async getMindInfo() {
+        return {
+          mind: { mindId: "space_one", name: "Mine" },
+          resolvedRevision: { revisionId: "revision_one" },
+          contentCapabilities: ["browse", "commit", "export"],
+        };
+      },
+    },
+    bindings: {
+      async read() {
+        return {
+          kind: "ready",
+          bindings: {
+            bindingSet: { state: "active", bindingVersion: 1 },
+            readBindings: [{
+              readBindingId: "read_one",
+              bindingOwnerId: "binding_owner_one",
+              spaceId: "space_one",
+              state: "active",
+            }],
+            writeBinding: null,
+          },
+        };
+      },
+      async mutateRead() { return { kind: "invalid" }; },
+      async mutateWrite() { return { kind: "invalid" }; },
     },
     browse: {
       async browseEntries() { return {}; },
@@ -885,7 +910,15 @@ test("product MCP facade advertises only canonical content tools and membership 
     commits: { async commit() { return { kind: "invalid" }; } },
     exports: { async start() { return { kind: "denied" }; }, async getStatus() { return { kind: "not_found" }; } },
   });
-  const actor = { ...registeredActor, authentication: { kind: "mcp_token", tokenId: "token_one", scopes: ["content:read"] } };
+  const actor = {
+    ...registeredActor,
+    authentication: {
+      kind: "mcp_token",
+      tokenId: "token_one",
+      bindingOwnerId: "binding_owner_one",
+      scopes: ["content:read"],
+    },
+  };
   const tools = await application.listTools({ actor });
   assert.deepEqual(tools.map(({ name }) => name), MCP_TOOL_DEFINITIONS.map(({ name }) => name));
   assert.equal(tools.some(({ name }) => String(name).includes("member") || String(name).includes("token")), false);

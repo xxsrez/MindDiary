@@ -3,6 +3,7 @@ import {
   CapabilityAuthorizer,
   ObjectStoreFailure,
   type AuthorizationDecision,
+  type Authorizer,
   type ObjectStore,
 } from "@mind-diary/application-ports";
 import {
@@ -45,7 +46,10 @@ export type MindValidationFailureCode =
   | "invalid_request"
   | "forbidden"
   | "revision_integrity_failure"
-  | "read_conflict";
+  | "read_conflict"
+  | "mind_binding_required"
+  | "binding_owner_revoked"
+  | "binding_state_unavailable";
 
 /** Safe validation failure that never embeds canonical content or private metadata. */
 export class MindValidationFailure extends Error {
@@ -97,6 +101,7 @@ export interface MindValidationDependencies {
   readonly store: MindDiscoveryStore;
   readonly objects: ObjectStore;
   readonly host: VerifiedSpaceHost;
+  readonly authorizer?: Authorizer;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -247,7 +252,7 @@ export class MindValidationService {
   readonly #store: MindDiscoveryStore;
   readonly #objects: ObjectStore;
   readonly #discovery: MindDiscoveryService;
-  readonly #authorizer: CapabilityAuthorizer;
+  readonly #authorizer: Authorizer;
 
   constructor(dependencies: MindValidationDependencies) {
     this.#store = dependencies.store;
@@ -256,7 +261,8 @@ export class MindValidationService {
       store: dependencies.store,
       host: dependencies.host,
     });
-    this.#authorizer = new CapabilityAuthorizer(dependencies.store);
+    this.#authorizer =
+      dependencies.authorizer ?? new CapabilityAuthorizer(dependencies.store);
   }
 
   async validateMind(
@@ -409,6 +415,24 @@ export class MindValidationService {
       revisionMode,
     });
     if (decision.kind === "allowed") return decision;
+    if (
+      decision.code === "mind_binding_required" ||
+      decision.code === "binding_owner_revoked" ||
+      decision.code === "binding_state_unavailable"
+    ) {
+      throw new MindValidationFailure(
+        decision.code,
+        "The current MCP credential cannot use this Mind binding.",
+        decision.retryable,
+      );
+    }
+    if (decision.code === "authorization_state_changed") {
+      throw new MindValidationFailure(
+        "read_conflict",
+        "Mind binding changed during validation; retry from a fresh descriptor.",
+        true,
+      );
+    }
     if (
       !concealCapabilityDenial &&
       (decision.code === "capability_denied" ||

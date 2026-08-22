@@ -2,6 +2,7 @@ import type { ActorContext } from "@mind-diary/application-contracts";
 import {
   CapabilityAuthorizer,
   type AuthorizationDecision,
+  type Authorizer,
 } from "@mind-diary/application-ports";
 import {
   utcInstant,
@@ -38,7 +39,10 @@ export type MindHistoryFailureCode =
   | "invalid_limit"
   | "forbidden"
   | "read_conflict"
-  | "revision_integrity_failure";
+  | "revision_integrity_failure"
+  | "mind_binding_required"
+  | "binding_owner_revoked"
+  | "binding_state_unavailable";
 
 /** Safe history failure that never embeds canonical paths, bodies, or private metadata. */
 export class MindHistoryFailure extends Error {
@@ -105,6 +109,7 @@ export interface GetMindRevisionResult {
 export interface MindHistoryDependencies {
   readonly store: MindDiscoveryStore;
   readonly host: VerifiedSpaceHost;
+  readonly authorizer?: Authorizer;
 }
 
 interface NormalizedListQuery {
@@ -353,12 +358,13 @@ function mapDiscoveryFailure(error: unknown): never {
 export class MindHistoryService {
   readonly #store: MindDiscoveryStore;
   readonly #discovery: MindDiscoveryService;
-  readonly #authorizer: CapabilityAuthorizer;
+  readonly #authorizer: Authorizer;
 
   constructor(dependencies: MindHistoryDependencies) {
     this.#store = dependencies.store;
     this.#discovery = new MindDiscoveryService(dependencies);
-    this.#authorizer = new CapabilityAuthorizer(dependencies.store);
+    this.#authorizer =
+      dependencies.authorizer ?? new CapabilityAuthorizer(dependencies.store);
   }
 
   async resolveSnapshotView(
@@ -609,6 +615,24 @@ export class MindHistoryService {
       revisionMode: "historical",
     });
     if (decision.kind === "allowed") return decision;
+    if (
+      decision.code === "mind_binding_required" ||
+      decision.code === "binding_owner_revoked" ||
+      decision.code === "binding_state_unavailable"
+    ) {
+      throw new MindHistoryFailure(
+        decision.code,
+        "The current MCP credential cannot use this Mind binding.",
+        decision.retryable,
+      );
+    }
+    if (decision.code === "authorization_state_changed") {
+      throw new MindHistoryFailure(
+        "read_conflict",
+        "Mind binding changed during the history read; retry from a fresh descriptor.",
+        true,
+      );
+    }
     if (
       !concealCapabilityDenial &&
       (decision.code === "capability_denied" ||

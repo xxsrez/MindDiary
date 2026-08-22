@@ -6926,6 +6926,11 @@ export class InMemoryRevisionMetadataStore
       );
       const transaction: ContentCommitMetadataTransaction = Object.freeze({
         kind: "authorization-transaction" as const,
+        readMindBindingSet: (
+          bindingOwnerId: MindBindingOwnerId,
+          principalId: PrincipalId,
+          occurredAt: ApplyReadMindBindingRequest["occurredAt"],
+        ) => this.readMindBindingSet(bindingOwnerId, principalId, occurredAt),
         readCurrentAuthorizationState: async (query: AuthorizationStateQuery) => {
           const current = currentSitesAuthorizationStateFromMaps(
             query,
@@ -7028,6 +7033,11 @@ export class InMemoryRevisionMetadataStore
       );
       const transaction: ExportStartTransaction = Object.freeze({
         kind: "authorization-transaction" as const,
+        readMindBindingSet: (
+          bindingOwnerId: MindBindingOwnerId,
+          principalId: PrincipalId,
+          occurredAt: ApplyReadMindBindingRequest["occurredAt"],
+        ) => this.readMindBindingSet(bindingOwnerId, principalId, occurredAt),
         readCurrentAuthorizationState: async (query: AuthorizationStateQuery) => {
           const current = currentSitesAuthorizationStateFromMaps(
             query,
@@ -7099,6 +7109,11 @@ export class InMemoryRevisionMetadataStore
       );
       const transaction: ExportDownloadGrantTransaction = Object.freeze({
         kind: "authorization-transaction" as const,
+        readMindBindingSet: (
+          bindingOwnerId: MindBindingOwnerId,
+          principalId: PrincipalId,
+          occurredAt: ApplyReadMindBindingRequest["occurredAt"],
+        ) => this.readMindBindingSet(bindingOwnerId, principalId, occurredAt),
         readCurrentAuthorizationState: async (query: AuthorizationStateQuery) => {
           const current = currentSitesAuthorizationStateFromMaps(
             query,

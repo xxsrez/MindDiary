@@ -1075,6 +1075,7 @@ const COMMIT_CHANGESET_INPUT_SCHEMA = Object.freeze({
   additionalProperties: false,
   required: Object.freeze([
     "mind",
+    "write_binding_id",
     "expected_revision",
     "idempotency_key",
     "summary",
@@ -1082,6 +1083,7 @@ const COMMIT_CHANGESET_INPUT_SCHEMA = Object.freeze({
   ]),
   properties: Object.freeze({
     mind: NON_EMPTY_STRING_SCHEMA,
+    write_binding_id: OPAQUE_ID_SCHEMA,
     expected_revision: NON_EMPTY_STRING_SCHEMA,
     idempotency_key: NON_EMPTY_STRING_SCHEMA,
     summary: Object.freeze({ type: "string" }),
@@ -1168,7 +1170,7 @@ export const MCP_COMMIT_EXPORT_TOOL_DEFINITIONS = Object.freeze([
     name: "commit_changeset",
     title: "Commit a Mind changeset",
     description:
-      "Atomically apply a non-empty Markdown changeset to the current HEAD. Before a substantial, deleting, or currently visible write, preview exact paths and visibility impact to the user and obtain explicit confirmation; then re-read HEAD and use its exact expected_revision. The call immediately creates one immutable revision and never creates a server draft or approval artifact. On revision_conflict, stop and rebuild instead of retrying a changed payload with the same idempotency key.",
+      "Atomically apply a non-empty Markdown changeset through the exact active write_binding_id to the matching current HEAD; a stale generation never redirects to another Mind. Before a substantial, deleting, or currently visible write, preview exact paths and visibility impact to the user and obtain explicit confirmation; then re-read HEAD and use its exact expected_revision. The call immediately creates one immutable revision and never creates a server draft or approval artifact. On revision_conflict, stop and rebuild instead of retrying a changed payload with the same idempotency key.",
     inputSchema: COMMIT_CHANGESET_INPUT_SCHEMA,
     outputSchema: COMMIT_CHANGESET_OUTPUT_SCHEMA,
     securitySchemes: WRITE_SECURITY_SCHEMES,
@@ -1904,6 +1906,16 @@ function readFailureMessage(code: string): string {
       return "The exact revision could not be materialized safely.";
     case "read_conflict":
       return "The Mind changed while it was being read; retry the call.";
+    case "mind_binding_required":
+      return "Attach this Mind for reading or select it as the writable target first.";
+    case "write_binding_required":
+      return "Select exactly one writable Mind before committing.";
+    case "write_binding_stale":
+      return "The writable Mind changed; inspect current bindings and rebuild the commit.";
+    case "binding_owner_revoked":
+      return "The current credential can no longer use Mind bindings.";
+    case "binding_state_unavailable":
+      return "Mind binding state is unavailable.";
     case "invalid_cursor":
       return "The pagination cursor is invalid.";
     case "invalid_limit":
