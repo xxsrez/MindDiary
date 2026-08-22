@@ -134,6 +134,7 @@ export type {
   WriteMindBinding,
   WriteMindBindingId,
   StagedBundleFileId,
+  UtcInstant,
 } from "@mind-diary/domain";
 
 export interface Clock {
@@ -926,6 +927,7 @@ export interface TransferOrdinaryMindOwnershipRequest {
   readonly requestId: ActorContext["requestId"];
   readonly auditEventId: AuditEventId;
   readonly auditOutboxMessageId: OutboxMessageId;
+  readonly capacityLimits?: Readonly<CapacityLimits>;
 }
 
 /** Exact post-transfer records persisted by one ownership transaction. */
@@ -951,6 +953,7 @@ export type TransferOrdinaryMindOwnershipResult =
         | "personal_mind"
         | "forbidden"
         | "ownership_target_invalid"
+        | "ownership_target_capacity_exceeded"
         | "ownership_state_changed"
         | "idempotency_conflict"
         | "effect_conflict"
@@ -1476,6 +1479,8 @@ export interface StagedBundleFileRecord {
   readonly expiresAt: UtcInstant;
   readonly consumedAt: UtcInstant | null;
   readonly rejectionCode: string | null;
+  /** Durable capacity linkage; absent only on legacy staged records. */
+  readonly capacityReservationId?: string;
 }
 
 export type CreateStagedBundleFileResult =
@@ -1484,7 +1489,8 @@ export type CreateStagedBundleFileResult =
 
 export interface BundleFileStagingTransaction
   extends AuthorizationTransaction,
-    IdempotencyTransaction {
+    IdempotencyTransaction,
+    CapacityReservationTransaction {
   readStagedBundleFile(
     stagedFileId: StagedBundleFileId,
   ): Promise<Readonly<StagedBundleFileRecord> | null>;
@@ -1519,7 +1525,7 @@ export type ConsumeStagedBundleFilesResult =
       readonly stagedFileId: StagedBundleFileId | null;
     };
 
-export interface BundleFileStagingStore {
+export interface BundleFileStagingStore extends CapacityLedgerStore {
   runBundleFileStagingTransaction<Result>(
     operation: (transaction: BundleFileStagingTransaction) => Promise<Result>,
   ): Promise<Result>;
@@ -1669,7 +1675,8 @@ export type CreateExportJobResult =
 
 export interface ExportStartTransaction
   extends AuthorizationTransaction,
-    IdempotencyTransaction {
+    IdempotencyTransaction,
+    CapacityReservationTransaction {
   readHead(spaceId: SpaceId): Promise<RevisionId | null>;
   readRevision(
     spaceId: SpaceId,
@@ -1816,6 +1823,162 @@ export interface RevisionMetadataStore
   commitRevision(request: RevisionCommitRequest): Promise<RevisionCommitResult>;
 }
 
+export type CapacityOperation = "commit" | "stage" | "export" | "import";
+export type CapacityUtilizationState = "normal" | "warning" | "soft_limit" | "hard_limit";
+export type CapacityReservationState =
+  | "active"
+  | "consumed"
+  | "cleanup_pending"
+  | "released";
+
+export interface CapacityAmounts {
+  readonly physicalCanonicalBytes: number;
+  readonly temporaryBytes: number;
+  readonly d1MetadataBytes: number;
+}
+
+export interface CapacityUsageSnapshot extends CapacityAmounts {
+  readonly logicalHeadBytes: number;
+  readonly logicalRetainedBytes: number;
+  readonly reservedBytes: number;
+  readonly storageAmplification: number;
+  readonly trustworthy: boolean;
+  readonly reconciledAt: UtcInstant | null;
+}
+
+export interface CapacityReservation {
+  readonly reservationId: string;
+  readonly requestedByPrincipalId: PrincipalId;
+  readonly ownerPrincipalId: PrincipalId;
+  readonly spaceId: SpaceId;
+  readonly operation: CapacityOperation;
+  readonly operationRef: string;
+  readonly baseRevisionId: RevisionId | null;
+  readonly idempotencyKey: IdempotencyKey;
+  readonly requested: Readonly<CapacityAmounts>;
+  readonly actual: Readonly<CapacityAmounts> | null;
+  readonly bulk: boolean;
+  readonly heavy: boolean;
+  readonly state: CapacityReservationState;
+  readonly createdAt: UtcInstant;
+  readonly expiresAt: UtcInstant;
+  readonly updatedAt: UtcInstant;
+}
+
+export interface CapacityLimits {
+  readonly mindPhysicalCanonicalBytes: number;
+  readonly principalPhysicalCanonicalBytes: number;
+  readonly sitePhysicalCanonicalBytes: number;
+  readonly siteTemporaryBytes: number;
+  readonly siteD1MetadataBytes: number;
+  readonly ordinaryCommitSoftGrowthBytes: number;
+  readonly activeHeavyPerMind: number;
+  readonly activeHeavyPerPrincipal: number;
+  readonly activeHeavyPerSite: number;
+}
+
+export interface CapacityAdmissionRequest {
+  readonly reservationId: string;
+  readonly requestedByPrincipalId: PrincipalId;
+  readonly spaceId: SpaceId;
+  readonly operation: CapacityOperation;
+  readonly operationRef: string;
+  readonly baseRevisionId: RevisionId | null;
+  readonly idempotencyKey: IdempotencyKey;
+  readonly requested: Readonly<CapacityAmounts>;
+  readonly bulk: boolean;
+  readonly heavy: boolean;
+  readonly createdAt: UtcInstant;
+  readonly expiresAt: UtcInstant;
+}
+
+export type CapacityAdmissionResult =
+  | {
+      readonly kind: "admitted";
+      readonly reservation: Readonly<CapacityReservation>;
+      readonly replayed: boolean;
+    }
+  | {
+      readonly kind: "rejected";
+      readonly reason:
+        | "invalid_request"
+        | "owner_not_found"
+        | "accounting_untrusted"
+        | "soft_limit"
+        | "hard_limit"
+        | "fairness_limit"
+        | "idempotency_conflict";
+      readonly utilization: CapacityUtilizationState;
+    };
+
+export interface CapacityReservationTransaction {
+  readCapacityReservation(
+    reservationId: string,
+  ): Promise<Readonly<CapacityReservation> | null>;
+  admitCapacityReservation(
+    request: Readonly<CapacityAdmissionRequest>,
+    limits: Readonly<CapacityLimits>,
+  ): Promise<CapacityAdmissionResult>;
+  consumeCapacityReservation(request: Readonly<{
+    reservationId: string;
+    actual: Readonly<CapacityAmounts>;
+    consumedAt: UtcInstant;
+  }>): Promise<"consumed" | "already_consumed" | "not_found" | "state_conflict">;
+  cancelCapacityReservation(request: Readonly<{
+    reservationId: string;
+    canceledAt: UtcInstant;
+  }>): Promise<"cleanup_pending" | "already_final" | "not_found">;
+}
+
+export interface CapacityReconcileResult {
+  readonly spaceId: SpaceId | null;
+  readonly scannedSpaces: number;
+  readonly driftDetected: boolean;
+  readonly usage: Readonly<CapacityUsageSnapshot>;
+}
+
+export interface CapacityTelemetrySnapshot {
+  readonly canonicalHeadroomBytes: number;
+  readonly temporaryHeadroomBytes: number;
+  readonly d1HeadroomBytes: number;
+  readonly storageAmplification: number;
+  readonly quotaRejects: number;
+  readonly staleReservations: number;
+  readonly utilization: CapacityUtilizationState;
+}
+
+/**
+ * Privacy-safe capacity authority. Implementations derive committed usage from
+ * immutable revision metadata and temporary job/staging records; ledger events
+ * and reservations are acceleration/protection state, never the sole source.
+ */
+export interface CapacityLedgerStore extends MetadataStore {
+  runCapacityTransaction<Result>(
+    operation: (transaction: CapacityReservationTransaction) => Promise<Result>,
+  ): Promise<Result>;
+  readMindCapacityUsage(spaceId: SpaceId): Promise<Readonly<CapacityUsageSnapshot> | null>;
+  readPrincipalCapacityUsage(
+    principalId: PrincipalId,
+  ): Promise<Readonly<CapacityUsageSnapshot>>;
+  readSiteCapacityUsage(): Promise<Readonly<CapacityUsageSnapshot>>;
+  readCapacityTelemetry(
+    limits: Readonly<CapacityLimits>,
+    now: UtcInstant,
+  ): Promise<Readonly<CapacityTelemetrySnapshot>>;
+  reconcileCapacityUsage(request: Readonly<{
+    spaceId?: SpaceId;
+    reconciledAt: UtcInstant;
+  }>): Promise<Readonly<CapacityReconcileResult>>;
+  collectExpiredCapacityReservations(request: Readonly<{
+    now: UtcInstant;
+    limit: number;
+  }>): Promise<readonly Readonly<CapacityReservation>[]>;
+  releaseCapacityReservation(request: Readonly<{
+    reservationId: string;
+    releasedAt: UtcInstant;
+  }>): Promise<boolean>;
+}
+
 /**
  * Race-sensitive content commit view over one rollback-on-error metadata
  * transaction. This boundary intentionally has no provisional audit/outbox
@@ -1823,7 +1986,8 @@ export interface RevisionMetadataStore
  */
 export interface ContentCommitMetadataTransaction
   extends AuthorizationTransaction,
-    IdempotencyTransaction {
+    IdempotencyTransaction,
+    CapacityReservationTransaction {
   readHead(spaceId: SpaceId): Promise<RevisionId | null>;
   readRevision(
     spaceId: SpaceId,
@@ -1854,6 +2018,7 @@ export interface ContentCommitMetadataStore
   extends RevisionMetadataStore,
     BackgroundWorkStore,
     BundleFileStagingStore,
+    CapacityLedgerStore,
     SpaceTargetRecordPurger {
   runContentCommitTransaction<Result>(
     operation: (

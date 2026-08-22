@@ -64,6 +64,16 @@ import type {
   ClaimIndexJobResult,
   ContentCommitMetadataStore,
   ContentCommitMetadataTransaction,
+  CapacityAdmissionRequest,
+  CapacityAdmissionResult,
+  CapacityAmounts,
+  CapacityLedgerStore,
+  CapacityLimits,
+  CapacityReconcileResult,
+  CapacityReservation,
+  CapacityReservationTransaction,
+  CapacityUsageSnapshot,
+  CapacityUtilizationState,
   BundleFileStagingTransaction,
   BundleFileDownloadGrant,
   BundleFileDownloadGrantStore,
@@ -162,6 +172,7 @@ import type {
   TransferOrdinaryMindOwnershipResult,
   VerifiedSpaceHost,
   TokenVerifier,
+  UtcInstant,
   WriteMindBinding,
   WriteMindBindingId,
 } from "@mind-diary/application-ports";
@@ -3686,6 +3697,233 @@ function purgeMindBindingsForPrincipal(
   }
 }
 
+const ZERO_CAPACITY_AMOUNTS: Readonly<CapacityAmounts> = Object.freeze({
+  physicalCanonicalBytes: 0,
+  temporaryBytes: 0,
+  d1MetadataBytes: 0,
+});
+
+function validCapacityAmounts(value: Readonly<CapacityAmounts>): boolean {
+  return [
+    value.physicalCanonicalBytes,
+    value.temporaryBytes,
+    value.d1MetadataBytes,
+  ].every((amount) => Number.isSafeInteger(amount) && amount >= 0);
+}
+
+function addCapacityAmounts(
+  left: Readonly<CapacityAmounts>,
+  right: Readonly<CapacityAmounts>,
+): Readonly<CapacityAmounts> {
+  return Object.freeze({
+    physicalCanonicalBytes:
+      left.physicalCanonicalBytes + right.physicalCanonicalBytes,
+    temporaryBytes: left.temporaryBytes + right.temporaryBytes,
+    d1MetadataBytes: left.d1MetadataBytes + right.d1MetadataBytes,
+  });
+}
+
+function cloneCapacityReservation(
+  reservation: Readonly<CapacityReservation>,
+): Readonly<CapacityReservation> {
+  return Object.freeze({
+    ...reservation,
+    requested: Object.freeze({ ...reservation.requested }),
+    actual: reservation.actual === null
+      ? null
+      : Object.freeze({ ...reservation.actual }),
+  });
+}
+
+function cloneCapacityReservations(
+  source: ReadonlyMap<string, Readonly<CapacityReservation>>,
+): Map<string, Readonly<CapacityReservation>> {
+  return new Map(
+    [...source].map(([id, reservation]) => [id, cloneCapacityReservation(reservation)]),
+  );
+}
+
+function capacityOwnerForSpace(
+  spaceId: SpaceId,
+  knowledgeSpaces: ReadonlyMap<SpaceId, Readonly<KnowledgeSpace>>,
+  memberships: ReadonlyMap<SpaceMembership["membershipId"], Readonly<SpaceMembership>>,
+  fallbackPrincipalId: PrincipalId,
+): PrincipalId | null {
+  const owners = [...memberships.values()].filter(
+    (membership) =>
+      membership.spaceId === spaceId &&
+      membership.state === "active" &&
+      membership.role === "owner",
+  );
+  if (owners.length === 1) return owners[0]!.principalId;
+  // Legacy isolated stores used by conformance fixtures predate control-plane
+  // aggregates. Production Spaces always have exactly one canonical Owner.
+  return knowledgeSpaces.has(spaceId) ? null : fallbackPrincipalId;
+}
+
+function ownedCapacitySpaceIds(
+  principalId: PrincipalId,
+  spaces: ReadonlyMap<SpaceId, SpaceState>,
+  knowledgeSpaces: ReadonlyMap<SpaceId, Readonly<KnowledgeSpace>>,
+  memberships: ReadonlyMap<SpaceMembership["membershipId"], Readonly<SpaceMembership>>,
+): ReadonlySet<SpaceId> {
+  const owned = new Set<SpaceId>();
+  for (const membership of memberships.values()) {
+    if (
+      membership.principalId === principalId &&
+      membership.state === "active" &&
+      membership.role === "owner"
+    ) owned.add(membership.spaceId);
+  }
+  if (owned.size === 0 && knowledgeSpaces.size === 0) {
+    for (const spaceId of spaces.keys()) owned.add(spaceId);
+  }
+  return owned;
+}
+
+function capacityUsageFromCanonicalState(input: Readonly<{
+  spaceIds: ReadonlySet<SpaceId>;
+  spaces: ReadonlyMap<SpaceId, SpaceState>;
+  stagedBundleFiles: ReadonlyMap<StagedBundleFileId, Readonly<StagedBundleFileRecord>>;
+  exportJobs: ReadonlyMap<JobId, Readonly<ExportJob>>;
+  reservations: ReadonlyMap<string, Readonly<CapacityReservation>>;
+  reconciledAt: ReadonlyMap<SpaceId, UtcInstant>;
+}>): Readonly<CapacityUsageSnapshot> {
+  let logicalHeadBytes = 0;
+  let logicalRetainedBytes = 0;
+  let physicalCanonicalBytes = 0;
+  let temporaryBytes = 0;
+  let d1MetadataBytes = 0;
+  let reservedBytes = 0;
+  let latestReconciledAt: UtcInstant | null = null;
+  const uniqueCanonical = new Set<string>();
+
+  for (const spaceId of input.spaceIds) {
+    const state = input.spaces.get(spaceId);
+    if (!state) continue;
+    d1MetadataBytes += 1_024;
+    const head = state.head === null ? null : state.revisions.get(state.head) ?? null;
+    if (head !== null) {
+      logicalHeadBytes += head.manifest.entries.reduce(
+        (total, entry) => total + entry.size,
+        0,
+      );
+    }
+    for (const envelope of state.revisions.values()) {
+      d1MetadataBytes += 512 + envelope.manifest.entries.length * 160;
+      logicalRetainedBytes += envelope.manifest.entries.reduce(
+        (total, entry) => total + entry.size,
+        0,
+      );
+      const manifestKey = `${spaceId}\u0000manifest\u0000${envelope.revision.manifestHash}`;
+      if (!uniqueCanonical.has(manifestKey)) {
+        uniqueCanonical.add(manifestKey);
+        physicalCanonicalBytes += envelope.revision.manifestSize ?? 0;
+      }
+      for (const entry of envelope.manifest.entries) {
+        const key = `${spaceId}\u0000${entry.kind}\u0000${entry.sha256}`;
+        if (uniqueCanonical.has(key)) continue;
+        uniqueCanonical.add(key);
+        physicalCanonicalBytes += entry.size;
+      }
+    }
+    const reconciled = input.reconciledAt.get(spaceId) ?? null;
+    if (
+      reconciled !== null &&
+      (latestReconciledAt === null || Date.parse(reconciled) > Date.parse(latestReconciledAt))
+    ) latestReconciledAt = reconciled;
+  }
+
+  for (const record of input.stagedBundleFiles.values()) {
+    if (!input.spaceIds.has(record.spaceId)) continue;
+    temporaryBytes += record.size;
+    d1MetadataBytes += 512;
+  }
+  for (const job of input.exportJobs.values()) {
+    if (!input.spaceIds.has(job.spaceId)) continue;
+    d1MetadataBytes += 768;
+    if (job.archive !== null && job.archiveCleanedAt === null) {
+      temporaryBytes += job.archive.size;
+    }
+  }
+  for (const reservation of input.reservations.values()) {
+    if (!input.spaceIds.has(reservation.spaceId)) continue;
+    d1MetadataBytes += 512;
+    if (reservation.state === "active") {
+      reservedBytes += reservation.requested.physicalCanonicalBytes +
+        reservation.requested.temporaryBytes +
+        reservation.requested.d1MetadataBytes;
+    }
+    if (reservation.state === "cleanup_pending") {
+      temporaryBytes += reservation.requested.temporaryBytes +
+        reservation.requested.physicalCanonicalBytes;
+    }
+  }
+  const storageAmplification = logicalHeadBytes === 0
+    ? 1
+    : physicalCanonicalBytes / logicalHeadBytes;
+  return Object.freeze({
+    logicalHeadBytes,
+    logicalRetainedBytes,
+    physicalCanonicalBytes,
+    temporaryBytes,
+    d1MetadataBytes,
+    reservedBytes,
+    storageAmplification,
+    trustworthy: true,
+    reconciledAt: latestReconciledAt,
+  });
+}
+
+function capacityReservationMatches(
+  reservation: Readonly<CapacityReservation>,
+  request: Readonly<CapacityAdmissionRequest>,
+): boolean {
+  return reservation.requestedByPrincipalId === request.requestedByPrincipalId &&
+    reservation.spaceId === request.spaceId &&
+    reservation.operation === request.operation &&
+    reservation.operationRef === request.operationRef &&
+    reservation.baseRevisionId === request.baseRevisionId &&
+    reservation.idempotencyKey === request.idempotencyKey &&
+    reservation.bulk === request.bulk &&
+    reservation.heavy === request.heavy &&
+    JSON.stringify(reservation.requested) === JSON.stringify(request.requested);
+}
+
+function utilizationState(ratio: number): CapacityUtilizationState {
+  if (ratio >= 1) return "hard_limit";
+  if (ratio >= 0.85) return "soft_limit";
+  if (ratio >= 0.7) return "warning";
+  return "normal";
+}
+
+function maxUtilizationState(ratios: readonly number[]) {
+  return utilizationState(Math.max(0, ...ratios));
+}
+
+function activeReservationAmounts(
+  reservations: ReadonlyMap<string, Readonly<CapacityReservation>>,
+  predicate: (reservation: Readonly<CapacityReservation>) => boolean,
+): Readonly<CapacityAmounts> {
+  let total = ZERO_CAPACITY_AMOUNTS;
+  for (const reservation of reservations.values()) {
+    if (reservation.state === "active" && predicate(reservation)) {
+      total = addCapacityAmounts(total, reservation.requested);
+    }
+  }
+  return total;
+}
+
+function validCapacityAdmissionRequest(request: Readonly<CapacityAdmissionRequest>): boolean {
+  return request.reservationId.length > 0 &&
+    request.operationRef.length > 0 &&
+    request.idempotencyKey.length > 0 &&
+    validCapacityAmounts(request.requested) &&
+    Number.isFinite(Date.parse(request.createdAt)) &&
+    Number.isFinite(Date.parse(request.expiresAt)) &&
+    Date.parse(request.expiresAt) > Date.parse(request.createdAt);
+}
+
 export class InMemoryRevisionMetadataStore
   implements
     ContentCommitMetadataStore,
@@ -3695,6 +3933,7 @@ export class InMemoryRevisionMetadataStore
     PersonalMindStore,
     OrdinaryMindStore,
     AccountDeletionStore,
+    CapacityLedgerStore,
     MembershipControlStore,
     ControlReadStore,
     MindBindingStore {
@@ -3710,6 +3949,10 @@ export class InMemoryRevisionMetadataStore
   #bundleFileDownloadGrants = new Map<string, Readonly<BundleFileDownloadGrant>>();
   #indexStates = new Map<string, Readonly<RevisionIndexState>>();
   #stagedBundleFiles = new Map<StagedBundleFileId, Readonly<StagedBundleFileRecord>>();
+  #capacityReservations = new Map<string, Readonly<CapacityReservation>>();
+  #capacityReconciledAt = new Map<SpaceId, UtcInstant>();
+  #capacityUsageLedger = new Map<SpaceId, Readonly<CapacityUsageSnapshot>>();
+  #capacityQuotaRejects = 0;
   #principals: PrincipalMap = new Map();
   #externalBindings: ExternalBindingMap = new Map();
   #knowledgeSpaces: KnowledgeSpaceMap = new Map();
@@ -3775,6 +4018,10 @@ export class InMemoryRevisionMetadataStore
       bundleFileDownloadGrants: new Map(this.#bundleFileDownloadGrants),
       indexStates: new Map(this.#indexStates),
       stagedBundleFiles: new Map(this.#stagedBundleFiles),
+      capacityReservations: new Map(this.#capacityReservations),
+      capacityReconciledAt: new Map(this.#capacityReconciledAt),
+      capacityUsageLedger: new Map(this.#capacityUsageLedger),
+      capacityQuotaRejects: this.#capacityQuotaRejects,
       principals: new Map(this.#principals),
       externalBindings: new Map(this.#externalBindings),
       knowledgeSpaces: new Map(this.#knowledgeSpaces),
@@ -3845,6 +4092,24 @@ export class InMemoryRevisionMetadataStore
     restored.#stagedBundleFiles = snapshot.stagedBundleFiles instanceof Map
       ? new Map(snapshot.stagedBundleFiles as Map<StagedBundleFileId, Readonly<StagedBundleFileRecord>>)
       : new Map();
+    restored.#capacityReservations = snapshot.capacityReservations instanceof Map
+      ? cloneCapacityReservations(
+          snapshot.capacityReservations as Map<string, Readonly<CapacityReservation>>,
+        )
+      : new Map();
+    restored.#capacityReconciledAt = snapshot.capacityReconciledAt instanceof Map
+      ? new Map(snapshot.capacityReconciledAt as Map<SpaceId, UtcInstant>)
+      : new Map();
+    restored.#capacityUsageLedger = snapshot.capacityUsageLedger instanceof Map
+      ? new Map(
+          [...(snapshot.capacityUsageLedger as Map<SpaceId, Readonly<CapacityUsageSnapshot>>)]
+            .map(([spaceId, usage]) => [spaceId, Object.freeze({ ...usage })]),
+        )
+      : new Map();
+    restored.#capacityQuotaRejects = Number.isSafeInteger(snapshot.capacityQuotaRejects) &&
+      (snapshot.capacityQuotaRejects as number) >= 0
+      ? snapshot.capacityQuotaRejects as number
+      : 0;
     restored.#principals = new Map(snapshot.principals as PrincipalMap);
     restored.#externalBindings = new Map(snapshot.externalBindings as ExternalBindingMap);
     restored.#knowledgeSpaces = new Map(snapshot.knowledgeSpaces as KnowledgeSpaceMap);
@@ -3873,6 +4138,476 @@ export class InMemoryRevisionMetadataStore
       restored.#authorizationStates.set(key, item);
     }
     return restored;
+  }
+
+  async runCapacityTransaction<Result>(
+    operation: (transaction: CapacityReservationTransaction) => Promise<Result>,
+  ): Promise<Result> {
+    return this.#runExclusive(async () => {
+      const reservations = cloneCapacityReservations(this.#capacityReservations);
+      const transaction = this.#capacityTransaction(reservations);
+      const result = await operation(transaction);
+      this.#capacityReservations = reservations;
+      return result;
+    });
+  }
+
+  async readMindCapacityUsage(
+    spaceId: SpaceId,
+  ): Promise<Readonly<CapacityUsageSnapshot> | null> {
+    return this.#runExclusive(async () => {
+      if (!this.#spaces.has(spaceId)) return null;
+      return capacityUsageFromCanonicalState({
+        spaceIds: new Set([spaceId]),
+        spaces: this.#spaces,
+        stagedBundleFiles: this.#stagedBundleFiles,
+        exportJobs: this.#exportJobs,
+        reservations: this.#capacityReservations,
+        reconciledAt: this.#capacityReconciledAt,
+      });
+    });
+  }
+
+  async readPrincipalCapacityUsage(
+    principalId: PrincipalId,
+  ): Promise<Readonly<CapacityUsageSnapshot>> {
+    return this.#runExclusive(async () => capacityUsageFromCanonicalState({
+      spaceIds: ownedCapacitySpaceIds(
+        principalId,
+        this.#spaces,
+        this.#knowledgeSpaces,
+        this.#memberships,
+      ),
+      spaces: this.#spaces,
+      stagedBundleFiles: this.#stagedBundleFiles,
+      exportJobs: this.#exportJobs,
+      reservations: this.#capacityReservations,
+      reconciledAt: this.#capacityReconciledAt,
+    }));
+  }
+
+  async readSiteCapacityUsage(): Promise<Readonly<CapacityUsageSnapshot>> {
+    return this.#runExclusive(async () => capacityUsageFromCanonicalState({
+      spaceIds: new Set(this.#spaces.keys()),
+      spaces: this.#spaces,
+      stagedBundleFiles: this.#stagedBundleFiles,
+      exportJobs: this.#exportJobs,
+      reservations: this.#capacityReservations,
+      reconciledAt: this.#capacityReconciledAt,
+    }));
+  }
+
+  async readCapacityTelemetry(
+    limits: Readonly<CapacityLimits>,
+    now: UtcInstant,
+  ) {
+    return this.#runExclusive(async () => {
+      const usage = capacityUsageFromCanonicalState({
+        spaceIds: new Set(this.#spaces.keys()),
+        spaces: this.#spaces,
+        stagedBundleFiles: this.#stagedBundleFiles,
+        exportJobs: this.#exportJobs,
+        reservations: this.#capacityReservations,
+        reconciledAt: this.#capacityReconciledAt,
+      });
+      const active = activeReservationAmounts(
+        this.#capacityReservations,
+        () => true,
+      );
+      const utilization = maxUtilizationState([
+        (usage.physicalCanonicalBytes + active.physicalCanonicalBytes) /
+          limits.sitePhysicalCanonicalBytes,
+        (usage.temporaryBytes + active.temporaryBytes) /
+          limits.siteTemporaryBytes,
+        (usage.d1MetadataBytes + active.d1MetadataBytes) /
+          limits.siteD1MetadataBytes,
+      ]);
+      return Object.freeze({
+        canonicalHeadroomBytes: Math.max(
+          0,
+          limits.sitePhysicalCanonicalBytes - usage.physicalCanonicalBytes -
+            active.physicalCanonicalBytes,
+        ),
+        temporaryHeadroomBytes: Math.max(
+          0,
+          limits.siteTemporaryBytes - usage.temporaryBytes - active.temporaryBytes,
+        ),
+        d1HeadroomBytes: Math.max(
+          0,
+          limits.siteD1MetadataBytes - usage.d1MetadataBytes - active.d1MetadataBytes,
+        ),
+        storageAmplification: usage.storageAmplification,
+        quotaRejects: this.#capacityQuotaRejects,
+        staleReservations: [...this.#capacityReservations.values()].filter(
+          (reservation) =>
+            reservation.state === "cleanup_pending" ||
+            (reservation.state === "active" &&
+              Date.parse(reservation.expiresAt) <= Date.parse(now)),
+        ).length,
+        utilization,
+      });
+    });
+  }
+
+  async reconcileCapacityUsage(request: Readonly<{
+    spaceId?: SpaceId;
+    reconciledAt: UtcInstant;
+  }>): Promise<Readonly<CapacityReconcileResult>> {
+    if (!Number.isFinite(Date.parse(request.reconciledAt))) {
+      throw new TypeError("capacity reconciliation time must be valid UTC");
+    }
+    return this.#runExclusive(async () => {
+      const selected = request.spaceId === undefined
+        ? new Set(this.#spaces.keys())
+        : new Set(this.#spaces.has(request.spaceId) ? [request.spaceId] : []);
+      let driftDetected = false;
+      for (const spaceId of selected) {
+        this.#capacityReconciledAt.set(spaceId, request.reconciledAt);
+        const usage = capacityUsageFromCanonicalState({
+          spaceIds: new Set([spaceId]),
+          spaces: this.#spaces,
+          stagedBundleFiles: this.#stagedBundleFiles,
+          exportJobs: this.#exportJobs,
+          reservations: this.#capacityReservations,
+          reconciledAt: this.#capacityReconciledAt,
+        });
+        const previous = this.#capacityUsageLedger.get(spaceId);
+        if (
+          previous !== undefined &&
+          JSON.stringify({ ...previous, reconciledAt: null }) !==
+            JSON.stringify({ ...usage, reconciledAt: null })
+        ) driftDetected = true;
+        this.#capacityUsageLedger.set(spaceId, usage);
+      }
+      const usage = capacityUsageFromCanonicalState({
+        spaceIds: selected,
+        spaces: this.#spaces,
+        stagedBundleFiles: this.#stagedBundleFiles,
+        exportJobs: this.#exportJobs,
+        reservations: this.#capacityReservations,
+        reconciledAt: this.#capacityReconciledAt,
+      });
+      return Object.freeze({
+        spaceId: request.spaceId ?? null,
+        scannedSpaces: selected.size,
+        driftDetected,
+        usage,
+      });
+    });
+  }
+
+  async collectExpiredCapacityReservations(request: Readonly<{
+    now: UtcInstant;
+    limit: number;
+  }>): Promise<readonly Readonly<CapacityReservation>[]> {
+    if (!Number.isSafeInteger(request.limit) || request.limit < 1) {
+      throw new TypeError("capacity reservation cleanup limit must be positive");
+    }
+    return this.#runExclusive(async () => {
+      const expired = [...this.#capacityReservations.values()]
+        .filter(
+          (reservation) =>
+            reservation.state === "cleanup_pending" ||
+            (reservation.state === "active" &&
+              Date.parse(reservation.expiresAt) <= Date.parse(request.now)),
+        )
+        .sort((left, right) =>
+          Date.parse(left.expiresAt) - Date.parse(right.expiresAt) ||
+          left.reservationId.localeCompare(right.reservationId),
+        )
+        .slice(0, request.limit)
+        .map((reservation) => reservation.state === "cleanup_pending"
+          ? cloneCapacityReservation(reservation)
+          : cloneCapacityReservation(Object.freeze({
+              ...reservation,
+              state: "cleanup_pending" as const,
+              updatedAt: request.now,
+            })));
+      for (const reservation of expired) {
+        this.#capacityReservations.set(reservation.reservationId, reservation);
+      }
+      return Object.freeze(expired);
+    });
+  }
+
+  async releaseCapacityReservation(request: Readonly<{
+    reservationId: string;
+    releasedAt: UtcInstant;
+  }>): Promise<boolean> {
+    return this.#runExclusive(async () => {
+      const current = this.#capacityReservations.get(request.reservationId);
+      if (current === undefined || current.state === "released") return false;
+      if (current.state === "active") return false;
+      this.#capacityReservations.set(
+        request.reservationId,
+        cloneCapacityReservation(Object.freeze({
+          ...current,
+          state: "released" as const,
+          updatedAt: request.releasedAt,
+        })),
+      );
+      return true;
+    });
+  }
+
+  async listCapacityReservationsForTest(): Promise<readonly Readonly<CapacityReservation>[]> {
+    return this.#runExclusive(async () => Object.freeze(
+      [...this.#capacityReservations.values()]
+        .sort((left, right) => left.reservationId.localeCompare(right.reservationId))
+        .map(cloneCapacityReservation),
+    ));
+  }
+
+  #capacityTransaction(
+    reservations: Map<string, Readonly<CapacityReservation>>,
+  ): CapacityReservationTransaction {
+    return Object.freeze({
+      readCapacityReservation: async (reservationId: string) => {
+        const reservation = reservations.get(reservationId);
+        return reservation === undefined ? null : cloneCapacityReservation(reservation);
+      },
+      admitCapacityReservation: async (
+        request: Readonly<CapacityAdmissionRequest>,
+        limits: Readonly<CapacityLimits>,
+      ): Promise<CapacityAdmissionResult> => {
+        if (!validCapacityAdmissionRequest(request)) {
+          return Object.freeze({
+            kind: "rejected",
+            reason: "invalid_request",
+            utilization: "normal",
+          });
+        }
+        const existing = reservations.get(request.reservationId);
+        if (existing !== undefined) {
+          if (!capacityReservationMatches(existing, request)) {
+            return Object.freeze({
+                kind: "rejected",
+                reason: "idempotency_conflict",
+                utilization: "normal",
+              });
+          }
+          const expiredActive = existing.state === "active" &&
+            Date.parse(existing.expiresAt) <= Date.parse(request.createdAt);
+          const resumableCommit = request.operation === "commit" &&
+            (existing.state === "cleanup_pending" || expiredActive);
+          if ((existing.state === "cleanup_pending" || expiredActive) && !resumableCommit) {
+            this.#capacityQuotaRejects += 1;
+            return Object.freeze({
+              kind: "rejected",
+              reason: "accounting_untrusted",
+              utilization: "normal",
+            });
+          }
+          if (existing.state === "released" || resumableCommit) {
+            const reacquired = cloneCapacityReservation(Object.freeze({
+              ...existing,
+              actual: null,
+              state: "active" as const,
+              createdAt: request.createdAt,
+              expiresAt: request.expiresAt,
+              updatedAt: request.createdAt,
+            }));
+            reservations.set(reacquired.reservationId, reacquired);
+            return Object.freeze({
+              kind: "admitted",
+              reservation: reacquired,
+              replayed: false,
+            });
+          }
+          return Object.freeze({
+            kind: "admitted",
+            reservation: cloneCapacityReservation(existing),
+            replayed: true,
+          });
+        }
+        const ownerPrincipalId = capacityOwnerForSpace(
+          request.spaceId,
+          this.#knowledgeSpaces,
+          this.#memberships,
+          request.requestedByPrincipalId,
+        );
+        if (ownerPrincipalId === null) {
+          this.#capacityQuotaRejects += 1;
+          return Object.freeze({
+            kind: "rejected",
+            reason: "owner_not_found",
+            utilization: "normal",
+          });
+        }
+        const spaceUsage = capacityUsageFromCanonicalState({
+          spaceIds: new Set([request.spaceId]),
+          spaces: this.#spaces,
+          stagedBundleFiles: this.#stagedBundleFiles,
+          exportJobs: this.#exportJobs,
+          reservations,
+          reconciledAt: this.#capacityReconciledAt,
+        });
+        const principalSpaceIds = new Set(ownedCapacitySpaceIds(
+          ownerPrincipalId,
+          this.#spaces,
+          this.#knowledgeSpaces,
+          this.#memberships,
+        ));
+        principalSpaceIds.add(request.spaceId);
+        const principalUsage = capacityUsageFromCanonicalState({
+          spaceIds: principalSpaceIds,
+          spaces: this.#spaces,
+          stagedBundleFiles: this.#stagedBundleFiles,
+          exportJobs: this.#exportJobs,
+          reservations,
+          reconciledAt: this.#capacityReconciledAt,
+        });
+        const siteUsage = capacityUsageFromCanonicalState({
+          spaceIds: new Set(this.#spaces.keys()),
+          spaces: this.#spaces,
+          stagedBundleFiles: this.#stagedBundleFiles,
+          exportJobs: this.#exportJobs,
+          reservations,
+          reconciledAt: this.#capacityReconciledAt,
+        });
+        const spaceReserved = activeReservationAmounts(
+          reservations,
+          (reservation) => reservation.spaceId === request.spaceId,
+        );
+        const principalReserved = activeReservationAmounts(
+          reservations,
+          (reservation) => reservation.ownerPrincipalId === ownerPrincipalId,
+        );
+        const siteReserved = activeReservationAmounts(reservations, () => true);
+
+        const currentRatios = [
+          (spaceUsage.physicalCanonicalBytes + spaceReserved.physicalCanonicalBytes) /
+            limits.mindPhysicalCanonicalBytes,
+          (principalUsage.physicalCanonicalBytes + principalReserved.physicalCanonicalBytes) /
+            limits.principalPhysicalCanonicalBytes,
+          (siteUsage.physicalCanonicalBytes + siteReserved.physicalCanonicalBytes) /
+            limits.sitePhysicalCanonicalBytes,
+          (siteUsage.temporaryBytes + siteReserved.temporaryBytes) /
+            limits.siteTemporaryBytes,
+          (siteUsage.d1MetadataBytes + siteReserved.d1MetadataBytes) /
+            limits.siteD1MetadataBytes,
+        ];
+        const projectedRatios = [
+          (spaceUsage.physicalCanonicalBytes + spaceReserved.physicalCanonicalBytes +
+            request.requested.physicalCanonicalBytes) /
+            limits.mindPhysicalCanonicalBytes,
+          (principalUsage.physicalCanonicalBytes + principalReserved.physicalCanonicalBytes +
+            request.requested.physicalCanonicalBytes) /
+            limits.principalPhysicalCanonicalBytes,
+          (siteUsage.physicalCanonicalBytes + siteReserved.physicalCanonicalBytes +
+            request.requested.physicalCanonicalBytes) /
+            limits.sitePhysicalCanonicalBytes,
+          (siteUsage.temporaryBytes + siteReserved.temporaryBytes +
+            request.requested.temporaryBytes) /
+            limits.siteTemporaryBytes,
+          (siteUsage.d1MetadataBytes + siteReserved.d1MetadataBytes +
+            request.requested.d1MetadataBytes) /
+            limits.siteD1MetadataBytes,
+        ];
+        const projectedUtilization = maxUtilizationState(projectedRatios);
+        const growth = request.requested.physicalCanonicalBytes +
+          request.requested.temporaryBytes + request.requested.d1MetadataBytes;
+        if (request.heavy) {
+          const activeHeavy = [...reservations.values()].filter(
+            (reservation) => reservation.state === "active" && reservation.heavy,
+          );
+          if (
+            activeHeavy.filter((reservation) => reservation.spaceId === request.spaceId).length >=
+              limits.activeHeavyPerMind ||
+            activeHeavy.filter((reservation) =>
+              reservation.ownerPrincipalId === ownerPrincipalId).length >=
+              limits.activeHeavyPerPrincipal ||
+            activeHeavy.length >= limits.activeHeavyPerSite
+          ) {
+            this.#capacityQuotaRejects += 1;
+            return Object.freeze({
+              kind: "rejected",
+              reason: "fairness_limit",
+              utilization: maxUtilizationState(currentRatios),
+            });
+          }
+        }
+        if (growth > 0 && projectedRatios.some((ratio) => ratio > 1)) {
+          this.#capacityQuotaRejects += 1;
+          return Object.freeze({
+            kind: "rejected",
+            reason: "hard_limit",
+            utilization: projectedUtilization,
+          });
+        }
+        const reachesSoftLimit = projectedRatios.some((ratio) => ratio >= 0.85);
+        const ordinaryCommitAllowed = request.operation === "commit" &&
+          !request.bulk &&
+          request.requested.physicalCanonicalBytes <=
+            limits.ordinaryCommitSoftGrowthBytes;
+        if (growth > 0 && reachesSoftLimit && (request.bulk || !ordinaryCommitAllowed)) {
+          this.#capacityQuotaRejects += 1;
+          return Object.freeze({
+            kind: "rejected",
+            reason: "soft_limit",
+            utilization: projectedUtilization,
+          });
+        }
+        const reservation = cloneCapacityReservation(Object.freeze({
+          ...request,
+          ownerPrincipalId,
+          actual: null,
+          state: "active" as const,
+          updatedAt: request.createdAt,
+        }));
+        reservations.set(reservation.reservationId, reservation);
+        return Object.freeze({ kind: "admitted", reservation, replayed: false });
+      },
+      consumeCapacityReservation: async (
+        request: Parameters<
+          CapacityReservationTransaction["consumeCapacityReservation"]
+        >[0],
+      ) => {
+        if (!validCapacityAmounts(request.actual)) return "state_conflict" as const;
+        const current = reservations.get(request.reservationId);
+        if (current === undefined) return "not_found" as const;
+        if (current.state === "consumed") {
+          return JSON.stringify(current.actual) === JSON.stringify(request.actual)
+            ? "already_consumed" as const
+            : "state_conflict" as const;
+        }
+        if (current.state !== "active") return "state_conflict" as const;
+        if (
+          request.actual.physicalCanonicalBytes > current.requested.physicalCanonicalBytes ||
+          request.actual.temporaryBytes > current.requested.temporaryBytes ||
+          request.actual.d1MetadataBytes > current.requested.d1MetadataBytes
+        ) return "state_conflict" as const;
+        reservations.set(
+          request.reservationId,
+          cloneCapacityReservation(Object.freeze({
+            ...current,
+            actual: Object.freeze({ ...request.actual }),
+            state: "consumed" as const,
+            updatedAt: request.consumedAt,
+          })),
+        );
+        return "consumed" as const;
+      },
+      cancelCapacityReservation: async (
+        request: Parameters<
+          CapacityReservationTransaction["cancelCapacityReservation"]
+        >[0],
+      ) => {
+        const current = reservations.get(request.reservationId);
+        if (current === undefined) return "not_found" as const;
+        if (current.state === "cleanup_pending") return "cleanup_pending" as const;
+        if (current.state !== "active") return "already_final" as const;
+        reservations.set(
+          request.reservationId,
+          cloneCapacityReservation(Object.freeze({
+            ...current,
+            state: "cleanup_pending" as const,
+            updatedAt: request.canceledAt,
+          })),
+        );
+        return "cleanup_pending" as const;
+      },
+    });
   }
 
   async readMindBindingSet(
@@ -3907,7 +4642,9 @@ export class InMemoryRevisionMetadataStore
     return this.#runExclusive(async () => {
       const stagedBundleFiles = new Map(this.#stagedBundleFiles);
       const idempotencyRecords = cloneIdempotencyRecords(this.#idempotencyRecords);
+      const capacityReservations = cloneCapacityReservations(this.#capacityReservations);
       const transaction: BundleFileStagingTransaction = Object.freeze({
+        ...this.#capacityTransaction(capacityReservations),
         kind: "authorization-transaction" as const,
         readMindBindingSet: (
           bindingOwnerId: MindBindingOwnerId,
@@ -3938,6 +4675,7 @@ export class InMemoryRevisionMetadataStore
       const result = await operation(transaction);
       this.#stagedBundleFiles = stagedBundleFiles;
       this.#idempotencyRecords = idempotencyRecords;
+      this.#capacityReservations = capacityReservations;
       return result;
     });
   }
@@ -3952,9 +4690,7 @@ export class InMemoryRevisionMetadataStore
     return this.#runExclusive(async () => {
       const candidates = [...this.#stagedBundleFiles.values()]
         .filter(
-          (record) =>
-            record.state !== "expired" &&
-            Date.parse(record.expiresAt) <= Date.parse(request.createdBefore),
+          (record) => Date.parse(record.expiresAt) <= Date.parse(request.createdBefore),
         )
         .sort((left, right) =>
           Date.parse(left.createdAt) - Date.parse(right.createdAt) ||
@@ -6417,6 +7153,36 @@ export class InMemoryRevisionMetadataStore
           ) {
             return Object.freeze({ kind: "ownership_target_invalid" });
           }
+          if (request.capacityLimits !== undefined) {
+            const targetSpaceIds = new Set(ownedCapacitySpaceIds(
+              target.principalId,
+              revisionSpaces,
+              knowledgeSpaces,
+              memberships,
+            ));
+            targetSpaceIds.add(request.spaceId);
+            const targetUsage = capacityUsageFromCanonicalState({
+              spaceIds: targetSpaceIds,
+              spaces: revisionSpaces,
+              stagedBundleFiles: this.#stagedBundleFiles,
+              exportJobs,
+              reservations: this.#capacityReservations,
+              reconciledAt: this.#capacityReconciledAt,
+            });
+            const targetReserved = activeReservationAmounts(
+              this.#capacityReservations,
+              (reservation) => targetSpaceIds.has(reservation.spaceId),
+            );
+            if (
+              targetUsage.physicalCanonicalBytes +
+                targetReserved.physicalCanonicalBytes >
+                request.capacityLimits.principalPhysicalCanonicalBytes
+            ) {
+              return Object.freeze({
+                kind: "ownership_target_capacity_exceeded",
+              });
+            }
+          }
 
           let transferredAggregate: ReturnType<
             typeof SpaceAggregate.restoreOrdinary
@@ -7661,6 +8427,7 @@ export class InMemoryRevisionMetadataStore
         [...this.#indexStates].map(([key, state]) => [key, cloneIndexState(state)]),
       );
       const stagedBundleFiles = new Map(this.#stagedBundleFiles);
+      const capacityReservations = cloneCapacityReservations(this.#capacityReservations);
       const authorizationStates = new Map(
         [...this.#authorizationStates].map(([key, state]) => [
           key,
@@ -7668,6 +8435,7 @@ export class InMemoryRevisionMetadataStore
         ]),
       );
       const transaction: ContentCommitMetadataTransaction = Object.freeze({
+        ...this.#capacityTransaction(capacityReservations),
         kind: "authorization-transaction" as const,
         readMindBindingSet: (
           bindingOwnerId: MindBindingOwnerId,
@@ -7767,6 +8535,7 @@ export class InMemoryRevisionMetadataStore
       this.#backgroundJobs = backgroundJobs;
       this.#indexStates = indexStates;
       this.#stagedBundleFiles = stagedBundleFiles;
+      this.#capacityReservations = capacityReservations;
       return result;
     });
   }
@@ -7782,6 +8551,7 @@ export class InMemoryRevisionMetadataStore
       const memberships = this.#memberships;
       const idempotencyRecords = cloneIdempotencyRecords(this.#idempotencyRecords);
       const exportJobs = cloneExportJobs(this.#exportJobs);
+      const capacityReservations = cloneCapacityReservations(this.#capacityReservations);
       const authorizationStates = new Map(
         [...this.#authorizationStates].map(([key, state]) => [
           key,
@@ -7789,6 +8559,7 @@ export class InMemoryRevisionMetadataStore
         ]),
       );
       const transaction: ExportStartTransaction = Object.freeze({
+        ...this.#capacityTransaction(capacityReservations),
         kind: "authorization-transaction" as const,
         readMindBindingSet: (
           bindingOwnerId: MindBindingOwnerId,
@@ -7843,6 +8614,7 @@ export class InMemoryRevisionMetadataStore
       const result = await operation(transaction);
       this.#idempotencyRecords = idempotencyRecords;
       this.#exportJobs = exportJobs;
+      this.#capacityReservations = capacityReservations;
       return result;
     });
   }
@@ -8770,6 +9542,17 @@ export class InMemoryRevisionMetadataStore
       ) {
         return false;
       }
+      const capacityReservation = [...this.#capacityReservations.values()].find(
+        (reservation) =>
+          reservation.operation === "export" &&
+          reservation.operationRef === String(jobId) &&
+          reservation.spaceId === current.spaceId,
+      );
+      if (
+        capacityReservation !== undefined &&
+        (capacityReservation.state !== "active" ||
+          archive.size > capacityReservation.requested.temporaryBytes)
+      ) return false;
       this.#exportJobs.set(
         jobId,
         Object.freeze({
@@ -8783,6 +9566,21 @@ export class InMemoryRevisionMetadataStore
           archive: Object.freeze({ ...archive }),
         }),
       );
+      if (capacityReservation !== undefined) {
+        this.#capacityReservations.set(
+          capacityReservation.reservationId,
+          cloneCapacityReservation(Object.freeze({
+            ...capacityReservation,
+            actual: Object.freeze({
+              physicalCanonicalBytes: 0,
+              temporaryBytes: archive.size,
+              d1MetadataBytes: capacityReservation.requested.d1MetadataBytes,
+            }),
+            state: "consumed" as const,
+            updatedAt: completedAt,
+          })),
+        );
+      }
       return true;
     });
   }
@@ -8853,6 +9651,23 @@ export class InMemoryRevisionMetadataStore
         archiveCleanedAt: null,
       });
       this.#exportJobs.set(jobId, expired);
+      for (const [reservationId, reservation] of this.#capacityReservations) {
+        if (
+          reservation.operation === "export" &&
+          reservation.operationRef === String(jobId) &&
+          reservation.spaceId === current.spaceId &&
+          reservation.state === "active"
+        ) {
+          this.#capacityReservations.set(
+            reservationId,
+            cloneCapacityReservation(Object.freeze({
+              ...reservation,
+              state: "cleanup_pending" as const,
+              updatedAt: now,
+            })),
+          );
+        }
+      }
       for (const [verifier, grant] of this.#exportDownloadGrants) {
         if (grant.jobId === jobId && grant.state === "active") {
           this.#exportDownloadGrants.set(
@@ -8895,6 +9710,24 @@ export class InMemoryRevisionMetadataStore
           archiveCleanedAt: cleanedAt,
         }),
       );
+      for (const [reservationId, reservation] of this.#capacityReservations) {
+        if (
+          reservation.operation === "export" &&
+          reservation.operationRef === String(jobId) &&
+          reservation.spaceId === current.spaceId &&
+          reservation.state !== "active" &&
+          reservation.state !== "released"
+        ) {
+          this.#capacityReservations.set(
+            reservationId,
+            cloneCapacityReservation(Object.freeze({
+              ...reservation,
+              state: "released" as const,
+              updatedAt: cleanedAt,
+            })),
+          );
+        }
+      }
       return true;
     });
   }
@@ -8939,12 +9772,19 @@ export class InMemoryRevisionMetadataStore
       const bundleFileGrantVerifiers = [...this.#bundleFileDownloadGrants]
         .filter(([, grant]) => grant.spaceId === spaceId)
         .map(([verifier]) => verifier);
+      const capacityReservationIds = [...this.#capacityReservations]
+        .filter(([, reservation]) => reservation.spaceId === spaceId)
+        .map(([reservationId]) => reservationId);
       jobIds.forEach((id) => this.#backgroundJobs.delete(id));
       exportJobIds.forEach((id) => this.#exportJobs.delete(id));
       exportGrantVerifiers.forEach((verifier) =>
         this.#exportDownloadGrants.delete(verifier));
       bundleFileGrantVerifiers.forEach((verifier) =>
         this.#bundleFileDownloadGrants.delete(verifier));
+      capacityReservationIds.forEach((reservationId) =>
+        this.#capacityReservations.delete(reservationId));
+      this.#capacityReconciledAt.delete(spaceId);
+      this.#capacityUsageLedger.delete(spaceId);
       indexKeys.forEach((key) => this.#indexStates.delete(key));
       outboxIds.forEach((id) => this.#auditOutbox.delete(id));
       auditIds.forEach((id) => this.#auditEvents.delete(id));

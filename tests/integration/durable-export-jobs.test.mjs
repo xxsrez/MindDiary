@@ -146,6 +146,9 @@ async function harness(options = {}) {
     jobIds: { nextExportJobId: () => ids[nextJob++] },
     downloadSecretCrypto,
     downloadUrlBase: "https://downloads.invalid/export-grants",
+    ...(options.capacityLimits === undefined
+      ? {}
+      : { capacityLimits: options.capacityLimits }),
   });
   const builder = new DeterministicOkfExportService({
     materializer: revisions,
@@ -171,6 +174,30 @@ async function harness(options = {}) {
     worker,
   };
 }
+
+test("export capacity admission is atomic with job creation", async () => {
+  const env = await harness({
+    capacityLimits: {
+      mindPhysicalCanonicalBytes: 2_147_483_648,
+      principalPhysicalCanonicalBytes: 8_589_934_592,
+      sitePhysicalCanonicalBytes: 34_359_738_368,
+      siteTemporaryBytes: 1,
+      siteD1MetadataBytes: 536_870_912,
+      ordinaryCommitSoftGrowthBytes: 4_194_304,
+      activeHeavyPerMind: 1,
+      activeHeavyPerPrincipal: 2,
+      activeHeavyPerSite: 8,
+    },
+  });
+  const result = await env.application().start(startRequest(
+    env.actor,
+    "export-capacity-hard-limit",
+  ));
+  assert.equal(result.kind, "invalid");
+  assert.equal(result.code, "capacity_hard_limit");
+  assert.equal((await env.metadata.listExportJobsForTest()).length, 0);
+  assert.equal((await env.metadata.listCapacityReservationsForTest()).length, 0);
+});
 
 function startRequest(actor, key = "export-idempotency-1", selector = { kind: "head" }) {
   return {

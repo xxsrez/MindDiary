@@ -10,6 +10,7 @@ import type {
   AccountDeletionIdGenerator,
   AccountDeletionStore,
   Clock,
+  CapacityLimits,
   ControlReadStore,
   ExternalIdentityBindingLookup,
   ExportArchiveStore,
@@ -3222,6 +3223,7 @@ export type OwnershipTransferFailureCode =
   | "personal_mind_operation_forbidden"
   | "forbidden"
   | "ownership_target_invalid"
+  | "ownership_target_capacity_exceeded"
   | "metadata_conflict"
   | "ownership_state_changed"
   | "idempotency_conflict"
@@ -3258,6 +3260,7 @@ export interface OwnershipTransferDependencies {
   readonly objects: Pick<ObjectStore, "calculateSha256">;
   readonly auditIds: OwnershipTransferAuditIdGenerator;
   readonly logger?: OwnershipTransferSafeLogger;
+  readonly capacityLimits?: Readonly<CapacityLimits>;
 }
 
 function ownershipTargetMemberId(value: unknown): MembershipId {
@@ -3324,12 +3327,14 @@ export class OwnershipTransferService {
   readonly #objects: Pick<ObjectStore, "calculateSha256">;
   readonly #auditIds: OwnershipTransferAuditIdGenerator;
   readonly #logger: OwnershipTransferSafeLogger | undefined;
+  readonly #capacityLimits: Readonly<CapacityLimits> | undefined;
 
   constructor(dependencies: OwnershipTransferDependencies) {
     this.#ordinaryMinds = dependencies.ordinaryMinds;
     this.#objects = dependencies.objects;
     this.#auditIds = dependencies.auditIds;
     this.#logger = dependencies.logger;
+    this.#capacityLimits = dependencies.capacityLimits;
   }
 
   async transferOwnership(
@@ -3410,6 +3415,9 @@ export class OwnershipTransferService {
             requestId,
             auditEventId: this.#auditIds.nextAuditEventId(),
             auditOutboxMessageId: this.#auditIds.nextOutboxMessageId(),
+            ...(this.#capacityLimits === undefined
+              ? {}
+              : { capacityLimits: this.#capacityLimits }),
           }),
       );
       if (transferred.kind === "transferred") {
@@ -3458,6 +3466,12 @@ export class OwnershipTransferService {
         throw new OwnershipTransferFailure(
           "ownership_target_invalid",
           "Ownership target must be an existing active participant.",
+        );
+      }
+      if (transferred.kind === "ownership_target_capacity_exceeded") {
+        throw new OwnershipTransferFailure(
+          "ownership_target_capacity_exceeded",
+          "The target Owner does not have enough aggregate storage headroom.",
         );
       }
       if (transferred.kind === "ownership_state_changed") {

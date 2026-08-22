@@ -22,8 +22,10 @@ ADR-0016 принимает следующую Sites storage boundary для Rel
 Space-scoped R2 objects + separately digested v3 manifests, D1 HEAD/reachability/
 ledger/reservations, delta-aware commits и bounded Markdown import. MD-265
 реализует Space-scoped objects/manifests, delta-aware commit/read/GC и legacy
-v1/v2 dual read в текущем repository candidate. Accounting, reservations,
-streaming export/cleanup и import из MD-266–MD-268 ещё не реализованы; UAT
+v1/v2 dual read в текущем repository candidate. Reconstructable accounting,
+durable reservations, admission/fairness, cleanup и privacy-safe usage surfaces
+из MD-266 также реализованы. Streaming export/cleanup и import из MD-268/MD-267
+ещё не реализованы; UAT
 evidence для всего extension отсутствует.
 
 ## Драйверы и ограничения
@@ -636,7 +638,8 @@ explicit target Mind. General cross-Mind search/synthesis требует нов�
   reads parent manifest plus touched bytes and writes delta + one manifest.
   Текущий repository candidate реализует content/manifest delta path, exact
   historical materialization, v1/v2 dual read и safe orphan cleanup. Historical
-  index, usage/reservations и import остаются последующими MD-266–MD-268;
+  index остаётся derived surface, usage/reservations реализованы; streaming
+  export/cleanup и import остаются последующими MD-268/MD-267;
   current-SHA UAT gate для реализованной части ещё не пройден.
 - Trusted Sites identity, browser CSRF/Origin и Bearer content MCP остаются
   разными security boundaries; browser не рендерит raw Markdown, MCP не
@@ -654,8 +657,9 @@ explicit target Mind. General cross-Mind search/synthesis требует нов�
   with ChatGPT.
 - UAT Site использует D1/R2 bindings; их live availability и
   persistence-after-redeploy проверены. Accepted Brain-scale quota,
-  reservation, import and bounded recovery contract remains unimplemented and
-  requires its own exact-candidate UAT evidence.
+  reservation/admission реализованы локально; import and bounded recovery
+  contract остаётся частично нереализованным и требует own exact-candidate UAT
+  evidence.
 - Streamable HTTP MCP реализован в том же Worker по non-reserved paths;
   Sites proxy/runtime compatibility подтверждена raw modern и реальными Codex
   flows.

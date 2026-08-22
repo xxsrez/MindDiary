@@ -451,6 +451,22 @@ test("pilot Product Site route map keeps one UAT shell, exact active navigation,
       if (request.operation === "list_minds") return [personalRoute, ordinaryOwnerRoute];
       if (request.operation === "list_mcp_tokens") return [];
       if (request.operation === "list_invitations") return { invitations: [] };
+      if (request.operation === "get_capacity_usage") return {
+        kind: "found",
+        usage: {
+          logicalHeadBytes: 1_024,
+          logicalRetainedBytes: 2_048,
+          physicalCanonicalBytes: 1_536,
+          temporaryBytes: 0,
+          d1MetadataBytes: 4_096,
+          reservedBytes: 0,
+          storageAmplification: 1.5,
+        },
+        principalUsage: { physicalCanonicalBytes: 2_048 },
+        mindCanonicalHeadroomBytes: 2_147_482_112,
+        principalCanonicalHeadroomBytes: 8_589_932_544,
+        utilization: "normal",
+      };
       if (request.operation === "list_public_minds") {
         return { minds: [{ ...ordinaryOwnerRoute, visibility: "public", discovery: "public_catalog", access: { kind: "visibility", role: null, capabilities: ["content:read"] } }], nextCursor: null };
       }
@@ -531,6 +547,22 @@ test("ordinary Mind list and exact route wire the UAT management and deletion co
         ],
       };
       if (request.operation === "list_invitations") return { invitations: [] };
+      if (request.operation === "get_capacity_usage") return {
+        kind: "found",
+        usage: {
+          logicalHeadBytes: 1_024,
+          logicalRetainedBytes: 2_048,
+          physicalCanonicalBytes: 1_536,
+          temporaryBytes: 0,
+          d1MetadataBytes: 4_096,
+          reservedBytes: 0,
+          storageAmplification: 1.5,
+        },
+        principalUsage: { physicalCanonicalBytes: 2_048 },
+        mindCanonicalHeadroomBytes: 2_147_482_112,
+        principalCanonicalHeadroomBytes: 8_589_932_544,
+        utilization: "normal",
+      };
       if (request.operation === "get_mind_deletion_impact") return {
         impactId: "impact_research",
         expiresAt: "2026-08-08T00:05:00.000Z",
@@ -565,6 +597,9 @@ test("ordinary Mind list and exact route wire the UAT management and deletion co
   assert.match(detailHtml, /data-owner-delete-controls/);
   assert.match(detailHtml, /data-owner-visibility-controls/);
   assert.match(detailHtml, /data-owner-transfer-controls/);
+  assert.match(detailHtml, /data-capacity-state="normal"/);
+  assert.match(detailHtml, /Counts come from immutable manifest and job metadata/);
+  assert.match(detailHtml, /Owner headroom/);
   assert.match(detailHtml, /data-invitations-membership-root/);
   assert.match(detailHtml, /Participants and invitations/);
   assert.match(detailHtml, /data-invitation-form/);
@@ -572,6 +607,15 @@ test("ordinary Mind list and exact route wire the UAT management and deletion co
   assert.match(detailHtml, /value="membership_editor">Editor Person — Editor/);
   assert.match(detailHtml, /mind-diary-ordinary-minds-client\.js/);
   assert.doesNotMatch(detailHtml, /revision_research/);
+
+  const capacity = await handler(new Request(
+    `${origin}/api/v1/minds/research-notes/capacity`,
+  ));
+  assert.equal(capacity.status, 200);
+  const capacityBody = await capacity.json();
+  assert.equal(capacityBody.data.kind, "found");
+  assert.equal(capacityBody.data.usage.physical_canonical_bytes, 1_536);
+  assert.equal(JSON.stringify(capacityBody).includes("path"), false);
 
   const asset = await handler(new Request(`${origin}/ui/mind-diary-ordinary-minds-client.js`));
   assert.equal(asset.status, 200);

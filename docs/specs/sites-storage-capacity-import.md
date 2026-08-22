@@ -4,9 +4,12 @@
 `implementation_status: partial`. Это Sites-only contract для Brain-scale
 storage/import в Release 0.1. MD-265 реализует в текущем repository candidate
 Space-scoped content objects, separately digested v3 manifests, delta-aware
-commit/read/GC и совместимое чтение legacy v1/v2 revisions. Accounting,
-reservations, streaming export/cleanup и import из MD-266–MD-268 ещё не
-реализованы; весь extension пока не проверен на exact UAT deployment.
+commit/read/GC и совместимое чтение legacy v1/v2 revisions. Reconstructable
+accounting, durable reservations, admission для commit/stage/export, fairness,
+bounded reservation cleanup, privacy-safe Owner usage и aggregate telemetry из
+MD-266 реализованы в текущем repository candidate. Streaming export/cleanup и
+import из MD-268/MD-267 ещё не реализованы; весь extension пока не проверен на
+exact UAT deployment.
 
 ## Цель и граница
 

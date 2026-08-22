@@ -37,6 +37,7 @@ import {
 import {
   renderOrdinaryMindsManagementDocument,
   type OrdinaryMindOwnershipCandidates,
+  type OrdinaryMindCapacity,
   type OrdinaryMindUiMember,
   type OrdinaryMindUiMind,
   type OrdinaryMindsManagementModel,
@@ -558,6 +559,57 @@ function ordinaryUiMind(value: unknown): OrdinaryMindUiMind | null {
   });
 }
 
+function ordinaryMindCapacity(value: unknown): OrdinaryMindCapacity | null {
+  const source = record(value);
+  const usage = record(source?.usage);
+  const principalUsage = record(source?.principalUsage);
+  if (source?.kind !== "found" || usage === null || principalUsage === null) return null;
+  const fields = [
+    "logicalHeadBytes",
+    "logicalRetainedBytes",
+    "physicalCanonicalBytes",
+    "temporaryBytes",
+    "d1MetadataBytes",
+    "reservedBytes",
+  ] as const;
+  if (fields.some((field) =>
+    !Number.isSafeInteger(usage[field]) || (usage[field] as number) < 0)) return null;
+  if (typeof usage.storageAmplification !== "number" || usage.storageAmplification < 0) {
+    return null;
+  }
+  const utilization = source.utilization;
+  if (
+    utilization !== "normal" && utilization !== "warning" &&
+    utilization !== "soft_limit" && utilization !== "hard_limit"
+  ) return null;
+  if (
+    !Number.isSafeInteger(principalUsage.physicalCanonicalBytes) ||
+    (principalUsage.physicalCanonicalBytes as number) < 0 ||
+    !Number.isSafeInteger(source.mindCanonicalHeadroomBytes) ||
+    (source.mindCanonicalHeadroomBytes as number) < 0 ||
+    !Number.isSafeInteger(source.principalCanonicalHeadroomBytes) ||
+    (source.principalCanonicalHeadroomBytes as number) < 0
+  ) return null;
+  return Object.freeze({
+    kind: "ready" as const,
+    usage: Object.freeze({
+      logicalHeadBytes: usage.logicalHeadBytes as number,
+      logicalRetainedBytes: usage.logicalRetainedBytes as number,
+      physicalCanonicalBytes: usage.physicalCanonicalBytes as number,
+      temporaryBytes: usage.temporaryBytes as number,
+      d1MetadataBytes: usage.d1MetadataBytes as number,
+      reservedBytes: usage.reservedBytes as number,
+      principalPhysicalCanonicalBytes:
+        principalUsage.physicalCanonicalBytes as number,
+      mindCanonicalHeadroomBytes: source.mindCanonicalHeadroomBytes as number,
+      principalCanonicalHeadroomBytes:
+        source.principalCanonicalHeadroomBytes as number,
+      storageAmplification: usage.storageAmplification,
+      utilization,
+    }),
+  });
+}
+
 function ordinaryUiMember(value: unknown): OrdinaryMindUiMember | null {
   const source = record(value);
   const memberId = requiredString(source?.memberId);
@@ -1074,6 +1126,7 @@ async function productUiDocument(input: {
         view = { kind: "route_error", handle, message: "Mind settings are unavailable." };
       } else {
         let ownership: OrdinaryMindOwnershipCandidates | undefined;
+        let capacity: OrdinaryMindCapacity | undefined;
         let collaboration: Extract<
           OrdinaryMindsManagementModel["view"],
           { readonly kind: "detail" }
@@ -1143,11 +1196,23 @@ async function productUiDocument(input: {
             if (resolved.role === "owner") ownership = { kind: "error" };
           }
         }
+        if (resolved.role === "owner") {
+          try {
+            capacity = ordinaryMindCapacity(await input.control.execute({
+              operation: "get_capacity_usage",
+              actor: input.identity.actor,
+              input: Object.freeze({ mind_ref: handle }),
+            })) ?? { kind: "error" };
+          } catch {
+            capacity = { kind: "error" };
+          }
+        }
         view = {
           kind: "detail",
           mind: resolved,
           ...(ownership === undefined ? {} : { ownership }),
           ...(collaboration === undefined ? {} : { collaboration }),
+          ...(capacity === undefined ? {} : { capacity }),
         };
       }
     } catch {
@@ -1245,6 +1310,7 @@ function apiOperation(method: string, pathname: string): {
   if (one === "minds" && two !== null) {
     const path = { mind_ref: two };
     if (tail.length === 2 && method === "GET") return { operation: "get_mind_info", path };
+    if (three === "capacity" && tail.length === 3 && method === "GET") return { operation: "get_capacity_usage", path };
     if (tail.length === 2 && method === "PATCH") return { operation: "rename_space", path };
     if (tail.length === 2 && method === "DELETE") return { operation: "delete_space", path };
     if (three === "deletion-impact" && tail.length === 3 && method === "GET") return { operation: "get_mind_deletion_impact", path };

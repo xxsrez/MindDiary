@@ -116,6 +116,7 @@ const TRANSACTION_METHODS = new Set([
   "runBundleFileDownloadGrantTransaction",
   "runMindBindingTransaction",
   "runBundleFileStagingTransaction",
+  "runCapacityTransaction",
 ]);
 
 const METADATA_MUTATIONS = new Set([
@@ -153,6 +154,9 @@ const METADATA_MUTATIONS = new Set([
   "revokeMindBindingOwner",
   "collectStagedBundleFilesForGc",
   "deleteExpiredStagedBundleFileRecord",
+  "reconcileCapacityUsage",
+  "collectExpiredCapacityReservations",
+  "releaseCapacityReservation",
 ]);
 
 const TOKEN_MUTATIONS = new Set([

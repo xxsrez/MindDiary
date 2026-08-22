@@ -166,7 +166,11 @@ export type ChangesetValidationCode =
   | "staged_bundle_file_not_verified"
   | "staged_bundle_file_expired"
   | "staged_bundle_file_binding_mismatch"
-  | "retained_bundle_file_quota_exceeded";
+  | "retained_bundle_file_quota_exceeded"
+  | "capacity_accounting_untrusted"
+  | "capacity_soft_limit"
+  | "capacity_hard_limit"
+  | "capacity_fairness_limit";
 
 export interface ChangesetValidationFailure {
   readonly code: ChangesetValidationCode;

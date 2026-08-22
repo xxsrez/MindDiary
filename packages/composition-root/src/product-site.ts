@@ -66,6 +66,8 @@ import {
   BUNDLE_FILE_LIMITS,
   BundleFileStagingService,
   BundleFileDownloadService,
+  CapacityAdmissionService,
+  DEFAULT_CAPACITY_LIMITS,
   CanonicalRevisionCoordinator,
   ChangesetCommitService,
   ContentPrivacySafeObservability,
@@ -327,6 +329,7 @@ class ProductControlApplication {
       readonly routes: MindRouteService;
       readonly catalog: PublicMindCatalogService;
       readonly tokens: TokenLifecycleService;
+      readonly capacity: CapacityAdmissionService;
     },
   ) {}
 
@@ -358,6 +361,13 @@ class ProductControlApplication {
         return this.services.ordinary.createSpaceWithOwner(actor as never, asRecord(input) as never);
       case "get_mind_info":
         return this.#mind(actor, input);
+      case "get_capacity_usage": {
+        const mind = await this.#mind(actor, input);
+        return this.services.capacity.readMindUsage({
+          actor: actor as never,
+          spaceId: mind.mindId,
+        });
+      }
       case "rename_space": {
         const mind = await this.#mind(actor, input);
         return this.services.ordinary.renameSpace(actor as never, asRecord(input, { mindId: mind.mindId }) as never);
@@ -878,7 +888,7 @@ export async function createProductSiteRuntime(
     ordinaryDeletion: new OrdinaryMindDeletionService({ ordinaryMinds: metadata, objects, index, audit, exportArchives: objects, ids: generated, clock, host, logger: controlObservability }),
     accountDeletion: new AccountDeletionService({ accounts: metadata, tokens: metadata, objects, index, audit, exportArchives: objects, ids: generated, clock, host, logger: controlObservability }),
     visibility: new VisibilityControlService({ ordinaryMinds: metadata, objects, auditIds: commonAuditIds, logger: controlObservability }),
-    ownership: new OwnershipTransferService({ ordinaryMinds: metadata, objects, auditIds: commonAuditIds, logger: controlObservability }),
+    ownership: new OwnershipTransferService({ ordinaryMinds: metadata, objects, auditIds: commonAuditIds, capacityLimits: DEFAULT_CAPACITY_LIMITS, logger: controlObservability }),
     membership: new MembershipControlService({ memberships: metadata, digest: objects, auditIds: commonAuditIds, logger: controlObservability }),
     reads: new ControlReadService(metadata),
     invitation: new InvitationControlService({
@@ -898,6 +908,11 @@ export async function createProductSiteRuntime(
       bindingOwners: metadata,
       bindingIds: generated,
       logger: controlObservability,
+    }),
+    capacity: new CapacityAdmissionService({
+      metadata,
+      authorizer,
+      clock,
     }),
   });
 

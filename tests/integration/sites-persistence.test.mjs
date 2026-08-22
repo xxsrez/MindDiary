@@ -4,7 +4,10 @@ import test from "node:test";
 import { InMemoryAuditSink } from "@mind-diary/adapter-audit-memory";
 import { InMemoryObjectStore } from "@mind-diary/adapter-object-memory";
 import { InMemoryExactRevisionSearchIndex } from "@mind-diary/adapter-search-memory";
-import { MindDiscoveryService } from "@mind-diary/application-content";
+import {
+  DEFAULT_CAPACITY_LIMITS,
+  MindDiscoveryService,
+} from "@mind-diary/application-content";
 import {
   AccountDeletionService,
   AccountBootstrapService,
@@ -13,7 +16,13 @@ import {
   OrdinaryMindControlService,
   OwnershipTransferService,
 } from "@mind-diary/application-control";
-import { CAPABILITIES, MARKDOWN_MEDIA_TYPE, verifiedSpaceHost } from "@mind-diary/domain";
+import {
+  CAPABILITIES,
+  MARKDOWN_MEDIA_TYPE,
+  idempotencyKey,
+  opaqueId,
+  verifiedSpaceHost,
+} from "@mind-diary/domain";
 import {
   COMPOSITION_SELECTION,
   createSitesPersistenceBoundary,
@@ -35,6 +44,37 @@ const T4 = "2026-08-08T08:20:00.000Z";
 const T5 = "2026-08-08T08:25:00.000Z";
 const HOST = verifiedSpaceHost("mind-diary.example");
 const SHA_A = `sha256:${"a".repeat(64)}`;
+
+test("Sites metadata reconstructs durable capacity reservations after isolate restart", async () => {
+  const database = new FakeD1Database();
+  const first = await createSitesMetadataStore(database);
+  const admitted = await first.runCapacityTransaction((transaction) =>
+    transaction.admitCapacityReservation({
+      reservationId: "capacity:restart:one",
+      requestedByPrincipalId: opaqueId("principal_capacity_restart"),
+      spaceId: opaqueId("space_capacity_restart"),
+      operation: "import",
+      operationRef: "import_capacity_restart",
+      baseRevisionId: null,
+      idempotencyKey: idempotencyKey("capacity-restart"),
+      requested: {
+        physicalCanonicalBytes: 1_024,
+        temporaryBytes: 2_048,
+        d1MetadataBytes: 512,
+      },
+      bulk: false,
+      heavy: false,
+      createdAt: T0,
+      expiresAt: T5,
+    }, DEFAULT_CAPACITY_LIMITS));
+  assert.equal(admitted.kind, "admitted");
+
+  const restarted = await createSitesMetadataStore(database);
+  const reservations = await restarted.listCapacityReservationsForTest();
+  assert.equal(reservations.length, 1);
+  assert.equal(reservations[0].reservationId, "capacity:restart:one");
+  assert.equal(reservations[0].state, "active");
+});
 
 class FakeD1Statement {
   #database;

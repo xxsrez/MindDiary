@@ -22,6 +22,7 @@ import {
 import {
   CanonicalRevisionCoordinator,
   ChangesetCommitService,
+  DEFAULT_CAPACITY_LIMITS,
   DeterministicOkfExportService,
   ExportJobApplicationService,
 } from "@mind-diary/application-content";
@@ -371,6 +372,11 @@ async function createExportApplication(env) {
       jobIds: env.jobIds,
       downloadSecretCrypto,
       downloadUrlBase: "https://downloads.invalid/export-grants",
+      capacityLimits: {
+        ...DEFAULT_CAPACITY_LIMITS,
+        activeHeavyPerMind: 8,
+        activeHeavyPerPrincipal: 8,
+      },
     }),
   };
 }

@@ -5,6 +5,7 @@ import type {
   AuthorizationStamp,
   BackgroundAuthorizer,
   Clock,
+  CapacityLimits,
   ExportArchiveStore,
   ExportDownloadGrantStore,
   ExportDownloadSecretCrypto,
@@ -37,6 +38,11 @@ import {
   normalizeIdempotencyKeyMaxBytes,
   validateIdempotencyKey,
 } from "./idempotency.js";
+import {
+  DEFAULT_CAPACITY_LIMITS,
+  capacityExpiry,
+  capacityReservationId,
+} from "./capacity.js";
 
 export const DEFAULT_EXPORT_JOB_RETENTION_MS = 24 * 60 * 60 * 1_000;
 export const MAX_EXPORT_JOB_RETENTION_MS = 30 * 24 * 60 * 60 * 1_000;
@@ -289,6 +295,7 @@ export class ExportJobApplicationService {
   readonly #retentionMs: number;
   readonly #downloadGrantTtlMs: number;
   readonly #idempotencyKeyMaxBytes: number;
+  readonly #capacityLimits: Readonly<CapacityLimits>;
 
   constructor(dependencies: {
     readonly authorizer: Authorizer;
@@ -303,6 +310,7 @@ export class ExportJobApplicationService {
     readonly retentionMs?: number;
     readonly downloadGrantTtlMs?: number;
     readonly idempotencyKeyMaxBytes?: number;
+    readonly capacityLimits?: Readonly<CapacityLimits>;
   }) {
     this.#authorizer = dependencies.authorizer;
     this.#backgroundAuthorizer = dependencies.backgroundAuthorizer;
@@ -333,6 +341,7 @@ export class ExportJobApplicationService {
     this.#idempotencyKeyMaxBytes = normalizeIdempotencyKeyMaxBytes(
       dependencies.idempotencyKeyMaxBytes ?? DEFAULT_IDEMPOTENCY_KEY_MAX_BYTES,
     );
+    this.#capacityLimits = dependencies.capacityLimits ?? DEFAULT_CAPACITY_LIMITS;
   }
 
   async start(request: StartExportRequest): Promise<StartExportResult> {
@@ -438,6 +447,42 @@ export class ExportJobApplicationService {
         );
       }
       const revisionId = envelope.revision.revisionId;
+      const estimatedArchiveBytes = envelope.manifest.entries.reduce(
+        (total, entry) => total + entry.size + ENCODER.encode(entry.path).byteLength + 256,
+        65_536,
+      );
+      const reservationId = capacityReservationId(
+        "export",
+        request.spaceId,
+        String(jobId),
+      );
+      const admitted = await transaction.admitCapacityReservation(
+        Object.freeze({
+          reservationId,
+          requestedByPrincipalId: actor.principalId,
+          spaceId: request.spaceId,
+          operation: "export" as const,
+          operationRef: String(jobId),
+          baseRevisionId: revisionId,
+          idempotencyKey: parsed.idempotencyKey,
+          requested: Object.freeze({
+            physicalCanonicalBytes: 0,
+            temporaryBytes: estimatedArchiveBytes,
+            d1MetadataBytes: 1_280,
+          }),
+          bulk: true,
+          heavy: true,
+          createdAt,
+          expiresAt: capacityExpiry("export", createdAt),
+        }),
+        this.#capacityLimits,
+      );
+      if (admitted.kind === "rejected") {
+        return invalid(
+          `capacity_${admitted.reason}`,
+          `capacity admission rejected: ${admitted.reason}`,
+        );
+      }
       const job: Readonly<ExportJob> = Object.freeze({
         jobId,
         requestedByPrincipalId: actor.principalId,

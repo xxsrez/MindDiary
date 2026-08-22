@@ -1014,3 +1014,4 @@ export * from "./changeset-commit.js";
 export * from "./deterministic-export.js";
 export * from "./export-jobs.js";
 export * from "./idempotency.js";
+export * from "./capacity.js";

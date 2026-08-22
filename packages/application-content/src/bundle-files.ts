@@ -3,6 +3,7 @@ import type {
   Authorizer,
   BundleFileObjectStore,
   BundleFileStagingStore,
+  CapacityLimits,
   Clock,
   IdempotencyNamespace,
   StagedBundleFileRecord,
@@ -19,6 +20,10 @@ import {
   type StagedBundleFileId,
   type WriteMindBindingId,
 } from "@mind-diary/domain";
+import {
+  CapacityAdmissionService,
+  capacityReservationId,
+} from "./capacity.js";
 
 export const BUNDLE_FILE_LIMITS = Object.freeze({
   maxFileBytes: 67_108_864,
@@ -73,7 +78,11 @@ export type StageBundleFileResult =
         | "staged_file_consumed"
         | "staged_file_rejected"
         | "unsupported_bundle_file_type"
-        | "bundle_file_media_mismatch";
+        | "bundle_file_media_mismatch"
+        | "capacity_accounting_untrusted"
+        | "capacity_soft_limit"
+        | "capacity_hard_limit"
+        | "capacity_fairness_limit";
     };
 
 const ENCODER = new TextEncoder();
@@ -144,6 +153,7 @@ export class BundleFileStagingService {
   readonly #objects: BundleFileObjectStore;
   readonly #clock: Clock;
   readonly #ids: StagedBundleFileIdGenerator;
+  readonly #capacity: CapacityAdmissionService;
 
   constructor(dependencies: {
     readonly authorizer: Authorizer;
@@ -151,6 +161,7 @@ export class BundleFileStagingService {
     readonly objects: BundleFileObjectStore;
     readonly clock: Clock;
     readonly ids?: StagedBundleFileIdGenerator;
+    readonly capacityLimits?: Readonly<CapacityLimits>;
   }) {
     this.#authorizer = dependencies.authorizer;
     this.#metadata = dependencies.metadata;
@@ -160,6 +171,14 @@ export class BundleFileStagingService {
       nextStagedBundleFileId: () =>
         opaqueId<"staged-bundle-file">(`staged_${crypto.randomUUID()}`),
     };
+    this.#capacity = new CapacityAdmissionService({
+      metadata: dependencies.metadata,
+      authorizer: dependencies.authorizer,
+      clock: dependencies.clock,
+      ...(dependencies.capacityLimits === undefined
+        ? {}
+        : { limits: dependencies.capacityLimits }),
+    });
   }
 
   async stage(request: StageBundleFileRequest): Promise<StageBundleFileResult> {
@@ -260,16 +279,47 @@ export class BundleFileStagingService {
       operation: "stage_bundle_file",
       key: request.idempotencyKey as IdempotencyKey,
     });
-    await this.#objects.putStagedBundleFile({
-      stagedFileId,
-      bindingOwnerId,
+    const reservationOperationRef = String(canonicalRequestHash);
+    const reservationId = capacityReservationId(
+      "stage",
+      request.spaceId,
+      reservationOperationRef,
+    );
+    const admission = await this.#capacity.reserve({
+      actor,
       spaceId: request.spaceId,
-      bytes,
+      operation: "stage",
+      operationRef: reservationOperationRef,
+      baseRevisionId: null,
+      idempotencyKey: namespace.key,
+      requested: Object.freeze({
+        physicalCanonicalBytes: 0,
+        temporaryBytes: bytes.byteLength,
+        d1MetadataBytes: 512,
+      }),
+      bulk: true,
+      heavy: bytes.byteLength > 4_194_304,
       createdAt,
     });
-
+    if (admission.kind === "rejected") {
+      const code = admission.reason === "hard_limit"
+        ? "capacity_hard_limit"
+        : admission.reason === "soft_limit"
+          ? "capacity_soft_limit"
+          : admission.reason === "fairness_limit"
+            ? "capacity_fairness_limit"
+            : "capacity_accounting_untrusted";
+      return Object.freeze({ kind: "invalid", code });
+    }
     let result: StageBundleFileResult;
     try {
+      await this.#objects.putStagedBundleFile({
+        stagedFileId,
+        bindingOwnerId,
+        spaceId: request.spaceId,
+        bytes,
+        createdAt,
+      });
       result = await this.#metadata.runBundleFileStagingTransaction(
         async (transaction) => {
           const authorization = await this.#authorizer.reauthorizeInTransaction(
@@ -348,6 +398,7 @@ export class BundleFileStagingService {
             expiresAt: expiresAt(createdAt),
             consumedAt: null,
             rejectionCode: null,
+            capacityReservationId: reservationId,
           });
           const created = await transaction.createStagedBundleFile(
             record,
@@ -371,19 +422,58 @@ export class BundleFileStagingService {
             }),
             completedAt: createdAt,
           });
-          return completion.kind === "completed"
-            ? Object.freeze({ kind: "staged", record: created.record, replayed: false } as const)
-            : Object.freeze({ kind: "invalid", code: "invalid_idempotency_state" } as const);
+          if (completion.kind !== "completed") {
+            throw new Error("staging idempotency did not complete atomically");
+          }
+          const consumed = await transaction.consumeCapacityReservation({
+            reservationId,
+            actual: Object.freeze({
+              physicalCanonicalBytes: 0,
+              temporaryBytes: bytes.byteLength,
+              d1MetadataBytes: 512,
+            }),
+            consumedAt: createdAt,
+          });
+          if (consumed !== "consumed" && consumed !== "already_consumed") {
+            throw new Error("staging capacity reservation was not consumed atomically");
+          }
+          return Object.freeze({
+            kind: "staged",
+            record: created.record,
+            replayed: false,
+          } as const);
         },
       );
     } catch (error) {
-      await this.#objects.deleteStagedBundleFile(stagedFileId).catch(() => false);
+      await this.#cleanupFailedStage(stagedFileId, reservationId);
       throw error;
     }
-    if (result.kind !== "staged" || result.record.stagedFileId !== stagedFileId) {
+    if (result.kind !== "staged") {
+      await this.#cleanupFailedStage(stagedFileId, reservationId);
+    } else if (result.record.stagedFileId !== stagedFileId) {
       await this.#objects.deleteStagedBundleFile(stagedFileId);
     }
     return result;
+  }
+
+  async #cleanupFailedStage(
+    stagedFileId: StagedBundleFileId,
+    reservationId: string,
+  ): Promise<void> {
+    let temporaryObjectAbsent = false;
+    try {
+      await this.#objects.deleteStagedBundleFile(stagedFileId);
+      temporaryObjectAbsent = true;
+    } catch {
+      // The durable cleanup-pending reservation keeps worst-case usage charged.
+    }
+    await this.#capacity.cancel(reservationId).catch(() => undefined);
+    if (temporaryObjectAbsent) {
+      await this.#metadata.releaseCapacityReservation({
+        reservationId,
+        releasedAt: this.#clock.now(),
+      }).catch(() => false);
+    }
   }
 
   async collectExpired(): Promise<Readonly<{ scanned: number; deleted: number; bytes: number }>> {
@@ -399,11 +489,20 @@ export class BundleFileStagingService {
     let bytes = 0;
     for (const candidate of candidates) {
       if (bytes + candidate.size > BUNDLE_FILE_LIMITS.gcMaxBytes) break;
-      if (await this.#objects.deleteStagedBundleFile(candidate.stagedFileId)) {
-        if (await this.#metadata.deleteExpiredStagedBundleFileRecord(candidate.stagedFileId)) {
-          deleted += 1;
-          bytes += candidate.size;
+      try {
+        await this.#objects.deleteStagedBundleFile(candidate.stagedFileId);
+      } catch {
+        continue;
+      }
+      if (await this.#metadata.deleteExpiredStagedBundleFileRecord(candidate.stagedFileId)) {
+        if (candidate.capacityReservationId !== undefined) {
+          await this.#metadata.releaseCapacityReservation({
+            reservationId: candidate.capacityReservationId,
+            releasedAt: now,
+          });
         }
+        deleted += 1;
+        bytes += candidate.size;
       }
     }
     return Object.freeze({ scanned: candidates.length, deleted, bytes });

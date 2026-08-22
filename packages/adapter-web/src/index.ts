@@ -51,6 +51,7 @@ export const WEB_CONTROL_ROUTES = [
   ["GET", "/api/v1/minds"],
   ["POST", "/api/v1/minds"],
   ["GET", "/api/v1/minds/{mind_ref}"],
+  ["GET", "/api/v1/minds/{mind_ref}/capacity"],
   ["PATCH", "/api/v1/minds/{mind_ref}"],
   ["GET", "/api/v1/minds/{mind_ref}/deletion-impact"],
   ["DELETE", "/api/v1/minds/{mind_ref}"],

@@ -3,6 +3,7 @@ import {
   REVISION_MANIFEST_MEDIA_TYPE,
   type Authorizer,
   type Clock,
+  type CapacityLimits,
   type CommitEffectIdGenerator,
   type ContentCommitMetadataStore,
   type ContentCommitMetadataTransaction,
@@ -42,6 +43,10 @@ import {
   validateIdempotencyKey,
 } from "./idempotency.js";
 import type { HeadRevisionReader } from "./index.js";
+import {
+  CapacityAdmissionService,
+  capacityReservationId,
+} from "./capacity.js";
 
 export interface CommitChangesetRequest {
   readonly actor: ActorContext;
@@ -115,6 +120,7 @@ export interface ChangesetCommitDependencies {
   readonly preflightLimits?: Readonly<ChangesetPreflightLimits>;
   readonly idempotencyKeyMaxBytes?: number;
   readonly maxRetainedBundleFileBytes?: number;
+  readonly capacityLimits?: Readonly<CapacityLimits>;
 }
 
 export const DEFAULT_MAX_RETAINED_BUNDLE_FILE_BYTES = 2_147_483_648;
@@ -241,6 +247,7 @@ export class ChangesetCommitService {
   readonly #preflightLimits: Readonly<ChangesetPreflightLimits>;
   readonly #idempotencyKeyMaxBytes: number;
   readonly #maxRetainedBundleFileBytes: number;
+  readonly #capacity: CapacityAdmissionService;
 
   constructor(dependencies: ChangesetCommitDependencies) {
     this.#authorizer = dependencies.authorizer;
@@ -259,6 +266,14 @@ export class ChangesetCommitService {
       throw new TypeError("retained BundleFile byte limit must be positive");
     }
     this.#maxRetainedBundleFileBytes = retainedLimit;
+    this.#capacity = new CapacityAdmissionService({
+      metadata: dependencies.metadata,
+      authorizer: dependencies.authorizer,
+      clock: dependencies.clock,
+      ...(dependencies.capacityLimits === undefined
+        ? {}
+        : { limits: dependencies.capacityLimits }),
+    });
     this.#preflight = new ChangesetPreflightService({
       authorizer: dependencies.authorizer,
       revisions: dependencies.revisions,
@@ -351,6 +366,51 @@ export class ChangesetCommitService {
 
     const committedAt = preflight.committedAt;
     const revisionId = this.#revisionIds.nextRevisionId();
+    const reservationOperationRef = String(canonicalRequestHash);
+    const reservationId = capacityReservationId(
+      "commit",
+      request.spaceId,
+      reservationOperationRef,
+    );
+    const candidateWriteBytes = preflight.candidateFiles.reduce(
+      (total, file) => total +
+        (file.kind === "markdown"
+          ? (file.writeRequired ? file.size : 0)
+          : (file.stagedFileId === null ? 0 : file.size)),
+      0,
+    );
+    const admission = await this.#capacity.reserve({
+      actor,
+      spaceId: request.spaceId,
+      operation: "commit",
+      operationRef: reservationOperationRef,
+      baseRevisionId: preflight.baseRevisionId,
+      idempotencyKey: validated.idempotencyKey,
+      requested: Object.freeze({
+        physicalCanonicalBytes:
+          candidateWriteBytes + 512 + preflight.candidateFiles.reduce(
+            (total, file) => total + ENCODER.encode(file.path).byteLength + 256,
+            0,
+          ),
+        temporaryBytes: 0,
+        d1MetadataBytes: 2_048 + preflight.candidateFiles.length * 160,
+      }),
+      bulk: false,
+      heavy: candidateWriteBytes > 4_194_304,
+      createdAt: committedAt,
+    });
+    if (admission.kind === "rejected") {
+      const code = admission.reason === "hard_limit"
+        ? "capacity_hard_limit"
+        : admission.reason === "soft_limit"
+          ? "capacity_soft_limit"
+          : admission.reason === "fairness_limit"
+            ? "capacity_fairness_limit"
+            : "capacity_accounting_untrusted";
+      return invalid(code, `capacity admission rejected: ${admission.reason}`);
+    }
+    try {
+    let actualPhysicalGrowth = 0;
     const entries = [];
     for (const file of preflight.candidateFiles) {
       if (file.kind === "markdown") {
@@ -389,6 +449,7 @@ export class ChangesetCommitService {
           mediaType: MARKDOWN_MEDIA_TYPE,
           createdAt: committedAt,
         });
+        if (put.status === "stored") actualPhysicalGrowth += put.object.size;
         entries.push({
           kind: "markdown" as const,
           path: file.path,
@@ -423,6 +484,7 @@ export class ChangesetCommitService {
         mediaType: file.mediaType,
         createdAt: committedAt,
       });
+      if (put.status === "stored") actualPhysicalGrowth += put.object.size;
       entries.push({
         kind: "opaque" as const,
         path: file.path,
@@ -440,9 +502,12 @@ export class ChangesetCommitService {
       mediaType: REVISION_MANIFEST_MEDIA_TYPE,
       createdAt: committedAt,
     });
+    if (manifestPut.status === "stored") {
+      actualPhysicalGrowth += manifestPut.object.size;
+    }
     const manifestHash = manifestPut.object.sha256;
 
-    return this.#metadata.runContentCommitTransaction(async (transaction) => {
+    const result = await this.#metadata.runContentCommitTransaction(async (transaction) => {
       const authorization = await this.#authorizer.reauthorizeInTransaction(
         {
           actor,
@@ -692,6 +757,24 @@ export class ChangesetCommitService {
             `commit effects were not staged atomically: ${effects.kind}`,
           );
         }
+        const capacityConsumed = await transaction.consumeCapacityReservation({
+          reservationId,
+          actual: Object.freeze({
+            physicalCanonicalBytes: actualPhysicalGrowth,
+            temporaryBytes: 0,
+            d1MetadataBytes: admission.reservation.requested.d1MetadataBytes,
+          }),
+          consumedAt: committedAt,
+        });
+        if (
+          capacityConsumed !== "consumed" &&
+          capacityConsumed !== "already_consumed"
+        ) {
+          throw new ChangesetCommitFailure(
+            "invalid_commit_effects",
+            `capacity reservation was not consumed atomically: ${capacityConsumed}`,
+          );
+        }
         return Object.freeze({
           kind: "committed",
           previousRevisionId: preflight.baseRevisionId,
@@ -716,6 +799,12 @@ export class ChangesetCommitService {
         `metadata rejected the changeset revision: ${committed.reason}`,
       );
     });
+    if (result.kind !== "committed") await this.#capacity.cancel(reservationId);
+    return result;
+    } catch (error) {
+      await this.#capacity.cancel(reservationId).catch(() => undefined);
+      throw error;
+    }
   }
 
   #validatePayload(

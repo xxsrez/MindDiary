@@ -42,6 +42,24 @@ export type OrdinaryMindCollaboration =
   | { readonly kind: "ready"; readonly snapshot: InvitationMembershipSnapshot }
   | { readonly kind: "error" };
 
+export interface OrdinaryMindCapacityUsage {
+  readonly logicalHeadBytes: number;
+  readonly logicalRetainedBytes: number;
+  readonly physicalCanonicalBytes: number;
+  readonly temporaryBytes: number;
+  readonly d1MetadataBytes: number;
+  readonly reservedBytes: number;
+  readonly principalPhysicalCanonicalBytes: number;
+  readonly mindCanonicalHeadroomBytes: number;
+  readonly principalCanonicalHeadroomBytes: number;
+  readonly storageAmplification: number;
+  readonly utilization: "normal" | "warning" | "soft_limit" | "hard_limit";
+}
+
+export type OrdinaryMindCapacity =
+  | { readonly kind: "ready"; readonly usage: OrdinaryMindCapacityUsage }
+  | { readonly kind: "error" };
+
 export type OrdinaryMindsUiCollectionState =
   | { readonly kind: "ready"; readonly minds: readonly OrdinaryMindUiMind[] }
   | { readonly kind: "loading" }
@@ -58,6 +76,7 @@ export type OrdinaryMindsManagementView =
       readonly mind: OrdinaryMindUiMind;
       readonly ownership?: OrdinaryMindOwnershipCandidates;
       readonly collaboration?: OrdinaryMindCollaboration;
+      readonly capacity?: OrdinaryMindCapacity;
     }
   | { readonly kind: "route_loading"; readonly handle: string }
   | { readonly kind: "route_error"; readonly handle: string; readonly message: string };
@@ -459,6 +478,54 @@ function renderCollaborationPanel(
   </section>`;
 }
 
+function formatBytes(value: number): string {
+  if (!Number.isSafeInteger(value) || value < 0) return "Unavailable";
+  if (value < 1_024) return `${value} B`;
+  const units = ["KiB", "MiB", "GiB"] as const;
+  let amount = value / 1_024;
+  let unit = 0;
+  while (amount >= 1_024 && unit < units.length - 1) {
+    amount /= 1_024;
+    unit += 1;
+  }
+  return `${amount.toFixed(amount >= 10 ? 1 : 2)} ${units[unit]}`;
+}
+
+function renderCapacityPanel(
+  mind: OrdinaryMindUiMind,
+  capacity: OrdinaryMindCapacity | undefined,
+): string {
+  if (safeRole(mind.role) !== "owner") return "";
+  if (capacity?.kind !== "ready") {
+    return `<section class="md-setup-card" aria-labelledby="capacity-heading" data-capacity-unavailable>
+      <div><p class="md-eyebrow">Owner capacity</p><h2 id="capacity-heading">Storage usage unavailable</h2><p>No content was read. Net-growing operations fail closed when trusted accounting is unavailable.</p></div>
+    </section>`;
+  }
+  const usage = capacity.usage;
+  const state = usage.utilization === "soft_limit"
+    ? "Soft limit"
+    : usage.utilization === "hard_limit"
+      ? "Hard limit"
+      : usage.utilization === "warning"
+        ? "Warning"
+        : "Normal";
+  return `<section class="md-setup-card" aria-labelledby="capacity-heading" data-capacity-state="${usage.utilization}">
+    <div><p class="md-eyebrow">Owner capacity</p><h2 id="capacity-heading">Storage and headroom</h2><p>Counts come from immutable manifest and job metadata. File paths and private content are never read for this view.</p></div>
+    <dl class="md-personal-summary">
+      <div><dt>State</dt><dd>${state}</dd></div>
+      <div><dt>Live HEAD</dt><dd>${formatBytes(usage.logicalHeadBytes)}</dd></div>
+      <div><dt>Retained history</dt><dd>${formatBytes(usage.logicalRetainedBytes)}</dd></div>
+      <div><dt>Canonical storage</dt><dd>${formatBytes(usage.physicalCanonicalBytes)}</dd></div>
+      <div><dt>Mind headroom</dt><dd>${formatBytes(usage.mindCanonicalHeadroomBytes)}</dd></div>
+      <div><dt>Owner aggregate</dt><dd>${formatBytes(usage.principalPhysicalCanonicalBytes)}</dd></div>
+      <div><dt>Owner headroom</dt><dd>${formatBytes(usage.principalCanonicalHeadroomBytes)}</dd></div>
+      <div><dt>Temporary</dt><dd>${formatBytes(usage.temporaryBytes)}</dd></div>
+      <div><dt>Reserved</dt><dd>${formatBytes(usage.reservedBytes)}</dd></div>
+      <div><dt>Storage amplification</dt><dd>${Number.isFinite(usage.storageAmplification) ? usage.storageAmplification.toFixed(2) : "Unavailable"}×</dd></div>
+    </dl>
+  </section>`;
+}
+
 function renderDeleteDialog(mind: OrdinaryMindUiMind, handle: string): string {
   if (safeRole(mind.role) !== "owner") return "";
   return `<dialog class="md-dialog" id="delete-ordinary-mind-dialog" aria-labelledby="delete-ordinary-mind-title" aria-describedby="delete-ordinary-mind-description" data-delete-mind-dialog>
@@ -498,6 +565,7 @@ function renderDetailView(
   mind: OrdinaryMindUiMind,
   ownership: OrdinaryMindOwnershipCandidates | undefined,
   collaboration: OrdinaryMindCollaboration | undefined,
+  capacity: OrdinaryMindCapacity | undefined,
   announcement: string | undefined,
 ): string {
   const handle = safeHandle(mind.handle);
@@ -533,6 +601,7 @@ function renderDetailView(
         ${renderRenamePanel(mind, handle)}
       </div>
       ${renderVisibilityPanel(mind, handle)}
+      ${renderCapacityPanel(mind, capacity)}
       ${renderCollaborationPanel(collaboration)}
       ${renderOwnershipPanel(mind, ownership)}
       ${renderDeletePanel(mind, handle)}
@@ -549,6 +618,7 @@ export function renderOrdinaryMindsManagement(model: OrdinaryMindsManagementMode
           model.view.mind,
           model.view.ownership,
           model.view.collaboration,
+          model.view.capacity,
           model.announcement,
         )
       : renderRouteState(model.view, model.announcement);

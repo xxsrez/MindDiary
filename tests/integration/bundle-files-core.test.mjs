@@ -118,7 +118,7 @@ async function bindWrite(metadata) {
   assert.equal(result.kind, "applied");
 }
 
-async function harness() {
+async function harness({ capacityLimits } = {}) {
   const metadata = new InMemoryRevisionMetadataStore();
   const objects = new InMemoryObjectStore();
   const currentActor = actor();
@@ -152,9 +152,37 @@ async function harness() {
     objects,
     clock: { now: () => LATER },
     ids: { nextStagedBundleFileId: () => `staged_bundle_${++stagedIds}` },
+    ...(capacityLimits === undefined ? {} : { capacityLimits }),
   });
   return { metadata, objects, revisions, authorizer, staging, currentActor };
 }
+
+test("staging capacity admission rejects before any temporary object write", async () => {
+  const env = await harness({
+    capacityLimits: {
+      mindPhysicalCanonicalBytes: 2_147_483_648,
+      principalPhysicalCanonicalBytes: 8_589_934_592,
+      sitePhysicalCanonicalBytes: 34_359_738_368,
+      siteTemporaryBytes: 1,
+      siteD1MetadataBytes: 536_870_912,
+      ordinaryCommitSoftGrowthBytes: 4_194_304,
+      activeHeavyPerMind: 1,
+      activeHeavyPerPrincipal: 2,
+      activeHeavyPerSite: 8,
+    },
+  });
+  const result = await env.staging.stage({
+    actor: env.currentActor,
+    spaceId: MINDS.ordinary.spaceId,
+    writeBindingId: WRITE_BINDING_ID,
+    displayFilename: "capacity.png",
+    claimedMediaType: "image/png",
+    bytes: PNG,
+    idempotencyKey: "capacity-stage",
+  });
+  assert.deepEqual(result, { kind: "invalid", code: "capacity_hard_limit" });
+  assert.equal(await env.objects.getStagedBundleFile("staged_bundle_1"), null);
+});
 
 test("manifest v1 stays byte-stable while new mixed manifests use discriminated v2", () => {
   const markdown = {
@@ -337,12 +365,21 @@ test("staging rejects spoofed types and atomically consumes a binding-pinned ref
     objects: env.objects,
     clock: { now: () => "2026-08-07T14:00:00.000Z" },
   });
+  const interrupted = await env.metadata.collectStagedBundleFilesForGc({
+    createdBefore: "2026-08-07T13:55:00.000Z",
+    limit: 1,
+  });
+  assert.equal(interrupted.length, 1);
+  assert.equal(interrupted[0].state, "expired");
   assert.deepEqual(await cleanup.collectExpired(), {
     scanned: 1,
     deleted: 1,
     bytes: PNG.byteLength,
   });
   assert.equal(await env.metadata.readStagedBundleFile(staged.record.stagedFileId), null);
+  const reservation = (await env.metadata.listCapacityReservationsForTest())
+    .find((item) => item.reservationId === staged.record.capacityReservationId);
+  assert.equal(reservation.state, "released");
   assert.deepEqual(
     (await env.objects.getBundleFile(MINDS.ordinary.spaceId, staged.record.sha256)).bytes,
     PNG,
@@ -901,6 +938,10 @@ test("staging metadata failure removes the uncommitted provider object", async (
   const staging = new BundleFileStagingService({
     authorizer: env.authorizer,
     metadata: {
+      runCapacityTransaction: (operation) =>
+        env.metadata.runCapacityTransaction(operation),
+      releaseCapacityReservation: (request) =>
+        env.metadata.releaseCapacityReservation(request),
       async runBundleFileStagingTransaction() {
         throw new Error("injected staging metadata failure");
       },
@@ -919,6 +960,8 @@ test("staging metadata failure removes the uncommitted provider object", async (
     idempotencyKey: "stage-metadata-failure",
   }), /injected staging metadata failure/u);
   assert.equal(await env.objects.getStagedBundleFile("staged_metadata_failure"), null);
+  const [reservation] = await env.metadata.listCapacityReservationsForTest();
+  assert.equal(reservation.state, "released");
 });
 
 test("opaque canonical dedupe is isolated by Space and Sites reconstructs staged metadata", async () => {

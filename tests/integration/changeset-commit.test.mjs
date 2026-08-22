@@ -209,6 +209,7 @@ async function fixture() {
     nextRevisionId,
     objectStore = objects,
     committedAt = REVISIONS.next.committedAt,
+    capacityLimits,
   }) => {
     grant(currentActor);
     return new ChangesetCommitService({
@@ -218,6 +219,7 @@ async function fixture() {
       objects: objectStore,
       clock: { now: () => committedAt },
       revisionIds: revisionIds(nextRevisionId),
+      ...(capacityLimits === undefined ? {} : { capacityLimits }),
     });
   };
   const snapshot = async () => {
@@ -256,6 +258,42 @@ async function fixture() {
   };
   return { objects, metadata, coordinator, grant, service, snapshot };
 }
+
+test("commit capacity rejection happens before canonical object writes", async () => {
+  const env = await fixture();
+  const editor = actor(
+    PRINCIPALS.editor.principalId,
+    "token_capacity_commit",
+    "request_capacity_commit",
+  );
+  const service = env.service({
+    currentActor: editor,
+    nextRevisionId: "revision_capacity_rejected",
+    capacityLimits: {
+      mindPhysicalCanonicalBytes: 1,
+      principalPhysicalCanonicalBytes: 1,
+      sitePhysicalCanonicalBytes: 1,
+      siteTemporaryBytes: 8_589_934_592,
+      siteD1MetadataBytes: 536_870_912,
+      ordinaryCommitSoftGrowthBytes: 4_194_304,
+      activeHeavyPerMind: 1,
+      activeHeavyPerPrincipal: 2,
+      activeHeavyPerSite: 8,
+    },
+  });
+  const before = await env.snapshot();
+  const result = await service.commit({
+    actor: editor,
+    spaceId: MINDS.ordinary.spaceId,
+    expectedRevisionId: REVISIONS.initial.revisionId,
+    idempotencyKey: "capacity-commit-reject",
+    summary: "capacity reject",
+    operations: changes("concepts/capacity-reject.md", "Capacity reject"),
+  });
+  assert.equal(result.kind, "invalid");
+  assert.equal(result.error.code, "capacity_hard_limit");
+  assert.deepEqual(await env.snapshot(), before);
+});
 
 test("success writes immutable candidate objects and performs one revision/HEAD transition", async () => {
   const env = await fixture();
@@ -602,6 +640,8 @@ test("metadata transaction failure leaves written objects unreachable and final 
   );
   assert.ok(after.spaceObjects.length > before.spaceObjects.length);
   assert.equal(after.files.some(([path]) => path === "concepts/failure.md"), false);
+  const [capacity] = await env.metadata.listCapacityReservationsForTest();
+  assert.equal(capacity.state, "cleanup_pending");
 });
 
 test("two Editors racing from one HEAD get one winner and one explicit conflict without hidden merge", async () => {

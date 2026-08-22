@@ -47,7 +47,7 @@ function actor(
   };
 }
 
-function harness({ auditIds } = {}) {
+function harness({ auditIds, capacityLimits } = {}) {
   const metadata = new InMemoryRevisionMetadataStore();
   const objects = new InMemoryObjectStore();
   const safeEvents = [];
@@ -102,6 +102,7 @@ function harness({ auditIds } = {}) {
       nextOutboxMessageId: () => `outbox_ownership_${++auditOutbox}`,
     },
     logger: { record: (event) => safeEvents.push(event) },
+    ...(capacityLimits === undefined ? {} : { capacityLimits }),
   });
   return {
     metadata,
@@ -113,6 +114,49 @@ function harness({ auditIds } = {}) {
     ownership,
   };
 }
+
+test("ownership transfer fails atomically when the target aggregate exceeds capacity", async () => {
+  const env = harness({
+    capacityLimits: {
+      mindPhysicalCanonicalBytes: 2_147_483_648,
+      principalPhysicalCanonicalBytes: 1,
+      sitePhysicalCanonicalBytes: 34_359_738_368,
+      siteTemporaryBytes: 8_589_934_592,
+      siteD1MetadataBytes: 536_870_912,
+      ordinaryCommitSoftGrowthBytes: 4_194_304,
+      activeHeavyPerMind: 1,
+      activeHeavyPerPrincipal: 2,
+      activeHeavyPerSite: 8,
+    },
+  });
+  const owner = await createAccount(env, 40, "Capacity Owner");
+  const target = await createAccount(env, 41, "Capacity Target");
+  const mind = await createMind(env, owner, "capacity-transfer");
+  const targetMemberId = await grantMembership(
+    env,
+    mind.mindId,
+    owner.principalId,
+    target.principalId,
+    "editor",
+    "capacity_target",
+  );
+  const before = await state(env, mind.mindId);
+
+  await assert.rejects(
+    env.ownership.transferOwnership(
+      actor(owner.principalId, "request_capacity_transfer"),
+      transferCommand(
+        mind.mindId,
+        targetMemberId,
+        before.space.metadataVersion,
+        "capacity-transfer",
+      ),
+    ),
+    failure("ownership_target_capacity_exceeded"),
+  );
+  const after = await state(env, mind.mindId);
+  assert.deepEqual(after, before);
+});
 
 async function createAccount(env, index, displayName = `Principal ${index}`) {
   return env.bootstrap.bootstrapAccount(
