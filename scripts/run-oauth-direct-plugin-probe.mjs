@@ -82,6 +82,7 @@ export const OAUTH_DIRECT_PLUGIN_ASSERTION_IDS = Object.freeze([
   "oauth.write-step-up",
   "oauth.authorization-mirror-active",
   "oauth.current-acl-readback",
+  "oauth.explicit-write-binding-readback",
   "oauth.product-runtime-commit",
   "oauth.product-runtime-idempotent-replay",
   "oauth.product-runtime-stale-cas",
@@ -973,9 +974,40 @@ async function runOAuthScenario({ assertions, nowState }) {
   );
   if (!info.content_capabilities?.includes("commit")) fail("oauth_current_acl_missing_commit");
   assertions.add("oauth.current-acl-readback");
+  const initialBindings = mcpData(
+    await modernTool(owner, writeGrant.tokens.access_token, "oauth-write-bindings-initial", "get_mind_bindings"),
+    "oauth_initial_bindings_failed",
+  );
+  if (initialBindings.binding_version !== 0 || initialBindings.write_binding !== null) {
+    fail("oauth_initial_bindings_not_empty");
+  }
+  const bound = mcpData(
+    await modernTool(owner, writeGrant.tokens.access_token, "oauth-write-bind", "set_write_mind_binding", {
+      action: "bind",
+      mind: "/me",
+      expected_binding_version: initialBindings.binding_version,
+      idempotency_key: `oauth:${nonce}:bind-write`,
+    }),
+    "oauth_write_binding_failed",
+  );
+  const writeBindingId = requiredString(
+    bound.current?.write_binding_id,
+    "oauth_write_binding_id_missing",
+  );
+  const bindingReadback = mcpData(
+    await modernTool(owner, writeGrant.tokens.access_token, "oauth-write-bindings-readback", "get_mind_bindings"),
+    "oauth_write_binding_readback_failed",
+  );
+  if (
+    bindingReadback.binding_version !== bound.binding_version ||
+    bindingReadback.write_binding?.write_binding_id !== writeBindingId ||
+    bindingReadback.write_binding?.mind?.route !== "/me"
+  ) fail("oauth_write_binding_readback_mismatch");
+  assertions.add("oauth.explicit-write-binding-readback");
   const expectedRevision = info.resolved_revision.revision_id;
   const commitArguments = {
     mind: "/me",
+    write_binding_id: writeBindingId,
     expected_revision: expectedRevision,
     idempotency_key: `oauth:${nonce}:commit`,
     summary: "OAuth exact-candidate fixture",
