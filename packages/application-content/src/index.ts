@@ -48,6 +48,7 @@ export const CONTENT_QUERIES = [
   "list_minds",
   "resolve_mind",
   "get_mind_info",
+  "get_mind_bindings",
   "browse_entries",
   "search_entries",
   "fetch_entry",
@@ -57,7 +58,12 @@ export const CONTENT_QUERIES = [
   "get_export_status",
 ] as const;
 
-export const CONTENT_COMMANDS = ["commit_changeset", "start_export"] as const;
+export const CONTENT_COMMANDS = [
+  "set_read_mind_binding",
+  "set_write_mind_binding",
+  "commit_changeset",
+  "start_export",
+] as const;
 
 export type McpObservabilityOutcome =
   | "authenticated"

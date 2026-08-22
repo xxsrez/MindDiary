@@ -32,12 +32,15 @@ export const MCP_CONTENT_TOOLS = [
   "list_minds",
   "resolve_mind",
   "get_mind_info",
+  "get_mind_bindings",
   "browse_entries",
   "search",
   "fetch",
   "list_revisions",
   "get_revision",
   "validate_mind",
+  "set_read_mind_binding",
+  "set_write_mind_binding",
   "commit_changeset",
   "start_export",
   "get_export_status",
@@ -366,6 +369,66 @@ const VALIDATE_MIND_INPUT_SCHEMA = strictInputSchema(
   ["mind"],
 );
 
+const GET_MIND_BINDINGS_INPUT_SCHEMA = strictInputSchema({});
+
+const BINDING_VERSION_SCHEMA = Object.freeze({
+  type: "integer",
+  minimum: 0,
+});
+
+const IDEMPOTENCY_KEY_SCHEMA = Object.freeze({
+  type: "string",
+  minLength: 1,
+  maxLength: 256,
+});
+
+const SET_READ_MIND_BINDING_INPUT_SCHEMA = strictInputSchema(
+  {
+    action: Object.freeze({
+      type: "string",
+      enum: Object.freeze(["attach", "detach"]),
+    }),
+    mind: MIND_SELECTOR_SCHEMA,
+    expected_binding_version: BINDING_VERSION_SCHEMA,
+    idempotency_key: IDEMPOTENCY_KEY_SCHEMA,
+  },
+  ["action", "mind", "expected_binding_version", "idempotency_key"],
+);
+
+const SET_WRITE_MIND_BINDING_INPUT_SCHEMA = Object.freeze({
+  $schema: JSON_SCHEMA_2020_12,
+  type: "object",
+  additionalProperties: false,
+  required: Object.freeze([
+    "action",
+    "expected_binding_version",
+    "idempotency_key",
+  ]),
+  properties: Object.freeze({
+    action: Object.freeze({
+      type: "string",
+      enum: Object.freeze(["bind", "unbind"]),
+    }),
+    mind: MIND_SELECTOR_SCHEMA,
+    expected_binding_version: BINDING_VERSION_SCHEMA,
+    idempotency_key: IDEMPOTENCY_KEY_SCHEMA,
+  }),
+  oneOf: Object.freeze([
+    Object.freeze({
+      required: Object.freeze(["mind"]),
+      properties: Object.freeze({
+        action: Object.freeze({ const: "bind" }),
+      }),
+    }),
+    Object.freeze({
+      properties: Object.freeze({
+        action: Object.freeze({ const: "unbind" }),
+      }),
+      not: Object.freeze({ required: Object.freeze(["mind"]) }),
+    }),
+  ]),
+});
+
 const LIST_MINDS_OUTPUT_SCHEMA = toolOutputSchema(
   Object.freeze({
     type: "object",
@@ -617,6 +680,154 @@ const VALIDATE_MIND_OUTPUT_SCHEMA = toolOutputSchema(
   }),
 );
 
+const BINDING_CONTENT_CAPABILITY_SCHEMA = Object.freeze({
+  type: "string",
+  enum: Object.freeze([
+    "browse",
+    "search",
+    "fetch",
+    "history",
+    "validate",
+    "export",
+    "commit",
+  ]),
+});
+
+const READ_BINDING_PROJECTION_SCHEMA = Object.freeze({
+  type: "object",
+  additionalProperties: false,
+  required: Object.freeze([
+    "read_binding_id",
+    "mind_id",
+    "availability",
+    "mind",
+    "content_capabilities",
+  ]),
+  properties: Object.freeze({
+    read_binding_id: OPAQUE_ID_SCHEMA,
+    mind_id: OPAQUE_ID_SCHEMA,
+    availability: Object.freeze({
+      type: "string",
+      enum: Object.freeze(["available", "unavailable"]),
+    }),
+    mind: Object.freeze({
+      oneOf: Object.freeze([MIND_DESCRIPTOR_SCHEMA, Object.freeze({ type: "null" })]),
+    }),
+    content_capabilities: Object.freeze({
+      type: "array",
+      uniqueItems: true,
+      items: BINDING_CONTENT_CAPABILITY_SCHEMA,
+    }),
+  }),
+});
+
+const WRITE_BINDING_PROJECTION_SCHEMA = Object.freeze({
+  type: "object",
+  additionalProperties: false,
+  required: Object.freeze([
+    "write_binding_id",
+    "mind_id",
+    "generation",
+    "state",
+    "availability",
+    "mind",
+    "content_capabilities",
+  ]),
+  properties: Object.freeze({
+    write_binding_id: OPAQUE_ID_SCHEMA,
+    mind_id: OPAQUE_ID_SCHEMA,
+    generation: BINDING_VERSION_SCHEMA,
+    state: Object.freeze({
+      type: "string",
+      enum: Object.freeze(["active", "invalidated"]),
+    }),
+    availability: Object.freeze({
+      type: "string",
+      enum: Object.freeze(["available", "unavailable"]),
+    }),
+    mind: Object.freeze({
+      oneOf: Object.freeze([MIND_DESCRIPTOR_SCHEMA, Object.freeze({ type: "null" })]),
+    }),
+    content_capabilities: Object.freeze({
+      type: "array",
+      uniqueItems: true,
+      items: BINDING_CONTENT_CAPABILITY_SCHEMA,
+    }),
+  }),
+});
+
+const MIND_BINDINGS_STATE_SCHEMA = Object.freeze({
+  type: "object",
+  additionalProperties: false,
+  required: Object.freeze([
+    "binding_version",
+    "read_bindings",
+    "write_binding",
+  ]),
+  properties: Object.freeze({
+    binding_version: BINDING_VERSION_SCHEMA,
+    read_bindings: Object.freeze({
+      type: "array",
+      uniqueItems: true,
+      items: READ_BINDING_PROJECTION_SCHEMA,
+    }),
+    write_binding: Object.freeze({
+      oneOf: Object.freeze([
+        WRITE_BINDING_PROJECTION_SCHEMA,
+        Object.freeze({ type: "null" }),
+      ]),
+    }),
+  }),
+});
+
+const GET_MIND_BINDINGS_OUTPUT_SCHEMA = toolOutputSchema(
+  MIND_BINDINGS_STATE_SCHEMA,
+);
+
+const SET_READ_MIND_BINDING_OUTPUT_SCHEMA = toolOutputSchema(
+  Object.freeze({
+    type: "object",
+    additionalProperties: false,
+    required: Object.freeze(["changed", "replayed", "bindings"]),
+    properties: Object.freeze({
+      changed: Object.freeze({ type: "boolean" }),
+      replayed: Object.freeze({ type: "boolean" }),
+      bindings: MIND_BINDINGS_STATE_SCHEMA,
+    }),
+  }),
+);
+
+const SET_WRITE_MIND_BINDING_OUTPUT_SCHEMA = toolOutputSchema(
+  Object.freeze({
+    type: "object",
+    additionalProperties: false,
+    required: Object.freeze([
+      "binding_version",
+      "changed",
+      "replayed",
+      "previous",
+      "current",
+    ]),
+    properties: Object.freeze({
+      binding_version: BINDING_VERSION_SCHEMA,
+      changed: Object.freeze({ type: "boolean" }),
+      replayed: Object.freeze({ type: "boolean" }),
+      previous: Object.freeze({
+        oneOf: Object.freeze([
+          WRITE_BINDING_PROJECTION_SCHEMA,
+          Object.freeze({ type: "null" }),
+        ]),
+      }),
+      current: Object.freeze({
+        oneOf: Object.freeze([
+          WRITE_BINDING_PROJECTION_SCHEMA,
+          Object.freeze({ type: "null" }),
+        ]),
+      }),
+    }),
+  }),
+);
+
 const READ_ONLY_ANNOTATIONS = Object.freeze({
   readOnlyHint: true,
   destructiveHint: false,
@@ -659,6 +870,16 @@ export const MCP_READ_TOOL_DEFINITIONS = Object.freeze([
       "Resolve one explicit Mind and HEAD, exact revision, or as-of selector to a single immutable revision and its current content capabilities.",
     inputSchema: GET_MIND_INFO_INPUT_SCHEMA,
     outputSchema: GET_MIND_INFO_OUTPUT_SCHEMA,
+    securitySchemes: READ_SECURITY_SCHEMES,
+    annotations: READ_ONLY_ANNOTATIONS,
+  }),
+  Object.freeze({
+    name: "get_mind_bindings",
+    title: "Get current Mind bindings",
+    description:
+      "Inspect the authenticated token or OAuth grant's active read bindings and singleton write binding. Inaccessible targets are redacted as unavailable and discovery is not changed.",
+    inputSchema: GET_MIND_BINDINGS_INPUT_SCHEMA,
+    outputSchema: GET_MIND_BINDINGS_OUTPUT_SCHEMA,
     securitySchemes: READ_SECURITY_SCHEMES,
     annotations: READ_ONLY_ANNOTATIONS,
   }),
@@ -721,6 +942,38 @@ export const MCP_READ_TOOL_DEFINITIONS = Object.freeze([
     outputSchema: VALIDATE_MIND_OUTPUT_SCHEMA,
     securitySchemes: READ_SECURITY_SCHEMES,
     annotations: READ_ONLY_ANNOTATIONS,
+  }),
+] as const);
+
+/** Service-metadata binding mutations; neither tool writes Mind content. */
+export const MCP_BINDING_TOOL_DEFINITIONS = Object.freeze([
+  Object.freeze({
+    name: "set_read_mind_binding",
+    title: "Attach or detach one readable Mind",
+    description:
+      "Attach one currently readable exact Mind or detach one current binding using expected_binding_version and idempotency_key. Detach by the returned mind_id remains possible after access loss and never reveals target metadata.",
+    inputSchema: SET_READ_MIND_BINDING_INPUT_SCHEMA,
+    outputSchema: SET_READ_MIND_BINDING_OUTPUT_SCHEMA,
+    securitySchemes: READ_SECURITY_SCHEMES,
+    annotations: Object.freeze({
+      readOnlyHint: false,
+      destructiveHint: true,
+      openWorldHint: false,
+    }),
+  }),
+  Object.freeze({
+    name: "set_write_mind_binding",
+    title: "Bind or unbind the writable Mind",
+    description:
+      "Atomically bind or rebind one exact Mind with current content:write authority, or unbind the current target. The response names the invalidated previous generation and the only active current generation.",
+    inputSchema: SET_WRITE_MIND_BINDING_INPUT_SCHEMA,
+    outputSchema: SET_WRITE_MIND_BINDING_OUTPUT_SCHEMA,
+    securitySchemes: WRITE_SECURITY_SCHEMES,
+    annotations: Object.freeze({
+      readOnlyHint: false,
+      destructiveHint: true,
+      openWorldHint: false,
+    }),
   }),
 ] as const);
 
@@ -958,6 +1211,7 @@ export const MCP_COMMIT_EXPORT_TOOL_DEFINITIONS = Object.freeze([
 /** Complete canonical tool catalog in the exact order advertised by tools/list. */
 export const MCP_TOOL_DEFINITIONS = Object.freeze([
   ...MCP_READ_TOOL_DEFINITIONS,
+  ...MCP_BINDING_TOOL_DEFINITIONS,
   ...MCP_COMMIT_EXPORT_TOOL_DEFINITIONS,
 ] as const);
 
@@ -1582,6 +1836,8 @@ function readToolSuccessMessage(name: McpReadToolName): string {
       return "Resolved the Mind.";
     case "get_mind_info":
       return "Resolved the Mind and revision.";
+    case "get_mind_bindings":
+      return "Read the current Mind bindings.";
     case "browse_entries":
       return "Browsed entries in the resolved Mind revision.";
     case "search":
@@ -2120,7 +2376,7 @@ function createMcpHttpHandlerAtEndpoint(
             }),
           }),
           instructions:
-            "Choose exactly one Mind for every content operation; use list_minds before working with content.",
+            "Use list_minds only to discover eligible targets. Inspect get_mind_bindings, attach every intended read target with set_read_mind_binding, and select at most one writable target with set_write_mind_binding. Discovery never creates a binding and there is no implicit /me fallback.",
           ttlMs: 60_000,
           cacheScope: "private" as const,
         }),
@@ -2356,7 +2612,10 @@ function createMcpHttpHandlerAtEndpoint(
     }
     const toolArguments = Object.freeze({ ...argumentsValue });
 
-    if (name === "commit_changeset" && !tokenAllowsWrite(actor)) {
+    if (
+      (name === "commit_changeset" || name === "set_write_mind_binding") &&
+      !tokenAllowsWrite(actor)
+    ) {
       const challenge = oauthChallenge(dependencies.oauth, "content:write");
       const response = toolError(
         rpc.id,
@@ -2759,7 +3018,7 @@ export function createLegacyCodexMcpHttpHandler(
                     version: "0.1.0",
                   },
                   instructions:
-                    "Choose exactly one Mind for every content operation; use list_minds before working with content.",
+                    "Use list_minds only to discover eligible targets. Inspect get_mind_bindings, attach every intended read target with set_read_mind_binding, and select at most one writable target with set_write_mind_binding. Discovery never creates a binding and there is no implicit /me fallback.",
                 },
               })
             : jsonRpcError(rpc.id, -32602, "Invalid params", 400);

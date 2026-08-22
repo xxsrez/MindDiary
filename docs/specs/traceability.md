@@ -61,14 +61,14 @@ failed или неполном evidence. Historical registry критериев 
 [ADR-0013](../decisions/0013-multiple-read-single-write-mind-bindings.md) и
 [binding specification](mind-bindings.md) изменяют future content-access
 contract, не переписывая historical release evidence. Contract (`MD-229`) и
-локальный durable state slice (`MD-231`) подтверждены; MCP tools, content
-enforcement и hosted claims остаются в последующих rows.
+локальный durable state slice (`MD-231`) и MCP binding tools (`MD-230`)
+подтверждены; content enforcement и hosted claims остаются в последующих rows.
 
 | ID | Наблюдаемый результат | Owner | Local evidence | UAT evidence |
 |---|---|---|---|---|
 | B0-Contract | OAuth grant/personal token — authoritative binding owner; `0..N` read, `0..1` write, exact lifecycle/CAS/errors и fail-closed migration согласованы. | `MD-229` | docs topology/link validation + `git diff --check`; это contract evidence, не runtime | not-applicable до implementation |
 | B1-State | Durable binding state переживает restart, atomic rebind invalidates previous ID, revoke/delete fail closed. | `MD-231` | `mind-binding-state` application/CAS/idempotency/Sites-reconstruction/audit suite; `ordinary-mind-deletion` и `account-deletion` orphan-negative cases; architecture check | `MD-235`, pending |
-| B2-Tools | Оба MCP profiles публикуют deterministic inspection/read/write binding tools с current authorization. | `MD-230` | pending | `MD-235`, pending |
+| B2-Tools | Оба MCP profiles публикуют deterministic inspection/read/write binding tools с current authorization. | `MD-230` | `mcp-binding-tools` strict schemas, redaction, step-up, cross-profile replay и modern/compatibility lifecycle; `mcp-tools`, `mcp-transport`, Product MCP runtime regressions | `MD-235`, pending |
 | B3-Enforcement | Bound reads и exact active write ID являются hard server boundary без wrong-Mind side effects. | `MD-232` | pending | `MD-235`, pending |
 | B4-UX | Product Site/plugin показывают current reads/exact write target и не infer-ят его из content/model state. | `MD-233` | pending | `MD-235`, pending |
 | B5-Capture | Отдельная opt-in capture policy пишет только в active target с provenance/privacy constraints. | `MD-234` | pending; binding сам capture не включает | `MD-235`, pending |
@@ -210,6 +210,7 @@ failure; отсутствующий receipt остаётся pending.
     "visibility-catalog-ui": { "title": "Visibility disclosure UI contract", "command": ["node", "--test", "tests/unit/visibility-catalog-ui.test.mjs"], "paths": ["tests/unit/visibility-catalog-ui.test.mjs"] },
     "mind-discovery": { "title": "Single-Mind discovery and exact resolve", "command": ["node", "--test", "tests/integration/mind-discovery.test.mjs"], "paths": ["tests/integration/mind-discovery.test.mjs"] },
     "mind-binding-state": { "title": "Durable versioned Mind binding state, audit and Sites CAS", "command": ["node", "--test", "tests/integration/mind-binding-state.test.mjs"], "paths": ["tests/integration/mind-binding-state.test.mjs"] },
+    "mcp-binding-tools": { "title": "Modern and compatibility MCP binding tools", "command": ["node", "--test", "tests/conformance/mcp-binding-tools.test.mjs"], "paths": ["tests/conformance/mcp-binding-tools.test.mjs"] },
     "mcp-auth": { "title": "Per-request MCP token lifecycle and scope", "command": ["node", "--test", "tests/unit/mcp-auth.test.mjs"], "paths": ["tests/unit/mcp-auth.test.mjs"] },
     "token-security": { "title": "Token verifier and non-disclosure", "command": ["node", "--test", "tests/unit/token-security.test.mjs"], "paths": ["tests/unit/token-security.test.mjs"] },
     "changeset-preflight": { "title": "Changeset authorization, limits and full-bundle validation", "command": ["node", "--test", "tests/unit/changeset-preflight.test.mjs"], "paths": ["tests/unit/changeset-preflight.test.mjs"] },

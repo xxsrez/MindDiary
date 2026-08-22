@@ -65,6 +65,7 @@ import {
   ExportJobApplicationService,
   McpBearerAuthenticationService,
   MindBrowseService,
+  MindBindingApplicationService,
   MindDiscoveryService,
   MindHistoryService,
   MindSearchService,
@@ -180,6 +181,14 @@ function ids(capture?: {
     nextSpaceId: () => nextOpaque("space"),
     nextMembershipId: () => nextOpaque("membership"),
     nextRevisionId: () => nextOpaque("revision"),
+    nextReadMindBindingId: () => nextOpaque("read-binding"),
+    nextWriteMindBindingId: () => nextOpaque("write-binding"),
+    nextMindBindingAuditEventId: () => nextOpaque("audit-binding"),
+    nextMindBindingOutboxMessageId: () => {
+      const id = nextOpaque("outbox-binding");
+      capture?.auditOutbox?.(id);
+      return id;
+    },
     nextPersonalSpaceHandle: () => `personal-${crypto.randomUUID()}`,
     nextAuditEventId: () => nextOpaque("audit"),
     nextOutboxMessageId: () => {
@@ -496,6 +505,12 @@ export async function createProductSiteRuntime(
   const locators = new WebCryptoMindLocatorCodec(options.locatorKey);
 
   const discovery = new MindDiscoveryService({ store: metadata, host });
+  const bindings = new MindBindingApplicationService({
+    authorizer,
+    bindings: metadata,
+    ids: generated,
+    digest: objects,
+  });
   const browse = new MindBrowseService({ store: metadata, objects, host, locators });
   const search = new MindSearchService({ store: metadata, index: readyIndex, host, locators });
   const principalsWithObservedUsefulSearch = new Set<string>();
@@ -562,6 +577,19 @@ export async function createProductSiteRuntime(
   });
   const mcpApplication = new ProductMcpContentApplication({
     discovery,
+    bindings: {
+      read: (request) => bindings.read(request),
+      mutateRead: (request) =>
+        runWithCapturedWork(
+          () => bindings.mutateRead(request),
+          (result) => result.kind === "applied" && !result.replayed,
+        ),
+      mutateWrite: (request) =>
+        runWithCapturedWork(
+          () => bindings.mutateWrite(request),
+          (result) => result.kind === "applied" && !result.replayed,
+        ),
+    },
     browse,
     search: observedSearch,
     history,

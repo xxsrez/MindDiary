@@ -14,6 +14,7 @@ const READ_TOOL_NAMES = [
   "list_minds",
   "resolve_mind",
   "get_mind_info",
+  "get_mind_bindings",
   "browse_entries",
   "search",
   "fetch",
@@ -226,7 +227,14 @@ test("tools/list ignores provider order, duplicates, and undeclared tools", asyn
     assert.equal(tool.outputSchema.$schema, "https://json-schema.org/draft/2020-12/schema");
     assert.deepEqual(
       tool.securitySchemes,
-      [{ type: "oauth2", scopes: [tool.name === "commit_changeset" ? "content:write" : "content:read"] }],
+      [{
+        type: "oauth2",
+        scopes: [
+          tool.name === "commit_changeset" || tool.name === "set_write_mind_binding"
+            ? "content:write"
+            : "content:read",
+        ],
+      }],
     );
   }
 });

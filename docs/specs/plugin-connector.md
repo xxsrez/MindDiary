@@ -1,6 +1,6 @@
 # Plugin и OAuth Mind Diary
 
-Статус: accepted, обновлено 2026-08-20. OAuth Authorization Server, dual
+Статус: accepted, обновлено 2026-08-22. OAuth Authorization Server, dual
 personal/OAuth MCP authentication, write step-up и connected-app revocation
 реализованы. Для Codex Desktop/CLI pilot 0.1 принят direct MCP package с OAuth
 при первом использовании. Blocking package/OAuth automation из ADR-0012
@@ -32,6 +32,10 @@ Repository candidate уже содержит:
 - read-first grant и `content:write` step-up;
 - dual `mdp_v1_`/`mdo_access_` MCP authentication, tool
   `securitySchemes` и OAuth challenges;
+- одинаковые modern `2026-07-28` и compatibility `2025-11-25` definitions и
+  application semantics для `get_mind_bindings`,
+  `set_read_mind_binding`, `set_write_mind_binding`; strict schemas не
+  допускают array write targets или unknown fields;
 - internal authorization mirror, благодаря которому application ACL/CAS/commit
   повторно проверяют OAuth token внутри текущих transaction boundaries;
 - connected-app list/revoke на `/settings/mcp` и account-deletion cleanup;
@@ -395,10 +399,12 @@ Blocking matrix:
    client secret или personal token.
 3. Unknown identity не получает старые права и проходит explicit onboarding
    либо recovery.
-4. Read-only grant разрешает `list_minds`, `resolve_mind`, browse, search,
-   fetch, history, validation и export, но не commit.
-5. Первый commit без write scope запускает native step-up; после consent
-   `commit_changeset` сохраняет CAS и idempotency semantics.
+4. Read-only grant разрешает discovery, `get_mind_bindings`, read
+   attach/detach, browse, search, fetch, history, validation и export, но не
+   singleton write binding или commit.
+5. Первый `set_write_mind_binding` либо commit без write scope запускает native
+   step-up; после consent binding mutation и `commit_changeset` сохраняют CAS и
+   idempotency semantics.
 6. Один principal видит все и только доступные ему Minds; каждый call явно
    выбирает один Mind, cross-Mind leakage отсутствует.
 7. Revocation делает следующий call unauthorized; reconnect создаёт новый
@@ -447,6 +453,9 @@ plugin version/cache snapshot и automated receipt; external canary сохран
 
 - Добавить dual personal/OAuth verifier, anonymous discovery,
   `securitySchemes`, challenges и per-tool scopes.
+- Публиковать binding inspection/read mutation с `content:read`, singleton
+  write mutation с `content:write`; discovery не создаёт binding и `/me` не
+  используется как fallback.
 - Сохранить application contract, Mind ACL, CAS и idempotency.
 - Выполнить local tests и полный repository gate на exact candidate.
 

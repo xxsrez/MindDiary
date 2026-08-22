@@ -1,11 +1,14 @@
 import type {
   ChangesetCommitService,
   ExportJobApplicationService,
+  MindBindingApplicationService,
   MindBrowseService,
   MindDiscoveryService,
   MindHistoryService,
   MindSearchService,
   MindValidationService,
+  MindBindingCommandResult,
+  ReadMindBindingsResult,
 } from "@mind-diary/application-content";
 import {
   MCP_TOOL_DEFINITIONS,
@@ -26,6 +29,10 @@ export interface ProductMcpApplicationDependencies {
   readonly search: Pick<MindSearchService, "searchEntries">;
   readonly history: Pick<MindHistoryService, "listRevisions" | "getRevision">;
   readonly validation: Pick<MindValidationService, "validateMind">;
+  readonly bindings: Pick<
+    MindBindingApplicationService,
+    "read" | "mutateRead" | "mutateWrite"
+  >;
   readonly commits: Pick<ChangesetCommitService, "commit">;
   readonly exports: Pick<ExportJobApplicationService, "start" | "getStatus">;
   /** Schedules durable work by opaque ID; the payload never carries authority. */
@@ -82,6 +89,26 @@ function targetMind(argumentsValue: Readonly<Record<string, unknown>>): unknown 
   return argumentsValue.mind;
 }
 
+function hasExactKeys(
+  value: Readonly<Record<string, unknown>>,
+  keys: readonly string[],
+): boolean {
+  const actual = Object.keys(value).sort();
+  const expected = [...keys].sort();
+  return (
+    actual.length === expected.length &&
+    actual.every((key, index) => key === expected[index])
+  );
+}
+
+function bindingVersionValue(value: unknown): value is number {
+  return Number.isSafeInteger(value) && (value as number) >= 0;
+}
+
+function idempotencyKeyValue(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0;
+}
+
 /** Complete custom Mind-aware content application behind the MCP HTTP adapters. */
 export class ProductMcpContentApplication implements McpContentApplication {
   readonly #dependencies: ProductMcpApplicationDependencies;
@@ -131,7 +158,10 @@ export class ProductMcpContentApplication implements McpContentApplication {
     if (
       request.name === "list_minds" ||
       request.name === "fetch" ||
-      request.name === "get_export_status"
+      request.name === "get_export_status" ||
+      request.name === "get_mind_bindings" ||
+      request.name === "set_read_mind_binding" ||
+      request.name === "set_write_mind_binding"
     ) {
       return Object.freeze({ kind: "allowed" as const });
     }
@@ -170,6 +200,152 @@ export class ProductMcpContentApplication implements McpContentApplication {
         return snakeOutput(await this.#dependencies.discovery.resolveMind(request.actor, input.handle));
       case "get_mind_info":
         return snakeOutput(await this.#dependencies.discovery.getMindInfo(request.actor, input.mind, input.revisionSelector));
+      case "get_mind_bindings": {
+        if (!hasExactKeys(input, [])) {
+          return this.#bindingError(request.actor.requestId, "invalid_request");
+        }
+        const read = await this.#dependencies.bindings.read({ actor: request.actor });
+        if (read.kind !== "ready") {
+          return this.#bindingError(request.actor.requestId, read.kind);
+        }
+        if (read.bindings.bindingSet.state !== "active") {
+          return this.#bindingError(request.actor.requestId, "binding_owner_revoked");
+        }
+        return createMcpToolSuccessResult(
+          snakeOutput(await this.#projectBindings(request.actor, read.bindings)),
+          "Read the current Mind bindings.",
+        );
+      }
+      case "set_read_mind_binding": {
+        if (
+          !hasExactKeys(input, [
+            "action",
+            "mind",
+            "expectedBindingVersion",
+            "idempotencyKey",
+          ]) ||
+          (input.action !== "attach" && input.action !== "detach") ||
+          !stringValue(input.mind) ||
+          !bindingVersionValue(input.expectedBindingVersion) ||
+          !idempotencyKeyValue(input.idempotencyKey)
+        ) {
+          return this.#bindingError(request.actor.requestId, "invalid_request");
+        }
+        let spaceId: string | null = null;
+        if (input.action === "detach") {
+          const current = await this.#dependencies.bindings.read({ actor: request.actor });
+          if (current.kind === "ready") {
+            spaceId =
+              current.bindings.readBindings.find(
+                (binding) => binding.spaceId === input.mind,
+              )?.spaceId ?? null;
+          }
+        }
+        if (spaceId === null) {
+          try {
+            const info = await this.#dependencies.discovery.getMindInfo(
+              request.actor,
+              input.mind,
+              { kind: "head" },
+            );
+            spaceId = info.mind.mindId;
+          } catch {
+            return this.#bindingError(request.actor.requestId, "mind_not_found");
+          }
+        }
+        const result = await this.#dependencies.bindings.mutateRead({
+          actor: request.actor,
+          action: input.action,
+          spaceId: spaceId as never,
+          expectedBindingVersion: input.expectedBindingVersion,
+          idempotencyKey: input.idempotencyKey,
+        });
+        if (result.kind !== "applied") {
+          return this.#bindingResultError(request.actor.requestId, result);
+        }
+        return createMcpToolSuccessResult(
+          snakeOutput({
+            changed: result.changed,
+            replayed: result.replayed,
+            bindings: await this.#projectBindings(request.actor, result.bindings),
+          }),
+          result.changed
+            ? `${input.action === "attach" ? "Attached" : "Detached"} the read Mind binding.`
+            : "The read Mind binding was already in the requested state.",
+        );
+      }
+      case "set_write_mind_binding": {
+        const bind = input.action === "bind";
+        const expectedKeys = bind
+          ? ["action", "mind", "expectedBindingVersion", "idempotencyKey"]
+          : ["action", "expectedBindingVersion", "idempotencyKey"];
+        if (
+          (input.action !== "bind" && input.action !== "unbind") ||
+          !hasExactKeys(input, expectedKeys) ||
+          (bind && !stringValue(input.mind)) ||
+          !bindingVersionValue(input.expectedBindingVersion) ||
+          !idempotencyKeyValue(input.idempotencyKey)
+        ) {
+          return this.#bindingError(request.actor.requestId, "invalid_request");
+        }
+        let result: MindBindingCommandResult;
+        if (bind) {
+          let spaceId: string;
+          try {
+            const info = await this.#dependencies.discovery.getMindInfo(
+              request.actor,
+              input.mind,
+              { kind: "head" },
+            );
+            spaceId = info.mind.mindId;
+          } catch {
+            return this.#bindingError(request.actor.requestId, "mind_not_found");
+          }
+          result = await this.#dependencies.bindings.mutateWrite({
+            actor: request.actor,
+            action: "bind",
+            spaceId: spaceId as never,
+            expectedBindingVersion: input.expectedBindingVersion,
+            idempotencyKey: input.idempotencyKey,
+          });
+        } else {
+          result = await this.#dependencies.bindings.mutateWrite({
+            actor: request.actor,
+            action: "unbind",
+            expectedBindingVersion: input.expectedBindingVersion,
+            idempotencyKey: input.idempotencyKey,
+          });
+        }
+        if (result.kind !== "applied") {
+          return this.#bindingResultError(request.actor.requestId, result);
+        }
+        return createMcpToolSuccessResult(
+          snakeOutput({
+            bindingVersion: result.bindings.bindingSet.bindingVersion,
+            changed: result.changed,
+            replayed: result.replayed,
+            previous:
+              result.previousWriteBinding === null
+                ? null
+                : await this.#projectWriteBinding(
+                    request.actor,
+                    result.previousWriteBinding,
+                  ),
+            current:
+              result.bindings.writeBinding === null
+                ? null
+                : await this.#projectWriteBinding(
+                    request.actor,
+                    result.bindings.writeBinding,
+                  ),
+          }),
+          result.changed
+            ? bind
+              ? "Selected the singleton writable Mind binding."
+              : "Removed the writable Mind binding."
+            : "The writable Mind binding was already in the requested state.",
+        );
+      }
       case "browse_entries":
         return snakeOutput(await this.#dependencies.browse.browseEntries(request.actor, input));
       case "search":
@@ -285,5 +461,132 @@ export class ProductMcpContentApplication implements McpContentApplication {
         );
       }
     }
+  }
+
+  async #projectBindings(
+    actor: AuthenticatedActor,
+    snapshot: Extract<
+      ReadMindBindingsResult,
+      { readonly kind: "ready" }
+    >["bindings"],
+  ) {
+    return Object.freeze({
+      bindingVersion: snapshot.bindingSet.bindingVersion,
+      readBindings: Object.freeze(
+        await Promise.all(
+          snapshot.readBindings.map(async (binding) => {
+            const target = await this.#projectTarget(actor, binding.spaceId);
+            return Object.freeze({
+              readBindingId: binding.readBindingId,
+              mindId: binding.spaceId,
+              ...target,
+            });
+          }),
+        ),
+      ),
+      writeBinding:
+        snapshot.writeBinding === null
+          ? null
+          : await this.#projectWriteBinding(actor, snapshot.writeBinding),
+    });
+  }
+
+  async #projectWriteBinding(
+    actor: AuthenticatedActor,
+    binding: NonNullable<
+      Extract<
+        ReadMindBindingsResult,
+        { readonly kind: "ready" }
+      >["bindings"]["writeBinding"]
+    >,
+  ) {
+    const target = await this.#projectTarget(actor, binding.spaceId);
+    return Object.freeze({
+      writeBindingId: binding.writeBindingId,
+      mindId: binding.spaceId,
+      generation: binding.generation,
+      state: binding.state,
+      ...target,
+    });
+  }
+
+  async #projectTarget(actor: AuthenticatedActor, spaceId: string) {
+    try {
+      const info = await this.#dependencies.discovery.getMindInfo(
+        actor,
+        spaceId,
+        { kind: "head" },
+      );
+      return Object.freeze({
+        availability: "available" as const,
+        mind: info.mind,
+        contentCapabilities: info.contentCapabilities,
+      });
+    } catch {
+      return Object.freeze({
+        availability: "unavailable" as const,
+        mind: null,
+        contentCapabilities: Object.freeze([]),
+      });
+    }
+  }
+
+  #bindingResultError(
+    requestId: AuthenticatedActor["requestId"],
+    result: Exclude<MindBindingCommandResult, { readonly kind: "applied" }>,
+  ) {
+    if (result.kind === "denied") {
+      return this.#bindingError(
+        requestId,
+        result.decision.code,
+        result.decision.retryable,
+      );
+    }
+    if (result.kind === "invalid") {
+      return this.#bindingError(requestId, "invalid_request");
+    }
+    if (result.kind === "binding_version_conflict") {
+      return createMcpToolErrorResult(
+        requestId,
+        result.kind,
+        "The binding state changed; inspect current bindings and rebuild the mutation.",
+        true,
+        Object.freeze({
+          current_binding_version: result.currentBindingVersion,
+        }),
+      );
+    }
+    return this.#bindingError(
+      requestId,
+      result.kind === "owner_mismatch" || result.kind === "invalid_record"
+        ? "binding_state_unavailable"
+        : result.kind,
+      result.kind === "effect_conflict",
+    );
+  }
+
+  #bindingError(
+    requestId: AuthenticatedActor["requestId"],
+    code: string,
+    retryable = false,
+  ) {
+    const messages: Readonly<Record<string, string>> = Object.freeze({
+      invalid_request: "The binding tool arguments are invalid.",
+      mind_not_found: "Mind was not found.",
+      insufficient_scope: "The token does not allow this binding operation.",
+      capability_denied: "The current principal cannot bind this Mind.",
+      access_denied: "Mind was not found.",
+      binding_owner_revoked: "The token or OAuth grant can no longer use bindings.",
+      binding_state_unavailable: "Mind binding state is unavailable.",
+      idempotency_conflict: "The idempotency key was already used for another binding mutation.",
+      effect_conflict: "Binding audit state changed; retry with a fresh request.",
+    });
+    const safeCode = code === "access_denied" ? "mind_not_found" : code;
+    return createMcpToolErrorResult(
+      requestId,
+      safeCode,
+      messages[code] ?? "The Mind binding operation failed.",
+      retryable,
+    );
   }
 }
