@@ -1434,84 +1434,157 @@ export async function createProductSiteRuntime(
       ? Math.max(1, Math.min(64, requestedLimit))
       : 16;
     const nowUtc = clock.now();
-    const gaps = await metadata.listActiveRevisionIndexGaps(limit);
-    let backfilled = 0;
-    for (const gap of gaps) {
-      const jobId = nextOpaque("job-index-recovery");
-      const ensured = await metadata.ensureRevisionIndexQueued(
-        Object.freeze({
-          jobId,
-          target: Object.freeze({
-            kind: "revision_index" as const,
-            spaceId: gap.spaceId,
-            revisionId: gap.revisionId,
-          }),
-          state: "queued" as const,
-          version: version(1),
-          attempts: 0,
-          availableAt: nowUtc,
-          claimExpiresAt: null,
-          createdAt: nowUtc,
-          updatedAt: nowUtc,
-        }),
-        Object.freeze({
-          spaceId: gap.spaceId,
-          revisionId: gap.revisionId,
-          status: "queued" as const,
-          attempts: 0,
-          queuedAt: nowUtc,
-          updatedAt: nowUtc,
-          readyAt: null,
-          lastFailureCode: null,
-        }),
-      );
-      if (ensured.kind === "queued") backfilled += 1;
-    }
-    const due = await metadata.listRecoverableIndexJobs(clock.now(), limit);
-    const results = await Promise.allSettled(
-      due.map((job) =>
-        dispatchBackground({ kind: "revision_index", jobId: job.jobId })),
-    );
-    let cleanupDeleted = 0;
-    let cleanupReclaimedBytes = 0;
-    let cleanupFailures = 0;
-    try {
-      const staged = await bundleFileStaging.collectExpired();
-      cleanupDeleted += staged.deleted;
-      cleanupReclaimedBytes += staged.bytes;
-      const imported = await markdownImports.collectExpired({
-        maxSessions: Math.min(16, limit),
-        maxFiles: limit,
-      });
-      cleanupDeleted += imported.deleted;
-      cleanupReclaimedBytes += imported.reclaimedBytes;
-      const cleanupActor = createBackgroundServiceActor({
-        serviceId: "mind-diary-sites-object-cleanup",
-        requestId: nextOpaque("background-request"),
-        occurredAtUtc: clock.now(),
-        deploymentCapabilities: Object.freeze([]),
-      });
-      const cleaned = await objectCleanup.handle({
-        actor: cleanupActor,
-        createdBefore: new Date(
-          Date.parse(nowUtc) - BUNDLE_FILE_LIMITS.gcSafetyMilliseconds,
-        ).toISOString(),
-        maxObjects: limit,
-        maxBytes: BUNDLE_FILE_LIMITS.gcMaxBytes,
-        maxDurationMs: 5_000,
-      });
-      cleanupDeleted += cleaned.deleted;
-      cleanupReclaimedBytes += cleaned.reclaimedBytes;
-    } catch {
-      cleanupFailures = 1;
-    }
-    return Object.freeze({
-      backfilled,
-      dispatched: results.length,
-      failed: results.filter((result) => result.status === "rejected").length + cleanupFailures,
-      cleanupDeleted,
-      cleanupReclaimedBytes,
+    const recoveryActor = createBackgroundServiceActor({
+      serviceId: "mind-diary-sites-recovery",
+      requestId: nextOpaque("background-request"),
+      occurredAtUtc: nowUtc,
+      deploymentCapabilities: Object.freeze([]),
     });
+    const totalStartedAt = Date.now();
+    const stage = async <Result>(
+      operation:
+        | "recovery_index_gaps"
+        | "recovery_index_dispatch"
+        | "recovery_staging_cleanup"
+        | "recovery_import_cleanup"
+        | "recovery_object_cleanup",
+      run: () => Promise<Result>,
+    ): Promise<Result> => {
+      const startedAt = Date.now();
+      try {
+        const result = await run();
+        backgroundObservability.recordRecoveryStage({
+          actor: recoveryActor,
+          occurredAtUtc: clock.now(),
+          stage: operation,
+          outcome: "success",
+          durationMs: Date.now() - startedAt,
+        });
+        return result;
+      } catch (error) {
+        backgroundObservability.recordRecoveryStage({
+          actor: recoveryActor,
+          occurredAtUtc: clock.now(),
+          stage: operation,
+          outcome: "failure",
+          durationMs: Date.now() - startedAt,
+        });
+        throw error;
+      }
+    };
+    try {
+      const backfilled = await stage("recovery_index_gaps", async () => {
+        const gaps = await metadata.listActiveRevisionIndexGaps(limit);
+        let count = 0;
+        for (const gap of gaps) {
+          const jobId = nextOpaque("job-index-recovery");
+          const ensured = await metadata.ensureRevisionIndexQueued(
+            Object.freeze({
+              jobId,
+              target: Object.freeze({
+                kind: "revision_index" as const,
+                spaceId: gap.spaceId,
+                revisionId: gap.revisionId,
+              }),
+              state: "queued" as const,
+              version: version(1),
+              attempts: 0,
+              availableAt: nowUtc,
+              claimExpiresAt: null,
+              createdAt: nowUtc,
+              updatedAt: nowUtc,
+            }),
+            Object.freeze({
+              spaceId: gap.spaceId,
+              revisionId: gap.revisionId,
+              status: "queued" as const,
+              attempts: 0,
+              queuedAt: nowUtc,
+              updatedAt: nowUtc,
+              readyAt: null,
+              lastFailureCode: null,
+            }),
+          );
+          if (ensured.kind === "queued") count += 1;
+        }
+        return count;
+      });
+      const results = await stage("recovery_index_dispatch", async () => {
+        const due = await metadata.listRecoverableIndexJobs(clock.now(), limit);
+        const settled: PromiseSettledResult<unknown>[] = [];
+        for (const job of due) {
+          try {
+            settled.push({
+              status: "fulfilled",
+              value: await dispatchBackground({ kind: "revision_index", jobId: job.jobId }),
+            });
+          } catch (reason) {
+            settled.push({ status: "rejected", reason });
+          }
+        }
+        return settled;
+      });
+      let cleanupDeleted = 0;
+      let cleanupReclaimedBytes = 0;
+      let cleanupFailures = 0;
+      try {
+        const staged = await stage(
+          "recovery_staging_cleanup",
+          () => bundleFileStaging.collectExpired(),
+        );
+        cleanupDeleted += staged.deleted;
+        cleanupReclaimedBytes += staged.bytes;
+        const imported = await stage(
+          "recovery_import_cleanup",
+          () => markdownImports.collectExpired({
+            maxSessions: Math.min(16, limit),
+            maxFiles: limit,
+          }),
+        );
+        cleanupDeleted += imported.deleted;
+        cleanupReclaimedBytes += imported.reclaimedBytes;
+        const cleaned = await stage(
+          "recovery_object_cleanup",
+          () => objectCleanup.handle({
+            actor: recoveryActor,
+            createdBefore: new Date(
+              Date.parse(nowUtc) - BUNDLE_FILE_LIMITS.gcSafetyMilliseconds,
+            ).toISOString(),
+            maxObjects: limit,
+            maxBytes: BUNDLE_FILE_LIMITS.gcMaxBytes,
+            maxDurationMs: 5_000,
+          }),
+        );
+        cleanupDeleted += cleaned.deleted;
+        cleanupReclaimedBytes += cleaned.reclaimedBytes;
+      } catch {
+        cleanupFailures = 1;
+      }
+      const result = Object.freeze({
+        backfilled,
+        dispatched: results.length,
+        failed: results.filter((entry) => entry.status === "rejected").length + cleanupFailures,
+        cleanupDeleted,
+        cleanupReclaimedBytes,
+      });
+      backgroundObservability.recordRecoveryStage({
+        actor: recoveryActor,
+        occurredAtUtc: clock.now(),
+        stage: "recovery_total",
+        outcome: result.failed === 0 ? "success" : "failure",
+        durationMs: Date.now() - totalStartedAt,
+      });
+      return result;
+    } catch (error) {
+      backgroundObservability.recordRecoveryStage({
+        actor: recoveryActor,
+        occurredAtUtc: clock.now(),
+        stage: "recovery_total",
+        outcome: "failure",
+        durationMs: Date.now() - totalStartedAt,
+      });
+      throw error;
+    }
   };
 
   return Object.freeze({

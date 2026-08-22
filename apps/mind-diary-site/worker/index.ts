@@ -1,5 +1,6 @@
 import { createProductSiteRuntime } from "@mind-diary/composition-root";
 import handler from "vinext/server/app-router-entry";
+import { RequestRecoveryCoordinator } from "./request-recovery";
 import { readRuntimeConfig, type ProductEnv } from "./runtime-config";
 import { IsolateRuntimeCache } from "./runtime-cache";
 
@@ -22,6 +23,7 @@ const runtimeCache = new IsolateRuntimeCache<
   Awaited<ReturnType<typeof createProductSiteRuntime>>,
   ScheduledWork
 >();
+const recoveryCoordinator = new RequestRecoveryCoordinator();
 
 function configFingerprint(env: ProductEnv, publicOrigin: string): string {
   const source = [
@@ -62,9 +64,10 @@ const worker = {
     try {
       const config = readRuntimeConfig(request, env);
       failureStage = "composition";
+      const fingerprint = configFingerprint(env, config.publicOrigin);
       const acquired = runtimeCache.acquire({
         environment: env,
-        fingerprint: configFingerprint(env, config.publicOrigin),
+        fingerprint,
         dispatch: dispatchScheduled,
         create: (schedule) => createProductSiteRuntime({
           database: env.DB,
@@ -86,17 +89,26 @@ const worker = {
         }),
       });
       const runtime = await acquired.runtime;
-      ctx.waitUntil(runtime.recoverBackground().catch(() => undefined));
-      failureStage = "product-fetch";
-      let response: Response | null;
-      try {
-        response = await runtime.fetch(request);
-      } finally {
-        const scheduled = acquired.drainScheduled();
-        if (scheduled.length > 0) ctx.waitUntil(Promise.allSettled(scheduled));
-      }
-      failureStage = "vinext-fetch";
-      return response ?? handler.fetch(request, env, ctx);
+      return recoveryCoordinator.respond({
+        request,
+        environment: env,
+        fingerprint,
+        waitUntil: (promise) => ctx.waitUntil(promise),
+        recover: () => runtime.recoverBackground(),
+        foreground: async () => {
+          failureStage = "product-fetch";
+          let response: Response | null;
+          try {
+            response = await runtime.fetch(request);
+          } finally {
+            const scheduled = acquired.drainScheduled();
+            if (scheduled.length > 0) ctx.waitUntil(Promise.allSettled(scheduled));
+          }
+          if (response !== null) return response;
+          failureStage = "vinext-fetch";
+          return handler.fetch(request, env, ctx);
+        },
+      });
     } catch {
       console.error(JSON.stringify({
         event: "mind-diary.runtime-unavailable",

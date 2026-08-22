@@ -594,10 +594,14 @@ residual risk ограничивается explicit write scope, current ACL, hi
   repeatable bounded commands по durable session checkpoints.
 
 Initial revision Personal и ordinary Mind получает durable queued index
-state/job в той же metadata transaction. Sites Worker выполняет bounded
-request-triggered recovery для missed/due/expired-claim work; после restart
-клиент видит exact `missing | queued | ready | failed` readiness через
-авторизованный `get_mind_info`, а не угадывает её повторными search errors.
+state/job в той же metadata transaction. После готового foreground response
+Sites Worker может запустить bounded request-triggered recovery для
+missed/due/expired-claim work. Static assets не запускают recovery; concurrent
+eligible requests объединяются в один isolate-level flight с явной cadence, а
+due jobs dispatch-ятся последовательно, чтобы recovery не блокировал
+authenticated reads очередью background work. После restart клиент видит exact
+`missing | queued | ready | failed` readiness через авторизованный
+`get_mind_info`, а не угадывает её повторными search errors.
 
 Физически UAT MVP держит Web adapter, MCP adapter и core в одном OpenAI
 Site. Это сохраняет внутреннюю границу без предположения о private service

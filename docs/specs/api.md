@@ -1070,8 +1070,12 @@ Accepted internal background/recovery names:
 
 The current candidate advances validation/finalization through repeatable
 bounded commands with durable checkpoints and runs expired-import cleanup from
-bounded request-triggered recovery. Separate public background routes do not
-exist; unknown routes remain 404 and no import tool is advertised through MCP.
+bounded request-triggered recovery. Recovery starts only after the foreground
+response is ready, excludes static assets, is single-flight per Worker
+deployment/config generation and observes a completion-based 30-second cadence.
+Its stages emit closed privacy-safe duration/outcome telemetry. Separate public
+background routes do not exist; unknown routes remain 404 and no import tool is
+advertised through MCP.
 
 Background handler получает service `ActorContext`, explicit job/aggregate ID и
 idempotency state. Он не доверяет serialized role/token claims из job payload и
@@ -1082,12 +1086,14 @@ idempotency state. Он не доверяет serialized role/token claims из 
 domain semantics.
 
 Personal bootstrap и ordinary Mind create атомарно ставят initial exact HEAD в
-`queued` вместе с одним `revision_index` job. Product Worker на каждом
-подходящем request запускает bounded recovery trigger: он backfill-ит active
-current HEAD без state/job и подбирает due `queued`, `failed` либо
-expired-running claims. Пять неуспешных attempts оставляют диагностируемый
-`failed` terminal state; recovery никогда не подмешивает другую HEAD и не
-меняет canonical content.
+`queued` вместе с одним `revision_index` job. После завершения подходящего
+foreground request Product Worker запускает либо присоединяет один bounded
+recovery flight: он backfill-ит active current HEAD без state/job и подбирает
+due `queued`, `failed` либо expired-running claims. Static assets не являются
+trigger, concurrent requests не создают дополнительные flights, а due jobs
+dispatch-ятся последовательно. Пять неуспешных attempts оставляют
+диагностируемый `failed` terminal state; recovery никогда не подмешивает другую
+HEAD и не меняет canonical content.
 
 ## Content MCP
 

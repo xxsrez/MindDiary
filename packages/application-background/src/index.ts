@@ -173,6 +173,34 @@ export class BackgroundPrivacySafeObservability {
       cohort: null,
     });
   }
+
+  recordRecoveryStage(event: {
+    readonly actor: Pick<ActorContext, "requestId">;
+    readonly occurredAtUtc: UtcInstant;
+    readonly stage:
+      | "recovery_index_gaps"
+      | "recovery_index_dispatch"
+      | "recovery_staging_cleanup"
+      | "recovery_import_cleanup"
+      | "recovery_object_cleanup"
+      | "recovery_total";
+    readonly outcome: "success" | "failure";
+    readonly durationMs: number;
+  }): void {
+    recordBackgroundMetric(this.#sink, {
+      kind: "operational",
+      metric: "request_latency_ms",
+      surface: "background",
+      operation: event.stage,
+      outcome: event.outcome,
+      unit: "milliseconds",
+      value: Math.max(0, event.durationMs),
+      occurredAtUtc: event.occurredAtUtc,
+      requestId: event.actor.requestId,
+      jobId: null,
+      cohort: null,
+    });
+  }
 }
 
 export type ServiceActorContext = Extract<ActorContext, { kind: "service" }>;

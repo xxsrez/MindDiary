@@ -3659,6 +3659,12 @@ export const PRIVACY_SAFE_OBSERVABILITY_OPERATIONS = [
   "history",
   "storage",
   "cleanup",
+  "recovery_index_gaps",
+  "recovery_index_dispatch",
+  "recovery_staging_cleanup",
+  "recovery_import_cleanup",
+  "recovery_object_cleanup",
+  "recovery_total",
   "citation",
 ] as const;
 
