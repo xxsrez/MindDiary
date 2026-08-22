@@ -19,7 +19,7 @@ import type { HeadRevisionReader } from "./index.js";
 
 const ENCODER = new TextEncoder();
 const DECODER = new TextDecoder("utf-8", { fatal: true });
-const CAPTURE_KEY = /^[a-z0-9](?:[a-z0-9-]{1,62}[a-z0-9])?$/u;
+const CAPTURE_KEY = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/u;
 const SINGLE_LINE = /^[^\u0000-\u001f\u007f\u2028\u2029]+$/u;
 const CAPTURE_KINDS = new Set(["fact", "decision", "source_note"]);
 const MAX_TITLE_BYTES = 160;

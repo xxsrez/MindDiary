@@ -249,6 +249,7 @@ test("publishes strict commit/export schemas and truthful annotations", () => {
   );
   assert.deepEqual([...definitions.keys()], [
     "commit_changeset",
+    "capture_knowledge",
     "start_export",
     "get_export_status",
   ]);
@@ -279,6 +280,34 @@ test("publishes strict commit/export schemas and truthful annotations", () => {
   assert.match(commit.description, /obtain explicit confirmation/u);
   assert.match(commit.description, /re-read HEAD/u);
   assert.match(commit.description, /revision_conflict/u);
+
+  const capture = definitions.get("capture_knowledge");
+  assert.equal(capture.inputSchema.additionalProperties, false);
+  assert.deepEqual(capture.inputSchema.required, [
+    "mind",
+    "write_binding_id",
+    "expected_binding_version",
+    "expected_revision",
+    "idempotency_key",
+    "classification",
+    "capture_kind",
+    "capture_key",
+    "title",
+    "description",
+    "body",
+    "sources",
+  ]);
+  assert.equal(
+    capture.inputSchema.properties.classification.const,
+    "routine_non_sensitive",
+  );
+  assert.deepEqual(capture.annotations, {
+    readOnlyHint: false,
+    destructiveHint: false,
+    openWorldHint: false,
+  });
+  assert.match(capture.description, /exact private active writable Mind/u);
+  assert.match(capture.description, /Never use this tool for sensitive, cross-Mind/u);
 
   const startExport = definitions.get("start_export");
   assert.deepEqual(startExport.annotations, {
@@ -318,7 +347,7 @@ test("tools/list advertises write scope for step-up while enforcing read-only to
   const writable = await result(await fixture.send(rpc("tools/list")));
   assert.deepEqual(
     writable.tools.map((definition) => definition.name),
-    ["commit_changeset", "start_export", "get_export_status"],
+    ["commit_changeset", "capture_knowledge", "start_export", "get_export_status"],
   );
   assert.equal(writable.tools[0].inputSchema.additionalProperties, false);
 
@@ -327,7 +356,7 @@ test("tools/list advertises write scope for step-up while enforcing read-only to
   );
   assert.deepEqual(
     readable.tools.map((definition) => definition.name),
-    ["commit_changeset", "start_export", "get_export_status"],
+    ["commit_changeset", "capture_knowledge", "start_export", "get_export_status"],
   );
   assert.deepEqual(readable.tools[0].securitySchemes, [
     { type: "oauth2", scopes: ["content:write"] },

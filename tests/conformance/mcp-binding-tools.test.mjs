@@ -206,6 +206,7 @@ function harness() {
     history: { async listRevisions() { return {}; }, async getRevision() { return {}; } },
     validation: { async validateMind() { return {}; } },
     commits: { async commit() { return { kind: "invalid" }; } },
+    capture: { async capture() { return { kind: "capture_disabled" }; } },
     exports: { async start() { return { kind: "denied" }; }, async getStatus() { return { kind: "not_found" }; } },
   });
   let request = 0;
@@ -321,6 +322,9 @@ test("publishes strict binding schemas and truthful service-state annotations", 
   );
   assert.ok(write.outputSchema.properties.data.required.includes("previous"));
   assert.ok(write.outputSchema.properties.data.required.includes("current"));
+  assert.ok(
+    get.outputSchema.properties.data.required.includes("automatic_capture"),
+  );
 });
 
 test("modern and compatibility profiles share multiple-read/single-write application semantics", async () => {
@@ -354,6 +358,11 @@ test("modern and compatibility profiles share multiple-read/single-write applica
   assert.equal(empty.structuredContent.data.binding_version, 0);
   assert.deepEqual(empty.structuredContent.data.read_bindings, []);
   assert.equal(empty.structuredContent.data.write_binding, null);
+  assert.deepEqual(empty.structuredContent.data.automatic_capture, {
+    mode: "disabled",
+    write_binding_id: null,
+    updated_at: null,
+  });
 
   const firstRead = await modernCall(env, "set_read_mind_binding", {
     action: "attach",

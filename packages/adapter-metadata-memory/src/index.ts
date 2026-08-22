@@ -924,7 +924,7 @@ const CAPTURE_COMMIT_AUDIT_METADATA_KEYS = [
   ...COMMIT_AUDIT_METADATA_KEYS,
 ] as const;
 const BOUNDED_OPAQUE_ID = /^[A-Za-z0-9._:-]{1,128}$/u;
-const CAPTURE_KEY_PATTERN = /^[a-z0-9](?:[a-z0-9-]{1,62}[a-z0-9])?$/u;
+const CAPTURE_KEY_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/u;
 const CAPTURE_SOURCE_PATH_PATTERN = /^(?!\/)(?!.*(?:^|\/)\.\.?\/)(?:[^\u0000-\u001f\u007f\\]+\/)*[^\u0000-\u001f\u007f\\]+\.md$/u;
 const MAX_CLAIM_LEASE_MS = 5 * 60 * 1_000;
 

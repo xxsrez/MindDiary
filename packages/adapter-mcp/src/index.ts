@@ -42,6 +42,7 @@ export const MCP_CONTENT_TOOLS = [
   "set_read_mind_binding",
   "set_write_mind_binding",
   "commit_changeset",
+  "capture_knowledge",
   "start_export",
   "get_export_status",
 ] as const;
@@ -763,6 +764,7 @@ const MIND_BINDINGS_STATE_SCHEMA = Object.freeze({
     "binding_version",
     "read_bindings",
     "write_binding",
+    "automatic_capture",
   ]),
   properties: Object.freeze({
     binding_version: BINDING_VERSION_SCHEMA,
@@ -776,6 +778,19 @@ const MIND_BINDINGS_STATE_SCHEMA = Object.freeze({
         WRITE_BINDING_PROJECTION_SCHEMA,
         Object.freeze({ type: "null" }),
       ]),
+    }),
+    automatic_capture: Object.freeze({
+      type: "object",
+      additionalProperties: false,
+      required: Object.freeze(["mode", "write_binding_id", "updated_at"]),
+      properties: Object.freeze({
+        mode: Object.freeze({
+          type: "string",
+          enum: Object.freeze(["disabled", "routine_non_sensitive"]),
+        }),
+        write_binding_id: Object.freeze({ type: Object.freeze(["string", "null"]) }),
+        updated_at: Object.freeze({ type: Object.freeze(["string", "null"]) }),
+      }),
     }),
   }),
 });
@@ -1114,6 +1129,102 @@ const COMMIT_CHANGESET_OUTPUT_SCHEMA = toolOutputSchema(
   }),
 );
 
+const AUTOMATIC_CAPTURE_SOURCE_SCHEMA = Object.freeze({
+  oneOf: Object.freeze([
+    Object.freeze({
+      type: "object",
+      additionalProperties: false,
+      required: Object.freeze(["kind"]),
+      properties: Object.freeze({ kind: Object.freeze({ const: "user_statement" }) }),
+    }),
+    Object.freeze({
+      type: "object",
+      additionalProperties: false,
+      required: Object.freeze(["kind", "revision_id", "path"]),
+      properties: Object.freeze({
+        kind: Object.freeze({ const: "target_entry" }),
+        revision_id: OPAQUE_ID_SCHEMA,
+        path: Object.freeze({ type: "string", minLength: 1, maxLength: 512 }),
+      }),
+    }),
+  ]),
+});
+
+const CAPTURE_KNOWLEDGE_INPUT_SCHEMA = strictInputSchema(
+  {
+    mind: MIND_SELECTOR_SCHEMA,
+    write_binding_id: OPAQUE_ID_SCHEMA,
+    expected_binding_version: BINDING_VERSION_SCHEMA,
+    expected_revision: OPAQUE_ID_SCHEMA,
+    idempotency_key: IDEMPOTENCY_KEY_SCHEMA,
+    classification: Object.freeze({ const: "routine_non_sensitive" }),
+    capture_kind: Object.freeze({
+      type: "string",
+      enum: Object.freeze(["fact", "decision", "source_note"]),
+    }),
+    capture_key: Object.freeze({
+      type: "string",
+      minLength: 1,
+      maxLength: 64,
+      pattern: "^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$",
+    }),
+    title: Object.freeze({ type: "string", minLength: 1, maxLength: 160 }),
+    description: Object.freeze({ type: "string", minLength: 1, maxLength: 320 }),
+    body: Object.freeze({ type: "string", minLength: 1, maxLength: 8_192 }),
+    sources: Object.freeze({
+      type: "array",
+      minItems: 1,
+      maxItems: 8,
+      items: AUTOMATIC_CAPTURE_SOURCE_SCHEMA,
+    }),
+  },
+  [
+    "mind",
+    "write_binding_id",
+    "expected_binding_version",
+    "expected_revision",
+    "idempotency_key",
+    "classification",
+    "capture_kind",
+    "capture_key",
+    "title",
+    "description",
+    "body",
+    "sources",
+  ],
+);
+
+const CAPTURE_KNOWLEDGE_OUTPUT_SCHEMA = toolOutputSchema(
+  Object.freeze({
+    type: "object",
+    additionalProperties: false,
+    required: Object.freeze([
+      "status",
+      "mind",
+      "path",
+      "previous_revision_id",
+      "revision",
+      "index_status",
+      "replayed",
+    ]),
+    properties: Object.freeze({
+      status: Object.freeze({
+        type: "string",
+        enum: Object.freeze(["captured", "no_op"]),
+      }),
+      mind: Object.freeze({ type: "object" }),
+      path: Object.freeze({ type: "string", minLength: 1 }),
+      previous_revision_id: Object.freeze({ type: Object.freeze(["string", "null"]) }),
+      revision: REVISION_DESCRIPTOR_SCHEMA,
+      index_status: Object.freeze({
+        type: "string",
+        enum: Object.freeze(["queued", "unchanged"]),
+      }),
+      replayed: Object.freeze({ type: "boolean" }),
+    }),
+  }),
+);
+
 const START_EXPORT_INPUT_SCHEMA = Object.freeze({
   $schema: JSON_SCHEMA_2020_12,
   type: "object",
@@ -1177,6 +1288,20 @@ export const MCP_COMMIT_EXPORT_TOOL_DEFINITIONS = Object.freeze([
     annotations: Object.freeze({
       readOnlyHint: false,
       destructiveHint: true,
+      openWorldHint: false,
+    }),
+  }),
+  Object.freeze({
+    name: "capture_knowledge",
+    title: "Capture routine knowledge",
+    description:
+      "Add one bounded routine, non-sensitive Memory to the exact private active writable Mind after automatic capture was explicitly enabled in the trusted control plane. Use the current binding_version, exact write_binding_id, and exact HEAD. Sources may be only the user's current statement or an entry in that same target HEAD. Never use this tool for sensitive, cross-Mind, external, destructive, or substantial content; request explicit confirmation and use commit_changeset when needed.",
+    inputSchema: CAPTURE_KNOWLEDGE_INPUT_SCHEMA,
+    outputSchema: CAPTURE_KNOWLEDGE_OUTPUT_SCHEMA,
+    securitySchemes: WRITE_SECURITY_SCHEMES,
+    annotations: Object.freeze({
+      readOnlyHint: false,
+      destructiveHint: false,
       openWorldHint: false,
     }),
   }),
@@ -2625,7 +2750,9 @@ function createMcpHttpHandlerAtEndpoint(
     const toolArguments = Object.freeze({ ...argumentsValue });
 
     if (
-      (name === "commit_changeset" || name === "set_write_mind_binding") &&
+      (name === "commit_changeset" ||
+        name === "capture_knowledge" ||
+        name === "set_write_mind_binding") &&
       !tokenAllowsWrite(actor)
     ) {
       const challenge = oauthChallenge(dependencies.oauth, "content:write");

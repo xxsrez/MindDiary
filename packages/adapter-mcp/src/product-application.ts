@@ -1,4 +1,5 @@
 import type {
+  AutomaticCaptureService,
   ChangesetCommitService,
   ExportJobApplicationService,
   MindBindingApplicationService,
@@ -34,6 +35,7 @@ export interface ProductMcpApplicationDependencies {
     "read" | "mutateRead" | "mutateWrite"
   >;
   readonly commits: Pick<ChangesetCommitService, "commit">;
+  readonly capture: Pick<AutomaticCaptureService, "capture">;
   readonly exports: Pick<ExportJobApplicationService, "start" | "getStatus">;
   /** Schedules durable work by opaque ID; the payload never carries authority. */
   readonly scheduleExport?: (jobId: string) => void | Promise<void>;
@@ -107,6 +109,51 @@ function bindingVersionValue(value: unknown): value is number {
 
 function idempotencyKeyValue(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
+}
+
+const CAPTURE_KEY_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/u;
+const CAPTURE_KINDS = new Set(["fact", "decision", "source_note"]);
+
+function validCaptureSources(value: unknown): boolean {
+  if (!Array.isArray(value) || value.length < 1 || value.length > 8) return false;
+  return value.every((item) => {
+    if (typeof item !== "object" || item === null || Array.isArray(item)) return false;
+    const record = item as Readonly<Record<string, unknown>>;
+    if (record.kind === "user_statement") return hasExactKeys(record, ["kind"]);
+    return record.kind === "target_entry" &&
+      hasExactKeys(record, ["kind", "revisionId", "path"]) &&
+      stringValue(record.revisionId) !== null &&
+      stringValue(record.path) !== null;
+  });
+}
+
+function validCaptureInput(input: Readonly<Record<string, unknown>>): boolean {
+  return hasExactKeys(input, [
+    "mind",
+    "writeBindingId",
+    "expectedBindingVersion",
+    "expectedRevision",
+    "idempotencyKey",
+    "classification",
+    "captureKind",
+    "captureKey",
+    "title",
+    "description",
+    "body",
+    "sources",
+  ]) &&
+    stringValue(input.mind) !== null &&
+    stringValue(input.writeBindingId) !== null &&
+    bindingVersionValue(input.expectedBindingVersion) &&
+    stringValue(input.expectedRevision) !== null &&
+    idempotencyKeyValue(input.idempotencyKey) &&
+    input.classification === "routine_non_sensitive" &&
+    typeof input.captureKind === "string" && CAPTURE_KINDS.has(input.captureKind) &&
+    typeof input.captureKey === "string" && CAPTURE_KEY_PATTERN.test(input.captureKey) &&
+    stringValue(input.title) !== null &&
+    stringValue(input.description) !== null &&
+    stringValue(input.body) !== null &&
+    validCaptureSources(input.sources);
 }
 
 /** Complete custom Mind-aware content application behind the MCP HTTP adapters. */
@@ -201,7 +248,7 @@ export class ProductMcpContentApplication implements McpContentApplication {
         input.revisionSelector,
       );
       const required =
-        request.name === "commit_changeset"
+        request.name === "commit_changeset" || request.name === "capture_knowledge"
           ? "commit"
           : request.name === "start_export"
             ? "export"
@@ -426,6 +473,84 @@ export class ProductMcpContentApplication implements McpContentApplication {
           output as Readonly<Record<string, unknown>>,
         );
       }
+      case "capture_knowledge": {
+        if (!validCaptureInput(input)) {
+          return createMcpToolErrorResult(
+            request.actor.requestId,
+            "invalid_capture_request",
+            "The capture arguments are invalid or outside the routine non-sensitive policy.",
+            false,
+          );
+        }
+        const info = await this.#dependencies.discovery.getMindInfo(
+          request.actor,
+          input.mind,
+          { kind: "head" },
+        );
+        const result = await this.#dependencies.capture.capture({
+          actor: request.actor,
+          spaceId: info.mind.mindId,
+          writeBindingId: input.writeBindingId,
+          expectedBindingVersion: input.expectedBindingVersion,
+          expectedRevisionId: input.expectedRevision,
+          idempotencyKey: input.idempotencyKey,
+          classification: input.classification,
+          captureKind: input.captureKind,
+          captureKey: input.captureKey,
+          title: input.title,
+          description: input.description,
+          body: input.body,
+          sources: input.sources,
+        });
+        if (result.kind === "captured" || result.kind === "no_op") {
+          if (result.kind === "captured") {
+            await this.#dependencies.scheduleCommitEffects?.();
+          }
+          const capturedInfo = await this.#dependencies.discovery.getMindInfo(
+            request.actor,
+            input.mind,
+            { kind: "revision", revisionId: result.revisionId },
+          );
+          return createMcpToolSuccessResult(
+            snakeOutput({
+              status: result.kind,
+              mind: capturedInfo.mind,
+              path: result.path,
+              previousRevisionId:
+                result.kind === "captured" ? result.previousRevisionId : null,
+              revision: capturedInfo.resolvedRevision,
+              indexStatus: result.kind === "captured" ? "queued" : "unchanged",
+              replayed: result.kind === "captured" ? result.replayed : false,
+            }),
+            result.kind === "captured"
+              ? "Captured one routine Memory in a new immutable revision."
+              : "The exact routine Memory already exists; no revision was created.",
+          );
+        }
+        const code = result.kind === "denied"
+          ? result.decision.code
+          : result.kind === "invalid"
+            ? result.error.code
+            : result.kind;
+        const messages: Readonly<Record<string, string>> = Object.freeze({
+          invalid_capture_request: "The capture arguments are invalid or outside the routine non-sensitive policy.",
+          capture_disabled: "Automatic capture is disabled for this credential.",
+          capture_binding_stale: "The automatic capture policy is not pinned to this current write binding generation.",
+          capture_target_visibility_blocked: "Automatic capture is available only for a private target Mind.",
+          capture_confirmation_required: "This source requires explicit user confirmation and a normal changeset.",
+          capture_conflict: "The stable capture key already names different content; no overwrite was attempted.",
+          capture_target_not_ready: "The target Mind is not ready for automatic capture.",
+          revision_conflict: "HEAD changed; inspect the current revision before considering a new capture.",
+        });
+        return createMcpToolErrorResult(
+          request.actor.requestId,
+          code,
+          messages[code] ?? "The routine Memory was not captured.",
+          result.kind === "revision_conflict" ||
+            (result.kind === "denied" && result.decision.retryable),
+          snakeOutput(result) as Readonly<Record<string, unknown>>,
+        );
+      }
       case "start_export": {
         const info = await this.#dependencies.discovery.getMindInfo(request.actor, input.mind, input.revisionSelector);
         const result = await this.#dependencies.exports.start({
@@ -536,6 +661,11 @@ export class ProductMcpContentApplication implements McpContentApplication {
         snapshot.writeBinding === null
           ? null
           : await this.#projectWriteBinding(actor, snapshot.writeBinding),
+      automaticCapture: Object.freeze({
+        mode: snapshot.bindingSet.automaticCaptureMode,
+        writeBindingId: snapshot.bindingSet.captureWriteBindingId,
+        updatedAt: snapshot.bindingSet.captureUpdatedAt,
+      }),
     });
   }
 

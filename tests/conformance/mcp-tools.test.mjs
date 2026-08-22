@@ -230,7 +230,9 @@ test("tools/list ignores provider order, duplicates, and undeclared tools", asyn
       [{
         type: "oauth2",
         scopes: [
-          tool.name === "commit_changeset" || tool.name === "set_write_mind_binding"
+          tool.name === "commit_changeset" ||
+            tool.name === "capture_knowledge" ||
+            tool.name === "set_write_mind_binding"
             ? "content:write"
             : "content:read",
         ],

@@ -58,6 +58,7 @@ import {
   RevisionIndexJobHandler,
 } from "@mind-diary/application-background";
 import {
+  AutomaticCaptureService,
   CanonicalRevisionCoordinator,
   ChangesetCommitService,
   ContentPrivacySafeObservability,
@@ -597,6 +598,12 @@ export async function createProductSiteRuntime(
     revisionIds: generated,
     effectIds: generated,
   });
+  const automaticCapture = new AutomaticCaptureService({
+    authorizer: contentAuthorizer,
+    bindings: metadata,
+    revisions,
+    commits,
+  });
   const exports = new ExportJobApplicationService({
     authorizer: contentAuthorizer,
     backgroundAuthorizer,
@@ -638,6 +645,13 @@ export async function createProductSiteRuntime(
         }
         return result;
       },
+    },
+    capture: {
+      capture: (request) =>
+        runWithCapturedWork(
+          () => automaticCapture.capture(request),
+          (result) => result.kind === "captured",
+        ),
     },
     exports,
     scheduleExport: async (jobId) => options.schedule({ kind: "export", id: jobId }),

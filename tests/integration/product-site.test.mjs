@@ -1000,7 +1000,13 @@ test("product MCP facade advertises only canonical content tools and membership 
         return {
           kind: "ready",
           bindings: {
-            bindingSet: { state: "active", bindingVersion: 1 },
+            bindingSet: {
+              state: "active",
+              bindingVersion: 1,
+              automaticCaptureMode: "disabled",
+              captureWriteBindingId: null,
+              captureUpdatedAt: null,
+            },
             readBindings: [{
               readBindingId: "read_one",
               bindingOwnerId: "binding_owner_one",
@@ -1023,6 +1029,7 @@ test("product MCP facade advertises only canonical content tools and membership 
     history: { async listRevisions() { return {}; }, async getRevision() { return {}; } },
     validation: { async validateMind() { return {}; } },
     commits: { async commit() { return { kind: "invalid" }; } },
+    capture: { async capture() { return { kind: "capture_disabled" }; } },
     exports: { async start() { return { kind: "denied" }; }, async getStatus() { return { kind: "not_found" }; } },
   });
   const actor = {
