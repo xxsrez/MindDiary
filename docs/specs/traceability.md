@@ -77,6 +77,22 @@ hosted `uat.mind-bindings` всё ещё требует evidence конкрет�
 | B5-Capture | Отдельная opt-in capture policy пишет только в active target с provenance/privacy constraints. | `MD-234` | `automatic-capture`, synthetic state matrix и fresh-plugin OAuth product-runtime capture/no-op assertions; Marketplace `181320e`, plugin `0.1.0+codex.20260822115002` | blocking `uat.mind-bindings` target-A capture and rebind fencing |
 | B6-Join | Один exact candidate проходит concurrency/security/persistence/plugin/UAT matrix. | `MD-235` | blocking `dev.mind-bindings` joins exact-SHA `dev.synthetic-multi-principal` and `dev.oauth-direct-plugin` receipts with required assertion IDs | blocking `uat.mind-bindings` exact candidate/deployment/plugin/profile receipt |
 
+## BundleFile extension 2026-08-22
+
+[ADR-0015](../decisions/0015-versioned-bundle-files.md) и
+[BundleFile specification](bundle-files.md) replace the old non-Markdown deny
+with a bounded raster/PDF/ZIP Release 0.1 slice. Accepted contract does not
+prove implementation; existing UAT deployment remains Markdown-only until the
+exact-candidate join below passes.
+
+| ID | Наблюдаемый результат | Owner | Local evidence | UAT evidence |
+|---|---|---|---|---|
+| BF0-Contract | Producer-defined manifest v2, v1 compatibility, path/type/limits/quarantine/staging/download/export/errors are exact and do not alter OKF 0.2 or `MD-OKF-ZIP-1`. | `MD-246` | affected docs + ADR-0015, docs topology/link validation and `git diff --check` | not-applicable until implementation |
+| BF1-State | In-memory/Sites ports persist arbitrary bytes and staged lifecycle; mixed CAS consumes refs atomically, history/GC/quota/deletion preserve invariants. | `MD-247` | manifest v1/v2, mixed commit, stale/idempotency/failure, historical bytes, quota/GC and reconstruction tests | exact-deployment persistence after redeploy |
+| BF2-Ingress | Both advertised MCP profiles expose scoped native `stage_bundle_file`; provider transport terminates in adapter and image/PDF/ZIP bytes pass exact static gate. | `MD-248` | schemas/annotations, host/redirect/stream/MIME/filename/limit/privacy negatives and composed MCP commit | pinned client/profile native-file stage evidence; unsupported profile is not pass |
+| BF3-ReadExport | Bound reader lists/downloads exact revision, Markdown references validate, one-use grants fail closed and `MD-BUNDLE-ZIP-1` is deterministic while legacy export is unchanged. | `MD-249` | current/historical/access/failure tests, exact headers and dual export byte fixtures | image/PDF/ZIP download SHA and export on exact deployment |
+| BF4-Join | One exact candidate passes repository/security/dev gates and real Codex stage → commit → list → download/history/revoke/redeploy flow. | `MD-250` | clean `npm ci` + one `npm run check`, docs/diff, exact-SHA dev receipt | exact Sites version/deployment/tool inventory/client-plugin tuple and redacted native-file receipt; missing capability keeps nonterminal |
+
 ## Как читать матрицу
 
 Источник критериев — раздел
@@ -137,9 +153,9 @@ secret и download URL.
 | 18 | Historical selector всегда read-only и использует current access; public→private отзывает history у non-member. | `AND-62` | `U/P, C, I, S, M`: exact/as-of boundaries, Owner write denial и access transition. | `A18 + MI + CX + R` |
 | 19 | File delete сохраняет старую revision; whole-Mind delete удаляет history/linked records, инвалидирует locators и навсегда retires non-linkable handle без forensic receipt. | `AND-52` | `U/P, I, F, B`: deletion impact, injected retry/race, old-file precondition и post-delete storage/locator scan. | `A19 + W + P + R` |
 | 20 | Account delete выполняет весь cascade, отзывает identity/tokens и сохраняет foreign commits только с non-PII `deleted-principal`; UI показывает impact. | `AND-47` | `U/P, I, F, B`: fresh/stale preview, crash/retry, cross-aggregate reconciliation и PII-negative scan. | `A20 + W + P + R` |
-| 21 | Changeset принимает только UTF-8 Markdown и пишет OKF 0.2; ZIP/import и non-Markdown transport отсутствуют. | `AND-41` | `U/P, C, I`: canonical path/UTF-8/full-bundle fixtures и negative API/MCP schema checks. | `A21 + CX + R` |
+| 21 | Markdown writes remain UTF-8/OKF 0.2; accepted BundleFile is a separate producer envelope, ZIP stays opaque and ZIP/import remains absent. | `AND-41` + `MD-246`–`MD-250` | Historical Markdown evidence plus BF0–BF4 manifest/type/staging/atomic/history/UAT rows. | `A21 + BF4 + CX + R` |
 | 22 | Unknown OKF fields/types переживают read-modify-write/export; conformance errors отделены от quality warnings. | `AND-41` | `U/P, C, I`: audited OKF 0.2 round-trip corpus, byte/semantic diff и separate validation classes. | `A22 + CX + R` |
-| 23 | Reader/baseline Reader экспортирует exact allowed revision через повторно авторизованный short-lived download без service metadata. | `AND-72` | `C, I, F, M`: access change build→grant, expiry, deterministic archive inspection и no-URL logging. | `A23 + CX + P + R` |
+| 23 | Reader/baseline Reader exports exact allowed revision through reauthorized grant: legacy `MD-OKF-ZIP-1` unchanged; mixed `MD-BUNDLE-ZIP-1` preserves exact files without service identity. | `AND-72` + `MD-249`/`MD-250` | Historical export evidence plus BF3/BF4 deterministic dual-profile/access rows. | `A23 + BF4 + CX + P + R` |
 | 24 | Search/fetch фильтруются по exact space/revision; missing historical index не подмешивает HEAD. | `AND-63` | `U/P, I, F, S, M`: seeded two-space/two-revision corpus, lag/missing index и result provenance. | `A24 + MI + CX + R` |
 | 25 | Corpus не расширяет scopes и не получает control-plane tools; allowed-write prompt injection остаётся явно residual risk. | `AND-76` | `C, I, S, M`: adversarial corpus, direct tool calls, tool catalog and state/telemetry assertions. | `A25 + MI + CX + R` |
 | 26 | MCP публикует custom Mind-aware profile без company-knowledge claim или user-openable content URLs. | `AND-76` | `C, S, M`: deterministic tool/resource catalog, absent standard/control surfaces и URI checks. | `A26 + MI + CX + R` |
@@ -255,7 +271,7 @@ failure; отсутствующий receipt остаётся pending.
     { "id": "aws-runtime", "claim": "AWS, AgentCore and a separate production runtime are not the Sites MVP fallback.", "evidence": ["architecture-check"] },
     { "id": "imports", "claim": "ZIP/local import and legacy migration are absent.", "evidence": ["okf-unit", "changeset-preflight"] },
     { "id": "checkpoints", "claim": "Branches, merge, moving tags and named checkpoints are absent.", "evidence": ["mind-history"] },
-    { "id": "non-markdown-assets", "claim": "Non-Markdown Asset transport is absent.", "evidence": ["okf-unit", "changeset-preflight"] },
+    { "id": "bundle-file-expansion", "claim": "BundleFile types beyond the accepted raster/PDF/ZIP slice, extraction/OCR/preview/resumable/import are absent.", "evidence": ["okf-unit", "changeset-preflight"] },
     { "id": "personalization", "claim": "Personalized landing and website AI are not exposed.", "evidence": ["exposure-contract"] },
     { "id": "oauth-company-knowledge", "claim": "ChatGPT Web/public-directory and company-knowledge profiles are not claimed by the direct Codex UAT plugin.", "evidence": ["mcp-transport", "mcp-tools"] },
     { "id": "claude-support", "claim": "Claude Code is not a supported client without its own conformance evidence.", "evidence": ["mcp-transport"] },
@@ -339,7 +355,7 @@ notes или live evidence 0.1 как частично поддержанные:
 | AWS / AgentCore / отдельный production container | Planned post-MVP infrastructure, не fallback при провале Sites. |
 | Productized imports, ZIP/local bundle import, legacy 0.1 migration | Отложены до отдельного format, conflict, quota и security contract. |
 | Named checkpoints/moving tags/branches/merge | История 0.1 использует только immutable revision IDs и `as_of`. |
-| `Asset`/`BundleFile`/`OpaqueAsset`, non-Markdown upload/fetch | Модель, manifest, safety и transport не приняты; 0.1 создаёт только Markdown. |
+| BundleFile formats beyond PNG/JPEG/GIF/WebP/PDF/ZIP; extraction/OCR/preview/resumable/import | First bounded producer profile is accepted; expansion remains absent without new contract/evidence. |
 | Personalized landing/`PersonalContext`/website AI | Отдельный будущий trusted use case; `/me` и handle routes в 0.1 — management. |
 | ChatGPT Web registered connector, public Plugin Directory, company-knowledge profile | Direct Codex UAT plugin с OAuth не доказывает эти profiles; нужна отдельная verification/review. |
 | Claude Code support | Не release gate и не supported client без отдельного adapter/client conformance test. |
@@ -369,16 +385,17 @@ operational проверки. `Реализовано` означает толь
 | File/operation/total-changeset limits | Реализованы и покрыты boundary fixtures | `AND-65` | Invalid/oversized commands должны по-прежнему оставлять no visible objects/revision на exact candidate. |
 | Lexical ranking и pagination behavior | Реализованы в exact-revision search baseline | `AND-63` | Seeded relevance/isolation benchmark; изменение scoring/threshold считается contract change и требует новых fixtures. |
 | Deterministic export container, filename и `Content-Disposition` | Реализованы как `MD-OKF-ZIP-1` с фиксированным filename | `AND-68` | Сохранять byte-for-byte repeatability, full-bundle validation и archive-safety fixtures. |
+| Versioned BundleFile and mixed export | Contract accepted in ADR-0015; implementation/UAT not started at MD-246 cutoff | `MD-245`–`MD-250` | BF1–BF4 must prove manifest/storage/native ingress/read/download/dual export and exact-SHA UAT; docs acceptance alone is not runtime evidence. |
 | Export size/expiry и durable job cleanup | Реализованы в repository baseline; representative load/UAT recovery ещё не выводится из local tests | `AND-70` | Restart/retry/load evidence с failed/expired/cleanup state; archive никогда не передаётся в JSON-RPC. |
 | Optional MCP Resources UX в target Codex | Resources surface реализована; tools остаются обязательным fallback | `AND-77` | Pinned real-client evidence отдельно подтверждает UX; отсутствие Resources UX не может ломать required tools flow. |
 | Manual identity recovery handoff | Fail-closed product boundary принят; полный operator workflow остаётся открытым | `AND-44` | Threat review и tests, доказывающие отсутствие automatic relink/merge/access transfer. |
 | Immediate replicated/index deletion и whole-Mind erasure | Restartable repository lifecycle и failure-injection реализованы; physical UAT erasure требует live proof | `AND-52` | Retry и post-delete object/index/job scan на exact deployment; forensic receipt по принятой MVP policy отсутствует. |
 | Account-wide cascade и foreign-commit tombstones | Repository lifecycle и PII-negative fixtures реализованы; расширенное live evidence остаётся release gate | `AND-47` | Cross-aggregate reconciliation и negative PII scan на exact candidate. |
 
-ChatGPT Web/public-directory/company-knowledge, personalization, assets,
-imports, checkpoints, AWS и support других clients не являются open
-implementation decisions 0.1: это denylist, которому понадобится новый
-explicit product/specification scope.
+ChatGPT Web/public-directory/company-knowledge, personalization, BundleFile
+formats/processing beyond accepted raster/PDF/ZIP, imports, checkpoints, AWS и
+support других clients не являются open implementation decisions 0.1: это
+denylist, которому понадобится новый explicit product/specification scope.
 
 ## Правило обновления
 

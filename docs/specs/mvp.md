@@ -10,6 +10,10 @@ blocking synthetic multi-principal automation реализована; OAuth/pack
 automation также реализована, а fresh external-account flow остаётся
 informational canary, не release gate.
 
+Release 0.1 теперь нормативно расширен accepted BundleFile slice по ADR-0015.
+Его implementation/UAT evidence остаются `not_started` до MD-247–MD-250 и не
+расширяют claims уже развёрнутого Markdown-only candidate.
+
 ## Цель
 
 Доказать на prod-like UAT OpenAI Site end-to-end сценарий: authenticated
@@ -100,9 +104,15 @@ informational canary, не release gate.
 
 ### Canonical content и export
 
-- Первый прототип принимает через changesets только UTF-8 Markdown paths и
-  создаёт OKF 0.2; ZIP/local bundle import и upload/fetch producer-defined
-  non-Markdown files в scope не входят.
+- Release 0.1 принимает UTF-8 Markdown/OKF 0.2 и producer-defined opaque
+  `BundleFile` для allowlisted raster/PDF/ZIP. ZIP остаётся attachment и не
+  включает ZIP/local bundle import, extraction или migration.
+- Unified revision manifest v2 фиксирует path, `kind: markdown | opaque`,
+  SHA-256, detected media type и byte size. Existing committed manifest v1
+  остаётся immutable/readable как Markdown-only.
+- `stage_bundle_file` quarantines and verifies exact bytes under current
+  credential/write binding; только atomic `commit_changeset` связывает ref с
+  canonical path и одновременно может обновить Markdown link.
 - Проверка OKF 0.2 conformance отдельно от quality warnings.
 - Неизвестные OKF types/fields сохраняются при read-modify-write и export.
 - Legacy 0.1 import/migration отложен и в будущем потребует explicit policy без
@@ -131,6 +141,12 @@ informational canary, не release gate.
   newline/encoding bytes сохраняются. Для готового archive считаются SHA-256
   всего ZIP и точный byte size. Одна exact revision при одной версии archive
   contract всегда даёт одинаковые bytes, SHA-256 и size.
+- Mixed revision требует explicit `MD-BUNDLE-ZIP-1`; absent/legacy profile
+  возвращает `export_profile_required`, а не silently drops opaque files.
+  Новый deterministic archive содержит exact Markdown/BundleFile paths и
+  `.mind-diary/manifest.json` producer integrity metadata, но не service IDs,
+  ACL, staging, audit или download grants. Existing `MD-OKF-ZIP-1` bytes and
+  fixtures remain unchanged.
 - Full export доступен любому Reader/baseline Reader с `content:read`, фиксирует
   exact revision и выдаётся через short-lived download URL с повторной
   authorization; отдельные rate/size limits не являются новой ACL.
@@ -154,6 +170,9 @@ informational canary, не release gate.
 - Lexical `search` по title, description, tags, headings и body внутри явно
   выбранного Mind/revision.
 - `fetch` по opaque ID, bound к `space_id + revision_id + path`.
+- `list_bundle_files` возвращает exact-revision metadata without bytes/URL;
+  `get_bundle_file_download` creates short-lived one-use grant and reauthorizes
+  again before exact bytes. Existing fetch/Resources remain Markdown-only.
 - История разрешается по exact `revision_id` или UTC `as_of`; `as_of` выбирает
   последнюю server-committed revision не позже указанного времени. Любой
   non-HEAD selector фиксирует exact revision и read-only. Named checkpoints не
@@ -182,8 +201,10 @@ commit_changeset(
 )
 ```
 
-- Operations включают create/replace/delete file, CAS replace `index.md` и
-  semantic `add_log_entry` для newest-first/date-grouped OKF `log.md`.
+- Operations включают create/replace/delete Markdown,
+  create/replace/delete BundleFile by verified staged ref, CAS replace
+  `index.md` и semantic `add_log_entry` для newest-first/date-grouped OKF
+  `log.md`.
 - Concept + index + log обновляются одним multi-file changeset.
 - Успех создаёт ровно одну immutable revision, продвигает HEAD и пишет audit.
 - Stale `expected_revision` возвращает `409 Conflict` и current revision без
@@ -496,15 +517,24 @@ fetch(id)
 list_revisions(mind, before?, limit?)
 get_revision(mind, revision_id)
 validate_mind(mind, revision_selector?)
+stage_bundle_file(mind, write_binding_id, native_file, idempotency_key, expected metadata?)
+list_bundle_files(mind, revision_selector?, cursor?, limit?)
+get_bundle_file_download(mind, revision_selector?, path)
 commit_changeset(mind, write_binding_id, expected_revision, idempotency_key, operations[])
 capture_knowledge(mind, write_binding_id, expected_binding_version, expected_revision, idempotency_key, routine payload, source refs[])
-start_export(mind, revision_selector?, idempotency_key)
+start_export(mind, revision_selector?, profile?, idempotency_key)
 get_export_status(job_id)
 ```
 
 Сигнатуры выше задают product surface. Exact REST/MCP wire schemas, result
 envelopes, pagination, errors, tool annotations и Resources contract находятся
 в [API specification](api.md).
+
+OpenAI native `file` metadata/download URL terminates in the MCP adapter and is
+advertised via `_meta["openai/fileParams"]`; it is not provider-neutral domain
+input. Pinned modern/compatibility clients must independently prove this
+extension. Unsupported client returns `native_file_input_unsupported` without
+local-path/base64 fallback.
 
 Это custom Mind-aware tool profile для Codex и отдельно проверяемых clients.
 Первый прототип не
@@ -608,8 +638,9 @@ network, которого Sites пока не обещает. Если Streamabl
     memberships/pending invitations в остальных Minds, identity/profile и
     отзывает tokens; commits в Minds других Owners остаются с non-PII
     `deleted-principal` tombstone. UI до действия перечисляет affected Minds.
-21. Changeset принимает только UTF-8 Markdown и создаёт OKF 0.2; ZIP/local
-    bundle import и transport producer-defined non-Markdown files отсутствуют.
+21. Changeset принимает UTF-8 Markdown/OKF 0.2 и только allowlisted
+    producer-defined BundleFile through verified staged refs; ZIP остаётся
+    opaque, а ZIP/local bundle import отсутствует.
 22. Unknown OKF fields/types сохраняются при read-modify-write и deterministic
     export; conformance errors отделены от quality warnings.
 23. Reader и baseline Reader могут экспортировать exact разрешённую revision;
@@ -619,6 +650,8 @@ network, которого Sites пока не обещает. Если Streamabl
     expiry, fail closed после revoke/private switch и не раскрывают URL/secret
     через safe status, logs или durable job metadata. Download возвращает
     `no-store`/`nosniff` headers и exact archive bytes.
+    Mixed revision отдельно требует deterministic `MD-BUNDLE-ZIP-1`; legacy
+    profile не меняется и не может silently omit BundleFile.
 24. Search/fetch ограничены exact space/revision. Missing historical index не
     подмешивает HEAD.
 25. Target content не расширяет server scopes и не получает control-plane
@@ -638,6 +671,25 @@ network, которого Sites пока не обещает. Если Streamabl
     version/deployment и live URL; на нём проходят authenticated web/control и
     required MCP client flows. Local, preview или UI-only deployment не
     засчитывается.
+
+### BundleFile extension acceptance
+
+- `BF1`: manifest v1 read compatibility и canonical v2 `markdown | opaque`
+  проходят exact digest/size/path fixtures без rewriting committed revisions.
+- `BF2`: native image/PDF/ZIP stage проходит MIME/extension sniff, exact limits,
+  quarantine, idempotency и binding ownership; foreign/expired/changed/oversize
+  cases do not create canonical revision.
+- `BF3`: mixed Markdown link + BundleFile changeset creates one HEAD or nothing;
+  stale CAS does not consume ref, history preserves replaced/deleted bytes.
+- `BF4`: list/download returns bounded metadata and one-use exact bytes with
+  current-access reauthorization; revoke/private/delete/expiry fail closed.
+- `BF5`: references and dual deterministic export validate exact bytes;
+  `MD-OKF-ZIP-1` stays unchanged and `MD-BUNDLE-ZIP-1` includes only canonical
+  files plus producer manifest.
+- `BF6`: exact-SHA dev/UAT evidence proves image + PDF + ZIP through pinned
+  native-file client/profile, persistence after redeploy and SHA-256 read-back.
+  Missing hosted capability keeps feature nonterminal.
+
 ## Compatibility gate для Sites и MCP
 
 Sites UAT MVP считается завершённым только после live-проверки:
@@ -714,9 +766,10 @@ Memory. Если index ещё не ready, canonical fetch остаётся до�
 
 Assisted conversion существующего Markdown остаётся concierge workflow:
 явно выбираются один target Mind и bounded set UTF-8 Markdown sources, затем
-используются те же preview/CAS/validation/search/fetch операции. Этот путь не
-добавляет ZIP/import/upload/crawl API, assets, legacy migration либо cross-Mind
-merge. Canonical corpus не помещается в prompt целиком; клиент fetch-ит только
+используются те же preview/CAS/validation/search/fetch операции. Этот Markdown
+conversion path не превращается в ZIP/bundle import, asset extraction, crawl,
+legacy migration либо cross-Mind merge; explicit BundleFile staging остаётся
+отдельным file-by-file workflow. Canonical corpus не помещается в prompt целиком; клиент fetch-ит только
 нужные exact-revision files. Token, Sites credential, email, private query и
 download URL не попадают в prompt, log или evidence.
 
@@ -728,7 +781,7 @@ time; principal identifier используется только для in-runti
 closed telemetry schema. Restart может начать новое observation window; это
 pilot measurement, а не durable user analytics state.
 
-## Не входит в первый прототип
+## Не входит в расширенный Release 0.1
 
 - anonymous access и anonymous KnowledgeSite publication;
 - revision-bound personalized content landing и PersonalContext generation;
@@ -738,8 +791,8 @@ pilot measurement, а не durable user analytics state.
 - branches, moving tags, named checkpoints, automatic semantic merge и
   historical writes;
 - separate drafts, diff approval и commit approval artifacts;
-- ZIP/local bundle import, upload/fetch producer-defined non-Markdown files и
-  legacy 0.1 migration;
+- ZIP/local bundle import, arbitrary file types, extraction, preview/OCR,
+  antivirus cleanliness claim, resumable upload и legacy 0.1 migration;
 - OpenAI company-knowledge `search`/`fetch` compatibility profile;
 - legal retention, recovery, soft delete и production privacy erasure model;
 - billing, organization administration и server-paid inference;
@@ -749,12 +802,12 @@ pilot measurement, а не durable user analytics state.
 - raw browser content viewer/editor, autonomous external actions и outbound
   push.
 
-Этот список ограничивает только первый prototype release. Product roadmap явно
+Этот список ограничивает только Release 0.1. Product roadmap явно
 сохраняет imports и named checkpoints как запланированные post-MVP функции,
 website AI — как отдельную фазу расширения аудитории, а AWS — как основную
-post-MVP infrastructure direction. Модель producer-defined non-Markdown
-`BundleFile`/`OpaqueAsset` остаётся открытым решением; эти имена не являются
-нормативными OKF 0.2 entities. См. [roadmap](../roadmap.md).
+post-MVP infrastructure direction. Bounded producer-defined `BundleFile`
+profile принят сервисом, но не становится нормативной OKF 0.2 entity; broader
+formats/capacity/processing остаются открыты. См. [roadmap](../roadmap.md).
 
 ## Измерения перед следующими решениями
 

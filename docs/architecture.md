@@ -12,6 +12,10 @@ evidence теперь дают отдельные synthetic multi-principal и a
 OAuth/package gates по ADR-0012; оба harness реализованы. Fresh external
 Codex/Desktop OAuth UI остаётся informational canary, а не blocking evidence.
 
+ADR-0015 принимает Release 0.1 architecture для versioned `BundleFile`, но её
+code/Sites implementation и native-file UAT gate ещё не являются свойством
+описанного выше deployed Markdown-only candidate.
+
 ## Драйверы и ограничения
 
 Архитектура должна поддержать одновременно:
@@ -20,7 +24,8 @@ Codex/Desktop OAuth UI остаётся informational canary, а не blocking e
 - ordinary Minds с single Owner, invitations, roles и visibility;
 - user-scoped MCP для Codex без загрузки всего corpus; другие clients, включая
   Claude Code, требуют отдельного adapter/client conformance evidence;
-- individual-file UTF-8 Markdown access и переносимый deterministic export;
+- individual-file UTF-8 Markdown и bounded opaque BundleFile access с
+  versioned deterministic exports;
 - immediate multi-file commits с immutable history и optimistic concurrency;
 - public/unlisted live-HEAD reads только для authenticated users;
 - Sites-only MVP UAT и post-MVP AWS portability без AWS SDK в domain
@@ -78,9 +83,10 @@ KnowledgeSpace --HEAD/history-------> SpaceRevision
 SpaceRevision --materialize---------> OKFBundle
 ```
 
-`KnowledgeSpace` — service aggregate и access boundary. `OKFBundle` export
-содержит только canonical Markdown files одной revision; account, handle, ACL,
-invitations, tokens, idempotency results, audit и indexes — service metadata.
+`KnowledgeSpace` — service aggregate и access boundary. Markdown остаётся OKF
+projection, а accepted manifest v2 связывает с той же revision opaque
+`BundleFile` exact bytes. Account, handle, ACL, invitations, tokens, staging,
+download grants, idempotency results, audit и indexes — service metadata.
 
 Personal Mind использует тот же content/revision schema, но application commands
 обеспечивают его sole-owner/private/non-shareable invariants и route `/me`.
@@ -98,9 +104,10 @@ frontmatter, provenance, trust/lifecycle fields и validation. Он:
 - разделяет conformance errors и quality warnings;
 - не знает об MCP, HTTP, auth, Sites, AWS SDK, SQL или search engine.
 
-ZIP/local bundle import, transport producer-defined non-Markdown files и legacy
-0.1 migration не входят в этот slice. Будущий legacy reader обязан получить
-explicit migration policy
+ZIP/local bundle import и legacy 0.1 migration не входят в этот slice.
+Producer-defined raster/PDF/ZIP transport принят отдельно в
+[BundleFile specification](specs/bundle-files.md); ZIP остаётся opaque и не
+является import. Будущий legacy reader обязан получить explicit migration policy
 и не может silently менять version/status semantics.
 
 ### 2. Application core
@@ -114,12 +121,13 @@ ports:
 - visibility и public catalog;
 - token issue/revoke/authenticate;
 - export/validate revision;
-- browse/search/fetch/history;
+- browse/search/fetch/history и list/download exact-revision BundleFile;
+- bounded verified file staging pinned к exact write binding;
 - atomic `commit_changeset`;
 - future-proposal bounded PersonalContext/SpaceLanding;
 - outbox/index jobs и audit.
 
-Core первого прототипа зависит от `MetadataStore`, `ObjectStore`, `SearchIndex`,
+Core Release 0.1 зависит от `MetadataStore`, arbitrary-byte `ObjectStore`, `SearchIndex`,
 `Authorizer`, `TokenHasher`, `AuditSink` и `Clock`, но не от concrete adapters.
 Если post-prototype personalization будет принята, она подключит отдельный
 узкий `PersonalContextProvider` port.
@@ -152,8 +160,11 @@ composition и automated import graph checks реализованы; live Sites 
   один раз; initial и final current-state/TOCTOU authorization остаются внутри
   соответствующего application use case и не дублируются отдельным protocol
   preflight.
+  Native OpenAI file object для `stage_bundle_file` разрешается только здесь:
+  adapter bounded-streams allowlisted temporary HTTPS source и передаёт core
+  verified bytes/metadata, никогда provider ID/URL или local path.
 - **Background adapter** выполняет идемпотентную индексацию, outbox delivery и
-  safe garbage collection incomplete/unreachable objects.
+  safe bounded garbage collection incomplete/unreachable/staged objects.
 
 Exact `/mcp` не принадлежит product router: live Sites probes показывают, что
 этот path перехватывается platform dispatcher до deployed Worker, тогда как
@@ -173,8 +184,8 @@ tool calls после redeploy.
   `dev-ready/v1` может использовать HTTP только внутри этого local runtime;
   hosted UAT/production origin остаётся canonical HTTPS, а Origin/CSRF checks в
   обоих случаях сравнивают exact origin без wildcard или forwarded-host trust.
-- Sites MVP UAT: D1 metadata/search/audit и R2 canonical
-  objects/export. Bindings и сохранение account/Personal Mind после redeploy
+- Sites MVP UAT: D1 metadata/search/audit/staging records и R2 arbitrary-byte
+  canonical objects/export. Bindings и сохранение account/Personal Mind после redeploy
   проверены live; quota, recovery и большой export требуют отдельного
   operational evidence по мере нагрузки.
 - Post-MVP AWS adapters: S3 canonical objects, DynamoDB transactional
@@ -410,14 +421,17 @@ KnowledgeSpace
 ├── SpaceRevision
 │   ├── revision_id + monotonic revision_number
 │   ├── parent_revision_id
-│   ├── manifest: path, SHA-256, media_type, size
+│   ├── manifest v1/v2: path, kind, SHA-256, media_type, size
 │   ├── exact UTF-8 OKF Markdown files
+│   ├── exact opaque BundleFile bytes
 │   └── committed_by, committed_at UTC, summary
 └── derived index state per revision
 ```
 
-Manifest — service envelope, не нормативный OKF file. Export материализует
-только выбранное дерево. Object-store version IDs не заменяют domain revision.
+Manifest — service envelope, не нормативный OKF file. Committed v1 остаётся
+Markdown-only; new v2 discriminates `markdown | opaque`. Export materializes
+только выбранное дерево и exact profile. Object-store version IDs не заменяют
+domain revision.
 
 History resolver принимает HEAD, exact ID или UTC `as_of`. `as_of` выбирает
 revision с максимальным number и `committed_at <= as_of`, без fallback на HEAD.
@@ -436,12 +450,16 @@ sequenceDiagram
     participant D as Metadata store
     participant W as Index worker
 
+    A->>M: stage_bundle_file(mind, write binding, native file, key)
+    M->>C: bounded verified bytes + canonical metadata
+    C->>O: quarantined then verified staged object
+    C-->>A: opaque staged_file_ref
     A->>M: commit_changeset(mind, write_binding_id, expected, key, operations)
     M->>C: authenticated ActorContext + command
     C->>D: resolve exact active binding, Mind and current role/token state
-    C->>C: normalize and validate OKF operations
+    C->>C: validate OKF + producer file operations/quotas
     C->>O: put content-addressed immutable objects
-    C->>D: conditional HEAD CAS + revision + audit/outbox
+    C->>D: conditional HEAD CAS + revision + staged consumption + audit/outbox
     alt expected HEAD matches
         D-->>C: committed revision_id
         C-->>A: success + new HEAD
@@ -457,7 +475,9 @@ sequenceDiagram
 если adapter/storage допускает race. Objects, записанные до неудачного HEAD CAS,
 недостижимы и удаляются только bounded garbage collection после safety window.
 
-Multi-file changeset all-or-nothing. `index.md` обновляется explicit replace
+Multi-file changeset all-or-nothing для Markdown и BundleFile. Staged refs
+pinned к exact binding and consumed only inside successful transaction.
+`index.md` обновляется explicit replace
 under HEAD CAS; automatic merge отложен. `add_log_entry` парсит canonical
 `log.md`, вставляет событие в newest-first/date-grouped позицию и снова
 валидирует файл. Idempotency result предотвращает duplicate revision/log entry.
@@ -475,10 +495,12 @@ payload с тем же key — `409 Idempotency Conflict`.
 3. Application требует active read binding либо exact write binding.
 4. Authorizer проверяет current membership или visibility grant.
 5. Revision selector разрешается в exact `revision_id`.
-6. Browse/search применяет `space_id + revision_id` filter до выдачи результатов.
+6. Browse/search/list BundleFile применяет `space_id + revision_id` filter до выдачи результатов.
 7. `fetch` перечитывает canonical object той же revision и возвращает
    provenance/freshness.
-8. Ответ ограничивается budget; truncation обозначается явно.
+8. BundleFile bytes выдаются только one-use download grant с повторной current
+   authorization; `fetch`/Resources остаются text-only.
+9. Ответ ограничивается budget; truncation обозначается явно.
 
 Index для каждой revision derived и rebuildable. При отсутствии/lag historical
 index browse/fetch остаются доступны, а search ждёт rebuild или честно сообщает
@@ -495,6 +517,8 @@ resolve_mind(exact unlisted handle) -> one authorized descriptor
 set_read_mind_binding -> attach/detach 0..N readable targets
 set_write_mind_binding -> atomically select 0..1 writable target
 capture_knowledge -> add one routine Memory only through enabled pinned policy
+stage_bundle_file -> verified opaque ref pinned to exact write generation
+list_bundle_files/get_bundle_file_download -> exact revision metadata/grant
 content_tool(mind, revision?, ...) -> exactly one bound space_id
 ```
 
@@ -665,11 +689,13 @@ audit log.
 - ACL разрешается до object/index read.
 - Concept/source text не расширяет server tools или scopes; модель всё ещё может
   ошибочно интерпретировать его как инструкцию в пределах разрешённых tools.
-- Changeset принимает только canonical relative Markdown paths и valid UTF-8,
-  ограничивает размер/число operations и отклоняет reserved-path misuse.
+- Changeset принимает canonical relative Markdown paths/valid UTF-8 и bounded
+  BundleFile operations только через verified staged refs; exact limits,
+  allowlist и reserved-path rules fail closed.
 - Web renderer не исполняет embedded HTML/script без isolation/sanitization.
-- Full export передаётся через short-lived download URL с повторной проверкой
-  доступа; upload intent в первом прототипе отсутствует.
+- Export и BundleFile bytes передаются через short-lived grants с повторной
+  проверкой доступа. Native upload intent существует только как quarantined
+  adapter transport; provider ID/URL не входит в domain или durable state.
 
 ## Риски и открытые вопросы
 
@@ -687,6 +713,8 @@ audit log.
 - Когда сложности конфликтов оправдают structured index merge вместо current
   HEAD CAS/retry?
 - Какие personal categories и consent model допустимы для personalization?
+- Достаточны ли first-slice BundleFile quotas/type allowlist для pilot и какой
+  production malware/CDR profile нужен до расширения formats?
 
 ## Внешние основания
 

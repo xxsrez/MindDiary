@@ -12,6 +12,10 @@ multi-principal и OAuth/package automation принята ADR-0012, но её h
 implementation теперь завершена. Machine-readable OpenAPI и MCP JSON Schemas
 проверяются на соответствие этому документу и реализации.
 
+ADR-0015 и [BundleFile specification](bundle-files.md) добавляют accepted
+Release 0.1 wire contract; его implementation/live UAT status остаётся
+`not_started` до MD-247–MD-250 и не расширяет deployed Markdown-only claims.
+
 ## Назначение и граница
 
 Mind Diary имеет четыре разные API-границы:
@@ -63,8 +67,9 @@ surface первого прототипа — authenticated MCP. Если adapte
 - роли `reader | editor | admin | owner` и scopes
   `content:read | content:write`;
 - отсутствие control-plane operations в content MCP;
-- UTF-8 Markdown и OKF 0.2 в первом прототипе;
-- отсутствие ZIP import и non-Markdown file transport;
+- UTF-8 Markdown/OKF 0.2 plus bounded producer-defined raster/PDF/ZIP
+  BundleFile; BundleFile не является OKF entity;
+- отсутствие ZIP import/extraction и arbitrary-file transport;
 - отсутствие company-knowledge compatibility claim.
 
 Предлагаемые для верификации wire-level решения:
@@ -90,9 +95,12 @@ surface первого прототипа — authenticated MCP. Если adapte
 - IDs — opaque case-sensitive strings. Клиент не парсит prefix или payload.
 - Content paths используют `/` независимо от OS и всегда относительны корню
   bundle.
-- Canonical content path заканчивается на `.md`, не начинается с `/`, не
+- Canonical Markdown path заканчивается на `.md`, не начинается с `/`, не
   содержит empty segment, `.`/`..`, backslash, control characters или
   percent-encoded separator.
+- Canonical BundleFile path already uses Unicode NFC, has at most 1024 UTF-8
+  bytes/255 per segment, does not end in `.md`, does not begin `.mind-diary/`
+  and follows the remaining relative-path prohibitions above.
 - Неизвестные JSON fields в request отклоняются, если schema не говорит иное.
   Это не относится к неизвестным OKF frontmatter fields: codec обязан их
   сохранять.
@@ -111,6 +119,7 @@ surface первого прототипа — authenticated MCP. Если adapte
 | `binding_owner_id` | Server-derived OAuth-grant/personal-token owner; first-party UI может передать его только как opaque locator собственного credential, после чего server заново проверяет ownership/state/scopes. Он никогда не является authority claim. |
 | `read_binding_id` | Immutable service record одного attached read target. |
 | `write_binding_id` | Immutable active generation singleton write target. |
+| `staged_file_ref` | Opaque verified staged file pinned to binding owner + Mind + exact write generation; expires and is not a content locator. |
 | `request_id` | Correlation ID безопасного request log. |
 
 Server повторно проверяет actor, scope и текущий доступ при использовании
@@ -207,7 +216,7 @@ List operations используют:
 ### Idempotency и concurrency
 
 - REST mutation передаёт `Idempotency-Key` header.
-- MCP `commit_changeset`, `capture_knowledge` и `start_export` передают
+- MCP `stage_bundle_file`, `commit_changeset`, `capture_knowledge` и `start_export` передают
   `idempotency_key` как
   explicit tool argument.
 - Key namespaced server-side по actor, operation и target aggregate и связан с
@@ -268,6 +277,25 @@ Application-layer error имеет стабильный machine code:
 | `invalid_path` | Path нарушает canonical path policy. |
 | `file_exists` | `create_file` направлен в существующий path. |
 | `file_not_found` | Replace/delete не находит path в expected revision. |
+| `native_file_input_unsupported` | Pinned client/profile cannot supply the required native file parameter. |
+| `bundle_file_size_limit_exceeded` | One opaque file exceeds 64 MiB. |
+| `bundle_file_operation_limit_exceeded` | More than 20 BundleFile operations. |
+| `bundle_file_changeset_size_limit_exceeded` | Staged bytes referenced by one changeset exceed 128 MiB. |
+| `bundle_file_quota_exceeded` | Resulting 1 GiB revision or 2 GiB retained Space quota would be exceeded. |
+| `staging_quota_exceeded` | Binding owner has more than 256 MiB outstanding staged bytes. |
+| `unsupported_bundle_file_type` | Detected type is outside PNG/JPEG/GIF/WebP/PDF/ZIP allowlist. |
+| `bundle_file_media_mismatch` | Declared MIME/extension disagrees with detected bytes. |
+| `staged_file_unavailable` | Ref is missing/foreign without revealing ownership/existence. |
+| `staged_file_expired` | Own verified ref passed its 60-minute TTL. |
+| `staged_file_consumed` | Own ref was already bound by another successful commit. |
+| `staged_file_rejected` | Static quarantine gate rejected own ref. |
+| `staged_file_binding_stale` | Ref is pinned to an invalidated write generation. |
+| `bundle_file_exists` | Create targets an existing exact path. |
+| `bundle_file_not_found` | Replace/delete/read target is absent without private leakage. |
+| `bundle_file_digest_mismatch` | Opaque replace/delete precondition differs. |
+| `bundle_file_integrity_failure` | Manifest digest/size and stored exact bytes differ. |
+| `bundle_file_download_expired` | One-use file download grant expired/was consumed. |
+| `export_profile_required` | Mixed revision needs explicit `MD-BUNDLE-ZIP-1`; legacy export cannot omit files. |
 | `okf_validation_failed` | Resulting changeset либо exact export revision не образует valid OKF 0.2 bundle. |
 | `revision_integrity_failure` | Exact committed manifest/object bytes не прошли integrity materialization. |
 | `archive_limit_exceeded` | Exact bundle превышает classic-ZIP limits `MD-OKF-ZIP-1`; ZIP64 fallback отсутствует. |
@@ -854,7 +882,7 @@ grant возвращают generic OAuth error без private principal/grant de
 
 Protected-resource metadata URL также публикуется в MCP
 `WWW-Authenticate` challenge. Read/export tools объявляют OAuth2
-`content:read`; `commit_changeset` и `capture_knowledge` объявляют
+`content:read`; `stage_bundle_file`, `commit_changeset` и `capture_knowledge` объявляют
 `content:write`. Missing,
 malformed, expired и revoked bearer получают `401`. Valid read-only bearer при
 вызове content write получает `insufficient_scope` и
@@ -915,6 +943,7 @@ fetch_entry
 list_revisions
 get_revision
 validate_revision
+list_bundle_files
 get_export_status
 ```
 
@@ -941,6 +970,7 @@ issue_mcp_token
 revoke_mcp_token
 set_read_mind_binding
 set_write_mind_binding
+stage_bundle_file
 commit_changeset
 start_export
 ```
@@ -951,6 +981,7 @@ start_export
 rebuild_revision_index
 complete_export
 collect_unreachable_objects
+collect_expired_staged_files
 deliver_audit_outbox
 expire_invitations
 expire_export_grants
@@ -1215,7 +1246,7 @@ Compatibility profile в `initialize` публикует только:
   обновляется, а смена HEAD создаёт новые URIs.
 - Prompts, sampling, elicitation, roots и skills extension не требуются MVP.
 
-Tools с write scope могут отсутствовать из `tools/list` для read-only token.
+Tools с write scope, включая native upload, могут отсутствовать из `tools/list` для read-only token.
 Server всё равно проверяет scope при прямом `tools/call`.
 
 ### Tool definitions и result envelope
@@ -1290,6 +1321,9 @@ transport metadata (`resultType`, `ttlMs`, `cacheScope`) из внешнего r
 | `list_revisions` | read | true | false | false |
 | `get_revision` | read | true | false | false |
 | `validate_mind` | read | true | false | false |
+| `stage_bundle_file` | write | false | false | true |
+| `list_bundle_files` | read | true | false | false |
+| `get_bundle_file_download` | read | false | false | true |
 | `commit_changeset` | write | false | true | false |
 | `capture_knowledge` | write | false | false | false |
 | `start_export` | read | false | false | false |
@@ -1301,6 +1335,11 @@ transport metadata (`resultType`, `ttlMs`, `cacheScope`) из внешнего r
 смысле tool annotation: server разрешает исключительно additive create + log и
 никогда replace/delete. `start_export` создаёт job, поэтому также не read-only,
 хотя canonical content не меняет.
+
+`stage_bundle_file` performs a bounded adapter download and writes quarantined
+staging state, therefore it is open-world but non-destructive. Download tool
+creates one-use bearer grant and is likewise non-read-only/open-world; it never
+places bytes in the tool result.
 
 ## Common MCP schemas
 
@@ -1367,6 +1406,42 @@ bound к тому же `space_id + revision_id + path + range`; HEAD не под
 
 `class` — `conformance | quality`; quality warning сам по себе не делает
 `valid: false`.
+
+### `BundleFileDescriptor`
+
+```json
+{
+  "path": "attachments/map.png",
+  "kind": "opaque",
+  "media_type": "image/png",
+  "size": 4567,
+  "sha256": "sha256:...",
+  "revision_id": "rev_opaque",
+  "inline_eligible": true,
+  "reference_status": "referenced"
+}
+```
+
+`reference_status` is `referenced | unreferenced | invalid_reference`; detailed
+diagnostics use the normal validation issue envelope. Descriptor contains no
+object key, staged/provider ID or download URL.
+
+### `StagedBundleFileDescriptor`
+
+```json
+{
+  "staged_file_ref": "staged_opaque",
+  "display_filename": "map.png",
+  "media_type": "image/png",
+  "size": 4567,
+  "sha256": "sha256:...",
+  "state": "verified",
+  "expires_at": "2026-08-22T16:00:00Z"
+}
+```
+
+Only own current-binding verified state is returned. Provider `file_id`,
+temporary URL, local path and bytes are absent.
 
 ## MCP tools
 
@@ -1687,6 +1762,95 @@ Output:
 Validator проверяет весь выбранный bundle, а не только `wiki/` или найденные
 entries.
 
+### `stage_bundle_file`
+
+Input:
+
+```json
+{
+  "mind": "research-notes",
+  "write_binding_id": "wbind_opaque",
+  "file": {
+    "file_id": "provider-opaque",
+    "download_url": "https://temporary-openai-host/...",
+    "file_name": "map.png",
+    "mime_type": "image/png"
+  },
+  "idempotency_key": "01J...",
+  "display_filename": "map.png",
+  "expected_size": 4567,
+  "expected_sha256": "sha256:..."
+}
+```
+
+Tool definition advertises `_meta["openai/fileParams"] = ["file"]`.
+`file_id`/`download_url` are current OpenAI adapter transport inputs and never
+cross the portable application port or durable record. Local path, base64 and
+arbitrary remote URL are invalid. The adapter allows bounded HTTPS download and
+redirects only from explicit OpenAI host allowlist, omits credentials and
+aborts above 67,108,864 bytes.
+
+Server requires exact active write binding/current write ACL, streams SHA-256,
+detects PNG/JPEG/GIF/WebP/PDF/ZIP magic, checks declared MIME/extension and
+applies the 60-minute/quota contract. Everything else is
+`unsupported_bundle_file_type`. Success:
+
+```json
+{ "staged_file": { "staged_file_ref": "staged_opaque", "state": "verified" } }
+```
+
+Same stage key/exact bytes/metadata returns the same ref; changed payload is
+`idempotency_conflict`. Ref is pinned to binding owner + Space + exact write
+generation. It is not reader-visible and no canonical revision is created.
+
+### `list_bundle_files`
+
+Input is `mind`, optional `revision_selector`, `cursor` and `limit`. It requires
+current read/write binding and `content:read`. Output:
+
+```json
+{
+  "mind": {},
+  "resolved_revision": {},
+  "files": [],
+  "diagnostics": [],
+  "next_cursor": null
+}
+```
+
+`files` contains `BundleFileDescriptor`; no bytes, URL or staged/provider ID.
+Ordering follows canonical manifest path and stays exact-revision.
+
+### `get_bundle_file_download`
+
+Input:
+
+```json
+{
+  "mind": "research-notes",
+  "revision_selector": { "kind": "revision", "revision_id": "rev_opaque" },
+  "path": "attachments/map.png"
+}
+```
+
+After current binding/token/scope/ACL/visibility authorization it returns a new
+one-use grant, default 5 minutes and maximum 10:
+
+```json
+{
+  "file": {},
+  "download_url": "https://current-host/api/bundle-download/opaque-secret",
+  "download_expires_at": "2026-08-22T16:05:00Z",
+  "disposition": "inline"
+}
+```
+
+Grant URL/secret is consume-on-response and absent from durable state/audit/
+logs. Download repeats current access and object integrity checks immediately
+before bytes. Raster may be inline; PDF/ZIP are attachment. Response uses exact
+`Content-Type`/`Content-Length`/digest ETag, safe RFC 5987 filename,
+`no-store`, `nosniff`, `no-referrer` and same-origin resource policy.
+
 ### `commit_changeset`
 
 Input:
@@ -1736,6 +1900,31 @@ Input:
 
 ```json
 {
+  "type": "create_bundle_file",
+  "path": "attachments/map.png",
+  "staged_file_ref": "staged_opaque"
+}
+```
+
+```json
+{
+  "type": "replace_bundle_file",
+  "path": "attachments/map.png",
+  "staged_file_ref": "staged_opaque",
+  "expected_sha256": "sha256:..."
+}
+```
+
+```json
+{
+  "type": "delete_bundle_file",
+  "path": "attachments/map.png",
+  "expected_sha256": "sha256:..."
+}
+```
+
+```json
+{
   "type": "replace_index",
   "path": "index.md",
   "text": "# Index\n\n* [API](concepts/api.md) - API contract.\n",
@@ -1761,14 +1950,19 @@ Rules:
   вставляет newest-first; client не передаёт произвольный heading date;
 - `category` — короткий prose convention, не enum OKF;
 - duplicate/conflicting paths внутри changeset отклоняются;
+- BundleFile create/replace accepts only own unexpired verified ref pinned to
+  exact current write generation; successful HEAD transaction consumes it,
+  while stale/failed transaction leaves it reusable until expiry;
+- no more than 20 BundleFile operations/128 MiB staged bytes; resulting
+  revision stays within 1 GiB and retained Space within 2 GiB;
 - `expected_sha256` optional; если он передан, file в expected HEAD обязан
   совпасть. Без него остаётся обязательная защита всего changeset через
   `expected_revision`;
 - MCP schema и runtime используют одно canonical поле `expected_sha256` также
   для `replace_index`: correct digest проходит, mismatch возвращает
   `file_digest_mismatch`, malformed digest — `invalid_operation`;
-- все resulting files обязаны быть valid UTF-8 Markdown и bundle обязан пройти
-  OKF conformance;
+- all resulting Markdown files are valid UTF-8/OKF; opaque entries pass the
+  producer path/type/reference/integrity contract;
 - concept + index + log применяются all-or-nothing;
 - успех создаёт ровно одну revision и одну HEAD transition.
 
@@ -1813,6 +2007,7 @@ Input:
 {
   "mind": "research-notes",
   "revision_selector": { "kind": "head" },
+  "profile": "MD-BUNDLE-ZIP-1",
   "idempotency_key": "01J..."
 }
 ```
@@ -1830,13 +2025,14 @@ Output:
 }
 ```
 
-Start фиксирует exact revision. Export deterministic, содержит только canonical
-OKF tree и не включает ACL, memberships, service manifest, audit или tokens.
-Exact bytes собираются application-level builder-ом `MD-OKF-ZIP-1` до
-background job/download-grant layer: materialized revision проходит
-full-bundle OKF validation, а Markdown objects копируются в archive без
-пересериализации. Реализация builder-а сама по себе не реализует asynchronous
-job, authorization или download grant.
+Start фиксирует exact revision and explicit profile. `MD-OKF-ZIP-1` is
+unchanged Markdown-only. Profile may be omitted only for a Markdown-only
+revision; mixed revision returns `export_profile_required` rather than omitting
+files. `MD-BUNDLE-ZIP-1` deterministically stores exact Markdown/opaque paths
+plus canonical `.mind-diary/manifest.json` with path/kind/media/digest/size.
+Neither profile includes ACL, memberships, service identity, staging, audit or
+tokens. Builders run before background job/download-grant layer; implementation
+of builder alone does not prove asynchronous authorization or download.
 
 ### `get_export_status`
 
@@ -1889,6 +2085,12 @@ UTF-8, entries отсортированы по unsigned UTF-8 bytes, DOS time ф
 entries отсутствуют. CRC-32 считается по exact Markdown bytes, а `sha256` и
 `size` — по всему готовому ZIP. Archive не содержит отдельный manifest и не
 задаёт import behavior.
+
+`MD-BUNDLE-ZIP-1` uses the same classic-ZIP metadata/ordering but filename
+`mind-diary-bundle.zip`, exact opaque bytes and reserved producer manifest.
+Manifest is canonical one-line UTF-8 JSON with final newline and does not
+contain Space/revision/principal identifiers. Its presence does not define ZIP
+import/extraction behavior.
 
 Client recovery flow сохраняет returned exact `revision_id`, скачивает grant
 до `download_expires_at`, сравнивает exact byte size и SHA-256 всего archive и
@@ -1981,9 +2183,14 @@ authentication не раскрывает existence/metadata.
 - Перед storage lookup отклонять token candidates, не совпадающие с exact
   fixed-size `mdp_v1` grammar; valid-format unknown/denied candidates получают
   тот же generic authentication failure, что cryptographic mismatch.
-- Ограничить query length, pagination, response budget, paths, file bytes,
-  operation count и total changeset bytes. Exact numbers должны стать
-  deployment constants и conformance fixtures до implementation release.
+- Ограничить query length, pagination и response budget; Markdown uses current
+  1 MiB/file, 4 MiB changeset and 64 MiB revision subtotal. BundleFile uses
+  accepted 64 MiB/file, 20 operations, 128 MiB staged changeset, 256 MiB
+  outstanding owner, 1 GiB revision and 2 GiB retained Space limits. Every
+  limit is a deployment constant and conformance boundary, not client input.
+- Native file download accepts HTTPS only from explicit provider host allowlist,
+  omits credentials, limits redirects/time/bytes and never logs file object,
+  temporary URL, bytes or local path.
 - Не логировать private search query, content body, token secret/verifier,
   CSRF token, authenticated/account email или download URL.
 - Sanitize all human/model-facing error text; private denial generic.
@@ -2030,6 +2237,17 @@ authentication не раскрывает existence/metadata.
 22. Product Site binding UI разделяет ACL и selection, redacts inaccessible
     target metadata, требует CSRF + exact credential ownership + binding CAS,
     перечитывает server state после success и fail closed после revoke.
+23. Manifest v1 compatibility/v2 canonicalization and exact historical opaque
+    bytes after replace/delete.
+24. Native file metadata, provider-host/redirect/stream limits, type sniff,
+    filename/MIME spoof, stage ownership/TTL/quota/idempotency and privacy
+    redaction.
+25. Mixed Markdown+BundleFile commit is one HEAD transition; stale/failure does
+    not consume ref or expose partial object.
+26. List/download exact revision, one-use grant, safe inline/attachment headers
+    and revoke/private/delete/expiry failures without metadata leakage.
+27. Byte-for-byte `MD-BUNDLE-ZIP-1` plus unchanged `MD-OKF-ZIP-1`, and real
+    pinned Codex native image/PDF/ZIP workflow on exact UAT deployment/profile.
 
 Claude Code и любой другой client получают отдельный adapter/client conformance
 profile до заявления поддержки.
@@ -2050,7 +2268,8 @@ Route reachability, Bearer forwarding и default/modern Codex profiles уже
 - поддерживает ли target Codex build MCP Resources достаточно для optional
   resource path; tools остаются обязательным fallback;
 - exact opaque ID encoding, signing/lookup и retention;
-- request/file/changeset/search/export limits и rate policies;
+- request/search/export rate policies and capacity evidence beyond the accepted
+  first-slice file limits;
 - search ranking details и threshold после lexical benchmark;
 - manual identity recovery workflow;
 - exact Marketplace plugin version/cache snapshot для blocking automated
@@ -2073,6 +2292,8 @@ transport без нового принятого решения.
 - [Доменная модель и доступ](domain-model.md)
 - [Архитектура](../architecture.md)
 - [Спецификация первого прототипа](mvp.md)
+- [BundleFile contract](bundle-files.md)
+- [ADR-0015: versioned BundleFile](../decisions/0015-versioned-bundle-files.md)
 - [ADR-0003: user-scoped MCP и immediate commits](../decisions/0003-user-scoped-mcp-and-direct-commits.md)
 - [Состояние платформенных предпосылок](../reports/2026-08-05-platform-status.md)
 - [MCP 2026-07-28: final release announcement](https://blog.modelcontextprotocol.io/posts/2026-07-28/)

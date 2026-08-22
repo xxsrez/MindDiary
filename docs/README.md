@@ -42,20 +42,23 @@ evidence, предлагаемый дизайн и ещё не проверен�
 13. [Traceability matrix MVP 0.1](specs/traceability.md) — критерии 1–29,
    owning stories, executable/release evidence, обязательные live flows,
    post-MVP denylist и implementation decisions.
-14. [Автономная доставка work scope](specs/ship-work-release.md) — универсальный
+14. [BundleFile](specs/bundle-files.md) — принятый producer-defined contract
+   versioned attachments: manifest v2, exact type/limit/staging/download rules,
+   mixed atomic commits и отдельный deterministic export profile.
+15. [Автономная доставка work scope](specs/ship-work-release.md) — универсальный
    принятый контракт `ship-work-release`: task-manager adapters, один mutable
    writer по умолчанию, selective lanes и scouts, cohorts, control API,
    dev/UAT promotion и ручная production boundary.
-15. [Контракт project profile](specs/ship-work-release-project-profile.md) —
+16. [Контракт project profile](specs/ship-work-release-project-profile.md) —
    versioned provider-neutral schema обязательных project-specific commands,
    runtime capabilities, gates, environments и evidence rows.
-16. [Контракт task-management adapter](specs/ship-work-release-task-manager.md) —
+17. [Контракт task-management adapter](specs/ship-work-release-task-manager.md) —
    versioned provider-neutral schema identity, snapshots, mutations,
    reconciliation и capability negotiation task-management backend-а.
-17. [Linear adapter для `ship-work-release`](specs/ship-work-release-linear.md) —
+18. [Linear adapter для `ship-work-release`](specs/ship-work-release-linear.md) —
    отдельное отображение Linear projects, milestones, issues, relations,
    statuses и updates в универсальную модель work collection/scope/item.
-18. [Упрощённая доставка Linear milestone](specs/ship-linear-release-v1.md) —
+19. [Упрощённая доставка Linear milestone](specs/ship-linear-release-v1.md) —
    исполнимый compromise profile `ship-linear-release`: один coordinator,
    coordinator-only либо exact N worker-субагентов, простой JSON journal,
    meaningful UAT batches и forward-only repair.
@@ -136,6 +139,9 @@ evidence, предлагаемый дизайн и ещё не проверен�
 - [ADR-0014: opt-in routine automatic capture](decisions/0014-opt-in-routine-automatic-capture.md)
   — принят default-off per-credential policy, pin к exact write generation,
   private/same-target initial profile и additive-only capture tool.
+- [ADR-0015: versioned BundleFile](decisions/0015-versioned-bundle-files.md) —
+  приняты unified manifest v2, adapter-only native file transport, bounded
+  quarantined staging и отдельный `MD-BUNDLE-ZIP-1` без изменения OKF 0.2.
 
 ## Исследования
 

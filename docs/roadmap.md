@@ -1,6 +1,6 @@
 # Roadmap и стратегия проверки Mind Diary
 
-Статус: зафиксированная product direction владельца проекта, 2026-08-09.
+Статус: зафиксированная product direction владельца проекта, 2026-08-22.
 Документ определяет последовательность проверки и развития продукта, но не
 является implementation specification, календарным обещанием или свидетельством
 реализованных функций.
@@ -14,8 +14,9 @@
 - внешний Codex через MCP — первая дешёвая пользовательская поверхность, а не
   единственный долгосрочный способ работы с Mind Diary;
 - imports и named checkpoints отложены из MVP, но явно планируются после него;
-- support non-Markdown files/assets вероятно понадобится, однако его точная
-  модель ещё не принята.
+- bounded support non-Markdown files/assets теперь принят как Release 0.1
+  BundleFile slice; более широкие formats, processing и capacity tiers не
+  приняты.
 
 Будущий product/market analysis обязан оценивать каждую фазу отдельно и не
 выдавать ограничения проверочного slice за окончательные границы продукта.
@@ -129,7 +130,7 @@ uniqueness, API и связь с export/share требуют отдельной 
 Checkpoint остаётся service metadata и не должен автоматически превращаться в
 OKF `tags` или изменять bundle.
 
-## Assets и другие non-Markdown files: решение пока открыто
+## Assets и другие non-Markdown files: первый slice принят
 
 [OKF 0.2](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md)
 не определяет нормативную сущность `Asset` и не задаёт общий binary manifest.
@@ -138,21 +139,27 @@ source через `sources[].resource` или ссылаться на файл �
 ссылкой. Packaging, MIME, size, checksum, preview, OCR и transport остаются
 producer-defined.
 
-Для Mind Diary потенциальный общий тип лучше пока называть `OpaqueAsset` или
-`BundleFile`, поскольку non-Markdown payload бывает не только binary:
+Для Mind Diary принят технический тип `BundleFile`, поскольку non-Markdown
+payload бывает не только binary:
 
 - images, PDF, audio, video и office documents;
 - CSV/JSON datasets;
 - SQL, Python, notebooks, executors и attesters;
 - любые неизвестные файлы, которые надо сохранить byte-for-byte для round-trip.
 
-Полноценная поддержка, вероятно, понадобится для source-grounded knowledge и
-нетехнической аудитории, но пока это candidate, а не принятое feature contract.
-Отдельный design должен определить content-addressed storage, manifest, digest,
-media type, quotas, archive safety, malware handling, previews, derived
-OCR/transcription, authorization и short-lived download URLs. Canonical bytes
-нельзя автоматически исполнять; extraction и previews должны оставаться
-производными.
+Release 0.1 принимает bounded raster/PDF/ZIP slice: unified revision manifest,
+quarantined staging, exact digest/media/size, atomic Markdown+file commits,
+reauthorized download и отдельный deterministic mixed export. Type allowlist,
+числовые quotas, archive containment и compatibility закреплены в
+[BundleFile specification](specs/bundle-files.md) и
+[ADR-0015](decisions/0015-versioned-bundle-files.md). Canonical bytes нельзя
+автоматически исполнять; ZIP не извлекается, а previews/OCR/transcription
+остаются будущими derived capabilities.
+
+Это решение не является productized import, general arbitrary-file support или
+production malware-cleanliness claim. Larger files/capacity, Office/audio/video,
+resumable upload, antivirus/CDR и extraction требуют нового evidence и
+accepted contract.
 
 ## Известный naming risk
 
@@ -176,8 +183,8 @@ OCR/transcription, authorization и short-lived download URLs. Canonical bytes
 - Какой один job-to-be-done должен определять успех первой Codex cohort?
 - Какие import formats идут первыми и нужен ли import уже в публичном MVP?
 - Какая точная семантика named checkpoints?
-- Нужен ли общий `BundleFile`/`OpaqueAsset` profile и какие file types входят в
-  первый asset slice?
+- Какие следующие BundleFile types, capacity tiers и processing capabilities
+  подтверждаются usage после bounded raster/PDF/ZIP slice?
 - Какой usage/retention signal запускает AWS migration?
 - Как устроены website AI pricing, billing, provider routing и write safety?
 - Сохраняется ли имя `Mind Diary` перед выходом за пределы pilot audience?

@@ -1,6 +1,6 @@
 # Доменная модель и доступ
 
-Статус: proposal, обновлено 2026-08-09. Product decisions в этом документе
+Статус: proposal, обновлено 2026-08-22. Product decisions в этом документе
 приняты для первого прототипа. Точные wire schemas принадлежат
 [API specification](api.md); repository baseline уже содержит domain,
 application, memory/Sites storage adapters и tests, а их live UAT evidence
@@ -20,10 +20,10 @@ Mind Diary: у него есть стабильная identity, дерево OKF
 | `Personal Mind` | Ровно один private Mind, автоматически и навсегда связанный с одним principal. |
 | `SpaceRevision` | Неизменяемый снимок всего content Mind с manifest и parent revision. |
 | `Snapshot View` | Read-only view одной исторической revision. |
-| `OKFBundle` | Материализованный export одной revision; memberships и ACL в него не входят. |
+| `OKFBundle` | Markdown/OKF projection одной revision; memberships и ACL в неё не входят. |
 | `KnowledgeEntry` / `Memory` | Пользовательский searchable OKF concept; `Memory` — umbrella term в UI. |
 | `Source` | Source-faithful материал или typed source concept с provenance. |
-| `Asset` / `OpaqueAsset` / `BundleFile` | Пользовательское и возможные технические имена producer-defined non-Markdown файла или resource, связанного с bundle. OKF 0.2 не задаёт нормативную Asset entity или binary manifest; support не входит в первый прототип. |
+| `BundleFile` | Принятый producer-defined opaque file одной revision; в UI attachment/asset. OKF 0.2 не задаёт эту entity или manifest. Первый slice ограничен raster/PDF/ZIP и отдельным service contract. |
 | `Index` / `Log` | Reserved OKF `index.md` и `log.md`, а не обычные `KnowledgeEntry`. |
 | `SpaceMembership` | Принятая связь principal с обычным Mind, ролью и lifecycle state. |
 | `SpaceInvitation` | Ожидающее принятия приглашение уже зарегистрированного principal. |
@@ -32,9 +32,9 @@ Mind Diary: у него есть стабильная identity, дерево OKF
 | `PersonalContext` | Отложенный proposal: ограниченная derived projection Personal Mind для персонализации, не второй corpus. |
 
 Слово «артефакт» допустимо как неформальное общее описание content, но API не
-должен скрывать под ним разные правила concept, source, opaque file и reserved
-files. Точная post-MVP модель `OpaqueAsset`/`BundleFile` остаётся открытым
-решением из [roadmap](../roadmap.md), а не частью нормативного OKF core.
+должен скрывать под ним разные правила concept, source, `BundleFile` и reserved
+files. `BundleFile` принят как service envelope по
+[отдельной specification](bundle-files.md), а не часть нормативного OKF core.
 
 ## Основные отношения
 
@@ -46,7 +46,8 @@ flowchart LR
     Membership["SpaceMembership"]
     Space["Ordinary Mind"]
     Revision["SpaceRevision"]
-    Bundle["OKFBundle"]
+    Bundle["OKF Markdown projection"]
+    File["BundleFile object"]
     Token["MCP access token"]
 
     Principal -->|"exactly one, sole Owner"| Personal
@@ -56,6 +57,7 @@ flowchart LR
     Space -->|"exactly one Owner membership"| Principal
     Space -->|"HEAD + history"| Revision
     Revision -->|"materialize"| Bundle
+    Revision -->|"manifest exact bytes"| File
     Principal -->|"zero or many"| Token
     Token -->|"discover currently allowed Minds"| Space
     Token -->|"owns one binding set"| MindBindingSet
@@ -378,8 +380,10 @@ commit_changeset(
 
 `mind` обязан совпадать с current target exact `write_binding_id`; binding ID
 проверяется в authoritative transaction и не перенаправляется после rebind.
-Один changeset может содержать create/replace/delete нескольких файлов и
-special operations для `index.md`/`log.md`. Он валидируется и применяется
+Один changeset может содержать create/replace/delete Markdown и BundleFile,
+а также special operations для `index.md`/`log.md`. Opaque create/replace
+ссылается только на verified staged ref exact active write binding. Changeset
+валидируется и применяется
 атомарно: создаёт ровно одну immutable `SpaceRevision` и переводит HEAD либо не
 меняет ничего. Stale `expected_revision` возвращает `409 Conflict` с current
 revision; клиент перечитывает данные и повторно строит изменение. Автоматический
@@ -398,7 +402,8 @@ Reserved files требуют явной семантики:
 
 Добавление concept, его ссылки в `index.md` и записи в `log.md` должно проходить
 одним changeset. Search/index infrastructure всегда производна и может быть
-перестроена из точной canonical revision.
+перестроена из точной canonical revision. Индексируются только Markdown
+entries; opaque bytes не становятся snippets.
 
 ## История и Snapshot View
 
@@ -442,16 +447,17 @@ corpus:
 Если agent-assisted administration понадобится позже, для него потребуется
 отдельная privileged surface и отдельный threat model.
 
-## Граница первого прототипа
+## Граница расширенного Release 0.1
 
-В прототип входят authenticated-only account model, автоматический Personal
+В Release 0.1 входят authenticated-only account model, автоматический Personal
 Mind, ordinary Minds, single-owner transfer, invitations registered users,
 четыре роли, три visibility modes, public catalog, immutable history, direct
-CAS commits, individual-file OKF access и user-scoped MCP.
+CAS commits, individual-file OKF access, bounded raster/PDF/ZIP BundleFile и
+user-scoped MCP.
 
 Не входят anonymous access/publication, unregistered-user onboarding,
 email invitations, fuzzy global user search, granular content grants, branches,
-automatic semantic merge, named checkpoints, ZIP/local bundle import, binary
-Asset upload/fetch, legacy 0.1 migration, legal retention policy, recovery after
+automatic semantic merge, named checkpoints, ZIP/local bundle import,
+BundleFile extraction/OCR/general file types, legacy 0.1 migration, legal retention policy, recovery after
 deletion, billing/organization administration и cross-Mind content synthesis
 без отдельного explicit use case.

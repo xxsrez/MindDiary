@@ -1,11 +1,13 @@
 # Обзор Mind Diary
 
-Статус: proposal, обновлено 2026-08-09. Product behavior первого прототипа
+Статус: proposal, обновлено 2026-08-22. Product behavior первого прототипа
 принято; Product Site реализован, развёрнут как single-principal UAT в OpenAI
 Sites и прошёл
 authenticated web/control, persistence-after-redeploy и обязательные Codex MCP
 compatibility gates. Расширенные read/write/history/export сценарии остаются
-следующей product-validation стадией.
+следующей product-validation стадией. Producer-defined BundleFile contract
+принят для расширенного Release 0.1, но его implementation/UAT evidence
+отделены от уже проверенного Markdown-only baseline.
 
 ## Зачем проект существует
 
@@ -126,12 +128,19 @@ email. Invitation появляется внутри Mind Diary, роль выб�
 
 ## Content и revisions
 
-Каждая revision материализуется как дерево UTF-8 Markdown в OKF 0.2 без
-memberships, ACL, tokens и service indexes. Обычная работа идёт по отдельным
-файлам; ZIP/local bundle import и upload/fetch producer-defined non-Markdown
-files в первый прототип не входят. Выбранную revision можно детерминированно
-экспортировать как
-`OKFBundle`.
+Каждая revision materializes единый service manifest exact files. Markdown
+остаётся OKF 0.2 content, а producer-defined `BundleFile` хранит opaque raster,
+PDF или ZIP bytes и не становится нормативной OKF entity. Обычная работа идёт
+по отдельным files; ZIP остаётся attachment и не означает ZIP/local bundle
+import. Markdown и BundleFile могут изменяться одним atomic changeset. Полный
+contract manifest, staging, downloads, limits и export находится в
+[BundleFile specification](specs/bundle-files.md).
+
+Markdown-only revision экспортируется прежним byte-for-byte
+`MD-OKF-ZIP-1`. Mixed revision требует explicit `MD-BUNDLE-ZIP-1`, который
+сохраняет exact files и producer manifest без ACL/service identities. Уже
+развёрнутый UAT остаётся Markdown-only до отдельного exact-SHA implementation и
+native-file client gate.
 
 Основная write-команда принимает `expected_revision`, `idempotency_key` и набор
 операций. Все операции применяются атомарно и создают ровно одну revision.
@@ -213,12 +222,13 @@ Mind, и не меняют current ACL, scope, CAS или idempotency boundaries
 5. Агент вызывает `list_minds`, выбирает `/me` или другой доступный Mind,
    просматривает index/search/fetch.
 6. Editor/Admin/Owner отправляет atomic changeset с current HEAD revision.
-7. Server валидирует OKF, создаёт immutable revision, CAS-продвигает HEAD,
+7. Server валидирует OKF и producer file contract, создаёт immutable revision, CAS-продвигает HEAD,
    пишет audit event и запускает rebuild derived index.
 8. Public/unlisted readers сразу видят новую HEAD; historical selector остаётся
    привязан к exact старой revision и read-only.
-9. Любой Reader/baseline Reader может получить детерминированный OKF export
-   exact разрешённой revision через повторно авторизованный download URL.
+9. Любой Reader/baseline Reader может получить детерминированный export exact
+   разрешённой revision через повторно авторизованный download URL; BundleFile
+   также скачивается отдельным short-lived exact-revision grant.
 
 ## Product principles
 
@@ -252,15 +262,17 @@ OKF access, immediate CAS commits, immutable history и export.
 email delivery, fuzzy global user search, granular file permissions, branches,
 automatic semantic merge, legal retention/recovery model, billing,
 organization administration и general cross-Mind synthesis.
-Также отложены ZIP/local bundle import, transport producer-defined non-Markdown
-files, legacy 0.1 migration, named checkpoints и company-knowledge compatibility
-profile.
+Также отложены ZIP/local bundle import, legacy 0.1 migration, named checkpoints
+и company-knowledge compatibility profile. Transport producer-defined
+non-Markdown files больше не является open non-goal: для raster/PDF/ZIP принят
+bounded BundleFile slice, но его repository/UAT status нельзя выводить из
+принятого contract.
 
 Imports и named checkpoints не просто исключены из MVP, а явно запланированы в
-post-MVP roadmap. Support non-Markdown files/assets вероятно потребуется, но
-его producer profile и первый поддерживаемый slice пока не приняты. Ограничения
-этого раздела нельзя трактовать как полные границы будущего продукта; см.
-[roadmap](roadmap.md).
+post-MVP roadmap. Более широкие file types, extraction, previews/OCR и
+resumable import остаются будущими решениями; принятый первый BundleFile slice
+не подразумевает их. Ограничения этого раздела нельзя трактовать как полные
+границы будущего продукта; см. [roadmap](roadmap.md).
 
 Personalized content landing из ограниченного PersonalContext остаётся частью
 product direction, но не входит в критерии первого прототипа. В этом slice
@@ -303,5 +315,7 @@ UAT и подтверждает live web + MCP flows. Production release вып�
 - Два concurrent Editors не теряют изменения: stale attempt получает conflict.
 - Исторический read не смешивается с HEAD и проверяет current access.
 - Export проходит OKF validation и сохраняет неизвестные fields/types.
+- Mixed revision сохраняет image/PDF/ZIP exact bytes в history, authorized
+  download и deterministic `MD-BUNDLE-ZIP-1`, не меняя `MD-OKF-ZIP-1`.
 - Будущий перенос Sites → AWS меняет adapters, но не domain, API semantics или
   OKF representation.
