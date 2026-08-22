@@ -1,0 +1,378 @@
+# Sites storage, capacity и Markdown import
+
+Статус: accepted, 2026-08-22. `normative_status: accepted`;
+`implementation_status: not_started`. Это Sites-only contract для Brain-scale
+storage/import в Release 0.1. Он расширяет прежний Markdown/BundleFile baseline,
+но не утверждает, что описанные delta commits, accounting или import уже
+реализованы либо проверены в UAT.
+
+## Цель и граница
+
+Обычная правка большого Mind не должна читать и заново записывать весь corpus,
+а большой import/export не должен становиться одной неограниченной Worker
+операцией. Canonical content остаётся immutable, exact-revision и
+content-addressed; D1 хранит transactional authority и bounded metadata, R2 —
+bytes. Derived search, usage projections и temporary objects не становятся
+источником истины.
+
+Первый import profile принимает только отдельные UTF-8 Markdown files. ZIP,
+BundleFile, symlinks, OCR, remote crawl, Google Drive sync, legacy OKF 0.1 и
+cross-Mind merge не входят в него. AWS остаётся будущей infrastructure
+direction и не является current implementation или fallback.
+
+## Выбранная модель
+
+### Canonical namespaces
+
+Все новые canonical bytes изолированы `space_id`; path, display name, email и
+content digest другого Mind не являются lookup key или existence oracle.
+
+```text
+spaces/{opaque-space-id}/objects/sha256/{hex}
+spaces/{opaque-space-id}/manifests/sha256/{hex}
+spaces/{opaque-space-id}/indexes/{opaque-revision-id}/{schema-version}
+staging/{opaque-owner-id}/{opaque-session-id}/{opaque-object-id}
+exports/{opaque-space-id}/{opaque-job-id}/{sha256-hex}
+```
+
+Keys являются internal locator, а не capability. Они не возвращаются клиенту,
+не попадают в audit/telemetry и всегда разрешаются после authorization.
+Cross-Space physical deduplication отклонена: выигрыш хранения не компенсирует
+privacy/accounting ambiguity. Внутри одного Space одинаковый digest занимает
+один canonical object и может быть достижим из многих revisions.
+
+### R2 responsibilities
+
+R2 хранит:
+
+- immutable Markdown и accepted opaque objects по Space-scoped digest;
+- canonical serialized immutable revision manifests;
+- derived exact-revision index artifacts;
+- quarantined import/staging objects;
+- in-progress и completed export artifacts.
+
+Каждый canonical put проверяет exact byte length и SHA-256 до появления D1
+reference. Повторный put с тем же Space/digest обязан получить те же bytes и
+metadata; collision или tamper fail closed. R2 listing никогда не используется
+в foreground read/commit или как authority для quota; list нужен только
+bounded reconcile/GC по persisted cursor.
+
+### D1 responsibilities
+
+D1 хранит transactional records:
+
+- Space/revision identity, parent, author, timestamp и immutable manifest ref;
+- единственный current HEAD и optimistic `expected_revision` CAS;
+- object reachability/refcount projections scoped to Space;
+- usage ledger, reservations, job/session state and persisted cursors;
+- idempotency results, authorization state, audit outbox и safe derived-index
+  status.
+
+D1 не хранит Markdown bodies, opaque bytes, ZIP bytes, private search corpus,
+download secrets или signed URLs. Manifest entry rows могут быть bounded
+projection для lookup/accounting, но canonical manifest bytes and digest are in
+R2; projection drift никогда не меняет revision meaning.
+
+### Immutable manifest and HEAD CAS
+
+Новая revision использует canonical manifest format
+`mind-diary-revision-manifest-v3`. Он сохраняет v2 entry semantics
+`path + kind + media_type + sha256 + size`, deterministic Unicode-scalar
+ordering и canonical one-line JSON with final newline. V3 отличается storage
+contract: manifest bytes имеют собственный Space-scoped R2 object, а revision
+record содержит exact manifest digest/size/schema.
+
+Commit строит новый manifest как delta от exact parent:
+
+1. Читает только parent manifest и bytes затронутых Markdown files.
+2. Пишет только новые/изменённые content objects и новый manifest.
+3. В одной D1 transaction повторно authorizes actor, проверяет reservation,
+   idempotency и exact HEAD.
+4. Создаёт revision record, обновляет reachability/usage and HEAD, consumes
+   staging/reservation и ставит derived jobs.
+
+Неуспешный CAS не создаёт видимую revision. Уже записанные immutable objects
+остаются unreachable и удаляются только после safety window. Retry с тем же
+canonical request/idempotency key возвращает прежний result; новый HEAD требует
+нового plan/confirmation/key.
+
+## Historical read and search
+
+Canonical browse/fetch/list/history всегда materialize exact manifest and
+object digests; HEAD никогда не подмешивается. V1/v2/v3 manifests читаются
+одним compatibility reader и проверяются по stored digest.
+
+Search остаётся derived:
+
+- current HEAD index строится eagerly after commit;
+- historical revision index строится on demand и хранится как bounded cache;
+- index содержит lexical fields/chunks/offsets, но не является canonical
+  history; full Markdown body не дублируется в D1;
+- cache eviction не удаляет canonical revision и не разрешает fallback на
+  HEAD; до rebuild tool возвращает `search_index_unavailable` with retry hint;
+- каждый build/query повторно authorizes exact Space/revision; revoke,
+  visibility change или delete fail closed;
+- one Space/job получает bounded slice, поэтому long history не монополизирует
+  Worker.
+
+## Usage definitions and ownership
+
+Accounting не читает content bodies и использует manifest/object metadata.
+
+- `logical_head_bytes`: сумма `size` entries current HEAD.
+- `logical_retained_bytes`: сумма entry sizes across all committed manifests;
+  reused bytes считаются для каждой revision и показывают history footprint.
+- `physical_canonical_bytes`: unique Space-scoped canonical content + manifest
+  + retained derived index bytes actually stored in R2.
+- `temporary_bytes`: active staging/import/export objects плюс pending cleanup.
+- `d1_metadata_bytes`: measured/estimated rows for canonical metadata, jobs,
+  ledger and indexes; private text fields отсутствуют.
+- `reserved_bytes`: worst-case growth active admitted operations, не уже
+  committed usage.
+
+Mind usage принадлежит его current sole Owner. Reader/Editor/Admin не получают
+quota charge. Ownership transfer разрешён только если target principal проходит
+aggregate admission с учётом Mind committed usage and active reservations;
+transfer itself не копирует objects. Same-Space shared digest physically
+считается один раз, logically — в каждой referencing revision. Cross-Space
+sharing запрещено.
+
+Ledger events ускоряют projection, но не являются единственной истиной.
+Reconcile повторно вычисляет values from committed D1 manifest/reachability
+records и exact R2 metadata bounded pages. Drift marks accounting
+`reconciling`; operations that could exceed a hard limit fail closed until the
+affected budget is trustworthy. Delete/net-shrink and cleanup remain allowed.
+
+## Limits and admission
+
+Все values — binary bytes and deployment constants. Provider headroom may be
+smaller; startup/reconcile then uses the smaller effective hard limit and marks
+the configured claim unavailable rather than overcommitting.
+
+| Scope | Metric | Hard limit |
+|---|---|---:|
+| one Markdown file | logical bytes | 1 MiB |
+| one Mind HEAD | Markdown bytes | 64 MiB |
+| one Mind HEAD | all entries | 1 GiB / 10,000 files |
+| one Mind history | physical canonical R2 | 2 GiB |
+| one principal | owned Minds physical canonical R2 | 8 GiB |
+| one Site | canonical R2 | 32 GiB |
+| one Site | temporary R2 | 8 GiB |
+| one Site | D1 metadata budget | 512 MiB |
+| one import session | Markdown files/bytes | 10,000 / 64 MiB |
+| one import batch | files/bytes | 256 / 4 MiB |
+| active import sessions | per principal / per Site | 2 / 16 |
+| active heavy jobs | per Mind / per principal / per Site | 1 / 2 / 8 |
+
+Existing BundleFile limits remain normative. Combined HEAD and retained-Space
+limits are evaluated against both Markdown and BundleFile entries; a lower
+specific limit wins.
+
+For each capacity, states are exact:
+
+- below `70%`: normal;
+- `70%..84.999%`: warning, operations still admitted;
+- `85%..99.999%`: soft limit; a new bulk import/stage/export reservation is
+  rejected. An ordinary commit may proceed only when its additional physical
+  canonical growth is at most 4 MiB and every affected budget remains below
+  hard limit. Payload size is not the test: same-digest reuse or an already
+  reserved BundleFile commit may have zero additional growth, while replacing
+  a file whose old bytes remain in history may grow retained usage. Delete,
+  net-shrink and cleanup always remain available;
+- `>=100%` including active reservations: hard stop for every net-growing
+  operation.
+
+The Owner sees Mind/principal warning and safe category totals; an operator sees
+aggregate Site totals/headroom without corpus, paths or principal email.
+No request field, role or UI acknowledgement can raise a limit. Changing limits
+is versioned deployment configuration plus compatibility evidence, not an
+operator bypass.
+
+### Reservation protocol
+
+Commit/import/export/stage obtains a durable reservation before expensive
+writes. Requested amount is the conservative upper bound for canonical,
+temporary and D1 growth; admission atomically checks:
+
+```text
+committed_usage + active_reservations + requested <= effective_hard_limit
+```
+
+Reservation is bound to owner, Space, operation, exact base revision,
+idempotency key and expiry. Acquire/replay/release/consume are D1-transactional
+and idempotent. An operation may reduce but never silently increase its
+reservation; expansion requires a new atomic admission check. Commit consumes
+actual growth and releases remainder in the same HEAD transaction. Failure,
+cancel and expiry move reservation to cleanup-pending; a persisted cursor
+reclaims temporary bytes before final release. Unknown outcome reconciles exact
+state before retry.
+
+## Markdown-only import profile
+
+Workflow: `plan -> reserve -> stage batches -> validate -> commit -> finalize`.
+An import session is private to current principal + write binding + Space,
+pinned to exact `expected_revision`, idempotency key and contract version.
+Default TTL is 24 hours; progress/checkpoints survive Worker restart.
+
+### Plan and path rules
+
+Plan accepts metadata for the whole selected corpus before any canonical
+visibility. Before bytes exist server validates declared size/digest grammar,
+quota estimate and these path rules:
+
+- relative `/`-separated path, no leading slash, backslash, drive/UNC/scheme,
+  empty/`.`/`..` segment, control character, encoded separator or NUL;
+- exact NFC; non-NFC is rejected, not silently rewritten;
+- `.md` suffix, at most 1,024 UTF-8 bytes total and 255 per segment;
+- no `.mind-diary/` root, symlink/hardlink/device entry or duplicate after NFC;
+- exact declared non-negative size and canonical SHA-256 grammar.
+
+Byte order, line endings and content are preserved; importer does not rename,
+case-fold, transcode or merge files. After staging, server verifies actual
+size/digest, valid UTF-8 and the whole corpus, including reserved
+`index.md`/`log.md`, references and unknown OKF types/fields preservation.
+The first conflict policy is only `replace_exact_head`: imported Markdown is an
+exact snapshot, omitted current Markdown paths are deletions, and existing
+opaque paths must remain unchanged without collision. UI shows additions,
+replacements/deletions and requires ordinary destructive preview/confirmation.
+To import into a new Mind, user first creates the Mind through normal control
+flow, binds its initial HEAD, then starts this same policy. Per-file merge,
+implicit rebase and historical write are absent.
+
+Plan returns bounded counts, logical bytes, path/conflict errors and quota
+state, never content bodies. Invalid plan creates no reservation or staged
+object.
+
+### Stage and checkpoint
+
+After reservation, client uploads ordered batches of at most 256 files / 4 MiB.
+Each batch has session ID, monotonic checkpoint, file digests and a
+session-scoped idempotency key. Exact replay returns the same checkpoint;
+changed bytes/metadata return `idempotency_conflict`. Server verifies streaming
+size, digest and UTF-8 before marking a file staged. Progress exposes counts,
+bytes and sanitized per-file code/path only to the authorized owner; logs omit
+path/content.
+
+Disconnect leaves the last committed checkpoint resumable. Cancel/expiry marks
+session closed, leaves HEAD unchanged and schedules bounded cleanup. A closed
+session never becomes active again; restart requires a new session/key.
+
+### Validate, commit and finalize
+
+Validation materializes the proposed manifest from staged digests, validates
+the entire corpus and rechecks current access, binding, expected HEAD and
+reservation. It never creates a visible revision.
+
+Commit promotes verified objects into the Space-scoped canonical namespace,
+writes one v3 manifest and uses the normal D1 HEAD transaction. Exactly one new
+immutable revision becomes visible or nothing does. Search index job is queued
+after commit; canonical browse/fetch works immediately. Finalize records the
+idempotent result and schedules staged cleanup. A stale HEAD returns conflict;
+server never rebases or partially imports automatically.
+
+## Export, staging and GC lifecycle
+
+- Staging/import objects have explicit owner/session/state/expiry and are not
+  reader-visible.
+- Export is exact-revision, asynchronous and streaming/batched into R2; archive
+  bytes never enter JSON-RPC or whole Worker memory.
+- Download URLs are short-lived response-only bearer material, reauthorized
+  before bytes and never durable/logged.
+- GC is mark/refcount assisted but treats committed manifests, active staging,
+  active export and unexpired reservations as roots.
+- Each cleanup run has persisted cursor and limits of 100 objects, 256 MiB and
+  20 seconds. It is idempotent and resumes after timeout.
+- Unreachable canonical objects wait at least 24 hours. Import/session temporary
+  objects wait until closed/expired plus one successful reconcile. No global
+  synchronous R2 scan/delete runs in a user request.
+
+Race policy is conservative: uncertain reachability skips deletion and emits a
+safe retry metric. Whole-Mind deletion uses its separate restartable erasure
+state machine; ordinary GC cannot replace that contract.
+
+## Privacy, threat model and operations
+
+Private/sensitive content remains untrusted input. D1/R2 objects inherit the
+Site deployment's access, residency, backup and recovery properties; Mind Diary
+does not claim a region, retention SLA, point-in-time restore or legal-erasure
+guarantee that Sites has not verified. UAT uses isolated test data.
+
+Never store in logs, telemetry, usage ledger, Task Manager evidence or metrics:
+
+- Markdown/BundleFile bytes, snippets, search query or paths;
+- token/CSRF/session/download secrets or verifiers;
+- signed URLs, provider file IDs, object keys or authenticated email;
+- raw manifest or import request/response bodies.
+
+Allowed telemetry is closed-schema: status/code, duration, bounded counts and
+bytes, utilization bucket, reservation age, queue age, retry count, reclaimed
+bytes and opaque non-reversible deployment/run fingerprints. Metrics cannot be
+joined into a corpus/principal inventory.
+
+Temporary bytes are encrypted/access-controlled by provider bindings and
+unreachable without application authorization; signed URLs are never used for
+staging authority. Backups are recovery material, not an alternate history/API,
+and may not resurrect deleted access. Production residency/backup/retention is
+an explicit future decision.
+
+## Migration, compatibility and rollback
+
+Migration is forward-only, resumable and non-destructive:
+
+1. Deploy dual reader for legacy embedded v1/v2 manifests and v3 manifest refs.
+2. Inventory legacy revisions from D1 in bounded pages; create Space-scoped R2
+   objects/manifests, verifying exact digest/size without changing HEAD.
+   Global legacy Markdown `canonical/sha256/*` is copied per reachable Space;
+   existing Space-scoped BundleFile objects are verified/reused rather than
+   rewritten. Embedded v1/v2 manifest bytes retain their original digest.
+3. Record backfill checkpoint and shadow-compare exact materialization,
+   retained usage and representative historical reads.
+4. Enable v3 delta writes only after every reachable object for a Space is
+   verified; old revisions stay immutable and readable.
+5. Reconcile ledger/refcounts from canonical manifests before enabling hard
+   admission; until then growth fails closed but reads/deletes continue.
+6. Enable import, streaming export and GC in dependency order only after their
+   targeted/local gates and exact UAT capacity evidence.
+
+Before the first v3 commit, application rollback may restore the last v2-capable
+deployment. After any v3 commit, rollback target must be dual-read/v3-aware;
+deploying older code is forbidden. Operational rollback disables new delta/
+import jobs and preserves bytes/state; it never rewrites history or deletes v3
+objects. Backfill failures quarantine only the affected Space for growth and
+remain resumable.
+
+Task sequence is normative: MD-264 contract -> MD-265 delta manifests/commit ->
+MD-266 accounting/admission; MD-268 streaming export/cleanup depends on
+MD-265; MD-267 import depends on MD-266 and MD-268 plus its existing search/
+MCP prerequisites. MD-260 closes only after those children and exact UAT
+capacity/import evidence.
+
+## Alternatives rejected
+
+- **Full revision snapshot in D1/R2 on every commit.** Simple, but makes small
+  edits O(total corpus) and duplicates immutable history.
+- **Global digest namespace across Minds.** Saves more bytes but creates
+  privacy and quota-ownership ambiguity.
+- **Event-only accounting.** Fast but can drift permanently after failure;
+  canonical reconcile is required.
+- **One synchronous import/export request.** Violates Worker memory/time and
+  makes disconnect recovery ambiguous.
+- **Publish batches directly to HEAD.** Exposes partial corpus and breaks one
+  immutable revision semantics.
+- **Use R2 listing as foreground authority.** Unbounded and race-prone; D1
+  references/reservations are the transaction boundary.
+- **Automatic AWS fallback.** Changes platform, cost, secrets and release
+  boundary without authority; AWS remains post-MVP.
+
+## Required evidence
+
+Repository tests must prove delta bytes read/written on a large synthetic
+corpus, deterministic manifests, v1/v2 compatibility, CAS/idempotency races,
+shared-digest accounting, reservation failure before/after HEAD, reconcile,
+bounded GC/export and import interrupt/resume/cancel/conflict.
+
+UAT evidence must join exact Git SHA, Sites version/deployment and large private
+fixture fingerprints; show D1/R2 usage/headroom without content; prove small
+delta, restart/redeploy persistence, quota warning/soft/hard behavior, bounded
+memory/latency, import resume and final exact search/fetch. Local tests or a
+deployment alone are not UAT acceptance.

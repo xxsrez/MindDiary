@@ -24,6 +24,8 @@ Mind Diary: у него есть стабильная identity, дерево OKF
 | `KnowledgeEntry` / `Memory` | Пользовательский searchable OKF concept; `Memory` — umbrella term в UI. |
 | `Source` | Source-faithful материал или typed source concept с provenance. |
 | `BundleFile` | Принятый producer-defined opaque file одной revision; в UI attachment/asset. OKF 0.2 не задаёт эту entity или manifest. Первый slice ограничен raster/PDF/ZIP и отдельным service contract. |
+| `ImportSession` | Private resumable Markdown-only staging aggregate, pinned to principal/write binding/Space/base revision/idempotency key; не revision и не reader-visible content. |
+| `CapacityReservation` | Durable bounded budget for one admitted operation; consumed/released atomically with canonical transition or cleanup. |
 | `Index` / `Log` | Reserved OKF `index.md` и `log.md`, а не обычные `KnowledgeEntry`. |
 | `SpaceMembership` | Принятая связь principal с обычным Mind, ролью и lifecycle state. |
 | `SpaceInvitation` | Ожидающее принятия приглашение уже зарегистрированного principal. |
@@ -389,6 +391,14 @@ commit_changeset(
 revision; клиент перечитывает данные и повторно строит изменение. Автоматический
 semantic merge, branches и last-writer-wins не поддерживаются.
 
+Accepted Brain-scale storage model materializes v3 manifest as a separately
+digested Space-scoped object. Delta commit reuses unchanged parent digests;
+reachability, usage and reservation move with revision/HEAD in the same D1
+transaction. Resumable Markdown import stages private batches and invokes this
+same final CAS once; checkpoints never become partial revisions. Normative
+details and not-started status are in
+[Sites storage/capacity/import](sites-storage-capacity-import.md).
+
 Reserved files требуют явной семантики:
 
 - `index.md` остаётся canonical authored OKF content; начальная special
@@ -453,11 +463,12 @@ corpus:
 Mind, ordinary Minds, single-owner transfer, invitations registered users,
 четыре роли, три visibility modes, public catalog, immutable history, direct
 CAS commits, individual-file OKF access, bounded raster/PDF/ZIP BundleFile и
-user-scoped MCP.
+user-scoped MCP. Accepted but not yet implemented Release 0.1 extension adds
+Space-scoped delta manifests, capacity admission and Markdown-only import.
 
 Не входят anonymous access/publication, unregistered-user onboarding,
 email invitations, fuzzy global user search, granular content grants, branches,
-automatic semantic merge, named checkpoints, ZIP/local bundle import,
+automatic semantic merge, named checkpoints, ZIP/binary/legacy bundle import,
 BundleFile extraction/OCR/general file types, legacy 0.1 migration, legal retention policy, recovery after
 deletion, billing/organization administration и cross-Mind content synthesis
 без отдельного explicit use case.

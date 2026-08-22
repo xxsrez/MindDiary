@@ -48,13 +48,16 @@
    acceptance или implementation changes.
 8. [REST и MCP API](docs/specs/api.md) — перед изменением protocol surface,
    backend routes, schemas или error contracts.
-9. [Проверку текущего OKF](docs/reports/2026-08-05-okf-status.md) — перед OKF
+9. [Sites storage, capacity и Markdown import](docs/specs/sites-storage-capacity-import.md)
+   — перед revision/object layout, accounting/quota, bulk import/export,
+   staging или GC changes.
+10. [Проверку текущего OKF](docs/reports/2026-08-05-okf-status.md) — перед OKF
    codec, fixtures или compatibility claims.
-10. [Проверку платформенных предпосылок](docs/reports/2026-08-05-platform-status.md)
+11. [Проверку платформенных предпосылок](docs/reports/2026-08-05-platform-status.md)
     — перед Sites/MCP platform или deployment claims.
-11. [Профиль доставки Mind Diary](docs/operations/ship-work-release-profile.md)
+12. [Профиль доставки Mind Diary](docs/operations/ship-work-release-profile.md)
     — перед dev launch, UAT cut, release evidence или production handoff.
-12. [Linear adapter доставки](docs/specs/ship-work-release-linear.md) — перед
+13. [Linear adapter доставки](docs/specs/ship-work-release-linear.md) — перед
     разрешением Linear scope, чтением acceptance/dependencies или projection
     статусов и evidence обратно в Linear.
 13. [Упрощённая доставка Linear milestone](docs/specs/ship-linear-release-v1.md)
@@ -119,12 +122,14 @@ ADR-0008/ADR-0009
 - Personal, group и community-wiki — сценарии одного Space, а не значения
   фиксированного `space_type`. Будущая anonymous web-publication остаётся
   отдельной моделью и не заменяет visibility прототипа.
-- Первый прототип создаёт и изменяет только UTF-8 Markdown content в OKF 0.2.
-  ZIP/local bundle import и non-Markdown file upload/fetch не входят в scope.
-  Productized imports явно планируются post-MVP; exact formats и security
-  boundary ещё не приняты. Codec сохраняет неизвестные OKF types/fields при
-  чтении, изменении и export; будущий legacy 0.1 import потребует отдельной
-  migration policy без silent version/status reinterpretation.
+- Базовый прототип создаёт UTF-8 Markdown content в OKF 0.2 и принятый
+  raster/PDF/ZIP `BundleFile`. Release 0.1 дополнительно принимает, но ещё не
+  реализует, resumable import отдельных UTF-8 Markdown files по
+  `plan → reserve → stage → validate → commit → finalize`; partial HEAD
+  запрещён. ZIP/archive, binary, OCR, remote-sync и legacy 0.1 import не входят
+  в scope. Codec сохраняет неизвестные OKF types/fields при чтении, изменении и
+  export; legacy migration потребует отдельной policy без silent version/status
+  reinterpretation.
 - Полнотекстовые, векторные и графовые индексы всегда производны и должны
   перестраиваться из выбранной канонической ревизии.
 - Изменение создаёт новую immutable revision. Продвижение HEAD требует
@@ -234,8 +239,8 @@ ADR-0008/ADR-0009
   доменном ядре.
 - Большой export не передавайте внутри JSON-RPC: используйте object storage и
   короткоживущий download URL. Upload intents, archive import и non-Markdown
-  file transport не проектируйте до отдельного решения; вероятная будущая
-  поддержка не означает уже принятого file profile.
+  import не расширяйте за принятые BundleFile/Markdown-only contracts;
+  вероятная будущая поддержка не означает уже принятого file profile.
 
 ## Релизный контракт
 

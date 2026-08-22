@@ -18,6 +18,12 @@ list/download, Markdown references и dual export реализованы в loca
 real-client native-file UAT gate ещё не является подтверждённым свойством
 deployed candidate.
 
+ADR-0016 принимает следующую Sites storage boundary для Release 0.1:
+Space-scoped R2 objects + separately digested v3 manifests, D1 HEAD/reachability/
+ledger/reservations, delta-aware commits и bounded Markdown import. Этот scope
+ещё не реализован; текущий full-corpus D1/R2 path остаётся исходной точкой
+MD-265–MD-268, а не evidence принятого design.
+
 ## Драйверы и ограничения
 
 Архитектура должна поддержать одновременно:
@@ -109,7 +115,9 @@ frontmatter, provenance, trust/lifecycle fields и validation. Он:
 ZIP/local bundle import и legacy 0.1 migration не входят в этот slice.
 Producer-defined raster/PDF/ZIP transport принят отдельно в
 [BundleFile specification](specs/bundle-files.md); ZIP остаётся opaque и не
-является import. Будущий legacy reader обязан получить explicit migration policy
+является import. Отдельный Markdown-only file import теперь принят в
+[storage/capacity/import contract](specs/sites-storage-capacity-import.md), но
+не реализован. Будущий legacy reader обязан получить explicit migration policy
 и не может silently менять version/status semantics.
 
 ### 2. Application core
@@ -620,6 +628,13 @@ explicit target Mind. General cross-Mind search/synthesis требует нов�
   candidates, содержащие все bounded normalized terms; application повторно
   сверяет candidate bytes/path с immutable manifest и выполняет ranking. Storage
   metrics считают unique source/lexical bytes отдельно от revision memberships.
+- Принятый replacement layout после MD-265 выносит Space-scoped canonical
+  content and manifest v3 bytes в R2; D1 хранит only exact refs, HEAD,
+  reachability, usage/reservations and bounded derived metadata. Small commit
+  reads parent manifest plus touched bytes and writes delta + one manifest.
+  Historical index is on-demand bounded cache without HEAD fallback. Until
+  implementation/current-SHA gates pass, this paragraph is normative target,
+  not deployed behavior.
 - Trusted Sites identity, browser CSRF/Origin и Bearer content MCP остаются
   разными security boundaries; browser не рендерит raw Markdown, MCP не
   публикует control tools.
@@ -635,8 +650,9 @@ explicit target Mind. General cross-Mind search/synthesis требует нов�
 - Sites — текущая UAT platform MVP и подтверждённый host web/admin UI с Sign in
   with ChatGPT.
 - UAT Site использует D1/R2 bindings; их live availability и
-  persistence-after-redeploy проверены, а quota и recovery остаются
-  operational follow-up.
+  persistence-after-redeploy проверены. Accepted Brain-scale quota,
+  reservation, import and bounded recovery contract remains unimplemented and
+  requires its own exact-candidate UAT evidence.
 - Streamable HTTP MCP реализован в том же Worker по non-reserved paths;
   Sites proxy/runtime compatibility подтверждена raw modern и реальными Codex
   flows.
@@ -717,6 +733,8 @@ audit log.
 - Какие personal categories и consent model допустимы для personalization?
 - Достаточны ли first-slice BundleFile quotas/type allowlist для pilot и какой
   production malware/CDR profile нужен до расширения formats?
+- Подтвердят ли exact Sites headroom and Brain-scale UAT fixture принятые
+  per-Mind/principal/Site limits без их скрытого повышения?
 
 ## Внешние основания
 

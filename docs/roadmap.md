@@ -13,7 +13,8 @@
 - Sites-only относится только к prod-like UAT текущего MVP;
 - внешний Codex через MCP — первая дешёвая пользовательская поверхность, а не
   единственный долгосрочный способ работы с Mind Diary;
-- imports и named checkpoints отложены из MVP, но явно планируются после него;
+- bounded Markdown-only import принят как расширение Release 0.1, но ещё не
+  реализован; ZIP/binary/legacy imports и named checkpoints остаются post-MVP;
 - bounded support non-Markdown files/assets теперь принят как Release 0.1
   BundleFile slice; более широкие formats, processing и capacity tiers не
   приняты.
@@ -111,15 +112,18 @@ Provider selection, retrieval flow, citations, consent, billing, cost controls,
 write confirmation и точная роль MCP пока не выбраны и требуют отдельных
 specifications. Успех Codex-first MVP не заменяет отдельную проверку этой фазы.
 
-## Явно запланированные post-MVP функции
+## Принятое расширение Release 0.1 и post-MVP функции
 
 ### Imports
 
-Импорт существующего knowledge corpus точно входит в product roadmap. В MVP
-можно использовать assisted или одноразовый conversion flow, но productized
-import должен появиться после проверки базового сценария. Импорт OKF bundle —
-естественный первый кандидат, но обязательные форматы, migration policy, conflict
-handling, quotas и security boundary ещё не приняты.
+Для Release 0.1 принят первый productized profile: отдельные UTF-8 Markdown
+files проходят resumable `plan → reserve → stage → validate → commit`, а один
+exact HEAD CAS публикует одну revision или ничего. Paths, idempotency, quotas,
+temporary lifecycle, delta storage и rollback зафиксированы в
+[Sites storage/capacity/import specification](specs/sites-storage-capacity-import.md)
+и [ADR-0016](decisions/0016-sites-storage-capacity-import.md). Implementation и
+UAT capacity/import evidence ещё отсутствуют. ZIP/binary import, legacy OKF
+0.1, remote sync и cross-Mind merge остаются post-MVP decisions.
 
 ### Named checkpoints
 
@@ -172,7 +176,8 @@ accepted contract.
 - Оценивать Codex-first managed OKF wedge отдельно от будущего website AI.
 - Не считать начальную аудиторию экспертами по Git, deployment или OKF только
   потому, что они используют Codex.
-- Не считать отсутствие imports/checkpoints в MVP отказом от них в roadmap.
+- Не считать отсутствие ZIP/binary/legacy imports и checkpoints в Release 0.1
+  отказом от них в roadmap.
 - Не считать Sites-only UAT MVP долгосрочным отказом от AWS или выбором
   будущей production platform.
 - Не переносить сигнал ближнего круга на массовый рынок без внешней cohort.
@@ -181,7 +186,7 @@ accepted contract.
 ## Открытые решения
 
 - Какой один job-to-be-done должен определять успех первой Codex cohort?
-- Какие import formats идут первыми и нужен ли import уже в публичном MVP?
+- Какие import formats идут после принятого Markdown-only profile?
 - Какая точная семантика named checkpoints?
 - Какие следующие BundleFile types, capacity tiers и processing capabilities
   подтверждаются usage после bounded raster/PDF/ZIP slice?

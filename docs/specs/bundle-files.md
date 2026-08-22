@@ -158,8 +158,11 @@ Existing Markdown limits remain 1 MiB/file, 4 MiB changed Markdown bytes and
 100 total changeset operations. Stage reserves the binding-owner staging quota;
 commit transaction reserves resulting-HEAD and retained-Space quotas before
 HEAD CAS. Failed/stale commit does not consume the staged ref or quota twice.
-No client field can raise a limit. MD-260 may later define a larger capacity
-tier through a new accepted contract; this slice does not infer it.
+No client field can raise a limit. MD-260 capacity/accounting semantics are now
+accepted in the
+[Sites storage/capacity/import contract](sites-storage-capacity-import.md): the
+lower applicable BundleFile/Mind/principal/Site limit wins. Implementation and
+capacity UAT remain separate; this slice does not infer larger values.
 
 ## Upload and commit lifecycle
 
@@ -328,6 +331,10 @@ paths cannot substitute this row.
   resumable upload, previews/OCR/transcription, office/audio/video formats,
   bundle import and cross-provider native-file transports.
 - Open: public production/download CDN and retention/legal erasure model.
+
+Markdown-only resumable import is accepted by ADR-0016 but is not a BundleFile
+transport, does not extract ZIP and remains unavailable until its implementation
+and UAT rows pass.
 
 Ни одна гипотеза/open item не ослабляет accepted first-slice deny-by-default,
 authorization, exact revision, quota or export rules.

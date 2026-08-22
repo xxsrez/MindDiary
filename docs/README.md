@@ -45,20 +45,24 @@ evidence, предлагаемый дизайн и ещё не проверен�
 14. [BundleFile](specs/bundle-files.md) — принятый producer-defined contract
    versioned attachments: manifest v2, exact type/limit/staging/download rules,
    mixed atomic commits и отдельный deterministic export profile.
-15. [Автономная доставка work scope](specs/ship-work-release.md) — универсальный
+15. [Sites storage, capacity и Markdown import](specs/sites-storage-capacity-import.md)
+   — принятый Brain-scale contract: Space-scoped content addressing, v3 delta
+   manifests, reconstructable accounting/reservations, bounded Markdown import,
+   streaming export/GC и migration/rollback boundary.
+16. [Автономная доставка work scope](specs/ship-work-release.md) — универсальный
    принятый контракт `ship-work-release`: task-manager adapters, один mutable
    writer по умолчанию, selective lanes и scouts, cohorts, control API,
    dev/UAT promotion и ручная production boundary.
-16. [Контракт project profile](specs/ship-work-release-project-profile.md) —
+17. [Контракт project profile](specs/ship-work-release-project-profile.md) —
    versioned provider-neutral schema обязательных project-specific commands,
    runtime capabilities, gates, environments и evidence rows.
-17. [Контракт task-management adapter](specs/ship-work-release-task-manager.md) —
+18. [Контракт task-management adapter](specs/ship-work-release-task-manager.md) —
    versioned provider-neutral schema identity, snapshots, mutations,
    reconciliation и capability negotiation task-management backend-а.
-18. [Linear adapter для `ship-work-release`](specs/ship-work-release-linear.md) —
+19. [Linear adapter для `ship-work-release`](specs/ship-work-release-linear.md) —
    отдельное отображение Linear projects, milestones, issues, relations,
    statuses и updates в универсальную модель work collection/scope/item.
-19. [Упрощённая доставка Linear milestone](specs/ship-linear-release-v1.md) —
+20. [Упрощённая доставка Linear milestone](specs/ship-linear-release-v1.md) —
    исполнимый compromise profile `ship-linear-release`: один coordinator,
    coordinator-only либо exact N worker-субагентов, простой JSON journal,
    meaningful UAT batches и forward-only repair.
@@ -142,6 +146,9 @@ evidence, предлагаемый дизайн и ещё не проверен�
 - [ADR-0015: versioned BundleFile](decisions/0015-versioned-bundle-files.md) —
   приняты unified manifest v2, adapter-only native file transport, bounded
   quarantined staging и отдельный `MD-BUNDLE-ZIP-1` без изменения OKF 0.2.
+- [ADR-0016: Sites storage, capacity и Markdown import](decisions/0016-sites-storage-capacity-import.md)
+  — приняты Space-scoped R2 objects/manifests, D1 HEAD/ledger/reservations,
+  delta commits, bounded Markdown import и v3-aware rollback floor.
 
 ## Исследования
 

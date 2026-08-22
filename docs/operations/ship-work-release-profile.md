@@ -1148,6 +1148,12 @@ Brain Markdown profile не меньше `1741` files / `5,681,704` bytes и mix
 не меньше `590,000,000` bytes. До готовности MD-245 mixed corpus row остаётся
 непроверенной и performance acceptance не может стать terminal.
 
+For MD-265–MD-268/MD-260 the same exact-candidate receipt additionally records
+delta R2/D1 bytes, reservation/headroom state, export/cleanup queue age, peak
+buffered bytes and bounded import checkpoints according to
+[ADR-0016](../decisions/0016-sites-storage-capacity-import.md). MD-264 is
+contract-only and does not claim hosted capacity evidence.
+
 Ненулевые blocking budgets:
 
 - server telemetry p95: `list_minds`, `browse_entries`, `search` ≤ `2000 ms`,

@@ -344,6 +344,14 @@ transport. Internal application API не публикуется как customer 
 idempotency, outbox/jobs и explicit intermediate states; distributed
 transaction не предполагается.
 
+Accepted Brain-scale target уточняет эту границу: D1 transaction additionally
+owns manifest refs, reachability/usage ledger, durable reservations and import/
+cleanup cursors; Space-scoped canonical object + manifest bytes remain in R2.
+Delta/import writes prepare immutable bytes first and publish only through one
+ordinary HEAD CAS. The current implementation does not yet satisfy this target;
+full contract is
+[Sites storage/capacity/import](sites-storage-capacity-import.md).
+
 ### Account bootstrap
 
 Одна metadata transaction:

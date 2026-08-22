@@ -20,6 +20,12 @@ export реализованы и покрыты local conformance/integration te
 exact-SHA UAT остаётся MD-250. Поэтому deployed claims пока не включают
 подтверждённый native-file client flow.
 
+ADR-0016 and
+[Sites storage/capacity/import specification](sites-storage-capacity-import.md)
+принимают следующую application/wire boundary для usage, reservations and
+Markdown import. Она пока `not_started`: current schemas/tool catalog не
+публикуют import session APIs, а прежний UAT deployment не является evidence.
+
 ## Назначение и граница
 
 Mind Diary имеет четыре разные API-границы:
@@ -73,7 +79,8 @@ surface первого прототипа — authenticated MCP. Если adapte
 - отсутствие control-plane operations в content MCP;
 - UTF-8 Markdown/OKF 0.2 plus bounded producer-defined raster/PDF/ZIP
   BundleFile; BundleFile не является OKF entity;
-- отсутствие ZIP import/extraction и arbitrary-file transport;
+- отсутствие ZIP/binary/legacy import/extraction; accepted Markdown-only file
+  import remains unavailable until MD-265–MD-268 implementation and UAT gates;
 - отсутствие company-knowledge compatibility claim.
 
 Предлагаемые для верификации wire-level решения:
@@ -517,6 +524,13 @@ Problem Details response:
 | `DELETE` | `/api/v1/mcp-tokens/{token_id}` | Revoke token. |
 | `DELETE` | `/api/v1/oauth-connections/{grant_id}` | Sites-authenticated principal отзывает свой connected app grant. |
 | `PATCH` | `/api/v1/mind-bindings/{binding_owner_id}` | Sites-authenticated principal меняет binding set exact собственного active credential с CAS и server read-back. |
+| `POST` | `/api/v1/minds/{mind_ref}/markdown-import-plans` | Accepted target: metadata-only exact-snapshot plan; not implemented. |
+| `POST` | `/api/v1/minds/{mind_ref}/markdown-imports` | Accepted target: reserve a validated plan and create private import session; not implemented. |
+| `PUT` | `/api/v1/markdown-imports/{import_id}/batches/{checkpoint}` | Accepted target: bounded streaming multipart Markdown batch; not implemented. |
+| `GET` | `/api/v1/markdown-imports/{import_id}` | Accepted target: authorized status/checkpoint/diagnostics; not implemented. |
+| `POST` | `/api/v1/markdown-imports/{import_id}/validate` | Accepted target: seal and validate whole staged corpus; not implemented. |
+| `POST` | `/api/v1/markdown-imports/{import_id}/commit` | Accepted target: publish one revision under HEAD CAS; not implemented. |
+| `DELETE` | `/api/v1/markdown-imports/{import_id}` | Accepted target: cancel before commit and schedule bounded cleanup; not implemented. |
 
 `mind_ref` в REST — `me` или canonical `space_handle`. Adapter разрешает его
 в internal `space_id` и только затем authorizes request.
@@ -990,6 +1004,32 @@ deliver_audit_outbox
 expire_invitations
 expire_export_grants
 ```
+
+ADR-0016 accepts these additional application operations, but the current
+implementation/catalog does not expose them yet:
+
+```text
+queries:
+  get_markdown_import_status
+
+commands:
+  plan_markdown_import
+  start_markdown_import
+  stage_markdown_import_batch
+  validate_markdown_import
+  commit_markdown_import
+  cancel_markdown_import
+
+background handlers:
+  continue_markdown_import_validation
+  finalize_markdown_import
+  collect_expired_markdown_import
+  reconcile_capacity_usage
+  expire_capacity_reservations
+```
+
+Until MD-265–MD-268 implement these names and schemas, unknown routes remain
+404 and no import tool may be advertised through MCP.
 
 Background handler получает service `ActorContext`, explicit job/aggregate ID и
 idempotency state. Он не доверяет serialized role/token claims из job payload и
@@ -2003,6 +2043,123 @@ revision нельзя изменить или сделать writable selector. 
 idempotency key. Unavailable derived index не разрешает fallback на stale
 chunks; canonical browse/fetch остаются source of truth.
 
+### Accepted Markdown import REST profile — not implemented
+
+This is a narrow same-origin, CSRF-protected write-only Sites UI ingress, not a
+generic browser raw-content API. It never returns Markdown bodies and does not
+add import tools to the current MCP catalog. After import, the normal bound MCP
+browse/search/fetch flow verifies the result.
+
+Every route rechecks current Sites principal, ownership of the selected active
+write credential, `content:write`, exact `write_binding_id`, current role and
+session version. `import_id`/`plan_id` are locators, not capabilities. Private or
+missing denial is indistinguishable.
+
+Plan request:
+
+```json
+{
+  "write_binding_id": "wbind_opaque",
+  "expected_revision": "rev_current",
+  "policy": "replace_exact_head",
+  "idempotency_key": "01J...",
+  "files": [
+    { "path": "concepts/example.md", "size": 1234, "sha256": "sha256:..." }
+  ]
+}
+```
+
+`files` is the complete desired Markdown snapshot, at most 10,000 entries /
+64 MiB. Plan validates metadata/path/digest grammar, conflicts and current
+capacity estimate without claiming UTF-8/OKF proof. It creates a private
+30-minute plan record and returns `plan_id`, `plan_hash`, additions,
+replacements, deletions, conflicts, counts/bytes and quota state; no content or
+reservation is created. Same key/exact request replays; changed request is
+`idempotency_conflict`.
+
+Start request:
+
+```json
+{
+  "plan_id": "import_plan_opaque",
+  "plan_hash": "sha256:...",
+  "expected_plan_version": 1,
+  "idempotency_key": "01J..."
+}
+```
+
+Start atomically reauthorizes exact binding/HEAD, acquires the conservative
+capacity reservation and returns `import_id`, `session_version`, state
+`staging`, checkpoint `0`, expiry and reserved safe totals. Default session TTL
+is 24 hours. A plan cannot be rebound/adopted by another credential or Mind.
+
+Batch request is `multipart/form-data`, at most 256 files / 4 MiB total. One
+JSON `manifest` part contains only:
+
+```json
+{
+  "expected_session_version": 3,
+  "expected_checkpoint": 512,
+  "idempotency_key": "01J...",
+  "files": [
+    { "ordinal": 512, "part": "file-512", "path": "concepts/example.md", "size": 1234, "sha256": "sha256:..." }
+  ]
+}
+```
+
+Each named file part is streamed with no filename/path authority. Server checks
+the sealed plan tuple, exact bytes/digest/UTF-8 and accepts only the next
+contiguous ordinals. Exact replay returns the same checkpoint; gap/out-of-order
+is `import_checkpoint_conflict`, changed replay is `idempotency_conflict`.
+Multipart headers/body/content/path never enter logs or telemetry.
+
+Validate uses `expected_session_version` + idempotency key, seals staging and
+starts restartable whole-corpus OKF/reference validation. Status states are:
+
+```text
+staging | validating | validated | committed | finalizing | completed
+rejected | conflict | canceled | expired | failed
+```
+
+Status returns safe totals, current checkpoint, expiry, quota/reservation state
+and bounded paginated diagnostics. Authorized UI may see affected path and
+stable code; telemetry/evidence only receives ordinal/code/counts. It never
+returns text, object keys, digests beyond the caller-supplied plan, credentials
+or signed URLs.
+
+Commit requires `expected_session_version`, exact `expected_revision`, current
+plan hash and idempotency key. It reauthorizes, verifies state `validated`,
+binding generation, reservation and HEAD, then creates exactly one v3 revision,
+moves HEAD, consumes reservation and marks the session committed in one D1
+transaction. Finalize is server-owned retryable cleanup/index work. `DELETE`
+before commit is idempotent cancel; after commit it cannot undo content and
+returns `import_already_committed`.
+
+Stable import/capacity errors:
+
+```text
+import_plan_expired
+import_plan_changed
+import_session_unavailable
+import_session_expired
+import_session_version_conflict
+import_checkpoint_conflict
+import_batch_limit_exceeded
+import_manifest_mismatch
+import_not_fully_staged
+import_validation_failed
+import_not_validated
+import_already_committed
+capacity_reconciling
+capacity_soft_limit_exceeded
+capacity_hard_limit_exceeded
+capacity_reservation_unavailable
+```
+
+Implementation must keep current generic request/body limits for ordinary
+routes and add explicit streaming multipart limits here. UI admission does not
+raise the accepted per-file/Mind/principal/Site limits.
+
 ### `start_export`
 
 Input:
@@ -2272,8 +2429,8 @@ Route reachability, Bearer forwarding и default/modern Codex profiles уже
 - поддерживает ли target Codex build MCP Resources достаточно для optional
   resource path; tools остаются обязательным fallback;
 - exact opaque ID encoding, signing/lookup и retention;
-- request/search/export rate policies and capacity evidence beyond the accepted
-  first-slice file limits;
+- request/search/export rate policies and exact Sites headroom/performance
+  evidence for the accepted ADR-0016 capacity limits;
 - search ranking details и threshold после lexical benchmark;
 - manual identity recovery workflow;
 - exact Marketplace plugin version/cache snapshot для blocking automated

@@ -16,6 +16,11 @@ BF1 core, BF2 native MCP ingress и BF3 read/download/reference/dual-export
 незавершённым до MD-250; local candidate не расширяет live claims без
 exact-candidate evidence.
 
+Release 0.1 также нормативно расширен accepted Sites storage/capacity/
+Markdown-import contract по ADR-0016. Он пока `not_started`: delta v3 commit,
+usage reservations, streaming cleanup/export and resumable import должны быть
+реализованы MD-265–MD-268 и отдельно доказаны exact UAT evidence.
+
 ## Цель
 
 Доказать на prod-like UAT OpenAI Site end-to-end сценарий: authenticated
@@ -109,6 +114,10 @@ exact-candidate evidence.
 - Release 0.1 принимает UTF-8 Markdown/OKF 0.2 и producer-defined opaque
   `BundleFile` для allowlisted raster/PDF/ZIP. ZIP остаётся attachment и не
   включает ZIP/local bundle import, extraction или migration.
+- Accepted Brain-scale extension хранит new v3 manifest separately from
+  Space-scoped content objects, reuses unchanged digests and admits bounded
+  Markdown-only import through one final HEAD CAS. Until MD-265–MD-268 pass,
+  this is normative target rather than implemented behavior.
 - Unified revision manifest v2 фиксирует path, `kind: markdown | opaque`,
   SHA-256, detected media type и byte size. Existing committed manifest v1
   остаётся immutable/readable как Markdown-only.
@@ -553,8 +562,11 @@ okf://spaces/{space-id}/revisions/{revision-id}/index
 okf://spaces/{space-id}/revisions/{revision-id}/entries/{path}
 ```
 
-Import в первом прототипе отсутствует. Все account/member/visibility/ownership/
-token operations остаются вне content MCP. Tool annotations честно обозначают
+Текущий deployed/tool baseline import не публикует. Accepted Markdown-only
+profile использует отдельный write-only Sites UI REST ingress и после
+implementation проверяется обычным MCP browse/search/fetch; ZIP/binary import
+остаётся отсутствующим. Все account/member/visibility/ownership/token
+operations остаются вне content MCP. Tool annotations честно обозначают
 mutations, но не заменяют server authorization. Недоверенный corpus может
 повлиять на модель и склонить её вызвать уже разрешённый content write; этот
 residual risk ограничивается explicit write scope, current ACL, history и audit,
@@ -567,7 +579,9 @@ residual risk ограничивается explicit write scope, current ACL, hi
 - **control:** account, Minds metadata, catalog, visibility, invitations,
   memberships, roles, transfer, deletion, tokens;
 - **content:** browse/search/fetch/history/export и atomic changesets;
-- **background:** index jobs, garbage collection недостижимых incomplete
+- **import (accepted, not implemented):** plan/reserve/stage/validate/commit/
+  cancel через narrow Sites UI write ingress и один content HEAD CAS;
+- **background:** index/import jobs, garbage collection недостижимых incomplete
   objects, audit delivery.
 
 Initial revision Personal и ordinary Mind получает durable queued index
@@ -642,7 +656,9 @@ network, которого Sites пока не обещает. Если Streamabl
     `deleted-principal` tombstone. UI до действия перечисляет affected Minds.
 21. Changeset принимает UTF-8 Markdown/OKF 0.2 и только allowlisted
     producer-defined BundleFile through verified staged refs; ZIP остаётся
-    opaque, а ZIP/local bundle import отсутствует.
+    opaque, а ZIP/binary/legacy bundle import отсутствует. Markdown-only file
+    import is accepted separately but unavailable until its implementation and
+    UAT rows pass.
 22. Unknown OKF fields/types сохраняются при read-modify-write и deterministic
     export; conformance errors отделены от quality warnings.
 23. Reader и baseline Reader могут экспортировать exact разрешённую revision;
@@ -691,6 +707,23 @@ network, которого Sites пока не обещает. Если Streamabl
 - `BF6`: exact-SHA dev/UAT evidence proves image + PDF + ZIP through pinned
   native-file client/profile, persistence after redeploy and SHA-256 read-back.
   Missing hosted capability keeps feature nonterminal.
+
+### Brain-scale storage/import extension acceptance
+
+- `SI0`: ADR-0016 and storage contract define D1/R2 keys/invariants,
+  logical/physical accounting, exact limits, reservations, privacy and
+  migration/rollback without claiming implementation.
+- `SI1`: small delta in a large Mind reads/writes only touched objects plus one
+  deterministic v3 manifest; v1/v2 history remains exact and CAS/idempotency
+  publishes one revision or nothing.
+- `SI2`: reconstructable usage ledger and reservations enforce warning/soft/
+  hard limits per Mind/principal/Site, shared digest and fairness semantics.
+- `SI3`: export and GC are streaming/bounded, persisted-cursor and safe under
+  commit/staging/export races.
+- `SI4`: Markdown import resumes from exact checkpoints, rejects invalid/quota/
+  conflict cases and publishes one exact revision only after full validation.
+- `SI5`: exact-SHA Sites UAT proves Brain-scale small delta, headroom,
+  interrupt/resume, quota reject, bounded cleanup/export and final search/fetch.
 
 ## Compatibility gate для Sites и MCP
 
@@ -793,7 +826,7 @@ pilot measurement, а не durable user analytics state.
 - branches, moving tags, named checkpoints, automatic semantic merge и
   historical writes;
 - separate drafts, diff approval и commit approval artifacts;
-- ZIP/local bundle import, arbitrary file types, extraction, preview/OCR,
+- ZIP/binary/legacy bundle import, arbitrary file types, extraction, preview/OCR,
   antivirus cleanliness claim, resumable upload и legacy 0.1 migration;
 - OpenAI company-knowledge `search`/`fetch` compatibility profile;
 - legal retention, recovery, soft delete и production privacy erasure model;
@@ -804,8 +837,9 @@ pilot measurement, а не durable user analytics state.
 - raw browser content viewer/editor, autonomous external actions и outbound
   push.
 
-Этот список ограничивает только Release 0.1. Product roadmap явно
-сохраняет imports и named checkpoints как запланированные post-MVP функции,
+Этот список ограничивает только Release 0.1. Product roadmap сохраняет
+ZIP/binary/legacy imports и named checkpoints как post-MVP functions;
+Markdown-only import уже принят, но не становится available без SI1–SI5,
 website AI — как отдельную фазу расширения аудитории, а AWS — как основную
 post-MVP infrastructure direction. Bounded producer-defined `BundleFile`
 profile принят сервисом, но не становится нормативной OKF 0.2 entity; broader

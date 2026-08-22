@@ -9,6 +9,9 @@ compatibility gates. Расширенные read/write/history/export сцена
 принят для расширенного Release 0.1; core, ingress и read/export реализованы
 локально, но их UAT evidence отделено от уже проверенного Markdown-only
 baseline.
+Sites storage/capacity/Markdown-import contract для Brain-scale Release 0.1
+принят отдельно; delta commits, reservations и resumable import ещё не
+реализованы и не входят в прежнее UAT evidence.
 
 ## Зачем проект существует
 
@@ -35,8 +38,9 @@ Sites + Codex MVP должен дешёво проверить, снимает �
 в [roadmap](roadmap.md).
 
 После подтверждения базового workflow product direction включает перенос core
-на AWS, productized imports, named checkpoints и собственную AI-поверхность в
-web UI с backend model API calls. Эта будущая поверхность должна позволить
+на AWS, расширение принятого Markdown-only import до других profiles, named
+checkpoints и собственную AI-поверхность в web UI с backend model API calls.
+Эта будущая поверхность должна позволить
 работать без самостоятельной настройки Codex/MCP и тем самым открыть продукт
 технически неподготовленной аудитории. Она не считается проверенной успехом
 первого Codex pilot.
@@ -129,13 +133,23 @@ email. Invitation появляется внутри Mind Diary, роль выб�
 
 ## Content и revisions
 
-Каждая revision materializes единый service manifest exact files. Markdown
+Каждая revision разрешается через единый immutable service manifest exact
+files. Markdown
 остаётся OKF 0.2 content, а producer-defined `BundleFile` хранит opaque raster,
 PDF или ZIP bytes и не становится нормативной OKF entity. Обычная работа идёт
 по отдельным files; ZIP остаётся attachment и не означает ZIP/local bundle
 import. Markdown и BundleFile могут изменяться одним atomic changeset. Полный
 contract manifest, staging, downloads, limits и export находится в
 [BundleFile specification](specs/bundle-files.md).
+
+Brain-scale contract добавляет отдельно digested manifest v3 в R2: новая
+revision переиспользует unchanged Space-scoped object digests и пишет только
+delta + manifest перед одним D1 HEAD CAS. D1 остаётся authority для revision,
+HEAD, reachability, accounting и reservations, но не хранит full Markdown
+corpus. Markdown-only import использует resumable
+`plan → reserve → stage → validate → commit → finalize` и публикует один HEAD
+либо ничего. Полная модель и её пока не реализованный status находятся в
+[Sites storage/capacity/import specification](specs/sites-storage-capacity-import.md).
 
 Markdown-only revision экспортируется прежним byte-for-byte
 `MD-OKF-ZIP-1`. Mixed revision требует explicit `MD-BUNDLE-ZIP-1`, который
@@ -269,11 +283,12 @@ non-Markdown files больше не является open non-goal: для rast
 bounded BundleFile slice, но его repository/UAT status нельзя выводить из
 принятого contract.
 
-Imports и named checkpoints не просто исключены из MVP, а явно запланированы в
-post-MVP roadmap. Более широкие file types, extraction, previews/OCR и
-resumable import остаются будущими решениями; принятый первый BundleFile slice
-не подразумевает их. Ограничения этого раздела нельзя трактовать как полные
-границы будущего продукта; см. [roadmap](roadmap.md).
+Markdown-only resumable import теперь принят для Release 0.1, но остаётся
+не реализованным; ZIP/binary/legacy imports и named checkpoints планируются
+post-MVP. Более широкие file types, extraction и previews/OCR остаются будущими
+решениями; принятый первый BundleFile slice не подразумевает их. Ограничения
+этого раздела нельзя трактовать как полные границы будущего продукта; см.
+[roadmap](roadmap.md).
 
 Personalized content landing из ограниченного PersonalContext остаётся частью
 product direction, но не входит в критерии первого прототипа. В этом slice
