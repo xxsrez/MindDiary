@@ -10,6 +10,7 @@
     { "path": "../adapter-audit-memory" },
     { "path": "../adapter-audit-sites" },
     { "path": "../adapter-background" },
+    { "path": "../adapter-locator-sites" },
     { "path": "../adapter-mcp" },
     { "path": "../adapter-oauth-sites" },
     { "path": "../adapter-metadata-memory" },

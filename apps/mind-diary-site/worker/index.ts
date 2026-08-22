@@ -50,6 +50,7 @@ const worker = {
         },
       });
       const runtime = await runtimePromise;
+      ctx.waitUntil(runtime.recoverBackground().catch(() => undefined));
       failureStage = "product-fetch";
       const response = await runtime.fetch(request);
       failureStage = "vinext-fetch";

@@ -40,6 +40,9 @@ const expectedDependencies = new Map(
     "@mind-diary/adapter-background": [
       "@mind-diary/application-background",
     ],
+    "@mind-diary/adapter-locator-sites": [
+      "@mind-diary/application-content",
+    ],
     "@mind-diary/adapter-metadata-memory": [
       "@mind-diary/application-ports",
     ],
@@ -72,6 +75,7 @@ const expectedDependencies = new Map(
       "@mind-diary/adapter-audit-memory",
       "@mind-diary/adapter-audit-sites",
       "@mind-diary/adapter-background",
+      "@mind-diary/adapter-locator-sites",
       "@mind-diary/adapter-mcp",
       "@mind-diary/adapter-metadata-memory",
       "@mind-diary/adapter-metadata-sites",

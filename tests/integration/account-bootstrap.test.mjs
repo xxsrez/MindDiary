@@ -49,6 +49,7 @@ function sequentialIds(overrides = {}) {
     nextSpaceId: () => `space_personal_${account}`,
     nextMembershipId: () => `membership_personal_${account}`,
     nextRevisionId: () => `revision_personal_${account}`,
+    nextIndexJobId: () => `job_index_personal_${account}`,
     nextPersonalSpaceHandle: () => `personal-service-${account}`,
     ...overrides,
   };
@@ -103,6 +104,24 @@ test("one transaction creates a complete private Personal Mind and /me resolves 
   });
   assert.equal("handle" in result.personalMind, false);
   assert.equal("displayName" in result, false);
+  const initialIndex = await accounts.readRevisionIndexState(
+    "space_personal_1",
+    "revision_personal_1",
+  );
+  assert.equal(initialIndex?.status, "queued");
+  const initialJobs = await accounts.listBackgroundJobsForTest();
+  assert.deepEqual(
+    initialJobs.map((job) => ({ id: job.jobId, target: job.target, state: job.state })),
+    [{
+      id: "job_index_personal_1",
+      target: {
+        kind: "revision_index",
+        spaceId: "space_personal_1",
+        revisionId: "revision_personal_1",
+      },
+      state: "queued",
+    }],
+  );
   assert.equal("normalizedBinding" in result, false);
 
   const resolved = await service.resolveMyMind(

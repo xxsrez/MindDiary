@@ -1151,6 +1151,63 @@ function stageContentCommitEffectsAgainst(
   return Object.freeze({ kind: "staged" });
 }
 
+function stageInitialRevisionIndexAgainst(
+  records: Pick<
+    AccountBootstrapRecordSet | OrdinaryMindRecordSet,
+    "initialRevision" | "initialIndexJob" | "initialIndexState"
+  >,
+  backgroundJobs: Map<JobId, Readonly<BackgroundJob>>,
+  indexStates: Map<string, Readonly<RevisionIndexState>>,
+  mode: "initial" | "recovery" = "initial",
+): "staged" | "legacy_missing" | "invalid" {
+  const revision = records.initialRevision.revision;
+  const job = records.initialIndexJob;
+  const state = records.initialIndexState;
+  if (job === undefined || state === undefined) return "legacy_missing";
+  const target = job.target;
+  if (
+    target.kind !== "revision_index" ||
+    target.spaceId !== revision.spaceId ||
+    target.revisionId !== revision.revisionId ||
+    state.spaceId !== revision.spaceId ||
+    state.revisionId !== revision.revisionId ||
+    job.state !== "queued" ||
+    job.version !== 1 ||
+    job.attempts !== 0 ||
+    job.claimExpiresAt !== null ||
+    (mode === "initial" && job.availableAt !== revision.committedAt) ||
+    (mode === "initial" && job.createdAt !== revision.committedAt) ||
+    (mode === "initial" && job.updatedAt !== revision.committedAt) ||
+    (mode === "recovery" && job.availableAt !== job.createdAt) ||
+    (mode === "recovery" && job.updatedAt !== job.createdAt) ||
+    (mode === "recovery" && Date.parse(job.createdAt) < Date.parse(revision.committedAt)) ||
+    state.status !== "queued" ||
+    state.attempts !== 0 ||
+    (mode === "initial" && state.queuedAt !== revision.committedAt) ||
+    (mode === "initial" && state.updatedAt !== revision.committedAt) ||
+    (mode === "recovery" && state.queuedAt !== job.createdAt) ||
+    (mode === "recovery" && state.updatedAt !== job.createdAt) ||
+    state.readyAt !== null ||
+    state.lastFailureCode !== null ||
+    backgroundJobs.has(job.jobId) ||
+    indexStates.has(indexStateKey(state.spaceId, state.revisionId)) ||
+    [...backgroundJobs.values()].some(
+      (candidate) =>
+        candidate.target.kind === "revision_index" &&
+        candidate.target.spaceId === target.spaceId &&
+        candidate.target.revisionId === target.revisionId,
+    )
+  ) {
+    return "invalid";
+  }
+  backgroundJobs.set(job.jobId, cloneBackgroundJob(job));
+  indexStates.set(
+    indexStateKey(state.spaceId, state.revisionId),
+    cloneIndexState(state),
+  );
+  return "staged";
+}
+
 function checkIdempotencyAgainst(
   request: CheckIdempotencyRequest,
   records: ReadonlyMap<string, CompletedIdempotencyRecord>,
@@ -5314,6 +5371,8 @@ export class InMemoryRevisionMetadataStore
           const candidateRevisionsById = new Map(revisionsById);
           const candidateIdempotencyRecords =
             cloneOrdinaryMindIdempotencyRecords(idempotencyRecords);
+          const candidateBackgroundJobs = new Map(backgroundJobs);
+          const candidateIndexStates = new Map(indexStates);
           const candidateActiveByHandle = new Map(activeByHandle);
           const candidateActiveBySpace = new Map(activeBySpace);
           const candidateRetired = new Map(retired);
@@ -5362,6 +5421,15 @@ export class InMemoryRevisionMetadataStore
             return Object.freeze({ kind: "record_conflict" });
           }
           this.#failOrdinaryMindIfRequested("create_after_revision");
+          if (
+            stageInitialRevisionIndexAgainst(
+              records,
+              candidateBackgroundJobs,
+              candidateIndexStates,
+            ) === "invalid"
+          ) {
+            return Object.freeze({ kind: "record_conflict" });
+          }
 
           candidateKnowledgeSpaces.set(
             space.spaceId,
@@ -5397,6 +5465,8 @@ export class InMemoryRevisionMetadataStore
           revisionSpaces = candidateRevisionSpaces;
           revisionsById = candidateRevisionsById;
           idempotencyRecords = candidateIdempotencyRecords;
+          backgroundJobs = candidateBackgroundJobs;
+          indexStates = candidateIndexStates;
           activeByHandle = candidateActiveByHandle;
           activeBySpace = candidateActiveBySpace;
           retired = candidateRetired;
@@ -6919,6 +6989,12 @@ export class InMemoryRevisionMetadataStore
       const memberships = cloneRecordMap(this.#memberships, freezeMembership);
       const revisionSpaces = cloneSpaces(this.#spaces);
       const revisionsById = new Map(this.#revisionsById);
+      const backgroundJobs = new Map(
+        [...this.#backgroundJobs].map(([id, job]) => [id, cloneBackgroundJob(job)]),
+      );
+      const indexStates = new Map(
+        [...this.#indexStates].map(([key, state]) => [key, cloneIndexState(state)]),
+      );
       const transaction: AccountBootstrapTransaction = Object.freeze({
         readAccountByExternalBinding: async (
           lookup: Readonly<ExternalIdentityBindingLookup>,
@@ -6998,6 +7074,12 @@ export class InMemoryRevisionMetadataStore
             return Object.freeze({ kind: "record_conflict" });
           }
           this.#failAccountBootstrapIfRequested("after_revision");
+          if (
+            stageInitialRevisionIndexAgainst(records, backgroundJobs, indexStates) ===
+            "invalid"
+          ) {
+            return Object.freeze({ kind: "record_conflict" });
+          }
           principals.set(principal.principalId, freezePrincipal(principal));
           this.#failAccountBootstrapIfRequested("after_principal");
           externalBindings.set(
@@ -7043,6 +7125,8 @@ export class InMemoryRevisionMetadataStore
       this.#memberships = memberships;
       this.#spaces = revisionSpaces;
       this.#revisionsById = revisionsById;
+      this.#backgroundJobs = backgroundJobs;
+      this.#indexStates = indexStates;
       return result;
     });
   }
@@ -7531,6 +7615,103 @@ export class InMemoryRevisionMetadataStore
         updatedAt: failedAt,
       }));
       return true;
+    });
+  }
+
+  async listRecoverableIndexJobs(
+    now: RevisionIndexState["updatedAt"],
+    limit: number,
+  ): Promise<readonly Readonly<BackgroundJob>[]> {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) return Object.freeze([]);
+    const nowMs = Date.parse(now);
+    if (!Number.isFinite(nowMs)) return Object.freeze([]);
+    return Object.freeze(
+      [...this.#backgroundJobs.values()]
+        .filter((job) => {
+          if (job.target.kind !== "revision_index") return false;
+          if (job.attempts >= 5) return false;
+          if (job.state === "queued" || job.state === "failed") {
+            return Date.parse(job.availableAt) <= nowMs;
+          }
+          return job.state === "running" &&
+            job.claimExpiresAt !== null &&
+            Date.parse(job.claimExpiresAt) <= nowMs;
+        })
+        .sort((left, right) => {
+          const availability = left.availableAt.localeCompare(right.availableAt);
+          return availability === 0
+            ? String(left.jobId).localeCompare(String(right.jobId), "en")
+            : availability;
+        })
+        .slice(0, limit)
+        .map(cloneBackgroundJob),
+    );
+  }
+
+  async listActiveRevisionIndexGaps(
+    limit: number,
+  ): Promise<readonly Readonly<{ readonly spaceId: SpaceId; readonly revisionId: RevisionId }>[]> {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) return Object.freeze([]);
+    return Object.freeze(
+      [...this.#knowledgeSpaces.values()]
+        .filter((space) =>
+          space.state === "active" &&
+          !this.#indexStates.has(indexStateKey(space.spaceId, space.headRevisionId)))
+        .sort((left, right) => String(left.spaceId).localeCompare(String(right.spaceId), "en"))
+        .slice(0, limit)
+        .map((space) => Object.freeze({
+          spaceId: space.spaceId,
+          revisionId: space.headRevisionId,
+        })),
+    );
+  }
+
+  async ensureRevisionIndexQueued(
+    job: Readonly<BackgroundJob>,
+    state: Readonly<RevisionIndexState>,
+  ) {
+    return this.#runExclusive(async () => {
+      if (job.target.kind !== "revision_index") {
+        return Object.freeze({ kind: "invalid_effects" as const });
+      }
+      const target = job.target;
+      const space = this.#knowledgeSpaces.get(target.spaceId);
+      if (!space || space.state !== "active") {
+        return Object.freeze({ kind: "revision_not_found" as const });
+      }
+      if (space.headRevisionId !== target.revisionId) {
+        return Object.freeze({ kind: "not_current_head" as const });
+      }
+      const revision = this.#revisionsById.get(target.revisionId);
+      if (!revision || revision.revision.spaceId !== target.spaceId) {
+        return Object.freeze({ kind: "revision_not_found" as const });
+      }
+      const key = indexStateKey(target.spaceId, target.revisionId);
+      const existingState = this.#indexStates.get(key);
+      const existingJob = [...this.#backgroundJobs.values()].find(
+        (candidate) =>
+          candidate.target.kind === "revision_index" &&
+          candidate.target.spaceId === target.spaceId &&
+          candidate.target.revisionId === target.revisionId,
+      );
+      if (existingState && existingJob) {
+        return Object.freeze({ kind: "already_present" as const, job: cloneBackgroundJob(existingJob) });
+      }
+      if (existingState || existingJob) {
+        return Object.freeze({ kind: "invalid_effects" as const });
+      }
+      const jobs = new Map(this.#backgroundJobs);
+      const states = new Map(this.#indexStates);
+      if (stageInitialRevisionIndexAgainst({
+        initialRevision: revision,
+        initialIndexJob: job,
+        initialIndexState: state,
+      }, jobs, states, "recovery") !== "staged") {
+        return Object.freeze({ kind: "invalid_effects" as const });
+      }
+      this.#backgroundJobs = jobs;
+      this.#indexStates = states;
+      return Object.freeze({ kind: "queued" as const, job: cloneBackgroundJob(job) });
     });
   }
 

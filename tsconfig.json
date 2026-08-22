@@ -12,6 +12,7 @@
     { "path": "packages/adapter-mcp" },
     { "path": "packages/adapter-oauth-sites" },
     { "path": "packages/adapter-background" },
+    { "path": "packages/adapter-locator-sites" },
     { "path": "packages/adapter-metadata-memory" },
     { "path": "packages/adapter-metadata-sites" },
     { "path": "packages/adapter-object-memory" },

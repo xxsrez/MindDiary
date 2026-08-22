@@ -529,6 +529,12 @@ residual risk ограничивается explicit write scope, current ACL, hi
 - **background:** index jobs, garbage collection недостижимых incomplete
   objects, audit delivery.
 
+Initial revision Personal и ordinary Mind получает durable queued index
+state/job в той же metadata transaction. Sites Worker выполняет bounded
+request-triggered recovery для missed/due/expired-claim work; после restart
+клиент видит exact `missing | queued | ready | failed` readiness через
+авторизованный `get_mind_info`, а не угадывает её повторными search errors.
+
 Физически UAT MVP держит Web adapter, MCP adapter и core в одном OpenAI
 Site. Это сохраняет внутреннюю границу без предположения о private service
 network, которого Sites пока не обещает. Если Streamable HTTP MCP не проходит

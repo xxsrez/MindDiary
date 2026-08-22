@@ -8,6 +8,7 @@ import {
   createBackgroundServiceActor,
   createProductBackgroundDispatcher,
 } from "@mind-diary/adapter-background";
+import { SitesMindLocatorCodec } from "@mind-diary/adapter-locator-sites";
 import {
   MCP_ENDPOINT,
   MCP_LEGACY_CODEX_ENDPOINT,
@@ -56,6 +57,7 @@ import {
   InvitationExpiryJobHandler,
   ReadyExactRevisionIndexService,
   RevisionIndexJobHandler,
+  RevisionIndexStatusService,
 } from "@mind-diary/application-background";
 import {
   AutomaticCaptureService,
@@ -73,7 +75,6 @@ import {
   MindSearchService,
   MindValidationService,
   MCP_CONTENT_DEPLOYMENT_CAPABILITIES,
-  WebCryptoMindLocatorCodec,
   type McpBearerAuthenticator,
   type SitesIdentityActorContext,
 } from "@mind-diary/application-content";
@@ -105,6 +106,7 @@ import {
   type MindBindingOwnerId,
   type PrincipalId,
   type UtcInstant,
+  version,
   verifiedSpaceHost,
 } from "@mind-diary/domain";
 
@@ -149,6 +151,12 @@ export interface ProductSiteRuntimeOptions {
 
 export interface ProductSiteRuntime {
   readonly fetch: (request: Request) => Promise<Response | null>;
+  /** Bounded request-triggered recovery for exact-revision index work. */
+  readonly recoverBackground: (limit?: number) => Promise<Readonly<{
+    backfilled: number;
+    dispatched: number;
+    failed: number;
+  }>>;
   readonly dispatchBackground: (work: Readonly<
     | { readonly kind: "revision_index"; readonly jobId: string }
     | { readonly kind: "export"; readonly jobId: string }
@@ -513,9 +521,14 @@ export async function createProductSiteRuntime(
   const backgroundAuthorizer = new CurrentAccessBackgroundAuthorizer(metadata);
   const revisions = new CanonicalRevisionCoordinator({ objects, revisions: metadata });
   const readyIndex = new ReadyExactRevisionIndexService({ work: metadata, index });
-  const locators = new WebCryptoMindLocatorCodec(options.locatorKey);
+  const indexStatus = new RevisionIndexStatusService(metadata);
+  const locators = new SitesMindLocatorCodec({
+    database: options.database,
+    secret: options.locatorKey,
+    now,
+  });
 
-  const discovery = new MindDiscoveryService({ store: metadata, host });
+  const discovery = new MindDiscoveryService({ store: metadata, host, indexStatus });
   const bindings = new MindBindingApplicationService({
     authorizer,
     bindings: metadata,
@@ -1170,8 +1183,59 @@ export async function createProductSiteRuntime(
     },
   });
 
+  const recoverBackground = async (requestedLimit = 16) => {
+    const limit = Number.isSafeInteger(requestedLimit)
+      ? Math.max(1, Math.min(64, requestedLimit))
+      : 16;
+    const nowUtc = clock.now();
+    const gaps = await metadata.listActiveRevisionIndexGaps(limit);
+    let backfilled = 0;
+    for (const gap of gaps) {
+      const jobId = nextOpaque("job-index-recovery");
+      const ensured = await metadata.ensureRevisionIndexQueued(
+        Object.freeze({
+          jobId,
+          target: Object.freeze({
+            kind: "revision_index" as const,
+            spaceId: gap.spaceId,
+            revisionId: gap.revisionId,
+          }),
+          state: "queued" as const,
+          version: version(1),
+          attempts: 0,
+          availableAt: nowUtc,
+          claimExpiresAt: null,
+          createdAt: nowUtc,
+          updatedAt: nowUtc,
+        }),
+        Object.freeze({
+          spaceId: gap.spaceId,
+          revisionId: gap.revisionId,
+          status: "queued" as const,
+          attempts: 0,
+          queuedAt: nowUtc,
+          updatedAt: nowUtc,
+          readyAt: null,
+          lastFailureCode: null,
+        }),
+      );
+      if (ensured.kind === "queued") backfilled += 1;
+    }
+    const due = await metadata.listRecoverableIndexJobs(clock.now(), limit);
+    const results = await Promise.allSettled(
+      due.map((job) =>
+        dispatchBackground({ kind: "revision_index", jobId: job.jobId })),
+    );
+    return Object.freeze({
+      backfilled,
+      dispatched: results.length,
+      failed: results.filter((result) => result.status === "rejected").length,
+    });
+  };
+
   return Object.freeze({
     dispatchBackground,
+    recoverBackground,
     async fetch(request: Request): Promise<Response | null> {
       const path = new URL(request.url).pathname;
       const oauthResponse = await oauth.fetch(request);

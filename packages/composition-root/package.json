@@ -10,6 +10,7 @@
     "@mind-diary/adapter-audit-memory": "0.0.0",
     "@mind-diary/adapter-audit-sites": "0.0.0",
     "@mind-diary/adapter-background": "0.0.0",
+    "@mind-diary/adapter-locator-sites": "0.0.0",
     "@mind-diary/adapter-mcp": "0.0.0",
     "@mind-diary/adapter-oauth-sites": "0.0.0",
     "@mind-diary/adapter-metadata-memory": "0.0.0",

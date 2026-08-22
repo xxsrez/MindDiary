@@ -553,6 +553,13 @@ explicit target Mind. General cross-Mind search/synthesis требует нов�
   `/api/mcp/2025-11-25` и не создаёт session state.
 - D1 event log сохраняет metadata transactions и восстанавливает state после
   нового runtime instance; R2 хранит canonical objects и export archives.
+  Initial revision index effects входят в account/Mind create transaction, а
+  bounded request-triggered reconciler подбирает due jobs и backfill-ит legacy
+  active HEAD без state/job после restart/redeploy.
+- Browse/search/fetch locator producer использует D1-backed fixed-size `mdl2_`
+  handles: private exact-revision payload хранится только AES-GCM encrypted,
+  lookup индексируется keyed verifier, TTL bounded. Legacy `mdl1_` decrypt
+  остаётся временным compatibility read path.
 - Trusted Sites identity, browser CSRF/Origin и Bearer content MCP остаются
   разными security boundaries; browser не рендерит raw Markdown, MCP не
   публикует control tools.

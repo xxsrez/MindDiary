@@ -83,6 +83,17 @@ function snakeOutput(value: unknown): unknown {
   return mapKeys(value, toSnakeKey);
 }
 
+function canonicalCommitOperations(value: unknown): unknown {
+  if (!Array.isArray(value)) return value;
+  return Object.freeze(value.map((item) => {
+    if (item === null || typeof item !== "object" || Array.isArray(item)) return item;
+    const operation = item as Readonly<Record<string, unknown>>;
+    if (!("expectedSha256" in operation)) return operation;
+    const { expectedSha256, ...rest } = operation;
+    return Object.freeze({ ...rest, expected_sha256: expectedSha256 });
+  }));
+}
+
 function stringValue(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
@@ -438,7 +449,7 @@ export class ProductMcpContentApplication implements McpContentApplication {
           expectedRevisionId: input.expectedRevision as never,
           idempotencyKey: input.idempotencyKey as never,
           summary: input.summary as never,
-          operations: input.operations as never,
+          operations: canonicalCommitOperations(input.operations) as never,
         });
         if (result.kind === "committed") {
           await this.#dependencies.scheduleCommitEffects?.();
@@ -459,7 +470,11 @@ export class ProductMcpContentApplication implements McpContentApplication {
         }
         const output = snakeOutput(result);
         const code =
-          result.kind === "denied" ? result.decision.code : result.kind;
+          result.kind === "denied"
+            ? result.decision.code
+            : result.kind === "invalid"
+              ? result.error.code
+              : result.kind;
         return createMcpToolErrorResult(
           request.actor.requestId,
           code,

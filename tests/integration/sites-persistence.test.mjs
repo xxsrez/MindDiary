@@ -64,6 +64,7 @@ class FakeD1Database {
   metadataEvents = [];
   search = new Map();
   audit = new Map();
+  locatorHandles = new Map();
   #failTag = null;
 
   prepare(sql) {
@@ -107,6 +108,23 @@ class FakeD1Database {
         payload_json: values[3],
       });
       return { success: true, meta: { changes: 1 } };
+    }
+    if (sql.includes("/*md-locator-create*/")) {
+      this.locatorHandles.set(values[0], {
+        encrypted_payload: values[1],
+        expires_at: values[2],
+      });
+      return { success: true, meta: { changes: 1 } };
+    }
+    if (sql.includes("/*md-locator-cleanup*/")) {
+      const expired = [...this.locatorHandles.entries()]
+        .filter(([, row]) => row.expires_at <= values[0])
+        .slice(0, 64);
+      for (const [key] of expired) this.locatorHandles.delete(key);
+      return { success: true, meta: { changes: expired.length } };
+    }
+    if (sql.includes("/*md-locator-delete*/")) {
+      return { success: true, meta: { changes: this.locatorHandles.delete(values[0]) ? 1 : 0 } };
     }
     if (sql.includes("/*md-search-replace*/")) {
       this.search.set(`${values[0]}\u0000${values[1]}`, values[2]);
@@ -164,6 +182,10 @@ class FakeD1Database {
     this.#maybeFail(sql);
     if (sql.includes("/*md-metadata-events*/")) {
       return { success: true, results: this.metadataEvents.map((row) => ({ ...row })) };
+    }
+    if (sql.includes("/*md-locator-read*/")) {
+      const row = this.locatorHandles.get(values[0]);
+      return { success: true, results: row ? [{ ...row }] : [] };
     }
     if (sql.includes("/*md-search-read*/")) {
       const documents_json = this.search.get(`${values[0]}\u0000${values[1]}`);
@@ -389,6 +411,79 @@ async function idempotentCommitRecord(store, namespace, revisionId) {
     });
   });
 }
+
+test("legacy active HEAD without index effects replays and is backfilled exactly once", async () => {
+  const database = new FakeD1Database();
+  const bucket = new FakeR2Bucket();
+  const generators = ids();
+  let boundary = await createSitesPersistenceBoundary({ database, bucket });
+  const app = services(boundary, generators);
+  const created = await app.bootstrap.bootstrapAccount(preRegistrationActor(1), {
+    action: "create_isolated_account",
+  });
+  const bootstrapEvent = database.metadataEvents.find(
+    (event) => event.operation === "runAccountBootstrapTransaction",
+  );
+  assert.ok(bootstrapEvent);
+  const payload = JSON.parse(bootstrapEvent.payload_json);
+  const createCall = payload.calls.find((call) => call.method === "createAccountBootstrap");
+  assert.ok(createCall);
+  delete createCall.args[0].initialIndexJob;
+  delete createCall.args[0].initialIndexState;
+  bootstrapEvent.payload_json = JSON.stringify(payload);
+
+  boundary = await createSitesPersistenceBoundary({ database, bucket });
+  const personal = await boundary.metadata.resolvePersonalMind(created.principalId);
+  assert.ok(personal);
+  assert.equal(
+    await boundary.metadata.readRevisionIndexState(
+      personal.spaceId,
+      personal.headRevisionId,
+    ),
+    null,
+  );
+  assert.deepEqual(
+    await boundary.metadata.listActiveRevisionIndexGaps(10),
+    [{ spaceId: personal.spaceId, revisionId: personal.headRevisionId }],
+  );
+
+  const recoveryState = {
+    spaceId: personal.spaceId,
+    revisionId: personal.headRevisionId,
+    status: "queued",
+    attempts: 0,
+    queuedAt: T1,
+    updatedAt: T1,
+    readyAt: null,
+    lastFailureCode: null,
+  };
+  const makeJob = (jobId) => ({
+    jobId,
+    target: {
+      kind: "revision_index",
+      spaceId: personal.spaceId,
+      revisionId: personal.headRevisionId,
+    },
+    state: "queued",
+    version: 1,
+    attempts: 0,
+    availableAt: T1,
+    claimExpiresAt: null,
+    createdAt: T1,
+    updatedAt: T1,
+  });
+  const [first, second] = await Promise.all([
+    boundary.metadata.ensureRevisionIndexQueued(makeJob("job_recovery_a"), recoveryState),
+    boundary.metadata.ensureRevisionIndexQueued(makeJob("job_recovery_b"), recoveryState),
+  ]);
+  assert.deepEqual(
+    [first.kind, second.kind].sort(),
+    ["already_present", "queued"],
+  );
+  const due = await boundary.metadata.listRecoverableIndexJobs(T1, 10);
+  assert.equal(due.length, 1);
+  assert.equal(due[0].target.revisionId, personal.headRevisionId);
+});
 
 test("Sites composition persists account, invitation, ownership, HEAD CAS, idempotency and token state across isolates", async () => {
   const database = new FakeD1Database();

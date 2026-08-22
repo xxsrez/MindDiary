@@ -51,6 +51,7 @@ function accountIds() {
     nextSpaceId: () => `space_personal_ordinary_${account}`,
     nextMembershipId: () => `membership_personal_ordinary_${account}`,
     nextRevisionId: () => `revision_personal_ordinary_${account}`,
+    nextIndexJobId: () => `job_index_personal_ordinary_${account}`,
     nextPersonalSpaceHandle: () => `personal-service-ordinary-${account}`,
   };
 }
@@ -59,10 +60,12 @@ function ordinaryIds(prefix = "ordinary") {
   let spaces = 0;
   let memberships = 0;
   let revisions = 0;
+  let indexJobs = 0;
   return {
     nextSpaceId: () => `space_${prefix}_${++spaces}`,
     nextMembershipId: () => `membership_${prefix}_${++memberships}`,
     nextRevisionId: () => `revision_${prefix}_${++revisions}`,
+    nextIndexJobId: () => `job_index_${prefix}_${++indexJobs}`,
   };
 }
 
@@ -154,6 +157,19 @@ test("create atomically publishes one private ordinary Mind, initial HEAD and so
   assert.equal(state.memberships[0].state, "active");
   assert.equal(state.memberships[0].principalId, owner.principalId);
   assert.equal(state.reservation.spaceId, created.mindId);
+  assert.equal(
+    (await env.metadata.readRevisionIndexState(
+      created.mindId,
+      state.space.headRevisionId,
+    ))?.status,
+    "queued",
+  );
+  assert.ok(
+    (await env.metadata.listBackgroundJobsForTest()).some((job) =>
+      job.jobId === "job_index_ordinary_1" &&
+      job.target.kind === "revision_index" &&
+      job.target.spaceId === created.mindId),
+  );
   assert.deepEqual(
     await env.metadata.resolveHandle({ host: HOST, handle: "research-notes" }),
     { kind: "resolved", spaceId: created.mindId },

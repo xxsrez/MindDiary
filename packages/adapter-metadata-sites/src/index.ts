@@ -101,6 +101,7 @@ const METADATA_MUTATIONS = new Set([
   "completeInvitationExpiryJob",
   "failInvitationExpiryJob",
   "claimIndexJob",
+  "ensureRevisionIndexQueued",
   "completeIndexJob",
   "failIndexJob",
   "claimAuditOutbox",

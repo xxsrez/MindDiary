@@ -567,6 +567,7 @@ test("injected transaction failures roll back invitation and idempotency, then e
       idempotencyKey: `rollback-${stage}`,
     });
     const before = await state(env, mind.mindId);
+    const jobsBefore = await env.metadata.listBackgroundJobsForTest();
     env.metadata.failNextOrdinaryMindAtForTest(stage);
     await assert.rejects(
       env.invitations.createInvitation(
@@ -576,7 +577,7 @@ test("injected transaction failures roll back invitation and idempotency, then e
       /injected ordinary Mind transaction failure/u,
     );
     assert.deepEqual(await state(env, mind.mindId), before);
-    assert.deepEqual(await env.metadata.listBackgroundJobsForTest(), []);
+    assert.deepEqual(await env.metadata.listBackgroundJobsForTest(), jobsBefore);
 
     const recovered = await env.invitations.createInvitation(
       actor(owner.principalId, `request_recover_${stage}`),
@@ -587,7 +588,11 @@ test("injected transaction failures roll back invitation and idempotency, then e
     assert.equal(final.invitations.length, 1);
     assert.equal(final.memberships.length, 1);
     assert.equal(final.space.metadataVersion, 2);
-    assert.equal((await env.metadata.listBackgroundJobsForTest()).length, 1);
+    assert.equal(
+      (await env.metadata.listBackgroundJobsForTest()).filter((job) =>
+        job.target.kind === "expire_invitation").length,
+      1,
+    );
   }
 });
 

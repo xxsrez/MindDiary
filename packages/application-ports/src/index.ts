@@ -145,6 +145,8 @@ export interface AccountBootstrapIdGenerator {
   nextSpaceId(): SpaceId;
   nextMembershipId(): MembershipId;
   nextRevisionId(): RevisionId;
+  /** Optional only for legacy test generators; production must provide it. */
+  nextIndexJobId?(): JobId;
   nextPersonalSpaceHandle(): string;
 }
 
@@ -224,6 +226,8 @@ export interface AccountBootstrapRecordSet {
   readonly personalBinding: Readonly<PersonalSpaceBinding>;
   readonly ownerMembership: Readonly<SpaceMembership>;
   readonly initialRevision: Readonly<CanonicalRevisionEnvelope>;
+  readonly initialIndexJob: Readonly<BackgroundJob>;
+  readonly initialIndexState: Readonly<RevisionIndexState>;
 }
 
 export type CreateAccountBootstrapResult =
@@ -400,6 +404,8 @@ export interface OrdinaryMindIdGenerator {
   nextSpaceId(): SpaceId;
   nextMembershipId(): MembershipId;
   nextRevisionId(): RevisionId;
+  /** Optional only for legacy test generators; production must provide it. */
+  nextIndexJobId?(): JobId;
 }
 
 /** Server-owned identity for one pending invitation. */
@@ -549,6 +555,8 @@ export interface OrdinaryMindRecordSet {
   readonly space: Readonly<KnowledgeSpace>;
   readonly ownerMembership: Readonly<SpaceMembership>;
   readonly initialRevision: Readonly<CanonicalRevisionEnvelope>;
+  readonly initialIndexJob: Readonly<BackgroundJob>;
+  readonly initialIndexState: Readonly<RevisionIndexState>;
   readonly idempotencyKey: IdempotencyKey;
   readonly canonicalRequestHash: Sha256Digest;
 }
@@ -1600,7 +1608,28 @@ export type ClaimAuditOutboxResult =
     }
   | { readonly kind: "not_found" | "not_available" | "completed" };
 
+export interface RevisionIndexRecoveryGap {
+  readonly spaceId: SpaceId;
+  readonly revisionId: RevisionId;
+}
+
+export type EnsureRevisionIndexQueuedResult =
+  | { readonly kind: "queued"; readonly job: Readonly<BackgroundJob> }
+  | { readonly kind: "already_present"; readonly job: Readonly<BackgroundJob> }
+  | { readonly kind: "revision_not_found" | "not_current_head" | "invalid_effects" };
+
 export interface BackgroundWorkStore extends MetadataStore {
+  listRecoverableIndexJobs(
+    now: UtcInstant,
+    limit: number,
+  ): Promise<readonly Readonly<BackgroundJob>[]>;
+  listActiveRevisionIndexGaps(
+    limit: number,
+  ): Promise<readonly Readonly<RevisionIndexRecoveryGap>[]>;
+  ensureRevisionIndexQueued(
+    job: Readonly<BackgroundJob>,
+    state: Readonly<RevisionIndexState>,
+  ): Promise<EnsureRevisionIndexQueuedResult>;
   claimIndexJob(
     jobId: JobId,
     now: UtcInstant,

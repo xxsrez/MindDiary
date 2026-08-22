@@ -1,5 +1,6 @@
 import { SITES_AUDIT_MIGRATIONS } from "../../packages/adapter-audit-sites/dist/index.js";
 import { SITES_METADATA_MIGRATIONS } from "../../packages/adapter-metadata-sites/dist/index.js";
+import { SITES_LOCATOR_MIGRATIONS } from "../../packages/adapter-locator-sites/dist/index.js";
 import { SITES_OAUTH_SCHEMA } from "../../packages/adapter-oauth-sites/dist/index.js";
 import { SITES_SEARCH_MIGRATIONS } from "../../packages/adapter-search-sites/dist/index.js";
 
@@ -11,6 +12,7 @@ export const EXPECTED_D1_SCHEMA_GROUPS = Object.freeze({
   metadata: Object.freeze(
     SITES_METADATA_MIGRATIONS.flatMap((migration) => migration.statements).map(canonicalSql),
   ),
+  locator: Object.freeze(SITES_LOCATOR_MIGRATIONS.map(canonicalSql)),
   search: Object.freeze(SITES_SEARCH_MIGRATIONS.map(canonicalSql)),
   audit: Object.freeze(SITES_AUDIT_MIGRATIONS.map(canonicalSql)),
   oauth: Object.freeze(SITES_OAUTH_SCHEMA.map(canonicalSql)),
@@ -52,6 +54,7 @@ class FakeD1Statement {
 
 export class FakeD1Database {
   metadataEvents = [];
+  locatorHandles = new Map();
   search = new Map();
   audit = new Map();
   oauthClients = new Map();
@@ -91,6 +94,30 @@ export class FakeD1Database {
     if (sql.includes("/*md-metadata-migration*/")) {
       this.#assertSchema("metadata");
       return { success: true, meta: { changes: 1 } };
+    }
+    if (sql.includes("/*md-locator-create*/")) {
+      if (this.locatorHandles.has(values[0])) {
+        throw new Error("duplicate FakeD1 locator verifier");
+      }
+      this.locatorHandles.set(values[0], {
+        verifier: values[0],
+        encrypted_payload: values[1],
+        expires_at: values[2],
+        created_at: values[3],
+      });
+      return { success: true, meta: { changes: 1 } };
+    }
+    if (sql.includes("/*md-locator-cleanup*/")) {
+      const expired = [...this.locatorHandles.values()]
+        .filter((row) => row.expires_at <= values[0])
+        .sort((left, right) => left.expires_at.localeCompare(right.expires_at))
+        .slice(0, 64);
+      for (const row of expired) this.locatorHandles.delete(row.verifier);
+      return { success: true, meta: { changes: expired.length } };
+    }
+    if (sql.includes("/*md-locator-delete*/")) {
+      const removed = this.locatorHandles.delete(values[0]);
+      return { success: true, meta: { changes: removed ? 1 : 0 } };
     }
     if (sql.includes("/*md-search-migration*/")) {
       this.#assertSchema("search");
@@ -495,6 +522,10 @@ export class FakeD1Database {
         success: true,
         results: this.metadataEvents.map((row) => ({ ...row })),
       };
+    }
+    if (sql.includes("/*md-locator-read*/")) {
+      const row = this.locatorHandles.get(values[0]);
+      return { success: true, results: row ? [structuredClone(row)] : [] };
     }
     if (sql.includes("/*md-search-read*/")) {
       this.#assertSchema("search");

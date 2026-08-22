@@ -61,6 +61,14 @@ const OPAQUE_ID_SCHEMA = Object.freeze({
   pattern: "^[^\\u0000-\\u001f\\u007f]+$",
 });
 
+/** Producer and consumer budget for every server-issued browse/search/fetch locator. */
+const LOCATOR_ID_SCHEMA = Object.freeze({
+  type: "string",
+  minLength: 1,
+  maxLength: 512,
+  pattern: "^[^\\u0000-\\u001f\\u007f]+$",
+});
+
 const PAGE_LIMIT_SCHEMA = Object.freeze({
   type: "integer",
   minimum: 1,
@@ -275,7 +283,7 @@ const ENTRY_SUMMARY_SCHEMA = Object.freeze({
     "size",
   ]),
   properties: Object.freeze({
-    entry_id: OPAQUE_ID_SCHEMA,
+    entry_id: LOCATOR_ID_SCHEMA,
     resource_uri: Object.freeze({ type: "string", format: "uri" }),
     path: NON_EMPTY_STRING_SCHEMA,
     kind: Object.freeze({
@@ -346,7 +354,7 @@ const SEARCH_INPUT_SCHEMA = strictInputSchema(
   ["mind", "query"],
 );
 
-const FETCH_INPUT_SCHEMA = strictInputSchema({ id: OPAQUE_ID_SCHEMA }, ["id"]);
+const FETCH_INPUT_SCHEMA = strictInputSchema({ id: LOCATOR_ID_SCHEMA }, ["id"]);
 
 const LIST_REVISIONS_INPUT_SCHEMA = strictInputSchema(
   {
@@ -460,6 +468,7 @@ const GET_MIND_INFO_OUTPUT_SCHEMA = toolOutputSchema(
       "resolved_revision",
       "revision_mode",
       "content_capabilities",
+      "index_status",
     ]),
     properties: Object.freeze({
       mind: MIND_DESCRIPTOR_SCHEMA,
@@ -482,6 +491,30 @@ const GET_MIND_INFO_OUTPUT_SCHEMA = toolOutputSchema(
             "export",
             "commit",
           ]),
+        }),
+      }),
+      index_status: Object.freeze({
+        type: "object",
+        additionalProperties: false,
+        required: Object.freeze([
+          "status",
+          "retryable",
+          "retry_after_ms",
+          "failure_code",
+        ]),
+        properties: Object.freeze({
+          status: Object.freeze({
+            type: "string",
+            enum: Object.freeze(["missing", "queued", "ready", "failed"]),
+          }),
+          retryable: Object.freeze({ type: "boolean" }),
+          retry_after_ms: Object.freeze({
+            type: Object.freeze(["integer", "null"]),
+            minimum: 0,
+          }),
+          failure_code: Object.freeze({
+            type: Object.freeze(["string", "null"]),
+          }),
         }),
       }),
     }),
@@ -577,6 +610,7 @@ const FETCH_OUTPUT_SCHEMA = toolOutputSchema(
           truncated: Object.freeze({ type: "boolean" }),
           continuation_id: Object.freeze({
             type: Object.freeze(["string", "null"]),
+            maxLength: 512,
           }),
         }),
       }),

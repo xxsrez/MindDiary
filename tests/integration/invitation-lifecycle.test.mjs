@@ -346,7 +346,11 @@ test("whole-Mind deletion removes invitation history, lifecycle idempotency and 
     command(invite.invitationId, 1, "reissue-before-delete"),
   );
   assert.equal((await state(env, mind.mindId)).invitations.length, 2);
-  assert.equal((await env.metadata.listBackgroundJobsForTest()).length, 2);
+  assert.equal(
+    (await env.metadata.listBackgroundJobsForTest()).filter((job) =>
+      job.target.kind === "expire_invitation").length,
+    2,
+  );
 
   const impact = await env.metadata.runOrdinaryMindTransaction(
     (transaction) => transaction.createOrdinaryMindDeletionImpact({
@@ -360,7 +364,7 @@ test("whole-Mind deletion removes invitation history, lifecycle idempotency and 
   );
   assert.equal(impact.kind, "created");
   assert.equal(impact.impact.invitationCount, 2);
-  assert.equal(impact.impact.backgroundJobCount, 2);
+  assert.equal(impact.impact.backgroundJobCount, 3);
   const deleted = await env.metadata.runOrdinaryMindTransaction(
     (transaction) => transaction.deleteOrdinaryMind({
       principalId: owner.principalId,
@@ -373,15 +377,23 @@ test("whole-Mind deletion removes invitation history, lifecycle idempotency and 
   );
   assert.equal(deleted.kind, "deleted");
   assert.equal(deleted.counts.invitations, 2);
-  assert.equal(deleted.counts.backgroundJobs, 2);
+  assert.equal(deleted.counts.backgroundJobs, 3);
   assert.equal(deleted.counts.idempotencyRecords, 3);
   assert.equal(await env.metadata.inspectOrdinaryMindStateForTest(mind.mindId), null);
-  assert.deepEqual(await env.metadata.listBackgroundJobsForTest(), []);
+  assert.equal(
+    (await env.metadata.listBackgroundJobsForTest()).filter((job) =>
+      (job.target.kind === "revision_index" && job.target.spaceId === mind.mindId) ||
+      job.target.kind === "expire_invitation").length,
+    0,
+  );
 });
 
 test("durable expiry re-reads invitation state, survives reconstruction and loses races safely", async () => {
   const { env, target, mind, invite } = await fixture("editor");
-  const [job] = await env.metadata.listBackgroundJobsForTest();
+  const job = (await env.metadata.listBackgroundJobsForTest()).find(
+    (candidate) => candidate.target.kind === "expire_invitation",
+  );
+  assert.ok(job);
   assert.equal(job.target.kind, "expire_invitation");
   assert.deepEqual(Object.keys(job.target), ["kind", "invitationId"]);
   const now = { value: "2026-08-14T06:14:59.999Z" };
@@ -411,7 +423,10 @@ test("durable expiry re-reads invitation state, survives reconstruction and lose
 
 test("expiry claims are lease/version fenced and stale workers cannot settle a reclaimed job", async () => {
   const { env, mind } = await fixture("reader");
-  const [job] = await env.metadata.listBackgroundJobsForTest();
+  const job = (await env.metadata.listBackgroundJobsForTest()).find(
+    (candidate) => candidate.target.kind === "expire_invitation",
+  );
+  assert.ok(job);
   const leaseOne = "2026-08-14T06:15:01.000Z";
   const first = await env.metadata.claimInvitationExpiryJob(job.jobId, EXPIRES, leaseOne);
   assert.equal(first.kind, "claimed");
@@ -451,7 +466,10 @@ test("injected lifecycle and expiry failures roll back exact state and remain re
   assert.equal(recovered.replayed, false);
 
   const expiring = await fixture("reader");
-  const [job] = await expiring.env.metadata.listBackgroundJobsForTest();
+  const job = (await expiring.env.metadata.listBackgroundJobsForTest()).find(
+    (candidate) => candidate.target.kind === "expire_invitation",
+  );
+  assert.ok(job);
   const clock = { now: () => EXPIRES };
   const handler = new InvitationExpiryJobHandler({ jobs: expiring.env.metadata, clock });
   expiring.env.metadata.failNextOrdinaryMindAtForTest("invitation_expiry_before_commit");

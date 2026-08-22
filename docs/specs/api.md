@@ -105,7 +105,7 @@ surface первого прототипа — authenticated MCP. Если adapte
 |---|---|
 | `mind_id` | Server-issued locator Mind; не bearer capability и не raw authority. |
 | `revision_id` | Immutable domain revision ID. |
-| `entry_id` | Exact locator, как минимум bound к `space_id + revision_id + path`. |
+| `entry_id` | Exact locator, bound к `space_id + revision_id + path`; producer и consumer ограничивают его 512 characters. Новые `mdl2_` handles имеют fixed 37-character form и server-side encrypted payload с TTL. |
 | `job_id` | Export job locator. |
 | `token_id` | Metadata ID MCP token; никогда не secret. |
 | `binding_owner_id` | Server-derived OAuth-grant/personal-token owner; first-party UI может передать его только как opaque locator собственного credential, после чего server заново проверяет ownership/state/scopes. Он никогда не является authority claim. |
@@ -964,6 +964,14 @@ idempotency state. Он не доверяет serialized role/token claims из 
 отвечают за перевод в HTTP Problem Details или MCP tool result, но не меняют
 domain semantics.
 
+Personal bootstrap и ordinary Mind create атомарно ставят initial exact HEAD в
+`queued` вместе с одним `revision_index` job. Product Worker на каждом
+подходящем request запускает bounded recovery trigger: он backfill-ит active
+current HEAD без state/job и подбирает due `queued`, `failed` либо
+expired-running claims. Пять неуспешных attempts оставляют диагностируемый
+`failed` terminal state; recovery никогда не подмешивает другую HEAD и не
+меняет canonical content.
+
 ## Content MCP
 
 ### Endpoint selection
@@ -1412,12 +1420,22 @@ Output:
   "mind": {},
   "resolved_revision": {},
   "revision_mode": "head",
-  "content_capabilities": ["browse", "search", "fetch", "commit"]
+  "content_capabilities": ["browse", "search", "fetch", "commit"],
+  "index_status": {
+    "status": "queued",
+    "retryable": true,
+    "retry_after_ms": 2000,
+    "failure_code": null
+  }
 }
 ```
 
 Historical mode никогда не содержит `commit`. Tool остаётся discovery: он не
 создаёт binding, а unbound target не объявляет content capability active.
+`index_status` относится только к exact resolved revision и не является
+authorization capability. Возможны `missing | queued | ready | failed`;
+клиент делает bounded poll по `retry_after_ms`, а после timeout продолжает
+через canonical browse/fetch. Job IDs, query и content в projection отсутствуют.
 
 ### `get_mind_bindings`
 
@@ -1602,8 +1620,13 @@ Input: `{ "id": "entry-or-continuation-opaque" }`.
 
 Output: `{ "fetched": FetchedEntry }`.
 
-`id` всегда фиксирует exact revision. Server проверяет current access перед
-каждым page fetch. Delete из HEAD не мешает fetch старой revision при
+`id` всегда фиксирует exact revision. Новый producer выдаёт compact `mdl2_`
+handle, не зависящий от длины path/revision ID; encrypted payload хранится в D1
+и истекает через один час. Server проверяет current access перед каждым page
+fetch. Tamper/expiry/unknown handle дают одинаковый `locator_not_found` без
+metadata leakage. Ранее выданные AES-GCM `mdl1_` IDs продолжают читаться при
+том же deployment key как migration compatibility path; новые `mdl1_` больше
+не выпускаются. Delete из HEAD не мешает fetch старой revision при
 сохранившемся current history access; whole-Mind deletion инвалидирует IDs.
 
 ### `list_revisions`
@@ -1741,6 +1764,9 @@ Rules:
 - `expected_sha256` optional; если он передан, file в expected HEAD обязан
   совпасть. Без него остаётся обязательная защита всего changeset через
   `expected_revision`;
+- MCP schema и runtime используют одно canonical поле `expected_sha256` также
+  для `replace_index`: correct digest проходит, mismatch возвращает
+  `file_digest_mismatch`, malformed digest — `invalid_operation`;
 - все resulting files обязаны быть valid UTF-8 Markdown и bundle обязан пройти
   OKF conformance;
 - concept + index + log применяются all-or-nothing;

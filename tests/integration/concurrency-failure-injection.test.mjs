@@ -1203,7 +1203,11 @@ test(
       { kind: "unavailable" },
     );
     assert.equal(env.audit.deliveredForTest().length, 0);
-    assert.equal((await env.metadata.listBackgroundJobsForTest()).length, 0);
+    assert.equal(
+      (await env.metadata.listBackgroundJobsForTest()).filter((job) =>
+        job.target.kind === "revision_index" && job.target.spaceId === mind.mindId).length,
+      0,
+    );
     assert.equal((await env.metadata.listAuditEventsForTest()).length, 0);
     assert.equal((await env.metadata.listAuditOutboxForTest()).length, 0);
   },

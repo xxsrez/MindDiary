@@ -46,6 +46,7 @@ class FakeD1Database {
   metadataEvents = [];
   search = new Map();
   audit = new Map();
+  locatorHandles = new Map();
 
   prepare(sql) {
     return new FakeD1Statement(this, sql);
@@ -78,6 +79,23 @@ class FakeD1Database {
         payload_json: values[3],
       });
       return { success: true, meta: { changes: 1 } };
+    }
+    if (sql.includes("/*md-locator-create*/")) {
+      this.locatorHandles.set(values[0], {
+        encrypted_payload: values[1],
+        expires_at: values[2],
+      });
+      return { success: true, meta: { changes: 1 } };
+    }
+    if (sql.includes("/*md-locator-cleanup*/")) {
+      const expired = [...this.locatorHandles.entries()]
+        .filter(([, row]) => row.expires_at <= values[0])
+        .slice(0, 64);
+      for (const [key] of expired) this.locatorHandles.delete(key);
+      return { success: true, meta: { changes: expired.length } };
+    }
+    if (sql.includes("/*md-locator-delete*/")) {
+      return { success: true, meta: { changes: this.locatorHandles.delete(values[0]) ? 1 : 0 } };
     }
     if (sql.includes("/*md-search-replace*/")) {
       this.search.set(`${values[0]}\u0000${values[1]}`, values[2]);
@@ -136,6 +154,10 @@ class FakeD1Database {
         success: true,
         results: this.metadataEvents.map((row) => ({ ...row })),
       };
+    }
+    if (sql.includes("/*md-locator-read*/")) {
+      const row = this.locatorHandles.get(values[0]);
+      return { success: true, results: row ? [{ ...row }] : [] };
     }
     if (sql.includes("/*md-search-read*/")) {
       const documents_json = this.search.get(`${values[0]}\u0000${values[1]}`);
@@ -467,9 +489,23 @@ test("empty account reaches a strict starter commit and first useful search/fetc
   );
   const writeBindingId = writeBinding.current.write_binding_id;
   const initialRevisionId = personal.head.revision_id;
+  const initialBrowse = await modernTool(
+    runtime,
+    secret,
+    "starter-browse-initial",
+    "browse_entries",
+    { mind: "/me", revision_selector: { kind: "revision", revision_id: initialRevisionId } },
+  );
+  const initialIndexDigest = initialBrowse.entries.find(({ path }) => path === "index.md")?.sha256;
+  assert.match(initialIndexDigest, /^sha256:[0-9a-f]{64}$/u);
   const operations = MIND_DIARY_STARTER_OKF_TEMPLATE.map((file) => {
     if (file.path === "index.md") {
-      return { type: "replace_index", path: file.path, text: file.text };
+      return {
+        type: "replace_index",
+        path: file.path,
+        text: file.text,
+        expected_sha256: initialIndexDigest,
+      };
     }
     if (file.path === "log.md") {
       return {
@@ -499,7 +535,69 @@ test("empty account reaches a strict starter commit and first useful search/fetc
   const starterRevisionId = committed.revision.revision_id;
   const indexWork = scheduled.findLast((work) => work.kind === "revision_index");
   assert.ok(indexWork);
-  await runtime.dispatchBackground({ kind: "revision_index", jobId: indexWork.id });
+  const queuedInfo = await modernTool(
+    runtime,
+    secret,
+    "starter-index-queued",
+    "get_mind_info",
+    { mind: "/me", revision_selector: { kind: "revision", revision_id: starterRevisionId } },
+  );
+  assert.equal(queuedInfo.index_status.status, "queued");
+  assert.equal(queuedInfo.index_status.retryable, true);
+  const recovery = await runtime.recoverBackground();
+  assert.ok(recovery.dispatched >= 2);
+  const readyInfo = await modernTool(
+    runtime,
+    secret,
+    "starter-index-ready",
+    "get_mind_info",
+    { mind: "/me", revision_selector: { kind: "revision", revision_id: starterRevisionId } },
+  );
+  assert.equal(readyInfo.index_status.status, "ready");
+  assert.equal(readyInfo.index_status.retryable, false);
+
+  for (const [id, digest, expectedStatus, expectedCode] of [
+    ["starter-index-stale-digest", initialIndexDigest, 200, "file_digest_mismatch"],
+    ["starter-index-malformed-digest", "sha256:not-a-digest", 200, "invalid_operation"],
+  ]) {
+    const rejected = await modernMcp(runtime, secret, {
+      jsonrpc: "2.0",
+      id,
+      method: "tools/call",
+      params: {
+        name: "commit_changeset",
+        arguments: {
+          mind: "/me",
+          write_binding_id: writeBindingId,
+          expected_revision: starterRevisionId,
+          idempotency_key: `commit:${id}`,
+          summary: "Reject invalid index precondition",
+          operations: [{
+            type: "replace_index",
+            path: "index.md",
+            text: MIND_DIARY_STARTER_OKF_TEMPLATE.find(({ path }) => path === "index.md").text,
+            expected_sha256: digest,
+          }],
+        },
+        _meta: {
+          "io.modelcontextprotocol/protocolVersion": MCP_TARGET_PROTOCOL,
+          "io.modelcontextprotocol/clientInfo": {
+            name: "mind-diary-starter-e2e",
+            version: "0.0.0",
+          },
+          "io.modelcontextprotocol/clientCapabilities": {},
+        },
+      },
+    });
+    const rejectedBody = await rejected.json();
+    assert.equal(rejected.status, expectedStatus, JSON.stringify(rejectedBody));
+    if (expectedStatus === 200) {
+      assert.equal(rejectedBody.result.isError, true);
+      assert.equal(rejectedBody.result.structuredContent.error.code, expectedCode);
+    } else {
+      assert.equal(rejectedBody.error.code, expectedCode);
+    }
+  }
 
   const validation = await modernTool(
     runtime,
@@ -1300,10 +1398,7 @@ test("durable product runtime carries a Sites account token through Codex MCP an
   assert.equal(committedBody.result.structuredContent.data.index_status, "queued");
   const committedIndexWork = scheduled.findLast((work) => work.kind === "revision_index");
   assert.ok(committedIndexWork);
-  await runtime.dispatchBackground({
-    kind: "revision_index",
-    jobId: committedIndexWork.id,
-  });
+  await runtime.recoverBackground();
 
   const listedAfterCommit = await legacyMcp(runtime, secret, {
     jsonrpc: "2.0",

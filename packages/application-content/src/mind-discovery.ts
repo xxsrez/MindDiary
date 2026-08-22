@@ -136,6 +136,24 @@ export interface MindInfoResult {
   readonly resolvedRevision: Readonly<MindDiscoveryRevisionDescriptor>;
   readonly revisionMode: RevisionMode;
   readonly contentCapabilities: readonly MindInfoCapability[];
+  readonly indexStatus: Readonly<{
+    readonly status: "missing" | "queued" | "ready" | "failed";
+    readonly retryable: boolean;
+    readonly retryAfterMs: number | null;
+    readonly failureCode: string | null;
+  }>;
+}
+
+export interface RevisionIndexStatusReader {
+  read(request: {
+    readonly spaceId: SpaceId;
+    readonly revisionId: RevisionId;
+    readonly currentHeadRevisionId: RevisionId | null;
+  }): Promise<Readonly<{
+    readonly status: "queued" | "ready" | "failed";
+    readonly attempts: number;
+    readonly lastFailureCode: string | null;
+  }> | null>;
 }
 
 export interface MindDiscoveryStore
@@ -145,6 +163,7 @@ export interface MindDiscoveryStore
 export interface MindDiscoveryDependencies {
   readonly store: MindDiscoveryStore;
   readonly host: VerifiedSpaceHost;
+  readonly indexStatus?: RevisionIndexStatusReader;
 }
 
 interface NormalizedListQuery {
@@ -363,12 +382,14 @@ function infoCapabilities(capabilities: readonly Capability[]): readonly MindInf
 export class MindDiscoveryService {
   readonly #store: MindDiscoveryStore;
   readonly #host: VerifiedSpaceHost;
+  readonly #indexStatus: RevisionIndexStatusReader | undefined;
   readonly #authorizer: CapabilityAuthorizer;
   readonly #handles: AuthorizedHandleReader<Readonly<OrdinaryMindRouteSnapshot>>;
 
   constructor(dependencies: MindDiscoveryDependencies) {
     this.#store = dependencies.store;
     this.#host = dependencies.host;
+    this.#indexStatus = dependencies.indexStatus;
     this.#authorizer = new CapabilityAuthorizer(dependencies.store);
     this.#handles = new AuthorizedHandleReader({
       handles: dependencies.store,
@@ -505,11 +526,33 @@ export class MindDiscoveryService {
         throw new MindDiscoveryFailure("mind_not_found", "Mind was not found.");
       }
       if ((await this.#store.readHead(spaceId)) !== currentHead) continue;
+      const rawIndexStatus = await this.#indexStatus?.read({
+        spaceId,
+        revisionId: envelope.revision.revisionId,
+        currentHeadRevisionId: currentHead,
+      });
+      const indexStatus = rawIndexStatus === undefined || rawIndexStatus === null
+        ? Object.freeze({
+            status: "missing" as const,
+            retryable: true,
+            retryAfterMs: 1_000,
+            failureCode: null,
+          })
+        : Object.freeze({
+            status: rawIndexStatus.status,
+            retryable: rawIndexStatus.status !== "ready" && rawIndexStatus.attempts < 5,
+            retryAfterMs:
+              rawIndexStatus.status !== "ready" && rawIndexStatus.attempts < 5
+                ? Math.min(30_000, 1_000 * (2 ** Math.min(rawIndexStatus.attempts, 5)))
+                : null,
+            failureCode: rawIndexStatus.lastFailureCode,
+          });
       return Object.freeze({
         mind: resolved.descriptor,
         resolvedRevision: revisionDescriptor(envelope, currentHead),
         revisionMode,
         contentCapabilities: infoCapabilities(access.capabilities),
+        indexStatus,
       });
     }
     throw new MindDiscoveryFailure(

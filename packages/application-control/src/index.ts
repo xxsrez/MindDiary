@@ -63,6 +63,7 @@ import {
   type DeletedPrincipalId,
   type IdempotencyKey,
   type InvitationRole,
+  type JobId,
   type MembershipId,
   type MindBindingOwnerId,
   type OutboxMessageId,
@@ -805,6 +806,42 @@ function exactBindingLookup(
   });
 }
 
+function initialRevisionIndexEffects(
+  ids: Pick<AccountBootstrapIdGenerator | OrdinaryMindIdGenerator, "nextIndexJobId">,
+  spaceId: SpaceId,
+  revisionId: string,
+  occurredAt: UtcInstant,
+) {
+  const jobId = ids.nextIndexJobId?.() ?? (`index_job_${revisionId}` as JobId);
+  return Object.freeze({
+    job: Object.freeze({
+      jobId,
+      target: Object.freeze({
+        kind: "revision_index" as const,
+        spaceId,
+        revisionId: revisionId as never,
+      }),
+      state: "queued" as const,
+      version: version(1),
+      attempts: 0,
+      availableAt: occurredAt,
+      claimExpiresAt: null,
+      createdAt: occurredAt,
+      updatedAt: occurredAt,
+    }),
+    state: Object.freeze({
+      spaceId,
+      revisionId: revisionId as never,
+      status: "queued" as const,
+      attempts: 0,
+      queuedAt: occurredAt,
+      updatedAt: occurredAt,
+      readyAt: null,
+      lastFailureCode: null,
+    }),
+  });
+}
+
 export class AccountBootstrapService {
   readonly #accounts: AccountBootstrapStore;
   readonly #objects: ObjectStore;
@@ -912,6 +949,12 @@ export class AccountBootstrapService {
         manifestHash,
         summary: "Create Personal Mind",
       });
+      const initialIndex = initialRevisionIndexEffects(
+        this.#ids,
+        spaceId,
+        revisionId,
+        actor.occurredAtUtc,
+      );
       const records = Object.freeze({
         principal: Object.freeze({
           principalId,
@@ -964,6 +1007,8 @@ export class AccountBootstrapService {
           updatedBy: principalId,
         }),
         initialRevision,
+        initialIndexJob: initialIndex.job,
+        initialIndexState: initialIndex.state,
       });
 
       const created = await this.#accounts.runAccountBootstrapTransaction(
@@ -1681,6 +1726,12 @@ export class OrdinaryMindControlService {
         manifestHash,
         summary: "Create Mind",
       });
+      const initialIndex = initialRevisionIndexEffects(
+        this.#ids,
+        spaceId,
+        revisionId,
+        trustedActor.occurredAtUtc,
+      );
       const records = Object.freeze({
         host: this.#host,
         space: Object.freeze({
@@ -1709,6 +1760,8 @@ export class OrdinaryMindControlService {
           updatedBy: trustedActor.principalId,
         }),
         initialRevision,
+        initialIndexJob: initialIndex.job,
+        initialIndexState: initialIndex.state,
         idempotencyKey: checkedIdempotencyKey,
         canonicalRequestHash,
       });
