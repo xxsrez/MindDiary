@@ -135,6 +135,7 @@ export class FakeD1Database {
         row.principal_id === values[1] &&
         row.client_id === values[2] &&
         row.resource === values[4]);
+      const reconnecting = existing?.revoked_at != null;
       const row = existing ?? {
         id: values[0],
         principal_id: values[1],
@@ -143,6 +144,14 @@ export class FakeD1Database {
         created_at: values[6],
         last_used_at: null,
       };
+      if (reconnecting) {
+        this.oauthGrants.delete(row.id);
+        Object.assign(row, {
+          id: values[0],
+          created_at: values[6],
+          last_used_at: null,
+        });
+      }
       Object.assign(row, {
         client_name: values[3],
         scopes_json: values[5],
@@ -456,7 +465,11 @@ export class FakeD1Database {
       const row = [...this.oauthRefresh.values()].find((item) =>
         item.token_verifier === values[0] && item.client_id === values[1]);
       return {
-        results: row ? [{ grant_id: row.grant_id, family_id: row.family_id }] : [],
+        results: row ? [{
+          grant_id: row.grant_id,
+          family_id: row.family_id,
+          principal_id: row.principal_id,
+        }] : [],
       };
     }
     if (sql.includes("/*md-oauth-connections-list*/")) {

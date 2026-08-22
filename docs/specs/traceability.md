@@ -64,17 +64,18 @@ contract, не переписывая historical release evidence. Contract (`MD
 локальный durable state slice (`MD-231`), MCP binding tools (`MD-230`) и hard
 content enforcement (`MD-232`), а также Product Site/interaction guidance
 (`MD-233`) подтверждены локально. Capture (`MD-234`) теперь также имеет local
-candidate; hosted join остаётся `MD-235`.
+candidate. `MD-235` добавляет blocking exact-candidate join в canonical profile;
+hosted `uat.mind-bindings` всё ещё требует evidence конкретного deployment.
 
 | ID | Наблюдаемый результат | Owner | Local evidence | UAT evidence |
 |---|---|---|---|---|
 | B0-Contract | OAuth grant/personal token — authoritative binding owner; `0..N` read, `0..1` write, exact lifecycle/CAS/errors и fail-closed migration согласованы. | `MD-229` | docs topology/link validation + `git diff --check`; это contract evidence, не runtime | not-applicable до implementation |
-| B1-State | Durable binding state переживает restart, atomic rebind invalidates previous ID, revoke/delete fail closed. | `MD-231` | `mind-binding-state` application/CAS/idempotency/Sites-reconstruction/audit suite; `ordinary-mind-deletion` и `account-deletion` orphan-negative cases; architecture check | `MD-235`, pending |
-| B2-Tools | Оба MCP profiles публикуют deterministic inspection/read/write binding tools с current authorization. | `MD-230` | `mcp-binding-tools` strict schemas, redaction, step-up, cross-profile replay и modern/compatibility lifecycle; `mcp-tools`, `mcp-transport`, Product MCP runtime regressions | `MD-235`, pending |
-| B3-Enforcement | Bound reads и exact active write ID являются hard server boundary без wrong-Mind side effects. | `MD-232` | `mind-binding-enforcement`: unbound/detached read, locator/job reuse, exact write ID и concurrent rebind fencing; 133-test content/MCP/persistence regression slice | `MD-235`, pending |
-| B4-UX | Product Site/plugin показывают current reads/exact write target и не infer-ят его из content/model state. | `MD-233` | `mcp-token-management-ui`: read/write/empty/revoked/stale/redaction/copy contract; Product HTTP CSRF/CAS/server-read-back integration; durable composed Product Site token binding/revoke fencing; real browser wide/portrait/landscape checks; Marketplace baseline `8f44ee4` | `MD-235`, pending |
-| B5-Capture | Отдельная opt-in capture policy пишет только в active target с provenance/privacy constraints. | `MD-234` | `automatic-capture` + `mind-binding-state`: default-off/private-only/pinned-generation/persistence/no-op/conflict/rebind/privacy/audit; strict MCP schema/write-step-up adapter; durable Product Site UI → CAS → MCP read-back → capture/no-op → disable E2E; Marketplace `181320e`, plugin `0.1.0+codex.20260822115002` validators | `MD-235`, pending |
-| B6-Join | Один exact candidate проходит concurrency/security/persistence/plugin/UAT matrix. | `MD-235` | pending | pending |
+| B1-State | Durable binding state переживает restart, atomic rebind invalidates previous ID, revoke/delete fail closed. | `MD-231` | `mind-binding-state` application/CAS/idempotency/Sites-reconstruction/audit suite; `ordinary-mind-deletion`, `account-deletion` и `gate:synthetic-multi-principal` assertions `restart-persistence`, `mind-delete-invalidates-target`, `owner-revoke-invalidates-state` | blocking `uat.mind-bindings` exact deployment |
+| B2-Tools | Оба MCP profiles публикуют deterministic inspection/read/write binding tools с current authorization. | `MD-230` | `mcp-binding-tools`, `mcp-tools`, `mcp-transport`; fresh-plugin OAuth gate и shared modern/compatibility state | blocking `uat.mind-bindings` exact deployment |
+| B3-Enforcement | Bound reads и exact active write ID являются hard server boundary без wrong-Mind side effects. | `MD-232` | `mind-binding-enforcement` и synthetic exact-candidate assertions `current-target-exactly-one-revision`, `rebind-stale-no-side-effect`, `concurrent-rebind-cas`, `detach-unbind-fail-closed` | blocking `uat.mind-bindings` exact deployment |
+| B4-UX | Product Site/plugin показывают current reads/exact write target и не infer-ят его из content/model state. | `MD-233` | UI/HTTP/browser suites; fresh Marketplace plugin receipt; OAuth connected-app revoke и clean reconnect-generation assertions | blocking `uat.mind-bindings` exact deployment |
+| B5-Capture | Отдельная opt-in capture policy пишет только в active target с provenance/privacy constraints. | `MD-234` | `automatic-capture`, synthetic state matrix и fresh-plugin OAuth product-runtime capture/no-op assertions; Marketplace `181320e`, plugin `0.1.0+codex.20260822115002` | blocking `uat.mind-bindings` target-A capture and rebind fencing |
+| B6-Join | Один exact candidate проходит concurrency/security/persistence/plugin/UAT matrix. | `MD-235` | blocking `dev.mind-bindings` joins exact-SHA `dev.synthetic-multi-principal` and `dev.oauth-direct-plugin` receipts with required assertion IDs | blocking `uat.mind-bindings` exact candidate/deployment/plugin/profile receipt |
 
 ## Как читать матрицу
 

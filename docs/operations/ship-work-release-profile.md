@@ -351,6 +351,7 @@ dev:
     - dev.mcp-compat
     - dev.synthetic-multi-principal
     - dev.oauth-direct-plugin
+    - dev.mind-bindings
     - dev.changed-surface
 
 uat:
@@ -508,6 +509,7 @@ uat:
     - uat.persistence-redeploy
     - uat.mcp-modern
     - uat.mcp-compat
+    - uat.mind-bindings
     - uat.changed-surface
     - uat.multi-principal
     - uat.oauth-direct-plugin-canary
@@ -745,6 +747,39 @@ evidence:
         max_bytes: 2097152
         required_fields: [status, candidate_sha, marketplace_candidate_sha, marketplace_tree_sha, plugin_version, plugin_snapshot_sha256, client, client_version, route, binding_namespace, external_ui_canary, assertions, artifact_sha256]
       redaction_policy: release-evidence-default
+    - id: dev.mind-bindings
+      stage: dev
+      requirement: required
+      when: { always: true }
+      probe:
+        kind: receipt_assertion
+        receipt_ids:
+          - dev.synthetic-multi-principal
+          - dev.oauth-direct-plugin
+        required_assertion_ids:
+          - bindings.initial-empty
+          - bindings.multi-read-idempotent
+          - bindings.single-write-current-target
+          - bindings.current-target-exactly-one-revision
+          - bindings.rebind-stale-no-side-effect
+          - bindings.concurrent-rebind-cas
+          - bindings.restart-persistence
+          - bindings.detach-unbind-fail-closed
+          - bindings.mind-delete-invalidates-target
+          - bindings.owner-revoke-invalidates-state
+          - oauth.explicit-write-binding-readback
+          - oauth.connected-app-binding-revoke
+          - oauth.reconnect-empty-binding-generation
+        assertions:
+          - { left: run.candidate_sha, operator: all-equal }
+      success: { path: /status, operator: eq, value: passed }
+      artifact:
+        schema: mind-diary/mind-bindings-join-evidence/v1
+        media_type: application/json
+        storage: inline-bounded
+        max_bytes: 65536
+        required_fields: [status, candidate_sha, receipt_ids, assertions, artifact_sha256]
+      redaction_policy: release-evidence-default
     - id: uat.exact-artifact-lineage
       stage: uat
       requirement: required
@@ -857,6 +892,42 @@ evidence:
         storage: content-addressed-reference
         max_bytes: 1048576
         required_fields: [status, candidate_sha, deployment_id, client, client_version, protocol_version, route, assertions, artifact_sha256]
+      redaction_policy: release-evidence-default
+    - id: uat.mind-bindings
+      stage: uat
+      requirement: required
+      when: { always: true }
+      probe:
+        kind: runtime_capability
+        capability: mind-diary/uat-mind-bindings/v1
+        inputs:
+          scenario: { literal: exact-candidate-two-mind-binding-matrix }
+          base_url: { literal: "https://mind-diary.example.invalid" }
+          deployment_id: { value_from: run.uat_deployment_id }
+          actor_class: { literal: single-principal-owner }
+          credential_ref: { literal: fresh-installed-marketplace-plugin }
+          targets: { literal: two-clearly-synthetic-private-minds }
+          routes: { literal: [/api/mcp, /api/mcp/2025-11-25] }
+        required_assertion_ids:
+          - bindings.read-two-exact-targets
+          - bindings.target-a-commit-and-capture
+          - bindings.prepare-a-rebind-b-stale-no-side-effect
+          - bindings.target-b-commit-exactly-once
+          - bindings.target-a-head-unchanged-after-stale
+          - bindings.detach-unbind-fail-closed
+          - bindings.persistence-after-redeploy
+          - bindings.oauth-refresh-preserves-generation
+          - bindings.oauth-revoke-invalidates-generation
+          - bindings.fresh-reconnect-empty-generation
+          - bindings.modern-compat-shared-state
+          - plugin.fresh-install-exact-version
+      success: { path: /status, operator: eq, value: passed }
+      artifact:
+        schema: mind-diary/uat-mind-bindings-evidence/v1
+        media_type: application/json
+        storage: content-addressed-reference
+        max_bytes: 2097152
+        required_fields: [status, candidate_sha, deployment_id, plugin_version, client, client_version, routes, target_fingerprints, assertions, artifact_sha256]
       redaction_policy: release-evidence-default
     - id: uat.changed-surface
       stage: uat
@@ -1024,11 +1095,12 @@ runtime:
 
 ## Resolution rules
 
-Accepted [Mind binding contract](../specs/mind-bindings.md) пока не имеет
-реализованной release row в canonical profile. Candidate, который включает
-binding runtime changes, нельзя продвигать по прежней MCP matrix как будто она
-достаточна: `MD-235` обязан до UAT добавить exact-candidate persistence,
-concurrency, revoke/delete, stale-writer/no-side-effect и fresh-plugin checks.
+Accepted [Mind binding contract](../specs/mind-bindings.md) имеет отдельные
+blocking `dev.mind-bindings` и `uat.mind-bindings` rows. Candidate, который
+включает binding runtime changes, нельзя продвигать по прежней MCP matrix как
+будто она достаточна: exact-candidate receipts обязаны доказать persistence,
+concurrency, revoke/delete, stale-writer/no-side-effect, OAuth
+revoke/reconnect-generation и fresh-plugin behavior до terminal UAT result.
 Contract-only `MD-229` проверяется docs validator и diff check и не является
 hosted functionality.
 
@@ -1075,8 +1147,10 @@ manual workflow с новым prompt и финальным подтвержде�
 
 Required rows доказывают только перечисленные assertions exact environment и
 candidate. `dev.synthetic-multi-principal` и `dev.oauth-direct-plugin` всегда
-blocking; compatibility, changed-surface и persistence-after-redeploy rows
-становятся обязательными по machine condition. Значение `not-applicable`
+blocking; `dev.mind-bindings` join-ит их exact-SHA assertions, а
+`uat.mind-bindings` всегда blocking для текущего binding candidate.
+Compatibility, changed-surface и persistence-after-redeploy rows становятся
+обязательными по machine condition. Значение `not-applicable`
 допустимо только при false condition; отсутствие required runtime capability
 или artifact является failure, а не основанием пропустить проверку.
 

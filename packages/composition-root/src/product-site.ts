@@ -103,6 +103,8 @@ import {
   type Capability,
   type EffectiveTokenScopes,
   type MindBindingOwnerId,
+  type PrincipalId,
+  type UtcInstant,
   verifiedSpaceHost,
 } from "@mind-diary/domain";
 
@@ -688,6 +690,19 @@ export async function createProductSiteRuntime(
     publicOrigin: options.publicOrigin,
     verifierKey: options.tokenVerifierKey,
     authorizationTokens: metadata,
+    async revokeBindingOwner(input) {
+      const result = await metadata.revokeMindBindingOwner({
+        bindingOwnerId: input.bindingOwnerId as MindBindingOwnerId,
+        principalId: input.principalId as PrincipalId,
+        requestId: nextOpaque("request-oauth-binding-revoke"),
+        auditEventId: generated.nextMindBindingAuditEventId(),
+        auditOutboxMessageId: generated.nextMindBindingOutboxMessageId(),
+        occurredAt: input.occurredAt as UtcInstant,
+      });
+      if (result.kind !== "revoked" && result.kind !== "not_found") {
+        throw new Error("OAuth binding owner revocation failed.");
+      }
+    },
     now,
     async resolveIdentity(request) {
       const identity = await resolveIdentity(request);
@@ -779,7 +794,15 @@ export async function createProductSiteRuntime(
     }),
     routes: new MindRouteService({ routes: metadata, host, logger: controlObservability }),
     catalog: new PublicMindCatalogService({ catalog: metadata, host, logger: controlObservability }),
-    tokens: new TokenLifecycleService({ clock, tokenHasher, tokenIds: generated, tokens: metadata, logger: controlObservability }),
+    tokens: new TokenLifecycleService({
+      clock,
+      tokenHasher,
+      tokenIds: generated,
+      tokens: metadata,
+      bindingOwners: metadata,
+      bindingIds: generated,
+      logger: controlObservability,
+    }),
   });
 
   const web = createProductWebHttpHandler({

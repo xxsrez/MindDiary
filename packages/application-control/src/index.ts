@@ -19,6 +19,8 @@ import type {
   McpTokenMetadata,
   McpTokenStore,
   MetadataStore,
+  MindBindingIdGenerator,
+  MindBindingStore,
   MindRouteMetadataStore,
   ObjectStore,
   OrdinaryMindIdGenerator,
@@ -62,6 +64,7 @@ import {
   type IdempotencyKey,
   type InvitationRole,
   type MembershipId,
+  type MindBindingOwnerId,
   type OutboxMessageId,
   type PrincipalId,
   type PrincipalAccountSnapshot,
@@ -328,6 +331,11 @@ export interface TokenLifecycleDependencies {
   readonly tokenHasher: TokenHasher;
   readonly tokenIds: TokenIdGenerator;
   readonly tokens: McpTokenStore;
+  readonly bindingOwners?: Pick<MindBindingStore, "revokeMindBindingOwner">;
+  readonly bindingIds?: Pick<
+    MindBindingIdGenerator,
+    "nextMindBindingAuditEventId" | "nextMindBindingOutboxMessageId"
+  >;
   readonly logger?: TokenLifecycleSafeLogger;
 }
 
@@ -440,6 +448,11 @@ export class TokenLifecycleService {
   readonly #tokenHasher: TokenHasher;
   readonly #tokenIds: TokenIdGenerator;
   readonly #tokens: McpTokenStore;
+  readonly #bindingOwners: Pick<MindBindingStore, "revokeMindBindingOwner"> | undefined;
+  readonly #bindingIds: Pick<
+    MindBindingIdGenerator,
+    "nextMindBindingAuditEventId" | "nextMindBindingOutboxMessageId"
+  > | undefined;
   readonly #logger: TokenLifecycleSafeLogger | undefined;
 
   constructor(dependencies: TokenLifecycleDependencies) {
@@ -447,6 +460,8 @@ export class TokenLifecycleService {
     this.#tokenHasher = dependencies.tokenHasher;
     this.#tokenIds = dependencies.tokenIds;
     this.#tokens = dependencies.tokens;
+    this.#bindingOwners = dependencies.bindingOwners;
+    this.#bindingIds = dependencies.bindingIds;
     this.#logger = dependencies.logger;
   }
 
@@ -622,6 +637,22 @@ export class TokenLifecycleService {
         "token_not_found",
         "Token was not found.",
       );
+    }
+    if (this.#bindingOwners !== undefined && this.#bindingIds !== undefined) {
+      const bindingResult = await this.#bindingOwners.revokeMindBindingOwner({
+        bindingOwnerId: tokenId as unknown as MindBindingOwnerId,
+        principalId,
+        requestId: actor.requestId,
+        auditEventId: this.#bindingIds.nextMindBindingAuditEventId(),
+        auditOutboxMessageId: this.#bindingIds.nextMindBindingOutboxMessageId(),
+        occurredAt: canonicalUtcInstant(revokedAtMilliseconds),
+      });
+      if (bindingResult.kind !== "revoked" && bindingResult.kind !== "not_found") {
+        throw new TokenLifecycleFailure(
+          "token_lifecycle_unavailable",
+          "Token binding revocation could not be completed.",
+        );
+      }
     }
     return Object.freeze({
       token: descriptor(result.token, revokedAtMilliseconds),

@@ -73,10 +73,15 @@ class OAuthD1 {
       const existing = [...this.grants.values()].find(
         (row) => row.principal_id === values[1] && row.client_id === values[2] && row.resource === values[4],
       );
+      const reconnecting = existing?.revoked_at != null;
       const row = existing ?? {
         id: values[0], principal_id: values[1], client_id: values[2],
         resource: values[4], created_at: values[6], last_used_at: null,
       };
+      if (reconnecting) {
+        this.grants.delete(row.id);
+        Object.assign(row, { id: values[0], created_at: values[6], last_used_at: null });
+      }
       Object.assign(row, {
         client_name: values[3], scopes_json: values[5], revoked_at: null,
         updated_at: values[7],
@@ -226,7 +231,11 @@ class OAuthD1 {
     }
     if (sql.includes("/*md-oauth-refresh-owner*/")) {
       const row = [...this.refresh.values()].find((item) => item.token_verifier === values[0] && item.client_id === values[1]);
-      return { results: row ? [{ grant_id: row.grant_id, family_id: row.family_id }] : [] };
+      return { results: row ? [{
+        grant_id: row.grant_id,
+        family_id: row.family_id,
+        principal_id: row.principal_id,
+      }] : [] };
     }
     if (sql.includes("/*md-oauth-connections-list*/")) {
       return { results: [...this.grants.values()].filter((row) => row.principal_id === values[0] && !row.revoked_at) };
@@ -250,15 +259,19 @@ async function pkce(value) {
 async function environment(options = {}) {
   const database = new OAuthD1();
   const authorizationTokens = new InMemoryMcpTokenStore();
+  const bindingRevocations = [];
   const connector = await createSitesOAuthConnector({
     database,
     publicOrigin: ORIGIN,
     verifierKey: Uint8Array.from({ length: 32 }, (_value, index) => index + 1),
     authorizationTokens,
+    revokeBindingOwner: options.revokeBindingOwner ?? ((input) => {
+      bindingRevocations.push(input);
+    }),
     ...(options.now ? { now: options.now } : {}),
     resolveIdentity: async () => ({ kind: "authenticated", principalId: "principal_1" }),
   });
-  return { database, connector, authorizationTokens };
+  return { database, connector, authorizationTokens, bindingRevocations };
 }
 
 async function register(connector) {
@@ -318,7 +331,7 @@ async function authorize(connector, clientId, scopes = "content:read") {
 }
 
 test("OAuth discovery, DCR, PKCE, read grant, step-up, and revoke are durable", async () => {
-  const { connector, authorizationTokens } = await environment();
+  const { connector, authorizationTokens, bindingRevocations } = await environment();
   const protectedMetadata = await connector.fetch(
     new Request(`${ORIGIN}/.well-known/oauth-protected-resource/api/mcp`),
   );
@@ -362,6 +375,15 @@ test("OAuth discovery, DCR, PKCE, read grant, step-up, and revoke are durable", 
   assert.equal(connections.length, 1);
   assert.deepEqual(connections[0].scopes, ["content:read", "content:write"]);
   assert.equal(await connector.revokeConnection("principal_1", connections[0].grantId), true);
+  assert.equal(bindingRevocations.length, 1);
+  assert.deepEqual(
+    {
+      bindingOwnerId: bindingRevocations[0].bindingOwnerId,
+      principalId: bindingRevocations[0].principalId,
+    },
+    { bindingOwnerId: connections[0].grantId, principalId: "principal_1" },
+  );
+  assert.equal(Number.isFinite(Date.parse(bindingRevocations[0].occurredAt)), true);
   assert.deepEqual(await connector.authenticator.authenticate(writeTokens.access_token, "request_3"), { kind: "invalid" });
   assert.equal(
     (await authorizationTokens.readMcpTokenForAuthorization(
@@ -376,6 +398,10 @@ test("OAuth discovery, DCR, PKCE, read grant, step-up, and revoke are durable", 
     (await connector.listConnections("principal_1"))[0].scopes,
     ["content:read"],
   );
+  assert.notEqual(
+    (await connector.listConnections("principal_1"))[0].grantId,
+    connections[0].grantId,
+  );
   const reconnectedActor = await connector.authenticator.authenticate(
     reconnectedRead.access_token,
     "request_reconnected",
@@ -387,9 +413,10 @@ test("OAuth discovery, DCR, PKCE, read grant, step-up, and revoke are durable", 
 });
 
 test("refresh rotation detects reuse and revokes the entire connection", async () => {
-  const { connector } = await environment();
+  const { connector, bindingRevocations } = await environment();
   const client = await register(connector);
   const issued = await authorize(connector, client.client_id);
+  const grantId = (await connector.listConnections("principal_1"))[0].grantId;
   const refreshForm = new URLSearchParams({
     grant_type: "refresh_token", refresh_token: issued.refresh_token,
     client_id: client.client_id, resource: `${ORIGIN}/api/mcp`,
@@ -408,6 +435,9 @@ test("refresh rotation detects reuse and revokes the entire connection", async (
   }));
   assert.equal(reused.status, 400);
   assert.equal((await reused.json()).error, "invalid_grant");
+  assert.equal(bindingRevocations.length, 1);
+  assert.equal(bindingRevocations[0].principalId, "principal_1");
+  assert.equal(bindingRevocations[0].bindingOwnerId, grantId);
   assert.deepEqual(await connector.authenticator.authenticate(rotatedBody.access_token, "request_reuse"), { kind: "invalid" });
 });
 

@@ -316,6 +316,16 @@ async function runScenario({ candidate, evidenceOut, randomBytesImpl, now }) {
     actors.owner.mcpToken === actors.participant.mcpToken ||
     actors.owner.mcpTokenId === actors.participant.mcpTokenId
   ) fail("shared_mcp_credential_forbidden");
+  const initialBindings = mcpResultData(
+    await actors.participant.mcp("get_mind_bindings"),
+  );
+  if (
+    initialBindings.binding_version !== 0 ||
+    initialBindings.read_bindings?.length !== 0 ||
+    initialBindings.write_binding !== null ||
+    initialBindings.automatic_capture?.mode !== "disabled"
+  ) fail("initial_binding_state_not_empty");
+  assertions.add("bindings.initial-empty");
   const ownerMinds = mcpMinds(await actors.owner.mcp("list_minds"), actors.owner.actorClass);
   const participantMinds = mcpMinds(
     await actors.participant.mcp("list_minds"),
@@ -451,6 +461,65 @@ async function runScenario({ candidate, evidenceOut, randomBytesImpl, now }) {
   const readerMind = mcpMinds(await actors.participant.mcp("list_minds"), actors.participant.actorClass)
     .find((mind) => mind.route === `/${handle}`);
   if (!readerMind) fail("reader_access_failed");
+  expectMcpError(
+    await actors.participant.mcp("list_revisions", { mind: `/${handle}` }),
+    "mind_binding_required",
+  );
+  assertions.add("bindings.unattached-readable-denied");
+  const attachedOrdinary = mcpResultData(await actors.participant.mcp(
+    "set_read_mind_binding",
+    {
+      action: "attach",
+      mind: `/${handle}`,
+      expected_binding_version: 0,
+      idempotency_key: `synthetic:${nonce}:binding:read:ordinary`,
+    },
+  ));
+  if (attachedOrdinary.bindings?.binding_version !== 1) {
+    fail("ordinary_read_binding_failed");
+  }
+  const attachedPersonal = mcpResultData(await actors.participant.mcp(
+    "set_read_mind_binding",
+    {
+      action: "attach",
+      mind: "/me",
+      expected_binding_version: 1,
+      idempotency_key: `synthetic:${nonce}:binding:read:personal`,
+    },
+  ));
+  const replayedOrdinary = mcpResultData(await actors.participant.mcp(
+    "set_read_mind_binding",
+    {
+      action: "attach",
+      mind: `/${handle}`,
+      expected_binding_version: 0,
+      idempotency_key: `synthetic:${nonce}:binding:read:ordinary`,
+    },
+  ));
+  const multiReadBindings = mcpResultData(
+    await actors.participant.mcp("get_mind_bindings"),
+  );
+  if (
+    attachedPersonal.bindings?.binding_version !== 2 ||
+    replayedOrdinary.replayed !== true ||
+    multiReadBindings.binding_version !== 2 ||
+    multiReadBindings.read_bindings?.length !== 2 ||
+    !multiReadBindings.read_bindings.some((binding) => binding.mind?.route === `/${handle}`) ||
+    !multiReadBindings.read_bindings.some((binding) => binding.mind?.route === "/me") ||
+    multiReadBindings.write_binding !== null
+  ) fail("multi_read_binding_state_mismatch");
+  mcpResultData(await actors.participant.mcp("browse_entries", { mind: `/${handle}` }));
+  mcpResultData(await actors.participant.mcp("browse_entries", { mind: "/me" }));
+  assertions.add("bindings.multi-read-idempotent");
+  expectMcpError(
+    await actors.participant.mcp("set_write_mind_binding", {
+      action: "bind",
+      mind: `/${handle}`,
+      expected_binding_version: 2,
+      idempotency_key: `synthetic:${nonce}:binding:reader-write-denied`,
+    }),
+    "capability_denied",
+  );
   const readerWrite = await actors.participant.mcp("commit_changeset", {
     mind: `/${handle}`,
     expected_revision: readerMind.head.revision_id,
@@ -463,6 +532,7 @@ async function runScenario({ candidate, evidenceOut, randomBytesImpl, now }) {
     }],
   });
   expectMcpError(readerWrite, "forbidden");
+  assertions.add("bindings.read-only-cannot-write");
   assertions.add("role-transition.reader-read-only");
 
   const reader = readerMembers.find((member) => member.role === "reader" && !member.is_self);
@@ -479,9 +549,29 @@ async function runScenario({ candidate, evidenceOut, randomBytesImpl, now }) {
   const editorInfo = mcpResultData(await actors.participant.mcp("get_mind_info", {
     mind: `/${handle}`,
   }));
+  const boundOrdinary = mcpResultData(await actors.participant.mcp(
+    "set_write_mind_binding",
+    {
+      action: "bind",
+      mind: `/${handle}`,
+      expected_binding_version: 2,
+      idempotency_key: `synthetic:${nonce}:binding:write:ordinary`,
+    },
+  ));
+  const ordinaryWriteBindingId = required(
+    boundOrdinary.current?.write_binding_id,
+    "ordinary_write_binding_missing",
+  );
+  if (
+    boundOrdinary.binding_version !== 3 ||
+    boundOrdinary.current?.mind?.route !== `/${handle}` ||
+    boundOrdinary.previous !== null
+  ) fail("ordinary_write_binding_mismatch");
+  assertions.add("bindings.single-write-current-target");
   const expectedRevision = editorInfo.resolved_revision.revision_id;
-  const committed = mcpResultData(await actors.participant.mcp("commit_changeset", {
+  const ordinaryCommitArguments = {
     mind: `/${handle}`,
+    write_binding_id: ordinaryWriteBindingId,
     expected_revision: expectedRevision,
     idempotency_key: `synthetic:${nonce}:editor-write`,
     summary: "Synthetic editor fixture",
@@ -490,14 +580,26 @@ async function runScenario({ candidate, evidenceOut, randomBytesImpl, now }) {
       path: "concepts/synthetic-gate.md",
       text: "---\ntype: Note\ntitle: Synthetic gate fixture\n---\nDeterministic fixture.\n",
     }],
-  }));
+  };
+  const committed = mcpResultData(await actors.participant.mcp(
+    "commit_changeset",
+    ordinaryCommitArguments,
+  ));
   const committedRevision = committed.revision?.revision_id;
   if (typeof committedRevision !== "string" || committedRevision === expectedRevision) {
     fail("editor_commit_failed");
   }
+  const replayedCommit = mcpResultData(await actors.participant.mcp(
+    "commit_changeset",
+    ordinaryCommitArguments,
+  ));
+  if (replayedCommit.revision?.revision_id !== committedRevision) {
+    fail("editor_commit_replay_changed_revision");
+  }
   assertions.add("role-transition.editor-controlled-commit");
   const stale = await actors.participant.mcp("commit_changeset", {
     mind: `/${handle}`,
+    write_binding_id: ordinaryWriteBindingId,
     expected_revision: expectedRevision,
     idempotency_key: `synthetic:${nonce}:stale-write`,
     summary: "Synthetic stale fixture",
@@ -514,7 +616,139 @@ async function runScenario({ candidate, evidenceOut, randomBytesImpl, now }) {
   if (afterStale.resolved_revision?.revision_id !== committedRevision) {
     fail("stale_commit_changed_head");
   }
+  assertions.add("bindings.current-target-exactly-one-revision");
   assertions.add("role-transition.stale-head-no-partial-state");
+
+  const personalBeforeRebind = mcpResultData(await actors.participant.mcp(
+    "get_mind_info",
+    { mind: "/me" },
+  )).resolved_revision.revision_id;
+  const preparedOrdinaryCommit = {
+    mind: `/${handle}`,
+    write_binding_id: ordinaryWriteBindingId,
+    expected_revision: committedRevision,
+    idempotency_key: `synthetic:${nonce}:binding:prepared-ordinary`,
+    summary: "Synthetic prepared ordinary fixture",
+    operations: [{
+      type: "create_file",
+      path: "concepts/prepared-before-rebind.md",
+      text: "---\ntype: Note\ntitle: Prepared before rebind\n---\nMust not commit.\n",
+    }],
+  };
+  const reboundPersonal = mcpResultData(await actors.participant.mcp(
+    "set_write_mind_binding",
+    {
+      action: "bind",
+      mind: "/me",
+      expected_binding_version: 3,
+      idempotency_key: `synthetic:${nonce}:binding:write:personal`,
+    },
+  ));
+  const personalWriteBindingId = required(
+    reboundPersonal.current?.write_binding_id,
+    "personal_write_binding_missing",
+  );
+  if (
+    reboundPersonal.binding_version !== 4 ||
+    reboundPersonal.previous?.write_binding_id !== ordinaryWriteBindingId ||
+    reboundPersonal.previous?.state !== "invalidated" ||
+    reboundPersonal.current?.mind?.route !== "/me"
+  ) fail("personal_rebind_mismatch");
+  expectMcpError(
+    await actors.participant.mcp("commit_changeset", preparedOrdinaryCommit),
+    "write_binding_stale",
+  );
+  const ordinaryAfterRebindDenial = mcpResultData(await actors.participant.mcp(
+    "get_mind_info",
+    { mind: `/${handle}` },
+  )).resolved_revision.revision_id;
+  const personalAfterRebindDenial = mcpResultData(await actors.participant.mcp(
+    "get_mind_info",
+    { mind: "/me" },
+  )).resolved_revision.revision_id;
+  if (
+    ordinaryAfterRebindDenial !== committedRevision ||
+    personalAfterRebindDenial !== personalBeforeRebind
+  ) fail("stale_write_after_rebind_created_side_effect");
+  assertions.add("bindings.rebind-stale-no-side-effect");
+
+  const personalCommitArguments = {
+    mind: "/me",
+    write_binding_id: personalWriteBindingId,
+    expected_revision: personalBeforeRebind,
+    idempotency_key: `synthetic:${nonce}:binding:commit:personal`,
+    summary: "Synthetic personal binding fixture",
+    operations: [{
+      type: "create_file",
+      path: "concepts/synthetic-binding-personal.md",
+      text: "---\ntype: Note\ntitle: Synthetic binding personal fixture\n---\nBound target only.\n",
+    }],
+  };
+  const committedPersonal = mcpResultData(await actors.participant.mcp(
+    "commit_changeset",
+    personalCommitArguments,
+  ));
+  const personalCommittedRevision = required(
+    committedPersonal.revision?.revision_id,
+    "personal_commit_revision_missing",
+  );
+  const replayedPersonal = mcpResultData(await actors.participant.mcp(
+    "commit_changeset",
+    personalCommitArguments,
+  ));
+  if (
+    personalCommittedRevision === personalBeforeRebind ||
+    replayedPersonal.revision?.revision_id !== personalCommittedRevision ||
+    mcpResultData(await actors.participant.mcp("get_mind_info", {
+      mind: `/${handle}`,
+    })).resolved_revision.revision_id !== committedRevision
+  ) fail("personal_bound_commit_not_exactly_once");
+  assertions.add("bindings.current-target-exactly-one-revision");
+
+  const concurrentRebinds = await Promise.all([
+    actors.participant.mcp("set_write_mind_binding", {
+      action: "bind",
+      mind: `/${handle}`,
+      expected_binding_version: 4,
+      idempotency_key: `synthetic:${nonce}:binding:concurrent:ordinary`,
+    }),
+    actors.participant.mcp("set_write_mind_binding", {
+      action: "bind",
+      mind: `/${handle}`,
+      expected_binding_version: 4,
+      idempotency_key: `synthetic:${nonce}:binding:concurrent:ordinary-second`,
+    }),
+  ]);
+  const successfulRebinds = concurrentRebinds.filter(
+    (response) => response.body?.result?.isError === false,
+  );
+  const rejectedRebinds = concurrentRebinds.filter(
+    (response) => response.body?.result?.isError === true,
+  );
+  if (
+    successfulRebinds.length !== 1 ||
+    rejectedRebinds.length !== 1 ||
+    rejectedRebinds[0].body.result.structuredContent.error?.code !== "binding_version_conflict"
+  ) fail("concurrent_rebind_cas_mismatch", {
+    outcomes: concurrentRebinds.map((response) => ({
+      status: response.status,
+      isError: response.body?.result?.isError,
+      code: safeCode(response.body?.result?.structuredContent?.error?.code),
+      bindingVersion: response.body?.result?.structuredContent?.data?.binding_version,
+      route: response.body?.result?.structuredContent?.data?.current?.mind?.route,
+    })),
+  });
+  const winningRebind = mcpResultData(successfulRebinds[0]);
+  const bindingsBeforeRestart = mcpResultData(
+    await actors.participant.mcp("get_mind_bindings"),
+  );
+  if (
+    bindingsBeforeRestart.binding_version !== 5 ||
+    bindingsBeforeRestart.read_bindings?.length !== 2 ||
+    bindingsBeforeRestart.write_binding?.write_binding_id !==
+      winningRebind.current?.write_binding_id
+  ) fail("concurrent_rebind_result_not_singleton");
+  assertions.add("bindings.concurrent-rebind-cas");
 
   const materializedWork = await drainScheduled({
     runtimeRef,
@@ -531,6 +765,13 @@ async function runScenario({ candidate, evidenceOut, randomBytesImpl, now }) {
     auditCount: database.audit.size,
   });
   assertions.add("background.search-and-audit-materialized");
+  const ordinaryBrowseBeforeDetach = mcpResultData(await actors.participant.mcp(
+    "browse_entries",
+    { mind: `/${handle}` },
+  ));
+  const ordinaryEntryId = ordinaryBrowseBeforeDetach.entries
+    ?.find((entry) => typeof entry.entry_id === "string")?.entry_id;
+  if (typeof ordinaryEntryId !== "string") fail("ordinary_entry_locator_missing");
 
   const ownerMind = data(await actors.owner.api(`/api/v1/minds/${handle}`));
   const editor = data(await actors.owner.api(`/api/v1/minds/${handle}/members`))
@@ -586,6 +827,102 @@ async function runScenario({ candidate, evidenceOut, randomBytesImpl, now }) {
     ) === true,
   });
   assertions.add("restart-persistence.owner-head-history-tokens");
+  const restartedBindings = mcpResultData(
+    await actors.participant.mcp("get_mind_bindings"),
+  );
+  if (
+    restartedBindings.binding_version !== bindingsBeforeRestart.binding_version ||
+    restartedBindings.read_bindings?.length !== 2 ||
+    restartedBindings.write_binding?.write_binding_id !==
+      bindingsBeforeRestart.write_binding?.write_binding_id
+  ) fail("restart_binding_state_changed");
+  assertions.add("bindings.restart-persistence");
+
+  const detachedOrdinary = mcpResultData(await actors.participant.mcp(
+    "set_read_mind_binding",
+    {
+      action: "detach",
+      mind: `/${handle}`,
+      expected_binding_version: 5,
+      idempotency_key: `synthetic:${nonce}:binding:detach:ordinary`,
+    },
+  ));
+  const detachedPersonal = mcpResultData(await actors.participant.mcp(
+    "set_read_mind_binding",
+    {
+      action: "detach",
+      mind: "/me",
+      expected_binding_version: 6,
+      idempotency_key: `synthetic:${nonce}:binding:detach:personal`,
+    },
+  ));
+  const staleWriteTarget = restartedBindings.write_binding;
+  const staleWriteTargetRoute = required(
+    staleWriteTarget?.mind?.route,
+    "stale_write_target_route_missing",
+  );
+  const staleWriteTargetHead = mcpResultData(await actors.participant.mcp(
+    "get_mind_info",
+    { mind: staleWriteTargetRoute },
+  )).resolved_revision.revision_id;
+  const unbound = mcpResultData(await actors.participant.mcp(
+    "set_write_mind_binding",
+    {
+      action: "unbind",
+      expected_binding_version: 7,
+      idempotency_key: `synthetic:${nonce}:binding:unbind`,
+    },
+  ));
+  if (
+    detachedOrdinary.bindings?.binding_version !== 6 ||
+    detachedPersonal.bindings?.binding_version !== 7 ||
+    unbound.binding_version !== 8 ||
+    unbound.current !== null ||
+    unbound.previous?.write_binding_id !== staleWriteTarget.write_binding_id
+  ) fail("detach_unbind_transition_mismatch");
+  expectMcpError(
+    await actors.participant.mcp("fetch", { id: ordinaryEntryId }),
+    "mind_binding_required",
+  );
+  expectMcpError(
+    await actors.participant.mcp("list_revisions", { mind: `/${handle}` }),
+    "mind_binding_required",
+  );
+  expectMcpError(
+    await actors.participant.mcp("browse_entries", { mind: "/me" }),
+    "mind_binding_required",
+  );
+  expectMcpError(
+    await actors.participant.mcp("commit_changeset", {
+      mind: staleWriteTargetRoute,
+      write_binding_id: staleWriteTarget.write_binding_id,
+      expected_revision: staleWriteTargetHead,
+      idempotency_key: `synthetic:${nonce}:binding:stale-after-unbind`,
+      summary: "Synthetic stale after unbind",
+      operations: [{
+        type: "create_file",
+        path: "concepts/stale-after-unbind.md",
+        text: "---\ntype: Note\ntitle: Stale after unbind\n---\nMust not commit.\n",
+      }],
+    }),
+    "write_binding_required",
+  );
+  const reboundForHeadRead = mcpResultData(await actors.participant.mcp(
+    "set_read_mind_binding",
+    {
+      action: "attach",
+      mind: staleWriteTargetRoute,
+      expected_binding_version: 8,
+      idempotency_key: `synthetic:${nonce}:binding:reattach:head-check`,
+    },
+  ));
+  if (
+    reboundForHeadRead.bindings?.binding_version !== 9 ||
+    mcpResultData(await actors.participant.mcp("get_mind_info", {
+      mind: staleWriteTargetRoute,
+    })).resolved_revision.revision_id !== staleWriteTargetHead
+  ) fail("stale_after_unbind_changed_head");
+  assertions.add("bindings.detach-unbind-fail-closed");
 
   const sourceMember = data(await actors.participant.api(`/api/v1/minds/${handle}/members`))
     .members?.find((member) => member.role === "admin" && !member.is_self);
@@ -615,12 +952,47 @@ async function runScenario({ candidate, evidenceOut, randomBytesImpl, now }) {
   );
   assertions.add("history-revoke.next-request-denied");
 
+  let bindingVersionBeforeDelete = 9;
+  if (staleWriteTargetRoute !== `/${handle}`) {
+    const attachedBeforeDelete = mcpResultData(await actors.participant.mcp(
+      "set_read_mind_binding",
+      {
+        action: "attach",
+        mind: `/${handle}`,
+        expected_binding_version: bindingVersionBeforeDelete,
+        idempotency_key: `synthetic:${nonce}:binding:attach-before-delete`,
+      },
+    ));
+    bindingVersionBeforeDelete = attachedBeforeDelete.bindings.binding_version;
+  }
+  const boundBeforeDelete = mcpResultData(await actors.participant.mcp(
+    "set_write_mind_binding",
+    {
+      action: "bind",
+      mind: `/${handle}`,
+      expected_binding_version: bindingVersionBeforeDelete,
+      idempotency_key: `synthetic:${nonce}:binding:bind-before-delete`,
+    },
+  ));
+  if (boundBeforeDelete.current?.mind?.route !== `/${handle}`) {
+    fail("delete_target_binding_missing");
+  }
   await deleteMind(actors.participant, handle, nonce);
   const deleted = await actors.participant.api(`/api/v1/minds/${handle}`, {
     expectedStatus: 404,
   });
   if (deleted.body?.error?.code !== "mind_not_found") fail("mind_cleanup_failed");
   assertions.add("cleanup.ordinary-mind-deleted");
+  const bindingsAfterMindDelete = mcpResultData(
+    await actors.participant.mcp("get_mind_bindings"),
+  );
+  if (
+    bindingsAfterMindDelete.write_binding !== null ||
+    bindingsAfterMindDelete.read_bindings?.some(
+      (binding) => binding.mind?.route === `/${handle}`,
+    )
+  ) fail("mind_delete_did_not_invalidate_bindings");
+  assertions.add("bindings.mind-delete-invalidates-target");
   await revokeToken(actors.owner, nonce, "owner");
   await revokeToken(actors.participant, nonce, "participant");
   const [ownerDenied, participantDenied] = await Promise.all([
@@ -631,6 +1003,22 @@ async function runScenario({ candidate, evidenceOut, randomBytesImpl, now }) {
     fail("token_cleanup_failed");
   }
   assertions.add("cleanup.tokens-revoked");
+  const revokedBindingInspection = await createSitesMetadataStore(database);
+  const revokedParticipantBindings = await revokedBindingInspection.readMindBindingSet(
+    actors.participant.mcpTokenId,
+    participantIds.principal,
+    new Date().toISOString(),
+  );
+  if (
+    revokedParticipantBindings?.bindingSet.state !== "revoked" ||
+    revokedParticipantBindings.writeBinding !== null ||
+    revokedParticipantBindings.readBindings.length !== 0
+  ) fail("binding_owner_revoke_state_mismatch", {
+    state: revokedParticipantBindings?.bindingSet.state ?? null,
+    hasWrite: revokedParticipantBindings?.writeBinding !== null,
+    readCount: revokedParticipantBindings?.readBindings.length ?? null,
+  });
+  assertions.add("bindings.owner-revoke-invalidates-state");
   await deleteAccount(actors.owner, nonce, "owner");
   await deleteAccount(actors.participant, nonce, "participant");
   assertions.add("cleanup.accounts-deleted");
@@ -653,6 +1041,37 @@ async function runScenario({ candidate, evidenceOut, randomBytesImpl, now }) {
     provider: BINDING_NAMESPACE,
     normalizedBinding: participantAlias,
   });
+  const deletedParticipantBindingState = await inspection.readMindBindingSet(
+    actors.participant.mcpTokenId,
+    participantIds.principal,
+    new Date().toISOString(),
+  );
+  const deletedParticipantBindingsAreEmpty =
+    deletedParticipantBindingState?.bindingSet.bindingVersion === 0 &&
+    deletedParticipantBindingState?.writeBinding === null &&
+    deletedParticipantBindingState?.readBindings.length === 0;
+  const retainedAuditTombstonesAreSafe = [...database.audit.values()].every((row) => {
+    let event;
+    try {
+      event = JSON.parse(row.event_json);
+    } catch {
+      return false;
+    }
+    const serialized = JSON.stringify(event);
+    return (
+      row.actor_kind === "deleted-principal" &&
+      row.principal_id === null &&
+      event?.actor?.kind === "deleted-principal" &&
+      event?.spaceId === null &&
+      event?.eventType === "mind_binding.owner_revoked" &&
+      !serialized.includes(ownerAlias) &&
+      !serialized.includes(participantAlias) &&
+      !serialized.includes(ownerIds.principal) &&
+      !serialized.includes(participantIds.principal) &&
+      !serialized.includes(actors.owner.mcpTokenId) &&
+      !serialized.includes(actors.participant.mcpTokenId)
+    );
+  });
   if (
     Object.values(accountTotals).some((count) => count !== 0) ||
     ordinaryTotals.minds !== 0 ||
@@ -663,9 +1082,10 @@ async function runScenario({ candidate, evidenceOut, randomBytesImpl, now }) {
     participantToken?.state !== "revoked" ||
     ownerBinding !== null ||
     participantBinding !== null ||
+    !deletedParticipantBindingsAreEmpty ||
     bucket.records.size !== 0 ||
     database.search.size !== 0 ||
-    database.audit.size !== 0
+    !retainedAuditTombstonesAreSafe
   ) fail("negative_state_scan_failed", {
     accountTotals,
     ordinaryTotals,
@@ -673,9 +1093,11 @@ async function runScenario({ candidate, evidenceOut, randomBytesImpl, now }) {
     ownerTokenState: ownerToken?.state ?? null,
     participantTokenState: participantToken?.state ?? null,
     bindingsRemoved: ownerBinding === null && participantBinding === null,
+    deletedParticipantBindingsAreEmpty,
     objectCount: bucket.records.size,
     searchCount: database.search.size,
     auditCount: database.audit.size,
+    retainedAuditTombstonesAreSafe,
   });
   assertions.add("cleanup.negative-state-scan");
   await assertNoSyntheticProductAuthority(ROOT);

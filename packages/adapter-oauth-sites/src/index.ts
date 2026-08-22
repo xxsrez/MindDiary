@@ -73,6 +73,11 @@ export interface SitesOAuthConnectorOptions {
     McpTokenStore,
     "createMcpToken" | "revokeMcpToken"
   >;
+  readonly revokeBindingOwner?: (input: Readonly<{
+    bindingOwnerId: string;
+    principalId: string;
+    occurredAt: string;
+  }>) => void | Promise<void>;
   readonly resolveIdentity: (
     request: Request,
   ) => OAuthIdentityResolution | Promise<OAuthIdentityResolution>;
@@ -791,7 +796,9 @@ export async function createSitesOAuthConnector(
           WHERE principal_id = ? AND client_id = ? AND resource = ? LIMIT 1`)
         .bind(identity.principalId, pending.client_id, pending.resource),
     );
-    const grantId = existing === null ? `md_oauth_grant_${crypto.randomUUID()}` : String(existing.id);
+    const grantId = existing === null || existing.revoked_at
+      ? `md_oauth_grant_${crypto.randomUUID()}`
+      : String(existing.id);
     const requestedScopes = storedScopes(pending.scopes_json);
     const existingScopes = existing?.revoked_at
       ? Object.freeze([]) as readonly OAuthScope[]
@@ -808,10 +815,21 @@ export async function createSitesOAuthConnector(
            revoked_at, created_at, updated_at, last_used_at)
           VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, NULL)
           ON CONFLICT(principal_id, client_id, resource) DO UPDATE SET
+            id = excluded.id,
             client_name = excluded.client_name,
             scopes_json = excluded.scopes_json,
+            created_at = CASE
+              WHEN md_oauth_grants.revoked_at IS NULL
+                THEN md_oauth_grants.created_at
+              ELSE excluded.created_at
+            END,
             revoked_at = NULL,
-            updated_at = excluded.updated_at`)
+            updated_at = excluded.updated_at,
+            last_used_at = CASE
+              WHEN md_oauth_grants.revoked_at IS NULL
+                THEN md_oauth_grants.last_used_at
+              ELSE NULL
+            END`)
         .bind(
           grantId,
           identity.principalId,
@@ -874,9 +892,18 @@ export async function createSitesOAuthConnector(
     await revokeMirroredRows(rows.results ?? [], revokedAt);
   };
 
-  const revokeGrantAndFamily = async (grantId: string, familyId: string): Promise<void> => {
+  const revokeGrantAndFamily = async (
+    grantId: string,
+    familyId: string,
+    principalId: string,
+  ): Promise<void> => {
     const timestamp = now().toISOString();
     await revokeMirroredGrant(grantId, timestamp);
+    await options.revokeBindingOwner?.({
+      bindingOwnerId: grantId,
+      principalId,
+      occurredAt: timestamp,
+    });
     await options.database.batch([
       options.database
         .prepare(`/*md-oauth-grant-revoke*/ UPDATE md_oauth_grants
@@ -1062,7 +1089,11 @@ export async function createSitesOAuthConnector(
       throw new OAuthProtocolError("invalid_grant", "Refresh token is invalid or revoked");
     }
     if (row.used_at || row.revoked_at) {
-      await revokeGrantAndFamily(String(row.grant_id), String(row.family_id));
+      await revokeGrantAndFamily(
+        String(row.grant_id),
+        String(row.family_id),
+        String(row.principal_id),
+      );
       throw new OAuthProtocolError("invalid_grant", "Refresh token reuse was detected and the connection was revoked");
     }
     if (Date.parse(String(row.expires_at)) <= now().getTime()) {
@@ -1085,7 +1116,11 @@ export async function createSitesOAuthConnector(
         .bind(now().toISOString(), row.id),
     );
     if (consumed === null) {
-      await revokeGrantAndFamily(String(row.grant_id), String(row.family_id));
+      await revokeGrantAndFamily(
+        String(row.grant_id),
+        String(row.family_id),
+        String(row.principal_id),
+      );
       throw new OAuthProtocolError("invalid_grant", "Refresh token reuse was detected and the connection was revoked");
     }
     return issueTokens({
@@ -1127,11 +1162,17 @@ export async function createSitesOAuthConnector(
         const tokenVerifier = await verifier(token, OAUTH_REFRESH_TOKEN_PREFIX);
         const row = tokenVerifier === null ? null : await statementFirst<DbRow>(
           options.database
-            .prepare(`/*md-oauth-refresh-owner*/ SELECT grant_id, family_id FROM md_oauth_refresh_tokens
+            .prepare(`/*md-oauth-refresh-owner*/ SELECT grant_id, family_id, principal_id FROM md_oauth_refresh_tokens
               WHERE token_verifier = ? AND client_id = ? LIMIT 1`)
             .bind(tokenVerifier, clientId),
         );
-        if (row !== null) await revokeGrantAndFamily(String(row.grant_id), String(row.family_id));
+        if (row !== null) {
+          await revokeGrantAndFamily(
+            String(row.grant_id),
+            String(row.family_id),
+            String(row.principal_id),
+          );
+        }
       } else if (token.startsWith(OAUTH_ACCESS_TOKEN_PREFIX)) {
         const tokenVerifier = await verifier(token, OAUTH_ACCESS_TOKEN_PREFIX);
         if (tokenVerifier !== null) {
@@ -1252,6 +1293,11 @@ export async function createSitesOAuthConnector(
     if (row === null) return false;
     const timestamp = now().toISOString();
     await revokeMirroredGrant(grantId, timestamp);
+    await options.revokeBindingOwner?.({
+      bindingOwnerId: grantId,
+      principalId,
+      occurredAt: timestamp,
+    });
     await options.database.batch([
       options.database
         .prepare(`/*md-oauth-grant-revoke*/ UPDATE md_oauth_grants SET revoked_at = ?, updated_at = ? WHERE id = ?`)

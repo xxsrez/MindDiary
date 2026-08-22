@@ -4,7 +4,9 @@
 state/application/persistence (`MD-231`), одинаковый binding tool surface для
 modern/compatibility MCP (`MD-230`) и hard content enforcement (`MD-232`)
 подтверждены. Product UI и exact Marketplace plugin guidance (`MD-233`)
-подтверждены локально; UAT evidence остаётся отдельным шагом (`MD-235`).
+подтверждены локально. Canonical release profile содержит blocking
+`dev.mind-bindings` и `uat.mind-bindings` join (`MD-235`); UAT evidence остаётся
+привязанным к конкретному candidate/deployment и не выводится из local tests.
 
 ## Назначение
 

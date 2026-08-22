@@ -91,7 +91,9 @@ export const OAUTH_DIRECT_PLUGIN_ASSERTION_IDS = Object.freeze([
   "oauth.product-runtime-idempotent-replay",
   "oauth.product-runtime-stale-cas",
   "oauth.connected-app-mirror-revoke",
+  "oauth.connected-app-binding-revoke",
   "oauth.reconnect-new-grant",
+  "oauth.reconnect-empty-binding-generation",
   "personal-token.modern-regression",
   "personal-token.compat-regression",
   "production-negative.no-synthetic-authority",
@@ -1150,13 +1152,42 @@ async function runOAuthScenario({ assertions, nowState }) {
   const revokedMirror = await metadata.readMcpTokenForAuthorization(writeAccessRecord.id);
   if (revokedMirror?.state !== "revoked") fail("oauth_authorization_mirror_not_revoked");
   assertions.add("oauth.connected-app-mirror-revoke");
+  const revokedBindings = await metadata.readMindBindingSet(
+    grantId,
+    ownerSession.principal_id,
+    nowState.value.toISOString(),
+  );
+  if (
+    revokedBindings?.bindingSet.state !== "revoked" ||
+    revokedBindings.writeBinding !== null ||
+    revokedBindings.readBindings.length !== 0
+  ) fail("oauth_connected_app_binding_owner_not_revoked");
+  assertions.add("oauth.connected-app-binding-revoke");
 
   const reconnect = await authorize(owner, clientId, { state: "state-reconnect" });
   mcpData(
     await modernTool(owner, reconnect.tokens.access_token, "oauth-reconnect-read", "list_minds"),
     "oauth_reconnect_failed",
   );
+  const reconnectBindings = mcpData(
+    await modernTool(
+      owner,
+      reconnect.tokens.access_token,
+      "oauth-reconnect-bindings",
+      "get_mind_bindings",
+    ),
+    "oauth_reconnect_bindings_failed",
+  );
+  const reconnectAccess = latestAccessRecord(database);
+  if (
+    reconnectAccess.grant_id === grantId ||
+    reconnectBindings.binding_set?.state !== "active" ||
+    reconnectBindings.binding_set?.binding_version !== 0 ||
+    reconnectBindings.write_binding !== null ||
+    reconnectBindings.read_bindings?.length !== 0
+  ) fail("oauth_reconnect_binding_generation_not_empty");
   assertions.add("oauth.reconnect-new-grant");
+  assertions.add("oauth.reconnect-empty-binding-generation");
 
   await owner.issueMcpToken({
     name: "Personal token regression",

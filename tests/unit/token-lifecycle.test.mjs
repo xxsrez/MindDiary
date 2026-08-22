@@ -60,7 +60,7 @@ function sequentialTokenIds(prefix = "token") {
   };
 }
 
-async function fixture() {
+async function fixture(overrides = {}) {
   const clock = mutableClock();
   const tokens = new InMemoryMcpTokenStore();
   const tokenHasher = await createWebCryptoTokenHasher({ verifierKey: TEST_KEY });
@@ -69,6 +69,7 @@ async function fixture() {
     tokens,
     tokenHasher,
     tokenIds: sequentialTokenIds(),
+    ...overrides,
   });
   return { clock, service, tokenHasher, tokens };
 }
@@ -308,6 +309,60 @@ test("list and revoke stay principal-scoped; concurrent revokes converge idempot
   assert.equal(
     (await tokens.readMcpTokenForAuthorization(alphaToken.token.tokenId)).state,
     "revoked",
+  );
+});
+
+test("token revoke fences its binding owner on first use and idempotent retry", async () => {
+  const revocations = [];
+  let auditId = 0;
+  let outboxId = 0;
+  const { service } = await fixture({
+    bindingOwners: {
+      async revokeMindBindingOwner(request) {
+        revocations.push(request);
+        return {
+          kind: "revoked",
+          invalidatedReadBindings: revocations.length === 1 ? 2 : 0,
+          invalidatedWriteBindings: revocations.length === 1 ? 1 : 0,
+          replayed: revocations.length !== 1,
+        };
+      },
+    },
+    bindingIds: {
+      nextMindBindingAuditEventId: () => `audit_token_binding_${++auditId}`,
+      nextMindBindingOutboxMessageId: () => `outbox_token_binding_${++outboxId}`,
+    },
+  });
+  const actor = sitesActor("principal_binding_revoke");
+  const issued = await service.issueMcpToken(actor, {
+    name: "binding owner",
+    scopes: ["content:write"],
+  });
+
+  const first = await service.revokeMcpToken(actor, issued.token.tokenId);
+  const retry = await service.revokeMcpToken(actor, issued.token.tokenId);
+
+  assert.equal(first.replayed, false);
+  assert.equal(retry.replayed, true);
+  assert.equal(revocations.length, 2);
+  assert.deepEqual(
+    revocations.map(({ bindingOwnerId, principalId, requestId, occurredAt }) => ({
+      bindingOwnerId,
+      principalId,
+      requestId,
+      occurredAt,
+    })),
+    [0, 1].map(() => ({
+      bindingOwnerId: issued.token.tokenId,
+      principalId: actor.principalId,
+      requestId: actor.requestId,
+      occurredAt: START,
+    })),
+  );
+  assert.equal(new Set(revocations.map((request) => request.auditEventId)).size, 2);
+  assert.equal(
+    new Set(revocations.map((request) => request.auditOutboxMessageId)).size,
+    2,
   );
 });
 
