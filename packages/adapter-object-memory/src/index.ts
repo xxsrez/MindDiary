@@ -8,6 +8,15 @@ import {
   type ImmutableObjectPutResult,
   type ImmutableObjectWriteRequest,
   type ObjectStore,
+  type BundleFileObject,
+  type BundleFileObjectMetadata,
+  type BundleFileObjectPutResult,
+  type BundleFileObjectStore,
+  type BundleFileObjectWriteRequest,
+  type BundleFileObjectListRequest,
+  type BundleFileObjectDeleteRequest,
+  type StagedBundleFileObject,
+  type StagedBundleFileObjectWriteRequest,
   type ExportArchivePutResult,
   type ExportArchiveStore,
   type ExportArchiveWriteRequest,
@@ -40,10 +49,23 @@ interface StoredArchive {
   readonly bytes: Uint8Array;
 }
 
+interface StoredBundleFile extends BundleFileObjectMetadata {
+  protectedAt: Utc;
+  bytes: Uint8Array;
+}
+
 const SHA256_PATTERN = /^sha256:[0-9a-f]{64}$/u;
 const UTC_PATTERN =
   /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,9}))?Z$/u;
 const MARKDOWN_MEDIA_TYPE = "text/markdown; charset=utf-8";
+const BUNDLE_FILE_MEDIA_TYPES = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/gif",
+  "image/webp",
+  "application/pdf",
+  "application/zip",
+]);
 
 function assertDigest(value: string): asserts value is Digest {
   if (!SHA256_PATTERN.test(value)) {
@@ -121,6 +143,15 @@ function assertMarkdown(bytes: Uint8Array, mediaType: string): void {
   }
 }
 
+function assertBundleFileMediaType(mediaType: string): void {
+  if (!BUNDLE_FILE_MEDIA_TYPES.has(mediaType)) {
+    throw new ObjectStoreIntegrityError(
+      "invalid_media_type",
+      "opaque canonical object media type is not allowed",
+    );
+  }
+}
+
 function bytesEqual(left: Uint8Array, right: Uint8Array): boolean {
   if (left.byteLength !== right.byteLength) return false;
   for (let index = 0; index < left.byteLength; index += 1) {
@@ -138,9 +169,11 @@ async function webCryptoSha256(bytes: Uint8Array): Promise<string> {
     .join("")}`;
 }
 
-export class InMemoryObjectStore implements ObjectStore, ExportArchiveStore {
+export class InMemoryObjectStore implements BundleFileObjectStore, ExportArchiveStore {
   readonly kind = "object-store" as const;
   readonly #objects = new Map<string, StoredObject>();
+  readonly #bundleFiles = new Map<string, StoredBundleFile>();
+  readonly #stagedBundleFiles = new Map<string, StagedBundleFileObject>();
   readonly #exportArchives = new Map<string, StoredArchive>();
   readonly #digestComputer: DigestComputer;
 
@@ -200,6 +233,146 @@ export class InMemoryObjectStore implements ObjectStore, ExportArchiveStore {
     if (!stored) return null;
     await this.#assertStoredIntegrity(stored);
     return Object.freeze({ ...this.#metadata(stored), bytes: new Uint8Array(stored.bytes) });
+  }
+
+  async putBundleFile(
+    request: BundleFileObjectWriteRequest,
+  ): Promise<BundleFileObjectPutResult> {
+    assertUtc(request.createdAt);
+    assertBundleFileMediaType(request.mediaType);
+    if (typeof request.spaceId !== "string" || request.spaceId.length === 0) {
+      throw new TypeError("BundleFile Space ID is required");
+    }
+    const bytes = new Uint8Array(request.bytes);
+    const digest = await this.calculateSha256(bytes);
+    const key = `${request.spaceId}:${digest}`;
+    const existing = this.#bundleFiles.get(key);
+    if (existing) {
+      if (
+        existing.mediaType !== request.mediaType ||
+        !bytesEqual(existing.bytes, bytes)
+      ) {
+        throw new ObjectStoreIntegrityError(
+          "digest_collision",
+          "different Space-scoped BundleFile bytes resolved to one digest",
+        );
+      }
+      if (compareUtc(request.createdAt, existing.protectedAt) > 0) {
+        existing.protectedAt = request.createdAt;
+      }
+      return Object.freeze({
+        object: this.#bundleMetadata(existing),
+        status: "already_exists",
+      });
+    }
+    const stored: StoredBundleFile = {
+      spaceId: request.spaceId,
+      sha256: digest,
+      mediaType: request.mediaType,
+      size: bytes.byteLength,
+      createdAt: request.createdAt,
+      protectedAt: request.createdAt,
+      bytes,
+    };
+    this.#bundleFiles.set(key, stored);
+    return Object.freeze({ object: this.#bundleMetadata(stored), status: "stored" });
+  }
+
+  async getBundleFile(
+    spaceId: BundleFileObjectMetadata["spaceId"],
+    digest: Digest,
+  ): Promise<Readonly<BundleFileObject> | null> {
+    assertDigest(digest);
+    const stored = this.#bundleFiles.get(`${spaceId}:${digest}`);
+    if (!stored) return null;
+    const actual = await this.calculateSha256(stored.bytes);
+    if (actual !== digest || stored.size !== stored.bytes.byteLength) {
+      throw new ObjectStoreIntegrityError("object_tampered", "BundleFile bytes are invalid");
+    }
+    return Object.freeze({
+      ...this.#bundleMetadata(stored),
+      bytes: new Uint8Array(stored.bytes),
+    });
+  }
+
+  async listBundleFileObjects(
+    request: BundleFileObjectListRequest,
+  ): Promise<readonly Readonly<BundleFileObjectMetadata>[]> {
+    assertUtc(request.createdBefore);
+    if (!Number.isSafeInteger(request.limit) || request.limit < 1) {
+      throw new ObjectStoreIntegrityError("invalid_limit", "BundleFile list limit is invalid");
+    }
+    const excluded = new Set(
+      request.excluded.map((item) => `${item.spaceId}:${item.sha256}`),
+    );
+    return Object.freeze([...this.#bundleFiles.entries()]
+      .filter(([, item]) =>
+        !excluded.has(`${item.spaceId}:${item.sha256}`) &&
+        compareUtc(item.protectedAt, request.createdBefore) < 0)
+      .sort(([, left], [, right]) =>
+        compareUtc(left.protectedAt, right.protectedAt) ||
+        left.spaceId.localeCompare(right.spaceId) ||
+        left.sha256.localeCompare(right.sha256))
+      .slice(0, request.limit)
+      .map(([, item]) => this.#bundleMetadata(item)));
+  }
+
+  async deleteBundleFileObject(
+    request: BundleFileObjectDeleteRequest,
+  ): Promise<boolean> {
+    assertDigest(request.sha256);
+    assertUtc(request.createdBefore);
+    assertUtc(request.expectedProtectedAt);
+    const key = `${request.spaceId}:${request.sha256}`;
+    const stored = this.#bundleFiles.get(key);
+    if (
+      !stored || stored.protectedAt !== request.expectedProtectedAt ||
+      compareUtc(stored.protectedAt, request.createdBefore) >= 0
+    ) return false;
+    return this.#bundleFiles.delete(key);
+  }
+
+  async putStagedBundleFile(
+    request: StagedBundleFileObjectWriteRequest,
+  ): Promise<Readonly<StagedBundleFileObject>> {
+    assertUtc(request.createdAt);
+    if (
+      typeof request.stagedFileId !== "string" || request.stagedFileId.length === 0 ||
+      typeof request.bindingOwnerId !== "string" || request.bindingOwnerId.length === 0 ||
+      typeof request.spaceId !== "string" || request.spaceId.length === 0
+    ) throw new TypeError("staged BundleFile identity is invalid");
+    const existing = this.#stagedBundleFiles.get(request.stagedFileId);
+    const candidate = Object.freeze({
+      stagedFileId: request.stagedFileId,
+      bindingOwnerId: request.bindingOwnerId,
+      spaceId: request.spaceId,
+      bytes: new Uint8Array(request.bytes),
+      size: request.bytes.byteLength,
+      createdAt: request.createdAt,
+    });
+    if (existing) {
+      if (
+        existing.bindingOwnerId !== candidate.bindingOwnerId ||
+        existing.spaceId !== candidate.spaceId ||
+        !bytesEqual(existing.bytes, candidate.bytes)
+      ) throw new ObjectStoreIntegrityError("digest_collision", "staged BundleFile ID collision");
+      return Object.freeze({ ...existing, bytes: new Uint8Array(existing.bytes) });
+    }
+    this.#stagedBundleFiles.set(request.stagedFileId, candidate);
+    return candidate;
+  }
+
+  async getStagedBundleFile(
+    stagedFileId: string,
+  ): Promise<Readonly<StagedBundleFileObject> | null> {
+    const stored = this.#stagedBundleFiles.get(stagedFileId);
+    return stored === undefined
+      ? null
+      : Object.freeze({ ...stored, bytes: new Uint8Array(stored.bytes) });
+  }
+
+  async deleteStagedBundleFile(stagedFileId: string): Promise<boolean> {
+    return this.#stagedBundleFiles.delete(stagedFileId);
   }
 
   async listImmutableObjects(
@@ -366,6 +539,19 @@ export class InMemoryObjectStore implements ObjectStore, ExportArchiveStore {
 
   #metadata(stored: StoredObject): Readonly<ImmutableObjectMetadata> {
     return Object.freeze({
+      sha256: stored.sha256,
+      mediaType: stored.mediaType,
+      size: stored.size,
+      createdAt: stored.createdAt,
+      protectedAt: stored.protectedAt,
+    });
+  }
+
+  #bundleMetadata(
+    stored: StoredBundleFile,
+  ): Readonly<BundleFileObjectMetadata> {
+    return Object.freeze({
+      spaceId: stored.spaceId,
       sha256: stored.sha256,
       mediaType: stored.mediaType,
       size: stored.size,

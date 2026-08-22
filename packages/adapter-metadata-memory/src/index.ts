@@ -64,6 +64,12 @@ import type {
   ClaimIndexJobResult,
   ContentCommitMetadataStore,
   ContentCommitMetadataTransaction,
+  BundleFileStagingTransaction,
+  CreateStagedBundleFileResult,
+  ConsumeStagedBundleFilesRequest,
+  ConsumeStagedBundleFilesResult,
+  StagedBundleFileId,
+  StagedBundleFileRecord,
   CurrentAuthorizationState,
   HandleRegistry,
   HandleReservationRequest,
@@ -163,6 +169,7 @@ import {
   isReservedTopLevelRoute,
   parseCanonicalSpaceHandle,
   revisionEnvelopesEqual,
+  serializeRevisionManifest,
   roleHasCapability,
   version,
 } from "@mind-diary/application-ports";
@@ -195,6 +202,122 @@ export interface InMemoryHandleRegistrySnapshot {
 
 const HANDLE_UNAVAILABLE = Object.freeze({ kind: "handle_unavailable" } as const);
 const HANDLE_NOT_FOUND = Object.freeze({ kind: "not_found" } as const);
+
+function freezeStagedBundleFile(
+  record: Readonly<StagedBundleFileRecord>,
+): Readonly<StagedBundleFileRecord> {
+  return Object.freeze({ ...record });
+}
+
+function stagedBundleFileActive(
+  record: Readonly<StagedBundleFileRecord>,
+  occurredAt: StagedBundleFileRecord["createdAt"],
+): boolean {
+  return (
+    (record.state === "quarantined" || record.state === "verified") &&
+    Date.parse(record.expiresAt) > Date.parse(occurredAt)
+  );
+}
+
+function createStagedBundleFileAgainst(
+  record: Readonly<StagedBundleFileRecord>,
+  maxOutstandingBytes: number,
+  occurredAt: StagedBundleFileRecord["createdAt"],
+  records: Map<StagedBundleFileId, Readonly<StagedBundleFileRecord>>,
+): CreateStagedBundleFileResult {
+  const existing = records.get(record.stagedFileId);
+  if (existing !== undefined) {
+    return JSON.stringify(existing) === JSON.stringify(record)
+      ? Object.freeze({ kind: "created", record: freezeStagedBundleFile(existing) })
+      : Object.freeze({ kind: "id_collision" });
+  }
+  const outstanding = [...records.values()]
+    .filter(
+      (item) =>
+        item.bindingOwnerId === record.bindingOwnerId &&
+        stagedBundleFileActive(item, occurredAt),
+    )
+    .reduce((total, item) => total + item.size, 0);
+  if (outstanding + record.size > maxOutstandingBytes) {
+    return Object.freeze({ kind: "outstanding_byte_limit_exceeded" });
+  }
+  const frozen = freezeStagedBundleFile(record);
+  records.set(record.stagedFileId, frozen);
+  return Object.freeze({ kind: "created", record: frozen });
+}
+
+function consumeStagedBundleFilesAgainst(
+  request: Readonly<ConsumeStagedBundleFilesRequest>,
+  records: Map<StagedBundleFileId, Readonly<StagedBundleFileRecord>>,
+): ConsumeStagedBundleFilesResult {
+  const seen = new Set<StagedBundleFileId>();
+  const selected: Readonly<StagedBundleFileRecord>[] = [];
+  for (const stagedFileId of request.stagedFileIds) {
+    if (seen.has(stagedFileId)) {
+      return Object.freeze({ kind: "duplicate_reference", stagedFileId });
+    }
+    seen.add(stagedFileId);
+    const record = records.get(stagedFileId);
+    if (!record) return Object.freeze({ kind: "not_found", stagedFileId });
+    if (Date.parse(record.expiresAt) <= Date.parse(request.consumedAt)) {
+      return Object.freeze({ kind: "expired", stagedFileId });
+    }
+    if (record.state !== "verified") {
+      return Object.freeze({ kind: "not_verified", stagedFileId });
+    }
+    if (
+      record.bindingOwnerId !== request.bindingOwnerId ||
+      record.writeBindingId !== request.writeBindingId ||
+      record.writeBindingGeneration !== request.writeBindingGeneration ||
+      record.spaceId !== request.spaceId
+    ) return Object.freeze({ kind: "binding_mismatch", stagedFileId });
+    selected.push(record);
+  }
+  const consumed = selected.map((record) => {
+    const updated = freezeStagedBundleFile({
+      ...record,
+      state: "consumed",
+      consumedAt: request.consumedAt,
+    });
+    records.set(record.stagedFileId, updated);
+    return updated;
+  });
+  return Object.freeze({ kind: "consumed", records: Object.freeze(consumed) });
+}
+
+function bundleFileRetainedQuotaAllows(
+  request: Readonly<{
+    spaceId: SpaceId;
+    candidateEntries: readonly Readonly<{ sha256: Digest; size: number }>[];
+    maxRetainedBytes: number;
+  }>,
+  spaces: ReadonlyMap<SpaceId, SpaceState>,
+): boolean {
+  if (!Number.isSafeInteger(request.maxRetainedBytes) || request.maxRetainedBytes < 1) {
+    return false;
+  }
+  const unique = new Map<Digest, number>();
+  for (const revision of spaces.get(request.spaceId)?.revisions.values() ?? []) {
+    for (const entry of revision.manifest.entries) {
+      if (entry.kind === "opaque") unique.set(entry.sha256, entry.size);
+    }
+  }
+  for (const entry of request.candidateEntries) {
+    const existingSize = unique.get(entry.sha256);
+    if (
+      !SHA256_PATTERN.test(entry.sha256) ||
+      !Number.isSafeInteger(entry.size) || entry.size < 0 ||
+      (existingSize !== undefined && existingSize !== entry.size)
+    ) return false;
+    unique.set(entry.sha256, entry.size);
+  }
+  let total = 0;
+  for (const size of unique.values()) {
+    total += size;
+    if (!Number.isSafeInteger(total) || total > request.maxRetainedBytes) return false;
+  }
+  return true;
+}
 
 function handleKey(
   host: VerifiedSpaceHost,
@@ -782,35 +905,11 @@ function validPath(path: string): boolean {
 }
 
 function canonicalManifestSource(envelope: Envelope): string | null {
-  const entries = envelope.manifest.entries;
-  const sorted = [...entries].sort((left, right) =>
-    compareUnicodeScalarValues(left.path, right.path),
-  );
-  const seen = new Set<string>();
-  for (let index = 0; index < entries.length; index += 1) {
-    const entry = entries[index]!;
-    if (
-      entry !== sorted[index] ||
-      seen.has(entry.path) ||
-      !validPath(entry.path) ||
-      !SHA256_PATTERN.test(entry.sha256) ||
-      entry.mediaType !== MARKDOWN_MEDIA_TYPE ||
-      !Number.isSafeInteger(entry.size) ||
-      entry.size < 0
-    ) {
-      return null;
-    }
-    seen.add(entry.path);
+  try {
+    return serializeRevisionManifest(envelope.manifest);
+  } catch {
+    return null;
   }
-  return `${JSON.stringify({
-    format: "mind-diary-revision-manifest-v1",
-    entries: entries.map((entry) => ({
-      path: entry.path,
-      sha256: entry.sha256,
-      media_type: entry.mediaType,
-      size: entry.size,
-    })),
-  })}\n`;
 }
 
 async function sha256(source: string): Promise<string> {
@@ -826,13 +925,23 @@ function envelopesEqual(left: Envelope, right: Envelope): boolean {
 }
 
 function cloneEnvelope(envelope: Envelope): Envelope {
-  const entries = envelope.manifest.entries.map((entry) => Object.freeze({ ...entry }));
+  const entries = envelope.manifest.entries.map((entry) =>
+    entry.kind === "opaque"
+      ? Object.freeze({ ...entry, kind: "opaque" as const })
+      : Object.freeze({
+          ...entry,
+          kind: "markdown" as const,
+          mediaType: MARKDOWN_MEDIA_TYPE,
+        }));
   return Object.freeze({
     revision: Object.freeze({
       ...envelope.revision,
       committedBy: Object.freeze({ ...envelope.revision.committedBy }),
     }),
-    manifest: Object.freeze({ entries: Object.freeze(entries) }),
+    manifest: Object.freeze({
+      format: envelope.manifest.format ?? "mind-diary-revision-manifest-v1",
+      entries: Object.freeze(entries),
+    }),
   });
 }
 
@@ -3481,6 +3590,7 @@ export class InMemoryRevisionMetadataStore
   #exportJobs = new Map<JobId, Readonly<ExportJob>>();
   #exportDownloadGrants = new Map<string, Readonly<ExportDownloadGrant>>();
   #indexStates = new Map<string, Readonly<RevisionIndexState>>();
+  #stagedBundleFiles = new Map<StagedBundleFileId, Readonly<StagedBundleFileRecord>>();
   #principals: PrincipalMap = new Map();
   #externalBindings: ExternalBindingMap = new Map();
   #knowledgeSpaces: KnowledgeSpaceMap = new Map();
@@ -3544,6 +3654,7 @@ export class InMemoryRevisionMetadataStore
       exportJobs: new Map(this.#exportJobs),
       exportDownloadGrants: new Map(this.#exportDownloadGrants),
       indexStates: new Map(this.#indexStates),
+      stagedBundleFiles: new Map(this.#stagedBundleFiles),
       principals: new Map(this.#principals),
       externalBindings: new Map(this.#externalBindings),
       knowledgeSpaces: new Map(this.#knowledgeSpaces),
@@ -3603,6 +3714,9 @@ export class InMemoryRevisionMetadataStore
     restored.#exportJobs = new Map(snapshot.exportJobs as Map<JobId, Readonly<ExportJob>>);
     restored.#exportDownloadGrants = new Map(snapshot.exportDownloadGrants as Map<string, Readonly<ExportDownloadGrant>>);
     restored.#indexStates = new Map(snapshot.indexStates as Map<string, Readonly<RevisionIndexState>>);
+    restored.#stagedBundleFiles = snapshot.stagedBundleFiles instanceof Map
+      ? new Map(snapshot.stagedBundleFiles as Map<StagedBundleFileId, Readonly<StagedBundleFileRecord>>)
+      : new Map();
     restored.#principals = new Map(snapshot.principals as PrincipalMap);
     restored.#externalBindings = new Map(snapshot.externalBindings as ExternalBindingMap);
     restored.#knowledgeSpaces = new Map(snapshot.knowledgeSpaces as KnowledgeSpaceMap);
@@ -3650,6 +3764,86 @@ export class InMemoryRevisionMetadataStore
     return mindBindingSnapshot(
       state ?? emptyMindBindingOwnerState(bindingOwnerId, principalId, occurredAt),
     );
+  }
+
+  async readStagedBundleFile(
+    stagedFileId: StagedBundleFileId,
+  ): Promise<Readonly<StagedBundleFileRecord> | null> {
+    const record = this.#stagedBundleFiles.get(stagedFileId);
+    return record === undefined ? null : freezeStagedBundleFile(record);
+  }
+
+  async runBundleFileStagingTransaction<Result>(
+    operation: (transaction: BundleFileStagingTransaction) => Promise<Result>,
+  ): Promise<Result> {
+    return this.#runExclusive(async () => {
+      const stagedBundleFiles = new Map(this.#stagedBundleFiles);
+      const transaction: BundleFileStagingTransaction = Object.freeze({
+        kind: "authorization-transaction" as const,
+        readMindBindingSet: (
+          bindingOwnerId: MindBindingOwnerId,
+          principalId: PrincipalId,
+          occurredAt: ApplyReadMindBindingRequest["occurredAt"],
+        ) => this.readMindBindingSet(bindingOwnerId, principalId, occurredAt),
+        readCurrentAuthorizationState: (query: AuthorizationStateQuery) =>
+          this.readCurrentAuthorizationState(query),
+        readStagedBundleFile: async (stagedFileId: StagedBundleFileId) => {
+          const record = stagedBundleFiles.get(stagedFileId);
+          return record === undefined ? null : freezeStagedBundleFile(record);
+        },
+        createStagedBundleFile: async (
+          record: Readonly<StagedBundleFileRecord>,
+          maxOutstandingBytes: number,
+          occurredAt: StagedBundleFileRecord["createdAt"],
+        ) => createStagedBundleFileAgainst(
+          record,
+          maxOutstandingBytes,
+          occurredAt,
+          stagedBundleFiles,
+        ),
+      });
+      const result = await operation(transaction);
+      this.#stagedBundleFiles = stagedBundleFiles;
+      return result;
+    });
+  }
+
+  async collectStagedBundleFilesForGc(request: Readonly<{
+    createdBefore: StagedBundleFileRecord["createdAt"];
+    limit: number;
+  }>): Promise<readonly Readonly<StagedBundleFileRecord>[]> {
+    if (!Number.isSafeInteger(request.limit) || request.limit < 1) {
+      throw new TypeError("staged BundleFile GC limit must be positive");
+    }
+    return this.#runExclusive(async () => {
+      const candidates = [...this.#stagedBundleFiles.values()]
+        .filter(
+          (record) =>
+            record.state !== "expired" &&
+            Date.parse(record.expiresAt) <= Date.parse(request.createdBefore),
+        )
+        .sort((left, right) =>
+          Date.parse(left.createdAt) - Date.parse(right.createdAt) ||
+          left.stagedFileId.localeCompare(right.stagedFileId),
+        )
+        .slice(0, request.limit)
+        .map((record) => freezeStagedBundleFile({ ...record, state: "expired" }));
+      for (const record of candidates) {
+        this.#stagedBundleFiles.set(record.stagedFileId, record);
+      }
+      return Object.freeze(candidates);
+    });
+  }
+
+  async deleteExpiredStagedBundleFileRecord(
+    stagedFileId: StagedBundleFileId,
+  ): Promise<boolean> {
+    return this.#runExclusive(async () => {
+      const current = this.#stagedBundleFiles.get(stagedFileId);
+      return current?.state === "expired"
+        ? this.#stagedBundleFiles.delete(stagedFileId)
+        : false;
+    });
   }
 
   async runMindBindingTransaction<Result>(
@@ -4142,7 +4336,8 @@ export class InMemoryRevisionMetadataStore
     spaceId: SpaceId,
     revisionId: RevisionId,
   ): Promise<Envelope | null> {
-    return this.#spaces.get(spaceId)?.revisions.get(revisionId) ?? null;
+    const envelope = this.#spaces.get(spaceId)?.revisions.get(revisionId);
+    return envelope === undefined ? null : cloneEnvelope(envelope);
   }
 
   async listRevisions(spaceId: SpaceId): Promise<readonly Envelope[]> {
@@ -4151,7 +4346,7 @@ export class InMemoryRevisionMetadataStore
       (left, right) =>
         left.revision.revisionNumber - right.revision.revisionNumber,
     );
-    return Object.freeze(revisions);
+    return Object.freeze(revisions.map(cloneEnvelope));
   }
 
   async readAccount(
@@ -7314,6 +7509,7 @@ export class InMemoryRevisionMetadataStore
       const indexStates = new Map(
         [...this.#indexStates].map(([key, state]) => [key, cloneIndexState(state)]),
       );
+      const stagedBundleFiles = new Map(this.#stagedBundleFiles);
       const authorizationStates = new Map(
         [...this.#authorizationStates].map(([key, state]) => [
           key,
@@ -7341,6 +7537,19 @@ export class InMemoryRevisionMetadataStore
         readHead: async (spaceId: SpaceId) => spaces.get(spaceId)?.head ?? null,
         readRevision: async (spaceId: SpaceId, revisionId: RevisionId) =>
           spaces.get(spaceId)?.revisions.get(revisionId) ?? null,
+        readStagedBundleFile: async (stagedFileId: StagedBundleFileId) => {
+          const record = stagedBundleFiles.get(stagedFileId);
+          return record === undefined ? null : freezeStagedBundleFile(record);
+        },
+        consumeStagedBundleFiles: async (
+          request: Readonly<ConsumeStagedBundleFilesRequest>,
+        ) => consumeStagedBundleFilesAgainst(request, stagedBundleFiles),
+        checkBundleFileRetainedQuota: async (
+          request: Parameters<
+            ContentCommitMetadataTransaction["checkBundleFileRetainedQuota"]
+          >[0],
+        ) =>
+          bundleFileRetainedQuotaAllows(request, spaces),
         checkIdempotency: async (request: CheckIdempotencyRequest) =>
           checkIdempotencyAgainst(request, idempotencyRecords),
         commitRevision: async (request: RevisionCommitRequest) => {
@@ -7406,6 +7615,7 @@ export class InMemoryRevisionMetadataStore
       this.#auditOutbox = auditOutbox;
       this.#backgroundJobs = backgroundJobs;
       this.#indexStates = indexStates;
+      this.#stagedBundleFiles = stagedBundleFiles;
       return result;
     });
   }
@@ -7651,6 +7861,26 @@ export class InMemoryRevisionMetadataStore
       for (const entry of revision.manifest.entries) reachable.add(entry.sha256);
     }
     return Object.freeze([...reachable].sort());
+  }
+
+  async listReachableBundleFileObjects(): Promise<readonly Readonly<{
+    spaceId: SpaceId;
+    sha256: Digest;
+  }>[]> {
+    const reachable = new Map<string, Readonly<{ spaceId: SpaceId; sha256: Digest }>>();
+    for (const revision of this.#revisionsById.values()) {
+      for (const entry of revision.manifest.entries) {
+        if (entry.kind !== "opaque") continue;
+        const item = Object.freeze({
+          spaceId: revision.revision.spaceId,
+          sha256: entry.sha256,
+        });
+        reachable.set(`${item.spaceId}\u0000${item.sha256}`, item);
+      }
+    }
+    return Object.freeze([...reachable.values()].sort((left, right) =>
+      left.spaceId.localeCompare(right.spaceId) || left.sha256.localeCompare(right.sha256),
+    ));
   }
 
   async claimInvitationExpiryJob(

@@ -3,11 +3,14 @@ import type {
   AuthorizationDecision,
   Authorizer,
   Clock,
+  BundleFileStagingStore,
+  StagedBundleFileRecord,
 } from "@mind-diary/application-ports";
 import {
   MARKDOWN_MEDIA_TYPE,
   RevisionEnvelopeError,
   canonicalMarkdownPath,
+  canonicalBundleFilePath,
   sha256Digest,
   type RevisionId,
   type RevisionMode,
@@ -16,6 +19,8 @@ import {
   type SpaceId,
   type UtcInstant,
   type WriteMindBindingId,
+  type BundleFileMediaType,
+  type StagedBundleFileId,
 } from "@mind-diary/domain";
 import {
   okfFileKind,
@@ -59,12 +64,34 @@ export interface AddLogEntryOperation {
   readonly message: string;
 }
 
+export interface CreateBundleFileOperation {
+  readonly type: "create_bundle_file";
+  readonly path: string;
+  readonly staged_file_id: StagedBundleFileId;
+}
+
+export interface ReplaceBundleFileOperation {
+  readonly type: "replace_bundle_file";
+  readonly path: string;
+  readonly staged_file_id: StagedBundleFileId;
+  readonly expected_sha256?: string;
+}
+
+export interface DeleteBundleFileOperation {
+  readonly type: "delete_bundle_file";
+  readonly path: string;
+  readonly expected_sha256?: string;
+}
+
 export type ChangesetOperation =
   | CreateFileOperation
   | ReplaceFileOperation
   | DeleteFileOperation
   | ReplaceIndexOperation
-  | AddLogEntryOperation;
+  | AddLogEntryOperation
+  | CreateBundleFileOperation
+  | ReplaceBundleFileOperation
+  | DeleteBundleFileOperation;
 
 export interface ChangesetPreflightLimits {
   readonly maxOperations: number;
@@ -75,6 +102,9 @@ export interface ChangesetPreflightLimits {
   readonly maxChangesetBytes: number;
   readonly maxResultingFiles: number;
   readonly maxResultingBundleBytes: number;
+  readonly maxBundleFileOperations: number;
+  readonly maxStagedBundleFileBytes: number;
+  readonly maxResultingRevisionBytes: number;
 }
 
 export const DEFAULT_CHANGESET_PREFLIGHT_LIMITS: Readonly<ChangesetPreflightLimits> =
@@ -87,6 +117,9 @@ export const DEFAULT_CHANGESET_PREFLIGHT_LIMITS: Readonly<ChangesetPreflightLimi
     maxChangesetBytes: 4_194_304,
     maxResultingFiles: 10_000,
     maxResultingBundleBytes: 67_108_864,
+    maxBundleFileOperations: 20,
+    maxStagedBundleFileBytes: 134_217_728,
+    maxResultingRevisionBytes: 1_073_741_824,
   });
 
 export interface ChangesetPreflightRequest {
@@ -122,7 +155,15 @@ export type ChangesetValidationCode =
   | "file_exists"
   | "file_not_found"
   | "file_digest_mismatch"
-  | "okf_validation_failed";
+  | "okf_validation_failed"
+  | "bundle_file_operation_limit_exceeded"
+  | "staged_bundle_file_byte_limit_exceeded"
+  | "resulting_revision_size_limit_exceeded"
+  | "staged_bundle_file_not_found"
+  | "staged_bundle_file_not_verified"
+  | "staged_bundle_file_expired"
+  | "staged_bundle_file_binding_mismatch"
+  | "retained_bundle_file_quota_exceeded";
 
 export interface ChangesetValidationFailure {
   readonly code: ChangesetValidationCode;
@@ -133,10 +174,24 @@ export interface ChangesetValidationFailure {
 }
 
 export interface ChangesetCandidateFile {
+  readonly kind: "markdown";
   readonly path: string;
   readonly mediaType: typeof MARKDOWN_MEDIA_TYPE;
   readonly text: string;
 }
+
+export interface ChangesetCandidateBundleFile {
+  readonly kind: "opaque";
+  readonly path: string;
+  readonly mediaType: BundleFileMediaType;
+  readonly sha256: Sha256Digest;
+  readonly size: number;
+  readonly stagedFileId: StagedBundleFileId | null;
+}
+
+export type ChangesetCandidateRevisionFile =
+  | ChangesetCandidateFile
+  | ChangesetCandidateBundleFile;
 
 type AllowedAuthorizationDecision = Extract<
   AuthorizationDecision,
@@ -149,7 +204,8 @@ export type ChangesetPreflightResult =
       readonly authorization: AllowedAuthorizationDecision;
       readonly baseRevisionId: RevisionId | null;
       readonly operations: readonly Readonly<ChangesetOperation>[];
-      readonly candidateFiles: readonly Readonly<ChangesetCandidateFile>[];
+      readonly candidateFiles: readonly Readonly<ChangesetCandidateRevisionFile>[];
+      readonly stagedBundleFileRecords: readonly Readonly<StagedBundleFileRecord>[];
       readonly validation: OkfBundleValidation;
       readonly committedAt: UtcInstant;
     }
@@ -170,6 +226,7 @@ export interface ChangesetPreflightDependencies {
   readonly authorizer: Authorizer;
   readonly revisions: HeadRevisionReader;
   readonly clock: Clock;
+  readonly stagedBundleFiles?: Pick<BundleFileStagingStore, "readStagedBundleFile">;
   readonly limits?: Readonly<ChangesetPreflightLimits>;
 }
 
@@ -183,10 +240,23 @@ export type ChangesetOperationValidationResult =
   | Extract<ChangesetPreflightResult, { readonly kind: "invalid" }>;
 
 interface WorkingFile {
+  readonly kind: "markdown";
   readonly path: string;
   readonly text: string;
   readonly sha256: Sha256Digest | null;
 }
+
+
+interface WorkingBundleFile {
+  readonly kind: "opaque";
+  readonly path: string;
+  readonly mediaType: BundleFileMediaType;
+  readonly sha256: Sha256Digest;
+  readonly size: number;
+  readonly stagedFileId: StagedBundleFileId | null;
+}
+
+type WorkingRevisionFile = WorkingFile | WorkingBundleFile;
 
 const ENCODER = new TextEncoder();
 const DECODER = new TextDecoder("utf-8", { fatal: true });
@@ -200,6 +270,9 @@ const LIMIT_KEYS = [
   "maxChangesetBytes",
   "maxResultingFiles",
   "maxResultingBundleBytes",
+  "maxBundleFileOperations",
+  "maxStagedBundleFileBytes",
+  "maxResultingRevisionBytes",
 ] as const satisfies readonly (keyof ChangesetPreflightLimits)[];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -271,6 +344,7 @@ function canonicalPath(
   value: unknown,
   operationIndex: number,
   limits: Readonly<ChangesetPreflightLimits>,
+  pathKind: "markdown" | "opaque" = "markdown",
 ): string | Extract<ChangesetPreflightResult, { readonly kind: "invalid" }> {
   if (typeof value !== "string") {
     return invalid("invalid_path", "operation path must be a string", {
@@ -278,7 +352,9 @@ function canonicalPath(
     });
   }
   try {
-    const path = canonicalMarkdownPath(value);
+    const path = pathKind === "markdown"
+      ? canonicalMarkdownPath(value)
+      : canonicalBundleFilePath(value);
     const pathBytes = safeUtf8(path);
     if (pathBytes === null) {
       return invalid("invalid_utf8", "operation path must be canonical UTF-8", {
@@ -294,7 +370,7 @@ function canonicalPath(
     return path;
   } catch (error) {
     if (error instanceof RevisionEnvelopeError) {
-      return invalid("invalid_path", "operation path is not canonical Markdown", {
+      return invalid("invalid_path", `operation path is not canonical ${pathKind}`, {
         operationIndex,
       });
     }
@@ -325,6 +401,21 @@ function expectedDigest(
     }
     throw error;
   }
+}
+
+function stagedFileId(
+  value: unknown,
+  operationIndex: number,
+  path: string,
+): StagedBundleFileId | Extract<ChangesetPreflightResult, { readonly kind: "invalid" }> {
+  if (
+    typeof value !== "string" || value.length === 0 ||
+    ENCODER.encode(value).byteLength > 255 || SINGLE_LINE_FORBIDDEN.test(value)
+  ) return invalid("invalid_operation", "staged_file_id must be a bounded opaque ID", {
+    operationIndex,
+    path,
+  });
+  return value as StagedBundleFileId;
 }
 
 function checkedText(
@@ -412,6 +503,7 @@ function validateOperationsAgainstLimits(
   const operations: Readonly<ChangesetOperation>[] = [];
   const seenPaths = new Set<string>();
   let totalBytes = 0;
+  let bundleOperationCount = 0;
   for (let index = 0; index < source.length; index += 1) {
     const candidate: unknown = source[index];
     if (!isRecord(candidate) || typeof candidate.type !== "string") {
@@ -419,7 +511,23 @@ function validateOperationsAgainstLimits(
         operationIndex: index,
       });
     }
-    const pathResult = canonicalPath(candidate.path, index, limits);
+    const bundleOperation =
+      candidate.type === "create_bundle_file" ||
+      candidate.type === "replace_bundle_file" ||
+      candidate.type === "delete_bundle_file";
+    if (bundleOperation && ++bundleOperationCount > limits.maxBundleFileOperations) {
+      return invalid(
+        "bundle_file_operation_limit_exceeded",
+        "BundleFile operation count exceeds its limit",
+        { operationIndex: index },
+      );
+    }
+    const pathResult = canonicalPath(
+      candidate.path,
+      index,
+      limits,
+      bundleOperation ? "opaque" : "markdown",
+    );
     if (typeof pathResult !== "string") return pathResult;
     const path = pathResult;
     if (seenPaths.has(path)) {
@@ -568,6 +676,57 @@ function validateOperationsAgainstLimits(
         category: category.value,
         message: message.value,
       });
+    } else if (candidate.type === "create_bundle_file") {
+      if (!hasExactKeys(candidate, ["type", "path", "staged_file_id"])) {
+        return invalid("invalid_operation", "create_bundle_file fields are invalid", {
+          operationIndex: index,
+          path,
+        });
+      }
+      const staged = stagedFileId(candidate.staged_file_id, index, path);
+      if (typeof staged !== "string") return staged;
+      totalBytes += ENCODER.encode(staged).byteLength;
+      operation = Object.freeze({
+        type: "create_bundle_file",
+        path,
+        staged_file_id: staged,
+      });
+    } else if (candidate.type === "replace_bundle_file") {
+      if (!hasExactKeys(
+        candidate,
+        ["type", "path", "staged_file_id"],
+        ["expected_sha256"],
+      )) {
+        return invalid("invalid_operation", "replace_bundle_file fields are invalid", {
+          operationIndex: index,
+          path,
+        });
+      }
+      const staged = stagedFileId(candidate.staged_file_id, index, path);
+      if (typeof staged !== "string") return staged;
+      const digest = expectedDigest(candidate.expected_sha256, index, path);
+      if (typeof digest === "object" && digest !== null && "kind" in digest) return digest;
+      totalBytes += ENCODER.encode(staged).byteLength;
+      operation = Object.freeze({
+        type: "replace_bundle_file",
+        path,
+        staged_file_id: staged,
+        ...(digest === null ? {} : { expected_sha256: digest }),
+      });
+    } else if (candidate.type === "delete_bundle_file") {
+      if (!hasExactKeys(candidate, ["type", "path"], ["expected_sha256"])) {
+        return invalid("invalid_operation", "delete_bundle_file fields are invalid", {
+          operationIndex: index,
+          path,
+        });
+      }
+      const digest = expectedDigest(candidate.expected_sha256, index, path);
+      if (typeof digest === "object" && digest !== null && "kind" in digest) return digest;
+      operation = Object.freeze({
+        type: "delete_bundle_file",
+        path,
+        ...(digest === null ? {} : { expected_sha256: digest }),
+      });
     } else {
       return invalid("invalid_operation", "operation type is not supported", {
         operationIndex: index,
@@ -598,13 +757,21 @@ export function validateChangesetOperations(
 }
 
 function digestMatches(
-  operation: ReplaceFileOperation | DeleteFileOperation | ReplaceIndexOperation,
-  file: WorkingFile,
+  operation:
+    | ReplaceFileOperation
+    | DeleteFileOperation
+    | ReplaceIndexOperation
+    | ReplaceBundleFileOperation
+    | DeleteBundleFileOperation,
+  file: WorkingRevisionFile,
 ): boolean {
   return operation.expected_sha256 === undefined || operation.expected_sha256 === file.sha256;
 }
 
-function comparePaths(left: ChangesetCandidateFile, right: ChangesetCandidateFile): number {
+function comparePaths(
+  left: ChangesetCandidateRevisionFile,
+  right: ChangesetCandidateRevisionFile,
+): number {
   return left.path < right.path ? -1 : left.path > right.path ? 1 : 0;
 }
 
@@ -613,11 +780,13 @@ export class ChangesetPreflightService {
   readonly #revisions: HeadRevisionReader;
   readonly #clock: Clock;
   readonly #limits: Readonly<ChangesetPreflightLimits>;
+  readonly #stagedBundleFiles: Pick<BundleFileStagingStore, "readStagedBundleFile"> | null;
 
   constructor(dependencies: ChangesetPreflightDependencies) {
     this.#authorizer = dependencies.authorizer;
     this.#revisions = dependencies.revisions;
     this.#clock = dependencies.clock;
+    this.#stagedBundleFiles = dependencies.stagedBundleFiles ?? null;
     this.#limits = normalizeLimits(
       dependencies.limits ?? DEFAULT_CHANGESET_PREFLIGHT_LIMITS,
     );
@@ -676,15 +845,28 @@ export class ChangesetPreflightService {
       });
     }
 
-    const working = new Map<string, WorkingFile>();
+    const working = new Map<string, WorkingRevisionFile>();
     for (const file of head?.files ?? []) {
-      working.set(
-        file.path,
-        Object.freeze({ path: file.path, text: file.text, sha256: file.sha256 }),
-      );
+      working.set(file.path, file.kind === "markdown"
+        ? Object.freeze({
+            kind: "markdown" as const,
+            path: file.path,
+            text: file.text,
+            sha256: file.sha256,
+          })
+        : Object.freeze({
+            kind: "opaque" as const,
+            path: file.path,
+            mediaType: file.mediaType,
+            sha256: file.sha256,
+            size: file.size,
+            stagedFileId: null,
+          }));
     }
 
     const committedAt = this.#clock.now();
+    const stagedRecords = new Map<StagedBundleFileId, Readonly<StagedBundleFileRecord>>();
+    let stagedBytes = 0;
 
     for (let index = 0; index < operationSet.operations.length; index += 1) {
       const operation = operationSet.operations[index]!;
@@ -698,13 +880,18 @@ export class ChangesetPreflightService {
         }
         working.set(
           operation.path,
-          Object.freeze({ path: operation.path, text: operation.text, sha256: null }),
+          Object.freeze({
+            kind: "markdown" as const,
+            path: operation.path,
+            text: operation.text,
+            sha256: null,
+          }),
         );
       } else if (
         operation.type === "replace_file" ||
         operation.type === "replace_index"
       ) {
-        if (!current) {
+        if (!current || current.kind !== "markdown") {
           return invalid("file_not_found", "replace target does not exist", {
             operationIndex: index,
             path: operation.path,
@@ -718,10 +905,15 @@ export class ChangesetPreflightService {
         }
         working.set(
           operation.path,
-          Object.freeze({ path: operation.path, text: operation.text, sha256: null }),
+          Object.freeze({
+            kind: "markdown" as const,
+            path: operation.path,
+            text: operation.text,
+            sha256: null,
+          }),
         );
       } else if (operation.type === "delete_file") {
-        if (!current) {
+        if (!current || current.kind !== "markdown") {
           return invalid("file_not_found", "delete target does not exist", {
             operationIndex: index,
             path: operation.path,
@@ -735,7 +927,7 @@ export class ChangesetPreflightService {
         }
         working.delete(operation.path);
       } else if (operation.type === "add_log_entry") {
-        if (!current) {
+        if (!current || current.kind !== "markdown") {
           return invalid("file_not_found", "log target does not exist", {
             operationIndex: index,
             path: operation.path,
@@ -769,11 +961,106 @@ export class ChangesetPreflightService {
         working.set(
           operation.path,
           Object.freeze({
+            kind: "markdown" as const,
             path: operation.path,
             text: materialized.text,
             sha256: null,
           }),
         );
+      } else if (
+        operation.type === "create_bundle_file" ||
+        operation.type === "replace_bundle_file"
+      ) {
+        if (operation.type === "create_bundle_file" && current) {
+          return invalid("file_exists", "create_bundle_file target already exists", {
+            operationIndex: index,
+            path: operation.path,
+          });
+        }
+        if (
+          operation.type === "replace_bundle_file" &&
+          (!current || current.kind !== "opaque")
+        ) return invalid("file_not_found", "replace BundleFile target does not exist", {
+          operationIndex: index,
+          path: operation.path,
+        });
+        if (
+          operation.type === "replace_bundle_file" && current &&
+          !digestMatches(operation, current)
+        ) return invalid("file_digest_mismatch", "replace BundleFile digest changed", {
+          operationIndex: index,
+          path: operation.path,
+        });
+        const staged = await this.#stagedBundleFiles?.readStagedBundleFile(
+          operation.staged_file_id,
+        );
+        if (!staged) return invalid(
+          "staged_bundle_file_not_found",
+          "staged BundleFile does not exist",
+          { operationIndex: index, path: operation.path },
+        );
+        if (Date.parse(staged.expiresAt) <= Date.parse(committedAt)) {
+          return invalid("staged_bundle_file_expired", "staged BundleFile expired", {
+            operationIndex: index,
+            path: operation.path,
+          });
+        }
+        if (staged.state !== "verified") {
+          return invalid(
+            "staged_bundle_file_not_verified",
+            "staged BundleFile is not verified",
+            { operationIndex: index, path: operation.path },
+          );
+        }
+        const bindingOwnerId =
+          request.actor.kind === "registered_principal" &&
+          request.actor.authentication.kind === "mcp_token"
+            ? request.actor.authentication.bindingOwnerId
+            : null;
+        if (
+          bindingOwnerId === null ||
+          request.writeBindingId === undefined ||
+          staged.bindingOwnerId !== bindingOwnerId ||
+          staged.writeBindingId !== request.writeBindingId ||
+          staged.spaceId !== request.spaceId
+        ) return invalid(
+          "staged_bundle_file_binding_mismatch",
+          "staged BundleFile is pinned to another binding or Mind",
+          { operationIndex: index, path: operation.path },
+        );
+        if (!stagedRecords.has(staged.stagedFileId)) {
+          stagedBytes += staged.size;
+          stagedRecords.set(staged.stagedFileId, staged);
+        }
+        if (stagedBytes > this.#limits.maxStagedBundleFileBytes) {
+          return invalid(
+            "staged_bundle_file_byte_limit_exceeded",
+            "staged BundleFile bytes exceed the changeset limit",
+            { operationIndex: index, path: operation.path },
+          );
+        }
+        working.set(operation.path, Object.freeze({
+          kind: "opaque",
+          path: operation.path,
+          mediaType: staged.mediaType,
+          sha256: staged.sha256,
+          size: staged.size,
+          stagedFileId: staged.stagedFileId,
+        }));
+      } else if (operation.type === "delete_bundle_file") {
+        if (!current || current.kind !== "opaque") {
+          return invalid("file_not_found", "delete BundleFile target does not exist", {
+            operationIndex: index,
+            path: operation.path,
+          });
+        }
+        if (!digestMatches(operation, current)) {
+          return invalid("file_digest_mismatch", "delete BundleFile digest changed", {
+            operationIndex: index,
+            path: operation.path,
+          });
+        }
+        working.delete(operation.path);
       }
     }
 
@@ -784,10 +1071,16 @@ export class ChangesetPreflightService {
       );
     }
     let resultingBytes = 0;
+    let resultingRevisionBytes = 0;
     const candidateFiles = [...working.values()]
       .map((file) => {
+        resultingRevisionBytes += file.kind === "markdown"
+          ? ENCODER.encode(file.text).byteLength
+          : file.size;
+        if (file.kind === "opaque") return Object.freeze({ ...file });
         resultingBytes += ENCODER.encode(file.text).byteLength;
         return Object.freeze({
+          kind: "markdown" as const,
           path: file.path,
           mediaType: MARKDOWN_MEDIA_TYPE,
           text: file.text,
@@ -800,8 +1093,18 @@ export class ChangesetPreflightService {
         "resulting bundle bytes exceed their limit",
       );
     }
+    if (resultingRevisionBytes > this.#limits.maxResultingRevisionBytes) {
+      return invalid(
+        "resulting_revision_size_limit_exceeded",
+        "resulting revision bytes exceed their limit",
+      );
+    }
 
-    const validation = validateOkfBundle(candidateFiles);
+    const validation = validateOkfBundle(
+      candidateFiles.filter(
+        (file): file is ChangesetCandidateFile => file.kind === "markdown",
+      ),
+    );
     if (!validation.valid) {
       return invalid(
         "okf_validation_failed",
@@ -818,6 +1121,7 @@ export class ChangesetPreflightService {
       baseRevisionId: currentRevisionId,
       operations: operationSet.operations,
       candidateFiles: Object.freeze(candidateFiles),
+      stagedBundleFileRecords: Object.freeze([...stagedRecords.values()]),
       validation,
       committedAt,
     });

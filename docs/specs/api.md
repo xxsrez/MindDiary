@@ -14,7 +14,9 @@ implementation теперь завершена. Machine-readable OpenAPI и MCP 
 
 ADR-0015 и [BundleFile specification](bundle-files.md) добавляют accepted
 Release 0.1 wire contract; его implementation/live UAT status остаётся
-`not_started` до MD-247–MD-250 и не расширяет deployed Markdown-only claims.
+`core_implemented_local` после MD-247; native MCP ingress, read/download,
+mixed export и exact-SHA UAT остаются MD-248–MD-250, поэтому deployed
+Markdown-only claims пока не расширяются.
 
 ## Назначение и граница
 

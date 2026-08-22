@@ -4,6 +4,7 @@ import {
   ObjectStoreFailure,
   type AuthorizationDecision,
   type Authorizer,
+  type BundleFileObjectStore,
   type ObjectStore,
 } from "@mind-diary/application-ports";
 import {
@@ -333,15 +334,16 @@ export class MindValidationService {
         info.revisionMode,
         initialAuthorization,
       );
-      if (entry.mediaType !== MARKDOWN_MEDIA_TYPE) {
-        throw new MindValidationFailure(
-          "revision_integrity_failure",
-          "The exact revision failed integrity verification.",
-        );
-      }
       let object;
       try {
-        object = await this.#objects.getImmutable(entry.sha256);
+        object = entry.kind === "markdown"
+          ? await this.#objects.getImmutable(entry.sha256)
+          : "getBundleFile" in this.#objects
+            ? await (this.#objects as BundleFileObjectStore).getBundleFile(
+                spaceId,
+                entry.sha256,
+              )
+            : null;
       } catch (error) {
         if (error instanceof ObjectStoreFailure) {
           throw new MindValidationFailure(
@@ -370,7 +372,9 @@ export class MindValidationService {
           "The exact revision failed integrity verification.",
         );
       }
-      sources.push(Object.freeze({ path: entry.path, bytes }));
+      if (entry.kind === "markdown") {
+        sources.push(Object.freeze({ path: entry.path, bytes }));
+      }
     }
     await this.#requireSameValidationAuthorization(
       actor,

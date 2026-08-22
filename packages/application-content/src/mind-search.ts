@@ -579,16 +579,19 @@ export class MindSearchService {
       resolvedRevision.revisionId,
       normalizedTerms,
     );
+    const markdownEntries = envelope.manifest.entries.filter(
+      (entry) => entry.kind === "markdown",
+    );
     if (
       indexed.kind !== "ready" ||
       indexed.spaceId !== spaceId ||
       indexed.revisionId !== resolvedRevision.revisionId ||
-      indexed.totalDocuments !== envelope.manifest.entries.length
+      indexed.totalDocuments !== markdownEntries.length
     ) {
       throw this.#unavailable();
     }
     const entries = new Map(
-      envelope.manifest.entries.map((entry) => [entry.path, entry] as const),
+      markdownEntries.map((entry) => [entry.path, entry] as const),
     );
     const seen = new Set<string>();
     const documents: SearchableDocument[] = [];

@@ -147,7 +147,8 @@ export interface ExactRevisionMaterialization {
   };
   readonly files: readonly {
     readonly path: string;
-    readonly text: string;
+    readonly kind?: "markdown" | "opaque";
+    readonly text?: string;
   }[];
 }
 
@@ -268,9 +269,12 @@ export class RevisionIndexJobHandler {
       await this.#index.replaceExactRevision({
         spaceId: target.spaceId,
         revisionId: target.revisionId,
-        documents: materialized.files.map((file) =>
-          Object.freeze({ path: file.path, text: file.text }),
-        ),
+        documents: materialized.files
+          .filter(
+            (file): file is typeof file & { readonly text: string } =>
+              file.kind !== "opaque" && typeof file.text === "string",
+          )
+          .map((file) => Object.freeze({ path: file.path, text: file.text })),
       });
       const completed = await this.#work.completeIndexJob(
         request.jobId,

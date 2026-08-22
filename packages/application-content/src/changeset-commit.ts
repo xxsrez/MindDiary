@@ -6,7 +6,7 @@ import type {
   ContentCommitMetadataStore,
   ContentCommitMetadataTransaction,
   IdempotencyNamespace,
-  ObjectStore,
+  BundleFileObjectStore,
   RevisionIdGenerator,
 } from "@mind-diary/application-ports";
 import {
@@ -23,6 +23,7 @@ import {
   type Sha256Digest,
   type SpaceId,
   type WriteMindBindingId,
+  type StagedBundleFileId,
 } from "@mind-diary/domain";
 import {
   ChangesetPreflightService,
@@ -105,13 +106,16 @@ export interface ChangesetCommitDependencies {
   readonly authorizer: Authorizer;
   readonly metadata: ContentCommitMetadataStore;
   readonly revisions: HeadRevisionReader;
-  readonly objects: ObjectStore;
+  readonly objects: BundleFileObjectStore;
   readonly clock: Clock;
   readonly revisionIds: RevisionIdGenerator;
   readonly effectIds?: CommitEffectIdGenerator;
   readonly preflightLimits?: Readonly<ChangesetPreflightLimits>;
   readonly idempotencyKeyMaxBytes?: number;
+  readonly maxRetainedBundleFileBytes?: number;
 }
+
+export const DEFAULT_MAX_RETAINED_BUNDLE_FILE_BYTES = 2_147_483_648;
 
 interface ValidatedCommitPayload {
   readonly idempotencyKey: IdempotencyKey;
@@ -163,6 +167,29 @@ function canonicalOperation(operation: Readonly<ChangesetOperation>): object {
         category: operation.category,
         message: operation.message,
       };
+    case "create_bundle_file":
+      return {
+        type: operation.type,
+        path: operation.path,
+        staged_file_id: operation.staged_file_id,
+      };
+    case "replace_bundle_file":
+      return {
+        type: operation.type,
+        path: operation.path,
+        staged_file_id: operation.staged_file_id,
+        ...(operation.expected_sha256 === undefined
+          ? {}
+          : { expected_sha256: operation.expected_sha256 }),
+      };
+    case "delete_bundle_file":
+      return {
+        type: operation.type,
+        path: operation.path,
+        ...(operation.expected_sha256 === undefined
+          ? {}
+          : { expected_sha256: operation.expected_sha256 }),
+      };
   }
 }
 
@@ -205,12 +232,13 @@ function writeBindingRequirement(
 export class ChangesetCommitService {
   readonly #authorizer: Authorizer;
   readonly #metadata: ContentCommitMetadataStore;
-  readonly #objects: ObjectStore;
+  readonly #objects: BundleFileObjectStore;
   readonly #revisionIds: RevisionIdGenerator;
   readonly #effectIds: CommitEffectIdGenerator | null;
   readonly #preflight: ChangesetPreflightService;
   readonly #preflightLimits: Readonly<ChangesetPreflightLimits>;
   readonly #idempotencyKeyMaxBytes: number;
+  readonly #maxRetainedBundleFileBytes: number;
 
   constructor(dependencies: ChangesetCommitDependencies) {
     this.#authorizer = dependencies.authorizer;
@@ -223,11 +251,18 @@ export class ChangesetCommitService {
     this.#idempotencyKeyMaxBytes = normalizeIdempotencyKeyMaxBytes(
       dependencies.idempotencyKeyMaxBytes ?? DEFAULT_IDEMPOTENCY_KEY_MAX_BYTES,
     );
+    const retainedLimit = dependencies.maxRetainedBundleFileBytes ??
+      DEFAULT_MAX_RETAINED_BUNDLE_FILE_BYTES;
+    if (!Number.isSafeInteger(retainedLimit) || retainedLimit < 1) {
+      throw new TypeError("retained BundleFile byte limit must be positive");
+    }
+    this.#maxRetainedBundleFileBytes = retainedLimit;
     this.#preflight = new ChangesetPreflightService({
       authorizer: dependencies.authorizer,
       revisions: dependencies.revisions,
       clock: dependencies.clock,
       limits: this.#preflightLimits,
+      stagedBundleFiles: dependencies.metadata,
     });
   }
 
@@ -316,12 +351,48 @@ export class ChangesetCommitService {
     const revisionId = this.#revisionIds.nextRevisionId();
     const entries = [];
     for (const file of preflight.candidateFiles) {
-      const put = await this.#objects.putImmutable({
-        bytes: ENCODER.encode(file.text),
-        mediaType: MARKDOWN_MEDIA_TYPE,
+      if (file.kind === "markdown") {
+        const put = await this.#objects.putImmutable({
+          bytes: ENCODER.encode(file.text),
+          mediaType: MARKDOWN_MEDIA_TYPE,
+          createdAt: committedAt,
+        });
+        entries.push({
+          kind: "markdown" as const,
+          path: file.path,
+          sha256: put.object.sha256,
+          mediaType: put.object.mediaType,
+          size: put.object.size,
+        });
+        continue;
+      }
+      if (file.stagedFileId === null) {
+        entries.push({
+          kind: "opaque" as const,
+          path: file.path,
+          sha256: file.sha256,
+          mediaType: file.mediaType,
+          size: file.size,
+        });
+        continue;
+      }
+      const staged = await this.#objects.getStagedBundleFile(file.stagedFileId);
+      if (
+        staged === null || staged.spaceId !== request.spaceId ||
+        staged.size !== file.size || staged.bytes.byteLength !== file.size ||
+        (await this.#objects.calculateSha256(staged.bytes)) !== file.sha256
+      ) return invalid(
+        "staged_bundle_file_not_verified",
+        "staged BundleFile bytes failed integrity verification",
+      );
+      const put = await this.#objects.putBundleFile({
+        spaceId: request.spaceId,
+        bytes: staged.bytes,
+        mediaType: file.mediaType,
         createdAt: committedAt,
       });
       entries.push({
+        kind: "opaque" as const,
         path: file.path,
         sha256: put.object.sha256,
         mediaType: put.object.mediaType,
@@ -367,6 +438,63 @@ export class ChangesetCommitService {
         });
       }
 
+
+      let stagedBindingOwnerId = null;
+      let stagedBindingGeneration = null;
+      if (preflight.stagedBundleFileRecords.length > 0) {
+        if (
+          actor.authentication.kind !== "mcp_token" ||
+          validated.writeBindingId === null ||
+          transaction.readMindBindingSet === undefined
+        ) return invalid(
+          "staged_bundle_file_binding_mismatch",
+          "BundleFile commit requires an active MCP write binding",
+        );
+        stagedBindingOwnerId = actor.authentication.bindingOwnerId;
+        const bindings = await transaction.readMindBindingSet(
+          stagedBindingOwnerId,
+          actor.principalId,
+          committedAt,
+        );
+        const write = bindings?.writeBinding;
+        if (
+          write === null || write === undefined || write.state !== "active" ||
+          write.writeBindingId !== validated.writeBindingId ||
+          write.spaceId !== request.spaceId
+        ) return invalid(
+          "staged_bundle_file_binding_mismatch",
+          "BundleFile write binding changed before commit",
+        );
+        stagedBindingGeneration = write.generation;
+        for (const expected of preflight.stagedBundleFileRecords) {
+          const current = await transaction.readStagedBundleFile(expected.stagedFileId);
+          if (
+            current === null || current.state !== "verified" ||
+            current.sha256 !== expected.sha256 || current.size !== expected.size ||
+            current.mediaType !== expected.mediaType ||
+            current.bindingOwnerId !== stagedBindingOwnerId ||
+            current.writeBindingId !== validated.writeBindingId ||
+            current.writeBindingGeneration !== stagedBindingGeneration ||
+            current.spaceId !== request.spaceId ||
+            Date.parse(current.expiresAt) <= Date.parse(committedAt)
+          ) return invalid(
+            "staged_bundle_file_not_verified",
+            "staged BundleFile state changed before commit",
+          );
+        }
+      }
+      const retainedQuotaAllowed = await transaction.checkBundleFileRetainedQuota({
+        spaceId: request.spaceId,
+        candidateEntries: preflight.candidateFiles
+          .filter((file) => file.kind === "opaque")
+          .map((file) => Object.freeze({ sha256: file.sha256, size: file.size })),
+        maxRetainedBytes: this.#maxRetainedBundleFileBytes,
+      });
+      if (!retainedQuotaAllowed) return invalid(
+        "retained_bundle_file_quota_exceeded",
+        "retained unique BundleFile bytes exceed the Space quota",
+      );
+
       let revisionNumber = 1;
       if (preflight.baseRevisionId !== null) {
         const parent = await transaction.readRevision(
@@ -406,6 +534,29 @@ export class ChangesetCommitService {
             "invalid_idempotency_state",
             "revision-ID replay cannot substitute for namespaced idempotency",
           );
+        }
+        if (
+          preflight.stagedBundleFileRecords.length > 0 &&
+          stagedBindingOwnerId !== null &&
+          stagedBindingGeneration !== null &&
+          validated.writeBindingId !== null
+        ) {
+          const consumed = await transaction.consumeStagedBundleFiles({
+            stagedFileIds: preflight.stagedBundleFileRecords.map(
+              (record) => record.stagedFileId,
+            ),
+            bindingOwnerId: stagedBindingOwnerId,
+            writeBindingId: validated.writeBindingId,
+            writeBindingGeneration: stagedBindingGeneration,
+            spaceId: request.spaceId,
+            consumedAt: committedAt,
+          });
+          if (consumed.kind !== "consumed") {
+            throw new ChangesetCommitFailure(
+              "invalid_commit_effects",
+              `staged BundleFiles were not consumed atomically: ${consumed.kind}`,
+            );
+          }
         }
         const completion = await transaction.completeIdempotency({
           namespace,

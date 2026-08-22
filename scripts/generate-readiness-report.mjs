@@ -14,7 +14,7 @@ const EXPECTED_DENYLIST = [
   "aws-runtime",
   "imports",
   "checkpoints",
-  "non-markdown-assets",
+  "bundle-file-expansion",
   "personalization",
   "oauth-company-knowledge",
   "claude-support",

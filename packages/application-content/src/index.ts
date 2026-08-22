@@ -9,6 +9,7 @@ import {
   type CurrentAuthorizationToken,
   type McpTokenStore,
   type ObjectStore,
+  type BundleFileObjectStore,
   type PilotCohort,
   type PrivacySafeObservabilityEvent,
   type PrivacySafeObservabilitySink,
@@ -28,6 +29,7 @@ import {
   type Capability,
   type EffectiveTokenScopes,
   type MarkdownMediaType,
+  type BundleFileMediaType,
   type MindBindingOwnerId,
   type RevisionAuthorReference,
   type RevisionId,
@@ -513,7 +515,8 @@ export class CanonicalRevisionError extends Error {
   }
 }
 
-export interface MaterializedRevisionFile {
+export interface MaterializedMarkdownRevisionFile {
+  readonly kind: "markdown";
   readonly path: string;
   readonly mediaType: MarkdownMediaType;
   readonly sha256: Sha256Digest;
@@ -521,6 +524,19 @@ export interface MaterializedRevisionFile {
   readonly bytes: Uint8Array;
   readonly text: string;
 }
+
+export interface MaterializedOpaqueRevisionFile {
+  readonly kind: "opaque";
+  readonly path: string;
+  readonly mediaType: BundleFileMediaType;
+  readonly sha256: Sha256Digest;
+  readonly size: number;
+  readonly bytes: Uint8Array;
+}
+
+export type MaterializedRevisionFile =
+  | MaterializedMarkdownRevisionFile
+  | MaterializedOpaqueRevisionFile;
 
 export interface MaterializedRevision {
   readonly envelope: Readonly<CanonicalRevisionEnvelope>;
@@ -703,7 +719,14 @@ export class CanonicalRevisionCoordinator {
     for (const entry of envelope.manifest.entries) {
       let object;
       try {
-        object = await this.#objects.getImmutable(entry.sha256);
+        object = entry.kind === "markdown"
+          ? await this.#objects.getImmutable(entry.sha256)
+          : "getBundleFile" in this.#objects
+            ? await (this.#objects as BundleFileObjectStore).getBundleFile(
+                spaceId,
+                entry.sha256,
+              )
+            : null;
       } catch (error) {
         if (error instanceof ObjectStoreFailure && error.code === "object_tampered") {
           throw new CanonicalRevisionError(
@@ -731,16 +754,24 @@ export class CanonicalRevisionCoordinator {
         );
       }
       const bytes = new Uint8Array(object.bytes);
-      files.push(
-        Object.freeze({
-          path: entry.path,
-          mediaType: entry.mediaType,
-          sha256: entry.sha256,
-          size: entry.size,
-          bytes,
-          text: decodeUtf8(bytes),
-        }),
-      );
+      files.push(entry.kind === "markdown"
+        ? Object.freeze({
+            kind: "markdown" as const,
+            path: entry.path,
+            mediaType: entry.mediaType,
+            sha256: entry.sha256,
+            size: entry.size,
+            bytes,
+            text: decodeUtf8(bytes),
+          })
+        : Object.freeze({
+            kind: "opaque" as const,
+            path: entry.path,
+            mediaType: entry.mediaType,
+            sha256: entry.sha256,
+            size: entry.size,
+            bytes,
+          }));
     }
     return Object.freeze({ envelope, files: Object.freeze(files) });
   }
@@ -769,6 +800,7 @@ export class CanonicalRevisionCoordinator {
       excludedDigests: [...reachable],
       limit: request.limit,
     });
+    let scanned = candidates.length;
     const deletedDigests: Sha256Digest[] = [];
     for (const candidate of candidates) {
       if (reachable.has(candidate.sha256)) continue;
@@ -779,8 +811,30 @@ export class CanonicalRevisionCoordinator {
       });
       if (deleted) deletedDigests.push(candidate.sha256);
     }
+    if (
+      deletedDigests.length < request.limit &&
+      "listBundleFileObjects" in this.#objects
+    ) {
+      const bundleObjects = this.#objects as BundleFileObjectStore;
+      const reachableBundleFiles = await this.#revisions.listReachableBundleFileObjects();
+      const bundleCandidates = await bundleObjects.listBundleFileObjects({
+        createdBefore,
+        excluded: reachableBundleFiles,
+        limit: request.limit - deletedDigests.length,
+      });
+      scanned += bundleCandidates.length;
+      for (const candidate of bundleCandidates) {
+        const deleted = await bundleObjects.deleteBundleFileObject({
+          spaceId: candidate.spaceId,
+          sha256: candidate.sha256,
+          expectedProtectedAt: candidate.protectedAt,
+          createdBefore,
+        });
+        if (deleted) deletedDigests.push(candidate.sha256);
+      }
+    }
     return Object.freeze({
-      scanned: candidates.length,
+      scanned,
       deleted: deletedDigests.length,
       deletedDigests: Object.freeze(deletedDigests),
     });
@@ -788,6 +842,7 @@ export class CanonicalRevisionCoordinator {
 }
 
 export * from "./changeset-preflight.js";
+export * from "./bundle-files.js";
 export * from "./changeset-commit.js";
 export * from "./deterministic-export.js";
 export * from "./export-jobs.js";

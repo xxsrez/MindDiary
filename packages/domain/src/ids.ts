@@ -15,6 +15,7 @@ export type TokenId = OpaqueId<"token">;
 export type MindBindingOwnerId = OpaqueId<"mind-binding-owner">;
 export type ReadMindBindingId = OpaqueId<"read-mind-binding">;
 export type WriteMindBindingId = OpaqueId<"write-mind-binding">;
+export type StagedBundleFileId = OpaqueId<"staged-bundle-file">;
 export type JobId = OpaqueId<"job">;
 export type IdempotencyRecordId = OpaqueId<"idempotency-record">;
 export type AuditEventId = OpaqueId<"audit-event">;

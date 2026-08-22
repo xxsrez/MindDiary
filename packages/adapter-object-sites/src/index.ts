@@ -10,6 +10,15 @@ import {
   type ImmutableObjectPutResult,
   type ImmutableObjectWriteRequest,
   type ObjectStore,
+  type BundleFileObject,
+  type BundleFileObjectMetadata,
+  type BundleFileObjectPutResult,
+  type BundleFileObjectStore,
+  type BundleFileObjectWriteRequest,
+  type BundleFileObjectListRequest,
+  type BundleFileObjectDeleteRequest,
+  type StagedBundleFileObject,
+  type StagedBundleFileObjectWriteRequest,
   type StoredExportArchive,
 } from "@mind-diary/application-ports";
 
@@ -67,9 +76,19 @@ const UTC = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z$/u;
 const MARKDOWN = "text/markdown; charset=utf-8";
 const CANONICAL_PREFIX = "canonical/sha256/";
 const EXPORT_PREFIX = "exports/";
+const BUNDLE_PREFIX = "bundle-files/";
+const STAGED_BUNDLE_PREFIX = "staged-bundle-files/";
 const DELETE_STATE = "deleting";
 const ACTIVE_STATE = "active";
 const MAX_R2_CAS_ATTEMPTS = 16;
+const BUNDLE_FILE_MEDIA_TYPES = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/gif",
+  "image/webp",
+  "application/pdf",
+  "application/zip",
+]);
 
 function assertDigest(value: string): asserts value is Digest {
   if (!SHA256.test(value)) {
@@ -108,6 +127,12 @@ function assertMarkdown(bytes: Uint8Array, mediaType: string): void {
     new TextDecoder("utf-8", { fatal: true }).decode(bytes);
   } catch {
     throw new ObjectStoreFailure("invalid_utf8", "canonical object is not UTF-8");
+  }
+}
+
+function assertBundleMediaType(mediaType: string): void {
+  if (!BUNDLE_FILE_MEDIA_TYPES.has(mediaType)) {
+    throw new ObjectStoreFailure("invalid_media_type", "BundleFile media type is not allowed");
   }
 }
 
@@ -165,7 +190,7 @@ async function bodyBytes(object: R2ObjectBodyLike): Promise<Uint8Array> {
 }
 
 /** R2-backed canonical and export object namespaces with conditional GC lease claims. */
-export class SitesObjectStore implements ObjectStore, ExportArchiveStore {
+export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveStore {
   readonly kind = "object-store" as const;
   readonly #bucket: R2BucketLike;
 
@@ -264,6 +289,192 @@ export class SitesObjectStore implements ObjectStore, ExportArchiveStore {
       throw new ObjectStoreFailure("object_tampered", "R2 immutable bytes are invalid");
     }
     return Object.freeze({ ...metadata, bytes });
+  }
+
+  async putBundleFile(
+    request: BundleFileObjectWriteRequest,
+  ): Promise<BundleFileObjectPutResult> {
+    assertUtc(request.createdAt);
+    assertBundleMediaType(request.mediaType);
+    const bytes = new Uint8Array(request.bytes);
+    const digest = await this.calculateSha256(bytes);
+    const key = `${BUNDLE_PREFIX}${encodeURIComponent(request.spaceId)}/sha256/${digest.slice(7)}`;
+    for (let attempt = 0; attempt < MAX_R2_CAS_ATTEMPTS; attempt += 1) {
+      const existing = await this.#bucket.get(key);
+      if (!existing) {
+        const stored = await this.#bucket.put(key, bytes, {
+          httpMetadata: { contentType: request.mediaType },
+          customMetadata: this.#bundleCustomMetadata({
+            spaceId: request.spaceId,
+            sha256: digest,
+            mediaType: request.mediaType,
+            size: bytes.byteLength,
+            createdAt: request.createdAt,
+            protectedAt: request.createdAt,
+          }),
+          onlyIf: { etagDoesNotMatch: "*" },
+        });
+        if (!stored) continue;
+        return Object.freeze({ object: this.#bundleMetadata(stored), status: "stored" });
+      }
+      const metadata = this.#bundleMetadata(existing);
+      const existingBytes = await bodyBytes(existing);
+      if (
+        metadata.sha256 !== digest ||
+        metadata.mediaType !== request.mediaType ||
+        !bytesEqual(existingBytes, bytes)
+      ) throw new ObjectStoreFailure("digest_collision", "BundleFile object collision");
+      if ((existing.customMetadata?.state ?? ACTIVE_STATE) === DELETE_STATE) continue;
+      const protectedAt = compareUtc(request.createdAt, metadata.protectedAt) > 0
+        ? request.createdAt
+        : metadata.protectedAt;
+      if (protectedAt !== metadata.protectedAt) {
+        const updated = await this.#bucket.put(key, existingBytes, {
+          httpMetadata: { contentType: request.mediaType },
+          customMetadata: this.#bundleCustomMetadata({ ...metadata, protectedAt }),
+          onlyIf: { etagMatches: existing.etag },
+        });
+        if (!updated) continue;
+        return Object.freeze({
+          object: this.#bundleMetadata(updated),
+          status: "already_exists",
+        });
+      }
+      return Object.freeze({ object: metadata, status: "already_exists" });
+    }
+    throw new Error("R2 BundleFile CAS retry budget exhausted");
+  }
+
+  async getBundleFile(
+    spaceId: BundleFileObjectMetadata["spaceId"],
+    digest: Digest,
+  ): Promise<Readonly<BundleFileObject> | null> {
+    assertDigest(digest);
+    const key = `${BUNDLE_PREFIX}${encodeURIComponent(spaceId)}/sha256/${digest.slice(7)}`;
+    const object = await this.#bucket.get(key);
+    if (!object) return null;
+    const metadata = this.#bundleMetadata(object);
+    const bytes = await bodyBytes(object);
+    if (
+      metadata.spaceId !== spaceId ||
+      metadata.sha256 !== digest ||
+      bytes.byteLength !== metadata.size ||
+      (await this.calculateSha256(bytes)) !== digest
+    ) throw new ObjectStoreFailure("object_tampered", "BundleFile bytes are invalid");
+    return Object.freeze({ ...metadata, bytes });
+  }
+
+  async listBundleFileObjects(
+    request: BundleFileObjectListRequest,
+  ): Promise<readonly Readonly<BundleFileObjectMetadata>[]> {
+    assertUtc(request.createdBefore);
+    if (!Number.isSafeInteger(request.limit) || request.limit < 1) {
+      throw new ObjectStoreFailure("invalid_limit", "BundleFile list limit is invalid");
+    }
+    const excluded = new Set(
+      request.excluded.map((item) => `${item.spaceId}\u0000${item.sha256}`),
+    );
+    return Object.freeze((await this.#listAll(BUNDLE_PREFIX))
+      .filter((object) => (object.customMetadata?.state ?? ACTIVE_STATE) === ACTIVE_STATE)
+      .map((object) => this.#bundleMetadata(object))
+      .filter((item) =>
+        !excluded.has(`${item.spaceId}\u0000${item.sha256}`) &&
+        compareUtc(item.protectedAt, request.createdBefore) < 0)
+      .sort((left, right) =>
+        compareUtc(left.protectedAt, right.protectedAt) ||
+        left.spaceId.localeCompare(right.spaceId) ||
+        left.sha256.localeCompare(right.sha256))
+      .slice(0, request.limit));
+  }
+
+  async deleteBundleFileObject(
+    request: BundleFileObjectDeleteRequest,
+  ): Promise<boolean> {
+    assertDigest(request.sha256);
+    assertUtc(request.createdBefore);
+    assertUtc(request.expectedProtectedAt);
+    const key = `${BUNDLE_PREFIX}${encodeURIComponent(request.spaceId)}/sha256/${request.sha256.slice(7)}`;
+    for (let attempt = 0; attempt < MAX_R2_CAS_ATTEMPTS; attempt += 1) {
+      const current = await this.#bucket.get(key);
+      if (!current) return false;
+      const metadata = this.#bundleMetadata(current);
+      if (
+        metadata.protectedAt !== request.expectedProtectedAt ||
+        compareUtc(metadata.protectedAt, request.createdBefore) >= 0
+      ) return false;
+      const state = current.customMetadata?.state ?? ACTIVE_STATE;
+      if (state === DELETE_STATE) {
+        if (current.customMetadata?.deleteBoundary !== request.createdBefore) return false;
+        await this.#bucket.delete(key);
+        return true;
+      }
+      const bytes = await bodyBytes(current);
+      const claimed = await this.#bucket.put(key, bytes, {
+        httpMetadata: { contentType: metadata.mediaType },
+        customMetadata: this.#bundleCustomMetadata(
+          metadata,
+          DELETE_STATE,
+          request.createdBefore,
+        ),
+        onlyIf: { etagMatches: current.etag },
+      });
+      if (!claimed) continue;
+      await this.#bucket.delete(key);
+      return true;
+    }
+    throw new Error("R2 BundleFile delete CAS retry budget exhausted");
+  }
+
+  async putStagedBundleFile(
+    request: StagedBundleFileObjectWriteRequest,
+  ): Promise<Readonly<StagedBundleFileObject>> {
+    assertUtc(request.createdAt);
+    const key = `${STAGED_BUNDLE_PREFIX}${encodeURIComponent(request.stagedFileId)}`;
+    const bytes = new Uint8Array(request.bytes);
+    for (let attempt = 0; attempt < MAX_R2_CAS_ATTEMPTS; attempt += 1) {
+      const existing = await this.#bucket.get(key);
+      if (existing) {
+        const restored = await this.#stagedBundleFile(existing);
+        if (
+          restored.bindingOwnerId !== request.bindingOwnerId ||
+          restored.spaceId !== request.spaceId ||
+          !bytesEqual(restored.bytes, bytes)
+        ) throw new ObjectStoreFailure("digest_collision", "staged BundleFile ID collision");
+        return restored;
+      }
+      const stored = await this.#bucket.put(key, bytes, {
+        customMetadata: Object.freeze({
+          schema: "md-r2-staged-bundle-file-v1",
+          stagedFileId: request.stagedFileId,
+          bindingOwnerId: request.bindingOwnerId,
+          spaceId: request.spaceId,
+          size: String(bytes.byteLength),
+          createdAt: request.createdAt,
+        }),
+        onlyIf: { etagDoesNotMatch: "*" },
+      });
+      if (!stored) continue;
+      const body = await this.#bucket.get(key);
+      if (!body) continue;
+      return this.#stagedBundleFile(body);
+    }
+    throw new Error("R2 staged BundleFile CAS retry budget exhausted");
+  }
+
+  async getStagedBundleFile(
+    stagedFileId: string,
+  ): Promise<Readonly<StagedBundleFileObject> | null> {
+    const object = await this.#bucket.get(
+      `${STAGED_BUNDLE_PREFIX}${encodeURIComponent(stagedFileId)}`,
+    );
+    return object === null ? null : this.#stagedBundleFile(object);
+  }
+
+  async deleteStagedBundleFile(stagedFileId: string): Promise<boolean> {
+    const key = `${STAGED_BUNDLE_PREFIX}${encodeURIComponent(stagedFileId)}`;
+    if (!(await this.#bucket.get(key))) return false;
+    await this.#bucket.delete(key);
+    return true;
   }
 
   async listImmutableObjects(
@@ -423,6 +634,76 @@ export class SitesObjectStore implements ObjectStore, ExportArchiveStore {
       if (page.truncated && !cursor) throw new Error("R2 pagination cursor is missing");
     } while (cursor);
     return objects;
+  }
+
+  #bundleMetadata(
+    object: R2ListedObjectLike,
+  ): Readonly<BundleFileObjectMetadata> {
+    const custom = object.customMetadata ?? {};
+    const digest = custom.sha256 ?? "";
+    const createdAt = custom.createdAt ?? "";
+    const protectedAt = custom.protectedAt ?? "";
+    const mediaType = custom.mediaType ?? "";
+    assertDigest(digest);
+    assertUtc(createdAt);
+    assertUtc(protectedAt);
+    assertBundleMediaType(mediaType);
+    if (
+      custom.schema !== "md-r2-bundle-file-v1" ||
+      ![ACTIVE_STATE, DELETE_STATE].includes(custom.state ?? ACTIVE_STATE) ||
+      typeof custom.spaceId !== "string" || custom.spaceId.length === 0 ||
+      Number(custom.size) !== object.size
+    ) throw new ObjectStoreFailure("object_tampered", "R2 BundleFile metadata is invalid");
+    return Object.freeze({
+      spaceId: custom.spaceId as BundleFileObjectMetadata["spaceId"],
+      sha256: digest,
+      mediaType: mediaType as BundleFileObjectMetadata["mediaType"],
+      size: object.size,
+      createdAt,
+      protectedAt,
+    });
+  }
+
+  #bundleCustomMetadata(
+    metadata: Readonly<BundleFileObjectMetadata>,
+    state = ACTIVE_STATE,
+    deleteBoundary = "",
+  ): Readonly<Record<string, string>> {
+    return Object.freeze({
+      schema: "md-r2-bundle-file-v1",
+      state,
+      spaceId: metadata.spaceId,
+      sha256: metadata.sha256,
+      mediaType: metadata.mediaType,
+      size: String(metadata.size),
+      createdAt: metadata.createdAt,
+      protectedAt: metadata.protectedAt,
+      deleteBoundary,
+    });
+  }
+
+  async #stagedBundleFile(
+    object: R2ObjectBodyLike,
+  ): Promise<Readonly<StagedBundleFileObject>> {
+    const custom = object.customMetadata ?? {};
+    const createdAt = custom.createdAt ?? "";
+    assertUtc(createdAt);
+    if (
+      custom.schema !== "md-r2-staged-bundle-file-v1" ||
+      typeof custom.stagedFileId !== "string" || custom.stagedFileId.length === 0 ||
+      typeof custom.bindingOwnerId !== "string" || custom.bindingOwnerId.length === 0 ||
+      typeof custom.spaceId !== "string" || custom.spaceId.length === 0 ||
+      Number(custom.size) !== object.size
+    ) throw new ObjectStoreFailure("object_tampered", "staged BundleFile metadata is invalid");
+    const bytes = await bodyBytes(object);
+    return Object.freeze({
+      stagedFileId: custom.stagedFileId as StagedBundleFileObject["stagedFileId"],
+      bindingOwnerId: custom.bindingOwnerId as StagedBundleFileObject["bindingOwnerId"],
+      spaceId: custom.spaceId as StagedBundleFileObject["spaceId"],
+      bytes,
+      size: bytes.byteLength,
+      createdAt,
+    });
   }
 
   #archiveMetadata(

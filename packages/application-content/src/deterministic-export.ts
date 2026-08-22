@@ -1,9 +1,11 @@
 import type { ObjectStore } from "@mind-diary/application-ports";
 import {
   MARKDOWN_MEDIA_TYPE,
+  BUNDLE_FILE_MEDIA_TYPES,
   canonicalMarkdownPath,
   type CanonicalRevisionEnvelope,
   type MarkdownMediaType,
+  type CanonicalObjectMediaType,
   type RevisionId,
   type Sha256Digest,
   type SpaceId,
@@ -27,6 +29,7 @@ export type OkfExportErrorCode =
   | "revision_not_found"
   | "revision_integrity_failure"
   | "okf_validation_failed"
+  | "export_profile_required"
   | "archive_limit_exceeded";
 
 export class OkfExportError extends Error {
@@ -51,8 +54,9 @@ export interface ExactRevisionExportRequest {
 }
 
 export interface ExportMaterializedRevisionFile {
+  readonly kind?: "markdown" | "opaque";
   readonly path: string;
-  readonly mediaType: MarkdownMediaType;
+  readonly mediaType: CanonicalObjectMediaType;
   readonly sha256: Sha256Digest;
   readonly size: number;
   readonly bytes: Uint8Array;
@@ -389,8 +393,28 @@ export class DeterministicOkfExportService {
       );
     }
 
+    const unsupported = materialized.files.find(
+      (file) =>
+        file.mediaType !== MARKDOWN_MEDIA_TYPE &&
+        !(BUNDLE_FILE_MEDIA_TYPES as readonly string[]).includes(file.mediaType),
+    );
+    if (unsupported !== undefined) {
+      throw new OkfExportError(
+        "revision_integrity_failure",
+        "exact revision contains an unsupported canonical object media type",
+      );
+    }
+    if (materialized.files.some((file) => file.mediaType !== MARKDOWN_MEDIA_TYPE)) {
+      throw new OkfExportError(
+        "export_profile_required",
+        "mixed revisions require the explicit MD-BUNDLE-ZIP-1 export profile",
+      );
+    }
+    const markdownFiles = materialized.files as readonly Readonly<
+      ExportMaterializedRevisionFile & { readonly mediaType: MarkdownMediaType }
+    >[];
     const validation = validateOkfBundle(
-      materialized.files.map((file) => ({
+      markdownFiles.map((file) => ({
         path: file.path,
         bytes: new Uint8Array(file.bytes),
       })),
@@ -403,7 +427,7 @@ export class DeterministicOkfExportService {
       );
     }
 
-    const bytes = createDeterministicZip(materialized.files);
+    const bytes = createDeterministicZip(markdownFiles);
     const sha256 = await this.#digest.calculateSha256(bytes);
     return Object.freeze({
       revisionId: parsed.revisionId,

@@ -22,6 +22,7 @@ import {
   type AuditOutboxMessage,
   type BackgroundJob,
   type BindingVersion,
+  type BundleFileMediaType,
   type Capability,
   type CanonicalRevisionEnvelope,
   type CanonicalSpaceHandle,
@@ -63,6 +64,7 @@ import {
   type SpaceId,
   type SpaceInvitation,
   type SpaceMembership,
+  type StagedBundleFileId,
   type SpaceLifecycleState,
   type TokenId,
   type UtcInstant,
@@ -103,6 +105,7 @@ export {
   version,
   verifiedSpaceHost,
   revisionEnvelopesEqual,
+  serializeRevisionManifest,
   roleHasCapability,
   bindingVersion,
   type CanonicalSpaceHandle,
@@ -127,6 +130,7 @@ export type {
   SpaceMembership,
   WriteMindBinding,
   WriteMindBindingId,
+  StagedBundleFileId,
 } from "@mind-diary/domain";
 
 export interface Clock {
@@ -1130,6 +1134,10 @@ export interface OrdinaryMindMetadataTransaction
 export interface CanonicalObjectReachabilityReader {
   /** Includes every historical revision, not only each Mind's current HEAD. */
   listReachableObjectDigests(): Promise<readonly Sha256Digest[]>;
+  listReachableBundleFileObjects(): Promise<readonly Readonly<{
+    spaceId: SpaceId;
+    sha256: Sha256Digest;
+  }>[]>;
 }
 
 /** Atomic handle, metadata, Owner, revision/HEAD and idempotency boundary. */
@@ -1280,6 +1288,167 @@ export interface ObjectStore {
     request: ImmutableObjectListRequest,
   ): Promise<readonly Readonly<ImmutableObjectMetadata>[]>;
   deleteImmutableObject(request: ImmutableObjectDeleteRequest): Promise<boolean>;
+}
+
+export interface BundleFileObjectWriteRequest {
+  readonly spaceId: SpaceId;
+  readonly bytes: Uint8Array;
+  readonly mediaType: BundleFileMediaType;
+  readonly createdAt: UtcInstant;
+}
+
+export interface BundleFileObjectMetadata {
+  readonly spaceId: SpaceId;
+  readonly sha256: Sha256Digest;
+  readonly mediaType: BundleFileMediaType;
+  readonly size: number;
+  readonly createdAt: UtcInstant;
+  readonly protectedAt: UtcInstant;
+}
+
+export interface BundleFileObject extends BundleFileObjectMetadata {
+  readonly bytes: Uint8Array;
+}
+
+export interface BundleFileObjectPutResult {
+  readonly object: Readonly<BundleFileObjectMetadata>;
+  readonly status: "stored" | "already_exists";
+}
+
+export interface BundleFileObjectListRequest {
+  readonly createdBefore: UtcInstant;
+  readonly excluded: readonly Readonly<{
+    spaceId: SpaceId;
+    sha256: Sha256Digest;
+  }>[];
+  readonly limit: number;
+}
+
+export interface BundleFileObjectDeleteRequest {
+  readonly spaceId: SpaceId;
+  readonly sha256: Sha256Digest;
+  readonly expectedProtectedAt: UtcInstant;
+  readonly createdBefore: UtcInstant;
+}
+
+export interface StagedBundleFileObjectWriteRequest {
+  readonly stagedFileId: StagedBundleFileId;
+  readonly bindingOwnerId: MindBindingOwnerId;
+  readonly spaceId: SpaceId;
+  readonly bytes: Uint8Array;
+  readonly createdAt: UtcInstant;
+}
+
+export interface StagedBundleFileObject {
+  readonly stagedFileId: StagedBundleFileId;
+  readonly bindingOwnerId: MindBindingOwnerId;
+  readonly spaceId: SpaceId;
+  readonly bytes: Uint8Array;
+  readonly size: number;
+  readonly createdAt: UtcInstant;
+}
+
+/** Opaque bytes use Space-scoped canonical keys and a separate staging namespace. */
+export interface BundleFileObjectStore extends ObjectStore {
+  putBundleFile(
+    request: Readonly<BundleFileObjectWriteRequest>,
+  ): Promise<BundleFileObjectPutResult>;
+  getBundleFile(
+    spaceId: SpaceId,
+    sha256: Sha256Digest,
+  ): Promise<Readonly<BundleFileObject> | null>;
+  listBundleFileObjects(
+    request: Readonly<BundleFileObjectListRequest>,
+  ): Promise<readonly Readonly<BundleFileObjectMetadata>[]>;
+  deleteBundleFileObject(
+    request: Readonly<BundleFileObjectDeleteRequest>,
+  ): Promise<boolean>;
+  putStagedBundleFile(
+    request: Readonly<StagedBundleFileObjectWriteRequest>,
+  ): Promise<Readonly<StagedBundleFileObject>>;
+  getStagedBundleFile(
+    stagedFileId: StagedBundleFileId,
+  ): Promise<Readonly<StagedBundleFileObject> | null>;
+  deleteStagedBundleFile(stagedFileId: StagedBundleFileId): Promise<boolean>;
+}
+
+export type StagedBundleFileState =
+  | "quarantined"
+  | "verified"
+  | "consumed"
+  | "expired"
+  | "rejected";
+
+export interface StagedBundleFileRecord {
+  readonly stagedFileId: StagedBundleFileId;
+  readonly bindingOwnerId: MindBindingOwnerId;
+  readonly writeBindingId: WriteMindBindingId;
+  readonly writeBindingGeneration: BindingVersion;
+  readonly spaceId: SpaceId;
+  readonly displayFilename: string;
+  readonly mediaType: BundleFileMediaType;
+  readonly sha256: Sha256Digest;
+  readonly size: number;
+  readonly state: StagedBundleFileState;
+  readonly createdAt: UtcInstant;
+  readonly expiresAt: UtcInstant;
+  readonly consumedAt: UtcInstant | null;
+  readonly rejectionCode: string | null;
+}
+
+export type CreateStagedBundleFileResult =
+  | { readonly kind: "created"; readonly record: Readonly<StagedBundleFileRecord> }
+  | { readonly kind: "id_collision" | "outstanding_byte_limit_exceeded" };
+
+export interface BundleFileStagingTransaction extends AuthorizationTransaction {
+  readStagedBundleFile(
+    stagedFileId: StagedBundleFileId,
+  ): Promise<Readonly<StagedBundleFileRecord> | null>;
+  createStagedBundleFile(
+    record: Readonly<StagedBundleFileRecord>,
+    maxOutstandingBytes: number,
+    occurredAt: UtcInstant,
+  ): Promise<CreateStagedBundleFileResult>;
+}
+
+export interface ConsumeStagedBundleFilesRequest {
+  readonly stagedFileIds: readonly StagedBundleFileId[];
+  readonly bindingOwnerId: MindBindingOwnerId;
+  readonly writeBindingId: WriteMindBindingId;
+  readonly writeBindingGeneration: BindingVersion;
+  readonly spaceId: SpaceId;
+  readonly consumedAt: UtcInstant;
+}
+
+export type ConsumeStagedBundleFilesResult =
+  | {
+      readonly kind: "consumed";
+      readonly records: readonly Readonly<StagedBundleFileRecord>[];
+    }
+  | {
+      readonly kind:
+        | "not_found"
+        | "not_verified"
+        | "expired"
+        | "binding_mismatch"
+        | "duplicate_reference";
+      readonly stagedFileId: StagedBundleFileId | null;
+    };
+
+export interface BundleFileStagingStore {
+  runBundleFileStagingTransaction<Result>(
+    operation: (transaction: BundleFileStagingTransaction) => Promise<Result>,
+  ): Promise<Result>;
+  readStagedBundleFile(
+    stagedFileId: StagedBundleFileId,
+  ): Promise<Readonly<StagedBundleFileRecord> | null>;
+  collectStagedBundleFilesForGc(request: Readonly<{
+    createdBefore: UtcInstant;
+    limit: number;
+  }>): Promise<readonly Readonly<StagedBundleFileRecord>[]>;
+  deleteExpiredStagedBundleFileRecord(
+    stagedFileId: StagedBundleFileId,
+  ): Promise<boolean>;
 }
 
 export interface ExportArchiveWriteRequest {
@@ -1531,12 +1700,27 @@ export interface ContentCommitMetadataTransaction
   stageContentCommitEffects(
     request: StageContentCommitEffectsRequest,
   ): Promise<StageContentCommitEffectsResult>;
+  readStagedBundleFile(
+    stagedFileId: StagedBundleFileId,
+  ): Promise<Readonly<StagedBundleFileRecord> | null>;
+  consumeStagedBundleFiles(
+    request: Readonly<ConsumeStagedBundleFilesRequest>,
+  ): Promise<ConsumeStagedBundleFilesResult>;
+  checkBundleFileRetainedQuota(request: Readonly<{
+    spaceId: SpaceId;
+    candidateEntries: readonly Readonly<{
+      sha256: Sha256Digest;
+      size: number;
+    }>[];
+    maxRetainedBytes: number;
+  }>): Promise<boolean>;
 }
 
 /** Atomic metadata boundary for one application-level content commit. */
 export interface ContentCommitMetadataStore
   extends RevisionMetadataStore,
     BackgroundWorkStore,
+    BundleFileStagingStore,
     SpaceTargetRecordPurger {
   runContentCommitTransaction<Result>(
     operation: (

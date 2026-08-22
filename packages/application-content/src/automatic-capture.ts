@@ -280,7 +280,7 @@ export class AutomaticCaptureService {
       return Object.freeze({ kind: "capture_target_not_ready" });
     }
     const existing = head.files.find((file) => file.path === validated.path);
-    if (existing?.text === validated.text) {
+    if (existing?.kind === "markdown" && existing.text === validated.text) {
       return Object.freeze({
         kind: "no_op",
         path: validated.path,

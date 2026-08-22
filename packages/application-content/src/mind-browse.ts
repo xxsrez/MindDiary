@@ -768,7 +768,7 @@ export class MindBrowseService {
       );
     }
     const entries = envelope.manifest.entries.filter(
-      (entry) => directoryOf(entry.path) === request.path,
+      (entry) => entry.kind === "markdown" && directoryOf(entry.path) === request.path,
     );
     const offset = cursor?.start ?? 0;
     if (
@@ -1023,7 +1023,9 @@ export class MindBrowseService {
       revisionId,
       notFoundCode,
     );
-    const entry = envelope.manifest.entries.find((candidate) => candidate.path === path);
+    const entry = envelope.manifest.entries.find(
+      (candidate) => candidate.kind === "markdown" && candidate.path === path,
+    );
     if (
       entry === undefined ||
       (locator !== undefined &&
