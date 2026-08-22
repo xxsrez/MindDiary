@@ -1070,12 +1070,13 @@ Accepted internal background/recovery names:
 
 The current candidate advances validation/finalization through repeatable
 bounded commands with durable checkpoints and runs expired-import cleanup from
-bounded request-triggered recovery. Recovery starts only after the foreground
-response is ready, excludes static assets, is single-flight per Worker
-deployment/config generation and observes a completion-based 30-second cadence.
-Its stages emit closed privacy-safe duration/outcome telemetry. Separate public
-background routes do not exist; unknown routes remain 404 and no import tool is
-advertised through MCP.
+bounded request-triggered recovery. Recovery starts only after a successful
+dynamic HTML document response is ready; OAuth, API, MCP and static assets are
+excluded. It is single-flight per Worker deployment/config generation and
+observes a completion-based 30-second cadence. Its stages emit closed
+privacy-safe duration/outcome telemetry. Separate public background routes do
+not exist; unknown routes remain 404 and no import tool is advertised through
+MCP.
 
 Background handler получает service `ActorContext`, explicit job/aggregate ID и
 idempotency state. Он не доверяет serialized role/token claims из job payload и

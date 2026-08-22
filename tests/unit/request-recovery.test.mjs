@@ -8,9 +8,12 @@ import {
 
 const ORIGIN = "https://mind-diary.example";
 
-test("only successful dynamic requests can trigger recovery", () => {
+test("only successful dynamic HTML document requests can trigger recovery", () => {
   const mobile = new Request(`${ORIGIN}/`, {
-    headers: { "user-agent": "Mobile Safari" },
+    headers: {
+      accept: "text/html,application/xhtml+xml",
+      "user-agent": "Mobile Safari",
+    },
   });
   assert.equal(isRecoveryEligibleRequest(mobile, new Response("ok")), true);
   for (const path of [
@@ -30,6 +33,24 @@ test("only successful dynamic requests can trigger recovery", () => {
     isRecoveryEligibleRequest(new Request(`${ORIGIN}/api/v1/minds`, { method: "OPTIONS" }), new Response(null, { status: 204 })),
     false,
   );
+  for (const request of [
+    new Request(`${ORIGIN}/oauth/token`, {
+      method: "POST",
+      headers: { accept: "application/json" },
+    }),
+    new Request(`${ORIGIN}/api/mcp`, {
+      method: "POST",
+      headers: { accept: "application/json, text/event-stream" },
+    }),
+    new Request(`${ORIGIN}/api/v1/minds`, {
+      headers: { accept: "application/json" },
+    }),
+    new Request(`${ORIGIN}/callback`, {
+      headers: { accept: "text/html" },
+    }),
+  ]) {
+    assert.equal(isRecoveryEligibleRequest(request, new Response("ok")), false, request.url);
+  }
   assert.equal(
     isRecoveryEligibleRequest(mobile, new Response("failed", { status: 503 })),
     false,
@@ -45,7 +66,9 @@ test("a slow recovery starts only after foreground and never delays its response
   const background = [];
 
   const response = await coordinator.respond({
-    request: new Request(`${ORIGIN}/`, { headers: { "user-agent": "Mobile Safari" } }),
+    request: new Request(`${ORIGIN}/`, {
+      headers: { accept: "text/html", "user-agent": "Mobile Safari" },
+    }),
     environment,
     fingerprint: "deployment-a",
     foreground: async () => {
@@ -86,7 +109,7 @@ test("concurrent home and asset burst creates one recovery flight", async () => 
     await recoveryGate;
   };
   const respond = (path) => coordinator.respond({
-    request: new Request(`${ORIGIN}${path}`),
+    request: new Request(`${ORIGIN}${path}`, { headers: { accept: "text/html" } }),
     environment,
     fingerprint: "deployment-a",
     foreground: async () => new Response("ok"),
@@ -114,7 +137,7 @@ test("completion-based cadence prevents a recovery storm after success or failur
   const background = [];
   let runs = 0;
   const respond = (recover = async () => undefined) => coordinator.respond({
-    request: new Request(`${ORIGIN}/api/mcp`, { method: "POST" }),
+    request: new Request(`${ORIGIN}/`, { headers: { accept: "text/html" } }),
     environment,
     fingerprint: "deployment-a",
     foreground: async () => new Response("ok"),

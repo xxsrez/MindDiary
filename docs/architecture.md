@@ -625,10 +625,11 @@ explicit target Mind. General cross-Mind search/synthesis требует нов�
   state в cache не сохраняются; background promises прикрепляются только к
   текущему request context. Failed initialization удаляется из cache, а config
   drift создаёт чистое поколение.
-- Request-triggered recovery запускается только после готового foreground
-  response, не запускается для static assets и объединяется в один isolate-level
-  flight на deployment/config fingerprint с 30-секундной cadence после
-  завершения. Due index jobs dispatch-ятся последовательно, поэтому recovery не
+- Request-triggered recovery запускается только после готового successful
+  dynamic HTML document response, не запускается для OAuth, API, MCP или static
+  assets и объединяется в один isolate-level flight на deployment/config
+  fingerprint с 30-секундной cadence после завершения. Due index jobs
+  dispatch-ятся последовательно, поэтому recovery не
   ставит веер metadata operations впереди authenticated reads; следующий
   foreground request может пройти между bounded recovery operations. Каждый
   recovery stage и весь flight публикуют только closed privacy-safe latency и

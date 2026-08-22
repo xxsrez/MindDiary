@@ -594,10 +594,11 @@ residual risk ограничивается explicit write scope, current ACL, hi
   repeatable bounded commands по durable session checkpoints.
 
 Initial revision Personal и ordinary Mind получает durable queued index
-state/job в той же metadata transaction. После готового foreground response
-Sites Worker может запустить bounded request-triggered recovery для
-missed/due/expired-claim work. Static assets не запускают recovery; concurrent
-eligible requests объединяются в один isolate-level flight с явной cadence, а
+state/job в той же metadata transaction. После готового successful dynamic HTML
+document response Sites Worker может запустить bounded request-triggered
+recovery для missed/due/expired-claim work. OAuth, API, MCP и static assets не
+запускают recovery; concurrent eligible requests объединяются в один
+isolate-level flight с явной cadence, а
 due jobs dispatch-ятся последовательно, чтобы recovery не блокировал
 authenticated reads очередью background work. После restart клиент видит exact
 `missing | queued | ready | failed` readiness через авторизованный

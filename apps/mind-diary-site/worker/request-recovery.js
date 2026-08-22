@@ -14,13 +14,35 @@ const STATIC_PATHS = new Set([
 
 const STATIC_EXTENSION = /\.(?:avif|css|gif|ico|jpe?g|js|map|mjs|otf|png|svg|ttf|webp|woff2?)$/iu;
 
+const NON_DOCUMENT_PATH_PREFIXES = Object.freeze([
+  "/api/",
+  "/oauth/",
+]);
+
+const NON_DOCUMENT_PATHS = new Set([
+  "/callback",
+  "/signin-with-chatgpt",
+  "/signout-with-chatgpt",
+]);
+
 export const REQUEST_RECOVERY_CADENCE_MS = 30_000;
 
-/** Recovery is useful only after a successfully produced dynamic response. */
+/** Recovery is useful only after a successfully produced HTML document response. */
 export function isRecoveryEligibleRequest(request, response) {
-  if (request.method === "OPTIONS" || response.status >= 500) return false;
+  if ((request.method !== "GET" && request.method !== "HEAD") || response.status >= 500) {
+    return false;
+  }
   const path = new URL(request.url).pathname;
-  return !STATIC_PATHS.has(path) &&
+  if (NON_DOCUMENT_PATHS.has(path) ||
+      NON_DOCUMENT_PATH_PREFIXES.some((prefix) => path.startsWith(prefix))) {
+    return false;
+  }
+  const acceptsHtml = request.headers
+    .get("accept")
+    ?.split(",")
+    .some((mediaRange) => mediaRange.trim().split(";", 1)[0].toLowerCase() === "text/html") ?? false;
+  return acceptsHtml &&
+    !STATIC_PATHS.has(path) &&
     !STATIC_PATH_PREFIXES.some((prefix) => path.startsWith(prefix)) &&
     !STATIC_EXTENSION.test(path);
 }
