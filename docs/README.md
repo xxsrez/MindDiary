@@ -36,23 +36,26 @@ evidence, предлагаемый дизайн и ещё не проверен�
 11. [Границы реализации](specs/implementation-boundaries.md) — trusted
    `ActorContext`, application ports/façades, transaction boundaries и
    enforceable dependency rules для будущего runtime.
-12. [Traceability matrix MVP 0.1](specs/traceability.md) — критерии 1–29,
+12. [Automatic knowledge capture](specs/automatic-capture.md) — принятый
+   default-off routine capture profile, exact write-generation pinning,
+   provenance, disclosure, deduplication и confirmation boundary.
+13. [Traceability matrix MVP 0.1](specs/traceability.md) — критерии 1–29,
    owning stories, executable/release evidence, обязательные live flows,
    post-MVP denylist и implementation decisions.
-13. [Автономная доставка work scope](specs/ship-work-release.md) — универсальный
+14. [Автономная доставка work scope](specs/ship-work-release.md) — универсальный
    принятый контракт `ship-work-release`: task-manager adapters, один mutable
    writer по умолчанию, selective lanes и scouts, cohorts, control API,
    dev/UAT promotion и ручная production boundary.
-14. [Контракт project profile](specs/ship-work-release-project-profile.md) —
+15. [Контракт project profile](specs/ship-work-release-project-profile.md) —
    versioned provider-neutral schema обязательных project-specific commands,
    runtime capabilities, gates, environments и evidence rows.
-15. [Контракт task-management adapter](specs/ship-work-release-task-manager.md) —
+16. [Контракт task-management adapter](specs/ship-work-release-task-manager.md) —
    versioned provider-neutral schema identity, snapshots, mutations,
    reconciliation и capability negotiation task-management backend-а.
-16. [Linear adapter для `ship-work-release`](specs/ship-work-release-linear.md) —
+17. [Linear adapter для `ship-work-release`](specs/ship-work-release-linear.md) —
    отдельное отображение Linear projects, milestones, issues, relations,
    statuses и updates в универсальную модель work collection/scope/item.
-17. [Упрощённая доставка Linear milestone](specs/ship-linear-release-v1.md) —
+18. [Упрощённая доставка Linear milestone](specs/ship-linear-release-v1.md) —
    исполнимый compromise profile `ship-linear-release`: один coordinator,
    coordinator-only либо exact N worker-субагентов, простой JSON journal,
    meaningful UAT batches и forward-only repair.
@@ -130,6 +133,9 @@ evidence, предлагаемый дизайн и ещё не проверен�
 - [ADR-0013: multiple-read/single-write Mind bindings](decisions/0013-multiple-read-single-write-mind-bindings.md)
   — binding owner выбран по OAuth grant/personal token, приняты `0..N` read,
   `0..1` write, versioned CAS/rebind и fail-closed migration без implicit `/me`.
+- [ADR-0014: opt-in routine automatic capture](decisions/0014-opt-in-routine-automatic-capture.md)
+  — принят default-off per-credential policy, pin к exact write generation,
+  private/same-target initial profile и additive-only capture tool.
 
 ## Исследования
 
