@@ -87,6 +87,7 @@ ActorContext:
       verified_by_platform: true
     mcp_token:
       token_id
+      binding_owner_id
       effective_scopes: content:read | content:read+content:write
     internal_service:
       purpose: index | export | gc | audit | expiry
@@ -114,7 +115,10 @@ ActorContext:
    системные часы.
 5. `request_id` служит correlation, а не authorization. `deployment_capabilities`
    могут только сужать разрешённое поведение.
-6. Role, visibility и membership не кэшируются в context. `Authorizer`
+6. Role, visibility и membership не кэшируются в context. `binding_owner_id`
+   выводится только из validated OAuth grant/personal token и выбирает
+   independent server-side binding set; request/chat не может его назначить.
+7. `Authorizer`
    вычисляет effective access из актуального server-side state для каждого
    target Mind; mutation повторяет проверку в своей metadata transaction.
 
@@ -155,7 +159,8 @@ document. Retryability и conflict сообщаются application-level result
 
 ### `MetadataStore`
 
-Transactional source of truth для principals, identity bindings, Spaces,
+Transactional source of truth для principals, identity bindings, Mind binding
+sets, Spaces,
 handles, memberships, invitations, tokens metadata, revisions, HEAD,
 idempotency, audit outbox, jobs и deletion state.
 
@@ -167,6 +172,8 @@ idempotency, audit outbox, jobs и deletion state.
   pending invitation и canonical handle;
 - conditional writes для metadata version, invitation state, token state и
   HEAD revision;
+- monotonic binding version, unique active read per owner/space и максимум один
+  active write record per binding owner;
 - storage одного command result с canonical request hash для idempotency;
 - запись domain state, audit outbox и background jobs в одной transaction;
 - denial/non-enumeration без предварительного object/index read.
@@ -199,7 +206,9 @@ state. Вход: trusted actor, resolved `space_id`, requested capability и
 transaction/snapshot context. Он учитывает active membership либо baseline
 visibility, token scopes, revision mode и deployment capability.
 
-Port не принимает client role как authority. Для private missing/denied target
+Port не принимает client role или binding owner как authority. Binding
+application сначала проверяет current authoritative record, затем Authorizer.
+Для private missing/denied target
 он не возвращает различимую metadata. Control/content application modules
 задают capability, но не дублируют role matrix в adapters.
 
@@ -273,15 +282,18 @@ Markdown, manifest body, search snippet, export bytes или content mutation.
 ```text
 queries:
   list_minds, resolve_mind, get_mind_info
+  get_mind_bindings
   browse_entries, search_entries, fetch_entry
   list_revisions, get_revision, validate_revision, get_export_status
 
 commands:
+  set_read_mind_binding, set_write_mind_binding
   commit_changeset, start_export
 ```
 
-Каждый content use case после discovery явно разрешает ровно один Mind и одну
-exact revision. Content boundary не экспортирует account, invitation,
+Каждый content use case после discovery явно разрешает ровно один bound Mind и
+одну exact revision. Binding mutations меняют только per-grant/token service
+selection и не создают ACL. Content boundary не экспортирует account, invitation,
 membership, role, visibility, ownership, deletion или token-management
 commands. `commit_changeset` требует registered principal, effective
 `content:write`, current content capability и current HEAD.

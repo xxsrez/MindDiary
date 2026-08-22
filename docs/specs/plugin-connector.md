@@ -85,7 +85,7 @@ Diary доступной после обновления каталога. Он�
 | Installation | `AVAILABLE` + `ON_USE` | то же поведение |
 | OAuth | authorization code + PKCE, DCR | тот же protocol profile, но Mind Diary scopes и identity rules |
 | Data authorization | internal Task Manager user | internal immutable Mind Diary `principal_id` |
-| Tool surface | task operations | один principal-wide content MCP для доступных Minds |
+| Tool surface | task operations | principal-wide discovery + per-grant/token `0..N` read и singleton write bindings |
 
 Не следует механически копировать из Task Manager:
 
@@ -114,15 +114,18 @@ Diary доступной после обновления каталога. Он�
    scopes.
 6. После consent host получает authorization code, обменивает его с PKCE и
    сохраняет connector grant.
-7. В новом чате пользователь сразу может перечислить свои Minds, искать и
-   читать Memories.
+7. В новом чате пользователь перечисляет доступные Minds, явно attach-ит
+   нужные read sources и выбирает не более одного writable target. Только после
+   этого content tools читают либо пишут.
 
 ### Запись
 
 Рекомендуемый default — `content:read` при установке и step-up consent на
-`content:write` при первом вызове `commit_changeset`. Так простой read path
-остаётся одноразовым подключением, а capability немедленно создавать immutable
-revisions выдаётся явно и только когда она нужна.
+`content:write` при первом `set_write_mind_binding` либо
+`commit_changeset`. Scope сам target не выбирает: user/agent сначала явно
+bind-ит exact writable Mind, а commit передаёт immutable `write_binding_id`.
+Так capability немедленно создавать revisions и destination selection остаются
+двумя независимыми boundaries.
 
 Если fresh-host validation покажет, что incremental scopes в installed plugin
 не дают надёжного UX, допустим pilot-компромисс: запросить оба scopes при
@@ -250,7 +253,8 @@ MCP authorization error также содержит `_meta["mcp/www_authenticate
 host мог открыть native linking или step-up flow. `tools/list` публикует
 `securitySchemes`:
 
-- read tools — `content:read`;
+- discovery, binding inspection и read attach/detach — `content:read`;
+- singleton write bind/rebind/unbind — `content:write`;
 - `commit_changeset` — `content:write`;
 - `start_export` — `content:read`, поскольку он создаёт delivery job, но не
   изменяет canonical Mind content.
@@ -309,7 +313,9 @@ internal `principal_id`.
   manual recovery до OAuth consent;
 - automatic relink, merge или access transfer запрещены;
 - один connector grant относится к principal, но каждый content call явно
-  выбирает один разрешённый Mind и revision;
+  выбирает один bound Mind и revision; сам immutable grant владеет independent
+  binding set, refresh его сохраняет, revoke делает unusable, reconnect создаёт
+  новый empty state;
 - текущие ACL и visibility проверяются при каждом call, а не фиксируются в
   access token;
 - OAuth не публикует membership, visibility, ownership transfer или personal
@@ -358,13 +364,17 @@ OAuth и ACL. Изменение Site access policy является отдел�
 разделённые области:
 
 1. `Connected apps` — client name, granted scopes, created/last-used times,
-   revoke и reconnect status.
+   revoke/reconnect status, attached read Minds и отдельный exact active
+   writable Mind либо `Not bound`.
 2. `Advanced: personal tokens` — существующие `mdp_v1_` create/list/revoke для
    CLI, compatibility и диагностики.
 
 В onboarding следует объяснять только пользовательские действия: установить
-Mind Diary из Srez Marketplace и пройти Authenticate. MCP URL, DCR, PKCE,
-resource audience и token rotation остаются implementation details.
+Mind Diary из Srez Marketplace, пройти Authenticate, подключить read Minds и
+явно выбрать writable target. MCP URL, DCR, PKCE, resource audience и token
+rotation остаются implementation details. Binding не включает automatic
+capture; его policy/opt-in принимаются отдельно по
+[Mind bindings](mind-bindings.md).
 
 ## Проверка и acceptance
 

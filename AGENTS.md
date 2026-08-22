@@ -152,10 +152,12 @@ ADR-0008/ADR-0009
   context и актуального server-side состояния.
 - MCP делает Space лениво доступным через search/fetch/resources; он не
   помещает весь corpus в контекст модели автоматически.
-- Один MCP connection аутентифицирует principal и даёт ему операции над всеми
-  доступными Minds: `/me`, memberships, каталогом `public` и `unlisted` по
-  точному handle. Каждая content operation явно выбирает один Mind и одну
-  revision; неявное смешивание corpus нескольких Minds запрещено.
+- Один MCP connection аутентифицирует principal и discover-ит все доступные
+  Minds: `/me`, memberships, каталог `public` и `unlisted` по точному handle.
+  Content read дополнительно требует active read binding либо current write
+  binding, а commit — exact singleton `write_binding_id` в binding set текущего
+  OAuth grant/personal token. Каждая content operation явно выбирает один Mind
+  и одну revision; fallback на `/me` и неявное смешивание corpus запрещены.
 - Первый прототип публикует custom Mind-aware MCP tools и не заявляет OpenAI
   company-knowledge compatibility. Standard `search(query)` не имеет Mind
   selector, а `okf://` identifiers не являются user-openable content URLs.

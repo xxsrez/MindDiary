@@ -57,13 +57,16 @@ flowchart LR
     Space -->|"HEAD + history"| Revision
     Revision -->|"materialize"| Bundle
     Principal -->|"zero or many"| Token
-    Token -->|"all currently allowed Minds"| Space
+    Token -->|"discover currently allowed Minds"| Space
+    Token -->|"owns one binding set"| MindBindingSet
+    MindBindingSet -->|"0..N read, 0..1 write"| Space
     Token -->|"always"| Personal
 ```
 
 Один principal может участвовать во многих ordinary Minds. Один MCP connection
-представляет principal, а не отдельный Mind; каждая content operation при этом
-явно выбирает ровно один Mind и одну revision.
+представляет principal, а не отдельный Mind; OAuth grant либо personal token
+владеет независимым binding set `0..N` read и `0..1` write. Каждая content
+operation явно выбирает ровно один Mind и одну revision.
 
 ## Account и identity
 
@@ -314,6 +317,7 @@ Effective permissions вызова равны:
 ```text
 current role or baseline visibility grant
 ∩ access-token scopes
+∩ current grant/token Mind binding
 ∩ deployment-enabled capabilities
 ∩ revision mode capabilities
 ```
@@ -324,8 +328,10 @@ principal и scopes; Authorizer читает актуальное состоян
 вызове.
 
 `content:write` включает `content:read`; write-only token в первом прототипе не
-существует. Token с одним `content:read` остаётся read-only независимо от роли
-principal.
+существует. Scope и ACL не выбирают destination: content read требует read
+binding либо current write binding, а commit — exact active immutable
+`write_binding_id`. Полный lifecycle и CAS описаны в
+[Mind bindings](mind-bindings.md).
 
 ## Visibility
 
@@ -363,12 +369,15 @@ server-side draft, diff confirmation и approval artifact в первом про
 ```text
 commit_changeset(
   mind,
+  write_binding_id,
   expected_revision,
   idempotency_key,
   operations[]
 )
 ```
 
+`mind` обязан совпадать с current target exact `write_binding_id`; binding ID
+проверяется в authoritative transaction и не перенаправляется после rebind.
 Один changeset может содержать create/replace/delete нескольких файлов и
 special operations для `index.md`/`log.md`. Он валидируется и применяется
 атомарно: создаёт ровно одну immutable `SpaceRevision` и переводит HEAD либо не
@@ -424,8 +433,9 @@ corpus:
 
 - **Sites control plane:** accounts, Minds, visibility, invitations,
   memberships, roles, ownership, deletion, MCP tokens и settings;
-- **Content MCP:** list/resolve allowed Minds, browse/search/fetch/history,
-  validate/export и immediate content commits;
+- **Content MCP:** discovery allowed Minds, управление per-grant/token read и
+  singleton write bindings, bound browse/search/fetch/history, validate/export
+  и immediate content commits;
 - **Internal application API:** единая граница use cases, которой пользуются
   web и MCP adapters. Raw file endpoints браузеру не выдаются.
 

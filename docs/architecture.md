@@ -233,6 +233,7 @@ created_at
 expires_at           # default 90 days
 last_used_at?
 revoked_at?
+binding_set_id       # service metadata, initial empty
 ```
 
 Canonical secret `mdp_v1_<base64url>` содержит ровно 32 random bytes, имеет
@@ -252,9 +253,10 @@ Threat analysis, benchmark и rotation boundary зафиксированы в
 
 Default и server maximum expiry равны 90 дням. Server проверяет
 expiry/revocation, строит `ActorContext` и затем на каждом tool call заново
-проверяет current Mind access. Token bound к principal, не Mind. Он не даёт
-control-plane capabilities и не логируется. `content:write` включает
-`content:read`; write-only token не выпускается.
+проверяет current Mind access. Token bound к principal, не Mind, и владеет
+independent server-side binding set. Он не даёт control-plane capabilities и не
+логируется. `content:write` включает `content:read`, но commit требует current
+singleton write binding; write-only token не выпускается.
 
 Codex configuration использует `bearer_token_env_var`. Для single-principal UAT Site
 отдельный `env_http_headers` передаёт `OAI-Sites-Authorization`, причём значение
@@ -275,7 +277,8 @@ direct `.mcp.json`; private registered app для pilot 0.1 не требует�
 Sites identity --> principal_id
 public DCR client + PKCE --> OAuth grant
 OAuth access token --> internal authorization mirror --> ActorContext
-ActorContext + current ACL + exact Mind/revision --> content use case
+OAuth grant --> independent MindBindingSet
+ActorContext + current binding + current ACL + exact Mind/revision --> content use case
 ```
 
 Authorization Server и protected resource живут на одном canonical UAT origin.
@@ -288,6 +291,12 @@ OAuth tables хранят normalized clients, pending requests, grants, one-time
 codes, access и refresh lifecycle. Opaque code/access/refresh secrets
 сохраняются только как domain-separated keyed HMAC-SHA-256 verifiers. Access
 token короткоживущий; refresh token rotation с reuse detection отзывает grant.
+
+Immutable OAuth grant, а не rotating access/refresh token и не chat ID, владеет
+binding set. Refresh сохраняет state; revoke делает его unusable; reconnect
+создаёт новый пустой state. Personal token использует тот же application
+contract с `token_id` как stable owner. Полный contract находится в
+[Mind bindings](specs/mind-bindings.md).
 
 Application core уже повторно проверяет current MCP token внутри ACL/CAS/commit
 transaction. Чтобы OAuth adapter не обходил эту boundary, каждому active OAuth
@@ -407,9 +416,9 @@ sequenceDiagram
     participant D as Metadata store
     participant W as Index worker
 
-    A->>M: commit_changeset(mind, expected, key, operations)
+    A->>M: commit_changeset(mind, write_binding_id, expected, key, operations)
     M->>C: authenticated ActorContext + command
-    C->>D: resolve Mind and current role/token state
+    C->>D: resolve exact active binding, Mind and current role/token state
     C->>C: normalize and validate OKF operations
     C->>O: put content-addressed immutable objects
     C->>D: conditional HEAD CAS + revision + audit/outbox
@@ -432,21 +441,24 @@ Multi-file changeset all-or-nothing. `index.md` обновляется explicit 
 under HEAD CAS; automatic merge отложен. `add_log_entry` парсит canonical
 `log.md`, вставляет событие в newest-first/date-grouped позицию и снова
 валидирует файл. Idempotency result предотвращает duplicate revision/log entry.
-Ключ namespaced по `principal_id + space_id + operation + key` и связан с
+Ключ namespaced по
+`binding_owner_id + write_binding_id + space_id + operation + key` и связан с
 canonical request hash: тот же payload возвращает прежний result, другой
 payload с тем же key — `409 Idempotency Conflict`.
 
 ## Поток content read
 
-1. MCP adapter аутентифицирует token и получает `principal_id`.
+1. MCP adapter аутентифицирует token и получает `principal_id` + trusted
+   `binding_owner_id`.
 2. Explicit Mind selector разрешается в `space_id`; `/me` разрешается только
    через actor.
-3. Authorizer проверяет current membership или visibility grant.
-4. Revision selector разрешается в exact `revision_id`.
-5. Browse/search применяет `space_id + revision_id` filter до выдачи результатов.
-6. `fetch` перечитывает canonical object той же revision и возвращает
+3. Application требует active read binding либо exact write binding.
+4. Authorizer проверяет current membership или visibility grant.
+5. Revision selector разрешается в exact `revision_id`.
+6. Browse/search применяет `space_id + revision_id` filter до выдачи результатов.
+7. `fetch` перечитывает canonical object той же revision и возвращает
    provenance/freshness.
-7. Ответ ограничивается budget; truncation обозначается явно.
+8. Ответ ограничивается budget; truncation обозначается явно.
 
 Index для каждой revision derived и rebuildable. При отсутствии/lag historical
 index browse/fetch остаются доступны, а search ждёт rebuild или честно сообщает
@@ -454,12 +466,15 @@ unavailable; fallback на HEAD запрещён.
 
 ## MCP surface и multi-Mind boundary
 
-Один connection видит allowed universe principal, но не смешивает corpus:
+Один connection discover-ит allowed universe principal, но content использует
+только authoritative bindings и не смешивает corpus:
 
 ```text
 list_minds -> /me + memberships + public catalog
 resolve_mind(exact unlisted handle) -> one authorized descriptor
-content_tool(mind, revision?, ...) -> exactly one resolved space_id
+set_read_mind_binding -> attach/detach 0..N readable targets
+set_write_mind_binding -> atomically select 0..1 writable target
+content_tool(mind, revision?, ...) -> exactly one bound space_id
 ```
 
 Opaque search result ID фиксирует `space_id + revision_id + path`, поэтому

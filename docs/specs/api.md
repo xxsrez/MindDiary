@@ -54,7 +54,10 @@ surface первого прототипа — authenticated MCP. Если adapte
 Принятые product invariants, которые этот документ не меняет:
 
 - authenticated-only доступ и private-by-default;
-- один principal-bound MCP connection для всех разрешённых Minds;
+- один principal-bound MCP connection для discovery всех разрешённых Minds и
+  independent binding set каждого OAuth grant/personal token;
+- `0..N` read bindings, `0..1` active write binding и fail-closed content
+  access вне них;
 - ровно один explicit Mind и одна resolved revision на content call;
 - immutable revisions, HEAD CAS и immediate commits без server draft;
 - роли `reader | editor | admin | owner` и scopes
@@ -105,6 +108,9 @@ surface первого прототипа — authenticated MCP. Если adapte
 | `entry_id` | Exact locator, как минимум bound к `space_id + revision_id + path`. |
 | `job_id` | Export job locator. |
 | `token_id` | Metadata ID MCP token; никогда не secret. |
+| `binding_owner_id` | Server-derived OAuth-grant/personal-token owner; не принимается от client. |
+| `read_binding_id` | Immutable service record одного attached read target. |
+| `write_binding_id` | Immutable active generation singleton write target. |
 | `request_id` | Correlation ID безопасного request log. |
 
 Server повторно проверяет actor, scope и текущий доступ при использовании
@@ -174,6 +180,11 @@ token store. Mirror не является user-visible personal token, но по
 application authorizer заново проверить token status, expiry и scopes внутри
 ACL/CAS/commit transaction. Grant revoke и account deletion отзывают mirror до
 best-effort cleanup OAuth normalized records.
+
+Grant владеет independent `MindBindingSet`; refresh rotation сохраняет его,
+revoke делает unusable, reconnect создаёт новый empty set. Для personal-token
+path stable owner — `token_id`. Полный record/lifecycle/tool contract находится
+в [Mind bindings](mind-bindings.md).
 
 ### Pagination
 
@@ -246,6 +257,12 @@ Application-layer error имеет стабильный machine code:
 | `metadata_conflict` | `expected_metadata_version` stale. |
 | `revision_conflict` | `expected_revision` stale. |
 | `idempotency_conflict` | Key повторно использован с другим payload. |
+| `mind_binding_required` | Target не подключён для content read. |
+| `write_binding_required` | Active singleton write target отсутствует. |
+| `write_binding_stale` | Переданный immutable write binding больше не active/exact. |
+| `binding_version_conflict` | `expected_binding_version` stale. |
+| `binding_owner_revoked` | Grant/token больше не может использовать binding state. |
+| `binding_state_unavailable` | Persisted binding state malformed или временно недоступен. |
 | `invalid_cursor` | Cursor malformed, expired или относится к другому query. |
 | `invalid_path` | Path нарушает canonical path policy. |
 | `file_exists` | `create_file` направлен в существующий path. |
@@ -786,6 +803,7 @@ ActorContext
 ├── principal_id
 ├── auth_kind: sites_identity | mcp_token | service
 ├── token_id? + token_scopes[]
+├── binding_owner_id?        # only validated OAuth grant/personal token
 ├── request_id
 └── trusted deployment context
 ```
@@ -818,6 +836,7 @@ list_minds
 resolve_mind_metadata
 resolve_mind
 get_mind_info
+get_mind_bindings
 list_public_minds
 list_members
 list_invitations
@@ -852,6 +871,8 @@ transfer_ownership
 delete_space
 issue_mcp_token
 revoke_mcp_token
+set_read_mind_binding
+set_write_mind_binding
 commit_changeset
 start_export
 ```
@@ -1063,9 +1084,9 @@ target deployment и не переносятся на другой Site по а�
 - Persisted records содержат только versioned verifier, scopes и lifecycle
   metadata; personal token дополнительно имеет safe `display_prefix`. Plain
   secret, recoverable material и HMAC key в records отсутствуют.
-- Current role/visibility, exact Mind и revision access проверяются на каждом
-  HTTP request/call; cached role claims и authorization из initialize/discovery
-  не используются.
+- Current binding, role/visibility, exact Mind и revision access проверяются на
+  каждом HTTP request/call; cached role claims и authorization из
+  initialize/discovery не используются.
 - `401` используется для missing/invalid/expired/revoked token и содержит
   безопасный `WWW-Authenticate: Bearer resource_metadata="..."` challenge с
   `content:read`.
@@ -1074,9 +1095,10 @@ target deployment и не переносятся на другой Site по а�
   `insufficient_scope` и write challenge. Visibility tool не заменяет scope
   enforcement.
 - `403` используется для invalid `Origin` и transport-level policy denial.
-- Repository candidate реализует private UAT connector profile. Он не считается
-  deployed/live compatible до exact-SHA UAT release и fresh registered
-  connector smoke; production/public plugin остаётся отдельной границей.
+- Repository candidate реализует private UAT direct-plugin profile. Он не
+  считается deployed/live compatible до exact-SHA UAT release, blocking
+  automated package/OAuth gate и применимого external UX canary;
+  production/public plugin остаётся отдельной границей.
 
 ### Advertised capabilities
 
@@ -1176,6 +1198,9 @@ transport metadata (`resultType`, `ttlMs`, `cacheScope`) из внешнего r
 | `list_minds` | read | true | false | false |
 | `resolve_mind` | read | true | false | false |
 | `get_mind_info` | read | true | false | false |
+| `get_mind_bindings` | read | true | false | false |
+| `set_read_mind_binding` | read | false | true | false |
+| `set_write_mind_binding` | write | false | true | false |
 | `browse_entries` | read | true | false | false |
 | `search` | read | true | false | false |
 | `fetch` | read | true | false | false |
@@ -1313,7 +1338,80 @@ Output:
 }
 ```
 
-Historical mode никогда не содержит `commit`.
+Historical mode никогда не содержит `commit`. Tool остаётся discovery: он не
+создаёт binding, а unbound target не объявляет content capability active.
+
+### `get_mind_bindings`
+
+Input: `{}`. Output `data`:
+
+```json
+{
+  "binding_version": 7,
+  "read_bindings": [
+    {
+      "read_binding_id": "rbind_opaque",
+      "state": "active",
+      "mind": {}
+    }
+  ],
+  "write_binding": {
+    "write_binding_id": "wbind_opaque",
+    "state": "active",
+    "mind": {}
+  }
+}
+```
+
+`write_binding` может быть `null`. Target, доступ к которому утрачен между
+reads, не раскрывает name/route: допустим только `{ "*_binding_id": "...",
+"state": "unavailable" }` до idempotent reconcile.
+
+### `set_read_mind_binding`
+
+Input:
+
+```json
+{
+  "action": "attach",
+  "mind": "research-notes",
+  "expected_binding_version": 7,
+  "idempotency_key": "01J..."
+}
+```
+
+`action` — exact `attach | detach`; unknown fields запрещены. Attach требует
+current read capability, detach остаётся idempotent и не меняет write binding.
+Output содержит `changed` и полный current `get_mind_bindings` state.
+
+### `set_write_mind_binding`
+
+Bind input:
+
+```json
+{
+  "action": "bind",
+  "mind": "research-notes",
+  "expected_binding_version": 7,
+  "idempotency_key": "01J..."
+}
+```
+
+Unbind input не содержит `mind`. Bind требует `content:write` и current write
+ACL. Если target меняется, transaction атомарно invalidates previous immutable
+ID и создаёт новый. Output:
+
+```json
+{
+  "binding_version": 8,
+  "previous": { "write_binding_id": "wbind_previous", "state": "invalidated" },
+  "current": { "write_binding_id": "wbind_current", "state": "active", "mind": {} }
+}
+```
+
+Для unbind `current` равен `null`; same-target bind — idempotent no-op без новой
+version/ID. Mutation всегда использует trusted current binding owner, а не
+principal/role/space ID из request.
 
 ### `browse_entries`
 
@@ -1453,6 +1551,7 @@ Input:
 ```json
 {
   "mind": "research-notes",
+  "write_binding_id": "wbind_opaque",
   "expected_revision": "rev_current",
   "idempotency_key": "01J...",
   "summary": "Add API design",
@@ -1460,8 +1559,10 @@ Input:
 }
 ```
 
-`expected_revision` обязана быть current HEAD. Historical selector отсутствует
-намеренно.
+`write_binding_id` обязан быть current active generation и указывать на exact
+`mind`; `expected_revision` обязана быть current HEAD. Historical selector
+отсутствует намеренно. Rebind перед transaction возвращает
+`write_binding_stale` и не перенаправляет payload.
 
 `operations` — non-empty tagged union:
 

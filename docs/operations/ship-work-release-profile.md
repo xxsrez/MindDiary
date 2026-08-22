@@ -1024,6 +1024,14 @@ runtime:
 
 ## Resolution rules
 
+Accepted [Mind binding contract](../specs/mind-bindings.md) пока не имеет
+реализованной release row в canonical profile. Candidate, который включает
+binding runtime changes, нельзя продвигать по прежней MCP matrix как будто она
+достаточна: `MD-235` обязан до UAT добавить exact-candidate persistence,
+concurrency, revoke/delete, stale-writer/no-side-effect и fresh-plugin checks.
+Contract-only `MD-229` проверяется docs validator и diff check и не является
+hosted functionality.
+
 Linear collection разрешается только по immutable project ID
 `6c07eabb-e588-4184-8eaa-5974ad67fdda`; имя `Mind Diary` остаётся display
 metadata. Default selector должен вернуть один exact nonterminal milestone и

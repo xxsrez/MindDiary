@@ -1,6 +1,9 @@
 # ADR-0003: user-scoped MCP и immediate commits
 
-Статус: accepted, 2026-08-05.
+Статус: accepted, 2026-08-05. Principal-wide content-access consequence
+изменено [ADR-0013](0013-multiple-read-single-write-mind-bindings.md): connection
+по-прежнему аутентифицирует principal и discover-ит доступные Minds, но content
+read/write теперь дополнительно ограничиваются server-side binding state.
 
 ## Контекст
 

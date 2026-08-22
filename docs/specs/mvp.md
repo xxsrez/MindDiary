@@ -213,6 +213,14 @@ Content MCP принимает два revocable bearer profiles:
 1. personal access token для direct Codex/CLI setup;
 2. OAuth access token для direct Marketplace MCP connection.
 
+Каждый OAuth grant или personal token имеет independent Mind binding set:
+`0..N` active read bindings и `0..1` active write binding. Новый или
+reconnected credential начинает с empty state. Discovery доступных Minds
+остаётся principal-scoped; content read требует current read/write binding, а
+commit — exact immutable `write_binding_id`. Scope и ACL binding не создают и
+не заменяют. Полный version/CAS/lifecycle contract — в
+[Mind bindings](mind-bindings.md).
+
 Personal access token имеет следующий contract:
 
 - token выпускается в authenticated Sites UI и связан с `principal_id`, не с
@@ -276,9 +284,9 @@ personal token. `/settings/mcp` отдельно показывает connected 
 немедленно отозвать grant.
 
 Этот профиль считается repository implementation, но не live UAT evidence до
-registration connector, exact-SHA deployment и fresh
-install/read/write-step-up/revoke/reconnect smoke. Production/public plugin
-остаётся отдельной release boundary.
+blocking automated direct-package/OAuth gate, exact-SHA deployment и
+применимого fresh external UX canary. Registered connector не prerequisite
+Codex pilot 0.1. Production/public plugin остаётся отдельной release boundary.
 
 ### Sites control plane
 
@@ -448,21 +456,28 @@ informational canary platform identity/audience behavior, не blocking gate
 
 ## Первая MCP-поверхность
 
+Перед content tools доступны `get_mind_bindings`,
+`set_read_mind_binding` и `set_write_mind_binding`. Mutations используют
+`expected_binding_version` + idempotency; rebind атомарно инвалидирует previous
+write ID. `list_minds`/`resolve_mind` остаются discovery и не attach-ят target.
 Все Mind-specific content calls принимают explicit `mind` selector (`/me`,
 handle или opaque ID, полученный от server). Scope одного call — ровно один
-Mind; general implicit cross-Mind search отсутствует.
+bound Mind; general implicit cross-Mind search отсутствует.
 
 ```text
 list_minds(cursor?, limit?)
 resolve_mind(handle)
 get_mind_info(mind, revision_selector?)
+get_mind_bindings()
+set_read_mind_binding(action, mind, expected_binding_version, idempotency_key)
+set_write_mind_binding(action, mind?, expected_binding_version, idempotency_key)
 browse_entries(mind, revision_selector?, path?)
 search(mind, revision_selector?, query)
 fetch(id)
 list_revisions(mind, before?, limit?)
 get_revision(mind, revision_id)
 validate_mind(mind, revision_selector?)
-commit_changeset(mind, expected_revision, idempotency_key, operations[])
+commit_changeset(mind, write_binding_id, expected_revision, idempotency_key, operations[])
 start_export(mind, revision_selector?, idempotency_key)
 get_export_status(job_id)
 ```
@@ -540,13 +555,15 @@ network, которого Sites пока не обещает. Если Streamabl
 10. `list_minds` одного MCP principal показывает `/me`, memberships и public
     catalog; чужой private Mind отсутствует, unlisted без exact resolve не
     обнаруживается.
-11. Один token работает с несколькими allowed Minds, но каждый call явно
-    выбирает один; content другого Mind не попадает в results.
+11. Один token discover-ит несколько allowed Minds, но content читает только
+    `0..N` attached read targets/current write target и пишет только в exact
+    singleton active write target; content другого Mind не попадает в results.
 12. Revoked/expired token отклоняется; server logs не содержат secret или
     private body. Retry token issuance не раскрывает прежний secret. Token с
     `content:write` также читает, token только с `content:read` не пишет.
 13. Reader/baseline grant не commit-ит; Editor/Admin/Owner immediate commit-ит
-    без draft/approval, если имеет `content:write`.
+    без draft/approval, если имеет `content:write`, current write ACL и exact
+    active `write_binding_id`.
 14. Current `expected_revision` создаёт одну new HEAD. Stale revision получает
     conflict и не пишет partial objects/revision.
 15. Retry с тем же namespaced idempotency key и payload возвращает тот же

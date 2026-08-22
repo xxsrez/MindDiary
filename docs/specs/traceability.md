@@ -56,6 +56,23 @@ failed или неполном evidence. Historical registry критериев 
 ниже сохраняются byte-for-contract: новые receipts не удаляют 29 критериев и
 не переписывают historical evidence.
 
+## Mind bindings extension 2026-08-22
+
+[ADR-0013](../decisions/0013-multiple-read-single-write-mind-bindings.md) и
+[binding specification](mind-bindings.md) изменяют future content-access
+contract, не переписывая historical release evidence. На текущем этапе принят
+только contract (`MD-229`): implementation, tests и hosted claims отсутствуют.
+
+| ID | Наблюдаемый результат | Owner | Local evidence | UAT evidence |
+|---|---|---|---|---|
+| B0-Contract | OAuth grant/personal token — authoritative binding owner; `0..N` read, `0..1` write, exact lifecycle/CAS/errors и fail-closed migration согласованы. | `MD-229` | docs topology/link validation + `git diff --check`; это contract evidence, не runtime | not-applicable до implementation |
+| B1-State | Durable binding state переживает restart, atomic rebind invalidates previous ID, revoke/delete fail closed. | `MD-231` | pending | `MD-235`, pending |
+| B2-Tools | Оба MCP profiles публикуют deterministic inspection/read/write binding tools с current authorization. | `MD-230` | pending | `MD-235`, pending |
+| B3-Enforcement | Bound reads и exact active write ID являются hard server boundary без wrong-Mind side effects. | `MD-232` | pending | `MD-235`, pending |
+| B4-UX | Product Site/plugin показывают current reads/exact write target и не infer-ят его из content/model state. | `MD-233` | pending | `MD-235`, pending |
+| B5-Capture | Отдельная opt-in capture policy пишет только в active target с provenance/privacy constraints. | `MD-234` | pending; binding сам capture не включает | `MD-235`, pending |
+| B6-Join | Один exact candidate проходит concurrency/security/persistence/plugin/UAT matrix. | `MD-235` | pending | pending |
+
 ## Как читать матрицу
 
 Источник критериев — раздел
@@ -106,9 +123,9 @@ secret и download URL.
 | 8 | Anonymous доступ отсутствует; authenticated private member, public и exact-handle unlisted caller получают только свои rights. | `AND-50` | `U/P, I, S, B`: visibility matrix, non-enumeration, anonymous denial и baseline read-only post-state. | `A8 + W + CX + R` |
 | 9 | Catalog содержит только public Minds; private switch закрывает baseline reads; UI объясняет live HEAD/history exposure и что unlisted URL не secret. | `AND-81` | `C, I, B`: catalog/transition contract, disclosure acknowledgement, stale cache/access regression. | `A9 + W + P + R` |
 | 10 | `list_minds` показывает `/me`, memberships и public catalog; private скрыт, unlisted без membership требует exact resolve. | `AND-60` | `C, I, M`: pagination/discovery fixtures, private/missing indistinguishability и exact resolve. | `A10 + MI + CX + R` |
-| 11 | Один principal token работает с несколькими allowed Minds, но каждый call разрешает ровно один Mind/revision без cross-Mind leakage. | `AND-74` | `C, I, S, M`: explicit selector, mismatched opaque IDs/cursors и multi-Mind isolation. | `A11 + MI + CX + R` |
+| 11 | Один principal token discover-ит несколько allowed Minds; content разрешает только bound target и ровно один Mind/revision без cross-Mind leakage. | historical `AND-74`; amended by `MD-229`–`MD-235` | Historical explicit-selector evidence сохраняется; binding enforcement pending в B1–B3. | Historical `A11 + MI + CX + R`; новый hosted claim только B6 |
 | 12 | Expired/revoked token denied; issuance replay не раскрывает secret; write включает read, read-only не пишет; telemetry не содержит secret/body. | `AND-58` | `U/P, C, I, S, M`: expiry/revoke/scope/replay plus automated log redaction. | `A12 + MI + CX + R` |
-| 13 | Reader/baseline Reader не commit-ит; Editor/Admin/Owner с `content:write` immediate commit-ит без draft/approval. | `AND-65` | `U/P, C, I, M`: effective role∩scope matrix, direct call denial и отсутствие state после error. | `A13 + MI + CX + R` |
+| 13 | Reader/baseline Reader не commit-ит; Editor/Admin/Owner immediate commit-ит только при `content:write` и exact active write binding, без draft/approval. | historical `AND-65`; amended by `MD-229`–`MD-235` | Historical role/scope evidence сохраняется; binding no-side-effect matrix pending в B3. | Historical `A13 + MI + CX + R`; новый hosted claim только B6 |
 | 14 | Current `expected_revision` создаёт одну new HEAD; stale revision возвращает conflict без reachable partial objects/revision. | `AND-67` | `U/P, I, F, M`: two-writer race, injected object-put→CAS fault и HEAD/object post-state. | `A14 + CX + P + R` |
 | 15 | Same namespaced key/payload возвращает тот же revision и не дублирует log; другой payload даёт idempotency conflict. | `AND-69` | `U/P, I, F, M`: same/different payload replay, cross-principal/space isolation и concurrent retries. | `A15 + CX + P + R` |
 | 16 | Concept, `index.md` и `log.md` появляются all-or-nothing; log остаётся valid newest-first/date-grouped OKF. | `AND-71` | `U/P, C, I, F, M`: clock-based log fixtures, invalid/stale operations и full-bundle post-validation. | `A16 + CX + P + R` |

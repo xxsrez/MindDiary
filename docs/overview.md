@@ -156,21 +156,26 @@ receipt также не сохраняются. Это сознательный 
 ## MCP и web control plane
 
 Один MCP connection аутентифицирует пользователя, а не отдельный Mind. Он
-может работать со всеми Minds, доступными этому principal:
+может discover-ить все Minds, доступные этому principal:
 
 - Personal Mind `/me`;
 - accepted memberships;
 - public catalog;
 - unlisted Mind по известному exact handle.
 
-Агент выбирает Mind по запросу пользователя, но каждый content call содержит
-явный selector одного Mind. Неявный cross-Mind search или смешивание corpora не
-происходит.
+Для content work connection имеет server-side binding set: `0..N` read Minds и
+`0..1` active writable Mind. Agent явно attach-ит read sources и bind-ит
+единственный write target; ACL и scopes остаются верхней границей authority.
+Каждый content call содержит selector одного Mind, а commit также exact
+immutable `write_binding_id`. Rebind атомарно делает прежний ID stale. Неявный
+fallback на Personal Mind, cross-Mind search или смешивание corpora не
+происходит. Полный contract — в [Mind bindings](specs/mind-bindings.md).
 
 MCP сразу commit-ит authorized изменения; отдельного server draft, diff
 approval или ручного подтверждения commit нет. Server всё равно проверяет
-token, current role/visibility, scopes, HEAD CAS и idempotency на каждом
-вызове. `content:write` включает read; write-only token не существует.
+token, current binding, current role/visibility, scopes, HEAD CAS и idempotency
+на каждом вызове. `content:write` включает read, но без active write binding не
+разрешает commit; write-only token не существует.
 
 Первый прототип использует custom Mind-aware MCP tools. Он не заявляет
 company-knowledge compatibility: стандартный `search(query)` не выбирает Mind,

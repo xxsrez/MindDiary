@@ -56,7 +56,8 @@ Mind Diary должен сделать работу с OKF заметно про
 - пользователь получает готовый Mind без ручного bootstrap storage;
 - Minds дают понятную гранулярность corpus и access boundary;
 - roles, visibility и revisions обслуживаются сервером;
-- Codex лениво читает и изменяет knowledge через один MCP connection;
+- Codex через один MCP connection явно подключает несколько read Minds и
+  единственный versioned writable Mind без ослабления ACL;
 - canonical data остаются переносимыми через deterministic export.
 
 Пользователь уже оплачивает inference своего Codex client, поэтому Mind Diary
