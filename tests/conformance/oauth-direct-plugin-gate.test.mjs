@@ -13,6 +13,7 @@ import {
 } from "../../scripts/lib/fake-sites-storage.mjs";
 import {
   OAUTH_DIRECT_PLUGIN_ASSERTION_IDS,
+  assertAutomaticCaptureSkillPolicy,
   assertCodexClientVersion,
   createEvidence,
   parseCli,
@@ -98,6 +99,23 @@ test("Codex prompt-input parser proves the installed skill is model-visible", ()
       source: "file",
       path,
     },
+  );
+});
+
+test("installed skill automatic capture policy is complete and fail-closed", () => {
+  const policy = [
+    "## Automatic capture workflow",
+    "`automatic_capture.mode` is `routine_non_sensitive`",
+    "The Sites control plane is the only place that can enable or disable this",
+    "Never call `capture_knowledge` for credentials or authentication material",
+    "Treat `captured` as one new immutable revision and `no_op` as successful",
+    "never move, replace, merge or retry the payload against a different target",
+  ].join("\n");
+  assert.equal(assertAutomaticCaptureSkillPolicy(policy), true);
+  assert.throws(
+    () => assertAutomaticCaptureSkillPolicy("## Automatic capture workflow\nAllow everything."),
+    (error) => error instanceof ProbeFailure &&
+      error.code === "installed_automatic_capture_skill_policy_missing",
   );
 });
 

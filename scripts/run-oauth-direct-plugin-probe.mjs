@@ -61,6 +61,7 @@ export const OAUTH_DIRECT_PLUGIN_ASSERTION_IDS = Object.freeze([
   "package.fresh-context-discovery-before-install",
   "package.install-before-oauth",
   "package.skill-discovery",
+  "package.automatic-capture-skill-policy",
   "package.mcp-resolution",
   "package.task-manager-separate",
   "oauth.protected-resource-discovery",
@@ -83,6 +84,9 @@ export const OAUTH_DIRECT_PLUGIN_ASSERTION_IDS = Object.freeze([
   "oauth.authorization-mirror-active",
   "oauth.current-acl-readback",
   "oauth.explicit-write-binding-readback",
+  "oauth.capture-policy-readback",
+  "oauth.product-runtime-capture",
+  "oauth.product-runtime-capture-no-op",
   "oauth.product-runtime-commit",
   "oauth.product-runtime-idempotent-replay",
   "oauth.product-runtime-stale-cas",
@@ -188,6 +192,22 @@ export function createEvidence({
     ...unsigned,
     artifact_sha256: digest(canonical(unsigned)),
   }));
+}
+
+export function assertAutomaticCaptureSkillPolicy(skill) {
+  const required = [
+    "## Automatic capture workflow",
+    "automatic_capture.mode` is `routine_non_sensitive",
+    "The Sites control plane is the only place that can enable or disable this",
+    "Never call `capture_knowledge` for credentials or authentication material",
+    "Treat `captured` as one new immutable revision and `no_op` as successful",
+    "never move, replace, merge or retry the payload against a different target",
+  ];
+  if (
+    typeof skill !== "string" ||
+    required.some((fragment) => !skill.includes(fragment))
+  ) fail("installed_automatic_capture_skill_policy_missing");
+  return true;
 }
 
 async function git(root, args, options = {}) {
@@ -411,6 +431,8 @@ async function verifyFreshPluginContext(snapshot, assertions) {
       { installedRoot, description },
     );
     assertions.add("package.skill-discovery");
+    assertAutomaticCaptureSkillPolicy(skill);
+    assertions.add("package.automatic-capture-skill-policy");
 
     const installedList = await codexJson(
       codexHome,
@@ -1004,7 +1026,74 @@ async function runOAuthScenario({ assertions, nowState }) {
     bindingReadback.write_binding?.mind?.route !== "/me"
   ) fail("oauth_write_binding_readback_mismatch");
   assertions.add("oauth.explicit-write-binding-readback");
-  const expectedRevision = info.resolved_revision.revision_id;
+  const settingsBeforeCapture = await owner.request("/settings/mcp");
+  const grantId = /data-revoke-oauth="([^"]+)"/u.exec(settingsBeforeCapture.text)?.[1];
+  if (!grantId) fail("oauth_connected_app_not_visible");
+  const captureEnabled = await owner.api(
+    `/api/v1/mind-bindings/${encodeURIComponent(grantId)}`,
+    {
+      method: "PATCH",
+      body: {
+        action: "enable_capture",
+        expected_binding_version: bindingReadback.binding_version,
+      },
+      idempotencyKey: `oauth:${nonce}:enable-capture`,
+      csrfPath: "/settings/mcp",
+    },
+  );
+  if (captureEnabled.body?.data?.binding_version !== bindingReadback.binding_version + 1) {
+    fail("oauth_capture_policy_enable_mismatch");
+  }
+  const captureBindings = mcpData(
+    await modernTool(owner, writeGrant.tokens.access_token, "oauth-capture-bindings-readback", "get_mind_bindings"),
+    "oauth_capture_bindings_readback_failed",
+  );
+  if (
+    captureBindings.binding_version !== captureEnabled.body.data.binding_version ||
+    captureBindings.automatic_capture?.mode !== "routine_non_sensitive" ||
+    captureBindings.automatic_capture?.write_binding_id !== writeBindingId ||
+    captureBindings.write_binding?.write_binding_id !== writeBindingId ||
+    captureBindings.write_binding?.mind?.visibility !== "private"
+  ) fail("oauth_capture_policy_readback_mismatch");
+  assertions.add("oauth.capture-policy-readback");
+  const captureArguments = {
+    mind: "/me",
+    write_binding_id: writeBindingId,
+    expected_binding_version: captureBindings.binding_version,
+    expected_revision: captureBindings.write_binding.mind.head.revision_id,
+    idempotency_key: `oauth:${nonce}:capture`,
+    classification: "routine_non_sensitive",
+    capture_kind: "fact",
+    capture_key: "oauth-gate-routine-fact",
+    title: "OAuth gate routine fact",
+    description: "A bounded non-sensitive fact stated by the synthetic user.",
+    body: "The synthetic user prefers compact weekly summaries.",
+    sources: [{ kind: "user_statement" }],
+  };
+  const captured = mcpData(
+    await modernTool(owner, writeGrant.tokens.access_token, "oauth-capture", "capture_knowledge", captureArguments),
+    "oauth_product_capture_failed",
+  );
+  if (
+    captured.status !== "captured" ||
+    captured.path !== "concepts/captured/oauth-gate-routine-fact.md" ||
+    captured.previous_revision_id !== captureArguments.expected_revision ||
+    captured.revision?.revision_id === captureArguments.expected_revision ||
+    captured.index_status !== "queued"
+  ) fail("oauth_product_capture_mismatch");
+  assertions.add("oauth.product-runtime-capture");
+  const captureNoOp = mcpData(
+    await modernTool(owner, writeGrant.tokens.access_token, "oauth-capture-no-op", "capture_knowledge", captureArguments),
+    "oauth_product_capture_no_op_failed",
+  );
+  if (
+    captureNoOp.status !== "no_op" ||
+    captureNoOp.path !== captured.path ||
+    captureNoOp.revision?.revision_id !== captured.revision.revision_id ||
+    captureNoOp.index_status !== "unchanged"
+  ) fail("oauth_product_capture_no_op_mismatch");
+  assertions.add("oauth.product-runtime-capture-no-op");
+  const expectedRevision = captured.revision.revision_id;
   const commitArguments = {
     mind: "/me",
     write_binding_id: writeBindingId,
@@ -1047,9 +1136,6 @@ async function runOAuthScenario({ assertions, nowState }) {
   );
   assertions.add("oauth.product-runtime-stale-cas");
 
-  const settings = await owner.request("/settings/mcp");
-  const grantId = /data-revoke-oauth="([^"]+)"/u.exec(settings.text)?.[1];
-  if (!grantId) fail("oauth_connected_app_not_visible");
   await owner.api(`/api/v1/oauth-connections/${encodeURIComponent(grantId)}`, {
     method: "DELETE",
     idempotencyKey: `oauth:${nonce}:connected-app-revoke`,
