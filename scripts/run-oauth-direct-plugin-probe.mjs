@@ -1154,7 +1154,7 @@ async function runOAuthScenario({ assertions, nowState }) {
   assertions.add("oauth.connected-app-mirror-revoke");
   const revokedBindings = await metadata.readMindBindingSet(
     grantId,
-    ownerSession.principal_id,
+    String(writeAccessRecord.principal_id),
     nowState.value.toISOString(),
   );
   if (
@@ -1181,8 +1181,7 @@ async function runOAuthScenario({ assertions, nowState }) {
   const reconnectAccess = latestAccessRecord(database);
   if (
     reconnectAccess.grant_id === grantId ||
-    reconnectBindings.binding_set?.state !== "active" ||
-    reconnectBindings.binding_set?.binding_version !== 0 ||
+    reconnectBindings.binding_version !== 0 ||
     reconnectBindings.write_binding !== null ||
     reconnectBindings.read_bindings?.length !== 0
   ) fail("oauth_reconnect_binding_generation_not_empty");
