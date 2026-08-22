@@ -1011,7 +1011,7 @@ h3 {
 
 .md-capture-policy > div {
   display: grid;
-  flex: 1;
+  flex: 1 1 18rem;
   gap: 0.45rem;
   min-width: 0;
 }
@@ -1223,7 +1223,8 @@ h3 {
   }
 
   .md-binding-list .md-button,
-  .md-binding-controls .md-button {
+  .md-binding-controls .md-button,
+  .md-capture-policy .md-button {
     width: 100%;
   }
 }
