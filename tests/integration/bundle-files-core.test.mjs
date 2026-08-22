@@ -12,6 +12,7 @@ import {
   BundleFileStagingService,
   CanonicalRevisionCoordinator,
   ChangesetCommitService,
+  DeterministicOkfExportService,
   MindBindingContentAuthorizer,
 } from "@mind-diary/application-content";
 import { RevisionIndexJobHandler } from "@mind-diary/application-background";
@@ -46,6 +47,9 @@ const WRITE_BINDING_ID = "write_binding_bundle_file";
 const HASH = `sha256:${"a".repeat(64)}`;
 const PNG = Uint8Array.from([
   0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x01,
+]);
+const PNG_REPLACEMENT = Uint8Array.from([
+  0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x02,
 ]);
 const PDF = new TextEncoder().encode("%PDF-1.7\n");
 const ZIP = Uint8Array.from([0x50, 0x4b, 0x03, 0x04, 0x00, 0x00]);
@@ -444,7 +448,7 @@ test("Markdown BundleFile references validate the atomic resulting revision", as
   );
 });
 
-test("BundleFile download grants are exact-revision and atomically one-use", async () => {
+test("BundleFile dev smoke preserves exact bytes, history, exports, and reconstructed state", async () => {
   const env = await harness();
   const stagedFiles = [];
   for (const [path, mediaType, bytes] of [
@@ -479,11 +483,28 @@ test("BundleFile download grants are exact-revision and atomically one-use", asy
     expectedRevisionId: REVISIONS.initial.revisionId,
     idempotencyKey: "commit-download-diagram",
     summary: "Add exact download diagram",
-    operations: stagedFiles.map(({ path, staged }) => ({
-      type: "create_bundle_file",
-      path,
-      staged_file_id: staged.record.stagedFileId,
-    })),
+    operations: [
+      ...stagedFiles.map(({ path, staged }) => ({
+        type: "create_bundle_file",
+        path,
+        staged_file_id: staged.record.stagedFileId,
+      })),
+      {
+        type: "create_file",
+        path: "concepts/bundle-files.md",
+        text: [
+          "---",
+          "type: Reference",
+          "title: Bundle files",
+          "---",
+          "",
+          "# Bundle files",
+          "",
+          "![Diagram](../assets/diagram.png)",
+          "",
+        ].join("\n"),
+      },
+    ],
   });
   assert.equal(committed.kind, "committed");
 
@@ -662,6 +683,126 @@ test("BundleFile download grants are exact-revision and atomically one-use", asy
   assert.deepEqual(
     await expiredService.download(serviceActor, expiredSecret),
     { kind: "not_found" },
+  );
+
+  const replacement = await env.staging.stage({
+    actor: env.currentActor,
+    spaceId: MINDS.ordinary.spaceId,
+    writeBindingId: WRITE_BINDING_ID,
+    displayFilename: "diagram-v2.png",
+    claimedMediaType: "image/png",
+    bytes: PNG_REPLACEMENT,
+    idempotencyKey: "stage-download-diagram-v2",
+  });
+  assert.equal(replacement.kind, "staged");
+  const replacementRevisionId = "revision_bundle_file_replacement";
+  const replacementCommits = new ChangesetCommitService({
+    authorizer: env.authorizer,
+    metadata: env.metadata,
+    revisions: env.revisions,
+    objects: env.objects,
+    clock: { now: () => "2026-08-05T13:07:00.000Z" },
+    revisionIds: { nextRevisionId: () => replacementRevisionId },
+  });
+  const replaced = await replacementCommits.commit({
+    actor: env.currentActor,
+    spaceId: MINDS.ordinary.spaceId,
+    writeBindingId: WRITE_BINDING_ID,
+    expectedRevisionId: REVISIONS.next.revisionId,
+    idempotencyKey: "replace-download-diagram-delete-archive",
+    summary: "Replace diagram and remove archive",
+    operations: [
+      {
+        type: "replace_bundle_file",
+        path: "assets/diagram.png",
+        staged_file_id: replacement.record.stagedFileId,
+      },
+      { type: "delete_bundle_file", path: "assets/archive.zip" },
+      {
+        type: "replace_file",
+        path: "concepts/bundle-files.md",
+        text: [
+          "---",
+          "type: Reference",
+          "title: Bundle files",
+          "---",
+          "",
+          "# Bundle files",
+          "",
+          "![Updated diagram](../assets/diagram.png)",
+          "",
+        ].join("\n"),
+      },
+    ],
+  });
+  assert.equal(replaced.kind, "committed");
+
+  const historical = await env.revisions.materialize(
+    MINDS.ordinary.spaceId,
+    REVISIONS.next.revisionId,
+  );
+  assert.deepEqual(
+    historical.files.find((file) => file.path === "assets/diagram.png").bytes,
+    PNG,
+  );
+  assert.deepEqual(
+    historical.files.find((file) => file.path === "assets/archive.zip").bytes,
+    ZIP,
+  );
+  const current = await env.revisions.materialize(
+    MINDS.ordinary.spaceId,
+    replacementRevisionId,
+  );
+  assert.deepEqual(
+    current.files.find((file) => file.path === "assets/diagram.png").bytes,
+    PNG_REPLACEMENT,
+  );
+  assert.equal(
+    current.files.some((file) => file.path === "assets/archive.zip"),
+    false,
+  );
+
+  const exporter = new DeterministicOkfExportService({
+    materializer: env.revisions,
+    digest: env.objects,
+  });
+  const firstBundleExport = await exporter.exportExactRevision({
+    spaceId: MINDS.ordinary.spaceId,
+    revisionId: replacementRevisionId,
+    profile: "MD-BUNDLE-ZIP-1",
+  });
+  const secondBundleExport = await exporter.exportExactRevision({
+    spaceId: MINDS.ordinary.spaceId,
+    revisionId: replacementRevisionId,
+    profile: "MD-BUNDLE-ZIP-1",
+  });
+  assert.deepEqual(secondBundleExport.bytes, firstBundleExport.bytes);
+  assert.equal(secondBundleExport.sha256, firstBundleExport.sha256);
+  const legacyExport = await exporter.exportExactRevision({
+    spaceId: MINDS.ordinary.spaceId,
+    revisionId: REVISIONS.initial.revisionId,
+    profile: "MD-OKF-ZIP-1",
+  });
+  assert.equal(legacyExport.archiveFormat, "MD-OKF-ZIP-1");
+
+  const reconstructedMetadata = InMemoryRevisionMetadataStore.fromDurableSnapshot(
+    env.metadata.exportDurableSnapshot(),
+  );
+  const reconstructedRevisions = new CanonicalRevisionCoordinator({
+    objects: env.objects,
+    revisions: reconstructedMetadata,
+  });
+  const reconstructed = await reconstructedRevisions.materialize(
+    MINDS.ordinary.spaceId,
+    replacementRevisionId,
+  );
+  assert.deepEqual(
+    reconstructed.files.find((file) => file.path === "assets/diagram.png").bytes,
+    PNG_REPLACEMENT,
+  );
+  assert.equal(
+    reconstructed.files.some((file) => file.path === "assets/archive.zip"),
+    false,
   );
 
   const deletedSecret = await issueDirectGrant(pngEntry);
