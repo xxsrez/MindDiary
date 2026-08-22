@@ -130,6 +130,70 @@ test("same exact revision and export config produce identical ZIP bytes and hash
   assert.equal(materializeCalls, 2);
 });
 
+test("streamed exact export is byte-identical while reading only one immutable file at a time", async () => {
+  const digest = new InMemoryObjectStore();
+  const source = [
+    file("zeta.md", "---\ntype: Zeta\n---\n\n# Zeta\n"),
+    file("alpha.md", "---\ntype: Alpha\n---\n\n# Alpha\n"),
+  ];
+  const files = await Promise.all(source.map(async (entry) => ({
+    ...entry,
+    kind: "markdown",
+    sha256: await digest.calculateSha256(entry.bytes),
+  })));
+  const envelope = {
+    revision: { spaceId: SPACE_ID, revisionId: REVISION_ID },
+    manifest: { entries: files.map(({ bytes: _bytes, ...entry }) => entry) },
+  };
+  let activeReads = 0;
+  let peakReads = 0;
+  const materializer = {
+    async materialize() {
+      return { envelope, files };
+    },
+    async readRevisionEnvelope() {
+      return envelope;
+    },
+    async readRevisionFile(_spaceId, _revisionId, path) {
+      activeReads += 1;
+      peakReads = Math.max(peakReads, activeReads);
+      try {
+        const selected = files.find((entry) => entry.path === path);
+        return selected === undefined ? null : { ...selected, bytes: new Uint8Array(selected.bytes) };
+      } finally {
+        activeReads -= 1;
+      }
+    },
+  };
+  const service = new DeterministicOkfExportService({ materializer, digest });
+  const bounded = await service.exportExactRevision({
+    spaceId: SPACE_ID,
+    revisionId: REVISION_ID,
+  });
+  const chunks = [];
+  let maxChunk = 0;
+  const streamed = await service.writeExactRevision({
+    spaceId: SPACE_ID,
+    revisionId: REVISION_ID,
+  }, {
+    async write(chunk) {
+      maxChunk = Math.max(maxChunk, chunk.byteLength);
+      chunks.push(new Uint8Array(chunk));
+    },
+  });
+  const bytes = new Uint8Array(chunks.reduce((size, chunk) => size + chunk.byteLength, 0));
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  assert.deepEqual(bytes, bounded.bytes);
+  assert.equal(streamed.sha256, bounded.sha256);
+  assert.equal(streamed.size, bounded.size);
+  assert.equal(peakReads, 1);
+  assert.ok(maxChunk <= 1_048_576);
+});
+
 test("invalid request and full-bundle validation failures are stable and produce no digest", async () => {
   let digestCalls = 0;
   const digest = {

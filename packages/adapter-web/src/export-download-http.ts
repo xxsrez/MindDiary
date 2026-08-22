@@ -3,7 +3,8 @@ export type ProductExportDownloadResult =
       readonly kind: "download";
       readonly response: Readonly<{
         readonly headers: Readonly<Record<string, string>>;
-        readonly bytes: Uint8Array;
+        readonly body?: Uint8Array | ReadableStream<Uint8Array>;
+        readonly bytes?: Uint8Array;
       }>;
     }
   | { readonly kind: "not_found" };
@@ -59,7 +60,11 @@ export function createProductExportDownloadHttpHandler(
       return notFound();
     }
     if (result.kind !== "download") return notFound();
-    const body = Uint8Array.from(result.response.bytes).buffer;
+    const responseBody = result.response.body ?? result.response.bytes;
+    if (responseBody === undefined) return notFound();
+    const body = responseBody instanceof Uint8Array
+      ? Uint8Array.from(responseBody).buffer
+      : responseBody;
     return new Response(body, {
       status: 200,
       headers: result.response.headers,

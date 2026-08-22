@@ -157,6 +157,9 @@ const METADATA_MUTATIONS = new Set([
   "reconcileCapacityUsage",
   "collectExpiredCapacityReservations",
   "releaseCapacityReservation",
+  "claimObjectCleanup",
+  "completeObjectCleanupBatch",
+  "failObjectCleanupBatch",
 ]);
 
 const TOKEN_MUTATIONS = new Set([

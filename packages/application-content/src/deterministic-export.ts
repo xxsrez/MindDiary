@@ -12,10 +12,13 @@ import {
   type SpaceId,
 } from "@mind-diary/domain";
 import {
+  collectOkfCrossLinkWarnings,
   OKF_VERSION,
+  parseOkfFile,
   validateOkfBundle,
   type OkfDiagnostic,
 } from "@mind-diary/okf-codec";
+import { IncrementalSha256 } from "./incremental-sha256.js";
 
 export const OKF_EXPORT_CONFIG = Object.freeze({
   archiveFormat: "MD-OKF-ZIP-1",
@@ -87,6 +90,18 @@ export interface ExactRevisionMaterializer {
   ): Promise<Readonly<ExportMaterializedRevision>>;
 }
 
+export interface ExactRevisionStreamReader {
+  readRevisionEnvelope(
+    spaceId: SpaceId,
+    revisionId: RevisionId,
+  ): Promise<Readonly<CanonicalRevisionEnvelope>>;
+  readRevisionFile(
+    spaceId: SpaceId,
+    revisionId: RevisionId,
+    path: string,
+  ): Promise<Readonly<ExportMaterializedRevisionFile> | null>;
+}
+
 export interface DeterministicOkfExport {
   readonly revisionId: RevisionId;
   readonly archiveFormat: ExportProfile;
@@ -103,11 +118,32 @@ export interface DeterministicOkfExport {
   readonly size: number;
 }
 
+export interface DeterministicExportChunkSink {
+  write(chunk: Uint8Array): Promise<void>;
+}
+
+export type StreamedDeterministicOkfExport = Omit<
+  DeterministicOkfExport,
+  "bytes"
+>;
+
 interface PreparedZipEntry {
   readonly path: string;
   readonly nameBytes: Uint8Array;
   readonly bytes: Uint8Array;
   readonly crc32: number;
+  localOffset: number;
+}
+
+interface StreamedZipEntry {
+  readonly path: string;
+  readonly nameBytes: Uint8Array;
+  readonly kind: "markdown" | "opaque" | "producer_manifest";
+  readonly mediaType: CanonicalObjectMediaType;
+  readonly sha256: Sha256Digest;
+  readonly size: number;
+  readonly crc32: number;
+  readonly generatedBytes: Uint8Array | null;
   localOffset: number;
 }
 
@@ -125,6 +161,7 @@ const ZIP_CENTRAL_HEADER_SIZE = 46;
 const ZIP_END_SIZE = 22;
 const ZIP_UINT16_MAX = 0xffff;
 const ZIP_UINT32_MAX = 0xffffffff;
+const EXPORT_STREAM_CHUNK_BYTES = 1_048_576;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -323,6 +360,66 @@ function writeCentralHeader(
   return offset + ZIP_CENTRAL_HEADER_SIZE + entry.nameBytes.byteLength;
 }
 
+function streamedLocalHeader(entry: StreamedZipEntry): Uint8Array {
+  const output = new Uint8Array(ZIP_LOCAL_HEADER_SIZE + entry.nameBytes.byteLength);
+  const view = new DataView(output.buffer);
+  view.setUint32(0, 0x04034b50, true);
+  view.setUint16(4, ZIP_VERSION_NEEDED, true);
+  view.setUint16(6, ZIP_UTF8_FLAG, true);
+  view.setUint16(8, ZIP_STORED_METHOD, true);
+  view.setUint16(10, ZIP_FIXED_TIME, true);
+  view.setUint16(12, ZIP_FIXED_DATE, true);
+  view.setUint32(14, entry.crc32, true);
+  view.setUint32(18, entry.size, true);
+  view.setUint32(22, entry.size, true);
+  view.setUint16(26, entry.nameBytes.byteLength, true);
+  view.setUint16(28, 0, true);
+  output.set(entry.nameBytes, ZIP_LOCAL_HEADER_SIZE);
+  return output;
+}
+
+function streamedCentralHeader(entry: StreamedZipEntry): Uint8Array {
+  const output = new Uint8Array(ZIP_CENTRAL_HEADER_SIZE + entry.nameBytes.byteLength);
+  const view = new DataView(output.buffer);
+  view.setUint32(0, 0x02014b50, true);
+  view.setUint16(4, ZIP_VERSION_MADE_BY_UNIX, true);
+  view.setUint16(6, ZIP_VERSION_NEEDED, true);
+  view.setUint16(8, ZIP_UTF8_FLAG, true);
+  view.setUint16(10, ZIP_STORED_METHOD, true);
+  view.setUint16(12, ZIP_FIXED_TIME, true);
+  view.setUint16(14, ZIP_FIXED_DATE, true);
+  view.setUint32(16, entry.crc32, true);
+  view.setUint32(20, entry.size, true);
+  view.setUint32(24, entry.size, true);
+  view.setUint16(28, entry.nameBytes.byteLength, true);
+  view.setUint16(30, 0, true);
+  view.setUint16(32, 0, true);
+  view.setUint16(34, 0, true);
+  view.setUint16(36, 0, true);
+  view.setUint32(38, ZIP_REGULAR_FILE_0644, true);
+  view.setUint32(42, entry.localOffset, true);
+  output.set(entry.nameBytes, ZIP_CENTRAL_HEADER_SIZE);
+  return output;
+}
+
+function streamedEndRecord(
+  entryCount: number,
+  centralSize: number,
+  localSize: number,
+): Uint8Array {
+  const output = new Uint8Array(ZIP_END_SIZE);
+  const view = new DataView(output.buffer);
+  view.setUint32(0, 0x06054b50, true);
+  view.setUint16(4, 0, true);
+  view.setUint16(6, 0, true);
+  view.setUint16(8, entryCount, true);
+  view.setUint16(10, entryCount, true);
+  view.setUint32(12, centralSize, true);
+  view.setUint32(16, localSize, true);
+  view.setUint16(20, 0, true);
+  return output;
+}
+
 function createDeterministicZip(
   files: readonly Readonly<ExportMaterializedRevisionFile>[],
   profile: ExportProfile,
@@ -394,15 +491,18 @@ function mapMaterializationFailure(error: unknown): never {
   throw error;
 }
 
-function sortedByUnsignedUtf8(
-  files: readonly Readonly<ExportMaterializedRevisionFile>[],
-): readonly Readonly<ExportMaterializedRevisionFile>[] {
+function sortedByUnsignedUtf8<T extends Readonly<{ readonly path: string }>>(
+  files: readonly T[],
+): readonly T[] {
   return Object.freeze([...files].sort((left, right) =>
     compareBytes(ENCODER.encode(left.path), ENCODER.encode(right.path))));
 }
 
 function bundleManifestBytes(
-  files: readonly Readonly<ExportMaterializedRevisionFile>[],
+  files: readonly Readonly<Pick<
+    ExportMaterializedRevisionFile,
+    "path" | "kind" | "mediaType" | "sha256" | "size"
+  >>[],
 ): Uint8Array {
   const manifest = {
     format: "mind-diary-bundle-export-manifest-v1",
@@ -418,9 +518,20 @@ function bundleManifestBytes(
   return ENCODER.encode(`${JSON.stringify(manifest)}\n`);
 }
 
+function exactRevisionStreamReader(
+  value: ExactRevisionMaterializer,
+): ExactRevisionStreamReader | null {
+  const candidate = value as Partial<ExactRevisionStreamReader>;
+  return typeof candidate.readRevisionEnvelope === "function" &&
+    typeof candidate.readRevisionFile === "function"
+    ? candidate as ExactRevisionStreamReader
+    : null;
+}
+
 export class DeterministicOkfExportService {
   readonly #materializer: ExactRevisionMaterializer;
   readonly #digest: Pick<ObjectStore, "calculateSha256">;
+  readonly #streamReader: ExactRevisionStreamReader | null;
 
   constructor(dependencies: {
     readonly materializer: ExactRevisionMaterializer;
@@ -428,6 +539,7 @@ export class DeterministicOkfExportService {
   }) {
     this.#materializer = dependencies.materializer;
     this.#digest = dependencies.digest;
+    this.#streamReader = exactRevisionStreamReader(dependencies.materializer);
   }
 
   async exportExactRevision(request: unknown): Promise<DeterministicOkfExport> {
@@ -559,5 +671,265 @@ export class DeterministicOkfExportService {
       sha256,
       size: bytes.byteLength,
     });
+  }
+
+  async writeExactRevision(
+    request: unknown,
+    sink: DeterministicExportChunkSink,
+  ): Promise<StreamedDeterministicOkfExport> {
+    if (typeof sink?.write !== "function") {
+      throw new OkfExportError("invalid_request", "export chunk sink is required");
+    }
+    if (this.#streamReader === null) {
+      const built = await this.exportExactRevision(request);
+      await sink.write(new Uint8Array(built.bytes));
+      const { bytes: _bytes, ...metadata } = built;
+      return Object.freeze(metadata);
+    }
+
+    const parsed = parseRequest(request);
+    let envelope: Readonly<CanonicalRevisionEnvelope>;
+    try {
+      envelope = await this.#streamReader.readRevisionEnvelope(
+        parsed.spaceId,
+        parsed.revisionId,
+      );
+    } catch (error) {
+      mapMaterializationFailure(error);
+    }
+    if (
+      envelope.revision.spaceId !== parsed.spaceId ||
+      envelope.revision.revisionId !== parsed.revisionId
+    ) {
+      throw new OkfExportError(
+        "revision_integrity_failure",
+        "stream reader returned a different immutable revision than requested",
+      );
+    }
+    const config = parsed.profile === BUNDLE_EXPORT_CONFIG.archiveFormat
+      ? BUNDLE_EXPORT_CONFIG
+      : OKF_EXPORT_CONFIG;
+    if (
+      parsed.profile === OKF_EXPORT_CONFIG.archiveFormat &&
+      envelope.manifest.entries.some((entry) => entry.kind !== "markdown")
+    ) {
+      throw new OkfExportError(
+        "export_profile_required",
+        "mixed revisions require the explicit MD-BUNDLE-ZIP-1 export profile",
+      );
+    }
+    if (
+      parsed.profile === BUNDLE_EXPORT_CONFIG.archiveFormat &&
+      envelope.manifest.entries.some((entry) => entry.path === ".mind-diary/manifest.json")
+    ) {
+      throw new OkfExportError(
+        "revision_integrity_failure",
+        "exact revision collides with the reserved producer manifest path",
+      );
+    }
+
+    const generatedManifest = parsed.profile === BUNDLE_EXPORT_CONFIG.archiveFormat
+      ? bundleManifestBytes(envelope.manifest.entries)
+      : null;
+    const projected = [
+      ...envelope.manifest.entries.map((entry) => ({
+        path: entry.path,
+        kind: entry.kind,
+        mediaType: entry.mediaType,
+        sha256: entry.sha256,
+        size: entry.size,
+        generatedBytes: null as Uint8Array | null,
+      })),
+      ...(generatedManifest === null
+        ? []
+        : [{
+            path: ".mind-diary/manifest.json",
+            kind: "producer_manifest" as const,
+            mediaType: MARKDOWN_MEDIA_TYPE,
+            sha256: await this.#digest.calculateSha256(generatedManifest),
+            size: generatedManifest.byteLength,
+            generatedBytes: generatedManifest,
+          }]),
+    ];
+    if (projected.length > ZIP_UINT16_MAX) {
+      throw new OkfExportError(
+        "archive_limit_exceeded",
+        "deterministic export supports at most 65535 entries",
+      );
+    }
+    const markdownPaths = envelope.manifest.entries
+      .filter((entry) => entry.kind === "markdown")
+      .map((entry) => entry.path);
+    const streamedEntries: StreamedZipEntry[] = [];
+    const conformanceErrors: OkfDiagnostic[] = [];
+    const seen = new Set<string>();
+
+    for (const entry of projected) {
+      let canonicalPath: string;
+      try {
+        canonicalPath = entry.kind === "producer_manifest"
+          ? entry.path
+          : entry.kind === "opaque"
+            ? canonicalBundleFilePath(entry.path)
+            : canonicalMarkdownPath(entry.path);
+      } catch {
+        throw new OkfExportError(
+          "revision_integrity_failure",
+          "exact revision contains a non-canonical export path",
+        );
+      }
+      if (seen.has(canonicalPath)) {
+        throw new OkfExportError(
+          "revision_integrity_failure",
+          "exact revision contains duplicate export paths",
+        );
+      }
+      seen.add(canonicalPath);
+      const nameBytes = ENCODER.encode(canonicalPath);
+      if (nameBytes.byteLength === 0 || nameBytes.byteLength > ZIP_UINT16_MAX) {
+        throw new OkfExportError(
+          "archive_limit_exceeded",
+          "deterministic export entry path exceeds the classic ZIP name limit",
+        );
+      }
+      if (entry.size > ZIP_UINT32_MAX) {
+        throw new OkfExportError(
+          "archive_limit_exceeded",
+          "deterministic export does not use ZIP64 file sizes",
+        );
+      }
+      const bytes = entry.generatedBytes ?? await this.#readStreamedFile(
+        parsed.spaceId,
+        parsed.revisionId,
+        entry,
+      );
+      if (entry.kind === "markdown") {
+        const result = parseOkfFile({ path: canonicalPath, bytes });
+        conformanceErrors.push(...result.diagnostics.filter(
+          (diagnostic) => diagnostic.severity === "error",
+        ));
+        if (result.file !== null) {
+          // Cross-links are quality-only in OKF 0.2; evaluate them one file at
+          // a time against the complete manifest projection without retaining
+          // every Markdown body in memory.
+          collectOkfCrossLinkWarnings([result.file], markdownPaths);
+        }
+      }
+      streamedEntries.push({
+        path: canonicalPath,
+        nameBytes,
+        kind: entry.kind,
+        mediaType: entry.mediaType,
+        sha256: entry.sha256,
+        size: entry.size,
+        crc32: calculateCrc32(bytes),
+        generatedBytes: entry.generatedBytes,
+        localOffset: 0,
+      });
+    }
+    if (conformanceErrors.length > 0) {
+      throw new OkfExportError(
+        "okf_validation_failed",
+        "exact revision does not pass full-bundle OKF 0.2 validation",
+        conformanceErrors,
+      );
+    }
+
+    streamedEntries.sort((left, right) => compareBytes(left.nameBytes, right.nameBytes));
+    let localSize = 0;
+    for (const entry of streamedEntries) {
+      entry.localOffset = localSize;
+      localSize = checkedZipTotal(
+        localSize,
+        ZIP_LOCAL_HEADER_SIZE + entry.nameBytes.byteLength + entry.size,
+      );
+    }
+    let centralSize = 0;
+    for (const entry of streamedEntries) {
+      centralSize = checkedZipTotal(
+        centralSize,
+        ZIP_CENTRAL_HEADER_SIZE + entry.nameBytes.byteLength,
+      );
+    }
+    const totalSize = checkedZipTotal(
+      checkedZipTotal(localSize, centralSize),
+      ZIP_END_SIZE,
+    );
+    const digest = new IncrementalSha256();
+    let written = 0;
+    const emit = async (chunk: Uint8Array) => {
+      if (chunk.byteLength === 0) return;
+      digest.update(chunk);
+      written = checkedZipTotal(written, chunk.byteLength);
+      await sink.write(new Uint8Array(chunk));
+    };
+    for (const entry of streamedEntries) {
+      await emit(streamedLocalHeader(entry));
+      const bytes = entry.generatedBytes ?? await this.#readStreamedFile(
+        parsed.spaceId,
+        parsed.revisionId,
+        entry,
+      );
+      for (let offset = 0; offset < bytes.byteLength; offset += EXPORT_STREAM_CHUNK_BYTES) {
+        await emit(bytes.subarray(offset, offset + EXPORT_STREAM_CHUNK_BYTES));
+      }
+    }
+    for (const entry of streamedEntries) await emit(streamedCentralHeader(entry));
+    await emit(streamedEndRecord(streamedEntries.length, centralSize, localSize));
+    if (written !== totalSize) {
+      throw new OkfExportError(
+        "revision_integrity_failure",
+        "streamed deterministic ZIP size differs from its planned size",
+      );
+    }
+    return Object.freeze({
+      revisionId: parsed.revisionId,
+      archiveFormat: config.archiveFormat,
+      mediaType: config.mediaType,
+      filename: config.filename,
+      contentDisposition: config.contentDisposition,
+      validatedOkfVersion: OKF_VERSION,
+      sha256: digest.digest(),
+      size: written,
+    });
+  }
+
+  async #readStreamedFile(
+    spaceId: SpaceId,
+    revisionId: RevisionId,
+    entry: Readonly<{
+      path: string;
+      kind: "markdown" | "opaque" | "producer_manifest";
+      mediaType: CanonicalObjectMediaType;
+      sha256: Sha256Digest;
+      size: number;
+    }>,
+  ): Promise<Uint8Array> {
+    if (entry.kind === "producer_manifest" || this.#streamReader === null) {
+      throw new OkfExportError(
+        "revision_integrity_failure",
+        "producer manifest bytes must be supplied by the export planner",
+      );
+    }
+    let file: Readonly<ExportMaterializedRevisionFile> | null;
+    try {
+      file = await this.#streamReader.readRevisionFile(spaceId, revisionId, entry.path);
+    } catch (error) {
+      mapMaterializationFailure(error);
+    }
+    const kind = file?.kind ?? "markdown";
+    if (
+      file === null || kind !== entry.kind || file.path !== entry.path ||
+      file.mediaType !== entry.mediaType || file.sha256 !== entry.sha256 ||
+      file.size !== entry.size || !(file.bytes instanceof Uint8Array) ||
+      file.bytes.byteLength !== entry.size ||
+      await this.#digest.calculateSha256(file.bytes) !== entry.sha256
+    ) {
+      throw new OkfExportError(
+        "revision_integrity_failure",
+        "exact revision object differs from its immutable manifest",
+      );
+    }
+    return new Uint8Array(file.bytes);
   }
 }

@@ -9,6 +9,7 @@ import { createWebCryptoExportDownloadSecretCrypto } from "@mind-diary/adapter-s
 import {
   ExportJobExpiryHandler,
   ExportJobHandler,
+  BoundedObjectCleanupHandler,
   SpaceTargetRecordPurgeService,
 } from "@mind-diary/application-background";
 import {
@@ -535,8 +536,23 @@ test("expiry and cleanup are durable, observable and idempotent", async () => {
   });
   assert.deepEqual(
     await expiry.handle({ actor: workerActor(at(5_000)), jobId: started.job.jobId }),
-    { kind: "completed" },
+    { kind: "not_available" },
   );
+  const cleanup = await new BoundedObjectCleanupHandler({
+    objects: env.objects,
+    checkpoints: env.metadata,
+    reachability: env.metadata,
+    staging: env.metadata,
+    exports: env.metadata,
+    clock: env.clock,
+    monotonicNow: () => 0,
+  }).handle({
+    actor: workerActor(at(5_000)),
+    createdBefore: FIXED_NOW,
+    maxObjects: 100,
+    maxDurationMs: 1_000,
+  });
+  assert.equal(cleanup.deleted, 1);
   const status = await env.application().getStatus({
     actor: env.actor,
     jobId: started.job.jobId,

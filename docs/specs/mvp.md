@@ -116,8 +116,9 @@ usage reservations, streaming cleanup/export and resumable import должны �
   включает ZIP/local bundle import, extraction или migration.
 - Accepted Brain-scale extension хранит new v3 manifest separately from
   Space-scoped content objects, reuses unchanged digests and admits bounded
-  Markdown-only import through one final HEAD CAS. Until MD-265–MD-268 pass,
-  this is normative target rather than implemented behavior.
+  Markdown-only import through one final HEAD CAS. MD-265, MD-266 и MD-268
+  реализованы в local candidate; import MD-267 и exact-SHA UAT evidence ещё
+  остаются normative target, а не проверенным deployed behavior.
 - Unified revision manifest v2 фиксирует path, `kind: markdown | opaque`,
   SHA-256, detected media type и byte size. Existing committed manifest v1
   остаётся immutable/readable как Markdown-only.
@@ -582,7 +583,8 @@ residual risk ограничивается explicit write scope, current ACL, hi
 - **import (accepted, not implemented):** plan/reserve/stage/validate/commit/
   cancel через narrow Sites UI write ingress и один content HEAD CAS;
 - **background:** index/import jobs, garbage collection недостижимых incomplete
-  objects, audit delivery.
+  objects, audit delivery. Текущий candidate выполняет export streaming и
+  bounded object cleanup; import jobs остаются accepted, not implemented.
 
 Initial revision Personal и ordinary Mind получает durable queued index
 state/job в той же metadata transaction. Sites Worker выполняет bounded

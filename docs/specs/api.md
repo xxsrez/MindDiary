@@ -23,8 +23,9 @@ exact-SHA UAT остаётся MD-250. Поэтому deployed claims пока �
 ADR-0016 and
 [Sites storage/capacity/import specification](sites-storage-capacity-import.md)
 принимают следующую application/wire boundary для usage, reservations and
-Markdown import. Она пока `not_started`: current schemas/tool catalog не
-публикуют import session APIs, а прежний UAT deployment не является evidence.
+Markdown import. MD-265/MD-266/MD-268 storage, capacity и streaming
+export/cleanup реализованы в local candidate; import session APIs MD-267 ещё не
+публикуются, а прежний UAT deployment не является evidence нового candidate.
 
 ## Назначение и граница
 
@@ -2232,6 +2233,11 @@ secret являются consume-on-response material: они не сохраня
 safe status projection, audit, logs или traces. После expiry новый URL требует
 новой authorization.
 Большой archive никогда не вкладывается в JSON-RPC response.
+Worker читает exact manifest без whole-corpus materialization, проверяет каждый
+canonical object отдельно и пишет deterministic ZIP в 1 MiB application chunks,
+которые Sites adapter собирает в deterministic 4 MiB R2 parts. Interrupted
+attempt сохраняет уже verified parts для fenced retry; completed claim хранит
+малый manifest с exact overall SHA-256/size и ordered part digests.
 
 Download response для успешного grant использует exact `media_type`,
 `filename` и `content_disposition` из job result, точный `Content-Length`,
@@ -2240,6 +2246,9 @@ Download response для успешного grant использует exact `me
 server повторно проверяет current principal read access к exact revision и
 состояние job/grant. Revoked membership, public/unlisted → private для baseline
 Reader, expired job/grant, удалённый или повреждённый archive fail closed.
+Sites download возвращает `ReadableStream` и проверяет size/SHA-256 каждого R2
+part; application сопоставляет overall digest/size с durable succeeded job до
+response и выполняет final authorization recheck.
 `MD-OKF-ZIP-1` — classic ZIP без compression: paths остаются bundle-relative
 UTF-8, entries отсортированы по unsigned UTF-8 bytes, DOS time фиксирован в
 `1980-01-01T00:00:00`, regular-file mode — `0644`, extra/comment/directory

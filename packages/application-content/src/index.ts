@@ -805,6 +805,14 @@ export class CanonicalRevisionCoordinator {
     return revisionId === null ? null : this.#readVerifiedEnvelope(spaceId, revisionId);
   }
 
+  /** Reads one exact verified manifest without materializing its corpus. */
+  async readRevisionEnvelope(
+    spaceId: SpaceId,
+    revisionId: RevisionId,
+  ): Promise<Readonly<CanonicalRevisionEnvelope>> {
+    return this.#readVerifiedEnvelope(spaceId, revisionId);
+  }
+
   async readRevisionFile(
     spaceId: SpaceId,
     revisionId: RevisionId,
@@ -1015,3 +1023,4 @@ export * from "./deterministic-export.js";
 export * from "./export-jobs.js";
 export * from "./idempotency.js";
 export * from "./capacity.js";
+export * from "./incremental-sha256.js";

@@ -24,9 +24,10 @@ ledger/reservations, delta-aware commits и bounded Markdown import. MD-265
 реализует Space-scoped objects/manifests, delta-aware commit/read/GC и legacy
 v1/v2 dual read в текущем repository candidate. Reconstructable accounting,
 durable reservations, admission/fairness, cleanup и privacy-safe usage surfaces
-из MD-266 также реализованы. Streaming export/cleanup и import из MD-268/MD-267
-ещё не реализованы; UAT
-evidence для всего extension отсутствует.
+из MD-266 также реализованы. MD-268 реализует в текущем repository candidate
+streaming deterministic export/download и D1-checkpointed bounded R2 cleanup;
+Markdown import из MD-267 ещё не реализован. UAT evidence для всего extension
+отсутствует.
 
 ## Драйверы и ограничения
 
@@ -638,8 +639,11 @@ explicit target Mind. General cross-Mind search/synthesis требует нов�
   reads parent manifest plus touched bytes and writes delta + one manifest.
   Текущий repository candidate реализует content/manifest delta path, exact
   historical materialization, v1/v2 dual read и safe orphan cleanup. Historical
-  index остаётся derived surface, usage/reservations реализованы; streaming
-  export/cleanup и import остаются последующими MD-268/MD-267;
+  index остаётся derived surface, usage/reservations реализованы. Export читает
+  одну immutable file за раз, пишет deterministic 4 MiB R2 parts и отдаёт их
+  download stream; cleanup проходит R2 namespaces страницами по одному object,
+  хранит lease/cursor в D1 и повторно сверяет refcounts, staging/export roots и
+  CAS fence. Import остаётся последующим MD-267;
   current-SHA UAT gate для реализованной части ещё не пройден.
 - Trusted Sites identity, browser CSRF/Origin и Bearer content MCP остаются
   разными security boundaries; browser не рендерит raw Markdown, MCP не
@@ -657,8 +661,8 @@ explicit target Mind. General cross-Mind search/synthesis требует нов�
   with ChatGPT.
 - UAT Site использует D1/R2 bindings; их live availability и
   persistence-after-redeploy проверены. Accepted Brain-scale quota,
-  reservation/admission реализованы локально; import and bounded recovery
-  contract остаётся частично нереализованным и требует own exact-candidate UAT
+  reservation/admission и bounded export/cleanup реализованы локально; import
+  остаётся нереализованным, а весь extension требует own exact-candidate UAT
   evidence.
 - Streamable HTTP MCP реализован в том же Worker по non-reserved paths;
   Sites proxy/runtime compatibility подтверждена raw modern и реальными Codex

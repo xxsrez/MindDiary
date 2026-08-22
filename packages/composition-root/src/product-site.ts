@@ -54,6 +54,7 @@ import {
 import {
   AuditOutboxDeliveryHandler,
   BackgroundPrivacySafeObservability,
+  BoundedObjectCleanupHandler,
   ExportJobExpiryHandler,
   ExportJobHandler,
   InvitationExpiryJobHandler,
@@ -163,6 +164,8 @@ export interface ProductSiteRuntime {
     backfilled: number;
     dispatched: number;
     failed: number;
+    cleanupDeleted: number;
+    cleanupReclaimedBytes: number;
   }>>;
   readonly dispatchBackground: (work: Readonly<
     | { readonly kind: "revision_index"; readonly jobId: string }
@@ -1206,6 +1209,15 @@ export async function createProductSiteRuntime(
   const auditJobs = new AuditOutboxDeliveryHandler({ work: metadata, audit, clock });
   const invitationJobs = new InvitationExpiryJobHandler({ jobs: metadata, clock });
   const exportExpiry = new ExportJobExpiryHandler({ jobs: metadata, archives: objects, clock });
+  const objectCleanup = new BoundedObjectCleanupHandler({
+    objects,
+    checkpoints: metadata,
+    reachability: metadata,
+    staging: metadata,
+    exports: metadata,
+    clock,
+    observability: backgroundObservability,
+  });
   const dispatchBackground = createProductBackgroundDispatcher({
     serviceId: "mind-diary-sites-background",
     now: clock.now,
@@ -1335,10 +1347,39 @@ export async function createProductSiteRuntime(
       due.map((job) =>
         dispatchBackground({ kind: "revision_index", jobId: job.jobId })),
     );
+    let cleanupDeleted = 0;
+    let cleanupReclaimedBytes = 0;
+    let cleanupFailures = 0;
+    try {
+      const staged = await bundleFileStaging.collectExpired();
+      cleanupDeleted += staged.deleted;
+      cleanupReclaimedBytes += staged.bytes;
+      const cleanupActor = createBackgroundServiceActor({
+        serviceId: "mind-diary-sites-object-cleanup",
+        requestId: nextOpaque("background-request"),
+        occurredAtUtc: clock.now(),
+        deploymentCapabilities: Object.freeze([]),
+      });
+      const cleaned = await objectCleanup.handle({
+        actor: cleanupActor,
+        createdBefore: new Date(
+          Date.parse(nowUtc) - BUNDLE_FILE_LIMITS.gcSafetyMilliseconds,
+        ).toISOString(),
+        maxObjects: limit,
+        maxBytes: BUNDLE_FILE_LIMITS.gcMaxBytes,
+        maxDurationMs: 5_000,
+      });
+      cleanupDeleted += cleaned.deleted;
+      cleanupReclaimedBytes += cleaned.reclaimedBytes;
+    } catch {
+      cleanupFailures = 1;
+    }
     return Object.freeze({
       backfilled,
       dispatched: results.length,
-      failed: results.filter((result) => result.status === "rejected").length,
+      failed: results.filter((result) => result.status === "rejected").length + cleanupFailures,
+      cleanupDeleted,
+      cleanupReclaimedBytes,
     });
   };
 

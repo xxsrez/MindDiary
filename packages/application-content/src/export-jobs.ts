@@ -107,7 +107,9 @@ export interface ExportDownloadResponse {
     readonly "X-Content-Type-Options": "nosniff";
     readonly "Referrer-Policy": "no-referrer";
   }>;
-  readonly bytes: Uint8Array;
+  readonly body: Uint8Array | ReadableStream<Uint8Array>;
+  /** Present for bounded legacy/in-memory archives; Sites streams the body. */
+  readonly bytes?: Uint8Array;
 }
 
 export type StartExportResult =
@@ -287,7 +289,8 @@ export class ExportJobApplicationService {
   readonly #backgroundAuthorizer: BackgroundAuthorizer;
   readonly #metadata: ExportDownloadGrantStore;
   readonly #digest: Pick<ObjectStore, "calculateSha256">;
-  readonly #archives: Pick<ExportArchiveStore, "readExportArchive">;
+  readonly #archives: Pick<ExportArchiveStore, "readExportArchive"> &
+    Partial<Pick<ExportArchiveStore, "openExportArchive">>;
   readonly #clock: Clock;
   readonly #jobIds: ExportJobIdGenerator;
   readonly #downloadSecretCrypto: ExportDownloadSecretCrypto;
@@ -302,7 +305,8 @@ export class ExportJobApplicationService {
     readonly backgroundAuthorizer: BackgroundAuthorizer;
     readonly metadata: ExportDownloadGrantStore;
     readonly digest: Pick<ObjectStore, "calculateSha256">;
-    readonly archives: Pick<ExportArchiveStore, "readExportArchive">;
+    readonly archives: Pick<ExportArchiveStore, "readExportArchive"> &
+      Partial<Pick<ExportArchiveStore, "openExportArchive">>;
     readonly clock: Clock;
     readonly jobIds: ExportJobIdGenerator;
     readonly downloadSecretCrypto: ExportDownloadSecretCrypto;
@@ -602,13 +606,30 @@ export class ExportJobApplicationService {
       await this.#metadata.revokeExportDownloadGrant(verifier, this.#clock.now());
       return Object.freeze({ kind: "not_found" });
     }
-    let bytes: Uint8Array | null;
+    let opened: Awaited<ReturnType<ExportArchiveStore["openExportArchive"]>>;
     try {
-      bytes = await this.#archives.readExportArchive(grant.objectKey);
+      if (this.#archives.openExportArchive !== undefined) {
+        opened = await this.#archives.openExportArchive(grant.objectKey);
+      } else {
+        const bytes = await this.#archives.readExportArchive(grant.objectKey);
+        opened = bytes === null
+          ? null
+          : Object.freeze({
+              // Preserve the bounded legacy adapter contract: it historically
+              // authenticated the claim and checked the exact stored size.
+              // Streaming stores provide their independently persisted digest.
+              sha256: job!.archive!.sha256,
+              size: bytes.byteLength,
+              body: bytes,
+            });
+      }
     } catch {
-      bytes = null;
+      opened = null;
     }
-    if (bytes === null || bytes.byteLength !== job!.archive!.size) {
+    if (
+      opened === null || opened.size !== job!.archive!.size ||
+      opened.sha256 !== job!.archive!.sha256
+    ) {
       await this.#metadata.revokeExportDownloadGrant(verifier, this.#clock.now());
       return Object.freeze({ kind: "not_found" });
     }
@@ -645,7 +666,12 @@ export class ExportJobApplicationService {
           "X-Content-Type-Options": "nosniff",
           "Referrer-Policy": "no-referrer",
         }),
-        bytes: new Uint8Array(bytes),
+        body: opened.body instanceof Uint8Array
+          ? new Uint8Array(opened.body)
+          : opened.body,
+        ...(opened.body instanceof Uint8Array
+          ? { bytes: new Uint8Array(opened.body) }
+          : {}),
       }),
     });
   }

@@ -7,9 +7,10 @@ Space-scoped content objects, separately digested v3 manifests, delta-aware
 commit/read/GC и совместимое чтение legacy v1/v2 revisions. Reconstructable
 accounting, durable reservations, admission для commit/stage/export, fairness,
 bounded reservation cleanup, privacy-safe Owner usage и aggregate telemetry из
-MD-266 реализованы в текущем repository candidate. Streaming export/cleanup и
-import из MD-268/MD-267 ещё не реализованы; весь extension пока не проверен на
-exact UAT deployment.
+MD-266 реализованы в текущем repository candidate. Streaming export/download и
+D1-checkpointed bounded cleanup из MD-268 также реализованы локально; import из
+MD-267 ещё не реализован, а весь extension пока не проверен на exact UAT
+deployment.
 
 ## Цель и граница
 

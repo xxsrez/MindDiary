@@ -1150,6 +1150,14 @@ export interface CanonicalObjectReachabilityReader {
     spaceId: SpaceId;
     sha256: Sha256Digest;
   }>[]>;
+  /** Point checks let bounded GC avoid materializing the global reachability set. */
+  isImmutableObjectReachable(sha256: Sha256Digest): Promise<boolean>;
+  isBundleFileObjectReachable(spaceId: SpaceId, sha256: Sha256Digest): Promise<boolean>;
+  isSpaceCanonicalObjectReachable(
+    kind: SpaceCanonicalObjectKind,
+    spaceId: SpaceId,
+    sha256: Sha256Digest,
+  ): Promise<boolean>;
 }
 
 /** Atomic handle, metadata, Owner, revision/HEAD and idempotency boundary. */
@@ -1569,17 +1577,162 @@ export type ExportArchivePutResult =
     }
   | { readonly kind: "digest_mismatch" | "object_key_collision" };
 
+export interface ExportArchiveUploadRequest {
+  readonly jobId: JobId;
+  readonly spaceId: SpaceId;
+  readonly claimVersion: Version;
+  readonly archiveFormat: "MD-OKF-ZIP-1" | "MD-BUNDLE-ZIP-1";
+  readonly filename: "mind-diary-okf-bundle.zip" | "mind-diary-bundle.zip";
+  readonly contentDisposition:
+    | 'attachment; filename="mind-diary-okf-bundle.zip"'
+    | 'attachment; filename="mind-diary-bundle.zip"';
+  readonly createdAt: UtcInstant;
+}
+
+/** Bounded writer; Sites persists deterministic parts instead of buffering one archive. */
+export interface ExportArchiveUpload {
+  write(chunk: Uint8Array): Promise<void>;
+  complete(request: Readonly<{
+    sha256: Sha256Digest;
+    size: number;
+  }>): Promise<ExportArchivePutResult>;
+  abort(): Promise<void>;
+}
+
+export interface OpenedExportArchive {
+  readonly sha256: Sha256Digest;
+  readonly size: number;
+  readonly body: Uint8Array | ReadableStream<Uint8Array>;
+}
+
 /** Binary export namespace; it is intentionally separate from canonical Markdown. */
 export interface ExportArchiveStore {
   readonly kind: "object-store";
   putExportArchive(
     request: ExportArchiveWriteRequest,
   ): Promise<ExportArchivePutResult>;
+  beginExportArchiveUpload(
+    request: Readonly<ExportArchiveUploadRequest>,
+  ): Promise<ExportArchiveUpload>;
+  openExportArchive(objectKey: string): Promise<Readonly<OpenedExportArchive> | null>;
   readExportArchive(objectKey: string): Promise<Uint8Array | null>;
   deleteExportArchive(objectKey: string): Promise<boolean>;
+  /** One bounded prefix lookup; never scans the global export namespace. */
+  hasExportArchivesForJob(jobId: JobId, spaceId: SpaceId): Promise<boolean>;
   /** Idempotent cleanup of completed and orphaned claim-scoped archives. */
   deleteExportArchivesForJob(jobId: JobId): Promise<number>;
   deleteExportArchivesForSpace(spaceId: SpaceId): Promise<number>;
+}
+
+export const OBJECT_CLEANUP_NAMESPACES = [
+  "immutable",
+  "bundle_file",
+  "space_canonical",
+  "staged_bundle",
+  "export",
+] as const;
+
+export type ObjectCleanupNamespace = (typeof OBJECT_CLEANUP_NAMESPACES)[number];
+
+interface ObjectCleanupCandidateBase {
+  /** Adapter-owned locator. It is never emitted to telemetry or user surfaces. */
+  readonly objectKey: string;
+  /** CAS fence captured by the bounded listing operation. */
+  readonly fence: string;
+  readonly size: number;
+  readonly createdAt: UtcInstant;
+}
+
+export type ObjectCleanupCandidate =
+  | (ObjectCleanupCandidateBase & {
+      readonly namespace: "immutable";
+      readonly sha256: Sha256Digest;
+      readonly protectedAt: UtcInstant;
+    })
+  | (ObjectCleanupCandidateBase & {
+      readonly namespace: "bundle_file";
+      readonly spaceId: SpaceId;
+      readonly sha256: Sha256Digest;
+      readonly protectedAt: UtcInstant;
+    })
+  | (ObjectCleanupCandidateBase & {
+      readonly namespace: "space_canonical";
+      readonly kind: SpaceCanonicalObjectKind;
+      readonly spaceId: SpaceId;
+      readonly sha256: Sha256Digest;
+      readonly protectedAt: UtcInstant;
+    })
+  | (ObjectCleanupCandidateBase & {
+      readonly namespace: "staged_bundle";
+      readonly stagedFileId: StagedBundleFileId;
+      readonly spaceId: SpaceId;
+    })
+  | (ObjectCleanupCandidateBase & {
+      readonly namespace: "export";
+      readonly jobId: JobId;
+      readonly spaceId: SpaceId;
+    });
+
+export interface ObjectCleanupPage {
+  readonly candidates: readonly Readonly<ObjectCleanupCandidate>[];
+  /** Opaque durable adapter cursor, or null when the namespace page cycle ended. */
+  readonly nextCursor: string | null;
+  readonly listed: number;
+}
+
+export interface ObjectCleanupCheckpoint {
+  readonly version: Version;
+  readonly namespace: ObjectCleanupNamespace;
+  readonly cursor: string | null;
+  readonly cycleStartedAt: UtcInstant;
+  readonly updatedAt: UtcInstant;
+  readonly leaseExpiresAt: UtcInstant | null;
+  readonly retries: number;
+  readonly failures: number;
+}
+
+export type ClaimObjectCleanupResult =
+  | {
+      readonly kind: "claimed";
+      readonly checkpoint: Readonly<ObjectCleanupCheckpoint>;
+      readonly reclaimedLease: boolean;
+    }
+  | { readonly kind: "busy" };
+
+/**
+ * Durable, cursor-paged object maintenance boundary. Implementations must keep
+ * each list bounded and fence deletes against writes after the selected safety
+ * boundary.
+ */
+export interface BoundedObjectCleanupStore {
+  listObjectCleanupPage(request: Readonly<{
+    namespace: ObjectCleanupNamespace;
+    cursor: string | null;
+    limit: number;
+  }>): Promise<Readonly<ObjectCleanupPage>>;
+  deleteObjectCleanupCandidate(request: Readonly<{
+    candidate: Readonly<ObjectCleanupCandidate>;
+    createdBefore: UtcInstant;
+  }>): Promise<boolean>;
+}
+
+/** D1 authority for the singleton bounded-cleanup cursor and worker lease. */
+export interface ObjectCleanupCheckpointStore {
+  claimObjectCleanup(request: Readonly<{
+    now: UtcInstant;
+    leaseExpiresAt: UtcInstant;
+  }>): Promise<ClaimObjectCleanupResult>;
+  completeObjectCleanupBatch(request: Readonly<{
+    expectedVersion: Version;
+    namespace: ObjectCleanupNamespace;
+    cursor: string | null;
+    cycleStartedAt: UtcInstant;
+    completedAt: UtcInstant;
+  }>): Promise<boolean>;
+  failObjectCleanupBatch(request: Readonly<{
+    expectedVersion: Version;
+    failedAt: UtcInstant;
+  }>): Promise<boolean>;
 }
 
 export type RevisionCommitResult =
@@ -3173,6 +3326,11 @@ export const PRIVACY_SAFE_OPERATIONAL_METRICS = [
   "rate_limit",
   "storage_cost_bytes",
   "query_cost_units",
+  "cleanup_queue_age_ms",
+  "cleanup_reclaimed_bytes",
+  "cleanup_orphan_count",
+  "cleanup_retry_count",
+  "cleanup_failure_count",
 ] as const;
 
 export const PRIVACY_SAFE_PILOT_METRICS = [
@@ -3233,6 +3391,7 @@ export const PRIVACY_SAFE_OBSERVABILITY_OPERATIONS = [
   "write",
   "history",
   "storage",
+  "cleanup",
   "citation",
 ] as const;
 

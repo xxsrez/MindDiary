@@ -61,6 +61,7 @@ import type {
   CompleteIdempotencyResult,
   ClaimAuditOutboxResult,
   ClaimExportJobResult,
+  ClaimObjectCleanupResult,
   ClaimIndexJobResult,
   ContentCommitMetadataStore,
   ContentCommitMetadataTransaction,
@@ -162,6 +163,9 @@ import type {
   OrdinaryMindRouteSnapshot,
   OrdinaryMindSnapshot,
   OrdinaryMindStore,
+  ObjectCleanupCheckpoint,
+  ObjectCleanupCheckpointStore,
+  ObjectCleanupNamespace,
   OwnershipTransferSnapshot,
   RenameOrdinaryMindRequest,
   RenameOrdinaryMindResult,
@@ -178,6 +182,7 @@ import type {
 } from "@mind-diary/application-ports";
 import {
   DomainInvariantError,
+  OBJECT_CLEANUP_NAMESPACES,
   PrincipalAccount,
   REVISION_MANIFEST_FORMAT_V3,
   SpaceAggregate,
@@ -3924,6 +3929,75 @@ function validCapacityAdmissionRequest(request: Readonly<CapacityAdmissionReques
     Date.parse(request.expiresAt) > Date.parse(request.createdAt);
 }
 
+interface ObjectReachabilityCounts {
+  readonly immutable: ReadonlyMap<Digest, number>;
+  readonly bundle: ReadonlyMap<string, number>;
+  readonly spaceCanonical: ReadonlyMap<string, number>;
+}
+
+function cloneObjectReachabilityCounts(value: unknown): Readonly<ObjectReachabilityCounts> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new TypeError("object reachability counts are invalid");
+  }
+  const source = value as Record<string, unknown>;
+  if (
+    !(source.immutable instanceof Map) || !(source.bundle instanceof Map) ||
+    !(source.spaceCanonical instanceof Map)
+  ) throw new TypeError("object reachability counts are invalid");
+  const clone = (input: Map<unknown, unknown>) => {
+    const output = new Map<string, number>();
+    for (const [key, count] of input) {
+      if (
+        typeof key !== "string" || !Number.isSafeInteger(count) ||
+        (count as number) < 1
+      ) throw new TypeError("object reachability counts are invalid");
+      output.set(key, count as number);
+    }
+    return output;
+  };
+  const immutable = new Map<Digest, number>();
+  for (const [key, count] of clone(source.immutable)) {
+    if (!/^sha256:[0-9a-f]{64}$/.test(key)) {
+      throw new TypeError("object reachability counts are invalid");
+    }
+    immutable.set(key as unknown as Digest, count);
+  }
+  return Object.freeze({
+    immutable,
+    bundle: clone(source.bundle),
+    spaceCanonical: clone(source.spaceCanonical),
+  });
+}
+
+function cloneObjectCleanupCheckpoint(value: unknown): Readonly<ObjectCleanupCheckpoint> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new TypeError("object cleanup checkpoint is invalid");
+  }
+  const source = value as Record<string, unknown>;
+  if (
+    !Number.isSafeInteger(source.version) || (source.version as number) < 0 ||
+    typeof source.namespace !== "string" ||
+    !(OBJECT_CLEANUP_NAMESPACES as readonly string[]).includes(source.namespace) ||
+    (source.cursor !== null && typeof source.cursor !== "string") ||
+    typeof source.cycleStartedAt !== "string" || !Number.isFinite(Date.parse(source.cycleStartedAt)) ||
+    typeof source.updatedAt !== "string" || !Number.isFinite(Date.parse(source.updatedAt)) ||
+    (source.leaseExpiresAt !== null &&
+      (typeof source.leaseExpiresAt !== "string" || !Number.isFinite(Date.parse(source.leaseExpiresAt)))) ||
+    !Number.isSafeInteger(source.retries) || (source.retries as number) < 0 ||
+    !Number.isSafeInteger(source.failures) || (source.failures as number) < 0
+  ) throw new TypeError("object cleanup checkpoint is invalid");
+  return Object.freeze({
+    version: source.version as ObjectCleanupCheckpoint["version"],
+    namespace: source.namespace as ObjectCleanupNamespace,
+    cursor: source.cursor as string | null,
+    cycleStartedAt: source.cycleStartedAt as UtcInstant,
+    updatedAt: source.updatedAt as UtcInstant,
+    leaseExpiresAt: source.leaseExpiresAt as UtcInstant | null,
+    retries: source.retries as number,
+    failures: source.failures as number,
+  });
+}
+
 export class InMemoryRevisionMetadataStore
   implements
     ContentCommitMetadataStore,
@@ -3934,12 +4008,14 @@ export class InMemoryRevisionMetadataStore
     OrdinaryMindStore,
     AccountDeletionStore,
     CapacityLedgerStore,
+    ObjectCleanupCheckpointStore,
     MembershipControlStore,
     ControlReadStore,
     MindBindingStore {
   readonly kind = "metadata-store" as const;
   #spaces = new Map<SpaceId, SpaceState>();
   #revisionsById = new Map<RevisionId, Envelope>();
+  #reachabilityCounts: Readonly<ObjectReachabilityCounts> | null = null;
   #idempotencyRecords = new Map<string, CompletedIdempotencyRecord>();
   #auditEvents = new Map<AuditEventId, Readonly<AuditEvent>>();
   #auditOutbox = new Map<OutboxMessageId, Readonly<AuditOutboxMessage>>();
@@ -3953,6 +4029,7 @@ export class InMemoryRevisionMetadataStore
   #capacityReconciledAt = new Map<SpaceId, UtcInstant>();
   #capacityUsageLedger = new Map<SpaceId, Readonly<CapacityUsageSnapshot>>();
   #capacityQuotaRejects = 0;
+  #objectCleanupCheckpoint: Readonly<ObjectCleanupCheckpoint> | null = null;
   #principals: PrincipalMap = new Map();
   #externalBindings: ExternalBindingMap = new Map();
   #knowledgeSpaces: KnowledgeSpaceMap = new Map();
@@ -4005,10 +4082,16 @@ export class InMemoryRevisionMetadataStore
 
   /** Trusted adapter checkpoint; canonical objects remain outside this projection. */
   exportDurableSnapshot(): unknown {
+    const reachabilityCounts = this.#objectReachabilityCounts();
     return {
       v: 1,
       spaces: new Map(this.#spaces),
       revisionsById: new Map(this.#revisionsById),
+      objectReachabilityCounts: Object.freeze({
+        immutable: new Map(reachabilityCounts.immutable),
+        bundle: new Map(reachabilityCounts.bundle),
+        spaceCanonical: new Map(reachabilityCounts.spaceCanonical),
+      }),
       idempotencyRecords: new Map(this.#idempotencyRecords),
       auditEvents: new Map(this.#auditEvents),
       auditOutbox: new Map(this.#auditOutbox),
@@ -4022,6 +4105,9 @@ export class InMemoryRevisionMetadataStore
       capacityReconciledAt: new Map(this.#capacityReconciledAt),
       capacityUsageLedger: new Map(this.#capacityUsageLedger),
       capacityQuotaRejects: this.#capacityQuotaRejects,
+      objectCleanupCheckpoint: this.#objectCleanupCheckpoint === null
+        ? null
+        : Object.freeze({ ...this.#objectCleanupCheckpoint }),
       principals: new Map(this.#principals),
       externalBindings: new Map(this.#externalBindings),
       knowledgeSpaces: new Map(this.#knowledgeSpaces),
@@ -4074,6 +4160,9 @@ export class InMemoryRevisionMetadataStore
     const restored = new InMemoryRevisionMetadataStore();
     restored.#spaces = new Map(snapshot.spaces as Map<SpaceId, SpaceState>);
     restored.#revisionsById = new Map(snapshot.revisionsById as Map<RevisionId, Envelope>);
+    restored.#reachabilityCounts = snapshot.objectReachabilityCounts === undefined
+      ? null
+      : cloneObjectReachabilityCounts(snapshot.objectReachabilityCounts);
     restored.#idempotencyRecords = new Map(snapshot.idempotencyRecords as Map<string, CompletedIdempotencyRecord>);
     restored.#auditEvents = new Map(snapshot.auditEvents as Map<AuditEventId, Readonly<AuditEvent>>);
     restored.#auditOutbox = new Map(snapshot.auditOutbox as Map<OutboxMessageId, Readonly<AuditOutboxMessage>>);
@@ -4110,6 +4199,10 @@ export class InMemoryRevisionMetadataStore
       (snapshot.capacityQuotaRejects as number) >= 0
       ? snapshot.capacityQuotaRejects as number
       : 0;
+    restored.#objectCleanupCheckpoint = snapshot.objectCleanupCheckpoint === undefined ||
+      snapshot.objectCleanupCheckpoint === null
+      ? null
+      : cloneObjectCleanupCheckpoint(snapshot.objectCleanupCheckpoint);
     restored.#principals = new Map(snapshot.principals as PrincipalMap);
     restored.#externalBindings = new Map(snapshot.externalBindings as ExternalBindingMap);
     restored.#knowledgeSpaces = new Map(snapshot.knowledgeSpaces as KnowledgeSpaceMap);
@@ -8079,6 +8172,7 @@ export class InMemoryRevisionMetadataStore
       this.#invitations = invitations;
       this.#spaces = revisionSpaces;
       this.#revisionsById = revisionsById;
+      this.#reachabilityCounts = null;
       this.#ordinaryMindIdempotencyRecords = idempotencyRecords;
       this.#membershipMutationRecords = membershipMutationRecords;
       this.#personalProfileIdempotencyRecords = personalProfileIdempotencyRecords;
@@ -8387,6 +8481,7 @@ export class InMemoryRevisionMetadataStore
       this.#memberships = memberships;
       this.#spaces = revisionSpaces;
       this.#revisionsById = revisionsById;
+      this.#reachabilityCounts = null;
       this.#backgroundJobs = backgroundJobs;
       this.#indexStates = indexStates;
       return result;
@@ -8528,6 +8623,7 @@ export class InMemoryRevisionMetadataStore
       const result = await operation(transaction);
       this.#spaces = spaces;
       this.#revisionsById = revisionsById;
+      this.#reachabilityCounts = null;
       this.#knowledgeSpaces = knowledgeSpaces;
       this.#idempotencyRecords = idempotencyRecords;
       this.#auditEvents = auditEvents;
@@ -8878,32 +8974,57 @@ export class InMemoryRevisionMetadataStore
     return Object.freeze({ kind: "committed", envelope: stored, replayed: false });
   }
 
-  async listReachableObjectDigests(): Promise<readonly Digest[]> {
-    const reachable = new Set<Digest>();
-    for (const revision of this.#revisionsById.values()) {
-      for (const entry of revision.manifest.entries) reachable.add(entry.sha256);
+  #objectReachabilityCounts(): Readonly<ObjectReachabilityCounts> {
+    if (this.#reachabilityCounts !== null) return this.#reachabilityCounts;
+    const immutable = new Map<Digest, number>();
+    const bundle = new Map<string, number>();
+    const spaceCanonical = new Map<string, number>();
+    const increment = (target: Map<string, number>, key: string) =>
+      target.set(key, (target.get(key) ?? 0) + 1);
+    for (const envelope of this.#revisionsById.values()) {
+      const spaceId = envelope.revision.spaceId;
+      for (const entry of envelope.manifest.entries) {
+        immutable.set(entry.sha256, (immutable.get(entry.sha256) ?? 0) + 1);
+        if (entry.kind === "opaque") {
+          increment(bundle, `${spaceId}\u0000${entry.sha256}`);
+        } else if (envelope.manifest.format === REVISION_MANIFEST_FORMAT_V3) {
+          increment(spaceCanonical, `markdown\u0000${spaceId}\u0000${entry.sha256}`);
+        }
+      }
+      if (envelope.manifest.format === REVISION_MANIFEST_FORMAT_V3) {
+        increment(
+          spaceCanonical,
+          `revision_manifest\u0000${spaceId}\u0000${envelope.revision.manifestHash}`,
+        );
+      }
     }
-    return Object.freeze([...reachable].sort());
+    this.#reachabilityCounts = Object.freeze({ immutable, bundle, spaceCanonical });
+    return this.#reachabilityCounts;
+  }
+
+  async listReachableObjectDigests(): Promise<readonly Digest[]> {
+    return Object.freeze([...this.#objectReachabilityCounts().immutable.keys()].sort());
+  }
+
+  async isImmutableObjectReachable(sha256: Digest): Promise<boolean> {
+    return (this.#objectReachabilityCounts().immutable.get(sha256) ?? 0) > 0;
   }
 
   async listReachableBundleFileObjects(): Promise<readonly Readonly<{
     spaceId: SpaceId;
     sha256: Digest;
   }>[]> {
-    const reachable = new Map<string, Readonly<{ spaceId: SpaceId; sha256: Digest }>>();
-    for (const revision of this.#revisionsById.values()) {
-      for (const entry of revision.manifest.entries) {
-        if (entry.kind !== "opaque") continue;
-        const item = Object.freeze({
-          spaceId: revision.revision.spaceId,
-          sha256: entry.sha256,
-        });
-        reachable.set(`${item.spaceId}\u0000${item.sha256}`, item);
-      }
-    }
-    return Object.freeze([...reachable.values()].sort((left, right) =>
+    const reachable = [...this.#objectReachabilityCounts().bundle.keys()].map((key) => {
+      const [spaceId, sha256] = key.split("\u0000");
+      return Object.freeze({ spaceId: spaceId as SpaceId, sha256: sha256 as Digest });
+    });
+    return Object.freeze(reachable.sort((left, right) =>
       left.spaceId.localeCompare(right.spaceId) || left.sha256.localeCompare(right.sha256),
     ));
+  }
+
+  async isBundleFileObjectReachable(spaceId: SpaceId, sha256: Digest): Promise<boolean> {
+    return (this.#objectReachabilityCounts().bundle.get(`${spaceId}\u0000${sha256}`) ?? 0) > 0;
   }
 
   async listReachableSpaceCanonicalObjects(): Promise<readonly Readonly<{
@@ -8911,37 +9032,119 @@ export class InMemoryRevisionMetadataStore
     spaceId: SpaceId;
     sha256: Digest;
   }>[]> {
-    const reachable = new Map<
-      string,
-      Readonly<{
-        kind: "markdown" | "revision_manifest";
-        spaceId: SpaceId;
-        sha256: Digest;
-      }>
-    >();
-    for (const envelope of this.#revisionsById.values()) {
-      if (envelope.manifest.format !== REVISION_MANIFEST_FORMAT_V3) continue;
-      const spaceId = envelope.revision.spaceId;
-      const manifest = Object.freeze({
-        kind: "revision_manifest" as const,
-        spaceId,
-        sha256: envelope.revision.manifestHash,
+    const reachable = [...this.#objectReachabilityCounts().spaceCanonical.keys()].map((key) => {
+      const [kind, spaceId, sha256] = key.split("\u0000");
+      return Object.freeze({
+        kind: kind as "markdown" | "revision_manifest",
+        spaceId: spaceId as SpaceId,
+        sha256: sha256 as Digest,
       });
-      reachable.set(`${manifest.kind}\u0000${spaceId}\u0000${manifest.sha256}`, manifest);
-      for (const entry of envelope.manifest.entries) {
-        if (entry.kind !== "markdown") continue;
-        const object = Object.freeze({
-          kind: "markdown" as const,
-          spaceId,
-          sha256: entry.sha256,
-        });
-        reachable.set(`${object.kind}\u0000${spaceId}\u0000${object.sha256}`, object);
-      }
-    }
-    return Object.freeze([...reachable.values()].sort((left, right) =>
+    });
+    return Object.freeze(reachable.sort((left, right) =>
       left.kind.localeCompare(right.kind) || left.spaceId.localeCompare(right.spaceId) ||
       left.sha256.localeCompare(right.sha256),
     ));
+  }
+
+  async isSpaceCanonicalObjectReachable(
+    kind: "markdown" | "revision_manifest",
+    spaceId: SpaceId,
+    sha256: Digest,
+  ): Promise<boolean> {
+    return (this.#objectReachabilityCounts().spaceCanonical.get(
+      `${kind}\u0000${spaceId}\u0000${sha256}`,
+    ) ?? 0) > 0;
+  }
+
+  async claimObjectCleanup(request: Readonly<{
+    now: UtcInstant;
+    leaseExpiresAt: UtcInstant;
+  }>): Promise<ClaimObjectCleanupResult> {
+    return this.#runExclusive(async () => {
+      if (
+        !Number.isFinite(Date.parse(request.now)) ||
+        !Number.isFinite(Date.parse(request.leaseExpiresAt)) ||
+        Date.parse(request.leaseExpiresAt) <= Date.parse(request.now)
+      ) throw new TypeError("object cleanup lease is invalid");
+      const current = this.#objectCleanupCheckpoint ?? Object.freeze({
+        version: 0 as ObjectCleanupCheckpoint["version"],
+        namespace: "immutable" as const,
+        cursor: null,
+        cycleStartedAt: request.now,
+        updatedAt: request.now,
+        leaseExpiresAt: null,
+        retries: 0,
+        failures: 0,
+      });
+      if (
+        current.leaseExpiresAt !== null &&
+        Date.parse(current.leaseExpiresAt) > Date.parse(request.now)
+      ) return Object.freeze({ kind: "busy" });
+      const reclaimedLease = current.leaseExpiresAt !== null;
+      this.#objectCleanupCheckpoint = Object.freeze({
+        ...current,
+        version: version(current.version + 1),
+        updatedAt: request.now,
+        leaseExpiresAt: request.leaseExpiresAt,
+        retries: current.retries + (reclaimedLease ? 1 : 0),
+      });
+      return Object.freeze({
+        kind: "claimed",
+        checkpoint: cloneObjectCleanupCheckpoint(this.#objectCleanupCheckpoint),
+        reclaimedLease,
+      });
+    });
+  }
+
+  async completeObjectCleanupBatch(request: Readonly<{
+    expectedVersion: ObjectCleanupCheckpoint["version"];
+    namespace: ObjectCleanupNamespace;
+    cursor: string | null;
+    cycleStartedAt: UtcInstant;
+    completedAt: UtcInstant;
+  }>): Promise<boolean> {
+    return this.#runExclusive(async () => {
+      const current = this.#objectCleanupCheckpoint;
+      if (
+        !current || current.version !== request.expectedVersion ||
+        current.leaseExpiresAt === null ||
+        !(OBJECT_CLEANUP_NAMESPACES as readonly string[]).includes(request.namespace) ||
+        (request.cursor !== null && request.cursor.length > 4096) ||
+        !Number.isFinite(Date.parse(request.cycleStartedAt)) ||
+        !Number.isFinite(Date.parse(request.completedAt))
+      ) return false;
+      this.#objectCleanupCheckpoint = Object.freeze({
+        ...current,
+        version: version(current.version + 1),
+        namespace: request.namespace,
+        cursor: request.cursor,
+        cycleStartedAt: request.cycleStartedAt,
+        updatedAt: request.completedAt,
+        leaseExpiresAt: null,
+      });
+      return true;
+    });
+  }
+
+  async failObjectCleanupBatch(request: Readonly<{
+    expectedVersion: ObjectCleanupCheckpoint["version"];
+    failedAt: UtcInstant;
+  }>): Promise<boolean> {
+    return this.#runExclusive(async () => {
+      const current = this.#objectCleanupCheckpoint;
+      if (
+        !current || current.version !== request.expectedVersion ||
+        current.leaseExpiresAt === null || !Number.isFinite(Date.parse(request.failedAt))
+      ) return false;
+      this.#objectCleanupCheckpoint = Object.freeze({
+        ...current,
+        version: version(current.version + 1),
+        updatedAt: request.failedAt,
+        leaseExpiresAt: null,
+        failures: current.failures + 1,
+      });
+      return true;
+    });
   }
 
   async claimInvitationExpiryJob(

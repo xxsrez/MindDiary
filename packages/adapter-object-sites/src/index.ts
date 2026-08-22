@@ -2,7 +2,10 @@ import {
   ObjectStoreFailure,
   type ExportArchivePutResult,
   type ExportArchiveStore,
+  type ExportArchiveUpload,
+  type ExportArchiveUploadRequest,
   type ExportArchiveWriteRequest,
+  type OpenedExportArchive,
   type ImmutableObject,
   type ImmutableObjectDeleteRequest,
   type ImmutableObjectListRequest,
@@ -27,6 +30,10 @@ import {
   type StagedBundleFileObject,
   type StagedBundleFileObjectWriteRequest,
   type StoredExportArchive,
+  type BoundedObjectCleanupStore,
+  type ObjectCleanupCandidate,
+  type ObjectCleanupNamespace,
+  type ObjectCleanupPage,
 } from "@mind-diary/application-ports";
 
 export const SITES_OBJECT_ADAPTER = "sites-r2-immutable-envelope" as const;
@@ -89,6 +96,7 @@ const SPACE_CANONICAL_PREFIX = "spaces/";
 const DELETE_STATE = "deleting";
 const ACTIVE_STATE = "active";
 const MAX_R2_CAS_ATTEMPTS = 16;
+const EXPORT_STREAM_PART_BYTES = 4_194_304;
 const BUNDLE_FILE_MEDIA_TYPES = new Set([
   "image/png",
   "image/jpeg",
@@ -97,6 +105,17 @@ const BUNDLE_FILE_MEDIA_TYPES = new Set([
   "application/pdf",
   "application/zip",
 ]);
+const CLEANUP_NAMESPACES = new Set<ObjectCleanupNamespace>([
+  "immutable",
+  "bundle_file",
+  "space_canonical",
+  "staged_bundle",
+  "export",
+]);
+
+function validCleanupNamespace(value: unknown): value is ObjectCleanupNamespace {
+  return typeof value === "string" && CLEANUP_NAMESPACES.has(value as ObjectCleanupNamespace);
+}
 
 function assertDigest(value: string): asserts value is Digest {
   if (!SHA256.test(value)) {
@@ -259,8 +278,9 @@ async function bodyBytes(object: R2ObjectBodyLike): Promise<Uint8Array> {
   return new Uint8Array(await object.arrayBuffer());
 }
 
+
 /** R2-backed canonical and export object namespaces with conditional GC lease claims. */
-export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveStore {
+export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveStore, BoundedObjectCleanupStore {
   readonly kind = "object-store" as const;
   readonly #bucket: R2BucketLike;
 
@@ -831,14 +851,223 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
       : Object.freeze({ kind: "object_key_collision" });
   }
 
-  async readExportArchive(objectKey: string): Promise<Uint8Array | null> {
+  async beginExportArchiveUpload(
+    request: Readonly<ExportArchiveUploadRequest>,
+  ): Promise<ExportArchiveUpload> {
+    assertUtc(request.createdAt);
+    const base = `${EXPORT_PREFIX}${encodeURIComponent(request.spaceId)}/${encodeURIComponent(
+      request.jobId,
+    )}/stream/`;
+    const pending = new Uint8Array(EXPORT_STREAM_PART_BYTES);
+    const parts: Array<Readonly<{ key: string; sha256: Digest; size: number }>> = [];
+    let pendingLength = 0;
+    let totalSize = 0;
+    let closed = false;
+    const flush = async () => {
+      if (pendingLength === 0) return;
+      const bytes = pending.slice(0, pendingLength);
+      const sha256 = await this.calculateSha256(bytes);
+      const partIndex = parts.length;
+      const key = `${base}parts/${String(partIndex).padStart(8, "0")}-${sha256.slice(7)}`;
+      const customMetadata = Object.freeze({
+        schema: "md-r2-export-stream-part-v1",
+        jobId: String(request.jobId),
+        spaceId: String(request.spaceId),
+        partIndex: String(partIndex),
+        sha256,
+        size: String(bytes.byteLength),
+        createdAt: request.createdAt,
+      });
+      const stored = await this.#bucket.put(key, bytes, {
+        httpMetadata: { contentType: "application/octet-stream" },
+        customMetadata,
+        onlyIf: { etagDoesNotMatch: "*" },
+      });
+      if (!stored) {
+        const existing = await this.#bucket.get(key);
+        if (
+          !existing || existing.size !== bytes.byteLength ||
+          existing.customMetadata?.sha256 !== sha256 ||
+          !bytesEqual(await bodyBytes(existing), bytes)
+        ) throw new ObjectStoreFailure(
+          "digest_collision",
+          "streamed export part key collision",
+        );
+      }
+      parts.push(Object.freeze({ key, sha256, size: bytes.byteLength }));
+      pendingLength = 0;
+    };
+    return Object.freeze({
+      write: async (chunk: Uint8Array) => {
+        if (closed) throw new Error("export upload is closed");
+        if (!(chunk instanceof Uint8Array)) throw new TypeError("export chunk must be bytes");
+        let offset = 0;
+        while (offset < chunk.byteLength) {
+          const copied = Math.min(
+            EXPORT_STREAM_PART_BYTES - pendingLength,
+            chunk.byteLength - offset,
+          );
+          pending.set(chunk.subarray(offset, offset + copied), pendingLength);
+          pendingLength += copied;
+          totalSize += copied;
+          offset += copied;
+          if (pendingLength === EXPORT_STREAM_PART_BYTES) await flush();
+        }
+      },
+      complete: async (completion: Parameters<ExportArchiveUpload["complete"]>[0]) => {
+        if (closed) throw new Error("export upload is closed");
+        closed = true;
+        await flush();
+        if (completion.size !== totalSize || !Number.isSafeInteger(totalSize)) {
+          return Object.freeze({ kind: "digest_mismatch" as const });
+        }
+        assertDigest(completion.sha256);
+        const key = `${base}claim-${request.claimVersion}-manifest`;
+        const archive = this.#archiveMetadata(
+          key,
+          { ...request, ...completion, bytes: new Uint8Array(0) },
+          totalSize,
+        );
+        const manifestBytes = new TextEncoder().encode(`${JSON.stringify({
+          schema: "md-r2-export-stream-manifest-v1",
+          sha256: completion.sha256,
+          size: totalSize,
+          parts,
+        })}\n`);
+        const customMetadata = Object.freeze({
+          ...this.#archiveCustomMetadata(archive),
+          schema: "md-r2-export-stream-manifest-v1",
+          partCount: String(parts.length),
+        });
+        const stored = await this.#bucket.put(key, manifestBytes, {
+          httpMetadata: { contentType: "application/json" },
+          customMetadata,
+          onlyIf: { etagDoesNotMatch: "*" },
+        });
+        if (!stored) {
+          const existing = await this.#bucket.get(key);
+          if (!existing || !bytesEqual(await bodyBytes(existing), manifestBytes)) {
+            return Object.freeze({ kind: "object_key_collision" as const });
+          }
+          return Object.freeze({ kind: "already_exists" as const, archive });
+        }
+        return Object.freeze({ kind: "stored" as const, archive });
+      },
+      // Persisted deterministic parts intentionally survive an interrupted
+      // claim and are reused by its fenced retry. Job expiry owns final cleanup.
+      abort: async () => {
+        closed = true;
+        pendingLength = 0;
+      },
+    });
+  }
+
+  async openExportArchive(
+    objectKey: string,
+  ): Promise<Readonly<OpenedExportArchive> | null> {
     const object = await this.#bucket.get(objectKey);
     if (!object || !objectKey.startsWith(EXPORT_PREFIX)) return null;
-    const bytes = await bodyBytes(object);
-    const digest = object.customMetadata?.sha256 ?? "";
-    assertDigest(digest);
-    if ((await this.calculateSha256(bytes)) !== digest) {
-      throw new ObjectStoreFailure("object_tampered", "R2 export bytes are invalid");
+    const custom = object.customMetadata ?? {};
+    const sha256 = custom.sha256 ?? "";
+    assertDigest(sha256);
+    const size = Number(custom.size);
+    if (!Number.isSafeInteger(size) || size < 0) {
+      throw new ObjectStoreFailure("object_tampered", "R2 export size is invalid");
+    }
+    if (custom.schema !== "md-r2-export-stream-manifest-v1") {
+      const bytes = await bodyBytes(object);
+      if (bytes.byteLength !== size || await this.calculateSha256(bytes) !== sha256) {
+        throw new ObjectStoreFailure("object_tampered", "R2 export bytes are invalid");
+      }
+      return Object.freeze({ sha256, size, body: bytes });
+    }
+    let decoded: unknown;
+    try {
+      decoded = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(
+        await bodyBytes(object),
+      ));
+    } catch {
+      throw new ObjectStoreFailure("object_tampered", "R2 export stream manifest is invalid");
+    }
+    if (typeof decoded !== "object" || decoded === null || Array.isArray(decoded)) {
+      throw new ObjectStoreFailure("object_tampered", "R2 export stream manifest is invalid");
+    }
+    const source = decoded as Record<string, unknown>;
+    if (
+      source.schema !== "md-r2-export-stream-manifest-v1" ||
+      source.sha256 !== sha256 || source.size !== size || !Array.isArray(source.parts) ||
+      source.parts.length !== Number(custom.partCount) || source.parts.length > 65_535
+    ) throw new ObjectStoreFailure("object_tampered", "R2 export stream manifest differs");
+    const parts = source.parts.map((value, index) => {
+      if (typeof value !== "object" || value === null || Array.isArray(value)) {
+        throw new ObjectStoreFailure("object_tampered", "R2 export stream part is invalid");
+      }
+      const part = value as Record<string, unknown>;
+      if (
+        typeof part.key !== "string" ||
+        !part.key.startsWith(`${objectKey.slice(0, objectKey.lastIndexOf("/") + 1)}parts/`) ||
+        typeof part.sha256 !== "string" || !SHA256.test(part.sha256) ||
+        !Number.isSafeInteger(part.size) || (part.size as number) < 0 ||
+        !part.key.startsWith(`${EXPORT_PREFIX}`) ||
+        !part.key.includes(`${String(index).padStart(8, "0")}-`)
+      ) throw new ObjectStoreFailure("object_tampered", "R2 export stream part is invalid");
+      return Object.freeze({
+        key: part.key,
+        sha256: part.sha256 as Digest,
+        size: part.size as number,
+      });
+    });
+    const bucket = this.#bucket;
+    const calculateSha256 = (bytes: Uint8Array) => this.calculateSha256(bytes);
+    let nextPart = 0;
+    const body = new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        if (nextPart >= parts.length) {
+          controller.close();
+          return;
+        }
+        const part = parts[nextPart]!;
+        const stored = await bucket.get(part.key);
+        if (!stored) {
+          controller.error(new ObjectStoreFailure("object_tampered", "R2 export part is missing"));
+          return;
+        }
+        const bytes = await bodyBytes(stored);
+        if (bytes.byteLength !== part.size || await calculateSha256(bytes) !== part.sha256) {
+          controller.error(new ObjectStoreFailure("object_tampered", "R2 export part is invalid"));
+          return;
+        }
+        nextPart += 1;
+        controller.enqueue(bytes);
+      },
+    });
+    return Object.freeze({ sha256, size, body });
+  }
+
+  async readExportArchive(objectKey: string): Promise<Uint8Array | null> {
+    const opened = await this.openExportArchive(objectKey);
+    if (opened === null) return null;
+    if (opened.body instanceof Uint8Array) return new Uint8Array(opened.body);
+    const reader = opened.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let size = 0;
+    while (true) {
+      const next = await reader.read();
+      if (next.done) break;
+      chunks.push(next.value);
+      size += next.value.byteLength;
+    }
+    if (size !== opened.size) {
+      throw new ObjectStoreFailure("object_tampered", "R2 export stream size differs");
+    }
+    const bytes = new Uint8Array(size);
+    let offset = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    if (await this.calculateSha256(bytes) !== opened.sha256) {
+      throw new ObjectStoreFailure("object_tampered", "R2 export stream digest differs");
     }
     return bytes;
   }
@@ -851,6 +1080,15 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
     return true;
   }
 
+  async hasExportArchivesForJob(
+    jobId: ExportArchiveWriteRequest["jobId"],
+    spaceId: ExportArchiveWriteRequest["spaceId"],
+  ): Promise<boolean> {
+    const prefix = `${EXPORT_PREFIX}${encodeURIComponent(spaceId)}/${encodeURIComponent(jobId)}/`;
+    const page = await this.#bucket.list({ prefix, limit: 1 });
+    return page.objects.length > 0;
+  }
+
   async deleteExportArchivesForJob(jobId: ExportArchiveWriteRequest["jobId"]): Promise<number> {
     return this.#deleteArchives((object) => object.customMetadata?.jobId === jobId);
   }
@@ -859,6 +1097,158 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
     spaceId: ExportArchiveWriteRequest["spaceId"],
   ): Promise<number> {
     return this.#deleteArchives((object) => object.customMetadata?.spaceId === spaceId);
+  }
+
+  async listObjectCleanupPage(request: Readonly<{
+    namespace: ObjectCleanupNamespace;
+    cursor: string | null;
+    limit: number;
+  }>): Promise<Readonly<ObjectCleanupPage>> {
+    if (!validCleanupNamespace(request.namespace)) {
+      throw new TypeError("object cleanup namespace is invalid");
+    }
+    if (!Number.isSafeInteger(request.limit) || request.limit < 1 || request.limit > 1_000) {
+      throw new ObjectStoreFailure("invalid_limit", "object cleanup page limit is invalid");
+    }
+    if (request.cursor !== null && (request.cursor.length === 0 || request.cursor.length > 4096)) {
+      throw new TypeError("object cleanup cursor is invalid");
+    }
+    const prefix = request.namespace === "immutable"
+      ? CANONICAL_PREFIX
+      : request.namespace === "bundle_file"
+        ? BUNDLE_PREFIX
+        : request.namespace === "space_canonical"
+          ? SPACE_CANONICAL_PREFIX
+          : request.namespace === "staged_bundle"
+            ? STAGED_BUNDLE_PREFIX
+            : EXPORT_PREFIX;
+    const page = await this.#bucket.list({
+      prefix,
+      ...(request.cursor === null ? {} : { cursor: request.cursor }),
+      limit: request.limit,
+      include: ["customMetadata"],
+    });
+    if (page.truncated && !page.cursor) {
+      throw new Error("R2 pagination cursor is missing");
+    }
+    const candidates: ObjectCleanupCandidate[] = [];
+    for (const object of page.objects) {
+      if (request.namespace === "immutable") {
+        const metadata = metadataFromR2(object);
+        candidates.push(Object.freeze({
+          namespace: "immutable",
+          objectKey: object.key,
+          fence: object.etag,
+          sha256: metadata.sha256,
+          size: object.size,
+          createdAt: metadata.createdAt,
+          protectedAt: metadata.protectedAt,
+        }));
+      } else if (request.namespace === "bundle_file") {
+        const metadata = this.#bundleMetadata(object);
+        candidates.push(Object.freeze({
+          namespace: "bundle_file",
+          objectKey: object.key,
+          fence: object.etag,
+          spaceId: metadata.spaceId,
+          sha256: metadata.sha256,
+          size: object.size,
+          createdAt: metadata.createdAt,
+          protectedAt: metadata.protectedAt,
+        }));
+      } else if (request.namespace === "space_canonical") {
+        if (!isSpaceCanonicalKey(object.key)) continue;
+        const metadata = spaceCanonicalMetadataFromR2(object);
+        candidates.push(Object.freeze({
+          namespace: "space_canonical",
+          objectKey: object.key,
+          fence: object.etag,
+          kind: metadata.kind,
+          spaceId: metadata.spaceId,
+          sha256: metadata.sha256,
+          size: object.size,
+          createdAt: metadata.createdAt,
+          protectedAt: metadata.protectedAt,
+        }));
+      } else if (request.namespace === "staged_bundle") {
+        const custom = object.customMetadata ?? {};
+        const createdAt = custom.createdAt ?? "";
+        assertUtc(createdAt);
+        if (
+          custom.schema !== "md-r2-staged-bundle-file-v1" ||
+          typeof custom.stagedFileId !== "string" || custom.stagedFileId.length === 0 ||
+          typeof custom.spaceId !== "string" || custom.spaceId.length === 0 ||
+          Number(custom.size) !== object.size
+        ) throw new ObjectStoreFailure("object_tampered", "staged cleanup metadata is invalid");
+        candidates.push(Object.freeze({
+          namespace: "staged_bundle",
+          objectKey: object.key,
+          fence: object.etag,
+          stagedFileId: custom.stagedFileId as StagedBundleFileObject["stagedFileId"],
+          spaceId: custom.spaceId as StagedBundleFileObject["spaceId"],
+          size: object.size,
+          createdAt,
+        }));
+      } else {
+        const custom = object.customMetadata ?? {};
+        const createdAt = custom.createdAt ?? "";
+        assertUtc(createdAt);
+        if (
+          ![
+            "md-r2-export-v1",
+            "md-r2-export-stream-part-v1",
+            "md-r2-export-stream-manifest-v1",
+          ].includes(custom.schema ?? "") ||
+          typeof custom.jobId !== "string" || custom.jobId.length === 0 ||
+          typeof custom.spaceId !== "string" || custom.spaceId.length === 0
+        ) throw new ObjectStoreFailure("object_tampered", "export cleanup metadata is invalid");
+        candidates.push(Object.freeze({
+          namespace: "export",
+          objectKey: object.key,
+          fence: object.etag,
+          jobId: custom.jobId as ExportArchiveWriteRequest["jobId"],
+          spaceId: custom.spaceId as ExportArchiveWriteRequest["spaceId"],
+          size: object.size,
+          createdAt,
+        }));
+      }
+    }
+    return Object.freeze({
+      candidates: Object.freeze(candidates),
+      listed: page.objects.length,
+      nextCursor: page.truncated ? page.cursor! : null,
+    });
+  }
+
+  async deleteObjectCleanupCandidate(request: Readonly<{
+    candidate: Readonly<ObjectCleanupCandidate>;
+    createdBefore: Utc;
+  }>): Promise<boolean> {
+    assertUtc(request.createdBefore);
+    const candidate = request.candidate;
+    const current = await this.#bucket.get(candidate.objectKey);
+    if (!current || current.etag !== candidate.fence) return false;
+    if (candidate.namespace === "immutable") return this.deleteImmutableObject({
+      sha256: candidate.sha256,
+      expectedProtectedAt: candidate.protectedAt,
+      createdBefore: request.createdBefore,
+    });
+    if (candidate.namespace === "bundle_file") return this.deleteBundleFileObject({
+      spaceId: candidate.spaceId,
+      sha256: candidate.sha256,
+      expectedProtectedAt: candidate.protectedAt,
+      createdBefore: request.createdBefore,
+    });
+    if (candidate.namespace === "space_canonical") return this.deleteSpaceCanonicalObject({
+      kind: candidate.kind,
+      spaceId: candidate.spaceId,
+      sha256: candidate.sha256,
+      expectedProtectedAt: candidate.protectedAt,
+      createdBefore: request.createdBefore,
+    });
+    if (compareUtc(candidate.createdAt, request.createdBefore) >= 0) return false;
+    await this.#bucket.delete(candidate.objectKey);
+    return true;
   }
 
   async #deleteArchives(predicate: (object: R2ListedObjectLike) => boolean): Promise<number> {

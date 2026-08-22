@@ -1,8 +1,12 @@
 import type { ActorContext } from "@mind-diary/application-contracts";
+import { OBJECT_CLEANUP_NAMESPACES } from "@mind-diary/application-ports";
 import type {
   AuditSink,
   BackgroundAuthorizer,
   BackgroundWorkStore,
+  BoundedObjectCleanupStore,
+  BundleFileStagingStore,
+  CanonicalObjectReachabilityReader,
   Clock,
   ExportArchiveStore,
   ExportJobStore,
@@ -13,6 +17,9 @@ import type {
   SearchIndex,
   SpaceTargetRecordPurger,
   SpaceTargetPurgeResult,
+  ObjectCleanupCandidate,
+  ObjectCleanupCheckpointStore,
+  ObjectCleanupNamespace,
 } from "@mind-diary/application-ports";
 import type {
   JobId,
@@ -132,6 +139,38 @@ export class BackgroundPrivacySafeObservability {
       requestId: event.actor.requestId,
       jobId: event.jobId,
       cohort: this.#cohort,
+    });
+  }
+
+  recordCleanup(event: {
+    readonly actor: Pick<ActorContext, "requestId">;
+    readonly occurredAtUtc: UtcInstant;
+    readonly outcome: "success" | "failure" | "retry" | "unavailable";
+    readonly queueAgeMs: number;
+    readonly reclaimedBytes: number;
+    readonly orphanCount: number;
+    readonly retries: number;
+    readonly failures: number;
+  }): void {
+    const values = Object.freeze([
+      ["cleanup_queue_age_ms", "milliseconds", event.queueAgeMs],
+      ["cleanup_reclaimed_bytes", "bytes", event.reclaimedBytes],
+      ["cleanup_orphan_count", "count", event.orphanCount],
+      ["cleanup_retry_count", "count", event.retries],
+      ["cleanup_failure_count", "count", event.failures],
+    ] as const);
+    for (const [metric, unit, value] of values) recordBackgroundMetric(this.#sink, {
+      kind: "operational",
+      metric,
+      surface: "background",
+      operation: "cleanup",
+      outcome: event.outcome,
+      unit,
+      value,
+      occurredAtUtc: event.occurredAtUtc,
+      requestId: event.actor.requestId,
+      jobId: null,
+      cohort: null,
     });
   }
 }
@@ -535,6 +574,290 @@ export class UnreachableObjectGcHandler {
   }
 }
 
+export interface BoundedObjectCleanupResult {
+  readonly kind: "completed" | "busy" | "fenced";
+  readonly scanned: number;
+  readonly examined: number;
+  readonly deleted: number;
+  readonly reclaimedBytes: number;
+  readonly orphanCount: number;
+  readonly queueAgeMs: number;
+  readonly retries: number;
+  readonly failures: number;
+  readonly namespace: ObjectCleanupNamespace;
+  readonly cursor: string | null;
+  readonly cycleCompleted: boolean;
+  readonly budgetExhausted: boolean;
+}
+
+function cleanupNamespaceAfter(namespace: ObjectCleanupNamespace): ObjectCleanupNamespace | null {
+  const index = OBJECT_CLEANUP_NAMESPACES.indexOf(namespace);
+  return index < 0 || index === OBJECT_CLEANUP_NAMESPACES.length - 1
+    ? null
+    : OBJECT_CLEANUP_NAMESPACES[index + 1]!;
+}
+
+/** Cursor-paged, lease-fenced GC for canonical, staging and export R2 namespaces. */
+export class BoundedObjectCleanupHandler {
+  readonly #objects: BoundedObjectCleanupStore &
+    Pick<ExportArchiveStore, "hasExportArchivesForJob">;
+  readonly #checkpoints: ObjectCleanupCheckpointStore;
+  readonly #reachability: CanonicalObjectReachabilityReader;
+  readonly #staging: Pick<BundleFileStagingStore, "readStagedBundleFile">;
+  readonly #exports: Pick<
+    ExportJobStore,
+    "readExportJob" | "completeExpiredExportCleanup"
+  >;
+  readonly #clock: Clock;
+  readonly #observability: BackgroundPrivacySafeObservability | null;
+  readonly #monotonicNow: () => number;
+
+  constructor(dependencies: {
+    readonly objects: BoundedObjectCleanupStore &
+      Pick<ExportArchiveStore, "hasExportArchivesForJob">;
+    readonly checkpoints: ObjectCleanupCheckpointStore;
+    readonly reachability: CanonicalObjectReachabilityReader;
+    readonly staging: Pick<BundleFileStagingStore, "readStagedBundleFile">;
+    readonly exports: Pick<
+      ExportJobStore,
+      "readExportJob" | "completeExpiredExportCleanup"
+    >;
+    readonly clock: Clock;
+    readonly observability?: BackgroundPrivacySafeObservability;
+    readonly monotonicNow?: () => number;
+  }) {
+    this.#objects = dependencies.objects;
+    this.#checkpoints = dependencies.checkpoints;
+    this.#reachability = dependencies.reachability;
+    this.#staging = dependencies.staging;
+    this.#exports = dependencies.exports;
+    this.#clock = dependencies.clock;
+    this.#observability = dependencies.observability ?? null;
+    this.#monotonicNow = dependencies.monotonicNow ?? Date.now;
+  }
+
+  async handle(request: {
+    readonly actor: ActorContext;
+    readonly createdBefore: UtcInstant | string;
+    readonly maxObjects?: number;
+    readonly maxBytes?: number;
+    readonly maxDurationMs?: number;
+  }): Promise<Readonly<BoundedObjectCleanupResult>> {
+    assertServiceActor(request.actor);
+    const createdBeforeMs = Date.parse(request.createdBefore);
+    if (!Number.isFinite(createdBeforeMs)) throw new TypeError("cleanup boundary is invalid");
+    const maxObjects = request.maxObjects ?? 100;
+    const maxBytes = request.maxBytes ?? 268_435_456;
+    const maxDurationMs = request.maxDurationMs ?? 20_000;
+    if (!Number.isSafeInteger(maxObjects) || maxObjects < 1 || maxObjects > 1_000) {
+      throw new TypeError("cleanup object budget is invalid");
+    }
+    if (!Number.isSafeInteger(maxBytes) || maxBytes < 1) {
+      throw new TypeError("cleanup byte budget is invalid");
+    }
+    if (!Number.isSafeInteger(maxDurationMs) || maxDurationMs < 1 || maxDurationMs > 60_000) {
+      throw new TypeError("cleanup time budget is invalid");
+    }
+    const startedAt = this.#monotonicNow();
+    const now = this.#clock.now();
+    const claim = await this.#checkpoints.claimObjectCleanup({
+      now,
+      leaseExpiresAt: retryAt(now, maxDurationMs + 10_000),
+    });
+    if (claim.kind === "busy") {
+      this.#observability?.recordCleanup({
+        actor: request.actor,
+        occurredAtUtc: now,
+        outcome: "unavailable",
+        queueAgeMs: 0,
+        reclaimedBytes: 0,
+        orphanCount: 0,
+        retries: 0,
+        failures: 0,
+      });
+      return Object.freeze({
+        kind: "busy",
+        scanned: 0,
+        examined: 0,
+        deleted: 0,
+        reclaimedBytes: 0,
+        orphanCount: 0,
+        queueAgeMs: 0,
+        retries: 0,
+        failures: 0,
+        namespace: "immutable",
+        cursor: null,
+        cycleCompleted: false,
+        budgetExhausted: false,
+      });
+    }
+
+    const checkpoint = claim.checkpoint;
+    let namespace = checkpoint.namespace;
+    let cursor = checkpoint.cursor;
+    let cycleStartedAt = checkpoint.cycleStartedAt;
+    let scanned = 0;
+    let examined = 0;
+    let deleted = 0;
+    let reclaimedBytes = 0;
+    let orphanCount = 0;
+    let queueAgeMs = 0;
+    let cycleCompleted = false;
+    let budgetExhausted = false;
+    try {
+      while (scanned < maxObjects && this.#monotonicNow() - startedAt < maxDurationMs) {
+        const page = await this.#objects.listObjectCleanupPage({
+          namespace,
+          cursor,
+          limit: 1,
+        });
+        scanned += page.listed;
+        const candidate = page.candidates[0];
+        if (candidate !== undefined) {
+          examined += 1;
+          if (await this.#isCollectable(candidate, now, createdBeforeMs)) {
+            orphanCount += 1;
+            queueAgeMs = Math.max(queueAgeMs, Date.parse(now) - Date.parse(candidate.createdAt));
+            if (reclaimedBytes + candidate.size > maxBytes) {
+              budgetExhausted = true;
+              break;
+            }
+            if (await this.#objects.deleteObjectCleanupCandidate({
+              candidate,
+              createdBefore: candidate.namespace === "staged_bundle" ||
+                  candidate.namespace === "export"
+                ? now
+                : request.createdBefore as UtcInstant,
+            })) {
+              deleted += 1;
+              reclaimedBytes += candidate.size;
+              if (candidate.namespace === "export") {
+                await this.#finishExpiredExportIfEmpty(candidate, now);
+              }
+            }
+          }
+        }
+        cursor = page.nextCursor;
+        if (cursor === null) {
+          const next = cleanupNamespaceAfter(namespace);
+          if (next === null) {
+            namespace = "immutable";
+            cycleStartedAt = this.#clock.now();
+            cycleCompleted = true;
+            break;
+          }
+          namespace = next;
+        }
+      }
+      if (
+        scanned >= maxObjects || reclaimedBytes >= maxBytes ||
+        this.#monotonicNow() - startedAt >= maxDurationMs
+      ) budgetExhausted = true;
+      const completedAt = this.#clock.now();
+      const persisted = await this.#checkpoints.completeObjectCleanupBatch({
+        expectedVersion: checkpoint.version,
+        namespace,
+        cursor,
+        cycleStartedAt,
+        completedAt,
+      });
+      const result = Object.freeze({
+        kind: persisted ? "completed" as const : "fenced" as const,
+        scanned,
+        examined,
+        deleted,
+        reclaimedBytes,
+        orphanCount,
+        queueAgeMs,
+        retries: checkpoint.retries,
+        failures: checkpoint.failures,
+        namespace,
+        cursor,
+        cycleCompleted,
+        budgetExhausted,
+      });
+      this.#observability?.recordCleanup({
+        actor: request.actor,
+        occurredAtUtc: completedAt,
+        outcome: persisted ? (claim.reclaimedLease ? "retry" : "success") : "unavailable",
+        queueAgeMs,
+        reclaimedBytes,
+        orphanCount,
+        retries: checkpoint.retries,
+        failures: checkpoint.failures,
+      });
+      return result;
+    } catch (error) {
+      const failedAt = this.#clock.now();
+      await this.#checkpoints.failObjectCleanupBatch({
+        expectedVersion: checkpoint.version,
+        failedAt,
+      }).catch(() => false);
+      this.#observability?.recordCleanup({
+        actor: request.actor,
+        occurredAtUtc: failedAt,
+        outcome: "failure",
+        queueAgeMs,
+        reclaimedBytes,
+        orphanCount,
+        retries: checkpoint.retries,
+        failures: checkpoint.failures + 1,
+      });
+      throw error;
+    }
+  }
+
+  async #isCollectable(
+    candidate: Readonly<ObjectCleanupCandidate>,
+    now: UtcInstant,
+    canonicalCreatedBeforeMs: number,
+  ): Promise<boolean> {
+    const oldEnough = Date.parse(candidate.createdAt) < canonicalCreatedBeforeMs;
+    if (candidate.namespace === "immutable") {
+      return oldEnough && !(await this.#reachability.isImmutableObjectReachable(candidate.sha256));
+    }
+    if (candidate.namespace === "bundle_file") {
+      return oldEnough && !(await this.#reachability.isBundleFileObjectReachable(
+        candidate.spaceId,
+        candidate.sha256,
+      ));
+    }
+    if (candidate.namespace === "space_canonical") {
+      return oldEnough && !(await this.#reachability.isSpaceCanonicalObjectReachable(
+        candidate.kind,
+        candidate.spaceId,
+        candidate.sha256,
+      ));
+    }
+    if (candidate.namespace === "staged_bundle") {
+      return oldEnough &&
+        (await this.#staging.readStagedBundleFile(candidate.stagedFileId)) === null;
+    }
+    const job = await this.#exports.readExportJob(candidate.jobId);
+    if (job === null) return oldEnough;
+    return job.spaceId === candidate.spaceId &&
+      (job.archiveCleanedAt !== null || job.state === "expired" ||
+        Date.parse(job.expiresAt) <= Date.parse(now));
+  }
+
+  async #finishExpiredExportIfEmpty(
+    candidate: Extract<ObjectCleanupCandidate, { readonly namespace: "export" }>,
+    now: UtcInstant,
+  ): Promise<void> {
+    if (await this.#objects.hasExportArchivesForJob(candidate.jobId, candidate.spaceId)) return;
+    const job = await this.#exports.readExportJob(candidate.jobId);
+    if (
+      job === null || job.spaceId !== candidate.spaceId || job.state !== "expired" ||
+      job.archiveCleanedAt !== null
+    ) return;
+    await this.#exports.completeExpiredExportCleanup(
+      candidate.jobId,
+      job.version,
+      now,
+    );
+  }
+}
+
 export class SpaceTargetRecordPurgeService {
   readonly #metadata: SpaceTargetRecordPurger;
   readonly #index: SearchIndex;
@@ -595,6 +918,23 @@ export interface DeterministicExportBuilder {
       | 'attachment; filename="mind-diary-okf-bundle.zip"'
       | 'attachment; filename="mind-diary-bundle.zip"';
     readonly bytes: Uint8Array;
+    readonly sha256: Sha256Digest;
+    readonly size: number;
+  }>;
+  writeExactRevision?(request: {
+    readonly spaceId: SpaceId;
+    readonly revisionId: RevisionId;
+    readonly profile?: "MD-OKF-ZIP-1" | "MD-BUNDLE-ZIP-1";
+  }, sink: Readonly<{
+    write(chunk: Uint8Array): Promise<void>;
+  }>): Promise<{
+    readonly revisionId: RevisionId;
+    readonly archiveFormat: "MD-OKF-ZIP-1" | "MD-BUNDLE-ZIP-1";
+    readonly mediaType: "application/zip";
+    readonly filename: "mind-diary-okf-bundle.zip" | "mind-diary-bundle.zip";
+    readonly contentDisposition:
+      | 'attachment; filename="mind-diary-okf-bundle.zip"'
+      | 'attachment; filename="mind-diary-bundle.zip"';
     readonly sha256: Sha256Digest;
     readonly size: number;
   }>;
@@ -680,13 +1020,58 @@ export class ExportJobHandler {
     }
 
     let objectKey: string | null = null;
+    let upload: { abort(): Promise<void> } | null = null;
     try {
-      const built = await this.#builder.exportExactRevision({
+      const exportRequest = {
         spaceId: job.spaceId,
         revisionId: job.revisionId,
         profile: job.profile ?? "MD-OKF-ZIP-1",
-      });
+      } as const;
       const expectedBundle = (job.profile ?? "MD-OKF-ZIP-1") === "MD-BUNDLE-ZIP-1";
+      let built: Awaited<ReturnType<DeterministicExportBuilder["exportExactRevision"]>> |
+        Awaited<ReturnType<NonNullable<DeterministicExportBuilder["writeExactRevision"]>>>;
+      let put;
+      if (this.#builder.writeExactRevision !== undefined) {
+        const streamingUpload = await this.#archives.beginExportArchiveUpload({
+          jobId: job.jobId,
+          spaceId: job.spaceId,
+          claimVersion: job.version,
+          archiveFormat: expectedBundle ? "MD-BUNDLE-ZIP-1" : "MD-OKF-ZIP-1",
+          filename: expectedBundle ? "mind-diary-bundle.zip" : "mind-diary-okf-bundle.zip",
+          contentDisposition: expectedBundle
+            ? 'attachment; filename="mind-diary-bundle.zip"'
+            : 'attachment; filename="mind-diary-okf-bundle.zip"',
+          createdAt: this.#clock.now(),
+        });
+        upload = streamingUpload;
+        built = await this.#builder.writeExactRevision(exportRequest, {
+          write: (chunk) => streamingUpload.write(chunk),
+        });
+        put = await streamingUpload.complete({
+          sha256: built.sha256,
+          size: built.size,
+        });
+        upload = null;
+      } else {
+        const buffered = await this.#builder.exportExactRevision(exportRequest);
+        if (!(buffered.bytes instanceof Uint8Array) || buffered.bytes.byteLength !== buffered.size) {
+          throw Object.assign(new Error("invalid deterministic export result"), {
+            code: "revision_integrity_failure",
+          });
+        }
+        built = buffered;
+        put = await this.#archives.putExportArchive({
+          jobId: job.jobId,
+          spaceId: job.spaceId,
+          claimVersion: job.version,
+          bytes: buffered.bytes,
+          sha256: buffered.sha256,
+          archiveFormat: buffered.archiveFormat,
+          filename: buffered.filename,
+          contentDisposition: buffered.contentDisposition,
+          createdAt: this.#clock.now(),
+        });
+      }
       if (
         built.revisionId !== job.revisionId ||
         built.archiveFormat !== (expectedBundle ? "MD-BUNDLE-ZIP-1" : "MD-OKF-ZIP-1") ||
@@ -695,25 +1080,12 @@ export class ExportJobHandler {
         built.contentDisposition !==
           (expectedBundle
             ? 'attachment; filename="mind-diary-bundle.zip"'
-            : 'attachment; filename="mind-diary-okf-bundle.zip"') ||
-        !(built.bytes instanceof Uint8Array) ||
-        built.bytes.byteLength !== built.size
+            : 'attachment; filename="mind-diary-okf-bundle.zip"')
       ) {
         throw Object.assign(new Error("invalid deterministic export result"), {
           code: "revision_integrity_failure",
         });
       }
-      const put = await this.#archives.putExportArchive({
-        jobId: job.jobId,
-        spaceId: job.spaceId,
-        claimVersion: job.version,
-        bytes: built.bytes,
-        sha256: built.sha256,
-        archiveFormat: built.archiveFormat,
-        filename: built.filename,
-        contentDisposition: built.contentDisposition,
-        createdAt: this.#clock.now(),
-      });
       if (!("archive" in put)) {
         throw new Error(`export archive object write rejected: ${put.kind}`);
       }
@@ -746,6 +1118,7 @@ export class ExportJobHandler {
       }
       return Object.freeze({ kind: "completed" });
     } catch (error) {
+      if (upload !== null) await upload.abort().catch(() => undefined);
       if (objectKey !== null) await this.#archives.deleteExportArchive(objectKey);
       return this.#failClaim(
         job.jobId,
@@ -817,11 +1190,13 @@ export class ExportJobExpiryHandler {
       return Object.freeze({ kind: expired.kind === "not_due" ? "not_available" : "not_found" });
     }
     if (expired.job.archiveCleanedAt !== null) {
-      // A stale crashed worker may have left a later claim-scoped orphan.
-      await this.#archives.deleteExportArchivesForJob(request.jobId);
       return Object.freeze({ kind: "already_completed" });
     }
-    await this.#archives.deleteExportArchivesForJob(request.jobId);
+    if (await this.#archives.hasExportArchivesForJob(request.jobId, expired.job.spaceId)) {
+      // The shared persisted-cursor cleanup owns bounded physical deletion and
+      // completes this metadata record after the final per-job object is gone.
+      return Object.freeze({ kind: "not_available" });
+    }
     const completed = await this.#jobs.completeExpiredExportCleanup(
       request.jobId,
       expired.job.version,

@@ -26,8 +26,15 @@ import {
   type StagedBundleFileObjectWriteRequest,
   type ExportArchivePutResult,
   type ExportArchiveStore,
+  type ExportArchiveUpload,
+  type ExportArchiveUploadRequest,
   type ExportArchiveWriteRequest,
+  type OpenedExportArchive,
   type StoredExportArchive,
+  type BoundedObjectCleanupStore,
+  type ObjectCleanupCandidate,
+  type ObjectCleanupNamespace,
+  type ObjectCleanupPage,
 } from "@mind-diary/application-ports";
 
 export const OBJECT_ADAPTER = "memory-revision-envelope" as const;
@@ -181,7 +188,7 @@ async function webCryptoSha256(bytes: Uint8Array): Promise<string> {
     .join("")}`;
 }
 
-export class InMemoryObjectStore implements BundleFileObjectStore, ExportArchiveStore {
+export class InMemoryObjectStore implements BundleFileObjectStore, ExportArchiveStore, BoundedObjectCleanupStore {
   readonly kind = "object-store" as const;
   readonly #objects = new Map<string, StoredObject>();
   readonly #bundleFiles = new Map<string, StoredBundleFile>();
@@ -612,6 +619,52 @@ export class InMemoryObjectStore implements BundleFileObjectStore, ExportArchive
     return Object.freeze({ kind: "stored", archive: metadata });
   }
 
+  async beginExportArchiveUpload(
+    request: Readonly<ExportArchiveUploadRequest>,
+  ): Promise<ExportArchiveUpload> {
+    const chunks: Uint8Array[] = [];
+    let closed = false;
+    return Object.freeze({
+      write: async (chunk: Uint8Array) => {
+        if (closed) throw new Error("export upload is closed");
+        if (!(chunk instanceof Uint8Array)) throw new TypeError("export chunk must be bytes");
+        chunks.push(new Uint8Array(chunk));
+      },
+      complete: async (completion: Parameters<ExportArchiveUpload["complete"]>[0]) => {
+        if (closed) throw new Error("export upload is closed");
+        closed = true;
+        const size = chunks.reduce((total, chunk) => total + chunk.byteLength, 0);
+        if (size !== completion.size) return Object.freeze({ kind: "digest_mismatch" as const });
+        const bytes = new Uint8Array(size);
+        let offset = 0;
+        for (const chunk of chunks) {
+          bytes.set(chunk, offset);
+          offset += chunk.byteLength;
+        }
+        return this.putExportArchive({ ...request, ...completion, bytes });
+      },
+      abort: async () => {
+        closed = true;
+        chunks.length = 0;
+      },
+    });
+  }
+
+  async openExportArchive(
+    objectKey: string,
+  ): Promise<Readonly<OpenedExportArchive> | null> {
+    const stored = this.#exportArchives.get(objectKey);
+    if (!stored) return null;
+    const bytes = await this.readExportArchive(objectKey);
+    return bytes === null
+      ? null
+      : Object.freeze({
+          sha256: stored.metadata.sha256,
+          size: stored.metadata.size,
+          body: bytes,
+        });
+  }
+
   async readExportArchive(objectKey: string): Promise<Uint8Array | null> {
     const stored = this.#exportArchives.get(objectKey);
     if (!stored) return null;
@@ -632,6 +685,14 @@ export class InMemoryObjectStore implements BundleFileObjectStore, ExportArchive
     return this.#exportArchives.delete(objectKey);
   }
 
+  async hasExportArchivesForJob(
+    jobId: ExportArchiveWriteRequest["jobId"],
+    spaceId: ExportArchiveWriteRequest["spaceId"],
+  ): Promise<boolean> {
+    return [...this.#exportArchives.values()].some((archive) =>
+      archive.metadata.jobId === jobId && archive.metadata.spaceId === spaceId);
+  }
+
   async deleteExportArchivesForJob(
     jobId: ExportArchiveWriteRequest["jobId"],
   ): Promise<number> {
@@ -650,6 +711,117 @@ export class InMemoryObjectStore implements BundleFileObjectStore, ExportArchive
       .map(([key]) => key);
     keys.forEach((key) => this.#exportArchives.delete(key));
     return keys.length;
+  }
+
+  async listObjectCleanupPage(request: Readonly<{
+    namespace: ObjectCleanupNamespace;
+    cursor: string | null;
+    limit: number;
+  }>): Promise<Readonly<ObjectCleanupPage>> {
+    if (!Number.isSafeInteger(request.limit) || request.limit < 1) {
+      throw new ObjectStoreIntegrityError("invalid_limit", "cleanup page limit is invalid");
+    }
+    const candidates: ObjectCleanupCandidate[] = [];
+    if (request.namespace === "immutable") {
+      for (const item of this.#objects.values()) candidates.push(Object.freeze({
+        namespace: "immutable",
+        objectKey: `canonical/${item.sha256}`,
+        fence: item.protectedAt,
+        sha256: item.sha256,
+        size: item.size,
+        createdAt: item.createdAt,
+        protectedAt: item.protectedAt,
+      }));
+    } else if (request.namespace === "bundle_file") {
+      for (const item of this.#bundleFiles.values()) candidates.push(Object.freeze({
+        namespace: "bundle_file",
+        objectKey: `bundle/${item.spaceId}/${item.sha256}`,
+        fence: item.protectedAt,
+        spaceId: item.spaceId,
+        sha256: item.sha256,
+        size: item.size,
+        createdAt: item.createdAt,
+        protectedAt: item.protectedAt,
+      }));
+    } else if (request.namespace === "space_canonical") {
+      for (const item of this.#spaceCanonicalObjects.values()) candidates.push(Object.freeze({
+        namespace: "space_canonical",
+        objectKey: `space/${item.spaceId}/${item.kind}/${item.sha256}`,
+        fence: item.protectedAt,
+        kind: item.kind,
+        spaceId: item.spaceId,
+        sha256: item.sha256,
+        size: item.size,
+        createdAt: item.createdAt,
+        protectedAt: item.protectedAt,
+      }));
+    } else if (request.namespace === "staged_bundle") {
+      for (const item of this.#stagedBundleFiles.values()) candidates.push(Object.freeze({
+        namespace: "staged_bundle",
+        objectKey: `staged/${item.stagedFileId}`,
+        fence: item.createdAt,
+        stagedFileId: item.stagedFileId,
+        spaceId: item.spaceId,
+        size: item.size,
+        createdAt: item.createdAt,
+      }));
+    } else {
+      for (const [objectKey, item] of this.#exportArchives) candidates.push(Object.freeze({
+        namespace: "export",
+        objectKey,
+        fence: `${item.metadata.createdAt}:${item.metadata.sha256}`,
+        jobId: item.metadata.jobId,
+        spaceId: item.metadata.spaceId,
+        size: item.metadata.size,
+        createdAt: item.metadata.createdAt,
+      }));
+    }
+    const remaining = candidates
+      .filter((candidate) => request.cursor === null || candidate.objectKey > request.cursor)
+      .sort((left, right) => left.objectKey.localeCompare(right.objectKey));
+    const page = remaining.slice(0, request.limit);
+    return Object.freeze({
+      candidates: Object.freeze(page),
+      listed: page.length,
+      nextCursor: remaining.length > page.length ? page.at(-1)!.objectKey : null,
+    });
+  }
+
+  async deleteObjectCleanupCandidate(request: Readonly<{
+    candidate: Readonly<ObjectCleanupCandidate>;
+    createdBefore: Utc;
+  }>): Promise<boolean> {
+    assertUtc(request.createdBefore);
+    const candidate = request.candidate;
+    if (candidate.namespace === "immutable") return this.deleteImmutableObject({
+      sha256: candidate.sha256,
+      expectedProtectedAt: candidate.protectedAt,
+      createdBefore: request.createdBefore,
+    });
+    if (candidate.namespace === "bundle_file") return this.deleteBundleFileObject({
+      spaceId: candidate.spaceId,
+      sha256: candidate.sha256,
+      expectedProtectedAt: candidate.protectedAt,
+      createdBefore: request.createdBefore,
+    });
+    if (candidate.namespace === "space_canonical") return this.deleteSpaceCanonicalObject({
+      kind: candidate.kind,
+      spaceId: candidate.spaceId,
+      sha256: candidate.sha256,
+      expectedProtectedAt: candidate.protectedAt,
+      createdBefore: request.createdBefore,
+    });
+    if (compareUtc(candidate.createdAt, request.createdBefore) >= 0) return false;
+    if (candidate.namespace === "staged_bundle") {
+      const current = this.#stagedBundleFiles.get(candidate.stagedFileId);
+      if (!current || current.createdAt !== candidate.fence) return false;
+      return this.#stagedBundleFiles.delete(candidate.stagedFileId);
+    }
+    const current = this.#exportArchives.get(candidate.objectKey);
+    if (!current || `${current.metadata.createdAt}:${current.metadata.sha256}` !== candidate.fence) {
+      return false;
+    }
+    return this.#exportArchives.delete(candidate.objectKey);
   }
 
   async listExportArchivesForTest(): Promise<readonly Readonly<StoredExportArchive>[]> {

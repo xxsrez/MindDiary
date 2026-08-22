@@ -1586,6 +1586,134 @@ test("R2 cleanup is lease-safe, restartable after failure, and export cleanup is
   assert.equal(await bundleRestart.deleteExportArchivesForJob(bundleRequest.jobId), 1);
 });
 
+test("Sites export upload resumes deterministic parts and downloads one verified R2 part at a time", async () => {
+  const database = new FakeD1Database();
+  const bucket = new FakeR2Bucket();
+  let store = (await createSitesPersistenceBoundary({ database, bucket })).objects;
+  const bytes = Uint8Array.from(
+    { length: 9 * 1_048_576 + 137 },
+    (_value, index) => index % 251,
+  );
+  const sha256 = await store.calculateSha256(bytes);
+  const request = {
+    jobId: "export_sites_stream_restart",
+    spaceId: "space_sites_stream",
+    claimVersion: 3,
+    archiveFormat: "MD-BUNDLE-ZIP-1",
+    filename: "mind-diary-bundle.zip",
+    contentDisposition: 'attachment; filename="mind-diary-bundle.zip"',
+    createdAt: T0,
+  };
+
+  const interrupted = await store.beginExportArchiveUpload(request);
+  await interrupted.write(bytes.subarray(0, 5 * 1_048_576));
+  await interrupted.abort();
+  const partsAfterInterruption = [...bucket.records].filter(([key]) =>
+    key.includes("/stream/parts/"));
+  assert.equal(partsAfterInterruption.length, 1);
+
+  store = (await createSitesPersistenceBoundary({ database, bucket })).objects;
+  const resumed = await store.beginExportArchiveUpload(request);
+  for (let offset = 0; offset < bytes.byteLength; offset += 777_777) {
+    await resumed.write(bytes.subarray(offset, offset + 777_777));
+  }
+  const completed = await resumed.complete({ sha256, size: bytes.byteLength });
+  assert.equal(completed.kind, "stored");
+  assert.equal(
+    [...bucket.records].filter(([key]) => key.includes("/stream/parts/")).length,
+    3,
+  );
+
+  const restarted = (await createSitesPersistenceBoundary({ database, bucket })).objects;
+  const opened = await restarted.openExportArchive(completed.archive.objectKey);
+  assert.ok(opened);
+  assert.equal(opened.sha256, sha256);
+  assert.equal(opened.size, bytes.byteLength);
+  assert.equal(opened.body instanceof Uint8Array, false);
+  const reader = opened.body.getReader();
+  const chunks = [];
+  let size = 0;
+  while (true) {
+    const next = await reader.read();
+    if (next.done) break;
+    assert.ok(next.value.byteLength <= 4_194_304);
+    chunks.push(next.value);
+    size += next.value.byteLength;
+  }
+  const downloaded = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    downloaded.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  assert.deepEqual(downloaded, bytes);
+
+  const [firstPartKey] = [...bucket.records.keys()].filter((key) =>
+    key.includes("/stream/parts/"));
+  const tampered = bucket.records.get(firstPartKey);
+  tampered.bytes[0] ^= 0xff;
+  const reopened = await restarted.openExportArchive(completed.archive.objectKey);
+  await assert.rejects(
+    reopened.body.getReader().read(),
+    /R2 export part is invalid/u,
+  );
+});
+
+test("Sites object cleanup checkpoint persists cursor and reclaims only an expired lease", async () => {
+  const database = new FakeD1Database();
+  const bucket = new FakeR2Bucket();
+  let boundary = await createSitesPersistenceBoundary({ database, bucket });
+  let store = boundary.objects;
+  for (const text of ["# cleanup a\n", "# cleanup b\n"]) {
+    await store.putImmutable({
+      bytes: new TextEncoder().encode(text),
+      mediaType: MARKDOWN_MEDIA_TYPE,
+      createdAt: T0,
+    });
+  }
+  const first = await boundary.metadata.claimObjectCleanup({ now: T0, leaseExpiresAt: T1 });
+  assert.equal(first.kind, "claimed");
+  assert.equal(first.reclaimedLease, false);
+  assert.equal(
+    (await boundary.metadata.claimObjectCleanup({ now: T0, leaseExpiresAt: T1 })).kind,
+    "busy",
+  );
+  const page = await store.listObjectCleanupPage({
+    namespace: "immutable",
+    cursor: null,
+    limit: 1,
+  });
+  assert.equal(page.listed, 1);
+  assert.ok(page.nextCursor);
+  assert.equal(await boundary.metadata.completeObjectCleanupBatch({
+    expectedVersion: first.checkpoint.version,
+    namespace: "immutable",
+    cursor: page.nextCursor,
+    cycleStartedAt: first.checkpoint.cycleStartedAt,
+    completedAt: T1,
+  }), true);
+
+  boundary = await createSitesPersistenceBoundary({ database, bucket });
+  store = boundary.objects;
+  const resumed = await boundary.metadata.claimObjectCleanup({ now: T2, leaseExpiresAt: T3 });
+  assert.equal(resumed.kind, "claimed");
+  assert.equal(resumed.checkpoint.cursor, page.nextCursor);
+  assert.equal(resumed.checkpoint.retries, 0);
+  const secondPage = await store.listObjectCleanupPage({
+    namespace: resumed.checkpoint.namespace,
+    cursor: resumed.checkpoint.cursor,
+    limit: 1,
+  });
+  assert.equal(secondPage.listed, 1);
+
+  boundary = await createSitesPersistenceBoundary({ database, bucket });
+  const reclaimed = await boundary.metadata.claimObjectCleanup({ now: T4, leaseExpiresAt: T5 });
+  assert.equal(reclaimed.kind, "claimed");
+  assert.equal(reclaimed.reclaimedLease, true);
+  assert.equal(reclaimed.checkpoint.cursor, page.nextCursor);
+  assert.equal(reclaimed.checkpoint.retries, 1);
+});
+
 async function runSearchContract(name, factory) {
   await test(name, async () => {
     const index = await factory();
