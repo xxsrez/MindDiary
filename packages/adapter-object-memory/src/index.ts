@@ -8,6 +8,13 @@ import {
   type ImmutableObjectPutResult,
   type ImmutableObjectWriteRequest,
   type ObjectStore,
+  REVISION_MANIFEST_MEDIA_TYPE,
+  type SpaceCanonicalObject,
+  type SpaceCanonicalObjectMetadata,
+  type SpaceCanonicalObjectPutResult,
+  type SpaceCanonicalObjectWriteRequest,
+  type SpaceCanonicalObjectListRequest,
+  type SpaceCanonicalObjectDeleteRequest,
   type BundleFileObject,
   type BundleFileObjectMetadata,
   type BundleFileObjectPutResult,
@@ -50,6 +57,11 @@ interface StoredArchive {
 }
 
 interface StoredBundleFile extends BundleFileObjectMetadata {
+  protectedAt: Utc;
+  bytes: Uint8Array;
+}
+
+interface StoredSpaceCanonicalObject extends SpaceCanonicalObjectMetadata {
   protectedAt: Utc;
   bytes: Uint8Array;
 }
@@ -173,6 +185,7 @@ export class InMemoryObjectStore implements BundleFileObjectStore, ExportArchive
   readonly kind = "object-store" as const;
   readonly #objects = new Map<string, StoredObject>();
   readonly #bundleFiles = new Map<string, StoredBundleFile>();
+  readonly #spaceCanonicalObjects = new Map<string, StoredSpaceCanonicalObject>();
   readonly #stagedBundleFiles = new Map<string, StagedBundleFileObject>();
   readonly #exportArchives = new Map<string, StoredArchive>();
   readonly #digestComputer: DigestComputer;
@@ -233,6 +246,112 @@ export class InMemoryObjectStore implements BundleFileObjectStore, ExportArchive
     if (!stored) return null;
     await this.#assertStoredIntegrity(stored);
     return Object.freeze({ ...this.#metadata(stored), bytes: new Uint8Array(stored.bytes) });
+  }
+
+  async putSpaceCanonicalObject(
+    request: SpaceCanonicalObjectWriteRequest,
+  ): Promise<SpaceCanonicalObjectPutResult> {
+    assertUtc(request.createdAt);
+    if (typeof request.spaceId !== "string" || request.spaceId.length === 0) {
+      throw new TypeError("canonical object Space ID is required");
+    }
+    if (request.kind === "markdown") {
+      assertMarkdown(request.bytes, request.mediaType);
+    } else if (request.mediaType !== REVISION_MANIFEST_MEDIA_TYPE) {
+      throw new ObjectStoreIntegrityError(
+        "invalid_media_type",
+        "revision manifest object media type is invalid",
+      );
+    }
+    const bytes = new Uint8Array(request.bytes);
+    if (request.kind === "revision_manifest") {
+      try {
+        new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+      } catch {
+        throw new ObjectStoreIntegrityError("invalid_utf8", "revision manifest is not UTF-8");
+      }
+    }
+    const digest = await this.calculateSha256(bytes);
+    const key = `${request.kind}:${request.spaceId}:${digest}`;
+    const existing = this.#spaceCanonicalObjects.get(key);
+    if (existing) {
+      await this.#assertSpaceCanonicalIntegrity(existing);
+      if (existing.mediaType !== request.mediaType || !bytesEqual(existing.bytes, bytes)) {
+        throw new ObjectStoreIntegrityError(
+          "digest_collision",
+          "different Space-scoped canonical bytes resolved to one digest",
+        );
+      }
+      if (compareUtc(request.createdAt, existing.protectedAt) > 0) {
+        existing.protectedAt = request.createdAt;
+      }
+      return Object.freeze({ object: this.#spaceCanonicalMetadata(existing), status: "already_exists" });
+    }
+    const stored: StoredSpaceCanonicalObject = {
+      kind: request.kind,
+      spaceId: request.spaceId,
+      sha256: digest,
+      mediaType: request.mediaType,
+      size: bytes.byteLength,
+      createdAt: request.createdAt,
+      protectedAt: request.createdAt,
+      bytes,
+    };
+    this.#spaceCanonicalObjects.set(key, stored);
+    return Object.freeze({ object: this.#spaceCanonicalMetadata(stored), status: "stored" });
+  }
+
+  async getSpaceCanonicalObject(
+    kind: SpaceCanonicalObjectMetadata["kind"],
+    spaceId: SpaceCanonicalObjectMetadata["spaceId"],
+    digest: Digest,
+  ): Promise<Readonly<SpaceCanonicalObject> | null> {
+    assertDigest(digest);
+    const stored = this.#spaceCanonicalObjects.get(`${kind}:${spaceId}:${digest}`);
+    if (!stored) return null;
+    await this.#assertSpaceCanonicalIntegrity(stored);
+    return Object.freeze({
+      ...this.#spaceCanonicalMetadata(stored),
+      bytes: new Uint8Array(stored.bytes),
+    });
+  }
+
+  async listSpaceCanonicalObjects(
+    request: SpaceCanonicalObjectListRequest,
+  ): Promise<readonly Readonly<SpaceCanonicalObjectMetadata>[]> {
+    assertUtc(request.createdBefore);
+    if (!Number.isSafeInteger(request.limit) || request.limit < 1) {
+      throw new ObjectStoreIntegrityError("invalid_limit", "canonical object list limit is invalid");
+    }
+    const excluded = new Set(request.excluded.map(
+      (item) => `${item.kind}:${item.spaceId}:${item.sha256}`,
+    ));
+    return Object.freeze([...this.#spaceCanonicalObjects.entries()]
+      .filter(([key, item]) =>
+        (request.spaceId === undefined || item.spaceId === request.spaceId) &&
+        !excluded.has(key) && compareUtc(item.protectedAt, request.createdBefore) < 0)
+      .sort(([, left], [, right]) =>
+        compareUtc(left.protectedAt, right.protectedAt) ||
+        left.kind.localeCompare(right.kind) ||
+        left.spaceId.localeCompare(right.spaceId) ||
+        left.sha256.localeCompare(right.sha256))
+      .slice(0, request.limit)
+      .map(([, item]) => this.#spaceCanonicalMetadata(item)));
+  }
+
+  async deleteSpaceCanonicalObject(
+    request: SpaceCanonicalObjectDeleteRequest,
+  ): Promise<boolean> {
+    assertDigest(request.sha256);
+    assertUtc(request.createdBefore);
+    assertUtc(request.expectedProtectedAt);
+    const key = `${request.kind}:${request.spaceId}:${request.sha256}`;
+    const stored = this.#spaceCanonicalObjects.get(key);
+    if (
+      !stored || stored.protectedAt !== request.expectedProtectedAt ||
+      compareUtc(stored.protectedAt, request.createdBefore) >= 0
+    ) return false;
+    return this.#spaceCanonicalObjects.delete(key);
   }
 
   async putBundleFile(
@@ -549,6 +668,19 @@ export class InMemoryObjectStore implements BundleFileObjectStore, ExportArchive
     stored.bytes = new Uint8Array(bytes);
   }
 
+  /** Deliberate v3 corruption hook for exact-manifest/object integrity tests. */
+  corruptSpaceCanonicalBytesForTest(
+    kind: SpaceCanonicalObjectMetadata["kind"],
+    spaceId: SpaceCanonicalObjectMetadata["spaceId"],
+    digest: Digest,
+    bytes: Uint8Array,
+  ): void {
+    assertDigest(digest);
+    const stored = this.#spaceCanonicalObjects.get(`${kind}:${spaceId}:${digest}`);
+    if (!stored) throw new Error("cannot corrupt a missing Space canonical fixture object");
+    stored.bytes = new Uint8Array(bytes);
+  }
+
   #metadata(stored: StoredObject): Readonly<ImmutableObjectMetadata> {
     return Object.freeze({
       sha256: stored.sha256,
@@ -570,6 +702,33 @@ export class InMemoryObjectStore implements BundleFileObjectStore, ExportArchive
       createdAt: stored.createdAt,
       protectedAt: stored.protectedAt,
     });
+  }
+
+  #spaceCanonicalMetadata(
+    stored: StoredSpaceCanonicalObject,
+  ): Readonly<SpaceCanonicalObjectMetadata> {
+    return Object.freeze({
+      kind: stored.kind,
+      spaceId: stored.spaceId,
+      sha256: stored.sha256,
+      mediaType: stored.mediaType,
+      size: stored.size,
+      createdAt: stored.createdAt,
+      protectedAt: stored.protectedAt,
+    });
+  }
+
+  async #assertSpaceCanonicalIntegrity(stored: StoredSpaceCanonicalObject): Promise<void> {
+    try {
+      if (stored.kind === "markdown") assertMarkdown(stored.bytes, stored.mediaType);
+      else if (stored.mediaType !== REVISION_MANIFEST_MEDIA_TYPE) throw new Error("media");
+    } catch {
+      throw new ObjectStoreIntegrityError("object_tampered", "Space canonical object is invalid");
+    }
+    const actual = await this.calculateSha256(stored.bytes);
+    if (actual !== stored.sha256 || stored.bytes.byteLength !== stored.size) {
+      throw new ObjectStoreIntegrityError("object_tampered", "Space canonical bytes are invalid");
+    }
   }
 
   async #assertStoredIntegrity(stored: StoredObject): Promise<void> {

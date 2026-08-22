@@ -168,6 +168,7 @@ import type {
 import {
   DomainInvariantError,
   PrincipalAccount,
+  REVISION_MANIFEST_FORMAT_V3,
   SpaceAggregate,
   bindingVersion,
   isReservedTopLevelHandle,
@@ -8130,6 +8131,44 @@ export class InMemoryRevisionMetadataStore
     }
     return Object.freeze([...reachable.values()].sort((left, right) =>
       left.spaceId.localeCompare(right.spaceId) || left.sha256.localeCompare(right.sha256),
+    ));
+  }
+
+  async listReachableSpaceCanonicalObjects(): Promise<readonly Readonly<{
+    kind: "markdown" | "revision_manifest";
+    spaceId: SpaceId;
+    sha256: Digest;
+  }>[]> {
+    const reachable = new Map<
+      string,
+      Readonly<{
+        kind: "markdown" | "revision_manifest";
+        spaceId: SpaceId;
+        sha256: Digest;
+      }>
+    >();
+    for (const envelope of this.#revisionsById.values()) {
+      if (envelope.manifest.format !== REVISION_MANIFEST_FORMAT_V3) continue;
+      const spaceId = envelope.revision.spaceId;
+      const manifest = Object.freeze({
+        kind: "revision_manifest" as const,
+        spaceId,
+        sha256: envelope.revision.manifestHash,
+      });
+      reachable.set(`${manifest.kind}\u0000${spaceId}\u0000${manifest.sha256}`, manifest);
+      for (const entry of envelope.manifest.entries) {
+        if (entry.kind !== "markdown") continue;
+        const object = Object.freeze({
+          kind: "markdown" as const,
+          spaceId,
+          sha256: entry.sha256,
+        });
+        reachable.set(`${object.kind}\u0000${spaceId}\u0000${object.sha256}`, object);
+      }
+    }
+    return Object.freeze([...reachable.values()].sort((left, right) =>
+      left.kind.localeCompare(right.kind) || left.spaceId.localeCompare(right.spaceId) ||
+      left.sha256.localeCompare(right.sha256),
     ));
   }
 

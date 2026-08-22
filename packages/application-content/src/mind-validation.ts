@@ -2,6 +2,7 @@ import type { ActorContext } from "@mind-diary/application-contracts";
 import {
   CapabilityAuthorizer,
   ObjectStoreFailure,
+  REVISION_MANIFEST_MEDIA_TYPE,
   type AuthorizationDecision,
   type Authorizer,
   type BundleFileObjectStore,
@@ -9,6 +10,9 @@ import {
 } from "@mind-diary/application-ports";
 import {
   MARKDOWN_MEDIA_TYPE,
+  REVISION_MANIFEST_FORMAT_V3,
+  parseRevisionManifest,
+  revisionEnvelopesEqual,
   serializeRevisionManifest,
   type BundleFileMediaType,
   type RevisionMode,
@@ -312,10 +316,34 @@ export class MindValidationService {
         "The exact revision failed integrity verification.",
       );
     }
-    const manifestHash = await this.#objects.calculateSha256(
-      encoder.encode(serializeRevisionManifest(envelope.manifest)),
-    );
-    if (manifestHash !== envelope.revision.manifestHash) {
+    let manifest = envelope.manifest;
+    try {
+      if (manifest.format === REVISION_MANIFEST_FORMAT_V3) {
+        const stored = "getSpaceCanonicalObject" in this.#objects
+          ? await (this.#objects as BundleFileObjectStore).getSpaceCanonicalObject(
+              "revision_manifest",
+              spaceId,
+              envelope.revision.manifestHash,
+            )
+          : null;
+        if (
+          stored === null || stored.mediaType !== REVISION_MANIFEST_MEDIA_TYPE ||
+          (envelope.revision.manifestSize !== undefined &&
+            stored.size !== envelope.revision.manifestSize)
+        ) throw new Error("missing manifest");
+        manifest = parseRevisionManifest(
+          new TextDecoder("utf-8", { fatal: true }).decode(stored.bytes),
+        );
+        if (!revisionEnvelopesEqual({ revision: envelope.revision, manifest }, envelope)) {
+          throw new Error("manifest projection mismatch");
+        }
+      } else {
+        const manifestHash = await this.#objects.calculateSha256(
+          encoder.encode(serializeRevisionManifest(manifest)),
+        );
+        if (manifestHash !== envelope.revision.manifestHash) throw new Error("manifest hash");
+      }
+    } catch {
       await this.#requireSameValidationAuthorization(
         actor,
         spaceId,
@@ -331,7 +359,7 @@ export class MindValidationService {
     const sources: { readonly path: string; readonly bytes: Uint8Array }[] = [];
     const referenceMarkdown: { readonly path: string; readonly text: string }[] = [];
     const bundleFiles: { readonly path: string; readonly mediaType: BundleFileMediaType }[] = [];
-    for (const entry of envelope.manifest.entries) {
+    for (const entry of manifest.entries) {
       await this.#requireSameValidationAuthorization(
         actor,
         spaceId,
@@ -341,7 +369,14 @@ export class MindValidationService {
       let object;
       try {
         object = entry.kind === "markdown"
-          ? await this.#objects.getImmutable(entry.sha256)
+          ? manifest.format === REVISION_MANIFEST_FORMAT_V3 &&
+              "getSpaceCanonicalObject" in this.#objects
+            ? await (this.#objects as BundleFileObjectStore).getSpaceCanonicalObject(
+                "markdown",
+                spaceId,
+                entry.sha256,
+              ) ?? await this.#objects.getImmutable(entry.sha256)
+            : await this.#objects.getImmutable(entry.sha256)
           : "getBundleFile" in this.#objects
             ? await (this.#objects as BundleFileObjectStore).getBundleFile(
                 spaceId,

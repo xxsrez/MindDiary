@@ -330,9 +330,25 @@ async function objectSnapshot(env) {
     excludedDigests: [],
     limit: 10_000,
   });
+  const spaceObjects = await env.objects.listSpaceCanonicalObjects({
+    createdBefore: FAR_FUTURE,
+    excluded: [],
+    limit: 10_000,
+  });
+  const reachableSpace = await env.metadata.listReachableSpaceCanonicalObjects();
   return {
-    all: objects.map((object) => object.sha256),
-    reachable: await env.metadata.listReachableObjectDigests(),
+    all: [
+      ...objects.map((object) => `legacy\0${object.sha256}`),
+      ...spaceObjects.map((object) =>
+        `${object.kind}\0${object.spaceId}\0${object.sha256}`),
+    ].sort(),
+    reachable: [
+      ...(await env.metadata.listReachableObjectDigests()).map(
+        (digest) => `legacy\0${digest}`,
+      ),
+      ...reachableSpace.map((object) =>
+        `${object.kind}\0${object.spaceId}\0${object.sha256}`),
+    ].sort(),
   };
 }
 
@@ -722,12 +738,12 @@ test(
     const gatedObjects = () => {
       let firstPut = true;
       return interceptPort(env.objects, {
-        putImmutable: async (putImmutable, request) => {
+        putSpaceCanonicalObject: async (putSpaceCanonicalObject, request) => {
           if (firstPut) {
             firstPut = false;
             await barrier.arriveAndWait();
           }
-          return putImmutable(request);
+          return putSpaceCanonicalObject(request);
         },
       });
     };

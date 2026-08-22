@@ -98,6 +98,7 @@ export type {
 export {
   DomainInvariantError,
   PrincipalAccount,
+  REVISION_MANIFEST_FORMAT_V3,
   RESERVED_TOP_LEVEL_HANDLES,
   SpaceAggregate,
   isReservedTopLevelHandle,
@@ -1141,6 +1142,11 @@ export interface CanonicalObjectReachabilityReader {
     spaceId: SpaceId;
     sha256: Sha256Digest;
   }>[]>;
+  listReachableSpaceCanonicalObjects(): Promise<readonly Readonly<{
+    kind: SpaceCanonicalObjectKind;
+    spaceId: SpaceId;
+    sha256: Sha256Digest;
+  }>[]>;
 }
 
 /** Atomic handle, metadata, Owner, revision/HEAD and idempotency boundary. */
@@ -1293,6 +1299,79 @@ export interface ObjectStore {
   deleteImmutableObject(request: ImmutableObjectDeleteRequest): Promise<boolean>;
 }
 
+export const REVISION_MANIFEST_MEDIA_TYPE =
+  "application/vnd.mind-diary.revision-manifest+json; charset=utf-8" as const;
+
+export type SpaceCanonicalObjectKind = "markdown" | "revision_manifest";
+export type SpaceCanonicalObjectMediaType =
+  | MarkdownMediaType
+  | typeof REVISION_MANIFEST_MEDIA_TYPE;
+
+export interface SpaceCanonicalObjectWriteRequest {
+  readonly kind: SpaceCanonicalObjectKind;
+  readonly spaceId: SpaceId;
+  readonly bytes: Uint8Array;
+  readonly mediaType: SpaceCanonicalObjectMediaType;
+  readonly createdAt: UtcInstant;
+}
+
+export interface SpaceCanonicalObjectMetadata {
+  readonly kind: SpaceCanonicalObjectKind;
+  readonly spaceId: SpaceId;
+  readonly sha256: Sha256Digest;
+  readonly mediaType: SpaceCanonicalObjectMediaType;
+  readonly size: number;
+  readonly createdAt: UtcInstant;
+  readonly protectedAt: UtcInstant;
+}
+
+export interface SpaceCanonicalObject extends SpaceCanonicalObjectMetadata {
+  readonly bytes: Uint8Array;
+}
+
+export interface SpaceCanonicalObjectPutResult {
+  readonly object: Readonly<SpaceCanonicalObjectMetadata>;
+  readonly status: "stored" | "already_exists";
+}
+
+export interface SpaceCanonicalObjectListRequest {
+  readonly createdBefore: UtcInstant;
+  /** Optional exact Space scope for lifecycle cleanup without global listing. */
+  readonly spaceId?: SpaceId;
+  readonly excluded: readonly Readonly<{
+    kind: SpaceCanonicalObjectKind;
+    spaceId: SpaceId;
+    sha256: Sha256Digest;
+  }>[];
+  readonly limit: number;
+}
+
+export interface SpaceCanonicalObjectDeleteRequest {
+  readonly kind: SpaceCanonicalObjectKind;
+  readonly spaceId: SpaceId;
+  readonly sha256: Sha256Digest;
+  readonly expectedProtectedAt: UtcInstant;
+  readonly createdBefore: UtcInstant;
+}
+
+/** Space-isolated v3 Markdown and revision-manifest bytes. */
+export interface SpaceCanonicalObjectStore {
+  putSpaceCanonicalObject(
+    request: Readonly<SpaceCanonicalObjectWriteRequest>,
+  ): Promise<SpaceCanonicalObjectPutResult>;
+  getSpaceCanonicalObject(
+    kind: SpaceCanonicalObjectKind,
+    spaceId: SpaceId,
+    sha256: Sha256Digest,
+  ): Promise<Readonly<SpaceCanonicalObject> | null>;
+  listSpaceCanonicalObjects(
+    request: Readonly<SpaceCanonicalObjectListRequest>,
+  ): Promise<readonly Readonly<SpaceCanonicalObjectMetadata>[]>;
+  deleteSpaceCanonicalObject(
+    request: Readonly<SpaceCanonicalObjectDeleteRequest>,
+  ): Promise<boolean>;
+}
+
 export interface BundleFileObjectWriteRequest {
   readonly spaceId: SpaceId;
   readonly bytes: Uint8Array;
@@ -1352,7 +1431,7 @@ export interface StagedBundleFileObject {
 }
 
 /** Opaque bytes use Space-scoped canonical keys and a separate staging namespace. */
-export interface BundleFileObjectStore extends ObjectStore {
+export interface BundleFileObjectStore extends ObjectStore, SpaceCanonicalObjectStore {
   putBundleFile(
     request: Readonly<BundleFileObjectWriteRequest>,
   ): Promise<BundleFileObjectPutResult>;

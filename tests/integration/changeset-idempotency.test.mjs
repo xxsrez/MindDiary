@@ -92,16 +92,33 @@ function revisionIds(...ids) {
 
 function objectStoreWithFirstPutHook(objects, hook) {
   let invoked = false;
+  const beforeFirstPut = async () => {
+    if (invoked) return;
+    invoked = true;
+    await hook();
+  };
   return {
     kind: "object-store",
     calculateSha256: (bytes) => objects.calculateSha256(bytes),
     async putImmutable(request) {
-      if (!invoked) {
-        invoked = true;
-        await hook();
-      }
+      await beforeFirstPut();
       return objects.putImmutable(request);
     },
+    async putSpaceCanonicalObject(request) {
+      await beforeFirstPut();
+      return objects.putSpaceCanonicalObject(request);
+    },
+    getSpaceCanonicalObject: (kind, spaceId, digest) =>
+      objects.getSpaceCanonicalObject(kind, spaceId, digest),
+    listSpaceCanonicalObjects: (request) => objects.listSpaceCanonicalObjects(request),
+    deleteSpaceCanonicalObject: (request) => objects.deleteSpaceCanonicalObject(request),
+    putBundleFile: (request) => objects.putBundleFile(request),
+    getBundleFile: (spaceId, digest) => objects.getBundleFile(spaceId, digest),
+    listBundleFileObjects: (request) => objects.listBundleFileObjects(request),
+    deleteBundleFileObject: (request) => objects.deleteBundleFileObject(request),
+    putStagedBundleFile: (request) => objects.putStagedBundleFile(request),
+    getStagedBundleFile: (id) => objects.getStagedBundleFile(id),
+    deleteStagedBundleFile: (id) => objects.deleteStagedBundleFile(id),
     getImmutable: (digest) => objects.getImmutable(digest),
     listImmutableObjects: (request) => objects.listImmutableObjects(request),
     deleteImmutableObject: (request) => objects.deleteImmutableObject(request),

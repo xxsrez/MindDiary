@@ -1,14 +1,18 @@
 import type { ActorContext, McpTokenActorContext } from "@mind-diary/application-contracts";
-import type {
-  Authorizer,
-  BundleFileDownloadGrantStore,
-  BundleFileObjectStore,
-  Clock,
-  ExportDownloadSecretCrypto,
+import {
+  REVISION_MANIFEST_MEDIA_TYPE,
+  type Authorizer,
+  type BundleFileDownloadGrantStore,
+  type BundleFileObjectStore,
+  type Clock,
+  type ExportDownloadSecretCrypto,
 } from "@mind-diary/application-ports";
 import {
   BUNDLE_FILE_MEDIA_TYPES,
+  REVISION_MANIFEST_FORMAT_V3,
   canonicalBundleFilePath,
+  parseRevisionManifest,
+  revisionEnvelopesEqual,
   serializeRevisionManifest,
   type BundleFileDownloadGrant,
   type BundleFileMediaType,
@@ -205,12 +209,39 @@ export class BundleFileDownloadService {
     const envelope = await this.#store.readRevision(info.mind.mindId, info.resolvedRevision.revisionId);
     if (
       envelope === null ||
-      envelope.revision.manifestHash !== info.resolvedRevision.manifestHash ||
-      (await this.#objects.calculateSha256(
-        new TextEncoder().encode(serializeRevisionManifest(envelope.manifest)),
-      )) !== envelope.revision.manifestHash
+      envelope.revision.manifestHash !== info.resolvedRevision.manifestHash
     ) throw new BundleFileDownloadFailure("revision_integrity_failure", "Exact revision failed integrity verification.");
-    const entry = envelope.manifest.entries.find((candidate) => candidate.path === path);
+    let manifest = envelope.manifest;
+    try {
+      if (manifest.format === REVISION_MANIFEST_FORMAT_V3) {
+        const stored = await this.#objects.getSpaceCanonicalObject(
+          "revision_manifest",
+          info.mind.mindId,
+          envelope.revision.manifestHash,
+        );
+        if (
+          stored === null || stored.mediaType !== REVISION_MANIFEST_MEDIA_TYPE ||
+          (envelope.revision.manifestSize !== undefined &&
+            stored.size !== envelope.revision.manifestSize)
+        ) throw new Error("missing manifest");
+        manifest = parseRevisionManifest(
+          new TextDecoder("utf-8", { fatal: true }).decode(stored.bytes),
+        );
+        if (!revisionEnvelopesEqual({ revision: envelope.revision, manifest }, envelope)) {
+          throw new Error("manifest projection mismatch");
+        }
+      } else if (
+        (await this.#objects.calculateSha256(
+          new TextEncoder().encode(serializeRevisionManifest(manifest)),
+        )) !== envelope.revision.manifestHash
+      ) throw new Error("manifest hash");
+    } catch {
+      throw new BundleFileDownloadFailure(
+        "revision_integrity_failure",
+        "Exact revision failed integrity verification.",
+      );
+    }
+    const entry = manifest.entries.find((candidate) => candidate.path === path);
     if (entry === undefined || entry.kind !== "opaque") {
       throw new BundleFileDownloadFailure("bundle_file_not_found", "BundleFile was not found.");
     }

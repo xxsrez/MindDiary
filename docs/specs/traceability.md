@@ -97,12 +97,13 @@ exact-candidate join below passes.
 
 [ADR-0016](../decisions/0016-sites-storage-capacity-import.md) and the
 [accepted contract](sites-storage-capacity-import.md) define the Release 0.1
-target but do not prove implementation or UAT availability.
+target. SI1 is implemented in the current repository candidate; this matrix
+still distinguishes local evidence from exact-deployment UAT availability.
 
 | ID | Наблюдаемый результат | Owner | Local evidence | UAT evidence |
 |---|---|---|---|---|
 | SI0-Contract | D1/R2 roles, Space-scoped objects/v3 manifests, exact historical search, usage ownership/limits/reservations, Markdown import, privacy and rollback are unambiguous. | `MD-264` | affected specs + ADR-0016, docs topology/link validation, `git diff --check` | not-applicable until implementation |
-| SI1-Delta | Small edit reuses unchanged digests and writes touched objects + manifest under existing HEAD CAS; v1/v2 compatibility and safe orphan handling remain. | `MD-265` | large synthetic delta byte counters, manifest/CAS/idempotency/migration/GC tests | exact-deployment small-delta and restart read-back |
+| SI1-Delta | Small edit reuses unchanged digests and writes touched objects + manifest under existing HEAD CAS; v1/v2 compatibility and safe orphan handling remain. | `MD-265` | `tests/integration/delta-revision-storage.test.mjs` plus manifest/CAS/idempotency/deletion/reconstruction regressions | exact-deployment small-delta and restart read-back |
 | SI2-Capacity | Reconstructable ledger and durable reservations enforce per-Mind/principal/Site warning/soft/hard limits, fairness and cleanup. | `MD-266` | race/retry/shared-digest/reconcile/admission/telemetry tests | exact usage/headroom/quota/fairness receipt |
 | SI3-Streaming | Export and R2 cleanup are streaming, persisted-cursor, bounded and safe against active roots/races. | `MD-268` | deterministic streaming export, concurrent commit/export/GC, restart/expiry tests | bounded memory/latency and cleanup receipt |
 | SI4-Import | Markdown-only plan/reserve/stage/checkpoint/validate/commit is resumable and publishes one exact revision or nothing. | `MD-267` | invalid path/UTF-8/OKF/quota/conflict/retry/cancel/restart corpus tests | interrupt/resume/quota reject/final search/fetch on exact deployment |
@@ -401,7 +402,7 @@ operational проверки. `Реализовано` означает толь
 | Lexical ranking и pagination behavior | Реализованы в exact-revision search baseline | `AND-63` | Seeded relevance/isolation benchmark; изменение scoring/threshold считается contract change и требует новых fixtures. |
 | Deterministic export container, filename и `Content-Disposition` | Реализованы как `MD-OKF-ZIP-1` с фиксированным filename | `AND-68` | Сохранять byte-for-byte repeatability, full-bundle validation и archive-safety fixtures. |
 | Versioned BundleFile and mixed export | MD-247 core, MD-248 native ingress and MD-249 read/reference/dual export are implemented locally; real-client UAT remains unverified | `MD-245`–`MD-250` | BF1–BF3 have local source/tests; BF4 must still prove exact-SHA native-client UAT. |
-| Brain-scale Sites storage/capacity/import | Accepted in ADR-0016; implementation and UAT evidence are absent | `MD-260`, `MD-264`–`MD-268` | SI0 is contract-only; SI1–SI5 remain blocking. |
+| Brain-scale Sites storage/capacity/import | Accepted in ADR-0016; MD-265 delta storage is implemented locally, while capacity/import/streaming and joined UAT evidence remain absent | `MD-260`, `MD-264`–`MD-268` | SI0 is accepted; SI1 has repository evidence; SI2–SI5 remain blocking. |
 | Export size/expiry и durable job cleanup | Реализованы в repository baseline; representative load/UAT recovery ещё не выводится из local tests | `AND-70` | Restart/retry/load evidence с failed/expired/cleanup state; archive никогда не передаётся в JSON-RPC. |
 | Optional MCP Resources UX в target Codex | Resources surface реализована; tools остаются обязательным fallback | `AND-77` | Pinned real-client evidence отдельно подтверждает UX; отсутствие Resources UX не может ломать required tools flow. |
 | Manual identity recovery handoff | Fail-closed product boundary принят; полный operator workflow остаётся открытым | `AND-44` | Threat review и tests, доказывающие отсутствие automatic relink/merge/access transfer. |

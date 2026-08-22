@@ -105,7 +105,11 @@ async function materializeBundle(env, state) {
   assert.equal(state.revisions.length, 1);
   return Promise.all(
     state.revisions[0].manifest.entries.map(async (entry) => {
-      const object = await env.objects.getImmutable(entry.sha256);
+      const object = await env.objects.getSpaceCanonicalObject(
+        "markdown",
+        state.space.spaceId,
+        entry.sha256,
+      ) ?? await env.objects.getImmutable(entry.sha256);
       assert.ok(object);
       return { path: entry.path, bytes: object.bytes };
     }),

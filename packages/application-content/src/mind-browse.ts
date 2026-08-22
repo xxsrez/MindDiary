@@ -2,13 +2,18 @@ import type { ActorContext } from "@mind-diary/application-contracts";
 import {
   CapabilityAuthorizer,
   ObjectStoreFailure,
+  REVISION_MANIFEST_MEDIA_TYPE,
   type AuthorizationDecision,
   type Authorizer,
+  type BundleFileObjectStore,
   type ObjectStore,
 } from "@mind-diary/application-ports";
 import {
   MARKDOWN_MEDIA_TYPE,
+  REVISION_MANIFEST_FORMAT_V3,
   canonicalMarkdownPath,
+  parseRevisionManifest,
+  revisionEnvelopesEqual,
   serializeRevisionManifest,
   type CanonicalRevisionEnvelope,
   type BundleFileMediaType,
@@ -889,7 +894,11 @@ export class MindBrowseService {
       page,
       MAX_BROWSE_OBJECT_CONCURRENCY,
       async (entry) => {
-        const bytes = await this.#readVerifiedObject(entry);
+        const bytes = await this.#readVerifiedObject(
+          envelope.revision.spaceId,
+          envelope.manifest.format,
+          entry,
+        );
         return this.#entrySummary(
           envelope.revision.spaceId,
           envelope.revision.revisionId,
@@ -994,7 +1003,11 @@ export class MindBrowseService {
       envelope.manifest.entries.filter((entry) => entry.kind === "markdown"),
       MAX_BROWSE_OBJECT_CONCURRENCY,
       async (entry) => {
-        const bytes = await this.#readVerifiedObject(entry);
+        const bytes = await this.#readVerifiedObject(
+          envelope.revision.spaceId,
+          envelope.manifest.format,
+          entry,
+        );
         try {
           return Object.freeze({
             path: entry.path,
@@ -1273,7 +1286,11 @@ export class MindBrowseService {
       initialAuthorization,
       notFoundCode,
     );
-    const bytes = await this.#readVerifiedObject(entry);
+    const bytes = await this.#readVerifiedObject(
+      envelope.revision.spaceId,
+      envelope.manifest.format,
+      entry,
+    );
     await this.#requireSameAuthorization(
       actor,
       spaceId,
@@ -1305,22 +1322,57 @@ export class MindBrowseService {
         notFoundCode === "revision_not_found" ? "Revision was not found." : "Entry was not found.",
       );
     }
-    const manifestHash = await this.#objects.calculateSha256(
-      new TextEncoder().encode(serializeRevisionManifest(envelope.manifest)),
-    );
-    if (manifestHash !== envelope.revision.manifestHash) {
+    let manifest = envelope.manifest;
+    try {
+      if (manifest.format === REVISION_MANIFEST_FORMAT_V3) {
+        const stored = "getSpaceCanonicalObject" in this.#objects
+          ? await (this.#objects as BundleFileObjectStore).getSpaceCanonicalObject(
+              "revision_manifest",
+              spaceId,
+              envelope.revision.manifestHash,
+            )
+          : null;
+        if (
+          stored === null || stored.mediaType !== REVISION_MANIFEST_MEDIA_TYPE ||
+          (envelope.revision.manifestSize !== undefined &&
+            stored.size !== envelope.revision.manifestSize)
+        ) throw new Error("missing manifest");
+        manifest = parseRevisionManifest(
+          new TextDecoder("utf-8", { fatal: true }).decode(stored.bytes),
+        );
+        if (!revisionEnvelopesEqual({ revision: envelope.revision, manifest }, envelope)) {
+          throw new Error("manifest projection mismatch");
+        }
+      } else {
+        const manifestHash = await this.#objects.calculateSha256(
+          new TextEncoder().encode(serializeRevisionManifest(manifest)),
+        );
+        if (manifestHash !== envelope.revision.manifestHash) throw new Error("manifest hash");
+      }
+    } catch {
       throw new MindBrowseFailure(
         "revision_integrity_failure",
         "The exact revision manifest failed integrity verification.",
       );
     }
-    return envelope;
+    return Object.freeze({ revision: envelope.revision, manifest });
   }
 
-  async #readVerifiedObject(entry: Readonly<RevisionManifestEntry>): Promise<Uint8Array> {
+  async #readVerifiedObject(
+    spaceId: SpaceId,
+    manifestFormat: CanonicalRevisionEnvelope["manifest"]["format"],
+    entry: Readonly<RevisionManifestEntry>,
+  ): Promise<Uint8Array> {
     let object;
     try {
-      object = await this.#objects.getImmutable(entry.sha256);
+      object = manifestFormat === REVISION_MANIFEST_FORMAT_V3 &&
+          "getSpaceCanonicalObject" in this.#objects
+        ? await (this.#objects as BundleFileObjectStore).getSpaceCanonicalObject(
+            "markdown",
+            spaceId,
+            entry.sha256,
+          ) ?? await this.#objects.getImmutable(entry.sha256)
+        : await this.#objects.getImmutable(entry.sha256);
     } catch (error) {
       if (error instanceof ObjectStoreFailure) {
         throw new MindBrowseFailure(

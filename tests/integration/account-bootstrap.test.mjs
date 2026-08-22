@@ -77,7 +77,11 @@ async function materializedPersonalBundle(accounts, objects, principalId) {
   assert.ok(envelope);
   const files = await Promise.all(
     envelope.manifest.entries.map(async (entry) => {
-      const object = await objects.getImmutable(entry.sha256);
+      const object = await objects.getSpaceCanonicalObject(
+        "markdown",
+        personal.spaceId,
+        entry.sha256,
+      ) ?? await objects.getImmutable(entry.sha256);
       assert.ok(object);
       return { path: entry.path, bytes: object.bytes };
     }),

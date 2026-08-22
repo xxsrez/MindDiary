@@ -20,9 +20,11 @@ deployed candidate.
 
 ADR-0016 принимает следующую Sites storage boundary для Release 0.1:
 Space-scoped R2 objects + separately digested v3 manifests, D1 HEAD/reachability/
-ledger/reservations, delta-aware commits и bounded Markdown import. Этот scope
-ещё не реализован; текущий full-corpus D1/R2 path остаётся исходной точкой
-MD-265–MD-268, а не evidence принятого design.
+ledger/reservations, delta-aware commits и bounded Markdown import. MD-265
+реализует Space-scoped objects/manifests, delta-aware commit/read/GC и legacy
+v1/v2 dual read в текущем repository candidate. Accounting, reservations,
+streaming export/cleanup и import из MD-266–MD-268 ещё не реализованы; UAT
+evidence для всего extension отсутствует.
 
 ## Драйверы и ограничения
 
@@ -632,9 +634,10 @@ explicit target Mind. General cross-Mind search/synthesis требует нов�
   content and manifest v3 bytes в R2; D1 хранит only exact refs, HEAD,
   reachability, usage/reservations and bounded derived metadata. Small commit
   reads parent manifest plus touched bytes and writes delta + one manifest.
-  Historical index is on-demand bounded cache without HEAD fallback. Until
-  implementation/current-SHA gates pass, this paragraph is normative target,
-  not deployed behavior.
+  Текущий repository candidate реализует content/manifest delta path, exact
+  historical materialization, v1/v2 dual read и safe orphan cleanup. Historical
+  index, usage/reservations и import остаются последующими MD-266–MD-268;
+  current-SHA UAT gate для реализованной части ещё не пройден.
 - Trusted Sites identity, browser CSRF/Origin и Bearer content MCP остаются
   разными security boundaries; browser не рендерит raw Markdown, MCP не
   публикует control tools.

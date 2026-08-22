@@ -18,7 +18,10 @@ import {
   COMPOSITION_SELECTION,
   createSitesPersistenceBoundary,
 } from "@mind-diary/composition-root";
-import { CapabilityAuthorizer } from "@mind-diary/application-ports";
+import {
+  CapabilityAuthorizer,
+  REVISION_MANIFEST_MEDIA_TYPE,
+} from "@mind-diary/application-ports";
 
 import {
   createSitesMetadataStore,
@@ -1333,6 +1336,62 @@ async function runObjectContract(name, factory) {
       true,
     );
     assert.equal(await store.getImmutable(put.object.sha256), null);
+
+    const scoped = await store.putSpaceCanonicalObject({
+      kind: "markdown",
+      spaceId: "space_object_contract",
+      bytes,
+      mediaType: MARKDOWN_MEDIA_TYPE,
+      createdAt: T0,
+    });
+    assert.equal(scoped.status, "stored");
+    assert.deepEqual(
+      (await store.getSpaceCanonicalObject(
+        "markdown",
+        "space_object_contract",
+        scoped.object.sha256,
+      )).bytes,
+      bytes,
+    );
+    assert.equal(
+      await store.getSpaceCanonicalObject(
+        "markdown",
+        "space_object_contract_foreign",
+        scoped.object.sha256,
+      ),
+      null,
+    );
+    const manifestBytes = new TextEncoder().encode(
+      '{"format":"mind-diary-revision-manifest-v3","entries":[]}\n',
+    );
+    const manifest = await store.putSpaceCanonicalObject({
+      kind: "revision_manifest",
+      spaceId: "space_object_contract",
+      bytes: manifestBytes,
+      mediaType: REVISION_MANIFEST_MEDIA_TYPE,
+      createdAt: T0,
+    });
+    assert.equal(manifest.status, "stored");
+    const scopedList = await store.listSpaceCanonicalObjects({
+      createdBefore: T2,
+      excluded: [{
+        kind: "markdown",
+        spaceId: "space_object_contract",
+        sha256: scoped.object.sha256,
+      }],
+      limit: 10,
+    });
+    assert.deepEqual(scopedList.map((object) => object.kind), ["revision_manifest"]);
+    assert.equal(
+      await store.deleteSpaceCanonicalObject({
+        kind: "revision_manifest",
+        spaceId: "space_object_contract",
+        sha256: manifest.object.sha256,
+        expectedProtectedAt: manifest.object.protectedAt,
+        createdBefore: T2,
+      }),
+      true,
+    );
   });
 }
 
@@ -1343,6 +1402,64 @@ await runObjectContract("Sites R2 object contract", async () => {
     bucket: new FakeR2Bucket(),
   });
   return boundary.objects;
+});
+
+test("Sites Space-canonical cleanup resumes after crash between delete mark and physical delete", async () => {
+  const database = new FakeD1Database();
+  const bucket = new FakeR2Bucket();
+  let store = (await createSitesPersistenceBoundary({ database, bucket })).objects;
+  const put = await store.putSpaceCanonicalObject({
+    kind: "markdown",
+    spaceId: "space_cleanup_resume",
+    bytes: new TextEncoder().encode("# Cleanup resume\n"),
+    mediaType: MARKDOWN_MEDIA_TYPE,
+    createdAt: T0,
+  });
+
+  bucket.failNextDelete();
+  await assert.rejects(
+    store.deleteSpaceCanonicalObject({
+      kind: "markdown",
+      spaceId: "space_cleanup_resume",
+      sha256: put.object.sha256,
+      expectedProtectedAt: put.object.protectedAt,
+      createdBefore: T1,
+    }),
+    /synthetic R2 delete failure/u,
+  );
+  assert.equal([...bucket.records.values()][0].customMetadata.state, "deleting");
+  await bucket.put(
+    "spaces/space_cleanup_resume/indexes/revision/schema/page",
+    new TextEncoder().encode("derived"),
+    { customMetadata: { state: "active", schema: "derived-index-v1" } },
+  );
+
+  store = (await createSitesPersistenceBoundary({ database, bucket })).objects;
+  const resumable = await store.listSpaceCanonicalObjects({
+    spaceId: "space_cleanup_resume",
+    createdBefore: T2,
+    excluded: [],
+    limit: 10,
+  });
+  assert.equal(resumable.length, 1);
+  assert.equal(
+    await store.deleteSpaceCanonicalObject({
+      kind: resumable[0].kind,
+      spaceId: resumable[0].spaceId,
+      sha256: resumable[0].sha256,
+      expectedProtectedAt: resumable[0].protectedAt,
+      createdBefore: T2,
+    }),
+    true,
+  );
+  assert.equal(
+    await store.getSpaceCanonicalObject(
+      "markdown",
+      "space_cleanup_resume",
+      put.object.sha256,
+    ),
+    null,
+  );
 });
 
 test("R2 cleanup is lease-safe, restartable after failure, and export cleanup is durable", async () => {

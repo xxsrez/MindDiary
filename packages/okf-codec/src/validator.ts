@@ -594,10 +594,16 @@ function normalizeLink(sourcePath: string, target: string): string | null {
   return output.join("/");
 }
 
-function collectBrokenLinkWarnings(
+/**
+ * Checks links in the supplied parsed files against a caller-provided complete
+ * Markdown path projection. This lets delta validation retain exact link
+ * diagnostics without loading unchanged file bodies.
+ */
+export function collectOkfCrossLinkWarnings(
   files: readonly ParsedOkfFile[],
+  availablePaths: readonly string[] = files.map((file) => file.path),
 ): readonly OkfDiagnostic[] {
-  const available = new Set(files.map((file) => file.path));
+  const available = new Set(availablePaths);
   const warnings: OkfDiagnostic[] = [];
   const linkPattern = /!?\[[^\]]*\]\(([^)\s]+)(?:\s+[^)]*)?\)/gu;
   for (const file of files) {
@@ -642,7 +648,7 @@ export function validateOkfBundle(
     diagnostics.push(...result.diagnostics);
     if (result.file) files.push(result.file);
   }
-  diagnostics.push(...collectBrokenLinkWarnings(files));
+  diagnostics.push(...collectOkfCrossLinkWarnings(files));
 
   const conformanceErrors = diagnostics.filter(
     (entry) => entry.category === "okf-conformance",

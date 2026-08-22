@@ -773,6 +773,18 @@ test("concurrent object re-put advances protectedAt and prevents unsafe physical
       }
       return base.deleteImmutableObject(request);
     },
+    putSpaceCanonicalObject: (request) => base.putSpaceCanonicalObject(request),
+    getSpaceCanonicalObject: (kind, spaceId, digest) =>
+      base.getSpaceCanonicalObject(kind, spaceId, digest),
+    listSpaceCanonicalObjects: (request) => base.listSpaceCanonicalObjects(request),
+    deleteSpaceCanonicalObject: (request) => base.deleteSpaceCanonicalObject(request),
+    putBundleFile: (request) => base.putBundleFile(request),
+    getBundleFile: (spaceId, digest) => base.getBundleFile(spaceId, digest),
+    listBundleFileObjects: (request) => base.listBundleFileObjects(request),
+    deleteBundleFileObject: (request) => base.deleteBundleFileObject(request),
+    putStagedBundleFile: (request) => base.putStagedBundleFile(request),
+    getStagedBundleFile: (id) => base.getStagedBundleFile(id),
+    deleteStagedBundleFile: (id) => base.deleteStagedBundleFile(id),
     putExportArchive: (request) => base.putExportArchive(request),
     readExportArchive: (key) => base.readExportArchive(key),
     deleteExportArchive: (key) => base.deleteExportArchive(key),

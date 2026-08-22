@@ -21,6 +21,7 @@ import {
   CAPABILITIES,
   REVISION_MANIFEST_FORMAT_V1,
   REVISION_MANIFEST_FORMAT_V2,
+  REVISION_MANIFEST_FORMAT_V3,
   bindingVersion,
   createCanonicalRevisionEnvelope,
   createRevisionManifest,
@@ -281,7 +282,7 @@ test("staging rejects spoofed types and atomically consumes a binding-pinned ref
     }],
   });
   assert.equal(committed.kind, "committed");
-  assert.equal(committed.envelope.manifest.format, REVISION_MANIFEST_FORMAT_V2);
+  assert.equal(committed.envelope.manifest.format, REVISION_MANIFEST_FORMAT_V3);
   assert.deepEqual(
     committed.envelope.manifest.entries.find((entry) => entry.kind === "opaque"),
     {

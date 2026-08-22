@@ -1,16 +1,18 @@
 import type { ActorContext } from "@mind-diary/application-contracts";
-import type {
-  Authorizer,
-  Clock,
-  CommitEffectIdGenerator,
-  ContentCommitMetadataStore,
-  ContentCommitMetadataTransaction,
-  IdempotencyNamespace,
-  BundleFileObjectStore,
-  RevisionIdGenerator,
+import {
+  REVISION_MANIFEST_MEDIA_TYPE,
+  type Authorizer,
+  type Clock,
+  type CommitEffectIdGenerator,
+  type ContentCommitMetadataStore,
+  type ContentCommitMetadataTransaction,
+  type IdempotencyNamespace,
+  type BundleFileObjectStore,
+  type RevisionIdGenerator,
 } from "@mind-diary/application-ports";
 import {
   MARKDOWN_MEDIA_TYPE,
+  REVISION_MANIFEST_FORMAT_V3,
   createCanonicalRevisionEnvelope,
   createRevisionManifest,
   opaqueId,
@@ -352,8 +354,38 @@ export class ChangesetCommitService {
     const entries = [];
     for (const file of preflight.candidateFiles) {
       if (file.kind === "markdown") {
-        const put = await this.#objects.putImmutable({
-          bytes: ENCODER.encode(file.text),
+        if (!file.writeRequired) {
+          if (file.sha256 === null) {
+            throw new ChangesetCommitFailure(
+              "invalid_revision_chain",
+              "unchanged Markdown entry has no immutable digest",
+            );
+          }
+          entries.push({
+            kind: "markdown" as const,
+            path: file.path,
+            sha256: file.sha256,
+            mediaType: MARKDOWN_MEDIA_TYPE,
+            size: file.size,
+          });
+          continue;
+        }
+        const bytes = ENCODER.encode(file.text!);
+        const digest = await this.#objects.calculateSha256(bytes);
+        if (file.sha256 !== null && digest === file.sha256 && bytes.byteLength === file.size) {
+          entries.push({
+            kind: "markdown" as const,
+            path: file.path,
+            sha256: digest,
+            mediaType: MARKDOWN_MEDIA_TYPE,
+            size: bytes.byteLength,
+          });
+          continue;
+        }
+        const put = await this.#objects.putSpaceCanonicalObject({
+          kind: "markdown",
+          spaceId: request.spaceId,
+          bytes,
           mediaType: MARKDOWN_MEDIA_TYPE,
           createdAt: committedAt,
         });
@@ -361,7 +393,7 @@ export class ChangesetCommitService {
           kind: "markdown" as const,
           path: file.path,
           sha256: put.object.sha256,
-          mediaType: put.object.mediaType,
+          mediaType: MARKDOWN_MEDIA_TYPE,
           size: put.object.size,
         });
         continue;
@@ -399,10 +431,16 @@ export class ChangesetCommitService {
         size: put.object.size,
       });
     }
-    const manifest = createRevisionManifest(entries);
-    const manifestHash = await this.#objects.calculateSha256(
-      ENCODER.encode(serializeRevisionManifest(manifest)),
-    );
+    const manifest = createRevisionManifest(entries, REVISION_MANIFEST_FORMAT_V3);
+    const manifestBytes = ENCODER.encode(serializeRevisionManifest(manifest));
+    const manifestPut = await this.#objects.putSpaceCanonicalObject({
+      kind: "revision_manifest",
+      spaceId: request.spaceId,
+      bytes: manifestBytes,
+      mediaType: REVISION_MANIFEST_MEDIA_TYPE,
+      createdAt: committedAt,
+    });
+    const manifestHash = manifestPut.object.sha256;
 
     return this.#metadata.runContentCommitTransaction(async (transaction) => {
       const authorization = await this.#authorizer.reauthorizeInTransaction(
@@ -522,6 +560,7 @@ export class ChangesetCommitService {
         },
         manifest,
         manifestHash,
+        manifestSize: manifestPut.object.size,
         summary: request.summary,
       });
       const committed = await transaction.commitRevision({

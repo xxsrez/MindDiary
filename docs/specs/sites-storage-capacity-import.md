@@ -1,10 +1,12 @@
 # Sites storage, capacity и Markdown import
 
 Статус: accepted, 2026-08-22. `normative_status: accepted`;
-`implementation_status: not_started`. Это Sites-only contract для Brain-scale
-storage/import в Release 0.1. Он расширяет прежний Markdown/BundleFile baseline,
-но не утверждает, что описанные delta commits, accounting или import уже
-реализованы либо проверены в UAT.
+`implementation_status: partial`. Это Sites-only contract для Brain-scale
+storage/import в Release 0.1. MD-265 реализует в текущем repository candidate
+Space-scoped content objects, separately digested v3 manifests, delta-aware
+commit/read/GC и совместимое чтение legacy v1/v2 revisions. Accounting,
+reservations, streaming export/cleanup и import из MD-266–MD-268 ещё не
+реализованы; весь extension пока не проверен на exact UAT deployment.
 
 ## Цель и граница
 

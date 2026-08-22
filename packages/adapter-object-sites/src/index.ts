@@ -10,6 +10,13 @@ import {
   type ImmutableObjectPutResult,
   type ImmutableObjectWriteRequest,
   type ObjectStore,
+  REVISION_MANIFEST_MEDIA_TYPE,
+  type SpaceCanonicalObject,
+  type SpaceCanonicalObjectMetadata,
+  type SpaceCanonicalObjectPutResult,
+  type SpaceCanonicalObjectWriteRequest,
+  type SpaceCanonicalObjectListRequest,
+  type SpaceCanonicalObjectDeleteRequest,
   type BundleFileObject,
   type BundleFileObjectMetadata,
   type BundleFileObjectPutResult,
@@ -78,6 +85,7 @@ const CANONICAL_PREFIX = "canonical/sha256/";
 const EXPORT_PREFIX = "exports/";
 const BUNDLE_PREFIX = "bundle-files/";
 const STAGED_BUNDLE_PREFIX = "staged-bundle-files/";
+const SPACE_CANONICAL_PREFIX = "spaces/";
 const DELETE_STATE = "deleting";
 const ACTIVE_STATE = "active";
 const MAX_R2_CAS_ATTEMPTS = 16;
@@ -138,6 +146,68 @@ function assertBundleMediaType(mediaType: string): void {
 
 function canonicalKey(digest: Digest): string {
   return `${CANONICAL_PREFIX}${digest.slice("sha256:".length)}`;
+}
+
+function spaceCanonicalKey(
+  kind: SpaceCanonicalObjectMetadata["kind"],
+  spaceId: SpaceCanonicalObjectMetadata["spaceId"],
+  digest: Digest,
+): string {
+  const namespace = kind === "markdown" ? "objects" : "manifests";
+  return `${SPACE_CANONICAL_PREFIX}${encodeURIComponent(spaceId)}/${namespace}/sha256/${digest.slice(7)}`;
+}
+
+function isSpaceCanonicalKey(key: string): boolean {
+  return /\/(?:objects|manifests)\/sha256\/[0-9a-f]{64}$/u.test(key);
+}
+
+function spaceCanonicalMetadataSource(
+  metadata: Readonly<SpaceCanonicalObjectMetadata>,
+  state = ACTIVE_STATE,
+  deleteBoundary = "",
+): Readonly<Record<string, string>> {
+  return Object.freeze({
+    schema: "md-r2-space-canonical-v1",
+    state,
+    kind: metadata.kind,
+    spaceId: metadata.spaceId,
+    sha256: metadata.sha256,
+    mediaType: metadata.mediaType,
+    size: String(metadata.size),
+    createdAt: metadata.createdAt,
+    protectedAt: metadata.protectedAt,
+    deleteBoundary,
+  });
+}
+
+function spaceCanonicalMetadataFromR2(
+  object: R2ListedObjectLike,
+): Readonly<SpaceCanonicalObjectMetadata> {
+  const custom = object.customMetadata ?? {};
+  const digest = custom.sha256 ?? "";
+  const createdAt = custom.createdAt ?? "";
+  const protectedAt = custom.protectedAt ?? "";
+  assertDigest(digest);
+  assertUtc(createdAt);
+  assertUtc(protectedAt);
+  const kind = custom.kind;
+  const mediaType = custom.mediaType;
+  if (
+    custom.schema !== "md-r2-space-canonical-v1" ||
+    (kind !== "markdown" && kind !== "revision_manifest") ||
+    typeof custom.spaceId !== "string" || custom.spaceId.length === 0 ||
+    Number(custom.size) !== object.size ||
+    (kind === "markdown" ? mediaType !== MARKDOWN : mediaType !== REVISION_MANIFEST_MEDIA_TYPE)
+  ) throw new ObjectStoreFailure("object_tampered", "Space canonical metadata is invalid");
+  return Object.freeze({
+    kind,
+    spaceId: custom.spaceId as SpaceCanonicalObjectMetadata["spaceId"],
+    sha256: digest,
+    mediaType: kind === "markdown" ? MARKDOWN : REVISION_MANIFEST_MEDIA_TYPE,
+    size: object.size,
+    createdAt,
+    protectedAt,
+  });
 }
 
 function canonicalMetadata(
@@ -289,6 +359,182 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
       throw new ObjectStoreFailure("object_tampered", "R2 immutable bytes are invalid");
     }
     return Object.freeze({ ...metadata, bytes });
+  }
+
+  async putSpaceCanonicalObject(
+    request: SpaceCanonicalObjectWriteRequest,
+  ): Promise<SpaceCanonicalObjectPutResult> {
+    assertUtc(request.createdAt);
+    if (typeof request.spaceId !== "string" || request.spaceId.length === 0) {
+      throw new TypeError("canonical object Space ID is required");
+    }
+    if (request.kind === "markdown") assertMarkdown(request.bytes, request.mediaType);
+    else if (request.mediaType !== REVISION_MANIFEST_MEDIA_TYPE) {
+      throw new ObjectStoreFailure("invalid_media_type", "revision manifest media type is invalid");
+    }
+    const bytes = new Uint8Array(request.bytes);
+    if (request.kind === "revision_manifest") {
+      try {
+        new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+      } catch {
+        throw new ObjectStoreFailure("invalid_utf8", "revision manifest is not UTF-8");
+      }
+    }
+    const digest = await this.calculateSha256(bytes);
+    const key = spaceCanonicalKey(request.kind, request.spaceId, digest);
+    const mediaType = request.mediaType;
+    for (let attempt = 0; attempt < MAX_R2_CAS_ATTEMPTS; attempt += 1) {
+      const existing = await this.#bucket.get(key);
+      if (!existing) {
+        const metadata: Readonly<SpaceCanonicalObjectMetadata> = Object.freeze({
+          kind: request.kind,
+          spaceId: request.spaceId,
+          sha256: digest,
+          mediaType,
+          size: bytes.byteLength,
+          createdAt: request.createdAt,
+          protectedAt: request.createdAt,
+        });
+        const stored = await this.#bucket.put(key, bytes, {
+          httpMetadata: { contentType: mediaType },
+          customMetadata: spaceCanonicalMetadataSource(metadata),
+          onlyIf: { etagDoesNotMatch: "*" },
+        });
+        if (!stored) continue;
+        return Object.freeze({ object: spaceCanonicalMetadataFromR2(stored), status: "stored" });
+      }
+      const metadata = spaceCanonicalMetadataFromR2(existing);
+      const existingBytes = await bodyBytes(existing);
+      const actual = await this.calculateSha256(existingBytes);
+      if (
+        metadata.kind !== request.kind || metadata.spaceId !== request.spaceId ||
+        metadata.mediaType !== mediaType || actual !== digest ||
+        !bytesEqual(existingBytes, bytes)
+      ) throw new ObjectStoreFailure(
+        actual === digest ? "digest_collision" : "object_tampered",
+        "Space canonical object does not match its digest",
+      );
+      if ((existing.customMetadata?.state ?? ACTIVE_STATE) === DELETE_STATE) continue;
+      const protectedAt = compareUtc(request.createdAt, metadata.protectedAt) > 0
+        ? request.createdAt
+        : metadata.protectedAt;
+      if (protectedAt !== metadata.protectedAt) {
+        const updated = await this.#bucket.put(key, existingBytes, {
+          httpMetadata: { contentType: mediaType },
+          customMetadata: spaceCanonicalMetadataSource({ ...metadata, protectedAt }),
+          onlyIf: { etagMatches: existing.etag },
+        });
+        if (!updated) continue;
+        return Object.freeze({
+          object: spaceCanonicalMetadataFromR2(updated),
+          status: "already_exists",
+        });
+      }
+      return Object.freeze({ object: metadata, status: "already_exists" });
+    }
+    throw new Error("R2 Space canonical CAS retry budget exhausted");
+  }
+
+  async getSpaceCanonicalObject(
+    kind: SpaceCanonicalObjectMetadata["kind"],
+    spaceId: SpaceCanonicalObjectMetadata["spaceId"],
+    digest: Digest,
+  ): Promise<Readonly<SpaceCanonicalObject> | null> {
+    assertDigest(digest);
+    const object = await this.#bucket.get(spaceCanonicalKey(kind, spaceId, digest));
+    if (!object) return null;
+    const metadata = spaceCanonicalMetadataFromR2(object);
+    const bytes = await bodyBytes(object);
+    if (
+      metadata.kind !== kind || metadata.spaceId !== spaceId || metadata.sha256 !== digest ||
+      bytes.byteLength !== metadata.size || (await this.calculateSha256(bytes)) !== digest
+    ) throw new ObjectStoreFailure("object_tampered", "Space canonical bytes are invalid");
+    if (kind === "markdown") assertMarkdown(bytes, metadata.mediaType);
+    return Object.freeze({ ...metadata, bytes });
+  }
+
+  async listSpaceCanonicalObjects(
+    request: SpaceCanonicalObjectListRequest,
+  ): Promise<readonly Readonly<SpaceCanonicalObjectMetadata>[]> {
+    assertUtc(request.createdBefore);
+    if (!Number.isSafeInteger(request.limit) || request.limit < 1) {
+      throw new ObjectStoreFailure("invalid_limit", "Space canonical list limit is invalid");
+    }
+    const excluded = new Set(request.excluded.map(
+      (item) => `${item.kind}\u0000${item.spaceId}\u0000${item.sha256}`,
+    ));
+    const prefix = request.spaceId === undefined
+      ? SPACE_CANONICAL_PREFIX
+      : `${SPACE_CANONICAL_PREFIX}${encodeURIComponent(request.spaceId)}/`;
+    return Object.freeze((await this.#listAll(prefix))
+      // Derived indexes share the top-level Space prefix but have a separate
+      // lifecycle and must never be interpreted as canonical objects.
+      .filter((object) => isSpaceCanonicalKey(object.key))
+      // A process may stop after the delete-marker CAS but before physical
+      // deletion. Keep claimed objects enumerable so a later bounded pass can
+      // finish the deletion.
+      .filter((object) => {
+        const state = object.customMetadata?.state ?? ACTIVE_STATE;
+        return state === ACTIVE_STATE || state === DELETE_STATE;
+      })
+      .map(spaceCanonicalMetadataFromR2)
+      .filter((item) =>
+        !excluded.has(`${item.kind}\u0000${item.spaceId}\u0000${item.sha256}`) &&
+        compareUtc(item.protectedAt, request.createdBefore) < 0)
+      .sort((left, right) =>
+        compareUtc(left.protectedAt, right.protectedAt) ||
+        left.kind.localeCompare(right.kind) || left.spaceId.localeCompare(right.spaceId) ||
+        left.sha256.localeCompare(right.sha256))
+      .slice(0, request.limit));
+  }
+
+  async deleteSpaceCanonicalObject(
+    request: SpaceCanonicalObjectDeleteRequest,
+  ): Promise<boolean> {
+    assertDigest(request.sha256);
+    assertUtc(request.createdBefore);
+    assertUtc(request.expectedProtectedAt);
+    const key = spaceCanonicalKey(request.kind, request.spaceId, request.sha256);
+    for (let attempt = 0; attempt < MAX_R2_CAS_ATTEMPTS; attempt += 1) {
+      const current = await this.#bucket.get(key);
+      if (!current) return false;
+      const metadata = spaceCanonicalMetadataFromR2(current);
+      if (
+        metadata.protectedAt !== request.expectedProtectedAt ||
+        compareUtc(metadata.protectedAt, request.createdBefore) >= 0
+      ) return false;
+      if ((current.customMetadata?.state ?? ACTIVE_STATE) === DELETE_STATE) {
+        const deleteBoundary = current.customMetadata?.deleteBoundary ?? "";
+        try {
+          assertUtc(deleteBoundary);
+        } catch {
+          throw new ObjectStoreFailure(
+            "object_tampered",
+            "Space canonical delete marker is invalid",
+          );
+        }
+        // A later cutoff may safely resume an older claim. Puts remain fenced
+        // by DELETE_STATE, while the caller re-applies current reachability
+        // before selecting this candidate.
+        if (compareUtc(deleteBoundary, request.createdBefore) > 0) return false;
+        await this.#bucket.delete(key);
+        return true;
+      }
+      const bytes = await bodyBytes(current);
+      const claimed = await this.#bucket.put(key, bytes, {
+        httpMetadata: { contentType: metadata.mediaType },
+        customMetadata: spaceCanonicalMetadataSource(
+          metadata,
+          DELETE_STATE,
+          request.createdBefore,
+        ),
+        onlyIf: { etagMatches: current.etag },
+      });
+      if (!claimed) continue;
+      await this.#bucket.delete(key);
+      return true;
+    }
+    throw new Error("R2 Space canonical delete CAS retry budget exhausted");
   }
 
   async putBundleFile(

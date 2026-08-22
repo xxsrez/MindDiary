@@ -5,6 +5,7 @@ import type {
 } from "@mind-diary/application-contracts";
 import {
   ObjectStoreFailure,
+  REVISION_MANIFEST_MEDIA_TYPE,
   type Clock,
   type CurrentAuthorizationToken,
   type McpTokenStore,
@@ -20,9 +21,13 @@ import {
 import {
   CAPABILITIES,
   MARKDOWN_MEDIA_TYPE,
+  REVISION_MANIFEST_FORMAT_V2,
+  REVISION_MANIFEST_FORMAT_V3,
   canonicalMarkdownPath,
   createCanonicalRevisionEnvelope,
   createRevisionManifest,
+  parseRevisionManifest,
+  revisionEnvelopesEqual,
   serializeRevisionManifest,
   utcInstant,
   type CanonicalRevisionEnvelope,
@@ -556,6 +561,18 @@ export interface HeadRevisionReader {
   readHeadRevision(spaceId: SpaceId): Promise<Readonly<MaterializedRevision> | null>;
 }
 
+/** Optional delta-aware exact reader; callers fall back to full materialization for legacy doubles. */
+export interface DeltaRevisionReader extends HeadRevisionReader {
+  readHeadRevisionEnvelope(
+    spaceId: SpaceId,
+  ): Promise<Readonly<CanonicalRevisionEnvelope> | null>;
+  readRevisionFile(
+    spaceId: SpaceId,
+    revisionId: RevisionId,
+    path: string,
+  ): Promise<Readonly<MaterializedRevisionFile> | null>;
+}
+
 export interface UnreachableObjectCollectionResult {
   readonly scanned: number;
   readonly deleted: number;
@@ -618,11 +635,11 @@ function validateFiles(
 }
 
 export class CanonicalRevisionCoordinator {
-  readonly #objects: ObjectStore;
+  readonly #objects: BundleFileObjectStore;
   readonly #revisions: RevisionMetadataStore;
 
   constructor(dependencies: {
-    readonly objects: ObjectStore;
+    readonly objects: BundleFileObjectStore;
     readonly revisions: RevisionMetadataStore;
   }) {
     this.#objects = dependencies.objects;
@@ -663,7 +680,9 @@ export class CanonicalRevisionCoordinator {
         size: put.object.size,
       });
     }
-    const manifest = createRevisionManifest(entries);
+    // This low-level full-snapshot builder remains the legacy v2 compatibility
+    // path. Application changesets below are the v3 delta-aware writer.
+    const manifest = createRevisionManifest(entries, REVISION_MANIFEST_FORMAT_V2);
     const manifestHash = await this.#objects.calculateSha256(
       new TextEncoder().encode(serializeRevisionManifest(manifest)),
     );
@@ -706,35 +725,23 @@ export class CanonicalRevisionCoordinator {
     spaceId: SpaceId,
     revisionId: RevisionId,
   ): Promise<Readonly<MaterializedRevision>> {
-    const envelope = await this.#revisions.readRevision(spaceId, revisionId);
+    const envelope = await this.#readVerifiedEnvelope(spaceId, revisionId);
     if (!envelope) {
       throw new CanonicalRevisionError(
         "revision_not_found",
         "exact revision does not exist in this Mind",
       );
     }
-    const actualManifestHash = await this.#objects.calculateSha256(
-      new TextEncoder().encode(serializeRevisionManifest(envelope.manifest)),
-    );
-    if (actualManifestHash !== envelope.revision.manifestHash) {
-      throw new CanonicalRevisionError(
-        "manifest_integrity_failure",
-        "committed manifest no longer matches its immutable hash",
-      );
-    }
-
     const files: MaterializedRevisionFile[] = [];
     for (const entry of envelope.manifest.entries) {
       let object;
       try {
         object = entry.kind === "markdown"
-          ? await this.#objects.getImmutable(entry.sha256)
-          : "getBundleFile" in this.#objects
-            ? await (this.#objects as BundleFileObjectStore).getBundleFile(
-                spaceId,
-                entry.sha256,
-              )
-            : null;
+          ? envelope.manifest.format === REVISION_MANIFEST_FORMAT_V3
+            ? await this.#objects.getSpaceCanonicalObject("markdown", spaceId, entry.sha256) ??
+              await this.#objects.getImmutable(entry.sha256)
+            : await this.#objects.getImmutable(entry.sha256)
+          : await this.#objects.getBundleFile(spaceId, entry.sha256);
       } catch (error) {
         if (error instanceof ObjectStoreFailure && error.code === "object_tampered") {
           throw new CanonicalRevisionError(
@@ -791,6 +798,139 @@ export class CanonicalRevisionCoordinator {
     return revisionId === null ? null : this.materialize(spaceId, revisionId);
   }
 
+  async readHeadRevisionEnvelope(
+    spaceId: SpaceId,
+  ): Promise<Readonly<CanonicalRevisionEnvelope> | null> {
+    const revisionId = await this.#revisions.readHead(spaceId);
+    return revisionId === null ? null : this.#readVerifiedEnvelope(spaceId, revisionId);
+  }
+
+  async readRevisionFile(
+    spaceId: SpaceId,
+    revisionId: RevisionId,
+    path: string,
+  ): Promise<Readonly<MaterializedRevisionFile> | null> {
+    const envelope = await this.#readVerifiedEnvelope(spaceId, revisionId);
+    const entry = envelope.manifest.entries.find((candidate) => candidate.path === path);
+    if (!entry) return null;
+    let object;
+    try {
+      object = entry.kind === "markdown"
+        ? envelope.manifest.format === REVISION_MANIFEST_FORMAT_V3
+          ? await this.#objects.getSpaceCanonicalObject("markdown", spaceId, entry.sha256) ??
+            await this.#objects.getImmutable(entry.sha256)
+          : await this.#objects.getImmutable(entry.sha256)
+        : await this.#objects.getBundleFile(spaceId, entry.sha256);
+    } catch (error) {
+      if (error instanceof ObjectStoreFailure && error.code === "object_tampered") {
+        throw new CanonicalRevisionError(
+          "object_integrity_failure",
+          `committed object failed integrity verification for ${JSON.stringify(path)}`,
+        );
+      }
+      throw error;
+    }
+    if (!object) {
+      throw new CanonicalRevisionError(
+        "object_not_found",
+        `committed object is missing for ${JSON.stringify(path)}`,
+      );
+    }
+    if (
+      object.sha256 !== entry.sha256 || object.mediaType !== entry.mediaType ||
+      object.size !== entry.size || object.bytes.byteLength !== entry.size
+    ) throw new CanonicalRevisionError(
+      "object_integrity_failure",
+      `committed object metadata differs for ${JSON.stringify(path)}`,
+    );
+    const bytes = new Uint8Array(object.bytes);
+    return entry.kind === "markdown"
+      ? Object.freeze({
+          kind: "markdown" as const,
+          path,
+          mediaType: entry.mediaType,
+          sha256: entry.sha256,
+          size: entry.size,
+          bytes,
+          text: decodeUtf8(bytes),
+        })
+      : Object.freeze({
+          kind: "opaque" as const,
+          path,
+          mediaType: entry.mediaType,
+          sha256: entry.sha256,
+          size: entry.size,
+          bytes,
+        });
+  }
+
+  async #readVerifiedEnvelope(
+    spaceId: SpaceId,
+    revisionId: RevisionId,
+  ): Promise<Readonly<CanonicalRevisionEnvelope>> {
+    const projected = await this.#revisions.readRevision(spaceId, revisionId);
+    if (!projected) {
+      throw new CanonicalRevisionError(
+        "revision_not_found",
+        "exact revision does not exist in this Mind",
+      );
+    }
+    if (projected.manifest.format !== REVISION_MANIFEST_FORMAT_V3) {
+      const actual = await this.#objects.calculateSha256(
+        new TextEncoder().encode(serializeRevisionManifest(projected.manifest)),
+      );
+      if (actual !== projected.revision.manifestHash) {
+        throw new CanonicalRevisionError(
+          "manifest_integrity_failure",
+          "committed manifest no longer matches its immutable hash",
+        );
+      }
+      return projected;
+    }
+    let stored;
+    try {
+      stored = await this.#objects.getSpaceCanonicalObject(
+        "revision_manifest",
+        spaceId,
+        projected.revision.manifestHash,
+      );
+    } catch (error) {
+      if (error instanceof ObjectStoreFailure && error.code === "object_tampered") {
+        throw new CanonicalRevisionError(
+          "manifest_integrity_failure",
+          "committed v3 manifest object failed integrity verification",
+        );
+      }
+      throw error;
+    }
+    if (
+      !stored || stored.mediaType !== REVISION_MANIFEST_MEDIA_TYPE ||
+      (projected.revision.manifestSize !== undefined &&
+        stored.size !== projected.revision.manifestSize)
+    ) throw new CanonicalRevisionError(
+      "manifest_integrity_failure",
+      "committed v3 manifest object is missing or has invalid metadata",
+    );
+    let manifest;
+    try {
+      manifest = parseRevisionManifest(decodeUtf8(stored.bytes));
+    } catch {
+      throw new CanonicalRevisionError(
+        "manifest_integrity_failure",
+        "committed v3 manifest bytes are not canonical",
+      );
+    }
+    const hydrated = Object.freeze({ revision: projected.revision, manifest });
+    if (
+      manifest.format !== REVISION_MANIFEST_FORMAT_V3 ||
+      !revisionEnvelopesEqual(hydrated, projected)
+    ) throw new CanonicalRevisionError(
+      "manifest_integrity_failure",
+      "committed v3 manifest differs from its D1 projection",
+    );
+    return hydrated;
+  }
+
   async collectUnreachableObjects(request: {
     readonly createdBefore: UtcInstant | string;
     readonly limit: number;
@@ -833,6 +973,25 @@ export class CanonicalRevisionCoordinator {
       scanned += bundleCandidates.length;
       for (const candidate of bundleCandidates) {
         const deleted = await bundleObjects.deleteBundleFileObject({
+          spaceId: candidate.spaceId,
+          sha256: candidate.sha256,
+          expectedProtectedAt: candidate.protectedAt,
+          createdBefore,
+        });
+        if (deleted) deletedDigests.push(candidate.sha256);
+      }
+    }
+    if (deletedDigests.length < request.limit) {
+      const reachableCanonical = await this.#revisions.listReachableSpaceCanonicalObjects();
+      const candidates = await this.#objects.listSpaceCanonicalObjects({
+        createdBefore,
+        excluded: reachableCanonical,
+        limit: request.limit - deletedDigests.length,
+      });
+      scanned += candidates.length;
+      for (const candidate of candidates) {
+        const deleted = await this.#objects.deleteSpaceCanonicalObject({
+          kind: candidate.kind,
           spaceId: candidate.spaceId,
           sha256: candidate.sha256,
           expectedProtectedAt: candidate.protectedAt,

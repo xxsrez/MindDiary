@@ -22,6 +22,7 @@ import type {
   MindBindingIdGenerator,
   MindBindingStore,
   MindRouteMetadataStore,
+  BundleFileObjectStore,
   ObjectStore,
   OrdinaryMindIdGenerator,
   OrdinaryMindDeletionCleanupWorkItem,
@@ -2015,7 +2016,7 @@ export interface OrdinaryMindDeletionResult {
 
 export interface OrdinaryMindDeletionDependencies {
   readonly ordinaryMinds: OrdinaryMindStore;
-  readonly objects: ObjectStore;
+  readonly objects: BundleFileObjectStore;
   readonly index: SearchIndex;
   readonly audit: AuditSink;
   readonly exportArchives: ExportArchiveStore;
@@ -2052,7 +2053,7 @@ function deletionConfirmation(handle: string): `delete-mind:${string}` {
 /** Owner-only irreversible ordinary-Mind deletion and crash-resumable cleanup. */
 export class OrdinaryMindDeletionService {
   readonly #ordinaryMinds: OrdinaryMindStore;
-  readonly #objects: ObjectStore;
+  readonly #objects: BundleFileObjectStore;
   readonly #index: SearchIndex;
   readonly #audit: AuditSink;
   readonly #exportArchives: ExportArchiveStore;
@@ -2331,6 +2332,29 @@ export class OrdinaryMindDeletionService {
         if (removed) canonicalObjectsDeleted += 1;
         else canonicalObjectsRetained += 1;
       }
+      const reachableSpaceCanonical =
+        await this.#ordinaryMinds.listReachableSpaceCanonicalObjects();
+      for (;;) {
+        const candidates = await this.#objects.listSpaceCanonicalObjects({
+          spaceId: work.spaceId,
+          createdBefore: work.deleteBefore,
+          excluded: reachableSpaceCanonical,
+          limit: 1_000,
+        });
+        if (candidates.length === 0) break;
+        for (const candidate of candidates) {
+          const removed = await this.#objects.deleteSpaceCanonicalObject({
+            kind: candidate.kind,
+            spaceId: candidate.spaceId,
+            sha256: candidate.sha256,
+            expectedProtectedAt: candidate.protectedAt,
+            createdBefore: work.deleteBefore,
+          });
+          if (removed) canonicalObjectsDeleted += 1;
+          else canonicalObjectsRetained += 1;
+        }
+        if (candidates.length < 1_000) break;
+      }
       const completed = await this.#ordinaryMinds.runOrdinaryMindTransaction(
         (transaction) =>
           transaction.completeOrdinaryMindDeletionCleanup({
@@ -2439,7 +2463,7 @@ export interface AccountDeletionSafeLogger {
 export interface AccountDeletionDependencies {
   readonly accounts: AccountDeletionStore;
   readonly tokens: McpTokenStore;
-  readonly objects: ObjectStore;
+  readonly objects: BundleFileObjectStore;
   readonly index: SearchIndex;
   readonly audit: AuditSink;
   readonly exportArchives: ExportArchiveStore;
@@ -2511,7 +2535,7 @@ function recordAccountDeletionEvent(
 export class AccountDeletionService {
   readonly #accounts: AccountDeletionStore;
   readonly #tokens: McpTokenStore;
-  readonly #objects: ObjectStore;
+  readonly #objects: BundleFileObjectStore;
   readonly #index: SearchIndex;
   readonly #audit: AuditSink;
   readonly #exportArchives: ExportArchiveStore;
@@ -2834,6 +2858,31 @@ export class AccountDeletionService {
         });
         if (removed) canonicalObjectsDeleted += 1;
         else canonicalObjectsRetained += 1;
+      }
+      const reachableSpaceCanonical =
+        await this.#accounts.listReachableSpaceCanonicalObjects();
+      for (const spaceId of work.deletedSpaceIds) {
+        for (;;) {
+          const candidates = await this.#objects.listSpaceCanonicalObjects({
+            spaceId,
+            createdBefore: work.deleteBefore,
+            excluded: reachableSpaceCanonical,
+            limit: 1_000,
+          });
+          if (candidates.length === 0) break;
+          for (const candidate of candidates) {
+            const removed = await this.#objects.deleteSpaceCanonicalObject({
+              kind: candidate.kind,
+              spaceId: candidate.spaceId,
+              sha256: candidate.sha256,
+              expectedProtectedAt: candidate.protectedAt,
+              createdBefore: work.deleteBefore,
+            });
+            if (removed) canonicalObjectsDeleted += 1;
+            else canonicalObjectsRetained += 1;
+          }
+          if (candidates.length < 1_000) break;
+        }
       }
       const completed = await this.#accounts.runAccountDeletionTransaction(
         (transaction) =>

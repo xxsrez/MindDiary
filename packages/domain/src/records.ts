@@ -191,6 +191,8 @@ export interface SpaceRevision {
   readonly committedAt: UtcInstant;
   readonly committedBy: RevisionAuthorReference;
   readonly manifestHash: Sha256Digest;
+  /** Present for separately stored v3 manifests; absent on embedded legacy v1/v2. */
+  readonly manifestSize?: number;
   readonly summary: string;
 }
 

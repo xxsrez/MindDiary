@@ -23,12 +23,14 @@ import {
   type StagedBundleFileId,
 } from "@mind-diary/domain";
 import {
+  collectOkfCrossLinkWarnings,
   okfFileKind,
+  parseOkfFile,
   validateOkfBundle,
   type OkfBundleValidation,
   type OkfDiagnostic,
 } from "@mind-diary/okf-codec";
-import type { HeadRevisionReader } from "./index.js";
+import type { DeltaRevisionReader, HeadRevisionReader } from "./index.js";
 import { analyzeBundleFileReferences } from "./bundle-file-references.js";
 import { materializeLogEntry } from "./reserved-content.js";
 
@@ -178,7 +180,10 @@ export interface ChangesetCandidateFile {
   readonly kind: "markdown";
   readonly path: string;
   readonly mediaType: typeof MARKDOWN_MEDIA_TYPE;
-  readonly text: string;
+  readonly text?: string;
+  readonly sha256: Sha256Digest | null;
+  readonly size: number;
+  readonly writeRequired: boolean;
 }
 
 export interface ChangesetCandidateBundleFile {
@@ -243,8 +248,10 @@ export type ChangesetOperationValidationResult =
 interface WorkingFile {
   readonly kind: "markdown";
   readonly path: string;
-  readonly text: string;
+  readonly text?: string;
   readonly sha256: Sha256Digest | null;
+  readonly size: number;
+  readonly writeRequired: boolean;
 }
 
 
@@ -776,6 +783,15 @@ function comparePaths(
   return left.path < right.path ? -1 : left.path > right.path ? 1 : 0;
 }
 
+function isDeltaRevisionReader(reader: HeadRevisionReader): reader is DeltaRevisionReader {
+  return (
+    "readHeadRevisionEnvelope" in reader &&
+    typeof reader.readHeadRevisionEnvelope === "function" &&
+    "readRevisionFile" in reader &&
+    typeof reader.readRevisionFile === "function"
+  );
+}
+
 export class ChangesetPreflightService {
   readonly #authorizer: Authorizer;
   readonly #revisions: HeadRevisionReader;
@@ -837,8 +853,17 @@ export class ChangesetPreflightService {
     );
     if (operationSet.kind === "invalid") return operationSet;
 
-    const head = await this.#revisions.readHeadRevision(request.spaceId);
-    const currentRevisionId = head?.envelope.revision.revisionId ?? null;
+    const deltaReader = isDeltaRevisionReader(this.#revisions)
+      ? this.#revisions
+      : null;
+    const headEnvelope = deltaReader === null
+      ? null
+      : await deltaReader.readHeadRevisionEnvelope(request.spaceId);
+    const head = deltaReader === null
+      ? await this.#revisions.readHeadRevision(request.spaceId)
+      : null;
+    const currentRevisionId =
+      headEnvelope?.revision.revisionId ?? head?.envelope.revision.revisionId ?? null;
     if (currentRevisionId !== request.expectedRevisionId) {
       return Object.freeze({
         kind: "revision_conflict",
@@ -847,22 +872,45 @@ export class ChangesetPreflightService {
     }
 
     const working = new Map<string, WorkingRevisionFile>();
-    for (const file of head?.files ?? []) {
-      working.set(file.path, file.kind === "markdown"
-        ? Object.freeze({
-            kind: "markdown" as const,
-            path: file.path,
-            text: file.text,
-            sha256: file.sha256,
-          })
-        : Object.freeze({
-            kind: "opaque" as const,
-            path: file.path,
-            mediaType: file.mediaType,
-            sha256: file.sha256,
-            size: file.size,
-            stagedFileId: null,
-          }));
+    if (headEnvelope !== null) {
+      for (const entry of headEnvelope.manifest.entries) {
+        working.set(entry.path, entry.kind === "markdown"
+          ? Object.freeze({
+              kind: "markdown" as const,
+              path: entry.path,
+              sha256: entry.sha256,
+              size: entry.size,
+              writeRequired: false,
+            })
+          : Object.freeze({
+              kind: "opaque" as const,
+              path: entry.path,
+              mediaType: entry.mediaType,
+              sha256: entry.sha256,
+              size: entry.size,
+              stagedFileId: null,
+            }));
+      }
+    } else {
+      for (const file of head?.files ?? []) {
+        working.set(file.path, file.kind === "markdown"
+          ? Object.freeze({
+              kind: "markdown" as const,
+              path: file.path,
+              text: file.text,
+              sha256: file.sha256,
+              size: file.size,
+              writeRequired: false,
+            })
+          : Object.freeze({
+              kind: "opaque" as const,
+              path: file.path,
+              mediaType: file.mediaType,
+              sha256: file.sha256,
+              size: file.size,
+              stagedFileId: null,
+            }));
+      }
     }
 
     const committedAt = this.#clock.now();
@@ -871,7 +919,7 @@ export class ChangesetPreflightService {
 
     for (let index = 0; index < operationSet.operations.length; index += 1) {
       const operation = operationSet.operations[index]!;
-      const current = working.get(operation.path);
+      let current = working.get(operation.path);
       if (operation.type === "create_file") {
         if (current) {
           return invalid("file_exists", "create_file target already exists", {
@@ -886,6 +934,8 @@ export class ChangesetPreflightService {
             path: operation.path,
             text: operation.text,
             sha256: null,
+            size: ENCODER.encode(operation.text).byteLength,
+            writeRequired: true,
           }),
         );
       } else if (
@@ -910,7 +960,9 @@ export class ChangesetPreflightService {
             kind: "markdown" as const,
             path: operation.path,
             text: operation.text,
-            sha256: null,
+            sha256: current.sha256,
+            size: ENCODER.encode(operation.text).byteLength,
+            writeRequired: true,
           }),
         );
       } else if (operation.type === "delete_file") {
@@ -934,9 +986,31 @@ export class ChangesetPreflightService {
             path: operation.path,
           });
         }
+        if (current.text === undefined && deltaReader !== null && currentRevisionId !== null) {
+          const loaded = await deltaReader.readRevisionFile(
+            request.spaceId,
+            currentRevisionId,
+            operation.path,
+          );
+          if (!loaded || loaded.kind !== "markdown") {
+            return invalid("file_not_found", "log target does not exist", {
+              operationIndex: index,
+              path: operation.path,
+            });
+          }
+          current = Object.freeze({
+            kind: "markdown" as const,
+            path: loaded.path,
+            text: loaded.text,
+            sha256: loaded.sha256,
+            size: loaded.size,
+            writeRequired: false,
+          });
+          working.set(operation.path, current);
+        }
         const materialized = materializeLogEntry({
           path: operation.path,
-          text: current.text,
+          text: current.text!,
           category: operation.category,
           message: operation.message,
           serverAssignedAt: committedAt,
@@ -965,7 +1039,9 @@ export class ChangesetPreflightService {
             kind: "markdown" as const,
             path: operation.path,
             text: materialized.text,
-            sha256: null,
+            sha256: current.sha256,
+            size: ENCODER.encode(materialized.text).byteLength,
+            writeRequired: true,
           }),
         );
       } else if (
@@ -1071,20 +1147,42 @@ export class ChangesetPreflightService {
         "resulting bundle file count exceeds its limit",
       );
     }
+    const fullReferenceScan = operationSet.operations.some((operation) =>
+      operation.type === "create_bundle_file" ||
+      operation.type === "replace_bundle_file" ||
+      operation.type === "delete_bundle_file"
+    );
+    if (deltaReader !== null && currentRevisionId !== null && fullReferenceScan) {
+      for (const [path, file] of working) {
+        if (file.kind !== "markdown" || file.text !== undefined) continue;
+        const loaded = await deltaReader.readRevisionFile(
+          request.spaceId,
+          currentRevisionId,
+          path,
+        );
+        if (!loaded || loaded.kind !== "markdown" || loaded.sha256 !== file.sha256) {
+          return invalid("okf_validation_failed", "exact parent file cannot be verified", {
+            path,
+          });
+        }
+        working.set(path, Object.freeze({ ...file, text: loaded.text }));
+      }
+    }
     let resultingBytes = 0;
     let resultingRevisionBytes = 0;
     const candidateFiles = [...working.values()]
       .map((file) => {
-        resultingRevisionBytes += file.kind === "markdown"
-          ? ENCODER.encode(file.text).byteLength
-          : file.size;
+        resultingRevisionBytes += file.size;
         if (file.kind === "opaque") return Object.freeze({ ...file });
-        resultingBytes += ENCODER.encode(file.text).byteLength;
+        resultingBytes += file.size;
         return Object.freeze({
           kind: "markdown" as const,
           path: file.path,
           mediaType: MARKDOWN_MEDIA_TYPE,
-          text: file.text,
+          ...(file.text === undefined ? {} : { text: file.text }),
+          sha256: file.sha256,
+          size: file.size,
+          writeRequired: file.writeRequired,
         });
       })
       .sort(comparePaths);
@@ -1101,15 +1199,55 @@ export class ChangesetPreflightService {
       );
     }
 
-    const okfValidation = validateOkfBundle(
-      candidateFiles.filter(
-        (file): file is ChangesetCandidateFile => file.kind === "markdown",
-      ),
+    const markdownCandidates = candidateFiles.filter(
+      (file): file is ChangesetCandidateFile => file.kind === "markdown",
     );
+    const okfValidation = deltaReader === null
+      ? validateOkfBundle(markdownCandidates.map((file) => ({
+          path: file.path,
+          text: file.text!,
+        })))
+      : (() => {
+          const parsed = markdownCandidates
+            .filter((file) => file.writeRequired)
+            .map((file) => parseOkfFile({ path: file.path, text: file.text! }));
+          const files = parsed.flatMap((result) =>
+            result.file === null ? [] : [result.file]);
+          const diagnostics = [
+            ...parsed.flatMap((result) => result.diagnostics),
+            ...collectOkfCrossLinkWarnings(
+              files,
+              markdownCandidates.map((file) => file.path),
+            ),
+          ];
+          const conformanceErrors = diagnostics.filter(
+            (entry) => entry.category === "okf-conformance",
+          );
+          const envelopeErrors = diagnostics.filter(
+            (entry) => entry.category === "mind-diary-envelope",
+          );
+          const qualityWarnings = diagnostics.filter(
+            (entry) => entry.category === "quality",
+          );
+          const empty = validateOkfBundle([]);
+          return Object.freeze({
+            ...empty,
+            valid: conformanceErrors.length === 0 && envelopeErrors.length === 0,
+            conforms: conformanceErrors.length === 0,
+            files: Object.freeze(files),
+            diagnostics: Object.freeze(diagnostics),
+            conformanceErrors: Object.freeze(conformanceErrors),
+            envelopeErrors: Object.freeze(envelopeErrors),
+            qualityWarnings: Object.freeze(qualityWarnings),
+          });
+        })();
+    const referenceMarkdown = markdownCandidates
+      .filter((file) =>
+        file.text !== undefined &&
+        (deltaReader === null || fullReferenceScan || file.writeRequired))
+      .map((file) => Object.freeze({ path: file.path, text: file.text! }));
     const referenceAnalysis = analyzeBundleFileReferences({
-      markdown: candidateFiles
-        .filter((file): file is ChangesetCandidateFile => file.kind === "markdown")
-        .map((file) => Object.freeze({ path: file.path, text: file.text })),
+      markdown: referenceMarkdown,
       bundleFiles: candidateFiles
         .filter((file) => file.kind === "opaque")
         .map((file) => Object.freeze({ path: file.path, mediaType: file.mediaType })),

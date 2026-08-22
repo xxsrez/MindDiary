@@ -106,16 +106,33 @@ function revisionIds(...ids) {
 
 function objectStoreWithFirstPutHook(objects, hook) {
   let invoked = false;
+  const beforeFirstPut = async () => {
+    if (invoked) return;
+    invoked = true;
+    await hook();
+  };
   return {
     kind: "object-store",
     calculateSha256: (bytes) => objects.calculateSha256(bytes),
     async putImmutable(request) {
-      if (!invoked) {
-        invoked = true;
-        await hook();
-      }
+      await beforeFirstPut();
       return objects.putImmutable(request);
     },
+    async putSpaceCanonicalObject(request) {
+      await beforeFirstPut();
+      return objects.putSpaceCanonicalObject(request);
+    },
+    getSpaceCanonicalObject: (kind, spaceId, digest) =>
+      objects.getSpaceCanonicalObject(kind, spaceId, digest),
+    listSpaceCanonicalObjects: (request) => objects.listSpaceCanonicalObjects(request),
+    deleteSpaceCanonicalObject: (request) => objects.deleteSpaceCanonicalObject(request),
+    putBundleFile: (request) => objects.putBundleFile(request),
+    getBundleFile: (spaceId, digest) => objects.getBundleFile(spaceId, digest),
+    listBundleFileObjects: (request) => objects.listBundleFileObjects(request),
+    deleteBundleFileObject: (request) => objects.deleteBundleFileObject(request),
+    putStagedBundleFile: (request) => objects.putStagedBundleFile(request),
+    getStagedBundleFile: (id) => objects.getStagedBundleFile(id),
+    deleteStagedBundleFile: (id) => objects.deleteStagedBundleFile(id),
     getImmutable: (digest) => objects.getImmutable(digest),
     listImmutableObjects: (request) => objects.listImmutableObjects(request),
     deleteImmutableObject: (request) => objects.deleteImmutableObject(request),
@@ -210,6 +227,12 @@ async function fixture() {
       excludedDigests: [],
       limit: 1_000,
     });
+    const spaceObjects = await objects.listSpaceCanonicalObjects({
+      createdBefore: OBJECT_LIST_CUTOFF,
+      excluded: [],
+      limit: 1_000,
+    });
+    const spaceReachable = await metadata.listReachableSpaceCanonicalObjects();
     return {
       head: head?.envelope.revision.revisionId ?? null,
       revisions: (await metadata.listRevisions(MINDS.ordinary.spaceId)).map(
@@ -217,6 +240,16 @@ async function fixture() {
       ),
       reachable: await metadata.listReachableObjectDigests(),
       objects: allObjects.map((object) => object.sha256),
+      spaceObjects: spaceObjects.map((object) => [
+        object.kind,
+        object.spaceId,
+        object.sha256,
+      ]),
+      spaceReachable: spaceReachable.map((object) => [
+        object.kind,
+        object.spaceId,
+        object.sha256,
+      ]),
       files:
         head?.files.map((file) => [file.path, file.text]) ?? [],
     };
@@ -260,7 +293,7 @@ test("success writes immutable candidate objects and performs one revision/HEAD 
     after.files.find(([path]) => path === "log.md")[1],
     /- \*\*Update\*\*: Added \[Atomic commit\]\(concepts\/atomic\.md\)\.\n- \*\*Create\*\*:/u,
   );
-  assert.deepEqual(after.reachable, [...after.objects].sort());
+  assert.equal(after.objects.every((digest) => after.reachable.includes(digest)), true);
   const historical = await env.coordinator.materialize(
     MINDS.ordinary.spaceId,
     REVISIONS.initial.revisionId,
@@ -567,7 +600,7 @@ test("metadata transaction failure leaves written objects unreachable and final 
     (await env.metadata.listIdempotencyRecordsForTest()).length,
     0,
   );
-  assert.ok(after.objects.length > before.objects.length);
+  assert.ok(after.spaceObjects.length > before.spaceObjects.length);
   assert.equal(after.files.some(([path]) => path === "concepts/failure.md"), false);
 });
 
@@ -635,15 +668,24 @@ test("two Editors racing from one HEAD get one winner and one explicit conflict 
     await env.metadata.readRevision(MINDS.ordinary.spaceId, losingRevisionId),
     null,
   );
-  assert.ok(after.objects.length > after.reachable.length);
-  assert.deepEqual(after.reachable, winner.envelope.manifest.entries.map(
-    (entry) => entry.sha256,
-  ).concat(
-    (await env.metadata.readRevision(
-      MINDS.ordinary.spaceId,
-      REVISIONS.initial.revisionId,
-    )).manifest.entries.map((entry) => entry.sha256),
-  ).filter((digest, index, all) => all.indexOf(digest) === index).sort());
+  const reachableSpaceKeys = new Set(after.spaceReachable.map((item) => item.join("\0")));
+  assert.equal(
+    after.spaceObjects.some((item) => !reachableSpaceKeys.has(item.join("\0"))),
+    true,
+  );
+  assert.deepEqual(
+    after.spaceReachable,
+    [
+      ...winner.envelope.manifest.entries
+        .filter((entry) => entry.kind === "markdown")
+        .map((entry) => ["markdown", MINDS.ordinary.spaceId, entry.sha256]),
+      [
+        "revision_manifest",
+        MINDS.ordinary.spaceId,
+        winner.envelope.revision.manifestHash,
+      ],
+    ].sort((left, right) => left.join("\0").localeCompare(right.join("\0"))),
+  );
 });
 
 test("concurrent write rebind fences a prepared commit before revision, audit, or index effects", async () => {
