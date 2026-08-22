@@ -195,6 +195,10 @@ export function createEvidence({
 }
 
 export function assertAutomaticCaptureSkillPolicy(skill) {
+  if (typeof skill !== "string") {
+    fail("installed_automatic_capture_skill_policy_missing");
+  }
+  const normalized = skill.replace(/\s+/gu, " ");
   const required = [
     "## Automatic capture workflow",
     "automatic_capture.mode` is `routine_non_sensitive",
@@ -203,10 +207,9 @@ export function assertAutomaticCaptureSkillPolicy(skill) {
     "Treat `captured` as one new immutable revision and `no_op` as successful",
     "never move, replace, merge or retry the payload against a different target",
   ];
-  if (
-    typeof skill !== "string" ||
-    required.some((fragment) => !skill.includes(fragment))
-  ) fail("installed_automatic_capture_skill_policy_missing");
+  if (required.some((fragment) => !normalized.includes(fragment))) {
+    fail("installed_automatic_capture_skill_policy_missing");
+  }
   return true;
 }
 
