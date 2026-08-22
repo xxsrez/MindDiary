@@ -221,6 +221,12 @@ commit — exact immutable `write_binding_id`. Scope и ACL binding не соз�
 не заменяют. Полный version/CAS/lifecycle contract — в
 [Mind bindings](mind-bindings.md).
 
+Отдельная automatic-capture policy default-off и принадлежит тому же
+credential. Она включается только в trusted Sites control plane, pin-ится к
+exact active private write generation и не переносится при rebind. Первый
+profile сохраняет только bounded routine/non-sensitive additive Memories по
+[automatic-capture contract](automatic-capture.md).
+
 Personal access token имеет следующий contract:
 
 - token выпускается в authenticated Sites UI и связан с `principal_id`, не с
@@ -301,6 +307,8 @@ Sites UI поддерживает:
 - OAuth connected-app list/revoke;
 - per-credential attached read-only Minds и один exact writable Mind с
   attach/detach/bind/switch/unbind, binding CAS и server read-back;
+- visible per-credential automatic capture `Off | On | blocked` с
+  enable/disable CAS и private-target warning;
 - management links и destructive-action warnings.
 
 Pilot-ready Product Site использует один authenticated navigation shell и
@@ -480,6 +488,7 @@ list_revisions(mind, before?, limit?)
 get_revision(mind, revision_id)
 validate_mind(mind, revision_selector?)
 commit_changeset(mind, write_binding_id, expected_revision, idempotency_key, operations[])
+capture_knowledge(mind, write_binding_id, expected_binding_version, expected_revision, idempotency_key, routine payload, source refs[])
 start_export(mind, revision_selector?, idempotency_key)
 get_export_status(job_id)
 ```
@@ -677,6 +686,11 @@ Copy-ready Codex playbook доступен после onboarding на `/me`, н�
 решение или заметку, видит bounded path-level preview с exact route,
 visibility, binding version и privacy-safe opaque write ID и подтверждает
 обычный `commit_changeset` против fresh exact binding + HEAD.
+Отдельно уже включённая в Sites routine policy позволяет skill вызвать
+`capture_knowledge` только для одной non-sensitive additive Memory в том же
+private target; policy/target/HEAD перечитываются перед каждым вызовом. Всё
+sensitive, cross-Mind, external, destructive или substantial остаётся в
+обычном preview/confirmation flow.
 Codex сам использует published tool schemas; пользователю не нужно собирать
 wire JSON. После commit flow обязан выполнить `validate_mind`, fetch
 `index.md`, lexical `search` по отличительной фразе и exact `fetch` найденной

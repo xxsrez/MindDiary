@@ -273,12 +273,15 @@ host мог открыть native linking или step-up flow. `tools/list` пу
 - discovery, binding inspection и read attach/detach — `content:read`;
 - singleton write bind/rebind/unbind — `content:write`;
 - `commit_changeset` — `content:write`;
+- `capture_knowledge` — `content:write`;
 - `start_export` — `content:read`, поскольку он создаёт delivery job, но не
   изменяет canonical Mind content.
 
 Tool annotations сохраняют фактическую семантику. В частности,
 `commit_changeset` остаётся immediate commit и destructive-capable operation;
 OAuth consent не превращает его в draft или approval artifact.
+`capture_knowledge` non-destructive по annotation, но всё равно немедленно
+создаёт additive immutable revision только через enabled server policy.
 
 ### Token lifecycle
 
@@ -398,8 +401,11 @@ controls после revoke/expiry. Switch copy объясняет, что previo
 Mind Diary из Srez Marketplace, пройти Authenticate, подключить read Minds и
 явно выбрать writable target. MCP URL, DCR, PKCE, resource audience и token
 rotation остаются implementation details. Binding не включает automatic
-capture; его policy/opt-in принимаются отдельно по
-[Mind bindings](mind-bindings.md).
+capture. Обновлённый companion skill читает `automatic_capture` из fresh
+bindings и использует `capture_knowledge` только для already-enabled
+routine/non-sensitive policy в exact private writable Mind. Он не включает
+policy через MCP и не переносит sensitive/cross-Mind/external payload; полный
+contract — в [Automatic capture](automatic-capture.md).
 
 ## Проверка и acceptance
 

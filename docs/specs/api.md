@@ -207,7 +207,8 @@ List operations используют:
 ### Idempotency и concurrency
 
 - REST mutation передаёт `Idempotency-Key` header.
-- MCP `commit_changeset` и `start_export` передают `idempotency_key` как
+- MCP `commit_changeset`, `capture_knowledge` и `start_export` передают
+  `idempotency_key` как
   explicit tool argument.
 - Key namespaced server-side по actor, operation и target aggregate и связан с
   canonical request hash.
@@ -786,6 +787,12 @@ Unbind использует только `action: "unbind_write"` и version. Un
 оба target selector одновременно, missing target и отрицательная version
 отклоняются.
 
+Automatic capture policy использует те же route/CSRF/CAS/idempotency
+boundaries. `enable_capture` не принимает target и server-side pin-ится к
+current active private write generation; `disable_capture` также не принимает
+target и остаётся доступным для blocked policy. Оба action требуют
+`content:write`. Rebind/unbind/revoke/delete автоматически сбрасывают policy.
+
 Server не доверяет route owner: он заново подтверждает, что token/grant
 принадлежит текущему Sites principal, active и имеет required scope. Затем
 `mind_ref` разрешается server-side, проверяется current ACL, а mutation
@@ -847,9 +854,10 @@ grant возвращают generic OAuth error без private principal/grant de
 
 Protected-resource metadata URL также публикуется в MCP
 `WWW-Authenticate` challenge. Read/export tools объявляют OAuth2
-`content:read`; `commit_changeset` объявляет `content:write`. Missing,
+`content:read`; `commit_changeset` и `capture_knowledge` объявляют
+`content:write`. Missing,
 malformed, expired и revoked bearer получают `401`. Valid read-only bearer при
-вызове commit получает `insufficient_scope` и
+вызове content write получает `insufficient_scope` и
 `_meta["mcp/www_authenticate"]` с write challenge, чтобы host мог начать native
 step-up.
 
@@ -1275,13 +1283,16 @@ transport metadata (`resultType`, `ttlMs`, `cacheScope`) из внешнего r
 | `get_revision` | read | true | false | false |
 | `validate_mind` | read | true | false | false |
 | `commit_changeset` | write | false | true | false |
+| `capture_knowledge` | write | false | false | false |
 | `start_export` | read | false | false | false |
 | `get_export_status` | read | true | false | false |
 
 `commit_changeset` помечен destructive, потому что один call может удалить или
 немедленно опубликовать content в live HEAD. Immutable history снижает риск, но
-не делает mutation read-only. `start_export` создаёт job, поэтому также не
-read-only, хотя canonical content не меняет.
+не делает mutation read-only. `capture_knowledge` non-destructive только в
+смысле tool annotation: server разрешает исключительно additive create + log и
+никогда replace/delete. `start_export` создаёт job, поэтому также не read-only,
+хотя canonical content не меняет.
 
 ## Common MCP schemas
 
@@ -1426,6 +1437,11 @@ Input: `{}`. Output `data`:
     "write_binding_id": "wbind_opaque",
     "state": "active",
     "mind": {}
+  },
+  "automatic_capture": {
+    "mode": "disabled",
+    "write_binding_id": null,
+    "updated_at": null
   }
 }
 ```
@@ -1479,6 +1495,43 @@ ID и создаёт новый. Output:
 Для unbind `current` равен `null`; same-target bind — idempotent no-op без новой
 version/ID. Mutation всегда использует trusted current binding owner, а не
 principal/role/space ID из request.
+
+### `capture_knowledge`
+
+Input требует exact current tuple и закрытый policy payload:
+
+```json
+{
+  "mind": "/me",
+  "write_binding_id": "wbind_opaque",
+  "expected_binding_version": 8,
+  "expected_revision": "rev_current",
+  "idempotency_key": "01J...",
+  "classification": "routine_non_sensitive",
+  "capture_kind": "fact",
+  "capture_key": "weekly-summary-preference",
+  "title": "Weekly summary preference",
+  "description": "A routine working preference stated by the user.",
+  "body": "The user prefers compact weekly summaries.",
+  "sources": [{ "kind": "user_statement" }]
+}
+```
+
+`capture_kind` ограничен `fact | decision | source_note`; source ref —
+`user_statement` либо `target_entry` с exact current same-target
+`revision_id + path`. Server заново требует enabled policy, pinned write ID,
+shared binding version, current private visibility, write ACL/scope и exact
+HEAD. Он создаёт только `concepts/captured/{capture_key}.md` и одну semantic
+`Capture` log entry. Exact duplicate возвращает `no_op`; другой content по тому
+же key — `capture_conflict`. Cross-Mind/external/sensitive/substantial input
+идёт через ordinary confirmed `commit_changeset`, не через automatic tool.
+
+Success сообщает `status: captured | no_op`, exact path/revision и
+`index_status: queued | unchanged`. No-write outcomes включают
+`capture_disabled`, `capture_binding_stale`,
+`capture_target_visibility_blocked`, `capture_confirmation_required`,
+`capture_conflict` и обычные ACL/scope/binding/revision errors. Error/result и
+audit не возвращают body, prompt, token, email или source bodies.
 
 ### `browse_entries`
 

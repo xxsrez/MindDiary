@@ -63,8 +63,8 @@ failed или неполном evidence. Historical registry критериев 
 contract, не переписывая historical release evidence. Contract (`MD-229`) и
 локальный durable state slice (`MD-231`), MCP binding tools (`MD-230`) и hard
 content enforcement (`MD-232`), а также Product Site/interaction guidance
-(`MD-233`) подтверждены локально; capture и hosted claims остаются в
-последующих rows.
+(`MD-233`) подтверждены локально. Capture (`MD-234`) теперь также имеет local
+candidate; hosted join остаётся `MD-235`.
 
 | ID | Наблюдаемый результат | Owner | Local evidence | UAT evidence |
 |---|---|---|---|---|
@@ -72,8 +72,8 @@ content enforcement (`MD-232`), а также Product Site/interaction guidance
 | B1-State | Durable binding state переживает restart, atomic rebind invalidates previous ID, revoke/delete fail closed. | `MD-231` | `mind-binding-state` application/CAS/idempotency/Sites-reconstruction/audit suite; `ordinary-mind-deletion` и `account-deletion` orphan-negative cases; architecture check | `MD-235`, pending |
 | B2-Tools | Оба MCP profiles публикуют deterministic inspection/read/write binding tools с current authorization. | `MD-230` | `mcp-binding-tools` strict schemas, redaction, step-up, cross-profile replay и modern/compatibility lifecycle; `mcp-tools`, `mcp-transport`, Product MCP runtime regressions | `MD-235`, pending |
 | B3-Enforcement | Bound reads и exact active write ID являются hard server boundary без wrong-Mind side effects. | `MD-232` | `mind-binding-enforcement`: unbound/detached read, locator/job reuse, exact write ID и concurrent rebind fencing; 133-test content/MCP/persistence regression slice | `MD-235`, pending |
-| B4-UX | Product Site/plugin показывают current reads/exact write target и не infer-ят его из content/model state. | `MD-233` | `mcp-token-management-ui`: read/write/empty/revoked/stale/redaction/copy contract; Product HTTP CSRF/CAS/server-read-back integration; durable composed Product Site token binding/revoke fencing; real browser wide/portrait/landscape checks; Marketplace `8f44ee4`, plugin `0.1.0+codex.20260822110945` validation | `MD-235`, pending |
-| B5-Capture | Отдельная opt-in capture policy пишет только в active target с provenance/privacy constraints. | `MD-234` | pending; binding сам capture не включает | `MD-235`, pending |
+| B4-UX | Product Site/plugin показывают current reads/exact write target и не infer-ят его из content/model state. | `MD-233` | `mcp-token-management-ui`: read/write/empty/revoked/stale/redaction/copy contract; Product HTTP CSRF/CAS/server-read-back integration; durable composed Product Site token binding/revoke fencing; real browser wide/portrait/landscape checks; Marketplace baseline `8f44ee4` | `MD-235`, pending |
+| B5-Capture | Отдельная opt-in capture policy пишет только в active target с provenance/privacy constraints. | `MD-234` | `automatic-capture` + `mind-binding-state`: default-off/private-only/pinned-generation/persistence/no-op/conflict/rebind/privacy/audit; strict MCP schema/write-step-up adapter; durable Product Site UI → CAS → MCP read-back → capture/no-op → disable E2E; Marketplace `181320e`, plugin `0.1.0+codex.20260822115002` validators | `MD-235`, pending |
 | B6-Join | Один exact candidate проходит concurrency/security/persistence/plugin/UAT matrix. | `MD-235` | pending | pending |
 
 ## Как читать матрицу

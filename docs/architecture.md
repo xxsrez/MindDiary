@@ -323,6 +323,15 @@ Production issuer/resource, ChatGPT Web connector и public directory остаю
 distribution boundary — в
 [ADR-0011](decisions/0011-direct-mcp-plugin-oauth-on-use.md).
 
+Automatic capture policy хранится в том же credential-owned binding aggregate,
+но остаётся отдельным default-off consent state. Trusted Web adapter включает
+или выключает её общей binding-version CAS; enable pin-ит current immutable
+write ID. Content adapter принимает `capture_knowledge` только для private
+target и передаёт в обычный commit transaction специальный
+`automatic_capture` requirement, поэтому concurrent policy/binding/ACL drift
+fence-ит revision, audit и index effects. Rebind/unbind/revoke/delete атомарно
+сбрасывают policy.
+
 Blocking OAuth/package conformance может подать тот же ephemeral trusted
 identity snapshot только в authorize/consent adapter test composition. DCR,
 PKCE, exact
@@ -481,6 +490,7 @@ list_minds -> /me + memberships + public catalog
 resolve_mind(exact unlisted handle) -> one authorized descriptor
 set_read_mind_binding -> attach/detach 0..N readable targets
 set_write_mind_binding -> atomically select 0..1 writable target
+capture_knowledge -> add one routine Memory only through enabled pinned policy
 content_tool(mind, revision?, ...) -> exactly one bound space_id
 ```
 

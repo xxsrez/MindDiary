@@ -1,8 +1,8 @@
 # Automatic knowledge capture
 
-Статус: accepted contract, 2026-08-22. Документ задаёт первый bounded
-Codex-first capture profile. Binding сам capture не включает; реализация и UAT
-evidence указываются отдельно.
+Статус: accepted contract и локально реализованный candidate, 2026-08-22.
+Документ задаёт первый bounded Codex-first capture profile. Binding сам capture
+не включает; hosted UAT evidence остаётся отдельным release gate.
 
 ## Назначение и граница
 
@@ -147,7 +147,7 @@ current active write generation. Unknown fields запрещены.
 
 ### MCP
 
-`get_mind_bindings` добавляет privacy-safe `capture_policy`. Новый command
+`get_mind_bindings` добавляет privacy-safe `automatic_capture`. Новый command
 `capture_knowledge` требует:
 
 - exact Mind selector и active `write_binding_id`;

@@ -259,16 +259,18 @@ Personal Mind default:
 ## Automatic capture и provenance boundary
 
 Binding разрешает destination selection, но **не включает automatic capture**.
-До отдельной реализации сохраняется только explicit user-requested content
-write. Content, prompt, source Mind или OAuth grant не могут включить capture.
+Отдельный [automatic-capture contract](automatic-capture.md) теперь локально
+реализован как per-credential opt-in state, pinned к exact active
+`write_binding_id`. Content, prompt, source Mind или OAuth grant по-прежнему не
+могут включить capture.
 
-Будущая capture policy обязана отдельно определить opt-in, eligible durable
-knowledge, bounded changes, deduplication, provenance, sensitivity и target
-visibility. Private/read-only source нельзя автоматически переносить в shared,
-unlisted или public target только потому, что principal имеет доступ к обоим.
-Rebind/ACL/HEAD conflict останавливает attempt; payload никогда не переносится
-в новый target автоматически. Replace/delete и visibility-impacting действия
-сохраняют отдельную preview/confirmation boundary.
+Initial profile допускает только bounded additive routine/non-sensitive Memory
+в private target. Private/read-only source нельзя автоматически переносить в
+другой, unlisted или public target только потому, что principal имеет доступ к
+обоим. Rebind/unbind/revoke/delete отключают policy; visibility/ACL/HEAD либо
+общий binding-version drift останавливают attempt. Payload никогда не
+переносится в новый target автоматически. Replace/delete/index и
+visibility-impacting действия сохраняют отдельную preview/confirmation boundary.
 
 ## Открытые вопросы вне этого решения
 
@@ -277,5 +279,5 @@ Rebind/ACL/HEAD conflict останавливает attempt; payload никог�
 - Нужна ли future UI-managed grouping нескольких grants в один user-visible
   workspace; release 0.1 сохраняет независимый state каждого authorization
   artifact.
-- Exact automatic-capture classification, consent и cross-Mind provenance
-  policy — scope отдельной Task, не часть binding implementation.
+- Future sensitive profiles, external/cross-Mind provenance и capture в
+  non-private targets требуют отдельных product решений.
