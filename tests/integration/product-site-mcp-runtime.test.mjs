@@ -494,6 +494,159 @@ async function modernTool(runtime, secret, id, name, args) {
   return body.result.structuredContent.data;
 }
 
+test("Product Site persists success-only web/MCP activity and hides the UAT directory from non-operators", async () => {
+  const database = new FakeD1Database();
+  const bucket = new FakeR2Bucket();
+  const scheduled = [];
+  let currentTime = new Date("2026-08-22T10:00:00.000Z");
+  let currentIdentity = {
+    verifiedEmail: "operator.activity@example.com",
+    verifiedFullName: "Activity Operator",
+  };
+  const runtimeOptions = {
+    database,
+    bucket,
+    publicOrigin: ORIGIN,
+    identity: {
+      readVerifiedIdentity() {
+        return { kind: "authenticated", ...currentIdentity };
+      },
+    },
+    tokenVerifierKey: key(23),
+    locatorKey: key(63),
+    exportDownloadVerifierKey: key(103),
+    csrfKey: key(143),
+    now: () => currentTime,
+    observabilityWriter: { write() {} },
+    schedule(work) { scheduled.push(work); },
+  };
+  let runtime = await createProductSiteRuntime(runtimeOptions);
+
+  const registration = await responseFrom(runtime, new Request(`${ORIGIN}/`));
+  const registrationCsrf = csrfFromHtml(await registration.text());
+  const bootstrap = await responseFrom(runtime, new Request(`${ORIGIN}/api/v1/account`, {
+    method: "POST",
+    headers: {
+      origin: ORIGIN,
+      "content-type": "application/json",
+      "x-csrf-token": registrationCsrf,
+      "idempotency-key": "bootstrap:operator-activity",
+    },
+    body: JSON.stringify({ action: "create_isolated_account" }),
+  }));
+  assert.equal(bootstrap.status, 200);
+  const operatorPrincipalId = (await bootstrap.json()).data.principal_id;
+
+  currentTime = new Date("2026-08-22T10:10:00.000Z");
+  const settings = await responseFrom(runtime, new Request(`${ORIGIN}/settings/mcp`));
+  const csrf = csrfFromHtml(await settings.text());
+  const issued = await responseFrom(runtime, new Request(`${ORIGIN}/api/v1/mcp-tokens`, {
+    method: "POST",
+    headers: {
+      origin: ORIGIN,
+      "content-type": "application/json",
+      "x-csrf-token": csrf,
+      "idempotency-key": "token:operator-activity",
+    },
+    body: JSON.stringify({ name: "Activity token", scopes: ["content:read"] }),
+  }));
+  const secret = (await issued.json()).data.secret;
+
+  currentTime = new Date("2026-08-22T10:20:00.000Z");
+  const listed = await modernMcp(runtime, secret, {
+    jsonrpc: "2.0",
+    id: "activity-tools-list",
+    method: "tools/list",
+    params: {
+      _meta: {
+        "io.modelcontextprotocol/protocolVersion": MCP_TARGET_PROTOCOL,
+        "io.modelcontextprotocol/clientInfo": {
+          name: "mind-diary-activity-e2e",
+          version: "0.0.0",
+        },
+        "io.modelcontextprotocol/clientCapabilities": {},
+      },
+    },
+  });
+  assert.equal(listed.status, 200);
+
+  runtime = await createProductSiteRuntime({
+    ...runtimeOptions,
+    serviceOperatorPrincipalIds: [operatorPrincipalId],
+  });
+  const directory = await responseFrom(runtime, new Request(
+    `${ORIGIN}/api/v1/internal/operators/users`,
+  ));
+  assert.equal(directory.status, 200);
+  const operatorRow = (await directory.json()).data.principals.find(
+    ({ principal_id }) => principal_id === operatorPrincipalId,
+  );
+  assert.equal(operatorRow.verified_email, "operator.activity@example.com");
+  assert.equal(operatorRow.activity.last_web_seen_at, "2026-08-22T10:10:00.000Z");
+  assert.equal(operatorRow.activity.last_mcp_seen_at, "2026-08-22T10:20:00.000Z");
+
+  currentTime = new Date("2026-08-22T10:30:00.000Z");
+  const deniedMcp = await modernMcp(runtime, "mdp_v1_invalid", {
+    jsonrpc: "2.0",
+    id: "activity-denied",
+    method: "tools/list",
+    params: {
+      _meta: {
+        "io.modelcontextprotocol/protocolVersion": MCP_TARGET_PROTOCOL,
+        "io.modelcontextprotocol/clientInfo": {
+          name: "mind-diary-activity-e2e",
+          version: "0.0.0",
+        },
+        "io.modelcontextprotocol/clientCapabilities": {},
+      },
+    },
+  });
+  assert.equal(deniedMcp.status, 401);
+  const afterDenied = await responseFrom(runtime, new Request(
+    `${ORIGIN}/api/v1/internal/operators/users`,
+  ));
+  const afterDeniedRow = (await afterDenied.json()).data.principals.find(
+    ({ principal_id }) => principal_id === operatorPrincipalId,
+  );
+  assert.equal(afterDeniedRow.activity.last_mcp_seen_at, "2026-08-22T10:20:00.000Z");
+
+  currentIdentity = {
+    verifiedEmail: "never.active@example.com",
+    verifiedFullName: "Never Active",
+  };
+  const secondRegistration = await responseFrom(runtime, new Request(`${ORIGIN}/`));
+  const secondCsrf = csrfFromHtml(await secondRegistration.text());
+  const secondBootstrap = await responseFrom(runtime, new Request(`${ORIGIN}/api/v1/account`, {
+    method: "POST",
+    headers: {
+      origin: ORIGIN,
+      "content-type": "application/json",
+      "x-csrf-token": secondCsrf,
+      "idempotency-key": "bootstrap:never-active",
+    },
+    body: JSON.stringify({ action: "create_isolated_account" }),
+  }));
+  assert.equal(secondBootstrap.status, 200);
+  const secondPrincipalId = (await secondBootstrap.json()).data.principal_id;
+  assert.equal(
+    (await responseFrom(runtime, new Request(`${ORIGIN}/internal/operators/users`))).status,
+    404,
+  );
+
+  currentIdentity = {
+    verifiedEmail: "operator.activity@example.com",
+    verifiedFullName: "Activity Operator",
+  };
+  const never = await responseFrom(runtime, new Request(
+    `${ORIGIN}/api/v1/internal/operators/users?never_active=true`,
+  ));
+  assert.equal(never.status, 200);
+  const neverRows = (await never.json()).data.principals;
+  assert.deepEqual(neverRows.map(({ principal_id }) => principal_id), [secondPrincipalId]);
+  assert.equal(neverRows[0].activity, null);
+  assert.ok(scheduled.some(({ kind }) => kind === "audit_outbox"));
+});
+
 test("empty account reaches a strict starter commit and first useful search/fetch with safe timing", async () => {
   const database = new FakeD1Database();
   const bucket = new FakeR2Bucket();

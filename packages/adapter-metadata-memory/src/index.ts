@@ -46,6 +46,7 @@ import type {
   PersonalMindTargetRequest,
   PersonalSpaceBinding,
   Principal,
+  PrincipalActivitySummary,
   PrincipalId,
   PrincipalAccountSnapshot,
   RegisteredPrincipalSnapshot,
@@ -144,6 +145,7 @@ import type {
   RevokePrincipalTokensForAccountDeletionRequest,
   RevokePrincipalTokensForAccountDeletionResult,
   PrincipalTokenDeletionSnapshot,
+  RecordPrincipalActivityRequest,
   ReadMindBinding,
   ReadMindBindingId,
   RetiredHandleMarker,
@@ -179,6 +181,11 @@ import type {
   SpaceTargetPurgeResult,
   StageContentCommitEffectsRequest,
   StageContentCommitEffectsResult,
+  ServiceOperatorDirectoryPage,
+  ServiceOperatorDirectoryQuery,
+  ServiceOperatorDirectoryStore,
+  ServiceOperatorPrincipalProjection,
+  StageServiceOperatorDirectoryAuditRequest,
   TransferOrdinaryMindOwnershipRequest,
   TransferOrdinaryMindOwnershipResult,
   VerifiedSpaceHost,
@@ -1111,6 +1118,71 @@ function cloneAuditOutbox(
   message: Readonly<AuditOutboxMessage>,
 ): Readonly<AuditOutboxMessage> {
   return Object.freeze({ ...message });
+}
+
+function clonePrincipalActivity(
+  summary: Readonly<PrincipalActivitySummary>,
+): Readonly<PrincipalActivitySummary> {
+  return Object.freeze({ ...summary });
+}
+
+const SERVICE_OPERATOR_CURSOR_PREFIX = "md_operator_cursor_v1.";
+
+function encodeServiceOperatorCursor(offset: number): string {
+  const json = JSON.stringify({ v: 1, o: offset });
+  return `${SERVICE_OPERATOR_CURSOR_PREFIX}${btoa(json)
+    .replaceAll("+", "-")
+    .replaceAll("/", "_")
+    .replace(/=+$/u, "")}`;
+}
+
+function decodeServiceOperatorCursor(cursor: string | undefined): number | null {
+  if (cursor === undefined) return 0;
+  if (!cursor.startsWith(SERVICE_OPERATOR_CURSOR_PREFIX)) return null;
+  try {
+    const encoded = cursor.slice(SERVICE_OPERATOR_CURSOR_PREFIX.length);
+    const padded = `${encoded}${"=".repeat((4 - (encoded.length % 4)) % 4)}`;
+    const parsed = JSON.parse(
+      atob(padded.replaceAll("-", "+").replaceAll("_", "/")),
+    ) as Record<string, unknown>;
+    if (
+      parsed.v !== 1 ||
+      !Number.isSafeInteger(parsed.o) ||
+      (parsed.o as number) < 0
+    ) return null;
+    const offset = parsed.o as number;
+    return encodeServiceOperatorCursor(offset) === cursor ? offset : null;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeDirectorySearch(value: string): string {
+  return value.normalize("NFKC").trim().toLocaleLowerCase("en-US");
+}
+
+function compareDirectoryRows(
+  left: Readonly<ServiceOperatorPrincipalProjection>,
+  right: Readonly<ServiceOperatorPrincipalProjection>,
+  query: Readonly<ServiceOperatorDirectoryQuery>,
+): number {
+  let compared = 0;
+  if (query.sort === "registered_at") {
+    compared = left.registeredAt.localeCompare(right.registeredAt);
+  } else if (query.sort === "last_activity_at") {
+    const leftValue = left.activity?.lastActivityAt ?? "";
+    const rightValue = right.activity?.lastActivityAt ?? "";
+    compared = leftValue.localeCompare(rightValue);
+  } else {
+    compared = normalizeDirectorySearch(left.displayName).localeCompare(
+      normalizeDirectorySearch(right.displayName),
+      "en-US",
+    );
+  }
+  if (compared === 0) {
+    compared = compareUnicodeScalarValues(left.principalId, right.principalId);
+  }
+  return query.direction === "asc" ? compared : -compared;
 }
 
 function cloneBackgroundJob(job: Readonly<BackgroundJob>): Readonly<BackgroundJob> {
@@ -4078,6 +4150,7 @@ export class InMemoryRevisionMetadataStore
     ObjectCleanupCheckpointStore,
     MembershipControlStore,
     ControlReadStore,
+    ServiceOperatorDirectoryStore,
     MindBindingStore {
   readonly kind = "metadata-store" as const;
   #spaces = new Map<SpaceId, SpaceState>();
@@ -4107,6 +4180,10 @@ export class InMemoryRevisionMetadataStore
   #capacityQuotaRejects = 0;
   #objectCleanupCheckpoint: Readonly<ObjectCleanupCheckpoint> | null = null;
   #principals: PrincipalMap = new Map();
+  #principalActivities = new Map<
+    PrincipalId,
+    Readonly<PrincipalActivitySummary>
+  >();
   #externalBindings: ExternalBindingMap = new Map();
   #knowledgeSpaces: KnowledgeSpaceMap = new Map();
   #personalBindings: PersonalBindingMap = new Map();
@@ -4191,6 +4268,7 @@ export class InMemoryRevisionMetadataStore
         ? null
         : Object.freeze({ ...this.#objectCleanupCheckpoint }),
       principals: new Map(this.#principals),
+      principalActivities: new Map(this.#principalActivities),
       externalBindings: new Map(this.#externalBindings),
       knowledgeSpaces: new Map(this.#knowledgeSpaces),
       personalBindings: new Map(this.#personalBindings),
@@ -4304,6 +4382,12 @@ export class InMemoryRevisionMetadataStore
       ? null
       : cloneObjectCleanupCheckpoint(snapshot.objectCleanupCheckpoint);
     restored.#principals = new Map(snapshot.principals as PrincipalMap);
+    restored.#principalActivities = snapshot.principalActivities instanceof Map
+      ? new Map(
+          [...(snapshot.principalActivities as Map<PrincipalId, Readonly<PrincipalActivitySummary>>)]
+            .map(([principalId, summary]) => [principalId, clonePrincipalActivity(summary)]),
+        )
+      : new Map();
     restored.#externalBindings = new Map(snapshot.externalBindings as ExternalBindingMap);
     restored.#knowledgeSpaces = new Map(snapshot.knowledgeSpaces as KnowledgeSpaceMap);
     restored.#personalBindings = new Map(snapshot.personalBindings as PersonalBindingMap);
@@ -4331,6 +4415,206 @@ export class InMemoryRevisionMetadataStore
       restored.#authorizationStates.set(key, item);
     }
     return restored;
+  }
+
+  async recordPrincipalActivity(
+    request: Readonly<RecordPrincipalActivityRequest>,
+  ): Promise<void> {
+    await this.#runExclusive(async () => {
+      if (
+        !BOUNDED_OPAQUE_ID.test(request.principalId) ||
+        !Number.isFinite(Date.parse(request.observedAt)) ||
+        (request.surface !== "web" && request.surface !== "mcp") ||
+        ![
+          "page",
+          "control_read",
+          "control_write",
+          "discovery",
+          "content_read",
+          "content_write",
+        ].includes(request.kind) ||
+        (request.surface === "web" &&
+          !["page", "control_read", "control_write"].includes(request.kind)) ||
+        (request.surface === "mcp" &&
+          !["discovery", "content_read", "content_write"].includes(request.kind))
+      ) {
+        throw new TypeError("Principal activity observation is invalid");
+      }
+      const principal = this.#principals.get(request.principalId);
+      if (!principal || principal.state !== "active") return;
+      const current = this.#principalActivities.get(request.principalId) ?? null;
+      const observed = Date.parse(request.observedAt);
+      const lastSurfaceAt = request.surface === "web"
+        ? current?.lastWebSeenAt ?? null
+        : current?.lastMcpSeenAt ?? null;
+      const advancesSurface =
+        lastSurfaceAt === null || observed > Date.parse(lastSurfaceAt);
+      const advancesOverall =
+        current?.lastActivityAt === null ||
+        current?.lastActivityAt === undefined ||
+        observed > Date.parse(current.lastActivityAt);
+      if (!advancesSurface && !advancesOverall) return;
+      const summary: Readonly<PrincipalActivitySummary> = Object.freeze({
+        principalId: request.principalId,
+        lastWebSeenAt:
+          request.surface === "web" && advancesSurface
+            ? request.observedAt
+            : current?.lastWebSeenAt ?? null,
+        lastMcpSeenAt:
+          request.surface === "mcp" && advancesSurface
+            ? request.observedAt
+            : current?.lastMcpSeenAt ?? null,
+        lastActivityAt: advancesOverall
+          ? request.observedAt
+          : current?.lastActivityAt ?? null,
+        lastActivitySurface: advancesOverall
+          ? request.surface
+          : current?.lastActivitySurface ?? null,
+        lastActivityKind: advancesOverall
+          ? request.kind
+          : current?.lastActivityKind ?? null,
+      });
+      this.#principalActivities.set(request.principalId, summary);
+    });
+  }
+
+  async readPrincipalActivity(
+    principalId: PrincipalId,
+  ): Promise<Readonly<PrincipalActivitySummary> | null> {
+    const current = this.#principalActivities.get(principalId);
+    return current ? clonePrincipalActivity(current) : null;
+  }
+
+  async listServiceOperatorPrincipals(
+    query: Readonly<ServiceOperatorDirectoryQuery>,
+  ): Promise<Readonly<ServiceOperatorDirectoryPage>> {
+    const offset = decodeServiceOperatorCursor(query.cursor);
+    if (
+      offset === null ||
+      !Number.isSafeInteger(query.limit) ||
+      query.limit < 1 ||
+      query.limit > 100
+    ) {
+      throw new TypeError("Service operator directory query is invalid");
+    }
+    const personalSpaceIds = new Set(
+      [...this.#personalBindings.values()].map((binding) => binding.spaceId),
+    );
+    const normalizedQuery = query.query === undefined
+      ? null
+      : normalizeDirectorySearch(query.query);
+    const rows = [...this.#principals.values()].flatMap((principal) => {
+      const binding = [...this.#externalBindings.values()]
+        .filter(
+          (candidate) =>
+            candidate.principalId === principal.principalId &&
+            candidate.state === "active",
+        )
+        .sort((left, right) =>
+          compareUnicodeScalarValues(left.bindingId, right.bindingId),
+        )[0];
+      if (!binding) return [];
+      const activity = this.#principalActivities.get(principal.principalId) ?? null;
+      const activeOrdinaryMemberships = [...this.#memberships.values()].filter(
+        (membership) =>
+          membership.principalId === principal.principalId &&
+          membership.state === "active" &&
+          !personalSpaceIds.has(membership.spaceId) &&
+          this.#knowledgeSpaces.get(membership.spaceId)?.state === "active",
+      );
+      const row: Readonly<ServiceOperatorPrincipalProjection> = Object.freeze({
+        principalId: principal.principalId,
+        displayName: principal.displayName,
+        verifiedEmail: String(binding.normalizedBinding),
+        state: principal.state,
+        registeredAt: principal.createdAt,
+        activity: activity === null ? null : clonePrincipalActivity(activity),
+        ownedMindCount: activeOrdinaryMemberships.filter(
+          (membership) => membership.role === "owner",
+        ).length,
+        participatingMindCount: activeOrdinaryMemberships.filter(
+          (membership) => membership.role !== "owner",
+        ).length,
+      });
+      if (query.state !== undefined && row.state !== query.state) return [];
+      if (
+        query.registeredFrom !== undefined &&
+        Date.parse(row.registeredAt) < Date.parse(query.registeredFrom)
+      ) return [];
+      if (
+        query.registeredTo !== undefined &&
+        Date.parse(row.registeredAt) > Date.parse(query.registeredTo)
+      ) return [];
+      const lastActivityAt = row.activity?.lastActivityAt ?? null;
+      if (query.neverActive === true && lastActivityAt !== null) return [];
+      if (query.neverActive === false && lastActivityAt === null) return [];
+      if (
+        query.activityFrom !== undefined &&
+        (lastActivityAt === null ||
+          Date.parse(lastActivityAt) < Date.parse(query.activityFrom))
+      ) return [];
+      if (
+        query.activityTo !== undefined &&
+        (lastActivityAt === null ||
+          Date.parse(lastActivityAt) > Date.parse(query.activityTo))
+      ) return [];
+      if (
+        normalizedQuery !== null &&
+        normalizeDirectorySearch(row.verifiedEmail) !== normalizedQuery &&
+        !normalizeDirectorySearch(row.displayName).includes(normalizedQuery)
+      ) return [];
+      return [row];
+    }).sort((left, right) => compareDirectoryRows(left, right, query));
+    const end = Math.min(offset + query.limit, rows.length);
+    return Object.freeze({
+      principals: Object.freeze(rows.slice(offset, end)),
+      nextCursor: end < rows.length ? encodeServiceOperatorCursor(end) : null,
+    });
+  }
+
+  async stageServiceOperatorDirectoryAudit(
+    request: Readonly<StageServiceOperatorDirectoryAuditRequest>,
+  ): Promise<void> {
+    await this.#runExclusive(async () => {
+      if (
+        !BOUNDED_OPAQUE_ID.test(request.operatorPrincipalId) ||
+        !BOUNDED_OPAQUE_ID.test(request.requestId) ||
+        !BOUNDED_OPAQUE_ID.test(request.auditEventId) ||
+        !BOUNDED_OPAQUE_ID.test(request.auditOutboxMessageId) ||
+        !Number.isFinite(Date.parse(request.occurredAt)) ||
+        !this.#principals.has(request.operatorPrincipalId) ||
+        this.#auditEvents.has(request.auditEventId) ||
+        this.#auditOutbox.has(request.auditOutboxMessageId)
+      ) {
+        throw new TypeError("Service operator directory audit is invalid");
+      }
+      const event: Readonly<AuditEvent> = Object.freeze({
+        auditEventId: request.auditEventId,
+        actor: Object.freeze({
+          kind: "principal" as const,
+          principalId: request.operatorPrincipalId,
+        }),
+        requestId: request.requestId,
+        eventType: "service_operator.principal_directory_read",
+        outcome: "succeeded" as const,
+        spaceId: null,
+        occurredAt: request.occurredAt,
+        safeMetadata: Object.freeze({ operation: "list_principals" }),
+      });
+      const outbox: Readonly<AuditOutboxMessage> = Object.freeze({
+        outboxMessageId: request.auditOutboxMessageId,
+        auditEventId: request.auditEventId,
+        state: "pending" as const,
+        version: version(1),
+        attempts: 0,
+        availableAt: request.occurredAt,
+        claimExpiresAt: null,
+        createdAt: request.occurredAt,
+        updatedAt: request.occurredAt,
+      });
+      this.#auditEvents.set(event.auditEventId, cloneAuditEvent(event));
+      this.#auditOutbox.set(outbox.outboxMessageId, cloneAuditOutbox(outbox));
+    });
   }
 
   async runCapacityTransaction<Result>(
@@ -5790,6 +6074,12 @@ export class InMemoryRevisionMetadataStore
   ): Promise<Result> {
     return this.#runExclusive(async () => {
       let principals = cloneRecordMap(this.#principals, freezePrincipal);
+      let principalActivities = new Map(
+        [...this.#principalActivities].map(([principalId, summary]) => [
+          principalId,
+          clonePrincipalActivity(summary),
+        ]),
+      );
       let externalBindings = cloneRecordMap(
         this.#externalBindings,
         freezeExternalBinding,
@@ -8233,6 +8523,7 @@ export class InMemoryRevisionMetadataStore
           externalBindingKeys.forEach((key) => externalBindings.delete(key));
           personalBindings.delete(request.principalId);
           principals.delete(request.principalId);
+          principalActivities.delete(request.principalId);
           purgeMindBindingsForPrincipal(
             mindBindingOwners,
             request.principalId,
@@ -8296,6 +8587,7 @@ export class InMemoryRevisionMetadataStore
 
       const result = await operation(transaction);
       this.#principals = principals;
+      this.#principalActivities = principalActivities;
       this.#externalBindings = externalBindings;
       this.#personalBindings = personalBindings;
       this.#knowledgeSpaces = knowledgeSpaces;

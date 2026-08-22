@@ -527,6 +527,7 @@ Problem Details response:
 | `DELETE` | `/api/v1/mcp-tokens/{token_id}` | Revoke token. |
 | `DELETE` | `/api/v1/oauth-connections/{grant_id}` | Sites-authenticated principal отзывает свой connected app grant. |
 | `PATCH` | `/api/v1/mind-bindings/{binding_owner_id}` | Sites-authenticated principal меняет binding set exact собственного active credential с CAS и server read-back. |
+| `GET` | `/api/v1/internal/operators/users` | Constructor-allowlisted service operator получает bounded read-only principal/activity directory; для остальных route indistinguishable `404`. |
 | `POST` | `/api/v1/minds/{mind_ref}/markdown-import-plans` | Local candidate: metadata-only exact-snapshot plan before reservation/staging. |
 | `POST` | `/api/v1/minds/{mind_ref}/markdown-imports` | Local candidate: reserve a current plan and create a principal-private session. |
 | `PUT` | `/api/v1/markdown-imports/{import_id}/batches/{checkpoint}` | Local candidate: bounded multipart Markdown batch with exact replay. |
@@ -537,6 +538,13 @@ Problem Details response:
 
 `mind_ref` в REST — `me` или canonical `space_handle`. Adapter разрешает его
 в internal `space_id` и только затем authorizes request.
+
+Internal operator query принимает bounded `query`, `state`,
+`registered_from|to`, `activity_from|to`, `never_active`, `sort`, `direction`,
+`limit` и opaque `cursor`. Response следует
+[service-operator contract](service-operator-directory.md), не возвращает
+corpus/Mind names/request history и audit-ит только opaque operator,
+operation/time. Это не content MCP и не customer-wide user-search API.
 
 Markdown import wire contract в local candidate:
 

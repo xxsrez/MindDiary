@@ -54,6 +54,7 @@ import {
   type InvitationMembershipMember,
   type InvitationMembershipPageModel,
 } from "./invitations-membership.js";
+import { renderServiceOperatorDirectoryDocument } from "./operator-directory.js";
 import {
   PRODUCT_COLLABORATION_CLIENT_JAVASCRIPT,
   PRODUCT_MARKDOWN_IMPORT_CLIENT_JAVASCRIPT,
@@ -222,6 +223,14 @@ export interface ProductWebMindBindings {
   ): Promise<unknown>;
 }
 
+export interface ProductWebActivityRecorder {
+  recordSuccessful(
+    actor: RegisteredSitesActor,
+    surface: "web",
+    kind: "page" | "control_read" | "control_write",
+  ): void | Promise<void>;
+}
+
 export interface ProductWebHttpHandlerDependencies {
   readonly applicationOrigin: string;
   readonly resolveIdentity: (
@@ -231,6 +240,7 @@ export interface ProductWebHttpHandlerDependencies {
   readonly control: ProductWebControlApplication;
   readonly oauthConnections?: ProductWebOAuthConnections;
   readonly mindBindings?: ProductWebMindBindings;
+  readonly activity?: ProductWebActivityRecorder;
 }
 
 const MUTATION_METHODS = new Set(["POST", "PATCH", "PUT", "DELETE"]);
@@ -243,6 +253,7 @@ const PRODUCT_UI_ROUTES = new Set([
   "/settings/account",
   "/settings/mcp",
   "/help",
+  "/internal/operators/users",
 ]);
 const RESERVED_UI_HANDLES = new Set([
   "api",
@@ -250,6 +261,7 @@ const RESERVED_UI_HANDLES = new Set([
   "callback",
   "help",
   "invitations",
+  "internal",
   "mcp",
   "me",
   "minds",
@@ -899,6 +911,7 @@ async function productUiDocument(input: {
   readonly control: ProductWebControlApplication;
   readonly oauthConnections?: ProductWebOAuthConnections;
   readonly mindBindings?: ProductWebMindBindings;
+  readonly query: Readonly<Record<string, string>>;
 }): Promise<string> {
   if (input.identity.kind === "registration_required") {
     const model: AuthenticatedOnboardingModel = {
@@ -917,6 +930,19 @@ async function productUiDocument(input: {
     input: Object.freeze({}),
   }));
   if (session === null) throw new TypeError("safe session projection is unavailable");
+
+  if (input.pathname === "/internal/operators/users") {
+    const page = await input.control.execute({
+      operation: "list_service_operator_principals",
+      actor: input.identity.actor,
+      input: input.query,
+    });
+    return withCsrfMeta(renderServiceOperatorDirectoryDocument({
+      displayName: session.displayName,
+      page,
+      query: input.query,
+    }), input.csrfToken);
+  }
 
   if (input.pathname === "/public") {
     let collection: PublicMindCatalogCollection;
@@ -1396,6 +1422,10 @@ function apiOperation(method: string, pathname: string): {
   const three = segment(tail[2]);
   const four = segment(tail[3]);
   if (method === "GET" && one === "session" && tail.length === 1) return { operation: "get_session", path: {} };
+  if (
+    method === "GET" && one === "internal" && two === "operators" &&
+    three === "users" && tail.length === 3
+  ) return { operation: "list_service_operator_principals", path: {} };
   if (one === "account" && tail.length === 1) {
     if (method === "POST") return { operation: "bootstrap_account", path: {} };
     if (method === "PATCH") return { operation: "rename_account", path: {} };
@@ -1518,6 +1548,9 @@ export function createProductWebHttpHandler(
       });
     }
     const isApi = url.pathname === "/api/v1" || url.pathname.startsWith("/api/v1/");
+    const isOperatorPath =
+      url.pathname === "/internal/operators/users" ||
+      url.pathname === "/api/v1/internal/operators/users";
     const detailMatch = /^\/([a-z0-9]+(?:-[a-z0-9]+)*)$/u.exec(url.pathname);
     const isUi = PRODUCT_UI_ROUTES.has(url.pathname) || (
       detailMatch !== null && !RESERVED_UI_HANDLES.has(detailMatch[1]!)
@@ -1532,6 +1565,9 @@ export function createProductWebHttpHandler(
     }
     const requestId = safeRequestId(identity);
     if (identity.kind === "denied") {
+      if (isOperatorPath) {
+        return errorResponse(404, "not_found", requestId);
+      }
       if (isUi && (request.method === "GET" || request.method === "HEAD")) {
         const response = html(renderAuthenticatedOnboardingDocument({
           kind: "anonymous",
@@ -1542,9 +1578,15 @@ export function createProductWebHttpHandler(
       return errorResponse(401, "authentication_required", requestId);
     }
     if (identity.kind === "unavailable") return errorResponse(503, "identity_binding_unavailable", requestId, true);
+    if (
+      isOperatorPath &&
+      identity.kind !== "authenticated"
+    ) return errorResponse(404, "not_found", requestId);
 
     if (isUi) {
       if (request.method !== "GET" && request.method !== "HEAD") return errorResponse(405, "method_not_allowed", requestId);
+      const uiQuery: Record<string, string> = {};
+      url.searchParams.forEach((value, key) => { uiQuery[key] = value; });
       let response: Response;
       try {
         response = html(await productUiDocument({
@@ -1559,9 +1601,16 @@ export function createProductWebHttpHandler(
           ...(dependencies.mindBindings === undefined
             ? {}
             : { mindBindings: dependencies.mindBindings }),
+          query: Object.freeze(uiQuery),
         }));
-      } catch {
-        response = errorResponse(503, "operation_failed", requestId, true);
+      } catch (error) {
+        const code = failureCode(error);
+        response = url.pathname === "/internal/operators/users"
+          ? errorResponse(applicationErrorStatus(code), code, requestId)
+          : errorResponse(503, "operation_failed", requestId, true);
+      }
+      if (response.ok && identity.kind === "authenticated") {
+        await dependencies.activity?.recordSuccessful(identity.actor, "web", "page");
       }
       return request.method === "HEAD" ? new Response(null, response) : response;
     }
@@ -1613,15 +1662,16 @@ export function createProductWebHttpHandler(
           identity.actor.principalId,
           String(matched.path.grant_id ?? ""),
         );
-        return revoked
-          ? json(200, { ok: true, data: { revoked: true } })
-          : errorResponse(404, "not_found", requestId);
+        if (!revoked) return errorResponse(404, "not_found", requestId);
+        await dependencies.activity?.recordSuccessful(identity.actor, "web", "control_write");
+        return json(200, { ok: true, data: { revoked: true } });
       }
       if (matched.operation === "mutate_mind_binding") {
         if (identity.kind !== "authenticated" || dependencies.mindBindings === undefined) {
           return errorResponse(404, "not_found", requestId);
         }
         const data = await dependencies.mindBindings.mutate(identity.actor, input);
+        await dependencies.activity?.recordSuccessful(identity.actor, "web", "control_write");
         return json(200, { ok: true, data: snakeOutput(data) });
       }
       const data = await dependencies.control.execute({
@@ -1629,6 +1679,13 @@ export function createProductWebHttpHandler(
         actor: identity.actor,
         input,
       });
+      if (identity.kind === "authenticated") {
+        await dependencies.activity?.recordSuccessful(
+          identity.actor,
+          "web",
+          MUTATION_METHODS.has(request.method) ? "control_write" : "control_read",
+        );
+      }
       return json(200, { ok: true, data: snakeOutput(data) });
     } catch (error) {
       const code = failureCode(error);

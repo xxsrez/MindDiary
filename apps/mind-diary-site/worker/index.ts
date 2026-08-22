@@ -31,6 +31,7 @@ function configFingerprint(env: ProductEnv, publicOrigin: string): string {
     env.MIND_DIARY_LOCATOR_KEY,
     env.MIND_DIARY_EXPORT_DOWNLOAD_VERIFIER_KEY,
     env.MIND_DIARY_CSRF_KEY,
+    env.MIND_DIARY_SERVICE_OPERATOR_PRINCIPAL_IDS,
   ].join("\u0000");
   let hash = 0x811c9dc5;
   for (let index = 0; index < source.length; index += 1) {

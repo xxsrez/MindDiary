@@ -343,6 +343,8 @@ Sites UI поддерживает:
 - visible per-credential automatic capture `Off | On | blocked` с
   enable/disable CAS и private-target warning;
 - management links и destructive-action warnings.
+- отдельный constructor-allowlisted read-only UAT operator directory с
+  compact success-only web/MCP activity summary; Mind roles его не открывают.
 
 Pilot-ready Product Site использует один authenticated navigation shell и
 следующую route map:
@@ -358,6 +360,7 @@ Pilot-ready Product Site использует один authenticated navigation 
 | `/settings/account` | profile, recovery handoff и account lifecycle |
 | `/settings/mcp` | Connected apps, personal MCP tokens, explicit read/write Mind bindings, setup и diagnostics |
 | `/help` | pilot help, environment и support boundaries |
+| `/internal/operators/users` | hidden read-only UAT principal/activity directory; non-operator получает exact `404` |
 
 Authenticated pages используют согласованные header/footer links, keyboard
 navigation и active state. Profile entrypoint ведёт на `/settings/account`, а
@@ -373,6 +376,8 @@ shell со ссылкой на platform-owned exact path `/signin-with-chatgpt`.
 принимает самодельный `return_to` и не реализует application callback. После
 platform sign-in новый request проходит обычное server-side identity
 resolution и только затем получает registration либо authenticated page.
+Internal operator route исключён из sign-in shell: anonymous, unregistered и
+authenticated non-operator получают одинаковый `404`.
 
 Эта human entry surface не меняет machine boundaries: signed-out
 `/api/v1/**` возвращает JSON `401 authentication_required`; недоступный

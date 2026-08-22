@@ -38,7 +38,12 @@ import type {
   PrivacySafeObservabilityEvent,
   PrivacySafeObservabilitySink,
   PublicMindCatalogStore,
+  PrincipalActivityKind,
+  PrincipalActivitySurface,
   SearchIndex,
+  ServiceOperatorAuditIdGenerator,
+  ServiceOperatorDirectoryQuery,
+  ServiceOperatorDirectoryStore,
   TokenHasher,
   TokenIdGenerator,
   VerifiedSpaceHost,
@@ -92,6 +97,7 @@ export const CONTROL_QUERIES = [
   "list_members",
   "list_invitations",
   "list_mcp_tokens",
+  "list_service_operator_principals",
 ] as const;
 
 export const CONTROL_COMMANDS = [
@@ -5739,6 +5745,174 @@ export class ControlReadService {
     }
     const invitations = await this.#store.listControlInvitations(principalId);
     return Object.freeze({ invitations: Object.freeze([...invitations]) });
+  }
+}
+
+export class PrincipalActivityService {
+  readonly #store: ServiceOperatorDirectoryStore;
+
+  constructor(store: ServiceOperatorDirectoryStore) {
+    this.#store = store;
+  }
+
+  /** Activity is observational: persistence failures never change product outcomes. */
+  async recordSuccessful(
+    actor: ActorContext,
+    surface: PrincipalActivitySurface,
+    kind: PrincipalActivityKind,
+  ): Promise<void> {
+    if (
+      actor.kind !== "registered_principal" ||
+      typeof actor.principalId !== "string" ||
+      actor.principalId.length === 0
+    ) return;
+    try {
+      await this.#store.recordPrincipalActivity({
+        principalId: actor.principalId,
+        surface,
+        kind,
+        observedAt: actor.occurredAtUtc,
+      });
+    } catch {
+      // Best-effort projection; canonical application success already happened.
+    }
+  }
+}
+
+export type ServiceOperatorDirectoryFailureCode = "not_found" | "invalid_request";
+
+export class ServiceOperatorDirectoryFailure extends Error {
+  readonly code: ServiceOperatorDirectoryFailureCode;
+
+  constructor(code: ServiceOperatorDirectoryFailureCode, message: string) {
+    super(message);
+    this.name = "ServiceOperatorDirectoryFailure";
+    this.code = code;
+  }
+}
+
+function operatorUtc(value: unknown): UtcInstant | undefined {
+  if (value === undefined || value === "") return undefined;
+  if (typeof value !== "string" || value.length > 40) {
+    throw new ServiceOperatorDirectoryFailure("invalid_request", "Invalid UTC range.");
+  }
+  const parsed = parseUtcInstant(value);
+  if (parsed === null || new Date(parsed).toISOString() !== value) {
+    throw new ServiceOperatorDirectoryFailure("invalid_request", "Invalid UTC range.");
+  }
+  return value as UtcInstant;
+}
+
+function operatorBoolean(value: unknown): boolean | undefined {
+  if (value === undefined) return undefined;
+  if (value === true || value === "true") return true;
+  if (value === false || value === "false") return false;
+  throw new ServiceOperatorDirectoryFailure("invalid_request", "Invalid boolean filter.");
+}
+
+export class ServiceOperatorDirectoryService {
+  readonly #store: ServiceOperatorDirectoryStore;
+  readonly #tokens: McpTokenStore;
+  readonly #operatorPrincipalIds: ReadonlySet<PrincipalId>;
+  readonly #ids: ServiceOperatorAuditIdGenerator;
+
+  constructor(dependencies: {
+    readonly store: ServiceOperatorDirectoryStore;
+    readonly tokens: McpTokenStore;
+    readonly operatorPrincipalIds: ReadonlySet<PrincipalId>;
+    readonly ids: ServiceOperatorAuditIdGenerator;
+  }) {
+    this.#store = dependencies.store;
+    this.#tokens = dependencies.tokens;
+    this.#operatorPrincipalIds = new Set(dependencies.operatorPrincipalIds);
+    this.#ids = dependencies.ids;
+  }
+
+  async list(
+    actor: ActorContext,
+    input: Readonly<Record<string, unknown>>,
+  ): Promise<unknown> {
+    const principalId = registeredSitesPrincipal(actor);
+    if (principalId === null || !this.#operatorPrincipalIds.has(principalId)) {
+      throw new ServiceOperatorDirectoryFailure("not_found", "Route was not found.");
+    }
+    const queryValue = input.query;
+    if (
+      queryValue !== undefined &&
+      (typeof queryValue !== "string" || queryValue.length > 320 || /[\u0000-\u001f\u007f]/u.test(queryValue))
+    ) {
+      throw new ServiceOperatorDirectoryFailure("invalid_request", "Invalid directory query.");
+    }
+    const state = input.state === "" ? undefined : input.state;
+    if (state !== undefined && state !== "active" && state !== "deleted") {
+      throw new ServiceOperatorDirectoryFailure("invalid_request", "Invalid account state.");
+    }
+    const sort = input.sort ?? "registered_at";
+    if (sort !== "registered_at" && sort !== "last_activity_at" && sort !== "display_name") {
+      throw new ServiceOperatorDirectoryFailure("invalid_request", "Invalid directory sort.");
+    }
+    const direction = input.direction ?? "desc";
+    if (direction !== "asc" && direction !== "desc") {
+      throw new ServiceOperatorDirectoryFailure("invalid_request", "Invalid sort direction.");
+    }
+    const limit = input.limit === undefined ? 50 : Number(input.limit);
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
+      throw new ServiceOperatorDirectoryFailure("invalid_request", "Invalid directory limit.");
+    }
+    const cursor = input.cursor;
+    if (cursor !== undefined && (typeof cursor !== "string" || cursor.length > 1024)) {
+      throw new ServiceOperatorDirectoryFailure("invalid_request", "Invalid directory cursor.");
+    }
+    const registeredFrom = operatorUtc(input.registeredFrom);
+    const registeredTo = operatorUtc(input.registeredTo);
+    const activityFrom = operatorUtc(input.activityFrom);
+    const activityTo = operatorUtc(input.activityTo);
+    const neverActive = operatorBoolean(input.neverActive);
+    if (
+      (registeredFrom !== undefined && registeredTo !== undefined &&
+        Date.parse(registeredFrom) > Date.parse(registeredTo)) ||
+      (activityFrom !== undefined && activityTo !== undefined &&
+        Date.parse(activityFrom) > Date.parse(activityTo))
+    ) {
+      throw new ServiceOperatorDirectoryFailure("invalid_request", "Invalid directory range.");
+    }
+    const query: Readonly<ServiceOperatorDirectoryQuery> = Object.freeze({
+      ...(queryValue === undefined ? {} : { query: queryValue as string }),
+      ...(state === undefined ? {} : { state }),
+      ...(registeredFrom === undefined ? {} : { registeredFrom }),
+      ...(registeredTo === undefined ? {} : { registeredTo }),
+      ...(activityFrom === undefined ? {} : { activityFrom }),
+      ...(activityTo === undefined ? {} : { activityTo }),
+      ...(neverActive === undefined ? {} : { neverActive }),
+      sort,
+      direction,
+      limit,
+      ...(cursor === undefined ? {} : { cursor }),
+    });
+    let page;
+    try {
+      page = await this.#store.listServiceOperatorPrincipals(query);
+    } catch {
+      throw new ServiceOperatorDirectoryFailure("invalid_request", "Invalid directory query.");
+    }
+    const occurredAt = Date.parse(actor.occurredAtUtc);
+    const principals = await Promise.all(page.principals.map(async (principal) => {
+      const credentials = await this.#tokens.listMcpTokenMetadata(principal.principalId);
+      return Object.freeze({
+        ...principal,
+        activeMcpCredentialCount: credentials.filter(
+          (token) => token.state === "active" && Date.parse(token.expiresAt) > occurredAt,
+        ).length,
+      });
+    }));
+    await this.#store.stageServiceOperatorDirectoryAudit({
+      operatorPrincipalId: principalId,
+      requestId: actor.requestId,
+      auditEventId: this.#ids.nextAuditEventId(),
+      auditOutboxMessageId: this.#ids.nextOutboxMessageId(),
+      occurredAt: actor.occurredAtUtc,
+    });
+    return Object.freeze({ principals: Object.freeze(principals), nextCursor: page.nextCursor });
   }
 }
 

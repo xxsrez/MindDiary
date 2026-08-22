@@ -250,6 +250,13 @@ Display name инициализируется из optional platform-provided fu
 вводится при первом входе; его последующая смена обновляет metadata Personal
 Mind, а не content HEAD.
 
+Отдельная service-operator authority задаётся constructor-only allowlist
+внутренних `principal_id`; она не выводится из email, token scope или
+KnowledgeSpace membership. Operator read model joins только metadata/tokens и
+compact success-only web/MCP activity summary, никогда не читает canonical
+objects или derived search corpus. Details и privacy/deletion contract — в
+[accepted operator specification](specs/service-operator-directory.md).
+
 ### MCP personal access tokens
 
 Personal token выбран как минимальный безопасный механизм первого прототипа:

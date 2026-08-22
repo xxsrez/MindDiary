@@ -454,6 +454,13 @@ corpus:
 - **Internal application API:** единая граница use cases, которой пользуются
   web и MCP adapters. Raw file endpoints браузеру не выдаются.
 
+Service-wide operator authority не является ролью Space. Она задаётся только
+constructor configuration по opaque `principal_id`, открывает один read-only
+support projection и не расширяет content/control capabilities. Compact
+success-only web/MCP activity summary является observational metadata, не
+authorization signal; поля, deletion и privacy contract заданы в
+[отдельной accepted specification](service-operator-directory.md).
+
 Если agent-assisted administration понадобится позже, для него потребуется
 отдельная privileged surface и отдельный threat model.
 
@@ -463,8 +470,9 @@ corpus:
 Mind, ordinary Minds, single-owner transfer, invitations registered users,
 четыре роли, три visibility modes, public catalog, immutable history, direct
 CAS commits, individual-file OKF access, bounded raster/PDF/ZIP BundleFile и
-user-scoped MCP. Accepted but not yet implemented Release 0.1 extension adds
-Space-scoped delta manifests, capacity admission and Markdown-only import.
+user-scoped MCP. Release 0.1 extensions add Space-scoped delta manifests,
+capacity admission, Markdown-only import и internal read-only UAT operator
+directory.
 
 Не входят anonymous access/publication, unregistered-user onboarding,
 email invitations, fuzzy global user search, granular content grants, branches,

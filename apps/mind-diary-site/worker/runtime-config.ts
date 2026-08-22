@@ -7,6 +7,20 @@ export interface ProductEnv {
   readonly MIND_DIARY_LOCATOR_KEY?: string;
   readonly MIND_DIARY_EXPORT_DOWNLOAD_VERIFIER_KEY?: string;
   readonly MIND_DIARY_CSRF_KEY?: string;
+  readonly MIND_DIARY_SERVICE_OPERATOR_PRINCIPAL_IDS?: string;
+}
+
+function serviceOperatorPrincipalIds(value: string | undefined): readonly string[] {
+  if (value === undefined || value.trim() === "") return Object.freeze([]);
+  const ids = value.split(",").map((candidate) => candidate.trim());
+  if (
+    ids.length > 32 ||
+    ids.some((candidate) => !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u.test(candidate)) ||
+    new Set(ids).size !== ids.length
+  ) {
+    throw new Error("MIND_DIARY_SERVICE_OPERATOR_PRINCIPAL_IDS must be a bounded unique opaque-ID list");
+  }
+  return Object.freeze(ids);
 }
 
 function decodeKey(value: string | undefined, name: string): Uint8Array {
@@ -66,5 +80,8 @@ export function readRuntimeConfig(request: Request, env: ProductEnv) {
     locatorKey: decodeKey(env.MIND_DIARY_LOCATOR_KEY, "MIND_DIARY_LOCATOR_KEY"),
     exportDownloadVerifierKey: decodeKey(env.MIND_DIARY_EXPORT_DOWNLOAD_VERIFIER_KEY, "MIND_DIARY_EXPORT_DOWNLOAD_VERIFIER_KEY"),
     csrfKey: decodeKey(env.MIND_DIARY_CSRF_KEY, "MIND_DIARY_CSRF_KEY"),
+    serviceOperatorPrincipalIds: serviceOperatorPrincipalIds(
+      env.MIND_DIARY_SERVICE_OPERATOR_PRINCIPAL_IDS,
+    ),
   });
 }

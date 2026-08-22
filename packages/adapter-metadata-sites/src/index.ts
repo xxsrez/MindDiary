@@ -121,6 +121,8 @@ const TRANSACTION_METHODS = new Set([
 ]);
 
 const METADATA_MUTATIONS = new Set([
+  "recordPrincipalActivity",
+  "stageServiceOperatorDirectoryAudit",
   "reserveHandle",
   "retireHandle",
   "commitRevision",

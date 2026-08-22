@@ -238,7 +238,9 @@ export class ProductMcpContentApplication implements McpContentApplication {
     this.#dependencies = dependencies;
   }
 
-  async listTools(): Promise<readonly Readonly<Record<string, unknown>>[]> {
+  async listTools(_request: {
+    readonly actor: AuthenticatedActor;
+  }): Promise<readonly Readonly<Record<string, unknown>>[]> {
     return MCP_TOOL_DEFINITIONS;
   }
 

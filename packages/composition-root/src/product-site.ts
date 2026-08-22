@@ -100,6 +100,8 @@ import {
   OwnershipTransferService,
   PersonalMindControlService,
   PublicMindCatalogService,
+  PrincipalActivityService,
+  ServiceOperatorDirectoryService,
   TokenLifecycleService,
   VisibilityControlService,
 } from "@mind-diary/application-control";
@@ -152,6 +154,8 @@ export interface ProductSiteRuntimeOptions {
   readonly locatorKey: Uint8Array;
   readonly exportDownloadVerifierKey: Uint8Array;
   readonly csrfKey: Uint8Array;
+  /** Constructor-only service authority. Missing/empty configuration fails closed. */
+  readonly serviceOperatorPrincipalIds?: readonly string[];
   /** Constructor-only clock dependency; Product Worker uses the system clock. */
   readonly now?: () => Date;
   readonly observabilityWriter?: SitesObservabilityWriter;
@@ -335,6 +339,7 @@ class ProductControlApplication {
       readonly tokens: TokenLifecycleService;
       readonly capacity: CapacityAdmissionService;
       readonly markdownImports: MarkdownImportService;
+      readonly operatorDirectory: ServiceOperatorDirectoryService;
     },
   ) {}
 
@@ -486,6 +491,8 @@ class ProductControlApplication {
       }
       case "list_invitations":
         return this.services.reads.listInvitations(actor as never);
+      case "list_service_operator_principals":
+        return this.services.operatorDirectory.list(actor as never, input);
       default:
         throw Object.assign(new Error("Unknown control operation."), { code: "not_found" });
     }
@@ -589,6 +596,14 @@ export async function createProductSiteRuntime(
     cohort: "close_circle",
   });
   const authorizer = new CapabilityAuthorizer(metadata);
+  const configuredOperatorPrincipalIds = new Set<PrincipalId>();
+  for (const principalId of options.serviceOperatorPrincipalIds ?? []) {
+    if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u.test(principalId)) {
+      throw new TypeError("serviceOperatorPrincipalIds must contain bounded opaque IDs");
+    }
+    configuredOperatorPrincipalIds.add(principalId as PrincipalId);
+  }
+  const activity = new PrincipalActivityService(metadata);
   const backgroundAuthorizer = new CurrentAccessBackgroundAuthorizer(metadata);
   const revisions = new CanonicalRevisionCoordinator({ objects, revisions: metadata });
   const readyIndex = new ReadyExactRevisionIndexService({ work: metadata, index });
@@ -884,8 +899,36 @@ export async function createProductSiteRuntime(
         }
       },
     });
+    const mcpWriteActivityTools = new Set([
+      "commit_changeset",
+      "capture_knowledge",
+      "stage_bundle_file",
+      "set_read_mind_binding",
+      "set_write_mind_binding",
+    ]);
     const timedContent = new Proxy(mcpApplication, {
       get(target, property, receiver) {
+        if (property === "listTools") {
+          return async (contentRequest: Parameters<ProductMcpContentApplication["listTools"]>[0]) => {
+            const result = await target.listTools(contentRequest);
+            await activity.recordSuccessful(contentRequest.actor, "mcp", "discovery");
+            return result;
+          };
+        }
+        if (property === "listRootResources") {
+          return async (contentRequest: Parameters<ProductMcpContentApplication["listRootResources"]>[0]) => {
+            const result = await target.listRootResources(contentRequest);
+            await activity.recordSuccessful(contentRequest.actor, "mcp", "discovery");
+            return result;
+          };
+        }
+        if (property === "readResource") {
+          return async (contentRequest: Parameters<ProductMcpContentApplication["readResource"]>[0]) => {
+            const result = await target.readResource(contentRequest);
+            await activity.recordSuccessful(contentRequest.actor, "mcp", "content_read");
+            return result;
+          };
+        }
         if (property === "executeAuthorizedToolCall") {
           return async (toolRequest: Parameters<ProductMcpContentApplication["executeAuthorizedToolCall"]>[0]) => {
             const stageStartedAt = performance.now();
@@ -893,6 +936,18 @@ export async function createProductSiteRuntime(
             try {
               const result = await target.executeAuthorizedToolCall(toolRequest);
               stageOutcome = "success";
+              const toolResult = typeof result === "object" && result !== null
+                ? result as { readonly isError?: unknown }
+                : null;
+              if (toolResult?.isError !== true) {
+                await activity.recordSuccessful(
+                  toolRequest.actor,
+                  "mcp",
+                  mcpWriteActivityTools.has(toolRequest.name)
+                    ? "content_write"
+                    : "content_read",
+                );
+              }
               return result;
             } finally {
               contentObservability.recordMcpPerformance({
@@ -980,6 +1035,12 @@ export async function createProductSiteRuntime(
       clock,
     }),
     markdownImports,
+    operatorDirectory: new ServiceOperatorDirectoryService({
+      store: metadata,
+      tokens: metadata,
+      operatorPrincipalIds: configuredOperatorPrincipalIds,
+      ids: generated,
+    }),
   });
 
   const web = createProductWebHttpHandler({
@@ -1237,6 +1298,7 @@ export async function createProductSiteRuntime(
         throw Object.assign(new Error("Binding mutation was not applied."), { code });
       },
     },
+    activity,
   });
   const exportDownload = createProductExportDownloadHttpHandler({
     async download(secret) {

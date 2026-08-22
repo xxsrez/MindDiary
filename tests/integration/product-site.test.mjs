@@ -147,6 +147,74 @@ const ordinaryOwnerRoute = Object.freeze({
   headRevisionId: "revision_research",
 });
 
+test("internal operator UI/API are read-only, fail closed and record only successful web use", async () => {
+  const activity = [];
+  const calls = [];
+  const operatorPage = Object.freeze({
+    principals: Object.freeze([Object.freeze({
+      principalId: "principal_support_target",
+      displayName: "<script>Target</script>",
+      verifiedEmail: "target@example.com",
+      state: "active",
+      registeredAt: "2026-08-22T09:00:00.000Z",
+      activity: null,
+      ownedMindCount: 0,
+      participatingMindCount: 0,
+      activeMcpCredentialCount: 0,
+    })]),
+    nextCursor: null,
+  });
+  const handler = createProductWebHttpHandler({
+    applicationOrigin: origin,
+    resolveIdentity: () => ({ kind: "authenticated", actor: registeredActor }),
+    csrf: { issue: () => "csrf-operator", verify: () => true },
+    activity: { recordSuccessful(actor, surface, kind) { activity.push({ actor, surface, kind }); } },
+    control: { async execute(request) {
+      calls.push(request);
+      if (request.operation === "get_session") return sessionProjection;
+      if (request.operation === "list_service_operator_principals") return operatorPage;
+      throw Object.assign(new Error("missing"), { code: "not_found" });
+    } },
+  });
+
+  const page = await handler(new Request(`${origin}/internal/operators/users?neverActive=true`));
+  assert.equal(page.status, 200);
+  const html = await page.text();
+  assert.match(html, /UAT users/u);
+  assert.match(html, /target@example\.com/u);
+  assert.doesNotMatch(html, /<script>Target<\/script>/u);
+  assert.match(html, /&lt;script&gt;Target&lt;\/script&gt;/u);
+  assert.deepEqual(calls.at(-1).input, { neverActive: "true" });
+  assert.deepEqual(activity.at(-1), { actor: registeredActor, surface: "web", kind: "page" });
+
+  const api = await handler(new Request(`${origin}/api/v1/internal/operators/users?query=target%40example.com`));
+  assert.equal(api.status, 200);
+  assert.equal((await api.json()).data.principals[0].verified_email, "target@example.com");
+  assert.equal(activity.at(-1).kind, "control_read");
+
+  const hidden = createProductWebHttpHandler({
+    applicationOrigin: origin,
+    resolveIdentity: () => ({ kind: "authenticated", actor: registeredActor }),
+    csrf: { issue: () => "csrf-hidden", verify: () => true },
+    activity: { recordSuccessful() { throw new Error("must not record denied reads"); } },
+    control: { async execute(request) {
+      if (request.operation === "get_session") return sessionProjection;
+      throw Object.assign(new Error("hidden"), { code: "not_found" });
+    } },
+  });
+  assert.equal((await hidden(new Request(`${origin}/internal/operators/users`))).status, 404);
+  assert.equal((await hidden(new Request(`${origin}/api/v1/internal/operators/users`))).status, 404);
+
+  const anonymous = createProductWebHttpHandler({
+    applicationOrigin: origin,
+    resolveIdentity: () => ({ kind: "denied" }),
+    csrf: { issue: () => "unused", verify: () => false },
+    control: { execute() { throw new Error("must not execute"); } },
+  });
+  assert.equal((await anonymous(new Request(`${origin}/internal/operators/users`))).status, 404);
+  assert.equal((await anonymous(new Request(`${origin}/api/v1/internal/operators/users`))).status, 404);
+});
+
 test("product web authenticates UI and fail-closes browser mutations", async () => {
   const calls = [];
   const handler = createProductWebHttpHandler({

@@ -299,6 +299,13 @@ test("preview binds the exact cascade and deletion preserves foreign revisions w
     occurredAt: CREATED_AT,
     safeMetadata: {},
   });
+  await env.metadata.recordPrincipalActivity({
+    principalId: deleted.principalId,
+    surface: "web",
+    kind: "page",
+    observedAt: CREATED_AT,
+  });
+  assert.ok(await env.metadata.readPrincipalActivity(deleted.principalId));
 
   const preview = await env.deletion.getAccountDeletionImpact(
     actor(deleted.principalId, "request_account_preview"),
@@ -324,6 +331,7 @@ test("preview binds the exact cascade and deletion preserves foreign revisions w
   assert.equal(result.spacesDeleted, 2);
   assert.equal(result.tokensRevoked, 1);
   assert.equal(await env.metadata.readAccount(deleted.principalId), null);
+  assert.equal(await env.metadata.readPrincipalActivity(deleted.principalId), null);
   const bindingsAfterDeletion = await env.metadata.readMindBindingSet(
     "binding_owner_account_delete",
     deleted.principalId,

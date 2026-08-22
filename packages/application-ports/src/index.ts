@@ -1086,6 +1086,97 @@ export interface ControlReadStore extends AuthorizationStateReader {
   listControlInvitations(principalId: PrincipalId): Promise<readonly Readonly<ControlInvitationProjection>[]>;
 }
 
+export const PRINCIPAL_ACTIVITY_SURFACES = ["web", "mcp"] as const;
+export const PRINCIPAL_ACTIVITY_KINDS = [
+  "page",
+  "control_read",
+  "control_write",
+  "discovery",
+  "content_read",
+  "content_write",
+] as const;
+export type PrincipalActivitySurface = (typeof PRINCIPAL_ACTIVITY_SURFACES)[number];
+export type PrincipalActivityKind = (typeof PRINCIPAL_ACTIVITY_KINDS)[number];
+
+/** Bounded success-only projection; this is deliberately not a request log. */
+export interface PrincipalActivitySummary {
+  readonly principalId: PrincipalId;
+  readonly lastWebSeenAt: UtcInstant | null;
+  readonly lastMcpSeenAt: UtcInstant | null;
+  readonly lastActivityAt: UtcInstant | null;
+  readonly lastActivitySurface: PrincipalActivitySurface | null;
+  readonly lastActivityKind: PrincipalActivityKind | null;
+}
+
+export interface RecordPrincipalActivityRequest {
+  readonly principalId: PrincipalId;
+  readonly surface: PrincipalActivitySurface;
+  readonly kind: PrincipalActivityKind;
+  readonly observedAt: UtcInstant;
+}
+
+export type ServiceOperatorDirectorySort =
+  | "registered_at"
+  | "last_activity_at"
+  | "display_name";
+
+export interface ServiceOperatorDirectoryQuery {
+  readonly query?: string;
+  readonly state?: PrincipalState;
+  readonly registeredFrom?: UtcInstant;
+  readonly registeredTo?: UtcInstant;
+  readonly activityFrom?: UtcInstant;
+  readonly activityTo?: UtcInstant;
+  readonly neverActive?: boolean;
+  readonly sort: ServiceOperatorDirectorySort;
+  readonly direction: "asc" | "desc";
+  readonly limit: number;
+  readonly cursor?: string;
+}
+
+export interface ServiceOperatorPrincipalProjection {
+  readonly principalId: PrincipalId;
+  readonly displayName: string;
+  /** Restricted support projection; never log or copy to audit metadata. */
+  readonly verifiedEmail: string;
+  readonly state: PrincipalState;
+  readonly registeredAt: UtcInstant;
+  readonly activity: Readonly<PrincipalActivitySummary> | null;
+  readonly ownedMindCount: number;
+  readonly participatingMindCount: number;
+}
+
+export interface ServiceOperatorDirectoryPage {
+  readonly principals: readonly Readonly<ServiceOperatorPrincipalProjection>[];
+  readonly nextCursor: string | null;
+}
+
+export interface StageServiceOperatorDirectoryAuditRequest {
+  readonly operatorPrincipalId: PrincipalId;
+  readonly requestId: RequestId;
+  readonly auditEventId: AuditEventId;
+  readonly auditOutboxMessageId: OutboxMessageId;
+  readonly occurredAt: UtcInstant;
+}
+
+export interface ServiceOperatorDirectoryStore extends MetadataStore {
+  recordPrincipalActivity(request: Readonly<RecordPrincipalActivityRequest>): Promise<void>;
+  readPrincipalActivity(
+    principalId: PrincipalId,
+  ): Promise<Readonly<PrincipalActivitySummary> | null>;
+  listServiceOperatorPrincipals(
+    query: Readonly<ServiceOperatorDirectoryQuery>,
+  ): Promise<Readonly<ServiceOperatorDirectoryPage>>;
+  stageServiceOperatorDirectoryAudit(
+    request: Readonly<StageServiceOperatorDirectoryAuditRequest>,
+  ): Promise<void>;
+}
+
+export interface ServiceOperatorAuditIdGenerator {
+  nextAuditEventId(): AuditEventId;
+  nextOutboxMessageId(): OutboxMessageId;
+}
+
 export interface OrdinaryMindMetadataTransaction
   extends AuthorizationTransaction,
     MembershipControlTransaction {
