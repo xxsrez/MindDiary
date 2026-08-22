@@ -170,6 +170,11 @@ test("binding UI separates attached read-only Minds from one writable Mind witho
         writeBindingId: "write-binding-safe",
         mind: { name: "Shared Research", route: "/research", visibility: "unlisted", canWrite: true },
       },
+      automaticCapture: {
+        mode: "routine_non_sensitive",
+        writeBindingId: "write-binding-safe",
+        updatedAt: "2026-08-22T10:00:00.000Z",
+      },
       eligibleMinds: [
         { name: "Personal Notes", route: "/me", visibility: "private", canWrite: true },
         { name: "Shared Research", route: "/research", visibility: "unlisted", canWrite: true },
@@ -191,6 +196,10 @@ test("binding UI separates attached read-only Minds from one writable Mind witho
   assert.match(html, /data-binding-form="bind_write"/);
   assert.match(html, /Switching makes the previous Mind no longer writable/);
   assert.match(html, /Unlisted\/public readers see committed live HEAD and history immediately/);
+  assert.match(html, /Automatic knowledge capture/);
+  assert.match(html, /Paused: the pinned writable generation or private-target requirement is no longer current/);
+  assert.match(html, /data-binding-action="disable_capture"/);
+  assert.match(html, /Sensitive, cross-Mind, external, destructive, and substantial content/);
   assert.doesNotMatch(html, /principal_|space_|private@example\.com/);
 });
 
@@ -204,6 +213,11 @@ test("revoked credentials expose recovery guidance but no binding mutation contr
       state: "revoked",
       readBindings: [],
       writeBinding: null,
+      automaticCapture: {
+        mode: "disabled",
+        writeBindingId: null,
+        updatedAt: null,
+      },
       eligibleMinds: [],
     }],
   });

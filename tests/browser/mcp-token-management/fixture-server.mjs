@@ -68,6 +68,11 @@ function fixtureModel(state) {
           canWrite: true,
         },
       },
+      automaticCapture: {
+        mode: "routine_non_sensitive",
+        writeBindingId: "write_fixture_research",
+        updatedAt: "2026-08-22T10:00:00.000Z",
+      },
       eligibleMinds: [
         {
           name: "Personal notes with a deliberately long mobile label",

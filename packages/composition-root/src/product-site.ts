@@ -867,6 +867,13 @@ export async function createProductSiteRuntime(
                   writeBindingId: String(result.bindings.writeBinding.writeBindingId),
                   mindId: String(result.bindings.writeBinding.spaceId),
                 }),
+            automaticCapture: Object.freeze({
+              mode: result.bindings.bindingSet.automaticCaptureMode,
+              writeBindingId: result.bindings.bindingSet.captureWriteBindingId === null
+                ? null
+                : String(result.bindings.bindingSet.captureWriteBindingId),
+              updatedAt: result.bindings.bindingSet.captureUpdatedAt,
+            }),
           });
         }));
         return Object.freeze(snapshots.filter((snapshot): snapshot is NonNullable<typeof snapshot> => snapshot !== null));
@@ -880,7 +887,8 @@ export async function createProductSiteRuntime(
           ownerId === null ||
           !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u.test(ownerId) ||
           !(action === "attach_read" || action === "detach_read" ||
-            action === "bind_write" || action === "unbind_write")
+            action === "bind_write" || action === "unbind_write" ||
+            action === "enable_capture" || action === "disable_capture")
         ) {
           throw Object.assign(new Error("Invalid binding mutation."), { code: "invalid_binding_request" });
         }
@@ -925,7 +933,8 @@ export async function createProductSiteRuntime(
         }
         const scopes = personal?.scopes ?? connection!.scopes;
         if (
-          (action === "bind_write" || action === "unbind_write") &&
+          (action === "bind_write" || action === "unbind_write" ||
+            action === "enable_capture" || action === "disable_capture") &&
           !scopes.includes("content:write")
         ) {
           throw Object.assign(new Error("Write scope is required."), { code: "insufficient_scope" });
@@ -989,28 +998,35 @@ export async function createProductSiteRuntime(
           }
         }
         const result = await runWithCapturedWork(
-          () => action === "attach_read" || action === "detach_read"
-            ? bindings.mutateRead({
+          () => action === "enable_capture" || action === "disable_capture"
+            ? bindings.mutateAutomaticCapture({
+                actor: bindingActor,
+                action: action === "enable_capture" ? "enable" : "disable",
+                expectedBindingVersion,
+                idempotencyKey,
+              })
+            : action === "attach_read" || action === "detach_read"
+              ? bindings.mutateRead({
                 actor: bindingActor,
                 action: action === "attach_read" ? "attach" : "detach",
                 spaceId: spaceId as never,
                 expectedBindingVersion,
                 idempotencyKey,
-              })
-            : bindings.mutateWrite(action === "bind_write"
-              ? {
-                  actor: bindingActor,
-                  action: "bind",
-                  spaceId: spaceId as never,
-                  expectedBindingVersion,
-                  idempotencyKey,
-                }
-              : {
-                  actor: bindingActor,
-                  action: "unbind",
-                  expectedBindingVersion,
-                  idempotencyKey,
-                }),
+                })
+              : bindings.mutateWrite(action === "bind_write"
+                ? {
+                    actor: bindingActor,
+                    action: "bind",
+                    spaceId: spaceId as never,
+                    expectedBindingVersion,
+                    idempotencyKey,
+                  }
+                : {
+                    actor: bindingActor,
+                    action: "unbind",
+                    expectedBindingVersion,
+                    idempotencyKey,
+                  }),
           (value) => value.kind === "applied" && !value.replayed,
         );
         if (result.kind === "applied") {

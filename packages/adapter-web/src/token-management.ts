@@ -161,6 +161,12 @@ export interface MindBindingUiWriteTarget {
   readonly mind: MindBindingUiMind | null;
 }
 
+export interface AutomaticCaptureUiPolicy {
+  readonly mode: "disabled" | "routine_non_sensitive";
+  readonly writeBindingId: string | null;
+  readonly updatedAt: string | null;
+}
+
 export type MindBindingOwnerUiState =
   | {
       readonly kind: "ready";
@@ -169,6 +175,7 @@ export type MindBindingOwnerUiState =
       readonly state: "active" | "revoked";
       readonly readBindings: readonly MindBindingUiReadTarget[];
       readonly writeBinding: MindBindingUiWriteTarget | null;
+      readonly automaticCapture: AutomaticCaptureUiPolicy;
       readonly eligibleMinds: readonly MindBindingUiMind[];
     }
   | {
@@ -340,6 +347,27 @@ function renderBindingPanel(
   const write = state.writeBinding === null
     ? `<p class="md-binding-empty"><strong>Active writable Mind:</strong> Not bound.</p>`
     : `<div class="md-binding-write"><p><strong>Active writable Mind</strong></p>${renderBindingMind(state.writeBinding.mind)}${actionable ? `<button class="md-button md-button--secondary" type="button" data-binding-action="unbind_write" data-binding-owner="${escapeUntrustedText(safeOwner)}" data-binding-version="${state.bindingVersion}">Unbind</button>` : ""}</div>`;
+  const captureEnabled = state.automaticCapture.mode === "routine_non_sensitive";
+  const capturePinned = captureEnabled &&
+    state.writeBinding !== null &&
+    state.automaticCapture.writeBindingId === state.writeBinding.writeBindingId;
+  const captureTargetPrivate = state.writeBinding?.mind?.visibility === "private";
+  const captureEligible = actionable && scopes.includes("content:write") &&
+    state.writeBinding !== null && captureTargetPrivate;
+  const captureDescription = captureEnabled
+    ? capturePinned && captureTargetPrivate
+      ? "On for routine, non-sensitive additive Memories in this exact private writable Mind."
+      : "Paused: the pinned writable generation or private-target requirement is no longer current."
+    : state.writeBinding === null
+      ? "Off. Bind one private writable Mind before enabling."
+      : !captureTargetPrivate
+        ? "Off. Automatic capture is available only while the writable Mind is private."
+        : "Off. Routine knowledge is never captured unless you enable it for this credential.";
+  const captureAction = captureEnabled ? "disable_capture" : "enable_capture";
+  const captureControl = actionable && scopes.includes("content:write")
+    ? `<button class="md-button md-button--secondary" type="button" data-binding-action="${captureAction}" data-binding-owner="${escapeUntrustedText(safeOwner)}" data-binding-version="${state.bindingVersion}"${!captureEnabled && !captureEligible ? " disabled" : ""}>${captureEnabled ? "Disable automatic capture" : "Enable automatic capture"}</button>`
+    : "";
+  const capture = `<div class="md-capture-policy"><div><p><strong>Automatic knowledge capture</strong></p><p>${escapeUntrustedText(captureDescription)}</p><p class="md-caveat">Sensitive, cross-Mind, external, destructive, and substantial content always requires an explicit normal write flow.</p></div>${captureControl}</div>`;
   const controls = !actionable
     ? `<p class="md-caveat">This credential is expired or revoked. Its bindings cannot be restored or changed; create or reconnect a credential, then choose bindings explicitly.</p>`
     : `<div class="md-binding-controls">
@@ -359,6 +387,7 @@ function renderBindingPanel(
     <p>Attached Minds are read-only. Only the single active writable Mind can receive commits.</p>
     <ul class="md-binding-list">${readRows}</ul>
     ${write}
+    ${capture}
     ${controls}
     <p class="md-form__status" role="status" aria-live="polite" data-binding-status></p>
   </section>`;

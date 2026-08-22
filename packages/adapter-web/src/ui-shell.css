@@ -993,12 +993,35 @@ h3 {
 }
 
 .md-binding-panel__heading,
-.md-binding-write {
+.md-binding-write,
+.md-capture-policy {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 0.75rem;
   flex-wrap: wrap;
+}
+
+.md-capture-policy {
+  padding: 0.85rem;
+  border: 1px solid var(--mind-diary-border-subtle);
+  border-radius: 0.75rem;
+  background: #fff;
+}
+
+.md-capture-policy > div {
+  display: grid;
+  flex: 1;
+  gap: 0.45rem;
+  min-width: 0;
+}
+
+.md-capture-policy p {
+  margin: 0;
+}
+
+.md-capture-policy .md-button {
+  flex: none;
 }
 
 .md-binding-panel h4 {

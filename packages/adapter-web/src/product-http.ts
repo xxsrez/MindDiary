@@ -202,6 +202,11 @@ export interface ProductWebMindBindingOwner {
     readonly writeBindingId: string;
     readonly mindId: string;
   } | null;
+  readonly automaticCapture: {
+    readonly mode: "disabled" | "routine_non_sensitive";
+    readonly writeBindingId: string | null;
+    readonly updatedAt: string | null;
+  };
 }
 
 export interface ProductWebMindBindings {
@@ -274,7 +279,8 @@ const PRODUCT_UI_PILOT_SHELL_CSS = `
 .md-setup-card pre{min-width:0;max-width:100%;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere}
 .md-setup-card pre code{white-space:inherit;overflow-wrap:anywhere}
 .md-binding-panel{display:grid;gap:.9rem;margin-top:1rem;padding-top:1rem;border-top:1px solid var(--mind-diary-border-subtle);min-width:0}
-.md-binding-panel__heading,.md-binding-write{display:flex;align-items:flex-start;justify-content:space-between;gap:.75rem;flex-wrap:wrap}
+.md-binding-panel__heading,.md-binding-write,.md-capture-policy{display:flex;align-items:flex-start;justify-content:space-between;gap:.75rem;flex-wrap:wrap}
+.md-capture-policy{padding:.85rem;border:1px solid var(--mind-diary-border-subtle);border-radius:.75rem;background:#fff}.md-capture-policy>div{display:grid;gap:.45rem;min-width:0;flex:1}.md-capture-policy p{margin:0}.md-capture-policy .md-button{flex:none}
 .md-binding-panel h4{margin:0;font-family:var(--mind-diary-font-display);font-size:1.2rem}
 .md-binding-list{display:grid;gap:.75rem;margin:0;padding:0;list-style:none}
 .md-binding-list li{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:.75rem;padding:.75rem;border:1px solid var(--mind-diary-border-subtle);border-radius:.75rem}
@@ -735,6 +741,27 @@ function bindingOwnerUi(
   const writeBindingId = writeSource === null ? null : requiredString(writeSource.writeBindingId);
   const writeMindId = writeSource === null ? null : requiredString(writeSource.mindId);
   if (writeSource !== null && (writeBindingId === null || writeMindId === null)) return null;
+  const captureSource = record(source.automaticCapture);
+  if (
+    captureSource === null ||
+    !("mode" in captureSource) ||
+    !("writeBindingId" in captureSource) ||
+    !("updatedAt" in captureSource)
+  ) return null;
+  const captureMode = captureSource.mode;
+  const captureWriteBindingId = captureSource.writeBindingId === null
+    ? null
+    : requiredString(captureSource.writeBindingId);
+  const captureUpdatedAt = captureSource.updatedAt === null
+    ? null
+    : requiredString(captureSource.updatedAt);
+  if (
+    !(captureMode === "disabled" || captureMode === "routine_non_sensitive") ||
+    (captureSource.writeBindingId !== null && captureWriteBindingId === null) ||
+    (captureSource.updatedAt !== null && captureUpdatedAt === null) ||
+    (captureMode === "disabled" && captureWriteBindingId !== null) ||
+    (captureMode === "routine_non_sensitive" && captureWriteBindingId === null)
+  ) return null;
   return Object.freeze({
     kind: "ready" as const,
     ownerId,
@@ -747,6 +774,11 @@ function bindingOwnerUi(
           writeBindingId: writeBindingId!,
           mind: candidates.get(writeMindId!) ?? null,
         }),
+    automaticCapture: Object.freeze({
+      mode: captureMode,
+      writeBindingId: captureWriteBindingId,
+      updatedAt: captureUpdatedAt,
+    }),
     eligibleMinds: Object.freeze([...candidates.values()]),
   });
 }

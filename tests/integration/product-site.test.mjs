@@ -792,6 +792,11 @@ test("Product Site projects and mutates exact credential bindings with CSRF, CAS
             { readBindingId: "read-binding-hidden", mindId: "space_hidden" },
           ],
           writeBinding: { writeBindingId: "write-binding-research", mindId: "space_research" },
+          automaticCapture: {
+            mode: "disabled",
+            writeBindingId: null,
+            updatedAt: null,
+          },
         }];
       },
       async mutate(actor, input) {
@@ -814,6 +819,9 @@ test("Product Site projects and mutates exact credential bindings with CSRF, CAS
   assert.match(html, /Access unavailable/);
   assert.match(html, /data-binding-action="detach_read"/);
   assert.match(html, /data-binding-form="bind_write"/);
+  assert.match(html, /Automatic knowledge capture/);
+  assert.match(html, /available only while the writable Mind is private/);
+  assert.match(html, /data-binding-action="enable_capture"[^>]*disabled/);
   assert.doesNotMatch(html, /space_hidden|space_personal|space_research/);
 
   const denied = await handler(new Request(`${origin}/api/v1/mind-bindings/tok_binding`, {

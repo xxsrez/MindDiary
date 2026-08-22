@@ -757,6 +757,9 @@ test("durable Product Site controls one token binding with ownership, CAS, read-
   const boundHtml = await boundPage.text();
   assert.match(boundHtml, /Version 1/u);
   assert.match(boundHtml, /Active writable Mind[\s\S]*Web Binding E2E[\s\S]*\/me[\s\S]*private/u);
+  assert.match(boundHtml, /Automatic knowledge capture/u);
+  assert.match(boundHtml, /Routine knowledge is never captured unless you enable it/u);
+  assert.match(boundHtml, /data-binding-action="enable_capture"/u);
   assert.doesNotMatch(boundHtml, /principal_|space_personal/u);
 
   const bindingReadResponse = await modernMcp(runtime, secret, {
@@ -780,6 +783,88 @@ test("durable Product Site controls one token binding with ownership, CAS, read-
   assert.equal(bindings.binding_version, 1);
   assert.equal(bindings.write_binding.mind.route, "/me");
   assert.equal(typeof bindings.write_binding.write_binding_id, "string");
+  assert.deepEqual(bindings.automatic_capture, {
+    mode: "disabled",
+    write_binding_id: null,
+    updated_at: null,
+  });
+
+  const captureEnabled = await mutate({
+    action: "enable_capture",
+    expected_binding_version: 1,
+  }, "binding:web-enable-capture");
+  assert.equal(captureEnabled.status, 200, await captureEnabled.clone().text());
+  assert.equal((await captureEnabled.json()).data.binding_version, 2);
+  const captureEnabledPage = await responseFrom(runtime, new Request(`${ORIGIN}/settings/mcp`));
+  const captureEnabledHtml = await captureEnabledPage.text();
+  assert.match(captureEnabledHtml, /Version 2/u);
+  assert.match(captureEnabledHtml, /On for routine, non-sensitive additive Memories/u);
+  assert.match(captureEnabledHtml, /data-binding-action="disable_capture"/u);
+
+  const captureBindings = await modernTool(
+    runtime,
+    secret,
+    "web-binding-capture-read-back",
+    "get_mind_bindings",
+    {},
+  );
+  assert.equal(captureBindings.binding_version, 2);
+  assert.deepEqual(captureBindings.automatic_capture, {
+    mode: "routine_non_sensitive",
+    write_binding_id: captureBindings.write_binding.write_binding_id,
+    updated_at: "2026-08-22T11:00:00.000Z",
+  });
+  const captureArguments = {
+    mind: "/me",
+    write_binding_id: captureBindings.write_binding.write_binding_id,
+    expected_binding_version: captureBindings.binding_version,
+    expected_revision: captureBindings.write_binding.mind.head.revision_id,
+    idempotency_key: "capture:web-binding-routine",
+    classification: "routine_non_sensitive",
+    capture_kind: "fact",
+    capture_key: "weekly-summary-preference",
+    title: "Weekly summary preference",
+    description: "A routine non-sensitive working preference stated by the user.",
+    body: "The user prefers compact weekly summaries with evidence first.",
+    sources: [{ kind: "user_statement" }],
+  };
+  const captured = await modernTool(
+    runtime,
+    secret,
+    "web-binding-capture",
+    "capture_knowledge",
+    captureArguments,
+  );
+  assert.equal(captured.status, "captured");
+  assert.equal(captured.path, "concepts/captured/weekly-summary-preference.md");
+  assert.equal(captured.previous_revision_id, captureArguments.expected_revision);
+  assert.equal(captured.index_status, "queued");
+  const noOp = await modernTool(
+    runtime,
+    secret,
+    "web-binding-capture-no-op",
+    "capture_knowledge",
+    captureArguments,
+  );
+  assert.equal(noOp.status, "no_op");
+  assert.equal(noOp.revision.revision_id, captured.revision.revision_id);
+  assert.equal(noOp.index_status, "unchanged");
+
+  const captureDisabled = await mutate({
+    action: "disable_capture",
+    expected_binding_version: 2,
+  }, "binding:web-disable-capture");
+  assert.equal(captureDisabled.status, 200, await captureDisabled.clone().text());
+  assert.equal((await captureDisabled.json()).data.binding_version, 3);
+  const disabledBindings = await modernTool(
+    runtime,
+    secret,
+    "web-binding-capture-disabled-read-back",
+    "get_mind_bindings",
+    {},
+  );
+  assert.equal(disabledBindings.binding_version, 3);
+  assert.equal(disabledBindings.automatic_capture.mode, "disabled");
 
   const stale = await mutate({
     action: "unbind_write",
@@ -788,7 +873,7 @@ test("durable Product Site controls one token binding with ownership, CAS, read-
   assert.equal(stale.status, 409);
   assert.equal((await stale.json()).error.code, "binding_version_conflict");
   const afterStale = await modernTool(runtime, secret, "web-binding-after-stale", "get_mind_bindings", {});
-  assert.equal(afterStale.binding_version, 1);
+  assert.equal(afterStale.binding_version, 3);
   assert.equal(afterStale.write_binding.mind.route, "/me");
 
   const unknownField = await mutate({
