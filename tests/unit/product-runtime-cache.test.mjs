@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { IsolateRuntimeCache } from "../../apps/mind-diary-site/worker/runtime-cache.ts";
+import { IsolateRuntimeCache } from "../../apps/mind-diary-site/worker/runtime-cache.js";
 
 test("isolate runtime cache single-flights warm and concurrent initialization", async () => {
   const cache = new IsolateRuntimeCache();
