@@ -10,8 +10,9 @@ compatibility gates. Расширенные read/write/history/export сцена
 локально, но их UAT evidence отделено от уже проверенного Markdown-only
 baseline.
 Sites storage/capacity/Markdown-import contract для Brain-scale Release 0.1
-принят отдельно; delta commits, reservations и resumable import ещё не
-реализованы и не входят в прежнее UAT evidence.
+принят отдельно и реализован в local candidate: delta commits, reservations,
+streaming export/cleanup и resumable import. Эти изменения ещё не входят в
+прежнее UAT evidence.
 
 ## Зачем проект существует
 
@@ -148,7 +149,7 @@ delta + manifest перед одним D1 HEAD CAS. D1 остаётся authorit
 HEAD, reachability, accounting и reservations, но не хранит full Markdown
 corpus. Markdown-only import использует resumable
 `plan → reserve → stage → validate → commit → finalize` и публикует один HEAD
-либо ничего. Полная модель и её пока не реализованный status находятся в
+либо ничего. Полная модель и её local-implemented/UAT-pending status находятся в
 [Sites storage/capacity/import specification](specs/sites-storage-capacity-import.md).
 
 Markdown-only revision экспортируется прежним byte-for-byte
@@ -283,9 +284,10 @@ non-Markdown files больше не является open non-goal: для rast
 bounded BundleFile slice, но его repository/UAT status нельзя выводить из
 принятого contract.
 
-Markdown-only resumable import теперь принят для Release 0.1, но остаётся
-не реализованным; ZIP/binary/legacy imports и named checkpoints планируются
-post-MVP. Более широкие file types, extraction и previews/OCR остаются будущими
+Markdown-only resumable import принят для Release 0.1 и реализован в local
+candidate, но ещё не является UAT-verified behavior; ZIP/binary/legacy imports
+и named checkpoints планируются post-MVP. Более широкие file types, extraction
+и previews/OCR остаются будущими
 решениями; принятый первый BundleFile slice не подразумевает их. Ограничения
 этого раздела нельзя трактовать как полные границы будущего продукта; см.
 [roadmap](roadmap.md).

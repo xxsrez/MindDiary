@@ -26,8 +26,9 @@ v1/v2 dual read в текущем repository candidate. Reconstructable accounti
 durable reservations, admission/fairness, cleanup и privacy-safe usage surfaces
 из MD-266 также реализованы. MD-268 реализует в текущем repository candidate
 streaming deterministic export/download и D1-checkpointed bounded R2 cleanup;
-Markdown import из MD-267 ещё не реализован. UAT evidence для всего extension
-отсутствует.
+MD-267 реализует в local candidate resumable Sites UI/REST Markdown import с
+durable stage/validation/promotion checkpoints и одним exact HEAD CAS. UAT
+evidence для всего extension отсутствует.
 
 ## Драйверы и ограничения
 
@@ -122,7 +123,8 @@ Producer-defined raster/PDF/ZIP transport принят отдельно в
 [BundleFile specification](specs/bundle-files.md); ZIP остаётся opaque и не
 является import. Отдельный Markdown-only file import теперь принят в
 [storage/capacity/import contract](specs/sites-storage-capacity-import.md), но
-не реализован. Будущий legacy reader обязан получить explicit migration policy
+реализован только в local candidate и ещё не доказан на exact UAT deployment.
+Будущий legacy reader обязан получить explicit migration policy
 и не может silently менять version/status semantics.
 
 ### 2. Application core
@@ -643,8 +645,9 @@ explicit target Mind. General cross-Mind search/synthesis требует нов�
   одну immutable file за раз, пишет deterministic 4 MiB R2 parts и отдаёт их
   download stream; cleanup проходит R2 namespaces страницами по одному object,
   хранит lease/cursor в D1 и повторно сверяет refcounts, staging/export roots и
-  CAS fence. Import остаётся последующим MD-267;
-  current-SHA UAT gate для реализованной части ещё не пройден.
+  CAS fence. Import staging, validation и canonical promotion также идут
+  bounded pages с durable checkpoints, а только последний D1 transaction
+  публикует manifest v3 и HEAD; current-SHA UAT gate ещё не пройден.
 - Trusted Sites identity, browser CSRF/Origin и Bearer content MCP остаются
   разными security boundaries; browser не рендерит raw Markdown, MCP не
   публикует control tools.

@@ -18,6 +18,7 @@ export interface OrdinaryMindUiMind {
   readonly mindId: string;
   readonly handle: string;
   readonly name: string;
+  readonly headRevisionId: string;
   readonly visibility: OrdinaryMindUiVisibility;
   readonly role: OrdinaryMindUiRole;
   readonly metadataVersion: number;
@@ -178,6 +179,7 @@ function isSafeMind(value: unknown): value is OrdinaryMindUiMind {
   return typeof mind.mindId === "string" && mind.mindId.length > 0 &&
     safeHandle(mind.handle) !== null &&
     typeof mind.name === "string" && mind.name.trim().length > 0 && mind.name.length <= 80 &&
+    typeof mind.headRevisionId === "string" && mind.headRevisionId.length > 0 &&
     safeRole(mind.role) === mind.role &&
     safeVisibility(mind.visibility) === mind.visibility &&
     safeMetadataVersion(mind.metadataVersion) !== null &&
@@ -389,6 +391,34 @@ function renderDeletePanel(mind: OrdinaryMindUiMind, handle: string): string {
   </section>`;
 }
 
+export function renderMarkdownImportPanel(target: Readonly<{
+  mindRef: string;
+  headRevisionId: string;
+}>): string {
+  return `<section class="md-setup-card" aria-labelledby="markdown-import-heading" data-markdown-import data-head-revision="${escapeUntrustedText(target.headRevisionId)}" data-import-handle="${escapeUntrustedText(target.mindRef)}">
+    <div>
+      <p class="md-eyebrow">Markdown snapshot</p>
+      <h2 id="markdown-import-heading">Import a folder</h2>
+      <p>Select UTF-8 Markdown files, review the exact change plan, then publish the whole snapshot as one immutable revision.</p>
+    </div>
+    <form data-markdown-import-form>
+      <div class="md-field">
+        <label for="markdown-import-files">Markdown folder or files</label>
+        <input id="markdown-import-files" name="files" type="file" accept=".md,text/markdown" multiple webkitdirectory directory data-import-files aria-describedby="markdown-import-help">
+        <p id="markdown-import-help">Up to 10,000 files, 1 MiB each and 64 MiB total. ZIP and non-Markdown files are not accepted.</p>
+      </div>
+      <button class="md-button md-button--secondary" type="button" data-plan-markdown-import>Review exact changes</button>
+      <section class="md-caveat" data-import-plan hidden style="display:none">
+        <p><strong>Exact replacement:</strong> <span data-import-additions>0</span> added, <span data-import-replacements>0</span> replaced, <span data-import-deletions>0</span> deleted and <span data-import-unchanged>0</span> unchanged. Existing opaque files remain.</p>
+        <label><input type="checkbox" data-import-confirm> I understand that every current Markdown file omitted from this selection will disappear from the new HEAD. Immutable history remains available.</label>
+      </section>
+      <p class="md-form__status" role="status" aria-live="polite" data-import-status></p>
+      <button class="md-button md-button--primary" type="submit" data-start-markdown-import disabled>Start or resume import</button>
+      <button class="md-button md-button--secondary" type="button" data-cancel-markdown-import hidden style="display:none">Cancel staged import</button>
+    </form>
+  </section>`;
+}
+
 function renderVisibilityPanel(mind: OrdinaryMindUiMind, handle: string): string {
   const visibility = safeVisibility(mind.visibility);
   const role = safeRole(mind.role);
@@ -581,8 +611,8 @@ function renderDetailView(
     <div class="md-page-heading">
       <div>
         <p class="md-eyebrow">Route-specific management</p>
-        <h1 data-route-mind-name>${escapeUntrustedText(mind.name)}</h1>
-        <p>Manage metadata for /${escapeUntrustedText(handle)}. Canonical knowledge files are available through the content MCP, not this browser page.</p>
+          <h1 data-route-mind-name>${escapeUntrustedText(mind.name)}</h1>
+        <p>Manage /${escapeUntrustedText(handle)} and import a bounded Markdown snapshot when your role can write content.</p>
       </div>
       ${renderAnnouncement(announcement)}
     </div>
@@ -601,6 +631,9 @@ function renderDetailView(
         ${renderRenamePanel(mind, handle)}
       </div>
       ${renderVisibilityPanel(mind, handle)}
+      ${role === "reader" || mind.accessKind === "visibility"
+        ? ""
+        : renderMarkdownImportPanel({ mindRef: handle, headRevisionId: mind.headRevisionId })}
       ${renderCapacityPanel(mind, capacity)}
       ${renderCollaborationPanel(collaboration)}
       ${renderOwnershipPanel(mind, ownership)}

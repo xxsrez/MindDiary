@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import vm from "node:vm";
 import {
   createProductBundleFileDownloadHttpHandler,
   createProductExportDownloadHttpHandler,
@@ -169,8 +170,13 @@ test("product web authenticates UI and fail-closes browser mutations", async () 
   assert.match(pageHtml, /data-profile-form/);
   assert.match(pageHtml, /mind-diary-onboarding-client\.js/);
   assert.match(pageHtml, /mind-diary-csrf-token/);
-  assert.doesNotMatch(pageHtml, /principal_one|revision_personal|Bearer must-not-be-used-by-web/);
+  assert.match(pageHtml, /data-markdown-import data-head-revision="revision_personal" data-import-handle="me"/);
+  assert.doesNotMatch(pageHtml, /principal_one|Bearer must-not-be-used-by-web/);
   assert.equal(page.headers.get("cache-control"), "no-store");
+  const onboardingAsset = await handler(new Request(`${origin}/ui/mind-diary-onboarding-client.js`));
+  const onboardingJavaScript = await onboardingAsset.text();
+  assert.match(onboardingJavaScript, /markdown-import-plans/);
+  assert.doesNotThrow(() => new vm.Script(onboardingJavaScript));
 
   const denied = await handler(new Request(`${origin}/api/v1/minds`, {
     method: "POST",
@@ -597,6 +603,9 @@ test("ordinary Mind list and exact route wire the UAT management and deletion co
   assert.match(detailHtml, /data-owner-delete-controls/);
   assert.match(detailHtml, /data-owner-visibility-controls/);
   assert.match(detailHtml, /data-owner-transfer-controls/);
+  assert.match(detailHtml, /data-markdown-import data-head-revision="revision_research"/);
+  assert.match(detailHtml, /Exact replacement:/);
+  assert.match(detailHtml, /every current Markdown file omitted/);
   assert.match(detailHtml, /data-capacity-state="normal"/);
   assert.match(detailHtml, /Counts come from immutable manifest and job metadata/);
   assert.match(detailHtml, /Owner headroom/);
@@ -606,7 +615,6 @@ test("ordinary Mind list and exact route wire the UAT management and deletion co
   assert.match(detailHtml, /data-member-role-form/);
   assert.match(detailHtml, /value="membership_editor">Editor Person — Editor/);
   assert.match(detailHtml, /mind-diary-ordinary-minds-client\.js/);
-  assert.doesNotMatch(detailHtml, /revision_research/);
 
   const capacity = await handler(new Request(
     `${origin}/api/v1/minds/research-notes/capacity`,
@@ -626,6 +634,15 @@ test("ordinary Mind list and exact route wire the UAT management and deletion co
   assert.match(assetBody, /acknowledge_live_head_and_history_exposure/);
   assert.match(assetBody, /expected_invitation_version/);
   assert.match(assetBody, /expected_membership_version/);
+  assert.match(assetBody, /markdown-import-plans/);
+  assert.match(assetBody, /markdown-import-mind/);
+  assert.match(assetBody, /history\.replaceState/);
+  assert.doesNotMatch(assetBody, /localStorage|sessionStorage/);
+  assert.match(assetBody, /"sha256:"\+hex/);
+  assert.match(assetBody, /descriptor_hash!==descriptorHash/);
+  assert.match(assetBody, /Uploading bounded batch/);
+  assert.match(assetBody, /promotion_checkpoint/);
+  assert.doesNotThrow(() => new vm.Script(assetBody));
 
   const impact = await handler(new Request(`${origin}/api/v1/minds/research-notes/deletion-impact`));
   assert.equal(impact.status, 200);
@@ -642,6 +659,141 @@ test("ordinary Mind list and exact route wire the UAT management and deletion co
   assert.equal(deleteCall.input.mind_ref, "research-notes");
   assert.equal(deleteCall.input.impactId, "impact_research");
   assert.equal(deleteCall.input.idempotencyKey, "delete:12345678");
+});
+
+test("Markdown import REST maps exact plan, resumable multipart checkpoints and terminal commands", async () => {
+  const calls = [];
+  const handler = createProductWebHttpHandler({
+    applicationOrigin: origin,
+    resolveIdentity: () => ({ kind: "authenticated", actor: registeredActor }),
+    csrf: { issue: () => "csrf-import", verify: (_actor, token) => token === "csrf-import" },
+    control: { execute(request) {
+      calls.push(request);
+      if (request.operation === "plan_markdown_import") return {
+        kind: "planned",
+        plan: { planId: "plan_import", expectedRevisionId: "revision_research", additions: 1 },
+        replayed: false,
+      };
+      if (request.operation === "start_markdown_import") return {
+        kind: "started",
+        session: { importId: "import_one", state: "active", version: 1, checkpoint: 0 },
+        replayed: false,
+      };
+      if (request.operation === "get_markdown_import") return {
+        kind: "found",
+        session: { importId: "import_one", state: "active", version: 1, checkpoint: 0 },
+      };
+      if (request.operation === "stage_markdown_import_batch") return {
+        kind: "staged",
+        session: { importId: "import_one", state: "active", version: 2, checkpoint: 1 },
+        replayed: false,
+      };
+      if (request.operation === "validate_markdown_import") return {
+        kind: "validated",
+        session: { importId: "import_one", state: "validated", version: 3, checkpoint: 1 },
+      };
+      if (request.operation === "commit_markdown_import") return {
+        kind: "committed", revisionId: "revision_imported", replayed: false,
+      };
+      if (request.operation === "cancel_markdown_import") return {
+        kind: "canceled", session: { importId: "import_one", state: "canceled", version: 4 }, replayed: false,
+      };
+      throw Object.assign(new Error("unexpected operation"), { code: "not_found" });
+    } },
+  });
+  const mutationHeaders = {
+    origin,
+    "x-csrf-token": "csrf-import",
+    "content-type": "application/json",
+  };
+
+  const plan = await handler(new Request(`${origin}/api/v1/minds/research-notes/markdown-import-plans`, {
+    method: "POST",
+    headers: { ...mutationHeaders, "idempotency-key": "import-plan:12345678" },
+    body: JSON.stringify({
+      expected_revision_id: "revision_research",
+      files: [{ path: "index.md", sha256: "a".repeat(64), size: 7 }],
+    }),
+  }));
+  assert.equal(plan.status, 200);
+  assert.equal((await plan.json()).data.plan.plan_id, "plan_import");
+  assert.deepEqual(calls.at(-1).input, {
+    expectedRevisionId: "revision_research",
+    files: [{ path: "index.md", sha256: "a".repeat(64), size: 7 }],
+    idempotencyKey: "import-plan:12345678",
+    mind_ref: "research-notes",
+  });
+
+  await handler(new Request(`${origin}/api/v1/minds/research-notes/markdown-imports`, {
+    method: "POST",
+    headers: { ...mutationHeaders, "idempotency-key": "import-session:12345678" },
+    body: JSON.stringify({ plan_id: "plan_import" }),
+  }));
+  assert.equal(calls.at(-1).operation, "start_markdown_import");
+  assert.equal(calls.at(-1).input.planId, "plan_import");
+
+  await handler(new Request(`${origin}/api/v1/markdown-imports/import_one`));
+  assert.equal(calls.at(-1).operation, "get_markdown_import");
+  assert.equal(calls.at(-1).input.import_id, "import_one");
+
+  const multipart = new FormData();
+  multipart.append("manifest", JSON.stringify({
+    expected_version: 1,
+    files: [{ field: "file_0", path: "index.md", sha256: "b".repeat(64), size: 7 }],
+  }));
+  multipart.append("file_0", new Blob(["# Mind\n"], { type: "text/markdown" }), "index.md");
+  const batch = await handler(new Request(`${origin}/api/v1/markdown-imports/import_one/batches/1`, {
+    method: "PUT",
+    headers: { origin, "x-csrf-token": "csrf-import" },
+    body: multipart,
+  }));
+  assert.equal(batch.status, 200);
+  const batchCall = calls.at(-1);
+  assert.equal(batchCall.operation, "stage_markdown_import_batch");
+  assert.equal(batchCall.input.import_id, "import_one");
+  assert.equal(batchCall.input.checkpoint, "1");
+  assert.equal(batchCall.input.expectedVersion, 1);
+  assert.equal(batchCall.input.files[0].path, "index.md");
+  assert.equal(batchCall.input.files[0].bytes instanceof Uint8Array, true);
+  assert.equal(new TextDecoder().decode(batchCall.input.files[0].bytes), "# Mind\n");
+
+  for (const [method, suffix, operation, body] of [
+    ["POST", "validate", "validate_markdown_import", { expected_version: 2 }],
+    ["POST", "commit", "commit_markdown_import", { expected_version: 3, summary: "Import" }],
+    ["DELETE", "", "cancel_markdown_import", { expected_version: 3 }],
+  ]) {
+    const response = await handler(new Request(
+      `${origin}/api/v1/markdown-imports/import_one${suffix ? `/${suffix}` : ""}`,
+      { method, headers: mutationHeaders, body: JSON.stringify(body) },
+    ));
+    assert.equal(response.status, 200, operation);
+    assert.equal(calls.at(-1).operation, operation);
+    assert.equal(calls.at(-1).input.expectedVersion, body.expected_version);
+  }
+
+  const before = calls.length;
+  const deniedBatch = await handler(new Request(`${origin}/api/v1/markdown-imports/import_one/batches/2`, {
+    method: "PUT",
+    headers: { origin, "x-csrf-token": "wrong" },
+    body: new FormData(),
+  }));
+  assert.equal(deniedBatch.status, 403);
+  assert.equal(calls.length, before);
+
+  const oversizedBatch = await handler(new Request(
+    `${origin}/api/v1/markdown-imports/import_one/batches/2`,
+    {
+      method: "PUT",
+      headers: {
+        origin,
+        "x-csrf-token": "csrf-import",
+        "content-type": "multipart/form-data; boundary=bounded-import-test",
+      },
+      body: new Uint8Array(5 * 1024 * 1024 + 1),
+    },
+  ));
+  assert.equal(oversizedBatch.status, 400);
+  assert.equal(calls.length, before);
 });
 
 test("collaboration pages expose safe invitation metadata and map every browser action to server-owned commands", async () => {

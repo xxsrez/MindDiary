@@ -323,6 +323,7 @@ function authenticatedModel(profileUpdate = { kind: "idle", idempotencyKey: "pro
     personalMind: {
       route: "/me",
       name: "Andrey",
+      headRevisionId: "revision_personal",
       updatedLabel: "Updated today",
     },
     profileUpdate,
@@ -345,10 +346,12 @@ test("authenticated My Mind card exposes only /me and Personal-safe management",
   assert.match(html, /class="md-setup-card md-setup-card--single"/u);
   assert.match(html, /data-copy-code="mind-diary-onboarding-starter-playbook"/u);
   assert.match(html, /data-copy-code="mind-diary-onboarding-concierge-playbook"/u);
+  assert.match(html, /data-markdown-import[^>]+data-import-handle="me"/u);
+  assert.match(html, /type="file"[^>]+data-import-files/u);
   assert.match(html, /only UTF-8 Markdown/u);
   assert.match(html, /Never store a token in a repository/u);
   assert.doesNotMatch(html, /space_handle|hidden handle|data-(?:share|visibility|transfer|delete)/i);
-  assert.doesNotMatch(html, /<(?:textarea|iframe)\b|contenteditable|type="file"/i);
+  assert.doesNotMatch(html, /<(?:textarea|iframe)\b|contenteditable/i);
   assert.doesNotMatch(html, /<button[^>]*>[^<]*(?:Share|Visibility|Transfer|Delete)/i);
 
   assert.match(shellCss, /\.md-setup-card > \*\s*\{\s*min-width:\s*0;/u);
@@ -389,6 +392,7 @@ test("onboarding escapes all profile text and loads only a safe local client", (
     personalMind: {
       route: "/me",
       name: `<svg onload="globalThis.pwned=2">`,
+      headRevisionId: "revision_personal",
       updatedLabel: `<script>globalThis.pwned=3</script>`,
     },
   });

@@ -108,6 +108,7 @@ function onboardingModel(pathname, state) {
     personalMind: {
       route: "/me",
       name: `<svg onload="globalThis.__mindDiaryInjected=true">Fixture Mind`,
+      headRevisionId: "revision_browser_fixture",
       updatedLabel: "Updated at fixture time",
     },
     profileUpdate,

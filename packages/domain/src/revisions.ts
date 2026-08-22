@@ -218,7 +218,7 @@ export function bundleFileMediaType(value: string): BundleFileMediaType {
   return value as BundleFileMediaType;
 }
 
-function compareUnicodeScalarValues(left: string, right: string): number {
+export function compareUnicodeScalarValues(left: string, right: string): number {
   const leftPoints = [...left].map((value) => value.codePointAt(0)!);
   const rightPoints = [...right].map((value) => value.codePointAt(0)!);
   const length = Math.min(leftPoints.length, rightPoints.length);

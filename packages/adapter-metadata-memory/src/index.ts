@@ -111,6 +111,13 @@ import type {
   MembershipControlTransaction,
   MembershipMutationReplayRequest,
   MembershipMutationReplayResult,
+  MarkdownImportMetadataStore,
+  MarkdownImportMetadataTransaction,
+  MarkdownImportPlan,
+  MarkdownImportSession,
+  MarkdownImportSessionFailure,
+  MarkdownImportSessionState,
+  MarkdownImportStagedFile,
   MetadataStore,
   MindRouteAuthorizationQuery,
   PublicMindCatalogPageRequest,
@@ -229,6 +236,48 @@ function freezeStagedBundleFile(
   record: Readonly<StagedBundleFileRecord>,
 ): Readonly<StagedBundleFileRecord> {
   return Object.freeze({ ...record });
+}
+
+function freezeMarkdownImportPlan(
+  plan: Readonly<MarkdownImportPlan>,
+): Readonly<MarkdownImportPlan> {
+  return Object.freeze({
+    ...plan,
+    files: Object.freeze(plan.files.map((file) => Object.freeze({ ...file }))),
+  });
+}
+
+function freezeMarkdownImportFailure(
+  failure: Readonly<MarkdownImportSessionFailure>,
+): Readonly<MarkdownImportSessionFailure> {
+  return Object.freeze({ ...failure });
+}
+
+function freezeMarkdownImportSession(
+  session: Readonly<MarkdownImportSession>,
+): Readonly<MarkdownImportSession> {
+  return Object.freeze({
+    ...session,
+    failures: Object.freeze(session.failures.map(freezeMarkdownImportFailure)),
+  });
+}
+
+function freezeMarkdownImportStagedFile(
+  file: Readonly<MarkdownImportStagedFile>,
+): Readonly<MarkdownImportStagedFile> {
+  return Object.freeze({ ...file });
+}
+
+function markdownImportKey(
+  principalId: PrincipalId,
+  spaceId: SpaceId,
+  key: MarkdownImportPlan["idempotencyKey"],
+): string {
+  return `${principalId}\u0000${spaceId}\u0000${key}`;
+}
+
+function markdownImportBatchKey(importId: string, checkpoint: number): string {
+  return `${importId}\u0000${checkpoint}`;
 }
 
 function stagedBundleFileActive(
@@ -3791,6 +3840,9 @@ function capacityUsageFromCanonicalState(input: Readonly<{
   spaces: ReadonlyMap<SpaceId, SpaceState>;
   stagedBundleFiles: ReadonlyMap<StagedBundleFileId, Readonly<StagedBundleFileRecord>>;
   exportJobs: ReadonlyMap<JobId, Readonly<ExportJob>>;
+  markdownImportPlans?: ReadonlyMap<string, Readonly<MarkdownImportPlan>>;
+  markdownImportSessions?: ReadonlyMap<string, Readonly<MarkdownImportSession>>;
+  markdownImportStagedFiles?: ReadonlyMap<StagedBundleFileId, Readonly<MarkdownImportStagedFile>>;
   reservations: ReadonlyMap<string, Readonly<CapacityReservation>>;
   reconciledAt: ReadonlyMap<SpaceId, UtcInstant>;
 }>): Readonly<CapacityUsageSnapshot> {
@@ -3849,6 +3901,20 @@ function capacityUsageFromCanonicalState(input: Readonly<{
     d1MetadataBytes += 768;
     if (job.archive !== null && job.archiveCleanedAt === null) {
       temporaryBytes += job.archive.size;
+    }
+  }
+  for (const plan of input.markdownImportPlans?.values() ?? []) {
+    if (!input.spaceIds.has(plan.spaceId)) continue;
+    d1MetadataBytes += 512 + plan.files.length * 160;
+  }
+  for (const session of input.markdownImportSessions?.values() ?? []) {
+    if (!input.spaceIds.has(session.spaceId)) continue;
+    d1MetadataBytes += 768 + session.failures.length * 128;
+  }
+  for (const file of input.markdownImportStagedFiles?.values() ?? []) {
+    const session = input.markdownImportSessions?.get(file.importId);
+    if (session !== undefined && input.spaceIds.has(session.spaceId)) {
+      d1MetadataBytes += 384;
     }
   }
   for (const reservation of input.reservations.values()) {
@@ -4008,6 +4074,7 @@ export class InMemoryRevisionMetadataStore
     OrdinaryMindStore,
     AccountDeletionStore,
     CapacityLedgerStore,
+    MarkdownImportMetadataStore,
     ObjectCleanupCheckpointStore,
     MembershipControlStore,
     ControlReadStore,
@@ -4025,6 +4092,15 @@ export class InMemoryRevisionMetadataStore
   #bundleFileDownloadGrants = new Map<string, Readonly<BundleFileDownloadGrant>>();
   #indexStates = new Map<string, Readonly<RevisionIndexState>>();
   #stagedBundleFiles = new Map<StagedBundleFileId, Readonly<StagedBundleFileRecord>>();
+  #markdownImportPlans = new Map<string, Readonly<MarkdownImportPlan>>();
+  #markdownImportSessions = new Map<string, Readonly<MarkdownImportSession>>();
+  #markdownImportStagedFiles = new Map<
+    StagedBundleFileId,
+    Readonly<MarkdownImportStagedFile>
+  >();
+  #markdownImportPlanKeys = new Map<string, string>();
+  #markdownImportSessionKeys = new Map<string, string>();
+  #markdownImportBatchHashes = new Map<string, string>();
   #capacityReservations = new Map<string, Readonly<CapacityReservation>>();
   #capacityReconciledAt = new Map<SpaceId, UtcInstant>();
   #capacityUsageLedger = new Map<SpaceId, Readonly<CapacityUsageSnapshot>>();
@@ -4101,6 +4177,12 @@ export class InMemoryRevisionMetadataStore
       bundleFileDownloadGrants: new Map(this.#bundleFileDownloadGrants),
       indexStates: new Map(this.#indexStates),
       stagedBundleFiles: new Map(this.#stagedBundleFiles),
+      markdownImportPlans: new Map(this.#markdownImportPlans),
+      markdownImportSessions: new Map(this.#markdownImportSessions),
+      markdownImportStagedFiles: new Map(this.#markdownImportStagedFiles),
+      markdownImportPlanKeys: new Map(this.#markdownImportPlanKeys),
+      markdownImportSessionKeys: new Map(this.#markdownImportSessionKeys),
+      markdownImportBatchHashes: new Map(this.#markdownImportBatchHashes),
       capacityReservations: new Map(this.#capacityReservations),
       capacityReconciledAt: new Map(this.#capacityReconciledAt),
       capacityUsageLedger: new Map(this.#capacityUsageLedger),
@@ -4181,6 +4263,24 @@ export class InMemoryRevisionMetadataStore
     restored.#stagedBundleFiles = snapshot.stagedBundleFiles instanceof Map
       ? new Map(snapshot.stagedBundleFiles as Map<StagedBundleFileId, Readonly<StagedBundleFileRecord>>)
       : new Map();
+    restored.#markdownImportPlans = snapshot.markdownImportPlans instanceof Map
+      ? new Map(snapshot.markdownImportPlans as Map<string, Readonly<MarkdownImportPlan>>)
+      : new Map();
+    restored.#markdownImportSessions = snapshot.markdownImportSessions instanceof Map
+      ? new Map(snapshot.markdownImportSessions as Map<string, Readonly<MarkdownImportSession>>)
+      : new Map();
+    restored.#markdownImportStagedFiles = snapshot.markdownImportStagedFiles instanceof Map
+      ? new Map(snapshot.markdownImportStagedFiles as Map<StagedBundleFileId, Readonly<MarkdownImportStagedFile>>)
+      : new Map();
+    restored.#markdownImportPlanKeys = snapshot.markdownImportPlanKeys instanceof Map
+      ? new Map(snapshot.markdownImportPlanKeys as Map<string, string>)
+      : new Map();
+    restored.#markdownImportSessionKeys = snapshot.markdownImportSessionKeys instanceof Map
+      ? new Map(snapshot.markdownImportSessionKeys as Map<string, string>)
+      : new Map();
+    restored.#markdownImportBatchHashes = snapshot.markdownImportBatchHashes instanceof Map
+      ? new Map(snapshot.markdownImportBatchHashes as Map<string, string>)
+      : new Map();
     restored.#capacityReservations = snapshot.capacityReservations instanceof Map
       ? cloneCapacityReservations(
           snapshot.capacityReservations as Map<string, Readonly<CapacityReservation>>,
@@ -4255,6 +4355,9 @@ export class InMemoryRevisionMetadataStore
         spaces: this.#spaces,
         stagedBundleFiles: this.#stagedBundleFiles,
         exportJobs: this.#exportJobs,
+        markdownImportPlans: this.#markdownImportPlans,
+        markdownImportSessions: this.#markdownImportSessions,
+        markdownImportStagedFiles: this.#markdownImportStagedFiles,
         reservations: this.#capacityReservations,
         reconciledAt: this.#capacityReconciledAt,
       });
@@ -4274,6 +4377,9 @@ export class InMemoryRevisionMetadataStore
       spaces: this.#spaces,
       stagedBundleFiles: this.#stagedBundleFiles,
       exportJobs: this.#exportJobs,
+      markdownImportPlans: this.#markdownImportPlans,
+      markdownImportSessions: this.#markdownImportSessions,
+      markdownImportStagedFiles: this.#markdownImportStagedFiles,
       reservations: this.#capacityReservations,
       reconciledAt: this.#capacityReconciledAt,
     }));
@@ -4285,6 +4391,9 @@ export class InMemoryRevisionMetadataStore
       spaces: this.#spaces,
       stagedBundleFiles: this.#stagedBundleFiles,
       exportJobs: this.#exportJobs,
+      markdownImportPlans: this.#markdownImportPlans,
+      markdownImportSessions: this.#markdownImportSessions,
+      markdownImportStagedFiles: this.#markdownImportStagedFiles,
       reservations: this.#capacityReservations,
       reconciledAt: this.#capacityReconciledAt,
     }));
@@ -4300,6 +4409,9 @@ export class InMemoryRevisionMetadataStore
         spaces: this.#spaces,
         stagedBundleFiles: this.#stagedBundleFiles,
         exportJobs: this.#exportJobs,
+        markdownImportPlans: this.#markdownImportPlans,
+        markdownImportSessions: this.#markdownImportSessions,
+        markdownImportStagedFiles: this.#markdownImportStagedFiles,
         reservations: this.#capacityReservations,
         reconciledAt: this.#capacityReconciledAt,
       });
@@ -4361,6 +4473,9 @@ export class InMemoryRevisionMetadataStore
           spaces: this.#spaces,
           stagedBundleFiles: this.#stagedBundleFiles,
           exportJobs: this.#exportJobs,
+          markdownImportPlans: this.#markdownImportPlans,
+          markdownImportSessions: this.#markdownImportSessions,
+          markdownImportStagedFiles: this.#markdownImportStagedFiles,
           reservations: this.#capacityReservations,
           reconciledAt: this.#capacityReconciledAt,
         });
@@ -4377,6 +4492,9 @@ export class InMemoryRevisionMetadataStore
         spaces: this.#spaces,
         stagedBundleFiles: this.#stagedBundleFiles,
         exportJobs: this.#exportJobs,
+        markdownImportPlans: this.#markdownImportPlans,
+        markdownImportSessions: this.#markdownImportSessions,
+        markdownImportStagedFiles: this.#markdownImportStagedFiles,
         reservations: this.#capacityReservations,
         reconciledAt: this.#capacityReconciledAt,
       });
@@ -4532,6 +4650,9 @@ export class InMemoryRevisionMetadataStore
           spaces: this.#spaces,
           stagedBundleFiles: this.#stagedBundleFiles,
           exportJobs: this.#exportJobs,
+          markdownImportPlans: this.#markdownImportPlans,
+          markdownImportSessions: this.#markdownImportSessions,
+          markdownImportStagedFiles: this.#markdownImportStagedFiles,
           reservations,
           reconciledAt: this.#capacityReconciledAt,
         });
@@ -4547,6 +4668,9 @@ export class InMemoryRevisionMetadataStore
           spaces: this.#spaces,
           stagedBundleFiles: this.#stagedBundleFiles,
           exportJobs: this.#exportJobs,
+          markdownImportPlans: this.#markdownImportPlans,
+          markdownImportSessions: this.#markdownImportSessions,
+          markdownImportStagedFiles: this.#markdownImportStagedFiles,
           reservations,
           reconciledAt: this.#capacityReconciledAt,
         });
@@ -4555,6 +4679,9 @@ export class InMemoryRevisionMetadataStore
           spaces: this.#spaces,
           stagedBundleFiles: this.#stagedBundleFiles,
           exportJobs: this.#exportJobs,
+          markdownImportPlans: this.#markdownImportPlans,
+          markdownImportSessions: this.#markdownImportSessions,
+          markdownImportStagedFiles: this.#markdownImportStagedFiles,
           reservations,
           reconciledAt: this.#capacityReconciledAt,
         });
@@ -4736,8 +4863,9 @@ export class InMemoryRevisionMetadataStore
       const stagedBundleFiles = new Map(this.#stagedBundleFiles);
       const idempotencyRecords = cloneIdempotencyRecords(this.#idempotencyRecords);
       const capacityReservations = cloneCapacityReservations(this.#capacityReservations);
+      const capacityTransaction = this.#capacityTransaction(capacityReservations);
       const transaction: BundleFileStagingTransaction = Object.freeze({
-        ...this.#capacityTransaction(capacityReservations),
+        ...capacityTransaction,
         kind: "authorization-transaction" as const,
         readMindBindingSet: (
           bindingOwnerId: MindBindingOwnerId,
@@ -7259,6 +7387,9 @@ export class InMemoryRevisionMetadataStore
               spaces: revisionSpaces,
               stagedBundleFiles: this.#stagedBundleFiles,
               exportJobs,
+              markdownImportPlans: this.#markdownImportPlans,
+              markdownImportSessions: this.#markdownImportSessions,
+              markdownImportStagedFiles: this.#markdownImportStagedFiles,
               reservations: this.#capacityReservations,
               reconciledAt: this.#capacityReconciledAt,
             });
@@ -8494,6 +8625,39 @@ export class InMemoryRevisionMetadataStore
     );
   }
 
+  async readMarkdownImportPlan(
+    planId: string,
+  ): Promise<Readonly<MarkdownImportPlan> | null> {
+    const plan = this.#markdownImportPlans.get(planId);
+    return plan === undefined ? null : freezeMarkdownImportPlan(plan);
+  }
+
+  async readMarkdownImportSession(
+    importId: string,
+  ): Promise<Readonly<MarkdownImportSession> | null> {
+    const session = this.#markdownImportSessions.get(importId);
+    return session === undefined ? null : freezeMarkdownImportSession(session);
+  }
+
+  async listMarkdownImportStagedFiles(
+    importId: string,
+  ): Promise<readonly Readonly<MarkdownImportStagedFile>[]> {
+    return Object.freeze([...this.#markdownImportStagedFiles.values()]
+      .filter((file) => file.importId === importId)
+      .sort((left, right) =>
+        left.checkpoint - right.checkpoint ||
+        compareUnicodeScalarValues(left.path, right.path),
+      )
+      .map(freezeMarkdownImportStagedFile));
+  }
+
+  async runMarkdownImportTransaction<Result>(
+    operation: (transaction: MarkdownImportMetadataTransaction) => Promise<Result>,
+  ): Promise<Result> {
+    return this.runContentCommitTransaction((transaction) =>
+      operation(transaction as MarkdownImportMetadataTransaction));
+  }
+
   async runContentCommitTransaction<Result>(
     operation: (
       transaction: ContentCommitMetadataTransaction,
@@ -8522,15 +8686,22 @@ export class InMemoryRevisionMetadataStore
         [...this.#indexStates].map(([key, state]) => [key, cloneIndexState(state)]),
       );
       const stagedBundleFiles = new Map(this.#stagedBundleFiles);
+      const markdownImportPlans = new Map(this.#markdownImportPlans);
+      const markdownImportSessions = new Map(this.#markdownImportSessions);
+      const markdownImportStagedFiles = new Map(this.#markdownImportStagedFiles);
+      const markdownImportPlanKeys = new Map(this.#markdownImportPlanKeys);
+      const markdownImportSessionKeys = new Map(this.#markdownImportSessionKeys);
+      const markdownImportBatchHashes = new Map(this.#markdownImportBatchHashes);
       const capacityReservations = cloneCapacityReservations(this.#capacityReservations);
+      const capacityTransaction = this.#capacityTransaction(capacityReservations);
       const authorizationStates = new Map(
         [...this.#authorizationStates].map(([key, state]) => [
           key,
           cloneAuthorizationState(state),
         ]),
       );
-      const transaction: ContentCommitMetadataTransaction = Object.freeze({
-        ...this.#capacityTransaction(capacityReservations),
+      const transaction: MarkdownImportMetadataTransaction = Object.freeze({
+        ...capacityTransaction,
         kind: "authorization-transaction" as const,
         readMindBindingSet: (
           bindingOwnerId: MindBindingOwnerId,
@@ -8618,6 +8789,331 @@ export class InMemoryRevisionMetadataStore
             indexStates,
             revisionsById,
           ),
+        readMarkdownImportPlan: async (planId: string) => {
+          const plan = markdownImportPlans.get(planId);
+          return plan === undefined ? null : freezeMarkdownImportPlan(plan);
+        },
+        createMarkdownImportPlan: async (
+          plan: Readonly<MarkdownImportPlan>,
+          siteD1MetadataLimit: number,
+        ) => {
+          const existingById = markdownImportPlans.get(plan.planId);
+          if (existingById !== undefined) {
+            return JSON.stringify(existingById) === JSON.stringify(plan)
+              ? Object.freeze({ kind: "created" as const, plan: freezeMarkdownImportPlan(existingById), replayed: true })
+              : Object.freeze({ kind: "id_collision" as const });
+          }
+          const key = markdownImportKey(plan.principalId, plan.spaceId, plan.idempotencyKey);
+          const existingId = markdownImportPlanKeys.get(key);
+          if (existingId !== undefined) {
+            const existing = markdownImportPlans.get(existingId);
+            if (existing === undefined) throw new Error("Markdown import plan key is corrupt");
+            return existing.canonicalRequestHash === plan.canonicalRequestHash
+              ? Object.freeze({ kind: "created" as const, plan: freezeMarkdownImportPlan(existing), replayed: true })
+              : Object.freeze({ kind: "idempotency_conflict" as const });
+          }
+          if (!Number.isSafeInteger(siteD1MetadataLimit) || siteD1MetadataLimit < 1) {
+            throw new TypeError("Markdown import plan D1 limit is invalid");
+          }
+          const usage = capacityUsageFromCanonicalState({
+            spaceIds: new Set(spaces.keys()),
+            spaces,
+            stagedBundleFiles,
+            exportJobs: this.#exportJobs,
+            markdownImportPlans,
+            markdownImportSessions,
+            markdownImportStagedFiles,
+            reservations: capacityReservations,
+            reconciledAt: this.#capacityReconciledAt,
+          });
+          if (usage.d1MetadataBytes + 512 + plan.files.length * 160 > siteD1MetadataLimit) {
+            this.#capacityQuotaRejects += 1;
+            return Object.freeze({ kind: "capacity_rejected" as const });
+          }
+          const stored = freezeMarkdownImportPlan(plan);
+          markdownImportPlans.set(plan.planId, stored);
+          markdownImportPlanKeys.set(key, plan.planId);
+          return Object.freeze({ kind: "created" as const, plan: stored, replayed: false });
+        },
+        readMarkdownImportSession: async (importId: string) => {
+          const session = markdownImportSessions.get(importId);
+          return session === undefined ? null : freezeMarkdownImportSession(session);
+        },
+        readMarkdownImportSessionForPlan: async (planId: string) => {
+          const session = [...markdownImportSessions.values()].find(
+            (candidate) => candidate.planId === planId,
+          );
+          return session === undefined ? null : freezeMarkdownImportSession(session);
+        },
+        createMarkdownImportSession: async (session: Readonly<MarkdownImportSession>) => {
+          const existingById = markdownImportSessions.get(session.importId);
+          if (existingById !== undefined) {
+            return JSON.stringify(existingById) === JSON.stringify(session)
+              ? Object.freeze({ kind: "created" as const, session: freezeMarkdownImportSession(existingById), replayed: true })
+              : Object.freeze({ kind: "id_collision" as const });
+          }
+          const key = markdownImportKey(
+            session.principalId,
+            session.spaceId,
+            session.idempotencyKey,
+          );
+          const existingId = markdownImportSessionKeys.get(key);
+          if (existingId !== undefined) {
+            const existing = markdownImportSessions.get(existingId);
+            if (existing === undefined) throw new Error("Markdown import session key is corrupt");
+            return existing.canonicalRequestHash === session.canonicalRequestHash
+              ? Object.freeze({ kind: "created" as const, session: freezeMarkdownImportSession(existing), replayed: true })
+              : Object.freeze({ kind: "idempotency_conflict" as const });
+          }
+          const claimedPlan = [...markdownImportSessions.values()].find(
+            (existing) => existing.planId === session.planId,
+          );
+          if (claimedPlan !== undefined) {
+            return Object.freeze({ kind: "idempotency_conflict" as const });
+          }
+          const plan = markdownImportPlans.get(session.planId);
+          if (
+            plan === undefined || plan.principalId !== session.principalId ||
+            plan.spaceId !== session.spaceId
+          ) return Object.freeze({ kind: "plan_not_found" as const });
+          if (Date.parse(plan.expiresAt) <= Date.parse(session.createdAt)) {
+            return Object.freeze({ kind: "plan_expired" as const });
+          }
+          if ((spaces.get(session.spaceId)?.head ?? null) !== session.expectedRevisionId) {
+            return Object.freeze({ kind: "head_conflict" as const });
+          }
+          const stored = freezeMarkdownImportSession(session);
+          markdownImportSessions.set(session.importId, stored);
+          markdownImportSessionKeys.set(key, session.importId);
+          return Object.freeze({ kind: "created" as const, session: stored, replayed: false });
+        },
+        listMarkdownImportStagedFiles: async (importId: string) =>
+          Object.freeze([...markdownImportStagedFiles.values()]
+            .filter((file) => file.importId === importId)
+            .sort((left, right) =>
+              left.checkpoint - right.checkpoint ||
+              compareUnicodeScalarValues(left.path, right.path),
+            )
+            .map(freezeMarkdownImportStagedFile)),
+        stageMarkdownImportBatch: async (
+          request: Parameters<
+            MarkdownImportMetadataTransaction["stageMarkdownImportBatch"]
+          >[0],
+        ) => {
+          const current = markdownImportSessions.get(request.importId);
+          if (current === undefined) return Object.freeze({ kind: "not_found" as const });
+          const batchKey = markdownImportBatchKey(request.importId, request.checkpoint);
+          const existingHash = markdownImportBatchHashes.get(batchKey);
+          if (existingHash !== undefined) {
+            return existingHash === request.canonicalRequestHash
+              ? Object.freeze({ kind: "staged" as const, session: freezeMarkdownImportSession(current), replayed: true })
+              : Object.freeze({ kind: "idempotency_conflict" as const });
+          }
+          if (current.version !== request.expectedVersion || current.state !== "active") {
+            return Object.freeze({ kind: "state_conflict" as const });
+          }
+          if (request.checkpoint !== current.checkpoint + 1) {
+            return Object.freeze({ kind: "checkpoint_conflict" as const });
+          }
+          const plan = markdownImportPlans.get(current.planId);
+          if (plan === undefined) return Object.freeze({ kind: "state_conflict" as const });
+          const planned = new Map(plan.files.map((file) => [file.path, file]));
+          const alreadyStaged = new Set([...markdownImportStagedFiles.values()]
+            .filter((file) => file.importId === current.importId)
+            .map((file) => file.path));
+          for (const file of request.files) {
+            const expected = planned.get(file.path);
+            if (
+              file.importId !== current.importId ||
+              file.checkpoint !== request.checkpoint ||
+              expected === undefined || expected.sha256 !== file.sha256 ||
+              expected.size !== file.size || alreadyStaged.has(file.path) ||
+              markdownImportStagedFiles.has(file.stagedFileId)
+            ) return Object.freeze({ kind: "file_conflict" as const });
+            alreadyStaged.add(file.path);
+          }
+          for (const file of request.files) {
+            markdownImportStagedFiles.set(
+              file.stagedFileId,
+              freezeMarkdownImportStagedFile(file),
+            );
+          }
+          const stagedFileCount = current.stagedFileCount + request.files.length;
+          const stagedBytes = current.stagedBytes + request.files.reduce(
+            (total, file) => total + file.size,
+            0,
+          );
+          if (stagedFileCount > plan.files.length || stagedBytes > plan.logicalBytes) {
+            throw new Error("Markdown import staged totals exceed the immutable plan");
+          }
+          const updated = freezeMarkdownImportSession({
+            ...current,
+            version: version(current.version + 1),
+            checkpoint: request.checkpoint,
+            stagedFileCount,
+            stagedBytes,
+            failures: Object.freeze(request.failures.map(freezeMarkdownImportFailure)),
+            updatedAt: request.stagedAt,
+          });
+          markdownImportSessions.set(current.importId, updated);
+          markdownImportBatchHashes.set(batchKey, request.canonicalRequestHash);
+          return Object.freeze({ kind: "staged" as const, session: updated, replayed: false });
+        },
+        transitionMarkdownImportSession: async (
+          request: Parameters<
+            MarkdownImportMetadataTransaction["transitionMarkdownImportSession"]
+          >[0],
+        ) => {
+          const current = markdownImportSessions.get(request.importId);
+          if (current === undefined) return Object.freeze({ kind: "not_found" as const });
+          if (current.version !== request.expectedVersion) {
+            return Object.freeze({ kind: "version_conflict" as const });
+          }
+          if (!request.from.includes(current.state)) {
+            return Object.freeze({ kind: "state_conflict" as const });
+          }
+          const updated = freezeMarkdownImportSession({
+            ...current,
+            state: request.to,
+            version: version(current.version + 1),
+            updatedAt: request.updatedAt,
+            failures: request.failures === undefined
+              ? current.failures
+              : Object.freeze(request.failures.map(freezeMarkdownImportFailure)),
+            validationCheckpoint: request.validationCheckpoint === undefined
+              ? current.validationCheckpoint
+              : request.validationCheckpoint,
+            validatedBytes: request.validatedBytes === undefined
+              ? current.validatedBytes
+              : request.validatedBytes,
+            promotionCheckpoint: request.promotionCheckpoint === undefined
+              ? current.promotionCheckpoint
+              : request.promotionCheckpoint,
+            promotedBytes: request.promotedBytes === undefined
+              ? current.promotedBytes
+              : request.promotedBytes,
+            revisionId: request.revisionId === undefined
+              ? current.revisionId
+              : request.revisionId,
+          });
+          markdownImportSessions.set(current.importId, updated);
+          return Object.freeze({ kind: "updated" as const, session: updated });
+        },
+        claimMarkdownImportCleanup: async (
+          request: Parameters<
+            MarkdownImportMetadataTransaction["claimMarkdownImportCleanup"]
+          >[0],
+        ) => {
+          if (!Number.isSafeInteger(request.limit) || request.limit < 1 || request.limit > 1_000) {
+            throw new TypeError("Markdown import cleanup limit is invalid");
+          }
+          const selected = [...markdownImportSessions.values()]
+            .filter((session) =>
+              session.cleanupCompletedAt === null &&
+              (session.state === "committed" || session.state === "canceled" ||
+                session.state === "validation_failed" || session.state === "expired" ||
+                Date.parse(session.expiresAt) <= Date.parse(request.now)),
+            )
+            .sort((left, right) =>
+              Date.parse(left.updatedAt) - Date.parse(right.updatedAt) ||
+              left.importId.localeCompare(right.importId),
+            )
+            .slice(0, request.limit);
+          const claimed = [];
+          for (const selectedSession of selected) {
+            let session = selectedSession;
+            if (
+              session.state === "active" || session.state === "validating" ||
+              session.state === "validated" || session.state === "finalizing"
+            ) {
+              session = freezeMarkdownImportSession({
+                ...session,
+                state: "expired",
+                version: version(session.version + 1),
+                updatedAt: request.now,
+              });
+              markdownImportSessions.set(session.importId, session);
+              await capacityTransaction.cancelCapacityReservation({
+                reservationId: session.reservationId,
+                canceledAt: request.now,
+              });
+            }
+            claimed.push(Object.freeze({
+              session: freezeMarkdownImportSession(session),
+              files: Object.freeze([...markdownImportStagedFiles.values()]
+                .filter((file) => file.importId === session.importId)
+                .sort((left, right) => compareUnicodeScalarValues(left.path, right.path))
+                .map(freezeMarkdownImportStagedFile)),
+            }));
+          }
+          return Object.freeze(claimed);
+        },
+        deleteMarkdownImportStagedFile: async (stagedFileId: StagedBundleFileId) =>
+          markdownImportStagedFiles.delete(stagedFileId),
+        completeMarkdownImportCleanup: async (
+          request: Parameters<
+            MarkdownImportMetadataTransaction["completeMarkdownImportCleanup"]
+          >[0],
+        ) => {
+          const current = markdownImportSessions.get(request.importId);
+          if (
+            current === undefined || current.version !== request.expectedVersion ||
+            current.cleanupCompletedAt !== null ||
+            (current.state !== "committed" && current.state !== "canceled" &&
+              current.state !== "expired" && current.state !== "validation_failed") ||
+            [...markdownImportStagedFiles.values()].some((file) =>
+              file.importId === current.importId)
+          ) return false;
+          const reservation = capacityReservations.get(current.reservationId);
+          if (reservation !== undefined && reservation.state !== "released") {
+            if (reservation.state === "active") return false;
+            capacityReservations.set(
+              reservation.reservationId,
+              cloneCapacityReservation(Object.freeze({
+                ...reservation,
+                state: "released" as const,
+                updatedAt: request.completedAt,
+              })),
+            );
+          }
+          markdownImportSessions.set(
+            current.importId,
+            freezeMarkdownImportSession({
+              ...current,
+              version: version(current.version + 1),
+              updatedAt: request.completedAt,
+              cleanupCompletedAt: request.completedAt,
+            }),
+          );
+          return true;
+        },
+        deleteExpiredMarkdownImportPlans: async (
+          request: Parameters<
+            MarkdownImportMetadataTransaction["deleteExpiredMarkdownImportPlans"]
+          >[0],
+        ) => {
+          if (!Number.isSafeInteger(request.limit) || request.limit < 1 || request.limit > 1_000) {
+            throw new TypeError("Markdown import plan cleanup limit is invalid");
+          }
+          const referenced = new Set([...markdownImportSessions.values()]
+            .map((session) => session.planId));
+          const expired = [...markdownImportPlans.values()]
+            .filter((plan) =>
+              !referenced.has(plan.planId) &&
+              Date.parse(plan.expiresAt) <= Date.parse(request.now))
+            .sort((left, right) =>
+              Date.parse(left.expiresAt) - Date.parse(right.expiresAt) ||
+              left.planId.localeCompare(right.planId),
+            )
+            .slice(0, request.limit);
+          for (const plan of expired) {
+            markdownImportPlans.delete(plan.planId);
+            markdownImportPlanKeys.delete(
+              markdownImportKey(plan.principalId, plan.spaceId, plan.idempotencyKey),
+            );
+          }
+          return expired.length;
+        },
       });
 
       const result = await operation(transaction);
@@ -8631,6 +9127,12 @@ export class InMemoryRevisionMetadataStore
       this.#backgroundJobs = backgroundJobs;
       this.#indexStates = indexStates;
       this.#stagedBundleFiles = stagedBundleFiles;
+      this.#markdownImportPlans = markdownImportPlans;
+      this.#markdownImportSessions = markdownImportSessions;
+      this.#markdownImportStagedFiles = markdownImportStagedFiles;
+      this.#markdownImportPlanKeys = markdownImportPlanKeys;
+      this.#markdownImportSessionKeys = markdownImportSessionKeys;
+      this.#markdownImportBatchHashes = markdownImportBatchHashes;
       this.#capacityReservations = capacityReservations;
       return result;
     });

@@ -20,6 +20,7 @@ const OWNER_MIND = Object.freeze({
   visibility: "private",
   role: "owner",
   metadataVersion: 7,
+  headRevisionId: "revision_owner_fixture",
   updatedLabel: "Updated today",
 });
 
@@ -30,6 +31,7 @@ const MEMBER_MIND = Object.freeze({
   visibility: "unlisted",
   role: "editor",
   metadataVersion: 4,
+  headRevisionId: "revision_member_fixture",
   updatedLabel: "Updated yesterday",
 });
 
@@ -163,7 +165,7 @@ test("ownership transfer lists active non-owner participants and states the sing
   assert.match(html, /data-transfer-ownership disabled/);
 });
 
-test("browser adapter is metadata-only and the page does not expose raw knowledge operations", () => {
+test("browser management stays metadata-only while import uses its bounded dedicated ingress", () => {
   assert.match(implementation, /interface OrdinaryMindsManagementAdapter/);
   assert.match(implementation, /listMinds\(\)/);
   assert.match(implementation, /getMind\(handle: string\)/);
@@ -177,7 +179,9 @@ test("browser adapter is metadata-only and the page does not expose raw knowledg
   );
 
   const html = renderOrdinaryMindsManagement(detailModel(OWNER_MIND));
-  assert.match(html, /Canonical knowledge files are available through the content MCP, not this browser page/);
+  assert.match(html, /Import a folder/);
+  assert.match(html, /data-markdown-import[^>]+data-head-revision="revision_owner_fixture"/);
+  assert.match(html, /type="file"[^>]+accept="\.md,text\/markdown"/);
   assert.doesNotMatch(html, /<textarea|name="(?:text|markdown|path)"/i);
 });
 

@@ -56,6 +56,7 @@ import {
 } from "./invitations-membership.js";
 import {
   PRODUCT_COLLABORATION_CLIENT_JAVASCRIPT,
+  PRODUCT_MARKDOWN_IMPORT_CLIENT_JAVASCRIPT,
   PRODUCT_ORDINARY_MINDS_CLIENT_JAVASCRIPT,
   PRODUCT_UI_APPLE_TOUCH_ICON_PNG,
   PRODUCT_VISIBILITY_CATALOG_CLIENT_JAVASCRIPT,
@@ -260,6 +261,9 @@ const RESERVED_UI_HANDLES = new Set([
 ]);
 const SITES_SIGN_IN_PATH = "/signin-with-chatgpt";
 const MAX_JSON_BYTES = 64 * 1024;
+const MAX_IMPORT_BATCH_BODY_BYTES = 5 * 1024 * 1024;
+const MAX_IMPORT_BATCH_BYTES = 4 * 1024 * 1024;
+const ENCODER = new TextEncoder();
 const SAFE_HEADERS = Object.freeze({
   "cache-control": "no-store",
   "content-security-policy":
@@ -420,6 +424,7 @@ interface ProductUiSession {
   readonly displayName: string;
   readonly profileVersion: number;
   readonly personalMindName: string;
+  readonly personalMindHeadRevisionId: string;
 }
 
 function pilotRoutePage(
@@ -483,9 +488,16 @@ function uiSession(value: unknown): ProductUiSession | null {
   const displayName = requiredString(principal?.displayName);
   const profileVersion = positiveInteger(principal?.profileVersion);
   const personalMindName = requiredString(personalMind?.name);
-  return displayName === null || profileVersion === null || personalMindName === null
+  const personalMindHeadRevisionId = requiredString(personalMind?.headRevisionId);
+  return displayName === null || profileVersion === null || personalMindName === null ||
+      personalMindHeadRevisionId === null
     ? null
-    : Object.freeze({ displayName, profileVersion, personalMindName });
+    : Object.freeze({
+        displayName,
+        profileVersion,
+        personalMindName,
+        personalMindHeadRevisionId,
+      });
 }
 
 function roleLabel(value: unknown): UiMindCard["role"] {
@@ -529,6 +541,7 @@ function ordinaryUiMind(value: unknown): OrdinaryMindUiMind | null {
   const name = requiredString(source?.name);
   const route = requiredString(source?.route);
   const metadataVersion = positiveInteger(source?.metadataVersion);
+  const headRevisionId = requiredString(source?.headRevisionId);
   const visibility = source?.visibility;
   const role = access?.role;
   if (
@@ -536,6 +549,7 @@ function ordinaryUiMind(value: unknown): OrdinaryMindUiMind | null {
     mindId === null ||
     handle === null ||
     name === null ||
+    headRevisionId === null ||
     route !== `/${handle}` ||
     handle.length < 3 ||
     handle.length > 63 ||
@@ -548,6 +562,7 @@ function ordinaryUiMind(value: unknown): OrdinaryMindUiMind | null {
     mindId,
     handle,
     name,
+    headRevisionId,
     visibility,
     role: role ?? "reader",
     metadataVersion,
@@ -844,15 +859,20 @@ function staticAsset(pathname: string): { readonly body: BodyInit; readonly type
   if (pathname === "/ui/mind-diary-shell.css") return { body: `${PRODUCT_UI_SHELL_CSS}\n${PRODUCT_UI_PILOT_SHELL_CSS}`, type: "text/css; charset=utf-8" };
   if (pathname === "/brand/mind-diary-lockup.svg") return { body: PRODUCT_UI_LOCKUP_SVG, type: "image/svg+xml; charset=utf-8" };
   if (pathname === "/brand/mind-diary-mark.svg") return { body: PRODUCT_UI_MARK_SVG, type: "image/svg+xml; charset=utf-8" };
+  if (pathname === "/ui/mind-diary-onboarding-client.js") {
+    return {
+      body: `${PRODUCT_UI_CLIENT_JAVASCRIPT}\n${PRODUCT_MARKDOWN_IMPORT_CLIENT_JAVASCRIPT}`,
+      type: "text/javascript; charset=utf-8",
+    };
+  }
   if (
-    pathname === "/ui/mind-diary-onboarding-client.js" ||
     pathname === "/ui/mind-diary-shell-client.js" ||
     pathname === "/ui/mind-diary-token-client.js" ||
     pathname === "/ui/mind-diary-account-client.js"
   ) return { body: PRODUCT_UI_CLIENT_JAVASCRIPT, type: "text/javascript; charset=utf-8" };
   if (pathname === "/ui/mind-diary-ordinary-minds-client.js") {
     return {
-      body: `${PRODUCT_ORDINARY_MINDS_CLIENT_JAVASCRIPT}\n${PRODUCT_COLLABORATION_CLIENT_JAVASCRIPT}`,
+      body: `${PRODUCT_ORDINARY_MINDS_CLIENT_JAVASCRIPT}\n${PRODUCT_MARKDOWN_IMPORT_CLIENT_JAVASCRIPT}\n${PRODUCT_COLLABORATION_CLIENT_JAVASCRIPT}`,
       type: "text/javascript; charset=utf-8",
     };
   }
@@ -1005,6 +1025,7 @@ async function productUiDocument(input: {
       personalMind: {
         route: "/me",
         name: session.personalMindName,
+        headRevisionId: session.personalMindHeadRevisionId,
         updatedLabel: "Current HEAD is ready",
       },
       profileUpdate: { kind: "idle", idempotencyKey: `profile:${crypto.randomUUID()}` },
@@ -1272,6 +1293,85 @@ async function readInput(request: Request): Promise<Readonly<Record<string, unkn
   return Object.freeze({ ...(value as Record<string, unknown>) });
 }
 
+async function readImportBatchInput(
+  request: Request,
+): Promise<Readonly<Record<string, unknown>>> {
+  const declaredLength = Number(request.headers.get("content-length") ?? "0");
+  if (Number.isFinite(declaredLength) && declaredLength > MAX_IMPORT_BATCH_BODY_BYTES) {
+    throw new TypeError("import batch body is too large");
+  }
+  if (!(request.headers.get("content-type") ?? "").toLowerCase().startsWith("multipart/form-data")) {
+    return readInput(request);
+  }
+  const reader = request.body?.getReader();
+  if (reader === undefined) throw new TypeError("import batch body is missing");
+  const chunks: Uint8Array[] = [];
+  let bodyBytes = 0;
+  while (true) {
+    const next = await reader.read();
+    if (next.done) break;
+    bodyBytes += next.value.byteLength;
+    if (bodyBytes > MAX_IMPORT_BATCH_BODY_BYTES) {
+      await reader.cancel();
+      throw new TypeError("import batch body is too large");
+    }
+    chunks.push(next.value);
+  }
+  const boundedBody = new Uint8Array(bodyBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    boundedBody.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  const boundedRequest = new Request(request.url, {
+    method: request.method,
+    headers: { "content-type": request.headers.get("content-type") ?? "" },
+    body: boundedBody,
+  });
+  const form = await boundedRequest.formData();
+  const manifestValue = form.get("manifest");
+  if (typeof manifestValue !== "string" || ENCODER.encode(manifestValue).byteLength > MAX_JSON_BYTES) {
+    throw new TypeError("import batch manifest is invalid");
+  }
+  const manifest: unknown = JSON.parse(manifestValue);
+  if (typeof manifest !== "object" || manifest === null || Array.isArray(manifest)) {
+    throw new TypeError("import batch manifest is invalid");
+  }
+  const source = manifest as Record<string, unknown>;
+  if (!Array.isArray(source.files) || source.files.length < 1 || source.files.length > 256) {
+    throw new TypeError("import batch manifest is invalid");
+  }
+  let totalBytes = 0;
+  const files = [];
+  for (const descriptor of source.files) {
+    if (typeof descriptor !== "object" || descriptor === null || Array.isArray(descriptor)) {
+      throw new TypeError("import batch descriptor is invalid");
+    }
+    const record = descriptor as Record<string, unknown>;
+    if (typeof record.field !== "string" || !/^file_[0-9]{1,3}$/u.test(record.field)) {
+      throw new TypeError("import batch descriptor is invalid");
+    }
+    const value = form.get(record.field);
+    if (
+      value === null || typeof value === "string" ||
+      typeof (value as Blob).arrayBuffer !== "function"
+    ) throw new TypeError("import batch file is missing");
+    const bytes = new Uint8Array(await (value as Blob).arrayBuffer());
+    totalBytes += bytes.byteLength;
+    if (totalBytes > MAX_IMPORT_BATCH_BYTES) throw new TypeError("import batch is too large");
+    files.push(Object.freeze({
+      path: record.path,
+      sha256: record.sha256,
+      size: record.size,
+      bytes,
+    }));
+  }
+  return Object.freeze({
+    expected_version: source.expected_version,
+    files: Object.freeze(files),
+  });
+}
+
 function segment(value: string | undefined): string | null {
   if (value === undefined || value.length === 0) return null;
   try {
@@ -1311,6 +1411,8 @@ function apiOperation(method: string, pathname: string): {
     const path = { mind_ref: two };
     if (tail.length === 2 && method === "GET") return { operation: "get_mind_info", path };
     if (three === "capacity" && tail.length === 3 && method === "GET") return { operation: "get_capacity_usage", path };
+    if (three === "markdown-import-plans" && tail.length === 3 && method === "POST") return { operation: "plan_markdown_import", path };
+    if (three === "markdown-imports" && tail.length === 3 && method === "POST") return { operation: "start_markdown_import", path };
     if (tail.length === 2 && method === "PATCH") return { operation: "rename_space", path };
     if (tail.length === 2 && method === "DELETE") return { operation: "delete_space", path };
     if (three === "deletion-impact" && tail.length === 3 && method === "GET") return { operation: "get_mind_deletion_impact", path };
@@ -1324,6 +1426,18 @@ function apiOperation(method: string, pathname: string): {
     if (three === "leave" && tail.length === 3 && method === "POST") return { operation: "leave_space", path };
     if (three === "ownership-transfer" && tail.length === 3 && method === "POST") return { operation: "transfer_ownership", path };
     if (three === "invitations" && tail.length === 3 && method === "POST") return { operation: "create_invitation", path };
+  }
+  if (one === "markdown-imports" && two !== null) {
+    const path = { import_id: two };
+    if (tail.length === 2 && method === "GET") return { operation: "get_markdown_import", path };
+    if (tail.length === 2 && method === "DELETE") return { operation: "cancel_markdown_import", path };
+    if (three === "batches" && four !== null && tail.length === 4 && method === "PUT") {
+      const checkpoint = Number(four);
+      if (!Number.isSafeInteger(checkpoint) || checkpoint < 1) return null;
+      return { operation: "stage_markdown_import_batch", path: { ...path, checkpoint: String(checkpoint) } };
+    }
+    if (three === "validate" && tail.length === 3 && method === "POST") return { operation: "validate_markdown_import", path };
+    if (three === "commit" && tail.length === 3 && method === "POST") return { operation: "commit_markdown_import", path };
   }
   if (one === "invitations") {
     if (tail.length === 1 && method === "GET") return { operation: "list_invitations", path: {} };
@@ -1362,11 +1476,22 @@ function applicationErrorStatus(code: string): number {
   if (code === "rate_limited") return 429;
   if (code === "search_index_unavailable") return 503;
   if (code === "binding_state_unavailable") return 503;
-  if (code === "okf_validation_failed") return 422;
+  if (code === "capacity_accounting_untrusted") return 503;
+  if (
+    code === "okf_validation_failed" ||
+    code === "import_validation_failed" ||
+    code === "import_file_limit_exceeded" ||
+    code === "import_byte_limit_exceeded" ||
+    code === "capacity_soft_limit" ||
+    code === "capacity_hard_limit" ||
+    code === "capacity_fairness_limit"
+  ) return 422;
   if (
     code === "handle_unavailable" ||
     code === "deletion_impact_changed" ||
     code === "deletion_impact_expired" ||
+    code === "import_plan_expired" ||
+    code === "import_session_expired" ||
     code === "ownership_state_changed" ||
     code.includes("conflict")
   ) return 409;
@@ -1465,7 +1590,9 @@ export function createProductWebHttpHandler(
     }
     let input: Readonly<Record<string, unknown>>;
     try {
-      const parsed = camelInput(await readInput(request));
+      const parsed = camelInput(await (matched.operation === "stage_markdown_import_batch"
+        ? readImportBatchInput(request)
+        : readInput(request)));
       const idempotencyKey = request.headers.get("idempotency-key");
       input = Object.freeze({
         ...parsed,

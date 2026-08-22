@@ -10,6 +10,7 @@ import {
   MIND_DIARY_CODEX_CONCIERGE_PLAYBOOK,
   MIND_DIARY_CODEX_STARTER_PLAYBOOK,
 } from "./token-management.js";
+import { renderMarkdownImportPanel } from "./ordinary-minds-management.js";
 
 export const MIND_DIARY_ONBOARDING_ASSETS = Object.freeze({
   shellStyles: MIND_DIARY_UI_ASSETS.shellStyles,
@@ -76,6 +77,7 @@ export type AuthenticatedOnboardingModel =
       readonly personalMind: {
         readonly route: "/me";
         readonly name: string;
+        readonly headRevisionId: string;
         readonly updatedLabel: string;
       };
       readonly profileUpdate: ProfileUpdateUiState;
@@ -298,6 +300,10 @@ function renderAuthenticated(
           </form>
         </section>
       </div>
+      ${renderMarkdownImportPanel({
+        mindRef: "me",
+        headRevisionId: model.personalMind.headRevisionId,
+      })}
       <section class="md-setup-card md-setup-card--single" aria-labelledby="first-result-title" data-starter-mind-guide>
         <p class="md-eyebrow">About 15 minutes</p>
         <h2 id="first-result-title">Create your first useful Memory</h2>
@@ -307,7 +313,7 @@ function renderAuthenticated(
         <p class="md-form__status" role="status" aria-live="polite" data-code-copy-status></p>
         <details>
           <summary>Have existing Markdown?</summary>
-          <p>Use assisted conversion without treating it as a product import. ZIP, assets, crawling, legacy migration, and cross-Mind merge remain unavailable.</p>
+          <p>Use the bounded import above for an exact UTF-8 Markdown snapshot. The assisted Codex path remains useful for conversion; ZIP, assets, crawling, legacy migration, and cross-Mind merge remain unavailable.</p>
           <pre><code id="mind-diary-onboarding-concierge-playbook" tabindex="-1" data-code-value>${escapeUntrustedText(MIND_DIARY_CODEX_CONCIERGE_PLAYBOOK)}</code></pre>
           <button class="md-button md-button--secondary" type="button" data-copy-code="mind-diary-onboarding-concierge-playbook">Copy concierge playbook</button>
         </details>

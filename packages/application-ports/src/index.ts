@@ -111,6 +111,7 @@ export {
   serializeRevisionManifest,
   roleHasCapability,
   bindingVersion,
+  compareUnicodeScalarValues,
   type CanonicalSpaceHandle,
   type HandlePolicyFailureReason,
   type VerifiedSpaceHost,
@@ -1974,6 +1975,181 @@ export interface RevisionMetadataStore
     spaceId: SpaceId,
   ): Promise<readonly Readonly<CanonicalRevisionEnvelope>[]>;
   commitRevision(request: RevisionCommitRequest): Promise<RevisionCommitResult>;
+}
+
+export type MarkdownImportSessionState =
+  | "active"
+  | "validating"
+  | "validated"
+  | "validation_failed"
+  | "finalizing"
+  | "committed"
+  | "canceled"
+  | "expired";
+
+export interface MarkdownImportPlanFile {
+  readonly path: string;
+  readonly sha256: Sha256Digest;
+  readonly size: number;
+}
+
+export interface MarkdownImportPlan {
+  readonly planId: string;
+  readonly principalId: PrincipalId;
+  readonly spaceId: SpaceId;
+  readonly expectedRevisionId: RevisionId;
+  readonly idempotencyKey: IdempotencyKey;
+  readonly canonicalRequestHash: Sha256Digest;
+  readonly descriptorHash: Sha256Digest;
+  readonly files: readonly Readonly<MarkdownImportPlanFile>[];
+  readonly logicalBytes: number;
+  readonly additions: number;
+  readonly replacements: number;
+  readonly deletions: number;
+  readonly unchanged: number;
+  readonly projectedUtilization: CapacityUtilizationState;
+  readonly createdAt: UtcInstant;
+  readonly expiresAt: UtcInstant;
+}
+
+export interface MarkdownImportStagedFile {
+  readonly stagedFileId: StagedBundleFileId;
+  readonly importId: string;
+  readonly checkpoint: number;
+  readonly path: string;
+  readonly sha256: Sha256Digest;
+  readonly size: number;
+  readonly createdAt: UtcInstant;
+}
+
+export interface MarkdownImportSessionFailure {
+  readonly path: string;
+  readonly code: string;
+}
+
+export interface MarkdownImportSession {
+  readonly importId: string;
+  readonly planId: string;
+  readonly principalId: PrincipalId;
+  readonly spaceId: SpaceId;
+  readonly expectedRevisionId: RevisionId;
+  readonly idempotencyKey: IdempotencyKey;
+  readonly canonicalRequestHash: Sha256Digest;
+  readonly reservationId: string;
+  readonly state: MarkdownImportSessionState;
+  readonly version: Version;
+  readonly checkpoint: number;
+  readonly stagedFileCount: number;
+  readonly stagedBytes: number;
+  readonly validationCheckpoint: number;
+  readonly validatedBytes: number;
+  readonly promotionCheckpoint: number;
+  readonly promotedBytes: number;
+  readonly failures: readonly Readonly<MarkdownImportSessionFailure>[];
+  readonly revisionId: RevisionId | null;
+  readonly createdAt: UtcInstant;
+  readonly expiresAt: UtcInstant;
+  readonly updatedAt: UtcInstant;
+  readonly cleanupCompletedAt: UtcInstant | null;
+}
+
+export type CreateMarkdownImportPlanResult =
+  | { readonly kind: "created"; readonly plan: Readonly<MarkdownImportPlan>; readonly replayed: boolean }
+  | { readonly kind: "idempotency_conflict" | "id_collision" | "capacity_rejected" };
+
+export type CreateMarkdownImportSessionResult =
+  | { readonly kind: "created"; readonly session: Readonly<MarkdownImportSession>; readonly replayed: boolean }
+  | {
+      readonly kind:
+        | "plan_not_found"
+        | "plan_expired"
+        | "head_conflict"
+        | "idempotency_conflict"
+        | "id_collision";
+    };
+
+export type StageMarkdownImportBatchResult =
+  | { readonly kind: "staged"; readonly session: Readonly<MarkdownImportSession>; readonly replayed: boolean }
+  | {
+      readonly kind:
+        | "not_found"
+        | "state_conflict"
+        | "checkpoint_conflict"
+        | "idempotency_conflict"
+        | "file_conflict";
+    };
+
+export type TransitionMarkdownImportSessionResult =
+  | { readonly kind: "updated"; readonly session: Readonly<MarkdownImportSession> }
+  | { readonly kind: "not_found" | "state_conflict" | "version_conflict" };
+
+export interface MarkdownImportMetadataTransaction
+  extends ContentCommitMetadataTransaction {
+  readMarkdownImportPlan(planId: string): Promise<Readonly<MarkdownImportPlan> | null>;
+  createMarkdownImportPlan(
+    plan: Readonly<MarkdownImportPlan>,
+    siteD1MetadataLimit: number,
+  ): Promise<CreateMarkdownImportPlanResult>;
+  readMarkdownImportSession(importId: string): Promise<Readonly<MarkdownImportSession> | null>;
+  readMarkdownImportSessionForPlan(
+    planId: string,
+  ): Promise<Readonly<MarkdownImportSession> | null>;
+  createMarkdownImportSession(
+    session: Readonly<MarkdownImportSession>,
+  ): Promise<CreateMarkdownImportSessionResult>;
+  listMarkdownImportStagedFiles(
+    importId: string,
+  ): Promise<readonly Readonly<MarkdownImportStagedFile>[]>;
+  stageMarkdownImportBatch(request: Readonly<{
+    importId: string;
+    expectedVersion: Version;
+    checkpoint: number;
+    canonicalRequestHash: Sha256Digest;
+    files: readonly Readonly<MarkdownImportStagedFile>[];
+    failures: readonly Readonly<MarkdownImportSessionFailure>[];
+    stagedAt: UtcInstant;
+  }>): Promise<StageMarkdownImportBatchResult>;
+  transitionMarkdownImportSession(request: Readonly<{
+    importId: string;
+    expectedVersion: Version;
+    from: readonly MarkdownImportSessionState[];
+    to: MarkdownImportSessionState;
+    updatedAt: UtcInstant;
+    failures?: readonly Readonly<MarkdownImportSessionFailure>[];
+    validationCheckpoint?: number;
+    validatedBytes?: number;
+    promotionCheckpoint?: number;
+    promotedBytes?: number;
+    revisionId?: RevisionId | null;
+  }>): Promise<TransitionMarkdownImportSessionResult>;
+  claimMarkdownImportCleanup(request: Readonly<{
+    now: UtcInstant;
+    limit: number;
+  }>): Promise<readonly Readonly<{
+    session: Readonly<MarkdownImportSession>;
+    files: readonly Readonly<MarkdownImportStagedFile>[];
+  }>[]>;
+  deleteMarkdownImportStagedFile(stagedFileId: StagedBundleFileId): Promise<boolean>;
+  completeMarkdownImportCleanup(request: Readonly<{
+    importId: string;
+    expectedVersion: Version;
+    completedAt: UtcInstant;
+  }>): Promise<boolean>;
+  deleteExpiredMarkdownImportPlans(request: Readonly<{
+    now: UtcInstant;
+    limit: number;
+  }>): Promise<number>;
+}
+
+export interface MarkdownImportMetadataStore extends ContentCommitMetadataStore {
+  runMarkdownImportTransaction<Result>(
+    operation: (transaction: MarkdownImportMetadataTransaction) => Promise<Result>,
+  ): Promise<Result>;
+  readMarkdownImportPlan(planId: string): Promise<Readonly<MarkdownImportPlan> | null>;
+  readMarkdownImportSession(importId: string): Promise<Readonly<MarkdownImportSession> | null>;
+  listMarkdownImportStagedFiles(
+    importId: string,
+  ): Promise<readonly Readonly<MarkdownImportStagedFile>[]>;
 }
 
 export type CapacityOperation = "commit" | "stage" | "export" | "import";

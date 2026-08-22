@@ -111,6 +111,7 @@ const TRANSACTION_METHODS = new Set([
   "runMembershipControlTransaction",
   "runAccountDeletionTransaction",
   "runContentCommitTransaction",
+  "runMarkdownImportTransaction",
   "runExportStartTransaction",
   "runExportDownloadGrantTransaction",
   "runBundleFileDownloadGrantTransaction",

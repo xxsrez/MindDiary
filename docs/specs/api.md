@@ -24,8 +24,9 @@ ADR-0016 and
 [Sites storage/capacity/import specification](sites-storage-capacity-import.md)
 принимают следующую application/wire boundary для usage, reservations and
 Markdown import. MD-265/MD-266/MD-268 storage, capacity и streaming
-export/cleanup реализованы в local candidate; import session APIs MD-267 ещё не
-публикуются, а прежний UAT deployment не является evidence нового candidate.
+export/cleanup реализованы в local candidate; MD-267 import session APIs и
+Sites UI также реализованы локально, а прежний UAT deployment не является
+evidence нового candidate.
 
 ## Назначение и граница
 
@@ -59,8 +60,9 @@ flowchart LR
    вызывают REST и MCP adapters. В первом Sites deployment это не обязательно
    отдельная сеть или HTTP service.
 
-Raw Markdown не выдаётся browser REST API. Единственная внешняя content
-surface первого прототипа — authenticated MCP. Если adapters позже станут
+Raw Markdown не выдаётся browser REST API. Узкий Markdown import ingress
+принимает bytes только на запись в private staging и не добавляет browser read
+surface; остальные content reads идут через authenticated MCP. Если adapters позже станут
 отдельными services, internal HTTP должен получить service authentication и
 не становится customer API автоматически.
 
@@ -80,8 +82,8 @@ surface первого прототипа — authenticated MCP. Если adapte
 - отсутствие control-plane operations в content MCP;
 - UTF-8 Markdown/OKF 0.2 plus bounded producer-defined raster/PDF/ZIP
   BundleFile; BundleFile не является OKF entity;
-- отсутствие ZIP/binary/legacy import/extraction; accepted Markdown-only file
-  import remains unavailable until MD-265–MD-268 implementation and UAT gates;
+- отсутствие ZIP/binary/legacy import/extraction; Markdown-only file import
+  implemented locally but remains unavailable until the exact UAT gate;
 - отсутствие company-knowledge compatibility claim.
 
 Предлагаемые для верификации wire-level решения:
@@ -525,16 +527,44 @@ Problem Details response:
 | `DELETE` | `/api/v1/mcp-tokens/{token_id}` | Revoke token. |
 | `DELETE` | `/api/v1/oauth-connections/{grant_id}` | Sites-authenticated principal отзывает свой connected app grant. |
 | `PATCH` | `/api/v1/mind-bindings/{binding_owner_id}` | Sites-authenticated principal меняет binding set exact собственного active credential с CAS и server read-back. |
-| `POST` | `/api/v1/minds/{mind_ref}/markdown-import-plans` | Accepted target: metadata-only exact-snapshot plan; not implemented. |
-| `POST` | `/api/v1/minds/{mind_ref}/markdown-imports` | Accepted target: reserve a validated plan and create private import session; not implemented. |
-| `PUT` | `/api/v1/markdown-imports/{import_id}/batches/{checkpoint}` | Accepted target: bounded streaming multipart Markdown batch; not implemented. |
-| `GET` | `/api/v1/markdown-imports/{import_id}` | Accepted target: authorized status/checkpoint/diagnostics; not implemented. |
-| `POST` | `/api/v1/markdown-imports/{import_id}/validate` | Accepted target: seal and validate whole staged corpus; not implemented. |
-| `POST` | `/api/v1/markdown-imports/{import_id}/commit` | Accepted target: publish one revision under HEAD CAS; not implemented. |
-| `DELETE` | `/api/v1/markdown-imports/{import_id}` | Accepted target: cancel before commit and schedule bounded cleanup; not implemented. |
+| `POST` | `/api/v1/minds/{mind_ref}/markdown-import-plans` | Local candidate: metadata-only exact-snapshot plan before reservation/staging. |
+| `POST` | `/api/v1/minds/{mind_ref}/markdown-imports` | Local candidate: reserve a current plan and create a principal-private session. |
+| `PUT` | `/api/v1/markdown-imports/{import_id}/batches/{checkpoint}` | Local candidate: bounded multipart Markdown batch with exact replay. |
+| `GET` | `/api/v1/markdown-imports/{import_id}` | Local candidate: authorized stage/validation/promotion progress and sanitized diagnostics. |
+| `POST` | `/api/v1/markdown-imports/{import_id}/validate` | Local candidate: advance one bounded validation page; repeat through `validated`. |
+| `POST` | `/api/v1/markdown-imports/{import_id}/commit` | Local candidate: advance bounded canonical promotion; last call performs one HEAD CAS. |
+| `DELETE` | `/api/v1/markdown-imports/{import_id}` | Local candidate: cancel before HEAD commit and schedule bounded cleanup. |
 
 `mind_ref` в REST — `me` или canonical `space_handle`. Adapter разрешает его
 в internal `space_id` и только затем authorizes request.
+
+Markdown import wire contract в local candidate:
+
+- plan принимает `expected_revision_id`, `Idempotency-Key` и полный массив
+  `{path, sha256, size}`; response возвращает immutable `plan_id`, counts,
+  `descriptor_hash`, `logical_bytes`, expiry и projected utilization без
+  content bodies;
+- start принимает `plan_id` и новый `Idempotency-Key`, атомарно проверяет HEAD,
+  access и capacity reservation и возвращает private `import_id`;
+- batch использует `multipart/form-data`: строковый part `manifest` содержит
+  `{expected_version, files:[{field,path,sha256,size}]}`, а каждый `field`
+  ссылается на один binary part. Path checkpoint начинается с `1`, строго
+  возрастает и exact replay не создаёт дубли;
+- `validate` принимает `{expected_version}` и за один call продвигает не более
+  100 files / 4 MiB. Response может вернуть `validation_progress`; client
+  повторяет command по новым `version`/`validation_checkpoint` до `validated`;
+- `commit` принимает `{expected_version, summary?}` и аналогично продвигает
+  bounded canonical promotion. `commit_progress` не меняет HEAD; только
+  terminal `committed` возвращает `revision_id` после одного exact CAS;
+- `GET` возвращает session state, stage/validation/promotion checkpoints,
+  bounded counts/bytes и sanitized `{path, code}` failures только создавшему
+  principal; `DELETE` принимает `{expected_version}` и до terminal commit
+  переводит session в cleanup без изменения HEAD.
+
+Plan/start/commit HEAD, version и idempotency conflicts возвращают `409`;
+invalid command shape — `400`; OKF/import/quota validation — `422`; временно
+недоверенный capacity accounting — `503`. Все mutation routes требуют exact
+Origin + CSRF, а raw paths/content не попадают в error envelope или logs.
 
 ### Session и account bootstrap
 
@@ -1006,8 +1036,9 @@ expire_invitations
 expire_export_grants
 ```
 
-ADR-0016 accepts these additional application operations, but the current
-implementation/catalog does not expose them yet:
+ADR-0016 accepts these additional application operations. Current local
+candidate exposes the query/commands below through the first-party Sites REST
+adapter; they are intentionally absent from content MCP:
 
 ```text
 queries:
@@ -1021,7 +1052,7 @@ commands:
   commit_markdown_import
   cancel_markdown_import
 
-background handlers:
+Accepted internal background/recovery names:
   continue_markdown_import_validation
   finalize_markdown_import
   collect_expired_markdown_import
@@ -1029,8 +1060,10 @@ background handlers:
   expire_capacity_reservations
 ```
 
-Until MD-265–MD-268 implement these names and schemas, unknown routes remain
-404 and no import tool may be advertised through MCP.
+The current candidate advances validation/finalization through repeatable
+bounded commands with durable checkpoints and runs expired-import cleanup from
+bounded request-triggered recovery. Separate public background routes do not
+exist; unknown routes remain 404 and no import tool is advertised through MCP.
 
 Background handler получает service `ActorContext`, explicit job/aggregate ID и
 idempotency state. Он не доверяет serialized role/token claims из job payload и
@@ -2044,117 +2077,134 @@ revision нельзя изменить или сделать writable selector. 
 idempotency key. Unavailable derived index не разрешает fallback на stale
 chunks; canonical browse/fetch остаются source of truth.
 
-### Accepted Markdown import REST profile — not implemented
+### Accepted Markdown import REST profile — implemented locally, UAT pending
 
-This is a narrow same-origin, CSRF-protected write-only Sites UI ingress, not a
+This is a narrow same-origin, CSRF-protected Sites control-plane ingress, not a
 generic browser raw-content API. It never returns Markdown bodies and does not
-add import tools to the current MCP catalog. After import, the normal bound MCP
-browse/search/fetch flow verifies the result.
+add import tools to the current MCP catalog. After import, normal authorized
+MCP browse/search/fetch verifies the result.
 
-Every route rechecks current Sites principal, ownership of the selected active
-write credential, `content:write`, exact `write_binding_id`, current role and
-session version. `import_id`/`plan_id` are locators, not capabilities. Private or
-missing denial is indistinguishable.
+Every plan/stage/validation/promotion/status route rechecks the current Sites
+principal, current Space role, exact HEAD where applicable and session version.
+Cancellation remains available to the creating principal after role loss
+because it can only close staging, release capacity and leave HEAD unchanged.
+The first-party UI does not borrow an MCP credential binding; any future MCP
+import adapter would require its own current write authorization.
+`import_id`/`plan_id` are locators, not capabilities. Private or missing denial
+is indistinguishable.
 
 Plan request:
 
 ```json
 {
-  "write_binding_id": "wbind_opaque",
-  "expected_revision": "rev_current",
-  "policy": "replace_exact_head",
-  "idempotency_key": "01J...",
+  "expected_revision_id": "rev_current",
   "files": [
     { "path": "concepts/example.md", "size": 1234, "sha256": "sha256:..." }
   ]
 }
 ```
 
+The request uses `POST /api/v1/minds/{mind_ref}/markdown-import-plans` and an
+`Idempotency-Key` header. `mind_ref` is `me` or one canonical ordinary-Mind
+handle; `replace_exact_head` is the only implemented policy and is therefore
+not caller-selectable.
+
 `files` is the complete desired Markdown snapshot, at most 10,000 entries /
 64 MiB. Plan validates metadata/path/digest grammar, conflicts and current
 capacity estimate without claiming UTF-8/OKF proof. It creates a private
-30-minute plan record and returns `plan_id`, `plan_hash`, additions,
-replacements, deletions, conflicts, counts/bytes and quota state; no content or
-reservation is created. Same key/exact request replays; changed request is
-`idempotency_conflict`.
+one-hour plan record and returns `plan_id`, additions, replacements, deletions,
+unchanged count, counts/bytes, expiry and projected utilization; no content or
+reservation is created. Plan metadata itself is admitted atomically against
+the Site D1 hard budget. Same key/exact request replays; changed request is
+`import_idempotency_conflict`. Unclaimed expired plans are deleted by bounded
+recovery.
 
 Start request:
 
 ```json
 {
-  "plan_id": "import_plan_opaque",
-  "plan_hash": "sha256:...",
-  "expected_plan_version": 1,
-  "idempotency_key": "01J..."
+  "plan_id": "import_plan_opaque"
 }
 ```
 
-Start atomically reauthorizes exact binding/HEAD, acquires the conservative
-capacity reservation and returns `import_id`, `session_version`, state
-`staging`, checkpoint `0`, expiry and reserved safe totals. Default session TTL
-is 24 hours. A plan cannot be rebound/adopted by another credential or Mind.
+Start uses `POST /api/v1/minds/{mind_ref}/markdown-imports` with a new
+`Idempotency-Key` header. It atomically reauthorizes the principal/role and
+exact HEAD, acquires the conservative capacity reservation and returns
+`import_id`, `version`, state `active`, checkpoint `0` and expiry. Default
+session TTL is 24 hours. A plan cannot be rebound or adopted by another
+principal or Mind.
 
 Batch request is `multipart/form-data`, at most 256 files / 4 MiB total. One
 JSON `manifest` part contains only:
 
 ```json
 {
-  "expected_session_version": 3,
-  "expected_checkpoint": 512,
-  "idempotency_key": "01J...",
+  "expected_version": 3,
   "files": [
-    { "ordinal": 512, "part": "file-512", "path": "concepts/example.md", "size": 1234, "sha256": "sha256:..." }
+    { "field": "file-512", "path": "concepts/example.md", "size": 1234, "sha256": "sha256:..." }
   ]
 }
 ```
 
-Each named file part is streamed with no filename/path authority. Server checks
-the sealed plan tuple, exact bytes/digest/UTF-8 and accepts only the next
-contiguous ordinals. Exact replay returns the same checkpoint; gap/out-of-order
-is `import_checkpoint_conflict`, changed replay is `idempotency_conflict`.
-Multipart headers/body/content/path never enter logs or telemetry.
+The checkpoint is the positive URI segment in
+`PUT /api/v1/markdown-imports/{import_id}/batches/{checkpoint}`. Each named
+file part has no filename/path authority. A bounded reader rejects the whole
+incoming multipart request above 5 MiB before parsing; the accepted batch is at
+most 256 files / 4 MiB. Server checks the sealed plan tuple, exact
+bytes/digest/UTF-8 and accepts only the next contiguous checkpoint. Exact
+replay returns the same checkpoint; a gap is `import_checkpoint_conflict` and
+changed replay is `import_idempotency_conflict`. Multipart headers,
+body/content and paths never enter logs or telemetry.
 
-Validate uses `expected_session_version` + idempotency key, seals staging and
-starts restartable whole-corpus OKF/reference validation. Status states are:
+Validate uses `expected_version`, seals staging and advances restartable
+whole-corpus OKF validation by at most 100 files / 4 MiB per call. Status states
+are:
 
 ```text
-staging | validating | validated | committed | finalizing | completed
-rejected | conflict | canceled | expired | failed
+active | validating | validated | validation_failed
+finalizing | committed | canceled | expired
 ```
 
-Status returns safe totals, current checkpoint, expiry, quota/reservation state
-and bounded paginated diagnostics. Authorized UI may see affected path and
-stable code; telemetry/evidence only receives ordinal/code/counts. It never
-returns text, object keys, digests beyond the caller-supplied plan, credentials
-or signed URLs.
+Status returns safe totals, stage/validation/promotion checkpoints, expiry and
+at most 100 sanitized `{path, code}` failures to the creating principal. It
+never returns Markdown text, R2 keys, credentials or signed URLs.
+`descriptor_hash` is SHA-256 over the deterministic sorted
+`[{path,sha256,size}]` descriptor array. The UI recomputes it after folder
+reselection and refuses resume if any path, size or digest differs; counts and
+aggregate bytes alone are never treated as identity.
+The first-party client keeps only the opaque current `import_id` and Mind ref in
+the same-page URL fragment for reload resume; it never persists file paths,
+digests or content in browser storage, and clears the fragment at every
+terminal outcome.
 
-Commit requires `expected_session_version`, exact `expected_revision`, current
-plan hash and idempotency key. It reauthorizes, verifies state `validated`,
-binding generation, reservation and HEAD, then creates exactly one v3 revision,
-moves HEAD, consumes reservation and marks the session committed in one D1
-transaction. Finalize is server-owned retryable cleanup/index work. `DELETE`
-before commit is idempotent cancel; after commit it cannot undo content and
-returns `import_already_committed`.
+Commit uses `expected_version` and advances verified canonical promotion by at
+most 100 files / 4 MiB per call. It reauthorizes, verifies the sealed plan,
+reservation and exact HEAD on every page. The terminal call creates exactly
+one v3 revision, moves HEAD, consumes the reservation, schedules index/audit
+work and marks the session committed in one D1 transaction. Earlier promotion
+pages do not change HEAD; their unreachable immutable objects use normal
+bounded cleanup after a stale-head/cancel outcome. `DELETE` before commit is
+idempotent cancel; after commit it cannot undo content.
 
 Stable import/capacity errors:
 
 ```text
 import_plan_expired
-import_plan_changed
-import_session_unavailable
+import_plan_not_found
+import_session_not_found
 import_session_expired
-import_session_version_conflict
+import_state_conflict
 import_checkpoint_conflict
-import_batch_limit_exceeded
-import_manifest_mismatch
-import_not_fully_staged
+import_idempotency_conflict
+import_file_conflict
+import_head_conflict
+import_file_limit_exceeded
+import_byte_limit_exceeded
 import_validation_failed
-import_not_validated
-import_already_committed
-capacity_reconciling
-capacity_soft_limit_exceeded
-capacity_hard_limit_exceeded
-capacity_reservation_unavailable
+capacity_accounting_untrusted
+capacity_soft_limit
+capacity_hard_limit
+capacity_fairness_limit
 ```
 
 Implementation must keep current generic request/body limits for ordinary

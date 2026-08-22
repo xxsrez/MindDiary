@@ -1,16 +1,17 @@
 # Sites storage, capacity и Markdown import
 
 Статус: accepted, 2026-08-22. `normative_status: accepted`;
-`implementation_status: partial`. Это Sites-only contract для Brain-scale
+`implementation_status: implemented_local_uat_pending`. Это Sites-only contract для Brain-scale
 storage/import в Release 0.1. MD-265 реализует в текущем repository candidate
 Space-scoped content objects, separately digested v3 manifests, delta-aware
 commit/read/GC и совместимое чтение legacy v1/v2 revisions. Reconstructable
 accounting, durable reservations, admission для commit/stage/export, fairness,
 bounded reservation cleanup, privacy-safe Owner usage и aggregate telemetry из
 MD-266 реализованы в текущем repository candidate. Streaming export/download и
-D1-checkpointed bounded cleanup из MD-268 также реализованы локально; import из
-MD-267 ещё не реализован, а весь extension пока не проверен на exact UAT
-deployment.
+D1-checkpointed bounded cleanup из MD-268 также реализованы локально. MD-267
+реализует private Sites UI/REST import sessions, bounded staging, validation и
+canonical promotion checkpoints, exact HEAD commit, retry/cancel/expiry и
+cleanup. Весь extension пока не проверен на exact UAT deployment.
 
 ## Цель и граница
 
@@ -216,8 +217,10 @@ state before retry.
 ## Markdown-only import profile
 
 Workflow: `plan -> reserve -> stage batches -> validate -> commit -> finalize`.
-An import session is private to current principal + write binding + Space,
-pinned to exact `expected_revision`, idempotency key and contract version.
+An import session is private to the current Sites-authenticated principal and
+Space, pinned to exact `expected_revision`, idempotency key and contract
+version. The first-party UI does not borrow an MCP credential binding; a future
+MCP import adapter would additionally require its current write binding.
 Default TTL is 24 hours; progress/checkpoints survive Worker restart.
 
 ### Plan and path rules
@@ -241,13 +244,18 @@ The first conflict policy is only `replace_exact_head`: imported Markdown is an
 exact snapshot, omitted current Markdown paths are deletions, and existing
 opaque paths must remain unchanged without collision. UI shows additions,
 replacements/deletions and requires ordinary destructive preview/confirmation.
-To import into a new Mind, user first creates the Mind through normal control
-flow, binds its initial HEAD, then starts this same policy. Per-file merge,
-implicit rebase and historical write are absent.
+The first-party UI exposes this flow for Personal Mind `/me` and writable
+ordinary Minds. To import into a new ordinary Mind, user first creates it
+through normal control flow, then plans against its exact initial HEAD.
+Per-file merge, implicit rebase and historical write are absent.
 
 Plan returns bounded counts, logical bytes, path/conflict errors and quota
 state, never content bodies. Invalid plan creates no reservation or staged
-object.
+object. A valid plan is admitted atomically against the Site D1 hard budget;
+unclaimed plans expire after one hour and bounded recovery deletes their
+metadata. Its constant-size descriptor hash covers the deterministic sorted
+`path`/`sha256`/`size` array; reload resume requires the reselected snapshot to
+match that hash, not merely counts or aggregate bytes.
 
 ### Stage and checkpoint
 
@@ -259,6 +267,10 @@ size, digest and UTF-8 before marking a file staged. Progress exposes counts,
 bytes and sanitized per-file code/path only to the authorized owner; logs omit
 path/content.
 
+One immutable plan can be claimed by exactly one import session. Exact start
+replay returns that session; a different idempotency key cannot create another
+session or share its reservation.
+
 Disconnect leaves the last committed checkpoint resumable. Cancel/expiry marks
 session closed, leaves HEAD unchanged and schedules bounded cleanup. A closed
 session never becomes active again; restart requires a new session/key.
@@ -266,13 +278,18 @@ session never becomes active again; restart requires a new session/key.
 ### Validate, commit and finalize
 
 Validation materializes the proposed manifest from staged digests, validates
-the entire corpus and rechecks current access, binding, expected HEAD and
-reservation. It never creates a visible revision.
+the entire corpus bounded pages of at most 100 files / 4 MiB and rechecks
+current access, expected HEAD and reservation. Durable validation checkpoint
+and byte count make repeated `validate` calls restart-safe. It never creates a
+visible revision. Each page validates OKF and Markdown BundleFile references
+against the retained opaque entries of the exact base revision; terminal
+sanitized failures schedule cleanup.
 
-Commit promotes verified objects into the Space-scoped canonical namespace,
-writes one v3 manifest and uses the normal D1 HEAD transaction. Exactly one new
-immutable revision becomes visible or nothing does. Search index job is queued
-after commit; canonical browse/fetch works immediately. Finalize records the
+Commit/finalize promotes verified objects into the Space-scoped canonical
+namespace in durable pages of at most 100 files / 4 MiB, then writes one v3
+manifest and uses the normal D1 HEAD transaction. Exactly one new immutable
+revision becomes visible or nothing does. Search index job is queued after
+commit; canonical browse/fetch works immediately. Finalize records the
 idempotent result and schedules staged cleanup. A stale HEAD returns conflict;
 server never rebases or partially imports automatically.
 

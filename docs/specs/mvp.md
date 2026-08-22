@@ -17,9 +17,9 @@ BF1 core, BF2 native MCP ingress и BF3 read/download/reference/dual-export
 exact-candidate evidence.
 
 Release 0.1 также нормативно расширен accepted Sites storage/capacity/
-Markdown-import contract по ADR-0016. Он пока `not_started`: delta v3 commit,
-usage reservations, streaming cleanup/export and resumable import должны быть
-реализованы MD-265–MD-268 и отдельно доказаны exact UAT evidence.
+Markdown-import contract по ADR-0016. MD-265–MD-268 реализованы в local
+candidate: delta v3 commit, usage reservations, streaming cleanup/export и
+resumable import. Exact-SHA UAT evidence остаётся отдельным обязательным gate.
 
 ## Цель
 
@@ -116,9 +116,9 @@ usage reservations, streaming cleanup/export and resumable import должны �
   включает ZIP/local bundle import, extraction или migration.
 - Accepted Brain-scale extension хранит new v3 manifest separately from
   Space-scoped content objects, reuses unchanged digests and admits bounded
-  Markdown-only import through one final HEAD CAS. MD-265, MD-266 и MD-268
-  реализованы в local candidate; import MD-267 и exact-SHA UAT evidence ещё
-  остаются normative target, а не проверенным deployed behavior.
+  Markdown-only import through one final HEAD CAS. MD-265–MD-268 реализованы в
+  local candidate; exact-SHA UAT evidence ещё остаётся normative target, а не
+  проверенным deployed behavior.
 - Unified revision manifest v2 фиксирует path, `kind: markdown | opaque`,
   SHA-256, detected media type и byte size. Existing committed manifest v1
   остаётся immutable/readable как Markdown-only.
@@ -563,9 +563,9 @@ okf://spaces/{space-id}/revisions/{revision-id}/index
 okf://spaces/{space-id}/revisions/{revision-id}/entries/{path}
 ```
 
-Текущий deployed/tool baseline import не публикует. Accepted Markdown-only
-profile использует отдельный write-only Sites UI REST ingress и после
-implementation проверяется обычным MCP browse/search/fetch; ZIP/binary import
+Текущий deployed baseline import ещё не публикует. Реализованный локально
+Markdown-only profile использует отдельный write-only Sites UI REST ingress и
+после UAT cut проверяется обычным MCP browse/search/fetch; ZIP/binary import
 остаётся отсутствующим. Все account/member/visibility/ownership/token
 operations остаются вне content MCP. Tool annotations честно обозначают
 mutations, но не заменяют server authorization. Недоверенный corpus может
@@ -580,11 +580,13 @@ residual risk ограничивается explicit write scope, current ACL, hi
 - **control:** account, Minds metadata, catalog, visibility, invitations,
   memberships, roles, transfer, deletion, tokens;
 - **content:** browse/search/fetch/history/export и atomic changesets;
-- **import (accepted, not implemented):** plan/reserve/stage/validate/commit/
-  cancel через narrow Sites UI write ingress и один content HEAD CAS;
+- **import (implemented local, UAT pending):** plan/reserve/stage/validate/
+  commit/cancel через narrow Sites UI write ingress, durable bounded
+  checkpoints и один content HEAD CAS;
 - **background:** index/import jobs, garbage collection недостижимых incomplete
   objects, audit delivery. Текущий candidate выполняет export streaming и
-  bounded object cleanup; import jobs остаются accepted, not implemented.
+  bounded object/import cleanup; validation и promotion продолжаются
+  repeatable bounded commands по durable session checkpoints.
 
 Initial revision Personal и ordinary Mind получает durable queued index
 state/job в той же metadata transaction. Sites Worker выполняет bounded
@@ -659,8 +661,8 @@ network, которого Sites пока не обещает. Если Streamabl
 21. Changeset принимает UTF-8 Markdown/OKF 0.2 и только allowlisted
     producer-defined BundleFile through verified staged refs; ZIP остаётся
     opaque, а ZIP/binary/legacy bundle import отсутствует. Markdown-only file
-    import is accepted separately but unavailable until its implementation and
-    UAT rows pass.
+    import is implemented locally but remains unavailable on the deployed
+    baseline until its UAT rows pass.
 22. Unknown OKF fields/types сохраняются при read-modify-write и deterministic
     export; conformance errors отделены от quality warnings.
 23. Reader и baseline Reader могут экспортировать exact разрешённую revision;

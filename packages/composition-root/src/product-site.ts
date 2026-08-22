@@ -75,6 +75,7 @@ import {
   DeterministicOkfExportService,
   ExportJobApplicationService,
   McpBearerAuthenticationService,
+  MarkdownImportService,
   MindBrowseService,
   MindBindingApplicationService,
   MindBindingContentAuthorizer,
@@ -333,6 +334,7 @@ class ProductControlApplication {
       readonly catalog: PublicMindCatalogService;
       readonly tokens: TokenLifecycleService;
       readonly capacity: CapacityAdmissionService;
+      readonly markdownImports: MarkdownImportService;
     },
   ) {}
 
@@ -371,6 +373,57 @@ class ProductControlApplication {
           spaceId: mind.mindId,
         });
       }
+      case "plan_markdown_import": {
+        const mind = await this.#mind(actor, input);
+        return this.services.markdownImports.plan({
+          actor: actor as never,
+          spaceId: mind.mindId,
+          expectedRevisionId: input.expectedRevisionId as never,
+          idempotencyKey: input.idempotencyKey,
+          files: input.files,
+        });
+      }
+      case "start_markdown_import": {
+        const mind = await this.#mind(actor, input);
+        return this.services.markdownImports.start({
+          actor: actor as never,
+          spaceId: mind.mindId,
+          planId: input.planId,
+          idempotencyKey: input.idempotencyKey,
+        });
+      }
+      case "get_markdown_import":
+        return this.services.markdownImports.status(
+          actor as never,
+          String(input.import_id ?? ""),
+        );
+      case "stage_markdown_import_batch":
+        return this.services.markdownImports.stageBatch({
+          actor: actor as never,
+          importId: String(input.import_id ?? ""),
+          checkpoint: input.checkpoint,
+          expectedVersion: input.expectedVersion,
+          files: input.files,
+        });
+      case "validate_markdown_import":
+        return this.services.markdownImports.validate({
+          actor: actor as never,
+          importId: String(input.import_id ?? ""),
+          expectedVersion: input.expectedVersion,
+        });
+      case "commit_markdown_import":
+        return this.services.markdownImports.commit({
+          actor: actor as never,
+          importId: String(input.import_id ?? ""),
+          expectedVersion: input.expectedVersion,
+          summary: input.summary,
+        });
+      case "cancel_markdown_import":
+        return this.services.markdownImports.cancel(
+          actor as never,
+          String(input.import_id ?? ""),
+          input.expectedVersion,
+        );
       case "rename_space": {
         const mind = await this.#mind(actor, input);
         return this.services.ordinary.renameSpace(actor as never, asRecord(input, { mindId: mind.mindId }) as never);
@@ -636,6 +689,15 @@ export async function createProductSiteRuntime(
     metadata,
     revisions,
     objects,
+    clock,
+    revisionIds: generated,
+    effectIds: generated,
+  });
+  const markdownImports = new MarkdownImportService({
+    authorizer,
+    metadata,
+    objects,
+    revisions,
     clock,
     revisionIds: generated,
     effectIds: generated,
@@ -917,6 +979,7 @@ export async function createProductSiteRuntime(
       authorizer,
       clock,
     }),
+    markdownImports,
   });
 
   const web = createProductWebHttpHandler({
@@ -1354,6 +1417,12 @@ export async function createProductSiteRuntime(
       const staged = await bundleFileStaging.collectExpired();
       cleanupDeleted += staged.deleted;
       cleanupReclaimedBytes += staged.bytes;
+      const imported = await markdownImports.collectExpired({
+        maxSessions: Math.min(16, limit),
+        maxFiles: limit,
+      });
+      cleanupDeleted += imported.deleted;
+      cleanupReclaimedBytes += imported.reclaimedBytes;
       const cleanupActor = createBackgroundServiceActor({
         serviceId: "mind-diary-sites-object-cleanup",
         requestId: nextOpaque("background-request"),
