@@ -45,7 +45,7 @@ test("starter and concierge playbooks keep the supported Codex-first boundary ex
   }
   for (const expected of [
     "concierge work, not a product import",
-    "exactly one accessible target Mind",
+    "exactly one writable target Mind",
     "UTF-8 Markdown only",
     "Do not create or imply a ZIP/import/upload/crawl API",
     "Never put the target Mind's whole canonical corpus into the prompt",

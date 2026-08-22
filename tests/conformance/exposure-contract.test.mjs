@@ -30,6 +30,7 @@ const expectedMcpTools = [
   "set_read_mind_binding",
   "set_write_mind_binding",
   "commit_changeset",
+  "capture_knowledge",
   "start_export",
   "get_export_status",
 ];
