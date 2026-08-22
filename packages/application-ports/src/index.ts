@@ -1400,7 +1400,9 @@ export type CreateStagedBundleFileResult =
   | { readonly kind: "created"; readonly record: Readonly<StagedBundleFileRecord> }
   | { readonly kind: "id_collision" | "outstanding_byte_limit_exceeded" };
 
-export interface BundleFileStagingTransaction extends AuthorizationTransaction {
+export interface BundleFileStagingTransaction
+  extends AuthorizationTransaction,
+    IdempotencyTransaction {
   readStagedBundleFile(
     stagedFileId: StagedBundleFileId,
   ): Promise<Readonly<StagedBundleFileRecord> | null>;
@@ -1517,6 +1519,8 @@ export interface IdempotencyNamespace {
   readonly spaceId: SpaceId;
   readonly operation: IdempotencyOperation;
   readonly key: IdempotencyKey;
+  /** Required by binding-owner-scoped operations such as native file staging. */
+  readonly bindingOwnerId?: MindBindingOwnerId;
 }
 
 export interface CheckIdempotencyRequest {
@@ -2914,6 +2918,7 @@ export const PRIVACY_SAFE_OBSERVABILITY_OPERATIONS = [
   "validate_mind",
   "set_read_mind_binding",
   "set_write_mind_binding",
+  "stage_bundle_file",
   "capture_knowledge",
   "start_export",
   "get_export_status",

@@ -10,6 +10,8 @@ import {
   type McpBearerAuthenticator,
 } from "@mind-diary/application-content";
 
+export * from "./native-file-input.js";
+
 export const MCP_TARGET_PROTOCOL = "2026-07-28" as const;
 export const MCP_ENDPOINT = "/api/mcp" as const;
 export const MCP_LEGACY_CODEX_PROTOCOL = "2025-11-25" as const;
@@ -41,6 +43,7 @@ export const MCP_CONTENT_TOOLS = [
   "validate_mind",
   "set_read_mind_binding",
   "set_write_mind_binding",
+  "stage_bundle_file",
   "commit_changeset",
   "capture_knowledge",
   "start_export",
@@ -1060,6 +1063,82 @@ const EXPORT_JOB_STATUS_SCHEMA = Object.freeze({
   }),
 });
 
+const NATIVE_FILE_INPUT_SCHEMA = Object.freeze({
+  type: "object",
+  additionalProperties: false,
+  required: Object.freeze(["file_id", "download_url"]),
+  properties: Object.freeze({
+    file_id: Object.freeze({ type: "string", minLength: 1, maxLength: 1_024 }),
+    download_url: Object.freeze({ type: "string", format: "uri", maxLength: 8_192 }),
+    file_name: Object.freeze({ type: "string", minLength: 1, maxLength: 1_024 }),
+    mime_type: Object.freeze({ type: "string", minLength: 1, maxLength: 256 }),
+  }),
+});
+
+const STAGE_BUNDLE_FILE_INPUT_SCHEMA = Object.freeze({
+  $schema: JSON_SCHEMA_2020_12,
+  type: "object",
+  additionalProperties: false,
+  required: Object.freeze(["mind", "write_binding_id", "file", "idempotency_key"]),
+  properties: Object.freeze({
+    mind: MIND_SELECTOR_SCHEMA,
+    write_binding_id: OPAQUE_ID_SCHEMA,
+    file: NATIVE_FILE_INPUT_SCHEMA,
+    idempotency_key: IDEMPOTENCY_KEY_SCHEMA,
+    display_filename: Object.freeze({ type: "string", minLength: 1, maxLength: 255 }),
+    expected_size: Object.freeze({
+      type: "integer",
+      minimum: 0,
+      maximum: 67_108_864,
+    }),
+    expected_sha256: SHA256_SCHEMA,
+  }),
+});
+
+const STAGE_BUNDLE_FILE_OUTPUT_SCHEMA = toolOutputSchema(
+  Object.freeze({
+    type: "object",
+    additionalProperties: false,
+    required: Object.freeze(["staged_file"]),
+    properties: Object.freeze({
+      staged_file: Object.freeze({
+        type: "object",
+        additionalProperties: false,
+        required: Object.freeze([
+          "staged_file_ref",
+          "state",
+          "display_filename",
+          "media_type",
+          "sha256",
+          "size",
+          "expires_at",
+          "replayed",
+        ]),
+        properties: Object.freeze({
+          staged_file_ref: OPAQUE_ID_SCHEMA,
+          state: Object.freeze({ const: "verified" }),
+          display_filename: Object.freeze({ type: "string", minLength: 1 }),
+          media_type: Object.freeze({
+            type: "string",
+            enum: Object.freeze([
+              "image/png",
+              "image/jpeg",
+              "image/gif",
+              "image/webp",
+              "application/pdf",
+              "application/zip",
+            ]),
+          }),
+          sha256: SHA256_SCHEMA,
+          size: Object.freeze({ type: "integer", minimum: 0 }),
+          expires_at: Object.freeze({ type: "string", format: "date-time" }),
+          replayed: Object.freeze({ type: "boolean" }),
+        }),
+      }),
+    }),
+  }),
+);
+
 const CHANGESET_OPERATION_SCHEMA = Object.freeze({
   oneOf: Object.freeze([
     Object.freeze({
@@ -1113,6 +1192,37 @@ const CHANGESET_OPERATION_SCHEMA = Object.freeze({
         path: Object.freeze({ type: "string", pattern: "(?:^|/)log\\.md$" }),
         category: NON_EMPTY_STRING_SCHEMA,
         message: NON_EMPTY_STRING_SCHEMA,
+      }),
+    }),
+    Object.freeze({
+      type: "object",
+      additionalProperties: false,
+      required: Object.freeze(["type", "path", "staged_file_ref"]),
+      properties: Object.freeze({
+        type: Object.freeze({ const: "create_bundle_file" }),
+        path: NON_EMPTY_STRING_SCHEMA,
+        staged_file_ref: OPAQUE_ID_SCHEMA,
+      }),
+    }),
+    Object.freeze({
+      type: "object",
+      additionalProperties: false,
+      required: Object.freeze(["type", "path", "staged_file_ref"]),
+      properties: Object.freeze({
+        type: Object.freeze({ const: "replace_bundle_file" }),
+        path: NON_EMPTY_STRING_SCHEMA,
+        staged_file_ref: OPAQUE_ID_SCHEMA,
+        expected_sha256: SHA256_SCHEMA,
+      }),
+    }),
+    Object.freeze({
+      type: "object",
+      additionalProperties: false,
+      required: Object.freeze(["type", "path"]),
+      properties: Object.freeze({
+        type: Object.freeze({ const: "delete_bundle_file" }),
+        path: NON_EMPTY_STRING_SCHEMA,
+        expected_sha256: SHA256_SCHEMA,
       }),
     }),
   ]),
@@ -1309,13 +1419,32 @@ const GET_EXPORT_STATUS_OUTPUT_SCHEMA = toolOutputSchema(
   }),
 );
 
+/** Native-file staging is provider-specific at the MCP edge and portable below it. */
+export const MCP_BUNDLE_FILE_TOOL_DEFINITIONS = Object.freeze([
+  Object.freeze({
+    name: "stage_bundle_file",
+    title: "Stage one BundleFile",
+    description:
+      "Download exactly one client-native file through the provider transport, verify its bounded bytes and metadata, and create one expiring staged_file_ref pinned to the exact active writable Mind binding. The provider file ID, temporary URL and bytes are never returned or persisted as content. Reuse the same idempotency_key for an uncertain outcome; changed bytes or metadata conflict.",
+    inputSchema: STAGE_BUNDLE_FILE_INPUT_SCHEMA,
+    outputSchema: STAGE_BUNDLE_FILE_OUTPUT_SCHEMA,
+    securitySchemes: WRITE_SECURITY_SCHEMES,
+    annotations: Object.freeze({
+      readOnlyHint: false,
+      destructiveHint: false,
+      openWorldHint: true,
+    }),
+    _meta: Object.freeze({ "openai/fileParams": Object.freeze(["file"]) }),
+  }),
+] as const);
+
 /** Canonical published definitions for immediate commit and asynchronous export. */
 export const MCP_COMMIT_EXPORT_TOOL_DEFINITIONS = Object.freeze([
   Object.freeze({
     name: "commit_changeset",
     title: "Commit a Mind changeset",
     description:
-      "Atomically apply a non-empty Markdown changeset through the exact active write_binding_id to the matching current HEAD; a stale generation never redirects to another Mind. Before a substantial, deleting, or currently visible write, preview exact paths and visibility impact to the user and obtain explicit confirmation; then re-read HEAD and use its exact expected_revision. The call immediately creates one immutable revision and never creates a server draft or approval artifact. On revision_conflict, stop and rebuild instead of retrying a changed payload with the same idempotency key.",
+      "Atomically apply one non-empty Markdown and/or staged BundleFile changeset through the exact active write_binding_id to the matching current HEAD; a stale generation never redirects to another Mind. Before a substantial, deleting, or currently visible write, preview exact paths and visibility impact to the user and obtain explicit confirmation; then re-read HEAD and use its exact expected_revision. The call immediately creates one immutable revision and never creates a server draft or approval artifact. On revision_conflict, stop and rebuild instead of retrying a changed payload with the same idempotency key.",
     inputSchema: COMMIT_CHANGESET_INPUT_SCHEMA,
     outputSchema: COMMIT_CHANGESET_OUTPUT_SCHEMA,
     securitySchemes: WRITE_SECURITY_SCHEMES,
@@ -1373,6 +1502,7 @@ export const MCP_COMMIT_EXPORT_TOOL_DEFINITIONS = Object.freeze([
 export const MCP_TOOL_DEFINITIONS = Object.freeze([
   ...MCP_READ_TOOL_DEFINITIONS,
   ...MCP_BINDING_TOOL_DEFINITIONS,
+  ...MCP_BUNDLE_FILE_TOOL_DEFINITIONS,
   ...MCP_COMMIT_EXPORT_TOOL_DEFINITIONS,
 ] as const);
 
@@ -2203,7 +2333,11 @@ function listedTools(
   );
   return Object.freeze(
     MCP_CONTENT_TOOLS
-      .filter((name) => available.has(name))
+      .filter(
+        (name) =>
+          available.has(name) &&
+          (name !== "stage_bundle_file" || tokenAllowsWrite(actor)),
+      )
       .map((name) => CANONICAL_DEFINITION_BY_NAME.get(name))
       .filter(
         (definition): definition is Readonly<Record<string, unknown>> =>
@@ -2790,6 +2924,7 @@ function createMcpHttpHandlerAtEndpoint(
 
     if (
       (name === "commit_changeset" ||
+        name === "stage_bundle_file" ||
         name === "capture_knowledge" ||
         name === "set_write_mind_binding") &&
       !tokenAllowsWrite(actor)

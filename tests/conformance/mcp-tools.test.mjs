@@ -220,7 +220,7 @@ test("tools/list ignores provider order, duplicates, and undeclared tools", asyn
   const result = await rpcResult(await fixture.send(rpc("tools/list")));
   assert.deepEqual(
     result.tools.map(({ name }) => name),
-    MCP_CONTENT_TOOLS,
+    MCP_CONTENT_TOOLS.filter((name) => name !== "stage_bundle_file"),
   );
   for (const tool of result.tools) {
     assert.equal(tool.inputSchema.$schema, "https://json-schema.org/draft/2020-12/schema");

@@ -14,9 +14,10 @@ implementation теперь завершена. Machine-readable OpenAPI и MCP 
 
 ADR-0015 и [BundleFile specification](bundle-files.md) добавляют accepted
 Release 0.1 wire contract; его implementation/live UAT status остаётся
-`core_implemented_local` после MD-247; native MCP ingress, read/download,
-mixed export и exact-SHA UAT остаются MD-248–MD-250, поэтому deployed
-Markdown-only claims пока не расширяются.
+`ingress_implemented_local` после MD-247/MD-248: native MCP staging и mixed
+commit schema реализованы и покрыты local conformance, но read/download, mixed
+export и real-client exact-SHA UAT остаются MD-249–MD-250. Поэтому deployed
+claims пока не включают подтверждённый native-file client flow.
 
 ## Назначение и граница
 

@@ -269,7 +269,16 @@ test("publishes strict commit/export schemas and truthful annotations", () => {
     commit.inputSchema.properties.operations.items.oneOf.map(
       (operation) => operation.properties.type.const,
     ),
-    ["create_file", "replace_file", "delete_file", "replace_index", "add_log_entry"],
+    [
+      "create_file",
+      "replace_file",
+      "delete_file",
+      "replace_index",
+      "add_log_entry",
+      "create_bundle_file",
+      "replace_bundle_file",
+      "delete_bundle_file",
+    ],
   );
   assert.deepEqual(commit.annotations, {
     readOnlyHint: false,

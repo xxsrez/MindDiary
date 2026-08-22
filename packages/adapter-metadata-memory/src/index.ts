@@ -979,6 +979,15 @@ function cloneAuthorizationState(state: AuthorizationState): AuthorizationState 
 function idempotencyNamespaceKey(
   namespace: Readonly<IdempotencyNamespace>,
 ): string {
+  if (namespace.operation === "stage_bundle_file") {
+    return JSON.stringify([
+      namespace.bindingOwnerId ?? null,
+      namespace.principalId,
+      namespace.spaceId,
+      namespace.operation,
+      namespace.key,
+    ]);
+  }
   return JSON.stringify([
     namespace.principalId,
     namespace.spaceId,
@@ -994,6 +1003,13 @@ function cloneIdempotencyRecord(
     return Object.freeze({
       ...record,
       operation: "commit_changeset",
+      result: Object.freeze({ ...record.result }),
+    });
+  }
+  if (record.operation === "stage_bundle_file") {
+    return Object.freeze({
+      ...record,
+      operation: "stage_bundle_file",
       result: Object.freeze({ ...record.result }),
     });
   }
@@ -1408,11 +1424,17 @@ function completeIdempotencyAgainst(
           operation: "commit_changeset",
           result: Object.freeze({ ...request.result }),
         })
-      : Object.freeze({
-          ...base,
-          operation: "start_export",
-          result: Object.freeze({ ...request.result }),
-        });
+      : request.result.kind === "stage_bundle_file"
+        ? Object.freeze({
+            ...base,
+            operation: "stage_bundle_file",
+            result: Object.freeze({ ...request.result }),
+          })
+        : Object.freeze({
+            ...base,
+            operation: "start_export",
+            result: Object.freeze({ ...request.result }),
+          });
   records.set(key, record);
   return Object.freeze({
     kind: "completed",
@@ -3778,6 +3800,7 @@ export class InMemoryRevisionMetadataStore
   ): Promise<Result> {
     return this.#runExclusive(async () => {
       const stagedBundleFiles = new Map(this.#stagedBundleFiles);
+      const idempotencyRecords = cloneIdempotencyRecords(this.#idempotencyRecords);
       const transaction: BundleFileStagingTransaction = Object.freeze({
         kind: "authorization-transaction" as const,
         readMindBindingSet: (
@@ -3801,9 +3824,14 @@ export class InMemoryRevisionMetadataStore
           occurredAt,
           stagedBundleFiles,
         ),
+        checkIdempotency: async (request: CheckIdempotencyRequest) =>
+          checkIdempotencyAgainst(request, idempotencyRecords),
+        completeIdempotency: async (request: CompleteIdempotencyRequest) =>
+          completeIdempotencyAgainst(request, idempotencyRecords),
       });
       const result = await operation(transaction);
       this.#stagedBundleFiles = stagedBundleFiles;
+      this.#idempotencyRecords = idempotencyRecords;
       return result;
     });
   }

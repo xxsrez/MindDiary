@@ -17,6 +17,7 @@ import type {
   SensitiveExternalBinding,
   Sha256Digest,
   SpaceId,
+  StagedBundleFileId,
   TokenId,
   UtcInstant,
   WriteMindBindingId,
@@ -341,6 +342,11 @@ export interface CommitChangesetIdempotencyResult {
   readonly revisionId: RevisionId;
 }
 
+export interface StageBundleFileIdempotencyResult {
+  readonly kind: "stage_bundle_file";
+  readonly stagedFileId: StagedBundleFileId;
+}
+
 export interface StartExportIdempotencyResult {
   readonly kind: "start_export";
   readonly jobId: JobId;
@@ -349,10 +355,12 @@ export interface StartExportIdempotencyResult {
 
 export type IdempotencyOperation =
   | CommitChangesetIdempotencyResult["kind"]
+  | StageBundleFileIdempotencyResult["kind"]
   | StartExportIdempotencyResult["kind"];
 
 export type IdempotencyResult =
   | CommitChangesetIdempotencyResult
+  | StageBundleFileIdempotencyResult
   | StartExportIdempotencyResult;
 
 interface IdempotencyRecordBase {
@@ -376,6 +384,11 @@ export type IdempotencyRecord =
       readonly operation: "commit_changeset";
       readonly state: "completed";
       readonly result: Readonly<CommitChangesetIdempotencyResult>;
+    })
+  | (IdempotencyRecordBase & {
+      readonly operation: "stage_bundle_file";
+      readonly state: "completed";
+      readonly result: Readonly<StageBundleFileIdempotencyResult>;
     })
   | (IdempotencyRecordBase & {
       readonly operation: "start_export";

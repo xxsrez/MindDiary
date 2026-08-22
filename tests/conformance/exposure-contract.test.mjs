@@ -29,6 +29,7 @@ const expectedMcpTools = [
   "validate_mind",
   "set_read_mind_binding",
   "set_write_mind_binding",
+  "stage_bundle_file",
   "commit_changeset",
   "capture_knowledge",
   "start_export",

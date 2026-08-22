@@ -64,6 +64,7 @@ export const CONTENT_QUERIES = [
 export const CONTENT_COMMANDS = [
   "set_read_mind_binding",
   "set_write_mind_binding",
+  "stage_bundle_file",
   "capture_knowledge",
   "commit_changeset",
   "start_export",
@@ -96,6 +97,7 @@ export type McpPerformanceTool =
   | "validate_mind"
   | "set_read_mind_binding"
   | "set_write_mind_binding"
+  | "stage_bundle_file"
   | "commit_changeset"
   | "capture_knowledge"
   | "start_export"

@@ -13,8 +13,9 @@ OAuth/package gates по ADR-0012; оба harness реализованы. Fresh 
 Codex/Desktop OAuth UI остаётся informational canary, а не blocking evidence.
 
 ADR-0015 принимает Release 0.1 architecture для versioned `BundleFile`, но её
-code/Sites implementation и native-file UAT gate ещё не являются свойством
-описанного выше deployed Markdown-only candidate.
+core уже реализован и развёрнут в UAT, а native MCP ingress реализован локально.
+Read/download/export и real-client native-file UAT gate ещё не являются
+подтверждённым свойством deployed candidate.
 
 ## Драйверы и ограничения
 

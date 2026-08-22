@@ -43,6 +43,8 @@ const HASH = `sha256:${"a".repeat(64)}`;
 const PNG = Uint8Array.from([
   0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x01,
 ]);
+const PDF = new TextEncoder().encode("%PDF-1.7\n");
+const ZIP = Uint8Array.from([0x50, 0x4b, 0x03, 0x04, 0x00, 0x00]);
 
 function actor() {
   return {
@@ -178,8 +180,9 @@ test("staging rejects spoofed types and atomically consumes a binding-pinned ref
     displayFilename: "spoofed.png",
     claimedMediaType: "image/png",
     bytes: new TextEncoder().encode("<svg><script/></svg>"),
+    idempotencyKey: "stage-spoofed-file",
   });
-  assert.deepEqual(spoofed, { kind: "invalid", code: "file_signature_mismatch" });
+  assert.deepEqual(spoofed, { kind: "invalid", code: "unsupported_bundle_file_type" });
 
   const staged = await env.staging.stage({
     actor: env.currentActor,
@@ -188,9 +191,35 @@ test("staging rejects spoofed types and atomically consumes a binding-pinned ref
     displayFilename: "diagram.png",
     claimedMediaType: "image/png",
     bytes: PNG,
+    idempotencyKey: "stage-diagram-file",
   });
   assert.equal(staged.kind, "staged");
   assert.equal(staged.record.state, "verified");
+  assert.equal(staged.replayed, false);
+
+  const replayedStage = await env.staging.stage({
+    actor: env.currentActor,
+    spaceId: MINDS.ordinary.spaceId,
+    writeBindingId: WRITE_BINDING_ID,
+    displayFilename: "diagram.png",
+    claimedMediaType: "image/png",
+    bytes: PNG,
+    idempotencyKey: "stage-diagram-file",
+  });
+  assert.equal(replayedStage.kind, "staged");
+  assert.equal(replayedStage.replayed, true);
+  assert.equal(replayedStage.record.stagedFileId, staged.record.stagedFileId);
+
+  const changedStage = await env.staging.stage({
+    actor: env.currentActor,
+    spaceId: MINDS.ordinary.spaceId,
+    writeBindingId: WRITE_BINDING_ID,
+    displayFilename: "diagram.png",
+    claimedMediaType: "image/png",
+    bytes: Uint8Array.from([...PNG, 0]),
+    idempotencyKey: "stage-diagram-file",
+  });
+  assert.deepEqual(changedStage, { kind: "invalid", code: "idempotency_conflict" });
 
   const quotaLimited = new ChangesetCommitService({
     authorizer: env.authorizer,
@@ -311,6 +340,106 @@ test("staging rejects spoofed types and atomically consumes a binding-pinned ref
   );
 });
 
+test("staging verifies image, PDF and ZIP metadata and fails closed on foreign or expired reuse", async () => {
+  const env = await harness();
+  for (const [name, mediaType, bytes] of [
+    ["diagram.png", "image/png", PNG],
+    ["paper.pdf", "application/pdf", PDF],
+    ["archive.zip", "application/zip", ZIP],
+  ]) {
+    const expectedSha256 = await env.objects.calculateSha256(bytes);
+    const staged = await env.staging.stage({
+      actor: env.currentActor,
+      spaceId: MINDS.ordinary.spaceId,
+      writeBindingId: WRITE_BINDING_ID,
+      displayFilename: name,
+      claimedMediaType: mediaType,
+      bytes,
+      idempotencyKey: `stage-${name}`,
+      expectedSize: bytes.byteLength,
+      expectedSha256,
+    });
+    assert.equal(staged.kind, "staged");
+    assert.equal(staged.record.displayFilename, name);
+    assert.equal(staged.record.mediaType, mediaType);
+    assert.equal(staged.record.size, bytes.byteLength);
+    assert.equal(staged.record.sha256, expectedSha256);
+  }
+
+  const mismatched = await env.staging.stage({
+    actor: env.currentActor,
+    spaceId: MINDS.ordinary.spaceId,
+    writeBindingId: WRITE_BINDING_ID,
+    displayFilename: "wrong-size.png",
+    claimedMediaType: "image/png",
+    bytes: PNG,
+    idempotencyKey: "stage-wrong-size",
+    expectedSize: PNG.byteLength + 1,
+  });
+  assert.deepEqual(mismatched, { kind: "invalid", code: "expected_size_mismatch" });
+
+  const foreign = await env.staging.stage({
+    actor: {
+      ...env.currentActor,
+      authentication: {
+        ...env.currentActor.authentication,
+        bindingOwnerId: "binding_owner_foreign",
+      },
+    },
+    spaceId: MINDS.ordinary.spaceId,
+    writeBindingId: WRITE_BINDING_ID,
+    displayFilename: "foreign.png",
+    claimedMediaType: "image/png",
+    bytes: PNG,
+    idempotencyKey: "stage-foreign",
+  });
+  assert.equal(foreign.kind, "denied");
+
+  const expired = new BundleFileStagingService({
+    authorizer: env.authorizer,
+    metadata: env.metadata,
+    objects: env.objects,
+    clock: { now: () => "2026-08-05T14:00:00.000Z" },
+  });
+  assert.deepEqual(await expired.stage({
+    actor: env.currentActor,
+    spaceId: MINDS.ordinary.spaceId,
+    writeBindingId: WRITE_BINDING_ID,
+    displayFilename: "diagram.png",
+    claimedMediaType: "image/png",
+    bytes: PNG,
+    idempotencyKey: "stage-diagram.png",
+    expectedSize: PNG.byteLength,
+    expectedSha256: await env.objects.calculateSha256(PNG),
+  }), { kind: "invalid", code: "staged_file_expired" });
+  assert.equal(await env.metadata.readHead(MINDS.ordinary.spaceId), REVISIONS.initial.revisionId);
+});
+
+test("staging metadata failure removes the uncommitted provider object", async () => {
+  const env = await harness();
+  const staging = new BundleFileStagingService({
+    authorizer: env.authorizer,
+    metadata: {
+      async runBundleFileStagingTransaction() {
+        throw new Error("injected staging metadata failure");
+      },
+    },
+    objects: env.objects,
+    clock: { now: () => LATER },
+    ids: { nextStagedBundleFileId: () => "staged_metadata_failure" },
+  });
+  await assert.rejects(staging.stage({
+    actor: env.currentActor,
+    spaceId: MINDS.ordinary.spaceId,
+    writeBindingId: WRITE_BINDING_ID,
+    displayFilename: "failure.png",
+    claimedMediaType: "image/png",
+    bytes: PNG,
+    idempotencyKey: "stage-metadata-failure",
+  }), /injected staging metadata failure/u);
+  assert.equal(await env.objects.getStagedBundleFile("staged_metadata_failure"), null);
+});
+
 test("opaque canonical dedupe is isolated by Space and Sites reconstructs staged metadata", async () => {
   const memory = new InMemoryObjectStore();
   const one = await memory.putBundleFile({
@@ -398,10 +527,37 @@ test("opaque canonical dedupe is isolated by Space and Sites reconstructs staged
     consumedAt: null,
     rejectionCode: null,
   };
-  const created = await first.runBundleFileStagingTransaction((transaction) =>
-    transaction.createStagedBundleFile(record, 268_435_456, FIXED_NOW),
-  );
-  assert.equal(created.kind, "created");
+  const namespace = {
+    principalId: PRINCIPALS.editor.principalId,
+    bindingOwnerId: BINDING_OWNER_ID,
+    spaceId: "space_sites",
+    operation: "stage_bundle_file",
+    key: "stage-sites-restart",
+  };
+  const created = await first.runBundleFileStagingTransaction(async (transaction) => {
+    const staged = await transaction.createStagedBundleFile(
+      record,
+      268_435_456,
+      FIXED_NOW,
+    );
+    const completed = await transaction.completeIdempotency({
+      namespace,
+      canonicalRequestHash: sitesPut.object.sha256,
+      result: { kind: "stage_bundle_file", stagedFileId: record.stagedFileId },
+      completedAt: FIXED_NOW,
+    });
+    return { staged, completed };
+  });
+  assert.equal(created.staged.kind, "created");
+  assert.equal(created.completed.kind, "completed");
   const restarted = await createSitesMetadataStore(database);
   assert.deepEqual(await restarted.readStagedBundleFile(record.stagedFileId), record);
+  const replay = await restarted.runBundleFileStagingTransaction((transaction) =>
+    transaction.checkIdempotency({
+      namespace,
+      canonicalRequestHash: sitesPut.object.sha256,
+    }),
+  );
+  assert.equal(replay.kind, "replay");
+  assert.equal(replay.record.result.stagedFileId, record.stagedFileId);
 });

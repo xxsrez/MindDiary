@@ -13,6 +13,7 @@ import {
   MCP_ENDPOINT,
   MCP_LEGACY_CODEX_ENDPOINT,
   MCP_RETIRED_SITES_ENDPOINT,
+  OpenAiNativeFileTransport,
   ProductMcpContentApplication,
   createLegacyCodexMcpHttpHandler,
   createMcpHttpHandler,
@@ -61,6 +62,8 @@ import {
 } from "@mind-diary/application-background";
 import {
   AutomaticCaptureService,
+  BUNDLE_FILE_LIMITS,
+  BundleFileStagingService,
   CanonicalRevisionCoordinator,
   ChangesetCommitService,
   ContentPrivacySafeObservability,
@@ -539,6 +542,15 @@ export async function createProductSiteRuntime(
     delegate: authorizer,
     bindings: metadata,
   });
+  const bundleFileStaging = new BundleFileStagingService({
+    authorizer: contentAuthorizer,
+    metadata,
+    objects,
+    clock,
+  });
+  const nativeFiles = new OpenAiNativeFileTransport({
+    maxBytes: BUNDLE_FILE_LIMITS.maxFileBytes,
+  });
   const browse = new MindBrowseService({
     store: metadata,
     objects,
@@ -649,6 +661,8 @@ export async function createProductSiteRuntime(
     search: observedSearch,
     history,
     validation,
+    staging: bundleFileStaging,
+    nativeFiles,
     commits: {
       commit: async (request) => {
         const result = await runWithCapturedWork(

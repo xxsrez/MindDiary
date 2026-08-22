@@ -1,5 +1,6 @@
 import type {
   AutomaticCaptureService,
+  BundleFileStagingService,
   ChangesetCommitService,
   ExportJobApplicationService,
   MindBindingApplicationService,
@@ -11,6 +12,10 @@ import type {
   MindBindingCommandResult,
   ReadMindBindingsResult,
 } from "@mind-diary/application-content";
+import {
+  NativeFileInputFailure,
+  type NativeFileTransport,
+} from "./native-file-input.js";
 import {
   MCP_TOOL_DEFINITIONS,
   createMcpToolErrorResult,
@@ -35,6 +40,8 @@ export interface ProductMcpApplicationDependencies {
     "read" | "mutateRead" | "mutateWrite"
   >;
   readonly commits: Pick<ChangesetCommitService, "commit">;
+  readonly staging?: Pick<BundleFileStagingService, "stage">;
+  readonly nativeFiles?: NativeFileTransport;
   readonly capture: Pick<AutomaticCaptureService, "capture">;
   readonly exports: Pick<ExportJobApplicationService, "start" | "getStatus">;
   /** Schedules durable work by opaque ID; the payload never carries authority. */
@@ -88,9 +95,12 @@ function canonicalCommitOperations(value: unknown): unknown {
   return Object.freeze(value.map((item) => {
     if (item === null || typeof item !== "object" || Array.isArray(item)) return item;
     const operation = item as Readonly<Record<string, unknown>>;
-    if (!("expectedSha256" in operation)) return operation;
-    const { expectedSha256, ...rest } = operation;
-    return Object.freeze({ ...rest, expected_sha256: expectedSha256 });
+    const { expectedSha256, stagedFileRef, ...rest } = operation;
+    return Object.freeze({
+      ...rest,
+      ...(stagedFileRef === undefined ? {} : { staged_file_id: stagedFileRef }),
+      ...(expectedSha256 === undefined ? {} : { expected_sha256: expectedSha256 }),
+    });
   }));
 }
 
@@ -120,6 +130,57 @@ function bindingVersionValue(value: unknown): value is number {
 
 function idempotencyKeyValue(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
+}
+
+const SHA256 = /^sha256:[0-9a-f]{64}$/u;
+
+function validStageBundleFileInput(input: Readonly<Record<string, unknown>>): boolean {
+  const allowed = new Set([
+    "mind",
+    "writeBindingId",
+    "file",
+    "idempotencyKey",
+    "displayFilename",
+    "expectedSize",
+    "expectedSha256",
+  ]);
+  return Object.keys(input).every((key) => allowed.has(key)) &&
+    stringValue(input.mind) !== null &&
+    stringValue(input.writeBindingId) !== null &&
+    input.file !== null && typeof input.file === "object" && !Array.isArray(input.file) &&
+    idempotencyKeyValue(input.idempotencyKey) &&
+    (input.displayFilename === undefined || stringValue(input.displayFilename) !== null) &&
+    (input.expectedSize === undefined ||
+      (Number.isSafeInteger(input.expectedSize) &&
+        (input.expectedSize as number) >= 0 &&
+        (input.expectedSize as number) <= 67_108_864)) &&
+    (input.expectedSha256 === undefined ||
+      (typeof input.expectedSha256 === "string" && SHA256.test(input.expectedSha256)));
+}
+
+function stageFailureCode(code: string): string {
+  switch (code) {
+    case "file_size_limit_exceeded":
+      return "bundle_file_size_limit_exceeded";
+    case "media_type_not_allowed":
+      return "unsupported_bundle_file_type";
+    case "file_signature_mismatch":
+    case "file_extension_mismatch":
+    case "expected_size_mismatch":
+      return "bundle_file_media_mismatch";
+    case "expected_sha256_mismatch":
+      return "bundle_file_digest_mismatch";
+    case "invalid_filename":
+      return "invalid_bundle_file_name";
+    case "outstanding_staged_byte_limit_exceeded":
+      return "staging_quota_exceeded";
+    case "binding_mismatch":
+      return "staged_file_binding_stale";
+    case "invalid_idempotency_key":
+      return "invalid_request";
+    default:
+      return code;
+  }
 }
 
 const CAPTURE_KEY_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/u;
@@ -259,7 +320,9 @@ export class ProductMcpContentApplication implements McpContentApplication {
         input.revisionSelector,
       );
       const required =
-        request.name === "commit_changeset" || request.name === "capture_knowledge"
+        request.name === "commit_changeset" ||
+          request.name === "capture_knowledge" ||
+          request.name === "stage_bundle_file"
           ? "commit"
           : request.name === "start_export"
             ? "export"
@@ -446,6 +509,137 @@ export class ProductMcpContentApplication implements McpContentApplication {
         return snakeOutput(await this.#dependencies.history.getRevision(request.actor, input));
       case "validate_mind":
         return snakeOutput(await this.#dependencies.validation.validateMind(request.actor, input));
+      case "stage_bundle_file": {
+        if (!validStageBundleFileInput(input)) {
+          return createMcpToolErrorResult(
+            request.actor.requestId,
+            "invalid_request",
+            "The native file staging arguments are invalid.",
+            false,
+          );
+        }
+        const info = await this.#dependencies.discovery.getMindInfo(
+          request.actor,
+          input.mind,
+          { kind: "head" },
+        );
+        if (!info.contentCapabilities.includes("commit")) {
+          return createMcpToolErrorResult(
+            request.actor.requestId,
+            "forbidden",
+            "The requested operation is not allowed.",
+            false,
+          );
+        }
+        const current = await this.#dependencies.bindings.read({ actor: request.actor });
+        if (current.kind !== "ready") {
+          return this.#bindingError(request.actor.requestId, current.kind);
+        }
+        if (current.bindings.bindingSet.state !== "active") {
+          return this.#bindingError(request.actor.requestId, "binding_owner_revoked");
+        }
+        const write = current.bindings.writeBinding;
+        if (write === null) {
+          return createMcpToolErrorResult(
+            request.actor.requestId,
+            "write_binding_required",
+            "Select exactly one writable Mind before staging a file.",
+            false,
+          );
+        }
+        if (
+          write.writeBindingId !== input.writeBindingId ||
+          write.spaceId !== info.mind.mindId
+        ) {
+          return createMcpToolErrorResult(
+            request.actor.requestId,
+            "write_binding_stale",
+            "The writable Mind changed; inspect current bindings and stage again.",
+            false,
+          );
+        }
+        if (
+          this.#dependencies.nativeFiles === undefined ||
+          this.#dependencies.staging === undefined
+        ) {
+          return createMcpToolErrorResult(
+            request.actor.requestId,
+            "native_file_input_unsupported",
+            "This deployed client/profile cannot supply native file input.",
+            false,
+          );
+        }
+        let downloaded;
+        try {
+          downloaded = await this.#dependencies.nativeFiles.download(input.file);
+        } catch (error) {
+          if (error instanceof NativeFileInputFailure) {
+            return createMcpToolErrorResult(
+              request.actor.requestId,
+              error.code,
+              error.message,
+              error.retryable,
+            );
+          }
+          return createMcpToolErrorResult(
+            request.actor.requestId,
+            "native_file_input_unsupported",
+            "The client native file input could not be read safely.",
+            true,
+          );
+        }
+        const staged = await this.#dependencies.staging.stage({
+          actor: request.actor,
+          spaceId: info.mind.mindId,
+          writeBindingId: input.writeBindingId,
+          displayFilename: input.displayFilename ?? downloaded.fileName,
+          claimedMediaType: downloaded.mimeType,
+          bytes: downloaded.bytes,
+          idempotencyKey: input.idempotencyKey,
+          expectedSize: input.expectedSize,
+          expectedSha256: input.expectedSha256,
+        });
+        if (staged.kind === "denied") {
+          const decision = staged.decision as Readonly<{
+            code?: unknown;
+            retryable?: unknown;
+          }>;
+          return createMcpToolErrorResult(
+            request.actor.requestId,
+            typeof decision.code === "string" ? decision.code : "forbidden",
+            "The requested operation is not allowed.",
+            decision.retryable === true,
+          );
+        }
+        if (staged.kind === "invalid") {
+          const code = stageFailureCode(staged.code);
+          return createMcpToolErrorResult(
+            request.actor.requestId,
+            code,
+            code === "idempotency_conflict"
+              ? "The idempotency key is already bound to different file bytes or metadata."
+              : "The native file could not be staged safely.",
+            false,
+          );
+        }
+        return createMcpToolSuccessResult(
+          snakeOutput({
+            stagedFile: {
+              stagedFileRef: staged.record.stagedFileId,
+              state: staged.record.state,
+              displayFilename: staged.record.displayFilename,
+              mediaType: staged.record.mediaType,
+              sha256: staged.record.sha256,
+              size: staged.record.size,
+              expiresAt: staged.record.expiresAt,
+              replayed: staged.replayed,
+            },
+          }),
+          staged.replayed
+            ? "Reconciled the existing staged BundleFile."
+            : "Staged one verified BundleFile.",
+        );
+      }
       case "commit_changeset": {
         const info = await this.#dependencies.discovery.getMindInfo(request.actor, input.mind, { kind: "head" });
         if (!info.contentCapabilities.includes("commit")) {
