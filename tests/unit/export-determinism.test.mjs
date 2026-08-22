@@ -4,6 +4,7 @@ import test from "node:test";
 import { InMemoryObjectStore } from "@mind-diary/adapter-object-memory";
 import {
   DeterministicOkfExportService,
+  BUNDLE_EXPORT_CONFIG,
   OKF_EXPORT_CONFIG,
   OkfExportError,
 } from "@mind-diary/application-content";
@@ -187,4 +188,83 @@ test("producer-defined non-Markdown objects are never added to the export", asyn
     (error) =>
       error instanceof OkfExportError && error.code === "revision_integrity_failure",
   );
+});
+
+test("MD-BUNDLE-ZIP-1 is byte-deterministic and carries exact opaque bytes plus canonical manifest", async () => {
+  const png = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  const markdown = file("concepts/file.md", "---\ntype: Reference\n---\n\n# File\n");
+  const opaque = {
+    kind: "opaque",
+    path: "assets/map.png",
+    mediaType: "image/png",
+    sha256: `sha256:${"a".repeat(64)}`,
+    size: png.byteLength,
+    bytes: png,
+  };
+  let calls = 0;
+  const service = new DeterministicOkfExportService({
+    materializer: {
+      async materialize() {
+        calls += 1;
+        return materialized(calls === 1 ? [opaque, markdown] : [markdown, opaque]);
+      },
+    },
+    digest: new InMemoryObjectStore(),
+  });
+
+  await assert.rejects(
+    service.exportExactRevision({ spaceId: SPACE_ID, revisionId: REVISION_ID }),
+    (error) => error instanceof OkfExportError && error.code === "export_profile_required",
+  );
+  const first = await service.exportExactRevision({
+    spaceId: SPACE_ID,
+    revisionId: REVISION_ID,
+    profile: "MD-BUNDLE-ZIP-1",
+  });
+  const second = await service.exportExactRevision({
+    spaceId: SPACE_ID,
+    revisionId: REVISION_ID,
+    profile: "MD-BUNDLE-ZIP-1",
+  });
+  assert.deepEqual(first.bytes, second.bytes);
+  assert.deepEqual(
+    {
+      archiveFormat: first.archiveFormat,
+      mediaType: first.mediaType,
+      filename: first.filename,
+      contentDisposition: first.contentDisposition,
+    },
+    BUNDLE_EXPORT_CONFIG,
+  );
+  const entries = readLocalEntries(first.bytes);
+  assert.deepEqual(entries.map(({ path }) => path), [
+    ".mind-diary/manifest.json",
+    "assets/map.png",
+    "concepts/file.md",
+  ]);
+  assert.deepEqual(entries.find(({ path }) => path === "assets/map.png").body, png);
+  const manifestText = decoder.decode(
+    entries.find(({ path }) => path === ".mind-diary/manifest.json").body,
+  );
+  assert.equal(manifestText.endsWith("\n"), true);
+  assert.deepEqual(JSON.parse(manifestText), {
+    format: "mind-diary-bundle-export-manifest-v1",
+    okf_version: "0.2",
+    files: [
+      {
+        path: "assets/map.png",
+        kind: "opaque",
+        media_type: "image/png",
+        sha256: opaque.sha256,
+        size: png.byteLength,
+      },
+      {
+        path: "concepts/file.md",
+        kind: "markdown",
+        media_type: MARKDOWN_MEDIA_TYPE,
+        sha256: PLACEHOLDER_DIGEST,
+        size: markdown.size,
+      },
+    ],
+  });
 });

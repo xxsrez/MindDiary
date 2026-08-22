@@ -443,6 +443,17 @@ export class InMemoryObjectStore implements BundleFileObjectStore, ExportArchive
     }
     assertDigest(request.sha256);
     const bytes = new Uint8Array(request.bytes);
+    const bundleProfile = request.archiveFormat === "MD-BUNDLE-ZIP-1";
+    const archiveFormat = bundleProfile ? "MD-BUNDLE-ZIP-1" : "MD-OKF-ZIP-1";
+    const filename = bundleProfile ? "mind-diary-bundle.zip" : "mind-diary-okf-bundle.zip";
+    const contentDisposition = bundleProfile
+      ? 'attachment; filename="mind-diary-bundle.zip"'
+      : 'attachment; filename="mind-diary-okf-bundle.zip"';
+    if (
+      (request.archiveFormat !== undefined && request.archiveFormat !== archiveFormat) ||
+      (request.filename !== undefined && request.filename !== filename) ||
+      (request.contentDisposition !== undefined && request.contentDisposition !== contentDisposition)
+    ) return Object.freeze({ kind: "object_key_collision" });
     const actual = await this.calculateSha256(bytes);
     if (actual !== request.sha256) {
       return Object.freeze({ kind: "digest_mismatch" });
@@ -455,6 +466,8 @@ export class InMemoryObjectStore implements BundleFileObjectStore, ExportArchive
       const same =
         existing.metadata.sha256 === actual &&
         existing.metadata.size === bytes.byteLength &&
+        existing.metadata.archiveFormat === archiveFormat &&
+        existing.metadata.filename === filename &&
         bytesEqual(existing.bytes, bytes);
       return same
         ? Object.freeze({
@@ -468,11 +481,10 @@ export class InMemoryObjectStore implements BundleFileObjectStore, ExportArchive
       jobId: request.jobId,
       spaceId: request.spaceId,
       claimVersion: request.claimVersion,
-      archiveFormat: "MD-OKF-ZIP-1" as const,
+      archiveFormat,
       mediaType: "application/zip" as const,
-      filename: "mind-diary-okf-bundle.zip" as const,
-      contentDisposition:
-        'attachment; filename="mind-diary-okf-bundle.zip"' as const,
+      filename,
+      contentDisposition,
       sha256: actual,
       size: bytes.byteLength,
       createdAt: request.createdAt,

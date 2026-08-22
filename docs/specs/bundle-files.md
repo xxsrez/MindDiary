@@ -1,13 +1,15 @@
 # BundleFile: versioned attachments в Mind
 
 Статус: accepted, 2026-08-22. `normative_status: accepted`;
-`implementation_status: ingress_implemented_local`: MD-247 реализует manifest
+`implementation_status: read_export_implemented_local`: MD-247 реализует manifest
 v1/v2, Space-scoped opaque objects, binding-pinned staging, mixed atomic commit,
 Markdown-only indexing, exact historical bytes и bounded GC в memory/Sites
 adapters. MD-248 добавляет deterministic `stage_bundle_file`, bounded
 OpenAI-native HTTPS ingress, binding-owner idempotency и BundleFile operations
-в MCP schema на обоих profiles. List/download, mixed export и real-client UAT
-evidence остаются MD-249–MD-250. Этот
+в MCP schema на обоих profiles. MD-249 реализует exact-revision list,
+one-use reauthorized download, Markdown reference validation и deterministic
+dual export в local candidate. Real-client exact-SHA UAT evidence остаётся
+MD-250. Этот
 producer-defined contract расширяет Mind Diary, но не изменяет Open Knowledge
 Format 0.2 и не объявляет `BundleFile` нормативной OKF entity.
 

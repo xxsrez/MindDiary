@@ -2,6 +2,7 @@ import type { ObjectStore } from "@mind-diary/application-ports";
 import {
   MARKDOWN_MEDIA_TYPE,
   BUNDLE_FILE_MEDIA_TYPES,
+  canonicalBundleFilePath,
   canonicalMarkdownPath,
   type CanonicalRevisionEnvelope,
   type MarkdownMediaType,
@@ -23,6 +24,17 @@ export const OKF_EXPORT_CONFIG = Object.freeze({
   contentDisposition:
     'attachment; filename="mind-diary-okf-bundle.zip"',
 } as const);
+
+export const BUNDLE_EXPORT_CONFIG = Object.freeze({
+  archiveFormat: "MD-BUNDLE-ZIP-1",
+  mediaType: "application/zip",
+  filename: "mind-diary-bundle.zip",
+  contentDisposition: 'attachment; filename="mind-diary-bundle.zip"',
+} as const);
+
+export type ExportProfile =
+  | typeof OKF_EXPORT_CONFIG.archiveFormat
+  | typeof BUNDLE_EXPORT_CONFIG.archiveFormat;
 
 export type OkfExportErrorCode =
   | "invalid_request"
@@ -51,6 +63,7 @@ export class OkfExportError extends Error {
 export interface ExactRevisionExportRequest {
   readonly spaceId: SpaceId;
   readonly revisionId: RevisionId;
+  readonly profile?: ExportProfile;
 }
 
 export interface ExportMaterializedRevisionFile {
@@ -76,10 +89,14 @@ export interface ExactRevisionMaterializer {
 
 export interface DeterministicOkfExport {
   readonly revisionId: RevisionId;
-  readonly archiveFormat: typeof OKF_EXPORT_CONFIG.archiveFormat;
+  readonly archiveFormat: ExportProfile;
   readonly mediaType: typeof OKF_EXPORT_CONFIG.mediaType;
-  readonly filename: typeof OKF_EXPORT_CONFIG.filename;
-  readonly contentDisposition: typeof OKF_EXPORT_CONFIG.contentDisposition;
+  readonly filename:
+    | typeof OKF_EXPORT_CONFIG.filename
+    | typeof BUNDLE_EXPORT_CONFIG.filename;
+  readonly contentDisposition:
+    | typeof OKF_EXPORT_CONFIG.contentDisposition
+    | typeof BUNDLE_EXPORT_CONFIG.contentDisposition;
   readonly validatedOkfVersion: typeof OKF_VERSION;
   readonly bytes: Uint8Array;
   readonly sha256: Sha256Digest;
@@ -113,15 +130,18 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-function parseRequest(value: unknown): ExactRevisionExportRequest {
+function parseRequest(value: unknown): ExactRevisionExportRequest & { readonly profile: ExportProfile } {
   if (!isRecord(value)) {
     throw new OkfExportError("invalid_request", "export request must be an object");
   }
   const keys = Object.keys(value).sort();
-  if (keys.length !== 2 || keys[0] !== "revisionId" || keys[1] !== "spaceId") {
+  const expected = Object.hasOwn(value, "profile")
+    ? ["profile", "revisionId", "spaceId"]
+    : ["revisionId", "spaceId"];
+  if (keys.length !== expected.length || keys.some((key, index) => key !== expected[index])) {
     throw new OkfExportError(
       "invalid_request",
-      "export request must contain only spaceId and revisionId",
+      "export request must contain only spaceId, revisionId and optional profile",
     );
   }
   const validOpaqueId = (candidate: unknown): candidate is string =>
@@ -135,9 +155,14 @@ function parseRequest(value: unknown): ExactRevisionExportRequest {
       "spaceId and revisionId must be bounded non-empty opaque IDs",
     );
   }
+  const profile = value.profile ?? OKF_EXPORT_CONFIG.archiveFormat;
+  if (profile !== OKF_EXPORT_CONFIG.archiveFormat && profile !== BUNDLE_EXPORT_CONFIG.archiveFormat) {
+    throw new OkfExportError("invalid_request", "export profile is invalid");
+  }
   return Object.freeze({
     spaceId: value.spaceId as SpaceId,
     revisionId: value.revisionId as RevisionId,
+    profile,
   });
 }
 
@@ -166,7 +191,7 @@ function checkedZipTotal(current: number, increment: number): number {
   if (!Number.isSafeInteger(total) || total > ZIP_UINT32_MAX) {
     throw new OkfExportError(
       "archive_limit_exceeded",
-      "MD-OKF-ZIP-1 exceeds classic ZIP size or offset limits",
+      "deterministic export exceeds classic ZIP size or offset limits",
     );
   }
   return total;
@@ -174,22 +199,27 @@ function checkedZipTotal(current: number, increment: number): number {
 
 function prepareEntries(
   files: readonly Readonly<ExportMaterializedRevisionFile>[],
+  profile: ExportProfile,
 ): PreparedZipEntry[] {
   if (!Array.isArray(files) || files.length > ZIP_UINT16_MAX) {
     throw new OkfExportError(
       "archive_limit_exceeded",
-      "MD-OKF-ZIP-1 supports at most 65535 Markdown entries",
+      "deterministic export supports at most 65535 entries",
     );
   }
   const seen = new Set<string>();
   const entries = files.map((file) => {
     let path: string;
     try {
-      path = canonicalMarkdownPath(file.path);
+      path = file.path === ".mind-diary/manifest.json"
+        ? file.path
+        : file.kind === "opaque"
+          ? canonicalBundleFilePath(file.path)
+          : canonicalMarkdownPath(file.path);
     } catch {
       throw new OkfExportError(
         "revision_integrity_failure",
-        "materialized revision contains a non-canonical Markdown path",
+        "materialized revision contains a non-canonical export path",
       );
     }
     if (seen.has(path)) {
@@ -199,7 +229,10 @@ function prepareEntries(
       );
     }
     seen.add(path);
-    if (file.mediaType !== MARKDOWN_MEDIA_TYPE) {
+    if (
+      profile === OKF_EXPORT_CONFIG.archiveFormat &&
+      file.mediaType !== MARKDOWN_MEDIA_TYPE
+    ) {
       throw new OkfExportError(
         "revision_integrity_failure",
         "materialized revision contains a non-Markdown object",
@@ -292,8 +325,9 @@ function writeCentralHeader(
 
 function createDeterministicZip(
   files: readonly Readonly<ExportMaterializedRevisionFile>[],
+  profile: ExportProfile,
 ): Uint8Array {
-  const entries = prepareEntries(files);
+  const entries = prepareEntries(files, profile);
   let localSize = 0;
   for (const entry of entries) {
     entry.localOffset = localSize;
@@ -360,6 +394,30 @@ function mapMaterializationFailure(error: unknown): never {
   throw error;
 }
 
+function sortedByUnsignedUtf8(
+  files: readonly Readonly<ExportMaterializedRevisionFile>[],
+): readonly Readonly<ExportMaterializedRevisionFile>[] {
+  return Object.freeze([...files].sort((left, right) =>
+    compareBytes(ENCODER.encode(left.path), ENCODER.encode(right.path))));
+}
+
+function bundleManifestBytes(
+  files: readonly Readonly<ExportMaterializedRevisionFile>[],
+): Uint8Array {
+  const manifest = {
+    format: "mind-diary-bundle-export-manifest-v1",
+    okf_version: OKF_VERSION,
+    files: sortedByUnsignedUtf8(files).map((file) => ({
+      path: file.path,
+      kind: file.kind ?? "markdown",
+      media_type: file.mediaType,
+      sha256: file.sha256,
+      size: file.size,
+    })),
+  };
+  return ENCODER.encode(`${JSON.stringify(manifest)}\n`);
+}
+
 export class DeterministicOkfExportService {
   readonly #materializer: ExactRevisionMaterializer;
   readonly #digest: Pick<ObjectStore, "calculateSha256">;
@@ -392,6 +450,14 @@ export class DeterministicOkfExportService {
         "materializer returned a different immutable revision than requested",
       );
     }
+    for (const file of materialized.files) {
+      if (!(file.bytes instanceof Uint8Array) || file.bytes.byteLength !== file.size) {
+        throw new OkfExportError(
+          "revision_integrity_failure",
+          "materialized revision object size does not match its manifest",
+        );
+      }
+    }
 
     const unsupported = materialized.files.find(
       (file) =>
@@ -404,7 +470,10 @@ export class DeterministicOkfExportService {
         "exact revision contains an unsupported canonical object media type",
       );
     }
-    if (materialized.files.some((file) => file.mediaType !== MARKDOWN_MEDIA_TYPE)) {
+    if (
+      parsed.profile === OKF_EXPORT_CONFIG.archiveFormat &&
+      materialized.files.some((file) => file.mediaType !== MARKDOWN_MEDIA_TYPE)
+    ) {
       throw new OkfExportError(
         "export_profile_required",
         "mixed revisions require the explicit MD-BUNDLE-ZIP-1 export profile",
@@ -413,8 +482,12 @@ export class DeterministicOkfExportService {
     const markdownFiles = materialized.files as readonly Readonly<
       ExportMaterializedRevisionFile & { readonly mediaType: MarkdownMediaType }
     >[];
+    const exactMarkdownFiles = materialized.files.filter(
+      (file): file is ExportMaterializedRevisionFile & { readonly mediaType: MarkdownMediaType } =>
+        file.mediaType === MARKDOWN_MEDIA_TYPE,
+    );
     const validation = validateOkfBundle(
-      markdownFiles.map((file) => ({
+      exactMarkdownFiles.map((file) => ({
         path: file.path,
         bytes: new Uint8Array(file.bytes),
       })),
@@ -427,14 +500,60 @@ export class DeterministicOkfExportService {
       );
     }
 
-    const bytes = createDeterministicZip(markdownFiles);
+    let archiveFiles: readonly Readonly<ExportMaterializedRevisionFile>[];
+    const config = parsed.profile === BUNDLE_EXPORT_CONFIG.archiveFormat
+      ? BUNDLE_EXPORT_CONFIG
+      : OKF_EXPORT_CONFIG;
+    if (parsed.profile === BUNDLE_EXPORT_CONFIG.archiveFormat) {
+      if (materialized.files.some((file) => file.path === ".mind-diary/manifest.json")) {
+        throw new OkfExportError(
+          "revision_integrity_failure",
+          "exact revision collides with the reserved producer manifest path",
+        );
+      }
+      for (const file of materialized.files) {
+        const kind = file.kind ?? "markdown";
+        if (
+          (kind === "markdown" && file.mediaType !== MARKDOWN_MEDIA_TYPE) ||
+          (kind === "opaque" && !(BUNDLE_FILE_MEDIA_TYPES as readonly string[]).includes(file.mediaType))
+        ) {
+          throw new OkfExportError(
+            "revision_integrity_failure",
+            "materialized revision kind and media type do not match",
+          );
+        }
+        try {
+          kind === "markdown" ? canonicalMarkdownPath(file.path) : canonicalBundleFilePath(file.path);
+        } catch {
+          throw new OkfExportError(
+            "revision_integrity_failure",
+            "materialized revision contains a non-canonical path",
+          );
+        }
+      }
+      const manifestBytes = bundleManifestBytes(materialized.files);
+      archiveFiles = Object.freeze([
+        ...materialized.files,
+        Object.freeze({
+          kind: "opaque" as const,
+          path: ".mind-diary/manifest.json",
+          mediaType: MARKDOWN_MEDIA_TYPE,
+          sha256: await this.#digest.calculateSha256(manifestBytes),
+          size: manifestBytes.byteLength,
+          bytes: manifestBytes,
+        }),
+      ]);
+    } else {
+      archiveFiles = markdownFiles;
+    }
+    const bytes = createDeterministicZip(archiveFiles, parsed.profile);
     const sha256 = await this.#digest.calculateSha256(bytes);
     return Object.freeze({
       revisionId: parsed.revisionId,
-      archiveFormat: OKF_EXPORT_CONFIG.archiveFormat,
-      mediaType: OKF_EXPORT_CONFIG.mediaType,
-      filename: OKF_EXPORT_CONFIG.filename,
-      contentDisposition: OKF_EXPORT_CONFIG.contentDisposition,
+      archiveFormat: config.archiveFormat,
+      mediaType: config.mediaType,
+      filename: config.filename,
+      contentDisposition: config.contentDisposition,
       validatedOkfVersion: OKF_VERSION,
       bytes,
       sha256,

@@ -585,12 +585,15 @@ export interface DeterministicExportBuilder {
   exportExactRevision(request: {
     readonly spaceId: SpaceId;
     readonly revisionId: RevisionId;
+    readonly profile?: "MD-OKF-ZIP-1" | "MD-BUNDLE-ZIP-1";
   }): Promise<{
     readonly revisionId: RevisionId;
-    readonly archiveFormat: "MD-OKF-ZIP-1";
+    readonly archiveFormat: "MD-OKF-ZIP-1" | "MD-BUNDLE-ZIP-1";
     readonly mediaType: "application/zip";
-    readonly filename: "mind-diary-okf-bundle.zip";
-    readonly contentDisposition: 'attachment; filename="mind-diary-okf-bundle.zip"';
+    readonly filename: "mind-diary-okf-bundle.zip" | "mind-diary-bundle.zip";
+    readonly contentDisposition:
+      | 'attachment; filename="mind-diary-okf-bundle.zip"'
+      | 'attachment; filename="mind-diary-bundle.zip"';
     readonly bytes: Uint8Array;
     readonly sha256: Sha256Digest;
     readonly size: number;
@@ -602,6 +605,7 @@ const SAFE_EXPORT_FAILURE_CODES = new Set([
   "revision_integrity_failure",
   "okf_validation_failed",
   "archive_limit_exceeded",
+  "export_profile_required",
 ]);
 
 function safeExportFailureCode(error: unknown): string {
@@ -680,14 +684,18 @@ export class ExportJobHandler {
       const built = await this.#builder.exportExactRevision({
         spaceId: job.spaceId,
         revisionId: job.revisionId,
+        profile: job.profile ?? "MD-OKF-ZIP-1",
       });
+      const expectedBundle = (job.profile ?? "MD-OKF-ZIP-1") === "MD-BUNDLE-ZIP-1";
       if (
         built.revisionId !== job.revisionId ||
-        built.archiveFormat !== "MD-OKF-ZIP-1" ||
+        built.archiveFormat !== (expectedBundle ? "MD-BUNDLE-ZIP-1" : "MD-OKF-ZIP-1") ||
         built.mediaType !== "application/zip" ||
-        built.filename !== "mind-diary-okf-bundle.zip" ||
+        built.filename !== (expectedBundle ? "mind-diary-bundle.zip" : "mind-diary-okf-bundle.zip") ||
         built.contentDisposition !==
-          'attachment; filename="mind-diary-okf-bundle.zip"' ||
+          (expectedBundle
+            ? 'attachment; filename="mind-diary-bundle.zip"'
+            : 'attachment; filename="mind-diary-okf-bundle.zip"') ||
         !(built.bytes instanceof Uint8Array) ||
         built.bytes.byteLength !== built.size
       ) {
@@ -701,6 +709,9 @@ export class ExportJobHandler {
         claimVersion: job.version,
         bytes: built.bytes,
         sha256: built.sha256,
+        archiveFormat: built.archiveFormat,
+        filename: built.filename,
+        contentDisposition: built.contentDisposition,
         createdAt: this.#clock.now(),
       });
       if (!("archive" in put)) {

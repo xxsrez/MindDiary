@@ -44,6 +44,7 @@ import {
 import {
   createProductWebHttpHandler,
   createProductExportDownloadHttpHandler,
+  createProductBundleFileDownloadHttpHandler,
   resolveProductSitesIdentity,
   SITES_IDENTITY_PROVIDER,
   type ProductSitesIdentityResolution,
@@ -64,6 +65,7 @@ import {
   AutomaticCaptureService,
   BUNDLE_FILE_LIMITS,
   BundleFileStagingService,
+  BundleFileDownloadService,
   CanonicalRevisionCoordinator,
   ChangesetCommitService,
   ContentPrivacySafeObservability,
@@ -642,6 +644,15 @@ export async function createProductSiteRuntime(
     downloadSecretCrypto: downloadCrypto,
     downloadUrlBase: `${options.publicOrigin}/api/v1/exports`,
   });
+  const bundleFileDownloads = new BundleFileDownloadService({
+    store: metadata,
+    objects,
+    authorizer: contentAuthorizer,
+    host,
+    clock,
+    secrets: downloadCrypto,
+    downloadUrlBase: `${options.publicOrigin}/api/bundle-download`,
+  });
   const mcpApplication = new ProductMcpContentApplication({
     discovery,
     bindings: {
@@ -662,6 +673,7 @@ export async function createProductSiteRuntime(
     history,
     validation,
     staging: bundleFileStaging,
+    bundleFileDownloads,
     nativeFiles,
     commits: {
       commit: async (request) => {
@@ -1156,6 +1168,17 @@ export async function createProductSiteRuntime(
       return exports.download({ actor, secret });
     },
   });
+  const bundleFileDownload = createProductBundleFileDownloadHttpHandler({
+    async download(secret) {
+      const actor = createBackgroundServiceActor({
+        serviceId: "mind-diary-bundle-file-download",
+        requestId: nextOpaque("bundle-download-request"),
+        occurredAtUtc: clock.now(),
+        deploymentCapabilities: Object.freeze(["content:fetch"]),
+      });
+      return bundleFileDownloads.download(actor, secret);
+    },
+  });
 
   const indexJobs = new RevisionIndexJobHandler({ work: metadata, revisions, index, clock });
   const exportJobs = new ExportJobHandler({
@@ -1332,15 +1355,21 @@ export async function createProductSiteRuntime(
       }
       const startedAt = Date.now();
       const exportRequest = path.startsWith("/api/v1/exports/");
+      const bundleFileRequest = path.startsWith("/api/bundle-download/");
       try {
-        const response = (await exportDownload(request)) ?? await web(request);
+        const response =
+          (await exportDownload(request)) ??
+          (await bundleFileDownload(request)) ??
+          await web(request);
         if (response !== null) {
-          const surface = exportRequest ? "content" as const : "control" as const;
+          const surface = exportRequest || bundleFileRequest ? "content" as const : "control" as const;
           const operation = exportRequest
             ? "export" as const
-            : path === "/"
-              ? "home" as const
-              : "request" as const;
+            : bundleFileRequest
+              ? "get_bundle_file_download" as const
+              : path === "/"
+                ? "home" as const
+                : "request" as const;
           recordRuntimeMetric(telemetry, {
             kind: "operational",
             metric: "request_latency_ms",
@@ -1390,7 +1419,7 @@ export async function createProductSiteRuntime(
         recordRuntimeMetric(telemetry, {
           kind: "operational",
           metric: "request_error",
-          surface: exportRequest ? "content" : "control",
+          surface: exportRequest || bundleFileRequest ? "content" : "control",
           operation: "storage",
           outcome: "unavailable",
           unit: "count",

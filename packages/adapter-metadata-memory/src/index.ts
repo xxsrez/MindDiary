@@ -65,6 +65,11 @@ import type {
   ContentCommitMetadataStore,
   ContentCommitMetadataTransaction,
   BundleFileStagingTransaction,
+  BundleFileDownloadGrant,
+  BundleFileDownloadGrantStore,
+  BundleFileDownloadGrantTransaction,
+  CreateBundleFileDownloadGrantResult,
+  ConsumeBundleFileDownloadGrantResult,
   CreateStagedBundleFileResult,
   ConsumeStagedBundleFilesRequest,
   ConsumeStagedBundleFilesResult,
@@ -1073,6 +1078,69 @@ function cloneExportDownloadGrants(
   );
 }
 
+function cloneBundleFileDownloadGrant(
+  grant: Readonly<BundleFileDownloadGrant>,
+): Readonly<BundleFileDownloadGrant> {
+  return Object.freeze({ ...grant });
+}
+
+function cloneBundleFileDownloadGrants(
+  source: ReadonlyMap<string, Readonly<BundleFileDownloadGrant>>,
+): Map<string, Readonly<BundleFileDownloadGrant>> {
+  return new Map(
+    [...source].map(([verifier, grant]) => [verifier, cloneBundleFileDownloadGrant(grant)]),
+  );
+}
+
+function validBundleFileDownloadGrant(
+  grant: Readonly<BundleFileDownloadGrant>,
+  revision: Readonly<CanonicalRevisionEnvelope> | undefined,
+): boolean {
+  const createdAt = Date.parse(grant.createdAt);
+  const expiresAt = Date.parse(grant.expiresAt);
+  const entry = revision?.manifest.entries.find((candidate) => candidate.path === grant.path);
+  return (
+    EXPORT_DOWNLOAD_VERIFIER_PATTERN.test(grant.secretVerifier) &&
+    typeof grant.requestedByPrincipalId === "string" && grant.requestedByPrincipalId.length > 0 &&
+    typeof grant.tokenId === "string" && grant.tokenId.length > 0 &&
+    typeof grant.bindingOwnerId === "string" && grant.bindingOwnerId.length > 0 &&
+    revision?.revision.spaceId === grant.spaceId &&
+    revision.revision.revisionId === grant.revisionId &&
+    entry?.kind === "opaque" &&
+    entry.mediaType === grant.mediaType &&
+    entry.sha256 === grant.sha256 &&
+    entry.size === grant.size &&
+    grant.state === "active" &&
+    grant.consumedAt === null &&
+    Number.isFinite(createdAt) &&
+    Number.isFinite(expiresAt) &&
+    expiresAt > createdAt
+  );
+}
+
+function readBundleFileDownloadGrantAgainst(
+  secretVerifier: BundleFileDownloadGrant["secretVerifier"],
+  now: BundleFileDownloadGrant["createdAt"],
+  grants: Map<string, Readonly<BundleFileDownloadGrant>>,
+): ConsumeBundleFileDownloadGrantResult | {
+  readonly kind: "active";
+  readonly grant: Readonly<BundleFileDownloadGrant>;
+} {
+  if (!EXPORT_DOWNLOAD_VERIFIER_PATTERN.test(secretVerifier) || !Number.isFinite(Date.parse(now))) {
+    return Object.freeze({ kind: "not_found" });
+  }
+  const current = grants.get(secretVerifier);
+  if (current === undefined) return Object.freeze({ kind: "not_found" });
+  if (current.state === "consumed") return Object.freeze({ kind: "consumed" });
+  if (current.state === "expired" || Date.parse(now) >= Date.parse(current.expiresAt)) {
+    if (current.state !== "expired") {
+      grants.set(secretVerifier, Object.freeze({ ...current, state: "expired" as const }));
+    }
+    return Object.freeze({ kind: "expired" });
+  }
+  return Object.freeze({ kind: "active", grant: cloneBundleFileDownloadGrant(current) });
+}
+
 function cloneIndexState(
   state: Readonly<RevisionIndexState>,
 ): Readonly<RevisionIndexState> {
@@ -1176,15 +1244,17 @@ function validClaimLease(now: string, claimExpiresAt: string): boolean {
 }
 
 function validExportArchive(archive: Readonly<ExportArchiveRecord>): boolean {
+  const bundleProfile = archive.archiveFormat === "MD-BUNDLE-ZIP-1";
   return (
     typeof archive.objectKey === "string" &&
     archive.objectKey.length > 0 &&
     archive.objectKey.length <= 512 &&
-    archive.archiveFormat === "MD-OKF-ZIP-1" &&
+    (archive.archiveFormat === "MD-OKF-ZIP-1" || bundleProfile) &&
     archive.mediaType === "application/zip" &&
-    archive.filename === "mind-diary-okf-bundle.zip" &&
-    archive.contentDisposition ===
-      'attachment; filename="mind-diary-okf-bundle.zip"' &&
+    archive.filename === (bundleProfile ? "mind-diary-bundle.zip" : "mind-diary-okf-bundle.zip") &&
+    archive.contentDisposition === (bundleProfile
+      ? 'attachment; filename="mind-diary-bundle.zip"'
+      : 'attachment; filename="mind-diary-okf-bundle.zip"') &&
     SHA256_PATTERN.test(archive.sha256) &&
     Number.isSafeInteger(archive.size) &&
     archive.size >= 0
@@ -1224,6 +1294,7 @@ function validInitialExportJob(
   const createdAt = Date.parse(job.createdAt);
   const expiresAt = Date.parse(job.expiresAt);
   const revision = revisionsById.get(job.revisionId);
+  const profile = job.profile ?? "MD-OKF-ZIP-1";
   return (
     typeof job.jobId === "string" &&
     job.jobId.length > 0 &&
@@ -1232,6 +1303,9 @@ function validInitialExportJob(
     typeof job.idempotencyKey === "string" &&
     job.idempotencyKey.length > 0 &&
     revision?.revision.spaceId === job.spaceId &&
+    (profile === "MD-OKF-ZIP-1" || profile === "MD-BUNDLE-ZIP-1") &&
+    (profile === "MD-BUNDLE-ZIP-1" ||
+      revision?.manifest.entries.every((entry) => entry.kind === "markdown")) &&
     job.state === "queued" &&
     job.version === 1 &&
     job.attempts === 0 &&
@@ -2815,6 +2889,10 @@ interface OrdinaryMindDeletionState {
     string,
     Readonly<ExportDownloadGrant>
   >;
+  readonly bundleFileDownloadGrants: ReadonlyMap<
+    string,
+    Readonly<BundleFileDownloadGrant>
+  >;
   readonly indexStates: ReadonlyMap<string, Readonly<RevisionIndexState>>;
   readonly activeBySpace: ReadonlyMap<
     SpaceId,
@@ -2860,6 +2938,10 @@ function targetRecordSelection(
     .filter(([, grant]) => grant.spaceId === spaceId)
     .map(([key]) => key)
     .sort();
+  const bundleFileDownloadGrantKeys = [...state.bundleFileDownloadGrants]
+    .filter(([, grant]) => grant.spaceId === spaceId)
+    .map(([key]) => key)
+    .sort();
   const indexKeys = [...state.indexStates]
     .filter(([, indexState]) => indexState.spaceId === spaceId)
     .map(([key]) => key)
@@ -2884,6 +2966,7 @@ function targetRecordSelection(
     backgroundJobIds: Object.freeze(backgroundJobIds),
     exportJobIds: Object.freeze(exportJobIds),
     exportGrantKeys: Object.freeze(exportGrantKeys),
+    bundleFileDownloadGrantKeys: Object.freeze(bundleFileDownloadGrantKeys),
     indexKeys: Object.freeze(indexKeys),
     contentIdempotencyKeys: Object.freeze(contentIdempotencyKeys),
     ordinaryIdempotencyKeys: Object.freeze(ordinaryIdempotencyKeys),
@@ -2945,6 +3028,17 @@ function ordinaryMindDeletionFingerprint(
         return [
           grant.jobId,
           grant.requestedByPrincipalId,
+          grant.state,
+          grant.expiresAt,
+        ];
+      }),
+      bundle_file_download_grants: records.bundleFileDownloadGrantKeys.map((key) => {
+        const grant = state.bundleFileDownloadGrants.get(key)!;
+        return [
+          grant.requestedByPrincipalId,
+          grant.tokenId,
+          grant.revisionId,
+          grant.path,
           grant.state,
           grant.expiresAt,
         ];
@@ -3595,6 +3689,7 @@ export class InMemoryRevisionMetadataStore
   implements
     ContentCommitMetadataStore,
     ExportDownloadGrantStore,
+    BundleFileDownloadGrantStore,
     PublicMindCatalogStore,
     PersonalMindStore,
     OrdinaryMindStore,
@@ -3611,6 +3706,7 @@ export class InMemoryRevisionMetadataStore
   #backgroundJobs = new Map<JobId, Readonly<BackgroundJob>>();
   #exportJobs = new Map<JobId, Readonly<ExportJob>>();
   #exportDownloadGrants = new Map<string, Readonly<ExportDownloadGrant>>();
+  #bundleFileDownloadGrants = new Map<string, Readonly<BundleFileDownloadGrant>>();
   #indexStates = new Map<string, Readonly<RevisionIndexState>>();
   #stagedBundleFiles = new Map<StagedBundleFileId, Readonly<StagedBundleFileRecord>>();
   #principals: PrincipalMap = new Map();
@@ -3675,6 +3771,7 @@ export class InMemoryRevisionMetadataStore
       backgroundJobs: new Map(this.#backgroundJobs),
       exportJobs: new Map(this.#exportJobs),
       exportDownloadGrants: new Map(this.#exportDownloadGrants),
+      bundleFileDownloadGrants: new Map(this.#bundleFileDownloadGrants),
       indexStates: new Map(this.#indexStates),
       stagedBundleFiles: new Map(this.#stagedBundleFiles),
       principals: new Map(this.#principals),
@@ -3733,8 +3830,16 @@ export class InMemoryRevisionMetadataStore
     restored.#auditEvents = new Map(snapshot.auditEvents as Map<AuditEventId, Readonly<AuditEvent>>);
     restored.#auditOutbox = new Map(snapshot.auditOutbox as Map<OutboxMessageId, Readonly<AuditOutboxMessage>>);
     restored.#backgroundJobs = new Map(snapshot.backgroundJobs as Map<JobId, Readonly<BackgroundJob>>);
-    restored.#exportJobs = new Map(snapshot.exportJobs as Map<JobId, Readonly<ExportJob>>);
+    restored.#exportJobs = new Map(
+      [...(snapshot.exportJobs as Map<JobId, Readonly<ExportJob>>)].map(([jobId, job]) => [
+        jobId,
+        Object.freeze({ ...job, profile: job.profile ?? "MD-OKF-ZIP-1" }),
+      ]),
+    );
     restored.#exportDownloadGrants = new Map(snapshot.exportDownloadGrants as Map<string, Readonly<ExportDownloadGrant>>);
+    restored.#bundleFileDownloadGrants = snapshot.bundleFileDownloadGrants instanceof Map
+      ? new Map(snapshot.bundleFileDownloadGrants as Map<string, Readonly<BundleFileDownloadGrant>>)
+      : new Map();
     restored.#indexStates = new Map(snapshot.indexStates as Map<string, Readonly<RevisionIndexState>>);
     restored.#stagedBundleFiles = snapshot.stagedBundleFiles instanceof Map
       ? new Map(snapshot.stagedBundleFiles as Map<StagedBundleFileId, Readonly<StagedBundleFileRecord>>)
@@ -4783,6 +4888,9 @@ export class InMemoryRevisionMetadataStore
       let exportDownloadGrants = cloneExportDownloadGrants(
         this.#exportDownloadGrants,
       );
+      let bundleFileDownloadGrants = cloneBundleFileDownloadGrants(
+        this.#bundleFileDownloadGrants,
+      );
       let indexStates = new Map(
         [...this.#indexStates].map(([key, state]) => [
           key,
@@ -4821,6 +4929,7 @@ export class InMemoryRevisionMetadataStore
         backgroundJobs,
         exportJobs,
         exportDownloadGrants,
+        bundleFileDownloadGrants,
         indexStates,
         activeBySpace,
       });
@@ -6692,6 +6801,8 @@ export class InMemoryRevisionMetadataStore
           selected.exportJobIds.forEach((id) => exportJobs.delete(id));
           selected.exportGrantKeys.forEach((key) =>
             exportDownloadGrants.delete(key));
+          selected.bundleFileDownloadGrantKeys.forEach((key) =>
+            bundleFileDownloadGrants.delete(key));
           selected.indexKeys.forEach((key) => indexStates.delete(key));
           selected.outboxIds.forEach((id) => auditOutbox.delete(id));
           selected.auditIds.forEach((id) => auditEvents.delete(id));
@@ -6732,6 +6843,8 @@ export class InMemoryRevisionMetadataStore
               backgroundJobs: selected.backgroundJobIds.length,
               exportJobs: selected.exportJobIds.length,
               exportDownloadGrants: selected.exportGrantKeys.length,
+              bundleFileDownloadGrants:
+                selected.bundleFileDownloadGrantKeys.length,
               indexStates: selected.indexKeys.length,
               auditEvents: selected.auditIds.length,
               auditOutboxMessages: selected.outboxIds.length,
@@ -7002,6 +7115,9 @@ export class InMemoryRevisionMetadataStore
             records.exportGrantKeys.forEach((key) =>
               exportDownloadGrants.delete(key),
             );
+            records.bundleFileDownloadGrantKeys.forEach((key) =>
+              bundleFileDownloadGrants.delete(key),
+            );
             records.indexKeys.forEach((key) => indexStates.delete(key));
             records.outboxIds.forEach((id) => auditOutbox.delete(id));
             records.auditIds.forEach((id) => auditEvents.delete(id));
@@ -7093,6 +7209,11 @@ export class InMemoryRevisionMetadataStore
               foreignExportJobIdSet.has(grant.jobId)
             ) {
               exportDownloadGrants.delete(key);
+            }
+          }
+          for (const [key, grant] of bundleFileDownloadGrants) {
+            if (grant.requestedByPrincipalId === request.principalId) {
+              bundleFileDownloadGrants.delete(key);
             }
           }
           for (const [key, record] of contentIdempotencyRecords) {
@@ -7206,6 +7327,7 @@ export class InMemoryRevisionMetadataStore
       this.#backgroundJobs = backgroundJobs;
       this.#exportJobs = exportJobs;
       this.#exportDownloadGrants = exportDownloadGrants;
+      this.#bundleFileDownloadGrants = bundleFileDownloadGrants;
       this.#indexStates = indexStates;
       this.#ordinaryMindDeletionImpacts = deletionImpacts;
       this.#ordinaryMindDeletionCleanup = deletionCleanup;
@@ -7782,6 +7904,106 @@ export class InMemoryRevisionMetadataStore
       this.#exportDownloadGrants = exportDownloadGrants;
       return result;
     });
+  }
+
+  async runBundleFileDownloadGrantTransaction<Result>(
+    operation: (transaction: BundleFileDownloadGrantTransaction) => Promise<Result>,
+  ): Promise<Result> {
+    return this.#runExclusive(async () => {
+      const grants = cloneBundleFileDownloadGrants(this.#bundleFileDownloadGrants);
+      const principals = this.#principals;
+      const knowledgeSpaces = this.#knowledgeSpaces;
+      const memberships = this.#memberships;
+      const spaces = this.#spaces;
+      const revisionsById = this.#revisionsById;
+      const authorizationStates = new Map(
+        [...this.#authorizationStates].map(([key, state]) => [
+          key,
+          cloneAuthorizationState(state),
+        ]),
+      );
+      const transaction: BundleFileDownloadGrantTransaction = Object.freeze({
+        kind: "authorization-transaction" as const,
+        readMindBindingSet: (
+          bindingOwnerId: MindBindingOwnerId,
+          principalId: PrincipalId,
+          occurredAt: ApplyReadMindBindingRequest["occurredAt"],
+        ) => this.readMindBindingSet(bindingOwnerId, principalId, occurredAt),
+        readCurrentAuthorizationState: async (query: AuthorizationStateQuery) => {
+          const current = currentSitesAuthorizationStateFromMaps(
+            query,
+            principals,
+            knowledgeSpaces,
+            memberships,
+          );
+          if (current !== null) return current;
+          const state = authorizationStates.get(authorizationStateKey(query));
+          return state ? cloneAuthorizationState(state) : null;
+        },
+        readRevision: async (spaceId: SpaceId, revisionId: RevisionId) =>
+          spaces.get(spaceId)?.revisions.get(revisionId) ?? null,
+        readBundleFileDownloadGrant: async (
+          secretVerifier: BundleFileDownloadGrant["secretVerifier"],
+          now: BundleFileDownloadGrant["createdAt"],
+        ) =>
+          readBundleFileDownloadGrantAgainst(secretVerifier, now, grants),
+        createBundleFileDownloadGrant: async (
+          grant: Readonly<BundleFileDownloadGrant>,
+        ): Promise<CreateBundleFileDownloadGrantResult> => {
+          if (grants.has(grant.secretVerifier)) {
+            return Object.freeze({ kind: "secret_collision" });
+          }
+          if (!validBundleFileDownloadGrant(grant, revisionsById.get(grant.revisionId))) {
+            return Object.freeze({ kind: "invalid_grant" });
+          }
+          const stored = cloneBundleFileDownloadGrant(grant);
+          grants.set(grant.secretVerifier, stored);
+          return Object.freeze({ kind: "created", grant: stored });
+        },
+        consumeBundleFileDownloadGrant: async (
+          secretVerifier: BundleFileDownloadGrant["secretVerifier"],
+          consumedAt: BundleFileDownloadGrant["createdAt"],
+        ): Promise<ConsumeBundleFileDownloadGrantResult> => {
+          const current = readBundleFileDownloadGrantAgainst(
+            secretVerifier,
+            consumedAt,
+            grants,
+          );
+          if (current.kind !== "active") return current;
+          const consumed = Object.freeze({
+            ...current.grant,
+            state: "consumed" as const,
+            consumedAt,
+          });
+          grants.set(secretVerifier, consumed);
+          return Object.freeze({ kind: "consumed", grant: consumed });
+        },
+      });
+      const result = await operation(transaction);
+      this.#bundleFileDownloadGrants = grants;
+      return result;
+    });
+  }
+
+  async readBundleFileDownloadGrant(
+    secretVerifier: BundleFileDownloadGrant["secretVerifier"],
+    now: BundleFileDownloadGrant["createdAt"],
+  ): Promise<ConsumeBundleFileDownloadGrantResult | {
+    readonly kind: "active";
+    readonly grant: Readonly<BundleFileDownloadGrant>;
+  }> {
+    return this.#runExclusive(async () =>
+      readBundleFileDownloadGrantAgainst(
+        secretVerifier,
+        now,
+        this.#bundleFileDownloadGrants,
+      ));
+  }
+
+  async listBundleFileDownloadGrantsForTest(): Promise<readonly Readonly<BundleFileDownloadGrant>[]> {
+    return Object.freeze(
+      [...this.#bundleFileDownloadGrants.values()].map(cloneBundleFileDownloadGrant),
+    );
   }
 
   /** Test/local fixture inspection; application replay goes through authorization. */
@@ -8675,10 +8897,15 @@ export class InMemoryRevisionMetadataStore
       const exportGrantVerifiers = [...this.#exportDownloadGrants]
         .filter(([, grant]) => grant.spaceId === spaceId)
         .map(([verifier]) => verifier);
+      const bundleFileGrantVerifiers = [...this.#bundleFileDownloadGrants]
+        .filter(([, grant]) => grant.spaceId === spaceId)
+        .map(([verifier]) => verifier);
       jobIds.forEach((id) => this.#backgroundJobs.delete(id));
       exportJobIds.forEach((id) => this.#exportJobs.delete(id));
       exportGrantVerifiers.forEach((verifier) =>
         this.#exportDownloadGrants.delete(verifier));
+      bundleFileGrantVerifiers.forEach((verifier) =>
+        this.#bundleFileDownloadGrants.delete(verifier));
       indexKeys.forEach((key) => this.#indexStates.delete(key));
       outboxIds.forEach((id) => this.#auditOutbox.delete(id));
       auditIds.forEach((id) => this.#auditEvents.delete(id));

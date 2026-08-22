@@ -6,8 +6,9 @@ Sites и прошёл
 authenticated web/control, persistence-after-redeploy и обязательные Codex MCP
 compatibility gates. Расширенные read/write/history/export сценарии остаются
 следующей product-validation стадией. Producer-defined BundleFile contract
-принят для расширенного Release 0.1, но его implementation/UAT evidence
-отделены от уже проверенного Markdown-only baseline.
+принят для расширенного Release 0.1; core, ingress и read/export реализованы
+локально, но их UAT evidence отделено от уже проверенного Markdown-only
+baseline.
 
 ## Зачем проект существует
 
@@ -139,7 +140,7 @@ contract manifest, staging, downloads, limits и export находится в
 Markdown-only revision экспортируется прежним byte-for-byte
 `MD-OKF-ZIP-1`. Mixed revision требует explicit `MD-BUNDLE-ZIP-1`, который
 сохраняет exact files и producer manifest без ACL/service identities. Уже
-развёрнутый UAT остаётся Markdown-only до отдельного exact-SHA implementation и
+развёрнутый UAT остаётся Markdown-only до exact-SHA cut local candidate и
 native-file client gate.
 
 Основная write-команда принимает `expected_revision`, `idempotency_key` и набор

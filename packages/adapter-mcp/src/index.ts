@@ -6,6 +6,7 @@ import {
   MindHistoryFailure,
   MindSearchFailure,
   MindValidationFailure,
+  BundleFileDownloadFailure,
   type McpBearerAuthenticationResult,
   type McpBearerAuthenticator,
 } from "@mind-diary/application-content";
@@ -41,9 +42,11 @@ export const MCP_CONTENT_TOOLS = [
   "list_revisions",
   "get_revision",
   "validate_mind",
+  "list_bundle_files",
   "set_read_mind_binding",
   "set_write_mind_binding",
   "stage_bundle_file",
+  "get_bundle_file_download",
   "commit_changeset",
   "capture_knowledge",
   "start_export",
@@ -346,6 +349,25 @@ const BROWSE_ENTRIES_INPUT_SCHEMA = strictInputSchema(
   ["mind"],
 );
 
+const LIST_BUNDLE_FILES_INPUT_SCHEMA = strictInputSchema(
+  {
+    mind: MIND_SELECTOR_SCHEMA,
+    revision_selector: REVISION_SELECTOR_SCHEMA,
+    cursor: OPAQUE_ID_SCHEMA,
+    limit: PAGE_LIMIT_SCHEMA,
+  },
+  ["mind"],
+);
+
+const GET_BUNDLE_FILE_DOWNLOAD_INPUT_SCHEMA = strictInputSchema(
+  {
+    mind: MIND_SELECTOR_SCHEMA,
+    revision_selector: REVISION_SELECTOR_SCHEMA,
+    path: Object.freeze({ type: "string", minLength: 1, maxLength: 1_024 }),
+  },
+  ["mind", "path"],
+);
+
 const SEARCH_INPUT_SCHEMA = strictInputSchema(
   {
     mind: MIND_SELECTOR_SCHEMA,
@@ -544,6 +566,75 @@ const BROWSE_ENTRIES_OUTPUT_SCHEMA = toolOutputSchema(
     }),
   }),
 );
+
+const BUNDLE_FILE_DESCRIPTOR_SCHEMA = Object.freeze({
+  type: "object",
+  additionalProperties: false,
+  required: Object.freeze([
+    "path", "kind", "media_type", "size", "sha256", "revision_id", "inline_eligible",
+  ]),
+  properties: Object.freeze({
+    path: Object.freeze({ type: "string", minLength: 1 }),
+    kind: Object.freeze({ const: "opaque" }),
+    media_type: Object.freeze({
+      type: "string",
+      enum: Object.freeze([
+        "image/png", "image/jpeg", "image/gif", "image/webp", "application/pdf", "application/zip",
+      ]),
+    }),
+    size: Object.freeze({ type: "integer", minimum: 0 }),
+    sha256: SHA256_SCHEMA,
+    revision_id: OPAQUE_ID_SCHEMA,
+    inline_eligible: Object.freeze({ type: "boolean" }),
+    reference_status: Object.freeze({
+      type: "string",
+      enum: Object.freeze(["referenced", "unreferenced", "invalid_reference"]),
+    }),
+  }),
+});
+
+const BUNDLE_REFERENCE_DIAGNOSTIC_SCHEMA = Object.freeze({
+  type: "object",
+  additionalProperties: false,
+  required: Object.freeze(["severity", "class", "code", "path", "message"]),
+  properties: Object.freeze({
+    severity: Object.freeze({ type: "string", enum: Object.freeze(["error", "warning"]) }),
+    class: Object.freeze({ type: "string", enum: Object.freeze(["conformance", "quality"]) }),
+    code: NON_EMPTY_STRING_SCHEMA,
+    path: Object.freeze({ type: "string" }),
+    line: Object.freeze({ type: "integer", minimum: 1 }),
+    message: NON_EMPTY_STRING_SCHEMA,
+  }),
+});
+
+const LIST_BUNDLE_FILES_OUTPUT_SCHEMA = toolOutputSchema(Object.freeze({
+  type: "object",
+  additionalProperties: false,
+  required: Object.freeze(["mind", "resolved_revision", "files", "diagnostics", "next_cursor"]),
+  properties: Object.freeze({
+    mind: MIND_DESCRIPTOR_SCHEMA,
+    resolved_revision: REVISION_DESCRIPTOR_SCHEMA,
+    files: Object.freeze({ type: "array", items: BUNDLE_FILE_DESCRIPTOR_SCHEMA }),
+    diagnostics: Object.freeze({ type: "array", items: BUNDLE_REFERENCE_DIAGNOSTIC_SCHEMA }),
+    next_cursor: Object.freeze({ type: Object.freeze(["string", "null"]) }),
+  }),
+}));
+
+const GET_BUNDLE_FILE_DOWNLOAD_OUTPUT_SCHEMA = toolOutputSchema(Object.freeze({
+  type: "object",
+  additionalProperties: false,
+  required: Object.freeze([
+    "mind", "resolved_revision", "file", "download_url", "download_expires_at", "disposition",
+  ]),
+  properties: Object.freeze({
+    mind: MIND_DESCRIPTOR_SCHEMA,
+    resolved_revision: REVISION_DESCRIPTOR_SCHEMA,
+    file: BUNDLE_FILE_DESCRIPTOR_SCHEMA,
+    download_url: Object.freeze({ type: "string", format: "uri" }),
+    download_expires_at: Object.freeze({ type: "string", format: "date-time" }),
+    disposition: Object.freeze({ type: "string", enum: Object.freeze(["inline", "attachment"]) }),
+  }),
+}));
 
 const SEARCH_OUTPUT_SCHEMA = toolOutputSchema(
   Object.freeze({
@@ -995,6 +1086,16 @@ export const MCP_READ_TOOL_DEFINITIONS = Object.freeze([
     securitySchemes: READ_SECURITY_SCHEMES,
     annotations: READ_ONLY_ANNOTATIONS,
   }),
+  Object.freeze({
+    name: "list_bundle_files",
+    title: "List exact-revision BundleFiles",
+    description:
+      "List bounded metadata and Markdown reference status for opaque files in one authorized exact revision. Bytes, provider IDs and download URLs are never returned.",
+    inputSchema: LIST_BUNDLE_FILES_INPUT_SCHEMA,
+    outputSchema: LIST_BUNDLE_FILES_OUTPUT_SCHEMA,
+    securitySchemes: READ_SECURITY_SCHEMES,
+    annotations: READ_ONLY_ANNOTATIONS,
+  }),
 ] as const);
 
 /** Service-metadata binding mutations; neither tool writes Mind content. */
@@ -1050,11 +1151,21 @@ const EXPORT_JOB_STATUS_SCHEMA = Object.freeze({
     }),
     expires_at: Object.freeze({ type: "string", format: "date-time" }),
     last_failure_code: Object.freeze({ type: Object.freeze(["string", "null"]) }),
-    archive_format: Object.freeze({ const: "MD-OKF-ZIP-1" }),
+    archive_format: Object.freeze({
+      type: "string",
+      enum: Object.freeze(["MD-OKF-ZIP-1", "MD-BUNDLE-ZIP-1"]),
+    }),
     media_type: Object.freeze({ const: "application/zip" }),
-    filename: Object.freeze({ const: "mind-diary-okf-bundle.zip" }),
+    filename: Object.freeze({
+      type: "string",
+      enum: Object.freeze(["mind-diary-okf-bundle.zip", "mind-diary-bundle.zip"]),
+    }),
     content_disposition: Object.freeze({
-      const: 'attachment; filename="mind-diary-okf-bundle.zip"',
+      type: "string",
+      enum: Object.freeze([
+        'attachment; filename="mind-diary-okf-bundle.zip"',
+        'attachment; filename="mind-diary-bundle.zip"',
+      ]),
     }),
     sha256: SHA256_SCHEMA,
     size: Object.freeze({ type: "integer", minimum: 0 }),
@@ -1377,6 +1488,10 @@ const START_EXPORT_INPUT_SCHEMA = Object.freeze({
   properties: Object.freeze({
     mind: NON_EMPTY_STRING_SCHEMA,
     revision_selector: REVISION_SELECTOR_SCHEMA,
+    profile: Object.freeze({
+      type: "string",
+      enum: Object.freeze(["MD-OKF-ZIP-1", "MD-BUNDLE-ZIP-1"]),
+    }),
     idempotency_key: NON_EMPTY_STRING_SCHEMA,
   }),
 });
@@ -1435,6 +1550,20 @@ export const MCP_BUNDLE_FILE_TOOL_DEFINITIONS = Object.freeze([
       openWorldHint: true,
     }),
     _meta: Object.freeze({ "openai/fileParams": Object.freeze(["file"]) }),
+  }),
+  Object.freeze({
+    name: "get_bundle_file_download",
+    title: "Create a one-use BundleFile download",
+    description:
+      "Create one short-lived one-use exact-revision download grant after current token, binding and Mind access checks. The tool returns no bytes; keep the response-only URL out of logs and prompts.",
+    inputSchema: GET_BUNDLE_FILE_DOWNLOAD_INPUT_SCHEMA,
+    outputSchema: GET_BUNDLE_FILE_DOWNLOAD_OUTPUT_SCHEMA,
+    securitySchemes: READ_SECURITY_SCHEMES,
+    annotations: Object.freeze({
+      readOnlyHint: false,
+      destructiveHint: false,
+      openWorldHint: true,
+    }),
   }),
 ] as const);
 
@@ -2146,6 +2275,8 @@ function readToolSuccessMessage(name: McpReadToolName): string {
       return "Fetched the exact Mind revision.";
     case "validate_mind":
       return "Validated the complete Mind revision.";
+    case "list_bundle_files":
+      return "Listed BundleFiles in the exact Mind revision.";
   }
 }
 
@@ -2192,6 +2323,8 @@ function readFailureMessage(code: string): string {
     case "locator_not_found":
     case "resource_not_found":
       return "The requested entry was not found.";
+    case "bundle_file_not_found":
+      return "BundleFile was not found.";
     case "search_index_unavailable":
       return "Search is unavailable for the exact requested revision.";
     case "discovery_unavailable":
@@ -2237,7 +2370,8 @@ function safeReadToolFailure(error: unknown): SafeReadToolFailure | null {
       error instanceof MindBrowseFailure ||
       error instanceof MindHistoryFailure ||
       error instanceof MindSearchFailure ||
-      error instanceof MindValidationFailure
+      error instanceof MindValidationFailure ||
+      error instanceof BundleFileDownloadFailure
     )
   ) {
     return null;
@@ -3035,7 +3169,7 @@ function createMcpHttpHandlerAtEndpoint(
       );
       return response;
     } catch (error) {
-      const safeFailure = isReadToolName(name)
+      const safeFailure = isReadToolName(name) || name === "get_bundle_file_download"
         ? safeReadToolFailure(error)
         : null;
       if (safeFailure !== null) {

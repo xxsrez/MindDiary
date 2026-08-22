@@ -21,11 +21,17 @@ import {
   type IdempotencyKey,
   type JobId,
   type RevisionId,
+  type CanonicalRevisionEnvelope,
   type RevisionMode,
   type Sha256Digest,
   type SpaceId,
   type UtcInstant,
 } from "@mind-diary/domain";
+import {
+  BUNDLE_EXPORT_CONFIG,
+  OKF_EXPORT_CONFIG,
+  type ExportProfile,
+} from "./deterministic-export.js";
 import {
   DEFAULT_IDEMPOTENCY_KEY_MAX_BYTES,
   normalizeIdempotencyKeyMaxBytes,
@@ -46,14 +52,17 @@ export interface StartExportRequest {
   readonly actor: ActorContext;
   readonly spaceId: SpaceId;
   readonly revisionSelector?: unknown;
+  readonly profile?: unknown;
   readonly idempotencyKey: unknown;
 }
 
 export interface SafeExportArchiveMetadata {
-  readonly archiveFormat: "MD-OKF-ZIP-1";
+  readonly archiveFormat: ExportProfile;
   readonly mediaType: "application/zip";
-  readonly filename: "mind-diary-okf-bundle.zip";
-  readonly contentDisposition: 'attachment; filename="mind-diary-okf-bundle.zip"';
+  readonly filename: "mind-diary-okf-bundle.zip" | "mind-diary-bundle.zip";
+  readonly contentDisposition:
+    | 'attachment; filename="mind-diary-okf-bundle.zip"'
+    | 'attachment; filename="mind-diary-bundle.zip"';
   readonly sha256: Sha256Digest;
   readonly size: number;
 }
@@ -83,7 +92,9 @@ export interface ExportDownloadResponse {
   readonly archive: Readonly<SafeExportArchiveMetadata>;
   readonly headers: Readonly<{
     readonly "Content-Type": "application/zip";
-    readonly "Content-Disposition": 'attachment; filename="mind-diary-okf-bundle.zip"';
+    readonly "Content-Disposition":
+      | 'attachment; filename="mind-diary-okf-bundle.zip"'
+      | 'attachment; filename="mind-diary-bundle.zip"';
     readonly "Content-Length": string;
     readonly "Cache-Control": "no-store";
     readonly Pragma: "no-cache";
@@ -129,6 +140,7 @@ interface ParsedStart {
   readonly selector: Readonly<ExportRevisionSelector>;
   readonly revisionMode: RevisionMode;
   readonly idempotencyKey: IdempotencyKey;
+  readonly profile: ExportProfile;
 }
 
 const ENCODER = new TextEncoder();
@@ -343,10 +355,16 @@ export class ExportJobApplicationService {
     }
     const actor = request.actor;
     const canonicalRequestHash = await this.#digest.calculateSha256(
-      ENCODER.encode(`${JSON.stringify({
-        format: "mind-diary-start-export-request-v1",
-        revision_selector: canonicalSelector(parsed.selector),
-      })}\n`),
+      ENCODER.encode(`${JSON.stringify(parsed.profile === OKF_EXPORT_CONFIG.archiveFormat
+        ? {
+            format: "mind-diary-start-export-request-v1",
+            revision_selector: canonicalSelector(parsed.selector),
+          }
+        : {
+            format: "mind-diary-start-export-request-v2",
+            revision_selector: canonicalSelector(parsed.selector),
+            profile: parsed.profile,
+          })}\n`),
     );
     const namespace: Readonly<
       IdempotencyNamespace & { readonly operation: "start_export" }
@@ -393,7 +411,8 @@ export class ExportJobApplicationService {
           replayed === null ||
           replayed.spaceId !== request.spaceId ||
           replayed.revisionId !== result.revisionId ||
-          replayed.requestedByPrincipalId !== actor.principalId
+          replayed.requestedByPrincipalId !== actor.principalId ||
+          (replayed.profile ?? OKF_EXPORT_CONFIG.archiveFormat) !== parsed.profile
         ) {
           throw new ExportJobInvariantError(
             "invalid_idempotency_result",
@@ -407,13 +426,24 @@ export class ExportJobApplicationService {
         });
       }
 
-      const revisionId = await this.#resolveRevision(transaction, request.spaceId, parsed.selector);
-      if (revisionId === null) return Object.freeze({ kind: "revision_not_found" });
+      const envelope = await this.#resolveRevision(transaction, request.spaceId, parsed.selector);
+      if (envelope === null) return Object.freeze({ kind: "revision_not_found" });
+      if (
+        parsed.profile === OKF_EXPORT_CONFIG.archiveFormat &&
+        envelope.manifest.entries.some((entry) => entry.kind === "opaque")
+      ) {
+        return invalid(
+          "export_profile_required",
+          "mixed revisions require the explicit MD-BUNDLE-ZIP-1 profile",
+        );
+      }
+      const revisionId = envelope.revision.revisionId;
       const job: Readonly<ExportJob> = Object.freeze({
         jobId,
         requestedByPrincipalId: actor.principalId,
         spaceId: request.spaceId,
         revisionId,
+        profile: parsed.profile,
         idempotencyKey: parsed.idempotencyKey,
         state: "queued",
         version: version(1),
@@ -737,10 +767,19 @@ export class ExportJobApplicationService {
     if (key.kind === "invalid") {
       return invalid("invalid_idempotency_key", "idempotency key is invalid");
     }
+    if (
+      request.profile !== undefined &&
+      request.profile !== OKF_EXPORT_CONFIG.archiveFormat &&
+      request.profile !== BUNDLE_EXPORT_CONFIG.archiveFormat
+    ) {
+      return invalid("invalid_export_profile", "export profile is invalid");
+    }
+    const profile = (request.profile ?? OKF_EXPORT_CONFIG.archiveFormat) as ExportProfile;
     return Object.freeze({
       selector,
       revisionMode: selector.kind === "head" ? "head" : "historical",
       idempotencyKey: key.key,
+      profile,
     });
   }
 
@@ -748,22 +787,24 @@ export class ExportJobApplicationService {
     transaction: ExportStartTransaction,
     spaceId: SpaceId,
     selector: Readonly<ExportRevisionSelector>,
-  ): Promise<RevisionId | null> {
-    if (selector.kind === "head") return transaction.readHead(spaceId);
+  ): Promise<Readonly<CanonicalRevisionEnvelope> | null> {
+    if (selector.kind === "head") {
+      const head = await transaction.readHead(spaceId);
+      return head === null ? null : transaction.readRevision(spaceId, head);
+    }
     if (selector.kind === "revision") {
-      const revision = await transaction.readRevision(spaceId, selector.revisionId);
-      return revision?.revision.revisionId ?? null;
+      return transaction.readRevision(spaceId, selector.revisionId);
     }
     const requestedAt = Date.parse(selector.asOf);
     const revisions = await transaction.listRevisions(spaceId);
-    let selected: RevisionId | null = null;
+    let selected: Readonly<CanonicalRevisionEnvelope> | null = null;
     let selectedNumber = -1;
     for (const envelope of revisions) {
       if (
         Date.parse(envelope.revision.committedAt) <= requestedAt &&
         envelope.revision.revisionNumber > selectedNumber
       ) {
-        selected = envelope.revision.revisionId;
+        selected = envelope;
         selectedNumber = envelope.revision.revisionNumber;
       }
     }

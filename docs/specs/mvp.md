@@ -11,9 +11,10 @@ automation также реализована, а fresh external-account flow о�
 informational canary, не release gate.
 
 Release 0.1 теперь нормативно расширен accepted BundleFile slice по ADR-0015.
-BF1 core и BF2 native MCP ingress реализованы локально в MD-247/MD-248; BF3
-read/download/export и BF4 real-client UAT join остаются незавершёнными до
-MD-249/MD-250 и не расширяют live claims без exact-candidate evidence.
+BF1 core, BF2 native MCP ingress и BF3 read/download/reference/dual-export
+реализованы локально в MD-247–MD-249. BF4 real-client UAT join остаётся
+незавершённым до MD-250; local candidate не расширяет live claims без
+exact-candidate evidence.
 
 ## Цель
 

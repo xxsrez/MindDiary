@@ -11,6 +11,7 @@ import {
   canonicalMarkdownPath,
   serializeRevisionManifest,
   type CanonicalRevisionEnvelope,
+  type BundleFileMediaType,
   type RevisionId,
   type RevisionManifestEntry,
   type RevisionMode,
@@ -19,6 +20,11 @@ import {
   type VerifiedSpaceHost,
 } from "@mind-diary/domain";
 import { okfFileKind, parseOkfFile } from "@mind-diary/okf-codec";
+import type { OkfDiagnostic } from "@mind-diary/okf-codec";
+import {
+  analyzeBundleFileReferences,
+  type BundleFileReferenceStatus,
+} from "./bundle-file-references.js";
 
 import {
   MindDiscoveryFailure,
@@ -47,6 +53,12 @@ const SHA256_PATTERN = /^sha256:[0-9a-f]{64}$/u;
 const CONTROL_CHARACTER = /[\u0000-\u001f\u007f]/u;
 const ENCODED_SEPARATOR = /%(?:2f|5c)/iu;
 const MAX_BROWSE_OBJECT_CONCURRENCY = 8;
+const INLINE_BUNDLE_FILE_MEDIA_TYPES = new Set<string>([
+  "image/png",
+  "image/jpeg",
+  "image/gif",
+  "image/webp",
+]);
 
 async function mapBounded<Input, Output>(
   values: readonly Input[],
@@ -126,9 +138,20 @@ export interface BrowseCursorLocatorPayload {
   readonly end: number;
 }
 
+export interface BundleFileListCursorLocatorPayload {
+  readonly version: 1;
+  readonly kind: "bundle_files";
+  readonly spaceId: SpaceId;
+  readonly revisionId: RevisionId;
+  readonly manifestHash: Sha256Digest;
+  readonly start: number;
+  readonly end: number;
+}
+
 export type MindLocatorPayload =
   | ExactEntryLocatorPayload
-  | BrowseCursorLocatorPayload;
+  | BrowseCursorLocatorPayload
+  | BundleFileListCursorLocatorPayload;
 
 /** Server-side opaque locator boundary. Decoding is never exposed to MCP clients. */
 export interface MindLocatorCodec {
@@ -281,6 +304,35 @@ function parseLocatorPayload(value: unknown): Readonly<MindLocatorPayload> | nul
       end: value.end as number,
     });
   }
+  if (value.kind === "bundle_files") {
+    if (
+      !hasExactKeys(value, [
+        "version",
+        "kind",
+        "spaceId",
+        "revisionId",
+        "manifestHash",
+        "start",
+        "end",
+      ]) ||
+      !validOpaqueIdentity(value.spaceId) ||
+      !validOpaqueIdentity(value.revisionId) ||
+      typeof value.manifestHash !== "string" ||
+      !SHA256_PATTERN.test(value.manifestHash) ||
+      !validRange(value.start, value.end, false)
+    ) {
+      return null;
+    }
+    return Object.freeze({
+      version: LOCATOR_VERSION,
+      kind: "bundle_files",
+      spaceId: value.spaceId as SpaceId,
+      revisionId: value.revisionId as RevisionId,
+      manifestHash: value.manifestHash as Sha256Digest,
+      start: value.start as number,
+      end: value.end as number,
+    });
+  }
   return null;
 }
 
@@ -401,6 +453,25 @@ export interface BrowseEntriesResult {
   readonly nextCursor: string | null;
 }
 
+export interface BundleFileDescriptor {
+  readonly path: string;
+  readonly kind: "opaque";
+  readonly mediaType: BundleFileMediaType;
+  readonly size: number;
+  readonly sha256: Sha256Digest;
+  readonly revisionId: RevisionId;
+  readonly inlineEligible: boolean;
+  readonly referenceStatus: BundleFileReferenceStatus;
+}
+
+export interface ListBundleFilesResult {
+  readonly mind: Readonly<MindDiscoveryDescriptor>;
+  readonly resolvedRevision: Readonly<MindDiscoveryRevisionDescriptor>;
+  readonly files: readonly Readonly<BundleFileDescriptor>[];
+  readonly diagnostics: readonly Readonly<OkfDiagnostic>[];
+  readonly nextCursor: string | null;
+}
+
 export interface FetchEntryRequest {
   readonly id: unknown;
   /** UTF-8 byte budget. The server never splits a Unicode scalar value. */
@@ -487,6 +558,40 @@ function normalizeBrowseQuery(value: unknown): Readonly<NormalizedBrowseQuery> {
     hasRevisionSelector: Object.hasOwn(value, "revisionSelector"),
     path,
     cursor,
+    limit: limit as number,
+  });
+}
+
+function normalizeBundleFileListQuery(value: unknown): Readonly<{
+  mind: unknown;
+  revisionSelector: unknown;
+  hasRevisionSelector: boolean;
+  cursor: string | null;
+  limit: number;
+}> {
+  if (!isRecord(value) || !("mind" in value)) {
+    throw new MindBrowseFailure("invalid_request", "BundleFile list request is invalid.");
+  }
+  const allowed = new Set(["mind", "revisionSelector", "cursor", "limit"]);
+  if (!Object.keys(value).every((key) => allowed.has(key))) {
+    throw new MindBrowseFailure("invalid_request", "BundleFile list request is invalid.");
+  }
+  const limit = value.limit ?? DEFAULT_BROWSE_LIMIT;
+  if (!Number.isSafeInteger(limit) || (limit as number) < 1 || (limit as number) > MAX_BROWSE_LIMIT) {
+    throw new MindBrowseFailure("invalid_limit", "BundleFile list limit is invalid.");
+  }
+  const cursor = value.cursor ?? null;
+  if (
+    cursor !== null &&
+    (typeof cursor !== "string" || cursor.length === 0 || cursor.length > MAX_LOCATOR_CHARACTERS)
+  ) {
+    throw new MindBrowseFailure("invalid_cursor", "BundleFile list cursor is invalid.");
+  }
+  return Object.freeze({
+    mind: value.mind,
+    revisionSelector: value.revisionSelector,
+    hasRevisionSelector: Object.hasOwn(value, "revisionSelector"),
+    cursor: cursor as string | null,
     limit: limit as number,
   });
 }
@@ -822,6 +927,130 @@ export class MindBrowseService {
       resolvedRevision: info.resolvedRevision,
       path: request.path,
       entries: summaries,
+      nextCursor,
+    });
+  }
+
+  async listBundleFiles(
+    actor: ActorContext,
+    query: unknown,
+  ): Promise<Readonly<ListBundleFilesResult>> {
+    const request = normalizeBundleFileListQuery(query);
+    let cursor: Readonly<BundleFileListCursorLocatorPayload> | null = null;
+    if (request.cursor !== null) {
+      const decoded = await this.#locators.decode(request.cursor);
+      if (decoded === null || decoded.kind !== "bundle_files") {
+        throw new MindBrowseFailure("invalid_cursor", "BundleFile list cursor is invalid.");
+      }
+      cursor = decoded;
+    }
+    const selector: unknown = cursor !== null && !request.hasRevisionSelector
+      ? ({ kind: "revision", revisionId: cursor.revisionId } satisfies MindRevisionSelector)
+      : request.revisionSelector;
+    let info;
+    try {
+      info = await this.#discovery.getMindInfo(actor, request.mind, selector);
+    } catch (error) {
+      if (cursor !== null && error instanceof MindDiscoveryFailure) {
+        throw new MindBrowseFailure("invalid_cursor", "BundleFile list cursor is invalid.");
+      }
+      mapDiscoveryFailure(error);
+    }
+    if (
+      cursor !== null &&
+      (cursor.spaceId !== info.mind.mindId || cursor.revisionId !== info.resolvedRevision.revisionId)
+    ) {
+      throw new MindBrowseFailure("invalid_cursor", "BundleFile list cursor is invalid.");
+    }
+    const initialAuthorization = await this.#requireAuthorization(
+      actor,
+      info.mind.mindId,
+      "content:browse",
+      info.revisionMode,
+      "mind_not_found",
+    );
+    const envelope = await this.#readVerifiedEnvelope(
+      info.mind.mindId,
+      info.resolvedRevision.revisionId,
+      "revision_not_found",
+    );
+    if (envelope.revision.manifestHash !== info.resolvedRevision.manifestHash) {
+      throw new MindBrowseFailure(
+        "revision_integrity_failure",
+        "The exact revision manifest failed integrity verification.",
+      );
+    }
+    const entries = envelope.manifest.entries.filter((entry) => entry.kind === "opaque");
+    const offset = cursor?.start ?? 0;
+    if (
+      cursor !== null &&
+      (cursor.manifestHash !== envelope.revision.manifestHash ||
+        cursor.end !== entries.length ||
+        offset >= entries.length)
+    ) {
+      throw new MindBrowseFailure("invalid_cursor", "BundleFile list cursor is invalid.");
+    }
+    const markdown = await mapBounded(
+      envelope.manifest.entries.filter((entry) => entry.kind === "markdown"),
+      MAX_BROWSE_OBJECT_CONCURRENCY,
+      async (entry) => {
+        const bytes = await this.#readVerifiedObject(entry);
+        try {
+          return Object.freeze({
+            path: entry.path,
+            text: new TextDecoder("utf-8", { fatal: true }).decode(bytes),
+          });
+        } catch {
+          throw new MindBrowseFailure(
+            "revision_integrity_failure",
+            "The exact revision Markdown failed UTF-8 verification.",
+          );
+        }
+      },
+    );
+    const references = analyzeBundleFileReferences({
+      markdown,
+      bundleFiles: entries.map((entry) => Object.freeze({
+        path: entry.path,
+        mediaType: entry.mediaType as BundleFileMediaType,
+      })),
+    });
+    const page = entries.slice(offset, offset + request.limit);
+    const files = page.map((entry) => Object.freeze({
+      path: entry.path,
+      kind: "opaque" as const,
+      mediaType: entry.mediaType as BundleFileMediaType,
+      size: entry.size,
+      sha256: entry.sha256,
+      revisionId: envelope.revision.revisionId,
+      inlineEligible: INLINE_BUNDLE_FILE_MEDIA_TYPES.has(entry.mediaType),
+      referenceStatus: references.statusByPath.get(entry.path) ?? "unreferenced",
+    }));
+    const nextOffset = offset + page.length;
+    const nextCursor = nextOffset < entries.length
+      ? await this.#locators.encode(Object.freeze({
+          version: LOCATOR_VERSION,
+          kind: "bundle_files",
+          spaceId: info.mind.mindId,
+          revisionId: info.resolvedRevision.revisionId,
+          manifestHash: envelope.revision.manifestHash,
+          start: nextOffset,
+          end: entries.length,
+        }))
+      : null;
+    await this.#requireSameAuthorization(
+      actor,
+      info.mind.mindId,
+      "content:browse",
+      info.revisionMode,
+      initialAuthorization,
+      "mind_not_found",
+    );
+    return Object.freeze({
+      mind: info.mind,
+      resolvedRevision: info.resolvedRevision,
+      files: Object.freeze(files),
+      diagnostics: references.diagnostics,
       nextCursor,
     });
   }

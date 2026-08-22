@@ -272,10 +272,12 @@ export interface BackgroundJob {
 export interface ExportArchiveRecord {
   /** Internal object-store locator. Safe status projections must omit it. */
   readonly objectKey: string;
-  readonly archiveFormat: "MD-OKF-ZIP-1";
+  readonly archiveFormat: "MD-OKF-ZIP-1" | "MD-BUNDLE-ZIP-1";
   readonly mediaType: "application/zip";
-  readonly filename: "mind-diary-okf-bundle.zip";
-  readonly contentDisposition: 'attachment; filename="mind-diary-okf-bundle.zip"';
+  readonly filename: "mind-diary-okf-bundle.zip" | "mind-diary-bundle.zip";
+  readonly contentDisposition:
+    | 'attachment; filename="mind-diary-okf-bundle.zip"'
+    | 'attachment; filename="mind-diary-bundle.zip"';
   readonly sha256: Sha256Digest;
   readonly size: number;
 }
@@ -285,6 +287,8 @@ export interface ExportJob {
   readonly requestedByPrincipalId: PrincipalId;
   readonly spaceId: SpaceId;
   readonly revisionId: RevisionId;
+  /** Missing only on legacy persisted snapshots and normalizes to MD-OKF-ZIP-1. */
+  readonly profile?: "MD-OKF-ZIP-1" | "MD-BUNDLE-ZIP-1";
   readonly idempotencyKey: IdempotencyKey;
   readonly state: JobState;
   readonly version: Version;
@@ -321,6 +325,29 @@ export interface ExportDownloadGrant {
   readonly createdAt: UtcInstant;
   readonly expiresAt: UtcInstant;
   readonly revokedAt: UtcInstant | null;
+}
+
+export type BundleFileDownloadGrantState = "active" | "consumed" | "expired";
+
+/**
+ * One-use exact-revision BundleFile bearer. The secret is response-only; only
+ * its verifier and the originating credential authority are durable.
+ */
+export interface BundleFileDownloadGrant {
+  readonly secretVerifier: ExportDownloadSecretVerifier;
+  readonly requestedByPrincipalId: PrincipalId;
+  readonly tokenId: TokenId;
+  readonly bindingOwnerId: MindBindingOwnerId;
+  readonly spaceId: SpaceId;
+  readonly revisionId: RevisionId;
+  readonly path: string;
+  readonly mediaType: "image/png" | "image/jpeg" | "image/gif" | "image/webp" | "application/pdf" | "application/zip";
+  readonly sha256: Sha256Digest;
+  readonly size: number;
+  readonly state: BundleFileDownloadGrantState;
+  readonly createdAt: UtcInstant;
+  readonly expiresAt: UtcInstant;
+  readonly consumedAt: UtcInstant | null;
 }
 
 /** Durable exact-revision state; it must never be inferred from current HEAD. */

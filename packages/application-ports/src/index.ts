@@ -23,6 +23,7 @@ import {
   type BackgroundJob,
   type BindingVersion,
   type BundleFileMediaType,
+  type BundleFileDownloadGrant,
   type Capability,
   type CanonicalRevisionEnvelope,
   type CanonicalSpaceHandle,
@@ -87,6 +88,7 @@ export type {
   JobId,
   ExportArchiveRecord,
   ExportDownloadGrant,
+  BundleFileDownloadGrant,
   ExportDownloadSecretVerifier,
   ExportJob,
   OutboxMessageId,
@@ -836,6 +838,7 @@ export interface OrdinaryMindDeletedRecordCounts {
   readonly backgroundJobs: number;
   readonly exportJobs: number;
   readonly exportDownloadGrants: number;
+  readonly bundleFileDownloadGrants: number;
   readonly indexStates: number;
   readonly auditEvents: number;
   readonly auditOutboxMessages: number;
@@ -1459,6 +1462,11 @@ export interface ExportArchiveWriteRequest {
   readonly claimVersion: Version;
   readonly bytes: Uint8Array;
   readonly sha256: Sha256Digest;
+  readonly archiveFormat?: "MD-OKF-ZIP-1" | "MD-BUNDLE-ZIP-1";
+  readonly filename?: "mind-diary-okf-bundle.zip" | "mind-diary-bundle.zip";
+  readonly contentDisposition?:
+    | 'attachment; filename="mind-diary-okf-bundle.zip"'
+    | 'attachment; filename="mind-diary-bundle.zip"';
   readonly createdAt: UtcInstant;
 }
 
@@ -1670,6 +1678,48 @@ export interface ExportDownloadGrantStore extends ExportJobStore {
     secretVerifier: ExportDownloadSecretVerifier,
     revokedAt: UtcInstant,
   ): Promise<boolean>;
+}
+
+export type CreateBundleFileDownloadGrantResult =
+  | { readonly kind: "created"; readonly grant: Readonly<BundleFileDownloadGrant> }
+  | { readonly kind: "secret_collision" | "invalid_grant" };
+
+export type ConsumeBundleFileDownloadGrantResult =
+  | { readonly kind: "consumed"; readonly grant: Readonly<BundleFileDownloadGrant> }
+  | { readonly kind: "not_found" | "expired" | "consumed" };
+
+export interface BundleFileDownloadGrantTransaction extends AuthorizationTransaction {
+  readRevision(
+    spaceId: SpaceId,
+    revisionId: RevisionId,
+  ): Promise<Readonly<CanonicalRevisionEnvelope> | null>;
+  readBundleFileDownloadGrant(
+    secretVerifier: ExportDownloadSecretVerifier,
+    now: UtcInstant,
+  ): Promise<ConsumeBundleFileDownloadGrantResult | { readonly kind: "active"; readonly grant: Readonly<BundleFileDownloadGrant> }>;
+  createBundleFileDownloadGrant(
+    grant: Readonly<BundleFileDownloadGrant>,
+  ): Promise<CreateBundleFileDownloadGrantResult>;
+  consumeBundleFileDownloadGrant(
+    secretVerifier: ExportDownloadSecretVerifier,
+    consumedAt: UtcInstant,
+  ): Promise<ConsumeBundleFileDownloadGrantResult>;
+}
+
+export interface BundleFileDownloadGrantStore
+  extends MetadataStore,
+    AuthorizationStateReader {
+  runBundleFileDownloadGrantTransaction<Result>(
+    operation: (transaction: BundleFileDownloadGrantTransaction) => Promise<Result>,
+  ): Promise<Result>;
+  readRevision(
+    spaceId: SpaceId,
+    revisionId: RevisionId,
+  ): Promise<Readonly<CanonicalRevisionEnvelope> | null>;
+  readBundleFileDownloadGrant(
+    secretVerifier: ExportDownloadSecretVerifier,
+    now: UtcInstant,
+  ): Promise<ConsumeBundleFileDownloadGrantResult | { readonly kind: "active"; readonly grant: Readonly<BundleFileDownloadGrant> }>;
 }
 
 /** Transactional revision metadata and HEAD; object bytes remain in ObjectStore. */
@@ -2919,6 +2969,8 @@ export const PRIVACY_SAFE_OBSERVABILITY_OPERATIONS = [
   "set_read_mind_binding",
   "set_write_mind_binding",
   "stage_bundle_file",
+  "list_bundle_files",
+  "get_bundle_file_download",
   "capture_knowledge",
   "start_export",
   "get_export_status",

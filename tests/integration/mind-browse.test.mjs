@@ -201,6 +201,61 @@ async function commitFiles(env, owner, mind, files, summary = "Seed browse fixtu
   return result.envelope.revision.revisionId;
 }
 
+async function commitMixedFiles(env, owner, mind, markdownFiles, opaqueFiles, summary) {
+  const expectedRevisionId = await env.metadata.readHead(mind.mindId);
+  const parent = await env.metadata.readRevision(mind.mindId, expectedRevisionId);
+  const markdownObjects = await Promise.all(markdownFiles.map((file) =>
+    env.objects.putImmutable({
+      bytes: encoder.encode(file.text),
+      mediaType: MARKDOWN_MEDIA_TYPE,
+      createdAt: CHANGED_AT,
+    })));
+  const opaqueObjects = await Promise.all(opaqueFiles.map((file) =>
+    env.objects.putBundleFile({
+      spaceId: mind.mindId,
+      bytes: file.bytes,
+      mediaType: file.mediaType,
+      createdAt: CHANGED_AT,
+    })));
+  const manifest = createRevisionManifest([
+    ...markdownFiles.map((file, index) => ({
+      kind: "markdown",
+      path: file.path,
+      sha256: markdownObjects[index].object.sha256,
+      mediaType: MARKDOWN_MEDIA_TYPE,
+      size: markdownObjects[index].object.size,
+    })),
+    ...opaqueFiles.map((file, index) => ({
+      kind: "opaque",
+      path: file.path,
+      sha256: opaqueObjects[index].object.sha256,
+      mediaType: file.mediaType,
+      size: opaqueObjects[index].object.size,
+    })),
+  ]);
+  const manifestHash = await env.objects.calculateSha256(
+    encoder.encode(serializeRevisionManifest(manifest)),
+  );
+  const revisionId = env.nextRevisionId();
+  const envelope = createCanonicalRevisionEnvelope({
+    revisionId,
+    spaceId: mind.mindId,
+    revisionNumber: parent.revision.revisionNumber + 1,
+    parentRevisionId: expectedRevisionId,
+    committedAt: CHANGED_AT,
+    committedBy: { kind: "principal", principalId: owner.principalId },
+    manifest,
+    manifestHash,
+    summary,
+  });
+  const result = await env.metadata.commitRevision({
+    expectedHeadRevisionId: expectedRevisionId,
+    envelope,
+  });
+  assert.equal(result.kind, "committed");
+  return revisionId;
+}
+
 function fixtureFiles(alphaBody = "PRIVATE_ALPHA_BODY", betaBody = "PRIVATE_BETA_BODY") {
   return [
     {
@@ -389,6 +444,90 @@ test("browse materializes a scaled page with bounded concurrency and determinist
   );
   assert.equal(env.observedObjects.reads(), 24);
   assert.equal(env.observedObjects.maxConcurrentReads(), 8);
+});
+
+test("BundleFile listing is metadata-only, paginated, and pinned to an exact historical revision", async () => {
+  const env = harness();
+  const owner = await createAccount(env, 1, "Bundle Browse Owner");
+  const mind = await createMind(env, owner, "bundle-browse");
+  const oldMarkdown = fixtureFiles().map((file) => file.path === "concepts/alpha.md"
+    ? { ...file, text: concept("Alpha", "![Diagram](../assets/a.png)") }
+    : file);
+  const oldRevision = await commitMixedFiles(
+    env,
+    owner,
+    mind,
+    oldMarkdown,
+    [
+      {
+        path: "assets/a.png",
+        mediaType: "image/png",
+        bytes: Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+      },
+      {
+        path: "assets/b.pdf",
+        mediaType: "application/pdf",
+        bytes: encoder.encode("%PDF-1.7\n"),
+      },
+    ],
+    "Add browsable BundleFiles",
+  );
+  env.observedObjects.reset();
+  const first = await env.browse.listBundleFiles(actor(owner.principalId), {
+    mind: mind.handle,
+    limit: 1,
+  });
+  assert.equal(first.resolvedRevision.revisionId, oldRevision);
+  assert.deepEqual(first.files.map((file) => ({
+    path: file.path,
+    inlineEligible: file.inlineEligible,
+    referenceStatus: file.referenceStatus,
+  })), [{
+    path: "assets/a.png",
+    inlineEligible: true,
+    referenceStatus: "referenced",
+  }]);
+  assert.ok(first.nextCursor);
+  assert.equal(env.observedObjects.reads(), oldMarkdown.length);
+  assert.doesNotMatch(JSON.stringify(first), /download|url|bytes/iu);
+
+  const currentRevision = await commitMixedFiles(
+    env,
+    owner,
+    mind,
+    fixtureFiles(),
+    [{
+      path: "assets/current.zip",
+      mediaType: "application/zip",
+      bytes: Uint8Array.from([0x50, 0x4b, 0x03, 0x04, 0x00, 0x00]),
+    }],
+    "Move HEAD after BundleFile cursor issuance",
+  );
+  const second = await env.browse.listBundleFiles(actor(owner.principalId), {
+    mind: mind.handle,
+    cursor: first.nextCursor,
+    limit: 1,
+  });
+  assert.equal(second.resolvedRevision.revisionId, oldRevision);
+  assert.deepEqual(second.files.map((file) => file.path), ["assets/b.pdf"]);
+  assert.equal(second.files[0].referenceStatus, "unreferenced");
+  assert.equal(second.nextCursor, null);
+
+  const historical = await env.browse.listBundleFiles(actor(owner.principalId), {
+    mind: mind.handle,
+    revisionSelector: { kind: "revision", revisionId: oldRevision },
+    limit: 10,
+  });
+  assert.deepEqual(historical.files.map((file) => file.path), [
+    "assets/a.png",
+    "assets/b.pdf",
+  ]);
+  const current = await env.browse.listBundleFiles(actor(owner.principalId), {
+    mind: mind.handle,
+    limit: 10,
+  });
+  assert.equal(current.resolvedRevision.revisionId, currentRevision);
+  assert.deepEqual(current.files.map((file) => file.path), ["assets/current.zip"]);
 });
 
 test("entry and continuation locators stay on one exact revision across a HEAD move", async () => {

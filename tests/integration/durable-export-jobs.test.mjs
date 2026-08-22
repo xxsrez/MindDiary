@@ -303,6 +303,41 @@ test("reconstructed worker builds the exact archive into object storage and stat
   assert.equal((await env.objects.listExportArchivesForTest()).length, 1);
 });
 
+test("explicit bundle export profile is durable and reaches the reconstructed worker", async () => {
+  const env = await harness();
+  const started = await env.application().start({
+    ...startRequest(env.actor, "bundle-export-profile"),
+    profile: "MD-BUNDLE-ZIP-1",
+  });
+  assert.equal(started.kind, "started");
+  assert.equal(
+    (await env.metadata.readExportJob(started.job.jobId)).profile,
+    "MD-BUNDLE-ZIP-1",
+  );
+  let observedRequest = null;
+  const observingBuilder = {
+    exportExactRevision: async (request) => {
+      observedRequest = request;
+      return env.builder.exportExactRevision(request);
+    },
+  };
+  assert.deepEqual(
+    await env.worker(observingBuilder).handle({
+      actor: workerActor(),
+      jobId: started.job.jobId,
+    }),
+    { kind: "completed" },
+  );
+  assert.equal(observedRequest.profile, "MD-BUNDLE-ZIP-1");
+  const status = await env.application().getStatus({
+    actor: env.actor,
+    jobId: started.job.jobId,
+  });
+  assert.equal(status.kind, "found");
+  assert.equal(status.job.archive.archiveFormat, "MD-BUNDLE-ZIP-1");
+  assert.equal(status.job.archive.filename, "mind-diary-bundle.zip");
+});
+
 test("job ID is only a locator: missing current access hides status and blocks the worker", async () => {
   const env = await harness();
   const started = await env.application().start(startRequest(env.actor));

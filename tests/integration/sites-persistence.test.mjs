@@ -1399,6 +1399,34 @@ test("R2 cleanup is lease-safe, restartable after failure, and export cleanup is
   const restarted = (await createSitesPersistenceBoundary({ database, bucket })).objects;
   assert.deepEqual(await restarted.readExportArchive(archive.archive.objectKey), archiveBytes);
   assert.equal(await restarted.deleteExportArchivesForJob("export_sites_restart"), 1);
+
+  const bundleRequest = {
+    jobId: "export_sites_bundle_restart",
+    spaceId: "space_sites_export",
+    claimVersion: 2,
+    bytes: archiveBytes,
+    sha256: archiveSha,
+    archiveFormat: "MD-BUNDLE-ZIP-1",
+    filename: "mind-diary-bundle.zip",
+    contentDisposition: 'attachment; filename="mind-diary-bundle.zip"',
+    createdAt: T4,
+  };
+  const bundleArchive = await restarted.putExportArchive(bundleRequest);
+  assert.equal(bundleArchive.kind, "stored");
+  assert.equal(bundleArchive.archive.archiveFormat, "MD-BUNDLE-ZIP-1");
+  const bundleRestart = (await createSitesPersistenceBoundary({ database, bucket })).objects;
+  const bundleReplay = await bundleRestart.putExportArchive(bundleRequest);
+  assert.equal(bundleReplay.kind, "already_exists");
+  assert.equal(bundleReplay.archive.filename, "mind-diary-bundle.zip");
+  await assert.rejects(
+    bundleRestart.putExportArchive({
+      ...bundleRequest,
+      jobId: "export_sites_invalid_profile",
+      archiveFormat: "MD-UNKNOWN-ZIP-1",
+    }),
+    /export profile metadata is invalid/u,
+  );
+  assert.equal(await bundleRestart.deleteExportArchivesForJob(bundleRequest.jobId), 1);
 });
 
 async function runSearchContract(name, factory) {

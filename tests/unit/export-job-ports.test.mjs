@@ -116,7 +116,18 @@ test("export archives use claim-scoped immutable keys and job cleanup is repeata
     (await objects.putExportArchive({ ...request, claimVersion: version(3) })).kind,
     "stored",
   );
-  assert.equal((await objects.listExportArchivesForTest()).length, 2);
+  const bundle = await objects.putExportArchive({
+    ...request,
+    jobId: "export_job_bundle_ports",
+    archiveFormat: "MD-BUNDLE-ZIP-1",
+    filename: "mind-diary-bundle.zip",
+    contentDisposition: 'attachment; filename="mind-diary-bundle.zip"',
+  });
+  assert.equal(bundle.kind, "stored");
+  assert.equal(bundle.archive.archiveFormat, "MD-BUNDLE-ZIP-1");
+  assert.equal(bundle.archive.filename, "mind-diary-bundle.zip");
+  assert.equal((await objects.listExportArchivesForTest()).length, 3);
   assert.equal(await objects.deleteExportArchivesForJob(request.jobId), 2);
   assert.equal(await objects.deleteExportArchivesForJob(request.jobId), 0);
+  assert.equal(await objects.deleteExportArchivesForJob("export_job_bundle_ports"), 1);
 });

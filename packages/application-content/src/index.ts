@@ -46,6 +46,8 @@ export * from "./mind-bindings.js";
 export * from "./automatic-capture.js";
 export * from "./mind-search.js";
 export * from "./mind-validation.js";
+export * from "./bundle-file-references.js";
+export * from "./bundle-file-downloads.js";
 
 export const CONTENT_QUERIES = [
   "list_minds",
@@ -58,6 +60,7 @@ export const CONTENT_QUERIES = [
   "list_revisions",
   "get_revision",
   "validate_revision",
+  "list_bundle_files",
   "get_export_status",
 ] as const;
 
@@ -65,6 +68,7 @@ export const CONTENT_COMMANDS = [
   "set_read_mind_binding",
   "set_write_mind_binding",
   "stage_bundle_file",
+  "get_bundle_file_download",
   "capture_knowledge",
   "commit_changeset",
   "start_export",
@@ -95,6 +99,8 @@ export type McpPerformanceTool =
   | "list_revisions"
   | "get_revision"
   | "validate_mind"
+  | "list_bundle_files"
+  | "get_bundle_file_download"
   | "set_read_mind_binding"
   | "set_write_mind_binding"
   | "stage_bundle_file"

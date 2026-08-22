@@ -37,8 +37,10 @@ function modernMeta() {
 }
 
 test("publishes strict native-file staging metadata and mixed commit operations", () => {
-  assert.equal(MCP_BUNDLE_FILE_TOOL_DEFINITIONS.length, 1);
-  const stage = MCP_BUNDLE_FILE_TOOL_DEFINITIONS[0];
+  assert.equal(MCP_BUNDLE_FILE_TOOL_DEFINITIONS.length, 2);
+  const stage = MCP_BUNDLE_FILE_TOOL_DEFINITIONS.find(
+    ({ name }) => name === "stage_bundle_file",
+  );
   assert.equal(stage.name, "stage_bundle_file");
   assert.deepEqual(stage.inputSchema.required, [
     "mind",
@@ -58,6 +60,22 @@ test("publishes strict native-file staging metadata and mixed commit operations"
   });
   const serialized = JSON.stringify(stage.outputSchema);
   assert.doesNotMatch(serialized, /file_id|download_url|bytes|local_path|base64/iu);
+
+  const download = MCP_BUNDLE_FILE_TOOL_DEFINITIONS.find(
+    ({ name }) => name === "get_bundle_file_download",
+  );
+  assert.deepEqual(download.inputSchema.required, ["mind", "path"]);
+  assert.equal(download.inputSchema.additionalProperties, false);
+  assert.deepEqual(download.securitySchemes, [{ type: "oauth2", scopes: ["content:read"] }]);
+  assert.deepEqual(download.annotations, {
+    readOnlyHint: false,
+    destructiveHint: false,
+    openWorldHint: true,
+  });
+  assert.doesNotMatch(
+    JSON.stringify(download.outputSchema.properties.data.properties.file),
+    /bytes|provider|object_key/iu,
+  );
 
   const commit = MCP_TOOL_DEFINITIONS.find(({ name }) => name === "commit_changeset");
   assert.deepEqual(
@@ -152,6 +170,8 @@ test("bounded native transport validates every redirect host and never exposes p
 
 test("product adapter terminates provider metadata and returns only verified staged metadata", async () => {
   let portableRequest = null;
+  let listRequest = null;
+  let downloadRequest = null;
   const application = new ProductMcpContentApplication({
     discovery: {
       async listMinds() { return {}; },
@@ -211,7 +231,49 @@ test("product adapter terminates provider metadata and returns only verified sta
         };
       },
     },
-    browse: {}, search: {}, history: {}, validation: {}, commits: {}, capture: {}, exports: {},
+    browse: {
+      async listBundleFiles(_actor, input) {
+        listRequest = input;
+        return {
+          mind: { mindId: "space_bundle_stage", name: "Bundle stage" },
+          resolvedRevision: { revisionId: "revision_exact" },
+          files: [{
+            path: "assets/diagram.png",
+            kind: "opaque",
+            mediaType: "image/png",
+            size: PNG.byteLength,
+            sha256: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            revisionId: "revision_exact",
+            inlineEligible: true,
+            referenceStatus: "referenced",
+          }],
+          diagnostics: [],
+          nextCursor: null,
+        };
+      },
+    },
+    bundleFileDownloads: {
+      async issue(_actor, input) {
+        downloadRequest = input;
+        return {
+          mind: { mindId: "space_bundle_stage", name: "Bundle stage" },
+          resolvedRevision: { revisionId: "revision_exact" },
+          file: {
+            path: "assets/diagram.png",
+            kind: "opaque",
+            mediaType: "image/png",
+            size: PNG.byteLength,
+            sha256: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            revisionId: "revision_exact",
+            inlineEligible: true,
+          },
+          downloadUrl: "https://mind-diary.invalid/api/bundle-download/one-use-secret",
+          downloadExpiresAt: "2026-08-22T12:05:00.000Z",
+          disposition: "inline",
+        };
+      },
+    },
+    search: {}, history: {}, validation: {}, commits: {}, capture: {}, exports: {},
   });
   const result = await application.executeToolCall({
     actor: ACTOR,
@@ -235,6 +297,49 @@ test("product adapter terminates provider metadata and returns only verified sta
   assert.equal("file" in portableRequest, false);
   const serialized = JSON.stringify(result);
   assert.doesNotMatch(serialized, /provider-secret|temporary-secret|download_url|file_id|137,80,78,71/iu);
+
+  const listed = await application.executeToolCall({
+    actor: ACTOR,
+    name: "list_bundle_files",
+    arguments: {
+      mind: "bundle-stage",
+      revision_selector: { kind: "revision", revision_id: "revision_exact" },
+      limit: 10,
+    },
+  });
+  assert.deepEqual(listRequest, {
+    mind: "bundle-stage",
+    revisionSelector: { kind: "revision", revisionId: "revision_exact" },
+    limit: 10,
+  });
+  assert.equal(listed.files[0].media_type, "image/png");
+  assert.equal(listed.files[0].reference_status, "referenced");
+  assert.doesNotMatch(JSON.stringify(listed), /download_url|bytes|provider/iu);
+
+  const download = await application.executeToolCall({
+    actor: ACTOR,
+    name: "get_bundle_file_download",
+    arguments: {
+      mind: "bundle-stage",
+      revision_selector: { kind: "revision", revision_id: "revision_exact" },
+      path: "assets/diagram.png",
+    },
+  });
+  assert.deepEqual(downloadRequest, {
+    mind: "bundle-stage",
+    revisionSelector: { kind: "revision", revisionId: "revision_exact" },
+    path: "assets/diagram.png",
+  });
+  assert.equal(download.isError, false);
+  assert.match(
+    download.structuredContent.data.download_url,
+    /\/api\/bundle-download\/one-use-secret$/u,
+  );
+  assert.equal(download.structuredContent.data.file.inline_eligible, true);
+  assert.doesNotMatch(
+    JSON.stringify(download.structuredContent.data.file),
+    /bytes|provider|object_key/iu,
+  );
 });
 
 test("read-only catalog omits native staging and direct calls fail before execution", async () => {

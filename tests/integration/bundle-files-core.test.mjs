@@ -6,7 +6,9 @@ import { InMemoryObjectStore } from "@mind-diary/adapter-object-memory";
 import { InMemoryExactRevisionSearchIndex } from "@mind-diary/adapter-search-memory";
 import { createSitesMetadataStore } from "@mind-diary/adapter-metadata-sites";
 import { createSitesObjectStore } from "@mind-diary/adapter-object-sites";
+import { createWebCryptoExportDownloadSecretCrypto } from "@mind-diary/adapter-security-webcrypto";
 import {
+  BundleFileDownloadService,
   BundleFileStagingService,
   CanonicalRevisionCoordinator,
   ChangesetCommitService,
@@ -19,9 +21,11 @@ import {
   REVISION_MANIFEST_FORMAT_V1,
   REVISION_MANIFEST_FORMAT_V2,
   bindingVersion,
+  createCanonicalRevisionEnvelope,
   createRevisionManifest,
   serializeRevisionManifest,
   version,
+  verifiedSpaceHost,
 } from "@mind-diary/domain";
 import {
   CANONICAL_REVISION_FILES,
@@ -340,6 +344,341 @@ test("staging rejects spoofed types and atomically consumes a binding-pinned ref
   );
 });
 
+test("Markdown BundleFile references validate the atomic resulting revision", async () => {
+  const env = await harness();
+  const staged = await env.staging.stage({
+    actor: env.currentActor,
+    spaceId: MINDS.ordinary.spaceId,
+    writeBindingId: WRITE_BINDING_ID,
+    displayFilename: "diagram.png",
+    claimedMediaType: "image/png",
+    bytes: PNG,
+    idempotencyKey: "stage-reference-diagram",
+  });
+  assert.equal(staged.kind, "staged");
+  const revisionIds = [
+    "revision_bundle_reference",
+    "revision_bundle_reference_invalid",
+    "revision_bundle_reference_removed",
+  ];
+  const commits = new ChangesetCommitService({
+    authorizer: env.authorizer,
+    metadata: env.metadata,
+    revisions: env.revisions,
+    objects: env.objects,
+    clock: { now: () => LATER },
+    revisionIds: { nextRevisionId: () => revisionIds.shift() },
+  });
+  const linkedText = [
+    "---",
+    "type: Reference",
+    "title: Diagram reference",
+    "---",
+    "",
+    "# Diagram reference",
+    "",
+    "![Diagram](../assets/diagram.png)",
+    "",
+  ].join("\n");
+  const created = await commits.commit({
+    actor: env.currentActor,
+    spaceId: MINDS.ordinary.spaceId,
+    writeBindingId: WRITE_BINDING_ID,
+    expectedRevisionId: REVISIONS.initial.revisionId,
+    idempotencyKey: "commit-bundle-reference",
+    summary: "Add linked diagram atomically",
+    operations: [
+      {
+        type: "create_bundle_file",
+        path: "assets/diagram.png",
+        staged_file_id: staged.record.stagedFileId,
+      },
+      {
+        type: "create_file",
+        path: "concepts/diagram-reference.md",
+        text: linkedText,
+      },
+    ],
+  });
+  assert.equal(created.kind, "committed");
+
+  const invalidDelete = await commits.commit({
+    actor: env.currentActor,
+    spaceId: MINDS.ordinary.spaceId,
+    writeBindingId: WRITE_BINDING_ID,
+    expectedRevisionId: created.envelope.revision.revisionId,
+    idempotencyKey: "delete-still-referenced-bundle-file",
+    summary: "Must not leave a dangling reference",
+    operations: [{ type: "delete_bundle_file", path: "assets/diagram.png" }],
+  });
+  assert.equal(invalidDelete.kind, "invalid");
+  assert.equal(invalidDelete.error.code, "okf_validation_failed");
+  assert.ok(invalidDelete.error.diagnostics.some(
+    (issue) => issue.code === "bundle_file_reference_missing",
+  ));
+  assert.equal(
+    await env.metadata.readHead(MINDS.ordinary.spaceId),
+    created.envelope.revision.revisionId,
+  );
+
+  const removed = await commits.commit({
+    actor: env.currentActor,
+    spaceId: MINDS.ordinary.spaceId,
+    writeBindingId: WRITE_BINDING_ID,
+    expectedRevisionId: created.envelope.revision.revisionId,
+    idempotencyKey: "remove-bundle-reference-and-file",
+    summary: "Remove diagram and its reference atomically",
+    operations: [
+      { type: "delete_bundle_file", path: "assets/diagram.png" },
+      {
+        type: "replace_file",
+        path: "concepts/diagram-reference.md",
+        text: linkedText.replace("![Diagram](../assets/diagram.png)", "Diagram removed."),
+      },
+    ],
+  });
+  assert.equal(removed.kind, "committed");
+  assert.equal(
+    removed.envelope.manifest.entries.some((entry) => entry.kind === "opaque"),
+    false,
+  );
+});
+
+test("BundleFile download grants are exact-revision and atomically one-use", async () => {
+  const env = await harness();
+  const stagedFiles = [];
+  for (const [path, mediaType, bytes] of [
+    ["assets/diagram.png", "image/png", PNG],
+    ["assets/справка.pdf", "application/pdf", PDF],
+    ["assets/archive.zip", "application/zip", ZIP],
+  ]) {
+    const staged = await env.staging.stage({
+      actor: env.currentActor,
+      spaceId: MINDS.ordinary.spaceId,
+      writeBindingId: WRITE_BINDING_ID,
+      displayFilename: path.split("/").at(-1),
+      claimedMediaType: mediaType,
+      bytes,
+      idempotencyKey: `stage-download-${path}`,
+    });
+    assert.equal(staged.kind, "staged");
+    stagedFiles.push({ path, staged });
+  }
+  const commits = new ChangesetCommitService({
+    authorizer: env.authorizer,
+    metadata: env.metadata,
+    revisions: env.revisions,
+    objects: env.objects,
+    clock: { now: () => LATER },
+    revisionIds: { nextRevisionId: () => REVISIONS.next.revisionId },
+  });
+  const committed = await commits.commit({
+    actor: env.currentActor,
+    spaceId: MINDS.ordinary.spaceId,
+    writeBindingId: WRITE_BINDING_ID,
+    expectedRevisionId: REVISIONS.initial.revisionId,
+    idempotencyKey: "commit-download-diagram",
+    summary: "Add exact download diagram",
+    operations: stagedFiles.map(({ path, staged }) => ({
+      type: "create_bundle_file",
+      path,
+      staged_file_id: staged.record.stagedFileId,
+    })),
+  });
+  assert.equal(committed.kind, "committed");
+
+  const crypto = await createWebCryptoExportDownloadSecretCrypto({
+    verifierKey: new Uint8Array(32).fill(23),
+  });
+  const discoveryStore = new Proxy(env.metadata, {
+    get(target, property) {
+      if (property === "readResolvedSpace") {
+        return async (spaceId) => spaceId === MINDS.ordinary.spaceId
+          ? {
+              host: verifiedSpaceHost("mind-diary.test"),
+              canonicalHandle: "bundle-downloads",
+              space: {
+                spaceId,
+                spaceHandle: "bundle-downloads",
+                normalizedHandle: "bundle-downloads",
+                name: "Bundle downloads",
+                visibility: "private",
+                state: "active",
+                metadataVersion: version(1),
+                accessVersion: version(1),
+                headRevisionId: REVISIONS.next.revisionId,
+                createdAt: FIXED_NOW,
+                updatedAt: LATER,
+              },
+            }
+          : null;
+      }
+      const value = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  const issueDirectGrant = async (entry) => {
+    const issued = await crypto.issueSecret();
+    const created = await env.metadata.runBundleFileDownloadGrantTransaction(
+      (transaction) => transaction.createBundleFileDownloadGrant({
+        secretVerifier: issued.verifier(),
+        requestedByPrincipalId: env.currentActor.principalId,
+        tokenId: TOKEN_ID,
+        bindingOwnerId: BINDING_OWNER_ID,
+        spaceId: MINDS.ordinary.spaceId,
+        revisionId: REVISIONS.next.revisionId,
+        path: entry.path,
+        mediaType: entry.mediaType,
+        sha256: entry.sha256,
+        size: entry.size,
+        state: "active",
+        createdAt: LATER,
+        expiresAt: "2026-08-05T13:05:00.000Z",
+        consumedAt: null,
+      }),
+    );
+    assert.equal(created.kind, "created");
+    return issued.consumeSecret();
+  };
+  const service = new BundleFileDownloadService({
+    store: discoveryStore,
+    objects: env.objects,
+    authorizer: env.authorizer,
+    host: verifiedSpaceHost("mind-diary.test"),
+    clock: { now: () => LATER },
+    secrets: crypto,
+    downloadUrlBase: "https://mind-diary.test/api/bundle-download",
+  });
+  const serviceActor = {
+    kind: "service",
+    serviceId: "bundle-download-test",
+    deploymentCapabilities: CAPABILITIES,
+    requestId: "request_bundle_download",
+    occurredAtUtc: LATER,
+  };
+  const authorizationKey = {
+    principalId: env.currentActor.principalId,
+    spaceId: MINDS.ordinary.spaceId,
+    tokenId: TOKEN_ID,
+  };
+  env.metadata.setCurrentAuthorizationStateForTest(authorizationKey, {
+    ...authorizationState(),
+    token: {
+      ...authorizationState().token,
+      expiresAt: "2026-08-06T12:01:00.000Z",
+    },
+  });
+  const issuingService = new BundleFileDownloadService({
+    store: discoveryStore,
+    objects: env.objects,
+    authorizer: env.authorizer,
+    host: verifiedSpaceHost("mind-diary.test"),
+    clock: { now: () => FIXED_NOW },
+    secrets: crypto,
+    downloadUrlBase: "https://mind-diary.test/api/bundle-download",
+  });
+  const issuedByApplication = await issuingService.issue(env.currentActor, {
+    mind: MINDS.ordinary.spaceId,
+    revisionSelector: { kind: "revision", revisionId: REVISIONS.next.revisionId },
+    path: "assets/diagram.png",
+  });
+  assert.equal(issuedByApplication.downloadExpiresAt, "2026-08-06T12:01:00.000Z");
+  assert.doesNotMatch(JSON.stringify(issuedByApplication.file), /bytes|url|provider/iu);
+  const applicationSecret = new URL(issuedByApplication.downloadUrl).pathname.split("/").at(-1);
+  const applicationDownload = await issuingService.download(serviceActor, applicationSecret);
+  assert.equal(applicationDownload.kind, "download");
+  assert.deepEqual(applicationDownload.bytes, PNG);
+  env.metadata.setCurrentAuthorizationStateForTest(authorizationKey, authorizationState());
+
+  const pngEntry = committed.envelope.manifest.entries.find(
+    (candidate) => candidate.path === "assets/diagram.png",
+  );
+  const secret = await issueDirectGrant(pngEntry);
+  const results = await Promise.all([
+    service.download(serviceActor, secret),
+    service.download(serviceActor, secret),
+  ]);
+  const download = results.find((result) => result.kind === "download");
+  assert.equal(results.filter((result) => result.kind === "download").length, 1);
+  assert.equal(results.filter((result) => result.kind === "not_found").length, 1);
+  assert.deepEqual(download.bytes, PNG);
+  assert.equal(download.headers["Content-Type"], "image/png");
+  assert.equal(download.headers["Content-Length"], String(PNG.byteLength));
+  assert.equal(download.headers["Cache-Control"], "no-store");
+  assert.equal(download.headers["Cross-Origin-Resource-Policy"], "same-origin");
+  assert.match(download.headers["Content-Disposition"], /^inline;/u);
+  assert.equal(download.headers["Content-Security-Policy"], "sandbox");
+
+  for (const [path, expectedBytes] of [
+    ["assets/справка.pdf", PDF],
+    ["assets/archive.zip", ZIP],
+  ]) {
+    const entry = committed.envelope.manifest.entries.find(
+      (candidate) => candidate.path === path,
+    );
+    const result = await service.download(serviceActor, await issueDirectGrant(entry));
+    assert.equal(result.kind, "download");
+    assert.deepEqual(result.bytes, expectedBytes);
+    assert.match(result.headers["Content-Disposition"], /^attachment;/u);
+    assert.doesNotMatch(result.headers["Content-Disposition"], /\r|\n/u);
+    if (path.includes("справка")) {
+      assert.match(result.headers["Content-Disposition"], /filename\*=UTF-8''/u);
+      assert.doesNotMatch(result.headers["Content-Disposition"], /справка/u);
+    }
+  }
+
+  const revokedSecret = await issueDirectGrant(pngEntry);
+  env.metadata.setCurrentAuthorizationStateForTest(authorizationKey, {
+    ...authorizationState(),
+    token: { ...authorizationState().token, state: "revoked" },
+  });
+  assert.deepEqual(
+    await service.download(serviceActor, revokedSecret),
+    { kind: "not_found" },
+  );
+
+  env.metadata.setCurrentAuthorizationStateForTest(authorizationKey, authorizationState());
+  const unauthorizedSecret = await issueDirectGrant(pngEntry);
+  env.metadata.setCurrentAuthorizationStateForTest(authorizationKey, {
+    ...authorizationState(),
+    membership: null,
+  });
+  assert.deepEqual(
+    await service.download(serviceActor, unauthorizedSecret),
+    { kind: "not_found" },
+  );
+
+  env.metadata.setCurrentAuthorizationStateForTest(authorizationKey, authorizationState());
+  const expiredSecret = await issueDirectGrant(pngEntry);
+  const expiredService = new BundleFileDownloadService({
+    store: env.metadata,
+    objects: env.objects,
+    authorizer: env.authorizer,
+    host: verifiedSpaceHost("mind-diary.test"),
+    clock: { now: () => "2026-08-05T13:06:00.000Z" },
+    secrets: crypto,
+    downloadUrlBase: "https://mind-diary.test/api/bundle-download",
+  });
+  assert.deepEqual(
+    await expiredService.download(serviceActor, expiredSecret),
+    { kind: "not_found" },
+  );
+
+  const deletedSecret = await issueDirectGrant(pngEntry);
+  assert.equal(
+    (await env.metadata.listBundleFileDownloadGrantsForTest()).filter(
+      (grant) => grant.state === "consumed",
+    ).length,
+    4,
+  );
+  await env.metadata.purgeSpaceTargetRecords(MINDS.ordinary.spaceId);
+  assert.deepEqual(await env.metadata.listBundleFileDownloadGrantsForTest(), []);
+  assert.deepEqual(
+    await service.download(serviceActor, deletedSecret),
+    { kind: "not_found" },
+  );
+});
+
 test("staging verifies image, PDF and ZIP metadata and fails closed on foreign or expired reuse", async () => {
   const env = await harness();
   for (const [name, mediaType, bytes] of [
@@ -560,4 +899,72 @@ test("opaque canonical dedupe is isolated by Space and Sites reconstructs staged
   );
   assert.equal(replay.kind, "replay");
   assert.equal(replay.record.result.stagedFileId, record.stagedFileId);
+
+  const bundleManifest = createRevisionManifest([{
+    kind: "opaque",
+    path: "assets/diagram.png",
+    sha256: sitesPut.object.sha256,
+    mediaType: "image/png",
+    size: PNG.byteLength,
+  }]);
+  const bundleManifestHash = await sitesObjects.calculateSha256(
+    new TextEncoder().encode(serializeRevisionManifest(bundleManifest)),
+  );
+  const bundleEnvelope = createCanonicalRevisionEnvelope({
+    revisionId: "revision_sites_bundle_download",
+    spaceId: "space_sites",
+    revisionNumber: 1,
+    parentRevisionId: null,
+    committedAt: FIXED_NOW,
+    committedBy: REVISION_AUTHORS.active,
+    manifest: bundleManifest,
+    manifestHash: bundleManifestHash,
+    summary: "Sites durable BundleFile download",
+  });
+  assert.equal((await restarted.commitRevision({
+    expectedHeadRevisionId: null,
+    envelope: bundleEnvelope,
+  })).kind, "committed");
+  const secretVerifier = `hmac-sha256:export-download:v1:${"7".repeat(64)}`;
+  const grant = {
+    secretVerifier,
+    requestedByPrincipalId: PRINCIPALS.editor.principalId,
+    tokenId: TOKEN_ID,
+    bindingOwnerId: BINDING_OWNER_ID,
+    spaceId: "space_sites",
+    revisionId: bundleEnvelope.revision.revisionId,
+    path: "assets/diagram.png",
+    mediaType: "image/png",
+    sha256: sitesPut.object.sha256,
+    size: PNG.byteLength,
+    state: "active",
+    createdAt: FIXED_NOW,
+    expiresAt: EXPIRY,
+    consumedAt: null,
+  };
+  assert.equal((await restarted.runBundleFileDownloadGrantTransaction(
+    (transaction) => transaction.createBundleFileDownloadGrant(grant),
+  )).kind, "created");
+  const afterGrantRestart = await createSitesMetadataStore(database);
+  const activeGrant = await afterGrantRestart.readBundleFileDownloadGrant(
+    secretVerifier,
+    FIXED_NOW,
+  );
+  assert.equal(activeGrant.kind, "active");
+  assert.deepEqual(activeGrant.grant, grant);
+
+  const competingRestart = await createSitesMetadataStore(database);
+  const consumed = await Promise.all([
+    afterGrantRestart.runBundleFileDownloadGrantTransaction((transaction) =>
+      transaction.consumeBundleFileDownloadGrant(secretVerifier, LATER)),
+    competingRestart.runBundleFileDownloadGrantTransaction((transaction) =>
+      transaction.consumeBundleFileDownloadGrant(secretVerifier, LATER)),
+  ]);
+  assert.equal(consumed.every((result) => result.kind === "consumed"), true);
+  assert.equal(consumed.filter((result) => "grant" in result).length, 1);
+  const finalRestart = await createSitesMetadataStore(database);
+  assert.deepEqual(
+    await finalRestart.readBundleFileDownloadGrant(secretVerifier, LATER),
+    { kind: "consumed" },
+  );
 });

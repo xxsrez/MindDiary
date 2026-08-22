@@ -10,6 +10,7 @@ import {
 import {
   MARKDOWN_MEDIA_TYPE,
   serializeRevisionManifest,
+  type BundleFileMediaType,
   type RevisionMode,
   type SpaceId,
   type VerifiedSpaceHost,
@@ -28,6 +29,7 @@ import {
   type MindDiscoveryRevisionDescriptor,
   type MindDiscoveryStore,
 } from "./mind-discovery.js";
+import { analyzeBundleFileReferences } from "./bundle-file-references.js";
 
 export const VALIDATION_ISSUE_LIMIT = 100;
 export const VALIDATION_RESPONSE_BYTE_BUDGET = 64 * 1024;
@@ -327,6 +329,8 @@ export class MindValidationService {
     }
 
     const sources: { readonly path: string; readonly bytes: Uint8Array }[] = [];
+    const referenceMarkdown: { readonly path: string; readonly text: string }[] = [];
+    const bundleFiles: { readonly path: string; readonly mediaType: BundleFileMediaType }[] = [];
     for (const entry of envelope.manifest.entries) {
       await this.#requireSameValidationAuthorization(
         actor,
@@ -374,6 +378,19 @@ export class MindValidationService {
       }
       if (entry.kind === "markdown") {
         sources.push(Object.freeze({ path: entry.path, bytes }));
+        try {
+          referenceMarkdown.push(Object.freeze({
+            path: entry.path,
+            text: new TextDecoder("utf-8", { fatal: true }).decode(bytes),
+          }));
+        } catch {
+          // The OKF validator reports invalid UTF-8 through its normal envelope.
+        }
+      } else {
+        bundleFiles.push(Object.freeze({
+          path: entry.path,
+          mediaType: entry.mediaType as BundleFileMediaType,
+        }));
       }
     }
     await this.#requireSameValidationAuthorization(
@@ -383,26 +400,41 @@ export class MindValidationService {
       initialAuthorization,
     );
 
-    const validation = validateOkfBundle(sources);
+    const okfValidation = validateOkfBundle(sources);
+    const referenceAnalysis = analyzeBundleFileReferences({
+      markdown: referenceMarkdown,
+      bundleFiles,
+    });
+    const referenceErrors = referenceAnalysis.diagnostics.filter(
+      (diagnostic) => diagnostic.severity === "error",
+    );
+    const referenceWarnings = referenceAnalysis.diagnostics.filter(
+      (diagnostic) => diagnostic.severity === "warning",
+    );
     const allErrors = Object.freeze([
-      ...validation.conformanceErrors,
-      ...validation.envelopeErrors,
+      ...okfValidation.conformanceErrors,
+      ...okfValidation.envelopeErrors,
+      ...referenceErrors,
     ]);
-    const bounded = boundedIssues(allErrors, validation.qualityWarnings);
+    const allWarnings = Object.freeze([
+      ...okfValidation.qualityWarnings,
+      ...referenceWarnings,
+    ]);
+    const bounded = boundedIssues(allErrors, allWarnings);
     return Object.freeze({
       mind: info.mind,
       resolvedRevision: info.resolvedRevision,
       revisionMode: info.revisionMode,
       readOnly: true,
-      valid: validation.valid,
+      valid: okfValidation.valid && referenceErrors.length === 0,
       conformanceErrors: bounded.conformanceErrors,
       qualityWarnings: bounded.qualityWarnings,
       issueCounts: Object.freeze({
         conformanceErrors: allErrors.length,
-        qualityWarnings: validation.qualityWarnings.length,
+        qualityWarnings: allWarnings.length,
       }),
       issuesTruncated: bounded.issuesTruncated,
-      validatedOkfVersion: validation.version,
+      validatedOkfVersion: okfValidation.version,
     });
   }
 

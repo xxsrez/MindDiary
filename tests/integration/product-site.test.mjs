@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  createProductBundleFileDownloadHttpHandler,
   createProductExportDownloadHttpHandler,
   createProductWebHttpHandler,
   resolveProductSitesIdentity,
@@ -978,6 +979,52 @@ test("opaque export download route returns exact authorized bytes and generic mi
   const wrongMethod = await handler(new Request(`${origin}/api/v1/exports/mdg_v1_valid`, { method: "POST" }));
   assert.equal(wrongMethod.status, 404);
   assert.deepEqual(seen, ["mdg_v1_valid", "mdg_v1_missing"]);
+});
+
+test("one-use BundleFile route serves exact headers and hides malformed or ranged requests", async () => {
+  const seen = [];
+  const handler = createProductBundleFileDownloadHttpHandler({
+    async download(secret) {
+      seen.push(secret);
+      if (secret === "mdg_v1_throw") throw new Error("private download failure");
+      return secret === "mdg_v1_valid"
+        ? {
+            kind: "download",
+            headers: {
+              "Content-Type": "image/png",
+              "Content-Length": "3",
+              "Content-Disposition": "inline; filename=\"image.png\"; filename*=UTF-8''image.png",
+              "Cache-Control": "no-store",
+              "X-Content-Type-Options": "nosniff",
+            },
+            bytes: Uint8Array.from([1, 2, 3]),
+          }
+        : { kind: "not_found" };
+    },
+  });
+  assert.equal(await handler(new Request(`${origin}/api/other`)), null);
+  const found = await handler(new Request(`${origin}/api/bundle-download/mdg_v1_valid`));
+  assert.equal(found.status, 200);
+  assert.equal(found.headers.get("content-type"), "image/png");
+  assert.equal(found.headers.get("content-disposition"),
+    "inline; filename=\"image.png\"; filename*=UTF-8''image.png");
+  assert.deepEqual(new Uint8Array(await found.arrayBuffer()), Uint8Array.from([1, 2, 3]));
+
+  for (const request of [
+    new Request(`${origin}/api/bundle-download/mdg_v1_missing`),
+    new Request(`${origin}/api/bundle-download/mdg_v1_valid`, {
+      headers: { range: "bytes=0-1" },
+    }),
+    new Request(`${origin}/api/bundle-download/mdg_v1_valid`, { method: "POST" }),
+    new Request(`${origin}/api/bundle-download/mdg_v1_%2Fescape`),
+    new Request(`${origin}/api/bundle-download/mdg_v1_throw`),
+  ]) {
+    const response = await handler(request);
+    assert.equal(response.status, 404);
+    assert.equal(response.headers.get("cache-control"), "no-store");
+    assert.doesNotMatch(await response.text(), /private|secret|range/iu);
+  }
+  assert.deepEqual(seen, ["mdg_v1_valid", "mdg_v1_missing", "mdg_v1_throw"]);
 });
 
 test("product MCP facade advertises only canonical content tools and membership roots", async () => {

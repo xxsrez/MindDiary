@@ -1,6 +1,7 @@
 import type {
   AutomaticCaptureService,
   BundleFileStagingService,
+  BundleFileDownloadService,
   ChangesetCommitService,
   ExportJobApplicationService,
   MindBindingApplicationService,
@@ -31,7 +32,7 @@ type AuthenticatedActor = Parameters<
 
 export interface ProductMcpApplicationDependencies {
   readonly discovery: Pick<MindDiscoveryService, "listMinds" | "resolveMind" | "getMindInfo">;
-  readonly browse: Pick<MindBrowseService, "browseEntries" | "fetch" | "readResource">;
+  readonly browse: Pick<MindBrowseService, "browseEntries" | "listBundleFiles" | "fetch" | "readResource">;
   readonly search: Pick<MindSearchService, "searchEntries">;
   readonly history: Pick<MindHistoryService, "listRevisions" | "getRevision">;
   readonly validation: Pick<MindValidationService, "validateMind">;
@@ -41,6 +42,7 @@ export interface ProductMcpApplicationDependencies {
   >;
   readonly commits: Pick<ChangesetCommitService, "commit">;
   readonly staging?: Pick<BundleFileStagingService, "stage">;
+  readonly bundleFileDownloads: Pick<BundleFileDownloadService, "issue">;
   readonly nativeFiles?: NativeFileTransport;
   readonly capture: Pick<AutomaticCaptureService, "capture">;
   readonly exports: Pick<ExportJobApplicationService, "start" | "getStatus">;
@@ -499,6 +501,20 @@ export class ProductMcpContentApplication implements McpContentApplication {
       }
       case "browse_entries":
         return snakeOutput(await this.#dependencies.browse.browseEntries(request.actor, input));
+      case "list_bundle_files": {
+        const result = await this.#dependencies.browse.listBundleFiles(request.actor, input);
+        return snakeOutput({
+          ...result,
+          diagnostics: result.diagnostics.map((diagnostic) => ({
+            severity: diagnostic.severity,
+            class: diagnostic.severity === "warning" ? "quality" : "conformance",
+            code: diagnostic.code,
+            path: diagnostic.path,
+            ...(diagnostic.line === undefined ? {} : { line: diagnostic.line }),
+            message: diagnostic.message,
+          })),
+        });
+      }
       case "search":
         return snakeOutput(await this.#dependencies.search.searchEntries(request.actor, input));
       case "fetch":
@@ -640,6 +656,11 @@ export class ProductMcpContentApplication implements McpContentApplication {
             : "Staged one verified BundleFile.",
         );
       }
+      case "get_bundle_file_download":
+        return createMcpToolSuccessResult(
+          snakeOutput(await this.#dependencies.bundleFileDownloads.issue(request.actor, input)),
+          "Created a one-use BundleFile download.",
+        );
       case "commit_changeset": {
         const info = await this.#dependencies.discovery.getMindInfo(request.actor, input.mind, { kind: "head" });
         if (!info.contentCapabilities.includes("commit")) {
@@ -796,6 +817,7 @@ export class ProductMcpContentApplication implements McpContentApplication {
           actor: request.actor,
           spaceId: info.mind.mindId,
           revisionSelector: input.revisionSelector as never,
+          profile: input.profile,
           idempotencyKey: input.idempotencyKey as never,
         });
         if (result.kind === "started") {
@@ -812,8 +834,11 @@ export class ProductMcpContentApplication implements McpContentApplication {
             "Started an exact-revision export.",
           );
         }
-        const code =
-          result.kind === "denied" ? result.decision.code : result.kind;
+        const code = result.kind === "denied"
+          ? result.decision.code
+          : result.kind === "invalid"
+            ? result.code
+            : result.kind;
         return createMcpToolErrorResult(
           request.actor.requestId,
           code,

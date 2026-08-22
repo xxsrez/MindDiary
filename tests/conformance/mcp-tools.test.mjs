@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { MindSearchFailure } from "../../packages/application-content/dist/index.js";
+import {
+  BundleFileDownloadFailure,
+  MindSearchFailure,
+} from "../../packages/application-content/dist/index.js";
 import {
   MCP_CONTENT_TOOLS,
   MCP_READ_TOOL_DEFINITIONS,
@@ -21,6 +24,7 @@ const READ_TOOL_NAMES = [
   "list_revisions",
   "get_revision",
   "validate_mind",
+  "list_bundle_files",
 ];
 
 function actor() {
@@ -110,6 +114,15 @@ function harness() {
             true,
           );
         }
+        if (
+          request.name === "get_bundle_file_download" &&
+          request.arguments.path === "assets/private.png"
+        ) {
+          throw new BundleFileDownloadFailure(
+            "bundle_file_not_found",
+            "private object key and provider diagnostic",
+          );
+        }
         if (request.name === "search") {
           return {
             mind: { mind_id: "mind_one" },
@@ -184,6 +197,7 @@ test("schemas require one explicit Mind and one revision selector shape", () => 
   for (const name of [
     "get_mind_info",
     "browse_entries",
+    "list_bundle_files",
     "search",
     "list_revisions",
     "get_revision",
@@ -205,6 +219,10 @@ test("schemas require one explicit Mind and one revision selector shape", () => 
     ["head", "revision", "as_of"],
   );
   assert.deepEqual(definitions.get("fetch").inputSchema.required, ["id"]);
+  assert.doesNotMatch(
+    JSON.stringify(definitions.get("list_bundle_files").outputSchema),
+    /download_url|bytes|provider|object_key/iu,
+  );
   assert.deepEqual(
     Object.keys(definitions.get("fetch").inputSchema.properties),
     ["id"],
@@ -320,4 +338,24 @@ test("authorization denial is generic and never reaches read execution", async (
   );
   assert.equal(JSON.stringify(result).includes("private_membership_row_42"), false);
   assert.equal(fixture.executionCalls.length, 0);
+});
+
+test("download-grant application failures stay structured and privacy-safe", async () => {
+  const fixture = harness();
+  const result = await rpcResult(await fixture.send(rpc("tools/call", {
+    name: "get_bundle_file_download",
+    arguments: {
+      mind: "research-notes",
+      revision_selector: { kind: "revision", revision_id: "rev_exact" },
+      path: "assets/private.png",
+    },
+  })));
+  assert.equal(result.isError, true);
+  assert.deepEqual(result.structuredContent.error, {
+    code: "bundle_file_not_found",
+    message: "BundleFile was not found.",
+    retryable: false,
+    request_id: "request_read_tools_1",
+  });
+  assert.doesNotMatch(JSON.stringify(result), /private object|provider diagnostic/iu);
 });

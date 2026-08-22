@@ -29,6 +29,7 @@ import {
   type OkfDiagnostic,
 } from "@mind-diary/okf-codec";
 import type { HeadRevisionReader } from "./index.js";
+import { analyzeBundleFileReferences } from "./bundle-file-references.js";
 import { materializeLogEntry } from "./reserved-content.js";
 
 export interface CreateFileOperation {
@@ -1100,11 +1101,41 @@ export class ChangesetPreflightService {
       );
     }
 
-    const validation = validateOkfBundle(
+    const okfValidation = validateOkfBundle(
       candidateFiles.filter(
         (file): file is ChangesetCandidateFile => file.kind === "markdown",
       ),
     );
+    const referenceAnalysis = analyzeBundleFileReferences({
+      markdown: candidateFiles
+        .filter((file): file is ChangesetCandidateFile => file.kind === "markdown")
+        .map((file) => Object.freeze({ path: file.path, text: file.text })),
+      bundleFiles: candidateFiles
+        .filter((file) => file.kind === "opaque")
+        .map((file) => Object.freeze({ path: file.path, mediaType: file.mediaType })),
+    });
+    const referenceErrors = referenceAnalysis.diagnostics.filter(
+      (diagnostic) => diagnostic.severity === "error",
+    );
+    const referenceWarnings = referenceAnalysis.diagnostics.filter(
+      (diagnostic) => diagnostic.severity === "warning",
+    );
+    const validation: Readonly<OkfBundleValidation> = Object.freeze({
+      ...okfValidation,
+      valid: okfValidation.valid && referenceErrors.length === 0,
+      diagnostics: Object.freeze([
+        ...okfValidation.diagnostics,
+        ...referenceAnalysis.diagnostics,
+      ]),
+      envelopeErrors: Object.freeze([
+        ...okfValidation.envelopeErrors,
+        ...referenceErrors,
+      ]),
+      qualityWarnings: Object.freeze([
+        ...okfValidation.qualityWarnings,
+        ...referenceWarnings,
+      ]),
+    });
     if (!validation.valid) {
       return invalid(
         "okf_validation_failed",

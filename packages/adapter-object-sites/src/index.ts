@@ -577,7 +577,9 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
     const same =
       existingBytes.byteLength === bytes.byteLength &&
       bytesEqual(existingBytes, bytes) &&
-      (await this.calculateSha256(existingBytes)) === request.sha256;
+      (await this.calculateSha256(existingBytes)) === request.sha256 &&
+      (existing.customMetadata?.archiveFormat ?? "MD-OKF-ZIP-1") === archive.archiveFormat &&
+      (existing.customMetadata?.filename ?? "mind-diary-okf-bundle.zip") === archive.filename;
     return same
       ? Object.freeze({ kind: "already_exists", archive })
       : Object.freeze({ kind: "object_key_collision" });
@@ -711,15 +713,26 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
     request: ExportArchiveWriteRequest,
     size: number,
   ): Readonly<StoredExportArchive> {
+    const bundleProfile = request.archiveFormat === "MD-BUNDLE-ZIP-1";
+    const archiveFormat = bundleProfile ? "MD-BUNDLE-ZIP-1" : "MD-OKF-ZIP-1";
+    const filename = bundleProfile ? "mind-diary-bundle.zip" : "mind-diary-okf-bundle.zip";
+    const contentDisposition = bundleProfile
+      ? 'attachment; filename="mind-diary-bundle.zip"'
+      : 'attachment; filename="mind-diary-okf-bundle.zip"';
+    if (
+      request.archiveFormat !== undefined && request.archiveFormat !== archiveFormat ||
+      request.filename !== undefined && request.filename !== filename ||
+      request.contentDisposition !== undefined && request.contentDisposition !== contentDisposition
+    ) throw new ObjectStoreFailure("invalid_media_type", "export profile metadata is invalid");
     return Object.freeze({
       objectKey,
       jobId: request.jobId,
       spaceId: request.spaceId,
       claimVersion: request.claimVersion,
-      archiveFormat: "MD-OKF-ZIP-1",
+      archiveFormat,
       mediaType: "application/zip",
-      filename: "mind-diary-okf-bundle.zip",
-      contentDisposition: 'attachment; filename="mind-diary-okf-bundle.zip"',
+      filename,
+      contentDisposition,
       sha256: request.sha256,
       size,
       createdAt: request.createdAt,
@@ -734,6 +747,8 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
       claimVersion: String(archive.claimVersion),
       sha256: archive.sha256,
       size: String(archive.size),
+      archiveFormat: archive.archiveFormat,
+      filename: archive.filename,
       createdAt: archive.createdAt,
     });
   }

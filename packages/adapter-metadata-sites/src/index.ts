@@ -113,6 +113,7 @@ const TRANSACTION_METHODS = new Set([
   "runContentCommitTransaction",
   "runExportStartTransaction",
   "runExportDownloadGrantTransaction",
+  "runBundleFileDownloadGrantTransaction",
   "runMindBindingTransaction",
   "runBundleFileStagingTransaction",
 ]);
