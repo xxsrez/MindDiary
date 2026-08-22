@@ -754,10 +754,66 @@ export async function createProductSiteRuntime(
     request: Request,
     profile: "modern" | "compatibility",
   ): Promise<Response> => {
-    const startedAt = Date.now();
+    const startedAt = performance.now();
     const requestId = requestIds().nextRequestId();
+    const performanceProfile = profile === "modern"
+      ? "mcp_modern" as const
+      : "mcp_compatibility" as const;
+    const timedAuthenticator: McpBearerAuthenticator = Object.freeze({
+      async authenticate(
+        candidate: Parameters<McpBearerAuthenticator["authenticate"]>[0],
+        currentRequestId: Parameters<McpBearerAuthenticator["authenticate"]>[1],
+      ) {
+        const stageStartedAt = performance.now();
+        let stageOutcome: "success" | "failure" = "failure";
+        try {
+          const result = await authenticator.authenticate(candidate, currentRequestId);
+          stageOutcome = result.kind === "authenticated" ? "success" : "failure";
+          return result;
+        } finally {
+          contentObservability.recordMcpPerformance({
+            requestId: currentRequestId,
+            occurredAtUtc: clock.now(),
+            durationMs: Math.max(0, performance.now() - stageStartedAt),
+            profile: performanceProfile,
+            stage: "stage_authentication",
+            tool: null,
+            outcome: stageOutcome,
+          });
+        }
+      },
+    });
+    const timedContent = new Proxy(mcpApplication, {
+      get(target, property, receiver) {
+        if (property === "executeAuthorizedToolCall") {
+          return async (toolRequest: Parameters<ProductMcpContentApplication["executeAuthorizedToolCall"]>[0]) => {
+            const stageStartedAt = performance.now();
+            let stageOutcome: "success" | "failure" = "failure";
+            try {
+              const result = await target.executeAuthorizedToolCall(toolRequest);
+              stageOutcome = "success";
+              return result;
+            } finally {
+              contentObservability.recordMcpPerformance({
+                requestId: toolRequest.actor.requestId,
+                occurredAtUtc: clock.now(),
+                durationMs: Math.max(0, performance.now() - stageStartedAt),
+                profile: performanceProfile,
+                stage: "stage_application",
+                tool: toolRequest.name,
+                outcome: stageOutcome,
+              });
+            }
+          };
+        }
+        const value = Reflect.get(target, property, receiver) as unknown;
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
     const dependencies = {
       ...mcpDependencies,
+      authenticator: timedAuthenticator,
+      content: timedContent,
       requestIds: { nextRequestId: () => requestId },
       logger: {
         record(event: {
@@ -775,9 +831,10 @@ export async function createProductSiteRuntime(
           contentObservability.recordMcpRequest({
             requestId: event.requestId,
             occurredAtUtc: clock.now(),
-            durationMs: Math.max(0, Date.now() - startedAt),
+            durationMs: Math.max(0, performance.now() - startedAt),
             status: event.status,
             outcome: event.outcome,
+            profile: performanceProfile,
           });
         },
       },
@@ -1265,7 +1322,11 @@ export async function createProductSiteRuntime(
         const response = (await exportDownload(request)) ?? await web(request);
         if (response !== null) {
           const surface = exportRequest ? "content" as const : "control" as const;
-          const operation = exportRequest ? "export" as const : "request" as const;
+          const operation = exportRequest
+            ? "export" as const
+            : path === "/"
+              ? "home" as const
+              : "request" as const;
           recordRuntimeMetric(telemetry, {
             kind: "operational",
             metric: "request_latency_ms",

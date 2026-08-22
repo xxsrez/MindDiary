@@ -158,7 +158,16 @@ export interface RevisionIndexStatusReader {
 
 export interface MindDiscoveryStore
   extends PublicMindCatalogStore,
-    RevisionMetadataStore {}
+    RevisionMetadataStore {
+  /**
+   * Optional adapter-level consistent view. Persistent adapters use this to
+   * refresh one materialized snapshot/tail before resolving a whole list,
+   * rather than issuing one storage refresh per candidate.
+   */
+  withConsistentRead?<Result>(
+    operation: (store: MindDiscoveryStore) => Promise<Result>,
+  ): Promise<Result>;
+}
 
 export interface MindDiscoveryDependencies {
   readonly store: MindDiscoveryStore;
@@ -176,6 +185,30 @@ interface EffectiveAccess {
   readonly grant: AuthorizationGrant;
   readonly stamp: AuthorizationStamp;
   readonly capabilities: readonly Capability[];
+}
+
+const MAX_DISCOVERY_CONCURRENCY = 8;
+
+async function mapDiscoveryBounded<Input, Output>(
+  values: readonly Input[],
+  operation: (value: Input) => Promise<Output>,
+): Promise<readonly Output[]> {
+  const results = new Array<Output>(values.length);
+  let next = 0;
+  await Promise.all(
+    Array.from(
+      { length: Math.min(MAX_DISCOVERY_CONCURRENCY, values.length) },
+      async () => {
+        for (;;) {
+          const index = next;
+          next += 1;
+          if (index >= values.length) return;
+          results[index] = await operation(values[index]!);
+        }
+      },
+    ),
+  );
+  return Object.freeze(results);
 }
 
 interface ResolvedMind {
@@ -399,6 +432,10 @@ export class MindDiscoveryService {
   }
 
   async listMinds(actor: ActorContext, query?: unknown): Promise<Readonly<ListMindsResult>> {
+    if (this.#store.withConsistentRead !== undefined) {
+      return this.#store.withConsistentRead((store) =>
+        new MindDiscoveryService({ store, host: this.#host }).listMinds(actor, query));
+    }
     const actorPrincipalId = this.#requireActor(actor);
     const normalized = normalizeListQuery(query);
     const byId = new Map<SpaceId, Readonly<MindDiscoveryDescriptor>>();
@@ -406,18 +443,13 @@ export class MindDiscoveryService {
     const personal = await this.#personal(actor, actorPrincipalId);
     byId.set(personal.descriptor.mindId, personal.descriptor);
 
-    const membershipIds = await this.#store.listActiveMembershipMindIds(actorPrincipalId);
-    for (const spaceId of [...new Set(membershipIds)].sort()) {
-      const resolved = await this.#ordinaryById(actor, spaceId, {
-        discovery: "membership",
-        requireMembership: true,
-        requirePublic: false,
-      });
-      if (resolved !== null) byId.set(spaceId, resolved.descriptor);
-    }
+    const membershipIds = [...new Set(
+      await this.#store.listActiveMembershipMindIds(actorPrincipalId),
+    )].sort();
 
     let catalogCursor: string | null = null;
     const seenCursors = new Set<string>();
+    const catalogIds = new Set<SpaceId>();
     let completed = false;
     for (let pageNumber = 0; pageNumber < MAX_CATALOG_PAGES; pageNumber += 1) {
       const page = await this.#store.listPublicMindCatalogPage({
@@ -431,13 +463,7 @@ export class MindDiscoveryService {
         );
       }
       for (const spaceId of page.spaceIds) {
-        if (byId.has(spaceId)) continue;
-        const resolved = await this.#ordinaryById(actor, spaceId, {
-          discovery: "public_catalog",
-          requireMembership: false,
-          requirePublic: true,
-        });
-        if (resolved !== null) byId.set(spaceId, resolved.descriptor);
+        if (!membershipIds.includes(spaceId)) catalogIds.add(spaceId);
       }
       if (page.nextCursor === null) {
         completed = true;
@@ -457,6 +483,25 @@ export class MindDiscoveryService {
         "discovery_unavailable",
         "Public Mind discovery is unavailable.",
       );
+    }
+    const candidates = [
+      ...membershipIds.map((spaceId) => Object.freeze({
+        spaceId,
+        discovery: "membership" as const,
+        requireMembership: true,
+        requirePublic: false,
+      })),
+      ...[...catalogIds].sort().map((spaceId) => Object.freeze({
+        spaceId,
+        discovery: "public_catalog" as const,
+        requireMembership: false,
+        requirePublic: true,
+      })),
+    ];
+    const resolvedCandidates = await mapDiscoveryBounded(candidates, (candidate) =>
+      this.#ordinaryById(actor, candidate.spaceId, candidate));
+    for (const [index, resolved] of resolvedCandidates.entries()) {
+      if (resolved !== null) byId.set(candidates[index]!.spaceId, resolved.descriptor);
     }
 
     const minds = [...byId.values()].sort((left, right) => {
@@ -811,24 +856,20 @@ export class MindDiscoveryService {
       Awaited<ReturnType<CapabilityAuthorizer["authorize"]>>,
       { readonly kind: "allowed" }
     > | null = null;
-    for (const capability of CONTENT_CAPABILITIES) {
-      const decision = await this.#authorizer.authorize({
-        actor,
-        spaceId,
-        capability,
-        revisionMode,
-      });
+    const decisions = await this.#authorizer.authorizeCapabilities({
+      actor,
+      spaceId,
+      capabilities: CONTENT_CAPABILITIES,
+      revisionMode,
+    });
+    for (const [index, capability] of CONTENT_CAPABILITIES.entries()) {
+      const decision = decisions[index]!;
       if (decision.kind === "denied") continue;
       if (anchor !== null && !sameStamp(anchor.stamp, decision.stamp)) return null;
       anchor ??= decision;
       allowed.push(capability);
     }
-    const finalRead = await this.#authorizer.authorize({
-      actor,
-      spaceId,
-      capability: READ_CAPABILITY,
-      revisionMode,
-    });
+    const finalRead = decisions[CONTENT_CAPABILITIES.indexOf(READ_CAPABILITY)]!;
     if (
       finalRead.kind === "denied" ||
       anchor === null ||

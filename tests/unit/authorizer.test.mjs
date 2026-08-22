@@ -120,6 +120,36 @@ test("role capability matrix uses current active membership", async () => {
   }
 });
 
+test("closed capability projection shares one current-state read", async () => {
+  const reader = mutableReader();
+  const authorizer = new CapabilityAuthorizer(reader);
+  const capabilities = [
+    "content:browse",
+    "content:search",
+    "content:fetch",
+    "content:history",
+    "content:write",
+  ];
+  const decisions = await authorizer.authorizeCapabilities({
+    actor: actor(),
+    spaceId,
+    capabilities,
+    revisionMode: "head",
+  });
+  assert.equal(reader.reads(), 1);
+  assert.deepEqual(decisions.map((decision) => decision.kind), [
+    "allowed",
+    "allowed",
+    "allowed",
+    "allowed",
+    "allowed",
+  ]);
+  assert.deepEqual(
+    decisions.map((decision) => decision.capability),
+    capabilities,
+  );
+});
+
 test("public and unlisted grants are read-only baseline access, never membership", async () => {
   for (const visibility of ["public", "unlisted"]) {
     const state = currentState({

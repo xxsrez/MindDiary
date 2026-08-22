@@ -36,12 +36,13 @@ function rpcRequest(method, { id = 1, name, arguments: args = {}, meta } = {}) {
   };
 }
 
-function harness() {
+function harness({ fused = false } = {}) {
   let nextRequestId = 0;
   let authenticationCalls = 0;
   let listCalls = 0;
   let authorizationCalls = 0;
   let executionCalls = 0;
+  let fusedExecutionCalls = 0;
   let committedRevisions = 0;
   const idempotencyResults = new Map();
   const actor = Object.freeze({
@@ -57,6 +58,76 @@ function harness() {
     occurredAtUtc: "2026-08-07T02:40:00.000Z",
   });
 
+  const content = {
+    async listTools() {
+      listCalls += 1;
+      return MCP_CONTENT_TOOLS.map((name) => ({ name }));
+    },
+    async authorizeToolCall(request) {
+      authorizationCalls += 1;
+      if (request.arguments.mode === "deny") {
+        return { kind: "denied", code: "capability_denied" };
+      }
+      if (request.arguments.mode === "race") {
+        return {
+          kind: "denied",
+          code: "authorization_state_changed",
+          retryable: true,
+        };
+      }
+      return { kind: "allowed" };
+    },
+    async executeToolCall(request) {
+      executionCalls += 1;
+      if (request.arguments.mode === "application_error") {
+        return {
+          resultType: "complete",
+          content: [{ type: "text", text: "HEAD changed." }],
+          structuredContent: {
+            ok: false,
+            error: {
+              code: "revision_conflict",
+              message: "HEAD changed.",
+              retryable: true,
+              request_id: "request_application_error",
+            },
+          },
+          isError: true,
+        };
+      }
+      if (request.name === "commit_changeset") {
+        const key = request.arguments.idempotency_key;
+        const existing = idempotencyResults.get(key);
+        if (existing !== undefined) return existing;
+        committedRevisions += 1;
+        const result = {
+          resultType: "complete",
+          structuredContent: {
+            ok: true,
+            data: { revision_id: `revision_${committedRevisions}` },
+          },
+          isError: false,
+        };
+        idempotencyResults.set(key, result);
+        return result;
+      }
+      return {
+        resultType: "complete",
+        structuredContent: { ok: true, data: {} },
+        isError: false,
+      };
+    },
+  };
+  if (fused) {
+    content.executeAuthorizedToolCall = async () => {
+      fusedExecutionCalls += 1;
+      return {
+        resultType: "complete",
+        structuredContent: { ok: true, data: { fused: true } },
+        isError: false,
+      };
+    };
+  }
   const dependencies = {
     allowedOrigin: "https://mind-diary.invalid",
     authenticator: {
@@ -73,66 +144,7 @@ function harness() {
         return `request_transport_${nextRequestId}`;
       },
     },
-    content: {
-      async listTools() {
-        listCalls += 1;
-        return MCP_CONTENT_TOOLS.map((name) => ({ name }));
-      },
-      async authorizeToolCall(request) {
-        authorizationCalls += 1;
-        if (request.arguments.mode === "deny") {
-          return { kind: "denied", code: "capability_denied" };
-        }
-        if (request.arguments.mode === "race") {
-          return {
-            kind: "denied",
-            code: "authorization_state_changed",
-            retryable: true,
-          };
-        }
-        return { kind: "allowed" };
-      },
-      async executeToolCall(request) {
-        executionCalls += 1;
-        if (request.arguments.mode === "application_error") {
-          return {
-            resultType: "complete",
-            content: [{ type: "text", text: "HEAD changed." }],
-            structuredContent: {
-              ok: false,
-              error: {
-                code: "revision_conflict",
-                message: "HEAD changed.",
-                retryable: true,
-                request_id: "request_application_error",
-              },
-            },
-            isError: true,
-          };
-        }
-        if (request.name === "commit_changeset") {
-          const key = request.arguments.idempotency_key;
-          const existing = idempotencyResults.get(key);
-          if (existing !== undefined) return existing;
-          committedRevisions += 1;
-          const result = {
-            resultType: "complete",
-            structuredContent: {
-              ok: true,
-              data: { revision_id: `revision_${committedRevisions}` },
-            },
-            isError: false,
-          };
-          idempotencyResults.set(key, result);
-          return result;
-        }
-        return {
-          resultType: "complete",
-          structuredContent: { ok: true, data: {} },
-          isError: false,
-        };
-      },
-    },
+    content,
   };
   const handler = createMcpHttpHandler(dependencies);
   const legacyCodexHandler = createLegacyCodexMcpHttpHandler(dependencies);
@@ -203,6 +215,7 @@ function harness() {
       listCalls: () => listCalls,
       authorizationCalls: () => authorizationCalls,
       executionCalls: () => executionCalls,
+      fusedExecutionCalls: () => fusedExecutionCalls,
       committedRevisions: () => committedRevisions,
     },
   };
@@ -237,6 +250,19 @@ test("stateless POST negotiates JSON and one request-scoped SSE event", async ()
   assert.equal((await sseBody(sseResponse)).result.isError, false);
   assert.equal(fixture.state.authenticationCalls(), 2);
   assert.equal(fixture.state.executionCalls(), 1);
+});
+
+test("product application fusion invokes one application boundary without protocol preflight", async () => {
+  const fixture = harness({ fused: true });
+  const response = await fixture.send({
+    body: rpcRequest("tools/call", { name: "search" }),
+  });
+  assert.equal(response.status, 200);
+  assert.equal((await jsonRpcBody(response)).result.isError, false);
+  assert.equal(fixture.state.authenticationCalls(), 1);
+  assert.equal(fixture.state.authorizationCalls(), 0);
+  assert.equal(fixture.state.executionCalls(), 0);
+  assert.equal(fixture.state.fusedExecutionCalls(), 1);
 });
 
 test("GET, DELETE, and legacy initialize are rejected while obsolete session state is ignored", async () => {

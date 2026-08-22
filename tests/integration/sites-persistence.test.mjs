@@ -4,6 +4,7 @@ import test from "node:test";
 import { InMemoryAuditSink } from "@mind-diary/adapter-audit-memory";
 import { InMemoryObjectStore } from "@mind-diary/adapter-object-memory";
 import { InMemoryExactRevisionSearchIndex } from "@mind-diary/adapter-search-memory";
+import { MindDiscoveryService } from "@mind-diary/application-content";
 import {
   AccountDeletionService,
   AccountBootstrapService,
@@ -62,19 +63,54 @@ class FakeD1Statement {
 
 class FakeD1Database {
   metadataEvents = [];
+  metadataSnapshot = null;
+  metadataReadLog = [];
+  searchWriteParameterCounts = [];
   search = new Map();
+  searchDocuments = new Map();
+  searchMemberships = new Map();
+  searchLexical = new Map();
   audit = new Map();
   locatorHandles = new Map();
   #failTag = null;
+  #batchTail = Promise.resolve();
 
   prepare(sql) {
     return new FakeD1Statement(this, sql);
   }
 
   async batch(statements) {
-    const results = [];
-    for (const statement of statements) results.push(await statement.run());
-    return results;
+    const previous = this.#batchTail;
+    let release;
+    this.#batchTail = new Promise((resolve) => { release = resolve; });
+    await previous;
+    const before = {
+      metadataEvents: structuredClone(this.metadataEvents),
+      metadataSnapshot: structuredClone(this.metadataSnapshot),
+      search: new Map(this.search),
+      searchDocuments: new Map([...this.searchDocuments].map(([key, value]) => [key, { ...value }])),
+      searchMemberships: new Map([...this.searchMemberships].map(([key, value]) => [key, { ...value }])),
+      searchLexical: new Map([...this.searchLexical].map(([key, value]) => [key, { ...value }])),
+      audit: new Map([...this.audit].map(([key, value]) => [key, { ...value }])),
+      locatorHandles: new Map([...this.locatorHandles].map(([key, value]) => [key, { ...value }])),
+    };
+    try {
+      const results = [];
+      for (const statement of statements) results.push(await statement.run());
+      return results;
+    } catch (error) {
+      this.metadataEvents = before.metadataEvents;
+      this.metadataSnapshot = before.metadataSnapshot;
+      this.search = before.search;
+      this.searchDocuments = before.searchDocuments;
+      this.searchMemberships = before.searchMemberships;
+      this.searchLexical = before.searchLexical;
+      this.audit = before.audit;
+      this.locatorHandles = before.locatorHandles;
+      throw error;
+    } finally {
+      release();
+    }
   }
 
   failNext(tag) {
@@ -109,6 +145,14 @@ class FakeD1Database {
       });
       return { success: true, meta: { changes: 1 } };
     }
+    if (sql.includes("/*md-metadata-snapshot-write*/")) {
+      const sequence = Number(values[0]);
+      if (this.metadataSnapshot !== null && this.metadataSnapshot.sequence >= sequence) {
+        return { success: true, meta: { changes: 0 } };
+      }
+      this.metadataSnapshot = { sequence, payload_json: values[1] };
+      return { success: true, meta: { changes: 1 } };
+    }
     if (sql.includes("/*md-locator-create*/")) {
       this.locatorHandles.set(values[0], {
         encrypted_payload: values[1],
@@ -126,17 +170,112 @@ class FakeD1Database {
     if (sql.includes("/*md-locator-delete*/")) {
       return { success: true, meta: { changes: this.locatorHandles.delete(values[0]) ? 1 : 0 } };
     }
-    if (sql.includes("/*md-search-replace*/")) {
-      this.search.set(`${values[0]}\u0000${values[1]}`, values[2]);
-      return { success: true, meta: { changes: 1 } };
+    if (sql.includes("/*md-search-membership-delete*/")) {
+      let changed = 0;
+      for (const [key, row] of this.searchMemberships) {
+        if (row.space_id !== values[0] || row.revision_id !== values[1]) continue;
+        this.searchMemberships.delete(key);
+        changed += 1;
+      }
+      return { success: true, meta: { changes: changed } };
     }
-    if (sql.includes("/*md-search-purge*/")) {
+    if (sql.includes("/*md-search-document-upsert*/")) {
+      this.searchWriteParameterCounts.push({ kind: "document", count: values.length });
+      let changed = 0;
+      for (let index = 0; index < values.length; index += 4) {
+        const key = `${values[index]}\u0000${values[index + 1]}`;
+        if (this.searchDocuments.has(key)) continue;
+        this.searchDocuments.set(key, {
+          space_id: values[index], digest: values[index + 1], text: values[index + 2], byte_size: Number(values[index + 3]),
+        });
+        changed += 1;
+      }
+      return { success: true, meta: { changes: changed } };
+    }
+    if (sql.includes("/*md-search-lexical-upsert*/")) {
+      this.searchWriteParameterCounts.push({ kind: "lexical", count: values.length });
+      let changed = 0;
+      for (let index = 0; index < values.length; index += 4) {
+        const key = `${values[index]}\u0000${values[index + 1]}`;
+        if (this.searchLexical.has(key)) continue;
+        this.searchLexical.set(key, {
+          space_id: values[index], digest: values[index + 1], normalized_text: values[index + 2], byte_size: Number(values[index + 3]),
+        });
+        changed += 1;
+      }
+      return { success: true, meta: { changes: changed } };
+    }
+    if (sql.includes("/*md-search-membership-insert*/")) {
+      this.searchWriteParameterCounts.push({ kind: "membership", count: values.length });
+      for (let index = 0; index < values.length; index += 5) {
+        const row = {
+          space_id: values[index], revision_id: values[index + 1], ordinal: Number(values[index + 2]),
+          path: values[index + 3], digest: values[index + 4],
+        };
+        this.searchMemberships.set(`${row.space_id}\u0000${row.revision_id}\u0000${row.path}`, row);
+      }
+      return { success: true, meta: { changes: values.length / 5 } };
+    }
+    if (sql.includes("/*md-search-legacy-delete*/")) {
+      return { success: true, meta: { changes: this.search.delete(`${values[0]}\u0000${values[1]}`) ? 1 : 0 } };
+    }
+    if (sql.includes("/*md-search-orphan-document-cleanup*/")) {
+      let changed = 0;
+      const used = new Set([...this.searchMemberships.values()]
+        .filter((row) => row.space_id === values[0])
+        .map((row) => row.digest));
+      for (const [key, row] of this.searchDocuments) {
+        if (row.space_id !== values[0] || used.has(row.digest)) continue;
+        this.searchDocuments.delete(key);
+        changed += 1;
+      }
+      return { success: true, meta: { changes: changed } };
+    }
+    if (sql.includes("/*md-search-orphan-lexical-cleanup*/")) {
+      let changed = 0;
+      const used = new Set([...this.searchMemberships.values()]
+        .filter((row) => row.space_id === values[0])
+        .map((row) => row.digest));
+      for (const [key, row] of this.searchLexical) {
+        if (row.space_id !== values[0] || used.has(row.digest)) continue;
+        this.searchLexical.delete(key);
+        changed += 1;
+      }
+      return { success: true, meta: { changes: changed } };
+    }
+    if (sql.includes("/*md-search-purge-memberships*/")) {
+      let changed = 0;
+      for (const [key, row] of this.searchMemberships) {
+        if (row.space_id !== values[0]) continue;
+        this.searchMemberships.delete(key);
+        changed += 1;
+      }
+      return { success: true, meta: { changes: changed } };
+    }
+    if (sql.includes("/*md-search-purge-documents*/")) {
+      let changed = 0;
+      for (const [key, row] of this.searchDocuments) {
+        if (row.space_id !== values[0]) continue;
+        this.searchDocuments.delete(key);
+        changed += 1;
+      }
+      return { success: true, meta: { changes: changed } };
+    }
+    if (sql.includes("/*md-search-purge-lexical*/")) {
+      let changed = 0;
+      for (const [key, row] of this.searchLexical) {
+        if (row.space_id !== values[0]) continue;
+        this.searchLexical.delete(key);
+        changed += 1;
+      }
+      return { success: true, meta: { changes: changed } };
+    }
+    if (sql.includes("/*md-search-purge-legacy*/")) {
       let changed = 0;
       for (const key of [...this.search.keys()]) {
-        if (key.startsWith(`${values[0]}\u0000`)) {
-          this.search.delete(key);
-          changed += 1;
-        }
+        if (!key.startsWith(`${values[0]}\u0000`)) continue;
+        this.search.delete(key);
+        changed += 1;
       }
       return { success: true, meta: { changes: changed } };
     }
@@ -180,19 +319,92 @@ class FakeD1Database {
 
   async all(sql, values) {
     this.#maybeFail(sql);
-    if (sql.includes("/*md-metadata-events*/")) {
+    if (sql.includes("/*md-metadata-snapshot-read*/")) {
+      this.metadataReadLog.push("snapshot");
+      return {
+        success: true,
+        results: this.metadataSnapshot === null ? [] : [{ ...this.metadataSnapshot }],
+      };
+    }
+    if (sql.includes("/*md-metadata-events-tail*/")) {
+      this.metadataReadLog.push("tail");
+      return {
+        success: true,
+        results: this.metadataEvents
+          .filter((row) => row.sequence > Number(values[0]))
+          .map((row) => ({ ...row })),
+      };
+    }
+    if (sql.includes("/*md-metadata-events-migration*/")) {
+      this.metadataReadLog.push("migration");
       return { success: true, results: this.metadataEvents.map((row) => ({ ...row })) };
     }
     if (sql.includes("/*md-locator-read*/")) {
       const row = this.locatorHandles.get(values[0]);
       return { success: true, results: row ? [{ ...row }] : [] };
     }
-    if (sql.includes("/*md-search-read*/")) {
+    if (sql.includes("/*md-search-read-normalized*/")) {
+      const results = [...this.searchMemberships.values()]
+        .filter((row) => row.space_id === values[0] && row.revision_id === values[1])
+        .sort((left, right) => left.ordinal - right.ordinal)
+        .map((row) => ({
+          path: row.path,
+          text: this.searchDocuments.get(`${row.space_id}\u0000${row.digest}`)?.text,
+        }));
+      return { success: true, results };
+    }
+    if (sql.includes("/*md-search-read-legacy*/")) {
       const documents_json = this.search.get(`${values[0]}\u0000${values[1]}`);
       return {
         success: true,
         results: documents_json === undefined ? [] : [{ documents_json }],
       };
+    }
+    if (sql.includes("/*md-search-projection-count*/")) {
+      const memberships = [...this.searchMemberships.values()].filter(
+        (row) => row.space_id === values[0] && row.revision_id === values[1],
+      );
+      const indexed = memberships.filter((row) =>
+        this.searchDocuments.has(`${row.space_id}\u0000${row.digest}`) &&
+        this.searchLexical.has(`${row.space_id}\u0000${row.digest}`));
+      return { success: true, results: [{
+        membership_count: memberships.length,
+        indexed_count: indexed.length,
+      }] };
+    }
+    if (sql.includes("/*md-search-query-normalized*/")) {
+      const terms = values.slice(2).map(String);
+      const results = [...this.searchMemberships.values()]
+        .filter((row) => row.space_id === values[0] && row.revision_id === values[1])
+        .filter((row) => {
+          const text = this.searchLexical.get(`${row.space_id}\u0000${row.digest}`)?.normalized_text;
+          return typeof text === "string" && terms.every((term) => text.includes(term));
+        })
+        .sort((left, right) => left.ordinal - right.ordinal)
+        .map((row) => ({
+          path: row.path,
+          text: this.searchDocuments.get(`${row.space_id}\u0000${row.digest}`)?.text,
+        }));
+      return { success: true, results };
+    }
+    if (sql.includes("/*md-search-count-revisions*/")) {
+      const revisions = new Set(
+        [...this.searchMemberships.values()]
+          .filter((row) => row.space_id === values[0])
+          .map((row) => row.revision_id),
+      );
+      return { success: true, results: [{ revision_count: revisions.size }] };
+    }
+    if (sql.includes("/*md-search-storage-metrics*/")) {
+      const documents = [...this.searchDocuments.values()].filter((row) => row.space_id === values[0]);
+      const memberships = [...this.searchMemberships.values()].filter((row) => row.space_id === values[0]);
+      const lexical = [...this.searchLexical.values()].filter((row) => row.space_id === values[0]);
+      return { success: true, results: [{
+        document_count: documents.length,
+        document_bytes: documents.reduce((total, row) => total + row.byte_size, 0),
+        lexical_bytes: lexical.reduce((total, row) => total + row.byte_size, 0),
+        membership_count: memberships.length,
+      }] };
     }
     if (sql.includes("/*md-audit-by-principal*/")) {
       return {
@@ -431,6 +643,7 @@ test("legacy active HEAD without index effects replays and is backfilled exactly
   delete createCall.args[0].initialIndexJob;
   delete createCall.args[0].initialIndexState;
   bootstrapEvent.payload_json = JSON.stringify(payload);
+  database.metadataSnapshot = null;
 
   boundary = await createSitesPersistenceBoundary({ database, bucket });
   const personal = await boundary.metadata.resolvePersonalMind(created.principalId);
@@ -483,6 +696,111 @@ test("legacy active HEAD without index effects replays and is backfilled exactly
   const due = await boundary.metadata.listRecoverableIndexJobs(T1, 10);
   assert.equal(due.length, 1);
   assert.equal(due[0].target.revisionId, personal.headRevisionId);
+});
+
+test("materialized metadata snapshot removes full-log replay from warm and restart reads", async () => {
+  const database = new FakeD1Database();
+  const bucket = new FakeR2Bucket();
+  let boundary = await createSitesPersistenceBoundary({ database, bucket });
+  const created = await services(boundary, ids()).bootstrap.bootstrapAccount(
+    preRegistrationActor(1),
+    { action: "create_isolated_account" },
+  );
+  assert.ok(database.metadataSnapshot);
+  const durableEvent = structuredClone(database.metadataEvents.at(-1));
+  for (let sequence = 2; sequence <= 10_000; sequence += 1) {
+    database.metadataEvents.push({ ...durableEvent, sequence });
+  }
+  database.metadataSnapshot.sequence = 10_000;
+
+  database.metadataReadLog = [];
+  boundary = await createSitesPersistenceBoundary({ database, bucket });
+  assert.deepEqual(database.metadataReadLog, ["snapshot", "tail"]);
+  database.metadataReadLog = [];
+  assert.ok(await boundary.metadata.readAccount(created.principalId));
+  assert.ok(await boundary.metadata.resolvePersonalMind(created.principalId));
+  assert.deepEqual(database.metadataReadLog, ["tail", "tail"]);
+
+  database.metadataReadLog = [];
+  boundary = await createSitesPersistenceBoundary({ database, bucket });
+  assert.ok(await boundary.metadata.readAccount(created.principalId));
+  assert.equal(database.metadataReadLog.filter((kind) => kind === "migration").length, 0);
+  assert.equal(database.metadataReadLog.filter((kind) => kind === "snapshot").length, 1);
+  assert.equal(database.metadataReadLog.filter((kind) => kind === "tail").length, 2);
+});
+
+test("snapshot write failure after fenced append self-heals from canonical tail", async () => {
+  const database = new FakeD1Database();
+  const store = await createSitesMetadataStore(database);
+  database.failNext("/*md-metadata-snapshot-write*/");
+  assert.equal(
+    (await store.reserveHandle({
+      host: HOST,
+      handle: "snapshot-recovery",
+      spaceId: "space_snapshot_recovery",
+    })).kind,
+    "reserved",
+  );
+  assert.equal(database.metadataEvents.length, 1);
+  assert.equal(database.metadataSnapshot.sequence, 0);
+
+  const restarted = await createSitesMetadataStore(database);
+  assert.deepEqual(
+    await restarted.resolveHandle({ host: HOST, handle: "snapshot-recovery" }),
+    { kind: "resolved", spaceId: "space_snapshot_recovery" },
+  );
+  assert.equal(database.metadataSnapshot.sequence, 1);
+});
+
+test("corrupt materialized metadata snapshot fails closed", async () => {
+  const database = new FakeD1Database();
+  const store = await createSitesMetadataStore(database);
+  await store.reserveHandle({
+    host: HOST,
+    handle: "snapshot-corrupt",
+    spaceId: "space_snapshot_corrupt",
+  });
+  database.metadataSnapshot.payload_json = JSON.stringify({ v: 999 });
+  await assert.rejects(createSitesMetadataStore(database), /snapshot is invalid/u);
+});
+
+test("list_minds resolves a scaled candidate set from one D1 read-session", async () => {
+  const database = new FakeD1Database();
+  const bucket = new FakeR2Bucket();
+  const generators = ids();
+  const boundary = await createSitesPersistenceBoundary({ database, bucket });
+  const app = services(boundary, generators);
+  const owner = await app.bootstrap.bootstrapAccount(preRegistrationActor(1), {
+    action: "create_isolated_account",
+  });
+  for (let index = 0; index < 24; index += 1) {
+    await app.ordinary.createSpaceWithOwner(
+      actor(owner.principalId, `request_scaled_${index}`, T1),
+      {
+        name: `Scaled ${index}`,
+        handle: `scaled-${String(index).padStart(2, "0")}`,
+        idempotencyKey: `scaled-${index}`,
+      },
+    );
+  }
+  const discovery = new MindDiscoveryService({ store: boundary.metadata, host: HOST });
+  database.metadataReadLog = [];
+  const listed = await discovery.listMinds(actor(owner.principalId, "request_scaled_list", T2), {
+    limit: 100,
+  });
+  assert.equal(listed.minds.length, 25);
+  assert.equal(listed.minds[0].route, "/me");
+  assert.deepEqual(database.metadataReadLog, ["tail"]);
+  const eventCount = database.metadataEvents.length;
+  await assert.rejects(
+    boundary.metadata.withConsistentRead((view) => view.reserveHandle({
+      host: HOST,
+      handle: "read-session-mutation",
+      spaceId: "space_read_session_mutation",
+    })),
+    /read-session is read-only/u,
+  );
+  assert.equal(database.metadataEvents.length, eventCount);
 });
 
 test("Sites composition persists account, invitation, ownership, HEAD CAS, idempotency and token state across isolates", async () => {
@@ -1117,6 +1435,165 @@ await runSearchContract("Sites D1 exact-revision search contract", async () => {
     bucket: new FakeR2Bucket(),
   });
   return boundary.index;
+});
+
+test("Sites search reuses digest rows across exact revisions and migrates legacy rows", async () => {
+  const database = new FakeD1Database();
+  const index = (await createSitesPersistenceBoundary({
+    database,
+    bucket: new FakeR2Bucket(),
+  })).index;
+  await index.replaceExactRevision({
+    spaceId: "space_search_reuse",
+    revisionId: "revision_search_reuse_1",
+    documents: [
+      { path: "a.md", text: "unchanged" },
+      { path: "b.md", text: "unchanged" },
+    ],
+  });
+  await index.replaceExactRevision({
+    spaceId: "space_search_reuse",
+    revisionId: "revision_search_reuse_2",
+    documents: [
+      { path: "a.md", text: "unchanged" },
+      { path: "b.md", text: "modified" },
+      { path: "c.md", text: "unchanged" },
+    ],
+  });
+  assert.deepEqual(await index.readStorageMetricsForTest("space_search_reuse"), {
+    documentCount: 2,
+    documentBytes: Buffer.byteLength("unchanged") + Buffer.byteLength("modified"),
+    lexicalBytes: Buffer.byteLength("unchanged") + Buffer.byteLength("modified"),
+    membershipCount: 5,
+  });
+  assert.deepEqual(
+    (await index.readExactRevision("space_search_reuse", "revision_search_reuse_1")).documents,
+    [
+      { path: "a.md", text: "unchanged" },
+      { path: "b.md", text: "unchanged" },
+    ],
+  );
+  assert.deepEqual(
+    (await index.readExactRevision("space_search_reuse", "revision_search_reuse_2")).documents,
+    [
+      { path: "a.md", text: "unchanged" },
+      { path: "b.md", text: "modified" },
+      { path: "c.md", text: "unchanged" },
+    ],
+  );
+  assert.deepEqual(
+    await index.queryExactRevision(
+      "space_search_reuse",
+      "revision_search_reuse_2",
+      ["modified"],
+    ),
+    {
+      kind: "ready",
+      spaceId: "space_search_reuse",
+      revisionId: "revision_search_reuse_2",
+      totalDocuments: 3,
+      documents: [{ path: "b.md", text: "modified" }],
+    },
+  );
+  database.searchLexical.clear();
+  assert.deepEqual(
+    (await index.queryExactRevision(
+      "space_search_reuse",
+      "revision_search_reuse_2",
+      ["modified"],
+    )).documents,
+    [{ path: "b.md", text: "modified" }],
+  );
+  assert.equal(database.searchLexical.size, 2);
+
+  database.search.set(
+    "space_search_reuse\u0000revision_search_legacy",
+    JSON.stringify([{ path: "legacy.md", text: "legacy text" }]),
+  );
+  assert.deepEqual(
+    (await index.readExactRevision("space_search_reuse", "revision_search_legacy")).documents,
+    [{ path: "legacy.md", text: "legacy text" }],
+  );
+  assert.equal(database.search.has("space_search_reuse\u0000revision_search_legacy"), false);
+  assert.equal(
+    [...database.searchMemberships.values()].some(
+      (row) => row.revision_id === "revision_search_legacy",
+    ),
+    true,
+  );
+});
+
+test("normalized search rebuild is atomic under failure and concurrent replacement", async () => {
+  const database = new FakeD1Database();
+  const index = (await createSitesPersistenceBoundary({
+    database,
+    bucket: new FakeR2Bucket(),
+  })).index;
+  const target = {
+    spaceId: "space_search_atomic",
+    revisionId: "revision_search_atomic",
+  };
+  await index.replaceExactRevision({
+    ...target,
+    documents: [{ path: "index.md", text: "before" }],
+  });
+  database.failNext("/*md-search-membership-insert*/");
+  await assert.rejects(
+    index.replaceExactRevision({
+      ...target,
+      documents: [{ path: "index.md", text: "failed" }],
+    }),
+    /synthetic D1 failure/u,
+  );
+  assert.deepEqual((await index.readExactRevision(target.spaceId, target.revisionId)).documents, [
+    { path: "index.md", text: "before" },
+  ]);
+
+  const candidates = ["winner-a", "winner-b"];
+  await Promise.all(candidates.map((text) => index.replaceExactRevision({
+    ...target,
+    documents: [
+      { path: "a.md", text },
+      { path: "b.md", text },
+    ],
+  })));
+  const current = (await index.readExactRevision(target.spaceId, target.revisionId)).documents;
+  assert.equal(current.length, 2);
+  assert.equal(current[0].text, current[1].text);
+  assert.equal(candidates.includes(current[0].text), true);
+});
+
+test("Brain-scale Markdown rebuild stays within D1 parameter bounds and query loads one candidate", async () => {
+  const database = new FakeD1Database();
+  const index = (await createSitesPersistenceBoundary({
+    database,
+    bucket: new FakeR2Bucket(),
+  })).index;
+  const fileCount = 1_741;
+  const targetBytes = 5_681_704;
+  const bodySize = Math.ceil(targetBytes / fileCount);
+  const documents = Array.from({ length: fileCount }, (_, item) => {
+    const marker = `marker-${String(item).padStart(5, "0")}`;
+    return {
+      path: `concepts/item-${String(item).padStart(5, "0")}.md`,
+      text: `${marker}\n${"x".repeat(Math.max(0, bodySize - marker.length - 1))}`,
+    };
+  });
+  assert.ok(documents.reduce((total, document) => total + Buffer.byteLength(document.text), 0) >= targetBytes);
+  await index.replaceExactRevision({
+    spaceId: "space_search_brain_scale",
+    revisionId: "revision_search_brain_scale",
+    documents,
+  });
+  assert.ok(database.searchWriteParameterCounts.length > 3);
+  assert.ok(database.searchWriteParameterCounts.every(({ count }) => count <= 100));
+  const result = await index.queryExactRevision(
+    "space_search_brain_scale",
+    "revision_search_brain_scale",
+    ["marker-01740"],
+  );
+  assert.equal(result.totalDocuments, fileCount);
+  assert.deepEqual(result.documents.map(({ path }) => path), ["concepts/item-01740.md"]);
 });
 
 test("D1 search and privacy-safe audit survive instances without becoming sources of truth", async () => {

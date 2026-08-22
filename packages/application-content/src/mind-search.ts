@@ -4,6 +4,7 @@ import {
   type AuthorizationDecision,
   type Authorizer,
   type ReadExactRevisionIndexResult,
+  type QueryExactRevisionIndexResult,
   type SearchIndex,
 } from "@mind-diary/application-ports";
 import {
@@ -103,6 +104,11 @@ export interface SearchEntriesResult {
 
 export interface ReadyExactRevisionIndexReader {
   read(spaceId: SpaceId, revisionId: RevisionId): Promise<ReadExactRevisionIndexResult>;
+  query?(
+    spaceId: SpaceId,
+    revisionId: RevisionId,
+    normalizedTerms: readonly string[],
+  ): Promise<QueryExactRevisionIndexResult>;
 }
 
 export interface MindSearchDependencies {
@@ -446,6 +452,7 @@ export class MindSearchService {
     const documents = await this.#loadVerifiedDocuments(
       info.mind.mindId,
       info.resolvedRevision,
+      request.terms,
     );
     const ranked = documents
       .map((document) => rankDocument(document, request.terms))
@@ -519,12 +526,35 @@ export class MindSearchService {
   async #readIndex(
     spaceId: SpaceId,
     revisionId: RevisionId,
-  ): Promise<ReadExactRevisionIndexResult> {
+    normalizedTerms: readonly string[],
+  ): Promise<QueryExactRevisionIndexResult> {
     try {
-      if ("read" in this.#index && typeof this.#index.read === "function") {
-        return await this.#index.read(spaceId, revisionId);
+      if ("query" in this.#index && typeof this.#index.query === "function") {
+        return await this.#index.query(spaceId, revisionId, normalizedTerms);
       }
-      return await (this.#index as SearchIndex).readExactRevision(spaceId, revisionId);
+      if (
+        "queryExactRevision" in this.#index &&
+        typeof this.#index.queryExactRevision === "function"
+      ) {
+        return await this.#index.queryExactRevision(
+          spaceId,
+          revisionId,
+          normalizedTerms,
+        );
+      }
+      if ("read" in this.#index && typeof this.#index.read === "function") {
+        const indexed = await this.#index.read(spaceId, revisionId);
+        return indexed.kind === "ready"
+          ? Object.freeze({ ...indexed, totalDocuments: indexed.documents.length })
+          : indexed;
+      }
+      const indexed = await (this.#index as SearchIndex).readExactRevision(
+        spaceId,
+        revisionId,
+      );
+      return indexed.kind === "ready"
+        ? Object.freeze({ ...indexed, totalDocuments: indexed.documents.length })
+        : indexed;
     } catch {
       return Object.freeze({ kind: "unavailable" });
     }
@@ -533,6 +563,7 @@ export class MindSearchService {
   async #loadVerifiedDocuments(
     spaceId: SpaceId,
     resolvedRevision: Readonly<MindDiscoveryRevisionDescriptor>,
+    normalizedTerms: readonly string[],
   ): Promise<readonly Readonly<SearchableDocument>[]> {
     const envelope = await this.#store.readRevision(spaceId, resolvedRevision.revisionId);
     if (
@@ -543,12 +574,16 @@ export class MindSearchService {
     ) {
       throw this.#unavailable();
     }
-    const indexed = await this.#readIndex(spaceId, resolvedRevision.revisionId);
+    const indexed = await this.#readIndex(
+      spaceId,
+      resolvedRevision.revisionId,
+      normalizedTerms,
+    );
     if (
       indexed.kind !== "ready" ||
       indexed.spaceId !== spaceId ||
       indexed.revisionId !== resolvedRevision.revisionId ||
-      indexed.documents.length !== envelope.manifest.entries.length
+      indexed.totalDocuments !== envelope.manifest.entries.length
     ) {
       throw this.#unavailable();
     }
@@ -577,7 +612,6 @@ export class MindSearchService {
         ),
       );
     }
-    if (seen.size !== entries.size) throw this.#unavailable();
     return Object.freeze(documents);
   }
 

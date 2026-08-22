@@ -471,6 +471,54 @@ export class InMemoryMcpTokenStore implements McpTokenStore {
     string
   >();
 
+  /** Trusted adapter checkpoint; callers must protect the serialized value. */
+  exportDurableSnapshot(): unknown {
+    return {
+      v: 1,
+      tokensById: new Map(this.#tokensById),
+      tokenIdByVerifier: new Map(this.#tokenIdByVerifier),
+      deletedPrincipals: new Set(this.#deletedPrincipals),
+      accountDeletionReservations: new Map(this.#accountDeletionReservations),
+    };
+  }
+
+  /** Restores a checkpoint produced by exportDurableSnapshot, failing closed on corruption. */
+  static fromDurableSnapshot(value: unknown): InMemoryMcpTokenStore {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      throw new TypeError("MCP token durable snapshot is invalid");
+    }
+    const snapshot = value as Record<string, unknown>;
+    if (
+      snapshot.v !== 1 ||
+      !(snapshot.tokensById instanceof Map) ||
+      !(snapshot.tokenIdByVerifier instanceof Map) ||
+      !(snapshot.deletedPrincipals instanceof Set) ||
+      !(snapshot.accountDeletionReservations instanceof Map)
+    ) {
+      throw new TypeError("MCP token durable snapshot is invalid");
+    }
+    const restored = new InMemoryMcpTokenStore();
+    for (const [key, item] of snapshot.tokensById) {
+      restored.#tokensById.set(key as McpTokenMetadata["tokenId"], item as StoredMcpToken);
+    }
+    for (const [key, item] of snapshot.tokenIdByVerifier) {
+      restored.#tokenIdByVerifier.set(
+        key as TokenVerifier,
+        item as McpTokenMetadata["tokenId"],
+      );
+    }
+    for (const item of snapshot.deletedPrincipals) {
+      restored.#deletedPrincipals.add(item as McpTokenMetadata["principalId"]);
+    }
+    for (const [key, item] of snapshot.accountDeletionReservations) {
+      restored.#accountDeletionReservations.set(
+        key as McpTokenMetadata["principalId"],
+        item as string,
+      );
+    }
+    return restored;
+  }
+
   async createMcpToken(
     request: CreateMcpTokenRequest,
   ): Promise<CreateMcpTokenResult> {
@@ -3482,6 +3530,108 @@ export class InMemoryRevisionMetadataStore
   #nextPersonalProfileFailureStage: PersonalProfileFailureStage | null = null;
   #nextOrdinaryMindFailureStage: OrdinaryMindFailureStage | null = null;
   #nextAccountDeletionFailureStage: AccountDeletionFailureStage | null = null;
+
+  /** Trusted adapter checkpoint; canonical objects remain outside this projection. */
+  exportDurableSnapshot(): unknown {
+    return {
+      v: 1,
+      spaces: new Map(this.#spaces),
+      revisionsById: new Map(this.#revisionsById),
+      idempotencyRecords: new Map(this.#idempotencyRecords),
+      auditEvents: new Map(this.#auditEvents),
+      auditOutbox: new Map(this.#auditOutbox),
+      backgroundJobs: new Map(this.#backgroundJobs),
+      exportJobs: new Map(this.#exportJobs),
+      exportDownloadGrants: new Map(this.#exportDownloadGrants),
+      indexStates: new Map(this.#indexStates),
+      principals: new Map(this.#principals),
+      externalBindings: new Map(this.#externalBindings),
+      knowledgeSpaces: new Map(this.#knowledgeSpaces),
+      personalBindings: new Map(this.#personalBindings),
+      memberships: new Map(this.#memberships),
+      invitations: new Map(this.#invitations),
+      personalProfileIdempotencyRecords: new Map(this.#personalProfileIdempotencyRecords),
+      ordinaryMindIdempotencyRecords: new Map(this.#ordinaryMindIdempotencyRecords),
+      membershipMutationRecords: new Map(this.#membershipMutationRecords),
+      ordinaryMindDeletionImpacts: new Map(this.#ordinaryMindDeletionImpacts),
+      ordinaryMindDeletionCleanup: new Map(this.#ordinaryMindDeletionCleanup),
+      accountDeletionImpacts: new Map(this.#accountDeletionImpacts),
+      accountDeletionCleanup: new Map(this.#accountDeletionCleanup),
+      mindBindingOwners: new Map(this.#mindBindingOwners),
+      activeHandlesByKey: new Map(this.#activeHandlesByKey),
+      activeHandlesBySpace: new Map(this.#activeHandlesBySpace),
+      retiredHandles: new Map(this.#retiredHandles),
+      publicMindCatalogGeneration: this.#publicMindCatalogGeneration,
+      publicMindCatalogSpaceIds: new Set(this.#publicMindCatalogSpaceIds),
+      publicMindCatalogSnapshots: new Map(this.#publicMindCatalogSnapshots),
+      authorizationStates: new Map(this.#authorizationStates),
+    };
+  }
+
+  /** Restores a checkpoint produced by exportDurableSnapshot, failing closed on corruption. */
+  static fromDurableSnapshot(value: unknown): InMemoryRevisionMetadataStore {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      throw new TypeError("Revision metadata durable snapshot is invalid");
+    }
+    const snapshot = value as Record<string, unknown>;
+    const mapFields = [
+      "spaces", "revisionsById", "idempotencyRecords", "auditEvents", "auditOutbox",
+      "backgroundJobs", "exportJobs", "exportDownloadGrants", "indexStates", "principals",
+      "externalBindings", "knowledgeSpaces", "personalBindings", "memberships", "invitations",
+      "personalProfileIdempotencyRecords", "ordinaryMindIdempotencyRecords",
+      "membershipMutationRecords", "ordinaryMindDeletionImpacts", "ordinaryMindDeletionCleanup",
+      "accountDeletionImpacts", "accountDeletionCleanup", "mindBindingOwners",
+      "activeHandlesByKey", "activeHandlesBySpace", "retiredHandles",
+      "publicMindCatalogSnapshots", "authorizationStates",
+    ] as const;
+    if (
+      snapshot.v !== 1 ||
+      !mapFields.every((field) => snapshot[field] instanceof Map) ||
+      !(snapshot.publicMindCatalogSpaceIds instanceof Set) ||
+      !Number.isSafeInteger(snapshot.publicMindCatalogGeneration) ||
+      (snapshot.publicMindCatalogGeneration as number) < 0
+    ) {
+      throw new TypeError("Revision metadata durable snapshot is invalid");
+    }
+    const restored = new InMemoryRevisionMetadataStore();
+    restored.#spaces = new Map(snapshot.spaces as Map<SpaceId, SpaceState>);
+    restored.#revisionsById = new Map(snapshot.revisionsById as Map<RevisionId, Envelope>);
+    restored.#idempotencyRecords = new Map(snapshot.idempotencyRecords as Map<string, CompletedIdempotencyRecord>);
+    restored.#auditEvents = new Map(snapshot.auditEvents as Map<AuditEventId, Readonly<AuditEvent>>);
+    restored.#auditOutbox = new Map(snapshot.auditOutbox as Map<OutboxMessageId, Readonly<AuditOutboxMessage>>);
+    restored.#backgroundJobs = new Map(snapshot.backgroundJobs as Map<JobId, Readonly<BackgroundJob>>);
+    restored.#exportJobs = new Map(snapshot.exportJobs as Map<JobId, Readonly<ExportJob>>);
+    restored.#exportDownloadGrants = new Map(snapshot.exportDownloadGrants as Map<string, Readonly<ExportDownloadGrant>>);
+    restored.#indexStates = new Map(snapshot.indexStates as Map<string, Readonly<RevisionIndexState>>);
+    restored.#principals = new Map(snapshot.principals as PrincipalMap);
+    restored.#externalBindings = new Map(snapshot.externalBindings as ExternalBindingMap);
+    restored.#knowledgeSpaces = new Map(snapshot.knowledgeSpaces as KnowledgeSpaceMap);
+    restored.#personalBindings = new Map(snapshot.personalBindings as PersonalBindingMap);
+    restored.#memberships = new Map(snapshot.memberships as MembershipMap);
+    restored.#invitations = new Map(snapshot.invitations as InvitationMap);
+    restored.#personalProfileIdempotencyRecords = new Map(snapshot.personalProfileIdempotencyRecords as Map<string, Readonly<PersonalProfileIdempotencyRecord>>);
+    restored.#ordinaryMindIdempotencyRecords = new Map(snapshot.ordinaryMindIdempotencyRecords as Map<string, Readonly<OrdinaryMindIdempotencyRecord>>);
+    restored.#membershipMutationRecords = cloneMembershipMutationRecords(
+      snapshot.membershipMutationRecords as Parameters<
+        typeof cloneMembershipMutationRecords
+      >[0],
+    );
+    restored.#ordinaryMindDeletionImpacts = new Map(snapshot.ordinaryMindDeletionImpacts as OrdinaryMindDeletionImpactMap);
+    restored.#ordinaryMindDeletionCleanup = new Map(snapshot.ordinaryMindDeletionCleanup as OrdinaryMindDeletionCleanupMap);
+    restored.#accountDeletionImpacts = new Map(snapshot.accountDeletionImpacts as AccountDeletionImpactMap);
+    restored.#accountDeletionCleanup = new Map(snapshot.accountDeletionCleanup as AccountDeletionCleanupMap);
+    restored.#mindBindingOwners = new Map(snapshot.mindBindingOwners as Map<MindBindingOwnerId, MutableMindBindingOwnerState>);
+    restored.#activeHandlesByKey = new Map(snapshot.activeHandlesByKey as ActiveHandleByKeyMap);
+    restored.#activeHandlesBySpace = new Map(snapshot.activeHandlesBySpace as ActiveHandleBySpaceMap);
+    restored.#retiredHandles = new Map(snapshot.retiredHandles as RetiredHandleMap);
+    restored.#publicMindCatalogGeneration = snapshot.publicMindCatalogGeneration as number;
+    restored.#publicMindCatalogSpaceIds = new Set(snapshot.publicMindCatalogSpaceIds as Set<SpaceId>);
+    restored.#publicMindCatalogSnapshots = new Map(snapshot.publicMindCatalogSnapshots as Map<number, readonly SpaceId[]>);
+    for (const [key, item] of snapshot.authorizationStates as Map<string, AuthorizationState>) {
+      restored.#authorizationStates.set(key, item);
+    }
+    return restored;
+  }
 
   async readMindBindingSet(
     bindingOwnerId: MindBindingOwnerId,

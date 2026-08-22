@@ -273,6 +273,12 @@ export class ProductMcpContentApplication implements McpContentApplication {
     }
   }
 
+  async executeAuthorizedToolCall(
+    request: Parameters<NonNullable<McpContentApplication["executeAuthorizedToolCall"]>>[0],
+  ): Promise<unknown> {
+    return this.executeToolCall(request);
+  }
+
   async executeToolCall(request: Parameters<McpContentApplication["executeToolCall"]>[0]): Promise<unknown> {
     const input = camelInput(request.arguments);
     switch (request.name) {

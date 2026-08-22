@@ -133,6 +133,15 @@ test("privacy-safe operational and pilot metrics retain only closed dimensions",
     status: 429,
     outcome: "internal_error",
   });
+  telemetry.content.recordMcpPerformance({
+    requestId: "request_mcp_performance_1",
+    occurredAtUtc: T0,
+    durationMs: 12.5,
+    profile: "mcp_modern",
+    stage: "stage_application",
+    tool: "list_minds",
+    outcome: "success",
+  });
 
   telemetry.background.recordJob({
     actor: actor("request_index_worker_1"),

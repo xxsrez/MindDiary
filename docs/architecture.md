@@ -147,7 +147,11 @@ composition и automated import graph checks реализованы; live Sites 
   проверенного `codex-cli 0.147.0`: client предлагает `2025-06-18`, server
   выбирает `2025-11-25`. Оба adapters вызывают одну content application
   boundary и заново проверяют Bearer token, scope, current membership и
-  visibility на каждом HTTP request.
+  visibility на каждом HTTP request. Protocol adapter выполняет transport-level
+  Bearer/scope checks и передаёт каждый tool call в application boundary ровно
+  один раз; initial и final current-state/TOCTOU authorization остаются внутри
+  соответствующего application use case и не дублируются отдельным protocol
+  preflight.
 - **Background adapter** выполняет идемпотентную индексацию, outbox delivery и
   safe garbage collection incomplete/unreachable objects.
 
@@ -552,7 +556,14 @@ explicit target Mind. General cross-Mind search/synthesis требует нов�
   adapter для default `codex-cli 0.147.0` обслуживает
   `/api/mcp/2025-11-25` и не создаёт session state.
 - D1 event log сохраняет metadata transactions и восстанавливает state после
-  нового runtime instance; R2 хранит canonical objects и export archives.
+  нового runtime instance. Event log остаётся canonical recovery source, а
+  materialized snapshot фиксирует exact applied sequence: cold start читает
+  snapshot и только contiguous tail, warm read — только tail. Legacy deployment
+  без snapshot один раз replay-ит полный log и материализует snapshot. Сбой
+  snapshot write после successful fenced append не отменяет canonical commit:
+  следующий read/restart replay-ит недостающий tail и repair-ит snapshot.
+  Corrupt snapshot или non-contiguous tail fail closed. R2 хранит canonical
+  objects и export archives.
   Initial revision index effects входят в account/Mind create transaction, а
   bounded request-triggered reconciler подбирает due jobs и backfill-ит legacy
   active HEAD без state/job после restart/redeploy.
@@ -560,6 +571,29 @@ explicit target Mind. General cross-Mind search/synthesis требует нов�
   handles: private exact-revision payload хранится только AES-GCM encrypted,
   lookup индексируется keyed verifier, TTL bounded. Legacy `mdl1_` decrypt
   остаётся временным compatibility read path.
+- Worker isolate повторно использует один initialized product runtime для
+  одинакового deployment/config fingerprint и single-flight-ит concurrent cold
+  initialization. Request `ExecutionContext`, request/response и private actor
+  state в cache не сохраняются; background promises прикрепляются только к
+  текущему request context. Failed initialization удаляется из cache, а config
+  drift создаёт чистое поколение.
+- `list_minds` выполняет один consistent metadata read-session: один D1
+  snapshot/tail refresh питает personal binding, membership/public candidates,
+  authorization state и route/revision projections. Candidate resolution и
+  browse object reads имеют bounded concurrency `8`, сохраняют deterministic
+  order, не выдают private metadata до authorization и повторяют final current
+  authorization там, где response materialization может пересечь race.
+- Exact-revision lexical search хранит normalized membership rows
+  `(space_id, revision_id, ordinal, path, digest)` отдельно от shared content
+  rows `(space_id, digest, text, byte_size)` и normalized lexical projection.
+  Одинаковые exact bytes разных revisions используют один digest row; legacy
+  revision JSON и pre-lexical v2 rows лениво и идемпотентно мигрируются при
+  exact read/query. Rebuild заменяет только membership выбранной revision одной
+  D1 batch, группируя writes максимум по 100 bound parameters на statement.
+  Query сначала проверяет joined document count, затем загружает из D1 только
+  candidates, содержащие все bounded normalized terms; application повторно
+  сверяет candidate bytes/path с immutable manifest и выполняет ranking. Storage
+  metrics считают unique source/lexical bytes отдельно от revision memberships.
 - Trusted Sites identity, browser CSRF/Origin и Bearer content MCP остаются
   разными security boundaries; browser не рендерит raw Markdown, MCP не
   публикует control tools.

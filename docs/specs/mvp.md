@@ -403,6 +403,15 @@ fail closed отклоняет дополнительные поля; applicatio
 успеха telemetry. Query, content/body/path/name, email, principal/space/revision
 identity, credentials, headers и URLs не записываются.
 
+Для performance gate `request_latency_ms` дополнительно проецируется по
+закрытым categorical operations: MCP profile (`mcp_modern` или
+`mcp_compatibility`), stage (`authentication`, `application`, `total`), exact
+allowlisted tool name и `home` route. Один opaque request ID связывает эти
+измерения; Mind selector, revision, query, result path и response body в
+dimensions не попадают. Gate использует не менее 20 warm samples на operation,
+фиксирует первый observed request отдельно и fail-closed отклоняет неполную
+profile matrix либо превышение budget.
+
 Operator использует bounded recent logs, exact current deployment и заранее
 зафиксированный compatible rollback target. Incident path сначала ограничивает
 impact через token revoke либо Sites audience revoke, затем классифицирует

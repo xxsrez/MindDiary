@@ -49,6 +49,18 @@ export const SITES_METADATA_MIGRATIONS = Object.freeze([
       )`,
     ]),
   }),
+  Object.freeze({
+    version: 2,
+    name: "materialized-snapshot-tail",
+    statements: Object.freeze([
+      `CREATE TABLE IF NOT EXISTS md_metadata_snapshots (
+        singleton_id INTEGER PRIMARY KEY CHECK (singleton_id = 1),
+        sequence INTEGER NOT NULL,
+        payload_json TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )`,
+    ]),
+  }),
 ]);
 
 type DurableTarget = "metadata" | "tokens";
@@ -79,6 +91,17 @@ interface DurableEventRow {
   readonly target: DurableTarget;
   readonly operation: string;
   readonly payload_json: string;
+}
+
+interface DurableSnapshotRow {
+  readonly sequence: number;
+  readonly payload_json: string;
+}
+
+interface DurableSnapshot {
+  readonly v: 1;
+  readonly metadata: unknown;
+  readonly tokens: unknown;
 }
 
 const TRANSACTION_METHODS = new Set([
@@ -145,6 +168,12 @@ function encode(value: unknown): string {
     if (item instanceof Uint8Array) {
       return { __md_sites_type: "uint8array", bytes: [...item] };
     }
+    if (item instanceof Map) {
+      return { __md_sites_type: "map", entries: [...item.entries()] };
+    }
+    if (item instanceof Set) {
+      return { __md_sites_type: "set", values: [...item.values()] };
+    }
     return item;
   });
 }
@@ -159,6 +188,8 @@ function decode<Value>(value: string): Value {
       const tagged = item as {
         readonly __md_sites_type: unknown;
         readonly bytes?: unknown;
+        readonly entries?: unknown;
+        readonly values?: unknown;
       };
       if (tagged.__md_sites_type === "undefined") return undefined;
       if (
@@ -166,6 +197,12 @@ function decode<Value>(value: string): Value {
         Array.isArray(tagged.bytes)
       ) {
         return Uint8Array.from(tagged.bytes as number[]);
+      }
+      if (tagged.__md_sites_type === "map" && Array.isArray(tagged.entries)) {
+        return new Map(tagged.entries as readonly (readonly [unknown, unknown])[]);
+      }
+      if (tagged.__md_sites_type === "set" && Array.isArray(tagged.values)) {
+        return new Set(tagged.values);
       }
     }
     return item;
@@ -235,6 +272,7 @@ export class SitesMetadataStore {
   #tokens = new InMemoryMcpTokenStore();
   #sequence = 0;
   #initialized = false;
+  #loaded = false;
   #tail: Promise<void> = Promise.resolve();
   #proxy: this;
 
@@ -302,6 +340,49 @@ export class SitesMetadataStore {
     });
   }
 
+  /** One refreshed in-isolate view for a closed read workflow such as list_minds. */
+  async withConsistentRead<Result>(
+    operation: (store: this) => Promise<Result>,
+  ): Promise<Result> {
+    if (typeof operation !== "function") {
+      throw new TypeError("Sites metadata read-session callback is required");
+    }
+    return this.#exclusive(async () => {
+      await this.#refresh();
+      const view = new Proxy(Object.create(null) as this, {
+        get: (_target, property) => {
+          if (property === "readCurrentAuthorizationState") {
+            return (query: AuthorizationStateQuery) =>
+              currentAuthorizationStateWithToken(this.#metadata, this.#tokens, query);
+          }
+          if (property === "readCurrentRouteAuthorizationState") {
+            return (query: MindRouteAuthorizationQuery) =>
+              currentRouteAuthorizationStateWithToken(
+                this.#metadata,
+                this.#tokens,
+                query,
+              );
+          }
+          if (typeof property !== "string") return undefined;
+          const selected = this.#select(property);
+          if (selected === null) return undefined;
+          const mutations = selected.target === "metadata"
+            ? METADATA_MUTATIONS
+            : TOKEN_MUTATIONS;
+          if (TRANSACTION_METHODS.has(property) || mutations.has(property)) {
+            return () => {
+              throw new TypeError("Sites metadata consistent read-session is read-only");
+            };
+          }
+          const current =
+            selected.target === "metadata" ? this.#metadata : this.#tokens;
+          return methodOf(current, property);
+        },
+      });
+      return operation(view);
+    });
+  }
+
   async #migrate(): Promise<void> {
     if (this.#initialized) return;
     for (const migration of SITES_METADATA_MIGRATIONS) {
@@ -327,16 +408,53 @@ export class SitesMetadataStore {
 
   async #refresh(): Promise<void> {
     await this.#migrate();
-    const loaded = await this.#load();
-    this.#metadata = loaded.metadata;
-    this.#tokens = loaded.tokens;
-    this.#sequence = loaded.sequence;
+    if (!this.#loaded) {
+      const loaded = await this.#load();
+      this.#metadata = loaded.metadata;
+      this.#tokens = loaded.tokens;
+      this.#sequence = loaded.sequence;
+      this.#loaded = true;
+      return;
+    }
+    this.#sequence = await this.#replayTail(
+      this.#metadata,
+      this.#tokens,
+      this.#sequence,
+    );
   }
 
   async #load(): Promise<LoadedState> {
+    const snapshots = await this.#database
+      .prepare(
+        `/*md-metadata-snapshot-read*/ SELECT sequence, payload_json
+         FROM md_metadata_snapshots WHERE singleton_id = 1`,
+      )
+      .all<DurableSnapshotRow>();
+    const snapshotRow = snapshots.results?.[0];
+    if (snapshotRow !== undefined) {
+      if (!Number.isSafeInteger(snapshotRow.sequence) || snapshotRow.sequence < 0) {
+        throw new Error("Sites metadata snapshot sequence is invalid");
+      }
+      const snapshot = decode<DurableSnapshot>(snapshotRow.payload_json);
+      if (snapshot.v !== 1) throw new Error("Sites metadata snapshot is invalid");
+      const metadata = InMemoryRevisionMetadataStore.fromDurableSnapshot(
+        snapshot.metadata,
+      );
+      const tokens = InMemoryMcpTokenStore.fromDurableSnapshot(snapshot.tokens);
+      const sequence = await this.#replayTail(
+        metadata,
+        tokens,
+        snapshotRow.sequence,
+      );
+      if (sequence > snapshotRow.sequence) {
+        await this.#persistSnapshot(sequence, metadata, tokens);
+      }
+      return { metadata, tokens, sequence };
+    }
+
     const result = await this.#database
       .prepare(
-        `/*md-metadata-events*/ SELECT sequence, target, operation, payload_json
+        `/*md-metadata-events-migration*/ SELECT sequence, target, operation, payload_json
          FROM md_metadata_events ORDER BY sequence ASC`,
       )
       .all<DurableEventRow>();
@@ -359,7 +477,39 @@ export class SitesMetadataStore {
       await this.#replay(metadata, tokens, event);
       expected = row.sequence;
     }
+    await this.#persistSnapshot(expected, metadata, tokens);
     return { metadata, tokens, sequence: expected };
+  }
+
+  async #replayTail(
+    metadata: InMemoryRevisionMetadataStore,
+    tokens: InMemoryMcpTokenStore,
+    afterSequence: number,
+  ): Promise<number> {
+    const result = await this.#database
+      .prepare(
+        `/*md-metadata-events-tail*/ SELECT sequence, target, operation, payload_json
+         FROM md_metadata_events WHERE sequence > ?1 ORDER BY sequence ASC`,
+      )
+      .bind(afterSequence)
+      .all<DurableEventRow>();
+    let expected = afterSequence;
+    for (const row of result.results ?? []) {
+      if (!Number.isSafeInteger(row.sequence) || row.sequence !== expected + 1) {
+        throw new Error("Sites metadata event sequence is not contiguous");
+      }
+      const event = decode<DurableEvent>(row.payload_json);
+      if (
+        event.v !== 1 ||
+        event.target !== row.target ||
+        event.method !== row.operation
+      ) {
+        throw new Error("Sites metadata event envelope is invalid");
+      }
+      await this.#replay(metadata, tokens, event);
+      expected = row.sequence;
+    }
+    return expected;
   }
 
   async #replay(
@@ -391,10 +541,11 @@ export class SitesMetadataStore {
       const target = targetName === "metadata" ? loaded.metadata : loaded.tokens;
       const result = await methodOf(target, method)(...args);
       const event: DurableEvent = { v: 1, kind: "direct", target: targetName, method, args };
-      if (await this.#append(loaded.sequence, event)) {
+      if (await this.#append(loaded.sequence, event, loaded.metadata, loaded.tokens)) {
         this.#metadata = loaded.metadata;
         this.#tokens = loaded.tokens;
         this.#sequence = loaded.sequence + 1;
+        this.#loaded = true;
         return result;
       }
     }
@@ -422,10 +573,11 @@ export class SitesMetadataStore {
         method,
         calls,
       };
-      if (await this.#append(loaded.sequence, event)) {
+      if (await this.#append(loaded.sequence, event, loaded.metadata, loaded.tokens)) {
         this.#metadata = loaded.metadata;
         this.#tokens = loaded.tokens;
         this.#sequence = loaded.sequence + 1;
+        this.#loaded = true;
         return result;
       }
     }
@@ -466,7 +618,12 @@ export class SitesMetadataStore {
     return Object.freeze(wrapper);
   }
 
-  async #append(expectedSequence: number, event: DurableEvent): Promise<boolean> {
+  async #append(
+    expectedSequence: number,
+    event: DurableEvent,
+    metadata: InMemoryRevisionMetadataStore,
+    tokens: InMemoryMcpTokenStore,
+  ): Promise<boolean> {
     const sequence = expectedSequence + 1;
     const result = await this.#database
       .prepare(
@@ -484,7 +641,41 @@ export class SitesMetadataStore {
         expectedSequence,
       )
       .run();
-    return changes(result) === 1;
+    if (changes(result) !== 1) return false;
+    try {
+      await this.#persistSnapshot(sequence, metadata, tokens);
+    } catch {
+      // The fenced event append above is the canonical commit. A stale or
+      // absent materialized snapshot is repaired by contiguous tail replay on
+      // the next read/restart; surfacing failure here would report an
+      // ambiguous mutation result and invite an unnecessary retry.
+    }
+    return true;
+  }
+
+  async #persistSnapshot(
+    sequence: number,
+    metadata: InMemoryRevisionMetadataStore,
+    tokens: InMemoryMcpTokenStore,
+  ): Promise<void> {
+    const payload: DurableSnapshot = Object.freeze({
+      v: 1,
+      metadata: metadata.exportDurableSnapshot(),
+      tokens: tokens.exportDurableSnapshot(),
+    });
+    await this.#database
+      .prepare(
+        `/*md-metadata-snapshot-write*/ INSERT INTO md_metadata_snapshots
+         (singleton_id, sequence, payload_json, updated_at)
+         VALUES (1, ?1, ?2, ?3)
+         ON CONFLICT(singleton_id) DO UPDATE SET
+           sequence = excluded.sequence,
+           payload_json = excluded.payload_json,
+           updated_at = excluded.updated_at
+         WHERE md_metadata_snapshots.sequence < excluded.sequence`,
+      )
+      .bind(sequence, encode(payload), new Date().toISOString())
+      .run();
   }
 
   async #exclusive<Result>(operation: () => Promise<Result>): Promise<Result> {

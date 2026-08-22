@@ -1129,6 +1129,40 @@ Exact diff check всегда получает закрытый range
 `{base_sha}..{candidate_sha}`. Full gate относится к exact integrated candidate,
 а CI query принимает только run workflow `328602767` с тем же full SHA.
 
+## Performance gate
+
+Изменения metadata/runtime/MCP read path, search storage или locator layout
+требуют отдельного exact-candidate performance receipt. Канонический runner:
+
+```text
+npm run gate:performance -- --scenario <private-scenario.json> --telemetry-jsonl <private-telemetry.jsonl> --candidate-sha <40-hex> --deployment-id <exact-id> --output <private-report.json>
+```
+
+Scenario и telemetry живут только в private temporary evidence storage.
+Credential values передаются runner-у исключительно через имена environment
+variables внутри scenario; report не сохраняет headers, token, query, body,
+Mind/revision IDs или raw response. Scenario связывает exact environment,
+deployment и SHA, содержит минимум 20 warm samples на request и заявляет
+фактически подготовленную matrix: `1/10/100` Minds, `1/20/100/1000` revisions,
+Brain Markdown profile не меньше `1741` files / `5,681,704` bytes и mixed corpus
+не меньше `590,000,000` bytes. До готовности MD-245 mixed corpus row остаётся
+непроверенной и performance acceptance не может стать terminal.
+
+Ненулевые blocking budgets:
+
+- server telemetry p95: `list_minds`, `browse_entries`, `search` ≤ `2000 ms`,
+  `fetch` ≤ `1000 ms`;
+- connector-observed read p95 ≤ `5000 ms`, authenticated home p95 ≤ `3000 ms`;
+- каждый first-observed request ≤ `5000 ms`; это честная observational метрика,
+  а не утверждение о provider cold isolate без отдельного provider signal;
+- point read при `10x` history имеет p95 не выше `1.2x` соответствующего `1x`
+  profile.
+
+Runner завершает процесс ненулевым кодом при превышении, менее чем 20 samples,
+неполной matrix, отсутствии server telemetry или history comparison. Local/dev
+receipt не заменяет UAT receipt; UAT receipt обязан ссылаться на exact Sites
+deployment и тот же candidate SHA.
+
 ## UAT и production boundary
 
 Обычный hosted release публикует saved Sites version в UAT project и после

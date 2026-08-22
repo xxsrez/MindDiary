@@ -1557,12 +1557,18 @@ export interface McpContentApplication {
     readonly actor: McpAuthenticatedActor;
     readonly uri: string;
   }): Promise<Readonly<McpImmutableResourceRead>>;
-  /** Resolves the target and reads current Authorizer state for every call. */
+  /** Legacy compatibility hook; fused handlers execute application authorization once. */
   authorizeToolCall(request: {
     readonly actor: McpAuthenticatedActor;
     readonly name: McpToolName;
     readonly arguments: Readonly<Record<string, unknown>>;
   }): Promise<McpToolAuthorizationDecision>;
+  /** Preferred product path: validates, authorizes and executes in one application graph. */
+  executeAuthorizedToolCall?(request: {
+    readonly actor: McpAuthenticatedActor;
+    readonly name: McpToolName;
+    readonly arguments: Readonly<Record<string, unknown>>;
+  }): Promise<unknown>;
   executeToolCall(request: {
     readonly actor: McpAuthenticatedActor;
     readonly name: McpToolName;
@@ -1629,7 +1635,6 @@ const SAFE_AUTHORIZATION_DENIALS = new Set([
   "historical_read_only",
   "authorization_state_changed",
 ]);
-
 /** Header values default to omission so unknown private metadata cannot leak. */
 export function redactMcpHeaders(
   headers: Headers,
@@ -2809,70 +2814,79 @@ function createMcpHttpHandlerAtEndpoint(
       return response;
     }
 
-    let authorization: McpToolAuthorizationDecision;
-    try {
-      authorization = await dependencies.content.authorizeToolCall({
-        actor,
-        name,
-        arguments: toolArguments,
-      });
-    } catch {
-      const response = jsonResponse(500, {
-        code: "internal_error",
-        request_id: requestId,
-      });
-      await safeLog(
-        dependencies.logger,
-        request,
-        requestId,
-        response,
-        "internal_error",
-      );
-      return response;
-    }
-
-    if (authorization.kind === "denied") {
-      if (
-        authorization.code === "authentication_required" ||
-        authorization.code === "token_inactive"
-      ) {
-        const response = authenticationResponse(requestId, dependencies.oauth);
+    const fusedExecution = dependencies.content.executeAuthorizedToolCall;
+    if (fusedExecution === undefined) {
+      let authorization: McpToolAuthorizationDecision;
+      try {
+        authorization = await dependencies.content.authorizeToolCall({
+          actor,
+          name,
+          arguments: toolArguments,
+        });
+      } catch {
+        const response = jsonResponse(500, {
+          code: "internal_error",
+          request_id: requestId,
+        });
         await safeLog(
           dependencies.logger,
           request,
           requestId,
           response,
-          "authentication_failed",
+          "internal_error",
         );
         return response;
       }
-      const code = SAFE_AUTHORIZATION_DENIALS.has(authorization.code)
-        ? authorization.code
-        : "forbidden";
-      const response = toolError(
-        rpc.id,
-        requestId,
-        code,
-        "The requested operation is not allowed.",
-        responseFormat,
-        authorization.retryable === true,
-      );
-      await safeLog(
-        dependencies.logger,
-        request,
-        requestId,
-        response,
-        "tool_denied",
-      );
-      return response;
+
+      if (authorization.kind === "denied") {
+        if (
+          authorization.code === "authentication_required" ||
+          authorization.code === "token_inactive"
+        ) {
+          const response = authenticationResponse(requestId, dependencies.oauth);
+          await safeLog(
+            dependencies.logger,
+            request,
+            requestId,
+            response,
+            "authentication_failed",
+          );
+          return response;
+        }
+        const code = SAFE_AUTHORIZATION_DENIALS.has(authorization.code)
+          ? authorization.code
+          : "forbidden";
+        const response = toolError(
+          rpc.id,
+          requestId,
+          code,
+          "The requested operation is not allowed.",
+          responseFormat,
+          authorization.retryable === true,
+        );
+        await safeLog(
+          dependencies.logger,
+          request,
+          requestId,
+          response,
+          "tool_denied",
+        );
+        return response;
+      }
     }
 
     try {
-      const execution = await dependencies.content.executeToolCall({
-        actor,
-        name,
-        arguments: toolArguments,
-      });
+      const execution = await (fusedExecution === undefined
+        ? dependencies.content.executeToolCall({
+            actor,
+            name,
+            arguments: toolArguments,
+          })
+        : fusedExecution.call(dependencies.content, {
+            actor,
+            name,
+            arguments: toolArguments,
+          }));
       const result = isReadToolName(name)
         ? normalizeReadToolExecutionResult(name, execution)
         : execution;

@@ -46,6 +46,29 @@ const LOCATOR_AAD = new TextEncoder().encode("mind-diary:opaque-locator:v1");
 const SHA256_PATTERN = /^sha256:[0-9a-f]{64}$/u;
 const CONTROL_CHARACTER = /[\u0000-\u001f\u007f]/u;
 const ENCODED_SEPARATOR = /%(?:2f|5c)/iu;
+const MAX_BROWSE_OBJECT_CONCURRENCY = 8;
+
+async function mapBounded<Input, Output>(
+  values: readonly Input[],
+  concurrency: number,
+  operation: (value: Input, index: number) => Promise<Output>,
+): Promise<readonly Output[]> {
+  const results = new Array<Output>(values.length);
+  let next = 0;
+  const workers = Array.from(
+    { length: Math.min(concurrency, values.length) },
+    async () => {
+      for (;;) {
+        const index = next;
+        next += 1;
+        if (index >= values.length) return;
+        results[index] = await operation(values[index]!, index);
+      }
+    },
+  );
+  await Promise.all(workers);
+  return Object.freeze(results);
+}
 
 type AllowedAuthorization = Extract<AuthorizationDecision, { readonly kind: "allowed" }>;
 
@@ -757,18 +780,19 @@ export class MindBrowseService {
       throw new MindBrowseFailure("invalid_cursor", "Browse cursor is invalid.");
     }
     const page = entries.slice(offset, offset + request.limit);
-    const summaries: MindEntrySummary[] = [];
-    for (const entry of page) {
-      const bytes = await this.#readVerifiedObject(entry);
-      summaries.push(
-        await this.#entrySummary(
+    const summaries = await mapBounded(
+      page,
+      MAX_BROWSE_OBJECT_CONCURRENCY,
+      async (entry) => {
+        const bytes = await this.#readVerifiedObject(entry);
+        return this.#entrySummary(
           envelope.revision.spaceId,
           envelope.revision.revisionId,
           entry,
           bytes,
-        ),
-      );
-    }
+        );
+      },
+    );
     const nextOffset = offset + page.length;
     const nextCursor =
       nextOffset < entries.length
@@ -797,7 +821,7 @@ export class MindBrowseService {
       mind: info.mind,
       resolvedRevision: info.resolvedRevision,
       path: request.path,
-      entries: Object.freeze(summaries),
+      entries: summaries,
       nextCursor,
     });
   }

@@ -1566,6 +1566,18 @@ export type ReadExactRevisionIndexResult =
     }
   | { readonly kind: "unavailable" };
 
+export type QueryExactRevisionIndexResult =
+  | {
+      readonly kind: "ready";
+      readonly spaceId: SpaceId;
+      readonly revisionId: RevisionId;
+      /** Joined membership/document count for completeness verification. */
+      readonly totalDocuments: number;
+      /** Query-specific candidates only; application ranking remains authoritative. */
+      readonly documents: readonly Readonly<ExactRevisionIndexDocument>[];
+    }
+  | { readonly kind: "unavailable" };
+
 /** Revision-keyed derived index. There is deliberately no implicit HEAD API. */
 export interface SearchIndex {
   readonly kind: "search-index";
@@ -1576,6 +1588,11 @@ export interface SearchIndex {
     spaceId: SpaceId,
     revisionId: RevisionId,
   ): Promise<ReadExactRevisionIndexResult>;
+  queryExactRevision?(
+    spaceId: SpaceId,
+    revisionId: RevisionId,
+    normalizedTerms: readonly string[],
+  ): Promise<QueryExactRevisionIndexResult>;
   purgeSpace(spaceId: SpaceId): Promise<number>;
 }
 
@@ -2188,6 +2205,48 @@ export class CapabilityAuthorizer implements Authorizer {
     return this.#authorizeWith(this.#states, request);
   }
 
+  /** One current-state read for a closed capability set on the same target. */
+  async authorizeCapabilities(request: {
+    readonly actor: ActorContext;
+    readonly spaceId: SpaceId;
+    readonly capabilities: readonly Capability[];
+    readonly revisionMode: RevisionMode;
+  }): Promise<readonly AuthorizationDecision[]> {
+    const registered = isRegisteredActor(request.actor) ? request.actor : null;
+    const authentication = registered?.authentication ?? null;
+    const canReadOnce =
+      authentication !== null &&
+      (authentication.kind === "sites_identity" || authentication.kind === "mcp_token") &&
+      request.capabilities.every(isKnownCapability) &&
+      isValidRevisionMode(request.revisionMode) &&
+      registered !== null &&
+      Array.isArray(registered.deploymentCapabilities) &&
+      registered.deploymentCapabilities.every(isKnownCapability);
+    const currentState = canReadOnce
+      ? this.#states.readCurrentAuthorizationState({
+          principalId: registered!.principalId,
+          spaceId: request.spaceId,
+          tokenId:
+            authentication.kind === "mcp_token" ? authentication.tokenId : null,
+        })
+      : undefined;
+    return Object.freeze(
+      await Promise.all(
+        request.capabilities.map((capability) =>
+          this.#authorizeWith(
+            this.#states,
+            {
+              actor: request.actor,
+              spaceId: request.spaceId,
+              capability,
+              revisionMode: request.revisionMode,
+            },
+            currentState,
+          )),
+      ),
+    );
+  }
+
   async reauthorizeInTransaction(
     request: AuthorizationRequest,
     transaction: AuthorizationTransaction,
@@ -2204,6 +2263,7 @@ export class CapabilityAuthorizer implements Authorizer {
   async #authorizeWith(
     states: AuthorizationStateReader,
     request: AuthorizationRequest,
+    currentState?: Promise<Readonly<CurrentAuthorizationState> | null>,
   ): Promise<AuthorizationDecision> {
     if (!isRegisteredActor(request.actor)) {
       return denied("authentication_required");
@@ -2226,11 +2286,11 @@ export class CapabilityAuthorizer implements Authorizer {
     }
     const tokenId =
       authentication.kind === "mcp_token" ? authentication.tokenId : null;
-    const state = await states.readCurrentAuthorizationState({
+    const state = await (currentState ?? states.readCurrentAuthorizationState({
       principalId: request.actor.principalId,
       spaceId: request.spaceId,
       tokenId,
-    });
+    }));
     if (!isValidCurrentAuthorizationState(state)) {
       return denied("authorization_state_unavailable");
     }
@@ -2652,7 +2712,27 @@ export const PRIVACY_SAFE_OBSERVABILITY_SURFACES = [
 
 export const PRIVACY_SAFE_OBSERVABILITY_OPERATIONS = [
   "request",
+  "home",
   "authentication",
+  "mcp_modern",
+  "mcp_compatibility",
+  "stage_authentication",
+  "stage_application",
+  "stage_total",
+  "list_minds",
+  "resolve_mind",
+  "get_mind_info",
+  "get_mind_bindings",
+  "browse_entries",
+  "fetch",
+  "list_revisions",
+  "get_revision",
+  "validate_mind",
+  "set_read_mind_binding",
+  "set_write_mind_binding",
+  "capture_knowledge",
+  "start_export",
+  "get_export_status",
   "commit_changeset",
   "revision_index",
   "export",

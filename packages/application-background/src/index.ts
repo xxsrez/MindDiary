@@ -483,6 +483,32 @@ export class ReadyExactRevisionIndexService {
     }
     return indexed;
   }
+
+  async query(spaceId: SpaceId, revisionId: RevisionId, normalizedTerms: readonly string[]) {
+    const state = await this.#work.readRevisionIndexState(spaceId, revisionId);
+    if (!state || state.status !== "ready") {
+      return Object.freeze({ kind: "unavailable" as const });
+    }
+    if (this.#index.queryExactRevision === undefined) {
+      const indexed = await this.#index.readExactRevision(spaceId, revisionId);
+      return indexed.kind === "ready"
+        ? Object.freeze({ ...indexed, totalDocuments: indexed.documents.length })
+        : indexed;
+    }
+    const indexed = await this.#index.queryExactRevision(
+      spaceId,
+      revisionId,
+      normalizedTerms,
+    );
+    if (
+      indexed.kind !== "ready" ||
+      indexed.spaceId !== spaceId ||
+      indexed.revisionId !== revisionId
+    ) {
+      return Object.freeze({ kind: "unavailable" as const });
+    }
+    return indexed;
+  }
 }
 
 export class UnreachableObjectGcHandler {

@@ -76,6 +76,29 @@ export type McpObservabilityOutcome =
   | "tool_completed"
   | "internal_error";
 
+export type McpPerformanceProfile = "mcp_modern" | "mcp_compatibility";
+export type McpPerformanceStage =
+  | "stage_authentication"
+  | "stage_application"
+  | "stage_total";
+export type McpPerformanceTool =
+  | "list_minds"
+  | "resolve_mind"
+  | "get_mind_info"
+  | "get_mind_bindings"
+  | "browse_entries"
+  | "search"
+  | "fetch"
+  | "list_revisions"
+  | "get_revision"
+  | "validate_mind"
+  | "set_read_mind_binding"
+  | "set_write_mind_binding"
+  | "commit_changeset"
+  | "capture_knowledge"
+  | "start_export"
+  | "get_export_status";
+
 function recordContentMetric(
   sink: PrivacySafeObservabilitySink,
   event: Readonly<PrivacySafeObservabilityEvent>,
@@ -117,6 +140,7 @@ export class ContentPrivacySafeObservability {
     readonly durationMs: number;
     readonly status: number;
     readonly outcome: McpObservabilityOutcome;
+    readonly profile?: McpPerformanceProfile;
   }): void {
     recordContentMetric(this.#sink, {
       kind: "operational",
@@ -185,6 +209,53 @@ export class ContentPrivacySafeObservability {
         outcome: "rate_limited",
         unit: "count",
         value: 1,
+        occurredAtUtc: event.occurredAtUtc,
+        requestId: event.requestId,
+        jobId: null,
+        cohort: null,
+      });
+    }
+    if (event.profile !== undefined) {
+      this.recordMcpPerformance({
+        requestId: event.requestId,
+        occurredAtUtc: event.occurredAtUtc,
+        durationMs: event.durationMs,
+        profile: event.profile,
+        stage: "stage_total",
+        tool: null,
+        outcome: event.status >= 400 ? "failure" : "success",
+      });
+    }
+  }
+
+  /**
+   * Emits only closed categorical route/tool/stage dimensions. Correlation is
+   * the existing opaque request ID; query, selector, path and content never
+   * cross this boundary.
+   */
+  recordMcpPerformance(event: {
+    readonly requestId: RequestId;
+    readonly occurredAtUtc: UtcInstant;
+    readonly durationMs: number;
+    readonly profile: McpPerformanceProfile;
+    readonly stage: McpPerformanceStage;
+    readonly tool: McpPerformanceTool | null;
+    readonly outcome: "success" | "failure";
+  }): void {
+    const operations = [
+      event.profile,
+      event.stage,
+      ...(event.tool === null ? [] : [event.tool]),
+    ] as const;
+    for (const operation of operations) {
+      recordContentMetric(this.#sink, {
+        kind: "operational",
+        metric: "request_latency_ms",
+        surface: "mcp",
+        operation,
+        outcome: event.outcome,
+        unit: "milliseconds",
+        value: event.durationMs,
         occurredAtUtc: event.occurredAtUtc,
         requestId: event.requestId,
         jobId: null,

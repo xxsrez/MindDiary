@@ -70,19 +70,30 @@ function accountIds() {
 
 function trackedObjects(delegate) {
   let immutableReads = 0;
+  let concurrentReads = 0;
+  let maximumConcurrentReads = 0;
   return {
     kind: "object-store",
     calculateSha256: (bytes) => delegate.calculateSha256(bytes),
     putImmutable: (request) => delegate.putImmutable(request),
-    getImmutable: (sha256) => {
+    getImmutable: async (sha256) => {
       immutableReads += 1;
-      return delegate.getImmutable(sha256);
+      concurrentReads += 1;
+      maximumConcurrentReads = Math.max(maximumConcurrentReads, concurrentReads);
+      try {
+        return await delegate.getImmutable(sha256);
+      } finally {
+        concurrentReads -= 1;
+      }
     },
     listImmutableObjects: (request) => delegate.listImmutableObjects(request),
     deleteImmutableObject: (request) => delegate.deleteImmutableObject(request),
     reads: () => immutableReads,
+    maxConcurrentReads: () => maximumConcurrentReads,
     reset: () => {
       immutableReads = 0;
+      concurrentReads = 0;
+      maximumConcurrentReads = 0;
     },
   };
 }
@@ -352,6 +363,32 @@ test("browse reads only the requested manifest page, parses frontmatter, and nev
   assert.deepEqual(root.entries.map((entry) => entry.path), ["index.md"]);
   assert.equal(root.entries[0].kind, "index");
   assert.equal(env.observedObjects.reads(), 3);
+});
+
+test("browse materializes a scaled page with bounded concurrency and deterministic order", async () => {
+  const env = harness();
+  const owner = await createAccount(env, 1, "Scaled Browse Owner");
+  const files = [
+    { path: "index.md", text: rootIndex([]) },
+    ...Array.from({ length: 24 }, (_, index) => ({
+      path: `concepts/item-${String(index).padStart(2, "0")}.md`,
+      text: concept(`Item ${String(index).padStart(2, "0")}`, `BODY_${index}`),
+    })),
+  ];
+  const mind = await createMind(env, owner, "scaled-browse", files);
+  env.observedObjects.reset();
+  const result = await env.browse.browseEntries(actor(owner.principalId), {
+    mind: mind.handle,
+    path: "concepts",
+    limit: 100,
+  });
+  assert.equal(result.entries.length, 24);
+  assert.deepEqual(
+    result.entries.map((entry) => entry.path),
+    files.slice(1).map((file) => file.path),
+  );
+  assert.equal(env.observedObjects.reads(), 24);
+  assert.equal(env.observedObjects.maxConcurrentReads(), 8);
 });
 
 test("entry and continuation locators stay on one exact revision across a HEAD move", async () => {

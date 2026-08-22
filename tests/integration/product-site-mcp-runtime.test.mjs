@@ -44,7 +44,11 @@ class FakeD1Statement {
 
 class FakeD1Database {
   metadataEvents = [];
+  metadataSnapshot = null;
   search = new Map();
+  searchDocuments = new Map();
+  searchMemberships = new Map();
+  searchLexical = new Map();
   audit = new Map();
   locatorHandles = new Map();
 
@@ -80,6 +84,14 @@ class FakeD1Database {
       });
       return { success: true, meta: { changes: 1 } };
     }
+    if (sql.includes("/*md-metadata-snapshot-write*/")) {
+      const sequence = Number(values[0]);
+      if (this.metadataSnapshot !== null && this.metadataSnapshot.sequence >= sequence) {
+        return { success: true, meta: { changes: 0 } };
+      }
+      this.metadataSnapshot = { sequence, payload_json: values[1] };
+      return { success: true, meta: { changes: 1 } };
+    }
     if (sql.includes("/*md-locator-create*/")) {
       this.locatorHandles.set(values[0], {
         encrypted_payload: values[1],
@@ -97,17 +109,109 @@ class FakeD1Database {
     if (sql.includes("/*md-locator-delete*/")) {
       return { success: true, meta: { changes: this.locatorHandles.delete(values[0]) ? 1 : 0 } };
     }
-    if (sql.includes("/*md-search-replace*/")) {
-      this.search.set(`${values[0]}\u0000${values[1]}`, values[2]);
-      return { success: true, meta: { changes: 1 } };
+    if (sql.includes("/*md-search-membership-delete*/")) {
+      let changes = 0;
+      for (const [key, row] of this.searchMemberships) {
+        if (row.space_id !== values[0] || row.revision_id !== values[1]) continue;
+        this.searchMemberships.delete(key);
+        changes += 1;
+      }
+      return { success: true, meta: { changes } };
     }
-    if (sql.includes("/*md-search-purge*/")) {
+    if (sql.includes("/*md-search-document-upsert*/")) {
+      let changes = 0;
+      for (let index = 0; index < values.length; index += 4) {
+        const key = `${values[index]}\u0000${values[index + 1]}`;
+        if (this.searchDocuments.has(key)) continue;
+        this.searchDocuments.set(key, {
+          space_id: values[index], digest: values[index + 1], text: values[index + 2], byte_size: Number(values[index + 3]),
+        });
+        changes += 1;
+      }
+      return { success: true, meta: { changes } };
+    }
+    if (sql.includes("/*md-search-lexical-upsert*/")) {
+      let changes = 0;
+      for (let index = 0; index < values.length; index += 4) {
+        const key = `${values[index]}\u0000${values[index + 1]}`;
+        if (this.searchLexical.has(key)) continue;
+        this.searchLexical.set(key, {
+          space_id: values[index], digest: values[index + 1], normalized_text: values[index + 2], byte_size: Number(values[index + 3]),
+        });
+        changes += 1;
+      }
+      return { success: true, meta: { changes } };
+    }
+    if (sql.includes("/*md-search-membership-insert*/")) {
+      for (let index = 0; index < values.length; index += 5) {
+        const row = {
+          space_id: values[index], revision_id: values[index + 1], ordinal: Number(values[index + 2]),
+          path: values[index + 3], digest: values[index + 4],
+        };
+        this.searchMemberships.set(`${row.space_id}\u0000${row.revision_id}\u0000${row.path}`, row);
+      }
+      return { success: true, meta: { changes: values.length / 5 } };
+    }
+    if (sql.includes("/*md-search-legacy-delete*/")) {
+      return { success: true, meta: { changes: this.search.delete(`${values[0]}\u0000${values[1]}`) ? 1 : 0 } };
+    }
+    if (sql.includes("/*md-search-orphan-document-cleanup*/")) {
+      let changes = 0;
+      const used = new Set([...this.searchMemberships.values()]
+        .filter((row) => row.space_id === values[0])
+        .map((row) => row.digest));
+      for (const [key, row] of this.searchDocuments) {
+        if (row.space_id !== values[0] || used.has(row.digest)) continue;
+        this.searchDocuments.delete(key);
+        changes += 1;
+      }
+      return { success: true, meta: { changes } };
+    }
+    if (sql.includes("/*md-search-orphan-lexical-cleanup*/")) {
+      let changes = 0;
+      const used = new Set([...this.searchMemberships.values()]
+        .filter((row) => row.space_id === values[0])
+        .map((row) => row.digest));
+      for (const [key, row] of this.searchLexical) {
+        if (row.space_id !== values[0] || used.has(row.digest)) continue;
+        this.searchLexical.delete(key);
+        changes += 1;
+      }
+      return { success: true, meta: { changes } };
+    }
+    if (sql.includes("/*md-search-purge-memberships*/")) {
+      let changes = 0;
+      for (const [key, row] of this.searchMemberships) {
+        if (row.space_id !== values[0]) continue;
+        this.searchMemberships.delete(key);
+        changes += 1;
+      }
+      return { success: true, meta: { changes } };
+    }
+    if (sql.includes("/*md-search-purge-documents*/")) {
+      let changes = 0;
+      for (const [key, row] of this.searchDocuments) {
+        if (row.space_id !== values[0]) continue;
+        this.searchDocuments.delete(key);
+        changes += 1;
+      }
+      return { success: true, meta: { changes } };
+    }
+    if (sql.includes("/*md-search-purge-lexical*/")) {
+      let changes = 0;
+      for (const [key, row] of this.searchLexical) {
+        if (row.space_id !== values[0]) continue;
+        this.searchLexical.delete(key);
+        changes += 1;
+      }
+      return { success: true, meta: { changes } };
+    }
+    if (sql.includes("/*md-search-purge-legacy*/")) {
       let changes = 0;
       for (const key of [...this.search.keys()]) {
-        if (key.startsWith(`${values[0]}\u0000`)) {
-          this.search.delete(key);
-          changes += 1;
-        }
+        if (!key.startsWith(`${values[0]}\u0000`)) continue;
+        this.search.delete(key);
+        changes += 1;
       }
       return { success: true, meta: { changes } };
     }
@@ -149,7 +253,21 @@ class FakeD1Database {
   }
 
   async all(sql, values) {
-    if (sql.includes("/*md-metadata-events*/")) {
+    if (sql.includes("/*md-metadata-snapshot-read*/")) {
+      return {
+        success: true,
+        results: this.metadataSnapshot === null ? [] : [{ ...this.metadataSnapshot }],
+      };
+    }
+    if (sql.includes("/*md-metadata-events-tail*/")) {
+      return {
+        success: true,
+        results: this.metadataEvents
+          .filter((row) => row.sequence > Number(values[0]))
+          .map((row) => ({ ...row })),
+      };
+    }
+    if (sql.includes("/*md-metadata-events-migration*/")) {
       return {
         success: true,
         results: this.metadataEvents.map((row) => ({ ...row })),
@@ -159,12 +277,66 @@ class FakeD1Database {
       const row = this.locatorHandles.get(values[0]);
       return { success: true, results: row ? [{ ...row }] : [] };
     }
-    if (sql.includes("/*md-search-read*/")) {
+    if (sql.includes("/*md-search-read-normalized*/")) {
+      const results = [...this.searchMemberships.values()]
+        .filter((row) => row.space_id === values[0] && row.revision_id === values[1])
+        .sort((left, right) => left.ordinal - right.ordinal)
+        .map((row) => ({
+          path: row.path,
+          text: this.searchDocuments.get(`${row.space_id}\u0000${row.digest}`)?.text,
+        }));
+      return { success: true, results };
+    }
+    if (sql.includes("/*md-search-read-legacy*/")) {
       const documents_json = this.search.get(`${values[0]}\u0000${values[1]}`);
       return {
         success: true,
         results: documents_json === undefined ? [] : [{ documents_json }],
       };
+    }
+    if (sql.includes("/*md-search-projection-count*/")) {
+      const memberships = [...this.searchMemberships.values()].filter(
+        (row) => row.space_id === values[0] && row.revision_id === values[1],
+      );
+      const indexed = memberships.filter((row) =>
+        this.searchDocuments.has(`${row.space_id}\u0000${row.digest}`) &&
+        this.searchLexical.has(`${row.space_id}\u0000${row.digest}`));
+      return { success: true, results: [{
+        membership_count: memberships.length,
+        indexed_count: indexed.length,
+      }] };
+    }
+    if (sql.includes("/*md-search-query-normalized*/")) {
+      const terms = values.slice(2).map(String);
+      const results = [...this.searchMemberships.values()]
+        .filter((row) => row.space_id === values[0] && row.revision_id === values[1])
+        .filter((row) => {
+          const text = this.searchLexical.get(`${row.space_id}\u0000${row.digest}`)?.normalized_text;
+          return typeof text === "string" && terms.every((term) => text.includes(term));
+        })
+        .sort((left, right) => left.ordinal - right.ordinal)
+        .map((row) => ({
+          path: row.path,
+          text: this.searchDocuments.get(`${row.space_id}\u0000${row.digest}`)?.text,
+        }));
+      return { success: true, results };
+    }
+    if (sql.includes("/*md-search-count-revisions*/")) {
+      const revisions = new Set([...this.searchMemberships.values()]
+        .filter((row) => row.space_id === values[0])
+        .map((row) => row.revision_id));
+      return { success: true, results: [{ revision_count: revisions.size }] };
+    }
+    if (sql.includes("/*md-search-storage-metrics*/")) {
+      const documents = [...this.searchDocuments.values()].filter((row) => row.space_id === values[0]);
+      const memberships = [...this.searchMemberships.values()].filter((row) => row.space_id === values[0]);
+      const lexical = [...this.searchLexical.values()].filter((row) => row.space_id === values[0]);
+      return { success: true, results: [{
+        document_count: documents.length,
+        document_bytes: documents.reduce((total, row) => total + row.byte_size, 0),
+        lexical_bytes: lexical.reduce((total, row) => total + row.byte_size, 0),
+        membership_count: memberships.length,
+      }] };
     }
     if (sql.includes("/*md-audit-by-principal*/")) {
       return {
@@ -654,6 +826,10 @@ test("empty account reaches a strict starter commit and first useful search/fetc
     "search",
     { mind: "/me", query: "concrete reusable note" },
   );
+  assert.equal(
+    (await responseFrom(runtime, new Request(`${ORIGIN}/`))).status,
+    200,
+  );
   const telemetry = telemetryLines.map((line) => JSON.parse(line));
   assert.equal(telemetry.filter(({ metric }) => metric === "setup_completion").length, 1);
   const firstUseful = telemetry.filter(
@@ -665,6 +841,24 @@ test("empty account reaches a strict starter commit and first useful search/fetc
   assert.equal(firstUseful[0].outcome, "resolved");
   assert.equal(Number.isSafeInteger(firstUseful[0].value), true);
   assert.ok(firstUseful[0].value >= 0);
+  const performanceOperations = new Set(
+    telemetry
+      .filter(({ metric }) => metric === "request_latency_ms")
+      .map(({ operation }) => operation),
+  );
+  for (const operation of [
+    "home",
+    "mcp_modern",
+    "stage_authentication",
+    "stage_application",
+    "stage_total",
+    "browse_entries",
+    "search",
+    "fetch",
+    "commit_changeset",
+  ]) {
+    assert.ok(performanceOperations.has(operation), `missing performance operation ${operation}`);
+  }
   assert.deepEqual(Object.keys(firstUseful[0]).sort(), [
     "cohort",
     "event",
