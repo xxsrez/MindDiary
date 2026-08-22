@@ -40,7 +40,7 @@ export interface MindBindingApplicationDependencies {
   readonly idempotencyKeyMaxBytes?: number;
 }
 
-type SitesIdentityActorContext = Extract<
+export type SitesIdentityActorContext = Extract<
   RegisteredPrincipalActorContext,
   { readonly authentication: { readonly kind: "sites_identity" } }
 >;

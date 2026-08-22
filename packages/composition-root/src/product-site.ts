@@ -57,7 +57,6 @@ import {
   ReadyExactRevisionIndexService,
   RevisionIndexJobHandler,
 } from "@mind-diary/application-background";
-import type { RegisteredPrincipalActorContext } from "@mind-diary/application-contracts";
 import {
   AutomaticCaptureService,
   CanonicalRevisionCoordinator,
@@ -76,6 +75,7 @@ import {
   MCP_CONTENT_DEPLOYMENT_CAPABILITIES,
   WebCryptoMindLocatorCodec,
   type McpBearerAuthenticator,
+  type SitesIdentityActorContext,
 } from "@mind-diary/application-content";
 import {
   AccountBootstrapService,
@@ -121,11 +121,6 @@ const PRODUCT_SITES_DEPLOYMENT_CAPABILITIES = Object.freeze([
   "ownership:transfer",
   "space:delete",
 ] satisfies readonly Capability[]);
-
-type SitesIdentityActorContext = Extract<
-  RegisteredPrincipalActorContext,
-  { readonly authentication: { readonly kind: "sites_identity" } }
->;
 
 export interface ProductSiteTrustedIdentityReader {
   readVerifiedIdentity(request: Request):
