@@ -57,6 +57,7 @@ import {
   ReadyExactRevisionIndexService,
   RevisionIndexJobHandler,
 } from "@mind-diary/application-background";
+import type { RegisteredPrincipalActorContext } from "@mind-diary/application-contracts";
 import {
   AutomaticCaptureService,
   CanonicalRevisionCoordinator,
@@ -102,7 +103,6 @@ import {
   type Capability,
   type EffectiveTokenScopes,
   type MindBindingOwnerId,
-  type TokenId,
   verifiedSpaceHost,
 } from "@mind-diary/domain";
 
@@ -121,6 +121,11 @@ const PRODUCT_SITES_DEPLOYMENT_CAPABILITIES = Object.freeze([
   "ownership:transfer",
   "space:delete",
 ] satisfies readonly Capability[]);
+
+type SitesIdentityActorContext = Extract<
+  RegisteredPrincipalActorContext,
+  { readonly authentication: { readonly kind: "sites_identity" } }
+>;
 
 export interface ProductSiteTrustedIdentityReader {
   readVerifiedIdentity(request: Request):
@@ -813,6 +818,8 @@ export async function createProductSiteRuntime(
     },
     mindBindings: {
       async list(actor, ownerIds) {
+        if (actor.authentication.kind !== "sites_identity") return Object.freeze([]);
+        const sitesActor = actor as SitesIdentityActorContext;
         const requested = new Set(ownerIds);
         if (requested.size === 0) return Object.freeze([]);
         const personalTokens = await control.services.tokens.listMcpTokens(actor as never);
@@ -836,20 +843,11 @@ export async function createProductSiteRuntime(
           })),
         ].filter((credential) => requested.has(credential.ownerId));
         const snapshots = await Promise.all(credentials.map(async (credential) => {
-          const bindingActor = Object.freeze({
-            kind: "registered_principal" as const,
-            principalId: actor.principalId,
-            authentication: Object.freeze({
-              kind: "mcp_token" as const,
-              tokenId: credential.tokenId as TokenId,
-              bindingOwnerId: credential.ownerId as MindBindingOwnerId,
-              effectiveScopes: Object.freeze([...credential.scopes]) as EffectiveTokenScopes,
-            }),
-            deploymentCapabilities: MCP_CONTENT_DEPLOYMENT_CAPABILITIES,
-            requestId: actor.requestId,
-            occurredAtUtc: actor.occurredAtUtc,
+          const result = await bindings.read({
+            actor: sitesActor,
+            bindingOwnerId: credential.ownerId as MindBindingOwnerId,
+            credentialScopes: Object.freeze([...credential.scopes]) as EffectiveTokenScopes,
           });
-          const result = await bindings.read({ actor: bindingActor });
           if (result.kind !== "ready") return null;
           return Object.freeze({
             ownerId: credential.ownerId,
@@ -879,6 +877,10 @@ export async function createProductSiteRuntime(
         return Object.freeze(snapshots.filter((snapshot): snapshot is NonNullable<typeof snapshot> => snapshot !== null));
       },
       async mutate(actor, input) {
+        if (actor.authentication.kind !== "sites_identity") {
+          throw Object.assign(new Error("Sites identity is required."), { code: "authentication_required" });
+        }
+        const sitesActor = actor as SitesIdentityActorContext;
         const ownerId = typeof input.binding_owner_id === "string"
           ? input.binding_owner_id
           : null;
@@ -939,18 +941,10 @@ export async function createProductSiteRuntime(
         ) {
           throw Object.assign(new Error("Write scope is required."), { code: "insufficient_scope" });
         }
-        const bindingActor = Object.freeze({
-          kind: "registered_principal" as const,
-          principalId: actor.principalId,
-          authentication: Object.freeze({
-            kind: "mcp_token" as const,
-            tokenId: ownerId as TokenId,
-            bindingOwnerId: ownerId as MindBindingOwnerId,
-            effectiveScopes: Object.freeze([...scopes]) as EffectiveTokenScopes,
-          }),
-          deploymentCapabilities: MCP_CONTENT_DEPLOYMENT_CAPABILITIES,
-          requestId: actor.requestId,
-          occurredAtUtc: actor.occurredAtUtc,
+        const bindingCaller = Object.freeze({
+          actor: sitesActor,
+          bindingOwnerId: ownerId as MindBindingOwnerId,
+          credentialScopes: Object.freeze([...scopes]) as EffectiveTokenScopes,
         });
         const expectedBindingVersion = input.expectedBindingVersion;
         const idempotencyKey = input.idempotencyKey;
@@ -986,7 +980,7 @@ export async function createProductSiteRuntime(
             });
             spaceId = (resolved as { readonly mindId?: unknown }).mindId;
           } else {
-            const current = await bindings.read({ actor: bindingActor });
+            const current = await bindings.read(bindingCaller);
             const selected = current.kind === "ready" && readBindingId !== null
               ? current.bindings.readBindings.find((binding) =>
                   String(binding.readBindingId) === readBindingId)
@@ -1000,29 +994,29 @@ export async function createProductSiteRuntime(
         const result = await runWithCapturedWork(
           () => action === "enable_capture" || action === "disable_capture"
             ? bindings.mutateAutomaticCapture({
-                actor: bindingActor,
+                ...bindingCaller,
                 action: action === "enable_capture" ? "enable" : "disable",
                 expectedBindingVersion,
                 idempotencyKey,
               })
             : action === "attach_read" || action === "detach_read"
               ? bindings.mutateRead({
-                actor: bindingActor,
-                action: action === "attach_read" ? "attach" : "detach",
-                spaceId: spaceId as never,
-                expectedBindingVersion,
-                idempotencyKey,
+                  ...bindingCaller,
+                  action: action === "attach_read" ? "attach" : "detach",
+                  spaceId: spaceId as never,
+                  expectedBindingVersion,
+                  idempotencyKey,
                 })
               : bindings.mutateWrite(action === "bind_write"
                 ? {
-                    actor: bindingActor,
+                    ...bindingCaller,
                     action: "bind",
                     spaceId: spaceId as never,
                     expectedBindingVersion,
                     idempotencyKey,
                   }
                 : {
-                    actor: bindingActor,
+                    ...bindingCaller,
                     action: "unbind",
                     expectedBindingVersion,
                     idempotencyKey,

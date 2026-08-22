@@ -40,6 +40,26 @@ function actor(overrides = {}) {
   };
 }
 
+function sitesActor(overrides = {}) {
+  return {
+    kind: "registered_principal",
+    principalId: PRINCIPAL_ID,
+    authentication: { kind: "sites_identity" },
+    deploymentCapabilities: CAPABILITIES,
+    requestId: "request_binding_sites_control",
+    occurredAtUtc: NOW,
+    ...overrides,
+  };
+}
+
+function sitesCaller(scopes = ["content:read", "content:write"]) {
+  return {
+    actor: sitesActor(),
+    bindingOwnerId: BINDING_OWNER_ID,
+    credentialScopes: scopes,
+  };
+}
+
 function authorizationState(spaceId, overrides = {}) {
   return {
     principal: { principalId: PRINCIPAL_ID, state: "active" },
@@ -87,6 +107,10 @@ function applicationHarness() {
     metadata.setCurrentAuthorizationStateForTest(
       { principalId: PRINCIPAL_ID, spaceId, tokenId: TOKEN_ID },
       authorizationState(spaceId),
+    );
+    metadata.setCurrentAuthorizationStateForTest(
+      { principalId: PRINCIPAL_ID, spaceId, tokenId: null },
+      authorizationState(spaceId, { token: null }),
     );
   }
   const objects = new InMemoryObjectStore();
@@ -419,6 +443,46 @@ test("automatic capture is explicit, private-only and pinned to one write genera
     3,
   );
   assert.equal(JSON.stringify(audits).includes("capture-enable-private"), false);
+});
+
+test("Sites control mutations use the stable server-resolved credential owner without an access token", async () => {
+  const { service } = applicationHarness();
+  const caller = sitesCaller();
+  const empty = await service.read(caller);
+  assert.equal(empty.kind, "ready");
+  assert.equal(empty.bindings.bindingSet.bindingVersion, 0);
+
+  const bound = await service.mutateWrite({
+    ...caller,
+    action: "bind",
+    spaceId: SPACE_A,
+    expectedBindingVersion: 0,
+    idempotencyKey: "sites-bind-write",
+  });
+  assert.equal(bound.kind, "applied");
+  assert.equal(bound.bindings.bindingSet.bindingVersion, 1);
+
+  const enabled = await service.mutateAutomaticCapture({
+    ...caller,
+    action: "enable",
+    expectedBindingVersion: 1,
+    idempotencyKey: "sites-enable-capture",
+  });
+  assert.equal(enabled.kind, "applied");
+  assert.equal(enabled.bindings.bindingSet.automaticCaptureMode, "routine_non_sensitive");
+
+  const denied = await service.mutateAutomaticCapture({
+    ...sitesCaller(["content:read"]),
+    action: "disable",
+    expectedBindingVersion: 2,
+    idempotencyKey: "sites-read-only-disable",
+  });
+  assert.equal(denied.kind, "denied");
+  assert.equal(denied.decision.code, "insufficient_scope");
+  assert.equal(
+    (await service.read(caller)).bindings.bindingSet.automaticCaptureMode,
+    "routine_non_sensitive",
+  );
 });
 
 test("Sites event-log persistence reconciles unknown outcomes and serializes concurrent CAS", async () => {

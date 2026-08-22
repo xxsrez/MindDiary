@@ -1,4 +1,7 @@
-import type { McpTokenActorContext } from "@mind-diary/application-contracts";
+import type {
+  McpTokenActorContext,
+  RegisteredPrincipalActorContext,
+} from "@mind-diary/application-contracts";
 import {
   type ApplyMindBindingMutationResult,
   type AuthorizationDecision,
@@ -14,6 +17,7 @@ import {
 import {
   bindingVersion,
   type BindingVersion,
+  type EffectiveTokenScopes,
   type IdempotencyKey,
   type MindBindingOwnerId,
   type PrincipalId,
@@ -36,39 +40,52 @@ export interface MindBindingApplicationDependencies {
   readonly idempotencyKeyMaxBytes?: number;
 }
 
-export interface ReadMindBindingsRequest {
-  readonly actor: McpTokenActorContext;
-}
+type SitesIdentityActorContext = Extract<
+  RegisteredPrincipalActorContext,
+  { readonly authentication: { readonly kind: "sites_identity" } }
+>;
 
-export interface MutateReadMindBindingRequest {
-  readonly actor: McpTokenActorContext;
+type MindBindingCaller =
+  | {
+      readonly actor: McpTokenActorContext;
+      readonly bindingOwnerId?: never;
+      readonly credentialScopes?: never;
+    }
+  | {
+      readonly actor: SitesIdentityActorContext;
+      /** Server-resolved credential locator; never accepted from an MCP body. */
+      readonly bindingOwnerId: MindBindingOwnerId;
+      /** Server-read current grant/token scopes for this exact owner. */
+      readonly credentialScopes: EffectiveTokenScopes;
+    };
+
+export type ReadMindBindingsRequest = MindBindingCaller;
+
+export type MutateReadMindBindingRequest = MindBindingCaller & {
   readonly action: "attach" | "detach";
   readonly spaceId: SpaceId;
   readonly expectedBindingVersion: unknown;
   readonly idempotencyKey: unknown;
-}
+};
 
 export type MutateWriteMindBindingRequest =
-  | {
-      readonly actor: McpTokenActorContext;
+  | (MindBindingCaller & {
       readonly action: "bind";
       readonly spaceId: SpaceId;
       readonly expectedBindingVersion: unknown;
       readonly idempotencyKey: unknown;
-    }
-  | {
-      readonly actor: McpTokenActorContext;
+    })
+  | (MindBindingCaller & {
       readonly action: "unbind";
       readonly expectedBindingVersion: unknown;
       readonly idempotencyKey: unknown;
-    };
+    });
 
-export interface MutateAutomaticCapturePolicyRequest {
-  readonly actor: McpTokenActorContext;
+export type MutateAutomaticCapturePolicyRequest = MindBindingCaller & {
   readonly action: "enable" | "disable";
   readonly expectedBindingVersion: unknown;
   readonly idempotencyKey: unknown;
-}
+};
 
 export type ReadMindBindingsResult =
   | {
@@ -103,14 +120,31 @@ export type MindBindingCommandResult =
     };
 
 interface ValidatedMutation {
-  readonly actor: McpTokenActorContext;
+  readonly actor: RegisteredPrincipalActorContext;
   readonly bindingOwnerId: MindBindingOwnerId;
   readonly principalId: PrincipalId;
+  readonly effectiveScopes: EffectiveTokenScopes;
   readonly expectedBindingVersion: BindingVersion;
   readonly idempotencyKey: IdempotencyKey;
 }
 
-function validActor(actor: unknown): actor is McpTokenActorContext {
+function validScopes(value: unknown): value is EffectiveTokenScopes {
+  return Array.isArray(value) && (
+    (value.length === 1 && value[0] === "content:read") ||
+    (value.length === 2 &&
+      value[0] === "content:read" &&
+      value[1] === "content:write")
+  );
+}
+
+function hasScope(
+  scopes: EffectiveTokenScopes,
+  scope: "content:read" | "content:write",
+): boolean {
+  return (scopes as readonly string[]).includes(scope);
+}
+
+function validMcpActor(actor: unknown): actor is McpTokenActorContext {
   if (typeof actor !== "object" || actor === null) return false;
   const value = actor as Partial<McpTokenActorContext>;
   return (
@@ -122,9 +156,46 @@ function validActor(actor: unknown): actor is McpTokenActorContext {
     value.authentication.kind === "mcp_token" &&
     typeof value.authentication.bindingOwnerId === "string" &&
     BOUNDED_ID.test(value.authentication.bindingOwnerId) &&
+    typeof value.authentication.tokenId === "string" &&
+    BOUNDED_ID.test(value.authentication.tokenId) &&
+    validScopes(value.authentication.effectiveScopes) &&
     typeof value.occurredAtUtc === "string" &&
     Number.isFinite(Date.parse(value.occurredAtUtc))
   );
+}
+
+function validatedCaller(
+  request: Readonly<MindBindingCaller>,
+): Pick<
+  ValidatedMutation,
+  "actor" | "bindingOwnerId" | "principalId" | "effectiveScopes"
+> | null {
+  if (validMcpActor(request.actor)) {
+    return Object.freeze({
+      actor: request.actor,
+      bindingOwnerId: request.actor.authentication.bindingOwnerId,
+      principalId: request.actor.principalId,
+      effectiveScopes: request.actor.authentication.effectiveScopes,
+    });
+  }
+  const actor = request.actor as Partial<SitesIdentityActorContext>;
+  if (
+    actor.kind !== "registered_principal" ||
+    typeof actor.principalId !== "string" ||
+    !BOUNDED_ID.test(actor.principalId) ||
+    actor.authentication?.kind !== "sites_identity" ||
+    typeof request.bindingOwnerId !== "string" ||
+    !BOUNDED_ID.test(request.bindingOwnerId) ||
+    !validScopes(request.credentialScopes) ||
+    typeof actor.occurredAtUtc !== "string" ||
+    !Number.isFinite(Date.parse(actor.occurredAtUtc))
+  ) return null;
+  return Object.freeze({
+    actor: request.actor,
+    bindingOwnerId: request.bindingOwnerId,
+    principalId: actor.principalId as PrincipalId,
+    effectiveScopes: request.credentialScopes,
+  });
 }
 
 function validSpaceId(value: unknown): value is SpaceId {
@@ -178,12 +249,13 @@ export class MindBindingApplicationService {
   async read(
     request: Readonly<ReadMindBindingsRequest>,
   ): Promise<ReadMindBindingsResult> {
-    if (!validActor(request.actor)) {
+    const caller = validatedCaller(request);
+    if (caller === null) {
       return Object.freeze({ kind: "invalid_actor" });
     }
     const snapshot = await this.#bindings.readMindBindingSet(
-      request.actor.authentication.bindingOwnerId,
-      request.actor.principalId,
+      caller.bindingOwnerId,
+      caller.principalId,
       request.actor.occurredAtUtc,
     );
     return snapshot === null
@@ -196,6 +268,9 @@ export class MindBindingApplicationService {
   ): Promise<MindBindingCommandResult> {
     const validated = this.#validateMutation(request);
     if ("kind" in validated) return validated;
+    if (!hasScope(validated.effectiveScopes, "content:read")) {
+      return Object.freeze({ kind: "denied", decision: bindingDenied("insufficient_scope") });
+    }
     if (request.action !== "attach" && request.action !== "detach") {
       return Object.freeze({ kind: "invalid", code: "invalid_action" });
     }
@@ -273,6 +348,9 @@ export class MindBindingApplicationService {
   ): Promise<MindBindingCommandResult> {
     const validated = this.#validateMutation(request);
     if ("kind" in validated) return validated;
+    if (!hasScope(validated.effectiveScopes, "content:write")) {
+      return Object.freeze({ kind: "denied", decision: bindingDenied("insufficient_scope") });
+    }
     if (request.action !== "bind" && request.action !== "unbind") {
       return Object.freeze({ kind: "invalid", code: "invalid_action" });
     }
@@ -351,6 +429,9 @@ export class MindBindingApplicationService {
   ): Promise<MindBindingCommandResult> {
     const validated = this.#validateMutation(request);
     if ("kind" in validated) return validated;
+    if (!hasScope(validated.effectiveScopes, "content:write")) {
+      return Object.freeze({ kind: "denied", decision: bindingDenied("insufficient_scope") });
+    }
     if (request.action !== "enable" && request.action !== "disable") {
       return Object.freeze({ kind: "invalid", code: "invalid_action" });
     }
@@ -407,7 +488,9 @@ export class MindBindingApplicationService {
     const authorizationState = await this.#bindings.readCurrentAuthorizationState({
       principalId: validated.principalId,
       spaceId: active.spaceId,
-      tokenId: request.actor.authentication.tokenId,
+      tokenId: request.actor.authentication.kind === "mcp_token"
+        ? request.actor.authentication.tokenId
+        : null,
     });
     if (authorizationState?.space.visibility !== "private") {
       return Object.freeze({ kind: "capture_target_visibility_blocked" });
@@ -451,11 +534,14 @@ export class MindBindingApplicationService {
   }
 
   #validateMutation(request: {
-    readonly actor: McpTokenActorContext;
+    readonly actor: RegisteredPrincipalActorContext;
+    readonly bindingOwnerId?: MindBindingOwnerId;
+    readonly credentialScopes?: EffectiveTokenScopes;
     readonly expectedBindingVersion: unknown;
     readonly idempotencyKey: unknown;
   }): ValidatedMutation | Extract<MindBindingCommandResult, { readonly kind: "invalid" }> {
-    if (!validActor(request.actor)) {
+    const caller = validatedCaller(request as MindBindingCaller);
+    if (caller === null) {
       return Object.freeze({ kind: "invalid", code: "invalid_actor" });
     }
     if (
@@ -472,9 +558,10 @@ export class MindBindingApplicationService {
       return Object.freeze({ kind: "invalid", code: "invalid_idempotency_key" });
     }
     return Object.freeze({
-      actor: request.actor,
-      bindingOwnerId: request.actor.authentication.bindingOwnerId,
-      principalId: request.actor.principalId,
+      actor: caller.actor,
+      bindingOwnerId: caller.bindingOwnerId,
+      principalId: caller.principalId,
+      effectiveScopes: caller.effectiveScopes,
       expectedBindingVersion: bindingVersion(
         request.expectedBindingVersion as number,
       ),
