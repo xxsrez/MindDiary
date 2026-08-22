@@ -6,6 +6,7 @@ import {
 import type { McpTokenStore, TokenVerifier } from "@mind-diary/application-ports";
 import type {
   EffectiveTokenScopes,
+  MindBindingOwnerId,
   PrincipalId,
   TokenId,
   UtcInstant,
@@ -1203,6 +1204,7 @@ export async function createSitesOAuthConnector(
         authentication: Object.freeze({
           kind: "mcp_token",
           tokenId: String(row.id) as TokenId,
+          bindingOwnerId: String(row.grant_id) as MindBindingOwnerId,
           effectiveScopes,
         }),
         deploymentCapabilities: MCP_CONTENT_DEPLOYMENT_CAPABILITIES,

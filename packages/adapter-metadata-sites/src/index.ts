@@ -90,6 +90,7 @@ const TRANSACTION_METHODS = new Set([
   "runContentCommitTransaction",
   "runExportStartTransaction",
   "runExportDownloadGrantTransaction",
+  "runMindBindingTransaction",
 ]);
 
 const METADATA_MUTATIONS = new Set([
@@ -123,6 +124,7 @@ const METADATA_MUTATIONS = new Set([
   "corruptOrdinaryHandleForTest",
   "markOrdinaryMindDeletingForTest",
   "setCurrentAuthorizationStateForTest",
+  "revokeMindBindingOwner",
 ]);
 
 const TOKEN_MUTATIONS = new Set([

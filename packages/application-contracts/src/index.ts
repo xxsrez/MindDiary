@@ -1,6 +1,7 @@
 import type {
   Capability,
   EffectiveTokenScopes,
+  MindBindingOwnerId,
   OpaqueId,
   PrincipalId,
   TokenId,
@@ -26,6 +27,8 @@ export type RegisteredPrincipalActorContext =
       readonly authentication: {
         readonly kind: "mcp_token";
         readonly tokenId: TokenId;
+        /** Stable OAuth-grant or personal-token owner of authoritative bindings. */
+        readonly bindingOwnerId: MindBindingOwnerId;
         /** Authenticated snapshot for transport filtering, never a role claim. */
         readonly effectiveScopes: EffectiveTokenScopes;
       };

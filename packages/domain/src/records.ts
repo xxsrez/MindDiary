@@ -7,23 +7,30 @@ import type {
   InvitationId,
   JobId,
   MembershipId,
+  MindBindingOwnerId,
   OutboxMessageId,
   PrincipalId,
   RequestId,
   RevisionId,
+  ReadMindBindingId,
   SecretVerifier,
   SensitiveExternalBinding,
   Sha256Digest,
   SpaceId,
   TokenId,
   UtcInstant,
+  WriteMindBindingId,
 } from "./ids.js";
 
 declare const versionBrand: unique symbol;
+declare const bindingVersionBrand: unique symbol;
 declare const revisionNumberBrand: unique symbol;
 declare const exportDownloadSecretVerifierBrand: unique symbol;
 
 export type Version = number & { readonly [versionBrand]: "version" };
+export type BindingVersion = number & {
+  readonly [bindingVersionBrand]: "binding-version";
+};
 export type RevisionNumber = number & {
   readonly [revisionNumberBrand]: "revision-number";
 };
@@ -43,6 +50,8 @@ export const INVITATION_STATES = [
   "expired",
 ] as const;
 export const ACCESS_TOKEN_STATES = ["active", "revoked", "expired"] as const;
+export const MIND_BINDING_SET_STATES = ["active", "revoked", "deleted"] as const;
+export const MIND_BINDING_STATES = ["active", "invalidated"] as const;
 export const JOB_STATES = [
   "queued",
   "running",
@@ -78,6 +87,8 @@ export type SpaceLifecycleState = (typeof SPACE_LIFECYCLE_STATES)[number];
 export type MembershipState = (typeof MEMBERSHIP_STATES)[number];
 export type InvitationState = (typeof INVITATION_STATES)[number];
 export type AccessTokenState = (typeof ACCESS_TOKEN_STATES)[number];
+export type MindBindingSetState = (typeof MIND_BINDING_SET_STATES)[number];
+export type MindBindingState = (typeof MIND_BINDING_STATES)[number];
 export type JobState = (typeof JOB_STATES)[number];
 export type IdempotencyState = (typeof IDEMPOTENCY_STATES)[number];
 export type OutboxState = (typeof OUTBOX_STATES)[number];
@@ -193,6 +204,35 @@ export interface AccessTokenMetadata {
   readonly expiresAt: UtcInstant;
   readonly lastUsedAt: UtcInstant | null;
   readonly revokedAt: UtcInstant | null;
+}
+
+/** Server-side selection owned by one OAuth grant or personal token. */
+export interface MindBindingSet {
+  readonly bindingOwnerId: MindBindingOwnerId;
+  readonly principalId: PrincipalId;
+  readonly state: MindBindingSetState;
+  readonly bindingVersion: BindingVersion;
+  readonly createdAt: UtcInstant;
+  readonly updatedAt: UtcInstant;
+}
+
+export interface ReadMindBinding {
+  readonly readBindingId: ReadMindBindingId;
+  readonly bindingOwnerId: MindBindingOwnerId;
+  readonly spaceId: SpaceId;
+  readonly state: MindBindingState;
+  readonly createdAt: UtcInstant;
+  readonly invalidatedAt: UtcInstant | null;
+}
+
+export interface WriteMindBinding {
+  readonly writeBindingId: WriteMindBindingId;
+  readonly bindingOwnerId: MindBindingOwnerId;
+  readonly spaceId: SpaceId;
+  readonly generation: BindingVersion;
+  readonly state: MindBindingState;
+  readonly createdAt: UtcInstant;
+  readonly invalidatedAt: UtcInstant | null;
 }
 
 export type BackgroundJobTarget =
@@ -372,6 +412,13 @@ export function version(value: number): Version {
     throw new TypeError("versions must be positive safe integers");
   }
   return value as Version;
+}
+
+export function bindingVersion(value: number): BindingVersion {
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new TypeError("binding versions must be non-negative safe integers");
+  }
+  return value as BindingVersion;
 }
 
 export function revisionNumber(value: number): RevisionNumber {

@@ -1,4 +1,7 @@
-import type { ActorContext } from "@mind-diary/application-contracts";
+import type {
+  ActorContext,
+  RequestId,
+} from "@mind-diary/application-contracts";
 import {
   ACCESS_TOKEN_STATES,
   CAPABILITIES,
@@ -17,6 +20,7 @@ import {
   type AuditEventId,
   type AuditOutboxMessage,
   type BackgroundJob,
+  type BindingVersion,
   type Capability,
   type CanonicalRevisionEnvelope,
   type CanonicalSpaceHandle,
@@ -30,6 +34,8 @@ import {
   type ExportJob,
   type HandlePolicyFailureReason,
   type MarkdownMediaType,
+  type MindBindingOwnerId,
+  type MindBindingSet,
   type MembershipId,
   type MembershipState,
   type IdempotencyKey,
@@ -46,6 +52,8 @@ import {
   type OutboxMessageId,
   type PrincipalState,
   type RevisionId,
+  type ReadMindBinding,
+  type ReadMindBindingId,
   type RevisionIndexState,
   type RevisionMode,
   type Role,
@@ -60,6 +68,8 @@ import {
   type VerifiedSpaceHost,
   type Version,
   type Visibility,
+  type WriteMindBinding,
+  type WriteMindBindingId,
 } from "@mind-diary/domain";
 
 export type { CanonicalRevisionEnvelope } from "@mind-diary/domain";
@@ -93,20 +103,28 @@ export {
   verifiedSpaceHost,
   revisionEnvelopesEqual,
   roleHasCapability,
+  bindingVersion,
   type CanonicalSpaceHandle,
   type HandlePolicyFailureReason,
   type VerifiedSpaceHost,
 } from "@mind-diary/domain";
 export type {
   ExternalIdentityBinding,
+  BindingVersion,
   SpaceInvitation,
   KnowledgeSpace,
+  MindBindingOwnerId,
+  MindBindingSet,
   PersonalSpaceBinding,
   Principal,
   PrincipalId,
   PrincipalAccountSnapshot,
+  ReadMindBinding,
+  ReadMindBindingId,
   SensitiveExternalBinding,
   SpaceMembership,
+  WriteMindBinding,
+  WriteMindBindingId,
 } from "@mind-diary/domain";
 
 export interface Clock {
@@ -176,6 +194,14 @@ export interface ExportDownloadSecretCrypto {
 
 export interface MetadataStore {
   readonly kind: "metadata-store";
+}
+
+/** Server-owned immutable IDs for Mind binding generations. */
+export interface MindBindingIdGenerator {
+  nextReadMindBindingId(): ReadMindBindingId;
+  nextWriteMindBindingId(): WriteMindBindingId;
+  nextMindBindingAuditEventId(): AuditEventId;
+  nextMindBindingOutboxMessageId(): OutboxMessageId;
 }
 
 export interface ExternalIdentityBindingLookup {
@@ -1704,6 +1730,119 @@ export interface AuthorizationStateReader {
 /** A state reader whose reads participate in the caller's metadata transaction. */
 export interface AuthorizationTransaction extends AuthorizationStateReader {
   readonly kind: "authorization-transaction";
+}
+
+export interface MindBindingSetSnapshot {
+  readonly bindingSet: Readonly<MindBindingSet>;
+  readonly readBindings: readonly Readonly<ReadMindBinding>[];
+  readonly writeBinding: Readonly<WriteMindBinding> | null;
+}
+
+interface MindBindingMutationRequestBase {
+  readonly bindingOwnerId: MindBindingOwnerId;
+  readonly principalId: PrincipalId;
+  readonly expectedBindingVersion: BindingVersion;
+  readonly idempotencyKey: IdempotencyKey;
+  readonly canonicalRequestHash: Sha256Digest;
+  readonly requestId: RequestId;
+  readonly auditEventId: AuditEventId;
+  readonly auditOutboxMessageId: OutboxMessageId;
+  readonly occurredAt: UtcInstant;
+}
+
+export type ApplyReadMindBindingRequest =
+  | (MindBindingMutationRequestBase & {
+      readonly action: "attach";
+      readonly spaceId: SpaceId;
+      readonly readBindingId: ReadMindBindingId;
+    })
+  | (MindBindingMutationRequestBase & {
+      readonly action: "detach";
+      readonly spaceId: SpaceId;
+      readonly readBindingId: null;
+    });
+
+export type ApplyWriteMindBindingRequest =
+  | (MindBindingMutationRequestBase & {
+      readonly action: "bind";
+      readonly spaceId: SpaceId;
+      readonly writeBindingId: WriteMindBindingId;
+    })
+  | (MindBindingMutationRequestBase & {
+      readonly action: "unbind";
+      readonly spaceId: null;
+      readonly writeBindingId: null;
+    });
+
+export type ApplyMindBindingMutationResult =
+  | {
+      readonly kind: "applied";
+      readonly bindings: Readonly<MindBindingSetSnapshot>;
+      readonly previousWriteBinding: Readonly<WriteMindBinding> | null;
+      readonly changed: boolean;
+      readonly replayed: boolean;
+    }
+  | {
+      readonly kind: "binding_version_conflict";
+      readonly currentBindingVersion: BindingVersion;
+    }
+  | { readonly kind: "idempotency_conflict" }
+  | { readonly kind: "binding_owner_revoked" }
+  | { readonly kind: "owner_mismatch" | "effect_conflict" | "invalid_record" };
+
+export interface RevokeMindBindingOwnerRequest {
+  readonly bindingOwnerId: MindBindingOwnerId;
+  readonly principalId: PrincipalId;
+  readonly requestId: RequestId;
+  readonly auditEventId: AuditEventId;
+  readonly auditOutboxMessageId: OutboxMessageId;
+  readonly occurredAt: UtcInstant;
+}
+
+export type RevokeMindBindingOwnerResult =
+  | {
+      readonly kind: "revoked";
+      readonly invalidatedReadBindings: number;
+      readonly invalidatedWriteBindings: number;
+      readonly replayed: boolean;
+    }
+  | {
+      readonly kind:
+        | "not_found"
+        | "owner_mismatch"
+        | "effect_conflict"
+        | "invalid_record";
+    };
+
+/** Atomic binding mutation plus fresh authorization transaction. */
+export interface MindBindingTransaction extends AuthorizationTransaction {
+  readMindBindingSet(
+    bindingOwnerId: MindBindingOwnerId,
+    principalId: PrincipalId,
+    occurredAt: UtcInstant,
+  ): Promise<Readonly<MindBindingSetSnapshot> | null>;
+  applyReadMindBinding(
+    request: Readonly<ApplyReadMindBindingRequest>,
+  ): Promise<ApplyMindBindingMutationResult>;
+  applyWriteMindBinding(
+    request: Readonly<ApplyWriteMindBindingRequest>,
+  ): Promise<ApplyMindBindingMutationResult>;
+}
+
+export interface MindBindingStore
+  extends MetadataStore,
+    AuthorizationStateReader {
+  readMindBindingSet(
+    bindingOwnerId: MindBindingOwnerId,
+    principalId: PrincipalId,
+    occurredAt: UtcInstant,
+  ): Promise<Readonly<MindBindingSetSnapshot> | null>;
+  runMindBindingTransaction<Result>(
+    operation: (transaction: MindBindingTransaction) => Promise<Result>,
+  ): Promise<Result>;
+  revokeMindBindingOwner(
+    request: Readonly<RevokeMindBindingOwnerRequest>,
+  ): Promise<RevokeMindBindingOwnerResult>;
 }
 
 export interface AuthorizationRequest {

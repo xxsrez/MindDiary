@@ -9,6 +9,9 @@ import type {
   AccountDeletionStore,
   ApplyMembershipMutationRequest,
   ApplyMembershipMutationResult,
+  ApplyMindBindingMutationResult,
+  ApplyReadMindBindingRequest,
+  ApplyWriteMindBindingRequest,
   BeginPrincipalTokenDeletionRequest,
   BeginPrincipalTokenDeletionResult,
   CancelPrincipalTokenDeletionRequest,
@@ -75,6 +78,11 @@ import type {
   JobId,
   McpTokenMetadata,
   McpTokenStore,
+  MindBindingOwnerId,
+  MindBindingSet,
+  MindBindingSetSnapshot,
+  MindBindingStore,
+  MindBindingTransaction,
   MembershipControlStore,
   MembershipControlTargetQuery,
   MembershipControlTransaction,
@@ -101,9 +109,13 @@ import type {
   ReadExportDownloadGrantResult,
   RevokeMcpTokenRequest,
   RevokeMcpTokenResult,
+  RevokeMindBindingOwnerRequest,
+  RevokeMindBindingOwnerResult,
   RevokePrincipalTokensForAccountDeletionRequest,
   RevokePrincipalTokensForAccountDeletionResult,
   PrincipalTokenDeletionSnapshot,
+  ReadMindBinding,
+  ReadMindBindingId,
   RetiredHandleMarker,
   RevisionIndexState,
   RevisionCommitRequest,
@@ -138,11 +150,14 @@ import type {
   TransferOrdinaryMindOwnershipResult,
   VerifiedSpaceHost,
   TokenVerifier,
+  WriteMindBinding,
+  WriteMindBindingId,
 } from "@mind-diary/application-ports";
 import {
   DomainInvariantError,
   PrincipalAccount,
   SpaceAggregate,
+  bindingVersion,
   isReservedTopLevelHandle,
   isReservedTopLevelRoute,
   parseCanonicalSpaceHandle,
@@ -2921,6 +2936,361 @@ function accountDeletionFingerprint(
   });
 }
 
+type AppliedMindBindingMutation = Readonly<
+  Extract<ApplyMindBindingMutationResult, { readonly kind: "applied" }>
+>;
+
+interface StoredMindBindingMutation {
+  readonly canonicalRequestHash: ApplyReadMindBindingRequest["canonicalRequestHash"];
+  readonly spaceId: SpaceId | null;
+  readonly result: AppliedMindBindingMutation;
+}
+
+interface MutableMindBindingOwnerState {
+  bindingSet: Readonly<MindBindingSet>;
+  readBindingsById: Map<ReadMindBindingId, Readonly<ReadMindBinding>>;
+  activeReadBindingBySpace: Map<SpaceId, ReadMindBindingId>;
+  writeBindingsById: Map<WriteMindBindingId, Readonly<WriteMindBinding>>;
+  activeWriteBindingId: WriteMindBindingId | null;
+  idempotency: Map<string, StoredMindBindingMutation>;
+}
+
+function cloneReadMindBinding(binding: Readonly<ReadMindBinding>): Readonly<ReadMindBinding> {
+  return Object.freeze({ ...binding });
+}
+
+function cloneWriteMindBinding(binding: Readonly<WriteMindBinding>): Readonly<WriteMindBinding> {
+  return Object.freeze({ ...binding });
+}
+
+function cloneMindBindingSnapshot(
+  snapshot: Readonly<MindBindingSetSnapshot>,
+): Readonly<MindBindingSetSnapshot> {
+  return Object.freeze({
+    bindingSet: Object.freeze({ ...snapshot.bindingSet }),
+    readBindings: Object.freeze(snapshot.readBindings.map(cloneReadMindBinding)),
+    writeBinding:
+      snapshot.writeBinding === null
+        ? null
+        : cloneWriteMindBinding(snapshot.writeBinding),
+  });
+}
+
+function cloneAppliedMindBindingMutation(
+  result: AppliedMindBindingMutation,
+): AppliedMindBindingMutation {
+  return Object.freeze({
+    ...result,
+    bindings: cloneMindBindingSnapshot(result.bindings),
+    previousWriteBinding:
+      result.previousWriteBinding === null
+        ? null
+        : cloneWriteMindBinding(result.previousWriteBinding),
+  });
+}
+
+function cloneMindBindingOwnerState(
+  state: MutableMindBindingOwnerState,
+): MutableMindBindingOwnerState {
+  return {
+    bindingSet: Object.freeze({ ...state.bindingSet }),
+    readBindingsById: new Map(
+      [...state.readBindingsById].map(([id, binding]) => [
+        id,
+        cloneReadMindBinding(binding),
+      ]),
+    ),
+    activeReadBindingBySpace: new Map(state.activeReadBindingBySpace),
+    writeBindingsById: new Map(
+      [...state.writeBindingsById].map(([id, binding]) => [
+        id,
+        cloneWriteMindBinding(binding),
+      ]),
+    ),
+    activeWriteBindingId: state.activeWriteBindingId,
+    idempotency: new Map(
+      [...state.idempotency].map(([key, record]) => [
+        key,
+        {
+          canonicalRequestHash: record.canonicalRequestHash,
+          spaceId: record.spaceId,
+          result: cloneAppliedMindBindingMutation(record.result),
+        },
+      ]),
+    ),
+  };
+}
+
+function cloneMindBindingOwners(
+  owners: ReadonlyMap<MindBindingOwnerId, MutableMindBindingOwnerState>,
+): Map<MindBindingOwnerId, MutableMindBindingOwnerState> {
+  return new Map(
+    [...owners].map(([ownerId, state]) => [
+      ownerId,
+      cloneMindBindingOwnerState(state),
+    ]),
+  );
+}
+
+function emptyMindBindingOwnerState(
+  bindingOwnerId: MindBindingOwnerId,
+  principalId: PrincipalId,
+  occurredAt: ApplyReadMindBindingRequest["occurredAt"],
+): MutableMindBindingOwnerState {
+  return {
+    bindingSet: Object.freeze({
+      bindingOwnerId,
+      principalId,
+      state: "active" as const,
+      bindingVersion: bindingVersion(0),
+      createdAt: occurredAt,
+      updatedAt: occurredAt,
+    }),
+    readBindingsById: new Map(),
+    activeReadBindingBySpace: new Map(),
+    writeBindingsById: new Map(),
+    activeWriteBindingId: null,
+    idempotency: new Map(),
+  };
+}
+
+function mindBindingSnapshot(
+  state: MutableMindBindingOwnerState,
+): Readonly<MindBindingSetSnapshot> {
+  const readBindings = [...state.activeReadBindingBySpace]
+    .sort(([left], [right]) => compareUnicodeScalarValues(left, right))
+    .map(([, id]) => state.readBindingsById.get(id))
+    .filter((binding): binding is Readonly<ReadMindBinding> =>
+      binding !== undefined && binding.state === "active",
+    )
+    .map(cloneReadMindBinding);
+  const write =
+    state.activeWriteBindingId === null
+      ? null
+      : state.writeBindingsById.get(state.activeWriteBindingId) ?? null;
+  return Object.freeze({
+    bindingSet: Object.freeze({ ...state.bindingSet }),
+    readBindings: Object.freeze(readBindings),
+    writeBinding:
+      write?.state === "active" ? cloneWriteMindBinding(write) : null,
+  });
+}
+
+function validMindBindingMutationBase(
+  request: Readonly<ApplyReadMindBindingRequest | ApplyWriteMindBindingRequest>,
+): boolean {
+  return (
+    BOUNDED_OPAQUE_ID.test(request.bindingOwnerId) &&
+    BOUNDED_OPAQUE_ID.test(request.principalId) &&
+    Number.isSafeInteger(request.expectedBindingVersion) &&
+    request.expectedBindingVersion >= 0 &&
+    typeof request.idempotencyKey === "string" &&
+    request.idempotencyKey.length > 0 &&
+    request.idempotencyKey.length <= 512 &&
+    SHA256_PATTERN.test(request.canonicalRequestHash) &&
+    BOUNDED_OPAQUE_ID.test(request.requestId) &&
+    BOUNDED_OPAQUE_ID.test(request.auditEventId) &&
+    BOUNDED_OPAQUE_ID.test(request.auditOutboxMessageId) &&
+    Number.isFinite(Date.parse(request.occurredAt))
+  );
+}
+
+function mindBindingIdempotencyKey(
+  operation: "read" | "write",
+  request: Readonly<ApplyReadMindBindingRequest | ApplyWriteMindBindingRequest>,
+): string {
+  return `${operation}\u0000${request.idempotencyKey}`;
+}
+
+function replayMindBindingMutation(
+  state: MutableMindBindingOwnerState,
+  operation: "read" | "write",
+  request: Readonly<ApplyReadMindBindingRequest | ApplyWriteMindBindingRequest>,
+): ApplyMindBindingMutationResult | null {
+  const record = state.idempotency.get(
+    mindBindingIdempotencyKey(operation, request),
+  );
+  if (!record) return null;
+  if (record.canonicalRequestHash !== request.canonicalRequestHash) {
+    return Object.freeze({ kind: "idempotency_conflict" });
+  }
+  return Object.freeze({
+    ...cloneAppliedMindBindingMutation(record.result),
+    replayed: true,
+  });
+}
+
+function recordMindBindingMutation(
+  state: MutableMindBindingOwnerState,
+  operation: "read" | "write",
+  request: Readonly<ApplyReadMindBindingRequest | ApplyWriteMindBindingRequest>,
+  result: AppliedMindBindingMutation,
+): void {
+  state.idempotency.set(mindBindingIdempotencyKey(operation, request), {
+    canonicalRequestHash: request.canonicalRequestHash,
+    spaceId: request.spaceId,
+    result: cloneAppliedMindBindingMutation(result),
+  });
+}
+
+function mindBindingEffectsAvailable(
+  auditEventId: AuditEventId,
+  auditOutboxMessageId: OutboxMessageId,
+  auditEvents: ReadonlyMap<AuditEventId, Readonly<AuditEvent>>,
+  auditOutbox: ReadonlyMap<OutboxMessageId, Readonly<AuditOutboxMessage>>,
+): boolean {
+  return (
+    !auditEvents.has(auditEventId) &&
+    !auditOutbox.has(auditOutboxMessageId) &&
+    ![...auditOutbox.values()].some(
+      (message) => message.auditEventId === auditEventId,
+    )
+  );
+}
+
+function stageMindBindingAudit(
+  request: Readonly<ApplyReadMindBindingRequest | ApplyWriteMindBindingRequest>,
+  result: AppliedMindBindingMutation,
+  spaceId: SpaceId | null,
+  auditEvents: Map<AuditEventId, Readonly<AuditEvent>>,
+  auditOutbox: Map<OutboxMessageId, Readonly<AuditOutboxMessage>>,
+): void {
+  const operation =
+    request.action === "attach"
+      ? "attach_read"
+      : request.action === "detach"
+        ? "detach_read"
+        : request.action === "bind"
+          ? "bind_write"
+          : "unbind_write";
+  const event = Object.freeze({
+    auditEventId: request.auditEventId,
+    actor: Object.freeze({
+      kind: "principal" as const,
+      principalId: request.principalId,
+    }),
+    requestId: request.requestId,
+    eventType: `mind_binding.${operation}`,
+    outcome: "succeeded" as const,
+    spaceId,
+    occurredAt: request.occurredAt,
+    safeMetadata: Object.freeze({
+      binding_version: result.bindings.bindingSet.bindingVersion,
+      changed: result.changed,
+      operation,
+    }),
+  });
+  const outbox = Object.freeze({
+    outboxMessageId: request.auditOutboxMessageId,
+    auditEventId: request.auditEventId,
+    state: "pending" as const,
+    version: version(1),
+    attempts: 0,
+    availableAt: request.occurredAt,
+    claimExpiresAt: null,
+    createdAt: request.occurredAt,
+    updatedAt: request.occurredAt,
+  });
+  auditEvents.set(event.auditEventId, cloneAuditEvent(event));
+  auditOutbox.set(outbox.outboxMessageId, cloneAuditOutbox(outbox));
+}
+
+function stageMindBindingRevokeAudit(
+  request: Readonly<RevokeMindBindingOwnerRequest>,
+  invalidatedReadBindings: number,
+  invalidatedWriteBindings: number,
+  bindingVersionValue: number,
+  auditEvents: Map<AuditEventId, Readonly<AuditEvent>>,
+  auditOutbox: Map<OutboxMessageId, Readonly<AuditOutboxMessage>>,
+): void {
+  const event = Object.freeze({
+    auditEventId: request.auditEventId,
+    actor: Object.freeze({
+      kind: "principal" as const,
+      principalId: request.principalId,
+    }),
+    requestId: request.requestId,
+    eventType: "mind_binding.owner_revoked",
+    outcome: "succeeded" as const,
+    spaceId: null,
+    occurredAt: request.occurredAt,
+    safeMetadata: Object.freeze({
+      binding_version: bindingVersionValue,
+      read_bindings_invalidated: invalidatedReadBindings,
+      write_bindings_invalidated: invalidatedWriteBindings,
+    }),
+  });
+  const outbox = Object.freeze({
+    outboxMessageId: request.auditOutboxMessageId,
+    auditEventId: request.auditEventId,
+    state: "pending" as const,
+    version: version(1),
+    attempts: 0,
+    availableAt: request.occurredAt,
+    claimExpiresAt: null,
+    createdAt: request.occurredAt,
+    updatedAt: request.occurredAt,
+  });
+  auditEvents.set(event.auditEventId, cloneAuditEvent(event));
+  auditOutbox.set(outbox.outboxMessageId, cloneAuditOutbox(outbox));
+}
+
+function purgeMindBindingsForSpace(
+  owners: Map<MindBindingOwnerId, MutableMindBindingOwnerState>,
+  spaceId: SpaceId,
+  occurredAt: ApplyReadMindBindingRequest["occurredAt"],
+): void {
+  for (const state of owners.values()) {
+    let activeChanged = false;
+    const activeReadId = state.activeReadBindingBySpace.get(spaceId);
+    if (activeReadId) {
+      state.activeReadBindingBySpace.delete(spaceId);
+      activeChanged = true;
+    }
+    for (const [id, binding] of state.readBindingsById) {
+      if (binding.spaceId === spaceId) state.readBindingsById.delete(id);
+    }
+    if (state.activeWriteBindingId !== null) {
+      const active = state.writeBindingsById.get(state.activeWriteBindingId);
+      if (active?.spaceId === spaceId) {
+        state.activeWriteBindingId = null;
+        activeChanged = true;
+      }
+    }
+    for (const [id, binding] of state.writeBindingsById) {
+      if (binding.spaceId === spaceId) state.writeBindingsById.delete(id);
+    }
+    for (const [key, record] of state.idempotency) {
+      if (
+        record.spaceId === spaceId ||
+        record.result.bindings.readBindings.some(
+          (binding) => binding.spaceId === spaceId,
+        ) ||
+        record.result.bindings.writeBinding?.spaceId === spaceId ||
+        record.result.previousWriteBinding?.spaceId === spaceId
+      ) {
+        state.idempotency.delete(key);
+      }
+    }
+    if (activeChanged && state.bindingSet.state === "active") {
+      state.bindingSet = Object.freeze({
+        ...state.bindingSet,
+        bindingVersion: bindingVersion(state.bindingSet.bindingVersion + 1),
+        updatedAt: occurredAt,
+      });
+    }
+  }
+}
+
+function purgeMindBindingsForPrincipal(
+  owners: Map<MindBindingOwnerId, MutableMindBindingOwnerState>,
+  principalId: PrincipalId,
+): void {
+  for (const [ownerId, state] of owners) {
+    if (state.bindingSet.principalId === principalId) owners.delete(ownerId);
+  }
+}
+
 export class InMemoryRevisionMetadataStore
   implements
     ContentCommitMetadataStore,
@@ -2930,7 +3300,8 @@ export class InMemoryRevisionMetadataStore
     OrdinaryMindStore,
     AccountDeletionStore,
     MembershipControlStore,
-    ControlReadStore {
+    ControlReadStore,
+    MindBindingStore {
   readonly kind = "metadata-store" as const;
   #spaces = new Map<SpaceId, SpaceState>();
   #revisionsById = new Map<RevisionId, Envelope>();
@@ -2971,6 +3342,10 @@ export class InMemoryRevisionMetadataStore
   #ordinaryMindDeletionCleanup: OrdinaryMindDeletionCleanupMap = new Map();
   #accountDeletionImpacts: AccountDeletionImpactMap = new Map();
   #accountDeletionCleanup: AccountDeletionCleanupMap = new Map();
+  #mindBindingOwners = new Map<
+    MindBindingOwnerId,
+    MutableMindBindingOwnerState
+  >();
   #activeHandlesByKey: ActiveHandleByKeyMap = new Map();
   #activeHandlesBySpace: ActiveHandleBySpaceMap = new Map();
   #retiredHandles: RetiredHandleMap = new Map();
@@ -2986,6 +3361,409 @@ export class InMemoryRevisionMetadataStore
   #nextPersonalProfileFailureStage: PersonalProfileFailureStage | null = null;
   #nextOrdinaryMindFailureStage: OrdinaryMindFailureStage | null = null;
   #nextAccountDeletionFailureStage: AccountDeletionFailureStage | null = null;
+
+  async readMindBindingSet(
+    bindingOwnerId: MindBindingOwnerId,
+    principalId: PrincipalId,
+    occurredAt: ApplyReadMindBindingRequest["occurredAt"],
+  ): Promise<Readonly<MindBindingSetSnapshot> | null> {
+    if (
+      !BOUNDED_OPAQUE_ID.test(bindingOwnerId) ||
+      !BOUNDED_OPAQUE_ID.test(principalId) ||
+      !Number.isFinite(Date.parse(occurredAt))
+    ) {
+      return null;
+    }
+    const state = this.#mindBindingOwners.get(bindingOwnerId);
+    if (state && state.bindingSet.principalId !== principalId) return null;
+    return mindBindingSnapshot(
+      state ?? emptyMindBindingOwnerState(bindingOwnerId, principalId, occurredAt),
+    );
+  }
+
+  async runMindBindingTransaction<Result>(
+    operation: (transaction: MindBindingTransaction) => Promise<Result>,
+  ): Promise<Result> {
+    return this.#runExclusive(async () => {
+      const owners = cloneMindBindingOwners(this.#mindBindingOwners);
+      const auditEvents = new Map(
+        [...this.#auditEvents].map(([id, event]) => [id, cloneAuditEvent(event)]),
+      );
+      const auditOutbox = new Map(
+        [...this.#auditOutbox].map(([id, message]) => [
+          id,
+          cloneAuditOutbox(message),
+        ]),
+      );
+      const getOwner = (
+        request: Readonly<ApplyReadMindBindingRequest | ApplyWriteMindBindingRequest>,
+      ): MutableMindBindingOwnerState | ApplyMindBindingMutationResult => {
+        if (!validMindBindingMutationBase(request)) {
+          return Object.freeze({ kind: "invalid_record" });
+        }
+        const existing = owners.get(request.bindingOwnerId);
+        if (existing && existing.bindingSet.principalId !== request.principalId) {
+          return Object.freeze({ kind: "owner_mismatch" });
+        }
+        const state =
+          existing ??
+          emptyMindBindingOwnerState(
+            request.bindingOwnerId,
+            request.principalId,
+            request.occurredAt,
+          );
+        if (state.bindingSet.state !== "active") {
+          return Object.freeze({ kind: "binding_owner_revoked" });
+        }
+        return state;
+      };
+
+      const transaction: MindBindingTransaction = Object.freeze({
+        kind: "authorization-transaction" as const,
+        readCurrentAuthorizationState: (query: AuthorizationStateQuery) =>
+          this.readCurrentAuthorizationState(query),
+        readMindBindingSet: async (
+          bindingOwnerId: MindBindingOwnerId,
+          principalId: PrincipalId,
+          occurredAt: ApplyReadMindBindingRequest["occurredAt"],
+        ) => {
+          if (
+            !BOUNDED_OPAQUE_ID.test(bindingOwnerId) ||
+            !BOUNDED_OPAQUE_ID.test(principalId) ||
+            !Number.isFinite(Date.parse(occurredAt))
+          ) {
+            return null;
+          }
+          const state = owners.get(bindingOwnerId);
+          if (state && state.bindingSet.principalId !== principalId) return null;
+          return mindBindingSnapshot(
+            state ?? emptyMindBindingOwnerState(bindingOwnerId, principalId, occurredAt),
+          );
+        },
+        applyReadMindBinding: async (
+          request: Readonly<ApplyReadMindBindingRequest>,
+        ): Promise<ApplyMindBindingMutationResult> => {
+          if (
+            (request.action !== "attach" && request.action !== "detach") ||
+            !BOUNDED_OPAQUE_ID.test(request.spaceId) ||
+            (request.action === "attach" &&
+              !BOUNDED_OPAQUE_ID.test(request.readBindingId))
+          ) {
+            return Object.freeze({ kind: "invalid_record" });
+          }
+          const selected = getOwner(request);
+          if (!("bindingSet" in selected)) return selected;
+          const replay = replayMindBindingMutation(selected, "read", request);
+          if (replay) return replay;
+          if (
+            selected.bindingSet.bindingVersion !==
+            request.expectedBindingVersion
+          ) {
+            return Object.freeze({
+              kind: "binding_version_conflict",
+              currentBindingVersion: selected.bindingSet.bindingVersion,
+            });
+          }
+          if (
+            !mindBindingEffectsAvailable(
+              request.auditEventId,
+              request.auditOutboxMessageId,
+              auditEvents,
+              auditOutbox,
+            )
+          ) {
+            return Object.freeze({ kind: "effect_conflict" });
+          }
+          if (!owners.has(request.bindingOwnerId)) {
+            owners.set(request.bindingOwnerId, selected);
+          }
+
+          const activeId = selected.activeReadBindingBySpace.get(request.spaceId);
+          let changed = false;
+          if (request.action === "attach") {
+            if (!activeId) {
+              if (selected.readBindingsById.has(request.readBindingId)) {
+                return Object.freeze({ kind: "invalid_record" });
+              }
+              selected.readBindingsById.set(
+                request.readBindingId,
+                Object.freeze({
+                  readBindingId: request.readBindingId,
+                  bindingOwnerId: request.bindingOwnerId,
+                  spaceId: request.spaceId,
+                  state: "active" as const,
+                  createdAt: request.occurredAt,
+                  invalidatedAt: null,
+                }),
+              );
+              selected.activeReadBindingBySpace.set(
+                request.spaceId,
+                request.readBindingId,
+              );
+              changed = true;
+            }
+          } else if (activeId) {
+            const current = selected.readBindingsById.get(activeId);
+            if (!current) return Object.freeze({ kind: "invalid_record" });
+            selected.readBindingsById.set(
+              activeId,
+              Object.freeze({
+                ...current,
+                state: "invalidated" as const,
+                invalidatedAt: request.occurredAt,
+              }),
+            );
+            selected.activeReadBindingBySpace.delete(request.spaceId);
+            changed = true;
+          }
+
+          if (changed) {
+            selected.bindingSet = Object.freeze({
+              ...selected.bindingSet,
+              bindingVersion: bindingVersion(
+                selected.bindingSet.bindingVersion + 1,
+              ),
+              updatedAt: request.occurredAt,
+            });
+          }
+          const result = Object.freeze({
+            kind: "applied" as const,
+            bindings: mindBindingSnapshot(selected),
+            previousWriteBinding: null,
+            changed,
+            replayed: false,
+          });
+          stageMindBindingAudit(
+            request,
+            result,
+            request.spaceId,
+            auditEvents,
+            auditOutbox,
+          );
+          recordMindBindingMutation(selected, "read", request, result);
+          return result;
+        },
+        applyWriteMindBinding: async (
+          request: Readonly<ApplyWriteMindBindingRequest>,
+        ): Promise<ApplyMindBindingMutationResult> => {
+          if (
+            (request.action !== "bind" && request.action !== "unbind") ||
+            (request.action === "bind" &&
+              (!BOUNDED_OPAQUE_ID.test(request.spaceId) ||
+                !BOUNDED_OPAQUE_ID.test(request.writeBindingId))) ||
+            (request.action === "unbind" &&
+              (request.spaceId !== null || request.writeBindingId !== null))
+          ) {
+            return Object.freeze({ kind: "invalid_record" });
+          }
+          const selected = getOwner(request);
+          if (!("bindingSet" in selected)) return selected;
+          const replay = replayMindBindingMutation(selected, "write", request);
+          if (replay) return replay;
+          if (
+            selected.bindingSet.bindingVersion !==
+            request.expectedBindingVersion
+          ) {
+            return Object.freeze({
+              kind: "binding_version_conflict",
+              currentBindingVersion: selected.bindingSet.bindingVersion,
+            });
+          }
+          if (
+            !mindBindingEffectsAvailable(
+              request.auditEventId,
+              request.auditOutboxMessageId,
+              auditEvents,
+              auditOutbox,
+            )
+          ) {
+            return Object.freeze({ kind: "effect_conflict" });
+          }
+
+          const active =
+            selected.activeWriteBindingId === null
+              ? null
+              : selected.writeBindingsById.get(selected.activeWriteBindingId) ??
+                null;
+          if (selected.activeWriteBindingId !== null && active === null) {
+            return Object.freeze({ kind: "invalid_record" });
+          }
+          if (!owners.has(request.bindingOwnerId)) {
+            owners.set(request.bindingOwnerId, selected);
+          }
+          let previous: Readonly<WriteMindBinding> | null = null;
+          let changed = false;
+          if (request.action === "bind") {
+            if (active?.state === "active" && active.spaceId === request.spaceId) {
+              // Same-target bind preserves the immutable generation.
+            } else {
+              if (selected.writeBindingsById.has(request.writeBindingId)) {
+                return Object.freeze({ kind: "invalid_record" });
+              }
+              if (active?.state === "active") {
+                previous = Object.freeze({
+                  ...active,
+                  state: "invalidated" as const,
+                  invalidatedAt: request.occurredAt,
+                });
+                selected.writeBindingsById.set(active.writeBindingId, previous);
+              }
+              const nextVersion = bindingVersion(
+                selected.bindingSet.bindingVersion + 1,
+              );
+              const current = Object.freeze({
+                writeBindingId: request.writeBindingId,
+                bindingOwnerId: request.bindingOwnerId,
+                spaceId: request.spaceId,
+                generation: nextVersion,
+                state: "active" as const,
+                createdAt: request.occurredAt,
+                invalidatedAt: null,
+              });
+              selected.writeBindingsById.set(request.writeBindingId, current);
+              selected.activeWriteBindingId = request.writeBindingId;
+              selected.bindingSet = Object.freeze({
+                ...selected.bindingSet,
+                bindingVersion: nextVersion,
+                updatedAt: request.occurredAt,
+              });
+              changed = true;
+            }
+          } else if (active?.state === "active") {
+            previous = Object.freeze({
+              ...active,
+              state: "invalidated" as const,
+              invalidatedAt: request.occurredAt,
+            });
+            selected.writeBindingsById.set(active.writeBindingId, previous);
+            selected.activeWriteBindingId = null;
+            selected.bindingSet = Object.freeze({
+              ...selected.bindingSet,
+              bindingVersion: bindingVersion(
+                selected.bindingSet.bindingVersion + 1,
+              ),
+              updatedAt: request.occurredAt,
+            });
+            changed = true;
+          }
+
+          const result = Object.freeze({
+            kind: "applied" as const,
+            bindings: mindBindingSnapshot(selected),
+            previousWriteBinding: previous,
+            changed,
+            replayed: false,
+          });
+          stageMindBindingAudit(
+            request,
+            result,
+            request.spaceId ?? previous?.spaceId ?? null,
+            auditEvents,
+            auditOutbox,
+          );
+          recordMindBindingMutation(selected, "write", request, result);
+          return result;
+        },
+      });
+
+      const result = await operation(transaction);
+      this.#mindBindingOwners = owners;
+      this.#auditEvents = auditEvents;
+      this.#auditOutbox = auditOutbox;
+      return result;
+    });
+  }
+
+  async revokeMindBindingOwner(
+    request: Readonly<RevokeMindBindingOwnerRequest>,
+  ): Promise<RevokeMindBindingOwnerResult> {
+    return this.#runExclusive(async () => {
+      if (
+        !BOUNDED_OPAQUE_ID.test(request.bindingOwnerId) ||
+        !BOUNDED_OPAQUE_ID.test(request.principalId) ||
+        !BOUNDED_OPAQUE_ID.test(request.requestId) ||
+        !BOUNDED_OPAQUE_ID.test(request.auditEventId) ||
+        !BOUNDED_OPAQUE_ID.test(request.auditOutboxMessageId) ||
+        !Number.isFinite(Date.parse(request.occurredAt))
+      ) {
+        return Object.freeze({ kind: "invalid_record" });
+      }
+      const state = this.#mindBindingOwners.get(request.bindingOwnerId);
+      if (!state) return Object.freeze({ kind: "not_found" });
+      if (state.bindingSet.principalId !== request.principalId) {
+        return Object.freeze({ kind: "owner_mismatch" });
+      }
+      if (state.bindingSet.state !== "active") {
+        return Object.freeze({
+          kind: "revoked",
+          invalidatedReadBindings: 0,
+          invalidatedWriteBindings: 0,
+          replayed: true,
+        });
+      }
+      if (
+        !mindBindingEffectsAvailable(
+          request.auditEventId,
+          request.auditOutboxMessageId,
+          this.#auditEvents,
+          this.#auditOutbox,
+        )
+      ) {
+        return Object.freeze({ kind: "effect_conflict" });
+      }
+      const invalidatedReadBindings = state.activeReadBindingBySpace.size;
+      for (const id of state.activeReadBindingBySpace.values()) {
+        const current = state.readBindingsById.get(id);
+        if (current) {
+          state.readBindingsById.set(
+            id,
+            Object.freeze({
+              ...current,
+              state: "invalidated" as const,
+              invalidatedAt: request.occurredAt,
+            }),
+          );
+        }
+      }
+      state.activeReadBindingBySpace.clear();
+      let invalidatedWriteBindings = 0;
+      if (state.activeWriteBindingId !== null) {
+        const current = state.writeBindingsById.get(state.activeWriteBindingId);
+        if (current) {
+          state.writeBindingsById.set(
+            current.writeBindingId,
+            Object.freeze({
+              ...current,
+              state: "invalidated" as const,
+              invalidatedAt: request.occurredAt,
+            }),
+          );
+          invalidatedWriteBindings = 1;
+        }
+      }
+      state.activeWriteBindingId = null;
+      state.bindingSet = Object.freeze({
+        ...state.bindingSet,
+        state: "revoked" as const,
+        bindingVersion: bindingVersion(state.bindingSet.bindingVersion + 1),
+        updatedAt: request.occurredAt,
+      });
+      stageMindBindingRevokeAudit(
+        request,
+        invalidatedReadBindings,
+        invalidatedWriteBindings,
+        state.bindingSet.bindingVersion,
+        this.#auditEvents,
+        this.#auditOutbox,
+      );
+      return Object.freeze({
+        kind: "revoked",
+        invalidatedReadBindings,
+        invalidatedWriteBindings,
+        replayed: false,
+      });
+    });
+  }
 
   async readHead(spaceId: SpaceId): Promise<RevisionId | null> {
     return this.#spaces.get(spaceId)?.head ?? null;
@@ -3437,6 +4215,7 @@ export class InMemoryRevisionMetadataStore
           cloneAuthorizationState(state),
         ]),
       );
+      let mindBindingOwners = cloneMindBindingOwners(this.#mindBindingOwners);
 
       const deletionState = (): OrdinaryMindDeletionState => ({
         knowledgeSpaces,
@@ -5317,6 +6096,11 @@ export class InMemoryRevisionMetadataStore
           for (const [impactId, candidate] of deletionImpacts) {
             if (candidate.spaceId === spaceId) deletionImpacts.delete(impactId);
           }
+          purgeMindBindingsForSpace(
+            mindBindingOwners,
+            spaceId,
+            request.occurredAt,
+          );
           this.#failOrdinaryMindIfRequested("delete_after_target_records");
 
           publicCatalogSpaceIds = derivePublicMindCatalogSpaceIds(
@@ -5619,6 +6403,11 @@ export class InMemoryRevisionMetadataStore
             for (const [impactId, candidate] of deletionImpacts) {
               if (candidate.spaceId === spaceId) deletionImpacts.delete(impactId);
             }
+            purgeMindBindingsForSpace(
+              mindBindingOwners,
+              spaceId,
+              request.occurredAt,
+            );
           }
           this.#failAccountDeletionIfRequested("delete_after_target_records");
 
@@ -5727,6 +6516,10 @@ export class InMemoryRevisionMetadataStore
           externalBindingKeys.forEach((key) => externalBindings.delete(key));
           personalBindings.delete(request.principalId);
           principals.delete(request.principalId);
+          purgeMindBindingsForPrincipal(
+            mindBindingOwners,
+            request.principalId,
+          );
           for (const [key, state] of authorizationStates) {
             if (
               state.principal.principalId === request.principalId ||
@@ -5813,6 +6606,7 @@ export class InMemoryRevisionMetadataStore
       this.#ordinaryMindDeletionCleanup = deletionCleanup;
       this.#accountDeletionImpacts = accountDeletionImpacts;
       this.#accountDeletionCleanup = accountDeletionCleanup;
+      this.#mindBindingOwners = mindBindingOwners;
       this.#authorizationStates.clear();
       authorizationStates.forEach((state, key) =>
         this.#authorizationStates.set(key, state));

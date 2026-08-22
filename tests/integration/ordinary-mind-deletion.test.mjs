@@ -17,7 +17,12 @@ import {
   MindRouteService,
   PublicMindCatalogService,
 } from "@mind-diary/application-control";
-import { CAPABILITIES, version, verifiedSpaceHost } from "@mind-diary/domain";
+import {
+  CAPABILITIES,
+  bindingVersion,
+  version,
+  verifiedSpaceHost,
+} from "@mind-diary/domain";
 
 const CREATED_AT = "2026-08-07T06:00:00.000Z";
 const DELETE_AT = "2026-08-07T06:10:00.000Z";
@@ -149,6 +154,27 @@ async function seedPrincipalToken(env, principalId) {
   assert.equal(created.kind, "created");
 }
 
+async function seedTargetBinding(env, principalId, spaceId) {
+  const result = await env.metadata.runMindBindingTransaction((transaction) =>
+    transaction.applyWriteMindBinding({
+      bindingOwnerId: "binding_owner_mind_delete",
+      principalId,
+      action: "bind",
+      spaceId,
+      writeBindingId: "write_binding_mind_delete",
+      expectedBindingVersion: bindingVersion(0),
+      idempotencyKey: "bind-before-mind-delete",
+      canonicalRequestHash: `sha256:${"7".repeat(64)}`,
+      requestId: "request_bind_before_mind_delete",
+      auditEventId: "audit_bind_before_mind_delete",
+      auditOutboxMessageId: "outbox_bind_before_mind_delete",
+      occurredAt: CREATED_AT,
+    }),
+  );
+  assert.equal(result.kind, "applied");
+  assert.equal(result.bindings.writeBinding.spaceId, spaceId);
+}
+
 async function seedExportLocators(env, target, principalId) {
   const job = {
     jobId: "export_delete_target",
@@ -231,6 +257,7 @@ test("Owner preview is expiring, impact-bound and whole-Mind deletion leaves onl
   const owner = await createAccount(env, 1);
   const target = await createMind(env, owner);
   await seedPrincipalToken(env, owner.principalId);
+  await seedTargetBinding(env, owner.principalId, target.mindId);
   assert.equal(
     await env.metadata.changeOrdinaryVisibilityForTest(
       target.mindId,
@@ -306,6 +333,13 @@ test("Owner preview is expiring, impact-bound and whole-Mind deletion leaves onl
   );
   assert.equal(result.replayed, false);
   assert.equal(await env.metadata.inspectOrdinaryMindStateForTest(target.mindId), null);
+  const bindingsAfterDeletion = await env.metadata.readMindBindingSet(
+    "binding_owner_mind_delete",
+    owner.principalId,
+    DELETE_AT,
+  );
+  assert.equal(bindingsAfterDeletion.writeBinding, null);
+  assert.deepEqual(bindingsAfterDeletion.readBindings, []);
   assert.equal(await env.metadata.readHead(target.mindId), null);
   assert.equal(
     await env.metadata.readRevision(target.mindId, target.headRevisionId),

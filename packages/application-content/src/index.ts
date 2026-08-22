@@ -28,6 +28,7 @@ import {
   type Capability,
   type EffectiveTokenScopes,
   type MarkdownMediaType,
+  type MindBindingOwnerId,
   type RevisionAuthorReference,
   type RevisionId,
   type Sha256Digest,
@@ -39,6 +40,7 @@ import type { OkfBundleFixture } from "@mind-diary/okf-codec";
 export * from "./mind-discovery.js";
 export * from "./mind-browse.js";
 export * from "./mind-history.js";
+export * from "./mind-bindings.js";
 export * from "./mind-search.js";
 export * from "./mind-validation.js";
 
@@ -363,6 +365,7 @@ export class McpBearerAuthenticationService implements McpBearerAuthenticator {
         authentication: Object.freeze({
           kind: "mcp_token",
           tokenId: token.tokenId,
+          bindingOwnerId: token.tokenId as unknown as MindBindingOwnerId,
           effectiveScopes: Object.freeze([...token.scopes]) as EffectiveTokenScopes,
         }),
         deploymentCapabilities: this.#deploymentCapabilities,

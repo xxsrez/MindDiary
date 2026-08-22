@@ -20,6 +20,7 @@ import {
 import { createLocalAccountDeletionBoundary } from "@mind-diary/composition-root";
 import {
   CAPABILITIES,
+  bindingVersion,
   createCanonicalRevisionEnvelope,
   version,
   verifiedSpaceHost,
@@ -179,6 +180,27 @@ async function seedToken(env, principalId, suffix = "a") {
   return tokenId;
 }
 
+async function seedAccountBinding(env, principalId, spaceId) {
+  const result = await env.metadata.runMindBindingTransaction((transaction) =>
+    transaction.applyWriteMindBinding({
+      bindingOwnerId: "binding_owner_account_delete",
+      principalId,
+      action: "bind",
+      spaceId,
+      writeBindingId: "write_binding_account_delete",
+      expectedBindingVersion: bindingVersion(0),
+      idempotencyKey: "bind-before-account-delete",
+      canonicalRequestHash: `sha256:${"8".repeat(64)}`,
+      requestId: "request_bind_before_account_delete",
+      auditEventId: "audit_bind_before_account_delete",
+      auditOutboxMessageId: "outbox_bind_before_account_delete",
+      occurredAt: CREATED_AT,
+    }),
+  );
+  assert.equal(result.kind, "applied");
+  assert.equal(result.bindings.writeBinding.spaceId, spaceId);
+}
+
 function deleteCommand(preview, key = "delete-account-once") {
   return {
     impactId: preview.impactId,
@@ -261,6 +283,7 @@ test("preview binds the exact cascade and deletion preserves foreign revisions w
     },
   );
   const tokenId = await seedToken(env, deleted.principalId);
+  await seedAccountBinding(env, deleted.principalId, owned.mindId);
   const foreignRevisionId = await seedForeignRevision(
     env,
     foreignMembershipMind,
@@ -301,6 +324,14 @@ test("preview binds the exact cascade and deletion preserves foreign revisions w
   assert.equal(result.spacesDeleted, 2);
   assert.equal(result.tokensRevoked, 1);
   assert.equal(await env.metadata.readAccount(deleted.principalId), null);
+  const bindingsAfterDeletion = await env.metadata.readMindBindingSet(
+    "binding_owner_account_delete",
+    deleted.principalId,
+    DELETE_AT,
+  );
+  assert.equal(bindingsAfterDeletion.bindingSet.bindingVersion, 0);
+  assert.equal(bindingsAfterDeletion.writeBinding, null);
+  assert.deepEqual(bindingsAfterDeletion.readBindings, []);
   assert.equal(await env.metadata.resolvePersonalMind(deleted.principalId), null);
   assert.equal(
     await env.metadata.readAccountByExternalBinding({

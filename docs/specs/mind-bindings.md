@@ -1,8 +1,10 @@
 # Multiple-read/single-write Mind bindings
 
-Статус: accepted product/domain/API contract, 2026-08-22. Реализация и UAT
-evidence остаются отдельными задачами; этот документ сам по себе не утверждает,
-что bindings уже доступны в deployed product.
+Статус: accepted product/domain/API contract, 2026-08-22. Локальная durable
+state/application/persistence реализация подтверждена в `MD-231`; MCP tools,
+enforcement на всех content operations и UAT evidence остаются отдельными
+задачами. Этот документ не утверждает, что bindings уже доступны в deployed
+product.
 
 ## Назначение
 
