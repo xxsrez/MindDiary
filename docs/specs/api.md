@@ -39,7 +39,8 @@ capability discovery plus read-only exact-payload stage/commit reconciliation;
 it reuses the existing atomic `commit_changeset` rather than defining another
 revision transaction. Native client/profile UAT and hosted
 upload-intent/producer evidence remain MD-250/downstream gates; provider
-connector sources stay contract-only.
+connector bindings remain unavailable even though their provider-neutral
+authorized-reader/staging boundary is implemented locally.
 No source may be inferred as hosted capability or used as a silent
 base64/URL/path fallback.
 

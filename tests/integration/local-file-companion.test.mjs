@@ -8,6 +8,7 @@ import { InMemoryRevisionMetadataStore } from "@mind-diary/adapter-metadata-memo
 import { InMemoryObjectStore } from "@mind-diary/adapter-object-memory";
 import {
   BundleFileStagingService,
+  AuthorizedConnectorIngressService,
   CanonicalRevisionCoordinator,
   ChangesetCommitService,
   FileIngressCoordinator,
@@ -180,6 +181,24 @@ test("local disk, workspace bytes and native session ref share one atomic commit
     const generatedIngress = new GeneratedArtifactIngressService({
       staging: env.staging,
     });
+    const connectorIngress = new AuthorizedConnectorIngressService({
+      staging: env.staging,
+      reader: {
+        async read({ object }) {
+          assert.deepEqual(object, { ref: "connector-object-fixture" });
+          return {
+            kind: "ready",
+            stream: (async function* () {
+              yield GENERATED_PNG;
+            })(),
+            displayFilename: "connector.png",
+            claimedMediaType: "image/png",
+            expectedSize: GENERATED_PNG.byteLength,
+            expectedSha256: await env.objects.calculateSha256(GENERATED_PNG),
+          };
+        },
+      },
+    });
     const ingress = new FileIngressCoordinator({
       staging: env.staging,
       commits: env.commits,
@@ -191,10 +210,7 @@ test("local disk, workspace bytes and native session ref share one atomic commit
           }),
         },
         connector_object: {
-          stage: (payload) => env.staging.stage({
-            ...payload,
-            sourceKind: "connector_object",
-          }),
+          stage: (payload) => connectorIngress.stage(payload),
         },
         local_path: {
           stage: (payload) => companion.uploadLocalFile({
@@ -298,9 +314,8 @@ test("local disk, workspace bytes and native session ref share one atomic commit
         actor: env.currentActor,
         spaceId: MINDS.ordinary.spaceId,
         writeBindingId: WRITE_BINDING_ID,
-        bytes: GENERATED_PNG,
+        object: { ref: "connector-object-fixture" },
         displayFilename: "connector.png",
-        claimedMediaType: "image/png",
         idempotencyKey: "connector-stage",
       },
     });
