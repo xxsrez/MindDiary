@@ -22,6 +22,7 @@ import {
   type RevisionId,
   type RevisionMode,
   type Role,
+  type SpaceRevision,
   type SpaceId,
   type UtcInstant,
   type VerifiedSpaceHost,
@@ -255,11 +256,29 @@ function sameGrant(left: AuthorizationGrant, right: AuthorizationGrant): boolean
       : false;
 }
 
+function sameEffectiveAccess(
+  left: EffectiveAccess,
+  right: EffectiveAccess,
+): boolean {
+  return (
+    sameStamp(left.stamp, right.stamp) &&
+    sameGrant(left.grant, right.grant) &&
+    left.capabilities.length === right.capabilities.length &&
+    left.capabilities.every((capability, index) => capability === right.capabilities[index])
+  );
+}
+
 function revisionDescriptor(
   envelope: Readonly<CanonicalRevisionEnvelope>,
   headRevisionId: RevisionId,
 ): Readonly<MindDiscoveryRevisionDescriptor> {
-  const revision = envelope.revision;
+  return revisionDescriptorFromRevision(envelope.revision, headRevisionId);
+}
+
+function revisionDescriptorFromRevision(
+  revision: Readonly<SpaceRevision>,
+  headRevisionId: RevisionId,
+): Readonly<MindDiscoveryRevisionDescriptor> {
   const committedBy =
     revision.committedBy.kind === "principal"
       ? Object.freeze({
@@ -280,6 +299,15 @@ function revisionDescriptor(
     manifestHash: revision.manifestHash,
     isHead: revision.revisionId === headRevisionId,
   });
+}
+
+function revisionDescriptorForHead(
+  value: Readonly<CanonicalRevisionEnvelope> | Readonly<SpaceRevision>,
+  headRevisionId: RevisionId,
+): Readonly<MindDiscoveryRevisionDescriptor> {
+  return "revision" in value
+    ? revisionDescriptor(value, headRevisionId)
+    : revisionDescriptorFromRevision(value, headRevisionId);
 }
 
 function accessDescriptor(access: EffectiveAccess): Readonly<MindDiscoveryAccess> {
@@ -787,14 +815,9 @@ export class MindDiscoveryService {
       requirePublic: boolean;
     }>,
   ): Promise<Readonly<ResolvedMind> | null> {
-    const initial = await this.#authorizer.authorize({
-      actor,
-      spaceId,
-      capability: READ_CAPABILITY,
-      revisionMode: "head",
-    });
+    const initial = await this.#capabilityPass(actor, spaceId, "head");
     if (
-      initial.kind === "denied" ||
+      initial === null ||
       (policy.requireMembership && initial.grant.kind !== "membership")
     ) {
       return null;
@@ -806,7 +829,13 @@ export class MindDiscoveryService {
     ) {
       return null;
     }
-    return this.#ordinarySnapshot(actor, snapshot!, policy.discovery, policy);
+    return this.#ordinarySnapshot(
+      actor,
+      snapshot!,
+      policy.discovery,
+      policy,
+      initial,
+    );
   }
 
   async #ordinarySnapshot(
@@ -814,15 +843,19 @@ export class MindDiscoveryService {
     snapshot: Readonly<OrdinaryMindRouteSnapshot>,
     discovery: "membership" | "public_catalog" | "exact_handle",
     policy?: Readonly<{ readonly requireMembership: boolean; readonly requirePublic: boolean }>,
+    initialAccess?: Readonly<EffectiveAccess>,
   ): Promise<Readonly<ResolvedMind> | null> {
     if (policy?.requirePublic && snapshot.space.visibility !== "public") return null;
-    const head = await this.#readRevision(snapshot.space.spaceId, snapshot.space.headRevisionId);
+    const head = snapshot.headRevision === undefined
+      ? await this.#readRevision(snapshot.space.spaceId, snapshot.space.headRevisionId)
+      : snapshot.headRevision;
     if (head === null) return null;
     const access = await this.#effectiveAccess(
       actor,
       snapshot.space.spaceId,
       "head",
       snapshot.space.accessVersion,
+      initialAccess,
     );
     if (
       access === null ||
@@ -845,7 +878,7 @@ export class MindDiscoveryService {
         discovery: effectiveDiscovery,
         access: accessDescriptor(access),
         metadataVersion: space.metadataVersion,
-        head: revisionDescriptor(head, space.headRevisionId),
+        head: revisionDescriptorForHead(head, space.headRevisionId),
       }),
       expectedAccessVersion: space.accessVersion,
     });
@@ -876,16 +909,14 @@ export class MindDiscoveryService {
     spaceId: SpaceId,
     revisionMode: RevisionMode,
     expectedAccessVersion: number | null,
+    initialAccess?: Readonly<EffectiveAccess>,
   ): Promise<Readonly<EffectiveAccess> | null> {
-    const first = await this.#capabilityPass(actor, spaceId, revisionMode);
+    const first = initialAccess ?? (await this.#capabilityPass(actor, spaceId, revisionMode));
     const second = await this.#capabilityPass(actor, spaceId, revisionMode);
     if (
       first === null ||
       second === null ||
-      !sameStamp(first.stamp, second.stamp) ||
-      !sameGrant(first.grant, second.grant) ||
-      first.capabilities.length !== second.capabilities.length ||
-      first.capabilities.some((capability, index) => capability !== second.capabilities[index]) ||
+      !sameEffectiveAccess(first, second) ||
       (expectedAccessVersion !== null && second.stamp.accessVersion !== expectedAccessVersion)
     ) {
       return null;

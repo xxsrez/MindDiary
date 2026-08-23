@@ -63,6 +63,7 @@ import {
   type SensitiveExternalBinding,
   type Sha256Digest,
   type SpaceId,
+  type SpaceRevision,
   type SpaceInvitation,
   type SpaceMembership,
   type StagedBundleFileId,
@@ -1279,6 +1280,12 @@ export interface OrdinaryMindRouteSnapshot {
   readonly host: VerifiedSpaceHost;
   readonly canonicalHandle: CanonicalSpaceHandle;
   readonly space: Readonly<KnowledgeSpace>;
+  /**
+   * Metadata-only HEAD projection. Adapters may provide it so discovery can
+   * avoid a second per-Mind envelope read; canonical object bytes remain out
+   * of the route projection.
+   */
+  readonly headRevision?: Readonly<SpaceRevision>;
 }
 
 export interface MindRouteAuthorizationQuery extends AuthorizationStateQuery {

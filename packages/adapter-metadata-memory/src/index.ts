@@ -5937,6 +5937,7 @@ export class InMemoryRevisionMetadataStore
     ) {
       return null;
     }
+    const headRevision = this.#spaces.get(spaceId)?.revisions.get(space.headRevisionId);
     const parsedHandle = parseCanonicalSpaceHandle(space.spaceHandle);
     const reservation = this.#activeHandlesBySpace.get(spaceId);
     if (
@@ -5955,7 +5956,7 @@ export class InMemoryRevisionMetadataStore
         this.#memberships,
       ) === null ||
       this.#spaces.get(spaceId)?.head !== space.headRevisionId ||
-      !this.#spaces.get(spaceId)?.revisions.has(space.headRevisionId)
+      headRevision === undefined
     ) {
       return null;
     }
@@ -5963,6 +5964,7 @@ export class InMemoryRevisionMetadataStore
       host: reservation.host,
       canonicalHandle: parsedHandle.canonicalHandle,
       space: freezeKnowledgeSpace(space),
+      headRevision: Object.freeze({ ...headRevision.revision }),
     });
   }
 

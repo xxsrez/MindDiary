@@ -212,16 +212,17 @@ async function runListScale(count) {
     `local list_minds ${count} exceeded ${LOCAL_MIND_SCALE_LATENCY_BUDGET_MS}ms`,
   );
 
-  // This is the exact current local baseline. It intentionally makes the
-  // remaining per-Mind metadata work visible instead of calling it bounded.
+  // The read session and HEAD projection remove duplicate revision reads and
+  // one authorization pass per Mind. The remaining route-snapshot and final
+  // authorization work is still visible instead of being called bounded.
   assert.deepEqual(evidence.calls, {
     readPersonalMindProfile: 1,
     listActiveMembershipMindIds: 1,
     listPublicMindCatalogPage: 1,
     readResolvedSpace: count,
-    readRevision: count + 1,
+    readRevision: 1,
     readHead: 0,
-    readCurrentAuthorizationState: count * 3 + 2,
+    readCurrentAuthorizationState: count * 2 + 2,
   });
   assert.ok(evidence.maximumConcurrent <= LOCAL_MIND_SCALE_CONCURRENCY);
   return Object.freeze({
