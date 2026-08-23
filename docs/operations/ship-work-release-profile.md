@@ -1129,6 +1129,17 @@ Exact diff check всегда получает закрытый range
 `{base_sha}..{candidate_sha}`. Full gate относится к exact integrated candidate,
 а CI query принимает только run workflow `328602767` с тем же full SHA.
 
+Deployable Sites archive собирается отдельной командой
+`npm --prefix apps/mind-diary-site run build` уже после checkout exact candidate
+и успешного full gate. Root `npm run check` компилирует workspace packages, но
+не является vinext build и не доказывает свежесть
+`apps/mind-diary-site/dist`. Публикуемый `.tgz` имеет один top-level `dist/` и
+обязан содержать `dist/server/index.js` и `dist/.openai/hosting.json`; archive,
+повторивший content hash предыдущей версии после runtime change, считается
+stale и не deploy-ится. Если Sites дедуплицировал saved version по уже
+использованному `commit_sha`, сначала нужен новый exact candidate SHA, а не
+повторный save другого archive под прежним source identity.
+
 ## Performance gate
 
 Изменения metadata/runtime/MCP read path, search storage или locator layout
