@@ -1,4 +1,5 @@
 export const REQUEST_RECOVERY_CADENCE_MS: number;
+export const REQUEST_RECOVERY_IDLE_MS: number;
 
 export function isRecoveryEligibleRequest(
   request: Request,
@@ -8,7 +9,9 @@ export function isRecoveryEligibleRequest(
 export declare class RequestRecoveryCoordinator {
   constructor(options?: {
     readonly cadenceMs?: number;
+    readonly idleMs?: number;
     readonly now?: () => number;
+    readonly delay?: (milliseconds: number) => Promise<unknown>;
   });
 
   respond<Environment extends object>(options: {

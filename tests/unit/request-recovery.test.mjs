@@ -58,7 +58,11 @@ test("only successful dynamic HTML document requests can trigger recovery", () =
 });
 
 test("a slow recovery starts only after foreground and never delays its response", async () => {
-  const coordinator = new RequestRecoveryCoordinator();
+  let releaseIdle;
+  const idleGate = new Promise((resolve) => { releaseIdle = resolve; });
+  const coordinator = new RequestRecoveryCoordinator({
+    delay: () => idleGate,
+  });
   const environment = {};
   const order = [];
   let releaseRecovery;
@@ -85,8 +89,12 @@ test("a slow recovery starts only after foreground and never delays its response
   });
 
   assert.equal(await response.text(), "home");
-  assert.deepEqual(order, ["foreground-start", "foreground-complete", "recovery-start"]);
+  assert.deepEqual(order, ["foreground-start", "foreground-complete"]);
   assert.equal(background.length, 1);
+  releaseIdle();
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.deepEqual(order, ["foreground-start", "foreground-complete", "recovery-start"]);
   releaseRecovery();
   await background[0];
   assert.deepEqual(order, [
@@ -98,7 +106,9 @@ test("a slow recovery starts only after foreground and never delays its response
 });
 
 test("concurrent home and asset burst creates one recovery flight", async () => {
-  const coordinator = new RequestRecoveryCoordinator();
+  const coordinator = new RequestRecoveryCoordinator({
+    delay: async () => undefined,
+  });
   const environment = {};
   let runs = 0;
   let releaseRecovery;
@@ -131,6 +141,7 @@ test("completion-based cadence prevents a recovery storm after success or failur
   let now = 1_000;
   const coordinator = new RequestRecoveryCoordinator({
     cadenceMs: 30_000,
+    delay: async () => undefined,
     now: () => now,
   });
   const environment = {};
@@ -161,4 +172,50 @@ test("completion-based cadence prevents a recovery storm after success or failur
   assert.equal(runs, 2);
   await respond();
   assert.equal(runs, 2);
+});
+
+test("a new HTML navigation fences an older idle timer before foreground completes", async () => {
+  const idleResolvers = [];
+  const coordinator = new RequestRecoveryCoordinator({
+    idleMs: 3_000,
+    delay: () => new Promise((resolve) => idleResolvers.push(resolve)),
+  });
+  const environment = {};
+  const background = [];
+  let runs = 0;
+  let releaseSecondForeground;
+  const secondForegroundGate = new Promise((resolve) => {
+    releaseSecondForeground = resolve;
+  });
+  const options = {
+    request: new Request(`${ORIGIN}/`, { headers: { accept: "text/html" } }),
+    environment,
+    fingerprint: "deployment-a",
+    recover: async () => { runs += 1; },
+    waitUntil: (promise) => background.push(promise),
+  };
+
+  await coordinator.respond({
+    ...options,
+    foreground: async () => new Response("first"),
+  });
+  assert.equal(idleResolvers.length, 1);
+
+  const second = coordinator.respond({
+    ...options,
+    foreground: async () => {
+      await secondForegroundGate;
+      return new Response("second");
+    },
+  });
+  idleResolvers[0]();
+  await background[0];
+  assert.equal(runs, 0);
+
+  releaseSecondForeground();
+  await second;
+  assert.equal(idleResolvers.length, 2);
+  idleResolvers[1]();
+  await background[1];
+  assert.equal(runs, 1);
 });

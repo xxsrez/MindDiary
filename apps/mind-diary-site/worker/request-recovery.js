@@ -26,10 +26,10 @@ const NON_DOCUMENT_PATHS = new Set([
 ]);
 
 export const REQUEST_RECOVERY_CADENCE_MS = 30_000;
+export const REQUEST_RECOVERY_IDLE_MS = 3_000;
 
-/** Recovery is useful only after a successfully produced HTML document response. */
-export function isRecoveryEligibleRequest(request, response) {
-  if ((request.method !== "GET" && request.method !== "HEAD") || response.status >= 500) {
+function isRecoveryCandidateRequest(request) {
+  if (request.method !== "GET" && request.method !== "HEAD") {
     return false;
   }
   const path = new URL(request.url).pathname;
@@ -47,37 +47,57 @@ export function isRecoveryEligibleRequest(request, response) {
     !STATIC_EXTENSION.test(path);
 }
 
+/** Recovery is useful only after a successfully produced HTML document response. */
+export function isRecoveryEligibleRequest(request, response) {
+  return response.status < 500 && isRecoveryCandidateRequest(request);
+}
+
 /**
- * One post-response recovery flight per Worker environment/config generation.
- * The response is never awaited on recovery, and failure observes the same
- * completion-based cadence so an unhealthy dependency cannot create a storm.
+ * One quiet-window recovery flight per Worker environment/config generation.
+ * A new document navigation fences an older pending timer before foreground
+ * work begins. The response never awaits recovery, and failure observes the
+ * same completion-based cadence so an unhealthy dependency cannot create a
+ * storm.
  */
 export class RequestRecoveryCoordinator {
   #slots = new WeakMap();
   #cadenceMs;
+  #idleMs;
   #now;
+  #delay;
 
   constructor(options = {}) {
     this.#cadenceMs = options.cadenceMs ?? REQUEST_RECOVERY_CADENCE_MS;
+    this.#idleMs = options.idleMs ?? REQUEST_RECOVERY_IDLE_MS;
     this.#now = options.now ?? Date.now;
+    this.#delay = options.delay ?? ((milliseconds) => new Promise(
+      (resolve) => setTimeout(resolve, milliseconds),
+    ));
     if (!Number.isSafeInteger(this.#cadenceMs) || this.#cadenceMs < 1) {
       throw new TypeError("request recovery cadence must be a positive integer");
+    }
+    if (!Number.isSafeInteger(this.#idleMs) || this.#idleMs < 1) {
+      throw new TypeError("request recovery idle window must be a positive integer");
     }
   }
 
   async respond(options) {
-    const response = await options.foreground();
-    if (!isRecoveryEligibleRequest(options.request, response)) return response;
-
+    const candidate = isRecoveryCandidateRequest(options.request);
     let slot = this.#slots.get(options.environment);
     if (slot === undefined || slot.fingerprint !== options.fingerprint) {
       slot = {
         fingerprint: options.fingerprint,
         inFlight: null,
         nextEligibleAt: 0,
+        navigationGeneration: 0,
       };
       this.#slots.set(options.environment, slot);
     }
+    if (candidate) slot.navigationGeneration += 1;
+    const navigationGeneration = slot.navigationGeneration;
+
+    const response = await options.foreground();
+    if (!candidate || response.status >= 500) return response;
 
     if (slot.inFlight !== null) {
       options.waitUntil(slot.inFlight.catch(() => undefined));
@@ -86,14 +106,23 @@ export class RequestRecoveryCoordinator {
     if (this.#now() < slot.nextEligibleAt) return response;
 
     const selected = slot;
-    const flight = Promise.resolve()
-      .then(() => options.recover())
-      .finally(() => {
-        selected.inFlight = null;
-        selected.nextEligibleAt = this.#now() + this.#cadenceMs;
+    const planned = this.#delay(this.#idleMs)
+      .then(() => {
+        if (
+          selected.navigationGeneration !== navigationGeneration ||
+          selected.inFlight !== null ||
+          this.#now() < selected.nextEligibleAt
+        ) return undefined;
+        const flight = Promise.resolve()
+          .then(() => options.recover())
+          .finally(() => {
+            selected.inFlight = null;
+            selected.nextEligibleAt = this.#now() + this.#cadenceMs;
+          });
+        selected.inFlight = flight;
+        return flight;
       });
-    selected.inFlight = flight;
-    options.waitUntil(flight.catch(() => undefined));
+    options.waitUntil(planned.catch(() => undefined));
     return response;
   }
 }

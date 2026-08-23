@@ -627,8 +627,10 @@ explicit target Mind. General cross-Mind search/synthesis требует нов�
   drift создаёт чистое поколение.
 - Request-triggered recovery запускается только после готового successful
   dynamic HTML document response, не запускается для OAuth, API, MCP или static
-  assets и объединяется в один isolate-level flight на deployment/config
-  fingerprint с 30-секундной cadence после завершения. Due index jobs
+  assets, ждёт трёхсекундное quiet window без новой HTML-навигации и
+  объединяется в один isolate-level flight на deployment/config fingerprint с
+  30-секундной cadence после завершения. Новая eligible navigation до старта
+  recovery отменяет старый timer и планирует quiet window заново. Due index jobs
   dispatch-ятся последовательно, поэтому recovery не
   ставит веер metadata operations впереди authenticated reads; следующий
   foreground request может пройти между bounded recovery operations. Каждый
