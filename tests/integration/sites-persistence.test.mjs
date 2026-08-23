@@ -1469,12 +1469,35 @@ test("Sites composition persists account, invitation, ownership, HEAD CAS, idemp
   assert.equal(indexClaim.kind, "claimed");
   assert.equal(auditClaim.kind, "claimed");
   assert.equal(
-    await tokenStore.failIndexJob(
+    await tokenStore.completeIndexJob(
       "index_job_sites_retry",
       indexClaim.job.version,
+      "2026-08-08T08:30:00.000Z",
+    ),
+    false,
+  );
+  const reclaimedIndexClaim = await tokenStore.claimIndexJob(
+    "index_job_sites_retry",
+    "2026-08-08T08:30:00.000Z",
+    "2026-08-08T08:31:00.000Z",
+  );
+  assert.equal(reclaimedIndexClaim.kind, "claimed");
+  assert.equal(reclaimedIndexClaim.job.attempts, 2);
+  assert.equal(
+    await tokenStore.completeIndexJob(
+      "index_job_sites_retry",
+      indexClaim.job.version,
+      "2026-08-08T08:30:30.000Z",
+    ),
+    false,
+  );
+  assert.equal(
+    await tokenStore.failIndexJob(
+      "index_job_sites_retry",
+      reclaimedIndexClaim.job.version,
       "synthetic_retry",
-      "2026-08-08T08:26:00.000Z",
-      "2026-08-08T08:27:00.000Z",
+      "2026-08-08T08:30:30.000Z",
+      "2026-08-08T08:31:00.000Z",
     ),
     true,
   );
@@ -1491,8 +1514,8 @@ test("Sites composition persists account, invitation, ownership, HEAD CAS, idemp
   const retryStore = await createSitesMetadataStore(database);
   const retryIndexClaim = await retryStore.claimIndexJob(
     "index_job_sites_retry",
-    "2026-08-08T08:27:00.000Z",
     "2026-08-08T08:31:00.000Z",
+    "2026-08-08T08:32:00.000Z",
   );
   const retryAuditClaim = await retryStore.claimAuditOutbox(
     "outbox_sites_retry",
@@ -1501,13 +1524,13 @@ test("Sites composition persists account, invitation, ownership, HEAD CAS, idemp
   );
   assert.equal(retryIndexClaim.kind, "claimed");
   assert.equal(retryAuditClaim.kind, "claimed");
-  assert.equal(retryIndexClaim.job.attempts, 2);
+  assert.equal(retryIndexClaim.job.attempts, 3);
   assert.equal(retryAuditClaim.message.attempts, 2);
   assert.equal(
     await retryStore.completeIndexJob(
       "index_job_sites_retry",
       retryIndexClaim.job.version,
-      "2026-08-08T08:28:00.000Z",
+      "2026-08-08T08:31:30.000Z",
     ),
     true,
   );
