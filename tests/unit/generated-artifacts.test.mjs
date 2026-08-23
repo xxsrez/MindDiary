@@ -12,8 +12,10 @@ const PNG = Uint8Array.from([
 
 function fakeStaging(results = []) {
   const requests = [];
+  const streamRequests = [];
   return {
     requests,
+    streamRequests,
     service: new GeneratedArtifactIngressService({
       staging: {
         async stage(request) {
@@ -27,6 +29,27 @@ function fakeStaging(results = []) {
               sourceKind: request.sourceKind,
               sha256: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
               size: request.bytes.byteLength,
+            },
+          };
+        },
+        async stageStream(request) {
+          const receivedChunks = [];
+          streamRequests.push({ ...request, receivedChunks });
+          for await (const chunk of request.stream) {
+            if (!(chunk instanceof Uint8Array)) {
+              return { kind: "stream_invalid", code: "stream_invalid_chunk" };
+            }
+            receivedChunks.push(chunk);
+          }
+          const next = results.shift();
+          return next ?? {
+            kind: "staged",
+            replayed: false,
+            record: {
+              stagedFileId: `staged_stream_${streamRequests.length}`,
+              sourceKind: request.sourceKind,
+              sha256: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              size: 9,
             },
           };
         },
@@ -63,8 +86,9 @@ test("server-generated ReadableStream is assembled with chunk validation", async
   });
   const result = await env.service.stageServerGenerated({ ...COMMON, stream });
   assert.equal(result.kind, "staged");
-  assert.equal(env.requests[0].sourceKind, "server_generated");
-  assert.deepEqual(env.requests[0].bytes, PNG);
+  assert.equal(env.streamRequests[0].sourceKind, "server_generated");
+  assert.equal(env.streamRequests[0].bytes, undefined);
+  assert.deepEqual(env.streamRequests[0].receivedChunks, [PNG.subarray(0, 4), PNG.subarray(4)]);
 });
 
 test("bounded in-memory limit fails before staging", async () => {
@@ -126,5 +150,6 @@ test("stageMany stops before a changeset can publish partial refs", async () => 
   ]);
   assert.equal(result.kind, "invalid");
   assert.equal(result.index, 1);
-  assert.equal(env.requests.length, 2);
+  assert.equal(env.streamRequests.length, 1);
+  assert.equal(env.requests.length, 1);
 });

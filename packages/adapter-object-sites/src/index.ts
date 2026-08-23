@@ -29,6 +29,8 @@ import {
   type BundleFileObjectDeleteRequest,
   type StagedBundleFileObject,
   type StagedBundleFileObjectWriteRequest,
+  type StagedBundleFileUpload,
+  type StagedBundleFileUploadRequest,
   type StoredExportArchive,
   type BoundedObjectCleanupStore,
   type ObjectCleanupCandidate,
@@ -63,7 +65,7 @@ export interface R2BucketLike {
   get(key: string): Promise<R2ObjectBodyLike | null>;
   put(
     key: string,
-    value: ArrayBuffer | Uint8Array,
+    value: ArrayBuffer | Uint8Array | ReadableStream<Uint8Array>,
     options?: Readonly<{
       customMetadata?: Readonly<Record<string, string>>;
       httpMetadata?: Readonly<{ contentType?: string }>;
@@ -753,6 +755,106 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
     throw new Error("R2 staged BundleFile CAS retry budget exhausted");
   }
 
+  /**
+   * Streams generated ingress directly into the R2 staging namespace.  The
+   * object remains quarantined under an opaque staged key until `complete`
+   * closes the body; abort cancels the body and removes any partial object.
+   */
+  async beginStagedBundleFileUpload(
+    request: Readonly<StagedBundleFileUploadRequest>,
+  ): Promise<StagedBundleFileUpload> {
+    assertUtc(request.createdAt);
+    if (
+      typeof request.stagedFileId !== "string" || request.stagedFileId.length === 0 ||
+      typeof request.bindingOwnerId !== "string" || request.bindingOwnerId.length === 0 ||
+      typeof request.spaceId !== "string" || request.spaceId.length === 0 ||
+      !Number.isSafeInteger(request.maxBytes) || request.maxBytes < 0
+    ) throw new ObjectStoreFailure("invalid_limit", "staged upload request is invalid");
+
+    const key = `${STAGED_BUNDLE_PREFIX}${encodeURIComponent(request.stagedFileId)}`;
+    const transform = new TransformStream<Uint8Array, Uint8Array>();
+    const writer = transform.writable.getWriter();
+    const putPromise = this.#bucket.put(key, transform.readable, {
+      customMetadata: Object.freeze({
+        schema: "md-r2-staged-bundle-file-stream-v1",
+        stagedFileId: request.stagedFileId,
+        bindingOwnerId: request.bindingOwnerId,
+        spaceId: request.spaceId,
+        createdAt: request.createdAt,
+        maxBytes: String(request.maxBytes),
+      }),
+      onlyIf: { etagDoesNotMatch: "*" },
+    });
+    let size = 0;
+    let closed = false;
+    let completed = false;
+    let aborted = false;
+
+    const abort = async (): Promise<void> => {
+      if (aborted) return;
+      aborted = true;
+      closed = true;
+      try {
+        await writer.abort();
+      } catch {
+        // The R2 body may already have observed the stream failure.
+      }
+      await putPromise.catch(() => undefined);
+      if (!completed) await this.#bucket.delete(key).catch(() => undefined);
+    };
+
+    return Object.freeze({
+      write: async (chunk: Uint8Array): Promise<void> => {
+        if (closed) throw new Error("staged upload is closed");
+        if (!(chunk instanceof Uint8Array)) {
+          await abort();
+          throw new TypeError("staged chunk must be bytes");
+        }
+        if (size + chunk.byteLength > request.maxBytes) {
+          await abort();
+          throw new ObjectStoreFailure(
+            "invalid_limit",
+            "staged upload exceeds its configured byte limit",
+          );
+        }
+        size += chunk.byteLength;
+        await writer.ready;
+        await writer.write(new Uint8Array(chunk));
+      },
+      complete: async ({ sha256, size: expectedSize }: { readonly sha256: Digest; readonly size: number }) => {
+        if (closed) throw new Error("staged upload is closed");
+        assertDigest(sha256);
+        if (expectedSize !== size) {
+          await abort();
+          throw new ObjectStoreFailure("object_tampered", "staged upload size mismatch");
+        }
+        try {
+          closed = true;
+          await writer.close();
+          const stored = await putPromise;
+          if (stored === null) {
+            throw new ObjectStoreFailure("digest_collision", "staged BundleFile ID collision");
+          }
+          if (stored.size !== expectedSize) {
+            throw new ObjectStoreFailure("object_tampered", "staged upload size mismatch");
+          }
+          completed = true;
+          return Object.freeze({
+            stagedFileId: request.stagedFileId,
+            bindingOwnerId: request.bindingOwnerId,
+            spaceId: request.spaceId,
+            size: expectedSize,
+            createdAt: request.createdAt,
+          });
+        } catch (error) {
+          await abort();
+          throw error;
+        }
+      },
+      abort,
+    });
+  }
+
   async getStagedBundleFile(
     stagedFileId: string,
   ): Promise<Readonly<StagedBundleFileObject> | null> {
@@ -1200,11 +1302,14 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
         const custom = object.customMetadata ?? {};
         const createdAt = custom.createdAt ?? "";
         assertUtc(createdAt);
+        const streamed = custom.schema === "md-r2-staged-bundle-file-stream-v1";
         if (
-          custom.schema !== "md-r2-staged-bundle-file-v1" ||
+          (!streamed && custom.schema !== "md-r2-staged-bundle-file-v1") ||
           typeof custom.stagedFileId !== "string" || custom.stagedFileId.length === 0 ||
           typeof custom.spaceId !== "string" || custom.spaceId.length === 0 ||
-          Number(custom.size) !== object.size
+          (streamed
+            ? !Number.isSafeInteger(Number(custom.maxBytes)) || Number(custom.maxBytes) < object.size
+            : Number(custom.size) !== object.size)
         ) throw new ObjectStoreFailure("object_tampered", "staged cleanup metadata is invalid");
         candidates.push(Object.freeze({
           namespace: "staged_bundle",
@@ -1352,12 +1457,15 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
     const custom = object.customMetadata ?? {};
     const createdAt = custom.createdAt ?? "";
     assertUtc(createdAt);
+    const streamed = custom.schema === "md-r2-staged-bundle-file-stream-v1";
     if (
-      custom.schema !== "md-r2-staged-bundle-file-v1" ||
+      (!streamed && custom.schema !== "md-r2-staged-bundle-file-v1") ||
       typeof custom.stagedFileId !== "string" || custom.stagedFileId.length === 0 ||
       typeof custom.bindingOwnerId !== "string" || custom.bindingOwnerId.length === 0 ||
       typeof custom.spaceId !== "string" || custom.spaceId.length === 0 ||
-      Number(custom.size) !== object.size
+      (streamed
+        ? !Number.isSafeInteger(Number(custom.maxBytes)) || Number(custom.maxBytes) < object.size
+        : Number(custom.size) !== object.size)
     ) throw new ObjectStoreFailure("object_tampered", "staged BundleFile metadata is invalid");
     const bytes = await bodyBytes(object);
     return Object.freeze({

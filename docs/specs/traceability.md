@@ -100,16 +100,17 @@ exact-candidate join below passes.
 и [единый file-ingress contract](file-ingress.md) фиксируют шесть source kinds,
 portable `VerifiedFileInput`/`staged_file_ref`, adapter/application ownership,
 typed capability errors, limits, lifecycle, idempotency и atomic multi-ref
-commit. `session_attachment` имеет локальный adapter implementation, а MD-272
-добавляет repo-local companion для `local_path`, `workspace/generated_artifact`
-и bounded local bytes. Это не hosted/native capability: MD-250 native-client
-UAT и hosted upload-intent evidence остаются pending; connector/server rows
-остаются contract-only до owning child tasks.
+commit. `session_attachment`, `bounded_in_memory` и `server_generated` имеют
+локальную implementation, а MD-272 добавляет repo-local companion для
+`local_path`, `workspace/generated_artifact` и bounded local bytes. Это не
+hosted/native capability: MD-250 native-client UAT, hosted upload-intent/
+producer evidence остаются pending; connector rows остаются contract-only.
 
 | ID | Наблюдаемый результат | Owner | Local evidence | UAT evidence |
 |---|---|---|---|---|
 | FI0-Contract | Каждый file source сводится к verified bytes и service-owned staged ref без provider ID/URL, local path, silent fallback или partial multi-ref commit; capability status не выдаётся за implementation. | `MD-271` | `file-ingress-contract`, affected docs + ADR-0018, docs topology/link validation and `git diff --check` | not-applicable until source adapter/client implementation |
 | FI1-LocalCompanion | Explicit regular local/workspace/generated file or bounded bytes passes the same path-free verified-input and atomic staging pipeline with safe path/symlink/special-file/size/MIME/SHA/idempotency/retry/cleanup checks; failures leave no revision. | `MD-272` | `tests/unit/local-file-companion.test.mjs` and `tests/integration/local-file-companion.test.mjs`; build, targeted contract/integration checks, architecture/docs/secrets checks and `git diff --check` | not-available: hosted upload intent/native client evidence is separate and remains pending |
+| FI1-Generated | `bounded_in_memory` and `server_generated` use the shared MIME/SHA/size/quota/quarantine/idempotency gate; server-generated chunks are written through the storage writer, cancellation/limit/static failures leave no staged object, and commit remains an explicit atomic next step. | `MD-273` | `tests/unit/generated-artifacts.test.mjs`, `tests/unit/sites-object-store-streaming.test.mjs`, `tests/integration/bundle-files-core.test.mjs`, build and targeted diff check | hosted producer wiring and exact deployed stream evidence remain pending |
 
 ## Brain-scale Sites storage/import extension 2026-08-22
 

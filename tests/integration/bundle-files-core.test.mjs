@@ -410,6 +410,48 @@ test("server-generated stream uses shared quarantine and records safe provenance
   );
 });
 
+test("server-generated cancellation and static rejection leave no staged object", async () => {
+  const env = await harness();
+  const ingress = new GeneratedArtifactIngressService({ staging: env.staging });
+  const controller = new AbortController();
+  const canceled = await ingress.stageServerGenerated({
+    actor: env.currentActor,
+    spaceId: MINDS.ordinary.spaceId,
+    writeBindingId: WRITE_BINDING_ID,
+    displayFilename: "canceled.png",
+    claimedMediaType: "image/png",
+    idempotencyKey: "generated-stream-canceled",
+    signal: controller.signal,
+    stream: (async function* () {
+      yield PNG;
+      controller.abort();
+      yield PNG;
+    })(),
+  });
+  assert.deepEqual(canceled, {
+    kind: "invalid",
+    code: "generated_artifact_cancelled",
+  });
+  assert.equal(await env.objects.getStagedBundleFile("staged_bundle_1"), null);
+
+  const rejected = await ingress.stageServerGenerated({
+    actor: env.currentActor,
+    spaceId: MINDS.ordinary.spaceId,
+    writeBindingId: WRITE_BINDING_ID,
+    displayFilename: "wrong.pdf",
+    claimedMediaType: "application/pdf",
+    idempotencyKey: "generated-stream-mime-rejected",
+    stream: (async function* () {
+      yield PNG;
+    })(),
+  });
+  assert.deepEqual(rejected, {
+    kind: "invalid",
+    code: "bundle_file_media_mismatch",
+  });
+  assert.equal(await env.objects.getStagedBundleFile("staged_bundle_2"), null);
+});
+
 test("Markdown BundleFile references validate the atomic resulting revision", async () => {
   const env = await harness();
   const staged = await env.staging.stage({

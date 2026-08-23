@@ -7,9 +7,9 @@ import {
   BUNDLE_FILE_LIMITS,
   BundleFileStagingService,
   type StageBundleFileRequest,
+  type StageBundleFileStreamResult,
   type StageBundleFileResult,
 } from "./bundle-files.js";
-import { IncrementalSha256 } from "./incremental-sha256.js";
 
 /**
  * Generated ingress limits are deliberately stricter for the inline path.
@@ -48,7 +48,8 @@ export type GeneratedArtifactInvalidCode =
   | "generated_artifact_input_conflict"
   | "generated_artifact_invalid_chunk"
   | "generated_artifact_size_limit_exceeded"
-  | "generated_artifact_cancelled";
+  | "generated_artifact_cancelled"
+  | "generated_artifact_streaming_unavailable";
 
 export type GeneratedArtifactIngressResult = StageBundleFileResult | {
   readonly kind: "invalid";
@@ -82,98 +83,41 @@ function cancelled(signal: AbortSignal | undefined): boolean {
   return signal?.aborted === true;
 }
 
-async function readGeneratedInput(
-  request: StageGeneratedArtifactRequest,
-  maxBytes: number,
-): Promise<
-  | Readonly<{ kind: "bytes"; bytes: Uint8Array; sha256: Sha256Digest; size: number }>
-  | Readonly<{ kind: "invalid"; code: GeneratedArtifactInvalidCode }>
-> {
-  if (cancelled(request.signal)) {
-    return Object.freeze({ kind: "invalid", code: "generated_artifact_cancelled" });
-  }
-  const hasBytes = request.bytes !== undefined;
-  const hasStream = request.stream !== undefined;
-  if (!hasBytes && !hasStream) {
-    return Object.freeze({ kind: "invalid", code: "generated_artifact_input_required" });
-  }
-  if (hasBytes && hasStream) {
-    return Object.freeze({ kind: "invalid", code: "generated_artifact_input_conflict" });
-  }
-
-  const chunks: Uint8Array[] = [];
-  const digest = new IncrementalSha256();
-  let size = 0;
-  const append = (chunk: unknown): GeneratedArtifactInvalidCode | null => {
-    if (!(chunk instanceof Uint8Array)) return "generated_artifact_invalid_chunk";
-    const copy = new Uint8Array(chunk);
-    size += copy.byteLength;
-    if (size > maxBytes) return "generated_artifact_size_limit_exceeded";
-    digest.update(copy);
-    chunks.push(copy);
-    return null;
-  };
-
-  if (hasBytes) {
-    const error = append(request.bytes);
-    if (error !== null) return Object.freeze({ kind: "invalid", code: error });
-  } else if (isReadableStream(request.stream)) {
-    const reader = request.stream.getReader();
-    try {
-      while (true) {
-        if (cancelled(request.signal)) {
-          await reader.cancel();
-          return Object.freeze({ kind: "invalid", code: "generated_artifact_cancelled" });
-        }
-        const next = await reader.read();
-        if (next.done) break;
-        const error = append(next.value);
-        if (error !== null) {
-          await reader.cancel();
-          return Object.freeze({ kind: "invalid", code: error });
-        }
+async function* readableStreamChunks(
+  stream: ReadableStream<unknown>,
+): AsyncGenerator<unknown> {
+  const reader = stream.getReader();
+  let finished = false;
+  try {
+    while (true) {
+      const next = await reader.read();
+      if (next.done) {
+        finished = true;
+        return;
       }
-    } catch {
-      await reader.cancel().catch(() => undefined);
-      return Object.freeze({ kind: "invalid", code: "generated_artifact_invalid_chunk" });
-    } finally {
-      reader.releaseLock();
+      yield next.value;
     }
-  } else if (isAsyncIterable(request.stream)) {
-    const iterator = request.stream[Symbol.asyncIterator]();
-    try {
-      while (true) {
-        if (cancelled(request.signal)) {
-          await iterator.return?.();
-          return Object.freeze({ kind: "invalid", code: "generated_artifact_cancelled" });
-        }
-        const next = await iterator.next();
-        if (next.done) break;
-        const error = append(next.value);
-        if (error !== null) {
-          await iterator.return?.();
-          return Object.freeze({ kind: "invalid", code: error });
-        }
-      }
-    } catch {
-      try {
-        await iterator.return?.();
-      } catch {
-        // The source is already failing; preserve the stable typed ingress error.
-      }
-      return Object.freeze({ kind: "invalid", code: "generated_artifact_invalid_chunk" });
-    }
-  } else {
-    return Object.freeze({ kind: "invalid", code: "generated_artifact_invalid_chunk" });
+  } finally {
+    if (!finished) await reader.cancel().catch(() => undefined);
+    reader.releaseLock();
   }
+}
 
-  const bytes = new Uint8Array(size);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return Object.freeze({ kind: "bytes", bytes, sha256: digest.digest(), size });
+function generatedStream(value: unknown): AsyncIterable<unknown> | null {
+  if (isReadableStream(value)) return readableStreamChunks(value);
+  return isAsyncIterable(value) ? value : null;
+}
+
+function mapStreamResult(result: StageBundleFileStreamResult): GeneratedArtifactIngressResult {
+  if (result.kind !== "stream_invalid") return result;
+  const code = result.code === "stream_cancelled"
+    ? "generated_artifact_cancelled"
+    : result.code === "stream_size_limit_exceeded"
+      ? "generated_artifact_size_limit_exceeded"
+      : result.code === "stream_transport_unavailable"
+        ? "generated_artifact_streaming_unavailable"
+        : "generated_artifact_invalid_chunk";
+  return Object.freeze({ kind: "invalid", code });
 }
 
 /**
@@ -183,10 +127,10 @@ async function readGeneratedInput(
  * adapter and byte transport differ.
  */
 export class GeneratedArtifactIngressService {
-  readonly #staging: Pick<BundleFileStagingService, "stage">;
+  readonly #staging: Pick<BundleFileStagingService, "stage" | "stageStream">;
 
   constructor(dependencies: {
-    readonly staging: Pick<BundleFileStagingService, "stage">;
+    readonly staging: Pick<BundleFileStagingService, "stage" | "stageStream">;
   }) {
     this.#staging = dependencies.staging;
   }
@@ -199,8 +143,48 @@ export class GeneratedArtifactIngressService {
     const maxBytes = sourceKind === "bounded_in_memory"
       ? GENERATED_ARTIFACT_LIMITS.maxBoundedInMemoryBytes
       : GENERATED_ARTIFACT_LIMITS.maxServerGeneratedBytes;
-    const input = await readGeneratedInput(request, maxBytes);
-    if (input.kind === "invalid") return input;
+    if (cancelled(request.signal)) {
+      return Object.freeze({ kind: "invalid", code: "generated_artifact_cancelled" });
+    }
+    const hasBytes = request.bytes !== undefined;
+    const hasStream = request.stream !== undefined;
+    if (!hasBytes && !hasStream) {
+      return Object.freeze({ kind: "invalid", code: "generated_artifact_input_required" });
+    }
+    if (hasBytes && hasStream) {
+      return Object.freeze({ kind: "invalid", code: "generated_artifact_input_conflict" });
+    }
+
+    if (hasStream) {
+      const stream = generatedStream(request.stream);
+      if (stream === null) {
+        return Object.freeze({ kind: "invalid", code: "generated_artifact_invalid_chunk" });
+      }
+      return mapStreamResult(await this.#staging.stageStream({
+        actor: request.actor,
+        spaceId: request.spaceId,
+        writeBindingId: request.writeBindingId,
+        displayFilename: request.displayFilename,
+        claimedMediaType: request.claimedMediaType,
+        idempotencyKey: request.idempotencyKey,
+        sourceKind,
+        stream,
+        maxBytes,
+        ...(request.expectedSize === undefined ? {} : { expectedSize: request.expectedSize }),
+        ...(request.expectedSha256 === undefined ? {} : { expectedSha256: request.expectedSha256 }),
+        ...(request.signal === undefined ? {} : { signal: request.signal }),
+      }));
+    }
+
+    if (!(request.bytes instanceof Uint8Array)) {
+      return Object.freeze({ kind: "invalid", code: "generated_artifact_invalid_chunk" });
+    }
+    if (request.bytes.byteLength > maxBytes) {
+      return Object.freeze({
+        kind: "invalid",
+        code: "generated_artifact_size_limit_exceeded",
+      });
+    }
 
     const stageRequest: StageBundleFileRequest = {
       actor: request.actor,
@@ -208,7 +192,7 @@ export class GeneratedArtifactIngressService {
       writeBindingId: request.writeBindingId,
       displayFilename: request.displayFilename,
       claimedMediaType: request.claimedMediaType,
-      bytes: input.bytes,
+      bytes: request.bytes,
       idempotencyKey: request.idempotencyKey,
       sourceKind,
       ...(request.expectedSize === undefined ? {} : { expectedSize: request.expectedSize }),

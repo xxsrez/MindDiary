@@ -35,6 +35,10 @@ test("MD-271 names every source kind with an explicit capability status", async 
     }
     assert.ok(row?.includes("UAT pending") || row?.includes("not started") || row?.includes("not-started") || row?.includes("not-available"), `source status missing: ${sourceKind}`);
   }
+  for (const sourceKind of sourceKinds.slice(4)) {
+    const row = spec.split("\n").find((line) => line.startsWith(`| \`${sourceKind}\` |`));
+    assert.match(row ?? "", /`implemented_local`/);
+  }
   assert.doesNotMatch(spec, /workspace_generated_artifact/);
 });
 

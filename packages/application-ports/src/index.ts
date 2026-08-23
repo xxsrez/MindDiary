@@ -1522,7 +1522,7 @@ export interface StagedBundleFileUpload {
   complete(request: Readonly<{
     sha256: Sha256Digest;
     size: number;
-  }>): Promise<Readonly<StagedBundleFileObject>>;
+  }>): Promise<Readonly<Omit<StagedBundleFileObject, "bytes">>>;
   abort(): Promise<void>;
 }
 

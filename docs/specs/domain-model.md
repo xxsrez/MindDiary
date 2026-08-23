@@ -403,12 +403,12 @@ details and not-started status are in
 [Sites storage/capacity/import](sites-storage-capacity-import.md).
 
 MD-271's [file-ingress contract](file-ingress.md) applies the same boundary to
-all BundleFile sources. The current candidate has local `session_attachment`
-adapter code/tests and the repo-local MD-272 companion for explicit
-`local_path`, `workspace/generated_artifact` and bounded local bytes. This
-companion does not claim hosted upload-intent or native-client capability;
-connector/server source kinds remain contract-only until their owning adapter
-and capability evidence exist.
+all BundleFile sources. The current candidate has local `session_attachment`,
+bounded-inline and server-generated streaming code/tests, plus the repo-local
+MD-272 companion for explicit `local_path`, `workspace/generated_artifact` and
+bounded local bytes. These adapters do not claim hosted upload-intent or
+native-client capability; connector and hosted producer evidence remain
+separate until their owning adapters and exact evidence exist.
 
 Reserved files требуют явной семантики:
 

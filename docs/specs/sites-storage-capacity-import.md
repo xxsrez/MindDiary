@@ -16,9 +16,10 @@ cleanup. Весь extension пока не проверен на exact UAT deploy
 MD-271 задаёт общий [file-ingress contract](file-ingress.md) для source bytes,
 которые могут быть staged как `BundleFile`. Этот документ отвечает только за
 Space-scoped storage, capacity/reservation и отдельный Markdown import profile:
-он не делает `local_path`, workspace, connector, bounded-inline или
-server-generated source capability реализованной. В текущем candidate native
-`session_attachment` остаётся отдельным BundleFile/MCP path с UAT gate MD-250.
+он не делает `local_path`, workspace или connector source capability
+реализованной. В текущем candidate native `session_attachment`, bounded-inline
+и server-generated streaming остаются отдельными local BundleFile paths;
+hosted/native UAT для них по-прежнему требует exact evidence.
 
 ## Цель и граница
 
