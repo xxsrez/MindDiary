@@ -1311,6 +1311,12 @@ export interface MindRouteMetadataStore
   listActiveMembershipMindIds(
     principalId: PrincipalId,
   ): Promise<readonly SpaceId[]>;
+  /** Optional page projection; callers must preserve input order. */
+  readonly readCurrentAuthorizationStates?: BatchAuthorizationStateReader["readCurrentAuthorizationStates"];
+  /** Optional post-authorization route snapshot projection; no ACL bypass. */
+  readonly readResolvedSpaces?: (
+    spaceIds: readonly SpaceId[],
+  ) => Promise<readonly (Readonly<OrdinaryMindRouteSnapshot> | null)[]>;
   readCurrentRouteAuthorizationState(
     query: MindRouteAuthorizationQuery,
   ): Promise<CurrentAuthorizationState | null>;
@@ -2751,6 +2757,18 @@ export interface AuthorizationStateReader {
   ): Promise<CurrentAuthorizationState | null>;
 }
 
+/**
+ * Optional batch form for read-only authorization projections.  Adapters may
+ * resolve a page of states from one refreshed metadata view; callers must keep
+ * query order and must still treat every returned state as a current,
+ * fail-closed snapshot.
+ */
+export interface BatchAuthorizationStateReader extends AuthorizationStateReader {
+  readCurrentAuthorizationStates(
+    queries: readonly AuthorizationStateQuery[],
+  ): Promise<readonly (Readonly<CurrentAuthorizationState> | null)[]>;
+}
+
 /** A state reader whose reads participate in the caller's metadata transaction. */
 export interface AuthorizationTransaction extends AuthorizationStateReader {
   readonly kind: "authorization-transaction";
@@ -3219,6 +3237,39 @@ export class CapabilityAuthorizer implements Authorizer {
             },
             currentState,
           )),
+      ),
+    );
+  }
+
+  /**
+   * Evaluates a closed capability set against a caller-supplied state that was
+   * read in a batch projection.  The same validation and capability rules as
+   * `authorizeCapabilities` apply; the supplied state is never trusted as a
+   * role or scope claim and is only used as the already-read current snapshot.
+   */
+  async authorizeCapabilitiesFromState(
+    request: {
+      readonly actor: ActorContext;
+      readonly spaceId: SpaceId;
+      readonly capabilities: readonly Capability[];
+      readonly revisionMode: RevisionMode;
+    },
+    currentState: Readonly<CurrentAuthorizationState> | null,
+  ): Promise<readonly AuthorizationDecision[]> {
+    return Object.freeze(
+      await Promise.all(
+        request.capabilities.map((capability) =>
+          this.#authorizeWith(
+            this.#states,
+            {
+              actor: request.actor,
+              spaceId: request.spaceId,
+              capability,
+              revisionMode: request.revisionMode,
+            },
+            Promise.resolve(currentState),
+          ),
+        ),
       ),
     );
   }

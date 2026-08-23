@@ -3,8 +3,11 @@ import {
   AuthorizedHandleReader,
   type BackgroundWorkStore,
   CapabilityAuthorizer,
+  type AuthorizationDecision,
   type AuthorizationGrant,
+  type AuthorizationStateQuery,
   type AuthorizationStamp,
+  type CurrentAuthorizationState,
   type OrdinaryMindRouteSnapshot,
   type PersonalMindProfileSnapshot,
   type PublicMindCatalogStore,
@@ -170,6 +173,14 @@ export interface MindDiscoveryStore
   withConsistentRead?<Result>(
     operation: (store: MindDiscoveryStore) => Promise<Result>,
   ): Promise<Result>;
+  /** Optional authorization page projection for bounded list reads. */
+  readonly readCurrentAuthorizationStates?: (
+    queries: readonly AuthorizationStateQuery[],
+  ) => Promise<readonly (Readonly<CurrentAuthorizationState> | null)[]>;
+  /** Optional post-authorization route snapshot page projection. */
+  readonly readResolvedSpaces?: (
+    spaceIds: readonly SpaceId[],
+  ) => Promise<readonly (Readonly<OrdinaryMindRouteSnapshot> | null)[]>;
 }
 
 export interface MindDiscoveryDependencies {
@@ -216,6 +227,57 @@ async function mapDiscoveryBounded<Input, Output>(
     ),
   );
   return Object.freeze(results);
+}
+
+function authorizationStateQuery(
+  actor: ActorContext,
+  spaceId: SpaceId,
+): AuthorizationStateQuery {
+  if (actor.kind !== "registered_principal") {
+    throw new MindDiscoveryFailure(
+      "authentication_required",
+      "An authenticated principal is required.",
+    );
+  }
+  return Object.freeze({
+    principalId: actor.principalId,
+    spaceId,
+    tokenId: actor.authentication.kind === "mcp_token"
+      ? actor.authentication.tokenId
+      : null,
+  });
+}
+
+function effectiveAccessFromDecisions(
+  decisions: readonly AuthorizationDecision[],
+): Readonly<EffectiveAccess> | null {
+  const allowed: Capability[] = [];
+  let anchor: Extract<AuthorizationDecision, { readonly kind: "allowed" }> | null = null;
+  for (const [index, capability] of CONTENT_CAPABILITIES.entries()) {
+    const decision = decisions[index];
+    if (decision === undefined || decision.kind === "denied") continue;
+    if (anchor !== null && !sameStamp(anchor.stamp, decision.stamp)) return null;
+    anchor ??= decision;
+    allowed.push(capability);
+  }
+  const finalRead = decisions[CONTENT_CAPABILITIES.indexOf(READ_CAPABILITY)];
+  if (
+    finalRead === undefined ||
+    finalRead.kind === "denied" ||
+    anchor === null ||
+    !sameStamp(anchor.stamp, finalRead.stamp) ||
+    !allowed.includes(READ_CAPABILITY)
+  ) {
+    return null;
+  }
+  const granted = contentCapabilitiesForGrant(finalRead.grant);
+  return Object.freeze({
+    grant: finalRead.grant,
+    stamp: finalRead.stamp,
+    capabilities: Object.freeze(
+      allowed.filter((capability) => granted.includes(capability)),
+    ),
+  });
 }
 
 interface ResolvedMind {
@@ -536,8 +598,7 @@ export class MindDiscoveryService {
         requirePublic: true,
       })),
     ];
-    const resolvedCandidates = await mapDiscoveryBounded(candidates, (candidate) =>
-      this.#ordinaryById(actor, candidate.spaceId, candidate));
+    const resolvedCandidates = await this.#resolveCandidates(actor, candidates);
     for (const [index, resolved] of resolvedCandidates.entries()) {
       if (resolved !== null) byId.set(candidates[index]!.spaceId, resolved.descriptor);
     }
@@ -563,6 +624,87 @@ export class MindDiscoveryService {
       nextCursor:
         nextOffset < minds.length ? encodeCursor(nextOffset, fingerprint) : null,
     });
+  }
+
+  async #resolveCandidates(
+    actor: ActorContext,
+    candidates: readonly Readonly<{
+      readonly spaceId: SpaceId;
+      readonly discovery: "membership" | "public_catalog";
+      readonly requireMembership: boolean;
+      readonly requirePublic: boolean;
+    }>[],
+  ): Promise<readonly (Readonly<ResolvedMind> | null)[]> {
+    const readStates = this.#store.readCurrentAuthorizationStates;
+    const readSnapshots = this.#store.readResolvedSpaces;
+    if (readStates === undefined || readSnapshots === undefined) {
+      return mapDiscoveryBounded(candidates, (candidate) =>
+        this.#ordinaryById(actor, candidate.spaceId, candidate));
+    }
+
+    const queries = candidates.map((candidate) =>
+      authorizationStateQuery(actor, candidate.spaceId));
+    const initialStates = await readStates.call(this.#store, queries);
+    if (!Array.isArray(initialStates) || initialStates.length !== candidates.length) {
+      throw new MindDiscoveryFailure(
+        "discovery_unavailable",
+        "Mind discovery is unavailable.",
+      );
+    }
+    const initialAccess = await Promise.all(
+      candidates.map((candidate, index) =>
+        this.#accessFromState(actor, candidate.spaceId, initialStates[index] ?? null)),
+    );
+    const authorized = candidates
+      .map((candidate, index) => ({ candidate, index }))
+      .filter(({ candidate, index }) => {
+        const access = initialAccess[index];
+        return access !== null && access !== undefined &&
+          (!candidate.requireMembership || access.grant.kind === "membership");
+      });
+    if (authorized.length === 0) return Object.freeze(candidates.map(() => null));
+
+    const snapshots = await readSnapshots.call(
+      this.#store,
+      authorized.map(({ candidate }) => candidate.spaceId),
+    );
+    if (!Array.isArray(snapshots) || snapshots.length !== authorized.length) {
+      throw new MindDiscoveryFailure(
+        "discovery_unavailable",
+        "Mind discovery is unavailable.",
+      );
+    }
+
+    const finalStates = await readStates.call(
+      this.#store,
+      authorized.map(({ candidate }) =>
+        authorizationStateQuery(actor, candidate.spaceId)),
+    );
+    if (!Array.isArray(finalStates) || finalStates.length !== authorized.length) {
+      throw new MindDiscoveryFailure(
+        "discovery_unavailable",
+        "Mind discovery is unavailable.",
+      );
+    }
+    const resolved = new Array<Readonly<ResolvedMind> | null>(candidates.length).fill(null);
+    for (const [offset, item] of authorized.entries()) {
+      const snapshot = snapshots[offset] ?? null;
+      if (snapshot === null) continue;
+      const final = await this.#accessFromState(
+        actor,
+        item.candidate.spaceId,
+        finalStates[offset] ?? null,
+      );
+      resolved[item.index] = await this.#ordinarySnapshot(
+        actor,
+        snapshot,
+        item.candidate.discovery,
+        item.candidate,
+        initialAccess[item.index] ?? undefined,
+        final ?? undefined,
+      );
+    }
+    return Object.freeze(resolved);
   }
 
   async resolveMind(
@@ -838,25 +980,49 @@ export class MindDiscoveryService {
     );
   }
 
+  async #accessFromState(
+    actor: ActorContext,
+    spaceId: SpaceId,
+    state: Readonly<CurrentAuthorizationState> | null,
+  ): Promise<Readonly<EffectiveAccess> | null> {
+    const decisions = await this.#authorizer.authorizeCapabilitiesFromState(
+      {
+        actor,
+        spaceId,
+        capabilities: CONTENT_CAPABILITIES,
+        revisionMode: "head",
+      },
+      state,
+    );
+    return effectiveAccessFromDecisions(decisions);
+  }
+
   async #ordinarySnapshot(
     actor: ActorContext,
     snapshot: Readonly<OrdinaryMindRouteSnapshot>,
     discovery: "membership" | "public_catalog" | "exact_handle",
     policy?: Readonly<{ readonly requireMembership: boolean; readonly requirePublic: boolean }>,
     initialAccess?: Readonly<EffectiveAccess>,
+    finalAccess?: Readonly<EffectiveAccess>,
   ): Promise<Readonly<ResolvedMind> | null> {
     if (policy?.requirePublic && snapshot.space.visibility !== "public") return null;
     const head = snapshot.headRevision === undefined
       ? await this.#readRevision(snapshot.space.spaceId, snapshot.space.headRevisionId)
       : snapshot.headRevision;
     if (head === null) return null;
-    const access = await this.#effectiveAccess(
-      actor,
-      snapshot.space.spaceId,
-      "head",
-      snapshot.space.accessVersion,
-      initialAccess,
-    );
+    const access = finalAccess === undefined
+      ? await this.#effectiveAccess(
+          actor,
+          snapshot.space.spaceId,
+          "head",
+          snapshot.space.accessVersion,
+          initialAccess,
+        )
+      : initialAccess !== undefined &&
+          sameEffectiveAccess(initialAccess, finalAccess) &&
+          finalAccess.stamp.accessVersion === snapshot.space.accessVersion
+        ? finalAccess
+        : null;
     if (
       access === null ||
       (policy?.requireMembership && access.grant.kind !== "membership") ||
@@ -929,41 +1095,13 @@ export class MindDiscoveryService {
     spaceId: SpaceId,
     revisionMode: RevisionMode,
   ): Promise<Readonly<EffectiveAccess> | null> {
-    const allowed: Capability[] = [];
-    let anchor: Extract<
-      Awaited<ReturnType<CapabilityAuthorizer["authorize"]>>,
-      { readonly kind: "allowed" }
-    > | null = null;
     const decisions = await this.#authorizer.authorizeCapabilities({
       actor,
       spaceId,
       capabilities: CONTENT_CAPABILITIES,
       revisionMode,
     });
-    for (const [index, capability] of CONTENT_CAPABILITIES.entries()) {
-      const decision = decisions[index]!;
-      if (decision.kind === "denied") continue;
-      if (anchor !== null && !sameStamp(anchor.stamp, decision.stamp)) return null;
-      anchor ??= decision;
-      allowed.push(capability);
-    }
-    const finalRead = decisions[CONTENT_CAPABILITIES.indexOf(READ_CAPABILITY)]!;
-    if (
-      finalRead.kind === "denied" ||
-      anchor === null ||
-      !sameStamp(anchor.stamp, finalRead.stamp) ||
-      !allowed.includes(READ_CAPABILITY)
-    ) {
-      return null;
-    }
-    const granted = contentCapabilitiesForGrant(finalRead.grant);
-    return Object.freeze({
-      grant: finalRead.grant,
-      stamp: finalRead.stamp,
-      capabilities: Object.freeze(
-        allowed.filter((capability) => granted.includes(capability)),
-      ),
-    });
+    return effectiveAccessFromDecisions(decisions);
   }
 
   async #readRevision(

@@ -12,8 +12,10 @@ import {
 } from "@mind-diary/application-content";
 import {
   AccountBootstrapService,
+  MindRouteService,
   OrdinaryMindControlService,
 } from "@mind-diary/application-control";
+import { createProductWebHttpHandler } from "@mind-diary/adapter-web";
 import {
   CAPABILITIES,
   MARKDOWN_MEDIA_TYPE,
@@ -35,9 +37,11 @@ const METADATA_READ_METHODS = Object.freeze([
   "listActiveMembershipMindIds",
   "listPublicMindCatalogPage",
   "readResolvedSpace",
+  "readResolvedSpaces",
   "readRevision",
   "readHead",
   "readCurrentAuthorizationState",
+  "readCurrentAuthorizationStates",
 ]);
 
 const OBJECT_READ_METHODS = Object.freeze([
@@ -212,17 +216,19 @@ async function runListScale(count) {
     `local list_minds ${count} exceeded ${LOCAL_MIND_SCALE_LATENCY_BUDGET_MS}ms`,
   );
 
-  // The read session and HEAD projection remove duplicate revision reads and
-  // one authorization pass per Mind. The remaining route-snapshot and final
-  // authorization work is still visible instead of being called bounded.
+  // Batch authorization and route projections keep the storage calls bounded
+  // by the page. The page still reports the number of logical candidate Minds
+  // so a later hosted profile can compare the same matrix.
   assert.deepEqual(evidence.calls, {
     readPersonalMindProfile: 1,
     listActiveMembershipMindIds: 1,
     listPublicMindCatalogPage: 1,
-    readResolvedSpace: count,
+    readResolvedSpace: 0,
+    readResolvedSpaces: 1,
     readRevision: 1,
     readHead: 0,
-    readCurrentAuthorizationState: count * 2 + 2,
+    readCurrentAuthorizationState: 2,
+    readCurrentAuthorizationStates: 2,
   });
   assert.ok(evidence.maximumConcurrent <= LOCAL_MIND_SCALE_CONCURRENCY);
   return Object.freeze({
@@ -231,6 +237,78 @@ async function runListScale(count) {
     next_cursor: first.nextCursor !== null,
     latency_ms: Number(elapsedMs.toFixed(3)),
     metadata: evidence,
+  });
+}
+
+async function runWebProjectionScale(count) {
+  const environment = await createEnvironment(count);
+  const metadata = instrumentStore(environment.metadata, METADATA_READ_METHODS);
+  const routes = new MindRouteService({
+    routes: metadata.store,
+    host: HOST,
+  });
+  const handler = createProductWebHttpHandler({
+    applicationOrigin: "https://mind-diary.example",
+    resolveIdentity: () => ({
+      kind: "authenticated",
+      actor: environment.ownerActor,
+    }),
+    csrf: {
+      issue: () => "local-scale-csrf",
+      verify: () => true,
+    },
+    control: {
+      execute: async (request) => {
+        if (request.operation !== "list_minds") {
+          throw new Error("unexpected local scale web operation");
+        }
+        return routes.listMinds(request.actor);
+      },
+    },
+  });
+
+  const startedAt = performance.now();
+  const home = await handler(new Request("https://mind-diary.example/"));
+  const homeElapsedMs = Math.max(0, performance.now() - startedAt);
+  assert.equal(home?.status, 200);
+  assert.match(await home.text(), /Mind Diary/u);
+  const homeEvidence = metadata.snapshot();
+  metadata.reset();
+
+  const mindsStartedAt = performance.now();
+  const minds = await handler(new Request("https://mind-diary.example/minds"));
+  const mindsElapsedMs = Math.max(0, performance.now() - mindsStartedAt);
+  assert.equal(minds?.status, 200);
+  assert.match(await minds.text(), /Minds/u);
+  const mindsEvidence = metadata.snapshot();
+  for (const evidence of [homeEvidence, mindsEvidence]) {
+    assert.deepEqual(evidence.calls, {
+      readPersonalMindProfile: 1,
+      listActiveMembershipMindIds: 1,
+      listPublicMindCatalogPage: 0,
+      readResolvedSpace: 0,
+      readResolvedSpaces: 1,
+      readRevision: 0,
+      readHead: 0,
+      readCurrentAuthorizationState: 0,
+      readCurrentAuthorizationStates: 2,
+    });
+    assert.ok(evidence.maximumConcurrent <= LOCAL_MIND_SCALE_CONCURRENCY);
+  }
+  assert.ok(homeElapsedMs <= LOCAL_MIND_SCALE_LATENCY_BUDGET_MS);
+  assert.ok(mindsElapsedMs <= LOCAL_MIND_SCALE_LATENCY_BUDGET_MS);
+  return Object.freeze({
+    mind_count: count,
+    home: Object.freeze({
+      status: home.status,
+      latency_ms: Number(homeElapsedMs.toFixed(3)),
+      metadata: homeEvidence,
+    }),
+    minds: Object.freeze({
+      status: minds.status,
+      latency_ms: Number(mindsElapsedMs.toFixed(3)),
+      metadata: mindsEvidence,
+    }),
   });
 }
 
@@ -333,12 +411,17 @@ async function runBrowseScale() {
 
 export async function runLocalMindScaleBenchmark() {
   const list = [];
-  for (const count of LOCAL_MIND_SCALE_COUNTS) list.push(await runListScale(count));
+  const web = [];
+  for (const count of LOCAL_MIND_SCALE_COUNTS) {
+    list.push(await runListScale(count));
+    web.push(await runWebProjectionScale(count));
+  }
   return Object.freeze({
     schema: LOCAL_MIND_SCALE_SCHEMA,
     environment: "local-synthetic-in-memory",
     hosted_evidence: false,
     list_minds: Object.freeze(list),
+    web_projections: Object.freeze(web),
     browse_entries: await runBrowseScale(),
   });
 }

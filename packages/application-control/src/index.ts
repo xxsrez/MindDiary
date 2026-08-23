@@ -1,6 +1,8 @@
 import type { ActorContext } from "@mind-diary/application-contracts";
 import type {
+  AuthorizationDecision,
   AuthorizationGrant,
+  AuthorizationStateQuery,
   AuthorizationStamp,
   AuthorizationTransaction,
   AuditSink,
@@ -12,6 +14,7 @@ import type {
   Clock,
   CapacityLimits,
   ControlReadStore,
+  CurrentAuthorizationState,
   ExternalIdentityBindingLookup,
   ExportArchiveStore,
   IssuedTokenSecret,
@@ -4981,6 +4984,36 @@ export interface MindRouteDependencies {
 
 const ROUTE_READ_CAPABILITY = "content:browse" as const;
 
+function routeAuthorizationStateQuery(
+  actor: ActorContext,
+  spaceId: SpaceId,
+): AuthorizationStateQuery {
+  if (actor.kind !== "registered_principal") {
+    throw new MindRouteFailure(
+      "authentication_required",
+      "A registered Sites principal is required.",
+    );
+  }
+  return Object.freeze({
+    principalId: actor.principalId,
+    spaceId,
+    tokenId: actor.authentication.kind === "mcp_token"
+      ? actor.authentication.tokenId
+      : null,
+  });
+}
+
+function sameRouteAuthorizationStamp(
+  left: AuthorizationStamp,
+  right: AuthorizationStamp,
+): boolean {
+  return (
+    left.accessVersion === right.accessVersion &&
+    left.membershipVersion === right.membershipVersion &&
+    left.tokenVersion === right.tokenVersion
+  );
+}
+
 function routeContentCapabilities(
   capabilities: readonly Capability[],
 ): readonly Capability[] {
@@ -5111,26 +5144,11 @@ export class MindRouteService {
       throw new MindRouteFailure("mind_not_found", "Mind was not found.");
     }
     const descriptors: MindRouteDescriptor[] = [personalRouteDescriptor(personal)];
-    const candidateIds = await this.#routes.listActiveMembershipMindIds(principalId);
-    for (const spaceId of [...new Set(candidateIds)].sort()) {
-      const first = await this.#authorizer.authorize({
-        actor,
-        spaceId,
-        capability: ROUTE_READ_CAPABILITY,
-        revisionMode: "head",
-      });
-      if (first.kind === "denied" || first.grant.kind !== "membership") continue;
-      const snapshot = await this.#routes.readResolvedSpace(spaceId);
-      if (!this.#validSnapshot(snapshot, spaceId, null, null)) {
-        continue;
-      }
-      const final = await this.#finalAuthorize(actor, snapshot!);
-      if (final.kind === "denied" || final.grant.kind !== "membership") continue;
-      if (!this.#validSnapshot(snapshot, spaceId, null, final.stamp.accessVersion)) {
-        continue;
-      }
-      descriptors.push(this.#ordinaryDescriptor(snapshot!, final.grant, "membership"));
-    }
+    const candidateIds = [...new Set(
+      await this.#routes.listActiveMembershipMindIds(principalId),
+    )].sort();
+    const batched = await this.#listMindsBatch(actor, candidateIds);
+    descriptors.push(...batched);
     descriptors.sort((left, right) => {
       if (left.isPersonal !== right.isPersonal) return left.isPersonal ? -1 : 1;
       const routeOrder = left.route.localeCompare(right.route, "en");
@@ -5138,6 +5156,103 @@ export class MindRouteService {
     });
     recordMindRouteEvent(this.#logger, "mind_list_returned", actor.requestId);
     return Object.freeze(descriptors);
+  }
+
+  async #listMindsBatch(
+    actor: ActorContext,
+    candidateIds: readonly SpaceId[],
+  ): Promise<readonly Readonly<OrdinaryMindRouteDescriptor>[]> {
+    const readStates = this.#routes.readCurrentAuthorizationStates;
+    const readSnapshots = this.#routes.readResolvedSpaces;
+    if (readStates === undefined || readSnapshots === undefined) {
+      const descriptors: OrdinaryMindRouteDescriptor[] = [];
+      for (const spaceId of candidateIds) {
+        const first = await this.#authorizer.authorize({
+          actor,
+          spaceId,
+          capability: ROUTE_READ_CAPABILITY,
+          revisionMode: "head",
+        });
+        if (first.kind === "denied" || first.grant.kind !== "membership") continue;
+        const snapshot = await this.#routes.readResolvedSpace(spaceId);
+        if (!this.#validSnapshot(snapshot, spaceId, null, null)) continue;
+        const final = await this.#finalAuthorize(actor, snapshot!);
+        if (final.kind === "denied" || final.grant.kind !== "membership") continue;
+        if (!this.#validSnapshot(snapshot, spaceId, null, final.stamp.accessVersion)) continue;
+        descriptors.push(this.#ordinaryDescriptor(snapshot!, final.grant, "membership"));
+      }
+      return Object.freeze(descriptors);
+    }
+
+    const queries = candidateIds.map((spaceId) =>
+      routeAuthorizationStateQuery(actor, spaceId));
+    const initialStates = await readStates.call(this.#routes, queries);
+    if (!Array.isArray(initialStates) || initialStates.length !== candidateIds.length) {
+      throw new MindRouteFailure("mind_not_found", "Mind was not found.");
+    }
+    const initial = await Promise.all(
+      candidateIds.map((spaceId, index) =>
+        this.#authorizeRouteFromState(actor, spaceId, initialStates[index] ?? null)),
+    );
+    const authorized = candidateIds
+      .map((spaceId, index) => ({ spaceId, index }))
+      .filter(({ index }) => {
+        const decision = initial[index];
+        return decision?.kind === "allowed" && decision.grant.kind === "membership";
+      });
+    if (authorized.length === 0) return Object.freeze([]);
+    const snapshots = await readSnapshots.call(
+      this.#routes,
+      authorized.map(({ spaceId }) => spaceId),
+    );
+    if (!Array.isArray(snapshots) || snapshots.length !== authorized.length) {
+      throw new MindRouteFailure("mind_not_found", "Mind was not found.");
+    }
+    const finalStates = await readStates.call(
+      this.#routes,
+      authorized.map(({ spaceId }) => routeAuthorizationStateQuery(actor, spaceId)),
+    );
+    if (!Array.isArray(finalStates) || finalStates.length !== authorized.length) {
+      throw new MindRouteFailure("mind_not_found", "Mind was not found.");
+    }
+    const descriptors: OrdinaryMindRouteDescriptor[] = [];
+    for (const [offset, item] of authorized.entries()) {
+      const snapshot = snapshots[offset] ?? null;
+      const first = initial[item.index];
+      const final = await this.#authorizeRouteFromState(
+        actor,
+        item.spaceId,
+        finalStates[offset] ?? null,
+      );
+      if (
+        snapshot === null ||
+        first?.kind !== "allowed" ||
+        first.grant.kind !== "membership" ||
+        final.kind !== "allowed" ||
+        final.grant.kind !== "membership" ||
+        !sameRouteAuthorizationStamp(first.stamp, final.stamp) ||
+        !this.#validSnapshot(snapshot, item.spaceId, null, final.stamp.accessVersion)
+      ) continue;
+      descriptors.push(this.#ordinaryDescriptor(snapshot, final.grant, "membership"));
+    }
+    return Object.freeze(descriptors);
+  }
+
+  async #authorizeRouteFromState(
+    actor: ActorContext,
+    spaceId: SpaceId,
+    state: Readonly<CurrentAuthorizationState> | null,
+  ): Promise<AuthorizationDecision> {
+    const [decision] = await this.#authorizer.authorizeCapabilitiesFromState(
+      {
+        actor,
+        spaceId,
+        capabilities: [ROUTE_READ_CAPABILITY],
+        revisionMode: "head",
+      },
+      state,
+    );
+    return decision ?? { kind: "denied", code: "authorization_state_unavailable", retryable: false };
   }
 
   /**

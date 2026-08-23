@@ -20,6 +20,25 @@ test("local 1/10/100 Mind fixture records deterministic list query counts and or
     assert.ok(row.latency_ms <= 2_000);
     assert.ok(row.metadata.maximumConcurrent <= 8);
     assert.equal(row.metadata.calls.listPublicMindCatalogPage, 1);
+    assert.equal(row.metadata.calls.readResolvedSpaces, 1);
+    assert.equal(row.metadata.calls.readCurrentAuthorizationStates, 2);
+    assert.equal(row.metadata.calls.readResolvedSpace, 0);
+    assert.equal(row.metadata.calls.readCurrentAuthorizationState, 2);
+  }
+  assert.deepEqual(
+    report.web_projections.map((row) => row.mind_count),
+    LOCAL_MIND_SCALE_COUNTS,
+  );
+  for (const row of report.web_projections) {
+    for (const projection of [row.home, row.minds]) {
+      assert.equal(projection.status, 200);
+      assert.ok(projection.latency_ms <= 2_000);
+      assert.ok(projection.metadata.maximumConcurrent <= 8);
+      assert.equal(projection.metadata.calls.readResolvedSpaces, 1);
+      assert.equal(projection.metadata.calls.readCurrentAuthorizationStates, 2);
+      assert.equal(projection.metadata.calls.readResolvedSpace, 0);
+      assert.equal(projection.metadata.calls.readCurrentAuthorizationState, 0);
+    }
   }
 });
 

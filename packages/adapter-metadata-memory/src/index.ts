@@ -5924,6 +5924,15 @@ export class InMemoryRevisionMetadataStore
     return this.#ordinaryMindRouteSnapshot(spaceId);
   }
 
+  async readResolvedSpaces(
+    spaceIds: readonly SpaceId[],
+  ): Promise<readonly (Readonly<OrdinaryMindRouteSnapshot> | null)[]> {
+    if (!Array.isArray(spaceIds)) return Object.freeze([]);
+    return Object.freeze(
+      spaceIds.map((spaceId) => this.#ordinaryMindRouteSnapshot(spaceId)),
+    );
+  }
+
   #ordinaryMindRouteSnapshot(
     spaceId: SpaceId,
   ): Readonly<OrdinaryMindRouteSnapshot> | null {
@@ -11406,6 +11415,23 @@ export class InMemoryRevisionMetadataStore
     }
     const state = this.#authorizationStates.get(authorizationStateKey(query));
     return state ? cloneAuthorizationState(state) : null;
+  }
+
+  async readCurrentAuthorizationStates(
+    queries: readonly AuthorizationStateQuery[],
+  ): Promise<readonly (AuthorizationState | null)[]> {
+    if (!Array.isArray(queries)) return Object.freeze([]);
+    return Object.freeze(
+      queries.map((query) => {
+        if (query === null || typeof query !== "object") return null;
+        if (query.tokenId === null) {
+          const current = this.#currentSitesAuthorizationState(query);
+          if (current !== null) return current;
+        }
+        const state = this.#authorizationStates.get(authorizationStateKey(query));
+        return state ? cloneAuthorizationState(state) : null;
+      }),
+    );
   }
 
   async readCurrentRouteAuthorizationState(

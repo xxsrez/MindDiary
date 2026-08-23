@@ -404,6 +404,21 @@ export class SitesMetadataStore {
     });
   }
 
+  async readCurrentAuthorizationStates(
+    queries: readonly AuthorizationStateQuery[],
+  ): Promise<readonly (Readonly<CurrentAuthorizationState> | null)[]> {
+    return this.#exclusive(async () => {
+      await this.#refresh();
+      return Object.freeze(
+        await Promise.all(
+          queries.map((query) =>
+            currentAuthorizationStateWithToken(this.#metadata, this.#tokens, query),
+          ),
+        ),
+      );
+    });
+  }
+
   async readCurrentRouteAuthorizationState(
     query: MindRouteAuthorizationQuery,
   ): Promise<Readonly<CurrentAuthorizationState> | null> {
@@ -431,6 +446,14 @@ export class SitesMetadataStore {
           if (property === "readCurrentAuthorizationState") {
             return (query: AuthorizationStateQuery) =>
               currentAuthorizationStateWithToken(this.#metadata, this.#tokens, query);
+          }
+          if (property === "readCurrentAuthorizationStates") {
+            return (queries: readonly AuthorizationStateQuery[]) =>
+              Promise.all(
+                queries.map((query) =>
+                  currentAuthorizationStateWithToken(this.#metadata, this.#tokens, query),
+                ),
+              );
           }
           if (property === "readCurrentRouteAuthorizationState") {
             return (query: MindRouteAuthorizationQuery) =>
