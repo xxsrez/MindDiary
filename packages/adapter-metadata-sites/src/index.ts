@@ -207,6 +207,7 @@ const TOKEN_MUTATIONS = new Set([
 const MAX_CAS_ATTEMPTS = 16;
 const SNAPSHOT_CHUNK_CODE_UNITS = 256 * 1_024;
 const SNAPSHOT_CHUNK_READ_PAGE = 8;
+const ACTIVITY_SNAPSHOT_CADENCE = 64;
 
 function splitSnapshotPayload(payload: string): readonly string[] {
   const chunks: string[] = [];
@@ -291,6 +292,16 @@ interface LoadedState {
   readonly metadata: InMemoryRevisionMetadataStore;
   readonly tokens: InMemoryMcpTokenStore;
   readonly sequence: number;
+}
+
+interface TailReplayResult {
+  readonly sequence: number;
+  readonly shouldCheckpoint: boolean;
+}
+
+function shouldCheckpointEvent(event: DurableEvent, sequence: number): boolean {
+  return event.method !== "recordPrincipalActivity" ||
+    sequence % ACTIVITY_SNAPSHOT_CADENCE === 0;
 }
 
 async function currentAuthorizationStateWithToken(
@@ -482,11 +493,11 @@ export class SitesMetadataStore {
       this.#loaded = true;
       return;
     }
-    this.#sequence = await this.#replayTail(
+    this.#sequence = (await this.#replayTail(
       this.#metadata,
       this.#tokens,
       this.#sequence,
-    );
+    )).sequence;
   }
 
   async #load(): Promise<LoadedState> {
@@ -597,22 +608,22 @@ export class SitesMetadataStore {
       snapshot.metadata,
     );
     const tokens = InMemoryMcpTokenStore.fromDurableSnapshot(snapshot.tokens);
-    const sequence = await this.#replayTail(
+    const replayed = await this.#replayTail(
       metadata,
       tokens,
       sequenceAtSnapshot,
     );
-    if (sequence > sequenceAtSnapshot) {
-      await this.#persistSnapshot(sequence, metadata, tokens);
+    if (replayed.shouldCheckpoint) {
+      await this.#persistSnapshot(replayed.sequence, metadata, tokens);
     }
-    return { metadata, tokens, sequence };
+    return { metadata, tokens, sequence: replayed.sequence };
   }
 
   async #replayTail(
     metadata: InMemoryRevisionMetadataStore,
     tokens: InMemoryMcpTokenStore,
     afterSequence: number,
-  ): Promise<number> {
+  ): Promise<TailReplayResult> {
     const result = await this.#database
       .prepare(
         `/*md-metadata-events-tail*/ SELECT sequence, target, operation, payload_json
@@ -621,6 +632,7 @@ export class SitesMetadataStore {
       .bind(afterSequence)
       .all<DurableEventRow>();
     let expected = afterSequence;
+    let shouldCheckpoint = false;
     for (const row of result.results ?? []) {
       if (!Number.isSafeInteger(row.sequence) || row.sequence !== expected + 1) {
         throw new Error("Sites metadata event sequence is not contiguous");
@@ -635,8 +647,9 @@ export class SitesMetadataStore {
       }
       await this.#replay(metadata, tokens, event);
       expected = row.sequence;
+      shouldCheckpoint ||= shouldCheckpointEvent(event, expected);
     }
-    return expected;
+    return Object.freeze({ sequence: expected, shouldCheckpoint });
   }
 
   async #replay(
@@ -769,13 +782,15 @@ export class SitesMetadataStore {
       )
       .run();
     if (changes(result) !== 1) return false;
-    try {
-      await this.#persistSnapshot(sequence, metadata, tokens);
-    } catch {
-      // The fenced event append above is the canonical commit. A stale or
-      // absent materialized snapshot is repaired by contiguous tail replay on
-      // the next read/restart; surfacing failure here would report an
-      // ambiguous mutation result and invite an unnecessary retry.
+    if (shouldCheckpointEvent(event, sequence)) {
+      try {
+        await this.#persistSnapshot(sequence, metadata, tokens);
+      } catch {
+        // The fenced event append above is the canonical commit. A stale or
+        // absent materialized snapshot is repaired by contiguous tail replay on
+        // the next read/restart; surfacing failure here would report an
+        // ambiguous mutation result and invite an unnecessary retry.
+      }
     }
     return true;
   }

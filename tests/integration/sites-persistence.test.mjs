@@ -109,6 +109,7 @@ class FakeD1Database {
   metadataSnapshot = null;
   metadataSnapshotHead = null;
   metadataSnapshotChunks = new Map();
+  metadataSnapshotWriteCount = 0;
   metadataReadLog = [];
   maxBoundStringLength = Number.POSITIVE_INFINITY;
   searchWriteParameterCounts = [];
@@ -204,6 +205,7 @@ class FakeD1Database {
       if (this.metadataSnapshotHead !== null && this.metadataSnapshotHead.sequence >= sequence) {
         return { success: true, meta: { changes: 0 } };
       }
+      this.metadataSnapshotWriteCount += 1;
       this.metadataSnapshotHead = {
         sequence,
         chunk_count: Number(values[1]),
@@ -904,6 +906,77 @@ test("chunked metadata snapshots stay below one D1 bound value and survive resta
 
   const restarted = await createSitesMetadataStore(database);
   assert.ok(await restarted.readMarkdownImportPlan("import-plan_chunked_3"));
+});
+
+test("high-frequency principal activity keeps a large snapshot durable without rewriting it per read", async () => {
+  const database = new FakeD1Database();
+  database.maxBoundStringLength = 300_000;
+  const boundary = await createSitesPersistenceBoundary({
+    database,
+    bucket: new FakeR2Bucket(),
+  });
+  const created = await services(boundary, ids()).bootstrap.bootstrapAccount(
+    preRegistrationActor(91),
+    { action: "create_isolated_account" },
+  );
+  for (let planIndex = 0; planIndex < 4; planIndex += 1) {
+    const files = Object.freeze(Array.from({ length: 500 }, (_, fileIndex) =>
+      Object.freeze({
+        path: `knowledge/activity/${planIndex}/${String(fileIndex).padStart(4, "0")}-${"x".repeat(96)}.md`,
+        sha256: SHA_A,
+        size: 1,
+      })));
+    const result = await boundary.metadata.runMarkdownImportTransaction((transaction) =>
+      transaction.createMarkdownImportPlan(Object.freeze({
+        planId: `import-plan_activity_${planIndex}`,
+        principalId: created.principalId,
+        spaceId: opaqueId("space_activity_snapshot"),
+        expectedRevisionId: opaqueId("revision_activity_snapshot"),
+        idempotencyKey: idempotencyKey(`activity-snapshot-${planIndex}`),
+        canonicalRequestHash: `sha256:${String(planIndex + 1).repeat(64).slice(0, 64)}`,
+        descriptorHash: `sha256:${String(planIndex + 5).repeat(64).slice(0, 64)}`,
+        files,
+        logicalBytes: files.length,
+        additions: files.length,
+        replacements: 0,
+        deletions: 0,
+        unchanged: 0,
+        projectedUtilization: "normal",
+        createdAt: T0,
+        expiresAt: T5,
+      }), 10_000_000));
+    assert.equal(result.kind, "created");
+  }
+  assert.ok(database.metadataSnapshotHead.payload_chars > database.maxBoundStringLength);
+  const writesBeforeActivity = database.metadataSnapshotWriteCount;
+  const sequenceBeforeActivity = database.metadataEvents.at(-1).sequence;
+
+  for (let index = 1; index <= 20; index += 1) {
+    await boundary.metadata.recordPrincipalActivity({
+      principalId: created.principalId,
+      surface: "web",
+      kind: "page",
+      observedAt: new Date(Date.parse(T0) + index * 1_000).toISOString(),
+    });
+  }
+
+  assert.equal(database.metadataEvents.at(-1).sequence, sequenceBeforeActivity + 20);
+  assert.ok(database.metadataSnapshotWriteCount - writesBeforeActivity <= 1);
+  const restarted = await createSitesMetadataStore(database);
+  const activity = await restarted.readPrincipalActivity(created.principalId);
+  assert.equal(activity.lastWebSeenAt, new Date(Date.parse(T0) + 20_000).toISOString());
+  assert.ok(database.metadataSnapshotHead.sequence < database.metadataEvents.at(-1).sequence);
+  assert.equal((await restarted.reserveHandle({
+    host: HOST,
+    handle: "activity-snapshot-checkpoint",
+    spaceId: "space_activity_snapshot_checkpoint",
+  })).kind, "reserved");
+  assert.equal(database.metadataSnapshotHead.sequence, database.metadataEvents.at(-1).sequence);
+  const checkpointRestart = await createSitesMetadataStore(database);
+  assert.equal(
+    (await checkpointRestart.readPrincipalActivity(created.principalId)).lastWebSeenAt,
+    new Date(Date.parse(T0) + 20_000).toISOString(),
+  );
 });
 
 test("corrupt materialized metadata snapshot fails closed", async () => {
