@@ -60,6 +60,8 @@ class FakeD1Statement {
 export class FakeD1Database {
   metadataEvents = [];
   metadataSnapshot = null;
+  metadataSnapshotHead = null;
+  metadataSnapshotChunks = new Map();
   locatorHandles = new Map();
   search = new Map();
   searchDocuments = new Map();
@@ -374,11 +376,35 @@ export class FakeD1Database {
     if (sql.includes("/*md-metadata-snapshot-write*/")) {
       this.#assertSchema("metadata");
       const sequence = Number(values[0]);
-      if (this.metadataSnapshot !== null && this.metadataSnapshot.sequence >= sequence) {
+      if (this.metadataSnapshotHead !== null && this.metadataSnapshotHead.sequence >= sequence) {
         return { success: true, meta: { changes: 0 } };
       }
-      this.metadataSnapshot = { sequence, payload_json: values[1] };
+      this.metadataSnapshotHead = {
+        sequence,
+        chunk_count: Number(values[1]),
+        payload_chars: Number(values[2]),
+      };
       return { success: true, meta: { changes: 1 } };
+    }
+    if (sql.includes("/*md-metadata-snapshot-chunk-write*/")) {
+      this.#assertSchema("metadata");
+      this.metadataSnapshotChunks.set(`${values[0]}:${values[1]}`, {
+        sequence: Number(values[0]),
+        chunk_index: Number(values[1]),
+        payload_json: values[2],
+      });
+      return { success: true, meta: { changes: 1 } };
+    }
+    if (sql.includes("/*md-metadata-snapshot-cleanup*/")) {
+      this.#assertSchema("metadata");
+      const headSequence = this.metadataSnapshotHead?.sequence ?? 0;
+      let changes = 0;
+      for (const [key, row] of this.metadataSnapshotChunks) {
+        if (row.sequence >= headSequence) continue;
+        this.metadataSnapshotChunks.delete(key);
+        changes += 1;
+      }
+      return { success: true, meta: { changes } };
     }
     if (sql.includes("/*md-search-membership-delete*/")) {
       this.#assertSchema("search");
@@ -635,6 +661,31 @@ export class FakeD1Database {
           : [],
       };
     }
+    if (sql.includes("/*md-metadata-snapshot-head-read*/")) {
+      this.#assertSchema("metadata");
+      return {
+        success: true,
+        results: this.metadataSnapshotHead === null
+          ? []
+          : [{ ...this.metadataSnapshotHead }],
+      };
+    }
+    if (sql.includes("/*md-metadata-snapshot-chunks-read*/")) {
+      this.#assertSchema("metadata");
+      return {
+        success: true,
+        results: [...this.metadataSnapshotChunks.values()]
+          .filter((row) =>
+            row.sequence === Number(values[0]) &&
+            row.chunk_index >= Number(values[1]))
+          .sort((left, right) => left.chunk_index - right.chunk_index)
+          .slice(0, Number(values[2]))
+          .map((row) => ({
+            chunk_index: row.chunk_index,
+            payload_json: row.payload_json,
+          })),
+      };
+    }
     if (sql.includes("/*md-metadata-snapshot-read*/")) {
       this.#assertSchema("metadata");
       return {
@@ -753,6 +804,8 @@ export class FakeD1Database {
   destroy() {
     this.metadataEvents.splice(0);
     this.metadataSnapshot = null;
+    this.metadataSnapshotHead = null;
+    this.metadataSnapshotChunks.clear();
     this.search.clear();
     this.searchDocuments.clear();
     this.searchMemberships.clear();

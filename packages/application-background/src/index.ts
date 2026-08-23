@@ -180,6 +180,7 @@ export class BackgroundPrivacySafeObservability {
     readonly stage:
       | "recovery_index_gaps"
       | "recovery_index_dispatch"
+      | "recovery_export_dispatch"
       | "recovery_staging_cleanup"
       | "recovery_import_cleanup"
       | "recovery_object_cleanup"
@@ -260,6 +261,7 @@ function retryAt(now: UtcInstant, retryDelayMs: number): UtcInstant {
 
 export const DEFAULT_BACKGROUND_CLAIM_LEASE_MS = 30_000;
 export const MAX_BACKGROUND_CLAIM_LEASE_MS = 5 * 60 * 1_000;
+export const DEFAULT_EXPORT_CLAIM_LEASE_MS = MAX_BACKGROUND_CLAIM_LEASE_MS;
 
 function boundedDuration(value: number, name: string, maximum: number): number {
   if (!Number.isSafeInteger(value) || value < 1 || value > maximum) {
@@ -1019,7 +1021,7 @@ export class ExportJobHandler {
       24 * 60 * 60 * 1_000,
     );
     this.#claimLeaseMs = boundedDuration(
-      dependencies.claimLeaseMs ?? DEFAULT_BACKGROUND_CLAIM_LEASE_MS,
+      dependencies.claimLeaseMs ?? DEFAULT_EXPORT_CLAIM_LEASE_MS,
       "export claim lease",
       MAX_BACKGROUND_CLAIM_LEASE_MS,
     );

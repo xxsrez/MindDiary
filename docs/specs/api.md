@@ -1078,6 +1078,13 @@ privacy-safe duration/outcome telemetry. Separate public background routes do
 not exist; unknown routes remain 404 and no import tool is advertised through
 MCP.
 
+The same bounded recovery re-dispatches due queued/failed export jobs and
+`running` jobs whose fenced claim expired. Export claims use the bounded
+five-minute lease rather than the short ordinary-job default, because a
+supported Brain-scale deterministic stream may legitimately take more than 30
+seconds. A crash still becomes recoverable after lease expiry; deterministic
+R2 parts are reused and stale completion cannot win the version fence.
+
 Background handler получает service `ActorContext`, explicit job/aggregate ID и
 idempotency state. Он не доверяет serialized role/token claims из job payload и
 не изменяет canonical content без обычной domain command/CAS boundary.
@@ -2133,6 +2140,12 @@ reservation is created. Plan metadata itself is admitted atomically against
 the Site D1 hard budget. Same key/exact request replays; changed request is
 `import_idempotency_conflict`. Unclaimed expired plans are deleted by bounded
 recovery.
+
+The metadata-only plan route has a dedicated 16 MiB JSON envelope so a
+Brain-scale descriptor list is not rejected by the ordinary 64 KiB control
+request limit. The bound applies before JSON parsing and never raises the
+10,000-file, 64 MiB logical-corpus or D1 admission limits. An oversized plan is
+`invalid_request`; every other ordinary JSON route keeps the 64 KiB envelope.
 
 Start request:
 

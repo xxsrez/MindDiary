@@ -857,6 +857,42 @@ test("Markdown import REST maps exact plan, resumable multipart checkpoints and 
     mind_ref: "research-notes",
   });
 
+  const brainScaleFiles = Array.from({ length: 1_741 }, (_unused, index) => ({
+    path: `concepts/note-${String(index).padStart(4, "0")}.md`,
+    sha256: `sha256:${String(index).padStart(64, "0")}`,
+    size: 3_264,
+  }));
+  const brainScaleBody = JSON.stringify({
+    expected_revision_id: "revision_research",
+    files: brainScaleFiles,
+  });
+  assert.ok(Buffer.byteLength(brainScaleBody) > 64 * 1024);
+  const brainScalePlan = await handler(new Request(
+    `${origin}/api/v1/minds/research-notes/markdown-import-plans`,
+    {
+      method: "POST",
+      headers: { ...mutationHeaders, "idempotency-key": "import-plan:brain-scale" },
+      body: brainScaleBody,
+    },
+  ));
+  assert.equal(brainScalePlan.status, 200);
+  assert.equal(calls.at(-1).input.files.length, 1_741);
+
+  const oversizedPlan = await handler(new Request(
+    `${origin}/api/v1/minds/research-notes/markdown-import-plans`,
+    {
+      method: "POST",
+      headers: {
+        ...mutationHeaders,
+        "content-length": String(16 * 1024 * 1024 + 1),
+        "idempotency-key": "import-plan:oversized",
+      },
+      body: "{}",
+    },
+  ));
+  assert.equal(oversizedPlan.status, 400);
+  assert.equal((await oversizedPlan.json()).error.code, "invalid_request");
+
   await handler(new Request(`${origin}/api/v1/minds/research-notes/markdown-imports`, {
     method: "POST",
     headers: { ...mutationHeaders, "idempotency-key": "import-session:12345678" },

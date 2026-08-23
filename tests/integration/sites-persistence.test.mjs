@@ -107,7 +107,10 @@ class FakeD1Statement {
 class FakeD1Database {
   metadataEvents = [];
   metadataSnapshot = null;
+  metadataSnapshotHead = null;
+  metadataSnapshotChunks = new Map();
   metadataReadLog = [];
+  maxBoundStringLength = Number.POSITIVE_INFINITY;
   searchWriteParameterCounts = [];
   search = new Map();
   searchDocuments = new Map();
@@ -130,6 +133,8 @@ class FakeD1Database {
     const before = {
       metadataEvents: structuredClone(this.metadataEvents),
       metadataSnapshot: structuredClone(this.metadataSnapshot),
+      metadataSnapshotHead: structuredClone(this.metadataSnapshotHead),
+      metadataSnapshotChunks: new Map(this.metadataSnapshotChunks),
       search: new Map(this.search),
       searchDocuments: new Map([...this.searchDocuments].map(([key, value]) => [key, { ...value }])),
       searchMemberships: new Map([...this.searchMemberships].map(([key, value]) => [key, { ...value }])),
@@ -144,6 +149,8 @@ class FakeD1Database {
     } catch (error) {
       this.metadataEvents = before.metadataEvents;
       this.metadataSnapshot = before.metadataSnapshot;
+      this.metadataSnapshotHead = before.metadataSnapshotHead;
+      this.metadataSnapshotChunks = before.metadataSnapshotChunks;
       this.search = before.search;
       this.searchDocuments = before.searchDocuments;
       this.searchMemberships = before.searchMemberships;
@@ -170,6 +177,10 @@ class FakeD1Database {
 
   async run(sql, values) {
     this.#maybeFail(sql);
+    if (values.some((value) =>
+      typeof value === "string" && value.length > this.maxBoundStringLength)) {
+      throw new Error("synthetic D1 bound string is too large");
+    }
     if (/^\s*(?:CREATE TABLE|CREATE INDEX)/u.test(sql)) {
       return { success: true, meta: { changes: 0 } };
     }
@@ -190,11 +201,33 @@ class FakeD1Database {
     }
     if (sql.includes("/*md-metadata-snapshot-write*/")) {
       const sequence = Number(values[0]);
-      if (this.metadataSnapshot !== null && this.metadataSnapshot.sequence >= sequence) {
+      if (this.metadataSnapshotHead !== null && this.metadataSnapshotHead.sequence >= sequence) {
         return { success: true, meta: { changes: 0 } };
       }
-      this.metadataSnapshot = { sequence, payload_json: values[1] };
+      this.metadataSnapshotHead = {
+        sequence,
+        chunk_count: Number(values[1]),
+        payload_chars: Number(values[2]),
+      };
       return { success: true, meta: { changes: 1 } };
+    }
+    if (sql.includes("/*md-metadata-snapshot-chunk-write*/")) {
+      this.metadataSnapshotChunks.set(`${values[0]}:${values[1]}`, {
+        sequence: Number(values[0]),
+        chunk_index: Number(values[1]),
+        payload_json: values[2],
+      });
+      return { success: true, meta: { changes: 1 } };
+    }
+    if (sql.includes("/*md-metadata-snapshot-cleanup*/")) {
+      const headSequence = this.metadataSnapshotHead?.sequence ?? 0;
+      let changed = 0;
+      for (const [key, row] of this.metadataSnapshotChunks) {
+        if (row.sequence >= headSequence) continue;
+        this.metadataSnapshotChunks.delete(key);
+        changed += 1;
+      }
+      return { success: true, meta: { changes: changed } };
     }
     if (sql.includes("/*md-locator-create*/")) {
       this.locatorHandles.set(values[0], {
@@ -362,6 +395,31 @@ class FakeD1Database {
 
   async all(sql, values) {
     this.#maybeFail(sql);
+    if (sql.includes("/*md-metadata-snapshot-head-read*/")) {
+      this.metadataReadLog.push("snapshot-head");
+      return {
+        success: true,
+        results: this.metadataSnapshotHead === null
+          ? []
+          : [{ ...this.metadataSnapshotHead }],
+      };
+    }
+    if (sql.includes("/*md-metadata-snapshot-chunks-read*/")) {
+      this.metadataReadLog.push("snapshot-chunks");
+      return {
+        success: true,
+        results: [...this.metadataSnapshotChunks.values()]
+          .filter((row) =>
+            row.sequence === Number(values[0]) &&
+            row.chunk_index >= Number(values[1]))
+          .sort((left, right) => left.chunk_index - right.chunk_index)
+          .slice(0, Number(values[2]))
+          .map((row) => ({
+            chunk_index: row.chunk_index,
+            payload_json: row.payload_json,
+          })),
+      };
+    }
     if (sql.includes("/*md-metadata-snapshot-read*/")) {
       this.metadataReadLog.push("snapshot");
       return {
@@ -687,6 +745,8 @@ test("legacy active HEAD without index effects replays and is backfilled exactly
   delete createCall.args[0].initialIndexState;
   bootstrapEvent.payload_json = JSON.stringify(payload);
   database.metadataSnapshot = null;
+  database.metadataSnapshotHead = null;
+  database.metadataSnapshotChunks.clear();
 
   boundary = await createSitesPersistenceBoundary({ database, bucket });
   const personal = await boundary.metadata.resolvePersonalMind(created.principalId);
@@ -749,16 +809,22 @@ test("materialized metadata snapshot removes full-log replay from warm and resta
     preRegistrationActor(1),
     { action: "create_isolated_account" },
   );
-  assert.ok(database.metadataSnapshot);
+  assert.ok(database.metadataSnapshotHead);
   const durableEvent = structuredClone(database.metadataEvents.at(-1));
   for (let sequence = 2; sequence <= 10_000; sequence += 1) {
     database.metadataEvents.push({ ...durableEvent, sequence });
   }
-  database.metadataSnapshot.sequence = 10_000;
+  database.metadataSnapshotHead.sequence = 10_000;
+  database.metadataSnapshotChunks = new Map(
+    [...database.metadataSnapshotChunks].map(([key, row]) => [
+      key.replace(/^\d+:/u, "10000:"),
+      { ...row, sequence: 10_000 },
+    ]),
+  );
 
   database.metadataReadLog = [];
   boundary = await createSitesPersistenceBoundary({ database, bucket });
-  assert.deepEqual(database.metadataReadLog, ["snapshot", "tail"]);
+  assert.deepEqual(database.metadataReadLog, ["snapshot-head", "snapshot-chunks", "tail"]);
   database.metadataReadLog = [];
   assert.ok(await boundary.metadata.readAccount(created.principalId));
   assert.ok(await boundary.metadata.resolvePersonalMind(created.principalId));
@@ -768,7 +834,8 @@ test("materialized metadata snapshot removes full-log replay from warm and resta
   boundary = await createSitesPersistenceBoundary({ database, bucket });
   assert.ok(await boundary.metadata.readAccount(created.principalId));
   assert.equal(database.metadataReadLog.filter((kind) => kind === "migration").length, 0);
-  assert.equal(database.metadataReadLog.filter((kind) => kind === "snapshot").length, 1);
+  assert.equal(database.metadataReadLog.filter((kind) => kind === "snapshot-head").length, 1);
+  assert.equal(database.metadataReadLog.filter((kind) => kind === "snapshot-chunks").length, 1);
   assert.equal(database.metadataReadLog.filter((kind) => kind === "tail").length, 2);
 });
 
@@ -785,14 +852,58 @@ test("snapshot write failure after fenced append self-heals from canonical tail"
     "reserved",
   );
   assert.equal(database.metadataEvents.length, 1);
-  assert.equal(database.metadataSnapshot.sequence, 0);
+  assert.equal(database.metadataSnapshotHead.sequence, 0);
 
   const restarted = await createSitesMetadataStore(database);
   assert.deepEqual(
     await restarted.resolveHandle({ host: HOST, handle: "snapshot-recovery" }),
     { kind: "resolved", spaceId: "space_snapshot_recovery" },
   );
-  assert.equal(database.metadataSnapshot.sequence, 1);
+  assert.equal(database.metadataSnapshotHead.sequence, 1);
+});
+
+test("chunked metadata snapshots stay below one D1 bound value and survive restart", async () => {
+  const database = new FakeD1Database();
+  database.maxBoundStringLength = 300_000;
+  const store = await createSitesMetadataStore(database);
+  for (let planIndex = 0; planIndex < 4; planIndex += 1) {
+    const files = Object.freeze(Array.from({ length: 500 }, (_, fileIndex) =>
+      Object.freeze({
+        path: `knowledge/${planIndex}/${String(fileIndex).padStart(4, "0")}-${"x".repeat(96)}.md`,
+        sha256: SHA_A,
+        size: 1,
+      })));
+    const result = await store.runMarkdownImportTransaction((transaction) =>
+      transaction.createMarkdownImportPlan(Object.freeze({
+        planId: `import-plan_chunked_${planIndex}`,
+        principalId: opaqueId("principal_chunked_snapshot"),
+        spaceId: opaqueId("space_chunked_snapshot"),
+        expectedRevisionId: opaqueId("revision_chunked_snapshot"),
+        idempotencyKey: idempotencyKey(`chunked-snapshot-${planIndex}`),
+        canonicalRequestHash: `sha256:${String(planIndex + 1).repeat(64).slice(0, 64)}`,
+        descriptorHash: `sha256:${String(planIndex + 5).repeat(64).slice(0, 64)}`,
+        files,
+        logicalBytes: files.length,
+        additions: files.length,
+        replacements: 0,
+        deletions: 0,
+        unchanged: 0,
+        projectedUtilization: "normal",
+        createdAt: T0,
+        expiresAt: T5,
+      }), 10_000_000));
+    assert.equal(result.kind, "created");
+  }
+  assert.ok(database.metadataSnapshotHead.payload_chars > database.maxBoundStringLength);
+  const currentChunks = [...database.metadataSnapshotChunks.values()].filter(
+    (row) => row.sequence === database.metadataSnapshotHead.sequence,
+  );
+  assert.equal(currentChunks.length, database.metadataSnapshotHead.chunk_count);
+  assert.ok(currentChunks.every((row) =>
+    row.payload_json.length <= database.maxBoundStringLength));
+
+  const restarted = await createSitesMetadataStore(database);
+  assert.ok(await restarted.readMarkdownImportPlan("import-plan_chunked_3"));
 });
 
 test("corrupt materialized metadata snapshot fails closed", async () => {
@@ -803,7 +914,12 @@ test("corrupt materialized metadata snapshot fails closed", async () => {
     handle: "snapshot-corrupt",
     spaceId: "space_snapshot_corrupt",
   });
-  database.metadataSnapshot.payload_json = JSON.stringify({ v: 999 });
+  const corruptChunkKey = `${database.metadataSnapshotHead.sequence}:0`;
+  database.metadataSnapshotChunks.set(corruptChunkKey, {
+    ...database.metadataSnapshotChunks.get(corruptChunkKey),
+    payload_json: JSON.stringify({ v: 999 }),
+  });
+  database.metadataSnapshotHead.payload_chars = JSON.stringify({ v: 999 }).length;
   await assert.rejects(createSitesMetadataStore(database), /snapshot is invalid/u);
 });
 

@@ -45,6 +45,8 @@ class FakeD1Statement {
 class FakeD1Database {
   metadataEvents = [];
   metadataSnapshot = null;
+  metadataSnapshotHead = null;
+  metadataSnapshotChunks = new Map();
   search = new Map();
   searchDocuments = new Map();
   searchMemberships = new Map();
@@ -86,11 +88,33 @@ class FakeD1Database {
     }
     if (sql.includes("/*md-metadata-snapshot-write*/")) {
       const sequence = Number(values[0]);
-      if (this.metadataSnapshot !== null && this.metadataSnapshot.sequence >= sequence) {
+      if (this.metadataSnapshotHead !== null && this.metadataSnapshotHead.sequence >= sequence) {
         return { success: true, meta: { changes: 0 } };
       }
-      this.metadataSnapshot = { sequence, payload_json: values[1] };
+      this.metadataSnapshotHead = {
+        sequence,
+        chunk_count: Number(values[1]),
+        payload_chars: Number(values[2]),
+      };
       return { success: true, meta: { changes: 1 } };
+    }
+    if (sql.includes("/*md-metadata-snapshot-chunk-write*/")) {
+      this.metadataSnapshotChunks.set(`${values[0]}:${values[1]}`, {
+        sequence: Number(values[0]),
+        chunk_index: Number(values[1]),
+        payload_json: values[2],
+      });
+      return { success: true, meta: { changes: 1 } };
+    }
+    if (sql.includes("/*md-metadata-snapshot-cleanup*/")) {
+      const headSequence = this.metadataSnapshotHead?.sequence ?? 0;
+      let changes = 0;
+      for (const [key, row] of this.metadataSnapshotChunks) {
+        if (row.sequence >= headSequence) continue;
+        this.metadataSnapshotChunks.delete(key);
+        changes += 1;
+      }
+      return { success: true, meta: { changes } };
     }
     if (sql.includes("/*md-locator-create*/")) {
       this.locatorHandles.set(values[0], {
@@ -253,6 +277,29 @@ class FakeD1Database {
   }
 
   async all(sql, values) {
+    if (sql.includes("/*md-metadata-snapshot-head-read*/")) {
+      return {
+        success: true,
+        results: this.metadataSnapshotHead === null
+          ? []
+          : [{ ...this.metadataSnapshotHead }],
+      };
+    }
+    if (sql.includes("/*md-metadata-snapshot-chunks-read*/")) {
+      return {
+        success: true,
+        results: [...this.metadataSnapshotChunks.values()]
+          .filter((row) =>
+            row.sequence === Number(values[0]) &&
+            row.chunk_index >= Number(values[1]))
+          .sort((left, right) => left.chunk_index - right.chunk_index)
+          .slice(0, Number(values[2]))
+          .map((row) => ({
+            chunk_index: row.chunk_index,
+            payload_json: row.payload_json,
+          })),
+      };
+    }
     if (sql.includes("/*md-metadata-snapshot-read*/")) {
       return {
         success: true,
@@ -1007,6 +1054,7 @@ test("empty account reaches a strict starter commit and first useful search/fetc
     "stage_total",
     "recovery_index_gaps",
     "recovery_index_dispatch",
+    "recovery_export_dispatch",
     "recovery_staging_cleanup",
     "recovery_import_cleanup",
     "recovery_object_cleanup",
@@ -1918,7 +1966,8 @@ test("durable product runtime carries a Sites account token through Codex MCP an
     (work) => work.kind === "export" && work.id === exportJob.job_id,
   );
   assert.ok(exportWork);
-  await runtime.dispatchBackground({ kind: "export", jobId: exportWork.id });
+  const exportRecovery = await runtime.recoverBackground();
+  assert.ok(exportRecovery.dispatched >= 1);
 
   const exportStatus = await legacyMcp(runtime, secret, {
     jsonrpc: "2.0",

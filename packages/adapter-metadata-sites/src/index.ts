@@ -61,6 +61,25 @@ export const SITES_METADATA_MIGRATIONS = Object.freeze([
       )`,
     ]),
   }),
+  Object.freeze({
+    version: 3,
+    name: "chunked-materialized-snapshot",
+    statements: Object.freeze([
+      `CREATE TABLE IF NOT EXISTS md_metadata_snapshot_heads (
+        singleton_id INTEGER PRIMARY KEY CHECK (singleton_id = 1),
+        sequence INTEGER NOT NULL,
+        chunk_count INTEGER NOT NULL,
+        payload_chars INTEGER NOT NULL,
+        updated_at TEXT NOT NULL
+      )`,
+      `CREATE TABLE IF NOT EXISTS md_metadata_snapshot_chunks (
+        sequence INTEGER NOT NULL,
+        chunk_index INTEGER NOT NULL,
+        payload_json TEXT NOT NULL,
+        PRIMARY KEY (sequence, chunk_index)
+      )`,
+    ]),
+  }),
 ]);
 
 type DurableTarget = "metadata" | "tokens";
@@ -95,6 +114,17 @@ interface DurableEventRow {
 
 interface DurableSnapshotRow {
   readonly sequence: number;
+  readonly payload_json: string;
+}
+
+interface DurableSnapshotHeadRow {
+  readonly sequence: number;
+  readonly chunk_count: number;
+  readonly payload_chars: number;
+}
+
+interface DurableSnapshotChunkRow {
+  readonly chunk_index: number;
   readonly payload_json: string;
 }
 
@@ -175,6 +205,28 @@ const TOKEN_MUTATIONS = new Set([
 ]);
 
 const MAX_CAS_ATTEMPTS = 16;
+const SNAPSHOT_CHUNK_CODE_UNITS = 256 * 1_024;
+const SNAPSHOT_CHUNK_READ_PAGE = 8;
+
+function splitSnapshotPayload(payload: string): readonly string[] {
+  const chunks: string[] = [];
+  for (let start = 0; start < payload.length;) {
+    let end = Math.min(payload.length, start + SNAPSHOT_CHUNK_CODE_UNITS);
+    if (
+      end < payload.length &&
+      end > start &&
+      payload.charCodeAt(end - 1) >= 0xd800 &&
+      payload.charCodeAt(end - 1) <= 0xdbff &&
+      payload.charCodeAt(end) >= 0xdc00 &&
+      payload.charCodeAt(end) <= 0xdfff
+    ) {
+      end -= 1;
+    }
+    chunks.push(payload.slice(start, end));
+    start = end;
+  }
+  return Object.freeze(chunks.length === 0 ? [""] : chunks);
+}
 
 function encode(value: unknown): string {
   return JSON.stringify(value, (_key, item: unknown) => {
@@ -438,6 +490,13 @@ export class SitesMetadataStore {
   }
 
   async #load(): Promise<LoadedState> {
+    const chunkedSnapshot = await this.#readChunkedSnapshot();
+    if (chunkedSnapshot !== null) {
+      return this.#loadSnapshot(
+        chunkedSnapshot.sequence,
+        chunkedSnapshot.payloadJson,
+      );
+    }
     const snapshots = await this.#database
       .prepare(
         `/*md-metadata-snapshot-read*/ SELECT sequence, payload_json
@@ -449,21 +508,7 @@ export class SitesMetadataStore {
       if (!Number.isSafeInteger(snapshotRow.sequence) || snapshotRow.sequence < 0) {
         throw new Error("Sites metadata snapshot sequence is invalid");
       }
-      const snapshot = decode<DurableSnapshot>(snapshotRow.payload_json);
-      if (snapshot.v !== 1) throw new Error("Sites metadata snapshot is invalid");
-      const metadata = InMemoryRevisionMetadataStore.fromDurableSnapshot(
-        snapshot.metadata,
-      );
-      const tokens = InMemoryMcpTokenStore.fromDurableSnapshot(snapshot.tokens);
-      const sequence = await this.#replayTail(
-        metadata,
-        tokens,
-        snapshotRow.sequence,
-      );
-      if (sequence > snapshotRow.sequence) {
-        await this.#persistSnapshot(sequence, metadata, tokens);
-      }
-      return { metadata, tokens, sequence };
+      return this.#loadSnapshot(snapshotRow.sequence, snapshotRow.payload_json);
     }
 
     const result = await this.#database
@@ -493,6 +538,74 @@ export class SitesMetadataStore {
     }
     await this.#persistSnapshot(expected, metadata, tokens);
     return { metadata, tokens, sequence: expected };
+  }
+
+  async #readChunkedSnapshot(): Promise<Readonly<{
+    sequence: number;
+    payloadJson: string;
+  }> | null> {
+    const heads = await this.#database
+      .prepare(
+        `/*md-metadata-snapshot-head-read*/ SELECT sequence, chunk_count, payload_chars
+         FROM md_metadata_snapshot_heads WHERE singleton_id = 1`,
+      )
+      .all<DurableSnapshotHeadRow>();
+    const head = heads.results?.[0];
+    if (head === undefined) return null;
+    if (
+      !Number.isSafeInteger(head.sequence) || head.sequence < 0 ||
+      !Number.isSafeInteger(head.chunk_count) || head.chunk_count < 1 ||
+      !Number.isSafeInteger(head.payload_chars) || head.payload_chars < 1
+    ) {
+      throw new Error("Sites metadata snapshot head is invalid");
+    }
+    const chunks: string[] = [];
+    while (chunks.length < head.chunk_count) {
+      const result = await this.#database
+        .prepare(
+          `/*md-metadata-snapshot-chunks-read*/ SELECT chunk_index, payload_json
+           FROM md_metadata_snapshot_chunks
+           WHERE sequence = ?1 AND chunk_index >= ?2
+           ORDER BY chunk_index ASC LIMIT ?3`,
+        )
+        .bind(head.sequence, chunks.length, SNAPSHOT_CHUNK_READ_PAGE)
+        .all<DurableSnapshotChunkRow>();
+      const page = [...(result.results ?? [])];
+      if (page.length === 0) throw new Error("Sites metadata snapshot chunks are incomplete");
+      for (const row of page) {
+        if (
+          row.chunk_index !== chunks.length ||
+          typeof row.payload_json !== "string" ||
+          chunks.length >= head.chunk_count
+        ) {
+          throw new Error("Sites metadata snapshot chunks are invalid");
+        }
+        chunks.push(row.payload_json);
+      }
+    }
+    const payloadJson = chunks.join("");
+    if (payloadJson.length !== head.payload_chars) {
+      throw new Error("Sites metadata snapshot payload length is invalid");
+    }
+    return Object.freeze({ sequence: head.sequence, payloadJson });
+  }
+
+  async #loadSnapshot(sequenceAtSnapshot: number, payloadJson: string): Promise<LoadedState> {
+    const snapshot = decode<DurableSnapshot>(payloadJson);
+    if (snapshot.v !== 1) throw new Error("Sites metadata snapshot is invalid");
+    const metadata = InMemoryRevisionMetadataStore.fromDurableSnapshot(
+      snapshot.metadata,
+    );
+    const tokens = InMemoryMcpTokenStore.fromDurableSnapshot(snapshot.tokens);
+    const sequence = await this.#replayTail(
+      metadata,
+      tokens,
+      sequenceAtSnapshot,
+    );
+    if (sequence > sequenceAtSnapshot) {
+      await this.#persistSnapshot(sequence, metadata, tokens);
+    }
+    return { metadata, tokens, sequence };
   }
 
   async #replayTail(
@@ -677,19 +790,39 @@ export class SitesMetadataStore {
       metadata: metadata.exportDurableSnapshot(),
       tokens: tokens.exportDurableSnapshot(),
     });
-    await this.#database
-      .prepare(
-        `/*md-metadata-snapshot-write*/ INSERT INTO md_metadata_snapshots
-         (singleton_id, sequence, payload_json, updated_at)
-         VALUES (1, ?1, ?2, ?3)
-         ON CONFLICT(singleton_id) DO UPDATE SET
-           sequence = excluded.sequence,
-           payload_json = excluded.payload_json,
-           updated_at = excluded.updated_at
-         WHERE md_metadata_snapshots.sequence < excluded.sequence`,
-      )
-      .bind(sequence, encode(payload), new Date().toISOString())
-      .run();
+    const encoded = encode(payload);
+    const chunks = splitSnapshotPayload(encoded);
+    const statements = chunks.map((chunk, chunkIndex) =>
+      this.#database
+        .prepare(
+          `/*md-metadata-snapshot-chunk-write*/ INSERT OR REPLACE INTO md_metadata_snapshot_chunks
+           (sequence, chunk_index, payload_json) VALUES (?1, ?2, ?3)`,
+        )
+        .bind(sequence, chunkIndex, chunk),
+    );
+    statements.push(
+      this.#database
+        .prepare(
+          `/*md-metadata-snapshot-write*/ INSERT INTO md_metadata_snapshot_heads
+           (singleton_id, sequence, chunk_count, payload_chars, updated_at)
+           VALUES (1, ?1, ?2, ?3, ?4)
+           ON CONFLICT(singleton_id) DO UPDATE SET
+             sequence = excluded.sequence,
+             chunk_count = excluded.chunk_count,
+             payload_chars = excluded.payload_chars,
+             updated_at = excluded.updated_at
+           WHERE md_metadata_snapshot_heads.sequence < excluded.sequence`,
+        )
+        .bind(sequence, chunks.length, encoded.length, new Date().toISOString()),
+      this.#database.prepare(
+        `/*md-metadata-snapshot-cleanup*/ DELETE FROM md_metadata_snapshot_chunks
+         WHERE sequence < COALESCE(
+           (SELECT sequence FROM md_metadata_snapshot_heads WHERE singleton_id = 1),
+           0
+         )`,
+      ),
+    );
+    await this.#database.batch(statements);
   }
 
   async #exclusive<Result>(operation: () => Promise<Result>): Promise<Result> {

@@ -139,6 +139,7 @@ const DECODER = new TextDecoder("utf-8", { fatal: true });
 const CONTROL = /[\u0000-\u001f\u007f]/u;
 const SCHEME = /^[a-z][a-z0-9+.-]*:/iu;
 const WINDOWS_DRIVE = /^[a-z]:/iu;
+const ENCODED_PATH_HAZARD = /%(?:00|2f|5c)/iu;
 
 function registeredActor(actor: ActorContext) {
   if (actor.kind !== "registered_principal") {
@@ -154,6 +155,7 @@ function canonicalImportPath(value: unknown): string {
   if (
     value.startsWith("/") || value.includes("\\") || value.includes("//") ||
     CONTROL.test(value) || SCHEME.test(value) || WINDOWS_DRIVE.test(value) ||
+    ENCODED_PATH_HAZARD.test(value) ||
     value.startsWith(".mind-diary/") || value === ".mind-diary" ||
     !value.endsWith(".md")
   ) throw new MarkdownImportError("invalid_import_path", "import path is outside the Markdown profile");

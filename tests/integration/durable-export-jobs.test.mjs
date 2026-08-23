@@ -468,6 +468,11 @@ test("claim fencing rejects stale completion and a transient failure is durably 
     at(2_000),
   );
   assert.equal(firstClaim.kind, "claimed");
+  assert.deepEqual(await env.metadata.listRecoverableExportJobs(at(1_000), 10), []);
+  assert.deepEqual(
+    (await env.metadata.listRecoverableExportJobs(at(2_000), 10)).map((job) => job.jobId),
+    [started.job.jobId],
+  );
   assert.deepEqual(
     await env.metadata.claimExportJob(started.job.jobId, at(1_000), at(3_000)),
     { kind: "not_available" },
@@ -508,6 +513,11 @@ test("claim fencing rejects stale completion and a transient failure is durably 
     true,
   );
   assert.equal((await env.metadata.readExportJob(started.job.jobId)).state, "failed");
+  assert.deepEqual(await env.metadata.listRecoverableExportJobs(at(2_999), 10), []);
+  assert.deepEqual(
+    (await env.metadata.listRecoverableExportJobs(at(3_000), 10)).map((job) => job.jobId),
+    [started.job.jobId],
+  );
 
   env.clock.set(at(3_000));
   const retried = await env.worker().handle({

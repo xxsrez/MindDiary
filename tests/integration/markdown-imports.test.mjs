@@ -144,6 +144,51 @@ function service({ metadata, objects, revisions, clock, generatedIds, revisionId
   });
 }
 
+test("Markdown import rejects non-canonical, reserved, encoded and overlong paths", async () => {
+  const objects = new InMemoryObjectStore();
+  const metadata = new InMemoryRevisionMetadataStore();
+  const revisions = await seed(objects, metadata);
+  authorize(metadata);
+  const imports = service({
+    metadata,
+    objects,
+    revisions,
+    clock: { now: () => T1 },
+    generatedIds: ids(),
+  });
+  const invalidPaths = [
+    "/absolute.md",
+    "concepts\\windows.md",
+    "https:scheme.md",
+    "concepts//empty.md",
+    "concepts/../parent.md",
+    ".mind-diary/private.md",
+    "concepts/cafe\u0301.md",
+    "concepts/encoded%2Fslash.md",
+    "concepts/encoded%5Cbackslash.md",
+    "concepts/encoded%00nul.md",
+    `${"é".repeat(128)}.md`,
+    `${"a".repeat(250)}/${"b".repeat(250)}/${"c".repeat(250)}/${"d".repeat(250)}/${"e".repeat(20)}.md`,
+  ];
+  await assert.rejects(
+    imports.plan({
+      actor: actor("request_import_invalid_paths"),
+      spaceId: MINDS.ordinary.spaceId,
+      expectedRevisionId: "revision_import_initial",
+      idempotencyKey: "plan-invalid-paths",
+      files: invalidPaths.map((path) => ({
+        path,
+        sha256: `sha256:${"a".repeat(64)}`,
+        size: 1,
+      })),
+    }),
+    (error) => error instanceof MarkdownImportError &&
+      error.code === "invalid_import_request" &&
+      error.failures.length === invalidPaths.length &&
+      error.failures.every((failure) => failure.code === "invalid_import_path"),
+  );
+});
+
 test("Markdown import survives restart, replays a batch, commits one HEAD and cleans staging", async () => {
   const objects = new InMemoryObjectStore();
   let metadata = new InMemoryRevisionMetadataStore();

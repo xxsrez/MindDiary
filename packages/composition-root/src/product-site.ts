@@ -1473,6 +1473,7 @@ export async function createProductSiteRuntime(
       operation:
         | "recovery_index_gaps"
         | "recovery_index_dispatch"
+        | "recovery_export_dispatch"
         | "recovery_staging_cleanup"
         | "recovery_import_cleanup"
         | "recovery_object_cleanup",
@@ -1552,6 +1553,21 @@ export async function createProductSiteRuntime(
         }
         return settled;
       });
+      const exportResults = await stage("recovery_export_dispatch", async () => {
+        const due = await metadata.listRecoverableExportJobs(clock.now(), limit);
+        const settled: PromiseSettledResult<unknown>[] = [];
+        for (const job of due) {
+          try {
+            settled.push({
+              status: "fulfilled",
+              value: await dispatchBackground({ kind: "export", jobId: job.jobId }),
+            });
+          } catch (reason) {
+            settled.push({ status: "rejected", reason });
+          }
+        }
+        return settled;
+      });
       let cleanupDeleted = 0;
       let cleanupReclaimedBytes = 0;
       let cleanupFailures = 0;
@@ -1590,8 +1606,11 @@ export async function createProductSiteRuntime(
       }
       const result = Object.freeze({
         backfilled,
-        dispatched: results.length,
-        failed: results.filter((entry) => entry.status === "rejected").length + cleanupFailures,
+        dispatched: results.length + exportResults.length,
+        failed:
+          results.filter((entry) => entry.status === "rejected").length +
+          exportResults.filter((entry) => entry.status === "rejected").length +
+          cleanupFailures,
         cleanupDeleted,
         cleanupReclaimedBytes,
       });

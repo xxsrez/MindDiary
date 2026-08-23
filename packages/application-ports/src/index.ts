@@ -1956,6 +1956,10 @@ export interface ExportJobStore extends MetadataStore, AuthorizationStateReader 
     operation: (transaction: ExportStartTransaction) => Promise<Result>,
   ): Promise<Result>;
   readExportJob(jobId: JobId): Promise<Readonly<ExportJob> | null>;
+  listRecoverableExportJobs(
+    now: UtcInstant,
+    limit: number,
+  ): Promise<readonly Readonly<ExportJob>[]>;
   claimExportJob(
     jobId: JobId,
     now: UtcInstant,
@@ -3665,6 +3669,7 @@ export const PRIVACY_SAFE_OBSERVABILITY_OPERATIONS = [
   "cleanup",
   "recovery_index_gaps",
   "recovery_index_dispatch",
+  "recovery_export_dispatch",
   "recovery_staging_cleanup",
   "recovery_import_cleanup",
   "recovery_object_cleanup",

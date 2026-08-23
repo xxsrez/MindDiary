@@ -605,12 +605,16 @@ explicit target Mind. General cross-Mind search/synthesis требует нов�
   `/api/mcp/2025-11-25` и не создаёт session state.
 - D1 event log сохраняет metadata transactions и восстанавливает state после
   нового runtime instance. Event log остаётся canonical recovery source, а
-  materialized snapshot фиксирует exact applied sequence: cold start читает
-  snapshot и только contiguous tail, warm read — только tail. Legacy deployment
-  без snapshot один раз replay-ит полный log и материализует snapshot. Сбой
-  snapshot write после successful fenced append не отменяет canonical commit:
-  следующий read/restart replay-ит недостающий tail и repair-ит snapshot.
-  Corrupt snapshot или non-contiguous tail fail closed. R2 хранит canonical
+  materialized snapshot фиксирует exact applied sequence: bounded D1 head
+  указывает на ordered 256-Ki-code-unit chunks, cold start читает chunks
+  страницами максимум по восемь и затем только contiguous tail, warm read —
+  только tail. Chunks, head switch и cleanup прежней generation записываются
+  одним D1 batch, поэтому snapshot больше лимита одного bound string не ломает
+  composition. Legacy single-row snapshot или deployment без snapshot один раз
+  replay-ится и материализуется в chunked form. Сбой snapshot write после
+  successful fenced append не отменяет canonical commit: следующий
+  read/restart replay-ит недостающий tail и repair-ит snapshot. Corrupt,
+  incomplete snapshot или non-contiguous tail fail closed. R2 хранит canonical
   objects и export archives.
   Initial revision index effects входят в account/Mind create transaction, а
   bounded request-triggered reconciler подбирает due jobs и backfill-ит legacy
@@ -630,8 +634,9 @@ explicit target Mind. General cross-Mind search/synthesis требует нов�
   assets, ждёт трёхсекундное quiet window без новой HTML-навигации и
   объединяется в один isolate-level flight на deployment/config fingerprint с
   30-секундной cadence после завершения. Новая eligible navigation до старта
-  recovery отменяет старый timer и планирует quiet window заново. Due index jobs
-  dispatch-ятся последовательно, поэтому recovery не
+  recovery отменяет старый timer и планирует quiet window заново. Due index и
+  queued/failed/expired-claim export jobs dispatch-ятся последовательно,
+  поэтому recovery не
   ставит веер metadata operations впереди authenticated reads; следующий
   foreground request может пройти между bounded recovery operations. Каждый
   recovery stage и весь flight публикуют только closed privacy-safe latency и

@@ -73,7 +73,10 @@ D1 хранит transactional records:
 - object reachability/refcount projections scoped to Space;
 - usage ledger, reservations, job/session state and persisted cursors;
 - idempotency results, authorization state, audit outbox и safe derived-index
-  status.
+  status;
+- canonical metadata event log и chunked materialized recovery snapshot:
+  snapshot payload не становится одной D1 value, а bounded chunks atomically
+  переключаются через exact sequence head и читаются bounded pages.
 
 D1 не хранит Markdown bodies, opaque bytes, ZIP bytes, private search corpus,
 download secrets или signed URLs. Manifest entry rows могут быть bounded

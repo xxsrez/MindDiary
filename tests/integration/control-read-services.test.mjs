@@ -28,6 +28,8 @@ class Statement {
 class EventLogD1 {
   events = [];
   snapshot = null;
+  snapshotHead = null;
+  snapshotChunks = new Map();
   prepare(sql) { return new Statement(this, sql); }
   async batch(statements) {
     const results = [];
@@ -50,15 +52,54 @@ class EventLogD1 {
     }
     if (sql.includes("/*md-metadata-snapshot-write*/")) {
       const sequence = Number(values[0]);
-      if (this.snapshot !== null && this.snapshot.sequence >= sequence) {
+      if (this.snapshotHead !== null && this.snapshotHead.sequence >= sequence) {
         return { meta: { changes: 0 } };
       }
-      this.snapshot = { sequence, payload_json: values[1] };
+      this.snapshotHead = {
+        sequence,
+        chunk_count: Number(values[1]),
+        payload_chars: Number(values[2]),
+      };
       return { meta: { changes: 1 } };
+    }
+    if (sql.includes("/*md-metadata-snapshot-chunk-write*/")) {
+      this.snapshotChunks.set(`${values[0]}:${values[1]}`, {
+        sequence: Number(values[0]),
+        chunk_index: Number(values[1]),
+        payload_json: values[2],
+      });
+      return { meta: { changes: 1 } };
+    }
+    if (sql.includes("/*md-metadata-snapshot-cleanup*/")) {
+      const headSequence = this.snapshotHead?.sequence ?? 0;
+      let changes = 0;
+      for (const [key, row] of this.snapshotChunks) {
+        if (row.sequence >= headSequence) continue;
+        this.snapshotChunks.delete(key);
+        changes += 1;
+      }
+      return { meta: { changes } };
     }
     throw new Error(`unsupported statement: ${sql}`);
   }
   async all(sql, values) {
+    if (sql.includes("/*md-metadata-snapshot-head-read*/")) {
+      return { results: this.snapshotHead === null ? [] : [{ ...this.snapshotHead }] };
+    }
+    if (sql.includes("/*md-metadata-snapshot-chunks-read*/")) {
+      return {
+        results: [...this.snapshotChunks.values()]
+          .filter((row) =>
+            row.sequence === Number(values[0]) &&
+            row.chunk_index >= Number(values[1]))
+          .sort((left, right) => left.chunk_index - right.chunk_index)
+          .slice(0, Number(values[2]))
+          .map((row) => ({
+            chunk_index: row.chunk_index,
+            payload_json: row.payload_json,
+          })),
+      };
+    }
     if (sql.includes("/*md-metadata-snapshot-read*/")) {
       return { results: this.snapshot === null ? [] : [{ ...this.snapshot }] };
     }

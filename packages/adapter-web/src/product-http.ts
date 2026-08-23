@@ -289,6 +289,7 @@ const RESERVED_UI_HANDLES = new Set([
 ]);
 const SITES_SIGN_IN_PATH = "/signin-with-chatgpt";
 const MAX_JSON_BYTES = 64 * 1024;
+const MAX_IMPORT_PLAN_BODY_BYTES = 16 * 1024 * 1024;
 const MAX_IMPORT_BATCH_BODY_BYTES = 5 * 1024 * 1024;
 const MAX_IMPORT_BATCH_BYTES = 4 * 1024 * 1024;
 const ENCODER = new TextEncoder();
@@ -1363,7 +1364,10 @@ async function productUiDocument(input: {
   }), input.csrfToken);
 }
 
-async function readInput(request: Request): Promise<Readonly<Record<string, unknown>>> {
+async function readInput(
+  request: Request,
+  maxBytes = MAX_JSON_BYTES,
+): Promise<Readonly<Record<string, unknown>>> {
   if (request.method === "GET") {
     const url = new URL(request.url);
     const query: Record<string, string> = {};
@@ -1373,11 +1377,11 @@ async function readInput(request: Request): Promise<Readonly<Record<string, unkn
     return Object.freeze(query);
   }
   const declaredLength = Number(request.headers.get("content-length") ?? "0");
-  if (Number.isFinite(declaredLength) && declaredLength > MAX_JSON_BYTES) {
+  if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
     throw new TypeError("request body is too large");
   }
   const text = await request.text();
-  if (new TextEncoder().encode(text).byteLength > MAX_JSON_BYTES) {
+  if (new TextEncoder().encode(text).byteLength > maxBytes) {
     throw new TypeError("request body is too large");
   }
   if (text.length === 0) return Object.freeze({});
@@ -1756,7 +1760,9 @@ export function createProductWebHttpHandler(
     try {
       const parsed = camelInput(await (matched.operation === "stage_markdown_import_batch"
         ? readImportBatchInput(request)
-        : readInput(request)));
+        : matched.operation === "plan_markdown_import"
+          ? readInput(request, MAX_IMPORT_PLAN_BODY_BYTES)
+          : readInput(request)));
       const idempotencyKey = request.headers.get("idempotency-key");
       input = Object.freeze({
         ...parsed,

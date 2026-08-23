@@ -10478,6 +10478,35 @@ export class InMemoryRevisionMetadataStore
     return job ? cloneExportJob(job) : null;
   }
 
+  async listRecoverableExportJobs(
+    now: ExportJob["updatedAt"],
+    limit: number,
+  ): Promise<readonly Readonly<ExportJob>[]> {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) return Object.freeze([]);
+    const nowMs = Date.parse(now);
+    if (!Number.isFinite(nowMs)) return Object.freeze([]);
+    return Object.freeze(
+      [...this.#exportJobs.values()]
+        .filter((job) => {
+          if (job.attempts >= 5 || Date.parse(job.expiresAt) <= nowMs) return false;
+          if (job.state === "queued" || job.state === "failed") {
+            return Date.parse(job.availableAt) <= nowMs;
+          }
+          return job.state === "running" &&
+            job.claimExpiresAt !== null &&
+            Date.parse(job.claimExpiresAt) <= nowMs;
+        })
+        .sort((left, right) => {
+          const availability = left.availableAt.localeCompare(right.availableAt);
+          return availability === 0
+            ? String(left.jobId).localeCompare(String(right.jobId), "en")
+            : availability;
+        })
+        .slice(0, limit)
+        .map(cloneExportJob),
+    );
+  }
+
   async claimExportJob(
     jobId: JobId,
     now: ExportJob["updatedAt"],
