@@ -639,6 +639,9 @@ explicit target Mind. General cross-Mind search/synthesis требует нов�
   membership/public candidates, authorization state, route/revision
   projections и публикуемый revision-index status. Binding-aware content
   authorization читает binding и current access из того же refreshed view.
+  Authenticated home и `/minds` получают display name Personal Mind и карточки
+  из этой же `list_minds` projection; отдельный последовательный
+  `get_session` перед списком не выполняется.
   Candidate resolution и browse object reads
   имеют bounded concurrency `8`, сохраняют deterministic order и не выдают
   private metadata до authorization. Read use case выполняет initial access

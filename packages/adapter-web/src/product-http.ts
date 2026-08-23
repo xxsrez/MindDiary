@@ -924,6 +924,65 @@ async function productUiDocument(input: {
     };
     return withCsrfMeta(renderAuthenticatedOnboardingDocument(model), input.csrfToken);
   }
+  if (input.pathname === "/" || input.pathname === "/minds") {
+    try {
+      const listed = await input.control.execute({
+        operation: "list_minds",
+        actor: input.identity.actor,
+        input: Object.freeze({}),
+      });
+      if (!Array.isArray(listed)) throw new TypeError("safe Mind list projection is unavailable");
+      const cards = listed
+        .map(uiMind)
+        .filter((mind): mind is UiMindCard => mind !== null);
+      const displayName = cards.find((mind) => mind.isPersonal === true)?.name;
+      if (displayName === undefined) {
+        throw new TypeError("Personal Mind is absent from the safe Mind list projection");
+      }
+      if (input.pathname === "/minds") {
+        const minds = listed
+          .map(ordinaryUiMind)
+          .filter((mind): mind is OrdinaryMindUiMind => mind !== null);
+        return withCsrfMeta(renderOrdinaryMindsManagementDocument({
+          displayName,
+          view: {
+            kind: "list",
+            collection: minds.length === 0
+              ? { kind: "empty" }
+              : { kind: "ready", minds: Object.freeze(minds) },
+          },
+        }, "/ui/mind-diary-ordinary-minds-client.js"), input.csrfToken);
+      }
+      return withCsrfMeta(renderMindDiaryUiShellDocument({
+        displayName,
+        activeNavigation: "home",
+        collection: cards.length === 0
+          ? { kind: "empty" }
+          : { kind: "ready", minds: Object.freeze(cards) },
+      }), input.csrfToken);
+    } catch {
+      const session = uiSession(await input.control.execute({
+        operation: "get_session",
+        actor: input.identity.actor,
+        input: Object.freeze({}),
+      }));
+      if (session === null) throw new TypeError("safe session projection is unavailable");
+      if (input.pathname === "/minds") {
+        return withCsrfMeta(renderOrdinaryMindsManagementDocument({
+          displayName: session.displayName,
+          view: {
+            kind: "list",
+            collection: { kind: "error", message: "Mind metadata is unavailable. Try again." },
+          },
+        }, "/ui/mind-diary-ordinary-minds-client.js"), input.csrfToken);
+      }
+      return withCsrfMeta(renderMindDiaryUiShellDocument({
+        displayName: session.displayName,
+        activeNavigation: "home",
+        collection: { kind: "error", message: "Mind summaries are unavailable. Try again." },
+      }), input.csrfToken);
+    }
+  }
   const session = uiSession(await input.control.execute({
     operation: "get_session",
     actor: input.identity.actor,
@@ -1130,32 +1189,6 @@ async function productUiDocument(input: {
       ...(bindingOwners === undefined ? {} : { bindingOwners }),
       siteOrigin: input.siteOrigin,
     }, "/ui/mind-diary-token-client.js"), input.csrfToken);
-  }
-
-  if (input.pathname === "/minds") {
-    let collection: Extract<
-      OrdinaryMindsManagementModel["view"],
-      { readonly kind: "list" }
-    >["collection"];
-    try {
-      const listed = await input.control.execute({
-        operation: "list_minds",
-        actor: input.identity.actor,
-        input: Object.freeze({}),
-      });
-      const minds = Array.isArray(listed)
-        ? listed.map(ordinaryUiMind).filter((mind): mind is OrdinaryMindUiMind => mind !== null)
-        : [];
-      collection = minds.length === 0
-        ? { kind: "empty" }
-        : { kind: "ready", minds: Object.freeze(minds) };
-    } catch {
-      collection = { kind: "error", message: "Mind metadata is unavailable. Try again." };
-    }
-    return withCsrfMeta(renderOrdinaryMindsManagementDocument({
-      displayName: session.displayName,
-      view: { kind: "list", collection },
-    }, "/ui/mind-diary-ordinary-minds-client.js"), input.csrfToken);
   }
 
   const routeMatch = /^\/([a-z0-9]+(?:-[a-z0-9]+)*)$/u.exec(input.pathname);

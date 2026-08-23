@@ -366,7 +366,7 @@ test("product root and MCP setup render live control projections and fixed same-
   assert.equal((await iconHead.arrayBuffer()).byteLength, 0);
   const wrongAssetMethod = await handler(new Request(`${origin}/ui/mind-diary-shell.css`, { method: "POST" }));
   assert.equal(wrongAssetMethod.status, 405);
-  assert.deepEqual(calls, ["get_session", "list_minds", "get_session", "list_mcp_tokens"]);
+  assert.deepEqual(calls, ["list_minds", "get_session", "list_mcp_tokens"]);
 });
 
 test("account settings wires profile CAS, fresh deletion impact, same-key retry client, and privacy-safe recovery", async () => {
@@ -601,6 +601,31 @@ test("pilot Product Site route map keeps one UAT shell, exact active navigation,
   const missingHtml = await missingMind.text();
   assert.match(missingHtml, /Mind settings unavailable/);
   assert.doesNotMatch(missingHtml, /not found|principal_one|space_research/i);
+});
+
+test("authenticated home and Mind list reuse list_minds without a preceding session read", async () => {
+  const calls = [];
+  const handler = createProductWebHttpHandler({
+    applicationOrigin: origin,
+    resolveIdentity: () => ({ kind: "authenticated", actor: registeredActor }),
+    csrf: { issue: () => "csrf-home-projection", verify: () => true },
+    control: { execute(request) {
+      calls.push(request.operation);
+      if (request.operation === "list_minds") return [personalRoute, ordinaryOwnerRoute];
+      throw new Error(`unexpected operation: ${request.operation}`);
+    } },
+  });
+
+  const home = await handler(new Request(`${origin}/`));
+  assert.equal(home.status, 200);
+  assert.match(await home.text(), /<title>Home — Mind Diary UAT<\/title>/u);
+  assert.deepEqual(calls, ["list_minds"]);
+
+  calls.length = 0;
+  const minds = await handler(new Request(`${origin}/minds`));
+  assert.equal(minds.status, 200);
+  assert.match(await minds.text(), /data-management-view="list"/u);
+  assert.deepEqual(calls, ["list_minds"]);
 });
 
 test("ordinary Mind list and exact route wire the UAT management and deletion controls", async () => {
