@@ -593,19 +593,42 @@ function bindingDenied(
 export class MindBindingContentAuthorizer implements Authorizer {
   readonly #delegate: Authorizer;
   readonly #bindings: MindBindingStore;
+  readonly #consistentRead:
+    | (<Result>(operation: (dependencies: Readonly<{
+        delegate: Authorizer;
+        bindings: Pick<MindBindingStore, "readMindBindingSet">;
+      }>) => Promise<Result>) => Promise<Result>)
+    | undefined;
 
   constructor(dependencies: {
     readonly delegate: Authorizer;
     readonly bindings: MindBindingStore;
+    readonly consistentRead?: <Result>(operation: (dependencies: Readonly<{
+      delegate: Authorizer;
+      bindings: Pick<MindBindingStore, "readMindBindingSet">;
+    }>) => Promise<Result>) => Promise<Result>;
   }) {
     this.#delegate = dependencies.delegate;
     this.#bindings = dependencies.bindings;
+    this.#consistentRead = dependencies.consistentRead;
   }
 
   async authorize(request: AuthorizationRequest): Promise<AuthorizationDecision> {
-    const binding = await this.#authorizeBinding(this.#bindings, request);
+    if (this.#consistentRead !== undefined) {
+      return this.#consistentRead(({ bindings, delegate }) =>
+        this.#authorizeWith(bindings, delegate, request));
+    }
+    return this.#authorizeWith(this.#bindings, this.#delegate, request);
+  }
+
+  async #authorizeWith(
+    bindings: Pick<MindBindingStore, "readMindBindingSet">,
+    delegate: Authorizer,
+    request: AuthorizationRequest,
+  ): Promise<AuthorizationDecision> {
+    const binding = await this.#authorizeBinding(bindings, request);
     if (binding.kind === "denied") return binding;
-    const authorization = await this.#delegate.authorize(request);
+    const authorization = await delegate.authorize(request);
     return authorization.kind === "denied"
       ? authorization
       : this.#withBindingStamp(authorization, binding.bindingVersion);

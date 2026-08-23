@@ -846,6 +846,58 @@ test("list_minds resolves a scaled candidate set from one D1 read-session", asyn
   assert.equal(database.metadataEvents.length, eventCount);
 });
 
+test("get_mind_info resolves one exact Mind from one D1 read-session", async () => {
+  const database = new FakeD1Database();
+  const bucket = new FakeR2Bucket();
+  const generators = ids();
+  const boundary = await createSitesPersistenceBoundary({ database, bucket });
+  const app = services(boundary, generators);
+  const owner = await app.bootstrap.bootstrapAccount(preRegistrationActor(1), {
+    action: "create_isolated_account",
+  });
+  const mind = await app.ordinary.createSpaceWithOwner(
+    actor(owner.principalId, "request_info_create", T1),
+    {
+      name: "Exact read session",
+      handle: "exact-read-session",
+      idempotencyKey: "exact-read-session",
+    },
+  );
+  const discovery = new MindDiscoveryService({ store: boundary.metadata, host: HOST });
+
+  database.metadataReadLog = [];
+  const info = await discovery.getMindInfo(
+    actor(owner.principalId, "request_info_read", T2),
+    "/exact-read-session",
+    { kind: "head" },
+  );
+
+  assert.equal(info.mind.mindId, mind.mindId);
+  assert.equal(info.resolvedRevision.revisionId, mind.headRevisionId);
+  assert.deepEqual(database.metadataReadLog, ["tail"]);
+
+  let indexStatusReads = 0;
+  const discoveryWithIndexStatus = new MindDiscoveryService({
+    store: boundary.metadata,
+    host: HOST,
+    indexStatus: {
+      async read() {
+        indexStatusReads += 1;
+        await boundary.metadata.readHead(mind.mindId);
+        return null;
+      },
+    },
+  });
+  database.metadataReadLog = [];
+  await discoveryWithIndexStatus.getMindInfo(
+    actor(owner.principalId, "request_info_status", T2),
+    "/exact-read-session",
+    { kind: "head" },
+  );
+  assert.equal(indexStatusReads, 1);
+  assert.deepEqual(database.metadataReadLog, ["tail", "tail"]);
+});
+
 test("Sites composition persists account, invitation, ownership, HEAD CAS, idempotency and token state across isolates", async () => {
   const database = new FakeD1Database();
   const bucket = new FakeR2Bucket();

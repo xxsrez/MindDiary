@@ -5,6 +5,7 @@ import { InMemoryRevisionMetadataStore } from "@mind-diary/adapter-metadata-memo
 import { InMemoryObjectStore } from "@mind-diary/adapter-object-memory";
 import {
   MindBindingApplicationService,
+  MindBindingContentAuthorizer,
 } from "@mind-diary/application-content";
 import { CapabilityAuthorizer } from "@mind-diary/application-ports";
 import { CAPABILITIES, bindingVersion, version } from "@mind-diary/domain";
@@ -280,6 +281,49 @@ test("application binding commands enforce fresh target authority, CAS and immut
   );
   assert.equal(JSON.stringify(auditEvents).includes(BINDING_OWNER_ID), false);
   assert.equal(JSON.stringify(auditEvents).includes(TOKEN_ID), false);
+});
+
+test("binding-aware authorization can share one consistent metadata read-session", async () => {
+  const { metadata, service } = applicationHarness();
+  const attached = await service.mutateRead({
+    actor: actor(),
+    action: "attach",
+    spaceId: SPACE_A,
+    expectedBindingVersion: 0,
+    idempotencyKey: "attach-for-consistent-auth",
+  });
+  assert.equal(attached.kind, "applied");
+
+  let sessions = 0;
+  const unexpectedDelegate = {
+    authorize: async () => {
+      throw new Error("authorization escaped the consistent read-session");
+    },
+    reauthorizeInTransaction: async () => {
+      throw new Error("unexpected transactional authorization");
+    },
+  };
+  const authorizer = new MindBindingContentAuthorizer({
+    delegate: unexpectedDelegate,
+    bindings: metadata,
+    consistentRead: async (operation) => {
+      sessions += 1;
+      return operation({
+        bindings: metadata,
+        delegate: new CapabilityAuthorizer(metadata),
+      });
+    },
+  });
+
+  const decision = await authorizer.authorize({
+    actor: actor(),
+    spaceId: SPACE_A,
+    capability: "content:browse",
+    revisionMode: "head",
+  });
+  assert.equal(decision.kind, "allowed");
+  assert.equal(decision.stamp.bindingVersion, 1);
+  assert.equal(sessions, 1);
 });
 
 test("revoking a binding owner invalidates all active records and is terminal", async () => {

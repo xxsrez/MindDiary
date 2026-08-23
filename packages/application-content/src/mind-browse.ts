@@ -1291,14 +1291,8 @@ export class MindBrowseService {
       envelope.manifest.format,
       entry,
     );
-    await this.#requireSameAuthorization(
-      actor,
-      spaceId,
-      "content:fetch",
-      "historical",
-      initialAuthorization,
-      notFoundCode,
-    );
+    // The caller performs the final current-access recheck after response
+    // materialization; repeating it here would add an identical D1 refresh.
     return Object.freeze({
       entry,
       bytes,

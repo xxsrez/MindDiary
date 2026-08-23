@@ -624,6 +624,12 @@ export async function createProductSiteRuntime(
   const contentAuthorizer = new MindBindingContentAuthorizer({
     delegate: authorizer,
     bindings: metadata,
+    consistentRead: (operation) =>
+      metadata.withConsistentRead((store) =>
+        operation({
+          bindings: store,
+          delegate: new CapabilityAuthorizer(store),
+        })),
   });
   const bundleFileStaging = new BundleFileStagingService({
     authorizer: contentAuthorizer,

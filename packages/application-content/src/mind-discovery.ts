@@ -540,6 +540,21 @@ export class MindDiscoveryService {
     mind: unknown,
     revisionSelector?: unknown,
   ): Promise<Readonly<MindInfoResult>> {
+    if (this.#store.withConsistentRead !== undefined) {
+      const info = await this.#store.withConsistentRead((store) =>
+        new MindDiscoveryService({
+          store,
+          host: this.#host,
+        }).getMindInfo(actor, mind, revisionSelector));
+      return Object.freeze({
+        ...info,
+        indexStatus: await this.#readIndexStatus(
+          info.mind.mindId,
+          info.resolvedRevision.revisionId,
+          info.mind.head.revisionId,
+        ),
+      });
+    }
     const actorPrincipalId = this.#requireActor(actor);
     const selector = parseRevisionSelector(revisionSelector);
     const revisionMode: RevisionMode = selector.kind === "head" ? "head" : "historical";
@@ -571,27 +586,11 @@ export class MindDiscoveryService {
         throw new MindDiscoveryFailure("mind_not_found", "Mind was not found.");
       }
       if ((await this.#store.readHead(spaceId)) !== currentHead) continue;
-      const rawIndexStatus = await this.#indexStatus?.read({
+      const indexStatus = await this.#readIndexStatus(
         spaceId,
-        revisionId: envelope.revision.revisionId,
-        currentHeadRevisionId: currentHead,
-      });
-      const indexStatus = rawIndexStatus === undefined || rawIndexStatus === null
-        ? Object.freeze({
-            status: "missing" as const,
-            retryable: true,
-            retryAfterMs: 1_000,
-            failureCode: null,
-          })
-        : Object.freeze({
-            status: rawIndexStatus.status,
-            retryable: rawIndexStatus.status !== "ready" && rawIndexStatus.attempts < 5,
-            retryAfterMs:
-              rawIndexStatus.status !== "ready" && rawIndexStatus.attempts < 5
-                ? Math.min(30_000, 1_000 * (2 ** Math.min(rawIndexStatus.attempts, 5)))
-                : null,
-            failureCode: rawIndexStatus.lastFailureCode,
-          });
+        envelope.revision.revisionId,
+        currentHead,
+      );
       return Object.freeze({
         mind: resolved.descriptor,
         resolvedRevision: revisionDescriptor(envelope, currentHead),
@@ -615,6 +614,35 @@ export class MindDiscoveryService {
       );
     }
     return id;
+  }
+
+  async #readIndexStatus(
+    spaceId: SpaceId,
+    revisionId: RevisionId,
+    currentHeadRevisionId: RevisionId,
+  ): Promise<Readonly<MindInfoResult["indexStatus"]>> {
+    const raw = await this.#indexStatus?.read({
+      spaceId,
+      revisionId,
+      currentHeadRevisionId,
+    });
+    if (raw === undefined || raw === null) {
+      return Object.freeze({
+        status: "missing",
+        retryable: true,
+        retryAfterMs: 1_000,
+        failureCode: null,
+      });
+    }
+    return Object.freeze({
+      status: raw.status,
+      retryable: raw.status !== "ready" && raw.attempts < 5,
+      retryAfterMs:
+        raw.status !== "ready" && raw.attempts < 5
+          ? Math.min(30_000, 1_000 * (2 ** Math.min(raw.attempts, 5)))
+          : null,
+      failureCode: raw.lastFailureCode,
+    });
   }
 
   async #mindSelector(
