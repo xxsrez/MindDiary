@@ -357,6 +357,7 @@ dev:
     - dev.mcp-modern
     - dev.mcp-compat
     - dev.synthetic-multi-principal
+    - dev.synthetic-browser
     - dev.oauth-direct-plugin
     - dev.mind-bindings
     - dev.changed-surface
@@ -722,6 +723,31 @@ evidence:
       success: { path: /status, operator: eq, value: passed }
       artifact:
         schema: mind-diary/synthetic-multi-principal-evidence/v1
+        media_type: application/json
+        storage: content-addressed-reference
+        max_bytes: 2097152
+        required_fields: [status, candidate_sha, actor_class, binding_namespace, run_fingerprint, actor_fingerprints, assertions, artifact_sha256]
+      redaction_policy: release-evidence-default
+    - id: dev.synthetic-browser
+      stage: dev
+      requirement: required
+      when: { always: true }
+      probe:
+        kind: runtime_capability
+        capability: mind-diary/synthetic-browser-smoke/v1
+        implementation:
+          command: [npm, run, gate:synthetic-browser, "--", --candidate-sha, "{candidate_sha}", --evidence-out, "{private-temp-evidence-path}"]
+          runbook: docs/operations/synthetic-browser-gate-runbook.md
+          composition: isolated-server-bound-browser-test-only
+          storage_seed: forbidden
+          hosted_deployment: forbidden
+        inputs:
+          candidate_sha: { value_from: run.candidate_sha }
+          actor_class: { literal: synthetic-browser-principal }
+          binding_namespace: { literal: synthetic-test }
+      success: { path: /status, operator: eq, value: passed }
+      artifact:
+        schema: mind-diary/synthetic-browser-evidence/v1
         media_type: application/json
         storage: content-addressed-reference
         max_bytes: 2097152
@@ -1204,8 +1230,9 @@ manual workflow с новым prompt и финальным подтвержде�
 ## Evidence interpretation
 
 Required rows доказывают только перечисленные assertions exact environment и
-candidate. `dev.synthetic-multi-principal` и `dev.oauth-direct-plugin` всегда
-blocking; `dev.mind-bindings` join-ит их exact-SHA assertions, а
+candidate. `dev.synthetic-multi-principal`, `dev.synthetic-browser` и
+`dev.oauth-direct-plugin` всегда blocking; `dev.mind-bindings` join-ит их
+exact-SHA assertions, а
 `uat.mind-bindings` всегда blocking для текущего binding candidate.
 Compatibility, changed-surface и persistence-after-redeploy rows становятся
 обязательными по machine condition. Значение `not-applicable`

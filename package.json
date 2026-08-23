@@ -26,6 +26,7 @@
     "check:docs": "node scripts/check-docs.mjs",
     "check:secrets": "node scripts/check-secrets.mjs",
     "gate:synthetic-multi-principal": "npm run build --silent && node scripts/run-synthetic-multi-principal-probe.mjs",
+    "gate:synthetic-browser": "npm run build --silent && node scripts/run-synthetic-browser-gate.mjs",
     "gate:oauth-direct-plugin": "npm run build --silent && node scripts/run-oauth-direct-plugin-probe.mjs",
     "gate:performance": "npm run build --silent && node scripts/benchmark-runtime-performance.mjs",
     "uat:multi-principal": "node scripts/run-uat-multi-principal-probe.mjs",

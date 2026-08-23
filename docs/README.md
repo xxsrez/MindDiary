@@ -98,6 +98,9 @@ evidence, предлагаемый дизайн и ещё не проверен�
 - [Synthetic multi-principal release gate](operations/synthetic-multi-principal-runbook.md)
   — blocking test-only composition без human credentials, storage seed,
   product login surface или ACL bypass.
+- [Synthetic browser Product Site gate](operations/synthetic-browser-gate-runbook.md)
+  — blocking local server-bound browser/UI composition, direct API negatives,
+  operator boundary и redacted exact-SHA receipt.
 - [Protocol assisted UAT pilot и feedback loop](operations/uat-pilot-protocol.md)
   — последовательные assisted/external cohorts, один feedback channel,
   privacy-safe metrics, cadence, feedback template, decision review и

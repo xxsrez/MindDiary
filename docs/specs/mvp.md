@@ -519,6 +519,13 @@ default-ится на `openai-sites`, Product Worker её не задаёт; UAT
 switch или client-selected principal. Passing artifact использует отдельную schema
 `mind-diary/synthetic-multi-principal-evidence/v1`.
 
+Отдельный blocking `P9-Browser` запускает
+[synthetic browser Product Site gate](../operations/synthetic-browser-gate-runbook.md).
+Он проверяет те же normal commands через реальный Product Site HTML/API
+surface, server-bound loopback browser contexts, operator directory и прямые
+negative requests. Это local composition MD-276/277/278/279; она не доказывает
+hosted browser/session behavior и не заменяет informational `P9-Sites-Canary`.
+
 Accepted двухфазный
 [real multi-principal Sites probe](../operations/uat-multi-principal-runbook.md)
 сохраняется как `P9-Sites-Canary`: два platform-authenticated principals,
