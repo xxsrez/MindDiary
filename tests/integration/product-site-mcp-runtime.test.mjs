@@ -11,6 +11,7 @@ import {
 } from "../../packages/adapter-mcp/dist/index.js";
 import { MIND_DIARY_STARTER_OKF_TEMPLATE } from "../../packages/adapter-web/dist/index.js";
 import { createProductSiteRuntime } from "../../packages/composition-root/dist/index.js";
+import { RequestRecoveryCoordinator } from "../../apps/mind-diary-site/worker/request-recovery.js";
 
 const ORIGIN = "https://mind-diary.example";
 
@@ -2854,4 +2855,291 @@ test("durable collaboration accepts exactly once, rejects stale role state, and 
       .some(({ route }) => route === "/collaboration-runtime"),
     false,
   );
+});
+
+test("request-triggered recovery reclaims a revision after an injected index dispatch failure", async () => {
+  const database = new FakeD1Database();
+  const bucket = new FakeR2Bucket();
+  const scheduled = [];
+  const telemetryLines = [];
+  let failNextIndexDispatch = false;
+  let injectedFailureCount = 0;
+  const recoveryMarker = "recovery-dispatch-marker";
+  const runtime = await createProductSiteRuntime({
+    database,
+    bucket,
+    publicOrigin: ORIGIN,
+    identity: {
+      readVerifiedIdentity() {
+        return {
+          kind: "authenticated",
+          verifiedEmail: "recovery.owner@example.com",
+          verifiedFullName: "Recovery Owner",
+        };
+      },
+    },
+    tokenVerifierKey: key(171),
+    locatorKey: key(211),
+    exportDownloadVerifierKey: key(251),
+    csrfKey: key(35),
+    observabilityWriter: { write(line) { telemetryLines.push(line); } },
+    schedule(work) {
+      if (work.kind === "revision_index" && failNextIndexDispatch) {
+        failNextIndexDispatch = false;
+        injectedFailureCount += 1;
+        throw new Error("injected revision index dispatch failure");
+      }
+      scheduled.push(work);
+    },
+  });
+
+  const registration = await responseFrom(runtime, new Request(`${ORIGIN}/`));
+  const registrationCsrf = csrfFromHtml(await registration.text());
+  const bootstrapped = await responseFrom(runtime, new Request(`${ORIGIN}/api/v1/account`, {
+    method: "POST",
+    headers: {
+      origin: ORIGIN,
+      "content-type": "application/json",
+      "x-csrf-token": registrationCsrf,
+      "idempotency-key": "bootstrap:request-recovery",
+    },
+    body: JSON.stringify({ action: "create_isolated_account" }),
+  }));
+  assert.equal(bootstrapped.status, 200);
+
+  const settings = await responseFrom(runtime, new Request(`${ORIGIN}/settings/mcp`));
+  const settingsCsrf = csrfFromHtml(await settings.text());
+  const issued = await responseFrom(runtime, new Request(`${ORIGIN}/api/v1/mcp-tokens`, {
+    method: "POST",
+    headers: {
+      origin: ORIGIN,
+      "content-type": "application/json",
+      "x-csrf-token": settingsCsrf,
+      "idempotency-key": "token:request-recovery",
+    },
+    body: JSON.stringify({ name: "Request recovery", scopes: ["content:write"] }),
+  }));
+  assert.equal(issued.status, 200);
+  const secret = (await issued.json()).data.secret;
+
+  const personal = (await modernTool(
+    runtime,
+    secret,
+    "request-recovery-list",
+    "list_minds",
+    {},
+  )).minds.find(({ route }) => route === "/me");
+  assert.ok(personal);
+  const writeBinding = await modernTool(
+    runtime,
+    secret,
+    "request-recovery-bind-write",
+    "set_write_mind_binding",
+    {
+      action: "bind",
+      mind: "/me",
+      expected_binding_version: 0,
+      idempotency_key: "binding:request-recovery",
+    },
+  );
+  const initialRevisionId = personal.head.revision_id;
+  const initialBrowse = await modernTool(
+    runtime,
+    secret,
+    "request-recovery-browse-initial",
+    "browse_entries",
+    { mind: "/me", revision_selector: { kind: "revision", revision_id: initialRevisionId } },
+  );
+  const initialIndexDigest = initialBrowse.entries.find(({ path }) => path === "index.md")?.sha256;
+  assert.match(initialIndexDigest, /^sha256:[0-9a-f]{64}$/u);
+
+  failNextIndexDispatch = true;
+  const failedCommit = await modernMcp(runtime, secret, {
+    jsonrpc: "2.0",
+    id: "request-recovery-injected-failure",
+    method: "tools/call",
+    params: {
+      name: "commit_changeset",
+      arguments: {
+        mind: "/me",
+        write_binding_id: writeBinding.current.write_binding_id,
+        expected_binding_version: writeBinding.binding_version,
+        expected_revision: initialRevisionId,
+        idempotency_key: "commit:request-recovery",
+        summary: "Recovery dispatch fixture",
+        operations: [{
+          type: "create_file",
+          path: "concepts/recovery-marker.md",
+          text: `---\ntype: Reference\n---\n\n${recoveryMarker}.\n`,
+        }],
+      },
+      _meta: {
+        "io.modelcontextprotocol/protocolVersion": MCP_TARGET_PROTOCOL,
+        "io.modelcontextprotocol/clientInfo": {
+          name: "mind-diary-request-recovery-e2e",
+          version: "0.0.0",
+        },
+        "io.modelcontextprotocol/clientCapabilities": {},
+      },
+    },
+  });
+  assert.equal(injectedFailureCount, 1);
+  assert.equal(failedCommit.status, 500);
+  const failedCommitBody = await failedCommit.json();
+  assert.deepEqual(failedCommitBody, {
+    code: "internal_error",
+    request_id: failedCommitBody.request_id,
+  });
+  assert.equal(JSON.stringify(failedCommitBody).includes(recoveryMarker), false);
+  assert.equal(JSON.stringify(failedCommitBody).includes("recovery.owner@example.com"), false);
+
+  const afterFailureMinds = await modernTool(
+    runtime,
+    secret,
+    "request-recovery-head-after-failure",
+    "list_minds",
+    {},
+  );
+  const failedHead = afterFailureMinds.minds.find(({ route }) => route === "/me");
+  assert.ok(failedHead);
+  const failedRevisionId = failedHead.head.revision_id;
+  assert.notEqual(failedRevisionId, initialRevisionId);
+  const queuedInfo = await modernTool(
+    runtime,
+    secret,
+    "request-recovery-queued",
+    "get_mind_info",
+    { mind: "/me", revision_selector: { kind: "revision", revision_id: failedRevisionId } },
+  );
+  assert.equal(queuedInfo.resolved_revision.revision_id, failedRevisionId);
+  assert.equal(queuedInfo.index_status.status, "queued");
+  assert.equal(queuedInfo.index_status.retryable, true);
+
+  const unavailableSearch = await modernMcp(runtime, secret, {
+    jsonrpc: "2.0",
+    id: "request-recovery-search-before",
+    method: "tools/call",
+    params: {
+      name: "search",
+      arguments: { mind: "/me", query: "dispatch marker" },
+      _meta: {
+        "io.modelcontextprotocol/protocolVersion": MCP_TARGET_PROTOCOL,
+        "io.modelcontextprotocol/clientInfo": {
+          name: "mind-diary-request-recovery-e2e",
+          version: "0.0.0",
+        },
+        "io.modelcontextprotocol/clientCapabilities": {},
+      },
+    },
+  });
+  assert.equal(unavailableSearch.status, 200);
+  const unavailableSearchBody = await unavailableSearch.json();
+  assert.equal(unavailableSearchBody.result.isError, true);
+  assert.equal(
+    unavailableSearchBody.result.structuredContent.error.code,
+    "search_index_unavailable",
+  );
+  assert.equal(JSON.stringify(unavailableSearchBody).includes(recoveryMarker), false);
+
+  const coordinator = new RequestRecoveryCoordinator({
+    cadenceMs: 30_000,
+    idleMs: 1,
+    delay: async () => undefined,
+    now: () => 1_000,
+  });
+  const recoveryWaits = [];
+  const recoveryEnvironment = {};
+  const documentRequest = new Request(`${ORIGIN}/`, {
+    headers: { accept: "text/html", "user-agent": "request-recovery-test" },
+  });
+  const documentResponse = await coordinator.respond({
+    request: documentRequest,
+    environment: recoveryEnvironment,
+    fingerprint: "request-recovery-test",
+    foreground: () => runtime.fetch(documentRequest),
+    recover: () => runtime.recoverBackground(),
+    waitUntil: (promise) => recoveryWaits.push(promise),
+  });
+  assert.equal(documentResponse.status, 200);
+  assert.equal(recoveryWaits.length, 1);
+  await Promise.all(recoveryWaits);
+
+  const readyInfo = await modernTool(
+    runtime,
+    secret,
+    "request-recovery-ready",
+    "get_mind_info",
+    { mind: "/me", revision_selector: { kind: "revision", revision_id: failedRevisionId } },
+  );
+  assert.equal(readyInfo.resolved_revision.revision_id, failedRevisionId);
+  assert.equal(readyInfo.index_status.status, "ready");
+  assert.equal(readyInfo.index_status.retryable, false);
+
+  const searchable = await modernTool(
+    runtime,
+    secret,
+    "request-recovery-search-after",
+    "search",
+    { mind: "/me", query: "dispatch marker" },
+  );
+  assert.equal(searchable.index_status, "ready");
+  assert.equal(searchable.results.length, 1);
+  assert.equal(searchable.results[0].entry.revision_id, failedRevisionId);
+  assert.equal(searchable.results[0].entry.path, "concepts/recovery-marker.md");
+
+  const finalMinds = await modernTool(
+    runtime,
+    secret,
+    "request-recovery-final-head",
+    "list_minds",
+    {},
+  );
+  assert.equal(
+    finalMinds.minds.find(({ route }) => route === "/me").head.revision_id,
+    failedRevisionId,
+  );
+
+  await modernTool(
+    runtime,
+    secret,
+    "request-recovery-unbind-write",
+    "set_write_mind_binding",
+    {
+      action: "unbind",
+      expected_binding_version: writeBinding.binding_version,
+      idempotency_key: "binding:request-recovery-unbind",
+    },
+  );
+
+  const unboundRead = await modernMcp(runtime, secret, {
+    jsonrpc: "2.0",
+    id: "request-recovery-unbound-read",
+    method: "tools/call",
+    params: {
+      name: "browse_entries",
+      arguments: { mind: "/me" },
+      _meta: {
+        "io.modelcontextprotocol/protocolVersion": MCP_TARGET_PROTOCOL,
+        "io.modelcontextprotocol/clientInfo": {
+          name: "mind-diary-request-recovery-e2e",
+          version: "0.0.0",
+        },
+        "io.modelcontextprotocol/clientCapabilities": {},
+      },
+    },
+  });
+  assert.equal(unboundRead.status, 200);
+  const unboundReadBody = await unboundRead.json();
+  assert.equal(unboundReadBody.result.isError, true);
+  assert.equal(
+    unboundReadBody.result.structuredContent.error.code,
+    "mind_binding_required",
+  );
+  assert.equal(JSON.stringify(unboundReadBody).includes(recoveryMarker), false);
+
+  assert.ok(scheduled.some(({ kind }) => kind === "revision_index"));
+  for (const line of telemetryLines) {
+    assert.equal(line.includes(recoveryMarker), false);
+    assert.equal(line.includes("recovery.owner@example.com"), false);
+  }
 });
