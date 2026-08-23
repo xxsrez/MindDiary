@@ -32,10 +32,11 @@ evidence для всего extension отсутствует.
 
 MD-271 принимает единый [file-ingress contract](specs/file-ingress.md) поверх
 этой BundleFile boundary. Шесть source kinds проходят через adapter-owned
-transport и application-owned byte verification, но в текущем candidate только
-`session_attachment` имеет local implementation; MD-250 native-client UAT ещё
-не закрыт. Local companion, connector, bounded-inline и server-generated
-capabilities остаются contract-only и не являются fallback или hosted claim.
+transport и application-owned byte verification. MD-272 добавляет repository-
+local companion для `local_path`, `workspace/generated_artifact` и bounded
+local bytes; MD-250 native-client UAT ещё не закрыт. Local companion не
+становится hosted/native fallback, а connector и server-generated hosted
+capabilities остаются отдельными contract claims.
 
 ## Драйверы и ограничения
 

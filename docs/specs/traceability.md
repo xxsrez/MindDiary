@@ -100,12 +100,16 @@ exact-candidate join below passes.
 и [единый file-ingress contract](file-ingress.md) фиксируют шесть source kinds,
 portable `VerifiedFileInput`/`staged_file_ref`, adapter/application ownership,
 typed capability errors, limits, lifecycle, idempotency и atomic multi-ref
-commit. Только `session_attachment` имеет local implementation; MD-250 native
-client UAT остаётся pending, остальные rows contract-only до child tasks.
+commit. `session_attachment` имеет локальный adapter implementation, а MD-272
+добавляет repo-local companion для `local_path`, `workspace/generated_artifact`
+и bounded local bytes. Это не hosted/native capability: MD-250 native-client
+UAT и hosted upload-intent evidence остаются pending; connector/server rows
+остаются contract-only до owning child tasks.
 
 | ID | Наблюдаемый результат | Owner | Local evidence | UAT evidence |
 |---|---|---|---|---|
 | FI0-Contract | Каждый file source сводится к verified bytes и service-owned staged ref без provider ID/URL, local path, silent fallback или partial multi-ref commit; capability status не выдаётся за implementation. | `MD-271` | `file-ingress-contract`, affected docs + ADR-0018, docs topology/link validation and `git diff --check` | not-applicable until source adapter/client implementation |
+| FI1-LocalCompanion | Explicit regular local/workspace/generated file or bounded bytes passes the same path-free verified-input and atomic staging pipeline with safe path/symlink/special-file/size/MIME/SHA/idempotency/retry/cleanup checks; failures leave no revision. | `MD-272` | `tests/unit/local-file-companion.test.mjs` and `tests/integration/local-file-companion.test.mjs`; build, targeted contract/integration checks, architecture/docs/secrets checks and `git diff --check` | not-available: hosted upload intent/native client evidence is separate and remains pending |
 
 ## Brain-scale Sites storage/import extension 2026-08-22
 

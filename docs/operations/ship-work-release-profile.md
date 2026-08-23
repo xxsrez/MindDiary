@@ -10,11 +10,12 @@
 [adapter specification](../specs/ship-work-release-linear.md).
 
 Release 0.1 scope includes the accepted MD-271 [file-ingress contract](../specs/file-ingress.md)
-and its `FI0-Contract` traceability row. The local targeted contract test is
-evidence of documentation consistency only: current candidate capability is
-limited to local `session_attachment` code/tests, MD-250 native-client UAT is
-still pending, and the other five source rows are contract-only. No UAT smoke
-row or deployment claim may be inferred for an unimplemented source adapter.
+and its `FI0-Contract` traceability row. MD-272 adds a repo-local companion for
+explicit `local_path`, `workspace/generated_artifact` and bounded local bytes;
+its targeted tests are local evidence only. MD-250 native-client UAT and
+hosted upload-intent evidence remain pending, while connector/server source
+rows are contract-only. No UAT smoke row or deployment claim may be inferred
+for an unimplemented hosted source adapter.
 
 ## Canonical profile
 
