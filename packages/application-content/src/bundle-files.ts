@@ -650,6 +650,7 @@ export class BundleFileStagingService {
     }
 
     let upload: StagedBundleFileUpload;
+    let temporaryObjectOwned = false;
     try {
       upload = await begin.call(this.#objects, {
         stagedFileId,
@@ -659,7 +660,7 @@ export class BundleFileStagingService {
         maxBytes: request.maxBytes,
       });
     } catch {
-      await this.#cleanupFailedStage(stagedFileId, reservationId);
+      await this.#cleanupFailedStage(stagedFileId, reservationId, false);
       return Object.freeze({
         kind: "stream_invalid",
         code: "stream_transport_unavailable",
@@ -670,7 +671,11 @@ export class BundleFileStagingService {
       failure: StageBundleFileStreamResult,
     ): Promise<StageBundleFileStreamResult> => {
       await upload.abort().catch(() => undefined);
-      await this.#cleanupFailedStage(stagedFileId, reservationId);
+      await this.#cleanupFailedStage(
+        stagedFileId,
+        reservationId,
+        temporaryObjectOwned,
+      );
       return failure;
     };
 
@@ -751,6 +756,7 @@ export class BundleFileStagingService {
       }
 
       await upload.complete({ sha256, size });
+      temporaryObjectOwned = true;
       const canonicalRequestHash = await this.#objects.calculateSha256(
         ENCODER.encode(`${JSON.stringify({
           format: "mind-diary-stage-bundle-file-request-v1",
@@ -914,13 +920,16 @@ export class BundleFileStagingService {
   async #cleanupFailedStage(
     stagedFileId: StagedBundleFileId,
     reservationId: string,
+    temporaryObjectOwned = true,
   ): Promise<void> {
-    let temporaryObjectAbsent = false;
-    try {
-      await this.#objects.deleteStagedBundleFile(stagedFileId);
-      temporaryObjectAbsent = true;
-    } catch {
-      // The durable cleanup-pending reservation keeps worst-case usage charged.
+    let temporaryObjectAbsent = !temporaryObjectOwned;
+    if (temporaryObjectOwned) {
+      try {
+        await this.#objects.deleteStagedBundleFile(stagedFileId);
+        temporaryObjectAbsent = true;
+      } catch {
+        // The durable cleanup-pending reservation keeps worst-case usage charged.
+      }
     }
     await this.#capacity.cancel(reservationId).catch(() => undefined);
     if (temporaryObjectAbsent) {

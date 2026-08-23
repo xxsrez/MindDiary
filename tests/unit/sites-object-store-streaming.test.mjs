@@ -77,6 +77,44 @@ class StreamingBucket {
   }
 }
 
+class PreflightBlindCollisionBucket extends StreamingBucket {
+  #hideExistingOnce = true;
+
+  async get(key) {
+    if (this.#hideExistingOnce) {
+      this.#hideExistingOnce = false;
+      return null;
+    }
+    return super.get(key);
+  }
+}
+
+async function settlesWithin(operation, milliseconds = 250) {
+  let timer;
+  try {
+    return await Promise.race([
+      operation,
+      new Promise((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`operation did not settle within ${milliseconds} ms`)),
+          milliseconds,
+        );
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function foreignStagedRecord(stagedFileId) {
+  return {
+    key: `staged-bundle-files/${stagedFileId}`,
+    bytes: Uint8Array.from([0x01, 0x02, 0x03]),
+    etag: "foreign-etag",
+    customMetadata: {},
+  };
+}
+
 test("Sites staged generated writer sends a ReadableStream and publishes only on complete", async () => {
   const bucket = new StreamingBucket();
   const objects = await createSitesObjectStore(bucket);
@@ -122,4 +160,46 @@ test("Sites staged generated writer aborts partial streams without publication",
   await upload.abort();
   assert.equal(bucket.records.size, 0);
   assert.equal(await objects.getStagedBundleFile("staged_stream_abort"), null);
+});
+
+test("Sites staged generated writer rejects an existing staged ID before opening a stream", async () => {
+  const bucket = new StreamingBucket();
+  const existing = foreignStagedRecord("staged_stream_existing");
+  bucket.records.set(existing.key, existing);
+  const objects = await createSitesObjectStore(bucket);
+
+  await assert.rejects(
+    objects.beginStagedBundleFileUpload({
+      stagedFileId: "staged_stream_existing",
+      bindingOwnerId: "binding_owner_test",
+      spaceId: "space_stream_test",
+      createdAt: CREATED_AT,
+      maxBytes: 64,
+    }),
+    (error) => error?.code === "digest_collision",
+  );
+  assert.deepEqual(bucket.records.get(existing.key)?.bytes, existing.bytes);
+  assert.equal(bucket.records.get(existing.key)?.etag, "foreign-etag");
+});
+
+test("Sites staged generated writer settles a conditional-put race without deleting the winner", async () => {
+  const bucket = new PreflightBlindCollisionBucket();
+  const existing = foreignStagedRecord("staged_stream_race");
+  bucket.records.set(existing.key, existing);
+  const objects = await createSitesObjectStore(bucket);
+  const upload = await objects.beginStagedBundleFileUpload({
+    stagedFileId: "staged_stream_race",
+    bindingOwnerId: "binding_owner_test",
+    spaceId: "space_stream_test",
+    createdAt: CREATED_AT,
+    maxBytes: 64,
+  });
+
+  await assert.rejects(
+    settlesWithin(upload.write(PNG)),
+    (error) => error?.code === "digest_collision",
+  );
+  await settlesWithin(upload.abort());
+  assert.deepEqual(bucket.records.get(existing.key)?.bytes, existing.bytes);
+  assert.equal(bucket.records.get(existing.key)?.etag, "foreign-etag");
 });

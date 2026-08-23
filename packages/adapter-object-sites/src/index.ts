@@ -772,9 +772,16 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
     ) throw new ObjectStoreFailure("invalid_limit", "staged upload request is invalid");
 
     const key = `${STAGED_BUNDLE_PREFIX}${encodeURIComponent(request.stagedFileId)}`;
+    if (await this.#get(key)) {
+      throw new ObjectStoreFailure("digest_collision", "staged BundleFile ID collision");
+    }
     const transform = new TransformStream<Uint8Array, Uint8Array>();
     const writer = transform.writable.getWriter();
-    const putPromise = this.#bucket.put(key, transform.readable, {
+    type PutOutcome =
+      | Readonly<{ kind: "stored"; object: R2ListedObjectLike }>
+      | Readonly<{ kind: "collision" }>
+      | Readonly<{ kind: "failed"; error: unknown }>;
+    const putOutcomePromise: Promise<PutOutcome> = this.#bucket.put(key, transform.readable, {
       customMetadata: Object.freeze({
         schema: "md-r2-staged-bundle-file-stream-v1",
         stagedFileId: request.stagedFileId,
@@ -784,23 +791,56 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
         maxBytes: String(request.maxBytes),
       }),
       onlyIf: { etagDoesNotMatch: "*" },
-    });
+    }).then(
+      (stored) => stored === null
+        ? Object.freeze({ kind: "collision" } as const)
+        : Object.freeze({ kind: "stored", object: stored } as const),
+      (error: unknown) => Object.freeze({ kind: "failed", error } as const),
+    );
     let size = 0;
     let closed = false;
     let completed = false;
-    let aborted = false;
+    let abortPromise: Promise<void> | null = null;
 
-    const abort = async (): Promise<void> => {
-      if (aborted) return;
-      aborted = true;
+    const putFailure = (outcome: Exclude<PutOutcome, { kind: "stored" }>): unknown =>
+      outcome.kind === "collision"
+        ? new ObjectStoreFailure("digest_collision", "staged BundleFile ID collision")
+        : outcome.error;
+
+    const abort = (): Promise<void> => {
+      if (abortPromise !== null) return abortPromise;
       closed = true;
-      try {
-        await writer.abort();
-      } catch {
-        // The R2 body may already have observed the stream failure.
+      abortPromise = (async () => {
+        await Promise.allSettled([
+          writer.abort(),
+          transform.readable.cancel(),
+        ]);
+        const outcome = await putOutcomePromise;
+        if (completed || outcome.kind !== "stored") return;
+
+        // A conditional-put collision belongs to another upload.  Even after
+        // our own put succeeds, only remove the exact etag that it returned.
+        const current = await this.#get(key).catch(() => null);
+        if (current?.etag === outcome.object.etag) {
+          await this.#bucket.delete(key).catch(() => undefined);
+        }
+      })();
+      return abortPromise;
+    };
+
+    const writeWithPutObservation = async (chunk: Uint8Array): Promise<void> => {
+      const result = await Promise.race([
+        writer.write(chunk).then(() => Object.freeze({ kind: "written" } as const)),
+        putOutcomePromise,
+      ]);
+      if (result.kind === "written") return;
+      if (result.kind === "stored") {
+        throw new ObjectStoreFailure(
+          "object_tampered",
+          "R2 staged upload completed before the stream was closed",
+        );
       }
-      await putPromise.catch(() => undefined);
-      if (!completed) await this.#bucket.delete(key).catch(() => undefined);
+      throw putFailure(result);
     };
 
     return Object.freeze({
@@ -817,9 +857,13 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
             "staged upload exceeds its configured byte limit",
           );
         }
-        size += chunk.byteLength;
-        await writer.ready;
-        await writer.write(new Uint8Array(chunk));
+        try {
+          await writeWithPutObservation(new Uint8Array(chunk));
+          size += chunk.byteLength;
+        } catch (error) {
+          await abort();
+          throw error;
+        }
       },
       complete: async ({ sha256, size: expectedSize }: { readonly sha256: Digest; readonly size: number }) => {
         if (closed) throw new Error("staged upload is closed");
@@ -830,12 +874,20 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
         }
         try {
           closed = true;
-          await writer.close();
-          const stored = await putPromise;
-          if (stored === null) {
-            throw new ObjectStoreFailure("digest_collision", "staged BundleFile ID collision");
+          const closePromise = writer.close();
+          const first = await Promise.race([
+            closePromise.then(() => Object.freeze({ kind: "closed" } as const)),
+            putOutcomePromise,
+          ]);
+          if (first.kind === "collision" || first.kind === "failed") {
+            throw putFailure(first);
           }
-          if (stored.size !== expectedSize) {
+          await closePromise;
+          const outcome = first.kind === "stored" ? first : await putOutcomePromise;
+          if (outcome.kind === "collision" || outcome.kind === "failed") {
+            throw putFailure(outcome);
+          }
+          if (outcome.object.size !== expectedSize) {
             throw new ObjectStoreFailure("object_tampered", "staged upload size mismatch");
           }
           completed = true;

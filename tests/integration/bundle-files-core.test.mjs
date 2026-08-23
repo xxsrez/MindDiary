@@ -452,6 +452,40 @@ test("server-generated cancellation and static rejection leave no staged object"
   assert.equal(await env.objects.getStagedBundleFile("staged_bundle_2"), null);
 });
 
+test("server-generated staged ID collision preserves the foreign object", async () => {
+  const env = await harness();
+  const foreign = Uint8Array.from([0x01, 0x02, 0x03]);
+  await env.objects.putStagedBundleFile({
+    stagedFileId: "staged_bundle_1",
+    bindingOwnerId: "binding_owner_foreign",
+    spaceId: MINDS.personal.spaceId,
+    bytes: foreign,
+    createdAt: LATER,
+  });
+  const ingress = new GeneratedArtifactIngressService({ staging: env.staging });
+
+  const result = await ingress.stageServerGenerated({
+    actor: env.currentActor,
+    spaceId: MINDS.ordinary.spaceId,
+    writeBindingId: WRITE_BINDING_ID,
+    displayFilename: "collision.png",
+    claimedMediaType: "image/png",
+    idempotencyKey: "generated-stream-collision",
+    stream: (async function* () {
+      yield PNG;
+    })(),
+  });
+
+  assert.deepEqual(result, {
+    kind: "invalid",
+    code: "generated_artifact_streaming_unavailable",
+  });
+  const preserved = await env.objects.getStagedBundleFile("staged_bundle_1");
+  assert.equal(preserved.bindingOwnerId, "binding_owner_foreign");
+  assert.equal(preserved.spaceId, MINDS.personal.spaceId);
+  assert.deepEqual(preserved.bytes, foreign);
+});
+
 test("Markdown BundleFile references validate the atomic resulting revision", async () => {
   const env = await harness();
   const staged = await env.staging.stage({
