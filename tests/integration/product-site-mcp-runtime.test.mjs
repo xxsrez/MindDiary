@@ -3041,6 +3041,32 @@ test("request-triggered recovery reclaims a revision after an injected index dis
   );
   assert.equal(JSON.stringify(unavailableSearchBody).includes(recoveryMarker), false);
 
+  // Simulate an isolate/redeploy boundary after the commit persisted its
+  // queued index job but before the first dispatch could run. The new runtime
+  // must recover from durable D1 state rather than the old runtime's memory.
+  const restartedRuntime = await createProductSiteRuntime({
+    database,
+    bucket,
+    publicOrigin: ORIGIN,
+    identity: {
+      readVerifiedIdentity() {
+        return {
+          kind: "authenticated",
+          verifiedEmail: "recovery.owner@example.com",
+          verifiedFullName: "Recovery Owner",
+        };
+      },
+    },
+    tokenVerifierKey: key(171),
+    locatorKey: key(211),
+    exportDownloadVerifierKey: key(251),
+    csrfKey: key(35),
+    observabilityWriter: { write(line) { telemetryLines.push(line); } },
+    schedule(work) {
+      scheduled.push({ ...work, runtime: "restarted" });
+    },
+  });
+
   const coordinator = new RequestRecoveryCoordinator({
     cadenceMs: 30_000,
     idleMs: 1,
@@ -3056,8 +3082,8 @@ test("request-triggered recovery reclaims a revision after an injected index dis
     request: documentRequest,
     environment: recoveryEnvironment,
     fingerprint: "request-recovery-test",
-    foreground: () => runtime.fetch(documentRequest),
-    recover: () => runtime.recoverBackground(),
+    foreground: () => restartedRuntime.fetch(documentRequest),
+    recover: () => restartedRuntime.recoverBackground(),
     waitUntil: (promise) => recoveryWaits.push(promise),
   });
   assert.equal(documentResponse.status, 200);
@@ -3065,7 +3091,7 @@ test("request-triggered recovery reclaims a revision after an injected index dis
   await Promise.all(recoveryWaits);
 
   const readyInfo = await modernTool(
-    runtime,
+    restartedRuntime,
     secret,
     "request-recovery-ready",
     "get_mind_info",
@@ -3076,7 +3102,7 @@ test("request-triggered recovery reclaims a revision after an injected index dis
   assert.equal(readyInfo.index_status.retryable, false);
 
   const searchable = await modernTool(
-    runtime,
+    restartedRuntime,
     secret,
     "request-recovery-search-after",
     "search",
@@ -3088,7 +3114,7 @@ test("request-triggered recovery reclaims a revision after an injected index dis
   assert.equal(searchable.results[0].entry.path, "concepts/recovery-marker.md");
 
   const finalMinds = await modernTool(
-    runtime,
+    restartedRuntime,
     secret,
     "request-recovery-final-head",
     "list_minds",
@@ -3100,7 +3126,7 @@ test("request-triggered recovery reclaims a revision after an injected index dis
   );
 
   await modernTool(
-    runtime,
+    restartedRuntime,
     secret,
     "request-recovery-unbind-write",
     "set_write_mind_binding",
@@ -3111,7 +3137,7 @@ test("request-triggered recovery reclaims a revision after an injected index dis
     },
   );
 
-  const unboundRead = await modernMcp(runtime, secret, {
+  const unboundRead = await modernMcp(restartedRuntime, secret, {
     jsonrpc: "2.0",
     id: "request-recovery-unbound-read",
     method: "tools/call",
