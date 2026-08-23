@@ -1,6 +1,7 @@
 import type { ActorContext } from "@mind-diary/application-contracts";
 import {
   AuthorizedHandleReader,
+  type BackgroundWorkStore,
   CapabilityAuthorizer,
   type AuthorizationGrant,
   type AuthorizationStamp,
@@ -158,7 +159,8 @@ export interface RevisionIndexStatusReader {
 
 export interface MindDiscoveryStore
   extends PublicMindCatalogStore,
-    RevisionMetadataStore {
+    RevisionMetadataStore,
+    Pick<BackgroundWorkStore, "readRevisionIndexState"> {
   /**
    * Optional adapter-level consistent view. Persistent adapters use this to
    * refresh one materialized snapshot/tail before resolving a whole list,
@@ -173,6 +175,10 @@ export interface MindDiscoveryDependencies {
   readonly store: MindDiscoveryStore;
   readonly host: VerifiedSpaceHost;
   readonly indexStatus?: RevisionIndexStatusReader;
+  /** Binds index-status reads to the adapter's already refreshed read-session. */
+  readonly indexStatusForStore?: (
+    store: MindDiscoveryStore,
+  ) => RevisionIndexStatusReader;
 }
 
 interface NormalizedListQuery {
@@ -416,6 +422,9 @@ export class MindDiscoveryService {
   readonly #store: MindDiscoveryStore;
   readonly #host: VerifiedSpaceHost;
   readonly #indexStatus: RevisionIndexStatusReader | undefined;
+  readonly #indexStatusForStore:
+    | ((store: MindDiscoveryStore) => RevisionIndexStatusReader)
+    | undefined;
   readonly #authorizer: CapabilityAuthorizer;
   readonly #handles: AuthorizedHandleReader<Readonly<OrdinaryMindRouteSnapshot>>;
 
@@ -423,6 +432,7 @@ export class MindDiscoveryService {
     this.#store = dependencies.store;
     this.#host = dependencies.host;
     this.#indexStatus = dependencies.indexStatus;
+    this.#indexStatusForStore = dependencies.indexStatusForStore;
     this.#authorizer = new CapabilityAuthorizer(dependencies.store);
     this.#handles = new AuthorizedHandleReader({
       handles: dependencies.store,
@@ -541,6 +551,15 @@ export class MindDiscoveryService {
     revisionSelector?: unknown,
   ): Promise<Readonly<MindInfoResult>> {
     if (this.#store.withConsistentRead !== undefined) {
+      const indexStatusForStore = this.#indexStatusForStore;
+      if (indexStatusForStore !== undefined) {
+        return this.#store.withConsistentRead((store) =>
+          new MindDiscoveryService({
+            store,
+            host: this.#host,
+            indexStatus: indexStatusForStore(store),
+          }).getMindInfo(actor, mind, revisionSelector));
+      }
       const info = await this.#store.withConsistentRead((store) =>
         new MindDiscoveryService({
           store,

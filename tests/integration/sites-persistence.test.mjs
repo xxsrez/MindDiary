@@ -896,6 +896,31 @@ test("get_mind_info resolves one exact Mind from one D1 read-session", async () 
   );
   assert.equal(indexStatusReads, 1);
   assert.deepEqual(database.metadataReadLog, ["tail", "tail"]);
+
+  const discoveryWithSessionIndexStatus = new MindDiscoveryService({
+    store: boundary.metadata,
+    host: HOST,
+    indexStatusForStore: (store) => ({
+      async read(request) {
+        indexStatusReads += 1;
+        await store.readHead(request.spaceId);
+        return {
+          status: "ready",
+          attempts: 1,
+          lastFailureCode: null,
+        };
+      },
+    }),
+  });
+  database.metadataReadLog = [];
+  const sessionInfo = await discoveryWithSessionIndexStatus.getMindInfo(
+    actor(owner.principalId, "request_info_session_status", T2),
+    "/exact-read-session",
+    { kind: "head" },
+  );
+  assert.equal(sessionInfo.indexStatus.status, "ready");
+  assert.equal(indexStatusReads, 2);
+  assert.deepEqual(database.metadataReadLog, ["tail"]);
 });
 
 test("Sites composition persists account, invitation, ownership, HEAD CAS, idempotency and token state across isolates", async () => {

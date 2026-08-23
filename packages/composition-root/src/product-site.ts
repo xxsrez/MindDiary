@@ -614,7 +614,12 @@ export async function createProductSiteRuntime(
     now,
   });
 
-  const discovery = new MindDiscoveryService({ store: metadata, host, indexStatus });
+  const discovery = new MindDiscoveryService({
+    store: metadata,
+    host,
+    indexStatus,
+    indexStatusForStore: (store) => new RevisionIndexStatusService(store),
+  });
   const bindings = new MindBindingApplicationService({
     authorizer,
     bindings: metadata,

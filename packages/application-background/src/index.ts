@@ -498,9 +498,9 @@ export interface ExposedRevisionIndexStatus {
 }
 
 export class RevisionIndexStatusService {
-  readonly #work: BackgroundWorkStore;
+  readonly #work: Pick<BackgroundWorkStore, "readRevisionIndexState">;
 
-  constructor(work: BackgroundWorkStore) {
+  constructor(work: Pick<BackgroundWorkStore, "readRevisionIndexState">) {
     this.#work = work;
   }
 

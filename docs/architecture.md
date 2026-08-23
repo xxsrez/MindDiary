@@ -636,9 +636,10 @@ explicit target Mind. General cross-Mind search/synthesis требует нов�
   outcome telemetry без identity, URL, content или storage keys.
 - `list_minds` и exact Mind discovery выполняют по одному consistent metadata
   read-session: один D1 snapshot/tail refresh питает personal binding,
-  membership/public candidates, authorization state и route/revision
-  projections. Binding-aware content authorization читает binding и current
-  access из того же refreshed view. Candidate resolution и browse object reads
+  membership/public candidates, authorization state, route/revision
+  projections и публикуемый revision-index status. Binding-aware content
+  authorization читает binding и current access из того же refreshed view.
+  Candidate resolution и browse object reads
   имеют bounded concurrency `8`, сохраняют deterministic order и не выдают
   private metadata до authorization. Read use case выполняет initial access
   check до target metadata/object/index и один final current-state/TOCTOU
