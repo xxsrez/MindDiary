@@ -96,6 +96,7 @@ const SPACE_CANONICAL_PREFIX = "spaces/";
 const DELETE_STATE = "deleting";
 const ACTIVE_STATE = "active";
 const MAX_R2_CAS_ATTEMPTS = 16;
+const R2_READ_TIMEOUT_MS = 5_000;
 const EXPORT_STREAM_PART_BYTES = 4_194_304;
 const BUNDLE_FILE_MEDIA_TYPES = new Set([
   "image/png",
@@ -274,8 +275,25 @@ function metadataFromR2(object: R2ListedObjectLike): Readonly<ImmutableObjectMet
   });
 }
 
+async function withR2ReadTimeout<Result>(
+  operation: Promise<Result>,
+  description: string,
+): Promise<Result> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      reject(new ObjectStoreFailure("object_read_timeout", `R2 ${description} timed out`));
+    }, R2_READ_TIMEOUT_MS);
+  });
+  try {
+    return await Promise.race([operation, timeout]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
 async function bodyBytes(object: R2ObjectBodyLike): Promise<Uint8Array> {
-  return new Uint8Array(await object.arrayBuffer());
+  return new Uint8Array(await withR2ReadTimeout(object.arrayBuffer(), "object body read"));
 }
 
 
@@ -290,6 +308,14 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
 
   async ready(): Promise<this> {
     return this;
+  }
+
+  async #get(key: string): Promise<R2ObjectBodyLike | null> {
+    return withR2ReadTimeout(this.#bucket.get(key), "object lookup");
+  }
+
+  async #list(options: Parameters<R2BucketLike["list"]>[0]): Promise<R2ListResultLike> {
+    return withR2ReadTimeout(this.#bucket.list(options), "object listing");
   }
 
   async calculateSha256(bytes: Uint8Array): Promise<Digest> {
@@ -307,7 +333,7 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
     const digest = await this.calculateSha256(bytes);
     const key = canonicalKey(digest);
     for (let attempt = 0; attempt < MAX_R2_CAS_ATTEMPTS; attempt += 1) {
-      const existing = await this.#bucket.get(key);
+      const existing = await this.#get(key);
       if (!existing) {
         const stored = await this.#bucket.put(key, bytes, {
           httpMetadata: { contentType: MARKDOWN },
@@ -370,7 +396,7 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
 
   async getImmutable(digest: Digest): Promise<Readonly<ImmutableObject> | null> {
     assertDigest(digest);
-    const object = await this.#bucket.get(canonicalKey(digest));
+    const object = await this.#get(canonicalKey(digest));
     if (!object) return null;
     const metadata = metadataFromR2(object);
     const bytes = await bodyBytes(object);
@@ -404,7 +430,7 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
     const key = spaceCanonicalKey(request.kind, request.spaceId, digest);
     const mediaType = request.mediaType;
     for (let attempt = 0; attempt < MAX_R2_CAS_ATTEMPTS; attempt += 1) {
-      const existing = await this.#bucket.get(key);
+      const existing = await this.#get(key);
       if (!existing) {
         const metadata: Readonly<SpaceCanonicalObjectMetadata> = Object.freeze({
           kind: request.kind,
@@ -461,7 +487,7 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
     digest: Digest,
   ): Promise<Readonly<SpaceCanonicalObject> | null> {
     assertDigest(digest);
-    const object = await this.#bucket.get(spaceCanonicalKey(kind, spaceId, digest));
+    const object = await this.#get(spaceCanonicalKey(kind, spaceId, digest));
     if (!object) return null;
     const metadata = spaceCanonicalMetadataFromR2(object);
     const bytes = await bodyBytes(object);
@@ -516,7 +542,7 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
     assertUtc(request.expectedProtectedAt);
     const key = spaceCanonicalKey(request.kind, request.spaceId, request.sha256);
     for (let attempt = 0; attempt < MAX_R2_CAS_ATTEMPTS; attempt += 1) {
-      const current = await this.#bucket.get(key);
+      const current = await this.#get(key);
       if (!current) return false;
       const metadata = spaceCanonicalMetadataFromR2(current);
       if (
@@ -566,7 +592,7 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
     const digest = await this.calculateSha256(bytes);
     const key = `${BUNDLE_PREFIX}${encodeURIComponent(request.spaceId)}/sha256/${digest.slice(7)}`;
     for (let attempt = 0; attempt < MAX_R2_CAS_ATTEMPTS; attempt += 1) {
-      const existing = await this.#bucket.get(key);
+      const existing = await this.#get(key);
       if (!existing) {
         const stored = await this.#bucket.put(key, bytes, {
           httpMetadata: { contentType: request.mediaType },
@@ -617,7 +643,7 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
   ): Promise<Readonly<BundleFileObject> | null> {
     assertDigest(digest);
     const key = `${BUNDLE_PREFIX}${encodeURIComponent(spaceId)}/sha256/${digest.slice(7)}`;
-    const object = await this.#bucket.get(key);
+    const object = await this.#get(key);
     if (!object) return null;
     const metadata = this.#bundleMetadata(object);
     const bytes = await bodyBytes(object);
@@ -661,7 +687,7 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
     assertUtc(request.expectedProtectedAt);
     const key = `${BUNDLE_PREFIX}${encodeURIComponent(request.spaceId)}/sha256/${request.sha256.slice(7)}`;
     for (let attempt = 0; attempt < MAX_R2_CAS_ATTEMPTS; attempt += 1) {
-      const current = await this.#bucket.get(key);
+      const current = await this.#get(key);
       if (!current) return false;
       const metadata = this.#bundleMetadata(current);
       if (
@@ -698,7 +724,7 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
     const key = `${STAGED_BUNDLE_PREFIX}${encodeURIComponent(request.stagedFileId)}`;
     const bytes = new Uint8Array(request.bytes);
     for (let attempt = 0; attempt < MAX_R2_CAS_ATTEMPTS; attempt += 1) {
-      const existing = await this.#bucket.get(key);
+      const existing = await this.#get(key);
       if (existing) {
         const restored = await this.#stagedBundleFile(existing);
         if (
@@ -720,7 +746,7 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
         onlyIf: { etagDoesNotMatch: "*" },
       });
       if (!stored) continue;
-      const body = await this.#bucket.get(key);
+      const body = await this.#get(key);
       if (!body) continue;
       return this.#stagedBundleFile(body);
     }
@@ -730,7 +756,7 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
   async getStagedBundleFile(
     stagedFileId: string,
   ): Promise<Readonly<StagedBundleFileObject> | null> {
-    const object = await this.#bucket.get(
+    const object = await this.#get(
       `${STAGED_BUNDLE_PREFIX}${encodeURIComponent(stagedFileId)}`,
     );
     return object === null ? null : this.#stagedBundleFile(object);
@@ -738,7 +764,7 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
 
   async deleteStagedBundleFile(stagedFileId: string): Promise<boolean> {
     const key = `${STAGED_BUNDLE_PREFIX}${encodeURIComponent(stagedFileId)}`;
-    if (!(await this.#bucket.get(key))) return false;
+    if (!(await this.#get(key))) return false;
     await this.#bucket.delete(key);
     return true;
   }
@@ -775,7 +801,7 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
     assertUtc(request.expectedProtectedAt);
     const key = canonicalKey(request.sha256);
     for (let attempt = 0; attempt < MAX_R2_CAS_ATTEMPTS; attempt += 1) {
-      const current = await this.#bucket.get(key);
+      const current = await this.#get(key);
       if (!current) return false;
       const metadata = metadataFromR2(current);
       if (
@@ -837,7 +863,7 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
       onlyIf: { etagDoesNotMatch: "*" },
     });
     if (stored) return Object.freeze({ kind: "stored", archive });
-    const existing = await this.#bucket.get(key);
+    const existing = await this.#get(key);
     if (!existing) return Object.freeze({ kind: "object_key_collision" });
     const existingBytes = await bodyBytes(existing);
     const same =
@@ -884,7 +910,7 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
         onlyIf: { etagDoesNotMatch: "*" },
       });
       if (!stored) {
-        const existing = await this.#bucket.get(key);
+        const existing = await this.#get(key);
         if (
           !existing || existing.size !== bytes.byteLength ||
           existing.customMetadata?.sha256 !== sha256 ||
@@ -945,7 +971,7 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
           onlyIf: { etagDoesNotMatch: "*" },
         });
         if (!stored) {
-          const existing = await this.#bucket.get(key);
+          const existing = await this.#get(key);
           if (!existing || !bytesEqual(await bodyBytes(existing), manifestBytes)) {
             return Object.freeze({ kind: "object_key_collision" as const });
           }
@@ -965,7 +991,7 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
   async openExportArchive(
     objectKey: string,
   ): Promise<Readonly<OpenedExportArchive> | null> {
-    const object = await this.#bucket.get(objectKey);
+    const object = await this.#get(objectKey);
     if (!object || !objectKey.startsWith(EXPORT_PREFIX)) return null;
     const custom = object.customMetadata ?? {};
     const sha256 = custom.sha256 ?? "";
@@ -1073,7 +1099,7 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
   }
 
   async deleteExportArchive(objectKey: string): Promise<boolean> {
-    if (!objectKey.startsWith(EXPORT_PREFIX) || !(await this.#bucket.get(objectKey))) {
+    if (!objectKey.startsWith(EXPORT_PREFIX) || !(await this.#get(objectKey))) {
       return false;
     }
     await this.#bucket.delete(objectKey);
@@ -1085,7 +1111,7 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
     spaceId: ExportArchiveWriteRequest["spaceId"],
   ): Promise<boolean> {
     const prefix = `${EXPORT_PREFIX}${encodeURIComponent(spaceId)}/${encodeURIComponent(jobId)}/`;
-    const page = await this.#bucket.list({ prefix, limit: 1 });
+    const page = await this.#list({ prefix, limit: 1 });
     return page.objects.length > 0;
   }
 
@@ -1122,7 +1148,7 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
           : request.namespace === "staged_bundle"
             ? STAGED_BUNDLE_PREFIX
             : EXPORT_PREFIX;
-    const page = await this.#bucket.list({
+    const page = await this.#list({
       prefix,
       ...(request.cursor === null ? {} : { cursor: request.cursor }),
       limit: request.limit,
@@ -1226,7 +1252,7 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
   }>): Promise<boolean> {
     assertUtc(request.createdBefore);
     const candidate = request.candidate;
-    const current = await this.#bucket.get(candidate.objectKey);
+    const current = await this.#get(candidate.objectKey);
     if (!current || current.etag !== candidate.fence) return false;
     if (candidate.namespace === "immutable") return this.deleteImmutableObject({
       sha256: candidate.sha256,
@@ -1261,7 +1287,7 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
     const objects: R2ListedObjectLike[] = [];
     let cursor: string | undefined;
     do {
-      const page = await this.#bucket.list({
+      const page = await this.#list({
         prefix,
         ...(cursor ? { cursor } : {}),
         limit: 1000,

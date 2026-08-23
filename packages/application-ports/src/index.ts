@@ -1382,7 +1382,8 @@ export type ObjectStoreFailureCode =
   | "invalid_timestamp"
   | "invalid_limit"
   | "digest_collision"
-  | "object_tampered";
+  | "object_tampered"
+  | "object_read_timeout";
 
 /** Stable port-level failure used without coupling application code to an adapter. */
 export class ObjectStoreFailure extends Error {
