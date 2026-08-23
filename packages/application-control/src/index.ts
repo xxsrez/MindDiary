@@ -5097,6 +5097,14 @@ export class MindRouteService {
   async listMinds(
     actor: ActorContext,
   ): Promise<readonly Readonly<MindRouteDescriptor>[]> {
+    if (this.#routes.withConsistentRead !== undefined) {
+      return this.#routes.withConsistentRead((routes) =>
+        new MindRouteService({
+          routes,
+          host: this.#host,
+          ...(this.#logger === undefined ? {} : { logger: this.#logger }),
+        }).listMinds(actor));
+    }
     const principalId = this.#requireActor(actor);
     const personal = await this.#routes.readPersonalMindProfile(principalId);
     if (personal === null || personal.principalId !== principalId) {

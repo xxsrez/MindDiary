@@ -147,6 +147,46 @@ const ordinaryOwnerRoute = Object.freeze({
   headRevisionId: "revision_research",
 });
 
+test("authenticated home emits correlated privacy-safe performance stages", async () => {
+  const events = [];
+  const dependencies = {
+    applicationOrigin: origin,
+    resolveIdentity: () => ({ kind: "authenticated", actor: registeredActor }),
+    csrf: { issue: () => "csrf-performance", verify: () => true },
+    control: {
+      execute(request) {
+        if (request.operation === "list_minds") return [personalRoute];
+        throw new Error("unexpected control operation");
+      },
+    },
+  };
+  const handler = createProductWebHttpHandler({
+    ...dependencies,
+    performance: { record: (event) => events.push(event) },
+  });
+
+  assert.equal((await handler(new Request(`${origin}/`))).status, 200);
+  assert.deepEqual(
+    events.map(({ operation }) => operation),
+    ["stage_authentication", "stage_application", "stage_total", "home"],
+  );
+  assert.deepEqual(new Set(events.map(({ requestId }) => requestId)), new Set(["request_one"]));
+  assert.equal(events.every(({ durationMs }) => Number.isFinite(durationMs) && durationMs >= 0), true);
+  assert.equal(events.every(({ outcome }) => outcome === "success"), true);
+  assert.deepEqual(Object.keys(events[0]).sort(), [
+    "durationMs",
+    "operation",
+    "outcome",
+    "requestId",
+  ]);
+
+  const failingRecorder = createProductWebHttpHandler({
+    ...dependencies,
+    performance: { record() { throw new Error("telemetry unavailable"); } },
+  });
+  assert.equal((await failingRecorder(new Request(`${origin}/`))).status, 200);
+});
+
 test("internal operator UI/API are read-only, fail closed and record only successful web use", async () => {
   const activity = [];
   const calls = [];

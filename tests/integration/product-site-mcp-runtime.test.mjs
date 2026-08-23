@@ -1018,6 +1018,16 @@ test("empty account reaches a strict starter commit and first useful search/fetc
   ]) {
     assert.ok(performanceOperations.has(operation), `missing performance operation ${operation}`);
   }
+  const webPerformance = telemetry.filter(({ metric, surface, operation }) =>
+    metric === "request_latency_ms" &&
+    surface === "control" &&
+    ["home", "stage_authentication", "stage_application", "stage_total"].includes(operation));
+  assert.deepEqual(
+    webPerformance.map(({ operation }) => operation),
+    ["stage_authentication", "stage_application", "stage_total", "home"],
+  );
+  assert.equal(new Set(webPerformance.map(({ requestId }) => requestId)).size, 1);
+  assert.notEqual(webPerformance[0].requestId, null);
   assert.deepEqual(Object.keys(firstUseful[0]).sort(), [
     "cohort",
     "event",

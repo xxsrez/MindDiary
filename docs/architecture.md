@@ -636,14 +636,14 @@ explicit target Mind. General cross-Mind search/synthesis требует нов�
   foreground request может пройти между bounded recovery operations. Каждый
   recovery stage и весь flight публикуют только closed privacy-safe latency и
   outcome telemetry без identity, URL, content или storage keys.
-- `list_minds` и exact Mind discovery выполняют по одному consistent metadata
-  read-session: один D1 snapshot/tail refresh питает personal binding,
-  membership/public candidates, authorization state, route/revision
-  projections и публикуемый revision-index status. Binding-aware content
-  authorization читает binding и current access из того же refreshed view.
-  Authenticated home и `/minds` получают display name Personal Mind и карточки
-  из этой же `list_minds` projection; отдельный последовательный
-  `get_session` перед списком не выполняется.
+- Content `list_minds`, exact Mind discovery и web/control membership list
+  выполняют по одному consistent metadata read-session: один D1 snapshot/tail
+  refresh питает personal binding, membership/public candidates, authorization
+  state, route/revision projections и публикуемый revision-index status.
+  Binding-aware content authorization читает binding и current access из того
+  же refreshed view. Authenticated home и `/minds` получают display name
+  Personal Mind и карточки из этой же web/control list projection; отдельный
+  последовательный `get_session` перед списком не выполняется.
   Candidate resolution и browse object reads
   имеют bounded concurrency `8`, сохраняют deterministic order и не выдают
   private metadata до authorization. Read use case выполняет initial access

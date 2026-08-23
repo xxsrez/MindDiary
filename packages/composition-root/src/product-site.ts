@@ -1057,6 +1057,23 @@ export async function createProductSiteRuntime(
   const web = createProductWebHttpHandler({
     applicationOrigin: options.publicOrigin,
     csrf,
+    performance: {
+      record(event) {
+        recordRuntimeMetric(telemetry, {
+          kind: "operational",
+          metric: "request_latency_ms",
+          surface: "control",
+          operation: event.operation,
+          outcome: event.outcome,
+          unit: "milliseconds",
+          value: event.durationMs,
+          occurredAtUtc: clock.now(),
+          requestId: event.requestId as never,
+          jobId: null,
+          cohort: null,
+        });
+      },
+    },
     control: {
       async execute(request) {
         const result = await runWithCapturedWork(() => control.execute(request));
@@ -1638,9 +1655,7 @@ export async function createProductSiteRuntime(
             ? "export" as const
             : bundleFileRequest
               ? "get_bundle_file_download" as const
-              : path === "/"
-                ? "home" as const
-                : "request" as const;
+              : "request" as const;
           recordRuntimeMetric(telemetry, {
             kind: "operational",
             metric: "request_latency_ms",

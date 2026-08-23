@@ -231,6 +231,21 @@ export interface ProductWebActivityRecorder {
   ): void | Promise<void>;
 }
 
+export type ProductWebPerformanceOperation =
+  | "home"
+  | "stage_authentication"
+  | "stage_application"
+  | "stage_total";
+
+export interface ProductWebPerformanceRecorder {
+  record(event: {
+    readonly requestId: string;
+    readonly operation: ProductWebPerformanceOperation;
+    readonly durationMs: number;
+    readonly outcome: "success" | "failure";
+  }): void | Promise<void>;
+}
+
 export interface ProductWebHttpHandlerDependencies {
   readonly applicationOrigin: string;
   readonly resolveIdentity: (
@@ -241,6 +256,7 @@ export interface ProductWebHttpHandlerDependencies {
   readonly oauthConnections?: ProductWebOAuthConnections;
   readonly mindBindings?: ProductWebMindBindings;
   readonly activity?: ProductWebActivityRecorder;
+  readonly performance?: ProductWebPerformanceRecorder;
 }
 
 const MUTATION_METHODS = new Set(["POST", "PATCH", "PUT", "DELETE"]);
@@ -359,6 +375,26 @@ function safeRequestId(resolution: ProductSitesIdentityResolution): string {
   return "actor" in resolution && typeof resolution.actor.requestId === "string"
     ? resolution.actor.requestId
     : "request_denied";
+}
+
+function recordWebPerformance(
+  recorder: ProductWebPerformanceRecorder | undefined,
+  event: Parameters<ProductWebPerformanceRecorder["record"]>[0],
+): void {
+  if (recorder === undefined) return;
+  try {
+    const pending = recorder.record(Object.freeze(event));
+    if (
+      typeof pending === "object" &&
+      pending !== null &&
+      "catch" in pending &&
+      typeof pending.catch === "function"
+    ) {
+      void pending.catch(() => undefined);
+    }
+  } catch {
+    // Performance evidence is best-effort and never changes a web outcome.
+  }
 }
 
 function escapeHtml(value: unknown): string {
@@ -1589,6 +1625,12 @@ export function createProductWebHttpHandler(
       detailMatch !== null && !RESERVED_UI_HANDLES.has(detailMatch[1]!)
     );
     if (!isApi && !isUi) return null;
+    const homeStartedAt = url.pathname === "/" &&
+      isUi &&
+      (request.method === "GET" || request.method === "HEAD")
+      ? performance.now()
+      : null;
+    const identityStartedAt = homeStartedAt === null ? null : performance.now();
 
     let identity: ProductSitesIdentityResolution;
     try {
@@ -1597,6 +1639,17 @@ export function createProductWebHttpHandler(
       identity = { kind: "unavailable" };
     }
     const requestId = safeRequestId(identity);
+    if (
+      identityStartedAt !== null &&
+      identity.kind === "authenticated"
+    ) {
+      recordWebPerformance(dependencies.performance, {
+        requestId,
+        operation: "stage_authentication",
+        durationMs: Math.max(0, performance.now() - identityStartedAt),
+        outcome: "success",
+      });
+    }
     if (identity.kind === "denied") {
       if (isOperatorPath) {
         return errorResponse(404, "not_found", requestId);
@@ -1620,6 +1673,9 @@ export function createProductWebHttpHandler(
       if (request.method !== "GET" && request.method !== "HEAD") return errorResponse(405, "method_not_allowed", requestId);
       const uiQuery: Record<string, string> = {};
       url.searchParams.forEach((value, key) => { uiQuery[key] = value; });
+      const applicationStartedAt = homeStartedAt !== null && identity.kind === "authenticated"
+        ? performance.now()
+        : null;
       let response: Response;
       try {
         response = html(await productUiDocument({
@@ -1645,7 +1701,33 @@ export function createProductWebHttpHandler(
       if (response.ok && identity.kind === "authenticated") {
         await dependencies.activity?.recordSuccessful(identity.actor, "web", "page");
       }
-      return request.method === "HEAD" ? new Response(null, response) : response;
+      const finalResponse = request.method === "HEAD"
+        ? new Response(null, response)
+        : response;
+      if (
+        homeStartedAt !== null &&
+        applicationStartedAt !== null &&
+        identity.kind === "authenticated"
+      ) {
+        const outcome = response.ok ? "success" as const : "failure" as const;
+        const completedAt = performance.now();
+        recordWebPerformance(dependencies.performance, {
+          requestId,
+          operation: "stage_application",
+          durationMs: Math.max(0, completedAt - applicationStartedAt),
+          outcome,
+        });
+        const totalDurationMs = Math.max(0, completedAt - homeStartedAt);
+        for (const operation of ["stage_total", "home"] as const) {
+          recordWebPerformance(dependencies.performance, {
+            requestId,
+            operation,
+            durationMs: totalDurationMs,
+            outcome,
+          });
+        }
+      }
+      return finalResponse;
     }
 
     const matched = apiOperation(request.method, url.pathname);

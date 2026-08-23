@@ -1297,6 +1297,10 @@ export interface MindRouteMetadataStore
     HandleRegistry,
     AuthorizationStateReader,
     ResolvedSpaceReader<OrdinaryMindRouteSnapshot> {
+  /** One refreshed, read-only view for a complete route projection. */
+  readonly withConsistentRead?: <Result>(
+    operation: (store: MindRouteMetadataStore) => Promise<Result>,
+  ) => Promise<Result>;
   listActiveMembershipMindIds(
     principalId: PrincipalId,
   ): Promise<readonly SpaceId[]>;

@@ -230,6 +230,39 @@ test("/me and list expose only safe Personal plus accepted membership descriptor
   assert.equal(serialized.includes(outsider.principalId), false);
 });
 
+test("membership list stays inside one adapter-provided consistent read session", async () => {
+  const env = harness();
+  const owner = await createAccount(env, 1, "Session Owner");
+  await createMind(env, owner, "session-notes", "Session Notes");
+  let sessions = 0;
+  let escapedReads = 0;
+  const guarded = new Proxy(env.metadata, {
+    get(target, property, receiver) {
+      if (property === "withConsistentRead") {
+        return async (operation) => {
+          sessions += 1;
+          return operation(env.metadata);
+        };
+      }
+      const selected = Reflect.get(target, property, receiver);
+      if (typeof selected !== "function") return selected;
+      return () => {
+        escapedReads += 1;
+        throw new Error("route list escaped the consistent read session");
+      };
+    },
+  });
+  const routes = new MindRouteService({ routes: guarded, host: HOST });
+
+  const listed = await routes.listMinds(
+    registeredActor(owner.principalId, "request_consistent_list"),
+  );
+
+  assert.equal(sessions, 1);
+  assert.equal(escapedReads, 0);
+  assert.deepEqual(listed.map((mind) => mind.route), ["/me", "/session-notes"]);
+});
+
 test("exact ordinary resolve uses membership or current public/unlisted Reader baseline", async () => {
   const env = harness();
   const owner = await createAccount(env, 1);

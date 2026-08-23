@@ -443,12 +443,14 @@ identity, credentials, headers и URLs не записываются.
 
 Для performance gate `request_latency_ms` дополнительно проецируется по
 закрытым categorical operations: MCP profile (`mcp_modern` или
-`mcp_compatibility`), stage (`authentication`, `application`, `total`), exact
-allowlisted tool name и `home` route. Один opaque request ID связывает эти
-измерения; Mind selector, revision, query, result path и response body в
-dimensions не попадают. Gate использует не менее 20 warm samples на operation,
-фиксирует первый observed request отдельно и fail-closed отклоняет неполную
-profile matrix либо превышение budget.
+`mcp_compatibility`), stage (`stage_authentication`, `stage_application`,
+`stage_total`), exact allowlisted tool name и `home` route. Authenticated home
+публикует `home` и все три stage operation с одним opaque request ID; MCP
+публикует profile, применимые stage и tool operation с request ID того же
+вызова. Mind selector, revision, query, result path и response body в dimensions
+не попадают. Gate использует не менее 20 warm samples на operation, фиксирует
+первый observed request отдельно и fail-closed отклоняет неполную profile matrix
+либо превышение budget.
 
 Operator использует bounded recent logs, exact current deployment и заранее
 зафиксированный compatible rollback target. Incident path сначала ограничивает
