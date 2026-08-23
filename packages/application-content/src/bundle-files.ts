@@ -59,6 +59,14 @@ export interface StageBundleFileRequest {
   readonly expectedSha256?: unknown;
 }
 
+/** Exact safe receipt used to resolve an unknown staging outcome without bytes. */
+export interface ReconcileStageBundleFileRequest
+  extends Omit<StageBundleFileRequest, "bytes"> {
+  readonly mediaType: unknown;
+  readonly sha256: unknown;
+  readonly size: unknown;
+}
+
 /**
  * Streaming counterpart to `StageBundleFileRequest`.  The source adapter owns
  * the producer and the object-store writer owns the temporary bytes; the
@@ -116,6 +124,10 @@ export type StageBundleFileResult =
         | "capacity_fairness_limit"
         | "file_ingress_source_unsupported";
     };
+
+export type ReconcileStageBundleFileResult =
+  | StageBundleFileResult
+  | { readonly kind: "missing" };
 
 const ENCODER = new TextEncoder();
 const CONTROL = /[\u0000-\u001f\u007f]/u;
@@ -254,6 +266,70 @@ function validateStageRequest(
   });
 }
 
+type StageReceipt = Readonly<{
+  mediaType: BundleFileMediaType;
+  sha256: Sha256Digest;
+  size: number;
+}>;
+
+function validateStageReceipt(
+  request: ReconcileStageBundleFileRequest,
+  validated: ValidatedStageRequest,
+): StageReceipt | StageInvalid {
+  if (
+    typeof request.mediaType !== "string" ||
+    !(BUNDLE_FILE_MEDIA_TYPES as readonly string[]).includes(request.mediaType)
+  ) return invalid("media_type_not_allowed");
+  const mediaType = bundleFileMediaType(request.mediaType);
+  if (
+    typeof request.sha256 !== "string" || !SHA256.test(request.sha256)
+  ) return invalid("expected_sha256_mismatch");
+  if (
+    typeof request.size !== "number" || !Number.isSafeInteger(request.size) ||
+    request.size < 0 || request.size > BUNDLE_FILE_LIMITS.maxFileBytes
+  ) return invalid("file_size_limit_exceeded");
+  if (
+    validated.claimedMediaType !== undefined &&
+    mediaType !== bundleFileMediaType(validated.claimedMediaType)
+  ) return invalid("bundle_file_media_mismatch");
+  if (!extensionMatches(validated.displayFilename, mediaType)) {
+    return invalid("bundle_file_media_mismatch");
+  }
+  if (
+    validated.expectedSize !== undefined &&
+    validated.expectedSize !== request.size
+  ) return invalid("expected_size_mismatch");
+  if (
+    validated.expectedSha256 !== undefined &&
+    validated.expectedSha256 !== request.sha256
+  ) return invalid("expected_sha256_mismatch");
+  return Object.freeze({
+    mediaType,
+    sha256: request.sha256 as Sha256Digest,
+    size: request.size,
+  });
+}
+
+function canonicalStageRequestSource(
+  bindingOwnerId: string,
+  validated: ValidatedStageRequest,
+  receipt: StageReceipt,
+): string {
+  return `${JSON.stringify({
+    format: "mind-diary-stage-bundle-file-request-v1",
+    binding_owner_id: bindingOwnerId,
+    write_binding_id: validated.writeBindingId,
+    display_filename: validated.displayFilename,
+    claimed_media_type: validated.claimedMediaType ?? null,
+    expected_size: validated.expectedSize ?? null,
+    expected_sha256: validated.expectedSha256 ?? null,
+    source_kind: validated.sourceKind,
+    media_type: receipt.mediaType,
+    sha256: receipt.sha256,
+    size: receipt.size,
+  })}\n`;
+}
+
 function expiresAt(createdAt: string): StagedBundleFileRecord["expiresAt"] {
   return utcInstant(
     new Date(Date.parse(createdAt) + BUNDLE_FILE_LIMITS.stagedTtlMilliseconds).toISOString(),
@@ -291,6 +367,87 @@ export class BundleFileStagingService {
       ...(dependencies.capacityLimits === undefined
         ? {}
         : { limits: dependencies.capacityLimits }),
+    });
+  }
+
+  /**
+   * Resolves one exact stage namespace from its safe source receipt. Missing
+   * means no completed stage exists; this method never uploads or reserves.
+   */
+  async reconcile(
+    request: ReconcileStageBundleFileRequest,
+  ): Promise<ReconcileStageBundleFileResult> {
+    const validation = validateStageRequest(request);
+    if (validation.kind === "invalid") return validation;
+    const receipt = validateStageReceipt(request, validation);
+    if ("kind" in receipt) return receipt;
+    const { actor, writeBindingId, idempotencyKey } = validation;
+    const bindingOwnerId = actor.authentication.bindingOwnerId;
+    const initial = await this.#authorizer.authorize({
+      actor,
+      spaceId: request.spaceId,
+      capability: "content:write",
+      revisionMode: "head",
+      bindingRequirement: Object.freeze({ kind: "write", writeBindingId }),
+    });
+    if (initial.kind === "denied") {
+      return Object.freeze({ kind: "denied", decision: initial });
+    }
+    const canonicalRequestHash = await this.#objects.calculateSha256(
+      ENCODER.encode(canonicalStageRequestSource(bindingOwnerId, validation, receipt)),
+    );
+    const namespace: Readonly<
+      IdempotencyNamespace & { readonly operation: "stage_bundle_file" }
+    > = Object.freeze({
+      principalId: actor.principalId,
+      bindingOwnerId,
+      spaceId: request.spaceId,
+      operation: "stage_bundle_file",
+      key: idempotencyKey,
+    });
+    const reconciledAt = this.#clock.now();
+    return this.#metadata.runBundleFileStagingTransaction(async (transaction) => {
+      const authorization = await this.#authorizer.reauthorizeInTransaction(
+        {
+          actor,
+          spaceId: request.spaceId,
+          capability: "content:write",
+          revisionMode: "head",
+          bindingRequirement: Object.freeze({ kind: "write", writeBindingId }),
+        },
+        transaction,
+        initial.stamp,
+      );
+      if (authorization.kind === "denied") {
+        return Object.freeze({ kind: "denied", decision: authorization } as const);
+      }
+      const idempotency = await transaction.checkIdempotency({
+        namespace,
+        canonicalRequestHash,
+      });
+      if (idempotency.kind === "missing") return Object.freeze({ kind: "missing" } as const);
+      if (idempotency.kind === "conflict") return invalid("idempotency_conflict");
+      if (
+        idempotency.record.operation !== "stage_bundle_file" ||
+        idempotency.record.result.kind !== "stage_bundle_file"
+      ) return invalid("invalid_idempotency_state");
+      const record = await transaction.readStagedBundleFile(
+        idempotency.record.result.stagedFileId,
+      );
+      if (
+        record === null || record.sourceKind !== validation.sourceKind ||
+        record.displayFilename !== validation.displayFilename ||
+        record.mediaType !== receipt.mediaType || record.sha256 !== receipt.sha256 ||
+        record.size !== receipt.size
+      ) return invalid("invalid_idempotency_state");
+      if (Date.parse(record.expiresAt) <= Date.parse(reconciledAt)) {
+        return invalid("staged_file_expired");
+      }
+      if (record.state === "consumed") return invalid("staged_file_consumed");
+      if (record.state === "rejected") return invalid("staged_file_rejected");
+      return record.state === "verified"
+        ? Object.freeze({ kind: "staged", record, replayed: true } as const)
+        : invalid("invalid_idempotency_state");
     });
   }
 
@@ -350,19 +507,11 @@ export class BundleFileStagingService {
       expectedSha256 !== sha256
     ) return Object.freeze({ kind: "invalid", code: "expected_sha256_mismatch" });
     const canonicalRequestHash = await this.#objects.calculateSha256(
-      ENCODER.encode(`${JSON.stringify({
-        format: "mind-diary-stage-bundle-file-request-v1",
-        binding_owner_id: bindingOwnerId,
-        write_binding_id: writeBindingId,
-        display_filename: displayFilename,
-        claimed_media_type: claimedMediaType ?? null,
-        expected_size: expectedSize ?? null,
-        expected_sha256: expectedSha256 ?? null,
-        source_kind: ingressSourceKind,
-        media_type: detected,
+      ENCODER.encode(canonicalStageRequestSource(bindingOwnerId, validation, {
+        mediaType: detected,
         sha256,
         size: bytes.byteLength,
-      })}\n`),
+      })),
     );
     const namespace: Readonly<
       IdempotencyNamespace & { readonly operation: "stage_bundle_file" }
@@ -758,19 +907,11 @@ export class BundleFileStagingService {
       await upload.complete({ sha256, size });
       temporaryObjectOwned = true;
       const canonicalRequestHash = await this.#objects.calculateSha256(
-        ENCODER.encode(`${JSON.stringify({
-          format: "mind-diary-stage-bundle-file-request-v1",
-          binding_owner_id: bindingOwnerId,
-          write_binding_id: writeBindingId,
-          display_filename: displayFilename,
-          claimed_media_type: claimedMediaType ?? null,
-          expected_size: expectedSize ?? null,
-          expected_sha256: expectedSha256 ?? null,
-          source_kind: ingressSourceKind,
-          media_type: detected,
+        ENCODER.encode(canonicalStageRequestSource(bindingOwnerId, validation, {
+          mediaType: detected,
           sha256,
           size,
-        })}\n`),
+        })),
       );
       const namespace: Readonly<
         IdempotencyNamespace & { readonly operation: "stage_bundle_file" }

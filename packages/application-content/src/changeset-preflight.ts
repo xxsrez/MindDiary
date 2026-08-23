@@ -147,6 +147,7 @@ export type ChangesetValidationCode =
   | "invalid_path"
   | "reserved_path_requires_special_operation"
   | "duplicate_operation_path"
+  | "duplicate_staged_bundle_file_reference"
   | "invalid_utf8"
   | "path_size_limit_exceeded"
   | "file_size_limit_exceeded"
@@ -514,6 +515,7 @@ function validateOperationsAgainstLimits(
 
   const operations: Readonly<ChangesetOperation>[] = [];
   const seenPaths = new Set<string>();
+  const seenStagedFileIds = new Set<StagedBundleFileId>();
   let totalBytes = 0;
   let bundleOperationCount = 0;
   for (let index = 0; index < source.length; index += 1) {
@@ -697,6 +699,14 @@ function validateOperationsAgainstLimits(
       }
       const staged = stagedFileId(candidate.staged_file_id, index, path);
       if (typeof staged !== "string") return staged;
+      if (seenStagedFileIds.has(staged)) {
+        return invalid(
+          "duplicate_staged_bundle_file_reference",
+          "one staged BundleFile ref may be used by only one file operation",
+          { operationIndex: index, path },
+        );
+      }
+      seenStagedFileIds.add(staged);
       totalBytes += ENCODER.encode(staged).byteLength;
       operation = Object.freeze({
         type: "create_bundle_file",
@@ -716,6 +726,14 @@ function validateOperationsAgainstLimits(
       }
       const staged = stagedFileId(candidate.staged_file_id, index, path);
       if (typeof staged !== "string") return staged;
+      if (seenStagedFileIds.has(staged)) {
+        return invalid(
+          "duplicate_staged_bundle_file_reference",
+          "one staged BundleFile ref may be used by only one file operation",
+          { operationIndex: index, path },
+        );
+      }
+      seenStagedFileIds.add(staged);
       const digest = expectedDigest(candidate.expected_sha256, index, path);
       if (typeof digest === "object" && digest !== null && "kind" in digest) return digest;
       totalBytes += ENCODER.encode(staged).byteLength;

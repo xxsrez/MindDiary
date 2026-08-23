@@ -55,6 +55,7 @@ export * from "./bundle-file-references.js";
 export * from "./bundle-file-downloads.js";
 export * from "./generated-artifacts.js";
 export * from "./local-file-companion.js";
+export * from "./file-ingress-coordinator.js";
 
 export const CONTENT_QUERIES = [
   "list_minds",

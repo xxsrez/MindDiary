@@ -222,6 +222,19 @@ test("staging rejects spoofed types and atomically consumes a binding-pinned ref
   });
   assert.deepEqual(spoofed, { kind: "invalid", code: "unsupported_bundle_file_type" });
 
+  const stageReceipt = {
+    actor: env.currentActor,
+    spaceId: MINDS.ordinary.spaceId,
+    writeBindingId: WRITE_BINDING_ID,
+    displayFilename: "diagram.png",
+    claimedMediaType: "image/png",
+    idempotencyKey: "stage-diagram-file",
+    mediaType: "image/png",
+    sha256: await env.objects.calculateSha256(PNG),
+    size: PNG.byteLength,
+  };
+  assert.deepEqual(await env.staging.reconcile(stageReceipt), { kind: "missing" });
+
   const staged = await env.staging.stage({
     actor: env.currentActor,
     spaceId: MINDS.ordinary.spaceId,
@@ -234,6 +247,17 @@ test("staging rejects spoofed types and atomically consumes a binding-pinned ref
   assert.equal(staged.kind, "staged");
   assert.equal(staged.record.state, "verified");
   assert.equal(staged.replayed, false);
+  const reconciledStage = await env.staging.reconcile(stageReceipt);
+  assert.equal(reconciledStage.kind, "staged");
+  assert.equal(reconciledStage.replayed, true);
+  assert.equal(reconciledStage.record.stagedFileId, staged.record.stagedFileId);
+  assert.deepEqual(
+    await env.staging.reconcile({
+      ...stageReceipt,
+      sha256: `sha256:${"0".repeat(64)}`,
+    }),
+    { kind: "invalid", code: "idempotency_conflict" },
+  );
 
   const replayedStage = await env.staging.stage({
     actor: env.currentActor,
@@ -258,6 +282,45 @@ test("staging rejects spoofed types and atomically consumes a binding-pinned ref
     idempotencyKey: "stage-diagram-file",
   });
   assert.deepEqual(changedStage, { kind: "invalid", code: "idempotency_conflict" });
+
+  const duplicateRefCommit = new ChangesetCommitService({
+    authorizer: env.authorizer,
+    metadata: env.metadata,
+    revisions: env.revisions,
+    objects: env.objects,
+    clock: { now: () => LATER },
+    revisionIds: { nextRevisionId: () => "revision_duplicate_staged_ref" },
+  });
+  const duplicateRef = await duplicateRefCommit.commit({
+    actor: env.currentActor,
+    spaceId: MINDS.ordinary.spaceId,
+    writeBindingId: WRITE_BINDING_ID,
+    expectedRevisionId: REVISIONS.initial.revisionId,
+    idempotencyKey: "commit-duplicate-staged-ref",
+    summary: "Must reject one staged ref under two paths",
+    operations: [
+      {
+        type: "create_bundle_file",
+        path: "assets/diagram-a.png",
+        staged_file_id: staged.record.stagedFileId,
+      },
+      {
+        type: "create_bundle_file",
+        path: "assets/diagram-b.png",
+        staged_file_id: staged.record.stagedFileId,
+      },
+    ],
+  });
+  assert.equal(duplicateRef.kind, "invalid");
+  assert.equal(
+    duplicateRef.error.code,
+    "duplicate_staged_bundle_file_reference",
+  );
+  assert.equal(await env.metadata.readHead(MINDS.ordinary.spaceId), REVISIONS.initial.revisionId);
+  assert.equal(
+    (await env.metadata.readStagedBundleFile(staged.record.stagedFileId)).state,
+    "verified",
+  );
 
   const quotaLimited = new ChangesetCommitService({
     authorizer: env.authorizer,

@@ -90,6 +90,11 @@ export type CommitChangesetResult =
   | { readonly kind: "idempotency_conflict" }
   | NonReadyPreflightResult;
 
+export type ReconcileChangesetResult =
+  | { readonly kind: "missing" }
+  | { readonly kind: "idempotency_conflict" }
+  | Extract<CommitChangesetResult, { readonly kind: "committed" | "denied" | "invalid" }>;
+
 export type ChangesetCommitFailureCode =
   | "invalid_actor"
   | "invalid_idempotency_result"
@@ -280,6 +285,64 @@ export class ChangesetCommitService {
       clock: dependencies.clock,
       limits: this.#preflightLimits,
       stagedBundleFiles: dependencies.metadata,
+    });
+  }
+
+  /**
+   * Read-only unknown-outcome resolution for an exact commit payload.  It
+   * performs the same current authorization and canonical-payload checks as
+   * commit(), but never preflights, reserves capacity, writes objects or moves
+   * HEAD when the idempotency namespace is still missing.
+   */
+  async reconcile(request: CommitChangesetRequest): Promise<ReconcileChangesetResult> {
+    const initialAuthorization = await this.#authorizer.authorize({
+      actor: request.actor,
+      spaceId: request.spaceId,
+      capability: "content:write",
+      revisionMode: "head",
+      ...writeBindingRequirement(request.writeBindingId, request.automaticCapture),
+    });
+    if (initialAuthorization.kind === "denied") {
+      return Object.freeze({ kind: "denied", decision: initialAuthorization });
+    }
+    if (request.actor.kind !== "registered_principal") {
+      throw new ChangesetCommitFailure(
+        "invalid_actor",
+        "an authorized content changeset must belong to a registered principal",
+      );
+    }
+    const validated = this.#validatePayload(request);
+    if ("kind" in validated) return validated;
+    const canonicalRequestHash = await this.#objects.calculateSha256(
+      ENCODER.encode(canonicalRequestSource(request, validated)),
+    );
+    const namespace: Readonly<
+      IdempotencyNamespace & { readonly operation: "commit_changeset" }
+    > = Object.freeze({
+      principalId: request.actor.principalId,
+      spaceId: request.spaceId,
+      operation: "commit_changeset",
+      key: validated.idempotencyKey,
+    });
+    return this.#metadata.runContentCommitTransaction(async (transaction) => {
+      const authorization = await this.#authorizer.reauthorizeInTransaction(
+        {
+          actor: request.actor,
+          spaceId: request.spaceId,
+          capability: "content:write",
+          revisionMode: "head",
+          ...writeBindingRequirement(
+            validated.writeBindingId,
+            validated.automaticCapture,
+          ),
+        },
+        transaction,
+        initialAuthorization.stamp,
+      );
+      if (authorization.kind === "denied") {
+        return Object.freeze({ kind: "denied", decision: authorization });
+      }
+      return this.#resolveIdempotency(transaction, namespace, canonicalRequestHash);
     });
   }
 

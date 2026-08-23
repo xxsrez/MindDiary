@@ -6,9 +6,10 @@
 local candidate и требуют отдельного exact evidence; MD-272 добавляет
 local-only companion implementation для `local_path` и
 `workspace/generated_artifact`. Native-file UAT остаётся MD-250, hosted
-upload-intent/producer evidence и connector/coordinator adapters остаются
-отдельными claims. Этот документ не добавляет новый hosted endpoint или
-transport.
+upload-intent/producer evidence и provider-specific connector adapter остаются
+отдельными claims. MD-274 добавляет repository-local `FileIngressCoordinator`,
+explicit stage/commit reconcile и mixed-source atomic integration; это не
+добавляет новый hosted endpoint или transport.
 
 ## Цель и граница
 
@@ -98,7 +99,8 @@ successful commit adds the canonical `kind: opaque` entry.
 
 ## Source capability matrix
 
-`Status` относится к exact candidate `00a4676a840f23fd1cf67998f2dbcc0f29428f5a`.
+`Status` относится к repository candidate, exact SHA которого фиксируется в
+Task/release evidence после commit.
 `implemented_local` означает repository code/tests only; `UAT pending` не
 является hosted capability. `proposal` означает contract slot, а не
 реализованный fallback.
@@ -170,14 +172,19 @@ members and ZIP extraction remain denied by the BundleFile policy.
   `staged_file_ref`/expiry; a changed source, snapshot, metadata or digest
   returns `idempotency_conflict`.
 - An unknown stage or upload-intent outcome is reconciled by repeating the
-  exact operation with the same key and payload. The client does not change
-  source, restage with a new key or infer failure from a network timeout.
+  exact safe receipt: current actor/binding, source kind, idempotency key,
+  canonical metadata, digest and size. `reconcileStage` never uploads bytes or
+  reserves capacity; it returns the existing verified ref, `missing`, a stable
+  state error or `idempotency_conflict`. The client does not change source,
+  restage with a new key or infer failure from a network timeout.
 - Upload intents are one-use. Exact replay of the same idempotency key may
   recover the same intent before expiry; a changed payload or second consumer
   returns `file_ingress_intent_conflict`.
 - A successful `commit_changeset` consumes every referenced staged ref in its
   single HEAD transaction. An unknown commit outcome is reconciled with the
-  exact commit key/payload; replay returns the same revision. Stale HEAD,
+  exact commit key/payload through `reconcileCommit`; replay returns the same
+  immutable revision and `missing` performs no preflight, reservation, object
+  write or HEAD mutation. Stale HEAD,
   invalid ref, quota or full-bundle failure publishes no reachable partial
   revision and does not consume refs.
 - Expiry/rejection cleanup is bounded and idempotent. Unreachable bytes remain
@@ -218,6 +225,7 @@ Stable errors are split by boundary:
 | Upload intent expired/consumed or changed | `file_ingress_intent_expired` / `file_ingress_intent_conflict` | Create a new intent/key for a new operation; never replay changed bytes |
 | Size/MIME/path/digest/static policy fails | Existing `bundle_file_*`, `unsupported_bundle_file_type`, `bundle_file_media_mismatch`, `invalid_bundle_file_name` | No canonical object or revision is published |
 | Stage/commit idempotency payload changed | `idempotency_conflict` | Re-read/reconcile; new key only for a genuinely new operation |
+| One staged ref is used by more than one file operation | `duplicate_staged_bundle_file_reference` | Build a changeset with one distinct verified ref per target path |
 | Binding generation or HEAD changed | `staged_file_binding_stale` / `revision_conflict` | Re-read current binding/HEAD and build a new confirmed operation |
 
 The first two generic ingress codes and intent codes are contract-level additions
@@ -245,7 +253,10 @@ This contract preserves the old boundaries:
 - `session_attachment` native stage, bounded inline staging, server-generated
   streaming staging and local companion are repository-local capabilities. None
   is advertised as hosted MCP/native support without exact client/provider/UAT
-  evidence; connector object remains contract-only/not-available.
+  evidence. `FileIngressCoordinator` dispatches only explicitly enabled
+  adapters, reports unavailable rows without fallback and delegates every
+  mixed-source commit to the existing atomic HEAD-CAS transaction. The
+  provider-specific connector implementation remains not-available.
 - Browser raw-content API, provider-wide connector sync, resumable non-Markdown
   upload, preview/OCR/transcription, archive import/extraction and production
   antivirus/CDR are not implied by this source matrix.
@@ -260,8 +271,8 @@ Open questions intentionally left for child implementation decisions:
 - Which connector object types and provider-specific ownership proofs can be
   supported, and how are their bounded fetch receipts represented (future
   connector work)?
-- How does MD-274 coordinate mixed source refs, reservation accounting and
-  unknown-outcome reconciliation without changing HEAD CAS?
+- Which protocol tools, if any, should expose the repository-local capability
+  and reconcile operations after hosted adapters have exact client evidence?
 - Which exact client/profile capability receipts are required before a source
   can move from `proposal`/`not-available` to `implemented` or UAT-supported?
 

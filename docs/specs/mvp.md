@@ -140,6 +140,10 @@ capability matrix, не обещание hosted generated или native fallback
   portable identity. Unsupported source/client возвращает typed capability
   error, а не silent base64/URL/path fallback. См. [единый file-ingress
   contract](file-ingress.md).
+- Repository-local coordinator dispatches only explicitly enabled source
+  adapters, reconciles exact safe stage/commit receipts without creating a
+  duplicate effect and uses the same atomic HEAD-CAS commit for mixed refs plus
+  Markdown. This does not claim a hosted connector or client capability.
 - Проверка OKF 0.2 conformance отдельно от quality warnings.
 - Неизвестные OKF types/fields сохраняются при read-modify-write и export.
 - Legacy 0.1 import/migration отложен и в будущем потребует explicit policy без

@@ -224,10 +224,19 @@ test("success stores a typed result and exact replay survives a later HEAD move"
     title: "Idempotent",
   });
 
+  assert.deepEqual(await service.reconcile(originalRequest), { kind: "missing" });
+
   const original = await service.commit(originalRequest);
   assert.equal(original.kind, "committed");
   assert.equal(original.replayed, false);
   assert.equal(original.envelope.revision.revisionId, "revision_idempotency_original");
+  const reconciled = await service.reconcile(structuredClone(originalRequest));
+  assert.equal(reconciled.kind, "committed");
+  assert.equal(reconciled.replayed, true);
+  assert.equal(
+    reconciled.envelope.revision.revisionId,
+    "revision_idempotency_original",
+  );
 
   const advanced = await env.coordinator.commit({
     spaceId: SPACE_A,

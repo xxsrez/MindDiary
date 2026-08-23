@@ -10,6 +10,8 @@ import {
   BundleFileStagingService,
   CanonicalRevisionCoordinator,
   ChangesetCommitService,
+  FileIngressCoordinator,
+  GeneratedArtifactIngressService,
   LocalFileCompanion,
   MindBindingContentAuthorizer,
   createLocalCompanionStagingTransport,
@@ -175,59 +177,149 @@ test("local disk, workspace bytes and native session ref share one atomic commit
       transport,
       authorize: async () => ({ kind: "allowed" }),
     });
+    const generatedIngress = new GeneratedArtifactIngressService({
+      staging: env.staging,
+    });
+    const ingress = new FileIngressCoordinator({
+      staging: env.staging,
+      commits: env.commits,
+      adapters: {
+        session_attachment: {
+          stage: (payload) => env.staging.stage({
+            ...payload,
+            sourceKind: "session_attachment",
+          }),
+        },
+        connector_object: {
+          stage: (payload) => env.staging.stage({
+            ...payload,
+            sourceKind: "connector_object",
+          }),
+        },
+        local_path: {
+          stage: (payload) => companion.uploadLocalFile({
+            ...payload,
+            sourceKind: "local_path",
+          }),
+        },
+        "workspace/generated_artifact": {
+          stage: (payload) => companion.uploadLocalFile({
+            ...payload,
+            sourceKind: "workspace/generated_artifact",
+          }),
+        },
+        bounded_in_memory: {
+          stage: (payload) => generatedIngress.stageBoundedInMemory(payload),
+        },
+        server_generated: {
+          stage: (payload) => generatedIngress.stageServerGenerated(payload),
+        },
+      },
+    });
+    assert.deepEqual(
+      ingress.capabilities().map(({ sourceKind, status }) => [sourceKind, status]),
+      [
+        ["session_attachment", "available_local"],
+        ["local_path", "available_local"],
+        ["workspace/generated_artifact", "available_local"],
+        ["connector_object", "available_local"],
+        ["bounded_in_memory", "available_local"],
+        ["server_generated", "available_local"],
+      ],
+    );
 
-    const local = await companion.uploadLocalFile({
-      actor: env.currentActor,
-      spaceId: MINDS.ordinary.spaceId,
-      writeBindingId: WRITE_BINDING_ID,
-      path: localPath,
-      idempotencyKey: "local-path-stage",
-      claimedMediaType: "image/png",
+    const local = await ingress.stage({
+      sourceKind: "local_path",
+      payload: {
+        actor: env.currentActor,
+        spaceId: MINDS.ordinary.spaceId,
+        writeBindingId: WRITE_BINDING_ID,
+        path: localPath,
+        idempotencyKey: "local-path-stage",
+        claimedMediaType: "image/png",
+      },
     });
     assert.equal(local.kind, "staged");
-    const localReplay = await companion.uploadLocalFile({
-      actor: env.currentActor,
-      spaceId: MINDS.ordinary.spaceId,
-      writeBindingId: WRITE_BINDING_ID,
-      path: localPath,
-      idempotencyKey: "local-path-stage",
-      claimedMediaType: "image/png",
+    const localReplay = await ingress.stage({
+      sourceKind: "local_path",
+      payload: {
+        actor: env.currentActor,
+        spaceId: MINDS.ordinary.spaceId,
+        writeBindingId: WRITE_BINDING_ID,
+        path: localPath,
+        idempotencyKey: "local-path-stage",
+        claimedMediaType: "image/png",
+      },
     });
     assert.equal(localReplay.kind, "staged");
     assert.equal(localReplay.replayed, true);
     assert.equal(localReplay.record.stagedFileId, local.record.stagedFileId);
-    const generated = await companion.uploadLocalFile({
-      actor: env.currentActor,
-      spaceId: MINDS.ordinary.spaceId,
-      writeBindingId: WRITE_BINDING_ID,
-      path: workspacePath,
+    const generated = await ingress.stage({
       sourceKind: "workspace/generated_artifact",
-      idempotencyKey: "workspace-stage",
-      claimedMediaType: "image/png",
+      payload: {
+        actor: env.currentActor,
+        spaceId: MINDS.ordinary.spaceId,
+        writeBindingId: WRITE_BINDING_ID,
+        path: workspacePath,
+        idempotencyKey: "workspace-stage",
+        claimedMediaType: "image/png",
+      },
     });
     assert.equal(generated.kind, "staged");
-    const bytes = await companion.uploadBytes({
-      actor: env.currentActor,
-      spaceId: MINDS.ordinary.spaceId,
-      writeBindingId: WRITE_BINDING_ID,
-      bytes: PDF,
-      displayFilename: "session.pdf",
-      claimedMediaType: "application/pdf",
-      idempotencyKey: "generated-bytes-stage",
+    const bytes = await ingress.stage({
+      sourceKind: "bounded_in_memory",
+      payload: {
+        actor: env.currentActor,
+        spaceId: MINDS.ordinary.spaceId,
+        writeBindingId: WRITE_BINDING_ID,
+        bytes: PDF,
+        displayFilename: "bounded.pdf",
+        claimedMediaType: "application/pdf",
+        idempotencyKey: "generated-bytes-stage",
+      },
     });
     assert.equal(bytes.kind, "staged");
-    const session = await env.staging.stage({
-      actor: env.currentActor,
-      spaceId: MINDS.ordinary.spaceId,
-      writeBindingId: WRITE_BINDING_ID,
-      bytes: PNG,
-      displayFilename: "session.png",
-      claimedMediaType: "image/png",
-      idempotencyKey: "native-session-stage",
+    const session = await ingress.stage({
+      sourceKind: "session_attachment",
+      payload: {
+        actor: env.currentActor,
+        spaceId: MINDS.ordinary.spaceId,
+        writeBindingId: WRITE_BINDING_ID,
+        bytes: PNG,
+        displayFilename: "session.png",
+        claimedMediaType: "image/png",
+        idempotencyKey: "native-session-stage",
+      },
     });
     assert.equal(session.kind, "staged");
+    const connector = await ingress.stage({
+      sourceKind: "connector_object",
+      payload: {
+        actor: env.currentActor,
+        spaceId: MINDS.ordinary.spaceId,
+        writeBindingId: WRITE_BINDING_ID,
+        bytes: GENERATED_PNG,
+        displayFilename: "connector.png",
+        claimedMediaType: "image/png",
+        idempotencyKey: "connector-stage",
+      },
+    });
+    assert.equal(connector.kind, "staged");
+    const serverGenerated = await ingress.stage({
+      sourceKind: "server_generated",
+      payload: {
+        actor: env.currentActor,
+        spaceId: MINDS.ordinary.spaceId,
+        writeBindingId: WRITE_BINDING_ID,
+        bytes: GENERATED_PNG,
+        displayFilename: "server-generated.png",
+        claimedMediaType: "image/png",
+        idempotencyKey: "server-generated-stage",
+      },
+    });
+    assert.equal(serverGenerated.kind, "staged");
 
-    const committed = await env.commits.commit({
+    const commitRequest = {
       actor: env.currentActor,
       spaceId: MINDS.ordinary.spaceId,
       writeBindingId: WRITE_BINDING_ID,
@@ -240,17 +332,30 @@ test("local disk, workspace bytes and native session ref share one atomic commit
         { type: "create_bundle_file", path: "assets/generated.png", staged_file_id: generated.record.stagedFileId },
         { type: "create_bundle_file", path: "assets/generated.pdf", staged_file_id: bytes.record.stagedFileId },
         { type: "create_bundle_file", path: "assets/session.png", staged_file_id: session.record.stagedFileId },
+        { type: "create_bundle_file", path: "assets/connector.png", staged_file_id: connector.record.stagedFileId },
+        { type: "create_bundle_file", path: "assets/server-generated.png", staged_file_id: serverGenerated.record.stagedFileId },
       ],
-    });
+    };
+    assert.deepEqual(await ingress.reconcileCommit(commitRequest), { kind: "missing" });
+    const committed = await ingress.commit(commitRequest);
     assert.equal(committed.kind, "committed");
+    const reconciledCommit = await ingress.reconcileCommit(commitRequest);
+    assert.equal(reconciledCommit.kind, "committed");
+    assert.equal(reconciledCommit.replayed, true);
+    assert.equal(
+      reconciledCommit.envelope.revision.revisionId,
+      committed.envelope.revision.revisionId,
+    );
     assert.equal(committed.envelope.manifest.format, REVISION_MANIFEST_FORMAT_V3);
     const opaque = committed.envelope.manifest.entries.filter((entry) => entry.kind === "opaque");
-    assert.equal(opaque.length, 4);
+    assert.equal(opaque.length, 6);
     const expected = new Map([
       ["assets/local.png", PNG],
       ["assets/generated.png", GENERATED_PNG],
       ["assets/generated.pdf", PDF],
       ["assets/session.png", PNG],
+      ["assets/connector.png", GENERATED_PNG],
+      ["assets/server-generated.png", GENERATED_PNG],
     ]);
     for (const entry of opaque) {
       const exact = await env.objects.getBundleFile(MINDS.ordinary.spaceId, entry.sha256);
@@ -260,10 +365,12 @@ test("local disk, workspace bytes and native session ref share one atomic commit
       assert.equal(exact.mediaType, entry.mediaType);
     }
     assert.deepEqual(
-      [local, generated, bytes, session].map((result) => result.record.state),
-      ["verified", "verified", "verified", "verified"],
+      [local, generated, bytes, session, connector, serverGenerated].map(
+        (result) => result.record.state,
+      ),
+      ["verified", "verified", "verified", "verified", "verified", "verified"],
     );
-    for (const result of [local, generated, bytes, session]) {
+    for (const result of [local, generated, bytes, session, connector, serverGenerated]) {
       assert.equal((await env.metadata.readStagedBundleFile(result.record.stagedFileId)).state, "consumed");
     }
   } finally {
