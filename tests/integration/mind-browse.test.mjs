@@ -489,7 +489,23 @@ test("BundleFile listing is metadata-only, paginated, and pinned to an exact his
   }]);
   assert.ok(first.nextCursor);
   assert.equal(env.observedObjects.reads(), oldMarkdown.length);
-  assert.doesNotMatch(JSON.stringify(first), /download|url|bytes/iu);
+  assert.deepEqual(Object.keys(first).sort(), [
+    "diagnostics",
+    "files",
+    "mind",
+    "nextCursor",
+    "resolvedRevision",
+  ]);
+  assert.deepEqual(Object.keys(first.files[0]).sort(), [
+    "inlineEligible",
+    "kind",
+    "mediaType",
+    "path",
+    "referenceStatus",
+    "revisionId",
+    "sha256",
+    "size",
+  ]);
 
   const currentRevision = await commitMixedFiles(
     env,
