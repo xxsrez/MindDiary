@@ -206,6 +206,34 @@ function harness() {
     history: { async listRevisions() { return {}; }, async getRevision() { return {}; } },
     validation: { async validateMind() { return {}; } },
     commits: { async commit() { return { kind: "invalid" }; } },
+    ingress: {
+      capabilities() {
+        return Object.freeze([
+          Object.freeze({
+            sourceKind: "session_attachment",
+            status: "available_hosted",
+            transport: "native_file_parameter",
+            maxBytes: 4_194_304,
+            fallback: "none",
+          }),
+          ...[
+            ["local_path", "local_companion"],
+            ["workspace/generated_artifact", "local_companion"],
+            ["connector_object", "authorized_connector"],
+            ["bounded_in_memory", "bounded_bytes"],
+            ["server_generated", "producer_stream"],
+          ].map(([sourceKind, transport]) => Object.freeze({
+            sourceKind,
+            status: "not_available",
+            transport,
+            maxBytes: 4_194_304,
+            fallback: "none",
+          })),
+        ]);
+      },
+      async reconcileStage() { return Object.freeze({ kind: "missing" }); },
+      async reconcileCommit() { return Object.freeze({ kind: "missing" }); },
+    },
     capture: { async capture() { return { kind: "capture_disabled" }; } },
     exports: { async start() { return { kind: "denied" }; }, async getStatus() { return { kind: "not_found" }; } },
   });
@@ -273,13 +301,13 @@ async function modernCall(env, name, args, token = "write-token", id = 1) {
   ));
 }
 
-async function compatibilityCall(env, name, args, id = 1) {
+async function compatibilityCall(env, name, args, id = 1, token = "write-token") {
   return result(await env.sendCompatibility({
     jsonrpc: "2.0",
     id,
     method: "tools/call",
     params: { name, arguments: args },
-  }));
+  }, token));
 }
 
 test("publishes strict binding schemas and truthful service-state annotations", () => {
@@ -353,6 +381,72 @@ test("modern and compatibility profiles share multiple-read/single-write applica
     params: {},
   }));
   assert.deepEqual(legacyList.tools.map(({ name }) => name), MCP_CONTENT_TOOLS);
+
+  for (const name of [
+    "get_file_ingress_capabilities",
+    "reconcile_file_stage",
+    "reconcile_changeset",
+  ]) {
+    const canonical = MCP_TOOL_DEFINITIONS.find((tool) => tool.name === name);
+    const modernDefinition = modernList.tools.find((tool) => tool.name === name);
+    const legacyDefinition = legacyList.tools.find((tool) => tool.name === name);
+    assert.deepEqual(modernDefinition.inputSchema, canonical.inputSchema);
+    assert.deepEqual(modernDefinition.outputSchema, canonical.outputSchema);
+    assert.deepEqual(modernDefinition.annotations, canonical.annotations);
+    assert.deepEqual(legacyDefinition.inputSchema, canonical.inputSchema);
+    assert.deepEqual(legacyDefinition.outputSchema, canonical.outputSchema);
+    assert.deepEqual(legacyDefinition.annotations, canonical.annotations);
+  }
+
+  const modernCapabilities = await modernCall(
+    env,
+    "get_file_ingress_capabilities",
+    {},
+    "write-token",
+    11,
+  );
+  const legacyCapabilities = await compatibilityCall(
+    env,
+    "get_file_ingress_capabilities",
+    {},
+    12,
+  );
+  assert.equal(modernCapabilities.isError, false);
+  assert.deepEqual(
+    legacyCapabilities.structuredContent,
+    modernCapabilities.structuredContent,
+  );
+  assert.deepEqual(
+    modernCapabilities.structuredContent.data.sources.map(
+      ({ source_kind, status }) => [source_kind, status],
+    ),
+    [
+      ["session_attachment", "available_hosted"],
+      ["local_path", "not_available"],
+      ["workspace/generated_artifact", "not_available"],
+      ["connector_object", "not_available"],
+      ["bounded_in_memory", "not_available"],
+      ["server_generated", "not_available"],
+    ],
+  );
+
+  for (const [id, name] of [
+    [13, "reconcile_file_stage"],
+    [14, "reconcile_changeset"],
+  ]) {
+    const modernDenied = await modernCall(env, name, {}, "read-token", id);
+    const legacyDenied = await compatibilityCall(
+      env,
+      name,
+      {},
+      id + 100,
+      "read-token",
+    );
+    assert.equal(modernDenied.structuredContent.error.code, "insufficient_scope");
+    assert.equal(legacyDenied.structuredContent.error.code, "insufficient_scope");
+    assert.equal(modernDenied.structuredContent.error.retryable, false);
+    assert.equal(legacyDenied.structuredContent.error.retryable, false);
+  }
 
   const empty = await modernCall(env, "get_mind_bindings", {}, "write-token", 2);
   assert.equal(empty.structuredContent.data.binding_version, 0);

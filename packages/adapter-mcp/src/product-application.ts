@@ -4,6 +4,7 @@ import type {
   BundleFileDownloadService,
   ChangesetCommitService,
   ExportJobApplicationService,
+  FileIngressCoordinator,
   MindBindingApplicationService,
   MindBrowseService,
   MindDiscoveryService,
@@ -42,6 +43,10 @@ export interface ProductMcpApplicationDependencies {
   >;
   readonly commits: Pick<ChangesetCommitService, "commit">;
   readonly staging?: Pick<BundleFileStagingService, "stage">;
+  readonly ingress: Pick<
+    FileIngressCoordinator,
+    "capabilities" | "reconcileStage" | "reconcileCommit"
+  >;
   readonly bundleFileDownloads: Pick<BundleFileDownloadService, "issue">;
   readonly nativeFiles?: NativeFileTransport;
   readonly capture: Pick<AutomaticCaptureService, "capture">;
@@ -135,6 +140,22 @@ function idempotencyKeyValue(value: unknown): value is string {
 }
 
 const SHA256 = /^sha256:[0-9a-f]{64}$/u;
+const FILE_INGRESS_SOURCE_KINDS = new Set([
+  "session_attachment",
+  "local_path",
+  "workspace/generated_artifact",
+  "connector_object",
+  "bounded_in_memory",
+  "server_generated",
+]);
+const FILE_INGRESS_MEDIA_TYPES = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/gif",
+  "image/webp",
+  "application/pdf",
+  "application/zip",
+]);
 
 function validStageBundleFileInput(input: Readonly<Record<string, unknown>>): boolean {
   const allowed = new Set([
@@ -152,6 +173,43 @@ function validStageBundleFileInput(input: Readonly<Record<string, unknown>>): bo
     input.file !== null && typeof input.file === "object" && !Array.isArray(input.file) &&
     idempotencyKeyValue(input.idempotencyKey) &&
     (input.displayFilename === undefined || stringValue(input.displayFilename) !== null) &&
+    (input.expectedSize === undefined ||
+      (Number.isSafeInteger(input.expectedSize) &&
+        (input.expectedSize as number) >= 0 &&
+        (input.expectedSize as number) <= 67_108_864)) &&
+    (input.expectedSha256 === undefined ||
+      (typeof input.expectedSha256 === "string" && SHA256.test(input.expectedSha256)));
+}
+
+function validReconcileFileStageInput(input: Readonly<Record<string, unknown>>): boolean {
+  const allowed = new Set([
+    "mind",
+    "writeBindingId",
+    "sourceKind",
+    "displayFilename",
+    "claimedMediaType",
+    "mediaType",
+    "sha256",
+    "size",
+    "idempotencyKey",
+    "expectedSize",
+    "expectedSha256",
+  ]);
+  return Object.keys(input).every((key) => allowed.has(key)) &&
+    stringValue(input.mind) !== null &&
+    stringValue(input.writeBindingId) !== null &&
+    typeof input.sourceKind === "string" &&
+    FILE_INGRESS_SOURCE_KINDS.has(input.sourceKind) &&
+    stringValue(input.displayFilename) !== null &&
+    (input.claimedMediaType === undefined ||
+      (typeof input.claimedMediaType === "string" &&
+        FILE_INGRESS_MEDIA_TYPES.has(input.claimedMediaType))) &&
+    typeof input.mediaType === "string" &&
+    FILE_INGRESS_MEDIA_TYPES.has(input.mediaType) &&
+    typeof input.sha256 === "string" && SHA256.test(input.sha256) &&
+    Number.isSafeInteger(input.size) && (input.size as number) >= 0 &&
+    (input.size as number) <= 67_108_864 &&
+    idempotencyKeyValue(input.idempotencyKey) &&
     (input.expectedSize === undefined ||
       (Number.isSafeInteger(input.expectedSize) &&
         (input.expectedSize as number) >= 0 &&
@@ -307,6 +365,7 @@ export class ProductMcpContentApplication implements McpContentApplication {
       request.name === "fetch" ||
       request.name === "get_export_status" ||
       request.name === "get_mind_bindings" ||
+      request.name === "get_file_ingress_capabilities" ||
       request.name === "set_read_mind_binding" ||
       request.name === "set_write_mind_binding"
     ) {
@@ -325,8 +384,10 @@ export class ProductMcpContentApplication implements McpContentApplication {
       );
       const required =
         request.name === "commit_changeset" ||
+          request.name === "reconcile_changeset" ||
           request.name === "capture_knowledge" ||
-          request.name === "stage_bundle_file"
+          request.name === "stage_bundle_file" ||
+          request.name === "reconcile_file_stage"
           ? "commit"
           : request.name === "start_export"
             ? "export"
@@ -355,6 +416,19 @@ export class ProductMcpContentApplication implements McpContentApplication {
         return snakeOutput(await this.#dependencies.discovery.resolveMind(request.actor, input.handle));
       case "get_mind_info":
         return snakeOutput(await this.#dependencies.discovery.getMindInfo(request.actor, input.mind, input.revisionSelector));
+      case "get_file_ingress_capabilities":
+        if (!hasExactKeys(input, [])) {
+          return createMcpToolErrorResult(
+            request.actor.requestId,
+            "invalid_request",
+            "File ingress capability arguments must be empty.",
+            false,
+          );
+        }
+        return createMcpToolSuccessResult(
+          snakeOutput({ sources: this.#dependencies.ingress.capabilities() }),
+          "Read the exact deployed file ingress capability matrix.",
+        );
       case "get_mind_bindings": {
         if (!hasExactKeys(input, [])) {
           return this.#bindingError(request.actor.requestId, "invalid_request");
@@ -658,6 +732,88 @@ export class ProductMcpContentApplication implements McpContentApplication {
             : "Staged one verified BundleFile.",
         );
       }
+      case "reconcile_file_stage": {
+        if (!validReconcileFileStageInput(input)) {
+          return createMcpToolErrorResult(
+            request.actor.requestId,
+            "invalid_request",
+            "The file stage reconciliation arguments are invalid.",
+            false,
+          );
+        }
+        const info = await this.#dependencies.discovery.getMindInfo(
+          request.actor,
+          input.mind,
+          { kind: "head" },
+        );
+        if (!info.contentCapabilities.includes("commit")) {
+          return createMcpToolErrorResult(
+            request.actor.requestId,
+            "forbidden",
+            "The requested operation is not allowed.",
+            false,
+          );
+        }
+        const reconciled = await this.#dependencies.ingress.reconcileStage({
+          actor: request.actor,
+          spaceId: info.mind.mindId,
+          writeBindingId: input.writeBindingId,
+          sourceKind: input.sourceKind,
+          displayFilename: input.displayFilename,
+          claimedMediaType: input.claimedMediaType,
+          mediaType: input.mediaType,
+          sha256: input.sha256,
+          size: input.size,
+          idempotencyKey: input.idempotencyKey,
+          expectedSize: input.expectedSize,
+          expectedSha256: input.expectedSha256,
+        });
+        if (reconciled.kind === "missing") {
+          return createMcpToolSuccessResult(
+            { status: "missing" },
+            "No completed file stage exists for the exact receipt.",
+          );
+        }
+        if (reconciled.kind === "denied") {
+          const decision = reconciled.decision as Readonly<{
+            code?: unknown;
+            retryable?: unknown;
+          }>;
+          return createMcpToolErrorResult(
+            request.actor.requestId,
+            typeof decision.code === "string" ? decision.code : "forbidden",
+            "The requested operation is not allowed.",
+            decision.retryable === true,
+          );
+        }
+        if (reconciled.kind === "invalid") {
+          const code = stageFailureCode(reconciled.code);
+          return createMcpToolErrorResult(
+            request.actor.requestId,
+            code,
+            code === "idempotency_conflict"
+              ? "The idempotency key is bound to a different file receipt."
+              : "The file stage outcome could not be reconciled.",
+            false,
+          );
+        }
+        return createMcpToolSuccessResult(
+          snakeOutput({
+            status: "staged",
+            stagedFile: {
+              stagedFileRef: reconciled.record.stagedFileId,
+              state: reconciled.record.state,
+              displayFilename: reconciled.record.displayFilename,
+              mediaType: reconciled.record.mediaType,
+              sha256: reconciled.record.sha256,
+              size: reconciled.record.size,
+              expiresAt: reconciled.record.expiresAt,
+              replayed: true,
+            },
+          }),
+          "Reconciled the existing staged BundleFile.",
+        );
+      }
       case "get_bundle_file_download":
         return createMcpToolSuccessResult(
           snakeOutput(await this.#dependencies.bundleFileDownloads.issue(request.actor, input)),
@@ -716,6 +872,65 @@ export class ProductMcpContentApplication implements McpContentApplication {
               : "The changeset was not committed.",
           result.kind === "revision_conflict" ||
             (result.kind === "denied" && result.decision.retryable),
+          output as Readonly<Record<string, unknown>>,
+        );
+      }
+      case "reconcile_changeset": {
+        const info = await this.#dependencies.discovery.getMindInfo(
+          request.actor,
+          input.mind,
+          { kind: "head" },
+        );
+        if (!info.contentCapabilities.includes("commit")) {
+          return createMcpToolErrorResult(
+            request.actor.requestId,
+            "forbidden",
+            "The requested operation is not allowed.",
+            false,
+          );
+        }
+        const result = await this.#dependencies.ingress.reconcileCommit({
+          actor: request.actor,
+          spaceId: info.mind.mindId,
+          writeBindingId: input.writeBindingId,
+          expectedRevisionId: input.expectedRevision as never,
+          idempotencyKey: input.idempotencyKey as never,
+          summary: input.summary as never,
+          operations: canonicalCommitOperations(input.operations) as never,
+        });
+        if (result.kind === "missing") {
+          return createMcpToolSuccessResult(
+            { status: "missing" },
+            "No completed changeset exists for the exact payload.",
+          );
+        }
+        if (result.kind === "committed") {
+          const committedInfo = await this.#dependencies.discovery.getMindInfo(
+            request.actor,
+            input.mind,
+            { kind: "revision", revisionId: result.envelope.revision.revisionId },
+          );
+          return createMcpToolSuccessResult(
+            snakeOutput({
+              status: "committed",
+              mind: committedInfo.mind,
+              previousRevisionId: result.previousRevisionId,
+              revision: committedInfo.resolvedRevision,
+            }),
+            "Reconciled the original immutable Mind revision.",
+          );
+        }
+        const output = snakeOutput(result);
+        const code = result.kind === "denied"
+          ? result.decision.code
+          : result.kind === "invalid"
+            ? result.error.code
+            : result.kind;
+        return createMcpToolErrorResult(
+          request.actor.requestId,
+          code,
+          "The changeset outcome could not be reconciled.",
+          result.kind === "denied" && result.decision.retryable,
           output as Readonly<Record<string, unknown>>,
         );
       }

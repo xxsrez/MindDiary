@@ -63,6 +63,7 @@ export const CONTENT_QUERIES = [
   "resolve_mind",
   "get_mind_info",
   "get_mind_bindings",
+  "get_file_ingress_capabilities",
   "browse_entries",
   "search_entries",
   "fetch_entry",
@@ -71,6 +72,8 @@ export const CONTENT_QUERIES = [
   "validate_revision",
   "list_bundle_files",
   "get_export_status",
+  "reconcile_file_stage",
+  "reconcile_changeset",
 ] as const;
 
 export const CONTENT_COMMANDS = [
@@ -102,6 +105,7 @@ export type McpPerformanceTool =
   | "resolve_mind"
   | "get_mind_info"
   | "get_mind_bindings"
+  | "get_file_ingress_capabilities"
   | "browse_entries"
   | "search"
   | "fetch"
@@ -113,7 +117,9 @@ export type McpPerformanceTool =
   | "set_read_mind_binding"
   | "set_write_mind_binding"
   | "stage_bundle_file"
+  | "reconcile_file_stage"
   | "commit_changeset"
+  | "reconcile_changeset"
   | "capture_knowledge"
   | "start_export"
   | "get_export_status";

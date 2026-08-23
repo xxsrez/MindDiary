@@ -959,9 +959,12 @@ redirect, PKCE verifier, resource, client, expired/consumed code или revoked
 grant возвращают generic OAuth error без private principal/grant details.
 
 Protected-resource metadata URL также публикуется в MCP
-`WWW-Authenticate` challenge. Read/export tools объявляют OAuth2
-`content:read`; `stage_bundle_file`, `commit_changeset` и `capture_knowledge` объявляют
-`content:write`. Missing,
+`WWW-Authenticate` challenge. Read/export tools и
+`get_file_ingress_capabilities` объявляют OAuth2 `content:read`;
+`stage_bundle_file`, `reconcile_file_stage`, `commit_changeset`,
+`reconcile_changeset` и `capture_knowledge` объявляют `content:write`.
+Reconcile tools сами не создают effect, но читают write-scoped idempotency
+namespace только после current write binding/ACL checks. Missing,
 malformed, expired и revoked bearer получают `401`. Valid read-only bearer при
 вызове content write получает `insufficient_scope` и
 `_meta["mcp/www_authenticate"]` с write challenge, чтобы host мог начать native
@@ -1011,6 +1014,7 @@ resolve_mind_metadata
 resolve_mind
 get_mind_info
 get_mind_bindings
+get_file_ingress_capabilities
 list_public_minds
 list_members
 list_invitations
@@ -1023,6 +1027,8 @@ get_revision
 validate_revision
 list_bundle_files
 get_export_status
+reconcile_file_stage
+reconcile_changeset
 ```
 
 ### Commands
@@ -1436,6 +1442,7 @@ transport metadata (`resultType`, `ttlMs`, `cacheScope`) из внешнего r
 | `get_mind_bindings` | read | true | false | false |
 | `set_read_mind_binding` | read | false | true | false |
 | `set_write_mind_binding` | write | false | true | false |
+| `get_file_ingress_capabilities` | read | true | false | false |
 | `browse_entries` | read | true | false | false |
 | `search` | read | true | false | false |
 | `fetch` | read | true | false | false |
@@ -1443,9 +1450,11 @@ transport metadata (`resultType`, `ttlMs`, `cacheScope`) из внешнего r
 | `get_revision` | read | true | false | false |
 | `validate_mind` | read | true | false | false |
 | `stage_bundle_file` | write | false | false | true |
+| `reconcile_file_stage` | write | true | false | false |
 | `list_bundle_files` | read | true | false | false |
 | `get_bundle_file_download` | read | false | false | true |
 | `commit_changeset` | write | false | true | false |
+| `reconcile_changeset` | write | true | false | false |
 | `capture_knowledge` | write | false | false | false |
 | `start_export` | read | false | false | false |
 | `get_export_status` | read | true | false | false |
@@ -1461,6 +1470,12 @@ transport metadata (`resultType`, `ttlMs`, `cacheScope`) из внешнего r
 staging state, therefore it is open-world but non-destructive. Download tool
 creates one-use bearer grant and is likewise non-read-only/open-world; it never
 places bytes in the tool result.
+
+`get_file_ingress_capabilities` is a privacy-safe deployed matrix, not a source
+locator. Both reconcile tools are read-only but deliberately write-scoped:
+they reauthorize the exact current write generation and inspect only the
+original stage/commit idempotency outcome. `missing` never uploads bytes,
+reserves capacity, writes an object or advances HEAD.
 
 ## Common MCP schemas
 
@@ -1883,6 +1898,31 @@ Output:
 Validator проверяет весь выбранный bundle, а не только `wiki/` или найденные
 entries.
 
+### `get_file_ingress_capabilities`
+
+Input is an empty object. Output contains exactly one privacy-safe row for each
+accepted source kind:
+
+```json
+{
+  "sources": [
+    {
+      "source_kind": "session_attachment",
+      "status": "available_hosted",
+      "transport": "native_file_parameter",
+      "max_bytes": 67108864,
+      "fallback": "none"
+    }
+  ]
+}
+```
+
+`status` is `available_local | available_hosted | not_available`. The response
+contains no provider identity, account, object locator, path, temporary URL or
+credential. A `not_available` row is terminal capability discovery for that
+deployed composition; the caller may not silently switch source kind or
+transport.
+
 ### `stage_bundle_file`
 
 Input:
@@ -1923,6 +1963,20 @@ applies the 60-minute/quota contract. Everything else is
 Same stage key/exact bytes/metadata returns the same ref; changed payload is
 `idempotency_conflict`. Ref is pinned to binding owner + Space + exact write
 generation. It is not reader-visible and no canonical revision is created.
+
+### `reconcile_file_stage`
+
+Input repeats the exact safe receipt of the uncertain stage: `mind`, current
+`write_binding_id`, `source_kind`, canonical display filename, canonical
+`media_type`, SHA-256, size and original `idempotency_key`, plus the original
+optional claimed MIME/expected size/digest when supplied. It never accepts raw
+bytes or a provider/local locator.
+
+Success returns either `{ "status": "missing" }` or
+`{ "status": "staged", "staged_file": {} }`. Exact replay returns the
+original verified ref; a changed receipt is `idempotency_conflict`. Expired,
+consumed and rejected refs remain stable state errors. The call performs no
+upload, capacity reservation or staging mutation.
 
 ### `list_bundle_files`
 
@@ -2104,6 +2158,28 @@ Success:
 Stale HEAD возвращает tool execution error `revision_conflict` с
 `details.current_revision`. Никаких objects/revision, достижимых из HEAD, не
 публикуется.
+
+### `reconcile_changeset`
+
+Input schema is exactly `commit_changeset`: the caller repeats the original
+Mind, write generation, expected HEAD, idempotency key, summary and full
+operations array. The server recalculates the same canonical payload hash after
+current token/binding/ACL checks. Success returns either
+`{ "status": "missing" }` or the original immutable result:
+
+```json
+{
+  "status": "committed",
+  "mind": {},
+  "previous_revision_id": "rev_previous",
+  "revision": {}
+}
+```
+
+`missing` does not run changeset preflight, reserve capacity, write canonical
+objects, schedule effects or move HEAD. A changed payload under the same key is
+`idempotency_conflict`; the caller must not infer failure from a transport
+timeout or retry a modified commit.
 
 Codex-first preflight перед substantial delete/replace либо изменением
 `public`/`unlisted` HEAD состоит из `get_mind_info` current HEAD, bounded

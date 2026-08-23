@@ -74,6 +74,7 @@ import {
   ContentPrivacySafeObservability,
   DeterministicOkfExportService,
   ExportJobApplicationService,
+  FileIngressCoordinator,
   McpBearerAuthenticationService,
   MarkdownImportService,
   MindBrowseService,
@@ -719,6 +720,24 @@ export async function createProductSiteRuntime(
     revisionIds: generated,
     effectIds: generated,
   });
+  const fileIngress = new FileIngressCoordinator({
+    staging: bundleFileStaging,
+    commits,
+    adapters: {
+      session_attachment: {
+        stage: (payload) => {
+          const request = payload as Parameters<BundleFileStagingService["stage"]>[0];
+          return bundleFileStaging.stage({
+            ...request,
+            sourceKind: "session_attachment",
+          });
+        },
+      },
+    },
+    capabilityStatus: {
+      session_attachment: "available_hosted",
+    },
+  });
   const markdownImports = new MarkdownImportService({
     authorizer,
     metadata,
@@ -774,6 +793,7 @@ export async function createProductSiteRuntime(
     history,
     validation,
     staging: bundleFileStaging,
+    ingress: fileIngress,
     bundleFileDownloads,
     nativeFiles,
     commits: {

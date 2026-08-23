@@ -45,9 +45,12 @@ export const MCP_CONTENT_TOOLS = [
   "list_bundle_files",
   "set_read_mind_binding",
   "set_write_mind_binding",
+  "get_file_ingress_capabilities",
   "stage_bundle_file",
+  "reconcile_file_stage",
   "get_bundle_file_download",
   "commit_changeset",
+  "reconcile_changeset",
   "capture_knowledge",
   "start_export",
   "get_export_status",
@@ -1186,6 +1189,81 @@ const NATIVE_FILE_INPUT_SCHEMA = Object.freeze({
   }),
 });
 
+const FILE_INGRESS_SOURCE_KIND_SCHEMA = Object.freeze({
+  type: "string",
+  enum: Object.freeze([
+    "session_attachment",
+    "local_path",
+    "workspace/generated_artifact",
+    "connector_object",
+    "bounded_in_memory",
+    "server_generated",
+  ]),
+});
+
+const FILE_INGRESS_MEDIA_TYPE_SCHEMA = Object.freeze({
+  type: "string",
+  enum: Object.freeze([
+    "image/png",
+    "image/jpeg",
+    "image/gif",
+    "image/webp",
+    "application/pdf",
+    "application/zip",
+  ]),
+});
+
+const GET_FILE_INGRESS_CAPABILITIES_INPUT_SCHEMA = strictInputSchema({});
+
+const GET_FILE_INGRESS_CAPABILITIES_OUTPUT_SCHEMA = toolOutputSchema(
+  Object.freeze({
+    type: "object",
+    additionalProperties: false,
+    required: Object.freeze(["sources"]),
+    properties: Object.freeze({
+      sources: Object.freeze({
+        type: "array",
+        minItems: 6,
+        maxItems: 6,
+        items: Object.freeze({
+          type: "object",
+          additionalProperties: false,
+          required: Object.freeze([
+            "source_kind",
+            "status",
+            "transport",
+            "max_bytes",
+            "fallback",
+          ]),
+          properties: Object.freeze({
+            source_kind: FILE_INGRESS_SOURCE_KIND_SCHEMA,
+            status: Object.freeze({
+              type: "string",
+              enum: Object.freeze([
+                "available_local",
+                "available_hosted",
+                "not_available",
+              ]),
+            }),
+            transport: Object.freeze({
+              type: "string",
+              enum: Object.freeze([
+                "native_file_parameter",
+                "authorized_connector",
+                "local_companion",
+                "bounded_bytes",
+                "producer_stream",
+              ]),
+            }),
+            max_bytes: Object.freeze({ type: "integer", minimum: 0 }),
+            fallback: Object.freeze({ const: "none" }),
+          }),
+        }),
+      }),
+    }),
+  }),
+);
+
 const STAGE_BUNDLE_FILE_INPUT_SCHEMA = Object.freeze({
   $schema: JSON_SCHEMA_2020_12,
   type: "object",
@@ -1206,47 +1284,91 @@ const STAGE_BUNDLE_FILE_INPUT_SCHEMA = Object.freeze({
   }),
 });
 
+const STAGED_FILE_DESCRIPTOR_SCHEMA = Object.freeze({
+  type: "object",
+  additionalProperties: false,
+  required: Object.freeze([
+    "staged_file_ref",
+    "state",
+    "display_filename",
+    "media_type",
+    "sha256",
+    "size",
+    "expires_at",
+    "replayed",
+  ]),
+  properties: Object.freeze({
+    staged_file_ref: OPAQUE_ID_SCHEMA,
+    state: Object.freeze({ const: "verified" }),
+    display_filename: Object.freeze({ type: "string", minLength: 1 }),
+    media_type: FILE_INGRESS_MEDIA_TYPE_SCHEMA,
+    sha256: SHA256_SCHEMA,
+    size: Object.freeze({ type: "integer", minimum: 0 }),
+    expires_at: Object.freeze({ type: "string", format: "date-time" }),
+    replayed: Object.freeze({ type: "boolean" }),
+  }),
+});
+
 const STAGE_BUNDLE_FILE_OUTPUT_SCHEMA = toolOutputSchema(
   Object.freeze({
     type: "object",
     additionalProperties: false,
     required: Object.freeze(["staged_file"]),
     properties: Object.freeze({
-      staged_file: Object.freeze({
+      staged_file: STAGED_FILE_DESCRIPTOR_SCHEMA,
+    }),
+  }),
+);
+
+const RECONCILE_FILE_STAGE_INPUT_SCHEMA = strictInputSchema(
+  {
+    mind: MIND_SELECTOR_SCHEMA,
+    write_binding_id: OPAQUE_ID_SCHEMA,
+    source_kind: FILE_INGRESS_SOURCE_KIND_SCHEMA,
+    display_filename: Object.freeze({ type: "string", minLength: 1, maxLength: 255 }),
+    claimed_media_type: FILE_INGRESS_MEDIA_TYPE_SCHEMA,
+    media_type: FILE_INGRESS_MEDIA_TYPE_SCHEMA,
+    sha256: SHA256_SCHEMA,
+    size: Object.freeze({ type: "integer", minimum: 0, maximum: 67_108_864 }),
+    idempotency_key: IDEMPOTENCY_KEY_SCHEMA,
+    expected_size: Object.freeze({
+      type: "integer",
+      minimum: 0,
+      maximum: 67_108_864,
+    }),
+    expected_sha256: SHA256_SCHEMA,
+  },
+  [
+    "mind",
+    "write_binding_id",
+    "source_kind",
+    "display_filename",
+    "media_type",
+    "sha256",
+    "size",
+    "idempotency_key",
+  ],
+);
+
+const RECONCILE_FILE_STAGE_OUTPUT_SCHEMA = toolOutputSchema(
+  Object.freeze({
+    oneOf: Object.freeze([
+      Object.freeze({
         type: "object",
         additionalProperties: false,
-        required: Object.freeze([
-          "staged_file_ref",
-          "state",
-          "display_filename",
-          "media_type",
-          "sha256",
-          "size",
-          "expires_at",
-          "replayed",
-        ]),
+        required: Object.freeze(["status"]),
+        properties: Object.freeze({ status: Object.freeze({ const: "missing" }) }),
+      }),
+      Object.freeze({
+        type: "object",
+        additionalProperties: false,
+        required: Object.freeze(["status", "staged_file"]),
         properties: Object.freeze({
-          staged_file_ref: OPAQUE_ID_SCHEMA,
-          state: Object.freeze({ const: "verified" }),
-          display_filename: Object.freeze({ type: "string", minLength: 1 }),
-          media_type: Object.freeze({
-            type: "string",
-            enum: Object.freeze([
-              "image/png",
-              "image/jpeg",
-              "image/gif",
-              "image/webp",
-              "application/pdf",
-              "application/zip",
-            ]),
-          }),
-          sha256: SHA256_SCHEMA,
-          size: Object.freeze({ type: "integer", minimum: 0 }),
-          expires_at: Object.freeze({ type: "string", format: "date-time" }),
-          replayed: Object.freeze({ type: "boolean" }),
+          status: Object.freeze({ const: "staged" }),
+          staged_file: STAGED_FILE_DESCRIPTOR_SCHEMA,
         }),
       }),
-    }),
+    ]),
   }),
 );
 
@@ -1381,6 +1503,35 @@ const COMMIT_CHANGESET_OUTPUT_SCHEMA = toolOutputSchema(
       revision: REVISION_DESCRIPTOR_SCHEMA,
       index_status: Object.freeze({ const: "queued" }),
     }),
+  }),
+);
+
+const RECONCILE_CHANGESET_OUTPUT_SCHEMA = toolOutputSchema(
+  Object.freeze({
+    oneOf: Object.freeze([
+      Object.freeze({
+        type: "object",
+        additionalProperties: false,
+        required: Object.freeze(["status"]),
+        properties: Object.freeze({ status: Object.freeze({ const: "missing" }) }),
+      }),
+      Object.freeze({
+        type: "object",
+        additionalProperties: false,
+        required: Object.freeze([
+          "status",
+          "mind",
+          "previous_revision_id",
+          "revision",
+        ]),
+        properties: Object.freeze({
+          status: Object.freeze({ const: "committed" }),
+          mind: Object.freeze({ type: "object" }),
+          previous_revision_id: Object.freeze({ type: Object.freeze(["string", "null"]) }),
+          revision: REVISION_DESCRIPTOR_SCHEMA,
+        }),
+      }),
+    ]),
   }),
 );
 
@@ -1537,6 +1688,20 @@ const GET_EXPORT_STATUS_OUTPUT_SCHEMA = toolOutputSchema(
 /** Native-file staging is provider-specific at the MCP edge and portable below it. */
 export const MCP_BUNDLE_FILE_TOOL_DEFINITIONS = Object.freeze([
   Object.freeze({
+    name: "get_file_ingress_capabilities",
+    title: "Get file ingress capabilities",
+    description:
+      "Read the exact deployed source capability matrix. An unavailable source has no implicit base64, URL, local-path or cross-source fallback.",
+    inputSchema: GET_FILE_INGRESS_CAPABILITIES_INPUT_SCHEMA,
+    outputSchema: GET_FILE_INGRESS_CAPABILITIES_OUTPUT_SCHEMA,
+    securitySchemes: READ_SECURITY_SCHEMES,
+    annotations: Object.freeze({
+      readOnlyHint: true,
+      destructiveHint: false,
+      openWorldHint: false,
+    }),
+  }),
+  Object.freeze({
     name: "stage_bundle_file",
     title: "Stage one BundleFile",
     description:
@@ -1550,6 +1715,20 @@ export const MCP_BUNDLE_FILE_TOOL_DEFINITIONS = Object.freeze([
       openWorldHint: true,
     }),
     _meta: Object.freeze({ "openai/fileParams": Object.freeze(["file"]) }),
+  }),
+  Object.freeze({
+    name: "reconcile_file_stage",
+    title: "Reconcile one file stage",
+    description:
+      "Read one exact stage idempotency outcome from its safe source receipt without uploading bytes or reserving capacity. Use the original source kind, key, digest, size and canonical metadata; changed payloads conflict.",
+    inputSchema: RECONCILE_FILE_STAGE_INPUT_SCHEMA,
+    outputSchema: RECONCILE_FILE_STAGE_OUTPUT_SCHEMA,
+    securitySchemes: WRITE_SECURITY_SCHEMES,
+    annotations: Object.freeze({
+      readOnlyHint: true,
+      destructiveHint: false,
+      openWorldHint: false,
+    }),
   }),
   Object.freeze({
     name: "get_bundle_file_download",
@@ -1580,6 +1759,20 @@ export const MCP_COMMIT_EXPORT_TOOL_DEFINITIONS = Object.freeze([
     annotations: Object.freeze({
       readOnlyHint: false,
       destructiveHint: true,
+      openWorldHint: false,
+    }),
+  }),
+  Object.freeze({
+    name: "reconcile_changeset",
+    title: "Reconcile a Mind changeset",
+    description:
+      "Read the idempotency outcome for the exact original commit_changeset payload. Missing performs no preflight, reservation, object write or HEAD mutation; a completed outcome returns the original immutable revision.",
+    inputSchema: COMMIT_CHANGESET_INPUT_SCHEMA,
+    outputSchema: RECONCILE_CHANGESET_OUTPUT_SCHEMA,
+    securitySchemes: WRITE_SECURITY_SCHEMES,
+    annotations: Object.freeze({
+      readOnlyHint: true,
+      destructiveHint: false,
       openWorldHint: false,
     }),
   }),
@@ -3058,7 +3251,9 @@ function createMcpHttpHandlerAtEndpoint(
 
     if (
       (name === "commit_changeset" ||
+        name === "reconcile_changeset" ||
         name === "stage_bundle_file" ||
+        name === "reconcile_file_stage" ||
         name === "capture_knowledge" ||
         name === "set_write_mind_binding") &&
       !tokenAllowsWrite(actor)

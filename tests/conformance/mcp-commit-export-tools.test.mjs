@@ -249,6 +249,7 @@ test("publishes strict commit/export schemas and truthful annotations", () => {
   );
   assert.deepEqual([...definitions.keys()], [
     "commit_changeset",
+    "reconcile_changeset",
     "capture_knowledge",
     "start_export",
     "get_export_status",
@@ -289,6 +290,23 @@ test("publishes strict commit/export schemas and truthful annotations", () => {
   assert.match(commit.description, /obtain explicit confirmation/u);
   assert.match(commit.description, /re-read HEAD/u);
   assert.match(commit.description, /revision_conflict/u);
+
+  const reconcile = definitions.get("reconcile_changeset");
+  assert.deepEqual(reconcile.inputSchema, commit.inputSchema);
+  assert.deepEqual(reconcile.securitySchemes, [
+    { type: "oauth2", scopes: ["content:write"] },
+  ]);
+  assert.deepEqual(reconcile.annotations, {
+    readOnlyHint: true,
+    destructiveHint: false,
+    openWorldHint: false,
+  });
+  assert.deepEqual(
+    reconcile.outputSchema.properties.data.oneOf.map(
+      (variant) => variant.properties.status.const,
+    ),
+    ["missing", "committed"],
+  );
 
   const capture = definitions.get("capture_knowledge");
   assert.equal(capture.inputSchema.additionalProperties, false);
@@ -356,7 +374,7 @@ test("tools/list advertises write scope for step-up while enforcing read-only to
   const writable = await result(await fixture.send(rpc("tools/list")));
   assert.deepEqual(
     writable.tools.map((definition) => definition.name),
-    ["commit_changeset", "capture_knowledge", "start_export", "get_export_status"],
+    ["commit_changeset", "reconcile_changeset", "capture_knowledge", "start_export", "get_export_status"],
   );
   assert.equal(writable.tools[0].inputSchema.additionalProperties, false);
 
@@ -365,7 +383,7 @@ test("tools/list advertises write scope for step-up while enforcing read-only to
   );
   assert.deepEqual(
     readable.tools.map((definition) => definition.name),
-    ["commit_changeset", "capture_knowledge", "start_export", "get_export_status"],
+    ["commit_changeset", "reconcile_changeset", "capture_knowledge", "start_export", "get_export_status"],
   );
   assert.deepEqual(readable.tools[0].securitySchemes, [
     { type: "oauth2", scopes: ["content:write"] },

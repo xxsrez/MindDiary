@@ -28,6 +28,7 @@ test("MD-271 names every source kind with an explicit capability status", async 
   const implementedKinds = new Set([
     "local_path",
     "workspace/generated_artifact",
+    "connector_object",
     "bounded_in_memory",
     "server_generated",
   ]);
@@ -74,5 +75,13 @@ test("MD-271 preserves the portable staged-ref boundary and common limits", asyn
   ]) {
     assert.ok(spec.includes(code), `missing error code in file-ingress contract: ${code}`);
     assert.ok(api.includes(code), `missing error code in API contract: ${code}`);
+  }
+  for (const tool of [
+    "get_file_ingress_capabilities",
+    "reconcile_file_stage",
+    "reconcile_changeset",
+  ]) {
+    assert.ok(spec.includes(tool), `missing file-ingress tool contract: ${tool}`);
+    assert.ok(api.includes(tool), `missing API tool contract: ${tool}`);
   }
 });

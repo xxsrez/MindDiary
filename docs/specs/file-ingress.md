@@ -8,8 +8,10 @@ local-only companion implementation для `local_path` и
 `workspace/generated_artifact`. Native-file UAT остаётся MD-250, hosted
 upload-intent/producer evidence и provider-specific connector adapter остаются
 отдельными claims. MD-274 добавляет repository-local `FileIngressCoordinator`,
-explicit stage/commit reconcile и mixed-source atomic integration; это не
-добавляет новый hosted endpoint или transport.
+explicit stage/commit reconcile, mixed-source atomic integration и три
+contracts на существующих MCP endpoints: `get_file_ingress_capabilities`,
+`reconcile_file_stage`, `reconcile_changeset`. Это не добавляет новый hosted
+endpoint или source transport.
 
 ## Цель и граница
 
@@ -110,7 +112,7 @@ Task/release evidence после commit.
 | `session_attachment` | MCP/provider adapter | Native client file parameter; adapter follows provider HTTPS object/redirect policy | `implemented_local`, `UAT pending` MD-250; `_meta["openai/fileParams"]=["file"]` is local schema evidence, not live client proof | If the pinned profile cannot supply native `file`, return `native_file_input_unsupported`; do not use base64, local path or arbitrary URL |
 | `local_path` | Local companion process | Out-of-band upload intent/equivalent binary stream; companion snapshots one regular file and sends bounded bytes | `implemented_local`, MD-272 unit/integration evidence; hosted intent/UAT pending | Missing companion, expired/invalid intent or revoked auth: `file_ingress_source_unsupported` / `file_ingress_intent_expired`; never send the path to hosted MCP |
 | `workspace/generated_artifact` | Local companion process with explicit workspace authority | Same out-of-band intent/equivalent stream, but artifact snapshot is selected by the local process | `implemented_local`, MD-272 unit/integration evidence; hosted intent/UAT pending | Missing companion/workspace authority: `file_ingress_source_unsupported`; no path fallback or arbitrary URL |
-| `connector_object` | Explicit authorized connector adapter | Connector API/object fetch with provider-specific bounded stream; arbitrary URL is not a connector contract | Provider-neutral reader/staging boundary is `implemented_local` with unit and mixed-source integration evidence; no provider binding or hosted evidence | Connector absent, revoked or object unavailable: generic `file_ingress_source_unavailable`; no cross-provider or native fallback |
+| `connector_object` | Explicit authorized connector adapter | Connector API/object fetch with provider-specific bounded stream; arbitrary URL is not a connector contract | Provider-neutral reader/staging boundary is `implemented_local` with unit and mixed-source integration evidence; provider binding and hosted UAT pending | Connector absent, revoked or object unavailable: generic `file_ingress_source_unavailable`; no cross-provider or native fallback |
 | `bounded_in_memory` | Calling adapter / trusted inline boundary | Explicit bounded bytes transport, not implicit JSON-RPC base64; local companion caps local generated path at 4 MiB and shared staging validates it | `implemented_local`, MD-272/MD-273; exact local tests cover limit, digest/MIME and quarantine; hosted UAT pending | Over limit or unsupported profile: `bundle_file_size_limit_exceeded` / `file_ingress_source_unsupported`; caller must choose out-of-band source |
 | `server_generated` | Trusted server-side producer | Internal application port or bounded job output; no client-supplied source locator; local provider writer streams to quarantine storage | `implemented_local`, MD-273; exact local tests cover stream, cancellation and no partial publication; hosted producer evidence pending | Producer unavailable/expired: `file_ingress_source_unavailable`; no client URL or path fallback |
 
@@ -273,10 +275,15 @@ Open questions intentionally left for child implementation decisions:
 - Which connector object types and provider-specific ownership proofs can be
   supported, and how are their bounded fetch receipts represented (future
   connector work)?
-- Which protocol tools, if any, should expose the repository-local capability
-  and reconcile operations after hosted adapters have exact client evidence?
 - Which exact client/profile capability receipts are required before a source
   can move from `proposal`/`not-available` to `implemented` or UAT-supported?
+
+Protocol exposure itself is accepted: both modern `2026-07-28` and isolated
+compatibility `2025-11-25` profiles publish the same strict schemas for
+`get_file_ingress_capabilities`, `reconcile_file_stage` and
+`reconcile_changeset`. This is contract/conformance evidence only; each
+capability row still reports the exact deployed adapter status and cannot turn
+repository-local code into hosted support.
 
 No open question permits a fallback that leaks provider IDs/URLs, local paths or
 bytes into the portable application contract, weakens BundleFile static policy,

@@ -37,7 +37,28 @@ function modernMeta() {
 }
 
 test("publishes strict native-file staging metadata and mixed commit operations", () => {
-  assert.equal(MCP_BUNDLE_FILE_TOOL_DEFINITIONS.length, 2);
+  assert.deepEqual(
+    MCP_BUNDLE_FILE_TOOL_DEFINITIONS.map(({ name }) => name),
+    [
+      "get_file_ingress_capabilities",
+      "stage_bundle_file",
+      "reconcile_file_stage",
+      "get_bundle_file_download",
+    ],
+  );
+  const capabilities = MCP_BUNDLE_FILE_TOOL_DEFINITIONS.find(
+    ({ name }) => name === "get_file_ingress_capabilities",
+  );
+  assert.equal("required" in capabilities.inputSchema, false);
+  assert.equal(capabilities.inputSchema.additionalProperties, false);
+  assert.deepEqual(capabilities.securitySchemes, [
+    { type: "oauth2", scopes: ["content:read"] },
+  ]);
+  assert.deepEqual(capabilities.annotations, {
+    readOnlyHint: true,
+    destructiveHint: false,
+    openWorldHint: false,
+  });
   const stage = MCP_BUNDLE_FILE_TOOL_DEFINITIONS.find(
     ({ name }) => name === "stage_bundle_file",
   );
@@ -60,6 +81,34 @@ test("publishes strict native-file staging metadata and mixed commit operations"
   });
   const serialized = JSON.stringify(stage.outputSchema);
   assert.doesNotMatch(serialized, /file_id|download_url|bytes|local_path|base64/iu);
+
+  const reconcile = MCP_BUNDLE_FILE_TOOL_DEFINITIONS.find(
+    ({ name }) => name === "reconcile_file_stage",
+  );
+  assert.deepEqual(reconcile.inputSchema.required, [
+    "mind",
+    "write_binding_id",
+    "source_kind",
+    "display_filename",
+    "media_type",
+    "sha256",
+    "size",
+    "idempotency_key",
+  ]);
+  assert.equal(reconcile.inputSchema.additionalProperties, false);
+  assert.deepEqual(reconcile.securitySchemes, [
+    { type: "oauth2", scopes: ["content:write"] },
+  ]);
+  assert.deepEqual(reconcile.annotations, {
+    readOnlyHint: true,
+    destructiveHint: false,
+    openWorldHint: false,
+  });
+  assert.equal("_meta" in reconcile, false);
+  assert.doesNotMatch(
+    JSON.stringify(reconcile.outputSchema),
+    /file_id|download_url|bytes|local_path|base64/iu,
+  );
 
   const download = MCP_BUNDLE_FILE_TOOL_DEFINITIONS.find(
     ({ name }) => name === "get_bundle_file_download",
@@ -172,14 +221,20 @@ test("product adapter terminates provider metadata and returns only verified sta
   let portableRequest = null;
   let listRequest = null;
   let downloadRequest = null;
+  let reconcileStageRequest = null;
+  let reconcileCommitRequest = null;
   const application = new ProductMcpContentApplication({
     discovery: {
       async listMinds() { return {}; },
       async resolveMind() { return {}; },
-      async getMindInfo() {
+      async getMindInfo(_actor, _selector, revisionSelector) {
         return {
           mind: { mindId: "space_bundle_stage", name: "Bundle stage" },
-          resolvedRevision: { revisionId: "revision_head" },
+          resolvedRevision: {
+            revisionId: revisionSelector?.kind === "revision"
+              ? revisionSelector.revisionId
+              : "revision_head",
+          },
           contentCapabilities: ["commit"],
         };
       },
@@ -228,6 +283,56 @@ test("product adapter terminates provider metadata and returns only verified sta
             size: PNG.byteLength,
             expiresAt: "2026-08-22T13:00:00.000Z",
           },
+        };
+      },
+    },
+    ingress: {
+      capabilities() {
+        return [
+          {
+            sourceKind: "session_attachment",
+            status: "available_hosted",
+            transport: "native_file_parameter",
+            maxBytes: 67_108_864,
+            fallback: "none",
+          },
+          ...[
+            ["local_path", "local_companion", 67_108_864],
+            ["workspace/generated_artifact", "local_companion", 67_108_864],
+            ["connector_object", "authorized_connector", 67_108_864],
+            ["bounded_in_memory", "bounded_bytes", 4_194_304],
+            ["server_generated", "producer_stream", 67_108_864],
+          ].map(([sourceKind, transport, maxBytes]) => ({
+            sourceKind,
+            status: "not_available",
+            transport,
+            maxBytes,
+            fallback: "none",
+          })),
+        ];
+      },
+      async reconcileStage(request) {
+        reconcileStageRequest = request;
+        return {
+          kind: "staged",
+          replayed: true,
+          record: {
+            stagedFileId: "staged_safe_ref",
+            state: "verified",
+            displayFilename: "diagram.png",
+            mediaType: "image/png",
+            sha256: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            size: PNG.byteLength,
+            expiresAt: "2026-08-22T13:00:00.000Z",
+          },
+        };
+      },
+      async reconcileCommit(request) {
+        reconcileCommitRequest = request;
+        return {
+          kind: "committed",
+          previousRevisionId: "revision_head",
+          envelope: { revision: { revisionId: "revision_committed" } },
         };
       },
     },
@@ -340,6 +445,85 @@ test("product adapter terminates provider metadata and returns only verified sta
     JSON.stringify(download.structuredContent.data.file),
     /bytes|provider|object_key/iu,
   );
+
+  const capabilities = await application.executeToolCall({
+    actor: ACTOR,
+    name: "get_file_ingress_capabilities",
+    arguments: {},
+  });
+  assert.equal(capabilities.isError, false);
+  assert.deepEqual(
+    capabilities.structuredContent.data.sources.map(({ source_kind, status }) => [
+      source_kind,
+      status,
+    ]),
+    [
+      ["session_attachment", "available_hosted"],
+      ["local_path", "not_available"],
+      ["workspace/generated_artifact", "not_available"],
+      ["connector_object", "not_available"],
+      ["bounded_in_memory", "not_available"],
+      ["server_generated", "not_available"],
+    ],
+  );
+
+  const reconciledStage = await application.executeToolCall({
+    actor: ACTOR,
+    name: "reconcile_file_stage",
+    arguments: {
+      mind: "bundle-stage",
+      write_binding_id: "write_binding_stage",
+      source_kind: "session_attachment",
+      display_filename: "diagram.png",
+      claimed_media_type: "image/png",
+      media_type: "image/png",
+      sha256: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      size: PNG.byteLength,
+      idempotency_key: "stage-diagram",
+      expected_size: PNG.byteLength,
+    },
+  });
+  assert.equal(reconciledStage.isError, false);
+  assert.equal(reconciledStage.structuredContent.data.status, "staged");
+  assert.equal(
+    reconciledStage.structuredContent.data.staged_file.staged_file_ref,
+    "staged_safe_ref",
+  );
+  assert.equal(reconcileStageRequest.spaceId, "space_bundle_stage");
+  assert.equal(reconcileStageRequest.sourceKind, "session_attachment");
+  assert.equal("bytes" in reconcileStageRequest, false);
+
+  const reconciledCommit = await application.executeToolCall({
+    actor: ACTOR,
+    name: "reconcile_changeset",
+    arguments: {
+      mind: "bundle-stage",
+      write_binding_id: "write_binding_stage",
+      expected_revision: "revision_head",
+      idempotency_key: "commit-diagram",
+      summary: "Publish diagram",
+      operations: [
+        {
+          type: "create_bundle_file",
+          path: "assets/diagram.png",
+          staged_file_ref: "staged_safe_ref",
+        },
+      ],
+    },
+  });
+  assert.equal(reconciledCommit.isError, false);
+  assert.equal(reconciledCommit.structuredContent.data.status, "committed");
+  assert.equal(
+    reconciledCommit.structuredContent.data.revision.revision_id,
+    "revision_committed",
+  );
+  assert.deepEqual(reconcileCommitRequest.operations, [
+    {
+      type: "create_bundle_file",
+      path: "assets/diagram.png",
+      staged_file_id: "staged_safe_ref",
+    },
+  ]);
 });
 
 test("read-only catalog omits native staging and direct calls fail before execution", async () => {
