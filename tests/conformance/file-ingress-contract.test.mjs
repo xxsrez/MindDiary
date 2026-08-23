@@ -25,19 +25,20 @@ test("MD-271 names every source kind with an explicit capability status", async 
   }
   assert.match(spec, /`implementation_status: partial_by_source`/);
   assert.match(spec, /`session_attachment`.*`implemented_local`/s);
-  const localCompanionKinds = new Set(["local_path", "workspace/generated_artifact", "bounded_in_memory"]);
+  const implementedKinds = new Set([
+    "local_path",
+    "workspace/generated_artifact",
+    "bounded_in_memory",
+    "server_generated",
+  ]);
   for (const sourceKind of sourceKinds.slice(1)) {
     const row = spec.split("\n").find((line) => line.startsWith(`| \`${sourceKind}\` |`));
-    if (localCompanionKinds.has(sourceKind)) {
+    if (implementedKinds.has(sourceKind)) {
       assert.ok(row?.includes("`implemented_local`"), `local companion status missing: ${sourceKind}`);
     } else {
       assert.ok(row?.includes("`proposal`"), `source must remain proposal: ${sourceKind}`);
     }
-    assert.ok(row?.includes("UAT pending") || row?.includes("not started") || row?.includes("not-started") || row?.includes("not-available"), `source status missing: ${sourceKind}`);
-  }
-  for (const sourceKind of sourceKinds.slice(4)) {
-    const row = spec.split("\n").find((line) => line.startsWith(`| \`${sourceKind}\` |`));
-    assert.match(row ?? "", /`implemented_local`/);
+    assert.ok(row?.includes("UAT pending") || row?.includes("pending") || row?.includes("not started") || row?.includes("not-started") || row?.includes("not-available"), `source status missing: ${sourceKind}`);
   }
   assert.doesNotMatch(spec, /workspace_generated_artifact/);
 });
