@@ -1487,6 +1487,54 @@ export interface BundleFileObjectWriteRequest {
   readonly createdAt: UtcInstant;
 }
 
+/**
+ * Safe provenance labels for the portable file-ingress boundary.
+ *
+ * Provider file IDs, local paths, URLs and other transport details deliberately
+ * do not have a type in this package.  A staged record may retain only one of
+ * these bounded labels so that all source adapters share the same BundleFile
+ * lifecycle without leaking their transport identity into the domain.
+ */
+export const FILE_INGRESS_SOURCE_KINDS = Object.freeze([
+  "session_attachment",
+  "local_path",
+  "workspace/generated_artifact",
+  "connector_object",
+  "bounded_in_memory",
+  "server_generated",
+] as const);
+
+export type FileIngressSourceKind = (typeof FILE_INGRESS_SOURCE_KINDS)[number];
+export type GeneratedArtifactSourceKind = Extract<
+  FileIngressSourceKind,
+  "bounded_in_memory" | "server_generated"
+>;
+
+/**
+ * Portable stream writer for source adapters that cannot buffer a generated
+ * payload in application memory.  The object-store adapter owns the actual
+ * out-of-band storage; application code supplies only bytes and verification
+ * metadata.  Implementations must make abort idempotent and never publish a
+ * staged object before `complete` succeeds.
+ */
+export interface StagedBundleFileUpload {
+  write(chunk: Uint8Array): Promise<void>;
+  complete(request: Readonly<{
+    sha256: Sha256Digest;
+    size: number;
+  }>): Promise<Readonly<StagedBundleFileObject>>;
+  abort(): Promise<void>;
+}
+
+export interface StagedBundleFileUploadRequest {
+  readonly stagedFileId: StagedBundleFileId;
+  readonly bindingOwnerId: MindBindingOwnerId;
+  readonly spaceId: SpaceId;
+  readonly createdAt: UtcInstant;
+  /** Adapter-enforced upper bound for one stream. */
+  readonly maxBytes: number;
+}
+
 export interface BundleFileObjectMetadata {
   readonly spaceId: SpaceId;
   readonly sha256: Sha256Digest;
@@ -1556,6 +1604,14 @@ export interface BundleFileObjectStore extends ObjectStore, SpaceCanonicalObject
   putStagedBundleFile(
     request: Readonly<StagedBundleFileObjectWriteRequest>,
   ): Promise<Readonly<StagedBundleFileObject>>;
+  /**
+   * Optional streaming ingress.  Legacy/local adapters may omit it and use
+   * bounded bytes instead; a provider adapter that implements it must enforce
+   * `maxBytes` before durable publication.
+   */
+  beginStagedBundleFileUpload?(
+    request: Readonly<StagedBundleFileUploadRequest>,
+  ): Promise<StagedBundleFileUpload>;
   getStagedBundleFile(
     stagedFileId: StagedBundleFileId,
   ): Promise<Readonly<StagedBundleFileObject> | null>;
@@ -1572,6 +1628,8 @@ export type StagedBundleFileState =
 export interface StagedBundleFileRecord {
   readonly stagedFileId: StagedBundleFileId;
   readonly bindingOwnerId: MindBindingOwnerId;
+  /** Safe source provenance; transport identifiers never cross this boundary. */
+  readonly sourceKind: FileIngressSourceKind;
   readonly writeBindingId: WriteMindBindingId;
   readonly writeBindingGeneration: BindingVersion;
   readonly spaceId: SpaceId;

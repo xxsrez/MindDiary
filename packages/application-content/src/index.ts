@@ -53,6 +53,7 @@ export * from "./mind-search.js";
 export * from "./mind-validation.js";
 export * from "./bundle-file-references.js";
 export * from "./bundle-file-downloads.js";
+export * from "./generated-artifacts.js";
 
 export const CONTENT_QUERIES = [
   "list_minds",

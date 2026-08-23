@@ -13,6 +13,7 @@ import {
   CanonicalRevisionCoordinator,
   ChangesetCommitService,
   DeterministicOkfExportService,
+  GeneratedArtifactIngressService,
   MindBindingContentAuthorizer,
 } from "@mind-diary/application-content";
 import { RevisionIndexJobHandler } from "@mind-diary/application-background";
@@ -382,6 +383,29 @@ test("staging rejects spoofed types and atomically consumes a binding-pinned ref
   assert.equal(reservation.state, "released");
   assert.deepEqual(
     (await env.objects.getBundleFile(MINDS.ordinary.spaceId, staged.record.sha256)).bytes,
+    PNG,
+  );
+});
+
+test("server-generated stream uses shared quarantine and records safe provenance", async () => {
+  const env = await harness();
+  const ingress = new GeneratedArtifactIngressService({ staging: env.staging });
+  const result = await ingress.stageServerGenerated({
+    actor: env.currentActor,
+    spaceId: MINDS.ordinary.spaceId,
+    writeBindingId: WRITE_BINDING_ID,
+    displayFilename: "generated.png",
+    claimedMediaType: "image/png",
+    idempotencyKey: "generated-stream-stage",
+    stream: (async function* () {
+      yield PNG.subarray(0, 4);
+      yield PNG.subarray(4);
+    })(),
+  });
+  assert.equal(result.kind, "staged");
+  assert.equal(result.record.sourceKind, "server_generated");
+  assert.deepEqual(
+    (await env.objects.getStagedBundleFile(result.record.stagedFileId))?.bytes,
     PNG,
   );
 });
@@ -1038,6 +1062,7 @@ test("opaque canonical dedupe is isolated by Space and Sites reconstructs staged
   const record = {
     stagedFileId: "staged_sites_restart",
     bindingOwnerId: BINDING_OWNER_ID,
+    sourceKind: "session_attachment",
     writeBindingId: WRITE_BINDING_ID,
     writeBindingGeneration: bindingVersion(1),
     spaceId: "space_sites",

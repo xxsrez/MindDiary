@@ -143,6 +143,26 @@ shell/script files, JAR/APK and macro-enabled Office formats. A ZIP-named file
 is opaque even if it contains an otherwise forbidden type; Mind Diary does not
 inspect, extract, preview or execute archive members.
 
+### Application generated ingress
+
+Backend and workspace producers use the same service-owned staging pipeline as
+native attachments. The portable application boundary carries only a safe
+`source_kind` label: `session_attachment`, `local_path`,
+`workspace/generated_artifact`, `connector_object`, `bounded_in_memory` or
+`server_generated`. Provider IDs, URLs, local paths, prompt text, secrets and
+other transport provenance terminate in the source adapter and are never part
+of a staged record or its idempotency payload.
+
+`bounded_in_memory` is an explicit inline path capped at 4 MiB. A
+`server_generated` producer may provide a bounded byte stream through the
+storage upload port, subject to the 64 MiB per-BundleFile limit; a producer
+that cannot stay within the application memory bound must use the adapter's
+out-of-band writer rather than pass a large inline value. Both paths perform
+the same SHA-256, size, magic-MIME, filename, quota, quarantine and
+binding-owner idempotency checks. Generated previews or derived artifacts do
+not become canonical files automatically: an authorized caller must reference
+the verified `staged_file_ref` in an explicit atomic `commit_changeset`.
+
 Staging state begins `quarantined`. The synchronous first-slice static gate
 checks bounded streaming download, SHA-256, size, filename/path-independent
 magic detection, declared MIME and extension agreement and the allowlist above;

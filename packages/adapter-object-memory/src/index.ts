@@ -24,6 +24,8 @@ import {
   type BundleFileObjectDeleteRequest,
   type StagedBundleFileObject,
   type StagedBundleFileObjectWriteRequest,
+  type StagedBundleFileUpload,
+  type StagedBundleFileUploadRequest,
   type ExportArchivePutResult,
   type ExportArchiveStore,
   type ExportArchiveUpload,
@@ -486,6 +488,72 @@ export class InMemoryObjectStore implements BundleFileObjectStore, ExportArchive
     }
     this.#stagedBundleFiles.set(request.stagedFileId, candidate);
     return candidate;
+  }
+
+  async beginStagedBundleFileUpload(
+    request: Readonly<StagedBundleFileUploadRequest>,
+  ): Promise<StagedBundleFileUpload> {
+    assertUtc(request.createdAt);
+    if (
+      typeof request.stagedFileId !== "string" || request.stagedFileId.length === 0 ||
+      typeof request.bindingOwnerId !== "string" || request.bindingOwnerId.length === 0 ||
+      typeof request.spaceId !== "string" || request.spaceId.length === 0 ||
+      !Number.isSafeInteger(request.maxBytes) || request.maxBytes < 0
+    ) throw new ObjectStoreIntegrityError("invalid_limit", "staged upload request is invalid");
+    const chunks: Uint8Array[] = [];
+    let size = 0;
+    let closed = false;
+    const close = (): void => {
+      closed = true;
+      chunks.length = 0;
+    };
+    return Object.freeze({
+      write: async (chunk: Uint8Array) => {
+        if (closed) throw new Error("staged upload is closed");
+        if (!(chunk instanceof Uint8Array)) throw new TypeError("staged chunk must be bytes");
+        if (size + chunk.byteLength > request.maxBytes) {
+          close();
+          throw new ObjectStoreIntegrityError(
+            "invalid_limit",
+            "staged upload exceeds its configured byte limit",
+          );
+        }
+        size += chunk.byteLength;
+        chunks.push(new Uint8Array(chunk));
+      },
+      complete: async (
+        completion: Parameters<StagedBundleFileUpload["complete"]>[0],
+      ) => {
+        if (closed) throw new Error("staged upload is closed");
+        if (!Number.isSafeInteger(completion.size) || completion.size !== size) {
+          close();
+          throw new ObjectStoreIntegrityError("object_tampered", "staged upload size mismatch");
+        }
+        const bytes = new Uint8Array(size);
+        let offset = 0;
+        for (const chunk of chunks) {
+          bytes.set(chunk, offset);
+          offset += chunk.byteLength;
+        }
+        const actual = await this.calculateSha256(bytes);
+        if (actual !== completion.sha256) {
+          close();
+          throw new ObjectStoreIntegrityError("object_tampered", "staged upload digest mismatch");
+        }
+        closed = true;
+        chunks.length = 0;
+        return this.putStagedBundleFile({
+          stagedFileId: request.stagedFileId,
+          bindingOwnerId: request.bindingOwnerId,
+          spaceId: request.spaceId,
+          bytes,
+          createdAt: request.createdAt,
+        });
+      },
+      abort: async () => {
+        close();
+      },
+    });
   }
 
   async getStagedBundleFile(

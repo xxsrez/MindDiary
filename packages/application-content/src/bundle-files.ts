@@ -1,10 +1,12 @@
 import type { ActorContext } from "@mind-diary/application-contracts";
+import { FILE_INGRESS_SOURCE_KINDS } from "@mind-diary/application-ports";
 import type {
   Authorizer,
   BundleFileObjectStore,
   BundleFileStagingStore,
   CapacityLimits,
   Clock,
+  FileIngressSourceKind,
   IdempotencyNamespace,
   StagedBundleFileRecord,
 } from "@mind-diary/application-ports";
@@ -46,6 +48,8 @@ export interface StageBundleFileRequest {
   readonly claimedMediaType: unknown;
   readonly bytes: unknown;
   readonly idempotencyKey: unknown;
+  /** Safe source provenance only; transport identifiers stay in adapters. */
+  readonly sourceKind?: unknown;
   readonly expectedSize?: unknown;
   readonly expectedSha256?: unknown;
 }
@@ -61,6 +65,7 @@ export type StageBundleFileResult =
       readonly kind: "invalid";
       readonly code:
         | "mcp_token_required"
+        | "invalid_source_kind"
         | "invalid_write_binding_id"
         | "invalid_filename"
         | "file_size_limit_exceeded"
@@ -99,6 +104,15 @@ const EXTENSIONS: Readonly<Record<BundleFileMediaType, readonly string[]>> = Obj
 
 function startsWith(bytes: Uint8Array, signature: readonly number[]): boolean {
   return signature.every((value, index) => bytes[index] === value);
+}
+
+function sourceKind(value: unknown): FileIngressSourceKind | null {
+  return value === undefined
+    ? "session_attachment"
+    : typeof value === "string" &&
+        (FILE_INGRESS_SOURCE_KINDS as readonly string[]).includes(value)
+      ? value as FileIngressSourceKind
+      : null;
 }
 
 export function detectBundleFileMediaType(bytes: Uint8Array): BundleFileMediaType | null {
@@ -196,6 +210,10 @@ export class BundleFileStagingService {
       CONTROL.test(request.idempotencyKey) ||
       ENCODER.encode(request.idempotencyKey).byteLength > 256
     ) return Object.freeze({ kind: "invalid", code: "invalid_idempotency_key" });
+    const ingressSourceKind = sourceKind(request.sourceKind);
+    if (ingressSourceKind === null) {
+      return Object.freeze({ kind: "invalid", code: "invalid_source_kind" });
+    }
     const displayFilename = filename(request.displayFilename);
     if (displayFilename === null) {
       return Object.freeze({ kind: "invalid", code: "invalid_filename" });
@@ -265,6 +283,7 @@ export class BundleFileStagingService {
         claimed_media_type: request.claimedMediaType ?? null,
         expected_size: request.expectedSize ?? null,
         expected_sha256: request.expectedSha256 ?? null,
+        source_kind: ingressSourceKind,
         media_type: detected,
         sha256,
         size: bytes.byteLength,
@@ -386,6 +405,7 @@ export class BundleFileStagingService {
           const record: Readonly<StagedBundleFileRecord> = Object.freeze({
             stagedFileId,
             bindingOwnerId,
+            sourceKind: ingressSourceKind,
             writeBindingId,
             writeBindingGeneration: write.generation,
             spaceId: request.spaceId,
