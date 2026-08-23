@@ -25,6 +25,7 @@ import {
 } from "@mind-diary/domain";
 import {
   COMPOSITION_SELECTION,
+  createProductSiteRuntime,
   createSitesPersistenceBoundary,
 } from "@mind-diary/composition-root";
 import {
@@ -801,6 +802,95 @@ test("legacy active HEAD without index effects replays and is backfilled exactly
   const due = await boundary.metadata.listRecoverableIndexJobs(T1, 10);
   assert.equal(due.length, 1);
   assert.equal(due[0].target.revisionId, personal.headRevisionId);
+});
+
+test("Product runtime concurrently backfills a missing active HEAD index after metadata reconstruction", async () => {
+  const database = new FakeD1Database();
+  const bucket = new FakeR2Bucket();
+  const generators = ids();
+  let boundary = await createSitesPersistenceBoundary({ database, bucket });
+  const created = await services(boundary, generators).bootstrap.bootstrapAccount(
+    preRegistrationActor(7),
+    { action: "create_isolated_account" },
+  );
+  const bootstrapEvent = database.metadataEvents.find(
+    (event) => event.operation === "runAccountBootstrapTransaction",
+  );
+  assert.ok(bootstrapEvent);
+  const payload = JSON.parse(bootstrapEvent.payload_json);
+  const createCall = payload.calls.find((call) => call.method === "createAccountBootstrap");
+  assert.ok(createCall);
+  delete createCall.args[0].initialIndexJob;
+  delete createCall.args[0].initialIndexState;
+  bootstrapEvent.payload_json = JSON.stringify(payload);
+  database.metadataSnapshot = null;
+  database.metadataSnapshotHead = null;
+  database.metadataSnapshotChunks.clear();
+
+  boundary = await createSitesPersistenceBoundary({ database, bucket });
+  const personal = await boundary.metadata.resolvePersonalMind(created.principalId);
+  assert.ok(personal);
+  assert.equal(
+    await boundary.metadata.readRevisionIndexState(
+      personal.spaceId,
+      personal.headRevisionId,
+    ),
+    null,
+  );
+
+  const now = new Date("2026-08-08T09:00:00.000Z");
+  const runtimeOptions = {
+    database,
+    bucket,
+    publicOrigin: "https://mind-diary.example",
+    identity: {
+      readVerifiedIdentity() {
+        return {
+          kind: "authenticated",
+          verifiedEmail: "recovery.runtime@example.invalid",
+          verifiedFullName: "Recovery Runtime",
+        };
+      },
+    },
+    tokenVerifierKey: Uint8Array.from({ length: 32 }, (_value, index) => index + 1),
+    locatorKey: Uint8Array.from({ length: 32 }, (_value, index) => index + 33),
+    exportDownloadVerifierKey: Uint8Array.from({ length: 32 }, (_value, index) => index + 65),
+    csrfKey: Uint8Array.from({ length: 32 }, (_value, index) => index + 97),
+    now: () => now,
+    observabilityWriter: { write() {} },
+    schedule() {},
+  };
+  const runtime = await createProductSiteRuntime(runtimeOptions);
+  const [first, second] = await Promise.all([
+    runtime.recoverBackground(),
+    runtime.recoverBackground(),
+  ]);
+  assert.equal(first.failed, 0);
+  assert.equal(second.failed, 0);
+  assert.equal(first.backfilled + second.backfilled, 1);
+
+  const recovered = await createSitesMetadataStore(database);
+  const ready = await recovered.readRevisionIndexState(
+    personal.spaceId,
+    personal.headRevisionId,
+  );
+  assert.ok(ready);
+  assert.equal(ready.status, "ready");
+  assert.equal(ready.attempts, 1);
+  assert.equal(
+    (await recovered.listActiveRevisionIndexGaps(10)).length,
+    0,
+  );
+
+  const restarted = await createProductSiteRuntime(runtimeOptions);
+  const afterRestart = await restarted.recoverBackground();
+  assert.equal(afterRestart.failed, 0);
+  assert.equal(afterRestart.backfilled, 0);
+  const afterRestartState = await recovered.readRevisionIndexState(
+    personal.spaceId,
+    personal.headRevisionId,
+  );
+  assert.equal(afterRestartState?.status, "ready");
 });
 
 test("materialized metadata snapshot removes full-log replay from warm and restart reads", async () => {
