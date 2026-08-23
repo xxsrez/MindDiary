@@ -184,6 +184,10 @@ evidence, предлагаемый дизайн и ещё не проверен�
 - [Security, privacy и threat regression на 2026-08-07](reports/2026-08-07-security-privacy-regression.md)
   — локальная fail-closed suite для identity, Origin/CSRF, token/ACL/locator
   boundaries, safe rendering и privacy-redacted evidence; без live claim.
+- [Universal file ingress matrix на 2026-08-23](reports/2026-08-23-universal-file-ingress-matrix.md)
+  — повторяемый `pass/fail/not-available` report по source, atomicity,
+  authorization, privacy, modern/compat conformance и текущей hosted Codex
+  capability boundary.
 - [Product Site source candidate на 2026-08-08](reports/2026-08-08-product-site-candidate.md)
   — исторический repository candidate, впоследствии интегрированный в
   deployment, который теперь классифицируется как UAT.
