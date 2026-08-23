@@ -13,6 +13,15 @@ MD-250. Этот
 producer-defined contract расширяет Mind Diary, но не изменяет Open Knowledge
 Format 0.2 и не объявляет `BundleFile` нормативной OKF entity.
 
+MD-271 добавляет общий [file-ingress contract](file-ingress.md) и source
+capability matrix для bytes, которые могут попасть в этот `BundleFile` slice.
+В текущем candidate реально подключён только `session_attachment` через
+OpenAI-native MCP parameter; `local_path`, `workspace/generated_artifact`,
+`connector_object`, `bounded_in_memory` и `server_generated` остаются
+contract-only/not-available до отдельных adapter evidence. Это расширяет
+portable source boundary, но не поднимает статус native client UAT и не
+разрешает silent base64, arbitrary URL или local-path fallback.
+
 ## Контекст и граница решения
 
 Проверенный внешний факт: OKF 0.2 задаёт переносимое дерево Markdown и ссылки
@@ -28,6 +37,13 @@ exact bytes.
 его содержимое в authority. Browser content editor/file manager, OCR,
 transcription, archive import/extraction, granular file ACL и production release
 в этот slice не входят.
+
+Все source kinds проходят один adapter-to-application boundary. Adapter
+заканчивает provider ID/temporary URL, absolute path или connector credential;
+application получает exact bytes и безопасные canonical metadata, а staging
+записывает safe `source_kind` рядом с digest/size/media type. Source kind не
+является частью authorization identity или manifest path; нормативные детали
+этой границы находятся в [file-ingress specification](file-ingress.md).
 
 ## Revision manifest v2
 
@@ -187,8 +203,9 @@ must prove this extension in UAT; lack of support is
 
 A verified record is pinned to
 `binding_owner_id + space_id + write_binding_id`, stores only opaque
-`staged_file_ref`, object key, digest, size, media type, safe filename, state and
-timestamps, and expires after 60 minutes. Provider file ID/URL is not persisted.
+`staged_file_ref`, source kind, object key, digest, size, media type, safe
+filename, state and timestamps, and expires after 60 minutes. Provider file
+ID/URL, local path and connector credential are not persisted.
 Foreign/not-found refs are externally indistinguishable
 `staged_file_unavailable`; owner-visible expired, consumed, rejected or stale-
 binding state has its specific code.

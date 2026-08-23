@@ -1,0 +1,87 @@
+# ADR-0018: единый file-ingress contract и source capability matrix
+
+Статус: accepted, 2026-08-23. Решение относится к Release 0.1 и текущему
+Sites UAT. Это contract decision MD-271; implementation/evidence каждой source
+capability остаются отдельными claims и child tasks.
+
+## Контекст
+
+ADR-0015 принял `BundleFile` и adapter-only OpenAI native ingress. Этот
+baseline уже даёт один безопасный путь `stage_bundle_file`, но не задаёт
+portable boundary для local disk, workspace/generated artifacts, authorized
+connector objects, bounded in-memory bytes или server-generated output. Без
+единого решения следующие adapters могли бы протащить provider ID/URL,
+absolute path или raw bytes в domain identity, либо незаметно заменить
+неподдержанный native input base64/arbitrary URL transport.
+
+MD-271 требует свести шесть source kinds к одной модели и сохранить совместную
+revision/atomicity с уже принятыми Markdown и BundleFile operations. При этом
+документ не должен превращать local companion или native client capability в
+проверенную реализацию без exact evidence.
+
+## Решение
+
+1. Portable application принимает только adapter-produced
+   `VerifiedFileInput` с closed `source_kind`, exact bytes, safe display
+   filename, detected media type, size и SHA-256. Provider identifiers,
+   temporary URLs, absolute paths, workspace paths, connector credentials and
+   raw request bodies terminate before the application port.
+2. Staging использует service-owned `staged_file_ref`, pinned to
+   `binding_owner_id + space_id + write_binding_id`. Record stores safe
+   `source_kind`, exact integrity/quota metadata and lifecycle state, but never
+   source locator or secret. Canonical identity remains `revision_id + path`.
+3. The source capability matrix in
+   [file-ingress specification](../specs/file-ingress.md) is normative for
+   source classes, limits, TTLs, verification ownership, typed errors,
+   fallback prohibition and implementation/evidence status.
+4. Existing `session_attachment` is the only currently implemented local
+   source profile. Both MCP profiles may advertise the native `file` parameter
+   only when their pinned client/profile capability is proven. Missing native
+   support returns `native_file_input_unsupported`; there is no silent base64,
+   local-path or arbitrary-URL fallback.
+5. `local_path`, `workspace/generated_artifact`, `connector_object`,
+   `bounded_in_memory` and `server_generated` are accepted source contract
+   slots, not shipped capabilities. Their adapters require separate
+   capability/transport evidence and may use only explicit out-of-band or
+   trusted internal boundaries.
+6. One staged ref belongs to one BundleFile target path in one changeset. A
+   changeset may contain multiple refs and Markdown operations, but successful
+   commit consumes all refs in one existing HEAD-CAS transaction. Unknown
+   stage/commit outcomes replay the exact key/payload; changed payloads produce
+   idempotency conflict; stale/failing commits never publish a partial revision.
+7. The existing BundleFile allowlist, path policy, quotas, historical bytes,
+   Markdown-only import profile and deterministic export profiles remain
+   unchanged. This ADR does not add archive import, generic binary formats,
+   browser raw-content endpoints or production malware-cleanliness claims.
+
+## Consequences
+
+- Future source adapters can share staging, authorization, quota, integrity,
+  audit and commit semantics without making source locators portable.
+- Capability negotiation is explicit: a client either supplies the required
+  native file/intent/inline profile or receives a typed unavailable result.
+- The current candidate can claim only local `session_attachment` code/tests;
+  MD-250 is still required for exact native client/profile UAT. MD-272–MD-274
+  are needed before other rows move beyond proposal/not-available.
+- Local snapshots may hash before network I/O for user feedback, but the
+  application recomputes digest/size/MIME; client declarations never become
+  authority. Provider and local path secrecy remains an adapter invariant.
+- Multi-source commits retain one immutable revision and one HEAD transition,
+  while shared digest/quota semantics continue to be governed by the lower
+  applicable BundleFile/Mind/principal/Site limits.
+
+## Отклонённые варианты
+
+- **Put provider IDs or URLs in `BundleFile`/domain records.** This leaks
+  transport identity, prevents provider migration and makes durable state
+  depend on short-lived capabilities.
+- **Pass absolute local/workspace paths through MCP.** A hosted service cannot
+  read a caller's disk safely, and path disclosure violates the portable
+  boundary; a separately authorized companion is required.
+- **Use base64 or arbitrary remote URLs as universal fallback.** This bypasses
+  host capability negotiation, creates unbounded memory/SSRF risk and changes
+  the native client contract silently.
+- **Commit one source at a time.** It exposes partial revisions and breaks the
+  existing atomic Markdown+BundleFile changeset semantics.
+- **Treat source kind as authorization identity.** Authorization remains
+  principal/binding/Space/ACL based; provenance class cannot grant access.

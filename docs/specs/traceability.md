@@ -93,6 +93,19 @@ exact-candidate join below passes.
 | BF3-ReadExport | Bound reader lists/downloads exact revision, Markdown references validate, one-use grants fail closed and `MD-BUNDLE-ZIP-1` is deterministic while legacy export is unchanged. | `MD-249` | Implemented locally: current/historical pagination, atomic references, token/ACL/expiry/delete failures, one-use concurrency, image/PDF/ZIP headers, Sites restart/CAS and dual export byte fixtures | image/PDF/ZIP download SHA and export on exact deployment |
 | BF4-Join | One exact candidate passes repository/security/dev gates and real Codex stage → commit → list → download/history/revoke/redeploy flow. | `MD-250` | clean `npm ci` + one `npm run check`, docs/diff, exact-SHA dev receipt | exact Sites version/deployment/tool inventory/client-plugin tuple and redacted native-file receipt; missing capability keeps nonterminal |
 
+## File-ingress extension 2026-08-23
+
+[ADR-0018](../decisions/0018-file-ingress-contract-and-source-capability-matrix.md)
+и [единый file-ingress contract](file-ingress.md) фиксируют шесть source kinds,
+portable `VerifiedFileInput`/`staged_file_ref`, adapter/application ownership,
+typed capability errors, limits, lifecycle, idempotency и atomic multi-ref
+commit. Только `session_attachment` имеет local implementation; MD-250 native
+client UAT остаётся pending, остальные rows contract-only до child tasks.
+
+| ID | Наблюдаемый результат | Owner | Local evidence | UAT evidence |
+|---|---|---|---|---|
+| FI0-Contract | Каждый file source сводится к verified bytes и service-owned staged ref без provider ID/URL, local path, silent fallback или partial multi-ref commit; capability status не выдаётся за implementation. | `MD-271` | `file-ingress-contract`, affected docs + ADR-0018, docs topology/link validation and `git diff --check` | not-applicable until source adapter/client implementation |
+
 ## Brain-scale Sites storage/import extension 2026-08-22
 
 [ADR-0016](../decisions/0016-sites-storage-capacity-import.md) and the
@@ -169,7 +182,7 @@ secret и download URL.
 | 18 | Historical selector всегда read-only и использует current access; public→private отзывает history у non-member. | `AND-62` | `U/P, C, I, S, M`: exact/as-of boundaries, Owner write denial и access transition. | `A18 + MI + CX + R` |
 | 19 | File delete сохраняет старую revision; whole-Mind delete удаляет history/linked records, инвалидирует locators и навсегда retires non-linkable handle без forensic receipt. | `AND-52` | `U/P, I, F, B`: deletion impact, injected retry/race, old-file precondition и post-delete storage/locator scan. | `A19 + W + P + R` |
 | 20 | Account delete выполняет весь cascade, отзывает identity/tokens и сохраняет foreign commits только с non-PII `deleted-principal`; UI показывает impact. | `AND-47` | `U/P, I, F, B`: fresh/stale preview, crash/retry, cross-aggregate reconciliation и PII-negative scan. | `A20 + W + P + R` |
-| 21 | Markdown writes remain UTF-8/OKF 0.2; accepted BundleFile is a separate producer envelope, ZIP stays opaque and ZIP/import remains absent. | `AND-41` | Historical Markdown evidence plus `MD-246`–`MD-250` BF0–BF4 manifest/type/staging/atomic/history/UAT rows. | `A21 + BF4 + CX + R` |
+| 21 | Markdown writes remain UTF-8/OKF 0.2; accepted BundleFile is a separate producer envelope, and MD-271 keeps all file source locators adapter-owned while ZIP stays opaque and ZIP/import remains absent. | `AND-41` | Historical Markdown evidence plus `MD-246`–`MD-250` BF0–BF4 rows and `MD-271` FI0 contract fixture. | `A21 + BF4 + CX + R` |
 | 22 | Unknown OKF fields/types переживают read-modify-write/export; conformance errors отделены от quality warnings. | `AND-41` | `U/P, C, I`: audited OKF 0.2 round-trip corpus, byte/semantic diff и separate validation classes. | `A22 + CX + R` |
 | 23 | Reader/baseline Reader exports exact allowed revision through reauthorized grant: legacy `MD-OKF-ZIP-1` unchanged; mixed `MD-BUNDLE-ZIP-1` preserves exact files without service identity. | `AND-72` | Historical export evidence plus `MD-249`/`MD-250` BF3/BF4 deterministic dual-profile/access rows. | `A23 + BF4 + CX + P + R` |
 | 24 | Search/fetch фильтруются по exact space/revision; missing historical index не подмешивает HEAD. | `AND-63` | `U/P, I, F, S, M`: seeded two-space/two-revision corpus, lag/missing index и result provenance. | `A24 + MI + CX + R` |
@@ -219,7 +232,7 @@ failure; отсутствующий receipt остаётся pending.
     { "id": 18, "owner": "AND-62", "local_evidence": ["mind-history"], "live_evidence": ["MI", "CX"], "release_evidence": "R" },
     { "id": 19, "owner": "AND-52", "local_evidence": ["ordinary-mind-deletion"], "live_evidence": ["W", "P"], "release_evidence": "R" },
     { "id": 20, "owner": "AND-47", "local_evidence": ["account-deletion"], "live_evidence": ["W", "P"], "release_evidence": "R" },
-    { "id": 21, "owner": "AND-41", "local_evidence": ["okf-unit", "okf-conformance", "changeset-preflight"], "live_evidence": ["CX"], "release_evidence": "R" },
+    { "id": 21, "owner": "AND-41", "local_evidence": ["okf-unit", "okf-conformance", "changeset-preflight", "file-ingress-contract"], "live_evidence": ["CX"], "release_evidence": "R" },
     { "id": 22, "owner": "AND-41", "local_evidence": ["okf-unit", "okf-conformance", "export-contract"], "live_evidence": ["CX"], "release_evidence": "R" },
     { "id": 23, "owner": "AND-72", "local_evidence": ["export-download-grants", "export-contract"], "live_evidence": ["CX", "P"], "release_evidence": "R" },
     { "id": 24, "owner": "AND-63", "local_evidence": ["mind-search", "mind-browse", "audit-index-jobs"], "live_evidence": ["MI", "CX"], "release_evidence": "R" },
@@ -262,6 +275,7 @@ failure; отсутствующий receipt остаётся pending.
     "ordinary-mind-deletion": { "title": "Whole-Mind deletion and retired handle", "command": ["node", "--test", "tests/integration/ordinary-mind-deletion.test.mjs"], "paths": ["tests/integration/ordinary-mind-deletion.test.mjs"] },
     "account-deletion": { "title": "Account cascade, retry and PII-negative scan", "command": ["node", "--test", "tests/integration/account-deletion.test.mjs"], "paths": ["tests/integration/account-deletion.test.mjs"] },
     "okf-unit": { "title": "OKF 0.2 paths, UTF-8 and unknown field round-trip", "command": ["node", "--test", "tests/unit/okf-codec.test.mjs"], "paths": ["tests/unit/okf-codec.test.mjs"] },
+    "file-ingress-contract": { "title": "MD-271 unified file-ingress source capability contract", "command": ["node", "--test", "tests/conformance/file-ingress-contract.test.mjs"], "paths": ["docs/specs/file-ingress.md", "docs/decisions/0018-file-ingress-contract-and-source-capability-matrix.md", "tests/conformance/file-ingress-contract.test.mjs"] },
     "export-contract": { "title": "Deterministic MD-OKF-ZIP-1 contract", "command": ["node", "--test", "tests/conformance/export-contract.test.mjs"], "paths": ["tests/conformance/export-contract.test.mjs"] },
     "export-download-grants": { "title": "Reauthorized short-lived export downloads", "command": ["node", "--test", "tests/integration/export-download-grants.test.mjs"], "paths": ["tests/integration/export-download-grants.test.mjs"] },
     "mind-search": { "title": "Exact-space and exact-revision search", "command": ["node", "--test", "tests/integration/mind-search.test.mjs"], "paths": ["tests/integration/mind-search.test.mjs"] },
@@ -287,7 +301,7 @@ failure; отсутствующий receipt остаётся pending.
     { "id": "aws-runtime", "claim": "AWS, AgentCore and a separate production runtime are not the Sites MVP fallback.", "evidence": ["architecture-check"] },
     { "id": "imports", "claim": "ZIP/local import and legacy migration are absent.", "evidence": ["okf-unit", "changeset-preflight"] },
     { "id": "checkpoints", "claim": "Branches, merge, moving tags and named checkpoints are absent.", "evidence": ["mind-history"] },
-    { "id": "bundle-file-expansion", "claim": "BundleFile types beyond the accepted raster/PDF/ZIP slice, extraction/OCR/preview/resumable/import are absent.", "evidence": ["okf-unit", "changeset-preflight"] },
+    { "id": "bundle-file-expansion", "claim": "BundleFile types beyond the accepted raster/PDF/ZIP slice, additional source adapters, extraction/OCR/preview/resumable/import are absent.", "evidence": ["okf-unit", "changeset-preflight", "file-ingress-contract"] },
     { "id": "personalization", "claim": "Personalized landing and website AI are not exposed.", "evidence": ["exposure-contract"] },
     { "id": "oauth-company-knowledge", "claim": "ChatGPT Web/public-directory and company-knowledge profiles are not claimed by the direct Codex UAT plugin.", "evidence": ["mcp-transport", "mcp-tools"] },
     { "id": "claude-support", "claim": "Claude Code is not a supported client without its own conformance evidence.", "evidence": ["mcp-transport"] },

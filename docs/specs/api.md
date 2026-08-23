@@ -28,6 +28,14 @@ export/cleanup реализованы в local candidate; MD-267 import session 
 Sites UI также реализованы локально, а прежний UAT deployment не является
 evidence нового candidate.
 
+ADR-0018 and [the unified file-ingress specification](file-ingress.md) define
+the portable source boundary for `session_attachment`, `local_path`,
+`workspace/generated_artifact`, `connector_object`, `bounded_in_memory` and
+`server_generated`. Only `session_attachment` is currently implemented locally;
+its native client/profile UAT remains MD-250. The other source kinds are
+contract-only and must not be inferred from this API document, advertised as
+available, or used as silent base64/URL/path fallbacks.
+
 ## Назначение и граница
 
 Mind Diary имеет четыре разные API-границы:
@@ -292,6 +300,11 @@ Application-layer error имеет стабильный machine code:
 | `file_exists` | `create_file` направлен в существующий path. |
 | `file_not_found` | Replace/delete не находит path в expected revision. |
 | `native_file_input_unsupported` | Pinned client/profile cannot supply the required native file parameter. |
+| `file_ingress_source_unsupported` | No enabled adapter/profile can read the requested source kind. |
+| `file_ingress_source_unavailable` | Source object or ownership cannot be established without revealing existence. |
+| `file_ingress_transport_unavailable` | Bounded source transport failed transiently; retry the exact request/key. |
+| `file_ingress_intent_expired` | One-use out-of-band upload intent expired or was consumed. |
+| `file_ingress_intent_conflict` | Upload intent key/payload was replayed with different metadata or bytes. |
 | `bundle_file_size_limit_exceeded` | One opaque file exceeds 64 MiB. |
 | `bundle_file_operation_limit_exceeded` | More than 20 BundleFile operations. |
 | `bundle_file_changeset_size_limit_exceeded` | Staged bytes referenced by one changeset exceed 128 MiB. |

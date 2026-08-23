@@ -13,6 +13,13 @@ D1-checkpointed bounded cleanup из MD-268 также реализованы л
 canonical promotion checkpoints, exact HEAD commit, retry/cancel/expiry и
 cleanup. Весь extension пока не проверен на exact UAT deployment.
 
+MD-271 задаёт общий [file-ingress contract](file-ingress.md) для source bytes,
+которые могут быть staged как `BundleFile`. Этот документ отвечает только за
+Space-scoped storage, capacity/reservation и отдельный Markdown import profile:
+он не делает `local_path`, workspace, connector, bounded-inline или
+server-generated source capability реализованной. В текущем candidate native
+`session_attachment` остаётся отдельным BundleFile/MCP path с UAT gate MD-250.
+
 ## Цель и граница
 
 Обычная правка большого Mind не должна читать и заново записывать весь corpus,
@@ -22,10 +29,18 @@ content-addressed; D1 хранит transactional authority и bounded metadata, 
 bytes. Derived search, usage projections и temporary objects не становятся
 источником истины.
 
+File ingress и Markdown import не смешиваются: file ingress stages one opaque
+object per `staged_file_ref`, а Markdown import stages a complete UTF-8
+Markdown snapshot through its own plan/session/checkpoint contract. Оба пути
+используют одинаковые Space-scoped objects, reservations и final HEAD CAS;
+ни один source locator не становится R2/D1 identity.
+
 Первый import profile принимает только отдельные UTF-8 Markdown files. ZIP,
-BundleFile, symlinks, OCR, remote crawl, Google Drive sync, legacy OKF 0.1 и
-cross-Mind merge не входят в него. AWS остаётся будущей infrastructure
-direction и не является current implementation или fallback.
+BundleFile file-by-file staging, symlinks, OCR, remote crawl, Google Drive
+sync, legacy OKF 0.1 и cross-Mind merge не входят в этот import profile.
+`BundleFile` ingress остаётся отдельным producer contract; его source matrix
+не превращает archive/binary import в доступный workflow. AWS остаётся будущей
+infrastructure direction и не является current implementation или fallback.
 
 ## Выбранная модель
 

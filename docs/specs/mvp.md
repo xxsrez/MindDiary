@@ -21,6 +21,14 @@ Markdown-import contract по ADR-0016. MD-265–MD-268 реализованы �
 candidate: delta v3 commit, usage reservations, streaming cleanup/export и
 resumable import. Exact-SHA UAT evidence остаётся отдельным обязательным gate.
 
+MD-271 принимает единый [file-ingress contract](file-ingress.md) для
+`session_attachment`, `local_path`, `workspace/generated_artifact`,
+`connector_object`, `bounded_in_memory` и `server_generated`. В текущем
+candidate только native `session_attachment` реализован локально; MD-250
+остаётся UAT gate, а остальные source rows contract-only до отдельных child
+tasks. Это capability matrix, не обещание local companion/native/connector
+implementation.
+
 ## Цель
 
 Доказать на prod-like UAT OpenAI Site end-to-end сценарий: authenticated
@@ -125,6 +133,12 @@ resumable import. Exact-SHA UAT evidence остаётся отдельным о�
 - `stage_bundle_file` quarantines and verifies exact bytes under current
   credential/write binding; только atomic `commit_changeset` связывает ref с
   canonical path и одновременно может обновить Markdown link.
+- Все file sources сначала проходят adapter-to-application
+  `VerifiedFileInput` и получают service-owned `staged_file_ref`; provider IDs,
+  temporary URLs, local/workspace paths и raw request bodies не являются
+  portable identity. Unsupported source/client возвращает typed capability
+  error, а не silent base64/URL/path fallback. См. [единый file-ingress
+  contract](file-ingress.md).
 - Проверка OKF 0.2 conformance отдельно от quality warnings.
 - Неизвестные OKF types/fields сохраняются при read-modify-write и export.
 - Legacy 0.1 import/migration отложен и в будущем потребует explicit policy без
@@ -554,6 +568,10 @@ advertised via `_meta["openai/fileParams"]`; it is not provider-neutral domain
 input. Pinned modern/compatibility clients must independently prove this
 extension. Unsupported client returns `native_file_input_unsupported` without
 local-path/base64 fallback.
+
+The native parameter is only the current `session_attachment` row of the
+file-ingress matrix. Other rows are not advertised by this MCP profile until
+their adapter, limits, ownership proof and conformance evidence exist.
 
 Это custom Mind-aware tool profile для Codex и отдельно проверяемых clients.
 Первый прототип не

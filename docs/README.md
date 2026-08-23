@@ -45,27 +45,31 @@ evidence, предлагаемый дизайн и ещё не проверен�
 14. [BundleFile](specs/bundle-files.md) — принятый producer-defined contract
    versioned attachments: manifest v2, exact type/limit/staging/download rules,
    mixed atomic commits и отдельный deterministic export profile.
-15. [Sites storage, capacity и Markdown import](specs/sites-storage-capacity-import.md)
+15. [Единый file-ingress contract](specs/file-ingress.md) — принятый portable
+   boundary и capability matrix для session attachment, local/workspace,
+   connector, bounded in-memory и server-generated sources; implementation
+   status каждой source явно отделён от contract.
+16. [Sites storage, capacity и Markdown import](specs/sites-storage-capacity-import.md)
    — принятый Brain-scale contract: Space-scoped content addressing, v3 delta
    manifests, reconstructable accounting/reservations, bounded Markdown import,
    streaming export/GC и migration/rollback boundary.
-16. [Операторский каталог principals и последняя активность](specs/service-operator-directory.md)
+17. [Операторский каталог principals и последняя активность](specs/service-operator-directory.md)
    — принятый read-only UAT contract отдельной service-operator authority,
    success-only web/MCP summary, privacy-minimized directory и deletion.
-17. [Автономная доставка work scope](specs/ship-work-release.md) — универсальный
+18. [Автономная доставка work scope](specs/ship-work-release.md) — универсальный
    принятый контракт `ship-work-release`: task-manager adapters, один mutable
    writer по умолчанию, selective lanes и scouts, cohorts, control API,
    dev/UAT promotion и ручная production boundary.
-18. [Контракт project profile](specs/ship-work-release-project-profile.md) —
+19. [Контракт project profile](specs/ship-work-release-project-profile.md) —
    versioned provider-neutral schema обязательных project-specific commands,
    runtime capabilities, gates, environments и evidence rows.
-19. [Контракт task-management adapter](specs/ship-work-release-task-manager.md) —
+20. [Контракт task-management adapter](specs/ship-work-release-task-manager.md) —
    versioned provider-neutral schema identity, snapshots, mutations,
    reconciliation и capability negotiation task-management backend-а.
-20. [Linear adapter для `ship-work-release`](specs/ship-work-release-linear.md) —
+21. [Linear adapter для `ship-work-release`](specs/ship-work-release-linear.md) —
    отдельное отображение Linear projects, milestones, issues, relations,
    statuses и updates в универсальную модель work collection/scope/item.
-21. [Упрощённая доставка Linear milestone](specs/ship-linear-release-v1.md) —
+22. [Упрощённая доставка Linear milestone](specs/ship-linear-release-v1.md) —
    исполнимый compromise profile `ship-linear-release`: один coordinator,
    coordinator-only либо exact N worker-субагентов, простой JSON journal,
    meaningful UAT batches и forward-only repair.
@@ -155,6 +159,10 @@ evidence, предлагаемый дизайн и ещё не проверен�
 - [ADR-0017: read-only service-operator directory](decisions/0017-service-operator-directory.md)
   — приняты отдельная constructor-only operator allowlist, compact success-only
   web/MCP activity summary, privacy-minimized read model и deletion boundary.
+- [ADR-0018: единый file-ingress contract](decisions/0018-file-ingress-contract-and-source-capability-matrix.md)
+  — приняты portable staged-ref boundary, шесть source kinds, explicit
+  capability negotiation, atomic multi-ref semantics и запрет silent fallback;
+  implementation остаётся source-specific.
 
 ## Исследования
 

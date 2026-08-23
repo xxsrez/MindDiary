@@ -510,7 +510,10 @@ Live Sites/MCP compatibility, physical storage semantics и Codex conformance
 - выбор языка, framework, ORM, database schema или Sites binding;
 - AWS/AgentCore deployment либо fallback runtime;
 - raw browser content surface или control-plane MCP tools;
-- imports, checkpoints, non-Markdown assets, personalized landing, anonymous
-  access, company-knowledge profile, drafts/approval и Claude Code support;
+- archive/OKF imports, checkpoints, personalized landing, anonymous access,
+  company-knowledge profile, drafts/approval и Claude Code support; bounded
+  non-Markdown `BundleFile` ingress follows the accepted
+  [file-ingress contract](file-ingress.md), while source adapters remain
+  capability-specific and unimplemented rows are not advertised;
 - утверждение, что наличие modules, ports и local checks само по себе доказывает
   physical storage semantics, live Sites compatibility или client conformance.

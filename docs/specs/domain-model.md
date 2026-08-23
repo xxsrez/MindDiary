@@ -24,6 +24,9 @@ Mind Diary: у него есть стабильная identity, дерево OKF
 | `KnowledgeEntry` / `Memory` | Пользовательский searchable OKF concept; `Memory` — umbrella term в UI. |
 | `Source` | Source-faithful материал или typed source concept с provenance. |
 | `BundleFile` | Принятый producer-defined opaque file одной revision; в UI attachment/asset. OKF 0.2 не задаёт эту entity или manifest. Первый slice ограничен raster/PDF/ZIP и отдельным service contract. |
+| `FileIngressSource` | Closed provenance class `session_attachment`, `local_path`, `workspace/generated_artifact`, `connector_object`, `bounded_in_memory` или `server_generated`; не authorization identity. |
+| `VerifiedFileInput` | Adapter-produced exact bytes plus source kind, safe filename, detected media type, size and SHA-256; provider IDs/URLs and local paths terminate at the adapter boundary. |
+| `staged_file_ref` | Service-owned quarantined/verified locator pinned to owner, Space and write binding; it is consumed atomically by a BundleFile changeset and is not a provider/local locator. |
 | `ImportSession` | Private resumable Markdown-only staging aggregate, pinned to principal/write binding/Space/base revision/idempotency key; не revision и не reader-visible content. |
 | `CapacityReservation` | Durable bounded budget for one admitted operation; consumed/released atomically with canonical transition or cleanup. |
 | `Index` / `Log` | Reserved OKF `index.md` и `log.md`, а не обычные `KnowledgeEntry`. |
@@ -398,6 +401,11 @@ transaction. Resumable Markdown import stages private batches and invokes this
 same final CAS once; checkpoints never become partial revisions. Normative
 details and not-started status are in
 [Sites storage/capacity/import](sites-storage-capacity-import.md).
+
+MD-271's [file-ingress contract](file-ingress.md) applies the same boundary to
+all BundleFile sources. The current candidate exposes only local
+`session_attachment` code/tests; the other source kinds remain contract-only
+until their owning adapter and capability evidence exist.
 
 Reserved files требуют явной семантики:
 
