@@ -174,11 +174,13 @@ test("authenticated home emits correlated privacy-safe performance stages", asyn
   assert.equal(events.every(({ durationMs }) => Number.isFinite(durationMs) && durationMs >= 0), true);
   assert.equal(events.every(({ outcome }) => outcome === "success"), true);
   assert.deepEqual(Object.keys(events[0]).sort(), [
+    "benchmarkCorrelationId",
     "durationMs",
     "operation",
     "outcome",
     "requestId",
   ]);
+  assert.equal(events.every(({ benchmarkCorrelationId }) => benchmarkCorrelationId === null), true);
 
   const failingRecorder = createProductWebHttpHandler({
     ...dependencies,
