@@ -153,9 +153,21 @@ credentials.
 - multi-source reconcile coordinator;
 - large-file capacity/admission profile сверх принятого MVP envelope.
 
-Эти Tasks сохраняются: выполненный код и инженерное знание не удаляются. Но
-после принятия release boundary они должны перейти в отдельный milestone или
-Backlog и потерять `Release blocker` для 0.1.
+Эти Tasks сохранены в Project, но уже выведены из Release 0.1, лишены
+`Release blocker` и понижены до `medium`. MD-257/MD-261 и scale Epic MD-259
+также находятся вне Release; они возвращаются только при измеренном P0 gap.
+
+## Ownership приёмки
+
+| Класс | Кто выполняет | Примеры |
+|---|---|---|
+| Agent-owned | Agent от начала до objective status transition | tests, Browser/Computer Use, Marketplace refresh/install, OAuth navigation, canaries, UAT publish/read-back, receipts, cleanup |
+| Agent-executed после подтверждения | Пользователь даёт одно at-action confirmation, затем agent выполняет и проверяет mutation | persistent UAT audience/operator allowlist, материальное расширение OAuth access |
+| Human-only security step | Пользователь делает ровно один недоступный инструментам шаг; agent автоматически продолжает | password, MFA, passkey, OS security prompt, создание отсутствующей внешней identity |
+| Product decision | Пользователь выбирает изменение обещания или authority boundary | host не поддерживает incremental consent, production, новая privacy/access policy |
+
+Ordinary OAuth consent не считается ручной пользовательской приёмкой. Общая
+просьба «проверьте всё вручную» не является допустимым blocker-report.
 
 ## Acceptance signals
 

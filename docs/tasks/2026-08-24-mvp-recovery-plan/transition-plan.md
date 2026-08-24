@@ -19,22 +19,23 @@ Owning Task: MD-292.
    storage/import specification, traceability и release profile.
 3. Обновить stale top-level Project/Release descriptions: убрать retired
    AND/Linear narrative и привести current release outcome к принятой границе.
-4. После fresh Task Manager read-back атомарно убрать `Release blocker` 0.1 и
-   active Release composition у:
+4. Planning reconciliation уже выполнена после fresh Task Manager read-back:
+   `Release blocker` 0.1 и active Release composition убраны у:
    - MD-245, MD-249–MD-250;
+   - MD-257, MD-259–MD-261;
    - MD-260, MD-266–MD-268;
    - MD-270, MD-272–MD-275;
    - MD-284, MD-288–MD-290.
 5. Сохранить их hierarchy, relations, code и evidence в следующем milestone;
    ничего не удалять и не помечать Duplicate без exact основания.
-6. Оставить MD-257/MD-261 supporting work только на случай измеренного
-   small-data bottleneck MD-258.
+6. Relations MD-257/MD-261 → MD-258 уже удалены; supporting work возвращается
+   только на случай измеренного small-data bottleneck.
 
 ### Gate
 
 - accepted docs и Task Manager показывают один P0 scope;
-- live Project/Release descriptions не содержат retired AND/Linear либо
-  противоречащие Marketplace/OAuth claims;
+- stale Project/Release prose обновлено через поддержанную write surface либо
+  явно помечено non-authoritative относительно accepted docs/composition;
 - final gate не зависит от BundleFile, large corpus, Google Drive или universal
   ingress;
 - post-MVP Tasks не имеют `Release blocker` 0.1.
@@ -90,9 +91,14 @@ Owning Task: MD-301. MD-292 блокирует эту фазу.
 ### 2.2 Operator gate — MD-244, MD-280–MD-283
 
 - использовать уже созданный bounded three-principal pool;
-- самостоятельно выполнить setup/verify/cleanup и privacy receipt;
-- не просить пользователя создавать principals повторно;
-- запросить помощь только при interactive account action, недоступном agent-у.
+- agent самостоятельно выполняет Browser/Computer Use session routing,
+  setup/verify/cleanup и privacy receipt;
+- не просить пользователя создавать principals повторно либо вручную выполнять
+  acceptance;
+- запросить ровно password/MFA/passkey/OS-security step, если он реально
+  недоступен agent-у;
+- перед persistent UAT audience/operator-allowlist mutation получить одно
+  at-action confirmation, затем выполнить mutation и read-back самим.
 
 ### 2.3 Index recovery — MD-252
 
@@ -226,6 +232,10 @@ Owning Task: MD-299.
    bounded reads.
 10. Сохранить redacted exact SHA/deployment/package receipt.
 
+Все шаги этой последовательности, включая Browser/Computer Use, ordinary OAuth
+consent, UAT navigation и status transition, принадлежат agent-у. Пользователь
+не является отдельным acceptance actor.
+
 ### Gate
 
 Без fresh real-account canary user-facing claim остаётся blocked. Renderer,
@@ -238,8 +248,11 @@ synthetic principals и contract tests его не подменяют.
 - paging/latency/unbounded reads → MD-297;
 - copy/journey failure → MD-298;
 - stale package/catalog → refresh/reinstall/reconcile до blocker-report;
-- account consent/MFA/approval, недоступные agent-у → внешний blocker по форме
-  из `blocker-register.md`.
+- password/MFA/passkey/OS-security step, недоступный agent-у → один bounded
+  human action по форме из `blocker-register.md`; ordinary OAuth consent agent
+  проходит сам, когда surface позволяет;
+- persistent UAT audience/operator-allowlist или material OAuth expansion →
+  одно at-action confirmation, затем agent выполняет mutation/read-back;
 - host не предлагает incremental consent после fresh install/retry →
   platform-boundary report и явное product decision; silent fallback запрещён.
 
@@ -282,6 +295,12 @@ Owning Task: MD-293.
 Подтверждённых внешних blockers на момент плана нет. Agent обязан сначала
 самостоятельно выполнить кодовый fix, создать bounded test input, refresh
 connector, deploy/reconcile UAT и классифицировать browser/product failure.
+
+Browser/Computer Use, ordinary OAuth consent, canary, evidence review и
+Task Manager terminal transition не являются пользовательской ручной
+приёмкой. Human-only остаются secret/security prompt, отсутствующая external
+identity, at-action authority confirmation и отдельное product/production/
+privacy decision.
 
 Если после этого остаётся внешняя граница, blocker-report содержит Tasks,
 проверенные альтернативы, одного actor, одно минимальное действие и observable

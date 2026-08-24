@@ -44,6 +44,13 @@ MD-301 + MD-294
 MD-295 + MD-296 + MD-297 + MD-298 + MD-300
   └─ block MD-299 exact connection-flow UAT
 
+MD-282 reusable UAT pool
+  ├─ blocks MD-281 operator-directory canary
+  └─ blocks MD-299 exact connection-flow UAT
+
+MD-280 operator Epic (MD-281..MD-283)
+  └─ blocks MD-244 operator/admin exact UAT
+
 MD-291 + MD-244 + MD-252 + MD-258 + MD-285 + MD-292 + MD-301 + MD-299
   └─ block MD-293 final first-user UAT
 ```
@@ -56,10 +63,10 @@ MD-291 остаётся product Epic и группирует MD-294–MD-300. Fi
 
 | Gate | Почему действительно блокирует | Owning Task | Следующее действие | Success signal |
 |---|---|---|---|---|
-| Normative boundary | Accepted storage/import contract и stale Project/Release descriptions противоречат small-data MVP | MD-292 | amend MVP/roadmap/ADR-0016/spec/profile, обновить top-level live context и атомарно reclassify file/scale Tasks | accepted docs и Task Manager дают один P0 list без retired AND/Linear claims |
+| Normative boundary | Accepted storage/import contract и stale Project/Release descriptions противоречат уже исправленной small-data composition | MD-292 | amend MVP/roadmap/ADR-0016/spec/profile; top-level prose обновить при появлении поддержанной write surface | accepted docs и Release composition дают один P0 list; stale prose явно non-authoritative |
 | Integration baseline | `main` и `1df46ec` остаются разными линиями; изменяющееся левое число нельзя хранить как contract | MD-301 | fresh `git rev-list --left-right --count`, inventory 21 engineering commits и conflict-aware integration в `main` | один remote `main` SHA, full gate passed |
 | Release authority | Release profile/migration должны соответствовать live Task Manager | MD-285–MD-287 | закрыть exact profile/conformance read-back | repository и live selector совпадают |
-| Operator evidence | Admin/account flows требуют воспроизводимого three-principal UAT | MD-244, MD-280–MD-283 | выполнить existing hosted pool/canary matrix | redacted exact-deployment receipt passed |
+| Operator evidence | Admin/account flows требуют воспроизводимого three-principal UAT | MD-244, MD-280–MD-283 | agent выполняет Browser/Computer Use setup, hosted pool/canary matrix, privacy read-back и cleanup | redacted exact-deployment receipt passed |
 | Index recovery | Пропущенный index job не должен требовать ручной data mutation | MD-252 | exact-candidate recovery probe | search восстанавливается bounded worker flow |
 | Small-data performance | Read path не должен возвращаться к 10–23 s latency | MD-258 | выполнить starter/small cold+warm receipt | принятые p95 budgets passed |
 | IA/security contract | Route identity, active OAuth/token-history split, step-up и pagination должны быть определены до UI code | MD-294 | записать specs и objective contract tests; запретить silent read+write fallback | MD-294 acceptance passed |
@@ -86,11 +93,12 @@ MD-291 остаётся product Epic и группирует MD-294–MD-300. Fi
 - **CR-12:** active OAuth list, detail и token-history page time, rendered size
   и bounded reads включены в MD-299 на fixture `0 / 1 / page_size + 1`.
 
-## Non-blocking scope Release 0.1
+## Non-blocking scope вне Release 0.1
 
-После MD-292 следующие Tasks сохраняются, но не блокируют MVP:
+Следующие Tasks уже сохранены вне Release и не блокируют MVP:
 
 - MD-245, MD-249–MD-250 — BundleFile vertical slice;
+- MD-257, MD-259, MD-261 — scale/runtime supporting work;
 - MD-260, MD-266–MD-268 — Brain-scale storage/import/export;
 - MD-270, MD-272–MD-275 — universal local/generated ingress;
 - MD-284 — Google Drive-specific adapter;
@@ -103,8 +111,10 @@ MD-291 остаётся product Epic и группирует MD-294–MD-300. Fi
 
 | Boundary | Что agent обязан сделать сам | Когда нужен человек | Resume signal |
 |---|---|---|---|
-| Marketplace/Codex OAuth account | refresh package, fresh context, install/connect, classify product vs surface failure, retry bounded flow | interactive consent, MFA или approval недоступны agent-у | fresh account видит exact package и OAuth завершается |
-| Sites/provider deployment | build exact artifact, publish UAT, read-back/reconcile version and deployment, retry bounded provider outcome | account/provider action невозможно выполнить доступными tools | exact SHA связан с доступным deployment и live URL |
+| Browser/account authentication | выбрать in-app Browser, использовать Chrome только для existing session, выполнить navigation и retry | password, MFA, passkey, OS security prompt или создание отсутствующей external identity | нужная session authenticated; agent продолжает с остановленной точки |
+| Persistent UAT access/OAuth expansion | подготовить exact diff, объяснить effect, после confirmation выполнить mutation и read-back | одно at-action confirmation перед audience/operator-allowlist или material OAuth-scope expansion | exact policy/grant read-back совпадает с approved diff |
+| Marketplace/Codex OAuth flow | refresh package, fresh context, install/connect, ordinary consent, first-write step-up, classify product vs surface failure | только security step выше; fresh-context click — лишь если callable reload/new-context surface действительно отсутствует | fresh account видит exact package, OAuth и step-up завершаются |
+| Sites/provider deployment | build exact artifact, publish UAT, read-back/reconcile version and deployment, retry bounded provider outcome | отдельное production/privacy/access-policy decision; не обычный UAT smoke | exact SHA связан с доступным deployment и live URL |
 
 Если fresh host после bounded refresh/reinstall вообще не предлагает
 incremental consent, это сначала platform-boundary evidence, а не разрешение
@@ -114,6 +124,8 @@ scope/claim; до него write UX остаётся незавершённым 
 Timeout, stale catalog или failed smoke сами по себе не являются просьбой к
 пользователю. Сначала должен быть исключён product bug, stale artifact,
 connector drift, missing test principal и verification-surface failure.
+Ordinary OAuth consent, Browser/Computer Use flow и evidence review не являются
+ручной пользовательской приёмкой.
 
 ## Обязательный blocker-report
 

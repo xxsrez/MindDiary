@@ -23,7 +23,7 @@
 
 ## Task Manager
 
-После второго критического прогона в Project 215 Tasks:
+После третьего критического прогона и reconciliation в Project 215 Tasks:
 
 | Состояние | Количество |
 |---|---:|
@@ -34,19 +34,28 @@
 | Todo | 11 |
 | Backlog | 0 |
 
-В Release `0.1` находятся 159 Tasks: 119 Done и 40 незавершённых. Из них
-MD-291–MD-301 образуют recovery graph; старый release scope всё ещё содержит
-file/scale expansion до выполнения MD-292. Поэтому live composition пока шире
-целевого P0, но расхождение имеет owning Task и больше не является скрытым.
+В Release `0.1` находятся 140 Tasks: 119 Done и 21 незавершённая
+(`Todo 11 / started 10 / Backlog 0`). Девятнадцать незавершённых file/scale
+Tasks уже выведены из Release, но сохранены в Project с history, hierarchy и
+evidence. Принятые product docs всё ещё противоречат этому small-data scope;
+normative amendment остаётся внутренним gate MD-292.
 
-### 40 незавершённых Tasks по реальному outcome
+### 21 незавершённая Release Task по реальному outcome
 
 | Контур | Tasks | Смысл |
 |---|---|---|
 | Release/UAT governance и operator | MD-244, MD-280–MD-283, MD-285–MD-287 | Тестовые principals, operator evidence, privacy boundary и переход на Task Manager |
-| Runtime и performance | MD-252, MD-257–MD-259, MD-261 | Recovery индекса, устранение N+1, latency gate и scale reliability |
-| BundleFile, scale и universal ingress | MD-245, MD-249–MD-250, MD-260, MD-266–MD-268, MD-270, MD-272–MD-275, MD-284, MD-288–MD-290 | Attachments, large import/export, quotas, local/generated/Google Drive sources и общий coordinator |
+| Runtime и performance | MD-252, MD-258 | Recovery индекса и small-data latency gate |
 | Recovery plan и connection UX | MD-291–MD-301 | Normative boundary, единый Git baseline, routes/access/pagination/onboarding, browser gate и final receipt |
+
+### 19 активных post-MVP Tasks вне Release 0.1
+
+| Контур | Tasks | Disposition |
+|---|---|---|
+| BundleFile | MD-245, MD-249–MD-250 | Сохранены в Project, `medium`, без `Release blocker` 0.1 |
+| Scale/runtime | MD-257, MD-259–MD-261, MD-266–MD-268 | Scale Epic и supporting optimizations не удерживают MD-258 |
+| Universal ingress | MD-270, MD-272–MD-275 | Сохранены для следующего milestone |
+| Provider/capacity canaries | MD-284, MD-288–MD-290 | Сохранены для следующего milestone |
 
 В незавершённом scope нет отдельной Task, которая владеет простым результатом
 «обычный пользователь за три шага подключил Codex и понял, какие Minds доступны
@@ -60,8 +69,8 @@ file/scale expansion до выполнения MD-292. Поэтому live compo
   а не обычный code review.
 - `In Progress` одновременно используется для product epic, release
   orchestration и отсутствующего внешнего тестового входа.
-- Label `Release blocker` назначен как обязательному MVP evidence, так и
-  Google Drive/general file ingress expansion.
+- Label `Release blocker` после reconciliation остался только у P0 Tasks;
+  Google Drive/general file ingress больше не находятся в Release 0.1.
 - Completed Task MD-161 уже называется exact pilot-ready release, хотя после
   неё в ту же Release добавлен большой новый graph. Поэтому её статус не может
   служить актуальным terminal signal.
@@ -115,9 +124,9 @@ Security model bindings сама по себе нужна:
 
 ## Несогласованность MVP scope
 
-Принятые product docs определяют первый прототип как Markdown-first
-Codex workflow и прямо относят productized import и non-Markdown files за
-границу MVP. Текущий Release, напротив, блокируется на:
+Базовый prototype contract остаётся Markdown-first Codex workflow, но более
+поздние accepted ADR/spec/roadmap amendments добавили BundleFile и Brain-scale
+import в Release 0.1. До planning reconciliation live Release также содержал:
 
 - Brain-scale storage/import;
 - local companion;
@@ -128,8 +137,22 @@ Codex workflow и прямо относят productized import и non-Markdown f
 
 Эти инициативы полезны, а значительная часть уже инженерно реализована. Но их
 полезность не делает их автоматическим условием первого пользовательского
-результата. Пока release boundary не принят заново, команда будет продолжать
-закрывать расширение продукта вместо завершения MVP.
+результата. Task composition уже исправлена; accepted docs ещё нет. Следующий
+обязательный шаг — нормативно привести их к тому же scope в MD-292.
+
+## Acceptance ownership после третьего review
+
+- Browser/Computer Use navigation, Marketplace/OAuth flow, hosted canaries,
+  runner, cleanup, receipts и evidence-backed status transition принадлежат
+  agent-у.
+- Пользователь не выполняет отдельную ручную приёмку.
+- Human-only остаются ввод password/MFA/passkey, OS security prompt и создание
+  отсутствующей внешней identity.
+- Persistent UAT audience/operator-allowlist либо OAuth-scope expansion требует
+  одного at-action подтверждения; само действие и read-back затем выполняет
+  agent.
+- Production, новая privacy policy и fallback при отсутствии incremental OAuth
+  consent остаются отдельными product decisions.
 
 ## Artifact и evidence drift
 

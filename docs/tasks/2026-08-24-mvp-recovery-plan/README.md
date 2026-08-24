@@ -29,7 +29,8 @@ release boundaries. Пока они представлены одним плос
    `MCP setup`, целевой information architecture, blocker graph, фаз перехода,
    рисков и критериев `Done` простым языком.
 2. [Текущее состояние](current-state.md) — фактический срез продукта,
-   репозитория, UAT и 40 незавершённых Tasks.
+   репозитория, UAT, 21 незавершённой Release Task и 19 сохранённых post-MVP
+   Tasks вне Release.
 3. [Целевое состояние MVP](target-state.md) — один пользовательский outcome,
    предлагаемая информационная архитектура и обязательные acceptance signals.
 4. [План перехода](transition-plan.md) — поэтапная последовательность работ,
@@ -55,10 +56,20 @@ MD-293 final first-user receipt.
 
 - Project: `Mind Diary` (`525e801d-0ae9-4be7-bae4-6a9c8f85f581`).
 - Release: `0.1` (`e92b681b-fd18-43e2-91df-3538c37d9890`).
-- Task Manager перечитан после второго критического прогона: Project содержит
-  215 Tasks, Release 0.1 — 159 Tasks; незавершённый release scope — 40 Tasks.
-  MD-301 исправлена из Backlog в Todo. Эти числа — датированный snapshot;
-  delivery всегда начинает работу с fresh read-back.
+- Task Manager перечитан после третьего критического прогона и planning
+  reconciliation: Project содержит 215 Tasks, Release 0.1 — 140 Tasks;
+  незавершённый release scope — 21 Task (`Todo 11 / started 10 / Done 119`),
+  `Backlog 0`. Девятнадцать незавершённых file/scale Tasks сохранены в Project,
+  но выведены из Release 0.1. Эти числа — датированный snapshot; delivery
+  всегда начинает работу с fresh read-back.
+- MD-282 теперь native blocks MD-281 и MD-299. MD-257/MD-261 больше не
+  блокируют small-data gate MD-258; requirement 590 MB явно исключён из current
+  acceptance.
+- Ключевые hosted Tasks используют agent-owned acceptance: Browser/Computer
+  Use, runner, UAT read-back и status transition выполняет agent. Человек нужен
+  только на exact password/MFA/passkey/OS-security boundary, для at-action
+  подтверждения persistent access-policy expansion либо отдельного
+  product/production/privacy decision.
 - Deployed UAT согласно последнему сохранённому release evidence связан с
   `eca3400` / Sites deployment 50. Более свежий engineering candidate —
   `1df46ec`; hosted acceptance для него ещё не является доказанным фактом.

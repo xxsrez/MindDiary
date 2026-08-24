@@ -367,10 +367,10 @@
     .scope-stack { display: flex; min-height: 92px; margin-top: 1.5rem; overflow: hidden; border-radius: 1rem; border: 1px solid var(--line); }
     .scope-part { display: grid; place-items: center; min-width: 0; padding: .7rem .35rem; text-align: center; font-size: .75rem; font-weight: 820; }
     .scope-part strong, .scope-part small { display: block; }
-    .scope-part.mvp { width: 27.5%; color: var(--white); background: var(--sage); }
-    .scope-part.ops { width: 20%; background: var(--brass-soft); }
-    .scope-part.runtime { width: 12.5%; background: var(--plum-soft); }
-    .scope-part.future { width: 40%; background: var(--coral-soft); }
+    .scope-part.mvp { width: 52.38%; color: var(--white); background: var(--sage); }
+    .scope-part.ops { width: 38.10%; background: var(--brass-soft); }
+    .scope-part.runtime { width: 9.52%; background: var(--plum-soft); }
+    .scope-part.future { width: 100%; background: var(--coral-soft); }
     .scope-legend { margin-top: .75rem; color: var(--ink-soft); font-size: .82rem; }
 
     .filter-row { display: flex; flex-wrap: wrap; gap: .55rem; margin: 1.4rem 0; }
@@ -544,7 +544,7 @@
     </div>
     <nav class="nav-scroll" aria-label="Разделы презентации">
       <a href="#diagnosis">Диагноз</a>
-      <a href="#audit2">Ревью 2</a>
+      <a href="#audit2">Ревью 3</a>
       <a href="#today">Сейчас</a>
       <a href="#architecture">Система</a>
       <a href="#problems">Проблемы</a>
@@ -577,7 +577,7 @@
             <strong>Важно</strong>
             <p class="muted">Это не заявление, что новый интерфейс уже сделан. Это карта текущего состояния, целевой модели, blockers и порядка работы.</p>
           </div>
-          <span class="fine">Fresh read 2026-08-24: Project 215, Release 159, unfinished 40; MD-301 исправлена из Backlog в Todo. Live-статусы могут измениться и принадлежат Task Manager. Архитектурные решения до принятия остаются proposal.</span>
+          <span class="fine">Fresh read после reconciliation 2026-08-24: Project 215, Release 140, unfinished 21, Backlog 0. Девятнадцать post-MVP Tasks сохранены вне Release. Live-статусы могут измениться и принадлежат Task Manager. Архитектурные решения до принятия остаются proposal.</span>
         </div>
       </div>
     </section>
@@ -622,20 +622,21 @@
     </section>
 
     <section class="section" id="audit2">
-      <p class="section-kicker">02 · Второй критический прогон</p>
+      <p class="section-kicker">02 · Третий критический прогон</p>
       <h2>Что исправлено, а что всё ещё нельзя честно назвать готовым.</h2>
       <p class="lead">Этот register отделяет дефекты самого плана от реальной delivery-работы и от внешних границ, которые можно доказать только в live host.</p>
 
       <div class="audit-grid">
         <article class="audit-item"><span class="audit-status fixed">Исправлено сейчас</span><h3>MD-301 больше не в Backlog</h3><p>Обязательный integration gate переведён в Todo; volatile Git divergence теперь всегда читается fresh.</p></article>
         <article class="audit-item"><span class="audit-status fixed">Исправлено сейчас</span><h3>OAuth и token history разделены</h3><p>Connections показывает active OAuth grants. Revoked/expired personal tokens живут в Advanced; выдуманного OAuth archive нет.</p></article>
-        <article class="audit-item"><span class="audit-status fixed">Исправлено сейчас</span><h3>Карта перестала искажать данные</h3><p>Исправлены общий масштаб bar chart, точные доли 40 Tasks, dependency graph, mobile markers, semantics и лишний closing tag.</p></article>
+        <article class="audit-item"><span class="audit-status fixed">Исправлено сейчас</span><h3>Release graph очищен</h3><p>19 unfinished file/scale Tasks сохранены вне Release; внутри осталось 21 P0 Task. MD-257/261 больше не блокируют small-data MD-258.</p></article>
+        <article class="audit-item"><span class="audit-status fixed">Исправлено сейчас</span><h3>Тестовый пул получил реальные dependencies</h3><p>MD-282 теперь urgent Release blocker и native blocks MD-281/MD-299.</p></article>
         <article class="audit-item"><span class="audit-status internal">Внутренний gate</span><h3>Normative scope ещё расходится</h3><p>Accepted docs и stale Project/Release descriptions исправляет MD-292. До этого top-level live context противоречив.</p></article>
         <article class="audit-item"><span class="audit-status internal">Внутренний gate</span><h3>Git baseline ещё не собран</h3><p>21 engineering commit требуют disposition и conflict-aware integration в MD-301. Новый UI до этого не начинается.</p></article>
         <article class="audit-item"><span class="audit-status internal">Внутренний gate</span><h3>Browser gate ещё не существует</h3><p>MD-300 должна выбрать runner/version, CI browser binary strategy и fixture lifecycle, затем сделать gate non-zero.</p></article>
         <article class="audit-item"><span class="audit-status external">Требует live proof</span><h3>Incremental OAuth consent</h3><p>Protocol определён, но fresh Codex plugin должен реально показать write step-up. Silent fallback на initial read+write запрещён.</p></article>
         <article class="audit-item"><span class="audit-status external">Требует live proof</span><h3>Exact UAT и Marketplace receipt</h3><p>Нужны publish/read-back, fresh package context, real account и один SHA/deployment/package receipt.</p></article>
-        <article class="audit-item"><span class="audit-status external">Пока не blocker</span><h3>Человек нужен только после попытки</h3><p>Interactive MFA/consent или provider account action становится blocker только после refresh, retry, reconcile и causal report.</p></article>
+        <article class="audit-item"><span class="audit-status external">Пока не blocker</span><h3>Acceptance выполняет agent</h3><p>Browser/Computer Use, ordinary OAuth, canary и receipt не перекладываются на человека. Human-only: password/MFA/passkey, at-action authority confirmation или product decision.</p></article>
       </div>
     </section>
 
@@ -769,16 +770,15 @@
       <h2>Проблема — не список багов, а неправильная очередь решений.</h2>
       <p class="lead">Кодирование нового UI прямо сейчас опасно: сначала нужно определить scope, собрать единый Git baseline и зафиксировать security/query contract.</p>
 
-      <div class="scope-stack" aria-label="Точные доли 40 незавершённых Tasks в Release 0.1">
+      <div class="scope-stack" aria-label="Точные доли 21 незавершённой Task в Release 0.1">
         <div class="scope-part mvp"><span><strong>11</strong><small>Recovery / connection UX</small></span></div>
         <div class="scope-part ops"><span><strong>8</strong><small>Governance / operator</small></span></div>
-        <div class="scope-part runtime"><span><strong>5</strong><small>Runtime / performance</small></span></div>
-        <div class="scope-part future"><span><strong>16</strong><small>Future file / scale</small></span></div>
+        <div class="scope-part runtime"><span><strong>2</strong><small>Runtime / performance</small></span></div>
       </div>
-      <p class="scope-legend">Точная композиция snapshot: 11 + 8 + 5 + 16 = 40 Tasks. Ширина каждого сегмента пропорциональна числу Tasks; это не оценка effort.</p>
+      <p class="scope-legend">Точная Release-композиция: 11 + 8 + 2 = 21 Task. Ещё 19 unfinished file/scale Tasks находятся вне Release. Ширина сегментов пропорциональна числу Tasks; это не оценка effort.</p>
 
       <div class="filter-row" role="group" aria-label="Фильтр архитектурных findings">
-        <button type="button" aria-pressed="true" data-filter="all">Все 15</button>
+        <button type="button" aria-pressed="true" data-filter="all">Все 17</button>
         <button type="button" aria-pressed="false" data-filter="p0">P0 — блокируют порядок</button>
         <button type="button" aria-pressed="false" data-filter="p1">P1 — обязательны в реализации</button>
         <button type="button" aria-pressed="false" data-filter="avoided">Уже устранены планом</button>
@@ -800,6 +800,8 @@
         <article class="card finding problem" data-kind="p0"><div class="finding-top"><h3>CR-13 · Stale Task Manager context</h3><span class="status-pill p0">P0</span></div><p>Project/Release descriptions всё ещё содержат retired AND/Linear narrative и противоречивый release scope.</p><div class="owner">MD-292</div></article>
         <article class="card finding target" data-kind="avoided"><div class="finding-top"><h3>CR-14 · Выдуманный OAuth archive</h3><span class="status-pill avoided">Исправлено</span></div><p>Connections показывает active OAuth grants; inactive history относится к personal tokens в Advanced MCP.</p><div class="owner">MD-294 + MD-297</div></article>
         <article class="card finding gate" data-kind="p1"><div class="finding-top"><h3>CR-15 · Browser CI mechanics</h3><span class="status-pill p1">P1</span></div><p>Runner/version, browser binary install/cache и fixture lifecycle должны быть детерминированы на clean CI.</p><div class="owner">MD-300</div></article>
+        <article class="card finding target" data-kind="avoided"><div class="finding-top"><h3>CR-16 · Человек как acceptance runner</h3><span class="status-pill avoided">Исправлено</span></div><p>Canary, Browser/Computer Use, ordinary OAuth, receipt и status transition принадлежат agent-у; human-only boundaries перечислены точно.</p><div class="owner">Исправлено в Tasks и blocker policy</div></article>
+        <article class="card finding target" data-kind="avoided"><div class="finding-top"><h3>CR-17 · Scope и test prerequisites</h3><span class="status-pill avoided">Исправлено</span></div><p>19 post-MVP Tasks выведены из Release, а MD-282 теперь блокирует реальные hosted consumers.</p><div class="owner">Исправлено в Task Manager</div></article>
       </div>
     </section>
 
@@ -873,10 +875,11 @@
           <button class="node-button" type="button" data-task="MD-297" data-related="MD-301 MD-294 MD-299"><strong>MD-297</strong><small>Pagination</small></button>
           <button class="node-button" type="button" data-task="MD-298" data-related="MD-301 MD-294 MD-299"><strong>MD-298</strong><small>Onboarding</small></button>
           <button class="node-button" type="button" data-task="MD-300" data-related="MD-301 MD-294 MD-299"><strong>MD-300</strong><small>Real browser gate</small></button>
+          <button class="node-button" type="button" data-task="MD-282" data-related="MD-281 MD-299"><strong>MD-282</strong><small>Three-session UAT pool</small></button>
         </div>
         <div class="graph-arrow" aria-hidden="true">↓</div>
         <div class="graph-layer">
-          <button class="node-button" type="button" data-task="MD-299" data-related="MD-295 MD-296 MD-297 MD-298 MD-300 MD-293"><strong>MD-299</strong><small>Connection UAT</small></button>
+          <button class="node-button" type="button" data-task="MD-299" data-related="MD-282 MD-295 MD-296 MD-297 MD-298 MD-300 MD-293"><strong>MD-299</strong><small>Connection UAT</small></button>
         </div>
         <div class="graph-arrow" aria-hidden="true">↓ + direct supporting gates</div>
         <div class="graph-layer">
@@ -894,8 +897,8 @@
       </div>
 
       <div class="timeline" aria-label="Фазы перехода">
-        <button class="phase" type="button" aria-expanded="true"><span class="phase-number">0</span><span class="phase-title"><strong>Зафиксировать маленький MVP</strong><small>Убрать normative conflict и reclassify future scope</small></span><span class="phase-state">MD-292</span></button>
-        <div class="phase-detail"><strong>Готово, когда:</strong> accepted docs и Task Manager показывают один P0 list; BundleFile, large corpus, Google Drive и universal ingress не блокируют final gate.</div>
+        <button class="phase" type="button" aria-expanded="true"><span class="phase-number">0</span><span class="phase-title"><strong>Зафиксировать маленький MVP</strong><small>Reclassification готова; убрать normative conflict</small></span><span class="phase-state">MD-292</span></button>
+        <div class="phase-detail"><strong>Готово, когда:</strong> accepted docs и Release composition показывают один P0 list. BundleFile/scale уже выведены; stale top-level prose до write surface явно non-authoritative.</div>
 
         <button class="phase" type="button" aria-expanded="false"><span class="phase-number">1</span><span class="phase-title"><strong>Собрать единый integration baseline</strong><small>Disposition 21 engineering commits и conflict-aware integration</small></span><span class="phase-state">MD-301</span></button>
         <div class="phase-detail"><strong>Готово, когда:</strong> один clean remote <code>main</code> SHA проходит full repository gate. Все дальнейшие изменения — его потомки.</div>
@@ -923,12 +926,20 @@
     <section class="section" id="risks">
       <p class="section-kicker">08 · Риски и блокеры</p>
       <h2>Большинство «блокеров» — наша внутренняя работа.</h2>
-      <p class="lead">Пользователь нужен только там, где действительно остаётся interactive consent, MFA или provider action, недоступное инструментам. До этого мы обязаны сами исправить код, создать fixture, refresh/reinstall, deploy и reconcile.</p>
+      <p class="lead">Acceptance выполняет agent. Пользователь подключается только на точной secret/security или authority boundary; после одного действия agent автоматически продолжает с остановленной точки.</p>
 
       <div class="grid-3" style="margin-top:2rem">
         <article class="card problem"><h3>Внутренний gate</h3><p>Можно решить кодом, docs, тестом, fixture, Task Manager mutation или UAT action.</p><strong>Не перекладываем на человека.</strong></article>
         <article class="card gate"><h3>Потенциальный внешний blocker</h3><p>Появляется только после самостоятельной попытки и доказательства, что retry/fix/reconcile не помогают.</p><strong>Один actor, одно действие, один resume signal.</strong></article>
         <article class="card target"><h3>Non-blocking scope</h3><p>BundleFile, Brain scale и universal ingress полезны, но их отсутствие не меняет terminal status MVP 0.1.</p><strong>Сохраняем, но переносим.</strong></article>
+      </div>
+
+      <h3 style="margin-top:2.5rem">Кто что делает при приёмке</h3>
+      <div class="grid-4" style="margin-top:1rem">
+        <article class="card target"><h3>Agent-owned</h3><p>Tests, Browser/Computer Use, Marketplace refresh/install, ordinary OAuth, canaries, cleanup, receipts и Done transition.</p></article>
+        <article class="card gate"><h3>Confirmation → agent</h3><p>Перед persistent UAT audience/operator allowlist или material OAuth expansion пользователь подтверждает exact diff; mutation/read-back делает agent.</p></article>
+        <article class="card advanced"><h3>Human-only security</h3><p>Password, MFA, passkey, OS security prompt или создание отсутствующей external identity. После success signal agent продолжает.</p></article>
+        <article class="card problem"><h3>Product decision</h3><p>Production, новая privacy/access policy или изменение claim, если host не поддерживает incremental consent.</p></article>
       </div>
 
       <h3 style="margin-top:2.5rem">Матрица архитектурных рисков</h3>
@@ -950,8 +961,8 @@
       </div>
 
       <div class="grid-2" style="margin-top:2rem">
-        <article class="card gate"><h3>Когда действительно идём к Андрею</h3><ul class="plain-list"><li>OAuth требует interactive consent/MFA, который agent не может завершить.</li><li>Provider требует account action, отсутствующее в доступных tools.</li><li>В отчёте уже перечислены попытки, exact affected Tasks и resume signal.</li></ul></article>
-        <article class="card target"><h3>Что делаем сами до этого</h3><ul class="plain-list"><li>Code fix, deterministic fixture и test principal.</li><li>Marketplace refresh, reinstall и fresh Codex context.</li><li>UAT publish, exact version read-back и reconcile.</li><li>Отделяем product failure от browser/tool failure.</li></ul></article>
+        <article class="card gate"><h3>Когда действительно идём к Андрею</h3><ul class="plain-list"><li>Нужен password/MFA/passkey или OS security prompt.</li><li>Нужно at-action подтвердить exact persistent access/OAuth expansion.</li><li>Нужно создать отсутствующую external identity или принять product/production/privacy decision.</li><li>В отчёте уже перечислены попытки, exact affected Tasks и resume signal.</li></ul></article>
+        <article class="card target"><h3>Что делаем сами до этого и после</h3><ul class="plain-list"><li>Code fix, deterministic fixture и test principal.</li><li>Browser/Computer Use, ordinary OAuth, Marketplace refresh/reinstall и fresh context.</li><li>UAT publish, canary, exact read-back, cleanup и reconcile.</li><li>После human success signal автоматически продолжаем весь flow.</li></ul></article>
       </div>
     </section>
 
@@ -961,7 +972,7 @@
       <p class="lead">Код, документы и знания остаются. Они просто перестают держать первый релиз заложником.</p>
       <div class="grid-4" style="margin-top:2rem">
         <article class="card"><h3>BundleFile</h3><p>MD-245, MD-249, MD-250</p><span class="fine">Versioned attachments vertical slice</span></article>
-        <article class="card"><h3>Brain scale</h3><p>MD-260, MD-266–268</p><span class="fine">Большой import/export и capacity</span></article>
+        <article class="card"><h3>Brain scale</h3><p>MD-257, MD-259–261, MD-266–268</p><span class="fine">Scale/runtime, большой import/export и capacity</span></article>
         <article class="card"><h3>Universal ingress</h3><p>MD-270, MD-272–275</p><span class="fine">Local/generated/provider sources</span></article>
         <article class="card"><h3>Provider adapters</h3><p>MD-284, MD-288–290</p><span class="fine">Google Drive и hosted capacity canaries</span></article>
       </div>
@@ -1101,7 +1112,7 @@
 
       const taskCopy = {
         'MD-291': ['Product Epic группирует MD-294–MD-300 и напрямую блокирует final MD-293, не полагаясь на implicit child lifecycle.'],
-        'MD-292': ['Принять definitive small-data boundary, обновить accepted docs и атомарно вывести future file/scale work из active Release 0.1.'],
+        'MD-292': ['Future file/scale work уже выведена из active Release 0.1. Осталось обновить accepted docs; stale top-level prose non-authoritative до поддержанной write surface.'],
         'MD-301': ['Сделать один integration baseline: disposition всех candidate commits, conflict-aware перенос, full gate и exact remote main SHA.'],
         'MD-294': ['Зафиксировать routes, opaque connection refs, identical 404, read-first/write-step-up, active OAuth/token-history split и bounded query contracts; silent scope widening запрещён.'],
         'MD-295': ['Разделить routes и реализовать actor-owned detail без enumeration и hidden unbounded response.'],
@@ -1109,6 +1120,7 @@
         'MD-297': ['Connections читает bounded active OAuth grants; Advanced MCP — separate active/inactive token history со stable opaque cursor и fixtures 0/1/page_size+1.'],
         'MD-298': ['Сделать основной journey из трёх шагов; tokens, protocol mechanics и capture перенести из primary copy.'],
         'MD-300': ['Зафиксировать runner/version, clean-CI browser binary и fixture lifecycle; затем добавить desktop/mobile, keyboard, focus, semantics и overflow gate.'],
+        'MD-282': ['Поддерживать reusable three-session UAT pool. Agent выполняет session routing, bootstrap и read-back; human-only — password/MFA/passkey или at-action access-policy confirmation.'],
         'MD-299': ['Выпустить exact candidate и соединить deterministic browser evidence с fresh real-account Marketplace/OAuth canary, включая реальный incremental consent.'],
         'MD-293': ['Собрать финальный first-user receipt: artifact + deployment + package + UX + security + cleanup.'],
         'MD-244': ['Three-principal operator/admin UAT evidence.'],

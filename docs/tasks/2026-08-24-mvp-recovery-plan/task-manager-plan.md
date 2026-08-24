@@ -7,9 +7,10 @@
 
 - Project `Mind Diary`: `525e801d-0ae9-4be7-bae4-6a9c8f85f581`.
 - Release `0.1`: `e92b681b-fd18-43e2-91df-3538c37d9890`.
-- После второго критического прогона: Project 215 Tasks; Release 159 Tasks;
-  `Backlog 0 / Todo 11 / started 29 / Done 119` внутри Release. Это датированный
-  snapshot; перед mutation обязателен fresh read-back.
+- После третьего критического прогона и reconciliation: Project 215 Tasks;
+  Release 140 Tasks; `Backlog 0 / Todo 11 / started 10 / Done 119` внутри
+  Release. Это датированный snapshot; перед mutation обязателен fresh
+  read-back.
 
 ## Правила графа
 
@@ -34,6 +35,7 @@
 | MD-297 | server-side credential pagination, revoke + hide | MD-299 |
 | MD-298 | three-step onboarding без protocol/capture noise | MD-299 |
 | MD-300 | real-browser deterministic gate | MD-299 |
+| MD-282 | reusable three-session UAT pool | MD-281, MD-299 |
 | MD-299 | exact browser/security/real-account connection UAT | MD-293 |
 | MD-244 | operator/admin exact UAT | MD-293 |
 | MD-252 | bounded exact-revision index recovery | MD-293 |
@@ -60,10 +62,10 @@ MD-299 и MD-301 блокируют final gate напрямую, поэтому 
 - MD-299 требует fresh real-account canary; informational external check не
   может доказать заявленный first-user outcome.
 
-## Post-MVP reclassification, принадлежащая MD-292
+## Post-MVP reclassification, применённая 2026-08-24
 
-После accepted-doc amendment и fresh versions следующие Tasks атомарно
-покидают active Release 0.1 и теряют `Release blocker` 0.1:
+После fresh versions следующие Tasks атомарно покинули active Release 0.1,
+потеряли `Release blocker` 0.1 и получили `medium` priority:
 
 | Tasks | Следующий outcome |
 |---|---|
@@ -73,8 +75,10 @@ MD-299 и MD-301 блокируют final gate напрямую, поэтому 
 | MD-284 | Google Drive-specific materialization |
 | MD-288–MD-290 | stateful capacity/generated hosted canaries |
 
-Их code/evidence сохраняются. MD-257/MD-261 остаются supporting fixes только
-если MD-258 обнаружит соответствующий small-data bottleneck.
+Дополнительно MD-257, MD-259 и MD-261 выведены из Release как scale/supporting
+scope. Relations MD-257 → MD-258 и MD-261 → MD-258 удалены: эти fixes
+возвращаются только при измеренном small-data bottleneck. Code/evidence и
+остальные post-MVP relations сохранены.
 
 ## Planning mutations, применённые 2026-08-24
 
@@ -97,6 +101,18 @@ MD-299 и MD-301 блокируют final gate напрямую, поэтому 
 - MD-297 больше не обещает отсутствующую revoked OAuth history: Connections
   читает active OAuth grants, Advanced MCP — bounded token history; заголовок
   Task также заменён на outcome-level формулировку без CSS-hide implication.
+- MD-282 получила `urgent` + `Release blocker` и native relations
+  `MD-282 blocks MD-281` и `MD-282 blocks MD-299`.
+- MD-244, MD-258, MD-280, MD-285 и весь connection critical path получили
+  priorities/labels, соответствующие реальному release order.
+- MD-244, MD-280–MD-283, MD-291, MD-293–MD-294 и MD-299–MD-300 используют
+  agent-owned acceptance. Human-only boundary сведена к password/MFA/passkey,
+  отсутствующей external identity, OS security prompt или at-action authority
+  confirmation; после неё agent продолжает сам.
+- MD-258 current description и superseding comment явно исключают 590 MB,
+  1,741 files и Brain-scale matrix из terminal acceptance.
+- Новые Tasks и архивирование не потребовались: actor/evidence outcomes уже
+  имели владельцев, а exact duplicates не обнаружены.
 
 MD-301 теперь Todo. Delivery переводит её в In Progress только при фактическом
 начале inventory/integration; UI implementation всё равно не начинается до её
@@ -112,3 +128,11 @@ terminal baseline gate.
 4. отсутствие post-MVP Task среди incoming MD-293 blockers;
 5. совпадение live graph с [реестром блокеров](blocker-register.md);
 6. отсутствие unknown outcome перед retry.
+
+## Ограничение adapter-а
+
+Current Task Manager adapter не предоставляет mutation Project/Release
+descriptions. Поэтому их stale AND/Linear narrative остаётся non-authoritative
+operational metadata до поддержанной write surface. Это явно записано в
+MD-292; release truth до исправления берётся из accepted repository docs,
+Release composition и native relations, а не из stale top-level prose.

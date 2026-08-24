@@ -6,7 +6,7 @@
 
 Исходный review artifact: `807c30884c63d8e88669fb9186742acadffcb95a`.
 Предыдущий проверенный planning artifact:
-`f96b3b70dbfafc4ddbc5324a6a4fbc95eff5ffe7`. Текущий second-review artifact
+`f96b3b70dbfafc4ddbc5324a6a4fbc95eff5ffe7`. Текущий third-review artifact
 фиксируется commit/read-back после завершения этой правки.
 
 Цель review — найти места, где recovery-plan невозможно честно реализовать,
@@ -24,7 +24,10 @@ mutations. Текущая исполнимая disposition всех findings п�
 - MD-301 владеет объединением Git baseline;
 - MD-294 фиксирует route identity, read-first/write-step-up и pagination;
 - MD-300 в Todo владеет настоящим browser acceptance layer;
-- MD-299/MD-293 требуют blocking fresh real-account canary.
+- MD-282 теперь явно блокирует MD-281 и MD-299 как reusable session-pool
+  prerequisite;
+- MD-299/MD-293 требуют blocking fresh real-account canary, но выполняет его
+  agent, а не пользователь.
 
 Подтверждённых активных внешних blockers нет. UI implementation начинается
 только после MD-292/MD-301/MD-294 gates.
@@ -45,6 +48,11 @@ mutations. Текущая исполнимая disposition всех findings п�
 | CR-10 | Avoided: automatic capture вне ordinary Connections/onboarding |
 | CR-11 | Resolved: MD-299 напрямую blocks MD-293 |
 | CR-12 | Включён в MD-299 на fixture `0 / 1 / page_size + 1` |
+| CR-13 | Partially resolved: Release composition исправлена; normative docs и stale top-level prose остаются MD-292 |
+| CR-14 | Resolved: active OAuth и personal-token history разделены |
+| CR-15 | Resolved: HTML data/accessibility defects исправлены |
+| CR-16 | Resolved: acceptance ownership разделён на agent-owned, at-action confirmation, human-only security step и product decision |
+| CR-17 | Resolved in Task Manager: 19 post-MVP Tasks выведены из Release; MD-257/261 не блокируют MD-258; MD-282 блокирует реальные consumers |
 
 ## P0 findings
 
@@ -94,8 +102,10 @@ Recovery proposal относит тот же graph к post-MVP.
 - явного решения, остаётся ли Markdown import в 0.1 отдельно от universal
   file-source expansion.
 
-Пока MD-292 не завершён таким решением, массовое снятие Release blocker было бы
-нормативно противоречивым.
+Planning reclassification выполнена по явному пользовательскому planning
+intent и делает исполнимый Release graph узким. Она не подменяет normative
+resolution: пока MD-292 не amend-ит accepted docs, нельзя утверждать, что новый
+scope уже принят на уровне product specifications.
 
 ### CR-3. Resolved: performance P0 ограничен небольшим dataset
 
@@ -281,10 +291,10 @@ MD-299 теперь измеряет:
 - remote read-back exact `e39375b` на `refs/heads/main`.
 
 Это историческое evidence доказывает repository integrity только того
-planning commit. Оно не доказывает текущий second-review artifact, UAT
+planning commit. Оно не доказывает текущий third-review artifact, UAT
 deployment, новый UI, MD-300 или включение 21 commits из `1df46ec`.
 
-## Findings второго критического прогона
+## Findings второго и третьего критических прогонов
 
 ### CR-13. Top-level Task Manager context противоречит recovery scope
 
@@ -317,11 +327,47 @@ mobile sequence markers, семантически скрытые дочерни�
 двойной closing `main`. Эти дефекты исправлены в HTML и повторно проверяются в
 desktop/mobile/browser runtime до commit.
 
-## Явные unresolved gates после второго review
+### CR-16. План ошибочно превращал человека в acceptance runner
+
+MD-244/MD-280/MD-282 и внешний blocker policy смешивали четыре разные вещи:
+обычную Browser/Computer Use работу, OAuth consent, secret/MFA boundary и
+product/access-policy decision. Из этого следовало ложное требование к
+пользователю вручную выполнять hosted canary и принимать результат.
+
+Исправленная actor model:
+
+1. tests, Browser/Computer Use, ordinary OAuth flow, canary, receipt и status
+   transition полностью выполняет agent;
+2. persistent UAT access/OAuth expansion требует одного at-action confirmation,
+   после которого mutation/read-back снова выполняет agent;
+3. password/MFA/passkey/OS prompt и отсутствующая external identity остаются
+   human-only security boundary;
+4. production, новая privacy policy и fallback при отсутствии incremental
+   consent остаются product decisions.
+
+Общая просьба «проверь вручную» теперь запрещена в Tasks и blocker policy.
+
+### CR-17. Live graph не отражал выбранный scope и test prerequisite
+
+Fresh Task Manager read-back показал 40 unfinished Release Tasks, хотя план уже
+считал 19 file/scale outcomes post-MVP. Одновременно MD-257 и MD-261
+безусловно блокировали small-data MD-258, а MD-282 с session pool вообще не
+блокировала MD-281/MD-299.
+
+Planning reconciliation выполнена и перечитана:
+
+- Release `0.1`: 140 total, 119 Done, 21 unfinished, Backlog 0;
+- 19 unfinished post-MVP Tasks сохранены вне Release, `medium`, без
+  `Release blocker`;
+- relations MD-257 → MD-258 и MD-261 → MD-258 удалены;
+- MD-282 стала urgent Release blocker и native blocks MD-281/MD-299;
+- новых или archived Tasks не потребовалось: exact duplicates не найдены.
+
+## Явные unresolved gates после третьего review
 
 | Проблема | Почему не исправляется только документом | Владелец / signal |
 |---|---|---|
-| Normative Task Manager drift | Нужны принятые scope amendments и atomic reclassification | MD-292; docs и live Project/Release дают один scope |
+| Normative Task Manager drift | Reclassification выполнена; нужны accepted scope amendments, а stale top-level prose не имеет доступной adapter mutation | MD-292; docs и Release composition дают один scope, stale prose non-authoritative до write surface |
 | Integration divergence | Нужен disposition и перенос engineering commits, а не новая цифра в плане | MD-301; один remote `main` и full gate |
 | Browser runner/CI mechanics | Нужно выбрать и внедрить runner, binary cache/install и fixture lifecycle | MD-300; non-zero deterministic browser gate |
 | Incremental OAuth consent | Свойство внешнего host доказывается только fresh installed-plugin canary | MD-299; first write вызывает реальный step-up |
