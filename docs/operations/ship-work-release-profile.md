@@ -1048,6 +1048,15 @@ evidence:
           - directory.operator_api_three_actor_readback
           - directory.operator_ui_readback
           - directory.stable_bounded_projection
+          - directory.cursor_pagination_nonduplicating
+          - directory.exact_display_name_search
+          - directory.registered_at_sort_both_directions
+          - directory.last_activity_at_sort_both_directions
+          - directory.display_name_sort_both_directions
+          - directory.utc_registration_and_activity_ranges
+          - directory.empty_exact_search
+          - directory.never_active_projection
+          - directory.never_active_ui_state
           - directory.mind_role_api_exact_404
           - directory.mind_role_ui_exact_404
           - directory.ordinary_api_exact_404

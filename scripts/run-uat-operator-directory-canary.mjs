@@ -47,6 +47,15 @@ export const OPERATOR_CANARY_ASSERTION_IDS = Object.freeze([
   "directory.operator_api_three_actor_readback",
   "directory.operator_ui_readback",
   "directory.stable_bounded_projection",
+  "directory.cursor_pagination_nonduplicating",
+  "directory.exact_display_name_search",
+  "directory.registered_at_sort_both_directions",
+  "directory.last_activity_at_sort_both_directions",
+  "directory.display_name_sort_both_directions",
+  "directory.utc_registration_and_activity_ranges",
+  "directory.empty_exact_search",
+  "directory.never_active_projection",
+  "directory.never_active_ui_state",
   "directory.mind_role_api_exact_404",
   "directory.mind_role_ui_exact_404",
   "directory.ordinary_api_exact_404",
@@ -438,7 +447,7 @@ function mindList(response, actorClass) {
 
 function assertMindRole(minds) {
   const ordinary = minds.find((mind) =>
-    isRecord(mind) && mind.isPersonal === false &&
+    isRecord(mind) && mind.is_personal === false &&
     mind.access?.kind === "membership" &&
     (mind.access?.role === "owner" || mind.access?.role === "admin"));
   if (!ordinary) fail("mind_role_membership_missing");
@@ -460,22 +469,94 @@ async function setup(state, credentials, fetchImpl) {
   });
 }
 
-function directoryRows(response) {
+function validUtc(value) {
+  return typeof value === "string" && Number.isFinite(Date.parse(value)) &&
+    new Date(value).toISOString() === value;
+}
+
+function optionalUtc(value, code) {
+  if (value === null || value === undefined) return null;
+  if (!validUtc(value)) fail(code);
+  return value;
+}
+
+function normalizeActivity(value) {
+  if (value === null) return null;
+  if (!isRecord(value)) fail("invalid_operator_activity_projection");
+  const lastWebSeenAt = optionalUtc(
+    value.last_web_seen_at,
+    "invalid_operator_web_activity_time",
+  );
+  const lastMcpSeenAt = optionalUtc(
+    value.last_mcp_seen_at,
+    "invalid_operator_mcp_activity_time",
+  );
+  const lastActivityAt = optionalUtc(
+    value.last_activity_at,
+    "invalid_operator_activity_time",
+  );
+  if (lastActivityAt === null) fail("invalid_operator_activity_projection");
+  return Object.freeze({ lastWebSeenAt, lastMcpSeenAt, lastActivityAt });
+}
+
+function nonNegativeInteger(value, code) {
+  if (!Number.isSafeInteger(value) || value < 0) fail(code);
+  return value;
+}
+
+function normalizeDirectoryRow(value) {
+  if (!isRecord(value)) fail("invalid_operator_directory_row");
+  const principalId = required(
+    value.principal_id,
+    "invalid_operator_principal_projection",
+  );
+  const displayName = required(
+    value.display_name,
+    "invalid_operator_display_name_projection",
+  );
+  required(value.verified_email, "invalid_operator_email_projection");
+  required(value.state, "invalid_operator_account_state_projection");
+  const registeredAt = value.registered_at;
+  if (!validUtc(registeredAt)) fail("invalid_operator_registration_time");
+  return Object.freeze({
+    principalId,
+    displayName,
+    registeredAt,
+    activity: normalizeActivity(value.activity),
+    ownedMindCount: nonNegativeInteger(
+      value.owned_mind_count,
+      "invalid_operator_owned_count",
+    ),
+    participatingMindCount: nonNegativeInteger(
+      value.participating_mind_count,
+      "invalid_operator_participating_count",
+    ),
+    activeMcpCredentialCount: nonNegativeInteger(
+      value.active_mcp_credential_count,
+      "invalid_operator_credential_count",
+    ),
+  });
+}
+
+function directoryPage(response) {
   const page = response.body?.data;
   if (!isRecord(page) || !Array.isArray(page.principals)) {
     fail("invalid_operator_directory_projection");
   }
-  return page.principals;
+  const nextCursor = page.next_cursor;
+  if (nextCursor !== null && (typeof nextCursor !== "string" || nextCursor.length === 0)) {
+    fail("invalid_operator_directory_cursor");
+  }
+  return Object.freeze({
+    rows: Object.freeze(page.principals.map(normalizeDirectoryRow)),
+    nextCursor,
+  });
 }
 
 function rowByPrincipal(rows, principalId) {
   const row = rows.find((candidate) => candidate?.principalId === principalId);
   if (!isRecord(row)) fail("actor_missing_from_operator_directory");
   return row;
-}
-
-function validUtc(value) {
-  return typeof value === "string" && Number.isFinite(Date.parse(value));
 }
 
 function activitySnapshot(row) {
@@ -487,10 +568,67 @@ function activitySnapshot(row) {
   return Object.freeze({ lastWebSeenAt, lastMcpSeenAt, lastActivityAt });
 }
 
-async function directory(clients) {
-  return clients.operator.api(
-    "/api/v1/internal/operators/users?limit=100&sort=registered_at&direction=asc",
-  );
+async function directory(clients, query = {}) {
+  const parameters = new URLSearchParams();
+  for (const [key, value] of Object.entries(query)) {
+    if (value !== undefined && value !== null) parameters.set(key, String(value));
+  }
+  const suffix = parameters.size === 0 ? "" : `?${parameters.toString()}`;
+  return directoryPage(await clients.operator.api(
+    `/api/v1/internal/operators/users${suffix}`,
+  ));
+}
+
+function compareUnicodeScalars(left, right) {
+  const leftPoints = [...left].map((value) => value.codePointAt(0));
+  const rightPoints = [...right].map((value) => value.codePointAt(0));
+  const length = Math.min(leftPoints.length, rightPoints.length);
+  for (let index = 0; index < length; index += 1) {
+    if (leftPoints[index] !== rightPoints[index]) {
+      return leftPoints[index] < rightPoints[index] ? -1 : 1;
+    }
+  }
+  return leftPoints.length === rightPoints.length
+    ? 0
+    : leftPoints.length < rightPoints.length ? -1 : 1;
+}
+
+function normalizedDisplayName(value) {
+  return value.normalize("NFKC").trim().toLocaleLowerCase("en-US");
+}
+
+function compareRows(left, right, sort, direction) {
+  let compared;
+  if (sort === "registered_at") {
+    compared = left.registeredAt.localeCompare(right.registeredAt);
+  } else if (sort === "last_activity_at") {
+    compared = (left.activity?.lastActivityAt ?? "").localeCompare(
+      right.activity?.lastActivityAt ?? "",
+    );
+  } else if (sort === "display_name") {
+    compared = normalizedDisplayName(left.displayName).localeCompare(
+      normalizedDisplayName(right.displayName),
+      "en-US",
+    );
+  } else {
+    fail("unsupported_operator_sort");
+  }
+  if (compared === 0) compared = compareUnicodeScalars(left.principalId, right.principalId);
+  return direction === "asc" ? compared : -compared;
+}
+
+function assertSorted(rows, sort, direction) {
+  for (let index = 1; index < rows.length; index += 1) {
+    if (compareRows(rows[index - 1], rows[index], sort, direction) > 0) {
+      fail("operator_directory_sort_invalid", { sort, direction });
+    }
+  }
+}
+
+function assertExactIds(rows, expectedRows, code) {
+  const observed = rows.map(({ principalId }) => principalId).sort(compareUnicodeScalars);
+  const expected = expectedRows.map(({ principalId }) => principalId).sort(compareUnicodeScalars);
+  if (canonical(observed) !== canonical(expected)) fail(code);
 }
 
 function assertExactNotFound(response, actorClass, surface) {
@@ -510,7 +648,12 @@ async function verify(state, credentials, fetchImpl, now) {
   const sessions = await readSessions(clients);
   assertSameActors(state, sessions);
 
-  const firstRows = directoryRows(await directory(clients));
+  const firstPage = await directory(clients, {
+    limit: 100,
+    sort: "registered_at",
+    direction: "asc",
+  });
+  const firstRows = firstPage.rows;
   if (firstRows.length < 3) fail("operator_directory_too_small");
   const firstActorRows = {};
   for (const actorClass of ACTOR_CLASSES) {
@@ -534,16 +677,125 @@ async function verify(state, credentials, fetchImpl, now) {
     !operatorUi.text.includes("UAT users")
   ) fail("operator_directory_ui_unavailable");
 
-  const secondRows = directoryRows(await directory(clients));
+  const secondRows = (await directory(clients, {
+    limit: 100,
+    sort: "registered_at",
+    direction: "asc",
+  })).rows;
   const firstOrder = firstRows.map((row) => row?.principalId);
   const secondOrder = secondRows.map((row) => row?.principalId);
   if (canonical(firstOrder) !== canonical(secondOrder)) {
     fail("operator_directory_unstable");
   }
+
+  const firstCursorPage = await directory(clients, {
+    limit: 1,
+    sort: "registered_at",
+    direction: "asc",
+  });
+  if (firstCursorPage.rows.length !== 1 || firstCursorPage.nextCursor === null) {
+    fail("operator_directory_cursor_missing");
+  }
+  const secondCursorPage = await directory(clients, {
+    limit: 1,
+    sort: "registered_at",
+    direction: "asc",
+    cursor: firstCursorPage.nextCursor,
+  });
+  if (
+    secondCursorPage.rows.length !== 1 ||
+    firstCursorPage.rows[0].principalId === secondCursorPage.rows[0].principalId
+  ) fail("operator_directory_cursor_repeated_row");
+
+  const searched = await directory(clients, {
+    query: firstActorRows.ordinary.displayName,
+    limit: 100,
+  });
+  if (
+    !searched.rows.some((row) => row.principalId === sessions.ordinary.principalId) ||
+    searched.rows.some((row) =>
+      normalizedDisplayName(row.displayName) !==
+        normalizedDisplayName(firstActorRows.ordinary.displayName))
+  ) fail("operator_directory_exact_search_failed");
+
+  for (const sort of ["registered_at", "last_activity_at", "display_name"]) {
+    for (const direction of ["asc", "desc"]) {
+      const sorted = await directory(clients, { limit: 100, sort, direction });
+      assertSorted(sorted.rows, sort, direction);
+    }
+  }
+
+  const registrationTarget = firstActorRows.ordinary.registeredAt;
+  const registrationRange = await directory(clients, {
+    registered_from: registrationTarget,
+    registered_to: registrationTarget,
+    limit: 100,
+  });
+  const expectedRegistrationRows = firstRows.filter(
+    ({ registeredAt }) => registeredAt === registrationTarget,
+  );
+  if (expectedRegistrationRows.length === 0) fail("operator_registration_fixture_missing");
+  assertExactIds(
+    registrationRange.rows,
+    expectedRegistrationRows,
+    "operator_registration_range_failed",
+  );
+
+  const activityTarget = firstActorRows.mind_role.activity.lastActivityAt;
+  const activityRange = await directory(clients, {
+    activity_from: activityTarget,
+    activity_to: activityTarget,
+    limit: 100,
+  });
+  const expectedActivityRows = firstRows.filter(
+    ({ activity, principalId }) =>
+      principalId !== sessions.operator.principalId &&
+      activity?.lastActivityAt === activityTarget,
+  );
+  if (expectedActivityRows.length === 0) fail("operator_activity_fixture_missing");
+  assertExactIds(
+    activityRange.rows,
+    expectedActivityRows,
+    "operator_activity_range_failed",
+  );
+
+  const empty = await directory(clients, {
+    query: `__uat_operator_canary_no_match_${state.run_nonce}__`,
+    limit: 100,
+  });
+  if (empty.rows.length !== 0 || empty.nextCursor !== null) {
+    fail("operator_directory_empty_search_failed");
+  }
+
+  const neverActive = await directory(clients, {
+    never_active: true,
+    limit: 100,
+    sort: "registered_at",
+    direction: "asc",
+  });
+  if (neverActive.rows.some(({ activity }) => activity !== null)) {
+    fail("operator_directory_never_active_failed");
+  }
+  const neverActiveUi = await clients.operator.request(
+    "/internal/operators/users?neverActive=true&limit=100",
+    { headers: { accept: "text/html" } },
+  );
+  if (
+    neverActiveUi.status !== 200 ||
+    !neverActiveUi.headers?.get?.("content-type")?.includes?.("text/html") ||
+    (!neverActiveUi.text.includes("Never") &&
+      !neverActiveUi.text.includes("No accounts match this bounded view."))
+  ) fail("operator_directory_never_active_ui_failed");
+
+  const deniedReferenceRows = (await directory(clients, {
+    limit: 100,
+    sort: "registered_at",
+    direction: "asc",
+  })).rows;
   const deniedBaseline = {};
   for (const actorClass of ["mind_role", "ordinary"]) {
     deniedBaseline[actorClass] = activitySnapshot(
-      rowByPrincipal(secondRows, sessions[actorClass].principalId),
+      rowByPrincipal(deniedReferenceRows, sessions[actorClass].principalId),
     );
     assertExactNotFound(
       await clients[actorClass].request("/api/v1/internal/operators/users?limit=1", {
@@ -561,7 +813,11 @@ async function verify(state, credentials, fetchImpl, now) {
     );
   }
 
-  const afterDeniedRows = directoryRows(await directory(clients));
+  const afterDeniedRows = (await directory(clients, {
+    limit: 100,
+    sort: "registered_at",
+    direction: "asc",
+  })).rows;
   for (const actorClass of ["mind_role", "ordinary"]) {
     const after = activitySnapshot(
       rowByPrincipal(afterDeniedRows, sessions[actorClass].principalId),

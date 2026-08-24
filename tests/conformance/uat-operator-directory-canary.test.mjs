@@ -142,17 +142,85 @@ function operatorFixture({ mindRole = true } = {}) {
     headers: { "content-type": "application/json" },
   });
   const actorFor = (headers) => sites[new Headers(headers).get("OAI-Sites-Authorization")];
-  const rows = () => ["operator", "mind_role", "ordinary"].map((actor, index) => ({
-    principalId: principals[actor],
-    displayName: `Fixture ${index}`,
-    verifiedEmail: `fixture-${index}@example.test`,
+  const queries = [];
+  const wireActivity = (actor) => {
+    const activity = activities.get(actor);
+    return activity === undefined ? null : {
+      last_web_seen_at: activity.lastWebSeenAt ?? null,
+      last_mcp_seen_at: activity.lastMcpSeenAt ?? null,
+      last_activity_at: activity.lastActivityAt,
+      last_activity_surface: activity.lastActivitySurface,
+      last_activity_kind: activity.lastActivityKind,
+    };
+  };
+  const rows = () => [...["operator", "mind_role", "ordinary"].map((actor, index) => ({
+    principal_id: principals[actor],
+    display_name: `Fixture ${index}`,
+    verified_email: `fixture-${index}@example.test`,
     state: "active",
-    registeredAt: `2026-08-20T00:00:0${index}.000Z`,
-    activity: activities.get(actor) ?? null,
-    ownedMindCount: actor === "mind_role" && mindRole ? 1 : 0,
-    participatingMindCount: 0,
-    activeMcpCredentialCount: 1,
-  }));
+    registered_at: `2026-08-20T00:00:0${index}.000Z`,
+    activity: wireActivity(actor),
+    owned_mind_count: actor === "mind_role" && mindRole ? 1 : 0,
+    participating_mind_count: 0,
+    active_mcp_credential_count: 1,
+  })), {
+    principal_id: "fixture-never-active",
+    display_name: "Fixture Never",
+    verified_email: "fixture-never@example.test",
+    state: "active",
+    registered_at: "2026-08-20T00:00:03.000Z",
+    activity: null,
+    owned_mind_count: 0,
+    participating_mind_count: 0,
+    active_mcp_credential_count: 0,
+  }];
+  const normalized = (value) => value.normalize("NFKC").trim().toLocaleLowerCase("en-US");
+  const compare = (left, right, sort, direction) => {
+    let compared;
+    if (sort === "registered_at") compared = left.registered_at.localeCompare(right.registered_at);
+    else if (sort === "last_activity_at") {
+      compared = (left.activity?.last_activity_at ?? "").localeCompare(
+        right.activity?.last_activity_at ?? "",
+      );
+    } else compared = normalized(left.display_name).localeCompare(normalized(right.display_name), "en-US");
+    if (compared === 0) compared = left.principal_id < right.principal_id ? -1 : left.principal_id > right.principal_id ? 1 : 0;
+    return direction === "asc" ? compared : -compared;
+  };
+  const page = (url) => {
+    const query = Object.fromEntries(url.searchParams);
+    queries.push(query);
+    let selected = rows();
+    if (query.query !== undefined) {
+      const needle = normalized(query.query);
+      selected = selected.filter((row) =>
+        normalized(row.display_name) === needle || normalized(row.verified_email) === needle);
+    }
+    if (query.never_active === "true") selected = selected.filter((row) => row.activity === null);
+    if (query.registered_from !== undefined) {
+      selected = selected.filter((row) => row.registered_at >= query.registered_from);
+    }
+    if (query.registered_to !== undefined) {
+      selected = selected.filter((row) => row.registered_at <= query.registered_to);
+    }
+    if (query.activity_from !== undefined) {
+      selected = selected.filter((row) =>
+        row.activity !== null && row.activity.last_activity_at >= query.activity_from);
+    }
+    if (query.activity_to !== undefined) {
+      selected = selected.filter((row) =>
+        row.activity !== null && row.activity.last_activity_at <= query.activity_to);
+    }
+    const sort = query.sort ?? "registered_at";
+    const direction = query.direction ?? "desc";
+    selected.sort((left, right) => compare(left, right, sort, direction));
+    const offset = query.cursor === undefined
+      ? 0
+      : Number(/^fixture\.(\d+)$/u.exec(query.cursor)?.[1] ?? Number.NaN);
+    const limit = Number(query.limit ?? 50);
+    const principals = selected.slice(offset, offset + limit);
+    const next = offset + limit < selected.length ? `fixture.${offset + limit}` : null;
+    return { principals, next_cursor: next };
+  };
   const fetchImpl = async (urlValue, options = {}) => {
     const url = new URL(urlValue);
     const actor = actorFor(options.headers);
@@ -167,15 +235,15 @@ function operatorFixture({ mindRole = true } = {}) {
     if (url.pathname === "/api/v1/minds") {
       record(actor, "web");
       const data = [{
-        mindId: `personal-fixture-${actor}`,
+        mind_id: `personal-fixture-${actor}`,
         route: "/me",
-        isPersonal: true,
+        is_personal: true,
         access: { kind: "membership", role: "owner" },
       }];
       if (actor === "mind_role" && mindRole) data.push({
-        mindId: "mind-fixture-shared",
+        mind_id: "mind-fixture-shared",
         route: "/fixture-shared",
-        isPersonal: false,
+        is_personal: false,
         access: { kind: "membership", role: "admin" },
       });
       return json(200, { data });
@@ -192,22 +260,27 @@ function operatorFixture({ mindRole = true } = {}) {
     }
     if (url.pathname === "/api/v1/internal/operators/users") {
       if (actor !== "operator") return json(404, { error: { code: "not_found" } });
-      const response = json(200, { data: { principals: rows(), nextCursor: null } });
+      const response = json(200, { data: page(url) });
       record(actor, "web");
       return response;
     }
     if (url.pathname === "/internal/operators/users") {
       if (actor !== "operator") return json(404, { error: { code: "not_found" } });
-      const response = new Response("<!doctype html><h1>UAT users</h1>", {
+      const empty = url.searchParams.get("neverActive") === "true" &&
+        rows().every((row) => row.activity !== null);
+      const response = new Response(
+        `<!doctype html><h1>UAT users</h1>${empty ? "No accounts match this bounded view." : "Never"}`,
+        {
         status: 200,
         headers: { "content-type": "text/html; charset=utf-8" },
-      });
+        },
+      );
       record(actor, "web");
       return response;
     }
     return json(404, { error: { code: "not_found" } });
   };
-  return { fetchImpl, activities };
+  return { fetchImpl, activities, queries };
 }
 
 test("setup, verify and cleanup exercise the three-actor hosted contract", async () => {
@@ -242,6 +315,20 @@ test("setup, verify and cleanup exercise the three-actor hosted contract", async
     assert.equal(evidence.assertions.length, OPERATOR_CANARY_ASSERTION_IDS.length);
     assert.equal(JSON.stringify(evidence).includes("principal-fixture"), false);
     assert.equal(JSON.stringify(evidence).includes("example.test"), false);
+    assert.equal(fixture.queries.some(({ cursor }) => cursor === "fixture.1"), true);
+    assert.equal(fixture.queries.some(({ query }) => query === "Fixture 2"), true);
+    assert.equal(fixture.queries.some(({ query }) => query?.startsWith("__uat_operator_canary_no_match_")), true);
+    assert.equal(fixture.queries.some(({ registered_from, registered_to }) =>
+      registered_from !== undefined && registered_from === registered_to), true);
+    assert.equal(fixture.queries.some(({ activity_from, activity_to }) =>
+      activity_from !== undefined && activity_from === activity_to), true);
+    assert.equal(fixture.queries.some(({ never_active }) => never_active === "true"), true);
+    for (const sort of ["registered_at", "last_activity_at", "display_name"]) {
+      for (const direction of ["asc", "desc"]) {
+        assert.equal(fixture.queries.some((query) =>
+          query.sort === sort && query.direction === direction), true, `${sort}:${direction}`);
+      }
+    }
 
     const cleaned = await run({ phase: "cleanup", state: statePath });
     assert.equal(cleaned.status, "cleaned");

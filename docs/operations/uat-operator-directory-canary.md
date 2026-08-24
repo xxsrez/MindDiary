@@ -19,8 +19,20 @@ Runner использует только обычные hosted web/control и mo
 проверяет distinct registered principals и Personal Minds в памяти, наличие
 ordinary-Mind role у `mind_role`, успешную web/MCP activity для каждого actor,
 stable bounded API projection минимум из трёх строк, operator HTML и exact
-`404/not_found` на UI/API для обоих non-operators. Второй operator read-back
-подтверждает, что denied requests не сдвинули их activity summary.
+`404/not_found` на UI/API для обоих non-operators. Hosted REST projection
+нормализуется из exact snake-case wire fields; camel-case test double не
+считается evidence. Canary также проверяет limit-1 cursor без повторной строки,
+exact display-name search, `registered_at` / `last_activity_at` / `display_name`
+в обоих направлениях, inclusive UTC registration/activity ranges и impossible
+synthetic empty query. Второй operator read-back подтверждает, что denied
+requests не сдвинули activity summary обоих non-operators.
+
+`never_active=true` не требует искусственно создавать ещё один account. Если
+такие строки есть, у каждой `activity` обязана быть `null`; ноль строк является
+корректным bounded result только вместе с отдельным успешным UI assertion,
+который показывает `Never` либо явный empty-state. Display name для exact
+search берётся из live row только в памяти, а synthetic empty query не содержит
+identity. Ни один query, cursor, row или sort value не входит в state/receipt.
 
 Canary не доказывает provider request-envelope privacy. Этот отдельный
 provider/application boundary и его redacted read-back принадлежат `MD-283` и
@@ -103,7 +115,8 @@ npm run uat:operator-directory-canary -- \
 ```
 
 Изменившийся deployment, actor session или отсутствие любого actor в bounded
-directory блокирует pass. Successful artifact имеет schema
+directory блокирует pass. Pagination/search/sort/range/empty/never-active
+failure также оставляет canary nonterminal. Successful artifact имеет schema
 `mind-diary/uat-operator-directory-canary-evidence/v1`, exact candidate SHA и
 deployment ID, actor source, один opaque run fingerprint, три actor class +
 opaque fingerprint, закрытый список assertion IDs, UTC observation и
