@@ -119,6 +119,7 @@ import {
   type PrivacySafeObservabilitySink,
 } from "@mind-diary/application-ports";
 import {
+  isRevisionIndexTerminalFailureCode,
   type Capability,
   type EffectiveTokenScopes,
   type MindBindingOwnerId,
@@ -176,6 +177,7 @@ export interface ProductSiteRuntime {
   /** Bounded request-triggered recovery for exact-revision index work. */
   readonly recoverBackground: (limit?: number) => Promise<Readonly<{
     backfilled: number;
+    repaired: number;
     dispatched: number;
     failed: number;
     cleanupDeleted: number;
@@ -1471,7 +1473,9 @@ export async function createProductSiteRuntime(
             outcome: result.kind === "completed" || result.kind === "already_completed"
               ? "success"
               : result.kind === "failed"
-                ? "failure"
+                ? isRevisionIndexTerminalFailureCode(result.failureCode)
+                  ? "unresolved"
+                  : "failure"
                 : result.kind === "not_available"
                   ? "unavailable"
                   : "retry",
@@ -1585,18 +1589,28 @@ export async function createProductSiteRuntime(
       }
     };
     try {
-      const backfilled = await stage("recovery_index_gaps", async () => {
-        const gaps = await metadata.listActiveRevisionIndexGaps(limit);
-        let count = 0;
-        for (const gap of gaps) {
+      const reconciliation = await stage("recovery_index_gaps", async () => {
+        const candidates = await metadata.listActiveRevisionIndexRecoveryCandidates(limit);
+        let backfilled = 0;
+        let repaired = 0;
+        for (const candidate of candidates) {
+          if (candidate.reason === "verify_ready_projection") {
+            const projected = index.inspectExactRevision === undefined
+              ? await index.readExactRevision(candidate.spaceId, candidate.revisionId)
+              : await index.inspectExactRevision(candidate.spaceId, candidate.revisionId);
+            if (projected.kind === "ready" &&
+                projected.spaceId === candidate.spaceId &&
+                projected.revisionId === candidate.revisionId) {
+              continue;
+            }
+          }
           const jobId = nextOpaque("job-index-recovery");
-          const ensured = await metadata.ensureRevisionIndexQueued(
-            Object.freeze({
+          const job = Object.freeze({
               jobId,
               target: Object.freeze({
                 kind: "revision_index" as const,
-                spaceId: gap.spaceId,
-                revisionId: gap.revisionId,
+                spaceId: candidate.spaceId,
+                revisionId: candidate.revisionId,
               }),
               state: "queued" as const,
               version: version(1),
@@ -1605,21 +1619,39 @@ export async function createProductSiteRuntime(
               claimExpiresAt: null,
               createdAt: nowUtc,
               updatedAt: nowUtc,
-            }),
-            Object.freeze({
-              spaceId: gap.spaceId,
-              revisionId: gap.revisionId,
+            });
+          const state = Object.freeze({
+              spaceId: candidate.spaceId,
+              revisionId: candidate.revisionId,
               status: "queued" as const,
               attempts: 0,
               queuedAt: nowUtc,
               updatedAt: nowUtc,
               readyAt: null,
               lastFailureCode: null,
-            }),
-          );
-          if (ensured.kind === "queued") count += 1;
+            });
+          const ensured = candidate.reason === "metadata_missing"
+            ? await metadata.ensureRevisionIndexQueued(job, state)
+            : candidate.reason === "metadata_inconsistent"
+              ? await metadata.repairRevisionIndexQueued(
+                  job,
+                  state,
+                  Object.freeze({ kind: "metadata_inconsistent" as const }),
+                )
+              : await metadata.repairRevisionIndexQueued(
+                  job,
+                  state,
+                  Object.freeze({
+                    kind: "physical_index_missing" as const,
+                    expectedReadyJobId: candidate.observedJobId,
+                    expectedReadyJobVersion: candidate.observedJobVersion,
+                  }),
+                );
+          if (ensured.kind !== "queued") continue;
+          if (candidate.reason === "metadata_missing") backfilled += 1;
+          else repaired += 1;
         }
-        return count;
+        return Object.freeze({ backfilled, repaired });
       });
       const results = await stage("recovery_index_dispatch", async () => {
         const due = await metadata.listRecoverableIndexJobs(clock.now(), limit);
@@ -1688,11 +1720,20 @@ export async function createProductSiteRuntime(
         cleanupFailures = 1;
       }
       const result = Object.freeze({
-        backfilled,
+        backfilled: reconciliation.backfilled,
+        repaired: reconciliation.repaired,
         dispatched: results.length + exportResults.length,
         failed:
-          results.filter((entry) => entry.status === "rejected").length +
-          exportResults.filter((entry) => entry.status === "rejected").length +
+          results.filter((entry) =>
+            entry.status === "rejected" ||
+            (typeof entry.value === "object" && entry.value !== null &&
+              "kind" in entry.value && entry.value.kind === "failed")
+          ).length +
+          exportResults.filter((entry) =>
+            entry.status === "rejected" ||
+            (typeof entry.value === "object" && entry.value !== null &&
+              "kind" in entry.value && entry.value.kind === "failed")
+          ).length +
           cleanupFailures,
         cleanupDeleted,
         cleanupReclaimedBytes,

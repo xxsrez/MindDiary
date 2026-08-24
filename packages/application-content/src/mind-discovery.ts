@@ -16,6 +16,7 @@ import {
 import {
   capabilitiesForRole,
   capabilitiesForVisibilityGrant,
+  isRevisionIndexTerminalFailureCode,
   isReservedTopLevelHandle,
   parseCanonicalSpaceHandle,
   utcInstant,
@@ -823,12 +824,18 @@ export class MindDiscoveryService {
         failureCode: null,
       });
     }
+    const retryable = raw.status !== "ready" &&
+      raw.attempts < 5 &&
+      !isRevisionIndexTerminalFailureCode(raw.lastFailureCode);
     return Object.freeze({
       status: raw.status,
-      retryable: raw.status !== "ready" && raw.attempts < 5,
+      retryable,
       retryAfterMs:
-        raw.status !== "ready" && raw.attempts < 5
-          ? Math.min(30_000, 1_000 * (2 ** Math.min(raw.attempts, 5)))
+        retryable
+          ? Math.min(
+              30_000,
+              1_000 * (2 ** Math.max(0, Math.min(raw.attempts - 1, 5))),
+            )
           : null,
       failureCode: raw.lastFailureCode,
     });

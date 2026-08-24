@@ -106,6 +106,27 @@ exact artifact/deployment и итог. Raw application/provider log line, field 
 application event связывается по safe locator/hash, а provider boundary — по
 classification-only receipt.
 
+## Проверка revision-index recovery
+
+UAT acceptance использует только обычный product flow, без corruption fixture,
+internal method или repair endpoint:
+
+1. Создать свежий synthetic ordinary Mind и выполнить один normal commit с
+   уникальным non-sensitive marker; сохранить exact returned `revision_id`.
+2. Дождаться `index_status=ready` для этой же revision. HEAD не должен
+   продвинуться из-за recovery.
+3. Выполнить search marker и получить expected hit с тем же `revision_id`, затем
+   выполнить заведомый no-hit query и получить пустой ready result, а не другую
+   revision или `search_index_unavailable`.
+4. Если наблюдался lag/retry, в evidence сохранить только terminal class,
+   bounded timestamps и opaque correlation. Query, path, content, identity и
+   raw exception не сохранять.
+5. Удалить synthetic Mind штатным lifecycle и подтвердить отсутствие доступа.
+
+Repository tests отдельно инъецируют partial metadata, missing physical
+projection, expired/stale claim и terminal limits. Они доказывают repair
+механику, но не требуют привилегированной мутации hosted UAT.
+
 ## Emergency revoke
 
 ### Утечка MCP token

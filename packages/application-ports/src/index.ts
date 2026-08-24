@@ -104,6 +104,7 @@ export {
   SpaceAggregate,
   isReservedTopLevelHandle,
   isReservedTopLevelRoute,
+  isRevisionIndexTerminalFailureCode,
   normalizeSpaceHandle,
   parseCanonicalSpaceHandle,
   version,
@@ -2644,6 +2645,14 @@ export type QueryExactRevisionIndexResult =
     }
   | { readonly kind: "unavailable" };
 
+export type InspectExactRevisionIndexResult =
+  | {
+      readonly kind: "ready";
+      readonly spaceId: SpaceId;
+      readonly revisionId: RevisionId;
+    }
+  | { readonly kind: "unavailable" };
+
 /** Revision-keyed derived index. There is deliberately no implicit HEAD API. */
 export interface SearchIndex {
   readonly kind: "search-index";
@@ -2654,6 +2663,11 @@ export interface SearchIndex {
     spaceId: SpaceId,
     revisionId: RevisionId,
   ): Promise<ReadExactRevisionIndexResult>;
+  /** Metadata-only physical projection probe; it must not load document text. */
+  inspectExactRevision?(
+    spaceId: SpaceId,
+    revisionId: RevisionId,
+  ): Promise<InspectExactRevisionIndexResult>;
   queryExactRevision?(
     spaceId: SpaceId,
     revisionId: RevisionId,
@@ -2696,7 +2710,39 @@ export interface RevisionIndexRecoveryGap {
   readonly revisionId: RevisionId;
 }
 
+export type RevisionIndexRecoveryCandidate =
+  | Readonly<{
+      readonly spaceId: SpaceId;
+      readonly revisionId: RevisionId;
+      readonly reason: "metadata_missing";
+    }>
+  | Readonly<{
+      readonly spaceId: SpaceId;
+      readonly revisionId: RevisionId;
+      readonly reason: "metadata_inconsistent";
+    }>
+  | Readonly<{
+      readonly spaceId: SpaceId;
+      readonly revisionId: RevisionId;
+      readonly reason: "verify_ready_projection";
+      readonly observedJobId: JobId;
+      readonly observedJobVersion: Version;
+    }>;
+
+export type RepairRevisionIndexReason =
+  | Readonly<{ readonly kind: "metadata_inconsistent" }>
+  | Readonly<{
+      readonly kind: "physical_index_missing";
+      readonly expectedReadyJobId: JobId;
+      readonly expectedReadyJobVersion: Version;
+    }>;
+
 export type EnsureRevisionIndexQueuedResult =
+  | { readonly kind: "queued"; readonly job: Readonly<BackgroundJob> }
+  | { readonly kind: "already_present"; readonly job: Readonly<BackgroundJob> }
+  | { readonly kind: "revision_not_found" | "not_current_head" | "invalid_effects" };
+
+export type RepairRevisionIndexQueuedResult =
   | { readonly kind: "queued"; readonly job: Readonly<BackgroundJob> }
   | { readonly kind: "already_present"; readonly job: Readonly<BackgroundJob> }
   | { readonly kind: "revision_not_found" | "not_current_head" | "invalid_effects" };
@@ -2709,10 +2755,22 @@ export interface BackgroundWorkStore extends MetadataStore {
   listActiveRevisionIndexGaps(
     limit: number,
   ): Promise<readonly Readonly<RevisionIndexRecoveryGap>[]>;
+  /**
+   * Bounded internal reconciliation scan. Ready candidates require a physical
+   * SearchIndex read before repair; no caller-controlled public endpoint uses it.
+   */
+  listActiveRevisionIndexRecoveryCandidates(
+    limit: number,
+  ): Promise<readonly RevisionIndexRecoveryCandidate[]>;
   ensureRevisionIndexQueued(
     job: Readonly<BackgroundJob>,
     state: Readonly<RevisionIndexState>,
   ): Promise<EnsureRevisionIndexQueuedResult>;
+  repairRevisionIndexQueued(
+    job: Readonly<BackgroundJob>,
+    state: Readonly<RevisionIndexState>,
+    reason: RepairRevisionIndexReason,
+  ): Promise<RepairRevisionIndexQueuedResult>;
   claimIndexJob(
     jobId: JobId,
     now: UtcInstant,

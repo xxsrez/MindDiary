@@ -497,6 +497,161 @@ test("worker failure preserves canonical commit; audit retries dedupe delivery",
   assert.equal(audit.deliveredForTest().length, 1);
 });
 
+test("revision index recovery uses bounded exponential backoff and terminal attempt and age limits", async () => {
+  const env = await fixture();
+  const service = env.commit(["revision_index_bounded_retry"]);
+  assert.equal((await service.commit({
+    actor: env.actor,
+    spaceId: MINDS.ordinary.spaceId,
+    expectedRevisionId: REVISIONS.initial.revisionId,
+    idempotencyKey: "bounded_index_retry",
+    summary: "Bounded index retry",
+    operations: operations("concepts/bounded-index-retry.md", "Bounded index retry"),
+  })).kind, "committed");
+  const jobId = "index_job_revision_index_bounded_retry";
+  let now = "2026-08-06T12:01:01.000Z";
+  const clock = { now: () => now };
+  const index = new InMemoryExactRevisionSearchIndex();
+  const handler = new RevisionIndexJobHandler({
+    work: env.metadata,
+    revisions: env.revisions,
+    index,
+    clock,
+    retryDelayMs: 1_000,
+    maxRetryDelayMs: 4_000,
+    maxAttempts: 3,
+    maxAgeMs: 60_000,
+  });
+
+  index.failNextReplaceForTest();
+  assert.deepEqual(await handler.handle({ actor: serviceActor(now), jobId }), {
+    kind: "failed",
+    failureCode: "index_rebuild_failed",
+  });
+  let job = (await env.metadata.listBackgroundJobsForTest())
+    .find((candidate) => candidate.jobId === jobId);
+  assert.equal(job.availableAt, "2026-08-06T12:01:02.000Z");
+
+  now = "2026-08-06T12:01:01.999Z";
+  assert.deepEqual(await handler.handle({ actor: serviceActor(now), jobId }), {
+    kind: "not_available",
+  });
+  now = "2026-08-06T12:01:02.000Z";
+  index.failNextReplaceForTest();
+  assert.equal((await handler.handle({ actor: serviceActor(now), jobId })).failureCode,
+    "index_rebuild_failed");
+  job = (await env.metadata.listBackgroundJobsForTest())
+    .find((candidate) => candidate.jobId === jobId);
+  assert.equal(job.availableAt, "2026-08-06T12:01:04.000Z");
+
+  now = "2026-08-06T12:01:04.000Z";
+  index.failNextReplaceForTest();
+  assert.deepEqual(await handler.handle({ actor: serviceActor(now), jobId }), {
+    kind: "failed",
+    failureCode: "index_retry_attempt_limit",
+  });
+  const terminal = await env.metadata.readRevisionIndexState(
+    MINDS.ordinary.spaceId,
+    "revision_index_bounded_retry",
+  );
+  assert.equal(terminal.status, "failed");
+  assert.equal(terminal.attempts, 3);
+  assert.equal(terminal.lastFailureCode, "index_retry_attempt_limit");
+  assert.deepEqual(await env.metadata.listRecoverableIndexJobs(now, 10), []);
+
+  const agedEnv = await fixture();
+  const agedService = agedEnv.commit(["revision_index_age_limit"]);
+  assert.equal((await agedService.commit({
+    actor: agedEnv.actor,
+    spaceId: MINDS.ordinary.spaceId,
+    expectedRevisionId: REVISIONS.initial.revisionId,
+    idempotencyKey: "aged_index_retry",
+    summary: "Aged index retry",
+    operations: operations("concepts/aged-index-retry.md", "Aged index retry"),
+  })).kind, "committed");
+  let materializations = 0;
+  const agedNow = "2026-08-06T12:01:02.000Z";
+  const agedHandler = new RevisionIndexJobHandler({
+    work: agedEnv.metadata,
+    revisions: {
+      async materialize(...args) {
+        materializations += 1;
+        return agedEnv.revisions.materialize(...args);
+      },
+    },
+    index: new InMemoryExactRevisionSearchIndex(),
+    clock: { now: () => agedNow },
+    maxAgeMs: 1_000,
+  });
+  assert.deepEqual(await agedHandler.handle({
+    actor: serviceActor(agedNow),
+    jobId: "index_job_revision_index_age_limit",
+  }), { kind: "failed", failureCode: "index_retry_age_limit" });
+  assert.equal(materializations, 0);
+  assert.equal((await agedEnv.metadata.readRevisionIndexState(
+    MINDS.ordinary.spaceId,
+    "revision_index_age_limit",
+  )).lastFailureCode, "index_retry_age_limit");
+});
+
+test("a reclaimed revision index claim fences the stale handler completion", async () => {
+  const env = await fixture();
+  const service = env.commit(["revision_index_handler_fence"]);
+  assert.equal((await service.commit({
+    actor: env.actor,
+    spaceId: MINDS.ordinary.spaceId,
+    expectedRevisionId: REVISIONS.initial.revisionId,
+    idempotencyKey: "index_handler_fence",
+    summary: "Index handler fence",
+    operations: operations("concepts/index-handler-fence.md", "Index handler fence"),
+  })).kind, "committed");
+  let now = "2026-08-06T12:01:01.000Z";
+  let replaceCalls = 0;
+  let releaseFirst;
+  let firstStarted;
+  const firstStartedGate = new Promise((resolve) => { firstStarted = resolve; });
+  const firstReplaceGate = new Promise((resolve) => { releaseFirst = resolve; });
+  const stored = new InMemoryExactRevisionSearchIndex();
+  const index = {
+    kind: "search-index",
+    async replaceExactRevision(request) {
+      replaceCalls += 1;
+      if (replaceCalls === 1) {
+        firstStarted();
+        await firstReplaceGate;
+      }
+      await stored.replaceExactRevision(request);
+    },
+    readExactRevision: (...args) => stored.readExactRevision(...args),
+    purgeSpace: (...args) => stored.purgeSpace(...args),
+  };
+  const handler = new RevisionIndexJobHandler({
+    work: env.metadata,
+    revisions: env.revisions,
+    index,
+    clock: { now: () => now },
+    claimLeaseMs: 1_000,
+  });
+  const request = {
+    actor: serviceActor(now),
+    jobId: "index_job_revision_index_handler_fence",
+  };
+  const stale = handler.handle(request);
+  await firstStartedGate;
+  now = "2026-08-06T12:01:02.001Z";
+  assert.deepEqual(await handler.handle({ ...request, actor: serviceActor(now) }), {
+    kind: "completed",
+  });
+  releaseFirst();
+  assert.deepEqual(await stale, { kind: "not_available" });
+  const state = await env.metadata.readRevisionIndexState(
+    MINDS.ordinary.spaceId,
+    "revision_index_handler_fence",
+  );
+  assert.equal(state.status, "ready");
+  assert.equal(state.attempts, 2);
+});
+
 test("expired claims are reclaimable and old claim versions cannot complete or fail", async () => {
   const env = await fixture();
   const service = env.commit(["revision_claim_fencing"]);

@@ -86,6 +86,15 @@ export class InMemoryExactRevisionSearchIndex implements SearchIndex {
     });
   }
 
+  async inspectExactRevision(
+    spaceId: ReplaceExactRevisionIndexRequest["spaceId"],
+    revisionId: ReplaceExactRevisionIndexRequest["revisionId"],
+  ) {
+    return this.#revisions.has(key(spaceId, revisionId))
+      ? Object.freeze({ kind: "ready" as const, spaceId, revisionId })
+      : Object.freeze({ kind: "unavailable" as const });
+  }
+
   /** Structural alias for application readers that require an exact ready snapshot. */
   async read(
     spaceId: ReplaceExactRevisionIndexRequest["spaceId"],

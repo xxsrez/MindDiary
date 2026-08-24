@@ -1209,12 +1209,27 @@ domain semantics.
 Personal bootstrap и ordinary Mind create атомарно ставят initial exact HEAD в
 `queued` вместе с одним `revision_index` job. После завершения подходящего
 foreground request Product Worker запускает либо присоединяет один bounded
-recovery flight: он backfill-ит active current HEAD без state/job и подбирает
-due `queued`, `failed` либо expired-running claims. Static assets не являются
-trigger, concurrent requests не создают дополнительные flights, а due jobs
-dispatch-ятся последовательно. Пять неуспешных attempts оставляют
-диагностируемый `failed` terminal state; recovery никогда не подмешивает другую
-HEAD и не меняет canonical content.
+recovery flight. Он backfill-ит active current HEAD без state/job, атомарно
+исправляет partial state/job mismatch и проверяет, что `ready` metadata имеет
+физическую exact-revision search projection. Проверка использует metadata-only
+presence/count probe без загрузки document text. Один durable metadata cursor
+вращает весь bounded candidate set по стабильному `space_id` order, поэтому
+ready-проверки не вытесняются partial metadata и cold isolate продолжает со
+следующей страницы. Отсутствующая projection создаёт
+новый fenced job только для того же current HEAD; concurrent isolates получают
+один repair, а version старого claim уже не может завершить новый job. Repair
+не публикуется как HTTP/MCP endpoint и не меняет canonical content.
+
+Due `queued`, `failed` либо expired-running claims dispatch-ятся
+последовательно. Index retry использует deterministic exponential backoff
+`1s, 2s, 4s, 8s` между пятью attempts с общим cap `30s`. Пятый неуспешный attempt либо возраст job
+`24h` переводит state в terminal `failed` с закрытым machine code
+`index_retry_attempt_limit` / `index_retry_age_limit`; safe projection ставит
+`retryable=false`. Terminal/recovery telemetry содержит только closed outcome,
+duration и opaque request/job IDs — без path, query, content, principal или
+exception text. Static assets не являются trigger, concurrent requests не
+создают дополнительные flights, а exported Product Worker restart test
+доказывает новую isolate/cache boundary через обычный `fetch`.
 
 ## Content MCP
 

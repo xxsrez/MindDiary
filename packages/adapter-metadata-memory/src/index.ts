@@ -153,6 +153,7 @@ import type {
   ReadMindBinding,
   ReadMindBindingId,
   RetiredHandleMarker,
+  RevisionIndexRecoveryCandidate,
   RevisionIndexState,
   RevisionCommitRequest,
   RevisionCommitResult,
@@ -207,6 +208,7 @@ import {
   bindingVersion,
   isReservedTopLevelHandle,
   isReservedTopLevelRoute,
+  isRevisionIndexTerminalFailureCode,
   parseCanonicalSpaceHandle,
   revisionEnvelopesEqual,
   serializeRevisionManifest,
@@ -1297,6 +1299,49 @@ function cloneIndexState(
 
 function indexStateKey(spaceId: SpaceId, revisionId: RevisionId): string {
   return `${spaceId}\u0000${revisionId}`;
+}
+
+function revisionIndexJobsForTarget(
+  jobs: ReadonlyMap<JobId, Readonly<BackgroundJob>>,
+  spaceId: SpaceId,
+  revisionId: RevisionId,
+): readonly Readonly<BackgroundJob>[] {
+  return [...jobs.values()].filter((job) =>
+    job.target.kind === "revision_index" &&
+    job.target.spaceId === spaceId &&
+    job.target.revisionId === revisionId
+  );
+}
+
+function revisionIndexMetadataConsistent(
+  state: Readonly<RevisionIndexState> | undefined,
+  jobs: readonly Readonly<BackgroundJob>[],
+): boolean {
+  if (state === undefined || jobs.length !== 1) return false;
+  const job = jobs[0]!;
+  if (
+    job.target.kind !== "revision_index" ||
+    job.target.spaceId !== state.spaceId ||
+    job.target.revisionId !== state.revisionId ||
+    job.attempts !== state.attempts
+  ) return false;
+  if (job.state === "succeeded") {
+    return state.status === "ready" && state.readyAt !== null &&
+      state.lastFailureCode === null && job.claimExpiresAt === null;
+  }
+  if (job.state === "running") {
+    return state.status === "queued" && state.readyAt === null &&
+      state.lastFailureCode === null && job.claimExpiresAt !== null;
+  }
+  if (job.state === "queued") {
+    return state.status === "queued" && state.readyAt === null &&
+      state.lastFailureCode === null && job.claimExpiresAt === null;
+  }
+  if (job.state === "failed") {
+    return state.status === "failed" && state.readyAt === null &&
+      state.lastFailureCode !== null && job.claimExpiresAt === null;
+  }
+  return false;
 }
 
 const COMMIT_AUDIT_METADATA_KEYS = [
@@ -4175,6 +4220,7 @@ export class InMemoryRevisionMetadataStore
   #exportDownloadGrants = new Map<string, Readonly<ExportDownloadGrant>>();
   #bundleFileDownloadGrants = new Map<string, Readonly<BundleFileDownloadGrant>>();
   #indexStates = new Map<string, Readonly<RevisionIndexState>>();
+  #revisionIndexRecoveryCursor = 0;
   #stagedBundleFiles = new Map<StagedBundleFileId, Readonly<StagedBundleFileRecord>>();
   #localFileUploadIntents = new Map<string, Readonly<LocalFileUploadIntentRecord>>();
   #markdownImportPlans = new Map<string, Readonly<MarkdownImportPlan>>();
@@ -4265,6 +4311,7 @@ export class InMemoryRevisionMetadataStore
       exportDownloadGrants: new Map(this.#exportDownloadGrants),
       bundleFileDownloadGrants: new Map(this.#bundleFileDownloadGrants),
       indexStates: new Map(this.#indexStates),
+      revisionIndexRecoveryCursor: this.#revisionIndexRecoveryCursor,
       stagedBundleFiles: new Map(this.#stagedBundleFiles),
       localFileUploadIntents: new Map(this.#localFileUploadIntents),
       markdownImportPlans: new Map(this.#markdownImportPlans),
@@ -4326,7 +4373,10 @@ export class InMemoryRevisionMetadataStore
       !mapFields.every((field) => snapshot[field] instanceof Map) ||
       !(snapshot.publicMindCatalogSpaceIds instanceof Set) ||
       !Number.isSafeInteger(snapshot.publicMindCatalogGeneration) ||
-      (snapshot.publicMindCatalogGeneration as number) < 0
+      (snapshot.publicMindCatalogGeneration as number) < 0 ||
+      (snapshot.revisionIndexRecoveryCursor !== undefined &&
+        (!Number.isSafeInteger(snapshot.revisionIndexRecoveryCursor) ||
+          (snapshot.revisionIndexRecoveryCursor as number) < 0))
     ) {
       throw new TypeError("Revision metadata durable snapshot is invalid");
     }
@@ -4351,6 +4401,9 @@ export class InMemoryRevisionMetadataStore
       ? new Map(snapshot.bundleFileDownloadGrants as Map<string, Readonly<BundleFileDownloadGrant>>)
       : new Map();
     restored.#indexStates = new Map(snapshot.indexStates as Map<string, Readonly<RevisionIndexState>>);
+    restored.#revisionIndexRecoveryCursor = snapshot.revisionIndexRecoveryCursor === undefined
+      ? 0
+      : snapshot.revisionIndexRecoveryCursor as number;
     restored.#stagedBundleFiles = snapshot.stagedBundleFiles instanceof Map
       ? new Map(snapshot.stagedBundleFiles as Map<StagedBundleFileId, Readonly<StagedBundleFileRecord>>)
       : new Map();
@@ -10273,6 +10326,13 @@ export class InMemoryRevisionMetadataStore
         .filter((job) => {
           if (job.target.kind !== "revision_index") return false;
           if (job.attempts >= 5) return false;
+          const indexState = this.#indexStates.get(indexStateKey(
+            job.target.spaceId,
+            job.target.revisionId,
+          ));
+          if (isRevisionIndexTerminalFailureCode(indexState?.lastFailureCode)) {
+            return false;
+          }
           if (job.state === "queued" || job.state === "failed") {
             return Date.parse(job.availableAt) <= nowMs;
           }
@@ -10291,6 +10351,23 @@ export class InMemoryRevisionMetadataStore
     );
   }
 
+  /** Test-only durable corruption fixture for recovery contract coverage. */
+  async corruptRevisionIndexMetadataForTest(
+    spaceId: SpaceId,
+    revisionId: RevisionId,
+    mode: "drop_job" | "drop_state",
+  ): Promise<boolean> {
+    return this.#runExclusive(async () => {
+      if (mode === "drop_state") {
+        return this.#indexStates.delete(indexStateKey(spaceId, revisionId));
+      }
+      if (mode !== "drop_job") return false;
+      const jobs = revisionIndexJobsForTarget(this.#backgroundJobs, spaceId, revisionId);
+      for (const job of jobs) this.#backgroundJobs.delete(job.jobId);
+      return jobs.length > 0;
+    });
+  }
+
   async listActiveRevisionIndexGaps(
     limit: number,
   ): Promise<readonly Readonly<{ readonly spaceId: SpaceId; readonly revisionId: RevisionId }>[]> {
@@ -10307,6 +10384,48 @@ export class InMemoryRevisionMetadataStore
           revisionId: space.headRevisionId,
         })),
     );
+  }
+
+  async listActiveRevisionIndexRecoveryCandidates(
+    limit: number,
+  ): Promise<readonly RevisionIndexRecoveryCandidate[]> {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) return Object.freeze([]);
+    return this.#runExclusive(async () => {
+      const candidates: RevisionIndexRecoveryCandidate[] = [...this.#knowledgeSpaces.values()]
+        .filter((space) => space.state === "active")
+        .map((space): RevisionIndexRecoveryCandidate | null => {
+          const spaceId = space.spaceId;
+          const revisionId = space.headRevisionId;
+          const state = this.#indexStates.get(indexStateKey(spaceId, revisionId));
+          const jobs = revisionIndexJobsForTarget(this.#backgroundJobs, spaceId, revisionId);
+          if (state === undefined && jobs.length === 0) {
+            return Object.freeze({ spaceId, revisionId, reason: "metadata_missing" as const });
+          }
+          if (!revisionIndexMetadataConsistent(state, jobs)) {
+            return Object.freeze({ spaceId, revisionId, reason: "metadata_inconsistent" as const });
+          }
+          return state?.status === "ready"
+            ? Object.freeze({
+                spaceId,
+                revisionId,
+                reason: "verify_ready_projection" as const,
+                observedJobId: jobs[0]!.jobId,
+                observedJobVersion: jobs[0]!.version,
+              })
+            : null;
+        })
+        .filter((candidate): candidate is RevisionIndexRecoveryCandidate => candidate !== null)
+        .sort((left, right) => String(left.spaceId).localeCompare(String(right.spaceId), "en"));
+      if (candidates.length === 0) {
+        this.#revisionIndexRecoveryCursor = 0;
+        return Object.freeze([]);
+      }
+      const start = this.#revisionIndexRecoveryCursor % candidates.length;
+      const rotated = [...candidates.slice(start), ...candidates.slice(0, start)];
+      const selected = rotated.slice(0, limit);
+      this.#revisionIndexRecoveryCursor = (start + selected.length) % candidates.length;
+      return Object.freeze(selected);
+    });
   }
 
   async ensureRevisionIndexQueued(
@@ -10354,6 +10473,74 @@ export class InMemoryRevisionMetadataStore
       }
       this.#backgroundJobs = jobs;
       this.#indexStates = states;
+      return Object.freeze({ kind: "queued" as const, job: cloneBackgroundJob(job) });
+    });
+  }
+
+  async repairRevisionIndexQueued(
+    job: Readonly<BackgroundJob>,
+    state: Readonly<RevisionIndexState>,
+    reason: Readonly<
+      | { readonly kind: "metadata_inconsistent" }
+      | {
+          readonly kind: "physical_index_missing";
+          readonly expectedReadyJobId: JobId;
+          readonly expectedReadyJobVersion: BackgroundJob["version"];
+        }
+    >,
+  ) {
+    return this.#runExclusive(async () => {
+      if (job.target.kind !== "revision_index" ||
+          (reason.kind !== "metadata_inconsistent" && reason.kind !== "physical_index_missing")) {
+        return Object.freeze({ kind: "invalid_effects" as const });
+      }
+      const target = job.target;
+      const space = this.#knowledgeSpaces.get(target.spaceId);
+      if (!space || space.state !== "active") {
+        return Object.freeze({ kind: "revision_not_found" as const });
+      }
+      if (space.headRevisionId !== target.revisionId) {
+        return Object.freeze({ kind: "not_current_head" as const });
+      }
+      const revision = this.#revisionsById.get(target.revisionId);
+      if (!revision || revision.revision.spaceId !== target.spaceId) {
+        return Object.freeze({ kind: "revision_not_found" as const });
+      }
+      const key = indexStateKey(target.spaceId, target.revisionId);
+      const existingState = this.#indexStates.get(key);
+      const existingJobs = revisionIndexJobsForTarget(
+        this.#backgroundJobs,
+        target.spaceId,
+        target.revisionId,
+      );
+      const consistent = revisionIndexMetadataConsistent(existingState, existingJobs);
+      if (consistent &&
+          (reason.kind === "metadata_inconsistent" ||
+            existingState?.status !== "ready" ||
+            existingJobs[0]!.jobId !== reason.expectedReadyJobId ||
+            existingJobs[0]!.version !== reason.expectedReadyJobVersion)) {
+        return Object.freeze({
+          kind: "already_present" as const,
+          job: cloneBackgroundJob(existingJobs[0]!),
+        });
+      }
+      if (this.#backgroundJobs.has(job.jobId) &&
+          !existingJobs.some((candidate) => candidate.jobId === job.jobId)) {
+        return Object.freeze({ kind: "invalid_effects" as const });
+      }
+      const candidateJobs = new Map(this.#backgroundJobs);
+      for (const existing of existingJobs) candidateJobs.delete(existing.jobId);
+      const candidateStates = new Map(this.#indexStates);
+      candidateStates.delete(key);
+      if (stageInitialRevisionIndexAgainst({
+        initialRevision: revision,
+        initialIndexJob: job,
+        initialIndexState: state,
+      }, candidateJobs, candidateStates, "recovery") !== "staged") {
+        return Object.freeze({ kind: "invalid_effects" as const });
+      }
+      this.#backgroundJobs = candidateJobs;
+      this.#indexStates = candidateStates;
       return Object.freeze({ kind: "queued" as const, job: cloneBackgroundJob(job) });
     });
   }

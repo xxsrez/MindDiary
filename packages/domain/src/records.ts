@@ -365,6 +365,22 @@ export interface RevisionIndexState {
   readonly lastFailureCode: string | null;
 }
 
+/** Closed terminal reasons for bounded exact-revision index recovery. */
+export const REVISION_INDEX_TERMINAL_FAILURE_CODES = Object.freeze([
+  "index_retry_attempt_limit",
+  "index_retry_age_limit",
+] as const);
+
+export type RevisionIndexTerminalFailureCode =
+  (typeof REVISION_INDEX_TERMINAL_FAILURE_CODES)[number];
+
+export function isRevisionIndexTerminalFailureCode(
+  value: unknown,
+): value is RevisionIndexTerminalFailureCode {
+  return typeof value === "string" &&
+    (REVISION_INDEX_TERMINAL_FAILURE_CODES as readonly string[]).includes(value);
+}
+
 export interface CommitChangesetIdempotencyResult {
   readonly kind: "commit_changeset";
   readonly previousRevisionId: RevisionId | null;
