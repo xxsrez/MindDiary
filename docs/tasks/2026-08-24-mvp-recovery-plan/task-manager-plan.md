@@ -102,14 +102,19 @@ race и потери evidence.
 
 ## Применённые planning-изменения 2026-08-24
 
-- После read-back Project содержит 213 Tasks: 9 Backlog, 29 started,
-  119 completed и 56 canceled. Release 0.1 содержит 157 Tasks, включая новые
-  9 Backlog planning items; ранее активные 29 Tasks не меняли status.
-- Созданы MD-291–MD-299 в Backlog Release 0.1 с полными problem-first
-  descriptions и acceptance.
+- После перевода исходного planning scope в Todo и добавления test-enablement
+  Task Project содержит 214 Tasks: 1 Backlog, 9 unstarted, 29 started,
+  119 completed и 56 canceled. Release 0.1 содержит 158 Tasks; ранее активные
+  29 Tasks не меняли status.
+- Созданы MD-291–MD-299 и по явному решению пользователя переведены из Backlog
+  в Todo Release 0.1 с полными problem-first descriptions и acceptance.
 - MD-291 имеет шесть native subtasks MD-294–MD-299.
 - MD-294 блокирует MD-295–MD-298; эти четыре implementation outcomes блокируют
   MD-299.
+- MD-299 напрямую блокирует MD-293, поэтому final UAT dependency не зависит от
+  неявной семантики закрытия Epic.
+- Критический прогон добавил MD-300 в Backlog как отдельный real-browser
+  test-enablement outcome; MD-300 напрямую блокирует MD-299.
 - MD-244, MD-252, MD-258, MD-285, MD-291 и MD-292 блокируют единый final gate
   MD-293.
 - Priority MD-244 исправлен с medium на high, поскольку Task остаётся active

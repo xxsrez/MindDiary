@@ -1254,16 +1254,17 @@ Credential values передаются runner-у исключительно че
 variables внутри scenario; report не сохраняет headers, token, query, body,
 Mind/revision IDs или raw response. Scenario связывает exact environment,
 deployment и SHA, содержит минимум 20 warm samples на request и заявляет
-фактически подготовленную matrix: `1/10/100` Minds, `1/20/100/1000` revisions,
-Brain Markdown profile не меньше `1741` files / `5,681,704` bytes и mixed corpus
-не меньше `590,000,000` bytes. До готовности MD-245 mixed corpus row остаётся
-непроверенной и performance acceptance не может стать terminal.
+фактически подготовленный небольшой детерминированный `starter/small` fixture.
+Release 0.1 performance gate не требует Brain-scale corpus, mixed-corpus
+minimum, `100` Minds или `1000` revisions. Такие scale/capacity scenarios
+остаются будущей non-blocking проверкой и не влияют на terminal status MD-258.
 
-For MD-265–MD-268/MD-260 the same exact-candidate receipt additionally records
-delta R2/D1 bytes, reservation/headroom state, export/cleanup queue age, peak
-buffered bytes and bounded import checkpoints according to
-[ADR-0016](../decisions/0016-sites-storage-capacity-import.md). MD-264 is
-contract-only and does not claim hosted capacity evidence.
+Если MD-265–MD-268/MD-260 проверяются на том же candidate, receipt может
+дополнительно фиксировать delta R2/D1 bytes, reservation/headroom state,
+export/cleanup queue age, peak buffered bytes и bounded import checkpoints по
+[ADR-0016](../decisions/0016-sites-storage-capacity-import.md). Эти extension
+rows не являются prerequisite terminal status MD-258. MD-264 остаётся
+contract-only и не заявляет hosted capacity evidence.
 
 Ненулевые blocking budgets:
 
@@ -1272,13 +1273,13 @@ contract-only and does not claim hosted capacity evidence.
 - connector-observed read p95 ≤ `5000 ms`, authenticated home p95 ≤ `3000 ms`;
 - каждый first-observed request ≤ `5000 ms`; это честная observational метрика,
   а не утверждение о provider cold isolate без отдельного provider signal;
-- point read при `10x` history имеет p95 не выше `1.2x` соответствующего `1x`
-  profile.
+- point read внутри bounded small-history fixture имеет p95 не выше `1.2x`
+  соответствующего baseline этого fixture.
 
 Runner завершает процесс ненулевым кодом при превышении, менее чем 20 samples,
-неполной matrix, отсутствии server telemetry или history comparison. Local/dev
-receipt не заменяет UAT receipt; UAT receipt обязан ссылаться на exact Sites
-deployment и тот же candidate SHA.
+неполном заявленном `starter/small` profile, отсутствии server telemetry или
+history comparison. Local/dev receipt не заменяет UAT receipt; UAT receipt
+обязан ссылаться на exact Sites deployment и тот же candidate SHA.
 
 ## UAT и production boundary
 

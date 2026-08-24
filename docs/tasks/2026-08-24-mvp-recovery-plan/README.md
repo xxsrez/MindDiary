@@ -31,6 +31,9 @@ release boundaries. Пока они представлены одним плос
    gates, rollback и terminal conditions.
 4. [План Task Manager](task-manager-plan.md) — triage действующего release
    graph и целевая структура новых Tasks.
+5. [Критический архитектурный прогон](critical-review.md) — baseline drift,
+   normative scope conflict, write-step-up state machine, browser acceptance,
+   pagination/security и скрытые зависимости final gate.
 
 ## Главный вывод
 
