@@ -4,9 +4,26 @@ import test from "node:test";
 import {
   RequestRecoveryCoordinator,
   isRecoveryEligibleRequest,
+  productWorkerConfigFingerprint,
 } from "../../apps/mind-diary-site/worker/request-recovery.js";
 
 const ORIGIN = "https://mind-diary.example";
+
+test("runtime cache fingerprint fences every restricted UAT configuration generation", () => {
+  const baseline = productWorkerConfigFingerprint({}, ORIGIN);
+  for (const [name, value] of Object.entries({
+    MIND_DIARY_DEPLOYMENT_CLASS: "uat",
+    MIND_DIARY_DEPLOYMENT_POSTURE: "restricted-uat",
+    MIND_DIARY_CAPACITY_PROFILE: "restricted-uat-v1",
+    MIND_DIARY_RELEASE_CANDIDATE_SHA: "a".repeat(40),
+    MIND_DIARY_CAPACITY_FENCE_NONCE: "capacity-fence-nonce-1234",
+    MIND_DIARY_PERFORMANCE_CORRELATION_KEY: "performance-correlation-key-private",
+  })) {
+    const fingerprint = productWorkerConfigFingerprint({ [name]: value }, ORIGIN);
+    assert.notEqual(fingerprint, baseline, name);
+    assert.equal(fingerprint.includes(value), false, name);
+  }
+});
 
 test("only successful dynamic HTML document requests can trigger recovery", () => {
   const mobile = new Request(`${ORIGIN}/`, {
