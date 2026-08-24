@@ -1,125 +1,104 @@
 # План Task Manager
 
-Статус документа: `proposal`.
+Статус документа: current planning projection; live Task Manager остаётся
+авторитетным для status, versions и relations.
 
-## Принципы изменений
+## Canonical scope
 
-- Не переписывать исторические Done Tasks: они фиксируют реально принятый на
-  тот момент scope.
-- Не удалять Tasks только ради красивого списка. Duplicate/Canceled допустимы
-  лишь при exact доказательстве, а полезный выполненный код сохраняется.
-- Новые planning Tasks создаются в Backlog и переходят дальше только при начале
-  фактической delivery.
-- Status отражает lifecycle результата; repository-ready и hosted-accepted
-  различаются в description/comments и evidence.
-- `Release blocker` означает только невозможность получить terminal outcome
-  Release 0.1.
+- Project `Mind Diary`: `525e801d-0ae9-4be7-bae4-6a9c8f85f581`.
+- Release `0.1`: `e92b681b-fd18-43e2-91df-3538c37d9890`.
+- После исправления плана: Project 215 Tasks; Release 159 Tasks;
+  `Backlog 1 / Todo 10 / started 29 / Done 119` внутри Release.
 
-## Целевая triage-модель существующих Tasks
+## Правила графа
 
-### P0 product/release blockers
+- `Release blocker` означает невозможность получить terminal outcome 0.1, а
+  не просто полезную незавершённую работу.
+- Каждый blocker имеет одну owning Task, objective acceptance и native
+  dependency до consumer.
+- Epic используется для grouping, но critical dependency дублируется прямой
+  `blocks` relation, если Task Manager не гарантирует child lifecycle.
+- Post-MVP Tasks не удаляются и не помечаются Duplicate ради чистого списка.
+- Physical credential deletion и production не входят в planning mutations.
 
-| Task | Роль в MVP | Требуемое действие |
+## Исполнимый P0 graph
+
+| Task | Outcome | Прямые consumers |
 |---|---|---|
-| MD-244 | operator outcome | поднять priority до high; закрыть по three-principal live evidence |
-| MD-252 | index recovery | принять repository work только после exact UAT recovery probe |
-| MD-258 | measured performance | закрыть одним consolidated performance receipt |
-| MD-280–MD-283 | воспроизводимый operator gate | завершить pool/canary/privacy evidence, затем разблокировать MD-244 |
-| MD-285–MD-287 | текущий release authority | завершить migration/read-back; не смешивать с product acceptance |
+| MD-292 | accepted small-data MVP boundary и reclassification | MD-301, MD-294, MD-293 |
+| MD-301 | один exact integration baseline в `main` | MD-295–MD-298, MD-300, MD-293 |
+| MD-294 | route/ref/query/write-step-up security contract | MD-295–MD-298, MD-300 |
+| MD-295 | bounded non-enumerating routes | MD-299 |
+| MD-296 | read-first/write-step-up access UX | MD-299 |
+| MD-297 | server-side credential pagination, revoke + hide | MD-299 |
+| MD-298 | three-step onboarding без protocol/capture noise | MD-299 |
+| MD-300 | real-browser deterministic gate | MD-299 |
+| MD-299 | exact browser/security/real-account connection UAT | MD-293 |
+| MD-244 | operator/admin exact UAT | MD-293 |
+| MD-252 | bounded exact-revision index recovery | MD-293 |
+| MD-258 | starter/small performance receipt | MD-293 |
+| MD-285 | Task Manager release authority | MD-293 |
+| MD-293 | final first-user release receipt | terminal gate |
 
-### P1 non-blocking hardening
+MD-291 группирует MD-294–MD-300 и также блокирует MD-293 как product Epic.
+MD-299 и MD-301 блокируют final gate напрямую, поэтому он не зависит только от
+неявной семантики закрытия Epic.
 
-| Task | Роль | Рекомендуемое состояние после scope decision |
-|---|---|---|
-| MD-245, MD-249, MD-250 | BundleFile vertical slice | оставить в batch только при низкой стоимости terminal UAT; иначе следующий milestone |
-| MD-257, MD-259, MD-261 | performance implementation | закрывать supporting evidence, но не заводить новый release cutoff на каждую Task |
-| MD-288 | stateful matrix | использовать как reusable gate; не делать обязательным для Markdown-only first-user path |
+## Выбранные решения вместо открытых вопросов
 
-### Post-MVP expansion graph
+- MD-292 больше не предлагает расширенный file/scale MVP как равноправный
+  вариант: Release 0.1 — small-data Codex-first Markdown outcome.
+- MD-294 фиксирует initial `content:read`; first write intent запускает native
+  step-up, после которого выбирается один writable Mind.
+- Raw grant/token IDs не используются как route identity.
+- MD-297 реализует bounded server-side paging; CSS/client-side hiding
+  недостаточно.
+- Credential hygiene — revoke + hide; hard delete не блокирует MVP.
+- Automatic capture не входит в ordinary Connections/onboarding.
+- MD-299 требует fresh real-account canary; informational external check не
+  может доказать заявленный first-user outcome.
 
-| Tasks | Outcome | Рекомендуемое действие после принятия boundary |
-|---|---|---|
-| MD-260, MD-266–MD-268 | Brain-scale storage/import/export | вынести из blocking 0.1 scope, сохранить hierarchy |
-| MD-270, MD-272–MD-275 | universal local/generated ingress | убрать `Release blocker` 0.1, перенести в следующий milestone |
-| MD-284 | Google Drive-specific adapter | не считать generic connector bridge доказательством Google Drive; следующий milestone |
-| MD-289–MD-290 | capacity/generated hosted canaries | оставить children соответствующих expansion outcomes |
+## Post-MVP reclassification, принадлежащая MD-292
 
-MD-284 требует особенно аккуратного текста: generic `connector_object` bridge
-и Google Drive-specific materialization — разные outcomes. Наличие первого не
-закрывает второе и не должно маскироваться широким title.
+После accepted-doc amendment и fresh versions следующие Tasks атомарно
+покидают active Release 0.1 и теряют `Release blocker` 0.1:
 
-## Новая структура Tasks
+| Tasks | Следующий outcome |
+|---|---|
+| MD-245, MD-249–MD-250 | BundleFile vertical slice |
+| MD-260, MD-266–MD-268 | Brain-scale storage/import/export |
+| MD-270, MD-272–MD-275 | universal local/generated ingress |
+| MD-284 | Google Drive-specific materialization |
+| MD-288–MD-290 | stateful capacity/generated hosted canaries |
 
-### Top-level decision Task — MD-292
+Их code/evidence сохраняются. MD-257/MD-261 остаются supporting fixes только
+если MD-258 обнаружит соответствующий small-data bottleneck.
 
-`MD-292 Зафиксировать границу Release 0.1: Codex-first MVP против file/scale expansion`
+## Planning mutations, применённые 2026-08-24
 
-Outcome: принято одно из двух явных решений — scope reset по этому документу
-или расширенный MVP с обновлёнными accepted product docs и обоснованием.
+- MD-291–MD-299 находятся в Todo; MD-300 переведена из Backlog в Todo.
+- Создана MD-301 `Собрать единый integration baseline Release 0.1` в Backlog,
+  `urgent`, с Labels `Release blocker` и `Improvement`.
+- Описания MD-291–MD-300 переписаны с точными decisions, acceptance и
+  blocker-report boundary.
+- Добавлены relations:
+  - MD-292 → MD-301 и MD-294;
+  - MD-301 → MD-295, MD-296, MD-297, MD-298, MD-300, MD-293;
+  - MD-294 → MD-300;
+  - ранее добавленные MD-295–MD-300 → MD-299 и MD-299 → MD-293 сохранены.
+- MD-244, MD-252, MD-258 и MD-285 продолжают напрямую блокировать MD-293.
 
-### Epic подключения — MD-291
+MD-301 остаётся Backlog, потому что это новая planning Task; начало delivery
+должно отдельным lifecycle action перевести её в Todo/In Progress. До этого
+UI implementation не начинается.
 
-`MD-291 Сделать подключение Mind Diary понятным для MVP 0.1`
+## Read-back checklist
 
-Children:
+После каждой следующей mutation нужно проверить:
 
-1. MD-294 — принять IA contract Connections / Connection details /
-   Advanced MCP / Codex Help;
-2. MD-295 — разделить routes и navigation;
-3. MD-296 — заменить технический binding editor на human-readable access
-   management;
-4. MD-297 — скрыть inactive/test credential history и добавить pagination;
-5. MD-298 — оставить Install → Authenticate → Choose Minds в primary
-   onboarding;
-6. MD-299 — пройти accessibility/mobile/security и exact UAT acceptance.
-
-### Final release gate — MD-293
-
-`MD-293 Провести финальный first-user UAT и закрыть MVP 0.1 по единому receipt`
-
-Этот Task блокируется только:
-
-- принятой release boundary;
-- Epic подключения;
-- MD-244;
-- MD-252;
-- MD-258;
-- MD-285.
-
-BundleFile/file-source expansion не добавляется в этот graph до отдельного
-решения о расширенном MVP.
-
-## Изменения, которые нельзя делать автоматически в параллельном release run
-
-Перевод MD-260/MD-270 graph в Backlog, удаление `Release blocker` и изменение
-Release composition меняют активный delivery scope. Их следует выполнить
-атомарно после завершения top-level decision Task и свежего read-back versions,
-а не одновременно с работой release executor над теми же Tasks.
-
-Это не откладывает решение: decision Task и final graph делают его первым
-обязательным шагом. Но сохраняют уже идущую инженерную работу от silent status
-race и потери evidence.
-
-## Применённые planning-изменения 2026-08-24
-
-- После перевода исходного planning scope в Todo и добавления test-enablement
-  Task Project содержит 214 Tasks: 1 Backlog, 9 unstarted, 29 started,
-  119 completed и 56 canceled. Release 0.1 содержит 158 Tasks; ранее активные
-  29 Tasks не меняли status.
-- Созданы MD-291–MD-299 и по явному решению пользователя переведены из Backlog
-  в Todo Release 0.1 с полными problem-first descriptions и acceptance.
-- MD-291 имеет шесть native subtasks MD-294–MD-299.
-- MD-294 блокирует MD-295–MD-298; эти четыре implementation outcomes блокируют
-  MD-299.
-- MD-299 напрямую блокирует MD-293, поэтому final UAT dependency не зависит от
-  неявной семантики закрытия Epic.
-- Критический прогон добавил MD-300 в Backlog как отдельный real-browser
-  test-enablement outcome; MD-300 напрямую блокирует MD-299.
-- MD-244, MD-252, MD-258, MD-285, MD-291 и MD-292 блокируют единый final gate
-  MD-293.
-- Priority MD-244 исправлен с medium на high, поскольку Task остаётся active
-  Release blocker.
-- Permanent deletion, Duplicate и status demotion существующих Tasks не
-  применялись: exact duplicates не найдены, а массовая переклассификация
-  активного release scope теперь является явным acceptance MD-292 и должна
-  выполняться после fresh version read-back.
+1. canonical Task ref и current version;
+2. status/priority/Release/labels;
+3. direction человеческой фразой `A blocks B`;
+4. отсутствие post-MVP Task среди incoming MD-293 blockers;
+5. совпадение live graph с [реестром блокеров](blocker-register.md);
+6. отсутствие unknown outcome перед retry.

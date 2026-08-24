@@ -23,7 +23,7 @@
 
 ## Task Manager
 
-На момент среза в Project 204 Tasks:
+После исправления planning graph в Project 215 Tasks:
 
 | Состояние | Количество |
 |---|---:|
@@ -31,19 +31,22 @@
 | Canceled | 56 |
 | In Review | 22 |
 | In Progress | 7 |
-| Todo / Backlog | 0 |
+| Todo | 10 |
+| Backlog | 1 |
 
-В Release `0.1` находятся 148 Tasks: 119 Done и все 29 незавершённых. Это
-означает, что release scope фактически равен всему активному хвосту проекта,
-а не минимальному набору результатов, необходимых для первого прототипа.
+В Release `0.1` находятся 159 Tasks: 119 Done и 40 незавершённых. Из них
+MD-291–MD-301 образуют recovery graph; старый release scope всё ещё содержит
+file/scale expansion до выполнения MD-292. Поэтому live composition пока шире
+целевого P0, но расхождение имеет owning Task и больше не является скрытым.
 
-### 29 незавершённых Tasks по реальному outcome
+### 40 незавершённых Tasks по реальному outcome
 
 | Контур | Tasks | Смысл |
 |---|---|---|
 | Release/UAT governance и operator | MD-244, MD-280–MD-283, MD-285–MD-287 | Тестовые principals, operator evidence, privacy boundary и переход на Task Manager |
 | Runtime и performance | MD-252, MD-257–MD-259, MD-261 | Recovery индекса, устранение N+1, latency gate и scale reliability |
 | BundleFile, scale и universal ingress | MD-245, MD-249–MD-250, MD-260, MD-266–MD-268, MD-270, MD-272–MD-275, MD-284, MD-288–MD-290 | Attachments, large import/export, quotas, local/generated/Google Drive sources и общий coordinator |
+| Recovery plan и connection UX | MD-291–MD-301 | Normative boundary, единый Git baseline, routes/access/pagination/onboarding, browser gate и final receipt |
 
 В незавершённом scope нет отдельной Task, которая владеет простым результатом
 «обычный пользователь за три шага подключил Codex и понял, какие Minds доступны
@@ -132,13 +135,13 @@ Codex workflow и прямо относят productized import и non-Markdown f
 
 | Surface | Текущий сигнал |
 |---|---|
-| Local `main` | `cf50d86`, dirty; не release candidate |
+| Local/remote `main` | `e39375b`, clean; planning baseline, но ещё не integrated candidate |
 | Последний deployed UAT evidence | `eca3400`, Sites deployment 50 |
-| Свежий integration candidate | `1df46ec`; содержит поздние hardening commits |
+| Свежий engineering candidate | `1df46ec`; `main...1df46ec` = 2/21 commits |
 | Hosted proof нового candidate | не доказан как единая full matrix |
 | MCP Setup IA | одинакова в deployed baseline и integration candidate |
 
-Поэтому нельзя закрывать Tasks только по repository checks и нельзя считать
-live UAT соответствующим самому свежему коду. Но также нельзя требовать полный
-hosted matrix заново для каждой внутренней Task: нужен один exact batch cutoff
-и одна консолидированная acceptance matrix.
+MD-301 обязан превратить две Git-линии в один exact `main` tip до UI code.
+Repository checks не заменяют live UAT, но полный hosted matrix также не
+повторяется для каждой внутренней Task: используется один exact batch cutoff и
+одна консолидированная acceptance matrix.

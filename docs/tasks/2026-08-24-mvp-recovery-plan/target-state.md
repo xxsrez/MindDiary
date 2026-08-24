@@ -10,12 +10,12 @@ accepted security/API contracts до отдельного принятого р�
 Новый зарегистрированный пользователь без знания MCP терминологии:
 
 1. устанавливает Mind Diary из Srez Marketplace;
-2. при первом content action проходит native OAuth;
-3. видит понятный список подключений и явно выбирает readable Minds и не более
-   одного writable Mind;
-4. через Codex создаёт или читает первую Memory, находит её, делает безопасное
-   изменение, видит историю и получает export;
-5. может немедленно отозвать connection и убедиться, что следующий вызов fail
+2. при первом content action проходит native read-only OAuth;
+3. видит понятный список подключений и выбирает readable Minds;
+4. через Codex получает первый read result, а первая write intent запускает
+   native step-up; только после него выбирается не более одного writable Mind;
+5. создаёт или изменяет Memory, видит историю и получает export;
+6. может немедленно отозвать connection и убедиться, что следующий вызов fail
    closed.
 
 Это terminal product result. Operator, synthetic principals, performance и
@@ -52,9 +52,9 @@ Route: `/settings/connections/{connection_ref}`.
 Здесь пользователь:
 
 - выбирает ноль или несколько readable Minds;
-- выбирает ноль или один writable Mind;
+- до write step-up видит read-only state без ложного writable control;
+- после `content:write` выбирает ноль или один writable Mind;
 - видит явный эффект переключения writable Mind;
-- включает automatic capture только для допустимого private writable target;
 - отзывает connection;
 - получает human-readable stale/revoked/error recovery.
 
@@ -62,6 +62,8 @@ Server продолжает использовать current binding version и 
 `write_binding_id`, но UI не выдаёт внутренний ID за пользовательское понятие.
 Фраза `Mind bindings` заменяется на `Access to your Minds`; `Attach read-only`
 — на `Allow reading`; `Bind writable Mind` — на `Allow writing to this Mind`.
+Automatic capture не входит в ordinary detail page Release 0.1; существующая
+capability остаётся Advanced/post-MVP и не блокирует onboarding.
 
 ### 3. Advanced MCP — personal tokens и protocol diagnostics
 
@@ -85,8 +87,11 @@ Route: `/help/codex`.
 Основной блок — ровно три шага:
 
 1. install;
-2. authenticate;
-3. choose Minds and ask Codex for the starter flow.
+2. authenticate for reading;
+3. choose readable Minds and ask Codex for the starter flow.
+
+Write step-up объясняется рядом с первым write scenario, а не выдаётся за уже
+полученное initial permission.
 
 Starter, safe-write, restore/export и bounded conversion playbooks остаются
 доступны ниже по отдельным сценариям, но не рендерятся на странице управления
@@ -95,13 +100,14 @@ credentials.
 ## Credential hygiene
 
 - Revoked и expired credentials скрыты по умолчанию.
-- History paginated и сортируется по последнему использованию.
-- UAT automation использует именованные credentials и bounded retention.
-- Cleanup удаляет или архивирует только тестовые credentials по exact owner и
-  naming contract; обычные пользовательские credentials не затрагиваются.
-- Повторные Codex OAuth grants должны либо иметь различимые client/session
-  names, либо консолидироваться в понятное connection identity без ослабления
-  revoke semantics.
+- Active list и inactive history имеют отдельные bounded server-side
+  projections/cursors; скрытые rows и bindings не попадают в response.
+- UAT automation использует именованные credentials, revoke и hide.
+- Physical credential deletion и retention policy не входят в MVP; обычные
+  пользовательские credentials не удаляются по naming heuristic.
+- Каждый active OAuth grant остаётся отдельной revocable connection и получает
+  безопасную различимую display label из client name и времени создания/last
+  used. Consolidation нескольких grants в одну identity не входит в MVP.
 
 ## Release scope
 
@@ -117,18 +123,17 @@ credentials.
 - новая Connections / Advanced / Help information architecture;
 - один final end-to-end UAT receipt на exact deployment.
 
-### P1 — можно довести в том же batch, но не определять MVP
+### Supporting work — только по измеренному P0 gap
 
-- уже почти завершённый BundleFile vertical slice;
-- runtime optimizations, выходящие за measured MVP threshold;
-- расширенная stateful import/export automation.
-
-P1 не задерживает final MVP gate, если P0 thresholds выполняются и исключённый
-surface не ломает существующий продукт.
+- MD-257/MD-261 и другие runtime fixes используются, только если small-data
+  MD-258 gate указывает на принадлежащий им bottleneck;
+- они не создают отдельный release cutoff при уже достаточном consolidated
+  receipt.
 
 ### Post-MVP expansion
 
 - Brain-scale resumable import;
+- BundleFile vertical slice;
 - universal local/generated/provider connector ingress;
 - Google Drive-specific adapter;
 - multi-source reconcile coordinator;
@@ -145,7 +150,8 @@ Release считается готовым только при одновреме
 1. exact Git SHA связан с exact Sites deployment и plugin package version;
 2. fresh Codex context видит skill и полный ожидаемый tool catalog;
 3. новый пользователь проходит Install → OAuth без personal token;
-4. read-only grant не пишет; write step-up выдаёт scoped write;
+4. initial read-only grant не пишет; первый write intent запускает native
+   step-up, после которого выбирается не более одного writable Mind;
 5. UI показывает тот же read/write access, который реально enforce-ит MCP;
 6. write использует current `write_binding_id`, stale binding/version fail
    closed;
@@ -154,5 +160,9 @@ Release считается готовым только при одновреме
 9. revoke останавливает следующий call; reconnect не оживляет старый grant;
 10. Connections остаётся пригодной на mobile и с keyboard/screen-reader;
 11. advanced details не находятся в primary onboarding;
-12. privacy receipt не содержит corpus, credentials, email или raw provider
+12. list/detail/history используют bounded server-side reads на небольшом
+    fixture `0 / 1 / page_size + 1`;
+13. fresh real-account Marketplace/OAuth canary проходит; deterministic tests
+    не подменяют этот user-facing signal;
+14. privacy receipt не содержит corpus, credentials, email или raw provider
     payload.

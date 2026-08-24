@@ -1,185 +1,269 @@
 # План перехода
 
-Статус документа: `proposal`.
+Статус документа: `proposal`; исполнимый порядок после критического прогона.
 
-План intentionally разделяет решение о scope, product implementation и live
-acceptance. Ни один этап не считается доказанным только потому, что предыдущая
-Task получила новый status.
+План отделяет внутреннюю работу от настоящих внешних blockers. Каждый
+внутренний gate имеет owning Task и success signal в
+[реестре блокеров](blocker-register.md). Ни один этап не считается доказанным
+по одному status change.
 
-## Фаза 0. Заморозить точку отсчёта
+## Фаза 0. Зафиксировать small-data Release 0.1
 
-### Действия
-
-1. Зафиксировать Task Manager snapshot: Project, Release, 29 active Tasks,
-   relations, labels и versions.
-2. Зафиксировать три artifact identities: deployed UAT, integration candidate,
-   local dirty checkout.
-3. Не строить новый release candidate из local `main` и не перетирать
-   параллельные изменения.
-4. Принять этот recovery package как рабочий planning baseline либо записать
-   отклонения отдельным decision note.
-
-### Gate
-
-Все участники используют один Project/Release и различают repository-ready,
-deployed и live-accepted состояния.
-
-## Фаза 1. Принять release boundary
+Owning Task: MD-292.
 
 ### Действия
 
-1. Подтвердить P0/P1/post-MVP классификацию из target state.
-2. Если universal ingress остаётся обязательным MVP, явно изменить accepted
-   MVP scope и указать пользовательскую гипотезу, ради которой он блокирует
-   release.
-3. Иначе:
-   - убрать `Release blocker` у MD-270, MD-275 и MD-284;
-   - вынести MD-260, MD-266–MD-268, MD-270, MD-272–MD-275, MD-284 и
-     MD-288–MD-290 из активного 0.1 gate;
-   - сохранить relations внутри expansion graph;
-   - не удалять Tasks и не отменять уже полученный код/evidence.
-4. Определить, остаётся ли BundleFile P1 в release batch или уходит вместе с
-   universal ingress. Это отдельное решение от Google Drive/Brain-scale.
+1. Принять одну границу: Codex-first Markdown MVP на небольшом deterministic
+   dataset.
+2. Amend/supersede противоречащие claims в MVP, roadmap, ADR-0016,
+   storage/import specification, traceability и release profile.
+3. После fresh Task Manager read-back атомарно убрать `Release blocker` 0.1 и
+   active Release composition у:
+   - MD-245, MD-249–MD-250;
+   - MD-260, MD-266–MD-268;
+   - MD-270, MD-272–MD-275;
+   - MD-284, MD-288–MD-290.
+4. Сохранить их hierarchy, relations, code и evidence в следующем milestone;
+   ничего не удалять и не помечать Duplicate без exact основания.
+5. Оставить MD-257/MD-261 supporting work только на случай измеренного
+   small-data bottleneck MD-258.
 
 ### Gate
 
-Существует один список P0 blockers; ни одна post-MVP Task не влияет на решение
-о готовности Release 0.1.
+- accepted docs и Task Manager показывают один P0 scope;
+- final gate не зависит от BundleFile, large corpus, Google Drive или universal
+  ingress;
+- post-MVP Tasks не имеют `Release blocker` 0.1.
 
-### Rollback
+### Recovery
 
-Reclassification обратима: Tasks остаются в Project со всеми comments и
-relations. Возврат в release требует нового явного решения, а не случайного
-сдвига статуса.
+Version conflict требует fresh read-back и повторного применения только
+неустаревшей части решения. Partial reclassification не считается успехом и
+не скрывается cleanup-ом.
 
-## Фаза 2. Стабилизировать release machinery
+## Фаза 1. Собрать один integration baseline
+
+Owning Task: MD-301. MD-292 блокирует эту фазу.
 
 ### Действия
 
-1. Завершить Task Manager migration graph MD-285–MD-287 и проверить свежий
-   task catalog/read-back.
-2. Завершить operator verification graph MD-244 и MD-280–MD-283 на exact
-   three-principal UAT pool.
-3. Выбрать один integration cutoff. Не добавлять в него feature work после
-   начала full gate, кроме исправления доказанного regression.
-4. Прогнать один repository full gate на exact cutoff, а не повторять полный
-   gate в каждой Task lane.
+1. Зафиксировать common ancestor `eca3400`, `main` и candidate `1df46ec`.
+2. Для каждого из 21 candidate commits записать disposition:
+   `integrate | already superseded | post-MVP preserve | reject` с причиной.
+3. Conflict-aware перенести применимые P0/reusable changes в `main`; не делать
+   blind merge и не дублировать семантически пересекающиеся commits.
+4. Сохранить Task Manager migration, operator, runtime, security и small-data
+   performance contracts.
+5. Выполнить `npm ci`, один полный `npm run check`, project-docs validator и
+   `git diff --check` на exact tip.
+6. Push `main`, выполнить remote read-back и объявить прежний candidate только
+   historical input, не release truth.
 
 ### Gate
 
-Есть один task authority, один exact candidate и воспроизводимый operator
-canary без ручного создания временной инфраструктуры во время smoke.
-
-## Фаза 3. Реализовать новую information architecture
-
-### Шаг 3.1. Принять IA contract
-
-- зафиксировать routes, redirect/alias policy и terminology;
-- определить connection identity и safe opaque route ref;
-- описать empty/loading/error/revoked/stale states;
-- принять pagination и test-credential retention contract.
-
-### Шаг 3.2. Разделить routes
-
-- добавить `/settings/connections`;
-- добавить detail surface одной connection;
-- добавить `/settings/developer/mcp`;
-- добавить `/help/codex`;
-- оставить `/settings/mcp` совместимым entrypoint;
-- обновить header/footer/onboarding links.
-
-### Шаг 3.3. Упростить access UX
-
-- показывать summary в списке connections;
-- редактировать access только на detail page;
-- скрыть internal IDs;
-- сохранить versioned CAS и fail-closed enforcement;
-- сделать exact warning при переключении writable Mind;
-- проверить automatic capture только на private writable target.
-
-### Шаг 3.4. Очистить credential history
-
-- active-first sorting;
-- inactive collapsed by default;
-- pagination/filter;
-- deterministic names для UAT credentials;
-- bounded cleanup runbook.
-
-### Шаг 3.5. Перенести instructional content
-
-- оставить три шага в primary onboarding;
-- перенести manual configs и self-check в Advanced;
-- перенести starter/recovery playbooks в Help;
-- удалить повторяющееся объяснение protocol mechanics из ordinary flow.
-
-### Targeted verification
-
-- renderer/unit tests для каждого state;
-- route and signed-out shell tests;
-- authorization/CAS regression для bindings;
-- keyboard focus, headings, labels и mobile layout;
-- token/grant archive pagination и negative tests;
-- старый `/settings/mcp` entrypoint не ломает bookmarks.
-
-## Фаза 4. Закрыть runtime P0
-
-### Действия
-
-1. На exact candidate подтвердить MD-252 recovery и MD-258 measured latency
-   gate.
-2. MD-257 и MD-261 считать supporting implementation; не создавать для них
-   отдельные hosted release cutoffs, если единая matrix уже покрывает outcome.
-3. Если measured thresholds не пройдены, исправлять конкретный bottleneck и
-   повторять только affected targeted probe до следующего batch cutoff.
-
-### Gate
-
-Starter workflow стабильно выполняется в принятом envelope, а index failure
-восстанавливается без ручной модификации данных.
-
-## Фаза 5. Выпустить один UAT candidate
-
-### Последовательность
-
-1. Freeze exact integration SHA.
-2. `npm ci`, один `npm run check`, `git diff --check` на exact candidate.
-3. Project-profile dev smoke всех P0 web/control/MCP flows.
-4. Publish exact candidate в UAT.
-5. Read-back deployment identity и live URL.
-6. Force-refresh Marketplace/plugin snapshot и fresh Codex context.
-7. Выполнить final first-user matrix из target state.
-8. Сохранить один redacted release receipt и связать его с final gate Task.
+Существует один clean remote `main` SHA. MD-295–MD-300 и final UAT используют
+только его потомков.
 
 ### Failure routing
 
-- repository failure → вернуть в owning implementation Task;
-- deployment mismatch → release machinery incident, не product bug;
-- browser bootstrap failure → verification-surface incident;
-- auth/ACL/binding mismatch → product security blocker;
-- missing external principal/account → operator pool blocker;
-- missing fresh tool catalog → connector/runtime blocker;
-- post-MVP file-source failure → не блокирует P0 после принятого scope reset.
+- semantic overlap → ручной hunk-level integration с disposition note;
+- failing targeted test → owning engineering change;
+- failing full gate → MD-301 остаётся nonterminal;
+- post-MVP commit → сохранить доступным, но не возвращать outcome в P0.
 
-## Фаза 6. Закрыть release без хвоста неопределённости
+## Фаза 2. Параллельно закрыть существующие release gates
 
-1. Final gate получает Done только после exact live receipt.
-2. P0 Tasks закрываются по owning evidence; comments ссылаются на один receipt,
-   а не копируют секреты или полный payload.
-3. P1 Tasks получают Done только при собственном acceptance; иначе остаются
-   явно non-blocking.
-4. Post-MVP Tasks переводятся в отдельный milestone/Backlog, сохраняя
-   hierarchy и dependencies.
-5. В documentation index deployed SHA и evidence обновляются отдельно от этого
-   planning snapshot.
+Эта фаза может идти параллельно с MD-294 после MD-292, но hosted evidence
+выполняется только на потомке exact baseline MD-301.
 
-## Terminal conditions
+### 2.1 Release authority — MD-285–MD-287
 
-Работа завершена, когда:
+- завершить accepted Task Manager profile/conformance;
+- доказать live Project/Release selector и bounded pagination/read-back;
+- исключить active Shipliner/Linear execution dependency;
+- сохранить production boundary.
 
-- обычный setup состоит из трёх понятных действий;
-- credentials, access settings и advanced developer material физически
-  разделены;
-- один exact UAT candidate проходит final first-user matrix;
-- Release `0.1` не содержит неоднозначных активных blockers;
-- каждый оставшийся незавершённый Task явно относится к следующему milestone,
-  а не выглядит забытым хвостом MVP.
+### 2.2 Operator gate — MD-244, MD-280–MD-283
+
+- использовать уже созданный bounded three-principal pool;
+- самостоятельно выполнить setup/verify/cleanup и privacy receipt;
+- не просить пользователя создавать principals повторно;
+- запросить помощь только при interactive account action, недоступном agent-у.
+
+### 2.3 Index recovery — MD-252
+
+- воспроизвести missing/failed exact-revision index job;
+- подтвердить bounded recovery без ручной durable-data mutation;
+- проверить search/read-back на exact candidate.
+
+### 2.4 Performance — MD-258
+
+- использовать только небольшой `starter/small` fixture;
+- отделить cold sample от не менее 20 warm samples;
+- проверить принятые server/connector/page budgets;
+- не требовать Brain-scale, mixed corpus или file-source graph.
+
+### Gate
+
+MD-244, MD-252, MD-258 и MD-285 имеют exact-candidate evidence либо остаются
+открыты с причинным internal failure. Они не превращаются во «внешний blocker»
+из-за отсутствующего тестового входа, который можно создать самим.
+
+## Фаза 3. Закрыть IA/security contract до UI code
+
+Owning Task: MD-294. MD-292 блокирует эту фазу.
+
+### Зафиксированные решения
+
+1. Routes: `/settings/connections`, opaque actor-owned detail route,
+   `/settings/developer/mcp`, `/help/codex`; `/settings/mcp` совместим.
+2. Raw grant/token IDs не попадают в URL; unknown/foreign connection одинаково
+   возвращаются как 404 до metadata read.
+3. OAuth read-first: initial grant — `content:read`; writable controls закрыты
+   до native step-up, инициированного первой write intent в Codex.
+4. Active connections и inactive token history имеют разные bounded
+   server-side projections/cursors.
+5. MVP credential hygiene — revoke + hide; hard delete и retention policy не
+   входят в 0.1.
+6. Automatic capture отсутствует в ordinary Connections/onboarding и остаётся
+   Advanced/post-MVP capability.
+7. Origin, CSRF, actor ownership, binding CAS, scopes и fail-closed revoke
+   сохраняются.
+
+### Gate
+
+Specs и objective contract tests описывают route/ref/state/query boundaries.
+После этого MD-294 разблокирует MD-295–MD-298 и MD-300.
+
+## Фаза 4. Реализовать bounded product flow
+
+Prerequisites: MD-301 и MD-294.
+
+### MD-295 — routes и server projections
+
+- физически разделить Connections, detail, Advanced MCP и Codex Help;
+- сохранить `/settings/mcp` entrypoint;
+- реализовать identical 404, signed-out behavior и reserved routes;
+- не включать inactive archive/bindings невидимой page в response.
+
+### MD-296 — access UX и write step-up
+
+- показывать readable Minds после initial OAuth;
+- не показывать writable access как доступный до `content:write`;
+- первая write intent запускает step-up;
+- после него разрешить 0..1 writable Mind с current binding CAS;
+- не показывать automatic capture в ordinary access editor.
+
+### MD-297 — credential history
+
+- separate active/inactive server queries;
+- bounded page size и opaque stable cursor;
+- binding state только для visible page или exact detail;
+- test fixtures `0 / 1 / page_size + 1`;
+- revoke + hide вместо physical cleanup.
+
+### MD-298 — onboarding
+
+- primary flow: Install → Authenticate for reading → Choose readable Minds;
+- write-step-up объяснять только рядом с первой записью;
+- personal tokens, protocol mechanics и capture убрать из primary copy;
+- starter/recovery material оставить в Help.
+
+### Gate
+
+Targeted unit/integration/security tests проходят на одном MD-301 baseline.
+Client-side collapse без bounded server reads не считается выполнением.
+
+## Фаза 5. Добавить настоящий browser gate
+
+Owning Task: MD-300. Prerequisites: MD-301 и MD-294.
+
+### Действия
+
+1. Запустить реальный browser DOM против deterministic fixture server.
+2. Проверить desktop/mobile, keyboard, focus order, accessibility-tree names,
+   headings/dialogs и overflow.
+3. Пройти четыре routes на fixtures `0 / 1 / page_size + 1`.
+4. Включить non-zero gate в repository acceptance path.
+5. Сохранять только privacy-safe result; не включать corpus, credentials,
+   email или durable user IDs.
+
+### Gate
+
+MD-300 passing evidence блокирует MD-299. HTTP/regex synthetic gate остаётся
+полезным security test, но не подменяет browser acceptance.
+
+## Фаза 6. Выпустить и проверить connection flow
+
+Owning Task: MD-299.
+
+### Candidate sequence
+
+1. Freeze exact descendant MD-301 baseline.
+2. Project-profile dev smoke P0 web/control/MCP flows.
+3. Publish exact candidate в UAT и reconcile deployment identity.
+4. Refresh Marketplace/plugin snapshot и открыть fresh Codex context.
+5. Выполнить MD-300 deterministic browser evidence.
+6. Выполнить fresh real-account Marketplace install/OAuth canary.
+7. Проверить read-first, first-write step-up, rebind, stale binding и revoke.
+8. Проверить list/detail/inactive page time, rendered size и bounded reads.
+9. Сохранить redacted exact SHA/deployment/package receipt.
+
+### Gate
+
+Без fresh real-account canary user-facing claim остаётся blocked. Renderer,
+synthetic principals и contract tests его не подменяют.
+
+### Failure routing
+
+- route/DOM/accessibility failure → MD-295/MD-300;
+- access/binding/scopes failure → MD-296;
+- paging/latency/unbounded reads → MD-297;
+- copy/journey failure → MD-298;
+- stale package/catalog → refresh/reinstall/reconcile до blocker-report;
+- account consent/MFA/approval, недоступные agent-у → внешний blocker по форме
+  из `blocker-register.md`.
+
+## Фаза 7. Провести final first-user UAT
+
+Owning Task: MD-293.
+
+### Required incoming gates
+
+- MD-292 normative boundary;
+- MD-301 integration baseline;
+- MD-244 operator outcome;
+- MD-252 index recovery;
+- MD-258 small-data performance;
+- MD-285 release authority;
+- MD-299 connection UAT.
+
+### Final matrix
+
+1. Fresh package/skill/tool catalog.
+2. Read-only OAuth reads and cannot write.
+3. First write triggers step-up; `write_binding_id` ограничивает один Mind.
+4. Three-principal isolation.
+5. Starter read/search/write/history/export на небольшом Mind.
+6. UI/MCP access parity, stale binding и immediate revoke.
+7. Exact artifact/deployment/package provenance и privacy-safe receipt.
+8. Все remaining nonterminal Tasks явно принадлежат post-MVP milestone.
+
+### Terminal conditions
+
+- ordinary setup физически состоит из трёх понятных действий;
+- credentials, access settings и developer material разделены;
+- один exact UAT candidate проходит deterministic и real-account matrices;
+- Release 0.1 не содержит post-MVP blockers;
+- каждый P0 Task имеет owning evidence и terminal status;
+- production не заявляется и не deploy-ится.
+
+## Внешний blocker policy
+
+Подтверждённых внешних blockers на момент плана нет. Agent обязан сначала
+самостоятельно выполнить кодовый fix, создать bounded test input, refresh
+connector, deploy/reconcile UAT и классифицировать browser/product failure.
+
+Если после этого остаётся внешняя граница, blocker-report содержит Tasks,
+проверенные альтернативы, одного actor, одно минимальное действие и observable
+resume signal. Общая просьба «проверь вручную» запрещена.

@@ -6,8 +6,9 @@
 
 Этот пакет фиксирует не новый набор обещаний, а способ вернуть Release `0.1`
 к одному проверяемому пользовательскому результату: новый пользователь ставит
-Mind Diary из Marketplace, проходит OAuth, явно выбирает доступные для чтения
-Minds и не более одного writable Mind, после чего получает первый полезный
+Mind Diary из Marketplace, проходит read-only OAuth, выбирает readable Minds,
+получает первый read result и при первой записи проходит native step-up для
+одного writable Mind. После этого он получает полезный
 read/write/history/export результат через Codex.
 
 Пакет нужен потому, что текущий release-контур одновременно содержит:
@@ -24,7 +25,7 @@ release boundaries. Пока они представлены одним плос
 ## Документы пакета
 
 1. [Текущее состояние](current-state.md) — фактический срез продукта,
-   репозитория, UAT и 29 незавершённых Tasks.
+   репозитория, UAT и 40 незавершённых Tasks.
 2. [Целевое состояние MVP](target-state.md) — один пользовательский outcome,
    предлагаемая информационная архитектура и обязательные acceptance signals.
 3. [План перехода](transition-plan.md) — поэтапная последовательность работ,
@@ -34,27 +35,30 @@ release boundaries. Пока они представлены одним плос
 5. [Критический архитектурный прогон](critical-review.md) — baseline drift,
    normative scope conflict, write-step-up state machine, browser acceptance,
    pagination/security и скрытые зависимости final gate.
+6. [Реестр блокеров](blocker-register.md) — единственная текущая проекция P0
+   gates, non-blocking scope, external boundaries и resume signals.
 
 ## Главный вывод
 
-Release `0.1` нельзя продолжать закрывать как сумму всех когда-либо добавленных
-технических инициатив. Сначала нужно принять его продуктовую границу, затем
-закрыть короткий P0 graph и провести один end-to-end first-user acceptance.
+Release `0.1` возвращается к small-data Codex-first Markdown MVP. BundleFile,
 Brain-scale import, provider-specific ingress и универсальные источники файлов
-должны перестать определять готовность Codex-first MVP, если отдельным решением
-не будет принято обратное.
+сохраняются как следующий milestone, но не определяют готовность 0.1. Текущий
+исполняемый порядок: MD-292 normative boundary → MD-301 integration baseline и
+MD-294 contract → implementation/browser gates → MD-299 connection UAT →
+MD-293 final first-user receipt.
 
 ## Источники истины и ограничения среза
 
 - Project: `Mind Diary` (`525e801d-0ae9-4be7-bae4-6a9c8f85f581`).
 - Release: `0.1` (`e92b681b-fd18-43e2-91df-3538c37d9890`).
-- Task Manager прочитан полностью, включая 204 Tasks и полные карточки всех 29
-  незавершённых Tasks.
+- Task Manager перечитан после planning mutations: Project содержит 215 Tasks,
+  Release 0.1 — 159 Tasks; незавершённый release scope — 40 Tasks.
 - Deployed UAT согласно последнему сохранённому release evidence связан с
   `eca3400` / Sites deployment 50. Более свежий engineering candidate —
   `1df46ec`; hosted acceptance для него ещё не является доказанным фактом.
 - Повторная загрузка UAT через in-app Browser 2026-08-24 завершилась timeout
   навигации. Поэтому текущие UI-числа ниже помечены как сделанный ранее в тот же
   день snapshot, а не как новый smoke на момент написания документа.
-- Локальный `main` грязный и отстаёт от integration candidate. Этот пакет не
-  меняет продуктовый код и не вмешивается в параллельную release-реализацию.
+- `main` чист на `e39375b`, но расходится с integration candidate `1df46ec` на
+  2/21 commits. MD-301 владеет обязательным conflict-aware объединением до
+  начала UI implementation.

@@ -4,25 +4,46 @@
 
 Дата: 2026-08-24.
 
-Проверенный Git artifact: `807c30884c63d8e88669fb9186742acadffcb95a`.
+Исходный review artifact: `807c30884c63d8e88669fb9186742acadffcb95a`.
+Последний проверенный planning artifact до текущей правки:
+`e39375bf0b590f3deb49a29e7b9f839d8f304998`.
 
 Цель review — найти места, где recovery-plan невозможно честно реализовать,
 проверить или принять в заявленном виде. Review не утверждает, что найденные
 решения уже приняты, кроме явно отмеченных `Resolved` и выполненных planning
-mutations.
+mutations. Текущая исполнимая disposition всех findings принадлежит
+[реестру блокеров](blocker-register.md); нижние sections сохраняют причинный
+диагноз до исправления плана.
 
 ## Итог
 
-План задаёт правильное направление, но пока не является полностью исполнимым
-release contract. До начала UI-реализации нужно закрыть три архитектурных
-решения и один test-enablement blocker:
+После исправления плана открытые вопросы больше не оставлены без владельца:
 
-1. выбрать один Git baseline между `main` и integration candidate;
-2. согласовать scope reset с уже accepted storage/import contract;
-3. определить state machine OAuth write step-up и writable selection;
-4. реализовать созданную MD-300 с настоящим browser acceptance layer.
+- MD-292 владеет definitive small-data boundary и accepted-doc amendment;
+- MD-301 владеет объединением Git baseline;
+- MD-294 фиксирует route identity, read-first/write-step-up и pagination;
+- MD-300 в Todo владеет настоящим browser acceptance layer;
+- MD-299/MD-293 требуют blocking fresh real-account canary.
 
-Без этого можно реализовать новые страницы и снова застрять на приёмке.
+Подтверждённых активных внешних blockers нет. UI implementation начинается
+только после MD-292/MD-301/MD-294 gates.
+
+## Disposition после исправления плана
+
+| Finding | Текущая disposition |
+|---|---|
+| CR-1 | Internal gate MD-301; blocks implementation и final UAT |
+| CR-2 | Internal gate MD-292; definitive small-data boundary, не новая развилка |
+| CR-3 | Resolved: large-corpus performance minimum удалён |
+| CR-4 | Resolved in contract: read-first OAuth, first-write native step-up; implementation MD-294/MD-296 |
+| CR-5 | Internal gate MD-300 в Todo, blocks MD-299 |
+| CR-6 | Resolved in acceptance: fresh real-account canary blocking для first-user claim |
+| CR-7 | Включён в MD-294/MD-295: opaque actor-owned ref и identical 404 |
+| CR-8 | Включён в MD-294/MD-297: bounded server-side projections/cursors |
+| CR-9 | Avoided: revoke + hide, physical deletion вне MVP |
+| CR-10 | Avoided: automatic capture вне ordinary Connections/onboarding |
+| CR-11 | Resolved: MD-299 напрямую blocks MD-293 |
+| CR-12 | Включён в MD-299 на fixture `0 / 1 / page_size + 1` |
 
 ## P0 findings
 
@@ -30,10 +51,10 @@ release contract. До начала UI-реализации нужно закр�
 
 Факт:
 
-- `main` после planning push: `807c308`;
+- `main` после follow-up planning push: `e39375b`;
 - integration candidate: `1df46ec`;
 - общий ancestor: `eca3400`;
-- `main...1df46ec`: один planning commit слева и 21 engineering commit справа.
+- `main...1df46ec`: два planning commits слева и 21 engineering commit справа.
 
 Среди отсутствующих в `main` commits находятся recovery, performance gate,
 capacity profile, hosted upload intents, generated/connector ingress hardening,
@@ -43,12 +64,9 @@ operator lifecycle и Task Manager migration commits.
 другой branch с иным runtime/profile contract. Exact candidate и evidence
 перестанут быть однозначными.
 
-Требуемое решение до реализации:
-
-- выбрать `main` как единственный integration baseline и перенести на него
-  неповторяющиеся commits из `1df46ec`; либо
-- объявить новый integration branch от `807c308` и формально заменить старый
-  candidate.
+Требуемое действие до реализации принадлежит MD-301: сделать `main`
+единственным integration baseline и conflict-aware перенести либо явно
+disposition-ить каждый из 21 commits `1df46ec`.
 
 Нельзя просто merge-ить обе линии целиком: `186878c`, `4de0a4a` и `457bc45`
 семантически пересекаются с planning commit `807c308`. Нужен bounded commit
@@ -87,7 +105,7 @@ non-blocking проверкой и не влияют на terminal status MD-258
 scale matrix. Число warm samples сохраняется, потому что оно отвечает за
 статистическую устойчивость latency, а не за объём test data.
 
-### CR-4. Обещанный writable selection не работает после read-only OAuth
+### CR-4. Resolved in plan: read-first OAuth и first-write step-up
 
 Accepted OAuth flow выдаёт сначала `content:read`; `content:write` появляется
 через native step-up при `set_write_mind_binding` либо commit.
@@ -98,18 +116,10 @@ Accepted OAuth flow выдаёт сначала `content:read`; `content:write` 
 - при direct binding mutation возвращает `insufficient_scope`;
 - не умеет инициировать grant-specific native OAuth step-up из web UI.
 
-Поэтому формулировка «Install → Authenticate → Choose readable и writable
-Minds» неоднозначна. Нужно принять один state machine:
-
-1. основной путь выбирает только readable Minds; первый write в Codex запускает
-   step-up и затем выбирает writable Mind;
-2. initial OAuth сразу запрашивает read+write как явно принятый pilot
-   compromise;
-3. Product Site получает отдельный поддержанный step-up handoff, если platform
-   действительно позволяет надёжно вернуться к exact connection.
-
-До решения MD-294/MD-296 нельзя честно проектировать connection details и их
-acceptance copy.
+План выбирает первый state machine: initial OAuth даёт read access, ordinary UI
+не обещает writing, первая write intent в Codex запускает native step-up, после
+которого становится доступен выбор 0..1 writable Mind. MD-294 фиксирует
+contract, MD-296 реализует его.
 
 ### CR-5. Existing synthetic browser gate не проверяет браузер
 
@@ -133,27 +143,23 @@ accessibility/mobile/browser evidence.
 - desktop и mobile viewport;
 - keyboard-only journey;
 - semantic heading/label/dialog checks;
-- credential datasets 0 / 1 / 37+;
+- bounded credential fixtures `0 / 1 / page_size + 1`;
 - exact hosted observation отдельно от deterministic local gate.
 
 MD-300 напрямую блокирует MD-299. Пока runner не реализован, MD-299 не может
 называть layout/accessibility автоматически доказанными.
 
-### CR-6. MD-293 противоречит informational external canary contract
+### CR-6. Resolved in plan: real-account canary blocking для UX claim
 
 MD-293 обещает final first-user UAT с fresh Marketplace install и OAuth.
 Accepted plugin/profile contract считает real external Marketplace/Codex UI
 canary informational: его failure не блокирует Release 0.1 и запрещает только
 claim о проверенном external-host UX.
 
-Нужно выбрать одно:
-
-- оставить external canary informational и переименовать terminal outcome в
-  automated compatibility/security UAT, явно оставив first-user UX unverified;
-- либо сделать real-account canary blocking для нового UX и гарантировать
-  accounts, browser surface, Marketplace version и bounded cleanup.
-
-Смешанный вариант приведёт к Done Task с более сильным названием, чем evidence.
+Исправленный plan выбирает второй вариант: MD-299 и MD-293 не получают Done без
+fresh real-account Marketplace/OAuth canary. Внешним blocker это становится
+только после самостоятельных refresh/reinstall/deploy/reconcile попыток и
+требует exact actor/action/resume signal.
 
 ## P1 findings
 
@@ -198,24 +204,23 @@ OAuth adapter сейчас возвращает только active grants; pers
 источник основной revoked history. Эти две коллекции нельзя притворно свести к
 одинаковой lifecycle model.
 
-### CR-9. Cleanup credentials не имеет принятой retention policy
+### CR-9. Resolved by exclusion: hard delete вне MVP
 
 Inactive binding tombstones нужны, чтобы stale clients гарантированно fail
 closed. `mind-bindings.md` оставляет срок их хранения открытым вопросом.
 
-Поэтому MD-297 может безопасно реализовать hide/filter/pagination, но physical
-cleanup нельзя принимать по одному naming heuristic. Для удаления нужны
-отдельные retention, audit, owner и recovery rules. До этого test hygiene —
-revoke + hide, а не hard delete.
+MD-297 реализует hide/filter/pagination и test hygiene `revoke + hide`.
+Physical cleanup требует отдельной retention/audit policy, но больше не
+блокирует Release 0.1.
 
-### CR-10. Automatic capture снова усложняет ordinary surface
+### CR-10. Resolved by exclusion: capture вне ordinary flow
 
 Binding contract прямо говорит, что binding не включает automatic capture.
-Recovery target всё же оставляет capture controls на connection detail page.
+Первоначальный recovery target всё же оставлял capture controls на connection
+detail page.
 
-Для минимального MVP лучше вынести capture в отдельный advanced section одной
-connection или отложить его UI. Иначе новая «простая» страница снова объединит
-access selection с отдельной content-ingestion policy и её privacy warnings.
+Исправленный plan не показывает automatic capture в ordinary Connections или
+onboarding. Existing capability остаётся Advanced/post-MVP и не блокирует MVP.
 
 ### CR-11. Resolved: MD-299 напрямую блокирует final gate
 
@@ -224,42 +229,40 @@ Done». Поэтому relation `MD-299 blocks MD-293` добавлена нап
 остаётся для product grouping, а terminal UAT dependency теперь читается
 машинно без предположения о lifecycle children.
 
-### CR-12. Connections page отсутствует в performance evidence
+### CR-12. Resolved in acceptance: bounded page evidence
 
 Web performance recorder сейчас выделяет только home/stages. Новый главный
 settings route может остаться медленным, даже если MCP budgets проходят.
 
-Acceptance должен измерять:
+MD-299 теперь измеряет:
 
 - active connections page server time и rendered size;
 - one connection detail page;
 - inactive history page;
-- cold/warm и dataset 1/37/100 credentials;
+- cold/warm и fixtures `0 / 1 / page_size + 1`;
 - верхнюю границу DB/binding reads.
 
 ## Рекомендуемый порядок разрешения
 
-1. MD-292: принять нормативный scope; small-data performance boundary уже
-   зафиксирована в MD-258 и release profile.
-2. Выполнить commit inventory `main` против `1df46ec`, создать один exact
-   integration baseline.
-3. MD-294: принять route/reference/pagination/write-step-up/capture contract.
-4. Реализовать MD-300 real-browser test enablement до MD-299.
-5. Реализовать server-side bounded list/detail projections до renderer split.
-6. Только после этого выполнять visual/copy разделение страниц.
-7. Принять blocking либо informational статус external canary; прямая relation
-   MD-299 → MD-293 уже добавлена.
+1. MD-292: amend accepted scope и reclassify post-MVP graph.
+2. MD-301: собрать один exact `main` baseline.
+3. MD-294: записать уже выбранный route/query/write-step-up contract.
+4. MD-295–MD-298 и MD-300: реализовать bounded product и browser gates.
+5. MD-299: deterministic + fresh real-account connection UAT.
+6. MD-244/MD-252/MD-258/MD-285 + MD-299: разблокировать MD-293.
+7. MD-293: один final first-user receipt без post-MVP scope.
 
 ## Что уже доказано
 
-На `807c308` выполнены:
+На `e39375b` до текущей правки плана выполнены:
 
 - `npm ci`;
 - один полный `npm run check`: 689 tests, 689 passed;
 - architecture, Product Site, fixtures, docs и secret/config checks;
-- project-docs validator: 65 documents, 296 local links;
-- `git diff --check origin/main^..origin/main` до push;
-- remote read-back exact `807c308` на `refs/heads/main`.
+- project-docs validator: 66 documents, 297 local links;
+- `git diff --check` до push;
+- remote read-back exact `e39375b` на `refs/heads/main`.
 
-Это доказывает repository integrity planning commit. Оно не доказывает UAT
-deployment, новый UI или включение 21 commits из `1df46ec`.
+Это доказывает repository integrity предыдущего planning commit. Оно не
+доказывает UAT deployment, новый UI, MD-300 или включение 21 commits из
+`1df46ec`.
