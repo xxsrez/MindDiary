@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { access, readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import test from "node:test";
 import { parse } from "yaml";
@@ -144,4 +144,45 @@ test("adapter specification and runtime reference remain separate and aligned", 
   }
   assert.match(specification, /Статус: accepted project mapping/u);
   assert.match(runtimeReference, /Статус: accepted operational reference/u);
+});
+
+test("retired Shipliner runtime and Linear adapter cannot re-enter the active gate", async () => {
+  const retiredPaths = [
+    ".agents/skills/ship-linear-release/SKILL.md",
+    "docs/specs/ship-linear-release-v1.md",
+    "docs/specs/ship-work-release-linear.md",
+  ];
+  for (const retiredPath of retiredPaths) {
+    await assert.rejects(
+      access(resolve(repositoryRoot, retiredPath)),
+      (error) => error?.code === "ENOENT",
+      `${retiredPath} must remain absent`,
+    );
+  }
+
+  const packageJson = JSON.parse(
+    await readFile(resolve(repositoryRoot, "package.json"), "utf8"),
+  );
+  assert.equal(packageJson.scripts["test:orchestration"], undefined);
+  assert.doesNotMatch(packageJson.scripts.check, /ship-linear|test:orchestration/iu);
+
+  const activeDocuments = [
+    "AGENTS.md",
+    "README.md",
+    "docs/README.md",
+    "docs/operations/ship-work-release-profile.md",
+    "docs/operations/ship-work-release.md",
+    "docs/specs/ship-work-release.md",
+    "docs/specs/ship-work-release-project-profile.md",
+    "docs/specs/ship-work-release-task-manager.md",
+    "docs/specs/ship-work-release-task-manager-srez.md",
+  ];
+  for (const documentPath of activeDocuments) {
+    const document = await readFile(resolve(repositoryRoot, documentPath), "utf8");
+    assert.doesNotMatch(
+      document,
+      /ship-linear-release|ship-work-release-linear/iu,
+      `${documentPath} must not route active delivery to retired contracts`,
+    );
+  }
 });

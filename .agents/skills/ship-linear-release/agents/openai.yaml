@@ -1,4 +1,0 @@
-interface:
-  display_name: "Ship Linear Release"
-  short_description: "Весь Linear milestone в main и UAT"
-  default_prompt: "Используй $ship-linear-release как один Codex Goal: заверши все in-scope задачи и defects текущего Linear milestone, интегрируй результат в main и проверь meaningful UAT batches без production."
