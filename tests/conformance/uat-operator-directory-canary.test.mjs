@@ -6,17 +6,26 @@ import test from "node:test";
 
 import {
   OPERATOR_CANARY_ASSERTION_IDS,
+  OPERATOR_CANARY_CLEANUP_ASSERTION_IDS,
   ProbeFailure,
   assertRedactedDocument,
   createEvidence,
   loadCredentialEnvironment,
   parseCli,
   run,
+  verifyCleanupEvidence,
+  verifyEvidence,
 } from "../../scripts/run-uat-operator-directory-canary.mjs";
 
 const SHA = "a".repeat(40);
 const DEPLOYMENT = "appgdep_operator123";
 const NOW = "2026-08-24T10:00:00.000Z";
+const TEST_NONCE = "abcdef0123456789abcdef0123456789";
+const ACTOR_CLASSES_FOR_FIXTURE = Object.freeze([
+  "operator",
+  "mind_role",
+  "ordinary",
+]);
 
 function actorFingerprints() {
   return {
@@ -66,15 +75,12 @@ test("operator canary redaction rejects credentials, email and service identifie
 function credentials() {
   return {
     MIND_DIARY_UAT_OPERATOR_SITES_TOKEN: "sites-operator",
-    MIND_DIARY_UAT_OPERATOR_MCP_TOKEN: "mdp_v1_operator",
     MIND_DIARY_UAT_MIND_ROLE_SITES_TOKEN: "sites-mind-role",
-    MIND_DIARY_UAT_MIND_ROLE_MCP_TOKEN: "mdp_v1_mind-role",
     MIND_DIARY_UAT_ORDINARY_SITES_TOKEN: "sites-ordinary",
-    MIND_DIARY_UAT_ORDINARY_MCP_TOKEN: "mdp_v1_ordinary",
   };
 }
 
-test("environment contract requires six distinct non-CLI credential refs", () => {
+test("environment contract requires three distinct Sites refs and rejects CLI secrets", () => {
   assert.equal(loadCredentialEnvironment(credentials()).operator.sitesToken, "sites-operator");
   assert.throws(
     () => loadCredentialEnvironment({
@@ -82,13 +88,6 @@ test("environment contract requires six distinct non-CLI credential refs", () =>
       MIND_DIARY_UAT_ORDINARY_SITES_TOKEN: "sites-operator",
     }),
     (error) => error instanceof ProbeFailure && error.code === "shared_sites_credential_forbidden",
-  );
-  assert.throws(
-    () => loadCredentialEnvironment({
-      ...credentials(),
-      MIND_DIARY_UAT_MIND_ROLE_MCP_TOKEN: "mdp_v1_operator",
-    }),
-    (error) => error instanceof ProbeFailure && error.code === "shared_mcp_credential_forbidden",
   );
   assert.deepEqual(parseCli([
     "--phase", "verify",
@@ -105,9 +104,20 @@ test("environment contract requires six distinct non-CLI credential refs", () =>
     () => parseCli(["--phase", "setup", "--operator-sites-token", "secret"]),
     (error) => error instanceof ProbeFailure && error.code === "unsupported_cli_argument",
   );
+  assert.throws(
+    () => parseCli(["--phase", "setup", "--operator-mcp-token", "secret"]),
+    (error) => error instanceof ProbeFailure && error.code === "unsupported_cli_argument",
+  );
+  assert.throws(
+    () => parseCli(["--phase", "setup", "--nonce", TEST_NONCE]),
+    (error) => error instanceof ProbeFailure && error.code === "unsupported_cli_argument",
+  );
 });
 
-function operatorFixture({ mindRole = true } = {}) {
+function operatorFixture({
+  failTokenIssueFor = null,
+  preexistingMindHandle = null,
+} = {}) {
   const principals = {
     operator: "principal-fixture-operator",
     mind_role: "principal-fixture-mind-role",
@@ -118,10 +128,20 @@ function operatorFixture({ mindRole = true } = {}) {
     "Bearer sites-mind-role": "mind_role",
     "Bearer sites-ordinary": "ordinary",
   };
-  const mcp = {
-    operator: "Bearer mdp_v1_operator",
-    mind_role: "Bearer mdp_v1_mind-role",
-    ordinary: "Bearer mdp_v1_ordinary",
+  const registered = new Set();
+  const tokens = new Map(ACTOR_CLASSES_FOR_FIXTURE.map((actor) => [actor, []]));
+  const secretActors = new Map();
+  const product = {
+    mindExists: preexistingMindHandle !== null,
+    mindHandle: preexistingMindHandle,
+    mindName: preexistingMindHandle === null
+      ? null
+      : `UAT Operator Directory ${TEST_NONCE}`,
+    mindCreateKey: null,
+    mindDeleteCount: 0,
+    bootstrapCount: 0,
+    tokenIssueCount: 0,
+    tokenRevokeCount: 0,
   };
   const activities = new Map();
   let tick = 0;
@@ -153,16 +173,17 @@ function operatorFixture({ mindRole = true } = {}) {
       last_activity_kind: activity.lastActivityKind,
     };
   };
-  const rows = () => [...["operator", "mind_role", "ordinary"].map((actor, index) => ({
+  const rows = () => [...ACTOR_CLASSES_FOR_FIXTURE.map((actor, index) => ({
     principal_id: principals[actor],
     display_name: `Fixture ${index}`,
     verified_email: `fixture-${index}@example.test`,
     state: "active",
     registered_at: `2026-08-20T00:00:0${index}.000Z`,
     activity: wireActivity(actor),
-    owned_mind_count: actor === "mind_role" && mindRole ? 1 : 0,
+    owned_mind_count: actor === "mind_role" && product.mindExists ? 1 : 0,
     participating_mind_count: 0,
-    active_mcp_credential_count: 1,
+    active_mcp_credential_count:
+      tokens.get(actor).filter(({ state }) => state === "active").length,
   })), {
     principal_id: "fixture-never-active",
     display_name: "Fixture Never",
@@ -224,15 +245,26 @@ function operatorFixture({ mindRole = true } = {}) {
   const fetchImpl = async (urlValue, options = {}) => {
     const url = new URL(urlValue);
     const actor = actorFor(options.headers);
+    const method = options.method ?? "GET";
+    const headers = new Headers(options.headers);
+    const body = options.body === undefined ? null : JSON.parse(options.body);
     if (!actor) return json(401, { error: { code: "authentication_required" } });
     if (url.pathname === "/api/v1/session") {
+      if (!registered.has(actor)) {
+        return json(409, { error: { code: "registration_required" } });
+      }
       record(actor, "web");
       return json(200, { data: {
         principal: { principal_id: principals[actor] },
         personal_mind: { mind_id: `personal-fixture-${actor}` },
       } });
     }
-    if (url.pathname === "/api/v1/minds") {
+    if (url.pathname === "/api/v1/account" && method === "POST") {
+      registered.add(actor);
+      product.bootstrapCount += 1;
+      return json(200, { data: { replayed: false } });
+    }
+    if (url.pathname === "/api/v1/minds" && method === "GET") {
       record(actor, "web");
       const data = [{
         mind_id: `personal-fixture-${actor}`,
@@ -240,16 +272,75 @@ function operatorFixture({ mindRole = true } = {}) {
         is_personal: true,
         access: { kind: "membership", role: "owner" },
       }];
-      if (actor === "mind_role" && mindRole) data.push({
-        mind_id: "mind-fixture-shared",
-        route: "/fixture-shared",
+      if (actor === "mind_role" && product.mindExists) data.push({
+        mind_id: "mind-fixture-temporary",
+        handle: product.mindHandle,
+        route: `/${product.mindHandle}`,
+        name: product.mindName,
         is_personal: false,
-        access: { kind: "membership", role: "admin" },
+        access: { kind: "membership", role: "owner" },
       });
       return json(200, { data });
     }
+    if (url.pathname === "/api/v1/minds" && method === "POST") {
+      const idempotencyKey = headers.get("idempotency-key");
+      if (product.mindExists) {
+        if (
+          product.mindCreateKey !== idempotencyKey ||
+          product.mindHandle !== body.handle ||
+          product.mindName !== body.name
+        ) return json(409, { error: { code: "handle_unavailable" } });
+      } else {
+        product.mindExists = true;
+        product.mindHandle = body.handle;
+        product.mindName = body.name;
+        product.mindCreateKey = idempotencyKey;
+      }
+      return json(200, { data: {
+        mind_id: "mind-fixture-temporary",
+        handle: product.mindHandle,
+        route: `/${product.mindHandle}`,
+        name: product.mindName,
+        is_personal: false,
+        access: { kind: "membership", role: "owner" },
+      } });
+    }
+    if (url.pathname === "/api/v1/mcp-tokens" && method === "POST") {
+      if (actor === failTokenIssueFor) {
+        return json(503, { error: { code: "token_lifecycle_unavailable" } });
+      }
+      const index = ++product.tokenIssueCount;
+      const token = {
+        token_id: `opaque-${actor}-${index}`,
+        name: body.name,
+        scopes: [...body.scopes],
+        expires_at: body.expires_at,
+        state: "active",
+        version: 1,
+      };
+      const secret = `mdp_v1_fixture_${actor}_${index}`;
+      tokens.get(actor).push(token);
+      secretActors.set(`Bearer ${secret}`, { actor, token });
+      return json(200, { data: { token, secret } });
+    }
+    if (url.pathname === "/api/v1/mcp-tokens" && method === "GET") {
+      return json(200, { data: { tokens: tokens.get(actor).map((token) => ({
+        ...token,
+      })) } });
+    }
+    const tokenMatch = /^\/api\/v1\/mcp-tokens\/([^/]+)$/u.exec(url.pathname);
+    if (tokenMatch && method === "DELETE") {
+      const token = tokens.get(actor).find(({ token_id: id }) =>
+        id === decodeURIComponent(tokenMatch[1]));
+      if (!token) return json(404, { error: { code: "token_not_found" } });
+      token.state = "revoked";
+      token.version += 1;
+      product.tokenRevokeCount += 1;
+      return json(200, { data: { token: { ...token } } });
+    }
     if (url.pathname === "/api/mcp") {
-      if (new Headers(options.headers).get("authorization") !== mcp[actor]) {
+      const credential = secretActors.get(headers.get("authorization"));
+      if (!credential || credential.actor !== actor || credential.token.state !== "active") {
         return json(401, { error: { code: "authentication_required" } });
       }
       record(actor, "mcp");
@@ -257,6 +348,42 @@ function operatorFixture({ mindRole = true } = {}) {
         isError: false,
         structuredContent: { data: { minds: [] } },
       } });
+    }
+    if (
+      product.mindHandle !== null &&
+      url.pathname === `/api/v1/minds/${product.mindHandle}` &&
+      method === "GET"
+    ) {
+      if (actor !== "mind_role" || !product.mindExists) {
+        return json(404, { error: { code: "mind_not_found" } });
+      }
+      return json(200, { data: {
+        mind_id: "mind-fixture-temporary",
+        handle: product.mindHandle,
+        route: `/${product.mindHandle}`,
+        name: product.mindName,
+        is_personal: false,
+        access: { kind: "membership", role: "owner" },
+      } });
+    }
+    if (
+      product.mindHandle !== null &&
+      url.pathname === `/api/v1/minds/${product.mindHandle}/deletion-impact` &&
+      method === "GET"
+    ) {
+      return json(200, { data: {
+        impact_id: "impact-fixture-temporary",
+        confirmation: `delete-mind:${product.mindHandle}`,
+      } });
+    }
+    if (
+      product.mindHandle !== null &&
+      url.pathname === `/api/v1/minds/${product.mindHandle}` &&
+      method === "DELETE"
+    ) {
+      product.mindExists = false;
+      product.mindDeleteCount += 1;
+      return json(200, { data: { replayed: false } });
     }
     if (url.pathname === "/api/v1/internal/operators/users") {
       if (actor !== "operator") return json(404, { error: { code: "not_found" } });
@@ -278,15 +405,27 @@ function operatorFixture({ mindRole = true } = {}) {
       record(actor, "web");
       return response;
     }
+    if (
+      url.pathname === "/" ||
+      url.pathname === "/minds" ||
+      url.pathname === "/settings/mcp" ||
+      (product.mindHandle !== null && url.pathname === `/${product.mindHandle}`)
+    ) {
+      return new Response(
+        '<!doctype html><meta name="mind-diary-csrf-token" content="fixture-csrf">',
+        { status: 200, headers: { "content-type": "text/html; charset=utf-8" } },
+      );
+    }
     return json(404, { error: { code: "not_found" } });
   };
-  return { fetchImpl, activities, queries };
+  return { fetchImpl, activities, queries, product, registered, tokens, sites };
 }
 
 test("setup, verify and cleanup exercise the three-actor hosted contract", async () => {
   const directory = await mkdtemp(join(tmpdir(), "mind-diary-operator-canary-"));
   const statePath = join(directory, "state.json");
   const evidencePath = join(directory, "evidence.json");
+  const cleanupEvidencePath = join(directory, "cleanup-evidence.json");
   const fixture = operatorFixture();
   try {
     const prepared = await run({
@@ -294,9 +433,17 @@ test("setup, verify and cleanup exercise the three-actor hosted contract", async
       candidate_sha: SHA,
       deployment_id: DEPLOYMENT,
       state_out: statePath,
-      nonce: "abcdef0123456789",
-    }, { environment: credentials(), fetchImpl: fixture.fetchImpl });
+    }, {
+      environment: credentials(),
+      fetchImpl: fixture.fetchImpl,
+      now: () => NOW,
+      nonceFactory: () => TEST_NONCE,
+    });
     assert.equal(prepared.status, "ready_for_verify");
+    const preparedStateText = await readFile(statePath, "utf8");
+    for (const forbidden of ["mdp_v1_", "opaque-", "principal-fixture", "example.test"]) {
+      assert.equal(preparedStateText.includes(forbidden), false, forbidden);
+    }
 
     const verified = await run({
       phase: "verify",
@@ -310,6 +457,7 @@ test("setup, verify and cleanup exercise the three-actor hosted contract", async
     });
     assert.equal(verified.status, "passed");
     const evidence = JSON.parse(await readFile(evidencePath, "utf8"));
+    assert.deepEqual(verifyEvidence(evidence), evidence);
     assert.equal(evidence.candidate_sha, SHA);
     assert.equal(evidence.deployment_id, DEPLOYMENT);
     assert.equal(evidence.assertions.length, OPERATOR_CANARY_ASSERTION_IDS.length);
@@ -330,37 +478,169 @@ test("setup, verify and cleanup exercise the three-actor hosted contract", async
       }
     }
 
-    const cleaned = await run({ phase: "cleanup", state: statePath });
+    assert.equal(fixture.product.bootstrapCount, 3);
+    assert.equal(fixture.product.tokenIssueCount, 6);
+    assert.equal(fixture.product.tokenRevokeCount, 6);
+    assert.equal(
+      [...fixture.tokens.values()].flat().every((token) =>
+        JSON.stringify(token.scopes) === JSON.stringify(["content:read"]) &&
+        token.expires_at === "2026-08-24T11:00:00.000Z"),
+      true,
+    );
+    assert.equal(fixture.product.mindExists, false);
+    assert.equal(fixture.product.mindDeleteCount, 1);
+    const cleaned = await run({
+      phase: "cleanup",
+      deployment_id: DEPLOYMENT,
+      state: statePath,
+      evidence_out: cleanupEvidencePath,
+    }, {
+      environment: credentials(),
+      fetchImpl: fixture.fetchImpl,
+      now: () => NOW,
+    });
     assert.equal(cleaned.status, "cleaned");
+    const cleanupEvidence = JSON.parse(await readFile(cleanupEvidencePath, "utf8"));
+    assert.deepEqual(verifyCleanupEvidence(cleanupEvidence), cleanupEvidence);
+    assert.deepEqual(
+      cleanupEvidence.assertions.map(({ id }) => id),
+      OPERATOR_CANARY_CLEANUP_ASSERTION_IDS,
+    );
+    assert.equal(fixture.product.mindDeleteCount, 1);
     assert.equal(fixture.activities.size, 3);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
 });
 
-test("failed setup leaves redacted state that recovery can close without credentials", async () => {
+test("failed setup leaves a redacted carrier and recovery removes product resources", async () => {
   const directory = await mkdtemp(join(tmpdir(), "mind-diary-operator-recovery-"));
   const statePath = join(directory, "state.json");
+  const evidencePath = join(directory, "recovery-evidence.json");
   try {
-    const fixture = operatorFixture({ mindRole: false });
+    const fixture = operatorFixture({ failTokenIssueFor: "ordinary" });
     await assert.rejects(
       run({
         phase: "setup",
         candidate_sha: SHA,
         deployment_id: DEPLOYMENT,
         state_out: statePath,
-        nonce: "abcdef0123456789",
-      }, { environment: credentials(), fetchImpl: fixture.fetchImpl }),
-      (error) => error instanceof ProbeFailure && error.code === "mind_role_membership_missing",
+      }, {
+        environment: credentials(),
+        fetchImpl: fixture.fetchImpl,
+        now: () => NOW,
+        nonceFactory: () => TEST_NONCE,
+      }),
+      (error) => error instanceof ProbeFailure && error.code === "api_request_failed",
     );
     const initial = JSON.parse(await readFile(statePath, "utf8"));
-    assert.equal(initial.status, "setup_started");
+    assert.equal(initial.status, "recovery_required");
     assert.equal(JSON.stringify(initial).includes("principal-fixture"), false);
-    const recovered = await run({ phase: "recovery", state: statePath }, {
-      environment: {},
-      fetchImpl: undefined,
+    assert.equal(fixture.product.mindExists, true);
+    const recovered = await run({
+      phase: "recovery",
+      deployment_id: DEPLOYMENT,
+      state: statePath,
+      evidence_out: evidencePath,
+    }, {
+      environment: credentials(),
+      fetchImpl: fixture.fetchImpl,
+      now: () => NOW,
     });
     assert.equal(recovered.status, "recovered");
+    assert.equal(fixture.product.mindExists, false);
+    assert.equal(fixture.product.mindDeleteCount, 1);
+    assert.equal(
+      [...fixture.tokens.values()].flat().some(({ state }) => state === "active"),
+      false,
+    );
+    assert.equal(
+      verifyCleanupEvidence(JSON.parse(await readFile(evidencePath, "utf8"))).phase,
+      "recovery",
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("cleanup refuses a replaced actor session and leaves the original Mind untouched", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "mind-diary-operator-swap-"));
+  const statePath = join(directory, "state.json");
+  const evidencePath = join(directory, "cleanup.json");
+  const fixture = operatorFixture();
+  try {
+    await run({
+      phase: "setup",
+      candidate_sha: SHA,
+      deployment_id: DEPLOYMENT,
+      state_out: statePath,
+    }, {
+      environment: credentials(),
+      fetchImpl: fixture.fetchImpl,
+      now: () => NOW,
+      nonceFactory: () => TEST_NONCE,
+    });
+    fixture.sites["Bearer sites-mind-role"] = "ordinary";
+    await assert.rejects(
+      run({
+        phase: "cleanup",
+        deployment_id: DEPLOYMENT,
+        state: statePath,
+        evidence_out: evidencePath,
+      }, {
+        environment: credentials(),
+        fetchImpl: fixture.fetchImpl,
+        now: () => NOW,
+      }),
+      (error) => error instanceof ProbeFailure && error.code === "actor_session_changed",
+    );
+    assert.equal(fixture.product.mindExists, true);
+    assert.equal(fixture.product.mindDeleteCount, 0);
+    await assert.rejects(readFile(evidencePath, "utf8"));
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a deterministic test nonce cannot adopt or delete a preexisting Mind", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "mind-diary-operator-collision-"));
+  const statePath = join(directory, "state.json");
+  const evidencePath = join(directory, "recovery.json");
+  const fixture = operatorFixture({
+    preexistingMindHandle: `uat-operator-directory-${TEST_NONCE}`,
+  });
+  try {
+    await assert.rejects(
+      run({
+        phase: "setup",
+        candidate_sha: SHA,
+        deployment_id: DEPLOYMENT,
+        state_out: statePath,
+      }, {
+        environment: credentials(),
+        fetchImpl: fixture.fetchImpl,
+        now: () => NOW,
+        nonceFactory: () => TEST_NONCE,
+      }),
+      (error) => error instanceof ProbeFailure &&
+        error.code === "temporary_mind_handle_collision",
+    );
+    await assert.rejects(
+      run({
+        phase: "recovery",
+        deployment_id: DEPLOYMENT,
+        state: statePath,
+        evidence_out: evidencePath,
+      }, {
+        environment: credentials(),
+        fetchImpl: fixture.fetchImpl,
+        now: () => NOW,
+      }),
+      (error) => error instanceof ProbeFailure && error.code === "api_request_failed",
+    );
+    assert.equal(fixture.product.mindExists, true);
+    assert.equal(fixture.product.mindDeleteCount, 0);
+    await assert.rejects(readFile(evidencePath, "utf8"));
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

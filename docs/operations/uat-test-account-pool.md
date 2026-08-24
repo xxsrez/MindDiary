@@ -16,7 +16,7 @@ receipt.
 | Alias | Lifecycle | Stable baseline | Разрешённая роль в canary |
 |---|---|---|---|
 | `UAT-OPERATOR` | persistent restricted UAT | custom-audience member, service operator, без ordinary Mind membership | только read-only operator surface |
-| `UAT-MIND-ROLE` | persistent restricted UAT | custom-audience member, non-operator, без ordinary Mind membership | временный `editor`, затем role cleanup |
+| `UAT-MIND-ROLE` | persistent restricted UAT | custom-audience member, non-operator, без ordinary Mind membership | создаёт временный private ordinary Mind и получает `Owner`; Mind удаляется целиком |
 | `UAT-ORDINARY` | persistent restricted UAT | custom-audience member, non-operator, без ordinary Mind membership | ordinary negative/UI/API actor |
 | `UAT-DISPOSABLE` | optional, ephemeral и только после отдельного owner approval | отсутствует | account/deletion/recovery drill; никогда не operator |
 
@@ -34,13 +34,16 @@ Aliases не являются product identities. Mapping alias → external acc
 3. exact custom-audience membership restricted UAT Site;
 4. exact service-operator allowlist, содержащий только `UAT-OPERATOR` из этого
    pool;
-5. выдачу short-lived session references через owner-controlled environment
-   для конкретного canary run.
+5. выдачу short-lived Sites session references через owner-controlled
+   environment для конкретного canary run.
 
 Delivery instruction не заменяет эту owner authority. Automation не создаёт
-accounts, не проходит MFA, не угадывает identity, не расширяет audience и не
-меняет operator allowlist. Production, группы, public access и постоянные
-personal MCP tokens находятся вне этого runbook.
+external accounts, не проходит MFA, не угадывает identity, не расширяет
+audience и не меняет operator allowlist. Normal Product Site bootstrap
+зарегистрированной внешней identity выполняет `MD-281` idempotently: созданные
+principal и Personal Mind становятся durable pool state и не удаляются после
+run. Production, группы, public access и постоянные personal MCP tokens
+находятся вне этого runbook.
 
 ## Machine-readable inventory
 
@@ -86,9 +89,12 @@ operator-allowlist read-back и distinct-principal observation через три
 independent sessions, затем записать только classification в private inventory.
 
 `createUatTestAccountPoolReadinessReceipt(...)` создаёт deterministic
-classification-only receipt с logical aliases, random actor fingerprints,
-actor counts, UTC observation и artifact hash. Receipt не содержит mapping,
-account/principal IDs, email, sessions, credentials, token IDs или content.
+classification-only receipt schema
+`mind-diary/uat-test-account-pool-readiness/v2` с exact candidate SHA,
+deployment ID, logical aliases, random actor fingerprints, actor counts, UTC
+observation и artifact hash. Receipt не содержит mapping, account/principal
+IDs, email, sessions, credentials, token IDs или content. Exact lineage делает
+его машинно joinable с canary, provider-privacy и cleanup receipts.
 
 ## Provisioning and read-back sequence
 
@@ -100,8 +106,11 @@ account/principal IDs, email, sessions, credentials, token IDs или content.
    actors либо четыре при separately approved `UAT-DISPOSABLE`.
 3. Owner устанавливает operator allowlist и подтверждает exact read-back:
    `UAT-OPERATOR` allowed, все остальные pool actors denied.
-4. Каждый actor открывает authenticated Product Site session. Product-owned
-   observations должны подтвердить distinct principals без сохранения их IDs.
+4. Каждый actor открывает authenticated Product Site session. Если external
+   identity ещё не зарегистрирована в продукте, canary вызывает обычный
+   `create_isolated_account` bootstrap с deterministic idempotency key.
+   Product-owned observations подтверждают distinct principals без сохранения
+   их IDs.
 5. Перед canary подтверждается baseline: нет временных ordinary Mind roles и
    нет оставшихся per-run MCP tokens.
 6. Только после всех owner-confirmed states и exact read-backs contract может
@@ -110,13 +119,17 @@ account/principal IDs, email, sessions, credentials, token IDs или content.
 
 ## Per-run token and role policy
 
-- Session references и MCP token secrets поступают только через environment в
-  конкретный runner process; их нельзя передавать CLI arguments или сохранять
-  в inventory/receipt.
-- Existing personal MCP token использовать нельзя. Нужен отдельный named
-  short-lived per-run token с минимальным scope.
-- `UAT-MIND-ROLE` получает временную ordinary Mind role только на время exact
-  canary. Operator authority не создаёт implicit Mind access.
+- Только три Sites session reference поступают через environment в конкретный
+  runner process; их нельзя передавать CLI arguments или сохранять в
+  inventory/receipt.
+- Existing personal MCP token не используется. Runner через normal control API
+  выпускает отдельный named token на каждую actor/phase, с TTL один час и exact
+  scope `content:read`, держит show-once secret только в памяти, отзывает token
+  и проверяет denial следующего MCP request.
+- `UAT-MIND-ROLE` создаёт deterministic temporary private ordinary Mind и тем
+  самым получает проверяемую `Owner` role. Это устраняет зависимость от
+  заранее существующего чужого Mind или membership; после verify/recovery Mind
+  удаляется целиком.
 - `UAT-ORDINARY` остаётся nonoperator/nonmember для negative checks.
 - Evidence observer сохраняет только actor class/fingerprint, assertion status
   и safe error code; response bodies, identity и credentials не сохраняются.
@@ -127,12 +140,14 @@ account/principal IDs, email, sessions, credentials, token IDs или content.
 
 1. revoke все созданные per-run MCP tokens и проверить denial следующего
    request;
-2. удалить временные invitations/memberships/test Mind data по contract canary;
-3. вернуть ordinary Mind role `UAT-MIND-ROLE` к stable baseline `none`;
-4. восстановить exact custom audience до pool baseline и exact operator
-   allowlist до единственного operator actor;
-5. выполнить independent read-back и negative session check;
-6. не удалять persistent pool accounts; optional disposable account удаляет
+2. удалить canary-owned temporary Mind вместе с его Owner membership;
+3. повторно перечислить named tokens и exact Mind route, подтвердив отсутствие
+   active token и `404/mind_not_found`;
+4. выполнить independent registered-session read-back и не удалять persistent
+   pool accounts;
+5. отдельно подтвердить, что exact custom audience и operator allowlist всё ещё
+   равны MD-282 baseline: runner их не меняет;
+6. optional disposable account удаляет
    только owner в отдельно подтверждённом deletion drill.
 
 Cleanup evidence фиксирует только closed assertion status и opaque
@@ -143,14 +158,16 @@ fingerprints. Нельзя сохранять forensic account identifiers ил�
 При interruption или mismatch runner прекращает новые writes и помечает run
 `recovery-required`. Recovery выполняется в таком порядке:
 
-1. revoke known per-run tokens в памяти runner; если reference утрачен, owner
-   отзывает все named tokens этого run через trusted control surface;
-2. удалить временные roles/invitations и bounded fixture data;
-3. owner восстанавливает exact audience и operator allowlist baseline;
-4. повторить three-session distinctness, nonoperator denial и token denial;
+1. по deterministic token-name prefix перечислить и revoke все active per-run
+   tokens, даже если show-once secret утрачен;
+2. удалить deterministic temporary Mind и его Owner membership;
+3. повторить registered-session, token-metadata и exact Mind-absence read-back;
+4. owner отдельно подтверждает unchanged exact audience и operator allowlist;
 5. новый `ready` receipt допустим только после fresh exact read-back.
 
-Если account provisioning, first login/MFA, audience или allowlist невозможно
+Recovery требует те же три Sites session references; local state без credentials
+не выдаёт ложный cleanup success. Если external account provisioning, first
+login/MFA, audience или allowlist невозможно
 завершить без новой identity/policy authority, это внешний blocker MD-282, а не
 repository или product failure. Возобновление требует explicit owner action;
 automation не расширяет authority и не ослабляет acceptance.

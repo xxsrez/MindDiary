@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 export const UAT_TEST_ACCOUNT_POOL_SCHEMA =
   "mind-diary/uat-test-account-pool-inventory/v1";
 export const UAT_TEST_ACCOUNT_POOL_RECEIPT_SCHEMA =
-  "mind-diary/uat-test-account-pool-readiness/v1";
+  "mind-diary/uat-test-account-pool-readiness/v2";
 
 export const REQUIRED_UAT_TEST_ACTOR_ALIASES = Object.freeze([
   "UAT-OPERATOR",
@@ -31,7 +31,7 @@ const ACTOR_PROFILES = Object.freeze({
       custom_audience: "member",
       service_operator: "denied",
       ordinary_mind_baseline: "none",
-      canary_mind_role: "editor-temporary",
+      canary_mind_role: "owner-temporary-mind",
     }),
   }),
   "UAT-ORDINARY": Object.freeze({
@@ -74,11 +74,22 @@ const RECOVERY_POLICY = Object.freeze({
   interrupted_run: "fail-closed-recovery-required",
   per_run_mcp_tokens: "revoke-and-deny-readback",
   temporary_mind_roles: "remove-and-readback-none",
-  custom_audience: "owner-restore-exact",
-  operator_allowlist: "owner-restore-exact",
+  custom_audience: "owner-confirm-unchanged-exact",
+  operator_allowlist: "owner-confirm-unchanged-exact",
 });
+const READINESS_ASSERTION_IDS = Object.freeze([
+  "authority.owner-confirmed",
+  "actors.independent-login-mfa",
+  "actors.distinct-principals",
+  "sites.custom-audience-exact",
+  "operator.allowlist-exact",
+  "baseline.no-temporary-role-or-token",
+]);
 const FINGERPRINT = /^actor-[a-z0-9]{16,64}$/u;
 const UTC_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/u;
+const CANDIDATE_SHA = /^[0-9a-f]{40}$/u;
+const DEPLOYMENT_ID = /^appgdep_[a-z0-9]+$/u;
+const SHA256 = /^sha256:[0-9a-f]{64}$/u;
 const FORBIDDEN_FIELD = /^(?:email|account_id|principal_id|session|session_ref|credential|secret|token|token_id|mfa_seed)$/iu;
 const FORBIDDEN_VALUE = /(?:@|https?:\/\/|mdp_v1_|mdg_v1_|mdo_(?:code|access|refresh)_|oai-sites-authorization|hmac-sha256:|(?:principal|account|token|grant|session)_[a-z0-9])/iu;
 
@@ -333,16 +344,28 @@ export function assessUatTestAccountPoolReadiness(value) {
   });
 }
 
-export function createUatTestAccountPoolReadinessReceipt(value, { observedAtUtc }) {
+export function createUatTestAccountPoolReadinessReceipt(value, {
+  observedAtUtc,
+  candidateSha,
+  deploymentId,
+}) {
   const inventory = validateUatTestAccountPoolInventory(value);
   const assessment = assessUatTestAccountPoolReadiness(inventory);
   if (assessment.status !== "ready") fail("pool_not_ready");
   if (typeof observedAtUtc !== "string" || !UTC_INSTANT.test(observedAtUtc) ||
     Number.isNaN(Date.parse(observedAtUtc))) fail("invalid_observed_at");
+  if (typeof candidateSha !== "string" || !CANDIDATE_SHA.test(candidateSha)) {
+    fail("invalid_candidate_sha");
+  }
+  if (typeof deploymentId !== "string" || !DEPLOYMENT_ID.test(deploymentId)) {
+    fail("invalid_deployment_id");
+  }
 
   const unsigned = {
     schema: UAT_TEST_ACCOUNT_POOL_RECEIPT_SCHEMA,
     status: "ready",
+    candidate_sha: candidateSha,
+    deployment_id: deploymentId,
     environment: inventory.environment,
     target_class: inventory.target_class,
     observed_at: observedAtUtc,
@@ -364,14 +387,7 @@ export function createUatTestAccountPoolReadinessReceipt(value, { observedAtUtc 
       per_run_mcp_tokens: BASELINE_READY,
     },
     recovery_policy: { ...RECOVERY_POLICY },
-    assertions: [
-      "authority.owner-confirmed",
-      "actors.independent-login-mfa",
-      "actors.distinct-principals",
-      "sites.custom-audience-exact",
-      "operator.allowlist-exact",
-      "baseline.no-temporary-role-or-token",
-    ].map((id) => ({ id, status: "passed" })),
+    assertions: READINESS_ASSERTION_IDS.map((id) => ({ id, status: "passed" })),
   };
   const receipt = {
     ...unsigned,
@@ -379,4 +395,112 @@ export function createUatTestAccountPoolReadinessReceipt(value, { observedAtUtc 
   };
   assertSafeDocument(receipt);
   return deepFreeze(receipt);
+}
+
+export function verifyUatTestAccountPoolReadinessReceipt(value) {
+  assertSafeDocument(value);
+  assertExactKeys(value, [
+    "schema",
+    "status",
+    "candidate_sha",
+    "deployment_id",
+    "environment",
+    "target_class",
+    "observed_at",
+    "actors",
+    "owner_authority",
+    "readback",
+    "baseline",
+    "recovery_policy",
+    "assertions",
+    "artifact_sha256",
+  ], "invalid_pool_receipt_shape");
+  if (
+    value.schema !== UAT_TEST_ACCOUNT_POOL_RECEIPT_SCHEMA ||
+    value.status !== "ready" ||
+    !CANDIDATE_SHA.test(value.candidate_sha) ||
+    !DEPLOYMENT_ID.test(value.deployment_id) ||
+    value.environment !== "uat" ||
+    value.target_class !== "restricted-custom-audience" ||
+    typeof value.observed_at !== "string" ||
+    !UTC_INSTANT.test(value.observed_at) ||
+    !Number.isFinite(Date.parse(value.observed_at)) ||
+    !SHA256.test(value.artifact_sha256)
+  ) fail("invalid_pool_receipt_header");
+  if (
+    !Array.isArray(value.actors) ||
+    !Array.isArray(value.assertions) ||
+    value.owner_authority !== "confirmed-by-owner"
+  ) fail("invalid_pool_receipt_status");
+  const aliases = value.actors.map((actor) => actor?.alias);
+  const allowedAliases = [
+    [...REQUIRED_UAT_TEST_ACTOR_ALIASES],
+    [...REQUIRED_UAT_TEST_ACTOR_ALIASES, ...OPTIONAL_UAT_TEST_ACTOR_ALIASES],
+  ];
+  if (!allowedAliases.some((expected) =>
+    expected.length === aliases.length &&
+    expected.every((alias, index) => alias === aliases[index]))) {
+    fail("invalid_pool_receipt_actors");
+  }
+  const fingerprints = new Set();
+  value.actors.forEach((actor, index) => {
+    assertExactKeys(actor, [
+      "alias",
+      "actor_fingerprint",
+      "lifecycle",
+    ], "invalid_pool_receipt_actors");
+    if (
+      actor.alias !== aliases[index] ||
+      actor.lifecycle !== ACTOR_PROFILES[actor.alias]?.lifecycle ||
+      !FINGERPRINT.test(actor.actor_fingerprint) ||
+      fingerprints.has(actor.actor_fingerprint)
+    ) fail("invalid_pool_receipt_actors");
+    fingerprints.add(actor.actor_fingerprint);
+  });
+  assertExactKeys(value.readback, [
+    "custom_audience",
+    "custom_audience_actor_count",
+    "operator_allowlist",
+    "operator_actor_count",
+    "distinct_principals",
+  ], "invalid_pool_receipt_readback");
+  if (
+    value.readback.custom_audience !== "exact" ||
+    value.readback.custom_audience_actor_count !== value.actors.length ||
+    value.readback.operator_allowlist !== "exact" ||
+    value.readback.operator_actor_count !== 1 ||
+    value.readback.distinct_principals !== "verified"
+  ) fail("invalid_pool_receipt_readback");
+  assertExactKeys(value.baseline, [
+    "temporary_mind_roles",
+    "per_run_mcp_tokens",
+  ], "invalid_pool_receipt_baseline");
+  if (
+    value.baseline.temporary_mind_roles !== BASELINE_READY ||
+    value.baseline.per_run_mcp_tokens !== BASELINE_READY
+  ) fail("invalid_pool_receipt_baseline");
+  assertExactKeys(
+    value.recovery_policy,
+    Object.keys(RECOVERY_POLICY),
+    "invalid_pool_receipt_recovery",
+  );
+  for (const [key, expected] of Object.entries(RECOVERY_POLICY)) {
+    if (value.recovery_policy[key] !== expected) {
+      fail("invalid_pool_receipt_recovery");
+    }
+  }
+  if (
+    value.assertions.length !== READINESS_ASSERTION_IDS.length ||
+    value.assertions.some((entry, index) => {
+      try {
+        assertExactKeys(entry, ["id", "status"], "invalid_pool_receipt_assertions");
+      } catch {
+        return true;
+      }
+      return entry.id !== READINESS_ASSERTION_IDS[index] || entry.status !== "passed";
+    })
+  ) fail("invalid_pool_receipt_assertions");
+  const { artifact_sha256: artifact, ...unsigned } = value;
+  if (artifact !== digest(canonical(unsigned))) fail("invalid_pool_receipt_hash");
+  return deepFreeze(structuredClone(value));
 }

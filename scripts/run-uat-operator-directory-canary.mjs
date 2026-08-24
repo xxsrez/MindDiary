@@ -19,28 +19,25 @@ export { ProbeFailure, assertRedactedDocument };
 
 const STATE_SCHEMA = "mind-diary/uat-operator-directory-canary-state/v1";
 const EVIDENCE_SCHEMA = "mind-diary/uat-operator-directory-canary-evidence/v1";
+const CLEANUP_EVIDENCE_SCHEMA =
+  "mind-diary/uat-operator-directory-cleanup-evidence/v1";
 const ACTOR_SOURCE = "environment-backed-sites-session";
 const DEFAULT_BASE_URL = "https://mind-diary.example.invalid";
 const MCP_PROTOCOL = "2026-07-28";
+const TOKEN_TTL_MILLISECONDS = 60 * 60 * 1_000;
 const ACTOR_CLASSES = Object.freeze(["operator", "mind_role", "ordinary"]);
 const ENVIRONMENT = Object.freeze({
-  operator: Object.freeze({
-    sites: "MIND_DIARY_UAT_OPERATOR_SITES_TOKEN",
-    mcp: "MIND_DIARY_UAT_OPERATOR_MCP_TOKEN",
-  }),
-  mind_role: Object.freeze({
-    sites: "MIND_DIARY_UAT_MIND_ROLE_SITES_TOKEN",
-    mcp: "MIND_DIARY_UAT_MIND_ROLE_MCP_TOKEN",
-  }),
-  ordinary: Object.freeze({
-    sites: "MIND_DIARY_UAT_ORDINARY_SITES_TOKEN",
-    mcp: "MIND_DIARY_UAT_ORDINARY_MCP_TOKEN",
-  }),
+  operator: "MIND_DIARY_UAT_OPERATOR_SITES_TOKEN",
+  mind_role: "MIND_DIARY_UAT_MIND_ROLE_SITES_TOKEN",
+  ordinary: "MIND_DIARY_UAT_ORDINARY_SITES_TOKEN",
 });
 
 export const OPERATOR_CANARY_ASSERTION_IDS = Object.freeze([
   "sessions.environment_backed_only",
   "sessions.three_distinct_registered_principals",
+  "accounts.normal_bootstrap_completed",
+  "tokens.per_run_read_only_and_revoked",
+  "roles.mind_role_created_temporary_ordinary_mind_as_owner",
   "roles.mind_role_has_ordinary_owner_or_admin_membership",
   "activity.successful_web_read_observed",
   "activity.successful_mcp_read_observed",
@@ -62,6 +59,13 @@ export const OPERATOR_CANARY_ASSERTION_IDS = Object.freeze([
   "directory.ordinary_ui_exact_404",
   "directory.denied_reads_do_not_advance_activity",
   "cleanup.no_ephemeral_product_resources",
+]);
+
+export const OPERATOR_CANARY_CLEANUP_ASSERTION_IDS = Object.freeze([
+  "tokens.named_per_run_revoked_or_absent",
+  "mind.temporary_ordinary_mind_absent",
+  "membership.temporary_owner_removed_with_mind",
+  "accounts.no_account_deletion_attempted",
 ]);
 
 function deploymentId(value) {
@@ -87,7 +91,7 @@ function baseUrl(value) {
 }
 
 function nonce(value) {
-  if (typeof value !== "string" || !/^[0-9a-f]{16}$/u.test(value)) {
+  if (typeof value !== "string" || !/^[0-9a-f]{32}$/u.test(value)) {
     fail("invalid_run_nonce");
   }
   return value;
@@ -161,26 +165,83 @@ export function createEvidence(input) {
   }));
 }
 
+export function verifyEvidence(value) {
+  if (!isRecord(value) || value.schema !== EVIDENCE_SCHEMA || value.status !== "passed") {
+    fail("invalid_operator_canary_evidence");
+  }
+  const actors = {};
+  if (!Array.isArray(value.actors) || value.actors.length !== ACTOR_CLASSES.length) {
+    fail("invalid_operator_canary_evidence");
+  }
+  for (const entry of value.actors) {
+    const actorClass = entry?.actor_class === "mind-role"
+      ? "mind_role"
+      : entry?.actor_class;
+    if (!ACTOR_CLASSES.includes(actorClass) || Object.hasOwn(actors, actorClass)) {
+      fail("invalid_operator_canary_evidence");
+    }
+    actors[actorClass] = entry.opaque_fingerprint;
+  }
+  const recreated = createEvidence({
+    candidateSha: value.candidate_sha,
+    deploymentId: value.deployment_id,
+    runFingerprint: value.run_fingerprint,
+    actors,
+    observedAtUtc: value.observed_at_utc,
+  });
+  if (canonical(recreated) !== canonical(value)) {
+    fail("invalid_operator_canary_evidence");
+  }
+  return recreated;
+}
+
+export function createCleanupEvidence(input) {
+  const unsigned = Object.freeze({
+    schema: CLEANUP_EVIDENCE_SCHEMA,
+    status: "passed",
+    phase: input.phase === "recovery" ? "recovery" : "cleanup",
+    candidate_sha: candidateSha(input.candidateSha),
+    deployment_id: deploymentId(input.deploymentId),
+    run_fingerprint: runFingerprint(input.runFingerprint),
+    assertions: Object.freeze(OPERATOR_CANARY_CLEANUP_ASSERTION_IDS.map((id) =>
+      Object.freeze({ id, status: "passed" }))),
+    observed_at_utc: observedAtUtc(input.observedAtUtc),
+  });
+  return assertRedactedDocument(Object.freeze({
+    ...unsigned,
+    artifact_sha256: digest(canonical(unsigned)),
+  }));
+}
+
+export function verifyCleanupEvidence(value) {
+  if (!isRecord(value) || value.schema !== CLEANUP_EVIDENCE_SCHEMA || value.status !== "passed") {
+    fail("invalid_operator_cleanup_evidence");
+  }
+  const recreated = createCleanupEvidence({
+    phase: value.phase,
+    candidateSha: value.candidate_sha,
+    deploymentId: value.deployment_id,
+    runFingerprint: value.run_fingerprint,
+    observedAtUtc: value.observed_at_utc,
+  });
+  if (canonical(recreated) !== canonical(value)) {
+    fail("invalid_operator_cleanup_evidence");
+  }
+  return recreated;
+}
+
 export function loadCredentialEnvironment(environment = process.env) {
   const credentials = {};
   for (const actorClass of ACTOR_CLASSES) {
-    const names = ENVIRONMENT[actorClass];
+    const name = ENVIRONMENT[actorClass];
     const sitesToken = required(
-      environment[names.sites],
-      `missing_${names.sites.toLowerCase()}`,
+      environment[name],
+      `missing_${name.toLowerCase()}`,
     );
-    const mcpToken = required(
-      environment[names.mcp],
-      `missing_${names.mcp.toLowerCase()}`,
-    );
-    if (!mcpToken.startsWith("mdp_v1_")) fail("invalid_mcp_token_reference");
-    credentials[actorClass] = Object.freeze({ sitesToken, mcpToken });
+    credentials[actorClass] = Object.freeze({ sitesToken });
   }
   if (new Set(ACTOR_CLASSES.map((key) => credentials[key].sitesToken)).size !== 3) {
     fail("shared_sites_credential_forbidden");
-  }
-  if (new Set(ACTOR_CLASSES.map((key) => credentials[key].mcpToken)).size !== 3) {
-    fail("shared_mcp_credential_forbidden");
   }
   return Object.freeze(credentials);
 }
@@ -206,7 +267,6 @@ export function parseCli(argv) {
     "state",
     "state_out",
     "evidence_out",
-    "nonce",
   ]);
   for (const key of Object.keys(options)) {
     if (!allowed.has(key)) fail("unsupported_cli_argument");
@@ -220,13 +280,35 @@ export function parseCli(argv) {
 function validateState(value) {
   if (!isRecord(value) || value.schema !== STATE_SCHEMA) fail("invalid_state_schema");
   const status = value.status;
-  if (!new Set(["setup_started", "ready_for_verify", "verified", "cleaned", "recovered"]).has(status)) {
+  if (!new Set([
+    "setup_started",
+    "ready_for_verify",
+    "recovery_required",
+    "verified",
+    "cleaned",
+    "recovered",
+  ]).has(status)) {
     fail("invalid_state_status");
   }
   const actors = actorFingerprintMap(
     value.actors,
     status === "ready_for_verify" || status === "verified",
   );
+  const actorCount = ACTOR_CLASSES.filter((actorClass) =>
+    actors[actorClass] !== null).length;
+  if (actorCount !== 0 && actorCount !== ACTOR_CLASSES.length) {
+    fail("partial_actor_fingerprints_forbidden");
+  }
+  const runNonce = nonce(value.run_nonce);
+  const expectedResources = Object.freeze({
+    mind_handle: `uat-operator-directory-${runNonce}`,
+    mind_name: `UAT Operator Directory ${runNonce}`,
+    token_name_prefix: `UAT Operator Directory ${runNonce}`,
+  });
+  if (
+    !isRecord(value.resources) ||
+    canonical(value.resources) !== canonical(expectedResources)
+  ) fail("invalid_canary_resources");
   const state = Object.freeze({
     schema: STATE_SCHEMA,
     status,
@@ -236,15 +318,16 @@ function validateState(value) {
     actor_source: value.actor_source === ACTOR_SOURCE
       ? ACTOR_SOURCE
       : fail("invalid_actor_source"),
-    run_nonce: nonce(value.run_nonce),
+    run_nonce: runNonce,
     run_fingerprint: runFingerprint(value.run_fingerprint),
     actors,
+    resources: expectedResources,
   });
   return Object.freeze(assertRedactedDocument(state));
 }
 
-function makeState(options) {
-  const runNonce = nonce(options.nonce ?? randomBytes(8).toString("hex"));
+function makeState(options, nonceFactory) {
+  const runNonce = nonce(nonceFactory());
   const candidate = candidateSha(options.candidate_sha);
   const deployment = deploymentId(options.deployment_id);
   return validateState({
@@ -257,6 +340,11 @@ function makeState(options) {
     run_nonce: runNonce,
     run_fingerprint: fingerprintRun(runNonce, candidate, deployment),
     actors: { operator: null, mind_role: null, ordinary: null },
+    resources: {
+      mind_handle: `uat-operator-directory-${runNonce}`,
+      mind_name: `UAT Operator Directory ${runNonce}`,
+      token_name_prefix: `UAT Operator Directory ${runNonce}`,
+    },
   });
 }
 
@@ -273,11 +361,13 @@ async function writeJson(path, value) {
 }
 
 class ActorClient {
-  constructor({ state, actorClass, sitesToken, mcpToken, fetchImpl }) {
+  constructor({ state, actorClass, sitesToken, fetchImpl }) {
     this.baseUrl = state.base_url;
     this.actorClass = actorClass;
     this.sitesToken = sitesToken;
-    this.mcpToken = mcpToken;
+    this.mcpToken = null;
+    this.mcpTokenId = null;
+    this.mcpTokenPhase = null;
     this.fetchImpl = fetchImpl;
   }
 
@@ -305,9 +395,37 @@ class ActorClient {
     return Object.freeze({ status: response.status, headers: response.headers, body, text });
   }
 
-  async api(path, expectedStatus = 200) {
+  async csrf(path = "/") {
     const response = await this.request(path, {
-      headers: { accept: "application/json" },
+      headers: { accept: "text/html" },
+    });
+    const match = response.status === 200 &&
+      /<meta name="mind-diary-csrf-token" content="([^"]+)">/u.exec(response.text);
+    if (!match) fail("csrf_token_missing", {
+      actorClass: this.actorClass,
+      status: response.status,
+    });
+    return match[1];
+  }
+
+  async api(path, {
+    method = "GET",
+    body,
+    idempotencyKey,
+    expectedStatus = 200,
+    csrfPath = "/minds",
+  } = {}) {
+    const headers = { accept: "application/json" };
+    if (method !== "GET") {
+      headers.origin = this.baseUrl;
+      headers["x-csrf-token"] = await this.csrf(csrfPath);
+      if (idempotencyKey) headers["idempotency-key"] = idempotencyKey;
+      if (body !== undefined) headers["content-type"] = "application/json";
+    }
+    const response = await this.request(path, {
+      method,
+      headers,
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
     if (response.status !== expectedStatus) {
       fail("api_request_failed", {
@@ -319,12 +437,24 @@ class ActorClient {
     return response;
   }
 
-  async session() {
-    const response = await this.request("/api/v1/session", {
+  async session(bootstrapKey) {
+    let response = await this.request("/api/v1/session", {
       headers: { accept: "application/json" },
     });
-    if (response.status === 409 && response.body?.error?.code === "registration_required") {
-      fail("actor_not_registered", { actorClass: this.actorClass });
+    if (
+      response.status === 409 &&
+      response.body?.error?.code === "registration_required" &&
+      bootstrapKey
+    ) {
+      await this.api("/api/v1/account", {
+        method: "POST",
+        body: { action: "create_isolated_account" },
+        idempotencyKey: bootstrapKey,
+        csrfPath: "/",
+      });
+      response = await this.request("/api/v1/session", {
+        headers: { accept: "application/json" },
+      });
     }
     if (response.status !== 200 || !isRecord(response.body?.data)) {
       fail("session_unavailable", {
@@ -335,8 +465,81 @@ class ActorClient {
     return response.body.data;
   }
 
-  async mcp(name, args = {}) {
-    const response = await this.request("/api/mcp", {
+  async sessionIfRegistered() {
+    const response = await this.request("/api/v1/session", {
+      headers: { accept: "application/json" },
+    });
+    if (
+      response.status === 409 &&
+      response.body?.error?.code === "registration_required"
+    ) return null;
+    if (response.status !== 200 || !isRecord(response.body?.data)) {
+      fail("session_unavailable", {
+        actorClass: this.actorClass,
+        status: response.status,
+      });
+    }
+    return response.body.data;
+  }
+
+  async issueReadOnlyMcpToken(state, now, phase) {
+    const issuedAt = Date.parse(now());
+    if (!Number.isFinite(issuedAt)) fail("invalid_token_issuance_time");
+    const expiresAt = new Date(issuedAt + TOKEN_TTL_MILLISECONDS).toISOString();
+    const issued = await this.api("/api/v1/mcp-tokens", {
+      method: "POST",
+      body: {
+        name: tokenName(state, this.actorClass, phase),
+        scopes: ["content:read"],
+        expires_at: expiresAt,
+      },
+      idempotencyKey: `uat-operator:${state.run_nonce}:token:${phase}:${this.actorClass}`,
+      csrfPath: "/settings/mcp",
+    });
+    const projection = issued.body?.data;
+    if (
+      typeof projection?.secret !== "string" ||
+      !projection.secret.startsWith("mdp_v1_") ||
+      typeof projection.token?.token_id !== "string" ||
+      projection.token?.name !== tokenName(state, this.actorClass, phase) ||
+      !Array.isArray(projection.token?.scopes) ||
+      !projection.token.scopes.includes("content:read") ||
+      projection.token.scopes.includes("content:write")
+    ) fail("token_issue_projection_invalid", { actorClass: this.actorClass });
+    this.mcpToken = projection.secret;
+    this.mcpTokenId = projection.token.token_id;
+    this.mcpTokenPhase = phase;
+  }
+
+  async revokeCurrentTokenAndAssertDenied(state) {
+    if (this.mcpToken === null || this.mcpTokenId === null) return;
+    const token = this.mcpToken;
+    const tokenId = this.mcpTokenId;
+    const revoked = await this.api(
+      `/api/v1/mcp-tokens/${encodeURIComponent(tokenId)}`,
+      {
+        method: "DELETE",
+        idempotencyKey:
+          `uat-operator:${state.run_nonce}:revoke:${this.mcpTokenPhase}:${this.actorClass}`,
+        csrfPath: "/settings/mcp",
+      },
+    );
+    if (revoked.body?.data?.token?.state !== "revoked") {
+      fail("token_revoke_failed", { actorClass: this.actorClass });
+    }
+    this.mcpToken = token;
+    const denied = await this.mcpRequest("list_minds");
+    if (denied.status !== 401) {
+      fail("revoked_token_still_accepted", { actorClass: this.actorClass });
+    }
+    this.mcpToken = null;
+    this.mcpTokenId = null;
+    this.mcpTokenPhase = null;
+  }
+
+  async mcpRequest(name, args = {}) {
+    if (this.mcpToken === null) fail("mcp_token_not_issued");
+    return this.request("/api/mcp", {
       method: "POST",
       headers: {
         accept: "application/json, text/event-stream",
@@ -364,6 +567,10 @@ class ActorClient {
         },
       }),
     });
+  }
+
+  async mcp(name, args = {}) {
+    const response = await this.mcpRequest(name, args);
     if (
       response.status !== 200 || response.body?.result?.isError === true ||
       !isRecord(response.body?.result?.structuredContent?.data)
@@ -384,11 +591,15 @@ function actorClients(state, credentials, fetchImpl) {
       state,
       actorClass,
       sitesToken: credentials[actorClass].sitesToken,
-      mcpToken: credentials[actorClass].mcpToken,
       fetchImpl,
     });
   }
   return Object.freeze(result);
+}
+
+function tokenName(state, actorClass, phase) {
+  if (!new Set(["setup", "verify"]).has(phase)) fail("invalid_token_phase");
+  return `${state.resources.token_name_prefix} ${phase} ${actorClass.replaceAll("_", "-")}`;
 }
 
 function sessionIds(session, actorClass) {
@@ -401,11 +612,13 @@ function sessionIds(session, actorClass) {
   return Object.freeze({ principalId, personalMindId });
 }
 
-async function readSessions(clients) {
+async function readSessions(clients, state) {
   const sessions = {};
   for (const actorClass of ACTOR_CLASSES) {
     sessions[actorClass] = sessionIds(
-      await clients[actorClass].session(),
+      await clients[actorClass].session(
+        `uat-operator:${state.run_nonce}:bootstrap:${actorClass}`,
+      ),
       actorClass,
     );
   }
@@ -445,27 +658,106 @@ function mindList(response, actorClass) {
   return minds;
 }
 
-function assertMindRole(minds) {
-  const ordinary = minds.find((mind) =>
-    isRecord(mind) && mind.is_personal === false &&
-    mind.access?.kind === "membership" &&
-    (mind.access?.role === "owner" || mind.access?.role === "admin"));
-  if (!ordinary) fail("mind_role_membership_missing");
+function temporaryMind(minds, state) {
+  return minds.find((mind) =>
+    isRecord(mind) &&
+    mind.is_personal === false &&
+    (mind.handle === state.resources.mind_handle ||
+      mind.route === `/${state.resources.mind_handle}`));
 }
 
-async function setup(state, credentials, fetchImpl) {
-  const clients = actorClients(state, credentials, fetchImpl);
-  const sessions = await readSessions(clients);
-  for (const actorClass of ACTOR_CLASSES) {
-    const response = await clients[actorClass].api("/api/v1/minds");
-    const minds = mindList(response, actorClass);
-    if (actorClass === "mind_role") assertMindRole(minds);
-    await clients[actorClass].mcp("list_minds");
+function assertTemporaryMindOwner(minds, state) {
+  const ordinary = temporaryMind(minds, state);
+  if (
+    !ordinary ||
+    ordinary.access?.kind !== "membership" ||
+    ordinary.access?.role !== "owner"
+  ) fail("temporary_mind_owner_missing");
+  return ordinary;
+}
+
+async function ensureTemporaryMind(state, clients) {
+  const before = mindList(
+    await clients.mind_role.api("/api/v1/minds"),
+    "mind_role",
+  );
+  if (temporaryMind(before, state) !== undefined) {
+    fail("temporary_mind_handle_collision");
   }
-  return validateState({
+  const created = await clients.mind_role.api("/api/v1/minds", {
+    method: "POST",
+    body: {
+      name: state.resources.mind_name,
+      handle: state.resources.mind_handle,
+    },
+    idempotencyKey: `uat-operator:${state.run_nonce}:mind:create`,
+    csrfPath: "/minds",
+  });
+  const projection = created.body?.data;
+  if (
+    !isRecord(projection) ||
+    projection.is_personal !== false ||
+    projection.access?.kind !== "membership" ||
+    projection.access?.role !== "owner"
+  ) fail("temporary_mind_create_invalid");
+  assertTemporaryMindOwner(
+    mindList(await clients.mind_role.api("/api/v1/minds"), "mind_role"),
+    state,
+  );
+  for (const actorClass of ["operator", "ordinary"]) {
+    if (temporaryMind(
+      mindList(await clients[actorClass].api("/api/v1/minds"), actorClass),
+      state,
+    ) !== undefined) fail("temporary_private_mind_leaked", { actorClass });
+  }
+}
+
+async function withReadOnlyTokens(state, clients, now, phase, action) {
+  let result;
+  let primaryError = null;
+  try {
+    for (const actorClass of ACTOR_CLASSES) {
+      await clients[actorClass].issueReadOnlyMcpToken(state, now, phase);
+    }
+    result = await action();
+  } catch (error) {
+    primaryError = error;
+  }
+  let cleanupError = null;
+  for (const actorClass of [...ACTOR_CLASSES].reverse()) {
+    try {
+      await clients[actorClass].revokeCurrentTokenAndAssertDenied(state);
+    } catch (error) {
+      cleanupError ??= error;
+    }
+  }
+  if (primaryError !== null) throw primaryError;
+  if (cleanupError !== null) throw cleanupError;
+  return result;
+}
+
+async function setup(state, credentials, fetchImpl, now, persistActorState) {
+  const clients = actorClients(state, credentials, fetchImpl);
+  const sessions = await readSessions(clients, state);
+  const actorState = validateState({
     ...state,
-    status: "ready_for_verify",
     actors: fingerprintsFor(state, sessions),
+  });
+  await persistActorState(actorState);
+  await ensureTemporaryMind(actorState, clients);
+  await withReadOnlyTokens(actorState, clients, now, "setup", async () => {
+    for (const actorClass of ACTOR_CLASSES) {
+      const minds = mindList(
+        await clients[actorClass].api("/api/v1/minds"),
+        actorClass,
+      );
+      if (actorClass === "mind_role") assertTemporaryMindOwner(minds, actorState);
+      await clients[actorClass].mcp("list_minds");
+    }
+  });
+  return validateState({
+    ...actorState,
+    status: "ready_for_verify",
   });
 }
 
@@ -642,11 +934,13 @@ function assertExactNotFound(response, actorClass, surface) {
   }
 }
 
-async function verify(state, credentials, fetchImpl, now) {
+async function verifyDirectory(state, clients, sessions) {
   if (state.status !== "ready_for_verify") fail("setup_not_complete");
-  const clients = actorClients(state, credentials, fetchImpl);
-  const sessions = await readSessions(clients);
   assertSameActors(state, sessions);
+  assertTemporaryMindOwner(
+    mindList(await clients.mind_role.api("/api/v1/minds"), "mind_role"),
+    state,
+  );
 
   const firstPage = await directory(clients, {
     limit: 100,
@@ -827,13 +1121,132 @@ async function verify(state, credentials, fetchImpl, now) {
     }
   }
 
-  return createEvidence({
-    candidateSha: state.candidate_sha,
-    deploymentId: state.deployment_id,
-    runFingerprint: state.run_fingerprint,
-    actors: state.actors,
-    observedAtUtc: now(),
+}
+
+function listedTokens(response, actorClass) {
+  const tokens = response.body?.data?.tokens;
+  if (!Array.isArray(tokens)) fail("invalid_token_list", { actorClass });
+  return tokens;
+}
+
+async function revokeNamedTokens(state, clients) {
+  for (const actorClass of ACTOR_CLASSES) {
+    const client = clients[actorClass];
+    if (await client.sessionIfRegistered() === null) continue;
+    const before = listedTokens(
+      await client.api("/api/v1/mcp-tokens"),
+      actorClass,
+    );
+    for (const token of before) {
+      if (
+        !isRecord(token) ||
+        typeof token.name !== "string" ||
+        !token.name.startsWith(`${state.resources.token_name_prefix} `) ||
+        token.state === "revoked"
+      ) continue;
+      if (typeof token.token_id !== "string") {
+        fail("invalid_token_list", { actorClass });
+      }
+      const revoked = await client.api(
+        `/api/v1/mcp-tokens/${encodeURIComponent(token.token_id)}`,
+        {
+          method: "DELETE",
+          idempotencyKey:
+            `uat-operator:${state.run_nonce}:recovery-revoke:${actorClass}:` +
+            sha256(token.token_id).slice(0, 16),
+          csrfPath: "/settings/mcp",
+        },
+      );
+      if (revoked.body?.data?.token?.state !== "revoked") {
+        fail("token_revoke_failed", { actorClass });
+      }
+    }
+    const after = listedTokens(
+      await client.api("/api/v1/mcp-tokens"),
+      actorClass,
+    );
+    if (after.some((token) =>
+      isRecord(token) &&
+      typeof token.name === "string" &&
+      token.name.startsWith(`${state.resources.token_name_prefix} `) &&
+      token.state !== "revoked")) {
+      fail("named_token_cleanup_failed", { actorClass });
+    }
+  }
+}
+
+async function deleteTemporaryMind(state, clients) {
+  if (await clients.mind_role.sessionIfRegistered() === null) return;
+  const path = `/api/v1/minds/${state.resources.mind_handle}`;
+  const current = await clients.mind_role.request(path, {
+    headers: { accept: "application/json" },
   });
+  if (current.status === 200) {
+    if (current.body?.data?.access?.role !== "owner") {
+      fail("temporary_mind_cleanup_not_owner");
+    }
+    const ownershipReplay = await clients.mind_role.api("/api/v1/minds", {
+      method: "POST",
+      body: {
+        name: state.resources.mind_name,
+        handle: state.resources.mind_handle,
+      },
+      idempotencyKey: `uat-operator:${state.run_nonce}:mind:create`,
+      csrfPath: "/minds",
+    });
+    if (
+      ownershipReplay.body?.data?.route !== `/${state.resources.mind_handle}` ||
+      ownershipReplay.body?.data?.name !== state.resources.mind_name ||
+      ownershipReplay.body?.data?.access?.role !== "owner"
+    ) fail("temporary_mind_ownership_replay_invalid");
+    const impact = await clients.mind_role.api(`${path}/deletion-impact`);
+    const impactId = impact.body?.data?.impact_id;
+    const confirmation = impact.body?.data?.confirmation;
+    if (typeof impactId !== "string" || typeof confirmation !== "string") {
+      fail("temporary_mind_deletion_impact_invalid");
+    }
+    await clients.mind_role.api(path, {
+      method: "DELETE",
+      body: { impact_id: impactId, confirmation },
+      idempotencyKey: `uat-operator:${state.run_nonce}:mind:delete`,
+      csrfPath: `/${state.resources.mind_handle}`,
+    });
+  } else if (
+    current.status !== 404 ||
+    current.body?.error?.code !== "mind_not_found"
+  ) {
+    fail("temporary_mind_cleanup_read_failed", { status: current.status });
+  }
+  const absent = await clients.mind_role.request(path, {
+    headers: { accept: "application/json" },
+  });
+  if (absent.status !== 404 || absent.body?.error?.code !== "mind_not_found") {
+    fail("temporary_mind_cleanup_failed");
+  }
+}
+
+async function cleanupProductResources(state, credentials, fetchImpl) {
+  const clients = actorClients(state, credentials, fetchImpl);
+  const sessions = {};
+  for (const actorClass of ACTOR_CLASSES) {
+    const session = await clients[actorClass].sessionIfRegistered();
+    sessions[actorClass] = session === null
+      ? null
+      : sessionIds(session, actorClass);
+  }
+  if (state.actors.operator === null) {
+    // Reversible resources are created only after the all-actor snapshot is
+    // durably written. A pre-snapshot failure can leave durable pool accounts,
+    // but it cannot leave a canary token or temporary Mind.
+    return;
+  }
+  if (ACTOR_CLASSES.some((actorClass) => sessions[actorClass] === null)) {
+    fail("cleanup_actor_session_missing");
+  }
+  assertSameActors(state, sessions);
+  await revokeNamedTokens(state, clients);
+  await deleteTemporaryMind(state, clients);
+  await revokeNamedTokens(state, clients);
 }
 
 async function closeLocalState(state, status) {
@@ -844,47 +1257,109 @@ export async function run(options, {
   environment = process.env,
   fetchImpl = globalThis.fetch,
   now = () => new Date().toISOString(),
+  nonceFactory = () => randomBytes(16).toString("hex"),
 } = {}) {
+  if (!new Set(["setup", "verify", "cleanup", "recovery"]).has(options?.phase)) {
+    fail("invalid_phase");
+  }
   if (options.phase === "setup") {
     if (!options.state_out) fail("missing_state_out");
     if (typeof fetchImpl !== "function") fail("fetch_unavailable");
-    const initial = makeState(options);
+    const initial = makeState(options, nonceFactory);
     await writeJson(options.state_out, initial);
-    const prepared = await setup(
-      initial,
-      loadCredentialEnvironment(environment),
-      fetchImpl,
-    );
-    await writeJson(options.state_out, prepared);
-    return Object.freeze({
-      status: "ready_for_verify",
-      state_path: options.state_out,
-      run_fingerprint: prepared.run_fingerprint,
-    });
+    let recoveryState = initial;
+    try {
+      const prepared = await setup(
+        initial,
+        loadCredentialEnvironment(environment),
+        fetchImpl,
+        now,
+        async (actorState) => {
+          recoveryState = actorState;
+          await writeJson(options.state_out, actorState);
+        },
+      );
+      await writeJson(options.state_out, prepared);
+      return Object.freeze({
+        status: "ready_for_verify",
+        state_path: options.state_out,
+        run_fingerprint: prepared.run_fingerprint,
+      });
+    } catch (error) {
+      await writeJson(
+        options.state_out,
+        await closeLocalState(recoveryState, "recovery_required"),
+      );
+      throw error;
+    }
   }
   if (!options.state) fail("missing_state");
   const state = await readState(options.state);
   if (options.phase === "verify") {
+    if (state.status !== "ready_for_verify") fail("setup_not_complete");
     if (!options.evidence_out) fail("missing_evidence_out");
     if (typeof fetchImpl !== "function") fail("fetch_unavailable");
     if (
       options.deployment_id !== undefined &&
       deploymentId(options.deployment_id) !== state.deployment_id
     ) fail("deployment_changed_since_setup");
-    const evidence = await verify(
-      state,
-      loadCredentialEnvironment(environment),
-      fetchImpl,
-      now,
-    );
-    await writeJson(options.evidence_out, evidence);
-    await writeJson(options.state, await closeLocalState(state, "verified"));
-    return Object.freeze({
-      status: "passed",
-      evidence_path: options.evidence_out,
-      artifact_sha256: evidence.artifact_sha256,
-    });
+    const credentials = loadCredentialEnvironment(environment);
+    try {
+      const clients = actorClients(state, credentials, fetchImpl);
+      const sessions = await readSessions(clients, state);
+      await withReadOnlyTokens(state, clients, now, "verify", async () => {
+        for (const actorClass of ACTOR_CLASSES) {
+          await clients[actorClass].mcp("list_minds");
+        }
+        await verifyDirectory(state, clients, sessions);
+      });
+      await cleanupProductResources(state, credentials, fetchImpl);
+      const evidence = createEvidence({
+        candidateSha: state.candidate_sha,
+        deploymentId: state.deployment_id,
+        runFingerprint: state.run_fingerprint,
+        actors: state.actors,
+        observedAtUtc: now(),
+      });
+      await writeJson(options.evidence_out, evidence);
+      await writeJson(options.state, await closeLocalState(state, "verified"));
+      return Object.freeze({
+        status: "passed",
+        evidence_path: options.evidence_out,
+        artifact_sha256: evidence.artifact_sha256,
+      });
+    } catch (error) {
+      try {
+        await cleanupProductResources(state, credentials, fetchImpl);
+      } catch {
+        // The deterministic names in state remain the recovery carrier.
+      }
+      await writeJson(
+        options.state,
+        await closeLocalState(state, "recovery_required"),
+      );
+      throw error;
+    }
   }
+  if (!options.evidence_out) fail("missing_cleanup_evidence_out");
+  if (typeof fetchImpl !== "function") fail("fetch_unavailable");
+  if (
+    options.deployment_id !== undefined &&
+    deploymentId(options.deployment_id) !== state.deployment_id
+  ) fail("deployment_changed_since_setup");
+  await cleanupProductResources(
+    state,
+    loadCredentialEnvironment(environment),
+    fetchImpl,
+  );
+  const cleanupEvidence = createCleanupEvidence({
+    phase: options.phase,
+    candidateSha: state.candidate_sha,
+    deploymentId: state.deployment_id,
+    runFingerprint: state.run_fingerprint,
+    observedAtUtc: now(),
+  });
+  await writeJson(options.evidence_out, cleanupEvidence);
   const terminal = await closeLocalState(
     state,
     options.phase === "cleanup" ? "cleaned" : "recovered",
@@ -894,11 +1369,13 @@ export async function run(options, {
     status: terminal.status,
     state_path: options.state,
     run_fingerprint: terminal.run_fingerprint,
+    evidence_path: options.evidence_out,
+    artifact_sha256: cleanupEvidence.artifact_sha256,
   });
 }
 
 function help() {
-  return `Usage:\n  npm run uat:operator-directory-canary -- --phase setup --candidate-sha <sha> --deployment-id <id> --state-out <private-path>\n  npm run uat:operator-directory-canary -- --phase verify --deployment-id <same-id> --state <private-path> --evidence-out <private-path>\n  npm run uat:operator-directory-canary -- --phase cleanup --state <private-path>\n  npm run uat:operator-directory-canary -- --phase recovery --state <private-path>\n\nAll three Sites sessions and MCP tokens are read only from MIND_DIARY_UAT_{OPERATOR,MIND_ROLE,ORDINARY}_{SITES_TOKEN,MCP_TOKEN}. Identity, email and credentials are not CLI inputs.`;
+  return `Usage:\n  npm run uat:operator-directory-canary -- --phase setup --candidate-sha <sha> --deployment-id <id> --state-out <private-path>\n  npm run uat:operator-directory-canary -- --phase verify --deployment-id <same-id> --state <private-path> --evidence-out <private-path>\n  npm run uat:operator-directory-canary -- --phase cleanup --deployment-id <same-id> --state <private-path> --evidence-out <private-path>\n  npm run uat:operator-directory-canary -- --phase recovery --deployment-id <same-id> --state <private-path> --evidence-out <private-path>\n\nThe three distinct Sites sessions are read only from MIND_DIARY_UAT_{OPERATOR,MIND_ROLE,ORDINARY}_SITES_TOKEN. The runner performs normal product bootstrap, issues and revokes named one-hour content:read MCP tokens, and deletes its deterministic temporary ordinary Mind. Identity, email and credentials are not CLI inputs or evidence fields.`;
 }
 
 async function main() {
