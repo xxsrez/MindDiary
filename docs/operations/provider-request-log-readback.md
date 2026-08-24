@@ -88,10 +88,22 @@ reference. Имена реальных provider fields и их значения 
 6. Если пользователь принимает bounded UAT boundary, записать отдельную
    classification-only authority evidence reference. Без неё общий status не
    может стать `accepted_boundary`, даже если все provider facts прочитаны.
-7. Создать и verify receipt helper-ом
-   `scripts/lib/provider-request-log-boundary.mjs`. Он запрещает дополнительные
-   поля, URL/email/credential-shaped values, произвольные locators и
-   `accepted_boundary` без authority evidence.
+7. Поместить только classification input в новый mode-private файл (`0600`) и
+   создать receipt исполняемым adapter-ом:
+
+   ```text
+   npm run uat:provider-log-boundary -- \
+     --input <private-classification.json> \
+     --evidence-out <new-private-evidence.json>
+   ```
+
+   Adapter использует `scripts/lib/provider-request-log-boundary.mjs`, требует
+   отдельные input/output paths, не перезаписывает существующий artifact и
+   создаёт output с mode `0600`. Closed input не содержит schema для raw logs:
+   он состоит только из exact lineage, application/provider classifications,
+   safe evidence locators/hashes и authority marker. Дополнительные поля,
+   URL/email/credential-shaped values, произвольные locators и
+   `accepted_boundary` без authority evidence отклоняются.
 8. Перечитать deployment identity и artifact hash receipt. Raw provider facts,
    request samples и временные inspection artifacts удалить по согласованной
    provider/local procedure; в repository/Task/evidence их не добавлять.
@@ -115,6 +127,25 @@ status `unknown` и `authority.status=required`; это шаблон незак�
 - `not_available`: provider не даёт прочитать/уменьшить все необходимые классы,
   а явного bounded acceptance ещё нет; требуется решение принять остаточную
   границу либо сменить provider/configuration.
+
+### Restricted-UAT residual decision
+
+Для Release 0.1 владелец разрешил bounded classification-only inspection и
+принял следующий остаточный boundary только для restricted UAT:
+
+- ноль событий в доступном Sites worker-log read-back после synthetic request
+  означает `not_available`, а не доказанное отсутствие provider envelope;
+- отсутствие callable retention/reduction/deletion controls также означает
+  `not_available`, а не `passed`;
+- такие classifications могут дать общий `accepted_boundary` только с
+  отдельным `authority.status=recorded`, passing application regressions,
+  exact final candidate/version/deployment, synthetic data, exact custom
+  audience и `production_excluded=true`;
+- появление доступного sensitive provider field/control либо drift lineage
+  требует нового решения и до него fail closed.
+
+Это не production privacy policy, не обещание provider retention и не
+утверждение, что IP/User-Agent/request target никогда не создаются платформой.
 
 ## Что никогда не попадает в durable receipt
 

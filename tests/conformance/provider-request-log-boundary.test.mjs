@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 
 import {
@@ -9,6 +11,10 @@ import {
   createProviderRequestLogBoundaryReceipt,
   verifyProviderRequestLogBoundaryReceipt,
 } from "../../scripts/lib/provider-request-log-boundary.mjs";
+import {
+  parseCli,
+  run as runProviderBoundary,
+} from "../../scripts/run-provider-request-log-boundary.mjs";
 
 const FIXTURE_URL = new URL("../fixtures/provider-request-log-boundary.json", import.meta.url);
 const EVIDENCE = Object.freeze({
@@ -80,6 +86,69 @@ test("not-available controls remain non-success until the boundary is explicitly
     authority: { status: "required", evidence: null },
   });
   assert.equal(pending.status, "not_available");
+
+  const accepted = createProviderRequestLogBoundaryReceipt({
+    candidate_sha: source.candidate_sha,
+    deployment: source.deployment,
+    observed_at_utc: source.observed_at_utc,
+    application_evidence: source.application_evidence,
+    provider_evidence: unavailable,
+    authority: { status: "recorded", evidence: EVIDENCE },
+  });
+  assert.equal(accepted.status, "accepted_boundary");
+});
+
+test("classification-only CLI writes one new mode-private accepted receipt", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "mind-diary-provider-boundary-"));
+  try {
+    const source = await fixture();
+    const inputPath = join(directory, "input.json");
+    const outputPath = join(directory, "evidence.json");
+    const input = {
+      candidate_sha: source.candidate_sha,
+      deployment: source.deployment,
+      observed_at_utc: source.observed_at_utc,
+      application_evidence: source.application_evidence,
+      provider_evidence: source.provider_evidence.map((entry) => ({
+        ...entry,
+        status: "not_available",
+        evidence: EVIDENCE,
+      })),
+      authority: { status: "recorded", evidence: EVIDENCE },
+    };
+    await writeFile(inputPath, `${JSON.stringify(input)}\n`, { mode: 0o600 });
+    const result = await runProviderBoundary({
+      input: inputPath,
+      evidence_out: outputPath,
+    });
+    assert.equal(result.status, "accepted_boundary");
+    const evidence = verifyProviderRequestLogBoundaryReceipt(
+      JSON.parse(await readFile(outputPath, "utf8")),
+    );
+    assert.equal(evidence.status, "accepted_boundary");
+    assert.equal((await stat(outputPath)).mode & 0o777, 0o600);
+    await assert.rejects(
+      runProviderBoundary({ input: inputPath, evidence_out: outputPath }),
+      (error) => error instanceof ProviderRequestLogBoundaryError &&
+        error.code === "evidence_output_exists",
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("classification CLI accepts only separate input/output paths", () => {
+  assert.deepEqual(parseCli(["--help"]), { help: true });
+  assert.throws(
+    () => parseCli(["--input", "/private/tmp/same", "--evidence-out", "/private/tmp/same"]),
+    (error) => error instanceof ProviderRequestLogBoundaryError &&
+      error.code === "input_output_path_collision",
+  );
+  assert.throws(
+    () => parseCli(["--input", "/private/tmp/input", "--raw-log", "/private/tmp/raw"]),
+    (error) => error instanceof ProviderRequestLogBoundaryError &&
+      error.code === "invalid_cli_arguments",
+  );
 });
 
 test("receipt rejects raw request values, arbitrary locators and unclassified fields without echoing them", async () => {
