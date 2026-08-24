@@ -452,9 +452,8 @@ Bounded pilot начинается только после показа учас
   token, authorization header или signed/download URL.
 
 Deployable UAT telemetry использует closed privacy-safe event projection:
-`metric`, `surface`, `operation`, `outcome`, unit/value, UTC timestamp, exact
-deployable lineage и только opaque bounded request/job/benchmark correlation.
-Она классифицирует setup,
+`metric`, `surface`, `operation`, `outcome`, unit/value, UTC timestamp и только
+opaque bounded request/job/benchmark correlation. Она классифицирует setup,
 authentication/MCP request failures, request latency, CAS conflicts, index/export
 lag, token/invitation/deletion outcomes и storage/runtime unavailability. Sink
 fail closed отклоняет дополнительные поля; application outcome не зависит от
@@ -470,26 +469,32 @@ operation с одним opaque request ID; MCP публикует profile, пр�
 tool operation с request ID того же вызова. Mind selector, revision, query,
 result path и response body в dimensions не попадают.
 
-Deployable projection дополнительно содержит exact `candidateSha`,
-`siteVersionId`, `deploymentId` и nullable `benchmarkCorrelationId`. Обычный
-traffic оставляет последний `null`. Performance runner выдаёт отдельный
-`benchmark_*` каждому sample; web/MCP response возвращает его и
+Deployable runtime projection v2 дополнительно содержит nullable
+`benchmarkCorrelationId`; обычный traffic оставляет его `null`. Performance
+runner выдаёт отдельный
+`benchmark_*` каждому sample и подписывает deployment HMAC; web/MCP response
+возвращает только valid ID и
 server-generated request ID только в bounded response headers, а telemetry
 повторяет оба opaque IDs. Значения не дают capability и не содержат principal,
 Mind, revision или query.
 
+Отдельный trusted Sites control-plane collector связывает runtime events с
+exact candidate/project/version/deployment/archive и выпускает closed
+performance projection, где каждая строка содержит `candidateSha`,
+`siteVersionId` и `deploymentId`. Runtime env и CLI declaration не заменяют
+control-plane join и не считаются attestation.
+
 Gate фиксирует один first-observed и не менее 20 warm samples каждого request,
 обязательно покрывает web, modern и compatibility profiles и связывает server
 latency только с distinct exact-lineage request/correlation-ID groups actual
-runner window. HTTP `200`
-не считается MCP success без matching JSON-RPC result,
+runner window. HTTP `200` не считается MCP success без matching JSON-RPC result,
 `isError === false` и structured success. Scale matrix принимается только из
 hashed exact-SHA/deployment provision+read-back receipt: observed и expected
 counts обязаны совпасть сразу по Minds, revisions, files и bytes; scenario
 declaration не является evidence. Receipt также keyed-HMAC связывает actual
 fixture credential, а hashed canonical arguments — exact selected fixture.
-Missing/mismatched/out-of-window telemetry,
-неполный profile/read-back либо превышение budget fail closed. При этом
+Missing/mismatched/out-of-window telemetry, неполный profile/read-back либо
+превышение budget fail closed. При этом
 telemetry sink остаётся best-effort и его отказ не меняет application outcome.
 
 Operator использует bounded recent logs, exact current deployment и заранее

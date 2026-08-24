@@ -169,6 +169,8 @@ export interface ProductSiteRuntimeOptions {
   readonly locatorKey: Uint8Array;
   readonly exportDownloadVerifierKey: Uint8Array;
   readonly csrfKey: Uint8Array;
+  /** Optional 256-bit gate-only key authenticating bounded benchmark correlation. */
+  readonly performanceCorrelationKey?: Uint8Array;
   /** Constructor-only service authority. Missing/empty configuration fails closed. */
   readonly serviceOperatorPrincipalIds?: readonly string[];
   /** Constructor-only environment class. Missing/unknown configuration keeps the canary absent. */
@@ -300,6 +302,17 @@ function benchmarkCorrelationId(request: Request): string | null {
   return value !== null && /^benchmark_[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$/u.test(value)
     ? value
     : null;
+}
+
+function performanceCorrelationSignature(request: Request): Uint8Array | null {
+  const value = request.headers.get("x-mind-diary-performance-correlation-signature");
+  const match = /^hmac-sha256:([0-9a-f]{64})$/u.exec(value ?? "");
+  if (match === null) return null;
+  return Uint8Array.from(match[1]!.match(/.{2}/gu)!, (byte) => Number.parseInt(byte, 16));
+}
+
+function performanceCorrelationMessage(id: string): Uint8Array {
+  return new TextEncoder().encode(`mind-diary/performance-correlation/v1\0${id}`);
 }
 
 function canonicalHost(origin: string) {
@@ -633,6 +646,51 @@ export async function createProductSiteRuntime(
   }
   const now = options.now ?? (() => new Date());
   const clock = Object.freeze({ now: () => now().toISOString() as never });
+  if (
+    options.performanceCorrelationKey !== undefined &&
+    options.performanceCorrelationKey.byteLength !== 32
+  ) throw new TypeError("performanceCorrelationKey must contain exactly 32 bytes");
+  let performanceCorrelationCryptoKey: CryptoKey | null = null;
+  if (options.performanceCorrelationKey !== undefined) {
+    const keyMaterial = Uint8Array.from(options.performanceCorrelationKey);
+    try {
+      performanceCorrelationCryptoKey = await crypto.subtle.importKey(
+        "raw",
+        keyMaterial.buffer,
+        { name: "HMAC", hash: "SHA-256" },
+        false,
+        ["verify"],
+      );
+    } finally {
+      keyMaterial.fill(0);
+    }
+  }
+  const trustedPerformanceRequest = async (request: Request): Promise<Request> => {
+    const correlationId = benchmarkCorrelationId(request);
+    const signature = performanceCorrelationSignature(request);
+    const headers = new Headers(request.headers);
+    headers.delete("x-mind-diary-performance-correlation-signature");
+    let verified = false;
+    if (
+      correlationId !== null && signature !== null &&
+      performanceCorrelationCryptoKey !== null
+    ) {
+      try {
+        const signatureBytes = Uint8Array.from(signature);
+        const messageBytes = Uint8Array.from(performanceCorrelationMessage(correlationId));
+        verified = await crypto.subtle.verify(
+          "HMAC",
+          performanceCorrelationCryptoKey,
+          signatureBytes.buffer,
+          messageBytes.buffer,
+        );
+      } catch {
+        verified = false;
+      }
+    }
+    if (!verified) headers.delete("x-mind-diary-performance-correlation-id");
+    return new Request(request, { headers });
+  };
   const pendingIndexJobs: string[] = [];
   const pendingAuditOutbox: string[] = [];
   const pendingInvitationExpiry: string[] = [];
@@ -1955,6 +2013,7 @@ export async function createProductSiteRuntime(
     generatedFileIngress,
     recoverBackground,
     async fetch(request: Request): Promise<Response | null> {
+      request = await trustedPerformanceRequest(request);
       const path = new URL(request.url).pathname;
       const oauthResponse = await oauth.fetch(request);
       if (oauthResponse !== null) return oauthResponse;

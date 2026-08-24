@@ -1,12 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { waitForTelemetry } from "../../scripts/benchmark-runtime-performance.mjs";
+
 import {
   PERFORMANCE_BUDGETS_MS,
   PERFORMANCE_TELEMETRY_EVENT,
   PERFORMANCE_TELEMETRY_SCHEMA,
   evaluatePerformanceGate,
   parsePerformanceTelemetryJsonl,
+  performanceGateNeedsTelemetryRetry,
   percentile,
   validatePerformanceScenario,
   verifyPerformanceScenarioCredentialBindings,
@@ -208,6 +211,7 @@ function rawScenario() {
     warm_samples: 20,
     telemetry_wait_seconds: 0,
     credential_binding_key_env: "MIND_DIARY_PERFORMANCE_BINDING_KEY",
+    performance_correlation_key_env: "MIND_DIARY_PERFORMANCE_CORRELATION_KEY",
     requests,
   };
 }
@@ -344,6 +348,46 @@ test("nearest-rank percentile is deterministic", () => {
   assert.equal(percentile([4, 1, 3, 2, 5], 0.95), 5);
   assert.equal(percentile(samples(7), 0.95), 7);
   assert.equal(percentile([], 0.95), null);
+});
+
+test("runner keeps polling while a valid telemetry capture is still finalizing", () => {
+  assert.equal(performanceGateNeedsTelemetryRetry({
+    failures: ["telemetry_capture_window_mismatch"],
+  }), true);
+  assert.equal(performanceGateNeedsTelemetryRetry({
+    failures: ["telemetry_capture_event_count_mismatch"],
+  }), true);
+  assert.equal(performanceGateNeedsTelemetryRetry({
+    failures: ["telemetry_capture_lineage_mismatch"],
+  }), false);
+});
+
+test("runner fails immediately on a semantically invalid control-plane capture", async () => {
+  const input = fixture();
+  const telemetryJsonl = `${input.server_telemetry.map((item) => JSON.stringify(item)).join("\n")}\n`;
+  const invalidCapture = JSON.stringify({
+    ...input.telemetry_capture,
+    generator: "mind-diary/untrusted-runtime-self-attestation/v1",
+  });
+  let reads = 0;
+  let sleeps = 0;
+  await assert.rejects(
+    waitForTelemetry({
+      telemetryPath: "telemetry.jsonl",
+      telemetryCapturePath: "capture.json",
+      timeoutSeconds: 300,
+      evaluation: {},
+    }, {
+      readText: async (path) => {
+        reads += 1;
+        return path === "telemetry.jsonl" ? telemetryJsonl : invalidCapture;
+      },
+      sleep: async () => { sleeps += 1; },
+    }),
+    (error) => error?.code === "invalid_control_plane_capture",
+  );
+  assert.equal(reads, 2);
+  assert.equal(sleeps, 0);
 });
 
 test("profile receipt verifies observed Minds, revisions, files and bytes and rejects tampering", () => {

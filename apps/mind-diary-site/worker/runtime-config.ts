@@ -13,6 +13,7 @@ export interface ProductEnv {
   readonly MIND_DIARY_CAPACITY_PROFILE?: string;
   readonly MIND_DIARY_RELEASE_CANDIDATE_SHA?: string;
   readonly MIND_DIARY_CAPACITY_FENCE_NONCE?: string;
+  readonly MIND_DIARY_PERFORMANCE_CORRELATION_KEY?: string;
 }
 
 function deploymentClass(
@@ -121,6 +122,10 @@ function capacityConfiguration(
   });
 }
 
+function decodeOptionalKey(value: string | undefined, name: string): Uint8Array | undefined {
+  return value === undefined || value === "" ? undefined : decodeKey(value, name);
+}
+
 function isCanonicalOrigin(value: string, protocol: "http:" | "https:"): boolean {
   const parsed = new URL(value);
   return parsed.protocol === protocol && parsed.origin === value && parsed.pathname === "/";
@@ -172,12 +177,17 @@ export function readRuntimeConfig(request: Request, env: ProductEnv) {
     env.MIND_DIARY_CAPACITY_FENCE_NONCE,
     operatorPrincipalIds,
   );
+  const performanceCorrelationKey = decodeOptionalKey(
+    env.MIND_DIARY_PERFORMANCE_CORRELATION_KEY,
+    "MIND_DIARY_PERFORMANCE_CORRELATION_KEY",
+  );
   return Object.freeze({
     publicOrigin,
     tokenVerifierKey: decodeKey(env.MIND_DIARY_TOKEN_VERIFIER_KEY, "MIND_DIARY_TOKEN_VERIFIER_KEY"),
     locatorKey: decodeKey(env.MIND_DIARY_LOCATOR_KEY, "MIND_DIARY_LOCATOR_KEY"),
     exportDownloadVerifierKey: decodeKey(env.MIND_DIARY_EXPORT_DOWNLOAD_VERIFIER_KEY, "MIND_DIARY_EXPORT_DOWNLOAD_VERIFIER_KEY"),
     csrfKey: decodeKey(env.MIND_DIARY_CSRF_KEY, "MIND_DIARY_CSRF_KEY"),
+    ...(performanceCorrelationKey === undefined ? {} : { performanceCorrelationKey }),
     serviceOperatorPrincipalIds: operatorPrincipalIds,
     deploymentClass: deploymentClass(env.MIND_DIARY_DEPLOYMENT_CLASS),
     ...capacity,
