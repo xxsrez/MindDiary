@@ -32,6 +32,7 @@
     "uat:multi-principal": "node scripts/run-uat-multi-principal-probe.mjs",
     "uat:operator-directory-canary": "node scripts/run-uat-operator-directory-canary.mjs",
     "uat:provider-log-boundary": "node scripts/run-provider-request-log-boundary.mjs",
+    "uat:storage-matrix": "node scripts/run-uat-storage-matrix.mjs",
     "readiness:report": "node scripts/generate-readiness-report.mjs --sha HEAD --output build/readiness-report.json",
     "check": "npm run clean && npm run build && node --test tests/unit/*.test.mjs tests/integration/*.test.mjs tests/conformance/*.test.mjs && npm run validate:fixtures && npm run check:architecture && npm run check:product-site && npm run check:docs && npm run check:secrets && node scripts/generate-readiness-report.mjs --sha HEAD --output build/readiness-report.json --local-gate-status passed"
   },

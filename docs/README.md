@@ -112,6 +112,9 @@ evidence, предлагаемый дизайн и ещё не проверен�
 - [Hosted canary операторского каталога](operations/uat-operator-directory-canary.md)
   — three-actor restricted-UAT setup/verify/cleanup/recovery с
   environment-only session references, exact `404` boundary и redacted receipt.
+- [Stateful UAT storage/import/export matrix](operations/uat-storage-matrix.md)
+  — exact Brain-scale Markdown fixture, REST multipart checkpoint до redeploy,
+  modern/compat MCP и export SHA read-back, recovery и run-owned cleanup.
 - [Protocol assisted UAT pilot и feedback loop](operations/uat-pilot-protocol.md)
   — последовательные assisted/external cohorts, один feedback channel,
   privacy-safe metrics, cadence, feedback template, decision review и
