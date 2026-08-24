@@ -16,14 +16,15 @@ Pilot проверяет один job-to-be-done:
 Владелец pilot и feedback queue — владелец проекта Mind Diary, который в
 конкретном release действует как UAT release coordinator. Только он допускает
 участника, связывает observation с exact candidate/deployment, проводит review
-и создаёт redacted Linear defect. Делегирование этой роли требует отдельной
+и создаёт redacted Task Manager defect task/comment. Делегирование этой роли
+требует отдельной
 явной записи до admission; несколько параллельных feedback queues запрещены.
 
 Единственный feedback channel для участника — тот же one-to-one trusted channel,
 через который владелец пригласил его в pilot и получил подтверждение UAT notice.
 Форма, публичный чат, общий credential, automatic outbound campaign и новый
 support channel не создаются. Identity и контакт остаются только в Sites access
-policy и исходном trusted channel; repository, Linear и release evidence
+policy и исходном trusted channel; repository, Task Manager и release evidence
 используют случайный opaque participant fingerprint без обратимого отображения.
 
 Pilot начинается только после passing `AND-161` exact-candidate join-gate.
@@ -57,7 +58,7 @@ workflow или bounded existing Markdown set, понимает restricted UAT b
 
 1. передаёт notice из UAT runbook и получает явное подтверждение;
 2. присваивает случайный opaque fingerprint вида `pilot-<random>`; identity не
-   кодируется в fingerprint и mapping не записывается в repository/Linear;
+   кодируется в fingerprint и mapping не записывается в repository/Task Manager;
 3. фиксирует `assisted | external`, exact UAT candidate/version/deployment и
    UTC admission time;
 4. добавляет ровно выбранный Sites principal и проверяет isolated account по
@@ -164,7 +165,7 @@ Setup friction
 Operational defect
 - Defect present: yes | no
 - Safe request ID and UTC only: <opaque or absent>
-- Linear issue: <identifier or absent>
+- Task Manager task/comment: <canonical ref or absent>
 
 Return and intent
 - Week-1 return: yes | no-observation | not-due
@@ -179,7 +180,7 @@ Privacy check
 
 Product usefulness, setup friction и operational defect заполняются отдельно:
 одна удачная demo не скрывает setup cost, а operational outage не доказывает
-отсутствие product value. Material defect создаётся в Linear только из
+отсутствие product value. Material defect создаётся в Task Manager только из
 redacted operational section и exact release evidence; participant feedback
 не превращается автоматически в feature request.
 

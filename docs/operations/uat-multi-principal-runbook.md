@@ -23,7 +23,7 @@ machine credential, придуманная identity и production audience за�
 3. Оба principals самостоятельно входят в Sites. Для automation каждый
    предоставляет отдельную short-lived Sites session reference. Secret
    передаётся только через локальный secret channel и environment, не через
-   shell history, repository, Linear или evidence.
+   shell history, repository, Task Manager или evidence.
 4. Каждый principal создаёт отдельный named read-only MCP token специально для
    probe. Secret и opaque token ID передаются через environment; после проверки
    probe отзывает оба token. Existing personal token использовать нельзя.

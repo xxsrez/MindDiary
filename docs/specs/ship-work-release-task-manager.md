@@ -5,8 +5,11 @@
 Документ задаёт provider-neutral boundary между универсальным
 [`ship-work-release`](ship-work-release.md) и task-management system. Конкретный
 provider реализует этот contract в отдельной adapter specification и
-lazy-loaded skill reference. Например, Linear mapping определён в
-[`ship-work-release-linear.md`](ship-work-release-linear.md).
+отдельном operational runtime reference. Текущая mapping Mind Diary определена
+в [`ship-work-release-task-manager-srez.md`](ship-work-release-task-manager-srez.md),
+а её runtime procedure — в
+[`operations/ship-work-release-task-manager-srez.md`](../operations/ship-work-release-task-manager-srez.md).
+Исторические provider documents не являются current selector или authority.
 
 Contract identity:
 

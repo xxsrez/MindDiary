@@ -66,13 +66,9 @@ evidence, предлагаемый дизайн и ещё не проверен�
 20. [Контракт task-management adapter](specs/ship-work-release-task-manager.md) —
    versioned provider-neutral schema identity, snapshots, mutations,
    reconciliation и capability negotiation task-management backend-а.
-21. [Linear adapter для `ship-work-release`](specs/ship-work-release-linear.md) —
-   отдельное отображение Linear projects, milestones, issues, relations,
-   statuses и updates в универсальную модель work collection/scope/item.
-22. [Упрощённая доставка Linear milestone](specs/ship-linear-release-v1.md) —
-   исполнимый compromise profile `ship-linear-release`: один coordinator,
-   coordinator-only либо exact N worker-субагентов, простой JSON journal,
-   meaningful UAT batches и forward-only repair.
+21. [Task Manager adapter Mind Diary](specs/ship-work-release-task-manager-srez.md) —
+   current Project/Release mapping, stable server instance, bounded reads,
+   versioned task writes и designated scope projection anchor.
 
 ## Руководства
 
@@ -86,6 +82,9 @@ evidence, предлагаемый дизайн и ещё не проверен�
   универсальный UX в Codex Desktop: status, «дойти до точки с запятой»,
   batch/UAT pause, resume, cohort upgrade, task-manager projection, recovery и
   отдельная manual production boundary.
+- [Task Manager runtime reference](operations/ship-work-release-task-manager-srez.md) —
+  exact connector preflight, pagination, versioned status/comments,
+  designated-anchor projection и reconcile-before-retry для Mind Diary.
 - [Профиль доставки Mind Diary](operations/ship-work-release-profile.md) —
   project-specific commands, integration branch, CI, dev launcher, UAT
   URL/evidence и production configuration.
@@ -120,7 +119,7 @@ evidence, предлагаемый дизайн и ещё не проверен�
 - [План запуска MVP 0.1 и сверки token estimate](tasks/2026-08-10-mvp-01-pilot-readiness-estimate.md)
   — независимый model estimate, отдельная user hypothesis, planning allocation
   `AND-150`–`AND-161` и protocol измерения фактического расхода следующего
-  `ship-linear-release`.
+  delivery run.
 
 ## Принятые решения
 
@@ -144,7 +143,8 @@ evidence, предлагаемый дизайн и ещё не проверен�
   отдельный manual-only workflow вне `ship-work-release`.
 - [ADR-0009: универсальный delivery skill и task-manager adapters](decisions/0009-task-manager-adapters.md)
   — принято имя `ship-work-release`, provider-neutral core и отдельные
-  lazy-loaded adapter references, включая Linear.
+  provider adapter/runtime references; amendment 2026-08-24 выбирает current
+  Task Manager mapping и supersede-ит Linear runtime для Mind Diary.
 - [ADR-0010: OAuth-коннектор и Marketplace pilot](decisions/0010-oauth-marketplace-connector.md)
   — приняты dual personal/OAuth authentication, PKCE/DCR, read-first consent,
   rotating refresh и server-side UAT OAuth boundary; distribution-часть для

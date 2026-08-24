@@ -1184,7 +1184,7 @@ canonical phase.
 run: run-17 / revision 43 / work scope 0.2
 snapshot: 2026-08-09T12:30:00Z / age 3s
 owner: session s09 / epoch 4 / cohort c03 / contract abc1234
-scope: adapter tm-linear / collection c17 / scope s02
+scope: adapter task-manager / collection c17 / scope s02
 mode: parallel, 2 lanes / durable / review=manual
 capabilities: dev=required, remote=required, ci=required, uat=required
 work items: 18 total, 7 unfinished, 3 ready

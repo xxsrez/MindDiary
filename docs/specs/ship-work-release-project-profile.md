@@ -77,7 +77,7 @@ Parser обязан:
 Внешняя сущность задаётся объектом `StableRef`:
 
 ```yaml
-provider: linear
+provider: task-manager
 kind: project
 id: 00000000-0000-0000-0000-000000000000
 display_name: Example
@@ -291,31 +291,41 @@ Profile не содержит значения credentials.
 
 ```yaml
 adapter:
-  id: linear
+  id: task-manager
   contract: ship-work-release/task-manager-adapter/v1
-  specification: docs/specs/ship-work-release-linear.md
-  runtime_reference: references/task-manager-linear.md
+  specification: docs/specs/ship-work-release-task-manager-srez.md
+  runtime_reference: docs/operations/ship-work-release-task-manager-srez.md
 provider_instance:
   id: immutable-provider-instance-id
   id_source: null
-collection: { provider: linear, kind: project, id: stable-id }
+collection: { provider: task-manager, kind: project, id: stable-id }
 default_scope:
-  selector: current_project_milestone
+  selector: configured_release
   parameters: {}
 pagination:
   request_timeout_seconds: 60
   connections:
-    scope_items: { page_size: 100, max_pages: 100, max_records: 10000 }
+    scope_items: { page_size: 50, max_pages: 200, max_records: 10000 }
 scope_fact_projection:
-  mode: native_scope
-  capability: provider/native-scope-facts/v1
+  mode: designated_anchor
+  target: { provider: task-manager, kind: task, id: stable-anchor-id }
+  resource_kind: task-comment
+  capability: provider/designated-anchor-comment/v1
+  marker_schema: ship-work-release/provider-scope-fact-marker/v1
+  identity_after_create: exact-comment-ref
+  expected_old: exact-anchor-version-and-predecessor-comment-ref
+  superseding: exact-predecessor-comment-ref
+  idempotency: explicit-key-and-effect-id
+  reconcile: exact-effect-id-marker-and-comment-ref
   unavailable_behavior: block-terminal-projection
 ```
 
 `specification` и `runtime_reference` — repository-relative paths. Первый
-указывает на accepted provider-specific contract, второй — на lazy-loaded
-операционный reference внутри packaged skill. Reference обязан быть производным
-от specification и не становится второй нормой.
+указывает на accepted provider-specific contract, второй — на отдельный
+операционный reference с exact tool sequence и reconcile procedure. Reference
+может находиться в tracked `docs/operations/` либо внутри packaged skill, но не
+может совпадать со specification. Он обязан быть производным от specification
+и не становится второй нормой.
 Collection всегда `StableRef`; selector возвращает exact `scope_ref` и bounded
 item set либо fail closed.
 
@@ -329,13 +339,18 @@ resolved ID сохраняется в `AdapterRef` до mutation. Slug, URL и c
 для identity, scope, relations, closure, catalogs или reconciliation. Для
 каждой обязательны positive `page_size`, `max_pages` и `max_records`, а общий
 `request_timeout_seconds` конечен. Неперечисленная paginated connection либо
-достижение любого bound до terminal cursor дают incomplete snapshot.
+достижение любого bound до terminal cursor дают incomplete snapshot. `page_size`
+не превышает documented maximum exact provider operation; меньший profile bound
+имеет приоритет над более широким transport maximum.
 
 `scope_fact_projection` задаёт ровно один authoritative projection home:
 `native_scope`, `designated_anchor` или `unavailable`. Первые два требуют exact
 target resolver, versioned marker schema, write/reconcile capability и правило
-сохранения созданного provider object ID. `unavailable` разрешает read-only и
-независимую implementation работу, но блокирует terminal scope projection.
+сохранения созданного provider object ID. `designated_anchor` дополнительно
+требует exact anchor `StableRef`, expected-old rule и непрерывную superseding
+chain по exact predecessor object ref; ambiguous head или unknown predecessor
+блокируют projection. `unavailable` разрешает read-only и независимую
+implementation работу, но блокирует terminal scope projection.
 
 `repository` содержит:
 

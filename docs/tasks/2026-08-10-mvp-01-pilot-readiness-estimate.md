@@ -2,10 +2,13 @@
 
 Статус: planned, запуск ещё не начат.
 
-Authoritative scope и lifecycle принадлежат Linear milestone `0.1`:
-`AND-150`–`AND-161`. Этот документ не дублирует task status; он фиксирует
-execution profile, две конкурирующие оценки и способ измерить фактический
-расход после запуска `ship-linear-release`.
+На момент составления плана authoritative scope и lifecycle относились к Linear
+milestone `0.1`: `AND-150`–`AND-161`. Это историческая запись; current authority
+Mind Diary находится в Task Manager Project/Release mapping из
+[`ship-work-release-task-manager-srez.md`](../specs/ship-work-release-task-manager-srez.md).
+Документ не дублирует Task status; он фиксирует execution profile, две
+конкурирующие оценки и способ измерить фактический расход следующего delivery
+run.
 
 ## Что сравниваем
 
@@ -78,7 +81,7 @@ worst cases за project-level percentile.
 ### До первого write
 
 1. Сохранить exact invocation, `workers`, UTC start, current `main` SHA,
-   Linear project/milestone IDs и идентификатор primary rollout.
+   исторические Linear project/milestone IDs и идентификатор primary rollout.
 2. Убедиться, что checkout clean и `main` соответствует ожидаемому remote.
 3. Только когда execution действительно начался, создать pending observation
    `20260810-mvp01-pilot-ready` в `codex-estimator` calibration store.
@@ -108,7 +111,7 @@ worst cases за project-level percentile.
    `actual / 100M` для текущего P50 token forecast. Отдельно отметить,
    подтверждает ли result пользовательскую гипотезу «сотни миллионов», не
    превращая её задним числом в числовой percentile.
-5. Обновить Linear estimates, этот план и calibration store отдельным
+5. Обновить estimates этого исторического плана и calibration store отдельным
    follow-up commit; не называть factor calibrated до трёх сопоставимых
    completed observations.
 
