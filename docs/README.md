@@ -115,6 +115,10 @@ evidence, предлагаемый дизайн и ещё не проверен�
 - [Stateful UAT storage/import/export matrix](operations/uat-storage-matrix.md)
   — exact Brain-scale Markdown fixture, REST multipart checkpoint до redeploy,
   modern/compat MCP и export SHA read-back, recovery и run-owned cleanup.
+- [Hosted canary generated producer ingress](operations/uat-generated-producer-canary.md)
+  — operator-only restricted-UAT проверка `bounded_in_memory` и
+  `server_generated` через distinct redeploy, exact bytes/SHA/history и
+  canary-owned cleanup.
 - [Protocol assisted UAT pilot и feedback loop](operations/uat-pilot-protocol.md)
   — последовательные assisted/external cohorts, один feedback channel,
   privacy-safe metrics, cadence, feedback template, decision review и

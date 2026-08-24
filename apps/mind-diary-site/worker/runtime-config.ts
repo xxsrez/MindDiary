@@ -8,6 +8,17 @@ export interface ProductEnv {
   readonly MIND_DIARY_EXPORT_DOWNLOAD_VERIFIER_KEY?: string;
   readonly MIND_DIARY_CSRF_KEY?: string;
   readonly MIND_DIARY_SERVICE_OPERATOR_PRINCIPAL_IDS?: string;
+  readonly MIND_DIARY_DEPLOYMENT_CLASS?: string;
+}
+
+function deploymentClass(
+  value: string | undefined,
+): "unknown" | "dev" | "uat" | "production" {
+  if (value === undefined || value.trim() === "") return "unknown";
+  if (value === "dev" || value === "uat" || value === "production") return value;
+  throw new Error(
+    "MIND_DIARY_DEPLOYMENT_CLASS must be exactly dev, uat, or production",
+  );
 }
 
 function serviceOperatorPrincipalIds(value: string | undefined): readonly string[] {
@@ -83,5 +94,6 @@ export function readRuntimeConfig(request: Request, env: ProductEnv) {
     serviceOperatorPrincipalIds: serviceOperatorPrincipalIds(
       env.MIND_DIARY_SERVICE_OPERATOR_PRINCIPAL_IDS,
     ),
+    deploymentClass: deploymentClass(env.MIND_DIARY_DEPLOYMENT_CLASS),
   });
 }

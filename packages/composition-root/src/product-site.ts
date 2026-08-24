@@ -128,6 +128,11 @@ import {
   version,
   verifiedSpaceHost,
 } from "@mind-diary/domain";
+import {
+  GeneratedIngressUatCanaryService,
+  createGeneratedIngressUatCanaryHttpHandler,
+  type ProductSiteDeploymentClass,
+} from "./generated-ingress-uat-canary.js";
 
 const PRODUCT_SITES_DEPLOYMENT_CAPABILITIES = Object.freeze([
   "content:browse",
@@ -164,6 +169,8 @@ export interface ProductSiteRuntimeOptions {
   readonly csrfKey: Uint8Array;
   /** Constructor-only service authority. Missing/empty configuration fails closed. */
   readonly serviceOperatorPrincipalIds?: readonly string[];
+  /** Constructor-only environment class. Missing/unknown configuration keeps the canary absent. */
+  readonly deploymentClass?: ProductSiteDeploymentClass;
   /** Constructor-only clock dependency; Product Worker uses the system clock. */
   readonly now?: () => Date;
   readonly observabilityWriter?: SitesObservabilityWriter;
@@ -947,6 +954,25 @@ export async function createProductSiteRuntime(
         ? oauth.authenticator.authenticate(candidate, requestId)
         : personalTokenAuthenticator.authenticate(candidate, requestId);
     },
+  });
+  const generatedIngressCanary = createGeneratedIngressUatCanaryHttpHandler({
+    applicationOrigin: options.publicOrigin,
+    deploymentClass: options.deploymentClass ?? "unknown",
+    resolveIdentity,
+    csrf,
+    service: new GeneratedIngressUatCanaryService({
+      operatorPrincipalIds: configuredOperatorPrincipalIds,
+      authenticator,
+      bindings,
+      discovery,
+      ingress: generatedFileIngress,
+      commit: (request) => runWithCapturedWork(
+        () => commits.commit(request),
+        (result) => result.kind === "committed",
+      ),
+      revisions,
+      revisionStore: metadata,
+    }),
   });
   const mcpDependencies = {
     authenticator,
@@ -1793,6 +1819,8 @@ export async function createProductSiteRuntime(
         const response =
           (await exportDownload(request)) ??
           (await bundleFileDownload(request)) ??
+          (await fileUploadIntent(request)) ??
+          (await generatedIngressCanary(request)) ??
           (await fileUploadIntent(request)) ??
           await web(request);
         if (response !== null) {
