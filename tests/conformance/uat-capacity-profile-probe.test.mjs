@@ -113,6 +113,7 @@ test("capacity UAT snapshot and receipt have exact versioned, redacted schema", 
     releaseConfigurationFenceSha256(),
   );
   assert.equal(evidence.lineage_scope, "runtime_configuration_fence_not_attestation");
+  assert.equal("deployment_id" in evidence, false);
   assert.deepEqual(
     evidence.assertions.map(({ id }) => id),
     CAPACITY_PROFILE_ASSERTION_IDS,
@@ -121,7 +122,7 @@ test("capacity UAT snapshot and receipt have exact versioned, redacted schema", 
   assert.equal(JSON.stringify(evidence).includes("@"), false);
 });
 
-test("capacity UAT snapshot rejects schema drift, changed limits and unbound lineage", () => {
+test("capacity UAT snapshot rejects schema drift, changed limits and wrong configuration fence", () => {
   const { reservations: _missing, ...missingField } = snapshot();
   assert.throws(
     () => validateCapacitySnapshot(missingField),
@@ -186,6 +187,10 @@ test("capacity UAT probe uses only environment credential, rejects query overrid
   });
   assert.throws(
     () => parseCli(["--operator-sites-token", "private"]),
+    (error) => error instanceof ProbeFailure && error.code === "unsupported_cli_argument",
+  );
+  assert.throws(
+    () => parseCli(["--deployment-id", "appgdep_self_certified"]),
     (error) => error instanceof ProbeFailure && error.code === "unsupported_cli_argument",
   );
 

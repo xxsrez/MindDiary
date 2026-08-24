@@ -123,7 +123,7 @@ evidence, предлагаемый дизайн и ещё не проверен�
   `server_generated` через distinct redeploy, exact bytes/SHA/history и
   canary-owned cleanup.
 - [Restricted-UAT capacity profile](operations/uat-capacity-profile.md) —
-  фиксированный 8 MiB per-Mind quota canary, server-bound operator readback,
+  фиксированный 8 MiB per-Mind quota canary, configuration-fenced operator readback,
   warning/soft/hard matrix, redacted receipt и terminal `default-v1` restore.
 - [Protocol assisted UAT pilot и feedback loop](operations/uat-pilot-protocol.md)
   — последовательные assisted/external cohorts, один feedback channel,
