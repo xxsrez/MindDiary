@@ -19,7 +19,7 @@ export const SITES_OBSERVABILITY_ADAPTER =
 export const SITES_OBSERVABILITY_EVENT =
   "mind-diary.privacy-safe-observability" as const;
 export const SITES_OBSERVABILITY_SCHEMA =
-  "mind-diary/privacy-safe-observability/v1" as const;
+  "mind-diary/privacy-safe-observability/v2" as const;
 
 const OBSERVABILITY_EVENT_KEYS = Object.freeze([
   "kind",
@@ -45,6 +45,7 @@ const OBSERVABILITY_COHORTS = new Set<string>(PILOT_COHORTS);
 const SAFE_REQUEST_ID = /^(?:req|request|background-request|download-request)[_-][A-Za-z0-9][A-Za-z0-9._:-]{0,119}$/u;
 const SAFE_JOB_ID = /^(?:(?:job(?:-[a-z]+)?)|export|index|audit|invitation|deletion)[_-][A-Za-z0-9][A-Za-z0-9._:-]{0,119}$/u;
 const SAFE_UTC_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/u;
+const SAFE_BENCHMARK_CORRELATION = /^benchmark_[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$/u;
 
 const OBSERVABILITY_METRIC_UNITS: Readonly<
   Record<PrivacySafeObservabilityMetric, PrivacySafeObservabilityUnit>
@@ -154,6 +155,10 @@ export interface SitesObservabilityWriter {
   write(serializedEvent: string): void | Promise<void>;
 }
 
+export interface SitesObservabilityContext {
+  readonly benchmarkCorrelationId?: (requestId: string | null) => string | null;
+}
+
 const DEFAULT_SITES_OBSERVABILITY_WRITER: SitesObservabilityWriter = Object.freeze({
   write(serializedEvent: string): void {
     console.info(serializedEvent);
@@ -168,28 +173,44 @@ const DEFAULT_SITES_OBSERVABILITY_WRITER: SitesObservabilityWriter = Object.free
 export class SitesPrivacySafeObservabilitySink implements PrivacySafeObservabilitySink {
   readonly kind = "privacy-safe-observability-sink" as const;
   readonly #writer: SitesObservabilityWriter;
+  readonly #benchmarkCorrelationId: (requestId: string | null) => string | null;
 
-  constructor(writer: SitesObservabilityWriter = DEFAULT_SITES_OBSERVABILITY_WRITER) {
+  constructor(
+    writer: SitesObservabilityWriter = DEFAULT_SITES_OBSERVABILITY_WRITER,
+    context: SitesObservabilityContext = Object.freeze({}),
+  ) {
     this.#writer = writer;
+    this.#benchmarkCorrelationId = context.benchmarkCorrelationId ?? (() => null);
   }
 
   record(event: Readonly<PrivacySafeObservabilityEvent>): void | Promise<void> {
     validateObservabilityEvent(event);
     const safe = safeObservabilityProjection(event);
+    let benchmarkCorrelationId: string | null = null;
+    try {
+      const candidate = this.#benchmarkCorrelationId(event.requestId);
+      if (candidate !== null && SAFE_BENCHMARK_CORRELATION.test(candidate)) {
+        benchmarkCorrelationId = candidate;
+      }
+    } catch {
+      benchmarkCorrelationId = null;
+    }
     return this.#writer.write(JSON.stringify({
       event: SITES_OBSERVABILITY_EVENT,
       schema: SITES_OBSERVABILITY_SCHEMA,
       ...safe,
+      benchmarkCorrelationId,
     }));
   }
 }
 
 export function createSitesPrivacySafeObservabilitySink(
   writer?: SitesObservabilityWriter,
+  context?: SitesObservabilityContext,
 ): SitesPrivacySafeObservabilitySink {
   return writer === undefined
-    ? new SitesPrivacySafeObservabilitySink()
-    : new SitesPrivacySafeObservabilitySink(writer);
+    ? new SitesPrivacySafeObservabilitySink(DEFAULT_SITES_OBSERVABILITY_WRITER, context)
+    : new SitesPrivacySafeObservabilitySink(writer, context);
 }
 
 export const SITES_AUDIT_ADAPTER = "sites-d1-privacy-safe-audit" as const;

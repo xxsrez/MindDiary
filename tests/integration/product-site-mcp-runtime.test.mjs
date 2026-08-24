@@ -503,7 +503,7 @@ async function legacyMcp(runtime, secret, body) {
   }));
 }
 
-async function modernMcp(runtime, secret, body) {
+async function modernMcp(runtime, secret, body, benchmarkCorrelationId) {
   return responseFrom(runtime, new Request(`${ORIGIN}${MCP_ENDPOINT}`, {
     method: "POST",
     headers: {
@@ -512,6 +512,9 @@ async function modernMcp(runtime, secret, body) {
       "content-type": "application/json; charset=utf-8",
       "mcp-method": body.method,
       "mcp-protocol-version": MCP_TARGET_PROTOCOL,
+      ...(benchmarkCorrelationId === undefined
+        ? {}
+        : { "x-mind-diary-performance-correlation-id": benchmarkCorrelationId }),
       ...(body.method === "tools/call" && typeof body.params?.name === "string"
         ? { "mcp-name": body.params.name }
         : {}),
@@ -520,7 +523,7 @@ async function modernMcp(runtime, secret, body) {
   }));
 }
 
-async function modernTool(runtime, secret, id, name, args) {
+async function modernTool(runtime, secret, id, name, args, benchmarkCorrelationId) {
   const response = await modernMcp(runtime, secret, {
     jsonrpc: "2.0",
     id,
@@ -537,8 +540,15 @@ async function modernTool(runtime, secret, id, name, args) {
         "io.modelcontextprotocol/clientCapabilities": {},
       },
     },
-  });
+  }, benchmarkCorrelationId);
   assert.equal(response.status, 200, name);
+  assert.match(response.headers.get("x-mind-diary-request-id") ?? "", /^request_/u);
+  if (benchmarkCorrelationId !== undefined) {
+    assert.equal(
+      response.headers.get("x-mind-diary-performance-correlation-id"),
+      benchmarkCorrelationId,
+    );
+  }
   const body = await response.json();
   assert.equal(body.result?.isError, false, `${name}: ${JSON.stringify(body)}`);
   assert.equal(body.result?.structuredContent?.ok, true, name);
@@ -724,8 +734,15 @@ test("empty account reaches a strict starter commit and first useful search/fetc
     schedule(work) { scheduled.push(work); },
   });
 
-  const registration = await responseFrom(runtime, new Request(`${ORIGIN}/`));
+  const registration = await responseFrom(runtime, new Request(`${ORIGIN}/`, {
+    headers: { "x-mind-diary-performance-correlation-id": "benchmark_starter_home" },
+  }));
   assert.equal(registration.status, 200);
+  assert.equal(
+    registration.headers.get("x-mind-diary-performance-correlation-id"),
+    "benchmark_starter_home",
+  );
+  assert.match(registration.headers.get("x-mind-diary-request-id") ?? "", /^request_/u);
   const registrationCsrf = csrfFromHtml(await registration.text());
   const bootstrapped = await responseFrom(runtime, new Request(`${ORIGIN}/api/v1/account`, {
     method: "POST",
@@ -758,7 +775,14 @@ test("empty account reaches a strict starter commit and first useful search/fetc
   assert.equal(issued.status, 200);
   const secret = (await issued.json()).data.secret;
 
-  const minds = await modernTool(runtime, secret, "starter-list", "list_minds", {});
+  const minds = await modernTool(
+    runtime,
+    secret,
+    "starter-list",
+    "list_minds",
+    {},
+    "benchmark_starter_list",
+  );
   const personal = minds.minds.find(({ route }) => route === "/me");
   assert.ok(personal);
   const unboundRead = await modernMcp(runtime, secret, {
@@ -1031,10 +1055,16 @@ test("empty account reaches a strict starter commit and first useful search/fetc
     { mind: "/me", query: "concrete reusable note" },
   );
   assert.equal(
-    (await responseFrom(runtime, new Request(`${ORIGIN}/`))).status,
+    (await responseFrom(runtime, new Request(`${ORIGIN}/`, {
+      headers: { "x-mind-diary-performance-correlation-id": "benchmark_starter_home" },
+    }))).status,
     200,
   );
   const telemetry = telemetryLines.map((line) => JSON.parse(line));
+  assert.ok(telemetry.some(({ benchmarkCorrelationId }) =>
+    benchmarkCorrelationId === "benchmark_starter_home"));
+  assert.ok(telemetry.some(({ benchmarkCorrelationId }) =>
+    benchmarkCorrelationId === "benchmark_starter_list"));
   assert.equal(telemetry.filter(({ metric }) => metric === "setup_completion").length, 1);
   const firstUseful = telemetry.filter(
     ({ metric }) => metric === "time_to_first_useful_search_ms",
@@ -1081,6 +1111,7 @@ test("empty account reaches a strict starter commit and first useful search/fetc
   assert.equal(new Set(webPerformance.map(({ requestId }) => requestId)).size, 1);
   assert.notEqual(webPerformance[0].requestId, null);
   assert.deepEqual(Object.keys(firstUseful[0]).sort(), [
+    "benchmarkCorrelationId",
     "cohort",
     "event",
     "jobId",

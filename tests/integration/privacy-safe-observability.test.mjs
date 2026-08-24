@@ -15,6 +15,7 @@ import {
   createLocalMcpHttpBoundary,
   createLocalPrivacySafeObservabilityBoundary,
 } from "@mind-diary/composition-root";
+import { ContentPrivacySafeObservability } from "@mind-diary/application-content";
 
 const T0 = "2026-08-07T22:00:00.000Z";
 const PRIVATE_QUERY = "private corpus needle";
@@ -305,6 +306,10 @@ test("deployable Sites telemetry emits one closed JSON projection and rejects pr
     write(serializedEvent) {
       lines.push(serializedEvent);
     },
+  }, {
+    benchmarkCorrelationId: (requestId) => requestId === "request_sites_observability_1"
+      ? "benchmark_observability_1"
+      : null,
   });
   sink.record(validEvent({
     requestId: "request_sites_observability_1",
@@ -314,7 +319,9 @@ test("deployable Sites telemetry emits one closed JSON projection and rejects pr
   const event = JSON.parse(lines[0]);
   assert.equal(event.event, SITES_OBSERVABILITY_EVENT);
   assert.equal(event.schema, SITES_OBSERVABILITY_SCHEMA);
+  assert.equal(event.benchmarkCorrelationId, "benchmark_observability_1");
   assert.deepEqual(Object.keys(event).sort(), [
+    "benchmarkCorrelationId",
     "cohort",
     "event",
     "jobId",
@@ -356,4 +363,25 @@ test("deployable Sites telemetry emits one closed JSON projection and rejects pr
     );
   }
   assert.equal(lines.length, 1);
+});
+
+test("performance telemetry sink failure never changes the application outcome", () => {
+  const telemetry = new ContentPrivacySafeObservability({
+    cohort: "external",
+    sink: {
+      kind: "privacy-safe-observability-sink",
+      record() {
+        throw new Error("injected telemetry failure");
+      },
+    },
+  });
+  assert.doesNotThrow(() => telemetry.recordMcpPerformance({
+    requestId: "request_performance_sink_failure_1",
+    occurredAtUtc: T0,
+    durationMs: 12,
+    profile: "mcp_modern",
+    stage: "stage_application",
+    tool: "search",
+    outcome: "success",
+  }));
 });

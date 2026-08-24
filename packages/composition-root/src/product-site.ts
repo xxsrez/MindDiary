@@ -188,6 +188,13 @@ function nextOpaque(prefix: string): never {
   return `${prefix}_${crypto.randomUUID()}` as never;
 }
 
+function benchmarkCorrelationId(request: Request): string | null {
+  const value = request.headers.get("x-mind-diary-performance-correlation-id");
+  return value !== null && /^benchmark_[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$/u.test(value)
+    ? value
+    : null;
+}
+
 function canonicalHost(origin: string) {
   const url = new URL(origin);
   const loopbackHttp = url.protocol === "http:" &&
@@ -584,7 +591,12 @@ export async function createProductSiteRuntime(
     createWebCryptoExportDownloadSecretCrypto({ verifierKey: options.exportDownloadVerifierKey }),
     createCsrf(options.csrfKey),
   ]);
-  const telemetry = createSitesPrivacySafeObservabilitySink(options.observabilityWriter);
+  const benchmarkCorrelations = new Map<string, string>();
+  const telemetry = createSitesPrivacySafeObservabilitySink(options.observabilityWriter, {
+    benchmarkCorrelationId: (requestId) => requestId === null
+      ? null
+      : benchmarkCorrelations.get(requestId) ?? null,
+  });
   const controlObservability = new ControlPrivacySafeObservability({
     sink: telemetry,
     clock,
@@ -905,6 +917,10 @@ export async function createProductSiteRuntime(
   ): Promise<Response> => {
     const startedAt = performance.now();
     const requestId = requestIds().nextRequestId();
+    const performanceCorrelationId = benchmarkCorrelationId(request);
+    if (performanceCorrelationId !== null) {
+      benchmarkCorrelations.set(requestId, performanceCorrelationId);
+    }
     const performanceProfile = profile === "modern"
       ? "mcp_modern" as const
       : "mcp_compatibility" as const;
@@ -1028,9 +1044,24 @@ export async function createProductSiteRuntime(
         },
       },
     };
-    return profile === "modern"
-      ? createMcpHttpHandler(dependencies)(request)
-      : createLegacyCodexMcpHttpHandler(dependencies)(request);
+    let response: Response;
+    try {
+      response = await (profile === "modern"
+        ? createMcpHttpHandler(dependencies)(request)
+        : createLegacyCodexMcpHttpHandler(dependencies)(request));
+    } finally {
+      benchmarkCorrelations.delete(requestId);
+    }
+    const headers = new Headers(response.headers);
+    headers.set("x-mind-diary-request-id", requestId);
+    if (performanceCorrelationId !== null) {
+      headers.set("x-mind-diary-performance-correlation-id", performanceCorrelationId);
+    }
+    return new Response(response.body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers,
+    });
   };
 
   const commonAuditIds = generated;
@@ -1081,19 +1112,26 @@ export async function createProductSiteRuntime(
     csrf,
     performance: {
       record(event) {
-        recordRuntimeMetric(telemetry, {
-          kind: "operational",
-          metric: "request_latency_ms",
-          surface: "control",
-          operation: event.operation,
-          outcome: event.outcome,
-          unit: "milliseconds",
-          value: event.durationMs,
-          occurredAtUtc: clock.now(),
-          requestId: event.requestId as never,
-          jobId: null,
-          cohort: null,
-        });
+        if (event.benchmarkCorrelationId !== null) {
+          benchmarkCorrelations.set(event.requestId, event.benchmarkCorrelationId);
+        }
+        try {
+          recordRuntimeMetric(telemetry, {
+            kind: "operational",
+            metric: "request_latency_ms",
+            surface: "control",
+            operation: event.operation,
+            outcome: event.outcome,
+            unit: "milliseconds",
+            value: event.durationMs,
+            occurredAtUtc: clock.now(),
+            requestId: event.requestId as never,
+            jobId: null,
+            cohort: null,
+          });
+        } finally {
+          benchmarkCorrelations.delete(event.requestId);
+        }
       },
     },
     control: {

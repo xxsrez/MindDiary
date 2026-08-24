@@ -88,6 +88,9 @@ evidence, предлагаемый дизайн и ещё не проверен�
 - [Профиль доставки Mind Diary](operations/ship-work-release-profile.md) —
   project-specific commands, integration branch, CI, dev launcher, UAT
   URL/evidence и production configuration.
+- [Exact-candidate performance gate](operations/performance-gate.md) —
+  machine-verified UAT scale read-back, web/modern/compatibility sampling,
+  request-correlated closed telemetry, blocking budgets и private receipt.
 - [Privacy-safe операции UAT pilot](operations/uat-pilot-operations.md) —
   participant boundaries, closed-schema telemetry, bounded diagnostics,
   token/audience revoke, exact rollback и fixture export/restore drill.
