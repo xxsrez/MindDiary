@@ -12,10 +12,10 @@ path. Он проверяет один exact Git SHA на одном exact Sites
 HTTP status как hosted evidence.
 
 Канонический local scale benchmark
-`npm run benchmark:local-mind-scale` остаётся полезным deterministic preflight для
-`1/10/100` Minds. Synthetic browser gate остаётся проверкой Product Site
-composition. Ни один из них не выдаётся за UAT profile provisioning/read-back
-или latency receipt.
+`npm run benchmark:local-mind-scale` остаётся полезным post-MVP preflight для
+`1/10/100` Minds, но не входит в blocking Release 0.1 acceptance. Synthetic
+browser gate остаётся проверкой Product Site composition. Ни один из них не
+выдаётся за UAT profile provisioning/read-back или latency receipt.
 
 ## Обязательные private inputs
 
@@ -28,17 +28,19 @@ body, query, Mind/revision ID, path, URL download grant или private corpus.
 Перед benchmark отдельный trusted UAT probe нормальными application commands
 создаёт synthetic fixture profiles и затем независимо считывает их состояние.
 Он выпускает hashed receipt
-`mind-diary/performance-profile-readback/v1` с generator
-`mind-diary/uat-profile-provision-readback/v1`.
+`mind-diary/performance-profile-readback/v2` с generator
+`mind-diary/uat-profile-provision-readback/v2`.
 
 Receipt связывает:
 
 - exact `candidate_sha` и полную Sites identity: project, version, deployment и
   SHA-256 опубликованного archive;
 - exact UAT target и canonical UTC provisioning/read-back window;
-- `1/10/100` observed Minds и `1/20/100/1000` observed revisions;
-- Brain Markdown profile не меньше `1741` files / `5,681,704` bytes;
-- mixed corpus не меньше одного file / `590,000,000` bytes;
+- один `starter_small` profile и два `small_history` profiles с exact
+  `1x`/`10x` history;
+- ровно два token-visible synthetic Minds: starter одновременно служит `1x`
+  history fixture и имеет одну revision, второй Mind имеет десять revisions;
+- в каждом profile от `1` до `16` files и от `1` byte до `1 MiB`;
 - для каждой строки distinct opaque provisioning/read-back request IDs,
   fixture fingerprint и exact equality `expected == observed` сразу по
   `minds/revisions/files/bytes`;
@@ -48,34 +50,37 @@ Receipt связывает:
 Safe file/byte read-back берётся из `get_revision.manifest_summary`
 (`file_count`, `total_bytes`), capacity projection и соответствующих normal
 application reads, а не из scenario declaration. Receipt с лишними полями,
-неверным hash, stale SHA/deployment, неполной matrix, отрицательным/нецелым
-count либо несовпадающим read-back отклоняется до первого benchmark request.
+неверным hash, stale SHA/deployment, отсутствующим starter/history profile,
+выходом за small bounds, отрицательным/нецелым count либо несовпадающим
+read-back отклоняется до первого benchmark request.
 HMAC key и credential никогда не входят в receipt: private scenario хранит
 только имя `credential_binding_key_env`, а runner пересчитывает binding из
-actual environment value до первого HTTP request. Поэтому три одинаковых
-`list_minds {}` с произвольным token не могут изображать profiles `1/10/100`.
+actual environment value до первого HTTP request. Поэтому одинаковые
+`list_minds {}` с произвольным token не могут изображать starter и два
+независимо прочитанных history fixtures.
 Отдельный 256-bit key из `performance_correlation_key_env` подписывает каждый
 runner correlation ID и совпадает с deployment secret
 `MIND_DIARY_PERFORMANCE_CORRELATION_KEY`; это не тот же proof, что credential
 binding, и ни одно значение key/signature в evidence не сохраняется.
 
-### Scenario v2
+### Scenario v3
 
-Private scenario имеет schema `mind-diary/performance-scenario/v2`, повторяет
+Private scenario имеет schema `mind-diary/performance-scenario/v3`, повторяет
 exact SHA/deployment/target, задаёт `warm_samples >= 20` и bounded
 `telemetry_wait_seconds <= 300`. Credential values задаются только через имена
 environment variables. Inline `Authorization`, cookie и Sites authorization
 header запрещены.
 
-Каждая из девяти fixture rows выполняется через оба MCP profiles:
+Три fixture profiles выполняются через оба MCP profiles:
 
 - `mcp_modern` — `POST /api/mcp`;
 - `mcp_compatibility` — `POST /api/mcp/2025-11-25`.
 
-В каждом profile обязательно присутствуют `list_minds`, `browse_entries`,
-`search` и `fetch`. Для point-read history задаётся одна пара
-`get_revision` с одинаковым comparison group и scale `1`/`10`. Отдельный
-`web` profile выполняет authenticated `GET /`.
+`starter_small` обязательно покрывает `list_minds`, `browse_entries`, `search`
+и `fetch`. Два `small_history` profiles покрывают пару `get_revision` с
+одинаковым comparison group и scale `1`/`10`. Отдельный `web` profile выполняет
+authenticated `GET /`. Large-corpus, Brain-scale, mixed 590 MB, 100 Minds и
+1000 revisions остаются post-MVP non-blocking capacity checks.
 
 Каждая request definition получает один first-observed sample и ровно
 `warm_samples` warm samples. MCP rows должны быть `tools/call`, а заявленная
@@ -177,12 +182,12 @@ Blocking budgets:
 
 ## Output и cleanup
 
-Report schema `mind-diary/performance-gate/v2` хранит только exact lineage,
+Report schema `mind-diary/performance-gate/v3` хранит только exact lineage,
 UTC window, budgets, fixture fingerprints, observed aggregate counts/bytes,
 aggregate timings, correlation counts, failures и canonical
 `artifact_sha256`. Raw request IDs, headers, body/query и response отсутствуют.
 
-После сохранения receipt operator удаляет synthetic fixture Minds/files normal
-application lifecycle и отдельно проверяет cleanup. Cleanup failure не
+После сохранения receipt operator удаляет оба synthetic fixture Minds/files
+normal application lifecycle и отдельно проверяет cleanup. Cleanup failure не
 переписывает performance result и остаётся release blocker-ом в owning
 capacity/UAT row. Никакой production action этот runbook не разрешает.

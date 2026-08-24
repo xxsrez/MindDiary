@@ -13,15 +13,13 @@ import {
 import {
   createPerformanceCredentialBinding,
   performanceRequestArgumentsDigest,
-  REQUIRED_BRAIN_MARKDOWN,
-  REQUIRED_MIND_COUNTS,
-  REQUIRED_MIXED_CORPUS,
-  REQUIRED_REVISION_COUNTS,
+  REQUIRED_SMALL_HISTORY_REVISION_COUNTS,
+  REQUIRED_STARTER_SMALL,
 } from "./performance-profile-readback.mjs";
 import { verifyPerformanceTelemetryCaptureReceipt } from "./performance-telemetry-capture.mjs";
 
-export const PERFORMANCE_GATE_SCHEMA = "mind-diary/performance-gate/v2";
-export const PERFORMANCE_SCENARIO_SCHEMA = "mind-diary/performance-scenario/v2";
+export const PERFORMANCE_GATE_SCHEMA = "mind-diary/performance-gate/v3";
+export const PERFORMANCE_SCENARIO_SCHEMA = "mind-diary/performance-scenario/v3";
 export const PERFORMANCE_TELEMETRY_EVENT = "mind-diary.performance-gate-telemetry";
 export const PERFORMANCE_TELEMETRY_SCHEMA = "mind-diary/performance-gate-telemetry/v1";
 
@@ -39,10 +37,8 @@ export const PERFORMANCE_BUDGETS_MS = Object.freeze({
 });
 
 export const REQUIRED_PROFILE_MATRIX = Object.freeze({
-  mind_counts: REQUIRED_MIND_COUNTS,
-  revision_counts: REQUIRED_REVISION_COUNTS,
-  brain_markdown_minimum: REQUIRED_BRAIN_MARKDOWN,
-  mixed_corpus_minimum: REQUIRED_MIXED_CORPUS,
+  starter_small: REQUIRED_STARTER_SMALL,
+  history_revision_counts: REQUIRED_SMALL_HISTORY_REVISION_COUNTS,
 });
 
 export const PERFORMANCE_PROFILES = Object.freeze([

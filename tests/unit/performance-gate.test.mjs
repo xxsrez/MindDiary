@@ -57,27 +57,25 @@ function fixtureArguments(id, operation) {
     return { mind: `/performance-${id}`, revision_id: `revision_${id}` };
   }
   if (operation === "browse_entries") {
-    return { mind: "/performance-brain", revision_selector: { kind: "head" } };
+    return { mind: "/performance-starter", revision_selector: { kind: "head" } };
   }
-  if (operation === "fetch") return { id: "entry_performance_brain" };
+  if (operation === "fetch") return { id: "entry_performance_starter" };
   if (operation === "search") {
-    return { mind: "/performance-mixed", query: "synthetic performance marker" };
+    return { mind: "/performance-starter", query: "synthetic performance marker" };
   }
   throw new Error(`unexpected fixture operation ${operation}`);
 }
 
 function operationsForKind(kind) {
-  if (kind === "mind_count") return ["list_minds"];
-  if (kind === "revision_count") return ["get_revision"];
-  if (kind === "brain_markdown") return ["browse_entries", "fetch"];
-  return ["search"];
+  if (kind === "small_history") return ["get_revision"];
+  return ["list_minds", "browse_entries", "search", "fetch"];
 }
 
-function profile(id, kind, observed) {
+function profile(id, kind, observed, fingerprintId = id) {
   return {
     id,
     kind,
-    fixture_fingerprint: `sha256:${id.charCodeAt(0).toString(16).padStart(2, "0").repeat(32)}`,
+    fixture_fingerprint: `sha256:${fingerprintId.charCodeAt(0).toString(16).padStart(2, "0").repeat(32)}`,
     credential_binding: {
       scheme: "hmac-sha256-v1",
       digest: createPerformanceCredentialBinding({
@@ -106,17 +104,11 @@ function profileReceipt() {
     deployment: DEPLOYMENT_RECORD,
     started_at: "2026-08-23T23:55:00.000Z",
     completed_at: "2026-08-23T23:59:00.000Z",
-    generator: "mind-diary/uat-profile-provision-readback/v1",
+    generator: "mind-diary/uat-profile-provision-readback/v2",
     profiles: [
-      profile("minds1", "mind_count", counts({ minds: 1 })),
-      profile("minds10", "mind_count", counts({ minds: 10 })),
-      profile("minds100", "mind_count", counts({ minds: 100 })),
-      profile("revisions1", "revision_count", counts({ revisions: 1 })),
-      profile("revisions20", "revision_count", counts({ revisions: 20 })),
-      profile("revisions100", "revision_count", counts({ revisions: 100 })),
-      profile("revisions1000", "revision_count", counts({ revisions: 1_000 })),
-      profile("brain", "brain_markdown", counts({ files: 1_741, bytes: 5_681_704 })),
-      profile("mixed", "mixed_corpus", counts({ files: 80, bytes: 590_000_000 })),
+      profile("starter", "starter_small", counts({ minds: 2, revisions: 1, files: 2, bytes: 1_024 })),
+      profile("history1", "small_history", counts({ minds: 2, revisions: 1, files: 2, bytes: 1_024 }), "starter"),
+      profile("history10", "small_history", counts({ minds: 2, revisions: 10, files: 1, bytes: 512 })),
     ],
   });
 }
@@ -178,32 +170,28 @@ function rawScenario() {
   }];
   for (const profileName of ["mcp_modern", "mcp_compatibility"]) {
     requests.push(
-      mcpRequest(profileName, "list_minds", "minds1", "minds1"),
-      mcpRequest(profileName, "list_minds", "minds10", "minds10"),
-      mcpRequest(profileName, "list_minds", "minds100", "minds100"),
-      mcpRequest(profileName, "get_revision", "revisions1", "revisions1"),
-      mcpRequest(profileName, "get_revision", "revisions20", "revisions20"),
+      mcpRequest(profileName, "list_minds", "starter", "starter"),
+      mcpRequest(profileName, "browse_entries", "starter", "starter_browse"),
+      mcpRequest(profileName, "search", "starter", "starter_search"),
+      mcpRequest(profileName, "fetch", "starter", "starter_fetch"),
       mcpRequest(
         profileName,
         "get_revision",
-        "revisions100",
-        "revisions100",
+        "history1",
+        "history1",
         { group: "point_history", scale: 1 },
       ),
       mcpRequest(
         profileName,
         "get_revision",
-        "revisions1000",
-        "revisions1000",
+        "history10",
+        "history10",
         { group: "point_history", scale: 10 },
       ),
-      mcpRequest(profileName, "browse_entries", "brain", "brain"),
-      mcpRequest(profileName, "fetch", "brain", "brain_fetch"),
-      mcpRequest(profileName, "search", "mixed", "mixed"),
     );
   }
   return {
-    schema: "mind-diary/performance-scenario/v2",
+    schema: "mind-diary/performance-scenario/v3",
     target_url: TARGET,
     environment: "uat",
     candidate_sha: CANDIDATE,
@@ -393,25 +381,32 @@ test("runner fails immediately on a semantically invalid control-plane capture",
 test("profile receipt verifies observed Minds, revisions, files and bytes and rejects tampering", () => {
   const receipt = profileReceipt();
   assert.deepEqual(verifyPerformanceProfileReadbackReceipt(receipt), receipt);
-  const tampered = structuredClone(receipt);
-  tampered.profiles[7].observed.files = 1_740;
+  const oversized = structuredClone(receipt);
+  oversized.profiles[0].observed.files = 17;
+  oversized.profiles[0].expected.files = 17;
   assert.throws(
-    () => verifyPerformanceProfileReadbackReceipt(tampered),
-    /profile readback rejected/u,
+    () => createPerformanceProfileReadbackReceipt(oversized),
+    /starter_small_profile_incomplete/u,
   );
   const declaredOnly = structuredClone(receipt);
-  declaredOnly.profiles[8].observed.bytes = 590_000_000;
-  declaredOnly.profiles[8].expected.bytes = 590_000_001;
+  declaredOnly.profiles[2].observed.bytes = 512;
+  declaredOnly.profiles[2].expected.bytes = 513;
   assert.throws(
     () => createPerformanceProfileReadbackReceipt(declaredOnly),
     /profile_readback_mismatch/u,
+  );
+  const wrongTopology = structuredClone(receipt);
+  wrongTopology.profiles[1].fixture_fingerprint = wrongTopology.profiles[2].fixture_fingerprint;
+  assert.throws(
+    () => createPerformanceProfileReadbackReceipt(wrongTopology),
+    /small_history_fixture_topology_invalid/u,
   );
 });
 
 test("scenario is exact-SHA/deployment scoped and forbids inline credentials and declared matrix", () => {
   const receipt = profileReceipt();
   const scenario = validatePerformanceScenario(rawScenario(), receipt);
-  assert.equal(scenario.requests.length, 21);
+  assert.equal(scenario.requests.length, 13);
   assert.equal(
     verifyPerformanceScenarioCredentialBindings(scenario, receipt, credentialEnvironment()),
     true,
@@ -439,13 +434,15 @@ test("scenario is exact-SHA/deployment scoped and forbids inline credentials and
     /invalid_mcp_scenario_request/u,
   );
   const wrongFixtureSelection = rawScenario();
-  wrongFixtureSelection.requests[4].body.params.arguments.revision_id = "revision_wrong";
+  const historyRequest = wrongFixtureSelection.requests.find(({ fixture_profile_id }) =>
+    fixture_profile_id === "history1");
+  historyRequest.body.params.arguments.revision_id = "revision_wrong";
   assert.throws(
     () => validatePerformanceScenario(wrongFixtureSelection, receipt),
     /fixture_request_binding_mismatch/u,
   );
   const wrongCredential = credentialEnvironment();
-  wrongCredential[fixtureCredentialEnv("minds10")] = fixtureCredential("minds1");
+  wrongCredential[fixtureCredentialEnv("starter")] = fixtureCredential("history1");
   assert.throws(
     () => verifyPerformanceScenarioCredentialBindings(scenario, receipt, wrongCredential),
     /fixture_credential_binding_mismatch/u,
@@ -457,7 +454,7 @@ test("performance gate passes only correlated web, modern and compatibility cold
   const report = evaluatePerformanceGate(fixture());
   assert.equal(report.status, "passed", JSON.stringify(report.failures));
   assert.deepEqual(report.failures, []);
-  assert.equal(report.connector.length, 21);
+  assert.equal(report.connector.length, 13);
   assert.ok(report.connector.every(({ telemetry_correlated_requests }) =>
     telemetry_correlated_requests === 21));
   assert.equal(report.server.length, 8);
@@ -489,7 +486,7 @@ test("gate fails closed on missing profile, stale telemetry, negative values and
   for (const failure of [
     "profile_coverage_missing:mcp_compatibility",
     "operation_coverage_missing:mcp_compatibility:list_minds",
-    "fixture_profile_unexercised:mcp_compatibility:minds1",
+    "fixture_profile_unexercised:mcp_compatibility:starter",
     "observed_cold_budget_exceeded:web.home",
     "connector_samples_incomplete:web.home",
     "connector_p95_budget_exceeded:web.home",

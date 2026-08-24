@@ -1,20 +1,19 @@
 import { createHash, createHmac } from "node:crypto";
 
 export const PERFORMANCE_PROFILE_READBACK_SCHEMA =
-  "mind-diary/performance-profile-readback/v1";
+  "mind-diary/performance-profile-readback/v2";
 export const PERFORMANCE_PROFILE_READBACK_GENERATOR =
-  "mind-diary/uat-profile-provision-readback/v1";
+  "mind-diary/uat-profile-provision-readback/v2";
 
-export const REQUIRED_MIND_COUNTS = Object.freeze([1, 10, 100]);
-export const REQUIRED_REVISION_COUNTS = Object.freeze([1, 20, 100, 1_000]);
-export const REQUIRED_BRAIN_MARKDOWN = Object.freeze({
-  files: 1_741,
-  bytes: 5_681_704,
+export const REQUIRED_STARTER_SMALL = Object.freeze({
+  minds: 2,
+  revisions: 1,
+  files_min: 1,
+  files_max: 16,
+  bytes_min: 1,
+  bytes_max: 1_048_576,
 });
-export const REQUIRED_MIXED_CORPUS = Object.freeze({
-  files: 1,
-  bytes: 590_000_000,
-});
+export const REQUIRED_SMALL_HISTORY_REVISION_COUNTS = Object.freeze([1, 10]);
 
 const SHA = /^[0-9a-f]{40}$/u;
 const SHA256 = /^sha256:[0-9a-f]{64}$/u;
@@ -55,16 +54,17 @@ const CREDENTIAL_BINDING_KEYS = new Set(["scheme", "digest"]);
 const REQUEST_BINDING_KEYS = new Set(["operation", "arguments_sha256"]);
 const COUNT_KEYS = new Set(["minds", "revisions", "files", "bytes"]);
 const PROFILE_KINDS = new Set([
-  "mind_count",
-  "revision_count",
-  "brain_markdown",
-  "mixed_corpus",
+  "starter_small",
+  "small_history",
 ]);
 const REQUIRED_PROFILE_OPERATIONS = Object.freeze({
-  mind_count: Object.freeze(["list_minds"]),
-  revision_count: Object.freeze(["get_revision"]),
-  brain_markdown: Object.freeze(["browse_entries", "fetch"]),
-  mixed_corpus: Object.freeze(["search"]),
+  starter_small: Object.freeze([
+    "list_minds",
+    "browse_entries",
+    "search",
+    "fetch",
+  ]),
+  small_history: Object.freeze(["get_revision"]),
 });
 
 export class PerformanceProfileReadbackError extends TypeError {
@@ -243,33 +243,40 @@ function profile(value) {
 }
 
 function assertRequiredMatrix(profiles) {
-  const mindCounts = profiles
-    .filter(({ kind }) => kind === "mind_count")
-    .map(({ observed }) => observed.minds)
-    .sort((left, right) => left - right);
-  const revisionCounts = profiles
-    .filter(({ kind }) => kind === "revision_count")
+  if (profiles.length !== 3) fail("unexpected_profile_matrix");
+  const starter = profiles.filter(({ kind }) => kind === "starter_small");
+  if (starter.length !== 1) fail("starter_small_profile_incomplete");
+  const starterObserved = starter[0].observed;
+  if (
+    starterObserved.minds !== REQUIRED_STARTER_SMALL.minds ||
+    starterObserved.revisions !== REQUIRED_STARTER_SMALL.revisions ||
+    starterObserved.files < REQUIRED_STARTER_SMALL.files_min ||
+    starterObserved.files > REQUIRED_STARTER_SMALL.files_max ||
+    starterObserved.bytes < REQUIRED_STARTER_SMALL.bytes_min ||
+    starterObserved.bytes > REQUIRED_STARTER_SMALL.bytes_max
+  ) fail("starter_small_profile_incomplete");
+
+  const history = profiles.filter(({ kind }) => kind === "small_history");
+  const revisionCounts = history
     .map(({ observed }) => observed.revisions)
     .sort((left, right) => left - right);
-  if (canonical(mindCounts) !== canonical(REQUIRED_MIND_COUNTS)) {
-    fail("mind_count_matrix_incomplete");
-  }
-  if (canonical(revisionCounts) !== canonical(REQUIRED_REVISION_COUNTS)) {
-    fail("revision_count_matrix_incomplete");
-  }
-  const brain = profiles.filter(({ kind }) => kind === "brain_markdown");
+  const historyOne = history.find(({ observed }) => observed.revisions === 1);
+  const historyTen = history.find(({ observed }) => observed.revisions === 10);
   if (
-    brain.length !== 1 ||
-    brain[0].observed.files < REQUIRED_BRAIN_MARKDOWN.files ||
-    brain[0].observed.bytes < REQUIRED_BRAIN_MARKDOWN.bytes
-  ) fail("brain_markdown_profile_incomplete");
-  const mixed = profiles.filter(({ kind }) => kind === "mixed_corpus");
+    history.length !== REQUIRED_SMALL_HISTORY_REVISION_COUNTS.length ||
+    canonical(revisionCounts) !== canonical(REQUIRED_SMALL_HISTORY_REVISION_COUNTS) ||
+    history.some(({ observed }) =>
+      observed.minds !== REQUIRED_STARTER_SMALL.minds ||
+      observed.files < REQUIRED_STARTER_SMALL.files_min ||
+      observed.files > REQUIRED_STARTER_SMALL.files_max ||
+      observed.bytes < REQUIRED_STARTER_SMALL.bytes_min ||
+      observed.bytes > REQUIRED_STARTER_SMALL.bytes_max)
+  ) fail("small_history_profile_incomplete");
   if (
-    mixed.length !== 1 ||
-    mixed[0].observed.files < REQUIRED_MIXED_CORPUS.files ||
-    mixed[0].observed.bytes < REQUIRED_MIXED_CORPUS.bytes
-  ) fail("mixed_corpus_profile_incomplete");
-  if (profiles.length !== 9) fail("unexpected_profile_matrix");
+    historyOne?.fixture_fingerprint !== starter[0].fixture_fingerprint ||
+    canonical(historyOne?.observed) !== canonical(starterObserved) ||
+    historyTen?.fixture_fingerprint === starter[0].fixture_fingerprint
+  ) fail("small_history_fixture_topology_invalid");
 }
 
 function unsignedReceipt(input) {
