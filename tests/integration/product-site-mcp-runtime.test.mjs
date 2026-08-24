@@ -48,6 +48,7 @@ class FakeD1Statement {
 
 class FakeD1Database {
   metadataEvents = [];
+  metadataTailReads = 0;
   metadataSnapshot = null;
   metadataSnapshotHead = null;
   metadataSnapshotChunks = new Map();
@@ -311,6 +312,7 @@ class FakeD1Database {
       };
     }
     if (sql.includes("/*md-metadata-events-tail*/")) {
+      this.metadataTailReads += 1;
       return {
         success: true,
         results: this.metadataEvents
@@ -1028,6 +1030,7 @@ test("empty account reaches a strict starter commit and first useful search/fetc
   assert.deepEqual(validation.conformance_errors, []);
   assert.deepEqual(validation.quality_warnings, []);
 
+  const tailReadsBeforeBrowse = database.metadataTailReads;
   const browsed = await modernTool(
     runtime,
     secret,
@@ -1035,8 +1038,10 @@ test("empty account reaches a strict starter commit and first useful search/fetc
     "browse_entries",
     { mind: "/me", revision_selector: { kind: "revision", revision_id: starterRevisionId } },
   );
+  assert.equal(database.metadataTailReads - tailReadsBeforeBrowse, 3);
   const indexEntry = browsed.entries.find(({ path }) => path === "index.md");
   assert.ok(indexEntry);
+  const tailReadsBeforeFetch = database.metadataTailReads;
   const fetchedIndex = await modernTool(
     runtime,
     secret,
@@ -1044,6 +1049,7 @@ test("empty account reaches a strict starter commit and first useful search/fetc
     "fetch",
     { id: indexEntry.entry_id },
   );
+  assert.equal(database.metadataTailReads - tailReadsBeforeFetch, 3);
   assert.match(fetchedIndex.text, /First useful Memory/u);
 
   const usefulSearch = await modernTool(
@@ -1065,6 +1071,7 @@ test("empty account reaches a strict starter commit and first useful search/fetc
   );
   assert.match(fetchedMemory.text, /one concrete fact, decision, or reusable note/u);
 
+  const tailReadsBeforeRepeatedSearch = database.metadataTailReads;
   await modernTool(
     runtime,
     secret,
@@ -1072,6 +1079,7 @@ test("empty account reaches a strict starter commit and first useful search/fetc
     "search",
     { mind: "/me", query: "concrete reusable note" },
   );
+  assert.equal(database.metadataTailReads - tailReadsBeforeRepeatedSearch, 3);
   const forgedCorrelation = await responseFrom(runtime, new Request(`${ORIGIN}/`, {
     headers: {
       "x-mind-diary-performance-correlation-id": "benchmark_forged_without_signature",

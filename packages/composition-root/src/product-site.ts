@@ -770,7 +770,6 @@ export async function createProductSiteRuntime(
   const activity = new PrincipalActivityService(metadata);
   const backgroundAuthorizer = new CurrentAccessBackgroundAuthorizer(metadata);
   const revisions = new CanonicalRevisionCoordinator({ objects, revisions: metadata });
-  const readyIndex = new ReadyExactRevisionIndexService({ work: metadata, index });
   const indexStatus = new RevisionIndexStatusService(metadata);
   const locators = new SitesMindLocatorCodec({
     database: options.database,
@@ -809,19 +808,55 @@ export async function createProductSiteRuntime(
   const nativeFiles = new OpenAiNativeFileTransport({
     maxBytes: BUNDLE_FILE_LIMITS.maxFileBytes,
   });
-  const browse = new MindBrowseService({
-    store: metadata,
-    objects,
-    host,
-    locators,
-    authorizer: contentAuthorizer,
+  const contentReadServices = (store: typeof metadata) => {
+    const scopedAuthorizer = new MindBindingContentAuthorizer({
+      delegate: new CapabilityAuthorizer(store),
+      bindings: store,
+    });
+    return Object.freeze({
+      browse: new MindBrowseService({
+        store,
+        objects,
+        host,
+        locators,
+        authorizer: scopedAuthorizer,
+      }),
+      search: new MindSearchService({
+        store,
+        index: new ReadyExactRevisionIndexService({ work: store, index }),
+        host,
+        locators,
+        authorizer: scopedAuthorizer,
+      }),
+      history: new MindHistoryService({
+        store,
+        host,
+        authorizer: scopedAuthorizer,
+      }),
+    });
+  };
+  // One current D1 snapshot/tail is the authority for one closed content-read
+  // request. All binding, ACL, revision and final-stamp checks still run, but
+  // they compare the same immutable read-session instead of paying for several
+  // identical cross-region refreshes inside a single MCP call.
+  const browse = Object.freeze({
+    browseEntries: (...args: Parameters<MindBrowseService["browseEntries"]>) =>
+      metadata.withConsistentRead((store) =>
+        contentReadServices(store).browse.browseEntries(...args)),
+    listBundleFiles: (...args: Parameters<MindBrowseService["listBundleFiles"]>) =>
+      metadata.withConsistentRead((store) =>
+        contentReadServices(store).browse.listBundleFiles(...args)),
+    fetch: (...args: Parameters<MindBrowseService["fetch"]>) =>
+      metadata.withConsistentRead((store) =>
+        contentReadServices(store).browse.fetch(...args)),
+    readResource: (...args: Parameters<MindBrowseService["readResource"]>) =>
+      metadata.withConsistentRead((store) =>
+        contentReadServices(store).browse.readResource(...args)),
   });
-  const search = new MindSearchService({
-    store: metadata,
-    index: readyIndex,
-    host,
-    locators,
-    authorizer: contentAuthorizer,
+  const search = Object.freeze({
+    searchEntries: (...args: Parameters<MindSearchService["searchEntries"]>) =>
+      metadata.withConsistentRead((store) =>
+        contentReadServices(store).search.searchEntries(...args)),
   });
   const principalsWithObservedUsefulSearch = new Set<string>();
   const observedSearch = {
@@ -863,10 +898,13 @@ export async function createProductSiteRuntime(
       return result;
     },
   };
-  const history = new MindHistoryService({
-    store: metadata,
-    host,
-    authorizer: contentAuthorizer,
+  const history = Object.freeze({
+    listRevisions: (...args: Parameters<MindHistoryService["listRevisions"]>) =>
+      metadata.withConsistentRead((store) =>
+        contentReadServices(store).history.listRevisions(...args)),
+    getRevision: (...args: Parameters<MindHistoryService["getRevision"]>) =>
+      metadata.withConsistentRead((store) =>
+        contentReadServices(store).history.getRevision(...args)),
   });
   const validation = new MindValidationService({
     store: metadata,
