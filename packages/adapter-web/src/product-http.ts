@@ -240,6 +240,7 @@ export type ProductWebPerformanceOperation =
 export interface ProductWebPerformanceRecorder {
   record(event: {
     readonly requestId: string;
+    readonly benchmarkCorrelationId: string | null;
     readonly operation: ProductWebPerformanceOperation;
     readonly durationMs: number;
     readonly outcome: "success" | "failure";
@@ -376,6 +377,13 @@ function safeRequestId(resolution: ProductSitesIdentityResolution): string {
   return "actor" in resolution && typeof resolution.actor.requestId === "string"
     ? resolution.actor.requestId
     : "request_denied";
+}
+
+function safeBenchmarkCorrelationId(request: Request): string | null {
+  const value = request.headers.get("x-mind-diary-performance-correlation-id");
+  return value !== null && /^benchmark_[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$/u.test(value)
+    ? value
+    : null;
 }
 
 function recordWebPerformance(
@@ -1634,6 +1642,9 @@ export function createProductWebHttpHandler(
       (request.method === "GET" || request.method === "HEAD")
       ? performance.now()
       : null;
+    const performanceCorrelationId = homeStartedAt === null
+      ? null
+      : safeBenchmarkCorrelationId(request);
     const identityStartedAt = homeStartedAt === null ? null : performance.now();
 
     let identity: ProductSitesIdentityResolution;
@@ -1649,6 +1660,7 @@ export function createProductWebHttpHandler(
     ) {
       recordWebPerformance(dependencies.performance, {
         requestId,
+        benchmarkCorrelationId: performanceCorrelationId,
         operation: "stage_authentication",
         durationMs: Math.max(0, performance.now() - identityStartedAt),
         outcome: "success",
@@ -1708,6 +1720,13 @@ export function createProductWebHttpHandler(
       const finalResponse = request.method === "HEAD"
         ? new Response(null, response)
         : response;
+      finalResponse.headers.set("x-mind-diary-request-id", requestId);
+      if (performanceCorrelationId !== null) {
+        finalResponse.headers.set(
+          "x-mind-diary-performance-correlation-id",
+          performanceCorrelationId,
+        );
+      }
       if (
         homeStartedAt !== null &&
         applicationStartedAt !== null &&
@@ -1717,6 +1736,7 @@ export function createProductWebHttpHandler(
         const completedAt = performance.now();
         recordWebPerformance(dependencies.performance, {
           requestId,
+          benchmarkCorrelationId: performanceCorrelationId,
           operation: "stage_application",
           durationMs: Math.max(0, completedAt - applicationStartedAt),
           outcome,
@@ -1725,6 +1745,7 @@ export function createProductWebHttpHandler(
         for (const operation of ["stage_total", "home"] as const) {
           recordWebPerformance(dependencies.performance, {
             requestId,
+            benchmarkCorrelationId: performanceCorrelationId,
             operation,
             durationMs: totalDurationMs,
             outcome,

@@ -1413,6 +1413,22 @@ documentation не задаёт `OAI-Sites-Authorization` как общий ст
 поэтому его availability и exact forwarding повторно проверяются на каждом
 target deployment и не переносятся на другой Site по аналогии.
 
+Успешный authenticated home response и оба MCP profiles возвращают bounded
+`X-Mind-Diary-Request-Id`, совпадающий с opaque `requestId` закрытой latency
+telemetry. Reserved performance request может дополнительно передать
+`X-Mind-Diary-Performance-Correlation-Id: benchmark_*`; adapter принимает
+только bounded grammar, возвращает exact value тем же header и проецирует его
+в deployable telemetry как `benchmarkCorrelationId`. Header не выбирает
+principal/Mind/revision, не меняет authorization и не является capability.
+Обычный request не получает correlation echo, а telemetry хранит `null`.
+
+Deployable Sites observability envelope остаётся closed и добавляет только
+`lineage: {candidateSha, siteVersionId, deploymentId}` и nullable
+`benchmarkCorrelationId` к ранее принятой privacy-safe event projection.
+Lineage берётся из trusted exact deployment configuration; неполная тройка
+отклоняется runtime configuration boundary. Query, request body, selector,
+content, credential и private identity в headers либо telemetry не попадают.
+
 ### MCP authentication
 
 - `Authorization: Bearer <token>` обязателен на каждом POST обоих endpoint;

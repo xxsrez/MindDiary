@@ -1,6 +1,6 @@
 # Спецификация первого прототипа
 
-Статус: proposal, обновлено 2026-08-22. Product requirements ниже приняты;
+Статус: proposal, обновлено 2026-08-24. Product requirements ниже приняты;
 Product Site и direct route/compatibility repair реализованы и развёрнуты как
 single-principal UAT в OpenAI Sites. Обязательные authenticated web/control,
 persistence-after-redeploy и default/modern Codex MCP gates пройдены live;
@@ -452,24 +452,45 @@ Bounded pilot начинается только после показа учас
   token, authorization header или signed/download URL.
 
 Deployable UAT telemetry использует closed privacy-safe event projection:
-`metric`, `surface`, `operation`, `outcome`, unit/value, UTC timestamp и только
-opaque bounded request/job correlation. Она классифицирует setup,
+`metric`, `surface`, `operation`, `outcome`, unit/value, UTC timestamp, exact
+deployable lineage и только opaque bounded request/job/benchmark correlation.
+Она классифицирует setup,
 authentication/MCP request failures, request latency, CAS conflicts, index/export
 lag, token/invitation/deletion outcomes и storage/runtime unavailability. Sink
 fail closed отклоняет дополнительные поля; application outcome не зависит от
 успеха telemetry. Query, content/body/path/name, email, principal/space/revision
 identity, credentials, headers и URLs не записываются.
 
-Для performance gate `request_latency_ms` дополнительно проецируется по
-закрытым categorical operations: MCP profile (`mcp_modern` или
-`mcp_compatibility`), stage (`stage_authentication`, `stage_application`,
-`stage_total`), exact allowlisted tool name и `home` route. Authenticated home
-публикует `home` и все три stage operation с одним opaque request ID; MCP
-публикует profile, применимые stage и tool operation с request ID того же
-вызова. Mind selector, revision, query, result path и response body в dimensions
-не попадают. Gate использует не менее 20 warm samples на operation, фиксирует
-первый observed request отдельно и fail-closed отклоняет неполную profile matrix
-либо превышение budget.
+Для [performance gate](../operations/performance-gate.md)
+`request_latency_ms` дополнительно проецируется по закрытым categorical
+operations: MCP profile (`mcp_modern` или `mcp_compatibility`), stage
+(`stage_authentication`, `stage_application`, `stage_total`), exact allowlisted
+tool name и `home` route. Authenticated home публикует `home` и все три stage
+operation с одним opaque request ID; MCP публикует profile, применимые stage и
+tool operation с request ID того же вызова. Mind selector, revision, query,
+result path и response body в dimensions не попадают.
+
+Deployable projection дополнительно содержит exact `candidateSha`,
+`siteVersionId`, `deploymentId` и nullable `benchmarkCorrelationId`. Обычный
+traffic оставляет последний `null`. Performance runner выдаёт отдельный
+`benchmark_*` каждому sample; web/MCP response возвращает его и
+server-generated request ID только в bounded response headers, а telemetry
+повторяет оба opaque IDs. Значения не дают capability и не содержат principal,
+Mind, revision или query.
+
+Gate фиксирует один first-observed и не менее 20 warm samples каждого request,
+обязательно покрывает web, modern и compatibility profiles и связывает server
+latency только с distinct exact-lineage request/correlation-ID groups actual
+runner window. HTTP `200`
+не считается MCP success без matching JSON-RPC result,
+`isError === false` и structured success. Scale matrix принимается только из
+hashed exact-SHA/deployment provision+read-back receipt: observed и expected
+counts обязаны совпасть сразу по Minds, revisions, files и bytes; scenario
+declaration не является evidence. Receipt также keyed-HMAC связывает actual
+fixture credential, а hashed canonical arguments — exact selected fixture.
+Missing/mismatched/out-of-window telemetry,
+неполный profile/read-back либо превышение budget fail closed. При этом
+telemetry sink остаётся best-effort и его отказ не меняет application outcome.
 
 Operator использует bounded recent logs, exact current deployment и заранее
 зафиксированный compatible rollback target. Incident path сначала ограничивает
