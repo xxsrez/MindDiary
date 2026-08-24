@@ -552,6 +552,7 @@ export async function createProductSiteRuntime(
       keyMaterial.fill(0);
     }
   }
+  const trustedIdentitySourceRequests = new WeakMap<Request, Request>();
   const trustedPerformanceRequest = async (request: Request): Promise<Request> => {
     if (
       request.headers.get("x-mind-diary-performance-correlation-id") === null &&
@@ -580,7 +581,9 @@ export async function createProductSiteRuntime(
       }
     }
     if (!verified) headers.delete("x-mind-diary-performance-correlation-id");
-    return new Request(request, { headers });
+    const sanitized = new Request(request, { headers });
+    trustedIdentitySourceRequests.set(sanitized, request);
+    return sanitized;
   };
   const pendingIndexJobs: string[] = [];
   const pendingAuditOutbox: string[] = [];
@@ -903,7 +906,9 @@ export async function createProductSiteRuntime(
       deploymentCapabilities: PRODUCT_SITES_DEPLOYMENT_CAPABILITIES,
     });
     return resolveProductSitesIdentity({
-      snapshot: await options.identity.readVerifiedIdentity(request),
+      snapshot: await options.identity.readVerifiedIdentity(
+        trustedIdentitySourceRequests.get(request) ?? request,
+      ),
       bindingProvider: identityBindingProvider,
       bindings: {
         async readActiveBinding(lookup) {

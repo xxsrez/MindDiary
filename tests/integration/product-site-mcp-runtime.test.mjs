@@ -3155,6 +3155,7 @@ test("request-triggered recovery reclaims a revision after an injected index dis
       "oai-authenticated-user-email": "recovery.owner@example.com",
       "oai-authenticated-user-full-name": "Recovery%20Owner",
       "oai-authenticated-user-full-name-encoding": "percent-encoded-utf-8",
+      "x-mind-diary-performance-correlation-id": "benchmark_forged_worker_identity",
     },
   });
   const documentResponse = await restartedWorker.fetch(
@@ -3166,6 +3167,10 @@ test("request-triggered recovery reclaims a revision after an injected index dis
     },
   );
   assert.equal(documentResponse.status, 200);
+  assert.equal(
+    documentResponse.headers.get("x-mind-diary-performance-correlation-id"),
+    null,
+  );
   assert.equal(recoveryWaits.length, 1);
   await Promise.all(recoveryWaits);
   assert.ok(restartedRuntime);

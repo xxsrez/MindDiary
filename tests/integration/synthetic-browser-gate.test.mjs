@@ -9,6 +9,34 @@ import {
   run,
   SYNTHETIC_BROWSER_ASSERTION_IDS,
 } from "../../scripts/run-synthetic-browser-gate.mjs";
+import { createSyntheticBrowserComposition } from "../../scripts/lib/synthetic-browser-composition.mjs";
+
+test("forged benchmark headers do not detach constructor-only browser identity", async () => {
+  const composition = await createSyntheticBrowserComposition();
+  const context = composition.createContext({
+    name: "forged-benchmark",
+    identity: {
+      kind: "authenticated",
+      verifiedEmail: "forged-benchmark@synthetic.invalid",
+      verifiedFullName: "Forged Benchmark",
+    },
+  });
+  try {
+    const result = await context.request("/", {
+      headers: {
+        "x-mind-diary-performance-correlation-id": "benchmark_forged_browser_identity",
+      },
+    });
+    assert.equal(result.status, 200);
+    assert.match(result.text, /data-session-state="registration_required"/u);
+    assert.equal(
+      result.headers.get("x-mind-diary-performance-correlation-id"),
+      null,
+    );
+  } finally {
+    await composition.close();
+  }
+});
 
 test("server-bound synthetic browser gate produces a complete redacted receipt", async () => {
   const directory = await mkdtemp(join(tmpdir(), "mind-diary-browser-gate-"));
