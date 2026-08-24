@@ -1,0 +1,299 @@
+import { spawn } from "node:child_process";
+import { resolve } from "node:path";
+
+import { expect, test } from "@playwright/test";
+
+const root = resolve(import.meta.dirname, "../../..");
+const fixtureServer = resolve(import.meta.dirname, "fixture-server.mjs");
+const fixtureDefinitions = Object.freeze([
+  Object.freeze({ count: 0, port: 4310 }),
+  Object.freeze({ count: 1, port: 4311 }),
+  Object.freeze({ count: 21, port: 4312 }),
+]);
+const processes = [];
+
+async function waitForFixture(origin, child) {
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline) {
+    if (child.exitCode !== null) {
+      throw new Error(`browser fixture exited before health check: ${child.exitCode}`);
+    }
+    try {
+      const response = await fetch(`${origin}/_fixture/health`, { cache: "no-store" });
+      if (response.status === 200) return;
+    } catch {
+      // The deterministic loopback listener may still be starting.
+    }
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 50));
+  }
+  throw new Error("browser fixture health check timed out");
+}
+
+async function startFixture(definition) {
+  const child = spawn(process.execPath, [fixtureServer], {
+    cwd: root,
+    env: {
+      ...process.env,
+      MIND_DIARY_BROWSER_FIXTURE_COUNT: String(definition.count),
+      MIND_DIARY_BROWSER_FIXTURE_PORT: String(definition.port),
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let diagnostics = "";
+  child.stdout.on("data", (chunk) => { diagnostics += chunk.toString("utf8"); });
+  child.stderr.on("data", (chunk) => { diagnostics += chunk.toString("utf8"); });
+  const origin = `http://127.0.0.1:${definition.port}`;
+  try {
+    await waitForFixture(origin, child);
+  } catch (error) {
+    child.kill("SIGTERM");
+    throw new Error(`${error.message}; fixture diagnostics: ${diagnostics.slice(0, 500)}`);
+  }
+  processes.push(child);
+  return Object.freeze({ ...definition, origin, child });
+}
+
+async function stopFixture(child) {
+  if (child.exitCode !== null) return;
+  child.kill("SIGTERM");
+  await Promise.race([
+    new Promise((resolveExit) => child.once("exit", resolveExit)),
+    new Promise((_, reject) => setTimeout(
+      () => reject(new Error("browser fixture did not terminate")),
+      5_000,
+    )),
+  ]);
+}
+
+async function expectNoHorizontalOverflow(page) {
+  const result = await page.evaluate(() => ({
+    viewport: document.documentElement.clientWidth,
+    documentWidth: document.documentElement.scrollWidth,
+    bodyWidth: document.body.scrollWidth,
+    panels: [...document.querySelectorAll(
+      "main, .md-token-card, .md-setup-card, .md-binding-panel, dialog",
+    )]
+      .filter((element) => {
+        const style = getComputedStyle(element);
+        return style.display !== "none" && style.visibility !== "hidden";
+      })
+      .map((element) => ({
+        tag: element.tagName.toLowerCase(),
+        clientWidth: element.clientWidth,
+        scrollWidth: element.scrollWidth,
+      }))
+      .filter((entry) => entry.scrollWidth > entry.clientWidth + 1),
+  }));
+  expect(result.documentWidth, JSON.stringify(result)).toBeLessThanOrEqual(result.viewport + 1);
+  expect(result.bodyWidth, JSON.stringify(result)).toBeLessThanOrEqual(result.viewport + 1);
+  expect(result.panels, JSON.stringify(result)).toEqual([]);
+}
+
+async function tabUntil(page, selector, maximumTabs = 100) {
+  for (let index = 0; index < maximumTabs; index += 1) {
+    await page.keyboard.press("Tab");
+    const matches = await page.evaluate((candidate) =>
+      document.activeElement?.matches(candidate) === true, selector);
+    if (matches) return;
+  }
+  throw new Error(`keyboard focus did not reach ${selector}`);
+}
+
+async function assertPageHasNoBrowserErrors(page, action) {
+  const errors = [];
+  page.on("pageerror", (error) => errors.push(`pageerror:${error.name}`));
+  page.on("console", (message) => {
+    if (message.type() === "error") errors.push(`console:${message.type()}`);
+  });
+  await action();
+  expect(errors).toEqual([]);
+}
+
+let fixtures;
+
+test.beforeAll(async () => {
+  fixtures = [];
+  for (const definition of fixtureDefinitions) {
+    fixtures.push(await startFixture(definition));
+  }
+});
+
+test.afterAll(async () => {
+  await Promise.all(processes.map(stopFixture));
+});
+
+for (const definition of fixtureDefinitions) {
+  test(`real DOM exposes four canonical routes for the ${definition.count}-item fixture`, async ({
+    browser,
+  }) => {
+    const fixture = fixtures.find((candidate) => candidate.count === definition.count);
+    const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+    const page = await context.newPage();
+    await assertPageHasNoBrowserErrors(page, async () => {
+      await page.goto(`${fixture.origin}/settings/connections`);
+      await expect(page.getByRole("heading", { level: 1, name: "Connections" })).toBeVisible();
+      await expect(page.getByRole("navigation", { name: "Primary" })).toBeVisible();
+      await expect(page.locator("[data-connections-page] .md-token-card")).toHaveCount(
+        Math.min(definition.count, 20),
+      );
+      await expect(page.getByRole("link", { name: "Next connections" })).toHaveCount(
+        definition.count === 21 ? 1 : 0,
+      );
+      await expectNoHorizontalOverflow(page);
+
+      if (definition.count > 0) {
+        const ref = `conn_v1_${"1".padStart(32, "0")}`;
+        await page.goto(`${fixture.origin}/settings/connections/${ref}`);
+        await expect(page.getByRole("heading", {
+          level: 1,
+          name: "Codex Marketplace on a deliberately narrow mobile viewport",
+        })).toBeVisible();
+        await expect(page.getByRole("heading", { level: 3, name: "Can read" })).toBeVisible();
+        await expect(page.getByRole("heading", { level: 3, name: "Can add and change" })).toBeVisible();
+        await expect(page.getByRole("button", { name: "Revoke connection" })).toBeVisible();
+        await expectNoHorizontalOverflow(page);
+      }
+
+      await page.goto(`${fixture.origin}/settings/developer/mcp`);
+      await expect(page.getByRole("heading", { level: 1, name: "Advanced MCP" })).toBeVisible();
+      await expect(page.getByRole("navigation", { name: "Personal token state" })).toBeVisible();
+      await expect(page.locator("[data-personal-token-ref]")).toHaveCount(
+        Math.min(definition.count, 20),
+      );
+      await expect(page.getByRole("link", { name: "Next tokens" })).toHaveCount(
+        definition.count === 21 ? 1 : 0,
+      );
+      await expect(page.getByRole("dialog", { name: "Copy your token now" })).toBeHidden();
+      await expectNoHorizontalOverflow(page);
+
+      await page.goto(`${fixture.origin}/help/codex`);
+      await expect(page.getByRole("heading", {
+        level: 1,
+        name: "Use Mind Diary with Codex",
+      })).toBeVisible();
+      await expect(page.getByRole("heading", { level: 2, name: "Install Mind Diary" })).toBeVisible();
+      await expect(page.getByRole("heading", {
+        level: 2,
+        name: "Choose readable Minds and start",
+      })).toBeVisible();
+      await expect(page.getByText("Revoke and reconnect only when the connection is no longer usable.")).toBeVisible();
+      const accessibilityTree = await page.locator("main").ariaSnapshot();
+      expect(accessibilityTree).toContain('heading "Use Mind Diary with Codex"');
+      expect(accessibilityTree).toContain('link "Connections"');
+      await expectNoHorizontalOverflow(page);
+    });
+    await context.close();
+  });
+}
+
+test("mobile viewport keeps every route bounded and opens primary navigation by keyboard", async ({
+  browser,
+}) => {
+  const fixture = fixtures.find((candidate) => candidate.count === 21);
+  const context = await browser.newContext({
+    viewport: { width: 390, height: 844 },
+    isMobile: true,
+    hasTouch: true,
+  });
+  const page = await context.newPage();
+  for (const path of [
+    "/settings/connections",
+    `/settings/connections/conn_v1_${"1".padStart(32, "0")}`,
+    "/settings/developer/mcp",
+    "/help/codex",
+  ]) {
+    await page.goto(`${fixture.origin}${path}`);
+    await expectNoHorizontalOverflow(page);
+  }
+  await page.goto(`${fixture.origin}/settings/connections`);
+  await tabUntil(page, "[data-menu-button]");
+  await expect(page.getByRole("button", { name: "Navigation" })).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("button", { name: "Navigation" })).toHaveAttribute(
+    "aria-expanded",
+    "true",
+  );
+  await expect(page.getByRole("link", { name: "My Mind" })).toBeFocused();
+  await context.close();
+});
+
+test("keyboard-only connection journey exposes progress, revoke, and reconnect states", async ({
+  browser,
+}) => {
+  const fixture = fixtures.find((candidate) => candidate.count === 1);
+  const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  const page = await context.newPage();
+  await page.goto(`${fixture.origin}/settings/connections`);
+
+  await page.keyboard.press("Tab");
+  await expect(page.getByRole("link", { name: "Skip to main content" })).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(page.locator("#main-content")).toBeFocused();
+  await tabUntil(page, 'a[href^="/settings/connections/conn_v1_"]');
+  await page.keyboard.press("Enter");
+  await page.waitForURL(/\/settings\/connections\/conn_v1_/u);
+
+  await tabUntil(page, '[data-access-action="clear_write"]');
+  await page.keyboard.press("Enter");
+  await expect(page.locator("[data-access-panel]")).toHaveAttribute("aria-busy", "true");
+  await expect(page.getByRole("status").filter({ hasText: "Saving current Mind access" })).toBeVisible();
+  await page.waitForLoadState("load");
+
+  await tabUntil(page, "[data-revoke-connection]");
+  await page.keyboard.press("Enter");
+  await page.waitForURL(`${fixture.origin}/settings/connections`);
+  await expect(page.getByRole("heading", { level: 2, name: "No active connections" })).toBeVisible();
+
+  const reconnect = await context.request.post(`${fixture.origin}/_fixture/reconnect`);
+  expect(reconnect.status()).toBe(200);
+  await page.reload();
+  await expect(page.locator("[data-connections-page] .md-token-card")).toHaveCount(1);
+  await context.close();
+});
+
+test("Advanced MCP dialog receives and restores focus without exposing raw identifiers", async ({
+  browser,
+}) => {
+  const fixture = fixtures.find((candidate) => candidate.count === 1);
+  const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  const page = await context.newPage();
+  await page.goto(`${fixture.origin}/settings/developer/mcp`);
+  await tabUntil(page, "#token-name");
+  await page.keyboard.type("Keyboard-created fixture token");
+  await tabUntil(page, "[data-token-submit]");
+  await page.keyboard.press("Enter");
+  const dialog = page.getByRole("dialog", { name: "Copy your token now" });
+  await expect(dialog).toBeVisible();
+  expect(await page.evaluate(() =>
+    document.activeElement?.closest("dialog")?.hasAttribute("data-secret-dialog") === true)).toBe(true);
+  const snapshot = await dialog.ariaSnapshot();
+  expect(snapshot).toContain('heading "Copy your token now"');
+  await tabUntil(page, "dialog [data-close-secret]");
+  await page.keyboard.press("Enter");
+  await expect(dialog).toBeHidden();
+  await expect(page.locator("[data-secret-value]")).toHaveText("Secret is not available.");
+  await expect(page.locator("body")).not.toContainText("[deterministic one-time fixture value]");
+  await expect(page.locator("body")).not.toContainText(/(?:token|grant|binding)_[A-Za-z0-9._:-]{8,}/u);
+  await context.close();
+});
+
+test("deterministic error fixtures keep actions unavailable on both credential surfaces", async ({
+  browser,
+}) => {
+  const fixture = fixtures.find((candidate) => candidate.count === 1);
+  const context = await browser.newContext();
+  await context.addCookies([{
+    name: "fixture_view",
+    value: "error",
+    domain: "127.0.0.1",
+    path: "/",
+  }]);
+  const page = await context.newPage();
+  await page.goto(`${fixture.origin}/settings/connections`);
+  await expect(page.getByRole("alert")).toContainText("Connections are unavailable");
+  await expect(page.getByRole("link", { name: "Manage access" })).toHaveCount(0);
+  await page.goto(`${fixture.origin}/settings/developer/mcp`);
+  await expect(page.getByRole("alert")).toContainText("Personal tokens are unavailable");
+  await expect(page.locator("[data-personal-token-ref]")).toHaveCount(0);
+  await context.close();
+});

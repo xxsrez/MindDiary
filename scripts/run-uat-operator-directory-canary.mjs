@@ -366,7 +366,7 @@ class ActorClient {
     this.actorClass = actorClass;
     this.sitesToken = sitesToken;
     this.mcpToken = null;
-    this.mcpTokenId = null;
+    this.mcpTokenRef = null;
     this.mcpTokenPhase = null;
     this.fetchImpl = fetchImpl;
   }
@@ -494,34 +494,34 @@ class ActorClient {
         expires_at: expiresAt,
       },
       idempotencyKey: `uat-operator:${state.run_nonce}:token:${phase}:${this.actorClass}`,
-      csrfPath: "/settings/mcp",
+      csrfPath: "/settings/developer/mcp",
     });
     const projection = issued.body?.data;
     if (
       typeof projection?.secret !== "string" ||
       !projection.secret.startsWith("mdp_v1_") ||
-      typeof projection.token?.token_id !== "string" ||
+      !/^ptok_v1_[0-9a-f]{32}$/u.test(projection.token?.personal_token_ref) ||
       projection.token?.name !== tokenName(state, this.actorClass, phase) ||
       !Array.isArray(projection.token?.scopes) ||
       !projection.token.scopes.includes("content:read") ||
       projection.token.scopes.includes("content:write")
     ) fail("token_issue_projection_invalid", { actorClass: this.actorClass });
     this.mcpToken = projection.secret;
-    this.mcpTokenId = projection.token.token_id;
+    this.mcpTokenRef = projection.token.personal_token_ref;
     this.mcpTokenPhase = phase;
   }
 
   async revokeCurrentTokenAndAssertDenied(state) {
-    if (this.mcpToken === null || this.mcpTokenId === null) return;
+    if (this.mcpToken === null || this.mcpTokenRef === null) return;
     const token = this.mcpToken;
-    const tokenId = this.mcpTokenId;
+    const tokenRef = this.mcpTokenRef;
     const revoked = await this.api(
-      `/api/v1/mcp-tokens/${encodeURIComponent(tokenId)}`,
+      `/api/v1/mcp-tokens/${encodeURIComponent(tokenRef)}`,
       {
         method: "DELETE",
         idempotencyKey:
           `uat-operator:${state.run_nonce}:revoke:${this.mcpTokenPhase}:${this.actorClass}`,
-        csrfPath: "/settings/mcp",
+        csrfPath: "/settings/developer/mcp",
       },
     );
     if (revoked.body?.data?.token?.state !== "revoked") {
@@ -533,7 +533,7 @@ class ActorClient {
       fail("revoked_token_still_accepted", { actorClass: this.actorClass });
     }
     this.mcpToken = null;
-    this.mcpTokenId = null;
+    this.mcpTokenRef = null;
     this.mcpTokenPhase = null;
   }
 
@@ -1119,7 +1119,7 @@ async function verifyDirectory(state, clients, sessions) {
 }
 
 function listedTokens(response, actorClass) {
-  const tokens = response.body?.data?.tokens;
+  const tokens = response.body?.data?.items;
   if (!Array.isArray(tokens)) fail("invalid_token_list", { actorClass });
   return tokens;
 }
@@ -1139,17 +1139,17 @@ async function revokeNamedTokens(state, clients) {
         !token.name.startsWith(`${state.resources.token_name_prefix} `) ||
         token.state === "revoked"
       ) continue;
-      if (typeof token.token_id !== "string") {
+      if (!/^ptok_v1_[0-9a-f]{32}$/u.test(token.personal_token_ref)) {
         fail("invalid_token_list", { actorClass });
       }
       const revoked = await client.api(
-        `/api/v1/mcp-tokens/${encodeURIComponent(token.token_id)}`,
+        `/api/v1/mcp-tokens/${encodeURIComponent(token.personal_token_ref)}`,
         {
           method: "DELETE",
           idempotencyKey:
             `uat-operator:${state.run_nonce}:recovery-revoke:${actorClass}:` +
-            sha256(token.token_id).slice(0, 16),
-          csrfPath: "/settings/mcp",
+            sha256(token.personal_token_ref).slice(0, 16),
+          csrfPath: "/settings/developer/mcp",
         },
       );
       if (revoked.body?.data?.token?.state !== "revoked") {

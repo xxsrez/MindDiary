@@ -190,6 +190,27 @@ function nextOpaque(prefix: string): never {
   return `${prefix}_${crypto.randomUUID()}` as never;
 }
 
+function nextPresentationRef(prefix: "ptok_v1_" | "conn_v1_"): never {
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  const encoded = [...bytes]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+  return `${prefix}${encoded}` as never;
+}
+
+async function staleAccessRef(ownerId: string, readBindingId: string): Promise<string> {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(
+      `mind-diary:stale-access-ref:v1\0${ownerId}\0${readBindingId}`,
+    ),
+  );
+  const encoded = [...new Uint8Array(digest).slice(0, 16)]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+  return `stale_v1_${encoded}`;
+}
+
 function benchmarkCorrelationId(request: Request): string | null {
   const value = request.headers.get("x-mind-diary-performance-correlation-id");
   return value !== null && /^benchmark_[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$/u.test(value)
@@ -268,6 +289,7 @@ function ids(capture?: {
     nextImpactId: () => nextOpaque("impact"),
     nextDeletedPrincipalId: () => nextOpaque("deleted-principal"),
     nextTokenId: () => nextOpaque("token"),
+    nextPersonalTokenRef: () => nextPresentationRef("ptok_v1_"),
   });
 }
 
@@ -342,6 +364,36 @@ async function createCsrf(keyBytes: Uint8Array) {
 function asRecord(input: Readonly<Record<string, unknown>>, additions: Record<string, unknown> = {}) {
   const { mind_ref: _mindRef, member_id: _memberId, invitation_id: _invitationId, token_id: _tokenId, ...rest } = input;
   return Object.freeze({ ...rest, ...additions });
+}
+
+function safePersonalTokenDescriptor(token: Readonly<{
+  readonly personalTokenRef: unknown;
+  readonly name: string;
+  readonly displayPrefix: string;
+  readonly scopes: readonly string[];
+  readonly state: string;
+  readonly version: number;
+  readonly createdAt: string;
+  readonly expiresAt: string;
+  readonly lastUsedAt: string | null;
+  readonly revokedAt: string | null;
+}>) {
+  if (
+    typeof token.personalTokenRef !== "string" ||
+    !/^ptok_v1_[0-9a-f]{32}$/u.test(token.personalTokenRef)
+  ) throw new Error("Personal token presentation metadata is unavailable");
+  return Object.freeze({
+    personalTokenRef: token.personalTokenRef,
+    name: token.name,
+    displayPrefix: token.displayPrefix,
+    scopes: token.scopes,
+    state: token.state,
+    version: token.version,
+    createdAt: token.createdAt,
+    expiresAt: token.expiresAt,
+    lastUsedAt: token.lastUsedAt,
+    revokedAt: token.revokedAt,
+  });
 }
 
 class ProductControlApplication {
@@ -501,12 +553,32 @@ class ProductControlApplication {
         return (await this.services.tokens.listMcpTokens(actor as never)).filter(
           (token) => !String(token.tokenId).startsWith(OAUTH_ACCESS_RECORD_PREFIX),
         );
+      case "list_personal_token_page":
+        return this.services.tokens.listPersonalTokenPage(actor as never, asRecord(input) as never);
+      case "read_personal_token":
+        return this.services.tokens.readPersonalToken(
+          actor as never,
+          input.personal_token_ref as never,
+        );
       case "issue_mcp_token": {
         const result = await this.services.tokens.issueMcpToken(actor as never, asRecord(input) as never);
-        return Object.freeze({ token: result.token, secret: result.secret.consumeSecret() });
+        return Object.freeze({
+          "token": safePersonalTokenDescriptor(result.token),
+          secret: result.secret.consumeSecret(),
+        });
       }
       case "revoke_mcp_token":
         return this.services.tokens.revokeMcpToken(actor as never, input.token_id as never);
+      case "revoke_personal_token": {
+        const result = await this.services.tokens.revokePersonalToken(
+          actor as never,
+          input.personal_token_ref as never,
+        );
+        return Object.freeze({
+          token: result.token,
+          replayed: result.replayed,
+        });
+      }
       case "list_members":
       {
         const mind = await this.#mind(actor, input);
@@ -656,6 +728,18 @@ export async function createProductSiteRuntime(
     createWebCryptoExportDownloadSecretCrypto({ verifierKey: options.exportDownloadVerifierKey }),
     createCsrf(options.csrfKey),
   ]);
+  const tokensMissingPresentationRefs = await metadata.listMcpTokensMissingPresentationRefs();
+  if (tokensMissingPresentationRefs.length > 0) {
+    await metadata.assignPersonalTokenRefs(tokensMissingPresentationRefs.map((tokenId) =>
+      Object.freeze({
+        tokenId,
+        personalTokenRef: generated.nextPersonalTokenRef(),
+      })
+    ));
+    if ((await metadata.listMcpTokensMissingPresentationRefs()).length > 0) {
+      throw new Error("Personal token presentation-ref migration did not converge");
+    }
+  }
   const benchmarkCorrelations = new Map<string, string>();
   const telemetry = createSitesPrivacySafeObservabilitySink(options.observabilityWriter, {
     benchmarkCorrelationId: (requestId) => requestId === null
@@ -1155,6 +1239,7 @@ export async function createProductSiteRuntime(
       clock,
       tokenHasher,
       tokenIds: generated,
+      personalTokenRefs: generated,
       tokens: metadata,
       bindingOwners: metadata,
       bindingIds: generated,
@@ -1173,6 +1258,197 @@ export async function createProductSiteRuntime(
       ids: generated,
     }),
   });
+
+  const listResolvedBindings = async (
+    actor: ProductWebActor,
+    credentials: readonly Readonly<{
+      readonly ownerId: string;
+      readonly scopes: readonly ("content:read" | "content:write")[];
+      readonly state: "active" | "revoked";
+    }>[],
+  ) => {
+    if (actor.authentication.kind !== "sites_identity") return Object.freeze([]);
+    const sitesActor = actor as SitesIdentityActorContext;
+    const snapshots = await Promise.all(credentials.map(async (credential) => {
+      const result = await bindings.read({
+        actor: sitesActor,
+        bindingOwnerId: credential.ownerId as MindBindingOwnerId,
+        credentialScopes: Object.freeze([...credential.scopes]) as EffectiveTokenScopes,
+      });
+      if (result.kind !== "ready") return null;
+      return Object.freeze({
+        ownerId: credential.ownerId,
+        bindingVersion: Number(result.bindings.bindingSet.bindingVersion),
+        state: credential.state === "active" ? result.bindings.bindingSet.state : "revoked" as const,
+        readBindings: Object.freeze(await Promise.all(
+          result.bindings.readBindings.map(async (binding) => Object.freeze({
+            readBindingId: String(binding.readBindingId),
+            staleAccessRef: await staleAccessRef(
+              credential.ownerId,
+              String(binding.readBindingId),
+            ),
+            mindId: String(binding.spaceId),
+          })),
+        )),
+        writeBinding: result.bindings.writeBinding === null
+          ? null
+          : Object.freeze({
+              writeBindingId: String(result.bindings.writeBinding.writeBindingId),
+              mindId: String(result.bindings.writeBinding.spaceId),
+            }),
+        automaticCapture: Object.freeze({
+          mode: result.bindings.bindingSet.automaticCaptureMode,
+          writeBindingId: result.bindings.bindingSet.captureWriteBindingId === null
+            ? null
+            : String(result.bindings.bindingSet.captureWriteBindingId),
+          updatedAt: result.bindings.bindingSet.captureUpdatedAt,
+        }),
+      });
+    }));
+    return Object.freeze(
+      snapshots.filter((snapshot): snapshot is NonNullable<typeof snapshot> => snapshot !== null),
+    );
+  };
+
+  const mutateResolvedBinding = async (
+    actor: ProductWebActor,
+    credential: Readonly<{
+      readonly ownerId: string;
+      readonly scopes: readonly ("content:read" | "content:write")[];
+      readonly state: "active" | "revoked";
+    }>,
+    input: Readonly<Record<string, unknown>>,
+  ) => {
+    if (actor.authentication.kind !== "sites_identity") {
+      throw Object.assign(new Error("Sites identity is required."), { code: "authentication_required" });
+    }
+    const sitesActor = actor as SitesIdentityActorContext;
+    const ownerId = typeof input.binding_owner_id === "string" ? input.binding_owner_id : null;
+    const action = input.action;
+    if (
+      credential.state !== "active" || ownerId !== credential.ownerId ||
+      !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u.test(credential.ownerId) ||
+      !(action === "attach_read" || action === "detach_read" ||
+        action === "bind_write" || action === "unbind_write")
+    ) {
+      throw Object.assign(new Error("Invalid binding mutation."), { code: "invalid_binding_request" });
+    }
+    const allowedKeys = new Set([
+      "action",
+      "binding_owner_id",
+      "expectedBindingVersion",
+      "idempotencyKey",
+      ...(action === "attach_read" || action === "bind_write"
+        ? ["mindRef"]
+        : action === "detach_read"
+          ? ["mindRef", "readBindingId"]
+          : []),
+    ]);
+    if (
+      Object.keys(input).some((key) => !allowedKeys.has(key)) ||
+      !Number.isSafeInteger(input.expectedBindingVersion) ||
+      Number(input.expectedBindingVersion) < 0 ||
+      typeof input.idempotencyKey !== "string" ||
+      input.idempotencyKey.length === 0
+    ) {
+      throw Object.assign(new Error("Invalid binding mutation fields."), { code: "invalid_binding_request" });
+    }
+    if (
+      (action === "bind_write" || action === "unbind_write") &&
+      !credential.scopes.includes("content:write")
+    ) {
+      throw Object.assign(new Error("Write scope is required."), { code: "insufficient_scope" });
+    }
+    const bindingCaller = Object.freeze({
+      actor: sitesActor,
+      bindingOwnerId: ownerId as MindBindingOwnerId,
+      credentialScopes: Object.freeze([...credential.scopes]) as EffectiveTokenScopes,
+    });
+    let spaceId: unknown = null;
+    if (action === "attach_read" || action === "bind_write") {
+      const mindRef = typeof input.mindRef === "string" ? input.mindRef : null;
+      if (mindRef === null || !/^\/(?:me|[a-z0-9]+(?:-[a-z0-9]+)*)$/u.test(mindRef)) {
+        throw Object.assign(new Error("Invalid binding target."), { code: "invalid_mind_ref" });
+      }
+      const resolved = await control.execute({
+        operation: "get_mind_info",
+        actor,
+        input: Object.freeze({ mind_ref: mindRef.slice(1) }),
+      });
+      spaceId = (resolved as { readonly mindId?: unknown }).mindId;
+    }
+    if (action === "detach_read") {
+      const mindRef = typeof input.mindRef === "string" ? input.mindRef : null;
+      const readBindingId = typeof input.readBindingId === "string" ? input.readBindingId : null;
+      if ((mindRef === null) === (readBindingId === null)) {
+        throw Object.assign(new Error("Exactly one detach target is required."), { code: "invalid_binding_request" });
+      }
+      if (mindRef !== null) {
+        if (!/^\/(?:me|[a-z0-9]+(?:-[a-z0-9]+)*)$/u.test(mindRef)) {
+          throw Object.assign(new Error("Invalid binding target."), { code: "invalid_mind_ref" });
+        }
+        const resolved = await control.execute({
+          operation: "get_mind_info",
+          actor,
+          input: Object.freeze({ mind_ref: mindRef.slice(1) }),
+        });
+        spaceId = (resolved as { readonly mindId?: unknown }).mindId;
+      } else {
+        const current = await bindings.read(bindingCaller);
+        const selected = current.kind === "ready" && readBindingId !== null
+          ? current.bindings.readBindings.find((binding) =>
+              String(binding.readBindingId) === readBindingId)
+          : undefined;
+        if (selected === undefined) {
+          throw Object.assign(new Error("Binding target not found."), { code: "binding_target_not_found" });
+        }
+        spaceId = selected.spaceId;
+      }
+    }
+    const expectedBindingVersion = input.expectedBindingVersion;
+    const idempotencyKey = input.idempotencyKey;
+    const result = await runWithCapturedWork(
+      () => action === "attach_read" || action === "detach_read"
+        ? bindings.mutateRead({
+            ...bindingCaller,
+            action: action === "attach_read" ? "attach" : "detach",
+            spaceId: spaceId as never,
+            expectedBindingVersion,
+            idempotencyKey,
+          })
+        : bindings.mutateWrite(action === "bind_write"
+          ? {
+              ...bindingCaller,
+              action: "bind",
+              spaceId: spaceId as never,
+              expectedBindingVersion,
+              idempotencyKey,
+            }
+          : {
+              ...bindingCaller,
+              action: "unbind",
+              expectedBindingVersion,
+              idempotencyKey,
+            }),
+      (value) => value.kind === "applied" && !value.replayed,
+    );
+    if (result.kind === "applied") {
+      return Object.freeze({
+        changed: result.changed,
+        replayed: result.replayed,
+        bindingVersion: Number(result.bindings.bindingSet.bindingVersion),
+      });
+    }
+    if (result.kind === "denied") {
+      throw Object.assign(new Error("Binding mutation was denied."), { code: result.decision.code });
+    }
+    if (result.kind === "invalid") {
+      throw Object.assign(new Error("Binding mutation is invalid."), { code: result.code });
+    }
+    throw Object.assign(new Error("Binding mutation was not applied."), {
+      code: result.kind === "owner_mismatch" ? "binding_owner_not_found" : result.kind,
+    });
+  };
 
   const web = createProductWebHttpHandler({
     applicationOrigin: options.publicOrigin,
@@ -1220,14 +1496,62 @@ export async function createProductSiteRuntime(
     },
     resolveIdentity,
     oauthConnections: {
-      list(principalId) {
-        return oauth.listConnections(principalId);
+      listPage(principalId, query) {
+        return oauth.listConnectionPage(principalId, query);
       },
-      revoke(principalId, grantId) {
-        return oauth.revokeConnection(principalId, grantId);
+      read(principalId, connectionRef) {
+        return oauth.readConnection(principalId, connectionRef);
+      },
+      revoke(principalId, connectionRef) {
+        return oauth.revokeConnection(principalId, connectionRef);
+      },
+    },
+    personalTokens: {
+      async listPage(actor, query) {
+        const page = await control.services.tokens.listPersonalTokenPage(actor as never, query);
+        const items = await Promise.all(page.items.map(async (item) => {
+          const metadataToken = await metadata.readMcpTokenMetadataByPresentationRef(
+            actor.principalId,
+            item.personalTokenRef,
+          );
+          if (metadataToken === null) {
+            throw new Error("Personal token binding owner is unavailable");
+          }
+          return Object.freeze({
+            ...item,
+            bindingOwnerId: String(metadataToken.tokenId),
+          });
+        }));
+        return Object.freeze({ items: Object.freeze(items), nextCursor: page.nextCursor });
+      },
+      async read(actor, personalTokenRef) {
+        try {
+          const [item, metadataToken] = await Promise.all([
+            control.services.tokens.readPersonalToken(actor as never, personalTokenRef as never),
+            metadata.readMcpTokenMetadataByPresentationRef(
+              actor.principalId,
+              personalTokenRef as never,
+            ),
+          ]);
+          return metadataToken === null
+            ? null
+            : Object.freeze({ ...item, bindingOwnerId: String(metadataToken.tokenId) });
+        } catch (error) {
+          if (
+            typeof error === "object" && error !== null && "code" in error &&
+            (error.code === "token_not_found" || error.code === "invalid_token_id")
+          ) return null;
+          throw error;
+        }
       },
     },
     mindBindings: {
+      listResolved(actor, credentials) {
+        return listResolvedBindings(actor, credentials);
+      },
+      mutateResolved(actor, credential, input) {
+        return mutateResolvedBinding(actor, credential, input);
+      },
       async list(actor, ownerIds) {
         if (actor.authentication.kind !== "sites_identity") return Object.freeze([]);
         const sitesActor = actor as SitesIdentityActorContext;
@@ -1235,7 +1559,7 @@ export async function createProductSiteRuntime(
         if (requested.size === 0) return Object.freeze([]);
         const personalTokens = await control.services.tokens.listMcpTokens(actor as never);
         const oauthConnections = ownerIds.some((ownerId) => ownerId.startsWith("md_oauth_grant_"))
-          ? await oauth.listConnections(String(actor.principalId))
+          ? (await oauth.listConnectionPage(String(actor.principalId), { limit: 50 })).items
           : Object.freeze([]);
         const credentials = [
           ...personalTokens
@@ -1247,8 +1571,8 @@ export async function createProductSiteRuntime(
               state: token.state,
             })),
           ...oauthConnections.map((connection) => Object.freeze({
-            ownerId: connection.grantId,
-            tokenId: connection.grantId,
+            ownerId: connection.bindingOwnerId,
+            tokenId: connection.bindingOwnerId,
             scopes: connection.scopes,
             state: "active" as const,
           })),
@@ -1266,10 +1590,11 @@ export async function createProductSiteRuntime(
             state: credential.state === "active"
               ? result.bindings.bindingSet.state
               : "revoked",
-            readBindings: Object.freeze(result.bindings.readBindings.map((binding) => Object.freeze({
+            readBindings: Object.freeze(await Promise.all(result.bindings.readBindings.map(async (binding) => Object.freeze({
               readBindingId: String(binding.readBindingId),
+              staleAccessRef: await staleAccessRef(credential.ownerId, String(binding.readBindingId)),
               mindId: String(binding.spaceId),
-            }))),
+            })))),
             writeBinding: result.bindings.writeBinding === null
               ? null
               : Object.freeze({
@@ -1335,9 +1660,9 @@ export async function createProductSiteRuntime(
           !String(token.tokenId).startsWith(OAUTH_ACCESS_RECORD_PREFIX) &&
           String(token.tokenId) === ownerId);
         const oauthConnections = personal === undefined
-          ? await oauth.listConnections(String(actor.principalId))
+          ? (await oauth.listConnectionPage(String(actor.principalId), { limit: 50 })).items
           : Object.freeze([]);
-        const connection = oauthConnections.find((item) => item.grantId === ownerId);
+        const connection = oauthConnections.find((item) => item.bindingOwnerId === ownerId);
         if (personal === undefined && connection === undefined) {
           throw Object.assign(new Error("Binding owner not found."), { code: "binding_owner_not_found" });
         }

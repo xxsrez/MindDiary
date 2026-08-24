@@ -18,6 +18,7 @@
     "test:unit": "npm run build --silent && node --test tests/unit/*.test.mjs",
     "test:integration": "npm run build --silent && node --test tests/integration/*.test.mjs",
     "test:conformance": "npm run build --silent && node --test tests/conformance/*.test.mjs && npm run validate:fixtures --silent",
+    "test:browser": "npm run build --silent && playwright test --config=playwright.config.mjs",
     "test": "npm run test:unit && npm run test:integration && npm run test:conformance",
     "validate:fixtures": "npm run build --silent && node scripts/validate-okf-fixtures.mjs",
     "check:architecture": "node scripts/check-architecture.mjs",
@@ -33,12 +34,17 @@
     "uat:operator-directory-canary": "node scripts/run-uat-operator-directory-canary.mjs",
     "uat:provider-log-boundary": "node scripts/run-provider-request-log-boundary.mjs",
     "readiness:report": "node scripts/generate-readiness-report.mjs --sha HEAD --output build/readiness-report.json",
-    "check": "npm run clean && npm run build && node --test tests/unit/*.test.mjs tests/integration/*.test.mjs tests/conformance/*.test.mjs && npm run validate:fixtures && npm run check:architecture && npm run check:product-site && npm run check:docs && npm run check:secrets && node scripts/generate-readiness-report.mjs --sha HEAD --output build/readiness-report.json --local-gate-status passed"
+    "check": "npm run clean && npm run build && node --test tests/unit/*.test.mjs tests/integration/*.test.mjs tests/conformance/*.test.mjs && playwright test --config=playwright.config.mjs && npm run validate:fixtures && npm run check:architecture && npm run check:product-site && npm run check:docs && npm run check:secrets && node scripts/generate-readiness-report.mjs --sha HEAD --output build/readiness-report.json --local-gate-status passed"
   },
   "dependencies": {
     "yaml": "2.9.0"
   },
   "devDependencies": {
+    "@playwright/browser-chromium": "1.62.1",
+    "@playwright/test": "1.62.1",
     "typescript": "5.9.3"
+  },
+  "allowScripts": {
+    "@playwright/browser-chromium@1.62.1": true
   }
 }

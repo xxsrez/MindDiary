@@ -7,6 +7,7 @@ import {
 export * from "./ui-shell.js";
 export * from "./onboarding.js";
 export * from "./token-management.js";
+export * from "./connections.js";
 export * from "./sites-identity-binding.js";
 export * from "./request-security.js";
 export * from "./product-http.js";
@@ -78,6 +79,10 @@ export const WEB_CONTROL_ROUTES = [
   ["DELETE", "/api/v1/invitations/{invitation_id}"],
   ["GET", "/api/v1/mcp-tokens"],
   ["POST", "/api/v1/mcp-tokens"],
-  ["DELETE", "/api/v1/mcp-tokens/{token_id}"],
-  ["PATCH", "/api/v1/mind-bindings/{binding_owner_id}"],
+  ["PATCH", "/api/v1/mcp-tokens/{personal_token_ref}/mind-access"],
+  ["DELETE", "/api/v1/mcp-tokens/{personal_token_ref}"],
+  ["GET", "/api/v1/connections"],
+  ["GET", "/api/v1/connections/{connection_ref}"],
+  ["PATCH", "/api/v1/connections/{connection_ref}/mind-access"],
+  ["DELETE", "/api/v1/connections/{connection_ref}"],
 ] as const;

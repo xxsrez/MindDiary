@@ -57,8 +57,8 @@ test("credential references require distinct Sites and MCP credentials", () => {
     MIND_DIARY_UAT_PARTICIPANT_EMAIL: "authorized@example.test",
     MIND_DIARY_UAT_OWNER_MCP_TOKEN: "mdp_v1_owner-reference",
     MIND_DIARY_UAT_PARTICIPANT_MCP_TOKEN: "mdp_v1_participant-reference",
-    MIND_DIARY_UAT_OWNER_MCP_TOKEN_ID: "opaque-owner-token",
-    MIND_DIARY_UAT_PARTICIPANT_MCP_TOKEN_ID: "opaque-participant-token",
+    MIND_DIARY_UAT_OWNER_MCP_TOKEN_REF: "ptok_v1_11111111111111111111111111111111",
+    MIND_DIARY_UAT_PARTICIPANT_MCP_TOKEN_REF: "ptok_v1_22222222222222222222222222222222",
   };
   assert.equal(loadCredentialEnvironment(environment).ownerSitesToken, "owner-sites");
   assert.throws(
@@ -172,7 +172,12 @@ function probeFixture() {
       return json(200, { data: { replayed: false } });
     }
     if (url.pathname === "/api/v1/mcp-tokens" && method === "GET") {
-      return json(200, { data: { tokens: [{ token_id: `opaque-${actor}-token`, state: state.tokenState.get(actor) }] } });
+      return json(200, { data: { items: [{
+        personal_token_ref: actor === "owner"
+          ? "ptok_v1_11111111111111111111111111111111"
+          : "ptok_v1_22222222222222222222222222222222",
+        state: state.tokenState.get(actor),
+      }] } });
     }
     if (segments[2] === "mcp-tokens" && segments.length === 4 && method === "DELETE") {
       state.tokenState.set(actor, "revoked");
@@ -243,8 +248,8 @@ test("two-phase probe exercises redeploy persistence, immediate revoke, and clea
     MIND_DIARY_UAT_PARTICIPANT_EMAIL: "authorized@example.test",
     MIND_DIARY_UAT_OWNER_MCP_TOKEN: "mdp_v1_owner-reference",
     MIND_DIARY_UAT_PARTICIPANT_MCP_TOKEN: "mdp_v1_participant-reference",
-    MIND_DIARY_UAT_OWNER_MCP_TOKEN_ID: "opaque-owner-token",
-    MIND_DIARY_UAT_PARTICIPANT_MCP_TOKEN_ID: "opaque-participant-token",
+    MIND_DIARY_UAT_OWNER_MCP_TOKEN_REF: "ptok_v1_11111111111111111111111111111111",
+    MIND_DIARY_UAT_PARTICIPANT_MCP_TOKEN_REF: "ptok_v1_22222222222222222222222222222222",
   };
   const fixture = probeFixture();
   try {

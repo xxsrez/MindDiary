@@ -21,7 +21,7 @@ test("Mind Diary delivery profile resolves the current Task Manager scope", asyn
   const profile = await loadProfile();
   const taskManagement = profile.task_management;
 
-  assert.equal(profile.profile_revision, 4);
+  assert.equal(profile.profile_revision, 5);
   assert.equal(taskManagement.adapter.id, "task-manager");
   assert.equal(
     taskManagement.adapter.specification,

@@ -50,7 +50,11 @@ test("signed-out UI gets one safe Sites entry while REST and identity outages re
   });
 
   let canonicalShell;
-  for (const path of ["/", "/me", "/minds", "/public", "/invitations", "/settings/account", "/settings/mcp", "/help", "/unknown-handle"]) {
+  for (const path of [
+    "/", "/me", "/minds", "/public", "/invitations", "/settings/account",
+    "/settings/connections", "/settings/developer/mcp", "/settings/mcp",
+    "/help/codex", "/help", "/unknown-handle",
+  ]) {
     const response = await denied(new Request(`${origin}${path}`));
     assert.equal(response.status, 200, path);
     assert.equal(response.headers.get("content-type"), "text/html; charset=utf-8", path);
@@ -306,8 +310,9 @@ test("product web authenticates UI and fail-closes browser mutations", async () 
   assert.equal(calls.at(-1).actor, registeredActor);
 });
 
-test("product root and MCP setup render live control projections and fixed same-origin assets", async () => {
+test("product root, Connections, and Advanced MCP render safe live projections and fixed assets", async () => {
   const calls = [];
+  const personalTokenRef = `ptok_v1_${"1".repeat(32)}`;
   const handler = createProductWebHttpHandler({
     applicationOrigin: origin,
     resolveIdentity: () => ({ kind: "authenticated", actor: registeredActor }),
@@ -316,20 +321,40 @@ test("product root and MCP setup render live control projections and fixed same-
       calls.push(request.operation);
       if (request.operation === "get_session") return sessionProjection;
       if (request.operation === "list_minds") return [personalRoute];
-      if (request.operation === "list_mcp_tokens") return [{
-        tokenId: "tok_safe",
-        name: "Codex on Mac",
-        displayPrefix: "mdp_v1_Abc123…",
-        scopes: ["content:read", "content:write"],
-        state: "active",
-        version: 1,
-        createdAt: "2026-08-08T00:00:00.000Z",
-        expiresAt: "2026-11-06T00:00:00.000Z",
-        lastUsedAt: null,
-        revokedAt: null,
-      }];
       throw Object.assign(new Error("unexpected operation"), { code: "not_found" });
     } },
+    personalTokens: {
+      async listPage() {
+        return { items: [{
+          personalTokenRef,
+          bindingOwnerId: "token_internal_must_not_render",
+          name: "Codex on Mac",
+          displayPrefix: "mdp_v1_Abc123…",
+          scopes: ["content:read", "content:write"],
+          state: "active",
+          createdAt: "2026-08-08T00:00:00.000Z",
+          expiresAt: "2026-11-06T00:00:00.000Z",
+          lastUsedAt: null,
+          revokedAt: null,
+        }], nextCursor: null };
+      },
+      async read() { return null; },
+    },
+    mindBindings: {
+      async list() { return []; },
+      async listResolved(_actor, credentials) {
+        return credentials.map((credential) => ({
+          ownerId: credential.ownerId,
+          bindingVersion: 0,
+          state: "active",
+          readBindings: [],
+          writeBinding: null,
+          automaticCapture: { mode: "disabled", writeBindingId: null, updatedAt: null },
+        }));
+      },
+      async mutate() { throw new Error("unused"); },
+      async mutateResolved() { throw new Error("unused"); },
+    },
   });
 
   const root = await handler(new Request(`${origin}/`));
@@ -337,33 +362,35 @@ test("product root and MCP setup render live control projections and fixed same-
   const rootHtml = await root.text();
   assert.match(rootHtml, /data-mind-diary-shell/);
   assert.match(rootHtml, /Product Owner/);
-  assert.match(rootHtml, /href="\/settings\/mcp"/);
+  assert.match(rootHtml, /href="\/settings\/connections"/);
   assert.match(rootHtml, /rel="icon" href="\/favicon\.ico" sizes="16x16 32x32"/);
   assert.match(rootHtml, /rel="icon" href="\/favicon\.svg" type="image\/svg\+xml" sizes="any"/);
   assert.match(rootHtml, /rel="icon" href="\/favicon-32x32\.png" type="image\/png" sizes="32x32"/);
   assert.match(rootHtml, /rel="apple-touch-icon" href="\/apple-touch-icon\.png" type="image\/png" sizes="180x180"/);
   assert.doesNotMatch(rootHtml, /principal_one|revision_personal/);
 
-  const tokens = await handler(new Request(`${origin}/settings/mcp`));
+  const legacy = await handler(new Request(`${origin}/settings/mcp`));
+  assert.equal(legacy.status, 308);
+  assert.equal(legacy.headers.get("location"), "/settings/developer/mcp");
+  const legacyHead = await handler(new Request(`${origin}/settings/mcp`, { method: "HEAD" }));
+  assert.equal(legacyHead.status, 308);
+  assert.equal(legacyHead.headers.get("location"), "/settings/developer/mcp");
+  assert.equal(await legacyHead.text(), "");
+
+  const tokens = await handler(new Request(`${origin}/settings/developer/mcp`));
   assert.equal(tokens.status, 200);
   const tokenHtml = await tokens.text();
-  assert.match(tokenHtml, /data-mind-diary-token-management/);
+  assert.match(tokenHtml, /data-advanced-mcp/);
   assert.match(tokenHtml, /Codex on Mac/);
   assert.match(tokenHtml, /mdp_v1_Abc123…/);
-  assert.match(tokenHtml, /mind-diary-token-client\.js/);
+  assert.match(tokenHtml, /mind-diary-connections-client\.js/);
+  assert.match(tokenHtml, /data-mcp-self-check/);
+  assert.match(tokenHtml, /data-run-mcp-self-check disabled/);
+  assert.match(tokenHtml, /data-copy-code="mind-diary-modern-config"/);
   assert.match(tokenHtml, /https:\/\/mind-diary\.example\/api\/mcp\/2025-11-25/);
   assert.match(tokenHtml, /https:\/\/mind-diary\.example\/api\/mcp/);
-  assert.match(tokenHtml, /data-run-mcp-self-check disabled/);
-  assert.match(tokenHtml, /Preview, restore and export with Codex/);
-  assert.match(tokenHtml, /data-copy-code="mind-diary-safe-write-playbook"/);
-  assert.match(tokenHtml, /data-copy-code="mind-diary-restore-export-playbook"/);
-  assert.match(tokenHtml, /data-copy-code="mind-diary-starter-playbook"/);
-  assert.match(tokenHtml, /data-copy-code="mind-diary-concierge-playbook"/);
-  assert.match(tokenHtml, /Start one valid Mind with Codex/);
-  assert.match(tokenHtml, /A restore is an ordinary confirmed changeset that creates a new HEAD/);
-  assert.match(tokenHtml, /Download URLs and credentials are bearer material/);
   assert.doesNotMatch(tokenHtml, /&lt;your-mind-diary-site&gt;/);
-  assert.doesNotMatch(tokenHtml, /synthetic-show-once-value|verifier|principal_one/i);
+  assert.doesNotMatch(tokenHtml, /synthetic-show-once-value|verifier|principal_one|token_internal_must_not_render/i);
 
   for (const [path, contentType, marker] of [
     ["/favicon.svg", "image/svg+xml; charset=utf-8", "#6C4BB6"],
@@ -371,12 +398,18 @@ test("product root and MCP setup render live control projections and fixed same-
     ["/brand/mind-diary-lockup.svg", "image/svg+xml; charset=utf-8", "Mind Diary logo"],
     ["/ui/mind-diary-onboarding-client.js", "text/javascript; charset=utf-8", "/api/v1/account"],
     ["/ui/mind-diary-token-client.js", "text/javascript; charset=utf-8", "/api/mcp/2025-11-25"],
+    ["/ui/mind-diary-connections-client.js", "text/javascript; charset=utf-8", "accessEndpoint"],
     ["/ui/mind-diary-visibility-client.js", "text/javascript; charset=utf-8", "data-public-catalog-retry"],
   ]) {
     const response = await handler(new Request(`${origin}${path}`));
     assert.equal(response.status, 200);
     assert.equal(response.headers.get("content-type"), contentType);
-    assert.match(await response.text(), new RegExp(marker.replaceAll("/", "\\/")));
+    const body = await response.text();
+    assert.match(body, new RegExp(marker.replaceAll("/", "\\/")));
+    if (path.endsWith(".js")) assert.doesNotThrow(() => new vm.Script(body));
+    if (path === "/ui/mind-diary-connections-client.js") {
+      assert.doesNotMatch(body, /api\/v1\/oauth-connections|api\/v1\/mind-bindings/);
+    }
   }
   const hostedShellCss = await (await handler(new Request(`${origin}/ui/mind-diary-shell.css`))).text();
   assert.match(hostedShellCss, /\.md-setup-card--single\{grid-template-columns:minmax\(0,1fr\)\}/u);
@@ -408,7 +441,7 @@ test("product root and MCP setup render live control projections and fixed same-
   assert.equal((await iconHead.arrayBuffer()).byteLength, 0);
   const wrongAssetMethod = await handler(new Request(`${origin}/ui/mind-diary-shell.css`, { method: "POST" }));
   assert.equal(wrongAssetMethod.status, 405);
-  assert.deepEqual(calls, ["list_minds", "get_session", "list_mcp_tokens"]);
+  assert.deepEqual(calls, ["list_minds", "get_session", "list_minds"]);
 });
 
 test("account settings wires profile CAS, fresh deletion impact, same-key retry client, and privacy-safe recovery", async () => {
@@ -594,6 +627,21 @@ test("pilot Product Site route map keeps one UAT shell, exact active navigation,
       }
       throw Object.assign(new Error("not found"), { code: "not_found" });
     } },
+    oauthConnections: {
+      async listPage() { return { items: [], nextCursor: null }; },
+      async read() { return null; },
+      async revoke() { return false; },
+    },
+    personalTokens: {
+      async listPage() { return { items: [], nextCursor: null }; },
+      async read() { return null; },
+    },
+    mindBindings: {
+      async list() { return []; },
+      async listResolved() { return []; },
+      async mutate() { throw new Error("unused"); },
+      async mutateResolved() { throw new Error("unused"); },
+    },
   });
 
   const routeMap = [
@@ -604,7 +652,9 @@ test("pilot Product Site route map keeps one UAT shell, exact active navigation,
     ["/public", /data-mind-diary-visibility-catalog/],
     ["/invitations", /data-global-invitations/],
     ["/settings/account", /data-mind-diary-account-deletion/],
-    ["/settings/mcp", /data-mind-diary-token-management/],
+    ["/settings/connections", /data-connections-page/],
+    ["/settings/developer/mcp", /data-advanced-mcp/],
+    ["/help/codex", /data-codex-help/],
     ["/help", /data-route-page="help"/],
   ];
   for (const [path, marker] of routeMap) {
@@ -619,11 +669,17 @@ test("pilot Product Site route map keeps one UAT shell, exact active navigation,
     assert.match(html, /href="\/public"/, path);
     assert.match(html, /href="\/invitations"/, path);
     assert.match(html, /href="\/settings\/account"/, path);
-    assert.match(html, /href="\/settings\/mcp"/, path);
-    assert.match(html, /href="\/help"/, path);
-    assert.equal((html.match(/aria-current="page"/g) ?? []).length, 1, path);
+    assert.match(html, /href="\/settings\/connections"/, path);
+    assert.match(html, /href="\/help\/codex"/, path);
+    if (path !== "/settings/developer/mcp") {
+      assert.equal((html.match(/aria-current="page"/g) ?? []).length, 1, path);
+    }
     assert.doesNotMatch(html, /owner-only production Site|current Site is production/i, path);
   }
+
+  const legacyMcp = await handler(new Request(`${origin}/settings/mcp`));
+  assert.equal(legacyMcp.status, 308);
+  assert.equal(legacyMcp.headers.get("location"), "/settings/developer/mcp");
 
   const help = await handler(new Request(`${origin}/help`));
   const helpHtml = await help.text();
@@ -634,6 +690,15 @@ test("pilot Product Site route map keeps one UAT shell, exact active navigation,
   assert.match(helpHtml, /data-copy-code="mind-diary-help-concierge-playbook"/u);
   assert.match(helpHtml, /exactly one target/u);
   assert.match(helpHtml, /concierge work, not a product import/u);
+
+  const codexHelp = await handler(new Request(`${origin}/help/codex`));
+  const codexHelpHtml = await codexHelp.text();
+  assert.match(codexHelpHtml, /Authenticate for reading/);
+  assert.match(codexHelpHtml, /Create the first useful Memory/);
+  assert.match(codexHelpHtml, /Preview and confirm a substantial change/);
+  assert.match(codexHelpHtml, /Restore as a new revision and export/);
+  assert.match(codexHelpHtml, /Convert a bounded Markdown set/);
+  assert.doesNotMatch(codexHelpHtml, /MIND_DIARY_TOKEN|api\/mcp\/2025-11-25/i);
 
   for (const path of ["/api", "/mcp", "/settings", "/settings/unknown", "/minds/extra"]) {
     assert.equal(await handler(new Request(`${origin}${path}`)), null, path);
@@ -1079,6 +1144,7 @@ test("collaboration pages expose safe invitation metadata and map every browser 
 
 test("token controls preserve CSRF and expose a one-time secret only in the issuance response", async () => {
   const calls = [];
+  const personalTokenRef = `ptok_v1_${"2".repeat(32)}`;
   const handler = createProductWebHttpHandler({
     applicationOrigin: origin,
     resolveIdentity: () => ({ kind: "authenticated", actor: registeredActor }),
@@ -1086,10 +1152,13 @@ test("token controls preserve CSRF and expose a one-time secret only in the issu
     control: { execute(request) {
       calls.push(request);
       if (request.operation === "issue_mcp_token") return {
-        token: { tokenId: "tok_created", displayPrefix: "mdp_v1_Safe12…" },
+        token: { personalTokenRef, displayPrefix: "mdp_v1_Safe12…" },
         secret: "synthetic-show-once-value",
       };
-      if (request.operation === "revoke_mcp_token") return { token: { tokenId: "tok_created", state: "revoked" }, replayed: false };
+      if (request.operation === "revoke_personal_token") return {
+        token: { personalTokenRef, state: "revoked" },
+        replayed: false,
+      };
       return sessionProjection;
     } },
   });
@@ -1110,54 +1179,80 @@ test("token controls preserve CSRF and expose a one-time secret only in the issu
   assert.equal(issued.status, 200);
   const issuedBody = await issued.json();
   assert.equal(issuedBody.data.secret, "synthetic-show-once-value");
+  assert.equal(issuedBody.data.token.personal_token_ref, personalTokenRef);
+  assert.equal(JSON.stringify(issuedBody).includes("token_id"), false);
+  assert.equal(JSON.stringify(issuedBody).includes("tok_created"), false);
   assert.equal(calls[0].input.idempotencyKey, "token:12345678");
 
-  const revoked = await handler(new Request(`${origin}/api/v1/mcp-tokens/tok_created`, {
+  const revoked = await handler(new Request(`${origin}/api/v1/mcp-tokens/${personalTokenRef}`, {
     method: "DELETE",
     headers: { origin, "x-csrf-token": "csrf-ui", "idempotency-key": "revoke:12345678" },
   }));
   assert.equal(revoked.status, 200);
-  assert.equal(calls[1].operation, "revoke_mcp_token");
-  assert.equal(calls[1].input.token_id, "tok_created");
+  const revokedBody = await revoked.json();
+  assert.equal(calls[1].operation, "revoke_personal_token");
+  assert.equal(calls[1].input.personal_token_ref, personalTokenRef);
+  assert.equal("token_id" in calls[1].input, false);
+  assert.equal(JSON.stringify(revokedBody).includes("token_id"), false);
 });
 
-test("Product Site projects and mutates exact credential bindings with CSRF, CAS, and inaccessible-Mind redaction", async () => {
+test("Connections project and mutate exact credential access with presentation refs, CAS, and redaction", async () => {
   const bindingCalls = [];
+  const connectionRef = `conn_v1_${"3".repeat(32)}`;
+  const staleAccessRef = `stale_v1_${"4".repeat(32)}`;
+  const bindingOwnerId = "md_oauth_grant_internal_must_not_render";
   let conflict = false;
+  const oauthConnection = Object.freeze({
+    connectionRef,
+    bindingOwnerId,
+    clientName: "Codex Marketplace",
+    scopes: Object.freeze(["content:read", "content:write"]),
+    createdAt: "2026-08-08T00:00:00.000Z",
+    lastUsedAt: null,
+  });
   const handler = createProductWebHttpHandler({
     applicationOrigin: origin,
     resolveIdentity: () => ({ kind: "authenticated", actor: registeredActor }),
     csrf: { issue: () => "csrf-bindings", verify: (_actor, token) => token === "csrf-bindings" },
     control: { execute(request) {
       if (request.operation === "get_session") return sessionProjection;
-      if (request.operation === "list_mcp_tokens") return [{
-        tokenId: "tok_binding",
-        name: "Bound Codex",
-        displayPrefix: "mdp_v1_Abc123…",
-        scopes: ["content:read", "content:write"],
-        state: "active",
-        createdAt: "2026-08-08T00:00:00.000Z",
-        expiresAt: "2026-11-06T00:00:00.000Z",
-        lastUsedAt: null,
-        revokedAt: null,
-      }];
       if (request.operation === "list_minds") return [personalRoute, {
         ...ordinaryOwnerRoute,
         visibility: "unlisted",
       }];
       throw Object.assign(new Error("unexpected operation"), { code: "not_found" });
     } },
+    oauthConnections: {
+      async listPage(principalId) {
+        assert.equal(principalId, registeredActor.principalId);
+        return { items: [oauthConnection], nextCursor: null };
+      },
+      async read(principalId, presentedRef) {
+        assert.equal(principalId, registeredActor.principalId);
+        return presentedRef === connectionRef ? oauthConnection : null;
+      },
+      async revoke() { return true; },
+    },
     mindBindings: {
-      async list(actor, ownerIds) {
+      async list() { throw new Error("legacy binding projection must not be used"); },
+      async listResolved(actor, credentials) {
         assert.equal(actor, registeredActor);
-        assert.deepEqual(ownerIds, ["tok_binding"]);
+        assert.deepEqual(credentials, [{
+          ownerId: bindingOwnerId,
+          scopes: ["content:read", "content:write"],
+          state: "active",
+        }]);
         return [{
-          ownerId: "tok_binding",
+          ownerId: bindingOwnerId,
           bindingVersion: 8,
           state: "active",
           readBindings: [
-            { readBindingId: "read-binding-personal", mindId: "space_personal" },
-            { readBindingId: "read-binding-hidden", mindId: "space_hidden" },
+            {
+              readBindingId: "read-binding-personal",
+              staleAccessRef: `stale_v1_${"5".repeat(32)}`,
+              mindId: "space_personal",
+            },
+            { readBindingId: "read-binding-hidden", staleAccessRef, mindId: "space_hidden" },
           ],
           writeBinding: { writeBindingId: "write-binding-research", mindId: "space_research" },
           automaticCapture: {
@@ -1167,8 +1262,9 @@ test("Product Site projects and mutates exact credential bindings with CSRF, CAS
           },
         }];
       },
-      async mutate(actor, input) {
-        bindingCalls.push({ actor, input });
+      async mutate() { throw new Error("legacy binding mutation must not be used"); },
+      async mutateResolved(actor, credential, input) {
+        bindingCalls.push({ actor, credential, input });
         if (conflict) {
           throw Object.assign(new Error("stale"), { code: "binding_version_conflict" });
         }
@@ -1177,30 +1273,38 @@ test("Product Site projects and mutates exact credential bindings with CSRF, CAS
     },
   });
 
-  const page = await handler(new Request(`${origin}/settings/mcp`));
+  const page = await handler(new Request(`${origin}/settings/connections`));
   assert.equal(page.status, 200);
   const html = await page.text();
-  assert.match(html, /Bound Codex/);
-  assert.match(html, /Version 8/);
-  assert.match(html, /Product Owner[\s\S]*\/me[\s\S]*private/);
-  assert.match(html, /Research Notes[\s\S]*\/research-notes[\s\S]*unlisted/);
-  assert.match(html, /Access unavailable/);
-  assert.match(html, /data-binding-action="detach_read"/);
-  assert.match(html, /data-binding-form="bind_write"/);
-  assert.match(html, /Automatic knowledge capture/);
-  assert.match(html, /available only while the writable Mind is private/);
-  assert.match(html, /data-binding-action="enable_capture"[^>]*disabled/);
-  assert.doesNotMatch(html, /space_hidden|space_personal|space_research/);
+  assert.match(html, /Codex Marketplace/);
+  assert.match(html, /Can read/);
+  assert.match(html, /Can add and change/);
+  assert.match(html, new RegExp(`/settings/connections/${connectionRef}`));
+  assert.doesNotMatch(html, /md_oauth_grant_internal_must_not_render|read-binding-|write-binding-|space_(?:personal|research)/);
 
-  const denied = await handler(new Request(`${origin}/api/v1/mind-bindings/tok_binding`, {
+  const detail = await handler(new Request(`${origin}/settings/connections/${connectionRef}`));
+  assert.equal(detail.status, 200);
+  const detailHtml = await detail.text();
+  assert.match(detailHtml, /data-connection-detail/);
+  assert.match(detailHtml, /data-binding-version="8"/);
+  assert.match(detailHtml, /Product Owner[\s\S]*\/me[\s\S]*private/);
+  assert.match(detailHtml, /Research Notes[\s\S]*\/research-notes[\s\S]*unlisted/);
+  assert.match(detailHtml, /Access unavailable/);
+  assert.match(detailHtml, new RegExp(staleAccessRef));
+  assert.match(detailHtml, /data-access-action="detach_read"/);
+  assert.match(detailHtml, /data-access-action="select_write"/);
+  assert.doesNotMatch(detailHtml, /Automatic knowledge capture|routine_non_sensitive|content:read|content:write/);
+  assert.doesNotMatch(detailHtml, /md_oauth_grant_internal_must_not_render|read-binding-|write-binding-|space_(?:hidden|personal|research)/);
+
+  const denied = await handler(new Request(`${origin}/api/v1/connections/${connectionRef}/mind-access`, {
     method: "PATCH",
     headers: { origin, "x-csrf-token": "wrong", "content-type": "application/json" },
-    body: JSON.stringify({ action: "bind_write", mind_ref: "/research-notes", expected_binding_version: 8 }),
+    body: JSON.stringify({ action: "select_write", mind_ref: "/research-notes", expected_binding_version: 8 }),
   }));
   assert.equal(denied.status, 403);
   assert.equal(bindingCalls.length, 0);
 
-  const applied = await handler(new Request(`${origin}/api/v1/mind-bindings/tok_binding`, {
+  const applied = await handler(new Request(`${origin}/api/v1/connections/${connectionRef}/mind-access`, {
     method: "PATCH",
     headers: {
       origin,
@@ -1209,28 +1313,58 @@ test("Product Site projects and mutates exact credential bindings with CSRF, CAS
       "idempotency-key": "binding:product-site",
     },
     body: JSON.stringify({
-      action: "bind_write",
+      action: "select_write",
       mind_ref: "/research-notes",
       expected_binding_version: 8,
     }),
   }));
   assert.equal(applied.status, 200);
-  assert.deepEqual((await applied.json()).data, {
-    changed: true,
-    replayed: false,
-    binding_version: 9,
-  });
+  const appliedBody = await applied.json();
+  assert.equal(appliedBody.data.connection_ref, connectionRef);
+  assert.equal(appliedBody.data.changed, true);
+  assert.equal(appliedBody.data.replayed, false);
+  assert.equal(appliedBody.data.access.binding_version, 8);
+  assert.equal(JSON.stringify(appliedBody).includes(bindingOwnerId), false);
+  assert.equal(JSON.stringify(appliedBody).includes("read-binding-"), false);
   assert.equal(bindingCalls[0].actor, registeredActor);
+  assert.deepEqual(bindingCalls[0].credential, {
+    ownerId: bindingOwnerId,
+    scopes: ["content:read", "content:write"],
+    state: "active",
+  });
   assert.deepEqual(bindingCalls[0].input, {
     action: "bind_write",
     mindRef: "/research-notes",
     expectedBindingVersion: 8,
     idempotencyKey: "binding:product-site",
-    binding_owner_id: "tok_binding",
+    binding_owner_id: bindingOwnerId,
+  });
+
+  const detached = await handler(new Request(`${origin}/api/v1/connections/${connectionRef}/mind-access`, {
+    method: "PATCH",
+    headers: {
+      origin,
+      "x-csrf-token": "csrf-bindings",
+      "content-type": "application/json",
+      "idempotency-key": "binding:detach-stale",
+    },
+    body: JSON.stringify({
+      action: "detach_read",
+      stale_access_ref: staleAccessRef,
+      expected_binding_version: 8,
+    }),
+  }));
+  assert.equal(detached.status, 200);
+  assert.deepEqual(bindingCalls[1].input, {
+    action: "detach_read",
+    readBindingId: "read-binding-hidden",
+    expectedBindingVersion: 8,
+    idempotencyKey: "binding:detach-stale",
+    binding_owner_id: bindingOwnerId,
   });
 
   conflict = true;
-  const stale = await handler(new Request(`${origin}/api/v1/mind-bindings/tok_binding`, {
+  const stale = await handler(new Request(`${origin}/api/v1/connections/${connectionRef}/mind-access`, {
     method: "PATCH",
     headers: {
       origin,
@@ -1238,10 +1372,196 @@ test("Product Site projects and mutates exact credential bindings with CSRF, CAS
       "content-type": "application/json",
       "idempotency-key": "binding:stale",
     },
-    body: JSON.stringify({ action: "unbind_write", expected_binding_version: 8 }),
+    body: JSON.stringify({ action: "clear_write", expected_binding_version: 8 }),
   }));
   assert.equal(stale.status, 409);
   assert.equal((await stale.json()).error.code, "binding_version_conflict");
+});
+
+test("read-only Connections omit every write control and require a separate write step", async () => {
+  const connectionRef = `conn_v1_${"6".repeat(32)}`;
+  const handler = createProductWebHttpHandler({
+    applicationOrigin: origin,
+    resolveIdentity: () => ({ kind: "authenticated", actor: registeredActor }),
+    csrf: { issue: () => "csrf-read-only", verify: () => true },
+    control: { execute(request) {
+      if (request.operation === "get_session") return sessionProjection;
+      if (request.operation === "list_minds") return [personalRoute, ordinaryOwnerRoute];
+      throw new Error("unexpected operation");
+    } },
+    oauthConnections: {
+      async listPage() { return { items: [], nextCursor: null }; },
+      async read(principalId, presentedRef) {
+        assert.equal(principalId, registeredActor.principalId);
+        return presentedRef === connectionRef ? {
+          connectionRef,
+          bindingOwnerId: "read_only_internal_owner",
+          clientName: "Read-only Codex",
+          scopes: ["content:read"],
+          createdAt: "2026-08-08T00:00:00.000Z",
+          lastUsedAt: null,
+        } : null;
+      },
+      async revoke() { return true; },
+    },
+    mindBindings: {
+      async list() { return []; },
+      async listResolved() {
+        return [{
+          ownerId: "read_only_internal_owner",
+          bindingVersion: 1,
+          state: "active",
+          readBindings: [],
+          writeBinding: null,
+          automaticCapture: { mode: "disabled", writeBindingId: null, updatedAt: null },
+        }];
+      },
+      async mutate() { throw new Error("unused"); },
+      async mutateResolved() { throw new Error("write mutation must not run"); },
+    },
+  });
+
+  const response = await handler(new Request(`${origin}/settings/connections/${connectionRef}`));
+  assert.equal(response.status, 200);
+  const html = await response.text();
+  assert.match(html, /Can add and change:<\/strong> No/);
+  assert.doesNotMatch(html, /data-access-action="select_write"|data-access-action="clear_write"|Select one writable Mind/);
+
+  const mutation = await handler(new Request(`${origin}/api/v1/connections/${connectionRef}/mind-access`, {
+    method: "PATCH",
+    headers: {
+      origin,
+      "x-csrf-token": "csrf-read-only",
+      "content-type": "application/json",
+      "idempotency-key": "read-only:write",
+    },
+    body: JSON.stringify({ action: "select_write", mind_ref: "/research-notes", expected_binding_version: 1 }),
+  }));
+  assert.equal(mutation.status, 409);
+  assert.equal((await mutation.json()).error.code, "write_step_up_required");
+});
+
+test("connection lookup makes unknown, foreign, and revoked presentation refs indistinguishable", async () => {
+  const refs = ["7", "8", "9"].map((digit) => `conn_v1_${digit.repeat(32)}`);
+  const reads = [];
+  let bindingReads = 0;
+  const handler = createProductWebHttpHandler({
+    applicationOrigin: origin,
+    resolveIdentity: () => ({ kind: "authenticated", actor: registeredActor }),
+    csrf: { issue: () => "csrf-missing-connection", verify: () => true },
+    control: { execute(request) {
+      if (request.operation === "get_session") return sessionProjection;
+      throw new Error("hidden state must not be read");
+    } },
+    oauthConnections: {
+      async listPage() { return { items: [], nextCursor: null }; },
+      async read(principalId, connectionRef) {
+        reads.push({ principalId, connectionRef });
+        return null;
+      },
+      async revoke() { throw new Error("must not revoke"); },
+    },
+    mindBindings: {
+      async list() { bindingReads += 1; return []; },
+      async listResolved() { bindingReads += 1; return []; },
+      async mutate() { throw new Error("must not mutate"); },
+      async mutateResolved() { throw new Error("must not mutate"); },
+    },
+  });
+
+  for (const connectionRef of refs) {
+    const ui = await handler(new Request(`${origin}/settings/connections/${connectionRef}`));
+    assert.equal(ui.status, 404);
+    assert.equal((await ui.json()).error.code, "connection_not_found");
+    const api = await handler(new Request(`${origin}/api/v1/connections/${connectionRef}`));
+    assert.equal(api.status, 404);
+    assert.equal((await api.json()).error.code, "connection_not_found");
+  }
+  assert.deepEqual(reads.map((read) => read.principalId), Array(6).fill(registeredActor.principalId));
+  assert.deepEqual(reads.map((read) => read.connectionRef), refs.flatMap((ref) => [ref, ref]));
+  assert.equal(bindingReads, 0);
+});
+
+test("connection pages stay bounded to the requested page and reject ambiguous list queries", async () => {
+  const refs = ["a", "b"].map((digit) => `conn_v1_${digit.repeat(32)}`);
+  const ownerIds = ["page_owner_a", "page_owner_b"];
+  const listCalls = [];
+  const bindingCalls = [];
+  const handler = createProductWebHttpHandler({
+    applicationOrigin: origin,
+    resolveIdentity: () => ({ kind: "authenticated", actor: registeredActor }),
+    csrf: { issue: () => "csrf-page", verify: () => true },
+    control: { execute(request) {
+      if (request.operation === "get_session") return sessionProjection;
+      if (request.operation === "list_minds") return [personalRoute];
+      throw new Error("unexpected operation");
+    } },
+    oauthConnections: {
+      async listPage(principalId, query) {
+        listCalls.push({ principalId, query });
+        return {
+          items: refs.map((connectionRef, index) => ({
+            connectionRef,
+            bindingOwnerId: ownerIds[index],
+            clientName: `Codex ${index + 1}`,
+            scopes: ["content:read"],
+            createdAt: `2026-08-0${index + 1}T00:00:00.000Z`,
+            lastUsedAt: null,
+          })),
+          nextCursor: "next_page_cursor",
+        };
+      },
+      async read() { return null; },
+      async revoke() { return false; },
+    },
+    mindBindings: {
+      async list() { return []; },
+      async listResolved(_actor, credentials) {
+        bindingCalls.push(credentials);
+        return credentials.map((credential) => ({
+          ownerId: credential.ownerId,
+          bindingVersion: 0,
+          state: "active",
+          readBindings: [],
+          writeBinding: null,
+          automaticCapture: { mode: "disabled", writeBindingId: null, updatedAt: null },
+        }));
+      },
+      async mutate() { throw new Error("unused"); },
+      async mutateResolved() { throw new Error("unused"); },
+    },
+  });
+
+  const page = await handler(new Request(`${origin}/api/v1/connections?limit=2&cursor=page_cursor`));
+  assert.equal(page.status, 200);
+  const pageBody = await page.json();
+  assert.deepEqual(pageBody.data.items.map((item) => item.connection_ref), refs);
+  assert.equal(pageBody.data.next_cursor, "next_page_cursor");
+  assert.equal(JSON.stringify(pageBody).includes("page_owner_"), false);
+  assert.deepEqual(bindingCalls, [[
+    { ownerId: ownerIds[0], scopes: ["content:read"], state: "active" },
+    { ownerId: ownerIds[1], scopes: ["content:read"], state: "active" },
+  ]]);
+  assert.deepEqual(listCalls[0], {
+    principalId: registeredActor.principalId,
+    query: { limit: 2, cursor: "page_cursor" },
+  });
+
+  for (const path of [
+    "/api/v1/connections?state=active",
+    "/api/v1/connections?limit=0",
+    "/api/v1/connections?limit=2.5",
+    "/api/v1/connections?limit=51",
+    "/api/v1/connections?limit=2&limit=3",
+    "/api/v1/connections?cursor=%2F",
+    "/settings/connections?unknown=1",
+    "/settings/developer/mcp?state=unknown",
+  ]) {
+    const invalid = await handler(new Request(`${origin}${path}`));
+    assert.equal(invalid.status, 400, path);
+    assert.equal((await invalid.json()).error.code, "invalid_request", path);
+  }
+  assert.equal(listCalls.length, 1);
 });
 
 test("product UI keeps control read failures generic and still offers bounded retry states", async () => {
@@ -1251,13 +1571,23 @@ test("product UI keeps control read failures generic and still offers bounded re
     csrf: { issue: () => "csrf-ui", verify: () => true },
     control: { execute(request) {
       if (request.operation === "get_session") return sessionProjection;
-      throw new Error("private token table diagnostic");
+      throw new Error("unexpected control operation");
     } },
+    personalTokens: {
+      async listPage() { throw new Error("private token table diagnostic"); },
+      async read() { return null; },
+    },
+    mindBindings: {
+      async list() { return []; },
+      async listResolved() { return []; },
+      async mutate() { throw new Error("unused"); },
+      async mutateResolved() { throw new Error("unused"); },
+    },
   });
-  const tokens = await tokenListFailure(new Request(`${origin}/settings/mcp`));
+  const tokens = await tokenListFailure(new Request(`${origin}/settings/developer/mcp`));
   assert.equal(tokens.status, 200);
   const tokenHtml = await tokens.text();
-  assert.match(tokenHtml, /Token metadata is unavailable\. Try again\./);
+  assert.match(tokenHtml, /Reload before using a personal token\./);
   assert.doesNotMatch(tokenHtml, /private token table diagnostic/);
 
   const sessionFailure = createProductWebHttpHandler({

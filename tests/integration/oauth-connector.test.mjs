@@ -38,6 +38,7 @@ class OAuthD1 {
   codes = new Map();
   access = new Map();
   refresh = new Map();
+  connectionPageLimits = [];
 
   prepare(sql) {
     return new Statement(this, sql);
@@ -51,7 +52,7 @@ class OAuthD1 {
     return { success: true, meta: { changes } };
   }
   async run(sql, values) {
-    if (/^CREATE (?:TABLE|INDEX)/u.test(sql.trim())) return this.result(0);
+    if (/^CREATE (?:UNIQUE )?(?:TABLE|INDEX)/u.test(sql.trim())) return this.result(0);
     if (sql.includes("/*md-oauth-client-create*/")) {
       this.clients.set(values[0], {
         id: values[0], client_name: values[1], redirect_uris_json: values[2],
@@ -71,20 +72,22 @@ class OAuthD1 {
     }
     if (sql.includes("/*md-oauth-grant-upsert*/")) {
       const existing = [...this.grants.values()].find(
-        (row) => row.principal_id === values[1] && row.client_id === values[2] && row.resource === values[4],
+        (row) => row.principal_id === values[2] && row.client_id === values[3] && row.resource === values[5],
       );
       const reconnecting = existing?.revoked_at != null;
       const row = existing ?? {
-        id: values[0], principal_id: values[1], client_id: values[2],
-        resource: values[4], created_at: values[6], last_used_at: null,
+        id: values[0], connection_ref: values[1], principal_id: values[2], client_id: values[3],
+        resource: values[5], created_at: values[7], last_used_at: null,
       };
       if (reconnecting) {
         this.grants.delete(row.id);
-        Object.assign(row, { id: values[0], created_at: values[6], last_used_at: null });
+        Object.assign(row, {
+          id: values[0], connection_ref: values[1], created_at: values[7], last_used_at: null,
+        });
       }
       Object.assign(row, {
-        client_name: values[3], scopes_json: values[5], revoked_at: null,
-        updated_at: values[7],
+        client_name: values[4], scopes_json: values[6], revoked_at: null,
+        updated_at: values[8],
       });
       this.grants.set(row.id, row);
       return this.result();
@@ -189,7 +192,12 @@ class OAuthD1 {
       const row = [...this.grants.values()].find(
         (item) => item.principal_id === values[0] && item.client_id === values[1] && item.resource === values[2],
       );
-      return { results: row ? [{ id: row.id, scopes_json: row.scopes_json, revoked_at: row.revoked_at }] : [] };
+      return { results: row ? [{
+        id: row.id,
+        connection_ref: row.connection_ref,
+        scopes_json: row.scopes_json,
+        revoked_at: row.revoked_at,
+      }] : [] };
     }
     if (sql.includes("/*md-oauth-code-read*/")) {
       const row = [...this.codes.values()].find(
@@ -237,12 +245,34 @@ class OAuthD1 {
         principal_id: row.principal_id,
       }] : [] };
     }
-    if (sql.includes("/*md-oauth-connections-list*/")) {
-      return { results: [...this.grants.values()].filter((row) => row.principal_id === values[0] && !row.revoked_at) };
+    if (sql.includes("/*md-oauth-connections-page-first*/")) {
+      this.connectionPageLimits.push(values[1]);
+      const rows = [...this.grants.values()]
+        .filter((row) => row.principal_id === values[0] && !row.revoked_at)
+        .sort((left, right) => right.created_at.localeCompare(left.created_at) ||
+          right.connection_ref.localeCompare(left.connection_ref));
+      return { results: rows.slice(0, values[1]) };
     }
-    if (sql.includes("/*md-oauth-connection-owner*/")) {
-      const row = this.grants.get(values[0]);
-      return { results: row && row.principal_id === values[1] && !row.revoked_at ? [{ id: row.id }] : [] };
+    if (sql.includes("/*md-oauth-connections-page-after*/")) {
+      const [principalId, upperAt, _upperAtAgain, upperRef, afterAt, _afterAtAgain, afterRef, limit] = values;
+      this.connectionPageLimits.push(limit);
+      const atOrBelow = (row, createdAt, connectionRef, inclusive) =>
+        row.created_at < createdAt ||
+        (row.created_at === createdAt && (inclusive
+          ? row.connection_ref <= connectionRef
+          : row.connection_ref < connectionRef));
+      const rows = [...this.grants.values()]
+        .filter((row) => row.principal_id === principalId && !row.revoked_at)
+        .filter((row) => atOrBelow(row, upperAt, upperRef, true))
+        .filter((row) => atOrBelow(row, afterAt, afterRef, false))
+        .sort((left, right) => right.created_at.localeCompare(left.created_at) ||
+          right.connection_ref.localeCompare(left.connection_ref));
+      return { results: rows.slice(0, limit) };
+    }
+    if (sql.includes("/*md-oauth-connection-read*/")) {
+      const row = [...this.grants.values()].find((item) =>
+        item.principal_id === values[0] && item.connection_ref === values[1] && !item.revoked_at);
+      return { results: row ? [{ ...row }] : [] };
     }
     throw new Error(`unsupported OAuth all: ${sql}`);
   }
@@ -340,7 +370,7 @@ test("OAuth discovery, DCR, PKCE, read grant, step-up, and revoke are durable", 
     authorization_servers: [ORIGIN],
     scopes_supported: ["content:read", "content:write"],
     resource_name: "Mind Diary",
-    resource_documentation: `${ORIGIN}/settings/mcp`,
+    resource_documentation: `${ORIGIN}/settings/developer/mcp`,
   });
   const serverMetadata = await connector.fetch(
     new Request(`${ORIGIN}/.well-known/oauth-authorization-server`),
@@ -366,22 +396,33 @@ test("OAuth discovery, DCR, PKCE, read grant, step-up, and revoke are durable", 
     )).state,
     "active",
   );
+  assert.deepEqual(await authorizationTokens.listMcpTokensMissingPresentationRefs(), []);
+  assert.deepEqual((await authorizationTokens.listMcpTokenMetadataPage({
+    principalId: "principal_1",
+    state: "active",
+    asOf: new Date().toISOString(),
+    limit: 20,
+  })).tokens, []);
 
   const writeTokens = await authorize(connector, client.client_id, "content:write");
   assert.equal(writeTokens.scope, "content:read content:write");
   const authenticatedWrite = await connector.authenticator.authenticate(writeTokens.access_token, "request_2");
   assert.deepEqual(authenticatedWrite.actor.authentication.effectiveScopes, ["content:read", "content:write"]);
-  const connections = await connector.listConnections("principal_1");
+  const connections = (await connector.listConnectionPage("principal_1")).items;
   assert.equal(connections.length, 1);
   assert.deepEqual(connections[0].scopes, ["content:read", "content:write"]);
-  assert.equal(await connector.revokeConnection("principal_1", connections[0].grantId), true);
+  assert.match(connections[0].connectionRef, /^conn_v1_[0-9a-f]{32}$/u);
+  assert.equal(
+    await connector.revokeConnection("principal_1", connections[0].connectionRef),
+    true,
+  );
   assert.equal(bindingRevocations.length, 1);
   assert.deepEqual(
     {
       bindingOwnerId: bindingRevocations[0].bindingOwnerId,
       principalId: bindingRevocations[0].principalId,
     },
-    { bindingOwnerId: connections[0].grantId, principalId: "principal_1" },
+    { bindingOwnerId: connections[0].bindingOwnerId, principalId: "principal_1" },
   );
   assert.equal(Number.isFinite(Date.parse(bindingRevocations[0].occurredAt)), true);
   assert.deepEqual(await connector.authenticator.authenticate(writeTokens.access_token, "request_3"), { kind: "invalid" });
@@ -395,12 +436,12 @@ test("OAuth discovery, DCR, PKCE, read grant, step-up, and revoke are durable", 
   const reconnectedRead = await authorize(connector, client.client_id);
   assert.equal(reconnectedRead.scope, "content:read");
   assert.deepEqual(
-    (await connector.listConnections("principal_1"))[0].scopes,
+    (await connector.listConnectionPage("principal_1")).items[0].scopes,
     ["content:read"],
   );
   assert.notEqual(
-    (await connector.listConnections("principal_1"))[0].grantId,
-    connections[0].grantId,
+    (await connector.listConnectionPage("principal_1")).items[0].connectionRef,
+    connections[0].connectionRef,
   );
   const reconnectedActor = await connector.authenticator.authenticate(
     reconnectedRead.access_token,
@@ -412,11 +453,75 @@ test("OAuth discovery, DCR, PKCE, read grant, step-up, and revoke are durable", 
   );
 });
 
+test("connection refs and bounded cursors preserve actor-safe stable traversal", async () => {
+  const fixed = new Date("2026-08-24T17:00:00.000Z");
+  const { connector, database } = await environment({ now: () => new Date(fixed) });
+  for (let index = 1; index <= 5; index += 1) {
+    const client = await register(connector);
+    database.clients.get(client.client_id).client_name = `Client ${index}`;
+    await authorize(connector, client.client_id);
+  }
+  const before = [...database.grants.values()]
+    .filter((row) => row.principal_id === "principal_1" && !row.revoked_at)
+    .sort((left, right) => right.created_at.localeCompare(left.created_at) ||
+      right.connection_ref.localeCompare(left.connection_ref))
+    .map((row) => row.connection_ref);
+
+  const first = await connector.listConnectionPage("principal_1", { limit: 2 });
+  assert.equal(first.items.length, 2);
+  assert.equal(first.nextCursor !== null, true);
+  assert.equal(first.nextCursor.includes("conn_v1_"), false);
+  assert.equal(first.items.every((item) => !("clientId" in item) && !("grantId" in item)), true);
+  assert.deepEqual(first.items.map((item) => item.connectionRef), before.slice(0, 2));
+
+  database.grants.set("md_oauth_grant_inserted_after_page", {
+    id: "md_oauth_grant_inserted_after_page",
+    connection_ref: `conn_v1_${"f".repeat(32)}`,
+    principal_id: "principal_1",
+    client_id: "md_oauth_client_inserted_after_page",
+    client_name: "Inserted after page one",
+    resource: `${ORIGIN}/api/mcp`,
+    scopes_json: JSON.stringify(["content:read"]),
+    revoked_at: null,
+    created_at: fixed.toISOString(),
+    updated_at: fixed.toISOString(),
+    last_used_at: null,
+  });
+  const second = await connector.listConnectionPage("principal_1", { cursor: first.nextCursor });
+  const third = await connector.listConnectionPage("principal_1", { cursor: second.nextCursor });
+  assert.deepEqual(
+    [...first.items, ...second.items, ...third.items].map((item) => item.connectionRef),
+    before,
+  );
+  assert.equal(third.nextCursor, null);
+  assert.equal(database.connectionPageLimits.every((limit) => limit === 3), true);
+
+  await assert.rejects(
+    connector.listConnectionPage("principal_2", { cursor: first.nextCursor }),
+    TypeError,
+  );
+  await assert.rejects(
+    connector.listConnectionPage("principal_1", { limit: 3, cursor: first.nextCursor }),
+    TypeError,
+  );
+  const target = first.items[0];
+  assert.equal(await connector.readConnection("principal_2", target.connectionRef), null);
+  assert.equal(await connector.readConnection("principal_1", "conn_v1_invalid"), null);
+  assert.equal(
+    (await connector.readConnection("principal_1", target.connectionRef)).clientName,
+    target.clientName,
+  );
+  assert.equal(await connector.revokeConnection("principal_2", target.connectionRef), false);
+  assert.equal(await connector.revokeConnection("principal_1", target.connectionRef), true);
+  assert.equal(await connector.readConnection("principal_1", target.connectionRef), null);
+  assert.equal(await connector.revokeConnection("principal_1", target.connectionRef), false);
+});
+
 test("refresh rotation detects reuse and revokes the entire connection", async () => {
   const { connector, bindingRevocations } = await environment();
   const client = await register(connector);
   const issued = await authorize(connector, client.client_id);
-  const grantId = (await connector.listConnections("principal_1"))[0].grantId;
+  const grantId = (await connector.listConnectionPage("principal_1")).items[0].bindingOwnerId;
   const refreshForm = new URLSearchParams({
     grant_type: "refresh_token", refresh_token: issued.refresh_token,
     client_id: client.client_id, resource: `${ORIGIN}/api/mcp`,

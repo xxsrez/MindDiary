@@ -56,7 +56,21 @@ import {
 } from "./invitations-membership.js";
 import { renderServiceOperatorDirectoryDocument } from "./operator-directory.js";
 import {
+  renderAdvancedMcpPageDocument,
+  renderCodexHelpPageDocument,
+  renderConnectionDetailDocument,
+  renderConnectionsPageDocument,
+  type AdvancedMcpPageModel,
+  type ConnectionDetail,
+  type ConnectionListItem,
+  type PersonalTokenItem,
+  type SafeConnectionMind,
+  type SafeCredentialAccess,
+} from "./connections.js";
+import {
   PRODUCT_COLLABORATION_CLIENT_JAVASCRIPT,
+  PRODUCT_CONNECTIONS_LAYOUT_CSS,
+  PRODUCT_CONNECTIONS_CLIENT_JAVASCRIPT,
   PRODUCT_MARKDOWN_IMPORT_CLIENT_JAVASCRIPT,
   PRODUCT_ORDINARY_MINDS_CLIENT_JAVASCRIPT,
   PRODUCT_UI_APPLE_TOUCH_ICON_PNG,
@@ -183,14 +197,51 @@ export interface ProductWebControlApplication {
 }
 
 export interface ProductWebOAuthConnections {
-  list(principalId: string): Promise<readonly {
-    readonly grantId: string;
+  listPage(principalId: string, query: Readonly<{
+    readonly limit?: number;
+    readonly cursor?: string | null;
+  }>): Promise<Readonly<{
+    readonly items: readonly {
+      readonly connectionRef: string;
+      readonly bindingOwnerId: string;
+      readonly clientName: string;
+      readonly scopes: readonly ("content:read" | "content:write")[];
+      readonly createdAt: string;
+      readonly lastUsedAt: string | null;
+    }[];
+    readonly nextCursor: string | null;
+  }>>;
+  read(principalId: string, connectionRef: string): Promise<Readonly<{
+    readonly connectionRef: string;
+    readonly bindingOwnerId: string;
     readonly clientName: string;
     readonly scopes: readonly ("content:read" | "content:write")[];
     readonly createdAt: string;
     readonly lastUsedAt: string | null;
-  }[]>;
-  revoke(principalId: string, grantId: string): Promise<boolean>;
+  }> | null>;
+  revoke(principalId: string, connectionRef: string): Promise<boolean>;
+}
+
+export interface ProductWebPersonalTokenRecord extends PersonalTokenItem {
+  readonly bindingOwnerId: string;
+}
+
+export interface ProductWebPersonalTokens {
+  listPage(
+    actor: RegisteredSitesActor,
+    query: Readonly<{
+      readonly state?: "active" | "revoked" | "expired";
+      readonly limit?: number;
+      readonly cursor?: string | null;
+    }>,
+  ): Promise<Readonly<{
+    readonly items: readonly ProductWebPersonalTokenRecord[];
+    readonly nextCursor: string | null;
+  }>>;
+  read(
+    actor: RegisteredSitesActor,
+    personalTokenRef: string,
+  ): Promise<Readonly<ProductWebPersonalTokenRecord> | null>;
 }
 
 export interface ProductWebMindBindingOwner {
@@ -199,6 +250,7 @@ export interface ProductWebMindBindingOwner {
   readonly state: "active" | "revoked" | "deleted";
   readonly readBindings: readonly {
     readonly readBindingId: string;
+    readonly staleAccessRef: string;
     readonly mindId: string;
   }[];
   readonly writeBinding: {
@@ -217,10 +269,31 @@ export interface ProductWebMindBindings {
     actor: RegisteredSitesActor,
     ownerIds: readonly string[],
   ): Promise<readonly ProductWebMindBindingOwner[]>;
+  listResolved(
+    actor: RegisteredSitesActor,
+    credentials: readonly Readonly<{
+      readonly ownerId: string;
+      readonly scopes: readonly ("content:read" | "content:write")[];
+      readonly state: "active" | "revoked";
+    }>[],
+  ): Promise<readonly ProductWebMindBindingOwner[]>;
   mutate(
     actor: RegisteredSitesActor,
     request: Readonly<Record<string, unknown>>,
   ): Promise<unknown>;
+  mutateResolved(
+    actor: RegisteredSitesActor,
+    credential: Readonly<{
+      readonly ownerId: string;
+      readonly scopes: readonly ("content:read" | "content:write")[];
+      readonly state: "active" | "revoked";
+    }>,
+    request: Readonly<Record<string, unknown>>,
+  ): Promise<Readonly<{
+    readonly changed: boolean;
+    readonly replayed: boolean;
+    readonly bindingVersion: number;
+  }>>;
 }
 
 export interface ProductWebActivityRecorder {
@@ -255,6 +328,7 @@ export interface ProductWebHttpHandlerDependencies {
   readonly csrf: ProductWebCsrf;
   readonly control: ProductWebControlApplication;
   readonly oauthConnections?: ProductWebOAuthConnections;
+  readonly personalTokens?: ProductWebPersonalTokens;
   readonly mindBindings?: ProductWebMindBindings;
   readonly activity?: ProductWebActivityRecorder;
   readonly performance?: ProductWebPerformanceRecorder;
@@ -269,6 +343,9 @@ const PRODUCT_UI_ROUTES = new Set([
   "/invitations",
   "/settings/account",
   "/settings/mcp",
+  "/settings/connections",
+  "/settings/developer/mcp",
+  "/help/codex",
   "/help",
   "/internal/operators/users",
 ]);
@@ -368,6 +445,8 @@ function safeErrorMessage(code: string): string {
   if (code === "registration_required") return "Account registration is required.";
   if (code === "invalid_request") return "The request is invalid.";
   if (code === "not_found") return "The resource was not found.";
+  if (code === "connection_not_found") return "The connection was not found.";
+  if (code === "personal_token_not_found") return "The personal token was not found.";
   if (code === "forbidden") return "The request is forbidden.";
   if (code === "method_not_allowed") return "The method is not allowed.";
   return "The request could not be completed.";
@@ -515,7 +594,7 @@ function pilotRoutePage(
       },
       links: [
         { href: "/minds", label: "Open Minds" },
-        { href: "/settings/mcp", label: "Open MCP setup" },
+        { href: "/settings/developer/mcp", label: "Open Advanced MCP" },
       ],
       guides: [
         {
@@ -907,13 +986,250 @@ function bindingOwnerUi(
   });
 }
 
+function safeCredentialAccess(
+  owner: ProductWebMindBindingOwner | undefined,
+  candidates: ReadonlyMap<string, MindBindingUiMind>,
+  canWrite: boolean,
+): SafeCredentialAccess | null {
+  if (
+    owner === undefined ||
+    owner.state !== "active" ||
+    !Number.isSafeInteger(owner.bindingVersion) ||
+    owner.bindingVersion < 0
+  ) return null;
+  const readableMinds = owner.readBindings.map((binding) => {
+    const mind = candidates.get(binding.mindId);
+    if (mind !== undefined) {
+      return Object.freeze({ kind: "available" as const, mind });
+    }
+    if (!/^stale_v1_[0-9a-f]{32}$/u.test(binding.staleAccessRef)) return null;
+    return Object.freeze({
+      kind: "unavailable" as const,
+      staleAccessRef: binding.staleAccessRef,
+    });
+  });
+  if (readableMinds.some((target) => target === null)) return null;
+  const writeCandidate = owner.writeBinding === null
+    ? null
+    : candidates.get(owner.writeBinding.mindId) ?? null;
+  return Object.freeze({
+    bindingVersion: owner.bindingVersion,
+    readableMinds: Object.freeze(readableMinds as Exclude<(typeof readableMinds)[number], null>[]),
+    ...(canWrite ? { writableMind: writeCandidate } : {}),
+    eligibleMinds: Object.freeze([...candidates.values()]) as readonly SafeConnectionMind[],
+  });
+}
+
+function safeConnectionListItem(
+  connection: Awaited<ReturnType<ProductWebOAuthConnections["listPage"]>>["items"][number],
+  access: SafeCredentialAccess,
+): ConnectionListItem {
+  const canWrite = connection.scopes.includes("content:write");
+  return Object.freeze({
+    connectionRef: connection.connectionRef,
+    clientName: connection.clientName,
+    createdAt: connection.createdAt,
+    lastUsedAt: connection.lastUsedAt,
+    canRead: connection.scopes.includes("content:read"),
+    canWrite,
+    readableMindCount: access.readableMinds.length,
+    writableMindSelected:
+      canWrite && access.writableMind !== null && access.writableMind !== undefined,
+  });
+}
+
+function safeConnectionDetail(
+  connection: Awaited<ReturnType<ProductWebOAuthConnections["read"]>>,
+  access: SafeCredentialAccess,
+): ConnectionDetail | null {
+  if (connection === null) return null;
+  return Object.freeze({
+    ...safeConnectionListItem(connection, access),
+    access,
+  });
+}
+
+function strictListQuery(
+  url: URL,
+  includeState: boolean,
+): Readonly<{
+  readonly state?: "active" | "revoked" | "expired";
+  readonly limit?: number;
+  readonly cursor?: string;
+}> | null {
+  const allowed = new Set(includeState ? ["state", "limit", "cursor"] : ["limit", "cursor"]);
+  let keysAreValid = true;
+  url.searchParams.forEach((_value, key) => {
+    if (!allowed.has(key) || url.searchParams.getAll(key).length !== 1) keysAreValid = false;
+  });
+  if (!keysAreValid) return null;
+  const limitValue = url.searchParams.get("limit");
+  const cursor = url.searchParams.get("cursor");
+  const state = url.searchParams.get("state");
+  if (
+    (limitValue !== null && !/^(?:[1-9]|[1-4][0-9]|50)$/u.test(limitValue)) ||
+    (cursor !== null && !/^[A-Za-z0-9_-]{1,2048}$/u.test(cursor)) ||
+    (state !== null && state !== "active" && state !== "revoked" && state !== "expired")
+  ) return null;
+  return Object.freeze({
+    ...(state === null ? {} : { state }),
+    ...(limitValue === null ? {} : { limit: Number(limitValue) }),
+    ...(cursor === null ? {} : { cursor }),
+  });
+}
+
+async function safeBindingCandidates(
+  control: ProductWebControlApplication,
+  actor: RegisteredSitesActor,
+): Promise<ReadonlyMap<string, MindBindingUiMind>> {
+  const listed = await control.execute({
+    operation: "list_minds",
+    actor,
+    input: Object.freeze({}),
+  });
+  if (!Array.isArray(listed)) throw new TypeError("safe Mind list projection is unavailable");
+  const candidates = new Map<string, MindBindingUiMind>();
+  for (const value of listed) {
+    const candidate = bindingUiCandidate(value);
+    if (candidate !== null) candidates.set(candidate.mindId, candidate.mind);
+  }
+  return candidates;
+}
+
+async function safeBindingAccessByOwner(
+  control: ProductWebControlApplication,
+  mindBindings: ProductWebMindBindings,
+  actor: RegisteredSitesActor,
+  credentials: readonly Readonly<{
+    readonly ownerId: string;
+    readonly scopes: readonly ("content:read" | "content:write")[];
+    readonly state: "active" | "revoked";
+  }>[],
+): Promise<ReadonlyMap<string, SafeCredentialAccess>> {
+  if (credentials.length === 0) return new Map();
+  const [candidates, owners] = await Promise.all([
+    safeBindingCandidates(control, actor),
+    mindBindings.listResolved(actor, credentials),
+  ]);
+  const byOwner = new Map(owners.map((owner) => [owner.ownerId, owner] as const));
+  const projections = new Map<string, SafeCredentialAccess>();
+  for (const credential of credentials) {
+    const access = safeCredentialAccess(
+      byOwner.get(credential.ownerId),
+      candidates,
+      credential.scopes.includes("content:write"),
+    );
+    if (access === null) throw new TypeError("safe Mind access projection is unavailable");
+    projections.set(credential.ownerId, access);
+  }
+  return projections;
+}
+
+async function mutateCredentialAccess(input: {
+  readonly actor: RegisteredSitesActor;
+  readonly mindBindings: ProductWebMindBindings;
+  readonly control: ProductWebControlApplication;
+  readonly ownerId: string;
+  readonly scopes: readonly ("content:read" | "content:write")[];
+  readonly request: Readonly<Record<string, unknown>>;
+  readonly presentationKey: "connection_ref" | "personal_token_ref";
+}): Promise<Readonly<{ readonly changed: boolean; readonly replayed: boolean }>> {
+  const action = input.request.action;
+  const expectedBindingVersion = nonnegativeInteger(input.request.expectedBindingVersion);
+  const idempotencyKey = requiredString(input.request.idempotencyKey);
+  if (
+    expectedBindingVersion === null ||
+    idempotencyKey === null ||
+    !["attach_read", "detach_read", "select_write", "clear_write"].includes(String(action))
+  ) {
+    throw Object.assign(new Error("Invalid access mutation."), { code: "invalid_request" });
+  }
+  const actionKeys = action === "attach_read" || action === "select_write"
+    ? ["mindRef"]
+    : action === "detach_read"
+      ? ["mindRef", "staleAccessRef"]
+      : [];
+  const allowed = new Set([
+    "action",
+    "expectedBindingVersion",
+    "idempotencyKey",
+    input.presentationKey,
+    ...actionKeys,
+  ]);
+  if (Object.keys(input.request).some((key) => !allowed.has(key))) {
+    throw Object.assign(new Error("Invalid access mutation."), { code: "invalid_request" });
+  }
+  const mindRef = input.request.mindRef;
+  const staleAccessRef = input.request.staleAccessRef;
+  if (
+    ((action === "attach_read" || action === "select_write") &&
+      (typeof mindRef !== "string" || !/^\/(?:me|[a-z0-9]+(?:-[a-z0-9]+)*)$/u.test(mindRef))) ||
+    (action === "detach_read" &&
+      !(
+        (typeof mindRef === "string" && /^\/(?:me|[a-z0-9]+(?:-[a-z0-9]+)*)$/u.test(mindRef) && staleAccessRef === undefined) ||
+        (typeof staleAccessRef === "string" && /^stale_v1_[0-9a-f]{32}$/u.test(staleAccessRef) && mindRef === undefined)
+      )) ||
+    (action === "clear_write" && (mindRef !== undefined || staleAccessRef !== undefined))
+  ) {
+    throw Object.assign(new Error("Invalid access mutation."), { code: "invalid_request" });
+  }
+  if (
+    (action === "select_write" || action === "clear_write") &&
+    !input.scopes.includes("content:write")
+  ) {
+    throw Object.assign(new Error("Write permission is required."), {
+      code: "write_step_up_required",
+    });
+  }
+  const [owners, candidates] = await Promise.all([
+    input.mindBindings.listResolved(input.actor, [Object.freeze({
+      ownerId: input.ownerId,
+      scopes: input.scopes,
+      state: "active" as const,
+    })]),
+    safeBindingCandidates(input.control, input.actor),
+  ]);
+  const owner = owners.find((candidate) => candidate.ownerId === input.ownerId);
+  if (owner === undefined || owner.state !== "active") {
+    throw Object.assign(new Error("Credential was not found."), { code: "not_found" });
+  }
+  let readBindingId: string | undefined;
+  if (action === "detach_read") {
+    const matches = owner.readBindings.filter((binding) =>
+      typeof staleAccessRef === "string"
+        ? binding.staleAccessRef === staleAccessRef
+        : candidates.get(binding.mindId)?.route === mindRef);
+    if (matches.length !== 1) {
+      throw Object.assign(new Error("Readable Mind was not found."), { code: "not_found" });
+    }
+    readBindingId = matches[0]!.readBindingId;
+  }
+  const result = await input.mindBindings.mutateResolved(input.actor, Object.freeze({
+    ownerId: input.ownerId,
+    scopes: input.scopes,
+    state: "active" as const,
+  }), Object.freeze({
+    action: action === "select_write"
+      ? "bind_write"
+      : action === "clear_write"
+        ? "unbind_write"
+        : action,
+    binding_owner_id: input.ownerId,
+    expectedBindingVersion,
+    idempotencyKey,
+    ...(typeof mindRef === "string" ? { mindRef } : {}),
+    ...(readBindingId === undefined ? {} : { readBindingId }),
+  }));
+  return Object.freeze({ changed: result.changed, replayed: result.replayed });
+}
+
 function staticAsset(pathname: string): { readonly body: BodyInit; readonly type: string } | null {
   if (pathname === "/favicon.ico") return { body: PRODUCT_UI_FAVICON_ICO, type: "image/x-icon" };
   if (pathname === "/favicon.svg") return { body: PRODUCT_UI_FAVICON_SVG, type: "image/svg+xml; charset=utf-8" };
   if (pathname === "/favicon-32x32.png") return { body: PRODUCT_UI_FAVICON_PNG, type: "image/png" };
   if (pathname === "/apple-touch-icon.png") return { body: PRODUCT_UI_APPLE_TOUCH_ICON_PNG, type: "image/png" };
   if (pathname === "/brand/mind-diary-tokens.css") return { body: PRODUCT_UI_TOKENS_CSS, type: "text/css; charset=utf-8" };
-  if (pathname === "/ui/mind-diary-shell.css") return { body: `${PRODUCT_UI_SHELL_CSS}\n${PRODUCT_UI_PILOT_SHELL_CSS}`, type: "text/css; charset=utf-8" };
+  if (pathname === "/ui/mind-diary-shell.css") return { body: `${PRODUCT_UI_SHELL_CSS}\n${PRODUCT_CONNECTIONS_LAYOUT_CSS}\n${PRODUCT_UI_PILOT_SHELL_CSS}`, type: "text/css; charset=utf-8" };
   if (pathname === "/brand/mind-diary-lockup.svg") return { body: PRODUCT_UI_LOCKUP_SVG, type: "image/svg+xml; charset=utf-8" };
   if (pathname === "/brand/mind-diary-mark.svg") return { body: PRODUCT_UI_MARK_SVG, type: "image/svg+xml; charset=utf-8" };
   if (pathname === "/ui/mind-diary-onboarding-client.js") {
@@ -945,6 +1261,12 @@ function staticAsset(pathname: string): { readonly body: BodyInit; readonly type
       type: "text/javascript; charset=utf-8",
     };
   }
+  if (pathname === "/ui/mind-diary-connections-client.js") {
+    return {
+      body: `${PRODUCT_UI_CLIENT_JAVASCRIPT}\n${PRODUCT_CONNECTIONS_CLIENT_JAVASCRIPT}`,
+      type: "text/javascript; charset=utf-8",
+    };
+  }
   return null;
 }
 
@@ -955,8 +1277,14 @@ async function productUiDocument(input: {
   readonly csrfToken: string;
   readonly control: ProductWebControlApplication;
   readonly oauthConnections?: ProductWebOAuthConnections;
+  readonly personalTokens?: ProductWebPersonalTokens;
   readonly mindBindings?: ProductWebMindBindings;
   readonly query: Readonly<Record<string, string>>;
+  readonly listQuery?: Readonly<{
+    readonly state?: "active" | "revoked" | "expired";
+    readonly limit?: number;
+    readonly cursor?: string;
+  }>;
 }): Promise<string> {
   if (input.identity.kind === "registration_required") {
     const model: AuthenticatedOnboardingModel = {
@@ -1034,6 +1362,138 @@ async function productUiDocument(input: {
     input: Object.freeze({}),
   }));
   if (session === null) throw new TypeError("safe session projection is unavailable");
+
+  if (input.pathname === "/help/codex") {
+    return withCsrfMeta(renderCodexHelpPageDocument(session.displayName), input.csrfToken);
+  }
+
+  if (input.pathname === "/settings/connections") {
+    if (input.oauthConnections === undefined || input.mindBindings === undefined) {
+      throw new TypeError("Connections projection is unavailable");
+    }
+    try {
+      const page = await input.oauthConnections.listPage(
+        input.identity.actor.principalId,
+        input.listQuery ?? {},
+      );
+      if (page.items.length === 0) {
+        return withCsrfMeta(renderConnectionsPageDocument({
+          displayName: session.displayName,
+          collection: { kind: "empty" },
+        }), input.csrfToken);
+      }
+      const access = await safeBindingAccessByOwner(
+        input.control,
+        input.mindBindings,
+        input.identity.actor,
+        page.items.map((connection) => Object.freeze({
+          ownerId: connection.bindingOwnerId,
+          scopes: connection.scopes,
+          state: "active" as const,
+        })),
+      );
+      const items = page.items.map((connection) =>
+        safeConnectionListItem(connection, access.get(connection.bindingOwnerId)!));
+      return withCsrfMeta(renderConnectionsPageDocument({
+        displayName: session.displayName,
+        collection: {
+          kind: "ready",
+          items: Object.freeze(items),
+          nextCursor: page.nextCursor,
+        },
+      }), input.csrfToken);
+    } catch {
+      return withCsrfMeta(renderConnectionsPageDocument({
+        displayName: session.displayName,
+        collection: { kind: "error", message: "Reload to check current connection access." },
+      }), input.csrfToken);
+    }
+  }
+
+  const connectionDetailMatch = /^\/settings\/connections\/([^/]+)$/u.exec(input.pathname);
+  if (connectionDetailMatch !== null) {
+    if (input.oauthConnections === undefined || input.mindBindings === undefined) {
+      throw Object.assign(new Error("Connection was not found."), { code: "connection_not_found" });
+    }
+    const connectionRef = connectionDetailMatch[1]!;
+    const connection = await input.oauthConnections.read(
+      input.identity.actor.principalId,
+      connectionRef,
+    );
+    if (connection === null) {
+      throw Object.assign(new Error("Connection was not found."), { code: "connection_not_found" });
+    }
+    const accessByOwner = await safeBindingAccessByOwner(
+      input.control,
+      input.mindBindings,
+      input.identity.actor,
+      [Object.freeze({
+        ownerId: connection.bindingOwnerId,
+        scopes: connection.scopes,
+        state: "active" as const,
+      })],
+    );
+    const access = accessByOwner.get(connection.bindingOwnerId);
+    if (access === undefined) throw new TypeError("safe connection access is unavailable");
+    const detail = safeConnectionDetail(connection, access);
+    if (detail === null) {
+      throw Object.assign(new Error("Connection was not found."), { code: "connection_not_found" });
+    }
+    return withCsrfMeta(renderConnectionDetailDocument({
+      displayName: session.displayName,
+      connection: detail,
+    }), input.csrfToken);
+  }
+
+  if (input.pathname === "/settings/developer/mcp") {
+    if (input.personalTokens === undefined || input.mindBindings === undefined) {
+      throw new TypeError("Personal token projection is unavailable");
+    }
+    const state = input.listQuery?.state ?? "active";
+    let collection: AdvancedMcpPageModel["collection"];
+    try {
+      const page = await input.personalTokens.listPage(input.identity.actor, {
+        ...input.listQuery,
+        state,
+      });
+      if (page.items.length === 0) {
+        collection = { kind: "empty" };
+      } else {
+        let access = new Map<string, SafeCredentialAccess>();
+        if (state === "active") {
+          access = new Map(await safeBindingAccessByOwner(
+            input.control,
+            input.mindBindings,
+            input.identity.actor,
+            page.items.map((token) => Object.freeze({
+              ownerId: token.bindingOwnerId,
+              scopes: token.scopes,
+              state: "active" as const,
+            })),
+          ));
+        }
+        collection = {
+          kind: "ready",
+          items: Object.freeze(page.items.map(({ bindingOwnerId, ...token }) => {
+            const tokenAccess = access.get(bindingOwnerId);
+            return Object.freeze({
+              ...token,
+              ...(state === "active" && tokenAccess !== undefined ? { access: tokenAccess } : {}),
+            });
+          })),
+          nextCursor: page.nextCursor,
+        };
+      }
+    } catch {
+      collection = { kind: "error", message: "Reload before using a personal token." };
+    }
+    return withCsrfMeta(renderAdvancedMcpPageDocument({
+      displayName: session.displayName,
+      siteOrigin: input.siteOrigin,
+      state,
+      collection,
+    }), input.csrfToken);
+  }
 
   if (input.pathname === "/internal/operators/users") {
     const page = await input.control.execute({
@@ -1160,80 +1620,6 @@ async function productUiDocument(input: {
       },
       profileUpdate: { kind: "idle", idempotencyKey: `profile:${crypto.randomUUID()}` },
     }), input.csrfToken);
-  }
-
-  if (input.pathname === "/settings/mcp") {
-    let collection: McpTokenManagementModel["collection"];
-    try {
-      const listed = await input.control.execute({
-        operation: "list_mcp_tokens",
-        actor: input.identity.actor,
-        input: Object.freeze({}),
-      });
-      const tokens = Array.isArray(listed)
-        ? listed.map(uiToken).filter((token): token is McpTokenUiToken => token !== null)
-        : [];
-      collection = tokens.length === 0
-        ? { kind: "empty" }
-        : { kind: "ready", tokens: Object.freeze(tokens) };
-    } catch {
-      collection = { kind: "error", message: "Token metadata is unavailable. Try again." };
-    }
-    let oauthConnections: McpTokenManagementModel["oauthConnections"];
-    if (input.oauthConnections !== undefined) {
-      try {
-        const connections = await input.oauthConnections.list(input.identity.actor.principalId);
-        oauthConnections = connections.length === 0
-          ? { kind: "empty" }
-          : { kind: "ready", connections };
-      } catch {
-        oauthConnections = { kind: "error", message: "Connected apps are unavailable. Try again." };
-      }
-    }
-    let bindingOwners: McpTokenManagementModel["bindingOwners"];
-    if (input.mindBindings !== undefined) {
-      const tokenOwnerIds = collection.kind === "ready"
-        ? collection.tokens.map((token) => token.tokenId)
-        : [];
-      const oauthOwnerIds = oauthConnections?.kind === "ready"
-        ? oauthConnections.connections.map((connection) => connection.grantId)
-        : [];
-      const ownerIds = Object.freeze([...tokenOwnerIds, ...oauthOwnerIds]);
-      try {
-        const [listedMinds, listedBindings] = await Promise.all([
-          input.control.execute({
-            operation: "list_minds",
-            actor: input.identity.actor,
-            input: Object.freeze({}),
-          }),
-          input.mindBindings.list(input.identity.actor, ownerIds),
-        ]);
-        const candidates = new Map<string, MindBindingUiMind>();
-        if (Array.isArray(listedMinds)) {
-          for (const value of listedMinds) {
-            const candidate = bindingUiCandidate(value);
-            if (candidate !== null) candidates.set(candidate.mindId, candidate.mind);
-          }
-        }
-        const projected = listedBindings
-          .map((owner) => bindingOwnerUi(owner, candidates))
-          .filter((owner): owner is MindBindingOwnerUiState => owner !== null);
-        bindingOwners = Object.freeze(projected);
-      } catch {
-        bindingOwners = Object.freeze(ownerIds.map((ownerId) => Object.freeze({
-          kind: "error" as const,
-          ownerId,
-          message: "Binding state is unavailable. Reload before using this credential for content.",
-        })));
-      }
-    }
-    return withCsrfMeta(renderMcpTokenManagementDocument({
-      displayName: session.displayName,
-      collection,
-      ...(oauthConnections === undefined ? {} : { oauthConnections }),
-      ...(bindingOwners === undefined ? {} : { bindingOwners }),
-      siteOrigin: input.siteOrigin,
-    }, "/ui/mind-diary-token-client.js"), input.csrfToken);
   }
 
   const routeMatch = /^\/([a-z0-9]+(?:-[a-z0-9]+)*)$/u.exec(input.pathname);
@@ -1558,15 +1944,20 @@ function apiOperation(method: string, pathname: string): {
     if (two !== null && three === "reissue" && tail.length === 3 && method === "POST") return { operation: "reissue_invitation", path: { invitation_id: two } };
   }
   if (one === "mcp-tokens") {
-    if (tail.length === 1 && method === "GET") return { operation: "list_mcp_tokens", path: {} };
+    if (tail.length === 1 && method === "GET") return { operation: "list_personal_token_page", path: {} };
     if (tail.length === 1 && method === "POST") return { operation: "issue_mcp_token", path: {} };
-    if (two !== null && tail.length === 2 && method === "DELETE") return { operation: "revoke_mcp_token", path: { token_id: two } };
+    if (two !== null && tail.length === 2 && method === "DELETE") return { operation: "revoke_personal_token", path: { personal_token_ref: two } };
+    if (two !== null && three === "mind-access" && tail.length === 3 && method === "PATCH") {
+      return { operation: "mutate_personal_token_access", path: { personal_token_ref: two } };
+    }
   }
-  if (one === "oauth-connections" && two !== null && tail.length === 2 && method === "DELETE") {
-    return { operation: "revoke_oauth_connection", path: { grant_id: two } };
-  }
-  if (one === "mind-bindings" && two !== null && tail.length === 2 && method === "PATCH") {
-    return { operation: "mutate_mind_binding", path: { binding_owner_id: two } };
+  if (one === "connections") {
+    if (tail.length === 1 && method === "GET") return { operation: "list_connections", path: {} };
+    if (two !== null && tail.length === 2 && method === "GET") return { operation: "get_connection", path: { connection_ref: two } };
+    if (two !== null && tail.length === 2 && method === "DELETE") return { operation: "revoke_connection", path: { connection_ref: two } };
+    if (two !== null && three === "mind-access" && tail.length === 3 && method === "PATCH") {
+      return { operation: "mutate_connection_access", path: { connection_ref: two } };
+    }
   }
   return null;
 }
@@ -1599,6 +1990,7 @@ function applicationErrorStatus(code: string): number {
   ) return 422;
   if (
     code === "handle_unavailable" ||
+    code === "write_step_up_required" ||
     code === "deletion_impact_changed" ||
     code === "deletion_impact_expired" ||
     code === "import_plan_expired" ||
@@ -1633,9 +2025,10 @@ export function createProductWebHttpHandler(
       url.pathname === "/internal/operators/users" ||
       url.pathname === "/api/v1/internal/operators/users";
     const detailMatch = /^\/([a-z0-9]+(?:-[a-z0-9]+)*)$/u.exec(url.pathname);
+    const connectionUiDetail = /^\/settings\/connections\/[^/]+$/u.test(url.pathname);
     const isUi = PRODUCT_UI_ROUTES.has(url.pathname) || (
       detailMatch !== null && !RESERVED_UI_HANDLES.has(detailMatch[1]!)
-    );
+    ) || connectionUiDetail;
     if (!isApi && !isUi) return null;
     const homeStartedAt = url.pathname === "/" &&
       isUi &&
@@ -1685,8 +2078,29 @@ export function createProductWebHttpHandler(
       identity.kind !== "authenticated"
     ) return errorResponse(404, "not_found", requestId);
 
+    if (
+      url.pathname === "/settings/mcp" &&
+      identity.kind === "authenticated" &&
+      (request.method === "GET" || request.method === "HEAD")
+    ) {
+      return new Response(null, {
+        status: 308,
+        headers: {
+          ...SAFE_HEADERS,
+          location: "/settings/developer/mcp",
+          "x-mind-diary-request-id": requestId,
+        },
+      });
+    }
+
     if (isUi) {
       if (request.method !== "GET" && request.method !== "HEAD") return errorResponse(405, "method_not_allowed", requestId);
+      const listQuery = url.pathname === "/settings/connections"
+        ? strictListQuery(url, false)
+        : url.pathname === "/settings/developer/mcp"
+          ? strictListQuery(url, true)
+          : Object.freeze({});
+      if (listQuery === null) return errorResponse(400, "invalid_request", requestId);
       const uiQuery: Record<string, string> = {};
       url.searchParams.forEach((value, key) => { uiQuery[key] = value; });
       const applicationStartedAt = homeStartedAt !== null && identity.kind === "authenticated"
@@ -1703,14 +2117,20 @@ export function createProductWebHttpHandler(
           ...(dependencies.oauthConnections === undefined
             ? {}
             : { oauthConnections: dependencies.oauthConnections }),
+          ...(dependencies.personalTokens === undefined
+            ? {}
+            : { personalTokens: dependencies.personalTokens }),
           ...(dependencies.mindBindings === undefined
             ? {}
             : { mindBindings: dependencies.mindBindings }),
           query: Object.freeze(uiQuery),
+          listQuery,
         }));
       } catch (error) {
         const code = failureCode(error);
-        response = url.pathname === "/internal/operators/users"
+        response = code === "connection_not_found"
+          ? errorResponse(404, "connection_not_found", requestId)
+          : url.pathname === "/internal/operators/users"
           ? errorResponse(applicationErrorStatus(code), code, requestId)
           : errorResponse(503, "operation_failed", requestId, true);
       }
@@ -1796,25 +2216,190 @@ export function createProductWebHttpHandler(
       return errorResponse(400, "invalid_request", requestId);
     }
     try {
-      if (matched.operation === "revoke_oauth_connection") {
-        if (identity.kind !== "authenticated" || dependencies.oauthConnections === undefined) {
-          return errorResponse(404, "not_found", requestId);
+      if (
+        matched.operation === "list_connections" ||
+        matched.operation === "get_connection" ||
+        matched.operation === "revoke_connection" ||
+        matched.operation === "mutate_connection_access"
+      ) {
+        if (
+          identity.kind !== "authenticated" ||
+          dependencies.oauthConnections === undefined ||
+          dependencies.mindBindings === undefined
+        ) return errorResponse(404, "connection_not_found", requestId);
+        if (matched.operation === "list_connections") {
+          const query = strictListQuery(url, false);
+          if (query === null) return errorResponse(400, "invalid_request", requestId);
+          const page = await dependencies.oauthConnections.listPage(
+            identity.actor.principalId,
+            query,
+          );
+          const access = await safeBindingAccessByOwner(
+            dependencies.control,
+            dependencies.mindBindings,
+            identity.actor,
+            page.items.map((connection) => Object.freeze({
+              ownerId: connection.bindingOwnerId,
+              scopes: connection.scopes,
+              state: "active" as const,
+            })),
+          );
+          const items = page.items.map((connection) =>
+            safeConnectionListItem(connection, access.get(connection.bindingOwnerId)!));
+          await dependencies.activity?.recordSuccessful(identity.actor, "web", "control_read");
+          return json(200, { ok: true, data: snakeOutput({ items, nextCursor: page.nextCursor }) });
         }
-        const revoked = await dependencies.oauthConnections.revoke(
+        const connectionRef = String(matched.path.connection_ref ?? "");
+        const connection = await dependencies.oauthConnections.read(
           identity.actor.principalId,
-          String(matched.path.grant_id ?? ""),
+          connectionRef,
         );
-        if (!revoked) return errorResponse(404, "not_found", requestId);
-        await dependencies.activity?.recordSuccessful(identity.actor, "web", "control_write");
-        return json(200, { ok: true, data: { revoked: true } });
-      }
-      if (matched.operation === "mutate_mind_binding") {
-        if (identity.kind !== "authenticated" || dependencies.mindBindings === undefined) {
-          return errorResponse(404, "not_found", requestId);
+        if (connection === null) return errorResponse(404, "connection_not_found", requestId);
+        if (matched.operation === "revoke_connection") {
+          if (requiredString(input.idempotencyKey) === null) {
+            return errorResponse(400, "invalid_request", requestId);
+          }
+          if (!(await dependencies.oauthConnections.revoke(identity.actor.principalId, connectionRef))) {
+            return errorResponse(404, "connection_not_found", requestId);
+          }
+          await dependencies.activity?.recordSuccessful(identity.actor, "web", "control_write");
+          return json(200, { ok: true, data: { revoked: true } });
         }
-        const data = await dependencies.mindBindings.mutate(identity.actor, input);
+        const mutation = matched.operation === "mutate_connection_access"
+          ? await mutateCredentialAccess({
+            actor: identity.actor,
+            mindBindings: dependencies.mindBindings,
+            control: dependencies.control,
+            ownerId: connection.bindingOwnerId,
+            scopes: connection.scopes,
+            request: input,
+            presentationKey: "connection_ref",
+          })
+          : null;
+        const fresh = matched.operation === "mutate_connection_access"
+          ? await dependencies.oauthConnections.read(identity.actor.principalId, connectionRef)
+          : connection;
+        if (fresh === null) return errorResponse(404, "connection_not_found", requestId);
+        const access = await safeBindingAccessByOwner(
+          dependencies.control,
+          dependencies.mindBindings,
+          identity.actor,
+          [Object.freeze({
+            ownerId: fresh.bindingOwnerId,
+            scopes: fresh.scopes,
+            state: "active" as const,
+          })],
+        );
+        const detail = safeConnectionDetail(fresh, access.get(fresh.bindingOwnerId)!);
+        if (detail === null) return errorResponse(404, "connection_not_found", requestId);
+        await dependencies.activity?.recordSuccessful(
+          identity.actor,
+          "web",
+          matched.operation === "mutate_connection_access" ? "control_write" : "control_read",
+        );
+        return json(200, {
+          ok: true,
+          data: snakeOutput(mutation === null ? detail : { ...detail, ...mutation }),
+        });
+      }
+      if (
+        matched.operation === "list_personal_token_page" ||
+        matched.operation === "mutate_personal_token_access"
+      ) {
+        if (
+          identity.kind !== "authenticated" ||
+          dependencies.personalTokens === undefined ||
+          dependencies.mindBindings === undefined
+        ) return errorResponse(404, "personal_token_not_found", requestId);
+        if (matched.operation === "list_personal_token_page") {
+          const query = strictListQuery(url, true);
+          if (query === null) return errorResponse(400, "invalid_request", requestId);
+          const state = query.state ?? "active";
+          const page = await dependencies.personalTokens.listPage(identity.actor, { ...query, state });
+          const access = state === "active"
+            ? await safeBindingAccessByOwner(
+                dependencies.control,
+                dependencies.mindBindings,
+                identity.actor,
+                page.items.map((token) => Object.freeze({
+                  ownerId: token.bindingOwnerId,
+                  scopes: token.scopes,
+                  state: "active" as const,
+                })),
+              )
+            : new Map<string, SafeCredentialAccess>();
+          const items = page.items.map(({ bindingOwnerId, ...token }) => {
+            const tokenAccess = access.get(bindingOwnerId);
+            if (state === "active" && tokenAccess === undefined) {
+              throw new TypeError("safe personal token access is unavailable");
+            }
+            return Object.freeze({
+              ...token,
+              ...(tokenAccess === undefined ? {} : { access: tokenAccess }),
+            });
+          });
+          await dependencies.activity?.recordSuccessful(identity.actor, "web", "control_read");
+          return json(200, { ok: true, data: snakeOutput({ items, nextCursor: page.nextCursor }) });
+        }
+        const personalTokenRef = String(matched.path.personal_token_ref ?? "");
+        const token = await dependencies.personalTokens.read(identity.actor, personalTokenRef);
+        if (token === null || token.state !== "active") {
+          return errorResponse(404, "personal_token_not_found", requestId);
+        }
+        const mutation = await mutateCredentialAccess({
+          actor: identity.actor,
+          mindBindings: dependencies.mindBindings,
+          control: dependencies.control,
+          ownerId: token.bindingOwnerId,
+          scopes: token.scopes,
+          request: input,
+          presentationKey: "personal_token_ref",
+        });
+        const fresh = await dependencies.personalTokens.read(identity.actor, personalTokenRef);
+        if (fresh === null) return errorResponse(404, "personal_token_not_found", requestId);
+        const access = await safeBindingAccessByOwner(
+          dependencies.control,
+          dependencies.mindBindings,
+          identity.actor,
+          [Object.freeze({
+            ownerId: fresh.bindingOwnerId,
+            scopes: fresh.scopes,
+            state: "active" as const,
+          })],
+        );
+        const { bindingOwnerId, ...safeToken } = fresh;
+        const freshAccess = access.get(bindingOwnerId);
+        if (freshAccess === undefined) {
+          throw new TypeError("safe personal token access is unavailable");
+        }
         await dependencies.activity?.recordSuccessful(identity.actor, "web", "control_write");
-        return json(200, { ok: true, data: snakeOutput(data) });
+        return json(200, {
+          ok: true,
+          data: snakeOutput({ ...safeToken, access: freshAccess, ...mutation }),
+        });
+      }
+      if (matched.operation === "revoke_personal_token") {
+        if (identity.kind !== "authenticated") {
+          return errorResponse(404, "personal_token_not_found", requestId);
+        }
+        if (requiredString(input.idempotencyKey) === null) {
+          return errorResponse(400, "invalid_request", requestId);
+        }
+        try {
+          const data = await dependencies.control.execute({
+            operation: matched.operation,
+            actor: identity.actor,
+            input,
+          });
+          await dependencies.activity?.recordSuccessful(identity.actor, "web", "control_write");
+          return json(200, { ok: true, data: snakeOutput(data) });
+        } catch (error) {
+          const code = failureCode(error);
+          if (code === "token_not_found" || code === "invalid_token_id") {
+            return errorResponse(404, "personal_token_not_found", requestId);
+          }
+          throw error;
+        }
       }
       const data = await dependencies.control.execute({
         operation: matched.operation,

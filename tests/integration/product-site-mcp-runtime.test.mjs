@@ -612,7 +612,7 @@ test("Product Site persists success-only web/MCP activity and hides the UAT dire
   const operatorPrincipalId = (await bootstrap.json()).data.principal_id;
 
   currentTime = new Date("2026-08-22T10:10:00.000Z");
-  const settings = await responseFrom(runtime, new Request(`${ORIGIN}/settings/mcp`));
+  const settings = await responseFrom(runtime, new Request(`${ORIGIN}/settings/developer/mcp`));
   const csrf = csrfFromHtml(await settings.text());
   const issued = await responseFrom(runtime, new Request(`${ORIGIN}/api/v1/mcp-tokens`, {
     method: "POST",
@@ -774,7 +774,7 @@ test("empty account reaches a strict starter commit and first useful search/fetc
   }));
   assert.equal(bootstrapped.status, 200);
 
-  const settings = await responseFrom(runtime, new Request(`${ORIGIN}/settings/mcp`));
+  const settings = await responseFrom(runtime, new Request(`${ORIGIN}/settings/developer/mcp`));
   assert.equal(settings.status, 200);
   const settingsCsrf = csrfFromHtml(await settings.text());
   const issued = await responseFrom(runtime, new Request(`${ORIGIN}/api/v1/mcp-tokens`, {
@@ -1286,7 +1286,7 @@ test("durable Product Site controls one token binding with ownership, CAS, read-
   }));
   assert.equal(bootstrapped.status, 200);
 
-  const settings = await responseFrom(runtime, new Request(`${ORIGIN}/settings/mcp`));
+  const settings = await responseFrom(runtime, new Request(`${ORIGIN}/settings/developer/mcp`));
   const csrf = csrfFromHtml(await settings.text());
   const issued = await responseFrom(runtime, new Request(`${ORIGIN}/api/v1/mcp-tokens`, {
     method: "POST",
@@ -1300,18 +1300,21 @@ test("durable Product Site controls one token binding with ownership, CAS, read-
   }));
   assert.equal(issued.status, 200);
   const issuedBody = await issued.json();
-  const tokenId = issuedBody.data.token.token_id;
+  const personalTokenRef = issuedBody.data.token.personal_token_ref;
   const secret = issuedBody.data.secret;
+  assert.match(personalTokenRef, /^ptok_v1_[0-9a-f]{32}$/u);
+  assert.equal(JSON.stringify(issuedBody).includes("token_id"), false);
 
-  const emptyPage = await responseFrom(runtime, new Request(`${ORIGIN}/settings/mcp`));
+  const emptyPage = await responseFrom(runtime, new Request(`${ORIGIN}/settings/developer/mcp`));
   const emptyHtml = await emptyPage.text();
   assert.match(emptyHtml, /Web binding token/u);
-  assert.match(emptyHtml, /Version 0/u);
-  assert.match(emptyHtml, /No attached read-only Minds/u);
-  assert.match(emptyHtml, /Active writable Mind:<\/strong> Not bound/u);
+  assert.match(emptyHtml, /data-binding-version="0"/u);
+  assert.match(emptyHtml, /No readable Minds selected/u);
+  assert.match(emptyHtml, /Can add and change[\s\S]*Not selected/u);
+  assert.doesNotMatch(emptyHtml, /Automatic knowledge capture/u);
 
   const mutate = (body, idempotencyKey) => responseFrom(runtime, new Request(
-    `${ORIGIN}/api/v1/mind-bindings/${encodeURIComponent(tokenId)}`,
+    `${ORIGIN}/api/v1/mcp-tokens/${encodeURIComponent(personalTokenRef)}/mind-access`,
     {
       method: "PATCH",
       headers: {
@@ -1325,20 +1328,21 @@ test("durable Product Site controls one token binding with ownership, CAS, read-
   ));
 
   const bound = await mutate({
-    action: "bind_write",
+    action: "select_write",
     mind_ref: "/me",
     expected_binding_version: 0,
   }, "binding:web-bind-write");
   assert.equal(bound.status, 200, await bound.clone().text());
-  assert.equal((await bound.json()).data.binding_version, 1);
+  const boundBody = await bound.json();
+  assert.equal(boundBody.data.changed, true);
+  assert.equal(boundBody.data.replayed, false);
+  assert.equal(boundBody.data.access.binding_version, 1);
 
-  const boundPage = await responseFrom(runtime, new Request(`${ORIGIN}/settings/mcp`));
+  const boundPage = await responseFrom(runtime, new Request(`${ORIGIN}/settings/developer/mcp`));
   const boundHtml = await boundPage.text();
-  assert.match(boundHtml, /Version 1/u);
-  assert.match(boundHtml, /Active writable Mind[\s\S]*Web Binding E2E[\s\S]*\/me[\s\S]*private/u);
-  assert.match(boundHtml, /Automatic knowledge capture/u);
-  assert.match(boundHtml, /Routine knowledge is never captured unless you enable it/u);
-  assert.match(boundHtml, /data-binding-action="enable_capture"/u);
+  assert.match(boundHtml, /data-binding-version="1"/u);
+  assert.match(boundHtml, /Can add and change[\s\S]*Web Binding E2E[\s\S]*\/me[\s\S]*private/u);
+  assert.doesNotMatch(boundHtml, /Automatic knowledge capture|data-binding-action/u);
   assert.doesNotMatch(boundHtml, /principal_|space_personal/u);
 
   const bindingReadResponse = await modernMcp(runtime, secret, {
@@ -1368,100 +1372,23 @@ test("durable Product Site controls one token binding with ownership, CAS, read-
     updated_at: null,
   });
 
-  const captureEnabled = await mutate({
-    action: "enable_capture",
-    expected_binding_version: 1,
-  }, "binding:web-enable-capture");
-  assert.equal(captureEnabled.status, 200, await captureEnabled.clone().text());
-  assert.equal((await captureEnabled.json()).data.binding_version, 2);
-  const captureEnabledPage = await responseFrom(runtime, new Request(`${ORIGIN}/settings/mcp`));
-  const captureEnabledHtml = await captureEnabledPage.text();
-  assert.match(captureEnabledHtml, /Version 2/u);
-  assert.match(captureEnabledHtml, /On for routine, non-sensitive additive Memories/u);
-  assert.match(captureEnabledHtml, /data-binding-action="disable_capture"/u);
-
-  const captureBindings = await modernTool(
-    runtime,
-    secret,
-    "web-binding-capture-read-back",
-    "get_mind_bindings",
-    {},
-  );
-  assert.equal(captureBindings.binding_version, 2);
-  assert.deepEqual(captureBindings.automatic_capture, {
-    mode: "routine_non_sensitive",
-    write_binding_id: captureBindings.write_binding.write_binding_id,
-    updated_at: "2026-08-22T11:00:00.000Z",
-  });
-  const captureArguments = {
-    mind: "/me",
-    write_binding_id: captureBindings.write_binding.write_binding_id,
-    expected_binding_version: captureBindings.binding_version,
-    expected_revision: captureBindings.write_binding.mind.head.revision_id,
-    idempotency_key: "capture:web-binding-routine",
-    classification: "routine_non_sensitive",
-    capture_kind: "fact",
-    capture_key: "weekly-summary-preference",
-    title: "Weekly summary preference",
-    description: "A routine non-sensitive working preference stated by the user.",
-    body: "The user prefers compact weekly summaries with evidence first.",
-    sources: [{ kind: "user_statement" }],
-  };
-  const captured = await modernTool(
-    runtime,
-    secret,
-    "web-binding-capture",
-    "capture_knowledge",
-    captureArguments,
-  );
-  assert.equal(captured.status, "captured");
-  assert.equal(captured.path, "concepts/captured/weekly-summary-preference.md");
-  assert.equal(captured.previous_revision_id, captureArguments.expected_revision);
-  assert.equal(captured.index_status, "queued");
-  const noOp = await modernTool(
-    runtime,
-    secret,
-    "web-binding-capture-no-op",
-    "capture_knowledge",
-    captureArguments,
-  );
-  assert.equal(noOp.status, "no_op");
-  assert.equal(noOp.revision.revision_id, captured.revision.revision_id);
-  assert.equal(noOp.index_status, "unchanged");
-
-  const captureDisabled = await mutate({
-    action: "disable_capture",
-    expected_binding_version: 2,
-  }, "binding:web-disable-capture");
-  assert.equal(captureDisabled.status, 200, await captureDisabled.clone().text());
-  assert.equal((await captureDisabled.json()).data.binding_version, 3);
-  const disabledBindings = await modernTool(
-    runtime,
-    secret,
-    "web-binding-capture-disabled-read-back",
-    "get_mind_bindings",
-    {},
-  );
-  assert.equal(disabledBindings.binding_version, 3);
-  assert.equal(disabledBindings.automatic_capture.mode, "disabled");
-
   const stale = await mutate({
-    action: "unbind_write",
+    action: "clear_write",
     expected_binding_version: 0,
   }, "binding:web-stale");
   assert.equal(stale.status, 409);
   assert.equal((await stale.json()).error.code, "binding_version_conflict");
   const afterStale = await modernTool(runtime, secret, "web-binding-after-stale", "get_mind_bindings", {});
-  assert.equal(afterStale.binding_version, 3);
+  assert.equal(afterStale.binding_version, 1);
   assert.equal(afterStale.write_binding.mind.route, "/me");
 
   const unknownField = await mutate({
-    action: "unbind_write",
+    action: "clear_write",
     expected_binding_version: 1,
     principal_id: "must-not-be-accepted",
   }, "binding:web-unknown-field");
   assert.equal(unknownField.status, 400);
-  assert.equal((await unknownField.json()).error.code, "invalid_binding_request");
+  assert.equal((await unknownField.json()).error.code, "invalid_request");
 
   const readOnlyIssued = await responseFrom(runtime, new Request(`${ORIGIN}/api/v1/mcp-tokens`, {
     method: "POST",
@@ -1474,9 +1401,9 @@ test("durable Product Site controls one token binding with ownership, CAS, read-
     body: JSON.stringify({ name: "Read-only binding token", scopes: ["content:read"] }),
   }));
   assert.equal(readOnlyIssued.status, 200);
-  const readOnlyTokenId = (await readOnlyIssued.json()).data.token.token_id;
+  const readOnlyTokenRef = (await readOnlyIssued.json()).data.token.personal_token_ref;
   const readOnlyWrite = await responseFrom(runtime, new Request(
-    `${ORIGIN}/api/v1/mind-bindings/${encodeURIComponent(readOnlyTokenId)}`,
+    `${ORIGIN}/api/v1/mcp-tokens/${encodeURIComponent(readOnlyTokenRef)}/mind-access`,
     {
       method: "PATCH",
       headers: {
@@ -1486,32 +1413,32 @@ test("durable Product Site controls one token binding with ownership, CAS, read-
         "idempotency-key": "binding:web-read-only-write",
       },
       body: JSON.stringify({
-        action: "bind_write",
+        action: "select_write",
         mind_ref: "/me",
         expected_binding_version: 0,
       }),
     },
   ));
-  assert.equal(readOnlyWrite.status, 403);
-  assert.equal((await readOnlyWrite.json()).error.code, "insufficient_scope");
-  const readOnlyPage = await responseFrom(runtime, new Request(`${ORIGIN}/settings/mcp`));
+  assert.equal(readOnlyWrite.status, 409);
+  assert.equal((await readOnlyWrite.json()).error.code, "write_step_up_required");
+  const readOnlyPage = await responseFrom(runtime, new Request(`${ORIGIN}/settings/developer/mcp`));
   const readOnlyHtml = await readOnlyPage.text();
-  const panelFor = (html, bindingOwnerId) => {
-    const marker = `data-binding-panel="${bindingOwnerId}"`;
+  const panelFor = (html, tokenRef) => {
+    const marker = `data-personal-token-ref="${tokenRef}"`;
     const markerStart = html.indexOf(marker);
-    assert.notEqual(markerStart, -1, `missing binding panel for ${bindingOwnerId}`);
-    const sectionStart = html.lastIndexOf("<section", markerStart);
-    const sectionEnd = html.indexOf("</section>", markerStart);
-    assert.notEqual(sectionStart, -1);
-    assert.notEqual(sectionEnd, -1);
-    return html.slice(sectionStart, sectionEnd + "</section>".length);
+    assert.notEqual(markerStart, -1, `missing personal-token panel for ${tokenRef}`);
+    const articleStart = html.lastIndexOf("<article", markerStart);
+    const articleEnd = html.indexOf("</article>", markerStart);
+    assert.notEqual(articleStart, -1);
+    assert.notEqual(articleEnd, -1);
+    return html.slice(articleStart, articleEnd + "</article>".length);
   };
-  const readOnlyPanel = panelFor(readOnlyHtml, readOnlyTokenId);
-  assert.match(readOnlyPanel, /data-binding-form="attach_read"/u);
-  assert.match(readOnlyPanel, /data-binding-form="bind_write"[\s\S]*disabled/u);
+  const readOnlyPanel = panelFor(readOnlyHtml, readOnlyTokenRef);
+  assert.match(readOnlyPanel, /data-access-action="attach_read"/u);
+  assert.doesNotMatch(readOnlyPanel, /data-access-action="select_write"|Select one writable Mind/u);
 
   const revoked = await responseFrom(runtime, new Request(
-    `${ORIGIN}/api/v1/mcp-tokens/${encodeURIComponent(tokenId)}`,
+    `${ORIGIN}/api/v1/mcp-tokens/${encodeURIComponent(personalTokenRef)}`,
     {
       method: "DELETE",
       headers: {
@@ -1522,28 +1449,28 @@ test("durable Product Site controls one token binding with ownership, CAS, read-
     },
   ));
   assert.equal(revoked.status, 200);
-  const revokedPage = await responseFrom(runtime, new Request(`${ORIGIN}/settings/mcp`));
+  const revokedPage = await responseFrom(runtime, new Request(`${ORIGIN}/settings/developer/mcp?state=revoked`));
   const revokedHtml = await revokedPage.text();
-  assert.match(revokedHtml, /This credential is expired or revoked/u);
-  const revokedPanel = panelFor(revokedHtml, tokenId);
-  assert.doesNotMatch(revokedPanel, /data-binding-form|data-binding-action/u);
+  assert.match(revokedHtml, /Web binding token/u);
+  const revokedPanel = panelFor(revokedHtml, personalTokenRef);
+  assert.doesNotMatch(revokedPanel, /data-access-form|data-access-action/u);
 
   const afterRevoke = await mutate({
-    action: "bind_write",
+    action: "select_write",
     mind_ref: "/me",
     expected_binding_version: 2,
   }, "binding:web-after-revoke");
-  assert.equal(afterRevoke.status, 403);
-  assert.equal((await afterRevoke.json()).error.code, "binding_owner_revoked");
+  assert.equal(afterRevoke.status, 404);
+  assert.equal((await afterRevoke.json()).error.code, "personal_token_not_found");
 
   currentTime = new Date("2027-01-22T11:00:00.000Z");
-  const expiredPage = await responseFrom(runtime, new Request(`${ORIGIN}/settings/mcp`));
+  const expiredPage = await responseFrom(runtime, new Request(`${ORIGIN}/settings/developer/mcp?state=expired`));
   const expiredHtml = await expiredPage.text();
-  const expiredReadOnlyPanel = panelFor(expiredHtml, readOnlyTokenId);
-  assert.match(expiredReadOnlyPanel, /expired or revoked/u);
-  assert.doesNotMatch(expiredReadOnlyPanel, /data-binding-form|data-binding-action/u);
+  const expiredReadOnlyPanel = panelFor(expiredHtml, readOnlyTokenRef);
+  assert.match(expiredReadOnlyPanel, /expired/u);
+  assert.doesNotMatch(expiredReadOnlyPanel, /data-access-form|data-access-action/u);
   const expiredMutation = await responseFrom(runtime, new Request(
-    `${ORIGIN}/api/v1/mind-bindings/${encodeURIComponent(readOnlyTokenId)}`,
+    `${ORIGIN}/api/v1/mcp-tokens/${encodeURIComponent(readOnlyTokenRef)}/mind-access`,
     {
       method: "PATCH",
       headers: {
@@ -1559,8 +1486,8 @@ test("durable Product Site controls one token binding with ownership, CAS, read-
       }),
     },
   ));
-  assert.equal(expiredMutation.status, 403);
-  assert.equal((await expiredMutation.json()).error.code, "binding_owner_revoked");
+  assert.equal(expiredMutation.status, 404);
+  assert.equal((await expiredMutation.json()).error.code, "personal_token_not_found");
 });
 
 test("durable product runtime carries a Sites account token through Codex MCP and revokes it", async () => {
@@ -1620,20 +1547,22 @@ test("durable product runtime carries a Sites account token through Codex MCP an
   assert.equal(sessionBody.data.principal.display_name, "Runtime Owner");
   assert.equal(sessionBody.data.personal_mind.route, "/me");
 
-  const settings = await responseFrom(runtime, new Request(`${ORIGIN}/settings/mcp`));
+  const settings = await responseFrom(runtime, new Request(`${ORIGIN}/settings/developer/mcp`));
   assert.equal(settings.status, 200);
   const settingsHtml = await settings.text();
   assert.match(settingsHtml, new RegExp(`${ORIGIN.replaceAll(".", "\\.")}\\/api\\/mcp\\/2025-11-25`, "u"));
   assert.match(settingsHtml, new RegExp(`${ORIGIN.replaceAll(".", "\\.")}\\/api\\/mcp`, "u"));
   assert.match(settingsHtml, /data-run-mcp-self-check disabled/u);
-  assert.match(settingsHtml, /Preview, restore and export with Codex/u);
-  assert.match(settingsHtml, /data-copy-code="mind-diary-safe-write-playbook"/u);
-  assert.match(settingsHtml, /data-copy-code="mind-diary-restore-export-playbook"/u);
-  assert.match(settingsHtml, /data-copy-code="mind-diary-starter-playbook"/u);
-  assert.match(settingsHtml, /data-copy-code="mind-diary-concierge-playbook"/u);
-  assert.match(settingsHtml, /Revoked access[\s\S]*Fail closed/u);
+  assert.doesNotMatch(settingsHtml, /Create the first useful Memory|Restore as a new revision and export/u);
   assert.doesNotMatch(settingsHtml, /&lt;your-mind-diary-site&gt;/u);
   const registeredCsrf = csrfFromHtml(settingsHtml);
+  const codexHelp = await responseFrom(runtime, new Request(`${ORIGIN}/help/codex`));
+  assert.equal(codexHelp.status, 200);
+  const codexHelpHtml = await codexHelp.text();
+  assert.match(codexHelpHtml, /Create the first useful Memory/u);
+  assert.match(codexHelpHtml, /Preview and confirm a substantial change/u);
+  assert.match(codexHelpHtml, /Restore as a new revision and export/u);
+  assert.match(codexHelpHtml, /Convert a bounded Markdown set/u);
 
   const createdMind = await responseFrom(runtime, new Request(`${ORIGIN}/api/v1/minds`, {
     method: "POST",
@@ -1725,9 +1654,10 @@ test("durable product runtime carries a Sites account token through Codex MCP an
   assert.equal(issued.status, 200);
   const issuedBody = await issued.json();
   const secret = issuedBody.data.secret;
-  const tokenId = issuedBody.data.token.token_id;
+  const personalTokenRef = issuedBody.data.token.personal_token_ref;
   assert.match(secret, /^mdp_v1_/u);
-  assert.equal(typeof tokenId, "string");
+  assert.match(personalTokenRef, /^ptok_v1_[0-9a-f]{32}$/u);
+  assert.equal(JSON.stringify(issuedBody).includes("token_id"), false);
 
   const discovery = await modernMcp(runtime, secret, {
     jsonrpc: "2.0",
@@ -2078,7 +2008,7 @@ test("durable product runtime carries a Sites account token through Codex MCP an
   );
 
   const revoked = await responseFrom(runtime, new Request(
-    `${ORIGIN}/api/v1/mcp-tokens/${encodeURIComponent(tokenId)}`,
+    `${ORIGIN}/api/v1/mcp-tokens/${encodeURIComponent(personalTokenRef)}`,
     {
       method: "DELETE",
       headers: {
@@ -2394,7 +2324,7 @@ test("durable Product Site enforces public baseline access, atomic ownership tra
   switchIdentity("visibility.outsider@example.com", "Baseline Reader");
   await registerCurrent();
 
-  const outsiderCsrf = await pageCsrf("/settings/mcp");
+  const outsiderCsrf = await pageCsrf("/settings/developer/mcp");
   const publicCatalog = await responseFrom(runtime, new Request(`${ORIGIN}/public`));
   assert.equal(publicCatalog.status, 200);
   const publicCatalogHtml = await publicCatalog.text();
@@ -2809,7 +2739,7 @@ test("durable collaboration accepts exactly once, rejects stale role state, and 
   );
   assert.equal(acceptedExact.status, 200);
   assert.equal((await acceptedExact.json()).data.access.role, "editor");
-  const memberSettingsCsrf = await csrf("/settings/mcp");
+  const memberSettingsCsrf = await csrf("/settings/developer/mcp");
   const issued = await mutation(
     "/api/v1/mcp-tokens",
     "POST",
@@ -2976,7 +2906,7 @@ test("request-triggered recovery reclaims a revision after an injected index dis
   }));
   assert.equal(bootstrapped.status, 200);
 
-  const settings = await responseFrom(runtime, new Request(`${ORIGIN}/settings/mcp`));
+  const settings = await responseFrom(runtime, new Request(`${ORIGIN}/settings/developer/mcp`));
   const settingsCsrf = csrfFromHtml(await settings.text());
   const issued = await responseFrom(runtime, new Request(`${ORIGIN}/api/v1/mcp-tokens`, {
     method: "POST",

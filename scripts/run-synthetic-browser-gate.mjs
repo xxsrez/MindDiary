@@ -156,13 +156,13 @@ async function issueToken(context, nonce, name) {
     method: "POST",
     body: { name, scopes: ["content:write"] },
     idempotencyKey: `browser:${nonce}:token:${name}`,
-    csrfPath: "/settings/mcp",
+    csrfPath: "/settings/developer/mcp",
   });
   const value = data(result, "token_issue_failed");
-  if (typeof value.secret !== "string" || typeof value.token?.token_id !== "string") {
+  if (typeof value.secret !== "string" || typeof value.token?.personal_token_ref !== "string") {
     fail("token_issue_projection_invalid");
   }
-  return Object.freeze({ secret: value.secret, id: value.token.token_id });
+  return Object.freeze({ secret: value.secret, ref: value.token.personal_token_ref });
 }
 
 async function setVisibility(context, handle, value, metadataVersion, nonce) {
@@ -200,11 +200,11 @@ async function deleteAccount(context, nonce, name) {
   expectError(session, 409, "registration_required");
 }
 
-async function revokeToken(context, tokenId, nonce, name) {
-  const result = data(await context.json(`/api/v1/mcp-tokens/${encodeURIComponent(tokenId)}`, {
+async function revokeToken(context, personalTokenRef, nonce, name) {
+  const result = data(await context.json(`/api/v1/mcp-tokens/${encodeURIComponent(personalTokenRef)}`, {
     method: "DELETE",
     idempotencyKey: `browser:${nonce}:token-revoke:${name}`,
-    csrfPath: "/settings/mcp",
+    csrfPath: "/settings/developer/mcp",
   }));
   if (result.token?.state !== "revoked") fail("token_revoke_failed");
 }
@@ -424,8 +424,8 @@ async function runScenario({ candidate, evidenceOut, randomBytesImpl, now }) {
     await deleteMind(participant, handle, nonce);
     expectError(await participant.api(`/api/v1/minds/${handle}`), 404, "mind_not_found");
     assertions.add("cleanup.ordinary-mind-deleted");
-    await revokeToken(owner, ownerToken.id, nonce, "owner");
-    await revokeToken(participant, participantToken.id, nonce, "participant");
+    await revokeToken(owner, ownerToken.ref, nonce, "owner");
+    await revokeToken(participant, participantToken.ref, nonce, "participant");
     expectStatus(await mcp(owner, ownerToken.secret, "list_minds"), 401, "revoked_owner_token_not_denied");
     expectStatus(await mcp(participant, participantToken.secret, "list_minds"), 401, "revoked_participant_token_not_denied");
     assertions.add("cleanup.tokens-revoked");

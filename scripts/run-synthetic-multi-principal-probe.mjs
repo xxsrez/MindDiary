@@ -231,11 +231,11 @@ async function deleteMind(actor, handle, nonce) {
 
 async function revokeToken(actor, nonce, suffix) {
   const response = data(await actor.api(
-    `/api/v1/mcp-tokens/${encodeURIComponent(actor.mcpTokenId)}`,
+    `/api/v1/mcp-tokens/${encodeURIComponent(actor.mcpTokenRef)}`,
     {
       method: "DELETE",
       idempotencyKey: `synthetic:${nonce}:token:revoke:${suffix}`,
-      csrfPath: "/settings/mcp",
+      csrfPath: "/settings/developer/mcp",
     },
   ));
   if (response.token?.state !== "revoked") fail("token_revoke_failed");
@@ -321,7 +321,7 @@ async function runScenario({ candidate, evidenceOut, randomBytesImpl, now }) {
   });
   if (
     actors.owner.mcpToken === actors.participant.mcpToken ||
-    actors.owner.mcpTokenId === actors.participant.mcpTokenId
+    actors.owner.mcpTokenRef === actors.participant.mcpTokenRef
   ) fail("shared_mcp_credential_forbidden");
   const initialBindings = mcpResultData(
     await actors.participant.mcp("get_mind_bindings"),
@@ -1000,6 +1000,22 @@ async function runScenario({ candidate, evidenceOut, randomBytesImpl, now }) {
     )
   ) fail("mind_delete_did_not_invalidate_bindings");
   assertions.add("bindings.mind-delete-invalidates-target");
+  const credentialInspection = await createSitesMetadataStore(database);
+  const [ownerTokenMetadata, participantTokenMetadata] = await Promise.all([
+    credentialInspection.readMcpTokenMetadataByPresentationRef(
+      ownerIds.principal,
+      actors.owner.mcpTokenRef,
+    ),
+    credentialInspection.readMcpTokenMetadataByPresentationRef(
+      participantIds.principal,
+      actors.participant.mcpTokenRef,
+    ),
+  ]);
+  if (ownerTokenMetadata === null || participantTokenMetadata === null) {
+    fail("personal_token_ref_resolution_failed");
+  }
+  const ownerTokenId = ownerTokenMetadata.tokenId;
+  const participantTokenId = participantTokenMetadata.tokenId;
   await revokeToken(actors.owner, nonce, "owner");
   await revokeToken(actors.participant, nonce, "participant");
   const [ownerDenied, participantDenied] = await Promise.all([
@@ -1012,7 +1028,7 @@ async function runScenario({ candidate, evidenceOut, randomBytesImpl, now }) {
   assertions.add("cleanup.tokens-revoked");
   const revokedBindingInspection = await createSitesMetadataStore(database);
   const revokedParticipantBindings = await revokedBindingInspection.readMindBindingSet(
-    actors.participant.mcpTokenId,
+    participantTokenId,
     participantIds.principal,
     new Date().toISOString(),
   );
@@ -1036,9 +1052,9 @@ async function runScenario({ candidate, evidenceOut, randomBytesImpl, now }) {
   const inspection = await createSitesMetadataStore(database);
   const accountTotals = await inspection.inspectAccountBootstrapStateForTest();
   const ordinaryTotals = await inspection.inspectOrdinaryMindTotalsForTest();
-  const ownerToken = await inspection.readMcpTokenForAuthorization(actors.owner.mcpTokenId);
+  const ownerToken = await inspection.readMcpTokenForAuthorization(ownerTokenId);
   const participantToken = await inspection.readMcpTokenForAuthorization(
-    actors.participant.mcpTokenId,
+    participantTokenId,
   );
   const ownerBinding = await inspection.readAccountByExternalBinding({
     provider: BINDING_NAMESPACE,
@@ -1049,7 +1065,7 @@ async function runScenario({ candidate, evidenceOut, randomBytesImpl, now }) {
     normalizedBinding: participantAlias,
   });
   const deletedParticipantBindingState = await inspection.readMindBindingSet(
-    actors.participant.mcpTokenId,
+    participantTokenId,
     participantIds.principal,
     new Date().toISOString(),
   );
@@ -1075,8 +1091,8 @@ async function runScenario({ candidate, evidenceOut, randomBytesImpl, now }) {
       !serialized.includes(participantAlias) &&
       !serialized.includes(ownerIds.principal) &&
       !serialized.includes(participantIds.principal) &&
-      !serialized.includes(actors.owner.mcpTokenId) &&
-      !serialized.includes(actors.participant.mcpTokenId)
+      !serialized.includes(actors.owner.mcpTokenRef) &&
+      !serialized.includes(actors.participant.mcpTokenRef)
     );
   });
   if (

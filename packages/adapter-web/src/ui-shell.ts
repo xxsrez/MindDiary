@@ -61,6 +61,7 @@ export type MindDiaryNavigationTarget =
   | "public"
   | "invitations"
   | "account"
+  | "connections"
   | "tokens"
   | "help";
 
@@ -137,7 +138,7 @@ export function renderMindDiaryAuthenticatedHeader(
       <a href="/minds"${activeAttribute(activeNavigation, "minds")}><span aria-hidden="true">▤</span> Minds</a>
       <a href="/public"${activeAttribute(activeNavigation, "public")}><span aria-hidden="true">◎</span> Public Minds</a>
       <a href="/invitations"${activeAttribute(activeNavigation, "invitations")}><span aria-hidden="true">✉</span> Invitations</a>
-      <a href="/settings/mcp"${activeAttribute(activeNavigation, "tokens")}><span aria-hidden="true">⌁</span> MCP setup</a>
+      <a href="/settings/connections"${activeAttribute(activeNavigation, "connections")}><span aria-hidden="true">⌁</span> Connections</a>
     </nav>
     <a class="md-profile" href="/settings/account" aria-label="Account settings for ${safeName}"${activeAttribute(activeNavigation, "account")}>
       <span class="md-profile__initial" aria-hidden="true">${initial}</span>
@@ -152,7 +153,7 @@ export function renderMindDiaryAuthenticatedFooter(
 ): string {
   return `<footer class="md-footer">
     <p><strong>Mind Diary UAT</strong> keeps the knowledge you choose in versioned Minds.</p>
-    <a href="/help"${activeAttribute(activeNavigation, "help")}>Help and accessibility</a>
+    <a href="/help/codex"${activeAttribute(activeNavigation, "help")}>Help with Codex</a>
   </footer>`;
 }
 

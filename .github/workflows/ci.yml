@@ -26,5 +26,7 @@ jobs:
           cache: npm
       - name: Install locked dependencies
         run: npm ci
+      - name: Install Chromium system dependencies
+        run: npx playwright install-deps chromium
       - name: Run canonical full check
         run: npm run check

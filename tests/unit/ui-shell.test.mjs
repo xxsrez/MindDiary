@@ -152,8 +152,8 @@ test("pilot route shell keeps exact links, active state, safe route states, and 
     ["public", "/public"],
     ["invitations", "/invitations"],
     ["account", "/settings/account"],
-    ["tokens", "/settings/mcp"],
-    ["help", "/help"],
+    ["connections", "/settings/connections"],
+    ["help", "/help/codex"],
   ];
   for (const [activeNavigation, expectedRoute] of routes) {
     const html = renderMindDiaryRoutePage({
@@ -170,7 +170,7 @@ test("pilot route shell keeps exact links, active state, safe route states, and 
     assert.match(html, /Hosted environment: UAT/);
     assert.match(html, /href="\/public"/);
     assert.match(html, /href="\/settings\/account"/);
-    assert.match(html, /href="\/help"/);
+    assert.match(html, /href="\/help\/codex"/);
   }
 
   for (const kind of ["loading", "empty", "error", "forbidden"]) {

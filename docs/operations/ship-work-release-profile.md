@@ -1,6 +1,6 @@
 # Профиль `ship-work-release` для Mind Diary
 
-Статус: accepted project configuration, revision 4, 2026-08-24.
+Статус: accepted project configuration, revision 5, 2026-08-24.
 
 Документ задаёт project-specific параметры Mind Diary по
 [provider-neutral profile contract](../specs/ship-work-release-project-profile.md).
@@ -19,7 +19,7 @@ adapters и их hosted canaries сохраняются как post-MVP graph, �
 `uat.changed-surface`. Их code/tests могут присутствовать в exact candidate;
 это не является hosted support claim и не блокирует terminal 0.1.
 
-Revision 4 сохраняет terminal `uat.operator-directory-canary`: exact-candidate
+Revision 5 сохраняет terminal `uat.operator-directory-canary`: exact-candidate
 three-actor read-only probe с environment-only credential references и
 redacted receipt. Account/audience/allowlist setup, provider privacy read-back
 и external cleanup остаются отдельными explicit-authority prerequisites и не
@@ -31,12 +31,21 @@ write step-up, singleton writable Mind, Markdown write/history/export и revoke
 cut; поэтому они не входят в ordinary `uat.smoke_rows` и не блокируют deploy,
 на котором MD-244/MD-299 получают evidence.
 
+Revision 5 также включает deterministic real-browser gate MD-300 в root
+`npm run check`. Runner фиксирован на `@playwright/test@1.62.1`, а exact
+Chromium lifecycle — на `@playwright/browser-chromium@1.62.1` и tracked
+`allowScripts`. Поэтому `npm ci` устанавливает browser revision из lockfile,
+не читая пользовательский Chrome, профиль, extensions или login state. Linux
+CI после install выполняет только system-dependency step
+`npx playwright install-deps chromium`; browser binaries между clean jobs не
+кэшируются, а npm cache не является browser authority.
+
 ## Canonical profile
 
 ~~~yaml
 schema: ship-work-release/project-profile/v1
 profile_id: mind-diary
-profile_revision: 4
+profile_revision: 5
 
 context:
   schema: ship-work-release/context-bindings/v1
@@ -1218,6 +1227,23 @@ class `openai-sites-production-deployment` — платформенный тер
 name, ни URL, ни старый receipt не используются вместо target resolution.
 
 ## Command и environment boundaries
+
+### Deterministic real-browser gate
+
+Root acceptance запускает `playwright test --config=playwright.config.mjs`
+после одного clean build. Конфигурация использует headless Chromium, один
+worker, `UTC`, `en-US`, reduced motion, заблокированные service workers и
+отключённые screenshot/trace/video artifacts. Любая browser assertion или
+fixture lifecycle failure завершает full gate ненулевым кодом.
+
+Runner сам поднимает три loopback-only fixture processes для коллекций
+`0 / 1 / 21`, ждёт их health contract и всегда завершает processes после
+suite. На четырёх canonical routes он исполняет реальный DOM и accessibility
+tree: desktop/mobile overflow, headings и accessible names, keyboard-only
+navigation, focus transfer, dialog lifecycle, loading/error, revoke и
+reconnect. Fixture HTTP bodies содержат только synthetic labels и presentation
+refs; reporter сохраняет только названия assertions и pass/fail, без corpus,
+credentials, email или durable user IDs.
 
 Все commands выполняются прямым `argv` без shell. Канонический full dev launcher
 проекта — root `npm run dev`; его machine event сообщает loopback URL,

@@ -27,8 +27,8 @@ const ENVIRONMENT = Object.freeze({
   participantEmail: "MIND_DIARY_UAT_PARTICIPANT_EMAIL",
   ownerMcpToken: ["MIND_DIARY_UAT_OWNER", "MCP_TOKEN"].join("_"),
   participantMcpToken: ["MIND_DIARY_UAT_PARTICIPANT", "MCP_TOKEN"].join("_"),
-  ownerMcpTokenId: ["MIND_DIARY_UAT_OWNER", "MCP_TOKEN_ID"].join("_"),
-  participantMcpTokenId: ["MIND_DIARY_UAT_PARTICIPANT", "MCP_TOKEN_ID"].join("_"),
+  ownerMcpTokenRef: ["MIND_DIARY_UAT_OWNER", "MCP_TOKEN_REF"].join("_"),
+  participantMcpTokenRef: ["MIND_DIARY_UAT_PARTICIPANT", "MCP_TOKEN_REF"].join("_"),
 });
 const ASSERTIONS = UAT_ASSERTION_IDS;
 
@@ -78,6 +78,10 @@ export function loadCredentialEnvironment(environment = process.env) {
   for (const [key, name] of Object.entries(ENVIRONMENT)) values[key] = required(environment[name], `missing_${name.toLowerCase()}`);
   if (!values.participantEmail.includes("@")) fail("invalid_participant_email_reference");
   if (!values.ownerMcpToken.startsWith("mdp_v1_") || !values.participantMcpToken.startsWith("mdp_v1_")) fail("invalid_mcp_token_reference");
+  if (
+    !/^ptok_v1_[0-9a-f]{32}$/u.test(values.ownerMcpTokenRef) ||
+    !/^ptok_v1_[0-9a-f]{32}$/u.test(values.participantMcpTokenRef)
+  ) fail("invalid_personal_token_ref");
   if (values.ownerSitesToken === values.participantSitesToken) fail("shared_sites_credential_forbidden");
   if (values.ownerMcpToken === values.participantMcpToken) fail("shared_mcp_credential_forbidden");
   return Object.freeze(values);
@@ -312,9 +316,9 @@ async function setup(state, credentials, fetchImpl) {
   if (sourceAfter.access?.role !== "admin" || targetAfter.access?.role !== "owner" || membersAfter?.filter((item) => item?.role === "owner").length !== 1) fail("ownership_transfer_failed");
 }
 
-async function revokeToken(actor, tokenId, state, suffix) {
-  const response = await actor.api(`/api/v1/mcp-tokens/${encodeURIComponent(tokenId)}`, {
-    method: "DELETE", idempotencyKey: `probe:${state.run_nonce}:token-revoke:${suffix}`, csrfPath: "/settings/mcp",
+async function revokeToken(actor, tokenRef, state, suffix) {
+  const response = await actor.api(`/api/v1/mcp-tokens/${encodeURIComponent(tokenRef)}`, {
+    method: "DELETE", idempotencyKey: `probe:${state.run_nonce}:token-revoke:${suffix}`, csrfPath: "/settings/developer/mcp",
   });
   if (response.body?.data?.token?.state !== "revoked") fail("token_revoke_failed", { actorClass: actor.actorClass });
 }
@@ -359,8 +363,8 @@ async function verify(state, newDeploymentId, credentials, fetchImpl) {
     client.participant.api(`/api/v1/minds/${state.mind.handle}`, { expectedStatus: 404 }),
   ]);
   if (ownerDeleted.body?.error?.code !== "mind_not_found" || participantDeleted.body?.error?.code !== "mind_not_found") fail("probe_mind_cleanup_failed");
-  await revokeToken(client.owner, credentials.ownerMcpTokenId, state, "owner");
-  await revokeToken(client.participant, credentials.participantMcpTokenId, state, "participant");
+  await revokeToken(client.owner, credentials.ownerMcpTokenRef, state, "owner");
+  await revokeToken(client.participant, credentials.participantMcpTokenRef, state, "participant");
   const [ownerDenied, participantDenied] = await Promise.all([client.owner.mcp("list_minds"), client.participant.mcp("list_minds")]);
   if (ownerDenied.status !== 401 || participantDenied.status !== 401) fail("probe_token_cleanup_failed");
   return createEvidence({
@@ -379,10 +383,10 @@ async function cleanup(state, credentials, fetchImpl) {
     const response = await actor.request(`/api/v1/minds/${state.mind.handle}`, { headers: { accept: "application/json" } });
     if (response.status === 200 && response.body?.data?.access?.role === "owner") { await deleteMind(actor, state); break; }
   }
-  for (const [actor, tokenId, suffix] of [[client.owner, credentials.ownerMcpTokenId, "owner"], [client.participant, credentials.participantMcpTokenId, "participant"]]) {
+  for (const [actor, tokenRef, suffix] of [[client.owner, credentials.ownerMcpTokenRef, "owner"], [client.participant, credentials.participantMcpTokenRef, "participant"]]) {
     const listed = await actor.request("/api/v1/mcp-tokens", { headers: { accept: "application/json" } });
-    const token = listed.body?.data?.tokens?.find((item) => item?.token_id === tokenId);
-    if (listed.status === 200 && token?.state !== "revoked") await revokeToken(actor, tokenId, state, suffix);
+    const token = listed.body?.data?.items?.find((item) => item?.personal_token_ref === tokenRef);
+    if (listed.status === 200 && token?.state !== "revoked") await revokeToken(actor, tokenRef, state, suffix);
   }
   return Object.freeze({ schema: STATE_SCHEMA, status: "cleaned", run_nonce: state.run_nonce });
 }

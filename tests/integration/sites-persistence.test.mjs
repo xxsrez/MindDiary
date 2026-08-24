@@ -1481,6 +1481,29 @@ test("Sites composition persists account, invitation, ownership, HEAD CAS, idemp
     (await (await createSitesMetadataStore(database)).listMcpTokenMetadata(owner.principalId)).length,
     1,
   );
+  assert.deepEqual(await tokenStore.listMcpTokensMissingPresentationRefs(), ["token_sites_durable"]);
+  const presentationAssignments = await Promise.all([
+    tokenStore.assignPersonalTokenRefs([{
+      tokenId: "token_sites_durable",
+      personalTokenRef: `ptok_v1_${"1".repeat(32)}`,
+    }]),
+    (await createSitesMetadataStore(database)).assignPersonalTokenRefs([{
+      tokenId: "token_sites_durable",
+      personalTokenRef: `ptok_v1_${"2".repeat(32)}`,
+    }]),
+  ]);
+  assert.deepEqual(presentationAssignments.sort(), [0, 1]);
+  const tokenAfterPresentationMigration = await createSitesMetadataStore(database);
+  assert.deepEqual(await tokenAfterPresentationMigration.listMcpTokensMissingPresentationRefs(), []);
+  const migratedToken = (await tokenAfterPresentationMigration.listMcpTokenMetadata(owner.principalId))[0];
+  assert.equal(/^ptok_v1_[0-9a-f]{32}$/u.test(migratedToken.personalTokenRef), true);
+  assert.equal(
+    (await tokenAfterPresentationMigration.readMcpTokenMetadataByPresentationRef(
+      owner.principalId,
+      migratedToken.personalTokenRef,
+    ))?.tokenId,
+    "token_sites_durable",
+  );
 
   const currentAuthorization = await tokenStore.readCurrentAuthorizationState({
     principalId: owner.principalId,

@@ -142,7 +142,7 @@ const server = createServer(async (request, response) => {
       sendText(response, 200, "application/json; charset=utf-8", '{"ok":true}');
       return;
     }
-    if (url.pathname === "/" || url.pathname === "/settings/mcp") {
+    if (url.pathname === "/" || url.pathname === "/settings/developer/mcp") {
       const state = url.searchParams.get("state") ?? "ready";
       sendText(
         response,
@@ -173,7 +173,7 @@ const server = createServer(async (request, response) => {
 });
 
 server.listen(port, host, () => {
-  process.stdout.write(`Mind Diary MCP token fixture: http://${host}:${port}/settings/mcp\n`);
+  process.stdout.write(`Mind Diary MCP token fixture: http://${host}:${port}/settings/developer/mcp\n`);
 });
 
 for (const signal of ["SIGINT", "SIGTERM"]) {

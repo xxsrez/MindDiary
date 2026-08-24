@@ -84,9 +84,8 @@ export const OAUTH_DIRECT_PLUGIN_ASSERTION_IDS = Object.freeze([
   "oauth.authorization-mirror-active",
   "oauth.current-acl-readback",
   "oauth.explicit-write-binding-readback",
-  "oauth.capture-policy-readback",
-  "oauth.product-runtime-capture",
-  "oauth.product-runtime-capture-no-op",
+  "oauth.connection-safe-projection",
+  "oauth.connection-stale-cas",
   "oauth.product-runtime-commit",
   "oauth.product-runtime-idempotent-replay",
   "oauth.product-runtime-stale-cas",
@@ -1031,74 +1030,39 @@ async function runOAuthScenario({ assertions, nowState }) {
     bindingReadback.write_binding?.mind?.route !== "/me"
   ) fail("oauth_write_binding_readback_mismatch");
   assertions.add("oauth.explicit-write-binding-readback");
-  const settingsBeforeCapture = await owner.request("/settings/mcp");
-  const grantId = /data-revoke-oauth="([^"]+)"/u.exec(settingsBeforeCapture.text)?.[1];
-  if (!grantId) fail("oauth_connected_app_not_visible");
-  const captureEnabled = await owner.api(
-    `/api/v1/mind-bindings/${encodeURIComponent(grantId)}`,
+  const connections = await owner.api("/api/v1/connections");
+  const connection = connections.body?.data?.items?.find((item) => item?.can_write === true);
+  const connectionRef = requiredString(
+    connection?.connection_ref,
+    "oauth_connected_app_not_visible",
+  );
+  const connectionDetail = await owner.api(
+    `/api/v1/connections/${encodeURIComponent(connectionRef)}`,
+  );
+  if (
+    connectionDetail.body?.data?.access?.binding_version !== bindingReadback.binding_version ||
+    connectionDetail.body?.data?.access?.writable_mind?.route !== "/me" ||
+    JSON.stringify(connectionDetail.body).includes(String(writeAccessRecord.grant_id))
+  ) fail("oauth_connection_safe_projection_mismatch");
+  assertions.add("oauth.connection-safe-projection");
+  const staleAccess = await owner.api(
+    `/api/v1/connections/${encodeURIComponent(connectionRef)}/mind-access`,
     {
       method: "PATCH",
       body: {
-        action: "enable_capture",
-        expected_binding_version: bindingReadback.binding_version,
+        action: "clear_write",
+        expected_binding_version: 0,
       },
-      idempotencyKey: `oauth:${nonce}:enable-capture`,
-      csrfPath: "/settings/mcp",
+      idempotencyKey: `oauth:${nonce}:stale-access`,
+      csrfPath: `/settings/connections/${encodeURIComponent(connectionRef)}`,
+      expectedStatus: 409,
     },
   );
-  if (captureEnabled.body?.data?.binding_version !== bindingReadback.binding_version + 1) {
-    fail("oauth_capture_policy_enable_mismatch");
+  if (staleAccess.body?.error?.code !== "binding_version_conflict") {
+    fail("oauth_connection_stale_cas_not_denied");
   }
-  const captureBindings = mcpData(
-    await modernTool(owner, writeGrant.tokens.access_token, "oauth-capture-bindings-readback", "get_mind_bindings"),
-    "oauth_capture_bindings_readback_failed",
-  );
-  if (
-    captureBindings.binding_version !== captureEnabled.body.data.binding_version ||
-    captureBindings.automatic_capture?.mode !== "routine_non_sensitive" ||
-    captureBindings.automatic_capture?.write_binding_id !== writeBindingId ||
-    captureBindings.write_binding?.write_binding_id !== writeBindingId ||
-    captureBindings.write_binding?.mind?.visibility !== "private"
-  ) fail("oauth_capture_policy_readback_mismatch");
-  assertions.add("oauth.capture-policy-readback");
-  const captureArguments = {
-    mind: "/me",
-    write_binding_id: writeBindingId,
-    expected_binding_version: captureBindings.binding_version,
-    expected_revision: captureBindings.write_binding.mind.head.revision_id,
-    idempotency_key: `oauth:${nonce}:capture`,
-    classification: "routine_non_sensitive",
-    capture_kind: "fact",
-    capture_key: "oauth-gate-routine-fact",
-    title: "OAuth gate routine fact",
-    description: "A bounded non-sensitive fact stated by the synthetic user.",
-    body: "The synthetic user prefers compact weekly summaries.",
-    sources: [{ kind: "user_statement" }],
-  };
-  const captured = mcpData(
-    await modernTool(owner, writeGrant.tokens.access_token, "oauth-capture", "capture_knowledge", captureArguments),
-    "oauth_product_capture_failed",
-  );
-  if (
-    captured.status !== "captured" ||
-    captured.path !== "concepts/captured/oauth-gate-routine-fact.md" ||
-    captured.previous_revision_id !== captureArguments.expected_revision ||
-    captured.revision?.revision_id === captureArguments.expected_revision ||
-    captured.index_status !== "queued"
-  ) fail("oauth_product_capture_mismatch");
-  assertions.add("oauth.product-runtime-capture");
-  const captureNoOp = mcpData(
-    await modernTool(owner, writeGrant.tokens.access_token, "oauth-capture-no-op", "capture_knowledge", captureArguments),
-    "oauth_product_capture_no_op_failed",
-  );
-  if (
-    captureNoOp.status !== "no_op" ||
-    captureNoOp.path !== captured.path ||
-    captureNoOp.revision?.revision_id !== captured.revision.revision_id ||
-    captureNoOp.index_status !== "unchanged"
-  ) fail("oauth_product_capture_no_op_mismatch");
-  assertions.add("oauth.product-runtime-capture-no-op");
-  const expectedRevision = captured.revision.revision_id;
+  assertions.add("oauth.connection-stale-cas");
+  const expectedRevision = bindingReadback.write_binding.mind.head.revision_id;
   const commitArguments = {
     mind: "/me",
     write_binding_id: writeBindingId,
@@ -1141,10 +1105,10 @@ async function runOAuthScenario({ assertions, nowState }) {
   );
   assertions.add("oauth.product-runtime-stale-cas");
 
-  await owner.api(`/api/v1/oauth-connections/${encodeURIComponent(grantId)}`, {
+  await owner.api(`/api/v1/connections/${encodeURIComponent(connectionRef)}`, {
     method: "DELETE",
     idempotencyKey: `oauth:${nonce}:connected-app-revoke`,
-    csrfPath: "/settings/mcp",
+    csrfPath: `/settings/connections/${encodeURIComponent(connectionRef)}`,
   });
   if ((await modernTool(owner, writeGrant.tokens.access_token, "oauth-connected-revoked", "list_minds")).status !== 401) {
     fail("oauth_connected_app_revoke_not_enforced");
@@ -1153,7 +1117,7 @@ async function runOAuthScenario({ assertions, nowState }) {
   if (revokedMirror?.state !== "revoked") fail("oauth_authorization_mirror_not_revoked");
   assertions.add("oauth.connected-app-mirror-revoke");
   const revokedBindings = await metadata.readMindBindingSet(
-    grantId,
+    String(writeAccessRecord.grant_id),
     String(writeAccessRecord.principal_id),
     nowState.value.toISOString(),
   );
@@ -1180,7 +1144,7 @@ async function runOAuthScenario({ assertions, nowState }) {
   );
   const reconnectAccess = latestAccessRecord(database);
   if (
-    reconnectAccess.grant_id === grantId ||
+    reconnectAccess.grant_id === writeAccessRecord.grant_id ||
     reconnectBindings.binding_version !== 0 ||
     reconnectBindings.write_binding !== null ||
     reconnectBindings.read_bindings?.length !== 0

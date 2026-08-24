@@ -317,7 +317,7 @@ function renderAuthenticated(
           <pre><code id="mind-diary-onboarding-concierge-playbook" tabindex="-1" data-code-value>${escapeUntrustedText(MIND_DIARY_CODEX_CONCIERGE_PLAYBOOK)}</code></pre>
           <button class="md-button md-button--secondary" type="button" data-copy-code="mind-diary-onboarding-concierge-playbook">Copy concierge playbook</button>
         </details>
-        <p><a href="/settings/mcp">Open MCP setup</a> for token and endpoint instructions. Never store a token in a repository or paste the full canonical corpus into a prompt.</p>
+        <p><a href="/settings/developer/mcp">Open Advanced MCP</a> for personal-token and endpoint instructions. Never store a token in a repository or paste the full canonical corpus into a prompt.</p>
       </section>
     </main>
     ${renderMindDiaryAuthenticatedFooter("my-mind")}

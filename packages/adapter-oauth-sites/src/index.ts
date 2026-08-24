@@ -56,13 +56,24 @@ export type OAuthIdentityResolution =
   | { readonly kind: "denied" }
   | { readonly kind: "unavailable" };
 
-export interface OAuthConnectionSummary {
-  readonly grantId: string;
+export interface OAuthConnectionRecord {
+  readonly connectionRef: string;
+  /** Server-only binding owner. Never serialize this record directly to a browser response. */
+  readonly bindingOwnerId: string;
   readonly clientName: string;
-  readonly clientId: string;
   readonly scopes: readonly OAuthScope[];
   readonly createdAt: string;
   readonly lastUsedAt: string | null;
+}
+
+export interface OAuthConnectionPageQuery {
+  readonly limit?: number;
+  readonly cursor?: string | null;
+}
+
+export interface OAuthConnectionPage {
+  readonly items: readonly Readonly<OAuthConnectionRecord>[];
+  readonly nextCursor: string | null;
 }
 
 export interface SitesOAuthConnectorOptions {
@@ -91,12 +102,17 @@ export interface SitesOAuthConnector {
   readonly protectedResourceMetadataUrl: string;
   readonly authenticator: McpBearerAuthenticator;
   readonly fetch: (request: Request) => Promise<Response | null>;
-  readonly listConnections: (
+  readonly listConnectionPage: (
     principalId: string,
-  ) => Promise<readonly OAuthConnectionSummary[]>;
+    query?: OAuthConnectionPageQuery,
+  ) => Promise<Readonly<OAuthConnectionPage>>;
+  readonly readConnection: (
+    principalId: string,
+    connectionRef: string,
+  ) => Promise<Readonly<OAuthConnectionRecord> | null>;
   readonly revokeConnection: (
     principalId: string,
-    grantId: string,
+    connectionRef: string,
   ) => Promise<boolean>;
   readonly revokePrincipalConnections: (principalId: string) => Promise<void>;
 }
@@ -135,7 +151,7 @@ const CODE_VERIFIER_PATTERN = /^[A-Za-z0-9._~-]{43,128}$/u;
 const OAUTH_SECRET_PATTERN = /^[A-Za-z0-9_-]{43}$/u;
 const CLIENT_ID_PATTERN = /^md_oauth_client_[0-9a-f-]{36}$/iu;
 const REQUEST_ID_PATTERN = /^md_oauth_request_[0-9a-f-]{36}$/iu;
-const GRANT_ID_PATTERN = /^md_oauth_grant_[0-9a-f-]{36}$/iu;
+const CONNECTION_REF_PATTERN = /^conn_v1_[0-9a-f]{32}$/u;
 const SECRET_DOMAIN = new TextEncoder().encode("mind-diary:oauth-secret:v1\0");
 
 export const SITES_OAUTH_SCHEMA = Object.freeze([
@@ -164,6 +180,7 @@ export const SITES_OAUTH_SCHEMA = Object.freeze([
   )`,
   `CREATE TABLE IF NOT EXISTS md_oauth_grants (
     id TEXT PRIMARY KEY,
+    connection_ref TEXT NOT NULL UNIQUE,
     principal_id TEXT NOT NULL,
     client_id TEXT NOT NULL,
     client_name TEXT NOT NULL,
@@ -218,6 +235,8 @@ export const SITES_OAUTH_SCHEMA = Object.freeze([
   )`,
   `CREATE INDEX IF NOT EXISTS md_oauth_grants_principal_idx
     ON md_oauth_grants(principal_id, revoked_at)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS md_oauth_grants_principal_connection_idx
+    ON md_oauth_grants(principal_id, connection_ref)`,
   `CREATE INDEX IF NOT EXISTS md_oauth_refresh_family_idx
     ON md_oauth_refresh_tokens(family_id)`,
 ]);
@@ -282,6 +301,95 @@ function bytesToHex(bytes: Uint8Array): string {
   let value = "";
   for (const byte of bytes) value += byte.toString(16).padStart(2, "0");
   return value;
+}
+
+function createConnectionRef(): string {
+  return `conn_v1_${bytesToHex(crypto.getRandomValues(new Uint8Array(16)))}`;
+}
+
+interface OAuthConnectionPosition {
+  readonly createdAt: string;
+  readonly connectionRef: string;
+}
+
+interface OAuthConnectionCursorPayload {
+  readonly v: 1;
+  readonly actor: string;
+  readonly filter: "active";
+  readonly limit: number;
+  readonly upperBound: OAuthConnectionPosition;
+  readonly after: OAuthConnectionPosition;
+}
+
+const OAUTH_CONNECTION_CURSOR_MAX_BYTES = 2_048;
+
+function encodeConnectionCursor(payload: OAuthConnectionCursorPayload): string {
+  return base64Url(new TextEncoder().encode(JSON.stringify(payload)));
+}
+
+function decodeConnectionCursor(value: string): unknown {
+  if (
+    value.length === 0 ||
+    new TextEncoder().encode(value).byteLength > OAUTH_CONNECTION_CURSOR_MAX_BYTES ||
+    !/^[A-Za-z0-9_-]+$/u.test(value)
+  ) return null;
+  try {
+    const padded = value.replaceAll("-", "+").replaceAll("_", "/")
+      .padEnd(Math.ceil(value.length / 4) * 4, "=");
+    const binary = atob(padded);
+    const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+    return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+  } catch {
+    return null;
+  }
+}
+
+function isConnectionPosition(value: unknown): value is OAuthConnectionPosition {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return Object.keys(record).length === 2 &&
+    typeof record.createdAt === "string" &&
+    Number.isFinite(Date.parse(record.createdAt)) &&
+    typeof record.connectionRef === "string" &&
+    CONNECTION_REF_PATTERN.test(record.connectionRef);
+}
+
+function isConnectionCursorPayload(value: unknown): value is OAuthConnectionCursorPayload {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return Object.keys(record).length === 6 &&
+    record.v === 1 &&
+    typeof record.actor === "string" &&
+    /^[0-9a-f]{64}$/u.test(record.actor) &&
+    record.filter === "active" &&
+    Number.isInteger(record.limit) &&
+    Number(record.limit) >= 1 &&
+    Number(record.limit) <= 50 &&
+    isConnectionPosition(record.upperBound) &&
+    isConnectionPosition(record.after);
+}
+
+async function connectionCursorActor(principalId: string): Promise<string> {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(`mind-diary:oauth-connection-cursor:v1\0${principalId}`),
+  );
+  return bytesToHex(new Uint8Array(digest));
+}
+
+function connectionRecord(row: DbRow): Readonly<OAuthConnectionRecord> {
+  const connectionRef = String(row.connection_ref);
+  if (!CONNECTION_REF_PATTERN.test(connectionRef)) {
+    throw new Error("OAuth connection presentation metadata is invalid");
+  }
+  return Object.freeze({
+    connectionRef,
+    bindingOwnerId: String(row.id),
+    clientName: String(row.client_name),
+    scopes: storedScopes(row.scopes_json),
+    createdAt: String(row.created_at),
+    lastUsedAt: typeof row.last_used_at === "string" ? row.last_used_at : null,
+  });
 }
 
 function parseSecret(
@@ -408,7 +516,7 @@ function consentPage(input: {
   const access = input.scopes.includes("content:write")
     ? "Read and write Memory content in the Minds you can currently access. Writes commit a new immutable revision immediately."
     : "Read Memory content in the Minds you can currently access. This connection cannot write.";
-  const body = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">${MIND_DIARY_FAVICON_LINKS}<title>Connect Mind Diary</title><style>body{margin:0;background:#fffaf2;color:#182642;font:16px/1.5 system-ui,sans-serif}main{width:min(38rem,calc(100% - 2rem));margin:8vh auto;padding:2rem;border:1px solid #c9c0b6;border-radius:1rem;background:white}h1{font:700 2rem/1.1 Georgia,serif}p{margin:1rem 0}.scope{padding:1rem;border-radius:.75rem;background:#f3edf9}.actions{display:flex;gap:.75rem;justify-content:flex-end;margin-top:2rem}button{min-height:2.75rem;padding:.6rem 1rem;border:2px solid #182642;border-radius:.65rem;font:inherit;font-weight:700;background:white;cursor:pointer}.approve{color:white;background:#6e3b8f;border-color:#6e3b8f}</style></head><body><main><p>Mind Diary connector</p><h1>Connect ${escapeHtml(input.clientName)}?</h1><p class="scope">${escapeHtml(access)}</p><p>You can revoke this connection later from <strong>MCP setup</strong>. Membership and account settings are never granted.</p><form method="post" action="/oauth/authorize"><input type="hidden" name="request_id" value="${escapeHtml(input.requestId)}"><div class="actions"><button name="decision" value="deny">Cancel</button><button class="approve" name="decision" value="approve">Connect</button></div></form></main></body></html>`;
+  const body = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">${MIND_DIARY_FAVICON_LINKS}<title>Connect Mind Diary</title><style>body{margin:0;background:#fffaf2;color:#182642;font:16px/1.5 system-ui,sans-serif}main{width:min(38rem,calc(100% - 2rem));margin:8vh auto;padding:2rem;border:1px solid #c9c0b6;border-radius:1rem;background:white}h1{font:700 2rem/1.1 Georgia,serif}p{margin:1rem 0}.scope{padding:1rem;border-radius:.75rem;background:#f3edf9}.actions{display:flex;gap:.75rem;justify-content:flex-end;margin-top:2rem}button{min-height:2.75rem;padding:.6rem 1rem;border:2px solid #182642;border-radius:.65rem;font:inherit;font-weight:700;background:white;cursor:pointer}.approve{color:white;background:#6e3b8f;border-color:#6e3b8f}</style></head><body><main><p>Mind Diary connector</p><h1>Connect ${escapeHtml(input.clientName)}?</h1><p class="scope">${escapeHtml(access)}</p><p>You can revoke this connection later from <strong>Connections</strong>. Membership and account settings are never granted.</p><form method="post" action="/oauth/authorize"><input type="hidden" name="request_id" value="${escapeHtml(input.requestId)}"><div class="actions"><button name="decision" value="deny">Cancel</button><button class="approve" name="decision" value="approve">Connect</button></div></form></main></body></html>`;
   return new Response(body, {
     status: 200,
     headers: {
@@ -497,7 +605,7 @@ export async function createSitesOAuthConnector(
     authorization_servers: Object.freeze([origin]),
     scopes_supported: OAUTH_SCOPES,
     resource_name: "Mind Diary",
-    resource_documentation: `${origin}/settings/mcp`,
+    resource_documentation: `${origin}/settings/developer/mcp`,
   });
 
   const parseRegistration = (value: unknown) => {
@@ -792,13 +900,18 @@ export async function createSitesOAuthConnector(
 
     const existing = await statementFirst<DbRow>(
       options.database
-        .prepare(`/*md-oauth-grant-read*/ SELECT id, scopes_json, revoked_at FROM md_oauth_grants
+        .prepare(`/*md-oauth-grant-read*/ SELECT id, connection_ref, scopes_json, revoked_at FROM md_oauth_grants
           WHERE principal_id = ? AND client_id = ? AND resource = ? LIMIT 1`)
         .bind(identity.principalId, pending.client_id, pending.resource),
     );
     const grantId = existing === null || existing.revoked_at
       ? `md_oauth_grant_${crypto.randomUUID()}`
       : String(existing.id);
+    const connectionRef = existing !== null && !existing.revoked_at &&
+        typeof existing.connection_ref === "string" &&
+        CONNECTION_REF_PATTERN.test(existing.connection_ref)
+      ? existing.connection_ref
+      : createConnectionRef();
     const requestedScopes = storedScopes(pending.scopes_json);
     const existingScopes = existing?.revoked_at
       ? Object.freeze([]) as readonly OAuthScope[]
@@ -811,11 +924,16 @@ export async function createSitesOAuthConnector(
     await options.database.batch([
       options.database
         .prepare(`/*md-oauth-grant-upsert*/ INSERT INTO md_oauth_grants
-          (id, principal_id, client_id, client_name, resource, scopes_json,
+          (id, connection_ref, principal_id, client_id, client_name, resource, scopes_json,
            revoked_at, created_at, updated_at, last_used_at)
-          VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, NULL)
+          VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, NULL)
           ON CONFLICT(principal_id, client_id, resource) DO UPDATE SET
             id = excluded.id,
+            connection_ref = CASE
+              WHEN md_oauth_grants.revoked_at IS NULL AND md_oauth_grants.connection_ref IS NOT NULL
+                THEN md_oauth_grants.connection_ref
+              ELSE excluded.connection_ref
+            END,
             client_name = excluded.client_name,
             scopes_json = excluded.scopes_json,
             created_at = CASE
@@ -832,6 +950,7 @@ export async function createSitesOAuthConnector(
             END`)
         .bind(
           grantId,
+          connectionRef,
           identity.principalId,
           pending.client_id,
           pending.client_name,
@@ -1255,42 +1374,111 @@ export async function createSitesOAuthConnector(
     });
   };
 
-  const listConnections = async (
+  const listConnectionPage = async (
     principalId: string,
-  ): Promise<readonly OAuthConnectionSummary[]> => {
+    query: OAuthConnectionPageQuery = {},
+  ): Promise<Readonly<OAuthConnectionPage>> => {
+    if (typeof query !== "object" || query === null || Array.isArray(query)) {
+      throw new TypeError("OAuth connection page is invalid");
+    }
+    const requestedLimit = query.limit ?? 20;
+    if (
+      !Number.isInteger(requestedLimit) || requestedLimit < 1 || requestedLimit > 50 ||
+      (query.cursor !== undefined && query.cursor !== null && typeof query.cursor !== "string")
+    ) {
+      throw new TypeError("OAuth connection page is invalid");
+    }
+    const actor = await connectionCursorActor(principalId);
+    let limit = requestedLimit;
+    let cursor: OAuthConnectionCursorPayload | null = null;
+    if (query.cursor !== undefined && query.cursor !== null) {
+      const decoded = decodeConnectionCursor(query.cursor);
+      if (
+        !isConnectionCursorPayload(decoded) ||
+        decoded.actor !== actor ||
+        (query.limit !== undefined && query.limit !== decoded.limit)
+      ) {
+        throw new TypeError("OAuth connection page cursor is invalid");
+      }
+      limit = decoded.limit;
+      cursor = decoded;
+    }
     await ensureSchema();
-    const result = await options.database
-      .prepare(`/*md-oauth-connections-list*/ SELECT id, client_name, client_id, scopes_json,
-        created_at, last_used_at FROM md_oauth_grants
-        WHERE principal_id = ? AND revoked_at IS NULL
-        ORDER BY COALESCE(last_used_at, created_at) DESC`)
-      .bind(principalId)
-      .all<DbRow>();
-    return Object.freeze(
-      (result.results ?? []).map((row) => Object.freeze({
-        grantId: String(row.id),
-        clientName: String(row.client_name),
-        clientId: String(row.client_id),
-        scopes: storedScopes(row.scopes_json),
-        createdAt: String(row.created_at),
-        lastUsedAt: typeof row.last_used_at === "string" ? row.last_used_at : null,
-      })),
+    const select = `SELECT id, connection_ref, client_name, scopes_json, created_at, last_used_at
+      FROM md_oauth_grants`;
+    const result = cursor === null
+      ? await options.database
+          .prepare(`/*md-oauth-connections-page-first*/ ${select}
+            WHERE principal_id = ? AND revoked_at IS NULL
+            ORDER BY created_at DESC, connection_ref DESC LIMIT ?`)
+          .bind(principalId, limit + 1)
+          .all<DbRow>()
+      : await options.database
+          .prepare(`/*md-oauth-connections-page-after*/ ${select}
+            WHERE principal_id = ? AND revoked_at IS NULL
+              AND (created_at < ? OR (created_at = ? AND connection_ref <= ?))
+              AND (created_at < ? OR (created_at = ? AND connection_ref < ?))
+            ORDER BY created_at DESC, connection_ref DESC LIMIT ?`)
+          .bind(
+            principalId,
+            cursor.upperBound.createdAt,
+            cursor.upperBound.createdAt,
+            cursor.upperBound.connectionRef,
+            cursor.after.createdAt,
+            cursor.after.createdAt,
+            cursor.after.connectionRef,
+            limit + 1,
+          )
+          .all<DbRow>();
+    const rows = [...(result.results ?? [])];
+    const pageRows = rows.slice(0, limit);
+    const items = Object.freeze(pageRows.map(connectionRecord));
+    const last = pageRows.at(-1);
+    const upper = cursor?.upperBound ?? (pageRows[0] === undefined
+      ? null
+      : Object.freeze({
+          createdAt: String(pageRows[0].created_at),
+          connectionRef: String(pageRows[0].connection_ref),
+        }));
+    const nextCursor = rows.length > limit && last !== undefined && upper !== null
+      ? encodeConnectionCursor({
+          v: 1,
+          actor,
+          filter: "active",
+          limit,
+          upperBound: upper,
+          after: Object.freeze({
+            createdAt: String(last.created_at),
+            connectionRef: String(last.connection_ref),
+          }),
+        })
+      : null;
+    return Object.freeze({ items, nextCursor });
+  };
+
+  const readConnection = async (
+    principalId: string,
+    connectionRef: string,
+  ): Promise<Readonly<OAuthConnectionRecord> | null> => {
+    if (!CONNECTION_REF_PATTERN.test(connectionRef)) return null;
+    await ensureSchema();
+    const row = await statementFirst<DbRow>(
+      options.database
+        .prepare(`/*md-oauth-connection-read*/ SELECT id, connection_ref, client_name,
+          scopes_json, created_at, last_used_at FROM md_oauth_grants
+          WHERE principal_id = ? AND connection_ref = ? AND revoked_at IS NULL LIMIT 1`)
+        .bind(principalId, connectionRef),
     );
+    return row === null ? null : connectionRecord(row);
   };
 
   const revokeConnection = async (
     principalId: string,
-    grantId: string,
+    connectionRef: string,
   ): Promise<boolean> => {
-    if (!GRANT_ID_PATTERN.test(grantId)) return false;
-    await ensureSchema();
-    const row = await statementFirst<DbRow>(
-      options.database
-        .prepare(`/*md-oauth-connection-owner*/ SELECT id FROM md_oauth_grants
-          WHERE id = ? AND principal_id = ? AND revoked_at IS NULL LIMIT 1`)
-        .bind(grantId, principalId),
-    );
-    if (row === null) return false;
+    const connection = await readConnection(principalId, connectionRef);
+    if (connection === null) return false;
+    const grantId = connection.bindingOwnerId;
     const timestamp = now().toISOString();
     await revokeMirroredGrant(grantId, timestamp);
     await options.revokeBindingOwner?.({
@@ -1387,7 +1575,8 @@ export async function createSitesOAuthConnector(
     protectedResourceMetadataUrl,
     authenticator: Object.freeze({ authenticate }),
     fetch: handle,
-    listConnections,
+    listConnectionPage,
+    readConnection,
     revokeConnection,
     revokePrincipalConnections,
   });

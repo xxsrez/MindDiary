@@ -21,6 +21,8 @@ import type {
   InvitationLifecycleIdGenerator,
   InvitationSnapshot,
   McpTokenMetadata,
+  McpTokenPagePosition,
+  McpTokenPageState,
   McpTokenStore,
   MetadataStore,
   MindBindingIdGenerator,
@@ -49,6 +51,7 @@ import type {
   ServiceOperatorDirectoryStore,
   TokenHasher,
   TokenIdGenerator,
+  PersonalTokenRefGenerator,
   VerifiedSpaceHost,
   VisibilityAuditIdGenerator,
 } from "@mind-diary/application-ports";
@@ -78,6 +81,7 @@ import {
   type MindBindingOwnerId,
   type OutboxMessageId,
   type PrincipalId,
+  type PersonalTokenRef,
   type PrincipalAccountSnapshot,
   type SensitiveExternalBinding,
   type SpaceId,
@@ -245,6 +249,7 @@ const RFC3339_UTC_PATTERN =
 
 export type TokenLifecycleFailureCode =
   | "authentication_required"
+  | "invalid_token_page"
   | "invalid_token_name"
   | "invalid_token_scopes"
   | "invalid_token_expiry"
@@ -268,6 +273,7 @@ export class TokenLifecycleFailure extends Error {
 
 export interface McpTokenDescriptor {
   readonly tokenId: TokenId;
+  readonly personalTokenRef: PersonalTokenRef | null;
   readonly name: string;
   readonly displayPrefix: string;
   readonly scopes: EffectiveTokenScopes;
@@ -277,6 +283,30 @@ export interface McpTokenDescriptor {
   readonly expiresAt: UtcInstant;
   readonly lastUsedAt: UtcInstant | null;
   readonly revokedAt: UtcInstant | null;
+}
+
+export interface PersonalTokenUiDescriptor {
+  readonly personalTokenRef: PersonalTokenRef;
+  readonly name: string;
+  readonly displayPrefix: string;
+  readonly scopes: EffectiveTokenScopes;
+  readonly state: AccessTokenState;
+  readonly version: number;
+  readonly createdAt: UtcInstant;
+  readonly expiresAt: UtcInstant;
+  readonly lastUsedAt: UtcInstant | null;
+  readonly revokedAt: UtcInstant | null;
+}
+
+export interface PersonalTokenPageResult {
+  readonly items: readonly Readonly<PersonalTokenUiDescriptor>[];
+  readonly nextCursor: string | null;
+}
+
+export interface PersonalTokenPageQuery {
+  readonly state?: McpTokenPageState;
+  readonly limit?: number;
+  readonly cursor?: string | null;
 }
 
 /** Public issuance boundary: consume-once secret, with no verifier accessor. */
@@ -319,6 +349,11 @@ export interface RevokeMcpTokenControlResult {
   readonly replayed: boolean;
 }
 
+export interface RevokePersonalTokenControlResult {
+  readonly token: Readonly<PersonalTokenUiDescriptor>;
+  readonly replayed: boolean;
+}
+
 export interface AccountTokenRevocationResult {
   readonly revokedCount: number;
   readonly replayed: boolean;
@@ -342,6 +377,7 @@ export interface TokenLifecycleDependencies {
   readonly clock: Clock;
   readonly tokenHasher: TokenHasher;
   readonly tokenIds: TokenIdGenerator;
+  readonly personalTokenRefs?: PersonalTokenRefGenerator;
   readonly tokens: McpTokenStore;
   readonly bindingOwners?: Pick<MindBindingStore, "revokeMindBindingOwner">;
   readonly bindingIds?: Pick<
@@ -412,6 +448,7 @@ function descriptor(
       : token.state;
   return Object.freeze({
     tokenId: token.tokenId,
+    personalTokenRef: token.personalTokenRef,
     name: token.name,
     displayPrefix: token.displayPrefix,
     scopes,
@@ -422,6 +459,112 @@ function descriptor(
     lastUsedAt: token.lastUsedAt,
     revokedAt: token.revokedAt,
   });
+}
+
+function personalTokenUiDescriptor(
+  token: Readonly<McpTokenMetadata>,
+  currentTime: number,
+): Readonly<PersonalTokenUiDescriptor> {
+  return personalTokenUiDescriptorFromLifecycle(descriptor(token, currentTime));
+}
+
+function personalTokenUiDescriptorFromLifecycle(
+  result: Readonly<McpTokenDescriptor>,
+): Readonly<PersonalTokenUiDescriptor> {
+  if (result.personalTokenRef === null) {
+    throw new TokenLifecycleFailure(
+      "token_lifecycle_unavailable",
+      "Token presentation metadata is unavailable.",
+    );
+  }
+  return Object.freeze({
+    personalTokenRef: result.personalTokenRef,
+    name: result.name,
+    displayPrefix: result.displayPrefix,
+    scopes: result.scopes,
+    state: result.state,
+    version: result.version,
+    createdAt: result.createdAt,
+    expiresAt: result.expiresAt,
+    lastUsedAt: result.lastUsedAt,
+    revokedAt: result.revokedAt,
+  });
+}
+
+interface PersonalTokenCursorPayload {
+  readonly v: 1;
+  readonly actor: string;
+  readonly state: McpTokenPageState;
+  readonly limit: number;
+  readonly asOf: UtcInstant;
+  readonly upperBound: McpTokenPagePosition | null;
+  readonly after: McpTokenPagePosition;
+}
+
+const PERSONAL_TOKEN_CURSOR_MAX_BYTES = 2_048;
+const PERSONAL_TOKEN_REF_PATTERN = /^ptok_v1_[0-9a-f]{32}$/u;
+
+function encodePersonalTokenCursor(payload: PersonalTokenCursorPayload): string {
+  const bytes = new TextEncoder().encode(JSON.stringify(payload));
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/u, "");
+}
+
+function decodePersonalTokenCursor(value: string): unknown {
+  if (
+    value.length === 0 ||
+    new TextEncoder().encode(value).byteLength > PERSONAL_TOKEN_CURSOR_MAX_BYTES ||
+    !/^[A-Za-z0-9_-]+$/u.test(value)
+  ) return null;
+  try {
+    const padded = value.replaceAll("-", "+").replaceAll("_", "/")
+      .padEnd(Math.ceil(value.length / 4) * 4, "=");
+    const binary = atob(padded);
+    const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+    return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+  } catch {
+    return null;
+  }
+}
+
+function isMcpTokenPageState(value: unknown): value is McpTokenPageState {
+  return value === "active" || value === "revoked" || value === "expired";
+}
+
+function isPersonalTokenPagePosition(value: unknown): value is McpTokenPagePosition {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return Object.keys(record).length === 2 &&
+    parseUtcInstant(record.createdAt) !== null &&
+    typeof record.personalTokenRef === "string" &&
+    PERSONAL_TOKEN_REF_PATTERN.test(record.personalTokenRef);
+}
+
+function isPersonalTokenCursorPayload(value: unknown): value is PersonalTokenCursorPayload {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return Object.keys(record).length === 7 &&
+    record.v === 1 &&
+    typeof record.actor === "string" &&
+    /^[0-9a-f]{64}$/u.test(record.actor) &&
+    isMcpTokenPageState(record.state) &&
+    Number.isInteger(record.limit) &&
+    Number(record.limit) >= 1 &&
+    Number(record.limit) <= 50 &&
+    parseUtcInstant(record.asOf) !== null &&
+    (record.upperBound === null || isPersonalTokenPagePosition(record.upperBound)) &&
+    isPersonalTokenPagePosition(record.after);
+}
+
+async function personalTokenCursorActor(principalId: PrincipalId): Promise<string> {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(`mind-diary:personal-token-cursor:v1\0${principalId}`),
+  );
+  return [...new Uint8Array(digest)]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
 }
 
 function requireSitesPrincipal(actor: ActorContext): PrincipalId {
@@ -459,6 +602,7 @@ export class TokenLifecycleService {
   readonly #clock: Clock;
   readonly #tokenHasher: TokenHasher;
   readonly #tokenIds: TokenIdGenerator;
+  readonly #personalTokenRefs: PersonalTokenRefGenerator;
   readonly #tokens: McpTokenStore;
   readonly #bindingOwners: Pick<MindBindingStore, "revokeMindBindingOwner"> | undefined;
   readonly #bindingIds: Pick<
@@ -471,6 +615,12 @@ export class TokenLifecycleService {
     this.#clock = dependencies.clock;
     this.#tokenHasher = dependencies.tokenHasher;
     this.#tokenIds = dependencies.tokenIds;
+    this.#personalTokenRefs = dependencies.personalTokenRefs ?? Object.freeze({
+      nextPersonalTokenRef: () => {
+        const bytes = crypto.getRandomValues(new Uint8Array(16));
+        return `ptok_v1_${[...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("")}` as PersonalTokenRef;
+      },
+    });
     this.#tokens = dependencies.tokens;
     this.#bindingOwners = dependencies.bindingOwners;
     this.#bindingIds = dependencies.bindingIds;
@@ -549,10 +699,18 @@ export class TokenLifecycleService {
         "Token identifier generation is unavailable.",
       );
     }
+    const personalTokenRef = this.#personalTokenRefs.nextPersonalTokenRef();
+    if (!/^ptok_v1_[0-9a-f]{32}$/u.test(personalTokenRef)) {
+      throw new TokenLifecycleFailure(
+        "token_lifecycle_unavailable",
+        "Token presentation identifier generation is unavailable.",
+      );
+    }
     const issuedSecret = await this.#tokenHasher.issueSecret();
     const persistence = issuedSecret.persistence();
     const created = await this.#tokens.createMcpToken({
       tokenId,
+      personalTokenRef,
       principalId,
       name,
       verifier: persistence.verifier,
@@ -592,6 +750,156 @@ export class TokenLifecycleService {
     }
     const tokens = await this.#tokens.listMcpTokenMetadata(principalId);
     return Object.freeze(tokens.map((token) => descriptor(token, currentTime)));
+  }
+
+  async listPersonalTokenPage(
+    actor: ActorContext,
+    query: PersonalTokenPageQuery = {},
+  ): Promise<Readonly<PersonalTokenPageResult>> {
+    const principalId = requireSitesPrincipal(actor);
+    if (typeof query !== "object" || query === null || Array.isArray(query)) {
+      throw new TokenLifecycleFailure("invalid_token_page", "Token page is invalid.");
+    }
+    const requestedState = query.state ?? "active";
+    const requestedLimit = query.limit ?? 20;
+    if (
+      !isMcpTokenPageState(requestedState) ||
+      !Number.isInteger(requestedLimit) ||
+      requestedLimit < 1 ||
+      requestedLimit > 50 ||
+      (query.cursor !== undefined && query.cursor !== null && typeof query.cursor !== "string")
+    ) {
+      throw new TokenLifecycleFailure("invalid_token_page", "Token page is invalid.");
+    }
+
+    const actorBinding = await personalTokenCursorActor(principalId);
+    let state = requestedState;
+    let limit = requestedLimit;
+    let asOf = this.#clock.now();
+    let upperBound: McpTokenPagePosition | undefined;
+    let after: McpTokenPagePosition | undefined;
+    if (query.cursor !== undefined && query.cursor !== null) {
+      const decoded = decodePersonalTokenCursor(query.cursor);
+      if (
+        !isPersonalTokenCursorPayload(decoded) ||
+        decoded.actor !== actorBinding ||
+        (query.state !== undefined && query.state !== decoded.state) ||
+        (query.limit !== undefined && query.limit !== decoded.limit)
+      ) {
+        throw new TokenLifecycleFailure("invalid_token_page", "Token page cursor is invalid.");
+      }
+      state = decoded.state;
+      limit = decoded.limit;
+      asOf = decoded.asOf;
+      upperBound = decoded.upperBound ?? undefined;
+      after = decoded.after;
+    }
+    const asOfMilliseconds = parseUtcInstant(asOf);
+    if (asOfMilliseconds === null) {
+      throw new TokenLifecycleFailure(
+        "token_lifecycle_unavailable",
+        "Token lifecycle time is unavailable.",
+      );
+    }
+    let page;
+    try {
+      page = await this.#tokens.listMcpTokenMetadataPage({
+        principalId,
+        state,
+        asOf: canonicalUtcInstant(asOfMilliseconds),
+        limit,
+        ...(upperBound === undefined ? {} : { upperBound }),
+        ...(after === undefined ? {} : { after }),
+      });
+    } catch (error) {
+      if (error instanceof TypeError) {
+        throw new TokenLifecycleFailure("invalid_token_page", "Token page cursor is invalid.");
+      }
+      throw error;
+    }
+    const items = Object.freeze(
+      page.tokens.map((token) => personalTokenUiDescriptor(token, asOfMilliseconds)),
+    );
+    const nextCursor = page.next === null
+      ? null
+      : encodePersonalTokenCursor({
+          v: 1,
+          actor: actorBinding,
+          state,
+          limit,
+          asOf: canonicalUtcInstant(asOfMilliseconds),
+          upperBound: page.upperBound,
+          after: page.next,
+        });
+    return Object.freeze({ items, nextCursor });
+  }
+
+  async readPersonalToken(
+    actor: ActorContext,
+    personalTokenRef: PersonalTokenRef,
+  ): Promise<Readonly<PersonalTokenUiDescriptor>> {
+    const principalId = requireSitesPrincipal(actor);
+    if (typeof personalTokenRef !== "string" || !PERSONAL_TOKEN_REF_PATTERN.test(personalTokenRef)) {
+      throw new TokenLifecycleFailure("invalid_token_id", "Token identifier is invalid.");
+    }
+    const currentTime = parseUtcInstant(this.#clock.now());
+    if (currentTime === null) {
+      throw new TokenLifecycleFailure(
+        "token_lifecycle_unavailable",
+        "Token lifecycle time is unavailable.",
+      );
+    }
+    const token = await this.#tokens.readMcpTokenMetadataByPresentationRef(
+      principalId,
+      personalTokenRef,
+    );
+    if (token === null) {
+      throw new TokenLifecycleFailure("token_not_found", "Token was not found.");
+    }
+    return personalTokenUiDescriptor(token, currentTime);
+  }
+
+  async revokePersonalToken(
+    actor: ActorContext,
+    personalTokenRef: PersonalTokenRef,
+  ): Promise<Readonly<RevokePersonalTokenControlResult>> {
+    const requestId = safeBootstrapRequestId(actor?.requestId);
+    try {
+      const principalId = requireSitesPrincipal(actor);
+      if (
+        typeof personalTokenRef !== "string" ||
+        !PERSONAL_TOKEN_REF_PATTERN.test(personalTokenRef)
+      ) {
+        throw new TokenLifecycleFailure("invalid_token_id", "Token identifier is invalid.");
+      }
+      const token = await this.#tokens.readMcpTokenMetadataByPresentationRef(
+        principalId,
+        personalTokenRef,
+      );
+      if (token === null) {
+        throw new TokenLifecycleFailure("token_not_found", "Token was not found.");
+      }
+      const result = await this.#revokeMcpToken(actor, token.tokenId);
+      recordTokenLifecycleEvent(
+        this.#logger,
+        result.replayed ? "token_revoke_replayed" : "token_revoked",
+        requestId,
+      );
+      return Object.freeze({
+        "token": personalTokenUiDescriptorFromLifecycle(result.token),
+        replayed: result.replayed,
+      });
+    } catch (error) {
+      recordTokenLifecycleEvent(
+        this.#logger,
+        error instanceof TokenLifecycleFailure &&
+          (error.code === "authentication_required" || error.code === "token_not_found")
+          ? "token_denied"
+          : "token_failed",
+        requestId,
+      );
+      throw error;
+    }
   }
 
   async revokeMcpToken(

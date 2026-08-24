@@ -315,7 +315,7 @@ function operatorFixture({
       }
       const index = ++product.tokenIssueCount;
       const token = {
-        token_id: `opaque-${actor}-${index}`,
+        personal_token_ref: `ptok_v1_${String(index).padStart(31, "0")}${actor === "operator" ? "1" : actor === "mind_role" ? "2" : "3"}`,
         name: body.name,
         scopes: [...body.scopes],
         expires_at: body.expires_at,
@@ -328,14 +328,14 @@ function operatorFixture({
       return json(200, { data: { token, secret } });
     }
     if (url.pathname === "/api/v1/mcp-tokens" && method === "GET") {
-      return json(200, { data: { tokens: tokens.get(actor).map((token) => ({
+      return json(200, { data: { items: tokens.get(actor).map((token) => ({
         ...token,
       })) } });
     }
     const tokenMatch = /^\/api\/v1\/mcp-tokens\/([^/]+)$/u.exec(url.pathname);
     if (tokenMatch && method === "DELETE") {
-      const token = tokens.get(actor).find(({ token_id: id }) =>
-        id === decodeURIComponent(tokenMatch[1]));
+      const token = tokens.get(actor).find(({ personal_token_ref: ref }) =>
+        ref === decodeURIComponent(tokenMatch[1]));
       if (!token) return json(404, { error: { code: "token_not_found" } });
       token.state = "revoked";
       token.version += 1;
@@ -412,7 +412,7 @@ function operatorFixture({
     if (
       url.pathname === "/" ||
       url.pathname === "/minds" ||
-      url.pathname === "/settings/mcp" ||
+      url.pathname === "/settings/developer/mcp" ||
       (product.mindHandle !== null && url.pathname === `/${product.mindHandle}`)
     ) {
       return new Response(

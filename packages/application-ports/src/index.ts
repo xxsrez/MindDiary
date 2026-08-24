@@ -48,6 +48,7 @@ import {
   type ExternalIdentityBinding,
   type KnowledgeSpace,
   type PersonalSpaceBinding,
+  type PersonalTokenRef,
   type Principal,
   type PrincipalAccountSnapshot,
   type PrincipalId,
@@ -3612,6 +3613,7 @@ export interface TokenHasher {
 /** Safe lifecycle metadata. The cryptographic verifier is deliberately absent. */
 export interface McpTokenMetadata {
   readonly tokenId: TokenId;
+  readonly personalTokenRef: PersonalTokenRef | null;
   readonly principalId: PrincipalId;
   readonly name: string;
   readonly displayPrefix: string;
@@ -3626,6 +3628,7 @@ export interface McpTokenMetadata {
 
 export interface CreateMcpTokenRequest {
   readonly tokenId: TokenId;
+  readonly personalTokenRef?: PersonalTokenRef;
   readonly principalId: PrincipalId;
   readonly name: string;
   readonly verifier: TokenVerifier;
@@ -3713,6 +3716,37 @@ export interface TokenIdGenerator {
   nextTokenId(): TokenId;
 }
 
+export interface PersonalTokenRefGenerator {
+  nextPersonalTokenRef(): PersonalTokenRef;
+}
+
+export type McpTokenPageState = "active" | "revoked" | "expired";
+
+export interface McpTokenPagePosition {
+  readonly createdAt: UtcInstant;
+  readonly personalTokenRef: PersonalTokenRef;
+}
+
+export interface ListMcpTokenMetadataPageRequest {
+  readonly principalId: PrincipalId;
+  readonly state: McpTokenPageState;
+  readonly asOf: UtcInstant;
+  readonly limit: number;
+  readonly upperBound?: McpTokenPagePosition;
+  readonly after?: McpTokenPagePosition;
+}
+
+export interface McpTokenMetadataPage {
+  readonly tokens: readonly Readonly<McpTokenMetadata>[];
+  readonly upperBound: McpTokenPagePosition | null;
+  readonly next: McpTokenPagePosition | null;
+}
+
+export interface AssignPersonalTokenRefRequest {
+  readonly tokenId: TokenId;
+  readonly personalTokenRef: PersonalTokenRef;
+}
+
 /**
  * Principal-scoped token persistence. Account deletion atomically prevents any
  * later issuance for that principal and revokes every existing token.
@@ -3724,6 +3758,17 @@ export interface McpTokenStore
   listMcpTokenMetadata(
     principalId: PrincipalId,
   ): Promise<readonly Readonly<McpTokenMetadata>[]>;
+  listMcpTokenMetadataPage(
+    request: ListMcpTokenMetadataPageRequest,
+  ): Promise<Readonly<McpTokenMetadataPage>>;
+  readMcpTokenMetadataByPresentationRef(
+    principalId: PrincipalId,
+    personalTokenRef: PersonalTokenRef,
+  ): Promise<Readonly<McpTokenMetadata> | null>;
+  listMcpTokensMissingPresentationRefs(): Promise<readonly TokenId[]>;
+  assignPersonalTokenRefs(
+    assignments: readonly AssignPersonalTokenRefRequest[],
+  ): Promise<number>;
   readMcpTokenForAuthorization(
     tokenId: TokenId,
   ): Promise<Readonly<CurrentAuthorizationToken> | null>;

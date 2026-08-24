@@ -20,7 +20,10 @@ import {
   renderMcpTokenManagement,
   renderMcpTokenManagementDocument,
 } from "../../packages/adapter-web/dist/index.js";
-import { PRODUCT_UI_CLIENT_JAVASCRIPT } from "../../packages/adapter-web/dist/product-ui-assets.js";
+import {
+  PRODUCT_CONNECTIONS_CLIENT_JAVASCRIPT,
+  PRODUCT_UI_CLIENT_JAVASCRIPT,
+} from "../../packages/adapter-web/dist/product-ui-assets.js";
 
 const implementation = await readFile(
   new URL("../../packages/adapter-web/src/token-management.ts", import.meta.url),
@@ -130,7 +133,7 @@ test("Codex instructions reference bearer_token_env_var without placing a token 
   assert.match(html, /OAuth Authorization Code with PKCE/);
 });
 
-test("connected apps show effective OAuth access and an immediate revoke control", () => {
+test("legacy mixed renderer is not backed by an actionable raw OAuth browser route", () => {
   const html = renderMcpTokenManagement({
     ...model({ kind: "empty" }),
     oauthConnections: {
@@ -148,7 +151,7 @@ test("connected apps show effective OAuth access and an immediate revoke control
   assert.match(html, /ChatGPT Mind Diary &lt;unsafe&gt;/);
   assert.match(html, /Read and write/);
   assert.match(html, /data-revoke-oauth="md_oauth_grant_12345678-1234-1234-1234-123456789abc"/);
-  assert.match(PRODUCT_UI_CLIENT_JAVASCRIPT, /\/api\/v1\/oauth-connections\//);
+  assert.doesNotMatch(PRODUCT_UI_CLIENT_JAVASCRIPT, /\/api\/v1\/oauth-connections\//);
 });
 
 test("binding UI separates attached read-only Minds from one writable Mind without leaking inaccessible metadata", () => {
@@ -385,9 +388,9 @@ test("production redacted self-check covers both auth boundaries and both MCP pr
   assert.doesNotMatch(PRODUCT_UI_CLIENT_JAVASCRIPT, /name:"(?:search|fetch|commit_changeset)"/);
   assert.match(PRODUCT_UI_CLIENT_JAVASCRIPT, /button\.closest\("section"\)/u);
   assert.match(PRODUCT_UI_CLIENT_JAVASCRIPT, /This text contains no token or Site credential/u);
-  assert.match(PRODUCT_UI_CLIENT_JAVASCRIPT, /\/api\/v1\/mind-bindings\//u);
-  assert.match(PRODUCT_UI_CLIENT_JAVASCRIPT, /expected_binding_version/u);
-  assert.match(PRODUCT_UI_CLIENT_JAVASCRIPT, /nothing was transferred automatically/u);
+  assert.doesNotMatch(PRODUCT_UI_CLIENT_JAVASCRIPT, /\/api\/v1\/mind-bindings\//u);
+  assert.match(PRODUCT_CONNECTIONS_CLIENT_JAVASCRIPT, /expected_binding_version/u);
+  assert.match(PRODUCT_CONNECTIONS_CLIENT_JAVASCRIPT, /Access changed in another session/u);
 });
 
 test("document loads only an explicitly safe local fixture client and CSS covers responsive token controls", () => {

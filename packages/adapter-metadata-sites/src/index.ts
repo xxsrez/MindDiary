@@ -205,6 +205,7 @@ const TOKEN_MUTATIONS = new Set([
   "beginPrincipalTokenDeletion",
   "completePrincipalTokenDeletion",
   "cancelPrincipalTokenDeletion",
+  "assignPersonalTokenRefs",
 ]);
 
 const MAX_CAS_ATTEMPTS = 16;

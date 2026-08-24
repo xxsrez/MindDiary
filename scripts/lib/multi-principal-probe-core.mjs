@@ -185,18 +185,18 @@ export class MultiPrincipalActorClient {
     this.identitySnapshot = Object.freeze({ ...identitySnapshot });
     this.dispatch = dispatch;
     this.mcpToken = null;
-    this.mcpTokenId = null;
+    this.mcpTokenRef = null;
   }
 
-  setMcpCredential({ secret, tokenId }) {
+  setMcpCredential({ secret, personalTokenRef }) {
     if (typeof secret !== "string" || !secret.startsWith("mdp_v1_")) {
       fail("invalid_mcp_token_reference");
     }
-    if (typeof tokenId !== "string" || tokenId.length === 0) {
-      fail("invalid_mcp_token_id");
+    if (typeof personalTokenRef !== "string" || !/^ptok_v1_[0-9a-f]{32}$/u.test(personalTokenRef)) {
+      fail("invalid_personal_token_ref");
     }
     this.mcpToken = secret;
-    this.mcpTokenId = tokenId;
+    this.mcpTokenRef = personalTokenRef;
   }
 
   async request(path, options = {}) {
@@ -297,13 +297,13 @@ export class MultiPrincipalActorClient {
       method: "POST",
       body: { name, scopes: ["content:write"] },
       idempotencyKey,
-      csrfPath: "/settings/mcp",
+      csrfPath: "/settings/developer/mcp",
     }), "token_issue_failed");
     this.setMcpCredential({
       secret: issued.secret,
-      tokenId: issued.token?.token_id,
+      personalTokenRef: issued.token?.personal_token_ref,
     });
-    return Object.freeze({ secret: this.mcpToken, tokenId: this.mcpTokenId });
+    return Object.freeze({ secret: this.mcpToken, personalTokenRef: this.mcpTokenRef });
   }
 
   async mcp(name, args = {}) {

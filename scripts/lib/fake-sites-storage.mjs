@@ -102,7 +102,7 @@ export class FakeD1Database {
 
   async run(sql, values) {
     const normalizedSql = canonicalSql(sql);
-    if (/^(?:CREATE TABLE|CREATE INDEX)/u.test(normalizedSql)) {
+    if (/^(?:CREATE TABLE|CREATE (?:UNIQUE )?INDEX)/u.test(normalizedSql)) {
       if (!EXPECTED_D1_SCHEMA.has(normalizedSql)) {
         throw new Error(`unexpected FakeD1 schema statement: ${normalizedSql}`);
       }
@@ -176,31 +176,33 @@ export class FakeD1Database {
     }
     if (sql.includes("/*md-oauth-grant-upsert*/")) {
       const existing = [...this.oauthGrants.values()].find((row) =>
-        row.principal_id === values[1] &&
-        row.client_id === values[2] &&
-        row.resource === values[4]);
+        row.principal_id === values[2] &&
+        row.client_id === values[3] &&
+        row.resource === values[5]);
       const reconnecting = existing?.revoked_at != null;
       const row = existing ?? {
         id: values[0],
-        principal_id: values[1],
-        client_id: values[2],
-        resource: values[4],
-        created_at: values[6],
+        connection_ref: values[1],
+        principal_id: values[2],
+        client_id: values[3],
+        resource: values[5],
+        created_at: values[7],
         last_used_at: null,
       };
       if (reconnecting) {
         this.oauthGrants.delete(row.id);
         Object.assign(row, {
           id: values[0],
-          created_at: values[6],
+          connection_ref: values[1],
+          created_at: values[7],
           last_used_at: null,
         });
       }
       Object.assign(row, {
-        client_name: values[3],
-        scopes_json: values[5],
+        client_name: values[4],
+        scopes_json: values[6],
         revoked_at: null,
-        updated_at: values[7],
+        updated_at: values[8],
       });
       this.oauthGrants.set(row.id, row);
       return { success: true, meta: { changes: 1 } };
@@ -577,7 +579,12 @@ export class FakeD1Database {
         item.resource === values[2]);
       return {
         results: row
-          ? [{ id: row.id, scopes_json: row.scopes_json, revoked_at: row.revoked_at }]
+          ? [{
+              id: row.id,
+              connection_ref: row.connection_ref,
+              scopes_json: row.scopes_json,
+              revoked_at: row.revoked_at,
+            }]
           : [],
       };
     }
@@ -643,6 +650,33 @@ export class FakeD1Database {
           principal_id: row.principal_id,
         }] : [],
       };
+    }
+    if (sql.includes("/*md-oauth-connections-page-first*/")) {
+      const rows = [...this.oauthGrants.values()]
+        .filter((row) => row.principal_id === values[0] && !row.revoked_at)
+        .sort((left, right) => right.created_at.localeCompare(left.created_at) ||
+          right.connection_ref.localeCompare(left.connection_ref));
+      return { results: rows.slice(0, values[1]) };
+    }
+    if (sql.includes("/*md-oauth-connections-page-after*/")) {
+      const [principalId, upperAt, _upperAtAgain, upperRef, afterAt, _afterAtAgain, afterRef, limit] = values;
+      const atOrBelow = (row, createdAt, connectionRef, inclusive) =>
+        row.created_at < createdAt ||
+        (row.created_at === createdAt && (inclusive
+          ? row.connection_ref <= connectionRef
+          : row.connection_ref < connectionRef));
+      const rows = [...this.oauthGrants.values()]
+        .filter((row) => row.principal_id === principalId && !row.revoked_at)
+        .filter((row) => atOrBelow(row, upperAt, upperRef, true))
+        .filter((row) => atOrBelow(row, afterAt, afterRef, false))
+        .sort((left, right) => right.created_at.localeCompare(left.created_at) ||
+          right.connection_ref.localeCompare(left.connection_ref));
+      return { results: rows.slice(0, limit) };
+    }
+    if (sql.includes("/*md-oauth-connection-read*/")) {
+      const row = [...this.oauthGrants.values()].find((item) =>
+        item.principal_id === values[0] && item.connection_ref === values[1] && !item.revoked_at);
+      return { results: row ? [{ ...row }] : [] };
     }
     if (sql.includes("/*md-oauth-connections-list*/")) {
       return {

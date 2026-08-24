@@ -60,6 +60,16 @@ function sequentialTokenIds(prefix = "token") {
   };
 }
 
+function sequentialPersonalTokenRefs() {
+  let next = 0;
+  return {
+    nextPersonalTokenRef() {
+      next += 1;
+      return `ptok_v1_${next.toString(16).padStart(32, "0")}`;
+    },
+  };
+}
+
 async function fixture(overrides = {}) {
   const clock = mutableClock();
   const tokens = new InMemoryMcpTokenStore();
@@ -309,6 +319,64 @@ test("list and revoke stay principal-scoped; concurrent revokes converge idempot
   assert.equal(
     (await tokens.readMcpTokenForAuthorization(alphaToken.token.tokenId)).state,
     "revoked",
+  );
+});
+
+test("presentation-ref token pages are actor-bound, stable, bounded, and omit storage IDs", async () => {
+  const { service } = await fixture({ personalTokenRefs: sequentialPersonalTokenRefs() });
+  const alpha = sitesActor("principal_page_alpha");
+  const beta = sitesActor("principal_page_beta");
+  const issued = [];
+  for (let index = 1; index <= 5; index += 1) {
+    issued.push(await service.issueMcpToken(alpha, {
+      name: `alpha ${index}`,
+      scopes: ["content:read"],
+    }));
+  }
+  await service.issueMcpToken(beta, { name: "beta", scopes: ["content:read"] });
+
+  const first = await service.listPersonalTokenPage(alpha, { state: "active", limit: 2 });
+  assert.deepEqual(first.items.map((token) => token.name), ["alpha 5", "alpha 4"]);
+  assert.equal(first.nextCursor !== null, true);
+  assert.equal(first.items.every((token) => !("tokenId" in token)), true);
+  assert.equal(JSON.stringify(first).includes("token_"), false);
+
+  await service.issueMcpToken(alpha, { name: "newer after page one", scopes: ["content:read"] });
+  const second = await service.listPersonalTokenPage(alpha, { cursor: first.nextCursor });
+  const third = await service.listPersonalTokenPage(alpha, { cursor: second.nextCursor });
+  assert.deepEqual(second.items.map((token) => token.name), ["alpha 3", "alpha 2"]);
+  assert.deepEqual(third.items.map((token) => token.name), ["alpha 1"]);
+  assert.equal(third.nextCursor, null);
+  assert.equal(
+    new Set([...first.items, ...second.items, ...third.items].map((token) => token.personalTokenRef)).size,
+    5,
+  );
+
+  await expectLifecycleFailure(
+    service.listPersonalTokenPage(beta, { cursor: first.nextCursor }),
+    "invalid_token_page",
+  );
+  await expectLifecycleFailure(
+    service.listPersonalTokenPage(alpha, { state: "revoked", cursor: first.nextCursor }),
+    "invalid_token_page",
+  );
+  await expectLifecycleFailure(
+    service.listPersonalTokenPage(alpha, { limit: 3, cursor: first.nextCursor }),
+    "invalid_token_page",
+  );
+
+  const targetRef = issued[0].token.personalTokenRef;
+  assert.equal(typeof targetRef, "string");
+  await expectLifecycleFailure(service.readPersonalToken(beta, targetRef), "token_not_found");
+  await expectLifecycleFailure(service.revokePersonalToken(beta, targetRef), "token_not_found");
+  const revoked = await service.revokePersonalToken(alpha, targetRef);
+  assert.equal(revoked.token.personalTokenRef, targetRef);
+  assert.equal(revoked.token.state, "revoked");
+  assert.equal("tokenId" in revoked.token, false);
+  assert.deepEqual(
+    (await service.listPersonalTokenPage(alpha, { state: "revoked", limit: 20 })).items
+      .map((token) => token.personalTokenRef),
+    [targetRef],
   );
 });
 
