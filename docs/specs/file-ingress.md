@@ -298,9 +298,13 @@ This contract preserves the old boundaries:
   MCP file parameter or shell-visible OAuth secret; it is advertised
   `available_hosted` only when issuance, capability HTTP handler and streaming
   staging writer are all wired. Exact UAT remains separate evidence.
-  `connector_object` is accepted by the generic intent transport but is not
-  advertised hosted until a provider-authorized client bridge and exact UAT
-  exist. `FileIngressCoordinator` dispatches only explicitly enabled adapters,
+  `connector_object` is advertised `available_hosted` when the generic intent
+  transport is wired because the server can safely accept bytes from an
+  authenticated client-side connector adapter. This status does not claim a
+  particular provider binding or live connector evidence: Google Drive remains
+  pending until the MD-284 bridge completes exact intent, upload/status,
+  authoritative reconcile, binding-pinned commit and read-back in UAT.
+  `FileIngressCoordinator` dispatches only explicitly enabled adapters,
   reports unavailable rows without fallback and delegates every
   mixed-source commit to the existing atomic HEAD-CAS transaction. The
   provider-specific connector binding remains not-available; the local generic

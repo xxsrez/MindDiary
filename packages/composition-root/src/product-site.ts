@@ -797,6 +797,7 @@ export async function createProductSiteRuntime(
       session_attachment: "available_hosted",
       local_path: "available_hosted",
       "workspace/generated_artifact": "available_hosted",
+      connector_object: "available_hosted",
       bounded_in_memory: "available_hosted",
       server_generated: "available_hosted",
     },

@@ -273,10 +273,12 @@ test("hosted generated ingress is authorized, durable, privacy-bounded and exact
   assert.deepEqual(
     capabilities.sources
       .filter(({ source_kind }) =>
+        source_kind === "connector_object" ||
         source_kind === "bounded_in_memory" || source_kind === "server_generated"
       )
       .map(({ source_kind, status, max_bytes }) => [source_kind, status, max_bytes]),
     [
+      ["connector_object", "available_hosted", 67_108_864],
       ["bounded_in_memory", "available_hosted", 4_194_304],
       ["server_generated", "available_hosted", 67_108_864],
     ],
