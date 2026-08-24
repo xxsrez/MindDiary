@@ -240,8 +240,9 @@ test("keyboard-only connection journey exposes progress, revoke, and reconnect s
   await page.waitForLoadState("load");
 
   await tabUntil(page, "[data-revoke-connection]");
+  const returnToConnections = page.waitForURL(`${fixture.origin}/settings/connections`);
   await page.keyboard.press("Enter");
-  await page.waitForURL(`${fixture.origin}/settings/connections`);
+  await returnToConnections;
   await expect(page.getByRole("heading", { level: 2, name: "No active connections" })).toBeVisible();
 
   const reconnect = await context.request.post(`${fixture.origin}/_fixture/reconnect`);
