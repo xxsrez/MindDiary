@@ -37,9 +37,12 @@ Canonical route: `/settings/connections`.
 - компактный список только active connections;
 - client name, read/write access, last used и понятный state;
 - краткую сводку `Can read: N Minds`, `Can write: <Mind | none>`;
-- действия `Manage access` и `Revoke`;
-- collapsed `Inactive connections` с pagination, а не полный архив в main
-  flow.
+- действия `Manage access` и `Revoke`.
+
+Для MVP эта страница читает только active OAuth grants. Продукт не обещает
+архив revoked/expired OAuth connections, пока у OAuth adapter нет отдельной
+retained-history projection. История active/revoked/expired personal tokens
+принадлежит Advanced MCP и не смешивается с ordinary Connections.
 
 Страница не показывает MCP endpoints, DCR, PKCE, protocol versions,
 environment-variable snippets, raw grant IDs, `write_binding_id` или recovery
@@ -80,6 +83,15 @@ Route: `/settings/developer/mcp`.
 Personal token остаётся поддерживаемым compatibility/recovery path, но не
 конкурирует с OAuth как основной способ подключения Marketplace plugin.
 
+### Ограничение OAuth step-up
+
+Application protocol детерминированно определяет read-first OAuth и
+`content:write` step-up. Но способность свежего установленного Codex plugin
+надёжно показать incremental consent должна быть доказана real-account canary.
+Если host этого не умеет, нельзя молча выдать initial read+write: требуется
+явное product decision — расширить initial scopes и честно изменить обещание
+либо отказаться от write claim для этого host profile.
+
 ### 4. Codex Help — first result и recovery guides
 
 Route: `/help/codex`.
@@ -99,9 +111,11 @@ credentials.
 
 ## Credential hygiene
 
-- Revoked и expired credentials скрыты по умолчанию.
-- Active list и inactive history имеют отдельные bounded server-side
-  projections/cursors; скрытые rows и bindings не попадают в response.
+- Revoked и expired personal tokens скрыты по умолчанию в Advanced MCP;
+  ordinary Connections не обещает retained revoked OAuth rows.
+- Active OAuth list и personal-token active/inactive history имеют разные
+  bounded server-side projections/cursors; скрытые token rows и bindings не
+  попадают в response.
 - UAT automation использует именованные credentials, revoke и hide.
 - Physical credential deletion и retention policy не входят в MVP; обычные
   пользовательские credentials не удаляются по naming heuristic.
@@ -162,7 +176,8 @@ Release считается готовым только при одновреме
 11. advanced details не находятся в primary onboarding;
 12. list/detail/history используют bounded server-side reads на небольшом
     fixture `0 / 1 / page_size + 1`;
-13. fresh real-account Marketplace/OAuth canary проходит; deterministic tests
-    не подменяют этот user-facing signal;
+13. fresh real-account Marketplace/OAuth canary подтверждает initial read-only
+    consent и incremental write step-up; deterministic tests не подменяют этот
+    user-facing signal и silent read+write fallback запрещён;
 14. privacy receipt не содержит corpus, credentials, email или raw provider
     payload.

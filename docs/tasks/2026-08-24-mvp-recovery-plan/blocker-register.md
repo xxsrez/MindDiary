@@ -27,7 +27,12 @@
 ```text
 MD-292 normative small-data MVP boundary
   ├─ blocks MD-301 single integration baseline
-  └─ blocks MD-294 IA/security contract
+  ├─ blocks MD-294 IA/security contract
+  └─ blocks MD-293 final gate
+
+MD-291 product Epic
+  ├─ groups MD-294..MD-300
+  └─ blocks MD-293 final gate
 
 MD-301 + MD-294
   ├─ block MD-295 routes and bounded projections
@@ -39,27 +44,28 @@ MD-301 + MD-294
 MD-295 + MD-296 + MD-297 + MD-298 + MD-300
   └─ block MD-299 exact connection-flow UAT
 
-MD-244 + MD-252 + MD-258 + MD-285 + MD-292 + MD-301 + MD-299
+MD-291 + MD-244 + MD-252 + MD-258 + MD-285 + MD-292 + MD-301 + MD-299
   └─ block MD-293 final first-user UAT
 ```
 
 MD-291 остаётся product Epic и группирует MD-294–MD-300. Final dependency не
-полагается только на implicit child lifecycle: MD-299 и MD-301 блокируют
-MD-293 напрямую.
+полагается только на implicit child lifecycle: MD-291, MD-299 и MD-301
+блокируют MD-293 напрямую.
 
 ## Открытые внутренние gates
 
 | Gate | Почему действительно блокирует | Owning Task | Следующее действие | Success signal |
 |---|---|---|---|---|
-| Normative boundary | Accepted storage/import contract всё ещё противоречит small-data MVP | MD-292 | amend MVP/roadmap/ADR-0016/spec/profile и атомарно reclassify file/scale Tasks | accepted docs и Task Manager дают один P0 list |
-| Integration baseline | `main` и `1df46ec` расходятся на 2/21 commits | MD-301 | inventory 21 commits и conflict-aware integration в `main` | один remote `main` SHA, full gate passed |
+| Normative boundary | Accepted storage/import contract и stale Project/Release descriptions противоречат small-data MVP | MD-292 | amend MVP/roadmap/ADR-0016/spec/profile, обновить top-level live context и атомарно reclassify file/scale Tasks | accepted docs и Task Manager дают один P0 list без retired AND/Linear claims |
+| Integration baseline | `main` и `1df46ec` остаются разными линиями; изменяющееся левое число нельзя хранить как contract | MD-301 | fresh `git rev-list --left-right --count`, inventory 21 engineering commits и conflict-aware integration в `main` | один remote `main` SHA, full gate passed |
 | Release authority | Release profile/migration должны соответствовать live Task Manager | MD-285–MD-287 | закрыть exact profile/conformance read-back | repository и live selector совпадают |
 | Operator evidence | Admin/account flows требуют воспроизводимого three-principal UAT | MD-244, MD-280–MD-283 | выполнить existing hosted pool/canary matrix | redacted exact-deployment receipt passed |
 | Index recovery | Пропущенный index job не должен требовать ручной data mutation | MD-252 | exact-candidate recovery probe | search восстанавливается bounded worker flow |
 | Small-data performance | Read path не должен возвращаться к 10–23 s latency | MD-258 | выполнить starter/small cold+warm receipt | принятые p95 budgets passed |
-| IA/security contract | Route identity, step-up и pagination должны быть определены до UI code | MD-294 | записать specs и objective contract tests | MD-294 acceptance passed |
+| IA/security contract | Route identity, active OAuth/token-history split, step-up и pagination должны быть определены до UI code | MD-294 | записать specs и objective contract tests; запретить silent read+write fallback | MD-294 acceptance passed |
 | Product implementation | Ordinary flow сейчас остаётся монолитным и unbounded | MD-295–MD-298 | реализовать routes, access UX, paging и copy | targeted security/UI tests passed |
-| Browser evidence | Synthetic HTTP gate не исполняет DOM/accessibility tree | MD-300 | добавить deterministic real-browser runner | desktop/mobile/keyboard gate passed |
+| Browser evidence | Synthetic HTTP gate не исполняет DOM/accessibility tree; runner/binary/fixture CI mechanics ещё не выбраны | MD-300 | зафиксировать toolchain и добавить deterministic real-browser runner | clean-CI desktop/mobile/keyboard gate passed |
+| Incremental consent | Deterministic protocol не доказывает, что fresh Codex host покажет native step-up | MD-299 | refresh/install и first-write real-account canary; без silent fallback | host показывает incremental consent или принято явное scope/claim decision |
 | Connection UAT | Новый flow должен совпасть с реальным MCP enforcement | MD-299 | deterministic gate + fresh real-account canary | exact privacy-safe receipt passed |
 | Final release | Нужен один terminal first-user result на одном artifact | MD-293 | UAT cut после всех incoming gates | exact SHA/deployment/package receipt passed |
 
@@ -69,15 +75,16 @@ MD-293 напрямую.
 
 - **CR-3:** large-corpus/Brain-scale performance minimum исключён; MD-258
   использует небольшой deterministic fixture.
-- **CR-4:** выбран read-first OAuth. Первый write intent в Codex запускает
-  native step-up; UI не обещает writable access до `content:write`.
+- **CR-4 (частично):** выбран read-first OAuth и silent fallback запрещён.
+  Реальная incremental-consent UX остаётся blocking canary MD-299, а не
+  доказанным фактом contract tests.
 - **CR-9:** physical credential deletion исключён из MVP. Test hygiene —
   deterministic naming, revoke и hide; retention policy не блокирует 0.1.
 - **CR-10:** automatic capture исключён из ordinary Connections/onboarding и
   остаётся Advanced/post-MVP capability.
 - **CR-11:** MD-299 напрямую блокирует MD-293.
-- **CR-12:** list/detail/inactive page time, rendered size и bounded reads
-  включены в MD-299 на fixture `0 / 1 / page_size + 1`.
+- **CR-12:** active OAuth list, detail и token-history page time, rendered size
+  и bounded reads включены в MD-299 на fixture `0 / 1 / page_size + 1`.
 
 ## Non-blocking scope Release 0.1
 
@@ -98,6 +105,11 @@ MD-293 напрямую.
 |---|---|---|---|
 | Marketplace/Codex OAuth account | refresh package, fresh context, install/connect, classify product vs surface failure, retry bounded flow | interactive consent, MFA или approval недоступны agent-у | fresh account видит exact package и OAuth завершается |
 | Sites/provider deployment | build exact artifact, publish UAT, read-back/reconcile version and deployment, retry bounded provider outcome | account/provider action невозможно выполнить доступными tools | exact SHA связан с доступным deployment и live URL |
+
+Если fresh host после bounded refresh/reinstall вообще не предлагает
+incremental consent, это сначала platform-boundary evidence, а не разрешение
+молча расширить initial scopes. Следующее действие — явное product decision о
+scope/claim; до него write UX остаётся незавершённым внутренним gate.
 
 Timeout, stale catalog или failed smoke сами по себе не являются просьбой к
 пользователю. Сначала должен быть исключён product bug, stale artifact,

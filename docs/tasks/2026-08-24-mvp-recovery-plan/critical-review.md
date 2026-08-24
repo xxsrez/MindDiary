@@ -5,8 +5,9 @@
 Дата: 2026-08-24.
 
 Исходный review artifact: `807c30884c63d8e88669fb9186742acadffcb95a`.
-Последний проверенный planning artifact до текущей правки:
-`e39375bf0b590f3deb49a29e7b9f839d8f304998`.
+Предыдущий проверенный planning artifact:
+`f96b3b70dbfafc4ddbc5324a6a4fbc95eff5ffe7`. Текущий second-review artifact
+фиксируется commit/read-back после завершения этой правки.
 
 Цель review — найти места, где recovery-plan невозможно честно реализовать,
 проверить или принять в заявленном виде. Review не утверждает, что найденные
@@ -35,7 +36,7 @@ mutations. Текущая исполнимая disposition всех findings п�
 | CR-1 | Internal gate MD-301; blocks implementation и final UAT |
 | CR-2 | Internal gate MD-292; definitive small-data boundary, не новая развилка |
 | CR-3 | Resolved: large-corpus performance minimum удалён |
-| CR-4 | Resolved in contract: read-first OAuth, first-write native step-up; implementation MD-294/MD-296 |
+| CR-4 | Internal + live gate: protocol определён, но fresh-host incremental consent ещё не доказан; MD-294/MD-296/MD-299 |
 | CR-5 | Internal gate MD-300 в Todo, blocks MD-299 |
 | CR-6 | Resolved in acceptance: fresh real-account canary blocking для first-user claim |
 | CR-7 | Включён в MD-294/MD-295: opaque actor-owned ref и identical 404 |
@@ -47,14 +48,17 @@ mutations. Текущая исполнимая disposition всех findings п�
 
 ## P0 findings
 
-### CR-1. `main` не содержит свежий integration candidate
+### CR-1. `main` не содержит fresh integration candidate
 
 Факт:
 
-- `main` после follow-up planning push: `e39375b`;
+- `main` содержит planning/docs commits, точное число которых меняется при
+  каждом обновлении review package;
 - integration candidate: `1df46ec`;
 - общий ancestor: `eca3400`;
-- `main...1df46ec`: два planning commits слева и 21 engineering commit справа.
+- справа от divergence остаётся 21 engineering commit; левое число нельзя
+  фиксировать как вечный факт и нужно читать fresh:
+  `git rev-list --left-right --count main...1df46ec`.
 
 Среди отсутствующих в `main` commits находятся recovery, performance gate,
 capacity profile, hosted upload intents, generated/connector ingress hardening,
@@ -105,7 +109,7 @@ non-blocking проверкой и не влияют на terminal status MD-258
 scale matrix. Число warm samples сохраняется, потому что оно отвечает за
 статистическую устойчивость latency, а не за объём test data.
 
-### CR-4. Resolved in plan: read-first OAuth и first-write step-up
+### CR-4. Частично разрешено: state machine определён, host step-up не доказан
 
 Accepted OAuth flow выдаёт сначала `content:read`; `content:write` появляется
 через native step-up при `set_write_mind_binding` либо commit.
@@ -121,6 +125,13 @@ Accepted OAuth flow выдаёт сначала `content:read`; `content:write` 
 которого становится доступен выбор 0..1 writable Mind. MD-294 фиксирует
 contract, MD-296 реализует его.
 
+Однако это ещё не полный resolution. Repository contract и deterministic tests
+не доказывают, что свежий установленный Marketplace plugin в текущем Codex host
+надёжно покажет incremental consent. Это блокирующий row MD-299 real-account
+canary. Если host не предлагает step-up после refresh/reinstall и bounded retry,
+нужен явный product decision: расширить initial grant до read+write и изменить
+обещание либо снять write claim для этого profile. Silent fallback запрещён.
+
 ### CR-5. Existing synthetic browser gate не проверяет браузер
 
 `npm run gate:synthetic-browser` создаёт server-bound HTTP contexts, читает
@@ -131,6 +142,8 @@ Repository содержит browser fixture servers, однако:
 
 - `npm run check` их не запускает;
 - browser runner отсутствует в dependencies;
+- не выбраны runner/version, CI browser-binary install/cache strategy и
+  deterministic fixture lifecycle;
 - нет автоматической проверки viewport, overflow, focus order, accessible
   names, dialogs и screen-reader semantics.
 
@@ -204,6 +217,10 @@ OAuth adapter сейчас возвращает только active grants; pers
 источник основной revoked history. Эти две коллекции нельзя притворно свести к
 одинаковой lifecycle model.
 
+Ordinary Connections поэтому показывает bounded active OAuth grants. Bounded
+active/inactive history относится к personal tokens в Advanced MCP. Retained
+revoked OAuth archive не входит в MVP без новой adapter projection.
+
 ### CR-9. Resolved by exclusion: hard delete вне MVP
 
 Inactive binding tombstones нужны, чтобы stale clients гарантированно fail
@@ -254,7 +271,7 @@ MD-299 теперь измеряет:
 
 ## Что уже доказано
 
-На `e39375b` до текущей правки плана выполнены:
+На историческом artifact `e39375b` до последующих правок плана были выполнены:
 
 - `npm ci`;
 - один полный `npm run check`: 689 tests, 689 passed;
@@ -263,6 +280,53 @@ MD-299 теперь измеряет:
 - `git diff --check` до push;
 - remote read-back exact `e39375b` на `refs/heads/main`.
 
-Это доказывает repository integrity предыдущего planning commit. Оно не
-доказывает UAT deployment, новый UI, MD-300 или включение 21 commits из
-`1df46ec`.
+Это историческое evidence доказывает repository integrity только того
+planning commit. Оно не доказывает текущий second-review artifact, UAT
+deployment, новый UI, MD-300 или включение 21 commits из `1df46ec`.
+
+## Findings второго критического прогона
+
+### CR-13. Top-level Task Manager context противоречит recovery scope
+
+Fresh read показал, что descriptions Project и Release всё ещё рассказывают про
+retired AND/Linear era, одновременно исключают OAuth/public plugin из Release
+0.1 и перечисляют scope, противоречащий текущему recovery graph.
+
+Это не безопасная cosmetic mutation: top-level descriptions — часть
+нормативного scope. Исправление добавлено в MD-292 и должно выполняться вместе
+с accepted-doc amendment и atomic Task reclassification. До этого live
+Project/Release context нельзя использовать как непротиворечивый acceptance
+source.
+
+### CR-14. План обещал несуществующую общую inactive-connections model
+
+Первый вариант target показывал `Inactive connections` в ordinary
+Connections. Реальный OAuth adapter возвращает active grants, а retained
+revoked/expired history существует у personal tokens. Общий archive без новой
+OAuth projection был бы ложным обещанием и мог бы вернуть unbounded page.
+
+Исправлено в плане и Tasks MD-294/MD-297: ordinary Connections читает только
+bounded active OAuth grants; Advanced MCP владеет bounded personal-token
+history. OAuth archive не обещается в MVP.
+
+### CR-15. Визуальная карта содержала фактические и accessibility-дефекты
+
+Во второй проверке найдены неверный общий масштаб burden chart, схематические
+ширины scope lanes без маркировки, неполный dependency graph, растягивающиеся
+mobile sequence markers, семантически скрытые дочерние элементы risk chart и
+двойной closing `main`. Эти дефекты исправлены в HTML и повторно проверяются в
+desktop/mobile/browser runtime до commit.
+
+## Явные unresolved gates после второго review
+
+| Проблема | Почему не исправляется только документом | Владелец / signal |
+|---|---|---|
+| Normative Task Manager drift | Нужны принятые scope amendments и atomic reclassification | MD-292; docs и live Project/Release дают один scope |
+| Integration divergence | Нужен disposition и перенос engineering commits, а не новая цифра в плане | MD-301; один remote `main` и full gate |
+| Browser runner/CI mechanics | Нужно выбрать и внедрить runner, binary cache/install и fixture lifecycle | MD-300; non-zero deterministic browser gate |
+| Incremental OAuth consent | Свойство внешнего host доказывается только fresh installed-plugin canary | MD-299; first write вызывает реальный step-up |
+| Hosted release evidence | Нужны exact publish/read-back и consolidated UAT | MD-299/MD-293; SHA/deployment/package receipt |
+
+Подтверждённых активных внешних blockers всё ещё нет: перечисленные пункты —
+внутренние gates либо потенциальные platform boundaries до фактической
+самостоятельной попытки.

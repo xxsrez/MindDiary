@@ -23,7 +23,7 @@
 
 ## Task Manager
 
-После исправления planning graph в Project 215 Tasks:
+После второго критического прогона в Project 215 Tasks:
 
 | Состояние | Количество |
 |---|---:|
@@ -31,8 +31,8 @@
 | Canceled | 56 |
 | In Review | 22 |
 | In Progress | 7 |
-| Todo | 10 |
-| Backlog | 1 |
+| Todo | 11 |
+| Backlog | 0 |
 
 В Release `0.1` находятся 159 Tasks: 119 Done и 40 незавершённых. Из них
 MD-291–MD-301 образуют recovery graph; старый release scope всё ещё содержит
@@ -135,9 +135,9 @@ Codex workflow и прямо относят productized import и non-Markdown f
 
 | Surface | Текущий сигнал |
 |---|---|
-| Local/remote `main` | `e39375b`, clean; planning baseline, но ещё не integrated candidate |
+| Local/remote `main` | clean planning baseline на момент fresh read; exact SHA меняется при обновлении review package и не является integrated candidate |
 | Последний deployed UAT evidence | `eca3400`, Sites deployment 50 |
-| Свежий engineering candidate | `1df46ec`; `main...1df46ec` = 2/21 commits |
+| Engineering candidate | `1df46ec`; справа остаётся 21 engineering commit, а изменяющееся число слева нужно читать fresh командой ниже |
 | Hosted proof нового candidate | не доказан как единая full matrix |
 | MCP Setup IA | одинакова в deployed baseline и integration candidate |
 
@@ -145,3 +145,12 @@ MD-301 обязан превратить две Git-линии в один exact
 Repository checks не заменяют live UAT, но полный hosted matrix также не
 повторяется для каждой внутренней Task: используется один exact batch cutoff и
 одна консолидированная acceptance matrix.
+
+Перед любой интеграцией текущий divergence проверяется заново:
+
+```bash
+git rev-list --left-right --count main...1df46ec
+```
+
+Датированные значения вроде прежних `2/21` или наблюдавшихся перед этим review
+`4/21` не являются release contract и не должны копироваться в acceptance.

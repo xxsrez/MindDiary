@@ -364,6 +364,14 @@
     .scope-segment.ops { flex: .9; background: var(--brass-soft); }
     .scope-segment.scale { flex: 1.9; background: var(--coral-soft); }
     .scope-segment.plan { flex: 1.25; background: var(--plum-soft); }
+    .scope-stack { display: flex; min-height: 92px; margin-top: 1.5rem; overflow: hidden; border-radius: 1rem; border: 1px solid var(--line); }
+    .scope-part { display: grid; place-items: center; min-width: 0; padding: .7rem .35rem; text-align: center; font-size: .75rem; font-weight: 820; }
+    .scope-part strong, .scope-part small { display: block; }
+    .scope-part.mvp { width: 27.5%; color: var(--white); background: var(--sage); }
+    .scope-part.ops { width: 20%; background: var(--brass-soft); }
+    .scope-part.runtime { width: 12.5%; background: var(--plum-soft); }
+    .scope-part.future { width: 40%; background: var(--coral-soft); }
+    .scope-legend { margin-top: .75rem; color: var(--ink-soft); font-size: .82rem; }
 
     .filter-row { display: flex; flex-wrap: wrap; gap: .55rem; margin: 1.4rem 0; }
     .finding-grid { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: .85rem; }
@@ -386,7 +394,7 @@
 
     .sequence { display: grid; gap: .5rem; margin-top: 1.4rem; }
     .sequence-row { display: grid; grid-template-columns: 64px 1fr; gap: .8rem; align-items: stretch; }
-    .sequence-index { display: grid; place-items: center; min-height: 64px; color: var(--white); border-radius: 50%; background: var(--plum); font-family: var(--display); font-size: 1.35rem; }
+    .sequence-index { display: grid; place-items: center; width: 64px; height: 64px; align-self: start; color: var(--white); border-radius: 50%; background: var(--plum); font-family: var(--display); font-size: 1.35rem; }
     .sequence-content { padding: .85rem 1rem; border-radius: .9rem; background: rgba(255,255,255,.72); border: 1px solid var(--line); }
     .sequence-content strong { display: block; }
     .sequence-content small { color: var(--ink-soft); }
@@ -446,6 +454,15 @@
     .risk-cell.low { background: var(--sage-soft); }
     .risk-item { display: block; margin-bottom: .45rem; font-size: .78rem; font-weight: 760; }
 
+    .audit-grid { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: .9rem; margin-top: 1.6rem; }
+    .audit-item { padding: 1.1rem; border: 1px solid var(--line); border-radius: 1rem; background: rgba(255,255,255,.7); }
+    .audit-item h3 { margin-bottom: .45rem; }
+    .audit-item p { margin: .45rem 0 0; }
+    .audit-status { display: inline-flex; padding: .22rem .5rem; border-radius: 999px; font-size: .7rem; font-weight: 850; }
+    .audit-status.fixed { color: #2d6138; background: #dcebdd; }
+    .audit-status.internal { color: #695019; background: #ffedb4; }
+    .audit-status.external { color: #782821; background: #ffd7d2; }
+
     .evidence-ladder { display: grid; gap: .7rem; margin-top: 1.5rem; }
     .evidence-step { display: grid; grid-template-columns: 2rem 1fr auto; gap: .8rem; align-items: center; padding: .8rem 1rem; border-radius: .85rem; background: rgba(255,255,255,.7); border: 1px solid var(--line); }
     .evidence-step .num { display: grid; place-items: center; width: 2rem; height: 2rem; color: var(--white); border-radius: 50%; background: var(--ink); }
@@ -463,7 +480,7 @@
     footer { width: min(var(--max), calc(100% - 2rem)); margin: 0 auto; padding: 2.5rem 0 4rem; border-top: 1px solid var(--line); color: var(--ink-soft); }
 
     @media (max-width: 920px) {
-      .grid-4, .finding-grid, .ia-map { grid-template-columns: repeat(2,minmax(0,1fr)); }
+      .grid-4, .finding-grid, .ia-map, .audit-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }
       .grid-3 { grid-template-columns: repeat(2,minmax(0,1fr)); }
       .architecture { grid-template-columns: 1fr; }
       .arch-arrow { transform: rotate(90deg); }
@@ -477,7 +494,7 @@
       .brand-mini span { display: none; }
       .section { width: min(100% - 1.25rem, var(--max)); padding: 4rem 0; }
       .hero { min-height: auto; padding-top: 5.5rem; }
-      .grid-2, .grid-3, .grid-4, .finding-grid, .ia-map { grid-template-columns: 1fr; }
+      .grid-2, .grid-3, .grid-4, .finding-grid, .ia-map, .audit-grid { grid-template-columns: minmax(0,1fr); }
       .story-map { grid-template-columns: 1fr; }
       .story-arrow { transform: rotate(90deg); }
       .bar-row { grid-template-columns: 1fr 3.5rem; }
@@ -493,6 +510,14 @@
       .source-list { columns: 1; }
       .scope-track { flex-direction: column; }
       .scope-segment { min-height: 44px; }
+      .scope-stack { display: grid; overflow: visible; }
+      .scope-part.mvp, .scope-part.ops, .scope-part.runtime, .scope-part.future { width: 100%; min-height: 58px; }
+      .before-after-table { overflow: visible; }
+      .before-after-table thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+      .before-after-table table, .before-after-table tbody, .before-after-table tr, .before-after-table td { display: block; width: 100%; }
+      .before-after-table tr { padding: .75rem; border-bottom: 1px solid var(--line); }
+      .before-after-table td { display: grid; grid-template-columns: minmax(88px, .7fr) minmax(0, 1.3fr); gap: .6rem; padding: .35rem 0; border: 0; }
+      .before-after-table td::before { content: attr(data-label); color: var(--ink-soft); font-size: .7rem; font-weight: 820; letter-spacing: .04em; text-transform: uppercase; }
     }
 
     @media print {
@@ -519,6 +544,7 @@
     </div>
     <nav class="nav-scroll" aria-label="Разделы презентации">
       <a href="#diagnosis">Диагноз</a>
+      <a href="#audit2">Ревью 2</a>
       <a href="#today">Сейчас</a>
       <a href="#architecture">Система</a>
       <a href="#problems">Проблемы</a>
@@ -551,7 +577,7 @@
             <strong>Важно</strong>
             <p class="muted">Это не заявление, что новый интерфейс уже сделан. Это карта текущего состояния, целевой модели, blockers и порядка работы.</p>
           </div>
-          <span class="fine">Live-статусы принадлежат Task Manager. Архитектурные решения до принятия остаются proposal.</span>
+          <span class="fine">Fresh read 2026-08-24: Project 215, Release 159, unfinished 40; MD-301 исправлена из Backlog в Todo. Live-статусы могут измениться и принадлежат Task Manager. Архитектурные решения до принятия остаются proposal.</span>
         </div>
       </div>
     </section>
@@ -595,8 +621,26 @@
       </div>
     </section>
 
+    <section class="section" id="audit2">
+      <p class="section-kicker">02 · Второй критический прогон</p>
+      <h2>Что исправлено, а что всё ещё нельзя честно назвать готовым.</h2>
+      <p class="lead">Этот register отделяет дефекты самого плана от реальной delivery-работы и от внешних границ, которые можно доказать только в live host.</p>
+
+      <div class="audit-grid">
+        <article class="audit-item"><span class="audit-status fixed">Исправлено сейчас</span><h3>MD-301 больше не в Backlog</h3><p>Обязательный integration gate переведён в Todo; volatile Git divergence теперь всегда читается fresh.</p></article>
+        <article class="audit-item"><span class="audit-status fixed">Исправлено сейчас</span><h3>OAuth и token history разделены</h3><p>Connections показывает active OAuth grants. Revoked/expired personal tokens живут в Advanced; выдуманного OAuth archive нет.</p></article>
+        <article class="audit-item"><span class="audit-status fixed">Исправлено сейчас</span><h3>Карта перестала искажать данные</h3><p>Исправлены общий масштаб bar chart, точные доли 40 Tasks, dependency graph, mobile markers, semantics и лишний closing tag.</p></article>
+        <article class="audit-item"><span class="audit-status internal">Внутренний gate</span><h3>Normative scope ещё расходится</h3><p>Accepted docs и stale Project/Release descriptions исправляет MD-292. До этого top-level live context противоречив.</p></article>
+        <article class="audit-item"><span class="audit-status internal">Внутренний gate</span><h3>Git baseline ещё не собран</h3><p>21 engineering commit требуют disposition и conflict-aware integration в MD-301. Новый UI до этого не начинается.</p></article>
+        <article class="audit-item"><span class="audit-status internal">Внутренний gate</span><h3>Browser gate ещё не существует</h3><p>MD-300 должна выбрать runner/version, CI browser binary strategy и fixture lifecycle, затем сделать gate non-zero.</p></article>
+        <article class="audit-item"><span class="audit-status external">Требует live proof</span><h3>Incremental OAuth consent</h3><p>Protocol определён, но fresh Codex plugin должен реально показать write step-up. Silent fallback на initial read+write запрещён.</p></article>
+        <article class="audit-item"><span class="audit-status external">Требует live proof</span><h3>Exact UAT и Marketplace receipt</h3><p>Нужны publish/read-back, fresh package context, real account и один SHA/deployment/package receipt.</p></article>
+        <article class="audit-item"><span class="audit-status external">Пока не blocker</span><h3>Человек нужен только после попытки</h3><p>Interactive MFA/consent или provider account action становится blocker только после refresh, retry, reconcile и causal report.</p></article>
+      </div>
+    </section>
+
     <section class="section" id="today">
-      <p class="section-kicker">02 · Что есть сейчас</p>
+      <p class="section-kicker">03 · Что есть сейчас</p>
       <h2>Страница, которая объясняет всё сразу, не объясняет ничего.</h2>
       <p class="lead">Серверная модель bindings нужна. Но ordinary user видит внутреннее устройство системы вместо простого ответа: «что это приложение может читать и куда оно может писать?»</p>
 
@@ -642,7 +686,7 @@
               <div class="mock-row"><div><h3 style="margin-bottom:.2rem">Connections</h3><span class="fine">Приложения, которым вы дали доступ</span></div><span class="mock-button">Connect another app</span></div>
               <div class="mock-section"><div class="mock-row"><div><strong>Codex · connected today</strong><br><span class="fine">Can read: 2 Minds · Can write: none</span></div><span class="mock-button">Manage access</span></div></div>
               <div class="mock-section"><div class="mock-row"><div><strong>Codex · work account</strong><br><span class="fine">Can read: 3 Minds · Can write: Product notes</span></div><span class="mock-button">Manage access</span></div></div>
-              <div class="mock-section"><strong>Inactive connections</strong><br><span class="fine">Скрыты по умолчанию · открываются отдельной страницей</span></div>
+              <div class="mock-section"><strong>Personal token history — в Advanced MCP</strong><br><span class="fine">Connections показывает только active OAuth grants; revoked OAuth archive не обещан</span></div>
               <div class="card target" style="margin-top:1rem"><strong>Что исчезло с этой страницы</strong><p class="fine">Tokens, endpoints, protocol versions, raw IDs, automatic capture и playbooks. Они не удалены — они разложены по правильным местам.</p></div>
             </div>
           </div>
@@ -650,17 +694,17 @@
       </div>
 
       <h3 style="margin-top:2.5rem">Нагрузка текущего экрана — не абстракция</h3>
-      <div class="burden-chart" role="img" aria-label="Сравнение размеров частей текущего MCP Setup snapshot">
-        <div class="bar-row"><span>OAuth connections</span><div class="bar-track"><div class="bar-fill" style="width:24%"></div></div><strong>9</strong></div>
-        <div class="bar-row"><span>Personal tokens</span><div class="bar-track"><div class="bar-fill" style="width:76%"></div></div><strong>28</strong></div>
-        <div class="bar-row"><span>Credential editors</span><div class="bar-track"><div class="bar-fill" style="width:100%"></div></div><strong>37</strong></div>
+      <div class="burden-chart" aria-label="Сравнение размеров частей текущего MCP Setup snapshot, общая шкала до 52">
+        <div class="bar-row"><span>OAuth connections</span><div class="bar-track"><div class="bar-fill" style="width:17.3%"></div></div><strong>9</strong></div>
+        <div class="bar-row"><span>Personal tokens</span><div class="bar-track"><div class="bar-fill" style="width:53.8%"></div></div><strong>28</strong></div>
+        <div class="bar-row"><span>Credential editors</span><div class="bar-track"><div class="bar-fill" style="width:71.2%"></div></div><strong>37</strong></div>
         <div class="bar-row"><span>Buttons</span><div class="bar-track"><div class="bar-fill" style="width:100%"></div></div><strong>52</strong></div>
       </div>
-      <p class="fine">Шкалы нормированы к максимальному значению внутри каждой группы snapshot; это иллюстрация UI-нагрузки, не performance benchmark.</p>
+      <p class="fine">Все полосы используют одну шкалу с максимумом 52; это иллюстрация UI-нагрузки, не performance benchmark.</p>
     </section>
 
     <section class="section" id="architecture">
-      <p class="section-kicker">03 · Как система устроена</p>
+      <p class="section-kicker">04 · Как система устроена</p>
       <h2>Под капотом есть нормальная система. Нужно отделить слои.</h2>
       <p class="lead">Кликните на компонент: снизу появится его роль и граница ответственности.</p>
 
@@ -721,19 +765,20 @@
     </section>
 
     <section class="section" id="problems">
-      <p class="section-kicker">04 · Почему релиз буксует</p>
+      <p class="section-kicker">05 · Почему релиз буксует</p>
       <h2>Проблема — не список багов, а неправильная очередь решений.</h2>
       <p class="lead">Кодирование нового UI прямо сейчас опасно: сначала нужно определить scope, собрать единый Git baseline и зафиксировать security/query contract.</p>
 
-      <div class="scope-lanes" aria-label="Смешение разных контуров в Release 0.1">
-        <div class="scope-lane"><strong>Пользовательский MVP</strong><div class="scope-track"><div class="scope-segment mvp">Install / OAuth / read / write</div></div></div>
-        <div class="scope-lane"><strong>Release evidence</strong><div class="scope-track"><div class="scope-segment ops">Principals</div><div class="scope-segment plan">Browser + UAT</div></div></div>
-        <div class="scope-lane"><strong>Runtime quality</strong><div class="scope-track"><div class="scope-segment ops">Index recovery</div><div class="scope-segment plan">Small-data latency</div></div></div>
-        <div class="scope-lane"><strong>Future platform</strong><div class="scope-track"><div class="scope-segment scale">BundleFile · Brain scale · universal ingress · Google Drive</div></div></div>
+      <div class="scope-stack" aria-label="Точные доли 40 незавершённых Tasks в Release 0.1">
+        <div class="scope-part mvp"><span><strong>11</strong><small>Recovery / connection UX</small></span></div>
+        <div class="scope-part ops"><span><strong>8</strong><small>Governance / operator</small></span></div>
+        <div class="scope-part runtime"><span><strong>5</strong><small>Runtime / performance</small></span></div>
+        <div class="scope-part future"><span><strong>16</strong><small>Future file / scale</small></span></div>
       </div>
+      <p class="scope-legend">Точная композиция snapshot: 11 + 8 + 5 + 16 = 40 Tasks. Ширина каждого сегмента пропорциональна числу Tasks; это не оценка effort.</p>
 
       <div class="filter-row" role="group" aria-label="Фильтр архитектурных findings">
-        <button type="button" aria-pressed="true" data-filter="all">Все 12</button>
+        <button type="button" aria-pressed="true" data-filter="all">Все 15</button>
         <button type="button" aria-pressed="false" data-filter="p0">P0 — блокируют порядок</button>
         <button type="button" aria-pressed="false" data-filter="p1">P1 — обязательны в реализации</button>
         <button type="button" aria-pressed="false" data-filter="avoided">Уже устранены планом</button>
@@ -743,7 +788,7 @@
         <article class="card finding problem" data-kind="p0"><div class="finding-top"><h3>CR-1 · Две Git-линии</h3><span class="status-pill p0">P0</span></div><p><code>main</code> и engineering candidate расходятся. Новый UI нельзя строить поверх неоднозначного release artifact.</p><div class="owner">Владелец: MD-301</div></article>
         <article class="card finding problem" data-kind="p0"><div class="finding-top"><h3>CR-2 · Конфликт accepted scope</h3><span class="status-pill p0">P0</span></div><p>Старые accepted docs называют Brain-scale частью 0.1, а recovery-plan выводит её за MVP. Это нужно изменить нормативно.</p><div class="owner">Владелец: MD-292</div></article>
         <article class="card finding target" data-kind="avoided"><div class="finding-top"><h3>CR-3 · Огромный тестовый corpus</h3><span class="status-pill avoided">Избежали</span></div><p>590 MB и Brain-scale больше не нужны для MVP gate. Проверяем небольшой deterministic fixture.</p><div class="owner">Решено планом</div></article>
-        <article class="card finding gate" data-kind="p0"><div class="finding-top"><h3>CR-4 · Когда появляется write</h3><span class="status-pill p0">P0</span></div><p>Выбрано: сначала read-only OAuth; первая write intent запускает native step-up. UI не обещает write раньше времени.</p><div class="owner">MD-294 + MD-296</div></article>
+        <article class="card finding gate" data-kind="p0"><div class="finding-top"><h3>CR-4 · Когда появляется write</h3><span class="status-pill p0">P0</span></div><p>State machine выбрана, но fresh Codex host ещё должен доказать incremental consent. Silent fallback на initial read+write запрещён.</p><div class="owner">MD-294 + MD-296 + MD-299</div></article>
         <article class="card finding problem" data-kind="p0"><div class="finding-top"><h3>CR-5 · «Browser test» без браузера</h3><span class="status-pill p0">P0</span></div><p>Существующий gate читает HTML как строку. Он не доказывает DOM, keyboard, focus, mobile overflow и accessibility tree.</p><div class="owner">Владелец: MD-300</div></article>
         <article class="card finding gate" data-kind="p0"><div class="finding-top"><h3>CR-6 · Нужен живой first-user canary</h3><span class="status-pill p0">P0</span></div><p>Contract tests не доказывают реальный Marketplace/OAuth путь. Для first-user claim canary становится blocking.</p><div class="owner">MD-299 + MD-293</div></article>
         <article class="card finding" data-kind="p1"><div class="finding-top"><h3>CR-7 · Connection URL</h3><span class="status-pill p1">P1</span></div><p>Detail route должен использовать opaque actor-owned reference и одинаковый 404 для unknown/foreign connection.</p><div class="owner">MD-294 + MD-295</div></article>
@@ -751,12 +796,15 @@
         <article class="card finding target" data-kind="avoided"><div class="finding-top"><h3>CR-9 · Hard delete credentials</h3><span class="status-pill avoided">Избежали</span></div><p>В MVP используем revoke + hide. Retention и физическое удаление не блокируют 0.1.</p><div class="owner">Решено исключением</div></article>
         <article class="card finding target" data-kind="avoided"><div class="finding-top"><h3>CR-10 · Automatic capture</h3><span class="status-pill avoided">Избежали</span></div><p>Capability остаётся, но уходит из ordinary Connections и onboarding в Advanced/post-MVP.</p><div class="owner">Решено исключением</div></article>
         <article class="card finding target" data-kind="avoided"><div class="finding-top"><h3>CR-11 · Неявная Epic dependency</h3><span class="status-pill avoided">Исправлено</span></div><p>MD-299 теперь напрямую блокирует final MD-293. Закрытие Epic больше не подменяет terminal dependency.</p><div class="owner">Исправлено в Task Manager</div></article>
-        <article class="card finding" data-kind="p1"><div class="finding-top"><h3>CR-12 · Settings performance</h3><span class="status-pill p1">P1</span></div><p>Нужно измерять list/detail/inactive pages на fixtures <code>0 / 1 / page_size + 1</code>, а не только MCP path.</p><div class="owner">Владелец: MD-299</div></article>
+        <article class="card finding" data-kind="p1"><div class="finding-top"><h3>CR-12 · Settings performance</h3><span class="status-pill p1">P1</span></div><p>Нужно измерять active OAuth list, detail и token-history pages на fixtures <code>0 / 1 / page_size + 1</code>, а не только MCP path.</p><div class="owner">Владелец: MD-299</div></article>
+        <article class="card finding problem" data-kind="p0"><div class="finding-top"><h3>CR-13 · Stale Task Manager context</h3><span class="status-pill p0">P0</span></div><p>Project/Release descriptions всё ещё содержат retired AND/Linear narrative и противоречивый release scope.</p><div class="owner">MD-292</div></article>
+        <article class="card finding target" data-kind="avoided"><div class="finding-top"><h3>CR-14 · Выдуманный OAuth archive</h3><span class="status-pill avoided">Исправлено</span></div><p>Connections показывает active OAuth grants; inactive history относится к personal tokens в Advanced MCP.</p><div class="owner">MD-294 + MD-297</div></article>
+        <article class="card finding gate" data-kind="p1"><div class="finding-top"><h3>CR-15 · Browser CI mechanics</h3><span class="status-pill p1">P1</span></div><p>Runner/version, browser binary install/cache и fixture lifecycle должны быть детерминированы на clean CI.</p><div class="owner">MD-300</div></article>
       </div>
     </section>
 
     <section class="section" id="target">
-      <p class="section-kicker">05 · Куда переводим</p>
+      <p class="section-kicker">06 · Куда переводим</p>
       <h2>Обычный пользователь видит четыре понятных места, а не внутренности протокола.</h2>
       <p class="lead">Функциональность не исчезает. Она раскладывается по ролям и моментам, когда действительно нужна.</p>
 
@@ -786,25 +834,26 @@
           </div>
         </article>
       </div>
+      <div class="card gate" style="margin-top:1rem"><strong>Непроверенная граница:</strong> эта state machine реализуема в протоколе, но incremental consent в свежем установленном Codex plugin должен пройти real-account canary. Если host его не предлагает, initial read+write нельзя включать молча — требуется отдельное product decision.</div>
 
       <h3 style="margin-top:2.5rem">Что меняется в языке и поведении</h3>
       <div class="before-after-table">
         <table>
           <thead><tr><th>Сегодня</th><th>Цель</th><th>Почему лучше</th></tr></thead>
           <tbody>
-            <tr><td>Mind bindings</td><td>Access to your Minds</td><td>Говорим об эффекте, а не реализации.</td></tr>
-            <tr><td>Attach read-only</td><td>Allow reading</td><td>Человек понимает разрешение.</td></tr>
-            <tr><td>Bind writable Mind</td><td>Allow writing to this Mind</td><td>Ясно, куда пойдут изменения.</td></tr>
-            <tr><td>Все revoked credentials в основном списке</td><td>Inactive history отдельно и постранично</td><td>Основной экран остаётся коротким.</td></tr>
-            <tr><td>Manual configs рядом с OAuth</td><td>Advanced MCP</td><td>Compatibility path не конкурирует с основным.</td></tr>
-            <tr><td>Client-side collapse</td><td>Bounded server-side queries</td><td>Убираем и визуальный шум, и лишние reads.</td></tr>
+            <tr><td data-label="Сегодня">Mind bindings</td><td data-label="Цель">Access to your Minds</td><td data-label="Почему лучше">Говорим об эффекте, а не реализации.</td></tr>
+            <tr><td data-label="Сегодня">Attach read-only</td><td data-label="Цель">Allow reading</td><td data-label="Почему лучше">Человек понимает разрешение.</td></tr>
+            <tr><td data-label="Сегодня">Bind writable Mind</td><td data-label="Цель">Allow writing to this Mind</td><td data-label="Почему лучше">Ясно, куда пойдут изменения.</td></tr>
+            <tr><td data-label="Сегодня">Все revoked credentials в основном списке</td><td data-label="Цель">Active OAuth — в Connections; token history — в Advanced</td><td data-label="Почему лучше">Не обещаем отсутствующий OAuth archive и держим основной экран коротким.</td></tr>
+            <tr><td data-label="Сегодня">Manual configs рядом с OAuth</td><td data-label="Цель">Advanced MCP</td><td data-label="Почему лучше">Compatibility path не конкурирует с основным.</td></tr>
+            <tr><td data-label="Сегодня">Client-side collapse</td><td data-label="Цель">Bounded server-side queries</td><td data-label="Почему лучше">Убираем и визуальный шум, и лишние reads.</td></tr>
           </tbody>
         </table>
       </div>
     </section>
 
     <section class="section" id="plan">
-      <p class="section-kicker">06 · Как переходим</p>
+      <p class="section-kicker">07 · Как переходим</p>
       <h2>Сначала убираем неоднозначность. Потом пишем UI.</h2>
       <p class="lead">Нажмите на Task в графе или раскройте фазу. Критический путь короткий, если не возвращать post-MVP scope обратно в 0.1.</p>
 
@@ -829,9 +878,17 @@
         <div class="graph-layer">
           <button class="node-button" type="button" data-task="MD-299" data-related="MD-295 MD-296 MD-297 MD-298 MD-300 MD-293"><strong>MD-299</strong><small>Connection UAT</small></button>
         </div>
-        <div class="graph-arrow" aria-hidden="true">↓ + operator / index / performance / authority gates</div>
+        <div class="graph-arrow" aria-hidden="true">↓ + direct supporting gates</div>
         <div class="graph-layer">
-          <button class="node-button" type="button" data-task="MD-293" data-related="MD-292 MD-301 MD-299 MD-244 MD-252 MD-258 MD-285"><strong>MD-293</strong><small>Final first-user receipt</small></button>
+          <button class="node-button" type="button" data-task="MD-291" data-related="MD-294 MD-295 MD-296 MD-297 MD-298 MD-299 MD-300 MD-293"><strong>MD-291</strong><small>Epic + final gate</small></button>
+          <button class="node-button" type="button" data-task="MD-244" data-related="MD-293"><strong>MD-244</strong><small>Operator UAT</small></button>
+          <button class="node-button" type="button" data-task="MD-252" data-related="MD-293"><strong>MD-252</strong><small>Index recovery</small></button>
+          <button class="node-button" type="button" data-task="MD-258" data-related="MD-293"><strong>MD-258</strong><small>Small-data latency</small></button>
+          <button class="node-button" type="button" data-task="MD-285" data-related="MD-293"><strong>MD-285</strong><small>Release authority</small></button>
+        </div>
+        <div class="graph-arrow" aria-hidden="true">↓</div>
+        <div class="graph-layer">
+          <button class="node-button" type="button" data-task="MD-293" data-related="MD-291 MD-292 MD-301 MD-299 MD-244 MD-252 MD-258 MD-285"><strong>MD-293</strong><small>Final first-user receipt</small></button>
         </div>
         <div class="graph-detail" id="graphDetail" aria-live="polite"><strong>Кликните на Task.</strong> Мы подсветим прямое окружение и объясним observable result.</div>
       </div>
@@ -847,16 +904,16 @@
         <div class="phase-detail"><strong>Готово, когда:</strong> есть exact-candidate evidence. Missing test input создаём сами; не называем его внешним blocker.</div>
 
         <button class="phase" type="button" aria-expanded="false"><span class="phase-number">3</span><span class="phase-title"><strong>Принять IA/security contract</strong><small>Opaque refs, identical 404, read-first step-up, bounded queries</small></span><span class="phase-state">MD-294</span></button>
-        <div class="phase-detail"><strong>Готово, когда:</strong> specs и contract tests определяют route/ref/state/query boundaries до UI code.</div>
+        <div class="phase-detail"><strong>Готово, когда:</strong> specs и contract tests определяют route/ref/state/query boundaries до UI code; active OAuth и token history не сведены в выдуманную общую lifecycle model.</div>
 
         <button class="phase" type="button" aria-expanded="false"><span class="phase-number">4</span><span class="phase-title"><strong>Реализовать продуктовый flow</strong><small>Routes, access UX, pagination и three-step onboarding</small></span><span class="phase-state">MD-295–298</span></button>
         <div class="phase-detail"><strong>Готово, когда:</strong> targeted security/UI tests проходят, а скрытые rows не загружаются сервером.</div>
 
         <button class="phase" type="button" aria-expanded="false"><span class="phase-number">5</span><span class="phase-title"><strong>Добавить настоящий browser gate</strong><small>Desktop, mobile, keyboard, focus, accessible names, overflow</small></span><span class="phase-state">MD-300</span></button>
-        <div class="phase-detail"><strong>Готово, когда:</strong> реальный DOM runner проверяет fixtures <code>0 / 1 / page_size + 1</code> и включён в acceptance path.</div>
+        <div class="phase-detail"><strong>Готово, когда:</strong> зафиксированы runner/version, CI browser binary strategy и fixture lifecycle; реальный DOM runner проверяет fixtures <code>0 / 1 / page_size + 1</code> и включён в acceptance path.</div>
 
         <button class="phase" type="button" aria-expanded="false"><span class="phase-number">6</span><span class="phase-title"><strong>Проверить connection flow в UAT</strong><small>Exact package, fresh Codex context, real account, step-up и revoke</small></span><span class="phase-state">MD-299</span></button>
-        <div class="phase-detail"><strong>Готово, когда:</strong> deterministic evidence и fresh real-account Marketplace/OAuth canary дают один privacy-safe receipt.</div>
+        <div class="phase-detail"><strong>Готово, когда:</strong> deterministic evidence и fresh real-account Marketplace/OAuth canary дают один privacy-safe receipt, а first write действительно вызывает incremental consent без silent scope widening.</div>
 
         <button class="phase" type="button" aria-expanded="false"><span class="phase-number">7</span><span class="phase-title"><strong>Провести final first-user UAT</strong><small>Один terminal result вместо набора локальных успехов</small></span><span class="phase-state">MD-293</span></button>
         <div class="phase-detail"><strong>Готово, когда:</strong> exact SHA, deployment и package связаны; read/write/history/export, isolation, performance и revoke проверены; remaining work находится post-MVP.</div>
@@ -864,7 +921,7 @@
     </section>
 
     <section class="section" id="risks">
-      <p class="section-kicker">07 · Риски и блокеры</p>
+      <p class="section-kicker">08 · Риски и блокеры</p>
       <h2>Большинство «блокеров» — наша внутренняя работа.</h2>
       <p class="lead">Пользователь нужен только там, где действительно остаётся interactive consent, MFA или provider action, недоступное инструментам. До этого мы обязаны сами исправить код, создать fixture, refresh/reinstall, deploy и reconcile.</p>
 
@@ -875,10 +932,10 @@
       </div>
 
       <h3 style="margin-top:2.5rem">Матрица архитектурных рисков</h3>
-      <div class="risk-matrix" role="img" aria-label="Матрица вероятности и влияния основных рисков">
+      <div class="risk-matrix" aria-label="Матрица вероятности и влияния основных рисков">
         <div></div><div class="risk-axis">Низкое влияние</div><div class="risk-axis">Среднее влияние</div><div class="risk-axis">Высокое влияние</div>
-        <div class="risk-axis">Высокая вероятность</div><div class="risk-cell medium"><span class="risk-item">Copy drift</span></div><div class="risk-cell high"><span class="risk-item">Client-side hiding без bounded reads</span><span class="risk-item">Новый UI на неправильном baseline</span></div><div class="risk-cell high"><span class="risk-item">Scope снова разрастается</span><span class="risk-item">Synthetic gate выдан за browser proof</span></div>
-        <div class="risk-axis">Средняя вероятность</div><div class="risk-cell low"><span class="risk-item">Старый /settings/mcp link</span></div><div class="risk-cell medium"><span class="risk-item">Opaque ref ошибочно раскрывает existence</span><span class="risk-item">Inactive history снова становится unbounded</span></div><div class="risk-cell high"><span class="risk-item">Real OAuth canary не проходит</span><span class="risk-item">Package/catalog drift</span></div>
+        <div class="risk-axis">Высокая вероятность</div><div class="risk-cell medium"><span class="risk-item">Copy drift</span><span class="risk-item">Stale Project/Release descriptions</span></div><div class="risk-cell high"><span class="risk-item">Client-side hiding без bounded reads</span><span class="risk-item">Новый UI на неправильном baseline</span></div><div class="risk-cell high"><span class="risk-item">Scope снова разрастается</span><span class="risk-item">Synthetic gate выдан за browser proof</span></div>
+        <div class="risk-axis">Средняя вероятность</div><div class="risk-cell low"><span class="risk-item">Старый /settings/mcp link</span></div><div class="risk-cell medium"><span class="risk-item">Opaque ref ошибочно раскрывает existence</span><span class="risk-item">Token history снова становится unbounded</span><span class="risk-item">Browser binary отсутствует в clean CI</span></div><div class="risk-cell high"><span class="risk-item">Incremental OAuth consent не появляется</span><span class="risk-item">Package/catalog drift</span></div>
         <div class="risk-axis">Низкая вероятность</div><div class="risk-cell low"><span class="risk-item">Print layout defect</span></div><div class="risk-cell low"><span class="risk-item">Advanced route confusion</span></div><div class="risk-cell medium"><span class="risk-item">Provider deployment boundary</span></div>
       </div>
 
@@ -899,7 +956,7 @@
     </section>
 
     <section class="section" id="parking">
-      <p class="section-kicker">08 · Что не выбрасываем</p>
+      <p class="section-kicker">09 · Что не выбрасываем</p>
       <h2>Post-MVP — это парковка, а не мусорка.</h2>
       <p class="lead">Код, документы и знания остаются. Они просто перестают держать первый релиз заложником.</p>
       <div class="grid-4" style="margin-top:2rem">
@@ -912,13 +969,13 @@
     </section>
 
     <section class="section" id="review">
-      <p class="section-kicker">09 · Ревью решения</p>
+      <p class="section-kicker">10 · Ревью решения</p>
       <h2>Что нужно подтвердить перед началом UI implementation.</h2>
       <p class="lead">Отметки сохраняются только в вашем браузере и не меняют проект или Task Manager. Это личный checklist для просмотра презентации.</p>
 
       <div class="decision-board" id="decisionBoard">
         <label class="review-item"><input type="checkbox" data-review="scope"><span><strong>Release 0.1 — маленький Codex-first Markdown MVP</strong><small>BundleFile, Brain scale, Google Drive и universal ingress переходят в следующий milestone.</small></span></label>
-        <label class="review-item"><input type="checkbox" data-review="oauth"><span><strong>OAuth работает read-first</strong><small>Write появляется только после первой write intent и native step-up.</small></span></label>
+        <label class="review-item"><input type="checkbox" data-review="oauth"><span><strong>Целевая OAuth-модель — read-first</strong><small>Write появляется только после первой write intent и native step-up; host support ещё требует live proof.</small></span></label>
         <label class="review-item"><input type="checkbox" data-review="ia"><span><strong>Connections / Details / Advanced / Help разделены</strong><small><code>/settings/mcp</code> остаётся совместимым entrypoint.</small></span></label>
         <label class="review-item"><input type="checkbox" data-review="security"><span><strong>Opaque refs, identical 404 и bounded server queries обязательны</strong><small>Client-side hiding не считается реализацией pagination.</small></span></label>
         <label class="review-item"><input type="checkbox" data-review="hygiene"><span><strong>Credential hygiene — revoke + hide</strong><small>Hard delete и retention policy не блокируют MVP.</small></span></label>
@@ -926,7 +983,7 @@
         <label class="review-item"><input type="checkbox" data-review="canary"><span><strong>Fresh real-account canary блокирует first-user claim</strong><small>Contract tests не подменяют Marketplace/OAuth journey.</small></span></label>
         <label class="review-item"><input type="checkbox" data-review="order"><span><strong>Порядок: MD-292 → MD-301/294 → implementation → MD-299 → MD-293</strong><small>UI code не начинается до scope, baseline и contract gates.</small></span></label>
       </div>
-      <div class="review-status" id="reviewStatus" aria-live="polite">Подтверждено 0 из 8 решений.</div>
+      <div class="review-status" id="reviewStatus" aria-live="polite">Просмотрено 0 из 8 решений.</div>
 
       <div class="grid-2" style="margin-top:2.5rem">
         <article class="card target">
@@ -959,7 +1016,7 @@
     </section>
 
     <section class="section" id="sources">
-      <p class="section-kicker">10 · Источники и границы</p>
+      <p class="section-kicker">11 · Источники и границы</p>
       <h2>Презентация — навигация, а не новый источник истины.</h2>
       <p class="lead">Подробные формулировки, статусы proposal/accepted, evidence и Task Manager projection находятся в документах ниже. При расхождении live Task Manager и repository state важнее этой визуальной карты.</p>
       <ul class="source-list">
@@ -1043,15 +1100,16 @@
       }));
 
       const taskCopy = {
+        'MD-291': ['Product Epic группирует MD-294–MD-300 и напрямую блокирует final MD-293, не полагаясь на implicit child lifecycle.'],
         'MD-292': ['Принять definitive small-data boundary, обновить accepted docs и атомарно вывести future file/scale work из active Release 0.1.'],
         'MD-301': ['Сделать один integration baseline: disposition всех candidate commits, conflict-aware перенос, full gate и exact remote main SHA.'],
-        'MD-294': ['Зафиксировать routes, opaque connection refs, identical 404, read-first/write-step-up state machine и bounded query contracts.'],
+        'MD-294': ['Зафиксировать routes, opaque connection refs, identical 404, read-first/write-step-up, active OAuth/token-history split и bounded query contracts; silent scope widening запрещён.'],
         'MD-295': ['Разделить routes и реализовать actor-owned detail без enumeration и hidden unbounded response.'],
         'MD-296': ['Показать readable Minds сразу, writable controls только после content:write, сохранить 0..1 write binding CAS.'],
-        'MD-297': ['Разделить active/inactive server projections, stable opaque cursor, revoke + hide и fixtures 0/1/page_size+1.'],
+        'MD-297': ['Connections читает bounded active OAuth grants; Advanced MCP — separate active/inactive token history со stable opaque cursor и fixtures 0/1/page_size+1.'],
         'MD-298': ['Сделать основной journey из трёх шагов; tokens, protocol mechanics и capture перенести из primary copy.'],
-        'MD-300': ['Добавить реальный deterministic browser runner: desktop/mobile, keyboard, focus, semantics и overflow.'],
-        'MD-299': ['Выпустить exact candidate и соединить deterministic browser evidence с fresh real-account Marketplace/OAuth canary.'],
+        'MD-300': ['Зафиксировать runner/version, clean-CI browser binary и fixture lifecycle; затем добавить desktop/mobile, keyboard, focus, semantics и overflow gate.'],
+        'MD-299': ['Выпустить exact candidate и соединить deterministic browser evidence с fresh real-account Marketplace/OAuth canary, включая реальный incremental consent.'],
         'MD-293': ['Собрать финальный first-user receipt: artifact + deployment + package + UX + security + cleanup.'],
         'MD-244': ['Three-principal operator/admin UAT evidence.'],
         'MD-252': ['Bounded exact-revision index recovery без ручной durable-data mutation.'],
@@ -1088,7 +1146,7 @@
         reviewInputs.forEach(input => { state[input.dataset.review] = input.checked; });
         try { localStorage.setItem(storageKey, JSON.stringify(state)); } catch (_) { /* file/private mode may block storage */ }
         const checked = reviewInputs.filter(input => input.checked).length;
-        reviewStatus.textContent = `Подтверждено ${checked} из ${reviewInputs.length} решений.${checked === reviewInputs.length ? ' Базовая архитектурная рамка согласована для этого браузера.' : ''}`;
+        reviewStatus.textContent = `Просмотрено ${checked} из ${reviewInputs.length} решений.${checked === reviewInputs.length ? ' Все пункты отмечены как просмотренные; это не меняет approval или Task status.' : ''}`;
       };
       reviewInputs.forEach(input => input.addEventListener('change', updateReview));
       updateReview();

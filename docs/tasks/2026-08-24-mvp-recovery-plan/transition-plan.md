@@ -17,20 +17,24 @@ Owning Task: MD-292.
    dataset.
 2. Amend/supersede противоречащие claims в MVP, roadmap, ADR-0016,
    storage/import specification, traceability и release profile.
-3. После fresh Task Manager read-back атомарно убрать `Release blocker` 0.1 и
+3. Обновить stale top-level Project/Release descriptions: убрать retired
+   AND/Linear narrative и привести current release outcome к принятой границе.
+4. После fresh Task Manager read-back атомарно убрать `Release blocker` 0.1 и
    active Release composition у:
    - MD-245, MD-249–MD-250;
    - MD-260, MD-266–MD-268;
    - MD-270, MD-272–MD-275;
    - MD-284, MD-288–MD-290.
-4. Сохранить их hierarchy, relations, code и evidence в следующем milestone;
+5. Сохранить их hierarchy, relations, code и evidence в следующем milestone;
    ничего не удалять и не помечать Duplicate без exact основания.
-5. Оставить MD-257/MD-261 supporting work только на случай измеренного
+6. Оставить MD-257/MD-261 supporting work только на случай измеренного
    small-data bottleneck MD-258.
 
 ### Gate
 
 - accepted docs и Task Manager показывают один P0 scope;
+- live Project/Release descriptions не содержат retired AND/Linear либо
+  противоречащие Marketplace/OAuth claims;
 - final gate не зависит от BundleFile, large corpus, Google Drive или universal
   ingress;
 - post-MVP Tasks не имеют `Release blocker` 0.1.
@@ -121,8 +125,9 @@ Owning Task: MD-294. MD-292 блокирует эту фазу.
    возвращаются как 404 до metadata read.
 3. OAuth read-first: initial grant — `content:read`; writable controls закрыты
    до native step-up, инициированного первой write intent в Codex.
-4. Active connections и inactive token history имеют разные bounded
-   server-side projections/cursors.
+4. Connections читает bounded active OAuth grants; Advanced MCP отдельно
+   читает bounded active/inactive personal-token history. Retained revoked
+   OAuth history не обещается без отдельной OAuth projection.
 5. MVP credential hygiene — revoke + hide; hard delete и retention policy не
    входят в 0.1.
 6. Automatic capture отсутствует в ordinary Connections/onboarding и остаётся
@@ -135,6 +140,11 @@ Owning Task: MD-294. MD-292 блокирует эту фазу.
 Specs и objective contract tests описывают route/ref/state/query boundaries.
 После этого MD-294 разблокирует MD-295–MD-298 и MD-300.
 
+Fresh-host incremental OAuth consent остаётся live gate, а не доказанным
+свойством contract tests. Silent fallback на initial read+write запрещён; если
+host не поддерживает step-up, требуется явное product decision до изменения
+scopes или user-facing claim.
+
 ## Фаза 4. Реализовать bounded product flow
 
 Prerequisites: MD-301 и MD-294.
@@ -144,7 +154,7 @@ Prerequisites: MD-301 и MD-294.
 - физически разделить Connections, detail, Advanced MCP и Codex Help;
 - сохранить `/settings/mcp` entrypoint;
 - реализовать identical 404, signed-out behavior и reserved routes;
-- не включать inactive archive/bindings невидимой page в response.
+- не включать personal-token history или bindings невидимой page в response.
 
 ### MD-296 — access UX и write step-up
 
@@ -156,7 +166,8 @@ Prerequisites: MD-301 и MD-294.
 
 ### MD-297 — credential history
 
-- separate active/inactive server queries;
+- bounded active OAuth query для Connections;
+- separate active/inactive personal-token queries для Advanced MCP;
 - bounded page size и opaque stable cursor;
 - binding state только для visible page или exact detail;
 - test fixtures `0 / 1 / page_size + 1`;
@@ -181,11 +192,14 @@ Owning Task: MD-300. Prerequisites: MD-301 и MD-294.
 ### Действия
 
 1. Запустить реальный browser DOM против deterministic fixture server.
-2. Проверить desktop/mobile, keyboard, focus order, accessibility-tree names,
+2. Зафиксировать runner/version, browser-binary install/cache strategy и
+   deterministic fixture lifecycle в CI, без зависимости от локального
+   browser state.
+3. Проверить desktop/mobile, keyboard, focus order, accessibility-tree names,
    headings/dialogs и overflow.
-3. Пройти четыре routes на fixtures `0 / 1 / page_size + 1`.
-4. Включить non-zero gate в repository acceptance path.
-5. Сохранять только privacy-safe result; не включать corpus, credentials,
+4. Пройти четыре routes на fixtures `0 / 1 / page_size + 1`.
+5. Включить non-zero gate в repository acceptance path.
+6. Сохранять только privacy-safe result; не включать corpus, credentials,
    email или durable user IDs.
 
 ### Gate
@@ -205,9 +219,12 @@ Owning Task: MD-299.
 4. Refresh Marketplace/plugin snapshot и открыть fresh Codex context.
 5. Выполнить MD-300 deterministic browser evidence.
 6. Выполнить fresh real-account Marketplace install/OAuth canary.
-7. Проверить read-first, first-write step-up, rebind, stale binding и revoke.
-8. Проверить list/detail/inactive page time, rendered size и bounded reads.
-9. Сохранить redacted exact SHA/deployment/package receipt.
+7. Проверить, что incremental consent действительно появляется на first write;
+   не подменять failure более широким initial scope без принятого решения.
+8. Проверить read-first, first-write step-up, rebind, stale binding и revoke.
+9. Проверить active OAuth list, token history/detail page time, rendered size и
+   bounded reads.
+10. Сохранить redacted exact SHA/deployment/package receipt.
 
 ### Gate
 
@@ -223,6 +240,8 @@ synthetic principals и contract tests его не подменяют.
 - stale package/catalog → refresh/reinstall/reconcile до blocker-report;
 - account consent/MFA/approval, недоступные agent-у → внешний blocker по форме
   из `blocker-register.md`.
+- host не предлагает incremental consent после fresh install/retry →
+  platform-boundary report и явное product decision; silent fallback запрещён.
 
 ## Фаза 7. Провести final first-user UAT
 

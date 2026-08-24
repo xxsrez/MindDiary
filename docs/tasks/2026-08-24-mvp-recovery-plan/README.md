@@ -55,14 +55,19 @@ MD-293 final first-user receipt.
 
 - Project: `Mind Diary` (`525e801d-0ae9-4be7-bae4-6a9c8f85f581`).
 - Release: `0.1` (`e92b681b-fd18-43e2-91df-3538c37d9890`).
-- Task Manager перечитан после planning mutations: Project содержит 215 Tasks,
-  Release 0.1 — 159 Tasks; незавершённый release scope — 40 Tasks.
+- Task Manager перечитан после второго критического прогона: Project содержит
+  215 Tasks, Release 0.1 — 159 Tasks; незавершённый release scope — 40 Tasks.
+  MD-301 исправлена из Backlog в Todo. Эти числа — датированный snapshot;
+  delivery всегда начинает работу с fresh read-back.
 - Deployed UAT согласно последнему сохранённому release evidence связан с
   `eca3400` / Sites deployment 50. Более свежий engineering candidate —
   `1df46ec`; hosted acceptance для него ещё не является доказанным фактом.
 - Повторная загрузка UAT через in-app Browser 2026-08-24 завершилась timeout
   навигации. Поэтому текущие UI-числа ниже помечены как сделанный ранее в тот же
   день snapshot, а не как новый smoke на момент написания документа.
-- `main` чист на `e39375b`, но расходится с integration candidate `1df46ec` на
-  2/21 commits. MD-301 владеет обязательным conflict-aware объединением до
-  начала UI implementation.
+- `main` и integration candidate `1df46ec` остаются разными линиями. Число
+  planning commits слева изменяется при обновлении этого пакета, поэтому
+  MD-301 обязана начинаться с fresh
+  `git rev-list --left-right --count main...1df46ec`, а затем выполнить
+  conflict-aware объединение до начала UI implementation. На входе второго
+  review справа оставался тот же набор из 21 engineering commit.

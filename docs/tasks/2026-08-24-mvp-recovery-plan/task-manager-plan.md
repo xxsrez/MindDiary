@@ -7,8 +7,9 @@
 
 - Project `Mind Diary`: `525e801d-0ae9-4be7-bae4-6a9c8f85f581`.
 - Release `0.1`: `e92b681b-fd18-43e2-91df-3538c37d9890`.
-- После исправления плана: Project 215 Tasks; Release 159 Tasks;
-  `Backlog 1 / Todo 10 / started 29 / Done 119` внутри Release.
+- После второго критического прогона: Project 215 Tasks; Release 159 Tasks;
+  `Backlog 0 / Todo 11 / started 29 / Done 119` внутри Release. Это датированный
+  snapshot; перед mutation обязателен fresh read-back.
 
 ## Правила графа
 
@@ -51,8 +52,9 @@ MD-299 и MD-301 блокируют final gate напрямую, поэтому 
 - MD-294 фиксирует initial `content:read`; first write intent запускает native
   step-up, после которого выбирается один writable Mind.
 - Raw grant/token IDs не используются как route identity.
-- MD-297 реализует bounded server-side paging; CSS/client-side hiding
-  недостаточно.
+- MD-297 реализует bounded active OAuth list для Connections и отдельную
+  active/inactive personal-token history для Advanced MCP;
+  CSS/client-side hiding недостаточно.
 - Credential hygiene — revoke + hide; hard delete не блокирует MVP.
 - Automatic capture не входит в ordinary Connections/onboarding.
 - MD-299 требует fresh real-account canary; informational external check не
@@ -77,8 +79,9 @@ MD-299 и MD-301 блокируют final gate напрямую, поэтому 
 ## Planning mutations, применённые 2026-08-24
 
 - MD-291–MD-299 находятся в Todo; MD-300 переведена из Backlog в Todo.
-- Создана MD-301 `Собрать единый integration baseline Release 0.1` в Backlog,
-  `urgent`, с Labels `Release blocker` и `Improvement`.
+- Создана MD-301 `Собрать единый integration baseline Release 0.1`, `urgent`,
+  с Labels `Release blocker` и `Improvement`; вторым review она исправлена из
+  Backlog в Todo, потому что это обязательный предшественник implementation.
 - Описания MD-291–MD-300 переписаны с точными decisions, acceptance и
   blocker-report boundary.
 - Добавлены relations:
@@ -87,10 +90,17 @@ MD-299 и MD-301 блокируют final gate напрямую, поэтому 
   - MD-294 → MD-300;
   - ранее добавленные MD-295–MD-300 → MD-299 и MD-299 → MD-293 сохранены.
 - MD-244, MD-252, MD-258 и MD-285 продолжают напрямую блокировать MD-293.
+- MD-292 дополнена обязанностью обновить stale top-level Project/Release
+  descriptions вместе с normative reclassification.
+- MD-294 запрещает silent fallback с read-first OAuth на initial read+write и
+  фиксирует live incremental-consent canary как отдельный gate.
+- MD-297 больше не обещает отсутствующую revoked OAuth history: Connections
+  читает active OAuth grants, Advanced MCP — bounded token history; заголовок
+  Task также заменён на outcome-level формулировку без CSS-hide implication.
 
-MD-301 остаётся Backlog, потому что это новая planning Task; начало delivery
-должно отдельным lifecycle action перевести её в Todo/In Progress. До этого
-UI implementation не начинается.
+MD-301 теперь Todo. Delivery переводит её в In Progress только при фактическом
+начале inventory/integration; UI implementation всё равно не начинается до её
+terminal baseline gate.
 
 ## Read-back checklist
 
