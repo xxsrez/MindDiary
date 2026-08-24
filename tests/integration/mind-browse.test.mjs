@@ -570,6 +570,7 @@ test("entry and continuation locators stay on one exact revision across a HEAD m
     id: oldEntry.entryId,
     maxBytes: 17,
   });
+  assert.equal(firstPage.entry.entryId, oldEntry.entryId);
   assert.equal(firstPage.truncated, true);
   assert.ok(firstPage.continuationId);
   const oldCanonical = oldFiles.find((file) => file.path === "concepts/alpha.md").text;
@@ -866,7 +867,7 @@ test("browse, fetch, and MCP resource reads reauthorize after response locators 
   await assert.rejects(
     racingFetch.fetch(actor(viewer.principalId), {
       id: entry.entryId,
-      maxBytes: 1024,
+      maxBytes: 16,
     }),
     expectFailure("locator_not_found"),
   );

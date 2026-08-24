@@ -1042,6 +1042,7 @@ test("empty account reaches a strict starter commit and first useful search/fetc
   const indexEntry = browsed.entries.find(({ path }) => path === "index.md");
   assert.ok(indexEntry);
   const tailReadsBeforeFetch = database.metadataTailReads;
+  const locatorHandlesBeforeFetch = database.locatorHandles.size;
   const fetchedIndex = await modernTool(
     runtime,
     secret,
@@ -1050,6 +1051,8 @@ test("empty account reaches a strict starter commit and first useful search/fetc
     { id: indexEntry.entry_id },
   );
   assert.equal(database.metadataTailReads - tailReadsBeforeFetch, 3);
+  assert.equal(database.locatorHandles.size, locatorHandlesBeforeFetch);
+  assert.equal(fetchedIndex.entry.entry_id, indexEntry.entry_id);
   assert.match(fetchedIndex.text, /First useful Memory/u);
 
   const usefulSearch = await modernTool(

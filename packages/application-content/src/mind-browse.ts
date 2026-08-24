@@ -1123,6 +1123,12 @@ export class MindBrowseService {
         locator.revisionId,
         loaded.entry,
         loaded.bytes,
+        locator.kind === "entry" &&
+          locator.start === 0 &&
+          locator.end === loaded.entry.size &&
+          typeof request.id === "string"
+          ? request.id
+          : undefined,
       ),
       text,
       truncated: continuationId !== null,
@@ -1196,6 +1202,7 @@ export class MindBrowseService {
     revisionId: RevisionId,
     entry: Readonly<RevisionManifestEntry>,
     bytes: Uint8Array,
+    reusableEntryId?: string,
   ): Promise<Readonly<MindEntrySummary>> {
     const parsed = parseOkfFile({ path: entry.path, bytes });
     if (!parsed.valid || parsed.file === null) {
@@ -1217,7 +1224,7 @@ export class MindBrowseService {
         "The exact revision contains an invalid resource identity.",
       );
     }
-    const entryId = await this.#locators.encode(
+    const entryId = reusableEntryId ?? await this.#locators.encode(
       Object.freeze({
         version: LOCATOR_VERSION,
         kind: "entry",
