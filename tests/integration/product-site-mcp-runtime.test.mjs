@@ -11,7 +11,10 @@ import {
 } from "../../packages/adapter-mcp/dist/index.js";
 import { MIND_DIARY_STARTER_OKF_TEMPLATE } from "../../packages/adapter-web/dist/index.js";
 import { createProductSiteRuntime } from "../../packages/composition-root/dist/index.js";
-import { RequestRecoveryCoordinator } from "../../apps/mind-diary-site/worker/request-recovery.js";
+import {
+  createMindDiaryProductWorker,
+  RequestRecoveryCoordinator,
+} from "../../apps/mind-diary-site/worker/request-recovery.js";
 
 const ORIGIN = "https://mind-diary.example";
 
@@ -3041,54 +3044,65 @@ test("request-triggered recovery reclaims a revision after an injected index dis
   );
   assert.equal(JSON.stringify(unavailableSearchBody).includes(recoveryMarker), false);
 
-  // Simulate an isolate/redeploy boundary after the commit persisted its
-  // queued index job but before the first dispatch could run. The new runtime
-  // must recover from durable D1 state rather than the old runtime's memory.
-  const restartedRuntime = await createProductSiteRuntime({
-    database,
-    bucket,
-    publicOrigin: ORIGIN,
-    identity: {
-      readVerifiedIdentity() {
-        return {
-          kind: "authenticated",
-          verifiedEmail: "recovery.owner@example.com",
-          verifiedFullName: "Recovery Owner",
-        };
-      },
-    },
-    tokenVerifierKey: key(171),
-    locatorKey: key(211),
-    exportDownloadVerifierKey: key(251),
-    csrfKey: key(35),
-    observabilityWriter: { write(line) { telemetryLines.push(line); } },
-    schedule(work) {
-      scheduled.push({ ...work, runtime: "restarted" });
-    },
-  });
-
-  const coordinator = new RequestRecoveryCoordinator({
-    cadenceMs: 30_000,
-    idleMs: 1,
-    delay: async () => undefined,
-    now: () => 1_000,
-  });
+  // Simulate an isolate/redeploy boundary through the same exported Worker
+  // fetch factory used by the deployed default export. Its cache, coordinator
+  // and composed runtime are fresh; only D1/R2 durable state is shared.
+  let restartedRuntime;
   const recoveryWaits = [];
-  const recoveryEnvironment = {};
+  const recoveryEnvironment = {
+    DB: database,
+    MIND_DIARY_BUCKET: bucket,
+    MIND_DIARY_PUBLIC_ORIGIN: ORIGIN,
+  };
+  const restartedWorker = createMindDiaryProductWorker({
+    async createRuntime(options) {
+      restartedRuntime = await createProductSiteRuntime({
+        ...options,
+        observabilityWriter: { write(line) { telemetryLines.push(line); } },
+      });
+      return restartedRuntime;
+    },
+    readConfig() {
+      return {
+        publicOrigin: ORIGIN,
+        tokenVerifierKey: key(171),
+        locatorKey: key(211),
+        exportDownloadVerifierKey: key(251),
+        csrfKey: key(35),
+        serviceOperatorPrincipalIds: [],
+      };
+    },
+    async fallbackFetch() {
+      return new Response("not found", { status: 404 });
+    },
+    recoveryCoordinator: new RequestRecoveryCoordinator({
+      cadenceMs: 30_000,
+      idleMs: 1,
+      delay: async () => undefined,
+      now: () => 1_000,
+    }),
+  });
   const documentRequest = new Request(`${ORIGIN}/`, {
-    headers: { accept: "text/html", "user-agent": "request-recovery-test" },
+    headers: {
+      accept: "text/html",
+      "user-agent": "request-recovery-test",
+      "oai-authenticated-user-email": "recovery.owner@example.com",
+      "oai-authenticated-user-full-name": "Recovery%20Owner",
+      "oai-authenticated-user-full-name-encoding": "percent-encoded-utf-8",
+    },
   });
-  const documentResponse = await coordinator.respond({
-    request: documentRequest,
-    environment: recoveryEnvironment,
-    fingerprint: "request-recovery-test",
-    foreground: () => restartedRuntime.fetch(documentRequest),
-    recover: () => restartedRuntime.recoverBackground(),
-    waitUntil: (promise) => recoveryWaits.push(promise),
-  });
+  const documentResponse = await restartedWorker.fetch(
+    documentRequest,
+    recoveryEnvironment,
+    {
+      waitUntil: (promise) => recoveryWaits.push(promise),
+      passThroughOnException() {},
+    },
+  );
   assert.equal(documentResponse.status, 200);
   assert.equal(recoveryWaits.length, 1);
   await Promise.all(recoveryWaits);
+  assert.ok(restartedRuntime);
 
   const readyInfo = await modernTool(
     restartedRuntime,
@@ -3112,6 +3126,15 @@ test("request-triggered recovery reclaims a revision after an injected index dis
   assert.equal(searchable.results.length, 1);
   assert.equal(searchable.results[0].entry.revision_id, failedRevisionId);
   assert.equal(searchable.results[0].entry.path, "concepts/recovery-marker.md");
+  const noHit = await modernTool(
+    restartedRuntime,
+    secret,
+    "request-recovery-search-no-hit",
+    "search",
+    { mind: "/me", query: "synthetic definitely absent recovery phrase" },
+  );
+  assert.equal(noHit.index_status, "ready");
+  assert.deepEqual(noHit.results, []);
 
   const finalMinds = await modernTool(
     restartedRuntime,

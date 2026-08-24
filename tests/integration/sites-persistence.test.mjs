@@ -21,6 +21,7 @@ import {
   MARKDOWN_MEDIA_TYPE,
   idempotencyKey,
   opaqueId,
+  version,
   verifiedSpaceHost,
 } from "@mind-diary/domain";
 import {
@@ -114,6 +115,7 @@ class FakeD1Database {
   metadataReadLog = [];
   maxBoundStringLength = Number.POSITIVE_INFINITY;
   searchWriteParameterCounts = [];
+  searchReadOperations = [];
   search = new Map();
   searchDocuments = new Map();
   searchMemberships = new Map();
@@ -298,6 +300,10 @@ class FakeD1Database {
     if (sql.includes("/*md-search-legacy-delete*/")) {
       return { success: true, meta: { changes: this.search.delete(`${values[0]}\u0000${values[1]}`) ? 1 : 0 } };
     }
+    if (sql.includes("/*md-search-empty-marker-upsert*/")) {
+      this.search.set(`${values[0]}\u0000${values[1]}`, "[]");
+      return { success: true, meta: { changes: 1 } };
+    }
     if (sql.includes("/*md-search-orphan-document-cleanup*/")) {
       let changed = 0;
       const used = new Set([...this.searchMemberships.values()]
@@ -448,6 +454,7 @@ class FakeD1Database {
       return { success: true, results: row ? [{ ...row }] : [] };
     }
     if (sql.includes("/*md-search-read-normalized*/")) {
+      this.searchReadOperations.push("normalized");
       const results = [...this.searchMemberships.values()]
         .filter((row) => row.space_id === values[0] && row.revision_id === values[1])
         .sort((left, right) => left.ordinal - right.ordinal)
@@ -458,6 +465,7 @@ class FakeD1Database {
       return { success: true, results };
     }
     if (sql.includes("/*md-search-read-legacy*/")) {
+      this.searchReadOperations.push("legacy");
       const documents_json = this.search.get(`${values[0]}\u0000${values[1]}`);
       return {
         success: true,
@@ -465,6 +473,7 @@ class FakeD1Database {
       };
     }
     if (sql.includes("/*md-search-projection-count*/")) {
+      this.searchReadOperations.push("projection-count");
       const memberships = [...this.searchMemberships.values()].filter(
         (row) => row.space_id === values[0] && row.revision_id === values[1],
       );
@@ -477,6 +486,7 @@ class FakeD1Database {
       }] };
     }
     if (sql.includes("/*md-search-query-normalized*/")) {
+      this.searchReadOperations.push("query");
       const terms = values.slice(2).map(String);
       const results = [...this.searchMemberships.values()]
         .filter((row) => row.space_id === values[0] && row.revision_id === values[1])
@@ -804,7 +814,7 @@ test("legacy active HEAD without index effects replays and is backfilled exactly
   assert.equal(due[0].target.revisionId, personal.headRevisionId);
 });
 
-test("Product runtime concurrently backfills a missing active HEAD index after metadata reconstruction", async () => {
+test("Product runtime atomically repairs partial metadata and a missing ready projection across restarts", async () => {
   const database = new FakeD1Database();
   const bucket = new FakeR2Bucket();
   const generators = ids();
@@ -813,29 +823,28 @@ test("Product runtime concurrently backfills a missing active HEAD index after m
     preRegistrationActor(7),
     { action: "create_isolated_account" },
   );
-  const bootstrapEvent = database.metadataEvents.find(
-    (event) => event.operation === "runAccountBootstrapTransaction",
-  );
-  assert.ok(bootstrapEvent);
-  const payload = JSON.parse(bootstrapEvent.payload_json);
-  const createCall = payload.calls.find((call) => call.method === "createAccountBootstrap");
-  assert.ok(createCall);
-  delete createCall.args[0].initialIndexJob;
-  delete createCall.args[0].initialIndexState;
-  bootstrapEvent.payload_json = JSON.stringify(payload);
-  database.metadataSnapshot = null;
-  database.metadataSnapshotHead = null;
-  database.metadataSnapshotChunks.clear();
+  const personalBeforeCorruption = await boundary.metadata.resolvePersonalMind(created.principalId);
+  assert.ok(personalBeforeCorruption);
+  assert.equal(await boundary.metadata.corruptRevisionIndexMetadataForTest(
+    personalBeforeCorruption.spaceId,
+    personalBeforeCorruption.headRevisionId,
+    "drop_job",
+  ), true);
 
   boundary = await createSitesPersistenceBoundary({ database, bucket });
   const personal = await boundary.metadata.resolvePersonalMind(created.principalId);
   assert.ok(personal);
-  assert.equal(
-    await boundary.metadata.readRevisionIndexState(
-      personal.spaceId,
-      personal.headRevisionId,
-    ),
-    null,
+  assert.equal((await boundary.metadata.readRevisionIndexState(
+    personal.spaceId,
+    personal.headRevisionId,
+  ))?.status, "queued");
+  assert.deepEqual(
+    await boundary.metadata.listActiveRevisionIndexRecoveryCandidates(10),
+    [{
+      spaceId: personal.spaceId,
+      revisionId: personal.headRevisionId,
+      reason: "metadata_inconsistent",
+    }],
   );
 
   const now = new Date("2026-08-08T09:00:00.000Z");
@@ -867,7 +876,8 @@ test("Product runtime concurrently backfills a missing active HEAD index after m
   ]);
   assert.equal(first.failed, 0);
   assert.equal(second.failed, 0);
-  assert.equal(first.backfilled + second.backfilled, 1);
+  assert.equal(first.backfilled + second.backfilled, 0);
+  assert.equal(first.repaired + second.repaired, 1);
 
   const recovered = await createSitesMetadataStore(database);
   const ready = await recovered.readRevisionIndexState(
@@ -886,11 +896,165 @@ test("Product runtime concurrently backfills a missing active HEAD index after m
   const afterRestart = await restarted.recoverBackground();
   assert.equal(afterRestart.failed, 0);
   assert.equal(afterRestart.backfilled, 0);
+  assert.equal(afterRestart.repaired, 0);
   const afterRestartState = await recovered.readRevisionIndexState(
     personal.spaceId,
     personal.headRevisionId,
   );
   assert.equal(afterRestartState?.status, "ready");
+
+  // The durable metadata still says ready, but the physical exact-revision
+  // membership disappeared. Two fresh isolates may observe the same gap; one
+  // atomic repair wins and the other joins the queued/rebuilt state.
+  for (const [key, row] of [...database.searchMemberships]) {
+    if (row.space_id === personal.spaceId && row.revision_id === personal.headRevisionId) {
+      database.searchMemberships.delete(key);
+    }
+  }
+  const missingProjection = await boundary.index.readExactRevision(
+    personal.spaceId,
+    personal.headRevisionId,
+  );
+  assert.deepEqual(missingProjection, { kind: "unavailable" });
+  const [staleReadyCandidate] = (await recovered
+    .listActiveRevisionIndexRecoveryCandidates(10))
+    .filter((candidate) => candidate.reason === "verify_ready_projection");
+  assert.ok(staleReadyCandidate);
+  const projectionFirst = await (await createProductSiteRuntime(runtimeOptions))
+    .recoverBackground();
+  assert.equal(projectionFirst.failed, 0);
+  assert.equal(projectionFirst.repaired, 1);
+  const staleRepairAt = "2026-08-08T09:00:01.000Z";
+  const stalePhysicalRepair = await recovered.repairRevisionIndexQueued(
+    {
+      jobId: "job_stale_physical_repair",
+      target: {
+        kind: "revision_index",
+        spaceId: personal.spaceId,
+        revisionId: personal.headRevisionId,
+      },
+      state: "queued",
+      version: version(1),
+      attempts: 0,
+      availableAt: staleRepairAt,
+      claimExpiresAt: null,
+      createdAt: staleRepairAt,
+      updatedAt: staleRepairAt,
+    },
+    {
+      spaceId: personal.spaceId,
+      revisionId: personal.headRevisionId,
+      status: "queued",
+      attempts: 0,
+      queuedAt: staleRepairAt,
+      updatedAt: staleRepairAt,
+      readyAt: null,
+      lastFailureCode: null,
+    },
+    {
+      kind: "physical_index_missing",
+      expectedReadyJobId: staleReadyCandidate.observedJobId,
+      expectedReadyJobVersion: staleReadyCandidate.observedJobVersion,
+    },
+  );
+  assert.equal(stalePhysicalRepair.kind, "already_present");
+  const projectionSecond = await (await createProductSiteRuntime(runtimeOptions))
+    .recoverBackground();
+  assert.equal(projectionSecond.failed, 0);
+  assert.equal(projectionSecond.repaired, 0);
+  const repairedBoundary = await createSitesPersistenceBoundary({ database, bucket });
+  const repairedProjection = await repairedBoundary.index.readExactRevision(
+    personal.spaceId,
+    personal.headRevisionId,
+  );
+  assert.equal(repairedProjection.kind, "ready");
+  assert.equal(repairedProjection.revisionId, personal.headRevisionId);
+  assert.equal((await repairedBoundary.metadata.readRevisionIndexState(
+    personal.spaceId,
+    personal.headRevisionId,
+  ))?.status, "ready");
+});
+
+test("durable recovery cursor crosses a mixed bounded page after a cold restart without loading healthy text", async () => {
+  const database = new FakeD1Database();
+  const bucket = new FakeR2Bucket();
+  const generators = ids();
+  const boundary = await createSitesPersistenceBoundary({ database, bucket });
+  const application = services(boundary, generators);
+  const principals = [];
+  for (let index = 1; index <= 17; index += 1) {
+    principals.push(await application.bootstrap.bootstrapAccount(
+      preRegistrationActor(100 + index),
+      { action: "create_isolated_account" },
+    ));
+  }
+  const recoveryNow = new Date("2026-08-08T10:00:00.000Z");
+  const runtimeOptions = {
+    database,
+    bucket,
+    publicOrigin: "https://mind-diary.example",
+    identity: {
+      readVerifiedIdentity() {
+        return {
+          kind: "authenticated",
+          verifiedEmail: "recovery.rotation@example.invalid",
+          verifiedFullName: "Recovery Rotation",
+        };
+      },
+    },
+    tokenVerifierKey: Uint8Array.from({ length: 32 }, (_value, index) => index + 1),
+    locatorKey: Uint8Array.from({ length: 32 }, (_value, index) => index + 33),
+    exportDownloadVerifierKey: Uint8Array.from({ length: 32 }, (_value, index) => index + 65),
+    csrfKey: Uint8Array.from({ length: 32 }, (_value, index) => index + 97),
+    now: () => recoveryNow,
+    observabilityWriter: { write() {} },
+    schedule() {},
+  };
+  const indexed = await (await createProductSiteRuntime(runtimeOptions)).recoverBackground(64);
+  assert.equal(indexed.failed, 0);
+  assert.equal(indexed.dispatched, 17);
+
+  const metadata = await createSitesMetadataStore(database);
+  const heads = (await Promise.all(principals.map(async (principal) => {
+    const personal = await metadata.resolvePersonalMind(principal.principalId);
+    assert.ok(personal);
+    return { spaceId: personal.spaceId, revisionId: personal.headRevisionId };
+  }))).sort((left, right) => left.spaceId.localeCompare(right.spaceId, "en"));
+  const urgent = heads.slice(0, 16);
+  const target = heads[16];
+  assert.ok(target);
+  for (const candidate of urgent) {
+    assert.equal(await metadata.corruptRevisionIndexMetadataForTest(
+      candidate.spaceId,
+      candidate.revisionId,
+      "drop_job",
+    ), true);
+  }
+  for (const [key, row] of [...database.searchMemberships]) {
+    if (row.space_id === target.spaceId && row.revision_id === target.revisionId) {
+      database.searchMemberships.delete(key);
+    }
+  }
+
+  database.searchReadOperations = [];
+  const first = await (await createProductSiteRuntime(runtimeOptions)).recoverBackground();
+  assert.equal(first.repaired, 16);
+  assert.equal(database.searchReadOperations.filter((operation) =>
+    operation === "projection-count").length, 0);
+  assert.equal(database.searchReadOperations.includes("normalized"), false);
+  assert.equal(database.searchReadOperations.includes("legacy"), false);
+
+  // A new runtime reconstructs the cursor from D1 and starts with the ready
+  // target that was outside the first urgent-only page.
+  const second = await (await createProductSiteRuntime(runtimeOptions)).recoverBackground();
+  assert.equal(second.repaired, 1);
+  assert.equal(database.searchReadOperations.filter((operation) =>
+    operation === "projection-count").length, 16);
+  assert.equal(database.searchReadOperations.includes("normalized"), false);
+  const repaired = await (await createSitesPersistenceBoundary({ database, bucket }))
+    .index.inspectExactRevision(target.spaceId, target.revisionId);
+  assert.equal(repaired.kind, "ready");
+  assert.equal(heads.length, 17);
 });
 
 test("materialized metadata snapshot removes full-log replay from warm and restart reads", async () => {
@@ -2109,7 +2273,45 @@ async function runSearchContract(name, factory) {
     assert.deepEqual(result.documents, [
       { path: "concepts/private.md", text: "private fixture body" },
     ]);
-    assert.equal(await index.purgeSpace("space_search_contract"), 1);
+    await index.replaceExactRevision({
+      spaceId: "space_search_contract",
+      revisionId: "revision_search_empty",
+      documents: [],
+    });
+    assert.deepEqual(
+      await index.inspectExactRevision("space_search_contract", "revision_search_empty"),
+      {
+        kind: "ready",
+        spaceId: "space_search_contract",
+        revisionId: "revision_search_empty",
+      },
+    );
+    assert.deepEqual(
+      await index.readExactRevision("space_search_contract", "revision_search_empty"),
+      {
+        kind: "ready",
+        spaceId: "space_search_contract",
+        revisionId: "revision_search_empty",
+        documents: [],
+      },
+    );
+    if (index.queryExactRevision !== undefined) {
+      assert.deepEqual(
+        await index.queryExactRevision(
+          "space_search_contract",
+          "revision_search_empty",
+          ["definitely-absent"],
+        ),
+        {
+          kind: "ready",
+          spaceId: "space_search_contract",
+          revisionId: "revision_search_empty",
+          totalDocuments: 0,
+          documents: [],
+        },
+      );
+    }
+    assert.equal(await index.purgeSpace("space_search_contract"), 2);
     assert.deepEqual(
       await index.readExactRevision("space_search_contract", "revision_search_contract"),
       { kind: "unavailable" },

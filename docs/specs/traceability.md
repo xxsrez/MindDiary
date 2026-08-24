@@ -57,6 +57,12 @@ failed или неполном evidence. Historical registry критериев 
 ниже сохраняются byte-for-contract: новые receipts не удаляют 29 критериев и
 не переписывают historical evidence.
 
+## Revision-index recovery extension 2026-08-24
+
+| ID | Наблюдаемый результат | Owner | Local evidence | UAT evidence |
+|---|---|---|---|---|
+| IR1-Recovery | Product Worker после реального isolate restart bounded-восстанавливает exact current-HEAD index: атомарно чинит missing/partial job-state, requeues `ready` без physical projection, применяет exponential backoff и terminal attempt/age limits; concurrent/stale claims fenced, а сигналы privacy-safe. Публичного arbitrary repair endpoint нет. | `MD-252` | `audit-outbox-index-jobs`: backoff/attempt/age/stale-handler; `sites-persistence`: partial metadata + missing ready projection + concurrent repair/restart + durable mixed-candidate `>limit` presence-only scan; `product-site-mcp-runtime`: exported Worker `fetch` restart; `privacy-safe-observability`: terminal closed outcome | На свежем synthetic ordinary Mind сохранить exact revision, дождаться `ready`, получить один expected search hit и один no-hit на той же revision, затем обычный cleanup. Privileged corruption или internal repair trigger в UAT не требуется и не разрешён. |
+
 ## Service-operator directory extension 2026-08-24
 
 [Accepted service-operator contract](service-operator-directory.md) отделяет

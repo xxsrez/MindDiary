@@ -81,7 +81,7 @@ export class BackgroundPrivacySafeObservability {
     readonly jobId: JobId;
     readonly occurredAtUtc: UtcInstant;
     readonly job: "revision_index" | "export";
-    readonly outcome: "success" | "failure" | "retry" | "unavailable";
+    readonly outcome: "success" | "failure" | "retry" | "unavailable" | "unresolved";
     readonly lagMs: number;
   }): void {
     recordBackgroundMetric(this.#sink, {
@@ -262,6 +262,10 @@ function retryAt(now: UtcInstant, retryDelayMs: number): UtcInstant {
 export const DEFAULT_BACKGROUND_CLAIM_LEASE_MS = 30_000;
 export const MAX_BACKGROUND_CLAIM_LEASE_MS = 5 * 60 * 1_000;
 export const DEFAULT_EXPORT_CLAIM_LEASE_MS = MAX_BACKGROUND_CLAIM_LEASE_MS;
+export const DEFAULT_INDEX_RETRY_BASE_DELAY_MS = 1_000;
+export const DEFAULT_INDEX_RETRY_MAX_DELAY_MS = 30_000;
+export const DEFAULT_INDEX_RETRY_MAX_ATTEMPTS = 5;
+export const DEFAULT_INDEX_RETRY_MAX_AGE_MS = 24 * 60 * 60 * 1_000;
 
 function boundedDuration(value: number, name: string, maximum: number): number {
   if (!Number.isSafeInteger(value) || value < 1 || value > maximum) {
@@ -281,7 +285,10 @@ export class RevisionIndexJobHandler {
   readonly #revisions: ExactRevisionMaterializer;
   readonly #index: SearchIndex;
   readonly #clock: Clock;
-  readonly #retryDelayMs: number;
+  readonly #retryBaseDelayMs: number;
+  readonly #retryMaxDelayMs: number;
+  readonly #retryMaxAttempts: number;
+  readonly #retryMaxAgeMs: number;
   readonly #claimLeaseMs: number;
 
   constructor(dependencies: {
@@ -290,16 +297,38 @@ export class RevisionIndexJobHandler {
     readonly index: SearchIndex;
     readonly clock: Clock;
     readonly retryDelayMs?: number;
+    readonly maxRetryDelayMs?: number;
+    readonly maxAttempts?: number;
+    readonly maxAgeMs?: number;
     readonly claimLeaseMs?: number;
   }) {
     this.#work = dependencies.work;
     this.#revisions = dependencies.revisions;
     this.#index = dependencies.index;
     this.#clock = dependencies.clock;
-    this.#retryDelayMs = boundedDuration(
-      dependencies.retryDelayMs ?? 1_000,
+    this.#retryBaseDelayMs = boundedDuration(
+      dependencies.retryDelayMs ?? DEFAULT_INDEX_RETRY_BASE_DELAY_MS,
       "index retry delay",
       24 * 60 * 60 * 1_000,
+    );
+    this.#retryMaxDelayMs = boundedDuration(
+      dependencies.maxRetryDelayMs ?? DEFAULT_INDEX_RETRY_MAX_DELAY_MS,
+      "index maximum retry delay",
+      24 * 60 * 60 * 1_000,
+    );
+    if (this.#retryMaxDelayMs < this.#retryBaseDelayMs) {
+      throw new TypeError("index maximum retry delay cannot be less than the base delay");
+    }
+    this.#retryMaxAttempts = dependencies.maxAttempts ?? DEFAULT_INDEX_RETRY_MAX_ATTEMPTS;
+    if (!Number.isSafeInteger(this.#retryMaxAttempts) ||
+        this.#retryMaxAttempts < 1 ||
+        this.#retryMaxAttempts > DEFAULT_INDEX_RETRY_MAX_ATTEMPTS) {
+      throw new TypeError("index retry attempt limit must be between one and five");
+    }
+    this.#retryMaxAgeMs = boundedDuration(
+      dependencies.maxAgeMs ?? DEFAULT_INDEX_RETRY_MAX_AGE_MS,
+      "index retry age limit",
+      30 * 24 * 60 * 60 * 1_000,
     );
     this.#claimLeaseMs = boundedDuration(
       dependencies.claimLeaseMs ?? DEFAULT_BACKGROUND_CLAIM_LEASE_MS,
@@ -323,6 +352,21 @@ export class RevisionIndexJobHandler {
     const target = claim.job.target;
     if (target.kind !== "revision_index") {
       return Object.freeze({ kind: "not_found" });
+    }
+    const claimedAtMs = Date.parse(claimedAt);
+    const createdAtMs = Date.parse(claim.job.createdAt);
+    if (!Number.isFinite(createdAtMs) || claimedAtMs - createdAtMs >= this.#retryMaxAgeMs) {
+      const failedAt = this.#clock.now();
+      const persisted = await this.#work.failIndexJob(
+        request.jobId,
+        claim.job.version,
+        "index_retry_age_limit",
+        failedAt,
+        failedAt,
+      );
+      return persisted
+        ? Object.freeze({ kind: "failed", failureCode: "index_retry_age_limit" })
+        : Object.freeze({ kind: "not_available" });
     }
     try {
       const materialized = await this.#revisions.materialize(
@@ -350,27 +394,45 @@ export class RevisionIndexJobHandler {
         claim.job.version,
         this.#clock.now(),
       );
-      if (!completed) throw new Error("index job completion race");
+      if (!completed) throw new IndexClaimFencedError();
       return Object.freeze({ kind: "completed" });
     } catch (error) {
+      if (error instanceof IndexClaimFencedError) {
+        return Object.freeze({ kind: "not_available" });
+      }
       const failedAt = this.#clock.now();
-      const failureCode =
-        error instanceof ExactRevisionMismatchError
-          ? "exact_revision_mismatch"
-          : "index_rebuild_failed";
-      await this.#work.failIndexJob(
+      const failedAtMs = Date.parse(failedAt);
+      const terminalByAge = !Number.isFinite(failedAtMs) ||
+        failedAtMs - createdAtMs >= this.#retryMaxAgeMs;
+      const failureCode = terminalByAge
+        ? "index_retry_age_limit"
+        : claim.job.attempts >= this.#retryMaxAttempts
+          ? "index_retry_attempt_limit"
+          : error instanceof ExactRevisionMismatchError
+            ? "exact_revision_mismatch"
+            : "index_rebuild_failed";
+      const retryDelayMs = Math.min(
+        this.#retryMaxDelayMs,
+        this.#retryBaseDelayMs * (2 ** Math.max(0, claim.job.attempts - 1)),
+      );
+      const persisted = await this.#work.failIndexJob(
         request.jobId,
         claim.job.version,
         failureCode,
         failedAt,
-        retryAt(failedAt, this.#retryDelayMs),
+        failureCode === "index_retry_attempt_limit" || failureCode === "index_retry_age_limit"
+          ? failedAt
+          : retryAt(failedAt, retryDelayMs),
       );
-      return Object.freeze({ kind: "failed", failureCode });
+      return persisted
+        ? Object.freeze({ kind: "failed", failureCode })
+        : Object.freeze({ kind: "not_available" });
     }
   }
 }
 
 class ExactRevisionMismatchError extends Error {}
+class IndexClaimFencedError extends Error {}
 
 export class AuditOutboxDeliveryHandler {
   readonly #work: BackgroundWorkStore;

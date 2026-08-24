@@ -170,6 +170,14 @@ test("privacy-safe operational and pilot metrics retain only closed dimensions",
     lagMs: 500,
   });
   telemetry.background.recordJob({
+    actor: actor("request_index_terminal_1"),
+    jobId: "index_job_terminal_1",
+    occurredAtUtc: T0,
+    job: "revision_index",
+    outcome: "unresolved",
+    lagMs: 750,
+  });
+  telemetry.background.recordJob({
     actor: actor("request_export_worker_1"),
     jobId: "export_job_1",
     occurredAtUtc: T0,
@@ -241,6 +249,11 @@ test("privacy-safe operational and pilot metrics retain only closed dimensions",
         item.jobId === "export_job_1",
     ),
   );
+  assert.ok(telemetry.sink.eventsForTest().some((event) =>
+    event.operation === "revision_index" &&
+    event.outcome === "unresolved" &&
+    event.jobId === "index_job_terminal_1"
+  ));
 
   const serialized = JSON.stringify({
     events: telemetry.sink.eventsForTest(),

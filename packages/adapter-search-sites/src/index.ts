@@ -234,12 +234,20 @@ export class SitesExactRevisionSearchIndex implements SearchIndex {
             document.path,
             document.digest,
           ]))),
-      this.#database
-        .prepare(
-          `/*md-search-legacy-delete*/ DELETE FROM md_exact_revision_search
-           WHERE space_id = ?1 AND revision_id = ?2`,
-        )
-        .bind(request.spaceId, request.revisionId),
+      documents.length === 0
+        ? this.#database
+            .prepare(
+              `/*md-search-empty-marker-upsert*/ INSERT INTO md_exact_revision_search
+               (space_id, revision_id, documents_json) VALUES (?1, ?2, '[]')
+               ON CONFLICT(space_id, revision_id) DO UPDATE SET documents_json = '[]'`,
+            )
+            .bind(request.spaceId, request.revisionId)
+        : this.#database
+            .prepare(
+              `/*md-search-legacy-delete*/ DELETE FROM md_exact_revision_search
+               WHERE space_id = ?1 AND revision_id = ?2`,
+            )
+            .bind(request.spaceId, request.revisionId),
       this.#database
         .prepare(
           `/*md-search-orphan-document-cleanup*/ DELETE FROM md_search_documents
@@ -319,6 +327,50 @@ export class SitesExactRevisionSearchIndex implements SearchIndex {
     });
   }
 
+  async inspectExactRevision(
+    spaceId: ReplaceExactRevisionIndexRequest["spaceId"],
+    revisionId: ReplaceExactRevisionIndexRequest["revisionId"],
+  ) {
+    await this.ready();
+    validateIdentity(spaceId, "space_id");
+    validateIdentity(revisionId, "revision_id");
+    const counts = await this.#database
+      .prepare(
+        `/*md-search-projection-count*/ SELECT
+           (SELECT COUNT(*) FROM md_search_revision_documents
+             WHERE space_id = ?1 AND revision_id = ?2) AS membership_count,
+           (SELECT COUNT(*)
+              FROM md_search_revision_documents AS membership
+              JOIN md_search_documents AS document
+                ON document.space_id = membership.space_id
+               AND document.digest = membership.digest
+              JOIN md_search_document_lexical AS lexical
+                ON lexical.space_id = membership.space_id
+               AND lexical.digest = membership.digest
+             WHERE membership.space_id = ?1 AND membership.revision_id = ?2)
+             AS indexed_count`,
+      )
+      .bind(spaceId, revisionId)
+      .all<SearchProjectionCountRow>();
+    const membershipCount = Number(counts.results?.[0]?.membership_count ?? 0);
+    const indexedCount = Number(counts.results?.[0]?.indexed_count ?? 0);
+    if (membershipCount > 0 && indexedCount === membershipCount) {
+      return Object.freeze({ kind: "ready" as const, spaceId, revisionId });
+    }
+    // Legacy projection is rare and migration-only. Healthy normalized rows
+    // never load document text during the recurring physical presence probe.
+    const legacy = await this.#database
+      .prepare(
+        `/*md-search-read-legacy*/ SELECT documents_json FROM md_exact_revision_search
+         WHERE space_id = ?1 AND revision_id = ?2`,
+      )
+      .bind(spaceId, revisionId)
+      .all<SearchRow>();
+    return legacy.results?.[0] === undefined
+      ? Object.freeze({ kind: "unavailable" as const })
+      : Object.freeze({ kind: "ready" as const, spaceId, revisionId });
+  }
+
   async queryExactRevision(
     spaceId: ReplaceExactRevisionIndexRequest["spaceId"],
     revisionId: ReplaceExactRevisionIndexRequest["revisionId"],
@@ -363,6 +415,15 @@ export class SitesExactRevisionSearchIndex implements SearchIndex {
     if (membershipCount === 0 || indexedCount !== membershipCount) {
       const legacy = await this.readExactRevision(spaceId, revisionId);
       if (legacy.kind !== "ready") return legacy;
+      if (legacy.documents.length === 0) {
+        return Object.freeze({
+          kind: "ready" as const,
+          spaceId,
+          revisionId,
+          totalDocuments: 0,
+          documents: Object.freeze([]),
+        });
+      }
       await this.replaceExactRevision({
         spaceId,
         revisionId,
