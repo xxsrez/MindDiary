@@ -312,6 +312,18 @@ test("restricted UAT generated ingress canary is fail-closed and exact across re
   assert.equal(mismatchedMcpPrincipal.status, 404);
   assert.deepEqual(await mismatchedMcpPrincipal.json(), exactNotFound);
 
+  const missingTarget = await responseFrom(runtime, canaryRequest(
+    operatorSitesSession,
+    operator.secret,
+    operator.csrf,
+    { ...setupInput, run_nonce: "fedcba9876543210" },
+  ));
+  assert.equal(missingTarget.status, 409);
+  assert.deepEqual(await missingTarget.json(), {
+    ok: false,
+    error: { code: "canary_target_not_ready" },
+  });
+
   const genericProducerInput = await responseFrom(runtime, canaryRequest(
     operatorSitesSession,
     operator.secret,

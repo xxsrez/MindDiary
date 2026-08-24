@@ -4,6 +4,7 @@ import type {
 } from "@mind-diary/adapter-web";
 import {
   GENERATED_ARTIFACT_LIMITS,
+  MindDiscoveryFailure,
   type CanonicalRevisionCoordinator,
   type ChangesetCommitService,
   type GeneratedArtifactProducerPort,
@@ -384,9 +385,17 @@ export class GeneratedIngressUatCanaryService {
       current.bindings.writeBinding.writeBindingId !== input.writeBindingId
     ) fail("canary_target_not_ready", 409);
     const handle = canaryHandle(input.runNonce);
-    const info = await this.#discovery.getMindInfo(actor, `/${handle}`, {
-      kind: "head",
-    });
+    let info;
+    try {
+      info = await this.#discovery.getMindInfo(actor, `/${handle}`, {
+        kind: "head",
+      });
+    } catch (error) {
+      if (error instanceof MindDiscoveryFailure && error.code === "mind_not_found") {
+        fail("canary_target_not_ready", 409);
+      }
+      throw error;
+    }
     if (
       info.mind.mindId !== current.bindings.writeBinding.spaceId ||
       info.mind.handle !== handle ||
