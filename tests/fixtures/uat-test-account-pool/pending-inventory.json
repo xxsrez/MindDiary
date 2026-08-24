@@ -33,7 +33,7 @@
         "custom_audience": "member",
         "service_operator": "denied",
         "ordinary_mind_baseline": "none",
-        "canary_mind_role": "editor-temporary"
+        "canary_mind_role": "owner-temporary-mind"
       },
       "provisioning": {
         "external_account": "pending-owner-action",
@@ -71,7 +71,7 @@
     "interrupted_run": "fail-closed-recovery-required",
     "per_run_mcp_tokens": "revoke-and-deny-readback",
     "temporary_mind_roles": "remove-and-readback-none",
-    "custom_audience": "owner-restore-exact",
-    "operator_allowlist": "owner-restore-exact"
+    "custom_audience": "owner-confirm-unchanged-exact",
+    "operator_allowlist": "owner-confirm-unchanged-exact"
   }
 }

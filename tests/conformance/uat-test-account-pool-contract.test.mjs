@@ -9,9 +9,12 @@ import {
   createPendingUatTestAccountPoolInventory,
   createUatTestAccountPoolReadinessReceipt,
   validateUatTestAccountPoolInventory,
+  verifyUatTestAccountPoolReadinessReceipt,
 } from "../../scripts/lib/uat-test-account-pool-contract.mjs";
 
 const T0 = "2026-08-24T10:00:00.000Z";
+const SHA = "a".repeat(40);
+const DEPLOYMENT = "appgdep_poolfixture";
 
 function readyInventory({ includeDisposable = false } = {}) {
   const inventory = structuredClone(
@@ -60,17 +63,26 @@ test("ready inventory emits a deterministic classification-only receipt", () => 
   });
   const receipt = createUatTestAccountPoolReadinessReceipt(inventory, {
     observedAtUtc: T0,
+    candidateSha: SHA,
+    deploymentId: DEPLOYMENT,
   });
   assert.equal(receipt.schema, UAT_TEST_ACCOUNT_POOL_RECEIPT_SCHEMA);
   assert.equal(receipt.status, "ready");
+  assert.equal(receipt.candidate_sha, SHA);
+  assert.equal(receipt.deployment_id, DEPLOYMENT);
   assert.equal(receipt.readback.custom_audience_actor_count, 3);
   assert.equal(receipt.readback.operator_actor_count, 1);
   assert.equal(receipt.recovery_policy.per_run_mcp_tokens, "revoke-and-deny-readback");
   assert.match(receipt.artifact_sha256, /^sha256:[0-9a-f]{64}$/u);
   assert.deepEqual(
     receipt,
-    createUatTestAccountPoolReadinessReceipt(inventory, { observedAtUtc: T0 }),
+    createUatTestAccountPoolReadinessReceipt(inventory, {
+      observedAtUtc: T0,
+      candidateSha: SHA,
+      deploymentId: DEPLOYMENT,
+    }),
   );
+  assert.deepEqual(verifyUatTestAccountPoolReadinessReceipt(receipt), receipt);
   const serialized = JSON.stringify(receipt);
   for (const forbidden of ["@", "https://", "mdp_v1_", "principal_", "session_"]) {
     assert.equal(serialized.includes(forbidden), false, forbidden);
@@ -109,6 +121,8 @@ test("receipt creation fails closed until every owner and read-back boundary pas
     assert.throws(
       () => createUatTestAccountPoolReadinessReceipt(inventory, {
         observedAtUtc: T0,
+        candidateSha: SHA,
+        deploymentId: DEPLOYMENT,
       }),
       (error) => error instanceof UatTestAccountPoolContractError &&
         error.code === "pool_not_ready",
@@ -154,9 +168,34 @@ test("optional disposable actor remains non-operator and owner-approved", () => 
   assert.equal(disposable.intended_roles.canary_mind_role, "account-lifecycle-only");
   const receipt = createUatTestAccountPoolReadinessReceipt(inventory, {
     observedAtUtc: T0,
+    candidateSha: SHA,
+    deploymentId: DEPLOYMENT,
   });
   assert.equal(receipt.readback.custom_audience_actor_count, 4);
   assert.equal(receipt.readback.operator_actor_count, 1);
+});
+
+test("readiness receipt rejects missing lineage and hash tampering", () => {
+  const inventory = readyInventory();
+  assert.throws(
+    () => createUatTestAccountPoolReadinessReceipt(inventory, {
+      observedAtUtc: T0,
+      candidateSha: SHA,
+    }),
+    UatTestAccountPoolContractError,
+  );
+  const receipt = createUatTestAccountPoolReadinessReceipt(inventory, {
+    observedAtUtc: T0,
+    candidateSha: SHA,
+    deploymentId: DEPLOYMENT,
+  });
+  assert.throws(
+    () => verifyUatTestAccountPoolReadinessReceipt({
+      ...receipt,
+      artifact_sha256: `sha256:${"0".repeat(64)}`,
+    }),
+    UatTestAccountPoolContractError,
+  );
 });
 
 test("runbook keeps provisioning and policy mutation at the owner boundary", async () => {
