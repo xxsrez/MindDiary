@@ -1,0 +1,53 @@
+{
+  "schema": "mind-diary/provider-request-log-boundary-receipt/v1",
+  "status": "unknown",
+  "candidate_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "deployment": {
+    "site_project_id": "appgprj_fixture",
+    "site_version_id": "appgver_fixture",
+    "deployment_id": "appgdep_fixture",
+    "archive_sha256": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
+  "observed_at_utc": "2026-08-24T10:00:00.000Z",
+  "application_evidence": [
+    {
+      "classification": "application_telemetry",
+      "status": "passed",
+      "evidence": {
+        "locator": "repo:tests/integration/privacy-safe-observability.test.mjs",
+        "sha256": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      }
+    },
+    {
+      "classification": "application_service_audit",
+      "status": "passed",
+      "evidence": {
+        "locator": "repo:tests/integration/service-operator-directory.test.mjs",
+        "sha256": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      }
+    },
+    {
+      "classification": "release_receipt",
+      "status": "passed",
+      "evidence": {
+        "locator": "repo:tests/conformance/provider-request-log-boundary.test.mjs",
+        "sha256": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+      }
+    }
+  ],
+  "provider_evidence": [
+    { "classification": "source_network_metadata", "status": "unknown", "evidence": null },
+    { "classification": "client_software_metadata", "status": "unknown", "evidence": null },
+    { "classification": "request_target_metadata", "status": "unknown", "evidence": null },
+    { "classification": "request_header_metadata", "status": "unknown", "evidence": null },
+    { "classification": "payload_metadata", "status": "unknown", "evidence": null },
+    { "classification": "credential_metadata", "status": "unknown", "evidence": null },
+    { "classification": "signed_resource_metadata", "status": "unknown", "evidence": null },
+    { "classification": "retention_control", "status": "unknown", "evidence": null },
+    { "classification": "reduction_control", "status": "unknown", "evidence": null },
+    { "classification": "access_control", "status": "unknown", "evidence": null },
+    { "classification": "deletion_control", "status": "unknown", "evidence": null }
+  ],
+  "authority": { "status": "required", "evidence": null },
+  "artifact_sha256": "sha256:1dd0b66c9a5b324646329ca3bf0fe633fcbdf2afb6d7448cdb9addac3aa3a443"
+}

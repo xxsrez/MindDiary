@@ -39,9 +39,9 @@ Operator перед admission отправляет через исходный t
 recovery boundary. Поскольку notice подтверждается до admission, он также
 предшествует любому MCP export в pilot.
 
-## Telemetry contract
+## Application telemetry contract
 
-UAT runtime пишет в Sites Worker logs только JSON event
+Application-owned logger UAT runtime пишет только JSON event
 `mind-diary.privacy-safe-observability` schema
 `mind-diary/privacy-safe-observability/v1`. Разрешены только:
 
@@ -54,6 +54,14 @@ UAT runtime пишет в Sites Worker logs только JSON event
 search query, email, principal/space/revision identity, token/verifier/header,
 cookie, signed/download URL и raw request/response. Telemetry best-effort:
 отказ logger-а не меняет authoritative request, transaction или background job.
+
+Этот contract ограничивает только строку, созданную Mind Diary application
+sink. Он не утверждает, что Sites/provider infrastructure request envelope
+содержит только этот JSON или не содержит network/client/request metadata.
+Свежие provider facts, controls и bounded acceptance проверяются отдельно по
+[provider request-log read-back](provider-request-log-readback.md). Пока
+read-back не выполнен на exact deployment, provider boundary остаётся
+`unknown`.
 
 Текущий минимальный набор сигналов:
 
@@ -73,9 +81,12 @@ inference, profiling и content-derived dimensions отсутствуют.
 
 1. Зафиксировать exact `project_id`, current deployment/version и Git SHA. Не
    выбирать rollback по словам «предыдущий» или только по времени.
-2. Прочитать recent Sites Worker logs с `errors_only=true`,
-   `since_minutes=15`, `limit<=100`. Расширить до `errors_only=false` только для
-   соседних safe telemetry events; не копировать весь log stream.
+2. Прочитать recent application events с exact event/schema filter,
+   `errors_only=true`, `since_minutes=15`, `limit<=100`. Расширить до
+   `errors_only=false` только для соседних событий того же closed schema; не
+   копировать весь log stream. Не считать provider request envelope этим
+   application event и не просматривать raw provider values без отдельной
+   authority из provider read-back procedure.
 3. Классифицировать incident:
    - `401`/auth denied: проверить exact audience и named token state; не просить
      token у участника;
@@ -90,8 +101,10 @@ inference, profiling и content-derived dimensions отсутствуют.
    закрывает MCP incident.
 
 В evidence сохраняются только class/status/timestamp/opaque correlation,
-exact artifact/deployment и итог. Raw log line допустима только после проверки
-closed schema и отсутствия запрещённых значений.
+exact artifact/deployment и итог. Raw application/provider log line, field name
+из конкретного request и field value в durable evidence не сохраняются;
+application event связывается по safe locator/hash, а provider boundary — по
+classification-only receipt.
 
 ## Emergency revoke
 

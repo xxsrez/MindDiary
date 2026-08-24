@@ -18,6 +18,14 @@ import { CAPABILITIES, version, verifiedSpaceHost } from "@mind-diary/domain";
 const T0 = "2026-08-22T09:00:00.000Z";
 const T1 = "2026-08-22T10:00:00.000Z";
 const T2 = "2026-08-22T11:00:00.000Z";
+const REQUEST_ENVELOPE_SENTINELS = Object.freeze({
+  sourceAddress: "198.51.100.73",
+  userAgent: "MindDiary-Private-Client/9.9",
+  requestPath: "/internal/operators/users?query=private",
+  authorization: `Bearer ${"B".repeat(48)}`,
+  signedUrl: "https://objects.example/private?signature=hidden",
+  corpusQuery: "private corpus needle",
+});
 
 function actor(principalId, occurredAtUtc = T2, requestId = "request_operator") {
   return {
@@ -27,6 +35,7 @@ function actor(principalId, occurredAtUtc = T2, requestId = "request_operator") 
     deploymentCapabilities: CAPABILITIES,
     requestId,
     occurredAtUtc,
+    ...REQUEST_ENVELOPE_SENTINELS,
   };
 }
 
@@ -186,5 +195,6 @@ test("service operator directory is separately authorized, monotonic, paginated,
     "operator.user.2@example.com",
     "OPERATOR.USER.2@EXAMPLE.COM",
     "Pilot User 2",
+    ...Object.values(REQUEST_ENVELOPE_SENTINELS),
   ]) assert.equal(serializedAudit.includes(forbidden), false, forbidden);
 });

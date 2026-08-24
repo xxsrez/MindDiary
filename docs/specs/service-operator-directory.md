@@ -91,6 +91,25 @@ Account deletion атомарно удаляет linkable activity summary вм�
 Activity summary не участвует в authentication, authorization, billing,
 retention decisions или product ranking.
 
+Эти гарантии разделены по трём поверхностям:
+
+- application telemetry принимает только runtime-validated closed event и не
+  получает directory query/rows, verified email, request path/headers либо
+  credentials;
+- service audit сохраняет только opaque operator actor/request, bounded
+  operation/outcome и UTC time; target email, query, returned rows/count и
+  request-envelope values отсутствуют;
+- infrastructure provider request envelope не является application telemetry
+  или service audit и не контролируется этим contract. Его field presence,
+  retention, reduction, access и deletion нельзя выводить из локальных tests;
+  они требуют отдельного
+  [bounded provider read-back](../operations/provider-request-log-readback.md)
+  и явного privacy authority decision для exact UAT deployment.
+
+До такого read-back provider boundary имеет `unknown`, а не `passed`.
+`not_available` provider control означает недоступность, а не автоматически
+приемлемую privacy границу.
+
 Sites persistence использует существующий fenced metadata event/snapshot
 contract без новой standalone activity table: latest summary — optional
 backward-compatible snapshot field, а legacy snapshot без него восстанавливает
@@ -112,9 +131,18 @@ Repository acceptance требует как минимум двух principals �
 - privacy regression не находит forbidden fields в state, responses, audit и
   telemetry.
 
+Product-controlled negative regression отдельно подставляет verified email,
+network/client metadata, corpus/query/path, credential/Authorization и signed
+resource sentinels и доказывает, что их значения отсутствуют в application
+telemetry, service audit и durable provider-boundary receipt. Это не проверяет
+provider envelope: его результат фиксируется только classification-only
+receipt schema `mind-diary/provider-request-log-boundary-receipt/v1`.
+
 Hosted claim требует exact UAT candidate, allowlisted operator, два реально
 изолированных principals и read-back web/MCP/never-active cases. Локальные
-tests сами по себе не являются live evidence.
+tests сами по себе не являются live evidence. Privacy часть hosted claim также
+требует exact-deployment provider read-back и explicit bounded authority;
+unknown provider behavior не закрывает acceptance и не объявляется product bug.
 
 ## Вне scope
 

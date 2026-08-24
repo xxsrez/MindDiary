@@ -22,6 +22,24 @@ const PRIVATE_BODY = "my private Memory body";
 const TOKEN = `mdp_v1_${"A".repeat(43)}`;
 const DOWNLOAD_URL = "https://objects.example/private-grant";
 const VERIFIED_EMAIL = "private.person@example.invalid";
+const SOURCE_ADDRESS = "198.51.100.73";
+const USER_AGENT = "MindDiary-Private-Client/9.9";
+const PRIVATE_PATH = "/me/private-memory?query=hidden";
+const AUTHORIZATION = `Bearer ${"B".repeat(48)}`;
+const SIGNED_URL = "https://objects.example/private?signature=hidden";
+
+const REQUEST_ENVELOPE_SENTINELS = Object.freeze([
+  PRIVATE_QUERY,
+  PRIVATE_BODY,
+  TOKEN,
+  DOWNLOAD_URL,
+  VERIFIED_EMAIL,
+  SOURCE_ADDRESS,
+  USER_AGENT,
+  PRIVATE_PATH,
+  AUTHORIZATION,
+  SIGNED_URL,
+]);
 
 function actor(requestId, occurredAtUtc = T0) {
   return { requestId, occurredAtUtc };
@@ -228,13 +246,7 @@ test("privacy-safe operational and pilot metrics retain only closed dimensions",
     events: telemetry.sink.eventsForTest(),
     dashboard,
   });
-  for (const secret of [
-    PRIVATE_QUERY,
-    PRIVATE_BODY,
-    TOKEN,
-    DOWNLOAD_URL,
-    VERIFIED_EMAIL,
-  ]) {
+  for (const secret of REQUEST_ENVELOPE_SENTINELS) {
     assert.equal(serialized.includes(secret), false);
   }
   assert.equal(serialized.includes("inference"), false);
@@ -248,20 +260,26 @@ test("redaction contract rejects extra payload fields and unsafe correlations", 
     { ...validEvent(), tokenSecret: TOKEN },
     { ...validEvent(), downloadUrl: DOWNLOAD_URL },
     { ...validEvent(), verifiedEmail: VERIFIED_EMAIL },
+    { ...validEvent(), sourceAddress: SOURCE_ADDRESS },
+    { ...validEvent(), userAgent: USER_AGENT },
+    { ...validEvent(), requestPath: PRIVATE_PATH },
+    { ...validEvent(), authorization: AUTHORIZATION },
+    { ...validEvent(), signedUrl: SIGNED_URL },
     validEvent({ requestId: TOKEN }),
     validEvent({ requestId: VERIFIED_EMAIL }),
+    validEvent({ requestId: SOURCE_ADDRESS }),
+    validEvent({ requestId: USER_AGENT }),
+    validEvent({ requestId: AUTHORIZATION }),
     validEvent({ jobId: DOWNLOAD_URL }),
+    validEvent({ jobId: SIGNED_URL }),
     validEvent({ operation: "inference" }),
   ]) {
     assert.throws(
       () => sink.record(event),
       (error) =>
         error instanceof UnsafeObservabilityEventError &&
-        !JSON.stringify(error).includes(PRIVATE_QUERY) &&
-        !JSON.stringify(error).includes(PRIVATE_BODY) &&
-        !JSON.stringify(error).includes(TOKEN) &&
-        !JSON.stringify(error).includes(DOWNLOAD_URL) &&
-        !JSON.stringify(error).includes(VERIFIED_EMAIL),
+        REQUEST_ENVELOPE_SENTINELS.every((value) =>
+          !JSON.stringify(error).includes(value)),
     );
   }
   assert.deepEqual(sink.eventsForTest(), []);
@@ -305,17 +323,23 @@ test("deployable Sites telemetry emits one closed JSON projection and rejects pr
     { ...validEvent(), email: VERIFIED_EMAIL },
     { ...validEvent(), token: TOKEN },
     { ...validEvent(), downloadUrl: DOWNLOAD_URL },
+    { ...validEvent(), sourceAddress: SOURCE_ADDRESS },
+    { ...validEvent(), userAgent: USER_AGENT },
+    { ...validEvent(), requestPath: PRIVATE_PATH },
+    { ...validEvent(), authorization: AUTHORIZATION },
+    { ...validEvent(), signedUrl: SIGNED_URL },
     validEvent({ requestId: VERIFIED_EMAIL }),
+    validEvent({ requestId: SOURCE_ADDRESS }),
+    validEvent({ requestId: USER_AGENT }),
+    validEvent({ requestId: AUTHORIZATION }),
     validEvent({ jobId: DOWNLOAD_URL }),
+    validEvent({ jobId: SIGNED_URL }),
   ]) {
     assert.throws(
       () => sink.record(unsafe),
       (error) => error instanceof UnsafeSitesObservabilityEventError &&
-        !JSON.stringify(error).includes(PRIVATE_QUERY) &&
-        !JSON.stringify(error).includes(PRIVATE_BODY) &&
-        !JSON.stringify(error).includes(VERIFIED_EMAIL) &&
-        !JSON.stringify(error).includes(TOKEN) &&
-        !JSON.stringify(error).includes(DOWNLOAD_URL),
+        REQUEST_ENVELOPE_SENTINELS.every((value) =>
+          !JSON.stringify(error).includes(value)),
     );
   }
   assert.equal(lines.length, 1);
