@@ -1,6 +1,6 @@
 # Профиль `ship-work-release` для Mind Diary
 
-Статус: accepted project configuration, revision 2, 2026-08-20.
+Статус: accepted project configuration, revision 3, 2026-08-24.
 
 Документ задаёт project-specific параметры Mind Diary по
 [provider-neutral profile contract](../specs/ship-work-release-project-profile.md).
@@ -18,12 +18,18 @@ only; MD-250 native-client UAT and hosted upload-intent/producer evidence remain
 pending, while connector rows are contract-only. No UAT smoke row or deployment
 claim may be inferred for an unimplemented hosted source adapter.
 
+Revision 3 добавляет required `uat.operator-directory-canary`: exact-candidate
+three-actor read-only probe с environment-only credential references и
+redacted receipt. Account/audience/allowlist setup, provider privacy read-back
+и external cleanup остаются отдельными explicit-authority prerequisites и не
+выполняются runner-ом.
+
 ## Canonical profile
 
 ~~~yaml
 schema: ship-work-release/project-profile/v1
 profile_id: mind-diary
-profile_revision: 2
+profile_revision: 3
 
 context:
   schema: ship-work-release/context-bindings/v1
@@ -1010,6 +1016,51 @@ evidence:
         storage: content-addressed-reference
         max_bytes: 2097152
         required_fields: [status, candidate_sha, deployment_id, actor_class, actor_fingerprints, assertions, artifact_sha256]
+      redaction_policy: release-evidence-default
+    - id: uat.operator-directory-canary
+      stage: uat
+      requirement: required
+      when: { always: true }
+      probe:
+        kind: runtime_capability
+        capability: mind-diary/uat-operator-directory-canary/v1
+        implementation:
+          command: [npm, run, uat:operator-directory-canary, "--"]
+          runbook: docs/operations/uat-operator-directory-canary.md
+          phases: [setup, verify, cleanup, recovery]
+          product_mutations: forbidden
+          account_bootstrap: forbidden
+          provider_configuration_mutation: forbidden
+          external_cleanup_readback: required-separately-for-md-280
+        inputs:
+          candidate_sha: { value_from: run.candidate_sha }
+          base_url: { literal: "https://mind-diary.example.invalid" }
+          deployment_id: { value_from: run.uat_deployment_id }
+          actor_source: { literal: environment-backed-sites-session }
+          actor_classes: { literal: [operator, mind-role, ordinary] }
+          credential_refs: { literal: six-distinct-environment-only-references }
+        required_assertion_ids:
+          - sessions.environment_backed_only
+          - sessions.three_distinct_registered_principals
+          - roles.mind_role_has_ordinary_owner_or_admin_membership
+          - activity.successful_web_read_observed
+          - activity.successful_mcp_read_observed
+          - directory.operator_api_three_actor_readback
+          - directory.operator_ui_readback
+          - directory.stable_bounded_projection
+          - directory.mind_role_api_exact_404
+          - directory.mind_role_ui_exact_404
+          - directory.ordinary_api_exact_404
+          - directory.ordinary_ui_exact_404
+          - directory.denied_reads_do_not_advance_activity
+          - cleanup.no_ephemeral_product_resources
+      success: { path: /status, operator: eq, value: passed }
+      artifact:
+        schema: mind-diary/uat-operator-directory-canary-evidence/v1
+        media_type: application/json
+        storage: content-addressed-reference
+        max_bytes: 1048576
+        required_fields: [status, candidate_sha, deployment_id, actor_source, run_fingerprint, actors, assertions, observed_at_utc, artifact_sha256]
       redaction_policy: release-evidence-default
     - id: uat.oauth-direct-plugin-canary
       stage: uat

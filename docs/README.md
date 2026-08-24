@@ -104,6 +104,9 @@ evidence, предлагаемый дизайн и ещё не проверен�
 - [Synthetic browser Product Site gate](operations/synthetic-browser-gate-runbook.md)
   — blocking local server-bound browser/UI composition, direct API negatives,
   operator boundary и redacted exact-SHA receipt.
+- [Hosted canary операторского каталога](operations/uat-operator-directory-canary.md)
+  — three-actor restricted-UAT setup/verify/cleanup/recovery с
+  environment-only session references, exact `404` boundary и redacted receipt.
 - [Protocol assisted UAT pilot и feedback loop](operations/uat-pilot-protocol.md)
   — последовательные assisted/external cohorts, один feedback channel,
   privacy-safe metrics, cadence, feedback template, decision review и
