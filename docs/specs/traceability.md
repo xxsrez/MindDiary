@@ -149,10 +149,14 @@ still distinguishes local evidence from exact-deployment UAT availability.
 
 Источник критериев — раздел
 [«Критерии готовности»](mvp.md#критерии-готовности). `Owning story` — ровно одна
-Linear story, которая обязана реализовать criterion и оставить executable
+Task Manager task, которая обязана реализовать criterion и оставить executable
 evidence. Сквозные stories `AND-85`–`AND-90` проверяют и собирают evidence для
 критериев 1–27, но не подменяют их owners; для критериев 28–29 `AND-85` и
 `AND-90` сами являются прямыми owners.
+
+Ключи `AND-*` и `MD-*` в сохранённых строках — display/history keys. Перед
+delivery они должны быть заново разрешены как canonical Task Manager Task refs;
+сама матрица не является selector и не даёт права угадывать scope.
 
 Типы executable evidence:
 
@@ -427,7 +431,7 @@ operational проверки. `Реализовано` означает толь
 проверяемом commit; `UAT baseline подтверждён` относится только к явно
 зафиксированному live artifact и не расширяет его scope.
 
-| Decision | Состояние | Linear owner | Следующее или обязательное evidence |
+| Decision | Состояние | Task Manager owner | Следующее или обязательное evidence |
 |---|---|---|---|
 | Trusted Sites identity/session/CSRF и D1/R2 bindings в одном Site | Реализовано; базовые identity, persistence-after-redeploy и UAT composition подтверждены | `AND-37` (Spike) | Каждый release повторяет redacted probe exact Site version/deployment; расширенные transaction/failure cases остаются criterion-specific gates. |
 | Non-reserved `/api/mcp` modern `2026-07-28`, isolated `/api/mcp/2025-11-25`, SSE/proxy behavior и Codex Bearer forwarding | Реализовано; оба профиля прошли базовый UAT Codex gate | `AND-37` (Spike) | Повторный live JSON/SSE/error probe и pinned Codex на exact candidate; `/mcp` остаётся pre-Worker platform route без automatic fallback. |
@@ -453,9 +457,9 @@ denylist, которому понадобится новый explicit product/sp
 
 ## Правило обновления
 
-Изменение scope в `mvp.md`, wire contract в `api.md` или owning Linear story в
+Изменение scope в `mvp.md`, wire contract в `api.md` или owning Task Manager task в
 том же change обновляет соответствующие строки этой матрицы. Owner story
 заменяет тип evidence на concrete test IDs/commands и durable artifact paths;
 `AND-85` генерирует полный report на candidate SHA; `AND-90` фиксирует `R` и
 проверяет, что все 29 строк ссылаются на тот же exact deployment. Закрытая
-Linear story без этого evidence не делает criterion выполненным.
+Task Manager task без этого evidence не делает criterion выполненным.

@@ -77,7 +77,7 @@ Parser обязан:
 Внешняя сущность задаётся объектом `StableRef`:
 
 ```yaml
-provider: linear
+provider: task-manager
 kind: project
 id: 00000000-0000-0000-0000-000000000000
 display_name: Example
@@ -291,16 +291,16 @@ Profile не содержит значения credentials.
 
 ```yaml
 adapter:
-  id: linear
+  id: task-manager
   contract: ship-work-release/task-manager-adapter/v1
-  specification: docs/specs/ship-work-release-linear.md
-  runtime_reference: references/task-manager-linear.md
+  specification: docs/specs/ship-work-release-task-manager-srez.md
+  runtime_reference: docs/specs/ship-work-release-task-manager-srez.md
 provider_instance:
   id: immutable-provider-instance-id
   id_source: null
-collection: { provider: linear, kind: project, id: stable-id }
+collection: { provider: task-manager, kind: project, id: stable-id }
 default_scope:
-  selector: current_project_milestone
+  selector: configured_release
   parameters: {}
 pagination:
   request_timeout_seconds: 60

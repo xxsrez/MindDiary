@@ -6,8 +6,8 @@
 [provider-neutral profile contract](../specs/ship-work-release-project-profile.md).
 Нормативные orchestration semantics находятся в
 [delivery specification](../specs/ship-work-release.md), команды пользователя —
-в [operator runbook](ship-work-release.md), а Linear mapping — в
-[adapter specification](../specs/ship-work-release-linear.md).
+в [operator runbook](ship-work-release.md), а текущая Task Manager mapping — в
+[adapter specification](../specs/ship-work-release-task-manager-srez.md).
 
 Release 0.1 scope includes the accepted MD-271 [file-ingress contract](../specs/file-ingress.md)
 and its `FI0-Contract` traceability row. Current candidate capability includes
@@ -89,45 +89,35 @@ context:
 
 task_management:
   adapter:
-    id: linear
+    id: task-manager
     contract: ship-work-release/task-manager-adapter/v1
-    specification: docs/specs/ship-work-release-linear.md
-    runtime_reference: references/task-manager-linear.md
+    specification: docs/specs/ship-work-release-task-manager-srez.md
+    runtime_reference: docs/specs/ship-work-release-task-manager-srez.md
   provider_instance:
-    id: null
-    id_source:
-      kind: adapter_capability
-      capability: linear/organization.identity.read/v1
-      expected_type: uuid
+    id: task-manager@srez-marketplace
+    id_source: null
   collection:
-    provider: linear
+    provider: task-manager
     kind: project
-    id: 6c07eabb-e588-4184-8eaa-5974ad67fdda
+    id: 525e801d-0ae9-4be7-bae4-6a9c8f85f581
     display_name: Mind Diary
   default_scope:
-    selector: current_project_milestone
-    parameters: {}
+    selector: configured_release
+    parameters:
+      release_id: e92b681b-fd18-43e2-91df-3538c37d9890
+      release_name: "0.1"
   pagination:
     request_timeout_seconds: 60
     connections:
-      project_milestones: { page_size: 100, max_pages: 10, max_records: 1000 }
-      scope_issues: { page_size: 100, max_pages: 100, max_records: 10000 }
-      issue_relations: { page_size: 100, max_pages: 100, max_records: 10000 }
-      sub_issues: { page_size: 100, max_pages: 100, max_records: 10000 }
-      projection_evidence: { page_size: 100, max_pages: 100, max_records: 10000 }
-      team_status_catalogs: { page_size: 100, max_pages: 10, max_records: 1000 }
+      project_releases: { page_size: 100, max_pages: 10, max_records: 1000 }
+      scope_tasks: { page_size: 100, max_pages: 100, max_records: 10000 }
+      task_relations: { page_size: 100, max_pages: 100, max_records: 10000 }
+      subtasks: { page_size: 100, max_pages: 100, max_records: 10000 }
+      task_comments: { page_size: 100, max_pages: 100, max_records: 10000 }
+      status_catalog: { page_size: 100, max_pages: 10, max_records: 1000 }
   scope_fact_projection:
-    mode: native_scope
-    target:
-      provider: linear
-      kind: project
-      id: 6c07eabb-e588-4184-8eaa-5974ad67fdda
-      display_name: Mind Diary
-    resource_kind: project-status-update
-    capability: linear/project-status-update/v1
-    marker_schema: ship-work-release/linear-scope-fact-marker/v1
-    identity_after_create: exact-status-update-id
-    reconcile: exact-marker-and-status-update-id
+    mode: unavailable
+    capability: task-manager/project-status-update/v1
     unavailable_behavior: block-terminal-projection
 
 repository:
@@ -1199,10 +1189,25 @@ revoke/reconnect-generation и fresh-plugin behavior до terminal UAT result.
 Contract-only `MD-229` проверяется docs validator и diff check и не является
 hosted functionality.
 
-Linear collection разрешается только по immutable project ID
-`6c07eabb-e588-4184-8eaa-5974ad67fdda`; имя `Mind Diary` остаётся display
-metadata. Default selector должен вернуть один exact nonterminal milestone и
-сохранить его stable ID в scope snapshot.
+Task Manager collection разрешается только по exact canonical Project ref
+`525e801d-0ae9-4be7-bae4-6a9c8f85f581`, а default scope — по exact active
+Release `0.1` ref `e92b681b-fd18-43e2-91df-3538c37d9890`. Имена остаются display
+metadata; поиск, старый receipt и старый provider ID не являются fallback. Перед каждым
+run coordinator заново читает Project и Release и блокирует ambiguous или
+stale result.
+
+Текущий Task Manager не предоставляет project-level status-update capability.
+Scope facts и terminal evidence поэтому фиксируются на exact Tasks через
+native comments и status read-back; project-level update не имитируется.
+
+Профиль задаёт identity и default selector, но сам по себе не является
+разрешением на delivery. Skill-only invocation вроде `Use ship-tasks skill` без
+точно выбранной Task или explicit delivery scope должен остановиться в
+read-only preflight до Goal/task/status/comment/code mutation и объяснить:
+какой selector отсутствует, какие живые Project/Release refs были разрешены и
+что нужно передать для продолжения. Такой `TASK CONTEXT ALARM` — защитное
+состояние, а не обращение к невыбранному provider и не повод угадывать scope по
+имени проекта.
 
 Sites project ID читается из tracked
 `apps/mind-diary-site/.openai/hosting.json#/project_id` на exact candidate.

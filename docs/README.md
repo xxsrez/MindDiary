@@ -66,13 +66,12 @@ evidence, предлагаемый дизайн и ещё не проверен�
 20. [Контракт task-management adapter](specs/ship-work-release-task-manager.md) —
    versioned provider-neutral schema identity, snapshots, mutations,
    reconciliation и capability negotiation task-management backend-а.
-21. [Linear adapter для `ship-work-release`](specs/ship-work-release-linear.md) —
-   отдельное отображение Linear projects, milestones, issues, relations,
-   statuses и updates в универсальную модель work collection/scope/item.
-22. [Упрощённая доставка Linear milestone](specs/ship-linear-release-v1.md) —
-   исполнимый compromise profile `ship-linear-release`: один coordinator,
-   coordinator-only либо exact N worker-субагентов, простой JSON journal,
-   meaningful UAT batches и forward-only repair.
+21. [Task Manager adapter Mind Diary](specs/ship-work-release-task-manager-srez.md) —
+    текущая привязка к Project `Mind Diary`, Release `0.1`, exact Task Manager
+    refs, bounded reads и границы task-level writes.
+22. [Исторический Linear adapter](specs/ship-work-release-linear.md) —
+    прежнее отображение Linear entities; не является текущим provider, profile
+    или source of truth.
 
 ## Руководства
 
@@ -117,10 +116,18 @@ evidence, предлагаемый дизайн и ещё не проверен�
 
 ## Активные планы
 
+- [План восстановления MVP 0.1](tasks/2026-08-24-mvp-recovery-plan/README.md)
+  — current state 29 незавершённых Tasks, целевая информационная архитектура
+  Connections / Advanced MCP / Codex Help, release-scope reset, подробный
+  переходный план и целевая модель Task Manager.
+- [План обновления runtime-регистрации Mind Diary plugin](tasks/2026-08-22-mind-diary-plugin-runtime-refresh.md)
+  — диагноз legacy registered connector, опыт Task Manager, безопасный
+  remove/add lifecycle, fresh-runtime acceptance и recovery без изменения
+  данных Minds.
 - [План запуска MVP 0.1 и сверки token estimate](tasks/2026-08-10-mvp-01-pilot-readiness-estimate.md)
   — независимый model estimate, отдельная user hypothesis, planning allocation
   `AND-150`–`AND-161` и protocol измерения фактического расхода следующего
-  `ship-linear-release`.
+  delivery run.
 
 ## Принятые решения
 
@@ -144,7 +151,8 @@ evidence, предлагаемый дизайн и ещё не проверен�
   отдельный manual-only workflow вне `ship-work-release`.
 - [ADR-0009: универсальный delivery skill и task-manager adapters](decisions/0009-task-manager-adapters.md)
   — принято имя `ship-work-release`, provider-neutral core и отдельные
-  lazy-loaded adapter references, включая Linear.
+  lazy-loaded adapter references; текущая Mind Diary mapping описана отдельно,
+  а Linear reference оставлен только для истории.
 - [ADR-0010: OAuth-коннектор и Marketplace pilot](decisions/0010-oauth-marketplace-connector.md)
   — приняты dual personal/OAuth authentication, PKCE/DCR, read-first consent,
   rotating refresh и server-side UAT OAuth boundary; distribution-часть для
@@ -178,6 +186,9 @@ evidence, предлагаемый дизайн и ещё не проверен�
 
 ## Исследования
 
+- [Поддержка Brain-масштаба: storage и capacity proposal на 2026-08-22](reports/2026-08-22-brain-scale-storage-and-capacity-proposal.md)
+  — live Sites/task evidence, профиль текущего Brain, узкие места revision,
+  search/import/export и поэтапный план для одного и нескольких крупных Minds.
 - [Состояние OKF на 2026-08-05](reports/2026-08-05-okf-status.md) — сверка
   официальной спецификации с зафиксированным OKF 0.2 snapshot.
 - [Рыночная оценка Mind Diary на 2026-08-05](reports/2026-08-05-market-assessment.md)

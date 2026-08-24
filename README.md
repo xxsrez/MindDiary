@@ -52,8 +52,8 @@ read-only token после проверки отозван; следующий r
 - [Контракт `ship-work-release`](docs/specs/ship-work-release.md)
 - [Контракт project delivery profile](docs/specs/ship-work-release-project-profile.md)
 - [Контракт task-management adapter](docs/specs/ship-work-release-task-manager.md)
-- [Linear adapter доставки](docs/specs/ship-work-release-linear.md)
-- [Упрощённый исполнимый `ship-linear-release`](docs/specs/ship-linear-release-v1.md)
+- [Task Manager adapter доставки](docs/specs/ship-work-release-task-manager-srez.md)
+- [Исторический Linear adapter](docs/specs/ship-work-release-linear.md)
 - [Операторский runbook](docs/operations/ship-work-release.md)
 - [Профиль dev/UAT/production доставки](docs/operations/ship-work-release-profile.md)
 
@@ -84,6 +84,5 @@ Codex передаёт первый через `env_http_headers`, второй 
 `bearer_token_env_var`. Следующий этап — расширять product workflows и
 automation поверх уже проверенного UAT Sites/MCP контура. Production является
 отдельной средой для живых пользователей, пока не provisioned и deploy-ится
-только вручную после явного запроса и подтверждения — никогда не через
-`ship-linear-release`. ZIP import,
+только вручную после явного запроса и подтверждения. ZIP import,
 producer-defined non-Markdown files и named checkpoints остаются вне MVP.

@@ -1,6 +1,12 @@
 # Linear adapter для `ship-work-release`
 
-Статус: accepted adapter specification, 2026-08-09.
+Статус: historical, superseded by
+[`ship-work-release-task-manager-srez.md`](ship-work-release-task-manager-srez.md),
+2026-08-23.
+
+Этот документ сохранён для исторической трассировки старого rollout. Он не
+является текущим adapter, project profile, scope selector или source of truth
+для Mind Diary; старый Project ID из него использовать запрещено.
 
 Документ задаёт только Linear-specific mapping общего
 [`task-management adapter`](ship-work-release-task-manager.md). Универсальные

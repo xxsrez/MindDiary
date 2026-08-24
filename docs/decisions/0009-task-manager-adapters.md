@@ -31,9 +31,10 @@ entity types, status catalog, relations, pagination, comment format и retry
   update format и API/tool behavior описываются в отдельном tracked adapter
   document и производном lazy-loaded
   `references/task-manager-<provider>.md` внутри skill.
-- Linear semantics задаёт отдельная
-  [adapter specification](../specs/ship-work-release-linear.md) и производный
-  skill reference `references/task-manager-linear.md`.
+- Provider-specific semantics задаёт отдельная adapter specification и
+  производный skill reference. Для текущего Mind Diary это
+  [Task Manager mapping](../specs/ship-work-release-task-manager-srez.md);
+  прежняя Linear mapping сохранена отдельно как historical.
 - `SKILL.md` остаётся thin router: читает adapter ID из profile, загружает общий
   task-management contract и ровно один provider adapter выбранного execution
   path.
@@ -47,8 +48,9 @@ entity types, status catalog, relations, pagination, comment format и retry
 
 - Универсальный contract и operator runbook не содержат Linear entity/status
   semantics.
-- Mind Diary выбирает adapter `linear` только в своём
-  [project delivery profile](../operations/ship-work-release-profile.md).
+- Mind Diary выбирает adapter `task-manager` только в своём
+  [project delivery profile](../operations/ship-work-release-profile.md), а
+  старый Linear profile больше не является действующей конфигурацией.
 - Task-manager adapter tests отделяются от router, state reducer, release и
   recovery conformance tests.
 - Canonical run state хранит stable adapter/collection/scope/item refs, а remote
