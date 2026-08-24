@@ -129,6 +129,9 @@ npm run uat:operator-directory-canary -- \
 Изменившийся deployment, actor session или отсутствие любого actor в bounded
 directory блокирует pass. Pagination/search/sort/range/empty/never-active
 failure также оставляет canary nonterminal. Перед passing receipt verify
+повторно подтверждает exact `Owner` temporary Mind через `access.role`; один
+положительный directory `participating_mind_count` не заменяет эту проверку.
+Затем verify
 выпускает fresh phase-local read-only tokens, повторяет MCP activity, выполняет
 directory matrix, revoke-ит tokens с denial read-back и удаляет temporary Mind
 через deletion-impact contract. Поэтому assertion
