@@ -1,8 +1,12 @@
 # ADR-0018: единый file-ingress contract и source capability matrix
 
-Статус: accepted, 2026-08-23. Решение относится к Release 0.1 и текущему
-Sites UAT. Это contract decision MD-271; implementation/evidence каждой source
-capability остаются отдельными claims и child tasks.
+Статус: accepted technical contract, 2026-08-23. Portable boundary и security
+invariants сохраняются, но включение universal file ingress в terminal Release
+0.1 частично заменено
+[ADR-0019](0019-release-0-1-codex-first-small-data-boundary.md): capability
+относится к post-MVP и не блокирует Markdown-first 0.1. Это contract decision
+MD-271; implementation/evidence каждой source capability остаются отдельными
+claims и child tasks.
 
 ## Контекст
 
@@ -63,9 +67,9 @@ revision/atomicity с уже принятыми Markdown и BundleFile operation
   native file/intent/inline profile or receives a typed unavailable result.
 - The current candidate can claim local `session_attachment`, bounded-inline
   and server-generated writer code/tests plus MD-272's local companion code;
-  MD-250 is still required for exact native client/profile UAT, hosted
-  upload-intent/producer use remains unproven, and MD-274 is needed for the
-  mixed-source coordinator.
+  MD-250 is still required before claiming exact native client/profile UAT,
+  hosted upload-intent/producer use remains unproven, and MD-274 owns the
+  mixed-source coordinator. Эти rows не являются terminal prerequisites 0.1.
 - Local snapshots may hash before network I/O for user feedback, but the
   application recomputes digest/size/MIME; client declarations never become
   authority. Provider and local path secrecy remains an adapter invariant.

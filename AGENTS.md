@@ -115,13 +115,12 @@ delivery profile и ADR-0008/ADR-0009
 - Personal, group и community-wiki — сценарии одного Space, а не значения
   фиксированного `space_type`. Будущая anonymous web-publication остаётся
   отдельной моделью и не заменяет visibility прототипа.
-- Базовый прототип создаёт UTF-8 Markdown content в OKF 0.2 и принятый
-  raster/PDF/ZIP `BundleFile`. Release 0.1 дополнительно принимает, но ещё не
-  реализует, resumable import отдельных UTF-8 Markdown files по
-  `plan → reserve → stage → validate → commit → finalize`; partial HEAD
-  запрещён. ZIP/archive, binary, OCR, remote-sync и legacy 0.1 import не входят
-  в scope. Codec сохраняет неизвестные OKF types/fields при чтении, изменении и
-  export; legacy migration потребует отдельной policy без silent version/status
+- Release 0.1 создаёт UTF-8 Markdown content в OKF 0.2 и проверяет Codex-first
+  workflow на небольшом детерминированном dataset. Принятые `BundleFile`,
+  Brain-scale storage/import/export и universal file ingress сохраняются как
+  post-MVP contracts и implementation graph, но не блокируют 0.1. Codec
+  сохраняет неизвестные OKF types/fields при чтении, изменении и export;
+  legacy migration потребует отдельной policy без silent version/status
   reinterpretation.
 - Полнотекстовые, векторные и графовые индексы всегда производны и должны
   перестраиваться из выбранной канонической ревизии.

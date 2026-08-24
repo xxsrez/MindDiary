@@ -1,6 +1,6 @@
 # Профиль `ship-work-release` для Mind Diary
 
-Статус: accepted project configuration, revision 3, 2026-08-24.
+Статус: accepted project configuration, revision 4, 2026-08-24.
 
 Документ задаёт project-specific параметры Mind Diary по
 [provider-neutral profile contract](../specs/ship-work-release-project-profile.md).
@@ -9,27 +9,32 @@
 в [operator runbook](ship-work-release.md), а текущая Task Manager mapping — в
 [adapter specification](../specs/ship-work-release-task-manager-srez.md).
 
-Release 0.1 scope includes the accepted MD-271 [file-ingress contract](../specs/file-ingress.md)
-and its `FI0-Contract` traceability row. Current candidate capability includes
-local `session_attachment`, bounded-inline and server-generated streaming
-code/tests, plus MD-272's repository-local companion for explicit `local_path`,
-`workspace/generated_artifact` and bounded local bytes. These are local evidence
-only; MD-250 native-client UAT and hosted upload-intent/producer evidence remain
-pending, while connector rows are contract-only. No UAT smoke row or deployment
-claim may be inferred for an unimplemented hosted source adapter.
+По [ADR-0019](../decisions/0019-release-0-1-codex-first-small-data-boundary.md)
+Release 0.1 является Codex-first Markdown/OKF 0.2 small-data slice. BundleFile,
+Brain-scale storage/import/export, universal file ingress, Google Drive/provider
+adapters и их hosted canaries сохраняются как post-MVP graph, но не включаются
+в batch release capability set и не активируют `dev.changed-surface` или
+`uat.changed-surface`. Их code/tests могут присутствовать в exact candidate;
+это не является hosted support claim и не блокирует terminal 0.1.
 
-Revision 3 добавляет required `uat.operator-directory-canary`: exact-candidate
+Revision 4 сохраняет terminal `uat.operator-directory-canary`: exact-candidate
 three-actor read-only probe с environment-only credential references и
 redacted receipt. Account/audience/allowlist setup, provider privacy read-back
 и external cleanup остаются отдельными explicit-authority prerequisites и не
-выполняются runner-ом.
+выполняются runner-ом. Final handoff дополнительно требует assertion о fresh
+real Marketplace/Codex first-user flow: install, read-first OAuth, explicit
+write step-up, singleton writable Mind, Markdown write/history/export и revoke
+на exact deployment. Synthetic automation остаётся отдельным blocking gate и
+не заменяет этот receipt. Оба terminal outcome собираются после interim UAT
+cut; поэтому они не входят в ordinary `uat.smoke_rows` и не блокируют deploy,
+на котором MD-244/MD-299 получают evidence.
 
 ## Canonical profile
 
 ~~~yaml
 schema: ship-work-release/project-profile/v1
 profile_id: mind-diary
-profile_revision: 3
+profile_revision: 4
 
 context:
   schema: ship-work-release/context-bindings/v1
@@ -518,7 +523,6 @@ uat:
     - uat.mind-bindings
     - uat.changed-surface
     - uat.multi-principal
-    - uat.oauth-direct-plugin-canary
 
 production:
   configured: false
@@ -1061,27 +1065,6 @@ evidence:
         max_bytes: 1048576
         required_fields: [status, candidate_sha, deployment_id, actor_source, run_fingerprint, actors, assertions, observed_at_utc, artifact_sha256]
       redaction_policy: release-evidence-default
-    - id: uat.oauth-direct-plugin-canary
-      stage: uat
-      requirement: informational
-      when: { always: true }
-      probe:
-        kind: runtime_capability
-        capability: mind-diary/uat-oauth-direct-plugin-canary/v1
-        inputs:
-          scenario: { literal: real-external-codex-install-oauth-ui }
-          base_url: { literal: "https://mind-diary.example.invalid" }
-          deployment_id: { value_from: run.uat_deployment_id }
-          actor_source: { literal: explicit-test-principal-reference }
-          route: { literal: /api/mcp }
-      success: { path: /status, operator: eq, value: passed }
-      artifact:
-        schema: mind-diary/oauth-direct-plugin-canary-evidence/v1
-        media_type: application/json
-        storage: content-addressed-reference
-        max_bytes: 2097152
-        required_fields: [status, candidate_sha, deployment_id, plugin_version, client, client_version, assertions, artifact_sha256]
-      redaction_policy: release-evidence-default
     - id: rollback.authenticated-web-control
       stage: rollback
       requirement: required
@@ -1147,6 +1130,9 @@ evidence:
       probe:
         kind: receipt_assertion
         receipt_ids: [run.scope-uat-release]
+        required_assertion_ids:
+          - operator.three-principal-privacy-exact-deployment
+          - first-user.real-account-exact-deployment
         assertions:
           - { left: run.scope_completion, operator: eq, right: accepted }
       success: { path: /status, operator: eq, value: passed }
@@ -1307,12 +1293,14 @@ Compatibility, changed-surface и persistence-after-redeploy rows становя
 допустимо только при false condition; отсутствие required runtime capability
 или artifact является failure, а не основанием пропустить проверку.
 
-`uat.multi-principal` и `uat.oauth-direct-plugin-canary` — informational real-
-platform observations. Missing actor reference, unavailable external UI или
-failed canary сохраняются как non-passing observation и запрещают claim о
-проверенной canary surface, но не блокируют UAT cut 0.1. Они не удовлетворяют
-blocking dev rows и не переименовывают historical receipt schemas.
+`uat.multi-principal` остаётся informational real-platform observation.
+`uat.operator-directory-canary` выполняется в terminal evidence phase, а
+first-user receipt реализуется MD-299/MD-293 и join-ится через
+`handoff.scope-uat-accepted`. Missing actor, unavailable external UI или failed
+receipt блокируют terminal 0.1, но не interim UAT deploy, нужный для получения
+самого evidence. Они не подменяют blocking dev rows и не переименовывают
+historical receipt schemas.
 
-Automated UAT smoke оставляет owner observation в
-`pending-owner-observation`. Никакая evidence row не сохраняет token, cookie,
+Обычная owner observation не подменяет terminal first-user assertion. Никакая
+evidence row не сохраняет token, cookie,
 authorization header, private Mind content или raw response body.

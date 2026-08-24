@@ -1,6 +1,7 @@
 # Roadmap и стратегия проверки Mind Diary
 
-Статус: зафиксированная product direction владельца проекта, 2026-08-22.
+Статус: зафиксированная product direction владельца проекта, обновлено
+2026-08-24.
 Документ определяет последовательность проверки и развития продукта, но не
 является implementation specification, календарным обещанием или свидетельством
 реализованных функций.
@@ -13,12 +14,11 @@
 - Sites-only относится только к prod-like UAT текущего MVP;
 - внешний Codex через MCP — первая дешёвая пользовательская поверхность, а не
   единственный долгосрочный способ работы с Mind Diary;
-- bounded Markdown-only import принят как расширение Release 0.1 и реализован
-  локально; exact UAT gate ещё не пройден, а ZIP/binary/legacy imports и named
-  checkpoints остаются post-MVP;
-- bounded support non-Markdown files/assets теперь принят как Release 0.1
-  BundleFile slice; более широкие formats, processing и capacity tiers не
-  приняты.
+- bounded Markdown-only import, Brain-scale storage/export и universal file
+  ingress приняты и частично реализованы как post-MVP graph; они не блокируют
+  small-data Markdown Release 0.1;
+- bounded non-Markdown `BundleFile` contract и local implementation сохранены
+  для post-MVP; hosted support требует собственного exact evidence.
 
 Будущий product/market analysis обязан оценивать каждую фазу отдельно и не
 выдавать ограничения проверочного slice за окончательные границы продукта.
@@ -113,20 +113,21 @@ Provider selection, retrieval flow, citations, consent, billing, cost controls,
 write confirmation и точная роль MCP пока не выбраны и требуют отдельных
 specifications. Успех Codex-first MVP не заменяет отдельную проверку этой фазы.
 
-## Принятое расширение Release 0.1 и post-MVP функции
+## Принятый post-MVP graph
 
 ### Imports
 
-Для Release 0.1 принят первый productized profile: отдельные UTF-8 Markdown
-files проходят resumable `plan → reserve → stage → validate → commit`, а один
-exact HEAD CAS публикует одну revision или ничего. Paths, idempotency, quotas,
+Для post-MVP принят первый productized profile: отдельные UTF-8 Markdown files
+проходят resumable `plan → reserve → stage → validate → commit`, а один exact
+HEAD CAS публикует одну revision или ничего. Paths, idempotency, quotas,
 temporary lifecycle, delta storage и rollback зафиксированы в
 [Sites storage/capacity/import specification](specs/sites-storage-capacity-import.md)
 и [ADR-0016](decisions/0016-sites-storage-capacity-import.md). Local
 implementation использует durable checkpoints для staging, validation и
 canonical promotion; exact-SHA UAT capacity/import evidence ещё отсутствует.
-ZIP/binary import, legacy OKF 0.1, remote sync и cross-Mind merge остаются
-post-MVP decisions.
+Этот profile и его UAT не входят в terminal Release 0.1. ZIP/binary import,
+legacy OKF 0.1, remote sync и cross-Mind merge остаются отдельными post-MVP
+decisions.
 
 ### Named checkpoints
 
@@ -137,7 +138,7 @@ uniqueness, API и связь с export/share требуют отдельной 
 Checkpoint остаётся service metadata и не должен автоматически превращаться в
 OKF `tags` или изменять bundle.
 
-## Assets и другие non-Markdown files: первый slice принят
+## Assets и другие non-Markdown files: post-MVP slice принят
 
 [OKF 0.2](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md)
 не определяет нормативную сущность `Asset` и не задаёт общий binary manifest.
@@ -154,7 +155,7 @@ payload бывает не только binary:
 - SQL, Python, notebooks, executors и attesters;
 - любые неизвестные файлы, которые надо сохранить byte-for-byte для round-trip.
 
-Release 0.1 принимает bounded raster/PDF/ZIP slice: unified revision manifest,
+Post-MVP graph принимает bounded raster/PDF/ZIP slice: unified revision manifest,
 quarantined staging, exact digest/media/size, atomic Markdown+file commits,
 reauthorized download и отдельный deterministic mixed export. Type allowlist,
 числовые quotas, archive containment и compatibility закреплены в
@@ -163,8 +164,9 @@ reauthorized download и отдельный deterministic mixed export. Type all
 автоматически исполнять; ZIP не извлекается, а previews/OCR/transcription
 остаются будущими derived capabilities.
 
-Это решение не является productized import, general arbitrary-file support или
-production malware-cleanliness claim. Larger files/capacity, Office/audio/video,
+Этот slice не блокирует Markdown-first Release 0.1 и не является productized
+import, general arbitrary-file support или production malware-cleanliness
+claim. Larger files/capacity, Office/audio/video,
 resumable upload, antivirus/CDR и extraction требуют нового evidence и
 accepted contract.
 
@@ -179,8 +181,8 @@ accepted contract.
 - Оценивать Codex-first managed OKF wedge отдельно от будущего website AI.
 - Не считать начальную аудиторию экспертами по Git, deployment или OKF только
   потому, что они используют Codex.
-- Не считать отсутствие ZIP/binary/legacy imports и checkpoints в Release 0.1
-  отказом от них в roadmap.
+- Не считать отсутствие BundleFile, file ingress, Brain-scale/import и
+  checkpoints в Release 0.1 отказом от них в roadmap.
 - Не считать Sites-only UAT MVP долгосрочным отказом от AWS или выбором
   будущей production platform.
 - Не переносить сигнал ближнего круга на массовый рынок без внешней cohort.
@@ -189,9 +191,9 @@ accepted contract.
 ## Открытые решения
 
 - Какой один job-to-be-done должен определять успех первой Codex cohort?
-- Какие import formats идут после принятого Markdown-only profile?
+- Когда измеренный usage оправдывает продвижение принятого Markdown-only import?
 - Какая точная семантика named checkpoints?
-- Какие следующие BundleFile types, capacity tiers и processing capabilities
+- Какие BundleFile types, capacity tiers и processing capabilities
   подтверждаются usage после bounded raster/PDF/ZIP slice?
 - Какой usage/retention signal запускает AWS migration?
 - Как устроены website AI pricing, billing, provider routing и write safety?

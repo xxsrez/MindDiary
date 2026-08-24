@@ -13,6 +13,12 @@ contracts на существующих MCP endpoints: `get_file_ingress_capabil
 `reconcile_file_stage`, `reconcile_changeset`. Это не добавляет новый hosted
 endpoint или source transport.
 
+Release applicability: portable boundary остаётся accepted, но
+[ADR-0019](../decisions/0019-release-0-1-codex-first-small-data-boundary.md)
+переносит universal file-ingress capability в post-MVP. Все source-specific
+evidence rows остаются обязательными перед соответствующим support claim, но
+не блокируют Markdown-first Release 0.1.
+
 ## Цель и граница
 
 MD-271 фиксирует один portable application contract для шести способов
@@ -23,9 +29,9 @@ file path, object identity и revision semantics. Existing
 [Sites storage/capacity/import contract](sites-storage-capacity-import.md) остаются
 источниками точных manifest, quota, import и export rules.
 
-Требование пользователя: Release 0.1 должен уметь свести session attachment,
-local disk, workspace/generated artifact, authorized connector object,
-bounded in-memory bytes и server-generated output к одной проверяемой модели.
+Требование post-MVP graph: session attachment, local disk,
+workspace/generated artifact, authorized connector object, bounded in-memory
+bytes и server-generated output должны сводиться к одной проверяемой модели.
 Это требование не означает, что каждый adapter уже существует или что текущий
 MCP client умеет передать каждый вид source.
 
@@ -200,8 +206,9 @@ modern `2026-07-28` and isolated compatibility `2025-11-25` adapters may
 advertise the native `file` parameter for a write-capable credential, with
 `_meta["openai/fileParams"] = ["file"]`. The local schema and transport tests
 prove only the repository candidate. Exact client/profile support remains a
-blocking MD-250 UAT row; a missing native capability is a non-passing result,
-not an automatic switch to another source.
+blocking MD-250 UAT row for the post-MVP BundleFile capability; a missing
+native capability is a non-passing support result, not an automatic switch to
+another source and not a blocker for Markdown-first Release 0.1.
 
 Read-only credentials do not gain staging by seeing the tool definition. The
 server checks token scope, current write binding, current ACL and exact Mind

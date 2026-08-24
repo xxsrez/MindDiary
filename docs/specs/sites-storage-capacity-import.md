@@ -1,8 +1,10 @@
 # Sites storage, capacity и Markdown import
 
 Статус: accepted, 2026-08-22. `normative_status: accepted`;
-`implementation_status: implemented_local_uat_pending`. Это Sites-only contract для Brain-scale
-storage/import в Release 0.1. MD-265 реализует в текущем repository candidate
+`implementation_status: implemented_local_uat_pending`. Это Sites-only contract
+для post-MVP Brain-scale storage/import. Его технические invariants сохраняются,
+но [ADR-0019](../decisions/0019-release-0-1-codex-first-small-data-boundary.md)
+убирает capability из terminal Release 0.1. MD-265 реализует в текущем repository candidate
 Space-scoped content objects, separately digested v3 manifests, delta-aware
 commit/read/GC и совместимое чтение legacy v1/v2 revisions. Reconstructable
 accounting, durable reservations, admission для commit/stage/export, fairness,
@@ -383,7 +385,7 @@ import jobs and preserves bytes/state; it never rewrites history or deletes v3
 objects. Backfill failures quarantine only the affected Space for growth and
 remain resumable.
 
-Task sequence is normative: MD-264 contract -> MD-265 delta manifests/commit ->
+Post-MVP task sequence is normative: MD-264 contract -> MD-265 delta manifests/commit ->
 MD-266 accounting/admission; MD-268 streaming export/cleanup depends on
 MD-265; MD-267 import depends on MD-266 and MD-268 plus its existing search/
 MCP prerequisites. MD-260 closes only after those children and exact UAT
@@ -413,8 +415,10 @@ corpus, deterministic manifests, v1/v2 compatibility, CAS/idempotency races,
 shared-digest accounting, reservation failure before/after HEAD, reconcile,
 bounded GC/export and import interrupt/resume/cancel/conflict.
 
-UAT evidence must join exact Git SHA, Sites version/deployment and large private
+UAT evidence для продвижения этого post-MVP slice must join exact Git SHA,
+Sites version/deployment and large private
 fixture fingerprints; show D1/R2 usage/headroom without content; prove small
 delta, restart/redeploy persistence, quota warning/soft/hard behavior, bounded
 memory/latency, import resume and final exact search/fetch. Local tests or a
-deployment alone are not UAT acceptance.
+deployment alone are not UAT acceptance. Эти rows не входят в final receipt
+Release 0.1.

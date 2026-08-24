@@ -42,15 +42,15 @@ evidence, предлагаемый дизайн и ещё не проверен�
 13. [Traceability matrix MVP 0.1](specs/traceability.md) — критерии 1–29,
    owning stories, executable/release evidence, обязательные live flows,
    post-MVP denylist и implementation decisions.
-14. [BundleFile](specs/bundle-files.md) — принятый producer-defined contract
+14. [BundleFile](specs/bundle-files.md) — принятый post-MVP producer-defined contract
    versioned attachments: manifest v2, exact type/limit/staging/download rules,
    mixed atomic commits и отдельный deterministic export profile.
-15. [Единый file-ingress contract](specs/file-ingress.md) — принятый portable
+15. [Единый file-ingress contract](specs/file-ingress.md) — принятый post-MVP portable
    boundary и capability matrix для session attachment, local/workspace,
    connector, bounded in-memory и server-generated sources; implementation
    status каждой source явно отделён от contract.
 16. [Sites storage, capacity и Markdown import](specs/sites-storage-capacity-import.md)
-   — принятый Brain-scale contract: Space-scoped content addressing, v3 delta
+   — принятый post-MVP Brain-scale contract: Space-scoped content addressing, v3 delta
    manifests, reconstructable accounting/reservations, bounded Markdown import,
    streaming export/GC и migration/rollback boundary.
 17. [Операторский каталог principals и последняя активность](specs/service-operator-directory.md)
@@ -172,10 +172,10 @@ evidence, предлагаемый дизайн и ещё не проверен�
   — принят default-off per-credential policy, pin к exact write generation,
   private/same-target initial profile и additive-only capture tool.
 - [ADR-0015: versioned BundleFile](decisions/0015-versioned-bundle-files.md) —
-  приняты unified manifest v2, adapter-only native file transport, bounded
+  приняты post-MVP unified manifest v2, adapter-only native file transport, bounded
   quarantined staging и отдельный `MD-BUNDLE-ZIP-1` без изменения OKF 0.2.
 - [ADR-0016: Sites storage, capacity и Markdown import](decisions/0016-sites-storage-capacity-import.md)
-  — приняты Space-scoped R2 objects/manifests, D1 HEAD/ledger/reservations,
+  — приняты post-MVP Space-scoped R2 objects/manifests, D1 HEAD/ledger/reservations,
   delta commits, bounded Markdown import и v3-aware rollback floor.
 - [ADR-0017: read-only service-operator directory](decisions/0017-service-operator-directory.md)
   — приняты отдельная constructor-only operator allowlist, compact success-only
@@ -183,7 +183,10 @@ evidence, предлагаемый дизайн и ещё не проверен�
 - [ADR-0018: единый file-ingress contract](decisions/0018-file-ingress-contract-and-source-capability-matrix.md)
   — приняты portable staged-ref boundary, шесть source kinds, explicit
   capability negotiation, atomic multi-ref semantics и запрет silent fallback;
-  implementation остаётся source-specific.
+  implementation остаётся source-specific; terminal 0.1 scope заменён ADR-0019.
+- [ADR-0019: Release 0.1 — Codex-first Markdown и small-data boundary](decisions/0019-release-0-1-codex-first-small-data-boundary.md)
+  — terminal 0.1 возвращён к Markdown/OKF 0.2 first-user workflow;
+  BundleFile, Brain-scale/import и universal ingress сохранены как post-MVP.
 
 ## Исследования
 

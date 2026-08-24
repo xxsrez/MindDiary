@@ -1,24 +1,24 @@
 # Архитектура Mind Diary
 
-Статус: proposal, обновлено 2026-08-22. Product Site components, adapters,
+Статус: proposal, обновлено 2026-08-24. Product Site components, adapters,
 route migration и isolated Codex bridge реализованы и развёрнуты как
 single-principal UAT в OpenAI Sites. Authenticated web/control,
 persistence-after-redeploy,
 raw modern discovery и оба профиля `codex-cli 0.147.0` проверены live. OAuth
 adapter реализован в repository candidate. Для Codex Desktop/CLI pilot 0.1
 принят direct MCP package с OAuth при первом использовании; fresh external-
-account install/OAuth lifecycle остаётся informational canary. Blocking release
-evidence теперь дают отдельные synthetic multi-principal и automated
-OAuth/package gates по ADR-0012; оба harness реализованы. Fresh external
-Codex/Desktop OAuth UI остаётся informational canary, а не blocking evidence.
+account install/OAuth lifecycle остаётся непроверенным на final candidate.
+Synthetic multi-principal и automated OAuth/package gates по ADR-0012 остаются
+blocking, а ADR-0019 дополнительно требует один blocking real-account
+first-user UAT receipt.
 
-ADR-0015 принимает Release 0.1 architecture для versioned `BundleFile`, но её
+ADR-0015 сохраняет post-MVP architecture для versioned `BundleFile`; её
 core уже реализован и развёрнут в UAT. Native MCP ingress, exact-revision
 list/download, Markdown references и dual export реализованы в local candidate;
 real-client native-file UAT gate ещё не является подтверждённым свойством
 deployed candidate.
 
-ADR-0016 принимает следующую Sites storage boundary для Release 0.1:
+ADR-0016 сохраняет следующую post-MVP Sites storage boundary:
 Space-scoped R2 objects + separately digested v3 manifests, D1 HEAD/reachability/
 ledger/reservations, delta-aware commits и bounded Markdown import. MD-265
 реализует Space-scoped objects/manifests, delta-aware commit/read/GC и legacy
@@ -28,9 +28,9 @@ durable reservations, admission/fairness, cleanup и privacy-safe usage surfaces
 streaming deterministic export/download и D1-checkpointed bounded R2 cleanup;
 MD-267 реализует в local candidate resumable Sites UI/REST Markdown import с
 durable stage/validation/promotion checkpoints и одним exact HEAD CAS. UAT
-evidence для всего extension отсутствует.
+evidence для всего extension отсутствует, но не блокирует Release 0.1.
 
-MD-271 принимает единый [file-ingress contract](specs/file-ingress.md) поверх
+MD-271 принимает единый post-MVP [file-ingress contract](specs/file-ingress.md) поверх
 этой BundleFile boundary. Шесть source kinds проходят через adapter-owned
 transport и application-owned byte verification. В текущем candidate
 `session_attachment`, bounded-inline и server-generated stream имеют local
@@ -47,8 +47,8 @@ implementation; MD-272 добавляет repository-local companion для `loc
 - ordinary Minds с single Owner, invitations, roles и visibility;
 - user-scoped MCP для Codex без загрузки всего corpus; другие clients, включая
   Claude Code, требуют отдельного adapter/client conformance evidence;
-- individual-file UTF-8 Markdown и bounded opaque BundleFile access с
-  versioned deterministic exports;
+- individual-file UTF-8 Markdown/OKF 0.2 access и deterministic export в 0.1;
+- bounded opaque BundleFile access остаётся post-MVP capability;
 - immediate multi-file commits с immutable history и optimistic concurrency;
 - public/unlisted live-HEAD reads только для authenticated users;
 - Sites-only MVP UAT и post-MVP AWS portability без AWS SDK в domain
@@ -107,8 +107,8 @@ SpaceRevision --materialize---------> OKFBundle
 ```
 
 `KnowledgeSpace` — service aggregate и access boundary. Markdown остаётся OKF
-projection, а accepted manifest v2 связывает с той же revision opaque
-`BundleFile` exact bytes. Account, handle, ACL, invitations, tokens, staging,
+projection. Accepted post-MVP manifest v2 может связывать с той же revision
+opaque `BundleFile` exact bytes. Account, handle, ACL, invitations, tokens, staging,
 download grants, idempotency results, audit и indexes — service metadata.
 
 Personal Mind использует тот же content/revision schema, но application commands
@@ -127,12 +127,13 @@ frontmatter, provenance, trust/lifecycle fields и validation. Он:
 - разделяет conformance errors и quality warnings;
 - не знает об MCP, HTTP, auth, Sites, AWS SDK, SQL или search engine.
 
-ZIP/local bundle import и legacy 0.1 migration не входят в этот slice.
-Producer-defined raster/PDF/ZIP transport принят отдельно в
+BundleFile, ZIP/local bundle import и legacy 0.1 migration не входят в terminal
+Release 0.1. Producer-defined raster/PDF/ZIP transport принят отдельно в
 [BundleFile specification](specs/bundle-files.md); ZIP остаётся opaque и не
-является import. Отдельный Markdown-only file import теперь принят в
+является import. Отдельный Markdown-only file import принят в
 [storage/capacity/import contract](specs/sites-storage-capacity-import.md), но
-реализован только в local candidate и ещё не доказан на exact UAT deployment.
+относится к post-MVP, реализован только в local candidate и ещё не доказан на
+exact UAT deployment.
 Будущий legacy reader обязан получить explicit migration policy
 и не может silently менять version/status semantics.
 
@@ -147,13 +148,13 @@ ports:
 - visibility и public catalog;
 - token issue/revoke/authenticate;
 - export/validate revision;
-- browse/search/fetch/history и list/download exact-revision BundleFile;
-- bounded verified file staging pinned к exact write binding;
+- browse/search/fetch/history Markdown exact revision;
+- post-MVP list/download exact-revision BundleFile и bounded verified staging;
 - atomic `commit_changeset`;
 - future-proposal bounded PersonalContext/SpaceLanding;
 - outbox/index jobs и audit.
 
-Core Release 0.1 зависит от `MetadataStore`, arbitrary-byte `ObjectStore`, `SearchIndex`,
+Core Release 0.1 зависит от `MetadataStore`, `ObjectStore`, `SearchIndex`,
 `Authorizer`, `TokenHasher`, `AuditSink` и `Clock`, но не от concrete adapters.
 Если post-prototype personalization будет принята, она подключит отдельный
 узкий `PersonalContextProvider` port.
@@ -374,7 +375,8 @@ active lifecycle и scope, затем вызывает тот же `MindBindingA
 заканчивается server-rendered read-back. OAuth bearer не даёт
 membership/account control plane. Direct UAT package использует
 `AVAILABLE + ON_USE`; blocking protocol/package/transport automation отделена
-от informational fresh external-account canary.
+от отдельного blocking fresh external-account first-user receipt на exact UAT
+candidate по ADR-0019.
 Production issuer/resource, ChatGPT Web connector и public directory остаются
 нерешённой release boundary. Server-side профиль
 зафиксирован в [ADR-0010](decisions/0010-oauth-marketplace-connector.md), а
@@ -396,8 +398,8 @@ PKCE, exact
 redirect/resource/state, token/refresh lifecycle, authorization mirror,
 current ACL/CAS и MCP transport проходят normal product contracts. Ни OAuth
 client, ни request fields не выбирают synthetic actor; password grant и admin
-token mint отсутствуют. Real external Codex/Desktop OAuth UI остаётся
-informational canary, а не release gate 0.1.
+token mint отсутствуют. Real external Codex/Desktop first-user OAuth UI теперь
+является отдельным blocking release gate 0.1 по ADR-0019.
 
 ## Mind identity, `/me` и visibility
 
@@ -685,7 +687,7 @@ explicit target Mind. General cross-Mind search/synthesis требует нов�
   candidates, содержащие все bounded normalized terms; application повторно
   сверяет candidate bytes/path с immutable manifest и выполняет ranking. Storage
   metrics считают unique source/lexical bytes отдельно от revision memberships.
-- Принятый replacement layout после MD-265 выносит Space-scoped canonical
+- Принятый post-MVP replacement layout после MD-265 выносит Space-scoped canonical
   content and manifest v3 bytes в R2; D1 хранит only exact refs, HEAD,
   reachability, usage/reservations and bounded derived metadata. Small commit
   reads parent manifest plus touched bytes and writes delta + one manifest.
@@ -713,10 +715,9 @@ explicit target Mind. General cross-Mind search/synthesis требует нов�
 - Sites — текущая UAT platform MVP и подтверждённый host web/admin UI с Sign in
   with ChatGPT.
 - UAT Site использует D1/R2 bindings; их live availability и
-  persistence-after-redeploy проверены. Accepted Brain-scale quota,
-  reservation/admission и bounded export/cleanup реализованы локально; import
-  остаётся нереализованным, а весь extension требует own exact-candidate UAT
-  evidence.
+  persistence-after-redeploy проверены. Accepted post-MVP Brain-scale quota,
+  reservation/admission, import и bounded export/cleanup имеют отдельный local
+  implementation/evidence lifecycle; он не входит в terminal UAT receipt 0.1.
 - Streamable HTTP MCP реализован в том же Worker по non-reserved paths;
   Sites proxy/runtime compatibility подтверждена raw modern и реальными Codex
   flows.

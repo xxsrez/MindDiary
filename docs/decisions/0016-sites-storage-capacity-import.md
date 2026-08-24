@@ -1,7 +1,11 @@
 # ADR-0016: Sites storage, capacity и Markdown import
 
-Статус: accepted, 2026-08-22. Решение относится к Release 0.1 and Sites UAT;
-implementation and live evidence остаются отдельными задачами MD-265–MD-268.
+Статус: accepted technical contract, 2026-08-22. Его storage, capacity,
+import, privacy и rollback invariants сохраняются, но включение этой capability
+в terminal Release 0.1 частично заменено
+[ADR-0019](0019-release-0-1-codex-first-small-data-boundary.md): Brain-scale
+slice относится к post-MVP и не блокирует Markdown-first 0.1. Implementation и
+live evidence остаются отдельными задачами MD-265–MD-268.
 
 ## Контекст
 

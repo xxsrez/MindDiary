@@ -21,7 +21,7 @@ test("Mind Diary delivery profile resolves the current Task Manager scope", asyn
   const profile = await loadProfile();
   const taskManagement = profile.task_management;
 
-  assert.equal(profile.profile_revision, 3);
+  assert.equal(profile.profile_revision, 4);
   assert.equal(taskManagement.adapter.id, "task-manager");
   assert.equal(
     taskManagement.adapter.specification,
@@ -39,4 +39,18 @@ test("Mind Diary delivery profile resolves the current Task Manager scope", asyn
   );
   assert.equal(taskManagement.scope_fact_projection.mode, "unavailable");
   assert.doesNotMatch(JSON.stringify(taskManagement), /\blinear\b/iu);
+  assert.equal(profile.uat.smoke_rows.includes("uat.operator-directory-canary"), false);
+  assert.equal(profile.uat.smoke_rows.includes("uat.first-user"), false);
+  const rowIds = profile.evidence.rows.map(({ id }) => id);
+  assert.equal(rowIds.includes("uat.oauth-direct-plugin-canary"), false);
+  assert.equal(rowIds.includes("uat.first-user"), false);
+  assert.deepEqual(
+    rowIds.filter((id) => /bundle|ingress|capacity|connector|generated/u.test(id)),
+    [],
+  );
+  const handoff = profile.evidence.rows.find(({ id }) => id === "handoff.scope-uat-accepted");
+  assert.deepEqual(handoff.probe.required_assertion_ids, [
+    "operator.three-principal-privacy-exact-deployment",
+    "first-user.real-account-exact-deployment",
+  ]);
 });

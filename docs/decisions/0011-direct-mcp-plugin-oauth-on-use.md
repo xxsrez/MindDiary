@@ -5,8 +5,10 @@
 релиза 0.1. Server-side OAuth и security boundaries ADR-0010 сохраняются.
 Validation carrier fresh external account уточнён
 [ADR-0012](0012-synthetic-principal-release-gates.md): blocking стала
-automated package/OAuth/transport matrix, а real external Desktop UI —
-informational canary.
+automated package/OAuth/transport matrix. Validation classification real
+external Desktop flow уточнена
+[ADR-0019](0019-release-0-1-codex-first-small-data-boundary.md): один final
+first-user UAT receipt теперь blocking.
 
 ## Контекст
 
@@ -52,9 +54,10 @@ OAuth непосредственно при первом обращении к M
   evidence наряду с MindDiary SHA и Sites deployment.
 - Blocking automated acceptance обязана раздельно доказать install-before-
   OAuth, first-use OAuth, skill/tool discovery в fresh temporary context,
-  bounded read и revoke/reconnect. Real external-account flow сохраняет эти
-  наблюдения как informational UX canary. Install success сам по себе не
-  доказывает OAuth lifecycle.
+  bounded read и revoke/reconnect. Real external-account first-user flow
+  дополнительно доказывает host/UI lifecycle на exact UAT candidate и входит в
+  terminal receipt 0.1. Install success сам по себе не доказывает OAuth
+  lifecycle.
 - Write smoke допустим только в явно выбранном UAT test Mind с
   `content:write`, fresh `expected_revision`, idempotency и отдельным
   подтверждением тестового изменения.

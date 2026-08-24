@@ -59,6 +59,11 @@ fallback.
   Поэтому scope fact projection имеет режим `unavailable`: нельзя имитировать
   project update, подменять его комментариями на произвольной задаче или
   объявлять terminal projection без task-level evidence.
+- Project/Release descriptions также не имеют supported mutation surface.
+  Поэтому их historical AND/Linear или superseded release-scope narrative
+  считается non-authoritative. Current scope задают exact Release composition,
+  relations, accepted repository contracts и fresh task read-back; stale
+  description не является blocker и не может расширить authority.
 - Delivery semantics, Goal policy, writer lanes, release boundary и deploy
   authority остаются в `ship-work-release`; adapter не выбирает их сам.
 

@@ -1,19 +1,18 @@
 # REST и MCP API Mind Diary
 
-Статус: proposal для верификации, обновлено 2026-08-22. Документ уточняет
+Статус: proposal для верификации, обновлено 2026-08-24. Документ уточняет
 wire-level контракты первого прототипа на основе принятых product decisions.
 Product API и direct MCP route/compatibility repair реализованы, развёрнуты как
 single-principal UAT в OpenAI Sites и проверены raw modern calls и реальным
 `codex-cli 0.147.0` на обоих profiles. OAuth server/client surface реализована в
 repository candidate. Для Codex Desktop/CLI pilot 0.1 принят direct MCP package
-с OAuth при первом использовании; fresh external-account lifecycle ещё не
-является blocking release evidence и остаётся informational canary. Blocking
-multi-principal и OAuth/package automation принята ADR-0012, но её harness
-implementation теперь завершена. Machine-readable OpenAPI и MCP JSON Schemas
+с OAuth при первом использовании. Synthetic multi-principal и OAuth/package
+automation остаются blocking; ADR-0019 дополнительно требует blocking
+real-account first-user UAT receipt. Machine-readable OpenAPI и MCP JSON Schemas
 проверяются на соответствие этому документу и реализации.
 
-ADR-0015 и [BundleFile specification](bundle-files.md) добавляют accepted
-Release 0.1 wire contract; его implementation/live UAT status остаётся
+ADR-0015 и [BundleFile specification](bundle-files.md) сохраняют accepted
+post-MVP wire contract; его implementation/live UAT status остаётся
 `read_export_implemented_local` после MD-247–MD-249: native MCP staging, mixed
 commit, exact-revision list/download, Markdown references и deterministic dual
 export реализованы и покрыты local conformance/integration tests. Real-client
@@ -22,14 +21,14 @@ exact-SHA UAT остаётся MD-250. Поэтому deployed claims пока �
 
 ADR-0016 and
 [Sites storage/capacity/import specification](sites-storage-capacity-import.md)
-принимают следующую application/wire boundary для usage, reservations and
+сохраняют post-MVP application/wire boundary для usage, reservations and
 Markdown import. MD-265/MD-266/MD-268 storage, capacity и streaming
 export/cleanup реализованы в local candidate; MD-267 import session APIs и
 Sites UI также реализованы локально, а прежний UAT deployment не является
 evidence нового candidate.
 
 ADR-0018 and [the unified file-ingress specification](file-ingress.md) define
-the portable source boundary for `session_attachment`, `local_path`,
+the post-MVP portable source boundary for `session_attachment`, `local_path`,
 `workspace/generated_artifact`, `connector_object`, `bounded_in_memory` and
 `server_generated`. Native `session_attachment`, bounded inline and local
 server-generated streaming are implemented locally; MD-272 also implements the
@@ -42,7 +41,8 @@ upload-intent/producer evidence remain MD-250/downstream gates; provider
 connector bindings remain unavailable even though their provider-neutral
 authorized-reader/staging boundary is implemented locally.
 No source may be inferred as hosted capability or used as a silent
-base64/URL/path fallback.
+base64/URL/path fallback. Ни одна из этих file/scale rows не блокирует
+Markdown-first Release 0.1 по ADR-0019.
 
 ## Назначение и граница
 
@@ -2585,7 +2585,7 @@ authentication не раскрывает existence/metadata.
 22. Product Site binding UI разделяет ACL и selection, redacts inaccessible
     target metadata, требует CSRF + exact credential ownership + binding CAS,
     перечитывает server state после success и fail closed после revoke.
-23. Manifest v1 compatibility/v2 canonicalization and exact historical opaque
+23. Post-MVP manifest v1 compatibility/v2 canonicalization and exact historical opaque
     bytes after replace/delete.
 24. Native file metadata, provider-host/redirect/stream limits, type sniff,
     filename/MIME spoof, stage ownership/TTL/quota/idempotency and privacy
@@ -2594,8 +2594,11 @@ authentication не раскрывает existence/metadata.
     not consume ref or expose partial object.
 26. List/download exact revision, one-use grant, safe inline/attachment headers
     and revoke/private/delete/expiry failures without metadata leakage.
-27. Byte-for-byte `MD-BUNDLE-ZIP-1` plus unchanged `MD-OKF-ZIP-1`, and real
+27. Post-MVP byte-for-byte `MD-BUNDLE-ZIP-1` plus unchanged `MD-OKF-ZIP-1`, and real
     pinned Codex native image/PDF/ZIP workflow on exact UAT deployment/profile.
+
+Rows 23–27 в этом file extension являются conformance contract для отдельного
+post-MVP promotion и не входят в terminal acceptance Release 0.1.
 
 Claude Code и любой другой client получают отдельный adapter/client conformance
 profile до заявления поддержки.
@@ -2622,8 +2625,7 @@ Route reachability, Bearer forwarding и default/modern Codex profiles уже
 - manual identity recovery workflow;
 - exact Marketplace plugin version/cache snapshot для blocking automated
   package/protocol gate; real external UAT install-before-OAuth/read/write-
-  step-up/revoke/reconnect остаётся informational canary и требуется только
-  для claim о проверенном external-host UX;
+  step-up/revoke/reconnect является отдельным blocking first-user receipt;
 - отдельный future ChatGPT Web connector/app profile после OpenAI verification,
   если он потребуется;
 - production OAuth issuer/resource, client migration и public directory policy

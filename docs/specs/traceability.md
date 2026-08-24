@@ -1,6 +1,6 @@
 # Traceability matrix MVP 0.1
 
-Статус: executable baseline, обновлено 2026-08-22. Документ связывает
+Статус: executable baseline, обновлено 2026-08-24. Документ связывает
 принятые критерии готовности с реализацией и обязательным evidence. Product Site
 развёрнут как single-principal UAT в OpenAI Sites; базовые web/persistence и оба
 Codex MCP profiles прошли live, но это не закрывает автоматически каждый
@@ -40,11 +40,11 @@ flows или финальный join-gate.
 | P9-Synthetic | Blocking multi-principal boundary доказывает normal bootstrap/current access минимум двумя ordinary principals через test-only trusted identity composition без human credentials, storage seed, product login surface или ACL bypass. | `MD-237` | `npm run gate:synthetic-multi-principal -- --candidate-sha <exact-HEAD-sha> --evidence-out <private-temp-path>/evidence.json`; `tests/integration/synthetic-multi-principal-probe.test.mjs`, `tests/conformance/synthetic-principal-packaging.test.mjs`, `npm run check:product-site`; distinct account/Personal Mind/token, private isolation, public/unlisted baseline, invite Reader → Editor, ownership transfer, reconstructed-runtime persistence, immediate Web/MCP/history revoke, normal cleanup и production-negative import/config check; `mind-diary/synthetic-multi-principal-evidence/v1` | Synthetic artifact exact candidate SHA; capability unavailable/failed блокирует release |
 | P9-Browser | Blocking server-bound browser composition повторяет normal Product Site bootstrap, real UI/API route matrix, direct negative API checks, operator UI/API boundary, restart persistence, revoke и cleanup минимум для двух ordinary principals. | `MD-276` / `MD-277` / `MD-278` / `MD-279` | `npm run gate:synthetic-browser -- --candidate-sha <exact-HEAD-sha> --evidence-out <private-temp-path>/evidence.json`; `tests/integration/synthetic-browser-gate.test.mjs`, `tests/conformance/synthetic-browser-gate.test.mjs`; `synthetic-browser-gate-runbook.md`; `mind-diary/synthetic-browser-evidence/v1` | Local exact-SHA receipt is blocking; no hosted browser claim, Sites canary remains informational |
 | P9-Sites-Canary | Два real platform-authenticated Sites principals повторяют collaboration/redeploy/revoke flow без shared credentials. | `MD-158` | existing `scripts/run-uat-multi-principal-probe.mjs` и conformance redaction suite | informational `mind-diary/multi-principal-evidence/v1`; отсутствие/failure не блокирует 0.1 и не подменяет P9-Synthetic |
-| O1-Automated | Blocking direct-plugin gate доказывает `AVAILABLE + ON_USE`, отсутствие private app, fresh temporary skill/tool discovery, OAuth DCR/PKCE/read/write-step-up/expiry/refresh/reuse/revoke/reconnect, modern/compatibility MCP и personal-token regression. | `MD-238` | `npm run gate:oauth-direct-plugin -- --candidate-sha <exact-HEAD-sha> --evidence-out <private-temp-path>/evidence.json`; actual `codex-cli 0.149.0` marketplace add/list/install, non-model `debug prompt-input` model-visible skill assertion и MCP resolution, strict fake D1 OAuth state machine, composed Product Site runtime и conformance receipt/redaction tests; synthetic identity только в trusted authorize/consent seam | Automated exact MindDiary/Marketplace HEAD/tree/package receipt; unavailable/failed capability блокирует release, external Desktop UI остаётся informational |
-| O1-External-Canary | Real external Marketplace/Codex account проходит install-before-OAuth и UI lifecycle на exact UAT candidate. | `MD-227` | owner-operated external host/session | informational canary; нужен для external-host UX claim, но не блокирует 0.1 |
+| O1-Automated | Blocking direct-plugin gate доказывает `AVAILABLE + ON_USE`, отсутствие private app, fresh temporary skill/tool discovery, OAuth DCR/PKCE/read/write-step-up/expiry/refresh/reuse/revoke/reconnect, modern/compatibility MCP и personal-token regression. | `MD-238` | `npm run gate:oauth-direct-plugin -- --candidate-sha <exact-HEAD-sha> --evidence-out <private-temp-path>/evidence.json`; actual `codex-cli 0.149.0` marketplace add/list/install, non-model `debug prompt-input` model-visible skill assertion и MCP resolution, strict fake D1 OAuth state machine, composed Product Site runtime и conformance receipt/redaction tests; synthetic identity только в trusted authorize/consent seam | Automated exact MindDiary/Marketplace HEAD/tree/package receipt; unavailable/failed capability блокирует release и не подменяет O1-FirstUser |
+| O1-FirstUser | Fresh real Marketplace/Codex account проходит install-before-OAuth, read-first use, write step-up, singleton writable Mind, write/history/export и revoke на exact UAT candidate. | `MD-293` | real-account first-user runner + browser/client receipt без raw identity/credentials/content | blocking exact-candidate/deployment receipt; synthetic automation остаётся отдельным prerequisite, но не заменяет этот flow |
 | P10a | Privacy-safe UAT operations показывают participant data/SLA/export/delete/credential boundaries до старта, подключают deployable closed-schema telemetry без corpus/query/email/credential/URL, дают bounded auth/MCP/storage diagnostics, exact rollback и emergency token/audience revoke path; deterministic export/restore drill выполняется на non-sensitive fixture corpus. | `AND-159` | Sites telemetry sink rejection/redaction tests, composed runtime metrics, fixture restore/export drill, participant UI contract и `operations/uat-pilot-operations.md` | `AND-161`: exact-candidate safe-log sample, rollback target и redacted operational smoke |
 | P10b | Pilot protocol определяет assisted → external cohorts, один owner/channel, consent-aware сценарии и cadence, privacy-safe activation/return/friction/intent definitions, separated feedback template, sampling bias, safety stop, go/no-go/inconclusive review и linked offboarding без product analytics expansion. | `AND-160` | [`operations/uat-pilot-protocol.md`](../operations/uat-pilot-protocol.md) + docs topology/link validation + closed telemetry contract из `AND-159` | `AND-161` join-gate; actual four-week cohort results не являются release evidence 0.1 |
-| P11 | Один exact candidate проходит canonical gate, blocking P9-Synthetic/O1 automation и required single-owner Web/persistence/MCP UAT rows одного deployment. | `MD-161` | canonical repository gate exact SHA + executable MD-237 synthetic receipt + MD-238 automated receipt после реализации | existing `W`, `P`, `MI`, `CX`, `R` exact-deployment slots сохраняются; informational Sites/Desktop canaries не входят в terminal condition 0.1 |
+| P11 | Один exact candidate проходит canonical gate, blocking P9-Synthetic/O1 automation, three-principal operator boundary и required real-account first-user Web/MCP UAT rows одного deployment. | `MD-293` | canonical repository gate exact SHA + synthetic/OAuth automation + operator/privacy receipts | `W`, `P`, `MI`, `CX`, `R` связываются с exact deployment; O1-FirstUser входит в terminal condition 0.1 |
 
 Accepted route map и security boundary находятся в
 [MVP specification](mvp.md#sites-control-plane). Для P1 page shell не считается
@@ -95,13 +95,13 @@ hosted `uat.mind-bindings` всё ещё требует evidence конкрет�
 | B5-Capture | Отдельная opt-in capture policy пишет только в active target с provenance/privacy constraints. | `MD-234` | `automatic-capture`, synthetic state matrix и fresh-plugin OAuth product-runtime capture/no-op assertions; Marketplace `181320e`, plugin `0.1.0+codex.20260822115002` | blocking `uat.mind-bindings` target-A capture and rebind fencing |
 | B6-Join | Один exact candidate проходит concurrency/security/persistence/plugin/UAT matrix. | `MD-235` | blocking `dev.mind-bindings` joins exact-SHA `dev.synthetic-multi-principal` and `dev.oauth-direct-plugin` receipts with required assertion IDs | blocking `uat.mind-bindings` exact candidate/deployment/plugin/profile receipt |
 
-## BundleFile extension 2026-08-22
+## Post-MVP BundleFile extension 2026-08-22
 
 [ADR-0015](../decisions/0015-versioned-bundle-files.md) и
 [BundleFile specification](bundle-files.md) replace the old non-Markdown deny
-with a bounded raster/PDF/ZIP Release 0.1 slice. Accepted contract does not
-prove implementation; existing UAT deployment remains Markdown-only until the
-exact-candidate join below passes.
+with a bounded raster/PDF/ZIP post-MVP slice. Accepted contract does not prove
+implementation. По ADR-0019 rows ниже не участвуют в readiness Release 0.1;
+они становятся blocking только для отдельного BundleFile promotion.
 
 | ID | Наблюдаемый результат | Owner | Local evidence | UAT evidence |
 |---|---|---|---|---|
@@ -111,7 +111,7 @@ exact-candidate join below passes.
 | BF3-ReadExport | Bound reader lists/downloads exact revision, Markdown references validate, one-use grants fail closed and `MD-BUNDLE-ZIP-1` is deterministic while legacy export is unchanged. | `MD-249` | Implemented locally: current/historical pagination, atomic references, token/ACL/expiry/delete failures, one-use concurrency, image/PDF/ZIP headers, Sites restart/CAS and dual export byte fixtures | image/PDF/ZIP download SHA and export on exact deployment |
 | BF4-Join | One exact candidate passes repository/security/dev gates and real Codex stage → commit → list → download/history/revoke/redeploy flow. | `MD-250` | clean `npm ci` + one `npm run check`, docs/diff, exact-SHA dev receipt | exact Sites version/deployment/tool inventory/client-plugin tuple and redacted native-file receipt; missing capability keeps nonterminal |
 
-## File-ingress extension 2026-08-23
+## Post-MVP file-ingress extension 2026-08-23
 
 [ADR-0018](../decisions/0018-file-ingress-contract-and-source-capability-matrix.md)
 и [единый file-ingress contract](file-ingress.md) фиксируют шесть source kinds,
@@ -129,12 +129,13 @@ producer evidence остаются pending; connector rows остаются cont
 | FI1-LocalCompanion | Explicit regular local/workspace/generated file or bounded bytes passes the same path-free verified-input and atomic staging pipeline with safe path/symlink/special-file/size/MIME/SHA/idempotency/retry/cleanup checks; failures leave no revision. | `MD-272` | `tests/unit/local-file-companion.test.mjs` and `tests/integration/local-file-companion.test.mjs`; build, targeted contract/integration checks, architecture/docs/secrets checks and `git diff --check` | not-available: hosted upload intent/native client evidence is separate and remains pending |
 | FI1-Generated | `bounded_in_memory` and `server_generated` use the shared MIME/SHA/size/quota/quarantine/idempotency gate; server-generated chunks are written through the storage writer, cancellation/limit/static failures leave no staged object, and commit remains an explicit atomic next step. | `MD-273` | `tests/unit/generated-artifacts.test.mjs`, `tests/unit/sites-object-store-streaming.test.mjs`, `tests/integration/bundle-files-core.test.mjs`, build and targeted diff check | hosted producer wiring and exact deployed stream evidence remain pending |
 
-## Brain-scale Sites storage/import extension 2026-08-22
+## Post-MVP Brain-scale Sites storage/import extension 2026-08-22
 
 [ADR-0016](../decisions/0016-sites-storage-capacity-import.md) and the
-[accepted contract](sites-storage-capacity-import.md) define the Release 0.1
-target. SI1 is implemented in the current repository candidate; this matrix
-still distinguishes local evidence from exact-deployment UAT availability.
+[accepted contract](sites-storage-capacity-import.md) define a post-MVP target.
+SI1 is implemented in the current repository candidate; this matrix still
+distinguishes local evidence from exact-deployment UAT availability, but SI0–SI5
+do not participate in Release 0.1 readiness.
 
 | ID | Наблюдаемый результат | Owner | Local evidence | UAT evidence |
 |---|---|---|---|---|
@@ -209,9 +210,9 @@ secret и download URL.
 | 18 | Historical selector всегда read-only и использует current access; public→private отзывает history у non-member. | `AND-62` | `U/P, C, I, S, M`: exact/as-of boundaries, Owner write denial и access transition. | `A18 + MI + CX + R` |
 | 19 | File delete сохраняет старую revision; whole-Mind delete удаляет history/linked records, инвалидирует locators и навсегда retires non-linkable handle без forensic receipt. | `AND-52` | `U/P, I, F, B`: deletion impact, injected retry/race, old-file precondition и post-delete storage/locator scan. | `A19 + W + P + R` |
 | 20 | Account delete выполняет весь cascade, отзывает identity/tokens и сохраняет foreign commits только с non-PII `deleted-principal`; UI показывает impact. | `AND-47` | `U/P, I, F, B`: fresh/stale preview, crash/retry, cross-aggregate reconciliation и PII-negative scan. | `A20 + W + P + R` |
-| 21 | Markdown writes remain UTF-8/OKF 0.2; accepted BundleFile is a separate producer envelope, and MD-271 keeps all file source locators adapter-owned while ZIP stays opaque and ZIP/import remains absent. | `AND-41` | Historical Markdown evidence plus `MD-246`–`MD-250` BF0–BF4 rows and `MD-271` FI0 contract fixture. | `A21 + BF4 + CX + R` |
+| 21 | Changeset Release 0.1 принимает UTF-8 Markdown/OKF 0.2; BundleFile, universal file ingress и import остаются post-MVP без hidden fallback. | `AND-41` | `U/P, C, I`: OKF codec, changeset preflight, UTF-8/path/limit and no-partial-publication fixtures. | `A21 + CX + R` |
 | 22 | Unknown OKF fields/types переживают read-modify-write/export; conformance errors отделены от quality warnings. | `AND-41` | `U/P, C, I`: audited OKF 0.2 round-trip corpus, byte/semantic diff и separate validation classes. | `A22 + CX + R` |
-| 23 | Reader/baseline Reader exports exact allowed revision through reauthorized grant: legacy `MD-OKF-ZIP-1` unchanged; mixed `MD-BUNDLE-ZIP-1` preserves exact files without service identity. | `AND-72` | Historical export evidence plus `MD-249`/`MD-250` BF3/BF4 deterministic dual-profile/access rows. | `A23 + BF4 + CX + P + R` |
+| 23 | Reader/baseline Reader exports exact allowed Markdown revision through reauthorized grant; `MD-OKF-ZIP-1` остаётся deterministic, access-checked и независимым от HEAD move. | `AND-72` | `C, I, S`: deterministic export, current-access reauthorization, expiry and download integrity fixtures. | `A23 + CX + P + R` |
 | 24 | Search/fetch фильтруются по exact space/revision; missing historical index не подмешивает HEAD. | `AND-63` | `U/P, I, F, S, M`: seeded two-space/two-revision corpus, lag/missing index и result provenance. | `A24 + MI + CX + R` |
 | 25 | Corpus не расширяет scopes и не получает control-plane tools; allowed-write prompt injection остаётся явно residual risk. | `AND-76` | `C, I, S, M`: adversarial corpus, direct tool calls, tool catalog and state/telemetry assertions. | `A25 + MI + CX + R` |
 | 26 | MCP публикует custom Mind-aware profile без company-knowledge claim или user-openable content URLs. | `AND-76` | `C, S, M`: deterministic tool/resource catalog, absent standard/control surfaces и URI checks. | `A26 + MI + CX + R` |
@@ -259,7 +260,7 @@ failure; отсутствующий receipt остаётся pending.
     { "id": 18, "owner": "AND-62", "local_evidence": ["mind-history"], "live_evidence": ["MI", "CX"], "release_evidence": "R" },
     { "id": 19, "owner": "AND-52", "local_evidence": ["ordinary-mind-deletion"], "live_evidence": ["W", "P"], "release_evidence": "R" },
     { "id": 20, "owner": "AND-47", "local_evidence": ["account-deletion"], "live_evidence": ["W", "P"], "release_evidence": "R" },
-    { "id": 21, "owner": "AND-41", "local_evidence": ["okf-unit", "okf-conformance", "changeset-preflight", "file-ingress-contract"], "live_evidence": ["CX"], "release_evidence": "R" },
+    { "id": 21, "owner": "AND-41", "local_evidence": ["okf-unit", "okf-conformance", "changeset-preflight"], "live_evidence": ["CX"], "release_evidence": "R" },
     { "id": 22, "owner": "AND-41", "local_evidence": ["okf-unit", "okf-conformance", "export-contract"], "live_evidence": ["CX"], "release_evidence": "R" },
     { "id": 23, "owner": "AND-72", "local_evidence": ["export-download-grants", "export-contract"], "live_evidence": ["CX", "P"], "release_evidence": "R" },
     { "id": 24, "owner": "AND-63", "local_evidence": ["mind-search", "mind-browse", "audit-index-jobs"], "live_evidence": ["MI", "CX"], "release_evidence": "R" },
@@ -326,9 +327,9 @@ failure; отсутствующий receipt остаётся pending.
   },
   "post_mvp_denylist": [
     { "id": "aws-runtime", "claim": "AWS, AgentCore and a separate production runtime are not the Sites MVP fallback.", "evidence": ["architecture-check"] },
-    { "id": "imports", "claim": "ZIP/local import and legacy migration are absent.", "evidence": ["okf-unit", "changeset-preflight"] },
+    { "id": "imports", "claim": "BundleFile, Brain-scale and Markdown import capabilities are post-MVP and cannot satisfy Release 0.1 readiness.", "evidence": ["okf-unit", "changeset-preflight"] },
     { "id": "checkpoints", "claim": "Branches, merge, moving tags and named checkpoints are absent.", "evidence": ["mind-history"] },
-    { "id": "bundle-file-expansion", "claim": "BundleFile types beyond the accepted raster/PDF/ZIP slice, additional source adapters, extraction/OCR/preview/resumable/import are absent.", "evidence": ["okf-unit", "changeset-preflight", "file-ingress-contract"] },
+    { "id": "bundle-file-expansion", "claim": "BundleFile and universal file-ingress surfaces are post-MVP and are not advertised as Release 0.1 support or used as a fallback.", "evidence": ["okf-unit", "changeset-preflight", "file-ingress-contract"] },
     { "id": "personalization", "claim": "Personalized landing and website AI are not exposed.", "evidence": ["exposure-contract"] },
     { "id": "oauth-company-knowledge", "claim": "ChatGPT Web/public-directory and company-knowledge profiles are not claimed by the direct Codex UAT plugin.", "evidence": ["mcp-transport", "mcp-tools"] },
     { "id": "claude-support", "claim": "Claude Code is not a supported client without its own conformance evidence.", "evidence": ["mcp-transport"] },
@@ -410,9 +411,9 @@ notes или live evidence 0.1 как частично поддержанные:
 | Capability | Граница 0.1 |
 |---|---|
 | AWS / AgentCore / отдельный production container | Planned post-MVP infrastructure, не fallback при провале Sites. |
-| ZIP/binary/legacy import | Markdown-only file import has an accepted but not-yet-implemented Release 0.1 contract; archive/binary/legacy profiles remain absent. |
+| Brain-scale storage/import/export | Accepted post-MVP contract and local code do not participate in Release 0.1 readiness. |
 | Named checkpoints/moving tags/branches/merge | История 0.1 использует только immutable revision IDs и `as_of`. |
-| BundleFile formats beyond PNG/JPEG/GIF/WebP/PDF/ZIP; extraction/OCR/preview/resumable/import | First bounded producer profile is accepted; expansion remains absent without new contract/evidence. |
+| BundleFile и universal file ingress | Accepted post-MVP contracts require their own evidence and cannot be advertised as Release 0.1 support or fallback. |
 | Personalized landing/`PersonalContext`/website AI | Отдельный будущий trusted use case; `/me` и handle routes в 0.1 — management. |
 | ChatGPT Web registered connector, public Plugin Directory, company-knowledge profile | Direct Codex UAT plugin с OAuth не доказывает эти profiles; нужна отдельная verification/review. |
 | Claude Code support | Не release gate и не supported client без отдельного adapter/client conformance test. |
@@ -442,18 +443,18 @@ operational проверки. `Реализовано` означает толь
 | File/operation/total-changeset limits | Реализованы и покрыты boundary fixtures | `AND-65` | Invalid/oversized commands должны по-прежнему оставлять no visible objects/revision на exact candidate. |
 | Lexical ranking и pagination behavior | Реализованы в exact-revision search baseline | `AND-63` | Seeded relevance/isolation benchmark; изменение scoring/threshold считается contract change и требует новых fixtures. |
 | Deterministic export container, filename и `Content-Disposition` | Реализованы как `MD-OKF-ZIP-1` с фиксированным filename | `AND-68` | Сохранять byte-for-byte repeatability, full-bundle validation и archive-safety fixtures. |
-| Versioned BundleFile and mixed export | MD-247 core, MD-248 native ingress and MD-249 read/reference/dual export are implemented locally; real-client UAT remains unverified | `MD-245`–`MD-250` | BF1–BF3 have local source/tests; BF4 must still prove exact-SHA native-client UAT. |
-| Brain-scale Sites storage/capacity/import | Accepted in ADR-0016; MD-265 delta storage and MD-266 reconstructable capacity/admission are implemented locally, while import/streaming and joined UAT evidence remain absent | `MD-260`, `MD-264`–`MD-268` | SI0 is accepted; SI1 and SI2 have repository evidence; SI3–SI5 remain blocking. |
+| Versioned BundleFile and mixed export | Post-MVP: MD-247 core, MD-248 native ingress and MD-249 read/reference/dual export are implemented locally; real-client UAT remains unverified | `MD-245`–`MD-250` | BF1–BF3 have local source/tests; BF4 blocks only BundleFile promotion, not Release 0.1. |
+| Brain-scale Sites storage/capacity/import | Post-MVP: accepted in ADR-0016; delta storage and reconstructable capacity/admission have local evidence, while joined UAT remains absent | `MD-260`, `MD-264`–`MD-268` | SI rows block only scale/import promotion, not Release 0.1. |
 | Export size/expiry и durable job cleanup | Реализованы в repository baseline; representative load/UAT recovery ещё не выводится из local tests | `AND-70` | Restart/retry/load evidence с failed/expired/cleanup state; archive никогда не передаётся в JSON-RPC. |
 | Optional MCP Resources UX в target Codex | Resources surface реализована; tools остаются обязательным fallback | `AND-77` | Pinned real-client evidence отдельно подтверждает UX; отсутствие Resources UX не может ломать required tools flow. |
 | Manual identity recovery handoff | Fail-closed product boundary принят; полный operator workflow остаётся открытым | `AND-44` | Threat review и tests, доказывающие отсутствие automatic relink/merge/access transfer. |
 | Immediate replicated/index deletion и whole-Mind erasure | Restartable repository lifecycle и failure-injection реализованы; physical UAT erasure требует live proof | `AND-52` | Retry и post-delete object/index/job scan на exact deployment; forensic receipt по принятой MVP policy отсутствует. |
 | Account-wide cascade и foreign-commit tombstones | Repository lifecycle и PII-negative fixtures реализованы; расширенное live evidence остаётся release gate | `AND-47` | Cross-aggregate reconciliation и negative PII scan на exact candidate. |
 
-ChatGPT Web/public-directory/company-knowledge, personalization, BundleFile
-formats/processing beyond accepted raster/PDF/ZIP, imports, checkpoints, AWS и
-support других clients не являются open implementation decisions 0.1: это
-denylist, которому понадобится новый explicit product/specification scope.
+ChatGPT Web/public-directory/company-knowledge, personalization, BundleFile,
+universal ingress, Brain-scale/import, checkpoints, AWS и support других clients
+не входят в terminal 0.1. Принятые post-MVP contracts сохраняются, но требуют
+собственного promotion/evidence scope.
 
 ## Правило обновления
 

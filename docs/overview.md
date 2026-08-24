@@ -1,18 +1,15 @@
 # Обзор Mind Diary
 
-Статус: proposal, обновлено 2026-08-22. Product behavior первого прототипа
+Статус: proposal, обновлено 2026-08-24. Product behavior первого прототипа
 принято; Product Site реализован, развёрнут как single-principal UAT в OpenAI
 Sites и прошёл
 authenticated web/control, persistence-after-redeploy и обязательные Codex MCP
 compatibility gates. Расширенные read/write/history/export сценарии остаются
-следующей product-validation стадией. Producer-defined BundleFile contract
-принят для расширенного Release 0.1; core, ingress и read/export реализованы
-локально, но их UAT evidence отделено от уже проверенного Markdown-only
-baseline.
-Sites storage/capacity/Markdown-import contract для Brain-scale Release 0.1
-принят отдельно и реализован в local candidate: delta commits, reservations,
-streaming export/cleanup и resumable import. Эти изменения ещё не входят в
-прежнее UAT evidence.
+следующей product-validation стадией. Release 0.1 возвращён к Codex-first
+Markdown/OKF 0.2 workflow на небольшом детерминированном dataset. Принятые и
+частично реализованные BundleFile, Brain-scale storage/import/export и universal
+file-ingress capabilities сохраняются как post-MVP graph и не входят в
+terminal receipt 0.1.
 
 ## Зачем проект существует
 
@@ -135,15 +132,15 @@ email. Invitation появляется внутри Mind Diary, роль выб�
 ## Content и revisions
 
 Каждая revision разрешается через единый immutable service manifest exact
-files. Markdown
-остаётся OKF 0.2 content, а producer-defined `BundleFile` хранит opaque raster,
+files. Terminal Release 0.1 использует Markdown/OKF 0.2 content.
+Producer-defined `BundleFile` post-MVP contract хранит opaque raster,
 PDF или ZIP bytes и не становится нормативной OKF entity. Обычная работа идёт
 по отдельным files; ZIP остаётся attachment и не означает ZIP/local bundle
 import. Markdown и BundleFile могут изменяться одним atomic changeset. Полный
 contract manifest, staging, downloads, limits и export находится в
 [BundleFile specification](specs/bundle-files.md).
 
-Brain-scale contract добавляет отдельно digested manifest v3 в R2: новая
+Post-MVP Brain-scale contract добавляет отдельно digested manifest v3 в R2: новая
 revision переиспользует unchanged Space-scoped object digests и пишет только
 delta + manifest перед одним D1 HEAD CAS. D1 остаётся authority для revision,
 HEAD, reachability, accounting и reservations, но не хранит full Markdown
@@ -153,7 +150,7 @@ corpus. Markdown-only import использует resumable
 [Sites storage/capacity/import specification](specs/sites-storage-capacity-import.md).
 
 Markdown-only revision экспортируется прежним byte-for-byte
-`MD-OKF-ZIP-1`. Mixed revision требует explicit `MD-BUNDLE-ZIP-1`, который
+`MD-OKF-ZIP-1`. Post-MVP mixed revision требует explicit `MD-BUNDLE-ZIP-1`, который
 сохраняет exact files и producer manifest без ACL/service identities. Уже
 развёрнутый UAT остаётся Markdown-only до exact-SHA cut local candidate и
 native-file client gate.
@@ -278,17 +275,13 @@ OKF access, immediate CAS commits, immutable history и export.
 email delivery, fuzzy global user search, granular file permissions, branches,
 automatic semantic merge, legal retention/recovery model, billing,
 organization administration и general cross-Mind synthesis.
-Также отложены ZIP/local bundle import, legacy 0.1 migration, named checkpoints
-и company-knowledge compatibility profile. Transport producer-defined
-non-Markdown files больше не является open non-goal: для raster/PDF/ZIP принят
-bounded BundleFile slice, но его repository/UAT status нельзя выводить из
-принятого contract.
-
-Markdown-only resumable import принят для Release 0.1 и реализован в local
-candidate, но ещё не является UAT-verified behavior; ZIP/binary/legacy imports
-и named checkpoints планируются post-MVP. Более широкие file types, extraction
-и previews/OCR остаются будущими
-решениями; принятый первый BundleFile slice не подразумевает их. Ограничения
+Также отложены BundleFile/file ingress, Brain-scale storage/import/export,
+ZIP/local bundle import, legacy 0.1 migration, named checkpoints и
+company-knowledge compatibility profile. Для raster/PDF/ZIP и Markdown-only
+resumable import приняты отдельные post-MVP contracts и существует local
+implementation evidence, но их repository/UAT status нельзя выводить из
+terminal Release 0.1. Более широкие file types, extraction и previews/OCR
+остаются будущими решениями. Ограничения
 этого раздела нельзя трактовать как полные границы будущего продукта; см.
 [roadmap](roadmap.md).
 

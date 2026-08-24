@@ -1,7 +1,10 @@
 # ADR-0015: versioned BundleFile и separate mixed export profile
 
-Статус: accepted, 2026-08-22. Решение расширяет Release 0.1 после исходного
-Markdown-only MVP и не меняет нормативный смысл OKF 0.2.
+Статус: accepted technical contract, 2026-08-22. Его технические и security
+invariants сохраняются, но включение `BundleFile` в terminal Release 0.1
+частично заменено [ADR-0019](0019-release-0-1-codex-first-small-data-boundary.md):
+этот slice относится к post-MVP и не блокирует Markdown-first 0.1. Решение не
+меняет нормативный смысл OKF 0.2.
 
 ## Контекст
 
@@ -37,10 +40,12 @@ CAS, deletion semantics и portable export. Одновременно прова�
   immutable revision under existing ACL, idempotency and HEAD CAS.
 - Current UAT stays Sites/R2; domain and application ports do not import Sites,
   OpenAI or AWS identities.
-- Native-file client compatibility becomes an explicit per-profile UAT gate.
-  Missing capability is a truthful blocker, not a base64/local-path fallback.
+- Native-file client compatibility остаётся explicit per-profile UAT gate для
+  продвижения самого BundleFile slice. Missing capability не блокирует Release
+  0.1, но запрещает claim о поддержке `BundleFile` и не допускает
+  base64/local-path fallback.
 - Quotas count exact logical/reachable bytes and may require a later capacity
-  tier; Release 0.1 values are deliberately bounded.
+  tier; значения этого post-MVP slice deliberately bounded.
 
 ## Отклонённые варианты
 

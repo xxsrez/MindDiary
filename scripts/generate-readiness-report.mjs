@@ -110,6 +110,14 @@ export async function validateRegistry(registry, { tableRows, pathExists, packag
     assert(exactArray([...tableRow.slots].sort(), expectedSlots), `criterion ${criterion.id} release slots differ between table and registry`);
   }
 
+  // Post-MVP evidence may remain executable without becoming a Release 0.1
+  // criterion dependency. Count those explicit denylist references as owned
+  // before rejecting genuinely orphaned evidence definitions.
+  for (const item of registry.post_mvp_denylist) {
+    if (!Array.isArray(item?.evidence)) continue;
+    for (const evidenceId of item.evidence) referencedEvidence.add(evidenceId);
+  }
+
   for (const [evidenceId, evidence] of Object.entries(registry.local_evidence)) {
     assert(/^[a-z0-9][a-z0-9-]*$/.test(evidenceId), `invalid local evidence id ${evidenceId}`);
     assert(typeof evidence.title === "string" && evidence.title.length > 0, `${evidenceId} must have a title`);

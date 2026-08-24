@@ -1,11 +1,11 @@
 # Plugin и OAuth Mind Diary
 
-Статус: accepted, обновлено 2026-08-22. OAuth Authorization Server, dual
+Статус: accepted, обновлено 2026-08-24. OAuth Authorization Server, dual
 personal/OAuth MCP authentication, write step-up и connected-app revocation
 реализованы. Для Codex Desktop/CLI pilot 0.1 принят direct MCP package с OAuth
 при первом использовании. Blocking package/OAuth automation из ADR-0012
-реализована; fresh external-account acceptance остаётся informational canary,
-а не release gate. Registered connector не входит в этот release path и
+реализована; ADR-0019 дополнительно делает один fresh external-account
+first-user receipt обязательным release gate. Registered connector не входит в этот release path и
 остаётся возможным будущим ChatGPT Web/public-directory вариантом.
 
 Связанные документы: [архитектура](../architecture.md),
@@ -17,7 +17,8 @@ server-side OAuth решение зафиксировано в
 distribution boundary — в
 [ADR-0011](../decisions/0011-direct-mcp-plugin-oauth-on-use.md). Validation
 carrier релиза 0.1 уточнён
-[ADR-0012](../decisions/0012-synthetic-principal-release-gates.md).
+[ADR-0012](../decisions/0012-synthetic-principal-release-gates.md) и
+[ADR-0019](../decisions/0019-release-0-1-codex-first-small-data-boundary.md).
 
 ## Текущий implementation checkpoint
 
@@ -45,8 +46,8 @@ Repository candidate уже содержит:
 но не hosted release evidence. Blocking run требует direct package validation
 и automated OAuth/transport lifecycle на exact SHA; exact-SHA single-owner UAT lineage остаётся
 обязательной hosted проверкой. Fresh external-account install/read/write/
-revoke/reconnect — отдельный informational canary и prerequisite только для
-claim о проверенном external-host UX.
+revoke/reconnect — отдельный blocking first-user receipt exact candidate и
+deployment; automation не подменяет этот host/UI evidence.
 
 ## Решение
 
@@ -451,9 +452,8 @@ Blocking matrix:
     обходятся.
 
 Real external Marketplace/Codex installation и OAuth UI на exact UAT
-deployment выполняются отдельно как informational canary. Его failure или
-недоступный human account не блокирует release 0.1, но до passing canary нельзя
-утверждать, что external-host install/auth UX проверен. ChatGPT Web требует
+deployment выполняются отдельно как blocking first-user flow. Его failure или
+отсутствие required real account блокирует release 0.1. ChatGPT Web требует
 отдельного connector conformance.
 
 Repository tests должны покрывать OAuth state machines, persistence, verifier,
@@ -510,9 +510,9 @@ plugin version/cache snapshot и automated receipt; external canary сохран
 
 | Вопрос | Почему важен | Как закрыть |
 | --- | --- | --- |
-| Проходит ли direct MCP OAuth в target Codex build | определяет protocol/package compatibility | blocking fresh temporary-context automation; real external-account smoke остаётся UX canary |
+| Проходит ли direct MCP OAuth в target Codex build | определяет protocol/package compatibility | blocking fresh temporary-context automation + blocking exact-UAT first-user receipt |
 | Пропускает ли Sites boundary host без ручного audience secret | иначе OAuth discovery не начнётся | read-only reachability test и отдельное access-policy решение |
-| Надёжен ли incremental write consent в installed plugin | влияет на безопасность и число dialogs | automated step-up gate + informational fresh-host UX canary; fallback к read+write в первом OAuth flow только по принятому решению |
+| Надёжен ли incremental write consent в installed plugin | влияет на безопасность и число dialogs | automated step-up gate + blocking fresh-host first-user receipt; fallback к read+write в первом OAuth flow только по принятому решению |
 | DCR или CIMD | неверный client profile ломает linking | DCR для pilot; CIMD только после conformance |
 | UAT или production branding | нельзя выдавать pilot за live service | `Mind Diary UAT` до provisioned production |
 | Как мигрировать exact MCP resource | resource — token audience | новая plugin version и reconnect, без silent URL swap |

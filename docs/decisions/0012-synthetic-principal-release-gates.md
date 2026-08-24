@@ -1,8 +1,10 @@
 # ADR-0012: SyntheticPrincipal и автоматические release gates
 
-Статус: accepted, 2026-08-20. Решение уточняет validation carrier релиза 0.1,
-не меняя product identity, OAuth или production boundaries из ADR-0010 и
-ADR-0011.
+Статус: accepted, 2026-08-20. Synthetic test composition и blocking automation
+сохраняются. Классификация real external first-user flow частично заменена
+[ADR-0019](0019-release-0-1-codex-first-small-data-boundary.md): один final
+hosted receipt теперь blocking. Product identity, OAuth и production boundaries
+из ADR-0010/ADR-0011 не меняются.
 
 ## Контекст
 
@@ -77,9 +79,9 @@ Harness вызывает normal application commands и protocol adapters. Он 
   и personal-token regression. Synthetic identity допускается только на
   trusted authorize/consent boundary test composition; token endpoint,
   application ACL/CAS и MCP transport остаются обычными.
-- Real external Marketplace/Codex installation и OAuth UI на UAT становятся
-  informational canary. Такой canary нужен перед утверждением, что конкретный
-  external-host UX проверен, но не является release blocker 0.1.
+- Real external Marketplace/Codex installation и OAuth UI остаются отдельными
+  от synthetic automation. По ADR-0019 один final first-user flow на exact UAT
+  candidate является release blocker 0.1; automation не может его подменить.
 
 Test OAuth не добавляет password grant, admin token mint, client-selected
 principal или special bearer. DCR client и package не могут выбрать synthetic

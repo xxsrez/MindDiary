@@ -4,8 +4,10 @@
 для Codex Desktop/CLI pilot 0.1 частично заменена
 [ADR-0011](0011-direct-mcp-plugin-oauth-on-use.md) 2026-08-20. Обязательный
 validation carrier fresh external account заменён automated gate, а real
-external flow сохранён informational canary в
-[ADR-0012](0012-synthetic-principal-release-gates.md).
+external flow был сохранён informational canary в
+[ADR-0012](0012-synthetic-principal-release-gates.md), но final first-user flow
+теперь blocking по
+[ADR-0019](0019-release-0-1-codex-first-small-data-boundary.md).
 
 Историческое решение ниже требовало private registered connector и
 `ON_INSTALL`. Оно сохраняет rationale и все server-side OAuth, identity,
@@ -80,9 +82,10 @@ platform-authenticated identity к immutable внутреннему `principal_i
 - Исторически fresh external installation, read, write step-up,
   revoke/reconnect и оба personal-token MCP profiles считались обязательным
   UAT evidence. ADR-0012 сохраняет те же protocol/package assertions в
-  blocking automated gate, а real external installation переводит в
-  informational canary; repository tests или direct curl сами по себе всё ещё
-  не закрывают automated package/transport receipt.
+  blocking automated gate. ADR-0019 дополнительно требует real external
+  first-user installation/read/write/revoke receipt; repository tests или
+  direct curl сами по себе не закрывают ни automated package/transport, ни
+  этот hosted user flow.
 
 ## Рассмотренные варианты
 

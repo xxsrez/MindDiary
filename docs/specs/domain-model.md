@@ -475,19 +475,20 @@ authorization signal; поля, deletion и privacy contract заданы в
 Если agent-assisted administration понадобится позже, для него потребуется
 отдельная privileged surface и отдельный threat model.
 
-## Граница расширенного Release 0.1
+## Граница Release 0.1
 
 В Release 0.1 входят authenticated-only account model, автоматический Personal
 Mind, ordinary Minds, single-owner transfer, invitations registered users,
 четыре роли, три visibility modes, public catalog, immutable history, direct
-CAS commits, individual-file OKF access, bounded raster/PDF/ZIP BundleFile и
-user-scoped MCP. Release 0.1 extensions add Space-scoped delta manifests,
-capacity admission, Markdown-only import и internal read-only UAT operator
-directory.
+CAS commits, individual-file UTF-8 Markdown/OKF 0.2 access, deterministic
+Markdown export, user-scoped MCP и internal read-only UAT operator directory.
+Принятые BundleFile, Space-scoped delta/capacity/import и universal file-ingress
+contracts относятся к post-MVP и не блокируют terminal 0.1.
 
 Не входят anonymous access/publication, unregistered-user onboarding,
 email invitations, fuzzy global user search, granular content grants, branches,
-automatic semantic merge, named checkpoints, ZIP/binary/legacy bundle import,
-BundleFile extraction/OCR/general file types, legacy 0.1 migration, legal retention policy, recovery after
+automatic semantic merge, named checkpoints, BundleFile/file ingress,
+Brain-scale storage/import/export, ZIP/binary/legacy bundle import,
+extraction/OCR/general file types, legacy 0.1 migration, legal retention policy, recovery after
 deletion, billing/organization administration и cross-Mind content synthesis
 без отдельного explicit use case.

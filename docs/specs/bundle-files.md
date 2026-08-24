@@ -13,6 +13,12 @@ MD-250. Этот
 producer-defined contract расширяет Mind Diary, но не изменяет Open Knowledge
 Format 0.2 и не объявляет `BundleFile` нормативной OKF entity.
 
+Release applicability: технический contract сохраняется, но
+[ADR-0019](../decisions/0019-release-0-1-codex-first-small-data-boundary.md)
+переносит весь BundleFile slice в post-MVP. MD-250 обязателен только перед
+claim о hosted/native BundleFile support; его отсутствие не блокирует
+Markdown-first Release 0.1.
+
 MD-271 добавляет общий [file-ingress contract](file-ingress.md) и source
 capability matrix для bytes, которые могут попасть в этот `BundleFile` slice.
 В текущем candidate `session_attachment` подключён через OpenAI-native MCP
@@ -27,10 +33,10 @@ URL или local-path fallback.
 
 Проверенный внешний факт: OKF 0.2 задаёт переносимое дерево Markdown и ссылки
 на resources, но не задаёт binary manifest, upload protocol, MIME policy,
-revisions, ACL или export container для произвольных bytes. Требование Release
-0.1: одна immutable `SpaceRevision` должна атомарно version-ить Markdown и
-приложенные raster image, PDF или ZIP, а historical read/export — сохранять их
-exact bytes.
+revisions, ACL или export container для произвольных bytes. Требование этого
+post-MVP slice: одна immutable `SpaceRevision` должна атомарно version-ить
+Markdown и приложенные raster image, PDF или ZIP, а historical read/export —
+сохранять их exact bytes.
 
 Принятое решение: техническая service entity называется `BundleFile`, а в UI
 используются attachment/asset. `BundleFile` остаётся opaque canonical file:
@@ -345,7 +351,7 @@ non-destructive and open-world. `commit_changeset` remains destructive. Tool
 catalog semantics are identical on modern and compatibility profiles only when
 the pinned client passes the native-file capability gate.
 
-## Проверяемые acceptance rows
+## Проверяемые post-MVP acceptance rows
 
 Local evidence must cover manifest v1 compatibility/v2 canonicalization,
 streaming limits/MIME spoof/denylist, mixed atomic commit and stale/idempotent
@@ -353,17 +359,19 @@ failure, exact historical bytes, same-Space retained quota/GC, current-access
 downloads, Markdown references, deterministic dual export and absence of bytes,
 URLs, provider IDs and local paths from logs/errors/audit.
 
-Dev and UAT must use image + PDF + ZIP exact fixtures. UAT evidence joins exact
+Dev and UAT promotion этого slice must use image + PDF + ZIP exact fixtures.
+UAT evidence joins exact
 Git SHA, Sites version/deployment, hosted tool inventory/schema, pinned Codex
 client/plugin tuple, stage → commit → list → download SHA read-back, historical
 replace/delete, access revoke and persistence after redeploy. Unsupported native
-file input keeps MD-250 and the epic nonterminal; repository tests or local
-paths cannot substitute this row.
+file input keeps MD-250 and the post-MVP epic nonterminal; repository tests or
+local paths cannot substitute this row. Это не меняет terminal status Release
+0.1.
 
 ## Гипотезы и открытые решения
 
 - Hypothesis: 64 MiB/file, 1 GiB live revision and 2 GiB retained Space are
-  sufficient for the Release 0.1 mixed-file pilot; MD-260 capacity evidence may
+  sufficient for the post-MVP mixed-file pilot; MD-260 capacity evidence may
   reject these values.
 - Open: production antivirus/content-disarm policy, larger/paid quotas,
   resumable upload, previews/OCR/transcription, office/audio/video formats,
