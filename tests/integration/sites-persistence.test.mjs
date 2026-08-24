@@ -1118,6 +1118,39 @@ test("snapshot write failure after fenced append self-heals from canonical tail"
   assert.equal(database.metadataSnapshotHead.sequence, 1);
 });
 
+test("Mind binding transactions keep fenced durability without rewriting every snapshot", async () => {
+  const database = new FakeD1Database();
+  const store = await createSitesMetadataStore(database);
+  assert.equal(
+    (await store.reserveHandle({
+      host: HOST,
+      handle: "binding-snapshot-cadence",
+      spaceId: "space_binding_snapshot_cadence",
+    })).kind,
+    "reserved",
+  );
+  const writesBeforeBindings = database.metadataSnapshotWriteCount;
+
+  for (let index = 0; index < 15; index += 1) {
+    const result = await store.runMindBindingTransaction(async () =>
+      Object.freeze({ kind: "binding-cadence-probe", index }));
+    assert.deepEqual(result, { kind: "binding-cadence-probe", index });
+  }
+
+  assert.equal(database.metadataEvents.at(-1).sequence, 16);
+  assert.equal(database.metadataSnapshotWriteCount - writesBeforeBindings, 1);
+  assert.equal(database.metadataSnapshotHead.sequence, 16);
+
+  const restarted = await createSitesMetadataStore(database);
+  assert.deepEqual(
+    await restarted.resolveHandle({
+      host: HOST,
+      handle: "binding-snapshot-cadence",
+    }),
+    { kind: "resolved", spaceId: "space_binding_snapshot_cadence" },
+  );
+});
+
 test("chunked metadata snapshots stay below one D1 bound value and survive restart", async () => {
   const database = new FakeD1Database();
   database.maxBoundStringLength = 300_000;

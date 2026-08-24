@@ -212,6 +212,7 @@ const MAX_CAS_ATTEMPTS = 16;
 const SNAPSHOT_CHUNK_CODE_UNITS = 256 * 1_024;
 const SNAPSHOT_CHUNK_READ_PAGE = 8;
 const ACTIVITY_SNAPSHOT_CADENCE = 64;
+const MIND_BINDING_SNAPSHOT_CADENCE = 16;
 
 function splitSnapshotPayload(payload: string): readonly string[] {
   const chunks: string[] = [];
@@ -304,8 +305,16 @@ interface TailReplayResult {
 }
 
 function shouldCheckpointEvent(event: DurableEvent, sequence: number): boolean {
-  return event.method !== "recordPrincipalActivity" ||
-    sequence % ACTIVITY_SNAPSHOT_CADENCE === 0;
+  if (event.method === "recordPrincipalActivity") {
+    return sequence % ACTIVITY_SNAPSHOT_CADENCE === 0;
+  }
+  if (event.method === "runMindBindingTransaction") {
+    // The fenced event is already canonical durability. Binding selection is
+    // latency-sensitive UI/MCP setup, so avoid rewriting the full materialized
+    // snapshot for every attach or rebind while keeping restart replay bounded.
+    return sequence % MIND_BINDING_SNAPSHOT_CADENCE === 0;
+  }
+  return true;
 }
 
 async function currentAuthorizationStateWithToken(
