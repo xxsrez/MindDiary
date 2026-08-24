@@ -230,14 +230,16 @@ test("keyboard-only connection journey exposes progress, revoke, and reconnect s
   await page.keyboard.press("Enter");
   await expect(page.locator("#main-content")).toBeFocused();
   await tabUntil(page, 'a[href^="/settings/connections/conn_v1_"]');
+  const openConnection = page.waitForURL(/\/settings\/connections\/conn_v1_/u);
   await page.keyboard.press("Enter");
-  await page.waitForURL(/\/settings\/connections\/conn_v1_/u);
+  await openConnection;
 
   await tabUntil(page, '[data-access-action="clear_write"]');
+  const accessReload = page.waitForNavigation({ waitUntil: "load" });
   await page.keyboard.press("Enter");
   await expect(page.locator("[data-access-panel]")).toHaveAttribute("aria-busy", "true");
   await expect(page.getByRole("status").filter({ hasText: "Saving current Mind access" })).toBeVisible();
-  await page.waitForLoadState("load");
+  await accessReload;
 
   await tabUntil(page, "[data-revoke-connection]");
   const returnToConnections = page.waitForURL(`${fixture.origin}/settings/connections`);
