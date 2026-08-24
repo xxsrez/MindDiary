@@ -55,7 +55,9 @@ deployment; automation не подменяет этот host/UI evidence.
 Mind Diary добавляется в существующий Srez Marketplace вторым plugin рядом с
 Task Manager. Для Codex Desktop/CLI pilot 0.1 принят следующий путь:
 
-1. Package распространяет thin skill и exact direct MCP resource `/api/mcp`.
+1. Package распространяет thin skill и проверенный Codex compatibility
+   transport `/api/mcp/2025-11-25`; canonical OAuth resource/audience остаётся
+   `/api/mcp`.
 2. Установка с policy `AVAILABLE + ON_USE` завершается без product OAuth и без
    чтения private registered app.
 3. Первый content tool call запускает native OAuth discovery, DCR и PKCE к
@@ -86,8 +88,8 @@ Diary доступной после обновления каталога. Он�
 | --- | --- | --- |
 | Marketplace | `srez-marketplace` | тот же Marketplace |
 | Plugin package | `plugins/task-manager` | новый `plugins/mind-diary` |
-| Connection | direct production MCP в `.mcp.json` | exact direct UAT MCP resource в `.mcp.json` |
-| Transport fallback | public MCP URL в `.mcp.json` | exact Mind Diary UAT MCP resource |
+| Connection | direct production MCP в `.mcp.json` | проверенный Codex compatibility transport и отдельный canonical UAT OAuth resource в `.mcp.json` |
+| Transport fallback | public MCP URL в `.mcp.json` | exact `/api/mcp/2025-11-25` для default Codex; `/api/mcp` остаётся modern resource/audience |
 | Installation | `AVAILABLE` + `ON_USE` | то же поведение |
 | OAuth | authorization code + PKCE, DCR | тот же protocol profile, но Mind Diary scopes и identity rules |
 | Data authorization | internal Task Manager user | internal immutable Mind Diary `principal_id` |
@@ -199,8 +201,13 @@ plugins/
 - категорию `Productivity`, пока каталог не подтвердит более точную knowledge
   category.
 
-`.app.json` отсутствует. `.mcp.json` содержит exact HTTPS UAT MCP resource и
-такой же `oauth_resource`; это canonical Codex Desktop/CLI connection source.
+`.app.json` отсутствует. `.mcp.json` содержит проверенный для default Codex
+transport `https://mind-diary.example.invalid/api/mcp/2025-11-25` и
+отдельный canonical `oauth_resource`
+`https://mind-diary.example.invalid/api/mcp`; это canonical Codex
+Desktop/CLI connection source. Такое разделение не меняет token audience:
+authorization и token exchange используют `/api/mcp`, а compatibility adapter
+изолирует только transport lifecycle клиента.
 
 Skill остаётся тонким interaction adapter. Он должен объяснять progressive
 disclosure, явный выбор одного Mind/revision, read-before-write,
@@ -346,13 +353,21 @@ internal `principal_id`.
 
 ## MCP endpoint decision
 
-Codex pilot resource — existing `POST /api/mcp` с profile `2026-07-28`.
-`.mcp.json` фиксирует этот exact URL и OAuth audience. Compatibility resource
-`/api/mcp/2025-11-25` сохраняется для доказанного personal-token client
-profile, но не подменяет package resource. Modern и compatibility lifecycle не
-смешиваются внутри одного request. Смена exact OAuth resource позднее считается
-package/client migration: новая plugin version, повторный consent и fresh-task
-validation, а не незаметная замена URL.
+Canonical resource/audience pilot-а — existing `POST /api/mcp` с profile
+`2026-07-28`. Однако проверенная пара default `codex-cli 0.149.0` требует
+изолированный compatibility lifecycle `2025-11-25`, поэтому `.mcp.json`
+задаёт transport URL `/api/mcp/2025-11-25` и отдельный `oauth_resource`
+`/api/mcp`. Это не fallback между lifecycle внутри request и не смена OAuth
+audience: compatibility adapter принимает тот же OAuth access token с audience
+`/api/mcp` и вызывает тот же content application contract. Opt-in modern client
+может работать непосредственно с `/api/mcp` только после отдельного
+client/adapter conformance.
+
+Смена canonical `oauth_resource` позднее считается package/client migration:
+новая plugin version, повторный consent и fresh-task validation, а не
+незаметная замена URL. Смена только transport profile также требует fresh
+conformance на exact Codex build, но не должна автоматически менять resource
+audience.
 
 Оба adapters вызывают существующий content application contract. OAuth меняет
 authentication boundary и discovery, но не tool payload, ACL или revision

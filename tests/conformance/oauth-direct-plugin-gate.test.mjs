@@ -12,9 +12,12 @@ import {
   FakeD1Database,
 } from "../../scripts/lib/fake-sites-storage.mjs";
 import {
+  CODEX_PLUGIN_MCP_URL,
+  CODEX_PLUGIN_OAUTH_RESOURCE,
   OAUTH_DIRECT_PLUGIN_ASSERTION_IDS,
   assertAutomaticCaptureSkillPolicy,
   assertCodexClientVersion,
+  assertDirectPackageServer,
   createEvidence,
   parseCli,
   parseCodexSkillDiscovery,
@@ -23,6 +26,32 @@ import {
 
 const SKILL_DESCRIPTION = "Use Mind Diary through its connected content MCP.";
 const INSTALLED_ROOT = "/private/tmp/fresh/plugins/cache/marketplace/mind-diary/version";
+
+test("Codex plugin uses the isolated compatibility transport with the canonical OAuth resource", () => {
+  assert.equal(CODEX_PLUGIN_MCP_URL, `${CODEX_PLUGIN_OAUTH_RESOURCE}/2025-11-25`);
+  assert.equal(assertDirectPackageServer({
+    type: "http",
+    url: CODEX_PLUGIN_MCP_URL,
+    oauth_resource: CODEX_PLUGIN_OAUTH_RESOURCE,
+  }), true);
+  for (const server of [
+    {
+      type: "http",
+      url: CODEX_PLUGIN_OAUTH_RESOURCE,
+      oauth_resource: CODEX_PLUGIN_OAUTH_RESOURCE,
+    },
+    {
+      type: "http",
+      url: CODEX_PLUGIN_MCP_URL,
+      oauth_resource: CODEX_PLUGIN_MCP_URL,
+    },
+  ]) {
+    assert.throws(
+      () => assertDirectPackageServer(server),
+      (error) => error instanceof ProbeFailure && error.code === "direct_resource_mismatch",
+    );
+  }
+});
 
 function promptInputFixture(line) {
   return [{

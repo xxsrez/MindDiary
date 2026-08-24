@@ -51,6 +51,10 @@ const CODEX_SKILL_DISCOVERY_PROMPT =
 const MAX_CODEX_PROMPT_INPUT_BYTES = 2 * 1024 * 1024;
 const MODERN_PROTOCOL = "2026-07-28";
 const COMPAT_PROTOCOL = "2025-11-25";
+export const CODEX_PLUGIN_MCP_URL =
+  "https://mind-diary.example.invalid/api/mcp/2025-11-25";
+export const CODEX_PLUGIN_OAUTH_RESOURCE =
+  "https://mind-diary.example.invalid/api/mcp";
 
 export const OAUTH_DIRECT_PLUGIN_ASSERTION_IDS = Object.freeze([
   "package.marketplace-head-tree-clean",
@@ -98,6 +102,15 @@ export const OAUTH_DIRECT_PLUGIN_ASSERTION_IDS = Object.freeze([
   "production-negative.no-synthetic-authority",
   "evidence.external-ui-canary-separated",
 ]);
+
+export function assertDirectPackageServer(server) {
+  if (
+    server?.type !== "http" ||
+    server?.url !== CODEX_PLUGIN_MCP_URL ||
+    server?.oauth_resource !== CODEX_PLUGIN_OAUTH_RESOURCE
+  ) fail("direct_resource_mismatch");
+  return true;
+}
 
 function sha256(value) {
   return createHash("sha256").update(value).digest("hex");
@@ -452,7 +465,7 @@ async function verifyFreshPluginContext(snapshot, assertions) {
     const server = mcpList.find?.((entry) => entry.name === "mind-diary");
     if (
       server?.transport?.type !== "streamable_http" ||
-      server?.transport?.url !== "https://mind-diary.example.invalid/api/mcp" ||
+      server?.transport?.url !== CODEX_PLUGIN_MCP_URL ||
       server?.auth_status !== "not_logged_in"
     ) fail("installed_mcp_resolution_mismatch");
     assertions.add("package.mcp-resolution");
@@ -476,11 +489,7 @@ function validatePackage(snapshot, assertions) {
   ) fail("catalog_policy_mismatch");
   assertions.add("package.catalog-available-on-use");
   const server = snapshot.mcpJson.mcpServers?.["mind-diary"];
-  if (
-    server?.type !== "http" ||
-    server?.url !== "https://mind-diary.example.invalid/api/mcp" ||
-    server?.oauth_resource !== server.url
-  ) fail("direct_resource_mismatch");
+  assertDirectPackageServer(server);
   assertions.add("package.direct-resource-exact");
   if (
     Object.hasOwn(snapshot.pluginJson, "apps") ||
