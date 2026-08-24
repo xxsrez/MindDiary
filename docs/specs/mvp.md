@@ -303,7 +303,8 @@ Personal access token имеет следующий contract:
   попадает в modern adapter;
 - оба endpoint используют тот же Bearer authenticator и тот же per-request
   current authorization для выбранного Mind/revision;
-- `/settings/mcp` строит два copy-ready secret-free Codex config из origin
+- `/settings/developer/mcp` (compatibility entrypoint `/settings/mcp`) строит
+  два copy-ready secret-free Codex config из origin
   текущего deployment: default `codex-cli 0.147.0` использует exact
   `/api/mcp/2025-11-25`, а opt-in `mcp_2026_07_28` — exact `/api/mcp`;
 - сразу после issuance и по явному retry, пока one-time secret ещё виден,
@@ -332,8 +333,12 @@ capabilities и на каждом content call проходит current scope и
 существующем token store. Поэтому текущая application authorization повторно
 проверяет OAuth status/scopes внутри ACL/CAS/commit transaction, а revoke,
 refresh reuse и account deletion fail closed. Mirror не отображается как
-personal token. `/settings/mcp` отдельно показывает connected apps и позволяет
-немедленно отозвать grant.
+personal token. Ordinary active grants показываются на
+`/settings/connections` через actor-owned opaque `connection_ref`; Advanced
+personal tokens и protocol diagnostics находятся на `/settings/developer/mcp`.
+Revoke немедленно закрывает grant и скрывает connection; raw grant/token/
+binding IDs не попадают в ordinary URL/DOM. Полный contract — в
+[Connections, Advanced MCP и Codex Help](connection-experience.md).
 
 Этот профиль считается repository implementation, но не live UAT evidence до
 blocking automated direct-package/OAuth gate, exact-SHA deployment и
@@ -349,12 +354,13 @@ Sites UI поддерживает:
 - visibility и Public Minds catalog;
 - invitations, acceptance/rejection, member list и role mutations;
 - ownership transfer;
-- named MCP token create/list/revoke;
-- OAuth connected-app list/revoke;
-- per-credential attached read-only Minds и один exact writable Mind с
-  attach/detach/bind/switch/unbind, binding CAS и server read-back;
-- visible per-credential automatic capture `Off | On | blocked` с
-  enable/disable CAS и private-target warning;
+- Advanced MCP personal-token create/bounded list/revoke;
+- ordinary active OAuth connection list/detail/revoke через safe presentation
+  projection;
+- readable Minds и, только после write step-up, один exact writable Mind с
+  attach/detach/select/switch/clear, binding CAS и server read-back;
+- automatic capture только в Advanced/post-MVP surface; он не входит в
+  ordinary Connections и не блокирует Release 0.1 onboarding;
 - management links и destructive-action warnings.
 - отдельный constructor-allowlisted read-only UAT operator directory с
   compact success-only web/MCP activity summary; Mind roles его не открывают.
@@ -371,8 +377,12 @@ Pilot-ready Product Site использует один authenticated navigation 
 | `/public` | authenticated Public Minds catalog |
 | `/invitations` | incoming invitations и collaboration entrypoint |
 | `/settings/account` | profile, recovery handoff и account lifecycle |
-| `/settings/mcp` | Connected apps, personal MCP tokens, explicit read/write Mind bindings, setup и diagnostics |
-| `/help` | pilot help, environment и support boundaries |
+| `/settings/connections` | active OAuth connections текущего actor |
+| `/settings/connections/{connection_ref}` | safe connection detail, readable Minds, optional writable Mind и revoke |
+| `/settings/developer/mcp` | Advanced personal tokens, config, diagnostics и bounded token history |
+| `/settings/mcp` | compatibility entrypoint в `/settings/developer/mcp` |
+| `/help/codex` | три шага Codex onboarding, write step-up и safe recovery |
+| `/help` | общий pilot help, environment и support boundaries |
 | `/internal/operators/users` | hidden read-only UAT principal/activity directory; non-operator получает exact `404` |
 
 Authenticated pages используют согласованные header/footer links, keyboard
@@ -850,8 +860,9 @@ Account bootstrap и создание ordinary Mind продолжают ато�
 Strict checked-in template является reproducible fixture, а не автоматически
 записываемым private content и не import format.
 
-Copy-ready Codex playbook доступен после onboarding на `/me`, на `/help` и в
-`/settings/mcp`. Client сначала читает authoritative `get_mind_bindings` и не
+Copy-ready Codex playbook доступен после onboarding на `/me`, на `/help/codex`
+и в `/settings/developer/mcp`. Client сначала читает authoritative
+`get_mind_bindings` и не
 выводит target из предыдущего chat/search/model state. Пользователь явно
 выбирает ровно один writable Personal либо ordinary Mind; rebind допустим
 только по trusted intent. Затем пользователь даёт один конкретный факт,

@@ -145,8 +145,10 @@ surface; остальные content reads идут через authenticated MCP.
 | `revision_id` | Immutable domain revision ID. |
 | `entry_id` | Exact locator, bound к `space_id + revision_id + path`; producer и consumer ограничивают его 512 characters. Новые `mdl2_` handles имеют fixed 37-character form и server-side encrypted payload с TTL. |
 | `job_id` | Export job locator. |
-| `token_id` | Metadata ID MCP token; никогда не secret. |
-| `binding_owner_id` | Server-derived OAuth-grant/personal-token owner; first-party UI может передать его только как opaque locator собственного credential, после чего server заново проверяет ownership/state/scopes. Он никогда не является authority claim. |
+| `connection_ref` | Product Site presentation locator actor-owned OAuth grant; не raw grant ID и не bearer. |
+| `personal_token_ref` | Product Site presentation locator actor-owned personal token; не raw token ID и не bearer. |
+| `token_id` | Internal metadata ID MCP token; Product Site browser его не получает. |
+| `binding_owner_id` | Internal server-derived OAuth-grant/personal-token owner; не является Product Site route/response или authority claim. |
 | `read_binding_id` | Immutable service record одного attached read target. |
 | `write_binding_id` | Immutable active generation singleton write target. |
 | `staged_file_ref` | Opaque verified staged file pinned to binding owner + Mind + exact write generation; expires and is not a content locator. |
@@ -443,7 +445,7 @@ Adapter различает human UI entry и machine endpoints до product data
 
 | Request | Signed-out result |
 |---|---|
-| `GET`/`HEAD` распознанного UI route (`/`, `/me`, `/minds`, `/public`, `/invitations`, `/settings/account`, `/settings/mcp`, `/help`, canonical `/{handle}`) | `200 text/html`; одинаковый static sign-in shell со ссылкой exact `/signin-with-chatgpt`, `Cache-Control: no-store`, без CSRF и product projections. `HEAD` возвращает те же status/headers без body. |
+| `GET`/`HEAD` распознанного UI route (`/`, `/me`, `/minds`, `/public`, `/invitations`, `/settings/account`, `/settings/connections`, `/settings/connections/{connection_ref}`, `/settings/developer/mcp`, `/settings/mcp`, `/help`, `/help/codex`, canonical `/{handle}`) | `200 text/html`; одинаковый static sign-in shell со ссылкой exact `/signin-with-chatgpt`, `Cache-Control: no-store`, без CSRF и product projections. `HEAD` возвращает те же status/headers без body. |
 | Любой `/api/v1/**` без trusted Sites identity | JSON `401 authentication_required`; HTML не возвращается. |
 | UI или REST при недоступном trusted identity provider/binding | JSON `503 identity_binding_unavailable`; sign-in shell не маскирует outage. |
 | `/api/mcp`, `/api/mcp/2025-11-25` без valid product Bearer | Existing MCP `401` + `WWW-Authenticate` contract; Sites sign-in shell не участвует. |
@@ -543,11 +545,14 @@ Problem Details response:
 | `POST` | `/api/v1/invitations/{invitation_id}/reject` | Target rejects pending invitation. |
 | `POST` | `/api/v1/invitations/{invitation_id}/reissue` | Current authorized sender atomically replaces an invitation. |
 | `DELETE` | `/api/v1/invitations/{invitation_id}` | Authorized sender cancels invitation. |
-| `GET` | `/api/v1/mcp-tokens` | Token metadata, never secrets/verifiers. |
+| `GET` | `/api/v1/mcp-tokens` | Bounded personal-token metadata/history with separate actor-bound cursor, never secrets/verifiers. |
 | `POST` | `/api/v1/mcp-tokens` | Issue named personal MCP token once. |
-| `DELETE` | `/api/v1/mcp-tokens/{token_id}` | Revoke token. |
-| `DELETE` | `/api/v1/oauth-connections/{grant_id}` | Sites-authenticated principal отзывает свой connected app grant. |
-| `PATCH` | `/api/v1/mind-bindings/{binding_owner_id}` | Sites-authenticated principal меняет binding set exact собственного active credential с CAS и server read-back. |
+| `PATCH` | `/api/v1/mcp-tokens/{personal_token_ref}/mind-access` | Advanced MCP personal-token access mutation with CAS and safe read-back. |
+| `DELETE` | `/api/v1/mcp-tokens/{personal_token_ref}` | Revoke actor-owned token through presentation ref. |
+| `GET` | `/api/v1/connections` | Bounded page active OAuth connections current actor; opaque actor-bound cursor. |
+| `GET` | `/api/v1/connections/{connection_ref}` | Actor-safe connection detail; unknown/foreign/revoked ref indistinguishable `404`. |
+| `PATCH` | `/api/v1/connections/{connection_ref}/mind-access` | Sites-authenticated principal меняет ordinary connection access с CAS и server-owned read-back. |
+| `DELETE` | `/api/v1/connections/{connection_ref}` | Fail-closed revoke + hide own active OAuth connection. |
 | `GET` | `/api/v1/internal/operators/users` | Constructor-allowlisted service operator получает bounded read-only principal/activity directory; для остальных route indistinguishable `404`. |
 | `POST` | `/api/v1/minds/{mind_ref}/markdown-import-plans` | Local candidate: metadata-only exact-snapshot plan before reservation/staging. |
 | `POST` | `/api/v1/minds/{mind_ref}/markdown-imports` | Local candidate: reserve a current plan and create a principal-private session. |
@@ -838,7 +843,7 @@ Success `201` показывает secret ровно один раз:
 {
   "data": {
     "token": {
-      "token_id": "tok_opaque",
+      "personal_token_ref": "ptok_v1_0123456789abcdef0123456789abcdef",
       "name": "Codex on Mac",
       "display_prefix": "mdp_v1_7H3k9Q…",
       "scopes": ["content:read", "content:write"],
@@ -859,28 +864,30 @@ policy.
 
 ### Product Site Mind bindings
 
-`/settings/mcp` показывает binding state отдельно для каждого personal token и
-connected OAuth grant. Browser получает только current доступные name, route,
-visibility и write eligibility. Если ACL/visibility больше не разрешают
+Ordinary `/settings/connections/{connection_ref}` показывает binding state
+active OAuth grant через actor-owned presentation projection, а
+`/settings/developer/mcp` отдельно обслуживает personal tokens. Browser
+получает только current доступные name, route, visibility и write eligibility.
+Если ACL/visibility больше не разрешают
 metadata target, UI показывает `Access unavailable` без `mind_id`, `space_id`,
-name или route; собственный opaque `read_binding_id` может использоваться
-только для удаления stale binding.
+name или route; отдельный connection-owned opaque `stale_access_ref` может
+использоваться только для удаления stale binding.
 
-Mutation использует exact credential locator в route, same-origin `Origin`,
-CSRF и `Idempotency-Key`:
+Ordinary mutation использует actor-owned presentation locator, same-origin
+`Origin`, CSRF и `Idempotency-Key`:
 
 ```http
-PATCH /api/v1/mind-bindings/token_opaque
+PATCH /api/v1/connections/conn_v1_opaque/mind-access
 Content-Type: application/json
 Idempotency-Key: binding:opaque
 X-CSRF-Token: ...
 ```
 
-Bind/switch одного writable Mind:
+Select/switch одного writable Mind:
 
 ```json
 {
-  "action": "bind_write",
+  "action": "select_write",
   "mind_ref": "/research-notes",
   "expected_binding_version": 7
 }
@@ -888,16 +895,15 @@ Bind/switch одного writable Mind:
 
 Attach read использует `action: "attach_read"` и тот же `mind_ref`. Detach
 доступного target использует `action: "detach_read" + mind_ref`; после потери
-доступа вместо Mind locator передаётся exact собственный `read_binding_id`.
-Unbind использует только `action: "unbind_write"` и version. Unknown fields,
+доступа вместо Mind locator передаётся exact собственный `stale_access_ref`.
+Clear использует только `action: "clear_write"` и version. Unknown fields,
 оба target selector одновременно, missing target и отрицательная version
 отклоняются.
 
-Automatic capture policy использует те же route/CSRF/CAS/idempotency
-boundaries. `enable_capture` не принимает target и server-side pin-ится к
-current active private write generation; `disable_capture` также не принимает
-target и остаётся доступным для blocked policy. Оба action требуют
-`content:write`. Rebind/unbind/revoke/delete автоматически сбрасывают policy.
+Automatic capture policy не показывается и не изменяется через ordinary
+Connections. Existing Advanced/post-MVP route сохраняет отдельные
+CSRF/CAS/idempotency boundaries; rebind/unbind/revoke/delete по-прежнему
+автоматически сбрасывают policy.
 
 Server не доверяет route owner: он заново подтверждает, что token/grant
 принадлежит текущему Sites principal, active и имеет required scope. Затем
@@ -916,11 +922,15 @@ Success возвращает только:
 }
 ```
 
-После success browser перезагружает `/settings/mcp` и читает authoritative
-server projection. UI явно разделяет attached read-only Minds и ровно один
-`Active writable Mind` либо `Not bound`, предупреждает, что switch лишает
+После success browser перезагружает exact connection detail и читает
+authoritative server projection. UI явно разделяет readable Minds и ровно один
+`Can add and change` target либо `Not selected`, предупреждает, что switch лишает
 previous target write authority, и показывает immediate live-HEAD/history
 эффект `unlisted`/`public`. Binding не меняет visibility, membership или ACL.
+
+Exact query bounds, separate personal-token history cursor, presentation
+identity, identical `404` и write-step-up states заданы в
+[Connections contract](connection-experience.md).
 
 ## OAuth connector surface
 
@@ -1170,8 +1180,9 @@ Mind authorization вычисляются заново для каждого HTT
 только protocol framing; compatibility adapter не добавляет отдельную ACL,
 cached actor или tool surface.
 
-Authenticated `/settings/mcp` получает canonical origin из server-side request
-и показывает два точных secret-free Codex config; endpoint placeholder не
+Authenticated `/settings/developer/mcp` (compatibility entrypoint
+`/settings/mcp`) получает canonical origin из server-side request и показывает
+два точных secret-free Codex config; endpoint placeholder не
 остаётся в hosted HTML. Browser self-check использует текущую Sites session
 только для `GET /api/v1/session`, а one-time Mind Diary Bearer — только для
 обоих content MCP endpoint. Он выполняет modern `server/discover` и read-only

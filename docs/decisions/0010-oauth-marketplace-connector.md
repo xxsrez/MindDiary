@@ -8,6 +8,10 @@ external flow был сохранён informational canary в
 [ADR-0012](0012-synthetic-principal-release-gates.md), но final first-user flow
 теперь blocking по
 [ADR-0019](0019-release-0-1-codex-first-small-data-boundary.md).
+Product Site IA и presentation identity дополнительно уточнены
+[ADR-0020](0020-connections-ia-and-safe-projections.md): ordinary active grants
+перенесены в Connections, а `/settings/mcp` остаётся compatibility entrypoint
+для Advanced MCP.
 
 Историческое решение ниже требовало private registered connector и
 `ON_INSTALL`. Оно сохраняет rationale и все server-side OAuth, identity,
@@ -59,8 +63,10 @@ platform-authenticated identity к immutable внутреннему `principal_i
   существующем token store. Application authorization заново читает эту запись
   внутри ACL/CAS/commit transaction; revoke, expiry и account deletion поэтому
   fail closed. Mirror records скрыты от personal-token UI.
-- `/settings/mcp` показывает connected apps и позволяет немедленно отозвать
-  grant. Personal tokens остаются отдельным advanced/direct-client path.
+- `/settings/connections` показывает active grants через actor-owned
+  presentation refs и позволяет немедленно отозвать grant. Personal tokens
+  остаются отдельным `/settings/developer/mcp` advanced/direct-client path;
+  эта Product Site часть superseded ADR-0020.
 - Исторический distribution choice: Marketplace plugin использовал бы новый
   registered app ID. Для Codex pilot 0.1 этот пункт superseded ADR-0011:
   package не содержит `apps`/`.app.json`; Srez Marketplace и Task Manager

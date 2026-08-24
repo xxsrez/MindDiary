@@ -189,8 +189,9 @@ write binding. Discovery не считается attach. Arbitrary `mind` select
 
 ## Product Site control projection
 
-Authenticated `/settings/mcp` показывает тот же authoritative binding set для
-каждого visible personal token и connected OAuth grant:
+Authenticated `/settings/connections/{connection_ref}` показывает authoritative
+binding set active OAuth grant через actor-owned presentation projection, а
+`/settings/developer/mcp` отдельно показывает personal-token control:
 
 - `Attached read-only Minds` — `0..N` current read bindings;
 - `Active writable Mind` — один exact target либо `Not bound`;
@@ -198,13 +199,15 @@ Authenticated `/settings/mcp` показывает тот же authoritative bin
   current Sites principal ещё вправе видеть;
 - `Access unavailable` без `space_id`, name или route после ACL/visibility
   loss; credential-owned opaque read binding остаётся removable;
-- revoked/expired/disconnected credential получает только recovery guidance,
-  без mutation controls.
+- revoked/expired OAuth connection скрыта из ordinary detail; Advanced
+  personal-token history может показать lifecycle/recovery metadata, но без
+  mutation controls.
 
-Browser mutation идёт через
-`PATCH /api/v1/mind-bindings/{binding_owner_id}` с same-origin CSRF,
+Ordinary browser mutation идёт через
+`PATCH /api/v1/connections/{connection_ref}/mind-access` с same-origin CSRF,
 `Idempotency-Key`, exact action и `expected_binding_version`. Route parameter —
-только locator: server заново подтверждает ownership, active lifecycle и
+отдельный presentation locator: server разрешает его внутри current actor и
+заново подтверждает ownership, active lifecycle и
 effective scope exact credential. `mind_ref` разрешается server-side; browser
 не передаёт `space_id`, principal, role или grant claim. Attach/bind повторяют
 fresh ACL authorization; detach/unbind не требуют сохранившегося target ACL,
@@ -217,6 +220,18 @@ payload. UI отдельно предупреждает: switch немедлен
 с previous target; `unlisted`/`public` visibility делает новые commits
 доступными соответствующим authenticated readers, а binding не меняет этот
 visibility effect.
+
+Raw OAuth grant, token и binding-owner IDs запрещены в ordinary URL/DOM;
+unknown, foreign и revoked refs возвращают identical `404` до metadata. Exact
+list/detail/cursor/state contract находится в
+[Connections, Advanced MCP и Codex Help](connection-experience.md).
+
+Advanced personal-token mutation использует отдельный actor-owned
+`personal_token_ref` в
+`PATCH /api/v1/mcp-tokens/{personal_token_ref}/mind-access`; raw token ID и
+`binding_owner_id` не являются Product Site route contract. Internal adapter
+разрешает presentation ref в exact binding owner только после actor scope и
+затем применяет тот же `binding_version`/CAS.
 
 ## Errors
 

@@ -218,6 +218,13 @@ Desktop/CLI pilot package устанавливается без private register
 начинается при первом MCP use. Оба bearer profile связаны с principal, а не
 Mind, и не меняют current ACL, scope, CAS или idempotency boundaries.
 
+Основной пользовательский путь использует ordinary `Connections`: active
+OAuth connection показывается через actor-owned opaque presentation ref,
+пользователь видит только `Can read` и, после отдельного write step-up,
+`Can add and change`. Personal tokens, endpoints и protocol diagnostics
+вынесены в `Advanced MCP`; полный UX/security contract находится в
+[Connections, Advanced MCP и Codex Help](specs/connection-experience.md).
+
 Пользователь оплачивает inference своего Codex/Claude client. Mind Diary в этом
 пути предоставляет MCP, storage и server-side operations, но не вызывает LLM от
 своего имени.

@@ -39,7 +39,8 @@ Repository candidate уже содержит:
   допускают array write targets или unknown fields;
 - internal authorization mirror, благодаря которому application ACL/CAS/commit
   повторно проверяют OAuth token внутри текущих transaction boundaries;
-- connected-app list/revoke на `/settings/mcp` и account-deletion cleanup;
+- actor-owned active connection list/detail/revoke на `/settings/connections`,
+  Advanced personal tokens на `/settings/developer/mcp` и account-deletion cleanup;
 - D1 migration и repository tests для positive и negative OAuth paths.
 
 Этот checkpoint и executable gate — доказательство repository implementation,
@@ -133,14 +134,15 @@ bind-ит exact writable Mind, а commit передаёт immutable `write_bindi
 двумя независимыми boundaries.
 
 Если fresh-host validation покажет, что incremental scopes в installed plugin
-не дают надёжного UX, допустим pilot-компромисс: запросить оба scopes при
-первом OAuth flow, но показать отдельное ясное предупреждение об immediate commits.
-Этот fallback требует отдельного принятия product/security trade-off.
+не дают надёжного UX, release останавливается на product-decision boundary.
+Запросить оба scopes при первом OAuth flow либо изменить first-user claim можно
+только отдельным явным решением; silent fallback запрещён.
 
 ### Повторное подключение и отзыв
 
-- Пользователь видит connected app, scopes, время создания и last use в
-  `/settings/mcp`.
+- Пользователь видит active connection, `Can read`/`Can add and change`, время
+  создания и last use в `/settings/connections`; protocol scopes остаются в
+  Advanced MCP.
 - `Revoke` немедленно отзывает grant, access tokens и всю refresh-token family.
 - Следующий tool call возвращает стандартный OAuth challenge; ручной bearer
   token не подставляется как скрытый fallback.
@@ -381,28 +383,32 @@ OAuth и ACL. Изменение Site access policy является отдел�
 
 ## Product UI
 
-Repository source `/settings/mcp` теперь содержит две явно разделённые
-credential области и общий binding control contract:
+Repository contract разделяет ordinary Connections и Advanced MCP:
 
-1. `Connected apps` — client name, granted scopes, created/last-used times,
-   revoke/reconnect status, attached read Minds и отдельный exact active
-   writable Mind либо `Not bound`.
-2. `Advanced: personal tokens` — существующие `mdp_v1_` create/list/revoke для
+1. `/settings/connections` — только active connection: client name, user
+   capabilities, created/last-used times, readable Minds и отдельный exact
+   writable Mind либо `Not selected`. После revoke карточка скрывается, detail
+   возвращает `404`, а reconnect guidance остаётся в Help/Advanced MCP.
+2. `/settings/developer/mcp` — существующие `mdp_v1_` create/list/revoke для
    CLI, compatibility и диагностики.
 
-Каждая credential card отделяет attached read-only Minds от единственного
-`Active writable Mind`/`Not bound`, поддерживает attach/detach/bind/switch/
-unbind с server read-back, redacts inaccessible target metadata и блокирует
-controls после revoke/expiry. Switch copy объясняет, что previous target больше
-не writable; visibility copy отдельно предупреждает об immediate
-`unlisted`/`public` live HEAD/history exposure. Это source-candidate evidence,
-не claim о уже развёрнутом UAT UI.
+Active connection detail отделяет readable Minds от единственного
+`Can add and change` target/`Not selected`, поддерживает attach/detach/select/
+switch/clear с server read-back и redacts inaccessible target metadata.
+Revoked/expired OAuth card не удерживается в ordinary UI. Advanced personal-
+token history может показывать revoked/expired metadata без mutation controls.
+Switch copy объясняет, что previous target больше не writable; visibility copy
+отдельно предупреждает об immediate `unlisted`/`public` live HEAD/history
+exposure. Это source-candidate evidence, не claim о уже развёрнутом UAT UI.
 
-В onboarding следует объяснять только пользовательские действия: установить
-Mind Diary из Srez Marketplace, пройти Authenticate, подключить read Minds и
-явно выбрать writable target. MCP URL, DCR, PKCE, resource audience и token
-rotation остаются implementation details. Binding не включает automatic
-capture. Обновлённый companion skill читает `automatic_capture` из fresh
+В onboarding следует объяснять только три пользовательских действия: установить
+Mind Diary из Srez Marketplace, пройти read Authenticate и при первом write
+intent пройти отдельный native step-up. Подключение read Minds входит во второй
+шаг, выбор одного writable target — в третий. MCP URL, DCR, PKCE, resource
+audience и token rotation остаются implementation details. Binding не включает
+automatic capture. Полный IA/state/query contract — в
+[Connections, Advanced MCP и Codex Help](connection-experience.md).
+Обновлённый companion skill читает `automatic_capture` из fresh
 bindings и использует `capture_knowledge` только для already-enabled
 routine/non-sensitive policy в exact private writable Mind. Он не включает
 policy через MCP и не переносит sensitive/cross-Mind/external payload; полный

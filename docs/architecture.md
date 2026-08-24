@@ -365,15 +365,20 @@ mirror, затем OAuth lifecycle records; account deletion authoritative casca
 также отзывает mirrors. Поэтому недоступность best-effort OAuth cleanup после
 account deletion не сохраняет content access.
 
-Web `/settings/mcp` показывает connected apps и немедленный revoke отдельно от
-personal tokens, а внутри каждой credential card — `0..N` read bindings и один
-write binding. Browser не получает credential Bearer: trusted Web adapter
-сначала заново подтверждает Sites principal → exact token/grant ownership,
-active lifecycle и scope, затем вызывает тот же `MindBindingApplicationService`
-с binding CAS. Accessible targets проецируются из current control metadata;
+Web разделяет ordinary `/settings/connections` и
+`/settings/connections/{connection_ref}` от `/settings/developer/mcp` с
+personal tokens и protocol diagnostics. `connection_ref` — отдельный actor-
+owned presentation locator; raw token/grant/binding IDs не попадают в URL или
+DOM. Browser не получает credential Bearer: trusted Web adapter сначала
+разрешает ref внутри current Sites principal, подтверждает active lifecycle и
+scope, затем вызывает тот же `MindBindingApplicationService` с binding CAS.
+List сначала читает bounded page active grants и одним bounded read — bindings
+только этой page. Accessible targets проецируются из current control metadata;
 утративший доступ target redacted без name/route/`space_id`. Success всегда
-заканчивается server-rendered read-back. OAuth bearer не даёт
-membership/account control plane. Direct UAT package использует
+заканчивается server-owned read-back. OAuth bearer не даёт membership/account
+control plane. Полный boundary — в
+[Connections contract](specs/connection-experience.md). Direct UAT package
+использует
 `AVAILABLE + ON_USE`; blocking protocol/package/transport automation отделена
 от отдельного blocking fresh external-account first-user receipt на exact UAT
 candidate по ADR-0019.
