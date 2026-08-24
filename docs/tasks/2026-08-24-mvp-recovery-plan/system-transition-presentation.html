@@ -1,0 +1,1098 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Mind Diary — как распутать MVP 0.1</title>
+  <style>
+    :root {
+      --ink: #182642;
+      --ink-soft: #40506a;
+      --paper: #fff7e8;
+      --paper-deep: #f5ead7;
+      --white: #ffffff;
+      --plum: #6c4bb6;
+      --plum-soft: #eee8fb;
+      --coral: #eb6f64;
+      --coral-soft: #fff0ec;
+      --brass: #b88a3b;
+      --brass-soft: #fff3cf;
+      --sage: #738f79;
+      --sage-soft: #e9f2e9;
+      --blue: #3178a8;
+      --blue-soft: #e5f3fb;
+      --line: rgba(24, 38, 66, .16);
+      --line-strong: rgba(24, 38, 66, .28);
+      --shadow: 0 18px 55px rgba(24, 38, 66, .10);
+      --display: Georgia, "Times New Roman", serif;
+      --ui: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --max: 1180px;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 8% 4%, rgba(235, 111, 100, .12), transparent 24rem),
+        radial-gradient(circle at 96% 1%, rgba(108, 75, 182, .12), transparent 30rem),
+        var(--paper);
+      font-family: var(--ui);
+      line-height: 1.55;
+    }
+
+    a { color: var(--plum); }
+    button, input, textarea { font: inherit; }
+    button { cursor: pointer; }
+    code {
+      padding: .1rem .34rem;
+      border-radius: .35rem;
+      background: rgba(24, 38, 66, .08);
+      font-size: .92em;
+    }
+
+    .skip-link {
+      position: absolute;
+      left: 1rem;
+      top: -4rem;
+      z-index: 100;
+      padding: .7rem 1rem;
+      color: var(--white);
+      background: var(--ink);
+      border-radius: .7rem;
+    }
+    .skip-link:focus { top: 1rem; }
+
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 40;
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      padding: .65rem max(1rem, calc((100vw - var(--max)) / 2));
+      border-bottom: 1px solid var(--line);
+      background: rgba(255, 247, 232, .94);
+      backdrop-filter: blur(14px);
+    }
+    .brand-mini {
+      display: flex;
+      align-items: center;
+      gap: .6rem;
+      flex: 0 0 auto;
+      color: var(--ink);
+      font-weight: 750;
+    }
+    .brand-mini img { width: 34px; height: 34px; }
+    .nav-scroll {
+      display: flex;
+      gap: .25rem;
+      overflow-x: auto;
+      scrollbar-width: none;
+    }
+    .nav-scroll::-webkit-scrollbar { display: none; }
+    .nav-scroll a {
+      flex: 0 0 auto;
+      padding: .45rem .65rem;
+      color: var(--ink-soft);
+      border-radius: .6rem;
+      text-decoration: none;
+      font-size: .86rem;
+      font-weight: 650;
+    }
+    .nav-scroll a:hover,
+    .nav-scroll a[aria-current="true"] {
+      color: var(--ink);
+      background: rgba(108, 75, 182, .11);
+    }
+    .progress-track {
+      position: fixed;
+      top: 57px;
+      left: 0;
+      right: 0;
+      z-index: 39;
+      height: 3px;
+      background: transparent;
+    }
+    .progress-fill {
+      width: 0;
+      height: 100%;
+      background: linear-gradient(90deg, var(--coral), var(--plum));
+    }
+
+    main { overflow: clip; }
+    .section {
+      width: min(var(--max), calc(100% - 2rem));
+      margin: 0 auto;
+      padding: 5.5rem 0;
+      scroll-margin-top: 5rem;
+    }
+    .section + .section { border-top: 1px solid var(--line); }
+    .section-kicker {
+      margin: 0 0 .7rem;
+      color: var(--plum);
+      font-size: .78rem;
+      font-weight: 800;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+    }
+    h1, h2, h3 {
+      margin-top: 0;
+      color: var(--ink);
+      line-height: 1.12;
+    }
+    h1, h2 { font-family: var(--display); }
+    h1 { max-width: 980px; margin-bottom: 1.2rem; font-size: clamp(2.65rem, 7vw, 6.4rem); letter-spacing: -.055em; }
+    h2 { max-width: 880px; margin-bottom: 1rem; font-size: clamp(2rem, 4.5vw, 4rem); letter-spacing: -.035em; }
+    h3 { font-size: 1.12rem; }
+    .lead {
+      max-width: 820px;
+      margin: 0;
+      color: var(--ink-soft);
+      font-size: clamp(1.06rem, 1.7vw, 1.32rem);
+    }
+    .muted { color: var(--ink-soft); }
+    .fine { font-size: .84rem; color: var(--ink-soft); }
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: .45rem;
+      margin-bottom: 1rem;
+      padding: .4rem .65rem;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: rgba(255,255,255,.54);
+      font-size: .84rem;
+      font-weight: 700;
+    }
+    .dot { width: .62rem; height: .62rem; border-radius: 50%; background: var(--coral); }
+
+    .hero {
+      min-height: 82vh;
+      display: grid;
+      align-content: center;
+      padding-top: 7rem;
+    }
+    .hero-actions { display: flex; flex-wrap: wrap; gap: .7rem; margin-top: 2rem; }
+    .button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: .45rem;
+      min-height: 44px;
+      padding: .72rem 1rem;
+      color: var(--ink);
+      border: 1px solid var(--line-strong);
+      border-radius: .8rem;
+      background: rgba(255,255,255,.68);
+      text-decoration: none;
+      font-weight: 750;
+    }
+    .button:hover { transform: translateY(-1px); border-color: var(--plum); }
+    .button.primary { color: var(--white); border-color: var(--plum); background: var(--plum); }
+    .hero-summary {
+      display: grid;
+      grid-template-columns: 1.25fr .75fr;
+      gap: 1rem;
+      margin-top: 4rem;
+    }
+    .hero-thesis {
+      padding: clamp(1.3rem, 3vw, 2.3rem);
+      border-radius: 1.5rem;
+      color: var(--white);
+      background: var(--ink);
+      box-shadow: var(--shadow);
+    }
+    .hero-thesis strong { color: #ffd2cb; }
+    .hero-thesis p { max-width: 720px; margin: 0; font-family: var(--display); font-size: clamp(1.35rem, 3vw, 2.4rem); line-height: 1.25; }
+    .hero-note {
+      display: grid;
+      align-content: space-between;
+      padding: 1.25rem;
+      border: 1px solid var(--line);
+      border-radius: 1.5rem;
+      background: rgba(255,255,255,.64);
+    }
+
+    .grid-2 { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 1rem; }
+    .grid-3 { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 1rem; }
+    .grid-4 { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 1rem; }
+    .stack { display: grid; gap: 1rem; }
+    .card {
+      padding: 1.25rem;
+      border: 1px solid var(--line);
+      border-radius: 1.15rem;
+      background: rgba(255,255,255,.72);
+      box-shadow: 0 10px 30px rgba(24,38,66,.05);
+    }
+    .card h3 { margin-bottom: .55rem; }
+    .card p:last-child { margin-bottom: 0; }
+    .card.problem { background: var(--coral-soft); }
+    .card.target { background: var(--sage-soft); }
+    .card.gate { background: var(--brass-soft); }
+    .card.platform { background: var(--blue-soft); }
+    .card.advanced { background: var(--plum-soft); }
+    .metric { padding: 1.15rem; border-top: 4px solid var(--plum); }
+    .metric.problem { border-top-color: var(--coral); }
+    .metric.good { border-top-color: var(--sage); }
+    .metric-value { display: block; margin: .2rem 0 .35rem; font-family: var(--display); font-size: clamp(2rem, 4vw, 3.4rem); line-height: 1; }
+    .metric-label { font-weight: 750; }
+
+    .plain-list { margin: .7rem 0 0; padding-left: 1.15rem; }
+    .plain-list li + li { margin-top: .4rem; }
+    .check-list { display: grid; gap: .7rem; margin: 1rem 0 0; padding: 0; list-style: none; }
+    .check-list li { display: grid; grid-template-columns: 1.45rem 1fr; gap: .55rem; }
+    .check-list li::before {
+      content: "✓";
+      display: grid;
+      place-items: center;
+      width: 1.35rem;
+      height: 1.35rem;
+      margin-top: .08rem;
+      color: var(--white);
+      border-radius: 50%;
+      background: var(--sage);
+      font-size: .78rem;
+      font-weight: 900;
+    }
+    .cross-list li::before { content: "×"; background: var(--coral); }
+
+    .story-map {
+      position: relative;
+      display: grid;
+      grid-template-columns: 1fr auto 1fr;
+      gap: 1.2rem;
+      align-items: stretch;
+      margin-top: 2.3rem;
+    }
+    .story-side { display: grid; gap: .75rem; }
+    .story-arrow { display: grid; place-items: center; color: var(--plum); font-size: 2rem; }
+    .story-box { padding: 1rem; border-radius: 1rem; border: 1px solid var(--line); background: rgba(255,255,255,.68); }
+    .story-box.bad { border-left: 5px solid var(--coral); }
+    .story-box.good { border-left: 5px solid var(--sage); }
+    .story-box small { display: block; margin-bottom: .25rem; color: var(--ink-soft); font-weight: 750; }
+
+    .toggle-row { display: flex; flex-wrap: wrap; gap: .55rem; margin: 1.5rem 0; }
+    .toggle-row button,
+    .filter-row button,
+    .node-button {
+      min-height: 40px;
+      padding: .55rem .78rem;
+      color: var(--ink);
+      border: 1px solid var(--line-strong);
+      border-radius: .7rem;
+      background: rgba(255,255,255,.66);
+      font-weight: 720;
+    }
+    .toggle-row button[aria-pressed="true"],
+    .filter-row button[aria-pressed="true"] { color: var(--white); border-color: var(--plum); background: var(--plum); }
+    [data-view-panel][hidden] { display: none; }
+
+    .mock-browser {
+      overflow: hidden;
+      border: 1px solid var(--line-strong);
+      border-radius: 1.25rem;
+      background: var(--white);
+      box-shadow: var(--shadow);
+    }
+    .browser-chrome {
+      display: flex;
+      align-items: center;
+      gap: .7rem;
+      padding: .7rem .9rem;
+      border-bottom: 1px solid var(--line);
+      background: #f6f0e5;
+    }
+    .browser-dots { display: flex; gap: .35rem; }
+    .browser-dots span { width: .7rem; height: .7rem; border-radius: 50%; background: var(--line-strong); }
+    .browser-address { flex: 1; padding: .36rem .6rem; border-radius: .45rem; background: var(--white); color: var(--ink-soft); font-size: .78rem; }
+    .browser-body { display: grid; grid-template-columns: 180px 1fr; min-height: 520px; }
+    .mock-nav { padding: 1rem; color: var(--white); background: var(--ink); }
+    .mock-nav strong { display: block; margin-bottom: 1.3rem; }
+    .mock-nav div { margin: .45rem 0; padding: .45rem .55rem; border-radius: .5rem; color: rgba(255,255,255,.72); font-size: .83rem; }
+    .mock-nav .active { color: var(--white); background: rgba(255,255,255,.14); }
+    .mock-content { padding: 1.15rem; }
+    .mock-content h3 { font-size: 1.35rem; }
+    .mock-section { margin: .8rem 0; padding: .8rem; border: 1px solid var(--line); border-radius: .8rem; background: #fffaf1; }
+    .mock-row { display: flex; justify-content: space-between; gap: .8rem; align-items: center; }
+    .mock-lines { display: grid; gap: .38rem; margin-top: .6rem; }
+    .mock-line { height: .55rem; border-radius: .3rem; background: rgba(24,38,66,.12); }
+    .mock-line.short { width: 58%; }
+    .mock-button { display: inline-block; padding: .38rem .55rem; border-radius: .5rem; color: var(--white); background: var(--plum); font-size: .74rem; font-weight: 700; }
+    .mock-badge { display: inline-block; padding: .2rem .45rem; border-radius: 999px; background: var(--sage-soft); font-size: .72rem; font-weight: 750; }
+    .current-wall { max-height: 390px; overflow: hidden; position: relative; }
+    .current-wall::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 150px; background: linear-gradient(transparent, var(--white)); }
+
+    .burden-chart { display: grid; gap: .85rem; margin-top: 1.4rem; }
+    .bar-row { display: grid; grid-template-columns: minmax(120px, 200px) 1fr 4rem; gap: .8rem; align-items: center; }
+    .bar-track { height: 18px; border-radius: 999px; background: rgba(24,38,66,.09); overflow: hidden; }
+    .bar-fill { height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--coral), var(--plum)); }
+    .bar-row strong { text-align: right; }
+
+    .architecture {
+      display: grid;
+      grid-template-columns: 1fr 1.35fr 1fr;
+      gap: 1rem;
+      align-items: stretch;
+      margin-top: 2rem;
+    }
+    .arch-lane { display: grid; gap: .75rem; align-content: center; }
+    .arch-label { color: var(--ink-soft); font-size: .75rem; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+    .arch-node {
+      position: relative;
+      padding: 1rem;
+      border: 1px solid var(--line);
+      border-radius: 1rem;
+      background: rgba(255,255,255,.7);
+    }
+    button.arch-node { width: 100%; color: var(--ink); text-align: left; }
+    button.arch-node:hover, button.arch-node[aria-pressed="true"] { border-color: var(--plum); box-shadow: 0 0 0 3px rgba(108,75,182,.13); }
+    .arch-node strong { display: block; margin-bottom: .25rem; }
+    .arch-node small { color: var(--ink-soft); }
+    .arch-center { padding: 1rem; border-radius: 1.25rem; color: var(--white); background: var(--ink); }
+    .arch-center .arch-node { color: var(--ink); background: var(--white); }
+    .arch-arrow { text-align: center; color: var(--plum); font-size: 1.4rem; }
+    .arch-detail { margin-top: 1rem; padding: 1rem; border-left: 5px solid var(--plum); border-radius: .7rem; background: var(--plum-soft); }
+
+    .scope-lanes { display: grid; gap: .65rem; margin-top: 1.5rem; }
+    .scope-lane { display: grid; grid-template-columns: 170px 1fr; gap: 1rem; align-items: center; }
+    .scope-track { display: flex; min-height: 46px; border-radius: .75rem; overflow: hidden; background: rgba(24,38,66,.08); }
+    .scope-segment { display: grid; place-items: center; padding: .5rem; text-align: center; font-size: .76rem; font-weight: 800; }
+    .scope-segment.mvp { flex: 1.2; color: var(--white); background: var(--sage); }
+    .scope-segment.ops { flex: .9; background: var(--brass-soft); }
+    .scope-segment.scale { flex: 1.9; background: var(--coral-soft); }
+    .scope-segment.plan { flex: 1.25; background: var(--plum-soft); }
+
+    .filter-row { display: flex; flex-wrap: wrap; gap: .55rem; margin: 1.4rem 0; }
+    .finding-grid { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: .85rem; }
+    .finding { min-height: 220px; }
+    .finding[hidden] { display: none; }
+    .finding-top { display: flex; justify-content: space-between; gap: .7rem; align-items: start; }
+    .status-pill { flex: 0 0 auto; padding: .22rem .5rem; border-radius: 999px; font-size: .7rem; font-weight: 850; }
+    .status-pill.p0 { color: #782821; background: #ffd7d2; }
+    .status-pill.p1 { color: #695019; background: #ffedb4; }
+    .status-pill.avoided { color: #2d6138; background: #dcebdd; }
+    .finding .owner { margin-top: .9rem; font-size: .8rem; font-weight: 800; color: var(--plum); }
+
+    .ia-map { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: .85rem; margin: 1.4rem 0 2rem; }
+    .ia-card { padding: 1rem; border-radius: 1rem; border: 1px solid var(--line); background: rgba(255,255,255,.72); }
+    .ia-card .path { display: block; margin-bottom: .65rem; color: var(--plum); font-size: .75rem; font-weight: 800; }
+    .ia-card.user { border-top: 5px solid var(--sage); }
+    .ia-card.developer { border-top: 5px solid var(--plum); }
+    .ia-card.help { border-top: 5px solid var(--blue); }
+    .ia-card.compat { border-top: 5px solid var(--brass); }
+
+    .sequence { display: grid; gap: .5rem; margin-top: 1.4rem; }
+    .sequence-row { display: grid; grid-template-columns: 64px 1fr; gap: .8rem; align-items: stretch; }
+    .sequence-index { display: grid; place-items: center; min-height: 64px; color: var(--white); border-radius: 50%; background: var(--plum); font-family: var(--display); font-size: 1.35rem; }
+    .sequence-content { padding: .85rem 1rem; border-radius: .9rem; background: rgba(255,255,255,.72); border: 1px solid var(--line); }
+    .sequence-content strong { display: block; }
+    .sequence-content small { color: var(--ink-soft); }
+    .sequence-row.locked .sequence-index { background: var(--coral); }
+    .sequence-row.done .sequence-index { background: var(--sage); }
+
+    .before-after-table { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; background: rgba(255,255,255,.56); }
+    th, td { padding: .9rem; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+    th { font-size: .78rem; letter-spacing: .04em; text-transform: uppercase; }
+    tbody tr:last-child td { border-bottom: 0; }
+
+    .graph-wrap { margin-top: 1.6rem; padding: 1rem; border-radius: 1.25rem; background: rgba(255,255,255,.62); border: 1px solid var(--line); }
+    .graph-layer { display: flex; flex-wrap: wrap; justify-content: center; gap: .6rem; }
+    .graph-arrow { padding: .45rem 0; text-align: center; color: var(--plum); font-size: 1.4rem; }
+    .node-button { min-width: 125px; text-align: left; }
+    .node-button strong { display: block; }
+    .node-button small { color: var(--ink-soft); }
+    .node-button:hover,
+    .node-button[aria-pressed="true"] { color: var(--white); border-color: var(--ink); background: var(--ink); }
+    .node-button[aria-pressed="true"] small { color: rgba(255,255,255,.76); }
+    .node-button.related { box-shadow: 0 0 0 3px rgba(108,75,182,.24); border-color: var(--plum); }
+    .graph-detail { min-height: 90px; margin-top: 1rem; padding: 1rem; border-radius: .8rem; background: var(--plum-soft); }
+
+    .timeline { position: relative; display: grid; gap: .8rem; margin-top: 1.6rem; }
+    .phase {
+      display: grid;
+      grid-template-columns: 70px minmax(0, 1fr) auto;
+      gap: 1rem;
+      align-items: center;
+      padding: 1rem;
+      color: var(--ink);
+      border: 1px solid var(--line);
+      border-radius: 1rem;
+      background: rgba(255,255,255,.7);
+      text-align: left;
+    }
+    .phase:hover, .phase[aria-expanded="true"] { border-color: var(--plum); }
+    .phase-number { font-family: var(--display); font-size: 2rem; color: var(--plum); }
+    .phase-title strong { display: block; }
+    .phase-title small { color: var(--ink-soft); }
+    .phase-state { padding: .25rem .55rem; border-radius: 999px; background: var(--brass-soft); font-size: .72rem; font-weight: 850; }
+    .phase-detail { display: none; padding: 0 1rem 1rem 86px; color: var(--ink-soft); }
+    .phase[aria-expanded="true"] + .phase-detail { display: block; }
+
+    .risk-matrix {
+      display: grid;
+      grid-template-columns: 110px repeat(3, minmax(0,1fr));
+      gap: .5rem;
+      align-items: stretch;
+      margin-top: 1.5rem;
+    }
+    .risk-axis { display: grid; place-items: center; color: var(--ink-soft); font-size: .75rem; font-weight: 800; text-align: center; }
+    .risk-cell { min-height: 120px; padding: .75rem; border-radius: .75rem; background: rgba(255,255,255,.55); border: 1px solid var(--line); }
+    .risk-cell.high { background: var(--coral-soft); }
+    .risk-cell.medium { background: var(--brass-soft); }
+    .risk-cell.low { background: var(--sage-soft); }
+    .risk-item { display: block; margin-bottom: .45rem; font-size: .78rem; font-weight: 760; }
+
+    .evidence-ladder { display: grid; gap: .7rem; margin-top: 1.5rem; }
+    .evidence-step { display: grid; grid-template-columns: 2rem 1fr auto; gap: .8rem; align-items: center; padding: .8rem 1rem; border-radius: .85rem; background: rgba(255,255,255,.7); border: 1px solid var(--line); }
+    .evidence-step .num { display: grid; place-items: center; width: 2rem; height: 2rem; color: var(--white); border-radius: 50%; background: var(--ink); }
+    .evidence-step .tag { padding: .22rem .5rem; border-radius: 999px; background: var(--plum-soft); font-size: .72rem; font-weight: 800; }
+
+    .decision-board { display: grid; gap: .7rem; margin-top: 1.4rem; }
+    .review-item { display: grid; grid-template-columns: auto 1fr; gap: .8rem; align-items: start; padding: 1rem; border: 1px solid var(--line); border-radius: .9rem; background: rgba(255,255,255,.68); }
+    .review-item input { width: 1.25rem; height: 1.25rem; margin-top: .15rem; accent-color: var(--plum); }
+    .review-item strong { display: block; }
+    .review-item small { color: var(--ink-soft); }
+    .review-status { margin-top: 1rem; color: var(--ink-soft); }
+
+    .source-list { columns: 2; column-gap: 2rem; margin-top: 1.5rem; padding-left: 1.2rem; }
+    .source-list li { break-inside: avoid; margin-bottom: .65rem; }
+    footer { width: min(var(--max), calc(100% - 2rem)); margin: 0 auto; padding: 2.5rem 0 4rem; border-top: 1px solid var(--line); color: var(--ink-soft); }
+
+    @media (max-width: 920px) {
+      .grid-4, .finding-grid, .ia-map { grid-template-columns: repeat(2,minmax(0,1fr)); }
+      .grid-3 { grid-template-columns: repeat(2,minmax(0,1fr)); }
+      .architecture { grid-template-columns: 1fr; }
+      .arch-arrow { transform: rotate(90deg); }
+      .hero-summary { grid-template-columns: 1fr; }
+      .scope-lane { grid-template-columns: 1fr; gap: .35rem; }
+      .browser-body { grid-template-columns: 140px 1fr; }
+    }
+
+    @media (max-width: 680px) {
+      .topbar { padding-inline: .75rem; }
+      .brand-mini span { display: none; }
+      .section { width: min(100% - 1.25rem, var(--max)); padding: 4rem 0; }
+      .hero { min-height: auto; padding-top: 5.5rem; }
+      .grid-2, .grid-3, .grid-4, .finding-grid, .ia-map { grid-template-columns: 1fr; }
+      .story-map { grid-template-columns: 1fr; }
+      .story-arrow { transform: rotate(90deg); }
+      .bar-row { grid-template-columns: 1fr 3.5rem; }
+      .bar-row > span:first-child { grid-column: 1 / -1; }
+      .browser-body { grid-template-columns: 1fr; }
+      .mock-nav { display: flex; gap: .4rem; overflow-x: auto; }
+      .mock-nav strong { display: none; }
+      .mock-nav div { flex: 0 0 auto; }
+      .phase { grid-template-columns: 52px 1fr; }
+      .phase-state { grid-column: 2; justify-self: start; }
+      .phase-detail { padding-left: 1rem; }
+      .risk-matrix { grid-template-columns: 64px repeat(3, minmax(130px,1fr)); overflow-x: auto; }
+      .source-list { columns: 1; }
+      .scope-track { flex-direction: column; }
+      .scope-segment { min-height: 44px; }
+    }
+
+    @media print {
+      .topbar, .progress-track, .hero-actions, .toggle-row, .filter-row, .decision-board { display: none !important; }
+      body { background: var(--white); }
+      .section { width: 100%; padding: 2rem 0; break-inside: avoid; }
+      .card, .mock-browser, .graph-wrap { box-shadow: none; }
+      [hidden] { display: block !important; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      *, *::before, *::after { animation: none !important; transition: none !important; }
+    }
+  </style>
+</head>
+<body>
+  <a class="skip-link" href="#main">К содержанию</a>
+
+  <header class="topbar">
+    <div class="brand-mini">
+      <img src="../../assets/brand/mind-diary-mark.svg" alt="">
+      <span>Mind Diary / MVP 0.1</span>
+    </div>
+    <nav class="nav-scroll" aria-label="Разделы презентации">
+      <a href="#diagnosis">Диагноз</a>
+      <a href="#today">Сейчас</a>
+      <a href="#architecture">Система</a>
+      <a href="#problems">Проблемы</a>
+      <a href="#target">Цель</a>
+      <a href="#plan">Переход</a>
+      <a href="#risks">Риски</a>
+      <a href="#review">Ревью</a>
+    </nav>
+  </header>
+  <div class="progress-track" aria-hidden="true"><div class="progress-fill" id="progressFill"></div></div>
+
+  <main id="main">
+    <section class="section hero" id="top">
+      <div>
+        <span class="eyebrow"><span class="dot"></span> Интерактивная карта восстановления · срез 24 августа 2026</span>
+        <h1>Система не сломана. Она запуталась.</h1>
+        <p class="lead">В Mind Diary уже есть важная серверная логика, безопасность, OAuth, MCP и UAT. Но пользовательский путь, developer-инструменты, операторские проверки и будущие file/scale-функции оказались свалены в одну страницу и один release. Из-за этого продукт выглядит сложнее, чем он есть, а релиз не умеет закончиться.</p>
+        <div class="hero-actions">
+          <a class="button primary" href="#diagnosis">Показать диагноз ↓</a>
+          <button class="button" type="button" id="printButton">Распечатать / сохранить PDF</button>
+        </div>
+      </div>
+
+      <div class="hero-summary">
+        <div class="hero-thesis">
+          <p><strong>Наша цель:</strong> оставить обычному человеку три понятных шага, спрятать технический шум в Advanced и довести один маленький MVP до честно проверенного Done.</p>
+        </div>
+        <div class="hero-note">
+          <div>
+            <strong>Важно</strong>
+            <p class="muted">Это не заявление, что новый интерфейс уже сделан. Это карта текущего состояния, целевой модели, blockers и порядка работы.</p>
+          </div>
+          <span class="fine">Live-статусы принадлежат Task Manager. Архитектурные решения до принятия остаются proposal.</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="diagnosis">
+      <p class="section-kicker">01 · Главный диагноз</p>
+      <h2>Мы пытались выпустить сразу четыре продукта.</h2>
+      <p class="lead">Они полезны по отдельности. Проблема начинается, когда они выглядят как один пользовательский сценарий и блокируют один и тот же релиз.</p>
+
+      <div class="grid-4" style="margin-top:2rem">
+        <article class="card target">
+          <h3>1. Обычный пользователь</h3>
+          <p>Установить → войти → выбрать Minds → получить результат в Codex.</p>
+        </article>
+        <article class="card advanced">
+          <h3>2. Разработчик</h3>
+          <p>Personal tokens, protocol profiles, endpoints и диагностика MCP.</p>
+        </article>
+        <article class="card gate">
+          <h3>3. Release operator</h3>
+          <p>Тестовые principals, canaries, evidence, cleanup и recovery.</p>
+        </article>
+        <article class="card problem">
+          <h3>4. Будущая платформа</h3>
+          <p>BundleFile, большие Minds, Google Drive и универсальный file ingress.</p>
+        </article>
+      </div>
+
+      <div class="story-map" aria-label="Переход от текущей модели к целевой">
+        <div class="story-side">
+          <div class="story-box bad"><small>Сегодня</small><strong>Одна огромная MCP Setup</strong><br>В ней 6 крупных sections и редактор доступа для каждой credential.</div>
+          <div class="story-box bad"><small>Сегодня</small><strong>Один плоский release graph</strong><br>MVP, performance, operator и future file work выглядят одинаковыми blockers.</div>
+          <div class="story-box bad"><small>Сегодня</small><strong>Много технических успехов</strong><br>Но нет одного актуального first-user receipt, который завершает релиз.</div>
+        </div>
+        <div class="story-arrow" aria-hidden="true">→</div>
+        <div class="story-side">
+          <div class="story-box good"><small>Цель</small><strong>Три понятных действия</strong><br>Install → Authenticate for reading → Choose readable Minds.</div>
+          <div class="story-box good"><small>Цель</small><strong>Отдельные поверхности</strong><br>Connections, Connection details, Advanced MCP и Codex Help.</div>
+          <div class="story-box good"><small>Цель</small><strong>Один terminal result</strong><br>Exact SHA + deployment + package + browser + real-account UAT.</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="today">
+      <p class="section-kicker">02 · Что есть сейчас</p>
+      <h2>Страница, которая объясняет всё сразу, не объясняет ничего.</h2>
+      <p class="lead">Серверная модель bindings нужна. Но ordinary user видит внутреннее устройство системы вместо простого ответа: «что это приложение может читать и куда оно может писать?»</p>
+
+      <div class="grid-4" style="margin-top:2rem">
+        <div class="card metric problem"><span class="metric-label">OAuth connections</span><span class="metric-value">9</span><span class="fine">на UAT snapshot</span></div>
+        <div class="card metric problem"><span class="metric-label">Personal tokens</span><span class="metric-value">28</span><span class="fine">из них 26 revoked</span></div>
+        <div class="card metric problem"><span class="metric-label">Binding panels</span><span class="metric-value">37</span><span class="fine">все на одной странице</span></div>
+        <div class="card metric problem"><span class="metric-label">Visible text</span><span class="metric-value">≈41k</span><span class="fine">символов основного content</span></div>
+      </div>
+
+      <div class="toggle-row" role="group" aria-label="Сравнение текущей и целевой страницы">
+        <button type="button" aria-pressed="true" data-view="current">Текущая страница</button>
+        <button type="button" aria-pressed="false" data-view="target">Целевая страница</button>
+      </div>
+
+      <div data-view-panel="current">
+        <div class="mock-browser" aria-label="Схематичный вид текущей MCP Setup">
+          <div class="browser-chrome"><div class="browser-dots"><span></span><span></span><span></span></div><div class="browser-address">mind-diary / settings / mcp</div></div>
+          <div class="browser-body">
+            <aside class="mock-nav"><strong>Mind Diary</strong><div>My Mind</div><div>Shared Minds</div><div class="active">MCP setup</div><div>Profile</div></aside>
+            <div class="mock-content current-wall">
+              <h3>MCP setup</h3>
+              <div class="mock-section"><div class="mock-row"><strong>Connected apps</strong><span class="mock-badge">9 connections</span></div><div class="mock-lines"><div class="mock-line"></div><div class="mock-line short"></div></div></div>
+              <div class="mock-section"><div class="mock-row"><strong>Your tokens</strong><span class="mock-badge">28 tokens</span></div><div class="mock-lines"><div class="mock-line"></div><div class="mock-line"></div><div class="mock-line short"></div></div></div>
+              <div class="mock-section"><strong>Create an MCP token</strong><div class="mock-lines"><div class="mock-line"></div><div class="mock-line short"></div></div></div>
+              <div class="mock-section"><strong>Manual Codex setup</strong><div class="mock-lines"><div class="mock-line"></div><div class="mock-line"></div><div class="mock-line short"></div></div></div>
+              <div class="mock-section"><strong>Starter and concierge playbooks</strong><div class="mock-lines"><div class="mock-line"></div><div class="mock-line"></div><div class="mock-line"></div></div></div>
+              <div class="mock-section"><strong>Safe-write, restore and export playbooks</strong><div class="mock-lines"><div class="mock-line"></div><div class="mock-line short"></div></div></div>
+              <div class="mock-section"><strong>Connection #1 — Mind bindings</strong><div class="mock-lines"><div class="mock-line"></div><div class="mock-line"></div></div></div>
+              <div class="mock-section"><strong>Token #1 — Mind bindings</strong><div class="mock-lines"><div class="mock-line"></div><div class="mock-line"></div></div></div>
+              <div class="mock-section"><strong>… ещё 35 редакторов</strong></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div data-view-panel="target" hidden>
+        <div class="mock-browser" aria-label="Схематичный вид целевой Connections">
+          <div class="browser-chrome"><div class="browser-dots"><span></span><span></span><span></span></div><div class="browser-address">mind-diary / settings / connections</div></div>
+          <div class="browser-body">
+            <aside class="mock-nav"><strong>Mind Diary</strong><div>My Mind</div><div>Shared Minds</div><div class="active">Connections</div><div>Advanced</div><div>Help</div></aside>
+            <div class="mock-content">
+              <div class="mock-row"><div><h3 style="margin-bottom:.2rem">Connections</h3><span class="fine">Приложения, которым вы дали доступ</span></div><span class="mock-button">Connect another app</span></div>
+              <div class="mock-section"><div class="mock-row"><div><strong>Codex · connected today</strong><br><span class="fine">Can read: 2 Minds · Can write: none</span></div><span class="mock-button">Manage access</span></div></div>
+              <div class="mock-section"><div class="mock-row"><div><strong>Codex · work account</strong><br><span class="fine">Can read: 3 Minds · Can write: Product notes</span></div><span class="mock-button">Manage access</span></div></div>
+              <div class="mock-section"><strong>Inactive connections</strong><br><span class="fine">Скрыты по умолчанию · открываются отдельной страницей</span></div>
+              <div class="card target" style="margin-top:1rem"><strong>Что исчезло с этой страницы</strong><p class="fine">Tokens, endpoints, protocol versions, raw IDs, automatic capture и playbooks. Они не удалены — они разложены по правильным местам.</p></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <h3 style="margin-top:2.5rem">Нагрузка текущего экрана — не абстракция</h3>
+      <div class="burden-chart" role="img" aria-label="Сравнение размеров частей текущего MCP Setup snapshot">
+        <div class="bar-row"><span>OAuth connections</span><div class="bar-track"><div class="bar-fill" style="width:24%"></div></div><strong>9</strong></div>
+        <div class="bar-row"><span>Personal tokens</span><div class="bar-track"><div class="bar-fill" style="width:76%"></div></div><strong>28</strong></div>
+        <div class="bar-row"><span>Credential editors</span><div class="bar-track"><div class="bar-fill" style="width:100%"></div></div><strong>37</strong></div>
+        <div class="bar-row"><span>Buttons</span><div class="bar-track"><div class="bar-fill" style="width:100%"></div></div><strong>52</strong></div>
+      </div>
+      <p class="fine">Шкалы нормированы к максимальному значению внутри каждой группы snapshot; это иллюстрация UI-нагрузки, не performance benchmark.</p>
+    </section>
+
+    <section class="section" id="architecture">
+      <p class="section-kicker">03 · Как система устроена</p>
+      <h2>Под капотом есть нормальная система. Нужно отделить слои.</h2>
+      <p class="lead">Кликните на компонент: снизу появится его роль и граница ответственности.</p>
+
+      <div class="architecture" aria-label="Архитектура Mind Diary">
+        <div class="arch-lane">
+          <div class="arch-label">Человек и клиент</div>
+          <button class="arch-node" type="button" data-arch="user" aria-pressed="false"><strong>Пользователь</strong><small>Устанавливает, выбирает доступ, работает с Memories</small></button>
+          <div class="arch-arrow" aria-hidden="true">↓</div>
+          <button class="arch-node" type="button" data-arch="codex" aria-pressed="false"><strong>Codex + Marketplace package</strong><small>Показывает skill и вызывает content tools</small></button>
+          <div class="arch-arrow" aria-hidden="true">↓ OAuth</div>
+          <button class="arch-node" type="button" data-arch="oauth" aria-pressed="false"><strong>OAuth connection</strong><small>Read-first consent, затем write step-up</small></button>
+        </div>
+
+        <div class="arch-center">
+          <div class="arch-label" style="color:rgba(255,255,255,.7)">Mind Diary в OpenAI Sites / UAT</div>
+          <div class="stack" style="margin-top:.75rem">
+            <button class="arch-node" type="button" data-arch="web" aria-pressed="false"><strong>Web / Control UI</strong><small>Connections, Minds, memberships, settings</small></button>
+            <div class="arch-arrow" aria-hidden="true">↕</div>
+            <button class="arch-node" type="button" data-arch="core" aria-pressed="false"><strong>Application core</strong><small>ActorContext, authorization, revisions, CAS</small></button>
+            <div class="arch-arrow" aria-hidden="true">↕</div>
+            <button class="arch-node" type="button" data-arch="mcp" aria-pressed="false"><strong>Content MCP</strong><small>List/search/fetch/write/history/export</small></button>
+          </div>
+        </div>
+
+        <div class="arch-lane">
+          <div class="arch-label">Данные и управление релизом</div>
+          <button class="arch-node" type="button" data-arch="storage" aria-pressed="false"><strong>D1 / R2 / search</strong><small>Canonical state, immutable revisions, derived index</small></button>
+          <div class="arch-arrow" aria-hidden="true">↑ evidence</div>
+          <button class="arch-node" type="button" data-arch="uat" aria-pressed="false"><strong>UAT deployment</strong><small>Exact artifact и hosted acceptance</small></button>
+          <div class="arch-arrow" aria-hidden="true">↑ plan</div>
+          <button class="arch-node" type="button" data-arch="tasks" aria-pressed="false"><strong>Task Manager</strong><small>Live scope, blockers, statuses, relations</small></button>
+        </div>
+      </div>
+      <div class="arch-detail" id="archDetail" aria-live="polite"><strong>Главная мысль:</strong> пользовательский UI не должен повторять внутреннюю архитектуру. Security invariants остаются на сервере, а интерфейс переводит их в человеческие ответы.</div>
+
+      <div class="grid-2" style="margin-top:2rem">
+        <article class="card target">
+          <h3>Что уже правильно и сохраняется</h3>
+          <ul class="check-list">
+            <li>Одна credential может читать <code>0..N</code> Minds.</li>
+            <li>У неё может быть не больше одного writable Mind.</li>
+            <li>Write использует текущие <code>write_binding_id</code> и binding version.</li>
+            <li>Revoke, stale binding и rebind работают fail closed.</li>
+            <li>ACL, scopes, actor identity и CAS проверяются сервером.</li>
+          </ul>
+        </article>
+        <article class="card problem">
+          <h3>Что нельзя переносить в пользовательскую модель</h3>
+          <ul class="check-list cross-list">
+            <li>Raw grant IDs и token IDs в адресах и copy.</li>
+            <li>Protocol versions и endpoints в onboarding.</li>
+            <li>37 раскрытых binding editors на одной странице.</li>
+            <li>Automatic capture рядом с обычным доступом.</li>
+            <li>Operator playbooks внутри ordinary settings.</li>
+          </ul>
+        </article>
+      </div>
+    </section>
+
+    <section class="section" id="problems">
+      <p class="section-kicker">04 · Почему релиз буксует</p>
+      <h2>Проблема — не список багов, а неправильная очередь решений.</h2>
+      <p class="lead">Кодирование нового UI прямо сейчас опасно: сначала нужно определить scope, собрать единый Git baseline и зафиксировать security/query contract.</p>
+
+      <div class="scope-lanes" aria-label="Смешение разных контуров в Release 0.1">
+        <div class="scope-lane"><strong>Пользовательский MVP</strong><div class="scope-track"><div class="scope-segment mvp">Install / OAuth / read / write</div></div></div>
+        <div class="scope-lane"><strong>Release evidence</strong><div class="scope-track"><div class="scope-segment ops">Principals</div><div class="scope-segment plan">Browser + UAT</div></div></div>
+        <div class="scope-lane"><strong>Runtime quality</strong><div class="scope-track"><div class="scope-segment ops">Index recovery</div><div class="scope-segment plan">Small-data latency</div></div></div>
+        <div class="scope-lane"><strong>Future platform</strong><div class="scope-track"><div class="scope-segment scale">BundleFile · Brain scale · universal ingress · Google Drive</div></div></div>
+      </div>
+
+      <div class="filter-row" role="group" aria-label="Фильтр архитектурных findings">
+        <button type="button" aria-pressed="true" data-filter="all">Все 12</button>
+        <button type="button" aria-pressed="false" data-filter="p0">P0 — блокируют порядок</button>
+        <button type="button" aria-pressed="false" data-filter="p1">P1 — обязательны в реализации</button>
+        <button type="button" aria-pressed="false" data-filter="avoided">Уже устранены планом</button>
+      </div>
+
+      <div class="finding-grid" id="findingGrid">
+        <article class="card finding problem" data-kind="p0"><div class="finding-top"><h3>CR-1 · Две Git-линии</h3><span class="status-pill p0">P0</span></div><p><code>main</code> и engineering candidate расходятся. Новый UI нельзя строить поверх неоднозначного release artifact.</p><div class="owner">Владелец: MD-301</div></article>
+        <article class="card finding problem" data-kind="p0"><div class="finding-top"><h3>CR-2 · Конфликт accepted scope</h3><span class="status-pill p0">P0</span></div><p>Старые accepted docs называют Brain-scale частью 0.1, а recovery-plan выводит её за MVP. Это нужно изменить нормативно.</p><div class="owner">Владелец: MD-292</div></article>
+        <article class="card finding target" data-kind="avoided"><div class="finding-top"><h3>CR-3 · Огромный тестовый corpus</h3><span class="status-pill avoided">Избежали</span></div><p>590 MB и Brain-scale больше не нужны для MVP gate. Проверяем небольшой deterministic fixture.</p><div class="owner">Решено планом</div></article>
+        <article class="card finding gate" data-kind="p0"><div class="finding-top"><h3>CR-4 · Когда появляется write</h3><span class="status-pill p0">P0</span></div><p>Выбрано: сначала read-only OAuth; первая write intent запускает native step-up. UI не обещает write раньше времени.</p><div class="owner">MD-294 + MD-296</div></article>
+        <article class="card finding problem" data-kind="p0"><div class="finding-top"><h3>CR-5 · «Browser test» без браузера</h3><span class="status-pill p0">P0</span></div><p>Существующий gate читает HTML как строку. Он не доказывает DOM, keyboard, focus, mobile overflow и accessibility tree.</p><div class="owner">Владелец: MD-300</div></article>
+        <article class="card finding gate" data-kind="p0"><div class="finding-top"><h3>CR-6 · Нужен живой first-user canary</h3><span class="status-pill p0">P0</span></div><p>Contract tests не доказывают реальный Marketplace/OAuth путь. Для first-user claim canary становится blocking.</p><div class="owner">MD-299 + MD-293</div></article>
+        <article class="card finding" data-kind="p1"><div class="finding-top"><h3>CR-7 · Connection URL</h3><span class="status-pill p1">P1</span></div><p>Detail route должен использовать opaque actor-owned reference и одинаковый 404 для unknown/foreign connection.</p><div class="owner">MD-294 + MD-295</div></article>
+        <article class="card finding" data-kind="p1"><div class="finding-top"><h3>CR-8 · CSS не лечит N+1</h3><span class="status-pill p1">P1</span></div><p>Скрыть 36 карточек недостаточно. Сервер обязан читать только текущую bounded page и exact detail.</p><div class="owner">MD-294 + MD-297</div></article>
+        <article class="card finding target" data-kind="avoided"><div class="finding-top"><h3>CR-9 · Hard delete credentials</h3><span class="status-pill avoided">Избежали</span></div><p>В MVP используем revoke + hide. Retention и физическое удаление не блокируют 0.1.</p><div class="owner">Решено исключением</div></article>
+        <article class="card finding target" data-kind="avoided"><div class="finding-top"><h3>CR-10 · Automatic capture</h3><span class="status-pill avoided">Избежали</span></div><p>Capability остаётся, но уходит из ordinary Connections и onboarding в Advanced/post-MVP.</p><div class="owner">Решено исключением</div></article>
+        <article class="card finding target" data-kind="avoided"><div class="finding-top"><h3>CR-11 · Неявная Epic dependency</h3><span class="status-pill avoided">Исправлено</span></div><p>MD-299 теперь напрямую блокирует final MD-293. Закрытие Epic больше не подменяет terminal dependency.</p><div class="owner">Исправлено в Task Manager</div></article>
+        <article class="card finding" data-kind="p1"><div class="finding-top"><h3>CR-12 · Settings performance</h3><span class="status-pill p1">P1</span></div><p>Нужно измерять list/detail/inactive pages на fixtures <code>0 / 1 / page_size + 1</code>, а не только MCP path.</p><div class="owner">Владелец: MD-299</div></article>
+      </div>
+    </section>
+
+    <section class="section" id="target">
+      <p class="section-kicker">05 · Куда переводим</p>
+      <h2>Обычный пользователь видит четыре понятных места, а не внутренности протокола.</h2>
+      <p class="lead">Функциональность не исчезает. Она раскладывается по ролям и моментам, когда действительно нужна.</p>
+
+      <div class="ia-map">
+        <article class="ia-card user"><span class="path">/settings/connections</span><h3>Connections</h3><p>Только active connections, короткая read/write summary, Manage access и Revoke.</p></article>
+        <article class="ia-card user"><span class="path">/settings/connections/{ref}</span><h3>Connection details</h3><p>Readable Minds, а после step-up — ноль или один writable Mind.</p></article>
+        <article class="ia-card developer"><span class="path">/settings/developer/mcp</span><h3>Advanced MCP</h3><p>Personal tokens, endpoints, configs, diagnostics и inactive history.</p></article>
+        <article class="ia-card help"><span class="path">/help/codex</span><h3>Codex Help</h3><p>Три шага, starter flow и отдельные recovery scenarios.</p></article>
+      </div>
+
+      <div class="grid-2">
+        <article class="card target">
+          <h3>Первое подключение — три шага</h3>
+          <div class="sequence">
+            <div class="sequence-row done"><div class="sequence-index">1</div><div class="sequence-content"><strong>Install Mind Diary</strong><small>Из Marketplace. Без personal token и ручного JSON.</small></div></div>
+            <div class="sequence-row done"><div class="sequence-index">2</div><div class="sequence-content"><strong>Authenticate for reading</strong><small>Native OAuth выдаёт только <code>content:read</code>.</small></div></div>
+            <div class="sequence-row done"><div class="sequence-index">3</div><div class="sequence-content"><strong>Choose readable Minds</strong><small>После этого Codex сразу может показать первый полезный результат.</small></div></div>
+          </div>
+        </article>
+
+        <article class="card advanced">
+          <h3>Write появляется ровно тогда, когда нужен</h3>
+          <div class="sequence">
+            <div class="sequence-row"><div class="sequence-index">A</div><div class="sequence-content"><strong>Пользователь просит записать Memory</strong><small>Это первая write intent в Codex.</small></div></div>
+            <div class="sequence-row locked"><div class="sequence-index">B</div><div class="sequence-content"><strong>Native step-up</strong><small>Пока scope не получен, write остаётся закрытым.</small></div></div>
+            <div class="sequence-row done"><div class="sequence-index">C</div><div class="sequence-content"><strong>Выбор 0..1 writable Mind</strong><small>Commit проверяет current <code>write_binding_id</code> и version.</small></div></div>
+          </div>
+        </article>
+      </div>
+
+      <h3 style="margin-top:2.5rem">Что меняется в языке и поведении</h3>
+      <div class="before-after-table">
+        <table>
+          <thead><tr><th>Сегодня</th><th>Цель</th><th>Почему лучше</th></tr></thead>
+          <tbody>
+            <tr><td>Mind bindings</td><td>Access to your Minds</td><td>Говорим об эффекте, а не реализации.</td></tr>
+            <tr><td>Attach read-only</td><td>Allow reading</td><td>Человек понимает разрешение.</td></tr>
+            <tr><td>Bind writable Mind</td><td>Allow writing to this Mind</td><td>Ясно, куда пойдут изменения.</td></tr>
+            <tr><td>Все revoked credentials в основном списке</td><td>Inactive history отдельно и постранично</td><td>Основной экран остаётся коротким.</td></tr>
+            <tr><td>Manual configs рядом с OAuth</td><td>Advanced MCP</td><td>Compatibility path не конкурирует с основным.</td></tr>
+            <tr><td>Client-side collapse</td><td>Bounded server-side queries</td><td>Убираем и визуальный шум, и лишние reads.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="section" id="plan">
+      <p class="section-kicker">06 · Как переходим</p>
+      <h2>Сначала убираем неоднозначность. Потом пишем UI.</h2>
+      <p class="lead">Нажмите на Task в графе или раскройте фазу. Критический путь короткий, если не возвращать post-MVP scope обратно в 0.1.</p>
+
+      <div class="graph-wrap">
+        <div class="graph-layer">
+          <button class="node-button" type="button" data-task="MD-292" data-related="MD-301 MD-294 MD-293"><strong>MD-292</strong><small>Small-data boundary</small></button>
+        </div>
+        <div class="graph-arrow" aria-hidden="true">↓</div>
+        <div class="graph-layer">
+          <button class="node-button" type="button" data-task="MD-301" data-related="MD-292 MD-295 MD-296 MD-297 MD-298 MD-300 MD-293"><strong>MD-301</strong><small>One Git baseline</small></button>
+          <button class="node-button" type="button" data-task="MD-294" data-related="MD-292 MD-295 MD-296 MD-297 MD-298 MD-300"><strong>MD-294</strong><small>IA/security contract</small></button>
+        </div>
+        <div class="graph-arrow" aria-hidden="true">↓</div>
+        <div class="graph-layer">
+          <button class="node-button" type="button" data-task="MD-295" data-related="MD-301 MD-294 MD-299"><strong>MD-295</strong><small>Routes</small></button>
+          <button class="node-button" type="button" data-task="MD-296" data-related="MD-301 MD-294 MD-299"><strong>MD-296</strong><small>Access UX</small></button>
+          <button class="node-button" type="button" data-task="MD-297" data-related="MD-301 MD-294 MD-299"><strong>MD-297</strong><small>Pagination</small></button>
+          <button class="node-button" type="button" data-task="MD-298" data-related="MD-301 MD-294 MD-299"><strong>MD-298</strong><small>Onboarding</small></button>
+          <button class="node-button" type="button" data-task="MD-300" data-related="MD-301 MD-294 MD-299"><strong>MD-300</strong><small>Real browser gate</small></button>
+        </div>
+        <div class="graph-arrow" aria-hidden="true">↓</div>
+        <div class="graph-layer">
+          <button class="node-button" type="button" data-task="MD-299" data-related="MD-295 MD-296 MD-297 MD-298 MD-300 MD-293"><strong>MD-299</strong><small>Connection UAT</small></button>
+        </div>
+        <div class="graph-arrow" aria-hidden="true">↓ + operator / index / performance / authority gates</div>
+        <div class="graph-layer">
+          <button class="node-button" type="button" data-task="MD-293" data-related="MD-292 MD-301 MD-299 MD-244 MD-252 MD-258 MD-285"><strong>MD-293</strong><small>Final first-user receipt</small></button>
+        </div>
+        <div class="graph-detail" id="graphDetail" aria-live="polite"><strong>Кликните на Task.</strong> Мы подсветим прямое окружение и объясним observable result.</div>
+      </div>
+
+      <div class="timeline" aria-label="Фазы перехода">
+        <button class="phase" type="button" aria-expanded="true"><span class="phase-number">0</span><span class="phase-title"><strong>Зафиксировать маленький MVP</strong><small>Убрать normative conflict и reclassify future scope</small></span><span class="phase-state">MD-292</span></button>
+        <div class="phase-detail"><strong>Готово, когда:</strong> accepted docs и Task Manager показывают один P0 list; BundleFile, large corpus, Google Drive и universal ingress не блокируют final gate.</div>
+
+        <button class="phase" type="button" aria-expanded="false"><span class="phase-number">1</span><span class="phase-title"><strong>Собрать единый integration baseline</strong><small>Disposition 21 engineering commits и conflict-aware integration</small></span><span class="phase-state">MD-301</span></button>
+        <div class="phase-detail"><strong>Готово, когда:</strong> один clean remote <code>main</code> SHA проходит full repository gate. Все дальнейшие изменения — его потомки.</div>
+
+        <button class="phase" type="button" aria-expanded="false"><span class="phase-number">2</span><span class="phase-title"><strong>Закрыть существующие gates</strong><small>Operator, index recovery, small-data performance, Task Manager authority</small></span><span class="phase-state">MD-244 / 252 / 258 / 285</span></button>
+        <div class="phase-detail"><strong>Готово, когда:</strong> есть exact-candidate evidence. Missing test input создаём сами; не называем его внешним blocker.</div>
+
+        <button class="phase" type="button" aria-expanded="false"><span class="phase-number">3</span><span class="phase-title"><strong>Принять IA/security contract</strong><small>Opaque refs, identical 404, read-first step-up, bounded queries</small></span><span class="phase-state">MD-294</span></button>
+        <div class="phase-detail"><strong>Готово, когда:</strong> specs и contract tests определяют route/ref/state/query boundaries до UI code.</div>
+
+        <button class="phase" type="button" aria-expanded="false"><span class="phase-number">4</span><span class="phase-title"><strong>Реализовать продуктовый flow</strong><small>Routes, access UX, pagination и three-step onboarding</small></span><span class="phase-state">MD-295–298</span></button>
+        <div class="phase-detail"><strong>Готово, когда:</strong> targeted security/UI tests проходят, а скрытые rows не загружаются сервером.</div>
+
+        <button class="phase" type="button" aria-expanded="false"><span class="phase-number">5</span><span class="phase-title"><strong>Добавить настоящий browser gate</strong><small>Desktop, mobile, keyboard, focus, accessible names, overflow</small></span><span class="phase-state">MD-300</span></button>
+        <div class="phase-detail"><strong>Готово, когда:</strong> реальный DOM runner проверяет fixtures <code>0 / 1 / page_size + 1</code> и включён в acceptance path.</div>
+
+        <button class="phase" type="button" aria-expanded="false"><span class="phase-number">6</span><span class="phase-title"><strong>Проверить connection flow в UAT</strong><small>Exact package, fresh Codex context, real account, step-up и revoke</small></span><span class="phase-state">MD-299</span></button>
+        <div class="phase-detail"><strong>Готово, когда:</strong> deterministic evidence и fresh real-account Marketplace/OAuth canary дают один privacy-safe receipt.</div>
+
+        <button class="phase" type="button" aria-expanded="false"><span class="phase-number">7</span><span class="phase-title"><strong>Провести final first-user UAT</strong><small>Один terminal result вместо набора локальных успехов</small></span><span class="phase-state">MD-293</span></button>
+        <div class="phase-detail"><strong>Готово, когда:</strong> exact SHA, deployment и package связаны; read/write/history/export, isolation, performance и revoke проверены; remaining work находится post-MVP.</div>
+      </div>
+    </section>
+
+    <section class="section" id="risks">
+      <p class="section-kicker">07 · Риски и блокеры</p>
+      <h2>Большинство «блокеров» — наша внутренняя работа.</h2>
+      <p class="lead">Пользователь нужен только там, где действительно остаётся interactive consent, MFA или provider action, недоступное инструментам. До этого мы обязаны сами исправить код, создать fixture, refresh/reinstall, deploy и reconcile.</p>
+
+      <div class="grid-3" style="margin-top:2rem">
+        <article class="card problem"><h3>Внутренний gate</h3><p>Можно решить кодом, docs, тестом, fixture, Task Manager mutation или UAT action.</p><strong>Не перекладываем на человека.</strong></article>
+        <article class="card gate"><h3>Потенциальный внешний blocker</h3><p>Появляется только после самостоятельной попытки и доказательства, что retry/fix/reconcile не помогают.</p><strong>Один actor, одно действие, один resume signal.</strong></article>
+        <article class="card target"><h3>Non-blocking scope</h3><p>BundleFile, Brain scale и universal ingress полезны, но их отсутствие не меняет terminal status MVP 0.1.</p><strong>Сохраняем, но переносим.</strong></article>
+      </div>
+
+      <h3 style="margin-top:2.5rem">Матрица архитектурных рисков</h3>
+      <div class="risk-matrix" role="img" aria-label="Матрица вероятности и влияния основных рисков">
+        <div></div><div class="risk-axis">Низкое влияние</div><div class="risk-axis">Среднее влияние</div><div class="risk-axis">Высокое влияние</div>
+        <div class="risk-axis">Высокая вероятность</div><div class="risk-cell medium"><span class="risk-item">Copy drift</span></div><div class="risk-cell high"><span class="risk-item">Client-side hiding без bounded reads</span><span class="risk-item">Новый UI на неправильном baseline</span></div><div class="risk-cell high"><span class="risk-item">Scope снова разрастается</span><span class="risk-item">Synthetic gate выдан за browser proof</span></div>
+        <div class="risk-axis">Средняя вероятность</div><div class="risk-cell low"><span class="risk-item">Старый /settings/mcp link</span></div><div class="risk-cell medium"><span class="risk-item">Opaque ref ошибочно раскрывает existence</span><span class="risk-item">Inactive history снова становится unbounded</span></div><div class="risk-cell high"><span class="risk-item">Real OAuth canary не проходит</span><span class="risk-item">Package/catalog drift</span></div>
+        <div class="risk-axis">Низкая вероятность</div><div class="risk-cell low"><span class="risk-item">Print layout defect</span></div><div class="risk-cell low"><span class="risk-item">Advanced route confusion</span></div><div class="risk-cell medium"><span class="risk-item">Provider deployment boundary</span></div>
+      </div>
+
+      <h3 style="margin-top:2.5rem">Лестница доказательств: что именно доказывает каждый уровень</h3>
+      <div class="evidence-ladder">
+        <div class="evidence-step"><span class="num">1</span><span><strong>Unit / contract tests</strong><br><span class="fine">Доказывают локальные правила и error contracts.</span></span><span class="tag">не deployment</span></div>
+        <div class="evidence-step"><span class="num">2</span><span><strong>Full repository gate</strong><br><span class="fine">Доказывает integrity exact Git candidate.</span></span><span class="tag">не hosted UI</span></div>
+        <div class="evidence-step"><span class="num">3</span><span><strong>Deterministic real-browser gate</strong><br><span class="fine">Доказывает DOM, mobile, keyboard и accessibility на fixtures.</span></span><span class="tag">не Marketplace</span></div>
+        <div class="evidence-step"><span class="num">4</span><span><strong>UAT exact deployment</strong><br><span class="fine">Связывает Git SHA с доступным hosted artifact.</span></span><span class="tag">не fresh user</span></div>
+        <div class="evidence-step"><span class="num">5</span><span><strong>Fresh real-account canary</strong><br><span class="fine">Доказывает реальный install/OAuth/first-result путь.</span></span><span class="tag">first-user claim</span></div>
+        <div class="evidence-step"><span class="num">6</span><span><strong>Final consolidated receipt</strong><br><span class="fine">Связывает artifact, deployment, package, UX, security и cleanup.</span></span><span class="tag">Done</span></div>
+      </div>
+
+      <div class="grid-2" style="margin-top:2rem">
+        <article class="card gate"><h3>Когда действительно идём к Андрею</h3><ul class="plain-list"><li>OAuth требует interactive consent/MFA, который agent не может завершить.</li><li>Provider требует account action, отсутствующее в доступных tools.</li><li>В отчёте уже перечислены попытки, exact affected Tasks и resume signal.</li></ul></article>
+        <article class="card target"><h3>Что делаем сами до этого</h3><ul class="plain-list"><li>Code fix, deterministic fixture и test principal.</li><li>Marketplace refresh, reinstall и fresh Codex context.</li><li>UAT publish, exact version read-back и reconcile.</li><li>Отделяем product failure от browser/tool failure.</li></ul></article>
+      </div>
+    </section>
+
+    <section class="section" id="parking">
+      <p class="section-kicker">08 · Что не выбрасываем</p>
+      <h2>Post-MVP — это парковка, а не мусорка.</h2>
+      <p class="lead">Код, документы и знания остаются. Они просто перестают держать первый релиз заложником.</p>
+      <div class="grid-4" style="margin-top:2rem">
+        <article class="card"><h3>BundleFile</h3><p>MD-245, MD-249, MD-250</p><span class="fine">Versioned attachments vertical slice</span></article>
+        <article class="card"><h3>Brain scale</h3><p>MD-260, MD-266–268</p><span class="fine">Большой import/export и capacity</span></article>
+        <article class="card"><h3>Universal ingress</h3><p>MD-270, MD-272–275</p><span class="fine">Local/generated/provider sources</span></article>
+        <article class="card"><h3>Provider adapters</h3><p>MD-284, MD-288–290</p><span class="fine">Google Drive и hosted capacity canaries</span></article>
+      </div>
+      <div class="card target" style="margin-top:1rem"><strong>Правило возврата:</strong> задача возвращается в P0 только если small-data MVP gate измеримо доказывает, что без неё terminal user outcome невозможен. Наличие уже написанного кода само по себе не делает функцию release blocker.</div>
+    </section>
+
+    <section class="section" id="review">
+      <p class="section-kicker">09 · Ревью решения</p>
+      <h2>Что нужно подтвердить перед началом UI implementation.</h2>
+      <p class="lead">Отметки сохраняются только в вашем браузере и не меняют проект или Task Manager. Это личный checklist для просмотра презентации.</p>
+
+      <div class="decision-board" id="decisionBoard">
+        <label class="review-item"><input type="checkbox" data-review="scope"><span><strong>Release 0.1 — маленький Codex-first Markdown MVP</strong><small>BundleFile, Brain scale, Google Drive и universal ingress переходят в следующий milestone.</small></span></label>
+        <label class="review-item"><input type="checkbox" data-review="oauth"><span><strong>OAuth работает read-first</strong><small>Write появляется только после первой write intent и native step-up.</small></span></label>
+        <label class="review-item"><input type="checkbox" data-review="ia"><span><strong>Connections / Details / Advanced / Help разделены</strong><small><code>/settings/mcp</code> остаётся совместимым entrypoint.</small></span></label>
+        <label class="review-item"><input type="checkbox" data-review="security"><span><strong>Opaque refs, identical 404 и bounded server queries обязательны</strong><small>Client-side hiding не считается реализацией pagination.</small></span></label>
+        <label class="review-item"><input type="checkbox" data-review="hygiene"><span><strong>Credential hygiene — revoke + hide</strong><small>Hard delete и retention policy не блокируют MVP.</small></span></label>
+        <label class="review-item"><input type="checkbox" data-review="browser"><span><strong>Нужен настоящий deterministic browser gate</strong><small>Desktop, mobile, keyboard, focus, accessible names и overflow.</small></span></label>
+        <label class="review-item"><input type="checkbox" data-review="canary"><span><strong>Fresh real-account canary блокирует first-user claim</strong><small>Contract tests не подменяют Marketplace/OAuth journey.</small></span></label>
+        <label class="review-item"><input type="checkbox" data-review="order"><span><strong>Порядок: MD-292 → MD-301/294 → implementation → MD-299 → MD-293</strong><small>UI code не начинается до scope, baseline и contract gates.</small></span></label>
+      </div>
+      <div class="review-status" id="reviewStatus" aria-live="polite">Подтверждено 0 из 8 решений.</div>
+
+      <div class="grid-2" style="margin-top:2.5rem">
+        <article class="card target">
+          <h3>Definition of Done Release 0.1</h3>
+          <ul class="check-list">
+            <li>Три понятных шага ordinary setup.</li>
+            <li>Один exact Git SHA, Sites deployment и plugin package.</li>
+            <li>Fresh Codex видит skill и ожидаемый tool catalog.</li>
+            <li>Read-only OAuth, write step-up и singleton writable Mind.</li>
+            <li>Three-principal isolation и immediate revoke.</li>
+            <li>Read/search/write/history/export на небольшом Mind.</li>
+            <li>Desktop/mobile/keyboard/browser evidence.</li>
+            <li>Все остальные tasks явно принадлежат post-MVP.</li>
+          </ul>
+        </article>
+        <article class="card problem">
+          <h3>Чем Done не является</h3>
+          <ul class="check-list cross-list">
+            <li>«Код вроде написан» без exact candidate.</li>
+            <li>HTTP regex вместо реального browser DOM.</li>
+            <li>Один успешный UI screen без MCP enforcement.</li>
+            <li>Локальный test вместо hosted evidence.</li>
+            <li>Старый UAT deployment вместо current artifact.</li>
+            <li>Manual просьба пользователю без blocker-report.</li>
+            <li>Закрытый Epic при незакрытых прямых dependencies.</li>
+            <li>Production claim: production вне этого release.</li>
+          </ul>
+        </article>
+      </div>
+    </section>
+
+    <section class="section" id="sources">
+      <p class="section-kicker">10 · Источники и границы</p>
+      <h2>Презентация — навигация, а не новый источник истины.</h2>
+      <p class="lead">Подробные формулировки, статусы proposal/accepted, evidence и Task Manager projection находятся в документах ниже. При расхождении live Task Manager и repository state важнее этой визуальной карты.</p>
+      <ul class="source-list">
+        <li><a href="README.md">План восстановления MVP 0.1</a></li>
+        <li><a href="current-state.md">Текущее состояние</a></li>
+        <li><a href="target-state.md">Целевое состояние</a></li>
+        <li><a href="transition-plan.md">План перехода</a></li>
+        <li><a href="critical-review.md">Критический архитектурный прогон</a></li>
+        <li><a href="blocker-register.md">Реестр блокеров</a></li>
+        <li><a href="task-manager-plan.md">План Task Manager</a></li>
+        <li><a href="../../architecture.md">Архитектура Mind Diary</a></li>
+        <li><a href="../../specs/mind-bindings.md">Mind bindings contract</a></li>
+        <li><a href="../../specs/plugin-connector.md">Plugin и OAuth</a></li>
+        <li><a href="../../operations/ship-work-release-profile.md">Release profile</a></li>
+        <li><a href="../../brand.md">Айдентика и язык продукта</a></li>
+      </ul>
+    </section>
+  </main>
+
+  <footer>
+    <strong>Mind Diary · MVP 0.1 recovery map</strong><br>
+    Сформировано на основе recovery-plan и критического review от 2026-08-24. Production deploy не входит в этот план.
+  </footer>
+
+  <script>
+    (() => {
+      const progressFill = document.getElementById('progressFill');
+      const navLinks = [...document.querySelectorAll('.nav-scroll a')];
+      const sections = navLinks.map(link => document.querySelector(link.getAttribute('href'))).filter(Boolean);
+
+      const updateScrollState = () => {
+        const root = document.documentElement;
+        const total = root.scrollHeight - root.clientHeight;
+        const percent = total > 0 ? Math.min(100, Math.max(0, root.scrollTop / total * 100)) : 0;
+        progressFill.style.width = `${percent}%`;
+
+        const marker = window.scrollY + 150;
+        let active = sections[0];
+        sections.forEach(section => { if (section.offsetTop <= marker) active = section; });
+        navLinks.forEach(link => link.setAttribute('aria-current', String(link.getAttribute('href') === `#${active?.id}`)));
+      };
+      window.addEventListener('scroll', updateScrollState, { passive: true });
+      window.addEventListener('resize', updateScrollState);
+      updateScrollState();
+
+      document.getElementById('printButton').addEventListener('click', () => window.print());
+
+      const viewButtons = [...document.querySelectorAll('[data-view]')];
+      const viewPanels = [...document.querySelectorAll('[data-view-panel]')];
+      viewButtons.forEach(button => button.addEventListener('click', () => {
+        const selected = button.dataset.view;
+        viewButtons.forEach(item => item.setAttribute('aria-pressed', String(item === button)));
+        viewPanels.forEach(panel => { panel.hidden = panel.dataset.viewPanel !== selected; });
+      }));
+
+      const archCopy = {
+        user: ['Пользователь', 'Видит human-readable Minds и permissions. Он не должен знать grant IDs, binding versions или protocol profiles.'],
+        codex: ['Codex + Marketplace package', 'Основной клиент MVP. Package даёт skill и direct MCP; свежий context обязан видеть точный catalog tools.'],
+        oauth: ['OAuth connection', 'Отдельная revocable credential. Начинается с content:read; write scope появляется только через native step-up.'],
+        web: ['Web / Control UI', 'Trusted surface для Connections, access и membership. Content MCP не получает control-plane capabilities.'],
+        core: ['Application core', 'Единственное место, где решаются actor identity, ACL, scopes, revision CAS и fail-closed lifecycle.'],
+        mcp: ['Content MCP', 'Лениво открывает Minds через tools/resources. Каждая операция явно выбирает Mind и revision.'],
+        storage: ['D1 / R2 / search', 'Canonical revisions и access state хранятся отдельно от производного индекса. Индекс можно восстановить из canonical revision.'],
+        uat: ['UAT deployment', 'Prod-like Sites target. Успех требует exact artifact и live evidence; это не production.'],
+        tasks: ['Task Manager', 'Авторитет для текущего Project/Release scope, versions, blockers и relations. Статическая презентация не заменяет live read-back.']
+      };
+      const archButtons = [...document.querySelectorAll('[data-arch]')];
+      const archDetail = document.getElementById('archDetail');
+      archButtons.forEach(button => button.addEventListener('click', () => {
+        archButtons.forEach(item => item.setAttribute('aria-pressed', String(item === button)));
+        const [title, body] = archCopy[button.dataset.arch];
+        archDetail.innerHTML = `<strong>${title}:</strong> ${body}`;
+      }));
+
+      const filterButtons = [...document.querySelectorAll('[data-filter]')];
+      const findings = [...document.querySelectorAll('.finding')];
+      filterButtons.forEach(button => button.addEventListener('click', () => {
+        const filter = button.dataset.filter;
+        filterButtons.forEach(item => item.setAttribute('aria-pressed', String(item === button)));
+        findings.forEach(item => { item.hidden = filter !== 'all' && item.dataset.kind !== filter; });
+      }));
+
+      const taskCopy = {
+        'MD-292': ['Принять definitive small-data boundary, обновить accepted docs и атомарно вывести future file/scale work из active Release 0.1.'],
+        'MD-301': ['Сделать один integration baseline: disposition всех candidate commits, conflict-aware перенос, full gate и exact remote main SHA.'],
+        'MD-294': ['Зафиксировать routes, opaque connection refs, identical 404, read-first/write-step-up state machine и bounded query contracts.'],
+        'MD-295': ['Разделить routes и реализовать actor-owned detail без enumeration и hidden unbounded response.'],
+        'MD-296': ['Показать readable Minds сразу, writable controls только после content:write, сохранить 0..1 write binding CAS.'],
+        'MD-297': ['Разделить active/inactive server projections, stable opaque cursor, revoke + hide и fixtures 0/1/page_size+1.'],
+        'MD-298': ['Сделать основной journey из трёх шагов; tokens, protocol mechanics и capture перенести из primary copy.'],
+        'MD-300': ['Добавить реальный deterministic browser runner: desktop/mobile, keyboard, focus, semantics и overflow.'],
+        'MD-299': ['Выпустить exact candidate и соединить deterministic browser evidence с fresh real-account Marketplace/OAuth canary.'],
+        'MD-293': ['Собрать финальный first-user receipt: artifact + deployment + package + UX + security + cleanup.'],
+        'MD-244': ['Three-principal operator/admin UAT evidence.'],
+        'MD-252': ['Bounded exact-revision index recovery без ручной durable-data mutation.'],
+        'MD-258': ['Small deterministic dataset, cold + warm samples и принятые latency budgets.'],
+        'MD-285': ['Task Manager release authority и current live selector.']
+      };
+      const taskButtons = [...document.querySelectorAll('[data-task]')];
+      const graphDetail = document.getElementById('graphDetail');
+      taskButtons.forEach(button => button.addEventListener('click', () => {
+        const task = button.dataset.task;
+        const related = new Set((button.dataset.related || '').split(' ').filter(Boolean));
+        taskButtons.forEach(item => {
+          item.setAttribute('aria-pressed', String(item === button));
+          item.classList.toggle('related', related.has(item.dataset.task));
+        });
+        graphDetail.innerHTML = `<strong>${task}:</strong> ${taskCopy[task]?.[0] || 'Supporting gate final release.'}`;
+      }));
+
+      document.querySelectorAll('.phase').forEach(button => button.addEventListener('click', () => {
+        const willOpen = button.getAttribute('aria-expanded') !== 'true';
+        document.querySelectorAll('.phase').forEach(item => item.setAttribute('aria-expanded', 'false'));
+        button.setAttribute('aria-expanded', String(willOpen));
+      }));
+
+      const reviewInputs = [...document.querySelectorAll('[data-review]')];
+      const reviewStatus = document.getElementById('reviewStatus');
+      const storageKey = 'mind-diary-mvp-review-v1';
+      let stored = {};
+      try { stored = JSON.parse(localStorage.getItem(storageKey) || '{}'); } catch (_) { stored = {}; }
+      reviewInputs.forEach(input => { input.checked = Boolean(stored[input.dataset.review]); });
+
+      const updateReview = () => {
+        const state = {};
+        reviewInputs.forEach(input => { state[input.dataset.review] = input.checked; });
+        try { localStorage.setItem(storageKey, JSON.stringify(state)); } catch (_) { /* file/private mode may block storage */ }
+        const checked = reviewInputs.filter(input => input.checked).length;
+        reviewStatus.textContent = `Подтверждено ${checked} из ${reviewInputs.length} решений.${checked === reviewInputs.length ? ' Базовая архитектурная рамка согласована для этого браузера.' : ''}`;
+      };
+      reviewInputs.forEach(input => input.addEventListener('change', updateReview));
+      updateReview();
+    })();
+  </script>
+</body>
+</html>

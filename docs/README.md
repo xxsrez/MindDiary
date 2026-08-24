@@ -117,9 +117,10 @@ evidence, предлагаемый дизайн и ещё не проверен�
 ## Активные планы
 
 - [План восстановления MVP 0.1](tasks/2026-08-24-mvp-recovery-plan/README.md)
-  — current state 29 незавершённых Tasks, целевая информационная архитектура
-  Connections / Advanced MCP / Codex Help, release-scope reset, подробный
-  переходный план и целевая модель Task Manager.
+  — current state 40 незавершённых Tasks, интерактивная
+  [визуальная карта системы и перехода](tasks/2026-08-24-mvp-recovery-plan/system-transition-presentation.html),
+  целевая информационная архитектура Connections / Advanced MCP / Codex Help,
+  release-scope reset, подробный переходный план и целевая модель Task Manager.
 - [План обновления runtime-регистрации Mind Diary plugin](tasks/2026-08-22-mind-diary-plugin-runtime-refresh.md)
   — диагноз legacy registered connector, опыт Task Manager, безопасный
   remove/add lifecycle, fresh-runtime acceptance и recovery без изменения

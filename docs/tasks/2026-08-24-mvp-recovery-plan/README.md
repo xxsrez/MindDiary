@@ -24,18 +24,22 @@ release boundaries. Пока они представлены одним плос
 
 ## Документы пакета
 
-1. [Текущее состояние](current-state.md) — фактический срез продукта,
+1. [Визуальная карта системы и перехода](system-transition-presentation.html) —
+   большая интерактивная презентация текущей архитектуры, перегруженного
+   `MCP setup`, целевой information architecture, blocker graph, фаз перехода,
+   рисков и критериев `Done` простым языком.
+2. [Текущее состояние](current-state.md) — фактический срез продукта,
    репозитория, UAT и 40 незавершённых Tasks.
-2. [Целевое состояние MVP](target-state.md) — один пользовательский outcome,
+3. [Целевое состояние MVP](target-state.md) — один пользовательский outcome,
    предлагаемая информационная архитектура и обязательные acceptance signals.
-3. [План перехода](transition-plan.md) — поэтапная последовательность работ,
+4. [План перехода](transition-plan.md) — поэтапная последовательность работ,
    gates, rollback и terminal conditions.
-4. [План Task Manager](task-manager-plan.md) — triage действующего release
+5. [План Task Manager](task-manager-plan.md) — triage действующего release
    graph и целевая структура новых Tasks.
-5. [Критический архитектурный прогон](critical-review.md) — baseline drift,
+6. [Критический архитектурный прогон](critical-review.md) — baseline drift,
    normative scope conflict, write-step-up state machine, browser acceptance,
    pagination/security и скрытые зависимости final gate.
-6. [Реестр блокеров](blocker-register.md) — единственная текущая проекция P0
+7. [Реестр блокеров](blocker-register.md) — единственная текущая проекция P0
    gates, non-blocking scope, external boundaries и resume signals.
 
 ## Главный вывод
