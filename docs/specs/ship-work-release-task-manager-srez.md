@@ -15,28 +15,29 @@ project values —
 Linear IDs, human keys и receipts сохраняют provenance, но не являются current
 selector или authority.
 
-## Adapter и provider instance
+## Adapter и configured runtime identity
 
 ```yaml
 adapter: task-manager
 contract: ship-work-release/task-manager-adapter/v1
-provider_instance_id: appgprj_exampleb73ec2a398f1e2cc
+provider_instance_id: task-manager@srez-marketplace
 runtime_reference: docs/operations/ship-work-release-task-manager-srez.md
 ```
 
-`provider_instance_id` — стабильный OpenAI Sites project ID deployed Task
-Manager server instance. Это не package/version plugin-а, не OAuth principal,
-не Project Mind Diary и не URL. Connector `get_workspace` пока не публикует
-отдельный immutable workspace UUID, поэтому profile хранит server instance ID
-как exact configured literal и запрещает подменять его package identity
-`task-manager@srez-marketplace`.
+Connector `get_workspace` публикует capability/count/status catalog, но не
+immutable workspace, tenant или server UUID. Поэтому inherited field
+`provider_instance_id` в этой mapping содержит accepted configured
+adapter/runtime identity `task-manager@srez-marketplace`, а не утверждение о
+provider-visible instance identity. Package version, OAuth principal, URL и
+OpenAI Sites hosting project ID не подставляются вместо отсутствующего UUID.
 
-Preflight независимо проверяет, что вызывается configured Task Manager MCP
-resource, `get_workspace` успешно возвращает фактические read/write
-capabilities текущего principal, а exact Project принадлежит этому server
-instance. Изменение configured server instance требует новой profile revision;
-совпадение display name или данных другого Task Manager instance не является
-reconciliation.
+Preflight разрешает exact direct package в fresh callable catalog, проверяет
+наличие `get_workspace`, exact entity reads, comments и versioned Task writes,
+затем читает observed capabilities и canonical Project/Release refs. Exact
+Project/Release identity вместе с connected OAuth authority ограничивает
+mutation внутри configured runtime. Deployment manifest Task Manager может
+служить отдельным provenance deployment-а, но не входит в AdapterRef и не
+reconcile-ится как connector instance.
 
 ## Canonical collection, scope и anchor
 
@@ -161,7 +162,7 @@ Payload marker имеет closed schema
   "schema": "ship-work-release/task-manager-scope-fact-comment/v1",
   "profile_id": "mind-diary",
   "profile_revision": 4,
-  "provider_instance_id": "appgprj_exampleb73ec2a398f1e2cc",
+  "provider_instance_id": "task-manager@srez-marketplace",
   "collection_id": "525e801d-0ae9-4be7-bae4-6a9c8f85f581",
   "scope_id": "e92b681b-fd18-43e2-91df-3538c37d9890",
   "anchor_task_id": "492adef6-ff53-4244-bf42-c101bb350ade",

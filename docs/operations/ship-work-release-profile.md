@@ -27,10 +27,12 @@ redacted receipt. Account/audience/allowlist setup, provider privacy read-back
 выполняются runner-ом.
 
 Revision 4 заменяет исторический Linear selector текущими exact Task Manager
-Project/Release refs. Provider instance закреплён как стабильный Sites project
-ID сервера Task Manager, все paginated reads ограничены page size `50`, а
-scope-level facts проецируются только в native comments заранее назначенной
-Task `MD-285` с exact predecessor, idempotency marker и comment read-back.
+Project/Release refs. Adapter boundary закреплён configured direct-package
+identity `task-manager@srez-marketplace`; он не выдаётся за отсутствующий в
+`get_workspace` immutable workspace UUID. Все paginated reads ограничены page
+size `50`, а scope-level facts проецируются только в native comments заранее
+назначенной Task `MD-285` с exact predecessor, idempotency marker и comment
+read-back.
 
 ## Canonical profile
 
@@ -102,7 +104,7 @@ task_management:
     specification: docs/specs/ship-work-release-task-manager-srez.md
     runtime_reference: docs/operations/ship-work-release-task-manager-srez.md
   provider_instance:
-    id: appgprj_exampleb73ec2a398f1e2cc
+    id: task-manager@srez-marketplace
     id_source: null
   collection:
     provider: task-manager

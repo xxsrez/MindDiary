@@ -12,12 +12,14 @@ receipt.
 
 ## Preflight
 
-1. Убедиться, что callable connector — Task Manager server instance
-   `appgprj_exampleb73ec2a398f1e2cc` из
-   `task_management.provider_instance.id`; package/version и display name не
-   являются instance identity.
+1. В fresh callable catalog разрешить configured direct package
+   `task-manager@srez-marketplace` и проверить наличие Task Manager
+   `get_workspace`, Project/Release/Task reads, native comments и versioned
+   Task write/reconcile tools. Совпадение только display name недостаточно.
 2. Вызвать `get_workspace`. Сохранить observed read/write capabilities без user
-   email, token или других credential values.
+   email, token или других credential values. Ответ не содержит immutable
+   workspace UUID; не придумывать его из Sites hosting project, URL, OAuth
+   principal или package version.
 3. Exact-read Project ref `525e801d-0ae9-4be7-bae4-6a9c8f85f581` и его current
    status catalog.
 4. Полностью пройти `list_releases(projectRef, limit=50)` до `hasMore=false` и
@@ -28,6 +30,9 @@ receipt.
 
 Нулевой/ambiguous result, stale identity, missing read capability или
 незавершённая pagination останавливают run до Goal/task/comment/code mutation.
+Configured package identity ограничивает runtime routing, но не является
+утверждением о connector-visible workspace/server UUID. Deployment provenance
+Task Manager проверяется отдельно и не участвует в AdapterRef reconciliation.
 
 ## Snapshot Release 0.1
 

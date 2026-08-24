@@ -67,8 +67,11 @@ evidence, предлагаемый дизайн и ещё не проверен�
    versioned provider-neutral schema identity, snapshots, mutations,
    reconciliation и capability negotiation task-management backend-а.
 21. [Task Manager adapter Mind Diary](specs/ship-work-release-task-manager-srez.md) —
-   current Project/Release mapping, stable server instance, bounded reads,
-   versioned task writes и designated scope projection anchor.
+   current Project/Release mapping, configured runtime identity, bounded
+   reads, versioned task writes и designated scope projection anchor.
+22. [Retired Linear adapter tombstone](specs/ship-work-release-linear.md) —
+   historical provenance прежнего path без executable selector, runtime или
+   delivery authority.
 
 ## Руководства
 

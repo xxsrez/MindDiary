@@ -335,6 +335,15 @@ workspace/tenant/server ID и доказать принадлежность coll
 resolved ID сохраняется в `AdapterRef` до mutation. Slug, URL и current user ID
 не заменяют provider instance ID.
 
+Если exact provider вообще не публикует workspace/tenant/server ID, accepted
+provider mapping может использовать literal configured adapter/runtime identity
+как routing boundary. Mapping обязана явно отметить отсутствие connector-visible
+instance identity, запретить claims/reconciliation по deployment project ID,
+URL, principal или package version и ограничить preflight одним direct package
+плюс exact collection/scope reads. Один profile не может так неоднозначно
+маршрутизировать несколько provider connections; их появление требует нового
+provider identity contract и profile revision.
+
 `pagination.connections` перечисляет каждую connection, которую adapter читает
 для identity, scope, relations, closure, catalogs или reconciliation. Для
 каждой обязательны positive `page_size`, `max_pages` и `max_records`, а общий

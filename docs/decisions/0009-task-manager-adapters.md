@@ -53,8 +53,10 @@ supersede-ит именно эту provider/runtime часть, не меняя 
 - current profile выбирает adapter `task-manager`, exact Project
   `525e801d-0ae9-4be7-bae4-6a9c8f85f581` и Release
   `e92b681b-fd18-43e2-91df-3538c37d9890`;
-- provider instance — stable configured Sites project ID Task Manager server,
-  а не connector package, user identity или URL;
+- current runtime boundary — configured direct-package identity
+  `task-manager@srez-marketplace` плюс fresh callable catalog, `get_workspace`
+  и exact Project/Release reads. Connector не публикует immutable workspace
+  UUID; Sites deployment project ID не подменяет эту отсутствующую identity;
 - specification и operational runtime reference являются разными tracked
   documents; второй производен от первого и не создаёт вторую норму;
 - из-за отсутствия native Release status-update scope facts используют exact

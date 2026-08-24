@@ -38,10 +38,10 @@ test("Mind Diary delivery profile resolves exact Task Manager Release 0.1", asyn
 
   assert.equal(
     taskManagement.provider_instance.id,
-    "appgprj_exampleb73ec2a398f1e2cc",
+    "task-manager@srez-marketplace",
   );
   assert.equal(taskManagement.provider_instance.id_source, null);
-  assert.doesNotMatch(taskManagement.provider_instance.id, /marketplace|plugin/iu);
+  assert.doesNotMatch(JSON.stringify(taskManagement), /appgprj_/u);
 
   assert.deepEqual(
     {
@@ -137,7 +137,8 @@ test("adapter specification and runtime reference remain separate and aligned", 
   ]);
 
   for (const document of [specification, runtimeReference]) {
-    assert.match(document, /appgprj_exampleb73ec2a398f1e2cc/u);
+    assert.match(document, /task-manager@srez-marketplace/u);
+    assert.doesNotMatch(document, /appgprj_/u);
     assert.match(document, /492adef6-ff53-4244-bf42-c101bb350ade/u);
     assert.match(document, /ship-work-release\/task-manager-scope-fact-comment\/v1/u);
     assert.match(document, /reconcile/iu);
@@ -146,11 +147,10 @@ test("adapter specification and runtime reference remain separate and aligned", 
   assert.match(runtimeReference, /Статус: accepted operational reference/u);
 });
 
-test("retired Shipliner runtime and Linear adapter cannot re-enter the active gate", async () => {
+test("retired Shipliner runtime and old Linear semantics cannot re-enter the active gate", async () => {
   const retiredPaths = [
     ".agents/skills/ship-linear-release/SKILL.md",
     "docs/specs/ship-linear-release-v1.md",
-    "docs/specs/ship-work-release-linear.md",
   ];
   for (const retiredPath of retiredPaths) {
     await assert.rejects(
@@ -166,10 +166,22 @@ test("retired Shipliner runtime and Linear adapter cannot re-enter the active ga
   assert.equal(packageJson.scripts["test:orchestration"], undefined);
   assert.doesNotMatch(packageJson.scripts.check, /ship-linear|test:orchestration/iu);
 
+  const tombstone = await readFile(
+    resolve(repositoryRoot, "docs/specs/ship-work-release-linear.md"),
+    "utf8",
+  );
+  assert.match(tombstone, /Статус: retired historical tombstone/u);
+  assert.match(tombstone, /ship-work-release-task-manager-srez\.md/u);
+  assert.match(tombstone, /0009-task-manager-adapters\.md#amendment-2026-08-24/u);
+  assert.doesNotMatch(
+    tombstone,
+    /current_project_milestone|references\/task-manager-linear|task_management\.adapter=linear/iu,
+  );
+  assert.ok(tombstone.length < 2_500, "the tombstone must not regrow the old full spec");
+
   const activeDocuments = [
     "AGENTS.md",
     "README.md",
-    "docs/README.md",
     "docs/operations/ship-work-release-profile.md",
     "docs/operations/ship-work-release.md",
     "docs/specs/ship-work-release.md",
