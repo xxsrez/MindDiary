@@ -11,10 +11,12 @@ import {
 import { SitesMindLocatorCodec } from "@mind-diary/adapter-locator-sites";
 import {
   MCP_ENDPOINT,
+  FILE_UPLOAD_INTENT_ROUTE_PREFIX,
   MCP_LEGACY_CODEX_ENDPOINT,
   MCP_RETIRED_SITES_ENDPOINT,
   OpenAiNativeFileTransport,
   ProductMcpContentApplication,
+  createFileUploadIntentHttpHandler,
   createLegacyCodexMcpHttpHandler,
   createMcpHttpHandler,
   type McpRequestIdGenerator,
@@ -76,7 +78,9 @@ import {
   ExportJobApplicationService,
   FileIngressCoordinator,
   GeneratedArtifactIngressService,
+  LocalFileUploadIntentService,
   McpBearerAuthenticationService,
+  createLocalFileUploadIntentSecretCodec,
   MarkdownImportService,
   MindBrowseService,
   MindBindingApplicationService,
@@ -660,6 +664,25 @@ export async function createProductSiteRuntime(
     ) =>
       generatedArtifactIngress.stageServerGenerated(request),
   });
+  const uploadIntentSecrets = await createLocalFileUploadIntentSecretCodec(
+    options.tokenVerifierKey,
+  );
+  const uploadIntents = new LocalFileUploadIntentService({
+    authorizer: contentAuthorizer,
+    bindings: metadata,
+    intents: metadata,
+    staging: {
+      stageStream: (request) => bundleFileStaging.stageStream(request),
+      readStagedBundleFile: (stagedFileId) => metadata.readStagedBundleFile(stagedFileId),
+    },
+    digest: objects,
+    clock,
+    secrets: uploadIntentSecrets,
+    deploymentCapabilities: MCP_CONTENT_DEPLOYMENT_CAPABILITIES,
+    issuerActorAllowed: (actor) =>
+      String(actor.authentication.tokenId).startsWith(OAUTH_ACCESS_RECORD_PREFIX) &&
+      String(actor.authentication.bindingOwnerId).startsWith("md_oauth_grant_"),
+  });
   const nativeFiles = new OpenAiNativeFileTransport({
     maxBytes: BUNDLE_FILE_LIMITS.maxFileBytes,
   });
@@ -763,6 +786,8 @@ export async function createProductSiteRuntime(
     },
     capabilityStatus: {
       session_attachment: "available_hosted",
+      local_path: "available_hosted",
+      "workspace/generated_artifact": "available_hosted",
       bounded_in_memory: "available_hosted",
       server_generated: "available_hosted",
     },
@@ -822,6 +847,9 @@ export async function createProductSiteRuntime(
     history,
     validation,
     staging: bundleFileStaging,
+    uploadIntents,
+    uploadIntentUrl: (capability) =>
+      `${options.publicOrigin}${FILE_UPLOAD_INTENT_ROUTE_PREFIX}${encodeURIComponent(capability)}`,
     ingress: fileIngress,
     bundleFileDownloads,
     nativeFiles,
@@ -962,6 +990,7 @@ export async function createProductSiteRuntime(
     const mcpWriteActivityTools = new Set([
       "commit_changeset",
       "capture_knowledge",
+      "create_file_upload_intent",
       "stage_bundle_file",
       "set_read_mind_binding",
       "set_write_mind_binding",
@@ -1399,6 +1428,11 @@ export async function createProductSiteRuntime(
       return bundleFileDownloads.download(actor, secret);
     },
   });
+  const fileUploadIntent = createFileUploadIntentHttpHandler({
+    application: uploadIntents,
+    publicOrigin: options.publicOrigin,
+    nextRequestId: () => nextOpaque("file-upload-request"),
+  });
 
   const indexJobs = new RevisionIndexJobHandler({ work: metadata, revisions, index, clock });
   const exportJobs = new ExportJobHandler({
@@ -1713,18 +1747,26 @@ export async function createProductSiteRuntime(
       const startedAt = Date.now();
       const exportRequest = path.startsWith("/api/v1/exports/");
       const bundleFileRequest = path.startsWith("/api/bundle-download/");
+      const fileUploadRequest = path.startsWith(FILE_UPLOAD_INTENT_ROUTE_PREFIX);
       try {
         const response =
           (await exportDownload(request)) ??
           (await bundleFileDownload(request)) ??
+          (await fileUploadIntent(request)) ??
           await web(request);
         if (response !== null) {
-          const surface = exportRequest || bundleFileRequest ? "content" as const : "control" as const;
+          const surface = exportRequest || bundleFileRequest || fileUploadRequest
+            ? "content" as const
+            : "control" as const;
           const operation = exportRequest
             ? "export" as const
             : bundleFileRequest
               ? "get_bundle_file_download" as const
-              : "request" as const;
+              : fileUploadRequest
+                ? request.method === "PUT"
+                  ? "stage_bundle_file" as const
+                  : "reconcile_file_stage" as const
+                : "request" as const;
           recordRuntimeMetric(telemetry, {
             kind: "operational",
             metric: "request_latency_ms",

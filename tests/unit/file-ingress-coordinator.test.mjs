@@ -23,9 +23,10 @@ function record(sourceKind) {
   };
 }
 
-function coordinator(adapters = {}) {
+function coordinator(adapters = {}, capabilityStatus = {}) {
   return new FileIngressCoordinator({
     adapters,
+    capabilityStatus,
     staging: {
       async reconcile(request) {
         return { kind: "stage_reconcile", request };
@@ -69,6 +70,30 @@ test("capabilities expose all sources and never invent an absent adapter", () =>
       ["bounded_in_memory", "available_local", "none"],
       ["server_generated", "not_available", "none"],
     ],
+  );
+});
+
+test("hosted intent sources are advertised without a direct adapter and explicit disable wins", async () => {
+  const localAdapter = {
+    async stage() {
+      return { kind: "staged", record: record("local_path"), replayed: false };
+    },
+  };
+  const service = coordinator(
+    { local_path: localAdapter, bounded_in_memory: localAdapter },
+    {
+      local_path: "available_hosted",
+      "workspace/generated_artifact": "available_hosted",
+      bounded_in_memory: "not_available",
+    },
+  );
+  const statuses = new Map(service.capabilities().map((item) => [item.sourceKind, item.status]));
+  assert.equal(statuses.get("local_path"), "available_hosted");
+  assert.equal(statuses.get("workspace/generated_artifact"), "available_hosted");
+  assert.equal(statuses.get("bounded_in_memory"), "not_available");
+  assert.deepEqual(
+    await service.stage({ sourceKind: "workspace/generated_artifact", payload: {} }),
+    { kind: "invalid", code: "file_ingress_source_unsupported" },
   );
 });
 

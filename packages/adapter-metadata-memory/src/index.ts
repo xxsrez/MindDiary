@@ -119,6 +119,10 @@ import type {
   MarkdownImportSessionFailure,
   MarkdownImportSessionState,
   MarkdownImportStagedFile,
+  LocalFileUploadIntentRecord,
+  LocalFileUploadIntentStore,
+  CreateLocalFileUploadIntentResult,
+  ClaimLocalFileUploadIntentResult,
   MetadataStore,
   MindRouteAuthorizationQuery,
   PublicMindCatalogPageRequest,
@@ -242,6 +246,12 @@ const HANDLE_NOT_FOUND = Object.freeze({ kind: "not_found" } as const);
 function freezeStagedBundleFile(
   record: Readonly<StagedBundleFileRecord>,
 ): Readonly<StagedBundleFileRecord> {
+  return Object.freeze({ ...record });
+}
+
+function freezeLocalFileUploadIntent(
+  record: Readonly<LocalFileUploadIntentRecord>,
+): Readonly<LocalFileUploadIntentRecord> {
   return Object.freeze({ ...record });
 }
 
@@ -4151,7 +4161,8 @@ export class InMemoryRevisionMetadataStore
     MembershipControlStore,
     ControlReadStore,
     ServiceOperatorDirectoryStore,
-    MindBindingStore {
+    MindBindingStore,
+    LocalFileUploadIntentStore {
   readonly kind = "metadata-store" as const;
   #spaces = new Map<SpaceId, SpaceState>();
   #revisionsById = new Map<RevisionId, Envelope>();
@@ -4165,6 +4176,7 @@ export class InMemoryRevisionMetadataStore
   #bundleFileDownloadGrants = new Map<string, Readonly<BundleFileDownloadGrant>>();
   #indexStates = new Map<string, Readonly<RevisionIndexState>>();
   #stagedBundleFiles = new Map<StagedBundleFileId, Readonly<StagedBundleFileRecord>>();
+  #localFileUploadIntents = new Map<string, Readonly<LocalFileUploadIntentRecord>>();
   #markdownImportPlans = new Map<string, Readonly<MarkdownImportPlan>>();
   #markdownImportSessions = new Map<string, Readonly<MarkdownImportSession>>();
   #markdownImportStagedFiles = new Map<
@@ -4254,6 +4266,7 @@ export class InMemoryRevisionMetadataStore
       bundleFileDownloadGrants: new Map(this.#bundleFileDownloadGrants),
       indexStates: new Map(this.#indexStates),
       stagedBundleFiles: new Map(this.#stagedBundleFiles),
+      localFileUploadIntents: new Map(this.#localFileUploadIntents),
       markdownImportPlans: new Map(this.#markdownImportPlans),
       markdownImportSessions: new Map(this.#markdownImportSessions),
       markdownImportStagedFiles: new Map(this.#markdownImportStagedFiles),
@@ -4340,6 +4353,9 @@ export class InMemoryRevisionMetadataStore
     restored.#indexStates = new Map(snapshot.indexStates as Map<string, Readonly<RevisionIndexState>>);
     restored.#stagedBundleFiles = snapshot.stagedBundleFiles instanceof Map
       ? new Map(snapshot.stagedBundleFiles as Map<StagedBundleFileId, Readonly<StagedBundleFileRecord>>)
+      : new Map();
+    restored.#localFileUploadIntents = snapshot.localFileUploadIntents instanceof Map
+      ? new Map(snapshot.localFileUploadIntents as Map<string, Readonly<LocalFileUploadIntentRecord>>)
       : new Map();
     restored.#markdownImportPlans = snapshot.markdownImportPlans instanceof Map
       ? new Map(snapshot.markdownImportPlans as Map<string, Readonly<MarkdownImportPlan>>)
@@ -5138,6 +5154,184 @@ export class InMemoryRevisionMetadataStore
   ): Promise<Readonly<StagedBundleFileRecord> | null> {
     const record = this.#stagedBundleFiles.get(stagedFileId);
     return record === undefined ? null : freezeStagedBundleFile(record);
+  }
+
+  async readLocalFileUploadIntent(
+    intentId: string,
+  ): Promise<Readonly<LocalFileUploadIntentRecord> | null> {
+    const record = this.#localFileUploadIntents.get(intentId);
+    return record === undefined ? null : freezeLocalFileUploadIntent(record);
+  }
+
+  async createLocalFileUploadIntent(
+    record: Readonly<LocalFileUploadIntentRecord>,
+  ): Promise<CreateLocalFileUploadIntentResult> {
+    return this.#runExclusive(async () => {
+      const namespace = [...this.#localFileUploadIntents.values()].find(
+        (candidate) => candidate.namespaceHash === record.namespaceHash,
+      );
+      if (namespace !== undefined) {
+        return namespace.canonicalRequestHash === record.canonicalRequestHash
+          ? Object.freeze({ kind: "replayed" as const, record: freezeLocalFileUploadIntent(namespace) })
+          : Object.freeze({ kind: "conflict" as const });
+      }
+      if (
+        record.state !== "active" || record.claimId !== null ||
+        record.leaseExpiresAt !== null || record.stagedFileId !== null ||
+        record.stageReplayed !== null ||
+        record.rejectionCode !== null || record.consumedAt !== null ||
+        !Number.isFinite(Date.parse(record.createdAt)) ||
+        !Number.isFinite(Date.parse(record.expiresAt)) ||
+        Date.parse(record.expiresAt) <= Date.parse(record.createdAt) ||
+        this.#localFileUploadIntents.has(record.intentId)
+      ) return Object.freeze({ kind: "conflict" as const });
+      const frozen = freezeLocalFileUploadIntent(record);
+      this.#localFileUploadIntents.set(record.intentId, frozen);
+      return Object.freeze({ kind: "created" as const, record: frozen });
+    });
+  }
+
+  async claimLocalFileUploadIntent(request: Readonly<{
+    intentId: string;
+    principalId: PrincipalId;
+    bindingOwnerId: MindBindingOwnerId;
+    claimId: string;
+    occurredAt: UtcInstant;
+    leaseExpiresAt: UtcInstant;
+  }>): Promise<ClaimLocalFileUploadIntentResult> {
+    return this.#runExclusive(async () => {
+      const current = this.#localFileUploadIntents.get(request.intentId);
+      if (
+        current === undefined || current.principalId !== request.principalId ||
+        current.bindingOwnerId !== request.bindingOwnerId
+      ) return Object.freeze({ kind: "not_found" as const });
+      const now = Date.parse(request.occurredAt);
+      const leaseExpiresAt = Date.parse(request.leaseExpiresAt);
+      if (
+        !Number.isFinite(now) || !Number.isFinite(leaseExpiresAt) ||
+        leaseExpiresAt <= now || leaseExpiresAt > Date.parse(current.expiresAt) ||
+        Date.parse(current.expiresAt) <= now
+      ) {
+        return Object.freeze({ kind: "expired" as const });
+      }
+      if (current.state === "consumed") return Object.freeze({ kind: "consumed" as const });
+      if (current.state === "rejected") return Object.freeze({ kind: "rejected" as const });
+      if (
+        current.state === "consuming" && current.leaseExpiresAt !== null &&
+        Date.parse(current.leaseExpiresAt) > now
+      ) return Object.freeze({ kind: "busy" as const });
+      const claimed = freezeLocalFileUploadIntent({
+        ...current,
+        state: "consuming",
+        claimId: request.claimId,
+        leaseExpiresAt: request.leaseExpiresAt,
+      });
+      this.#localFileUploadIntents.set(request.intentId, claimed);
+      return Object.freeze({ kind: "claimed" as const, record: claimed });
+    });
+  }
+
+  async renewLocalFileUploadIntent(request: Readonly<{
+    intentId: string;
+    claimId: string;
+    occurredAt: UtcInstant;
+    leaseExpiresAt: UtcInstant;
+  }>): Promise<"renewed" | "claim_lost" | "expired" | "not_found"> {
+    return this.#runExclusive(async () => {
+      const current = this.#localFileUploadIntents.get(request.intentId);
+      if (current === undefined) return "not_found";
+      if (current.state !== "consuming" || current.claimId !== request.claimId) {
+        return "claim_lost";
+      }
+      const now = Date.parse(request.occurredAt);
+      const requestedExpiry = Date.parse(request.leaseExpiresAt);
+      const currentExpiry = current.leaseExpiresAt === null
+        ? Number.NaN
+        : Date.parse(current.leaseExpiresAt);
+      if (!Number.isFinite(now) || Date.parse(current.expiresAt) <= now) return "expired";
+      if (
+        !Number.isFinite(requestedExpiry) || requestedExpiry <= now ||
+        !Number.isFinite(currentExpiry) || currentExpiry <= now
+      ) return "claim_lost";
+      if (requestedExpiry <= currentExpiry) return "renewed";
+      this.#localFileUploadIntents.set(request.intentId, freezeLocalFileUploadIntent({
+        ...current,
+        leaseExpiresAt: request.leaseExpiresAt,
+      }));
+      return "renewed";
+    });
+  }
+
+  async completeLocalFileUploadIntent(request: Readonly<{
+    intentId: string;
+    claimId: string;
+    stagedFileId: StagedBundleFileId;
+    replayed: boolean;
+    completedAt: UtcInstant;
+  }>): Promise<"completed" | "claim_lost" | "expired" | "not_found"> {
+    return this.#runExclusive(async () => {
+      const current = this.#localFileUploadIntents.get(request.intentId);
+      if (current === undefined) return "not_found";
+      if (current.state !== "consuming" || current.claimId !== request.claimId) return "claim_lost";
+      const completedAt = Date.parse(request.completedAt);
+      if (!Number.isFinite(completedAt) || Date.parse(current.expiresAt) <= completedAt) {
+        return "expired";
+      }
+      if (
+        current.leaseExpiresAt === null ||
+        Date.parse(current.leaseExpiresAt) <= completedAt
+      ) return "claim_lost";
+      this.#localFileUploadIntents.set(request.intentId, freezeLocalFileUploadIntent({
+        ...current,
+        state: "consumed",
+        claimId: null,
+        leaseExpiresAt: null,
+        stagedFileId: request.stagedFileId,
+        stageReplayed: request.replayed,
+        consumedAt: request.completedAt,
+      }));
+      return "completed";
+    });
+  }
+
+  async rejectLocalFileUploadIntent(request: Readonly<{
+    intentId: string;
+    claimId: string;
+    code: string;
+    rejectedAt: UtcInstant;
+  }>): Promise<"rejected" | "claim_lost" | "not_found"> {
+    return this.#runExclusive(async () => {
+      const current = this.#localFileUploadIntents.get(request.intentId);
+      if (current === undefined) return "not_found";
+      if (current.state !== "consuming" || current.claimId !== request.claimId) return "claim_lost";
+      this.#localFileUploadIntents.set(request.intentId, freezeLocalFileUploadIntent({
+        ...current,
+        state: "rejected",
+        claimId: null,
+        leaseExpiresAt: null,
+        rejectionCode: request.code,
+        consumedAt: request.rejectedAt,
+      }));
+      return "rejected";
+    });
+  }
+
+  async releaseLocalFileUploadIntent(request: Readonly<{
+    intentId: string;
+    claimId: string;
+  }>): Promise<"released" | "claim_lost" | "not_found"> {
+    return this.#runExclusive(async () => {
+      const current = this.#localFileUploadIntents.get(request.intentId);
+      if (current === undefined) return "not_found";
+      if (current.state !== "consuming" || current.claimId !== request.claimId) return "claim_lost";
+      this.#localFileUploadIntents.set(request.intentId, freezeLocalFileUploadIntent({
+        ...current,
+        state: "active",
+        claimId: null,
+        leaseExpiresAt: null,
+      }));
+      return "released";
+    });
   }
 
   async runBundleFileStagingTransaction<Result>(

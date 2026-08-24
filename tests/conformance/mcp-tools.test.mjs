@@ -238,7 +238,9 @@ test("tools/list ignores provider order, duplicates, and undeclared tools", asyn
   const result = await rpcResult(await fixture.send(rpc("tools/list")));
   assert.deepEqual(
     result.tools.map(({ name }) => name),
-    MCP_CONTENT_TOOLS.filter((name) => name !== "stage_bundle_file"),
+    MCP_CONTENT_TOOLS.filter(
+      (name) => name !== "stage_bundle_file" && name !== "create_file_upload_intent",
+    ),
   );
   for (const tool of result.tools) {
     assert.equal(tool.inputSchema.$schema, "https://json-schema.org/draft/2020-12/schema");
@@ -252,6 +254,7 @@ test("tools/list ignores provider order, duplicates, and undeclared tools", asyn
             tool.name === "reconcile_changeset" ||
             tool.name === "capture_knowledge" ||
             tool.name === "set_write_mind_binding" ||
+            tool.name === "create_file_upload_intent" ||
             tool.name === "reconcile_file_stage"
             ? "content:write"
             : "content:read",

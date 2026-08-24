@@ -1523,6 +1523,90 @@ export type GeneratedArtifactSourceKind = Extract<
   "bounded_in_memory" | "server_generated"
 >;
 
+export type LocalFileUploadIntentSourceKind = Extract<
+  FileIngressSourceKind,
+  "local_path" | "workspace/generated_artifact" | "connector_object"
+>;
+
+export type LocalFileUploadIntentState =
+  | "active"
+  | "consuming"
+  | "consumed"
+  | "rejected";
+
+/** Durable, path-free state for one OAuth-owned companion upload. */
+export interface LocalFileUploadIntentRecord {
+  readonly intentId: string;
+  readonly namespaceHash: Sha256Digest;
+  readonly canonicalRequestHash: Sha256Digest;
+  readonly principalId: PrincipalId;
+  readonly tokenId: TokenId;
+  readonly bindingOwnerId: MindBindingOwnerId;
+  readonly spaceId: SpaceId;
+  readonly writeBindingId: WriteMindBindingId;
+  readonly sourceKind: LocalFileUploadIntentSourceKind;
+  readonly displayFilename: string;
+  readonly claimedMediaType: BundleFileMediaType;
+  readonly expectedSize: number;
+  readonly expectedSha256: Sha256Digest;
+  readonly idempotencyKey: IdempotencyKey;
+  readonly state: LocalFileUploadIntentState;
+  readonly claimId: string | null;
+  readonly leaseExpiresAt: UtcInstant | null;
+  readonly stagedFileId: StagedBundleFileId | null;
+  readonly stageReplayed: boolean | null;
+  readonly rejectionCode: string | null;
+  readonly createdAt: UtcInstant;
+  readonly expiresAt: UtcInstant;
+  readonly consumedAt: UtcInstant | null;
+}
+
+export type CreateLocalFileUploadIntentResult =
+  | { readonly kind: "created" | "replayed"; readonly record: Readonly<LocalFileUploadIntentRecord> }
+  | { readonly kind: "conflict" };
+
+export type ClaimLocalFileUploadIntentResult =
+  | { readonly kind: "claimed"; readonly record: Readonly<LocalFileUploadIntentRecord> }
+  | { readonly kind: "not_found" | "expired" | "consumed" | "rejected" | "busy" };
+
+export interface LocalFileUploadIntentStore {
+  readLocalFileUploadIntent(intentId: string): Promise<Readonly<LocalFileUploadIntentRecord> | null>;
+  createLocalFileUploadIntent(
+    record: Readonly<LocalFileUploadIntentRecord>,
+  ): Promise<CreateLocalFileUploadIntentResult>;
+  claimLocalFileUploadIntent(request: Readonly<{
+    intentId: string;
+    principalId: PrincipalId;
+    bindingOwnerId: MindBindingOwnerId;
+    claimId: string;
+    occurredAt: UtcInstant;
+    leaseExpiresAt: UtcInstant;
+  }>): Promise<ClaimLocalFileUploadIntentResult>;
+  renewLocalFileUploadIntent(request: Readonly<{
+    intentId: string;
+    claimId: string;
+    occurredAt: UtcInstant;
+    leaseExpiresAt: UtcInstant;
+  }>): Promise<"renewed" | "claim_lost" | "expired" | "not_found">;
+  completeLocalFileUploadIntent(request: Readonly<{
+    intentId: string;
+    claimId: string;
+    stagedFileId: StagedBundleFileId;
+    replayed: boolean;
+    completedAt: UtcInstant;
+  }>): Promise<"completed" | "claim_lost" | "expired" | "not_found">;
+  rejectLocalFileUploadIntent(request: Readonly<{
+    intentId: string;
+    claimId: string;
+    code: string;
+    rejectedAt: UtcInstant;
+  }>): Promise<"rejected" | "claim_lost" | "not_found">;
+  releaseLocalFileUploadIntent(request: Readonly<{
+    intentId: string;
+    claimId: string;
+  }>): Promise<"released" | "claim_lost" | "not_found">;
+}
+
 /**
  * Portable stream writer for source adapters that cannot buffer a generated
  * payload in application memory.  The object-store adapter owns the actual
@@ -3756,6 +3840,7 @@ export const PRIVACY_SAFE_OBSERVABILITY_OPERATIONS = [
   "get_mind_info",
   "get_mind_bindings",
   "get_file_ingress_capabilities",
+  "create_file_upload_intent",
   "browse_entries",
   "fetch",
   "list_revisions",

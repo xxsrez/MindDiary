@@ -125,10 +125,10 @@ export class FileIngressCoordinator {
     return Object.freeze(FILE_INGRESS_SOURCE_KINDS.map((sourceKind) => {
       const adapter = this.#adapters[sourceKind];
       const declared = this.#capabilityStatus[sourceKind];
-      const status = adapter === undefined
-        ? "not_available"
-        : declared === "available_hosted"
-          ? "available_hosted"
+      const status = declared === "available_hosted"
+        ? "available_hosted"
+        : declared === "not_available" || adapter === undefined
+          ? "not_available"
           : "available_local";
       return Object.freeze({ sourceKind, status, ...CAPABILITY_BASE[sourceKind] });
     }));

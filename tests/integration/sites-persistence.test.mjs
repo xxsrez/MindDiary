@@ -77,6 +77,70 @@ test("Sites metadata reconstructs durable capacity reservations after isolate re
   assert.equal(reservations[0].state, "active");
 });
 
+test("Sites metadata preserves one-use file upload intents across isolate restarts", async () => {
+  const database = new FakeD1Database();
+  const first = await createSitesMetadataStore(database);
+  const record = Object.freeze({
+    intentId: "upload-intent:restart:one",
+    namespaceHash: `sha256:${"1".repeat(64)}`,
+    canonicalRequestHash: `sha256:${"2".repeat(64)}`,
+    principalId: "principal_upload_restart",
+    tokenId: "md_oauth_access_record_upload_restart",
+    bindingOwnerId: "md_oauth_grant_upload_restart",
+    spaceId: "space_upload_restart",
+    writeBindingId: "write-binding-upload-restart",
+    sourceKind: "connector_object",
+    displayFilename: "restart.pdf",
+    claimedMediaType: "application/pdf",
+    expectedSize: 42,
+    expectedSha256: `sha256:${"3".repeat(64)}`,
+    idempotencyKey: "upload-restart",
+    state: "active",
+    claimId: null,
+    leaseExpiresAt: null,
+    stagedFileId: null,
+    stageReplayed: null,
+    rejectionCode: null,
+    createdAt: T0,
+    expiresAt: T3,
+    consumedAt: null,
+  });
+  assert.equal((await first.createLocalFileUploadIntent(record)).kind, "created");
+
+  const second = await createSitesMetadataStore(database);
+  const claimed = await second.claimLocalFileUploadIntent({
+    intentId: record.intentId,
+    principalId: record.principalId,
+    bindingOwnerId: record.bindingOwnerId,
+    claimId: "upload-claim:restart:one",
+    occurredAt: T1,
+    leaseExpiresAt: T2,
+  });
+  assert.equal(claimed.kind, "claimed");
+  assert.equal(await second.renewLocalFileUploadIntent({
+    intentId: record.intentId,
+    claimId: "upload-claim:restart:one",
+    occurredAt: T1,
+    leaseExpiresAt: T3,
+  }), "renewed");
+
+  const third = await createSitesMetadataStore(database);
+  assert.equal(await third.completeLocalFileUploadIntent({
+    intentId: record.intentId,
+    claimId: "upload-claim:restart:one",
+    stagedFileId: "staged-file-upload-restart",
+    replayed: false,
+    completedAt: T2,
+  }), "completed");
+
+  const fourth = await createSitesMetadataStore(database);
+  const restored = await fourth.readLocalFileUploadIntent(record.intentId);
+  assert.equal(restored?.state, "consumed");
+  assert.equal(restored?.stagedFileId, "staged-file-upload-restart");
+  assert.equal(restored?.sourceKind, "connector_object");
+  assert.equal(restored?.claimId, null);
+});
+
 class FakeD1Statement {
   #database;
   #sql;

@@ -41,6 +41,7 @@ test("publishes strict native-file staging metadata and mixed commit operations"
     MCP_BUNDLE_FILE_TOOL_DEFINITIONS.map(({ name }) => name),
     [
       "get_file_ingress_capabilities",
+      "create_file_upload_intent",
       "stage_bundle_file",
       "reconcile_file_stage",
       "get_bundle_file_download",
@@ -59,6 +60,39 @@ test("publishes strict native-file staging metadata and mixed commit operations"
     destructiveHint: false,
     openWorldHint: false,
   });
+  const intent = MCP_BUNDLE_FILE_TOOL_DEFINITIONS.find(
+    ({ name }) => name === "create_file_upload_intent",
+  );
+  assert.deepEqual(intent.inputSchema.required, [
+    "write_binding_id",
+    "source_kind",
+    "display_filename",
+    "claimed_media_type",
+    "expected_size",
+    "expected_sha256",
+    "idempotency_key",
+  ]);
+  assert.equal(intent.inputSchema.additionalProperties, false);
+  assert.deepEqual(intent.inputSchema.properties.source_kind.enum, [
+    "local_path",
+    "workspace/generated_artifact",
+    "connector_object",
+  ]);
+  assert.deepEqual(intent.securitySchemes, [{ type: "oauth2", scopes: ["content:write"] }]);
+  assert.deepEqual(intent.annotations, {
+    readOnlyHint: false,
+    destructiveHint: false,
+    openWorldHint: true,
+  });
+  assert.equal("_meta" in intent, false);
+  assert.doesNotMatch(
+    JSON.stringify(intent.inputSchema),
+    /local_path(?:"\s*:)|provider_file|provider_account|source_url|base64|bytes/iu,
+  );
+  assert.doesNotMatch(
+    JSON.stringify(intent.outputSchema),
+    /oauth|token|provider|account|local_path|bytes|base64/iu,
+  );
   const stage = MCP_BUNDLE_FILE_TOOL_DEFINITIONS.find(
     ({ name }) => name === "stage_bundle_file",
   );
@@ -223,6 +257,7 @@ test("product adapter terminates provider metadata and returns only verified sta
   let downloadRequest = null;
   let reconcileStageRequest = null;
   let reconcileCommitRequest = null;
+  let uploadIntentRequest = null;
   const application = new ProductMcpContentApplication({
     discovery: {
       async listMinds() { return {}; },
@@ -285,6 +320,20 @@ test("product adapter terminates provider metadata and returns only verified sta
           },
         };
       },
+    },
+    uploadIntents: {
+      async create(_actor, input) {
+        uploadIntentRequest = input;
+        return {
+          kind: "ready",
+          uploadCapability: "mdupload_v1_safecapability",
+          expiresAt: "2026-08-22T12:10:00.000Z",
+          replayed: false,
+        };
+      },
+    },
+    uploadIntentUrl(capability) {
+      return `https://mind-diary.invalid/api/file-ingress/upload-intents/${capability}`;
     },
     ingress: {
       capabilities() {
@@ -380,6 +429,11 @@ test("product adapter terminates provider metadata and returns only verified sta
     },
     search: {}, history: {}, validation: {}, commits: {}, capture: {}, exports: {},
   });
+  assert.equal(
+    (await application.listTools({ actor: ACTOR }))
+      .some(({ name }) => name === "create_file_upload_intent"),
+    true,
+  );
   const result = await application.executeToolCall({
     actor: ACTOR,
     name: "stage_bundle_file",
@@ -467,6 +521,40 @@ test("product adapter terminates provider metadata and returns only verified sta
     ],
   );
 
+  const intentResult = await application.executeToolCall({
+    actor: ACTOR,
+    name: "create_file_upload_intent",
+    arguments: {
+      source_kind: "connector_object",
+      write_binding_id: "write_binding_stage",
+      display_filename: "diagram.png",
+      claimed_media_type: "image/png",
+      expected_size: PNG.byteLength,
+      expected_sha256: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      idempotency_key: "connector-upload-intent",
+    },
+  });
+  assert.equal(intentResult.isError, false);
+  assert.deepEqual(uploadIntentRequest, {
+    source_kind: "connector_object",
+    write_binding_id: "write_binding_stage",
+    display_filename: "diagram.png",
+    claimed_media_type: "image/png",
+    expected_size: PNG.byteLength,
+    expected_sha256: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    idempotency_key: "connector-upload-intent",
+  });
+  assert.deepEqual(
+    Object.keys(intentResult.structuredContent.data).sort(),
+    ["expires_at", "replayed", "upload_url"],
+  );
+  assert.equal(
+    intentResult.structuredContent.data.upload_url,
+    "https://mind-diary.invalid/api/file-ingress/upload-intents/mdupload_v1_safecapability",
+  );
+  assert.equal(intentResult.structuredContent.data.replayed, false);
+  assert.doesNotMatch(JSON.stringify(intentResult), /provider-secret|mdo_access|local_path.*\//iu);
+
   const reconciledStage = await application.executeToolCall({
     actor: ACTOR,
     name: "reconcile_file_stage",
@@ -526,7 +614,7 @@ test("product adapter terminates provider metadata and returns only verified sta
   ]);
 });
 
-test("read-only catalog omits native staging and direct calls fail before execution", async () => {
+test("read-only catalog omits native and intent staging and direct calls fail before execution", async () => {
   let executed = 0;
   const readActor = Object.freeze({
     ...ACTOR,
@@ -565,18 +653,21 @@ test("read-only catalog omits native staging and direct calls fail before execut
     params: { _meta: modernMeta() },
   })).json()).result;
   assert.equal(listed.tools.some(({ name }) => name === "stage_bundle_file"), false);
+  assert.equal(listed.tools.some(({ name }) => name === "create_file_upload_intent"), false);
 
-  const called = (await (await send({
-    jsonrpc: "2.0",
-    id: 2,
-    method: "tools/call",
-    params: {
-      name: "stage_bundle_file",
-      arguments: {},
-      _meta: modernMeta(),
-    },
-  })).json()).result;
-  assert.equal(called.isError, true);
-  assert.equal(called.structuredContent.error.code, "insufficient_scope");
+  for (const name of ["stage_bundle_file", "create_file_upload_intent"]) {
+    const called = (await (await send({
+      jsonrpc: "2.0",
+      id: 2,
+      method: "tools/call",
+      params: {
+        name,
+        arguments: {},
+        _meta: modernMeta(),
+      },
+    })).json()).result;
+    assert.equal(called.isError, true);
+    assert.equal(called.structuredContent.error.code, "insufficient_scope");
+  }
   assert.equal(executed, 0);
 });

@@ -31,6 +31,7 @@ const expectedMcpTools = [
   "set_read_mind_binding",
   "set_write_mind_binding",
   "get_file_ingress_capabilities",
+  "create_file_upload_intent",
   "stage_bundle_file",
   "reconcile_file_stage",
   "get_bundle_file_download",

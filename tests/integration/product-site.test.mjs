@@ -1462,7 +1462,13 @@ test("product MCP facade advertises only canonical content tools and membership 
     },
   };
   const tools = await application.listTools({ actor });
-  assert.deepEqual(tools.map(({ name }) => name), MCP_TOOL_DEFINITIONS.map(({ name }) => name));
+  assert.deepEqual(
+    tools.map(({ name }) => name),
+    MCP_TOOL_DEFINITIONS
+      .filter(({ name }) => name !== "create_file_upload_intent")
+      .map(({ name }) => name),
+  );
+  assert.equal(tools.some(({ name }) => name === "create_file_upload_intent"), false);
   assert.equal(tools.some(({ name }) => String(name).includes("member") || String(name).includes("token")), false);
   const roots = await application.listRootResources({ actor });
   assert.equal(roots.resources.length, 1);

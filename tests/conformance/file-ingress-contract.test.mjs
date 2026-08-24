@@ -25,16 +25,13 @@ test("MD-271 names every source kind with an explicit capability status", async 
   }
   assert.match(spec, /`implementation_status: partial_by_source`/);
   assert.match(spec, /`session_attachment`.*`implemented_local`/s);
-  const implementedKinds = new Set([
-    "local_path",
-    "workspace/generated_artifact",
-    "connector_object",
-    "bounded_in_memory",
-    "server_generated",
-  ]);
+  const hostedKinds = new Set(["local_path", "workspace/generated_artifact"]);
+  const localKinds = new Set(["connector_object", "bounded_in_memory", "server_generated"]);
   for (const sourceKind of sourceKinds.slice(1)) {
     const row = spec.split("\n").find((line) => line.startsWith(`| \`${sourceKind}\` |`));
-    if (implementedKinds.has(sourceKind)) {
+    if (hostedKinds.has(sourceKind)) {
+      assert.ok(row?.includes("`implemented_hosted_candidate`"), `hosted candidate status missing: ${sourceKind}`);
+    } else if (localKinds.has(sourceKind)) {
       assert.ok(row?.includes("`implemented_local`"), `local companion status missing: ${sourceKind}`);
     } else {
       assert.ok(row?.includes("`proposal`"), `source must remain proposal: ${sourceKind}`);
@@ -78,6 +75,7 @@ test("MD-271 preserves the portable staged-ref boundary and common limits", asyn
   }
   for (const tool of [
     "get_file_ingress_capabilities",
+    "create_file_upload_intent",
     "reconcile_file_stage",
     "reconcile_changeset",
   ]) {

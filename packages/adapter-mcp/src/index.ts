@@ -12,6 +12,7 @@ import {
 } from "@mind-diary/application-content";
 
 export * from "./native-file-input.js";
+export * from "./file-upload-intent.js";
 
 export const MCP_TARGET_PROTOCOL = "2026-07-28" as const;
 export const MCP_ENDPOINT = "/api/mcp" as const;
@@ -46,6 +47,7 @@ export const MCP_CONTENT_TOOLS = [
   "set_read_mind_binding",
   "set_write_mind_binding",
   "get_file_ingress_capabilities",
+  "create_file_upload_intent",
   "stage_bundle_file",
   "reconcile_file_stage",
   "get_bundle_file_download",
@@ -1264,6 +1266,53 @@ const GET_FILE_INGRESS_CAPABILITIES_OUTPUT_SCHEMA = toolOutputSchema(
   }),
 );
 
+const CREATE_FILE_UPLOAD_INTENT_SOURCE_KIND_SCHEMA = Object.freeze({
+  type: "string",
+  enum: Object.freeze([
+    "local_path",
+    "workspace/generated_artifact",
+    "connector_object",
+  ]),
+});
+
+const CREATE_FILE_UPLOAD_INTENT_INPUT_SCHEMA = strictInputSchema(
+  {
+    write_binding_id: OPAQUE_ID_SCHEMA,
+    source_kind: CREATE_FILE_UPLOAD_INTENT_SOURCE_KIND_SCHEMA,
+    display_filename: Object.freeze({ type: "string", minLength: 1, maxLength: 255 }),
+    claimed_media_type: FILE_INGRESS_MEDIA_TYPE_SCHEMA,
+    expected_size: Object.freeze({
+      type: "integer",
+      minimum: 0,
+      maximum: 67_108_864,
+    }),
+    expected_sha256: SHA256_SCHEMA,
+    idempotency_key: IDEMPOTENCY_KEY_SCHEMA,
+  },
+  [
+    "write_binding_id",
+    "source_kind",
+    "display_filename",
+    "claimed_media_type",
+    "expected_size",
+    "expected_sha256",
+    "idempotency_key",
+  ],
+);
+
+const CREATE_FILE_UPLOAD_INTENT_OUTPUT_SCHEMA = toolOutputSchema(
+  Object.freeze({
+    type: "object",
+    additionalProperties: false,
+    required: Object.freeze(["upload_url", "expires_at", "replayed"]),
+    properties: Object.freeze({
+      upload_url: Object.freeze({ type: "string", format: "uri", maxLength: 4_096 }),
+      expires_at: Object.freeze({ type: "string", format: "date-time" }),
+      replayed: Object.freeze({ type: "boolean" }),
+    }),
+  }),
+);
+
 const STAGE_BUNDLE_FILE_INPUT_SCHEMA = Object.freeze({
   $schema: JSON_SCHEMA_2020_12,
   type: "object",
@@ -1699,6 +1748,20 @@ export const MCP_BUNDLE_FILE_TOOL_DEFINITIONS = Object.freeze([
       readOnlyHint: true,
       destructiveHint: false,
       openWorldHint: false,
+    }),
+  }),
+  Object.freeze({
+    name: "create_file_upload_intent",
+    title: "Create a one-use file upload intent",
+    description:
+      "Create or exactly replay one 10-minute, same-origin upload capability for a verified local/workspace snapshot or an already-read connector object. The exact active write binding and current OAuth grant are rechecked server-side. Return only the capability URL to the trusted companion; never provide a local path, provider locator, account ID, OAuth token, arbitrary URL or base64 bytes.",
+    inputSchema: CREATE_FILE_UPLOAD_INTENT_INPUT_SCHEMA,
+    outputSchema: CREATE_FILE_UPLOAD_INTENT_OUTPUT_SCHEMA,
+    securitySchemes: WRITE_SECURITY_SCHEMES,
+    annotations: Object.freeze({
+      readOnlyHint: false,
+      destructiveHint: false,
+      openWorldHint: true,
     }),
   }),
   Object.freeze({
@@ -2663,7 +2726,8 @@ function listedTools(
       .filter(
         (name) =>
           available.has(name) &&
-          (name !== "stage_bundle_file" || tokenAllowsWrite(actor)),
+          ((name !== "stage_bundle_file" && name !== "create_file_upload_intent") ||
+            tokenAllowsWrite(actor)),
       )
       .map((name) => CANONICAL_DEFINITION_BY_NAME.get(name))
       .filter(
@@ -3252,6 +3316,7 @@ function createMcpHttpHandlerAtEndpoint(
     if (
       (name === "commit_changeset" ||
         name === "reconcile_changeset" ||
+        name === "create_file_upload_intent" ||
         name === "stage_bundle_file" ||
         name === "reconcile_file_stage" ||
         name === "capture_knowledge" ||

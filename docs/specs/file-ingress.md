@@ -3,11 +3,11 @@
 Статус: accepted contract boundary, 2026-08-23. `normative_status: accepted`;
 `implementation_status: partial_by_source`: общий portable boundary принят,
 `session_attachment`, `bounded_in_memory` и `server_generated` реализованы в
-local candidate и требуют отдельного exact evidence; MD-272 добавляет
-local-only companion implementation для `local_path` и
+local candidate и требуют отдельного exact evidence; MD-272 добавляет local
+companion и hosted one-use upload-intent transport для `local_path` и
 `workspace/generated_artifact`. Native-file UAT остаётся MD-250, hosted
-upload-intent/producer evidence и provider-specific connector adapter остаются
-отдельными claims. MD-274 добавляет repository-local `FileIngressCoordinator`,
+producer evidence и provider-specific connector adapter остаются отдельными
+claims. MD-274 добавляет repository-local `FileIngressCoordinator`,
 explicit stage/commit reconcile, mixed-source atomic integration и три
 contracts на существующих MCP endpoints: `get_file_ingress_capabilities`,
 `reconcile_file_stage`, `reconcile_changeset`. Это не добавляет новый hosted
@@ -110,8 +110,8 @@ Task/release evidence после commit.
 | Source kind | Adapter owns reading | Transport boundary | Status / evidence | Explicit fallback |
 |---|---|---|---|---|
 | `session_attachment` | MCP/provider adapter | Native client file parameter; adapter follows provider HTTPS object/redirect policy | `implemented_local`, `UAT pending` MD-250; `_meta["openai/fileParams"]=["file"]` is local schema evidence, not live client proof | If the pinned profile cannot supply native `file`, return `native_file_input_unsupported`; do not use base64, local path or arbitrary URL |
-| `local_path` | Local companion process | Out-of-band upload intent/equivalent binary stream; companion snapshots one regular file and sends bounded bytes | `implemented_local`, MD-272 unit/integration evidence; hosted intent/UAT pending | Missing companion, expired/invalid intent or revoked auth: `file_ingress_source_unsupported` / `file_ingress_intent_expired`; never send the path to hosted MCP |
-| `workspace/generated_artifact` | Local companion process with explicit workspace authority | Same out-of-band intent/equivalent stream, but artifact snapshot is selected by the local process | `implemented_local`, MD-272 unit/integration evidence; hosted intent/UAT pending | Missing companion/workspace authority: `file_ingress_source_unsupported`; no path fallback or arbitrary URL |
+| `local_path` | Local companion process | MCP-issued, OAuth write-scoped one-use upload capability followed by one bounded binary `PUT`; companion snapshots one regular file and sends only bytes plus safe metadata | `implemented_hosted_candidate`, MD-272 unit/integration/security evidence; exact UAT pending | Missing companion, expired/invalid intent or revoked auth: `file_ingress_source_unsupported` / `file_ingress_intent_expired`; never send the path or OAuth bearer to the companion |
+| `workspace/generated_artifact` | Local companion process with explicit workspace authority | Same one-use hosted intent, but the selected artifact snapshot is established only by the local process | `implemented_hosted_candidate`, MD-272 unit/integration/security evidence; exact UAT pending | Missing companion/workspace authority: `file_ingress_source_unsupported`; no path fallback or arbitrary URL |
 | `connector_object` | Explicit authorized connector adapter | Connector API/object fetch with provider-specific bounded stream; arbitrary URL is not a connector contract | Provider-neutral reader/staging boundary is `implemented_local` with unit and mixed-source integration evidence; provider binding and hosted UAT pending | Connector absent, revoked or object unavailable: generic `file_ingress_source_unavailable`; no cross-provider or native fallback |
 | `bounded_in_memory` | Calling adapter / trusted inline boundary | Explicit bounded bytes transport, not implicit JSON-RPC base64; local companion caps local generated path at 4 MiB and shared staging validates it | `implemented_local`, MD-272/MD-273; exact local tests cover limit, digest/MIME and quarantine; hosted UAT pending | Over limit or unsupported profile: `bundle_file_size_limit_exceeded` / `file_ingress_source_unsupported`; caller must choose out-of-band source |
 | `server_generated` | Trusted server-side producer | Internal application port or bounded job output; no client-supplied source locator; local provider writer streams to quarantine storage | `implemented_local`, MD-273; exact local tests cover stream, cancellation and no partial publication; hosted producer evidence pending | Producer unavailable/expired: `file_ingress_source_unavailable`; no client URL or path fallback |
@@ -136,7 +136,7 @@ every source after transport-specific admission:
 | Staged bytes referenced by one changeset | 134,217,728 bytes (128 MiB) | Markdown limits and resulting revision limits still apply |
 | Outstanding verified staged bytes per binding owner | 268,435,456 bytes (256 MiB) | Includes all source kinds in that owner namespace |
 | Verified staged-ref TTL | 3,600 seconds (60 minutes) | Expiry is service time; ref is not reader-visible |
-| One-use upload intent TTL (proposed out-of-band sources) | 600 seconds (10 minutes) | Intent is separate from `staged_file_ref`; no replay after expiry |
+| One-use upload intent TTL | 600 seconds (10 minutes) | Intent is separate from `staged_file_ref`; no replay after expiry |
 | Retained canonical objects per Space | 2,147,483,648 bytes (2 GiB) | Lower applicable capacity limit wins |
 
 Existing limits remain unchanged: resulting HEAD has at most 10,000 entries,
@@ -149,8 +149,8 @@ contract remains authoritative.
 | Source kind | Source-specific budget | Where bytes/metadata are checked | Initial state and success |
 |---|---|---|---|
 | `session_attachment` | `file_id` ≤ 1,024 chars; temporary URL ≤ 8,192; name ≤ 1,024; MIME hint ≤ 256; current Sites adapter default: 30,000 ms, up to 4 redirects, 64 MiB stream | Provider adapter checks HTTPS allowlist, credentials omission, redirect/timeout/stream bound; application recomputes SHA-256, size, magic MIME and safe filename | `quarantined → verified → staged_file_ref`; only verified ref may enter commit |
-| `local_path` | One regular file per intent, ≤ 64 MiB; proposed intent 600 s; staged ref 3,600 s | Companion checks regular-file/snapshot/size/digest before upload; application rechecks exact bytes, MIME and filename after upload | `intent → quarantined → verified`; changed snapshot is a new key, not a changed retry |
-| `workspace/generated_artifact` | One selected artifact per intent, ≤ 64 MiB; proposed intent 600 s; staged ref 3,600 s | Companion checks workspace authority and snapshot; application rechecks bytes, digest, MIME and safe filename | Same as `local_path`; workspace path never reaches application identity |
+| `local_path` | One regular file per intent, ≤ 64 MiB; intent 600 s; consume lease 30 s; staged ref 3,600 s | Companion checks regular-file/snapshot/size/digest before intent creation; application rechecks exact streamed bytes, MIME and filename after upload | `intent → consuming → quarantined → verified`; changed snapshot is a new key, not a changed retry |
+| `workspace/generated_artifact` | One selected artifact per intent, ≤ 64 MiB; intent 600 s; consume lease 30 s; staged ref 3,600 s | Companion checks workspace authority and snapshot; application rechecks bytes, digest, MIME and safe filename | Same as `local_path`; workspace path never reaches application identity |
 | `connector_object` | One object per stage, ≤ 64 MiB; proposed fetch deadline 30 s and at most 4 provider redirects where the connector permits; staged ref 3,600 s | Connector validates grant/object ownership and bounded fetch; application recomputes digest, size, magic MIME and filename | `quarantined → verified`; provider metadata is advisory only |
 | `bounded_in_memory` | One object per explicit call, ≤ 4,194,304 bytes (4 MiB); no upload intent; staged ref 3,600 s | Calling adapter enforces byte bound; application recomputes digest, size and MIME before quarantine promotion | `quarantined → verified`; larger payload must use an explicit out-of-band source |
 | `server_generated` | One producer output, ≤ 64 MiB; proposed generation lease 600 s; staged ref 3,600 s | Trusted producer supplies bytes, but application still checks exact digest, size, magic MIME and safe filename | `quarantined → verified`; producer job identity is not a file identity |
@@ -182,6 +182,46 @@ members and ZIP extraction remain denied by the BundleFile policy.
 - Upload intents are one-use. Exact replay of the same idempotency key may
   recover the same intent before expiry; a changed payload or second consumer
   returns `file_ingress_intent_conflict`.
+- The authenticated MCP command `create_file_upload_intent` creates or exactly
+  replays an intent for the caller's current OAuth `content:write` grant and
+  exact active `write_binding_id`. It returns one same-origin absolute
+  `upload_url` with a signed opaque capability, `expires_at` and `replayed`.
+  OAuth remains inside the managed MCP host: the repository-local companion is
+  never asked to discover, copy or receive `mdo_access_*` bearer material.
+  Personal MCP tokens and Sites identity cannot issue this hosted companion
+  capability; the exact registered OAuth grant is the binding owner.
+  Exact replay is also pinned to the issuing access-token record. OAuth token
+  rotation creates a fresh intent under the same grant and never reactivates a
+  capability issued by a revoked or expired token.
+- The companion uses the returned capability for one exact
+  `PUT /api/file-ingress/upload-intents/{intent_ref}` and privacy-bounded,
+  non-consuming `GET` status/reconcile. These HTTP calls intentionally accept
+  no `Authorization`, cookie or user identity; the capability is pinned to the
+  already authorized principal, token, binding owner, Space, write binding and
+  source kind. Application staging still rechecks current token, ACL and exact
+  write binding before accepting bytes.
+- Intent JSON contains only `source_kind`, `write_binding_id`, safe display
+  filename, claimed MIME, exact size/SHA-256 and idempotency key. `PUT` is
+  `application/octet-stream`; absolute/workspace path, provider identity,
+  account, URL, bearer material and raw bytes never enter intent metadata,
+  logs or error bodies. Unknown fields fail closed.
+- The same intent transport may carry `connector_object` only after an
+  authenticated client-side connector adapter has read the exact provider
+  object and terminated provider identity. The hosted intent never accepts a
+  provider locator or claims provider authorization on its own.
+- Consumption is claimed by a 30-second lease before bytes enter quarantine
+  and renewed every 10 seconds while the stream is active. Renewal loss aborts
+  the staging attempt before another claimant may safely proceed. A definitive
+  byte/policy failure retires the intent; a transport interruption releases
+  it, and a process crash is recoverable after lease expiry. If the
+  client loses the successful `PUT` response, `GET` returns the verified staged
+  receipt without accepting the bytes a second time.
+- The capability MAC is verified in constant time after bounded syntax parsing.
+  The URL is an expiring bearer secret: it is never emitted in logs, errors,
+  audit metadata or release evidence. The client validates the exact public
+  origin and route, omits credentials, and rejects redirects, query, fragment
+  and user-info before sending raw bytes. A foreign or changed capability has
+  the same non-disclosing unavailable result as an unknown one.
 - A successful `commit_changeset` consumes every referenced staged ref in its
   single HEAD transaction. An unknown commit outcome is reconciled with the
   exact commit key/payload through `reconcileCommit`; replay returns the same
@@ -230,10 +270,10 @@ Stable errors are split by boundary:
 | One staged ref is used by more than one file operation | `duplicate_staged_bundle_file_reference` | Build a changeset with one distinct verified ref per target path |
 | Binding generation or HEAD changed | `staged_file_binding_stale` / `revision_conflict` | Re-read current binding/HEAD and build a new confirmed operation |
 
-The first two generic ingress codes and intent codes are contract-level additions
-for future adapters; they do not claim current implementation. Current native
-failures retain `native_file_input_unsupported` so MD-248/MD-250 remain
-backward-compatible.
+The first two generic ingress codes remain shared adapter contracts. Intent
+codes are implemented by the MD-272 hosted candidate, but exact UAT is still a
+separate evidence claim. Current native failures retain
+`native_file_input_unsupported` so MD-248/MD-250 remain backward-compatible.
 
 Audit may retain opaque actor/Space/request IDs, `source_kind`, operation,
 status, bounded size category and outcome. It must not retain provider IDs,
@@ -253,10 +293,15 @@ This contract preserves the old boundaries:
   quotas and deterministic `MD-OKF-ZIP-1`/`MD-BUNDLE-ZIP-1` exports are
   unchanged.
 - `session_attachment` native stage, bounded inline staging, server-generated
-  streaming staging and local companion are repository-local capabilities. None
-  is advertised as hosted MCP/native support without exact client/provider/UAT
-  evidence. `FileIngressCoordinator` dispatches only explicitly enabled
-  adapters, reports unavailable rows without fallback and delegates every
+  streaming staging are repository-local capabilities. The MD-272 hosted
+  companion transport uses an MCP-issued short-lived capability rather than an
+  MCP file parameter or shell-visible OAuth secret; it is advertised
+  `available_hosted` only when issuance, capability HTTP handler and streaming
+  staging writer are all wired. Exact UAT remains separate evidence.
+  `connector_object` is accepted by the generic intent transport but is not
+  advertised hosted until a provider-authorized client bridge and exact UAT
+  exist. `FileIngressCoordinator` dispatches only explicitly enabled adapters,
+  reports unavailable rows without fallback and delegates every
   mixed-source commit to the existing atomic HEAD-CAS transaction. The
   provider-specific connector binding remains not-available; the local generic
   reader contract proves only that an authorized adapter can stream verified
@@ -267,9 +312,9 @@ This contract preserves the old boundaries:
 
 Open questions intentionally left for child implementation decisions:
 
-- Hosted local-companion trust/consent and one-use upload-intent endpoint remain
-  an open UAT/platform decision; MD-272 proves the local adapter boundary
-  without creating a private Sites bypass.
+- Whether the MCP-issued capability companion should later be packaged as a
+  separately installed desktop daemon remains a distribution decision; it
+  cannot broaden the accepted one-file authority or expose a filesystem path.
 - Which hosted producer wiring and runtime limits are required before the local
   server-generated writer can be promoted to UAT evidence (MD-273)?
 - Which connector object types and provider-specific ownership proofs can be

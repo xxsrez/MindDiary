@@ -357,10 +357,13 @@ test("publishes strict binding schemas and truthful service-state annotations", 
 
 test("modern and compatibility profiles share multiple-read/single-write application semantics", async () => {
   const env = harness();
+  const wiredTools = MCP_CONTENT_TOOLS.filter(
+    (name) => name !== "create_file_upload_intent",
+  );
   const discover = await result(await env.sendModern(modernRpc("server/discover", { id: 0 })));
   assert.match(discover.instructions, /Discovery never creates a binding/u);
   const modernList = await result(await env.sendModern(modernRpc("tools/list")));
-  assert.deepEqual(modernList.tools.map(({ name }) => name), MCP_CONTENT_TOOLS);
+  assert.deepEqual(modernList.tools.map(({ name }) => name), wiredTools);
 
   const initialize = await result(await env.sendCompatibility({
     jsonrpc: "2.0",
@@ -380,7 +383,7 @@ test("modern and compatibility profiles share multiple-read/single-write applica
     method: "tools/list",
     params: {},
   }));
-  assert.deepEqual(legacyList.tools.map(({ name }) => name), MCP_CONTENT_TOOLS);
+  assert.deepEqual(legacyList.tools.map(({ name }) => name), wiredTools);
 
   for (const name of [
     "get_file_ingress_capabilities",

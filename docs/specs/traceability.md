@@ -120,15 +120,17 @@ exact-candidate join below passes.
 portable `VerifiedFileInput`/`staged_file_ref`, adapter/application ownership,
 typed capability errors, limits, lifecycle, idempotency и atomic multi-ref
 commit. `session_attachment`, `bounded_in_memory` и `server_generated` имеют
-локальную implementation, а MD-272 добавляет repo-local companion для
-`local_path`, `workspace/generated_artifact` и bounded local bytes. Это не
-hosted/native capability: MD-250 native-client UAT, hosted upload-intent/
-producer evidence остаются pending; connector rows остаются contract-only.
+локальную implementation, а MD-272 добавляет repo-local companion и hosted
+one-use intent candidate для `local_path` и
+`workspace/generated_artifact`. Это не live claim: MD-250 native-client UAT и
+exact hosted upload-intent/producer evidence остаются pending. Generic intent
+allowlists `connector_object`, но этот row остаётся `not_available`, пока
+отдельный provider-authorized client bridge не пройдёт exact UAT.
 
 | ID | Наблюдаемый результат | Owner | Local evidence | UAT evidence |
 |---|---|---|---|---|
 | FI0-Contract | Каждый file source сводится к verified bytes и service-owned staged ref без provider ID/URL, local path, silent fallback или partial multi-ref commit; capability status не выдаётся за implementation. | `MD-271` | `file-ingress-contract`, affected docs + ADR-0018, docs topology/link validation and `git diff --check` | not-applicable until source adapter/client implementation |
-| FI1-LocalCompanion | Explicit regular local/workspace/generated file or bounded bytes passes the same path-free verified-input and atomic staging pipeline with safe path/symlink/special-file/size/MIME/SHA/idempotency/retry/cleanup checks; failures leave no revision. | `MD-272` | `tests/unit/local-file-companion.test.mjs` and `tests/integration/local-file-companion.test.mjs`; build, targeted contract/integration checks, architecture/docs/secrets checks and `git diff --check` | not-available: hosted upload intent/native client evidence is separate and remains pending |
+| FI1-LocalCompanion | Explicit regular local/workspace/generated file passes the same path-free verified-input and atomic staging pipeline; an OAuth write-scoped MCP command issues a same-origin one-use 10-minute capability, then capability-only raw PUT and non-consuming GET enforce binding/source pinning, safe regular-file metadata, renewable slow-upload fencing, digest/MIME/size/idempotency, replay/expiry/foreign privacy and unknown-outcome recovery without exposing OAuth or local/provider locators. | `MD-272` | `tests/unit/local-file-companion.test.mjs`, `tests/unit/local-file-upload-intents.test.mjs`, `tests/unit/file-upload-intent-http.test.mjs`, `tests/integration/local-file-upload-intents.test.mjs` and MCP conformance; build, targeted architecture/docs/secrets checks and `git diff --check` | candidate implemented; exact synthetic hosted OAuth/MCP issuance + binary PUT/GET + `reconcile_file_stage` UAT remains required before Done |
 | FI1-Generated | `bounded_in_memory` and `server_generated` use the shared MIME/SHA/size/quota/quarantine/idempotency gate; server-generated chunks are written through the storage writer, cancellation/limit/static failures leave no staged object, and commit remains an explicit atomic next step. | `MD-273` | `tests/unit/generated-artifacts.test.mjs`, `tests/unit/sites-object-store-streaming.test.mjs`, `tests/integration/bundle-files-core.test.mjs`, build and targeted diff check | hosted producer wiring and exact deployed stream evidence remain pending |
 
 ## Brain-scale Sites storage/import extension 2026-08-22
