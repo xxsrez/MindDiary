@@ -197,6 +197,9 @@ evidence, предлагаемый дизайн и ещё не проверен�
 
 ## Исследования
 
+- [Reconciliation baseline Release 0.1 на 2026-08-24](reports/2026-08-24-release-0-1-integration-baseline.md)
+  — fresh divergence, disposition всех 21 engineering commits, conflict-aware
+  P0 replay и отдельный preservation ref для post-MVP lineage.
 - [Поддержка Brain-масштаба: storage и capacity proposal на 2026-08-22](reports/2026-08-22-brain-scale-storage-and-capacity-proposal.md)
   — live Sites/task evidence, профиль текущего Brain, узкие места revision,
   search/import/export и поэтапный план для одного и нескольких крупных Minds.
