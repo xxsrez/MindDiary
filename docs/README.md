@@ -92,6 +92,9 @@ evidence, предлагаемый дизайн и ещё не проверен�
 - [Privacy-safe операции UAT pilot](operations/uat-pilot-operations.md) —
   participant boundaries, closed-schema telemetry, bounded diagnostics,
   token/audience revoke, exact rollback и fixture export/restore drill.
+- [Restricted-UAT test account pool](operations/uat-test-account-pool.md) —
+  fail-closed logical aliases, owner-authority boundary, redacted inventory,
+  exact audience/operator read-back и bounded cleanup/recovery.
 - [Multi-principal UAT probe](operations/uat-multi-principal-runbook.md) —
   informational Sites canary двух отдельных real principals, redeploy
   persistence, immediate revoke, redacted receipt и cleanup.

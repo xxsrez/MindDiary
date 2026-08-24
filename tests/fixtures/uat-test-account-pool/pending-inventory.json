@@ -1,0 +1,77 @@
+{
+  "schema": "mind-diary/uat-test-account-pool-inventory/v1",
+  "environment": "uat",
+  "target_class": "restricted-custom-audience",
+  "owner_authority": {
+    "external_account_provisioning": "pending-owner-action",
+    "first_login_mfa": "pending-owner-action",
+    "custom_audience_mutation": "pending-owner-action",
+    "operator_allowlist_mutation": "pending-owner-action"
+  },
+  "actors": [
+    {
+      "alias": "UAT-OPERATOR",
+      "actor_fingerprint": null,
+      "lifecycle": "persistent-restricted-uat",
+      "intended_roles": {
+        "custom_audience": "member",
+        "service_operator": "allowed",
+        "ordinary_mind_baseline": "none",
+        "canary_mind_role": "none"
+      },
+      "provisioning": {
+        "external_account": "pending-owner-action",
+        "first_login_mfa": "pending-owner-action",
+        "independent_session": "not-run"
+      }
+    },
+    {
+      "alias": "UAT-MIND-ROLE",
+      "actor_fingerprint": null,
+      "lifecycle": "persistent-restricted-uat",
+      "intended_roles": {
+        "custom_audience": "member",
+        "service_operator": "denied",
+        "ordinary_mind_baseline": "none",
+        "canary_mind_role": "editor-temporary"
+      },
+      "provisioning": {
+        "external_account": "pending-owner-action",
+        "first_login_mfa": "pending-owner-action",
+        "independent_session": "not-run"
+      }
+    },
+    {
+      "alias": "UAT-ORDINARY",
+      "actor_fingerprint": null,
+      "lifecycle": "persistent-restricted-uat",
+      "intended_roles": {
+        "custom_audience": "member",
+        "service_operator": "denied",
+        "ordinary_mind_baseline": "none",
+        "canary_mind_role": "none"
+      },
+      "provisioning": {
+        "external_account": "pending-owner-action",
+        "first_login_mfa": "pending-owner-action",
+        "independent_session": "not-run"
+      }
+    }
+  ],
+  "readback": {
+    "custom_audience": "not-run",
+    "operator_allowlist": "not-run",
+    "distinct_principals": "not-run"
+  },
+  "baseline": {
+    "temporary_mind_roles": "not-run",
+    "per_run_mcp_tokens": "not-run"
+  },
+  "recovery_policy": {
+    "interrupted_run": "fail-closed-recovery-required",
+    "per_run_mcp_tokens": "revoke-and-deny-readback",
+    "temporary_mind_roles": "remove-and-readback-none",
+    "custom_audience": "owner-restore-exact",
+    "operator_allowlist": "owner-restore-exact"
+  }
+}
