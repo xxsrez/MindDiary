@@ -957,11 +957,6 @@ async function verifyDirectory(state, clients, sessions) {
     );
     activitySnapshot(firstActorRows[actorClass]);
   }
-  if (
-    Number(firstActorRows.mind_role.ownedMindCount ?? 0) +
-      Number(firstActorRows.mind_role.participatingMindCount ?? 0) < 1
-  ) fail("mind_role_support_count_missing");
-
   const operatorUi = await clients.operator.request("/internal/operators/users?limit=100", {
     headers: { accept: "text/html" },
   });

@@ -133,6 +133,7 @@ function operatorFixture({
   const secretActors = new Map();
   const product = {
     mindExists: preexistingMindHandle !== null,
+    mindRole: "owner",
     mindHandle: preexistingMindHandle,
     mindName: preexistingMindHandle === null
       ? null
@@ -180,8 +181,10 @@ function operatorFixture({
     state: "active",
     registered_at: `2026-08-20T00:00:0${index}.000Z`,
     activity: wireActivity(actor),
-    owned_mind_count: actor === "mind_role" && product.mindExists ? 1 : 0,
-    participating_mind_count: 0,
+    owned_mind_count:
+      actor === "mind_role" && product.mindExists && product.mindRole === "owner" ? 1 : 0,
+    participating_mind_count:
+      actor === "mind_role" && product.mindExists && product.mindRole !== "owner" ? 1 : 0,
     active_mcp_credential_count:
       tokens.get(actor).filter(({ state }) => state === "active").length,
   })), {
@@ -278,7 +281,7 @@ function operatorFixture({
         route: `/${product.mindHandle}`,
         name: product.mindName,
         is_personal: false,
-        access: { kind: "membership", role: "owner" },
+        access: { kind: "membership", role: product.mindRole },
       });
       return json(200, { data });
     }
@@ -292,6 +295,7 @@ function operatorFixture({
         ) return json(409, { error: { code: "handle_unavailable" } });
       } else {
         product.mindExists = true;
+        product.mindRole = "owner";
         product.mindHandle = body.handle;
         product.mindName = body.name;
         product.mindCreateKey = idempotencyKey;
@@ -302,7 +306,7 @@ function operatorFixture({
         route: `/${product.mindHandle}`,
         name: product.mindName,
         is_personal: false,
-        access: { kind: "membership", role: "owner" },
+        access: { kind: "membership", role: product.mindRole },
       } });
     }
     if (url.pathname === "/api/v1/mcp-tokens" && method === "POST") {
@@ -363,7 +367,7 @@ function operatorFixture({
         route: `/${product.mindHandle}`,
         name: product.mindName,
         is_personal: false,
-        access: { kind: "membership", role: "owner" },
+        access: { kind: "membership", role: product.mindRole },
       } });
     }
     if (
@@ -558,6 +562,46 @@ test("failed setup leaves a redacted carrier and recovery removes product resour
       verifyCleanupEvidence(JSON.parse(await readFile(evidencePath, "utf8"))).phase,
       "recovery",
     );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("verify rejects a reader-only temporary Mind despite positive participation count", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "mind-diary-operator-reader-role-"));
+  const statePath = join(directory, "state.json");
+  const evidencePath = join(directory, "evidence.json");
+  const fixture = operatorFixture();
+  try {
+    await run({
+      phase: "setup",
+      candidate_sha: SHA,
+      deployment_id: DEPLOYMENT,
+      state_out: statePath,
+    }, {
+      environment: credentials(),
+      fetchImpl: fixture.fetchImpl,
+      now: () => NOW,
+      nonceFactory: () => TEST_NONCE,
+    });
+
+    fixture.product.mindRole = "reader";
+    await assert.rejects(
+      run({
+        phase: "verify",
+        deployment_id: DEPLOYMENT,
+        state: statePath,
+        evidence_out: evidencePath,
+      }, {
+        environment: credentials(),
+        fetchImpl: fixture.fetchImpl,
+        now: () => NOW,
+      }),
+      (error) => error instanceof ProbeFailure &&
+        error.code === "temporary_mind_owner_missing",
+    );
+    assert.equal(fixture.product.mindExists, true);
+    await assert.rejects(readFile(evidencePath, "utf8"));
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
