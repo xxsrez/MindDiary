@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 import test from "node:test";
 
 import {
@@ -475,6 +475,15 @@ function key(seed) {
   return Uint8Array.from({ length: 32 }, (_value, index) => (seed + index) % 256);
 }
 
+const PERFORMANCE_CORRELATION_KEY = key(201);
+
+function performanceCorrelationSignature(id) {
+  const hmac = createHmac("sha256", PERFORMANCE_CORRELATION_KEY);
+  hmac.update("mind-diary/performance-correlation/v1\0", "utf8");
+  hmac.update(id, "utf8");
+  return `hmac-sha256:${hmac.digest("hex")}`;
+}
+
 function csrfFromHtml(html) {
   const match = /<meta name="mind-diary-csrf-token" content="([^"]+)">/u.exec(html);
   assert.ok(match, "server-rendered page must include a CSRF token");
@@ -514,7 +523,11 @@ async function modernMcp(runtime, secret, body, benchmarkCorrelationId) {
       "mcp-protocol-version": MCP_TARGET_PROTOCOL,
       ...(benchmarkCorrelationId === undefined
         ? {}
-        : { "x-mind-diary-performance-correlation-id": benchmarkCorrelationId }),
+        : {
+            "x-mind-diary-performance-correlation-id": benchmarkCorrelationId,
+            "x-mind-diary-performance-correlation-signature":
+              performanceCorrelationSignature(benchmarkCorrelationId),
+          }),
       ...(body.method === "tools/call" && typeof body.params?.name === "string"
         ? { "mcp-name": body.params.name }
         : {}),
@@ -730,12 +743,17 @@ test("empty account reaches a strict starter commit and first useful search/fetc
     locatorKey: key(51),
     exportDownloadVerifierKey: key(91),
     csrfKey: key(131),
+    performanceCorrelationKey: PERFORMANCE_CORRELATION_KEY,
     observabilityWriter: { write(line) { telemetryLines.push(line); } },
     schedule(work) { scheduled.push(work); },
   });
 
   const registration = await responseFrom(runtime, new Request(`${ORIGIN}/`, {
-    headers: { "x-mind-diary-performance-correlation-id": "benchmark_starter_home" },
+    headers: {
+      "x-mind-diary-performance-correlation-id": "benchmark_starter_home",
+      "x-mind-diary-performance-correlation-signature":
+        performanceCorrelationSignature("benchmark_starter_home"),
+    },
   }));
   assert.equal(registration.status, 200);
   assert.equal(
@@ -1054,9 +1072,23 @@ test("empty account reaches a strict starter commit and first useful search/fetc
     "search",
     { mind: "/me", query: "concrete reusable note" },
   );
+  const forgedCorrelation = await responseFrom(runtime, new Request(`${ORIGIN}/`, {
+    headers: {
+      "x-mind-diary-performance-correlation-id": "benchmark_forged_without_signature",
+    },
+  }));
+  assert.equal(forgedCorrelation.status, 200);
+  assert.equal(
+    forgedCorrelation.headers.get("x-mind-diary-performance-correlation-id"),
+    null,
+  );
   assert.equal(
     (await responseFrom(runtime, new Request(`${ORIGIN}/`, {
-      headers: { "x-mind-diary-performance-correlation-id": "benchmark_starter_home" },
+      headers: {
+        "x-mind-diary-performance-correlation-id": "benchmark_starter_home",
+        "x-mind-diary-performance-correlation-signature":
+          performanceCorrelationSignature("benchmark_starter_home"),
+      },
     }))).status,
     200,
   );
@@ -1065,6 +1097,8 @@ test("empty account reaches a strict starter commit and first useful search/fetc
     benchmarkCorrelationId === "benchmark_starter_home"));
   assert.ok(telemetry.some(({ benchmarkCorrelationId }) =>
     benchmarkCorrelationId === "benchmark_starter_list"));
+  assert.equal(telemetry.some(({ benchmarkCorrelationId }) =>
+    benchmarkCorrelationId === "benchmark_forged_without_signature"), false);
   assert.equal(telemetry.filter(({ metric }) => metric === "setup_completion").length, 1);
   const firstUseful = telemetry.filter(
     ({ metric }) => metric === "time_to_first_useful_search_ms",
@@ -1100,9 +1134,10 @@ test("empty account reaches a strict starter commit and first useful search/fetc
   ]) {
     assert.ok(performanceOperations.has(operation), `missing performance operation ${operation}`);
   }
-  const webPerformance = telemetry.filter(({ metric, surface, operation }) =>
+  const webPerformance = telemetry.filter(({ metric, surface, operation, benchmarkCorrelationId }) =>
     metric === "request_latency_ms" &&
     surface === "control" &&
+    benchmarkCorrelationId === "benchmark_starter_home" &&
     ["home", "stage_authentication", "stage_application", "stage_total"].includes(operation));
   assert.deepEqual(
     webPerformance.map(({ operation }) => operation),
@@ -2245,7 +2280,7 @@ test("durable product runtime carries a Sites account token through Codex MCP an
   assert.ok(telemetry.length > 0);
   assert.ok(telemetry.every((event) =>
     event.event === "mind-diary.privacy-safe-observability" &&
-    event.schema === "mind-diary/privacy-safe-observability/v1"
+    event.schema === "mind-diary/privacy-safe-observability/v2"
   ));
   const metrics = new Set(telemetry.map((event) => event.metric));
   for (const metric of [

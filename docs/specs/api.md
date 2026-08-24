@@ -1330,18 +1330,21 @@ target deployment и не переносятся на другой Site по а�
 Успешный authenticated home response и оба MCP profiles возвращают bounded
 `X-Mind-Diary-Request-Id`, совпадающий с opaque `requestId` закрытой latency
 telemetry. Reserved performance request может дополнительно передать
-`X-Mind-Diary-Performance-Correlation-Id: benchmark_*`; adapter принимает
-только bounded grammar, возвращает exact value тем же header и проецирует его
-в deployable telemetry как `benchmarkCorrelationId`. Header не выбирает
+`X-Mind-Diary-Performance-Correlation-Id: benchmark_*` вместе с keyed HMAC в
+`X-Mind-Diary-Performance-Correlation-Signature`. Runtime принимает только
+bounded grammar и valid signature deployment secret, удаляет signature до
+application/logging boundary, возвращает exact ID тем же header и проецирует
+его в deployable telemetry как `benchmarkCorrelationId`. Header не выбирает
 principal/Mind/revision, не меняет authorization и не является capability.
-Обычный request не получает correlation echo, а telemetry хранит `null`.
+Missing/invalid signature не меняет request outcome, не получает correlation
+echo, а telemetry хранит `null`.
 
-Deployable Sites observability envelope остаётся closed и добавляет только
-`lineage: {candidateSha, siteVersionId, deploymentId}` и nullable
-`benchmarkCorrelationId` к ранее принятой privacy-safe event projection.
-Lineage берётся из trusted exact deployment configuration; неполная тройка
-отклоняется runtime configuration boundary. Query, request body, selector,
-content, credential и private identity в headers либо telemetry не попадают.
+Deployable Sites observability envelope v2 остаётся closed и добавляет только
+nullable `benchmarkCorrelationId` к ранее принятой privacy-safe event
+projection. Exact `candidateSha`, `siteVersionId` и `deploymentId` добавляет не
+runtime declaration, а отдельный trusted Sites control-plane collector в
+закрытую performance-gate projection. Query, request body, selector, content,
+credential и private identity в headers либо telemetry не попадают.
 
 ### MCP authentication
 

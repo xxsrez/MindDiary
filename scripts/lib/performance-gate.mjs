@@ -76,6 +76,7 @@ const SENSITIVE_HEADERS = new Set([
   "oai-sites-authorization",
   "proxy-authorization",
   "x-mind-diary-performance-correlation-id",
+  "x-mind-diary-performance-correlation-signature",
 ]);
 
 const SCENARIO_KEYS = new Set([
@@ -87,6 +88,7 @@ const SCENARIO_KEYS = new Set([
   "warm_samples",
   "telemetry_wait_seconds",
   "credential_binding_key_env",
+  "performance_correlation_key_env",
   "requests",
 ]);
 const REQUEST_KEYS = new Set([
@@ -330,6 +332,8 @@ export function validatePerformanceScenario(value, profileReadback) {
     value.telemetry_wait_seconds < 0 || value.telemetry_wait_seconds > 300 ||
     typeof value.credential_binding_key_env !== "string" ||
     !ENVIRONMENT_NAME.test(value.credential_binding_key_env) ||
+    typeof value.performance_correlation_key_env !== "string" ||
+    !ENVIRONMENT_NAME.test(value.performance_correlation_key_env) ||
     !Array.isArray(value.requests) || value.requests.length === 0
   ) reject("invalid_scenario");
   const fixtureProfiles = new Map(profileReadback.profiles.map((item) => [item.id, item]));
@@ -350,6 +354,7 @@ export function validatePerformanceScenario(value, profileReadback) {
     warm_samples: value.warm_samples,
     telemetry_wait_seconds: value.telemetry_wait_seconds,
     credential_binding_key_env: value.credential_binding_key_env,
+    performance_correlation_key_env: value.performance_correlation_key_env,
     requests,
   });
 }
@@ -435,6 +440,14 @@ export function percentile(samples, fraction) {
   const sorted = samples.map(Number).sort((left, right) => left - right);
   const index = Math.max(0, Math.ceil(sorted.length * fraction) - 1);
   return sorted[index];
+}
+
+export function performanceGateNeedsTelemetryRetry(report) {
+  return Array.isArray(report?.failures) && report.failures.some((failure) =>
+    failure === "telemetry_capture_window_mismatch" ||
+    failure === "telemetry_capture_event_count_mismatch" ||
+    failure.startsWith("telemetry_correlation_count_mismatch:") ||
+    failure.startsWith("server_samples_below_20:"));
 }
 
 function rounded(value) {

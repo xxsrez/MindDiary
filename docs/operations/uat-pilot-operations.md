@@ -43,12 +43,14 @@ recovery boundary. Поскольку notice подтверждается до a
 
 Application-owned logger UAT runtime пишет только JSON event
 `mind-diary.privacy-safe-observability` schema
-`mind-diary/privacy-safe-observability/v1`. Разрешены только:
+`mind-diary/privacy-safe-observability/v2`. Разрешены только:
 
 - `kind`, `metric`, `surface`, `operation`, `outcome`, `unit`, numeric `value`;
 - `occurredAtUtc`;
 - bounded opaque `requestId`/`jobId` либо `null`;
 - fixed pilot `cohort` либо `null`.
+- gate-only bounded `benchmarkCorrelationId` либо `null`; non-null value
+  проходит только с valid deployment HMAC и не даёт product capability.
 
 Дополнительное поле отклоняет весь event. Запрещены content/body/path/name,
 search query, email, principal/space/revision identity, token/verifier/header,

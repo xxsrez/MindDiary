@@ -54,6 +54,10 @@ HMAC key и credential никогда не входят в receipt: private scen
 только имя `credential_binding_key_env`, а runner пересчитывает binding из
 actual environment value до первого HTTP request. Поэтому три одинаковых
 `list_minds {}` с произвольным token не могут изображать profiles `1/10/100`.
+Отдельный 256-bit key из `performance_correlation_key_env` подписывает каждый
+runner correlation ID и совпадает с deployment secret
+`MIND_DIARY_PERFORMANCE_CORRELATION_KEY`; это не тот же proof, что credential
+binding, и ни одно значение key/signature в evidence не сохраняется.
 
 ### Scenario v2
 
@@ -84,18 +88,24 @@ fixture-bound Bearer env reference.
 
 ### Closed telemetry JSONL
 
-Параллельный bounded log collector пишет только application events
-`mind-diary.privacy-safe-observability` schema
-`mind-diary/privacy-safe-observability/v1` в private JSONL. Deployable
-projection содержит закрытый `lineage` (`candidateSha`, `siteVersionId`,
-`deploymentId`) и nullable bounded `benchmarkCorrelationId`; UAT performance
-events обязаны иметь exact non-null values. Для этого exact deployment получает
-`MIND_DIARY_CANDIDATE_SHA`, `MIND_DIARY_SITE_VERSION_ID` и
-`MIND_DIARY_DEPLOYMENT_ID`. Неполная либо несовпадающая runtime configuration
-не может выдать performance receipt.
+Runtime пишет closed application events `mind-diary.privacy-safe-observability`
+schema `mind-diary/privacy-safe-observability/v2`. Вторая версия добавляет к
+прежней privacy-safe projection только nullable bounded
+`benchmarkCorrelationId`.
+
+Параллельный bounded collector выбирает events только из exact provider
+project/version/deployment window, сверяет candidate и archive через Sites
+control plane и выпускает отдельную private JSONL projection
+`mind-diary.performance-gate-telemetry` schema
+`mind-diary/performance-gate-telemetry/v1`. В каждой строке она сохраняет
+закрытый runtime event и добавляет exact `lineage` (`candidateSha`,
+`siteVersionId`, `deploymentId`). Runtime env или CLI declaration не считается
+provider attestation и не может подставить эту lineage.
 
 Runner создаёт новый opaque `benchmark_*` для каждого cold/warm request,
 посылает его только в `X-Mind-Diary-Performance-Correlation-Id` и требует exact
+HMAC в `X-Mind-Diary-Performance-Correlation-Signature`. Runtime удаляет оба
+headers при missing/invalid signature; только authenticated value получает
 echo вместе с server-generated `X-Mind-Diary-Request-Id`. Telemetry group
 принимается только когда оба ID exact совпадают с одним sample и все её events
 лежат внутри его window. Это исключает foreign same-operation traffic даже в
@@ -107,7 +117,9 @@ categorical value, небезопасный correlation ID, отрицатель
 collector выпускает hashed
 `mind-diary/performance-telemetry-capture/v1`, который связывает exact
 candidate/deployment/target, охватывающий capture window, event count и SHA-256
-final JSONL. Незавершённый либо изменившийся JSONL не принимается.
+final JSONL, а также generator
+`mind-diary/sites-control-plane-telemetry-join/v1` и opaque control-plane query
+ID. Незавершённый либо изменившийся JSONL не принимается.
 
 Application telemetry остаётся best-effort: отказ sink никогда не меняет
 HTTP/MCP/application outcome. Performance gate отдельно fail closed получает

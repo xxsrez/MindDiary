@@ -8,6 +8,7 @@ export interface ProductEnv {
   readonly MIND_DIARY_EXPORT_DOWNLOAD_VERIFIER_KEY?: string;
   readonly MIND_DIARY_CSRF_KEY?: string;
   readonly MIND_DIARY_SERVICE_OPERATOR_PRINCIPAL_IDS?: string;
+  readonly MIND_DIARY_PERFORMANCE_CORRELATION_KEY?: string;
 }
 
 function serviceOperatorPrincipalIds(value: string | undefined): readonly string[] {
@@ -31,6 +32,10 @@ function decodeKey(value: string | undefined, name: string): Uint8Array {
   const bytes = Uint8Array.from(atob(base64), (character) => character.charCodeAt(0));
   if (bytes.byteLength !== 32) throw new Error(`${name} is invalid`);
   return bytes;
+}
+
+function decodeOptionalKey(value: string | undefined, name: string): Uint8Array | undefined {
+  return value === undefined || value === "" ? undefined : decodeKey(value, name);
 }
 
 function isCanonicalOrigin(value: string, protocol: "http:" | "https:"): boolean {
@@ -74,12 +79,17 @@ export function resolveRuntimePublicOrigin(
 export function readRuntimeConfig(request: Request, env: ProductEnv) {
   const requestOrigin = new URL(request.url).origin;
   const publicOrigin = resolveRuntimePublicOrigin(requestOrigin, env.MIND_DIARY_PUBLIC_ORIGIN);
+  const performanceCorrelationKey = decodeOptionalKey(
+    env.MIND_DIARY_PERFORMANCE_CORRELATION_KEY,
+    "MIND_DIARY_PERFORMANCE_CORRELATION_KEY",
+  );
   return Object.freeze({
     publicOrigin,
     tokenVerifierKey: decodeKey(env.MIND_DIARY_TOKEN_VERIFIER_KEY, "MIND_DIARY_TOKEN_VERIFIER_KEY"),
     locatorKey: decodeKey(env.MIND_DIARY_LOCATOR_KEY, "MIND_DIARY_LOCATOR_KEY"),
     exportDownloadVerifierKey: decodeKey(env.MIND_DIARY_EXPORT_DOWNLOAD_VERIFIER_KEY, "MIND_DIARY_EXPORT_DOWNLOAD_VERIFIER_KEY"),
     csrfKey: decodeKey(env.MIND_DIARY_CSRF_KEY, "MIND_DIARY_CSRF_KEY"),
+    ...(performanceCorrelationKey === undefined ? {} : { performanceCorrelationKey }),
     serviceOperatorPrincipalIds: serviceOperatorPrincipalIds(
       env.MIND_DIARY_SERVICE_OPERATOR_PRINCIPAL_IDS,
     ),

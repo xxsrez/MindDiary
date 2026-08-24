@@ -1,11 +1,13 @@
 import { readFile, writeFile } from "node:fs/promises";
-import { randomUUID } from "node:crypto";
+import { createHmac, randomUUID } from "node:crypto";
 import { performance } from "node:perf_hooks";
 import process from "node:process";
+import { pathToFileURL } from "node:url";
 
 import {
   evaluatePerformanceGate,
   parsePerformanceTelemetryJsonl,
+  performanceGateNeedsTelemetryRetry,
   validatePerformanceScenario,
   verifyPerformanceScenarioCredentialBindings,
 } from "./lib/performance-gate.mjs";
@@ -38,9 +40,10 @@ function required(args, name) {
   return value;
 }
 
-function requestHeaders(definition, benchmarkCorrelationId) {
+function requestHeaders(definition, benchmarkCorrelationId, signature) {
   const headers = new Headers(definition.headers ?? {});
   headers.set("x-mind-diary-performance-correlation-id", benchmarkCorrelationId);
+  headers.set("x-mind-diary-performance-correlation-signature", signature);
   if (definition.bearer_token_env) {
     const secret = process.env[definition.bearer_token_env];
     if (!secret) throw new Error(`missing environment ${definition.bearer_token_env}`);
@@ -54,13 +57,21 @@ function requestHeaders(definition, benchmarkCorrelationId) {
   return headers;
 }
 
-async function timedFetch(targetUrl, definition) {
+function performanceCorrelationSignature(key, benchmarkCorrelationId) {
+  const hmac = createHmac("sha256", key);
+  hmac.update("mind-diary/performance-correlation/v1\0", "utf8");
+  hmac.update(benchmarkCorrelationId, "utf8");
+  return `hmac-sha256:${hmac.digest("hex")}`;
+}
+
+async function timedFetch(targetUrl, definition, correlationKey) {
   const benchmarkCorrelationId = `benchmark_${randomUUID().replaceAll("-", "")}`;
+  const signature = performanceCorrelationSignature(correlationKey, benchmarkCorrelationId);
   const startedAtUtc = new Date().toISOString();
   const startedAt = performance.now();
   const response = await fetch(new URL(definition.path, targetUrl), {
     method: definition.method,
-    headers: requestHeaders(definition, benchmarkCorrelationId),
+    headers: requestHeaders(definition, benchmarkCorrelationId, signature),
     ...(definition.body === undefined ? {} : { body: JSON.stringify(definition.body) }),
     redirect: "manual",
   });
@@ -93,22 +104,29 @@ async function timedFetch(targetUrl, definition) {
   });
 }
 
-function pendingTelemetry(report) {
-  return report.failures.some((failure) =>
-    failure.startsWith("telemetry_correlation_count_mismatch:") ||
-    failure.startsWith("server_samples_below_20:"));
+function telemetryArtifactNotReady(error) {
+  return typeof error === "object" && error !== null && error.code === "ENOENT";
 }
 
-async function waitForTelemetry({ telemetryPath, telemetryCapturePath, timeoutSeconds, evaluation }) {
+export async function waitForTelemetry(
+  { telemetryPath, telemetryCapturePath, timeoutSeconds, evaluation },
+  dependencies = {},
+) {
+  const readText = dependencies.readText ?? ((path) => readFile(path, "utf8"));
+  const sleep = dependencies.sleep ?? ((milliseconds) =>
+    new Promise((resolve) => setTimeout(resolve, milliseconds)));
   const deadline = Date.now() + timeoutSeconds * 1_000;
   let lastReport = null;
   let lastError = null;
   do {
     try {
-      const telemetryJsonl = await readFile(telemetryPath, "utf8");
+      const [telemetryJsonl, telemetryCaptureJson] = await Promise.all([
+        readText(telemetryPath),
+        readText(telemetryCapturePath),
+      ]);
       const telemetry = parsePerformanceTelemetryJsonl(telemetryJsonl);
       const telemetryCapture = verifyPerformanceTelemetryCaptureReceipt(
-        JSON.parse(await readFile(telemetryCapturePath, "utf8")),
+        JSON.parse(telemetryCaptureJson),
         telemetryJsonl,
       );
       const report = evaluatePerformanceGate({
@@ -117,12 +135,13 @@ async function waitForTelemetry({ telemetryPath, telemetryCapturePath, timeoutSe
         telemetry_capture: telemetryCapture,
       });
       lastReport = report;
-      if (!pendingTelemetry(report) || Date.now() >= deadline) return report;
+      if (!performanceGateNeedsTelemetryRetry(report) || Date.now() >= deadline) return report;
     } catch (error) {
+      if (!telemetryArtifactNotReady(error)) throw error;
       lastError = error;
       if (Date.now() >= deadline) break;
     }
-    await new Promise((resolve) => setTimeout(resolve, TELEMETRY_POLL_INTERVAL_MS));
+    await sleep(TELEMETRY_POLL_INTERVAL_MS);
   } while (Date.now() <= deadline);
   if (lastReport !== null) return lastReport;
   throw lastError ?? new Error("performance telemetry unavailable");
@@ -158,11 +177,17 @@ async function main() {
     throw new Error("performance target mismatch");
   }
   verifyPerformanceScenarioCredentialBindings(scenario, profileReadback, process.env);
+  const encodedCorrelationKey = process.env[scenario.performance_correlation_key_env];
+  if (typeof encodedCorrelationKey !== "string" || !/^[A-Za-z0-9_-]{43}$/u.test(encodedCorrelationKey)) {
+    throw new Error("performance correlation key is unavailable");
+  }
+  const correlationKey = Buffer.from(encodedCorrelationKey, "base64url");
+  if (correlationKey.byteLength !== 32) throw new Error("performance correlation key is invalid");
 
   const startedAt = new Date().toISOString();
   const connectorResults = [];
   for (const definition of scenario.requests) {
-    const observedCold = await timedFetch(scenario.target_url, definition);
+    const observedCold = await timedFetch(scenario.target_url, definition, correlationKey);
     const warm = [];
     const sampleWindows = [{
       kind: "cold",
@@ -174,7 +199,7 @@ async function main() {
     }];
     let completedAt = observedCold.completed_at;
     for (let sample = 0; sample < scenario.warm_samples; sample += 1) {
-      const observed = await timedFetch(scenario.target_url, definition);
+      const observed = await timedFetch(scenario.target_url, definition, correlationKey);
       warm.push(observed.elapsed_ms);
       sampleWindows.push({
         kind: "warm",
@@ -231,4 +256,6 @@ async function main() {
   if (report.status !== "passed") process.exitCode = 1;
 }
 
-main().catch((error) => fail(error instanceof Error ? error.message : "performance gate failed"));
+if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((error) => fail(error instanceof Error ? error.message : "performance gate failed"));
+}
