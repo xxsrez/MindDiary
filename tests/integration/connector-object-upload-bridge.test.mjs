@@ -4,12 +4,14 @@ import { createHash } from "node:crypto";
 import {
   mkdir,
   mkdtemp,
+  realpath,
   rm,
   symlink,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { createServer } from "node:net";
 import test from "node:test";
 
 import {
@@ -27,6 +29,7 @@ const SIGNED_HANDLE = "mdupload_v1_privateCapabilityValue1234567890";
 const CAPABILITY_URL =
   `https://mind-diary.example/api/file-ingress/upload-intents/${SIGNED_HANDLE}`;
 const EXPECTED_ORIGIN = "https://mind-diary.example";
+const MATERIALIZATION_ROOT = "/private/tmp";
 const PRIVATE_DRIVE_ID = "private_drive_object_id";
 const PRIVATE_DRIVE_ACCOUNT = "private_drive_account";
 const SENSITIVE_GRANT_VALUE = "private_drive_token";
@@ -172,7 +175,7 @@ function metadata(fixture) {
 }
 
 test("materialized PNG, PDF and opaque ZIP use the exact MD-272 raw intent seam", async () => {
-  const root = await mkdtemp(join(tmpdir(), "mind-diary-md284-bridge-"));
+  const root = await realpath(await mkdtemp(join(tmpdir(), "mind-diary-md284-bridge-")));
   try {
     for (const fixture of Object.values(CONNECTOR_OBJECT_BRIDGE_FIXTURES)) {
       const path = join(root, `materialized-${fixture.filename}`);
@@ -180,6 +183,7 @@ test("materialized PNG, PDF and opaque ZIP use the exact MD-272 raw intent seam"
       const server = new FakeUploadIntentServer(fixture.bytes, metadata(fixture));
       const uploader = new ConnectorObjectCompanionUploader({
         expectedOrigin: EXPECTED_ORIGIN,
+        materializationRoot: root,
         transport: new UploadIntentHttpTransport({
           expectedOrigin: EXPECTED_ORIGIN,
           fetcher: server.fetch,
@@ -211,21 +215,87 @@ test("materialized PNG, PDF and opaque ZIP use the exact MD-272 raw intent seam"
 });
 
 test("Node materialized-file adapter rejects symlink, directory, special and oversize inputs", async () => {
-  const root = await mkdtemp(join(tmpdir(), "mind-diary-md284-source-"));
+  const root = await realpath(await mkdtemp("/private/tmp/md284-source-"));
+  let socketServer;
   try {
     const file = join(root, "object.png");
     const link = join(root, "object-link.png");
     const directory = join(root, "object-directory.png");
+    const socket = join(root, "object-special.png");
     await writeFile(file, CONNECTOR_OBJECT_BRIDGE_FIXTURES.png.bytes);
     await symlink(file, link);
     await mkdir(directory);
-    const source = new NodeMaterializedConnectorFileSource();
+    socketServer = createServer();
+    await new Promise((resolveListen, rejectListen) => {
+      socketServer.once("error", rejectListen);
+      socketServer.listen(socket, resolveListen);
+    });
+    const source = new NodeMaterializedConnectorFileSource({
+      materializationRoot: root,
+    });
     assert.deepEqual(await source.read(link, { maxBytes: 64 }), { kind: "symlink" });
     assert.deepEqual(await source.read(directory, { maxBytes: 64 }), { kind: "directory" });
-    assert.deepEqual(await source.read("/dev/null", { maxBytes: 64 }), { kind: "special" });
+    assert.deepEqual(await source.read(socket, { maxBytes: 64 }), { kind: "special" });
     assert.deepEqual(await source.read(file, { maxBytes: 4 }), { kind: "oversize" });
   } finally {
+    if (socketServer !== undefined) {
+      await new Promise((resolveClose) => socketServer.close(resolveClose));
+    }
     await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("trusted materialization root rejects symlink escapes and invalid roots without consuming capability", async () => {
+  const sandbox = await realpath(await mkdtemp(join(tmpdir(), "mind-diary-md284-root-")));
+  try {
+    const trustedRoot = join(sandbox, "connector-results");
+    const outsideRoot = join(sandbox, "outside");
+    const linkedDirectory = join(trustedRoot, "linked-result");
+    const fixture = CONNECTOR_OBJECT_BRIDGE_FIXTURES.png;
+    await mkdir(trustedRoot);
+    await mkdir(outsideRoot);
+    await writeFile(join(outsideRoot, fixture.filename), fixture.bytes);
+    await symlink(outsideRoot, linkedDirectory);
+
+    let consumes = 0;
+    const escapedUploader = new ConnectorObjectCompanionUploader({
+      expectedOrigin: EXPECTED_ORIGIN,
+      materializationRoot: trustedRoot,
+      transport: {
+        async consume() {
+          consumes += 1;
+          return { status: "staged" };
+        },
+      },
+    });
+    const escapedPath = join(linkedDirectory, fixture.filename);
+    const escapedReceipt = await escapedUploader.upload(
+      privateState(escapedPath, fixture),
+    );
+    assert.equal(escapedReceipt.status, "source_unsupported");
+    assert.equal(consumes, 0);
+
+    const rootFile = join(sandbox, "not-a-directory");
+    const missingRoot = join(sandbox, "missing-root");
+    const linkedRoot = join(sandbox, "linked-root");
+    await writeFile(rootFile, fixture.bytes);
+    await symlink(trustedRoot, linkedRoot);
+    for (const materializationRoot of [rootFile, missingRoot, linkedRoot]) {
+      let message = null;
+      try {
+        new ConnectorObjectCompanionUploader({
+          expectedOrigin: EXPECTED_ORIGIN,
+          materializationRoot,
+        });
+      } catch (error) {
+        message = String(error?.message);
+      }
+      assert.match(message, /options are invalid/u);
+      assert.equal(message.includes(materializationRoot), false);
+    }
+    assert.equal(consumes, 0);
+  } finally {
+    await rm(sandbox, { recursive: true, force: true });
   }
 });
 
@@ -259,6 +329,7 @@ test("GET status is non-consuming; replay, changed, expiry, timeout and interrup
     const server = new FakeUploadIntentServer(fixture.bytes, metadata(fixture));
     const uploader = new ConnectorObjectCompanionUploader({
       expectedOrigin: EXPECTED_ORIGIN,
+      materializationRoot: MATERIALIZATION_ROOT,
       source,
       transport: new UploadIntentHttpTransport({
         expectedOrigin: EXPECTED_ORIGIN,
@@ -287,6 +358,7 @@ test("GET status is non-consuming; replay, changed, expiry, timeout and interrup
     server.state = "expired";
     const uploader = new ConnectorObjectCompanionUploader({
       expectedOrigin: EXPECTED_ORIGIN,
+      materializationRoot: MATERIALIZATION_ROOT,
       source: fakeSource(fixture.bytes),
       transport: new UploadIntentHttpTransport({
         expectedOrigin: EXPECTED_ORIGIN,
@@ -304,6 +376,7 @@ test("GET status is non-consuming; replay, changed, expiry, timeout and interrup
     server.mode = "timeout_before_consume";
     const uploader = new ConnectorObjectCompanionUploader({
       expectedOrigin: EXPECTED_ORIGIN,
+      materializationRoot: MATERIALIZATION_ROOT,
       source: fakeSource(fixture.bytes),
       transport: new UploadIntentHttpTransport({
         expectedOrigin: EXPECTED_ORIGIN,
@@ -384,6 +457,7 @@ test("GET status is non-consuming; replay, changed, expiry, timeout and interrup
     server.mode = "interrupt_before_consume";
     const uploader = new ConnectorObjectCompanionUploader({
       expectedOrigin: EXPECTED_ORIGIN,
+      materializationRoot: MATERIALIZATION_ROOT,
       source: fakeSource(fixture.bytes),
       transport: new UploadIntentHttpTransport({
         expectedOrigin: EXPECTED_ORIGIN,
@@ -402,6 +476,7 @@ test("GET status is non-consuming; replay, changed, expiry, timeout and interrup
     server.mode = "interrupt_after_consume";
     const uploader = new ConnectorObjectCompanionUploader({
       expectedOrigin: EXPECTED_ORIGIN,
+      materializationRoot: MATERIALIZATION_ROOT,
       source: fakeSource(fixture.bytes),
       transport: new UploadIntentHttpTransport({
         expectedOrigin: EXPECTED_ORIGIN,
@@ -418,7 +493,7 @@ test("GET status is non-consuming; replay, changed, expiry, timeout and interrup
 });
 
 test("stdin-only CLI never emits private path, capability or Drive identity", async () => {
-  const root = await mkdtemp(join(tmpdir(), "mind-diary-md284-cli-"));
+  const root = await realpath(await mkdtemp(join(tmpdir(), "mind-diary-md284-cli-")));
   try {
     const file = join(root, "private.png");
     const link = join(root, "private-link.png");
@@ -432,6 +507,7 @@ test("stdin-only CLI never emits private path, capability or Drive identity", as
       env: {
         ...process.env,
         MIND_DIARY_CONNECTOR_UPLOAD_ORIGIN: EXPECTED_ORIGIN,
+        MIND_DIARY_CONNECTOR_MATERIALIZATION_ROOT: root,
       },
       stdio: ["pipe", "pipe", "pipe"],
     });
@@ -452,6 +528,7 @@ test("stdin-only CLI never emits private path, capability or Drive identity", as
     for (const sensitive of [
       file,
       link,
+      root,
       CAPABILITY_URL,
       SIGNED_HANDLE,
       PRIVATE_DRIVE_ID,

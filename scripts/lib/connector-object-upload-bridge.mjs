@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
-import { constants } from "node:fs";
+import { constants, lstatSync, realpathSync } from "node:fs";
 import { lstat, open, realpath } from "node:fs/promises";
-import { isAbsolute, resolve } from "node:path";
+import { isAbsolute, relative, resolve, sep } from "node:path";
 
 export const CONNECTOR_OBJECT_BRIDGE_FORMAT =
   "mind-diary-connector-object-upload-private-v1";
@@ -71,6 +71,11 @@ const PRIVATE_STATE_KEYS = Object.freeze([
   "expected_size",
   "expected_sha256",
 ]);
+// Google Drive raw fetch/download returns a materializable `file_uri` and an
+// outer `workspace_path`. The caller maps only that already-materialized path
+// to `materialized_file_path`; `file_uri`, provider URL and base64 are
+// deliberately absent from this exact private schema. The containing trusted
+// root arrives separately through local configuration.
 const CONTROL = /[\u0000-\u001f\u007f]/u;
 const SHA256 = /^sha256:[0-9a-f]{64}$/u;
 const UTC = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z$/u;
@@ -122,6 +127,30 @@ function safeAbsolutePath(value) {
     isAbsolute(value) && resolve(value) === value && !CONTROL.test(value);
 }
 
+function safeMaterializationRoot(value) {
+  return safeAbsolutePath(value) && value !== resolve("/");
+}
+
+function canonicalMaterializationRoot(value) {
+  if (!safeMaterializationRoot(value)) return null;
+  try {
+    const entry = lstatSync(value);
+    const canonicalPath = realpathSync(value);
+    return !entry.isSymbolicLink() && entry.isDirectory() && canonicalPath === value
+      ? canonicalPath
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function pathBelowRoot(value, root) {
+  if (!safeAbsolutePath(value) || !safeMaterializationRoot(root)) return false;
+  const below = relative(root, value);
+  return below.length > 0 && below !== ".." && !below.startsWith(`..${sep}`) &&
+    !isAbsolute(below);
+}
+
 function extensionMatches(filename, mediaType) {
   const extensions = EXTENSIONS[mediaType];
   const lower = filename.toLocaleLowerCase("en-US");
@@ -157,12 +186,12 @@ function validCapabilityUrl(value, expectedOrigin) {
   }
 }
 
-function parsePrivateState(value, expectedOrigin) {
+function parsePrivateState(value, expectedOrigin, materializationRoot) {
   if (!record(value) || !exactKeys(value, PRIVATE_STATE_KEYS) ||
       value.format !== CONNECTOR_OBJECT_BRIDGE_FORMAT ||
       value.provider_profile !== "google_drive" ||
       value.source_kind !== "connector_object" ||
-      !safeAbsolutePath(value.materialized_file_path) ||
+      !pathBelowRoot(value.materialized_file_path, materializationRoot) ||
       !validCapabilityUrl(value.upload_url, expectedOrigin) ||
       !safeFilename(value.display_filename) ||
       typeof value.claimed_media_type !== "string" ||
@@ -221,25 +250,87 @@ function cancelled(signal) {
   return signal?.aborted === true;
 }
 
+async function inspectMaterializationRoot(materializationRoot) {
+  let entry;
+  let canonicalPath;
+  try {
+    [entry, canonicalPath] = await Promise.all([
+      lstat(materializationRoot),
+      realpath(materializationRoot),
+    ]);
+  } catch {
+    return null;
+  }
+  if (entry.isSymbolicLink() || !entry.isDirectory() ||
+      canonicalPath !== materializationRoot) {
+    return null;
+  }
+  return Object.freeze({
+    canonicalPath,
+    snapshot: snapshot(entry, canonicalPath),
+  });
+}
+
+async function inspectMaterializedPath(materializationRoot, privatePath) {
+  if (!pathBelowRoot(privatePath, materializationRoot)) {
+    return Object.freeze({ kind: "outside_root" });
+  }
+  const parts = relative(materializationRoot, privatePath).split(sep);
+  let cursor = materializationRoot;
+  let entry = null;
+  try {
+    for (let index = 0; index < parts.length; index += 1) {
+      cursor = resolve(cursor, parts[index]);
+      entry = await lstat(cursor);
+      if (entry.isSymbolicLink()) return Object.freeze({ kind: "symlink" });
+      if (index < parts.length - 1 && !entry.isDirectory()) {
+        return Object.freeze({ kind: "special" });
+      }
+    }
+  } catch {
+    return Object.freeze({ kind: "missing" });
+  }
+  const kind = fileKind(entry);
+  return kind === "regular"
+    ? Object.freeze({ kind, entry })
+    : Object.freeze({ kind });
+}
+
 /** Node/macOS source adapter. The private path never leaves this method. */
 export class NodeMaterializedConnectorFileSource {
+  #materializationRoot;
+
+  constructor({ materializationRoot } = {}) {
+    const canonicalRoot = canonicalMaterializationRoot(materializationRoot);
+    if (canonicalRoot === null) {
+      throw new TypeError("Connector materialization root is invalid");
+    }
+    this.#materializationRoot = canonicalRoot;
+  }
+
   async read(privatePath, { maxBytes, signal } = {}) {
-    if (!safeAbsolutePath(privatePath) || !Number.isSafeInteger(maxBytes) || maxBytes < 0) {
+    if (!pathBelowRoot(privatePath, this.#materializationRoot) ||
+        !Number.isSafeInteger(maxBytes) || maxBytes < 0) {
       return Object.freeze({ kind: "unavailable" });
     }
     if (cancelled(signal)) return Object.freeze({ kind: "interrupted" });
-    let before;
+    const rootBefore = await inspectMaterializationRoot(this.#materializationRoot);
+    if (rootBefore === null) return Object.freeze({ kind: "invalid_root" });
+    const inspectedBefore = await inspectMaterializedPath(
+      this.#materializationRoot,
+      privatePath,
+    );
+    if (inspectedBefore.kind !== "regular") return inspectedBefore;
+    const before = inspectedBefore.entry;
     let canonicalBefore;
     try {
-      [before, canonicalBefore] = await Promise.all([
-        lstat(privatePath),
-        realpath(privatePath),
-      ]);
+      canonicalBefore = await realpath(privatePath);
     } catch {
       return Object.freeze({ kind: "missing" });
     }
-    const kind = fileKind(before);
-    if (kind !== "regular") return Object.freeze({ kind });
+    if (!pathBelowRoot(canonicalBefore, rootBefore.canonicalPath)) {
+      return Object.freeze({ kind: "outside_root" });
+    }
     if (!Number.isSafeInteger(before.size) || before.size < 0 || before.size > maxBytes) {
       return Object.freeze({ kind: "oversize" });
     }
@@ -276,17 +367,23 @@ export class NodeMaterializedConnectorFileSource {
     } finally {
       await handle.close().catch(() => undefined);
     }
-    let after;
+    const inspectedAfter = await inspectMaterializedPath(
+      this.#materializationRoot,
+      privatePath,
+    );
+    if (inspectedAfter.kind !== "regular") {
+      return Object.freeze({ kind: "changed" });
+    }
+    const after = inspectedAfter.entry;
     let canonicalAfter;
     try {
-      [after, canonicalAfter] = await Promise.all([
-        lstat(privatePath),
-        realpath(privatePath),
-      ]);
+      canonicalAfter = await realpath(privatePath);
     } catch {
       return Object.freeze({ kind: "changed" });
     }
-    if (fileKind(after) !== "regular" ||
+    const rootAfter = await inspectMaterializationRoot(this.#materializationRoot);
+    if (rootAfter === null || rootAfter.snapshot !== rootBefore.snapshot ||
+        !pathBelowRoot(canonicalAfter, rootAfter.canonicalPath) ||
         snapshot(after, canonicalAfter) !== beforeSnapshot) {
       return Object.freeze({ kind: "changed" });
     }
@@ -589,6 +686,7 @@ export class UploadIntentHttpTransport {
 }
 
 function mapSourceFailure(kind) {
+  if (kind === "invalid_root") return "invalid_materialization_root";
   if (kind === "oversize") return "oversize";
   if (kind === "changed") return "changed";
   if (kind === "interrupted") return "interrupted";
@@ -600,27 +698,38 @@ export class ConnectorObjectCompanionUploader {
   #source;
   #transport;
   #expectedOrigin;
+  #materializationRoot;
   #maxFileBytes;
 
   constructor({
     expectedOrigin,
-    source = new NodeMaterializedConnectorFileSource(),
+    materializationRoot,
+    source,
     transport,
     maxFileBytes = CONNECTOR_OBJECT_BRIDGE_LIMITS.maxFileBytes,
   } = {}) {
     const origin = canonicalOrigin(expectedOrigin);
-    if (origin === null || !Number.isSafeInteger(maxFileBytes) || maxFileBytes < 1 ||
+    const canonicalRoot = canonicalMaterializationRoot(materializationRoot);
+    if (origin === null || canonicalRoot === null ||
+        !Number.isSafeInteger(maxFileBytes) || maxFileBytes < 1 ||
         maxFileBytes > CONNECTOR_OBJECT_BRIDGE_LIMITS.maxFileBytes) {
-      throw new TypeError("Connector object bridge byte limit is invalid");
+      throw new TypeError("Connector object bridge options are invalid");
     }
     this.#expectedOrigin = origin;
-    this.#source = source;
+    this.#materializationRoot = canonicalRoot;
+    this.#source = source ?? new NodeMaterializedConnectorFileSource({
+      materializationRoot: canonicalRoot,
+    });
     this.#transport = transport ?? new UploadIntentHttpTransport({ expectedOrigin: origin });
     this.#maxFileBytes = maxFileBytes;
   }
 
   async upload(privateState, { signal } = {}) {
-    const state = parsePrivateState(privateState, this.#expectedOrigin);
+    const state = parsePrivateState(
+      privateState,
+      this.#expectedOrigin,
+      this.#materializationRoot,
+    );
     if (state === null) return connectorObjectReceipt({ status: "invalid_private_state" });
     if (state.expected_size > this.#maxFileBytes) {
       return connectorObjectReceipt({
@@ -693,8 +802,15 @@ export class ConnectorObjectCompanionUploader {
   }
 }
 
-export function parseConnectorObjectPrivateState(value, expectedOrigin) {
-  return parsePrivateState(value, expectedOrigin);
+export function parseConnectorObjectPrivateState(
+  value,
+  expectedOrigin,
+  materializationRoot,
+) {
+  const canonicalRoot = canonicalMaterializationRoot(materializationRoot);
+  return canonicalRoot === null
+    ? null
+    : parsePrivateState(value, expectedOrigin, canonicalRoot);
 }
 
 export function isValidUploadCapabilityUrl(value, expectedOrigin) {

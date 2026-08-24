@@ -43,12 +43,16 @@ export async function runConnectorObjectUploadBridge({
   argv = process.argv.slice(2),
   uploader,
   expectedOrigin = process.env.MIND_DIARY_CONNECTOR_UPLOAD_ORIGIN,
+  materializationRoot = process.env.MIND_DIARY_CONNECTOR_MATERIALIZATION_ROOT,
 } = {}) {
   let receipt;
   let activeUploader = uploader;
   if (activeUploader === undefined) {
     try {
-      activeUploader = new ConnectorObjectCompanionUploader({ expectedOrigin });
+      activeUploader = new ConnectorObjectCompanionUploader({
+        expectedOrigin,
+        materializationRoot,
+      });
     } catch {
       activeUploader = null;
     }

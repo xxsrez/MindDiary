@@ -21,6 +21,7 @@ const PRIVATE_PATH = "/private/tmp/md284/drive-object.bin";
 const CAPABILITY_URL =
   "https://mind-diary.example/api/file-ingress/upload-intents/mdupload_v1_privateSignedCapability123456";
 const EXPECTED_ORIGIN = "https://mind-diary.example";
+const MATERIALIZATION_ROOT = "/private/tmp";
 const DRIVE_ID = "private_drive_object_id";
 const DRIVE_ACCOUNT = "private_drive_account";
 const SENSITIVE_GRANT_VALUE = "private_drive_token";
@@ -48,6 +49,7 @@ function uploader({ sourceResult = { kind: "ready", bytes: PNG }, transport, max
   const calls = [];
   const service = new ConnectorObjectCompanionUploader({
     expectedOrigin: EXPECTED_ORIGIN,
+    materializationRoot: MATERIALIZATION_ROOT,
     source: {
       async read(path, options) {
         calls.push({ kind: "source", path, options });
@@ -186,7 +188,11 @@ test("MIME, extension, size and SHA are revalidated against exact materialized b
 });
 
 test("private state is exact and rejects provider identity, arbitrary URL and CLI-shaped extras", () => {
-  assert.ok(parseConnectorObjectPrivateState(state(), EXPECTED_ORIGIN));
+  assert.ok(parseConnectorObjectPrivateState(
+    state(),
+    EXPECTED_ORIGIN,
+    MATERIALIZATION_ROOT,
+  ));
   assert.equal(isValidUploadCapabilityUrl(CAPABILITY_URL, EXPECTED_ORIGIN), true);
   assert.equal(isValidUploadCapabilityUrl(
     "https://evil.example/api/file-ingress/upload-intents/mdupload_v1_attackCapability123456",
@@ -196,11 +202,49 @@ test("private state is exact and rejects provider identity, arbitrary URL and CL
     { ...state(), drive_file_id: DRIVE_ID },
     { ...state(), drive_account: DRIVE_ACCOUNT },
     { ...state(), access_token: SENSITIVE_GRANT_VALUE },
+    { ...state(), file_uri: { id: DRIVE_ID } },
+    { ...state(), workspace_path: PRIVATE_PATH },
+    { ...state(), base64: "iVBORw0KGgo=" },
     { ...state(), upload_url: "https://drive.google.com/file/d/private" },
     { ...state(), upload_url: `${CAPABILITY_URL}?redirect=https://example.com` },
     { ...state(), source_kind: "local_path" },
   ]) {
-    assert.equal(parseConnectorObjectPrivateState(candidate, EXPECTED_ORIGIN), null);
+    assert.equal(parseConnectorObjectPrivateState(
+      candidate,
+      EXPECTED_ORIGIN,
+      MATERIALIZATION_ROOT,
+    ), null);
+  }
+});
+
+test("trusted materialization root rejects traversal and sibling paths before source access", async () => {
+  const env = uploader();
+  for (const materialized_file_path of [
+    `${MATERIALIZATION_ROOT}/../sibling/drive-object.png`,
+    `${MATERIALIZATION_ROOT}-sibling/drive-object.png`,
+    MATERIALIZATION_ROOT,
+  ]) {
+    const receipt = await env.service.upload(state({ materialized_file_path }));
+    assert.equal(receipt.status, "invalid_private_state");
+  }
+  assert.equal(env.calls.length, 0);
+  for (const materializationRoot of [
+    "/",
+    `${MATERIALIZATION_ROOT}/`,
+    `${MATERIALIZATION_ROOT}/../md284`,
+  ]) {
+    assert.equal(parseConnectorObjectPrivateState(
+      state(),
+      EXPECTED_ORIGIN,
+      materializationRoot,
+    ), null);
+    assert.throws(
+      () => new ConnectorObjectCompanionUploader({
+        expectedOrigin: EXPECTED_ORIGIN,
+        materializationRoot,
+      }),
+      /options are invalid/u,
+    );
   }
 });
 
