@@ -68,7 +68,8 @@ evidence, предлагаемый дизайн и ещё не проверен�
    reconciliation и capability negotiation task-management backend-а.
 21. [Task Manager adapter Mind Diary](specs/ship-work-release-task-manager-srez.md) —
     текущая привязка к Project `Mind Diary`, Release `0.1`, exact Task Manager
-    refs, bounded reads и границы task-level writes.
+    refs, bounded reads, versioned task writes и designated scope projection
+    anchor.
 22. [Исторический Linear adapter](specs/ship-work-release-linear.md) —
     прежнее отображение Linear entities; не является текущим provider, profile
     или source of truth.
@@ -88,6 +89,9 @@ evidence, предлагаемый дизайн и ещё не проверен�
 - [Профиль доставки Mind Diary](operations/ship-work-release-profile.md) —
   project-specific commands, integration branch, CI, dev launcher, UAT
   URL/evidence и production configuration.
+- [Task Manager runtime reference](operations/ship-work-release-task-manager-srez.md) —
+  exact connector preflight, pagination, versioned status/comments,
+  designated-anchor projection и reconcile-before-retry для Mind Diary.
 - [Exact-candidate performance gate](operations/performance-gate.md) —
   machine-verified UAT scale read-back, web/modern/compatibility sampling,
   request-correlated closed telemetry, blocking budgets и private receipt.

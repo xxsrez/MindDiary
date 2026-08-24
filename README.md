@@ -53,6 +53,7 @@ read-only token после проверки отозван; следующий r
 - [Контракт project delivery profile](docs/specs/ship-work-release-project-profile.md)
 - [Контракт task-management adapter](docs/specs/ship-work-release-task-manager.md)
 - [Task Manager adapter доставки](docs/specs/ship-work-release-task-manager-srez.md)
+- [Task Manager runtime reference](docs/operations/ship-work-release-task-manager-srez.md)
 - [Исторический Linear adapter](docs/specs/ship-work-release-linear.md)
 - [Операторский runbook](docs/operations/ship-work-release.md)
 - [Профиль dev/UAT/production доставки](docs/operations/ship-work-release-profile.md)

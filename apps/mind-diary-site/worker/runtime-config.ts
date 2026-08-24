@@ -8,6 +8,11 @@ export interface ProductEnv {
   readonly MIND_DIARY_EXPORT_DOWNLOAD_VERIFIER_KEY?: string;
   readonly MIND_DIARY_CSRF_KEY?: string;
   readonly MIND_DIARY_SERVICE_OPERATOR_PRINCIPAL_IDS?: string;
+  readonly MIND_DIARY_DEPLOYMENT_CLASS?: string;
+  readonly MIND_DIARY_DEPLOYMENT_POSTURE?: string;
+  readonly MIND_DIARY_CAPACITY_PROFILE?: string;
+  readonly MIND_DIARY_RELEASE_CANDIDATE_SHA?: string;
+  readonly MIND_DIARY_CAPACITY_FENCE_NONCE?: string;
   readonly MIND_DIARY_PERFORMANCE_CORRELATION_KEY?: string;
 }
 

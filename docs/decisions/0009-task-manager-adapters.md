@@ -1,6 +1,6 @@
 # ADR-0009: универсальный delivery skill и task-manager adapters
 
-Статус: accepted, 2026-08-09.
+Статус: accepted, amended 2026-08-24.
 
 ## Контекст
 
@@ -43,6 +43,30 @@ entity types, status catalog, relations, pagination, comment format и retry
 - Unsupported, missing или ambiguous adapter configuration блокирует run до
   mutation. Core не угадывает provider по repository, URL или человеческому
   названию scope.
+
+## Amendment 2026-08-24
+
+Первоначальная project-specific запись этого ADR выбирала Linear и repo-local
+`ship-linear-release` для Mind Diary. Миграция Release 0.1 в Task Manager
+supersede-ит именно эту provider/runtime часть, не меняя provider-neutral core:
+
+- current profile выбирает adapter `task-manager`, exact Project
+  `525e801d-0ae9-4be7-bae4-6a9c8f85f581` и Release
+  `e92b681b-fd18-43e2-91df-3538c37d9890`;
+- current runtime boundary — configured direct-package identity
+  `task-manager@srez-marketplace` плюс fresh callable catalog, `get_workspace`
+  и exact Project/Release reads; отсутствующий connector-visible workspace UUID
+  не подменяется Sites project, URL, OAuth principal или package version;
+- specification и operational runtime reference являются разными tracked
+  documents; второй производен от первого и не создаёт вторую норму;
+- из-за отсутствия native Release status-update scope facts используют exact
+  designated anchor Task `492adef6-ff53-4244-bf42-c101bb350ade` с
+  predecessor/superseding comment chain и reconcile-before-retry;
+- repo-local Linear/Shipliner runtime больше не является callable delivery
+  authority; Git history и historical mapping сохраняют provenance.
+
+Эта секция имеет приоритет над прежним выбором Linear для Mind Diary и не
+утверждает, что Task Manager является единственным adapter других projects.
 
 ## Последствия
 

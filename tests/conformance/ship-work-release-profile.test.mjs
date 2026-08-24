@@ -27,6 +27,16 @@ test("Mind Diary delivery profile resolves the current Task Manager scope", asyn
     taskManagement.adapter.specification,
     "docs/specs/ship-work-release-task-manager-srez.md",
   );
+  assert.equal(
+    taskManagement.adapter.runtime_reference,
+    "docs/operations/ship-work-release-task-manager-srez.md",
+  );
+  assert.notEqual(
+    taskManagement.adapter.specification,
+    taskManagement.adapter.runtime_reference,
+  );
+  assert.equal(taskManagement.provider_instance.id, "task-manager@srez-marketplace");
+  assert.equal(taskManagement.provider_instance.id_source, null);
   assert.equal(taskManagement.collection.provider, "task-manager");
   assert.equal(
     taskManagement.collection.id,
@@ -37,7 +47,32 @@ test("Mind Diary delivery profile resolves the current Task Manager scope", asyn
     taskManagement.default_scope.parameters.release_id,
     "e92b681b-fd18-43e2-91df-3538c37d9890",
   );
-  assert.equal(taskManagement.scope_fact_projection.mode, "unavailable");
+  assert.equal(taskManagement.scope_fact_projection.mode, "designated_anchor");
+  assert.deepEqual(
+    {
+      provider: taskManagement.scope_fact_projection.target.provider,
+      kind: taskManagement.scope_fact_projection.target.kind,
+      id: taskManagement.scope_fact_projection.target.id,
+    },
+    {
+      provider: "task-manager",
+      kind: "task",
+      id: "492adef6-ff53-4244-bf42-c101bb350ade",
+    },
+  );
+  assert.equal(
+    taskManagement.scope_fact_projection.marker_schema,
+    "ship-work-release/task-manager-scope-fact-comment/v1",
+  );
+  assert.equal(
+    taskManagement.scope_fact_projection.reconcile,
+    "exact-effect-id-marker-and-comment-ref",
+  );
+  for (const bounds of Object.values(taskManagement.pagination.connections)) {
+    assert.ok(bounds.page_size > 0 && bounds.page_size <= 50);
+    assert.ok(bounds.max_pages > 0);
+    assert.ok(bounds.max_records > 0);
+  }
   assert.doesNotMatch(JSON.stringify(taskManagement), /\blinear\b/iu);
   assert.equal(profile.uat.smoke_rows.includes("uat.operator-directory-canary"), false);
   assert.equal(profile.uat.smoke_rows.includes("uat.first-user"), false);

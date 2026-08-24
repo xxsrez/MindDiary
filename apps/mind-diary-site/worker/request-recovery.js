@@ -147,6 +147,11 @@ export function productWorkerConfigFingerprint(environment, publicOrigin) {
     environment.MIND_DIARY_EXPORT_DOWNLOAD_VERIFIER_KEY,
     environment.MIND_DIARY_CSRF_KEY,
     environment.MIND_DIARY_SERVICE_OPERATOR_PRINCIPAL_IDS,
+    environment.MIND_DIARY_DEPLOYMENT_CLASS,
+    environment.MIND_DIARY_DEPLOYMENT_POSTURE,
+    environment.MIND_DIARY_CAPACITY_PROFILE,
+    environment.MIND_DIARY_RELEASE_CANDIDATE_SHA,
+    environment.MIND_DIARY_CAPACITY_FENCE_NONCE,
     environment.MIND_DIARY_PERFORMANCE_CORRELATION_KEY,
   ].join("\u0000");
   let hash = 0x811c9dc5;

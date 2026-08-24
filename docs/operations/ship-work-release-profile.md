@@ -6,8 +6,10 @@
 [provider-neutral profile contract](../specs/ship-work-release-project-profile.md).
 Нормативные orchestration semantics находятся в
 [delivery specification](../specs/ship-work-release.md), команды пользователя —
-в [operator runbook](ship-work-release.md), а текущая Task Manager mapping — в
-[adapter specification](../specs/ship-work-release-task-manager-srez.md).
+в [operator runbook](ship-work-release.md), текущая Task Manager mapping — в
+[adapter specification](../specs/ship-work-release-task-manager-srez.md), а
+точный порядок connector calls — в
+[operational runtime reference](ship-work-release-task-manager-srez.md).
 
 По [ADR-0019](../decisions/0019-release-0-1-codex-first-small-data-boundary.md)
 Release 0.1 является Codex-first Markdown/OKF 0.2 small-data slice. BundleFile,
@@ -97,7 +99,7 @@ task_management:
     id: task-manager
     contract: ship-work-release/task-manager-adapter/v1
     specification: docs/specs/ship-work-release-task-manager-srez.md
-    runtime_reference: docs/specs/ship-work-release-task-manager-srez.md
+    runtime_reference: docs/operations/ship-work-release-task-manager-srez.md
   provider_instance:
     id: task-manager@srez-marketplace
     id_source: null
@@ -114,15 +116,27 @@ task_management:
   pagination:
     request_timeout_seconds: 60
     connections:
-      project_releases: { page_size: 100, max_pages: 10, max_records: 1000 }
-      scope_tasks: { page_size: 100, max_pages: 100, max_records: 10000 }
-      task_relations: { page_size: 100, max_pages: 100, max_records: 10000 }
-      subtasks: { page_size: 100, max_pages: 100, max_records: 10000 }
-      task_comments: { page_size: 100, max_pages: 100, max_records: 10000 }
-      status_catalog: { page_size: 100, max_pages: 10, max_records: 1000 }
+      project_releases: { page_size: 50, max_pages: 20, max_records: 1000 }
+      scope_tasks: { page_size: 50, max_pages: 200, max_records: 10000 }
+      task_relations: { page_size: 50, max_pages: 200, max_records: 10000 }
+      subtasks: { page_size: 50, max_pages: 200, max_records: 10000 }
+      task_comments: { page_size: 50, max_pages: 200, max_records: 10000 }
+      status_catalog: { page_size: 50, max_pages: 20, max_records: 1000 }
   scope_fact_projection:
-    mode: unavailable
-    capability: task-manager/project-status-update/v1
+    mode: designated_anchor
+    target:
+      provider: task-manager
+      kind: task
+      id: 492adef6-ff53-4244-bf42-c101bb350ade
+      display_name: MD-285
+    resource_kind: task-comment
+    capability: task-manager/designated-anchor-comment/v1
+    marker_schema: ship-work-release/task-manager-scope-fact-comment/v1
+    identity_after_create: exact-comment-ref
+    expected_old: exact-anchor-version-and-predecessor-comment-ref
+    superseding: exact-predecessor-comment-ref
+    idempotency: explicit-key-and-effect-id
+    reconcile: exact-effect-id-marker-and-comment-ref
     unavailable_behavior: block-terminal-projection
 
 repository:
