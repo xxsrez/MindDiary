@@ -553,6 +553,10 @@ export async function createProductSiteRuntime(
     }
   }
   const trustedPerformanceRequest = async (request: Request): Promise<Request> => {
+    if (
+      request.headers.get("x-mind-diary-performance-correlation-id") === null &&
+      request.headers.get("x-mind-diary-performance-correlation-signature") === null
+    ) return request;
     const correlationId = benchmarkCorrelationId(request);
     const signature = performanceCorrelationSignature(request);
     const headers = new Headers(request.headers);
