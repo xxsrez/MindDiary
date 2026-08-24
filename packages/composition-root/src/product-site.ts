@@ -109,6 +109,8 @@ import {
   PublicMindCatalogService,
   PrincipalActivityService,
   ServiceOperatorDirectoryService,
+  ServiceOperatorCapacityDiagnosticsService,
+  type ServiceOperatorCapacityProfile,
   TokenLifecycleService,
   VisibilityControlService,
 } from "@mind-diary/application-control";
@@ -171,10 +173,100 @@ export interface ProductSiteRuntimeOptions {
   readonly serviceOperatorPrincipalIds?: readonly string[];
   /** Constructor-only environment class. Missing/unknown configuration keeps the canary absent. */
   readonly deploymentClass?: ProductSiteDeploymentClass;
+  /** Trusted deployment posture; never derived from a request. */
+  readonly deploymentPosture?: "production" | "restricted-uat";
+  /** Fixed, versioned profile selector; arbitrary numeric overrides are not accepted. */
+  readonly capacityProfileId?: "default-v1" | "restricted-uat-v1";
+  /** Trusted non-secret configuration fence; it is not release attestation. */
+  readonly releaseCandidateSha?: string;
+  readonly capacityFenceNonce?: string;
   /** Constructor-only clock dependency; Product Worker uses the system clock. */
   readonly now?: () => Date;
   readonly observabilityWriter?: SitesObservabilityWriter;
   readonly schedule: (work: Readonly<{ readonly kind: string; readonly id: string }>) => void | Promise<void>;
+}
+
+export const RESTRICTED_UAT_CAPACITY_PROFILE: Readonly<ServiceOperatorCapacityProfile> =
+  Object.freeze({
+    schema: "mind-diary/capacity-profile",
+    version: 1,
+    profileId: "restricted-uat-v1",
+    deploymentPosture: "restricted-uat",
+    limits: Object.freeze({
+      ...DEFAULT_CAPACITY_LIMITS,
+      mindPhysicalCanonicalBytes: 8_388_608,
+    }),
+  });
+
+export const RESTRICTED_UAT_DEFAULT_CAPACITY_PROFILE: Readonly<ServiceOperatorCapacityProfile> =
+  Object.freeze({
+    schema: "mind-diary/capacity-profile",
+    version: 1,
+    profileId: "default-v1",
+    deploymentPosture: "restricted-uat",
+    limits: Object.freeze({ ...DEFAULT_CAPACITY_LIMITS }),
+  });
+
+function resolveCapacityProfile(
+  options: ProductSiteRuntimeOptions,
+  operatorPrincipalIds: ReadonlySet<PrincipalId>,
+): Readonly<ServiceOperatorCapacityProfile> | null {
+  const deploymentPosture: unknown = options.deploymentPosture;
+  const capacityProfileId: unknown = options.capacityProfileId;
+  const releaseCandidateSha: unknown = options.releaseCandidateSha;
+  const capacityFenceNonce: unknown = options.capacityFenceNonce;
+  if (
+    deploymentPosture !== undefined &&
+    deploymentPosture !== "production" &&
+    deploymentPosture !== "restricted-uat"
+  ) {
+    throw new TypeError("deploymentPosture is invalid");
+  }
+  if (deploymentPosture !== "restricted-uat") {
+    if (
+      capacityProfileId !== undefined ||
+      releaseCandidateSha !== undefined ||
+      capacityFenceNonce !== undefined
+    ) throw new TypeError("capacity profile and configuration fence require restricted-uat posture");
+    return null;
+  }
+  if (
+    capacityProfileId !== undefined &&
+    capacityProfileId !== "default-v1" &&
+    capacityProfileId !== "restricted-uat-v1"
+  ) {
+    throw new TypeError("capacityProfileId is invalid");
+  }
+  if (operatorPrincipalIds.size < 1) {
+    throw new TypeError("restricted UAT capacity diagnostics require a service operator allowlist");
+  }
+  if (typeof releaseCandidateSha !== "string" || !/^[0-9a-f]{40}$/u.test(releaseCandidateSha)) {
+    throw new TypeError("restricted UAT capacity diagnostics require an exact candidate SHA");
+  }
+  if (
+    typeof capacityFenceNonce !== "string" ||
+    !/^[A-Za-z0-9_-]{22,64}$/u.test(capacityFenceNonce)
+  ) {
+    throw new TypeError("restricted UAT capacity diagnostics require a bounded fence nonce");
+  }
+  return capacityProfileId === "restricted-uat-v1"
+    ? RESTRICTED_UAT_CAPACITY_PROFILE
+    : RESTRICTED_UAT_DEFAULT_CAPACITY_PROFILE;
+}
+
+async function capacityReleaseConfigurationFenceSha256(
+  candidateSha: string,
+  fenceNonce: string,
+): Promise<string> {
+  const message = new TextEncoder().encode(
+    `mind-diary/uat-release-configuration-fence/v1\0${candidateSha}\0${fenceNonce}`,
+  );
+  try {
+    const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", message));
+    return `sha256:${[...digest].map((byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+  } finally {
+    message.fill(0);
+  }
 }
 
 export interface ProductSiteRuntime {
@@ -365,6 +457,7 @@ class ProductControlApplication {
       readonly capacity: CapacityAdmissionService;
       readonly markdownImports: MarkdownImportService;
       readonly operatorDirectory: ServiceOperatorDirectoryService;
+      readonly operatorCapacity?: ServiceOperatorCapacityDiagnosticsService;
     },
   ) {}
 
@@ -518,6 +611,11 @@ class ProductControlApplication {
         return this.services.reads.listInvitations(actor as never);
       case "list_service_operator_principals":
         return this.services.operatorDirectory.list(actor as never, input);
+      case "get_service_operator_capacity":
+        if (this.services.operatorCapacity === undefined) {
+          throw Object.assign(new Error("Unknown control operation."), { code: "not_found" });
+        }
+        return this.services.operatorCapacity.read(actor as never, input);
       default:
         throw Object.assign(new Error("Unknown control operation."), { code: "not_found" });
     }
@@ -633,6 +731,17 @@ export async function createProductSiteRuntime(
     }
     configuredOperatorPrincipalIds.add(principalId as PrincipalId);
   }
+  const activeCapacityProfile = resolveCapacityProfile(
+    options,
+    configuredOperatorPrincipalIds,
+  );
+  const activeCapacityReleaseConfigurationFenceSha256 = activeCapacityProfile === null
+    ? null
+    : await capacityReleaseConfigurationFenceSha256(
+        options.releaseCandidateSha as string,
+        options.capacityFenceNonce as string,
+      );
+  const capacityLimits = activeCapacityProfile?.limits ?? DEFAULT_CAPACITY_LIMITS;
   const activity = new PrincipalActivityService(metadata);
   const backgroundAuthorizer = new CurrentAccessBackgroundAuthorizer(metadata);
   const revisions = new CanonicalRevisionCoordinator({ objects, revisions: metadata });
@@ -671,6 +780,7 @@ export async function createProductSiteRuntime(
     metadata,
     objects,
     clock,
+    capacityLimits,
   });
   const generatedArtifactIngress = new GeneratedArtifactIngressService({
     staging: bundleFileStaging,
@@ -778,6 +888,7 @@ export async function createProductSiteRuntime(
     revisions,
     objects,
     clock,
+    capacityLimits,
     revisionIds: generated,
     effectIds: generated,
   });
@@ -822,6 +933,7 @@ export async function createProductSiteRuntime(
     clock,
     revisionIds: generated,
     effectIds: generated,
+    capacityLimits,
   });
   const automaticCapture = new AutomaticCaptureService({
     authorizer: contentAuthorizer,
@@ -839,6 +951,7 @@ export async function createProductSiteRuntime(
     jobIds: generated,
     downloadSecretCrypto: downloadCrypto,
     downloadUrlBase: `${options.publicOrigin}/api/v1/exports`,
+    capacityLimits,
   });
   const bundleFileDownloads = new BundleFileDownloadService({
     store: metadata,
@@ -1157,7 +1270,7 @@ export async function createProductSiteRuntime(
     ordinaryDeletion: new OrdinaryMindDeletionService({ ordinaryMinds: metadata, objects, index, audit, exportArchives: objects, ids: generated, clock, host, logger: controlObservability }),
     accountDeletion: new AccountDeletionService({ accounts: metadata, tokens: metadata, objects, index, audit, exportArchives: objects, ids: generated, clock, host, logger: controlObservability }),
     visibility: new VisibilityControlService({ ordinaryMinds: metadata, objects, auditIds: commonAuditIds, logger: controlObservability }),
-    ownership: new OwnershipTransferService({ ordinaryMinds: metadata, objects, auditIds: commonAuditIds, capacityLimits: DEFAULT_CAPACITY_LIMITS, logger: controlObservability }),
+    ownership: new OwnershipTransferService({ ordinaryMinds: metadata, objects, auditIds: commonAuditIds, capacityLimits, logger: controlObservability }),
     membership: new MembershipControlService({ memberships: metadata, digest: objects, auditIds: commonAuditIds, logger: controlObservability }),
     reads: new ControlReadService(metadata),
     invitation: new InvitationControlService({
@@ -1182,6 +1295,7 @@ export async function createProductSiteRuntime(
       metadata,
       authorizer,
       clock,
+      limits: capacityLimits,
     }),
     markdownImports,
     operatorDirectory: new ServiceOperatorDirectoryService({
@@ -1190,6 +1304,19 @@ export async function createProductSiteRuntime(
       operatorPrincipalIds: configuredOperatorPrincipalIds,
       ids: generated,
     }),
+    ...(activeCapacityProfile === null
+      ? {}
+      : {
+          operatorCapacity: new ServiceOperatorCapacityDiagnosticsService({
+            store: metadata,
+            clock,
+            ids: generated,
+            operatorPrincipalIds: configuredOperatorPrincipalIds,
+            profile: activeCapacityProfile,
+            releaseConfigurationFenceSha256:
+              activeCapacityReleaseConfigurationFenceSha256 as string,
+          }),
+        }),
   });
 
   const web = createProductWebHttpHandler({

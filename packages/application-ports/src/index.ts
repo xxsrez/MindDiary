@@ -1161,6 +1161,14 @@ export interface StageServiceOperatorDirectoryAuditRequest {
   readonly occurredAt: UtcInstant;
 }
 
+export interface StageServiceOperatorCapacityAuditRequest {
+  readonly operatorPrincipalId: PrincipalId;
+  readonly requestId: RequestId;
+  readonly auditEventId: AuditEventId;
+  readonly auditOutboxMessageId: OutboxMessageId;
+  readonly occurredAt: UtcInstant;
+}
+
 export interface ServiceOperatorDirectoryStore extends MetadataStore {
   recordPrincipalActivity(request: Readonly<RecordPrincipalActivityRequest>): Promise<void>;
   readPrincipalActivity(
@@ -1171,6 +1179,12 @@ export interface ServiceOperatorDirectoryStore extends MetadataStore {
   ): Promise<Readonly<ServiceOperatorDirectoryPage>>;
   stageServiceOperatorDirectoryAudit(
     request: Readonly<StageServiceOperatorDirectoryAuditRequest>,
+  ): Promise<void>;
+}
+
+export interface ServiceOperatorCapacityAuditStore extends MetadataStore {
+  stageServiceOperatorCapacityAudit(
+    request: Readonly<StageServiceOperatorCapacityAuditRequest>,
   ): Promise<void>;
 }
 
@@ -2528,7 +2542,16 @@ export interface CapacityTelemetrySnapshot {
   readonly d1HeadroomBytes: number;
   readonly storageAmplification: number;
   readonly quotaRejects: number;
-  readonly staleReservations: number;
+  readonly reservations: Readonly<{
+    readonly activeCount: number;
+    readonly activeBytes: number;
+    readonly expiredActiveCount: number;
+    readonly expiredActiveBytes: number;
+    readonly cleanupPendingCount: number;
+    readonly cleanupPendingBytes: number;
+    readonly staleCount: number;
+    readonly staleBytes: number;
+  }>;
   readonly utilization: CapacityUtilizationState;
 }
 

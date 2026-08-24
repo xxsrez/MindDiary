@@ -191,6 +191,7 @@ import type {
   ServiceOperatorDirectoryStore,
   ServiceOperatorPrincipalProjection,
   StageServiceOperatorDirectoryAuditRequest,
+  StageServiceOperatorCapacityAuditRequest,
   TransferOrdinaryMindOwnershipRequest,
   TransferOrdinaryMindOwnershipResult,
   VerifiedSpaceHost,
@@ -4686,6 +4687,51 @@ export class InMemoryRevisionMetadataStore
     });
   }
 
+  async stageServiceOperatorCapacityAudit(
+    request: Readonly<StageServiceOperatorCapacityAuditRequest>,
+  ): Promise<void> {
+    await this.#runExclusive(async () => {
+      if (
+        !BOUNDED_OPAQUE_ID.test(request.operatorPrincipalId) ||
+        !BOUNDED_OPAQUE_ID.test(request.requestId) ||
+        !BOUNDED_OPAQUE_ID.test(request.auditEventId) ||
+        !BOUNDED_OPAQUE_ID.test(request.auditOutboxMessageId) ||
+        !Number.isFinite(Date.parse(request.occurredAt)) ||
+        !this.#principals.has(request.operatorPrincipalId) ||
+        this.#auditEvents.has(request.auditEventId) ||
+        this.#auditOutbox.has(request.auditOutboxMessageId)
+      ) {
+        throw new TypeError("Service operator capacity audit is invalid");
+      }
+      const event: Readonly<AuditEvent> = Object.freeze({
+        auditEventId: request.auditEventId,
+        actor: Object.freeze({
+          kind: "principal" as const,
+          principalId: request.operatorPrincipalId,
+        }),
+        requestId: request.requestId,
+        eventType: "service_operator.capacity_diagnostics_read",
+        outcome: "succeeded" as const,
+        spaceId: null,
+        occurredAt: request.occurredAt,
+        safeMetadata: Object.freeze({ operation: "read_capacity_diagnostics" }),
+      });
+      const outbox: Readonly<AuditOutboxMessage> = Object.freeze({
+        outboxMessageId: request.auditOutboxMessageId,
+        auditEventId: request.auditEventId,
+        state: "pending" as const,
+        version: version(1),
+        attempts: 0,
+        availableAt: request.occurredAt,
+        claimExpiresAt: null,
+        createdAt: request.occurredAt,
+        updatedAt: request.occurredAt,
+      });
+      this.#auditEvents.set(event.auditEventId, cloneAuditEvent(event));
+      this.#auditOutbox.set(outbox.outboxMessageId, cloneAuditOutbox(outbox));
+    });
+  }
+
   async runCapacityTransaction<Result>(
     operation: (transaction: CapacityReservationTransaction) => Promise<Result>,
   ): Promise<Result> {
@@ -4772,6 +4818,23 @@ export class InMemoryRevisionMetadataStore
         this.#capacityReservations,
         () => true,
       );
+      const requestedBytes = (reservation: Readonly<CapacityReservation>) =>
+        reservation.requested.physicalCanonicalBytes +
+        reservation.requested.temporaryBytes +
+        reservation.requested.d1MetadataBytes;
+      const activeReservations = [...this.#capacityReservations.values()].filter(
+        (reservation) => reservation.state === "active",
+      );
+      const expiredActiveReservations = activeReservations.filter(
+        (reservation) => Date.parse(reservation.expiresAt) <= Date.parse(now),
+      );
+      const cleanupPendingReservations = [...this.#capacityReservations.values()].filter(
+        (reservation) => reservation.state === "cleanup_pending",
+      );
+      const staleReservations = [
+        ...expiredActiveReservations,
+        ...cleanupPendingReservations,
+      ];
       const utilization = maxUtilizationState([
         (usage.physicalCanonicalBytes + active.physicalCanonicalBytes) /
           limits.sitePhysicalCanonicalBytes,
@@ -4796,12 +4859,28 @@ export class InMemoryRevisionMetadataStore
         ),
         storageAmplification: usage.storageAmplification,
         quotaRejects: this.#capacityQuotaRejects,
-        staleReservations: [...this.#capacityReservations.values()].filter(
-          (reservation) =>
-            reservation.state === "cleanup_pending" ||
-            (reservation.state === "active" &&
-              Date.parse(reservation.expiresAt) <= Date.parse(now)),
-        ).length,
+        reservations: Object.freeze({
+          activeCount: activeReservations.length,
+          activeBytes: activeReservations.reduce(
+            (total, reservation) => total + requestedBytes(reservation),
+            0,
+          ),
+          expiredActiveCount: expiredActiveReservations.length,
+          expiredActiveBytes: expiredActiveReservations.reduce(
+            (total, reservation) => total + requestedBytes(reservation),
+            0,
+          ),
+          cleanupPendingCount: cleanupPendingReservations.length,
+          cleanupPendingBytes: cleanupPendingReservations.reduce(
+            (total, reservation) => total + requestedBytes(reservation),
+            0,
+          ),
+          staleCount: staleReservations.length,
+          staleBytes: staleReservations.reduce(
+            (total, reservation) => total + requestedBytes(reservation),
+            0,
+          ),
+        }),
         utilization,
       });
     });
@@ -5100,7 +5179,7 @@ export class InMemoryRevisionMetadataStore
             });
           }
         }
-        if (growth > 0 && projectedRatios.some((ratio) => ratio > 1)) {
+        if (growth > 0 && projectedRatios.some((ratio) => ratio >= 1)) {
           this.#capacityQuotaRejects += 1;
           return Object.freeze({
             kind: "rejected",

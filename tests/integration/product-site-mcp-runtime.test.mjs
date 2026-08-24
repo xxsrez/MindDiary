@@ -556,6 +556,8 @@ async function modernTool(runtime, secret, id, name, args, benchmarkCorrelationI
 }
 
 test("Product Site persists success-only web/MCP activity and hides the UAT directory from non-operators", async () => {
+  const capacityCandidateSha = "a".repeat(40);
+  const capacityFenceNonce = "capacity-fence-nonce-01";
   const database = new FakeD1Database();
   const bucket = new FakeR2Bucket();
   const scheduled = [];
@@ -581,6 +583,51 @@ test("Product Site persists success-only web/MCP activity and hides the UAT dire
     observabilityWriter: { write() {} },
     schedule(work) { scheduled.push(work); },
   };
+  await assert.rejects(
+    createProductSiteRuntime({
+      ...runtimeOptions,
+      deploymentPosture: "restricted-uat",
+      capacityProfileId: "restricted-uat-v1",
+    }),
+    /require a service operator allowlist/u,
+  );
+  await assert.rejects(
+    createProductSiteRuntime({
+      ...runtimeOptions,
+      serviceOperatorPrincipalIds: ["principal_operator_placeholder"],
+      deploymentPosture: "production",
+      capacityProfileId: "restricted-uat-v1",
+    }),
+    /require restricted-uat posture/u,
+  );
+  await assert.rejects(
+    createProductSiteRuntime({
+      ...runtimeOptions,
+      serviceOperatorPrincipalIds: ["principal_operator_placeholder"],
+      deploymentPosture: "restricted-uat",
+      capacityProfileId: "custom-1",
+    }),
+    /capacityProfileId is invalid/u,
+  );
+  await assert.rejects(
+    createProductSiteRuntime({
+      ...runtimeOptions,
+      serviceOperatorPrincipalIds: ["principal_operator_placeholder"],
+      deploymentPosture: "restricted-uat",
+      capacityProfileId: "restricted-uat-v1",
+    }),
+    /require an exact candidate SHA/u,
+  );
+  await assert.rejects(
+    createProductSiteRuntime({
+      ...runtimeOptions,
+      serviceOperatorPrincipalIds: ["principal_operator_placeholder"],
+      deploymentPosture: "restricted-uat",
+      capacityProfileId: "restricted-uat-v1",
+      releaseCandidateSha: capacityCandidateSha,
+    }),
+    /require a bounded fence nonce/u,
+  );
   let runtime = await createProductSiteRuntime(runtimeOptions);
 
   const registration = await responseFrom(runtime, new Request(`${ORIGIN}/`));
@@ -645,6 +692,67 @@ test("Product Site persists success-only web/MCP activity and hides the UAT dire
   assert.equal(operatorRow.verified_email, "operator.activity@example.com");
   assert.equal(operatorRow.activity.last_web_seen_at, "2026-08-22T10:10:00.000Z");
   assert.equal(operatorRow.activity.last_mcp_seen_at, "2026-08-22T10:20:00.000Z");
+  assert.equal((await responseFrom(runtime, new Request(
+    `${ORIGIN}/api/v1/internal/operators/capacity`,
+  ))).status, 404);
+
+  runtime = await createProductSiteRuntime({
+    ...runtimeOptions,
+    serviceOperatorPrincipalIds: [operatorPrincipalId],
+    deploymentPosture: "restricted-uat",
+    capacityProfileId: "restricted-uat-v1",
+    releaseCandidateSha: capacityCandidateSha,
+    capacityFenceNonce,
+  });
+  const capacity = await responseFrom(runtime, new Request(
+    `${ORIGIN}/api/v1/internal/operators/capacity`,
+  ));
+  assert.equal(capacity.status, 200);
+  const capacityData = (await capacity.json()).data;
+  assert.equal(capacityData.schema, "mind-diary/operator-capacity-diagnostics");
+  assert.equal(capacityData.version, 1);
+  assert.deepEqual(capacityData.release_fence, {
+    schema: "mind-diary/uat-release-configuration-fence",
+    version: 1,
+    sha256: `sha256:${createHash("sha256")
+      .update(
+        `mind-diary/uat-release-configuration-fence/v1\0${capacityCandidateSha}\0${capacityFenceNonce}`,
+      )
+      .digest("hex")}`,
+  });
+  assert.equal(capacityData.profile.profile_id, "restricted-uat-v1");
+  assert.equal(capacityData.profile.deployment_posture, "restricted-uat");
+  assert.equal(capacityData.profile.limits.mind_physical_canonical_bytes, 8_388_608);
+  assert.equal(typeof capacityData.headroom.canonical_bytes, "number");
+  assert.equal(typeof capacityData.storage_amplification, "number");
+  assert.equal(typeof capacityData.quota_rejects, "number");
+  assert.equal(typeof capacityData.reservations.stale_count, "number");
+  assert.equal(typeof capacityData.reservations.stale_bytes, "number");
+  assert.equal((await responseFrom(runtime, new Request(
+    `${ORIGIN}/api/v1/internal/operators/capacity?limit=1`,
+  ))).status, 400);
+  assert.equal((await responseFrom(runtime, new Request(
+    `${ORIGIN}/api/v1/internal/operators/capacity`,
+    { method: "POST" },
+  ))).status, 404);
+
+  runtime = await createProductSiteRuntime({
+    ...runtimeOptions,
+    serviceOperatorPrincipalIds: [operatorPrincipalId],
+    deploymentPosture: "restricted-uat",
+    releaseCandidateSha: capacityCandidateSha,
+    capacityFenceNonce,
+  });
+  const terminalCapacity = await responseFrom(runtime, new Request(
+    `${ORIGIN}/api/v1/internal/operators/capacity`,
+  ));
+  assert.equal(terminalCapacity.status, 200);
+  const terminalCapacityData = (await terminalCapacity.json()).data;
+  assert.equal(terminalCapacityData.profile.profile_id, "default-v1");
+  assert.equal(
+    terminalCapacityData.profile.limits.mind_physical_canonical_bytes,
+    2_147_483_648,
+  );
 
   currentTime = new Date("2026-08-22T10:30:00.000Z");
   const deniedMcp = await modernMcp(runtime, "mdp_v1_invalid", {
@@ -691,6 +799,23 @@ test("Product Site persists success-only web/MCP activity and hides the UAT dire
   const secondPrincipalId = (await secondBootstrap.json()).data.principal_id;
   assert.equal(
     (await responseFrom(runtime, new Request(`${ORIGIN}/internal/operators/users`))).status,
+    404,
+  );
+  assert.equal(
+    (await responseFrom(runtime, new Request(
+      `${ORIGIN}/api/v1/internal/operators/capacity`,
+    ))).status,
+    404,
+  );
+
+  currentIdentity = {
+    verifiedEmail: "capacity.unregistered@example.com",
+    verifiedFullName: "Capacity Unregistered",
+  };
+  assert.equal(
+    (await responseFrom(runtime, new Request(
+      `${ORIGIN}/api/v1/internal/operators/capacity`,
+    ))).status,
     404,
   );
 
@@ -2245,7 +2370,7 @@ test("durable product runtime carries a Sites account token through Codex MCP an
   assert.ok(telemetry.length > 0);
   assert.ok(telemetry.every((event) =>
     event.event === "mind-diary.privacy-safe-observability" &&
-    event.schema === "mind-diary/privacy-safe-observability/v1"
+    event.schema === "mind-diary/privacy-safe-observability/v2"
   ));
   const metrics = new Set(telemetry.map((event) => event.metric));
   for (const metric of [

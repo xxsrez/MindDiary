@@ -7,7 +7,9 @@ Space-scoped content objects, separately digested v3 manifests, delta-aware
 commit/read/GC и совместимое чтение legacy v1/v2 revisions. Reconstructable
 accounting, durable reservations, admission для commit/stage/export, fairness,
 bounded reservation cleanup, privacy-safe Owner usage и aggregate telemetry из
-MD-266 реализованы в текущем repository candidate. Streaming export/download и
+MD-266 реализованы в текущем repository candidate. MD-289 добавляет
+fixed restricted-UAT capacity profile, allowlisted closed diagnostics и
+redacted hosted probe; live exact-SHA evidence ещё не получено. Streaming export/download и
 D1-checkpointed bounded cleanup из MD-268 также реализованы локально. MD-267
 реализует private Sites UI/REST import sessions, bounded staging, validation и
 canonical promotion checkpoints, exact HEAD commit, retry/cancel/expiry и
@@ -213,6 +215,44 @@ aggregate Site totals/headroom without corpus, paths or principal email.
 No request field, role or UI acknowledgement can raise a limit. Changing limits
 is versioned deployment configuration plus compatibility evidence, not an
 operator bypass.
+
+### Restricted-UAT quota canary profile
+
+Для дешёвой hosted проверки warning/soft/hard branches принят единственный
+неproduction selector `restricted-uat-v1`. Он меняет только
+`mindPhysicalCanonicalBytes` с `2 GiB` на `8 MiB`; все остальные значения
+остаются exact `DEFAULT_CAPACITY_LIMITS`. Профиль активируется только trusted
+Worker configuration при одновременных
+`MIND_DIARY_DEPLOYMENT_POSTURE=restricted-uat`,
+`MIND_DIARY_CAPACITY_PROFILE=restricted-uat-v1` и непустом constructor-only
+service-operator allowlist. Declared Git candidate и новый non-secret random
+nonce также приходят из trusted runtime configuration; application возвращает
+только их domain-separated SHA-256 configuration fence. Missing/unknown/production posture,
+неизвестный selector, пустой allowlist и malformed/incomplete fence fail
+closed при composition; request, header, UI или actor role не могут выбрать
+либо изменить limits/lineage.
+
+При активном профиле read-only
+`GET /api/v1/internal/operators/capacity` возвращает allowlisted operator-у
+closed version-1 schema: exact profile/limits, aggregate safe usage/headroom,
+storage amplification, quota reject count, privacy-safe active/expired-active/
+cleanup-pending/stale reservation counts and bytes, utilization, configuration
+fence и UTC timestamps. Fence не является attestation artifact/version/
+deployment/archive; exact lineage доказывается отдельным fenced Sites
+control-plane readback + immediate HTTP probe. Endpoint принимает ноль query fields, не имеет
+mutation/reconcile capability и возвращает `404` всем non-operators и вне
+restricted-UAT posture. Успешное чтение пишет отдельный durable audit event с
+opaque actor/request, operation/time и без capacity values. Проекция не
+содержит content, paths, Mind/principal IDs, email, raw provider/object
+identifiers, URLs или secrets.
+
+Отключение selector при сохранённой restricted-UAT posture выбирает
+`default-v1`: все значения равны compiled defaults, а endpoint остаётся
+доступным для terminal restore receipt. Полное удаление restricted posture и
+configuration-fence bindings возвращает endpoint в `404` без data migration. Новый deployment и
+provider env read-back обязательны. Exact UAT procedure и redacted receipt
+описаны в
+[restricted-UAT capacity runbook](../operations/uat-capacity-profile.md).
 
 ### Reservation protocol
 

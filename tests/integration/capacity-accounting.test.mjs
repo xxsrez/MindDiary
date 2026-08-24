@@ -162,7 +162,7 @@ test("reservation admission is serialized, retry-safe and enforces fairness plus
 
   const hard = await softStore.runCapacityTransaction((transaction) =>
     transaction.admitCapacityReservation(
-      request({ suffix: "hard", requested: { physicalCanonicalBytes: 101 } }),
+      request({ suffix: "hard", requested: { physicalCanonicalBytes: 100 } }),
       constrained,
     ));
   assert.equal(hard.kind, "rejected");
@@ -228,7 +228,16 @@ test("expired reservations become bounded cleanup work and telemetry stays conte
     DEFAULT_CAPACITY_LIMITS,
     "2026-08-22T14:00:00.000Z",
   );
-  assert.equal(telemetry.staleReservations, 1);
+  assert.deepEqual(telemetry.reservations, {
+    activeCount: 0,
+    activeBytes: 0,
+    expiredActiveCount: 0,
+    expiredActiveBytes: 0,
+    cleanupPendingCount: 1,
+    cleanupPendingBytes: 16,
+    staleCount: 1,
+    staleBytes: 16,
+  });
   assert.ok(telemetry.temporaryHeadroomBytes >= 0);
   assert.equal("path" in telemetry, false);
   assert.equal("email" in telemetry, false);

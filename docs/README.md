@@ -122,6 +122,9 @@ evidence, предлагаемый дизайн и ещё не проверен�
   — operator-only restricted-UAT проверка `bounded_in_memory` и
   `server_generated` через distinct redeploy, exact bytes/SHA/history и
   canary-owned cleanup.
+- [Restricted-UAT capacity profile](operations/uat-capacity-profile.md) —
+  фиксированный 8 MiB per-Mind quota canary, server-bound operator readback,
+  warning/soft/hard matrix, redacted receipt и terminal `default-v1` restore.
 - [Protocol assisted UAT pilot и feedback loop](operations/uat-pilot-protocol.md)
   — последовательные assisted/external cohorts, один feedback channel,
   privacy-safe metrics, cadence, feedback template, decision review и

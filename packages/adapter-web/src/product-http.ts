@@ -1507,6 +1507,10 @@ function apiOperation(method: string, pathname: string): {
     method === "GET" && one === "internal" && two === "operators" &&
     three === "users" && tail.length === 3
   ) return { operation: "list_service_operator_principals", path: {} };
+  if (
+    method === "GET" && one === "internal" && two === "operators" &&
+    three === "capacity" && tail.length === 3
+  ) return { operation: "get_service_operator_capacity", path: {} };
   if (one === "account" && tail.length === 1) {
     if (method === "POST") return { operation: "bootstrap_account", path: {} };
     if (method === "PATCH") return { operation: "rename_account", path: {} };
@@ -1631,7 +1635,8 @@ export function createProductWebHttpHandler(
     const isApi = url.pathname === "/api/v1" || url.pathname.startsWith("/api/v1/");
     const isOperatorPath =
       url.pathname === "/internal/operators/users" ||
-      url.pathname === "/api/v1/internal/operators/users";
+      url.pathname === "/api/v1/internal/operators/users" ||
+      url.pathname === "/api/v1/internal/operators/capacity";
     const detailMatch = /^\/([a-z0-9]+(?:-[a-z0-9]+)*)$/u.exec(url.pathname);
     const isUi = PRODUCT_UI_ROUTES.has(url.pathname) || (
       detailMatch !== null && !RESERVED_UI_HANDLES.has(detailMatch[1]!)

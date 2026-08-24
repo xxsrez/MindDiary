@@ -12,6 +12,7 @@ import type {
   AccountDeletionIdGenerator,
   AccountDeletionStore,
   Clock,
+  CapacityLedgerStore,
   CapacityLimits,
   ControlReadStore,
   CurrentAuthorizationState,
@@ -45,6 +46,7 @@ import type {
   PrincipalActivitySurface,
   SearchIndex,
   ServiceOperatorAuditIdGenerator,
+  ServiceOperatorCapacityAuditStore,
   ServiceOperatorDirectoryQuery,
   ServiceOperatorDirectoryStore,
   TokenHasher,
@@ -101,6 +103,7 @@ export const CONTROL_QUERIES = [
   "list_invitations",
   "list_mcp_tokens",
   "list_service_operator_principals",
+  "get_service_operator_capacity",
 ] as const;
 
 export const CONTROL_COMMANDS = [
@@ -6036,6 +6039,164 @@ export class ServiceOperatorDirectoryService {
       occurredAt: actor.occurredAtUtc,
     });
     return Object.freeze({ principals: Object.freeze(principals), nextCursor: page.nextCursor });
+  }
+}
+
+export interface ServiceOperatorCapacityProfile {
+  readonly schema: "mind-diary/capacity-profile";
+  readonly version: 1;
+  readonly profileId: "default-v1" | "restricted-uat-v1";
+  readonly deploymentPosture: "restricted-uat";
+  readonly limits: Readonly<CapacityLimits>;
+}
+
+const CAPACITY_PROFILE_KEYS = Object.freeze([
+  "schema",
+  "version",
+  "profileId",
+  "deploymentPosture",
+  "limits",
+] satisfies readonly (keyof ServiceOperatorCapacityProfile)[]);
+
+const CAPACITY_LIMIT_KEYS = Object.freeze([
+  "mindPhysicalCanonicalBytes",
+  "principalPhysicalCanonicalBytes",
+  "sitePhysicalCanonicalBytes",
+  "siteTemporaryBytes",
+  "siteD1MetadataBytes",
+  "ordinaryCommitSoftGrowthBytes",
+  "activeHeavyPerMind",
+  "activeHeavyPerPrincipal",
+  "activeHeavyPerSite",
+] satisfies readonly (keyof CapacityLimits)[]);
+
+function isCapacityLimitSet(value: Readonly<CapacityLimits>): boolean {
+  const keys = Object.keys(value).sort();
+  const expected = [...CAPACITY_LIMIT_KEYS].sort();
+  return keys.length === expected.length &&
+    keys.every((key, index) => key === expected[index]) &&
+    CAPACITY_LIMIT_KEYS.every((key) =>
+      Number.isSafeInteger(value[key]) && value[key] > 0
+    );
+}
+
+/**
+ * A narrow read-only operator projection for a deployment-selected UAT
+ * capacity profile. It deliberately has no mutation, request override or
+ * corpus/principal dimension.
+ */
+export class ServiceOperatorCapacityDiagnosticsService {
+  readonly #store: CapacityLedgerStore & ServiceOperatorCapacityAuditStore;
+  readonly #clock: Clock;
+  readonly #ids: ServiceOperatorAuditIdGenerator;
+  readonly #operatorPrincipalIds: ReadonlySet<PrincipalId>;
+  readonly #profile: Readonly<ServiceOperatorCapacityProfile>;
+  readonly #releaseConfigurationFenceSha256: string;
+
+  constructor(dependencies: {
+    readonly store: CapacityLedgerStore & ServiceOperatorCapacityAuditStore;
+    readonly clock: Clock;
+    readonly ids: ServiceOperatorAuditIdGenerator;
+    readonly operatorPrincipalIds: ReadonlySet<PrincipalId>;
+    readonly profile: Readonly<ServiceOperatorCapacityProfile>;
+    readonly releaseConfigurationFenceSha256: string;
+  }) {
+    const profileKeys = Object.keys(dependencies.profile).sort();
+    const expectedProfileKeys = [...CAPACITY_PROFILE_KEYS].sort();
+    if (
+      profileKeys.length !== expectedProfileKeys.length ||
+      profileKeys.some((key, index) => key !== expectedProfileKeys[index]) ||
+      dependencies.profile.schema !== "mind-diary/capacity-profile" ||
+      dependencies.profile.version !== 1 ||
+      (dependencies.profile.profileId !== "default-v1" &&
+        dependencies.profile.profileId !== "restricted-uat-v1") ||
+      dependencies.profile.deploymentPosture !== "restricted-uat" ||
+      !isCapacityLimitSet(dependencies.profile.limits)
+    ) {
+      throw new TypeError("service operator capacity profile is invalid");
+    }
+    if (dependencies.operatorPrincipalIds.size < 1) {
+      throw new TypeError("service operator capacity diagnostics require an allowlist");
+    }
+    if (!/^sha256:[0-9a-f]{64}$/u.test(dependencies.releaseConfigurationFenceSha256)) {
+      throw new TypeError("service operator capacity release configuration fence is invalid");
+    }
+    this.#store = dependencies.store;
+    this.#clock = dependencies.clock;
+    this.#ids = dependencies.ids;
+    this.#operatorPrincipalIds = new Set(dependencies.operatorPrincipalIds);
+    this.#releaseConfigurationFenceSha256 = dependencies.releaseConfigurationFenceSha256;
+    this.#profile = Object.freeze({
+      ...dependencies.profile,
+      limits: Object.freeze({ ...dependencies.profile.limits }),
+    });
+  }
+
+  async read(
+    actor: ActorContext,
+    input: Readonly<Record<string, unknown>>,
+  ): Promise<unknown> {
+    const principalId = registeredSitesPrincipal(actor);
+    if (principalId === null || !this.#operatorPrincipalIds.has(principalId)) {
+      throw new ServiceOperatorDirectoryFailure("not_found", "Route was not found.");
+    }
+    if (Object.keys(input).length !== 0) {
+      throw new ServiceOperatorDirectoryFailure(
+        "invalid_request",
+        "Capacity diagnostics do not accept request parameters.",
+      );
+    }
+    const observedAt = this.#clock.now();
+    const [usage, telemetry] = await Promise.all([
+      this.#store.readSiteCapacityUsage(),
+      this.#store.readCapacityTelemetry(this.#profile.limits, observedAt),
+    ]);
+    await this.#store.stageServiceOperatorCapacityAudit({
+      operatorPrincipalId: principalId,
+      requestId: actor.requestId,
+      auditEventId: this.#ids.nextAuditEventId(),
+      auditOutboxMessageId: this.#ids.nextOutboxMessageId(),
+      occurredAt: actor.occurredAtUtc,
+    });
+    return Object.freeze({
+      schema: "mind-diary/operator-capacity-diagnostics",
+      version: 1,
+      observedAt,
+      releaseFence: Object.freeze({
+        schema: "mind-diary/uat-release-configuration-fence",
+        version: 1,
+        sha256: this.#releaseConfigurationFenceSha256,
+      }),
+      profile: this.#profile,
+      usage: Object.freeze({
+        physicalCanonicalBytes: usage.physicalCanonicalBytes,
+        temporaryBytes: usage.temporaryBytes,
+        d1MetadataBytes: usage.d1MetadataBytes,
+        logicalHeadBytes: usage.logicalHeadBytes,
+        logicalRetainedBytes: usage.logicalRetainedBytes,
+        reservedBytes: usage.reservedBytes,
+        trustworthy: usage.trustworthy,
+        reconciledAt: usage.reconciledAt,
+      }),
+      headroom: Object.freeze({
+        canonicalBytes: telemetry.canonicalHeadroomBytes,
+        temporaryBytes: telemetry.temporaryHeadroomBytes,
+        d1MetadataBytes: telemetry.d1HeadroomBytes,
+      }),
+      storageAmplification: telemetry.storageAmplification,
+      quotaRejects: telemetry.quotaRejects,
+      reservations: Object.freeze({
+        activeCount: telemetry.reservations.activeCount,
+        activeBytes: telemetry.reservations.activeBytes,
+        expiredActiveCount: telemetry.reservations.expiredActiveCount,
+        expiredActiveBytes: telemetry.reservations.expiredActiveBytes,
+        cleanupPendingCount: telemetry.reservations.cleanupPendingCount,
+        cleanupPendingBytes: telemetry.reservations.cleanupPendingBytes,
+        staleCount: telemetry.reservations.staleCount,
+        staleBytes: telemetry.reservations.staleBytes,
+      }),
+      utilization: telemetry.utilization,
+    });
   }
 }
 

@@ -1,6 +1,6 @@
 # REST и MCP API Mind Diary
 
-Статус: proposal для верификации, обновлено 2026-08-22. Документ уточняет
+Статус: proposal для верификации, обновлено 2026-08-24. Документ уточняет
 wire-level контракты первого прототипа на основе принятых product decisions.
 Product API и direct MCP route/compatibility repair реализованы, развёрнуты как
 single-principal UAT в OpenAI Sites и проверены raw modern calls и реальным
@@ -26,7 +26,9 @@ ADR-0016 and
 Markdown import. MD-265/MD-266/MD-268 storage, capacity и streaming
 export/cleanup реализованы в local candidate; MD-267 import session APIs и
 Sites UI также реализованы локально, а прежний UAT deployment не является
-evidence нового candidate.
+evidence нового candidate. MD-289 добавляет local-only fixed restricted-UAT
+capacity selector и allowlisted aggregate diagnostic; exact deployment
+evidence ещё не получено.
 
 ADR-0018 and [the unified file-ingress specification](file-ingress.md) define
 the portable source boundary for `session_attachment`, `local_path`,
@@ -555,6 +557,7 @@ Problem Details response:
 | `DELETE` | `/api/v1/oauth-connections/{grant_id}` | Sites-authenticated principal отзывает свой connected app grant. |
 | `PATCH` | `/api/v1/mind-bindings/{binding_owner_id}` | Sites-authenticated principal меняет binding set exact собственного active credential с CAS и server read-back. |
 | `GET` | `/api/v1/internal/operators/users` | Constructor-allowlisted service operator получает bounded read-only principal/activity directory; для остальных route indistinguishable `404`. |
+| `GET` | `/api/v1/internal/operators/capacity` | Только при active `restricted-uat-v1`: allowlisted operator получает closed aggregate capacity/profile readback; для остальных и default runtime route indistinguishable `404`. |
 | `POST` | `/api/v1/minds/{mind_ref}/markdown-import-plans` | Local candidate: metadata-only exact-snapshot plan before reservation/staging. |
 | `POST` | `/api/v1/minds/{mind_ref}/markdown-imports` | Local candidate: reserve a current plan and create a principal-private session. |
 | `PUT` | `/api/v1/markdown-imports/{import_id}/batches/{checkpoint}` | Local candidate: bounded multipart Markdown batch with exact replay. |
@@ -572,6 +575,29 @@ Internal operator query принимает bounded `query`, `state`,
 [service-operator contract](service-operator-directory.md), не возвращает
 corpus/Mind names/request history и audit-ит только opaque operator,
 operation/time. Это не content MCP и не customer-wide user-search API.
+
+Internal capacity diagnostic принимает ноль query fields и существует только
+при trusted deployment configuration
+`MIND_DIARY_DEPLOYMENT_POSTURE=restricted-uat` +
+optional `MIND_DIARY_CAPACITY_PROFILE=restricted-uat-v1` + non-empty
+constructor operator allowlist + declared candidate/non-secret nonce
+configuration fence. Selector absent означает exact `default-v1` readback; вне
+restricted-UAT posture endpoint отсутствует. Profile ID, limits или fence
+нельзя передать request-ом. Response
+имеет schema `mind-diary/operator-capacity-diagnostics`, `version: 1` и только
+exact profile/limit constants, aggregate usage/headroom bytes, trustworthy/
+reconciliation timestamps, storage amplification, quota reject count,
+active/expired-active/cleanup-pending/stale reservation counts and bytes,
+utilization enum и domain-separated SHA-256 configuration fence. Fence
+отличает runtime configuration, но не attests Git artifact, Sites version,
+deployment или archive; они требуют отдельного fenced control-plane join с
+immediate HTTP probe. Raw
+Mind/principal/file/object/provider IDs, email, path, URL, content и secrets
+отсутствуют. Successful read пишет отдельный durable
+`service_operator.capacity_diagnostics_read` audit с opaque actor/request,
+operation/time и без capacity values. Unknown query получает
+`400 invalid_request`; mutations отсутствуют. Полный lifecycle описан в
+[restricted-UAT capacity runbook](../operations/uat-capacity-profile.md).
 
 Markdown import wire contract в local candidate:
 
@@ -1105,6 +1131,8 @@ list_public_minds
 list_members
 list_invitations
 list_mcp_tokens
+list_service_operator_principals
+get_service_operator_capacity
 browse_entries
 search_entries
 fetch_entry

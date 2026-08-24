@@ -28,8 +28,16 @@ test("runtime package is product composition, not capability probe or fallback",
   const joined = sources.join("\n");
   assert.match(joined, /createProductSiteRuntime/);
   assert.match(joined, /MIND_DIARY_TOKEN_VERIFIER_KEY/);
+  assert.ok((joined.match(/MIND_DIARY_DEPLOYMENT_POSTURE/gu) ?? []).length >= 2);
+  assert.ok((joined.match(/MIND_DIARY_CAPACITY_PROFILE/gu) ?? []).length >= 2);
+  assert.ok((joined.match(/MIND_DIARY_RELEASE_CANDIDATE_SHA/gu) ?? []).length >= 2);
+  assert.ok((joined.match(/MIND_DIARY_CAPACITY_FENCE_NONCE/gu) ?? []).length >= 2);
+  assert.doesNotMatch(joined, /MIND_DIARY_(?:SITES_)?DEPLOYMENT_ID/u);
   assert.doesNotMatch(joined, /sites-probe|PROBE_BUCKET|AgentCore|DynamoDB|S3Client|OpenSearch/);
-  assert.doesNotMatch(await readFile(resolve(app, ".openai/hosting.json"), "utf8"), /VERIFIER|SECRET|TOKEN/);
+  assert.doesNotMatch(
+    await readFile(resolve(app, ".openai/hosting.json"), "utf8"),
+    /VERIFIER|SECRET|TOKEN|CAPACITY_PROFILE|DEPLOYMENT_POSTURE|RELEASE_CANDIDATE|CAPACITY_FENCE/,
+  );
 });
 
 test("product composition routes the Sites-safe modern and versioned Codex MCP endpoints", async () => {
