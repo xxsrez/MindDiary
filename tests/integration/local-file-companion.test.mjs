@@ -326,7 +326,7 @@ test("local disk, workspace bytes and native session ref share one atomic commit
         actor: env.currentActor,
         spaceId: MINDS.ordinary.spaceId,
         writeBindingId: WRITE_BINDING_ID,
-        bytes: GENERATED_PNG,
+        stream: (async function* () { yield GENERATED_PNG; })(),
         displayFilename: "server-generated.png",
         claimedMediaType: "image/png",
         idempotencyKey: "server-generated-stage",

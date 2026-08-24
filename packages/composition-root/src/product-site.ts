@@ -75,6 +75,7 @@ import {
   DeterministicOkfExportService,
   ExportJobApplicationService,
   FileIngressCoordinator,
+  GeneratedArtifactIngressService,
   McpBearerAuthenticationService,
   MarkdownImportService,
   MindBrowseService,
@@ -86,6 +87,7 @@ import {
   MindValidationService,
   MCP_CONTENT_DEPLOYMENT_CAPABILITIES,
   type McpBearerAuthenticator,
+  type GeneratedArtifactProducerPort,
   type SitesIdentityActorContext,
 } from "@mind-diary/application-content";
 import {
@@ -165,6 +167,8 @@ export interface ProductSiteRuntimeOptions {
 
 export interface ProductSiteRuntime {
   readonly fetch: (request: Request) => Promise<Response | null>;
+  /** Trusted, non-HTTP ingress for bounded backend-produced BundleFile bytes. */
+  readonly generatedFileIngress: GeneratedArtifactProducerPort;
   /** Bounded request-triggered recovery for exact-revision index work. */
   readonly recoverBackground: (limit?: number) => Promise<Readonly<{
     backfilled: number;
@@ -643,6 +647,19 @@ export async function createProductSiteRuntime(
     objects,
     clock,
   });
+  const generatedArtifactIngress = new GeneratedArtifactIngressService({
+    staging: bundleFileStaging,
+  });
+  const generatedFileIngress: GeneratedArtifactProducerPort = Object.freeze({
+    stageBoundedInMemory: (
+      request: Parameters<GeneratedArtifactProducerPort["stageBoundedInMemory"]>[0],
+    ) =>
+      generatedArtifactIngress.stageBoundedInMemory(request),
+    stageServerGenerated: (
+      request: Parameters<GeneratedArtifactProducerPort["stageServerGenerated"]>[0],
+    ) =>
+      generatedArtifactIngress.stageServerGenerated(request),
+  });
   const nativeFiles = new OpenAiNativeFileTransport({
     maxBytes: BUNDLE_FILE_LIMITS.maxFileBytes,
   });
@@ -733,9 +750,21 @@ export async function createProductSiteRuntime(
           });
         },
       },
+      bounded_in_memory: {
+        stage: (payload) => generatedFileIngress.stageBoundedInMemory(
+          payload as Parameters<GeneratedArtifactProducerPort["stageBoundedInMemory"]>[0],
+        ),
+      },
+      server_generated: {
+        stage: (payload) => generatedFileIngress.stageServerGenerated(
+          payload as Parameters<GeneratedArtifactProducerPort["stageServerGenerated"]>[0],
+        ),
+      },
     },
     capabilityStatus: {
       session_attachment: "available_hosted",
+      bounded_in_memory: "available_hosted",
+      server_generated: "available_hosted",
     },
   });
   const markdownImports = new MarkdownImportService({
@@ -1656,6 +1685,7 @@ export async function createProductSiteRuntime(
 
   return Object.freeze({
     dispatchBackground,
+    generatedFileIngress,
     recoverBackground,
     async fetch(request: Request): Promise<Response | null> {
       const path = new URL(request.url).pathname;

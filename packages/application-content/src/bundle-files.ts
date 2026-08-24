@@ -2,7 +2,10 @@ import type {
   ActorContext,
   McpTokenActorContext,
 } from "@mind-diary/application-contracts";
-import { FILE_INGRESS_SOURCE_KINDS } from "@mind-diary/application-ports";
+import {
+  FILE_INGRESS_SOURCE_KINDS,
+  ObjectStoreFailure,
+} from "@mind-diary/application-ports";
 import type {
   Authorizer,
   BundleFileObjectStore,
@@ -87,6 +90,40 @@ export type StageBundleFileStreamResult = StageBundleFileResult | {
     | "stream_size_limit_exceeded"
     | "stream_transport_unavailable";
 };
+
+export type BundleFileStageTransportErrorCode =
+  | "storage_unavailable"
+  | "stream_transport_unavailable";
+
+/**
+ * A failure raised only at the temporary object-writer boundary. Transaction,
+ * idempotency and capacity invariant failures deliberately remain unwrapped.
+ */
+export class BundleFileStageTransportError extends Error {
+  readonly code: BundleFileStageTransportErrorCode;
+
+  constructor(code: BundleFileStageTransportErrorCode) {
+    super("BundleFile staging transport is unavailable.");
+    this.name = "BundleFileStageTransportError";
+    this.code = code;
+  }
+}
+
+function stageTransportError(
+  code: BundleFileStageTransportErrorCode,
+  error: unknown,
+): BundleFileStageTransportError {
+  if (error instanceof BundleFileStageTransportError) {
+    if (error.code !== code) throw error;
+    return error;
+  }
+  // Read timeouts are availability failures when they happen inside a staged
+  // write preflight. Integrity/validation failures must retain their identity.
+  if (error instanceof ObjectStoreFailure && error.code !== "object_read_timeout") {
+    throw error;
+  }
+  return new BundleFileStageTransportError(code);
+}
 
 export type StageBundleFileResult =
   | {
@@ -556,13 +593,17 @@ export class BundleFileStagingService {
     }
     let result: StageBundleFileResult;
     try {
-      await this.#objects.putStagedBundleFile({
-        stagedFileId,
-        bindingOwnerId,
-        spaceId: request.spaceId,
-        bytes,
-        createdAt,
-      });
+      try {
+        await this.#objects.putStagedBundleFile({
+          stagedFileId,
+          bindingOwnerId,
+          spaceId: request.spaceId,
+          bytes,
+          createdAt,
+        });
+      } catch (error) {
+        throw stageTransportError("storage_unavailable", error);
+      }
       result = await this.#metadata.runBundleFileStagingTransaction(
         async (transaction) => {
           const authorization = await this.#authorizer.reauthorizeInTransaction(
@@ -808,8 +849,9 @@ export class BundleFileStagingService {
         createdAt,
         maxBytes: request.maxBytes,
       });
-    } catch {
+    } catch (error) {
       await this.#cleanupFailedStage(stagedFileId, reservationId, false);
+      stageTransportError("stream_transport_unavailable", error);
       return Object.freeze({
         kind: "stream_invalid",
         code: "stream_transport_unavailable",
@@ -834,33 +876,37 @@ export class BundleFileStagingService {
       let signatureSize = 0;
       let size = 0;
       let failure: StageBundleFileStreamResult | null = null;
-      for await (const chunk of request.stream) {
-        if (request.signal?.aborted) {
-          failure = Object.freeze({ kind: "stream_invalid", code: "stream_cancelled" });
-          break;
+      try {
+        for await (const chunk of request.stream) {
+          if (request.signal?.aborted) {
+            failure = Object.freeze({ kind: "stream_invalid", code: "stream_cancelled" });
+            break;
+          }
+          if (!(chunk instanceof Uint8Array)) {
+            failure = Object.freeze({
+              kind: "stream_invalid",
+              code: "stream_invalid_chunk",
+            });
+            break;
+          }
+          if (size + chunk.byteLength > request.maxBytes) {
+            failure = Object.freeze({
+              kind: "stream_invalid",
+              code: "stream_size_limit_exceeded",
+            });
+            break;
+          }
+          if (signatureSize < signature.byteLength) {
+            const copied = Math.min(signature.byteLength - signatureSize, chunk.byteLength);
+            signature.set(chunk.subarray(0, copied), signatureSize);
+            signatureSize += copied;
+          }
+          size += chunk.byteLength;
+          digest.update(chunk);
+          await upload.write(chunk);
         }
-        if (!(chunk instanceof Uint8Array)) {
-          failure = Object.freeze({
-            kind: "stream_invalid",
-            code: "stream_invalid_chunk",
-          });
-          break;
-        }
-        if (size + chunk.byteLength > request.maxBytes) {
-          failure = Object.freeze({
-            kind: "stream_invalid",
-            code: "stream_size_limit_exceeded",
-          });
-          break;
-        }
-        if (signatureSize < signature.byteLength) {
-          const copied = Math.min(signature.byteLength - signatureSize, chunk.byteLength);
-          signature.set(chunk.subarray(0, copied), signatureSize);
-          signatureSize += copied;
-        }
-        size += chunk.byteLength;
-        digest.update(chunk);
-        await upload.write(chunk);
+      } catch (error) {
+        throw stageTransportError("stream_transport_unavailable", error);
       }
       if (failure !== null) return await streamFailure(failure);
       if (request.signal?.aborted) {
@@ -904,7 +950,11 @@ export class BundleFileStagingService {
         }));
       }
 
-      await upload.complete({ sha256, size });
+      try {
+        await upload.complete({ sha256, size });
+      } catch (error) {
+        throw stageTransportError("stream_transport_unavailable", error);
+      }
       temporaryObjectOwned = true;
       const canonicalRequestHash = await this.#objects.calculateSha256(
         ENCODER.encode(canonicalStageRequestSource(bindingOwnerId, validation, {
@@ -1050,11 +1100,16 @@ export class BundleFileStagingService {
         await this.#cleanupFailedStage(stagedFileId, reservationId);
       }
       return result;
-    } catch {
-      return await streamFailure(Object.freeze({
+    } catch (error) {
+      const unavailable = Object.freeze({
         kind: "stream_invalid",
         code: "stream_transport_unavailable",
-      }));
+      } as const);
+      if (error instanceof BundleFileStageTransportError) {
+        return await streamFailure(unavailable);
+      }
+      await streamFailure(unavailable);
+      throw error;
     }
   }
 

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  BundleFileStageTransportError,
   GENERATED_ARTIFACT_LIMITS,
   GeneratedArtifactIngressService,
 } from "@mind-diary/application-content";
@@ -152,4 +153,48 @@ test("stageMany stops before a changeset can publish partial refs", async () => 
   assert.equal(result.index, 1);
   assert.equal(env.streamRequests.length, 1);
   assert.equal(env.requests.length, 1);
+});
+
+test("generated producer maps storage and stream writer failures to typed results", async () => {
+  const service = new GeneratedArtifactIngressService({
+    staging: {
+      async stage() { throw new BundleFileStageTransportError("storage_unavailable"); },
+      async stageStream() {
+        return { kind: "stream_invalid", code: "stream_transport_unavailable" };
+      },
+    },
+  });
+  assert.deepEqual(
+    await service.stageBoundedInMemory({ ...COMMON, bytes: PNG }),
+    { kind: "invalid", code: "generated_artifact_storage_unavailable" },
+  );
+  assert.deepEqual(
+    await service.stageServerGenerated({
+      ...COMMON,
+      stream: (async function* () { yield PNG; })(),
+    }),
+    { kind: "invalid", code: "generated_artifact_streaming_unavailable" },
+  );
+});
+
+test("generated producer does not mask staging invariant failures", async () => {
+  const boundedInvariant = new Error("bounded staging invariant failed");
+  const streamInvariant = new Error("stream staging invariant failed");
+  const service = new GeneratedArtifactIngressService({
+    staging: {
+      async stage() { throw boundedInvariant; },
+      async stageStream() { throw streamInvariant; },
+    },
+  });
+  await assert.rejects(
+    service.stageBoundedInMemory({ ...COMMON, bytes: PNG }),
+    (error) => error === boundedInvariant,
+  );
+  await assert.rejects(
+    service.stageServerGenerated({
+      ...COMMON,
+      stream: (async function* () { yield PNG; })(),
+    }),
+    (error) => error === streamInvariant,
+  );
 });

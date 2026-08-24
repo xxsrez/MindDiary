@@ -1,10 +1,11 @@
-import type { ActorContext } from "@mind-diary/application-contracts";
+import type { McpTokenActorContext } from "@mind-diary/application-contracts";
 import type {
   GeneratedArtifactSourceKind,
 } from "@mind-diary/application-ports";
 import type { Sha256Digest, SpaceId, StagedBundleFileId } from "@mind-diary/domain";
 import {
   BUNDLE_FILE_LIMITS,
+  BundleFileStageTransportError,
   BundleFileStagingService,
   type StageBundleFileRequest,
   type StageBundleFileStreamResult,
@@ -26,7 +27,7 @@ export type GeneratedArtifactInput =
   | Readonly<{ stream: unknown; bytes?: never }>;
 
 type GeneratedArtifactRequestFields = Readonly<{
-  readonly actor: ActorContext;
+  readonly actor: McpTokenActorContext;
   readonly spaceId: SpaceId;
   readonly writeBindingId: unknown;
   readonly sourceKind: unknown;
@@ -39,8 +40,14 @@ type GeneratedArtifactRequestFields = Readonly<{
 }>;
 
 export type StageGeneratedArtifactRequest = GeneratedArtifactInput & GeneratedArtifactRequestFields;
-export type StageGeneratedArtifactWithoutSource = GeneratedArtifactInput &
-  Omit<GeneratedArtifactRequestFields, "sourceKind">;
+export type StageBoundedInMemoryArtifactRequest = Readonly<{
+  readonly bytes: unknown;
+  readonly stream?: never;
+}> & Omit<GeneratedArtifactRequestFields, "sourceKind">;
+export type StageServerGeneratedArtifactRequest = Readonly<{
+  readonly stream: unknown;
+  readonly bytes?: never;
+}> & Omit<GeneratedArtifactRequestFields, "sourceKind">;
 
 export type GeneratedArtifactInvalidCode =
   | "invalid_source_kind"
@@ -49,6 +56,7 @@ export type GeneratedArtifactInvalidCode =
   | "generated_artifact_invalid_chunk"
   | "generated_artifact_size_limit_exceeded"
   | "generated_artifact_cancelled"
+  | "generated_artifact_storage_unavailable"
   | "generated_artifact_streaming_unavailable";
 
 export type GeneratedArtifactIngressResult = StageBundleFileResult | {
@@ -61,6 +69,22 @@ export interface PreparedGeneratedArtifact {
   readonly sourceKind: GeneratedArtifactSourceKind;
   readonly sha256: Sha256Digest;
   readonly size: number;
+}
+
+/**
+ * Trusted inbound port for backend producers in a hosted composition.
+ *
+ * The two methods fix the safe provenance label at the application boundary;
+ * callers can supply bytes or a producer stream, but cannot supply a local
+ * path, provider object identifier, URL or arbitrary source kind.
+ */
+export interface GeneratedArtifactProducerPort {
+  stageBoundedInMemory(
+    request: StageBoundedInMemoryArtifactRequest,
+  ): Promise<GeneratedArtifactIngressResult>;
+  stageServerGenerated(
+    request: StageServerGeneratedArtifactRequest,
+  ): Promise<GeneratedArtifactIngressResult>;
 }
 
 function generatedSourceKind(value: unknown): GeneratedArtifactSourceKind | null {
@@ -126,7 +150,7 @@ function mapStreamResult(result: StageBundleFileStreamResult): GeneratedArtifact
  * idempotency to the existing BundleFile staging service; only the source
  * adapter and byte transport differ.
  */
-export class GeneratedArtifactIngressService {
+export class GeneratedArtifactIngressService implements GeneratedArtifactProducerPort {
   readonly #staging: Pick<BundleFileStagingService, "stage" | "stageStream">;
 
   constructor(dependencies: {
@@ -198,19 +222,54 @@ export class GeneratedArtifactIngressService {
       ...(request.expectedSize === undefined ? {} : { expectedSize: request.expectedSize }),
       ...(request.expectedSha256 === undefined ? {} : { expectedSha256: request.expectedSha256 }),
     };
-    return this.#staging.stage(stageRequest);
+    try {
+      return await this.#staging.stage(stageRequest);
+    } catch (error) {
+      if (
+        !(error instanceof BundleFileStageTransportError) ||
+        error.code !== "storage_unavailable"
+      ) throw error;
+      return Object.freeze({
+        kind: "invalid",
+        code: "generated_artifact_storage_unavailable",
+      });
+    }
   }
 
   stageBoundedInMemory(
-    request: StageGeneratedArtifactWithoutSource,
+    request: StageBoundedInMemoryArtifactRequest,
   ): Promise<GeneratedArtifactIngressResult> {
-    return this.stage({ ...request, sourceKind: "bounded_in_memory" });
+    return this.stage({
+      actor: request.actor,
+      spaceId: request.spaceId,
+      writeBindingId: request.writeBindingId,
+      sourceKind: "bounded_in_memory",
+      displayFilename: request.displayFilename,
+      claimedMediaType: request.claimedMediaType,
+      idempotencyKey: request.idempotencyKey,
+      bytes: request.bytes,
+      ...(request.expectedSize === undefined ? {} : { expectedSize: request.expectedSize }),
+      ...(request.expectedSha256 === undefined ? {} : { expectedSha256: request.expectedSha256 }),
+      ...(request.signal === undefined ? {} : { signal: request.signal }),
+    });
   }
 
   stageServerGenerated(
-    request: StageGeneratedArtifactWithoutSource,
+    request: StageServerGeneratedArtifactRequest,
   ): Promise<GeneratedArtifactIngressResult> {
-    return this.stage({ ...request, sourceKind: "server_generated" });
+    return this.stage({
+      actor: request.actor,
+      spaceId: request.spaceId,
+      writeBindingId: request.writeBindingId,
+      sourceKind: "server_generated",
+      displayFilename: request.displayFilename,
+      claimedMediaType: request.claimedMediaType,
+      idempotencyKey: request.idempotencyKey,
+      stream: request.stream,
+      ...(request.expectedSize === undefined ? {} : { expectedSize: request.expectedSize }),
+      ...(request.expectedSha256 === undefined ? {} : { expectedSha256: request.expectedSha256 }),
+      ...(request.signal === undefined ? {} : { signal: request.signal }),
+    });
   }
 
   /**

@@ -527,22 +527,20 @@ test("server-generated staged ID collision preserves the foreign object", async 
   });
   const ingress = new GeneratedArtifactIngressService({ staging: env.staging });
 
-  const result = await ingress.stageServerGenerated({
-    actor: env.currentActor,
-    spaceId: MINDS.ordinary.spaceId,
-    writeBindingId: WRITE_BINDING_ID,
-    displayFilename: "collision.png",
-    claimedMediaType: "image/png",
-    idempotencyKey: "generated-stream-collision",
-    stream: (async function* () {
-      yield PNG;
-    })(),
-  });
-
-  assert.deepEqual(result, {
-    kind: "invalid",
-    code: "generated_artifact_streaming_unavailable",
-  });
+  await assert.rejects(
+    ingress.stageServerGenerated({
+      actor: env.currentActor,
+      spaceId: MINDS.ordinary.spaceId,
+      writeBindingId: WRITE_BINDING_ID,
+      displayFilename: "collision.png",
+      claimedMediaType: "image/png",
+      idempotencyKey: "generated-stream-collision",
+      stream: (async function* () {
+        yield PNG;
+      })(),
+    }),
+    (error) => error?.code === "digest_collision",
+  );
   const preserved = await env.objects.getStagedBundleFile("staged_bundle_1");
   assert.equal(preserved.bindingOwnerId, "binding_owner_foreign");
   assert.equal(preserved.spaceId, MINDS.personal.spaceId);
@@ -1096,7 +1094,7 @@ test("staging verifies image, PDF and ZIP metadata and fails closed on foreign o
   assert.equal(await env.metadata.readHead(MINDS.ordinary.spaceId), REVISIONS.initial.revisionId);
 });
 
-test("staging metadata failure removes the uncommitted provider object", async () => {
+test("staging metadata failures remove temporary objects and remain invariant errors", async () => {
   const env = await harness();
   const staging = new BundleFileStagingService({
     authorizer: env.authorizer,
@@ -1125,6 +1123,37 @@ test("staging metadata failure removes the uncommitted provider object", async (
   assert.equal(await env.objects.getStagedBundleFile("staged_metadata_failure"), null);
   const [reservation] = await env.metadata.listCapacityReservationsForTest();
   assert.equal(reservation.state, "released");
+
+  const streamStaging = new BundleFileStagingService({
+    authorizer: env.authorizer,
+    metadata: {
+      runCapacityTransaction: (operation) =>
+        env.metadata.runCapacityTransaction(operation),
+      releaseCapacityReservation: (request) =>
+        env.metadata.releaseCapacityReservation(request),
+      async runBundleFileStagingTransaction() {
+        throw new Error("injected stream staging metadata failure");
+      },
+    },
+    objects: env.objects,
+    clock: { now: () => LATER },
+    ids: { nextStagedBundleFileId: () => "staged_stream_metadata_failure" },
+  });
+  await assert.rejects(streamStaging.stageStream({
+    actor: env.currentActor,
+    spaceId: MINDS.ordinary.spaceId,
+    writeBindingId: WRITE_BINDING_ID,
+    displayFilename: "stream-failure.png",
+    claimedMediaType: "image/png",
+    sourceKind: "server_generated",
+    stream: (async function* () { yield PNG; })(),
+    maxBytes: 64,
+    idempotencyKey: "stage-stream-metadata-failure",
+  }), /injected stream staging metadata failure/u);
+  assert.equal(
+    await env.objects.getStagedBundleFile("staged_stream_metadata_failure"),
+    null,
+  );
 });
 
 test("opaque canonical dedupe is isolated by Space and Sites reconstructs staged metadata", async () => {
