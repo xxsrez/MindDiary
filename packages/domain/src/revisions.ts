@@ -15,8 +15,9 @@ export const MARKDOWN_MEDIA_TYPE = "text/markdown; charset=utf-8" as const;
 export const REVISION_MANIFEST_FORMAT_V1 = "mind-diary-revision-manifest-v1" as const;
 export const REVISION_MANIFEST_FORMAT_V2 = "mind-diary-revision-manifest-v2" as const;
 export const REVISION_MANIFEST_FORMAT_V3 = "mind-diary-revision-manifest-v3" as const;
-/** Delta-aware commits use v3; legacy builders may still explicitly retain v1/v2. */
-export const REVISION_MANIFEST_FORMAT = REVISION_MANIFEST_FORMAT_V3;
+export const REVISION_MANIFEST_FORMAT_V4 = "mind-diary-revision-manifest-v4" as const;
+/** Delta-aware commits use v4; legacy builders may still explicitly retain v1/v2/v3. */
+export const REVISION_MANIFEST_FORMAT = REVISION_MANIFEST_FORMAT_V4;
 
 export const BUNDLE_FILE_MEDIA_TYPES = Object.freeze([
   "image/png",
@@ -28,12 +29,18 @@ export const BUNDLE_FILE_MEDIA_TYPES = Object.freeze([
 ] as const);
 
 export type MarkdownMediaType = typeof MARKDOWN_MEDIA_TYPE;
-export type BundleFileMediaType = (typeof BUNDLE_FILE_MEDIA_TYPES)[number];
+/**
+ * Canonical advisory media essence for an opaque BundleFile. Manifest v4 is
+ * intentionally open-world; the frozen list above remains the legacy v2/v3
+ * compatibility allowlist, not the current type universe.
+ */
+export type BundleFileMediaType = string;
 export type CanonicalObjectMediaType = MarkdownMediaType | BundleFileMediaType;
 export type RevisionManifestFormat =
   | typeof REVISION_MANIFEST_FORMAT_V1
   | typeof REVISION_MANIFEST_FORMAT_V2
-  | typeof REVISION_MANIFEST_FORMAT_V3;
+  | typeof REVISION_MANIFEST_FORMAT_V3
+  | typeof REVISION_MANIFEST_FORMAT_V4;
 
 interface RevisionManifestEntryBase {
   readonly path: string;
@@ -209,10 +216,18 @@ export function canonicalBundleFilePath(value: string): string {
 }
 
 export function bundleFileMediaType(value: string): BundleFileMediaType {
+  if (/[^\u0020-\u007e]/u.test(value)) return "application/octet-stream";
+  const essence = value.split(";", 1)[0]?.trim().toLowerCase() ?? "";
+  const token = "[!#$%&'*+.^_`|~0-9a-z-]+";
+  const valid = essence.length <= 127 && new RegExp(`^${token}/${token}$`, "u").test(essence);
+  return (valid ? essence : "application/octet-stream") as BundleFileMediaType;
+}
+
+function legacyBundleFileMediaType(value: string): BundleFileMediaType {
   if (!(BUNDLE_FILE_MEDIA_TYPES as readonly string[]).includes(value)) {
     throw new RevisionEnvelopeError(
       "invalid_media_type",
-      `BundleFile media type is not allowed: ${JSON.stringify(value)}`,
+      `legacy BundleFile media type is not allowed: ${JSON.stringify(value)}`,
     );
   }
   return value as BundleFileMediaType;
@@ -236,7 +251,8 @@ export function createRevisionManifest(
   if (
     format !== REVISION_MANIFEST_FORMAT_V1 &&
     format !== REVISION_MANIFEST_FORMAT_V2 &&
-    format !== REVISION_MANIFEST_FORMAT_V3
+    format !== REVISION_MANIFEST_FORMAT_V3 &&
+    format !== REVISION_MANIFEST_FORMAT_V4
   ) {
     throw new RevisionEnvelopeError("invalid_media_type", "revision manifest format is invalid");
   }
@@ -269,7 +285,9 @@ export function createRevisionManifest(
               `Markdown revision objects must use ${MARKDOWN_MEDIA_TYPE}`,
             );
           })()
-      : bundleFileMediaType(entry.mediaType);
+      : format === REVISION_MANIFEST_FORMAT_V4
+        ? bundleFileMediaType(entry.mediaType)
+        : legacyBundleFileMediaType(entry.mediaType);
     if (!Number.isSafeInteger(entry.size) || entry.size < 0) {
       throw new RevisionEnvelopeError(
         "invalid_size",
@@ -305,7 +323,7 @@ export function serializeRevisionManifest(manifest: RevisionManifest): string {
   })}\n`;
 }
 
-/** Strictly parses canonical v1/v2/v3 manifest bytes and rejects non-canonical JSON. */
+/** Strictly parses canonical v1/v2/v3/v4 manifest bytes and rejects non-canonical JSON. */
 export function parseRevisionManifest(source: string): Readonly<RevisionManifest> {
   let parsed: unknown;
   try {
@@ -324,7 +342,8 @@ export function parseRevisionManifest(source: string): Readonly<RevisionManifest
   if (
     value.format !== REVISION_MANIFEST_FORMAT_V1 &&
     value.format !== REVISION_MANIFEST_FORMAT_V2 &&
-    value.format !== REVISION_MANIFEST_FORMAT_V3
+    value.format !== REVISION_MANIFEST_FORMAT_V3 &&
+    value.format !== REVISION_MANIFEST_FORMAT_V4
   ) {
     throw new RevisionEnvelopeError("invalid_media_type", "revision manifest format is invalid");
   }
@@ -403,12 +422,13 @@ export function createCanonicalRevisionEnvelope(
     serializeRevisionManifest(manifest),
   ).byteLength;
   if (
-    manifest.format === REVISION_MANIFEST_FORMAT_V3 &&
+    (manifest.format === REVISION_MANIFEST_FORMAT_V3 ||
+      manifest.format === REVISION_MANIFEST_FORMAT_V4) &&
     input.manifestSize !== canonicalManifestSize
   ) {
     throw new RevisionEnvelopeError(
       "invalid_size",
-      "revision manifest v3 requires its exact canonical byte size",
+      "revision manifest v3/v4 requires its exact canonical byte size",
     );
   }
   const revision: SpaceRevision = Object.freeze({

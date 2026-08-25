@@ -63,22 +63,22 @@ const CAPABILITY_BASE: Readonly<
 > = Object.freeze({
   session_attachment: Object.freeze({
     transport: "native_file_parameter",
-    maxBytes: 67_108_864,
+    maxBytes: 268_435_456,
     fallback: "none",
   }),
   local_path: Object.freeze({
     transport: "local_companion",
-    maxBytes: 67_108_864,
+    maxBytes: 268_435_456,
     fallback: "none",
   }),
   "workspace/generated_artifact": Object.freeze({
     transport: "local_companion",
-    maxBytes: 67_108_864,
+    maxBytes: 268_435_456,
     fallback: "none",
   }),
   connector_object: Object.freeze({
     transport: "authorized_connector",
-    maxBytes: 67_108_864,
+    maxBytes: 268_435_456,
     fallback: "none",
   }),
   bounded_in_memory: Object.freeze({
@@ -88,7 +88,7 @@ const CAPABILITY_BASE: Readonly<
   }),
   server_generated: Object.freeze({
     transport: "producer_stream",
-    maxBytes: 67_108_864,
+    maxBytes: 268_435_456,
     fallback: "none",
   }),
 });

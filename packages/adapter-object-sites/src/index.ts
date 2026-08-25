@@ -20,6 +20,7 @@ import {
   type SpaceCanonicalObjectListRequest,
   type SpaceCanonicalObjectDeleteRequest,
   type BundleFileObject,
+  type OpenedBundleFileObject,
   type BundleFileObjectMetadata,
   type BundleFileObjectPutResult,
   type BundleFileObjectStore,
@@ -27,6 +28,8 @@ import {
   type BundleFileObjectListRequest,
   type BundleFileObjectDeleteRequest,
   type StagedBundleFileObject,
+  type OpenedStagedBundleFileObject,
+  type PromoteStagedBundleFileRequest,
   type StagedBundleFileObjectWriteRequest,
   type StagedBundleFileUpload,
   type StagedBundleFileUploadRequest,
@@ -44,6 +47,7 @@ export interface R2ObjectBodyLike {
   readonly size: number;
   readonly etag: string;
   readonly customMetadata?: Readonly<Record<string, string>>;
+  readonly body: ReadableStream<Uint8Array>;
   arrayBuffer(): Promise<ArrayBuffer>;
 }
 
@@ -99,14 +103,7 @@ const ACTIVE_STATE = "active";
 const MAX_R2_CAS_ATTEMPTS = 16;
 const R2_READ_TIMEOUT_MS = 5_000;
 const EXPORT_STREAM_PART_BYTES = 4_194_304;
-const BUNDLE_FILE_MEDIA_TYPES = new Set([
-  "image/png",
-  "image/jpeg",
-  "image/gif",
-  "image/webp",
-  "application/pdf",
-  "application/zip",
-]);
+const SAFE_MEDIA_TYPE = /^[!#$%&'*+.^_`|~0-9a-z-]+\/[!#$%&'*+.^_`|~0-9a-z-]+$/u;
 const CLEANUP_NAMESPACES = new Set<ObjectCleanupNamespace>([
   "immutable",
   "bundle_file",
@@ -160,7 +157,7 @@ function assertMarkdown(bytes: Uint8Array, mediaType: string): void {
 }
 
 function assertBundleMediaType(mediaType: string): void {
-  if (!BUNDLE_FILE_MEDIA_TYPES.has(mediaType)) {
+  if (mediaType.length > 127 || !SAFE_MEDIA_TYPE.test(mediaType)) {
     throw new ObjectStoreFailure("invalid_media_type", "BundleFile media type is not allowed");
   }
 }
@@ -295,6 +292,10 @@ async function withR2ReadTimeout<Result>(
 
 async function bodyBytes(object: R2ObjectBodyLike): Promise<Uint8Array> {
   return new Uint8Array(await withR2ReadTimeout(object.arrayBuffer(), "object body read"));
+}
+
+function bodyStream(object: R2ObjectBodyLike): ReadableStream<Uint8Array> {
+  return object.body;
 }
 
 
@@ -657,6 +658,21 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
     return Object.freeze({ ...metadata, bytes });
   }
 
+  async openBundleFile(
+    spaceId: BundleFileObjectMetadata["spaceId"],
+    digest: Digest,
+  ): Promise<Readonly<OpenedBundleFileObject> | null> {
+    assertDigest(digest);
+    const key = `${BUNDLE_PREFIX}${encodeURIComponent(spaceId)}/sha256/${digest.slice(7)}`;
+    const object = await this.#get(key);
+    if (!object) return null;
+    const metadata = this.#bundleMetadata(object);
+    if (metadata.spaceId !== spaceId || metadata.sha256 !== digest) {
+      throw new ObjectStoreFailure("object_tampered", "BundleFile metadata is invalid");
+    }
+    return Object.freeze({ ...metadata, body: bodyStream(object) });
+  }
+
   async listBundleFileObjects(
     request: BundleFileObjectListRequest,
   ): Promise<readonly Readonly<BundleFileObjectMetadata>[]> {
@@ -913,6 +929,76 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
       `${STAGED_BUNDLE_PREFIX}${encodeURIComponent(stagedFileId)}`,
     );
     return object === null ? null : this.#stagedBundleFile(object);
+  }
+
+  async openStagedBundleFile(
+    stagedFileId: string,
+  ): Promise<Readonly<OpenedStagedBundleFileObject> | null> {
+    const object = await this.#get(
+      `${STAGED_BUNDLE_PREFIX}${encodeURIComponent(stagedFileId)}`,
+    );
+    if (object === null) return null;
+    return Object.freeze({ ...this.#stagedBundleMetadata(object), body: bodyStream(object) });
+  }
+
+  async promoteStagedBundleFile(
+    request: Readonly<PromoteStagedBundleFileRequest>,
+  ): Promise<BundleFileObjectPutResult> {
+    assertUtc(request.createdAt);
+    assertDigest(request.sha256);
+    assertBundleMediaType(request.mediaType);
+    const stagedKey = `${STAGED_BUNDLE_PREFIX}${encodeURIComponent(request.stagedFileId)}`;
+    const canonicalKey = `${BUNDLE_PREFIX}${encodeURIComponent(request.spaceId)}/sha256/${request.sha256.slice(7)}`;
+    for (let attempt = 0; attempt < MAX_R2_CAS_ATTEMPTS; attempt += 1) {
+      const staged = await this.#get(stagedKey);
+      if (staged === null) throw new ObjectStoreFailure("object_tampered", "staged BundleFile is missing");
+      const stagedMetadata = this.#stagedBundleMetadata(staged);
+      if (
+        stagedMetadata.bindingOwnerId !== request.bindingOwnerId ||
+        stagedMetadata.spaceId !== request.spaceId || stagedMetadata.size !== request.size
+      ) throw new ObjectStoreFailure("object_tampered", "staged BundleFile metadata mismatch");
+      const existing = await this.#get(canonicalKey);
+      if (existing !== null) {
+        const metadata = this.#bundleMetadata(existing);
+        if (
+          metadata.spaceId !== request.spaceId || metadata.sha256 !== request.sha256 ||
+          metadata.mediaType !== request.mediaType || metadata.size !== request.size
+        ) throw new ObjectStoreFailure("digest_collision", "BundleFile object collision");
+        if (compareUtc(request.createdAt, metadata.protectedAt) <= 0) {
+          return Object.freeze({ object: metadata, status: "already_exists" });
+        }
+        const updated = await this.#bucket.put(canonicalKey, bodyStream(existing), {
+          httpMetadata: { contentType: request.mediaType },
+          customMetadata: this.#bundleCustomMetadata({
+            ...metadata,
+            protectedAt: request.createdAt,
+          }),
+          onlyIf: { etagMatches: existing.etag },
+        });
+        if (updated === null) continue;
+        return Object.freeze({ object: this.#bundleMetadata(updated), status: "already_exists" });
+      }
+      const stored = await this.#bucket.put(canonicalKey, bodyStream(staged), {
+        httpMetadata: { contentType: request.mediaType },
+        customMetadata: this.#bundleCustomMetadata({
+          spaceId: request.spaceId,
+          sha256: request.sha256,
+          mediaType: request.mediaType,
+          size: request.size,
+          createdAt: request.createdAt,
+          protectedAt: request.createdAt,
+        }),
+        onlyIf: { etagDoesNotMatch: "*" },
+      });
+      if (stored === null) continue;
+      const metadata = this.#bundleMetadata(stored);
+      if (metadata.size !== request.size) {
+        await this.#bucket.delete(canonicalKey).catch(() => undefined);
+        throw new ObjectStoreFailure("object_tampered", "promoted BundleFile size mismatch");
+      }
+      return Object.freeze({ object: metadata, status: "stored" });
+    }
+    throw new Error("R2 BundleFile promotion CAS retry budget exhausted");
   }
 
   async deleteStagedBundleFile(stagedFileId: string): Promise<boolean> {
@@ -1505,6 +1591,14 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
   async #stagedBundleFile(
     object: R2ObjectBodyLike,
   ): Promise<Readonly<StagedBundleFileObject>> {
+    const metadata = this.#stagedBundleMetadata(object);
+    const bytes = await bodyBytes(object);
+    return Object.freeze({ ...metadata, bytes, size: bytes.byteLength });
+  }
+
+  #stagedBundleMetadata(
+    object: R2ListedObjectLike,
+  ): Readonly<Omit<StagedBundleFileObject, "bytes">> {
     const custom = object.customMetadata ?? {};
     const createdAt = custom.createdAt ?? "";
     assertUtc(createdAt);
@@ -1518,13 +1612,11 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
         ? !Number.isSafeInteger(Number(custom.maxBytes)) || Number(custom.maxBytes) < object.size
         : Number(custom.size) !== object.size)
     ) throw new ObjectStoreFailure("object_tampered", "staged BundleFile metadata is invalid");
-    const bytes = await bodyBytes(object);
     return Object.freeze({
       stagedFileId: custom.stagedFileId as StagedBundleFileObject["stagedFileId"],
       bindingOwnerId: custom.bindingOwnerId as StagedBundleFileObject["bindingOwnerId"],
       spaceId: custom.spaceId as StagedBundleFileObject["spaceId"],
-      bytes,
-      size: bytes.byteLength,
+      size: object.size,
       createdAt,
     });
   }

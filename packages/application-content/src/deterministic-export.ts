@@ -1,7 +1,6 @@
 import type { ObjectStore } from "@mind-diary/application-ports";
 import {
   MARKDOWN_MEDIA_TYPE,
-  BUNDLE_FILE_MEDIA_TYPES,
   canonicalBundleFilePath,
   canonicalMarkdownPath,
   type CanonicalRevisionEnvelope,
@@ -100,6 +99,13 @@ export interface ExactRevisionStreamReader {
     revisionId: RevisionId,
     path: string,
   ): Promise<Readonly<ExportMaterializedRevisionFile> | null>;
+  openRevisionFile(
+    spaceId: SpaceId,
+    revisionId: RevisionId,
+    path: string,
+  ): Promise<Readonly<Omit<ExportMaterializedRevisionFile, "bytes"> & {
+    readonly body: ReadableStream<Uint8Array>;
+  }> | null>;
 }
 
 export interface DeterministicOkfExport {
@@ -221,6 +227,23 @@ function calculateCrc32(bytes: Uint8Array): number {
     }
   }
   return (crc ^ 0xffffffff) >>> 0;
+}
+
+class IncrementalCrc32 {
+  #crc = 0xffffffff;
+
+  update(bytes: Uint8Array): void {
+    for (const byte of bytes) {
+      this.#crc ^= byte;
+      for (let bit = 0; bit < 8; bit += 1) {
+        this.#crc = (this.#crc >>> 1) ^ ((this.#crc & 1) === 0 ? 0 : 0xedb88320);
+      }
+    }
+  }
+
+  digest(): number {
+    return (this.#crc ^ 0xffffffff) >>> 0;
+  }
 }
 
 function checkedZipTotal(current: number, increment: number): number {
@@ -523,7 +546,8 @@ function exactRevisionStreamReader(
 ): ExactRevisionStreamReader | null {
   const candidate = value as Partial<ExactRevisionStreamReader>;
   return typeof candidate.readRevisionEnvelope === "function" &&
-    typeof candidate.readRevisionFile === "function"
+    typeof candidate.readRevisionFile === "function" &&
+    typeof candidate.openRevisionFile === "function"
     ? candidate as ExactRevisionStreamReader
     : null;
 }
@@ -569,19 +593,16 @@ export class DeterministicOkfExportService {
           "materialized revision object size does not match its manifest",
         );
       }
-    }
-
-    const unsupported = materialized.files.find(
-      (file) =>
-        file.mediaType !== MARKDOWN_MEDIA_TYPE &&
-        !(BUNDLE_FILE_MEDIA_TYPES as readonly string[]).includes(file.mediaType),
-    );
-    if (unsupported !== undefined) {
-      throw new OkfExportError(
+      const kind = file.kind ?? "markdown";
+      if (
+        (kind === "markdown" && file.mediaType !== MARKDOWN_MEDIA_TYPE) ||
+        (kind === "opaque" && file.mediaType === MARKDOWN_MEDIA_TYPE)
+      ) throw new OkfExportError(
         "revision_integrity_failure",
-        "exact revision contains an unsupported canonical object media type",
+        "materialized revision kind and media type do not match",
       );
     }
+
     if (
       parsed.profile === OKF_EXPORT_CONFIG.archiveFormat &&
       materialized.files.some((file) => file.mediaType !== MARKDOWN_MEDIA_TYPE)
@@ -627,7 +648,7 @@ export class DeterministicOkfExportService {
         const kind = file.kind ?? "markdown";
         if (
           (kind === "markdown" && file.mediaType !== MARKDOWN_MEDIA_TYPE) ||
-          (kind === "opaque" && !(BUNDLE_FILE_MEDIA_TYPES as readonly string[]).includes(file.mediaType))
+          (kind === "opaque" && file.mediaType === MARKDOWN_MEDIA_TYPE)
         ) {
           throw new OkfExportError(
             "revision_integrity_failure",
@@ -798,13 +819,14 @@ export class DeterministicOkfExportService {
           "deterministic export does not use ZIP64 file sizes",
         );
       }
-      const bytes = entry.generatedBytes ?? await this.#readStreamedFile(
-        parsed.spaceId,
-        parsed.revisionId,
-        entry,
-      );
+      const inspected = entry.generatedBytes === null
+        ? await this.#inspectStreamedFile(parsed.spaceId, parsed.revisionId, entry)
+        : Object.freeze({
+            crc32: calculateCrc32(entry.generatedBytes),
+            markdownBytes: entry.generatedBytes,
+          });
       if (entry.kind === "markdown") {
-        const result = parseOkfFile({ path: canonicalPath, bytes });
+        const result = parseOkfFile({ path: canonicalPath, bytes: inspected.markdownBytes! });
         conformanceErrors.push(...result.diagnostics.filter(
           (diagnostic) => diagnostic.severity === "error",
         ));
@@ -822,7 +844,7 @@ export class DeterministicOkfExportService {
         mediaType: entry.mediaType,
         sha256: entry.sha256,
         size: entry.size,
-        crc32: calculateCrc32(bytes),
+        crc32: inspected.crc32,
         generatedBytes: entry.generatedBytes,
         localOffset: 0,
       });
@@ -865,13 +887,12 @@ export class DeterministicOkfExportService {
     };
     for (const entry of streamedEntries) {
       await emit(streamedLocalHeader(entry));
-      const bytes = entry.generatedBytes ?? await this.#readStreamedFile(
-        parsed.spaceId,
-        parsed.revisionId,
-        entry,
-      );
-      for (let offset = 0; offset < bytes.byteLength; offset += EXPORT_STREAM_CHUNK_BYTES) {
-        await emit(bytes.subarray(offset, offset + EXPORT_STREAM_CHUNK_BYTES));
+      if (entry.generatedBytes !== null) {
+        for (let offset = 0; offset < entry.generatedBytes.byteLength; offset += EXPORT_STREAM_CHUNK_BYTES) {
+          await emit(entry.generatedBytes.subarray(offset, offset + EXPORT_STREAM_CHUNK_BYTES));
+        }
+      } else {
+        await this.#emitStreamedFile(parsed.spaceId, parsed.revisionId, entry, emit);
       }
     }
     for (const entry of streamedEntries) await emit(streamedCentralHeader(entry));
@@ -894,7 +915,7 @@ export class DeterministicOkfExportService {
     });
   }
 
-  async #readStreamedFile(
+  async #openStreamedFile(
     spaceId: SpaceId,
     revisionId: RevisionId,
     entry: Readonly<{
@@ -904,16 +925,18 @@ export class DeterministicOkfExportService {
       sha256: Sha256Digest;
       size: number;
     }>,
-  ): Promise<Uint8Array> {
+  ): Promise<Readonly<Omit<ExportMaterializedRevisionFile, "bytes"> & {
+    readonly body: ReadableStream<Uint8Array>;
+  }>> {
     if (entry.kind === "producer_manifest" || this.#streamReader === null) {
       throw new OkfExportError(
         "revision_integrity_failure",
         "producer manifest bytes must be supplied by the export planner",
       );
     }
-    let file: Readonly<ExportMaterializedRevisionFile> | null;
+    let file: Awaited<ReturnType<ExactRevisionStreamReader["openRevisionFile"]>>;
     try {
-      file = await this.#streamReader.readRevisionFile(spaceId, revisionId, entry.path);
+      file = await this.#streamReader.openRevisionFile(spaceId, revisionId, entry.path);
     } catch (error) {
       mapMaterializationFailure(error);
     }
@@ -921,15 +944,85 @@ export class DeterministicOkfExportService {
     if (
       file === null || kind !== entry.kind || file.path !== entry.path ||
       file.mediaType !== entry.mediaType || file.sha256 !== entry.sha256 ||
-      file.size !== entry.size || !(file.bytes instanceof Uint8Array) ||
-      file.bytes.byteLength !== entry.size ||
-      await this.#digest.calculateSha256(file.bytes) !== entry.sha256
+      file.size !== entry.size || !(file.body instanceof ReadableStream)
     ) {
       throw new OkfExportError(
         "revision_integrity_failure",
         "exact revision object differs from its immutable manifest",
       );
     }
-    return new Uint8Array(file.bytes);
+    return file;
+  }
+
+  async #inspectStreamedFile(
+    spaceId: SpaceId,
+    revisionId: RevisionId,
+    entry: Readonly<Pick<StreamedZipEntry, "path" | "kind" | "mediaType" | "sha256" | "size">>,
+  ): Promise<Readonly<{ crc32: number; markdownBytes: Uint8Array | null }>> {
+    const file = await this.#openStreamedFile(spaceId, revisionId, entry);
+    const reader = file.body.getReader();
+    const sha = new IncrementalSha256();
+    const crc = new IncrementalCrc32();
+    const markdownChunks: Uint8Array[] = [];
+    let size = 0;
+    try {
+      while (true) {
+        const part = await reader.read();
+        if (part.done) break;
+        if (!(part.value instanceof Uint8Array) || size + part.value.byteLength > entry.size) {
+          await reader.cancel().catch(() => undefined);
+          throw new OkfExportError("revision_integrity_failure", "streamed revision object size differs from its manifest");
+        }
+        size += part.value.byteLength;
+        sha.update(part.value);
+        crc.update(part.value);
+        if (entry.kind === "markdown") markdownChunks.push(new Uint8Array(part.value));
+      }
+    } finally {
+      reader.releaseLock();
+    }
+    if (size !== entry.size || sha.digest() !== entry.sha256) {
+      throw new OkfExportError("revision_integrity_failure", "streamed revision object differs from its immutable manifest");
+    }
+    let markdownBytes: Uint8Array | null = null;
+    if (entry.kind === "markdown") {
+      markdownBytes = new Uint8Array(size);
+      let offset = 0;
+      for (const chunk of markdownChunks) {
+        markdownBytes.set(chunk, offset);
+        offset += chunk.byteLength;
+      }
+    }
+    return Object.freeze({ crc32: crc.digest(), markdownBytes });
+  }
+
+  async #emitStreamedFile(
+    spaceId: SpaceId,
+    revisionId: RevisionId,
+    entry: Readonly<Pick<StreamedZipEntry, "path" | "kind" | "mediaType" | "sha256" | "size">>,
+    emit: (chunk: Uint8Array) => Promise<void>,
+  ): Promise<void> {
+    const file = await this.#openStreamedFile(spaceId, revisionId, entry);
+    const reader = file.body.getReader();
+    const sha = new IncrementalSha256();
+    let size = 0;
+    try {
+      while (true) {
+        const part = await reader.read();
+        if (part.done) break;
+        if (!(part.value instanceof Uint8Array) || size + part.value.byteLength > entry.size) {
+          await reader.cancel().catch(() => undefined);
+          throw new OkfExportError("revision_integrity_failure", "streamed revision object size differs from its manifest");
+        }
+        size += part.value.byteLength;
+        sha.update(part.value);
+        await emit(part.value);
+      }
+    } finally {
+      reader.releaseLock();
+    }
+    if (size !== entry.size || sha.digest() !== entry.sha256) {
+      throw new OkfExportError("revision_integrity_failure", "streamed revision object differs from its immutable manifest");
+    }
   }
 }

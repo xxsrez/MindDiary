@@ -42,7 +42,7 @@ export interface ProductMcpApplicationDependencies {
     "read" | "mutateRead" | "mutateWrite"
   >;
   readonly commits: Pick<ChangesetCommitService, "commit">;
-  readonly staging?: Pick<BundleFileStagingService, "stage">;
+  readonly staging?: Pick<BundleFileStagingService, "stageStream">;
   readonly ingress: Pick<
     FileIngressCoordinator,
     "capabilities" | "reconcileStage" | "reconcileCommit"
@@ -148,15 +148,6 @@ const FILE_INGRESS_SOURCE_KINDS = new Set([
   "bounded_in_memory",
   "server_generated",
 ]);
-const FILE_INGRESS_MEDIA_TYPES = new Set([
-  "image/png",
-  "image/jpeg",
-  "image/gif",
-  "image/webp",
-  "application/pdf",
-  "application/zip",
-]);
-
 function validStageBundleFileInput(input: Readonly<Record<string, unknown>>): boolean {
   const allowed = new Set([
     "mind",
@@ -176,7 +167,7 @@ function validStageBundleFileInput(input: Readonly<Record<string, unknown>>): bo
     (input.expectedSize === undefined ||
       (Number.isSafeInteger(input.expectedSize) &&
         (input.expectedSize as number) >= 0 &&
-        (input.expectedSize as number) <= 67_108_864)) &&
+        (input.expectedSize as number) <= 268_435_456)) &&
     (input.expectedSha256 === undefined ||
       (typeof input.expectedSha256 === "string" && SHA256.test(input.expectedSha256)));
 }
@@ -202,18 +193,16 @@ function validReconcileFileStageInput(input: Readonly<Record<string, unknown>>):
     FILE_INGRESS_SOURCE_KINDS.has(input.sourceKind) &&
     stringValue(input.displayFilename) !== null &&
     (input.claimedMediaType === undefined ||
-      (typeof input.claimedMediaType === "string" &&
-        FILE_INGRESS_MEDIA_TYPES.has(input.claimedMediaType))) &&
-    typeof input.mediaType === "string" &&
-    FILE_INGRESS_MEDIA_TYPES.has(input.mediaType) &&
+      (typeof input.claimedMediaType === "string" && input.claimedMediaType.length <= 256)) &&
+    typeof input.mediaType === "string" && input.mediaType.length <= 127 &&
     typeof input.sha256 === "string" && SHA256.test(input.sha256) &&
     Number.isSafeInteger(input.size) && (input.size as number) >= 0 &&
-    (input.size as number) <= 67_108_864 &&
+    (input.size as number) <= 268_435_456 &&
     idempotencyKeyValue(input.idempotencyKey) &&
     (input.expectedSize === undefined ||
       (Number.isSafeInteger(input.expectedSize) &&
         (input.expectedSize as number) >= 0 &&
-        (input.expectedSize as number) <= 67_108_864)) &&
+        (input.expectedSize as number) <= 268_435_456)) &&
     (input.expectedSha256 === undefined ||
       (typeof input.expectedSha256 === "string" && SHA256.test(input.expectedSha256)));
 }
@@ -680,13 +669,14 @@ export class ProductMcpContentApplication implements McpContentApplication {
             true,
           );
         }
-        const staged = await this.#dependencies.staging.stage({
+        const staged = await this.#dependencies.staging.stageStream({
           actor: request.actor,
           spaceId: info.mind.mindId,
           writeBindingId: input.writeBindingId,
           displayFilename: input.displayFilename ?? downloaded.fileName,
           claimedMediaType: downloaded.mimeType,
-          bytes: downloaded.bytes,
+          stream: downloaded.stream,
+          maxBytes: 268_435_456,
           idempotencyKey: input.idempotencyKey,
           expectedSize: input.expectedSize,
           expectedSha256: input.expectedSha256,
@@ -712,6 +702,16 @@ export class ProductMcpContentApplication implements McpContentApplication {
               ? "The idempotency key is already bound to different file bytes or metadata."
               : "The native file could not be staged safely.",
             false,
+          );
+        }
+        if (staged.kind === "stream_invalid") {
+          return createMcpToolErrorResult(
+            request.actor.requestId,
+            staged.code === "stream_size_limit_exceeded"
+              ? "bundle_file_size_limit_exceeded"
+              : "native_file_input_unsupported",
+            "The native file could not be staged safely.",
+            staged.code === "stream_transport_unavailable",
           );
         }
         return createMcpToolSuccessResult(

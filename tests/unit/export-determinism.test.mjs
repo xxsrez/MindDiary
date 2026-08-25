@@ -164,6 +164,27 @@ test("streamed exact export is byte-identical while reading only one immutable f
         activeReads -= 1;
       }
     },
+    async openRevisionFile(_spaceId, _revisionId, path) {
+      activeReads += 1;
+      peakReads = Math.max(peakReads, activeReads);
+      const selected = files.find((entry) => entry.path === path);
+      if (selected === undefined) {
+        activeReads -= 1;
+        return null;
+      }
+      const bytes = new Uint8Array(selected.bytes);
+      const { bytes: _bytes, ...metadata } = selected;
+      return {
+        ...metadata,
+        body: new ReadableStream({
+          start(controller) {
+            controller.enqueue(bytes);
+            controller.close();
+            activeReads -= 1;
+          },
+        }),
+      };
+    },
   };
   const service = new DeterministicOkfExportService({ materializer, digest });
   const bounded = await service.exportExactRevision({

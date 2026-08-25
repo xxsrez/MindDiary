@@ -1,5 +1,4 @@
 import {
-  BUNDLE_FILE_MEDIA_TYPES,
   canonicalBundleFilePath,
   type BundleFileMediaType,
 } from "@mind-diary/domain";
@@ -37,7 +36,7 @@ const RASTER_TYPES = new Set<BundleFileMediaType>([
   "image/gif",
   "image/webp",
 ]);
-const EXPECTED_EXTENSIONS: Readonly<Record<BundleFileMediaType, readonly string[]>> =
+const EXPECTED_EXTENSIONS: Readonly<Record<string, readonly string[]>> =
   Object.freeze({
     "image/png": Object.freeze([".png"]),
     "image/jpeg": Object.freeze([".jpg", ".jpeg"]),
@@ -256,7 +255,8 @@ function diagnostic(
 
 function extensionMatches(path: string, mediaType: BundleFileMediaType): boolean {
   const lower = path.toLocaleLowerCase("en-US");
-  return EXPECTED_EXTENSIONS[mediaType].some((extension) => lower.endsWith(extension));
+  const expected = EXPECTED_EXTENSIONS[mediaType];
+  return expected === undefined || expected.some((extension) => lower.endsWith(extension));
 }
 
 export function analyzeBundleFileReferences(input: Readonly<{
@@ -265,9 +265,6 @@ export function analyzeBundleFileReferences(input: Readonly<{
 }>): Readonly<BundleFileReferenceAnalysis> {
   const targets = new Map(
     input.bundleFiles.map((target) => {
-      if (!(BUNDLE_FILE_MEDIA_TYPES as readonly string[]).includes(target.mediaType)) {
-        throw new TypeError("BundleFile reference target media type is invalid.");
-      }
       return [canonicalBundleFilePath(target.path), target] as const;
     }),
   );

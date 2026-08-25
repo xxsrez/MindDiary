@@ -993,6 +993,12 @@ class FakeR2Body {
     this.etag = record.etag;
     this.customMetadata = { ...record.customMetadata };
     this.#bytes = new Uint8Array(record.bytes);
+    this.body = new ReadableStream({
+      start: (controller) => {
+        controller.enqueue(new Uint8Array(this.#bytes));
+        controller.close();
+      },
+    });
   }
 
   async arrayBuffer() {

@@ -212,7 +212,7 @@ const MIME_TYPES = new Set<BundleFileMediaType>([
   "application/pdf",
   "application/zip",
 ]);
-const EXTENSIONS: Readonly<Record<BundleFileMediaType, readonly string[]>> = Object.freeze({
+const EXTENSIONS: Readonly<Partial<Record<BundleFileMediaType, readonly string[]>>> = Object.freeze({
   "image/png": Object.freeze([".png"]),
   "image/jpeg": Object.freeze([".jpg", ".jpeg"]),
   "image/gif": Object.freeze([".gif"]),
@@ -273,7 +273,7 @@ function validSourceKind(value: unknown): LocalCompanionSourceKind | null {
 
 function extensionMatches(filename: string, mediaType: BundleFileMediaType): boolean {
   const lower = filename.toLocaleLowerCase("en-US");
-  return EXTENSIONS[mediaType].some((extension) => lower.endsWith(extension));
+  return EXTENSIONS[mediaType]?.some((extension) => lower.endsWith(extension)) ?? false;
 }
 
 function sameInspection(

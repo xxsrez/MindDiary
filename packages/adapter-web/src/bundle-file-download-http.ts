@@ -3,7 +3,7 @@ export interface ProductBundleFileDownloadApplication {
     | {
         readonly kind: "download";
         readonly headers: Readonly<Record<string, string>>;
-        readonly bytes: Uint8Array;
+        readonly body: ReadableStream<Uint8Array>;
       }
     | { readonly kind: "not_found" }
   >;
@@ -41,7 +41,7 @@ export function createProductBundleFileDownloadHttpHandler(
     try {
       const result = await application.download(secret);
       if (result.kind !== "download") return notFound();
-      return new Response(Uint8Array.from(result.bytes).buffer, {
+      return new Response(result.body, {
         status: 200,
         headers: result.headers,
       });

@@ -17,7 +17,7 @@ export class NativeFileInputFailure extends Error {
 }
 
 export interface VerifiedNativeFileDownload {
-  readonly bytes: Uint8Array;
+  readonly stream: AsyncIterable<Uint8Array>;
   readonly fileName?: string;
   readonly mimeType?: string;
 }
@@ -145,6 +145,7 @@ export class OpenAiNativeFileTransport implements NativeFileTransport {
       });
     });
     const timeout = setTimeout(() => controller.abort(), this.#timeoutMs);
+    let handedOff = false;
     try {
       for (let redirect = 0; redirect <= this.#maxRedirects; redirect += 1) {
         try {
@@ -185,40 +186,45 @@ export class OpenAiNativeFileTransport implements NativeFileTransport {
           throw new NativeFileInputFailure("bundle_file_size_limit_exceeded");
         }
       }
-      const reader = response.body.getReader();
-      const chunks: Uint8Array[] = [];
-      let total = 0;
-      while (true) {
-        let next: ReadableStreamReadResult<Uint8Array>;
-        try {
-          next = await Promise.race([reader.read(), deadline]);
-        } catch (error) {
-          void reader.cancel().catch(() => undefined);
-          if (error instanceof NativeFileInputFailure) throw error;
-          throw new NativeFileInputFailure("native_file_input_unsupported", true);
-        }
-        if (next.done) break;
-        const chunk = next.value;
-        total += chunk.byteLength;
-        if (total > this.#maxBytes) {
-          void reader.cancel().catch(() => undefined);
-          throw new NativeFileInputFailure("bundle_file_size_limit_exceeded");
-        }
-        chunks.push(chunk);
-      }
-      const bytes = new Uint8Array(total);
-      let offset = 0;
-      for (const chunk of chunks) {
-        bytes.set(chunk, offset);
-        offset += chunk.byteLength;
-      }
+      const body = response.body;
+      const maxBytes = this.#maxBytes;
+      let consumed = false;
+      handedOff = true;
       return Object.freeze({
-        bytes,
+        stream: Object.freeze({
+          async *[Symbol.asyncIterator]() {
+            if (consumed) throw new NativeFileInputFailure("native_file_input_unsupported");
+            consumed = true;
+            const reader = body.getReader();
+            let total = 0;
+            try {
+              while (true) {
+                let next: ReadableStreamReadResult<Uint8Array>;
+                try {
+                  next = await Promise.race([reader.read(), deadline]);
+                } catch (error) {
+                  if (error instanceof NativeFileInputFailure) throw error;
+                  throw new NativeFileInputFailure("native_file_input_unsupported", true);
+                }
+                if (next.done) break;
+                total += next.value.byteLength;
+                if (total > maxBytes) {
+                  throw new NativeFileInputFailure("bundle_file_size_limit_exceeded");
+                }
+                yield next.value;
+              }
+            } finally {
+              clearTimeout(timeout);
+              await reader.cancel().catch(() => undefined);
+              reader.releaseLock();
+            }
+          },
+        }),
         ...(input.fileName === undefined ? {} : { fileName: input.fileName }),
         ...(input.mimeType === undefined ? {} : { mimeType: input.mimeType }),
       });
     } finally {
-      clearTimeout(timeout);
+      if (!handedOff) clearTimeout(timeout);
     }
   }
 }

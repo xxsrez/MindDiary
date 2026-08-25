@@ -40,7 +40,7 @@ test("authorized connector reader keeps provider identity outside shared staging
   });
   assert.equal(calls.length, 1);
   assert.equal(calls[0].sourceKind, "connector_object");
-  assert.equal(calls[0].maxBytes, 67_108_864);
+  assert.equal(calls[0].maxBytes, 268_435_456);
   assert.equal("object" in calls[0], false);
   assert.equal("providerObjectId" in calls[0], false);
 });

@@ -9,6 +9,7 @@ import {
 } from "@mind-diary/application-ports";
 import {
   REVISION_MANIFEST_FORMAT_V3,
+  REVISION_MANIFEST_FORMAT_V4,
   canonicalBundleFilePath,
   parseRevisionManifest,
   revisionEnvelopesEqual,
@@ -29,6 +30,7 @@ import {
   type MindDiscoveryRevisionDescriptor,
   type MindDiscoveryStore,
 } from "./mind-discovery.js";
+import { IncrementalSha256 } from "./incremental-sha256.js";
 
 export const DEFAULT_BUNDLE_FILE_DOWNLOAD_GRANT_TTL_MS = 5 * 60 * 1_000;
 export const MAX_BUNDLE_FILE_DOWNLOAD_GRANT_TTL_MS = 10 * 60 * 1_000;
@@ -75,7 +77,7 @@ export type BundleFileDownloadResponse =
   | {
       readonly kind: "download";
       readonly headers: Readonly<Record<string, string>>;
-      readonly bytes: Uint8Array;
+      readonly body: ReadableStream<Uint8Array>;
     }
   | { readonly kind: "not_found" };
 
@@ -142,6 +144,31 @@ function descriptor(
     revisionId,
     inlineEligible: RASTER_TYPES.has(entry.mediaType),
   });
+}
+
+async function verifyBody(
+  body: ReadableStream<Uint8Array>,
+  expectedSize: number,
+  expectedSha256: Sha256Digest,
+): Promise<boolean> {
+  const reader = body.getReader();
+  const digest = new IncrementalSha256();
+  let size = 0;
+  try {
+    while (true) {
+      const part = await reader.read();
+      if (part.done) break;
+      if (!(part.value instanceof Uint8Array) || size + part.value.byteLength > expectedSize) {
+        await reader.cancel().catch(() => undefined);
+        return false;
+      }
+      size += part.value.byteLength;
+      digest.update(part.value);
+    }
+    return size === expectedSize && digest.digest() === expectedSha256;
+  } finally {
+    reader.releaseLock();
+  }
 }
 
 export class BundleFileDownloadService {
@@ -212,7 +239,10 @@ export class BundleFileDownloadService {
     ) throw new BundleFileDownloadFailure("revision_integrity_failure", "Exact revision failed integrity verification.");
     let manifest = envelope.manifest;
     try {
-      if (manifest.format === REVISION_MANIFEST_FORMAT_V3) {
+      if (
+        manifest.format === REVISION_MANIFEST_FORMAT_V3 ||
+        manifest.format === REVISION_MANIFEST_FORMAT_V4
+      ) {
         const stored = await this.#objects.getSpaceCanonicalObject(
           "revision_manifest",
           info.mind.mindId,
@@ -372,14 +402,19 @@ export class BundleFileDownloadService {
     ) return Object.freeze({ kind: "not_found" });
     let object;
     try {
-      object = await this.#objects.getBundleFile(grant.spaceId, grant.sha256);
+      object = await this.#objects.openBundleFile(grant.spaceId, grant.sha256);
     } catch {
       return Object.freeze({ kind: "not_found" });
     }
     if (
       object === null || object.mediaType !== grant.mediaType || object.size !== grant.size ||
-      object.bytes.byteLength !== grant.size ||
-      (await this.#objects.calculateSha256(object.bytes)) !== grant.sha256
+      !(await verifyBody(object.body, grant.size, grant.sha256))
+    ) return Object.freeze({ kind: "not_found" });
+
+    const responseObject = await this.#objects.openBundleFile(grant.spaceId, grant.sha256);
+    if (
+      responseObject === null || responseObject.mediaType !== grant.mediaType ||
+      responseObject.size !== grant.size
     ) return Object.freeze({ kind: "not_found" });
 
     const consumed = await this.#store.runBundleFileDownloadGrantTransaction(async (transaction) => {
@@ -420,7 +455,7 @@ export class BundleFileDownloadService {
         "Cross-Origin-Resource-Policy": "same-origin",
         ...(disposition === "inline" ? { "Content-Security-Policy": "sandbox" } : {}),
       }),
-      bytes: new Uint8Array(object.bytes),
+      body: responseObject.body,
     });
   }
 

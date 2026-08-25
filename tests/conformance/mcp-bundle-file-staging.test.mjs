@@ -164,7 +164,11 @@ test("bounded native transport validates every redirect host and never exposes p
     fileName: "diagram.png",
     mimeType: "image/png",
   });
-  assert.deepEqual(downloaded.bytes, PNG);
+  const chunks = [];
+  for await (const chunk of downloaded.stream) {
+    chunks.push(chunk);
+  }
+  assert.deepEqual(Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))), Buffer.from(PNG));
   assert.equal(downloaded.fileName, "diagram.png");
   assert.equal(downloaded.mimeType, "image/png");
   assert.deepEqual(requested.map(({ credentials, redirect }) => ({ credentials, redirect })), [
@@ -189,10 +193,15 @@ test("bounded native transport validates every redirect host and never exposes p
     fetcher: async () => new Response(PNG, { status: 200 }),
   });
   await assert.rejects(
-    tooSmall.download({
-      fileId: "provider-secret-id",
-      downloadUrl: "https://files.oaiusercontent.com/file/temporary-secret",
-    }),
+    (async () => {
+      const pending = await tooSmall.download({
+        fileId: "provider-secret-id",
+        downloadUrl: "https://files.oaiusercontent.com/file/temporary-secret",
+      });
+      for await (const _chunk of pending.stream) {
+        // Consume the stream when the provider omits Content-Length.
+      }
+    })(),
     (error) => error instanceof NativeFileInputFailure &&
       error.code === "bundle_file_size_limit_exceeded",
   );
@@ -207,10 +216,15 @@ test("bounded native transport validates every redirect host and never exposes p
     }), { status: 200 }),
   });
   await assert.rejects(
-    stalled.download({
-      fileId: "provider-secret-id",
-      downloadUrl: "https://files.oaiusercontent.com/file/stalled-secret",
-    }),
+    (async () => {
+      const pending = await stalled.download({
+        fileId: "provider-secret-id",
+        downloadUrl: "https://files.oaiusercontent.com/file/stalled-secret",
+      });
+      for await (const _chunk of pending.stream) {
+        // Consume the bounded stream so its timeout and size checks execute.
+      }
+    })(),
     (error) => error instanceof NativeFileInputFailure &&
       error.code === "native_file_input_unsupported" &&
       error.retryable === true,
@@ -265,11 +279,15 @@ test("product adapter terminates provider metadata and returns only verified sta
           fileName: "diagram.png",
           mimeType: "image/png",
         });
-        return { bytes: PNG, fileName: "diagram.png", mimeType: "image/png" };
+        return {
+          stream: (async function* () { yield PNG; })(),
+          fileName: "diagram.png",
+          mimeType: "image/png",
+        };
       },
     },
     staging: {
-      async stage(request) {
+      async stageStream(request) {
         portableRequest = request;
         return {
           kind: "staged",
@@ -398,7 +416,14 @@ test("product adapter terminates provider metadata and returns only verified sta
   });
   assert.equal(result.isError, false);
   assert.equal(result.structuredContent.data.staged_file.staged_file_ref, "staged_safe_ref");
-  assert.deepEqual(portableRequest.bytes, PNG);
+  const stagedChunks = [];
+  for await (const chunk of portableRequest.stream) {
+    stagedChunks.push(chunk);
+  }
+  assert.deepEqual(
+    Buffer.concat(stagedChunks.map((chunk) => Buffer.from(chunk))),
+    Buffer.from(PNG),
+  );
   assert.equal("file" in portableRequest, false);
   const serialized = JSON.stringify(result);
   assert.doesNotMatch(serialized, /provider-secret|temporary-secret|download_url|file_id|137,80,78,71/iu);

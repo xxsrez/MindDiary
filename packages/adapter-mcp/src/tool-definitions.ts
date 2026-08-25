@@ -1193,14 +1193,15 @@ const FILE_INGRESS_SOURCE_KIND_SCHEMA = Object.freeze({
 
 const FILE_INGRESS_MEDIA_TYPE_SCHEMA = Object.freeze({
   type: "string",
-  enum: Object.freeze([
-    "image/png",
-    "image/jpeg",
-    "image/gif",
-    "image/webp",
-    "application/pdf",
-    "application/zip",
-  ]),
+  minLength: 3,
+  maxLength: 127,
+  pattern: "^[!#$%&'*+.^_`|~0-9a-z-]+/[!#$%&'*+.^_`|~0-9a-z-]+$",
+});
+
+const FILE_INGRESS_MEDIA_HINT_SCHEMA = Object.freeze({
+  type: "string",
+  minLength: 1,
+  maxLength: 256,
 });
 
 const GET_FILE_INGRESS_CAPABILITIES_INPUT_SCHEMA = strictInputSchema({});
@@ -1268,7 +1269,7 @@ const STAGE_BUNDLE_FILE_INPUT_SCHEMA = Object.freeze({
     expected_size: Object.freeze({
       type: "integer",
       minimum: 0,
-      maximum: 67_108_864,
+      maximum: 268_435_456,
     }),
     expected_sha256: SHA256_SCHEMA,
   }),
@@ -1316,15 +1317,15 @@ const RECONCILE_FILE_STAGE_INPUT_SCHEMA = strictInputSchema(
     write_binding_id: OPAQUE_ID_SCHEMA,
     source_kind: FILE_INGRESS_SOURCE_KIND_SCHEMA,
     display_filename: Object.freeze({ type: "string", minLength: 1, maxLength: 255 }),
-    claimed_media_type: FILE_INGRESS_MEDIA_TYPE_SCHEMA,
+    claimed_media_type: FILE_INGRESS_MEDIA_HINT_SCHEMA,
     media_type: FILE_INGRESS_MEDIA_TYPE_SCHEMA,
     sha256: SHA256_SCHEMA,
-    size: Object.freeze({ type: "integer", minimum: 0, maximum: 67_108_864 }),
+    size: Object.freeze({ type: "integer", minimum: 0, maximum: 268_435_456 }),
     idempotency_key: IDEMPOTENCY_KEY_SCHEMA,
     expected_size: Object.freeze({
       type: "integer",
       minimum: 0,
-      maximum: 67_108_864,
+      maximum: 268_435_456,
     }),
     expected_sha256: SHA256_SCHEMA,
   },

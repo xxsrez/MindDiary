@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import test from "node:test";
 
 import { InMemoryRevisionMetadataStore } from "@mind-diary/adapter-metadata-memory";
@@ -23,6 +24,7 @@ import {
   REVISION_MANIFEST_FORMAT_V1,
   REVISION_MANIFEST_FORMAT_V2,
   REVISION_MANIFEST_FORMAT_V3,
+  REVISION_MANIFEST_FORMAT_V4,
   bindingVersion,
   createCanonicalRevisionEnvelope,
   createRevisionManifest,
@@ -55,6 +57,55 @@ const PNG_REPLACEMENT = Uint8Array.from([
 ]);
 const PDF = new TextEncoder().encode("%PDF-1.7\n");
 const ZIP = Uint8Array.from([0x50, 0x4b, 0x03, 0x04, 0x00, 0x00]);
+
+async function streamBytes(body) {
+  return new Uint8Array(await new Response(body).arrayBuffer());
+}
+
+function streamingProbeObjectStore() {
+  const evidence = { writes: 0, maxChunkBytes: 0, completedBytes: 0, aborted: false };
+  return {
+    evidence,
+    calculateSha256: async (bytes) =>
+      `sha256:${createHash("sha256").update(bytes).digest("hex")}`,
+    beginStagedBundleFileUpload: async (request) => {
+      let size = 0;
+      let closed = false;
+      return {
+        write: async (chunk) => {
+          assert.equal(closed, false);
+          assert.ok(size + chunk.byteLength <= request.maxBytes);
+          size += chunk.byteLength;
+          evidence.writes += 1;
+          evidence.maxChunkBytes = Math.max(evidence.maxChunkBytes, chunk.byteLength);
+        },
+        complete: async ({ size: expectedSize }) => {
+          assert.equal(expectedSize, size);
+          closed = true;
+          evidence.completedBytes = size;
+          return {
+            stagedFileId: request.stagedFileId,
+            bindingOwnerId: request.bindingOwnerId,
+            spaceId: request.spaceId,
+            size,
+            createdAt: request.createdAt,
+          };
+        },
+        abort: async () => {
+          closed = true;
+          evidence.aborted = true;
+        },
+      };
+    },
+    deleteStagedBundleFile: async () => true,
+  };
+}
+
+async function* repeatedChunks(count, chunkBytes, extra = 0) {
+  const chunk = new Uint8Array(chunkBytes);
+  for (let index = 0; index < count; index += 1) yield chunk;
+  if (extra > 0) yield new Uint8Array(extra);
+}
 
 function actor() {
   return {
@@ -209,7 +260,7 @@ test("manifest v1 stays byte-stable while new mixed manifests use discriminated 
   assert.match(serializeRevisionManifest(v2), /"kind":"opaque"/u);
 });
 
-test("staging rejects spoofed types and atomically consumes a binding-pinned ref", async () => {
+test("staging contains spoofed types and atomically consumes a binding-pinned ref", async () => {
   const env = await harness();
   const spoofed = await env.staging.stage({
     actor: env.currentActor,
@@ -220,7 +271,8 @@ test("staging rejects spoofed types and atomically consumes a binding-pinned ref
     bytes: new TextEncoder().encode("<svg><script/></svg>"),
     idempotencyKey: "stage-spoofed-file",
   });
-  assert.deepEqual(spoofed, { kind: "invalid", code: "unsupported_bundle_file_type" });
+  assert.equal(spoofed.kind, "staged");
+  assert.equal(spoofed.record.mediaType, "application/octet-stream");
 
   const stageReceipt = {
     actor: env.currentActor,
@@ -374,7 +426,7 @@ test("staging rejects spoofed types and atomically consumes a binding-pinned ref
     }],
   });
   assert.equal(committed.kind, "committed");
-  assert.equal(committed.envelope.manifest.format, REVISION_MANIFEST_FORMAT_V3);
+  assert.equal(committed.envelope.manifest.format, REVISION_MANIFEST_FORMAT_V4);
   assert.deepEqual(
     committed.envelope.manifest.entries.find((entry) => entry.kind === "opaque"),
     {
@@ -436,9 +488,9 @@ test("staging rejects spoofed types and atomically consumes a binding-pinned ref
   assert.equal(interrupted.length, 1);
   assert.equal(interrupted[0].state, "expired");
   assert.deepEqual(await cleanup.collectExpired(), {
-    scanned: 1,
-    deleted: 1,
-    bytes: PNG.byteLength,
+    scanned: 2,
+    deleted: 2,
+    bytes: PNG.byteLength + new TextEncoder().encode("<svg><script/></svg>").byteLength,
   });
   assert.equal(await env.metadata.readStagedBundleFile(staged.record.stagedFileId), null);
   const reservation = (await env.metadata.listCapacityReservationsForTest())
@@ -473,7 +525,61 @@ test("server-generated stream uses shared quarantine and records safe provenance
   );
 });
 
-test("server-generated cancellation and static rejection leave no staged object", async () => {
+test("streaming stage accepts exact 256 MiB and rejects byte 268435457 without buffering", async () => {
+  const acceptedEnv = await harness();
+  const acceptedObjects = streamingProbeObjectStore();
+  const accepted = new BundleFileStagingService({
+    authorizer: acceptedEnv.authorizer,
+    metadata: acceptedEnv.metadata,
+    objects: acceptedObjects,
+    clock: { now: () => LATER },
+    ids: { nextStagedBundleFileId: () => "staged_stream_exact_256m" },
+  });
+  const exact = await accepted.stageStream({
+    actor: acceptedEnv.currentActor,
+    spaceId: MINDS.ordinary.spaceId,
+    writeBindingId: WRITE_BINDING_ID,
+    displayFilename: "large.bin",
+    idempotencyKey: "stage-large-exact-256m",
+    sourceKind: "server_generated",
+    maxBytes: 268_435_456,
+    stream: repeatedChunks(256, 1_048_576),
+  });
+  assert.equal(exact.kind, "staged");
+  assert.equal(exact.record.size, 268_435_456);
+  assert.equal(exact.record.mediaType, "application/octet-stream");
+  assert.deepEqual(acceptedObjects.evidence, {
+    writes: 256,
+    maxChunkBytes: 1_048_576,
+    completedBytes: 268_435_456,
+    aborted: false,
+  });
+
+  const overflowEnv = await harness();
+  const overflowObjects = streamingProbeObjectStore();
+  const overflow = new BundleFileStagingService({
+    authorizer: overflowEnv.authorizer,
+    metadata: overflowEnv.metadata,
+    objects: overflowObjects,
+    clock: { now: () => LATER },
+    ids: { nextStagedBundleFileId: () => "staged_stream_overflow_256m" },
+  });
+  const plusOne = await overflow.stageStream({
+    actor: overflowEnv.currentActor,
+    spaceId: MINDS.ordinary.spaceId,
+    writeBindingId: WRITE_BINDING_ID,
+    displayFilename: "large-plus-one.bin",
+    idempotencyKey: "stage-large-plus-one",
+    sourceKind: "server_generated",
+    maxBytes: 268_435_456,
+    stream: repeatedChunks(256, 1_048_576, 1),
+  });
+  assert.deepEqual(plusOne, { kind: "stream_invalid", code: "stream_size_limit_exceeded" });
+  assert.equal(overflowObjects.evidence.completedBytes, 0);
+  assert.equal(overflowObjects.evidence.aborted, true);
+});
+
+test("server-generated cancellation cleans up and MIME conflict degrades to opaque", async () => {
   const env = await harness();
   const ingress = new GeneratedArtifactIngressService({ staging: env.staging });
   const controller = new AbortController();
@@ -508,11 +614,9 @@ test("server-generated cancellation and static rejection leave no staged object"
       yield PNG;
     })(),
   });
-  assert.deepEqual(rejected, {
-    kind: "invalid",
-    code: "bundle_file_media_mismatch",
-  });
-  assert.equal(await env.objects.getStagedBundleFile("staged_bundle_2"), null);
+  assert.equal(rejected.kind, "staged");
+  assert.equal(rejected.record.mediaType, "application/octet-stream");
+  assert.notEqual(await env.objects.getStagedBundleFile("staged_bundle_2"), null);
 });
 
 test("server-generated staged ID collision preserves the foreign object", async () => {
@@ -547,6 +651,76 @@ test("server-generated staged ID collision preserves the foreign object", async 
   assert.equal(preserved.bindingOwnerId, "binding_owner_foreign");
   assert.equal(preserved.spaceId, MINDS.personal.spaceId);
   assert.deepEqual(preserved.bytes, foreign);
+});
+
+test("arbitrary opaque formats stage and commit atomically with bounded safe media fallback", async () => {
+  const env = await harness();
+  const fixtures = [
+    ["assets/document.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", Uint8Array.from([...ZIP, 1])],
+    ["assets/photo.heic", "image/heic", Uint8Array.from([0, 0, 0, 24, 0x66, 0x74, 0x79, 0x70])],
+    ["assets/book.epub", "application/epub+zip", Uint8Array.from([...ZIP, 2])],
+    ["assets/audio.opus", "audio/ogg", new TextEncoder().encode("OggS\0OpusHead")],
+    ["assets/page.html", "text/html; charset=UTF-8", new TextEncoder().encode("<!doctype html><p>opaque</p>")],
+    ["assets/notebook.ipynb", "application/x-ipynb+json", new TextEncoder().encode("{\"cells\":[]}")],
+    ["assets/archive.zip", "application/zip", ZIP],
+    ["assets/unknown.custom", "application/x-mind-diary-test", Uint8Array.of(0, 1, 2, 3)],
+  ];
+  const staged = [];
+  for (const [path, claimedMediaType, bytes] of fixtures) {
+    const result = await env.staging.stage({
+      actor: env.currentActor,
+      spaceId: MINDS.ordinary.spaceId,
+      writeBindingId: WRITE_BINDING_ID,
+      displayFilename: path.split("/").at(-1),
+      claimedMediaType,
+      bytes,
+      idempotencyKey: `stage-arbitrary-${path}`,
+    });
+    assert.equal(result.kind, "staged", path);
+    staged.push({ path, bytes, result });
+  }
+  assert.equal(
+    staged.find(({ path }) => path.endsWith("archive.zip")).result.record.mediaType,
+    "application/zip",
+  );
+  assert.ok(staged
+    .filter(({ path }) => !path.endsWith("archive.zip"))
+    .every(({ result }) => result.record.mediaType === "application/octet-stream"));
+
+  const commits = new ChangesetCommitService({
+    authorizer: env.authorizer,
+    metadata: env.metadata,
+    revisions: env.revisions,
+    objects: env.objects,
+    clock: { now: () => LATER },
+    revisionIds: { nextRevisionId: () => "revision_arbitrary_opaque_formats" },
+  });
+  const committed = await commits.commit({
+    actor: env.currentActor,
+    spaceId: MINDS.ordinary.spaceId,
+    writeBindingId: WRITE_BINDING_ID,
+    expectedRevisionId: REVISIONS.initial.revisionId,
+    idempotencyKey: "commit-arbitrary-opaque-formats",
+    summary: "Commit arbitrary opaque formats",
+    operations: staged.map(({ path, result }) => ({
+      type: "create_bundle_file",
+      path,
+      staged_file_id: result.record.stagedFileId,
+    })),
+  });
+  assert.equal(committed.kind, "committed");
+  assert.equal(committed.envelope.manifest.format, REVISION_MANIFEST_FORMAT_V4);
+  const exact = await env.revisions.materialize(
+    MINDS.ordinary.spaceId,
+    committed.envelope.revision.revisionId,
+  );
+  for (const fixture of staged) {
+    assert.deepEqual(
+      exact.files.find(({ path }) => path === fixture.path)?.bytes,
+      fixture.bytes,
+      fixture.path,
+    );
+  }
 });
 
 test("Markdown BundleFile references validate the atomic resulting revision", async () => {
@@ -809,7 +983,7 @@ test("BundleFile dev smoke preserves exact bytes, history, exports, and reconstr
   const applicationSecret = new URL(issuedByApplication.downloadUrl).pathname.split("/").at(-1);
   const applicationDownload = await issuingService.download(serviceActor, applicationSecret);
   assert.equal(applicationDownload.kind, "download");
-  assert.deepEqual(applicationDownload.bytes, PNG);
+  assert.deepEqual(await streamBytes(applicationDownload.body), PNG);
   env.metadata.setCurrentAuthorizationStateForTest(authorizationKey, authorizationState());
 
   const pngEntry = committed.envelope.manifest.entries.find(
@@ -823,7 +997,7 @@ test("BundleFile dev smoke preserves exact bytes, history, exports, and reconstr
   const download = results.find((result) => result.kind === "download");
   assert.equal(results.filter((result) => result.kind === "download").length, 1);
   assert.equal(results.filter((result) => result.kind === "not_found").length, 1);
-  assert.deepEqual(download.bytes, PNG);
+  assert.deepEqual(await streamBytes(download.body), PNG);
   assert.equal(download.headers["Content-Type"], "image/png");
   assert.equal(download.headers["Content-Length"], String(PNG.byteLength));
   assert.equal(download.headers["Cache-Control"], "no-store");
@@ -840,7 +1014,7 @@ test("BundleFile dev smoke preserves exact bytes, history, exports, and reconstr
     );
     const result = await service.download(serviceActor, await issueDirectGrant(entry));
     assert.equal(result.kind, "download");
-    assert.deepEqual(result.bytes, expectedBytes);
+    assert.deepEqual(await streamBytes(result.body), expectedBytes);
     assert.match(result.headers["Content-Disposition"], /^attachment;/u);
     assert.doesNotMatch(result.headers["Content-Disposition"], /\r|\n/u);
     if (path.includes("справка")) {

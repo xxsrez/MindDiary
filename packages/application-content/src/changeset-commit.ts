@@ -13,7 +13,7 @@ import {
 } from "@mind-diary/application-ports";
 import {
   MARKDOWN_MEDIA_TYPE,
-  REVISION_MANIFEST_FORMAT_V3,
+  REVISION_MANIFEST_FORMAT_V4,
   createCanonicalRevisionEnvelope,
   createRevisionManifest,
   opaqueId,
@@ -46,6 +46,7 @@ import {
   CapacityAdmissionService,
   capacityReservationId,
 } from "./capacity.js";
+import { IncrementalSha256 } from "./incremental-sha256.js";
 
 export interface CommitChangesetRequest {
   readonly actor: ActorContext;
@@ -142,6 +143,32 @@ type InvalidResult = Extract<
 >;
 
 const ENCODER = new TextEncoder();
+
+async function verifiedStagedStream(
+  body: ReadableStream<Uint8Array>,
+  expectedSize: number,
+  expectedSha256: Sha256Digest,
+): Promise<boolean> {
+  const reader = body.getReader();
+  const digest = new IncrementalSha256();
+  let size = 0;
+  try {
+    while (true) {
+      const part = await reader.read();
+      if (part.done) break;
+      const chunk = part.value;
+      if (!(chunk instanceof Uint8Array) || size + chunk.byteLength > expectedSize) {
+        await reader.cancel().catch(() => undefined);
+        return false;
+      }
+      size += chunk.byteLength;
+      digest.update(chunk);
+    }
+    return size === expectedSize && digest.digest() === expectedSha256;
+  } finally {
+    reader.releaseLock();
+  }
+}
 
 function invalid(code: ChangesetValidationCode, message: string): InvalidResult {
   return Object.freeze({
@@ -531,21 +558,33 @@ export class ChangesetCommitService {
         });
         continue;
       }
-      const staged = await this.#objects.getStagedBundleFile(file.stagedFileId);
+      const staged = await this.#objects.openStagedBundleFile(file.stagedFileId);
       if (
         staged === null || staged.spaceId !== request.spaceId ||
-        staged.size !== file.size || staged.bytes.byteLength !== file.size ||
-        (await this.#objects.calculateSha256(staged.bytes)) !== file.sha256
+        staged.size !== file.size ||
+        !(await verifiedStagedStream(staged.body, file.size, file.sha256))
       ) return invalid(
         "staged_bundle_file_not_verified",
         "staged BundleFile bytes failed integrity verification",
       );
-      const put = await this.#objects.putBundleFile({
+      const put = await this.#objects.promoteStagedBundleFile({
+        stagedFileId: file.stagedFileId,
+        bindingOwnerId: staged.bindingOwnerId,
         spaceId: request.spaceId,
-        bytes: staged.bytes,
+        sha256: file.sha256,
+        size: file.size,
         mediaType: file.mediaType,
         createdAt: committedAt,
       });
+      const promoted = await this.#objects.openBundleFile(request.spaceId, file.sha256);
+      if (
+        promoted === null || promoted.mediaType !== file.mediaType ||
+        promoted.size !== file.size ||
+        !(await verifiedStagedStream(promoted.body, file.size, file.sha256))
+      ) return invalid(
+        "staged_bundle_file_not_verified",
+        "promoted BundleFile bytes failed integrity verification",
+      );
       if (put.status === "stored") actualPhysicalGrowth += put.object.size;
       entries.push({
         kind: "opaque" as const,
@@ -555,7 +594,7 @@ export class ChangesetCommitService {
         size: put.object.size,
       });
     }
-    const manifest = createRevisionManifest(entries, REVISION_MANIFEST_FORMAT_V3);
+    const manifest = createRevisionManifest(entries, REVISION_MANIFEST_FORMAT_V4);
     const manifestBytes = ENCODER.encode(serializeRevisionManifest(manifest));
     const manifestPut = await this.#objects.putSpaceCanonicalObject({
       kind: "revision_manifest",

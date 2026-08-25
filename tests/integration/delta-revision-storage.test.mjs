@@ -16,6 +16,7 @@ import {
   CAPABILITIES,
   MARKDOWN_MEDIA_TYPE,
   REVISION_MANIFEST_FORMAT_V3,
+  REVISION_MANIFEST_FORMAT_V4,
   createCanonicalRevisionEnvelope,
   createRevisionManifest,
   serializeRevisionManifest,
@@ -415,7 +416,7 @@ test("legacy v2 corpus stays exact-readable while its first v3 change remains a 
     }],
   });
   assert.equal(result.kind, "committed");
-  assert.equal(result.envelope.manifest.format, REVISION_MANIFEST_FORMAT_V3);
+  assert.equal(result.envelope.manifest.format, REVISION_MANIFEST_FORMAT_V4);
   assert.equal(counted.metrics.markdownReadBytes, 0);
   assert.equal(counted.metrics.markdownPutCount, 1);
   assert.equal(counted.metrics.markdownPutBytes, ENCODER.encode(replacement).byteLength);

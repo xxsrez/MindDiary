@@ -15,7 +15,6 @@ import type {
   StagedBundleFileUpload,
 } from "@mind-diary/application-ports";
 import {
-  BUNDLE_FILE_MEDIA_TYPES,
   bundleFileMediaType,
   opaqueId,
   utcInstant,
@@ -33,7 +32,7 @@ import {
 import { IncrementalSha256 } from "./incremental-sha256.js";
 
 export const BUNDLE_FILE_LIMITS = Object.freeze({
-  maxFileBytes: 67_108_864,
+  maxFileBytes: 268_435_456,
   maxOutstandingStagedBytes: 268_435_456,
   stagedTtlMilliseconds: 60 * 60 * 1_000,
   gcSafetyMilliseconds: 24 * 60 * 60 * 1_000,
@@ -132,7 +131,7 @@ export type ReconcileStageBundleFileResult =
 const ENCODER = new TextEncoder();
 const CONTROL = /[\u0000-\u001f\u007f]/u;
 const SHA256 = /^sha256:[0-9a-f]{64}$/u;
-const EXTENSIONS: Readonly<Record<BundleFileMediaType, readonly string[]>> = Object.freeze({
+const EXTENSIONS: Readonly<Record<string, readonly string[]>> = Object.freeze({
   "image/png": Object.freeze([".png"]),
   "image/jpeg": Object.freeze([".jpg", ".jpeg"]),
   "image/gif": Object.freeze([".gif"]),
@@ -191,7 +190,21 @@ function filename(value: unknown): string | null {
 
 function extensionMatches(name: string, mediaType: BundleFileMediaType): boolean {
   const lower = name.toLocaleLowerCase("en-US");
-  return EXTENSIONS[mediaType].some((extension) => lower.endsWith(extension));
+  return EXTENSIONS[mediaType]?.some((extension) => lower.endsWith(extension)) ?? false;
+}
+
+function canonicalDetectedMedia(
+  detected: BundleFileMediaType | null,
+  claimed: string | undefined,
+  displayFilename: string,
+): BundleFileMediaType {
+  if (detected === null) return "application/octet-stream" as BundleFileMediaType;
+  if (claimed !== undefined && bundleFileMediaType(claimed) !== detected) {
+    return "application/octet-stream" as BundleFileMediaType;
+  }
+  return extensionMatches(displayFilename, detected)
+    ? detected
+    : "application/octet-stream" as BundleFileMediaType;
 }
 
 type StageInvalid = Extract<StageBundleFileResult, { readonly kind: "invalid" }>;
@@ -238,9 +251,8 @@ function validateStageRequest(
   if (displayFilename === null) return invalid("invalid_filename");
   const claimedMediaType = request.claimedMediaType === undefined
     ? undefined
-    : typeof request.claimedMediaType === "string" &&
-        (BUNDLE_FILE_MEDIA_TYPES as readonly string[]).includes(request.claimedMediaType)
-      ? request.claimedMediaType
+    : typeof request.claimedMediaType === "string"
+      ? bundleFileMediaType(request.claimedMediaType)
       : null;
   if (claimedMediaType === null) return invalid("media_type_not_allowed");
   const expectedSize = request.expectedSize;
@@ -277,8 +289,7 @@ function validateStageReceipt(
   validated: ValidatedStageRequest,
 ): StageReceipt | StageInvalid {
   if (
-    typeof request.mediaType !== "string" ||
-    !(BUNDLE_FILE_MEDIA_TYPES as readonly string[]).includes(request.mediaType)
+    typeof request.mediaType !== "string"
   ) return invalid("media_type_not_allowed");
   const mediaType = bundleFileMediaType(request.mediaType);
   if (
@@ -288,13 +299,6 @@ function validateStageReceipt(
     typeof request.size !== "number" || !Number.isSafeInteger(request.size) ||
     request.size < 0 || request.size > BUNDLE_FILE_LIMITS.maxFileBytes
   ) return invalid("file_size_limit_exceeded");
-  if (
-    validated.claimedMediaType !== undefined &&
-    mediaType !== bundleFileMediaType(validated.claimedMediaType)
-  ) return invalid("bundle_file_media_mismatch");
-  if (!extensionMatches(validated.displayFilename, mediaType)) {
-    return invalid("bundle_file_media_mismatch");
-  }
   if (
     validated.expectedSize !== undefined &&
     validated.expectedSize !== request.size
@@ -471,17 +475,11 @@ export class BundleFileStagingService {
     if (bytes.byteLength > BUNDLE_FILE_LIMITS.maxFileBytes) {
       return Object.freeze({ kind: "invalid", code: "file_size_limit_exceeded" });
     }
-    const detected = detectBundleFileMediaType(bytes);
-    if (detected === null) {
-      return Object.freeze({ kind: "invalid", code: "unsupported_bundle_file_type" });
-    }
-    if (
-      claimedMediaType !== undefined &&
-      detected !== bundleFileMediaType(claimedMediaType)
-    ) return Object.freeze({ kind: "invalid", code: "bundle_file_media_mismatch" });
-    if (!extensionMatches(displayFilename, detected)) {
-      return Object.freeze({ kind: "invalid", code: "bundle_file_media_mismatch" });
-    }
+    const detected = canonicalDetectedMedia(
+      detectBundleFileMediaType(bytes),
+      claimedMediaType,
+      displayFilename,
+    );
     if (
       expectedSize !== undefined &&
       expectedSize !== bytes.byteLength
@@ -883,26 +881,11 @@ export class BundleFileStagingService {
           code: "expected_sha256_mismatch",
         }));
       }
-      const detected = detectBundleFileMediaType(signature.subarray(0, signatureSize));
-      if (detected === null) {
-        return await streamFailure(Object.freeze({
-          kind: "invalid",
-          code: "unsupported_bundle_file_type",
-        }));
-      }
-      if (
-        claimedMediaType !== undefined &&
-        detected !== bundleFileMediaType(claimedMediaType)
-      ) return await streamFailure(Object.freeze({
-        kind: "invalid",
-        code: "bundle_file_media_mismatch",
-      }));
-      if (!extensionMatches(displayFilename, detected)) {
-        return await streamFailure(Object.freeze({
-          kind: "invalid",
-          code: "bundle_file_media_mismatch",
-        }));
-      }
+      const detected = canonicalDetectedMedia(
+        detectBundleFileMediaType(signature.subarray(0, signatureSize)),
+        claimedMediaType,
+        displayFilename,
+      );
 
       await upload.complete({ sha256, size });
       temporaryObjectOwned = true;

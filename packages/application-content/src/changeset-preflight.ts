@@ -121,7 +121,7 @@ export const DEFAULT_CHANGESET_PREFLIGHT_LIMITS: Readonly<ChangesetPreflightLimi
     maxResultingFiles: 10_000,
     maxResultingBundleBytes: 67_108_864,
     maxBundleFileOperations: 20,
-    maxStagedBundleFileBytes: 134_217_728,
+    maxStagedBundleFileBytes: 268_435_456,
     maxResultingRevisionBytes: 1_073_741_824,
   });
 

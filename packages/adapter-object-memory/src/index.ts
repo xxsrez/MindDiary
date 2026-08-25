@@ -16,6 +16,7 @@ import {
   type SpaceCanonicalObjectListRequest,
   type SpaceCanonicalObjectDeleteRequest,
   type BundleFileObject,
+  type OpenedBundleFileObject,
   type BundleFileObjectMetadata,
   type BundleFileObjectPutResult,
   type BundleFileObjectStore,
@@ -23,6 +24,8 @@ import {
   type BundleFileObjectListRequest,
   type BundleFileObjectDeleteRequest,
   type StagedBundleFileObject,
+  type OpenedStagedBundleFileObject,
+  type PromoteStagedBundleFileRequest,
   type StagedBundleFileObjectWriteRequest,
   type StagedBundleFileUpload,
   type StagedBundleFileUploadRequest,
@@ -79,14 +82,7 @@ const SHA256_PATTERN = /^sha256:[0-9a-f]{64}$/u;
 const UTC_PATTERN =
   /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,9}))?Z$/u;
 const MARKDOWN_MEDIA_TYPE = "text/markdown; charset=utf-8";
-const BUNDLE_FILE_MEDIA_TYPES = new Set([
-  "image/png",
-  "image/jpeg",
-  "image/gif",
-  "image/webp",
-  "application/pdf",
-  "application/zip",
-]);
+const SAFE_MEDIA_TYPE = /^[!#$%&'*+.^_`|~0-9a-z-]+\/[!#$%&'*+.^_`|~0-9a-z-]+$/u;
 
 function assertDigest(value: string): asserts value is Digest {
   if (!SHA256_PATTERN.test(value)) {
@@ -165,7 +161,7 @@ function assertMarkdown(bytes: Uint8Array, mediaType: string): void {
 }
 
 function assertBundleFileMediaType(mediaType: string): void {
-  if (!BUNDLE_FILE_MEDIA_TYPES.has(mediaType)) {
+  if (mediaType.length > 127 || !SAFE_MEDIA_TYPE.test(mediaType)) {
     throw new ObjectStoreIntegrityError(
       "invalid_media_type",
       "opaque canonical object media type is not allowed",
@@ -423,6 +419,24 @@ export class InMemoryObjectStore implements BundleFileObjectStore, ExportArchive
     });
   }
 
+  async openBundleFile(
+    spaceId: BundleFileObjectMetadata["spaceId"],
+    digest: Digest,
+  ): Promise<Readonly<OpenedBundleFileObject> | null> {
+    const object = await this.getBundleFile(spaceId, digest);
+    if (object === null) return null;
+    const bytes = new Uint8Array(object.bytes);
+    return Object.freeze({
+      ...this.#bundleMetadata(object as StoredBundleFile),
+      body: new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(bytes);
+          controller.close();
+        },
+      }),
+    });
+  }
+
   async listBundleFileObjects(
     request: BundleFileObjectListRequest,
   ): Promise<readonly Readonly<BundleFileObjectMetadata>[]> {
@@ -563,6 +577,47 @@ export class InMemoryObjectStore implements BundleFileObjectStore, ExportArchive
     return stored === undefined
       ? null
       : Object.freeze({ ...stored, bytes: new Uint8Array(stored.bytes) });
+  }
+
+  async openStagedBundleFile(
+    stagedFileId: string,
+  ): Promise<Readonly<OpenedStagedBundleFileObject> | null> {
+    const stored = this.#stagedBundleFiles.get(stagedFileId);
+    if (stored === undefined) return null;
+    const bytes = new Uint8Array(stored.bytes);
+    return Object.freeze({
+      stagedFileId: stored.stagedFileId,
+      bindingOwnerId: stored.bindingOwnerId,
+      spaceId: stored.spaceId,
+      size: stored.size,
+      createdAt: stored.createdAt,
+      body: new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(bytes);
+          controller.close();
+        },
+      }),
+    });
+  }
+
+  async promoteStagedBundleFile(
+    request: Readonly<PromoteStagedBundleFileRequest>,
+  ): Promise<BundleFileObjectPutResult> {
+    const staged = this.#stagedBundleFiles.get(request.stagedFileId);
+    if (
+      staged === undefined || staged.bindingOwnerId !== request.bindingOwnerId ||
+      staged.spaceId !== request.spaceId || staged.size !== request.size
+    ) throw new ObjectStoreIntegrityError("object_tampered", "staged BundleFile metadata mismatch");
+    const actual = await this.calculateSha256(staged.bytes);
+    if (actual !== request.sha256) {
+      throw new ObjectStoreIntegrityError("object_tampered", "staged BundleFile digest mismatch");
+    }
+    return this.putBundleFile({
+      spaceId: request.spaceId,
+      bytes: staged.bytes,
+      mediaType: request.mediaType,
+      createdAt: request.createdAt,
+    });
   }
 
   async deleteStagedBundleFile(stagedFileId: string): Promise<boolean> {

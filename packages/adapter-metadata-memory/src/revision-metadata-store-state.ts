@@ -89,6 +89,7 @@ import {
 } from "./metadata-store-internals.js";
 import {
   REVISION_MANIFEST_FORMAT_V3,
+  REVISION_MANIFEST_FORMAT_V4,
   isReservedTopLevelHandle,
   parseCanonicalSpaceHandle,
 } from "@mind-diary/application-ports";
@@ -632,11 +633,17 @@ export abstract class RevisionMetadataStoreState {
           immutable.set(entry.sha256, (immutable.get(entry.sha256) ?? 0) + 1);
           if (entry.kind === "opaque") {
             increment(bundle, `${spaceId}\u0000${entry.sha256}`);
-          } else if (envelope.manifest.format === REVISION_MANIFEST_FORMAT_V3) {
+          } else if (
+            envelope.manifest.format === REVISION_MANIFEST_FORMAT_V3 ||
+            envelope.manifest.format === REVISION_MANIFEST_FORMAT_V4
+          ) {
             increment(spaceCanonical, `markdown\u0000${spaceId}\u0000${entry.sha256}`);
           }
         }
-        if (envelope.manifest.format === REVISION_MANIFEST_FORMAT_V3) {
+        if (
+          envelope.manifest.format === REVISION_MANIFEST_FORMAT_V3 ||
+          envelope.manifest.format === REVISION_MANIFEST_FORMAT_V4
+        ) {
           increment(
             spaceCanonical,
             `revision_manifest\u0000${spaceId}\u0000${envelope.revision.manifestHash}`,

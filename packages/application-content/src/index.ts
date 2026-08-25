@@ -23,6 +23,7 @@ import {
   MARKDOWN_MEDIA_TYPE,
   REVISION_MANIFEST_FORMAT_V2,
   REVISION_MANIFEST_FORMAT_V3,
+  REVISION_MANIFEST_FORMAT_V4,
   canonicalMarkdownPath,
   createCanonicalRevisionEnvelope,
   createRevisionManifest,
@@ -747,7 +748,8 @@ export class CanonicalRevisionCoordinator {
       let object;
       try {
         object = entry.kind === "markdown"
-          ? envelope.manifest.format === REVISION_MANIFEST_FORMAT_V3
+          ? envelope.manifest.format === REVISION_MANIFEST_FORMAT_V3 ||
+              envelope.manifest.format === REVISION_MANIFEST_FORMAT_V4
             ? await this.#objects.getSpaceCanonicalObject("markdown", spaceId, entry.sha256) ??
               await this.#objects.getImmutable(entry.sha256)
             : await this.#objects.getImmutable(entry.sha256)
@@ -834,7 +836,8 @@ export class CanonicalRevisionCoordinator {
     let object;
     try {
       object = entry.kind === "markdown"
-        ? envelope.manifest.format === REVISION_MANIFEST_FORMAT_V3
+        ? envelope.manifest.format === REVISION_MANIFEST_FORMAT_V3 ||
+            envelope.manifest.format === REVISION_MANIFEST_FORMAT_V4
           ? await this.#objects.getSpaceCanonicalObject("markdown", spaceId, entry.sha256) ??
             await this.#objects.getImmutable(entry.sha256)
           : await this.#objects.getImmutable(entry.sha256)
@@ -882,6 +885,52 @@ export class CanonicalRevisionCoordinator {
         });
   }
 
+  async openRevisionFile(
+    spaceId: SpaceId,
+    revisionId: RevisionId,
+    path: string,
+  ): Promise<Readonly<Omit<MaterializedRevisionFile, "bytes" | "text"> & {
+    readonly body: ReadableStream<Uint8Array>;
+  }> | null> {
+    const envelope = await this.#readVerifiedEnvelope(spaceId, revisionId);
+    const entry = envelope.manifest.entries.find((candidate) => candidate.path === path);
+    if (entry === undefined) return null;
+    if (entry.kind === "opaque") {
+      const opened = await this.#objects.openBundleFile(spaceId, entry.sha256);
+      if (
+        opened === null || opened.sha256 !== entry.sha256 ||
+        opened.mediaType !== entry.mediaType || opened.size !== entry.size
+      ) throw new CanonicalRevisionError(
+        "object_integrity_failure",
+        `committed object metadata differs for ${JSON.stringify(path)}`,
+      );
+      return Object.freeze({
+        kind: "opaque" as const,
+        path,
+        mediaType: entry.mediaType,
+        sha256: entry.sha256,
+        size: entry.size,
+        body: opened.body,
+      });
+    }
+    const materialized = await this.readRevisionFile(spaceId, revisionId, path);
+    if (materialized === null || materialized.kind !== "markdown") return null;
+    const bytes = new Uint8Array(materialized.bytes);
+    return Object.freeze({
+      kind: "markdown" as const,
+      path,
+      mediaType: materialized.mediaType,
+      sha256: materialized.sha256,
+      size: materialized.size,
+      body: new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(bytes);
+          controller.close();
+        },
+      }),
+    });
+  }
+
   async #readVerifiedEnvelope(
     spaceId: SpaceId,
     revisionId: RevisionId,
@@ -893,7 +942,10 @@ export class CanonicalRevisionCoordinator {
         "exact revision does not exist in this Mind",
       );
     }
-    if (projected.manifest.format !== REVISION_MANIFEST_FORMAT_V3) {
+    if (
+      projected.manifest.format !== REVISION_MANIFEST_FORMAT_V3 &&
+      projected.manifest.format !== REVISION_MANIFEST_FORMAT_V4
+    ) {
       const actual = await this.#objects.calculateSha256(
         new TextEncoder().encode(serializeRevisionManifest(projected.manifest)),
       );
@@ -940,7 +992,8 @@ export class CanonicalRevisionCoordinator {
     }
     const hydrated = Object.freeze({ revision: projected.revision, manifest });
     if (
-      manifest.format !== REVISION_MANIFEST_FORMAT_V3 ||
+      (manifest.format !== REVISION_MANIFEST_FORMAT_V3 &&
+        manifest.format !== REVISION_MANIFEST_FORMAT_V4) ||
       !revisionEnvelopesEqual(hydrated, projected)
     ) throw new CanonicalRevisionError(
       "manifest_integrity_failure",

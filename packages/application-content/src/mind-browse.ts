@@ -11,6 +11,7 @@ import {
 import {
   MARKDOWN_MEDIA_TYPE,
   REVISION_MANIFEST_FORMAT_V3,
+  REVISION_MANIFEST_FORMAT_V4,
   canonicalMarkdownPath,
   parseRevisionManifest,
   revisionEnvelopesEqual,
@@ -1325,7 +1326,10 @@ export class MindBrowseService {
     }
     let manifest = envelope.manifest;
     try {
-      if (manifest.format === REVISION_MANIFEST_FORMAT_V3) {
+      if (
+        manifest.format === REVISION_MANIFEST_FORMAT_V3 ||
+        manifest.format === REVISION_MANIFEST_FORMAT_V4
+      ) {
         const stored = "getSpaceCanonicalObject" in this.#objects
           ? await (this.#objects as BundleFileObjectStore).getSpaceCanonicalObject(
               "revision_manifest",
@@ -1366,7 +1370,8 @@ export class MindBrowseService {
   ): Promise<Uint8Array> {
     let object;
     try {
-      object = manifestFormat === REVISION_MANIFEST_FORMAT_V3 &&
+      object = (manifestFormat === REVISION_MANIFEST_FORMAT_V3 ||
+          manifestFormat === REVISION_MANIFEST_FORMAT_V4) &&
           "getSpaceCanonicalObject" in this.#objects
         ? await (this.#objects as BundleFileObjectStore).getSpaceCanonicalObject(
             "markdown",

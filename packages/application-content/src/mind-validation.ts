@@ -10,6 +10,7 @@ import {
 } from "@mind-diary/application-ports";
 import {
   REVISION_MANIFEST_FORMAT_V3,
+  REVISION_MANIFEST_FORMAT_V4,
   parseRevisionManifest,
   revisionEnvelopesEqual,
   serializeRevisionManifest,
@@ -33,6 +34,7 @@ import {
   type MindDiscoveryStore,
 } from "./mind-discovery.js";
 import { analyzeBundleFileReferences } from "./bundle-file-references.js";
+import { IncrementalSha256 } from "./incremental-sha256.js";
 
 export const VALIDATION_ISSUE_LIMIT = 100;
 export const VALIDATION_RESPONSE_BYTE_BUDGET = 64 * 1024;
@@ -41,6 +43,31 @@ export const VALIDATION_PATH_CHARACTER_LIMIT = 512;
 
 const CONTROL_OR_BIDI = /[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/gu;
 const encoder = new TextEncoder();
+
+async function verifyOpaqueBody(
+  body: ReadableStream<Uint8Array>,
+  expectedSize: number,
+  expectedSha256: string,
+): Promise<boolean> {
+  const reader = body.getReader();
+  const digest = new IncrementalSha256();
+  let size = 0;
+  try {
+    while (true) {
+      const part = await reader.read();
+      if (part.done) break;
+      if (!(part.value instanceof Uint8Array) || size + part.value.byteLength > expectedSize) {
+        await reader.cancel().catch(() => undefined);
+        return false;
+      }
+      size += part.value.byteLength;
+      digest.update(part.value);
+    }
+    return size === expectedSize && digest.digest() === expectedSha256;
+  } finally {
+    reader.releaseLock();
+  }
+}
 
 type AllowedAuthorization = Extract<
   AuthorizationDecision,
@@ -317,7 +344,10 @@ export class MindValidationService {
     }
     let manifest = envelope.manifest;
     try {
-      if (manifest.format === REVISION_MANIFEST_FORMAT_V3) {
+      if (
+        manifest.format === REVISION_MANIFEST_FORMAT_V3 ||
+        manifest.format === REVISION_MANIFEST_FORMAT_V4
+      ) {
         const stored = "getSpaceCanonicalObject" in this.#objects
           ? await (this.#objects as BundleFileObjectStore).getSpaceCanonicalObject(
               "revision_manifest",
@@ -365,23 +395,49 @@ export class MindValidationService {
         info.revisionMode,
         initialAuthorization,
       );
-      let object;
-      try {
-        object = entry.kind === "markdown"
-          ? manifest.format === REVISION_MANIFEST_FORMAT_V3 &&
-              "getSpaceCanonicalObject" in this.#objects
-            ? await (this.#objects as BundleFileObjectStore).getSpaceCanonicalObject(
-                "markdown",
-                spaceId,
-                entry.sha256,
-              ) ?? await this.#objects.getImmutable(entry.sha256)
-            : await this.#objects.getImmutable(entry.sha256)
-          : "getBundleFile" in this.#objects
-            ? await (this.#objects as BundleFileObjectStore).getBundleFile(
+      if (entry.kind === "opaque") {
+        let opened;
+        try {
+          opened = "openBundleFile" in this.#objects
+            ? await (this.#objects as BundleFileObjectStore).openBundleFile(
                 spaceId,
                 entry.sha256,
               )
             : null;
+        } catch (error) {
+          if (error instanceof ObjectStoreFailure) {
+            throw new MindValidationFailure(
+              "revision_integrity_failure",
+              "The exact revision failed integrity verification.",
+            );
+          }
+          throw error;
+        }
+        if (
+          opened === null || opened.sha256 !== entry.sha256 ||
+          opened.mediaType !== entry.mediaType || opened.size !== entry.size ||
+          !(await verifyOpaqueBody(opened.body, entry.size, entry.sha256))
+        ) throw new MindValidationFailure(
+          "revision_integrity_failure",
+          "The exact revision failed integrity verification.",
+        );
+        bundleFiles.push(Object.freeze({
+          path: entry.path,
+          mediaType: entry.mediaType,
+        }));
+        continue;
+      }
+      let object;
+      try {
+        object = (manifest.format === REVISION_MANIFEST_FORMAT_V3 ||
+            manifest.format === REVISION_MANIFEST_FORMAT_V4) &&
+            "getSpaceCanonicalObject" in this.#objects
+          ? await (this.#objects as BundleFileObjectStore).getSpaceCanonicalObject(
+              "markdown",
+              spaceId,
+              entry.sha256,
+            ) ?? await this.#objects.getImmutable(entry.sha256)
+          : await this.#objects.getImmutable(entry.sha256);
       } catch (error) {
         if (error instanceof ObjectStoreFailure) {
           throw new MindValidationFailure(
@@ -410,21 +466,14 @@ export class MindValidationService {
           "The exact revision failed integrity verification.",
         );
       }
-      if (entry.kind === "markdown") {
-        sources.push(Object.freeze({ path: entry.path, bytes }));
-        try {
-          referenceMarkdown.push(Object.freeze({
-            path: entry.path,
-            text: new TextDecoder("utf-8", { fatal: true }).decode(bytes),
-          }));
-        } catch {
-          // The OKF validator reports invalid UTF-8 through its normal envelope.
-        }
-      } else {
-        bundleFiles.push(Object.freeze({
+      sources.push(Object.freeze({ path: entry.path, bytes }));
+      try {
+        referenceMarkdown.push(Object.freeze({
           path: entry.path,
-          mediaType: entry.mediaType as BundleFileMediaType,
+          text: new TextDecoder("utf-8", { fatal: true }).decode(bytes),
         }));
+      } catch {
+        // The OKF validator reports invalid UTF-8 through its normal envelope.
       }
     }
     await this.#requireSameValidationAuthorization(

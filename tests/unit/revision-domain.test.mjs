@@ -3,10 +3,13 @@ import { createHash } from "node:crypto";
 import test from "node:test";
 import {
   MARKDOWN_MEDIA_TYPE,
+  REVISION_MANIFEST_FORMAT_V3,
+  REVISION_MANIFEST_FORMAT_V4,
   RevisionEnvelopeError,
   canonicalMarkdownPath,
   createCanonicalRevisionEnvelope,
   createRevisionManifest,
+  parseRevisionManifest,
   revisionNumber,
   serializeRevisionManifest,
   sha256Digest,
@@ -33,6 +36,34 @@ test("revision manifest ordering and serialization are deterministic", () => {
   assert.equal(hash(serializeRevisionManifest(forward)).length, 71);
   assert.ok(Object.isFrozen(forward));
   assert.ok(Object.isFrozen(forward.entries));
+});
+
+test("manifest v4 accepts open safe media while v3 keeps its historical allowlist", () => {
+  const v4 = createRevisionManifest([{
+    kind: "opaque",
+    path: "sources/page.html",
+    sha256: A,
+    mediaType: "Text/HTML; charset=utf-8",
+    size: 17,
+  }], REVISION_MANIFEST_FORMAT_V4);
+  assert.equal(v4.entries[0].mediaType, "text/html");
+  assert.equal(parseRevisionManifest(serializeRevisionManifest(v4)).format, REVISION_MANIFEST_FORMAT_V4);
+
+  const fallback = createRevisionManifest([{
+    kind: "opaque",
+    path: "sources/unknown.bin",
+    sha256: B,
+    mediaType: "text/plain\r\nX-Evil: yes",
+    size: 3,
+  }], REVISION_MANIFEST_FORMAT_V4);
+  assert.equal(fallback.entries[0].mediaType, "application/octet-stream");
+  assert.throws(() => createRevisionManifest([{
+    kind: "opaque",
+    path: "sources/page.html",
+    sha256: A,
+    mediaType: "text/html",
+    size: 17,
+  }], REVISION_MANIFEST_FORMAT_V3), RevisionEnvelopeError);
 });
 
 test("revision values reject invalid digest, path, media, size, number and UTC metadata", () => {

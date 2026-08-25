@@ -237,6 +237,11 @@ export interface BundleFileObject extends BundleFileObjectMetadata {
   readonly bytes: Uint8Array;
 }
 
+/** Bounded canonical read. The caller owns and must consume or cancel `body`. */
+export interface OpenedBundleFileObject extends BundleFileObjectMetadata {
+  readonly body: ReadableStream<Uint8Array>;
+}
+
 export interface BundleFileObjectPutResult {
   readonly object: Readonly<BundleFileObjectMetadata>;
   readonly status: "stored" | "already_exists";
@@ -275,6 +280,22 @@ export interface StagedBundleFileObject {
   readonly createdAt: UtcInstant;
 }
 
+/** Bounded quarantine read used for integrity verification before promotion. */
+export interface OpenedStagedBundleFileObject
+  extends Omit<StagedBundleFileObject, "bytes"> {
+  readonly body: ReadableStream<Uint8Array>;
+}
+
+export interface PromoteStagedBundleFileRequest {
+  readonly stagedFileId: StagedBundleFileId;
+  readonly bindingOwnerId: MindBindingOwnerId;
+  readonly spaceId: SpaceId;
+  readonly sha256: Sha256Digest;
+  readonly size: number;
+  readonly mediaType: BundleFileMediaType;
+  readonly createdAt: UtcInstant;
+}
+
 /** Opaque bytes use Space-scoped canonical keys and a separate staging namespace. */
 export interface BundleFileObjectStore extends ObjectStore, SpaceCanonicalObjectStore {
   putBundleFile(
@@ -284,6 +305,10 @@ export interface BundleFileObjectStore extends ObjectStore, SpaceCanonicalObject
     spaceId: SpaceId,
     sha256: Sha256Digest,
   ): Promise<Readonly<BundleFileObject> | null>;
+  openBundleFile(
+    spaceId: SpaceId,
+    sha256: Sha256Digest,
+  ): Promise<Readonly<OpenedBundleFileObject> | null>;
   listBundleFileObjects(
     request: Readonly<BundleFileObjectListRequest>,
   ): Promise<readonly Readonly<BundleFileObjectMetadata>[]>;
@@ -304,6 +329,12 @@ export interface BundleFileObjectStore extends ObjectStore, SpaceCanonicalObject
   getStagedBundleFile(
     stagedFileId: StagedBundleFileId,
   ): Promise<Readonly<StagedBundleFileObject> | null>;
+  openStagedBundleFile(
+    stagedFileId: StagedBundleFileId,
+  ): Promise<Readonly<OpenedStagedBundleFileObject> | null>;
+  promoteStagedBundleFile(
+    request: Readonly<PromoteStagedBundleFileRequest>,
+  ): Promise<BundleFileObjectPutResult>;
   deleteStagedBundleFile(stagedFileId: StagedBundleFileId): Promise<boolean>;
 }
 

@@ -22,6 +22,7 @@ import type {
   UtcInstant,
   WriteMindBindingId,
 } from "./ids.js";
+import type { BundleFileMediaType } from "./revisions.js";
 
 declare const versionBrand: unique symbol;
 declare const bindingVersionBrand: unique symbol;
@@ -343,7 +344,7 @@ export interface BundleFileDownloadGrant {
   readonly spaceId: SpaceId;
   readonly revisionId: RevisionId;
   readonly path: string;
-  readonly mediaType: "image/png" | "image/jpeg" | "image/gif" | "image/webp" | "application/pdf" | "application/zip";
+  readonly mediaType: BundleFileMediaType;
   readonly sha256: Sha256Digest;
   readonly size: number;
   readonly state: BundleFileDownloadGrantState;
