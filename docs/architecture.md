@@ -678,15 +678,14 @@ explicit target Mind. General cross-Mind search/synthesis требует нов�
   state в cache не сохраняются; background promises прикрепляются только к
   текущему request context. Failed initialization удаляется из cache, а config
   drift создаёт чистое поколение.
-- Request-triggered recovery запускается только после готового successful
-  dynamic HTML document response, не запускается для OAuth, API, MCP или static
-  assets, ждёт трёхсекундное quiet window без новой HTML-навигации и
+- Request-triggered recovery запускается только отдельным same-origin `HEAD`
+  pulse после browser `load`/idle, поэтому navigation response не владеет его
+  `waitUntil`. Обычный document GET, OAuth, API, MCP и static assets recovery не
+  запускают. Pulse ждёт трёхсекундное quiet window и
   объединяется в один isolate-level flight на deployment/config fingerprint с
-  30-секундной cadence после завершения. Новая eligible navigation до старта
-  recovery не только fence-ит generation, но и немедленно завершает старый
-  cancelable idle wait в его исходном request context, после чего планирует
-  quiet window заново. В каждый момент существует только один active owned
-  recovery wait; superseded wait завершается сразу. Due index и
+  30-секундной cadence после завершения. Новый pulse до старта recovery fence-ит
+  старое generation без переноса timer, AbortSignal или другого I/O object между
+  Cloudflare request contexts. Due index и
   queued/failed/expired-claim export jobs dispatch-ятся последовательно,
   поэтому recovery не
   ставит веер metadata operations впереди authenticated reads; следующий

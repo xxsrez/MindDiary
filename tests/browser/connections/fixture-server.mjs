@@ -193,6 +193,14 @@ const server = createServer(async (request, response) => {
       json(response, 200, { ok: true });
       return;
     }
+    if (
+      url.pathname === "/" &&
+      method === "HEAD" &&
+      request.headers["x-mind-diary-recovery-pulse"] === "1"
+    ) {
+      send(response, 200, "text/html; charset=utf-8", "");
+      return;
+    }
     if (url.pathname === "/brand/mind-diary-tokens.css") {
       send(response, 200, "text/css; charset=utf-8", PRODUCT_UI_TOKENS_CSS);
       return;

@@ -2,6 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  PRODUCT_UI_CLIENT_JAVASCRIPT,
+} from "../../packages/adapter-web/dist/product-ui-assets.js";
+
+import {
+  REQUEST_RECOVERY_PULSE_HEADER,
   RequestRecoveryCoordinator,
   createMindDiaryProductWorker,
   isRecoveryEligibleRequest,
@@ -9,6 +14,23 @@ import {
 } from "../../apps/mind-diary-site/worker/request-recovery.js";
 
 const ORIGIN = "https://mind-diary.example";
+
+function recoveryPulse(path = "/") {
+  return new Request(`${ORIGIN}${path}`, {
+    method: "HEAD",
+    headers: {
+      accept: "text/html",
+      [REQUEST_RECOVERY_PULSE_HEADER]: "1",
+    },
+  });
+}
+
+test("product UI schedules a fire-and-forget recovery pulse only after page load", () => {
+  assert.match(PRODUCT_UI_CLIENT_JAVASCRIPT, /requestIdleCallback/u);
+  assert.match(PRODUCT_UI_CLIENT_JAVASCRIPT, /method:"HEAD"/u);
+  assert.match(PRODUCT_UI_CLIENT_JAVASCRIPT, /"x-mind-diary-recovery-pulse":"1"/u);
+  assert.match(PRODUCT_UI_CLIENT_JAVASCRIPT, /addEventListener\("load"/u);
+});
 
 test("Product Worker serves static assets without composing the product runtime", async () => {
   let runtimeCreations = 0;
@@ -94,14 +116,15 @@ test("runtime cache fingerprint fences every restricted UAT configuration genera
   }
 });
 
-test("only successful dynamic HTML document requests can trigger recovery", () => {
+test("only a successful explicit post-load HEAD pulse can trigger recovery", () => {
   const mobile = new Request(`${ORIGIN}/`, {
     headers: {
       accept: "text/html,application/xhtml+xml",
       "user-agent": "Mobile Safari",
     },
   });
-  assert.equal(isRecoveryEligibleRequest(mobile, new Response("ok")), true);
+  assert.equal(isRecoveryEligibleRequest(mobile, new Response("ok")), false);
+  assert.equal(isRecoveryEligibleRequest(recoveryPulse(), new Response("ok")), true);
   for (const path of [
     "/_next/static/app.js",
     "/assets/app.css",
@@ -138,7 +161,7 @@ test("only successful dynamic HTML document requests can trigger recovery", () =
     assert.equal(isRecoveryEligibleRequest(request, new Response("ok")), false, request.url);
   }
   assert.equal(
-    isRecoveryEligibleRequest(mobile, new Response("failed", { status: 503 })),
+    isRecoveryEligibleRequest(recoveryPulse(), new Response("failed", { status: 503 })),
     false,
   );
 });
@@ -156,9 +179,7 @@ test("a slow recovery starts only after foreground and never delays its response
   const background = [];
 
   const response = await coordinator.respond({
-    request: new Request(`${ORIGIN}/`, {
-      headers: { accept: "text/html", "user-agent": "Mobile Safari" },
-    }),
+    request: recoveryPulse(),
     environment,
     fingerprint: "deployment-a",
     foreground: async () => {
@@ -217,7 +238,7 @@ test("a slow recovery starts only after foreground and never delays its response
   ]);
 });
 
-test("concurrent home and asset burst creates one owned recovery wait", async () => {
+test("post-load pulse owns recovery while document and asset requests remain foreground-only", async () => {
   const coordinator = new RequestRecoveryCoordinator({
     delay: async () => undefined,
   });
@@ -230,8 +251,8 @@ test("concurrent home and asset burst creates one owned recovery wait", async ()
     runs += 1;
     await recoveryGate;
   };
-  const respond = (path) => coordinator.respond({
-    request: new Request(`${ORIGIN}${path}`, { headers: { accept: "text/html" } }),
+  const respond = (request) => coordinator.respond({
+    request,
     environment,
     fingerprint: "deployment-a",
     foreground: async () => new Response("ok"),
@@ -240,8 +261,11 @@ test("concurrent home and asset burst creates one owned recovery wait", async ()
   });
 
   await Promise.all([
-    ...Array.from({ length: 20 }, () => respond("/")),
-    ...Array.from({ length: 20 }, (_, index) => respond(`/_next/static/${index}.js`)),
+    respond(recoveryPulse()),
+    ...Array.from({ length: 20 }, () =>
+      respond(new Request(`${ORIGIN}/`, { headers: { accept: "text/html" } }))),
+    ...Array.from({ length: 20 }, (_, index) =>
+      respond(new Request(`${ORIGIN}/_next/static/${index}.js`))),
   ]);
   assert.equal(runs, 1);
   assert.equal(background.length, 1);
@@ -249,13 +273,16 @@ test("concurrent home and asset burst creates one owned recovery wait", async ()
   await Promise.all(background);
 });
 
-test("a later navigation cancels the previous idle wait immediately", async () => {
-  const coordinator = new RequestRecoveryCoordinator({ idleMs: 50 });
+test("a later pulse fences the previous idle wait without sharing cancellation I/O", async () => {
+  const idleResolvers = [];
+  const coordinator = new RequestRecoveryCoordinator({
+    delay: () => new Promise((resolve) => idleResolvers.push(resolve)),
+  });
   const environment = {};
   const background = [];
   let runs = 0;
-  const respond = (path) => coordinator.respond({
-    request: new Request(`${ORIGIN}${path}`, { headers: { accept: "text/html" } }),
+  const respond = () => coordinator.respond({
+    request: recoveryPulse(),
     environment,
     fingerprint: "deployment-a",
     foreground: async () => new Response("ok"),
@@ -263,12 +290,14 @@ test("a later navigation cancels the previous idle wait immediately", async () =
     waitUntil: (promise) => background.push(promise),
   });
 
-  await respond("/");
+  await respond();
   assert.equal(background.length, 1);
-  await respond("/me");
+  await respond();
   assert.equal(background.length, 2);
+  idleResolvers[0]();
   await background[0];
   assert.equal(runs, 0);
+  idleResolvers[1]();
   await background[1];
   assert.equal(runs, 1);
 });
@@ -284,7 +313,7 @@ test("completion-based cadence prevents a recovery storm after success or failur
   const background = [];
   let runs = 0;
   const respond = (recover = async () => undefined) => coordinator.respond({
-    request: new Request(`${ORIGIN}/`, { headers: { accept: "text/html" } }),
+    request: recoveryPulse(),
     environment,
     fingerprint: "deployment-a",
     foreground: async () => new Response("ok"),
@@ -310,7 +339,7 @@ test("completion-based cadence prevents a recovery storm after success or failur
   assert.equal(runs, 2);
 });
 
-test("a new HTML navigation fences an older idle timer before foreground completes", async () => {
+test("a new pulse fences an older idle timer before foreground completes", async () => {
   const idleResolvers = [];
   const coordinator = new RequestRecoveryCoordinator({
     idleMs: 3_000,
@@ -324,7 +353,7 @@ test("a new HTML navigation fences an older idle timer before foreground complet
     releaseSecondForeground = resolve;
   });
   const options = {
-    request: new Request(`${ORIGIN}/`, { headers: { accept: "text/html" } }),
+    request: recoveryPulse(),
     environment,
     fingerprint: "deployment-a",
     recover: async () => { runs += 1; },

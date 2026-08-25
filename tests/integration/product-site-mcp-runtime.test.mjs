@@ -13,6 +13,7 @@ import { MIND_DIARY_STARTER_OKF_TEMPLATE } from "../../packages/adapter-web/dist
 import { createProductSiteRuntime } from "../../packages/composition-root/dist/index.js";
 import {
   createMindDiaryProductWorker,
+  REQUEST_RECOVERY_PULSE_HEADER,
   RequestRecoveryCoordinator,
 } from "../../apps/mind-diary-site/worker/request-recovery.js";
 
@@ -3285,6 +3286,28 @@ test("request-triggered recovery reclaims a revision after an injected index dis
     documentResponse.headers.get("x-mind-diary-performance-correlation-id"),
     null,
   );
+  assert.equal(recoveryWaits.length, 1);
+  await Promise.all(recoveryWaits.splice(0));
+
+  const recoveryPulse = await restartedWorker.fetch(
+    new Request(`${ORIGIN}/`, {
+      method: "HEAD",
+      headers: {
+        accept: "text/html",
+        [REQUEST_RECOVERY_PULSE_HEADER]: "1",
+        "user-agent": "request-recovery-test",
+        "oai-authenticated-user-email": "recovery.owner@example.com",
+        "oai-authenticated-user-full-name": "Recovery%20Owner",
+        "oai-authenticated-user-full-name-encoding": "percent-encoded-utf-8",
+      },
+    }),
+    recoveryEnvironment,
+    {
+      waitUntil: (promise) => recoveryWaits.push(promise),
+      passThroughOnException() {},
+    },
+  );
+  assert.equal(recoveryPulse.status, 200);
   assert.equal(recoveryWaits.length, 2);
   await Promise.all(recoveryWaits);
   assert.ok(restartedRuntime);
