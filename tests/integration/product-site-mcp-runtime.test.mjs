@@ -55,6 +55,7 @@ class FakeD1Database {
   metadataSnapshotHead = null;
   metadataSnapshotChunks = new Map();
   principalActivities = new Map();
+  localFileUploadIntents = new Map();
   search = new Map();
   searchDocuments = new Map();
   searchMemberships = new Map();
@@ -78,6 +79,42 @@ class FakeD1Database {
     }
     if (sql.includes("/*md-metadata-migration*/")) {
       this.metadataSchemaVersion = Math.max(this.metadataSchemaVersion, Number(values[0]));
+      return { success: true, meta: { changes: 1 } };
+    }
+    if (sql.includes("/*md-upload-intent-create*/")) {
+      if (
+        this.localFileUploadIntents.has(values[0]) ||
+        [...this.localFileUploadIntents.values()].some(
+          (row) => row.namespace_hash === values[1],
+        )
+      ) return { success: true, meta: { changes: 0 } };
+      this.localFileUploadIntents.set(values[0], {
+        intent_id: values[0],
+        namespace_hash: values[1],
+        expires_at: values[2],
+        record_version: 1,
+        record_json: values[3],
+      });
+      return { success: true, meta: { changes: 1 } };
+    }
+    if (sql.includes("/*md-upload-intent-update*/")) {
+      const row = this.localFileUploadIntents.get(values[2]);
+      if (!row || row.record_version !== Number(values[3])) {
+        return { success: true, meta: { changes: 0 } };
+      }
+      Object.assign(row, {
+        expires_at: values[0],
+        record_version: row.record_version + 1,
+        record_json: values[1],
+      });
+      return { success: true, meta: { changes: 1 } };
+    }
+    if (sql.includes("/*md-upload-intent-delete-expired*/")) {
+      const row = this.localFileUploadIntents.get(values[0]);
+      if (!row || row.expires_at !== values[1] || row.expires_at > values[2]) {
+        return { success: true, meta: { changes: 0 } };
+      }
+      this.localFileUploadIntents.delete(values[0]);
       return { success: true, meta: { changes: 1 } };
     }
     if (sql.includes("migration*/")) {
@@ -321,6 +358,28 @@ class FakeD1Database {
   }
 
   async all(sql, values) {
+    if (sql.includes("/*md-upload-intent-read-namespace*/")) {
+      const row = [...this.localFileUploadIntents.values()].find(
+        (candidate) => candidate.namespace_hash === values[0],
+      );
+      return { success: true, results: row ? [{ ...row }] : [] };
+    }
+    if (sql.includes("/*md-upload-intent-read*/")) {
+      const row = this.localFileUploadIntents.get(values[0]);
+      return { success: true, results: row ? [{ ...row }] : [] };
+    }
+    if (sql.includes("/*md-upload-intent-collect-expired*/")) {
+      return {
+        success: true,
+        results: [...this.localFileUploadIntents.values()]
+          .filter((row) => row.expires_at <= values[0])
+          .sort((left, right) =>
+            left.expires_at.localeCompare(right.expires_at) ||
+            left.intent_id.localeCompare(right.intent_id))
+          .slice(0, Number(values[1]))
+          .map((row) => ({ ...row })),
+      };
+    }
     if (sql.includes("/*md-metadata-cold-load*/")) {
       const rows = [];
       const baseSequence = this.metadataSnapshotHead?.sequence ??

@@ -36,6 +36,7 @@ export const MCP_CONTENT_TOOLS = [
   "set_read_mind_binding",
   "set_write_mind_binding",
   "get_file_ingress_capabilities",
+  "create_file_upload_intent",
   "stage_bundle_file",
   "reconcile_file_stage",
   "get_bundle_file_download",
@@ -1255,6 +1256,68 @@ const GET_FILE_INGRESS_CAPABILITIES_OUTPUT_SCHEMA = toolOutputSchema(
   }),
 );
 
+const CREATE_FILE_UPLOAD_INTENT_INPUT_SCHEMA = strictInputSchema(
+  {
+    mind: MIND_SELECTOR_SCHEMA,
+    write_binding_id: OPAQUE_ID_SCHEMA,
+    source_kind: Object.freeze({
+      type: "string",
+      enum: Object.freeze([
+        "local_path",
+        "workspace/generated_artifact",
+      ]),
+    }),
+    display_filename: Object.freeze({
+      type: "string",
+      minLength: 1,
+      maxLength: 255,
+    }),
+    claimed_media_type: Object.freeze({
+      type: "string",
+      maxLength: 256,
+    }),
+    expected_size: Object.freeze({
+      type: "integer",
+      minimum: 0,
+      maximum: 268_435_456,
+    }),
+    expected_sha256: SHA256_SCHEMA,
+    idempotency_key: IDEMPOTENCY_KEY_SCHEMA,
+  },
+  [
+    "mind",
+    "write_binding_id",
+    "source_kind",
+    "display_filename",
+    "expected_size",
+    "expected_sha256",
+    "idempotency_key",
+  ],
+);
+
+const CREATE_FILE_UPLOAD_INTENT_OUTPUT_SCHEMA = toolOutputSchema(
+  Object.freeze({
+    type: "object",
+    additionalProperties: false,
+    required: Object.freeze([
+      "intent_version",
+      "upload_url",
+      "expires_at",
+      "replayed",
+    ]),
+    properties: Object.freeze({
+      intent_version: Object.freeze({ const: 1 }),
+      upload_url: Object.freeze({
+        type: "string",
+        format: "uri",
+        maxLength: 4_096,
+      }),
+      expires_at: Object.freeze({ type: "string", format: "date-time" }),
+      replayed: Object.freeze({ type: "boolean" }),
+    }),
+  }),
+);
+
 const STAGE_BUNDLE_FILE_INPUT_SCHEMA = Object.freeze({
   $schema: JSON_SCHEMA_2020_12,
   type: "object",
@@ -1690,6 +1753,20 @@ export const MCP_BUNDLE_FILE_TOOL_DEFINITIONS = Object.freeze([
       readOnlyHint: true,
       destructiveHint: false,
       openWorldHint: false,
+    }),
+  }),
+  Object.freeze({
+    name: "create_file_upload_intent",
+    title: "Create a one-use companion upload intent",
+    description:
+      "Create or exactly replay one versioned 10-minute same-origin upload capability for one verified local or workspace-generated regular-file snapshot. The exact active writable Mind binding and current OAuth grant are rechecked server-side. Return only the capability URL to the trusted companion; never provide a local path, bearer, provider locator, arbitrary URL or base64 bytes.",
+    inputSchema: CREATE_FILE_UPLOAD_INTENT_INPUT_SCHEMA,
+    outputSchema: CREATE_FILE_UPLOAD_INTENT_OUTPUT_SCHEMA,
+    securitySchemes: WRITE_SECURITY_SCHEMES,
+    annotations: Object.freeze({
+      readOnlyHint: false,
+      destructiveHint: false,
+      openWorldHint: true,
     }),
   }),
   Object.freeze({

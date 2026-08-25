@@ -11,10 +11,12 @@ import {
 import { SitesMindLocatorCodec } from "@mind-diary/adapter-locator-sites";
 import {
   MCP_ENDPOINT,
+  FILE_UPLOAD_INTENT_ROUTE_PREFIX,
   MCP_LEGACY_CODEX_ENDPOINT,
   MCP_RETIRED_SITES_ENDPOINT,
   OpenAiNativeFileTransport,
   ProductMcpContentApplication,
+  createFileUploadIntentHttpHandler,
   createLegacyCodexMcpHttpHandler,
   createMcpHttpHandler,
   type McpRequestIdGenerator,
@@ -26,6 +28,7 @@ import {
   type D1DatabaseLike as OAuthD1DatabaseLike,
 } from "@mind-diary/adapter-oauth-sites";
 import {
+  createSitesLocalFileUploadIntentStore,
   createSitesMetadataStore,
   type D1DatabaseLike as MetadataD1DatabaseLike,
 } from "@mind-diary/adapter-metadata-sites";
@@ -76,7 +79,11 @@ import {
   DeterministicOkfExportService,
   ExportJobApplicationService,
   FileIngressCoordinator,
+  LocalFileUploadIntentCleanupService,
+  LocalFileUploadIntentService,
+  MCP_CONTENT_DEPLOYMENT_CAPABILITIES,
   McpBearerAuthenticationService,
+  createLocalFileUploadIntentSecretCodec,
   MarkdownImportService,
   MindBrowseService,
   MindBindingApplicationService,
@@ -808,6 +815,37 @@ export async function createProductSiteRuntime(
     objects,
     clock,
   });
+  const uploadIntentSecrets = await createLocalFileUploadIntentSecretCodec(
+    options.tokenVerifierKey,
+  );
+  const uploadIntentMetadata = await createSitesLocalFileUploadIntentStore(
+    options.database,
+  );
+  const uploadIntents = new LocalFileUploadIntentService({
+    authorizer: contentAuthorizer,
+    bindings: metadata,
+    intents: uploadIntentMetadata,
+    staging: {
+      stageStream: (request) => bundleFileStaging.stageStream(request),
+      readStagedBundleFile: (stagedFileId) =>
+        metadata.readStagedBundleFile(stagedFileId),
+    },
+    digest: objects,
+    clock,
+    secrets: uploadIntentSecrets,
+    deploymentCapabilities: MCP_CONTENT_DEPLOYMENT_CAPABILITIES,
+    issuerActorAllowed: (actor) =>
+      String(actor.authentication.tokenId).startsWith(
+        OAUTH_ACCESS_RECORD_PREFIX,
+      ) &&
+      String(actor.authentication.bindingOwnerId).startsWith(
+        "md_oauth_grant_",
+      ),
+  });
+  const uploadIntentCleanup = new LocalFileUploadIntentCleanupService({
+    intents: uploadIntentMetadata,
+    clock,
+  });
   const nativeFiles = new OpenAiNativeFileTransport({
     maxBytes: BUNDLE_FILE_LIMITS.maxFileBytes,
   });
@@ -997,6 +1035,12 @@ export async function createProductSiteRuntime(
     history,
     validation,
     staging: bundleFileStaging,
+    uploadIntents,
+    uploadIntentUrl: (capability) =>
+      new URL(
+        `${FILE_UPLOAD_INTENT_ROUTE_PREFIX}${encodeURIComponent(capability)}`,
+        options.publicOrigin,
+      ).href,
     ingress: fileIngress,
     bundleFileDownloads,
     nativeFiles,
@@ -1160,6 +1204,7 @@ export async function createProductSiteRuntime(
     const mcpWriteActivityTools = new Set([
       "commit_changeset",
       "capture_knowledge",
+      "create_file_upload_intent",
       "stage_bundle_file",
       "set_read_mind_binding",
       "set_write_mind_binding",
@@ -1885,6 +1930,11 @@ export async function createProductSiteRuntime(
       return bundleFileDownloads.download(actor, secret);
     },
   });
+  const fileUploadIntent = createFileUploadIntentHttpHandler({
+    application: uploadIntents,
+    publicOrigin: options.publicOrigin,
+    nextRequestId: () => nextOpaque("file-upload-request"),
+  });
 
   const indexJobs = new RevisionIndexJobHandler({ work: metadata, revisions, index, clock });
   const exportJobs = new ExportJobHandler({
@@ -2143,6 +2193,11 @@ export async function createProductSiteRuntime(
         );
         cleanupDeleted += staged.deleted;
         cleanupReclaimedBytes += staged.bytes;
+        const expiredIntents = await stage(
+          "recovery_staging_cleanup",
+          () => uploadIntentCleanup.run(),
+        );
+        cleanupDeleted += expiredIntents.deleted;
         const imported = await stage(
           "recovery_import_cleanup",
           () => markdownImports.collectExpired({
@@ -2243,18 +2298,29 @@ export async function createProductSiteRuntime(
       const startedAt = Date.now();
       const exportRequest = path.startsWith("/api/v1/exports/");
       const bundleFileRequest = path.startsWith("/api/bundle-download/");
+      const fileUploadRequest = path.startsWith(
+        FILE_UPLOAD_INTENT_ROUTE_PREFIX,
+      );
       try {
         const response =
           (await exportDownload(request)) ??
           (await bundleFileDownload(request)) ??
+          (await fileUploadIntent(request)) ??
           await web(request, deferActivity);
         if (response !== null) {
-          const surface = exportRequest || bundleFileRequest ? "content" as const : "control" as const;
+          const surface =
+            exportRequest || bundleFileRequest || fileUploadRequest
+              ? "content" as const
+              : "control" as const;
           const operation = exportRequest
             ? "export" as const
             : bundleFileRequest
               ? "get_bundle_file_download" as const
-              : "request" as const;
+              : fileUploadRequest
+                ? request.method === "PUT"
+                  ? "stage_bundle_file" as const
+                  : "reconcile_file_stage" as const
+                : "request" as const;
           recordRuntimeMetric(telemetry, {
             kind: "operational",
             metric: "request_latency_ms",
@@ -2304,7 +2370,10 @@ export async function createProductSiteRuntime(
         recordRuntimeMetric(telemetry, {
           kind: "operational",
           metric: "request_error",
-          surface: exportRequest || bundleFileRequest ? "content" : "control",
+          surface:
+            exportRequest || bundleFileRequest || fileUploadRequest
+              ? "content"
+              : "control",
           operation: "storage",
           outcome: "unavailable",
           unit: "count",

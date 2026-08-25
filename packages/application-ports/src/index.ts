@@ -65,6 +65,7 @@ export type {
 export * from "./runtime.js";
 export * from "./control.js";
 export * from "./objects.js";
+export * from "./upload-intents.js";
 export * from "./revisions.js";
 export * from "./authorization.js";
 export * from "./tokens.js";

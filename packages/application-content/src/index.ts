@@ -56,6 +56,7 @@ export * from "./bundle-file-references.js";
 export * from "./bundle-file-downloads.js";
 export * from "./generated-artifacts.js";
 export * from "./local-file-companion.js";
+export * from "./local-file-upload-intents.js";
 export * from "./file-ingress-coordinator.js";
 export * from "./connector-ingress.js";
 
@@ -80,6 +81,7 @@ export const CONTENT_QUERIES = [
 export const CONTENT_COMMANDS = [
   "set_read_mind_binding",
   "set_write_mind_binding",
+  "create_file_upload_intent",
   "stage_bundle_file",
   "get_bundle_file_download",
   "capture_knowledge",
@@ -117,6 +119,7 @@ export type McpPerformanceTool =
   | "get_bundle_file_download"
   | "set_read_mind_binding"
   | "set_write_mind_binding"
+  | "create_file_upload_intent"
   | "stage_bundle_file"
   | "reconcile_file_stage"
   | "commit_changeset"

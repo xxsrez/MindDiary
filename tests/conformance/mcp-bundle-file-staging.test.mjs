@@ -41,10 +41,29 @@ test("publishes strict native-file staging metadata and mixed commit operations"
     MCP_BUNDLE_FILE_TOOL_DEFINITIONS.map(({ name }) => name),
     [
       "get_file_ingress_capabilities",
+      "create_file_upload_intent",
       "stage_bundle_file",
       "reconcile_file_stage",
       "get_bundle_file_download",
     ],
+  );
+  const intent = MCP_BUNDLE_FILE_TOOL_DEFINITIONS.find(
+    ({ name }) => name === "create_file_upload_intent",
+  );
+  assert.deepEqual(intent.inputSchema.required, [
+    "mind",
+    "write_binding_id",
+    "source_kind",
+    "display_filename",
+    "expected_size",
+    "expected_sha256",
+    "idempotency_key",
+  ]);
+  assert.equal(intent.inputSchema.properties.expected_size.maximum, 268_435_456);
+  assert.equal("_meta" in intent, false);
+  assert.doesNotMatch(
+    JSON.stringify({ inputSchema: intent.inputSchema, outputSchema: intent.outputSchema }),
+    /file_id|download_url|bytes|absolute_path|bearer|connector_object/iu,
   );
   const capabilities = MCP_BUNDLE_FILE_TOOL_DEFINITIONS.find(
     ({ name }) => name === "get_file_ingress_capabilities",
@@ -590,6 +609,10 @@ test("read-only catalog omits native staging and direct calls fail before execut
     params: { _meta: modernMeta() },
   })).json()).result;
   assert.equal(listed.tools.some(({ name }) => name === "stage_bundle_file"), false);
+  assert.equal(
+    listed.tools.some(({ name }) => name === "create_file_upload_intent"),
+    false,
+  );
 
   const called = (await (await send({
     jsonrpc: "2.0",
@@ -603,5 +626,17 @@ test("read-only catalog omits native staging and direct calls fail before execut
   })).json()).result;
   assert.equal(called.isError, true);
   assert.equal(called.structuredContent.error.code, "insufficient_scope");
+  const intentCalled = (await (await send({
+    jsonrpc: "2.0",
+    id: 3,
+    method: "tools/call",
+    params: {
+      name: "create_file_upload_intent",
+      arguments: {},
+      _meta: modernMeta(),
+    },
+  })).json()).result;
+  assert.equal(intentCalled.isError, true);
+  assert.equal(intentCalled.structuredContent.error.code, "insufficient_scope");
   assert.equal(executed, 0);
 });

@@ -1278,3 +1278,5 @@ export async function createSitesMetadataStore(
 ): Promise<SitesMetadataStore> {
   return new SitesMetadataStore(database).ready();
 }
+
+export * from "./local-file-upload-intent-store.js";

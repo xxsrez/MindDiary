@@ -1,4 +1,5 @@
 export * from "./native-file-input.js";
+export * from "./file-upload-intent.js";
 export * from "./product-application.js";
 
 export {

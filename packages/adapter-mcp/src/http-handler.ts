@@ -718,7 +718,9 @@ function listedTools(
       .filter(
         (name) =>
           available.has(name) &&
-          (name !== "stage_bundle_file" || tokenAllowsWrite(actor)),
+          ((name !== "stage_bundle_file" &&
+            name !== "create_file_upload_intent") ||
+            tokenAllowsWrite(actor)),
       )
       .map((name) => CANONICAL_DEFINITION_BY_NAME.get(name))
       .filter(
@@ -1307,6 +1309,7 @@ export function createMcpHttpHandlerAtEndpoint(
     if (
       (name === "commit_changeset" ||
         name === "reconcile_changeset" ||
+        name === "create_file_upload_intent" ||
         name === "stage_bundle_file" ||
         name === "reconcile_file_stage" ||
         name === "capture_knowledge" ||

@@ -206,6 +206,18 @@ function harness() {
     history: { async listRevisions() { return {}; }, async getRevision() { return {}; } },
     validation: { async validateMind() { return {}; } },
     commits: { async commit() { return { kind: "invalid" }; } },
+    uploadIntents: {
+      async create() {
+        return {
+          kind: "ready",
+          uploadCapability: `mdupload_v1_${"A".repeat(64)}`,
+          expiresAt: "2026-08-22T10:10:00.000Z",
+          replayed: false,
+        };
+      },
+    },
+    uploadIntentUrl: (capability) =>
+      `https://mind-diary.invalid/api/file-ingress/v1/upload-intents/${capability}`,
     ingress: {
       capabilities() {
         return Object.freeze([
@@ -384,6 +396,7 @@ test("modern and compatibility profiles share multiple-read/single-write applica
 
   for (const name of [
     "get_file_ingress_capabilities",
+    "create_file_upload_intent",
     "reconcile_file_stage",
     "reconcile_changeset",
   ]) {
@@ -415,6 +428,35 @@ test("modern and compatibility profiles share multiple-read/single-write applica
   assert.deepEqual(
     legacyCapabilities.structuredContent,
     modernCapabilities.structuredContent,
+  );
+  const intentArguments = {
+    mind: "alpha",
+    write_binding_id: "write_binding_fixture",
+    source_kind: "local_path",
+    display_filename: "fixture.epub",
+    claimed_media_type: "application/epub+zip",
+    expected_size: 42,
+    expected_sha256: `sha256:${"a".repeat(64)}`,
+    idempotency_key: "profile-upload-intent",
+  };
+  const modernIntent = await modernCall(
+    env,
+    "create_file_upload_intent",
+    intentArguments,
+    "write-token",
+    13,
+  );
+  const legacyIntent = await compatibilityCall(
+    env,
+    "create_file_upload_intent",
+    intentArguments,
+    14,
+  );
+  assert.equal(modernIntent.isError, false);
+  assert.deepEqual(legacyIntent.structuredContent, modernIntent.structuredContent);
+  assert.match(
+    modernIntent.structuredContent.data.upload_url,
+    /^https:\/\/mind-diary\.invalid\/api\/file-ingress\/v1\/upload-intents\/mdupload_v1_/u,
   );
   assert.deepEqual(
     modernCapabilities.structuredContent.data.sources.map(

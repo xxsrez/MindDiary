@@ -1,5 +1,8 @@
 import { SITES_AUDIT_MIGRATIONS } from "../../packages/adapter-audit-sites/dist/index.js";
-import { SITES_METADATA_MIGRATIONS } from "../../packages/adapter-metadata-sites/dist/index.js";
+import {
+  SITES_LOCAL_FILE_UPLOAD_INTENT_SCHEMA,
+  SITES_METADATA_MIGRATIONS,
+} from "../../packages/adapter-metadata-sites/dist/index.js";
 import { SITES_LOCATOR_MIGRATIONS } from "../../packages/adapter-locator-sites/dist/index.js";
 import { SITES_OAUTH_SCHEMA } from "../../packages/adapter-oauth-sites/dist/index.js";
 import { SITES_SEARCH_MIGRATIONS } from "../../packages/adapter-search-sites/dist/index.js";
@@ -11,6 +14,9 @@ function canonicalSql(sql) {
 export const EXPECTED_D1_SCHEMA_GROUPS = Object.freeze({
   metadata: Object.freeze(
     SITES_METADATA_MIGRATIONS.flatMap((migration) => migration.statements).map(canonicalSql),
+  ),
+  uploadIntents: Object.freeze(
+    SITES_LOCAL_FILE_UPLOAD_INTENT_SCHEMA.map(canonicalSql),
   ),
   locator: Object.freeze(SITES_LOCATOR_MIGRATIONS.map(canonicalSql)),
   search: Object.freeze(SITES_SEARCH_MIGRATIONS.map(canonicalSql)),
@@ -63,6 +69,7 @@ export class FakeD1Database {
   metadataSnapshotHead = null;
   metadataSnapshotChunks = new Map();
   principalActivities = new Map();
+  localFileUploadIntents = new Map();
   locatorHandles = new Map();
   search = new Map();
   searchDocuments = new Map();
@@ -111,6 +118,45 @@ export class FakeD1Database {
       return { success: true, meta: { changes: 0 } };
     }
     if (sql.includes("/*md-metadata-migration*/")) {
+      return { success: true, meta: { changes: 1 } };
+    }
+    if (sql.includes("/*md-upload-intent-create*/")) {
+      this.#assertSchema("uploadIntents");
+      if (
+        this.localFileUploadIntents.has(values[0]) ||
+        [...this.localFileUploadIntents.values()].some(
+          (row) => row.namespace_hash === values[1],
+        )
+      ) return { success: true, meta: { changes: 0 } };
+      this.localFileUploadIntents.set(values[0], {
+        intent_id: values[0],
+        namespace_hash: values[1],
+        expires_at: values[2],
+        record_version: 1,
+        record_json: values[3],
+      });
+      return { success: true, meta: { changes: 1 } };
+    }
+    if (sql.includes("/*md-upload-intent-update*/")) {
+      this.#assertSchema("uploadIntents");
+      const row = this.localFileUploadIntents.get(values[2]);
+      if (!row || row.record_version !== Number(values[3])) {
+        return { success: true, meta: { changes: 0 } };
+      }
+      Object.assign(row, {
+        expires_at: values[0],
+        record_version: row.record_version + 1,
+        record_json: values[1],
+      });
+      return { success: true, meta: { changes: 1 } };
+    }
+    if (sql.includes("/*md-upload-intent-delete-expired*/")) {
+      this.#assertSchema("uploadIntents");
+      const row = this.localFileUploadIntents.get(values[0]);
+      if (
+        !row || row.expires_at !== values[1] || row.expires_at > values[2]
+      ) return { success: true, meta: { changes: 0 } };
+      this.localFileUploadIntents.delete(values[0]);
       return { success: true, meta: { changes: 1 } };
     }
     if (sql.includes("/*md-locator-create*/")) {
@@ -595,6 +641,31 @@ export class FakeD1Database {
   }
 
   async all(sql, values) {
+    if (sql.includes("/*md-upload-intent-read-namespace*/")) {
+      this.#assertSchema("uploadIntents");
+      const row = [...this.localFileUploadIntents.values()].find(
+        (candidate) => candidate.namespace_hash === values[0],
+      );
+      return { success: true, results: row ? [{ ...row }] : [] };
+    }
+    if (sql.includes("/*md-upload-intent-read*/")) {
+      this.#assertSchema("uploadIntents");
+      const row = this.localFileUploadIntents.get(values[0]);
+      return { success: true, results: row ? [{ ...row }] : [] };
+    }
+    if (sql.includes("/*md-upload-intent-collect-expired*/")) {
+      this.#assertSchema("uploadIntents");
+      return {
+        success: true,
+        results: [...this.localFileUploadIntents.values()]
+          .filter((row) => row.expires_at <= values[0])
+          .sort((left, right) =>
+            left.expires_at.localeCompare(right.expires_at) ||
+            left.intent_id.localeCompare(right.intent_id))
+          .slice(0, Number(values[1]))
+          .map((row) => ({ ...row })),
+      };
+    }
     if (sql.includes("/*md-oauth-")) this.#assertSchema("oauth");
     if (sql.includes("/*md-oauth-client-read*/")) {
       return { results: this.oauthClients.has(values[0]) ? [{ ...this.oauthClients.get(values[0]) }] : [] };
@@ -950,6 +1021,7 @@ export class FakeD1Database {
     this.metadataSnapshotHead = null;
     this.metadataSnapshotChunks.clear();
     this.principalActivities.clear();
+    this.localFileUploadIntents.clear();
     this.search.clear();
     this.searchDocuments.clear();
     this.searchMemberships.clear();

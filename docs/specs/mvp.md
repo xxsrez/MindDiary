@@ -808,11 +808,12 @@ acceptance Release 0.1.
   persistence after redeploy and SHA-256 read-back.
   Missing hosted capability keeps feature nonterminal.
 
-MD-304 owns BF1–BF5 core runtime/storage evidence. MD-305 must separately prove
-one-use intent expiry/replay, authorization, path-free metadata and HTTP/MCP
-composition for local/workspace sources while reusing MD-304 staging/object
-ports; it does not own a second BundleFile store or lifecycle. MD-275 joins the
-applicable client/source flows into exact-candidate UAT evidence.
+MD-304 owns BF1–BF5 core runtime/storage evidence. MD-305 repository tests
+separately prove one-use intent expiry/replay, authorization, path-free
+metadata and HTTP/MCP composition for local/workspace sources while reusing
+only the MD-304 `stageStream` application seam; it does not own a second
+BundleFile store or lifecycle. MD-275 still joins the applicable client/source
+flows into exact-candidate UAT evidence.
 
 ### Post-MVP Brain-scale storage/import acceptance
 

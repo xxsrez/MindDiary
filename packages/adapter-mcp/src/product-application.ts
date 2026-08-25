@@ -5,6 +5,7 @@ import type {
   ChangesetCommitService,
   ExportJobApplicationService,
   FileIngressCoordinator,
+  LocalFileUploadIntentService,
   MindBindingApplicationService,
   MindBrowseService,
   MindDiscoveryService,
@@ -43,6 +44,8 @@ export interface ProductMcpApplicationDependencies {
   >;
   readonly commits: Pick<ChangesetCommitService, "commit">;
   readonly staging?: Pick<BundleFileStagingService, "stageStream">;
+  readonly uploadIntents?: Pick<LocalFileUploadIntentService, "create">;
+  readonly uploadIntentUrl?: (capability: string) => string;
   readonly ingress: Pick<
     FileIngressCoordinator,
     "capabilities" | "reconcileStage" | "reconcileCommit"
@@ -288,7 +291,15 @@ export class ProductMcpContentApplication implements McpContentApplication {
   async listTools(_request: {
     readonly actor: AuthenticatedActor;
   }): Promise<readonly Readonly<Record<string, unknown>>[]> {
-    return MCP_TOOL_DEFINITIONS;
+    if (
+      this.#dependencies.uploadIntents !== undefined &&
+      this.#dependencies.uploadIntentUrl !== undefined
+    ) return MCP_TOOL_DEFINITIONS;
+    return Object.freeze(
+      MCP_TOOL_DEFINITIONS.filter(
+        (definition) => definition.name !== "create_file_upload_intent",
+      ),
+    );
   }
 
   async listRootResources(request: {
@@ -375,6 +386,7 @@ export class ProductMcpContentApplication implements McpContentApplication {
         request.name === "commit_changeset" ||
           request.name === "reconcile_changeset" ||
           request.name === "capture_knowledge" ||
+          request.name === "create_file_upload_intent" ||
           request.name === "stage_bundle_file" ||
           request.name === "reconcile_file_stage"
           ? "commit"
@@ -418,6 +430,107 @@ export class ProductMcpContentApplication implements McpContentApplication {
           snakeOutput({ sources: this.#dependencies.ingress.capabilities() }),
           "Read the exact deployed file ingress capability matrix.",
         );
+      case "create_file_upload_intent": {
+        if (
+          this.#dependencies.uploadIntents === undefined ||
+          this.#dependencies.uploadIntentUrl === undefined
+        ) {
+          return createMcpToolErrorResult(
+            request.actor.requestId,
+            "file_ingress_source_unsupported",
+            "This deployment does not expose the companion upload-intent boundary.",
+            false,
+          );
+        }
+        if (
+          !hasExactKeys(input, [
+            "mind",
+            "writeBindingId",
+            "sourceKind",
+            "displayFilename",
+            ...(input.claimedMediaType === undefined
+              ? []
+              : ["claimedMediaType"]),
+            "expectedSize",
+            "expectedSha256",
+            "idempotencyKey",
+          ])
+        ) {
+          return createMcpToolErrorResult(
+            request.actor.requestId,
+            "invalid_request",
+            "The upload intent arguments are invalid.",
+            false,
+          );
+        }
+        let info;
+        try {
+          info = await this.#dependencies.discovery.getMindInfo(
+            request.actor,
+            input.mind,
+            { kind: "head" },
+          );
+        } catch {
+          return createMcpToolErrorResult(
+            request.actor.requestId,
+            "mind_not_found",
+            "The requested Mind is unavailable.",
+            false,
+          );
+        }
+        if (!info.contentCapabilities.includes("commit")) {
+          return createMcpToolErrorResult(
+            request.actor.requestId,
+            "forbidden",
+            "The requested operation is not allowed.",
+            false,
+          );
+        }
+        const {
+          mind: _mind,
+          ...intentArguments
+        } = request.arguments;
+        const created = await this.#dependencies.uploadIntents.create(
+          request.actor,
+          info.mind.mindId,
+          intentArguments,
+        );
+        if (created.kind === "denied") {
+          const decision = created.decision as Readonly<{
+            code?: unknown;
+            retryable?: unknown;
+          }>;
+          return createMcpToolErrorResult(
+            request.actor.requestId,
+            typeof decision.code === "string" ? decision.code : "forbidden",
+            "The upload intent could not be authorized.",
+            decision.retryable === true,
+          );
+        }
+        if (created.kind === "invalid") {
+          return createMcpToolErrorResult(
+            request.actor.requestId,
+            created.code,
+            created.code === "file_ingress_intent_conflict"
+              ? "The idempotency key is bound to another upload intent payload."
+              : "The upload intent request was not accepted.",
+            created.code === "file_ingress_transport_unavailable",
+          );
+        }
+        return createMcpToolSuccessResult(
+          {
+            intent_version: 1,
+            upload_url: this.#dependencies.uploadIntentUrl(
+              created.uploadCapability,
+            ),
+            expires_at: created.expiresAt,
+            replayed: created.replayed,
+          },
+          created.replayed
+            ? "Recovered the existing one-use file upload intent."
+            : "Created one short-lived file upload intent.",
+        );
+      }
       case "get_mind_bindings": {
         if (!hasExactKeys(input, [])) {
           return this.#bindingError(request.actor.requestId, "invalid_request");

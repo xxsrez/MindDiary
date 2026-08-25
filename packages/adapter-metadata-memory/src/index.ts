@@ -7,6 +7,7 @@ export { InMemoryHandleRegistry } from "./handle-registry.js";
 export type { InMemoryHandleRegistrySnapshot } from "./handle-registry.js";
 export { InMemoryMcpTokenStore } from "./mcp-token-store.js";
 export { InMemoryRevisionMetadataStore } from "./revision-metadata-store.js";
+export { InMemoryLocalFileUploadIntentStore } from "./local-file-upload-intent-store.js";
 export type {
   AccountBootstrapFailureStage,
   AccountDeletionFailureStage,
