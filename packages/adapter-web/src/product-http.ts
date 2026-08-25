@@ -348,35 +348,90 @@ export interface ProductWebHttpHandlerDependencies {
   readonly mindBindings?: ProductWebMindBindings;
   readonly activity?: ProductWebActivityRecorder;
   readonly performance?: ProductWebPerformanceRecorder;
+  /** Bounded hosted-only coalescing window; direct/local calls remain synchronous. */
+  readonly activityCoalesceWindowMs?: number;
 }
 
 type ProductWebActivityDeferrer = (promise: Promise<unknown>) => void;
 
-async function recordSuccessfulProductWebActivity(
-  recorder: ProductWebActivityRecorder | undefined,
-  defer: ProductWebActivityDeferrer | undefined,
-  actor: RegisteredSitesActor,
-  kind: "page" | "control_read" | "control_write",
-): Promise<void> {
-  if (recorder === undefined) return;
-  let pending: Promise<void>;
-  try {
-    pending = Promise.resolve(recorder.recordSuccessful(actor, "web", kind));
-  } catch {
-    return;
+interface PendingProductWebActivity {
+  actor: RegisteredSitesActor;
+  kind: "page" | "control_read" | "control_write";
+  revision: number;
+  promise: Promise<void>;
+}
+
+class ProductWebActivityCoordinator {
+  readonly #recorder: ProductWebActivityRecorder | undefined;
+  readonly #windowMs: number;
+  readonly #pendingByPrincipal = new Map<string, PendingProductWebActivity>();
+
+  constructor(recorder: ProductWebActivityRecorder | undefined, windowMs: number) {
+    this.#recorder = recorder;
+    this.#windowMs = windowMs;
   }
-  if (defer !== undefined) {
+
+  async record(
+    defer: ProductWebActivityDeferrer | undefined,
+    actor: RegisteredSitesActor,
+    kind: PendingProductWebActivity["kind"],
+  ): Promise<void> {
+    if (this.#recorder === undefined) return;
+    if (defer === undefined) {
+      try {
+        await this.#recorder.recordSuccessful(actor, "web", kind);
+      } catch {
+        // Activity is observational and must never change the product response.
+      }
+      return;
+    }
+
+    const principalKey = String(actor.principalId);
+    let pending = this.#pendingByPrincipal.get(principalKey);
+    if (pending === undefined) {
+      pending = {
+        actor,
+        kind,
+        revision: 0,
+        promise: Promise.resolve(),
+      };
+      const entry = pending;
+      entry.promise = (async () => {
+        if (this.#windowMs > 0) {
+          await new Promise<void>((resolve) => setTimeout(resolve, this.#windowMs));
+        }
+        let recordedRevision = -1;
+        while (recordedRevision !== entry.revision) {
+          recordedRevision = entry.revision;
+          const currentActor = entry.actor;
+          const currentKind = entry.kind;
+          try {
+            await this.#recorder!.recordSuccessful(currentActor, "web", currentKind);
+          } catch {
+            // Best-effort activity failures never affect the foreground result.
+          }
+        }
+      })().finally(() => {
+        if (this.#pendingByPrincipal.get(principalKey) === entry) {
+          this.#pendingByPrincipal.delete(principalKey);
+        }
+      });
+      this.#pendingByPrincipal.set(principalKey, entry);
+    } else if (
+      Date.parse(actor.occurredAtUtc) >= Date.parse(pending.actor.occurredAtUtc)
+    ) {
+      pending.actor = actor;
+      pending.kind = kind;
+      pending.revision += 1;
+    }
+
     try {
-      defer(pending.catch(() => undefined));
+      defer(pending.promise);
       return;
     } catch {
       // Fall through to the bounded foreground fallback when host deferral fails.
     }
-  }
-  try {
-    await pending;
-  } catch {
-    // Activity is observational and must never change the product response.
+    await pending.promise;
   }
 }
 
@@ -2073,6 +2128,15 @@ export function createProductWebHttpHandler(
   deferActivity?: ProductWebActivityDeferrer,
 ) => Promise<Response | null> {
   const origin = canonicalOrigin(dependencies.applicationOrigin);
+  const activityCoalesceWindowMs = dependencies.activityCoalesceWindowMs ?? 1_500;
+  if (
+    !Number.isSafeInteger(activityCoalesceWindowMs) ||
+    activityCoalesceWindowMs < 0 || activityCoalesceWindowMs > 2_000
+  ) throw new TypeError("activityCoalesceWindowMs must be an integer from 0 to 2000");
+  const activity = new ProductWebActivityCoordinator(
+    dependencies.activity,
+    activityCoalesceWindowMs,
+  );
   return async (request, deferActivity) => {
     const url = new URL(request.url);
     const staticResponse = createProductUiStaticAssetResponse(request);
@@ -2192,8 +2256,7 @@ export function createProductWebHttpHandler(
           : errorResponse(503, "operation_failed", requestId, true);
       }
       if (response.ok && identity.kind === "authenticated") {
-        await recordSuccessfulProductWebActivity(
-          dependencies.activity,
+        await activity.record(
           deferActivity,
           identity.actor,
           "page",
@@ -2308,8 +2371,7 @@ export function createProductWebHttpHandler(
           );
           const items = page.items.map((connection) =>
             safeConnectionListItem(connection, access.get(connection.bindingOwnerId)!));
-          await recordSuccessfulProductWebActivity(
-            dependencies.activity,
+          await activity.record(
             deferActivity,
             identity.actor,
             "control_read",
@@ -2329,8 +2391,7 @@ export function createProductWebHttpHandler(
           if (!(await dependencies.oauthConnections.revoke(identity.actor.principalId, connectionRef))) {
             return errorResponse(404, "connection_not_found", requestId);
           }
-          await recordSuccessfulProductWebActivity(
-            dependencies.activity,
+          await activity.record(
             deferActivity,
             identity.actor,
             "control_write",
@@ -2364,8 +2425,7 @@ export function createProductWebHttpHandler(
         );
         const detail = safeConnectionDetail(fresh, access.get(fresh.bindingOwnerId)!);
         if (detail === null) return errorResponse(404, "connection_not_found", requestId);
-        await recordSuccessfulProductWebActivity(
-          dependencies.activity,
+        await activity.record(
           deferActivity,
           identity.actor,
           matched.operation === "mutate_connection_access" ? "control_write" : "control_read",
@@ -2411,8 +2471,7 @@ export function createProductWebHttpHandler(
               ...(tokenAccess === undefined ? {} : { access: tokenAccess }),
             });
           });
-          await recordSuccessfulProductWebActivity(
-            dependencies.activity,
+          await activity.record(
             deferActivity,
             identity.actor,
             "control_read",
@@ -2450,8 +2509,7 @@ export function createProductWebHttpHandler(
         if (freshAccess === undefined) {
           throw new TypeError("safe personal token access is unavailable");
         }
-        await recordSuccessfulProductWebActivity(
-          dependencies.activity,
+        await activity.record(
           deferActivity,
           identity.actor,
           "control_write",
@@ -2474,8 +2532,7 @@ export function createProductWebHttpHandler(
             actor: identity.actor,
             input,
           });
-          await recordSuccessfulProductWebActivity(
-            dependencies.activity,
+          await activity.record(
             deferActivity,
             identity.actor,
             "control_write",
@@ -2495,8 +2552,7 @@ export function createProductWebHttpHandler(
         input,
       });
       if (identity.kind === "authenticated") {
-        await recordSuccessfulProductWebActivity(
-          dependencies.activity,
+        await activity.record(
           deferActivity,
           identity.actor,
           MUTATION_METHODS.has(request.method) ? "control_write" : "control_read",

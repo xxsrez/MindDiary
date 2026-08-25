@@ -354,6 +354,7 @@ test("successful web activity can run after the response through host deferral",
     csrf: { issue: () => "csrf-deferred-activity", verify: () => true },
     control: { execute() { throw new Error("must not execute"); } },
     activity: { recordSuccessful() { return pendingActivity; } },
+    activityCoalesceWindowMs: 0,
   });
 
   const response = await handler(
@@ -366,6 +367,38 @@ test("successful web activity can run after the response through host deferral",
   finishActivity();
   await Promise.all(deferred);
   assert.equal(activityFinished, true);
+});
+
+test("rapid successful pages coalesce one deferred activity write per principal", async () => {
+  const activityCalls = [];
+  const deferred = [];
+  const handler = createProductWebHttpHandler({
+    applicationOrigin: origin,
+    resolveIdentity: () => ({
+      kind: "authenticated",
+      actor: registeredActor,
+      session: sessionProjection,
+    }),
+    csrf: { issue: () => "csrf-coalesced-activity", verify: () => true },
+    control: { execute() { throw new Error("must not execute"); } },
+    activity: {
+      recordSuccessful(actor, surface, kind) {
+        activityCalls.push({ actor, surface, kind });
+      },
+    },
+    activityCoalesceWindowMs: 25,
+  });
+
+  for (let index = 0; index < 3; index += 1) {
+    const response = await handler(
+      new Request(`${origin}/me`),
+      (promise) => { deferred.push(promise); },
+    );
+    assert.equal(response.status, 200);
+  }
+  assert.equal(new Set(deferred).size, 1);
+  await Promise.all(deferred);
+  assert.deepEqual(activityCalls, [{ actor: registeredActor, surface: "web", kind: "page" }]);
 });
 
 test("product root, Connections, and Advanced MCP render safe live projections and fixed assets", async () => {
