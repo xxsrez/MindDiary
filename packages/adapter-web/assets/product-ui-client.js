@@ -4,7 +4,11 @@ const request=async(method,path,body,key)=>{const headers={accept:"application/j
 const newKey=(prefix)=>prefix+":"+crypto.randomUUID();
 const shell=document.querySelector("[data-mind-diary-shell]");
 const recoveryPulse=()=>fetch("/",{method:"HEAD",headers:{accept:"text/html","x-mind-diary-recovery-pulse":"1"},credentials:"same-origin",cache:"no-store"}).catch(()=>undefined);
-const scheduleRecoveryPulse=()=>{"requestIdleCallback" in window?window.requestIdleCallback(()=>void recoveryPulse(),{timeout:5000}):setTimeout(()=>void recoveryPulse(),1000)};
+const scheduleRecoveryPulse=()=>setTimeout(()=>{
+  if(document.visibilityState!=="visible")return;
+  if("requestIdleCallback" in window)window.requestIdleCallback(()=>void recoveryPulse(),{timeout:5000});
+  else void recoveryPulse();
+},15000);
 if(document.readyState==="complete")scheduleRecoveryPulse();else window.addEventListener("load",scheduleRecoveryPulse,{once:true});
 const createDialog=shell?.querySelector("#create-mind-dialog");
 shell?.addEventListener("click",(event)=>{const target=event.target instanceof Element?event.target:null;if(target?.closest("[data-open-create-dialog]")){createDialog?.showModal?.();createDialog?.querySelector("#mind-name")?.focus()}if(target?.closest("[data-retry-home-minds]"))void loadHomeMinds()});

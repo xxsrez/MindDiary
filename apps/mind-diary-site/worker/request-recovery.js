@@ -27,8 +27,8 @@ const NON_DOCUMENT_PATHS = new Set([
   "/signout-with-chatgpt",
 ]);
 
-export const REQUEST_RECOVERY_CADENCE_MS = 30_000;
-export const REQUEST_RECOVERY_IDLE_MS = 3_000;
+export const REQUEST_RECOVERY_CADENCE_MS = 5 * 60_000;
+export const REQUEST_RECOVERY_IDLE_MS = 5_000;
 export const REQUEST_RECOVERY_PULSE_HEADER = "x-mind-diary-recovery-pulse";
 
 function isRecoveryCandidateRequest(request) {
@@ -226,7 +226,19 @@ export function createMindDiaryProductWorker(options) {
           environment,
           fingerprint,
           waitUntil: (promise) => context.waitUntil(promise),
-          recover: () => runtime.recoverBackground(),
+          recover: async () => {
+            try {
+              // Request-triggered maintenance must remain a tiny repair tick.
+              // Larger batches are explicit operator work: on Sites they can
+              // occupy the shared D1 binding long enough to starve navigation.
+              return await runtime.recoverBackground(4);
+            } finally {
+              // Work produced by recovery belongs to the pulse that started
+              // it. Never leave it for an unrelated foreground read to adopt.
+              const scheduled = acquired.drainScheduled();
+              if (scheduled.length > 0) await Promise.allSettled(scheduled);
+            }
+          },
           foreground: async () => {
             failureStage = "product-fetch";
             let response;
@@ -235,8 +247,10 @@ export function createMindDiaryProductWorker(options) {
                 context.waitUntil(Promise.resolve(promise).catch(() => undefined));
               });
             } finally {
-              const scheduled = acquired.drainScheduled();
-              if (scheduled.length > 0) context.waitUntil(Promise.allSettled(scheduled));
+              if (!["GET", "HEAD", "OPTIONS"].includes(request.method)) {
+                const scheduled = acquired.drainScheduled();
+                if (scheduled.length > 0) context.waitUntil(Promise.allSettled(scheduled));
+              }
             }
             if (response !== null) return response;
             failureStage = "vinext-fetch";

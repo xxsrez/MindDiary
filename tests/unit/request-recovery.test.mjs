@@ -27,9 +27,51 @@ function recoveryPulse(path = "/") {
 
 test("product UI schedules a fire-and-forget recovery pulse only after page load", () => {
   assert.match(PRODUCT_UI_CLIENT_JAVASCRIPT, /requestIdleCallback/u);
+  assert.match(PRODUCT_UI_CLIENT_JAVASCRIPT, /setTimeout\(.*15000/su);
+  assert.match(PRODUCT_UI_CLIENT_JAVASCRIPT, /visibilityState/u);
   assert.match(PRODUCT_UI_CLIENT_JAVASCRIPT, /method:"HEAD"/u);
   assert.match(PRODUCT_UI_CLIENT_JAVASCRIPT, /"x-mind-diary-recovery-pulse":"1"/u);
   assert.match(PRODUCT_UI_CLIENT_JAVASCRIPT, /addEventListener\("load"/u);
+});
+
+test("foreground reads never inherit scheduled work from request recovery", async () => {
+  let schedule;
+  let releaseDispatch;
+  const dispatchGate = new Promise((resolve) => { releaseDispatch = resolve; });
+  const waits = [];
+  const worker = createMindDiaryProductWorker({
+    recoveryCoordinator: new RequestRecoveryCoordinator({ delay: async () => undefined }),
+    async createRuntime(capturedSchedule) {
+      schedule = capturedSchedule;
+      return {
+        async fetch() { return new Response("ok"); },
+        async recoverBackground(limit) {
+          assert.equal(limit, 4);
+          schedule({ kind: "revision_index", id: "job_recovery" });
+        },
+        async dispatchBackground() { await dispatchGate; },
+      };
+    },
+    readConfig() { return { publicOrigin: ORIGIN }; },
+    async fallbackFetch() { return new Response("fallback", { status: 404 }); },
+  });
+  const environment = {};
+  const context = { waitUntil: (promise) => waits.push(promise) };
+
+  assert.equal((await worker.fetch(recoveryPulse(), environment, context)).status, 200);
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.equal(waits.length, 1);
+
+  assert.equal((await worker.fetch(
+    new Request(`${ORIGIN}/minds`, { headers: { accept: "text/html" } }),
+    environment,
+    context,
+  )).status, 200);
+  assert.equal(waits.length, 1);
+
+  releaseDispatch();
+  await waits[0];
 });
 
 test("Product Worker serves static assets without composing the product runtime", async () => {

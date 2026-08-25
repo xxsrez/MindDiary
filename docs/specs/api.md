@@ -1109,9 +1109,12 @@ Accepted internal background/recovery names:
 The current candidate advances validation/finalization through repeatable
 bounded commands with durable checkpoints and runs expired-import cleanup from
 bounded request-triggered recovery. Recovery starts only after a successful
-dynamic HTML document response is ready; OAuth, API, MCP and static assets are
-excluded. It is single-flight per Worker deployment/config generation and
-observes a completion-based 30-second cadence. Its stages emit closed
+dynamic HTML document response is ready and the visible document has remained
+open for a 15-second client quiet period plus the bounded server idle window;
+OAuth, API, MCP and static assets are excluded. A request-triggered flight
+processes at most four candidates per recovery stage. It is single-flight per
+Worker deployment/config generation and observes a completion-based five-minute
+cadence; larger recovery batches are explicit operator work. Its stages emit closed
 privacy-safe duration/outcome telemetry. Separate public background routes do
 not exist; unknown routes remain 404 and no import tool is advertised through
 MCP.
