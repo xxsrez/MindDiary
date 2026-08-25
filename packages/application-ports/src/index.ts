@@ -54,6 +54,7 @@ export type {
   PrincipalAccountSnapshot,
   ReadMindBinding,
   ReadMindBindingId,
+  Sha256Digest,
   SensitiveExternalBinding,
   SpaceMembership,
   WriteMindBinding,

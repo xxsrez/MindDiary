@@ -1,4 +1,4 @@
-import type { Sha256Digest } from "@mind-diary/domain";
+import type { Sha256Digest } from "@mind-diary/application-ports";
 
 const INITIAL: readonly number[] = [
   0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,

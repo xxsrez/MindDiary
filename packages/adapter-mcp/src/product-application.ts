@@ -426,10 +426,22 @@ export class ProductMcpContentApplication implements McpContentApplication {
             false,
           );
         }
+        {
+          const hostedUploadIntents =
+            this.#dependencies.uploadIntents !== undefined &&
+            this.#dependencies.uploadIntentUrl !== undefined;
+          const sources = this.#dependencies.ingress.capabilities().map((source) =>
+            hostedUploadIntents &&
+            (source.sourceKind === "local_path" ||
+              source.sourceKind === "workspace/generated_artifact")
+              ? Object.freeze({ ...source, status: "available_hosted" as const })
+              : source,
+          );
         return createMcpToolSuccessResult(
-          snakeOutput({ sources: this.#dependencies.ingress.capabilities() }),
+          snakeOutput({ sources: Object.freeze(sources) }),
           "Read the exact deployed file ingress capability matrix.",
         );
+        }
       case "create_file_upload_intent": {
         if (
           this.#dependencies.uploadIntents === undefined ||

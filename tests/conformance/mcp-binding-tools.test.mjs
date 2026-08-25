@@ -464,8 +464,8 @@ test("modern and compatibility profiles share multiple-read/single-write applica
     ),
     [
       ["session_attachment", "available_hosted"],
-      ["local_path", "not_available"],
-      ["workspace/generated_artifact", "not_available"],
+      ["local_path", "available_hosted"],
+      ["workspace/generated_artifact", "available_hosted"],
       ["connector_object", "not_available"],
       ["bounded_in_memory", "not_available"],
       ["server_generated", "not_available"],
