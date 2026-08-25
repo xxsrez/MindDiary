@@ -212,10 +212,19 @@ delivery profile и ADR-0008/ADR-0009
   local/test данными. Перед UAT release нужно проверить на нём все применимые
   web/control, persistence и MCP flows; локальный smoke не является hosted
   evidence.
-- `UAT` — текущий prod-like OpenAI Site Mind Diary для web/admin UI,
-  application core, persistence и Streamable HTTP MCP. Это default hosted
-  release target; каждый cut связывает exact artifact с Site deployment и
-  применимым live evidence.
+- `UAT` (`User Acceptance Testing`) — текущая prod-like тестовая OpenAI Site
+  среда Mind Diary для web/admin UI, application core, persistence и Streamable
+  HTTP MCP. Она предназначена для регулярной проверки release candidates в
+  реальном hosted окружении до production и является default hosted release
+  target; каждый cut связывает exact artifact с Site deployment и применимым
+  live evidence.
+- Публикация в UAT имеет standing authority: агент может самостоятельно
+  релизить туда проверенные изменения в рамках текущей работы и не запрашивает
+  отдельное разрешение, pre-deploy approval или финальное подтверждение
+  пользователя. UAT создан именно для таких периодических агентских релизов.
+  Не публикуйте каждую мелкую промежуточную правку: объединяйте связанные
+  изменения в осмысленные cuts, не снижая обязательные release gates и live
+  verification.
 - `production` — отдельная среда для живых пользователей. Она не является
   алиасом текущего Site, пока не provisioned, и не deploy-ится как часть
   обычного UAT release. Нужны отдельный ручной workflow, явный prompt
@@ -239,6 +248,10 @@ delivery profile и ADR-0008/ADR-0009
 - Без явного слова `production` обычный release означает UAT release: targeted
   checks, exact candidate, полный gate, project-profile dev smoke, configured
   remote/CI, publish в UAT target и declared live evidence.
+- Отдельное пользовательское разрешение на каждый UAT release не требуется.
+  Если hosted verification полезна для текущей задачи, агент самостоятельно
+  выбирает разумный момент для UAT cut, избегает избыточно частых публикаций и
+  после deployment выполняет обязательный read-back и live smoke.
 - Фразы «зарелизить на продакшн», «зарелизить на прод» и `release to
   production` означают отдельную manual-only операцию. Не трактуйте их как UAT
   release и не включайте production deploy в обычный UAT release. Перед
