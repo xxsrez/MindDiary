@@ -62,6 +62,7 @@ export class FakeD1Database {
   metadataSnapshot = null;
   metadataSnapshotHead = null;
   metadataSnapshotChunks = new Map();
+  principalActivities = new Map();
   locatorHandles = new Map();
   search = new Map();
   searchDocuments = new Map();
@@ -408,6 +409,40 @@ export class FakeD1Database {
       }
       return { success: true, meta: { changes } };
     }
+    if (sql.includes("/*md-principal-activity-upsert*/")) {
+      this.#assertSchema("metadata");
+      const current = this.principalActivities.get(values[0]);
+      const next = {
+        principal_id: values[0],
+        last_web_seen_at: values[1],
+        last_mcp_seen_at: values[2],
+        last_activity_at: values[3],
+        last_activity_surface: values[4],
+        last_activity_kind: values[5],
+      };
+      if (current?.last_web_seen_at &&
+          (!next.last_web_seen_at || current.last_web_seen_at >= next.last_web_seen_at)) {
+        next.last_web_seen_at = current.last_web_seen_at;
+      }
+      if (current?.last_mcp_seen_at &&
+          (!next.last_mcp_seen_at || current.last_mcp_seen_at >= next.last_mcp_seen_at)) {
+        next.last_mcp_seen_at = current.last_mcp_seen_at;
+      }
+      if (current && current.last_activity_at >= next.last_activity_at) {
+        next.last_activity_at = current.last_activity_at;
+        next.last_activity_surface = current.last_activity_surface;
+        next.last_activity_kind = current.last_activity_kind;
+      }
+      this.principalActivities.set(values[0], next);
+      return { success: true, meta: { changes: 1 } };
+    }
+    if (sql.includes("/*md-principal-activity-delete*/")) {
+      this.#assertSchema("metadata");
+      return {
+        success: true,
+        meta: { changes: this.principalActivities.delete(values[0]) ? 1 : 0 },
+      };
+    }
     if (sql.includes("/*md-search-membership-delete*/")) {
       this.#assertSchema("search");
       let changes = 0;
@@ -743,6 +778,18 @@ export class FakeD1Database {
         results: this.metadataEvents.map((row) => ({ ...row })),
       };
     }
+    if (sql.includes("/*md-principal-activity-read-one*/")) {
+      this.#assertSchema("metadata");
+      const row = this.principalActivities.get(values[0]);
+      return { success: true, results: row ? [{ ...row }] : [] };
+    }
+    if (sql.includes("/*md-principal-activity-read-all*/")) {
+      this.#assertSchema("metadata");
+      return {
+        success: true,
+        results: [...this.principalActivities.values()].map((row) => ({ ...row })),
+      };
+    }
     if (sql.includes("/*md-metadata-events*/")) {
       this.#assertSchema("metadata");
       return {
@@ -840,6 +887,7 @@ export class FakeD1Database {
     this.metadataSnapshot = null;
     this.metadataSnapshotHead = null;
     this.metadataSnapshotChunks.clear();
+    this.principalActivities.clear();
     this.search.clear();
     this.searchDocuments.clear();
     this.searchMemberships.clear();

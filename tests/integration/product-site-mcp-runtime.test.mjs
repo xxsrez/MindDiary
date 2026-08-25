@@ -52,6 +52,7 @@ class FakeD1Database {
   metadataSnapshot = null;
   metadataSnapshotHead = null;
   metadataSnapshotChunks = new Map();
+  principalActivities = new Map();
   search = new Map();
   searchDocuments = new Map();
   searchMemberships = new Map();
@@ -120,6 +121,38 @@ class FakeD1Database {
         changes += 1;
       }
       return { success: true, meta: { changes } };
+    }
+    if (sql.includes("/*md-principal-activity-upsert*/")) {
+      const current = this.principalActivities.get(values[0]);
+      const next = {
+        principal_id: values[0],
+        last_web_seen_at: values[1],
+        last_mcp_seen_at: values[2],
+        last_activity_at: values[3],
+        last_activity_surface: values[4],
+        last_activity_kind: values[5],
+      };
+      if (current?.last_web_seen_at &&
+          (!next.last_web_seen_at || current.last_web_seen_at >= next.last_web_seen_at)) {
+        next.last_web_seen_at = current.last_web_seen_at;
+      }
+      if (current?.last_mcp_seen_at &&
+          (!next.last_mcp_seen_at || current.last_mcp_seen_at >= next.last_mcp_seen_at)) {
+        next.last_mcp_seen_at = current.last_mcp_seen_at;
+      }
+      if (current && current.last_activity_at >= next.last_activity_at) {
+        next.last_activity_at = current.last_activity_at;
+        next.last_activity_surface = current.last_activity_surface;
+        next.last_activity_kind = current.last_activity_kind;
+      }
+      this.principalActivities.set(values[0], next);
+      return { success: true, meta: { changes: 1 } };
+    }
+    if (sql.includes("/*md-principal-activity-delete*/")) {
+      return {
+        success: true,
+        meta: { changes: this.principalActivities.delete(values[0]) ? 1 : 0 },
+      };
     }
     if (sql.includes("/*md-locator-create*/")) {
       this.locatorHandles.set(values[0], {
@@ -324,6 +357,16 @@ class FakeD1Database {
       return {
         success: true,
         results: this.metadataEvents.map((row) => ({ ...row })),
+      };
+    }
+    if (sql.includes("/*md-principal-activity-read-one*/")) {
+      const row = this.principalActivities.get(values[0]);
+      return { success: true, results: row ? [{ ...row }] : [] };
+    }
+    if (sql.includes("/*md-principal-activity-read-all*/")) {
+      return {
+        success: true,
+        results: [...this.principalActivities.values()].map((row) => ({ ...row })),
       };
     }
     if (sql.includes("/*md-locator-read*/")) {
