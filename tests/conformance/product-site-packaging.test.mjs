@@ -48,11 +48,21 @@ test("product composition routes the Sites-safe modern and versioned Codex MCP e
 });
 
 test("product Worker owns the operable UI and scopes the one-time Bearer to MCP self-check", async () => {
-  const [http, assets, composition] = await Promise.all([
+  const [http, assetWrapper, composition, browserAssets] = await Promise.all([
     readFile(resolve(root, "packages/adapter-web/src/product-http.ts"), "utf8"),
     readFile(resolve(root, "packages/adapter-web/src/product-ui-assets.ts"), "utf8"),
     readFile(resolve(root, "packages/composition-root/src/product-site.ts"), "utf8"),
+    Promise.all([
+      "product-ui-client.js",
+      "ordinary-minds-client.js",
+      "markdown-import-client.js",
+      "collaboration-client.js",
+      "connections-client.js",
+      "visibility-catalog-client.js",
+      "shell-interactions.js",
+    ].map((name) => readFile(resolve(root, "packages/adapter-web/assets", name), "utf8"))),
   ]);
+  const assets = `${assetWrapper}\n${browserAssets.join("\n")}`;
   assert.match(http, /renderAuthenticatedOnboardingDocument/);
   assert.match(http, /renderMindDiaryUiShellDocument/);
   assert.match(http, /renderAdvancedMcpPageDocument/);

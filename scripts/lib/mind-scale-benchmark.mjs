@@ -109,10 +109,16 @@ function instrumentStore(delegate, methods) {
   const methodSet = new Set(methods);
   let active = 0;
   let maximumConcurrent = 0;
-  const store = new Proxy(delegate, {
+  const wrap = (target) => new Proxy(target, {
     get(target, property) {
       const selected = Reflect.get(target, property, target);
       if (typeof selected !== "function") return selected;
+      if (property === "withConsistentRead") {
+        return (operation) => selected.call(
+          target,
+          (sessionStore) => operation(wrap(sessionStore)),
+        );
+      }
       if (typeof property !== "string" || !methodSet.has(property)) {
         return selected.bind(target);
       }
@@ -133,6 +139,7 @@ function instrumentStore(delegate, methods) {
       };
     },
   });
+  const store = wrap(delegate);
   return Object.freeze({
     store,
     snapshot: () => Object.freeze({
@@ -181,7 +188,27 @@ async function createEnvironment(count) {
     });
     minds.push(Object.freeze({ mindId: created.mindId, handle }));
   }
-  return Object.freeze({ metadata, objects, bootstrap, owner, ownerActor, minds });
+  const account = await metadata.readAccount(owner.principalId);
+  assert.ok(account);
+  const session = Object.freeze({
+    principal: Object.freeze({
+      displayName: account.principal.displayName,
+      profileVersion: account.principal.profileVersion,
+    }),
+    personalMind: Object.freeze({
+      name: account.personalMind.space.name,
+      headRevisionId: account.personalMind.space.headRevisionId,
+    }),
+  });
+  return Object.freeze({
+    metadata,
+    objects,
+    bootstrap,
+    owner,
+    ownerActor,
+    minds,
+    session,
+  });
 }
 
 function expectedListRoutes(count) {
@@ -252,6 +279,7 @@ async function runWebProjectionScale(count) {
     resolveIdentity: () => ({
       kind: "authenticated",
       actor: environment.ownerActor,
+      session: environment.session,
     }),
     csrf: {
       issue: () => "local-scale-csrf",
@@ -281,20 +309,30 @@ async function runWebProjectionScale(count) {
   assert.equal(minds?.status, 200);
   assert.match(await minds.text(), /Minds/u);
   const mindsEvidence = metadata.snapshot();
-  for (const evidence of [homeEvidence, mindsEvidence]) {
-    assert.deepEqual(evidence.calls, {
-      readPersonalMindProfile: 1,
-      listActiveMembershipMindIds: 1,
-      listPublicMindCatalogPage: 0,
-      readResolvedSpace: 0,
-      readResolvedSpaces: 1,
-      readRevision: 0,
-      readHead: 0,
-      readCurrentAuthorizationState: 0,
-      readCurrentAuthorizationStates: 2,
-    });
-    assert.ok(evidence.maximumConcurrent <= LOCAL_MIND_SCALE_CONCURRENCY);
-  }
+  assert.deepEqual(homeEvidence.calls, {
+    readPersonalMindProfile: 1,
+    listActiveMembershipMindIds: 1,
+    listPublicMindCatalogPage: 0,
+    readResolvedSpace: 0,
+    readResolvedSpaces: 1,
+    readRevision: 0,
+    readHead: 0,
+    readCurrentAuthorizationState: 0,
+    readCurrentAuthorizationStates: 2,
+  });
+  assert.deepEqual(mindsEvidence.calls, {
+    readPersonalMindProfile: 0,
+    listActiveMembershipMindIds: 0,
+    listPublicMindCatalogPage: 0,
+    readResolvedSpace: 0,
+    readResolvedSpaces: 0,
+    readRevision: 0,
+    readHead: 0,
+    readCurrentAuthorizationState: 0,
+    readCurrentAuthorizationStates: 0,
+  });
+  assert.ok(homeEvidence.maximumConcurrent <= LOCAL_MIND_SCALE_CONCURRENCY);
+  assert.ok(mindsEvidence.maximumConcurrent <= LOCAL_MIND_SCALE_CONCURRENCY);
   assert.ok(homeElapsedMs <= LOCAL_MIND_SCALE_LATENCY_BUDGET_MS);
   assert.ok(mindsElapsedMs <= LOCAL_MIND_SCALE_LATENCY_BUDGET_MS);
   return Object.freeze({
