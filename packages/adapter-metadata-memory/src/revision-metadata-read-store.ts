@@ -1,0 +1,1515 @@
+import type {
+  AuthorizationState,
+  Envelope,
+  MindBindingMutationRequest,
+  MutableMindBindingOwnerState,
+  RevisionId,
+  SpaceId,
+} from "./metadata-store-internals.js";
+import type {
+  AccountDeletionContext,
+  ApplyAutomaticCapturePolicyRequest,
+  ApplyMindBindingMutationResult,
+  ApplyReadMindBindingRequest,
+  ApplyWriteMindBindingRequest,
+  AuditEvent,
+  AuditOutboxMessage,
+  AuthorizationStateQuery,
+  BundleFileStagingTransaction,
+  CapacityLimits,
+  CapacityReconcileResult,
+  CapacityReservation,
+  CapacityReservationTransaction,
+  CapacityUsageSnapshot,
+  CheckIdempotencyRequest,
+  CompleteIdempotencyRequest,
+  ControlInvitationProjection,
+  ControlMemberProjection,
+  ExternalIdentityBindingLookup,
+  HandleReservationRequest,
+  HandleReservationResult,
+  HandleResolutionRequest,
+  HandleResolutionResult,
+  HandleRetirementRequest,
+  HandleRetirementResult,
+  MembershipMutationReplayRequest,
+  MembershipMutationReplayResult,
+  MindBindingOwnerId,
+  MindBindingSetSnapshot,
+  MindBindingTransaction,
+  MindRouteAuthorizationQuery,
+  OrdinaryMindRouteSnapshot,
+  PersonalMindProfileSnapshot,
+  PersonalMindResolution,
+  PersonalMindTargetClassification,
+  PersonalMindTargetRequest,
+  Principal,
+  PrincipalAccountSnapshot,
+  PrincipalActivitySummary,
+  PrincipalId,
+  PublicMindCatalogPageRequest,
+  PublicMindCatalogPageResult,
+  RecordPrincipalActivityRequest,
+  RevokeMindBindingOwnerRequest,
+  RevokeMindBindingOwnerResult,
+  ServiceOperatorDirectoryPage,
+  ServiceOperatorDirectoryQuery,
+  ServiceOperatorPrincipalProjection,
+  StageServiceOperatorDirectoryAuditRequest,
+  StagedBundleFileId,
+  StagedBundleFileRecord,
+  UtcInstant,
+  WriteMindBinding,
+} from "@mind-diary/application-ports";
+import {
+  reserveHandleAgainst,
+  resolveHandleAgainst,
+  retireHandleAgainst,
+} from "./handle-registry.js";
+import {
+  BOUNDED_OPAQUE_ID,
+  PUBLIC_CATALOG_CURSOR_QUERY,
+  accountByBindingFromMaps,
+  accountFromMaps,
+  activeReservationAmounts,
+  authorizationStateKey,
+  capacityUsageFromCanonicalState,
+  checkIdempotencyAgainst,
+  cloneAccountDeletionCleanup,
+  cloneAccountDeletionImpact,
+  cloneAuditEvent,
+  cloneAuditOutbox,
+  cloneAuthorizationState,
+  cloneCapacityReservation,
+  cloneCapacityReservations,
+  cloneEnvelope,
+  cloneIdempotencyRecords,
+  cloneMindBindingOwners,
+  clonePrincipalActivity,
+  compareDirectoryRows,
+  compareUnicodeScalarValues,
+  completeIdempotencyAgainst,
+  createStagedBundleFileAgainst,
+  decodePublicCatalogCursor,
+  decodeServiceOperatorCursor,
+  emptyMindBindingOwnerState,
+  encodePublicCatalogCursor,
+  encodeServiceOperatorCursor,
+  freezeStagedBundleFile,
+  maxUtilizationState,
+  mindBindingEffectsAvailable,
+  mindBindingSnapshot,
+  normalizeDirectorySearch,
+  ownedCapacitySpaceIds,
+  personalMindProfileFromAccount,
+  readMembershipReplay,
+  recordMindBindingMutation,
+  replayMindBindingMutation,
+  stageMindBindingAudit,
+  stageMindBindingRevokeAudit,
+  validMindBindingMutationBase,
+} from "./metadata-store-internals.js";
+import {
+  bindingVersion,
+  isReservedTopLevelHandle,
+  parseCanonicalSpaceHandle,
+  version,
+} from "@mind-diary/application-ports";
+import { RevisionMetadataSnapshotStore } from "./revision-metadata-snapshot-store.js";
+
+export abstract class RevisionMetadataReadStore extends RevisionMetadataSnapshotStore {
+  async recordPrincipalActivity(
+      request: Readonly<RecordPrincipalActivityRequest>,
+    ): Promise<void> {
+      await this._runExclusive(async () => {
+        if (
+          !BOUNDED_OPAQUE_ID.test(request.principalId) ||
+          !Number.isFinite(Date.parse(request.observedAt)) ||
+          (request.surface !== "web" && request.surface !== "mcp") ||
+          ![
+            "page",
+            "control_read",
+            "control_write",
+            "discovery",
+            "content_read",
+            "content_write",
+          ].includes(request.kind) ||
+          (request.surface === "web" &&
+            !["page", "control_read", "control_write"].includes(request.kind)) ||
+          (request.surface === "mcp" &&
+            !["discovery", "content_read", "content_write"].includes(request.kind))
+        ) {
+          throw new TypeError("Principal activity observation is invalid");
+        }
+        const principal = this._principals.get(request.principalId);
+        if (!principal || principal.state !== "active") return;
+        const current = this._principalActivities.get(request.principalId) ?? null;
+        const observed = Date.parse(request.observedAt);
+        const lastSurfaceAt = request.surface === "web"
+          ? current?.lastWebSeenAt ?? null
+          : current?.lastMcpSeenAt ?? null;
+        const advancesSurface =
+          lastSurfaceAt === null || observed > Date.parse(lastSurfaceAt);
+        const advancesOverall =
+          current?.lastActivityAt === null ||
+          current?.lastActivityAt === undefined ||
+          observed > Date.parse(current.lastActivityAt);
+        if (!advancesSurface && !advancesOverall) return;
+        const summary: Readonly<PrincipalActivitySummary> = Object.freeze({
+          principalId: request.principalId,
+          lastWebSeenAt:
+            request.surface === "web" && advancesSurface
+              ? request.observedAt
+              : current?.lastWebSeenAt ?? null,
+          lastMcpSeenAt:
+            request.surface === "mcp" && advancesSurface
+              ? request.observedAt
+              : current?.lastMcpSeenAt ?? null,
+          lastActivityAt: advancesOverall
+            ? request.observedAt
+            : current?.lastActivityAt ?? null,
+          lastActivitySurface: advancesOverall
+            ? request.surface
+            : current?.lastActivitySurface ?? null,
+          lastActivityKind: advancesOverall
+            ? request.kind
+            : current?.lastActivityKind ?? null,
+        });
+        this._principalActivities.set(request.principalId, summary);
+      });
+    }
+
+  async readPrincipalActivity(
+      principalId: PrincipalId,
+    ): Promise<Readonly<PrincipalActivitySummary> | null> {
+      const current = this._principalActivities.get(principalId);
+      return current ? clonePrincipalActivity(current) : null;
+    }
+
+  async listServiceOperatorPrincipals(
+      query: Readonly<ServiceOperatorDirectoryQuery>,
+    ): Promise<Readonly<ServiceOperatorDirectoryPage>> {
+      const offset = decodeServiceOperatorCursor(query.cursor);
+      if (
+        offset === null ||
+        !Number.isSafeInteger(query.limit) ||
+        query.limit < 1 ||
+        query.limit > 100
+      ) {
+        throw new TypeError("Service operator directory query is invalid");
+      }
+      const personalSpaceIds = new Set(
+        [...this._personalBindings.values()].map((binding) => binding.spaceId),
+      );
+      const normalizedQuery = query.query === undefined
+        ? null
+        : normalizeDirectorySearch(query.query);
+      const rows = [...this._principals.values()].flatMap((principal) => {
+        const binding = [...this._externalBindings.values()]
+          .filter(
+            (candidate) =>
+              candidate.principalId === principal.principalId &&
+              candidate.state === "active",
+          )
+          .sort((left, right) =>
+            compareUnicodeScalarValues(left.bindingId, right.bindingId),
+          )[0];
+        if (!binding) return [];
+        const activity = this._principalActivities.get(principal.principalId) ?? null;
+        const activeOrdinaryMemberships = [...this._memberships.values()].filter(
+          (membership) =>
+            membership.principalId === principal.principalId &&
+            membership.state === "active" &&
+            !personalSpaceIds.has(membership.spaceId) &&
+            this._knowledgeSpaces.get(membership.spaceId)?.state === "active",
+        );
+        const row: Readonly<ServiceOperatorPrincipalProjection> = Object.freeze({
+          principalId: principal.principalId,
+          displayName: principal.displayName,
+          verifiedEmail: String(binding.normalizedBinding),
+          state: principal.state,
+          registeredAt: principal.createdAt,
+          activity: activity === null ? null : clonePrincipalActivity(activity),
+          ownedMindCount: activeOrdinaryMemberships.filter(
+            (membership) => membership.role === "owner",
+          ).length,
+          participatingMindCount: activeOrdinaryMemberships.filter(
+            (membership) => membership.role !== "owner",
+          ).length,
+        });
+        if (query.state !== undefined && row.state !== query.state) return [];
+        if (
+          query.registeredFrom !== undefined &&
+          Date.parse(row.registeredAt) < Date.parse(query.registeredFrom)
+        ) return [];
+        if (
+          query.registeredTo !== undefined &&
+          Date.parse(row.registeredAt) > Date.parse(query.registeredTo)
+        ) return [];
+        const lastActivityAt = row.activity?.lastActivityAt ?? null;
+        if (query.neverActive === true && lastActivityAt !== null) return [];
+        if (query.neverActive === false && lastActivityAt === null) return [];
+        if (
+          query.activityFrom !== undefined &&
+          (lastActivityAt === null ||
+            Date.parse(lastActivityAt) < Date.parse(query.activityFrom))
+        ) return [];
+        if (
+          query.activityTo !== undefined &&
+          (lastActivityAt === null ||
+            Date.parse(lastActivityAt) > Date.parse(query.activityTo))
+        ) return [];
+        if (
+          normalizedQuery !== null &&
+          normalizeDirectorySearch(row.verifiedEmail) !== normalizedQuery &&
+          !normalizeDirectorySearch(row.displayName).includes(normalizedQuery)
+        ) return [];
+        return [row];
+      }).sort((left, right) => compareDirectoryRows(left, right, query));
+      const end = Math.min(offset + query.limit, rows.length);
+      return Object.freeze({
+        principals: Object.freeze(rows.slice(offset, end)),
+        nextCursor: end < rows.length ? encodeServiceOperatorCursor(end) : null,
+      });
+    }
+
+  async stageServiceOperatorDirectoryAudit(
+      request: Readonly<StageServiceOperatorDirectoryAuditRequest>,
+    ): Promise<void> {
+      await this._runExclusive(async () => {
+        if (
+          !BOUNDED_OPAQUE_ID.test(request.operatorPrincipalId) ||
+          !BOUNDED_OPAQUE_ID.test(request.requestId) ||
+          !BOUNDED_OPAQUE_ID.test(request.auditEventId) ||
+          !BOUNDED_OPAQUE_ID.test(request.auditOutboxMessageId) ||
+          !Number.isFinite(Date.parse(request.occurredAt)) ||
+          !this._principals.has(request.operatorPrincipalId) ||
+          this._auditEvents.has(request.auditEventId) ||
+          this._auditOutbox.has(request.auditOutboxMessageId)
+        ) {
+          throw new TypeError("Service operator directory audit is invalid");
+        }
+        const event: Readonly<AuditEvent> = Object.freeze({
+          auditEventId: request.auditEventId,
+          actor: Object.freeze({
+            kind: "principal" as const,
+            principalId: request.operatorPrincipalId,
+          }),
+          requestId: request.requestId,
+          eventType: "service_operator.principal_directory_read",
+          outcome: "succeeded" as const,
+          spaceId: null,
+          occurredAt: request.occurredAt,
+          safeMetadata: Object.freeze({ operation: "list_principals" }),
+        });
+        const outbox: Readonly<AuditOutboxMessage> = Object.freeze({
+          outboxMessageId: request.auditOutboxMessageId,
+          auditEventId: request.auditEventId,
+          state: "pending" as const,
+          version: version(1),
+          attempts: 0,
+          availableAt: request.occurredAt,
+          claimExpiresAt: null,
+          createdAt: request.occurredAt,
+          updatedAt: request.occurredAt,
+        });
+        this._auditEvents.set(event.auditEventId, cloneAuditEvent(event));
+        this._auditOutbox.set(outbox.outboxMessageId, cloneAuditOutbox(outbox));
+      });
+    }
+
+  async runCapacityTransaction<Result>(
+      operation: (transaction: CapacityReservationTransaction) => Promise<Result>,
+    ): Promise<Result> {
+      return this._runExclusive(async () => {
+        const reservations = cloneCapacityReservations(this._capacityReservations);
+        const transaction = this._capacityTransaction(reservations);
+        const result = await operation(transaction);
+        this._capacityReservations = reservations;
+        return result;
+      });
+    }
+
+  async readMindCapacityUsage(
+      spaceId: SpaceId,
+    ): Promise<Readonly<CapacityUsageSnapshot> | null> {
+      return this._runExclusive(async () => {
+        if (!this._spaces.has(spaceId)) return null;
+        return capacityUsageFromCanonicalState({
+          spaceIds: new Set([spaceId]),
+          spaces: this._spaces,
+          stagedBundleFiles: this._stagedBundleFiles,
+          exportJobs: this._exportJobs,
+          markdownImportPlans: this._markdownImportPlans,
+          markdownImportSessions: this._markdownImportSessions,
+          markdownImportStagedFiles: this._markdownImportStagedFiles,
+          reservations: this._capacityReservations,
+          reconciledAt: this._capacityReconciledAt,
+        });
+      });
+    }
+
+  async readPrincipalCapacityUsage(
+      principalId: PrincipalId,
+    ): Promise<Readonly<CapacityUsageSnapshot>> {
+      return this._runExclusive(async () => capacityUsageFromCanonicalState({
+        spaceIds: ownedCapacitySpaceIds(
+          principalId,
+          this._spaces,
+          this._knowledgeSpaces,
+          this._memberships,
+        ),
+        spaces: this._spaces,
+        stagedBundleFiles: this._stagedBundleFiles,
+        exportJobs: this._exportJobs,
+        markdownImportPlans: this._markdownImportPlans,
+        markdownImportSessions: this._markdownImportSessions,
+        markdownImportStagedFiles: this._markdownImportStagedFiles,
+        reservations: this._capacityReservations,
+        reconciledAt: this._capacityReconciledAt,
+      }));
+    }
+
+  async readSiteCapacityUsage(): Promise<Readonly<CapacityUsageSnapshot>> {
+      return this._runExclusive(async () => capacityUsageFromCanonicalState({
+        spaceIds: new Set(this._spaces.keys()),
+        spaces: this._spaces,
+        stagedBundleFiles: this._stagedBundleFiles,
+        exportJobs: this._exportJobs,
+        markdownImportPlans: this._markdownImportPlans,
+        markdownImportSessions: this._markdownImportSessions,
+        markdownImportStagedFiles: this._markdownImportStagedFiles,
+        reservations: this._capacityReservations,
+        reconciledAt: this._capacityReconciledAt,
+      }));
+    }
+
+  async readCapacityTelemetry(
+      limits: Readonly<CapacityLimits>,
+      now: UtcInstant,
+    ) {
+      return this._runExclusive(async () => {
+        const usage = capacityUsageFromCanonicalState({
+          spaceIds: new Set(this._spaces.keys()),
+          spaces: this._spaces,
+          stagedBundleFiles: this._stagedBundleFiles,
+          exportJobs: this._exportJobs,
+          markdownImportPlans: this._markdownImportPlans,
+          markdownImportSessions: this._markdownImportSessions,
+          markdownImportStagedFiles: this._markdownImportStagedFiles,
+          reservations: this._capacityReservations,
+          reconciledAt: this._capacityReconciledAt,
+        });
+        const active = activeReservationAmounts(
+          this._capacityReservations,
+          () => true,
+        );
+        const utilization = maxUtilizationState([
+          (usage.physicalCanonicalBytes + active.physicalCanonicalBytes) /
+            limits.sitePhysicalCanonicalBytes,
+          (usage.temporaryBytes + active.temporaryBytes) /
+            limits.siteTemporaryBytes,
+          (usage.d1MetadataBytes + active.d1MetadataBytes) /
+            limits.siteD1MetadataBytes,
+        ]);
+        return Object.freeze({
+          canonicalHeadroomBytes: Math.max(
+            0,
+            limits.sitePhysicalCanonicalBytes - usage.physicalCanonicalBytes -
+              active.physicalCanonicalBytes,
+          ),
+          temporaryHeadroomBytes: Math.max(
+            0,
+            limits.siteTemporaryBytes - usage.temporaryBytes - active.temporaryBytes,
+          ),
+          d1HeadroomBytes: Math.max(
+            0,
+            limits.siteD1MetadataBytes - usage.d1MetadataBytes - active.d1MetadataBytes,
+          ),
+          storageAmplification: usage.storageAmplification,
+          quotaRejects: this._capacityQuotaRejects,
+          staleReservations: [...this._capacityReservations.values()].filter(
+            (reservation) =>
+              reservation.state === "cleanup_pending" ||
+              (reservation.state === "active" &&
+                Date.parse(reservation.expiresAt) <= Date.parse(now)),
+          ).length,
+          utilization,
+        });
+      });
+    }
+
+  async reconcileCapacityUsage(request: Readonly<{
+      spaceId?: SpaceId;
+      reconciledAt: UtcInstant;
+    }>): Promise<Readonly<CapacityReconcileResult>> {
+      if (!Number.isFinite(Date.parse(request.reconciledAt))) {
+        throw new TypeError("capacity reconciliation time must be valid UTC");
+      }
+      return this._runExclusive(async () => {
+        const selected = request.spaceId === undefined
+          ? new Set(this._spaces.keys())
+          : new Set(this._spaces.has(request.spaceId) ? [request.spaceId] : []);
+        let driftDetected = false;
+        for (const spaceId of selected) {
+          this._capacityReconciledAt.set(spaceId, request.reconciledAt);
+          const usage = capacityUsageFromCanonicalState({
+            spaceIds: new Set([spaceId]),
+            spaces: this._spaces,
+            stagedBundleFiles: this._stagedBundleFiles,
+            exportJobs: this._exportJobs,
+            markdownImportPlans: this._markdownImportPlans,
+            markdownImportSessions: this._markdownImportSessions,
+            markdownImportStagedFiles: this._markdownImportStagedFiles,
+            reservations: this._capacityReservations,
+            reconciledAt: this._capacityReconciledAt,
+          });
+          const previous = this._capacityUsageLedger.get(spaceId);
+          if (
+            previous !== undefined &&
+            JSON.stringify({ ...previous, reconciledAt: null }) !==
+              JSON.stringify({ ...usage, reconciledAt: null })
+          ) driftDetected = true;
+          this._capacityUsageLedger.set(spaceId, usage);
+        }
+        const usage = capacityUsageFromCanonicalState({
+          spaceIds: selected,
+          spaces: this._spaces,
+          stagedBundleFiles: this._stagedBundleFiles,
+          exportJobs: this._exportJobs,
+          markdownImportPlans: this._markdownImportPlans,
+          markdownImportSessions: this._markdownImportSessions,
+          markdownImportStagedFiles: this._markdownImportStagedFiles,
+          reservations: this._capacityReservations,
+          reconciledAt: this._capacityReconciledAt,
+        });
+        return Object.freeze({
+          spaceId: request.spaceId ?? null,
+          scannedSpaces: selected.size,
+          driftDetected,
+          usage,
+        });
+      });
+    }
+
+  async collectExpiredCapacityReservations(request: Readonly<{
+      now: UtcInstant;
+      limit: number;
+    }>): Promise<readonly Readonly<CapacityReservation>[]> {
+      if (!Number.isSafeInteger(request.limit) || request.limit < 1) {
+        throw new TypeError("capacity reservation cleanup limit must be positive");
+      }
+      return this._runExclusive(async () => {
+        const expired = [...this._capacityReservations.values()]
+          .filter(
+            (reservation) =>
+              reservation.state === "cleanup_pending" ||
+              (reservation.state === "active" &&
+                Date.parse(reservation.expiresAt) <= Date.parse(request.now)),
+          )
+          .sort((left, right) =>
+            Date.parse(left.expiresAt) - Date.parse(right.expiresAt) ||
+            left.reservationId.localeCompare(right.reservationId),
+          )
+          .slice(0, request.limit)
+          .map((reservation) => reservation.state === "cleanup_pending"
+            ? cloneCapacityReservation(reservation)
+            : cloneCapacityReservation(Object.freeze({
+                ...reservation,
+                state: "cleanup_pending" as const,
+                updatedAt: request.now,
+              })));
+        for (const reservation of expired) {
+          this._capacityReservations.set(reservation.reservationId, reservation);
+        }
+        return Object.freeze(expired);
+      });
+    }
+
+  async releaseCapacityReservation(request: Readonly<{
+      reservationId: string;
+      releasedAt: UtcInstant;
+    }>): Promise<boolean> {
+      return this._runExclusive(async () => {
+        const current = this._capacityReservations.get(request.reservationId);
+        if (current === undefined || current.state === "released") return false;
+        if (current.state === "active") return false;
+        this._capacityReservations.set(
+          request.reservationId,
+          cloneCapacityReservation(Object.freeze({
+            ...current,
+            state: "released" as const,
+            updatedAt: request.releasedAt,
+          })),
+        );
+        return true;
+      });
+    }
+
+  async listCapacityReservationsForTest(): Promise<readonly Readonly<CapacityReservation>[]> {
+      return this._runExclusive(async () => Object.freeze(
+        [...this._capacityReservations.values()]
+          .sort((left, right) => left.reservationId.localeCompare(right.reservationId))
+          .map(cloneCapacityReservation),
+      ));
+    }
+
+  async readMindBindingSet(
+      bindingOwnerId: MindBindingOwnerId,
+      principalId: PrincipalId,
+      occurredAt: ApplyReadMindBindingRequest["occurredAt"],
+    ): Promise<Readonly<MindBindingSetSnapshot> | null> {
+      if (
+        !BOUNDED_OPAQUE_ID.test(bindingOwnerId) ||
+        !BOUNDED_OPAQUE_ID.test(principalId) ||
+        !Number.isFinite(Date.parse(occurredAt))
+      ) {
+        return null;
+      }
+      const state = this._mindBindingOwners.get(bindingOwnerId);
+      if (state && state.bindingSet.principalId !== principalId) return null;
+      return mindBindingSnapshot(
+        state ?? emptyMindBindingOwnerState(bindingOwnerId, principalId, occurredAt),
+      );
+    }
+
+  async readStagedBundleFile(
+      stagedFileId: StagedBundleFileId,
+    ): Promise<Readonly<StagedBundleFileRecord> | null> {
+      const record = this._stagedBundleFiles.get(stagedFileId);
+      return record === undefined ? null : freezeStagedBundleFile(record);
+    }
+
+  async runBundleFileStagingTransaction<Result>(
+      operation: (transaction: BundleFileStagingTransaction) => Promise<Result>,
+    ): Promise<Result> {
+      return this._runExclusive(async () => {
+        const stagedBundleFiles = new Map(this._stagedBundleFiles);
+        const idempotencyRecords = cloneIdempotencyRecords(this._idempotencyRecords);
+        const capacityReservations = cloneCapacityReservations(this._capacityReservations);
+        const capacityTransaction = this._capacityTransaction(capacityReservations);
+        const transaction: BundleFileStagingTransaction = Object.freeze({
+          ...capacityTransaction,
+          kind: "authorization-transaction" as const,
+          readMindBindingSet: (
+            bindingOwnerId: MindBindingOwnerId,
+            principalId: PrincipalId,
+            occurredAt: ApplyReadMindBindingRequest["occurredAt"],
+          ) => this.readMindBindingSet(bindingOwnerId, principalId, occurredAt),
+          readCurrentAuthorizationState: (query: AuthorizationStateQuery) =>
+            this.readCurrentAuthorizationState(query),
+          readStagedBundleFile: async (stagedFileId: StagedBundleFileId) => {
+            const record = stagedBundleFiles.get(stagedFileId);
+            return record === undefined ? null : freezeStagedBundleFile(record);
+          },
+          createStagedBundleFile: async (
+            record: Readonly<StagedBundleFileRecord>,
+            maxOutstandingBytes: number,
+            occurredAt: StagedBundleFileRecord["createdAt"],
+          ) => createStagedBundleFileAgainst(
+            record,
+            maxOutstandingBytes,
+            occurredAt,
+            stagedBundleFiles,
+          ),
+          checkIdempotency: async (request: CheckIdempotencyRequest) =>
+            checkIdempotencyAgainst(request, idempotencyRecords),
+          completeIdempotency: async (request: CompleteIdempotencyRequest) =>
+            completeIdempotencyAgainst(request, idempotencyRecords),
+        });
+        const result = await operation(transaction);
+        this._stagedBundleFiles = stagedBundleFiles;
+        this._idempotencyRecords = idempotencyRecords;
+        this._capacityReservations = capacityReservations;
+        return result;
+      });
+    }
+
+  async collectStagedBundleFilesForGc(request: Readonly<{
+      createdBefore: StagedBundleFileRecord["createdAt"];
+      limit: number;
+    }>): Promise<readonly Readonly<StagedBundleFileRecord>[]> {
+      if (!Number.isSafeInteger(request.limit) || request.limit < 1) {
+        throw new TypeError("staged BundleFile GC limit must be positive");
+      }
+      return this._runExclusive(async () => {
+        const candidates = [...this._stagedBundleFiles.values()]
+          .filter(
+            (record) => Date.parse(record.expiresAt) <= Date.parse(request.createdBefore),
+          )
+          .sort((left, right) =>
+            Date.parse(left.createdAt) - Date.parse(right.createdAt) ||
+            left.stagedFileId.localeCompare(right.stagedFileId),
+          )
+          .slice(0, request.limit)
+          .map((record) => freezeStagedBundleFile({ ...record, state: "expired" }));
+        for (const record of candidates) {
+          this._stagedBundleFiles.set(record.stagedFileId, record);
+        }
+        return Object.freeze(candidates);
+      });
+    }
+
+  async deleteExpiredStagedBundleFileRecord(
+      stagedFileId: StagedBundleFileId,
+    ): Promise<boolean> {
+      return this._runExclusive(async () => {
+        const current = this._stagedBundleFiles.get(stagedFileId);
+        return current?.state === "expired"
+          ? this._stagedBundleFiles.delete(stagedFileId)
+          : false;
+      });
+    }
+
+  async runMindBindingTransaction<Result>(
+      operation: (transaction: MindBindingTransaction) => Promise<Result>,
+    ): Promise<Result> {
+      return this._runExclusive(async () => {
+        const owners = cloneMindBindingOwners(this._mindBindingOwners);
+        const auditEvents = new Map(
+          [...this._auditEvents].map(([id, event]) => [id, cloneAuditEvent(event)]),
+        );
+        const auditOutbox = new Map(
+          [...this._auditOutbox].map(([id, message]) => [
+            id,
+            cloneAuditOutbox(message),
+          ]),
+        );
+        const getOwner = (
+          request: Readonly<MindBindingMutationRequest>,
+        ): MutableMindBindingOwnerState | ApplyMindBindingMutationResult => {
+          if (!validMindBindingMutationBase(request)) {
+            return Object.freeze({ kind: "invalid_record" });
+          }
+          const existing = owners.get(request.bindingOwnerId);
+          if (existing && existing.bindingSet.principalId !== request.principalId) {
+            return Object.freeze({ kind: "owner_mismatch" });
+          }
+          const state =
+            existing ??
+            emptyMindBindingOwnerState(
+              request.bindingOwnerId,
+              request.principalId,
+              request.occurredAt,
+            );
+          if (state.bindingSet.state !== "active") {
+            return Object.freeze({ kind: "binding_owner_revoked" });
+          }
+          return state;
+        };
+
+        const transaction: MindBindingTransaction = Object.freeze({
+          kind: "authorization-transaction" as const,
+          readCurrentAuthorizationState: (query: AuthorizationStateQuery) =>
+            this.readCurrentAuthorizationState(query),
+          readMindBindingSet: async (
+            bindingOwnerId: MindBindingOwnerId,
+            principalId: PrincipalId,
+            occurredAt: ApplyReadMindBindingRequest["occurredAt"],
+          ) => {
+            if (
+              !BOUNDED_OPAQUE_ID.test(bindingOwnerId) ||
+              !BOUNDED_OPAQUE_ID.test(principalId) ||
+              !Number.isFinite(Date.parse(occurredAt))
+            ) {
+              return null;
+            }
+            const state = owners.get(bindingOwnerId);
+            if (state && state.bindingSet.principalId !== principalId) return null;
+            return mindBindingSnapshot(
+              state ?? emptyMindBindingOwnerState(bindingOwnerId, principalId, occurredAt),
+            );
+          },
+          applyReadMindBinding: async (
+            request: Readonly<ApplyReadMindBindingRequest>,
+          ): Promise<ApplyMindBindingMutationResult> => {
+            if (
+              (request.action !== "attach" && request.action !== "detach") ||
+              !BOUNDED_OPAQUE_ID.test(request.spaceId) ||
+              (request.action === "attach" &&
+                !BOUNDED_OPAQUE_ID.test(request.readBindingId))
+            ) {
+              return Object.freeze({ kind: "invalid_record" });
+            }
+            const selected = getOwner(request);
+            if (!("bindingSet" in selected)) return selected;
+            const replay = replayMindBindingMutation(selected, "read", request);
+            if (replay) return replay;
+            if (
+              selected.bindingSet.bindingVersion !==
+              request.expectedBindingVersion
+            ) {
+              return Object.freeze({
+                kind: "binding_version_conflict",
+                currentBindingVersion: selected.bindingSet.bindingVersion,
+              });
+            }
+            if (
+              !mindBindingEffectsAvailable(
+                request.auditEventId,
+                request.auditOutboxMessageId,
+                auditEvents,
+                auditOutbox,
+              )
+            ) {
+              return Object.freeze({ kind: "effect_conflict" });
+            }
+            if (!owners.has(request.bindingOwnerId)) {
+              owners.set(request.bindingOwnerId, selected);
+            }
+
+            const activeId = selected.activeReadBindingBySpace.get(request.spaceId);
+            let changed = false;
+            if (request.action === "attach") {
+              if (!activeId) {
+                if (selected.readBindingsById.has(request.readBindingId)) {
+                  return Object.freeze({ kind: "invalid_record" });
+                }
+                selected.readBindingsById.set(
+                  request.readBindingId,
+                  Object.freeze({
+                    readBindingId: request.readBindingId,
+                    bindingOwnerId: request.bindingOwnerId,
+                    spaceId: request.spaceId,
+                    state: "active" as const,
+                    createdAt: request.occurredAt,
+                    invalidatedAt: null,
+                  }),
+                );
+                selected.activeReadBindingBySpace.set(
+                  request.spaceId,
+                  request.readBindingId,
+                );
+                changed = true;
+              }
+            } else if (activeId) {
+              const current = selected.readBindingsById.get(activeId);
+              if (!current) return Object.freeze({ kind: "invalid_record" });
+              selected.readBindingsById.set(
+                activeId,
+                Object.freeze({
+                  ...current,
+                  state: "invalidated" as const,
+                  invalidatedAt: request.occurredAt,
+                }),
+              );
+              selected.activeReadBindingBySpace.delete(request.spaceId);
+              changed = true;
+            }
+
+            if (changed) {
+              selected.bindingSet = Object.freeze({
+                ...selected.bindingSet,
+                bindingVersion: bindingVersion(
+                  selected.bindingSet.bindingVersion + 1,
+                ),
+                updatedAt: request.occurredAt,
+              });
+            }
+            const result = Object.freeze({
+              kind: "applied" as const,
+              bindings: mindBindingSnapshot(selected),
+              previousWriteBinding: null,
+              changed,
+              replayed: false,
+            });
+            stageMindBindingAudit(
+              request,
+              result,
+              request.spaceId,
+              auditEvents,
+              auditOutbox,
+            );
+            recordMindBindingMutation(selected, "read", request, result);
+            return result;
+          },
+          applyWriteMindBinding: async (
+            request: Readonly<ApplyWriteMindBindingRequest>,
+          ): Promise<ApplyMindBindingMutationResult> => {
+            if (
+              (request.action !== "bind" && request.action !== "unbind") ||
+              (request.action === "bind" &&
+                (!BOUNDED_OPAQUE_ID.test(request.spaceId) ||
+                  !BOUNDED_OPAQUE_ID.test(request.writeBindingId))) ||
+              (request.action === "unbind" &&
+                (request.spaceId !== null || request.writeBindingId !== null))
+            ) {
+              return Object.freeze({ kind: "invalid_record" });
+            }
+            const selected = getOwner(request);
+            if (!("bindingSet" in selected)) return selected;
+            const replay = replayMindBindingMutation(selected, "write", request);
+            if (replay) return replay;
+            if (
+              selected.bindingSet.bindingVersion !==
+              request.expectedBindingVersion
+            ) {
+              return Object.freeze({
+                kind: "binding_version_conflict",
+                currentBindingVersion: selected.bindingSet.bindingVersion,
+              });
+            }
+            if (
+              !mindBindingEffectsAvailable(
+                request.auditEventId,
+                request.auditOutboxMessageId,
+                auditEvents,
+                auditOutbox,
+              )
+            ) {
+              return Object.freeze({ kind: "effect_conflict" });
+            }
+
+            const active =
+              selected.activeWriteBindingId === null
+                ? null
+                : selected.writeBindingsById.get(selected.activeWriteBindingId) ??
+                  null;
+            if (selected.activeWriteBindingId !== null && active === null) {
+              return Object.freeze({ kind: "invalid_record" });
+            }
+            if (!owners.has(request.bindingOwnerId)) {
+              owners.set(request.bindingOwnerId, selected);
+            }
+            let previous: Readonly<WriteMindBinding> | null = null;
+            let changed = false;
+            if (request.action === "bind") {
+              if (active?.state === "active" && active.spaceId === request.spaceId) {
+                // Same-target bind preserves the immutable generation.
+              } else {
+                if (selected.writeBindingsById.has(request.writeBindingId)) {
+                  return Object.freeze({ kind: "invalid_record" });
+                }
+                if (active?.state === "active") {
+                  previous = Object.freeze({
+                    ...active,
+                    state: "invalidated" as const,
+                    invalidatedAt: request.occurredAt,
+                  });
+                  selected.writeBindingsById.set(active.writeBindingId, previous);
+                }
+                const nextVersion = bindingVersion(
+                  selected.bindingSet.bindingVersion + 1,
+                );
+                const current = Object.freeze({
+                  writeBindingId: request.writeBindingId,
+                  bindingOwnerId: request.bindingOwnerId,
+                  spaceId: request.spaceId,
+                  generation: nextVersion,
+                  state: "active" as const,
+                  createdAt: request.occurredAt,
+                  invalidatedAt: null,
+                });
+                selected.writeBindingsById.set(request.writeBindingId, current);
+                selected.activeWriteBindingId = request.writeBindingId;
+                selected.bindingSet = Object.freeze({
+                  ...selected.bindingSet,
+                  bindingVersion: nextVersion,
+                  automaticCaptureMode: "disabled" as const,
+                  captureWriteBindingId: null,
+                  captureUpdatedAt:
+                    selected.bindingSet.automaticCaptureMode === "disabled"
+                      ? selected.bindingSet.captureUpdatedAt
+                      : request.occurredAt,
+                  updatedAt: request.occurredAt,
+                });
+                changed = true;
+              }
+            } else if (active?.state === "active") {
+              previous = Object.freeze({
+                ...active,
+                state: "invalidated" as const,
+                invalidatedAt: request.occurredAt,
+              });
+              selected.writeBindingsById.set(active.writeBindingId, previous);
+              selected.activeWriteBindingId = null;
+              selected.bindingSet = Object.freeze({
+                ...selected.bindingSet,
+                bindingVersion: bindingVersion(
+                  selected.bindingSet.bindingVersion + 1,
+                ),
+                automaticCaptureMode: "disabled" as const,
+                captureWriteBindingId: null,
+                captureUpdatedAt:
+                  selected.bindingSet.automaticCaptureMode === "disabled"
+                    ? selected.bindingSet.captureUpdatedAt
+                    : request.occurredAt,
+                updatedAt: request.occurredAt,
+              });
+              changed = true;
+            }
+
+            const result = Object.freeze({
+              kind: "applied" as const,
+              bindings: mindBindingSnapshot(selected),
+              previousWriteBinding: previous,
+              changed,
+              replayed: false,
+            });
+            stageMindBindingAudit(
+              request,
+              result,
+              request.spaceId ?? previous?.spaceId ?? null,
+              auditEvents,
+              auditOutbox,
+            );
+            recordMindBindingMutation(selected, "write", request, result);
+            return result;
+          },
+          applyAutomaticCapturePolicy: async (
+            request: Readonly<ApplyAutomaticCapturePolicyRequest>,
+          ): Promise<ApplyMindBindingMutationResult> => {
+            if (
+              (request.action !== "enable" && request.action !== "disable") ||
+              (request.action === "enable" &&
+                (request.mode !== "routine_non_sensitive" ||
+                  !BOUNDED_OPAQUE_ID.test(request.spaceId) ||
+                  !BOUNDED_OPAQUE_ID.test(request.writeBindingId))) ||
+              (request.action === "disable" &&
+                (request.mode !== "disabled" || request.writeBindingId !== null ||
+                  (request.spaceId !== null && !BOUNDED_OPAQUE_ID.test(request.spaceId))))
+            ) {
+              return Object.freeze({ kind: "invalid_record" });
+            }
+            const selected = getOwner(request);
+            if (!("bindingSet" in selected)) return selected;
+            const replay = replayMindBindingMutation(selected, "capture", request);
+            if (replay) return replay;
+            if (selected.bindingSet.bindingVersion !== request.expectedBindingVersion) {
+              return Object.freeze({
+                kind: "binding_version_conflict",
+                currentBindingVersion: selected.bindingSet.bindingVersion,
+              });
+            }
+            if (
+              !mindBindingEffectsAvailable(
+                request.auditEventId,
+                request.auditOutboxMessageId,
+                auditEvents,
+                auditOutbox,
+              )
+            ) {
+              return Object.freeze({ kind: "effect_conflict" });
+            }
+            const active = selected.activeWriteBindingId === null
+              ? null
+              : selected.writeBindingsById.get(selected.activeWriteBindingId) ?? null;
+            if (
+              request.action === "enable" &&
+              (active?.state !== "active" ||
+                active.spaceId !== request.spaceId ||
+                active.writeBindingId !== request.writeBindingId)
+            ) {
+              return Object.freeze({ kind: "invalid_record" });
+            }
+            if (!owners.has(request.bindingOwnerId)) owners.set(request.bindingOwnerId, selected);
+            const changed = request.action === "enable"
+              ? selected.bindingSet.automaticCaptureMode !== request.mode ||
+                selected.bindingSet.captureWriteBindingId !== request.writeBindingId
+              : selected.bindingSet.automaticCaptureMode !== "disabled" ||
+                selected.bindingSet.captureWriteBindingId !== null;
+            if (changed) {
+              selected.bindingSet = Object.freeze({
+                ...selected.bindingSet,
+                bindingVersion: bindingVersion(selected.bindingSet.bindingVersion + 1),
+                automaticCaptureMode: request.mode,
+                captureWriteBindingId:
+                  request.action === "enable" ? request.writeBindingId : null,
+                captureUpdatedAt: request.occurredAt,
+                updatedAt: request.occurredAt,
+              });
+            }
+            const result = Object.freeze({
+              kind: "applied" as const,
+              bindings: mindBindingSnapshot(selected),
+              previousWriteBinding: null,
+              changed,
+              replayed: false,
+            });
+            stageMindBindingAudit(
+              request,
+              result,
+              request.spaceId,
+              auditEvents,
+              auditOutbox,
+            );
+            recordMindBindingMutation(selected, "capture", request, result);
+            return result;
+          },
+        });
+
+        const result = await operation(transaction);
+        this._mindBindingOwners = owners;
+        this._auditEvents = auditEvents;
+        this._auditOutbox = auditOutbox;
+        return result;
+      });
+    }
+
+  async revokeMindBindingOwner(
+      request: Readonly<RevokeMindBindingOwnerRequest>,
+    ): Promise<RevokeMindBindingOwnerResult> {
+      return this._runExclusive(async () => {
+        if (
+          !BOUNDED_OPAQUE_ID.test(request.bindingOwnerId) ||
+          !BOUNDED_OPAQUE_ID.test(request.principalId) ||
+          !BOUNDED_OPAQUE_ID.test(request.requestId) ||
+          !BOUNDED_OPAQUE_ID.test(request.auditEventId) ||
+          !BOUNDED_OPAQUE_ID.test(request.auditOutboxMessageId) ||
+          !Number.isFinite(Date.parse(request.occurredAt))
+        ) {
+          return Object.freeze({ kind: "invalid_record" });
+        }
+        const state = this._mindBindingOwners.get(request.bindingOwnerId);
+        if (!state) return Object.freeze({ kind: "not_found" });
+        if (state.bindingSet.principalId !== request.principalId) {
+          return Object.freeze({ kind: "owner_mismatch" });
+        }
+        if (state.bindingSet.state !== "active") {
+          return Object.freeze({
+            kind: "revoked",
+            invalidatedReadBindings: 0,
+            invalidatedWriteBindings: 0,
+            replayed: true,
+          });
+        }
+        if (
+          !mindBindingEffectsAvailable(
+            request.auditEventId,
+            request.auditOutboxMessageId,
+            this._auditEvents,
+            this._auditOutbox,
+          )
+        ) {
+          return Object.freeze({ kind: "effect_conflict" });
+        }
+        const invalidatedReadBindings = state.activeReadBindingBySpace.size;
+        for (const id of state.activeReadBindingBySpace.values()) {
+          const current = state.readBindingsById.get(id);
+          if (current) {
+            state.readBindingsById.set(
+              id,
+              Object.freeze({
+                ...current,
+                state: "invalidated" as const,
+                invalidatedAt: request.occurredAt,
+              }),
+            );
+          }
+        }
+        state.activeReadBindingBySpace.clear();
+        let invalidatedWriteBindings = 0;
+        if (state.activeWriteBindingId !== null) {
+          const current = state.writeBindingsById.get(state.activeWriteBindingId);
+          if (current) {
+            state.writeBindingsById.set(
+              current.writeBindingId,
+              Object.freeze({
+                ...current,
+                state: "invalidated" as const,
+                invalidatedAt: request.occurredAt,
+              }),
+            );
+            invalidatedWriteBindings = 1;
+          }
+        }
+        state.activeWriteBindingId = null;
+        state.bindingSet = Object.freeze({
+          ...state.bindingSet,
+          state: "revoked" as const,
+          bindingVersion: bindingVersion(state.bindingSet.bindingVersion + 1),
+          automaticCaptureMode: "disabled" as const,
+          captureWriteBindingId: null,
+          captureUpdatedAt:
+            state.bindingSet.automaticCaptureMode === "disabled"
+              ? state.bindingSet.captureUpdatedAt
+              : request.occurredAt,
+          updatedAt: request.occurredAt,
+        });
+        stageMindBindingRevokeAudit(
+          request,
+          invalidatedReadBindings,
+          invalidatedWriteBindings,
+          state.bindingSet.bindingVersion,
+          this._auditEvents,
+          this._auditOutbox,
+        );
+        return Object.freeze({
+          kind: "revoked",
+          invalidatedReadBindings,
+          invalidatedWriteBindings,
+          replayed: false,
+        });
+      });
+    }
+
+  async readHead(spaceId: SpaceId): Promise<RevisionId | null> {
+      return this._spaces.get(spaceId)?.head ?? null;
+    }
+
+  async readRevision(
+      spaceId: SpaceId,
+      revisionId: RevisionId,
+    ): Promise<Envelope | null> {
+      const envelope = this._spaces.get(spaceId)?.revisions.get(revisionId);
+      return envelope === undefined ? null : cloneEnvelope(envelope);
+    }
+
+  async listRevisions(spaceId: SpaceId): Promise<readonly Envelope[]> {
+      const revisions = [...(this._spaces.get(spaceId)?.revisions.values() ?? [])];
+      revisions.sort(
+        (left, right) =>
+          left.revision.revisionNumber - right.revision.revisionNumber,
+      );
+      return Object.freeze(revisions.map(cloneEnvelope));
+    }
+
+  async readAccount(
+      principalId: Principal["principalId"],
+    ): Promise<Readonly<PrincipalAccountSnapshot> | null> {
+      return accountFromMaps(
+        principalId,
+        this._principals,
+        this._externalBindings,
+        this._knowledgeSpaces,
+        this._personalBindings,
+        this._memberships,
+      );
+    }
+
+  async readAccountByExternalBinding(
+      lookup: Readonly<ExternalIdentityBindingLookup>,
+    ): Promise<Readonly<PrincipalAccountSnapshot> | null> {
+      return accountByBindingFromMaps(
+        lookup,
+        this._principals,
+        this._externalBindings,
+        this._knowledgeSpaces,
+        this._personalBindings,
+        this._memberships,
+      );
+    }
+
+  async resolvePersonalMind(
+      principalId: Principal["principalId"],
+    ): Promise<Readonly<PersonalMindResolution> | null> {
+      try {
+        const account = accountFromMaps(
+          principalId,
+          this._principals,
+          this._externalBindings,
+          this._knowledgeSpaces,
+          this._personalBindings,
+          this._memberships,
+        );
+        if (account === null || account.personalMind.space.state !== "active") {
+          return null;
+        }
+        return Object.freeze({
+          spaceId: account.personalMind.space.spaceId,
+          headRevisionId: account.personalMind.space.headRevisionId,
+        });
+      } catch {
+        return null;
+      }
+    }
+
+  async listActiveMembershipMindIds(
+      principalId: Principal["principalId"],
+    ): Promise<readonly SpaceId[]> {
+      const principal = this._principals.get(principalId);
+      if (!principal || principal.state !== "active") return Object.freeze([]);
+      const personalSpaceId = this._personalBindings.get(principalId)?.spaceId;
+      return Object.freeze(
+        [...new Set(
+          [...this._memberships.values()]
+            .filter(
+              (membership) =>
+                membership.principalId === principalId &&
+                membership.state === "active" &&
+                membership.spaceId !== personalSpaceId,
+            )
+            .map((membership) => membership.spaceId),
+        )].sort(),
+      );
+    }
+
+  async readMembershipMutationReplay(
+      request: Readonly<MembershipMutationReplayRequest>,
+    ): Promise<MembershipMutationReplayResult> {
+      return readMembershipReplay(this._membershipMutationRecords, request);
+    }
+
+  async listControlMembers(
+      spaceId: SpaceId,
+    ): Promise<readonly Readonly<ControlMemberProjection>[]> {
+      const space = this._knowledgeSpaces.get(spaceId);
+      if (!space || space.state !== "active") return Object.freeze([]);
+      return Object.freeze(
+        [...this._memberships.values()]
+          .filter((membership) => membership.spaceId === spaceId)
+          .map((membership) => {
+            const principal = this._principals.get(membership.principalId);
+            if (!principal) return null;
+            return Object.freeze({
+              memberId: membership.membershipId,
+              principalId: membership.principalId,
+              displayName: principal.displayName,
+              role: membership.role,
+              state: membership.state,
+              membershipVersion: membership.version,
+            });
+          })
+          .filter(
+            (projection): projection is Readonly<ControlMemberProjection> =>
+              projection !== null,
+          )
+          .sort((left, right) =>
+            left.memberId.localeCompare(right.memberId, "en"),
+          ),
+      );
+    }
+
+  async listControlInvitations(
+      principalId: PrincipalId,
+    ): Promise<readonly Readonly<ControlInvitationProjection>[]> {
+      const principal = this._principals.get(principalId);
+      if (!principal || principal.state !== "active") return Object.freeze([]);
+      return Object.freeze(
+        [...this._invitations.values()]
+          .filter(
+            (invitation) =>
+              invitation.targetPrincipalId === principalId ||
+              invitation.createdBy === principalId,
+          )
+          .map((invitation) => {
+            const outgoing = invitation.createdBy === principalId;
+            const counterpartyId = outgoing
+              ? invitation.targetPrincipalId
+              : invitation.createdBy;
+            const counterparty = this._principals.get(counterpartyId);
+            const mind = this._knowledgeSpaces.get(invitation.spaceId);
+            if (!counterparty || !mind || mind.state !== "active") return null;
+            return Object.freeze({
+              invitationId: invitation.invitationId,
+              mindId: invitation.spaceId,
+              mindName: mind.name,
+              direction: outgoing ? ("outgoing" as const) : ("incoming" as const),
+              counterpartyPrincipalId: counterpartyId,
+              counterpartyDisplayName: counterparty.displayName,
+              proposedRole: invitation.proposedRole,
+              state: invitation.state,
+              invitationVersion: invitation.version,
+              expiresAt: invitation.expiresAt,
+            });
+          })
+          .filter(
+            (projection): projection is Readonly<ControlInvitationProjection> =>
+              projection !== null,
+          )
+          .sort((left, right) =>
+            left.invitationId.localeCompare(right.invitationId, "en"),
+          ),
+      );
+    }
+
+  async listPublicMindCatalogPage(
+      request: Readonly<PublicMindCatalogPageRequest>,
+    ): Promise<PublicMindCatalogPageResult> {
+      if (
+        typeof request !== "object" ||
+        request === null ||
+        !Number.isSafeInteger(request.limit) ||
+        request.limit < 1 ||
+        request.limit > 100
+      ) {
+        return Object.freeze({ kind: "invalid_cursor" });
+      }
+      const decoded =
+        request.cursor === null
+          ? Object.freeze({
+              v: 1 as const,
+              q: PUBLIC_CATALOG_CURSOR_QUERY,
+              g: this._publicMindCatalogGeneration,
+              o: 0,
+            })
+          : typeof request.cursor === "string"
+            ? decodePublicCatalogCursor(request.cursor)
+            : null;
+      if (decoded === null) return Object.freeze({ kind: "invalid_cursor" });
+      const snapshot = this._publicMindCatalogSnapshots.get(decoded.g);
+      if (snapshot === undefined || decoded.o > snapshot.length) {
+        return Object.freeze({ kind: "invalid_cursor" });
+      }
+      const end = Math.min(decoded.o + request.limit, snapshot.length);
+      return Object.freeze({
+        kind: "page",
+        spaceIds: Object.freeze(snapshot.slice(decoded.o, end)),
+        nextCursor:
+          end < snapshot.length
+            ? encodePublicCatalogCursor(decoded.g, end)
+            : null,
+      });
+    }
+
+  async readResolvedSpace(
+      spaceId: SpaceId,
+    ): Promise<Readonly<OrdinaryMindRouteSnapshot> | null> {
+      return this._ordinaryMindRouteSnapshot(spaceId);
+    }
+
+  async readResolvedSpaces(
+      spaceIds: readonly SpaceId[],
+    ): Promise<readonly (Readonly<OrdinaryMindRouteSnapshot> | null)[]> {
+      if (!Array.isArray(spaceIds)) return Object.freeze([]);
+      return Object.freeze(
+        spaceIds.map((spaceId) => this._ordinaryMindRouteSnapshot(spaceId)),
+      );
+    }
+
+  async readPersonalMindProfile(
+      principalId: Principal["principalId"],
+    ): Promise<Readonly<PersonalMindProfileSnapshot> | null> {
+      try {
+        const account = accountFromMaps(
+          principalId,
+          this._principals,
+          this._externalBindings,
+          this._knowledgeSpaces,
+          this._personalBindings,
+          this._memberships,
+        );
+        return account === null ? null : personalMindProfileFromAccount(account);
+      } catch {
+        return null;
+      }
+    }
+
+  async classifyPersonalMindTarget(
+      request: PersonalMindTargetRequest,
+    ): Promise<PersonalMindTargetClassification> {
+      const target = this._knowledgeSpaces.get(request.spaceId);
+      if (!target || target.state !== "active") {
+        return Object.freeze({ kind: "not_found" });
+      }
+      const personalBinding = [...this._personalBindings.values()].find(
+        (binding) => binding.spaceId === request.spaceId,
+      );
+      if (!personalBinding) {
+        return Object.freeze({ kind: "ordinary", spaceId: request.spaceId });
+      }
+      if (personalBinding.principalId !== request.principalId) {
+        return Object.freeze({ kind: "not_found" });
+      }
+      const account = await this.readAccount(request.principalId);
+      if (
+        account === null ||
+        account.personalMind.personalBinding?.spaceId !== request.spaceId
+      ) {
+        return Object.freeze({ kind: "not_found" });
+      }
+      return Object.freeze({ kind: "own_personal", spaceId: request.spaceId });
+    }
+
+  async reserveHandle(
+      request: HandleReservationRequest,
+    ): Promise<HandleReservationResult> {
+      return this._runExclusive(async () =>
+        reserveHandleAgainst(request, {
+          activeByHandle: this._activeHandlesByKey,
+          activeBySpace: this._activeHandlesBySpace,
+          retired: this._retiredHandles,
+        }),
+      );
+    }
+
+  async resolveHandle(
+      request: HandleResolutionRequest,
+    ): Promise<HandleResolutionResult> {
+      return resolveHandleAgainst(request, {
+        activeByHandle: this._activeHandlesByKey,
+      });
+    }
+
+  async retireHandle(
+      request: HandleRetirementRequest,
+    ): Promise<HandleRetirementResult> {
+      return this._runExclusive(async () =>
+        retireHandleAgainst(request, {
+          activeByHandle: this._activeHandlesByKey,
+          activeBySpace: this._activeHandlesBySpace,
+          retired: this._retiredHandles,
+        }),
+      );
+    }
+
+  async readAccountDeletionContext(
+      principalId: Principal["principalId"],
+      impactId: string,
+    ): Promise<Readonly<AccountDeletionContext> | null> {
+      const impact = this._accountDeletionImpacts.get(impactId);
+      if (impact?.principalId === principalId) {
+        return Object.freeze({
+          kind: "impact",
+          impact: cloneAccountDeletionImpact(impact),
+        });
+      }
+      const cleanup = this._accountDeletionCleanup.get(impactId);
+      if (cleanup?.principalId === principalId) {
+        return Object.freeze({
+          kind: "cleanup",
+          cleanup: cloneAccountDeletionCleanup(cleanup),
+        });
+      }
+      return null;
+    }
+
+  async readCurrentAuthorizationState(
+      query: AuthorizationStateQuery,
+    ): Promise<AuthorizationState | null> {
+      if (query.tokenId === null) {
+        const current = this._currentSitesAuthorizationState(query);
+        if (current !== null) return current;
+      }
+      const state = this._authorizationStates.get(authorizationStateKey(query));
+      return state ? cloneAuthorizationState(state) : null;
+    }
+
+  async readCurrentAuthorizationStates(
+      queries: readonly AuthorizationStateQuery[],
+    ): Promise<readonly (AuthorizationState | null)[]> {
+      if (!Array.isArray(queries)) return Object.freeze([]);
+      return Object.freeze(
+        queries.map((query) => {
+          if (query === null || typeof query !== "object") return null;
+          if (query.tokenId === null) {
+            const current = this._currentSitesAuthorizationState(query);
+            if (current !== null) return current;
+          }
+          const state = this._authorizationStates.get(authorizationStateKey(query));
+          return state ? cloneAuthorizationState(state) : null;
+        }),
+      );
+    }
+
+  async readCurrentRouteAuthorizationState(
+      query: MindRouteAuthorizationQuery,
+    ): Promise<AuthorizationState | null> {
+      const parsed = parseCanonicalSpaceHandle(query.handle);
+      const snapshot = this._ordinaryMindRouteSnapshot(query.spaceId);
+      if (
+        parsed.kind !== "valid" ||
+        isReservedTopLevelHandle(parsed.canonicalHandle) ||
+        !snapshot ||
+        snapshot.host !== query.host ||
+        snapshot.canonicalHandle !== parsed.canonicalHandle
+      ) {
+        return null;
+      }
+      return this._currentSitesAuthorizationState({
+        principalId: query.principalId,
+        spaceId: query.spaceId,
+        tokenId: query.tokenId,
+      });
+    }
+}
