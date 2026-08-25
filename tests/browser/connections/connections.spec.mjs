@@ -139,6 +139,10 @@ for (const definition of fixtureDefinitions) {
       await expect(page.getByRole("link", { name: "Next connections" })).toHaveCount(
         definition.count === 21 ? 1 : 0,
       );
+      if (definition.count === 0) {
+        await expect(page.getByRole("link", { name: "Open the three-step guide" }))
+          .toHaveAttribute("href", "/help/codex");
+      }
       await expectNoHorizontalOverflow(page);
 
       if (definition.count > 0) {
@@ -176,7 +180,7 @@ for (const definition of fixtureDefinitions) {
         level: 2,
         name: "Choose readable Minds and start",
       })).toBeVisible();
-      await expect(page.getByText("Revoke and reconnect only when the connection is no longer usable.")).toBeVisible();
+      await expect(page.getByText("Revoke and reconnect only when the existing connection is no longer usable.")).toBeVisible();
       const accessibilityTree = await page.locator("main").ariaSnapshot();
       expect(accessibilityTree).toContain('heading "Use Mind Diary with Codex"');
       expect(accessibilityTree).toContain('link "Connections"');
@@ -220,6 +224,65 @@ test("mobile viewport keeps every route bounded and opens primary navigation by 
     "false",
   );
   await expect(page.getByRole("button", { name: "Navigation" })).toBeFocused();
+  await context.close();
+});
+
+test("Codex guide switches Desktop and CLI paths by keyboard and copies exact current inputs", async ({
+  browser,
+}) => {
+  const fixture = fixtures.find((candidate) => candidate.count === 1);
+  const context = await browser.newContext({
+    viewport: { width: 1280, height: 900 },
+    permissions: ["clipboard-read", "clipboard-write"],
+  });
+  const page = await context.newPage();
+  await page.goto(`${fixture.origin}/help/codex`);
+
+  const desktop = page.getByRole("tab", { name: "Desktop" });
+  const cli = page.getByRole("tab", { name: "CLI" });
+  const desktopPanel = page.locator("#codex-client-desktop-panel");
+  const cliPanel = page.locator("#codex-client-cli-panel");
+  await expect(desktop).toHaveAttribute("aria-selected", "true");
+  await expect(desktopPanel).toBeVisible();
+  await expect(cliPanel).toBeHidden();
+  await expect(page.getByText("Srez Marketplace").first()).toBeVisible();
+  await expect(desktopPanel.getByText("Mind Diary UAT")).toBeVisible();
+  await expect(page.getByText("Installed", { exact: true })).toBeVisible();
+
+  await page.getByRole("button", { name: "Copy Marketplace URL" }).click();
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(
+    "https://github.com/xxsrez/marketplace",
+  );
+
+  await desktop.focus();
+  await page.keyboard.press("ArrowRight");
+  await expect(cli).toBeFocused();
+  await expect(cli).toHaveAttribute("aria-selected", "true");
+  await expect(desktopPanel).toBeHidden();
+  await expect(cliPanel).toBeVisible();
+  await expect(page.locator("#codex-help-cli-install")).toHaveText(
+    "codex plugin marketplace add xxsrez/marketplace\n" +
+      "codex plugin add mind-diary@srez-marketplace",
+  );
+  await expect(page.getByText("/new", { exact: true })).toBeVisible();
+
+  await page.getByRole("button", { name: "Copy CLI install commands" }).click();
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(
+    "codex plugin marketplace add xxsrez/marketplace\n" +
+      "codex plugin add mind-diary@srez-marketplace",
+  );
+  await page.getByRole("button", { name: "Copy read-only check" }).click();
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(
+    "Use Mind Diary to list the Minds I can read. Do not create or change any Memory.",
+  );
+
+  const accessibilityTree = await page.locator("main").ariaSnapshot();
+  expect(accessibilityTree).toContain('tablist "Choose a Codex setup path"');
+  expect(accessibilityTree).toContain('tab "Desktop"');
+  expect(accessibilityTree).toContain('tab "CLI" [selected]');
+  await expectNoHorizontalOverflow(page);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expectNoHorizontalOverflow(page);
   await context.close();
 });
 

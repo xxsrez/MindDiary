@@ -841,11 +841,21 @@ test("pilot Product Site route map keeps one UAT shell, exact active navigation,
   const codexHelp = await handler(new Request(`${origin}/help/codex`));
   const codexHelpHtml = await codexHelp.text();
   assert.match(codexHelpHtml, /Authenticate for reading/);
-  assert.match(codexHelpHtml, /Create the first useful Memory/);
-  assert.match(codexHelpHtml, /Preview and confirm a substantial change/);
-  assert.match(codexHelpHtml, /Restore as a new revision and export/);
-  assert.match(codexHelpHtml, /Convert a bounded Markdown set/);
-  assert.doesNotMatch(codexHelpHtml, /MIND_DIARY_TOKEN|api\/mcp\/2025-11-25/i);
+  assert.match(codexHelpHtml, /Srez Marketplace/);
+  assert.match(codexHelpHtml, /Mind Diary UAT/);
+  assert.match(codexHelpHtml, /OAuth-on-first-use/);
+  assert.match(codexHelpHtml, /https:\/\/github\.com\/xxsrez\/marketplace/);
+  assert.match(codexHelpHtml, /codex plugin marketplace add xxsrez\/marketplace/);
+  assert.match(codexHelpHtml, /codex plugin add mind-diary@srez-marketplace/);
+  assert.match(codexHelpHtml, /Use Mind Diary to list the Minds I can read\. Do not create or change any Memory\./);
+  assert.match(codexHelpHtml, /data-codex-client-tab="desktop"/);
+  assert.match(codexHelpHtml, /data-codex-client-tab="cli"/);
+  assert.match(codexHelpHtml, /data-copy-code="codex-help-cli-install"/);
+  assert.match(codexHelpHtml, /href="\/settings\/developer\/mcp">Advanced MCP/);
+  assert.doesNotMatch(
+    codexHelpHtml,
+    /MIND_DIARY_TOKEN|api\/mcp|client secret|PKCE|DCR|content:read|binding_version|write_binding_id/i,
+  );
 
   for (const path of ["/api", "/mcp", "/settings", "/settings/unknown", "/minds/extra"]) {
     assert.equal(await handler(new Request(`${origin}${path}`)), null, path);

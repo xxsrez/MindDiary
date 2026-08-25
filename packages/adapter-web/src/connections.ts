@@ -6,10 +6,6 @@ import {
   renderMindDiaryAuthenticatedHeader,
 } from "./ui-shell.js";
 import {
-  MIND_DIARY_CODEX_CONCIERGE_PLAYBOOK,
-  MIND_DIARY_CODEX_RESTORE_EXPORT_PLAYBOOK,
-  MIND_DIARY_CODEX_SAFE_WRITE_PLAYBOOK,
-  MIND_DIARY_CODEX_STARTER_PLAYBOOK,
   MIND_DIARY_MCP_COMPATIBILITY_PATH,
   MIND_DIARY_MCP_MODERN_PATH,
   mindDiaryCodexConfig,
@@ -281,17 +277,35 @@ export function renderAdvancedMcpPageDocument(model: AdvancedMcpPageModel): stri
 }
 
 export function renderCodexHelpPageDocument(displayName: string): string {
-  const scenarios = [
-    ["starter", "Create the first useful Memory", MIND_DIARY_CODEX_STARTER_PLAYBOOK],
-    ["safe-write", "Preview and confirm a substantial change", MIND_DIARY_CODEX_SAFE_WRITE_PLAYBOOK],
-    ["restore-export", "Restore as a new revision and export", MIND_DIARY_CODEX_RESTORE_EXPORT_PLAYBOOK],
-    ["bounded-conversion", "Convert a bounded Markdown set", MIND_DIARY_CODEX_CONCIERGE_PLAYBOOK],
-  ] as const;
-  const playbooks = scenarios.map(([id, title, value]) => `<details class="md-setup-card"><summary><strong>${escapeUntrustedText(title)}</strong></summary><pre><code id="codex-help-${id}" tabindex="-1" data-code-value>${escapeUntrustedText(value)}</code></pre><button class="md-button md-button--secondary" type="button" data-copy-code="codex-help-${id}">Copy this prompt</button><p class="md-form__status" role="status" aria-live="polite" data-code-copy-status></p></details>`).join("");
+  const marketplaceUrl = "https://github.com/xxsrez/marketplace";
+  const cliInstall = "codex plugin marketplace add xxsrez/marketplace\ncodex plugin add mind-diary@srez-marketplace";
+  const readOnlySmoke = "Use Mind Diary to list the Minds I can read. Do not create or change any Memory.";
   return document("Help with Codex", `<div class="md-shell" data-mind-diary-shell data-codex-help data-nav-open="false">
     <a class="md-skip-link" href="#main-content">Skip to main content</a>
     ${renderMindDiaryAuthenticatedHeader(displayName, "help")}
-    <main id="main-content" class="md-main" tabindex="-1"><div class="md-page-heading"><div><p class="md-eyebrow">Three steps</p><h1>Use Mind Diary with Codex</h1><p>You do not need an endpoint, token, or identifier for the ordinary connection flow.</p></div></div><ol class="md-setup-steps"><li><h2>Install Mind Diary</h2><p>Install it from the available Marketplace.</p></li><li><h2>Authenticate for reading</h2><p>Ask Codex to read from Mind Diary. Approve the native read permission when it opens.</p></li><li><h2>Choose readable Minds and start</h2><p>Choose the Minds Codex may read, then use the starter prompt below. When you first ask Codex to add or change a Memory, it opens a separate write permission step; after approval, choose at most one writable Mind.</p></li></ol><section class="md-setup-card"><h2>If something does not work</h2><p>Open <a href="/settings/connections">Connections</a> to check current access. A read-only connection intentionally has no write selector. If Codex cannot write, ask it to add or change a Memory so the separate write permission can begin. Revoke and reconnect only when the connection is no longer usable.</p><p>Use <a href="/settings/developer/mcp">Advanced MCP</a> only for personal tokens, endpoint configuration, or protocol diagnostics.</p></section><section aria-labelledby="codex-scenarios-heading"><div class="md-section-heading"><div><p class="md-eyebrow">Choose one scenario</p><h2 id="codex-scenarios-heading">Starter and recovery prompts</h2></div></div>${playbooks}</section></main>
+    <main id="main-content" class="md-main" tabindex="-1">
+      <div class="md-page-heading"><div><p class="md-eyebrow">Three steps</p><h1>Use Mind Diary with Codex</h1><p>Install the plugin first. Your account connection is a separate OAuth-on-first-use step.</p></div></div>
+      <div class="md-client-tabs" role="tablist" aria-label="Choose a Codex setup path">
+        <button class="md-button md-button--secondary" id="codex-client-desktop-tab" type="button" role="tab" aria-selected="true" aria-controls="codex-client-desktop-panel" tabindex="0" data-codex-client-tab="desktop">Desktop</button>
+        <button class="md-button md-button--secondary" id="codex-client-cli-tab" type="button" role="tab" aria-selected="false" aria-controls="codex-client-cli-panel" tabindex="-1" data-codex-client-tab="cli">CLI</button>
+      </div>
+      <section class="md-client-panel" id="codex-client-desktop-panel" role="tabpanel" aria-labelledby="codex-client-desktop-tab" data-codex-client-panel="desktop">
+        <ol class="md-setup-steps">
+          <li data-copy-region><h2>Install Mind Diary</h2><p>Open <strong>Plugins</strong>, choose <strong>Add marketplace</strong>, paste this repository, and add it. In <strong>Srez Marketplace</strong>, open <strong>Mind Diary UAT</strong> and choose <strong>Install</strong>.</p><pre><code id="codex-help-desktop-marketplace" tabindex="-1" data-code-value>${escapeUntrustedText(marketplaceUrl)}</code></pre><button class="md-button md-button--secondary" type="button" data-copy-code="codex-help-desktop-marketplace">Copy Marketplace URL</button><p class="md-form__status" role="status" aria-live="polite" data-code-copy-status></p><p><strong>Success:</strong> the plugin card says <strong>Installed</strong>. This confirms the plugin package, not an account connection.</p></li>
+          <li data-copy-region><h2>Authenticate for reading</h2><p>Start a new Task and send the read-only check below. The first read opens <strong>Authenticate</strong> or <strong>Connect</strong>. Sign in with the same account and workspace you use for this Mind Diary Site, then approve reading.</p><pre><code id="codex-help-desktop-smoke" tabindex="-1" data-code-value>${escapeUntrustedText(readOnlySmoke)}</code></pre><button class="md-button md-button--secondary" type="button" data-copy-code="codex-help-desktop-smoke">Copy read-only check</button><p class="md-form__status" role="status" aria-live="polite" data-code-copy-status></p><p><strong>Success:</strong> Mind Diary appears in <a href="/settings/connections">Connections</a>. That connection is created only after consent.</p></li>
+          <li><h2>Choose readable Minds and start</h2><p>Choose at least one Mind Codex may read. In a fresh Task, run the same read-only check. Success is a bounded list of readable Minds; no Memory is created or changed.</p></li>
+        </ol>
+      </section>
+      <section class="md-client-panel" id="codex-client-cli-panel" role="tabpanel" aria-labelledby="codex-client-cli-tab" data-codex-client-panel="cli">
+        <ol class="md-setup-steps">
+          <li data-copy-region><h2>Install Mind Diary</h2><p>Run these commands as written. The first adds <strong>Srez Marketplace</strong>; the second installs the <strong>Mind Diary</strong> plugin.</p><pre><code id="codex-help-cli-install" tabindex="-1" data-code-value>${escapeUntrustedText(cliInstall)}</code></pre><button class="md-button md-button--secondary" type="button" data-copy-code="codex-help-cli-install">Copy CLI install commands</button><p class="md-form__status" role="status" aria-live="polite" data-code-copy-status></p><p><strong>Success:</strong> <code>codex plugin list</code> shows <code>mind-diary@srez-marketplace</code> as installed and enabled. This is still separate from the account connection.</p></li>
+          <li><h2>Authenticate for reading</h2><p>Run <code>codex</code> and ask Mind Diary to read. The first read opens <strong>Authenticate</strong>. Sign in with the same account and workspace you use for this Mind Diary Site, then approve reading.</p></li>
+          <li data-copy-region><h2>Choose readable Minds and start</h2><p>Choose at least one readable Mind, enter <code>/new</code>, then send this safe check. Success is a bounded list of readable Minds; no Memory is created or changed.</p><pre><code id="codex-help-cli-smoke" tabindex="-1" data-code-value>${escapeUntrustedText(readOnlySmoke)}</code></pre><button class="md-button md-button--secondary" type="button" data-copy-code="codex-help-cli-smoke">Copy read-only check</button><p class="md-form__status" role="status" aria-live="polite" data-code-copy-status></p></li>
+        </ol>
+      </section>
+      <section class="md-setup-card md-setup-card--single" aria-labelledby="codex-help-troubleshooting"><div><p class="md-eyebrow">Checkpoint help</p><h2 id="codex-help-troubleshooting">If a step does not finish</h2><ul><li><strong>Marketplace:</strong> compare the repository exactly. Add it once, then reload Plugins once.</li><li><strong>Install:</strong> confirm the plugin says Installed and start a fresh Task. Installed does not mean connected.</li><li><strong>Authenticate:</strong> repeat the read-only check in a fresh Task and confirm the same account and workspace. Then check <a href="/settings/connections">Connections</a>.</li><li><strong>Readable Minds:</strong> open Connections and attach at least one Mind you can currently access.</li></ul><p>Revoke and reconnect only when the existing connection is no longer usable.</p></div></section>
+      <section class="md-setup-card md-setup-card--single"><h2>Advanced setup</h2><p><a href="/settings/developer/mcp">Advanced MCP</a> is the separate place for direct client setup and diagnostics. The ordinary plugin flow above does not require it.</p></section>
+    </main>
     ${renderMindDiaryAuthenticatedFooter("help")}
   </div>`);
 }

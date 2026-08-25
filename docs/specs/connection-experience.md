@@ -1,6 +1,6 @@
 # Connections, Advanced MCP и Codex Help
 
-Статус: accepted contract, 2026-08-24. Документ задаёт пользовательскую
+Статус: accepted contract, 2026-08-25. Документ задаёт пользовательскую
 information architecture и server-owned projection для Release 0.1. Реализация
 и live UAT evidence проверяются отдельно; наличие этого контракта не является
 утверждением о развёрнутом поведении.
@@ -14,10 +14,13 @@ information architecture и server-owned projection для Release 0.1. Реал
 3. только при первом write intent пройти отдельный native write step-up и при
    необходимости выбрать один writable Mind.
 
-В основной flow не попадают MCP endpoint, OAuth/DCR/PKCE, scopes, grant/token/
-binding identifiers, personal-token archive и automatic capture. Они не нужны
-для ответа на пользовательские вопросы «что подключено», «что можно читать»,
-«куда можно записывать» и «как отключить доступ».
+В основной flow не попадают MCP endpoint, OAuth protocol mechanics
+(DCR/PKCE), scopes, grant/token/binding identifiers, personal-token archive и
+automatic capture. `/help/codex` один раз называет пользовательский lifecycle
+signal `OAuth on first use`, чтобы отделить установленный plugin от ещё не
+созданной connection, но не объясняет протокол. Эти детали не нужны для ответа
+на пользовательские вопросы «что подключено», «что можно читать», «куда можно
+записывать» и «как отключить доступ».
 
 Приняты четыре canonical routes:
 
@@ -33,6 +36,52 @@ binding identifiers, personal-token archive и automatic capture. Они не н
 `/settings/developer/mcp`; signed-out request получает тот же безопасный sign-in
 shell, что остальные распознанные UI routes. Он не остаётся второй canonical
 страницей и не смешивает ordinary Connections с Advanced MCP.
+
+## Canonical `/help/codex` guide
+
+Guide сохраняет три top-level шага `Install Mind Diary` → `Authenticate for
+reading` → `Choose readable Minds and start`. Над ними находится один
+keyboard-accessible switch между `Desktop` и `CLI`; выбранный path меняет
+только инструкции внутри тех же трёх шагов. Без JavaScript оба path остаются
+читаемыми, а при активном script switch использует tab semantics, включая
+Arrow/Home/End navigation и связанный tabpanel.
+
+Desktop path показывает проверяемый текущий flow:
+
+1. открыть Plugins, добавить Marketplace repository
+   `https://github.com/xxsrez/marketplace`, найти `Mind Diary UAT` в
+   `Srez Marketplace` и выбрать `Install`;
+2. начать новую Task и отправить безопасный read-only smoke. Первый read
+   открывает native `Authenticate`/`Connect`; пользователь входит тем же
+   account/workspace, что использует текущий Mind Diary Site;
+3. выбрать хотя бы один readable Mind и повторить smoke в fresh Task.
+
+CLI path использует только поддержанные команды:
+
+```bash
+codex plugin marketplace add xxsrez/marketplace
+codex plugin add mind-diary@srez-marketplace
+```
+
+После install пользователь запускает Codex, first read открывает
+`Authenticate`, затем `/new` создаёт fresh Task для проверочного smoke. Guide
+не утверждает, что `Installed` уже означает connection: `Installed` — success
+signal package install, а появление app в `/settings/connections` после consent
+— success signal OAuth connection.
+
+Одинаковый copy-ready read smoke используется в обоих path:
+
+```text
+Use Mind Diary to list the Minds I can read. Do not create or change any Memory.
+```
+
+Успех означает bounded список readable Minds и отсутствие content mutation.
+Для каждого checkpoint guide даёт один bounded recovery: сверить exact
+Marketplace source/install state, выполнить read smoke в fresh Task, проверить
+тот же account/workspace и current selection в Connections. Revoke/reconnect не
+является default troubleshooting и предлагается только для уже unusable
+connection. Empty Connections, authenticated footer и starter card `/me`
+ссылаются на canonical `/help/codex`.
 
 ## Presentation identity и actor boundary
 

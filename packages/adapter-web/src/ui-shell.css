@@ -757,6 +757,45 @@ code,
   font-size: 1rem;
 }
 
+.md-client-tabs {
+  display: inline-flex;
+  max-width: 100%;
+  gap: 0.35rem;
+  margin-block-end: 1.5rem;
+  padding: 0.3rem;
+  border: 1px solid var(--mind-diary-border-subtle, #d9d2c8);
+  border-radius: var(--mind-diary-radius-control, 12px);
+  background: var(--mind-diary-white, #fff);
+}
+
+.md-client-tabs [role="tab"][aria-selected="true"] {
+  color: var(--mind-diary-white, #fff);
+  border-color: var(--mind-diary-memory-plum, #6c4bb6);
+  background: var(--mind-diary-memory-plum, #6c4bb6);
+}
+
+.md-client-panel,
+.md-client-panel > .md-setup-steps,
+.md-client-panel pre {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.md-client-panel[hidden] {
+  display: none;
+}
+
+.md-client-panel pre {
+  padding: 0.85rem;
+  border: 1px solid var(--mind-diary-border-subtle, #d9d2c8);
+  border-radius: var(--mind-diary-radius-control, 12px);
+  color: var(--mind-diary-ink, #182642);
+  background: var(--mind-diary-paper, #fff7e8);
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .md-setup-card pre {
   min-width: 0;
   max-width: 100%;
@@ -1225,6 +1264,16 @@ code,
   }
 
   .md-section-heading .md-button {
+    width: 100%;
+  }
+
+  .md-client-tabs {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100%;
+  }
+
+  .md-client-tabs .md-button {
     width: 100%;
   }
 

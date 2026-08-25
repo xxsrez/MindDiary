@@ -1,5 +1,5 @@
 (() => {
-  const shell = document.querySelector("[data-connections-page],[data-connection-detail],[data-advanced-mcp]");
+  const shell = document.querySelector("[data-connections-page],[data-connection-detail],[data-advanced-mcp],[data-codex-help]");
   if (!shell) return;
 
   const csrf = document.querySelector('meta[name="mind-diary-csrf-token"]')?.getAttribute("content") ?? "";
@@ -30,6 +30,52 @@
   const say = (element, message) => {
     if (element) element.textContent = message;
   };
+
+  for (const button of shell.querySelectorAll("[data-copy-code]")) {
+    button.addEventListener("click", async () => {
+      const codeId = button.dataset.copyCode ?? "";
+      const code = codeId ? document.getElementById(codeId) : null;
+      const region = button.closest("[data-copy-region],details,section,li");
+      const status = region?.querySelector("[data-code-copy-status]");
+      if (!code?.matches("[data-code-value]") || !status) return;
+      try {
+        await navigator.clipboard.writeText(code.textContent ?? "");
+        say(status, "Copied. This text contains no token or Site credential.");
+      } catch {
+        say(status, "Copy was blocked. Select the text and copy it manually.");
+        code.focus();
+      }
+    });
+  }
+
+  const clientTabs = [...shell.querySelectorAll("[data-codex-client-tab]")];
+  const clientPanels = [...shell.querySelectorAll("[data-codex-client-panel]")];
+  const activateClient = (selected, moveFocus) => {
+    const client = selected.dataset.codexClientTab;
+    for (const tab of clientTabs) {
+      const active = tab === selected;
+      tab.setAttribute("aria-selected", String(active));
+      tab.tabIndex = active ? 0 : -1;
+    }
+    for (const panel of clientPanels) panel.hidden = panel.dataset.codexClientPanel !== client;
+    if (moveFocus) selected.focus();
+  };
+  clientTabs.forEach((tab, index) => {
+    tab.addEventListener("click", () => activateClient(tab, false));
+    tab.addEventListener("keydown", (event) => {
+      let next = null;
+      if (event.key === "ArrowRight") next = clientTabs[(index + 1) % clientTabs.length];
+      if (event.key === "ArrowLeft") next = clientTabs[(index - 1 + clientTabs.length) % clientTabs.length];
+      if (event.key === "Home") next = clientTabs[0];
+      if (event.key === "End") next = clientTabs[clientTabs.length - 1];
+      if (next === null) return;
+      event.preventDefault();
+      activateClient(next, true);
+    });
+  });
+  const initialClient = clientTabs.find((tab) => tab.getAttribute("aria-selected") === "true")
+    ?? clientTabs[0];
+  if (initialClient) activateClient(initialClient, false);
 
   const dateLabel = (value) => {
     if (value === null) return "Never";

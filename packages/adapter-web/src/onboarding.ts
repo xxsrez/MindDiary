@@ -307,7 +307,7 @@ function renderAuthenticated(
       <section class="md-setup-card md-setup-card--single" aria-labelledby="first-result-title" data-starter-mind-guide>
         <p class="md-eyebrow">About 15 minutes</p>
         <h2 id="first-result-title">Create your first useful Memory</h2>
-        <p>Connect Codex, then copy this prompt. It selects exactly one Personal or ordinary Mind, creates only UTF-8 Markdown, validates the complete OKF 0.2 bundle, and proves the result with index, search, and fetch.</p>
+        <p><a href="/help/codex">Open the Codex setup guide</a> if Mind Diary is not installed and connected yet. Then copy this prompt. It selects exactly one Personal or ordinary Mind, creates only UTF-8 Markdown, validates the complete OKF 0.2 bundle, and proves the result with index, search, and fetch.</p>
         <pre><code id="mind-diary-onboarding-starter-playbook" tabindex="-1" data-code-value>${escapeUntrustedText(MIND_DIARY_CODEX_STARTER_PLAYBOOK)}</code></pre>
         <button class="md-button md-button--primary" type="button" data-copy-code="mind-diary-onboarding-starter-playbook">Copy starter playbook</button>
         <p class="md-form__status" role="status" aria-live="polite" data-code-copy-status></p>

@@ -343,6 +343,7 @@ test("authenticated My Mind card exposes only /me and Personal-safe management",
   assert.match(html, /data-profile-version="3"/);
   assert.match(html, /does not edit Memories or create a content revision/i);
   assert.match(html, /Create your first useful Memory/u);
+  assert.match(html, /href="\/help\/codex">Open the Codex setup guide<\/a>/u);
   assert.match(html, /class="md-setup-card md-setup-card--single"/u);
   assert.match(html, /data-copy-code="mind-diary-onboarding-starter-playbook"/u);
   assert.match(html, /data-copy-code="mind-diary-onboarding-concierge-playbook"/u);
