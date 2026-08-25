@@ -1,7 +1,8 @@
 # Доменная модель и доступ
 
-Статус: proposal, обновлено 2026-08-22. Product decisions в этом документе
-приняты для первого прототипа. Точные wire schemas принадлежат
+Статус: proposal, обновлено 2026-08-25. Product decisions первого прототипа
+приняты для первого прототипа; format-neutral BundleFile amendment принят
+отдельно для Release 0.2. Точные wire schemas принадлежат
 [API specification](api.md); repository baseline уже содержит domain,
 application, memory/Sites storage adapters и tests, а их live UAT evidence
 учитывается отдельно от нормативной модели.
@@ -23,9 +24,9 @@ Mind Diary: у него есть стабильная identity, дерево OKF
 | `OKFBundle` | Markdown/OKF projection одной revision; memberships и ACL в неё не входят. |
 | `KnowledgeEntry` / `Memory` | Пользовательский searchable OKF concept; `Memory` — umbrella term в UI. |
 | `Source` | Source-faithful материал или typed source concept с provenance. |
-| `BundleFile` | Принятый producer-defined opaque file одной revision; в UI attachment/asset. OKF 0.2 не задаёт эту entity или manifest. Первый slice ограничен raster/PDF/ZIP и отдельным service contract. |
+| `BundleFile` | Принятый producer-defined regular non-Markdown file одной revision с `kind: opaque`; в UI attachment/asset. OKF 0.2 не задаёт эту entity или manifest. Release 0.2 admission format-neutral; preview/index policy separate. |
 | `FileIngressSource` | Closed provenance class `session_attachment`, `local_path`, `workspace/generated_artifact`, `connector_object`, `bounded_in_memory` или `server_generated`; не authorization identity. |
-| `VerifiedFileInput` | Adapter-produced exact bytes plus source kind, safe filename, detected media type, size and SHA-256; provider IDs/URLs and local paths terminate at the adapter boundary. |
+| `VerifiedFileInput` | Adapter-produced bounded byte stream plus source kind, safe filename, advisory media evidence, size and SHA-256; provider IDs/URLs and local paths terminate at the adapter boundary. |
 | `staged_file_ref` | Service-owned quarantined/verified locator pinned to owner, Space and write binding; it is consumed atomically by a BundleFile changeset and is not a provider/local locator. |
 | `ImportSession` | Private resumable Markdown-only staging aggregate, pinned to principal/write binding/Space/base revision/idempotency key; не revision и не reader-visible content. |
 | `CapacityReservation` | Durable bounded budget for one admitted operation; consumed/released atomically with canonical transition or cleanup. |
@@ -394,8 +395,10 @@ commit_changeset(
 revision; клиент перечитывает данные и повторно строит изменение. Автоматический
 semantic merge, branches и last-writer-wins не поддерживаются.
 
-Accepted Brain-scale storage model materializes v3 manifest as a separately
-digested Space-scoped object. Delta commit reuses unchanged parent digests;
+Accepted Brain-scale storage model materializes manifest as a separately
+digested Space-scoped object. Legacy v3 uses the historical closed-media entry
+semantics; Release 0.2 v4 keeps the storage layout with open advisory media and
+`application/octet-stream` fallback. Delta commit reuses unchanged parent digests;
 reachability, usage and reservation move with revision/HEAD in the same D1
 transaction. Resumable Markdown import stages private batches and invokes this
 same final CAS once; checkpoints never become partial revisions. Normative
@@ -409,6 +412,13 @@ MD-272 companion for explicit `local_path`, `workspace/generated_artifact` and
 bounded local bytes. These adapters do not claim hosted upload-intent or
 native-client capability; connector and hosted producer evidence remain
 separate until their owning adapters and exact evidence exist.
+
+The accepted 0.2 opaque-file maximum is exactly 268,435,456 bytes (256 MiB),
+inclusive, and one changeset may reference at most the same staged-byte total.
+Upload, SHA-256, quarantine, promotion, historical read/download and export are
+streaming/non-buffering: no application/domain port requires resident memory
+proportional to the file. Current adapters still implement the legacy
+64 MiB/allowlist baseline until MD-304.
 
 Reserved files требуют явной семантики:
 
@@ -492,3 +502,17 @@ Brain-scale storage/import/export, ZIP/binary/legacy bundle import,
 extraction/OCR/general file types, legacy 0.1 migration, legal retention policy, recovery after
 deletion, billing/organization administration и cross-Mind content synthesis
 без отдельного explicit use case.
+
+## Граница Release 0.2 BundleFile
+
+Accepted domain target разрешает arbitrary regular non-Markdown file as opaque
+versioned member. `media_type` is advisory and open; unknown/missing/conflicting
+evidence becomes `application/octet-stream`. Only Markdown is OKF knowledge and
+indexed content. Only a separately verified safe-raster subset may be inline;
+all other objects are attachment/download-only and never executed/extracted.
+
+MD-306 may add one typed OKF Markdown entry with unknown producer fields and
+individually staged linked files through ordinary changesets. This does not add
+an OKF `Asset`, directory/glob/batch/archive importer, migration database or
+whole-Brain atomicity; `recorded_by`, `applies_to` and `sources` remain
+producer content, not service authority.

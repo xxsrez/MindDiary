@@ -1,7 +1,7 @@
 # Roadmap и стратегия проверки Mind Diary
 
 Статус: зафиксированная product direction владельца проекта, обновлено
-2026-08-24.
+2026-08-25.
 Документ определяет последовательность проверки и развития продукта, но не
 является implementation specification, календарным обещанием или свидетельством
 реализованных функций.
@@ -17,8 +17,9 @@
 - bounded Markdown-only import, Brain-scale storage/export и universal file
   ingress приняты и частично реализованы как post-MVP graph; они не блокируют
   small-data Markdown Release 0.1;
-- bounded non-Markdown `BundleFile` contract и local implementation сохранены
-  для post-MVP; hosted support требует собственного exact evidence.
+- Release 0.2 принимает format-neutral `BundleFile` contract для arbitrary
+  regular files до 256 MiB; текущая local implementation остаётся legacy
+  raster/PDF/ZIP + 64 MiB baseline до MD-304 и hosted exact evidence.
 
 Будущий product/market analysis обязан оценивать каждую фазу отдельно и не
 выдавать ограничения проверочного slice за окончательные границы продукта.
@@ -155,20 +156,20 @@ payload бывает не только binary:
 - SQL, Python, notebooks, executors и attesters;
 - любые неизвестные файлы, которые надо сохранить byte-for-byte для round-trip.
 
-Post-MVP graph принимает bounded raster/PDF/ZIP slice: unified revision manifest,
-quarantined staging, exact digest/media/size, atomic Markdown+file commits,
-reauthorized download и отдельный deterministic mixed export. Type allowlist,
-числовые quotas, archive containment и compatibility закреплены в
-[BundleFile specification](specs/bundle-files.md) и
-[ADR-0015](decisions/0015-versioned-bundle-files.md). Canonical bytes нельзя
-автоматически исполнять; ZIP не извлекается, а previews/OCR/transcription
-остаются будущими derived capabilities.
+Historical post-MVP graph начал с bounded raster/PDF/ZIP slice. Release 0.2
+принимает его format-neutral replacement: manifest v4 хранит любой явно
+выбранный regular file как `kind: opaque`, open advisory `media_type` использует
+`application/octet-stream` fallback, а exact per-file limit равен 256 MiB.
+Storage не зависит от preview support: только safe raster subset может быть
+inline, DOCX/HEIC/EPUB/OPUS/HTML/notebook/ZIP/unknown binary — download-only.
+Canonical bytes нельзя автоматически исполнять или извлекать. Полный contract
+закреплён в [BundleFile specification](specs/bundle-files.md) и
+[ADR-0021](decisions/0021-format-neutral-bundle-files.md).
 
-Этот slice не блокирует Markdown-first Release 0.1 и не является productized
-import, general arbitrary-file support или production malware-cleanliness
-claim. Larger files/capacity, Office/audio/video,
-resumable upload, antivirus/CDR и extraction требуют нового evidence и
-accepted contract.
+Этот target не меняет terminal Markdown-first Release 0.1 и не является bulk
+Brain import, directory/archive import, rich renderer или production
+malware-cleanliness claim. Текущий runtime остаётся legacy-bounded; MD-304,
+последующие browse/download/export tasks и exact UAT должны доказать 0.2.
 
 ## Известный naming risk
 
@@ -193,8 +194,8 @@ accepted contract.
 - Какой один job-to-be-done должен определять успех первой Codex cohort?
 - Когда измеренный usage оправдывает продвижение принятого Markdown-only import?
 - Какая точная семантика named checkpoints?
-- Какие BundleFile types, capacity tiers и processing capabilities
-  подтверждаются usage после bounded raster/PDF/ZIP slice?
+- Какие capacity tiers и optional processing/preview capabilities подтверждаются
+  usage после format-neutral storage, не превращаясь обратно в admission rule?
 - Какой usage/retention signal запускает AWS migration?
 - Как устроены website AI pricing, billing, provider routing и write safety?
 - Сохраняется ли имя `Mind Diary` перед выходом за пределы pilot audience?

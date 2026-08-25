@@ -11,6 +11,12 @@ Markdown/OKF 0.2 workflow на небольшом детерминированн
 file-ingress capabilities сохраняются как post-MVP graph и не входят в
 terminal receipt 0.1.
 
+Release 0.2 принимает format-neutral `BundleFile` target: arbitrary regular
+non-Markdown files до 256 MiB сохраняются byte-for-byte как `kind: opaque`, а
+MIME/preview support не управляет admission. Текущий runtime всё ещё реализует
+legacy raster/PDF/ZIP + 64 MiB baseline; MD-304 должен доставить manifest v4 и
+streaming implementation до claim о поддержке 0.2.
+
 ## Зачем проект существует
 
 Mind Diary даёт пользователям и их агентам управляемый доступ к живым базам
@@ -133,10 +139,13 @@ email. Invitation появляется внутри Mind Diary, роль выб�
 
 Каждая revision разрешается через единый immutable service manifest exact
 files. Terminal Release 0.1 использует Markdown/OKF 0.2 content.
-Producer-defined `BundleFile` post-MVP contract хранит opaque raster,
-PDF или ZIP bytes и не становится нормативной OKF entity. Обычная работа идёт
-по отдельным files; ZIP остаётся attachment и не означает ZIP/local bundle
-import. Markdown и BundleFile могут изменяться одним atomic changeset. Полный
+Producer-defined `BundleFile` Release 0.2 contract хранит любой явно выбранный
+regular non-Markdown file как opaque exact bytes и не становится нормативной
+OKF entity. Unknown/conflicting media получает `application/octet-stream`;
+только безопасный raster subset может иметь inline preview, всё остальное —
+download-only. Обычная работа идёт по отдельным files; ZIP остаётся attachment
+и не означает ZIP/local bundle import. Markdown и BundleFile могут изменяться
+одним atomic changeset. Полный
 contract manifest, staging, downloads, limits и export находится в
 [BundleFile specification](specs/bundle-files.md).
 
@@ -282,13 +291,13 @@ OKF access, immediate CAS commits, immutable history и export.
 email delivery, fuzzy global user search, granular file permissions, branches,
 automatic semantic merge, legal retention/recovery model, billing,
 organization administration и general cross-Mind synthesis.
-Также отложены BundleFile/file ingress, Brain-scale storage/import/export,
+Для terminal 0.1 также были отложены BundleFile/file ingress, Brain-scale storage/import/export,
 ZIP/local bundle import, legacy 0.1 migration, named checkpoints и
-company-knowledge compatibility profile. Для raster/PDF/ZIP и Markdown-only
-resumable import приняты отдельные post-MVP contracts и существует local
-implementation evidence, но их repository/UAT status нельзя выводить из
-terminal Release 0.1. Более широкие file types, extraction и previews/OCR
-остаются будущими решениями. Ограничения
+company-knowledge compatibility profile. Release 0.2 теперь принимает
+format-neutral storage contract; его runtime/UAT status нельзя выводить из
+legacy raster/PDF/ZIP implementation или terminal Release 0.1. Extraction,
+execution, rich previews/OCR и bulk/archive import остаются будущими решениями.
+Ограничения
 этого раздела нельзя трактовать как полные границы будущего продукта; см.
 [roadmap](roadmap.md).
 
@@ -333,7 +342,8 @@ UAT и подтверждает live web + MCP flows. Production release вып�
 - Два concurrent Editors не теряют изменения: stale attempt получает conflict.
 - Исторический read не смешивается с HEAD и проверяет current access.
 - Export проходит OKF validation и сохраняет неизвестные fields/types.
-- Mixed revision сохраняет image/PDF/ZIP exact bytes в history, authorized
+- Mixed revision после implementation 0.2 сохраняет DOCX, HEIC, EPUB, OPUS,
+  HTML, notebook, ZIP и unknown binary exact bytes в history, authorized
   download и deterministic `MD-BUNDLE-ZIP-1`, не меняя `MD-OKF-ZIP-1`.
 - Будущий перенос Sites → AWS меняет adapters, но не domain, API semantics или
   OKF representation.

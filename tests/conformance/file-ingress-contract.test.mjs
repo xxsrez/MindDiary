@@ -60,9 +60,10 @@ test("MD-271 preserves the portable staged-ref boundary and common limits", asyn
     assert.match(text, /atomic/);
     assert.match(text, /silent base64/);
   }
-  assert.match(spec, /67,108,864 bytes \(64 MiB\)/);
-  assert.match(spec, /134,217,728 bytes \(128 MiB\)/);
-  assert.match(spec, /268,435,456 bytes \(256 MiB\)/);
+  assert.match(spec, /One staged\/canonical BundleFile.*268,435,456 bytes \(256 MiB\), inclusive/);
+  assert.match(spec, /Staged bytes referenced by one changeset.*268,435,456 bytes \(256 MiB\)/);
+  assert.match(spec, /Byte 268,435,457 fails/);
+  assert.match(spec, /4,194,304 bytes \(4 MiB\)/);
   assert.match(spec, /3,600 seconds \(60 minutes\)/);
   assert.match(spec, /600 seconds \(10 minutes\)/);
   for (const code of [

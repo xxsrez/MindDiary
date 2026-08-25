@@ -1,6 +1,6 @@
 # Архитектура Mind Diary
 
-Статус: proposal, обновлено 2026-08-24. Product Site components, adapters,
+Статус: proposal, обновлено 2026-08-25. Product Site components, adapters,
 route migration и isolated Codex bridge реализованы и развёрнуты как
 single-principal UAT в OpenAI Sites. Authenticated web/control,
 persistence-after-redeploy,
@@ -12,11 +12,13 @@ Synthetic multi-principal и automated OAuth/package gates по ADR-0012 ост�
 blocking, а ADR-0019 дополнительно требует один blocking real-account
 first-user UAT receipt.
 
-ADR-0015 сохраняет post-MVP architecture для versioned `BundleFile`; её
-core уже реализован и развёрнут в UAT. Native MCP ingress, exact-revision
-list/download, Markdown references и dual export реализованы в local candidate;
-real-client native-file UAT gate ещё не является подтверждённым свойством
-deployed candidate.
+ADR-0015 сохраняет immutable/staged versioned `BundleFile` architecture.
+ADR-0021 принимает для Release 0.2 manifest v4, arbitrary opaque files,
+open advisory media и 256 MiB streaming. Текущий core/UAT остаётся legacy
+manifest v1/v2/v3 + raster/PDF/ZIP + 64 MiB baseline; MD-304 владеет runtime
+replacement. Native MCP ingress, exact-revision list/download, Markdown
+references и dual export имеют local legacy evidence, но не доказывают
+format-neutral candidate или real-client UAT.
 
 ADR-0016 сохраняет следующую post-MVP Sites storage boundary:
 Space-scoped R2 objects + separately digested v3 manifests, D1 HEAD/reachability/
@@ -35,9 +37,11 @@ MD-271 принимает единый post-MVP [file-ingress contract](specs/fi
 transport и application-owned byte verification. В текущем candidate
 `session_attachment`, bounded-inline и server-generated stream имеют local
 implementation; MD-272 добавляет repository-local companion для `local_path`,
-`workspace/generated_artifact` и bounded local bytes. MD-250 native-client UAT
-ещё не закрыт, а local/hosted producer, connector и generated paths не являются
-автоматически доступными или fallback capability.
+`workspace/generated_artifact` и bounded local bytes. Исторический MD-250
+закрыт без Release 0.2 promotion; current runtime/file-ingress work принадлежит
+MD-304/MD-305, а joined native-client UAT — MD-275. Local/hosted producer,
+connector и generated paths не являются автоматически доступными или fallback
+capability.
 
 ## Драйверы и ограничения
 
@@ -48,7 +52,8 @@ implementation; MD-272 добавляет repository-local companion для `loc
 - user-scoped MCP для Codex без загрузки всего corpus; другие clients, включая
   Claude Code, требуют отдельного adapter/client conformance evidence;
 - individual-file UTF-8 Markdown/OKF 0.2 access и deterministic export в 0.1;
-- bounded opaque BundleFile access остаётся post-MVP capability;
+- format-neutral opaque BundleFile up to 256 MiB is an accepted Release 0.2
+  target; current implementation status remains separate;
 - immediate multi-file commits с immutable history и optimistic concurrency;
 - public/unlisted live-HEAD reads только для authenticated users;
 - Sites-only MVP UAT и post-MVP AWS portability без AWS SDK в domain
@@ -107,8 +112,8 @@ SpaceRevision --materialize---------> OKFBundle
 ```
 
 `KnowledgeSpace` — service aggregate и access boundary. Markdown остаётся OKF
-projection. Accepted post-MVP manifest v2 может связывать с той же revision
-opaque `BundleFile` exact bytes. Account, handle, ACL, invitations, tokens, staging,
+projection. Accepted Release 0.2 manifest v4 может связывать с той же revision
+arbitrary opaque `BundleFile` exact bytes. Account, handle, ACL, invitations, tokens, staging,
 download grants, idempotency results, audit и indexes — service metadata.
 
 Personal Mind использует тот же content/revision schema, но application commands
@@ -128,9 +133,10 @@ frontmatter, provenance, trust/lifecycle fields и validation. Он:
 - не знает об MCP, HTTP, auth, Sites, AWS SDK, SQL или search engine.
 
 BundleFile, ZIP/local bundle import и legacy 0.1 migration не входят в terminal
-Release 0.1. Producer-defined raster/PDF/ZIP transport принят отдельно в
+Release 0.1. Producer-defined format-neutral transport принят отдельно в
 [BundleFile specification](specs/bundle-files.md); ZIP остаётся opaque и не
-является import. Отдельный Markdown-only file import принят в
+является import. Only safe raster may be inline; every other type is
+download-only. Отдельный Markdown-only file import принят в
 [storage/capacity/import contract](specs/sites-storage-capacity-import.md), но
 относится к post-MVP, реализован только в local candidate и ещё не доказан на
 exact UAT deployment.
@@ -149,7 +155,8 @@ ports:
 - token issue/revoke/authenticate;
 - export/validate revision;
 - browse/search/fetch/history Markdown exact revision;
-- post-MVP list/download exact-revision BundleFile и bounded verified staging;
+- Release 0.2 target list/download exact-revision arbitrary BundleFile и
+  verified streaming staging;
 - atomic `commit_changeset`;
 - future-proposal bounded PersonalContext/SpaceLanding;
 - outbox/index jobs и audit.
@@ -209,8 +216,11 @@ composition и automated import graph checks реализованы; live Sites 
   соответствующего application use case и не дублируются отдельным protocol
   preflight.
   Native OpenAI file object для `stage_bundle_file` разрешается только здесь:
-  adapter bounded-streams allowlisted temporary HTTPS source и передаёт core
-  verified bytes/metadata, никогда provider ID/URL или local path.
+  adapter streams allowlisted temporary HTTPS source directly to quarantine,
+  calculates exact digest/size and passes header-safe advisory media, никогда
+  provider ID/URL или local path. The accepted v4 path succeeds through exactly
+  256 MiB and never requires a full-file buffer; current adapter remains
+  64 MiB/closed-media until MD-304.
   Другие источники не перегружают native `file`: local/workspace paths требуют
   отдельного companion intent, connector object — отдельного authorized
   adapter, а inline/server-generated bytes — explicit bounded producer port.
@@ -854,8 +864,9 @@ audit log.
 - Concept/source text не расширяет server tools или scopes; модель всё ещё может
   ошибочно интерпретировать его как инструкцию в пределах разрешённых tools.
 - Changeset принимает canonical relative Markdown paths/valid UTF-8 и bounded
-  BundleFile operations только через verified staged refs; exact limits,
-  allowlist и reserved-path rules fail closed.
+  BundleFile operations только через verified staged refs; exact 256 MiB
+  streaming/quotas and reserved-path rules fail closed. MIME/extension does not
+  gate storage; unknown/conflicting media becomes `application/octet-stream`.
 - Web renderer не исполняет embedded HTML/script без isolation/sanitization.
 - Export и BundleFile bytes передаются через short-lived grants с повторной
   проверкой доступа. Native upload intent существует только как quarantined
@@ -877,8 +888,8 @@ audit log.
 - Когда сложности конфликтов оправдают structured index merge вместо current
   HEAD CAS/retry?
 - Какие personal categories и consent model допустимы для personalization?
-- Достаточны ли first-slice BundleFile quotas/type allowlist для pilot и какой
-  production malware/CDR profile нужен до расширения formats?
+- Достаточны ли 256 MiB/1 GiB/2 GiB BundleFile quotas для pilot и какой
+  production malware/CDR/preview profile нужен without making it admission?
 - Подтвердят ли exact Sites headroom and Brain-scale UAT fixture принятые
   per-Mind/principal/Site limits без их скрытого повышения?
 

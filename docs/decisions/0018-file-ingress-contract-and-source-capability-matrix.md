@@ -1,8 +1,9 @@
 # ADR-0018: единый file-ingress contract и source capability matrix
 
 Статус: accepted technical contract, 2026-08-23. Portable boundary и security
-invariants сохраняются, но включение universal file ingress в terminal Release
-0.1 частично заменено
+invariants сохраняются; closed BundleFile allowlist/64 MiB static-policy часть
+заменена [ADR-0021](0021-format-neutral-bundle-files.md). Включение universal
+file ingress в terminal Release 0.1 ранее частично заменено
 [ADR-0019](0019-release-0-1-codex-first-small-data-boundary.md): capability
 относится к post-MVP и не блокирует Markdown-first 0.1. Это contract decision
 MD-271; implementation/evidence каждой source capability остаются отдельными
@@ -54,10 +55,11 @@ revision/atomicity с уже принятыми Markdown и BundleFile operation
    commit consumes all refs in one existing HEAD-CAS transaction. Unknown
    stage/commit outcomes replay the exact key/payload; changed payloads produce
    idempotency conflict; stale/failing commits never publish a partial revision.
-7. The existing BundleFile allowlist, path policy, quotas, historical bytes,
-   Markdown-only import profile and deterministic export profiles remain
-   unchanged. This ADR does not add archive import, generic binary formats,
-   browser raw-content endpoints or production malware-cleanliness claims.
+7. BundleFile path policy, historical bytes, Markdown-only import profile and
+   deterministic export profiles remain unchanged. Format-neutral admission,
+   v4 media semantics and 256 MiB limits now belong to ADR-0021. This ADR does
+   not add archive import, browser raw-content endpoints or production
+   malware-cleanliness claims.
 
 ## Consequences
 
@@ -65,10 +67,11 @@ revision/atomicity с уже принятыми Markdown и BundleFile operation
   audit and commit semantics without making source locators portable.
 - Capability negotiation is explicit: a client either supplies the required
   native file/intent/inline profile or receives a typed unavailable result.
-- The current candidate can claim local `session_attachment`, bounded-inline
+- The historical candidate can claim local `session_attachment`, bounded-inline
   and server-generated writer code/tests plus MD-272's local companion code;
-  MD-250 is still required before claiming exact native client/profile UAT,
-  hosted upload-intent/producer use remains unproven, and MD-274 owns the
+  MD-250 was its exact native client/profile UAT gate. Release 0.2 runtime/
+  ingress and joined UAT now belong to MD-304/MD-305/MD-275 under ADR-0021.
+  Hosted upload-intent/producer use remains unproven, and MD-274 owns the
   mixed-source coordinator. Эти rows не являются terminal prerequisites 0.1.
 - Local snapshots may hash before network I/O for user feedback, but the
   application recomputes digest/size/MIME; client declarations never become

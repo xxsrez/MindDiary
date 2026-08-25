@@ -1,10 +1,12 @@
 # ADR-0015: versioned BundleFile и separate mixed export profile
 
-Статус: accepted technical contract, 2026-08-22. Его технические и security
-invariants сохраняются, но включение `BundleFile` в terminal Release 0.1
-частично заменено [ADR-0019](0019-release-0-1-codex-first-small-data-boundary.md):
-этот slice относится к post-MVP и не блокирует Markdown-first 0.1. Решение не
-меняет нормативный смысл OKF 0.2.
+Статус: accepted technical contract, 2026-08-22. Его closed MIME admission и
+64 MiB limit заменены format-neutral решением
+[ADR-0021](0021-format-neutral-bundle-files.md); immutable revision, staging,
+authorization, exact-byte и export invariants сохраняются. Включение
+`BundleFile` в terminal Release 0.1 ранее частично заменено
+[ADR-0019](0019-release-0-1-codex-first-small-data-boundary.md): этот slice не
+блокировал Markdown-first 0.1. Решения не меняют нормативный смысл OKF 0.2.
 
 ## Контекст
 

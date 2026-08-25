@@ -1,23 +1,21 @@
 # BundleFile: versioned attachments в Mind
 
-Статус: accepted, 2026-08-22. `normative_status: accepted`;
-`implementation_status: read_export_implemented_local`: MD-247 реализует manifest
-v1/v2, Space-scoped opaque objects, binding-pinned staging, mixed atomic commit,
-Markdown-only indexing, exact historical bytes и bounded GC в memory/Sites
-adapters. MD-248 добавляет deterministic `stage_bundle_file`, bounded
-OpenAI-native HTTPS ingress, binding-owner idempotency и BundleFile operations
-в MCP schema на обоих profiles. MD-249 реализует exact-revision list,
-one-use reauthorized download, Markdown reference validation и deterministic
-dual export в local candidate. Real-client exact-SHA UAT evidence остаётся
-MD-250. Этот
-producer-defined contract расширяет Mind Diary, но не изменяет Open Knowledge
-Format 0.2 и не объявляет `BundleFile` нормативной OKF entity.
+Статус: accepted, 2026-08-22; format-neutral amendment принят 2026-08-25 в
+[ADR-0021](../decisions/0021-format-neutral-bundle-files.md).
+`normative_status: accepted`; `implementation_status: legacy_bounded_local`.
+Текущий repository baseline из MD-247/MD-248/MD-249 реализует manifest v1/v2/v3,
+allowlist raster/PDF/ZIP и 64 MiB per-file limit. Это проверенный исторический
+baseline, но не текущая product boundary Release 0.2. MD-303 принимает manifest
+v4, open advisory media type и exact 256 MiB streaming invariant; их runtime
+реализация и legacy/v4 conformance принадлежат MD-304. Этот producer-defined
+contract расширяет Mind Diary, но не изменяет Open Knowledge Format 0.2 и не
+объявляет `BundleFile` нормативной OKF entity.
 
-Release applicability: технический contract сохраняется, но
+Release applicability: технический contract сохранялся как post-MVP graph 0.1,
+а Release 0.2 принимает format-neutral target. Для исторического 0.1
 [ADR-0019](../decisions/0019-release-0-1-codex-first-small-data-boundary.md)
-переносит весь BundleFile slice в post-MVP. MD-250 обязателен только перед
-claim о hosted/native BundleFile support; его отсутствие не блокирует
-Markdown-first Release 0.1.
+переносил весь BundleFile slice в post-MVP. Наличие legacy implementation не
+разрешает claim о v4/arbitrary-file support до MD-304 и exact UAT evidence.
 
 MD-271 добавляет общий [file-ingress contract](file-ingress.md) и source
 capability matrix для bytes, которые могут попасть в этот `BundleFile` slice.
@@ -33,10 +31,11 @@ URL или local-path fallback.
 
 Проверенный внешний факт: OKF 0.2 задаёт переносимое дерево Markdown и ссылки
 на resources, но не задаёт binary manifest, upload protocol, MIME policy,
-revisions, ACL или export container для произвольных bytes. Требование этого
-post-MVP slice: одна immutable `SpaceRevision` должна атомарно version-ить
-Markdown и приложенные raster image, PDF или ZIP, а historical read/export —
-сохранять их exact bytes.
+revisions, ACL или export container для произвольных bytes. Требование Release
+0.2: одна immutable `SpaceRevision` должна атомарно version-ить Markdown и любой
+явно выбранный regular non-Markdown file, а historical read/export — сохранять
+его exact path, bytes, size и SHA-256 независимо от расширения, MIME detection
+или preview support.
 
 Принятое решение: техническая service entity называется `BundleFile`, а в UI
 используются attachment/asset. `BundleFile` остаётся opaque canonical file:
@@ -52,13 +51,13 @@ application получает exact bytes и безопасные canonical metad
 является частью authorization identity или manifest path; нормативные детали
 этой границы находятся в [file-ingress specification](file-ingress.md).
 
-## Revision manifest v2
+## Revision manifest v4
 
-Каждая новая revision после включения feature записывает service manifest:
+После включения MD-304 каждая новая revision записывает service manifest v4:
 
 ```json
 {
-  "format": "mind-diary-revision-manifest-v2",
+  "format": "mind-diary-revision-manifest-v4",
   "entries": [
     {
       "path": "concepts/trip.md",
@@ -68,10 +67,10 @@ application получает exact bytes и безопасные canonical metad
       "size": 1234
     },
     {
-      "path": "attachments/map.png",
+      "path": "sources/interview.opus",
       "kind": "opaque",
       "sha256": "sha256:<64 lowercase hex>",
-      "media_type": "image/png",
+      "media_type": "audio/ogg",
       "size": 4567
     }
   ]
@@ -80,13 +79,14 @@ application получает exact bytes и безопасные canonical metad
 
 - Manifest — service envelope outside OKF content. ACL, memberships, provider
   IDs, staging state, download grants, audit и indexes в него не входят.
-- `kind` is exactly `markdown | opaque`. Markdown сохраняет existing media type
-  and codec rules; opaque entry uses the detected canonical media type.
+- `kind` is exactly `markdown | opaque`. Markdown сохраняет exact
+  `text/markdown; charset=utf-8` и existing codec rules. У opaque entry
+  `media_type` — открытая advisory string; она не является admission rule,
+  renderer permission, index selector или authorization signal.
 - Entries have unique canonical paths and deterministic Unicode-scalar ordering.
   Digest and size always describe exact immutable object bytes.
-- Existing `mind-diary-revision-manifest-v1` remains readable forever and is
-  normalized in memory as `kind: markdown`; committed v1 bytes/hash never
-  переписываются. Следующая ordinary commit создаёт v2 без bulk migration.
+- V4 сохраняет v3 Space-scoped manifest-object layout, но меняет media policy
+  явно. Он не выдаётся за compatible v3 bytes и не переписывает старые hashes.
 - Search/index jobs consume only `kind: markdown`. Opaque files are not
   `KnowledgeEntry`, snippets or MCP text Resources.
 
@@ -94,6 +94,23 @@ Object keys and physical deduplication are scoped by `space_id`; a digest in
 одном Mind не даёт lookup/existence signal о другом Mind. HEAD quota counts
 logical manifest bytes; retained quota counts unique objects reachable from all
 revisions of the same Space.
+
+### Legacy compatibility без reinterpretation
+
+| Manifest | Historical meaning | Read/next-write rule |
+|---|---|---|
+| v1 | Markdown-only; `kind` отсутствует | Reader projects every entry as `kind: markdown`; committed bytes/hash remain untouched. |
+| v2 | Inline mixed manifest with closed raster/PDF/ZIP media baseline | Reader uses stored kind/media/path exactly; it does not re-sniff or broaden the historical admission decision. |
+| v3 | Separately digested R2 manifest with v2 entry semantics | Reader verifies the stored manifest digest/size and preserves the exact historical projection. |
+| v4 | Separately digested format-neutral manifest with open advisory media | New ordinary commits after MD-304 write v4. |
+
+No bulk migration is required. The first ordinary change from v1/v2/v3 reads
+the exact parent and creates a new v4 child; the parent remains independently
+readable/exportable. Unknown manifest format fails closed without guessing its
+kind/media semantics. Unknown OKF `type` and producer fields inside Markdown
+remain source bytes and must survive read-modify-write/export; service manifest
+metadata never reinterprets `recorded_by`, `applies_to`, `sources` or another
+producer field as authority.
 
 ## Canonical paths и Markdown references
 
@@ -130,25 +147,44 @@ Therefore replacing/deleting a referenced file must update the referring
 Markdown in the same atomic changeset. Links resolve only inside the selected
 revision and never follow HEAD implicitly.
 
-## First-slice type and containment policy
+## Format-neutral media и containment policy
 
-Detected bytes, not filename or client/provider MIME, select the canonical media
-type. Declared MIME and extension are hints that must agree with detection.
+Admission и serving разделены. Любой explicitly selected regular file, который
+проходит path, size, streaming integrity, quota, authorization и staging
+lifecycle checks, может стать `kind: opaque`. Extension, declared MIME и
+preview support не блокируют storage/history/export.
 
-| Canonical media type | Accepted extensions | Detection | Serving |
+Opaque `media_type` хранит lowercase ASCII MIME essence `type/subtype`, где обе
+части непусты и состоят только из letters, digits и RFC `tchar` punctuation;
+ровно один `/`, общая длина не больше 127 ASCII bytes, whitespace, parameters,
+controls и другая response-header syntax запрещены. Parameters входящего hint
+не сохраняются: adapter разбирает только его essence перед normalization.
+Server-owned confident detection может выбрать любой syntactically valid
+registered либо producer-defined media type. Missing, unknown, syntactically
+invalid или conflicting evidence нормализуется в exact
+`application/octet-stream`; declared MIME и filename остаются hints и никогда
+не становятся authority. `bundle_file_media_mismatch` может быть quality
+diagnostic, но не storage failure.
+
+| Example | Canonical/advisory media | Storage | Serving |
 |---|---|---|---|
-| `image/png` | `.png` | PNG signature | inline or attachment |
-| `image/jpeg` | `.jpg`, `.jpeg` | JPEG SOI signature | inline or attachment |
-| `image/gif` | `.gif` | GIF87a/GIF89a | inline or attachment |
-| `image/webp` | `.webp` | RIFF + WEBP signature | inline or attachment |
-| `application/pdf` | `.pdf` | `%PDF-` signature | attachment only |
-| `application/zip` | `.zip` | accepted ZIP signatures | attachment only; never extracted |
+| DOCX | `application/vnd.openxmlformats-officedocument.wordprocessingml.document` or fallback | opaque, exact bytes | download-only |
+| HEIC | `image/heic` or fallback | opaque, exact bytes | download-only |
+| EPUB | `application/epub+zip` or fallback | opaque, exact bytes | download-only; never extracted |
+| OPUS | `audio/ogg`, `audio/opus` or fallback | opaque, exact bytes | download-only |
+| HTML | `text/html` or fallback | opaque, exact bytes | download-only; never rendered |
+| Jupyter notebook | `application/x-ipynb+json` or fallback | opaque, exact bytes | download-only; never executed |
+| ZIP | `application/zip` or fallback | opaque, exact bytes | download-only; never extracted |
+| Unknown `.bin` | `application/octet-stream` | opaque, exact bytes | download-only |
 
-Everything else is deny-by-default with `unsupported_bundle_file_type`,
-including unknown/octet-stream, SVG, HTML, JavaScript, WebAssembly, executables,
-shell/script files, JAR/APK and macro-enabled Office formats. A ZIP-named file
-is opaque even if it contains an otherwise forbidden type; Mind Diary does not
-inspect, extract, preview or execute archive members.
+Only the safe raster preview subset `image/png`, `image/jpeg`, `image/gif` and
+`image/webp` may be inline-eligible after byte signature, bounded decoder and
+response-policy checks succeed. Eligibility is a derived serving decision, not
+manifest identity; failed/unsupported preview falls back to download without
+changing canonical bytes. SVG, HTML, JavaScript, executables, archives, Office,
+audio/video, HEIC and every octet-stream object are download-only, `nosniff`,
+never executed or extracted. Production antivirus/CDR cleanliness is not
+claimed.
 
 ### Application generated ingress
 
@@ -162,22 +198,36 @@ of a staged record or its idempotency payload.
 
 `bounded_in_memory` is an explicit inline path capped at 4 MiB. A
 `server_generated` producer may provide a bounded byte stream through the
-storage upload port, subject to the 64 MiB per-BundleFile limit; the local
+storage upload port, subject to the 256 MiB per-BundleFile limit; the local
 Sites object adapter sends that stream directly to quarantine storage rather
 than assembling it in application memory. Both paths perform the same SHA-256,
-size, magic-MIME, filename, quota, quarantine and binding-owner idempotency
+size, advisory-media, filename, quota, quarantine and binding-owner idempotency
 checks. Generated previews or derived artifacts do not become canonical files
 automatically: an authorized caller must reference the verified
 `staged_file_ref` in an explicit atomic `commit_changeset`.
 
-Staging state begins `quarantined`. The synchronous first-slice static gate
-checks bounded streaming download, SHA-256, size, filename/path-independent
-magic detection, declared MIME and extension agreement and the allowlist above;
-success moves the record to `verified`, failure to `rejected`. This is a
+Staging state begins `quarantined`. The synchronous gate checks bounded
+streaming transfer, SHA-256, size, regular-file snapshot, safe filename,
+advisory-media normalization, quota and binding. Success moves the record to
+`verified`, failure to `rejected`. This is a
 containment policy, not an antivirus clean bill of health. Only a `verified`
 record may be committed; staged bytes are never reader-visible. Committed
-PDF/ZIP always download as attachment, raster inline responses remain
-`nosniff`/sandboxed, and no canonical file is executed server-side.
+non-preview files always download as attachment, safe-raster inline responses
+remain `nosniff`/sandboxed, and no canonical file is executed server-side.
+
+### Exact streaming invariant
+
+The maximum accepted file is exactly 268,435,456 bytes (256 MiB), inclusive.
+Byte 268,435,457 fails with `bundle_file_size_limit_exceeded`; a declared
+`Content-Length` above the limit is rejected before body read, while absent or
+untrusted length is enforced by the counting stream. Transport, SHA-256,
+quarantine put, canonical promotion, historical download and mixed export must
+process bounded chunks and must not call a full-file `arrayBuffer`, concatenate
+all chunks or otherwise require resident memory proportional to file size.
+Detection/preview may retain only a bounded prefix/decoder window. Cancellation,
+timeout, digest mismatch or overflow leaves no reachable canonical object or
+partial revision. MD-304 owns executable proof with a synthetic file larger
+than 146,215,108 bytes and boundary fixtures at 256 MiB / 256 MiB + 1 byte.
 
 ## Exact limits and quotas
 
@@ -185,9 +235,9 @@ All numbers are binary bytes and fail closed before canonical HEAD mutation:
 
 | Limit | Value |
 |---|---:|
-| One BundleFile | 67,108,864 bytes (64 MiB) |
+| One BundleFile | 268,435,456 bytes (256 MiB), inclusive |
 | BundleFile operations in one changeset | 20 |
-| Sum of staged bytes referenced by one changeset | 134,217,728 bytes (128 MiB) |
+| Sum of staged bytes referenced by one changeset | 268,435,456 bytes (256 MiB) |
 | Outstanding verified staged bytes per binding owner | 268,435,456 bytes (256 MiB) |
 | All entries in one resulting revision | 10,000 |
 | Markdown subtotal in one resulting revision | existing 67,108,864 bytes (64 MiB) |
@@ -224,7 +274,8 @@ and `mime_type`. These values terminate at the MCP adapter: only verified bytes,
 canonical metadata and trusted binding context cross the application port.
 Local paths, base64 and arbitrary remote URLs are invalid; the adapter accepts
 HTTPS download/redirect hosts only from its explicit OpenAI allowlist, omits
-credentials and aborts the stream at the byte limit. Each client/profile tuple
+credentials and aborts the counting stream after 268,435,456 bytes. Each
+client/profile tuple
 must prove this extension in UAT; lack of support is
 `native_file_input_unsupported`, never a hidden fallback.
 
@@ -256,8 +307,8 @@ ref and expiry; changed bytes/metadata returns `idempotency_conflict`.
 ```
 
 The same authorization, exact binding generation, full-bundle validation,
-idempotency and HEAD CAS fence Markdown and opaque operations. Success creates
-one v2 revision and marks every referenced staged ref `consumed` in the same
+idempotency and HEAD CAS fence Markdown and opaque operations. After MD-304,
+success creates one v4 revision and marks every referenced staged ref `consumed` in the same
 transaction. Failure publishes no reachable partial revision and leaves refs
 reusable until expiry. After an unknown outcome the client repeats the exact
 commit key/payload; it never restages or changes the key until reconciliation.
@@ -265,8 +316,8 @@ commit key/payload; it never restages or changes the key until reconciliation.
 ## Read and download lifecycle
 
 `list_bundle_files` requires `content:read`, exact read/write binding and one
-Mind/revision. It returns bounded path, detected media type, size, SHA-256,
-revision ID, inline eligibility and deterministic reference diagnostics; no
+Mind/revision. It returns bounded path, advisory media type, size, SHA-256,
+revision ID, derived inline eligibility and deterministic reference diagnostics; no
 bytes, provider ID or URL.
 
 `get_bundle_file_download` selects exact revision + path, reauthorizes current
@@ -280,8 +331,9 @@ Successful bytes use exact `Content-Type`, `Content-Length`, `ETag` from SHA-256
 `Cache-Control: no-store`, `Pragma: no-cache`,
 `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer` and
 `Cross-Origin-Resource-Policy: same-origin`. `Content-Disposition` uses a safe
-ASCII fallback plus RFC 5987 UTF-8 filename. Only allowlisted raster may be
-`inline`; PDF/ZIP are always `attachment`. Grant secret/URL is consume-on-
+ASCII fallback plus RFC 5987 UTF-8 filename. Only the verified safe-raster
+subset may be `inline`; every other object, including
+`application/octet-stream`, is `attachment`. Grant secret/URL is consume-on-
 response material and never appears in durable status, audit, logs, telemetry,
 Task Manager evidence or model content.
 
@@ -290,8 +342,8 @@ enters JSON-RPC `structuredContent` or model context automatically.
 
 ## Deterministic export compatibility
 
-`MD-OKF-ZIP-1` remains byte-for-byte unchanged and Markdown-only. Existing v1
-revisions and v2 Markdown-only revisions can request it. A mixed revision never
+`MD-OKF-ZIP-1` remains byte-for-byte unchanged and Markdown-only. Existing
+v1/v2/v3 revisions and v4 Markdown-only revisions can request it. A mixed revision never
 silently drops opaque files: absent/legacy profile returns
 `export_profile_required`.
 
@@ -328,7 +380,6 @@ bundle_file_operation_limit_exceeded
 bundle_file_changeset_size_limit_exceeded
 bundle_file_quota_exceeded
 staging_quota_exceeded
-unsupported_bundle_file_type
 bundle_file_media_mismatch
 invalid_bundle_file_name
 staged_file_unavailable
@@ -353,34 +404,56 @@ the pinned client passes the native-file capability gate.
 
 ## Проверяемые post-MVP acceptance rows
 
-Local evidence must cover manifest v1 compatibility/v2 canonicalization,
-streaming limits/MIME spoof/denylist, mixed atomic commit and stale/idempotent
+`unsupported_bundle_file_type` остаётся legacy pre-v4 error code for exact old
+client/candidate reconciliation. V4 admission never returns it only because a
+regular file has an unknown MIME or extension. `bundle_file_media_mismatch` in
+v4 is a diagnostic followed by `application/octet-stream` fallback, not a
+rejection.
+
+MD-303 contract evidence covers manifest v1/v2/v3 compatibility, explicit v4,
+open MIME fallback, exact numeric limits, arbitrary-format examples and the
+incremental OKF boundary. MD-304 implementation evidence must cover v4
+canonicalization, 256 MiB streaming/+1 overflow, MIME conflict fallback,
+mixed atomic commit and stale/idempotent
 failure, exact historical bytes, same-Space retained quota/GC, current-access
 downloads, Markdown references, deterministic dual export and absence of bytes,
 URLs, provider IDs and local paths from logs/errors/audit.
 
-Dev and UAT promotion этого slice must use image + PDF + ZIP exact fixtures.
+Dev and UAT promotion этого slice must include safe raster plus DOCX, HEIC,
+EPUB, OPUS, HTML, notebook, ZIP and unknown-binary exact fixtures.
 UAT evidence joins exact
 Git SHA, Sites version/deployment, hosted tool inventory/schema, pinned Codex
 client/plugin tuple, stage → commit → list → download SHA read-back, historical
 replace/delete, access revoke and persistence after redeploy. Unsupported native
-file input keeps MD-250 and the post-MVP epic nonterminal; repository tests or
-local paths cannot substitute this row. Это не меняет terminal status Release
-0.1.
+file input keeps MD-275 and Release 0.2 nonterminal; repository tests or local
+paths cannot substitute this row. Historical MD-250 evidence remains a legacy-
+baseline record and does not promote the v4 contract. Это не меняет terminal
+status Release 0.1.
 
 ## Гипотезы и открытые решения
 
-- Hypothesis: 64 MiB/file, 1 GiB live revision and 2 GiB retained Space are
-  sufficient for the post-MVP mixed-file pilot; MD-260 capacity evidence may
-  reject these values.
+- Accepted for Release 0.2: 256 MiB/file with unchanged 1 GiB live-revision and
+  2 GiB retained-Space ceilings. Usage evidence may require a future tier, but
+  cannot raise these limits silently.
 - Open: production antivirus/content-disarm policy, larger/paid quotas,
-  resumable upload, previews/OCR/transcription, office/audio/video formats,
-  bundle import and cross-provider native-file transports.
+  resumable upload, OCR/transcription, rich preview/rendering, bundle import and
+  cross-provider native-file transports.
 - Open: public production/download CDN and retention/legal erasure model.
 
 Markdown-only resumable import is accepted by ADR-0016 but is not a BundleFile
 transport, does not extract ZIP and remains unavailable until its implementation
 and UAT rows pass.
 
-Ни одна гипотеза/open item не ослабляет accepted first-slice deny-by-default,
-authorization, exact revision, quota or export rules.
+## Incremental OKF boundary
+
+MD-306 may preserve one typed OKF Markdown entry with unknown producer fields
+beside arbitrary opaque files in an ordinary revision using existing Markdown
+operations plus one `staged_file_ref` per selected regular file. This contract
+does not add an OKF `Asset` type, does not interpret `recorded_by`, `applies_to`,
+`sources` or opaque bytes as service authority and does not create a directory,
+glob, batch, archive-import or whole-Brain migration profile. Each incremental
+operation remains one normal changeset over an explicitly selected entry or
+small linked set.
+
+Ни один open item не ослабляет format-neutral storage, authorization, exact
+revision, 256 MiB streaming, quota, download-only containment или export rules.

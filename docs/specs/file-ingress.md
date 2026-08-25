@@ -5,9 +5,11 @@
 `session_attachment`, `bounded_in_memory` и `server_generated` реализованы в
 local candidate и требуют отдельного exact evidence; MD-272 добавляет
 local-only companion implementation для `local_path` и
-`workspace/generated_artifact`. Native-file UAT остаётся MD-250, hosted
-upload-intent/producer evidence и provider-specific connector adapter остаются
-отдельными claims. MD-274 добавляет repository-local `FileIngressCoordinator`,
+`workspace/generated_artifact`. Исторический MD-250 закрыт без Release 0.2
+promotion; current runtime/file-ingress work принадлежит MD-304/MD-305, а
+joined native-file UAT — MD-275. Hosted upload-intent/producer evidence и
+provider-specific connector adapter остаются отдельными claims. MD-274 добавляет
+repository-local `FileIngressCoordinator`,
 explicit stage/commit reconcile, mixed-source atomic integration и три
 contracts на существующих MCP endpoints: `get_file_ingress_capabilities`,
 `reconcile_file_stage`, `reconcile_changeset`. Это не добавляет новый hosted
@@ -18,6 +20,11 @@ Release applicability: portable boundary остаётся accepted, но
 переносит universal file-ingress capability в post-MVP. Все source-specific
 evidence rows остаются обязательными перед соответствующим support claim, но
 не блокируют Markdown-first Release 0.1.
+
+[ADR-0021](../decisions/0021-format-neutral-bundle-files.md) replaces the
+historical closed MIME allowlist and 64 MiB cap. The accepted Release 0.2 target
+stores arbitrary regular files with advisory media and streams one file up to
+256 MiB; current source adapters remain legacy-bounded until MD-304/MD-305.
 
 ## Цель и граница
 
@@ -46,9 +53,10 @@ MCP client умеет передать каждый вид source.
   provider object ID, local path, URL или capability для другого Mind.
 - `source_kind` хранится как closed enum без provider/account secret. Он
   описывает provenance class, но не становится authorization identity.
-- Canonical MIME выбирается по exact bytes. Declared MIME, filename и
-  provider metadata — только hints; `BundleFile` allowlist, display-name и
-  canonical-path policy применяются без ослабления.
+- Canonical media metadata is open and advisory. Declared MIME, filename and
+  provider metadata are hints; missing, invalid, unknown or conflicting
+  evidence becomes header-safe `application/octet-stream` and never blocks
+  format-neutral storage. Display-name and canonical-path policy still apply.
 - Каждый BundleFile operation получает один verified staged ref. Один
   changeset может содержать много разных refs вместе с Markdown operations,
   но каждый ref связывается ровно с одним target path и duplicate ref в одном
@@ -102,7 +110,7 @@ created_at / expires_at / consumed_at?
 `binding_owner_id`, `space_id` и `write_binding_id` проверяются заново при
 stage, list, commit и cleanup. Provider account, `file_id`, temporary URL,
 absolute path, bytes и connector credentials не сохраняются в этом record.
-The record does not change OKF frontmatter or the v2/v3 manifest: only a
+The record does not change OKF frontmatter or the v4 manifest: only a
 successful commit adds the canonical `kind: opaque` entry.
 
 ## Source capability matrix
@@ -115,7 +123,7 @@ Task/release evidence после commit.
 
 | Source kind | Adapter owns reading | Transport boundary | Status / evidence | Explicit fallback |
 |---|---|---|---|---|
-| `session_attachment` | MCP/provider adapter | Native client file parameter; adapter follows provider HTTPS object/redirect policy | `implemented_local`, `UAT pending` MD-250; `_meta["openai/fileParams"]=["file"]` is local schema evidence, not live client proof | If the pinned profile cannot supply native `file`, return `native_file_input_unsupported`; do not use base64, local path or arbitrary URL |
+| `session_attachment` | MCP/provider adapter | Native client file parameter; adapter follows provider HTTPS object/redirect policy | legacy path is `implemented_local`; Release 0.2 UAT remains MD-275 after MD-304/MD-305; `_meta["openai/fileParams"]=["file"]` is local schema evidence, not live client proof | If the pinned profile cannot supply native `file`, return `native_file_input_unsupported`; do not use base64, local path or arbitrary URL |
 | `local_path` | Local companion process | Out-of-band upload intent/equivalent binary stream; companion snapshots one regular file and sends bounded bytes | `implemented_local`, MD-272 unit/integration evidence; hosted intent/UAT pending | Missing companion, expired/invalid intent or revoked auth: `file_ingress_source_unsupported` / `file_ingress_intent_expired`; never send the path to hosted MCP |
 | `workspace/generated_artifact` | Local companion process with explicit workspace authority | Same out-of-band intent/equivalent stream, but artifact snapshot is selected by the local process | `implemented_local`, MD-272 unit/integration evidence; hosted intent/UAT pending | Missing companion/workspace authority: `file_ingress_source_unsupported`; no path fallback or arbitrary URL |
 | `connector_object` | Explicit authorized connector adapter | Connector API/object fetch with provider-specific bounded stream; arbitrary URL is not a connector contract | Provider-neutral reader/staging boundary is `implemented_local` with unit and mixed-source integration evidence; provider binding and hosted UAT pending | Connector absent, revoked or object unavailable: generic `file_ingress_source_unavailable`; no cross-provider or native fallback |
@@ -137,9 +145,9 @@ every source after transport-specific admission:
 
 | Limit | Value | Rule |
 |---|---:|---|
-| One staged/canonical BundleFile | 67,108,864 bytes (64 MiB) | Fail closed before canonical HEAD mutation |
+| One staged/canonical BundleFile | 268,435,456 bytes (256 MiB), inclusive | Byte 268,435,457 fails before canonical HEAD mutation |
 | BundleFile operations in one changeset | 20 | One staged ref per file operation; no duplicate ref |
-| Staged bytes referenced by one changeset | 134,217,728 bytes (128 MiB) | Markdown limits and resulting revision limits still apply |
+| Staged bytes referenced by one changeset | 268,435,456 bytes (256 MiB) | Permits one maximum-size file; Markdown/resulting revision limits still apply |
 | Outstanding verified staged bytes per binding owner | 268,435,456 bytes (256 MiB) | Includes all source kinds in that owner namespace |
 | Verified staged-ref TTL | 3,600 seconds (60 minutes) | Expiry is service time; ref is not reader-visible |
 | One-use upload intent TTL (proposed out-of-band sources) | 600 seconds (10 minutes) | Intent is separate from `staged_file_ref`; no replay after expiry |
@@ -154,12 +162,12 @@ contract remains authoritative.
 
 | Source kind | Source-specific budget | Where bytes/metadata are checked | Initial state and success |
 |---|---|---|---|
-| `session_attachment` | `file_id` ≤ 1,024 chars; temporary URL ≤ 8,192; name ≤ 1,024; MIME hint ≤ 256; current Sites adapter default: 30,000 ms, up to 4 redirects, 64 MiB stream | Provider adapter checks HTTPS allowlist, credentials omission, redirect/timeout/stream bound; application recomputes SHA-256, size, magic MIME and safe filename | `quarantined → verified → staged_file_ref`; only verified ref may enter commit |
-| `local_path` | One regular file per intent, ≤ 64 MiB; proposed intent 600 s; staged ref 3,600 s | Companion checks regular-file/snapshot/size/digest before upload; application rechecks exact bytes, MIME and filename after upload | `intent → quarantined → verified`; changed snapshot is a new key, not a changed retry |
-| `workspace/generated_artifact` | One selected artifact per intent, ≤ 64 MiB; proposed intent 600 s; staged ref 3,600 s | Companion checks workspace authority and snapshot; application rechecks bytes, digest, MIME and safe filename | Same as `local_path`; workspace path never reaches application identity |
-| `connector_object` | One object per stage, ≤ 64 MiB; proposed fetch deadline 30 s and at most 4 provider redirects where the connector permits; staged ref 3,600 s | Connector validates grant/object ownership and bounded fetch; application recomputes digest, size, magic MIME and filename | `quarantined → verified`; provider metadata is advisory only |
+| `session_attachment` | `file_id` ≤ 1,024 chars; temporary URL ≤ 8,192; name ≤ 1,024; MIME hint ≤ 256; target adapter: 30,000 ms, up to 4 redirects, 256 MiB counting stream | Provider adapter checks HTTPS allowlist, credentials omission, redirect/timeout/stream bound; application recomputes SHA-256, size, advisory media and safe filename | `quarantined → verified → staged_file_ref`; only verified ref may enter commit |
+| `local_path` | One regular file per intent, ≤ 256 MiB; proposed intent 600 s; staged ref 3,600 s | Companion checks regular-file/snapshot/size/digest before upload; application rechecks exact bytes, media and filename after upload | `intent → quarantined → verified`; changed snapshot is a new key, not a changed retry |
+| `workspace/generated_artifact` | One selected artifact per intent, ≤ 256 MiB; proposed intent 600 s; staged ref 3,600 s | Companion checks workspace authority and snapshot; application rechecks bytes, digest, media and safe filename | Same as `local_path`; workspace path never reaches application identity |
+| `connector_object` | One object per stage, ≤ 256 MiB; proposed fetch deadline 30 s and at most 4 provider redirects where the connector permits; staged ref 3,600 s | Connector validates grant/object ownership and bounded fetch; application recomputes digest, size, advisory media and filename | `quarantined → verified`; provider metadata is advisory only |
 | `bounded_in_memory` | One object per explicit call, ≤ 4,194,304 bytes (4 MiB); no upload intent; staged ref 3,600 s | Calling adapter enforces byte bound; application recomputes digest, size and MIME before quarantine promotion | `quarantined → verified`; larger payload must use an explicit out-of-band source |
-| `server_generated` | One producer output, ≤ 64 MiB; proposed generation lease 600 s; staged ref 3,600 s | Trusted producer supplies bytes, but application still checks exact digest, size, magic MIME and safe filename | `quarantined → verified`; producer job identity is not a file identity |
+| `server_generated` | One producer output, ≤ 256 MiB; proposed generation lease 600 s; staged ref 3,600 s | Trusted producer supplies bytes, but application still checks exact digest, size, advisory media and safe filename | `quarantined → verified`; producer job identity is not a file identity |
 
 The current `session_attachment` values are repository-verified composition
 defaults, not a claim about every OpenAI host or client. A changed timeout,
@@ -167,10 +175,19 @@ redirect allowlist, inline limit or intent TTL is a versioned contract change
 with targeted checks and applicable UAT evidence.
 
 Verification is deliberately two-stage: source adapters protect transport and
-ownership boundaries; the application owns canonical byte-level integrity and
-BundleFile allowlist decisions. Declared MIME/extension never overrides magic
-detection. Unsupported types, SVG/HTML/script/executable content, archive
-members and ZIP extraction remain denied by the BundleFile policy.
+ownership boundaries; the application owns canonical byte-level integrity,
+size/quota and header-safe media normalization. Declared MIME/extension never
+overrides exact-byte evidence. Unknown and conflicting formats are stored as
+`application/octet-stream`; SVG/HTML/script/executable/archive and every
+non-safe-raster type remain download-only and are never rendered, executed or
+extracted.
+
+Every transport above the explicit 4 MiB `bounded_in_memory` profile uses a
+counting stream and direct quarantine writes. Hashing, promotion, download and
+export must retain only bounded chunks/prefixes, not a full-file buffer. Exact
+256 MiB succeeds; the next byte returns `bundle_file_size_limit_exceeded` with
+no reachable object/revision. Current local adapters still enforce their
+legacy 64 MiB implementation until MD-304/MD-305 changes and tests them.
 
 ### Idempotency and reconcile
 
@@ -206,7 +223,7 @@ modern `2026-07-28` and isolated compatibility `2025-11-25` adapters may
 advertise the native `file` parameter for a write-capable credential, with
 `_meta["openai/fileParams"] = ["file"]`. The local schema and transport tests
 prove only the repository candidate. Exact client/profile support remains a
-blocking MD-250 UAT row for the post-MVP BundleFile capability; a missing
+blocking MD-275 UAT row for the Release 0.2 BundleFile capability; a missing
 native capability is a non-passing support result, not an automatic switch to
 another source and not a blocker for Markdown-first Release 0.1.
 
@@ -232,15 +249,16 @@ Stable errors are split by boundary:
 | Source object cannot be read or ownership cannot be established | `file_ingress_source_unavailable` | Generic response without existence/owner leak; retry only after source state is fixed |
 | Bounded source transport temporarily fails | `file_ingress_transport_unavailable` | Retry exact request/key while source TTL permits; do not alter payload |
 | Upload intent expired/consumed or changed | `file_ingress_intent_expired` / `file_ingress_intent_conflict` | Create a new intent/key for a new operation; never replay changed bytes |
-| Size/MIME/path/digest/static policy fails | Existing `bundle_file_*`, `unsupported_bundle_file_type`, `bundle_file_media_mismatch`, `invalid_bundle_file_name` | No canonical object or revision is published |
+| Size/path/digest/static policy fails | Existing `bundle_file_*`, `invalid_bundle_file_name` | No canonical object or revision is published |
+| MIME is missing, unknown, invalid or conflicts | `bundle_file_media_mismatch` diagnostic + `application/octet-stream` | Storage continues; serving remains download-only |
 | Stage/commit idempotency payload changed | `idempotency_conflict` | Re-read/reconcile; new key only for a genuinely new operation |
 | One staged ref is used by more than one file operation | `duplicate_staged_bundle_file_reference` | Build a changeset with one distinct verified ref per target path |
 | Binding generation or HEAD changed | `staged_file_binding_stale` / `revision_conflict` | Re-read current binding/HEAD and build a new confirmed operation |
 
 The first two generic ingress codes and intent codes are contract-level additions
 for future adapters; they do not claim current implementation. Current native
-failures retain `native_file_input_unsupported` so MD-248/MD-250 remain
-backward-compatible.
+failures retain `native_file_input_unsupported` so the historical MD-248/MD-250
+baseline remains backward-compatible.
 
 Audit may retain opaque actor/Space/request IDs, `source_kind`, operation,
 status, bounded size category and outcome. It must not retain provider IDs,
@@ -256,9 +274,9 @@ This contract preserves the old boundaries:
 - Markdown-only import remains the separate `plan → reserve → stage → validate
   → commit → finalize` Sites profile. It does not accept BundleFile source
   kinds, ZIP extraction or arbitrary binary import.
-- `BundleFile` v1/v2/v3 manifest semantics, exact historical bytes, current
-  quotas and deterministic `MD-OKF-ZIP-1`/`MD-BUNDLE-ZIP-1` exports are
-  unchanged.
+- `BundleFile` v1/v2/v3 historical semantics and exact bytes remain unchanged;
+  new commits target v4 with open advisory media. Deterministic
+  `MD-OKF-ZIP-1`/`MD-BUNDLE-ZIP-1` profiles remain separate.
 - `session_attachment` native stage, bounded inline staging, server-generated
   streaming staging and local companion are repository-local capabilities. None
   is advertised as hosted MCP/native support without exact client/provider/UAT
@@ -293,5 +311,6 @@ capability row still reports the exact deployed adapter status and cannot turn
 repository-local code into hosted support.
 
 No open question permits a fallback that leaks provider IDs/URLs, local paths or
-bytes into the portable application contract, weakens BundleFile static policy,
-or claims a local/native capability without evidence.
+bytes into the portable application contract, weakens BundleFile
+authorization/streaming/download containment, or claims a local/native
+capability without evidence.

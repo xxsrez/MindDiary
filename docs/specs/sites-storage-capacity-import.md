@@ -15,6 +15,11 @@ D1-checkpointed bounded cleanup из MD-268 также реализованы л
 canonical promotion checkpoints, exact HEAD commit, retry/cancel/expiry и
 cleanup. Весь extension пока не проверен на exact UAT deployment.
 
+ADR-0021 accepts manifest v4 as the Release 0.2 format-neutral successor. V4
+keeps the separately digested Space-scoped layout but opens opaque media and
+raises the per-file/counting-stream boundary to 256 MiB. Current local storage
+still writes v3/legacy closed-media objects until MD-304.
+
 MD-271 задаёт общий [file-ingress contract](file-ingress.md) для source bytes,
 которые могут быть staged как `BundleFile`. Этот документ отвечает только за
 Space-scoped storage, capacity/reservation и отдельный Markdown import profile:
@@ -103,12 +108,13 @@ R2; projection drift никогда не меняет revision meaning.
 
 ### Immutable manifest and HEAD CAS
 
-Новая revision использует canonical manifest format
-`mind-diary-revision-manifest-v3`. Он сохраняет v2 entry semantics
-`path + kind + media_type + sha256 + size`, deterministic Unicode-scalar
-ordering и canonical one-line JSON with final newline. V3 отличается storage
-contract: manifest bytes имеют собственный Space-scoped R2 object, а revision
-record содержит exact manifest digest/size/schema.
+Release 0.2 new revision uses canonical manifest format
+`mind-diary-revision-manifest-v4`. It keeps v3's separately digested storage
+contract and exact `path + kind + media_type + sha256 + size`, deterministic
+Unicode-scalar ordering and canonical one-line JSON with final newline. V4
+changes opaque `media_type` from a closed enum to open advisory metadata with
+header-safe `application/octet-stream` fallback. Current implementation writes
+v3 until MD-304.
 
 Commit строит новый manifest как delta от exact parent:
 
@@ -127,8 +133,10 @@ canonical request/idempotency key возвращает прежний result; н
 ## Historical read and search
 
 Canonical browse/fetch/list/history всегда materialize exact manifest and
-object digests; HEAD никогда не подмешивается. V1/v2/v3 manifests читаются
-одним compatibility reader и проверяются по stored digest.
+object digests; HEAD никогда не подмешивается. V1/v2/v3/v4 manifests читаются
+одним version-aware compatibility reader и проверяются по stored digest. Each
+legacy format retains its historical meaning; no read path re-sniffs or
+rewrites old manifest bytes.
 
 Search остаётся derived:
 
@@ -180,6 +188,9 @@ the configured claim unavailable rather than overcommitting.
 | Scope | Metric | Hard limit |
 |---|---|---:|
 | one Markdown file | logical bytes | 1 MiB |
+| one opaque BundleFile | logical bytes | 256 MiB inclusive |
+| one BundleFile changeset | referenced staged bytes | 256 MiB |
+| one binding owner | outstanding verified staged bytes | 256 MiB |
 | one Mind HEAD | Markdown bytes | 64 MiB |
 | one Mind HEAD | all entries | 1 GiB / 10,000 files |
 | one Mind history | physical canonical R2 | 2 GiB |
@@ -192,9 +203,11 @@ the configured claim unavailable rather than overcommitting.
 | active import sessions | per principal / per Site | 2 / 16 |
 | active heavy jobs | per Mind / per principal / per Site | 1 / 2 / 8 |
 
-Existing BundleFile limits remain normative. Combined HEAD and retained-Space
+BundleFile's 60-minute verified-ref TTL, 24-hour orphan safety window and
+100-object/256-MiB GC pass remain normative. Combined HEAD and retained-Space
 limits are evaluated against both Markdown and BundleFile entries; a lower
-specific limit wins.
+specific limit wins. Every opaque upload/promotion/download/export is chunked;
+capacity accounting never requires reading the full object into memory.
 
 For each capacity, states are exact:
 
@@ -363,7 +376,8 @@ an explicit future decision.
 
 Migration is forward-only, resumable and non-destructive:
 
-1. Deploy dual reader for legacy embedded v1/v2 manifests and v3 manifest refs.
+1. Keep dual reader for legacy embedded v1/v2 and separately stored v3
+   manifests; add explicit v4 read/write without changing the old branches.
 2. Inventory legacy revisions from D1 in bounded pages; create Space-scoped R2
    objects/manifests, verifying exact digest/size without changing HEAD.
    Global legacy Markdown `canonical/sha256/*` is copied per reachable Space;
@@ -371,8 +385,9 @@ Migration is forward-only, resumable and non-destructive:
    rewritten. Embedded v1/v2 manifest bytes retain their original digest.
 3. Record backfill checkpoint and shadow-compare exact materialization,
    retained usage and representative historical reads.
-4. Enable v3 delta writes only after every reachable object for a Space is
-   verified; old revisions stay immutable and readable.
+4. Existing v3 delta writes stay valid. Enable v4 writes only after MD-304
+   verifies arbitrary media, exact 256 MiB streaming and all reachable parent
+   objects for a Space; old revisions stay immutable and readable.
 5. Reconcile ledger/refcounts from canonical manifests before enabling hard
    admission; until then growth fails closed but reads/deletes continue.
 6. Enable import, streaming export and GC in dependency order only after their
@@ -380,10 +395,10 @@ Migration is forward-only, resumable and non-destructive:
 
 Before the first v3 commit, application rollback may restore the last v2-capable
 deployment. After any v3 commit, rollback target must be dual-read/v3-aware;
-deploying older code is forbidden. Operational rollback disables new delta/
-import jobs and preserves bytes/state; it never rewrites history or deletes v3
-objects. Backfill failures quarantine only the affected Space for growth and
-remain resumable.
+after any v4 commit it must also be v4-aware. Deploying older code is forbidden.
+Operational rollback disables new writes/import jobs and preserves bytes/state;
+it never rewrites history or deletes v3/v4 objects. Backfill failures quarantine
+only the affected Space for growth and remain resumable.
 
 Post-MVP task sequence is normative: MD-264 contract -> MD-265 delta manifests/commit ->
 MD-266 accounting/admission; MD-268 streaming export/cleanup depends on

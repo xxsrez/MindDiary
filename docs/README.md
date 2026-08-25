@@ -45,9 +45,10 @@ evidence, предлагаемый дизайн и ещё не проверен�
 14. [Traceability matrix MVP 0.1](specs/traceability.md) — критерии 1–29,
    owning stories, executable/release evidence, обязательные live flows,
    post-MVP denylist и implementation decisions.
-15. [BundleFile](specs/bundle-files.md) — принятый post-MVP producer-defined contract
-   versioned attachments: manifest v2, exact type/limit/staging/download rules,
-   mixed atomic commits и отдельный deterministic export profile.
+15. [BundleFile](specs/bundle-files.md) — принятый Release 0.2 producer-defined
+   format-neutral contract: explicit manifest v4, arbitrary opaque files,
+   256 MiB streaming, safe-raster preview, download-only containment, mixed
+   atomic commits и отдельный deterministic export profile.
 16. [Единый file-ingress contract](specs/file-ingress.md) — принятый post-MVP portable
    boundary и capability matrix для session attachment, local/workspace,
    connector, bounded in-memory и server-generated sources; implementation
@@ -182,8 +183,9 @@ evidence, предлагаемый дизайн и ещё не проверен�
   — принят default-off per-credential policy, pin к exact write generation,
   private/same-target initial profile и additive-only capture tool.
 - [ADR-0015: versioned BundleFile](decisions/0015-versioned-bundle-files.md) —
-  приняты post-MVP unified manifest v2, adapter-only native file transport, bounded
-  quarantined staging и отдельный `MD-BUNDLE-ZIP-1` без изменения OKF 0.2.
+  исторически приняты post-MVP unified manifest v2, adapter-only native file
+  transport, bounded quarantined staging и отдельный `MD-BUNDLE-ZIP-1` без
+  изменения OKF 0.2; closed media/64 MiB часть superseded ADR-0021.
 - [ADR-0016: Sites storage, capacity и Markdown import](decisions/0016-sites-storage-capacity-import.md)
   — приняты post-MVP Space-scoped R2 objects/manifests, D1 HEAD/ledger/reservations,
   delta commits, bounded Markdown import и v3-aware rollback floor.
@@ -193,13 +195,18 @@ evidence, предлагаемый дизайн и ещё не проверен�
 - [ADR-0018: единый file-ingress contract](decisions/0018-file-ingress-contract-and-source-capability-matrix.md)
   — приняты portable staged-ref boundary, шесть source kinds, explicit
   capability negotiation, atomic multi-ref semantics и запрет silent fallback;
-  implementation остаётся source-specific; terminal 0.1 scope заменён ADR-0019.
+  implementation остаётся source-specific; terminal 0.1 scope заменён ADR-0019,
+  closed BundleFile static policy — ADR-0021.
 - [ADR-0019: Release 0.1 — Codex-first Markdown и small-data boundary](decisions/0019-release-0-1-codex-first-small-data-boundary.md)
   — terminal 0.1 возвращён к Markdown/OKF 0.2 first-user workflow;
   BundleFile, Brain-scale/import и universal ingress сохранены как post-MVP.
 - [ADR-0020: Connections IA и безопасные presentation projections](decisions/0020-connections-ia-and-safe-projections.md)
   — ordinary Connections отделены от Advanced MCP, принят actor-owned opaque
   `connection_ref`, bounded page projection и запрет silent write widening.
+- [ADR-0021: format-neutral BundleFile и безопасное serving](decisions/0021-format-neutral-bundle-files.md)
+  — closed MIME admission заменён arbitrary opaque storage, manifest v4,
+  header-safe `application/octet-stream` fallback, exact 256 MiB streaming и
+  safe-raster-only inline policy без изменения OKF 0.2.
 
 ## Исследования
 

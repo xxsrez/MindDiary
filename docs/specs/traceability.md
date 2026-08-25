@@ -121,6 +121,18 @@ implementation. По ADR-0019 rows ниже не участвуют в readiness
 | BF3-ReadExport | Bound reader lists/downloads exact revision, Markdown references validate, one-use grants fail closed and `MD-BUNDLE-ZIP-1` is deterministic while legacy export is unchanged. | `MD-249` | Implemented locally: current/historical pagination, atomic references, token/ACL/expiry/delete failures, one-use concurrency, image/PDF/ZIP headers, Sites restart/CAS and dual export byte fixtures | image/PDF/ZIP download SHA and export on exact deployment |
 | BF4-Join | One exact candidate passes repository/security/dev gates and real Codex stage → commit → list → download/history/revoke/redeploy flow. | `MD-250` | clean `npm ci` + one `npm run check`, docs/diff, exact-SHA dev receipt | exact Sites version/deployment/tool inventory/client-plugin tuple and redacted native-file receipt; missing capability keeps nonterminal |
 
+## Release 0.2 format-neutral BundleFile amendment 2026-08-25
+
+[ADR-0021](../decisions/0021-format-neutral-bundle-files.md) supersedes only
+the closed media/64 MiB parts of the historical BF rows. The old rows remain
+evidence of the implemented bounded baseline, not current product limits.
+
+| ID | Наблюдаемый результат | Owner | Local evidence | UAT evidence |
+|---|---|---|---|---|
+| BF7-Contract-v4 | Manifest v4 stores arbitrary regular `kind: opaque`, open header-safe media uses `application/octet-stream` fallback, v1/v2/v3 retain historical meaning, and OKF unknown producer fields survive unchanged. | `MD-303` | ADR-0021; product/domain/API/storage/traceability docs; `bundle-file-format-neutral-contract` + existing full-bundle OKF codec; docs validator and `git diff --check` | not-applicable; contract is not runtime proof |
+| BF8-Streaming-state | Stage, SHA-256, quarantine, promotion, history, download, export and GC are bounded-streaming through exact 256 MiB; +1 byte fails without reachable state. Arbitrary formats remain download-only except verified safe raster. | `MD-304` | v4 legacy fixtures; >146,215,108-byte synthetic stream; exact 256 MiB/+1 boundary; memory/chunk assertions; DOCX/HEIC/EPUB/OPUS/HTML/notebook/ZIP/unknown fixtures | exact-candidate persistence/redeploy and byte/digest read-back |
+| BF9-Incremental-OKF | One typed OKF Markdown entry with unknown producer fields and individually selected opaque files commits through ordinary operations without copying project/runtime state or introducing batch/archive import. | `MD-306` | synthetic full-bundle fixture, link normalization, exact second changeset/idempotent retry, installed connector packaging | joined into MD-275 exact UAT candidate |
+
 ## Post-MVP file-ingress extension 2026-08-23
 
 [ADR-0018](../decisions/0018-file-ingress-contract-and-source-capability-matrix.md)
@@ -130,8 +142,9 @@ typed capability errors, limits, lifecycle, idempotency и atomic multi-ref
 commit. `session_attachment`, `bounded_in_memory` и `server_generated` имеют
 локальную implementation, а MD-272 добавляет repo-local companion для
 `local_path`, `workspace/generated_artifact` и bounded local bytes. Это не
-hosted/native capability: MD-250 native-client UAT, hosted upload-intent/
-producer evidence остаются pending; connector rows остаются contract-only.
+hosted/native capability: the historical MD-250 row remains legacy evidence;
+MD-275 owns Release 0.2 joined native-client UAT. Hosted upload-intent/producer
+evidence остаются pending; connector rows остаются contract-only.
 
 | ID | Наблюдаемый результат | Owner | Local evidence | UAT evidence |
 |---|---|---|---|---|
@@ -453,7 +466,7 @@ operational проверки. `Реализовано` означает толь
 | File/operation/total-changeset limits | Реализованы и покрыты boundary fixtures | `AND-65` | Invalid/oversized commands должны по-прежнему оставлять no visible objects/revision на exact candidate. |
 | Lexical ranking и pagination behavior | Реализованы в exact-revision search baseline | `AND-63` | Seeded relevance/isolation benchmark; изменение scoring/threshold считается contract change и требует новых fixtures. |
 | Deterministic export container, filename и `Content-Disposition` | Реализованы как `MD-OKF-ZIP-1` с фиксированным filename | `AND-68` | Сохранять byte-for-byte repeatability, full-bundle validation и archive-safety fixtures. |
-| Versioned BundleFile and mixed export | Post-MVP: MD-247 core, MD-248 native ingress and MD-249 read/reference/dual export are implemented locally; real-client UAT remains unverified | `MD-245`–`MD-250` | BF1–BF3 have local source/tests; BF4 blocks only BundleFile promotion, not Release 0.1. |
+| Versioned BundleFile and mixed export | Release 0.2 format-neutral contract is accepted in ADR-0021; repository runtime remains the legacy bounded baseline until MD-304 | `MD-245`, `MD-303`, `MD-304`, `MD-249`, `MD-306`, `MD-275` | BF7 is contract evidence only; BF8–BF9 and joined UAT must prove arbitrary format, 256 MiB streaming and incremental OKF before support claim. Release 0.1 history remains unchanged. |
 | Brain-scale Sites storage/capacity/import | Post-MVP: accepted in ADR-0016; delta storage and reconstructable capacity/admission have local evidence, while joined UAT remains absent | `MD-260`, `MD-264`–`MD-268` | SI rows block only scale/import promotion, not Release 0.1. |
 | Export size/expiry и durable job cleanup | Реализованы в repository baseline; representative load/UAT recovery ещё не выводится из local tests | `AND-70` | Restart/retry/load evidence с failed/expired/cleanup state; archive никогда не передаётся в JSON-RPC. |
 | Optional MCP Resources UX в target Codex | Resources surface реализована; tools остаются обязательным fallback | `AND-77` | Pinned real-client evidence отдельно подтверждает UX; отсутствие Resources UX не может ломать required tools flow. |
