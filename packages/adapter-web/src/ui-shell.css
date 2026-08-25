@@ -612,6 +612,25 @@ h3 {
   flex-direction: column;
 }
 
+.md-token-card,
+.md-binding-panel,
+.md-binding-panel > section,
+.md-binding-panel form,
+.md-binding-controls,
+.md-binding-list li {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.md-token-card h3,
+.md-token-card code,
+.md-page-heading h1,
+.md-binding-panel label,
+.md-binding-target {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .md-token-card__heading {
   display: flex;
   align-items: start;
@@ -691,6 +710,14 @@ h3 {
 
 .md-setup-card > * {
   min-width: 0;
+}
+
+code,
+.md-setup-card dd,
+.md-setup-card .md-card__metadata > div {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .md-setup-card--single {
@@ -1030,6 +1057,25 @@ h3 {
   font-size: 1.2rem;
 }
 
+.md-binding-panel form {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.md-binding-panel label {
+  display: grid;
+  min-width: 0;
+  gap: 0.35rem;
+  font-weight: 750;
+}
+
+.md-binding-panel select {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+}
+
 .md-binding-list {
   display: grid;
   gap: 0.75rem;
@@ -1154,7 +1200,7 @@ h3 {
   }
 
   .md-brand img {
-    width: min(10.5rem, 50vw);
+    width: min(10.5rem, 34vw);
   }
 
   .md-menu-button {

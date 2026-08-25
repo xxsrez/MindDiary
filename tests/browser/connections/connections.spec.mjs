@@ -214,6 +214,12 @@ test("mobile viewport keeps every route bounded and opens primary navigation by 
     "true",
   );
   await expect(page.getByRole("link", { name: "My Mind" })).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("button", { name: "Navigation" })).toHaveAttribute(
+    "aria-expanded",
+    "false",
+  );
+  await expect(page.getByRole("button", { name: "Navigation" })).toBeFocused();
   await context.close();
 });
 

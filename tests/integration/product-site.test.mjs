@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import vm from "node:vm";
 import {
   createProductBundleFileDownloadHttpHandler,
@@ -507,10 +508,10 @@ test("product root, Connections, and Advanced MCP render safe live projections a
     }
   }
   const hostedShellCss = await (await handler(new Request(`${origin}/ui/mind-diary-shell.css`))).text();
-  assert.match(hostedShellCss, /\.md-setup-card--single\{grid-template-columns:minmax\(0,1fr\)\}/u);
-  assert.match(hostedShellCss, /\.md-setup-card pre\{[^}]*max-width:100%[^}]*overflow:auto[^}]*white-space:pre-wrap[^}]*overflow-wrap:anywhere/u);
-  assert.match(hostedShellCss, /@media\(max-width:52rem\)/u);
-  assert.match(hostedShellCss, /\.md-setup-card\{grid-template-columns:minmax\(0,1fr\)\}/u);
+  assert.equal(
+    hostedShellCss,
+    await readFile(new URL("../../packages/adapter-web/src/ui-shell.css", import.meta.url), "utf8"),
+  );
   for (const [path, contentType, expectedDimensions] of [
     ["/favicon-32x32.png", "image/png", [32, 32]],
     ["/apple-touch-icon.png", "image/png", [180, 180]],
@@ -810,11 +811,15 @@ test("pilot Product Site route map keeps one UAT shell, exact active navigation,
   assert.doesNotMatch(missingHtml, /not found|principal_one|space_research/i);
 });
 
-test("authenticated home and Mind list reuse list_minds without a preceding session read", async () => {
+test("authenticated home reads its collection while the Mind list defers collection work", async () => {
   const calls = [];
   const handler = createProductWebHttpHandler({
     applicationOrigin: origin,
-    resolveIdentity: () => ({ kind: "authenticated", actor: registeredActor }),
+    resolveIdentity: () => ({
+      kind: "authenticated",
+      actor: registeredActor,
+      session: sessionProjection,
+    }),
     csrf: { issue: () => "csrf-home-projection", verify: () => true },
     control: { execute(request) {
       calls.push(request.operation);
@@ -832,7 +837,7 @@ test("authenticated home and Mind list reuse list_minds without a preceding sess
   const minds = await handler(new Request(`${origin}/minds`));
   assert.equal(minds.status, 200);
   assert.match(await minds.text(), /data-management-view="list"/u);
-  assert.deepEqual(calls, ["list_minds"]);
+  assert.deepEqual(calls, []);
 });
 
 test("ordinary Mind list and exact route wire the UAT management and deletion controls", async () => {
@@ -892,9 +897,8 @@ test("ordinary Mind list and exact route wire the UAT management and deletion co
   assert.equal(list.status, 200);
   const listHtml = await list.text();
   assert.match(listHtml, /data-ordinary-minds-management/);
-  assert.match(listHtml, /data-mind-card="research-notes"/);
-  assert.match(listHtml, /href="\/research-notes"[^>]*data-manage-mind/);
-  assert.doesNotMatch(listHtml, /data-mind-card="me"/);
+  assert.match(listHtml, /aria-busy="true"/);
+  assert.doesNotMatch(listHtml, /data-mind-card=/);
 
   const detail = await handler(new Request(`${origin}/research-notes`));
   assert.equal(detail.status, 200);
@@ -934,6 +938,7 @@ test("ordinary Mind list and exact route wire the UAT management and deletion co
   assert.match(assetBody, /acknowledge_live_head_and_history_exposure/);
   assert.match(assetBody, /expected_invitation_version/);
   assert.match(assetBody, /expected_membership_version/);
+  assert.match(assetBody, /request\("GET","\/api\/v1\/minds"\)/);
   assert.match(assetBody, /markdown-import-plans/);
   assert.match(assetBody, /markdown-import-mind/);
   assert.match(assetBody, /history\.replaceState/);

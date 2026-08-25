@@ -5290,6 +5290,11 @@ export interface MindRouteDependencies {
   readonly logger?: MindRouteSafeLogger;
 }
 
+const CONSISTENT_MIND_ROUTE_READ = Symbol("consistent_mind_route_read");
+type MindRouteConstruction = MindRouteDependencies & {
+  readonly [CONSISTENT_MIND_ROUTE_READ]?: true;
+};
+
 const ROUTE_READ_CAPABILITY = "content:browse" as const;
 
 function routeAuthorizationStateQuery(
@@ -5393,15 +5398,17 @@ export class MindRouteService {
   readonly #routes: MindRouteMetadataStore;
   readonly #host: VerifiedSpaceHost;
   readonly #logger: MindRouteSafeLogger | undefined;
+  readonly #consistentRead: boolean;
   readonly #authorizer: CapabilityAuthorizer;
   readonly #handleReader: AuthorizedHandleReader<
     Readonly<OrdinaryMindRouteSnapshot>
   >;
 
-  constructor(dependencies: MindRouteDependencies) {
+  constructor(dependencies: MindRouteConstruction) {
     this.#routes = dependencies.routes;
     this.#host = dependencies.host;
     this.#logger = dependencies.logger;
+    this.#consistentRead = dependencies[CONSISTENT_MIND_ROUTE_READ] === true;
     this.#authorizer = new CapabilityAuthorizer(dependencies.routes);
     this.#handleReader = new AuthorizedHandleReader({
       handles: dependencies.routes,
@@ -5443,6 +5450,7 @@ export class MindRouteService {
         new MindRouteService({
           routes,
           host: this.#host,
+          [CONSISTENT_MIND_ROUTE_READ]: true,
           ...(this.#logger === undefined ? {} : { logger: this.#logger }),
         }).listMinds(actor));
     }
@@ -5515,6 +5523,21 @@ export class MindRouteService {
     );
     if (!Array.isArray(snapshots) || snapshots.length !== authorized.length) {
       throw new MindRouteFailure("mind_not_found", "Mind was not found.");
+    }
+    if (this.#consistentRead) {
+      const descriptors: OrdinaryMindRouteDescriptor[] = [];
+      for (const [offset, item] of authorized.entries()) {
+        const snapshot = snapshots[offset] ?? null;
+        const decision = initial[item.index];
+        if (
+          snapshot === null ||
+          decision?.kind !== "allowed" ||
+          decision.grant.kind !== "membership" ||
+          !this.#validSnapshot(snapshot, item.spaceId, null, decision.stamp.accessVersion)
+        ) continue;
+        descriptors.push(this.#ordinaryDescriptor(snapshot, decision.grant, "membership"));
+      }
+      return Object.freeze(descriptors);
     }
     const finalStates = await readStates.call(
       this.#routes,

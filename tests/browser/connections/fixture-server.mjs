@@ -8,7 +8,7 @@ import {
 } from "../../../packages/adapter-web/dist/index.js";
 import {
   PRODUCT_CONNECTIONS_CLIENT_JAVASCRIPT,
-  PRODUCT_CONNECTIONS_LAYOUT_CSS,
+  PRODUCT_SHELL_INTERACTIONS_JAVASCRIPT,
   PRODUCT_UI_CLIENT_JAVASCRIPT,
   PRODUCT_UI_FAVICON_SVG,
   PRODUCT_UI_LOCKUP_SVG,
@@ -198,12 +198,7 @@ const server = createServer(async (request, response) => {
       return;
     }
     if (url.pathname === "/ui/mind-diary-shell.css") {
-      send(
-        response,
-        200,
-        "text/css; charset=utf-8",
-        `${PRODUCT_UI_SHELL_CSS}\n${PRODUCT_CONNECTIONS_LAYOUT_CSS}`,
-      );
+      send(response, 200, "text/css; charset=utf-8", PRODUCT_UI_SHELL_CSS);
       return;
     }
     if (url.pathname === "/brand/mind-diary-lockup.svg") {
@@ -219,7 +214,7 @@ const server = createServer(async (request, response) => {
         response,
         200,
         "text/javascript; charset=utf-8",
-        `${PRODUCT_UI_CLIENT_JAVASCRIPT}\n${PRODUCT_CONNECTIONS_CLIENT_JAVASCRIPT}`,
+        `${PRODUCT_SHELL_INTERACTIONS_JAVASCRIPT}\n${PRODUCT_UI_CLIENT_JAVASCRIPT}\n${PRODUCT_CONNECTIONS_CLIENT_JAVASCRIPT}`,
       );
       return;
     }

@@ -390,6 +390,11 @@ navigation и active state. Profile entrypoint ведёт на `/settings/accoun
 Help остаётся достижимым из footer. Hosted environment явно маркируется как
 `UAT`; историческое live evidence 2026-08-09 не делает его production.
 
+`/minds` не блокирует первый document paint чтением всей membership
+collection: shell и loading-state строятся из уже проверенной session
+projection, после чего browser запрашивает `GET /api/v1/minds`, безопасно
+заменяет collection и сохраняет retry/error state без чтения content.
+
 Public Sites audience означает только достижимость Site до входа и не меняет
 authenticated-only product boundary. Для распознанных Product Site UI routes
 signed-out `GET` и `HEAD` возвращают один и тот же безопасный HTML sign-in

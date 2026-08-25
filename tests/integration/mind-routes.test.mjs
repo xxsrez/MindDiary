@@ -236,12 +236,24 @@ test("membership list stays inside one adapter-provided consistent read session"
   await createMind(env, owner, "session-notes", "Session Notes");
   let sessions = 0;
   let escapedReads = 0;
+  let authorizationBatches = 0;
   const guarded = new Proxy(env.metadata, {
     get(target, property, receiver) {
       if (property === "withConsistentRead") {
         return async (operation) => {
           sessions += 1;
-          return operation(env.metadata);
+          return operation(new Proxy(env.metadata, {
+            get(readTarget, readProperty, readReceiver) {
+              const selected = Reflect.get(readTarget, readProperty, readReceiver);
+              if (readProperty !== "readCurrentAuthorizationStates" || typeof selected !== "function") {
+                return typeof selected === "function" ? selected.bind(readTarget) : selected;
+              }
+              return (...args) => {
+                authorizationBatches += 1;
+                return selected.apply(readTarget, args);
+              };
+            },
+          }));
         };
       }
       const selected = Reflect.get(target, property, receiver);
@@ -260,6 +272,7 @@ test("membership list stays inside one adapter-provided consistent read session"
 
   assert.equal(sessions, 1);
   assert.equal(escapedReads, 0);
+  assert.equal(authorizationBatches, 1);
   assert.deepEqual(listed.map((mind) => mind.route), ["/me", "/session-notes"]);
 });
 

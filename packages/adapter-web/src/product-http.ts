@@ -62,10 +62,10 @@ import {
 } from "./connections.js";
 import {
   PRODUCT_COLLABORATION_CLIENT_JAVASCRIPT,
-  PRODUCT_CONNECTIONS_LAYOUT_CSS,
   PRODUCT_CONNECTIONS_CLIENT_JAVASCRIPT,
   PRODUCT_MARKDOWN_IMPORT_CLIENT_JAVASCRIPT,
   PRODUCT_ORDINARY_MINDS_CLIENT_JAVASCRIPT,
+  PRODUCT_SHELL_INTERACTIONS_JAVASCRIPT,
   PRODUCT_UI_APPLE_TOUCH_ICON_PNG,
   PRODUCT_VISIBILITY_CATALOG_CLIENT_JAVASCRIPT,
   PRODUCT_UI_CLIENT_JAVASCRIPT,
@@ -388,29 +388,6 @@ const SAFE_HEADERS = Object.freeze({
   "x-frame-options": "DENY",
 });
 const STATIC_ASSET_CACHE_CONTROL = "public, max-age=60, stale-while-revalidate=300";
-const PRODUCT_UI_PILOT_SHELL_CSS = `
-.md-brand-lockup{display:inline-flex;align-items:center;gap:.55rem;min-width:0}
-.md-environment{padding:.2rem .5rem;border:1px solid var(--mind-diary-memory-plum);border-radius:999px;color:var(--mind-diary-memory-plum);background:#fff;font-size:.72rem;font-weight:800;letter-spacing:.08em}
-.md-navigation{flex-wrap:wrap}
-.md-profile{text-decoration:none}
-.md-profile[aria-current=page]{background:#eee5fa;box-shadow:inset 0 -3px var(--mind-diary-memory-plum)}
-.md-route-links{display:flex;flex-wrap:wrap;gap:.75rem;margin-top:1.25rem}
-.md-setup-card>*{min-width:0}
-.md-setup-card--single{grid-template-columns:minmax(0,1fr)}
-.md-setup-card pre{min-width:0;max-width:100%;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere}
-.md-setup-card pre code{white-space:inherit;overflow-wrap:anywhere}
-.md-binding-panel{display:grid;gap:.9rem;margin-top:1rem;padding-top:1rem;border-top:1px solid var(--mind-diary-border-subtle);min-width:0}
-.md-binding-panel__heading,.md-binding-write,.md-capture-policy{display:flex;align-items:flex-start;justify-content:space-between;gap:.75rem;flex-wrap:wrap}
-.md-capture-policy{padding:.85rem;border:1px solid var(--mind-diary-border-subtle);border-radius:.75rem;background:#fff}.md-capture-policy>div{display:grid;gap:.45rem;min-width:0;flex:1 1 18rem}.md-capture-policy p{margin:0}.md-capture-policy .md-button{flex:none}
-.md-binding-panel h4{margin:0;font-family:var(--mind-diary-font-display);font-size:1.2rem}
-.md-binding-list{display:grid;gap:.75rem;margin:0;padding:0;list-style:none}
-.md-binding-list li{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:.75rem;padding:.75rem;border:1px solid var(--mind-diary-border-subtle);border-radius:.75rem}
-.md-binding-target{display:grid;gap:.2rem;min-width:0}.md-binding-target code,.md-binding-target span{overflow-wrap:anywhere}.md-binding-target--unavailable{color:#5b6473}
-.md-binding-controls{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,17rem),1fr));gap:.9rem}.md-binding-controls form{display:grid;align-content:start;gap:.65rem;padding:.85rem;border:1px solid var(--mind-diary-border-subtle);border-radius:.75rem}.md-binding-controls label{display:grid;gap:.35rem;font-weight:750}.md-binding-controls select{width:100%;min-width:0;min-height:2.9rem;padding:.55rem;border:2px solid #7c8492;border-radius:var(--mind-diary-radius-control);background:#fff}.md-binding-controls .md-caveat{grid-column:1/-1}
-@media(max-width:52rem){.md-header{grid-template-columns:1fr auto auto}.md-menu-button{grid-column:2}.md-profile{display:inline-flex;grid-column:3}.md-navigation{grid-column:1/-1}.md-setup-card{grid-template-columns:minmax(0,1fr)}}
-@media(max-width:36rem){.md-header{grid-template-columns:1fr auto}.md-brand-lockup{grid-column:1}.md-menu-button{grid-column:2}.md-profile{display:inline-flex;grid-column:1/-1;justify-self:stretch;justify-content:center}.md-binding-list li{grid-template-columns:minmax(0,1fr)}.md-binding-list .md-button,.md-binding-controls .md-button,.md-capture-policy .md-button{width:100%}}
-`;
-
 function canonicalOrigin(value: string): string {
   const parsed = new URL(value);
   const loopbackHttp = parsed.protocol === "http:" &&
@@ -1135,12 +1112,12 @@ function staticAsset(pathname: string): { readonly body: BodyInit; readonly type
   if (pathname === "/favicon-32x32.png") return { body: PRODUCT_UI_FAVICON_PNG, type: "image/png" };
   if (pathname === "/apple-touch-icon.png") return { body: PRODUCT_UI_APPLE_TOUCH_ICON_PNG, type: "image/png" };
   if (pathname === "/brand/mind-diary-tokens.css") return { body: PRODUCT_UI_TOKENS_CSS, type: "text/css; charset=utf-8" };
-  if (pathname === "/ui/mind-diary-shell.css") return { body: `${PRODUCT_UI_SHELL_CSS}\n${PRODUCT_CONNECTIONS_LAYOUT_CSS}\n${PRODUCT_UI_PILOT_SHELL_CSS}`, type: "text/css; charset=utf-8" };
+  if (pathname === "/ui/mind-diary-shell.css") return { body: PRODUCT_UI_SHELL_CSS, type: "text/css; charset=utf-8" };
   if (pathname === "/brand/mind-diary-lockup.svg") return { body: PRODUCT_UI_LOCKUP_SVG, type: "image/svg+xml; charset=utf-8" };
   if (pathname === "/brand/mind-diary-mark.svg") return { body: PRODUCT_UI_MARK_SVG, type: "image/svg+xml; charset=utf-8" };
   if (pathname === "/ui/mind-diary-onboarding-client.js") {
     return {
-      body: `${PRODUCT_UI_CLIENT_JAVASCRIPT}\n${PRODUCT_MARKDOWN_IMPORT_CLIENT_JAVASCRIPT}`,
+      body: `${PRODUCT_SHELL_INTERACTIONS_JAVASCRIPT}\n${PRODUCT_UI_CLIENT_JAVASCRIPT}\n${PRODUCT_MARKDOWN_IMPORT_CLIENT_JAVASCRIPT}`,
       type: "text/javascript; charset=utf-8",
     };
   }
@@ -1148,28 +1125,28 @@ function staticAsset(pathname: string): { readonly body: BodyInit; readonly type
     pathname === "/ui/mind-diary-shell-client.js" ||
     pathname === "/ui/mind-diary-token-client.js" ||
     pathname === "/ui/mind-diary-account-client.js"
-  ) return { body: PRODUCT_UI_CLIENT_JAVASCRIPT, type: "text/javascript; charset=utf-8" };
+  ) return { body: `${PRODUCT_SHELL_INTERACTIONS_JAVASCRIPT}\n${PRODUCT_UI_CLIENT_JAVASCRIPT}`, type: "text/javascript; charset=utf-8" };
   if (pathname === "/ui/mind-diary-ordinary-minds-client.js") {
     return {
-      body: `${PRODUCT_ORDINARY_MINDS_CLIENT_JAVASCRIPT}\n${PRODUCT_MARKDOWN_IMPORT_CLIENT_JAVASCRIPT}\n${PRODUCT_COLLABORATION_CLIENT_JAVASCRIPT}`,
+      body: `${PRODUCT_SHELL_INTERACTIONS_JAVASCRIPT}\n${PRODUCT_ORDINARY_MINDS_CLIENT_JAVASCRIPT}\n${PRODUCT_MARKDOWN_IMPORT_CLIENT_JAVASCRIPT}\n${PRODUCT_COLLABORATION_CLIENT_JAVASCRIPT}`,
       type: "text/javascript; charset=utf-8",
     };
   }
   if (pathname === "/ui/mind-diary-collaboration-client.js") {
     return {
-      body: PRODUCT_COLLABORATION_CLIENT_JAVASCRIPT,
+      body: `${PRODUCT_SHELL_INTERACTIONS_JAVASCRIPT}\n${PRODUCT_COLLABORATION_CLIENT_JAVASCRIPT}`,
       type: "text/javascript; charset=utf-8",
     };
   }
   if (pathname === "/ui/mind-diary-visibility-client.js") {
     return {
-      body: PRODUCT_VISIBILITY_CATALOG_CLIENT_JAVASCRIPT,
+      body: `${PRODUCT_SHELL_INTERACTIONS_JAVASCRIPT}\n${PRODUCT_VISIBILITY_CATALOG_CLIENT_JAVASCRIPT}`,
       type: "text/javascript; charset=utf-8",
     };
   }
   if (pathname === "/ui/mind-diary-connections-client.js") {
     return {
-      body: `${PRODUCT_UI_CLIENT_JAVASCRIPT}\n${PRODUCT_CONNECTIONS_CLIENT_JAVASCRIPT}`,
+      body: `${PRODUCT_SHELL_INTERACTIONS_JAVASCRIPT}\n${PRODUCT_UI_CLIENT_JAVASCRIPT}\n${PRODUCT_CONNECTIONS_CLIENT_JAVASCRIPT}`,
       type: "text/javascript; charset=utf-8",
     };
   }
@@ -1232,7 +1209,17 @@ async function productUiDocument(input: {
     if (current === null) throw new TypeError("safe session projection is unavailable");
     return current;
   };
-  if (input.pathname === "/" || input.pathname === "/minds") {
+  if (input.pathname === "/minds") {
+    const session = await readSession();
+    return withCsrfMeta(renderOrdinaryMindsManagementDocument({
+      displayName: session.displayName,
+      view: {
+        kind: "list",
+        collection: { kind: "loading" },
+      },
+    }, "/ui/mind-diary-ordinary-minds-client.js"), input.csrfToken);
+  }
+  if (input.pathname === "/") {
     try {
       const listed = await input.control.execute({
         operation: "list_minds",
@@ -1247,20 +1234,6 @@ async function productUiDocument(input: {
       if (displayName === undefined) {
         throw new TypeError("Personal Mind is absent from the safe Mind list projection");
       }
-      if (input.pathname === "/minds") {
-        const minds = listed
-          .map(ordinaryUiMind)
-          .filter((mind): mind is OrdinaryMindUiMind => mind !== null);
-        return withCsrfMeta(renderOrdinaryMindsManagementDocument({
-          displayName,
-          view: {
-            kind: "list",
-            collection: minds.length === 0
-              ? { kind: "empty" }
-              : { kind: "ready", minds: Object.freeze(minds) },
-          },
-        }, "/ui/mind-diary-ordinary-minds-client.js"), input.csrfToken);
-      }
       return withCsrfMeta(renderMindDiaryUiShellDocument({
         displayName,
         activeNavigation: "home",
@@ -1270,15 +1243,6 @@ async function productUiDocument(input: {
       }), input.csrfToken);
     } catch {
       const session = await readSession();
-      if (input.pathname === "/minds") {
-        return withCsrfMeta(renderOrdinaryMindsManagementDocument({
-          displayName: session.displayName,
-          view: {
-            kind: "list",
-            collection: { kind: "error", message: "Mind metadata is unavailable. Try again." },
-          },
-        }, "/ui/mind-diary-ordinary-minds-client.js"), input.csrfToken);
-      }
       return withCsrfMeta(renderMindDiaryUiShellDocument({
         displayName: session.displayName,
         activeNavigation: "home",
