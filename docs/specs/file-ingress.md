@@ -6,9 +6,11 @@
 local candidate и требуют отдельного exact evidence; MD-272 добавляет
 local-only companion implementation для `local_path` и
 `workspace/generated_artifact`. Исторический MD-250 закрыт без Release 0.2
-promotion; current runtime/file-ingress work принадлежит MD-304/MD-305, а
-joined native-file UAT — MD-275. Hosted upload-intent/producer evidence и
-provider-specific connector adapter остаются отдельными claims. MD-274 добавляет
+promotion. MD-304 владеет format-neutral core storage/streaming lifecycle;
+MD-305 владеет hosted one-use upload-intent service и HTTP/MCP composition
+только для local companion/workspace-generated sources поверх MD-304. Joined
+native-file UAT принадлежит MD-275. Hosted producer evidence и provider-specific
+connector adapter остаются отдельными claims. MD-274 добавляет
 repository-local `FileIngressCoordinator`,
 explicit stage/commit reconcile, mixed-source atomic integration и три
 contracts на существующих MCP endpoints: `get_file_ingress_capabilities`,
@@ -24,7 +26,8 @@ evidence rows остаются обязательными перед соотв�
 [ADR-0021](../decisions/0021-format-neutral-bundle-files.md) replaces the
 historical closed MIME allowlist and 64 MiB cap. The accepted Release 0.2 target
 stores arbitrary regular files with advisory media and streams one file up to
-256 MiB; current source adapters remain legacy-bounded until MD-304/MD-305.
+256 MiB. Core stage/commit/download/export remains legacy-bounded until MD-304;
+hosted local/workspace upload-intent composition remains absent until MD-305.
 
 ## Цель и граница
 
@@ -123,9 +126,9 @@ Task/release evidence после commit.
 
 | Source kind | Adapter owns reading | Transport boundary | Status / evidence | Explicit fallback |
 |---|---|---|---|---|
-| `session_attachment` | MCP/provider adapter | Native client file parameter; adapter follows provider HTTPS object/redirect policy | legacy path is `implemented_local`; Release 0.2 UAT remains MD-275 after MD-304/MD-305; `_meta["openai/fileParams"]=["file"]` is local schema evidence, not live client proof | If the pinned profile cannot supply native `file`, return `native_file_input_unsupported`; do not use base64, local path or arbitrary URL |
-| `local_path` | Local companion process | Out-of-band upload intent/equivalent binary stream; companion snapshots one regular file and sends bounded bytes | `implemented_local`, MD-272 unit/integration evidence; hosted intent/UAT pending | Missing companion, expired/invalid intent or revoked auth: `file_ingress_source_unsupported` / `file_ingress_intent_expired`; never send the path to hosted MCP |
-| `workspace/generated_artifact` | Local companion process with explicit workspace authority | Same out-of-band intent/equivalent stream, but artifact snapshot is selected by the local process | `implemented_local`, MD-272 unit/integration evidence; hosted intent/UAT pending | Missing companion/workspace authority: `file_ingress_source_unsupported`; no path fallback or arbitrary URL |
+| `session_attachment` | MCP/provider adapter | Native client file parameter; adapter follows provider HTTPS object/redirect policy | legacy path is `implemented_local`; format-neutral core is MD-304 and joined Release 0.2 UAT is MD-275; `_meta["openai/fileParams"]=["file"]` is local schema evidence, not live client proof | If the pinned profile cannot supply native `file`, return `native_file_input_unsupported`; do not use base64, local path or arbitrary URL |
+| `local_path` | Local companion process | Out-of-band upload intent/equivalent binary stream; companion snapshots one regular file and sends bounded bytes | `implemented_local`, MD-272 unit/integration evidence; MD-305 owns hosted one-use intent/HTTP/MCP composition, UAT pending | Missing companion, expired/invalid intent or revoked auth: `file_ingress_source_unsupported` / `file_ingress_intent_expired`; never send the path to hosted MCP |
+| `workspace/generated_artifact` | Local companion process with explicit workspace authority | Same out-of-band intent/equivalent stream, but artifact snapshot is selected by the local process | `implemented_local`, MD-272 unit/integration evidence; MD-305 owns hosted one-use intent/HTTP/MCP composition, UAT pending | Missing companion/workspace authority: `file_ingress_source_unsupported`; no path fallback or arbitrary URL |
 | `connector_object` | Explicit authorized connector adapter | Connector API/object fetch with provider-specific bounded stream; arbitrary URL is not a connector contract | Provider-neutral reader/staging boundary is `implemented_local` with unit and mixed-source integration evidence; provider binding and hosted UAT pending | Connector absent, revoked or object unavailable: generic `file_ingress_source_unavailable`; no cross-provider or native fallback |
 | `bounded_in_memory` | Calling adapter / trusted inline boundary | Explicit bounded bytes transport, not implicit JSON-RPC base64; local companion caps local generated path at 4 MiB and shared staging validates it | `implemented_local`, MD-272/MD-273; exact local tests cover limit, digest/MIME and quarantine; hosted UAT pending | Over limit or unsupported profile: `bundle_file_size_limit_exceeded` / `file_ingress_source_unsupported`; caller must choose out-of-band source |
 | `server_generated` | Trusted server-side producer | Internal application port or bounded job output; no client-supplied source locator; local provider writer streams to quarantine storage | `implemented_local`, MD-273; exact local tests cover stream, cancellation and no partial publication; hosted producer evidence pending | Producer unavailable/expired: `file_ingress_source_unavailable`; no client URL or path fallback |
@@ -187,7 +190,9 @@ counting stream and direct quarantine writes. Hashing, promotion, download and
 export must retain only bounded chunks/prefixes, not a full-file buffer. Exact
 256 MiB succeeds; the next byte returns `bundle_file_size_limit_exceeded` with
 no reachable object/revision. Current local adapters still enforce their
-legacy 64 MiB implementation until MD-304/MD-305 changes and tests them.
+legacy 64 MiB core implementation until MD-304 changes and tests it. MD-305
+consumes that completed streaming/staging contract and cannot redefine its
+limits, object identity or lifecycle.
 
 ### Idempotency and reconcile
 
@@ -292,9 +297,11 @@ This contract preserves the old boundaries:
 
 Open questions intentionally left for child implementation decisions:
 
-- Hosted local-companion trust/consent and one-use upload-intent endpoint remain
-  an open UAT/platform decision; MD-272 proves the local adapter boundary
-  without creating a private Sites bypass.
+- MD-305 owns hosted local-companion trust/consent, one-use upload-intent
+  service, HTTP/MCP metadata and composition. Endpoint shape and platform
+  feasibility remain its implementation/UAT decisions; MD-272 proves only the
+  local adapter boundary, and MD-305 must not create a private Sites bypass or
+  duplicate MD-304 storage/staging.
 - Which hosted producer wiring and runtime limits are required before the local
   server-generated writer can be promoted to UAT evidence (MD-273)?
 - Which connector object types and provider-specific ownership proofs can be

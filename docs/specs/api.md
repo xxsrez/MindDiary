@@ -39,11 +39,19 @@ revision transaction. Native client/profile UAT and hosted
 upload-intent/producer evidence remain separate downstream gates; provider
 connector bindings remain unavailable even though their provider-neutral
 authorized-reader/staging boundary is implemented locally. Historical MD-250
-closed without Release 0.2 promotion; MD-304/MD-305 own current runtime/ingress
-work and MD-275 owns the joined UAT gate.
+closed without Release 0.2 promotion. MD-304 owns format-neutral core object
+lifecycle and streaming stage/commit/download/export. MD-305 owns only the
+hosted one-use upload-intent service plus HTTP/MCP metadata/composition for
+local companion and workspace-generated sources; it consumes MD-304 ports and
+does not own BundleFile storage. MD-275 owns the joined UAT gate.
 No source may be inferred as hosted capability or used as a silent
 base64/URL/path fallback. Ни одна из этих file/scale rows не блокирует
 Markdown-first Release 0.1 по ADR-0019.
+
+The upload-intent wire surface is not part of MD-303 or MD-304. MD-305 must
+version its one-use intent/request/receipt metadata, expiry/replay errors and
+HTTP/MCP composition without introducing a second staging record, digest rule,
+quota model or canonical object lifecycle.
 
 ## Назначение и граница
 

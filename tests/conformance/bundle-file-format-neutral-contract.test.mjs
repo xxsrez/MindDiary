@@ -30,7 +30,7 @@ test("MD-303 fixes the format-neutral v4 manifest and legacy read boundary", asy
   assert.match(adr, /заменяет closed MIME admission[\s\S]*64 MiB limit/i);
   assert.match(adr, /repository runtime.*legacy bounded baseline/is);
   assert.match(traceability, /BF7-Contract-v4.*`MD-303`/s);
-  assert.match(traceability, /BF8-Streaming-state.*`MD-304`/s);
+  assert.match(traceability, /BF8-Core-runtime.*`MD-304`/s);
 });
 
 test("MD-303 keeps media advisory, bounded and independent from serving", async () => {
@@ -93,5 +93,25 @@ test("MD-303 covers arbitrary formats without expanding the MD-306 boundary", as
   assert.match(spec, /ordinary revision using existing Markdown[\s\S]*`staged_file_ref`/);
   assert.match(spec, /does not add an OKF `Asset`/);
   assert.match(domain, /MD-306 may add one typed OKF Markdown entry/);
-  assert.match(traceability, /BF9-Incremental-OKF.*`MD-306`/s);
+  assert.match(traceability, /BF10-Incremental-OKF.*`MD-306`/s);
+});
+
+test("MD-304 and MD-305 have non-overlapping runtime and hosted-intent ownership", async () => {
+  const documents = await Promise.all([
+    readRepositoryFile("docs/architecture.md"),
+    readRepositoryFile("docs/specs/api.md"),
+    readRepositoryFile("docs/specs/file-ingress.md"),
+    readRepositoryFile("docs/specs/mvp.md"),
+  ]);
+  const traceability = await readRepositoryFile("docs/specs/traceability.md");
+
+  for (const text of documents) {
+    assert.match(text, /MD-304[\s\S]{0,180}(?:core|runtime|storage|stage)/i);
+    assert.match(text, /MD-305[\s\S]{0,220}(?:one-use upload-intent|upload-intent service)/i);
+    assert.match(text, /MD-305[\s\S]{0,300}(?:does not own|не меняет|cannot redefine|поверх MD-304|reusing MD-304)/i);
+    assert.doesNotMatch(text, /MD-304\/MD-305 (?:own|changes|принадлежит)/i);
+  }
+  assert.match(traceability, /BF8-Core-runtime.*`MD-304`/s);
+  assert.match(traceability, /BF9-Hosted-upload-intent.*`MD-305`/s);
+  assert.match(traceability, /BF10-Incremental-OKF.*`MD-306`/s);
 });

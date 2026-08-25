@@ -411,7 +411,10 @@ bounded-inline and server-generated streaming code/tests, plus the repo-local
 MD-272 companion for explicit `local_path`, `workspace/generated_artifact` and
 bounded local bytes. These adapters do not claim hosted upload-intent or
 native-client capability; connector and hosted producer evidence remain
-separate until their owning adapters and exact evidence exist.
+separate until their owning adapters and exact evidence exist. MD-305 owns only
+hosted one-use upload-intent/HTTP/MCP composition for local/workspace sources
+over MD-304 staging ports; it does not own a second object or BundleFile
+lifecycle.
 
 The accepted 0.2 opaque-file maximum is exactly 268,435,456 bytes (256 MiB),
 inclusive, and one changeset may reference at most the same staged-byte total.

@@ -24,7 +24,9 @@ parameter, `bounded_in_memory` и `server_generated` используют лок
 staging/streaming pipeline, а MD-272 подключает repository-local companion для
 `local_path` и `workspace/generated_artifact`. Native client UAT,
 hosted upload-intent/producer evidence и `connector_object` adapter остаются
-отдельными gates; это не разрешает silent base64, arbitrary
+отдельными gates. MD-305 владеет только hosted one-use upload-intent service и
+HTTP/MCP composition для local/workspace sources поверх MD-304 core; он не
+меняет этот object/storage contract. Это не разрешает silent base64, arbitrary
 URL или local-path fallback.
 
 ## Контекст и граница решения

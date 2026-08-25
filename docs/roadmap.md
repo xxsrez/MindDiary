@@ -169,7 +169,9 @@ Canonical bytes нельзя автоматически исполнять ил�
 Этот target не меняет terminal Markdown-first Release 0.1 и не является bulk
 Brain import, directory/archive import, rich renderer или production
 malware-cleanliness claim. Текущий runtime остаётся legacy-bounded; MD-304,
-последующие browse/download/export tasks и exact UAT должны доказать 0.2.
+MD-305 hosted local/workspace upload-intent composition, последующие
+browse/download/export tasks и exact UAT должны доказать 0.2. MD-305 использует
+MD-304 core object lifecycle и не вводит второй BundleFile store.
 
 ## Известный naming risk
 
