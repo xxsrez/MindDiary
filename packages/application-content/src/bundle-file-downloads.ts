@@ -93,7 +93,216 @@ const RASTER_TYPES = new Set<BundleFileMediaType>([
   "image/gif",
   "image/webp",
 ]);
+const MAX_SAFE_RASTER_PREFIX_BYTES = 64 * 1024;
 const CONTROL = /[\u0000-\u001f\u007f]/u;
+
+function uint16BigEndian(bytes: Uint8Array, offset: number): number {
+  return (bytes[offset]! << 8) | bytes[offset + 1]!;
+}
+
+function uint16LittleEndian(bytes: Uint8Array, offset: number): number {
+  return bytes[offset]! | (bytes[offset + 1]! << 8);
+}
+
+function uint24LittleEndian(bytes: Uint8Array, offset: number): number {
+  return bytes[offset]! | (bytes[offset + 1]! << 8) | (bytes[offset + 2]! << 16);
+}
+
+function uint32BigEndian(bytes: Uint8Array, offset: number): number {
+  return (
+    bytes[offset]! * 0x1_000_000 +
+    (bytes[offset + 1]! << 16) +
+    (bytes[offset + 2]! << 8) +
+    bytes[offset + 3]!
+  );
+}
+
+function uint32LittleEndian(bytes: Uint8Array, offset: number): number {
+  return (
+    bytes[offset]! +
+    bytes[offset + 1]! * 0x100 +
+    bytes[offset + 2]! * 0x1_0000 +
+    bytes[offset + 3]! * 0x100_0000
+  );
+}
+
+function bytesMatch(
+  bytes: Uint8Array,
+  offset: number,
+  expected: readonly number[],
+): boolean {
+  return expected.every((value, index) => bytes[offset + index] === value);
+}
+
+function crc32(bytes: Uint8Array): number {
+  let crc = 0xffff_ffff;
+  for (const byte of bytes) {
+    crc ^= byte;
+    for (let bit = 0; bit < 8; bit += 1) {
+      crc = (crc >>> 1) ^ ((crc & 1) === 0 ? 0 : 0xedb8_8320);
+    }
+  }
+  return (crc ^ 0xffff_ffff) >>> 0;
+}
+
+function validPngHeader(bytes: Uint8Array): boolean {
+  if (
+    bytes.byteLength < 33 ||
+    !bytesMatch(bytes, 0, [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]) ||
+    uint32BigEndian(bytes, 8) !== 13 ||
+    !bytesMatch(bytes, 12, [0x49, 0x48, 0x44, 0x52])
+  ) return false;
+  const width = uint32BigEndian(bytes, 16);
+  const height = uint32BigEndian(bytes, 20);
+  const bitDepth = bytes[24]!;
+  const colorType = bytes[25]!;
+  const validBitDepth = colorType === 0
+    ? [1, 2, 4, 8, 16].includes(bitDepth)
+    : colorType === 2
+      ? bitDepth === 8 || bitDepth === 16
+      : colorType === 3
+        ? [1, 2, 4, 8].includes(bitDepth)
+        : colorType === 4 || colorType === 6
+          ? bitDepth === 8 || bitDepth === 16
+          : false;
+  return width > 0 && height > 0 && validBitDepth &&
+    bytes[26] === 0 && bytes[27] === 0 && (bytes[28] === 0 || bytes[28] === 1) &&
+    crc32(bytes.subarray(12, 29)) === uint32BigEndian(bytes, 29);
+}
+
+function validGifHeader(bytes: Uint8Array): boolean {
+  return bytes.byteLength >= 13 &&
+    (bytesMatch(bytes, 0, [0x47, 0x49, 0x46, 0x38, 0x37, 0x61]) ||
+      bytesMatch(bytes, 0, [0x47, 0x49, 0x46, 0x38, 0x39, 0x61])) &&
+    uint16LittleEndian(bytes, 6) > 0 && uint16LittleEndian(bytes, 8) > 0;
+}
+
+const JPEG_START_OF_FRAME_MARKERS = new Set([
+  0xc0, 0xc1, 0xc2, 0xc3, 0xc5, 0xc6, 0xc7, 0xc9, 0xca, 0xcb, 0xcd, 0xce, 0xcf,
+]);
+
+function validJpegHeader(bytes: Uint8Array): boolean {
+  if (bytes.byteLength < 13 || !bytesMatch(bytes, 0, [0xff, 0xd8])) return false;
+  let offset = 2;
+  while (offset + 3 < bytes.byteLength) {
+    if (bytes[offset] !== 0xff) return false;
+    while (bytes[offset] === 0xff) offset += 1;
+    if (offset >= bytes.byteLength) return false;
+    const marker = bytes[offset]!;
+    offset += 1;
+    if (marker === 0xd9 || marker === 0xda) return false;
+    if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) continue;
+    if (offset + 1 >= bytes.byteLength) return false;
+    const segmentLength = uint16BigEndian(bytes, offset);
+    if (segmentLength < 2 || offset + segmentLength > bytes.byteLength) return false;
+    if (JPEG_START_OF_FRAME_MARKERS.has(marker)) {
+      return segmentLength >= 8 &&
+        uint16BigEndian(bytes, offset + 3) > 0 &&
+        uint16BigEndian(bytes, offset + 5) > 0;
+    }
+    offset += segmentLength;
+  }
+  return false;
+}
+
+function validWebpHeader(bytes: Uint8Array, expectedSize: number): boolean {
+  if (
+    bytes.byteLength < 30 ||
+    !bytesMatch(bytes, 0, [0x52, 0x49, 0x46, 0x46]) ||
+    !bytesMatch(bytes, 8, [0x57, 0x45, 0x42, 0x50]) ||
+    uint32LittleEndian(bytes, 4) + 8 !== expectedSize
+  ) return false;
+  const chunkSize = uint32LittleEndian(bytes, 16);
+  if (bytesMatch(bytes, 12, [0x56, 0x50, 0x38, 0x58])) {
+    return chunkSize >= 10 &&
+      uint24LittleEndian(bytes, 24) < 0xff_ffff &&
+      uint24LittleEndian(bytes, 27) < 0xff_ffff;
+  }
+  if (bytesMatch(bytes, 12, [0x56, 0x50, 0x38, 0x4c])) {
+    if (chunkSize < 5 || bytes[20] !== 0x2f) return false;
+    const packed = uint32LittleEndian(bytes, 21);
+    return (packed & 0x3fff) < 0x3fff && ((packed >>> 14) & 0x3fff) < 0x3fff;
+  }
+  if (bytesMatch(bytes, 12, [0x56, 0x50, 0x38, 0x20])) {
+    return chunkSize >= 10 && bytesMatch(bytes, 23, [0x9d, 0x01, 0x2a]) &&
+      (uint16LittleEndian(bytes, 26) & 0x3fff) > 0 &&
+      (uint16LittleEndian(bytes, 28) & 0x3fff) > 0;
+  }
+  return false;
+}
+
+/**
+ * Bounded serving-time verification for the only media types that may be
+ * rendered inline. Advisory MIME alone is deliberately insufficient.
+ */
+export function isVerifiedSafeRasterPrefix(
+  mediaType: BundleFileMediaType,
+  bytes: Uint8Array,
+  expectedSize: number,
+): boolean {
+  if (!RASTER_TYPES.has(mediaType) || !Number.isSafeInteger(expectedSize) || expectedSize < 1) {
+    return false;
+  }
+  switch (mediaType) {
+    case "image/png": return validPngHeader(bytes);
+    case "image/jpeg": return validJpegHeader(bytes);
+    case "image/gif": return validGifHeader(bytes);
+    case "image/webp": return validWebpHeader(bytes, expectedSize);
+    default: return false;
+  }
+}
+
+export async function inspectSafeRasterPreview(
+  body: ReadableStream<Uint8Array>,
+  mediaType: BundleFileMediaType,
+  expectedSize: number,
+): Promise<boolean> {
+  if (!RASTER_TYPES.has(mediaType) || !Number.isSafeInteger(expectedSize) || expectedSize < 1) {
+    await body.cancel().catch(() => undefined);
+    return false;
+  }
+  const target = Math.min(expectedSize, MAX_SAFE_RASTER_PREFIX_BYTES);
+  const prefix = new Uint8Array(target);
+  const reader = body.getReader();
+  let size = 0;
+  try {
+    while (size < target) {
+      const part = await reader.read();
+      if (part.done) return false;
+      if (!(part.value instanceof Uint8Array)) {
+        await reader.cancel().catch(() => undefined);
+        return false;
+      }
+      if (size + part.value.byteLength > expectedSize) {
+        await reader.cancel().catch(() => undefined);
+        return false;
+      }
+      const copied = Math.min(part.value.byteLength, target - size);
+      prefix.set(part.value.subarray(0, copied), size);
+      size += copied;
+      if (copied < part.value.byteLength) {
+        await reader.cancel().catch(() => undefined);
+        break;
+      }
+    }
+    if (size !== target) return false;
+    if (target === expectedSize) {
+      const terminal = await reader.read();
+      if (!terminal.done) {
+        await reader.cancel().catch(() => undefined);
+        return false;
+      }
+    } else {
+      await reader.cancel().catch(() => undefined);
+    }
+    return isVerifiedSafeRasterPrefix(mediaType, prefix, expectedSize);
+  } catch {
+    await reader.cancel().catch(() => undefined);
+    return false;
+  } finally {
+    reader.releaseLock();
+  }
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -134,6 +343,7 @@ function rfc5987(value: string): string {
 function descriptor(
   entry: Readonly<{ path: string; mediaType: BundleFileMediaType; size: number; sha256: Sha256Digest }>,
   revisionId: RevisionId,
+  inlineEligible: boolean,
 ): Readonly<BundleFileDownloadDescriptor> {
   return Object.freeze({
     path: entry.path,
@@ -142,7 +352,7 @@ function descriptor(
     size: entry.size,
     sha256: entry.sha256,
     revisionId,
-    inlineEligible: RASTER_TYPES.has(entry.mediaType),
+    inlineEligible,
   });
 }
 
@@ -150,9 +360,12 @@ async function verifyBody(
   body: ReadableStream<Uint8Array>,
   expectedSize: number,
   expectedSha256: Sha256Digest,
-): Promise<boolean> {
+  mediaType: BundleFileMediaType,
+): Promise<Readonly<{ integrityVerified: boolean; inlineEligible: boolean }>> {
   const reader = body.getReader();
   const digest = new IncrementalSha256();
+  const prefix = new Uint8Array(Math.min(expectedSize, MAX_SAFE_RASTER_PREFIX_BYTES));
+  let prefixSize = 0;
   let size = 0;
   try {
     while (true) {
@@ -160,12 +373,25 @@ async function verifyBody(
       if (part.done) break;
       if (!(part.value instanceof Uint8Array) || size + part.value.byteLength > expectedSize) {
         await reader.cancel().catch(() => undefined);
-        return false;
+        return Object.freeze({ integrityVerified: false, inlineEligible: false });
+      }
+      if (prefixSize < prefix.byteLength) {
+        const copied = Math.min(prefix.byteLength - prefixSize, part.value.byteLength);
+        prefix.set(part.value.subarray(0, copied), prefixSize);
+        prefixSize += copied;
       }
       size += part.value.byteLength;
       digest.update(part.value);
     }
-    return size === expectedSize && digest.digest() === expectedSha256;
+    const integrityVerified = size === expectedSize && digest.digest() === expectedSha256;
+    return Object.freeze({
+      integrityVerified,
+      inlineEligible: integrityVerified && prefixSize === prefix.byteLength &&
+        isVerifiedSafeRasterPrefix(mediaType, prefix, expectedSize),
+    });
+  } catch {
+    await reader.cancel().catch(() => undefined);
+    return Object.freeze({ integrityVerified: false, inlineEligible: false });
   } finally {
     reader.releaseLock();
   }
@@ -274,12 +500,31 @@ export class BundleFileDownloadService {
     if (entry === undefined || entry.kind !== "opaque") {
       throw new BundleFileDownloadFailure("bundle_file_not_found", "BundleFile was not found.");
     }
+    let inlineEligible = false;
+    if (RASTER_TYPES.has(entry.mediaType as BundleFileMediaType)) {
+      try {
+        const preview = await this.#objects.openBundleFile(info.mind.mindId, entry.sha256);
+        if (preview !== null) {
+          if (preview.mediaType !== entry.mediaType || preview.size !== entry.size) {
+            await preview.body.cancel().catch(() => undefined);
+          } else {
+            inlineEligible = await inspectSafeRasterPreview(
+              preview.body,
+              entry.mediaType as BundleFileMediaType,
+              entry.size,
+            );
+          }
+        }
+      } catch {
+        inlineEligible = false;
+      }
+    }
     const file = descriptor({
       path: entry.path,
       mediaType: entry.mediaType as BundleFileMediaType,
       size: entry.size,
       sha256: entry.sha256,
-    }, envelope.revision.revisionId);
+    }, envelope.revision.revisionId, inlineEligible);
 
     for (let attempt = 0; attempt < 3; attempt += 1) {
       const issued = await this.#secrets.issueSecret();
@@ -406,16 +651,25 @@ export class BundleFileDownloadService {
     } catch {
       return Object.freeze({ kind: "not_found" });
     }
-    if (
-      object === null || object.mediaType !== grant.mediaType || object.size !== grant.size ||
-      !(await verifyBody(object.body, grant.size, grant.sha256))
-    ) return Object.freeze({ kind: "not_found" });
+    if (object === null || object.mediaType !== grant.mediaType || object.size !== grant.size) {
+      return Object.freeze({ kind: "not_found" });
+    }
+    const verification = await verifyBody(
+      object.body,
+      grant.size,
+      grant.sha256,
+      grant.mediaType,
+    );
+    if (!verification.integrityVerified) return Object.freeze({ kind: "not_found" });
 
     const responseObject = await this.#objects.openBundleFile(grant.spaceId, grant.sha256);
     if (
       responseObject === null || responseObject.mediaType !== grant.mediaType ||
       responseObject.size !== grant.size
-    ) return Object.freeze({ kind: "not_found" });
+    ) {
+      await responseObject?.body.cancel().catch(() => undefined);
+      return Object.freeze({ kind: "not_found" });
+    }
 
     const consumed = await this.#store.runBundleFileDownloadGrantTransaction(async (transaction) => {
       const current = await this.#authorizer.reauthorizeInTransaction(
@@ -437,10 +691,13 @@ export class BundleFileDownloadService {
       ) return Object.freeze({ kind: "not_found" as const });
       return transaction.consumeBundleFileDownloadGrant(grant.secretVerifier, this.#clock.now());
     });
-    if (consumed.kind !== "consumed") return Object.freeze({ kind: "not_found" });
+    if (consumed.kind !== "consumed") {
+      await responseObject.body.cancel().catch(() => undefined);
+      return Object.freeze({ kind: "not_found" });
+    }
 
     const displayName = filename(grant.path);
-    const disposition = RASTER_TYPES.has(grant.mediaType) ? "inline" : "attachment";
+    const disposition = verification.inlineEligible ? "inline" : "attachment";
     return Object.freeze({
       kind: "download",
       headers: Object.freeze({

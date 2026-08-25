@@ -31,6 +31,7 @@ import {
   analyzeBundleFileReferences,
   type BundleFileReferenceStatus,
 } from "./bundle-file-references.js";
+import { inspectSafeRasterPreview } from "./bundle-file-downloads.js";
 
 import {
   MindDiscoveryFailure,
@@ -1022,7 +1023,7 @@ export class MindBrowseService {
         }
       },
     );
-    const references = analyzeBundleFileReferences({
+    const preliminaryReferences = analyzeBundleFileReferences({
       markdown,
       bundleFiles: entries.map((entry) => Object.freeze({
         path: entry.path,
@@ -1030,6 +1031,29 @@ export class MindBrowseService {
       })),
     });
     const page = entries.slice(offset, offset + request.limit);
+    const pagePaths = new Set(page.map((entry) => entry.path));
+    const previewCandidates = entries.filter((entry) =>
+      INLINE_BUNDLE_FILE_MEDIA_TYPES.has(entry.mediaType) &&
+      (pagePaths.has(entry.path) ||
+        preliminaryReferences.statusByPath.get(entry.path) !== "unreferenced"));
+    const previewEligibility = new Map(await mapBounded(
+      previewCandidates,
+      MAX_BROWSE_OBJECT_CONCURRENCY,
+      async (entry) => [entry.path, await this.#inspectBundleFilePreview(
+        envelope.revision.spaceId,
+        entry,
+      )] as const,
+    ));
+    const references = analyzeBundleFileReferences({
+      markdown,
+      bundleFiles: entries.map((entry) => Object.freeze({
+        path: entry.path,
+        mediaType: entry.mediaType as BundleFileMediaType,
+        ...(previewEligibility.has(entry.path)
+          ? { inlineEligible: previewEligibility.get(entry.path)! }
+          : {}),
+      })),
+    });
     const files = page.map((entry) => Object.freeze({
       path: entry.path,
       kind: "opaque" as const,
@@ -1037,7 +1061,7 @@ export class MindBrowseService {
       size: entry.size,
       sha256: entry.sha256,
       revisionId: envelope.revision.revisionId,
-      inlineEligible: INLINE_BUNDLE_FILE_MEDIA_TYPES.has(entry.mediaType),
+      inlineEligible: previewEligibility.get(entry.path) ?? false,
       referenceStatus: references.statusByPath.get(entry.path) ?? "unreferenced",
     }));
     const nextOffset = offset + page.length;
@@ -1408,6 +1432,37 @@ export class MindBrowseService {
       );
     }
     return bytes;
+  }
+
+  async #inspectBundleFilePreview(
+    spaceId: SpaceId,
+    entry: Readonly<RevisionManifestEntry>,
+  ): Promise<boolean> {
+    if (
+      entry.kind !== "opaque" ||
+      !INLINE_BUNDLE_FILE_MEDIA_TYPES.has(entry.mediaType) ||
+      !("openBundleFile" in this.#objects)
+    ) return false;
+    try {
+      const object = await (this.#objects as BundleFileObjectStore).openBundleFile(
+        spaceId,
+        entry.sha256,
+      );
+      if (object === null) return false;
+      if (object.mediaType !== entry.mediaType || object.size !== entry.size) {
+        await object.body.cancel().catch(() => undefined);
+        return false;
+      }
+      return await inspectSafeRasterPreview(
+        object.body,
+        entry.mediaType as BundleFileMediaType,
+        entry.size,
+      );
+    } catch {
+      // Preview verification is a derived serving capability. Failure leaves
+      // canonical storage intact and safely falls back to attachment.
+      return false;
+    }
   }
 
   async #requireAuthorization(

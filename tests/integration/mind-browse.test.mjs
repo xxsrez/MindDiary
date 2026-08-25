@@ -31,6 +31,18 @@ const CHANGED_AT = "2026-08-07T13:01:00.000Z";
 const DELETE_AT = "2026-08-07T13:10:00.000Z";
 const HOST = verifiedSpaceHost("mind-diary.example");
 const encoder = new TextEncoder();
+const VALID_PNG = Uint8Array.from([
+  0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+  0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+  0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+  0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4, 0x89,
+]);
+const MALFORMED_PNG = Uint8Array.from([
+  0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+  0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  0x08, 0x06, 0x00, 0x00, 0x00, 0xf0, 0xd7, 0xaf, 0xb7,
+]);
 
 function preRegistrationActor(index, displayName = `Browse Principal ${index}`) {
   return {
@@ -70,6 +82,7 @@ function accountIds() {
 
 function trackedObjects(delegate) {
   let immutableReads = 0;
+  let bundleOpens = 0;
   let concurrentReads = 0;
   let maximumConcurrentReads = 0;
   return {
@@ -86,12 +99,18 @@ function trackedObjects(delegate) {
         concurrentReads -= 1;
       }
     },
+    openBundleFile: async (spaceId, sha256) => {
+      bundleOpens += 1;
+      return delegate.openBundleFile(spaceId, sha256);
+    },
     listImmutableObjects: (request) => delegate.listImmutableObjects(request),
     deleteImmutableObject: (request) => delegate.deleteImmutableObject(request),
     reads: () => immutableReads,
+    bundleOpens: () => bundleOpens,
     maxConcurrentReads: () => maximumConcurrentReads,
     reset: () => {
       immutableReads = 0;
+      bundleOpens = 0;
       concurrentReads = 0;
       maximumConcurrentReads = 0;
     },
@@ -446,12 +465,18 @@ test("browse materializes a scaled page with bounded concurrency and determinist
   assert.equal(env.observedObjects.maxConcurrentReads(), 8);
 });
 
-test("BundleFile listing is metadata-only, paginated, and pinned to an exact historical revision", async () => {
+test("BundleFile listing returns metadata only, verifies preview bytes, and stays on an exact historical revision", async () => {
   const env = harness();
   const owner = await createAccount(env, 1, "Bundle Browse Owner");
   const mind = await createMind(env, owner, "bundle-browse");
   const oldMarkdown = fixtureFiles().map((file) => file.path === "concepts/alpha.md"
-    ? { ...file, text: concept("Alpha", "![Diagram](../assets/a.png)") }
+    ? {
+        ...file,
+        text: concept(
+          "Alpha",
+          "![Diagram](../assets/a.png)\n![Spoofed](../assets/spoofed.png)",
+        ),
+      }
     : file);
   const oldRevision = await commitMixedFiles(
     env,
@@ -462,12 +487,17 @@ test("BundleFile listing is metadata-only, paginated, and pinned to an exact his
       {
         path: "assets/a.png",
         mediaType: "image/png",
-        bytes: Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+        bytes: VALID_PNG,
       },
       {
         path: "assets/b.pdf",
         mediaType: "application/pdf",
         bytes: encoder.encode("%PDF-1.7\n"),
+      },
+      {
+        path: "assets/spoofed.png",
+        mediaType: "image/png",
+        bytes: MALFORMED_PNG,
       },
     ],
     "Add browsable BundleFiles",
@@ -489,6 +519,10 @@ test("BundleFile listing is metadata-only, paginated, and pinned to an exact his
   }]);
   assert.ok(first.nextCursor);
   assert.equal(env.observedObjects.reads(), oldMarkdown.length);
+  assert.equal(env.observedObjects.bundleOpens(), 2);
+  assert.deepEqual(first.diagnostics.map(({ code }) => code), [
+    "bundle_file_inline_disallowed",
+  ]);
   assert.deepEqual(Object.keys(first).sort(), [
     "diagnostics",
     "files",
@@ -527,7 +561,22 @@ test("BundleFile listing is metadata-only, paginated, and pinned to an exact his
   assert.equal(second.resolvedRevision.revisionId, oldRevision);
   assert.deepEqual(second.files.map((file) => file.path), ["assets/b.pdf"]);
   assert.equal(second.files[0].referenceStatus, "unreferenced");
-  assert.equal(second.nextCursor, null);
+  assert.ok(second.nextCursor);
+  const third = await env.browse.listBundleFiles(actor(owner.principalId), {
+    mind: mind.handle,
+    cursor: second.nextCursor,
+    limit: 1,
+  });
+  assert.deepEqual(third.files.map((file) => ({
+    path: file.path,
+    inlineEligible: file.inlineEligible,
+    referenceStatus: file.referenceStatus,
+  })), [{
+    path: "assets/spoofed.png",
+    inlineEligible: false,
+    referenceStatus: "invalid_reference",
+  }]);
+  assert.equal(third.nextCursor, null);
 
   const historical = await env.browse.listBundleFiles(actor(owner.principalId), {
     mind: mind.handle,
@@ -537,6 +586,7 @@ test("BundleFile listing is metadata-only, paginated, and pinned to an exact his
   assert.deepEqual(historical.files.map((file) => file.path), [
     "assets/a.png",
     "assets/b.pdf",
+    "assets/spoofed.png",
   ]);
   const current = await env.browse.listBundleFiles(actor(owner.principalId), {
     mind: mind.handle,

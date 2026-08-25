@@ -12,6 +12,8 @@ export interface BundleFileReferenceMarkdown {
 export interface BundleFileReferenceTarget {
   readonly path: string;
   readonly mediaType: BundleFileMediaType;
+  /** Fresh serving-time verification; omitted for pure contract analysis. */
+  readonly inlineEligible?: boolean;
 }
 
 export type BundleFileReferenceStatus =
@@ -44,6 +46,15 @@ const EXPECTED_EXTENSIONS: Readonly<Record<string, readonly string[]>> =
     "image/webp": Object.freeze([".webp"]),
     "application/pdf": Object.freeze([".pdf"]),
     "application/zip": Object.freeze([".zip"]),
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": Object.freeze([".docx"]),
+    "image/heic": Object.freeze([".heic", ".heif"]),
+    "application/epub+zip": Object.freeze([".epub"]),
+    "audio/ogg": Object.freeze([".ogg", ".opus"]),
+    "audio/opus": Object.freeze([".opus"]),
+    "text/html": Object.freeze([".html", ".htm"]),
+    "text/csv": Object.freeze([".csv"]),
+    "application/json": Object.freeze([".json"]),
+    "application/x-ipynb+json": Object.freeze([".ipynb"]),
   });
 const SCHEME = /^[A-Za-z][A-Za-z0-9+.-]*:/u;
 
@@ -299,14 +310,18 @@ export function analyzeBundleFileReferences(input: Readonly<{
         ));
         continue;
       }
-      if (reference.image && !RASTER_TYPES.has(target.mediaType)) {
+      if (
+        reference.image &&
+        (target.inlineEligible === false ||
+          (target.inlineEligible === undefined && !RASTER_TYPES.has(target.mediaType)))
+      ) {
         invalid.add(target.path);
         diagnostics.push(diagnostic(
           "error",
           "bundle_file_inline_disallowed",
           source.path,
           reference.line,
-          "Only allowlisted raster BundleFiles may use Markdown image syntax.",
+          "Only freshly verified safe raster BundleFiles may use Markdown image syntax.",
         ));
       } else {
         valid.add(target.path);

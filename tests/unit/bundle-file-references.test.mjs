@@ -91,3 +91,47 @@ test("inline destinations preserve balanced or escaped parentheses in canonical 
   assert.equal(result.statusByPath.get("assets/scan(2).png"), "referenced");
   assert.deepEqual(result.diagnostics, []);
 });
+
+test("Markdown image syntax falls back when a raster advisory type fails fresh preview verification", () => {
+  const result = analyzeBundleFileReferences({
+    markdown: [{
+      path: "concepts/example.md",
+      text: "![Spoofed](../assets/spoofed.png)",
+    }],
+    bundleFiles: [{
+      path: "assets/spoofed.png",
+      mediaType: "image/png",
+      inlineEligible: false,
+    }],
+  });
+  assert.equal(result.statusByPath.get("assets/spoofed.png"), "invalid_reference");
+  assert.deepEqual(result.diagnostics.map(({ code }) => code), [
+    "bundle_file_inline_disallowed",
+  ]);
+});
+
+test("format-neutral advisory extensions produce deterministic mismatch warnings", () => {
+  const result = analyzeBundleFileReferences({
+    markdown: [{
+      path: "index.md",
+      text: [
+        "[Document](assets/document.bin)",
+        "[Notebook](assets/notebook.json)",
+        "[Data](assets/data.txt)",
+      ].join("\n"),
+    }],
+    bundleFiles: [
+      {
+        path: "assets/document.bin",
+        mediaType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      },
+      { path: "assets/notebook.json", mediaType: "application/x-ipynb+json" },
+      { path: "assets/data.txt", mediaType: "text/csv" },
+    ],
+  });
+  assert.deepEqual(result.diagnostics.map(({ code, path }) => [code, path]), [
+    ["bundle_file_reference_media_mismatch", "index.md"],
+    ["bundle_file_reference_media_mismatch", "index.md"],
+    ["bundle_file_reference_media_mismatch", "index.md"],
+  ]);
+});

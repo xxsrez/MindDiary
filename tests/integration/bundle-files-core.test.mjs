@@ -50,16 +50,59 @@ const BINDING_OWNER_ID = "binding_owner_bundle_file";
 const WRITE_BINDING_ID = "write_binding_bundle_file";
 const HASH = `sha256:${"a".repeat(64)}`;
 const PNG = Uint8Array.from([
-  0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x01,
+  0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+  0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+  0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+  0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4, 0x89,
 ]);
 const PNG_REPLACEMENT = Uint8Array.from([
-  0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x02,
+  0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+  0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+  0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x01,
+  0x08, 0x06, 0x00, 0x00, 0x00, 0xf4, 0x22, 0x7f, 0x8a,
+]);
+const MALFORMED_PNG = Uint8Array.from([
+  0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+  0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  0x08, 0x06, 0x00, 0x00, 0x00, 0xf0, 0xd7, 0xaf, 0xb7,
+]);
+const JPEG = Uint8Array.from([
+  0xff, 0xd8, 0xff, 0xc0, 0x00, 0x0b, 0x08, 0x00, 0x01, 0x00, 0x01,
+  0x01, 0x01, 0x11, 0x00, 0xff, 0xd9,
+]);
+const GIF = Uint8Array.from([
+  0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00,
+]);
+const WEBP = Uint8Array.from([
+  0x52, 0x49, 0x46, 0x46, 0x16, 0x00, 0x00, 0x00,
+  0x57, 0x45, 0x42, 0x50, 0x56, 0x50, 0x38, 0x20,
+  0x0a, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x9d,
+  0x01, 0x2a, 0x01, 0x00, 0x01, 0x00,
 ]);
 const PDF = new TextEncoder().encode("%PDF-1.7\n");
 const ZIP = Uint8Array.from([0x50, 0x4b, 0x03, 0x04, 0x00, 0x00]);
 
 async function streamBytes(body) {
   return new Uint8Array(await new Response(body).arrayBuffer());
+}
+
+function readStoredZipEntries(bytes) {
+  const entries = new Map();
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  let offset = 0;
+  while (offset + 30 <= bytes.byteLength && view.getUint32(offset, true) === 0x04034b50) {
+    assert.equal(view.getUint16(offset + 8, true), 0, "fixture expects stored ZIP entries");
+    const size = view.getUint32(offset + 18, true);
+    const nameLength = view.getUint16(offset + 26, true);
+    const extraLength = view.getUint16(offset + 28, true);
+    const nameStart = offset + 30;
+    const dataStart = nameStart + nameLength + extraLength;
+    const path = new TextDecoder().decode(bytes.subarray(nameStart, nameStart + nameLength));
+    entries.set(path, bytes.slice(dataStart, dataStart + size));
+    offset = dataStart + size;
+  }
+  return entries;
 }
 
 function streamingProbeObjectStore() {
@@ -661,6 +704,8 @@ test("arbitrary opaque formats stage and commit atomically with bounded safe med
     ["assets/book.epub", "application/epub+zip", Uint8Array.from([...ZIP, 2]), "application/epub+zip"],
     ["assets/audio.opus", "audio/ogg", new TextEncoder().encode("OggS\0OpusHead"), "audio/ogg"],
     ["assets/page.html", "text/html; charset=UTF-8", new TextEncoder().encode("<!doctype html><p>opaque</p>"), "text/html"],
+    ["assets/table.csv", "text/csv", new TextEncoder().encode("name,value\nalpha,1\n"), "application/octet-stream"],
+    ["assets/data.json", "application/json", new TextEncoder().encode("{\"value\":1}"), "application/octet-stream"],
     ["assets/notebook.ipynb", "application/x-ipynb+json", new TextEncoder().encode("{\"cells\":[]}"), "application/x-ipynb+json"],
     ["assets/archive.zip", "application/zip", ZIP, "application/zip"],
     ["assets/unknown.custom", "application/x-mind-diary-test", Uint8Array.of(0, 1, 2, 3), "application/octet-stream"],
@@ -836,12 +881,26 @@ test("Markdown BundleFile references validate the atomic resulting revision", as
 
 test("BundleFile dev smoke preserves exact bytes, history, exports, and reconstructed state", async () => {
   const env = await harness();
-  const stagedFiles = [];
-  for (const [path, mediaType, bytes] of [
+  const opaqueFixtures = [
     ["assets/diagram.png", "image/png", PNG],
+    ["assets/photo.jpg", "image/jpeg", JPEG],
+    ["assets/animation.gif", "image/gif", GIF],
+    ["assets/preview.webp", "image/webp", WEBP],
+    ["assets/spoofed.png", "image/png", MALFORMED_PNG],
     ["assets/справка.pdf", "application/pdf", PDF],
+    ["assets/document.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", Uint8Array.from([...ZIP, 1])],
+    ["assets/photo.heic", "image/heic", Uint8Array.from([0, 0, 0, 24, 0x66, 0x74, 0x79, 0x70, 0x68, 0x65, 0x69, 0x63])],
+    ["assets/book.epub", "application/epub+zip", Uint8Array.from([...ZIP, 2])],
+    ["assets/audio.opus", "audio/ogg", new TextEncoder().encode("OggS\0OpusHead")],
+    ["assets/page.html", "text/html", new TextEncoder().encode("<!doctype html><p>opaque</p>")],
+    ["assets/table.csv", "text/csv", new TextEncoder().encode("name,value\nalpha,1\n")],
+    ["assets/data.json", "application/json", new TextEncoder().encode("{\"value\":1}")],
+    ["assets/notebook.ipynb", "application/x-ipynb+json", new TextEncoder().encode("{\"cells\":[]}")],
     ["assets/archive.zip", "application/zip", ZIP],
-  ]) {
+    ["assets/unknown.bin", "application/x-mind-diary-test", Uint8Array.of(0, 1, 2, 3)],
+  ];
+  const stagedFiles = [];
+  for (const [path, mediaType, bytes] of opaqueFixtures) {
     const staged = await env.staging.stage({
       actor: env.currentActor,
       spaceId: MINDS.ordinary.spaceId,
@@ -852,7 +911,7 @@ test("BundleFile dev smoke preserves exact bytes, history, exports, and reconstr
       idempotencyKey: `stage-download-${path}`,
     });
     assert.equal(staged.kind, "staged");
-    stagedFiles.push({ path, staged });
+    stagedFiles.push({ path, bytes, staged });
   }
   const commits = new ChangesetCommitService({
     authorizer: env.authorizer,
@@ -897,6 +956,22 @@ test("BundleFile dev smoke preserves exact bytes, history, exports, and reconstr
   const crypto = await createWebCryptoExportDownloadSecretCrypto({
     verifierKey: new Uint8Array(32).fill(23),
   });
+  let bundleFileOpens = 0;
+  const observedDownloadObjects = new Proxy(env.objects, {
+    get(target, property) {
+      if (property === "openBundleFile") {
+        return async (...args) => {
+          bundleFileOpens += 1;
+          return target.openBundleFile(...args);
+        };
+      }
+      const value = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  const resetBundleFileOpens = () => {
+    bundleFileOpens = 0;
+  };
   const discoveryStore = new Proxy(env.metadata, {
     get(target, property) {
       if (property === "readResolvedSpace") {
@@ -949,7 +1024,7 @@ test("BundleFile dev smoke preserves exact bytes, history, exports, and reconstr
   };
   const service = new BundleFileDownloadService({
     store: discoveryStore,
-    objects: env.objects,
+    objects: observedDownloadObjects,
     authorizer: env.authorizer,
     host: verifiedSpaceHost("mind-diary.test"),
     clock: { now: () => LATER },
@@ -977,7 +1052,7 @@ test("BundleFile dev smoke preserves exact bytes, history, exports, and reconstr
   });
   const issuingService = new BundleFileDownloadService({
     store: discoveryStore,
-    objects: env.objects,
+    objects: observedDownloadObjects,
     authorizer: env.authorizer,
     host: verifiedSpaceHost("mind-diary.test"),
     clock: { now: () => FIXED_NOW },
@@ -990,12 +1065,41 @@ test("BundleFile dev smoke preserves exact bytes, history, exports, and reconstr
     path: "assets/diagram.png",
   });
   assert.equal(issuedByApplication.downloadExpiresAt, "2026-08-06T12:01:00.000Z");
+  assert.equal(issuedByApplication.file.inlineEligible, true);
+  assert.equal(issuedByApplication.disposition, "inline");
   assert.doesNotMatch(JSON.stringify(issuedByApplication.file), /bytes|url|provider/iu);
   const applicationSecret = new URL(issuedByApplication.downloadUrl).pathname.split("/").at(-1);
   const applicationDownload = await issuingService.download(serviceActor, applicationSecret);
   assert.equal(applicationDownload.kind, "download");
   assert.deepEqual(await streamBytes(applicationDownload.body), PNG);
+  const spoofedIssue = await issuingService.issue(env.currentActor, {
+    mind: MINDS.ordinary.spaceId,
+    revisionSelector: { kind: "revision", revisionId: REVISIONS.next.revisionId },
+    path: "assets/spoofed.png",
+  });
+  assert.equal(spoofedIssue.file.inlineEligible, false);
+  assert.equal(spoofedIssue.disposition, "attachment");
   env.metadata.setCurrentAuthorizationStateForTest(authorizationKey, authorizationState());
+
+  resetBundleFileOpens();
+  await assert.rejects(
+    issuingService.issue(env.currentActor, {
+      mind: MINDS.ordinary.spaceId,
+      path: "../assets/diagram.png",
+    }),
+    (error) => error?.code === "invalid_request",
+  );
+  await assert.rejects(
+    issuingService.issue(env.currentActor, {
+      mind: MINDS.personal.spaceId,
+      path: "assets/diagram.png",
+    }),
+    (error) => error?.code === "mind_not_found",
+  );
+  assert.deepEqual(await service.download(serviceActor, "foreign-download-secret"), {
+    kind: "not_found",
+  });
+  assert.equal(bundleFileOpens, 0);
 
   const pngEntry = committed.envelope.manifest.entries.find(
     (candidate) => candidate.path === "assets/diagram.png",
@@ -1016,17 +1120,30 @@ test("BundleFile dev smoke preserves exact bytes, history, exports, and reconstr
   assert.match(download.headers["Content-Disposition"], /^inline;/u);
   assert.equal(download.headers["Content-Security-Policy"], "sandbox");
 
-  for (const [path, expectedBytes] of [
-    ["assets/справка.pdf", PDF],
-    ["assets/archive.zip", ZIP],
-  ]) {
+  const inlinePaths = new Set([
+    "assets/diagram.png",
+    "assets/photo.jpg",
+    "assets/animation.gif",
+    "assets/preview.webp",
+  ]);
+  const additionalDownloadFixtures = stagedFiles.filter(({ path }) => path !== "assets/diagram.png");
+  for (const { path, bytes: expectedBytes } of additionalDownloadFixtures) {
     const entry = committed.envelope.manifest.entries.find(
       (candidate) => candidate.path === path,
     );
     const result = await service.download(serviceActor, await issueDirectGrant(entry));
     assert.equal(result.kind, "download");
     assert.deepEqual(await streamBytes(result.body), expectedBytes);
-    assert.match(result.headers["Content-Disposition"], /^attachment;/u);
+    assert.match(
+      result.headers["Content-Disposition"],
+      inlinePaths.has(path) ? /^inline;/u : /^attachment;/u,
+    );
+    assert.equal(result.headers["X-Content-Type-Options"], "nosniff");
+    assert.equal(result.headers["Cache-Control"], "no-store");
+    assert.equal(
+      result.headers["Content-Security-Policy"],
+      inlinePaths.has(path) ? "sandbox" : undefined,
+    );
     assert.doesNotMatch(result.headers["Content-Disposition"], /\r|\n/u);
     if (path.includes("справка")) {
       assert.match(result.headers["Content-Disposition"], /filename\*=UTF-8''/u);
@@ -1039,10 +1156,12 @@ test("BundleFile dev smoke preserves exact bytes, history, exports, and reconstr
     ...authorizationState(),
     token: { ...authorizationState().token, state: "revoked" },
   });
+  resetBundleFileOpens();
   assert.deepEqual(
     await service.download(serviceActor, revokedSecret),
     { kind: "not_found" },
   );
+  assert.equal(bundleFileOpens, 0);
 
   env.metadata.setCurrentAuthorizationStateForTest(authorizationKey, authorizationState());
   const unauthorizedSecret = await issueDirectGrant(pngEntry);
@@ -1050,26 +1169,30 @@ test("BundleFile dev smoke preserves exact bytes, history, exports, and reconstr
     ...authorizationState(),
     membership: null,
   });
+  resetBundleFileOpens();
   assert.deepEqual(
     await service.download(serviceActor, unauthorizedSecret),
     { kind: "not_found" },
   );
+  assert.equal(bundleFileOpens, 0);
 
   env.metadata.setCurrentAuthorizationStateForTest(authorizationKey, authorizationState());
   const expiredSecret = await issueDirectGrant(pngEntry);
   const expiredService = new BundleFileDownloadService({
     store: env.metadata,
-    objects: env.objects,
+    objects: observedDownloadObjects,
     authorizer: env.authorizer,
     host: verifiedSpaceHost("mind-diary.test"),
     clock: { now: () => "2026-08-05T13:06:00.000Z" },
     secrets: crypto,
     downloadUrlBase: "https://mind-diary.test/api/bundle-download",
   });
+  resetBundleFileOpens();
   assert.deepEqual(
     await expiredService.download(serviceActor, expiredSecret),
     { kind: "not_found" },
   );
+  assert.equal(bundleFileOpens, 0);
 
   const replacement = await env.staging.stage({
     actor: env.currentActor,
@@ -1164,6 +1287,27 @@ test("BundleFile dev smoke preserves exact bytes, history, exports, and reconstr
   });
   assert.deepEqual(secondBundleExport.bytes, firstBundleExport.bytes);
   assert.equal(secondBundleExport.sha256, firstBundleExport.sha256);
+  const currentExportEntries = readStoredZipEntries(firstBundleExport.bytes);
+  for (const { path, bytes } of stagedFiles) {
+    if (path === "assets/archive.zip") {
+      assert.equal(currentExportEntries.has(path), false);
+    } else {
+      assert.deepEqual(
+        currentExportEntries.get(path),
+        path === "assets/diagram.png" ? PNG_REPLACEMENT : bytes,
+        path,
+      );
+    }
+  }
+  const historicalBundleExport = await exporter.exportExactRevision({
+    spaceId: MINDS.ordinary.spaceId,
+    revisionId: REVISIONS.next.revisionId,
+    profile: "MD-BUNDLE-ZIP-1",
+  });
+  const historicalExportEntries = readStoredZipEntries(historicalBundleExport.bytes);
+  for (const { path, bytes } of stagedFiles) {
+    assert.deepEqual(historicalExportEntries.get(path), bytes, path);
+  }
   const legacyExport = await exporter.exportExactRevision({
     spaceId: MINDS.ordinary.spaceId,
     revisionId: REVISIONS.initial.revisionId,
@@ -1196,14 +1340,16 @@ test("BundleFile dev smoke preserves exact bytes, history, exports, and reconstr
     (await env.metadata.listBundleFileDownloadGrantsForTest()).filter(
       (grant) => grant.state === "consumed",
     ).length,
-    4,
+    2 + additionalDownloadFixtures.length,
   );
   await env.metadata.purgeSpaceTargetRecords(MINDS.ordinary.spaceId);
   assert.deepEqual(await env.metadata.listBundleFileDownloadGrantsForTest(), []);
+  resetBundleFileOpens();
   assert.deepEqual(
     await service.download(serviceActor, deletedSecret),
     { kind: "not_found" },
   );
+  assert.equal(bundleFileOpens, 0);
 });
 
 test("staging verifies image, PDF and ZIP metadata and fails closed on foreign or expired reuse", async () => {
