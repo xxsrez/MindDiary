@@ -385,7 +385,6 @@ test("successful web activity can run after the response through host deferral",
     csrf: { issue: () => "csrf-deferred-activity", verify: () => true },
     control: { execute() { throw new Error("must not execute"); } },
     activity: { recordSuccessful() { return pendingActivity; } },
-    activityCoalesceWindowMs: 0,
   });
 
   const response = await handler(

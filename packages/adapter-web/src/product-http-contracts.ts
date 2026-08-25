@@ -271,6 +271,6 @@ export interface ProductWebHttpHandlerDependencies {
   readonly mindBindings?: ProductWebMindBindings;
   readonly activity?: ProductWebActivityRecorder;
   readonly performance?: ProductWebPerformanceRecorder;
-  /** Bounded hosted-only coalescing window; direct/local calls remain synchronous. */
+  /** Optional hosted-only coalescing window; defaults to zero to protect navigation latency. */
   readonly activityCoalesceWindowMs?: number;
 }

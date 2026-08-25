@@ -297,6 +297,10 @@ KnowledgeSpace membership. Operator read model joins только metadata/token
 compact success-only web/MCP activity summary, никогда не читает canonical
 objects или derived search corpus. Details и privacy/deletion contract — в
 [accepted operator specification](specs/service-operator-directory.md).
+Hosted web activity сохраняется через request-scoped best-effort deferral без
+искусственного debounce по умолчанию: observational write не должен добавлять
+1,5 секунды к Worker lifetime каждого page transition. Явное bounded coalescing
+остаётся opt-in для профилей, где экономия writes важнее navigation latency.
 
 ### MCP personal access tokens
 

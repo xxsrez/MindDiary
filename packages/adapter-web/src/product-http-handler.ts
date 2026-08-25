@@ -74,7 +74,11 @@ export function createProductWebHttpHandler(
   deferActivity?: ProductWebActivityDeferrer,
 ) => Promise<Response | null> {
   const origin = canonicalOrigin(dependencies.applicationOrigin);
-  const activityCoalesceWindowMs = dependencies.activityCoalesceWindowMs ?? 1_500;
+  // A hosted waitUntil contributes to the Worker lifetime observed by Sites.
+  // Keep the default activity write deferred, but never hold navigation open
+  // purely to debounce observational metadata. Callers that value write
+  // coalescing over latency can still opt into a bounded window explicitly.
+  const activityCoalesceWindowMs = dependencies.activityCoalesceWindowMs ?? 0;
   if (
     !Number.isSafeInteger(activityCoalesceWindowMs) ||
     activityCoalesceWindowMs < 0 || activityCoalesceWindowMs > 2_000
