@@ -102,7 +102,9 @@ export class RequestRecoveryCoordinator {
     if (!candidate || response.status >= 500) return response;
 
     if (slot.inFlight !== null) {
-      options.waitUntil(slot.inFlight.catch(() => undefined));
+      // The request that started the flight already owns its waitUntil. Reusing
+      // that promise here makes every navigation during maintenance inherit the
+      // remaining Worker lifetime even though its foreground response is ready.
       return response;
     }
     if (this.#now() < slot.nextEligibleAt) return response;

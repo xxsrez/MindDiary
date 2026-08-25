@@ -699,6 +699,9 @@ explicit target Mind. General cross-Mind search/synthesis требует нов�
   transitions, но materialized snapshot checkpoint-ятся с cadence 16: один
   request-triggered empty scan больше не переписывает весь metadata snapshot
   дважды непосредственно перед следующим foreground navigation.
+  Recovery flight принадлежит только тому Worker request context, который его
+  запустил: последующие document navigation не регистрируют уже активный
+  background promise в собственном `waitUntil` и не наследуют его wall time.
   Внутри adapter-provided immutable read-session batch list использует один
   authorization-state pass; второй TOCTOU pass нужен только там, где между
   metadata reads действительно возможна mutation race.

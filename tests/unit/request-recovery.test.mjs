@@ -181,12 +181,38 @@ test("a slow recovery starts only after foreground and never delays its response
   await Promise.resolve();
   await Promise.resolve();
   assert.deepEqual(order, ["foreground-start", "foreground-complete", "recovery-start"]);
+
+  const secondResponse = await coordinator.respond({
+    request: new Request(`${ORIGIN}/me`, {
+      headers: { accept: "text/html", "user-agent": "Mobile Safari" },
+    }),
+    environment,
+    fingerprint: "deployment-a",
+    foreground: async () => {
+      order.push("second-foreground-complete");
+      return new Response("my mind");
+    },
+    recover: async () => {
+      throw new Error("an active recovery flight must be reused");
+    },
+    waitUntil: (promise) => background.push(promise),
+  });
+  assert.equal(await secondResponse.text(), "my mind");
+  assert.equal(background.length, 1);
+  assert.deepEqual(order, [
+    "foreground-start",
+    "foreground-complete",
+    "recovery-start",
+    "second-foreground-complete",
+  ]);
+
   releaseRecovery();
   await background[0];
   assert.deepEqual(order, [
     "foreground-start",
     "foreground-complete",
     "recovery-start",
+    "second-foreground-complete",
     "recovery-complete",
   ]);
 });
