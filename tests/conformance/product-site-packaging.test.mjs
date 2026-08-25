@@ -55,7 +55,7 @@ test("product Worker owns the operable UI and scopes the one-time Bearer to MCP 
   ]);
   assert.match(http, /renderAuthenticatedOnboardingDocument/);
   assert.match(http, /renderMindDiaryUiShellDocument/);
-  assert.match(http, /renderMcpTokenManagementDocument/);
+  assert.match(http, /renderAdvancedMcpPageDocument/);
   assert.match(http, /\/settings\/mcp/);
   assert.match(http, /pathname === "\/favicon\.ico"/u);
   assert.match(http, /pathname === "\/favicon\.svg"/u);
