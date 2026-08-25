@@ -572,9 +572,9 @@ const BUNDLE_FILE_DESCRIPTOR_SCHEMA = Object.freeze({
     kind: Object.freeze({ const: "opaque" }),
     media_type: Object.freeze({
       type: "string",
-      enum: Object.freeze([
-        "image/png", "image/jpeg", "image/gif", "image/webp", "application/pdf", "application/zip",
-      ]),
+      minLength: 3,
+      maxLength: 127,
+      pattern: "^[!#$%&'*+.^_`|~0-9a-z-]+/[!#$%&'*+.^_`|~0-9a-z-]+$",
     }),
     size: Object.freeze({ type: "integer", minimum: 0 }),
     sha256: SHA256_SCHEMA,

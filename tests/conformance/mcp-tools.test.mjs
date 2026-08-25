@@ -223,6 +223,14 @@ test("schemas require one explicit Mind and one revision selector shape", () => 
     JSON.stringify(definitions.get("list_bundle_files").outputSchema),
     /download_url|bytes|provider|object_key/iu,
   );
+  const listedMediaType = definitions.get("list_bundle_files")
+    .outputSchema.properties.data.properties.files.items.properties.media_type;
+  assert.equal(listedMediaType.enum, undefined);
+  assert.equal(listedMediaType.maxLength, 127);
+  assert.equal(
+    listedMediaType.pattern,
+    "^[!#$%&'*+.^_`|~0-9a-z-]+/[!#$%&'*+.^_`|~0-9a-z-]+$",
+  );
   assert.deepEqual(
     Object.keys(definitions.get("fetch").inputSchema.properties),
     ["id"],
