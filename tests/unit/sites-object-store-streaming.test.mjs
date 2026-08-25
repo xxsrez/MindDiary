@@ -99,6 +99,17 @@ class PreflightBlindCollisionBucket extends StreamingBucket {
   }
 }
 
+class CorruptingPersistedBucket extends StreamingBucket {
+  async put(key, value, options = {}) {
+    const stored = await super.put(key, value, options);
+    const record = this.records.get(key);
+    if (stored !== null && key.startsWith("staged-bundle-files/") && record?.bytes.length > 0) {
+      record.bytes[0] ^= 0xff;
+    }
+    return stored;
+  }
+}
+
 async function settlesWithin(operation, milliseconds = 250) {
   let timer;
   try {
@@ -170,6 +181,25 @@ test("Sites staged generated writer aborts partial streams without publication",
   await upload.abort();
   assert.equal(bucket.records.size, 0);
   assert.equal(await objects.getStagedBundleFile("staged_stream_abort"), null);
+});
+
+test("Sites staged completion rejects and removes persisted digest corruption", async () => {
+  const bucket = new CorruptingPersistedBucket();
+  const objects = await createSitesObjectStore(bucket);
+  const upload = await objects.beginStagedBundleFileUpload({
+    stagedFileId: "staged_stream_corrupt",
+    bindingOwnerId: "binding_owner_test",
+    spaceId: "space_stream_test",
+    createdAt: CREATED_AT,
+    maxBytes: 64,
+  });
+  await upload.write(PNG);
+  const sha256 = await objects.calculateSha256(PNG);
+  await assert.rejects(
+    upload.complete({ sha256, size: PNG.byteLength }),
+    (error) => error?.code === "object_tampered",
+  );
+  assert.equal(bucket.records.has("staged-bundle-files/staged_stream_corrupt"), false);
 });
 
 test("Sites promotion and canonical open use R2 body streams without arrayBuffer", async () => {

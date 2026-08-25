@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { InMemoryObjectStore } from "@mind-diary/adapter-object-memory";
 import {
@@ -213,6 +214,16 @@ test("streamed exact export is byte-identical while reading only one immutable f
   assert.equal(streamed.size, bounded.size);
   assert.equal(peakReads, 1);
   assert.ok(maxChunk <= 1_048_576);
+});
+
+test("streamed export keeps one contract-bounded Markdown file and never concatenates stream chunks", async () => {
+  const source = await readFile(
+    new URL("../../packages/application-content/src/deterministic-export.ts", import.meta.url),
+    "utf8",
+  );
+  assert.match(source, /MAX_EXPORT_MARKDOWN_FILE_BYTES = 1_048_576/u);
+  assert.match(source, /entry\.kind === "markdown"[\s\S]{0,160}#inspectBoundedMarkdownFile/u);
+  assert.doesNotMatch(source, /markdownChunks|markdownBytes\.set\(/u);
 });
 
 test("invalid request and full-bundle validation failures are stable and produce no digest", async () => {

@@ -656,17 +656,17 @@ test("server-generated staged ID collision preserves the foreign object", async 
 test("arbitrary opaque formats stage and commit atomically with bounded safe media fallback", async () => {
   const env = await harness();
   const fixtures = [
-    ["assets/document.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", Uint8Array.from([...ZIP, 1])],
-    ["assets/photo.heic", "image/heic", Uint8Array.from([0, 0, 0, 24, 0x66, 0x74, 0x79, 0x70])],
-    ["assets/book.epub", "application/epub+zip", Uint8Array.from([...ZIP, 2])],
-    ["assets/audio.opus", "audio/ogg", new TextEncoder().encode("OggS\0OpusHead")],
-    ["assets/page.html", "text/html; charset=UTF-8", new TextEncoder().encode("<!doctype html><p>opaque</p>")],
-    ["assets/notebook.ipynb", "application/x-ipynb+json", new TextEncoder().encode("{\"cells\":[]}")],
-    ["assets/archive.zip", "application/zip", ZIP],
-    ["assets/unknown.custom", "application/x-mind-diary-test", Uint8Array.of(0, 1, 2, 3)],
+    ["assets/document.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", Uint8Array.from([...ZIP, 1]), "application/vnd.openxmlformats-officedocument.wordprocessingml.document"],
+    ["assets/photo.heic", "image/heic", Uint8Array.from([0, 0, 0, 24, 0x66, 0x74, 0x79, 0x70, 0x68, 0x65, 0x69, 0x63]), "image/heic"],
+    ["assets/book.epub", "application/epub+zip", Uint8Array.from([...ZIP, 2]), "application/epub+zip"],
+    ["assets/audio.opus", "audio/ogg", new TextEncoder().encode("OggS\0OpusHead"), "audio/ogg"],
+    ["assets/page.html", "text/html; charset=UTF-8", new TextEncoder().encode("<!doctype html><p>opaque</p>"), "text/html"],
+    ["assets/notebook.ipynb", "application/x-ipynb+json", new TextEncoder().encode("{\"cells\":[]}"), "application/x-ipynb+json"],
+    ["assets/archive.zip", "application/zip", ZIP, "application/zip"],
+    ["assets/unknown.custom", "application/x-mind-diary-test", Uint8Array.of(0, 1, 2, 3), "application/octet-stream"],
   ];
   const staged = [];
-  for (const [path, claimedMediaType, bytes] of fixtures) {
+  for (const [path, claimedMediaType, bytes, expectedMediaType] of fixtures) {
     const result = await env.staging.stage({
       actor: env.currentActor,
       spaceId: MINDS.ordinary.spaceId,
@@ -677,15 +677,26 @@ test("arbitrary opaque formats stage and commit atomically with bounded safe med
       idempotencyKey: `stage-arbitrary-${path}`,
     });
     assert.equal(result.kind, "staged", path);
+    assert.equal(result.record.mediaType, expectedMediaType, path);
     staged.push({ path, bytes, result });
   }
-  assert.equal(
-    staged.find(({ path }) => path.endsWith("archive.zip")).result.record.mediaType,
-    "application/zip",
-  );
-  assert.ok(staged
-    .filter(({ path }) => !path.endsWith("archive.zip"))
-    .every(({ result }) => result.record.mediaType === "application/octet-stream"));
+  for (const [displayFilename, claimedMediaType, bytes] of [
+    ["missing.html", undefined, new TextEncoder().encode("<!doctype html>")],
+    ["invalid.html", "text/html\r\nx-injected: yes", new TextEncoder().encode("<!doctype html>")],
+    ["conflict.html", "text/html", PNG],
+  ]) {
+    const fallback = await env.staging.stage({
+      actor: env.currentActor,
+      spaceId: MINDS.ordinary.spaceId,
+      writeBindingId: WRITE_BINDING_ID,
+      displayFilename,
+      claimedMediaType,
+      bytes,
+      idempotencyKey: `stage-advisory-fallback-${displayFilename}`,
+    });
+    assert.equal(fallback.kind, "staged", displayFilename);
+    assert.equal(fallback.record.mediaType, "application/octet-stream", displayFilename);
+  }
 
   const commits = new ChangesetCommitService({
     authorizer: env.authorizer,

@@ -168,6 +168,8 @@ const ZIP_END_SIZE = 22;
 const ZIP_UINT16_MAX = 0xffff;
 const ZIP_UINT32_MAX = 0xffffffff;
 const EXPORT_STREAM_CHUNK_BYTES = 1_048_576;
+/** Canonical Markdown is already limited to 1 MiB; export retains at most one file for OKF parsing. */
+const MAX_EXPORT_MARKDOWN_FILE_BYTES = 1_048_576;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -820,7 +822,9 @@ export class DeterministicOkfExportService {
         );
       }
       const inspected = entry.generatedBytes === null
-        ? await this.#inspectStreamedFile(parsed.spaceId, parsed.revisionId, entry)
+        ? entry.kind === "markdown"
+          ? await this.#inspectBoundedMarkdownFile(parsed.spaceId, parsed.revisionId, entry)
+          : await this.#inspectStreamedFile(parsed.spaceId, parsed.revisionId, entry)
         : Object.freeze({
             crc32: calculateCrc32(entry.generatedBytes),
             markdownBytes: entry.generatedBytes,
@@ -963,7 +967,6 @@ export class DeterministicOkfExportService {
     const reader = file.body.getReader();
     const sha = new IncrementalSha256();
     const crc = new IncrementalCrc32();
-    const markdownChunks: Uint8Array[] = [];
     let size = 0;
     try {
       while (true) {
@@ -976,7 +979,6 @@ export class DeterministicOkfExportService {
         size += part.value.byteLength;
         sha.update(part.value);
         crc.update(part.value);
-        if (entry.kind === "markdown") markdownChunks.push(new Uint8Array(part.value));
       }
     } finally {
       reader.releaseLock();
@@ -984,16 +986,48 @@ export class DeterministicOkfExportService {
     if (size !== entry.size || sha.digest() !== entry.sha256) {
       throw new OkfExportError("revision_integrity_failure", "streamed revision object differs from its immutable manifest");
     }
-    let markdownBytes: Uint8Array | null = null;
-    if (entry.kind === "markdown") {
-      markdownBytes = new Uint8Array(size);
-      let offset = 0;
-      for (const chunk of markdownChunks) {
-        markdownBytes.set(chunk, offset);
-        offset += chunk.byteLength;
-      }
+    return Object.freeze({ crc32: crc.digest(), markdownBytes: null });
+  }
+
+  async #inspectBoundedMarkdownFile(
+    spaceId: SpaceId,
+    revisionId: RevisionId,
+    entry: Readonly<Pick<StreamedZipEntry, "path" | "kind" | "mediaType" | "sha256" | "size">>,
+  ): Promise<Readonly<{ crc32: number; markdownBytes: Uint8Array }>> {
+    if (this.#streamReader === null || entry.size > MAX_EXPORT_MARKDOWN_FILE_BYTES) {
+      throw new OkfExportError(
+        "revision_integrity_failure",
+        "canonical Markdown exceeds the bounded export validation limit",
+      );
     }
-    return Object.freeze({ crc32: crc.digest(), markdownBytes });
+    let file: Awaited<ReturnType<ExactRevisionStreamReader["readRevisionFile"]>>;
+    try {
+      file = await this.#streamReader.readRevisionFile(spaceId, revisionId, entry.path);
+    } catch (error) {
+      mapMaterializationFailure(error);
+    }
+    const kind = file?.kind ?? "markdown";
+    if (
+      file === null || kind !== "markdown" || entry.kind !== "markdown" ||
+      file.path !== entry.path || file.mediaType !== entry.mediaType ||
+      file.sha256 !== entry.sha256 || file.size !== entry.size ||
+      !(file.bytes instanceof Uint8Array) || file.bytes.byteLength !== entry.size
+    ) throw new OkfExportError(
+      "revision_integrity_failure",
+      "bounded Markdown object differs from its immutable manifest",
+    );
+    const digest = new IncrementalSha256();
+    digest.update(file.bytes);
+    if (digest.digest() !== entry.sha256) {
+      throw new OkfExportError(
+        "revision_integrity_failure",
+        "bounded Markdown object differs from its immutable manifest",
+      );
+    }
+    return Object.freeze({
+      crc32: calculateCrc32(file.bytes),
+      markdownBytes: file.bytes,
+    });
   }
 
   async #emitStreamedFile(

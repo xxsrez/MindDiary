@@ -39,6 +39,7 @@ import {
   type ObjectCleanupNamespace,
   type ObjectCleanupPage,
 } from "@mind-diary/application-ports";
+import { IncrementalSha256 } from "./incremental-sha256.js";
 
 export const SITES_OBJECT_ADAPTER = "sites-r2-immutable-envelope" as const;
 
@@ -296,6 +297,31 @@ async function bodyBytes(object: R2ObjectBodyLike): Promise<Uint8Array> {
 
 function bodyStream(object: R2ObjectBodyLike): ReadableStream<Uint8Array> {
   return object.body;
+}
+
+async function verifyBodyStream(
+  body: ReadableStream<Uint8Array>,
+  expectedSize: number,
+  expectedSha256: Digest,
+): Promise<boolean> {
+  const reader = body.getReader();
+  const digest = new IncrementalSha256();
+  let size = 0;
+  try {
+    while (true) {
+      const part = await reader.read();
+      if (part.done) break;
+      if (!(part.value instanceof Uint8Array) || size + part.value.byteLength > expectedSize) {
+        await reader.cancel().catch(() => undefined);
+        return false;
+      }
+      size += part.value.byteLength;
+      digest.update(part.value);
+    }
+    return size === expectedSize && digest.digest() === expectedSha256;
+  } finally {
+    reader.releaseLock();
+  }
 }
 
 
@@ -905,6 +931,15 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
           if (outcome.object.size !== expectedSize) {
             throw new ObjectStoreFailure("object_tampered", "staged upload size mismatch");
           }
+          const persisted = await this.#get(key);
+          if (
+            persisted === null || persisted.etag !== outcome.object.etag ||
+            this.#stagedBundleMetadata(persisted).size !== expectedSize ||
+            !(await verifyBodyStream(persisted.body, expectedSize, sha256))
+          ) throw new ObjectStoreFailure(
+            "object_tampered",
+            "persisted staged upload failed digest verification",
+          );
           completed = true;
           return Object.freeze({
             stagedFileId: request.stagedFileId,

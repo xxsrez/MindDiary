@@ -138,7 +138,23 @@ const EXTENSIONS: Readonly<Record<string, readonly string[]>> = Object.freeze({
   "image/webp": Object.freeze([".webp"]),
   "application/pdf": Object.freeze([".pdf"]),
   "application/zip": Object.freeze([".zip"]),
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document": Object.freeze([".docx"]),
+  "image/heic": Object.freeze([".heic", ".heif"]),
+  "application/epub+zip": Object.freeze([".epub"]),
+  "audio/ogg": Object.freeze([".ogg", ".opus"]),
+  "audio/opus": Object.freeze([".opus"]),
+  "text/html": Object.freeze([".html", ".htm"]),
+  "application/x-ipynb+json": Object.freeze([".ipynb"]),
 });
+const ZIP_CONTAINER_MEDIA_TYPES = new Set<BundleFileMediaType>([
+  "application/zip",
+  "application/epub+zip",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+]);
+const EXTENSION_ADVISORY_MEDIA_TYPES = new Set<BundleFileMediaType>([
+  "text/html",
+  "application/x-ipynb+json",
+]);
 
 function startsWith(bytes: Uint8Array, signature: readonly number[]): boolean {
   return signature.every((value, index) => bytes[index] === value);
@@ -167,6 +183,17 @@ export function detectBundleFileMediaType(bytes: Uint8Array): BundleFileMediaTyp
     bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50
   ) return "image/webp";
   if (startsWith(bytes, [0x25, 0x50, 0x44, 0x46, 0x2d])) return "application/pdf";
+  if (
+    bytes.byteLength >= 12 &&
+    bytes[4] === 0x66 && bytes[5] === 0x74 && bytes[6] === 0x79 && bytes[7] === 0x70 &&
+    ((bytes[8] === 0x68 && bytes[9] === 0x65 && bytes[10] === 0x69) ||
+      (bytes[8] === 0x6d && bytes[9] === 0x69 && bytes[10] === 0x66))
+  ) return "image/heic";
+  if (
+    startsWith(bytes, [0x4f, 0x67, 0x67, 0x53]) &&
+    new TextDecoder("ascii").decode(bytes.subarray(0, Math.min(bytes.byteLength, 512)))
+      .includes("OpusHead")
+  ) return "audio/ogg";
   if (
     startsWith(bytes, [0x50, 0x4b, 0x03, 0x04]) ||
     startsWith(bytes, [0x50, 0x4b, 0x05, 0x06]) ||
@@ -198,13 +225,24 @@ function canonicalDetectedMedia(
   claimed: string | undefined,
   displayFilename: string,
 ): BundleFileMediaType {
-  if (detected === null) return "application/octet-stream" as BundleFileMediaType;
-  if (claimed !== undefined && bundleFileMediaType(claimed) !== detected) {
-    return "application/octet-stream" as BundleFileMediaType;
+  const fallback = "application/octet-stream";
+  const advisory = claimed === undefined ? null : bundleFileMediaType(claimed);
+  const advisoryKnown = advisory !== null && advisory !== fallback &&
+    extensionMatches(displayFilename, advisory);
+  if (detected === null) {
+    return advisoryKnown && EXTENSION_ADVISORY_MEDIA_TYPES.has(advisory)
+      ? advisory
+      : fallback;
   }
-  return extensionMatches(displayFilename, detected)
-    ? detected
-    : "application/octet-stream" as BundleFileMediaType;
+  if (detected === "application/zip") {
+    if (advisoryKnown && ZIP_CONTAINER_MEDIA_TYPES.has(advisory)) return advisory;
+    return advisory === null && extensionMatches(displayFilename, detected)
+      ? detected
+      : fallback;
+  }
+  if (!extensionMatches(displayFilename, detected)) return fallback;
+  if (advisory !== null && advisory !== detected) return fallback;
+  return detected;
 }
 
 type StageInvalid = Extract<StageBundleFileResult, { readonly kind: "invalid" }>;

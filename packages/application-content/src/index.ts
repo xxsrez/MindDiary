@@ -915,7 +915,6 @@ export class CanonicalRevisionCoordinator {
     }
     const materialized = await this.readRevisionFile(spaceId, revisionId, path);
     if (materialized === null || materialized.kind !== "markdown") return null;
-    const bytes = new Uint8Array(materialized.bytes);
     return Object.freeze({
       kind: "markdown" as const,
       path,
@@ -924,7 +923,7 @@ export class CanonicalRevisionCoordinator {
       size: materialized.size,
       body: new ReadableStream<Uint8Array>({
         start(controller) {
-          controller.enqueue(bytes);
+          controller.enqueue(materialized.bytes);
           controller.close();
         },
       }),
