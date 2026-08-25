@@ -390,11 +390,11 @@ navigation и active state. Profile entrypoint ведёт на `/settings/accoun
 Help остаётся достижимым из footer. Hosted environment явно маркируется как
 `UAT`; историческое live evidence 2026-08-09 не делает его production.
 
-Home, `/minds`, `/public`, `/invitations` и account danger zone не блокируют
+Home, `/minds`, `/public`, `/invitations`, `/settings/connections` и account danger zone не блокируют
 первый document paint чтением тяжёлой control projection. Shell и loading-state
 строятся из уже проверенной session projection. Затем browser запрашивает
 соответственно `GET /api/v1/minds`, `GET /api/v1/public-minds`,
-`GET /api/v1/invitations-overview` или
+`GET /api/v1/invitations-overview`, `GET /api/v1/connections` или
 `GET /api/v1/account/deletion-impact`, безопасно заменяет только нужную
 collection/panel и сохраняет retry/error state без чтения content. Ответы этих
 endpoint-ов ограничены server-side allowlist UI-полями; browser-side validation

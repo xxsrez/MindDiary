@@ -1443,10 +1443,14 @@ test("Connections project and mutate exact credential access with presentation r
   const page = await handler(new Request(`${origin}/settings/connections`));
   assert.equal(page.status, 200);
   const html = await page.text();
-  assert.match(html, /Codex Marketplace/);
-  assert.match(html, /Can read/);
-  assert.match(html, /Can add and change/);
-  assert.match(html, new RegExp(`/settings/connections/${connectionRef}`));
+  assert.match(html, /Loading connections/);
+  assert.match(html, /data-connections-collection/);
+  assert.doesNotMatch(html, /Codex Marketplace|Can read|Can add and change/);
+  const collection = await handler(new Request(`${origin}/api/v1/connections`));
+  assert.equal(collection.status, 200);
+  const collectionBody = await collection.json();
+  assert.equal(collectionBody.data.items[0].client_name, "Codex Marketplace");
+  assert.equal(collectionBody.data.items[0].connection_ref, connectionRef);
   assert.doesNotMatch(html, /md_oauth_grant_internal_must_not_render|read-binding-|write-binding-|space_(?:personal|research)/);
 
   const detail = await handler(new Request(`${origin}/settings/connections/${connectionRef}`));

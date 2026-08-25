@@ -158,6 +158,17 @@ const handler = createProductWebHttpHandler({
       throw Object.assign(new Error("Unsupported browser fixture operation"), { code: "not_found" });
     },
   },
+  oauthConnections: {
+    async listPage() { return { items: [], nextCursor: null }; },
+    async read() { return null; },
+    async revoke() { return false; },
+  },
+  mindBindings: {
+    async list() { return []; },
+    async listResolved() { return []; },
+    async mutate() { throw new Error("unused"); },
+    async mutateResolved() { throw new Error("unused"); },
+  },
 });
 
 async function nodeRequest(request) {

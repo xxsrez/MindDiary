@@ -1267,43 +1267,10 @@ async function productUiDocument(input: {
     if (input.oauthConnections === undefined || input.mindBindings === undefined) {
       throw new TypeError("Connections projection is unavailable");
     }
-    try {
-      const page = await input.oauthConnections.listPage(
-        input.identity.actor.principalId,
-        input.listQuery ?? {},
-      );
-      if (page.items.length === 0) {
-        return withCsrfMeta(renderConnectionsPageDocument({
-          displayName: session.displayName,
-          collection: { kind: "empty" },
-        }), input.csrfToken);
-      }
-      const access = await safeBindingAccessByOwner(
-        input.control,
-        input.mindBindings,
-        input.identity.actor,
-        page.items.map((connection) => Object.freeze({
-          ownerId: connection.bindingOwnerId,
-          scopes: connection.scopes,
-          state: "active" as const,
-        })),
-      );
-      const items = page.items.map((connection) =>
-        safeConnectionListItem(connection, access.get(connection.bindingOwnerId)!));
-      return withCsrfMeta(renderConnectionsPageDocument({
-        displayName: session.displayName,
-        collection: {
-          kind: "ready",
-          items: Object.freeze(items),
-          nextCursor: page.nextCursor,
-        },
-      }), input.csrfToken);
-    } catch {
-      return withCsrfMeta(renderConnectionsPageDocument({
-        displayName: session.displayName,
-        collection: { kind: "error", message: "Reload to check current connection access." },
-      }), input.csrfToken);
-    }
+    return withCsrfMeta(renderConnectionsPageDocument({
+      displayName: session.displayName,
+      collection: { kind: "loading" },
+    }), input.csrfToken);
   }
 
   const connectionDetailMatch = /^\/settings\/connections\/([^/]+)$/u.exec(input.pathname);

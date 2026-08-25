@@ -49,6 +49,7 @@ export interface ConnectionDetail extends ConnectionListItem {
 }
 
 export type ConnectionsCollection =
+  | { readonly kind: "loading" }
   | { readonly kind: "ready"; readonly items: readonly ConnectionListItem[]; readonly nextCursor: string | null }
   | { readonly kind: "empty" }
   | { readonly kind: "error"; readonly message: string };
@@ -151,12 +152,14 @@ function renderConnectionCard(item: ConnectionListItem): string {
 
 export function renderConnectionsPageDocument(model: ConnectionsPageModel): string {
   let collection: string;
-  if (model.collection.kind === "error") {
-    collection = `<section class="md-state md-state--error" role="alert"><h2>Connections are unavailable</h2><p>${escapeUntrustedText(model.collection.message)}</p><a class="md-button md-button--secondary" href="/settings/connections">Try again</a></section>`;
+  if (model.collection.kind === "loading") {
+    collection = `<section class="md-state md-state--loading" aria-busy="true" data-connections-collection data-collection-state="loading"><h2>Loading connections</h2><p role="status" aria-live="polite">Opening current access…</p></section>`;
+  } else if (model.collection.kind === "error") {
+    collection = `<section class="md-state md-state--error" role="alert" data-connections-collection data-collection-state="error"><h2>Connections are unavailable</h2><p>${escapeUntrustedText(model.collection.message)}</p><a class="md-button md-button--secondary" href="/settings/connections">Try again</a></section>`;
   } else if (model.collection.kind === "empty") {
-    collection = `<section class="md-state md-state--empty"><h2>No active connections</h2><p>Install Mind Diary from the available Marketplace, then ask Codex to use one of your Minds. Codex will open the read consent when it first needs access.</p><a class="md-button md-button--primary" href="/help/codex">Open the three-step guide</a></section>`;
+    collection = `<section class="md-state md-state--empty" data-connections-collection data-collection-state="empty"><h2>No active connections</h2><p>Install Mind Diary from the available Marketplace, then ask Codex to use one of your Minds. Codex will open the read consent when it first needs access.</p><a class="md-button md-button--primary" href="/help/codex">Open the three-step guide</a></section>`;
   } else {
-    collection = `<section aria-labelledby="connections-heading"><h2 id="connections-heading">Active connections</h2><div class="md-token-grid">${model.collection.items.map(renderConnectionCard).join("")}</div>${nextLink("/settings/connections", model.collection.nextCursor, "Next connections")}</section>`;
+    collection = `<section aria-labelledby="connections-heading" data-connections-collection data-collection-state="ready"><h2 id="connections-heading">Active connections</h2><div class="md-token-grid">${model.collection.items.map(renderConnectionCard).join("")}</div>${nextLink("/settings/connections", model.collection.nextCursor, "Next connections")}</section>`;
   }
   return document("Connections", `<div class="md-shell" data-mind-diary-shell data-connections-page data-nav-open="false">
     <a class="md-skip-link" href="#main-content">Skip to main content</a>

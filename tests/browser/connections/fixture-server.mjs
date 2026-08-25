@@ -258,6 +258,31 @@ const server = createServer(async (request, response) => {
       return;
     }
 
+    if (url.pathname === "/api/v1/connections" && method === "GET") {
+      if (errorFixture) {
+        json(response, 503, { error: { code: "operation_failed", message: "Fixture failure." } });
+        return;
+      }
+      const result = page(activeConnections(), url.searchParams.get("cursor"));
+      json(response, 200, {
+        ok: true,
+        data: {
+          items: result.items.map((item) => ({
+            connection_ref: item.connectionRef,
+            client_name: item.clientName,
+            created_at: item.createdAt,
+            last_used_at: item.lastUsedAt,
+            can_read: item.canRead,
+            can_write: item.canWrite,
+            readable_mind_count: item.readableMindCount,
+            writable_mind_selected: item.writableMindSelected,
+          })),
+          next_cursor: result.nextCursor,
+        },
+      });
+      return;
+    }
+
     const connectionMatch = /^\/settings\/connections\/(conn_v1_[0-9a-f]{32})$/u.exec(url.pathname);
     if (connectionMatch && method === "GET") {
       const item = activeConnections().find((candidate) =>

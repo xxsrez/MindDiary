@@ -681,9 +681,11 @@ explicit target Mind. General cross-Mind search/synthesis требует нов�
   проверенной identity session. Home и `/minds` затем запрашивают
   `GET /api/v1/minds`, `/public` — `GET /api/v1/public-minds`, `/invitations` —
   `GET /api/v1/invitations-overview`, а account danger zone —
-  `GET /api/v1/account/deletion-impact`. Поэтому document transition не
+  `GET /api/v1/account/deletion-impact`. `/settings/connections` аналогично
+  запрашивает bounded credential projection через `GET /api/v1/connections`.
+  Поэтому document transition не
   блокируется полной membership/catalog/invitation collection или построением
-  deletion preview. Каждый endpoint возвращает отдельную allowlist-проекцию,
+  deletion preview и binding-aware OAuth projection. Каждый endpoint возвращает отдельную allowlist-проекцию,
   browser безопасно заменяет только соответствующий loading-state, а current
   server projection и retry/error state сохраняются.
   Внутри adapter-provided immutable read-session batch list использует один

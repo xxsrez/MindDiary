@@ -92,4 +92,13 @@ test("heavy navigation pages render their shell before deferred collection reads
   await expect(page.getByRole("heading", { name: "Loading the exact deletion preview" })).toBeVisible();
   await expect(page.locator("[data-account-deletion-impact]")).toBeVisible();
   await expect(page.getByRole("heading", { name: "Review the deletion cascade" })).toBeVisible();
+
+  await page.route("**/api/v1/connections", async (route) => {
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 300));
+    await route.continue();
+  });
+  await page.goto(`${origin}/settings/connections`, { waitUntil: "domcontentloaded" });
+  await expect(page.getByRole("heading", { name: "Loading connections" })).toBeVisible();
+  await expect(page.locator("[data-connections-collection]")).toHaveAttribute("aria-busy", "true");
+  await expect(page.getByRole("heading", { name: "No active connections" })).toBeVisible();
 });
