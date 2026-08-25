@@ -194,27 +194,27 @@ function renderMindCard(mind: UiMindCard): string {
 function renderCollection(collection: UiCollectionState): string {
   switch (collection.kind) {
     case "loading":
-      return `<section class="md-state md-state--loading" aria-labelledby="minds-heading" aria-busy="true">
+      return `<section class="md-state md-state--loading" aria-labelledby="minds-heading" aria-busy="true" data-home-minds-collection>
         <div class="md-loading-mark" aria-hidden="true"><span></span><span></span><span></span></div>
         <h2 id="minds-heading">Opening your Minds</h2>
         <p role="status" aria-live="polite">Loading Mind summaries…</p>
       </section>`;
     case "empty":
-      return `<section class="md-state md-state--empty" aria-labelledby="minds-heading">
+      return `<section class="md-state md-state--empty" aria-labelledby="minds-heading" data-home-minds-collection>
         <span class="md-state__symbol" aria-hidden="true">+</span>
         <h2 id="minds-heading">Create your first shared Mind</h2>
         <p>My Mind is always yours. Create another Mind when you want to build from Memories with other people.</p>
         <button class="md-button md-button--primary" type="button" data-open-create-dialog>Create a Mind</button>
       </section>`;
     case "error":
-      return `<section class="md-state md-state--error" aria-labelledby="minds-heading" role="alert">
+      return `<section class="md-state md-state--error" aria-labelledby="minds-heading" role="alert" data-home-minds-collection>
         <span class="md-state__symbol" aria-hidden="true">!</span>
         <h2 id="minds-heading">We couldn’t open your Minds</h2>
         <p>${escapeUntrustedText(collection.message)}</p>
         <button class="md-button md-button--secondary" type="button" data-retry>Try again</button>
       </section>`;
     case "ready":
-      return `<section aria-labelledby="minds-heading">
+      return `<section aria-labelledby="minds-heading" data-home-minds-collection>
         <div class="md-section-heading">
           <div>
             <p class="md-eyebrow">Your library</p>

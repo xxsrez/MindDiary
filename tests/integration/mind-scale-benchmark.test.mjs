@@ -33,10 +33,17 @@ test("local 1/10/100 Mind fixture records deterministic list query counts and or
     assert.equal(row.home.status, 200);
     assert.ok(row.home.latency_ms <= 2_000);
     assert.ok(row.home.metadata.maximumConcurrent <= 8);
-    assert.equal(row.home.metadata.calls.readResolvedSpaces, 1);
-    assert.equal(row.home.metadata.calls.readCurrentAuthorizationStates, 2);
-    assert.equal(row.home.metadata.calls.readResolvedSpace, 0);
-    assert.equal(row.home.metadata.calls.readCurrentAuthorizationState, 0);
+    assert.deepEqual(row.home.metadata.calls, {
+      readPersonalMindProfile: 0,
+      listActiveMembershipMindIds: 0,
+      listPublicMindCatalogPage: 0,
+      readResolvedSpace: 0,
+      readResolvedSpaces: 0,
+      readRevision: 0,
+      readHead: 0,
+      readCurrentAuthorizationState: 0,
+      readCurrentAuthorizationStates: 0,
+    });
 
     assert.equal(row.minds.status, 200);
     assert.ok(row.minds.latency_ms <= 2_000);

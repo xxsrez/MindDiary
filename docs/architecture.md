@@ -677,11 +677,15 @@ explicit target Mind. General cross-Mind search/synthesis требует нов�
   refresh питает personal binding, membership/public candidates, authorization
   state, route/revision projections и публикуемый revision-index status.
   Binding-aware content authorization читает binding и current access из того
-  же refreshed view. Authenticated home получает display name Personal Mind и
-  карточки из одной web/control list projection. `/minds` сначала возвращает
-  shell из уже проверенной identity session, затем browser отдельно запрашивает
-  `GET /api/v1/minds`; поэтому document transition не блокируется полной
-  membership collection, а сама collection остаётся current server projection.
+  же refreshed view. Authenticated navigation сначала возвращает shell из уже
+  проверенной identity session. Home и `/minds` затем запрашивают
+  `GET /api/v1/minds`, `/public` — `GET /api/v1/public-minds`, `/invitations` —
+  `GET /api/v1/invitations-overview`, а account danger zone —
+  `GET /api/v1/account/deletion-impact`. Поэтому document transition не
+  блокируется полной membership/catalog/invitation collection или построением
+  deletion preview. Каждый endpoint возвращает отдельную allowlist-проекцию,
+  browser безопасно заменяет только соответствующий loading-state, а current
+  server projection и retry/error state сохраняются.
   Внутри adapter-provided immutable read-session batch list использует один
   authorization-state pass; второй TOCTOU pass нужен только там, где между
   metadata reads действительно возможна mutation race.

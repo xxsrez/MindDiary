@@ -48,7 +48,7 @@ const session = () => ({
 const handler = createProductWebHttpHandler({
   applicationOrigin: handlerOrigin,
   resolveIdentity: () => registered
-    ? { kind: "authenticated", actor: registeredActor }
+    ? { kind: "authenticated", actor: registeredActor, session: session() }
     : { kind: "registration_required", actor: bootstrapActor },
   csrf: {
     issue: () => csrfToken,
@@ -123,6 +123,12 @@ const handler = createProductWebHttpHandler({
           metadataVersion: 1,
           headRevisionId: "revision_browser_fixture",
         }];
+      }
+      if (request.operation === "list_public_minds") {
+        return { minds: [] };
+      }
+      if (request.operation === "get_invitations_overview") {
+        return { minds: [], invitations: { invitations: [] } };
       }
       if (request.operation === "list_mcp_tokens") {
         return issued ? [{

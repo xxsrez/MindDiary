@@ -310,15 +310,15 @@ async function runWebProjectionScale(count) {
   assert.match(await minds.text(), /Minds/u);
   const mindsEvidence = metadata.snapshot();
   assert.deepEqual(homeEvidence.calls, {
-    readPersonalMindProfile: 1,
-    listActiveMembershipMindIds: 1,
+    readPersonalMindProfile: 0,
+    listActiveMembershipMindIds: 0,
     listPublicMindCatalogPage: 0,
     readResolvedSpace: 0,
-    readResolvedSpaces: 1,
+    readResolvedSpaces: 0,
     readRevision: 0,
     readHead: 0,
     readCurrentAuthorizationState: 0,
-    readCurrentAuthorizationStates: 2,
+    readCurrentAuthorizationStates: 0,
   });
   assert.deepEqual(mindsEvidence.calls, {
     readPersonalMindProfile: 0,

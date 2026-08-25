@@ -156,7 +156,11 @@ test("authenticated home emits correlated privacy-safe performance stages", asyn
   const events = [];
   const dependencies = {
     applicationOrigin: origin,
-    resolveIdentity: () => ({ kind: "authenticated", actor: registeredActor }),
+    resolveIdentity: () => ({
+      kind: "authenticated",
+      actor: registeredActor,
+      session: sessionProjection,
+    }),
     csrf: { issue: () => "csrf-performance", verify: () => true },
     control: {
       execute(request) {
@@ -323,7 +327,16 @@ test("authenticated UI reuses the identity session snapshot instead of rereading
     csrf: { issue: () => "csrf-session-snapshot", verify: () => true },
     control: { execute(request) {
       calls.push(request.operation);
-      if (request.operation === "list_public_minds") return { minds: [], nextCursor: null };
+      if (request.operation === "list_public_minds") return { minds: [{
+        mindId: "space_public_notes",
+        route: "/public-notes",
+        name: "Public Notes",
+        isPersonal: false,
+        visibility: "public",
+        discovery: "public_catalog",
+        principalId: "principal_must_not_render",
+        privateContent: "PRIVATE CATALOG CONTENT",
+      }], nextCursor: "cursor_must_not_render" };
       throw new Error(`unexpected control operation: ${request.operation}`);
     } },
   });
@@ -335,7 +348,24 @@ test("authenticated UI reuses the identity session snapshot instead of rereading
 
   const catalog = await handler(new Request(`${origin}/public`));
   assert.equal(catalog.status, 200);
-  assert.match(await catalog.text(), /data-mind-diary-visibility-catalog/u);
+  assert.match(await catalog.text(), /data-public-catalog-collection/u);
+  assert.deepEqual(calls, []);
+
+  const catalogData = await handler(new Request(`${origin}/api/v1/public-minds`));
+  assert.equal(catalogData.status, 200);
+  const catalogPayload = await catalogData.json();
+  assert.deepEqual(catalogPayload.data.minds, [{
+    mind_id: "space_public_notes",
+    route: "/public-notes",
+    name: "Public Notes",
+    summary: "A versioned Mind shared by its Owner.",
+    visibility: "public",
+    is_personal: false,
+    discovery: "public_catalog",
+  }]);
+  assert.equal(JSON.stringify(catalogPayload).includes("principal_must_not_render"), false);
+  assert.equal(JSON.stringify(catalogPayload).includes("PRIVATE CATALOG CONTENT"), false);
+  assert.equal(JSON.stringify(catalogPayload).includes("cursor_must_not_render"), false);
   assert.deepEqual(calls, ["list_public_minds"]);
 });
 
@@ -407,7 +437,11 @@ test("product root, Connections, and Advanced MCP render safe live projections a
   const personalTokenRef = `ptok_v1_${"1".repeat(32)}`;
   const handler = createProductWebHttpHandler({
     applicationOrigin: origin,
-    resolveIdentity: () => ({ kind: "authenticated", actor: registeredActor }),
+    resolveIdentity: () => ({
+      kind: "authenticated",
+      actor: registeredActor,
+      session: sessionProjection,
+    }),
     csrf: { issue: () => "csrf-ui", verify: () => true },
     control: { async execute(request) {
       calls.push(request.operation);
@@ -453,6 +487,7 @@ test("product root, Connections, and Advanced MCP render safe live projections a
   assert.equal(root.status, 200);
   const rootHtml = await root.text();
   assert.match(rootHtml, /data-mind-diary-shell/);
+  assert.match(rootHtml, /data-home-minds-collection/);
   assert.match(rootHtml, /Product Owner/);
   assert.match(rootHtml, /href="\/settings\/connections"/);
   assert.match(rootHtml, /rel="icon" href="\/favicon\.ico" sizes="16x16 32x32"/);
@@ -537,7 +572,7 @@ test("product root, Connections, and Advanced MCP render safe live projections a
   assert.equal((await iconHead.arrayBuffer()).byteLength, 0);
   const wrongAssetMethod = await handler(new Request(`${origin}/ui/mind-diary-shell.css`, { method: "POST" }));
   assert.equal(wrongAssetMethod.status, 405);
-  assert.deepEqual(calls, ["list_minds", "get_session", "list_minds"]);
+  assert.deepEqual(calls, ["list_minds"]);
 });
 
 test("account settings wires profile CAS, fresh deletion impact, same-key retry client, and privacy-safe recovery", async () => {
@@ -590,14 +625,23 @@ test("account settings wires profile CAS, fresh deletion impact, same-key retry 
   assert.match(html, /data-profile-form data-profile-version="3"/);
   assert.match(html, /data-identity-recovery-handoff/);
   assert.match(html, /same trusted channel that admitted you/);
-  assert.match(html, /data-account-deletion-impact/);
-  assert.match(html, /Research Notes/);
-  assert.match(html, /Memberships[\s\S]*<h3>2<\/h3>/);
-  assert.match(html, /Pending invitations[\s\S]*<h3>1<\/h3>/);
-  assert.match(html, /Active MCP tokens[\s\S]*<h3>3<\/h3>/);
+  assert.match(html, /data-account-deletion-panel/);
+  assert.match(html, /Loading the exact deletion preview/);
+  assert.doesNotMatch(html, /Research Notes/);
   assert.match(html, /mind-diary-account-client\.js/);
   assert.equal((html.match(/aria-current="page"/g) ?? []).length, 1);
   assert.doesNotMatch(html, /must-not-render@example\.com|PRIVATE ACCOUNT CONTENT|principal_one|revision_personal/);
+
+  const impactResponse = await handler(new Request(`${origin}/api/v1/account/deletion-impact`));
+  assert.equal(impactResponse.status, 200);
+  const impactPayload = await impactResponse.json();
+  assert.equal(impactPayload.data.impact_id, deletionImpact.impactId);
+  assert.equal(impactPayload.data.owned_minds[0].name, "Research Notes");
+  assert.equal(impactPayload.data.foreign_membership_count, 2);
+  assert.equal(impactPayload.data.pending_invitation_count, 1);
+  assert.equal(impactPayload.data.active_mcp_token_count, 3);
+  assert.equal(JSON.stringify(impactPayload).includes("must-not-render@example.com"), false);
+  assert.equal(JSON.stringify(impactPayload).includes("PRIVATE ACCOUNT CONTENT"), false);
 
   const asset = await handler(new Request(`${origin}/ui/mind-diary-account-client.js`));
   assert.equal(asset.status, 200);
@@ -648,9 +692,11 @@ test("account settings wires profile CAS, fresh deletion impact, same-key retry 
   const stalePage = await handler(new Request(`${origin}/settings/account`));
   assert.equal(stalePage.status, 200);
   const staleHtml = await stalePage.text();
-  assert.match(staleHtml, /A fresh deletion preview is required/);
-  assert.match(staleHtml, /data-refresh-deletion-impact/);
+  assert.match(staleHtml, /Loading the exact deletion preview/);
   assert.doesNotMatch(staleHtml, /data-account-deletion-form/);
+  const staleImpact = await handler(new Request(`${origin}/api/v1/account/deletion-impact`));
+  assert.equal(staleImpact.status, 200);
+  assert.equal((await staleImpact.json()).data.expires_at, deletionImpact.expiresAt);
 });
 
 test("an unlinked authenticated identity gets only isolated creation or a non-secret manual recovery handoff", async () => {
@@ -751,7 +797,7 @@ test("pilot Product Site route map keeps one UAT shell, exact active navigation,
     ["/minds", /data-management-view="list"/],
     ["/research-notes", /data-mind-handle="research-notes"/],
     ["/public", /data-mind-diary-visibility-catalog/],
-    ["/invitations", /data-global-invitations/],
+    ["/invitations", /data-people-collection/],
     ["/settings/account", /data-mind-diary-account-deletion/],
     ["/settings/connections", /data-connections-page/],
     ["/settings/developer/mcp", /data-advanced-mcp/],
@@ -811,7 +857,7 @@ test("pilot Product Site route map keeps one UAT shell, exact active navigation,
   assert.doesNotMatch(missingHtml, /not found|principal_one|space_research/i);
 });
 
-test("authenticated home reads its collection while the Mind list defers collection work", async () => {
+test("authenticated Home and Minds both defer collection work behind their safe API", async () => {
   const calls = [];
   const handler = createProductWebHttpHandler({
     applicationOrigin: origin,
@@ -830,14 +876,19 @@ test("authenticated home reads its collection while the Mind list defers collect
 
   const home = await handler(new Request(`${origin}/`));
   assert.equal(home.status, 200);
-  assert.match(await home.text(), /<title>Home — Mind Diary UAT<\/title>/u);
-  assert.deepEqual(calls, ["list_minds"]);
+  assert.match(await home.text(), /data-home-minds-collection/u);
+  assert.deepEqual(calls, []);
 
   calls.length = 0;
   const minds = await handler(new Request(`${origin}/minds`));
   assert.equal(minds.status, 200);
   assert.match(await minds.text(), /data-management-view="list"/u);
   assert.deepEqual(calls, []);
+
+  const listed = await handler(new Request(`${origin}/api/v1/minds`));
+  assert.equal(listed.status, 200);
+  assert.equal((await listed.json()).data.length, 2);
+  assert.deepEqual(calls, ["list_minds"]);
 });
 
 test("ordinary Mind list and exact route wire the UAT management and deletion controls", async () => {
@@ -1182,21 +1233,29 @@ test("collaboration pages expose safe invitation metadata and map every browser 
   const page = await handler(new Request(`${origin}/invitations`));
   assert.equal(page.status, 200);
   const html = await page.text();
-  assert.match(html, /data-global-invitations/);
-  assert.match(html, /External Collaboration/);
-  assert.match(html, /Research Notes/);
-  assert.match(html, /href="\/research-notes"/);
-  assert.match(html, /data-invitation-action="accept"/);
-  assert.match(html, /data-invitation-action="reject"/);
-  assert.match(html, /data-invitation-action="reissue"/);
+  assert.match(html, /data-people-collection/);
+  assert.match(html, /Loading participants and invitations/);
+  assert.doesNotMatch(html, /External Collaboration|Research Notes/);
   assert.doesNotMatch(html, /must-not-render@example\.com|principal_must_not_render/);
+  assert.equal(calls.filter(({ operation }) => operation === "get_invitations_overview").length, 0);
+
+  const overview = await handler(new Request(`${origin}/api/v1/invitations-overview`));
+  assert.equal(overview.status, 200);
+  const overviewPayload = await overview.json();
+  assert.equal(overviewPayload.data.invitations.invitations.length, 2);
+  assert.equal(overviewPayload.data.minds.length, 1);
+  assert.equal(JSON.stringify(overviewPayload).includes("must-not-render@example.com"), false);
+  assert.equal(JSON.stringify(overviewPayload).includes("principal_must_not_render"), false);
   assert.equal(calls.filter(({ operation }) => operation === "get_invitations_overview").length, 1);
   assert.equal(calls.some(({ operation }) => operation === "list_minds"), false);
   assert.equal(calls.some(({ operation }) => operation === "list_invitations"), false);
 
   const asset = await handler(new Request(`${origin}/ui/mind-diary-collaboration-client.js`));
   assert.equal(asset.status, 200);
-  assert.match(await asset.text(), /registered_principal_not_found/);
+  const collaborationClient = await asset.text();
+  assert.match(collaborationClient, /registered_principal_not_found/);
+  assert.match(collaborationClient, /api\/v1\/invitations-overview/);
+  assert.match(collaborationClient, /data-invitation-action/);
 
   const cases = [
     ["POST", "/api/v1/minds/research-notes/invitations", {

@@ -72,6 +72,7 @@ export const WEB_CONTROL_ROUTES = [
   ["POST", "/api/v1/minds/{mind_ref}/leave"],
   ["POST", "/api/v1/minds/{mind_ref}/ownership-transfer"],
   ["GET", "/api/v1/invitations"],
+  ["GET", "/api/v1/invitations-overview"],
   ["POST", "/api/v1/minds/{mind_ref}/invitations"],
   ["POST", "/api/v1/invitations/{invitation_id}/accept"],
   ["POST", "/api/v1/invitations/{invitation_id}/reject"],

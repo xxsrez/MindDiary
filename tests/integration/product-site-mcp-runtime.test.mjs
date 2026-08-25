@@ -1584,10 +1584,18 @@ test("durable product runtime carries a Sites account token through Codex MCP an
   );
   assert.ok(invitationsPage instanceof Response);
   assert.equal(invitationsPage.status, 200);
-  assert.match(await invitationsPage.text(), /data-global-invitations/u);
+  assert.match(await invitationsPage.text(), /data-people-collection/u);
+  const invitationOverview = await responseFrom(
+    runtime,
+    new Request(`${ORIGIN}/api/v1/invitations-overview`),
+  );
+  assert.equal(invitationOverview.status, 200);
+  const invitationOverviewBody = await invitationOverview.json();
+  assert.deepEqual(invitationOverviewBody.data.minds, []);
+  assert.deepEqual(invitationOverviewBody.data.invitations.invitations, []);
   assert.equal(deferredInvitationsActivity.length, 1);
   await Promise.all(deferredInvitationsActivity);
-  assert.equal(database.metadataTailReads - tailReadsBeforeInvitationsPage, 3);
+  assert.equal(database.metadataTailReads - tailReadsBeforeInvitationsPage, 5);
 
   const settings = await responseFrom(runtime, new Request(`${ORIGIN}/settings/developer/mcp`));
   assert.equal(settings.status, 200);
@@ -2195,8 +2203,9 @@ test("durable product runtime carries a Sites account token through Codex MCP an
   const accountPageHtml = await accountPage.text();
   assert.match(accountPageHtml, /data-mind-diary-account-deletion/u);
   assert.match(accountPageHtml, /Runtime Owner Renamed/u);
-  assert.match(accountPageHtml, /data-account-deletion-impact/u);
-  assert.match(accountPageHtml, /Type <code>delete-account<\/code> exactly/u);
+  assert.match(accountPageHtml, /data-account-deletion-panel/u);
+  assert.match(accountPageHtml, /Loading the exact deletion preview/u);
+  assert.doesNotMatch(accountPageHtml, /Type <code>delete-account<\/code> exactly/u);
   assert.match(accountPageHtml, /same trusted channel that admitted you/u);
   assert.doesNotMatch(accountPageHtml, /Runtime\.Owner@Example\.COM|runtime\.owner@example\.com/u);
   const accountCsrf = csrfFromHtml(accountPageHtml);
@@ -2370,8 +2379,16 @@ test("durable Product Site enforces public baseline access, atomic ownership tra
   const publicCatalog = await responseFrom(runtime, new Request(`${ORIGIN}/public`));
   assert.equal(publicCatalog.status, 200);
   const publicCatalogHtml = await publicCatalog.text();
-  assert.match(publicCatalogHtml, /data-public-mind-card/);
-  assert.match(publicCatalogHtml, /Visibility Runtime/);
+  assert.match(publicCatalogHtml, /data-public-catalog-collection/);
+  const publicCatalogData = await responseFrom(
+    runtime,
+    new Request(`${ORIGIN}/api/v1/public-minds`),
+  );
+  assert.equal(publicCatalogData.status, 200);
+  const publicCatalogBody = await publicCatalogData.json();
+  assert.equal(publicCatalogBody.data.minds.length, 1);
+  assert.equal(publicCatalogBody.data.minds[0].route, "/visibility-runtime");
+  assert.equal(publicCatalogBody.data.minds[0].name, "Visibility Runtime");
   assert.doesNotMatch(publicCatalogHtml, /private|unlisted Mind metadata is unavailable/iu);
 
   const baselineExact = await responseFrom(runtime, new Request(`${ORIGIN}/api/v1/minds/visibility-runtime`));
@@ -2741,9 +2758,21 @@ test("durable collaboration accepts exactly once, rejects stale role state, and 
   const invitationPage = await responseFrom(runtime, new Request(`${ORIGIN}/invitations`));
   assert.equal(invitationPage.status, 200);
   const invitationPageHtml = await invitationPage.text();
-  assert.match(invitationPageHtml, /Collaboration Runtime/);
-  assert.match(invitationPageHtml, /data-invitation-action="accept"/);
+  assert.match(invitationPageHtml, /data-people-collection/);
   assert.doesNotMatch(invitationPageHtml, /collaboration\.owner@example\.com/);
+
+  const invitationOverview = await responseFrom(
+    runtime,
+    new Request(`${ORIGIN}/api/v1/invitations-overview`),
+  );
+  assert.equal(invitationOverview.status, 200);
+  const invitationOverviewBody = await invitationOverview.json();
+  const overviewInvitation = invitationOverviewBody.data.invitations.invitations.find(
+    ({ direction, mind_name: mindName }) =>
+      direction === "incoming" && mindName === "Collaboration Runtime",
+  );
+  assert.ok(overviewInvitation);
+  assert.equal(JSON.stringify(invitationOverviewBody).includes("collaboration.owner@example.com"), false);
 
   const memberCsrf = csrfFromHtml(invitationPageHtml);
   const incoming = await responseFrom(runtime, new Request(`${ORIGIN}/api/v1/invitations`));

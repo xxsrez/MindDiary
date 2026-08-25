@@ -540,6 +540,7 @@ Problem Details response:
 | `POST` | `/api/v1/minds/{mind_ref}/leave` | Non-owner leaves Mind. |
 | `POST` | `/api/v1/minds/{mind_ref}/ownership-transfer` | Atomic Owner → target, source → Admin. |
 | `GET` | `/api/v1/invitations` | Invitations caller may see. |
+| `GET` | `/api/v1/invitations-overview` | Browser-only allowlist projection invitations + ordinary Mind routes из одного consistent read; без email, principal IDs и content. |
 | `POST` | `/api/v1/minds/{mind_ref}/invitations` | Invite registered principal. |
 | `POST` | `/api/v1/invitations/{invitation_id}/accept` | Target accepts pending invitation. |
 | `POST` | `/api/v1/invitations/{invitation_id}/reject` | Target rejects pending invitation. |

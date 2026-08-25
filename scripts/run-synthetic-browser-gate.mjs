@@ -293,13 +293,15 @@ async function runScenario({ candidate, evidenceOut, randomBytesImpl, now }) {
     assertions.add("private.route-and-api-non-enumeration");
 
     mind = await setVisibility(owner, handle, "public", mind.metadata_version, nonce);
-    const publicPage = await participant.page("/public");
-    if (!publicPage.includes(handle) || !(await participant.page(`/${handle}`)).includes("Synthetic Browser Mind")) {
+    const publicMinds = data(await participant.json("/api/v1/public-minds")).minds;
+    if (!publicMinds.some((candidate) => candidate.route === `/${handle}`) ||
+        !(await participant.page(`/${handle}`)).includes("Synthetic Browser Mind")) {
       fail("public_ui_catalog_failed");
     }
     assertions.add("visibility.public-ui-and-catalog");
     mind = await setVisibility(owner, handle, "unlisted", mind.metadata_version, nonce);
-    if ((await participant.page("/public")).includes(handle) ||
+    if (data(await participant.json("/api/v1/public-minds")).minds
+      .some((candidate) => candidate.route === `/${handle}`) ||
         !(await participant.page(`/${handle}`)).includes("Synthetic Browser Mind")) fail("unlisted_ui_failed");
     assertions.add("visibility.unlisted-exact-ui");
     mind = await setVisibility(owner, handle, "private", mind.metadata_version, nonce);

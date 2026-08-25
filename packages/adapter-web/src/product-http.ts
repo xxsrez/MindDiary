@@ -13,7 +13,6 @@ import {
 import {
   normalizeAccountDeletionImpact,
   renderAccountDeletionDocument,
-  type AccountDeletionViewState,
 } from "./account-deletion.js";
 import {
   renderMindDiaryUiShellDocument,
@@ -37,7 +36,6 @@ import {
 } from "./ordinary-minds-management.js";
 import {
   renderVisibilityCatalogDocument,
-  type PublicMindCatalogCollection,
   type PublicMindCatalogItem,
 } from "./visibility-catalog.js";
 import {
@@ -45,7 +43,6 @@ import {
   type InvitationMembershipGlobalInvitation,
   type InvitationMembershipInvitation,
   type InvitationMembershipMember,
-  type InvitationMembershipPageModel,
 } from "./invitations-membership.js";
 import { renderServiceOperatorDirectoryDocument } from "./operator-directory.js";
 import {
@@ -840,6 +837,39 @@ function publicUiMind(value: unknown): PublicMindCatalogItem | null {
   });
 }
 
+function safeInvitationOverview(value: unknown): Readonly<{
+  minds: readonly Readonly<{
+    mindId: string;
+    route: `/${string}`;
+    role: OrdinaryMindUiMind["role"];
+  }>[];
+  invitations: Readonly<{
+    invitations: readonly InvitationMembershipGlobalInvitation[];
+  }>;
+}> | null {
+  const source = record(value);
+  const invitationSource = record(source?.invitations);
+  if (!Array.isArray(source?.minds) || !Array.isArray(invitationSource?.invitations)) {
+    return null;
+  }
+  const ordinaryMinds = source.minds
+    .map(ordinaryUiMind)
+    .filter((mind): mind is OrdinaryMindUiMind => mind !== null);
+  const mindMap = new Map(ordinaryMinds.map((mind) => [mind.mindId, mind] as const));
+  const minds = Object.freeze(ordinaryMinds.map((mind) => Object.freeze({
+    mindId: mind.mindId,
+    route: `/${mind.handle}` as `/${string}`,
+    role: mind.role,
+  })));
+  const invitations = Object.freeze(invitationSource.invitations
+    .map((invitation) => invitationUi(invitation, mindMap))
+    .filter((invitation): invitation is InvitationMembershipGlobalInvitation => invitation !== null));
+  return Object.freeze({
+    minds,
+    invitations: Object.freeze({ invitations }),
+  });
+}
+
 interface ProductBindingUiCandidate {
   readonly mindId: string;
   readonly mind: MindBindingUiMind;
@@ -1220,35 +1250,12 @@ async function productUiDocument(input: {
     }, "/ui/mind-diary-ordinary-minds-client.js"), input.csrfToken);
   }
   if (input.pathname === "/") {
-    try {
-      const listed = await input.control.execute({
-        operation: "list_minds",
-        actor: input.identity.actor,
-        input: Object.freeze({}),
-      });
-      if (!Array.isArray(listed)) throw new TypeError("safe Mind list projection is unavailable");
-      const cards = listed
-        .map(uiMind)
-        .filter((mind): mind is UiMindCard => mind !== null);
-      const displayName = cards.find((mind) => mind.isPersonal === true)?.name;
-      if (displayName === undefined) {
-        throw new TypeError("Personal Mind is absent from the safe Mind list projection");
-      }
-      return withCsrfMeta(renderMindDiaryUiShellDocument({
-        displayName,
-        activeNavigation: "home",
-        collection: cards.length === 0
-          ? { kind: "empty" }
-          : { kind: "ready", minds: Object.freeze(cards) },
-      }), input.csrfToken);
-    } catch {
-      const session = await readSession();
-      return withCsrfMeta(renderMindDiaryUiShellDocument({
-        displayName: session.displayName,
-        activeNavigation: "home",
-        collection: { kind: "error", message: "Mind summaries are unavailable. Try again." },
-      }), input.csrfToken);
-    }
+    const session = await readSession();
+    return withCsrfMeta(renderMindDiaryUiShellDocument({
+      displayName: session.displayName,
+      activeNavigation: "home",
+      collection: { kind: "loading" },
+    }), input.csrfToken);
   }
   const session = await readSession();
 
@@ -1398,84 +1405,22 @@ async function productUiDocument(input: {
   }
 
   if (input.pathname === "/public") {
-    let collection: PublicMindCatalogCollection;
-    try {
-      const result = record(await input.control.execute({
-        operation: "list_public_minds",
-        actor: input.identity.actor,
-        input: Object.freeze({}),
-      }));
-      const minds = Array.isArray(result?.minds)
-        ? result.minds.map(publicUiMind).filter((mind): mind is PublicMindCatalogItem => mind !== null)
-        : [];
-      collection = minds.length === 0
-        ? { kind: "empty" }
-        : { kind: "ready", minds: Object.freeze(minds) };
-    } catch {
-      collection = { kind: "error", message: "Public Minds are unavailable. No private metadata was returned." };
-    }
     return withCsrfMeta(renderVisibilityCatalogDocument({
       kind: "catalog",
       displayName: session.displayName,
       authenticated: true,
-      collection,
+      collection: { kind: "loading" },
     }, "/ui/mind-diary-visibility-client.js"), input.csrfToken);
   }
 
   if (input.pathname === "/invitations") {
-    let collection: InvitationMembershipPageModel["collection"];
-    try {
-      const overview = record(await input.control.execute({
-        operation: "get_invitations_overview",
-        actor: input.identity.actor,
-        input: Object.freeze({}),
-      }));
-      if (overview === null) throw new TypeError("safe invitation overview is unavailable");
-      const listedInvitations = overview.invitations;
-      const listedMinds = overview.minds;
-      const minds = Array.isArray(listedMinds)
-        ? listedMinds.map(ordinaryUiMind).filter((mind): mind is OrdinaryMindUiMind => mind !== null)
-        : [];
-      const mindMap = new Map(minds.map((mind) => [mind.mindId, mind] as const));
-      const invitationRecord = record(listedInvitations);
-      const invitations = Array.isArray(invitationRecord?.invitations)
-        ? invitationRecord.invitations
-          .map((invitation) => invitationUi(invitation, mindMap))
-          .filter((invitation): invitation is InvitationMembershipGlobalInvitation => invitation !== null)
-        : [];
-      collection = { kind: "global_ready", invitations: Object.freeze(invitations) };
-    } catch {
-      collection = {
-        kind: "error",
-        message: "Invitation metadata is unavailable. No Mind content was requested.",
-      };
-    }
     return withCsrfMeta(renderInvitationsMembershipDocument({
       displayName: session.displayName,
-      collection,
+      collection: { kind: "loading" },
     }, "/ui/mind-diary-collaboration-client.js"), input.csrfToken);
   }
 
   if (input.pathname === "/settings/account") {
-    let state: AccountDeletionViewState;
-    try {
-      const impact = normalizeAccountDeletionImpact(await input.control.execute({
-        operation: "get_account_deletion_impact",
-        actor: input.identity.actor,
-        input: Object.freeze({}),
-      }));
-      state = impact === null
-        ? { kind: "load_error", reason: "invalid" }
-        : Date.parse(impact.expiresAt) <= Date.now()
-          ? { kind: "stale", reason: "expired" }
-          : {
-              kind: "preview",
-              impact,
-              idempotencyKey: `account-delete:${crypto.randomUUID()}`,
-            };
-    } catch {
-      state = { kind: "load_error", reason: "unavailable" };
-    }
     return withCsrfMeta(renderAccountDeletionDocument({
       displayName: session.displayName,
       profile: {
@@ -1483,7 +1428,7 @@ async function productUiDocument(input: {
         personalMindName: session.personalMindName,
         idempotencyKey: `profile:${crypto.randomUUID()}`,
       },
-      state,
+      state: { kind: "loading" },
     }, "/ui/mind-diary-account-client.js"), input.csrfToken);
   }
 
@@ -1828,6 +1773,11 @@ function apiOperation(method: string, pathname: string): {
     if (two !== null && three === "reject" && tail.length === 3 && method === "POST") return { operation: "reject_invitation", path: { invitation_id: two } };
     if (two !== null && three === "reissue" && tail.length === 3 && method === "POST") return { operation: "reissue_invitation", path: { invitation_id: two } };
   }
+  if (
+    one === "invitations-overview" &&
+    tail.length === 1 &&
+    method === "GET"
+  ) return { operation: "get_invitations_overview", path: {} };
   if (one === "mcp-tokens") {
     if (tail.length === 1 && method === "GET") return { operation: "list_personal_token_page", path: {} };
     if (tail.length === 1 && method === "POST") return { operation: "issue_mcp_token", path: {} };
@@ -2313,6 +2263,47 @@ export function createProductWebHttpHandler(
           }
           throw error;
         }
+      }
+      if (matched.operation === "get_account_deletion_impact") {
+        const impact = normalizeAccountDeletionImpact(await dependencies.control.execute({
+          operation: matched.operation,
+          actor: identity.actor,
+          input,
+        }));
+        if (impact === null) throw new TypeError("safe account deletion impact is unavailable");
+        if (identity.kind === "authenticated") {
+          await activity.record(deferActivity, identity.actor, "control_read");
+        }
+        return json(200, { ok: true, data: snakeOutput(impact) });
+      }
+      if (matched.operation === "list_public_minds") {
+        const source = record(await dependencies.control.execute({
+          operation: matched.operation,
+          actor: identity.actor,
+          input,
+        }));
+        if (source === null || !Array.isArray(source.minds)) {
+          throw new TypeError("safe Public Mind catalog is unavailable");
+        }
+        const minds = Object.freeze(source.minds
+          .map(publicUiMind)
+          .filter((mind): mind is PublicMindCatalogItem => mind !== null));
+        if (identity.kind === "authenticated") {
+          await activity.record(deferActivity, identity.actor, "control_read");
+        }
+        return json(200, { ok: true, data: snakeOutput({ minds }) });
+      }
+      if (matched.operation === "get_invitations_overview") {
+        const overview = safeInvitationOverview(await dependencies.control.execute({
+          operation: matched.operation,
+          actor: identity.actor,
+          input,
+        }));
+        if (overview === null) throw new TypeError("safe invitation overview is unavailable");
+        if (identity.kind === "authenticated") {
+          await activity.record(deferActivity, identity.actor, "control_read");
+        }
+        return json(200, { ok: true, data: snakeOutput(overview) });
       }
       const data = await dependencies.control.execute({
         operation: matched.operation,

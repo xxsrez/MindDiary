@@ -397,13 +397,15 @@ async function runScenario({ candidate, evidenceOut, randomBytesImpl, now }) {
   });
   expectMcpError(baselineWrite, "forbidden");
   assertions.add("visibility.public-baseline-read-only");
-  if (!(await actors.participant.request("/public")).text.includes(handle)) {
+  if (!data(await actors.participant.api("/api/v1/public-minds")).minds
+    .some((candidate) => candidate.route === `/${handle}`)) {
     fail("public_catalog_missing");
   }
   assertions.add("visibility.public-catalog-only");
 
   current = await visibility(actors.owner, handle, nonce, "unlisted", current.metadata_version);
-  if ((await actors.participant.request("/public")).text.includes(handle)) {
+  if (data(await actors.participant.api("/api/v1/public-minds")).minds
+    .some((candidate) => candidate.route === `/${handle}`)) {
     fail("unlisted_catalog_leak");
   }
   if (data(await actors.participant.api(`/api/v1/minds/${handle}`)).visibility !== "unlisted") {

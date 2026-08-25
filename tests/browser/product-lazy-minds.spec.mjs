@@ -41,7 +41,7 @@ test.afterAll(async () => {
   await new Promise((resolveExit) => fixture.once("exit", resolveExit));
 });
 
-test("Minds navigation renders its shell before the deferred collection read finishes", async ({
+test("heavy navigation pages render their shell before deferred collection reads finish", async ({
   page,
 }) => {
   await page.goto(origin);
@@ -57,4 +57,39 @@ test("Minds navigation renders its shell before the deferred collection read fin
   await expect(page.getByRole("heading", { name: "Loading your Minds" })).toBeVisible();
   await expect(page.locator("[data-minds-collection]")).toHaveAttribute("aria-busy", "true");
   await expect(page.getByRole("heading", { name: "No shared Minds yet" })).toBeVisible();
+
+  await page.unroute("**/api/v1/minds");
+  await page.route("**/api/v1/minds", async (route) => {
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 300));
+    await route.continue();
+  });
+  await page.goto(origin, { waitUntil: "domcontentloaded" });
+  await expect(page.getByRole("heading", { name: "Opening your Minds" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Minds", exact: true })).toBeVisible();
+
+  await page.route("**/api/v1/public-minds", async (route) => {
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 300));
+    await route.continue();
+  });
+  await page.goto(`${origin}/public`, { waitUntil: "domcontentloaded" });
+  await expect(page.getByRole("heading", { name: "Opening Public Minds" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "No Public Minds yet" })).toBeVisible();
+
+  await page.route("**/api/v1/invitations-overview", async (route) => {
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 300));
+    await route.continue();
+  });
+  await page.goto(`${origin}/invitations`, { waitUntil: "domcontentloaded" });
+  await expect(page.getByRole("heading", { name: "Loading participants and invitations" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Incoming invitations" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Sent invitations" })).toBeVisible();
+
+  await page.route("**/api/v1/account/deletion-impact", async (route) => {
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 300));
+    await route.continue();
+  });
+  await page.goto(`${origin}/settings/account`, { waitUntil: "domcontentloaded" });
+  await expect(page.getByRole("heading", { name: "Loading the exact deletion preview" })).toBeVisible();
+  await expect(page.locator("[data-account-deletion-impact]")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Review the deletion cascade" })).toBeVisible();
 });
