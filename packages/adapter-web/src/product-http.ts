@@ -1602,18 +1602,14 @@ async function productUiDocument(input: {
   if (input.pathname === "/invitations") {
     let collection: InvitationMembershipPageModel["collection"];
     try {
-      const [listedInvitations, listedMinds] = await Promise.all([
-        input.control.execute({
-          operation: "list_invitations",
-          actor: input.identity.actor,
-          input: Object.freeze({}),
-        }),
-        input.control.execute({
-          operation: "list_minds",
-          actor: input.identity.actor,
-          input: Object.freeze({}),
-        }),
-      ]);
+      const overview = record(await input.control.execute({
+        operation: "get_invitations_overview",
+        actor: input.identity.actor,
+        input: Object.freeze({}),
+      }));
+      if (overview === null) throw new TypeError("safe invitation overview is unavailable");
+      const listedInvitations = overview.invitations;
+      const listedMinds = overview.minds;
       const minds = Array.isArray(listedMinds)
         ? listedMinds.map(ordinaryUiMind).filter((mind): mind is OrdinaryMindUiMind => mind !== null)
         : [];

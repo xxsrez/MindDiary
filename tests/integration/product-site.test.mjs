@@ -661,7 +661,12 @@ test("pilot Product Site route map keeps one UAT shell, exact active navigation,
       if (request.operation === "get_session") return sessionProjection;
       if (request.operation === "list_minds") return [personalRoute, ordinaryOwnerRoute];
       if (request.operation === "list_mcp_tokens") return [];
-      if (request.operation === "list_invitations") return { invitations: [] };
+      if (request.operation === "get_invitations_overview") {
+        return {
+          invitations: { invitations: [] },
+          minds: [personalRoute, ordinaryOwnerRoute],
+        };
+      }
       if (request.operation === "get_capacity_usage") return {
         kind: "found",
         usage: {
@@ -1103,9 +1108,9 @@ test("collaboration pages expose safe invitation metadata and map every browser 
     control: { execute(request) {
       calls.push(request);
       if (request.operation === "get_session") return sessionProjection;
-      if (request.operation === "list_minds") return [personalRoute, ordinaryOwnerRoute];
-      if (request.operation === "list_invitations") return {
-        invitations: [
+      if (request.operation === "get_invitations_overview") return {
+        minds: [personalRoute, ordinaryOwnerRoute],
+        invitations: { invitations: [
           {
             invitationId: "invitation_incoming",
             mindId: "space_external",
@@ -1130,7 +1135,7 @@ test("collaboration pages expose safe invitation metadata and map every browser 
             expiresAt: "2026-08-09T00:00:00.000Z",
             invitationVersion: 3,
           },
-        ],
+        ] },
       };
       return { applied: true };
     } },
@@ -1147,6 +1152,9 @@ test("collaboration pages expose safe invitation metadata and map every browser 
   assert.match(html, /data-invitation-action="reject"/);
   assert.match(html, /data-invitation-action="reissue"/);
   assert.doesNotMatch(html, /must-not-render@example\.com|principal_must_not_render/);
+  assert.equal(calls.filter(({ operation }) => operation === "get_invitations_overview").length, 1);
+  assert.equal(calls.some(({ operation }) => operation === "list_minds"), false);
+  assert.equal(calls.some(({ operation }) => operation === "list_invitations"), false);
 
   const asset = await handler(new Request(`${origin}/ui/mind-diary-collaboration-client.js`));
   assert.equal(asset.status, 200);

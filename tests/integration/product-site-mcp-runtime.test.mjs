@@ -1576,6 +1576,19 @@ test("durable product runtime carries a Sites account token through Codex MCP an
   await Promise.all(deferredPersonalActivity);
   assert.equal(database.metadataTailReads - tailReadsBeforePersonalPage, 2);
 
+  const tailReadsBeforeInvitationsPage = database.metadataTailReads;
+  const deferredInvitationsActivity = [];
+  const invitationsPage = await runtime.fetch(
+    new Request(`${ORIGIN}/invitations`),
+    (promise) => { deferredInvitationsActivity.push(promise); },
+  );
+  assert.ok(invitationsPage instanceof Response);
+  assert.equal(invitationsPage.status, 200);
+  assert.match(await invitationsPage.text(), /data-global-invitations/u);
+  assert.equal(deferredInvitationsActivity.length, 1);
+  await Promise.all(deferredInvitationsActivity);
+  assert.equal(database.metadataTailReads - tailReadsBeforeInvitationsPage, 3);
+
   const settings = await responseFrom(runtime, new Request(`${ORIGIN}/settings/developer/mcp`));
   assert.equal(settings.status, 200);
   const settingsHtml = await settings.text();
