@@ -159,6 +159,13 @@ Core Release 0.1 зависит от `MetadataStore`, `ObjectStore`, `SearchInde
 Если post-prototype personalization будет принята, она подключит отдельный
 узкий `PersonalContextProvider` port.
 
+Package `application-control` сохраняет один публичный entrypoint, но не одну
+реализационную единицу: account bootstrap/delete, Personal и ordinary Mind
+lifecycle, membership/invitations, visibility/ownership, routes/catalog,
+tokens и read/observability сгруппированы в отдельные use-case modules.
+Внутренние helpers экспортируются только между этими modules и не расширяют
+публичный package surface.
+
 Точная форма trusted context, обязанности каждого port, отдельные control,
 content и background façades, transaction boundaries и обязательные dependency
 rules зафиксированы в
