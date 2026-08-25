@@ -2338,6 +2338,7 @@ test("Sites object cleanup checkpoint persists cursor and reclaims only an expir
       createdAt: T0,
     });
   }
+  const snapshotWritesBeforeCleanup = database.metadataSnapshotWriteCount;
   const first = await boundary.metadata.claimObjectCleanup({ now: T0, leaseExpiresAt: T1 });
   assert.equal(first.kind, "claimed");
   assert.equal(first.reclaimedLease, false);
@@ -2379,6 +2380,7 @@ test("Sites object cleanup checkpoint persists cursor and reclaims only an expir
   assert.equal(reclaimed.reclaimedLease, true);
   assert.equal(reclaimed.checkpoint.cursor, page.nextCursor);
   assert.equal(reclaimed.checkpoint.retries, 1);
+  assert.equal(database.metadataSnapshotWriteCount, snapshotWritesBeforeCleanup);
 });
 
 async function runSearchContract(name, factory) {

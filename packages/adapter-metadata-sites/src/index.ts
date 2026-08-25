@@ -247,6 +247,12 @@ const MAX_CAS_ATTEMPTS = 16;
 const SNAPSHOT_CHUNK_CODE_UNITS = 256 * 1_024;
 const SNAPSHOT_CHUNK_READ_PAGE = 8;
 const MIND_BINDING_SNAPSHOT_CADENCE = 16;
+const OBJECT_CLEANUP_SNAPSHOT_CADENCE = 16;
+const OBJECT_CLEANUP_CHECKPOINT_METHODS = new Set([
+  "claimObjectCleanup",
+  "completeObjectCleanupBatch",
+  "failObjectCleanupBatch",
+]);
 
 function splitSnapshotPayload(payload: string): readonly string[] {
   const chunks: string[] = [];
@@ -344,6 +350,13 @@ function shouldCheckpointEvent(event: DurableEvent, sequence: number): boolean {
     // latency-sensitive UI/MCP setup, so avoid rewriting the full materialized
     // snapshot for every attach or rebind while keeping restart replay bounded.
     return sequence % MIND_BINDING_SNAPSHOT_CADENCE === 0;
+  }
+  if (OBJECT_CLEANUP_CHECKPOINT_METHODS.has(event.method)) {
+    // Claim/completion events are already fenced durability. Request-triggered
+    // maintenance may emit both around one empty bounded scan; rewriting the
+    // complete account/Mind snapshot for each checkpoint would contend with
+    // the next foreground navigation. Keep restart replay bounded instead.
+    return sequence % OBJECT_CLEANUP_SNAPSHOT_CADENCE === 0;
   }
   return true;
 }
