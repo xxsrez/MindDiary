@@ -1717,10 +1717,13 @@ test("durable product runtime carries a Sites account token through Codex MCP an
   const codexHelp = await responseFrom(runtime, new Request(`${ORIGIN}/help/codex`));
   assert.equal(codexHelp.status, 200);
   const codexHelpHtml = await codexHelp.text();
-  assert.match(codexHelpHtml, /Create the first useful Memory/u);
-  assert.match(codexHelpHtml, /Preview and confirm a substantial change/u);
-  assert.match(codexHelpHtml, /Restore as a new revision and export/u);
-  assert.match(codexHelpHtml, /Convert a bounded Markdown set/u);
+  assert.match(codexHelpHtml, /data-codex-client-tab="desktop"/u);
+  assert.match(codexHelpHtml, /data-codex-client-tab="cli"/u);
+  assert.match(codexHelpHtml, /https:\/\/github\.com\/xxsrez\/marketplace/u);
+  assert.match(
+    codexHelpHtml,
+    /Use Mind Diary to list the Minds I can read\. Do not create or change any Memory\./u,
+  );
 
   const createdMind = await responseFrom(runtime, new Request(`${ORIGIN}/api/v1/minds`, {
     method: "POST",
