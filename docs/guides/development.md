@@ -44,6 +44,7 @@ secret/config hygiene gates. Generated output остаётся в `packages/*/di
 | Весь выбранный OKF fixture | `npm run validate:fixtures` |
 | Module/import/transitive graph | `npm run check:architecture` |
 | Product Site packaging contract | `npm run check:product-site` |
+| Свежесть deployable Product Site artifact | `npm run check:product-site-artifact -- --candidate-sha <exact-HEAD-sha>` после vinext build в чистом release checkout |
 | Markdown links и локальная структура | `npm run check:docs` |
 | Secrets и local config hygiene | `npm run check:secrets` |
 | Полный локальный gate | `npm run check` |

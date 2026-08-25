@@ -1266,6 +1266,13 @@ stale и не deploy-ится. Если Sites дедуплицировал saved
 использованному `commit_sha`, сначала нужен новый exact candidate SHA, а не
 повторный save другого archive под прежним source identity.
 
+Каждый vinext build также создаёт `dist/.openai/release.json` с exact Git SHA,
+tree SHA и SHA-256 server bundle. Перед упаковкой release checkout должен быть
+чистым, а `npm run check:product-site-artifact -- --candidate-sha
+<exact-HEAD-sha>` обязан подтвердить совпадение metadata, текущего checkout и
+`dist/server/index.js`. Это отдельный artifact gate после сборки, а не часть
+repository gate до фиксации candidate SHA.
+
 ## Performance gate
 
 Изменения metadata/runtime/MCP read path, search storage или locator layout
