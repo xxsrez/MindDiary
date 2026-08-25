@@ -657,8 +657,12 @@ explicit target Mind. General cross-Mind search/synthesis требует нов�
   Success-only `PrincipalActivitySummary` является отдельной монотонной D1
   projection: page/MCP observation делает один bounded upsert и не добавляет
   canonical event, не replay-ит metadata state и не переписывает полный
-  snapshot. Operator read накладывает эту projection на canonical principal
-  directory; legacy activity из старого snapshot остаётся читаемой. Account
+  snapshot. Rapid page observations одного principal коалесцируются в один
+  promise, который регистрируется только в создавшем его Worker request
+  context; последующие navigation обновляют bounded payload, но не наследуют
+  чужой `waitUntil` lifetime. Operator read накладывает эту projection на
+  canonical principal directory; legacy activity из старого snapshot остаётся
+  читаемой. Account
   deletion удаляет canonical principal/activity и очищает projection, а строка
   без существующего principal никогда не становится видимой.
   Initial revision index effects входят в account/Mind create transaction, а
@@ -679,7 +683,10 @@ explicit target Mind. General cross-Mind search/synthesis требует нов�
   assets, ждёт трёхсекундное quiet window без новой HTML-навигации и
   объединяется в один isolate-level flight на deployment/config fingerprint с
   30-секундной cadence после завершения. Новая eligible navigation до старта
-  recovery отменяет старый timer и планирует quiet window заново. Due index и
+  recovery не только fence-ит generation, но и немедленно завершает старый
+  cancelable idle wait в его исходном request context, после чего планирует
+  quiet window заново. В каждый момент существует только один active owned
+  recovery wait; superseded wait завершается сразу. Due index и
   queued/failed/expired-claim export jobs dispatch-ятся последовательно,
   поэтому recovery не
   ставит веер metadata operations впереди authenticated reads; следующий
@@ -705,7 +712,12 @@ explicit target Mind. General cross-Mind search/synthesis требует нов�
   Durable object-cleanup claim/complete/fail остаются fenced event-log
   transitions, но materialized snapshot checkpoint-ятся с cadence 16: один
   request-triggered empty scan больше не переписывает весь metadata snapshot
-  дважды непосредственно перед следующим foreground navigation.
+  дважды непосредственно перед следующим foreground navigation. Rotating
+  revision-index recovery cursor использует ту же bounded cadence; пустые
+  staged-file и Markdown-import cleanup passes вообще не добавляют canonical
+  event. Последовательные warm mutations получают detached CAS base клонированием
+  одного tail-refreshed in-process state, а не повторным чтением и parsing всего
+  D1 snapshot для каждой recovery stage.
   Recovery flight принадлежит только тому Worker request context, который его
   запустил: последующие document navigation не регистрируют уже активный
   background promise в собственном `waitUntil` и не наследуют его wall time.

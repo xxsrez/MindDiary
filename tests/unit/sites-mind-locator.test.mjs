@@ -45,7 +45,8 @@ test("Sites locators remain fixed-size, durable, expiring and mdl1-compatible", 
     now: () => now,
   });
   assert.deepEqual(await restarted.decode(locator), payload);
-  assert.equal(await restarted.decode(`${locator.slice(0, -1)}x`), null);
+  const tamperedLocator = `${locator.slice(0, -1)}${locator.endsWith("x") ? "y" : "x"}`;
+  assert.equal(await restarted.decode(tamperedLocator), null);
 
   const legacy = new WebCryptoMindLocatorCodec(secret);
   const legacyLocator = await legacy.encode(payload);

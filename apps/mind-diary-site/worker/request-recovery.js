@@ -30,6 +30,21 @@ const NON_DOCUMENT_PATHS = new Set([
 export const REQUEST_RECOVERY_CADENCE_MS = 30_000;
 export const REQUEST_RECOVERY_IDLE_MS = 3_000;
 
+function cancelableDelay(milliseconds, signal) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      signal.removeEventListener("abort", finish);
+      resolve();
+    };
+    const timer = setTimeout(finish, milliseconds);
+    signal.addEventListener("abort", finish, { once: true });
+  });
+}
+
 function isRecoveryCandidateRequest(request) {
   if (request.method !== "GET" && request.method !== "HEAD") {
     return false;
@@ -72,9 +87,7 @@ export class RequestRecoveryCoordinator {
     this.#cadenceMs = options.cadenceMs ?? REQUEST_RECOVERY_CADENCE_MS;
     this.#idleMs = options.idleMs ?? REQUEST_RECOVERY_IDLE_MS;
     this.#now = options.now ?? Date.now;
-    this.#delay = options.delay ?? ((milliseconds) => new Promise(
-      (resolve) => setTimeout(resolve, milliseconds),
-    ));
+    this.#delay = options.delay ?? cancelableDelay;
     if (!Number.isSafeInteger(this.#cadenceMs) || this.#cadenceMs < 1) {
       throw new TypeError("request recovery cadence must be a positive integer");
     }
@@ -87,15 +100,21 @@ export class RequestRecoveryCoordinator {
     const candidate = isRecoveryCandidateRequest(options.request);
     let slot = this.#slots.get(options.environment);
     if (slot === undefined || slot.fingerprint !== options.fingerprint) {
+      slot?.idleController?.abort();
       slot = {
         fingerprint: options.fingerprint,
         inFlight: null,
+        idleController: null,
         nextEligibleAt: 0,
         navigationGeneration: 0,
       };
       this.#slots.set(options.environment, slot);
     }
-    if (candidate) slot.navigationGeneration += 1;
+    if (candidate) {
+      slot.navigationGeneration += 1;
+      slot.idleController?.abort();
+      slot.idleController = null;
+    }
     const navigationGeneration = slot.navigationGeneration;
 
     const response = await options.foreground();
@@ -108,9 +127,12 @@ export class RequestRecoveryCoordinator {
       return response;
     }
     if (this.#now() < slot.nextEligibleAt) return response;
+    if (slot.navigationGeneration !== navigationGeneration) return response;
 
     const selected = slot;
-    const planned = this.#delay(this.#idleMs)
+    const idleController = new AbortController();
+    selected.idleController = idleController;
+    const planned = this.#delay(this.#idleMs, idleController.signal)
       .then(() => {
         if (
           selected.navigationGeneration !== navigationGeneration ||
@@ -125,6 +147,11 @@ export class RequestRecoveryCoordinator {
           });
         selected.inFlight = flight;
         return flight;
+      })
+      .finally(() => {
+        if (selected.idleController === idleController) {
+          selected.idleController = null;
+        }
       });
     options.waitUntil(planned.catch(() => undefined));
     return response;

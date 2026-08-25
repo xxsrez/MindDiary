@@ -217,7 +217,7 @@ test("a slow recovery starts only after foreground and never delays its response
   ]);
 });
 
-test("concurrent home and asset burst creates one recovery flight", async () => {
+test("concurrent home and asset burst creates one owned recovery wait", async () => {
   const coordinator = new RequestRecoveryCoordinator({
     delay: async () => undefined,
   });
@@ -244,9 +244,33 @@ test("concurrent home and asset burst creates one recovery flight", async () => 
     ...Array.from({ length: 20 }, (_, index) => respond(`/_next/static/${index}.js`)),
   ]);
   assert.equal(runs, 1);
-  assert.equal(background.length, 20);
+  assert.equal(background.length, 1);
   releaseRecovery();
   await Promise.all(background);
+});
+
+test("a later navigation cancels the previous idle wait immediately", async () => {
+  const coordinator = new RequestRecoveryCoordinator({ idleMs: 50 });
+  const environment = {};
+  const background = [];
+  let runs = 0;
+  const respond = (path) => coordinator.respond({
+    request: new Request(`${ORIGIN}${path}`, { headers: { accept: "text/html" } }),
+    environment,
+    fingerprint: "deployment-a",
+    foreground: async () => new Response("ok"),
+    recover: async () => { runs += 1; },
+    waitUntil: (promise) => background.push(promise),
+  });
+
+  await respond("/");
+  assert.equal(background.length, 1);
+  await respond("/me");
+  assert.equal(background.length, 2);
+  await background[0];
+  assert.equal(runs, 0);
+  await background[1];
+  assert.equal(runs, 1);
 });
 
 test("completion-based cadence prevents a recovery storm after success or failure", async () => {

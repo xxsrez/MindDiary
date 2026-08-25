@@ -55,7 +55,9 @@ export class ProductWebActivityCoordinator {
 
     const principalKey = String(actor.principalId);
     let pending = this.#pendingByPrincipal.get(principalKey);
+    let ownsDeferral = false;
     if (pending === undefined) {
+      ownsDeferral = true;
       pending = {
         actor,
         kind,
@@ -91,6 +93,11 @@ export class ProductWebActivityCoordinator {
       pending.kind = kind;
       pending.revision += 1;
     }
+
+    // A coalesced promise belongs to the request context that created it.
+    // Registering that same promise with later Worker contexts makes each
+    // navigation inherit the original best-effort write lifetime on Sites.
+    if (!ownsDeferral) return;
 
     try {
       defer(pending.promise);

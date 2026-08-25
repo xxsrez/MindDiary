@@ -427,7 +427,7 @@ test("rapid successful pages coalesce one deferred activity write per principal"
     );
     assert.equal(response.status, 200);
   }
-  assert.equal(new Set(deferred).size, 1);
+  assert.equal(deferred.length, 1);
   await Promise.all(deferred);
   assert.deepEqual(activityCalls, [{ actor: registeredActor, surface: "web", kind: "page" }]);
 });

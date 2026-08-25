@@ -1223,6 +1223,65 @@ test("guarded metadata cold load removes full-log replay and extra restart round
   assert.equal(database.metadataReadLog.filter((kind) => kind === "tail").length, 1);
 });
 
+test("warm metadata mutations clone one tail-refreshed view and omit empty recovery events", async () => {
+  const database = new FakeD1Database();
+  const store = await createSitesMetadataStore(database);
+  database.metadataReadLog = [];
+
+  assert.equal((await store.reserveHandle({
+    host: HOST,
+    handle: "warm-mutation-base",
+    spaceId: "space_warm_mutation_base",
+  })).kind, "reserved");
+  const eventCount = database.metadataEvents.length;
+  const snapshotWrites = database.metadataSnapshotWriteCount;
+  assert.deepEqual(await store.collectStagedBundleFilesForGc({
+    createdBefore: T5,
+    limit: 100,
+  }), []);
+  assert.deepEqual(
+    await store.runMarkdownImportTransaction((transaction) =>
+      transaction.claimMarkdownImportCleanup({ now: T5, limit: 4 })),
+    [],
+  );
+  assert.equal(
+    await store.runMarkdownImportTransaction((transaction) =>
+      transaction.deleteExpiredMarkdownImportPlans({ now: T5, limit: 100 })),
+    0,
+  );
+
+  assert.deepEqual(database.metadataReadLog, ["tail", "tail", "tail", "tail"]);
+  assert.equal(database.metadataEvents.length, eventCount);
+  assert.equal(database.metadataSnapshotWriteCount, snapshotWrites);
+});
+
+test("request recovery cursor keeps fenced events with bounded snapshot cadence", async () => {
+  const database = new FakeD1Database();
+  const boundary = await createSitesPersistenceBoundary({
+    database,
+    bucket: new FakeR2Bucket(),
+  });
+  await services(boundary, ids()).bootstrap.bootstrapAccount(
+    preRegistrationActor(92),
+    { action: "create_isolated_account" },
+  );
+  const startingSequence = database.metadataEvents.at(-1).sequence;
+  const writesBeforeRecovery = database.metadataSnapshotWriteCount;
+
+  for (let pass = 0; pass < 16; pass += 1) {
+    assert.ok(Array.isArray(
+      await boundary.metadata.listActiveRevisionIndexRecoveryCandidates(10),
+    ));
+  }
+
+  assert.equal(database.metadataEvents.at(-1).sequence, startingSequence + 16);
+  assert.equal(database.metadataSnapshotWriteCount - writesBeforeRecovery, 1);
+  const restarted = await createSitesMetadataStore(database);
+  assert.ok(Array.isArray(
+    await restarted.listActiveRevisionIndexRecoveryCandidates(10),
+  ));
+});
+
 test("snapshot write failure after fenced append self-heals from canonical tail", async () => {
   const database = new FakeD1Database();
   const store = await createSitesMetadataStore(database);

@@ -244,10 +244,14 @@ const SNAPSHOT_CHUNK_CODE_UNITS = 256 * 1_024;
 const SITES_METADATA_SCHEMA_VERSION = SITES_METADATA_MIGRATIONS.at(-1)?.version ?? 0;
 const MIND_BINDING_SNAPSHOT_CADENCE = 16;
 const OBJECT_CLEANUP_SNAPSHOT_CADENCE = 16;
+const REQUEST_RECOVERY_SNAPSHOT_CADENCE = 16;
 const OBJECT_CLEANUP_CHECKPOINT_METHODS = new Set([
   "claimObjectCleanup",
   "completeObjectCleanupBatch",
   "failObjectCleanupBatch",
+]);
+const REQUEST_RECOVERY_CHECKPOINT_METHODS = new Set([
+  "listActiveRevisionIndexRecoveryCandidates",
 ]);
 
 function splitSnapshotPayload(payload: string): readonly string[] {
@@ -354,7 +358,37 @@ function shouldCheckpointEvent(event: DurableEvent, sequence: number): boolean {
     // the next foreground navigation. Keep restart replay bounded instead.
     return sequence % OBJECT_CLEANUP_SNAPSHOT_CADENCE === 0;
   }
+  if (REQUEST_RECOVERY_CHECKPOINT_METHODS.has(event.method)) {
+    // The rotating recovery cursor is durable, but rewriting the complete
+    // metadata snapshot for every quiet-window scan makes an otherwise empty
+    // maintenance pass contend with the next foreground navigation.
+    return sequence % REQUEST_RECOVERY_SNAPSHOT_CADENCE === 0;
+  }
   return true;
+}
+
+function isEmptyRecoveryDirectCall(method: string, result: unknown): boolean {
+  return method === "collectStagedBundleFilesForGc" &&
+    Array.isArray(result) && result.length === 0;
+}
+
+function isEmptyRecoveryTransaction(
+  method: string,
+  calls: readonly DurableCall[],
+  callResults: readonly unknown[],
+): boolean {
+  if (
+    method !== "runMarkdownImportTransaction" ||
+    calls.length !== 1 ||
+    callResults.length !== 1
+  ) return false;
+  return (
+    calls[0]?.method === "claimMarkdownImportCleanup" &&
+    Array.isArray(callResults[0]) && callResults[0].length === 0
+  ) || (
+    calls[0]?.method === "deleteExpiredMarkdownImportPlans" &&
+    callResults[0] === 0
+  );
 }
 
 async function currentAuthorizationStateWithToken(
@@ -457,8 +491,9 @@ export class SitesMetadataStore {
   ): Promise<void> {
     await this.#exclusive(async () => {
       await this.#refresh();
-      await this.#metadata.recordPrincipalActivity(request);
-      const summary = await this.#metadata.readPrincipalActivity(request.principalId);
+      const view = this.#cloneMetadata(this.#metadata);
+      await view.recordPrincipalActivity(request);
+      const summary = await view.readPrincipalActivity(request.principalId);
       if (summary === null) return;
       await this.#upsertPrincipalActivity(summary);
     });
@@ -469,9 +504,10 @@ export class SitesMetadataStore {
   ): Promise<Readonly<PrincipalActivitySummary> | null> {
     return this.#exclusive(async () => {
       await this.#refresh();
+      const view = this.#cloneMetadata(this.#metadata);
       const rows = await this.#readPrincipalActivityRows(principalId);
-      await this.#hydratePrincipalActivity(rows);
-      const summary = await this.#metadata.readPrincipalActivity(principalId);
+      await this.#hydratePrincipalActivity(view, rows);
+      const summary = await view.readPrincipalActivity(principalId);
       if (summary === null && rows.length > 0) {
         await this.#deletePrincipalActivity(principalId);
       }
@@ -484,9 +520,10 @@ export class SitesMetadataStore {
   ): Promise<Readonly<ServiceOperatorDirectoryPage>> {
     return this.#exclusive(async () => {
       await this.#refresh();
+      const view = this.#cloneMetadata(this.#metadata);
       const rows = await this.#readPrincipalActivityRows();
-      await this.#hydratePrincipalActivity(rows);
-      return this.#metadata.listServiceOperatorPrincipals(query);
+      await this.#hydratePrincipalActivity(view, rows);
+      return view.listServiceOperatorPrincipals(query);
     });
   }
 
@@ -865,9 +902,10 @@ export class SitesMetadataStore {
     args: readonly unknown[],
   ): Promise<unknown> {
     for (let attempt = 0; attempt < MAX_CAS_ATTEMPTS; attempt += 1) {
-      const loaded = await this.#load();
+      const loaded = await this.#createMutationBase();
       const target = targetName === "metadata" ? loaded.metadata : loaded.tokens;
       const result = await methodOf(target, method)(...args);
+      if (isEmptyRecoveryDirectCall(method, result)) return result;
       const event: DurableEvent = { v: 1, kind: "direct", target: targetName, method, args };
       if (await this.#append(loaded.sequence, event, loaded.metadata, loaded.tokens)) {
         this.#metadata = loaded.metadata;
@@ -880,6 +918,28 @@ export class SitesMetadataStore {
     throw new Error("Sites metadata CAS retry budget exhausted");
   }
 
+  async #createMutationBase(): Promise<LoadedState> {
+    // Warm mutations need a detached state for safe CAS retry, not another
+    // remote read and parse of the complete materialized snapshot. Refresh the
+    // canonical cache from the small event tail, then clone it in-process.
+    await this.#refresh();
+    return Object.freeze({
+      metadata: this.#cloneMetadata(this.#metadata),
+      tokens: InMemoryMcpTokenStore.fromDurableSnapshot(
+        this.#tokens.exportDurableSnapshot(),
+      ),
+      sequence: this.#sequence,
+    });
+  }
+
+  #cloneMetadata(
+    metadata: InMemoryRevisionMetadataStore,
+  ): InMemoryRevisionMetadataStore {
+    return InMemoryRevisionMetadataStore.fromDurableSnapshot(
+      metadata.exportDurableSnapshot(),
+    );
+  }
+
   async #runTransaction(
     method: string,
     operation: (transaction: unknown) => Promise<unknown>,
@@ -888,12 +948,19 @@ export class SitesMetadataStore {
       throw new TypeError("Sites metadata transaction callback is required");
     }
     for (let attempt = 0; attempt < MAX_CAS_ATTEMPTS; attempt += 1) {
-      const loaded = await this.#load();
+      const loaded = await this.#createMutationBase();
       const calls: DurableCall[] = [];
+      const callResults: unknown[] = [];
       const result = await methodOf(loaded.metadata, method)(
         async (transaction: object) =>
-          operation(this.#captureTransaction(transaction, loaded.tokens, calls)),
+          operation(this.#captureTransaction(
+            transaction,
+            loaded.tokens,
+            calls,
+            callResults,
+          )),
       );
+      if (isEmptyRecoveryTransaction(method, calls, callResults)) return result;
       const event: DurableEvent = {
         v: 1,
         kind: "transaction",
@@ -917,6 +984,7 @@ export class SitesMetadataStore {
     transaction: object,
     tokens: InMemoryMcpTokenStore,
     calls: DurableCall[],
+    callResults: unknown[],
   ): Readonly<Record<string, unknown>> {
     const wrapper: Record<string, unknown> = {};
     for (const property of Object.keys(transaction)) {
@@ -941,6 +1009,7 @@ export class SitesMetadataStore {
           callResult = await methodOf(transaction, property)(...args);
         }
         calls.push({ method: property, args });
+        callResults.push(callResult);
         return callResult;
       };
     }
@@ -1101,6 +1170,7 @@ export class SitesMetadataStore {
   }
 
   async #hydratePrincipalActivity(
+    metadata: InMemoryRevisionMetadataStore,
     rows: readonly PrincipalActivityRow[],
   ): Promise<void> {
     for (const row of rows) {
@@ -1139,7 +1209,7 @@ export class SitesMetadataStore {
         return Number(left.overall) - Number(right.overall);
       });
       for (const { overall: _overall, ...observation } of observations) {
-        await this.#metadata.recordPrincipalActivity(observation);
+        await metadata.recordPrincipalActivity(observation);
       }
     }
   }
