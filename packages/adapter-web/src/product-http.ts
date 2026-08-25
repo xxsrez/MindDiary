@@ -1,7 +1,4 @@
-import type {
-  ControlBoundaryMarker,
-  SitesIdentityBeforeRegistration,
-} from "@mind-diary/application-control";
+import type { SitesIdentityBeforeRegistration } from "@mind-diary/application-control";
 import {
   SITES_IDENTITY_PROVIDER,
   normalizeSitesVerifiedEmail,
@@ -28,11 +25,7 @@ import {
 import {
   MIND_DIARY_CODEX_CONCIERGE_PLAYBOOK,
   MIND_DIARY_CODEX_STARTER_PLAYBOOK,
-  renderMcpTokenManagementDocument,
-  type MindBindingOwnerUiState,
   type MindBindingUiMind,
-  type McpTokenManagementModel,
-  type McpTokenUiToken,
 } from "./token-management.js";
 import {
   renderOrdinaryMindsManagementDocument,
@@ -84,11 +77,16 @@ import {
   PRODUCT_UI_SHELL_CSS,
   PRODUCT_UI_TOKENS_CSS,
 } from "./product-ui-assets.js";
+import {
+  ProductWebActivityCoordinator,
+  type ProductWebActivityDeferrer,
+  type ProductWebActivityRecorder,
+  type ProductWebRegisteredActor,
+} from "./product-web-activity.js";
 
-type RegisteredSitesActor = Extract<
-  ControlBoundaryMarker["actor"],
-  { readonly kind: "registered_principal" }
->;
+export type { ProductWebActivityRecorder } from "./product-web-activity.js";
+
+type RegisteredSitesActor = ProductWebRegisteredActor;
 export type ProductWebActor = RegisteredSitesActor | SitesIdentityBeforeRegistration;
 
 export interface ProductSitesSessionSnapshot {
@@ -312,14 +310,6 @@ export interface ProductWebMindBindings {
   }>>;
 }
 
-export interface ProductWebActivityRecorder {
-  recordSuccessful(
-    actor: RegisteredSitesActor,
-    surface: "web",
-    kind: "page" | "control_read" | "control_write",
-  ): void | Promise<void>;
-}
-
 export type ProductWebPerformanceOperation =
   | "home"
   | "stage_authentication"
@@ -350,89 +340,6 @@ export interface ProductWebHttpHandlerDependencies {
   readonly performance?: ProductWebPerformanceRecorder;
   /** Bounded hosted-only coalescing window; direct/local calls remain synchronous. */
   readonly activityCoalesceWindowMs?: number;
-}
-
-type ProductWebActivityDeferrer = (promise: Promise<unknown>) => void;
-
-interface PendingProductWebActivity {
-  actor: RegisteredSitesActor;
-  kind: "page" | "control_read" | "control_write";
-  revision: number;
-  promise: Promise<void>;
-}
-
-class ProductWebActivityCoordinator {
-  readonly #recorder: ProductWebActivityRecorder | undefined;
-  readonly #windowMs: number;
-  readonly #pendingByPrincipal = new Map<string, PendingProductWebActivity>();
-
-  constructor(recorder: ProductWebActivityRecorder | undefined, windowMs: number) {
-    this.#recorder = recorder;
-    this.#windowMs = windowMs;
-  }
-
-  async record(
-    defer: ProductWebActivityDeferrer | undefined,
-    actor: RegisteredSitesActor,
-    kind: PendingProductWebActivity["kind"],
-  ): Promise<void> {
-    if (this.#recorder === undefined) return;
-    if (defer === undefined) {
-      try {
-        await this.#recorder.recordSuccessful(actor, "web", kind);
-      } catch {
-        // Activity is observational and must never change the product response.
-      }
-      return;
-    }
-
-    const principalKey = String(actor.principalId);
-    let pending = this.#pendingByPrincipal.get(principalKey);
-    if (pending === undefined) {
-      pending = {
-        actor,
-        kind,
-        revision: 0,
-        promise: Promise.resolve(),
-      };
-      const entry = pending;
-      entry.promise = (async () => {
-        if (this.#windowMs > 0) {
-          await new Promise<void>((resolve) => setTimeout(resolve, this.#windowMs));
-        }
-        let recordedRevision = -1;
-        while (recordedRevision !== entry.revision) {
-          recordedRevision = entry.revision;
-          const currentActor = entry.actor;
-          const currentKind = entry.kind;
-          try {
-            await this.#recorder!.recordSuccessful(currentActor, "web", currentKind);
-          } catch {
-            // Best-effort activity failures never affect the foreground result.
-          }
-        }
-      })().finally(() => {
-        if (this.#pendingByPrincipal.get(principalKey) === entry) {
-          this.#pendingByPrincipal.delete(principalKey);
-        }
-      });
-      this.#pendingByPrincipal.set(principalKey, entry);
-    } else if (
-      Date.parse(actor.occurredAtUtc) >= Date.parse(pending.actor.occurredAtUtc)
-    ) {
-      pending.actor = actor;
-      pending.kind = kind;
-      pending.revision += 1;
-    }
-
-    try {
-      defer(pending.promise);
-      return;
-    } catch {
-      // Fall through to the bounded foreground fallback when host deferral fails.
-    }
-    await pending.promise;
-  }
 }
 
 const MUTATION_METHODS = new Set(["POST", "PATCH", "PUT", "DELETE"]);
@@ -956,39 +863,6 @@ function publicUiMind(value: unknown): PublicMindCatalogItem | null {
   });
 }
 
-function uiToken(value: unknown): McpTokenUiToken | null {
-  const source = record(value);
-  const tokenId = requiredString(source?.tokenId);
-  const name = requiredString(source?.name);
-  const displayPrefix = requiredString(source?.displayPrefix);
-  const createdAt = requiredString(source?.createdAt);
-  const expiresAt = requiredString(source?.expiresAt);
-  const state = source?.state;
-  const rawScopes = source?.scopes;
-  if (
-    tokenId === null || name === null || displayPrefix === null ||
-    createdAt === null || expiresAt === null ||
-    !(state === "active" || state === "expired" || state === "revoked") ||
-    !Array.isArray(rawScopes)
-  ) return null;
-  const scopes = rawScopes.filter(
-    (scope): scope is "content:read" | "content:write" =>
-      scope === "content:read" || scope === "content:write",
-  );
-  if (scopes.length === 0) return null;
-  return Object.freeze({
-    tokenId,
-    name,
-    displayPrefix,
-    scopes: Object.freeze(scopes),
-    state,
-    createdAt,
-    expiresAt,
-    lastUsedAt: requiredString(source?.lastUsedAt),
-    revokedAt: requiredString(source?.revokedAt),
-  });
-}
-
 interface ProductBindingUiCandidate {
   readonly mindId: string;
   readonly mind: MindBindingUiMind;
@@ -1015,76 +889,6 @@ function bindingUiCandidate(value: unknown): ProductBindingUiCandidate | null {
       visibility,
       canWrite: role === "editor" || role === "admin" || role === "owner",
     }),
-  });
-}
-
-function bindingOwnerUi(
-  value: unknown,
-  candidates: ReadonlyMap<string, MindBindingUiMind>,
-): MindBindingOwnerUiState | null {
-  const source = record(value);
-  const ownerId = requiredString(source?.ownerId);
-  const bindingVersion = nonnegativeInteger(source?.bindingVersion);
-  if (
-    ownerId === null || bindingVersion === null ||
-    !(source?.state === "active" || source?.state === "revoked" || source?.state === "deleted") ||
-    !Array.isArray(source.readBindings)
-  ) return null;
-  const readBindings = source.readBindings.map((value) => {
-    const binding = record(value);
-    const readBindingId = requiredString(binding?.readBindingId);
-    const mindId = requiredString(binding?.mindId);
-    return readBindingId === null || mindId === null
-      ? null
-      : Object.freeze({
-          readBindingId,
-          mind: candidates.get(mindId) ?? null,
-        });
-  });
-  if (readBindings.some((binding) => binding === null)) return null;
-  const writeSource = source.writeBinding === null ? null : record(source.writeBinding);
-  const writeBindingId = writeSource === null ? null : requiredString(writeSource.writeBindingId);
-  const writeMindId = writeSource === null ? null : requiredString(writeSource.mindId);
-  if (writeSource !== null && (writeBindingId === null || writeMindId === null)) return null;
-  const captureSource = record(source.automaticCapture);
-  if (
-    captureSource === null ||
-    !("mode" in captureSource) ||
-    !("writeBindingId" in captureSource) ||
-    !("updatedAt" in captureSource)
-  ) return null;
-  const captureMode = captureSource.mode;
-  const captureWriteBindingId = captureSource.writeBindingId === null
-    ? null
-    : requiredString(captureSource.writeBindingId);
-  const captureUpdatedAt = captureSource.updatedAt === null
-    ? null
-    : requiredString(captureSource.updatedAt);
-  if (
-    !(captureMode === "disabled" || captureMode === "routine_non_sensitive") ||
-    (captureSource.writeBindingId !== null && captureWriteBindingId === null) ||
-    (captureSource.updatedAt !== null && captureUpdatedAt === null) ||
-    (captureMode === "disabled" && captureWriteBindingId !== null) ||
-    (captureMode === "routine_non_sensitive" && captureWriteBindingId === null)
-  ) return null;
-  return Object.freeze({
-    kind: "ready" as const,
-    ownerId,
-    bindingVersion,
-    state: source.state === "active" ? "active" : "revoked",
-    readBindings: Object.freeze(readBindings as Exclude<(typeof readBindings)[number], null>[]),
-    writeBinding: writeSource === null
-      ? null
-      : Object.freeze({
-          writeBindingId: writeBindingId!,
-          mind: candidates.get(writeMindId!) ?? null,
-        }),
-    automaticCapture: Object.freeze({
-      mode: captureMode,
-      writeBindingId: captureWriteBindingId,
-      updatedAt: captureUpdatedAt,
-    }),
-    eligibleMinds: Object.freeze([...candidates.values()]),
   });
 }
 

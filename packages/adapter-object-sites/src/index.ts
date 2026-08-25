@@ -12,7 +12,6 @@ import {
   type ImmutableObjectMetadata,
   type ImmutableObjectPutResult,
   type ImmutableObjectWriteRequest,
-  type ObjectStore,
   REVISION_MANIFEST_MEDIA_TYPE,
   type SpaceCanonicalObject,
   type SpaceCanonicalObjectMetadata,

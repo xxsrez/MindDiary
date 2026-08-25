@@ -26,7 +26,6 @@ import {
   type Sha256Digest,
   type SpaceId,
   type WriteMindBindingId,
-  type StagedBundleFileId,
 } from "@mind-diary/domain";
 import {
   ChangesetPreflightService,

@@ -120,7 +120,6 @@ import type {
   MarkdownImportPlan,
   MarkdownImportSession,
   MarkdownImportSessionFailure,
-  MarkdownImportSessionState,
   MarkdownImportStagedFile,
   MetadataStore,
   MindRouteAuthorizationQuery,
@@ -138,7 +137,6 @@ import type {
   ExportDownloadGrantStore,
   ExportDownloadGrantTransaction,
   ExportJob,
-  ExportJobStore,
   ExportStartTransaction,
   ReadExportDownloadGrantResult,
   RevokeMcpTokenRequest,
@@ -1101,8 +1099,6 @@ const SHA256_PATTERN = /^sha256:[0-9a-f]{64}$/u;
 const EXPORT_DOWNLOAD_VERIFIER_PATTERN =
   /^hmac-sha256:export-download:v1:[0-9a-f]{64}$/u;
 const MARKDOWN_MEDIA_TYPE = "text/markdown; charset=utf-8";
-const CONTROL_CHARACTER = /[\u0000-\u001f\u007f]/u;
-const ENCODED_SEPARATOR = /%(?:2f|5c)/iu;
 
 function compareUnicodeScalarValues(left: string, right: string): number {
   const leftPoints = [...left].map((value) => value.codePointAt(0)!);
@@ -1113,21 +1109,6 @@ function compareUnicodeScalarValues(left: string, right: string): number {
     if (difference !== 0) return difference;
   }
   return leftPoints.length - rightPoints.length;
-}
-
-function validPath(path: string): boolean {
-  const segments = path.split("/");
-  return (
-    path.length > 0 &&
-    !path.startsWith("/") &&
-    !path.includes("\\") &&
-    !CONTROL_CHARACTER.test(path) &&
-    !ENCODED_SEPARATOR.test(path) &&
-    segments.every(
-      (segment) => segment.length > 0 && segment !== "." && segment !== "..",
-    ) &&
-    path.endsWith(".md")
-  );
 }
 
 function canonicalManifestSource(envelope: Envelope): string | null {
@@ -2776,11 +2757,8 @@ const OWNERSHIP_TRANSFER_AUDIT_METADATA_KEYS = [
 
 function ownershipTransferAuditEffects(
   request: Readonly<TransferOrdinaryMindOwnershipRequest>,
-  previousSpace: Readonly<KnowledgeSpace>,
   currentSpace: Readonly<KnowledgeSpace>,
-  previousSource: Readonly<SpaceMembership>,
   currentSource: Readonly<SpaceMembership>,
-  previousTarget: Readonly<SpaceMembership>,
   currentTarget: Readonly<SpaceMembership>,
 ): Readonly<{
   event: Readonly<AuditEvent>;
@@ -2922,11 +2900,8 @@ function stageOwnershipTransferAuditEffects(
 ): boolean {
   const effects = ownershipTransferAuditEffects(
     request,
-    previousSpace,
     currentSpace,
-    previousSource,
     currentSource,
-    previousTarget,
     currentTarget,
   );
   if (

@@ -8,7 +8,6 @@ import {
   type ExportDownloadSecretCrypto,
 } from "@mind-diary/application-ports";
 import {
-  BUNDLE_FILE_MEDIA_TYPES,
   REVISION_MANIFEST_FORMAT_V3,
   canonicalBundleFilePath,
   parseRevisionManifest,

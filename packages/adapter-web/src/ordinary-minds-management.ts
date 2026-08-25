@@ -556,7 +556,7 @@ function renderCapacityPanel(
   </section>`;
 }
 
-function renderDeleteDialog(mind: OrdinaryMindUiMind, handle: string): string {
+function renderDeleteDialog(mind: OrdinaryMindUiMind): string {
   if (safeRole(mind.role) !== "owner") return "";
   return `<dialog class="md-dialog" id="delete-ordinary-mind-dialog" aria-labelledby="delete-ordinary-mind-title" aria-describedby="delete-ordinary-mind-description" data-delete-mind-dialog>
     <form class="md-form" data-delete-mind-form>
@@ -640,7 +640,7 @@ function renderDetailView(
       ${renderDeletePanel(mind, handle)}
     </div>
   </main>
-  ${renderDeleteDialog(mind, handle)}`;
+  ${renderDeleteDialog(mind)}`;
 }
 
 export function renderOrdinaryMindsManagement(model: OrdinaryMindsManagementModel): string {

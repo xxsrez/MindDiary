@@ -85,7 +85,6 @@ import {
   MindHistoryService,
   MindSearchService,
   MindValidationService,
-  MCP_CONTENT_DEPLOYMENT_CAPABILITIES,
   type McpBearerAuthenticator,
   type SitesIdentityActorContext,
 } from "@mind-diary/application-content";

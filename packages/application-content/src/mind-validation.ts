@@ -9,7 +9,6 @@ import {
   type ObjectStore,
 } from "@mind-diary/application-ports";
 import {
-  MARKDOWN_MEDIA_TYPE,
   REVISION_MANIFEST_FORMAT_V3,
   parseRevisionManifest,
   revisionEnvelopesEqual,
