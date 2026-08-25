@@ -139,20 +139,16 @@ interface DurableEventRow {
   readonly payload_json: string;
 }
 
-interface DurableSnapshotRow {
+interface DurableColdLoadRow {
+  readonly row_kind: number;
   readonly sequence: number;
+  readonly chunk_count: number | null;
+  readonly payload_chars: number | null;
+  readonly chunk_index: number | null;
+  readonly target: DurableTarget | null;
+  readonly operation: string | null;
   readonly payload_json: string;
-}
-
-interface DurableSnapshotHeadRow {
-  readonly sequence: number;
-  readonly chunk_count: number;
-  readonly payload_chars: number;
-}
-
-interface DurableSnapshotChunkRow {
-  readonly chunk_index: number;
-  readonly payload_json: string;
+  readonly schema_version: number;
 }
 
 interface DurableSnapshot {
@@ -245,7 +241,7 @@ const TOKEN_MUTATIONS = new Set([
 
 const MAX_CAS_ATTEMPTS = 16;
 const SNAPSHOT_CHUNK_CODE_UNITS = 256 * 1_024;
-const SNAPSHOT_CHUNK_READ_PAGE = 8;
+const SITES_METADATA_SCHEMA_VERSION = SITES_METADATA_MIGRATIONS.at(-1)?.version ?? 0;
 const MIND_BINDING_SNAPSHOT_CADENCE = 16;
 const OBJECT_CLEANUP_SNAPSHOT_CADENCE = 16;
 const OBJECT_CLEANUP_CHECKPOINT_METHODS = new Set([
@@ -446,7 +442,6 @@ export class SitesMetadataStore {
 
   async ready(): Promise<this> {
     await this.#exclusive(async () => {
-      await this.#migrate();
       await this.#refresh();
     });
     return this.#proxy;
@@ -609,9 +604,22 @@ export class SitesMetadataStore {
   }
 
   async #refresh(): Promise<void> {
-    await this.#migrate();
     if (!this.#loaded) {
-      const loaded = await this.#load();
+      let loaded: LoadedState;
+      if (this.#initialized) {
+        loaded = await this.#load();
+      } else {
+        try {
+          loaded = await this.#load();
+          this.#initialized = true;
+        } catch {
+          // A fresh or older database may not yet have every table referenced
+          // by the fast cold-load query. Apply the idempotent schema batch once
+          // and retry; current deployments avoid a separate migration round-trip.
+          await this.#migrate();
+          loaded = await this.#load();
+        }
+      }
       this.#metadata = loaded.metadata;
       this.#tokens = loaded.tokens;
       this.#sequence = loaded.sequence;
@@ -626,118 +634,164 @@ export class SitesMetadataStore {
   }
 
   async #load(): Promise<LoadedState> {
-    const chunkedSnapshot = await this.#readChunkedSnapshot();
-    if (chunkedSnapshot !== null) {
-      return this.#loadSnapshot(
-        chunkedSnapshot.sequence,
-        chunkedSnapshot.payloadJson,
-      );
-    }
-    const snapshots = await this.#database
-      .prepare(
-        `/*md-metadata-snapshot-read*/ SELECT sequence, payload_json
-         FROM md_metadata_snapshots WHERE singleton_id = 1`,
-      )
-      .all<DurableSnapshotRow>();
-    const snapshotRow = snapshots.results?.[0];
-    if (snapshotRow !== undefined) {
-      if (!Number.isSafeInteger(snapshotRow.sequence) || snapshotRow.sequence < 0) {
-        throw new Error("Sites metadata snapshot sequence is invalid");
-      }
-      return this.#loadSnapshot(snapshotRow.sequence, snapshotRow.payload_json);
-    }
-
     const result = await this.#database
       .prepare(
-        `/*md-metadata-events-migration*/ SELECT sequence, target, operation, payload_json
-         FROM md_metadata_events ORDER BY sequence ASC`,
+        `/*md-metadata-cold-load*/ WITH
+         schema_guard AS (
+           SELECT
+             COALESCE(MAX(version), 0) AS schema_version,
+             (SELECT COUNT(*) FROM md_principal_activity WHERE 0) AS activity_guard
+           FROM md_metadata_schema_migrations
+         ),
+         current_head AS (
+           SELECT sequence, chunk_count, payload_chars
+           FROM md_metadata_snapshot_heads WHERE singleton_id = 1
+         ),
+         base_sequence AS (
+           SELECT COALESCE(
+             (SELECT sequence FROM current_head),
+             (SELECT sequence FROM md_metadata_snapshots WHERE singleton_id = 1),
+             0
+           ) AS sequence
+         )
+         SELECT
+           0 AS row_kind,
+           head.sequence,
+           head.chunk_count,
+           head.payload_chars,
+           chunk.chunk_index,
+           NULL AS target,
+           NULL AS operation,
+           chunk.payload_json,
+           guard.schema_version
+         FROM schema_guard AS guard
+         JOIN current_head AS head
+         JOIN md_metadata_snapshot_chunks AS chunk
+           ON chunk.sequence = head.sequence
+         UNION ALL
+         SELECT
+           1 AS row_kind,
+           snapshot.sequence,
+           1 AS chunk_count,
+           LENGTH(snapshot.payload_json) AS payload_chars,
+           0 AS chunk_index,
+           NULL AS target,
+           NULL AS operation,
+           snapshot.payload_json,
+           guard.schema_version
+         FROM schema_guard AS guard
+         JOIN md_metadata_snapshots AS snapshot ON snapshot.singleton_id = 1
+         WHERE NOT EXISTS (SELECT 1 FROM current_head)
+         UNION ALL
+         SELECT
+           2 AS row_kind,
+           event.sequence,
+           NULL AS chunk_count,
+           NULL AS payload_chars,
+           NULL AS chunk_index,
+           event.target,
+           event.operation,
+           event.payload_json,
+           guard.schema_version
+         FROM schema_guard AS guard
+         JOIN base_sequence AS base
+         JOIN md_metadata_events AS event ON event.sequence > base.sequence
+         UNION ALL
+         SELECT
+           3 AS row_kind,
+           0 AS sequence,
+           NULL AS chunk_count,
+           NULL AS payload_chars,
+           NULL AS chunk_index,
+           NULL AS target,
+           NULL AS operation,
+           '' AS payload_json,
+           guard.schema_version
+         FROM schema_guard AS guard
+         WHERE NOT EXISTS (SELECT 1 FROM current_head)
+           AND NOT EXISTS (
+             SELECT 1 FROM md_metadata_snapshots WHERE singleton_id = 1
+           )
+           AND NOT EXISTS (SELECT 1 FROM md_metadata_events)
+         ORDER BY row_kind ASC, sequence ASC, chunk_index ASC`,
       )
-      .all<DurableEventRow>();
+      .all<DurableColdLoadRow>();
     const rows = [...(result.results ?? [])];
-    const metadata = new InMemoryRevisionMetadataStore();
-    const tokens = new InMemoryMcpTokenStore();
-    let expected = 0;
-    for (const row of rows) {
-      if (!Number.isSafeInteger(row.sequence) || row.sequence !== expected + 1) {
-        throw new Error("Sites metadata event sequence is not contiguous");
-      }
-      const event = decode<DurableEvent>(row.payload_json);
-      if (
-        event.v !== 1 ||
-        event.target !== row.target ||
-        event.method !== row.operation
-      ) {
-        throw new Error("Sites metadata event envelope is invalid");
-      }
-      await this.#replay(metadata, tokens, event);
-      expected = row.sequence;
-    }
-    await this.#persistSnapshot(expected, metadata, tokens);
-    return { metadata, tokens, sequence: expected };
-  }
-
-  async #readChunkedSnapshot(): Promise<Readonly<{
-    sequence: number;
-    payloadJson: string;
-  }> | null> {
-    const heads = await this.#database
-      .prepare(
-        `/*md-metadata-snapshot-head-read*/ SELECT sequence, chunk_count, payload_chars
-         FROM md_metadata_snapshot_heads WHERE singleton_id = 1`,
-      )
-      .all<DurableSnapshotHeadRow>();
-    const head = heads.results?.[0];
-    if (head === undefined) return null;
     if (
-      !Number.isSafeInteger(head.sequence) || head.sequence < 0 ||
-      !Number.isSafeInteger(head.chunk_count) || head.chunk_count < 1 ||
-      !Number.isSafeInteger(head.payload_chars) || head.payload_chars < 1
+      rows.length === 0 ||
+      rows.some((row) => row.schema_version !== SITES_METADATA_SCHEMA_VERSION)
     ) {
-      throw new Error("Sites metadata snapshot head is invalid");
+      const observed = rows.length === 0
+        ? "no rows"
+        : [...new Set(rows.map((row) => String(row.schema_version)))].join(",");
+      throw new Error(
+        `Sites metadata schema upgrade is required (expected ${SITES_METADATA_SCHEMA_VERSION}; observed ${observed})`,
+      );
     }
-    const chunks: string[] = [];
-    while (chunks.length < head.chunk_count) {
-      const result = await this.#database
-        .prepare(
-          `/*md-metadata-snapshot-chunks-read*/ SELECT chunk_index, payload_json
-           FROM md_metadata_snapshot_chunks
-           WHERE sequence = ?1 AND chunk_index >= ?2
-           ORDER BY chunk_index ASC LIMIT ?3`,
-        )
-        .bind(head.sequence, chunks.length, SNAPSHOT_CHUNK_READ_PAGE)
-        .all<DurableSnapshotChunkRow>();
-      const page = [...(result.results ?? [])];
-      if (page.length === 0) throw new Error("Sites metadata snapshot chunks are incomplete");
-      for (const row of page) {
+    const eventRows = rows
+      .filter((row) => row.row_kind === 2)
+      .map((row) => ({
+        sequence: row.sequence,
+        target: row.target as DurableTarget,
+        operation: row.operation as string,
+        payload_json: row.payload_json,
+      }));
+    const snapshotRows = rows.filter((row) => row.row_kind === 0 || row.row_kind === 1);
+    if (snapshotRows.length > 0) {
+      const first = snapshotRows[0]!;
+      const chunkCount = first.chunk_count;
+      const payloadChars = first.payload_chars;
+      if (
+        !Number.isSafeInteger(first.sequence) || first.sequence < 0 ||
+        typeof chunkCount !== "number" ||
+        !Number.isSafeInteger(chunkCount) || chunkCount < 1 ||
+        typeof payloadChars !== "number" ||
+        !Number.isSafeInteger(payloadChars) || payloadChars < 1 ||
+        snapshotRows.length !== chunkCount
+      ) {
+        throw new Error("Sites metadata snapshot is invalid");
+      }
+      const chunks: string[] = [];
+      for (const row of snapshotRows) {
         if (
+          row.sequence !== first.sequence ||
+          row.chunk_count !== chunkCount ||
+          row.payload_chars !== payloadChars ||
           row.chunk_index !== chunks.length ||
-          typeof row.payload_json !== "string" ||
-          chunks.length >= head.chunk_count
+          typeof row.payload_json !== "string"
         ) {
           throw new Error("Sites metadata snapshot chunks are invalid");
         }
         chunks.push(row.payload_json);
       }
+      const payloadJson = chunks.join("");
+      if (payloadJson.length !== payloadChars) {
+        throw new Error("Sites metadata snapshot payload length is invalid");
+      }
+      return this.#loadSnapshot(first.sequence, payloadJson, eventRows);
     }
-    const payloadJson = chunks.join("");
-    if (payloadJson.length !== head.payload_chars) {
-      throw new Error("Sites metadata snapshot payload length is invalid");
-    }
-    return Object.freeze({ sequence: head.sequence, payloadJson });
+
+    const metadata = new InMemoryRevisionMetadataStore();
+    const tokens = new InMemoryMcpTokenStore();
+    const replayed = await this.#replayRows(metadata, tokens, 0, eventRows);
+    await this.#persistSnapshot(replayed.sequence, metadata, tokens);
+    return { metadata, tokens, sequence: replayed.sequence };
   }
 
-  async #loadSnapshot(sequenceAtSnapshot: number, payloadJson: string): Promise<LoadedState> {
+  async #loadSnapshot(
+    sequenceAtSnapshot: number,
+    payloadJson: string,
+    tailRows?: readonly DurableEventRow[],
+  ): Promise<LoadedState> {
     const snapshot = decode<DurableSnapshot>(payloadJson);
     if (snapshot.v !== 1) throw new Error("Sites metadata snapshot is invalid");
     const metadata = InMemoryRevisionMetadataStore.fromDurableSnapshot(
       snapshot.metadata,
     );
     const tokens = InMemoryMcpTokenStore.fromDurableSnapshot(snapshot.tokens);
-    const replayed = await this.#replayTail(
-      metadata,
-      tokens,
-      sequenceAtSnapshot,
-    );
+    const replayed = tailRows === undefined
+      ? await this.#replayTail(metadata, tokens, sequenceAtSnapshot)
+      : await this.#replayRows(metadata, tokens, sequenceAtSnapshot, tailRows);
     if (replayed.shouldCheckpoint) {
       await this.#persistSnapshot(replayed.sequence, metadata, tokens);
     }
@@ -756,9 +810,18 @@ export class SitesMetadataStore {
       )
       .bind(afterSequence)
       .all<DurableEventRow>();
+    return this.#replayRows(metadata, tokens, afterSequence, result.results ?? []);
+  }
+
+  async #replayRows(
+    metadata: InMemoryRevisionMetadataStore,
+    tokens: InMemoryMcpTokenStore,
+    afterSequence: number,
+    rows: readonly DurableEventRow[],
+  ): Promise<TailReplayResult> {
     let expected = afterSequence;
     let shouldCheckpoint = false;
-    for (const row of result.results ?? []) {
+    for (const row of rows) {
       if (!Number.isSafeInteger(row.sequence) || row.sequence !== expected + 1) {
         throw new Error("Sites metadata event sequence is not contiguous");
       }

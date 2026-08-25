@@ -109,6 +109,7 @@ class FakeD1Statement {
 
 class FakeD1Database {
   batchStatementCounts = [];
+  metadataSchemaVersion = 4;
   metadataEvents = [];
   metadataSnapshot = null;
   metadataSnapshotHead = null;
@@ -195,6 +196,10 @@ class FakeD1Database {
     }
     if (/^\s*(?:CREATE TABLE|CREATE INDEX)/u.test(sql)) {
       return { success: true, meta: { changes: 0 } };
+    }
+    if (sql.includes("/*md-metadata-migration*/")) {
+      this.metadataSchemaVersion = Math.max(this.metadataSchemaVersion, Number(values[0]));
+      return { success: true, meta: { changes: 1 } };
     }
     if (sql.includes("migration*/")) {
       return { success: true, meta: { changes: 1 } };
@@ -445,6 +450,67 @@ class FakeD1Database {
   }
 
   async all(sql, values) {
+    if (sql.includes("/*md-metadata-cold-load*/")) {
+      this.metadataReadLog.push("cold-load");
+      const rows = [];
+      const baseSequence = this.metadataSnapshotHead?.sequence ??
+        this.metadataSnapshot?.sequence ?? 0;
+      if (this.metadataSnapshotHead !== null) {
+        rows.push(...[...this.metadataSnapshotChunks.values()]
+          .filter((row) => row.sequence === this.metadataSnapshotHead.sequence)
+          .sort((left, right) => left.chunk_index - right.chunk_index)
+          .map((row) => ({
+            row_kind: 0,
+            sequence: this.metadataSnapshotHead.sequence,
+            chunk_count: this.metadataSnapshotHead.chunk_count,
+            payload_chars: this.metadataSnapshotHead.payload_chars,
+            chunk_index: row.chunk_index,
+            target: null,
+            operation: null,
+            payload_json: row.payload_json,
+            schema_version: this.metadataSchemaVersion,
+          })));
+      } else if (this.metadataSnapshot !== null) {
+        rows.push({
+          row_kind: 1,
+          sequence: this.metadataSnapshot.sequence,
+          chunk_count: 1,
+          payload_chars: this.metadataSnapshot.payload_json.length,
+          chunk_index: 0,
+          target: null,
+          operation: null,
+          payload_json: this.metadataSnapshot.payload_json,
+          schema_version: this.metadataSchemaVersion,
+        });
+      }
+      rows.push(...this.metadataEvents
+        .filter((row) => row.sequence > baseSequence)
+        .map((row) => ({
+          row_kind: 2,
+          sequence: row.sequence,
+          chunk_count: null,
+          payload_chars: null,
+          chunk_index: null,
+          target: row.target,
+          operation: row.operation,
+          payload_json: row.payload_json,
+          schema_version: this.metadataSchemaVersion,
+        })));
+      if (rows.length === 0) {
+        rows.push({
+          row_kind: 3,
+          sequence: 0,
+          chunk_count: null,
+          payload_chars: null,
+          chunk_index: null,
+          target: null,
+          operation: null,
+          payload_json: "",
+          schema_version: this.metadataSchemaVersion,
+        });
+      }
+      return { success: true, results: rows };
+    }
     this.#maybeFail(sql);
     if (sql.includes("/*md-metadata-snapshot-head-read*/")) {
       this.metadataReadLog.push("snapshot-head");
@@ -590,6 +656,7 @@ class FakeD1Database {
 
 test("Sites metadata applies cold schema migrations in one D1 batch", async () => {
   const database = new FakeD1Database();
+  database.metadataSchemaVersion = 0;
   await createSitesMetadataStore(database);
   const expectedMigrationStatements = SITES_METADATA_MIGRATIONS.reduce(
     (count, migration) => count + migration.statements.length + 1,
@@ -1119,7 +1186,7 @@ test("durable recovery cursor crosses a mixed bounded page after a cold restart 
   assert.equal(heads.length, 17);
 });
 
-test("materialized metadata snapshot removes full-log replay from warm and restart reads", async () => {
+test("guarded metadata cold load removes full-log replay and extra restart round-trips", async () => {
   const database = new FakeD1Database();
   const bucket = new FakeR2Bucket();
   let boundary = await createSitesPersistenceBoundary({ database, bucket });
@@ -1142,7 +1209,7 @@ test("materialized metadata snapshot removes full-log replay from warm and resta
 
   database.metadataReadLog = [];
   boundary = await createSitesPersistenceBoundary({ database, bucket });
-  assert.deepEqual(database.metadataReadLog, ["snapshot-head", "snapshot-chunks", "tail"]);
+  assert.deepEqual(database.metadataReadLog, ["cold-load"]);
   database.metadataReadLog = [];
   assert.ok(await boundary.metadata.readAccount(created.principalId));
   assert.ok(await boundary.metadata.resolvePersonalMind(created.principalId));
@@ -1152,9 +1219,8 @@ test("materialized metadata snapshot removes full-log replay from warm and resta
   boundary = await createSitesPersistenceBoundary({ database, bucket });
   assert.ok(await boundary.metadata.readAccount(created.principalId));
   assert.equal(database.metadataReadLog.filter((kind) => kind === "migration").length, 0);
-  assert.equal(database.metadataReadLog.filter((kind) => kind === "snapshot-head").length, 1);
-  assert.equal(database.metadataReadLog.filter((kind) => kind === "snapshot-chunks").length, 1);
-  assert.equal(database.metadataReadLog.filter((kind) => kind === "tail").length, 2);
+  assert.equal(database.metadataReadLog.filter((kind) => kind === "cold-load").length, 1);
+  assert.equal(database.metadataReadLog.filter((kind) => kind === "tail").length, 1);
 });
 
 test("snapshot write failure after fenced append self-heals from canonical tail", async () => {

@@ -47,6 +47,7 @@ class FakeD1Statement {
 }
 
 class FakeD1Database {
+  metadataSchemaVersion = 4;
   metadataEvents = [];
   metadataTailReads = 0;
   metadataSnapshot = null;
@@ -73,6 +74,10 @@ class FakeD1Database {
   async run(sql, values) {
     if (/^\s*(?:CREATE TABLE|CREATE INDEX)/u.test(sql)) {
       return { success: true, meta: { changes: 0 } };
+    }
+    if (sql.includes("/*md-metadata-migration*/")) {
+      this.metadataSchemaVersion = Math.max(this.metadataSchemaVersion, Number(values[0]));
+      return { success: true, meta: { changes: 1 } };
     }
     if (sql.includes("migration*/")) {
       return { success: true, meta: { changes: 1 } };
@@ -315,6 +320,66 @@ class FakeD1Database {
   }
 
   async all(sql, values) {
+    if (sql.includes("/*md-metadata-cold-load*/")) {
+      const rows = [];
+      const baseSequence = this.metadataSnapshotHead?.sequence ??
+        this.metadataSnapshot?.sequence ?? 0;
+      if (this.metadataSnapshotHead !== null) {
+        rows.push(...[...this.metadataSnapshotChunks.values()]
+          .filter((row) => row.sequence === this.metadataSnapshotHead.sequence)
+          .sort((left, right) => left.chunk_index - right.chunk_index)
+          .map((row) => ({
+            row_kind: 0,
+            sequence: this.metadataSnapshotHead.sequence,
+            chunk_count: this.metadataSnapshotHead.chunk_count,
+            payload_chars: this.metadataSnapshotHead.payload_chars,
+            chunk_index: row.chunk_index,
+            target: null,
+            operation: null,
+            payload_json: row.payload_json,
+            schema_version: this.metadataSchemaVersion,
+          })));
+      } else if (this.metadataSnapshot !== null) {
+        rows.push({
+          row_kind: 1,
+          sequence: this.metadataSnapshot.sequence,
+          chunk_count: 1,
+          payload_chars: this.metadataSnapshot.payload_json.length,
+          chunk_index: 0,
+          target: null,
+          operation: null,
+          payload_json: this.metadataSnapshot.payload_json,
+          schema_version: this.metadataSchemaVersion,
+        });
+      }
+      rows.push(...this.metadataEvents
+        .filter((row) => row.sequence > baseSequence)
+        .map((row) => ({
+          row_kind: 2,
+          sequence: row.sequence,
+          chunk_count: null,
+          payload_chars: null,
+          chunk_index: null,
+          target: row.target,
+          operation: row.operation,
+          payload_json: row.payload_json,
+          schema_version: this.metadataSchemaVersion,
+        })));
+      if (rows.length === 0) {
+        rows.push({
+          row_kind: 3,
+          sequence: 0,
+          chunk_count: null,
+          payload_chars: null,
+          chunk_index: null,
+          target: null,
+          operation: null,
+          payload_json: "",
+          schema_version: this.metadataSchemaVersion,
+        });
+      }
+      return { success: true, results: rows };
+    }
     if (sql.includes("/*md-metadata-snapshot-head-read*/")) {
       return {
         success: true,

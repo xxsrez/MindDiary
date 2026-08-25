@@ -26,6 +26,7 @@ class Statement {
 }
 
 class EventLogD1 {
+  metadataSchemaVersion = 4;
   events = [];
   snapshot = null;
   snapshotHead = null;
@@ -38,6 +39,10 @@ class EventLogD1 {
   }
   async run(sql, values) {
     if (/^\s*CREATE TABLE/u.test(sql)) return { meta: { changes: 0 } };
+    if (sql.includes("/*md-metadata-migration*/")) {
+      this.metadataSchemaVersion = Math.max(this.metadataSchemaVersion, Number(values[0]));
+      return { meta: { changes: 1 } };
+    }
     if (sql.includes("migration*/")) return { meta: { changes: 1 } };
     if (sql.includes("/*md-metadata-append*/")) {
       const current = this.events.at(-1)?.sequence ?? 0;
@@ -83,6 +88,65 @@ class EventLogD1 {
     throw new Error(`unsupported statement: ${sql}`);
   }
   async all(sql, values) {
+    if (sql.includes("/*md-metadata-cold-load*/")) {
+      const rows = [];
+      const baseSequence = this.snapshotHead?.sequence ?? this.snapshot?.sequence ?? 0;
+      if (this.snapshotHead !== null) {
+        rows.push(...[...this.snapshotChunks.values()]
+          .filter((row) => row.sequence === this.snapshotHead.sequence)
+          .sort((left, right) => left.chunk_index - right.chunk_index)
+          .map((row) => ({
+            row_kind: 0,
+            sequence: this.snapshotHead.sequence,
+            chunk_count: this.snapshotHead.chunk_count,
+            payload_chars: this.snapshotHead.payload_chars,
+            chunk_index: row.chunk_index,
+            target: null,
+            operation: null,
+            payload_json: row.payload_json,
+            schema_version: this.metadataSchemaVersion,
+          })));
+      } else if (this.snapshot !== null) {
+        rows.push({
+          row_kind: 1,
+          sequence: this.snapshot.sequence,
+          chunk_count: 1,
+          payload_chars: this.snapshot.payload_json.length,
+          chunk_index: 0,
+          target: null,
+          operation: null,
+          payload_json: this.snapshot.payload_json,
+          schema_version: this.metadataSchemaVersion,
+        });
+      }
+      rows.push(...this.events
+        .filter((row) => row.sequence > baseSequence)
+        .map((row) => ({
+          row_kind: 2,
+          sequence: row.sequence,
+          chunk_count: null,
+          payload_chars: null,
+          chunk_index: null,
+          target: row.target,
+          operation: row.operation,
+          payload_json: row.payload_json,
+          schema_version: this.metadataSchemaVersion,
+        })));
+      if (rows.length === 0) {
+        rows.push({
+          row_kind: 3,
+          sequence: 0,
+          chunk_count: null,
+          payload_chars: null,
+          chunk_index: null,
+          target: null,
+          operation: null,
+          payload_json: "",
+          schema_version: this.metadataSchemaVersion,
+        });
+      }
+      return { results: rows };
+    }
     if (sql.includes("/*md-metadata-snapshot-head-read*/")) {
       return { results: this.snapshotHead === null ? [] : [{ ...this.snapshotHead }] };
     }

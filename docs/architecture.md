@@ -704,7 +704,10 @@ explicit target Mind. General cross-Mind search/synthesis требует нов�
   background promise в собственном `waitUntil` и не наследуют его wall time.
   Cold-isolate schema bootstrap отправляет все ordered idempotent metadata
   migrations одним D1 batch вместо отдельного network round-trip на каждую
-  migration; snapshot load начинается только после успешного общего batch.
+  migration. Current-schema cold load одним guarded SQL получает snapshot chunks
+  и canonical event tail; fresh/older schema автоматически применяет migration
+  batch и повторяет тот же read. Таким образом обычный isolate startup не делает
+  отдельные head, chunks, tail и no-op migration round-trips.
   Внутри adapter-provided immutable read-session batch list использует один
   authorization-state pass; второй TOCTOU pass нужен только там, где между
   metadata reads действительно возможна mutation race.
