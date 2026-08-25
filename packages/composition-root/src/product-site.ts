@@ -48,6 +48,7 @@ import {
   resolveProductSitesIdentity,
   SITES_IDENTITY_PROVIDER,
   type ProductSitesIdentityResolution,
+  type ProductSitesSessionSnapshot,
   type ProductWebActor,
   type TrustedSitesIdentitySnapshot,
 } from "@mind-diary/adapter-web";
@@ -1030,7 +1031,8 @@ export async function createProductSiteRuntime(
       occurredAtUtc: clock.now(),
       deploymentCapabilities: PRODUCT_SITES_DEPLOYMENT_CAPABILITIES,
     });
-    return resolveProductSitesIdentity({
+    let session: Readonly<ProductSitesSessionSnapshot> | undefined;
+    const resolution = await resolveProductSitesIdentity({
       snapshot: await options.identity.readVerifiedIdentity(
         trustedIdentitySourceRequests.get(request) ?? request,
       ),
@@ -1038,6 +1040,18 @@ export async function createProductSiteRuntime(
       bindings: {
         async readActiveBinding(lookup) {
           const account = await metadata.readAccountByExternalBinding(lookup as never);
+          if (account !== null) {
+            session = Object.freeze({
+              principal: Object.freeze({
+                displayName: account.principal.displayName,
+                profileVersion: account.principal.profileVersion,
+              }),
+              personalMind: Object.freeze({
+                name: account.personalMind.space.name,
+                headRevisionId: account.personalMind.space.headRevisionId,
+              }),
+            });
+          }
           return account === null
             ? Object.freeze({ kind: "unbound" as const })
             : Object.freeze({
@@ -1050,6 +1064,9 @@ export async function createProductSiteRuntime(
       },
       context,
     });
+    return resolution.kind === "authenticated" && session !== undefined
+      ? Object.freeze({ ...resolution, session })
+      : resolution;
   };
   const oauth = await createSitesOAuthConnector({
     database: options.database,
@@ -2218,7 +2235,7 @@ export async function createProductSiteRuntime(
         const response =
           (await exportDownload(request)) ??
           (await bundleFileDownload(request)) ??
-          await web(request);
+          await web(request, deferActivity);
         if (response !== null) {
           const surface = exportRequest || bundleFileRequest ? "content" as const : "control" as const;
           const operation = exportRequest

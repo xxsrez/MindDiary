@@ -91,8 +91,24 @@ type RegisteredSitesActor = Extract<
 >;
 export type ProductWebActor = RegisteredSitesActor | SitesIdentityBeforeRegistration;
 
+export interface ProductSitesSessionSnapshot {
+  readonly principal: {
+    readonly displayName: string;
+    readonly profileVersion: number;
+  };
+  readonly personalMind: {
+    readonly name: string;
+    readonly headRevisionId: string;
+  };
+}
+
 export type ProductSitesIdentityResolution =
-  | { readonly kind: "authenticated"; readonly actor: RegisteredSitesActor }
+  | {
+      readonly kind: "authenticated";
+      readonly actor: RegisteredSitesActor;
+      /** Safe projection captured by the same durable read that authenticated the request. */
+      readonly session?: Readonly<ProductSitesSessionSnapshot>;
+    }
   | { readonly kind: "registration_required"; readonly actor: SitesIdentityBeforeRegistration }
   | { readonly kind: "denied" }
   | { readonly kind: "unavailable" };
@@ -332,6 +348,36 @@ export interface ProductWebHttpHandlerDependencies {
   readonly mindBindings?: ProductWebMindBindings;
   readonly activity?: ProductWebActivityRecorder;
   readonly performance?: ProductWebPerformanceRecorder;
+}
+
+type ProductWebActivityDeferrer = (promise: Promise<unknown>) => void;
+
+async function recordSuccessfulProductWebActivity(
+  recorder: ProductWebActivityRecorder | undefined,
+  defer: ProductWebActivityDeferrer | undefined,
+  actor: RegisteredSitesActor,
+  kind: "page" | "control_read" | "control_write",
+): Promise<void> {
+  if (recorder === undefined) return;
+  let pending: Promise<void>;
+  try {
+    pending = Promise.resolve(recorder.recordSuccessful(actor, "web", kind));
+  } catch {
+    return;
+  }
+  if (defer !== undefined) {
+    try {
+      defer(pending.catch(() => undefined));
+      return;
+    } catch {
+      // Fall through to the bounded foreground fallback when host deferral fails.
+    }
+  }
+  try {
+    await pending;
+  } catch {
+    // Activity is observational and must never change the product response.
+  }
 }
 
 const MUTATION_METHODS = new Set(["POST", "PATCH", "PUT", "DELETE"]);
@@ -1315,6 +1361,18 @@ async function productUiDocument(input: {
     };
     return withCsrfMeta(renderAuthenticatedOnboardingDocument(model), input.csrfToken);
   }
+  const authenticatedIdentity = input.identity;
+  const readSession = async (): Promise<ProductUiSession> => {
+    const captured = uiSession(authenticatedIdentity.session);
+    if (captured !== null) return captured;
+    const current = uiSession(await input.control.execute({
+      operation: "get_session",
+      actor: authenticatedIdentity.actor,
+      input: Object.freeze({}),
+    }));
+    if (current === null) throw new TypeError("safe session projection is unavailable");
+    return current;
+  };
   if (input.pathname === "/" || input.pathname === "/minds") {
     try {
       const listed = await input.control.execute({
@@ -1352,12 +1410,7 @@ async function productUiDocument(input: {
           : { kind: "ready", minds: Object.freeze(cards) },
       }), input.csrfToken);
     } catch {
-      const session = uiSession(await input.control.execute({
-        operation: "get_session",
-        actor: input.identity.actor,
-        input: Object.freeze({}),
-      }));
-      if (session === null) throw new TypeError("safe session projection is unavailable");
+      const session = await readSession();
       if (input.pathname === "/minds") {
         return withCsrfMeta(renderOrdinaryMindsManagementDocument({
           displayName: session.displayName,
@@ -1374,12 +1427,7 @@ async function productUiDocument(input: {
       }), input.csrfToken);
     }
   }
-  const session = uiSession(await input.control.execute({
-    operation: "get_session",
-    actor: input.identity.actor,
-    input: Object.freeze({}),
-  }));
-  if (session === null) throw new TypeError("safe session projection is unavailable");
+  const session = await readSession();
 
   if (input.pathname === "/help/codex") {
     return withCsrfMeta(renderCodexHelpPageDocument(session.displayName), input.csrfToken);
@@ -2024,9 +2072,12 @@ function applicationErrorStatus(code: string): number {
 /** Authenticated web/control handler. It deliberately never reads Bearer auth. */
 export function createProductWebHttpHandler(
   dependencies: ProductWebHttpHandlerDependencies,
-): (request: Request) => Promise<Response | null> {
+): (
+  request: Request,
+  deferActivity?: ProductWebActivityDeferrer,
+) => Promise<Response | null> {
   const origin = canonicalOrigin(dependencies.applicationOrigin);
-  return async (request) => {
+  return async (request, deferActivity) => {
     const url = new URL(request.url);
     const staticResponse = createProductUiStaticAssetResponse(request);
     if (staticResponse !== null) return staticResponse;
@@ -2145,7 +2196,12 @@ export function createProductWebHttpHandler(
           : errorResponse(503, "operation_failed", requestId, true);
       }
       if (response.ok && identity.kind === "authenticated") {
-        await dependencies.activity?.recordSuccessful(identity.actor, "web", "page");
+        await recordSuccessfulProductWebActivity(
+          dependencies.activity,
+          deferActivity,
+          identity.actor,
+          "page",
+        );
       }
       const finalResponse = request.method === "HEAD"
         ? new Response(null, response)
@@ -2256,7 +2312,12 @@ export function createProductWebHttpHandler(
           );
           const items = page.items.map((connection) =>
             safeConnectionListItem(connection, access.get(connection.bindingOwnerId)!));
-          await dependencies.activity?.recordSuccessful(identity.actor, "web", "control_read");
+          await recordSuccessfulProductWebActivity(
+            dependencies.activity,
+            deferActivity,
+            identity.actor,
+            "control_read",
+          );
           return json(200, { ok: true, data: snakeOutput({ items, nextCursor: page.nextCursor }) });
         }
         const connectionRef = String(matched.path.connection_ref ?? "");
@@ -2272,7 +2333,12 @@ export function createProductWebHttpHandler(
           if (!(await dependencies.oauthConnections.revoke(identity.actor.principalId, connectionRef))) {
             return errorResponse(404, "connection_not_found", requestId);
           }
-          await dependencies.activity?.recordSuccessful(identity.actor, "web", "control_write");
+          await recordSuccessfulProductWebActivity(
+            dependencies.activity,
+            deferActivity,
+            identity.actor,
+            "control_write",
+          );
           return json(200, { ok: true, data: { revoked: true } });
         }
         const mutation = matched.operation === "mutate_connection_access"
@@ -2302,9 +2368,10 @@ export function createProductWebHttpHandler(
         );
         const detail = safeConnectionDetail(fresh, access.get(fresh.bindingOwnerId)!);
         if (detail === null) return errorResponse(404, "connection_not_found", requestId);
-        await dependencies.activity?.recordSuccessful(
+        await recordSuccessfulProductWebActivity(
+          dependencies.activity,
+          deferActivity,
           identity.actor,
-          "web",
           matched.operation === "mutate_connection_access" ? "control_write" : "control_read",
         );
         return json(200, {
@@ -2348,7 +2415,12 @@ export function createProductWebHttpHandler(
               ...(tokenAccess === undefined ? {} : { access: tokenAccess }),
             });
           });
-          await dependencies.activity?.recordSuccessful(identity.actor, "web", "control_read");
+          await recordSuccessfulProductWebActivity(
+            dependencies.activity,
+            deferActivity,
+            identity.actor,
+            "control_read",
+          );
           return json(200, { ok: true, data: snakeOutput({ items, nextCursor: page.nextCursor }) });
         }
         const personalTokenRef = String(matched.path.personal_token_ref ?? "");
@@ -2382,7 +2454,12 @@ export function createProductWebHttpHandler(
         if (freshAccess === undefined) {
           throw new TypeError("safe personal token access is unavailable");
         }
-        await dependencies.activity?.recordSuccessful(identity.actor, "web", "control_write");
+        await recordSuccessfulProductWebActivity(
+          dependencies.activity,
+          deferActivity,
+          identity.actor,
+          "control_write",
+        );
         return json(200, {
           ok: true,
           data: snakeOutput({ ...safeToken, access: freshAccess, ...mutation }),
@@ -2401,7 +2478,12 @@ export function createProductWebHttpHandler(
             actor: identity.actor,
             input,
           });
-          await dependencies.activity?.recordSuccessful(identity.actor, "web", "control_write");
+          await recordSuccessfulProductWebActivity(
+            dependencies.activity,
+            deferActivity,
+            identity.actor,
+            "control_write",
+          );
           return json(200, { ok: true, data: snakeOutput(data) });
         } catch (error) {
           const code = failureCode(error);
@@ -2417,9 +2499,10 @@ export function createProductWebHttpHandler(
         input,
       });
       if (identity.kind === "authenticated") {
-        await dependencies.activity?.recordSuccessful(
+        await recordSuccessfulProductWebActivity(
+          dependencies.activity,
+          deferActivity,
           identity.actor,
-          "web",
           MUTATION_METHODS.has(request.method) ? "control_write" : "control_read",
         );
       }

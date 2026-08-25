@@ -1563,6 +1563,19 @@ test("durable product runtime carries a Sites account token through Codex MCP an
   assert.equal(sessionBody.data.principal.display_name, "Runtime Owner");
   assert.equal(sessionBody.data.personal_mind.route, "/me");
 
+  const tailReadsBeforePersonalPage = database.metadataTailReads;
+  const deferredPersonalActivity = [];
+  const personalPage = await runtime.fetch(
+    new Request(`${ORIGIN}/me`),
+    (promise) => { deferredPersonalActivity.push(promise); },
+  );
+  assert.ok(personalPage instanceof Response);
+  assert.equal(personalPage.status, 200);
+  assert.match(await personalPage.text(), /<h1>My Mind<\/h1>/u);
+  assert.equal(deferredPersonalActivity.length, 1);
+  await Promise.all(deferredPersonalActivity);
+  assert.equal(database.metadataTailReads - tailReadsBeforePersonalPage, 2);
+
   const settings = await responseFrom(runtime, new Request(`${ORIGIN}/settings/developer/mcp`));
   assert.equal(settings.status, 200);
   const settingsHtml = await settings.text();
@@ -3117,7 +3130,7 @@ test("request-triggered recovery reclaims a revision after an injected index dis
     documentResponse.headers.get("x-mind-diary-performance-correlation-id"),
     null,
   );
-  assert.equal(recoveryWaits.length, 1);
+  assert.equal(recoveryWaits.length, 2);
   await Promise.all(recoveryWaits);
   assert.ok(restartedRuntime);
 

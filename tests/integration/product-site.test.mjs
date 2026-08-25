@@ -310,6 +310,64 @@ test("product web authenticates UI and fail-closes browser mutations", async () 
   assert.equal(calls.at(-1).actor, registeredActor);
 });
 
+test("authenticated UI reuses the identity session snapshot instead of rereading it", async () => {
+  const calls = [];
+  const handler = createProductWebHttpHandler({
+    applicationOrigin: origin,
+    resolveIdentity: () => ({
+      kind: "authenticated",
+      actor: registeredActor,
+      session: sessionProjection,
+    }),
+    csrf: { issue: () => "csrf-session-snapshot", verify: () => true },
+    control: { execute(request) {
+      calls.push(request.operation);
+      if (request.operation === "list_public_minds") return { minds: [], nextCursor: null };
+      throw new Error(`unexpected control operation: ${request.operation}`);
+    } },
+  });
+
+  const personal = await handler(new Request(`${origin}/me`));
+  assert.equal(personal.status, 200);
+  assert.match(await personal.text(), /<h1>My Mind<\/h1>/u);
+  assert.deepEqual(calls, []);
+
+  const catalog = await handler(new Request(`${origin}/public`));
+  assert.equal(catalog.status, 200);
+  assert.match(await catalog.text(), /data-mind-diary-visibility-catalog/u);
+  assert.deepEqual(calls, ["list_public_minds"]);
+});
+
+test("successful web activity can run after the response through host deferral", async () => {
+  let finishActivity;
+  let activityFinished = false;
+  const pendingActivity = new Promise((resolve) => { finishActivity = resolve; })
+    .then(() => { activityFinished = true; });
+  const deferred = [];
+  const handler = createProductWebHttpHandler({
+    applicationOrigin: origin,
+    resolveIdentity: () => ({
+      kind: "authenticated",
+      actor: registeredActor,
+      session: sessionProjection,
+    }),
+    csrf: { issue: () => "csrf-deferred-activity", verify: () => true },
+    control: { execute() { throw new Error("must not execute"); } },
+    activity: { recordSuccessful() { return pendingActivity; } },
+  });
+
+  const response = await handler(
+    new Request(`${origin}/me`),
+    (promise) => { deferred.push(promise); },
+  );
+  assert.equal(response.status, 200);
+  assert.equal(activityFinished, false);
+  assert.equal(deferred.length, 1);
+  finishActivity();
+  await Promise.all(deferred);
+  assert.equal(activityFinished, true);
+});
+
 test("product root, Connections, and Advanced MCP render safe live projections and fixed assets", async () => {
   const calls = [];
   const personalTokenRef = `ptok_v1_${"1".repeat(32)}`;
