@@ -1,28 +1,17 @@
-import type { ActorContext } from "@mind-diary/application-contracts";
-import type {
-  BundleFileMediaType,
-  Sha256Digest,
-  SpaceId,
+import {
+  bundleFileMediaType,
+  type BundleFileMediaType,
+  type Sha256Digest,
 } from "@mind-diary/domain";
-import type { StagedBundleFileRecord } from "@mind-diary/application-ports";
 import {
   BUNDLE_FILE_LIMITS,
-  BundleFileStagingService,
   detectBundleFileMediaType,
-  type StageBundleFileResult,
 } from "./bundle-files.js";
 import { IncrementalSha256 } from "./incremental-sha256.js";
 
-/**
- * The local companion is deliberately an adapter boundary.  A local path is
- * accepted only by `LocalCompanionFileSystem`; this application-facing input
- * never contains that path.  This keeps local filesystem details out of the
- * staged record, idempotency payload and hosted transport.
- */
 export type LocalCompanionSourceKind =
   | "local_path"
-  | "workspace/generated_artifact"
-  | "bounded_in_memory";
+  | "workspace/generated_artifact";
 
 export type LocalCompanionFileKind =
   | "regular"
@@ -32,124 +21,116 @@ export type LocalCompanionFileKind =
   | "missing";
 
 export interface LocalCompanionFileInspection {
-  /** Internal adapter value. It must never be copied to an upload request. */
-  readonly canonicalPath: string;
   readonly displayFilename: string;
   readonly kind: LocalCompanionFileKind;
-  /** Opaque local snapshot identity used only for before/after comparison. */
+  /** Opaque adapter-owned dev/inode/size/time snapshot. */
   readonly snapshotId: string;
   readonly size: number;
-  /** Explicit path authority established by the local companion adapter. */
   readonly authority: "local" | "workspace" | "none";
-  /** False for a lexical path containing a symlink or unresolved traversal. */
   readonly canonical: boolean;
 }
 
-export interface LocalCompanionFileReadOptions {
-  readonly maxBytes: number;
-  readonly signal?: AbortSignal;
+export interface LocalCompanionOpenFile {
+  readonly inspection: Readonly<LocalCompanionFileInspection>;
+  inspect(): Promise<Readonly<LocalCompanionFileInspection>>;
+  stream(options: Readonly<{
+    maxBytes: number;
+    signal?: AbortSignal;
+  }>): AsyncIterable<Uint8Array>;
+  close(): Promise<void>;
 }
 
-/**
- * Minimal filesystem port for a local companion process.  A Node/macOS
- * adapter can implement this with `lstat`/`realpath`/`open(O_NOFOLLOW)`;
- * the application core does not import a host filesystem or receive paths.
- */
+export type LocalCompanionOpenResult =
+  | Readonly<{ kind: "opened"; file: LocalCompanionOpenFile }>
+  | Readonly<{
+      kind: "invalid";
+      code:
+        | "file_ingress_source_unavailable"
+        | "file_ingress_source_unsupported"
+        | "invalid_path";
+    }>;
+
+/** The absolute path stops at this local adapter boundary. */
 export interface LocalCompanionFileSystem {
-  inspect(path: string): Promise<Readonly<LocalCompanionFileInspection>>;
-  read(
-    path: string,
-    options: Readonly<LocalCompanionFileReadOptions>,
-  ): Promise<readonly Uint8Array[]>;
+  open(path: string): Promise<LocalCompanionOpenResult>;
 }
 
-export interface VerifiedLocalCompanionFileInput {
-  readonly sourceKind: LocalCompanionSourceKind;
-  readonly bytes: Uint8Array;
-  readonly safeDisplayFilename: string;
-  readonly detectedMediaType: BundleFileMediaType;
-  readonly size: number;
+export interface LocalCompanionPreparedReceipt {
+  readonly local_file_ref: string;
+  readonly source_kind: LocalCompanionSourceKind;
+  readonly display_filename: string;
+  readonly claimed_media_type: BundleFileMediaType;
+  readonly expected_size: number;
+  readonly expected_sha256: Sha256Digest;
+  readonly expires_at: string;
+}
+
+export interface LocalCompanionStagedReceipt {
+  readonly staged_file_ref: string;
+  readonly state: "verified";
+  readonly source_kind: LocalCompanionSourceKind;
+  readonly display_filename: string;
+  readonly media_type: BundleFileMediaType;
   readonly sha256: Sha256Digest;
+  readonly size: number;
+  readonly expires_at: string;
+  readonly replayed: boolean;
 }
 
-export interface LocalCompanionUploadRequest {
-  readonly input: Readonly<VerifiedLocalCompanionFileInput>;
-  readonly actor: ActorContext;
-  readonly spaceId: SpaceId;
-  readonly writeBindingId: unknown;
-  readonly idempotencyKey: string;
+export interface LocalCompanionHostedUploadRequest {
+  readonly uploadUrl: string;
+  readonly stream: AsyncIterable<Uint8Array>;
   readonly signal?: AbortSignal;
 }
 
-/**
- * Out-of-band upload boundary.  The path is intentionally absent.  A local
- * implementation can call BundleFileStagingService directly; a hosted
- * companion implementation can replace this with an expiring upload-intent
- * or binary stream without changing the local path verifier.
- */
-export interface LocalCompanionUploadTransport {
-  upload(request: Readonly<LocalCompanionUploadRequest>): Promise<StageBundleFileResult>;
+/** Path-free MD-305 GET-before-PUT/reconcile transport. */
+export interface LocalCompanionHostedUploadTransport {
+  upload(
+    request: Readonly<LocalCompanionHostedUploadRequest>,
+  ): Promise<Readonly<LocalCompanionStagedReceipt>>;
 }
 
-export interface LocalCompanionAuthorizationRequest {
-  readonly operation: "upload_local_file" | "upload_bytes";
-  readonly sourceKind: LocalCompanionSourceKind;
-  readonly displayFilename: string | null;
-}
+export type LocalCompanionHostedFailureCode =
+  | "invalid_upload_url"
+  | "file_ingress_source_unavailable"
+  | "file_ingress_intent_expired"
+  | "file_ingress_intent_conflict"
+  | "file_ingress_transport_unavailable"
+  | "invalid_request"
+  | "bundle_file_size_limit_exceeded"
+  | "bundle_file_size_mismatch"
+  | "bundle_file_digest_mismatch"
+  | "invalid_bundle_file_name"
+  | "staging_quota_exceeded"
+  | "capacity_soft_limit"
+  | "capacity_hard_limit"
+  | "capacity_fairness_limit"
+  | "capacity_accounting_untrusted";
 
-export type LocalCompanionAuthorizationResult =
-  | Readonly<{ kind: "allowed" }>
-  | Readonly<{ kind: "denied"; code?: string }>;
+export class LocalCompanionHostedFailure extends Error {
+  readonly name = "LocalCompanionHostedFailure";
+
+  constructor(
+    readonly code: LocalCompanionHostedFailureCode,
+    readonly retryable = code === "file_ingress_transport_unavailable",
+    readonly unknownOutcome = false,
+  ) {
+    super("The hosted file upload operation did not complete.");
+  }
+}
 
 export interface LocalCompanionLogger {
-  /** Only closed, privacy-safe dimensions are allowed in this callback. */
+  /** This closed record intentionally cannot contain paths, refs, URLs or names. */
   record(event: Readonly<{
-    readonly operation: "upload_local_file" | "upload_bytes";
-    readonly sourceKind: LocalCompanionSourceKind;
-    readonly outcome: "started" | "success" | "failure" | "retry";
-    readonly code?: string;
-    readonly attempt: number;
-    readonly size?: number;
+    operation: "prepare_local_file" | "upload_prepared_file";
+    source_kind: LocalCompanionSourceKind;
+    outcome: "success" | "failure" | "retry";
+    code?: LocalCompanionInvalidCode;
+    size?: number;
   }>): void | Promise<void>;
 }
 
-export interface LocalCompanionCleanupRequest {
-  /** Cleanup is explicitly opt-in; user-selected source files are untouched. */
-  readonly cleanup?: () => void | Promise<void>;
-  readonly cleanupMode?: "always" | "success";
-}
-
-export interface LocalCompanionTarget {
-  readonly actor: ActorContext;
-  readonly spaceId: SpaceId;
-  readonly writeBindingId: unknown;
-}
-
-export interface LocalCompanionMetadata extends LocalCompanionCleanupRequest {
-  readonly displayFilename?: unknown;
-  readonly claimedMediaType?: unknown;
-  readonly expectedSize?: unknown;
-  readonly expectedSha256?: unknown;
-  readonly idempotencyKey: unknown;
-  readonly signal?: AbortSignal;
-}
-
-export interface UploadLocalFileRequest
-  extends LocalCompanionTarget, LocalCompanionMetadata {
-  readonly path: unknown;
-  readonly sourceKind?: unknown;
-}
-
-export interface UploadBytesRequest
-  extends LocalCompanionTarget, LocalCompanionMetadata {
-  readonly bytes: unknown;
-  /** Bytes are local/generated only; server_generated is owned by MD-273. */
-  readonly sourceKind?: unknown;
-}
-
 export type LocalCompanionInvalidCode =
-  | "authentication_required"
-  | "forbidden"
   | "invalid_path"
   | "file_ingress_source_unavailable"
   | "file_ingress_source_unsupported"
@@ -157,46 +138,57 @@ export type LocalCompanionInvalidCode =
   | "file_ingress_intent_expired"
   | "file_ingress_intent_conflict"
   | "bundle_file_size_limit_exceeded"
-  | "bundle_file_media_mismatch"
-  | "unsupported_bundle_file_type"
+  | "bundle_file_size_mismatch"
+  | "bundle_file_digest_mismatch"
   | "invalid_bundle_file_name"
-  | "expected_size_mismatch"
-  | "expected_sha256_mismatch"
+  | "staging_quota_exceeded"
+  | "capacity_soft_limit"
+  | "capacity_hard_limit"
+  | "capacity_fairness_limit"
+  | "capacity_accounting_untrusted"
   | "local_companion_file_changed"
   | "local_companion_cancelled"
   | "local_companion_concurrency_limit"
-  | "local_companion_invalid_bytes"
   | "local_companion_invalid_source_kind"
-  | "local_companion_invalid_media_type"
-  | "local_companion_authorization_denied";
+  | "local_companion_ref_not_found"
+  | "local_companion_ref_expired"
+  | "local_companion_ref_in_use"
+  | "invalid_request"
+  | "invalid_upload_url";
 
-export type LocalCompanionResult =
-  | StageBundleFileResult
+export type PrepareLocalFileResult =
+  | Readonly<{ kind: "prepared"; prepared_file: LocalCompanionPreparedReceipt }>
   | Readonly<{ kind: "invalid"; code: LocalCompanionInvalidCode }>;
 
-export class LocalCompanionTransportFailure extends Error {
-  readonly name = "LocalCompanionTransportFailure";
+export type UploadPreparedFileResult =
+  | Readonly<{ kind: "staged"; staged_file: LocalCompanionStagedReceipt }>
+  | Readonly<{
+      kind: "invalid";
+      code: LocalCompanionInvalidCode;
+      retryable?: boolean;
+    }>;
 
-  constructor(
-    readonly code:
-      | "file_ingress_transport_unavailable"
-      | "file_ingress_intent_expired"
-      | "file_ingress_intent_conflict"
-      | "file_ingress_source_unavailable"
-      | "file_ingress_source_unsupported",
-    message = "Local companion upload transport failed.",
-    readonly retryable = code === "file_ingress_transport_unavailable",
-    readonly unknownOutcome = false,
-  ) {
-    super(message);
-  }
+export interface PrepareLocalFileRequest {
+  readonly path: unknown;
+  readonly source_kind?: unknown;
+  readonly display_filename?: unknown;
+  readonly claimed_media_type?: unknown;
+  readonly expected_size?: unknown;
+  readonly expected_sha256?: unknown;
+  readonly signal?: AbortSignal;
+}
+
+export interface UploadPreparedFileRequest {
+  readonly local_file_ref: unknown;
+  readonly upload_url: unknown;
+  readonly signal?: AbortSignal;
 }
 
 export const LOCAL_COMPANION_LIMITS = Object.freeze({
   maxFileBytes: BUNDLE_FILE_LIMITS.maxFileBytes,
-  maxBoundedBytes: 4_194_304,
-  defaultMaxAttempts: 3,
-  defaultMaxConcurrentUploads: 2,
+  preparedTtlMilliseconds: 600_000,
+  defaultMaxPreparedFiles: 8,
+  prefixBytes: 64,
 });
 
 const CONTROL = /[\u0000-\u001f\u007f]/u;
@@ -204,33 +196,21 @@ const GLOB = /[*?\[\]{}]/u;
 const SHA256 = /^sha256:[0-9a-f]{64}$/u;
 const ABSOLUTE_POSIX = /^\//u;
 const ABSOLUTE_WINDOWS = /^[A-Za-z]:[\\/]/u;
-const MIME_TYPES = new Set<BundleFileMediaType>([
-  "image/png",
-  "image/jpeg",
-  "image/gif",
-  "image/webp",
-  "application/pdf",
-  "application/zip",
-]);
-const EXTENSIONS: Readonly<Partial<Record<BundleFileMediaType, readonly string[]>>> = Object.freeze({
-  "image/png": Object.freeze([".png"]),
-  "image/jpeg": Object.freeze([".jpg", ".jpeg"]),
-  "image/gif": Object.freeze([".gif"]),
-  "image/webp": Object.freeze([".webp"]),
-  "application/pdf": Object.freeze([".pdf"]),
-  "application/zip": Object.freeze([".zip"]),
-});
+const LOCAL_REF = /^mdlocal_v1_[A-Za-z0-9_-]{16,256}$/u;
 
-function invalid(code: LocalCompanionInvalidCode): Readonly<{ kind: "invalid"; code: LocalCompanionInvalidCode }> {
-  return Object.freeze({ kind: "invalid", code });
-}
-
-function isAbsolutePath(path: string): boolean {
-  return ABSOLUTE_POSIX.test(path) || ABSOLUTE_WINDOWS.test(path);
-}
-
-function hasTraversal(path: string): boolean {
-  return path.split(/[\\/]/u).some((segment) => segment === "..");
+function invalid(
+  code: LocalCompanionInvalidCode,
+  retryable?: boolean,
+): Readonly<{
+  kind: "invalid";
+  code: LocalCompanionInvalidCode;
+  retryable?: boolean;
+}> {
+  return Object.freeze({
+    kind: "invalid",
+    code,
+    ...(retryable === undefined ? {} : { retryable }),
+  });
 }
 
 function validPathInput(value: unknown): value is string {
@@ -239,413 +219,474 @@ function validPathInput(value: unknown): value is string {
     value.length <= 16_384 &&
     !CONTROL.test(value) &&
     !GLOB.test(value) &&
-    !hasTraversal(value) &&
-    isAbsolutePath(value);
+    !value.split(/[\\/]/u).includes("..") &&
+    (ABSOLUTE_POSIX.test(value) || ABSOLUTE_WINDOWS.test(value));
 }
 
 function validFilename(value: unknown): value is string {
   return typeof value === "string" &&
     value.length > 0 &&
     value === value.normalize("NFC") &&
-    !value.includes("/") &&
-    !value.includes("\\") &&
     value !== "." &&
     value !== ".." &&
+    !value.includes("/") &&
+    !value.includes("\\") &&
     !CONTROL.test(value) &&
     new TextEncoder().encode(value).byteLength <= 255;
 }
 
-function validExpectedSize(value: unknown): value is number {
-  return Number.isSafeInteger(value) && (value as number) >= 0;
+function sourceKind(value: unknown): LocalCompanionSourceKind | null {
+  if (value === undefined || value === "local_path") return "local_path";
+  return value === "workspace/generated_artifact" ? value : null;
 }
 
-function validExpectedSha256(value: unknown): value is Sha256Digest {
-  return typeof value === "string" && SHA256.test(value);
-}
-
-function validSourceKind(value: unknown): LocalCompanionSourceKind | null {
-  return value === "local_path" ||
-      value === "workspace/generated_artifact" ||
-      value === "bounded_in_memory"
-    ? value
+function expectedSize(value: unknown): number | null {
+  return Number.isSafeInteger(value) && (value as number) >= 0 &&
+      (value as number) <= LOCAL_COMPANION_LIMITS.maxFileBytes
+    ? value as number
     : null;
 }
 
-function extensionMatches(filename: string, mediaType: BundleFileMediaType): boolean {
-  const lower = filename.toLocaleLowerCase("en-US");
-  return EXTENSIONS[mediaType]?.some((extension) => lower.endsWith(extension)) ?? false;
+function expectedSha256(value: unknown): Sha256Digest | null {
+  return typeof value === "string" && SHA256.test(value)
+    ? value as Sha256Digest
+    : null;
 }
 
-function sameInspection(
-  before: Readonly<LocalCompanionFileInspection>,
-  after: Readonly<LocalCompanionFileInspection>,
+function sameSnapshot(
+  left: Readonly<LocalCompanionFileInspection>,
+  right: Readonly<LocalCompanionFileInspection>,
 ): boolean {
-  return before.kind === "regular" &&
-    after.kind === "regular" &&
-    before.canonicalPath === after.canonicalPath &&
-    before.snapshotId === after.snapshotId &&
-    before.size === after.size &&
-    before.authority === after.authority &&
-    before.canonical === after.canonical;
+  return left.kind === "regular" &&
+    right.kind === "regular" &&
+    left.snapshotId === right.snapshotId &&
+    left.size === right.size &&
+    left.authority === right.authority &&
+    left.canonical === right.canonical;
 }
 
-function safeLoggerRecord(logger: LocalCompanionLogger | undefined, event: Parameters<LocalCompanionLogger["record"]>[0]): void {
+function recordLog(
+  logger: LocalCompanionLogger | undefined,
+  event: Parameters<LocalCompanionLogger["record"]>[0],
+): void {
   if (logger === undefined) return;
   try {
     const result = logger.record(event);
-    if (typeof result === "object" && result !== null && "catch" in result && typeof result.catch === "function") {
-      void result.catch(() => undefined);
-    }
+    if (result instanceof Promise) void result.catch(() => undefined);
   } catch {
-    // Local telemetry cannot alter an upload outcome.
+    // Telemetry cannot affect the local file result.
   }
 }
 
-function authorizationAllowed(result: LocalCompanionAuthorizationResult): boolean {
-  return result.kind === "allowed";
-}
+type StreamDigest = Readonly<{
+  sha256: Sha256Digest;
+  size: number;
+  prefix: Uint8Array;
+}>;
 
-function transportCode(error: unknown): LocalCompanionInvalidCode {
-  if (error instanceof LocalCompanionTransportFailure) return error.code;
-  return "file_ingress_transport_unavailable";
-}
-
-function transportRetryable(error: unknown): boolean {
-  return error instanceof LocalCompanionTransportFailure
-    ? error.retryable || error.unknownOutcome
-    : true;
-}
-
-function transportUnknownOutcome(error: unknown): boolean {
-  return error instanceof LocalCompanionTransportFailure && error.unknownOutcome;
-}
-
-/**
- * Local companion application boundary for disk/workspace/generated files.
- * It performs a bounded, two-snapshot read and delegates the final stage gate
- * to the same BundleFile staging service as native and generated sources.
- */
-export class LocalFileCompanion {
-  readonly #filesystem: LocalCompanionFileSystem;
-  readonly #transport: LocalCompanionUploadTransport;
-  readonly #authorize: (
-    request: Readonly<LocalCompanionAuthorizationRequest>,
-  ) => Promise<LocalCompanionAuthorizationResult>;
-  readonly #logger: LocalCompanionLogger | undefined;
-  readonly #maxAttempts: number;
-  readonly #maxConcurrent: number;
-  #activeUploads = 0;
-
-  constructor(dependencies: {
-    readonly filesystem: LocalCompanionFileSystem;
-    readonly transport: LocalCompanionUploadTransport;
-    readonly authorize: (
-      request: Readonly<LocalCompanionAuthorizationRequest>,
-    ) => Promise<LocalCompanionAuthorizationResult>;
-    readonly logger?: LocalCompanionLogger;
-    readonly maxAttempts?: number;
-    readonly maxConcurrentUploads?: number;
-  }) {
-    if (!Number.isSafeInteger(dependencies.maxAttempts ?? LOCAL_COMPANION_LIMITS.defaultMaxAttempts) ||
-      (dependencies.maxAttempts ?? LOCAL_COMPANION_LIMITS.defaultMaxAttempts) < 1 ||
-      !Number.isSafeInteger(dependencies.maxConcurrentUploads ?? LOCAL_COMPANION_LIMITS.defaultMaxConcurrentUploads) ||
-      (dependencies.maxConcurrentUploads ?? LOCAL_COMPANION_LIMITS.defaultMaxConcurrentUploads) < 1) {
-      throw new TypeError("Local companion limits are invalid.");
+async function digestStream(
+  stream: AsyncIterable<Uint8Array>,
+  signal?: AbortSignal,
+): Promise<StreamDigest> {
+  const digest = new IncrementalSha256();
+  const prefix = new Uint8Array(LOCAL_COMPANION_LIMITS.prefixBytes);
+  let prefixSize = 0;
+  let size = 0;
+  for await (const chunk of stream) {
+    if (signal?.aborted) throw new LocalCompanionReadFailure("cancelled");
+    if (!(chunk instanceof Uint8Array)) {
+      throw new LocalCompanionReadFailure("unavailable");
     }
-    this.#filesystem = dependencies.filesystem;
-    this.#transport = dependencies.transport;
-    this.#authorize = dependencies.authorize;
-    this.#logger = dependencies.logger;
-    this.#maxAttempts = dependencies.maxAttempts ?? LOCAL_COMPANION_LIMITS.defaultMaxAttempts;
-    this.#maxConcurrent = dependencies.maxConcurrentUploads ?? LOCAL_COMPANION_LIMITS.defaultMaxConcurrentUploads;
+    if (size + chunk.byteLength > LOCAL_COMPANION_LIMITS.maxFileBytes) {
+      throw new LocalCompanionReadFailure("oversize");
+    }
+    if (prefixSize < prefix.byteLength) {
+      const copied = Math.min(prefix.byteLength - prefixSize, chunk.byteLength);
+      prefix.set(chunk.subarray(0, copied), prefixSize);
+      prefixSize += copied;
+    }
+    size += chunk.byteLength;
+    digest.update(chunk);
   }
-
-  /** Explicit operation name matching the local companion contract. */
-  upload_local_file(request: UploadLocalFileRequest): Promise<LocalCompanionResult> {
-    return this.uploadLocalFile(request);
-  }
-
-  /** Explicit operation name matching the local companion contract. */
-  upload_bytes(request: UploadBytesRequest): Promise<LocalCompanionResult> {
-    return this.uploadBytes(request);
-  }
-
-  async uploadLocalFile(request: UploadLocalFileRequest): Promise<LocalCompanionResult> {
-    const sourceKind = request.sourceKind === undefined
-      ? "local_path"
-      : validSourceKind(request.sourceKind);
-    if (sourceKind === null || sourceKind === "bounded_in_memory") {
-      return invalid("local_companion_invalid_source_kind");
-    }
-    if (!validPathInput(request.path)) return invalid("invalid_path");
-    const path = request.path;
-    const maxBytes = LOCAL_COMPANION_LIMITS.maxFileBytes;
-    const acquired = this.#acquire();
-    if (!acquired) return invalid("local_companion_concurrency_limit");
-    const cleanup = request.cleanup;
-    let success = false;
-    try {
-      const authorized = await this.#authorize({
-        operation: "upload_local_file",
-        sourceKind,
-        displayFilename: validFilename(request.displayFilename) ? request.displayFilename : null,
-      });
-      if (!authorizationAllowed(authorized)) return invalid("local_companion_authorization_denied");
-      const before = await this.#inspect(path);
-      if (before === null) return invalid("file_ingress_source_unavailable");
-      if (before.kind === "missing") return invalid("file_ingress_source_unavailable");
-      if (before.kind === "directory") return invalid("file_ingress_source_unsupported");
-      if (before.kind === "symlink") return invalid("file_ingress_source_unsupported");
-      if (before.kind === "special") return invalid("file_ingress_source_unsupported");
-      if (!before.canonical) return invalid("invalid_path");
-      const expectedAuthority = sourceKind === "workspace/generated_artifact"
-        ? "workspace"
-        : "local";
-      if (before.authority !== expectedAuthority) return invalid("file_ingress_source_unsupported");
-      if (!Number.isSafeInteger(before.size) || before.size < 0 || before.size > maxBytes) {
-        return invalid("bundle_file_size_limit_exceeded");
-      }
-      const bytes = await this.#read(path, maxBytes, request.signal);
-      if (bytes === null) return invalid(request.signal?.aborted ? "local_companion_cancelled" : "file_ingress_source_unavailable");
-      if (bytes.byteLength !== before.size) return invalid("local_companion_file_changed");
-      const after = await this.#inspect(path);
-      if (after === null || !sameInspection(before, after)) return invalid("local_companion_file_changed");
-      const result = await this.#stage({
-        ...request,
-        sourceKind,
-        displayFilename: request.displayFilename ?? before.displayFilename,
-        bytes,
-      });
-      success = result.kind === "staged";
-      return result;
-    } finally {
-      await this.#cleanup(cleanup, request.cleanupMode, success, "upload_local_file", sourceKind);
-      this.#release();
-    }
-  }
-
-  async uploadBytes(request: UploadBytesRequest): Promise<LocalCompanionResult> {
-    const sourceKind = request.sourceKind === undefined
-      ? "bounded_in_memory"
-      : validSourceKind(request.sourceKind);
-    if (sourceKind !== "bounded_in_memory") return invalid("local_companion_invalid_source_kind");
-    const acquired = this.#acquire();
-    if (!acquired) return invalid("local_companion_concurrency_limit");
-    let success = false;
-    try {
-      const displayFilename = validFilename(request.displayFilename)
-        ? request.displayFilename
-        : null;
-      if (displayFilename === null) return invalid("invalid_bundle_file_name");
-      const authorized = await this.#authorize({
-        operation: "upload_bytes",
-        sourceKind,
-        displayFilename,
-      });
-      if (!authorizationAllowed(authorized)) return invalid("local_companion_authorization_denied");
-      const bytes = this.#bytes(request.bytes, LOCAL_COMPANION_LIMITS.maxBoundedBytes);
-      if (bytes === null) return invalid(request.signal?.aborted ? "local_companion_cancelled" : "local_companion_invalid_bytes");
-      const result = await this.#stage({ ...request, sourceKind, displayFilename, bytes });
-      success = result.kind === "staged";
-      return result;
-    } finally {
-      await this.#cleanup(request.cleanup, request.cleanupMode, success, "upload_bytes", sourceKind);
-      this.#release();
-    }
-  }
-
-  #acquire(): boolean {
-    if (this.#activeUploads >= this.#maxConcurrent) return false;
-    this.#activeUploads += 1;
-    return true;
-  }
-
-  #release(): void {
-    this.#activeUploads -= 1;
-  }
-
-  async #inspect(path: string): Promise<Readonly<LocalCompanionFileInspection> | null> {
-    try {
-      return await this.#filesystem.inspect(path);
-    } catch {
-      return null;
-    }
-  }
-
-  async #read(path: string, maxBytes: number, signal: AbortSignal | undefined): Promise<Uint8Array | null> {
-    if (signal?.aborted) return null;
-    let chunks: readonly Uint8Array[];
-    try {
-      chunks = await this.#filesystem.read(path, { maxBytes, ...(signal === undefined ? {} : { signal }) });
-    } catch {
-      return null;
-    }
-    let size = 0;
-    const owned: Uint8Array[] = [];
-    for (const chunk of chunks) {
-      if (signal?.aborted) return null;
-      if (!(chunk instanceof Uint8Array)) return null;
-      const copy = new Uint8Array(chunk);
-      size += copy.byteLength;
-      if (size > maxBytes) return null;
-      owned.push(copy);
-    }
-    const bytes = new Uint8Array(size);
-    let offset = 0;
-    for (const chunk of owned) {
-      bytes.set(chunk, offset);
-      offset += chunk.byteLength;
-    }
-    return bytes;
-  }
-
-  #bytes(value: unknown, maxBytes: number): Uint8Array | null {
-    if (!(value instanceof Uint8Array)) return null;
-    if (value.byteLength > maxBytes) return null;
-    return new Uint8Array(value);
-  }
-
-  async #stage(
-    request: Readonly<LocalCompanionTarget & LocalCompanionMetadata & {
-      readonly sourceKind: LocalCompanionSourceKind;
-      readonly displayFilename: unknown;
-      readonly bytes: Uint8Array;
-    }>,
-  ): Promise<LocalCompanionResult> {
-    if (request.signal?.aborted) return invalid("local_companion_cancelled");
-    const displayFilename = validFilename(request.displayFilename)
-      ? request.displayFilename
-      : null;
-    if (displayFilename === null) return invalid("invalid_bundle_file_name");
-    const detected = detectBundleFileMediaType(request.bytes);
-    if (detected === null) return invalid("unsupported_bundle_file_type");
-    if (!extensionMatches(displayFilename, detected)) return invalid("bundle_file_media_mismatch");
-    if (request.claimedMediaType !== undefined &&
-      (typeof request.claimedMediaType !== "string" || !MIME_TYPES.has(request.claimedMediaType as BundleFileMediaType))) {
-      return invalid("local_companion_invalid_media_type");
-    }
-    if (request.claimedMediaType !== undefined && request.claimedMediaType !== detected) {
-      return invalid("bundle_file_media_mismatch");
-    }
-    if (request.expectedSize !== undefined &&
-      (!validExpectedSize(request.expectedSize) || request.expectedSize !== request.bytes.byteLength)) {
-      return invalid("expected_size_mismatch");
-    }
-    const digest = new IncrementalSha256();
-    digest.update(request.bytes);
-    const sha256 = digest.digest();
-    if (request.expectedSha256 !== undefined &&
-      (!validExpectedSha256(request.expectedSha256) || request.expectedSha256 !== sha256)) {
-      return invalid("expected_sha256_mismatch");
-    }
-    if (typeof request.idempotencyKey !== "string" || request.idempotencyKey.length === 0 || CONTROL.test(request.idempotencyKey) || new TextEncoder().encode(request.idempotencyKey).byteLength > 256) {
-      return invalid("file_ingress_intent_conflict");
-    }
-    const input: Readonly<VerifiedLocalCompanionFileInput> = Object.freeze({
-      sourceKind: request.sourceKind,
-      bytes: new Uint8Array(request.bytes),
-      safeDisplayFilename: displayFilename,
-      detectedMediaType: detected,
-      size: request.bytes.byteLength,
-      sha256,
-    });
-    safeLoggerRecord(this.#logger, {
-      operation: request.sourceKind === "bounded_in_memory" ? "upload_bytes" : "upload_local_file",
-      sourceKind: request.sourceKind,
-      outcome: "started",
-      attempt: 1,
-      size: input.size,
-    });
-    for (let attempt = 1; attempt <= this.#maxAttempts; attempt += 1) {
-      if (request.signal?.aborted) return invalid("local_companion_cancelled");
-      try {
-        const result = await this.#transport.upload(Object.freeze({
-          input,
-          actor: request.actor,
-          spaceId: request.spaceId,
-          writeBindingId: request.writeBindingId,
-          idempotencyKey: request.idempotencyKey,
-          ...(request.signal === undefined ? {} : { signal: request.signal }),
-        }));
-        safeLoggerRecord(this.#logger, {
-          operation: request.sourceKind === "bounded_in_memory" ? "upload_bytes" : "upload_local_file",
-          sourceKind: request.sourceKind,
-          outcome: result.kind === "staged" ? "success" : "failure",
-          code: result.kind === "invalid" ? result.code : result.kind,
-          attempt,
-          size: input.size,
-        });
-        return result;
-      } catch (error) {
-        const code = transportCode(error);
-        const retry = transportRetryable(error) && attempt < this.#maxAttempts && !request.signal?.aborted;
-        safeLoggerRecord(this.#logger, {
-          operation: request.sourceKind === "bounded_in_memory" ? "upload_bytes" : "upload_local_file",
-          sourceKind: request.sourceKind,
-          outcome: retry ? "retry" : "failure",
-          code,
-          attempt,
-          size: input.size,
-        });
-        if (retry) continue;
-        if (request.signal?.aborted) return invalid("local_companion_cancelled");
-        if (transportUnknownOutcome(error) && code === "file_ingress_transport_unavailable") {
-          return invalid("file_ingress_transport_unavailable");
-        }
-        return invalid(code);
-      }
-    }
-    return invalid("file_ingress_transport_unavailable");
-  }
-
-  async #cleanup(
-    cleanup: (() => void | Promise<void>) | undefined,
-    mode: "always" | "success" | undefined,
-    success: boolean,
-    operation: "upload_local_file" | "upload_bytes",
-    sourceKind: LocalCompanionSourceKind,
-  ): Promise<void> {
-    if (cleanup === undefined || (mode === "success" && !success)) return;
-    try {
-      await cleanup();
-    } catch {
-      safeLoggerRecord(this.#logger, {
-        operation,
-        sourceKind,
-        outcome: "failure",
-        code: "local_companion_cleanup_failed",
-        attempt: 1,
-      });
-    }
-  }
-}
-
-/**
- * Local deterministic transport used by dev/tests. It is intentionally a
- * narrow adapter: only verified bytes/metadata cross into BundleFile staging.
- */
-export function createLocalCompanionStagingTransport(dependencies: {
-  readonly staging: Pick<BundleFileStagingService, "stage">;
-}): LocalCompanionUploadTransport {
   return Object.freeze({
-    async upload(request: Readonly<LocalCompanionUploadRequest>): Promise<StageBundleFileResult> {
-      if (request.signal?.aborted) {
-        throw new LocalCompanionTransportFailure("file_ingress_transport_unavailable", "Upload cancelled.", false);
-      }
-      return dependencies.staging.stage({
-        actor: request.actor,
-        spaceId: request.spaceId,
-        writeBindingId: request.writeBindingId,
-        bytes: request.input.bytes,
-        sourceKind: request.input.sourceKind,
-        displayFilename: request.input.safeDisplayFilename,
-        claimedMediaType: request.input.detectedMediaType,
-        expectedSize: request.input.size,
-        expectedSha256: request.input.sha256,
-        idempotencyKey: request.idempotencyKey,
-      });
-    },
+    sha256: digest.digest(),
+    size,
+    prefix: prefix.subarray(0, prefixSize),
   });
 }
 
-export type LocalCompanionStagedRecord = Readonly<StagedBundleFileRecord>;
+class LocalCompanionReadFailure extends Error {
+  readonly name = "LocalCompanionReadFailure";
+  constructor(readonly reason: "cancelled" | "oversize" | "unavailable") {
+    super("The local file could not be read.");
+  }
+}
+
+function mapReadFailure(error: unknown): LocalCompanionInvalidCode {
+  if (error instanceof LocalCompanionReadFailure) {
+    if (error.reason === "cancelled") return "local_companion_cancelled";
+    if (error.reason === "oversize") return "bundle_file_size_limit_exceeded";
+  }
+  return "file_ingress_source_unavailable";
+}
+
+function advisoryMediaType(
+  claimed: unknown,
+  prefix: Uint8Array,
+): BundleFileMediaType {
+  if (typeof claimed === "string") return bundleFileMediaType(claimed);
+  return detectBundleFileMediaType(prefix) ??
+    bundleFileMediaType("application/octet-stream");
+}
+
+function validReceipt(
+  value: unknown,
+): value is Readonly<LocalCompanionStagedReceipt> {
+  if (typeof value !== "object" || value === null) return false;
+  const receipt = value as Record<string, unknown>;
+  return typeof receipt.staged_file_ref === "string" &&
+    receipt.staged_file_ref.length > 0 &&
+    receipt.staged_file_ref.length <= 512 &&
+    !CONTROL.test(receipt.staged_file_ref) &&
+    receipt.state === "verified" &&
+    (receipt.source_kind === "local_path" ||
+      receipt.source_kind === "workspace/generated_artifact") &&
+    validFilename(receipt.display_filename) &&
+    typeof receipt.media_type === "string" &&
+    bundleFileMediaType(receipt.media_type) === receipt.media_type &&
+    typeof receipt.sha256 === "string" && SHA256.test(receipt.sha256) &&
+    Number.isSafeInteger(receipt.size) && (receipt.size as number) >= 0 &&
+    (receipt.size as number) <= LOCAL_COMPANION_LIMITS.maxFileBytes &&
+    typeof receipt.expires_at === "string" &&
+    Number.isFinite(Date.parse(receipt.expires_at)) &&
+    typeof receipt.replayed === "boolean";
+}
+
+interface PreparedFile {
+  readonly file: LocalCompanionOpenFile;
+  readonly inspection: Readonly<LocalCompanionFileInspection>;
+  readonly receipt: LocalCompanionPreparedReceipt;
+  state: "ready" | "uploading";
+}
+
+/**
+ * Two-step local companion used by the installable connector:
+ * prepare_local_file -> hosted create_file_upload_intent ->
+ * upload_prepared_file. The stable handle and path never cross this process.
+ */
+export class LocalFileCompanion {
+  readonly #filesystem: LocalCompanionFileSystem;
+  readonly #transport: LocalCompanionHostedUploadTransport;
+  readonly #clock: { now(): number };
+  readonly #nextRef: () => string;
+  readonly #logger: LocalCompanionLogger | undefined;
+  readonly #ttl: number;
+  readonly #maxPrepared: number;
+  readonly #prepared = new Map<string, PreparedFile>();
+
+  constructor(dependencies: Readonly<{
+    filesystem: LocalCompanionFileSystem;
+    transport: LocalCompanionHostedUploadTransport;
+    clock?: { now(): number };
+    nextLocalFileRef?: () => string;
+    logger?: LocalCompanionLogger;
+    preparedTtlMilliseconds?: number;
+    maxPreparedFiles?: number;
+  }>) {
+    this.#filesystem = dependencies.filesystem;
+    this.#transport = dependencies.transport;
+    this.#clock = dependencies.clock ?? { now: () => Date.now() };
+    this.#nextRef = dependencies.nextLocalFileRef ??
+      (() => `mdlocal_v1_${crypto.randomUUID().replaceAll("-", "")}`);
+    this.#logger = dependencies.logger;
+    this.#ttl = dependencies.preparedTtlMilliseconds ??
+      LOCAL_COMPANION_LIMITS.preparedTtlMilliseconds;
+    this.#maxPrepared = dependencies.maxPreparedFiles ??
+      LOCAL_COMPANION_LIMITS.defaultMaxPreparedFiles;
+    if (!Number.isSafeInteger(this.#ttl) || this.#ttl < 1 ||
+      !Number.isSafeInteger(this.#maxPrepared) || this.#maxPrepared < 1) {
+      throw new TypeError("Local companion limits are invalid.");
+    }
+  }
+
+  prepare_local_file(request: PrepareLocalFileRequest): Promise<PrepareLocalFileResult> {
+    return this.prepareLocalFile(request);
+  }
+
+  upload_prepared_file(request: UploadPreparedFileRequest): Promise<UploadPreparedFileResult> {
+    return this.uploadPreparedFile(request);
+  }
+
+  async prepareLocalFile(request: PrepareLocalFileRequest): Promise<PrepareLocalFileResult> {
+    await this.#expirePrepared();
+    const selectedSourceKind = sourceKind(request.source_kind);
+    if (selectedSourceKind === null) {
+      return invalid("local_companion_invalid_source_kind");
+    }
+    if (!validPathInput(request.path)) return invalid("invalid_path");
+    if (request.display_filename !== undefined &&
+      !validFilename(request.display_filename)) {
+      return invalid("invalid_bundle_file_name");
+    }
+    if (request.expected_size !== undefined &&
+      expectedSize(request.expected_size) === null) {
+      return invalid("bundle_file_size_mismatch");
+    }
+    if (request.expected_sha256 !== undefined &&
+      expectedSha256(request.expected_sha256) === null) {
+      return invalid("bundle_file_digest_mismatch");
+    }
+    if (this.#prepared.size >= this.#maxPrepared) {
+      return invalid("local_companion_concurrency_limit");
+    }
+
+    let opened: LocalCompanionOpenResult;
+    try {
+      opened = await this.#filesystem.open(request.path);
+    } catch {
+      return invalid("file_ingress_source_unavailable");
+    }
+    if (opened.kind === "invalid") return invalid(opened.code);
+    const file = opened.file;
+    const before = file.inspection;
+    const closeInvalid = async (code: LocalCompanionInvalidCode) => {
+      await file.close().catch(() => undefined);
+      recordLog(this.#logger, {
+        operation: "prepare_local_file",
+        source_kind: selectedSourceKind,
+        outcome: "failure",
+        code,
+      });
+      return invalid(code);
+    };
+    if (before.kind !== "regular") {
+      return await closeInvalid("file_ingress_source_unsupported");
+    }
+    if (!before.canonical ||
+      before.authority !== (selectedSourceKind === "local_path" ? "local" : "workspace")) {
+      return await closeInvalid("file_ingress_source_unsupported");
+    }
+    if (!Number.isSafeInteger(before.size) || before.size < 0 ||
+      before.size > LOCAL_COMPANION_LIMITS.maxFileBytes) {
+      return await closeInvalid("bundle_file_size_limit_exceeded");
+    }
+    if (request.expected_size !== undefined && request.expected_size !== before.size) {
+      return await closeInvalid("bundle_file_size_mismatch");
+    }
+
+    let digest: StreamDigest;
+    try {
+      digest = await digestStream(file.stream({
+        maxBytes: LOCAL_COMPANION_LIMITS.maxFileBytes,
+        ...(request.signal === undefined ? {} : { signal: request.signal }),
+      }), request.signal);
+    } catch (error) {
+      return await closeInvalid(mapReadFailure(error));
+    }
+    let after: Readonly<LocalCompanionFileInspection>;
+    try {
+      after = await file.inspect();
+    } catch {
+      return await closeInvalid("file_ingress_source_unavailable");
+    }
+    if (!sameSnapshot(before, after) || digest.size !== before.size) {
+      return await closeInvalid("local_companion_file_changed");
+    }
+    if (request.expected_sha256 !== undefined &&
+      request.expected_sha256 !== digest.sha256) {
+      return await closeInvalid("bundle_file_digest_mismatch");
+    }
+    const displayFilename = request.display_filename ?? before.displayFilename;
+    if (!validFilename(displayFilename)) {
+      return await closeInvalid("invalid_bundle_file_name");
+    }
+    const now = this.#clock.now();
+    const expiresAt = new Date(now + this.#ttl).toISOString();
+    let localFileRef = "";
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const candidate = this.#nextRef();
+      if (LOCAL_REF.test(candidate) && !this.#prepared.has(candidate)) {
+        localFileRef = candidate;
+        break;
+      }
+    }
+    if (localFileRef === "") {
+      return await closeInvalid("file_ingress_transport_unavailable");
+    }
+    const receipt = Object.freeze({
+      local_file_ref: localFileRef,
+      source_kind: selectedSourceKind,
+      display_filename: displayFilename,
+      claimed_media_type: advisoryMediaType(
+        request.claimed_media_type,
+        digest.prefix,
+      ),
+      expected_size: digest.size,
+      expected_sha256: digest.sha256,
+      expires_at: expiresAt,
+    });
+    this.#prepared.set(localFileRef, {
+      file,
+      inspection: before,
+      receipt,
+      state: "ready",
+    });
+    recordLog(this.#logger, {
+      operation: "prepare_local_file",
+      source_kind: selectedSourceKind,
+      outcome: "success",
+      size: digest.size,
+    });
+    return Object.freeze({ kind: "prepared", prepared_file: receipt });
+  }
+
+  async uploadPreparedFile(
+    request: UploadPreparedFileRequest,
+  ): Promise<UploadPreparedFileResult> {
+    await this.#expirePrepared();
+    if (typeof request.local_file_ref !== "string" ||
+      !LOCAL_REF.test(request.local_file_ref)) {
+      return invalid("local_companion_ref_not_found");
+    }
+    if (typeof request.upload_url !== "string") {
+      return invalid("invalid_upload_url");
+    }
+    const prepared = this.#prepared.get(request.local_file_ref);
+    if (prepared === undefined) return invalid("local_companion_ref_not_found");
+    if (Date.parse(prepared.receipt.expires_at) <= this.#clock.now()) {
+      await this.#discard(request.local_file_ref, prepared);
+      return invalid("local_companion_ref_expired");
+    }
+    if (prepared.state !== "ready") return invalid("local_companion_ref_in_use");
+    if (request.signal?.aborted) return invalid("local_companion_cancelled");
+    let current: Readonly<LocalCompanionFileInspection>;
+    try {
+      current = await prepared.file.inspect();
+    } catch {
+      await this.#discard(request.local_file_ref, prepared);
+      return invalid("file_ingress_source_unavailable");
+    }
+    if (!sameSnapshot(prepared.inspection, current)) {
+      await this.#discard(request.local_file_ref, prepared);
+      return invalid("local_companion_file_changed");
+    }
+    prepared.state = "uploading";
+
+    let streamStarted = false;
+    let streamOutcome: Promise<"verified" | "changed" | "incomplete"> =
+      Promise.resolve("incomplete");
+    const verifiedStream = (): AsyncIterable<Uint8Array> => {
+      return (async function* () {
+        streamStarted = true;
+        let resolveOutcome!: (value: "verified" | "changed" | "incomplete") => void;
+        streamOutcome = new Promise((resolve) => { resolveOutcome = resolve; });
+        const source = prepared.file.stream({
+          maxBytes: LOCAL_COMPANION_LIMITS.maxFileBytes,
+          ...(request.signal === undefined ? {} : { signal: request.signal }),
+        });
+        const digest = new IncrementalSha256();
+        let size = 0;
+        let completed = false;
+        try {
+          for await (const chunk of source) {
+            if (request.signal?.aborted) {
+              throw new LocalCompanionReadFailure("cancelled");
+            }
+            if (!(chunk instanceof Uint8Array)) {
+              throw new LocalCompanionReadFailure("unavailable");
+            }
+            size += chunk.byteLength;
+            if (size > LOCAL_COMPANION_LIMITS.maxFileBytes) {
+              throw new LocalCompanionReadFailure("oversize");
+            }
+            digest.update(chunk);
+            yield chunk;
+          }
+          const after = await prepared.file.inspect();
+          completed = sameSnapshot(prepared.inspection, after) &&
+            size === prepared.receipt.expected_size &&
+            digest.digest() === prepared.receipt.expected_sha256;
+          resolveOutcome(completed ? "verified" : "changed");
+          if (!completed) throw new LocalCompanionReadFailure("unavailable");
+        } finally {
+          if (!completed) resolveOutcome("incomplete");
+        }
+      })();
+    };
+
+    try {
+      const staged = await this.#transport.upload({
+        uploadUrl: request.upload_url,
+        stream: verifiedStream(),
+        ...(request.signal === undefined ? {} : { signal: request.signal }),
+      });
+      const localVerification = streamStarted ? await streamOutcome : "verified";
+      if (localVerification !== "verified") {
+        await this.#discard(request.local_file_ref, prepared);
+        return invalid("local_companion_file_changed");
+      }
+      if (!validReceipt(staged) ||
+        staged.source_kind !== prepared.receipt.source_kind ||
+        staged.display_filename !== prepared.receipt.display_filename ||
+        staged.sha256 !== prepared.receipt.expected_sha256 ||
+        staged.size !== prepared.receipt.expected_size) {
+        await this.#discard(request.local_file_ref, prepared);
+        return invalid("file_ingress_intent_conflict");
+      }
+      await this.#discard(request.local_file_ref, prepared);
+      recordLog(this.#logger, {
+        operation: "upload_prepared_file",
+        source_kind: prepared.receipt.source_kind,
+        outcome: "success",
+        size: staged.size,
+      });
+      return Object.freeze({ kind: "staged", staged_file: staged });
+    } catch (error) {
+      const localVerification = streamStarted ? await streamOutcome : "incomplete";
+      if (localVerification === "changed") {
+        await this.#discard(request.local_file_ref, prepared);
+        return invalid("local_companion_file_changed");
+      }
+      const hosted = error instanceof LocalCompanionHostedFailure
+        ? error
+        : new LocalCompanionHostedFailure(
+            "file_ingress_transport_unavailable",
+            true,
+            true,
+          );
+      const retain = hosted.retryable || hosted.unknownOutcome;
+      if (retain) prepared.state = "ready";
+      else await this.#discard(request.local_file_ref, prepared);
+      recordLog(this.#logger, {
+        operation: "upload_prepared_file",
+        source_kind: prepared.receipt.source_kind,
+        outcome: retain ? "retry" : "failure",
+        code: hosted.code,
+        size: prepared.receipt.expected_size,
+      });
+      return invalid(hosted.code, retain);
+    }
+  }
+
+  async close(): Promise<void> {
+    const entries = [...this.#prepared.entries()];
+    this.#prepared.clear();
+    await Promise.all(entries.map(([, prepared]) =>
+      prepared.file.close().catch(() => undefined)));
+  }
+
+  async #expirePrepared(): Promise<void> {
+    const now = this.#clock.now();
+    for (const [ref, prepared] of this.#prepared) {
+      if (prepared.state === "ready" &&
+        Date.parse(prepared.receipt.expires_at) <= now) {
+        await this.#discard(ref, prepared);
+      }
+    }
+  }
+
+  async #discard(ref: string, prepared: PreparedFile): Promise<void> {
+    if (this.#prepared.get(ref) === prepared) this.#prepared.delete(ref);
+    await prepared.file.close().catch(() => undefined);
+  }
+}

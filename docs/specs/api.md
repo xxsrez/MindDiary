@@ -2078,6 +2078,58 @@ records are deleted in bounded batches of at most 100 after the 24-hour safety
 window. Quarantined/orphan byte cleanup remains the shared BundleFile/object
 lifecycle and is not duplicated by the intent service.
 
+### Local companion two-step runtime
+
+The installable local connector deliberately does not duplicate hosted OAuth.
+It exposes two local-only tools around the hosted intent above. First,
+`prepare_local_file` accepts exactly one explicit absolute regular-file path:
+
+```json
+{
+  "path": "/absolute/local/fixture.epub",
+  "source_kind": "local_path",
+  "display_filename": "fixture.epub",
+  "claimed_media_type": "application/epub+zip",
+  "expected_size": 4567,
+  "expected_sha256": "sha256:..."
+}
+```
+
+Only `path` is required. `source_kind` defaults to `local_path` and may instead
+be `workspace/generated_artifact` when the connector has explicit workspace
+authority. The tool opens one stable no-follow regular-file descriptor,
+streams a first SHA-256/size pass, compares device/inode/size/mtime snapshot
+before and after that pass and returns a 600-second process-local receipt:
+
+```json
+{
+  "local_file_ref": "mdlocal_v1_opaque",
+  "source_kind": "local_path",
+  "display_filename": "fixture.epub",
+  "claimed_media_type": "application/epub+zip",
+  "expected_size": 4567,
+  "expected_sha256": "sha256:...",
+  "expires_at": "2026-08-25T12:10:00.000Z"
+}
+```
+
+The caller passes those path-free fields to hosted
+`create_file_upload_intent`, then invokes local `upload_prepared_file` with
+exactly `local_file_ref` and the returned `upload_url`. The connector performs
+credentialless GET-before-PUT, streams the same open descriptor from byte zero
+while recomputing size/SHA-256, rechecks its snapshot after EOF and reconciles
+an unknown PUT with GET. Success returns the hosted verified `staged_file`
+receipt and consumes the local ref. Only a retryable or unknown transport
+outcome retains the same ref for exact retry; success, expiry, mutation or a
+definitive rejection closes and invalidates it.
+
+Directory, glob, traversal, final symlink, special file, oversize and changed
+bytes fail with typed path-free errors. The path, descriptor, source bytes,
+`local_file_ref` and `upload_url` never enter logs or hosted intent metadata;
+network requests contain only the one-use capability URL and bounded binary
+body. No base64/full-file buffer, redirect, cookie, bearer or referrer fallback
+exists.
+
 ### `stage_bundle_file`
 
 Input:

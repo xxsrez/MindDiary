@@ -6,98 +6,145 @@ import {
 } from "node:fs/promises";
 import { basename, isAbsolute, relative, resolve, sep } from "node:path";
 
+const READ_CHUNK_BYTES = 1024 * 1024;
+
 /**
- * Node/macOS filesystem adapter for the portable LocalFileCompanion port.
- * Paths stop at this adapter.  It returns only an opaque snapshot and safe
- * basename to the application boundary; callers must still keep the returned
- * path out of logs and remote requests.
+ * Node/macOS stable-handle adapter for LocalFileCompanion. The selected path
+ * is used only while opening the descriptor and never appears in its result or
+ * in an error. Every stream reads the same descriptor from position zero.
  */
 export function createNodeLocalCompanionFileSystem(options = {}) {
-  const localRoots = resolveRoots(options.localRoots ?? []);
-  const workspaceRoots = resolveRoots(options.workspaceRoots ?? []);
+  const localRoots = resolveRoots(options.localRoots ?? [], false);
+  const workspaceRoots = resolveRoots(options.workspaceRoots ?? [], true);
 
   return Object.freeze({
-    async inspect(inputPath) {
+    async open(inputPath) {
       if (typeof inputPath !== "string" || !isAbsolute(inputPath)) {
-        return missingInspection(inputPath);
+        return invalid("invalid_path");
       }
-      let entry;
-      let canonicalPath;
+      let lexical;
       try {
-        [entry, canonicalPath] = await Promise.all([
-          lstat(inputPath),
-          realpath(inputPath),
-        ]);
+        lexical = await lstat(inputPath, { bigint: true });
       } catch {
-        return missingInspection(inputPath);
+        return invalid("file_ingress_source_unavailable");
       }
-      const kind = entry.isSymbolicLink()
-        ? "symlink"
-        : entry.isDirectory()
-          ? "directory"
-          : entry.isFile()
-            ? "regular"
-            : "special";
-      const [canonicalLocalRoots, canonicalWorkspaceRoots] = await Promise.all([
-        canonicalRoots(localRoots),
-        canonicalRoots(workspaceRoots),
-      ]);
-      const authority = authorityFor(
-        canonicalPath,
-        [...localRoots, ...canonicalLocalRoots],
-        [...workspaceRoots, ...canonicalWorkspaceRoots],
-      );
-      const snapshotId = [
-        String(entry.dev),
-        String(entry.ino),
-        String(entry.size),
-        String(entry.mtimeMs),
-        String(entry.ctimeMs),
-      ].join(":");
-      return Object.freeze({
-        canonicalPath,
-        displayFilename: basename(canonicalPath),
-        kind,
-        snapshotId,
-        size: entry.size,
-        authority,
-        // The resolved root check rejects path traversal and links escaping a
-        // consented root. Final-component symlinks are rejected by `kind`.
-        canonical: authority !== "none" && !entry.isSymbolicLink(),
-      });
-    },
+      if (lexical.isSymbolicLink() || lexical.isDirectory() || !lexical.isFile()) {
+        return invalid("file_ingress_source_unsupported");
+      }
 
-    async read(inputPath, { maxBytes, signal } = {}) {
-      if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) {
-        throw new TypeError("local companion read limit is invalid");
-      }
-      if (signal?.aborted) throw abortError();
-      const flags = constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0);
-      const handle = await open(inputPath, flags);
-      const chunks = [];
-      let total = 0;
+      let handle;
       try {
-        const bufferSize = Math.min(1024 * 1024, Math.max(1, maxBytes || 1));
-        while (true) {
-          if (signal?.aborted) throw abortError();
-          const buffer = new Uint8Array(bufferSize);
-          const result = await handle.read(buffer, 0, buffer.byteLength, null);
-          if (result.bytesRead === 0) break;
-          const chunk = buffer.subarray(0, result.bytesRead);
-          total += chunk.byteLength;
-          if (total > maxBytes) throw new RangeError("local companion file exceeds limit");
-          chunks.push(new Uint8Array(chunk));
+        handle = await open(
+          inputPath,
+          constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0),
+        );
+      } catch {
+        return invalid("file_ingress_source_unavailable");
+      }
+      try {
+        const [opened, canonicalPath, canonicalLocalRoots, canonicalWorkspaceRoots] =
+          await Promise.all([
+            handle.stat({ bigint: true }),
+            realpath(inputPath),
+            canonicalRoots(localRoots),
+            canonicalRoots(workspaceRoots),
+          ]);
+        if (!opened.isFile() ||
+          opened.dev !== lexical.dev || opened.ino !== lexical.ino) {
+          await handle.close();
+          return invalid("file_ingress_source_unsupported");
         }
-        return Object.freeze(chunks);
-      } finally {
-        await handle.close();
+        const authority = authorityFor(
+          canonicalPath,
+          [...localRoots, ...canonicalLocalRoots],
+          [...workspaceRoots, ...canonicalWorkspaceRoots],
+        );
+        if (authority === "none") {
+          await handle.close();
+          return invalid("file_ingress_source_unsupported");
+        }
+        const displayFilename = basename(canonicalPath);
+        const initial = inspection(opened, displayFilename, authority);
+        let closed = false;
+        let active = false;
+        return Object.freeze({
+          kind: "opened",
+          file: Object.freeze({
+            inspection: initial,
+            async inspect() {
+              if (closed) throw safeError();
+              try {
+                return inspection(
+                  await handle.stat({ bigint: true }),
+                  displayFilename,
+                  authority,
+                );
+              } catch {
+                throw safeError();
+              }
+            },
+            stream({ maxBytes, signal } = {}) {
+              if (closed || active ||
+                !Number.isSafeInteger(maxBytes) || maxBytes < 0) {
+                return failingStream();
+              }
+              active = true;
+              return (async function* () {
+                let position = 0;
+                try {
+                  while (true) {
+                    if (signal?.aborted) throw abortError();
+                    const buffer = new Uint8Array(
+                      Math.min(READ_CHUNK_BYTES, Math.max(1, maxBytes + 1 - position)),
+                    );
+                    let result;
+                    try {
+                      result = await handle.read(
+                        buffer,
+                        0,
+                        buffer.byteLength,
+                        position,
+                      );
+                    } catch {
+                      throw safeError();
+                    }
+                    if (result.bytesRead === 0) return;
+                    position += result.bytesRead;
+                    if (position > maxBytes) throw oversizeError();
+                    yield buffer.subarray(0, result.bytesRead);
+                  }
+                } finally {
+                  active = false;
+                }
+              })();
+            },
+            async close() {
+              if (closed) return;
+              closed = true;
+              try {
+                await handle.close();
+              } catch {
+                // Closing a private descriptor is best-effort and path-free.
+              }
+            },
+          }),
+        });
+      } catch {
+        try {
+          await handle.close();
+        } catch {
+          // Preserve the typed, path-free boundary.
+        }
+        return invalid("file_ingress_source_unavailable");
       }
     },
   });
 }
 
-function resolveRoots(roots) {
-  if (!Array.isArray(roots)) throw new TypeError("local companion roots must be an array");
+function resolveRoots(roots, allowEmpty) {
+  if (!Array.isArray(roots) || (!allowEmpty && roots.length === 0)) {
+    throw new TypeError("local companion requires at least one explicit root");
+  }
   return Object.freeze(roots.map((root) => {
     if (typeof root !== "string" || !isAbsolute(root)) {
       throw new TypeError("local companion roots must be absolute paths");
@@ -124,21 +171,46 @@ async function canonicalRoots(roots) {
 
 function within(candidate, root) {
   const suffix = relative(root, candidate);
-  return suffix === "" || (suffix !== ".." && !suffix.startsWith(`..${sep}`) && !isAbsolute(suffix));
+  return suffix === "" ||
+    (suffix !== ".." && !suffix.startsWith(`..${sep}`) && !isAbsolute(suffix));
 }
 
-function missingInspection(inputPath) {
+function inspection(entry, displayFilename, authority) {
+  const size = Number(entry.size);
   return Object.freeze({
-    canonicalPath: typeof inputPath === "string" ? inputPath : "",
-    displayFilename: "",
-    kind: "missing",
-    snapshotId: "",
-    size: 0,
-    authority: "none",
-    canonical: false,
+    displayFilename,
+    kind: entry.isFile() ? "regular" : entry.isDirectory() ? "directory" : "special",
+    snapshotId: [
+      entry.dev,
+      entry.ino,
+      entry.size,
+      entry.mtimeNs,
+      entry.ctimeNs,
+    ].map(String).join(":"),
+    size,
+    authority,
+    canonical: entry.isFile() && Number.isSafeInteger(size) && size >= 0,
   });
 }
 
+function invalid(code) {
+  return Object.freeze({ kind: "invalid", code });
+}
+
+function safeError() {
+  return new Error("local companion file access failed");
+}
+
+function oversizeError() {
+  return new RangeError("local companion file exceeds limit");
+}
+
 function abortError() {
-  return Object.assign(new Error("local companion read cancelled"), { name: "AbortError" });
+  return Object.assign(new Error("local companion read cancelled"), {
+    name: "AbortError",
+  });
+}
+
+async function* failingStream() {
+  throw safeError();
 }

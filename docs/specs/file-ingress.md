@@ -242,8 +242,17 @@ contract or bypass the same application gate.
 Local/workspace and connector adapters negotiate their own explicit capability
 and source kind. MD-305 exposes `create_file_upload_intent` plus the
 same-origin capability-only GET/PUT route for the first two sources; the local
-companion performs credentialless GET-before-PUT and GET reconciliation after
-an unknown outcome. The implemented generated paths must not overload the native
+companion uses a two-tool local sequence: `prepare_local_file` opens one stable
+no-follow regular-file descriptor and returns a 600-second process-local
+pathless ref plus safe filename/media/size/SHA metadata; after the caller mints
+the hosted intent from that metadata, `upload_prepared_file` accepts only the
+local ref and one-use `upload_url`. It performs credentialless GET-before-PUT,
+streams the same descriptor with a second digest/snapshot verification and GET
+reconciliation after an unknown outcome. A successful, expired, changed or
+definitively rejected ref is closed and invalidated; only retryable/unknown
+transport retains the exact ref. Directory, glob, traversal, final symlink,
+special file and byte mutation fail locally without putting a path in output,
+network or telemetry. The implemented generated paths must not overload the native
 `file` field with a local path, arbitrary URL or unbounded bytes. Until the
 corresponding implementation and conformance evidence exists, the capability
 is `not-available`; hosted UAT for generated paths is still a separate claim.

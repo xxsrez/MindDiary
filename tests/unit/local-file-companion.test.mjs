@@ -1,311 +1,306 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import test from "node:test";
 
 import {
-  LocalCompanionTransportFailure,
+  LocalCompanionHostedFailure,
   LocalFileCompanion,
-  LOCAL_COMPANION_LIMITS,
 } from "@mind-diary/application-content";
 
-const PNG = Uint8Array.from([
-  0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x01,
-]);
-const ACTOR = { kind: "service", serviceId: "local-companion-test" };
-const TARGET = {
-  actor: ACTOR,
-  spaceId: "space_local_companion",
-  writeBindingId: "binding_local_companion",
-};
+const BYTES = new TextEncoder().encode("arbitrary epub-ish bytes\0with binary");
+const SHA = `sha256:${createHash("sha256").update(BYTES).digest("hex")}`;
+const URL = "https://mind-diary.invalid/api/file-ingress/v1/upload-intents/mdupload_v1_test";
+const REF = "mdlocal_v1_0123456789abcdef";
+const NOW = Date.parse("2026-08-25T12:00:00.000Z");
 
-function inspection(overrides = {}) {
+function snapshot(overrides = {}) {
   return {
-    canonicalPath: "/workspace/artifact.png",
-    displayFilename: "artifact.png",
+    displayFilename: "fixture.epub",
     kind: "regular",
-    snapshotId: "snapshot-1",
-    size: PNG.byteLength,
+    snapshotId: "dev:ino:size:mtime",
+    size: BYTES.byteLength,
     authority: "local",
     canonical: true,
     ...overrides,
   };
 }
 
-function fakeFilesystem({ before = inspection(), after = before, chunks = [PNG] } = {}) {
-  let inspectCount = 0;
+function fakeFile(options = {}) {
+  const inspections = [...(options.inspections ?? [snapshot(), snapshot(), snapshot()])];
+  let inspectIndex = 0;
+  let closed = 0;
+  let streams = 0;
   return {
-    get inspectCount() {
-      return inspectCount;
-    },
+    get closed() { return closed; },
+    get streams() { return streams; },
+    inspection: inspections[0],
     async inspect() {
-      inspectCount += 1;
-      return inspectCount === 1 ? before : after;
+      inspectIndex += 1;
+      return inspections[Math.min(inspectIndex, inspections.length - 1)];
     },
-    async read() {
-      return chunks;
+    stream() {
+      streams += 1;
+      const chunks = options.chunks ?? [BYTES.subarray(0, 7), BYTES.subarray(7)];
+      return (async function* () {
+        for (const chunk of chunks) yield chunk;
+      })();
     },
+    async close() { closed += 1; },
   };
 }
 
-function stagedResult(sourceKind = "local_path") {
+function staged(overrides = {}) {
   return {
-    kind: "staged",
+    staged_file_ref: "staged_local_fixture",
+    state: "verified",
+    source_kind: "local_path",
+    display_filename: "fixture.epub",
+    media_type: "application/epub+zip",
+    sha256: SHA,
+    size: BYTES.byteLength,
+    expires_at: "2026-08-25T13:00:00.000Z",
     replayed: false,
-    record: {
-      stagedFileId: "staged_local_companion",
-      sourceKind,
-      sha256: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-      size: PNG.byteLength,
-    },
+    ...overrides,
   };
 }
 
 function harness(options = {}) {
-  const calls = [];
+  const file = options.file ?? fakeFile();
+  const transportCalls = [];
+  const filesystemCalls = [];
   const transport = options.transport ?? {
     async upload(request) {
-      calls.push(request);
-      return stagedResult(request.input.sourceKind);
+      const chunks = [];
+      for await (const chunk of request.stream) chunks.push(new Uint8Array(chunk));
+      transportCalls.push({
+        uploadUrl: request.uploadUrl,
+        bytes: Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))),
+        keys: Object.keys(request).sort(),
+      });
+      return staged(options.staged);
     },
   };
-  const service = new LocalFileCompanion({
-    filesystem: options.filesystem ?? fakeFilesystem(),
+  const companion = new LocalFileCompanion({
+    filesystem: {
+      async open(path) {
+        filesystemCalls.push(path);
+        return { kind: "opened", file };
+      },
+    },
     transport,
-    authorize: options.authorize ?? (async () => ({ kind: "allowed" })),
+    clock: options.clock ?? { now: () => NOW },
+    nextLocalFileRef: options.nextLocalFileRef ?? (() => REF),
     ...(options.logger === undefined ? {} : { logger: options.logger }),
-    ...(options.maxAttempts === undefined ? {} : { maxAttempts: options.maxAttempts }),
-    ...(options.maxConcurrentUploads === undefined ? {} : { maxConcurrentUploads: options.maxConcurrentUploads }),
+    ...(options.preparedTtlMilliseconds === undefined
+      ? {}
+      : { preparedTtlMilliseconds: options.preparedTtlMilliseconds }),
   });
-  return { calls, service };
+  return { companion, file, filesystemCalls, transportCalls };
 }
 
-test("local file is verified before only-path-free upload transport", async () => {
-  const env = harness();
-  const result = await env.service.upload_local_file({
-    ...TARGET,
-    path: "/workspace/artifact.png",
-    idempotencyKey: "local-file-1",
-    expectedSize: PNG.byteLength,
-    displayFilename: "artifact.png",
-    claimedMediaType: "image/png",
+async function prepare(env, overrides = {}) {
+  return env.companion.prepare_local_file({
+    path: "/private/work/fixture.epub",
+    claimed_media_type: "application/epub+zip",
+    ...overrides,
   });
-  assert.equal(result.kind, "staged");
-  assert.equal(env.calls.length, 1);
-  assert.equal(env.calls[0].input.sourceKind, "local_path");
-  assert.equal(env.calls[0].input.size, PNG.byteLength);
-  assert.equal(env.calls[0].input.detectedMediaType, "image/png");
-  assert.equal(env.calls[0].input.safeDisplayFilename, "artifact.png");
-  assert.equal(Object.hasOwn(env.calls[0], "path"), false);
-  assert.equal(Object.hasOwn(env.calls[0].input, "canonicalPath"), false);
-});
+}
 
-test("local companion telemetry stays path- and secret-free", async () => {
+test("prepare returns only a short-lived pathless receipt for arbitrary bytes", async () => {
   const events = [];
   const env = harness({ logger: { record(event) { events.push(event); } } });
-  const result = await env.service.uploadLocalFile({
-    ...TARGET,
-    path: "/private/user/workspace/secret-artifact.png",
-    idempotencyKey: "telemetry-secret",
-    displayFilename: "secret-artifact.png",
+  const result = await prepare(env, {
+    expected_size: BYTES.byteLength,
+    expected_sha256: SHA,
   });
-  assert.equal(result.kind, "staged");
-  const serialized = JSON.stringify(events);
-  assert.doesNotMatch(serialized, /private|workspace|secret-artifact|telemetry-secret|local-companion-test/u);
-  assert.match(serialized, /upload_local_file/u);
+  assert.equal(result.kind, "prepared");
+  assert.deepEqual(result.prepared_file, {
+    local_file_ref: REF,
+    source_kind: "local_path",
+    display_filename: "fixture.epub",
+    claimed_media_type: "application/epub+zip",
+    expected_size: BYTES.byteLength,
+    expected_sha256: SHA,
+    expires_at: "2026-08-25T12:10:00.000Z",
+  });
+  assert.equal(env.file.streams, 1);
+  assert.equal(env.file.closed, 0);
+  const serialized = JSON.stringify({ output: result, events });
+  assert.doesNotMatch(serialized, /\/private|\/work|fixture\.epub.*fixture\.epub/u);
 });
 
-test("workspace artifacts use explicit workspace authority and the same boundary", async () => {
-  const env = harness({
-    filesystem: fakeFilesystem({
-      before: inspection({ authority: "workspace" }),
-      after: inspection({ authority: "workspace" }),
+test("upload streams the same stable handle, returns the hosted receipt and consumes the ref", async () => {
+  const env = harness();
+  const prepared = await prepare(env);
+  assert.equal(prepared.kind, "prepared");
+  const result = await env.companion.upload_prepared_file({
+    local_file_ref: REF,
+    upload_url: URL,
+  });
+  assert.deepEqual(result, { kind: "staged", staged_file: staged() });
+  assert.equal(env.file.streams, 2);
+  assert.equal(env.file.closed, 1);
+  assert.equal(env.transportCalls.length, 1);
+  assert.equal(env.transportCalls[0].uploadUrl, URL);
+  assert.deepEqual(env.transportCalls[0].bytes, Buffer.from(BYTES));
+  assert.deepEqual(env.transportCalls[0].keys, ["stream", "uploadUrl"]);
+  assert.deepEqual(
+    await env.companion.upload_prepared_file({
+      local_file_ref: REF,
+      upload_url: URL,
     }),
-  });
-  const result = await env.service.uploadLocalFile({
-    ...TARGET,
-    path: "/workspace/generated/artifact.png",
-    sourceKind: "workspace/generated_artifact",
-    idempotencyKey: "workspace-file-1",
-  });
-  assert.equal(result.kind, "staged");
-  assert.equal(env.calls[0].input.sourceKind, "workspace/generated_artifact");
+    { kind: "invalid", code: "local_companion_ref_not_found" },
+  );
 });
 
-test("missing, traversal, symlink, directory and special files fail closed", async (t) => {
-  for (const [name, filesystem, expected] of [
-    ["missing", fakeFilesystem({ before: inspection({ kind: "missing" }) }), "file_ingress_source_unavailable"],
-    ["symlink", fakeFilesystem({ before: inspection({ kind: "symlink" }) }), "file_ingress_source_unsupported"],
-    ["directory", fakeFilesystem({ before: inspection({ kind: "directory" }) }), "file_ingress_source_unsupported"],
-    ["special", fakeFilesystem({ before: inspection({ kind: "special" }) }), "file_ingress_source_unsupported"],
-    ["outside authority", fakeFilesystem({ before: inspection({ authority: "none" }) }), "file_ingress_source_unsupported"],
+test("absolute one-file grammar, explicit authority and special kinds fail closed", async (t) => {
+  for (const [name, request] of [
+    ["relative", { path: "fixture.epub" }],
+    ["glob", { path: "/private/work/*.epub" }],
+    ["traversal", { path: "/private/work/../fixture.epub" }],
+    ["source", { path: "/private/work/fixture.epub", source_kind: "session_attachment" }],
   ]) {
     await t.test(name, async () => {
-      const env = harness({ filesystem });
-      const result = await env.service.uploadLocalFile({
-        ...TARGET,
-        path: "/workspace/artifact.png",
-        idempotencyKey: `local-${name}`,
-      });
-      assert.deepEqual(result, { kind: "invalid", code: expected });
-      assert.equal(env.calls.length, 0);
+      const env = harness();
+      const result = await env.companion.prepare_local_file(request);
+      assert.equal(result.kind, "invalid");
+      assert.equal(env.filesystemCalls.length, 0);
     });
   }
-  const traversal = harness();
-  assert.deepEqual(
-    await traversal.service.uploadLocalFile({
-      ...TARGET,
-      path: "/workspace/../outside/artifact.png",
-      idempotencyKey: "traversal",
-    }),
-    { kind: "invalid", code: "invalid_path" },
-  );
-  assert.equal(traversal.calls.length, 0);
+  for (const [name, inspection] of [
+    ["directory", snapshot({ kind: "directory" })],
+    ["symlink", snapshot({ kind: "symlink" })],
+    ["special", snapshot({ kind: "special" })],
+    ["outside authority", snapshot({ authority: "none" })],
+  ]) {
+    await t.test(name, async () => {
+      const env = harness({ file: fakeFile({ inspections: [inspection] }) });
+      assert.deepEqual(await prepare(env), {
+        kind: "invalid",
+        code: "file_ingress_source_unsupported",
+      });
+      assert.equal(env.file.streams, 0);
+      assert.equal(env.file.closed, 1);
+    });
+  }
 });
 
-test("changed snapshots and oversize files never reach transport", async (t) => {
-  await t.test("changed snapshot", async () => {
+test("expected size/digest and stable snapshot changes are deterministic", async (t) => {
+  await t.test("size", async () => {
+    const env = harness();
+    assert.deepEqual(await prepare(env, { expected_size: BYTES.byteLength + 1 }), {
+      kind: "invalid",
+      code: "bundle_file_size_mismatch",
+    });
+  });
+  await t.test("digest", async () => {
+    const env = harness();
+    assert.deepEqual(await prepare(env, {
+      expected_sha256: `sha256:${"0".repeat(64)}`,
+    }), {
+      kind: "invalid",
+      code: "bundle_file_digest_mismatch",
+    });
+  });
+  await t.test("prepare mutation", async () => {
     const env = harness({
-      filesystem: fakeFilesystem({
-        before: inspection({ snapshotId: "before" }),
-        after: inspection({ snapshotId: "after" }),
+      file: fakeFile({ inspections: [snapshot(), snapshot({ snapshotId: "changed" })] }),
+    });
+    assert.deepEqual(await prepare(env), {
+      kind: "invalid",
+      code: "local_companion_file_changed",
+    });
+  });
+  await t.test("pre-upload mutation", async () => {
+    const env = harness({
+      file: fakeFile({
+        inspections: [snapshot(), snapshot(), snapshot({ snapshotId: "changed" })],
       }),
     });
-    const result = await env.service.uploadLocalFile({
-      ...TARGET,
-      path: "/workspace/artifact.png",
-      idempotencyKey: "changed",
+    assert.equal((await prepare(env)).kind, "prepared");
+    assert.deepEqual(await env.companion.upload_prepared_file({
+      local_file_ref: REF,
+      upload_url: URL,
+    }), {
+      kind: "invalid",
+      code: "local_companion_file_changed",
     });
-    assert.deepEqual(result, { kind: "invalid", code: "local_companion_file_changed" });
-    assert.equal(env.calls.length, 0);
-  });
-  await t.test("oversize", async () => {
-    const env = harness({
-      filesystem: fakeFilesystem({
-        before: inspection({ size: LOCAL_COMPANION_LIMITS.maxFileBytes + 1 }),
-      }),
-    });
-    const result = await env.service.uploadLocalFile({
-      ...TARGET,
-      path: "/workspace/artifact.png",
-      idempotencyKey: "oversize",
-    });
-    assert.deepEqual(result, { kind: "invalid", code: "bundle_file_size_limit_exceeded" });
-    assert.equal(env.calls.length, 0);
+    assert.equal(env.transportCalls.length, 0);
   });
 });
 
-test("bounded bytes sniff MIME, reject mismatch and enforce its tighter limit", async (t) => {
-  await t.test("happy path", async () => {
-    const env = harness({ filesystem: fakeFilesystem() });
-    const result = await env.service.upload_bytes({
-      ...TARGET,
-      bytes: PNG,
-      displayFilename: "generated.png",
-      claimedMediaType: "image/png",
-      idempotencyKey: "bytes-1",
-    });
-    assert.equal(result.kind, "staged");
-    assert.equal(env.calls[0].input.sourceKind, "bounded_in_memory");
-  });
-  await t.test("MIME mismatch", async () => {
-    const env = harness();
-    const result = await env.service.upload_bytes({
-      ...TARGET,
-      bytes: PNG,
-      displayFilename: "generated.png",
-      claimedMediaType: "application/pdf",
-      idempotencyKey: "bytes-mismatch",
-    });
-    assert.deepEqual(result, { kind: "invalid", code: "bundle_file_media_mismatch" });
-    assert.equal(env.calls.length, 0);
-  });
-  await t.test("bounded limit", async () => {
-    const env = harness();
-    const result = await env.service.upload_bytes({
-      ...TARGET,
-      bytes: new Uint8Array(LOCAL_COMPANION_LIMITS.maxBoundedBytes + 1),
-      displayFilename: "generated.png",
-      idempotencyKey: "bytes-oversize",
-    });
-    assert.deepEqual(result, { kind: "invalid", code: "local_companion_invalid_bytes" });
-    assert.equal(env.calls.length, 0);
-  });
-});
-
-test("transport retries the identical verified payload and idempotency key", async () => {
-  const calls = [];
+test("unknown transport outcome retains the same ref for exact reconcile/retry", async () => {
   let attempt = 0;
+  const seen = [];
   const env = harness({
-    maxAttempts: 3,
     transport: {
       async upload(request) {
-        calls.push(request);
         attempt += 1;
         if (attempt === 1) {
-          throw new LocalCompanionTransportFailure(
+          throw new LocalCompanionHostedFailure(
             "file_ingress_transport_unavailable",
-            "unknown outcome",
             true,
             true,
           );
         }
-        return stagedResult(request.input.sourceKind);
+        const chunks = [];
+        for await (const chunk of request.stream) chunks.push(chunk);
+        seen.push(Buffer.concat(chunks.map(Buffer.from)));
+        return staged({ replayed: true });
       },
     },
   });
-  const result = await env.service.upload_bytes({
-    ...TARGET,
-    bytes: PNG,
-    displayFilename: "generated.png",
-    idempotencyKey: "retry-exact",
+  assert.equal((await prepare(env)).kind, "prepared");
+  assert.deepEqual(await env.companion.upload_prepared_file({
+    local_file_ref: REF,
+    upload_url: URL,
+  }), {
+    kind: "invalid",
+    code: "file_ingress_transport_unavailable",
+    retryable: true,
   });
-  assert.equal(result.kind, "staged");
-  assert.equal(calls.length, 2);
-  assert.equal(calls[0].idempotencyKey, calls[1].idempotencyKey);
-  assert.deepEqual(calls[0].input.bytes, calls[1].input.bytes);
-  assert.equal(calls[0].input.sha256, calls[1].input.sha256);
+  const retried = await env.companion.upload_prepared_file({
+    local_file_ref: REF,
+    upload_url: URL,
+  });
+  assert.equal(retried.kind, "staged");
+  assert.equal(retried.staged_file.replayed, true);
+  assert.deepEqual(seen, [Buffer.from(BYTES)]);
+  assert.equal(env.file.closed, 1);
 });
 
-test("authorization, cancellation and cleanup boundaries are fail closed", async (t) => {
-  await t.test("authorization denial reads nothing", async () => {
-    const filesystem = fakeFilesystem();
+test("definitive rejection and expiry invalidate the process-local ref", async (t) => {
+  await t.test("definitive", async () => {
     const env = harness({
-      filesystem,
-      authorize: async () => ({ kind: "denied", code: "forbidden" }),
+      transport: {
+        async upload() {
+          throw new LocalCompanionHostedFailure("file_ingress_intent_expired");
+        },
+      },
     });
-    const result = await env.service.uploadLocalFile({
-      ...TARGET,
-      path: "/workspace/artifact.png",
-      idempotencyKey: "denied",
+    assert.equal((await prepare(env)).kind, "prepared");
+    assert.deepEqual(await env.companion.upload_prepared_file({
+      local_file_ref: REF,
+      upload_url: URL,
+    }), {
+      kind: "invalid",
+      code: "file_ingress_intent_expired",
+      retryable: false,
     });
-    assert.deepEqual(result, { kind: "invalid", code: "local_companion_authorization_denied" });
-    assert.equal(filesystem.inspectCount, 0);
+    assert.equal(env.file.closed, 1);
   });
-  await t.test("cancelled upload does not call transport", async () => {
-    const controller = new AbortController();
-    controller.abort();
-    const env = harness();
-    const result = await env.service.upload_bytes({
-      ...TARGET,
-      bytes: PNG,
-      displayFilename: "generated.png",
-      idempotencyKey: "cancelled",
-      signal: controller.signal,
+  await t.test("local TTL", async () => {
+    let now = NOW;
+    const env = harness({ clock: { now: () => now } });
+    assert.equal((await prepare(env)).kind, "prepared");
+    now += 600_001;
+    assert.deepEqual(await env.companion.upload_prepared_file({
+      local_file_ref: REF,
+      upload_url: URL,
+    }), {
+      kind: "invalid",
+      code: "local_companion_ref_not_found",
     });
-    assert.deepEqual(result, { kind: "invalid", code: "local_companion_cancelled" });
-    assert.equal(env.calls.length, 0);
-  });
-  await t.test("cleanup is explicit and runs after success", async () => {
-    let cleanups = 0;
-    const env = harness();
-    const result = await env.service.upload_bytes({
-      ...TARGET,
-      bytes: PNG,
-      displayFilename: "generated.png",
-      idempotencyKey: "cleanup",
-      cleanupMode: "success",
-      cleanup: () => { cleanups += 1; },
-    });
-    assert.equal(result.kind, "staged");
-    assert.equal(cleanups, 1);
+    assert.equal(env.file.closed, 1);
   });
 });
