@@ -224,7 +224,9 @@ export function createMindDiaryProductWorker(options) {
             failureStage = "product-fetch";
             let response;
             try {
-              response = await runtime.fetch(request);
+              response = await runtime.fetch(request, (promise) => {
+                context.waitUntil(Promise.resolve(promise).catch(() => undefined));
+              });
             } finally {
               const scheduled = acquired.drainScheduled();
               if (scheduled.length > 0) context.waitUntil(Promise.allSettled(scheduled));

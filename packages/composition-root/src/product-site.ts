@@ -167,7 +167,10 @@ export interface ProductSiteRuntimeOptions {
 }
 
 export interface ProductSiteRuntime {
-  readonly fetch: (request: Request) => Promise<Response | null>;
+  readonly fetch: (
+    request: Request,
+    deferActivity?: (promise: Promise<unknown>) => void,
+  ) => Promise<Response | null>;
   /** Bounded request-triggered recovery for exact-revision index work. */
   readonly recoverBackground: (limit?: number) => Promise<Readonly<{
     backfilled: number;
@@ -1103,6 +1106,7 @@ export async function createProductSiteRuntime(
   const handleMcp = async (
     request: Request,
     profile: "modern" | "compatibility",
+    deferActivity?: (promise: Promise<unknown>) => void,
   ): Promise<Response> => {
     const startedAt = performance.now();
     const requestId = requestIds().nextRequestId();
@@ -1144,26 +1148,39 @@ export async function createProductSiteRuntime(
       "set_read_mind_binding",
       "set_write_mind_binding",
     ]);
+    const recordMcpActivity = (
+      actor: Parameters<PrincipalActivityService["recordSuccessful"]>[0],
+      kind: Parameters<PrincipalActivityService["recordSuccessful"]>[2],
+    ): Promise<void> | undefined => {
+      const pending = activity.recordSuccessful(actor, "mcp", kind);
+      if (deferActivity === undefined) return pending;
+      try {
+        deferActivity(pending);
+      } catch {
+        // Activity remains best-effort even if a host defer hook is unavailable.
+      }
+      return undefined;
+    };
     const timedContent = new Proxy(mcpApplication, {
       get(target, property, receiver) {
         if (property === "listTools") {
           return async (contentRequest: Parameters<ProductMcpContentApplication["listTools"]>[0]) => {
             const result = await target.listTools(contentRequest);
-            await activity.recordSuccessful(contentRequest.actor, "mcp", "discovery");
+            await recordMcpActivity(contentRequest.actor, "discovery");
             return result;
           };
         }
         if (property === "listRootResources") {
           return async (contentRequest: Parameters<ProductMcpContentApplication["listRootResources"]>[0]) => {
             const result = await target.listRootResources(contentRequest);
-            await activity.recordSuccessful(contentRequest.actor, "mcp", "discovery");
+            await recordMcpActivity(contentRequest.actor, "discovery");
             return result;
           };
         }
         if (property === "readResource") {
           return async (contentRequest: Parameters<ProductMcpContentApplication["readResource"]>[0]) => {
             const result = await target.readResource(contentRequest);
-            await activity.recordSuccessful(contentRequest.actor, "mcp", "content_read");
+            await recordMcpActivity(contentRequest.actor, "content_read");
             return result;
           };
         }
@@ -1178,9 +1195,8 @@ export async function createProductSiteRuntime(
                 ? result as { readonly isError?: unknown }
                 : null;
               if (toolResult?.isError !== true) {
-                await activity.recordSuccessful(
+                await recordMcpActivity(
                   toolRequest.actor,
-                  "mcp",
                   mcpWriteActivityTools.has(toolRequest.name)
                     ? "content_write"
                     : "content_read",
@@ -2166,13 +2182,18 @@ export async function createProductSiteRuntime(
   return Object.freeze({
     dispatchBackground,
     recoverBackground,
-    async fetch(request: Request): Promise<Response | null> {
+    async fetch(
+      request: Request,
+      deferActivity?: (promise: Promise<unknown>) => void,
+    ): Promise<Response | null> {
       request = await trustedPerformanceRequest(request);
       const path = new URL(request.url).pathname;
       const oauthResponse = await oauth.fetch(request);
       if (oauthResponse !== null) return oauthResponse;
-      if (path === MCP_ENDPOINT) return handleMcp(request, "modern");
-      if (path === MCP_LEGACY_CODEX_ENDPOINT) return handleMcp(request, "compatibility");
+      if (path === MCP_ENDPOINT) return handleMcp(request, "modern", deferActivity);
+      if (path === MCP_LEGACY_CODEX_ENDPOINT) {
+        return handleMcp(request, "compatibility", deferActivity);
+      }
       if (path === MCP_RETIRED_SITES_ENDPOINT) {
         return new Response(
           JSON.stringify({

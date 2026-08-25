@@ -3,11 +3,46 @@ import test from "node:test";
 
 import {
   RequestRecoveryCoordinator,
+  createMindDiaryProductWorker,
   isRecoveryEligibleRequest,
   productWorkerConfigFingerprint,
 } from "../../apps/mind-diary-site/worker/request-recovery.js";
 
 const ORIGIN = "https://mind-diary.example";
+
+test("Product Worker defers observational activity without delaying the response", async () => {
+  let releaseActivity;
+  const activity = new Promise((resolve) => { releaseActivity = resolve; });
+  const waits = [];
+  const worker = createMindDiaryProductWorker({
+    async createRuntime() {
+      return {
+        async fetch(_request, deferActivity) {
+          deferActivity(activity);
+          return new Response("mcp response");
+        },
+        async recoverBackground() {},
+        async dispatchBackground() {},
+      };
+    },
+    readConfig() {
+      return { publicOrigin: ORIGIN };
+    },
+    async fallbackFetch() {
+      return new Response("fallback", { status: 404 });
+    },
+  });
+
+  const response = await worker.fetch(
+    new Request(`${ORIGIN}/api/mcp`, { method: "POST" }),
+    {},
+    { waitUntil: (promise) => waits.push(promise) },
+  );
+  assert.equal(await response.text(), "mcp response");
+  assert.equal(waits.length, 1);
+  releaseActivity();
+  await waits[0];
+});
 
 test("runtime cache fingerprint fences every restricted UAT configuration generation", () => {
   const baseline = productWorkerConfigFingerprint({}, ORIGIN);

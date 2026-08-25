@@ -34,7 +34,10 @@ export declare function createMindDiaryProductWorker<
   Context extends { waitUntil(promise: Promise<unknown>): void },
   RuntimeOptions,
   Runtime extends {
-    fetch(request: Request): Promise<Response | null>;
+    fetch(
+      request: Request,
+      deferActivity?: (promise: Promise<unknown>) => void,
+    ): Promise<Response | null>;
     recoverBackground(): Promise<unknown>;
     dispatchBackground(work: Readonly<Record<string, unknown>>): Promise<unknown>;
   },

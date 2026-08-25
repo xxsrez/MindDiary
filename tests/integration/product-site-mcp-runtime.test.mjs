@@ -629,7 +629,10 @@ test("Product Site persists success-only web/MCP activity and hides the UAT dire
   const secret = (await issued.json()).data.secret;
 
   currentTime = new Date("2026-08-22T10:20:00.000Z");
-  const listed = await modernMcp(runtime, secret, {
+  const deferredActivity = [];
+  const listed = await modernMcp({
+    fetch: (request) => runtime.fetch(request, (promise) => deferredActivity.push(promise)),
+  }, secret, {
     jsonrpc: "2.0",
     id: "activity-tools-list",
     method: "tools/list",
@@ -645,6 +648,8 @@ test("Product Site persists success-only web/MCP activity and hides the UAT dire
     },
   });
   assert.equal(listed.status, 200);
+  assert.equal(deferredActivity.length, 1);
+  await Promise.all(deferredActivity);
 
   runtime = await createProductSiteRuntime({
     ...runtimeOptions,
