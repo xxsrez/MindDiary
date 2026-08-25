@@ -647,6 +647,13 @@ explicit target Mind. General cross-Mind search/synthesis требует нов�
   read/restart replay-ит недостающий tail и repair-ит snapshot. Corrupt,
   incomplete snapshot или non-contiguous tail fail closed. R2 хранит canonical
   objects и export archives.
+  Success-only `PrincipalActivitySummary` является отдельной монотонной D1
+  projection: page/MCP observation делает один bounded upsert и не добавляет
+  canonical event, не replay-ит metadata state и не переписывает полный
+  snapshot. Operator read накладывает эту projection на canonical principal
+  directory; legacy activity из старого snapshot остаётся читаемой. Account
+  deletion удаляет canonical principal/activity и очищает projection, а строка
+  без существующего principal никогда не становится видимой.
   Initial revision index effects входят в account/Mind create transaction, а
   bounded request-triggered reconciler подбирает due jobs и backfill-ит legacy
   active HEAD без state/job после restart/redeploy.

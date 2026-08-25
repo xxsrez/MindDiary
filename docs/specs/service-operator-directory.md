@@ -117,13 +117,20 @@ retention decisions или product ranking.
 `not_available` provider control означает недоступность, а не автоматически
 приемлемую privacy границу.
 
-Sites persistence использует существующий fenced metadata event/snapshot
-contract без новой standalone activity table: latest summary — optional
-backward-compatible snapshot field, а legacy snapshot без него восстанавливает
-пустую map. Это schema migration rule, а не новый SQL DDL. WAL не является
-product/query surface и не формирует отдельный session/clickstream read model;
-его lifecycle следует общей metadata event-log/backup policy. Account cascade
-удаляет summary в той же metadata transaction до нового materialized snapshot.
+Sites persistence хранит новые observations в отдельной bounded
+`md_principal_activity` projection с одной строкой на opaque `principal_id`.
+Atomic upsert применяет монотонный `max(previous, observed_at)` отдельно к web,
+MCP и общему timestamp. Observation не входит в fenced canonical metadata event
+log, не запускает его replay и не переписывает большой materialized snapshot;
+тем самым observational telemetry не захватывает canonical metadata path между
+UI-переходами. Operator read накладывает projection на актуальный canonical
+principal directory. Optional activity field старого snapshot остаётся
+backward-compatible источником до первого нового observation.
+
+Projection не является request log, product/query surface или источником
+authentication/authorization. Account cascade удаляет activity из canonical
+state и projection; даже при сбое best-effort physical cleanup строка без
+существующего principal не разрешается read path и удаляется при exact read.
 
 ## Verification
 

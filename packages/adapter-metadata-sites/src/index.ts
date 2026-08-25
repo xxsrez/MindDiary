@@ -6,6 +6,14 @@ import type {
   AuthorizationStateQuery,
   CurrentAuthorizationState,
   MindRouteAuthorizationQuery,
+  PrincipalActivityKind,
+  PrincipalActivitySummary,
+  PrincipalActivitySurface,
+  PrincipalId,
+  RecordPrincipalActivityRequest,
+  ServiceOperatorDirectoryPage,
+  ServiceOperatorDirectoryQuery,
+  UtcInstant,
 } from "@mind-diary/application-ports";
 
 export const SITES_METADATA_ADAPTER = "sites-d1-fenced-event-log" as const;
@@ -80,6 +88,25 @@ export const SITES_METADATA_MIGRATIONS = Object.freeze([
       )`,
     ]),
   }),
+  Object.freeze({
+    version: 4,
+    name: "principal-activity-projection",
+    statements: Object.freeze([
+      `CREATE TABLE IF NOT EXISTS md_principal_activity (
+        principal_id TEXT PRIMARY KEY,
+        last_web_seen_at TEXT,
+        last_mcp_seen_at TEXT,
+        last_activity_at TEXT NOT NULL,
+        last_activity_surface TEXT NOT NULL CHECK (last_activity_surface IN ('web', 'mcp')),
+        last_activity_kind TEXT NOT NULL CHECK (
+          last_activity_kind IN (
+            'page', 'control_read', 'control_write',
+            'discovery', 'content_read', 'content_write'
+          )
+        )
+      )`,
+    ]),
+  }),
 ]);
 
 type DurableTarget = "metadata" | "tokens";
@@ -134,6 +161,15 @@ interface DurableSnapshot {
   readonly tokens: unknown;
 }
 
+interface PrincipalActivityRow {
+  readonly principal_id: string;
+  readonly last_web_seen_at: string | null;
+  readonly last_mcp_seen_at: string | null;
+  readonly last_activity_at: string;
+  readonly last_activity_surface: string;
+  readonly last_activity_kind: string;
+}
+
 const TRANSACTION_METHODS = new Set([
   "runAccountBootstrapTransaction",
   "runPersonalMindTransaction",
@@ -151,7 +187,6 @@ const TRANSACTION_METHODS = new Set([
 ]);
 
 const METADATA_MUTATIONS = new Set([
-  "recordPrincipalActivity",
   "stageServiceOperatorDirectoryAudit",
   "reserveHandle",
   "retireHandle",
@@ -211,7 +246,6 @@ const TOKEN_MUTATIONS = new Set([
 const MAX_CAS_ATTEMPTS = 16;
 const SNAPSHOT_CHUNK_CODE_UNITS = 256 * 1_024;
 const SNAPSHOT_CHUNK_READ_PAGE = 8;
-const ACTIVITY_SNAPSHOT_CADENCE = 64;
 const MIND_BINDING_SNAPSHOT_CADENCE = 16;
 
 function splitSnapshotPayload(payload: string): readonly string[] {
@@ -305,9 +339,6 @@ interface TailReplayResult {
 }
 
 function shouldCheckpointEvent(event: DurableEvent, sequence: number): boolean {
-  if (event.method === "recordPrincipalActivity") {
-    return sequence % ACTIVITY_SNAPSHOT_CADENCE === 0;
-  }
   if (event.method === "runMindBindingTransaction") {
     // The fenced event is already canonical durability. Binding selection is
     // latency-sensitive UI/MCP setup, so avoid rewriting the full materialized
@@ -406,6 +437,49 @@ export class SitesMetadataStore {
       await this.#refresh();
     });
     return this.#proxy;
+  }
+
+  /**
+   * Activity is an observational last-seen projection, not canonical product
+   * state. Keep it out of the fenced metadata event log so a page view never
+   * replays or rewrites the full account/Mind snapshot.
+   */
+  async recordPrincipalActivity(
+    request: Readonly<RecordPrincipalActivityRequest>,
+  ): Promise<void> {
+    await this.#exclusive(async () => {
+      await this.#refresh();
+      await this.#metadata.recordPrincipalActivity(request);
+      const summary = await this.#metadata.readPrincipalActivity(request.principalId);
+      if (summary === null) return;
+      await this.#upsertPrincipalActivity(summary);
+    });
+  }
+
+  async readPrincipalActivity(
+    principalId: PrincipalId,
+  ): Promise<Readonly<PrincipalActivitySummary> | null> {
+    return this.#exclusive(async () => {
+      await this.#refresh();
+      const rows = await this.#readPrincipalActivityRows(principalId);
+      await this.#hydratePrincipalActivity(rows);
+      const summary = await this.#metadata.readPrincipalActivity(principalId);
+      if (summary === null && rows.length > 0) {
+        await this.#deletePrincipalActivity(principalId);
+      }
+      return summary;
+    });
+  }
+
+  async listServiceOperatorPrincipals(
+    query: Readonly<ServiceOperatorDirectoryQuery>,
+  ): Promise<Readonly<ServiceOperatorDirectoryPage>> {
+    return this.#exclusive(async () => {
+      await this.#refresh();
+      const rows = await this.#readPrincipalActivityRows();
+      await this.#hydratePrincipalActivity(rows);
+      return this.#metadata.listServiceOperatorPrincipals(query);
+    });
   }
 
   async readCurrentAuthorizationState(
@@ -754,6 +828,7 @@ export class SitesMetadataStore {
         this.#tokens = loaded.tokens;
         this.#sequence = loaded.sequence + 1;
         this.#loaded = true;
+        await this.#cleanupPrincipalActivityAfterTransaction(method, calls, result);
         return result;
       }
     }
@@ -874,6 +949,159 @@ export class SitesMetadataStore {
       ),
     );
     await this.#database.batch(statements);
+  }
+
+  async #upsertPrincipalActivity(
+    summary: Readonly<PrincipalActivitySummary>,
+  ): Promise<void> {
+    await this.#database
+      .prepare(
+        `/*md-principal-activity-upsert*/ INSERT INTO md_principal_activity
+         (principal_id, last_web_seen_at, last_mcp_seen_at, last_activity_at,
+          last_activity_surface, last_activity_kind)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+         ON CONFLICT(principal_id) DO UPDATE SET
+           last_web_seen_at = CASE
+             WHEN excluded.last_web_seen_at IS NOT NULL AND
+               (md_principal_activity.last_web_seen_at IS NULL OR
+                excluded.last_web_seen_at > md_principal_activity.last_web_seen_at)
+             THEN excluded.last_web_seen_at
+             ELSE md_principal_activity.last_web_seen_at
+           END,
+           last_mcp_seen_at = CASE
+             WHEN excluded.last_mcp_seen_at IS NOT NULL AND
+               (md_principal_activity.last_mcp_seen_at IS NULL OR
+                excluded.last_mcp_seen_at > md_principal_activity.last_mcp_seen_at)
+             THEN excluded.last_mcp_seen_at
+             ELSE md_principal_activity.last_mcp_seen_at
+           END,
+           last_activity_at = CASE
+             WHEN excluded.last_activity_at > md_principal_activity.last_activity_at
+             THEN excluded.last_activity_at
+             ELSE md_principal_activity.last_activity_at
+           END,
+           last_activity_surface = CASE
+             WHEN excluded.last_activity_at > md_principal_activity.last_activity_at
+             THEN excluded.last_activity_surface
+             ELSE md_principal_activity.last_activity_surface
+           END,
+           last_activity_kind = CASE
+             WHEN excluded.last_activity_at > md_principal_activity.last_activity_at
+             THEN excluded.last_activity_kind
+             ELSE md_principal_activity.last_activity_kind
+           END`,
+      )
+      .bind(
+        summary.principalId,
+        summary.lastWebSeenAt,
+        summary.lastMcpSeenAt,
+        summary.lastActivityAt,
+        summary.lastActivitySurface,
+        summary.lastActivityKind,
+      )
+      .run();
+  }
+
+  async #readPrincipalActivityRows(
+    principalId?: PrincipalId,
+  ): Promise<readonly PrincipalActivityRow[]> {
+    const statement = principalId === undefined
+      ? this.#database.prepare(
+          `/*md-principal-activity-read-all*/ SELECT principal_id, last_web_seen_at,
+           last_mcp_seen_at, last_activity_at, last_activity_surface, last_activity_kind
+           FROM md_principal_activity`,
+        )
+      : this.#database
+          .prepare(
+            `/*md-principal-activity-read-one*/ SELECT principal_id, last_web_seen_at,
+             last_mcp_seen_at, last_activity_at, last_activity_surface, last_activity_kind
+             FROM md_principal_activity WHERE principal_id = ?1`,
+          )
+          .bind(principalId);
+    const result = await statement.all<PrincipalActivityRow>();
+    return Object.freeze([...(result.results ?? [])]);
+  }
+
+  async #hydratePrincipalActivity(
+    rows: readonly PrincipalActivityRow[],
+  ): Promise<void> {
+    for (const row of rows) {
+      const principalId = row.principal_id as PrincipalId;
+      const overallSurface = row.last_activity_surface as PrincipalActivitySurface;
+      const overallKind = row.last_activity_kind as PrincipalActivityKind;
+      const overallAt = row.last_activity_at as UtcInstant;
+      const observations: Array<Readonly<RecordPrincipalActivityRequest> & {
+        readonly overall: boolean;
+      }> = [];
+      if (row.last_web_seen_at !== null) {
+        observations.push(Object.freeze({
+          principalId,
+          surface: "web",
+          kind: overallSurface === "web" && row.last_web_seen_at === overallAt
+            ? overallKind
+            : "page",
+          observedAt: row.last_web_seen_at as UtcInstant,
+          overall: overallSurface === "web" && row.last_web_seen_at === overallAt,
+        }));
+      }
+      if (row.last_mcp_seen_at !== null) {
+        observations.push(Object.freeze({
+          principalId,
+          surface: "mcp",
+          kind: overallSurface === "mcp" && row.last_mcp_seen_at === overallAt
+            ? overallKind
+            : "discovery",
+          observedAt: row.last_mcp_seen_at as UtcInstant,
+          overall: overallSurface === "mcp" && row.last_mcp_seen_at === overallAt,
+        }));
+      }
+      observations.sort((left, right) => {
+        const chronological = Date.parse(left.observedAt) - Date.parse(right.observedAt);
+        if (chronological !== 0) return chronological;
+        return Number(left.overall) - Number(right.overall);
+      });
+      for (const { overall: _overall, ...observation } of observations) {
+        await this.#metadata.recordPrincipalActivity(observation);
+      }
+    }
+  }
+
+  async #deletePrincipalActivity(principalId: PrincipalId): Promise<void> {
+    await this.#database
+      .prepare(
+        `/*md-principal-activity-delete*/ DELETE FROM md_principal_activity
+         WHERE principal_id = ?1`,
+      )
+      .bind(principalId)
+      .run();
+  }
+
+  async #cleanupPrincipalActivityAfterTransaction(
+    method: string,
+    calls: readonly DurableCall[],
+    result: unknown,
+  ): Promise<void> {
+    if (method !== "runAccountDeletionTransaction") return;
+    if (
+      typeof result !== "object" ||
+      result === null ||
+      !("kind" in result) ||
+      (result.kind !== "deleted" && result.kind !== "cleanup_pending")
+    ) return;
+    const deletion = calls.find((call) => call.method === "deleteAccountCascade");
+    const request = deletion?.args[0];
+    if (
+      typeof request !== "object" ||
+      request === null ||
+      !("principalId" in request) ||
+      typeof request.principalId !== "string"
+    ) return;
+    try {
+      await this.#deletePrincipalActivity(request.principalId as PrincipalId);
+    } catch {
+      // The account deletion event is canonical. A stale observational row is
+      // invisible without its principal and is removed on an exact activity read.
+    }
   }
 
   async #exclusive<Result>(operation: () => Promise<Result>): Promise<Result> {

@@ -112,6 +112,7 @@ class FakeD1Database {
   metadataSnapshotHead = null;
   metadataSnapshotChunks = new Map();
   metadataSnapshotWriteCount = 0;
+  principalActivities = new Map();
   metadataReadLog = [];
   maxBoundStringLength = Number.POSITIVE_INFINITY;
   searchWriteParameterCounts = [];
@@ -139,6 +140,9 @@ class FakeD1Database {
       metadataSnapshot: structuredClone(this.metadataSnapshot),
       metadataSnapshotHead: structuredClone(this.metadataSnapshotHead),
       metadataSnapshotChunks: new Map(this.metadataSnapshotChunks),
+      principalActivities: new Map(
+        [...this.principalActivities].map(([key, value]) => [key, { ...value }]),
+      ),
       search: new Map(this.search),
       searchDocuments: new Map([...this.searchDocuments].map(([key, value]) => [key, { ...value }])),
       searchMemberships: new Map([...this.searchMemberships].map(([key, value]) => [key, { ...value }])),
@@ -155,6 +159,7 @@ class FakeD1Database {
       this.metadataSnapshot = before.metadataSnapshot;
       this.metadataSnapshotHead = before.metadataSnapshotHead;
       this.metadataSnapshotChunks = before.metadataSnapshotChunks;
+      this.principalActivities = before.principalActivities;
       this.search = before.search;
       this.searchDocuments = before.searchDocuments;
       this.searchMemberships = before.searchMemberships;
@@ -233,6 +238,40 @@ class FakeD1Database {
         changed += 1;
       }
       return { success: true, meta: { changes: changed } };
+    }
+    if (sql.includes("/*md-principal-activity-upsert*/")) {
+      const current = this.principalActivities.get(values[0]);
+      const next = {
+        principal_id: values[0],
+        last_web_seen_at: values[1],
+        last_mcp_seen_at: values[2],
+        last_activity_at: values[3],
+        last_activity_surface: values[4],
+        last_activity_kind: values[5],
+      };
+      if (current) {
+        next.last_web_seen_at = !next.last_web_seen_at ||
+            (current.last_web_seen_at && current.last_web_seen_at >= next.last_web_seen_at)
+          ? current.last_web_seen_at
+          : next.last_web_seen_at;
+        next.last_mcp_seen_at = !next.last_mcp_seen_at ||
+            (current.last_mcp_seen_at && current.last_mcp_seen_at >= next.last_mcp_seen_at)
+          ? current.last_mcp_seen_at
+          : next.last_mcp_seen_at;
+        if (current.last_activity_at >= next.last_activity_at) {
+          next.last_activity_at = current.last_activity_at;
+          next.last_activity_surface = current.last_activity_surface;
+          next.last_activity_kind = current.last_activity_kind;
+        }
+      }
+      this.principalActivities.set(values[0], next);
+      return { success: true, meta: { changes: 1 } };
+    }
+    if (sql.includes("/*md-principal-activity-delete*/")) {
+      return {
+        success: true,
+        meta: { changes: this.principalActivities.delete(values[0]) ? 1 : 0 },
+      };
     }
     if (sql.includes("/*md-locator-create*/")) {
       this.locatorHandles.set(values[0], {
@@ -448,6 +487,16 @@ class FakeD1Database {
     if (sql.includes("/*md-metadata-events-migration*/")) {
       this.metadataReadLog.push("migration");
       return { success: true, results: this.metadataEvents.map((row) => ({ ...row })) };
+    }
+    if (sql.includes("/*md-principal-activity-read-one*/")) {
+      const row = this.principalActivities.get(values[0]);
+      return { success: true, results: row ? [{ ...row }] : [] };
+    }
+    if (sql.includes("/*md-principal-activity-read-all*/")) {
+      return {
+        success: true,
+        results: [...this.principalActivities.values()].map((row) => ({ ...row })),
+      };
     }
     if (sql.includes("/*md-locator-read*/")) {
       const row = this.locatorHandles.get(values[0]);
@@ -1195,7 +1244,7 @@ test("chunked metadata snapshots stay below one D1 bound value and survive resta
   assert.ok(await restarted.readMarkdownImportPlan("import-plan_chunked_3"));
 });
 
-test("high-frequency principal activity keeps a large snapshot durable without rewriting it per read", async () => {
+test("high-frequency principal activity bypasses the canonical log and large snapshot", async () => {
   const database = new FakeD1Database();
   database.maxBoundStringLength = 300_000;
   const boundary = await createSitesPersistenceBoundary({
@@ -1237,6 +1286,7 @@ test("high-frequency principal activity keeps a large snapshot durable without r
   assert.ok(database.metadataSnapshotHead.payload_chars > database.maxBoundStringLength);
   const writesBeforeActivity = database.metadataSnapshotWriteCount;
   const sequenceBeforeActivity = database.metadataEvents.at(-1).sequence;
+  const staleActivityWriter = await createSitesMetadataStore(database);
 
   for (let index = 1; index <= 20; index += 1) {
     await boundary.metadata.recordPrincipalActivity({
@@ -1247,12 +1297,22 @@ test("high-frequency principal activity keeps a large snapshot durable without r
     });
   }
 
-  assert.equal(database.metadataEvents.at(-1).sequence, sequenceBeforeActivity + 20);
-  assert.ok(database.metadataSnapshotWriteCount - writesBeforeActivity <= 1);
+  assert.equal(database.metadataEvents.at(-1).sequence, sequenceBeforeActivity);
+  assert.equal(database.metadataSnapshotWriteCount, writesBeforeActivity);
+  assert.equal(database.principalActivities.size, 1);
+  await staleActivityWriter.recordPrincipalActivity({
+    principalId: created.principalId,
+    surface: "mcp",
+    kind: "content_read",
+    observedAt: new Date(Date.parse(T0) + 10_000).toISOString(),
+  });
   const restarted = await createSitesMetadataStore(database);
   const activity = await restarted.readPrincipalActivity(created.principalId);
   assert.equal(activity.lastWebSeenAt, new Date(Date.parse(T0) + 20_000).toISOString());
-  assert.ok(database.metadataSnapshotHead.sequence < database.metadataEvents.at(-1).sequence);
+  assert.equal(activity.lastMcpSeenAt, new Date(Date.parse(T0) + 10_000).toISOString());
+  assert.equal(activity.lastActivitySurface, "web");
+  assert.equal(activity.lastActivityKind, "page");
+  assert.equal(database.metadataSnapshotHead.sequence, database.metadataEvents.at(-1).sequence);
   assert.equal((await restarted.reserveHandle({
     host: HOST,
     handle: "activity-snapshot-checkpoint",
@@ -1916,6 +1976,13 @@ test("whole-Mind and account cleanup resume from durable deletion state after re
     host: HOST,
   };
   const accountDeletion = new AccountDeletionService(accountDeletionOptions);
+  await boundary.metadata.recordPrincipalActivity({
+    principalId: owner.principalId,
+    surface: "web",
+    kind: "page",
+    observedAt: T5,
+  });
+  assert.equal(database.principalActivities.size, 1);
   const accountImpact = await accountDeletion.getAccountDeletionImpact(
     actor(owner.principalId, "request_sites_account_preview", T5),
   );
@@ -1932,6 +1999,7 @@ test("whole-Mind and account cleanup resume from durable deletion state after re
     /deletion cleanup is incomplete/iu,
   );
   assert.equal(await boundary.metadata.readAccount(owner.principalId), null);
+  assert.equal(database.principalActivities.size, 0);
   assert.equal((await boundary.metadata.inspectAccountDeletionCleanupForTest()).length, 1);
 
   boundary = await createSitesPersistenceBoundary({ database, bucket });
