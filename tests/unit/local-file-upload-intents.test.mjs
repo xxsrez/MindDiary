@@ -76,6 +76,7 @@ async function harness(options = {}) {
   let claimId = 0;
   let binding = bindingSnapshot();
   let authorization = "allowed";
+  const activeTokens = options.activeTokens ?? null;
   const intents = options.intents ?? new InMemoryLocalFileUploadIntentStore();
   const staged = new Map();
   const stageCalls = [];
@@ -115,8 +116,11 @@ async function harness(options = {}) {
   };
   const service = new LocalFileUploadIntentService({
     authorizer: {
-      async authorize() {
-        return authorization === "allowed"
+      async authorize(request) {
+        return authorization === "allowed" &&
+            (activeTokens === null || activeTokens.has(
+              String(request.actor.authentication.tokenId),
+            ))
           ? { kind: "allowed" }
           : { kind: "denied", code: "forbidden", retryable: false };
       },
@@ -258,6 +262,17 @@ test("size/digest failures, interruption, replay, wrong binding/Mind, revoke and
       if (mode === "size") return { kind: "invalid", code: "expected_size_mismatch" };
       if (mode === "digest") return { kind: "invalid", code: "expected_sha256_mismatch" };
       if (mode === "oversize") return { kind: "stream_invalid", code: "stream_size_limit_exceeded" };
+      if (mode === "capacity-soft") return { kind: "invalid", code: "capacity_soft_limit" };
+      if (mode === "capacity-hard") return { kind: "invalid", code: "capacity_hard_limit" };
+      if (mode === "capacity-fairness") {
+        return { kind: "invalid", code: "capacity_fairness_limit" };
+      }
+      if (mode === "capacity-untrusted") {
+        return { kind: "invalid", code: "capacity_accounting_untrusted" };
+      }
+      if (mode === "quota") {
+        return { kind: "invalid", code: "outstanding_staged_byte_limit_exceeded" };
+      }
       const record = stagedRecord(request, mode);
       staged.set(record.stagedFileId, record);
       return { kind: "staged", record, replayed: false };
@@ -330,7 +345,16 @@ test("size/digest failures, interruption, replay, wrong binding/Mind, revoke and
   })).code, "file_ingress_source_unavailable");
   env.setAuthorization("allowed");
 
-  for (const failureMode of ["size", "digest", "oversize"]) {
+  for (const [failureMode, rejectionCode] of [
+    ["size", "expected_size_mismatch"],
+    ["digest", "expected_sha256_mismatch"],
+    ["oversize", "stream_size_limit_exceeded"],
+    ["capacity-soft", "capacity_soft_limit"],
+    ["capacity-hard", "capacity_hard_limit"],
+    ["capacity-fairness", "capacity_fairness_limit"],
+    ["capacity-untrusted", "capacity_accounting_untrusted"],
+    ["quota", "outstanding_staged_byte_limit_exceeded"],
+  ]) {
     mode = failureMode;
     const failed = await createIntent(env, { idempotency_key: `failure-${failureMode}` });
     const result = await env.service.upload({
@@ -339,10 +363,10 @@ test("size/digest failures, interruption, replay, wrong binding/Mind, revoke and
       stream: (async function* () {})(),
     });
     assert.notEqual(result.kind, "staged");
-    assert.equal((await env.service.status({
+    assert.deepEqual(await env.service.status({
       capability: failed.uploadCapability,
       requestId: `status_${failureMode}`,
-    })).kind, "rejected");
+    }), { kind: "rejected", code: rejectionCode });
   }
 
   env.setNow("2026-08-25T12:11:00.000Z");
@@ -350,6 +374,65 @@ test("size/digest failures, interruption, replay, wrong binding/Mind, revoke and
     capability: guarded.uploadCapability,
     requestId: "expired",
   })).code, "file_ingress_intent_expired");
+});
+
+test("exact replay atomically follows the current OAuth access record and preserves revoke fencing", async () => {
+  const tokenA = AUTHORIZATION_RECORD_ID;
+  const tokenB = "md_oauth_access_upload_intent_rotated_b";
+  const tokenC = "md_oauth_access_upload_intent_rotated_c";
+  const activeTokens = new Set([tokenA]);
+  const env = await harness({ activeTokens });
+  const request = {
+    source_kind: "workspace/generated_artifact",
+    write_binding_id: BINDING,
+    display_filename: "rotated.bin",
+    expected_size: 0,
+    expected_sha256: SHA_A,
+    idempotency_key: "oauth-rotation-replay",
+  };
+  const created = await env.service.create(actor(tokenA), SPACE, request);
+  assert.equal(created.kind, "ready");
+
+  activeTokens.delete(tokenA);
+  activeTokens.add(tokenB);
+  const rotated = await env.service.create(actor(tokenB), SPACE, request);
+  assert.deepEqual(rotated, { ...created, replayed: true });
+  assert.equal((await env.service.status({
+    capability: rotated.uploadCapability,
+    requestId: "request_rotated_status",
+  })).kind, "pending");
+
+  activeTokens.add(tokenC);
+  const [replayB, replayC] = await Promise.all([
+    env.service.create(actor(tokenB), SPACE, request),
+    env.service.create(actor(tokenC), SPACE, request),
+  ]);
+  assert.deepEqual(replayB, { ...created, replayed: true });
+  assert.deepEqual(replayC, { ...created, replayed: true });
+  const snapshot = env.intents.exportDurableSnapshot();
+  const durable = [...snapshot.records.values()][0];
+  assert.ok(durable.tokenId === tokenB || durable.tokenId === tokenC);
+  const losingToken = durable.tokenId === tokenB ? tokenC : tokenB;
+  activeTokens.delete(losingToken);
+  assert.equal((await env.service.status({
+    capability: created.uploadCapability,
+    requestId: "request_concurrent_replay_status",
+  })).kind, "pending");
+
+  activeTokens.delete(durable.tokenId);
+  assert.equal((await env.service.status({
+    capability: created.uploadCapability,
+    requestId: "request_rotated_revoke",
+  })).code, "file_ingress_source_unavailable");
+  assert.equal((await env.service.create(
+    actor(durable.tokenId),
+    SPACE,
+    request,
+  )).kind, "denied");
+  assert.equal(
+    [...env.intents.exportDurableSnapshot().records.values()][0].tokenId,
+    durable.tokenId,
+  );
 });
 
 test("cleanup deletes at most the bounded expired/orphan batch after the safety window", async () => {

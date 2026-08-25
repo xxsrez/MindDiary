@@ -208,7 +208,10 @@ limits, object identity or lifecycle.
   restage with a new key or infer failure from a network timeout.
 - Upload intents are one-use. Exact replay of the same idempotency key may
   recover the same intent before expiry; a changed payload or second consumer
-  returns `file_ingress_intent_conflict`.
+  returns `file_ingress_intent_conflict`. OAuth access-record rotation within
+  the same still-active principal/grant/exact binding atomically refreshes the
+  replayed intent authorization reference; it cannot change body identity or
+  resurrect a revoked grant/binding.
 - A successful `commit_changeset` consumes every referenced staged ref in its
   single HEAD transaction. An unknown commit outcome is reconciled with the
   exact commit key/payload through `reconcileCommit`; replay returns the same

@@ -30,6 +30,18 @@ export interface HostedFileUploadStagedReceipt {
   readonly replayed: boolean;
 }
 
+export type HostedFileUploadIntentRejectionCode =
+  | "file_ingress_intent_conflict"
+  | "bundle_file_size_limit_exceeded"
+  | "bundle_file_size_mismatch"
+  | "bundle_file_digest_mismatch"
+  | "invalid_bundle_file_name"
+  | "staging_quota_exceeded"
+  | "capacity_soft_limit"
+  | "capacity_hard_limit"
+  | "capacity_fairness_limit"
+  | "capacity_accounting_untrusted";
+
 export type HostedFileUploadIntentStatus =
   | Readonly<{ status: "pending"; expires_at: string }>
   | Readonly<{
@@ -38,13 +50,7 @@ export type HostedFileUploadIntentStatus =
     }>
   | Readonly<{
       status: "rejected";
-      code:
-        | "file_ingress_intent_conflict"
-        | "bundle_file_size_limit_exceeded"
-        | "bundle_file_size_mismatch"
-        | "bundle_file_digest_mismatch"
-        | "invalid_bundle_file_name"
-        | "staging_quota_exceeded";
+      code: HostedFileUploadIntentRejectionCode;
     }>;
 
 const JSON_HEADERS = Object.freeze({
@@ -211,6 +217,11 @@ function publicRejectionCode(
       return "invalid_bundle_file_name";
     case "outstanding_staged_byte_limit_exceeded":
       return "staging_quota_exceeded";
+    case "capacity_soft_limit":
+    case "capacity_hard_limit":
+    case "capacity_fairness_limit":
+    case "capacity_accounting_untrusted":
+      return code;
     default:
       return "file_ingress_intent_conflict";
   }
@@ -241,7 +252,12 @@ function stageFailure(
     return problem(413, "bundle_file_size_limit_exceeded");
   }
   if (result.code.startsWith("capacity_")) {
-    return problem(429, result.code, result.code === "capacity_soft_limit");
+    return problem(
+      429,
+      result.code,
+      result.code === "capacity_soft_limit" ||
+        result.code === "capacity_accounting_untrusted",
+    );
   }
   const code = result.code === "expected_sha256_mismatch"
     ? "bundle_file_digest_mismatch"
@@ -360,12 +376,23 @@ export class HostedFileUploadIntentClientFailure extends Error {
       | "bundle_file_size_mismatch"
       | "bundle_file_digest_mismatch"
       | "invalid_bundle_file_name"
-      | "staging_quota_exceeded",
+      | "staging_quota_exceeded"
+      | "capacity_soft_limit"
+      | "capacity_hard_limit"
+      | "capacity_fairness_limit"
+      | "capacity_accounting_untrusted",
     readonly retryable = code === "file_ingress_transport_unavailable",
     readonly unknownOutcome = false,
   ) {
     super("The hosted file upload operation did not complete.");
   }
+}
+
+function hostedRejectionRetryable(
+  code: HostedFileUploadIntentRejectionCode,
+): boolean {
+  return code === "capacity_soft_limit" ||
+    code === "capacity_accounting_untrusted";
 }
 
 export interface HostedFileUploadIntentClient {
@@ -453,6 +480,10 @@ function statusData(value: unknown): HostedFileUploadIntentStatus | null {
     "bundle_file_digest_mismatch",
     "invalid_bundle_file_name",
     "staging_quota_exceeded",
+    "capacity_soft_limit",
+    "capacity_hard_limit",
+    "capacity_fairness_limit",
+    "capacity_accounting_untrusted",
   ]);
   if (
     data.status === "rejected" &&
@@ -551,11 +582,16 @@ function responseFailure(
     "bundle_file_digest_mismatch",
     "invalid_bundle_file_name",
     "staging_quota_exceeded",
+    "capacity_soft_limit",
+    "capacity_hard_limit",
+    "capacity_fairness_limit",
+    "capacity_accounting_untrusted",
   ]);
   if (definitive.has(code)) {
     return new HostedFileUploadIntentClientFailure(
       code as HostedFileUploadIntentClientFailure["code"],
-      false,
+      code === "capacity_soft_limit" ||
+        code === "capacity_accounting_untrusted",
     );
   }
   return new HostedFileUploadIntentClientFailure(
@@ -624,6 +660,7 @@ export function createHostedFileUploadIntentClient(options: Readonly<{
       if (reconciled.status === "rejected") {
         throw new HostedFileUploadIntentClientFailure(
           reconciled.code,
+          hostedRejectionRetryable(reconciled.code),
         );
       }
     } catch (error) {
@@ -643,6 +680,7 @@ export function createHostedFileUploadIntentClient(options: Readonly<{
       if (before.status === "rejected") {
         throw new HostedFileUploadIntentClientFailure(
           before.code,
+          hostedRejectionRetryable(before.code),
         );
       }
       const url = exactCapabilityUrl(input.uploadUrl, publicOrigin);

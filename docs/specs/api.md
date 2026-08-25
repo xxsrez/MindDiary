@@ -2038,7 +2038,10 @@ Success returns versioned metadata only:
 
 The capability is a domain-separated HMAC, lives for 600 seconds and is never
 stored or emitted by application logs in usable form. Exact key/payload replay before expiry returns
-the same URL; changed metadata conflicts. Current token, grant, write binding,
+the same URL; changed metadata conflicts. When the OAuth grant rotates its
+short-lived access record, exact replay atomically refreshes only the durable
+token reference after principal, grant, binding, Mind and body identity match;
+all other intent fields remain immutable. Current token, grant, write binding,
 Mind and `content:write` authority are rechecked when creating, reconciling and
 uploading, so revoke/rebind invalidates an outstanding capability.
 
@@ -2064,7 +2067,11 @@ secret-bearing path.
 - Missing/wrong/revoked capabilities are indistinguishable `404`;
   expired is `410`, consumed/conflicting is `409`, declared/stream oversize is
   `413`, exact size/digest mismatch is a typed `422`, and transient transport
-  failure is retryable `503`.
+  failure is retryable `503`. Admission preserves `capacity_soft_limit`,
+  `capacity_hard_limit`, `capacity_fairness_limit`,
+  `capacity_accounting_untrusted` and `staging_quota_exceeded` unchanged through
+  immediate PUT errors, durable GET reconciliation and the companion client;
+  soft/untrusted capacity outcomes remain retryable.
 
 Only path-free intent metadata is durable in the dedicated D1 store. Expired
 records are deleted in bounded batches of at most 100 after the 24-hour safety

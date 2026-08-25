@@ -169,12 +169,35 @@ export class SitesLocalFileUploadIntentStore implements LocalFileUploadIntentSto
     if (changes(inserted) === 1) {
       return Object.freeze({ kind: "created", record: Object.freeze({ ...record }) });
     }
-    const existing = await this.#readByNamespace(record.namespaceHash);
-    if (existing === null) return Object.freeze({ kind: "conflict" });
-    const replay = decodeRecord(existing);
-    return replay.canonicalRequestHash === record.canonicalRequestHash
-      ? Object.freeze({ kind: "replayed", record: replay })
-      : Object.freeze({ kind: "conflict" });
+    for (let attempt = 0; attempt < 16; attempt += 1) {
+      const existing = await this.#readByNamespace(record.namespaceHash);
+      if (existing === null) return Object.freeze({ kind: "conflict" });
+      const before = decodeRecord(existing);
+      const replayStore = isolatedStore(before);
+      const replay = await replayStore.createLocalFileUploadIntent(record);
+      if (replay.kind === "conflict") return replay;
+      const after = await replayStore.readLocalFileUploadIntent(before.intentId);
+      if (after === null || encodeRecord(after) === encodeRecord(before)) {
+        return replay;
+      }
+      const updated = await this.#database
+        .prepare(
+          `/*md-upload-intent-update*/ UPDATE md_local_file_upload_intents
+           SET expires_at = ?1, record_version = record_version + 1, record_json = ?2
+           WHERE intent_id = ?3 AND record_version = ?4`,
+        )
+        .bind(
+          after.expiresAt,
+          encodeRecord(after),
+          before.intentId,
+          existing.record_version,
+        )
+        .run();
+      if (changes(updated) === 1) {
+        return Object.freeze({ kind: "replayed", record: after });
+      }
+    }
+    throw new Error("Sites upload intent CAS retry budget exhausted");
   }
 
   async #mutate<Result>(

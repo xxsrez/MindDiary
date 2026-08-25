@@ -138,6 +138,11 @@ test("HTTP failures are typed and never echo private exceptions, capability, pat
     [{ kind: "invalid", code: "expected_size_mismatch" }, 422, "bundle_file_size_mismatch"],
     [{ kind: "invalid", code: "expected_sha256_mismatch" }, 422, "bundle_file_digest_mismatch"],
     [{ kind: "stream_invalid", code: "stream_size_limit_exceeded" }, 413, "bundle_file_size_limit_exceeded"],
+    [{ kind: "invalid", code: "capacity_soft_limit" }, 429, "capacity_soft_limit"],
+    [{ kind: "invalid", code: "capacity_hard_limit" }, 429, "capacity_hard_limit"],
+    [{ kind: "invalid", code: "capacity_fairness_limit" }, 429, "capacity_fairness_limit"],
+    [{ kind: "invalid", code: "capacity_accounting_untrusted" }, 429, "capacity_accounting_untrusted"],
+    [{ kind: "invalid", code: "outstanding_staged_byte_limit_exceeded" }, 422, "staging_quota_exceeded"],
   ]) {
     const env = handler({ upload: result });
     const failure = await env.handler(new Request(URL, {
@@ -157,6 +162,70 @@ test("HTTP failures are typed and never echo private exceptions, capability, pat
     status: "rejected",
     code: "bundle_file_digest_mismatch",
   });
+  for (const [storedCode, publicCode] of [
+    ["capacity_soft_limit", "capacity_soft_limit"],
+    ["capacity_hard_limit", "capacity_hard_limit"],
+    ["capacity_fairness_limit", "capacity_fairness_limit"],
+    ["capacity_accounting_untrusted", "capacity_accounting_untrusted"],
+    ["outstanding_staged_byte_limit_exceeded", "staging_quota_exceeded"],
+  ]) {
+    const capacity = handler({
+      status: { kind: "rejected", code: storedCode },
+    });
+    const status = await capacity.handler(new Request(URL));
+    assert.equal(status.status, 200);
+    assert.deepEqual((await status.json()).data, {
+      status: "rejected",
+      code: publicCode,
+    });
+  }
+});
+
+test("companion client preserves typed capacity failures from PUT and GET reconciliation", async () => {
+  const pending = () => new Response(JSON.stringify({
+    ok: true,
+    data: { status: "pending", expires_at: "2026-08-25T12:10:00.000Z" },
+  }));
+  for (const [code, status, retryable] of [
+    ["capacity_soft_limit", 429, true],
+    ["capacity_hard_limit", 429, false],
+    ["capacity_fairness_limit", 429, false],
+    ["capacity_accounting_untrusted", 429, true],
+    ["staging_quota_exceeded", 422, false],
+  ]) {
+    let calls = 0;
+    const client = createHostedFileUploadIntentClient({
+      publicOrigin: ORIGIN,
+      async fetcher() {
+        calls += 1;
+        if (calls === 1) return pending();
+        return new Response(JSON.stringify({
+          ok: false,
+          error: { code, message: "safe", retryable },
+        }), { status });
+      },
+    });
+    await assert.rejects(
+      client.upload({ uploadUrl: URL, bytes: new Uint8Array() }),
+      (error) => error instanceof HostedFileUploadIntentClientFailure &&
+        error.code === code && error.retryable === retryable,
+    );
+
+    const reconciled = createHostedFileUploadIntentClient({
+      publicOrigin: ORIGIN,
+      async fetcher() {
+        return new Response(JSON.stringify({
+          ok: true,
+          data: { status: "rejected", code },
+        }));
+      },
+    });
+    await assert.rejects(
+      reconciled.upload({ uploadUrl: URL, bytes: new Uint8Array() }),
+      (error) => error instanceof HostedFileUploadIntentClientFailure &&
+        error.code === code && error.retryable === retryable,
+    );
+  }
 });
 
 test("companion client reconciles an unknown PUT and always omits credentials, bearer and redirects", async () => {

@@ -32,6 +32,7 @@ export interface LocalFileUploadIntentRecord {
   readonly namespaceHash: Sha256Digest;
   readonly canonicalRequestHash: Sha256Digest;
   readonly principalId: PrincipalId;
+  /** Current OAuth authorization mirror; exact grant-scoped replay may rotate it. */
   readonly tokenId: TokenId;
   readonly bindingOwnerId: MindBindingOwnerId;
   readonly spaceId: SpaceId;

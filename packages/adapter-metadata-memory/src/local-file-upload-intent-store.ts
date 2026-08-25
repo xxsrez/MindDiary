@@ -96,6 +96,24 @@ function validNew(record: Readonly<LocalFileUploadIntentRecord>): boolean {
     record.claimId === null;
 }
 
+function sameReplayIdentity(
+  current: Readonly<LocalFileUploadIntentRecord>,
+  incoming: Readonly<LocalFileUploadIntentRecord>,
+): boolean {
+  return current.namespaceHash === incoming.namespaceHash &&
+    current.canonicalRequestHash === incoming.canonicalRequestHash &&
+    current.principalId === incoming.principalId &&
+    current.bindingOwnerId === incoming.bindingOwnerId &&
+    current.spaceId === incoming.spaceId &&
+    current.writeBindingId === incoming.writeBindingId &&
+    current.sourceKind === incoming.sourceKind &&
+    current.displayFilename === incoming.displayFilename &&
+    current.claimedMediaType === incoming.claimedMediaType &&
+    current.expectedSize === incoming.expectedSize &&
+    current.expectedSha256 === incoming.expectedSha256 &&
+    current.idempotencyKey === incoming.idempotencyKey;
+}
+
 /** Dedicated path-free metadata store for upload intents only. */
 export class InMemoryLocalFileUploadIntentStore
   implements LocalFileUploadIntentStore {
@@ -156,15 +174,27 @@ export class InMemoryLocalFileUploadIntentStore
     record: Readonly<LocalFileUploadIntentRecord>,
   ): Promise<CreateLocalFileUploadIntentResult> {
     return this.#exclusive(() => {
+      if (!validNew(record)) {
+        return Object.freeze({ kind: "conflict" as const });
+      }
       const replay = [...this.#records.values()].find(
         (candidate) => candidate.namespaceHash === record.namespaceHash,
       );
       if (replay !== undefined) {
-        return replay.canonicalRequestHash === record.canonicalRequestHash
-          ? Object.freeze({ kind: "replayed" as const, record: clone(replay) })
-          : Object.freeze({ kind: "conflict" as const });
+        if (!sameReplayIdentity(replay, record)) {
+          return Object.freeze({ kind: "conflict" as const });
+        }
+        // Exact replay is grant-scoped, while OAuth access records rotate.
+        // The already-authorized caller may refresh only the token reference;
+        // the stable principal/grant/binding/body identity remains immutable.
+        const current = replay.tokenId === record.tokenId ||
+            Date.parse(replay.expiresAt) <= Date.parse(record.createdAt)
+          ? replay
+          : clone({ ...replay, tokenId: record.tokenId });
+        if (current !== replay) this.#records.set(replay.intentId, current);
+        return Object.freeze({ kind: "replayed" as const, record: clone(current) });
       }
-      if (!validNew(record) || this.#records.has(record.intentId)) {
+      if (this.#records.has(record.intentId)) {
         return Object.freeze({ kind: "conflict" as const });
       }
       const stored = clone(record);
