@@ -851,6 +851,8 @@ test("pilot Product Site route map keeps one UAT shell, exact active navigation,
   assert.match(codexHelpHtml, /data-codex-client-tab="desktop"/);
   assert.match(codexHelpHtml, /data-codex-client-tab="cli"/);
   assert.match(codexHelpHtml, /data-copy-code="codex-help-cli-install"/);
+  assert.match(codexHelpHtml, /Create the first useful Memory/);
+  assert.match(codexHelpHtml, /href="\/me#first-result-title">Open the starter card/);
   assert.match(codexHelpHtml, /href="\/settings\/developer\/mcp">Advanced MCP/);
   assert.doesNotMatch(
     codexHelpHtml,

@@ -1724,6 +1724,8 @@ test("durable product runtime carries a Sites account token through Codex MCP an
     codexHelpHtml,
     /Use Mind Diary to list the Minds I can read\. Do not create or change any Memory\./u,
   );
+  assert.match(codexHelpHtml, /Create the first useful Memory/u);
+  assert.match(codexHelpHtml, /href="\/me#first-result-title">Open the starter card/u);
 
   const createdMind = await responseFrom(runtime, new Request(`${ORIGIN}/api/v1/minds`, {
     method: "POST",

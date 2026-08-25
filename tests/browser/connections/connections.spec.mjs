@@ -275,6 +275,8 @@ test("Codex guide switches Desktop and CLI paths by keyboard and copies exact cu
   expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(
     "Use Mind Diary to list the Minds I can read. Do not create or change any Memory.",
   );
+  await expect(page.getByRole("link", { name: "Open the starter card" }))
+    .toHaveAttribute("href", "/me#first-result-title");
 
   const accessibilityTree = await page.locator("main").ariaSnapshot();
   expect(accessibilityTree).toContain('tablist "Choose a Codex setup path"');

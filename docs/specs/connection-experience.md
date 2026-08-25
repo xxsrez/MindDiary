@@ -76,6 +76,10 @@ Use Mind Diary to list the Minds I can read. Do not create or change any Memory.
 ```
 
 Успех означает bounded список readable Minds и отсутствие content mutation.
+После успешного smoke guide сохраняет прежний first-result handoff: ссылка
+`Create the first useful Memory` возвращает пользователя к существующей starter
+card `/me#first-result-title`, не дублируя её technical playbook внутри setup
+flow.
 Для каждого checkpoint guide даёт один bounded recovery: сверить exact
 Marketplace source/install state, выполнить read smoke в fresh Task, проверить
 тот же account/workspace и current selection в Connections. Revoke/reconnect не
