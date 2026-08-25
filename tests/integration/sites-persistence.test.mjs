@@ -35,6 +35,7 @@ import {
 } from "@mind-diary/application-ports";
 
 import {
+  SITES_METADATA_MIGRATIONS,
   createSitesMetadataStore,
 } from "../../packages/adapter-metadata-sites/dist/index.js";
 
@@ -107,6 +108,7 @@ class FakeD1Statement {
 }
 
 class FakeD1Database {
+  batchStatementCounts = [];
   metadataEvents = [];
   metadataSnapshot = null;
   metadataSnapshotHead = null;
@@ -131,6 +133,7 @@ class FakeD1Database {
   }
 
   async batch(statements) {
+    this.batchStatementCounts.push(statements.length);
     const previous = this.#batchTail;
     let release;
     this.#batchTail = new Promise((resolve) => { release = resolve; });
@@ -584,6 +587,16 @@ class FakeD1Database {
     throw new Error(`unsupported FakeD1 all statement: ${sql}`);
   }
 }
+
+test("Sites metadata applies cold schema migrations in one D1 batch", async () => {
+  const database = new FakeD1Database();
+  await createSitesMetadataStore(database);
+  const expectedMigrationStatements = SITES_METADATA_MIGRATIONS.reduce(
+    (count, migration) => count + migration.statements.length + 1,
+    0,
+  );
+  assert.deepEqual(database.batchStatementCounts, [expectedMigrationStatements, 3]);
+});
 
 class FakeR2Body {
   constructor(record) {

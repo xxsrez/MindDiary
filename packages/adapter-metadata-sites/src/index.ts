@@ -585,18 +585,20 @@ export class SitesMetadataStore {
 
   async #migrate(): Promise<void> {
     if (this.#initialized) return;
+    const appliedAt = new Date().toISOString();
+    const statements: D1PreparedStatementLike[] = [];
     for (const migration of SITES_METADATA_MIGRATIONS) {
-      const statements = migration.statements.map((sql) => this.#database.prepare(sql));
       statements.push(
+        ...migration.statements.map((sql) => this.#database.prepare(sql)),
         this.#database
           .prepare(
             `/*md-metadata-migration*/ INSERT OR IGNORE INTO md_metadata_schema_migrations
              (version, name, applied_at) VALUES (?1, ?2, ?3)`,
           )
-          .bind(migration.version, migration.name, new Date().toISOString()),
+          .bind(migration.version, migration.name, appliedAt),
       );
-      await this.#database.batch(statements);
     }
+    await this.#database.batch(statements);
     this.#initialized = true;
   }
 
