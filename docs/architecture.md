@@ -166,6 +166,20 @@ tokens и read/observability сгруппированы в отдельные us
 Внутренние helpers экспортируются только между этими modules и не расширяют
 публичный package surface.
 
+`application-ports` следует тому же правилу: корневой entrypoint является
+только стабильным façade, а control, object/storage, revision/background,
+authorization, token и observability contracts разделены по ответственности.
+Protocol adapter MCP отдельно держит декларативные tool/schema definitions,
+modern HTTP lifecycle и isolated legacy Codex translation. In-memory metadata
+adapter собирает ordinary-Mind transaction из отдельных membership/invitation,
+lifecycle/visibility/ownership и deletion slices поверх одного mutable
+unit-of-work state; один coordinator сохраняет atomic commit/rollback boundary.
+
+Repository architecture gate дополнительно ограничивает один production
+TypeScript source file 2500 строками. Это coarse regression guard, а не метрика
+качества сама по себе: более ранний split всё равно обязателен, когда файл
+смешивает независимые причины для изменения.
+
 Точная форма trusted context, обязанности каждого port, отдельные control,
 content и background façades, transaction boundaries и обязательные dependency
 rules зафиксированы в

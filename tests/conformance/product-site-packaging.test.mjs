@@ -34,7 +34,7 @@ test("runtime package is product composition, not capability probe or fallback",
 
 test("product composition routes the Sites-safe modern and versioned Codex MCP endpoints", async () => {
   const [mcp, composition, tokenUi] = await Promise.all([
-    readFile(resolve(root, "packages/adapter-mcp/src/index.ts"), "utf8"),
+    readFile(resolve(root, "packages/adapter-mcp/src/tool-definitions.ts"), "utf8"),
     readFile(resolve(root, "packages/composition-root/src/product-site.ts"), "utf8"),
     readFile(resolve(root, "packages/adapter-web/src/token-management.ts"), "utf8"),
   ]);
@@ -49,7 +49,13 @@ test("product composition routes the Sites-safe modern and versioned Codex MCP e
 
 test("product Worker owns the operable UI and scopes the one-time Bearer to MCP self-check", async () => {
   const [http, assetWrapper, composition, browserAssets] = await Promise.all([
-    readFile(resolve(root, "packages/adapter-web/src/product-http.ts"), "utf8"),
+    Promise.all([
+      "product-http-document.ts",
+      "product-http-handler.ts",
+      "product-http-static-assets.ts",
+    ].map((name) =>
+      readFile(resolve(root, "packages/adapter-web/src", name), "utf8")
+    )).then((sources) => sources.join("\n")),
     readFile(resolve(root, "packages/adapter-web/src/product-ui-assets.ts"), "utf8"),
     readFile(resolve(root, "packages/composition-root/src/product-site.ts"), "utf8"),
     Promise.all([

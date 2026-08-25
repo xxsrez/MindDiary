@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 
 const root = resolve(import.meta.dirname, "..");
 const packageRoot = resolve(root, "packages");
+const maxProductionSourceLines = 2_500;
 
 const expectedDependencies = new Map(
   Object.entries({
@@ -148,6 +149,12 @@ for (const [name, expected] of expectedDependencies) {
   for (const file of sourceFiles) {
     const path = resolve(sourceRoot, file);
     const source = await readFile(path, "utf8");
+    const lineCount = source.split(/\r?\n/u).length - (source.endsWith("\n") ? 1 : 0);
+    if (lineCount > maxProductionSourceLines) {
+      errors.push(
+        `${name}: ${file} has ${lineCount} lines; split responsibilities before exceeding the ${maxProductionSourceLines}-line production-source budget`,
+      );
+    }
     for (const match of source.matchAll(importPattern)) {
       const specifier = match[1] ?? match[2];
       if (specifier?.startsWith("@mind-diary/")) {
