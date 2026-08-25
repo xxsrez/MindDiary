@@ -183,6 +183,57 @@ test("a concurrent commit re-protecting an orphan wins the cleanup fence", async
   assert.ok(await objects.getImmutable(stored.object.sha256));
 });
 
+test("cleanup batches one object page and parallel reachability checks within its object budget", async () => {
+  const objects = new InMemoryObjectStore();
+  for (let index = 0; index < 4; index += 1) {
+    await objects.putImmutable({
+      bytes: new TextEncoder().encode(`# batched orphan ${index}\n`),
+      mediaType: MARKDOWN_MEDIA_TYPE,
+      createdAt: T0,
+    });
+  }
+  const listRequests = [];
+  const batchedObjects = {
+    listObjectCleanupPage(request) {
+      listRequests.push(request);
+      return objects.listObjectCleanupPage(request);
+    },
+    hasExportArchivesForJob: (jobId, spaceId) =>
+      objects.hasExportArchivesForJob(jobId, spaceId),
+    deleteObjectCleanupCandidate: (request) =>
+      objects.deleteObjectCleanupCandidate(request),
+  };
+  let activeReachabilityChecks = 0;
+  let maximumConcurrentReachabilityChecks = 0;
+  const state = {
+    ...metadata(),
+    async isImmutableObjectReachable() {
+      activeReachabilityChecks += 1;
+      maximumConcurrentReachabilityChecks = Math.max(
+        maximumConcurrentReachabilityChecks,
+        activeReachabilityChecks,
+      );
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      activeReachabilityChecks -= 1;
+      return false;
+    },
+  };
+  const result = await new BoundedObjectCleanupHandler({
+    objects: batchedObjects,
+    checkpoints: new InMemoryRevisionMetadataStore(),
+    reachability: state,
+    staging: state,
+    exports: state,
+    clock: { now: () => T4 },
+    monotonicNow: () => 0,
+  }).handle({ actor, createdBefore: T3, maxObjects: 4, maxDurationMs: 1_000 });
+
+  assert.equal(result.deleted, 4);
+  assert.equal(listRequests.length, 1);
+  assert.equal(listRequests[0].limit, 4);
+  assert.equal(maximumConcurrentReachabilityChecks, 4);
+});
+
 test("cleanup persists progress at strict object, byte and time budgets", async () => {
   const objects = new InMemoryObjectStore();
   for (let index = 0; index < 4; index += 1) {

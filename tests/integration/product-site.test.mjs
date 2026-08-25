@@ -404,6 +404,10 @@ test("product root, Connections, and Advanced MCP render safe live projections a
     const response = await handler(new Request(`${origin}${path}`));
     assert.equal(response.status, 200);
     assert.equal(response.headers.get("content-type"), contentType);
+    assert.equal(
+      response.headers.get("cache-control"),
+      "public, max-age=60, stale-while-revalidate=300",
+    );
     const body = await response.text();
     assert.match(body, new RegExp(marker.replaceAll("/", "\\/")));
     if (path.endsWith(".js")) assert.doesNotThrow(() => new vm.Script(body));

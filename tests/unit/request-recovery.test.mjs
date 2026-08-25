@@ -10,6 +10,40 @@ import {
 
 const ORIGIN = "https://mind-diary.example";
 
+test("Product Worker serves static assets without composing the product runtime", async () => {
+  let runtimeCreations = 0;
+  let configReads = 0;
+  const waits = [];
+  const worker = createMindDiaryProductWorker({
+    async createRuntime() {
+      runtimeCreations += 1;
+      throw new Error("static assets must not compose the runtime");
+    },
+    staticFetch(request) {
+      return new URL(request.url).pathname === "/ui/app.css"
+        ? new Response("asset", { headers: { "content-type": "text/css" } })
+        : null;
+    },
+    readConfig() {
+      configReads += 1;
+      return { publicOrigin: ORIGIN };
+    },
+    async fallbackFetch() {
+      return new Response("fallback", { status: 404 });
+    },
+  });
+
+  const response = await worker.fetch(
+    new Request(`${ORIGIN}/ui/app.css`),
+    {},
+    { waitUntil: (promise) => waits.push(promise) },
+  );
+  assert.equal(await response.text(), "asset");
+  assert.equal(runtimeCreations, 0);
+  assert.equal(configReads, 0);
+  assert.equal(waits.length, 0);
+});
+
 test("Product Worker defers observational activity without delaying the response", async () => {
   let releaseActivity;
   const activity = new Promise((resolve) => { releaseActivity = resolve; });

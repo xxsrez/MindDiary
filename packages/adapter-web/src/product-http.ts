@@ -379,6 +379,7 @@ const SAFE_HEADERS = Object.freeze({
   "x-content-type-options": "nosniff",
   "x-frame-options": "DENY",
 });
+const STATIC_ASSET_CACHE_CONTROL = "public, max-age=60, stale-while-revalidate=300";
 const PRODUCT_UI_PILOT_SHELL_CSS = `
 .md-brand-lockup{display:inline-flex;align-items:center;gap:.55rem;min-width:0}
 .md-environment{padding:.2rem .5rem;border:1px solid var(--mind-diary-memory-plum);border-radius:999px;color:var(--mind-diary-memory-plum);background:#fff;font-size:.72rem;font-weight:800;letter-spacing:.08em}
@@ -1270,6 +1271,23 @@ function staticAsset(pathname: string): { readonly body: BodyInit; readonly type
   return null;
 }
 
+/** Serves compile-time product assets without requiring product runtime composition. */
+export function createProductUiStaticAssetResponse(request: Request): Response | null {
+  const asset = staticAsset(new URL(request.url).pathname);
+  if (asset === null) return null;
+  if (request.method !== "GET" && request.method !== "HEAD") {
+    return errorResponse(405, "method_not_allowed", "asset_request");
+  }
+  return new Response(request.method === "HEAD" ? null : asset.body, {
+    status: 200,
+    headers: {
+      ...SAFE_HEADERS,
+      "cache-control": STATIC_ASSET_CACHE_CONTROL,
+      "content-type": asset.type,
+    },
+  });
+}
+
 async function productUiDocument(input: {
   readonly pathname: string;
   readonly siteOrigin: string;
@@ -2010,16 +2028,8 @@ export function createProductWebHttpHandler(
   const origin = canonicalOrigin(dependencies.applicationOrigin);
   return async (request) => {
     const url = new URL(request.url);
-    const asset = staticAsset(url.pathname);
-    if (asset !== null) {
-      if (request.method !== "GET" && request.method !== "HEAD") {
-        return errorResponse(405, "method_not_allowed", "asset_request");
-      }
-      return new Response(request.method === "HEAD" ? null : asset.body, {
-        status: 200,
-        headers: { ...SAFE_HEADERS, "content-type": asset.type },
-      });
-    }
+    const staticResponse = createProductUiStaticAssetResponse(request);
+    if (staticResponse !== null) return staticResponse;
     const isApi = url.pathname === "/api/v1" || url.pathname.startsWith("/api/v1/");
     const isOperatorPath =
       url.pathname === "/internal/operators/users" ||

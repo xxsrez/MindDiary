@@ -43,6 +43,7 @@ export declare function createMindDiaryProductWorker<
   },
 >(options: {
   readonly createRuntime: (options: RuntimeOptions) => Promise<Runtime>;
+  readonly staticFetch?: (request: Request) => Response | null;
   readonly readConfig: (request: Request, environment: Environment) =>
     Readonly<Record<string, unknown> & { readonly publicOrigin: string }>;
   readonly fallbackFetch: (

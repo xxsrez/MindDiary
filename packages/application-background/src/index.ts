@@ -801,17 +801,27 @@ export class BoundedObjectCleanupHandler {
         const page = await this.#objects.listObjectCleanupPage({
           namespace,
           cursor,
-          limit: 1,
+          limit: Math.min(16, maxObjects - scanned),
         });
         scanned += page.listed;
-        const candidate = page.candidates[0];
-        if (candidate !== undefined) {
+        const collectable = await Promise.all(page.candidates.map((candidate) =>
+          this.#isCollectable(candidate, now, createdBeforeMs)
+        ));
+        let pageCompleted = true;
+        for (let index = 0; index < page.candidates.length; index += 1) {
+          const candidate = page.candidates[index]!;
+          if (this.#monotonicNow() - startedAt >= maxDurationMs) {
+            budgetExhausted = true;
+            pageCompleted = false;
+            break;
+          }
           examined += 1;
-          if (await this.#isCollectable(candidate, now, createdBeforeMs)) {
+          if (collectable[index]) {
             orphanCount += 1;
             queueAgeMs = Math.max(queueAgeMs, Date.parse(now) - Date.parse(candidate.createdAt));
             if (reclaimedBytes + candidate.size > maxBytes) {
               budgetExhausted = true;
+              pageCompleted = false;
               break;
             }
             if (await this.#objects.deleteObjectCleanupCandidate({
@@ -829,6 +839,7 @@ export class BoundedObjectCleanupHandler {
             }
           }
         }
+        if (!pageCompleted) break;
         cursor = page.nextCursor;
         if (cursor === null) {
           const next = cleanupNamespaceAfter(namespace);

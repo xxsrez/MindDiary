@@ -178,15 +178,19 @@ function dispatchScheduled(runtime, work) {
 export function createMindDiaryProductWorker(options) {
   if (typeof options?.createRuntime !== "function" ||
       typeof options?.readConfig !== "function" ||
-      typeof options?.fallbackFetch !== "function") {
+      typeof options?.fallbackFetch !== "function" ||
+      (options.staticFetch !== undefined && typeof options.staticFetch !== "function")) {
     throw new TypeError("product Worker dependencies are required");
   }
   const runtimeCache = options.runtimeCache ?? new IsolateRuntimeCache();
   const recoveryCoordinator = options.recoveryCoordinator ?? new RequestRecoveryCoordinator();
   return Object.freeze({
     async fetch(request, environment, context) {
-      let failureStage = "runtime-config";
+      let failureStage = "static-assets";
       try {
+        const staticResponse = options.staticFetch?.(request) ?? null;
+        if (staticResponse !== null) return staticResponse;
+        failureStage = "runtime-config";
         const config = options.readConfig(request, environment);
         failureStage = "composition";
         const fingerprint = productWorkerConfigFingerprint(environment, config.publicOrigin);
