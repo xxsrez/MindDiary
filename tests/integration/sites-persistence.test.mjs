@@ -1383,6 +1383,69 @@ test("Mind binding transactions keep fenced durability without rewriting every s
   );
 });
 
+test("MCP token mutations keep fenced durability with bounded snapshot cadence", async () => {
+  const database = new FakeD1Database();
+  let store = await createSitesMetadataStore(database);
+  const principalId = opaqueId("principal_token_snapshot_cadence");
+  const writesBeforeTokens = database.metadataSnapshotWriteCount;
+
+  for (let index = 0; index < 15; index += 1) {
+    const created = await store.createMcpToken({
+      tokenId: `token_snapshot_cadence_${index}`,
+      principalId,
+      name: `Codex cadence fixture ${index}`,
+      verifier: `hmac-sha256:v1:${index.toString(16).padStart(64, "0")}`,
+      displayPrefix: "mdp_v1_abcdef…",
+      scopes: ["content:read", "content:write"],
+      createdAt: T0,
+      expiresAt: "2026-11-06T08:00:00.000Z",
+    });
+    assert.equal(created.kind, "created");
+  }
+
+  assert.equal(database.metadataEvents.at(-1).sequence, 15);
+  assert.equal(database.metadataSnapshotWriteCount, writesBeforeTokens);
+  store = await createSitesMetadataStore(database);
+  assert.equal((await store.listMcpTokenMetadata(principalId)).length, 15);
+
+  const revoked = await store.revokeMcpToken({
+    principalId,
+    tokenId: "token_snapshot_cadence_0",
+    revokedAt: T5,
+  });
+  assert.equal(revoked.kind, "revoked");
+  assert.equal(database.metadataEvents.at(-1).sequence, 16);
+  assert.equal(database.metadataSnapshotWriteCount - writesBeforeTokens, 1);
+  assert.equal(database.metadataSnapshotHead.sequence, 16);
+
+  store = await createSitesMetadataStore(database);
+  assert.equal(
+    (await store.listMcpTokenMetadata(principalId))
+      .find((token) => token.tokenId === "token_snapshot_cadence_0")?.state,
+    "revoked",
+  );
+  const createdAfterCheckpoint = await store.createMcpToken({
+    tokenId: "token_snapshot_cadence_15",
+    principalId,
+    name: "Codex cadence fixture 15",
+    verifier: `hmac-sha256:v1:${(15).toString(16).padStart(64, "0")}`,
+    displayPrefix: "mdp_v1_abcdef…",
+    scopes: ["content:read", "content:write"],
+    createdAt: T1,
+    expiresAt: "2026-11-06T08:00:00.000Z",
+  });
+  assert.equal(createdAfterCheckpoint.kind, "created");
+  assert.equal(database.metadataSnapshotWriteCount - writesBeforeTokens, 1);
+
+  store = await createSitesMetadataStore(database);
+  const afterTailReplay = await store.listMcpTokenMetadata(principalId);
+  assert.equal(afterTailReplay.length, 16);
+  assert.equal(
+    afterTailReplay.find((token) => token.tokenId === "token_snapshot_cadence_15")?.state,
+    "active",
+  );
+});
+
 test("chunked metadata snapshots stay below one D1 bound value and survive restart", async () => {
   const database = new FakeD1Database();
   database.maxBoundStringLength = 300_000;

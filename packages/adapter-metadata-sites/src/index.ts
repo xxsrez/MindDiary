@@ -242,6 +242,7 @@ const TOKEN_MUTATIONS = new Set([
 const MAX_CAS_ATTEMPTS = 16;
 const SNAPSHOT_CHUNK_CODE_UNITS = 256 * 1_024;
 const SITES_METADATA_SCHEMA_VERSION = SITES_METADATA_MIGRATIONS.at(-1)?.version ?? 0;
+const TOKEN_SNAPSHOT_CADENCE = 16;
 const MIND_BINDING_SNAPSHOT_CADENCE = 16;
 const OBJECT_CLEANUP_SNAPSHOT_CADENCE = 16;
 const REQUEST_RECOVERY_SNAPSHOT_CADENCE = 16;
@@ -345,6 +346,12 @@ interface TailReplayResult {
 }
 
 function shouldCheckpointEvent(event: DurableEvent, sequence: number): boolean {
+  if (TOKEN_MUTATIONS.has(event.method)) {
+    // The fenced token event is already canonical durability. OAuth refresh is
+    // latency-sensitive, so do not make every rollover wait for a rewrite of
+    // the complete metadata snapshot while keeping cold tail replay bounded.
+    return sequence % TOKEN_SNAPSHOT_CADENCE === 0;
+  }
   if (event.method === "runMindBindingTransaction") {
     // The fenced event is already canonical durability. Binding selection is
     // latency-sensitive UI/MCP setup, so avoid rewriting the full materialized

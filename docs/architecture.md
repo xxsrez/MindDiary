@@ -765,7 +765,11 @@ explicit target Mind. General cross-Mind search/synthesis требует нов�
   transitions, но materialized snapshot checkpoint-ятся с cadence 16: один
   request-triggered empty scan больше не переписывает весь metadata snapshot
   дважды непосредственно перед следующим foreground navigation. Rotating
-  revision-index recovery cursor использует ту же bounded cadence; пустые
+  revision-index recovery cursor использует ту же bounded cadence. MCP token
+  create/revoke и остальные token-lifecycle mutations также сразу сохраняются
+  каноническим fenced event, а полный materialized snapshot checkpoint-ится с
+  cadence 16: обычный OAuth refresh не ждёт синхронной перезаписи всего
+  metadata state, при этом cold restart replay-ит bounded tail. Пустые
   staged-file и Markdown-import cleanup passes вообще не добавляют canonical
   event. Последовательные warm mutations получают detached CAS base клонированием
   одного tail-refreshed in-process state, а не повторным чтением и parsing всего
