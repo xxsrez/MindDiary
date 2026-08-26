@@ -354,7 +354,7 @@ internal `principal_id`.
 ## MCP endpoint decision
 
 Canonical resource/audience pilot-а — existing `POST /api/mcp` с profile
-`2026-07-28`. Однако проверенная пара default `codex-cli 0.149.0` требует
+`2026-07-28`. Однако проверенная пара default `codex-cli 0.149.1` требует
 изолированный compatibility lifecycle `2025-11-25`, поэтому `.mcp.json`
 задаёт transport URL `/api/mcp/2025-11-25` и отдельный `oauth_resource`
 `/api/mcp`. Это не fallback между lifecycle внутри request и не смена OAuth
