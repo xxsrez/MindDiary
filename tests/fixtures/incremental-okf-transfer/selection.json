@@ -1,0 +1,22 @@
+{
+  "first": {
+    "entry": "wiki/harbor-lantern.md",
+    "attachment": "raw/harbor-evidence.bin"
+  },
+  "second": {
+    "entry": "wiki/second-observation.md",
+    "attachment": "output/second-derived.txt"
+  },
+  "excluded": [
+    "AGENTS.md",
+    ".agents/rules.md",
+    "skills/private-capture/SKILL.md",
+    "scripts/rebuild.sh",
+    "docs/project-settings.md",
+    "operations/events/0001.md",
+    "operations/revisions/0001.md",
+    "operations/config.yml",
+    "tmp/generated.md",
+    "archive/full-brain.zip"
+  ]
+}
