@@ -1876,7 +1876,12 @@ test("one-use BundleFile route serves exact headers and hides malformed or range
               "Cache-Control": "no-store",
               "X-Content-Type-Options": "nosniff",
             },
-            bytes: Uint8Array.from([1, 2, 3]),
+            body: new ReadableStream({
+              start(controller) {
+                controller.enqueue(Uint8Array.from([1, 2, 3]));
+                controller.close();
+              },
+            }),
           }
         : { kind: "not_found" };
     },

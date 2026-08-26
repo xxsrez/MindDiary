@@ -116,6 +116,7 @@ class FakeD1Database {
   metadataSnapshotChunks = new Map();
   metadataSnapshotWriteCount = 0;
   principalActivities = new Map();
+  localFileUploadIntents = new Map();
   metadataReadLog = [];
   maxBoundStringLength = Number.POSITIVE_INFINITY;
   searchWriteParameterCounts = [];
@@ -565,6 +566,18 @@ class FakeD1Database {
       return {
         success: true,
         results: [...this.principalActivities.values()].map((row) => ({ ...row })),
+      };
+    }
+    if (sql.includes("/*md-upload-intent-collect-expired*/")) {
+      return {
+        success: true,
+        results: [...this.localFileUploadIntents.values()]
+          .filter((row) => row.expires_at <= values[0])
+          .sort((left, right) =>
+            left.expires_at.localeCompare(right.expires_at) ||
+            left.intent_id.localeCompare(right.intent_id))
+          .slice(0, Number(values[1]))
+          .map((row) => ({ ...row })),
       };
     }
     if (sql.includes("/*md-locator-read*/")) {
