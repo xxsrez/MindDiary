@@ -423,16 +423,8 @@ const SET_READ_MIND_BINDING_INPUT_SCHEMA = strictInputSchema(
   ["action", "mind", "expected_binding_version", "idempotency_key"],
 );
 
-const SET_WRITE_MIND_BINDING_INPUT_SCHEMA = Object.freeze({
-  $schema: JSON_SCHEMA_2020_12,
-  type: "object",
-  additionalProperties: false,
-  required: Object.freeze([
-    "action",
-    "expected_binding_version",
-    "idempotency_key",
-  ]),
-  properties: Object.freeze({
+const SET_WRITE_MIND_BINDING_INPUT_SCHEMA = strictInputSchema(
+  {
     action: Object.freeze({
       type: "string",
       enum: Object.freeze(["bind", "unbind"]),
@@ -440,22 +432,9 @@ const SET_WRITE_MIND_BINDING_INPUT_SCHEMA = Object.freeze({
     mind: MIND_SELECTOR_SCHEMA,
     expected_binding_version: BINDING_VERSION_SCHEMA,
     idempotency_key: IDEMPOTENCY_KEY_SCHEMA,
-  }),
-  oneOf: Object.freeze([
-    Object.freeze({
-      required: Object.freeze(["mind"]),
-      properties: Object.freeze({
-        action: Object.freeze({ const: "bind" }),
-      }),
-    }),
-    Object.freeze({
-      properties: Object.freeze({
-        action: Object.freeze({ const: "unbind" }),
-      }),
-      not: Object.freeze({ required: Object.freeze(["mind"]) }),
-    }),
-  ]),
-});
+  },
+  ["action", "expected_binding_version", "idempotency_key"],
+);
 
 const LIST_MINDS_OUTPUT_SCHEMA = toolOutputSchema(
   Object.freeze({

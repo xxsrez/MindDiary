@@ -16,6 +16,7 @@ import {
   CODEX_PLUGIN_OAUTH_RESOURCE,
   OAUTH_DIRECT_PLUGIN_ASSERTION_IDS,
   assertAutomaticCaptureSkillPolicy,
+  assertCodexCompatibleWriteBindingSchema,
   assertCodexClientVersion,
   assertDirectPackageServer,
   createEvidence,
@@ -51,6 +52,34 @@ test("Codex plugin uses the isolated compatibility transport with the canonical 
       (error) => error instanceof ProbeFailure && error.code === "direct_resource_mismatch",
     );
   }
+});
+
+test("Codex-compatible binding declaration keeps every callable field at the root", () => {
+  const flat = [{
+    name: "set_write_mind_binding",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["action", "expected_binding_version", "idempotency_key"],
+      properties: {
+        action: { type: "string", enum: ["bind", "unbind"] },
+        mind: { type: "string" },
+        expected_binding_version: { type: "integer", minimum: 0 },
+        idempotency_key: { type: "string", minLength: 1, maxLength: 256 },
+      },
+    },
+  }];
+  assert.equal(assertCodexCompatibleWriteBindingSchema(flat), true);
+  const oldOneOf = structuredClone(flat);
+  oldOneOf[0].inputSchema.oneOf = [
+    { properties: { action: { const: "bind" } }, required: ["mind"] },
+    { properties: { action: { const: "unbind" } }, not: { required: ["mind"] } },
+  ];
+  assert.throws(
+    () => assertCodexCompatibleWriteBindingSchema(oldOneOf),
+    (error) => error instanceof ProbeFailure &&
+      error.code === "codex_write_binding_schema_incompatible",
+  );
 });
 
 function promptInputFixture(line) {

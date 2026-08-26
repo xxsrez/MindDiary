@@ -68,6 +68,7 @@ export const OAUTH_DIRECT_PLUGIN_ASSERTION_IDS = Object.freeze([
   "package.automatic-capture-skill-policy",
   "package.mcp-resolution",
   "package.task-manager-separate",
+  "oauth.codex-compatible-write-binding-schema",
   "oauth.protected-resource-discovery",
   "oauth.authorization-server-discovery",
   "oauth.public-dcr-no-secret",
@@ -109,6 +110,41 @@ export function assertDirectPackageServer(server) {
     server?.url !== CODEX_PLUGIN_MCP_URL ||
     server?.oauth_resource !== CODEX_PLUGIN_OAUTH_RESOURCE
   ) fail("direct_resource_mismatch");
+  return true;
+}
+
+export function assertCodexCompatibleWriteBindingSchema(tools) {
+  if (!Array.isArray(tools)) fail("codex_write_binding_schema_incompatible");
+  const definition = tools.find((tool) => tool?.name === "set_write_mind_binding");
+  const schema = definition?.inputSchema;
+  const properties = schema?.properties;
+  const expectedProperties = [
+    "action",
+    "mind",
+    "expected_binding_version",
+    "idempotency_key",
+  ];
+  const forbiddenRootKeywords = ["allOf", "anyOf", "oneOf"];
+  if (
+    !isRecord(schema) ||
+    schema.type !== "object" ||
+    schema.additionalProperties !== false ||
+    forbiddenRootKeywords.some((key) => Object.hasOwn(schema, key)) ||
+    !isRecord(properties) ||
+    JSON.stringify(Object.keys(properties)) !== JSON.stringify(expectedProperties) ||
+    JSON.stringify(schema.required) !== JSON.stringify([
+      "action",
+      "expected_binding_version",
+      "idempotency_key",
+    ]) ||
+    JSON.stringify(properties.action?.enum) !== JSON.stringify(["bind", "unbind"]) ||
+    properties.mind?.type !== "string" ||
+    properties.expected_binding_version?.type !== "integer" ||
+    properties.expected_binding_version?.minimum !== 0 ||
+    properties.idempotency_key?.type !== "string" ||
+    properties.idempotency_key?.minLength !== 1 ||
+    properties.idempotency_key?.maxLength !== 256
+  ) fail("codex_write_binding_schema_incompatible");
   return true;
 }
 
@@ -740,7 +776,7 @@ function expectMcpError(response, expected, code) {
   return response.body.result;
 }
 
-async function assertCompatibilityRead(actor, token) {
+async function assertCompatibilityRead(actor, token, { verifyBindingSchema = false } = {}) {
   const initialized = await compatibility(actor, token, {
     jsonrpc: "2.0",
     id: "oauth-compat-init",
@@ -758,6 +794,16 @@ async function assertCompatibilityRead(actor, token) {
     jsonrpc: "2.0",
     method: "notifications/initialized",
   }), 202, "oauth_compat_initialized_failed");
+  if (verifyBindingSchema) {
+    const tools = await compatibility(actor, token, {
+      jsonrpc: "2.0",
+      id: "oauth-compat-tools",
+      method: "tools/list",
+      params: {},
+    });
+    if (tools.status !== 200) fail("oauth_compat_tools_list_failed");
+    assertCodexCompatibleWriteBindingSchema(tools.body?.result?.tools);
+  }
   const listed = await compatibility(actor, token, {
     jsonrpc: "2.0",
     id: "oauth-compat-list",
@@ -910,6 +956,20 @@ async function runOAuthScenario({ assertions, nowState }) {
 
   const readGrant = await authorize(owner, clientId, { state: "state-read-runtime" });
   if (readGrant.tokens?.scope !== "content:read") fail("oauth_read_scope_mismatch");
+  const advertisedModernTools = await modern(owner, readGrant.tokens.access_token, {
+    jsonrpc: "2.0",
+    id: "oauth-modern-tools",
+    method: "tools/list",
+    params: {
+      _meta: {
+        "io.modelcontextprotocol/protocolVersion": MODERN_PROTOCOL,
+        "io.modelcontextprotocol/clientInfo": { name: "oauth-direct-plugin-gate", version: "1" },
+        "io.modelcontextprotocol/clientCapabilities": {},
+      },
+    },
+  });
+  if (advertisedModernTools.status !== 200) fail("oauth_modern_tools_list_failed");
+  assertCodexCompatibleWriteBindingSchema(advertisedModernTools.body?.result?.tools);
   const discovery = await modern(owner, readGrant.tokens.access_token, {
     jsonrpc: "2.0",
     id: "oauth-modern-discovery",
@@ -931,9 +991,12 @@ async function runOAuthScenario({ assertions, nowState }) {
   );
   if (!modernList.minds?.some((mind) => mind.route === "/me")) fail("oauth_personal_mind_missing");
   assertions.add("oauth.read-grant-modern-runtime");
-  const compatList = await assertCompatibilityRead(owner, readGrant.tokens.access_token);
+  const compatList = await assertCompatibilityRead(owner, readGrant.tokens.access_token, {
+    verifyBindingSchema: true,
+  });
   if (!compatList.minds?.some((mind) => mind.route === "/me")) fail("oauth_compat_personal_mind_missing");
   assertions.add("oauth.read-grant-compat-runtime");
+  assertions.add("oauth.codex-compatible-write-binding-schema");
   const personal = modernList.minds.find((mind) => mind.route === "/me");
   const writeChallenge = expectMcpError(
     await modernTool(owner, readGrant.tokens.access_token, "oauth-read-write", "commit_changeset", {

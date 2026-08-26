@@ -354,12 +354,21 @@ test("publishes strict binding schemas and truthful service-state annotations", 
     });
   }
   const write = definitions.get("set_write_mind_binding");
+  assert.deepEqual(Object.keys(write.inputSchema.properties), [
+    "action",
+    "mind",
+    "expected_binding_version",
+    "idempotency_key",
+  ]);
+  assert.deepEqual(write.inputSchema.required, [
+    "action",
+    "expected_binding_version",
+    "idempotency_key",
+  ]);
+  assert.deepEqual(write.inputSchema.properties.action.enum, ["bind", "unbind"]);
   assert.equal(write.inputSchema.properties.mind.type, "string");
   assert.equal("minds" in write.inputSchema.properties, false);
-  assert.deepEqual(
-    write.inputSchema.oneOf.map((variant) => variant.properties.action.const),
-    ["bind", "unbind"],
-  );
+  assert.equal("oneOf" in write.inputSchema, false);
   assert.ok(write.outputSchema.properties.data.required.includes("previous"));
   assert.ok(write.outputSchema.properties.data.required.includes("current"));
   assert.ok(
@@ -580,6 +589,23 @@ test("modern and compatibility profiles share multiple-read/single-write applica
   }, "write-token", 7);
   assert.equal(invalidArray.isError, true);
   assert.equal(invalidArray.structuredContent.error.code, "invalid_request");
+
+  const missingMind = await modernCall(env, "set_write_mind_binding", {
+    action: "bind",
+    expected_binding_version: 4,
+    idempotency_key: "missing-mind",
+  }, "write-token", 70);
+  assert.equal(missingMind.isError, true);
+  assert.equal(missingMind.structuredContent.error.code, "invalid_request");
+
+  const unexpectedMind = await modernCall(env, "set_write_mind_binding", {
+    action: "unbind",
+    mind: "beta",
+    expected_binding_version: 4,
+    idempotency_key: "unexpected-mind",
+  }, "write-token", 701);
+  assert.equal(unexpectedMind.isError, true);
+  assert.equal(unexpectedMind.structuredContent.error.code, "invalid_request");
 
   const injectedAuthority = await modernCall(env, "set_write_mind_binding", {
     action: "bind",
