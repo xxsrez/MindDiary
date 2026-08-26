@@ -11,6 +11,7 @@ import {
 import { InMemoryObjectStore } from "@mind-diary/adapter-object-memory";
 import { InMemoryExactRevisionSearchIndex } from "@mind-diary/adapter-search-memory";
 import { createWebCryptoExportDownloadSecretCrypto } from "@mind-diary/adapter-security-webcrypto";
+import { RevisionIndexJobHandler } from "@mind-diary/application-background";
 import {
   BundleFileDownloadService,
   BundleFileStagingService,
@@ -298,15 +299,58 @@ async function createHarness() {
   });
 }
 
-async function indexRevision(env, revisionId) {
-  const exact = await env.revisions.materialize(MINDS.ordinary.spaceId, revisionId);
-  await env.searchIndex.replaceExactRevision({
+async function processScheduledIndexJob(env, revisionId) {
+  const matchingJobs = (await env.metadata.listBackgroundJobsForTest()).filter(
+    (job) => job.target.kind === "revision_index" &&
+      job.target.spaceId === MINDS.ordinary.spaceId &&
+      job.target.revisionId === revisionId,
+  );
+  assert.equal(matchingJobs.length, 1);
+  const [job] = matchingJobs;
+  assert.equal(job.state, "queued");
+  assert.deepEqual(job.target, {
+    kind: "revision_index",
     spaceId: MINDS.ordinary.spaceId,
     revisionId,
-    documents: exact.files
-      .filter((file) => file.kind === "markdown")
-      .map((file) => Object.freeze({ path: file.path, text: file.text })),
   });
+  assert.equal(
+    (await env.metadata.readRevisionIndexState(
+      MINDS.ordinary.spaceId,
+      revisionId,
+    )).status,
+    "queued",
+  );
+
+  const handler = new RevisionIndexJobHandler({
+    work: env.metadata,
+    revisions: env.revisions,
+    index: env.searchIndex,
+    clock: env.clock,
+  });
+  assert.deepEqual(await handler.handle({
+    actor: Object.freeze({
+      kind: "service",
+      serviceId: "incremental-okf-transfer-indexer",
+      deploymentCapabilities: CAPABILITIES,
+      requestId: `request_index_${revisionId}`,
+      occurredAtUtc: env.clock.now(),
+    }),
+    jobId: job.jobId,
+  }), { kind: "completed" });
+  assert.equal(
+    (await env.metadata.readRevisionIndexState(
+      MINDS.ordinary.spaceId,
+      revisionId,
+    )).status,
+    "ready",
+  );
+  assert.equal(
+    (await env.searchIndex.readExactRevision(
+      MINDS.ordinary.spaceId,
+      revisionId,
+    )).kind,
+    "ready",
+  );
 }
 
 async function stageSelectedLocalFile(env, currentActor, {
@@ -366,7 +410,7 @@ function exactSnapshot(materialized) {
       }));
 }
 
-test("two explicit typed OKF transfers use ordinary changesets without migration state", async () => {
+test("two agent-selected typed OKF previews execute through ordinary changesets", async () => {
   const env = await createHarness();
   const selection = JSON.parse(
     await readFile(resolve(FIXTURE_ROOT, "selection.json"), "utf8"),
@@ -386,6 +430,9 @@ test("two explicit typed OKF transfers use ordinary changesets without migration
   const attachmentBytes = new Uint8Array(
     await readSelected(selection.first.attachment),
   );
+  // The installed skill and model own explicit selection and link-rewrite preview.
+  // This test starts with that exact preview and proves the existing public
+  // application services can execute it; it is not a hosted importer or planner.
   const firstTransferred = firstSource.replace(
     "](/raw/harbor-evidence.bin#sample)",
     "](../raw/harbor-evidence.bin#sample)",
@@ -457,7 +504,7 @@ test("two explicit typed OKF transfers use ordinary changesets without migration
   assert.equal(reconciledCommit.kind, "committed");
   assert.equal(reconciledCommit.replayed, true);
   assert.equal((await env.metadata.listRevisions(MINDS.ordinary.spaceId)).length, 2);
-  await indexRevision(env, first.envelope.revision.revisionId);
+  await processScheduledIndexJob(env, first.envelope.revision.revisionId);
   const firstExactBeforeSecond = exactSnapshot(await env.revisions.materialize(
     MINDS.ordinary.spaceId,
     first.envelope.revision.revisionId,
@@ -538,7 +585,7 @@ test("two explicit typed OKF transfers use ordinary changesets without migration
   assert.equal(second.envelope.revision.parentRevisionId, freshHead);
   assert.equal(second.envelope.revision.revisionNumber, 3);
   assert.equal((await env.metadata.listRevisions(MINDS.ordinary.spaceId)).length, 3);
-  await indexRevision(env, second.envelope.revision.revisionId);
+  await processScheduledIndexJob(env, second.envelope.revision.revisionId);
 
   assert.deepEqual(
     exactSnapshot(await env.revisions.materialize(
@@ -651,5 +698,4 @@ test("two explicit typed OKF transfers use ordinary changesets without migration
   assert.equal(validation.resolvedRevision.revisionId, second.envelope.revision.revisionId);
   assert.equal(validation.valid, true);
   assert.equal(validation.validatedOkfVersion, "0.2");
-  assert.equal(Object.hasOwn(env, "migrationDatabase"), false);
 });
