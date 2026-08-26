@@ -134,24 +134,26 @@ evidence of the implemented bounded baseline, not current product limits.
 | BF9-Hosted-upload-intent | Local companion and workspace-generated sources use one hosted one-use upload-intent service with bounded HTTP/MCP metadata, authorization, expiry/replay/reconcile and path-free composition into MD-304 staging ports. It does not define another BundleFile object store, digest/quota rule or canonical lifecycle. | `MD-305` | intent issue/consume/expiry/replay/auth tests; HTTP/MCP schemas and metadata privacy; local/workspace composition against MD-304 streaming ports | exact deployed local/workspace stage → commit → download read-back; unsupported host remains non-passing |
 | BF10-Incremental-OKF | One typed OKF Markdown entry with unknown producer fields and individually selected opaque files commits through ordinary operations without copying project/runtime state or introducing batch/archive import. | `MD-306` | synthetic full-bundle fixture, link normalization, exact second changeset/idempotent retry, installed connector packaging | joined into MD-275 exact UAT candidate |
 
-## Post-MVP file-ingress extension 2026-08-23
+## Release 0.2 readable-path ingress и post-MVP extensions
 
 [ADR-0018](../decisions/0018-file-ingress-contract-and-source-capability-matrix.md)
-и [единый file-ingress contract](file-ingress.md) фиксируют шесть source kinds,
-portable `VerifiedFileInput`/`staged_file_ref`, adapter/application ownership,
-typed capability errors, limits, lifecycle, idempotency и atomic multi-ref
-commit. `session_attachment`, `bounded_in_memory` и `server_generated` имеют
-локальную implementation, а MD-272 добавляет repo-local companion для
-`local_path`, `workspace/generated_artifact` и bounded local bytes. Это не
-hosted/native capability: the historical MD-250 row remains legacy evidence;
-MD-275 owns Release 0.2 joined native-client UAT. Hosted upload-intent/producer
-evidence остаются pending; connector rows остаются contract-only.
+и [единый file-ingress contract](file-ingress.md) фиксируют portable
+`VerifiedFileInput`/`staged_file_ref`, adapter/application ownership, typed
+errors, limits, lifecycle, idempotency и atomic commit. Release 0.2 выбирает
+только packaged-companion `local_path` и `workspace/generated_artifact` поверх
+MD-305 upload intent. Direct host/provider, connector, bounded generated и
+server-generated routes остаются Release 0.3 `not_available`; repository ports
+или schemas не являются support evidence.
 
 | ID | Наблюдаемый результат | Owner | Local evidence | UAT evidence |
 |---|---|---|---|---|
 | FI0-Contract | Каждый file source сводится к verified bytes и service-owned staged ref без provider ID/URL, local path, silent fallback или partial multi-ref commit; capability status не выдаётся за implementation. | `MD-271` | `file-ingress-contract`, affected docs + ADR-0018, docs topology/link validation and `git diff --check` | not-applicable until source adapter/client implementation |
 | FI1-LocalCompanion | Explicit regular local/workspace/generated file or bounded bytes passes the same path-free verified-input and atomic staging pipeline with safe path/symlink/special-file/size/MIME/SHA/idempotency/retry/cleanup checks; failures leave no revision. | `MD-272` | `tests/unit/local-file-companion.test.mjs` and `tests/integration/local-file-companion.test.mjs`; build, targeted contract/integration checks, architecture/docs/secrets checks and `git diff --check` | not-available: hosted upload intent/native client evidence is separate and remains pending |
 | FI1-Generated | `bounded_in_memory` and `server_generated` use the shared MIME/SHA/size/quota/quarantine/idempotency gate; server-generated chunks are written through the storage writer, cancellation/limit/static failures leave no staged object, and commit remains an explicit atomic next step. | `MD-273` | `tests/unit/generated-artifacts.test.mjs`, `tests/unit/sites-object-store-streaming.test.mjs`, `tests/integration/bundle-files-core.test.mjs`, build and targeted diff check | hosted producer wiring and exact deployed stream evidence remain pending |
+| FI2-ReadablePath | One explicit absolute regular-file path on the current Codex host enters the same verified stage through the packaged companion; disk and trusted workspace provenance remain distinct, path never reaches hosted state, and observable failures do not invent cross-host/provider provenance. | `MD-312` | affected contract/docs, packaged companion schema, local no-follow/snapshot/limit/error tests and docs validation | MD-325 exact installed-client disk/workspace journey |
+| FI3-CapabilityLayers | Hosted adapter availability, installed client companion inventory and admission of one concrete path are three separate facts; deferred Release 0.3 routes stay `not_available`. | `MD-313` | hosted capability schema/code and conformance tests; client inventory remains external evidence | MD-325 exact client/profile + companion inventory + hosted adapter/binding join |
+| FI4-ReadablePathErrors | Missing/inaccessible, unsupported path/authority, changed snapshot and expired local ref have distinct path-free outcomes plus bounded remediation; pre-admission failures create no staged object or revision. | `MD-323` | packaged companion error mapping/tests and privacy checks | MD-325 negative path/snapshot/ref rows |
+| FI5-DiskFirstJoin | Disk and workspace fixtures of representative and unknown formats pass stage, atomic commit, exact download, history/export and redeploy persistence on one candidate; negative rows stay fail closed. | `MD-325` | exact repository/plugin candidates, one full gate and diff checks | exact Git SHA, Sites version/deployment, installed plugin/client inventory, binding, revisions and privacy-safe hashes |
 
 ## Post-MVP Brain-scale Sites storage/import extension 2026-08-22
 

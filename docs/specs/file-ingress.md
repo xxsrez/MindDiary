@@ -1,21 +1,16 @@
 # Единый file-ingress contract и source capability matrix
 
-Статус: accepted contract boundary, 2026-08-23. `normative_status: accepted`;
-`implementation_status: partial_by_source`: общий portable boundary принят,
-`session_attachment`, `bounded_in_memory` и `server_generated` реализованы в
-local candidate и требуют отдельного exact evidence; MD-272 добавляет
-local-only companion implementation для `local_path` и
-`workspace/generated_artifact`. Исторический MD-250 закрыт без Release 0.2
-promotion. MD-304 владеет format-neutral core storage/streaming lifecycle;
-MD-305 владеет hosted one-use upload-intent service и HTTP/MCP composition
-только для local companion/workspace-generated sources поверх MD-304. Joined
-native-file UAT принадлежит MD-275. Hosted producer evidence и provider-specific
-connector adapter остаются отдельными claims. MD-274 добавляет
-repository-local `FileIngressCoordinator`,
-explicit stage/commit reconcile, mixed-source atomic integration и три
-contracts на существующих MCP endpoints: `get_file_ingress_capabilities`,
-`reconcile_file_stage`, `reconcile_changeset`. Это не добавляет новый hosted
-endpoint или source transport.
+Статус: accepted contract boundary, 2026-08-23; Release 0.2 readable-path
+profile принят 2026-08-26. `normative_status: accepted`;
+`implementation_status: implemented_repository_for_disk_workspace`: общий
+portable boundary принят, а обязательный Release 0.2 slice использует packaged
+local companion для `local_path` и `workspace/generated_artifact`, hosted
+one-use upload intent MD-305 и format-neutral streaming lifecycle MD-304.
+`FileIngressCoordinator` сохраняет общую staging/commit semantics и exact
+reconcile. Direct host/provider transport, connector adapter, bounded generated
+bytes и server-generated producer остаются Release 0.3 capabilities и не
+выдаются за поддержку Release 0.2 только потому, что в repository существуют
+их ports, schemas или локальные tests.
 
 Release applicability: portable boundary остаётся accepted, но
 [ADR-0019](../decisions/0019-release-0-1-codex-first-small-data-boundary.md)
@@ -26,8 +21,9 @@ evidence rows остаются обязательными перед соотв�
 [ADR-0021](../decisions/0021-format-neutral-bundle-files.md) replaces the
 historical closed MIME allowlist and 64 MiB cap. The Release 0.2 repository
 candidate combines MD-304 format-neutral streaming through 256 MiB with the
-MD-305 hosted local/workspace upload-intent composition. Joined UAT evidence is
-still pending and no repository-local result is a hosted support claim.
+MD-305 hosted local/workspace upload-intent composition. MD-325 owns the single
+joined installed-client/UAT gate; no repository-local result is a hosted or
+installed-client support claim.
 
 ## Цель и граница
 
@@ -44,6 +40,44 @@ workspace/generated artifact, authorized connector object, bounded in-memory
 bytes и server-generated output должны сводиться к одной проверяемой модели.
 Это требование не означает, что каждый adapter уже существует или что текущий
 MCP client умеет передать каждый вид source.
+
+## Release 0.2 readable-path profile
+
+Release 0.2 имеет один обязательный user journey:
+
+```text
+explicit readable absolute path on the current Codex execution host
+  -> packaged local prepare_local_file
+  -> hosted one-use upload intent
+  -> packaged local upload_prepared_file
+  -> verified staged_file_ref
+  -> atomic changeset / immutable BundleFile revision
+```
+
+- `local_path` — authority на один явно выбранный absolute path. Companion
+  открывает exact regular file на текущем execution host и удерживает stable
+  descriptor; отдельный root, directory, glob или batch authority не возникает.
+- `workspace/generated_artifact` использует тот же byte route, но требует
+  canonical path внутри trusted roots из process configuration. Root никогда не
+  принимается tool argument и не выводится из filename или content.
+- Extension и MIME не являются admission gate. Invalid, unknown или conflicting
+  media evidence нормализуется в `application/octet-stream`; exact bytes, size,
+  SHA-256, 256 MiB inclusive limit и bounded streaming совпадают с BundleFile
+  contract.
+- Relative path, traversal, glob request, directory, final symlink, special
+  file, inaccessible source, unsupported workspace authority, changed snapshot
+  и oversize input fail closed до hosted staging либо revision mutation.
+- Hosted MCP получает только path-free metadata и затем uploaded bytes по
+  one-use capability. Absolute path не входит в hosted request, error, audit,
+  telemetry, staged record или release evidence. URL, base64, provider object и
+  другой source kind не используются как fallback.
+- Ошибка классифицирует только наблюдаемую boundary: source unavailable на
+  текущем host, unsupported path/authority, changed snapshot или expired local
+  ref. Missing path сам по себе не доказывает cross-host origin, удалённый
+  attachment или истёкший provider object.
+- `session_attachment` не является обязательным input Release 0.2. Direct
+  host/provider, connector, bounded generated и server-generated routes
+  остаются `not_available` для release claim до Release 0.3.
 
 ### Принятые invariants
 
@@ -118,20 +152,18 @@ successful commit adds the canonical `kind: opaque` entry.
 
 ## Source capability matrix
 
-`Status` относится к repository candidate, exact SHA которого фиксируется в
-Task/release evidence после commit.
-`implemented_local` означает repository code/tests only; `UAT pending` не
-является hosted capability. `proposal` означает contract slot, а не
-реализованный fallback.
+`Release status` относится к product claim, а не к наличию interface или test
+double в repository. `implemented_repository` означает только code/tests;
+`UAT pending` не является hosted или installed-client capability.
 
-| Source kind | Adapter owns reading | Transport boundary | Status / evidence | Explicit fallback |
+| Source kind | Adapter owns reading | Transport boundary | Release status / evidence | Explicit fallback |
 |---|---|---|---|---|
-| `session_attachment` | MCP/provider adapter | Native client file parameter; adapter follows provider HTTPS object/redirect policy | legacy path is `implemented_local`; format-neutral core is MD-304 and joined Release 0.2 UAT is MD-275; `_meta["openai/fileParams"]=["file"]` is local schema evidence, not live client proof | If the pinned profile cannot supply native `file`, return `native_file_input_unsupported`; do not use base64, local path or arbitrary URL |
-| `local_path` | Local companion process | Out-of-band upload intent/equivalent binary stream; companion snapshots one regular file and sends bounded bytes | `implemented_local`: MD-272 companion plus MD-305 hosted service/HTTP/MCP repository candidate; joined UAT pending | Missing companion, expired/invalid intent or revoked auth: `file_ingress_source_unsupported` / `file_ingress_intent_expired`; never send the path to hosted MCP |
-| `workspace/generated_artifact` | Local companion process with explicit workspace authority | Same out-of-band intent/equivalent stream, but artifact snapshot is selected by the local process | `implemented_local`: MD-272 companion plus MD-305 hosted service/HTTP/MCP repository candidate; joined UAT pending | Missing companion/workspace authority: `file_ingress_source_unsupported`; no path fallback or arbitrary URL |
-| `connector_object` | Explicit authorized connector adapter | Connector API/object fetch with provider-specific bounded stream; arbitrary URL is not a connector contract | Provider-neutral reader/staging boundary is `implemented_local` with unit and mixed-source integration evidence; provider binding and hosted UAT pending | Connector absent, revoked or object unavailable: generic `file_ingress_source_unavailable`; no cross-provider or native fallback |
-| `bounded_in_memory` | Calling adapter / trusted inline boundary | Explicit bounded bytes transport, not implicit JSON-RPC base64; local companion caps local generated path at 4 MiB and shared staging validates it | `implemented_local`, MD-272/MD-273; exact local tests cover limit, digest/MIME and quarantine; hosted UAT pending | Over limit or unsupported profile: `bundle_file_size_limit_exceeded` / `file_ingress_source_unsupported`; caller must choose out-of-band source |
-| `server_generated` | Trusted server-side producer | Internal application port or bounded job output; no client-supplied source locator; local provider writer streams to quarantine storage | `implemented_local`, MD-273; exact local tests cover stream, cancellation and no partial publication; hosted producer evidence pending | Producer unavailable/expired: `file_ingress_source_unavailable`; no client URL or path fallback |
+| `session_attachment` | MCP/provider adapter | Native client file parameter | Release 0.3 `not_available`; legacy repository schema is not a Release 0.2 support claim | No base64, local-path or arbitrary-URL fallback |
+| `local_path` | Packaged local companion on the current Codex host | Path-free one-use hosted upload intent; companion snapshots one exact regular file | Release 0.2 `implemented_repository`; installed tool inventory and exact disk journey are pending MD-325 | Missing companion is a client-installation failure; local admission returns only observable safe errors; never send the path to hosted MCP |
+| `workspace/generated_artifact` | Packaged local companion with trusted process-configured workspace roots | Same path-free one-use hosted intent | Release 0.2 `implemented_repository`; installed tool inventory and exact workspace journey are pending MD-325 | Unsupported authority fails locally; do not relabel or fall back to URL/provider transport |
+| `connector_object` | Explicit authorized connector adapter | Connector API/object fetch | Release 0.3 `not_available`; provider-neutral ports/tests are not an enabled adapter | No cross-provider, native-file or URL fallback |
+| `bounded_in_memory` | Future trusted producer boundary | Explicit bounded bytes transport | Release 0.3 `not_available`; repository-local helper tests are not a hosted route | No JSON-RPC base64 fallback |
+| `server_generated` | Future trusted server-side producer | Internal producer stream/job output | Release 0.3 `not_available`; repository-local writer tests are not hosted producer wiring | No client URL/path fallback |
 
 All six rows use the same application static gate and the same commit
 transaction. A source adapter may have a stricter limit, but it cannot raise
@@ -225,22 +257,19 @@ limits, object identity or lifecycle.
 
 ## Native MCP capability negotiation
 
-The current `stage_bundle_file` tool is the `session_attachment` profile. Both
-modern `2026-07-28` and isolated compatibility `2025-11-25` adapters may
-advertise the native `file` parameter for a write-capable credential, with
-`_meta["openai/fileParams"] = ["file"]`. The local schema and transport tests
-prove only the repository candidate. Exact client/profile support remains a
-blocking MD-275 UAT row for the Release 0.2 BundleFile capability; a missing
-native capability is a non-passing support result, not an automatic switch to
-another source and not a blocker for Markdown-first Release 0.1.
+The legacy `stage_bundle_file` tool is the `session_attachment` profile. Its
+schema may remain available for compatibility, but Release 0.2 does not claim
+or require that transport. Direct host/provider input stays `not_available`
+until Release 0.3 evidence; a static `_meta["openai/fileParams"]` declaration is
+not installed-client or hosted support proof and never activates fallback.
 
 Read-only credentials do not gain staging by seeing the tool definition. The
 server checks token scope, current write binding, current ACL and exact Mind
 again on every call. Compatibility framing does not create a second source
 contract or bypass the same application gate.
 
-Local/workspace and connector adapters negotiate their own explicit capability
-and source kind. MD-305 exposes `create_file_upload_intent` plus the
+Local/workspace adapters negotiate their own explicit capability and source
+kind. MD-305 exposes `create_file_upload_intent` plus the
 same-origin capability-only GET/PUT route for the first two sources; the local
 companion uses a two-tool local sequence: `prepare_local_file` opens one stable
 no-follow regular-file descriptor and returns a 600-second process-local
@@ -252,10 +281,12 @@ reconciliation after an unknown outcome. A successful, expired, changed or
 definitively rejected ref is closed and invalidated; only retryable/unknown
 transport retains the exact ref. Directory, glob, traversal, final symlink,
 special file and byte mutation fail locally without putting a path in output,
-network or telemetry. The implemented generated paths must not overload the native
-`file` field with a local path, arbitrary URL or unbounded bytes. Until the
-corresponding implementation and conformance evidence exists, the capability
-is `not-available`; hosted UAT for generated paths is still a separate claim.
+network or telemetry. The implemented generated paths must not overload the
+native `file` field with a local path, arbitrary URL or unbounded bytes.
+Installed companion visibility is proven only by fresh exact client/plugin tool
+inventory; hosted response cannot observe it. Readability of one path is proven
+only by that local `prepare_local_file` call. MD-325 joins those two facts with
+the hosted adapter/binding and exact disk/workspace journeys.
 
 ## Errors, privacy and audit
 
@@ -264,8 +295,10 @@ Stable errors are split by boundary:
 | Situation | Code | Retry/fallback rule |
 |---|---|---|
 | Current native profile cannot accept a client file | `native_file_input_unsupported` | No silent base64/path/URL fallback; choose an explicitly supported adapter |
-| Source kind has no enabled adapter/profile | `file_ingress_source_unsupported` | Non-retryable capability result; no automatic source conversion |
-| Source object cannot be read or ownership cannot be established | `file_ingress_source_unavailable` | Generic response without existence/owner leak; retry only after source state is fixed |
+| Path/source cannot be read on the current execution host | `file_ingress_source_unavailable` | Choose or copy one regular file to a readable absolute path on this host; do not guess cross-host/provider provenance |
+| Path shape, file kind or workspace authority is unsupported | `file_ingress_source_unsupported` | Choose an exact regular file or an authorized workspace path; no automatic source conversion |
+| Retained descriptor no longer matches the verified snapshot | `local_companion_file_changed` | Wait for writes to finish and prepare the exact file again with a new logical intent |
+| Prepared process-local reference expired | `local_companion_ref_expired` | Prepare the exact file again; an expired ref never selects or reopens a path implicitly |
 | Bounded source transport temporarily fails | `file_ingress_transport_unavailable` | Retry exact request/key while source TTL permits; do not alter payload |
 | Upload intent expired/consumed or changed | `file_ingress_intent_expired` / `file_ingress_intent_conflict` | Create a new intent/key for a new operation; never replay changed bytes |
 | Size/path/digest/static policy fails | Existing `bundle_file_*`, `invalid_bundle_file_name` | No canonical object or revision is published |
@@ -333,8 +366,9 @@ Open questions intentionally left for child implementation decisions:
 - Which connector object types and provider-specific ownership proofs can be
   supported, and how are their bounded fetch receipts represented (future
   connector work)?
-- Which exact client/profile capability receipts are required before a source
-  can move from `proposal`/`not-available` to `implemented` or UAT-supported?
+- Release 0.3 must separately define exact client/profile receipts for direct
+  host/provider, connector and generated routes before any of them can move
+  from `not_available` to supported.
 
 Protocol exposure itself is accepted: both modern `2026-07-28` and isolated
 compatibility `2025-11-25` profiles publish the same strict schemas for

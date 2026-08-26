@@ -49,10 +49,11 @@ evidence, предлагаемый дизайн и ещё не проверен�
    format-neutral contract: explicit manifest v4, arbitrary opaque files,
    256 MiB streaming, safe-raster preview, download-only containment, mixed
    atomic commits и отдельный deterministic export profile.
-16. [Единый file-ingress contract](specs/file-ingress.md) — принятый post-MVP portable
-   boundary и capability matrix для session attachment, local/workspace,
-   connector, bounded in-memory и server-generated sources; implementation
-   status каждой source явно отделён от contract.
+16. [Единый file-ingress contract](specs/file-ingress.md) — принятый portable
+   boundary, обязательный Release 0.2 readable-path profile через packaged
+   local companion и отложенная Release 0.3 matrix direct/provider, connector
+   и generated sources; implementation, installed-client и per-path evidence
+   разделены.
 17. [Sites storage, capacity и Markdown import](specs/sites-storage-capacity-import.md)
    — принятый post-MVP Brain-scale contract: Space-scoped content addressing, v3 delta
    manifests, reconstructable accounting/reservations, bounded Markdown import,

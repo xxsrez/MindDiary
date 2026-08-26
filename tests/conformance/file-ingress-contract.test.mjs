@@ -9,7 +9,7 @@ async function readRepositoryFile(relativePath) {
   return readFile(resolve(repositoryRoot, relativePath), "utf8");
 }
 
-test("MD-271 names every source kind with an explicit capability status", async () => {
+test("MD-312 fixes the Release 0.2 readable-path profile without promoting deferred routes", async () => {
   const spec = await readRepositoryFile("docs/specs/file-ingress.md");
   const sourceKinds = [
     "session_attachment",
@@ -23,23 +23,31 @@ test("MD-271 names every source kind with an explicit capability status", async 
   for (const sourceKind of sourceKinds) {
     assert.ok(spec.includes(`| \`${sourceKind}\` |`), `missing source row: ${sourceKind}`);
   }
-  assert.match(spec, /`implementation_status: partial_by_source`/);
-  assert.match(spec, /`session_attachment`.*`implemented_local`/s);
+  assert.match(spec, /`implementation_status: implemented_repository_for_disk_workspace`/);
   const implementedKinds = new Set([
     "local_path",
     "workspace/generated_artifact",
-    "connector_object",
-    "bounded_in_memory",
-    "server_generated",
   ]);
-  for (const sourceKind of sourceKinds.slice(1)) {
+  for (const sourceKind of sourceKinds) {
     const row = spec.split("\n").find((line) => line.startsWith(`| \`${sourceKind}\` |`));
     if (implementedKinds.has(sourceKind)) {
-      assert.ok(row?.includes("`implemented_local`"), `local companion status missing: ${sourceKind}`);
+      assert.ok(row?.includes("Release 0.2 `implemented_repository`"), `Release 0.2 companion status missing: ${sourceKind}`);
+      assert.ok(row?.includes("MD-325"), `joined evidence owner missing: ${sourceKind}`);
     } else {
-      assert.ok(row?.includes("`proposal`"), `source must remain proposal: ${sourceKind}`);
+      assert.ok(row?.includes("Release 0.3 `not_available`"), `source must remain deferred: ${sourceKind}`);
     }
-    assert.ok(row?.includes("UAT pending") || row?.includes("pending") || row?.includes("not started") || row?.includes("not-started") || row?.includes("not-available"), `source status missing: ${sourceKind}`);
+  }
+  assert.match(spec, /explicit readable absolute path on the current Codex execution host/);
+  assert.match(spec, /Missing path сам по себе не доказывает cross-host origin/);
+  assert.match(spec, /Absolute path не входит в hosted request, error, audit/);
+  assert.match(spec, /URL, base64, provider object.*не используются как fallback/s);
+  for (const code of [
+    "file_ingress_source_unavailable",
+    "file_ingress_source_unsupported",
+    "local_companion_file_changed",
+    "local_companion_ref_expired",
+  ]) {
+    assert.ok(spec.includes(code), `missing readable-path outcome: ${code}`);
   }
   assert.doesNotMatch(spec, /workspace_generated_artifact/);
 });
