@@ -4,8 +4,9 @@
 profile принят 2026-08-26. `normative_status: accepted`;
 `implementation_status: implemented_repository_for_disk_workspace`: общий
 portable boundary принят, а обязательный Release 0.2 slice использует packaged
-local companion для `local_path` и `workspace/generated_artifact`, hosted
-one-use upload intent MD-305 и format-neutral streaming lifecycle MD-304.
+local companion для `local_path` и `workspace/generated_artifact`, MD-305
+hosted one-use upload-intent service и format-neutral streaming lifecycle
+MD-304.
 `FileIngressCoordinator` сохраняет общую staging/commit semantics и exact
 reconcile. Direct host/provider transport, connector adapter, bounded generated
 bytes и server-generated producer остаются Release 0.3 capabilities и не
