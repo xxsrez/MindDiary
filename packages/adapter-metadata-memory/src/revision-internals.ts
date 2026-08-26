@@ -21,6 +21,8 @@ import {
   type ExportArchiveRecord,
   type ExportDownloadGrant,
   type ExportJob,
+  FILE_INGRESS_SOURCE_KINDS,
+  type FileIngressSourceKind,
   type IdempotencyNamespace,
   type IdempotencyRecord,
   type JobId,
@@ -595,6 +597,14 @@ export const CAPTURE_COMMIT_AUDIT_METADATA_KEYS = [
   "capture_source_refs",
   ...COMMIT_AUDIT_METADATA_KEYS,
 ] as const;
+export const STAGED_COMMIT_AUDIT_METADATA_KEYS = [
+  ...COMMIT_AUDIT_METADATA_KEYS,
+  "staged_source_receipts",
+] as const;
+export const CAPTURE_STAGED_COMMIT_AUDIT_METADATA_KEYS = [
+  ...CAPTURE_COMMIT_AUDIT_METADATA_KEYS,
+  "staged_source_receipts",
+] as const;
 export const BOUNDED_OPAQUE_ID = /^[A-Za-z0-9._:-]{1,128}$/u;
 export const CAPTURE_KEY_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/u;
 export const CAPTURE_SOURCE_PATH_PATTERN = /^(?!\/)(?!.*(?:^|\/)\.\.?\/)(?:[^\u0000-\u001f\u007f\\]+\/)*[^\u0000-\u001f\u007f\\]+\.md$/u;
@@ -625,16 +635,70 @@ export function validCaptureAuditSourceRefs(value: unknown): boolean {
   });
 }
 
+type StagedSourceAuditReceipt = Readonly<{
+  source_kind: FileIngressSourceKind;
+  sha256: string;
+}>;
+
+export function validStagedSourceAuditReceipts(value: unknown): boolean {
+  if (typeof value !== "string" || value.length > 4_096) return false;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    return false;
+  }
+  if (!Array.isArray(parsed) || parsed.length < 1 || parsed.length > 20) return false;
+  const receipts: StagedSourceAuditReceipt[] = [];
+  for (const item of parsed) {
+    if (typeof item !== "object" || item === null || Array.isArray(item)) return false;
+    const record = item as Readonly<Record<string, unknown>>;
+    if (
+      Object.keys(record).sort().join(",") !== "sha256,source_kind" ||
+      typeof record.source_kind !== "string" ||
+      !(FILE_INGRESS_SOURCE_KINDS as readonly string[]).includes(record.source_kind) ||
+      typeof record.sha256 !== "string" ||
+      !SHA256_PATTERN.test(record.sha256)
+    ) return false;
+    receipts.push({
+      source_kind: record.source_kind as FileIngressSourceKind,
+      sha256: record.sha256,
+    });
+  }
+  const ordered = [...receipts].sort((left, right) =>
+    left.source_kind < right.source_kind
+      ? -1
+      : left.source_kind > right.source_kind
+        ? 1
+        : left.sha256 < right.sha256
+          ? -1
+          : left.sha256 > right.sha256
+            ? 1
+            : 0
+  );
+  return JSON.stringify(receipts) === value &&
+    JSON.stringify(ordered) === value;
+}
+
 export function validCommitAuditMetadata(
   metadata: Readonly<Record<string, unknown>>,
   envelope: Envelope,
 ): boolean {
   const keys = Object.keys(metadata).sort();
-  const capture = keys.length === CAPTURE_COMMIT_AUDIT_METADATA_KEYS.length &&
+  const captureOnly = keys.length === CAPTURE_COMMIT_AUDIT_METADATA_KEYS.length &&
     keys.every((key, index) => key === CAPTURE_COMMIT_AUDIT_METADATA_KEYS[index]);
-  const ordinary = keys.length === COMMIT_AUDIT_METADATA_KEYS.length &&
+  const ordinaryOnly = keys.length === COMMIT_AUDIT_METADATA_KEYS.length &&
     keys.every((key, index) => key === COMMIT_AUDIT_METADATA_KEYS[index]);
-  if (!ordinary && !capture) {
+  const stagedOnly = keys.length === STAGED_COMMIT_AUDIT_METADATA_KEYS.length &&
+    keys.every((key, index) => key === STAGED_COMMIT_AUDIT_METADATA_KEYS[index]);
+  const captureStaged =
+    keys.length === CAPTURE_STAGED_COMMIT_AUDIT_METADATA_KEYS.length &&
+    keys.every(
+      (key, index) => key === CAPTURE_STAGED_COMMIT_AUDIT_METADATA_KEYS[index],
+    );
+  const capture = captureOnly || captureStaged;
+  const staged = stagedOnly || captureStaged;
+  if (!ordinaryOnly && !capture && !stagedOnly) {
     return false;
   }
   const revision = envelope.revision;
@@ -653,6 +717,9 @@ export function validCommitAuditMetadata(
     typeof metadata.manifest_hash === "string" &&
     SHA256_PATTERN.test(metadata.manifest_hash) &&
     metadata.manifest_hash === revision.manifestHash &&
+    (!staged || validStagedSourceAuditReceipts(
+      metadata.staged_source_receipts,
+    )) &&
     (!capture || (
       metadata.capture_mode === "routine_non_sensitive" &&
       typeof metadata.capture_key === "string" &&

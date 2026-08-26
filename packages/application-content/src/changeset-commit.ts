@@ -7,6 +7,7 @@ import {
   type CommitEffectIdGenerator,
   type ContentCommitMetadataStore,
   type ContentCommitMetadataTransaction,
+  type FileIngressSourceKind,
   type IdempotencyNamespace,
   type BundleFileObjectStore,
   type RevisionIdGenerator,
@@ -137,12 +138,42 @@ interface ValidatedCommitPayload {
   readonly automaticCapture: Readonly<AutomaticCaptureCommitContext> | null;
 }
 
+interface StagedSourceAuditReceipt {
+  readonly source_kind: FileIngressSourceKind;
+  readonly sha256: Sha256Digest;
+}
+
 type InvalidResult = Extract<
   ChangesetPreflightResult,
   { readonly kind: "invalid" }
 >;
 
 const ENCODER = new TextEncoder();
+
+function canonicalStagedSourceAuditReceipts(
+  records: readonly Readonly<{
+    sourceKind: FileIngressSourceKind;
+    sha256: Sha256Digest;
+  }>[],
+): string | null {
+  if (records.length === 0) return null;
+  const receipts: StagedSourceAuditReceipt[] = records.map((record) => ({
+    source_kind: record.sourceKind,
+    sha256: record.sha256,
+  }));
+  receipts.sort((left, right) =>
+    left.source_kind < right.source_kind
+      ? -1
+      : left.source_kind > right.source_kind
+        ? 1
+        : left.sha256 < right.sha256
+          ? -1
+          : left.sha256 > right.sha256
+            ? 1
+            : 0
+  );
+  return JSON.stringify(receipts);
+}
 
 async function verifiedStagedStream(
   body: ReadableStream<Uint8Array>,
@@ -454,6 +485,9 @@ export class ChangesetCommitService {
     if (preflight.kind !== "ready") return preflight;
 
     const committedAt = preflight.committedAt;
+    const stagedSourceReceipts = canonicalStagedSourceAuditReceipts(
+      preflight.stagedBundleFileRecords,
+    );
     const revisionId = this.#revisionIds.nextRevisionId();
     const reservationOperationRef = String(canonicalRequestHash);
     const reservationId = capacityReservationId(
@@ -676,6 +710,7 @@ export class ChangesetCommitService {
             current === null || current.state !== "verified" ||
             current.sha256 !== expected.sha256 || current.size !== expected.size ||
             current.mediaType !== expected.mediaType ||
+            current.sourceKind !== expected.sourceKind ||
             current.bindingOwnerId !== stagedBindingOwnerId ||
             current.writeBindingId !== validated.writeBindingId ||
             current.writeBindingGeneration !== stagedBindingGeneration ||
@@ -803,6 +838,9 @@ export class ChangesetCommitService {
               previous_revision_id: preflight.baseRevisionId,
               revision_number: committed.envelope.revision.revisionNumber,
               manifest_hash: committed.envelope.revision.manifestHash,
+              ...(stagedSourceReceipts === null
+                ? {}
+                : { staged_source_receipts: stagedSourceReceipts }),
               ...(validated.automaticCapture === null
                 ? {}
                 : {

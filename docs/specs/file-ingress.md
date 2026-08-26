@@ -286,6 +286,19 @@ download grants or source content. Durable staged metadata may retain exact
 digest/size/media type for integrity and quota; these fields are not emitted as
 provider identity or capability.
 
+Успешный mixed-source `commit_changeset` сохраняет в content audit один
+canonical bounded `staged_source_receipts` value: JSON-массив из `1..20`
+элементов `{ "source_kind", "sha256" }`, отсортированный сначала по закрытому
+`source_kind`, затем по digest. Один элемент соответствует одному consumed
+staged ref, поэтому одинаковые bytes из нескольких refs сохраняют
+множественность. В receipt нет target/display path, staged/provider/object ID,
+size, media hint, URL, capability или bytes. Metadata validator принимает
+только exact canonical JSON, известные source kinds и SHA-256 и отклоняет
+missing/extra/malformed fields внутри той же transaction, что revision, HEAD,
+ref consumption, idempotency, audit/outbox и index effects. Markdown-only
+commit не получает это поле; controlled automatic-capture metadata остаётся
+совместимой с теми же строгими вариантами key set.
+
 ## Compatibility, non-goals and open questions
 
 This contract preserves the old boundaries:
