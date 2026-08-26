@@ -295,6 +295,8 @@ test("keyboard-only connection journey exposes progress, revoke, and reconnect s
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   const page = await context.newPage();
   await page.goto(`${fixture.origin}/settings/connections`);
+  await expect(page.locator("[data-connections-collection]"))
+    .toHaveAttribute("data-collection-state", "ready");
 
   await page.keyboard.press("Tab");
   await expect(page.getByRole("link", { name: "Skip to main content" })).toBeFocused();
