@@ -430,16 +430,34 @@ export class ProductMcpContentApplication implements McpContentApplication {
           const hostedUploadIntents =
             this.#dependencies.uploadIntents !== undefined &&
             this.#dependencies.uploadIntentUrl !== undefined;
-          const sources = this.#dependencies.ingress.capabilities().map((source) =>
-            hostedUploadIntents &&
-            (source.sourceKind === "local_path" ||
-              source.sourceKind === "workspace/generated_artifact")
-              ? Object.freeze({ ...source, status: "available_hosted" as const })
-              : source,
-          );
+          const sources = Object.freeze([
+            "session_attachment",
+            "local_path",
+            "workspace/generated_artifact",
+            "connector_object",
+            "bounded_in_memory",
+            "server_generated",
+          ].map((sourceKind) => {
+            const available = hostedUploadIntents &&
+              (sourceKind === "local_path" ||
+                sourceKind === "workspace/generated_artifact");
+            return Object.freeze({
+              sourceKind,
+              serverAdapterStatus: available ? "available" : "not_available",
+              serverTransport: available ? "companion_upload_intent" : "none",
+              requiresWriteBinding: available,
+              maxBytes: available ? 268_435_456 : 0,
+              fallback: "none",
+            });
+          }));
         return createMcpToolSuccessResult(
-          snakeOutput({ sources: Object.freeze(sources) }),
-          "Read the exact deployed file ingress capability matrix.",
+          snakeOutput({
+            reportScope: "hosted_server_adapters_only",
+            clientCompanionStatus: "not_reported",
+            pathAdmissionStatus: "not_reported",
+            sources,
+          }),
+          "Read the hosted server-adapter matrix; client inventory and path admission are not reported.",
         );
         }
       case "create_file_upload_intent": {

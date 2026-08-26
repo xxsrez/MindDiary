@@ -1211,8 +1211,16 @@ const GET_FILE_INGRESS_CAPABILITIES_OUTPUT_SCHEMA = toolOutputSchema(
   Object.freeze({
     type: "object",
     additionalProperties: false,
-    required: Object.freeze(["sources"]),
+    required: Object.freeze([
+      "report_scope",
+      "client_companion_status",
+      "path_admission_status",
+      "sources",
+    ]),
     properties: Object.freeze({
+      report_scope: Object.freeze({ const: "hosted_server_adapters_only" }),
+      client_companion_status: Object.freeze({ const: "not_reported" }),
+      path_admission_status: Object.freeze({ const: "not_reported" }),
       sources: Object.freeze({
         type: "array",
         minItems: 6,
@@ -1222,31 +1230,23 @@ const GET_FILE_INGRESS_CAPABILITIES_OUTPUT_SCHEMA = toolOutputSchema(
           additionalProperties: false,
           required: Object.freeze([
             "source_kind",
-            "status",
-            "transport",
+            "server_adapter_status",
+            "server_transport",
+            "requires_write_binding",
             "max_bytes",
             "fallback",
           ]),
           properties: Object.freeze({
             source_kind: FILE_INGRESS_SOURCE_KIND_SCHEMA,
-            status: Object.freeze({
+            server_adapter_status: Object.freeze({
               type: "string",
-              enum: Object.freeze([
-                "available_local",
-                "available_hosted",
-                "not_available",
-              ]),
+              enum: Object.freeze(["available", "not_available"]),
             }),
-            transport: Object.freeze({
+            server_transport: Object.freeze({
               type: "string",
-              enum: Object.freeze([
-                "native_file_parameter",
-                "authorized_connector",
-                "local_companion",
-                "bounded_bytes",
-                "producer_stream",
-              ]),
+              enum: Object.freeze(["companion_upload_intent", "none"]),
             }),
+            requires_write_binding: Object.freeze({ type: "boolean" }),
             max_bytes: Object.freeze({ type: "integer", minimum: 0 }),
             fallback: Object.freeze({ const: "none" }),
           }),
@@ -1745,7 +1745,7 @@ export const MCP_BUNDLE_FILE_TOOL_DEFINITIONS = Object.freeze([
     name: "get_file_ingress_capabilities",
     title: "Get file ingress capabilities",
     description:
-      "Read the exact deployed source capability matrix. An unavailable source has no implicit base64, URL, local-path or cross-source fallback.",
+      "Read only the hosted service's deployed ingress adapters, binding requirements and limits. This response does not report installed client companions or promise that a specific local path is readable; those require fresh client inventory and local admission. An unavailable source has no implicit base64, URL, local-path or cross-source fallback.",
     inputSchema: GET_FILE_INGRESS_CAPABILITIES_INPUT_SCHEMA,
     outputSchema: GET_FILE_INGRESS_CAPABILITIES_OUTPUT_SCHEMA,
     securitySchemes: READ_SECURITY_SCHEMES,

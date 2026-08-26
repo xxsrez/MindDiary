@@ -1973,28 +1973,45 @@ entries.
 
 ### `get_file_ingress_capabilities`
 
-Input is an empty object. Output contains exactly one privacy-safe row for each
-accepted source kind:
+Input is an empty object. Output is deliberately scoped to the hosted service.
+It contains exactly one privacy-safe server-adapter row for each accepted
+source kind:
 
 ```json
 {
+  "report_scope": "hosted_server_adapters_only",
+  "client_companion_status": "not_reported",
+  "path_admission_status": "not_reported",
   "sources": [
     {
-      "source_kind": "session_attachment",
-      "status": "available_hosted",
-      "transport": "native_file_parameter",
-      "max_bytes": 67108864,
+      "source_kind": "local_path",
+      "server_adapter_status": "available",
+      "server_transport": "companion_upload_intent",
+      "requires_write_binding": true,
+      "max_bytes": 268435456,
       "fallback": "none"
     }
   ]
 }
 ```
 
-`status` is `available_local | available_hosted | not_available`. The response
-contains no provider identity, account, object locator, path, temporary URL or
-credential. A `not_available` row is terminal capability discovery for that
-deployed composition; the caller may not silently switch source kind or
-transport.
+`server_adapter_status` is `available | not_available`. It proves only that the
+deployed hosted service has the named server boundary, required binding check
+and advertised byte limit. It does not prove that a packaged companion is
+installed or visible in the active Codex client/profile, and it never predicts
+whether one concrete path will pass local admission. Those two facts require,
+respectively, fresh installed-client inventory and a local companion call.
+
+Release 0.2 reports only `local_path` and
+`workspace/generated_artifact` as `available`, both through
+`companion_upload_intent` and both requiring the exact active write binding.
+`session_attachment`, `connector_object`, `bounded_in_memory` and
+`server_generated` remain `not_available` with `server_transport: "none"`,
+`requires_write_binding: false` and `max_bytes: 0`. The response contains no
+provider identity, account, object locator, path, filename, temporary URL,
+credential or private content. A `not_available` row is terminal capability
+discovery for that deployed composition; the caller may not silently switch
+source kind or transport.
 
 ### `create_file_upload_intent`
 

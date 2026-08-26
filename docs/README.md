@@ -236,6 +236,9 @@ evidence, предлагаемый дизайн и ещё не проверен�
   — повторяемый `pass/fail/not-available` report по source, atomicity,
   authorization, privacy, modern/compat conformance и текущей hosted Codex
   capability boundary.
+- [Disk-first ingress: capability layers на 2026-08-26](reports/2026-08-26-disk-first-ingress-capability-layers.md)
+  — текущая Release 0.2 граница между hosted server adapters, installed Codex
+  companion inventory и admission конкретного local/workspace path.
 - [Product Site source candidate на 2026-08-08](reports/2026-08-08-product-site-candidate.md)
   — исторический repository candidate, впоследствии интегрированный в
   deployment, который теперь классифицируется как UAT.

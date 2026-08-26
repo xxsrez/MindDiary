@@ -3,6 +3,12 @@
 Статус: dated verification report, 2026-08-23. Документ не меняет accepted
 contract и не является production evidence.
 
+Историческая оговорка: capability interpretation этого отчёта superseded
+disk-first контрактом Release 0.2 и
+[разделяющим отчётом 2026-08-26](2026-08-26-disk-first-ingress-capability-layers.md).
+Repository evidence ниже остаётся датированным фактом своего candidate, но не
+описывает текущий release selector и не доказывает current hosted support.
+
 ## Ответ
 
 Repository candidate реализует и локально проверяет единый file-ingress

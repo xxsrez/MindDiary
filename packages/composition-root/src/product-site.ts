@@ -14,7 +14,6 @@ import {
   FILE_UPLOAD_INTENT_ROUTE_PREFIX,
   MCP_LEGACY_CODEX_ENDPOINT,
   MCP_RETIRED_SITES_ENDPOINT,
-  OpenAiNativeFileTransport,
   ProductMcpContentApplication,
   createFileUploadIntentHttpHandler,
   createLegacyCodexMcpHttpHandler,
@@ -846,9 +845,6 @@ export async function createProductSiteRuntime(
     intents: uploadIntentMetadata,
     clock,
   });
-  const nativeFiles = new OpenAiNativeFileTransport({
-    maxBytes: BUNDLE_FILE_LIMITS.maxFileBytes,
-  });
   const contentReadServices = (store: typeof metadata) => {
     const scopedAuthorizer = new MindBindingContentAuthorizer({
       delegate: new CapabilityAuthorizer(store),
@@ -965,20 +961,6 @@ export async function createProductSiteRuntime(
   const fileIngress = new FileIngressCoordinator({
     staging: bundleFileStaging,
     commits,
-    adapters: {
-      session_attachment: {
-        stage: (payload) => {
-          const request = payload as Parameters<BundleFileStagingService["stage"]>[0];
-          return bundleFileStaging.stage({
-            ...request,
-            sourceKind: "session_attachment",
-          });
-        },
-      },
-    },
-    capabilityStatus: {
-      session_attachment: "available_hosted",
-    },
   });
   const markdownImports = new MarkdownImportService({
     authorizer,
@@ -1043,7 +1025,6 @@ export async function createProductSiteRuntime(
       ).href,
     ingress: fileIngress,
     bundleFileDownloads,
-    nativeFiles,
     commits: {
       commit: async (request) => {
         const result = await runWithCapturedWork(

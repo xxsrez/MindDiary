@@ -460,16 +460,37 @@ test("modern and compatibility profiles share multiple-read/single-write applica
   );
   assert.deepEqual(
     modernCapabilities.structuredContent.data.sources.map(
-      ({ source_kind, status }) => [source_kind, status],
+      ({ source_kind, server_adapter_status, server_transport,
+        requires_write_binding, max_bytes }) => [
+        source_kind,
+        server_adapter_status,
+        server_transport,
+        requires_write_binding,
+        max_bytes,
+      ],
     ),
     [
-      ["session_attachment", "available_hosted"],
-      ["local_path", "available_hosted"],
-      ["workspace/generated_artifact", "available_hosted"],
-      ["connector_object", "not_available"],
-      ["bounded_in_memory", "not_available"],
-      ["server_generated", "not_available"],
+      ["session_attachment", "not_available", "none", false, 0],
+      ["local_path", "available", "companion_upload_intent", true, 268_435_456],
+      ["workspace/generated_artifact", "available", "companion_upload_intent", true, 268_435_456],
+      ["connector_object", "not_available", "none", false, 0],
+      ["bounded_in_memory", "not_available", "none", false, 0],
+      ["server_generated", "not_available", "none", false, 0],
     ],
+  );
+  assert.deepEqual(
+    {
+      report_scope: modernCapabilities.structuredContent.data.report_scope,
+      client_companion_status:
+        modernCapabilities.structuredContent.data.client_companion_status,
+      path_admission_status:
+        modernCapabilities.structuredContent.data.path_admission_status,
+    },
+    {
+      report_scope: "hosted_server_adapters_only",
+      client_companion_status: "not_reported",
+      path_admission_status: "not_reported",
+    },
   );
 
   for (const [id, name] of [

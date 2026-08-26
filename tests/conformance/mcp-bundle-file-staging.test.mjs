@@ -78,6 +78,26 @@ test("publishes strict native-file staging metadata and mixed commit operations"
     destructiveHint: false,
     openWorldHint: false,
   });
+  assert.deepEqual(capabilities.outputSchema.required, ["ok"]);
+  const capabilityData = capabilities.outputSchema.properties.data;
+  assert.deepEqual(capabilityData.required, [
+    "report_scope",
+    "client_companion_status",
+    "path_admission_status",
+    "sources",
+  ]);
+  assert.deepEqual(
+    capabilityData.properties.sources.items.properties.server_adapter_status.enum,
+    ["available", "not_available"],
+  );
+  assert.deepEqual(
+    capabilityData.properties.sources.items.properties.server_transport.enum,
+    ["companion_upload_intent", "none"],
+  );
+  assert.doesNotMatch(
+    JSON.stringify(capabilities.outputSchema),
+    /filename|absolute_path|provider_locator|account|token|url|private_content/iu,
+  );
   const stage = MCP_BUNDLE_FILE_TOOL_DEFINITIONS.find(
     ({ name }) => name === "stage_bundle_file",
   );
@@ -497,19 +517,34 @@ test("product adapter terminates provider metadata and returns only verified sta
   });
   assert.equal(capabilities.isError, false);
   assert.deepEqual(
-    capabilities.structuredContent.data.sources.map(({ source_kind, status }) => [
+    capabilities.structuredContent.data.sources.map(({
       source_kind,
-      status,
+      server_adapter_status,
+      server_transport,
+      requires_write_binding,
+      max_bytes,
+    }) => [
+      source_kind,
+      server_adapter_status,
+      server_transport,
+      requires_write_binding,
+      max_bytes,
     ]),
     [
-      ["session_attachment", "available_hosted"],
-      ["local_path", "not_available"],
-      ["workspace/generated_artifact", "not_available"],
-      ["connector_object", "not_available"],
-      ["bounded_in_memory", "not_available"],
-      ["server_generated", "not_available"],
+      ["session_attachment", "not_available", "none", false, 0],
+      ["local_path", "not_available", "none", false, 0],
+      ["workspace/generated_artifact", "not_available", "none", false, 0],
+      ["connector_object", "not_available", "none", false, 0],
+      ["bounded_in_memory", "not_available", "none", false, 0],
+      ["server_generated", "not_available", "none", false, 0],
     ],
   );
+  assert.equal(
+    capabilities.structuredContent.data.report_scope,
+    "hosted_server_adapters_only",
+  );
+  assert.equal(capabilities.structuredContent.data.client_companion_status, "not_reported");
+  assert.equal(capabilities.structuredContent.data.path_admission_status, "not_reported");
 
   const reconciledStage = await application.executeToolCall({
     actor: ACTOR,
