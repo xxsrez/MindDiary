@@ -451,6 +451,9 @@ class FakeD1Database {
   }
 
   async all(sql, values) {
+    if (sql.includes("/*md-upload-intent-collect-expired*/")) {
+      return { success: true, results: [] };
+    }
     if (sql.includes("/*md-metadata-cold-load*/")) {
       this.metadataReadLog.push("cold-load");
       const rows = [];
