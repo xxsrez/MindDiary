@@ -16,6 +16,18 @@ const READ_CHUNK_BYTES = 1024 * 1024;
 export function createNodeLocalCompanionFileSystem(options = {}) {
   const localRoots = resolveRoots(options.localRoots ?? [], false);
   const workspaceRoots = resolveRoots(options.workspaceRoots ?? [], true);
+  // Root authority belongs to connector configuration, not to a later file
+  // operation. Resolve it once so a mutable root symlink cannot redefine the
+  // consent boundary between descriptor open and authorization.
+  const canonicalAuthorityRoots = Promise.all([
+    canonicalRoots(localRoots),
+    canonicalRoots(workspaceRoots),
+  ]);
+  const beforeAuthorityCheck = options.beforeAuthorityCheck;
+  if (beforeAuthorityCheck !== undefined &&
+    typeof beforeAuthorityCheck !== "function") {
+    throw new TypeError("local companion authority hook is invalid");
+  }
 
   return Object.freeze({
     async open(inputPath) {
@@ -42,22 +54,33 @@ export function createNodeLocalCompanionFileSystem(options = {}) {
         return invalid("file_ingress_source_unavailable");
       }
       try {
-        const [opened, canonicalPath, canonicalLocalRoots, canonicalWorkspaceRoots] =
-          await Promise.all([
-            handle.stat({ bigint: true }),
-            realpath(inputPath),
-            canonicalRoots(localRoots),
-            canonicalRoots(workspaceRoots),
-          ]);
+        const opened = await handle.stat({ bigint: true });
         if (!opened.isFile() ||
           opened.dev !== lexical.dev || opened.ino !== lexical.ino) {
           await handle.close();
           return invalid("file_ingress_source_unsupported");
         }
+        // Tests use this hook to deterministically exercise a parent-symlink
+        // swap after open. It cannot supply or alter authority evidence.
+        await beforeAuthorityCheck?.();
+        const canonicalPath = await realpath(inputPath);
+        const [canonicalEntry, [canonicalLocalRoots, canonicalWorkspaceRoots]] =
+          await Promise.all([
+            lstat(canonicalPath, { bigint: true }),
+            canonicalAuthorityRoots,
+          ]);
+        // Authority is derived only after the resolved path is proven to name
+        // the exact dev/inode held by the already-open descriptor. A parent
+        // symlink swap therefore fails rather than authorizing another path.
+        if (!canonicalEntry.isFile() || canonicalEntry.isSymbolicLink() ||
+          canonicalEntry.dev !== opened.dev || canonicalEntry.ino !== opened.ino) {
+          await handle.close();
+          return invalid("file_ingress_source_unsupported");
+        }
         const authority = authorityFor(
           canonicalPath,
-          [...localRoots, ...canonicalLocalRoots],
-          [...workspaceRoots, ...canonicalWorkspaceRoots],
+          canonicalLocalRoots,
+          canonicalWorkspaceRoots,
         );
         if (authority === "none") {
           await handle.close();

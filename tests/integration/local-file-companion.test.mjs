@@ -123,6 +123,50 @@ test("Node companion prepares arbitrary regular formats and rejects directory, f
   }
 });
 
+test("authority rejects a parent-symlink swap between descriptor open and path resolution", async () => {
+  const root = await mkdtemp(join(tmpdir(), "mind-diary-md272-authority-race-"));
+  try {
+    const allowed = join(root, "allowed");
+    const outside = join(root, "outside");
+    const pivot = join(root, "pivot");
+    await mkdir(allowed);
+    await mkdir(outside);
+    await writeFile(join(allowed, "selected.bin"), "allowed bytes");
+    await writeFile(join(outside, "selected.bin"), "outside private bytes");
+    const { symlink } = await import("node:fs/promises");
+    await symlink(outside, pivot);
+    let swapped = false;
+    let transportCalls = 0;
+    const companion = new LocalFileCompanion({
+      filesystem: createNodeLocalCompanionFileSystem({
+        localRoots: [allowed],
+        async beforeAuthorityCheck() {
+          assert.equal(swapped, false);
+          await rm(pivot, { force: true });
+          await symlink(allowed, pivot);
+          swapped = true;
+        },
+      }),
+      transport: {
+        async upload() {
+          transportCalls += 1;
+          throw new Error("authority race reached transport");
+        },
+      },
+    });
+    assert.deepEqual(await companion.prepare_local_file({
+      path: join(pivot, "selected.bin"),
+    }), {
+      kind: "invalid",
+      code: "file_ingress_source_unsupported",
+    });
+    assert.equal(swapped, true);
+    assert.equal(transportCalls, 0);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("stable descriptor streams a structural file above 146215108 bytes without a proportional buffer", { timeout: 120_000 }, async () => {
   const root = await mkdtemp(join(tmpdir(), "mind-diary-md272-structural-"));
   const structuralSize = 146_215_109;
