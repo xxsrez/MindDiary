@@ -394,13 +394,22 @@ exact redirect URI, resource `/api/mcp`, scopes, state и PKCE `S256`; consent
 OAuth tables хранят normalized clients, pending requests, grants, one-time
 codes, access и refresh lifecycle. Opaque code/access/refresh secrets
 сохраняются только как domain-separated keyed HMAC-SHA-256 verifiers. Access
-token короткоживущий; refresh token rotation с reuse detection отзывает grant.
+token короткоживущий. Refresh rotation допускает только 30-секундное
+non-destructive окно для проигравшего конкурентного caller: он получает
+`invalid_grant` без нового bearer и перечитывает общий credential store.
+Поздний reuse старого token отзывает grant, всю family и active mirrors.
 
 Immutable OAuth grant, а не rotating access/refresh token и не chat ID, владеет
 binding set. Refresh сохраняет state; revoke делает его unusable; reconnect
 создаёт новый пустой state. Personal token использует тот же application
 contract с `token_id` как stable owner. Полный contract находится в
 [Mind bindings](specs/mind-bindings.md).
+
+Уже отозванный из-за replay grant не восстанавливается на месте. Recovery
+создаёт новый OAuth grant через native Codex reconnect, после чего fresh
+`get_mind_bindings` показывает empty binding set и пользователь заново явно
+выбирает read/write targets. Это recovery от terminal revoke; обычный refresh
+rollover внутри active grant bindings не меняет.
 
 Application core уже повторно проверяет current MCP token внутри ACL/CAS/commit
 transaction. Чтобы OAuth adapter не обходил эту boundary, каждому active OAuth

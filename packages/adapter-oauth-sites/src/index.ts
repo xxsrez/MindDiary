@@ -18,6 +18,7 @@ export const OAUTH_ACCESS_TOKEN_TTL_SECONDS = 15 * 60;
 export const OAUTH_AUTHORIZATION_CODE_TTL_SECONDS = 5 * 60;
 export const OAUTH_AUTHORIZATION_REQUEST_TTL_SECONDS = 10 * 60;
 export const OAUTH_REFRESH_TOKEN_TTL_SECONDS = 30 * 24 * 60 * 60;
+export const OAUTH_REFRESH_REUSE_GRACE_SECONDS = 30;
 export const OAUTH_ACCESS_TOKEN_PREFIX = "mdo_access_" as const;
 export const OAUTH_AUTHORIZATION_CODE_PREFIX = "mdo_code_" as const;
 export const OAUTH_REFRESH_TOKEN_PREFIX = "mdo_refresh_" as const;
@@ -1039,6 +1040,36 @@ export async function createSitesOAuthConnector(
     ]);
   };
 
+  const rejectRefreshReuse = async (
+    row: DbRow,
+    observedAt: Date,
+  ): Promise<never> => {
+    const usedAt = typeof row.used_at === "string"
+      ? Date.parse(row.used_at)
+      : Number.NaN;
+    const elapsedMs = observedAt.getTime() - usedAt;
+    if (
+      !row.revoked_at &&
+      Number.isFinite(usedAt) &&
+      elapsedMs >= 0 &&
+      elapsedMs <= OAUTH_REFRESH_REUSE_GRACE_SECONDS * 1_000
+    ) {
+      throw new OAuthProtocolError(
+        "invalid_grant",
+        "Refresh token was already rotated; reload the latest stored credentials",
+      );
+    }
+    await revokeGrantAndFamily(
+      String(row.grant_id),
+      String(row.family_id),
+      String(row.principal_id),
+    );
+    throw new OAuthProtocolError(
+      "invalid_grant",
+      "Refresh token reuse was detected and the connection was revoked",
+    );
+  };
+
   const issueTokens = async (input: {
     readonly grantId: string;
     readonly principalId: string;
@@ -1207,14 +1238,7 @@ export async function createSitesOAuthConnector(
     if (row === null || String(row.client_id) !== clientId || row.grant_revoked_at) {
       throw new OAuthProtocolError("invalid_grant", "Refresh token is invalid or revoked");
     }
-    if (row.used_at || row.revoked_at) {
-      await revokeGrantAndFamily(
-        String(row.grant_id),
-        String(row.family_id),
-        String(row.principal_id),
-      );
-      throw new OAuthProtocolError("invalid_grant", "Refresh token reuse was detected and the connection was revoked");
-    }
+    if (row.used_at || row.revoked_at) await rejectRefreshReuse(row, now());
     if (Date.parse(String(row.expires_at)) <= now().getTime()) {
       throw new OAuthProtocolError("invalid_grant", "Refresh token has expired");
     }
@@ -1235,12 +1259,21 @@ export async function createSitesOAuthConnector(
         .bind(now().toISOString(), row.id),
     );
     if (consumed === null) {
-      await revokeGrantAndFamily(
-        String(row.grant_id),
-        String(row.family_id),
-        String(row.principal_id),
+      const current = await statementFirst<DbRow>(
+        options.database
+          .prepare(`/*md-oauth-refresh-read*/ SELECT t.*, g.revoked_at AS grant_revoked_at
+            FROM md_oauth_refresh_tokens t JOIN md_oauth_grants g ON g.id = t.grant_id
+            WHERE t.token_verifier = ? LIMIT 1`)
+          .bind(tokenVerifier),
       );
-      throw new OAuthProtocolError("invalid_grant", "Refresh token reuse was detected and the connection was revoked");
+      if (
+        current === null ||
+        String(current.client_id) !== clientId ||
+        current.grant_revoked_at
+      ) {
+        throw new OAuthProtocolError("invalid_grant", "Refresh token is invalid or revoked");
+      }
+      await rejectRefreshReuse(current, now());
     }
     return issueTokens({
       grantId: String(row.grant_id),

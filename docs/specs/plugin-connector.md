@@ -28,8 +28,8 @@ Repository candidate уже содержит:
 - public-client DCR; allowlisted Client ID Metadata Document parser остаётся
   не рекламируемым compatibility path до отдельного live conformance;
 - authorization code + PKCE `S256`, exact redirect/resource validation;
-- 15-minute access token, rotating 30-day refresh token и grant-family revoke
-  при refresh reuse;
+- 15-minute access token, rotating 30-day refresh token, bounded
+  concurrent-refresh tolerance и grant-family revoke при позднем refresh reuse;
 - read-first grant и `content:write` step-up;
 - dual `mdp_v1_`/`mdo_access_` MCP authentication, tool
   `securitySchemes` и OAuth challenges;
@@ -301,10 +301,22 @@ OAuth consent не превращает его в draft или approval artifact
   resource, principal, scopes и PKCE challenge;
 - access token: opaque, 15 минут, exact resource audience;
 - refresh token: opaque, 30 дней, rotation при каждом использовании;
-- reuse старого refresh token: отзыв всей token family и grant;
+- повтор уже использованного refresh token не позднее 30 секунд после
+  server-side `used_at`: `invalid_grant` без новых credentials и без отзыва
+  grant/family; caller обязан перечитать общий credential store и использовать
+  сохранённый первым refresh successor;
+- reuse того же старого refresh token после 30-секундного окна, с некорректным
+  `used_at` либо в уже revoked family: отзыв всей token family и grant;
 - revoke connector: отзыв grant, active access tokens и refresh family;
 - verifier: keyed HMAC-SHA-256, constant-time compare, secret показывается
   только как bearer value и не логируется.
+
+Окно является узкой защитой от normal race двух Codex-процессов, которые
+прочитали один current refresh token до того, как первый caller сохранил его
+successor. Второй caller не получает ни successor, ни новый access token, а
+потому окно не становится повторной выдачей bearer secret. За пределами окна
+reuse detection сохраняет fail-closed family revoke. Timestamp назначает
+server; client time, retry count и process identity не участвуют в решении.
 
 OAuth tokens получают отдельные bounded prefixes, чтобы auth boundary могла
 без перебора выбрать verifier. Existing `mdp_v1_` personal tokens продолжают
@@ -327,6 +339,11 @@ token, email или client-supplied principal.
 revision export или user content. Account deletion и connector revoke удаляют
 либо отзывают все identity-linked OAuth credentials согласно общей privacy
 model.
+
+Bounded concurrent-refresh tolerance не хранит recoverable successor или
+plaintext replay response. Достаточны существующие server-side `used_at`,
+grant/family linkage и HMAC verifier. Secret, authorization URL и raw token
+response не попадают в logs, UAT receipts или Task evidence.
 
 ## Identity и authorization
 

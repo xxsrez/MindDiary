@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   OAUTH_ACCESS_TOKEN_PREFIX,
+  OAUTH_REFRESH_REUSE_GRACE_SECONDS,
   createSitesOAuthConnector,
 } from "../../packages/adapter-oauth-sites/dist/index.js";
 import { InMemoryMcpTokenStore } from "../../packages/adapter-metadata-memory/dist/index.js";
@@ -517,26 +518,58 @@ test("connection refs and bounded cursors preserve actor-safe stable traversal",
   assert.equal(await connector.revokeConnection("principal_1", target.connectionRef), false);
 });
 
-test("refresh rotation detects reuse and revokes the entire connection", async () => {
-  const { connector, bindingRevocations } = await environment();
+test("refresh rotation tolerates bounded concurrent reuse without revoking the connection", async () => {
+  const current = new Date("2026-08-26T20:00:00.000Z");
+  const { connector, bindingRevocations } = await environment({ now: () => new Date(current) });
   const client = await register(connector);
   const issued = await authorize(connector, client.client_id);
   const grantId = (await connector.listConnectionPage("principal_1")).items[0].bindingOwnerId;
-  const refreshForm = new URLSearchParams({
+  const refresh = () => connector.fetch(new Request(`${ORIGIN}/oauth/token`, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "refresh_token", refresh_token: issued.refresh_token,
+      client_id: client.client_id, resource: `${ORIGIN}/api/mcp`,
+    }),
+  }));
+  const responses = await Promise.all([refresh(), refresh()]);
+  assert.deepEqual(responses.map((response) => response.status).sort(), [200, 400]);
+  const rotated = responses.find((response) => response.status === 200);
+  const concurrent = responses.find((response) => response.status === 400);
+  const rotatedBody = await rotated.json();
+  const concurrentBody = await concurrent.json();
+  assert.notEqual(rotatedBody.refresh_token, issued.refresh_token);
+  assert.equal(concurrentBody.error, "invalid_grant");
+  assert.match(concurrentBody.error_description, /reload the latest stored credentials/u);
+  assert.equal(bindingRevocations.length, 0);
+  assert.equal((await connector.listConnectionPage("principal_1")).items[0].bindingOwnerId, grantId);
+  assert.equal(
+    (await connector.authenticator.authenticate(rotatedBody.access_token, "request_concurrent")).kind,
+    "authenticated",
+  );
+});
+
+test("refresh reuse after the bounded grace revokes the entire connection", async () => {
+  let current = new Date("2026-08-26T20:00:00.000Z");
+  const { connector, bindingRevocations } = await environment({ now: () => new Date(current) });
+  const client = await register(connector);
+  const issued = await authorize(connector, client.client_id);
+  const grantId = (await connector.listConnectionPage("principal_1")).items[0].bindingOwnerId;
+  const refreshForm = () => new URLSearchParams({
     grant_type: "refresh_token", refresh_token: issued.refresh_token,
     client_id: client.client_id, resource: `${ORIGIN}/api/mcp`,
   });
   const rotated = await connector.fetch(new Request(`${ORIGIN}/oauth/token`, {
     method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" },
-    body: refreshForm,
+    body: refreshForm(),
   }));
   assert.equal(rotated.status, 200);
   const rotatedBody = await rotated.json();
-  assert.notEqual(rotatedBody.refresh_token, issued.refresh_token);
+  current = new Date(current.getTime() + OAUTH_REFRESH_REUSE_GRACE_SECONDS * 1_000 + 1);
 
   const reused = await connector.fetch(new Request(`${ORIGIN}/oauth/token`, {
     method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" },
-    body: refreshForm,
+    body: refreshForm(),
   }));
   assert.equal(reused.status, 400);
   assert.equal((await reused.json()).error, "invalid_grant");

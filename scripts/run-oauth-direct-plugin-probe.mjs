@@ -83,12 +83,14 @@ export const OAUTH_DIRECT_PLUGIN_ASSERTION_IDS = Object.freeze([
   "oauth.read-grant-write-challenge",
   "oauth.access-token-expiry",
   "oauth.refresh-rotation",
-  "oauth.refresh-reuse-revokes-family",
+  "oauth.refresh-concurrent-reuse-tolerated",
+  "oauth.refresh-late-reuse-revokes-family",
   "oauth.rfc7009-revoke-next-request",
   "oauth.write-step-up",
   "oauth.authorization-mirror-active",
   "oauth.current-acl-readback",
   "oauth.explicit-write-binding-readback",
+  "oauth.refresh-preserves-write-binding",
   "oauth.connection-safe-projection",
   "oauth.connection-stale-cas",
   "oauth.product-runtime-commit",
@@ -1042,10 +1044,20 @@ async function runOAuthScenario({ assertions, nowState }) {
   if (reused.status !== 400 || reused.body?.error !== "invalid_grant") {
     fail("oauth_refresh_reuse_not_detected");
   }
-  if ((await modernTool(owner, rotated.body.access_token, "oauth-reuse-denied", "list_minds")).status !== 401) {
-    fail("oauth_refresh_reuse_did_not_revoke_access");
+  mcpData(
+    await modernTool(owner, rotated.body.access_token, "oauth-concurrent-reuse-read", "list_minds"),
+    "oauth_concurrent_refresh_reuse_revoked_access",
+  );
+  assertions.add("oauth.refresh-concurrent-reuse-tolerated");
+  nowState.value = new Date(nowState.value.getTime() + 30 * 1_000 + 1);
+  const lateReuse = await refresh(owner, clientId, rotationGrant.tokens.refresh_token);
+  if (lateReuse.status !== 400 || lateReuse.body?.error !== "invalid_grant") {
+    fail("oauth_late_refresh_reuse_not_detected");
   }
-  assertions.add("oauth.refresh-reuse-revokes-family");
+  if ((await modernTool(owner, rotated.body.access_token, "oauth-late-reuse-denied", "list_minds")).status !== 401) {
+    fail("oauth_late_refresh_reuse_did_not_revoke_access");
+  }
+  assertions.add("oauth.refresh-late-reuse-revokes-family");
 
   const rfcGrant = await authorize(owner, clientId, { state: "state-rfc7009" });
   expectStatus(await revoke(owner, clientId, rfcGrant.tokens.access_token), 200, "oauth_rfc7009_failed");
@@ -1102,6 +1114,26 @@ async function runOAuthScenario({ assertions, nowState }) {
     bindingReadback.write_binding?.mind?.route !== "/me"
   ) fail("oauth_write_binding_readback_mismatch");
   assertions.add("oauth.explicit-write-binding-readback");
+  const refreshedWriteGrant = expectStatus(
+    await refresh(owner, clientId, writeGrant.tokens.refresh_token),
+    200,
+    "oauth_bound_grant_refresh_failed",
+  );
+  const refreshedBindingReadback = mcpData(
+    await modernTool(
+      owner,
+      refreshedWriteGrant.body.access_token,
+      "oauth-refreshed-write-bindings-readback",
+      "get_mind_bindings",
+    ),
+    "oauth_refreshed_write_binding_readback_failed",
+  );
+  if (
+    refreshedBindingReadback.binding_version !== bindingReadback.binding_version ||
+    refreshedBindingReadback.write_binding?.write_binding_id !== writeBindingId ||
+    refreshedBindingReadback.write_binding?.mind?.route !== "/me"
+  ) fail("oauth_refresh_changed_write_binding");
+  assertions.add("oauth.refresh-preserves-write-binding");
   const connections = await owner.api("/api/v1/connections");
   const connection = connections.body?.data?.items?.find((item) => item?.can_write === true);
   const connectionRef = requiredString(

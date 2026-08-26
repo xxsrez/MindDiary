@@ -227,8 +227,11 @@ mdo_refresh_<43 base64url characters without padding>
 domain-separated keyed HMAC-SHA-256 verifier и lifecycle metadata; один secret
 нельзя принять в роли другого. Authorization code живёт 5 минут и потребляется
 один раз, access token — 15 минут, rotating refresh token — не более 30 дней.
-Повторное использование уже заменённого refresh token отзывает весь grant и
-его active authorization records.
+Повторное использование уже заменённого refresh token в течение 30 секунд от
+server-side `used_at` возвращает `invalid_grant`, не выдаёт credentials и не
+отзывает grant: параллельный caller должен перечитать общий credential store.
+Повтор после этого bounded окна, некорректный `used_at` либо reuse в уже revoked
+family отзывает весь grant и его active authorization records.
 
 OAuth grant связан с `principal_id + client_id + resource`, а не с одним Mind.
 Allowed resource для pilot — exact canonical modern MCP URL `/api/mcp`.
@@ -987,6 +990,13 @@ Token response имеет стандартные `token_type: Bearer`, `expires_
 но не расширить их; write step-up проходит новый authorization flow. Wrong
 redirect, PKCE verifier, resource, client, expired/consumed code или revoked
 grant возвращают generic OAuth error без private principal/grant details.
+
+Если два callers предъявили один current refresh token конкурентно, ровно один
+rotation succeeds. Проигравший запрос в течение 30 секунд получает
+`invalid_grant` с указанием перечитать latest credentials, но не отзывает
+successor, grant, active access tokens или grant-owned Mind bindings. Такой
+ответ никогда не повторяет bearer secrets. Поздний reuse сохраняет полный
+family revoke.
 
 Protected-resource metadata URL также публикуется в MCP
 `WWW-Authenticate` challenge. Read/export tools и

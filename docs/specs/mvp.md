@@ -339,8 +339,11 @@ capabilities и на каждом content call проходит current scope и
 Каждый OAuth access token создаёт скрытую authorization mirror record в
 существующем token store. Поэтому текущая application authorization повторно
 проверяет OAuth status/scopes внутри ACL/CAS/commit transaction, а revoke,
-refresh reuse и account deletion fail closed. Mirror не отображается как
-personal token. Ordinary active grants показываются на
+поздний refresh reuse и account deletion fail closed. Конкурентный повтор уже
+использованного refresh token в течение 30 секунд отклоняется без credentials и
+без revoke, чтобы второй Codex process мог перечитать successor из общего
+credential store; после окна reuse по-прежнему отзывает family и mirrors.
+Mirror не отображается как personal token. Ordinary active grants показываются на
 `/settings/connections` через actor-owned opaque `connection_ref`; Advanced
 personal tokens и protocol diagnostics находятся на `/settings/developer/mcp`.
 Revoke немедленно закрывает grant и скрывает connection; raw grant/token/
@@ -874,8 +877,9 @@ portable container и AWS/AgentCore не используются без нов�
 решения. Connector extension блокирует automated exact-candidate gate:
 package shape и fresh temporary plugin context, OAuth discovery/DCR/PKCE,
 exact redirect/resource/state, read, write step-up, expiry, refresh rotation/
-reuse, revoke/reconnect, modern/compatibility transport и existing personal-
-token regression. Synthetic identity допустима только на trusted authorize/
+bounded concurrent reuse/late replay revoke, revoke/reconnect,
+modern/compatibility transport и existing personal-token regression. Synthetic
+identity допустима только на trusted authorize/
 consent boundary; password grant, admin mint и client-selected principal
 запрещены. Real external Marketplace/Codex OAuth UI остаётся informational
 canary и не переписывает уже доказанный personal-token MVP. Production/public
