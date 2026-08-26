@@ -35,9 +35,18 @@ import {
 } from "@mind-diary/application-ports";
 
 import {
+  SITES_LOCAL_FILE_UPLOAD_INTENT_SCHEMA,
   SITES_METADATA_MIGRATIONS,
   createSitesMetadataStore,
 } from "../../packages/adapter-metadata-sites/dist/index.js";
+
+function canonicalSql(sql) {
+  return sql.replace(/\s+/gu, " ").trim();
+}
+
+const EXPECTED_UPLOAD_INTENT_SCHEMA = Object.freeze(
+  SITES_LOCAL_FILE_UPLOAD_INTENT_SCHEMA.map(canonicalSql),
+);
 
 const T0 = "2026-08-08T08:00:00.000Z";
 const T1 = "2026-08-08T08:05:00.000Z";
@@ -127,6 +136,7 @@ class FakeD1Database {
   searchLexical = new Map();
   audit = new Map();
   locatorHandles = new Map();
+  #appliedUploadIntentSchema = new Set();
   #failTag = null;
   #batchTail = Promise.resolve();
 
@@ -195,7 +205,11 @@ class FakeD1Database {
       typeof value === "string" && value.length > this.maxBoundStringLength)) {
       throw new Error("synthetic D1 bound string is too large");
     }
-    if (/^\s*(?:CREATE TABLE|CREATE INDEX)/u.test(sql)) {
+    const normalizedSql = canonicalSql(sql);
+    if (/^(?:CREATE TABLE|CREATE INDEX)/u.test(normalizedSql)) {
+      if (EXPECTED_UPLOAD_INTENT_SCHEMA.includes(normalizedSql)) {
+        this.#appliedUploadIntentSchema.add(normalizedSql);
+      }
       return { success: true, meta: { changes: 0 } };
     }
     if (sql.includes("/*md-metadata-migration*/")) {
@@ -452,6 +466,7 @@ class FakeD1Database {
 
   async all(sql, values) {
     if (sql.includes("/*md-upload-intent-collect-expired*/")) {
+      this.#assertUploadIntentSchema();
       return { success: true, results: [] };
     }
     if (sql.includes("/*md-metadata-cold-load*/")) {
@@ -668,7 +683,28 @@ class FakeD1Database {
     }
     throw new Error(`unsupported FakeD1 all statement: ${sql}`);
   }
+
+  #assertUploadIntentSchema() {
+    const missing = EXPECTED_UPLOAD_INTENT_SCHEMA.filter(
+      (statement) => !this.#appliedUploadIntentSchema.has(statement),
+    );
+    if (missing.length > 0) {
+      throw new Error("FakeD1 uploadIntents schema is incomplete");
+    }
+  }
 }
+
+test("FakeD1 rejects expired upload-intent collection before its schema is complete", async () => {
+  const database = new FakeD1Database();
+  await database.prepare(SITES_LOCAL_FILE_UPLOAD_INTENT_SCHEMA[0]).run();
+  await assert.rejects(
+    database
+      .prepare("/*md-upload-intent-collect-expired*/ SELECT intent_id FROM md_local_file_upload_intents")
+      .bind(T0, 64)
+      .all(),
+    /FakeD1 uploadIntents schema is incomplete/u,
+  );
+});
 
 test("Sites metadata applies cold schema migrations in one D1 batch", async () => {
   const database = new FakeD1Database();
