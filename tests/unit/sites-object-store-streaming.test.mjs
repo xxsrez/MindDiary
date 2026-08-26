@@ -166,6 +166,47 @@ test("Sites staged generated writer sends a ReadableStream and publishes only on
   );
 });
 
+test("Sites staged writer uses the Cloudflare fixed-length stream for an exact source", async () => {
+  const original = Object.getOwnPropertyDescriptor(globalThis, "FixedLengthStream");
+  const requestedLengths = [];
+  class ProbeFixedLengthStream {
+    constructor(expectedLength) {
+      requestedLengths.push(expectedLength);
+      const transform = new TransformStream();
+      this.readable = transform.readable;
+      this.writable = transform.writable;
+    }
+  }
+  Object.defineProperty(globalThis, "FixedLengthStream", {
+    configurable: true,
+    writable: true,
+    value: ProbeFixedLengthStream,
+  });
+  try {
+    const bucket = new StreamingBucket();
+    const objects = await createSitesObjectStore(bucket);
+    const upload = await objects.beginStagedBundleFileUpload({
+      stagedFileId: "staged_stream_fixed_length",
+      bindingOwnerId: "binding_owner_test",
+      spaceId: "space_stream_test",
+      createdAt: CREATED_AT,
+      maxBytes: 64,
+      expectedSize: PNG.byteLength,
+    });
+    await upload.write(PNG);
+    const sha256 = await objects.calculateSha256(PNG);
+    await upload.complete({ sha256, size: PNG.byteLength });
+    assert.deepEqual(requestedLengths, [PNG.byteLength]);
+    assert.deepEqual(
+      (await objects.getStagedBundleFile("staged_stream_fixed_length")).bytes,
+      PNG,
+    );
+  } finally {
+    if (original === undefined) delete globalThis.FixedLengthStream;
+    else Object.defineProperty(globalThis, "FixedLengthStream", original);
+  }
+});
+
 test("Sites staged generated writer aborts partial streams without publication", async () => {
   const bucket = new StreamingBucket();
   const objects = await createSitesObjectStore(bucket);

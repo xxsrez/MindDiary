@@ -222,6 +222,8 @@ export interface StagedBundleFileUploadRequest {
   readonly createdAt: UtcInstant;
   /** Adapter-enforced upper bound for one stream. */
   readonly maxBytes: number;
+  /** Exact producer length when the authorized source supplies one. */
+  readonly expectedSize?: number;
 }
 
 export interface BundleFileObjectMetadata {

@@ -299,6 +299,27 @@ function bodyStream(object: R2ObjectBodyLike): ReadableStream<Uint8Array> {
   return object.body;
 }
 
+type StagedUploadTransform = Readonly<{
+  readable: ReadableStream<Uint8Array>;
+  writable: WritableStream<Uint8Array>;
+}>;
+
+type FixedLengthStreamConstructor = new (
+  expectedLength: number,
+) => StagedUploadTransform;
+
+function stagedUploadTransform(expectedSize: number | undefined): StagedUploadTransform {
+  const fixedLengthStream = (
+    globalThis as typeof globalThis & {
+      readonly FixedLengthStream?: FixedLengthStreamConstructor;
+    }
+  ).FixedLengthStream;
+  if (expectedSize !== undefined && typeof fixedLengthStream === "function") {
+    return new fixedLengthStream(expectedSize);
+  }
+  return new TransformStream<Uint8Array, Uint8Array>();
+}
+
 async function verifyBodyStream(
   body: ReadableStream<Uint8Array>,
   expectedSize: number,
@@ -809,14 +830,19 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
       typeof request.stagedFileId !== "string" || request.stagedFileId.length === 0 ||
       typeof request.bindingOwnerId !== "string" || request.bindingOwnerId.length === 0 ||
       typeof request.spaceId !== "string" || request.spaceId.length === 0 ||
-      !Number.isSafeInteger(request.maxBytes) || request.maxBytes < 0
+      !Number.isSafeInteger(request.maxBytes) || request.maxBytes < 0 ||
+      (request.expectedSize !== undefined && (
+        !Number.isSafeInteger(request.expectedSize) ||
+        request.expectedSize < 0 ||
+        request.expectedSize > request.maxBytes
+      ))
     ) throw new ObjectStoreFailure("invalid_limit", "staged upload request is invalid");
 
     const key = `${STAGED_BUNDLE_PREFIX}${encodeURIComponent(request.stagedFileId)}`;
     if (await this.#get(key)) {
       throw new ObjectStoreFailure("digest_collision", "staged BundleFile ID collision");
     }
-    const transform = new TransformStream<Uint8Array, Uint8Array>();
+    const transform = stagedUploadTransform(request.expectedSize);
     const writer = transform.writable.getWriter();
     type PutOutcome =
       | Readonly<{ kind: "stored"; object: R2ListedObjectLike }>

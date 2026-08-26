@@ -568,6 +568,39 @@ test("server-generated stream uses shared quarantine and records safe provenance
   );
 });
 
+test("streaming stage forwards an exact authorized source size to object storage", async () => {
+  const env = await harness();
+  const objects = streamingProbeObjectStore();
+  const begin = objects.beginStagedBundleFileUpload;
+  let requestedExpectedSize;
+  objects.beginStagedBundleFileUpload = async (request) => {
+    requestedExpectedSize = request.expectedSize;
+    return begin(request);
+  };
+  const staging = new BundleFileStagingService({
+    authorizer: env.authorizer,
+    metadata: env.metadata,
+    objects,
+    clock: { now: () => LATER },
+    ids: { nextStagedBundleFileId: () => "staged_stream_exact_source_size" },
+  });
+  const result = await staging.stageStream({
+    actor: env.currentActor,
+    spaceId: MINDS.ordinary.spaceId,
+    writeBindingId: WRITE_BINDING_ID,
+    displayFilename: "exact-source.bin",
+    idempotencyKey: "stage-exact-source-size",
+    sourceKind: "local_path",
+    expectedSize: PNG.byteLength,
+    maxBytes: 268_435_456,
+    stream: (async function* () {
+      yield PNG;
+    })(),
+  });
+  assert.equal(result.kind, "staged");
+  assert.equal(requestedExpectedSize, PNG.byteLength);
+});
+
 test("streaming stage accepts exact 256 MiB and rejects byte 268435457 without buffering", async () => {
   const acceptedEnv = await harness();
   const acceptedObjects = streamingProbeObjectStore();

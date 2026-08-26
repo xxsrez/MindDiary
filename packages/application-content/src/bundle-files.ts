@@ -843,6 +843,7 @@ export class BundleFileStagingService {
         spaceId: request.spaceId,
         createdAt,
         maxBytes: request.maxBytes,
+        ...(expectedSize === undefined ? {} : { expectedSize }),
       });
     } catch {
       await this.#cleanupFailedStage(stagedFileId, reservationId, false);
