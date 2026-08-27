@@ -119,3 +119,50 @@ test("heavy navigation pages render their shell before deferred collection reads
   await expect(page.locator("[data-connections-collection]")).toHaveAttribute("aria-busy", "true");
   await expect(page.getByRole("heading", { name: "No active connections" })).toBeVisible();
 });
+
+test("Public Minds stops repeated cursors and deduplicates immutable Mind IDs across routes", async ({
+  page,
+}) => {
+  await page.goto(origin);
+  const registration = page.locator("[data-isolated-account-form]");
+  if (await registration.count() > 0) {
+    await registration.evaluate((form) => form.requestSubmit());
+    await page.waitForURL("**/me");
+  }
+  const repeatedCursor = "mdc1_eyJ2IjoxLCJxIjoicHVibGljX21pbmRzIiwiZyI6OSwibyI6MjR9";
+  let catalogRequests = 0;
+  await page.route("**/api/v1/public-minds*", async (route) => {
+    catalogRequests += 1;
+    const changedRoute = catalogRequests > 1;
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        data: {
+          minds: [{
+            mind_id: "space_browser_repeated",
+            route: changedRoute ? "/browser-public-renamed" : "/browser-public-stable",
+            name: changedRoute ? "Browser Public Renamed" : "Browser Public Stable",
+            description: changedRoute ? "Changed route page." : "Stable first page.",
+            summary: changedRoute ? "Changed route page." : "Stable first page.",
+            visibility: "public",
+            is_personal: false,
+            discovery: "public_catalog",
+          }],
+        },
+        next_cursor: repeatedCursor,
+      }),
+    });
+  });
+
+  await page.goto(`${origin}/public`);
+  await expect(page.getByRole("link", { name: "Browser Public Stable" })).toBeVisible();
+  await page.getByRole("button", { name: "Load more" }).click();
+
+  await expect(page.locator('[data-public-mind-card="space_browser_repeated"]')).toHaveCount(1);
+  await expect(page.getByRole("link", { name: "Browser Public Stable" })).toHaveCount(1);
+  await expect(page.getByRole("link", { name: "Browser Public Renamed" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Load more" })).toHaveCount(0);
+  expect(catalogRequests).toBe(2);
+});

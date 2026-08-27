@@ -115,28 +115,43 @@ const publicCollection = (kind, minds = [], nextCursor = null) => {
 let publicPending = false;
 let publicMinds = [];
 let publicNextCursor = null;
+const publicSeenCursors = new Set();
 const loadPublicMinds = async (append = false) => {
   const current = visibilityShell?.querySelector("[data-public-catalog-collection]");
   if (!current || publicPending) return;
+  if (!append) {
+    publicMinds = [];
+    publicNextCursor = null;
+    publicSeenCursors.clear();
+  }
+  const requestCursor = append ? publicNextCursor : null;
+  if (append && (requestCursor === null || publicSeenCursors.has(requestCursor))) {
+    publicNextCursor = null;
+    current.replaceWith(publicCollection(publicMinds.length === 0 ? "empty" : "ready", publicMinds));
+    return;
+  }
   publicPending = true;
   const button = current.querySelector("[data-public-catalog-more]");
   if (button) button.disabled = true;
   try {
-    const page = await visibilityRequest(append ? publicNextCursor : null);
+    const page = await visibilityRequest(requestCursor);
+    if (requestCursor !== null) publicSeenCursors.add(requestCursor);
     const pageMinds = page.minds.map(safePublicMind).filter(Boolean);
     const candidates = append ? [...publicMinds, ...pageMinds] : pageMinds;
     const seen = new Set();
     publicMinds = candidates.filter((mind) => {
-      const identity = `${mind.id}\u0000${mind.route}`;
-      if (seen.has(identity)) return false;
-      seen.add(identity);
+      if (seen.has(mind.id)) return false;
+      seen.add(mind.id);
       return true;
     });
-    publicNextCursor = page.nextCursor;
+    publicNextCursor = page.nextCursor !== null && !publicSeenCursors.has(page.nextCursor)
+      ? page.nextCursor
+      : null;
     current.replaceWith(publicCollection(publicMinds.length === 0 ? "empty" : "ready", publicMinds, publicNextCursor));
   } catch {
     publicMinds = [];
     publicNextCursor = null;
+    publicSeenCursors.clear();
     current.replaceWith(publicCollection("error"));
   } finally {
     publicPending = false;
