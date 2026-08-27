@@ -43,8 +43,10 @@ operation disposition и migration принадлежат MD-337/MD-339.
 11. [Compact admin IA и design contract](specs/compact-admin-information-architecture.md)
    — измеримые desktop/mobile layouts, density/tokens, route/session states,
    privacy/destructive disclosures и machine-check mapping для MD-347.
-12. [Mind bindings](specs/mind-bindings.md) — historical Release 0.1/0.2
-   binding contract, сохранённый до отдельного MD-339 replacement/migration.
+12. [Credential write target Release 0.3](specs/credential-write-target.md) —
+   целевой Sites-only singleton write target, ACL-derived reads, lifecycle,
+   migration и compatibility contract; historical Release 0.1/0.2 bindings
+   сохранены в отдельной [спецификации](specs/mind-bindings.md).
 13. [Границы реализации](specs/implementation-boundaries.md) — trusted
    `ActorContext`, application ports/façades, transaction boundaries и
    enforceable dependency rules для будущего runtime.
@@ -221,6 +223,10 @@ operation disposition и migration принадлежат MD-337/MD-339.
   — closed MIME admission заменён arbitrary opaque storage, manifest v4,
   header-safe `application/octet-stream` fallback, exact 256 MiB streaming и
   safe-raster-only inline policy без изменения OKF 0.2.
+- [ADR-0022: Sites-controlled credential write target](decisions/0022-site-controlled-credential-write-target.md)
+  — read bindings заменены current ACL/visibility, а per-credential singleton
+  write target управляется только через Sites control plane с CAS, active
+  credential lifecycle и fail-closed migration.
 
 ## Исследования
 
