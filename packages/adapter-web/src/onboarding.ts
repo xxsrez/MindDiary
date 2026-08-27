@@ -178,6 +178,7 @@ function renderRegistration(
           <p class="md-eyebrow">Start separately</p>
           <h2 id="isolated-account-title">Create a new isolated account</h2>
           <p>This creates one new account and one private My Mind. It does not inherit, relink, or merge earlier access.</p>
+          <p>Mind Diary does not create or store a separate password. You continue to sign in through ChatGPT.</p>
           <form data-isolated-account-form data-bootstrap-key="${escapeUntrustedText(key ?? "")}">
             <div class="md-field">
               <label for="onboarding-display-name">Display name</label>
@@ -305,6 +306,17 @@ function renderAuthenticated(
           </form>
         </section>
       </div>
+      <section class="md-setup-card md-setup-card--single" aria-labelledby="optional-codex-setup-title" data-optional-codex-setup>
+        <div>
+          <p class="md-eyebrow">Optional Codex connection</p>
+          <h2 id="optional-codex-setup-title">Use My Mind from Codex</h2>
+          <p>Your account and My Mind are ready now; no setup wizard is required to reopen them. Install and connect Mind Diary only when you want Codex to work with a selected Mind.</p>
+        </div>
+        <nav class="md-route-links" aria-label="Optional Codex setup actions">
+          <a class="md-button md-button--primary" href="/help/codex" data-marketplace-install-guide>Install and connect Mind Diary</a>
+          <a class="md-button md-button--secondary" href="/settings/connections">View Connections</a>
+        </nav>
+      </section>
       ${renderMarkdownImportPanel({
         mindRef: "me",
         headRevisionId: model.personalMind.headRevisionId,

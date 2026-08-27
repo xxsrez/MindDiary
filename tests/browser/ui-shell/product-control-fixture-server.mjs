@@ -28,7 +28,11 @@ const bootstrapActor = Object.freeze({
   occurredAtUtc: "2026-08-08T00:00:00.000Z",
 });
 
-let registered = false;
+const configuredIdentityState = process.env.MIND_DIARY_UI_IDENTITY_STATE ?? "registration_required";
+if (!["signed_out", "registration_required", "registered"].includes(configuredIdentityState)) {
+  throw new Error("MIND_DIARY_UI_IDENTITY_STATE is invalid");
+}
+let identityState = configuredIdentityState;
 let displayName = "Browser Fixture";
 let profileVersion = 1;
 let issued = false;
@@ -47,9 +51,11 @@ const session = () => ({
 
 const handler = createProductWebHttpHandler({
   applicationOrigin: handlerOrigin,
-  resolveIdentity: () => registered
-    ? { kind: "authenticated", actor: registeredActor, session: session() }
-    : { kind: "registration_required", actor: bootstrapActor },
+  resolveIdentity: () => identityState === "signed_out"
+    ? { kind: "denied" }
+    : identityState === "registered"
+      ? { kind: "authenticated", actor: registeredActor, session: session() }
+      : { kind: "registration_required", actor: bootstrapActor },
   csrf: {
     issue: () => csrfToken,
     verify: (_actor, candidate) => candidate === csrfToken,
@@ -57,7 +63,7 @@ const handler = createProductWebHttpHandler({
   control: {
     execute(request) {
       if (request.operation === "bootstrap_account") {
-        registered = true;
+        identityState = "registered";
         displayName = String(request.input.displayName ?? "Browser Fixture");
         profileVersion = 1;
         return session();
@@ -97,7 +103,7 @@ const handler = createProductWebHttpHandler({
             code: "deletion_impact_changed",
           });
         }
-        registered = false;
+        identityState = "registration_required";
         issued = false;
         return {
           replayed: false,
@@ -192,9 +198,48 @@ async function sendNodeResponse(source, target) {
 
 const server = createServer(async (request, response) => {
   try {
-    if (request.url === "/_fixture/health") {
+    const fixtureUrl = new URL(request.url ?? "/", browserOrigin);
+    if (fixtureUrl.pathname === "/_fixture/health") {
       response.writeHead(200, { "content-type": "application/json; charset=utf-8" });
       response.end('{"ok":true}');
+      return;
+    }
+    if (fixtureUrl.pathname === "/_fixture/reset") {
+      const next = fixtureUrl.searchParams.get("state") ?? configuredIdentityState;
+      if (!["signed_out", "registration_required", "registered"].includes(next)) {
+        response.writeHead(400, { "content-type": "application/json; charset=utf-8" });
+        response.end('{"ok":false}');
+        return;
+      }
+      identityState = next;
+      displayName = "Browser Fixture";
+      profileVersion = 1;
+      issued = false;
+      response.writeHead(204, { "cache-control": "no-store" });
+      response.end();
+      return;
+    }
+    if (fixtureUrl.pathname === "/_fixture/bump-profile") {
+      if (identityState !== "registered") {
+        response.writeHead(409, { "content-type": "application/json; charset=utf-8" });
+        response.end('{"ok":false}');
+        return;
+      }
+      profileVersion += 1;
+      response.writeHead(204, { "cache-control": "no-store" });
+      response.end();
+      return;
+    }
+    if (fixtureUrl.pathname === "/signin-with-chatgpt") {
+      identityState = "registration_required";
+      response.writeHead(303, { location: "/", "cache-control": "no-store" });
+      response.end();
+      return;
+    }
+    if (fixtureUrl.pathname === "/signout-with-chatgpt") {
+      identityState = "signed_out";
+      response.writeHead(303, { location: "/", "cache-control": "no-store" });
+      response.end();
       return;
     }
     const handled = await handler(await nodeRequest(request));

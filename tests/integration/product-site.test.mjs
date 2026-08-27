@@ -662,6 +662,11 @@ test("account settings wires profile CAS, fresh deletion impact, same-key retry 
   const html = await page.text();
   assert.match(html, /<title>Account and profile — Mind Diary UAT<\/title>/);
   assert.match(html, /data-profile-form data-profile-version="3"/);
+  assert.match(html, /data-current-account-identity/);
+  assert.match(html, /ChatGPT through OpenAI Sites/);
+  assert.match(html, /does not create or store a separate password/);
+  assert.match(html, /href="\/help\/codex">Install and connect Mind Diary<\/a>/);
+  assert.match(html, /href="\/settings\/connections">View Connections<\/a>/);
   assert.match(html, /data-identity-recovery-handoff/);
   assert.match(html, /same trusted channel that admitted you/);
   assert.match(html, /data-account-deletion-panel/);
@@ -688,6 +693,9 @@ test("account settings wires profile CAS, fresh deletion impact, same-key retry 
   assert.match(assetBody, /DELETE","\/api\/v1\/account"/);
   assert.match(assetBody, /deletion_impact_changed/);
   assert.match(assetBody, /Retry sends the exact same deletion command/);
+  assert.match(assetBody, /account_bootstrap_conflict/);
+  assert.match(assetBody, /data-profile-conflict|profileConflict/);
+  assert.match(assetBody, /data-ia-impact|iaImpact/);
   assert.match(assetBody, /location\.replace\("\/"\)/);
 
   const renamed = await handler(new Request(`${origin}/api/v1/account`, {

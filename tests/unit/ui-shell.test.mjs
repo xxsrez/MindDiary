@@ -376,6 +376,8 @@ test("unknown identity offers explicit isolated creation and categorical manual 
   assert.match(html, /data-session-state="registration_required"/);
   assert.match(html, /Create a new isolated account/);
   assert.match(html, /does not inherit, relink, or merge earlier access/i);
+  assert.match(html, /does not create or store a separate password/i);
+  assert.doesNotMatch(html, /type="password"/i);
   assert.match(html, /data-bootstrap-key="bootstrap-attempt-0001"/);
   assert.match(html, /data-manual-recovery/);
   assert.match(html, /Nothing is relinked, merged, or transferred automatically/);
@@ -450,6 +452,10 @@ test("authenticated My Mind card exposes only /me and Personal-safe management",
   assert.match(html, /data-profile-version="3"/);
   assert.match(html, /does not edit Memories or create a content revision/i);
   assert.match(html, /Create your first useful Memory/u);
+  assert.match(html, /data-optional-codex-setup/u);
+  assert.match(html, /no setup wizard is required/u);
+  assert.match(html, /data-marketplace-install-guide[^>]+href="\/help\/codex"|href="\/help\/codex"[^>]+data-marketplace-install-guide/u);
+  assert.match(html, /href="\/settings\/connections">View Connections<\/a>/u);
   assert.match(html, /href="\/help\/codex">Open the Codex setup guide<\/a>/u);
   assert.match(html, /class="md-setup-card md-setup-card--single"/u);
   assert.match(html, /data-copy-code="mind-diary-onboarding-starter-playbook"/u);

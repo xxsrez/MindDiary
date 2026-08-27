@@ -352,6 +352,33 @@ copy используют `min-width: 0` и `overflow-wrap: anywhere`.
 | Advanced MCP | Protocol scopes/endpoints/token lifecycle только внутри `/settings/developer/mcp`. | Protocol details не попадают в ordinary shell или Connections list. |
 | Retryable/stale state | В affected collection/panel; stale success и mutation actions убираются до read-back. | UI сначала перечитывает authoritative state и не повторяет guessed mutation. |
 
+## Account bootstrap и account lifecycle shell
+
+MD-365 применяет общий compact shell к полному account lifecycle, не вводя
+второй onboarding wizard или отдельную password identity:
+
+| Состояние | Видимая поверхность | Разрешённое действие | Fail-closed граница |
+|---|---|---|---|
+| signed out | Один route-agnostic `AuthShell` с Mind Diary/UAT и exact `/signin-with-chatgpt`. | Передать управление platform sign-in. | Нет CSRF, application navigation, account/Mind/target metadata или отражения исходного route. |
+| authenticated, binding unknown | Registration shell с suggested display name, если он дан trusted platform context. | Exact `create_isolated_account` с одним idempotency key либо отдельный manual recovery handoff. | Mind Diary не создаёт password, не показывает normalized email и не relink/merge/transfer-ит прежний account автоматически. |
+| bootstrap pending/error | Bounded progress либо causal error без partial account projection. | Только stable retry того же attempt, когда он безопасен. | Один submit in flight; conflict требует authoritative reload, а не нового guessed attempt. |
+| registered `/me` | Обычный `AppShell`, Personal Mind и профиль. | Сразу открыть `/me`; по желанию перейти в стабильный Codex install/connect guide или Connections. | Setup guide не является обязательным wizard и не блокирует повторное открытие account. |
+| registered `/settings/account` | Safe current sign-in label, profile CAS, отдельный recovery handoff и danger zone. | Rename profile, открыть Codex/Connections, загрузить fresh deletion impact. | UI не показывает email/raw IDs; identity recovery не смешивается с routine edit. |
+| deletion ready | Disclosure → exact expiring cascade → exact confirmation → destructive action. | Удалить account только по fresh impact и `delete-account`. | Changed/expired impact инвалидирует confirmation; ambiguous result повторяет exact idempotent command; private content не входит в preview. |
+
+`Current sign-in` означает только безопасную категорию `ChatGPT through OpenAI
+Sites`; она не делает email authorization identity и не требует возвращать email
+в session projection. На `/me` optional install/connect action ведёт в принятый
+`/help/codex`, где stable Marketplace source и connection success signal уже
+зафиксированы. Отсутствие установки не меняет account readiness.
+
+Объективная приёмка этого slice объединяет существующие application tests
+атомарности/idempotency и Personal Mind invariants с browser path
+`signed out → registration → bootstrap → reopen/back → account settings → exact
+deletion → registration`. Browser path дополнительно проверяет mobile keyboard
+navigation, конфликт без stale success и отсутствие email, raw identifiers и
+private fixture content в DOM.
+
 ## No-data-leak contract
 
 - Application rail содержит только статические labels и routes. Он не делает

@@ -128,6 +128,8 @@ export function errorResponse(
 function safeErrorMessage(code: string): string {
   if (code === "authentication_required") return "Authentication is required.";
   if (code === "registration_required") return "Account registration is required.";
+  if (code === "account_bootstrap_conflict") return "Account setup changed in another request. Reload the current account state before trying again.";
+  if (code === "profile_conflict") return "The profile changed in another session. Reload the current account state before saving again.";
   if (code === "invalid_request") return "The request is invalid.";
   if (code === "not_found") return "The resource was not found.";
   if (code === "connection_not_found") return "The connection was not found.";

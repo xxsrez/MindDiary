@@ -107,6 +107,11 @@ test("preview renders the exact safe cascade and no private content", () => {
 
   assert.match(html, /Exact, expiring preview/);
   assert.match(html, /<h1>Account and profile<\/h1>/);
+  assert.match(html, /data-current-account-identity/);
+  assert.match(html, /ChatGPT through OpenAI Sites/);
+  assert.match(html, /does not create or store a separate password/);
+  assert.match(html, /href="\/help\/codex">Install and connect Mind Diary<\/a>/);
+  assert.match(html, /href="\/settings\/connections">View Connections<\/a>/);
   assert.match(html, /data-profile-form data-profile-version="3"/);
   assert.match(html, /Renaming it does not change the Mind address, identity, history, or content HEAD/);
   assert.match(html, /data-identity-recovery-handoff/);
@@ -115,6 +120,10 @@ test("preview renders the exact safe cascade and no private content", () => {
   assert.match(html, /Never send an MCP token, private Mind content, query, export URL, or download URL/);
   assert.match(html, /datetime="2026-08-07T14:15:00\.000Z"/);
   assert.match(html, /data-account-deletion-impact/);
+  assert.match(html, /data-ia-disclosure="account-delete"/);
+  assert.match(html, /data-ia-impact="account-delete"/);
+  assert.match(html, /data-ia-confirmation="account-delete"/);
+  assert.match(html, /data-ia-destructive-action="account-delete"/);
   assert.match(html, /data-idempotency-key="account-delete-attempt-0001"/);
   assert.match(html, /<strong>Andrey<\/strong> <code>\/me<\/code>/);
   assert.match(html, /Owned Minds \(2\)/);
@@ -129,7 +138,7 @@ test("preview renders the exact safe cascade and no private content", () => {
   assert.match(html, /retains no forensic deletion receipt/i);
   assert.match(html, /Type <code>delete-account<\/code> exactly/);
   assert.match(html, /pattern="delete-account"/);
-  assert.match(html, /data-confirm-account-deletion disabled/);
+  assert.match(html, /data-confirm-account-deletion[^>]* disabled/);
   assert.doesNotMatch(html, /PRIVATE CONCEPT BODY|private@example\.com/);
   assert.doesNotMatch(html, /soft delete (?:is|will be) available|recover this account|download (?:a )?deletion receipt/i);
 });

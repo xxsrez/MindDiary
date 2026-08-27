@@ -311,9 +311,9 @@ function renderImpactPreview(
   const action = retrying
     ? `<div>
         <p class="md-caveat" role="alert">${operationStatus}</p>
-        <button class="md-button md-button--danger" type="button" data-retry-account-deletion>Retry exact deletion</button>
+        <button class="md-button md-button--danger" type="button" data-retry-account-deletion data-ia-destructive-action="account-delete">Retry exact deletion</button>
       </div>`
-    : `<form class="md-token-form" data-account-deletion-form${deleting ? ' aria-busy="true"' : ""}>
+    : `<form class="md-token-form" data-account-deletion-form data-ia-confirmation="account-delete"${deleting ? ' aria-busy="true"' : ""}>
         <div class="md-field">
           <label for="account-deletion-confirmation">Type <code>${ACCOUNT_DELETION_CONFIRMATION}</code> exactly</label>
           <input id="account-deletion-confirmation" name="confirmation" type="text" required pattern="delete-account" autocomplete="off" autocapitalize="none" spellcheck="false" aria-describedby="account-deletion-confirmation-help"${deleting ? ` value="${ACCOUNT_DELETION_CONFIRMATION}" disabled` : ""}>
@@ -321,9 +321,9 @@ function renderImpactPreview(
         </div>
         ${feedback}
         <p class="md-form__status" role="status" aria-live="polite" data-account-deletion-status>${deleting ? operationStatus : ""}</p>
-        <button class="md-button md-button--danger" type="submit" data-confirm-account-deletion disabled>${deleting ? "Deleting account…" : "Delete account permanently"}</button>
+        <button class="md-button md-button--danger" type="submit" data-confirm-account-deletion data-ia-destructive-action="account-delete" disabled>${deleting ? "Deleting account…" : "Delete account permanently"}</button>
       </form>`;
-  return `<div class="md-token-layout" data-account-deletion-impact data-impact-id="${escapeUntrustedText(impact.impactId)}" data-impact-expires-at="${escapeUntrustedText(impact.expiresAt)}" data-idempotency-key="${escapeUntrustedText(state.idempotencyKey)}">
+  return `<div class="md-token-layout" data-account-deletion-impact data-ia-impact="account-delete" data-impact-id="${escapeUntrustedText(impact.impactId)}" data-impact-expires-at="${escapeUntrustedText(impact.expiresAt)}" data-idempotency-key="${escapeUntrustedText(state.idempotencyKey)}">
     <section class="md-setup-card" aria-labelledby="cascade-heading">
       <div>
         <p class="md-eyebrow">Exact, expiring preview</p>
@@ -386,6 +386,18 @@ function renderAccountProfile(
       <button class="md-button md-button--primary" type="submit">Save profile name</button>
       <p class="md-form__status" role="status" aria-live="polite" data-profile-status></p>
     </form>
+  </section>`;
+}
+
+function renderCurrentIdentity(): string {
+  return `<section class="md-profile-card" aria-labelledby="current-sign-in-title" data-current-account-identity>
+    <p class="md-eyebrow">Current sign-in</p>
+    <h2 id="current-sign-in-title">ChatGPT through OpenAI Sites</h2>
+    <p>Mind Diary does not create or store a separate password. After sign-in, access is resolved through the internal account binding; an email address is not shown or used as the visible account identifier here.</p>
+    <nav class="md-route-links" aria-label="Account connection actions">
+      <a class="md-button md-button--secondary" href="/help/codex">Install and connect Mind Diary</a>
+      <a class="md-button md-button--secondary" href="/settings/connections">View Connections</a>
+    </nav>
   </section>`;
 }
 
@@ -477,6 +489,7 @@ export function renderAccountDeletion(
         </div>
       </div>
       <div class="md-my-mind-layout" data-account-lifecycle>
+        ${renderCurrentIdentity()}
         ${renderAccountProfile(model)}
         ${renderRecoveryHandoff()}
       </div>
@@ -486,6 +499,7 @@ export function renderAccountDeletion(
             <p class="md-eyebrow">Danger zone</p>
             <h2 id="delete-account-title">Delete account</h2>
             <p>Review the server’s current cascade before authorizing this irreversible action.</p>
+            <p class="md-caveat" data-ia-disclosure="account-delete"><strong>Immediate and irreversible:</strong> the next panel must show a fresh exact cascade before the deletion action becomes available.</p>
           </div>
         </div>
         <div data-account-deletion-panel>${renderAccountDeletionPanel(model.state)}</div>
