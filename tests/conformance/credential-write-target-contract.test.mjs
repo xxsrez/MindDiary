@@ -55,7 +55,7 @@ test("credential write target fixture is a closed Release 0.3 contract", () => {
     "acceptanceIds",
   ], "top-level contract drifted");
   unique(fixture.acceptanceIds, "acceptance IDs must be unique");
-  assert.equal(fixture.acceptanceIds.length, 10);
+  assert.equal(fixture.acceptanceIds.length, 11);
 });
 
 test("reads use explicit selectors and current ACL or visibility without read binding", () => {
@@ -128,11 +128,12 @@ test("target transitions are versioned, idempotent, and never fall back", () => 
   assert.equal(transitions.revoke_or_expire.fallback, "none");
 });
 
-test("only trusted Site mutates target while MCP is inspect-only", () => {
+test("only trusted Site inspects or mutates target while MCP has no target tool", () => {
   assert.equal(fixture.siteControl.mutationSurface, "trusted_sites_web_only");
   assert.equal(fixture.siteControl.oauthLocation, "connection_detail");
   assert.equal(fixture.siteControl.personalTokenLocation, "advanced_mcp");
-  assert.deepEqual(fixture.siteControl.actions, ["select", "switch", "clear"]);
+  assert.deepEqual(fixture.siteControl.actions, ["select_write", "clear_write"]);
+  assert.equal(fixture.siteControl.switchSemantics, "select_write_when_target_exists");
   for (const required of [
     "actor_owned_presentation_ref",
     "expected_target_version",
@@ -142,8 +143,20 @@ test("only trusted Site mutates target while MCP is inspect-only", () => {
     "server_read_back",
   ]) assert.ok(fixture.siteControl.requires.includes(required), required);
   assert.equal(fixture.siteControl.readableProjectionPersistedAsBinding, false);
-  assert.equal(fixture.mcp.inspection, "privacy_safe_current_credential_only");
+  assert.equal(fixture.mcp.targetInspection, false);
+  assert.equal(fixture.mcp.targetInspectionSurface, "trusted_sites_web_only");
   assert.equal(fixture.mcp.targetMutation, false);
+  assert.deepEqual(fixture.mcp.removedTargetTools, [
+    "get_mind_bindings",
+    "set_read_mind_binding",
+    "set_write_mind_binding",
+  ]);
+  assert.equal(fixture.mcp.capabilityTargetField, "requires_writable_target");
+  assert.deepEqual(fixture.mcp.canonicalTargetErrors, [
+    "writable_target_required",
+    "writable_target_mismatch",
+    "writable_target_unavailable",
+  ]);
   assert.equal(fixture.mcp.protocolProfilesShareSemantics, true);
   assert.equal(fixture.mcp.operationNamesOwnedBy, "MD-337");
 });
@@ -151,18 +164,23 @@ test("only trusted Site mutates target while MCP is inspect-only", () => {
 test("commit is fenced by exact generation, Mind, scope, role, HEAD, and idempotency", () => {
   assert.deepEqual(fixture.commit.requiredInputFields, [
     "mind",
-    "write_target_generation",
     "expected_revision",
     "idempotency_key",
     "operations",
   ]);
+  for (const field of [
+    "write_target_generation",
+    "write_binding_id",
+    "expected_binding_version",
+  ]) assert.ok(fixture.commit.forbiddenAuthorityInputFields.includes(field), field);
   for (const check of [
     "active_credential",
     "exact_immutable_owner",
     "content_write_scope",
-    "active_target_generation",
+    "server_pins_active_target_generation",
     "explicit_mind_matches_generation",
     "current_writer_role",
+    "transaction_rechecks_same_generation",
     "staged_refs_same_owner_generation",
     "expected_head",
     "idempotency",
@@ -185,7 +203,8 @@ test("every denied operation case has zero observable mutation side effects", ()
     "stale_generation",
     "wrong_mind",
     "revoked_or_expired_owner",
-    "scope_or_role_loss",
+    "scope_loss",
+    "role_loss",
     "visibility_removes_read_grant",
     "corrupt_or_partial_state",
     "stale_head",
@@ -233,6 +252,11 @@ test("migration is explicit, same-owner only, and fail closed", () => {
   assert.equal(migration.personalToken.inPlaceWriteUpgrade, false);
   assert.equal(migration.personalToken.newOwner, true);
   assert.equal(migration.personalToken.newTarget, "empty");
+  assert.equal(migration.personalToken.legacyWriteOutcome, "writable_target_required");
+  assert.equal(
+    migration.personalToken.legacyWriteRemediationState,
+    "pending_upgrade_reissue_required",
+  );
   assert.equal(migration.reconnect.newOwner, true);
   assert.equal(migration.reconnect.newTarget, "empty");
   assert.equal(migration.reconnect.targetCopyAllowed, false);
@@ -260,10 +284,16 @@ test("ADR preserves historical evidence while superseding only Release 0.3 acces
   assert.match(historicalDecision, /частично superseded для Release 0\.3/u);
   assert.match(historicalDecision, /Сохраняются historical implementation и\s+evidence/u);
   assert.match(specification, /Runtime, persistence, wire schemas,[\s\S]*ещё не реализованы/u);
-  assert.match(specification, /MCP inspection не принимает action/u);
+  assert.match(specification, /Content MCP не публикует target-management или отдельный target-inspection/u);
   assert.match(specification, /Same-owner OAuth preservation/u);
   assert.equal(fixture.legacyCompatibility.historicalContractRetained, true);
   assert.equal(fixture.legacyCompatibility.historicalEvidenceReclassifiedAsTarget, false);
   assert.equal(fixture.legacyCompatibility.silentOldIdTranslation, false);
   assert.equal(fixture.legacyCompatibility.silentPersonalFallback, false);
+  for (const retired of [
+    "write_binding_required",
+    "write_binding_stale",
+    "binding_state_unavailable",
+    "write_target_upgrade_required",
+  ]) assert.ok(fixture.legacyCompatibility.retiredTargetErrorAliases.includes(retired), retired);
 });

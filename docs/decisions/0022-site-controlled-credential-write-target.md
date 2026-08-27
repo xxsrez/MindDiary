@@ -43,18 +43,19 @@ target через reconnect/reissue и не выдаёт historical schema за 
    `0..1` active writable target. Rotating access/refresh tokens не меняют owner;
    reconnect и reissue создают новый owner с пустым target.
 3. Select, switch и clear доступны только trusted Sites Web: ordinary
-   Connection detail для OAuth и Advanced MCP для personal token. MCP может
-   только inspect-ить privacy-safe current target exact credential и не имеет
-   target mutation. Corpus, prompt, model memory и read result target не
-   выбирают.
+   Connection detail для OAuth и Advanced MCP для personal token. Там же живёт
+   privacy-safe target inspect/read-back. Content MCP не имеет отдельного
+   target inspection или mutation tool; corpus, prompt, model memory и read
+   result target не выбирают.
 4. Каждый material select/switch/clear увеличивает `target_version` и создаёт
    либо инвалидирует never-reused `target_generation`. Same-target select —
    idempotent no-op. Browser command использует actor-owned presentation ref,
    expected version, idempotency и server read-back; raw owner/credential/
    `space_id` не являются request authority.
-5. Content commit передаёт explicit Mind, current opaque target generation,
-   expected HEAD и idempotency key. Authoritative transaction требует того же
-   owner, exact generation/Mind, `content:write`, current Editor/Admin/Owner,
+5. Content commit передаёт explicit Mind, expected HEAD и idempotency key без
+   `write_binding_id` или replacement generation field. Server разрешает и
+   pin-ит current owner/target generation, а authoritative transaction требует
+   тот же exact generation/Mind, `content:write`, current Editor/Admin/Owner,
    current target state и HEAD CAS. Любой stale, revoked, wrong-Mind,
    role-loss или unavailable-state case завершается без revision, HEAD, audit,
    index, staged-consumption или fallback side effect.
@@ -75,8 +76,11 @@ target через reconnect/reissue и не выдаёт historical schema за 
 Полная record, lifecycle, migration, privacy, error и acceptance semantics
 зафиксированы в
 [credential writable-target specification](../specs/credential-write-target.md).
-Exact keep/move/retire operation names и route/tool aliases принадлежат MD-337;
-они не могут ослабить это решение.
+Exact keep/move/retire operation names, wire fields и canonical target errors
+принадлежат MD-337; они не могут ослабить это решение. MD-339 использует
+`expected_target_version`, `requires_writable_target`,
+`writable_target_required`, `writable_target_mismatch` и
+`writable_target_unavailable` без собственных конкурирующих aliases.
 
 ## Последствия
 

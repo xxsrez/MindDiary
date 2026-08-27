@@ -4,7 +4,8 @@
 access/binding replacement для Release 0.3. Runtime, persistence, wire schemas,
 migration job, UI и UAT evidence ещё не реализованы и не выводятся из этого
 контракта. Exact disposition historical operation names/routes принадлежит
-MD-337.
+MD-337; его wire fields и target error taxonomy являются authoritative для
+этой specification.
 
 Решение принято в
 [ADR-0022](../decisions/0022-site-controlled-credential-write-target.md).
@@ -116,13 +117,14 @@ stale denial; exact retention задаётся implementation policy без по
 | Mind deletion | Generation unusable и затем reconciled/tombstoned; no replacement target. |
 | Corrupt/unavailable state | Inspect/mutation/commit fail closed без guessed target. |
 
-Каждая Site mutation требует `expected_target_version` и idempotency key.
+Каждая Site mutation требует canonical `expected_target_version` и idempotency key.
 Transaction разрешает exact owner из trusted presentation ref, сверяет
 version, reauthorizes target, создаёт/инвалидирует generation, повышает version
 ровно один раз и сохраняет canonical result + request hash. Idempotency
 namespace — `binding_owner_id + writable-target-operation + key`. Exact replay
 возвращает прежний result; changed payload — `idempotency_conflict`; stale CAS
-— `write_target_version_conflict` без target metadata leakage.
+возвращает conflict без target metadata leakage. Exact route-level mapping
+принадлежит MD-337 и не вводит отдельный MD-339 machine code.
 
 ## Sites control plane
 
@@ -146,34 +148,23 @@ persisted read bindings. Такой список — bounded snapshot current AC
 visibility; он не является prerequisite content read и не переносится в MCP
 как authority.
 
-## MCP inspection и content commit
+## MCP и content commit
 
-Content MCP имеет только privacy-safe inspection exact current credential:
-
-```json
-{
-  "access_contract": "credential-write-target/v1",
-  "target_version": 8,
-  "writable_target": {
-    "target_generation": "wtgen_opaque",
-    "state": "active",
-    "mind": { "route": "/research-notes", "name": "Research Notes" }
-  }
-}
-```
-
-`writable_target` может быть `null`. После access loss `mind` отсутствует и
-state может быть только `unavailable`; owner/principal/space/internal
-credential IDs не возвращаются. MCP inspection не принимает action,
-`expected_target_version` или idempotency key и не изменяет state. Exact
-query/tool name выберет MD-337.
+Content MCP не публикует target-management или отдельный target-inspection
+tool: MD-337 удаляет historical `get_mind_bindings`,
+`set_read_mind_binding` и `set_write_mind_binding` из обоих catalogs. Current
+target inspect/read-back живёт на actor-owned Site Connection/Advanced MCP
+projection. Content tools только предъявляют explicit Mind и получают
+canonical `writable_target_required | writable_target_mismatch |
+writable_target_unavailable` без private target metadata. Capability report
+использует canonical boolean `requires_writable_target`, не historical
+`requires_write_binding`.
 
 Целевая content commit shape содержит минимум:
 
 ```json
 {
   "mind": "research-notes",
-  "write_target_generation": "wtgen_opaque",
   "expected_revision": "rev_current",
   "idempotency_key": "01J...",
   "operations": []
@@ -181,14 +172,17 @@ query/tool name выберет MD-337.
 ```
 
 `mind` остаётся explicit cross-check, но не authority. Client не передаёт
-`binding_owner_id`, target version, role или scope. Authoritative transaction:
+`binding_owner_id`, target generation/version, `write_binding_id`, role или
+scope. Authoritative transaction:
 
 1. аутентифицирует current credential и получает exact immutable owner;
 2. требует `content:write`;
-3. читает current active target state и exact generation;
+3. читает current active target state и pin-ит exact generation внутри trusted
+   application context;
 4. разрешает `mind` и требует совпадение `space_id`;
 5. проверяет current active role `editor | admin | owner`;
-6. проверяет staged refs/automatic policy against same owner + generation;
+6. внутри transaction повторно требует тот же owner + generation и проверяет
+   staged refs/automatic policy against them;
 7. проверяет `expected_revision`, validation, quotas и idempotency;
 8. одной transaction создаёт revision, продвигает HEAD, consumes exact staged
    refs и пишет audit/outbox либо не меняет ничего.
@@ -200,11 +194,11 @@ previous/current/Personal/«единственный доступный» Mind. 
 создаёт reachable object, revision, HEAD, audit/outbox/index effect и не
 consumes staged ref.
 
-Historical `write_binding_id` и `expected_binding_version` не принимаются как
-v1 target generation/version. Protocol compatibility profiles могут иметь
-разные envelopes, но вызывают одну semantics. MD-337 может сохранить aliases
-только с explicit v1 schema; silent translation old ID или target mutation
-через MCP запрещены.
+Historical `write_binding_id` и `expected_binding_version` удалены из target
+content schemas, а replacement generation field не добавляется. Protocol
+compatibility profiles могут иметь разные envelopes, но вызывают одну
+semantics. MD-337 не сохраняет old MCP aliases: exact calls fail explicitly,
+silent translation old ID или target mutation через MCP запрещены.
 
 ## Capture, staging и in-flight work
 
@@ -232,8 +226,9 @@ schema/application/client evidence.
 ### Общие правила
 
 1. Каждый legacy owner сначала становится `pending_upgrade`; content read
-   использует новый ACL/visibility contract, но write возвращает
-   `write_target_upgrade_required`.
+   использует новый ACL/visibility contract, но write возвращает canonical
+   `writable_target_required` с безопасной Site-owned remediation state. Новый
+   product error для upgrade не вводится.
 2. Legacy `0..N` read records не становятся v1 authority, не ограничивают read
    и после safety window могут быть удалены/tombstoned.
 3. Old write binding ID, generation, target version и staged ref не принимаются
@@ -268,7 +263,7 @@ target copy запрещён.
 Legacy personal token не получает v1 write authority in place. Advanced MCP
 показывает `reissue required`; новый token получает new immutable owner и empty
 target. Старый token до revoke/expiry может читать по current scope/ACL, но его
-commit fail closed с `write_target_upgrade_required`. Secret/token record,
+commit fail closed с `writable_target_required`. Secret/token record,
 target, capture consent и pending payload не копируются.
 
 ### Automatic capture migration
@@ -283,17 +278,14 @@ write record, target остаётся private и current scope/role действ
 
 | Code | Meaning |
 |---|---|
-| `write_target_required` | Active v1 target отсутствует. |
-| `write_target_upgrade_required` | Legacy owner ещё не re-consented/reissued/upgraded. |
-| `write_target_stale` | Generation больше не active exact owner. |
-| `write_target_mismatch` | Explicit Mind не совпадает с current generation; target metadata не раскрывается. |
-| `write_target_version_conflict` | Site mutation built on stale target version. |
-| `write_target_owner_unavailable` | Credential revoked/expired/deleted или owner cannot be resolved. |
-| `write_target_state_unavailable` | Persisted target state corrupt/partial/temporarily unavailable. |
+| `writable_target_required` | Active v1 target отсутствует; включает `pending_upgrade`, а re-consent/reissue показывается как Site state/remediation, не отдельный code. |
+| `writable_target_mismatch` | Explicit Mind не совпадает с current selected target; metadata другого target не раскрывается. |
+| `writable_target_unavailable` | Owner revoked/expired/deleted, pinned generation stale, target/state corrupt/partial/unavailable либо target deleted. |
 
-Historical wire aliases могут map-иться на эти classes только в explicit
-versioned adapter, зарегистрированном MD-337. Они не меняют semantics и не
-позволяют old IDs. Missing/foreign/wrong-owner/private denial остаётся
+Это exact canonical set MD-337. Historical `write_binding_required`,
+`write_binding_stale`, `binding_owner_revoked`, `binding_state_unavailable` и
+собственные `write_target_*` aliases retired; они не map-ятся в hidden success
+и не позволяют old IDs. Missing/foreign/wrong-owner/private denial остаётся
 indistinguishable до authorization. Logs/audit/telemetry не содержат raw
 credential/owner/generation IDs, private Mind metadata, prompt, content,
 staged locator или target-selection request body.
@@ -307,8 +299,8 @@ Machine-readable closed contract:
 1. private/member, public catalog, exact-handle unlisted и historical current-
    access read без read binding;
 2. owner isolation для двух grants/tokens одного principal;
-3. Site-only select/switch/clear, version CAS, idempotent same-target и MCP
-   inspect-only;
+3. Site-only select/switch/clear/inspect, version CAS, idempotent same-target и
+   отсутствие MCP target inspection/mutation;
 4. exact generation/Mind/scope/role/HEAD/idempotency commit и zero side effects
    для stale/revoke/wrong-Mind/access-loss/corrupt state;
 5. OAuth refresh preservation, reconnect/reissue empty target и no owner copy;
@@ -316,4 +308,4 @@ Machine-readable closed contract:
    и ambiguous/corrupt fail-closed path;
 7. capture/staged generation pinning, no transfer and fail-closed migration;
 8. modern/compatibility protocol envelopes invoking one target-v1 application
-   semantics without legacy ID translation.
+   semantics without legacy ID/replacement-generation wire fields.
