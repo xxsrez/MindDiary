@@ -340,6 +340,7 @@ test("credential target actions keep recovery-safe clear distinct from select", 
     clear_write: {
       checks: [
         "credential_owner_authority",
+        "active_lifecycle",
         "expected_target_version",
         "idempotency",
       ],

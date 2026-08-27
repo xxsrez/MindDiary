@@ -125,7 +125,7 @@
       "metadataDisclosure": "authorized-target-only"
     },
     "clear_write": {
-      "checks": ["credential_owner_authority", "expected_target_version", "idempotency"],
+      "checks": ["credential_owner_authority", "active_lifecycle", "expected_target_version", "idempotency"],
       "mustNotRequire": ["target_acl", "current_writer_role", "target_eligibility"],
       "allowedAfter": ["target_acl_loss", "target_role_loss", "target_deletion"],
       "errors": ["credential_not_found", "target_conflict"],

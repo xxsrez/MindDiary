@@ -62,12 +62,13 @@ actor, authorization checks, базовую схему ошибок и прав�
 
 `select_write` additionally requires active credential lifecycle,
 `content:write`, current writer role and target eligibility. `clear_write`
-requires only credential-owner authority, `expected_target_version` and
-idempotency: target ACL, current writer role and target eligibility are not
-preconditions. Clear therefore remains available after target ACL/role loss or
-target deletion and reveals no target metadata. This action-specific split is
-normative; the shared `credential-control` profile must not be interpreted as
-adding select-only checks to recovery-safe clear.
+requires credential-owner authority, active credential lifecycle,
+`expected_target_version` and idempotency: target ACL, current writer role and
+target eligibility are not preconditions. A revoked or expired credential
+cannot clear state, but an active credential may clear after target ACL/role
+loss or target deletion without revealing target metadata. This action-specific
+split is normative; the shared `credential-control` profile must not be
+interpreted as adding the remaining select-only checks to recovery-safe clear.
 
 ## REST control routes
 
