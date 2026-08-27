@@ -354,7 +354,14 @@ async function runScenario({ candidate, evidenceOut, randomBytesImpl, now }) {
       action: "bind", mind: `/${handle}`, expected_binding_version: 0,
       idempotency_key: `browser:${nonce}:editor-bind`,
     }));
+    await composition.restart({ serviceOperatorPrincipalIds: [operatorBootstrap.principal_id] });
     const currentInfo = mcpData(await mcp(participant, participantToken.secret, "get_mind_info", { mind: `/${handle}` }));
+    expectMcpError(await mcp(participant, participantToken.secret, "commit_changeset", {
+      mind: `/${handle}`, write_binding_id: `${binding.current.write_binding_id}:stale`,
+      expected_revision: currentInfo.resolved_revision.revision_id,
+      idempotency_key: `browser:${nonce}:editor-write-stale`, summary: "Stale generation denial",
+      operations: [{ type: "create_file", path: "concepts/must-not-commit.md", text: "---\ntype: Note\ntitle: Must not commit\n---\nDenied.\n" }],
+    }), "write_binding_stale");
     const commit = mcpData(await mcp(participant, participantToken.secret, "commit_changeset", {
       mind: `/${handle}`, write_binding_id: binding.current.write_binding_id,
       expected_revision: currentInfo.resolved_revision.revision_id,

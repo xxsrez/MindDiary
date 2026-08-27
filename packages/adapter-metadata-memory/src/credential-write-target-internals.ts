@@ -9,11 +9,13 @@ import {
   type LegacyCredentialWriteTargetUpgradeSnapshot,
   type ApplyCredentialWriteTargetRequest,
   type MindBindingOwnerId,
+  type MindBindingSetSnapshot,
   type OutboxMessageId,
   type PrincipalId,
   type RevokeCredentialWriteTargetOwnerRequest,
   type SpaceId,
   type UtcInstant,
+  type WriteMindBindingId,
 } from "@mind-diary/application-ports";
 import { version } from "@mind-diary/application-ports";
 
@@ -240,6 +242,46 @@ export function credentialWriteTargetSnapshot(
         kind: "pending_upgrade" as const,
         legacy: Object.freeze({ ...legacy }),
       });
+}
+
+/**
+ * Transitional projection for the pre-cutover content authorizer. The
+ * credential target remains the sole authority; no legacy record is read or
+ * persisted to construct this view.
+ */
+export function credentialWriteTargetLegacyProjection(
+  state: Readonly<CredentialWriteTargetState>,
+): Readonly<MindBindingSetSnapshot> {
+  const active = state.lifecycleState === "active"
+    ? state.activeGeneration
+    : null;
+  return Object.freeze({
+    bindingSet: Object.freeze({
+      bindingOwnerId: state.bindingOwnerId,
+      principalId: state.principalId,
+      state: state.lifecycleState === "active" ? "active" as const : "revoked" as const,
+      bindingVersion: state.targetVersion,
+      automaticCaptureMode: state.automaticCaptureMode,
+      captureWriteBindingId:
+        state.captureGenerationId as unknown as WriteMindBindingId | null,
+      captureUpdatedAt:
+        state.automaticCaptureMode === "disabled" ? null : state.updatedAt,
+      createdAt: state.createdAt,
+      updatedAt: state.updatedAt,
+    }),
+    readBindings: Object.freeze([]),
+    writeBinding: active === null
+      ? null
+      : Object.freeze({
+          writeBindingId: active.generationId as unknown as WriteMindBindingId,
+          bindingOwnerId: state.bindingOwnerId,
+          spaceId: active.spaceId,
+          generation: state.targetVersion,
+          state: "active" as const,
+          createdAt: active.selectedAt,
+          invalidatedAt: null,
+        }),
+  });
 }
 
 export function migrateLegacyMindBindingOwners(

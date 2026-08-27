@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { InMemoryMcpTokenStore } from "../../packages/adapter-metadata-memory/dist/index.js";
+import {
+  InMemoryMcpTokenStore,
+  InMemoryRevisionMetadataStore,
+} from "../../packages/adapter-metadata-memory/dist/index.js";
 import { createWebCryptoTokenHasher } from "../../packages/adapter-security-webcrypto/dist/index.js";
 import {
   MCP_TOKEN_DEFAULT_LIFETIME_DAYS,
@@ -82,6 +85,37 @@ async function fixture(overrides = {}) {
     ...overrides,
   });
   return { clock, service, tokenHasher, tokens };
+}
+
+function writeTargetDependencies(targets = new InMemoryRevisionMetadataStore()) {
+  let audit = 0;
+  let outbox = 0;
+  return {
+    targets,
+    dependencies: {
+      writeTargets: targets,
+      writeTargetIds: {
+        nextCredentialWriteTargetAuditEventId: () =>
+          `audit_failed_issue_cleanup_${++audit}`,
+        nextCredentialWriteTargetOutboxMessageId: () =>
+          `outbox_failed_issue_cleanup_${++outbox}`,
+      },
+    },
+  };
+}
+
+async function assertFailedIssueTargetIsTerminal(targets, principalId, ownerId) {
+  const target = await targets.readCredentialWriteTarget(ownerId, principalId);
+  assert.equal(target.kind, "current");
+  assert.equal(target.state.lifecycleState, "revoked");
+  assert.equal(target.state.activeGeneration, null);
+  assert.equal(target.state.captureGenerationId, null);
+  assert.equal(
+    (await targets.listAuditEventsForTest()).filter(
+      ({ eventType }) => eventType === "credential_write_target.owner_revoked",
+    ).length,
+    1,
+  );
 }
 
 async function expectLifecycleFailure(promise, code) {
@@ -541,6 +575,71 @@ test("one token follows current access across Minds and revocation or expiry sto
     ).code,
     "token_inactive",
   );
+});
+
+test("principal token disablement compensates a newly registered write target", async () => {
+  const principalId = "principal_issue_disabled_cleanup";
+  const { targets, dependencies } = writeTargetDependencies();
+  const { service } = await fixture(dependencies);
+  await service.revokeTokensForAccountDeletion(principalId);
+
+  await expectLifecycleFailure(
+    service.issueMcpToken(sitesActor(principalId), {
+      name: "must not leave an active owner",
+      scopes: ["content:write"],
+    }),
+    "principal_tokens_disabled",
+  );
+
+  await assertFailedIssueTargetIsTerminal(targets, principalId, "token_1");
+});
+
+test("secret and token-store issuance failures compensate their write targets", async (t) => {
+  await t.test("secret issuance failure", async () => {
+    const principalId = "principal_secret_failure_cleanup";
+    const { targets, dependencies } = writeTargetDependencies();
+    const injected = new Error("injected secret issuance failure");
+    const { service } = await fixture({
+      ...dependencies,
+      tokenHasher: {
+        async issueSecret() {
+          throw injected;
+        },
+      },
+    });
+
+    await assert.rejects(
+      service.issueMcpToken(sitesActor(principalId), {
+        name: "secret failure",
+        scopes: ["content:write"],
+      }),
+      (error) => error === injected,
+    );
+    await assertFailedIssueTargetIsTerminal(targets, principalId, "token_1");
+  });
+
+  await t.test("token-store failure", async () => {
+    const principalId = "principal_token_store_failure_cleanup";
+    const { targets, dependencies } = writeTargetDependencies();
+    const injected = new Error("injected token store failure");
+    const { service } = await fixture({
+      ...dependencies,
+      tokens: {
+        async createMcpToken() {
+          throw injected;
+        },
+      },
+    });
+
+    await assert.rejects(
+      service.issueMcpToken(sitesActor(principalId), {
+        name: "token store failure",
+        scopes: ["content:write"],
+      }),
+      (error) => error === injected,
+    );
+    await assertFailedIssueTargetIsTerminal(targets, principalId, "token_1");
+  });
 });
 
 test("account deletion atomically revokes tokens and blocks racing or later issuance", async () => {

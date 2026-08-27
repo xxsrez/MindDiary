@@ -1,7 +1,30 @@
 import type { ActorContext } from "@mind-diary/application-contracts";
-import type { Clock, CredentialWriteTargetIdGenerator, CredentialWriteTargetStore, IssuedTokenSecret, McpTokenMetadata, McpTokenPagePosition, McpTokenPageState, McpTokenStore, TokenHasher, TokenIdGenerator, PersonalTokenRefGenerator } from "@mind-diary/application-ports";
+import type {
+  Clock,
+  CredentialWriteTargetIdGenerator,
+  CredentialWriteTargetStore,
+  IssuedTokenSecret,
+  McpTokenMetadata,
+  McpTokenPagePosition,
+  McpTokenPageState,
+  McpTokenStore,
+  PersonalTokenRefGenerator,
+  TokenHasher,
+  TokenIdGenerator,
+} from "@mind-diary/application-ports";
 import { normalizeTokenScopes } from "@mind-diary/domain";
-import type { AccessTokenState, EffectiveTokenScopes, MindBindingOwnerId, PrincipalId, PersonalTokenRef, TokenId, TokenScope, UtcInstant } from "@mind-diary/domain";
+import type {
+  AccessTokenState,
+  AuditEventId,
+  EffectiveTokenScopes,
+  MindBindingOwnerId,
+  OutboxMessageId,
+  PersonalTokenRef,
+  PrincipalId,
+  TokenId,
+  TokenScope,
+  UtcInstant,
+} from "@mind-diary/domain";
 import { safeBootstrapRequestId } from "./account-bootstrap.js";
 
 export const MCP_TOKEN_DEFAULT_LIFETIME_DAYS = 90 as const;
@@ -383,6 +406,14 @@ export class TokenLifecycleService {
   readonly #logger: TokenLifecycleSafeLogger | undefined;
 
   constructor(dependencies: TokenLifecycleDependencies) {
+    if (
+      (dependencies.writeTargets === undefined) !==
+      (dependencies.writeTargetIds === undefined)
+    ) {
+      throw new TypeError(
+        "Token write-target store and identifier generator must be configured together.",
+      );
+    }
     this.#clock = dependencies.clock;
     this.#tokenHasher = dependencies.tokenHasher;
     this.#tokenIds = dependencies.tokenIds;
@@ -477,7 +508,21 @@ export class TokenLifecycleService {
         "Token presentation identifier generation is unavailable.",
       );
     }
+    let registeredNewWriteTarget = false;
+    let cleanupAuditEventId: AuditEventId | null = null;
+    let cleanupAuditOutboxMessageId: OutboxMessageId | null = null;
     if (this.#writeTargets !== undefined) {
+      if (this.#writeTargetIds === undefined) {
+        throw new TokenLifecycleFailure(
+          "token_lifecycle_unavailable",
+          "Token write-target cleanup is unavailable.",
+        );
+      }
+      // Allocate every cleanup dependency before the durable owner can exist.
+      cleanupAuditEventId =
+        this.#writeTargetIds.nextCredentialWriteTargetAuditEventId();
+      cleanupAuditOutboxMessageId =
+        this.#writeTargetIds.nextCredentialWriteTargetOutboxMessageId();
       const registered = await this.#writeTargets.runCredentialWriteTargetTransaction(
         (transaction) => transaction.registerCredentialWriteTargetOwner({
           bindingOwnerId: tokenId as unknown as MindBindingOwnerId,
@@ -492,36 +537,87 @@ export class TokenLifecycleService {
           "Token write-target profile could not be initialized.",
         );
       }
+      registeredNewWriteTarget = !registered.replayed;
     }
-    const issuedSecret = await this.#tokenHasher.issueSecret();
-    const persistence = issuedSecret.persistence();
-    const created = await this.#tokens.createMcpToken({
-      tokenId,
-      personalTokenRef,
+    try {
+      const issuedSecret = await this.#tokenHasher.issueSecret();
+      const persistence = issuedSecret.persistence();
+      const created = await this.#tokens.createMcpToken({
+        tokenId,
+        personalTokenRef,
+        principalId,
+        name,
+        verifier: persistence.verifier,
+        displayPrefix: persistence.displayPrefix,
+        scopes,
+        createdAt: canonicalUtcInstant(createdAtMilliseconds),
+        expiresAt: canonicalUtcInstant(expiresAtMilliseconds),
+      });
+      if (created.kind === "principal_deleted") {
+        throw new TokenLifecycleFailure(
+          "principal_tokens_disabled",
+          "Token issuance is disabled for this principal.",
+        );
+      }
+      if (created.kind !== "created") {
+        throw new TokenLifecycleFailure(
+          "token_issue_conflict",
+          "Token issuance conflicted with current state.",
+        );
+      }
+      return Object.freeze({
+        token: descriptor(created.token, createdAtMilliseconds),
+        secret: new ConsumeOnceMcpTokenSecret(issuedSecret),
+      });
+    } catch (error) {
+      if (registeredNewWriteTarget) {
+        if (cleanupAuditEventId === null || cleanupAuditOutboxMessageId === null) {
+          throw new TokenLifecycleFailure(
+            "token_lifecycle_unavailable",
+            "Token write-target cleanup is unavailable.",
+          );
+        }
+        await this.#cleanupFailedIssuanceWriteTarget(
+          tokenId,
+          principalId,
+          actor.requestId,
+          canonicalUtcInstant(createdAtMilliseconds),
+          cleanupAuditEventId,
+          cleanupAuditOutboxMessageId,
+        );
+      }
+      throw error;
+    }
+  }
+
+  async #cleanupFailedIssuanceWriteTarget(
+    tokenId: TokenId,
+    principalId: PrincipalId,
+    requestId: ActorContext["requestId"],
+    occurredAt: UtcInstant,
+    auditEventId: AuditEventId,
+    auditOutboxMessageId: OutboxMessageId,
+  ): Promise<void> {
+    if (this.#writeTargets === undefined) {
+      throw new TokenLifecycleFailure(
+        "token_lifecycle_unavailable",
+        "Token write-target cleanup is unavailable.",
+      );
+    }
+    const result = await this.#writeTargets.revokeCredentialWriteTargetOwner({
+      bindingOwnerId: tokenId as unknown as MindBindingOwnerId,
       principalId,
-      name,
-      verifier: persistence.verifier,
-      displayPrefix: persistence.displayPrefix,
-      scopes,
-      createdAt: canonicalUtcInstant(createdAtMilliseconds),
-      expiresAt: canonicalUtcInstant(expiresAtMilliseconds),
+      requestId,
+      auditEventId,
+      auditOutboxMessageId,
+      occurredAt,
     });
-    if (created.kind === "principal_deleted") {
+    if (result.kind !== "revoked" && result.kind !== "not_found") {
       throw new TokenLifecycleFailure(
-        "principal_tokens_disabled",
-        "Token issuance is disabled for this principal.",
+        "token_lifecycle_unavailable",
+        "Token write-target cleanup could not be completed.",
       );
     }
-    if (created.kind !== "created") {
-      throw new TokenLifecycleFailure(
-        "token_issue_conflict",
-        "Token issuance conflicted with current state.",
-      );
-    }
-    return Object.freeze({
-      token: descriptor(created.token, createdAtMilliseconds),
-      secret: new ConsumeOnceMcpTokenSecret(issuedSecret),
-    });
   }
 
   async listMcpTokens(

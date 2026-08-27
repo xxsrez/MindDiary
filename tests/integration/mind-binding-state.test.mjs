@@ -102,7 +102,7 @@ function bindingIds() {
   };
 }
 
-function applicationHarness() {
+function applicationHarness(writeAuthority = "legacy_mind_binding") {
   const metadata = new InMemoryRevisionMetadataStore();
   for (const spaceId of [SPACE_A, SPACE_B]) {
     metadata.setCurrentAuthorizationStateForTest(
@@ -118,11 +118,43 @@ function applicationHarness() {
   const service = new MindBindingApplicationService({
     authorizer: new CapabilityAuthorizer(metadata),
     bindings: metadata,
+    writeAuthority,
     ids: bindingIds(),
     digest: objects,
   });
   return { metadata, service };
 }
+
+test("credential-target write mode fails closed instead of falling back to legacy state", async () => {
+  const { metadata, service } = applicationHarness("credential_write_target");
+  const currentActor = actor();
+  const denied = await service.mutateWrite({
+    actor: currentActor,
+    action: "bind",
+    spaceId: SPACE_A,
+    expectedBindingVersion: 0,
+    idempotencyKey: "missing-target-owner-fails-closed",
+  });
+  assert.equal(denied.kind, "binding_owner_revoked");
+  const readDenied = await service.mutateRead({
+    actor: currentActor,
+    action: "attach",
+    spaceId: SPACE_A,
+    expectedBindingVersion: 0,
+    idempotencyKey: "read-binding-command-is-decommissioned",
+  });
+  assert.equal(readDenied.kind, "binding_owner_revoked");
+  assert.equal(
+    (await metadata.readMindBindingSet(BINDING_OWNER_ID, PRINCIPAL_ID, NOW))
+      .writeBinding,
+    null,
+  );
+  assert.equal(
+    await metadata.readCredentialWriteTarget(BINDING_OWNER_ID, PRINCIPAL_ID),
+    null,
+  );
+  assert.equal((await metadata.listAuditEventsForTest()).length, 0);
+});
 
 async function applyWrite(store, input) {
   return store.runMindBindingTransaction((transaction) =>
@@ -306,6 +338,7 @@ test("binding-aware authorization can share one consistent metadata read-session
   const authorizer = new MindBindingContentAuthorizer({
     delegate: unexpectedDelegate,
     bindings: metadata,
+    readAuthority: "legacy_mind_binding",
     consistentRead: async (operation) => {
       sessions += 1;
       return operation({
@@ -324,6 +357,37 @@ test("binding-aware authorization can share one consistent metadata read-session
   assert.equal(decision.kind, "allowed");
   assert.equal(decision.stamp.bindingVersion, 1);
   assert.equal(sessions, 1);
+});
+
+test("current-ACL read mode grants no durable binding authority and follows ACL revocation", async () => {
+  const { metadata } = applicationHarness("credential_write_target");
+  const authorizer = new MindBindingContentAuthorizer({
+    delegate: new CapabilityAuthorizer(metadata),
+    bindings: metadata,
+    readAuthority: "current_acl",
+  });
+  const request = {
+    actor: actor(),
+    spaceId: SPACE_A,
+    capability: "content:browse",
+    revisionMode: "head",
+  };
+  const allowed = await authorizer.authorize(request);
+  assert.equal(allowed.kind, "allowed");
+  assert.equal("bindingVersion" in allowed.stamp, false);
+  assert.equal((await metadata.listAuditEventsForTest()).length, 0);
+
+  const revoked = authorizationState(SPACE_A);
+  metadata.setCurrentAuthorizationStateForTest(
+    { principalId: PRINCIPAL_ID, spaceId: SPACE_A, tokenId: TOKEN_ID },
+    {
+      ...revoked,
+      membership: { ...revoked.membership, state: "revoked" },
+    },
+  );
+  const denied = await authorizer.authorize(request);
+  assert.equal(denied.kind, "denied");
+  assert.equal(denied.code, "access_denied");
 });
 
 test("revoking a binding owner invalidates all active records and is terminal", async () => {
@@ -529,7 +593,7 @@ test("Sites control mutations use the stable server-resolved credential owner wi
   );
 });
 
-test("Sites event-log persistence reconciles unknown outcomes and serializes concurrent CAS", async () => {
+test("Sites restart decommissions legacy binding events without reviving their write generation", async () => {
   const database = new FakeD1Database();
   const first = await createSitesMetadataStore(database);
   const initial = await applyWrite(first, {
@@ -548,56 +612,32 @@ test("Sites event-log persistence reconciles unknown outcomes and serializes con
     PRINCIPAL_ID,
     LATER,
   );
-  assert.equal(durable.bindingSet.bindingVersion, 1);
-  assert.equal(durable.writeBinding.writeBindingId, "write_sites_alpha");
+  assert.equal(durable, null);
+  const pending = await restarted.readCredentialWriteTarget(
+    BINDING_OWNER_ID,
+    PRINCIPAL_ID,
+  );
+  assert.equal(pending.kind, "pending_upgrade");
+  assert.equal(pending.legacy.candidateSpaceId, SPACE_A);
+  assert.equal(pending.legacy.candidateGeneration, 1);
 
-  const reconciled = await applyWrite(restarted, {
+  const bypassAttempt = await applyWrite(restarted, {
     spaceId: SPACE_A,
     writeBindingId: "write_sites_unknown_retry",
     expectedBindingVersion: 0,
     idempotencyKey: "sites-bind-alpha",
     canonicalRequestHash: SHA_A,
   });
-  assert.equal(reconciled.kind, "applied");
-  assert.equal(reconciled.replayed, true);
-  assert.equal(reconciled.bindings.writeBinding.writeBindingId, "write_sites_alpha");
-
-  const left = await createSitesMetadataStore(database);
-  const right = await createSitesMetadataStore(database);
-  const race = await Promise.all([
-    applyWrite(left, {
-      spaceId: SPACE_B,
-      writeBindingId: "write_sites_race_beta",
-      expectedBindingVersion: 1,
-      idempotencyKey: "sites-race-beta",
-      canonicalRequestHash: SHA_B,
-    }),
-    applyWrite(right, {
-      spaceId: SPACE_A,
-      writeBindingId: "write_sites_race_alpha",
-      expectedBindingVersion: 1,
-      idempotencyKey: "sites-race-alpha",
-      canonicalRequestHash: `sha256:${"c".repeat(64)}`,
-    }),
-  ]);
-  assert.deepEqual(
-    race.map((result) => result.kind).sort(),
-    ["applied", "binding_version_conflict"],
-  );
-  const final = await (await createSitesMetadataStore(database)).readMindBindingSet(
+  assert.equal(bypassAttempt.kind, "effect_conflict");
+  const finalStore = await createSitesMetadataStore(database);
+  assert.equal(await finalStore.readMindBindingSet(
     BINDING_OWNER_ID,
     PRINCIPAL_ID,
     LATER,
-  );
-  assert.equal(final.bindingSet.bindingVersion, 2);
-  assert.ok([SPACE_A, SPACE_B].includes(final.writeBinding.spaceId));
+  ), null);
   assert.equal(
-    final.readBindings.length,
-    0,
-    "binding state remains service metadata and never changes content/read records",
-  );
-  assert.equal(
-    (await (await createSitesMetadataStore(database)).listAuditEventsForTest()).length,
-    2,
+    (await finalStore.readCredentialWriteTarget(BINDING_OWNER_ID, PRINCIPAL_ID)).kind,
+    "pending_upgrade",
+    "forward replay never turns a decommissioned legacy event into current authority",
   );
 });

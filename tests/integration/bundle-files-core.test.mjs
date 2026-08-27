@@ -239,6 +239,7 @@ async function harness({ capacityLimits } = {}) {
   const authorizer = new MindBindingContentAuthorizer({
     delegate: new CapabilityAuthorizer(metadata),
     bindings: metadata,
+    readAuthority: "legacy_mind_binding",
   });
   let stagedIds = 0;
   const staging = new BundleFileStagingService({

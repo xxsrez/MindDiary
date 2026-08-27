@@ -816,13 +816,14 @@ evidence:
           - dev.oauth-direct-plugin
         required_assertion_ids:
           - bindings.initial-empty
-          - bindings.multi-read-idempotent
+          - reads.current-acl-without-binding
+          - reads.multi-mind-current-acl
           - bindings.single-write-current-target
           - bindings.current-target-exactly-one-revision
           - bindings.rebind-stale-no-side-effect
           - bindings.concurrent-rebind-cas
           - bindings.restart-persistence
-          - bindings.detach-unbind-fail-closed
+          - bindings.unbind-write-fail-closed
           - bindings.mind-delete-invalidates-target
           - bindings.owner-revoke-invalidates-state
           - oauth.explicit-write-binding-readback

@@ -882,12 +882,14 @@ export async function createProductSiteRuntime(
   const bindings = new MindBindingApplicationService({
     authorizer,
     bindings: metadata,
+    writeAuthority: "credential_write_target",
     ids: generated,
     digest: objects,
   });
   const contentAuthorizer = new MindBindingContentAuthorizer({
     delegate: authorizer,
     bindings: metadata,
+    readAuthority: "current_acl",
     consistentRead: (operation) =>
       metadata.withConsistentRead((store) =>
         operation({
@@ -936,6 +938,7 @@ export async function createProductSiteRuntime(
     const scopedAuthorizer = new MindBindingContentAuthorizer({
       delegate: new CapabilityAuthorizer(store),
       bindings: store,
+      readAuthority: "current_acl",
     });
     return Object.freeze({
       browse: new MindBrowseService({

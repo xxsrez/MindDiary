@@ -100,6 +100,7 @@ import {
   compareUnicodeScalarValues,
   completeIdempotencyAgainst,
   credentialWriteTargetEffectsAvailable,
+  credentialWriteTargetLegacyProjection,
   credentialWriteTargetSnapshot,
   createStagedBundleFileAgainst,
   decodePublicCatalogCursor,
@@ -604,6 +605,14 @@ export abstract class RevisionMetadataReadStore extends RevisionMetadataSnapshot
         return null;
       }
       const state = this._mindBindingOwners.get(bindingOwnerId);
+      const target = this._credentialWriteTargetOwners.get(bindingOwnerId);
+      if (target !== undefined) {
+        if (target.state.principalId !== principalId) return null;
+        return credentialWriteTargetLegacyProjection(target.state);
+      }
+      if (this._legacyCredentialWriteTargetUpgrades.has(bindingOwnerId)) {
+        return null;
+      }
       if (state && state.bindingSet.principalId !== principalId) return null;
       return mindBindingSnapshot(
         state ?? emptyMindBindingOwnerState(bindingOwnerId, principalId, occurredAt),

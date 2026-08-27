@@ -767,6 +767,7 @@ test("concurrent write rebind fences a prepared commit before revision, audit, o
   const bindings = new MindBindingApplicationService({
     authorizer: baseAuthorizer,
     bindings: env.metadata,
+    writeAuthority: "legacy_mind_binding",
     digest: env.objects,
     ids: {
       nextReadMindBindingId: () => `read_binding_commit_${++readId}`,
@@ -788,6 +789,7 @@ test("concurrent write rebind fences a prepared commit before revision, audit, o
   const bindingAuthorizer = new MindBindingContentAuthorizer({
     delegate: baseAuthorizer,
     bindings: env.metadata,
+    readAuthority: "legacy_mind_binding",
   });
   const racedObjects = objectStoreWithFirstPutHook(env.objects, async () => {
     const rebound = await bindings.mutateWrite({

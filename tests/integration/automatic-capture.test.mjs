@@ -124,6 +124,7 @@ async function fixture() {
   const bindings = new MindBindingApplicationService({
     authorizer: delegate,
     bindings: metadata,
+    writeAuthority: "legacy_mind_binding",
     ids: bindingIds(),
     digest: objects,
   });
@@ -142,7 +143,11 @@ async function fixture() {
     idempotencyKey: "automatic-capture-enable",
   });
   assert.equal(enabled.kind, "applied");
-  const authorizer = new MindBindingContentAuthorizer({ delegate, bindings: metadata });
+  const authorizer = new MindBindingContentAuthorizer({
+    delegate,
+    bindings: metadata,
+    readAuthority: "legacy_mind_binding",
+  });
   const commits = new ChangesetCommitService({
     authorizer,
     metadata,

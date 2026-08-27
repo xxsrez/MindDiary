@@ -159,6 +159,7 @@ function harness() {
   const bindings = new MindBindingApplicationService({
     authorizer: new CapabilityAuthorizer(metadata),
     bindings: metadata,
+    writeAuthority: "legacy_mind_binding",
     ids: ids(),
     digest: objects,
   });

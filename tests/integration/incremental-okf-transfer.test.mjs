@@ -215,6 +215,7 @@ async function createHarness() {
   const authorizer = new MindBindingContentAuthorizer({
     delegate: new CapabilityAuthorizer(metadata),
     bindings: metadata,
+    readAuthority: "legacy_mind_binding",
   });
   const staging = new BundleFileStagingService({
     authorizer,

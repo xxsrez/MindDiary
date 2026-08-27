@@ -4,6 +4,7 @@ import type {
 } from "@mind-diary/application-contracts";
 import {
   type ApplyMindBindingMutationResult,
+  type ApplyCredentialWriteTargetResult,
   type AuthorizationDecision,
   type AuthorizationRequest,
   type AuthorizationStamp,
@@ -12,16 +13,20 @@ import {
   type MindBindingIdGenerator,
   type MindBindingSetSnapshot,
   type MindBindingStore,
+  type CredentialWriteTargetStore,
   type ObjectStore,
 } from "@mind-diary/application-ports";
 import {
   bindingVersion,
   type BindingVersion,
+  type CredentialWriteTargetGenerationId,
+  type CredentialWriteTargetState,
   type EffectiveTokenScopes,
   type IdempotencyKey,
   type MindBindingOwnerId,
   type PrincipalId,
   type SpaceId,
+  type WriteMindBindingId,
 } from "@mind-diary/domain";
 import {
   DEFAULT_IDEMPOTENCY_KEY_MAX_BYTES,
@@ -34,7 +39,9 @@ const BOUNDED_ID = /^[^\u0000-\u001f\u007f]{1,512}$/u;
 
 export interface MindBindingApplicationDependencies {
   readonly authorizer: Authorizer;
-  readonly bindings: MindBindingStore;
+  readonly bindings: MindBindingStore & CredentialWriteTargetStore;
+  /** Explicit transition gate: a runtime never consults both write authorities. */
+  readonly writeAuthority: "credential_write_target" | "legacy_mind_binding";
   readonly ids: MindBindingIdGenerator;
   readonly digest: Pick<ObjectStore, "calculateSha256">;
   readonly idempotencyKeyMaxBytes?: number;
@@ -225,20 +232,61 @@ function canonicalMutationSource(input: {
   })}\n`;
 }
 
+function legacyProjectionFromCredentialTarget(
+  state: Readonly<CredentialWriteTargetState>,
+): Readonly<MindBindingSetSnapshot> {
+  const active = state.lifecycleState === "active"
+    ? state.activeGeneration
+    : null;
+  return Object.freeze({
+    bindingSet: Object.freeze({
+      bindingOwnerId: state.bindingOwnerId,
+      principalId: state.principalId,
+      state: state.lifecycleState === "active" ? "active" as const : "revoked" as const,
+      bindingVersion: state.targetVersion,
+      automaticCaptureMode: state.automaticCaptureMode,
+      captureWriteBindingId:
+        state.captureGenerationId as unknown as WriteMindBindingId | null,
+      captureUpdatedAt:
+        state.automaticCaptureMode === "disabled" ? null : state.updatedAt,
+      createdAt: state.createdAt,
+      updatedAt: state.updatedAt,
+    }),
+    readBindings: Object.freeze([]),
+    writeBinding: active === null
+      ? null
+      : Object.freeze({
+          writeBindingId: active.generationId as unknown as WriteMindBindingId,
+          bindingOwnerId: state.bindingOwnerId,
+          spaceId: active.spaceId,
+          generation: state.targetVersion,
+          state: "active" as const,
+          createdAt: active.selectedAt,
+          invalidatedAt: null,
+        }),
+  });
+}
+
 /**
  * Authoritative MCP binding use case. Persisted bindings contain identifiers
  * only; target authority is freshly checked before and inside attach/bind.
  */
 export class MindBindingApplicationService {
   readonly #authorizer: Authorizer;
-  readonly #bindings: MindBindingStore;
+  readonly #bindings: MindBindingStore & CredentialWriteTargetStore;
+  readonly #writeAuthority: MindBindingApplicationDependencies["writeAuthority"];
   readonly #ids: MindBindingIdGenerator;
   readonly #digest: Pick<ObjectStore, "calculateSha256">;
   readonly #idempotencyKeyMaxBytes: number;
 
   constructor(dependencies: MindBindingApplicationDependencies) {
+    if (
+      dependencies.writeAuthority !== "credential_write_target" &&
+      dependencies.writeAuthority !== "legacy_mind_binding"
+    ) throw new TypeError("Mind binding write authority must be explicit.");
     this.#authorizer = dependencies.authorizer;
     this.#bindings = dependencies.bindings;
+    this.#writeAuthority = dependencies.writeAuthority;
     this.#ids = dependencies.ids;
     this.#digest = dependencies.digest;
     this.#idempotencyKeyMaxBytes = normalizeIdempotencyKeyMaxBytes(
@@ -273,6 +321,11 @@ export class MindBindingApplicationService {
     }
     if (request.action !== "attach" && request.action !== "detach") {
       return Object.freeze({ kind: "invalid", code: "invalid_action" });
+    }
+    if (this.#writeAuthority === "credential_write_target") {
+      // Reads use current ACL in the new profile. The legacy command remains
+      // fail-closed until its protocol surface is removed separately.
+      return Object.freeze({ kind: "binding_owner_revoked" });
     }
     if (!validSpaceId(request.spaceId)) {
       return Object.freeze({ kind: "invalid", code: "invalid_space_id" });
@@ -370,6 +423,21 @@ export class MindBindingApplicationService {
         }),
       ),
     );
+    if (this.#writeAuthority === "credential_write_target") {
+      const targetProfile = await this.#bindings.readCredentialWriteTarget(
+        validated.bindingOwnerId,
+        validated.principalId,
+      );
+      if (targetProfile?.kind !== "current") {
+        return Object.freeze({ kind: "binding_owner_revoked" });
+      }
+      return this.#mutateCredentialWrite(
+        request,
+        validated,
+        targetProfile.state,
+        canonicalRequestHash,
+      );
+    }
     if (request.action === "unbind") {
       const auditEventId = this.#ids.nextMindBindingAuditEventId();
       const auditOutboxMessageId = this.#ids.nextMindBindingOutboxMessageId();
@@ -424,6 +492,135 @@ export class MindBindingApplicationService {
     });
   }
 
+  async #mutateCredentialWrite(
+    request: Readonly<MutateWriteMindBindingRequest>,
+    validated: ValidatedMutation,
+    before: Readonly<CredentialWriteTargetState>,
+    canonicalRequestHash: Awaited<ReturnType<ObjectStore["calculateSha256"]>>,
+  ): Promise<MindBindingCommandResult> {
+    const auditEventId = this.#ids.nextMindBindingAuditEventId();
+    const auditOutboxMessageId = this.#ids.nextMindBindingOutboxMessageId();
+    if (request.action === "unbind") {
+      const result = await this.#bindings.runCredentialWriteTargetTransaction(
+        (transaction) => transaction.applyCredentialWriteTarget({
+          bindingOwnerId: validated.bindingOwnerId,
+          principalId: validated.principalId,
+          operation: "clear",
+          expectedTargetVersion: validated.expectedBindingVersion,
+          idempotencyKey: validated.idempotencyKey,
+          canonicalRequestHash,
+          requestId: request.actor.requestId,
+          auditEventId,
+          auditOutboxMessageId,
+          occurredAt: request.actor.occurredAtUtc,
+        }),
+      );
+      return this.#mapCredentialTargetResult(result, before, validated);
+    }
+
+    const authorizationRequest = Object.freeze({
+      actor: request.actor,
+      spaceId: request.spaceId,
+      capability: "content:write" as const,
+      revisionMode: "head" as const,
+    });
+    const initial = await this.#authorizer.authorize(authorizationRequest);
+    if (initial.kind === "denied") {
+      return Object.freeze({ kind: "denied", decision: initial });
+    }
+    const generationId = this.#ids.nextWriteMindBindingId() as unknown as
+      CredentialWriteTargetGenerationId;
+    const result = await this.#bindings.runCredentialWriteTargetTransaction(
+      (transaction) => transaction.applyCredentialWriteTarget({
+        bindingOwnerId: validated.bindingOwnerId,
+        principalId: validated.principalId,
+        operation: "select",
+        spaceId: request.spaceId,
+        expectedTargetVersion: validated.expectedBindingVersion,
+        generationId,
+        credentialHasWriteScope: true,
+        idempotencyKey: validated.idempotencyKey,
+        canonicalRequestHash,
+        requestId: request.actor.requestId,
+        auditEventId,
+        auditOutboxMessageId,
+        occurredAt: request.actor.occurredAtUtc,
+      }),
+    );
+    return this.#mapCredentialTargetResult(result, before, validated);
+  }
+
+  async #mapCredentialTargetResult(
+    result: ApplyCredentialWriteTargetResult,
+    before: Readonly<CredentialWriteTargetState>,
+    validated: ValidatedMutation,
+    includePreviousWriteBinding = true,
+  ): Promise<MindBindingCommandResult> {
+    if (result.kind === "applied") {
+      const priorWrite = legacyProjectionFromCredentialTarget(before).writeBinding;
+      const previousWriteBinding =
+        includePreviousWriteBinding &&
+        result.changed &&
+        priorWrite !== null &&
+        priorWrite.writeBindingId !==
+          (result.state.activeGeneration?.generationId as unknown as
+            WriteMindBindingId | undefined)
+          ? Object.freeze({
+              ...priorWrite,
+              state: "invalidated" as const,
+              invalidatedAt: result.state.updatedAt,
+            })
+          : null;
+      return Object.freeze({
+        kind: "applied" as const,
+        bindings: legacyProjectionFromCredentialTarget(result.state),
+        previousWriteBinding,
+        changed: result.changed,
+        replayed: result.replayed,
+      });
+    }
+    if (result.kind === "target_version_conflict") {
+      const current = await this.#bindings.readCredentialWriteTarget(
+        validated.bindingOwnerId,
+        validated.principalId,
+      );
+      return Object.freeze({
+        kind: "binding_version_conflict" as const,
+        currentBindingVersion: bindingVersion(
+          current?.kind === "current" ? current.state.targetVersion : 0,
+        ),
+      });
+    }
+    if (result.kind === "idempotency_conflict") {
+      return Object.freeze({ kind: "idempotency_conflict" });
+    }
+    if (result.kind === "effect_conflict") {
+      return Object.freeze({ kind: "effect_conflict" });
+    }
+    if (result.kind === "owner_mismatch") {
+      return Object.freeze({ kind: "owner_mismatch" });
+    }
+    if (result.kind === "invalid_record") {
+      return Object.freeze({ kind: "invalid_record" });
+    }
+    if (result.kind === "write_scope_required") {
+      return Object.freeze({
+        kind: "denied",
+        decision: bindingDenied("insufficient_scope"),
+      });
+    }
+    if (result.kind === "writer_access_required") {
+      return Object.freeze({
+        kind: "denied",
+        decision: bindingDenied("capability_denied"),
+      });
+    }
+    if (result.kind === "generation_mismatch") {
+      return Object.freeze({ kind: "write_binding_stale" });
+    }
+    return Object.freeze({ kind: "binding_owner_revoked" });
+  }
+
   async mutateAutomaticCapture(
     request: Readonly<MutateAutomaticCapturePolicyRequest>,
   ): Promise<MindBindingCommandResult> {
@@ -435,6 +632,16 @@ export class MindBindingApplicationService {
     if (request.action !== "enable" && request.action !== "disable") {
       return Object.freeze({ kind: "invalid", code: "invalid_action" });
     }
+    const targetProfile = this.#writeAuthority === "credential_write_target"
+      ? await this.#bindings.readCredentialWriteTarget(
+          validated.bindingOwnerId,
+          validated.principalId,
+        )
+      : null;
+    if (
+      this.#writeAuthority === "credential_write_target" &&
+      targetProfile?.kind !== "current"
+    ) return Object.freeze({ kind: "binding_owner_revoked" });
     const current = await this.#bindings.readMindBindingSet(
       validated.bindingOwnerId,
       validated.principalId,
@@ -469,6 +676,31 @@ export class MindBindingApplicationService {
     const auditEventId = this.#ids.nextMindBindingAuditEventId();
     const auditOutboxMessageId = this.#ids.nextMindBindingOutboxMessageId();
     if (request.action === "disable") {
+      if (targetProfile?.kind === "current") {
+        const result = await this.#bindings.runCredentialWriteTargetTransaction(
+          (transaction) => transaction.applyCredentialWriteTarget({
+            bindingOwnerId: validated.bindingOwnerId,
+            principalId: validated.principalId,
+            operation: "configure_capture",
+            mode: "disabled",
+            expectedTargetVersion: validated.expectedBindingVersion,
+            expectedGenerationId: null,
+            credentialHasWriteScope: true,
+            idempotencyKey: validated.idempotencyKey,
+            canonicalRequestHash,
+            requestId: request.actor.requestId,
+            auditEventId,
+            auditOutboxMessageId,
+            occurredAt: request.actor.occurredAtUtc,
+          }),
+        );
+        return this.#mapCredentialTargetResult(
+          result,
+          targetProfile.state,
+          validated,
+          false,
+        );
+      }
       return this.#bindings.runMindBindingTransaction((transaction) =>
         transaction.applyAutomaticCapturePolicy({
           ...validated,
@@ -508,6 +740,32 @@ export class MindBindingApplicationService {
     const initial = await this.#authorizer.authorize(authorizationRequest);
     if (initial.kind === "denied") {
       return Object.freeze({ kind: "denied", decision: initial });
+    }
+    if (targetProfile?.kind === "current") {
+      const result = await this.#bindings.runCredentialWriteTargetTransaction(
+        (transaction) => transaction.applyCredentialWriteTarget({
+          bindingOwnerId: validated.bindingOwnerId,
+          principalId: validated.principalId,
+          operation: "configure_capture",
+          mode: "routine_non_sensitive",
+          expectedTargetVersion: validated.expectedBindingVersion,
+          expectedGenerationId:
+            active.writeBindingId as unknown as CredentialWriteTargetGenerationId,
+          credentialHasWriteScope: true,
+          idempotencyKey: validated.idempotencyKey,
+          canonicalRequestHash,
+          requestId: request.actor.requestId,
+          auditEventId,
+          auditOutboxMessageId,
+          occurredAt: request.actor.occurredAtUtc,
+        }),
+      );
+      return this.#mapCredentialTargetResult(
+        result,
+        targetProfile.state,
+        validated,
+        false,
+      );
     }
     return this.#bindings.runMindBindingTransaction(async (transaction) => {
       const fresh = await this.#authorizer.reauthorizeInTransaction(
@@ -586,13 +844,14 @@ function bindingDenied(
 }
 
 /**
- * Enforces the binding owned by the authenticated MCP credential before any
- * Mind content authorization. Transactional rechecks fence rebind from commit
- * and export-start effects without turning discovery into an implicit attach.
+ * Uses current ACL directly for reads in the new profile and enforces the
+ * credential-owned generation for writes. Transactional rechecks fence rebind
+ * from commit and export-start effects.
  */
 export class MindBindingContentAuthorizer implements Authorizer {
   readonly #delegate: Authorizer;
   readonly #bindings: MindBindingStore;
+  readonly #readAuthority: "current_acl" | "legacy_mind_binding";
   readonly #consistentRead:
     | (<Result>(operation: (dependencies: Readonly<{
         delegate: Authorizer;
@@ -603,13 +862,19 @@ export class MindBindingContentAuthorizer implements Authorizer {
   constructor(dependencies: {
     readonly delegate: Authorizer;
     readonly bindings: MindBindingStore;
+    readonly readAuthority: "current_acl" | "legacy_mind_binding";
     readonly consistentRead?: <Result>(operation: (dependencies: Readonly<{
       delegate: Authorizer;
       bindings: Pick<MindBindingStore, "readMindBindingSet">;
     }>) => Promise<Result>) => Promise<Result>;
   }) {
+    if (
+      dependencies.readAuthority !== "current_acl" &&
+      dependencies.readAuthority !== "legacy_mind_binding"
+    ) throw new TypeError("Mind content read authority must be explicit.");
     this.#delegate = dependencies.delegate;
     this.#bindings = dependencies.bindings;
+    this.#readAuthority = dependencies.readAuthority;
     this.#consistentRead = dependencies.consistentRead;
   }
 
@@ -626,6 +891,10 @@ export class MindBindingContentAuthorizer implements Authorizer {
     delegate: Authorizer,
     request: AuthorizationRequest,
   ): Promise<AuthorizationDecision> {
+    if (
+      this.#readAuthority === "current_acl" &&
+      request.capability !== "content:write"
+    ) return delegate.authorize(request);
     const binding = await this.#authorizeBinding(bindings, request);
     if (binding.kind === "denied") return binding;
     const authorization = await delegate.authorize(request);
@@ -639,6 +908,16 @@ export class MindBindingContentAuthorizer implements Authorizer {
     transaction: AuthorizationTransaction,
     expected: AuthorizationStamp,
   ): Promise<AuthorizationDecision> {
+    if (
+      this.#readAuthority === "current_acl" &&
+      request.capability !== "content:write"
+    ) {
+      return this.#delegate.reauthorizeInTransaction(
+        request,
+        transaction,
+        expected,
+      );
+    }
     if (transaction.readMindBindingSet === undefined) {
       return bindingDenied("binding_state_unavailable", true);
     }
