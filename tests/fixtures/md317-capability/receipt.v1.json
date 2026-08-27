@@ -1,0 +1,161 @@
+{
+  "schema": "mind-diary/md317-host-file-capability-receipt/v1",
+  "captured_at": "2026-08-27T20:25:14Z",
+  "client": {
+    "class": "codex_desktop",
+    "version": "26.820.60940",
+    "build": "7119",
+    "bundle_id": "com.openai.codex"
+  },
+  "plugin": {
+    "id": "mind-diary",
+    "version": "0.1.0+codex.20260826190538"
+  },
+  "catalog": {
+    "hosted_tool_count": 23,
+    "local_companion_tool_count": 2
+  },
+  "binding_observation": {
+    "mind_ref": "me",
+    "visibility": "private",
+    "binding_version": 7,
+    "mutated": false
+  },
+  "server_capabilities": [
+    {
+      "source_kind": "session_attachment",
+      "status": "not_available",
+      "transport": "none",
+      "max_bytes": 0,
+      "fallback": "none"
+    },
+    {
+      "source_kind": "local_path",
+      "status": "available",
+      "transport": "companion_upload_intent",
+      "max_bytes": 268435456,
+      "fallback": "none"
+    },
+    {
+      "source_kind": "workspace/generated_artifact",
+      "status": "available",
+      "transport": "companion_upload_intent",
+      "max_bytes": 268435456,
+      "fallback": "none"
+    },
+    {
+      "source_kind": "connector_object",
+      "status": "not_available",
+      "transport": "none",
+      "max_bytes": 0,
+      "fallback": "none"
+    },
+    {
+      "source_kind": "bounded_in_memory",
+      "status": "not_available",
+      "transport": "none",
+      "max_bytes": 0,
+      "fallback": "none"
+    },
+    {
+      "source_kind": "server_generated",
+      "status": "not_available",
+      "transport": "none",
+      "max_bytes": 0,
+      "fallback": "none"
+    }
+  ],
+  "assertions": [
+    {
+      "id": "MD317-DESKTOP-NATIVE-SCHEMA",
+      "outcome": "schema_present",
+      "error_code": null,
+      "retryable": null
+    },
+    {
+      "id": "MD317-DESKTOP-HOST-PICKER-BRIDGE",
+      "outcome": "not_available",
+      "error_code": "native_file_input_unsupported",
+      "retryable": false
+    },
+    {
+      "id": "MD317-INVALID-OBJECT",
+      "outcome": "not_available",
+      "error_code": "invalid_request",
+      "retryable": false
+    },
+    {
+      "id": "MD317-DESKTOP-SAME-HOST-PATH",
+      "outcome": "supported_same_host_path",
+      "error_code": null,
+      "retryable": null
+    },
+    {
+      "id": "MD317-COMPANION-PNG",
+      "outcome": "supported_same_host_path",
+      "error_code": null,
+      "retryable": null,
+      "size": 170,
+      "sha256": "9d580819bed1c8e7d744e20278936336f09bcb10d5046b849828755617aa2917",
+      "media_type": "image/png"
+    },
+    {
+      "id": "MD317-COMPANION-UNKNOWN-BINARY",
+      "outcome": "supported_same_host_path",
+      "error_code": null,
+      "retryable": null,
+      "size": 37,
+      "sha256": "a8bb55bd3c1c444b8f291151ca3c83b640c42d4342e4b9f3c6eda62cf3a4076e",
+      "media_type": "application/octet-stream"
+    },
+    {
+      "id": "MD317-UNAVAILABLE-PATH",
+      "outcome": "not_available",
+      "error_code": "file_ingress_source_unavailable",
+      "retryable": false
+    },
+    {
+      "id": "MD317-SIZE-MISMATCH",
+      "outcome": "not_available",
+      "error_code": "bundle_file_size_mismatch",
+      "retryable": false
+    },
+    {
+      "id": "MD317-EXPIRY",
+      "outcome": "not_available",
+      "error_code": "local_companion_ref_expired",
+      "retryable": false,
+      "local_ref_expires_at": "2026-08-27T20:24:36.614178Z",
+      "intent_expires_at": "2026-08-27T20:24:42.319Z"
+    },
+    {
+      "id": "MD317-UAT-DEFERRED-SOURCES",
+      "outcome": "not_available",
+      "error_code": "capability_not_available",
+      "retryable": false
+    },
+    {
+      "id": "MD317-OTHER-PLUGIN-BRIDGE-SCHEMA",
+      "outcome": "comparison_only",
+      "error_code": null,
+      "retryable": null
+    },
+    {
+      "id": "MD317-CHATGPT-WORK-PROFILE",
+      "outcome": "not_available",
+      "error_code": "profile_not_callable",
+      "retryable": false
+    }
+  ],
+  "effects": {
+    "synthetic_only": true,
+    "temporary_staged_ref_count": 2,
+    "commit_changeset_call_count": 0,
+    "head_transition_count": 0,
+    "binding_mutation_count": 0,
+    "membership_mutation_count": 0,
+    "acl_mutation_count": 0,
+    "repository_mutation_during_probe": false,
+    "local_fixture_directory_removed": true
+  }
+}
