@@ -32,16 +32,19 @@ URL или local-path fallback.
 ### Release 0.3 product authority
 
 Format-neutral bytes, manifest, containment, exact-revision read/download and
-atomic commit semantics ниже сохраняются. User-facing ingress/import and bulk
-export lifecycle belong to Sites control plane; Content MCP не управляет
-staging/import/export и не выбирает writable target. Его mutation boundary —
-ordinary exact-target content commit, который может использовать только
-server-approved input и остаётся fenced by current ACL/scope/HEAD.
+atomic commit semantics ниже сохраняются. Bulk import/export orchestration
+принадлежит Sites control plane; Content MCP не управляет этими workflows и не
+выбирает writable target. Ordinary per-file source admission, stage и reconcile
+могут оставаться подготовкой exact-target content commit в Codex content flow:
+input остаётся explicit, adapter-owned и server-approved, а commit — fenced by
+current ACL/scope/HEAD. Такая подготовка не создаёт control-plane authority или
+второй bulk import surface.
 
-Historical `stage_bundle_file`, binding and export tool descriptions retained
+Historical `stage_bundle_file`, reconcile, binding and export tool descriptions
 below document 0.1/0.2 compatibility, not the Release 0.3 operation register.
-MD-337 owns exact disposition; MD-339 owns target/binding compatibility and
-migration. Runtime, schemas, storage and UAT claims do not change in MD-336.
+MD-336 neither retires nor adopts their exact names: MD-337 owns disposition;
+MD-339 owns target/binding compatibility and migration. Runtime, schemas,
+storage and UAT claims do not change in MD-336.
 
 ## Контекст и граница решения
 

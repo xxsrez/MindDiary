@@ -583,8 +583,10 @@ checkpoints/tags не входят в первый прототип.
 
 Sequence ниже сохраняет as-built staging/binding composition. Release 0.3
 сохраняет только конечный content invariant — atomic commit в
-server-approved exact target; user-facing import/staging orchestration и выбор
-target принадлежат Site. Exact разбор существующих calls выполнят MD-337 и
+server-approved exact target. Выбор target и bulk import/export orchestration
+принадлежат Site; ordinary per-file source admission/stage/reconcile может
+оставаться подготовкой MCP content commit при adapter-owned transport и
+server-approved input. Exact разбор существующих calls выполнят MD-337 и
 MD-339.
 
 ```mermaid

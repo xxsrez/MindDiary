@@ -29,16 +29,19 @@ installed-client support claim.
 ### Release 0.3 product authority
 
 Source, byte-integrity, staging and atomic-revision invariants этого документа
-сохраняются, но user-facing import/ingress workflow принадлежит Sites control
-plane. Content MCP не выбирает source, не создаёт import session и не управляет
-staging lifecycle; его единственная mutation authority — exact-target content
-commit, который может использовать только уже server-approved input по будущему
-operation contract. Site также владеет export lifecycle.
+сохраняются. Sites control plane владеет bulk import/export orchestration, но
+ordinary per-file ingress остаётся частью Codex content flow: companion/adapter
+может принять явно выбранный source, а Content MCP — провести bounded
+admission, stage и reconcile как подготовку exact-target content commit.
+Transport и source authorization остаются adapter-owned, input —
+server-approved; MCP не создаёт bulk import session, не меняет writable target
+и не получает Connection, connector или provider control.
 
 Existing MCP upload/stage/reconcile descriptions ниже остаются historical
-0.1/0.2 compatibility, а не target operation register. Exact disposition
-принадлежит MD-337; writable-target/binding representation and migration —
-MD-339. MD-336 не меняет runtime, schemas, storage or UAT claims.
+0.1/0.2 compatibility, а не target operation register. MD-336 не решает, какие
+exact tools сохраняются: disposition принадлежит MD-337; writable-target/
+binding representation and migration — MD-339. MD-336 не меняет runtime,
+schemas, storage or UAT claims.
 
 ## Цель и граница
 
