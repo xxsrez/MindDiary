@@ -393,12 +393,16 @@ async function runScenario({ candidate, evidenceOut, randomBytesImpl, now }) {
       nonce,
       { action: "select_write", mind_ref: `/${handle}`, expected_target_version: 0 },
       "reader-denied",
-      409,
+      403,
     );
-    expectError(readerTarget, 409, "target_ineligible");
+    expectError(readerTarget, 403, "target_ineligible");
     expectMcpError(await mcp(participant, participantToken.secret, "commit_changeset", {
       mind: `/${handle}`, expected_revision: readerMind.head.revision_id,
-      idempotency_key: `browser:${nonce}:reader-write`, summary: "Reader denial", operations: [],
+      idempotency_key: `browser:${nonce}:reader-write`, summary: "Reader denial", operations: [{
+        type: "create_file",
+        path: "concepts/reader-must-not-write.md",
+        text: "---\ntype: Note\ntitle: Reader must not write\n---\nDenied.\n",
+      }],
     }), "forbidden");
     assertions.add("role.reader-no-write");
     await owner.json(`/api/v1/minds/${handle}/members/${encodeURIComponent(participantMember.member_id)}`, {

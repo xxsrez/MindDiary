@@ -1826,8 +1826,7 @@ test("durable product runtime carries a Sites account token through Codex MCP an
   );
   assert.equal(invitationOverview.status, 200);
   const invitationOverviewBody = await invitationOverview.json();
-  assert.deepEqual(invitationOverviewBody.data.minds, []);
-  assert.deepEqual(invitationOverviewBody.data.invitations.invitations, []);
+  assert.deepEqual(invitationOverviewBody.data.invitations, []);
   assert.equal(deferredInvitationsActivity.length, 1);
   await Promise.all(deferredInvitationsActivity);
   assert.equal(database.metadataTailReads - tailReadsBeforeInvitationsPage, 5);
@@ -3366,7 +3365,7 @@ test("durable collaboration accepts exactly once, rejects stale role state, and 
   );
   assert.equal(invitationOverview.status, 200);
   const invitationOverviewBody = await invitationOverview.json();
-  const overviewInvitation = invitationOverviewBody.data.invitations.invitations.find(
+  const overviewInvitation = invitationOverviewBody.data.invitations.find(
     ({ direction, mind_name: mindName }) =>
       direction === "incoming" && mindName === "Collaboration Runtime",
   );

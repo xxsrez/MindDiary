@@ -78,6 +78,22 @@ function expectMcpError(response, code) {
 }
 
 async function mutatePersonalTarget(actor, body, idempotencyKey, expectedStatus) {
+  if (expectedStatus === null) {
+    return actor.request(
+      `/api/v1/mcp-tokens/${encodeURIComponent(actor.mcpTokenRef)}/mind-access`,
+      {
+        method: "PATCH",
+        headers: {
+          accept: "application/json",
+          "content-type": "application/json",
+          "idempotency-key": idempotencyKey,
+          origin: actor.origin,
+          "x-csrf-token": await actor.csrf("/settings/developer/mcp"),
+        },
+        body: JSON.stringify(body),
+      },
+    );
+  }
   return actor.api(
     `/api/v1/mcp-tokens/${encodeURIComponent(actor.mcpTokenRef)}/mind-access`,
     {
@@ -543,7 +559,7 @@ async function runScenario({ candidate, evidenceOut, randomBytesImpl, now }) {
       expected_target_version: 0,
     },
     `synthetic:${nonce}:target:reader-write-denied`,
-    409,
+    403,
   );
   if (readerTargetDenied.body?.error?.code !== "target_ineligible") {
     fail("reader_target_selection_not_denied");
@@ -723,12 +739,12 @@ async function runScenario({ candidate, evidenceOut, randomBytesImpl, now }) {
       action: "select_write",
       mind_ref: `/${handle}`,
       expected_target_version: 2,
-    }, `synthetic:${nonce}:target:concurrent:ordinary`),
+    }, `synthetic:${nonce}:target:concurrent:ordinary`, null),
     mutatePersonalTarget(actors.participant, {
       action: "select_write",
       mind_ref: `/${handle}`,
       expected_target_version: 2,
-    }, `synthetic:${nonce}:target:concurrent:ordinary-second`),
+    }, `synthetic:${nonce}:target:concurrent:ordinary-second`, null),
   ]);
   const successfulRebinds = concurrentRebinds.filter(
     (response) => response.status === 200,
@@ -981,12 +997,12 @@ async function runScenario({ candidate, evidenceOut, randomBytesImpl, now }) {
   );
   if (
     revokedParticipantTarget?.kind !== "current" ||
-    revokedParticipantTarget.state.lifecycle !== "revoked" ||
+    revokedParticipantTarget.state.lifecycleState !== "revoked" ||
     revokedParticipantTarget.state.activeGeneration !== null
   ) fail("target_owner_revoke_state_mismatch", {
     kind: revokedParticipantTarget?.kind ?? null,
     lifecycle: revokedParticipantTarget?.kind === "current"
-      ? revokedParticipantTarget.state.lifecycle
+      ? revokedParticipantTarget.state.lifecycleState
       : null,
     hasActiveGeneration: revokedParticipantTarget?.kind === "current"
       ? revokedParticipantTarget.state.activeGeneration !== null

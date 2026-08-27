@@ -2108,7 +2108,7 @@ test("one-use BundleFile route serves exact headers and hides malformed or range
   assert.deepEqual(seen, ["mdg_v1_valid", "mdg_v1_missing", "mdg_v1_throw"]);
 });
 
-test("product MCP facade advertises only canonical content tools and membership roots", async () => {
+test("product MCP facade advertises only canonical content tools and current-access roots", async () => {
   const application = new ProductMcpContentApplication({
     discovery: {
       async listMinds() {
