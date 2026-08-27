@@ -23,6 +23,7 @@ test("MD-322 evidence contract fixes the trusted stream, limit and lease boundar
   });
   const [
     source,
+    stagingSource,
     specification,
     architecture,
     traceability,
@@ -30,6 +31,7 @@ test("MD-322 evidence contract fixes the trusted stream, limit and lease boundar
     retryEvidence,
   ] = await Promise.all([
     repositoryFile("packages/application-content/src/server-generated-ingress.ts"),
+    repositoryFile("packages/application-content/src/bundle-files.ts"),
     repositoryFile("docs/specs/file-ingress.md"),
     repositoryFile("docs/architecture.md"),
     repositoryFile("docs/specs/traceability.md"),
@@ -40,6 +42,7 @@ test("MD-322 evidence contract fixes the trusted stream, limit and lease boundar
   assert.match(source, /AbortSignal\.any/u);
   assert.match(source, /Promise\.race/u);
   assert.match(source, /stageServerGenerated/u);
+  assert.match(source, /bundleFileMediaType\(request\.expectedMediaType\)/u);
   assert.ok(
     source.indexOf("#reconciliation.reconcile") <
       source.indexOf("request.producer(Object.freeze"),
@@ -48,6 +51,11 @@ test("MD-322 evidence contract fixes the trusted stream, limit and lease boundar
   assert.match(specification, /byte 268,435,457[\s\S]*fail closed/u);
   assert.match(specification, /600-second producer lease/u);
   assert.match(specification, /uncertain same-key retry performs[\s\S]*no generation/u);
+  assert.match(specification, /MIME essence[\s\S]*before `upload\.complete`/u);
+  assert.ok(
+    stagingSource.indexOf("expectedMediaType !== detected") <
+      stagingSource.indexOf("await upload.complete({ sha256, size })"),
+  );
   assert.match(architecture, /serverGeneratedIngress/u);
   assert.match(traceability, /FI6-ServerGeneratedComposition/u);
   assert.match(traceability, /"server-generated-composition"/u);
@@ -56,6 +64,9 @@ test("MD-322 evidence contract fixes the trusted stream, limit and lease boundar
   assert.match(coreEvidence, /overflowObjects\.evidence\.aborted, true/u);
   assert.match(retryEvidence, /assert\.equal\(producerInvocations, 1\)/u);
   assert.match(retryEvidence, /objectCallsAfterSuccess/u);
+  assert.match(retryEvidence, /application\/pdf; charset=binary/u);
+  assert.match(retryEvidence, /allocatedReservationsBeforeWrongMedia/u);
+  assert.match(retryEvidence, /collectStagedBundleFilesForGc/u);
 });
 
 test("the internal request cannot carry bytes or source/provider identity", async () => {

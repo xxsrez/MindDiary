@@ -257,6 +257,9 @@ with `source_kind: server_generated`, `max_bytes: 268435456` and a bounded
 locator, prompt or job identity. The caller supplies an exact safe receipt —
 display filename, canonical media type, size and SHA-256 — which passes the
 common filename/media/size/digest gate and contains no producer authority.
+The media receipt is reduced to the canonical lowercase MIME essence before
+reconcile and request hashing, so parameters such as
+`application/pdf; charset=binary` are equivalent to `application/pdf`.
 
 Before opening the producer, the port uses existing stage reconciliation with
 the current actor, owner namespace, Space, exact writable target, source kind,
@@ -273,6 +276,11 @@ invalid chunk and byte 268,435,457 close or return the producer best-effort and
 fail closed through the existing quarantine cleanup. Counting and SHA-256 stay
 incremental; the route never assembles the complete artifact in application
 memory. Exact 268,435,456 bytes remain permitted by the shared gate.
+If sniffed canonical media differs from the expected MIME essence, the common
+streaming gate rejects before `upload.complete` and idempotency completion,
+aborts the temporary writer and releases the quota reservation. No staged
+record or object remains, so the same key can be retried with a corrected,
+internally consistent safe receipt.
 
 Success returns only the service-owned `staged_file_ref`. It does not advance
 HEAD: quota, exact writable-target authorization, idempotency, explicit atomic
@@ -360,7 +368,7 @@ Stable errors are split by boundary:
 | Bounded source transport temporarily fails | `file_ingress_transport_unavailable` | Retry exact request/key while source TTL permits; do not alter payload |
 | Upload intent expired/consumed or changed | `file_ingress_intent_expired` / `file_ingress_intent_conflict` | Create a new intent/key for a new operation; never replay changed bytes |
 | Size/path/digest/static policy fails | Existing `bundle_file_*`, `invalid_bundle_file_name` | No canonical object or revision is published |
-| MIME is missing, unknown, invalid or conflicts | `bundle_file_media_mismatch` diagnostic + `application/octet-stream` | Storage continues; serving remains download-only |
+| Advisory MIME is missing, unknown, invalid or conflicts | `bundle_file_media_mismatch` diagnostic + `application/octet-stream` | Storage continues; serving remains download-only. An internal route that supplies an exact expected MIME receipt instead rejects a detected mismatch before object promotion |
 | Stage/commit idempotency payload changed | `idempotency_conflict` | Re-read/reconcile; new key only for a genuinely new operation |
 | One staged ref is used by more than one file operation | `duplicate_staged_bundle_file_reference` | Build a changeset with one distinct verified ref per target path |
 | Binding generation or HEAD changed | `staged_file_binding_stale` / `revision_conflict` | Re-read current binding/HEAD and build a new confirmed operation |

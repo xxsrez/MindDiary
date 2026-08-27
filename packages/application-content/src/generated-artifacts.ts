@@ -35,6 +35,7 @@ type GeneratedArtifactRequestFields = Readonly<{
   readonly idempotencyKey: unknown;
   readonly expectedSize?: unknown;
   readonly expectedSha256?: unknown;
+  readonly expectedMediaType?: unknown;
   readonly signal?: AbortSignal;
 }>;
 
@@ -172,6 +173,9 @@ export class GeneratedArtifactIngressService {
         maxBytes,
         ...(request.expectedSize === undefined ? {} : { expectedSize: request.expectedSize }),
         ...(request.expectedSha256 === undefined ? {} : { expectedSha256: request.expectedSha256 }),
+        ...(request.expectedMediaType === undefined
+          ? {}
+          : { expectedMediaType: request.expectedMediaType }),
         ...(request.signal === undefined ? {} : { signal: request.signal }),
       }));
     }
@@ -197,6 +201,9 @@ export class GeneratedArtifactIngressService {
       sourceKind,
       ...(request.expectedSize === undefined ? {} : { expectedSize: request.expectedSize }),
       ...(request.expectedSha256 === undefined ? {} : { expectedSha256: request.expectedSha256 }),
+      ...(request.expectedMediaType === undefined
+        ? {}
+        : { expectedMediaType: request.expectedMediaType }),
     };
     return this.#staging.stage(stageRequest);
   }

@@ -1,5 +1,5 @@
 import type { McpTokenActorContext } from "@mind-diary/application-contracts";
-import type { SpaceId } from "@mind-diary/domain";
+import { bundleFileMediaType, type SpaceId } from "@mind-diary/domain";
 import type { BundleFileStagingService } from "./bundle-files.js";
 import {
   GENERATED_ARTIFACT_LIMITS,
@@ -207,6 +207,10 @@ export class TrustedServerGeneratedIngressService {
   ): Promise<GeneratedArtifactIngressResult> {
     if (request.signal?.aborted) return cancelled();
     if (typeof request.producer !== "function") return unavailable();
+    if (typeof request.expectedMediaType !== "string") {
+      return Object.freeze({ kind: "invalid", code: "media_type_not_allowed" });
+    }
+    const expectedMediaType = bundleFileMediaType(request.expectedMediaType);
 
     // The exact producer receipt makes an uncertain retry resolvable without
     // invoking the producer or touching object storage. Existing reconcile
@@ -218,12 +222,13 @@ export class TrustedServerGeneratedIngressService {
         spaceId: request.spaceId,
         writeBindingId: request.writeBindingId,
         displayFilename: request.displayFilename,
-        claimedMediaType: request.expectedMediaType,
+        claimedMediaType: expectedMediaType,
         idempotencyKey: request.idempotencyKey,
         sourceKind: "server_generated",
         expectedSize: request.expectedSize,
         expectedSha256: request.expectedSha256,
-        mediaType: request.expectedMediaType,
+        expectedMediaType,
+        mediaType: expectedMediaType,
         size: request.expectedSize,
         sha256: request.expectedSha256,
       });
@@ -278,7 +283,8 @@ export class TrustedServerGeneratedIngressService {
         spaceId: request.spaceId,
         writeBindingId: request.writeBindingId,
         displayFilename: request.displayFilename,
-        claimedMediaType: request.expectedMediaType,
+        claimedMediaType: expectedMediaType,
+        expectedMediaType,
         idempotencyKey: request.idempotencyKey,
         stream: guarded.stream,
         expectedSize: request.expectedSize,
@@ -290,10 +296,6 @@ export class TrustedServerGeneratedIngressService {
         result.code === "generated_artifact_cancelled" &&
         request.signal?.aborted !== true && leaseController.signal.aborted
       ) return unavailable();
-      if (
-        result.kind === "staged" &&
-        result.record.mediaType !== request.expectedMediaType
-      ) return Object.freeze({ kind: "invalid", code: "bundle_file_media_mismatch" });
       return result;
     } catch {
       return request.signal?.aborted ? cancelled() : unavailable();

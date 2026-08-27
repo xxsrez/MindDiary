@@ -50,7 +50,10 @@ cancellable bounded stream напрямую в MD-304 `stageStream`, без по
 буфера, HTTP/MCP exposure или capability advertisement. Exact safe
 media/size/SHA receipt сначала проходит producer-free reconcile в
 owner/Space/current writable-target namespace, поэтому uncertain retry не
-повторяет generation/upload, а mismatch останавливается до object storage.
+повторяет generation/upload. Ожидаемый MIME заранее нормализуется до
+канонической основы; несовпадение с распознанным типом останавливает операцию
+до публикации временного объекта и фиксации idempotency outcome, а временный
+поток записи и резерв квоты очищаются без скрытого staged-состояния.
 Joined native-client
 UAT принадлежит MD-275, а late-UAT producer proof — MD-290. Connector и
 generated paths не являются автоматически доступными или fallback capability.

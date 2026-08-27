@@ -69,6 +69,11 @@ composition as a constructor-owned internal application port. It accepts no
 wire request and adds no MCP/REST tool, route or export surface; the public
 capability row remains `not_available` until MD-290 late UAT installs and
 verifies a privacy-safe producer use case.
+Its exact expected media is normalized to the lowercase MIME essence before
+reconcile and canonical request hashing. A detected mismatch is rejected in
+the shared streaming gate before object promotion/idempotency completion; the
+temporary writer and quota reservation are released, leaving the same key
+available for one corrected request.
 No source may be inferred as hosted capability or used as a silent
 base64/URL/path fallback. Ни одна из этих file/scale rows не блокирует
 Markdown-first Release 0.1 по ADR-0019.
@@ -424,7 +429,7 @@ Application-layer error имеет стабильный machine code:
 | `bundle_file_quota_exceeded` | Resulting 1 GiB revision or 2 GiB retained Space quota would be exceeded. |
 | `staging_quota_exceeded` | Binding owner has more than 256 MiB outstanding staged bytes. |
 | `unsupported_bundle_file_type` | Legacy pre-v4 candidate only; v4 cannot reject a regular file solely for unknown MIME/extension. |
-| `bundle_file_media_mismatch` | Quality diagnostic: declared/detected media conflicts; v4 stores `application/octet-stream` and remains download-only. |
+| `bundle_file_media_mismatch` | Advisory declared/detected conflict normally falls back to `application/octet-stream`; an internal exact expected-media receipt instead rejects before staged-object promotion. |
 | `staged_file_unavailable` | Ref is missing/foreign without revealing ownership/existence. |
 | `staged_file_expired` | Own verified ref passed its 60-minute TTL. |
 | `staged_file_consumed` | Own ref was already bound by another successful commit. |

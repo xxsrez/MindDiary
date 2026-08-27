@@ -64,6 +64,7 @@ const COMMON = {
   writeBindingId: "binding_test",
   displayFilename: "generated.png",
   claimedMediaType: "image/png",
+  expectedMediaType: "image/png; charset=binary",
   idempotencyKey: "generated-test-1",
 };
 
@@ -87,6 +88,7 @@ test("server-generated ReadableStream is assembled with chunk validation", async
   const result = await env.service.stageServerGenerated({ ...COMMON, stream });
   assert.equal(result.kind, "staged");
   assert.equal(env.streamRequests[0].sourceKind, "server_generated");
+  assert.equal(env.streamRequests[0].expectedMediaType, COMMON.expectedMediaType);
   assert.equal(env.streamRequests[0].bytes, undefined);
   assert.deepEqual(env.streamRequests[0].receivedChunks, [PNG.subarray(0, 4), PNG.subarray(4)]);
 });

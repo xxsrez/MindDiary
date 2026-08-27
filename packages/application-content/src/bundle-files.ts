@@ -56,6 +56,8 @@ export interface StageBundleFileRequest {
   readonly sourceKind?: unknown;
   readonly expectedSize?: unknown;
   readonly expectedSha256?: unknown;
+  /** Optional canonical MIME essence that the sniffed result must equal. */
+  readonly expectedMediaType?: unknown;
 }
 
 /** Exact safe receipt used to resolve an unknown staging outcome without bytes. */
@@ -257,6 +259,7 @@ type ValidatedStageRequest = Readonly<{
   sourceKind: FileIngressSourceKind;
   expectedSize: number | undefined;
   expectedSha256: Sha256Digest | undefined;
+  expectedMediaType: BundleFileMediaType | undefined;
 }>;
 
 function invalid(code: StageInvalid["code"]): StageInvalid {
@@ -266,7 +269,8 @@ function invalid(code: StageInvalid["code"]): StageInvalid {
 function validateStageRequest(
   request: Readonly<Pick<StageBundleFileRequest,
     "actor" | "writeBindingId" | "displayFilename" | "claimedMediaType" |
-    "idempotencyKey" | "sourceKind" | "expectedSize" | "expectedSha256">>,
+    "idempotencyKey" | "sourceKind" | "expectedSize" | "expectedSha256" |
+    "expectedMediaType">>,
 ): ValidatedStageRequest | StageInvalid {
   const actor = request.actor;
   if (
@@ -303,6 +307,12 @@ function validateStageRequest(
     expectedSha256 !== undefined &&
     (typeof expectedSha256 !== "string" || !SHA256.test(expectedSha256))
   ) return invalid("expected_sha256_mismatch");
+  const expectedMediaType = request.expectedMediaType === undefined
+    ? undefined
+    : typeof request.expectedMediaType === "string"
+      ? bundleFileMediaType(request.expectedMediaType)
+      : null;
+  if (expectedMediaType === null) return invalid("media_type_not_allowed");
   return Object.freeze({
     kind: "validated" as const,
     actor: mcpActor,
@@ -313,6 +323,7 @@ function validateStageRequest(
     sourceKind: ingressSourceKind,
     expectedSize: expectedSize as number | undefined,
     expectedSha256: expectedSha256 as Sha256Digest | undefined,
+    expectedMediaType,
   });
 }
 
@@ -330,6 +341,10 @@ function validateStageReceipt(
     typeof request.mediaType !== "string"
   ) return invalid("media_type_not_allowed");
   const mediaType = bundleFileMediaType(request.mediaType);
+  if (
+    validated.expectedMediaType !== undefined &&
+    validated.expectedMediaType !== mediaType
+  ) return invalid("bundle_file_media_mismatch");
   if (
     typeof request.sha256 !== "string" || !SHA256.test(request.sha256)
   ) return invalid("expected_sha256_mismatch");
@@ -365,6 +380,9 @@ function canonicalStageRequestSource(
     claimed_media_type: validated.claimedMediaType ?? null,
     expected_size: validated.expectedSize ?? null,
     expected_sha256: validated.expectedSha256 ?? null,
+    ...(validated.expectedMediaType === undefined
+      ? {}
+      : { expected_media_type: validated.expectedMediaType }),
     source_kind: validated.sourceKind,
     media_type: receipt.mediaType,
     sha256: receipt.sha256,
@@ -505,6 +523,7 @@ export class BundleFileStagingService {
       sourceKind: ingressSourceKind,
       expectedSize,
       expectedSha256,
+      expectedMediaType,
     } = validation;
     if (!(request.bytes instanceof Uint8Array)) {
       return Object.freeze({ kind: "invalid", code: "file_signature_mismatch" });
@@ -518,6 +537,9 @@ export class BundleFileStagingService {
       claimedMediaType,
       displayFilename,
     );
+    if (expectedMediaType !== undefined && expectedMediaType !== detected) {
+      return invalid("bundle_file_media_mismatch");
+    }
     if (
       expectedSize !== undefined &&
       expectedSize !== bytes.byteLength
@@ -774,6 +796,7 @@ export class BundleFileStagingService {
       sourceKind: ingressSourceKind,
       expectedSize,
       expectedSha256,
+      expectedMediaType,
     } = validation;
     const bindingOwnerId = actor.authentication.bindingOwnerId;
     const initial = await this.#authorizer.authorize({
@@ -925,6 +948,9 @@ export class BundleFileStagingService {
         claimedMediaType,
         displayFilename,
       );
+      if (expectedMediaType !== undefined && expectedMediaType !== detected) {
+        return await streamFailure(invalid("bundle_file_media_mismatch"));
+      }
 
       await upload.complete({ sha256, size });
       temporaryObjectOwned = true;

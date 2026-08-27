@@ -94,6 +94,23 @@ test("trusted producer forwards only a bounded stream to the shared ingress", as
   ]) assert.equal(forbidden in env.stages[0], false, forbidden);
 });
 
+test("expected media is reduced to one canonical MIME essence before reconcile and staging", async () => {
+  const env = fixture();
+  const result = await env.service.stage({
+    ...COMMON,
+    displayFilename: "generated.pdf",
+    expectedMediaType: "Application/PDF; charset=binary",
+    producer: () => (async function* () { yield BYTES; })(),
+  });
+
+  assert.equal(result.kind, "staged");
+  assert.equal(env.reconciles[0].claimedMediaType, "application/pdf");
+  assert.equal(env.reconciles[0].expectedMediaType, "application/pdf");
+  assert.equal(env.reconciles[0].mediaType, "application/pdf");
+  assert.equal(env.stages[0].claimedMediaType, "application/pdf");
+  assert.equal(env.stages[0].expectedMediaType, "application/pdf");
+});
+
 test("the accepted producer lease and size ceiling are exact and cannot widen", () => {
   assert.deepEqual(SERVER_GENERATED_INGRESS_LIMITS, {
     maxBytes: 268_435_456,

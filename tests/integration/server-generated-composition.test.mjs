@@ -280,7 +280,7 @@ test("hosted composition stages one trusted stream and reuses commit/history/dow
     spaceId,
     writeBindingId,
     displayFilename: "safe-generated.pdf",
-    expectedMediaType: "application/pdf",
+    expectedMediaType: "application/pdf; charset=binary",
     expectedSize: PDF.byteLength,
     expectedSha256: sha256(PDF),
   };
@@ -300,6 +300,49 @@ test("hosted composition stages one trusted stream and reuses commit/history/dow
   });
   assert.equal(stagedObjectCount(bucket), beforeFailedStage);
 
+  const wrongMediaKey = "stage:server-generated-media-correction";
+  const metadataBeforeWrongMedia = await createSitesMetadataStore(database);
+  const idempotencyBeforeWrongMedia = await metadataBeforeWrongMedia
+    .listIdempotencyRecordsForTest();
+  const allocatedReservationsBeforeWrongMedia = (
+    await metadataBeforeWrongMedia.listCapacityReservationsForTest()
+  ).filter(({ state }) => state !== "released");
+  const objectsBeforeWrongMedia = stagedObjectCount(bucket);
+  let wrongMediaProducerInvocations = 0;
+  const wrongMedia = await runtime.serverGeneratedIngress.stage({
+    ...common,
+    expectedMediaType: "image/png",
+    idempotencyKey: wrongMediaKey,
+    producer: () => {
+      wrongMediaProducerInvocations += 1;
+      return (async function* () { yield PDF; })();
+    },
+  });
+  assert.deepEqual(wrongMedia, {
+    kind: "invalid",
+    code: "bundle_file_media_mismatch",
+  });
+  assert.equal(wrongMediaProducerInvocations, 1);
+  assert.equal(stagedObjectCount(bucket), objectsBeforeWrongMedia);
+
+  const metadataAfterWrongMedia = await createSitesMetadataStore(database);
+  assert.deepEqual(
+    (await metadataAfterWrongMedia.listCapacityReservationsForTest())
+      .filter(({ state }) => state !== "released"),
+    allocatedReservationsBeforeWrongMedia,
+  );
+  assert.deepEqual(
+    await metadataAfterWrongMedia.listIdempotencyRecordsForTest(),
+    idempotencyBeforeWrongMedia,
+  );
+  assert.equal(
+    (await metadataAfterWrongMedia.collectStagedBundleFilesForGc({
+      createdBefore: "2099-01-01T00:00:00.000Z",
+      limit: 100,
+    })).length,
+    0,
+  );
+
   const privacySentinels = {
     localPath: "/private/prompt/output.pdf",
     url: "https://provider.invalid/private-output",
@@ -310,7 +353,7 @@ test("hosted composition stages one trusted stream and reuses commit/history/dow
   let producerInvocations = 0;
   const staged = await runtime.serverGeneratedIngress.stage({
     ...common,
-    idempotencyKey: "stage:server-generated-success",
+    idempotencyKey: wrongMediaKey,
     producer: () => {
       producerInvocations += 1;
       return new ReadableStream({
@@ -325,6 +368,7 @@ test("hosted composition stages one trusted stream and reuses commit/history/dow
   });
   assert.equal(staged.kind, "staged");
   assert.equal(staged.record.sourceKind, "server_generated");
+  assert.equal(staged.record.mediaType, "application/pdf");
   assert.equal(staged.record.size, PDF.byteLength);
   assert.equal(staged.record.sha256, sha256(PDF));
   const objectCallsAfterSuccess = {
@@ -336,7 +380,8 @@ test("hosted composition stages one trusted stream and reuses commit/history/dow
   runtime = await createProductSiteRuntime(runtimeOptions);
   const replayed = await runtime.serverGeneratedIngress.stage({
     ...common,
-    idempotencyKey: "stage:server-generated-success",
+    expectedMediaType: "application/pdf",
+    idempotencyKey: wrongMediaKey,
     producer: () => {
       producerInvocations += 1;
       return (async function* () { yield PDF; })();
@@ -356,7 +401,7 @@ test("hosted composition stages one trusted stream and reuses commit/history/dow
   const conflict = await runtime.serverGeneratedIngress.stage({
     ...common,
     expectedSha256: `sha256:${"f".repeat(64)}`,
-    idempotencyKey: "stage:server-generated-success",
+    idempotencyKey: wrongMediaKey,
     producer: () => {
       producerInvocations += 1;
       return (async function* () { yield PDF; })();
