@@ -267,10 +267,6 @@ export abstract class RevisionMetadataOrdinaryLifecycleStore extends RevisionMet
             if (!principal || principal.state !== "active") {
               return Object.freeze({ kind: "forbidden" });
             }
-            const space = tx.knowledgeSpaces.get(request.spaceId);
-            if (!space || space.state !== "active") {
-              return Object.freeze({ kind: "mind_not_found" });
-            }
             const personalBinding = [...tx.personalBindings.values()].find(
               (binding) => binding.spaceId === request.spaceId,
             );
@@ -281,6 +277,10 @@ export abstract class RevisionMetadataOrdinaryLifecycleStore extends RevisionMet
                     ? "personal_mind"
                     : "mind_not_found",
               });
+            }
+            const space = tx.knowledgeSpaces.get(request.spaceId);
+            if (!space || space.state !== "active") {
+              return Object.freeze({ kind: "mind_not_found" });
             }
 
             const aggregateMemberships = [...tx.memberships.values()].filter(
@@ -329,9 +329,14 @@ export abstract class RevisionMetadataOrdinaryLifecycleStore extends RevisionMet
 
             let renamedAggregate: ReturnType<typeof SpaceAggregate.restoreOrdinary>;
             try {
-              renamedAggregate = currentAggregate.rename({
+              renamedAggregate = currentAggregate.updateMetadata({
                 actorPrincipalId: request.principalId,
-                name: request.displayName,
+                ...(request.displayName === undefined
+                  ? {}
+                  : { name: request.displayName }),
+                ...(Object.prototype.hasOwnProperty.call(request, "description")
+                  ? { description: request.description }
+                  : {}),
                 expectedMetadataVersion: request.expectedMetadataVersion,
                 occurredAt: request.occurredAt,
               });

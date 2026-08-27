@@ -18,6 +18,7 @@ export interface OrdinaryMindUiMind {
   readonly mindId: string;
   readonly handle: string;
   readonly name: string;
+  readonly description: string | null;
   readonly headRevisionId: string;
   readonly visibility: OrdinaryMindUiVisibility;
   readonly role: OrdinaryMindUiRole;

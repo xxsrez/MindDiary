@@ -189,8 +189,22 @@ export class InMemoryRevisionMetadataStore extends RevisionMetadataSupportStore
           )
         : new Map();
       restored._externalBindings = new Map(snapshot.externalBindings as ExternalBindingMap);
-      restored._knowledgeSpaces = new Map(snapshot.knowledgeSpaces as KnowledgeSpaceMap);
       restored._personalBindings = new Map(snapshot.personalBindings as PersonalBindingMap);
+      const personalSpaceIds = new Set(
+        [...restored._personalBindings.values()].map((binding) => binding.spaceId),
+      );
+      restored._knowledgeSpaces = new Map(
+        [...(snapshot.knowledgeSpaces as KnowledgeSpaceMap)].map(([spaceId, space]) => {
+          if (personalSpaceIds.has(spaceId)) {
+            const { description: _ordinaryDescription, ...personalSpace } = space;
+            return [spaceId, Object.freeze(personalSpace)] as const;
+          }
+          return [
+            spaceId,
+            Object.freeze({ ...space, description: space.description ?? null }),
+          ] as const;
+        }),
+      );
       restored._memberships = new Map(snapshot.memberships as MembershipMap);
       restored._invitations = new Map(snapshot.invitations as InvitationMap);
       restored._personalProfileIdempotencyRecords = new Map(snapshot.personalProfileIdempotencyRecords as Map<string, Readonly<PersonalProfileIdempotencyRecord>>);

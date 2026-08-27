@@ -114,10 +114,15 @@ async function createAccount(env, index, name = `Principal ${index}`) {
   });
 }
 
-async function createMind(env, owner, handle, name = handle) {
+async function createMind(env, owner, handle, name = handle, description = undefined) {
   return env.ordinary.createSpaceWithOwner(
     registeredActor(owner.principalId, `request_create_${handle}`, CREATED_AT),
-    { name, handle, idempotencyKey: `create-${handle}` },
+    {
+      name,
+      handle,
+      ...(description === undefined ? {} : { description }),
+      idempotencyKey: `create-${handle}`,
+    },
   );
 }
 
@@ -193,7 +198,13 @@ test("authenticated catalog returns only current public ordinary Minds without f
   const env = harness();
   const owner = await createAccount(env, 1, "Catalog Owner");
   const visitor = await createAccount(env, 2, "Catalog Visitor");
-  const publicMind = await createMind(env, owner, "public-library", "Public Library");
+  const publicMind = await createMind(
+    env,
+    owner,
+    "public-library",
+    "Public Library",
+    "A public catalog description.",
+  );
   const unlistedMind = await createMind(env, owner, "exact-only", "Exact Only");
   const privateMind = await createMind(env, owner, "private-notes", "Private Notes");
   await changeVisibility(env, owner, publicMind, "public", "public-library");
@@ -210,6 +221,7 @@ test("authenticated catalog returns only current public ordinary Minds without f
     route: "/public-library",
     handle: "public-library",
     name: "Public Library",
+    description: "A public catalog description.",
     isPersonal: false,
     visibility: "public",
     discovery: "public_catalog",

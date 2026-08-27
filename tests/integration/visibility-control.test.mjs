@@ -223,6 +223,7 @@ test("visibility transition changes only policy epochs, grants baseline reads, a
     route: "/grant-boundary",
     handle: "grant-boundary",
     name: before.space.name,
+    description: null,
     visibility: "public",
     metadataVersion: before.space.metadataVersion + 1,
     accessVersion: before.space.accessVersion + 1,

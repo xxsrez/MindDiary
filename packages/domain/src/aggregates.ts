@@ -19,6 +19,47 @@ import {
 } from "./records.js";
 import { roleHasCapability } from "./capabilities.js";
 
+export type OrdinaryMindDescriptionNormalization =
+  | { readonly kind: "valid"; readonly value: string | null }
+  | { readonly kind: "invalid" };
+
+function hasUnpairedSurrogate(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const current = value.charCodeAt(index);
+    if (current >= 0xd800 && current <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) return true;
+      index += 1;
+    } else if (current >= 0xdc00 && current <= 0xdfff) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** Canonical service-metadata normalization shared by create, update, and restore. */
+export function normalizeOrdinaryMindDescription(
+  value: string,
+): OrdinaryMindDescriptionNormalization {
+  if (hasUnpairedSurrogate(value)) return Object.freeze({ kind: "invalid" });
+  let normalized: string;
+  try {
+    normalized = value.normalize("NFKC").replace(/\r\n?/gu, "\n").trim();
+  } catch {
+    return Object.freeze({ kind: "invalid" });
+  }
+  if (
+    /[\u0000-\u0009\u000b-\u001f\u007f-\u009f]/u.test(normalized) ||
+    [...normalized].length > 500
+  ) {
+    return Object.freeze({ kind: "invalid" });
+  }
+  return Object.freeze({
+    kind: "valid",
+    value: normalized.length === 0 ? null : normalized,
+  });
+}
+
 export type DomainInvariantCode =
   | "record_space_mismatch"
   | "invalid_record"
@@ -33,6 +74,7 @@ export type DomainInvariantCode =
   | "duplicate_personal_binding"
   | "principal_binding_mismatch"
   | "personal_profile_mismatch"
+  | "personal_description"
   | "principal_not_active"
   | "space_not_active"
   | "membership_not_active"
@@ -185,6 +227,24 @@ function validateOrdinary(
   space: KnowledgeSpace,
   memberships: readonly SpaceMembership[],
 ): void {
+  if (
+    !("description" in space) ||
+    !(space.description === null || typeof space.description === "string")
+  ) {
+    throw new DomainInvariantError(
+      "invalid_record",
+      "ordinary Mind description metadata is invalid",
+    );
+  }
+  if (typeof space.description === "string") {
+    const normalized = normalizeOrdinaryMindDescription(space.description);
+    if (normalized.kind !== "valid" || normalized.value !== space.description) {
+      throw new DomainInvariantError(
+        "invalid_record",
+        "ordinary Mind description metadata is invalid",
+      );
+    }
+  }
   if (space.state !== "active") return;
   const owners = memberships.filter(
     (membership) => membership.state === "active" && membership.role === "owner",
@@ -203,6 +263,12 @@ function validatePersonal(
   memberships: readonly SpaceMembership[],
   invitations: readonly SpaceInvitation[],
 ): void {
+  if (Object.prototype.hasOwnProperty.call(space, "description")) {
+    throw new DomainInvariantError(
+      "personal_description",
+      "Personal Mind cannot carry ordinary description metadata",
+    );
+  }
   if (!sameSpace(binding.spaceId, space.spaceId)) {
     throw new DomainInvariantError(
       "personal_binding_mismatch",
@@ -279,7 +345,9 @@ export class SpaceAggregate {
   }): SpaceAggregate {
     return new SpaceAggregate({
       kind: "ordinary",
-      space: input.space,
+      space: Object.prototype.hasOwnProperty.call(input.space, "description")
+        ? input.space
+        : { ...input.space, description: null },
       personalBinding: null,
       memberships: input.memberships,
       invitations: input.invitations ?? [],
@@ -387,6 +455,21 @@ export class SpaceAggregate {
     readonly expectedMetadataVersion: Version;
     readonly occurredAt: UtcInstant;
   }): SpaceAggregate {
+    return this.updateMetadata({
+      actorPrincipalId: input.actorPrincipalId,
+      name: input.name,
+      expectedMetadataVersion: input.expectedMetadataVersion,
+      occurredAt: input.occurredAt,
+    });
+  }
+
+  updateMetadata(input: {
+    readonly actorPrincipalId: PrincipalId;
+    readonly name?: string;
+    readonly description?: string | null;
+    readonly expectedMetadataVersion: Version;
+    readonly occurredAt: UtcInstant;
+  }): SpaceAggregate {
     if (this.#kind !== "ordinary") {
       throw new DomainInvariantError(
         "settings_permission_required",
@@ -410,10 +493,18 @@ export class SpaceAggregate {
         "current settings capability is required",
       );
     }
+    const nextName = input.name ?? this.#space.name;
+    const nextDescription = Object.prototype.hasOwnProperty.call(input, "description")
+      ? input.description
+      : this.#space.description;
+    if (nextName === this.#space.name && nextDescription === this.#space.description) {
+      return this;
+    }
     return SpaceAggregate.restoreOrdinary({
       space: {
         ...this.#space,
-        name: input.name,
+        name: nextName,
+        description: nextDescription as string | null,
         metadataVersion: version(this.#space.metadataVersion + 1),
         updatedAt: input.occurredAt,
       },

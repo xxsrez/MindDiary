@@ -442,7 +442,8 @@ export type CreateOrdinaryMindResult =
 export interface RenameOrdinaryMindRequest {
   readonly principalId: PrincipalId;
   readonly spaceId: SpaceId;
-  readonly displayName: string;
+  readonly displayName?: string;
+  readonly description?: string | null;
   readonly expectedMetadataVersion: Version;
   readonly idempotencyKey: IdempotencyKey;
   readonly canonicalRequestHash: Sha256Digest;

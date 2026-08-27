@@ -6,6 +6,7 @@ import {
   PrincipalAccount,
   SpaceAggregate,
   capabilitiesForRole,
+  normalizeOrdinaryMindDescription,
   normalizeTokenScopes,
   roleHasCapability,
   version,
@@ -121,6 +122,7 @@ test("active ordinary Mind restores only with exactly one Owner", () => {
   );
 
   const aggregate = ordinary();
+  assert.equal(aggregate.snapshot().space.description, null);
   assert.equal(
     aggregate.snapshot().memberships.filter((item) => item.role === "owner").length,
     1,
@@ -134,6 +136,31 @@ test("active ordinary Mind restores only with exactly one Owner", () => {
       ],
     }),
   );
+});
+
+test("ordinary description normalization is canonical and bounded by Unicode code points", () => {
+  assert.deepEqual(
+    normalizeOrdinaryMindDescription("  Ａ\r\nsecond line  "),
+    { kind: "valid", value: "A\nsecond line" },
+  );
+  assert.deepEqual(normalizeOrdinaryMindDescription("\t\n"), {
+    kind: "valid",
+    value: null,
+  });
+  assert.deepEqual(normalizeOrdinaryMindDescription("😀".repeat(500)), {
+    kind: "valid",
+    value: "😀".repeat(500),
+  });
+  assert.deepEqual(normalizeOrdinaryMindDescription("😀".repeat(501)), {
+    kind: "invalid",
+  });
+  for (const invalid of ["bad\0value", "bad\u000bvalue", "bad\u0085value", "\ud800"]) {
+    assert.deepEqual(normalizeOrdinaryMindDescription(invalid), { kind: "invalid" });
+  }
+
+  expectDomainError("invalid_record", () => ordinary({
+    space: space({ description: " not canonical " }),
+  }));
 });
 
 test("active membership and pending invitation uniqueness is enforced per Mind/principal", () => {
@@ -261,6 +288,14 @@ test("Personal Mind uses the ordinary space schema but is private and sole-owned
   });
 
   assert.equal(personal.snapshot().kind, "personal");
+  assert.equal("description" in personal.snapshot().space, false);
+  expectDomainError("personal_description", () =>
+    SpaceAggregate.restorePersonal({
+      space: { ...personalSpace, description: null },
+      binding,
+      membership: owner,
+    }),
+  );
   expectDomainError("personal_visibility", () =>
     SpaceAggregate.restorePersonal({
       space: { ...personalSpace, visibility: "public" },

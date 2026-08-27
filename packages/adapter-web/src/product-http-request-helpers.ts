@@ -233,6 +233,21 @@ export function requiredString(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
+function ordinaryDescription(value: unknown): string | null | undefined {
+  return value === undefined || value === null
+    ? null
+    : typeof value === "string"
+      ? value
+      : undefined;
+}
+
+function descriptionExcerpt(value: string | null, fallback: string): string {
+  if (value === null) return fallback;
+  const compact = value.replace(/\s+/gu, " ").trim();
+  const points = [...compact];
+  return points.length <= 180 ? compact : `${points.slice(0, 179).join("")}…`;
+}
+
 function positiveInteger(value: unknown): number | null {
   return Number.isSafeInteger(value) && Number(value) > 0 ? Number(value) : null;
 }
@@ -340,13 +355,18 @@ export function uiMind(value: unknown): UiMindCard | null {
     !(visibility === "private" || visibility === "unlisted" || visibility === "public")
   ) return null;
   const isPersonal = source?.isPersonal === true;
+  const description = ordinaryDescription(source?.description);
+  if (!isPersonal && description === undefined) return null;
   return Object.freeze({
     id: requiredString(source?.mindId) ?? route,
     name,
     route,
     description: isPersonal
       ? "Your private place for personal Memories."
-      : "A versioned Mind available through your current access.",
+      : descriptionExcerpt(
+          description ?? null,
+          "A versioned Mind available through your current access.",
+        ),
     visibility,
     role: roleLabel(access?.role),
     updatedLabel: "Current HEAD is ready",
@@ -360,6 +380,7 @@ export function ordinaryUiMind(value: unknown): OrdinaryMindUiMind | null {
   const mindId = requiredString(source?.mindId);
   const handle = requiredString(source?.handle);
   const name = requiredString(source?.name);
+  const description = ordinaryDescription(source?.description);
   const route = requiredString(source?.route);
   const metadataVersion = positiveInteger(source?.metadataVersion);
   const headRevisionId = requiredString(source?.headRevisionId);
@@ -370,6 +391,7 @@ export function ordinaryUiMind(value: unknown): OrdinaryMindUiMind | null {
     mindId === null ||
     handle === null ||
     name === null ||
+    description === undefined ||
     headRevisionId === null ||
     route !== `/${handle}` ||
     handle.length < 3 ||
@@ -383,6 +405,7 @@ export function ordinaryUiMind(value: unknown): OrdinaryMindUiMind | null {
     mindId,
     handle,
     name,
+    description,
     headRevisionId,
     visibility,
     role: role ?? "reader",
@@ -522,8 +545,9 @@ export function publicUiMind(value: unknown): PublicMindCatalogItem | null {
   const mindId = requiredString(source?.mindId);
   const route = requiredString(source?.route);
   const name = requiredString(source?.name);
+  const description = ordinaryDescription(source?.description);
   if (
-    mindId === null || route === null || name === null ||
+    mindId === null || route === null || name === null || description === undefined ||
     !/^\/[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(route) ||
     source?.isPersonal !== false || source?.visibility !== "public" ||
     source?.discovery !== "public_catalog"
@@ -532,7 +556,11 @@ export function publicUiMind(value: unknown): PublicMindCatalogItem | null {
     mindId,
     route,
     name,
-    summary: "A versioned Mind shared by its Owner.",
+    description,
+    summary: descriptionExcerpt(
+      description,
+      "A versioned Mind shared by its Owner.",
+    ),
     visibility: "public",
     isPersonal: false,
     discovery: "public_catalog",

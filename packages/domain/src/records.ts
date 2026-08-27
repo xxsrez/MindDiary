@@ -141,6 +141,11 @@ export interface KnowledgeSpace {
   readonly spaceHandle: string;
   readonly normalizedHandle: string;
   readonly name: string;
+  /**
+   * Ordinary-Mind service metadata only. Legacy ordinary records may omit the
+   * field and are reconstructed as null; Personal Mind records must omit it.
+   */
+  readonly description?: string | null;
   readonly visibility: Visibility;
   readonly state: SpaceLifecycleState;
   readonly metadataVersion: Version;

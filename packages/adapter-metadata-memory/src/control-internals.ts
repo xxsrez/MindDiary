@@ -549,6 +549,7 @@ export function sameKnowledgeSpaceRecord(
     left.spaceHandle === right.spaceHandle &&
     left.normalizedHandle === right.normalizedHandle &&
     left.name === right.name &&
+    (left.description ?? null) === (right.description ?? null) &&
     left.visibility === right.visibility &&
     left.state === right.state &&
     left.metadataVersion === right.metadataVersion &&

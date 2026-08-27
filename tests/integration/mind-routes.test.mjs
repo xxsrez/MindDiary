@@ -93,10 +93,15 @@ async function createAccount(env, index, displayName = `Owner ${index}`) {
   );
 }
 
-async function createMind(env, owner, handle, name = handle) {
+async function createMind(env, owner, handle, name = handle, description = undefined) {
   return env.ordinary.createSpaceWithOwner(
     registeredActor(owner.principalId, `request_create_${handle}`),
-    { name, handle, idempotencyKey: `create-${handle}` },
+    {
+      name,
+      handle,
+      ...(description === undefined ? {} : { description }),
+      idempotencyKey: `create-${handle}`,
+    },
   );
 }
 
@@ -166,7 +171,13 @@ test("/me and list expose only safe Personal plus accepted membership descriptor
   const owner = await createAccount(env, 1, "Mind Owner");
   const member = await createAccount(env, 2, "Accepted Member");
   const outsider = await createAccount(env, 3, "Outside Visitor");
-  const shared = await createMind(env, owner, "shared-notes", "Shared Notes");
+  const shared = await createMind(
+    env,
+    owner,
+    "shared-notes",
+    "Shared Notes",
+    "Only authorized readers receive this metadata.",
+  );
   const unlisted = await createMind(env, owner, "quiet-library", "Quiet Library");
   const published = await createMind(env, owner, "public-library", "Public Library");
   const privateMind = await createMind(env, owner, "private-library", "Private Library");
@@ -194,6 +205,7 @@ test("/me and list expose only safe Personal plus accepted membership descriptor
   assert.equal(personal.name, "Accepted Member");
   assert.equal(personal.isPersonal, true);
   assert.equal("handle" in personal, false);
+  assert.equal("description" in personal, false);
   assert.equal(
     personal.access.capabilities.some(
       (capability) => !capability.startsWith("content:"),
@@ -212,6 +224,10 @@ test("/me and list expose only safe Personal plus accepted membership descriptor
   );
   assert.equal(listed[1].access.kind, "membership");
   assert.equal(listed[1].access.role, "editor");
+  assert.equal(
+    listed[1].description,
+    "Only authorized readers receive this metadata.",
+  );
   assert.equal(
     listed[1].access.capabilities.some(
       (capability) => !capability.startsWith("content:"),
@@ -281,7 +297,13 @@ test("exact ordinary resolve uses membership or current public/unlisted Reader b
   const owner = await createAccount(env, 1);
   const member = await createAccount(env, 2);
   const outsider = await createAccount(env, 3);
-  const mind = await createMind(env, owner, "research-notes", "Research Notes");
+  const mind = await createMind(
+    env,
+    owner,
+    "research-notes",
+    "Research Notes",
+    "Authorized route description.",
+  );
   await grantMembership(env, mind, member, "reader", "reader");
 
   const ownerResult = await env.routes.resolveRoute(
@@ -342,6 +364,7 @@ test("exact ordinary resolve uses membership or current public/unlisted Reader b
     );
     assert.equal(baseline.visibility, visibility);
     assert.equal(baseline.discovery, "exact_handle");
+    assert.equal(baseline.description, "Authorized route description.");
     assert.deepEqual(baseline.access, {
       kind: "visibility",
       role: null,

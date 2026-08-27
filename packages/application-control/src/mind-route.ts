@@ -51,6 +51,7 @@ export interface OrdinaryMindRouteDescriptor {
   readonly route: `/${string}`;
   readonly handle: string;
   readonly name: string;
+  readonly description: string | null;
   readonly isPersonal: false;
   readonly visibility: "private" | "unlisted" | "public";
   readonly discovery: "membership" | "exact_handle" | "public_catalog";
@@ -538,6 +539,7 @@ export class MindRouteService {
       route: `/${snapshot.canonicalHandle}`,
       handle: snapshot.canonicalHandle,
       name: space.name,
+      description: space.description ?? null,
       isPersonal: false,
       visibility: space.visibility,
       discovery,

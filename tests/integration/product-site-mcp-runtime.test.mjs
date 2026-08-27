@@ -1795,10 +1795,37 @@ test("durable product runtime carries a Sites account token through Codex MCP an
       "x-csrf-token": registeredCsrf,
       "idempotency-key": "mind:product-runtime-e2e",
     },
-    body: JSON.stringify({ name: "Runtime Shared", handle: "runtime-shared" }),
+    body: JSON.stringify({
+      name: "Runtime Shared",
+      handle: "runtime-shared",
+      description: "  Runtime Ｍind\r\ndescription  ",
+    }),
   }));
   assert.equal(createdMind.status, 200);
-  assert.equal((await createdMind.json()).data.route, "/runtime-shared");
+  const createdMindBody = await createdMind.json();
+  assert.equal(createdMindBody.data.route, "/runtime-shared");
+  assert.equal(createdMindBody.data.description, "Runtime Mind\ndescription");
+
+  const rejectedPersonalCreate = await responseFrom(runtime, new Request(
+    `${ORIGIN}/api/v1/minds`,
+    {
+      method: "POST",
+      headers: {
+        origin: ORIGIN,
+        "content-type": "application/json",
+        "x-csrf-token": registeredCsrf,
+        "idempotency-key": "mind:rejected-personal-description",
+      },
+      body: JSON.stringify({
+        name: "Injected Personal",
+        handle: "injected-personal",
+        description: "Must not exist",
+        is_personal: true,
+      }),
+    },
+  ));
+  assert.equal(rejectedPersonalCreate.status, 400);
+  assert.equal((await rejectedPersonalCreate.json()).error.code, "invalid_request");
 
   runtime = await createProductSiteRuntime(runtimeOptions);
   const reconstructedMinds = await responseFrom(
@@ -1806,9 +1833,15 @@ test("durable product runtime carries a Sites account token through Codex MCP an
     new Request(`${ORIGIN}/api/v1/minds`),
   );
   assert.equal(reconstructedMinds.status, 200);
+  const reconstructedMindsBody = await reconstructedMinds.json();
   assert.deepEqual(
-    (await reconstructedMinds.json()).data.map(({ route }) => route),
+    reconstructedMindsBody.data.map(({ route }) => route),
     ["/me", "/runtime-shared"],
+  );
+  assert.equal("description" in reconstructedMindsBody.data[0], false);
+  assert.equal(
+    reconstructedMindsBody.data[1].description,
+    "Runtime Mind\ndescription",
   );
   const reconstructedExact = await responseFrom(
     runtime,
@@ -1817,6 +1850,7 @@ test("durable product runtime carries a Sites account token through Codex MCP an
   assert.equal(reconstructedExact.status, 200);
   const reconstructedExactBody = await reconstructedExact.json();
   assert.equal(reconstructedExactBody.data.access.role, "owner");
+  assert.equal(reconstructedExactBody.data.description, "Runtime Mind\ndescription");
 
   const renamedMind = await responseFrom(runtime, new Request(
     `${ORIGIN}/api/v1/minds/runtime-shared`,
@@ -1830,6 +1864,7 @@ test("durable product runtime carries a Sites account token through Codex MCP an
       },
       body: JSON.stringify({
         name: "Runtime Library",
+        description: "Updated runtime description",
         expected_metadata_version: reconstructedExactBody.data.metadata_version,
       }),
     },
@@ -1837,8 +1872,66 @@ test("durable product runtime carries a Sites account token through Codex MCP an
   assert.equal(renamedMind.status, 200);
   const renamedMindBody = await renamedMind.json();
   assert.equal(renamedMindBody.data.name, "Runtime Library");
+  assert.equal(renamedMindBody.data.description, "Updated runtime description");
+  assert.equal(
+    renamedMindBody.data.metadata_version,
+    reconstructedExactBody.data.metadata_version + 1,
+  );
+  assert.equal(
+    renamedMindBody.data.access_version,
+    createdMindBody.data.access_version,
+  );
   assert.equal(renamedMindBody.data.route, "/runtime-shared");
   assert.equal(renamedMindBody.data.head_revision_id, reconstructedExactBody.data.head_revision_id);
+
+  const noOpDescription = await responseFrom(runtime, new Request(
+    `${ORIGIN}/api/v1/minds/runtime-shared`,
+    {
+      method: "PATCH",
+      headers: {
+        origin: ORIGIN,
+        "content-type": "application/json",
+        "x-csrf-token": registeredCsrf,
+        "idempotency-key": "description-no-op:product-runtime-e2e",
+      },
+      body: JSON.stringify({
+        description: " Updated runtime description ",
+        expected_metadata_version: renamedMindBody.data.metadata_version,
+      }),
+    },
+  ));
+  assert.equal(noOpDescription.status, 200);
+  const noOpDescriptionBody = await noOpDescription.json();
+  assert.equal(
+    noOpDescriptionBody.data.metadata_version,
+    renamedMindBody.data.metadata_version,
+  );
+  assert.equal(
+    noOpDescriptionBody.data.head_revision_id,
+    reconstructedExactBody.data.head_revision_id,
+  );
+
+  const personalDescription = await responseFrom(runtime, new Request(
+    `${ORIGIN}/api/v1/minds/me`,
+    {
+      method: "PATCH",
+      headers: {
+        origin: ORIGIN,
+        "content-type": "application/json",
+        "x-csrf-token": registeredCsrf,
+        "idempotency-key": "description-personal:product-runtime-e2e",
+      },
+      body: JSON.stringify({
+        description: "Must stay absent",
+        expected_metadata_version: sessionBody.data.personal_mind.metadata_version,
+      }),
+    },
+  ));
+  assert.equal(personalDescription.status, 403);
+  assert.equal(
+    (await personalDescription.json()).error.code,
+    "personal_mind_operation_forbidden",
+  );
 
   runtime = await createProductSiteRuntime(runtimeOptions);
   const renamedAfterRestart = await responseFrom(
@@ -1848,6 +1941,10 @@ test("durable product runtime carries a Sites account token through Codex MCP an
   assert.equal(renamedAfterRestart.status, 200);
   const renamedAfterRestartBody = await renamedAfterRestart.json();
   assert.equal(renamedAfterRestartBody.data.name, "Runtime Library");
+  assert.equal(
+    renamedAfterRestartBody.data.description,
+    "Updated runtime description",
+  );
   assert.equal(renamedAfterRestartBody.data.route, "/runtime-shared");
   assert.equal(renamedAfterRestartBody.data.head_revision_id, reconstructedExactBody.data.head_revision_id);
 
@@ -1967,6 +2064,8 @@ test("durable product runtime carries a Sites account token through Codex MCP an
   );
   assert.ok(ordinaryMind);
   assert.equal(ordinaryMind.name, "Runtime Library");
+  assert.equal("description" in ordinaryMind, false);
+  assert.equal(JSON.stringify(listedBody).includes("Updated runtime description"), false);
   const personalMind = listedBody.result.structuredContent.data.minds.find(
     ({ route }) => route === "/me",
   );

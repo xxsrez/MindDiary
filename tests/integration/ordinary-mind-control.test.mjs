@@ -143,6 +143,7 @@ test("create atomically publishes one private ordinary Mind, initial HEAD and so
     route: "/research-notes",
     handle: "research-notes",
     name: "Research Notes",
+    description: null,
     visibility: "private",
     metadataVersion: 1,
     accessVersion: 1,
@@ -153,6 +154,7 @@ test("create atomically publishes one private ordinary Mind, initial HEAD and so
   assert.equal(state.space.spaceHandle, "research-notes");
   assert.equal(state.space.normalizedHandle, "research-notes");
   assert.equal(state.space.visibility, "private");
+  assert.equal(state.space.description, null);
   assert.equal(state.space.headRevisionId, state.revisions[0].revision.revisionId);
   assert.equal(state.revisions[0].revision.revisionNumber, 1);
   assert.equal(state.revisions[0].revision.parentRevisionId, null);
@@ -445,6 +447,261 @@ test("rename changes only non-unique display name under metadata CAS", async () 
   assert.notEqual(duplicate.handle, renamed.handle);
 });
 
+test("ordinary description create and partial metadata update normalize atomically without content effects", async () => {
+  const env = harness();
+  const owner = await createAccount(env, 1);
+  const actor = registeredActor(owner.principalId, "request_description_owner", CREATED_AT);
+
+  const omitted = await env.ordinary.createSpaceWithOwner(actor, {
+    name: "Omitted",
+    handle: "description-omitted",
+    idempotencyKey: "description-omitted",
+  });
+  assert.equal(omitted.description, null);
+  const explicitNull = await env.ordinary.createSpaceWithOwner(actor, {
+    name: "Null",
+    handle: "description-null",
+    description: null,
+    idempotencyKey: "description-null",
+  });
+  assert.equal(explicitNull.description, null);
+  const empty = await env.ordinary.createSpaceWithOwner(actor, {
+    name: "Empty",
+    handle: "description-empty",
+    description: " \r\n\t ",
+    idempotencyKey: "description-empty",
+  });
+  assert.equal(empty.description, null);
+  const created = await env.ordinary.createSpaceWithOwner(actor, {
+    name: "Described",
+    handle: "description-valid",
+    description: "  Ａ first line\r\nsecond line  ",
+    idempotencyKey: "description-valid",
+  });
+  assert.equal(created.description, "A first line\nsecond line");
+  const createReplay = await env.ordinary.createSpaceWithOwner(actor, {
+    name: "Described",
+    handle: "description-valid",
+    description: "A first line\nsecond line",
+    idempotencyKey: "description-valid",
+  });
+  assert.equal(createReplay.replayed, true);
+  assert.deepEqual({ ...createReplay, replayed: false }, created);
+  await assert.rejects(env.ordinary.createSpaceWithOwner(actor, {
+    name: "Described",
+    handle: "description-valid",
+    description: "Changed create payload",
+    idempotencyKey: "description-valid",
+  }), expectFailure("idempotency_conflict"));
+
+  const before = await ordinaryState(env, created.mindId);
+  const updated = await env.ordinary.renameSpace(
+    registeredActor(owner.principalId, "request_description_combined"),
+    {
+      mindId: created.mindId,
+      name: "  Updated Mind  ",
+      description: "  Updated\rdescription  ",
+      expectedMetadataVersion: before.space.metadataVersion,
+      idempotencyKey: "description-combined",
+    },
+  );
+  const after = await ordinaryState(env, created.mindId);
+  assert.equal(updated.name, "Updated Mind");
+  assert.equal(updated.description, "Updated\ndescription");
+  assert.equal(updated.metadataVersion, before.space.metadataVersion + 1);
+  assert.equal(after.space.description, "Updated\ndescription");
+  assert.equal(after.space.accessVersion, before.space.accessVersion);
+  assert.equal(after.space.headRevisionId, before.space.headRevisionId);
+  assert.deepEqual(after.revisions, before.revisions);
+  assert.deepEqual(after.memberships, before.memberships);
+
+  const replay = await env.ordinary.renameSpace(actor, {
+    mindId: created.mindId,
+    name: "Updated Mind",
+    description: "Updated\ndescription",
+    expectedMetadataVersion: before.space.metadataVersion,
+    idempotencyKey: "description-combined",
+  });
+  assert.equal(replay.replayed, true);
+  assert.deepEqual({ ...replay, replayed: false }, updated);
+  await assert.rejects(
+    env.ordinary.renameSpace(actor, {
+      mindId: created.mindId,
+      description: "Different",
+      expectedMetadataVersion: updated.metadataVersion,
+      idempotencyKey: "description-combined",
+    }),
+    expectFailure("idempotency_conflict"),
+  );
+
+  const noOpBefore = await ordinaryState(env, created.mindId);
+  const noOp = await env.ordinary.renameSpace(actor, {
+    mindId: created.mindId,
+    description: " Updated\r\ndescription ",
+    expectedMetadataVersion: updated.metadataVersion,
+    idempotencyKey: "description-no-op",
+  });
+  assert.equal(noOp.metadataVersion, updated.metadataVersion);
+  assert.equal(noOp.replayed, false);
+  assert.deepEqual(await ordinaryState(env, created.mindId), noOpBefore);
+  const noOpReplay = await env.ordinary.renameSpace(actor, {
+    mindId: created.mindId,
+    description: "Updated\ndescription",
+    expectedMetadataVersion: updated.metadataVersion,
+    idempotencyKey: "description-no-op",
+  });
+  assert.equal(noOpReplay.replayed, true);
+
+  const cleared = await env.ordinary.renameSpace(actor, {
+    mindId: created.mindId,
+    description: " \n ",
+    expectedMetadataVersion: updated.metadataVersion,
+    idempotencyKey: "description-clear",
+  });
+  assert.equal(cleared.description, null);
+  assert.equal(cleared.metadataVersion, updated.metadataVersion + 1);
+  const explicitNullNoOp = await env.ordinary.renameSpace(actor, {
+    mindId: created.mindId,
+    description: null,
+    expectedMetadataVersion: cleared.metadataVersion,
+    idempotencyKey: "description-null-no-op",
+  });
+  assert.equal(explicitNullNoOp.metadataVersion, cleared.metadataVersion);
+});
+
+test("description validation, CAS and ordinary-only authorization fail closed without partial update", async () => {
+  const env = harness();
+  const owner = await createAccount(env, 1);
+  const editor = await createAccount(env, 2);
+  const reader = await createAccount(env, 3);
+  const visitor = await createAccount(env, 4);
+  const ownerActor = registeredActor(owner.principalId, "request_description_boundaries");
+  const created = await env.ordinary.createSpaceWithOwner(
+    registeredActor(owner.principalId, "request_description_target", CREATED_AT),
+    {
+      name: "Boundary Target",
+      handle: "description-boundaries",
+      description: "Initial",
+      idempotencyKey: "description-boundaries",
+    },
+  );
+  for (const [principal, role] of [[editor, "editor"], [reader, "reader"]]) {
+    assert.equal(await env.metadata.grantOrdinaryMembershipForTest({
+      membershipId: `membership_description_${role}`,
+      spaceId: created.mindId,
+      principalId: principal.principalId,
+      role,
+      state: "active",
+      version: 1,
+      createdAt: RENAMED_AT,
+      createdBy: owner.principalId,
+      updatedAt: RENAMED_AT,
+      updatedBy: owner.principalId,
+    }, RENAMED_AT), true);
+  }
+  assert.equal(
+    await env.metadata.changeOrdinaryVisibilityForTest(
+      created.mindId,
+      "public",
+      "2026-08-07T04:32:00.000Z",
+    ),
+    true,
+  );
+  const current = await ordinaryState(env, created.mindId);
+  for (const principal of [editor, reader, visitor]) {
+    await assert.rejects(env.ordinary.renameSpace(
+      registeredActor(principal.principalId, `request_denied_${principal.principalId}`),
+      {
+        mindId: created.mindId,
+        description: "Denied",
+        expectedMetadataVersion: current.space.metadataVersion,
+        idempotencyKey: `description-denied-${principal.principalId}`,
+      },
+    ), expectFailure("forbidden"));
+  }
+
+  const stable = await ordinaryState(env, created.mindId);
+  for (const invalid of [
+    "x".repeat(501),
+    "bad\0value",
+    "bad\u000bvalue",
+    "bad\u0085value",
+    "\ud800",
+  ]) {
+    await assert.rejects(env.ordinary.renameSpace(ownerActor, {
+      mindId: created.mindId,
+      name: "Must Not Apply",
+      description: invalid,
+      expectedMetadataVersion: stable.space.metadataVersion,
+      idempotencyKey: `invalid-description-${invalid.length}-${invalid.charCodeAt(0)}`,
+    }), expectFailure("invalid_description"));
+  }
+  const personalBefore = await env.metadata.readPersonalMindProfile(owner.principalId);
+  assert.ok(personalBefore);
+  await assert.rejects(env.ordinary.renameSpace(ownerActor, {
+    mindId: created.mindId,
+    description: "Valid",
+    expectedMetadataVersion: stable.space.metadataVersion - 1,
+    idempotencyKey: "description-stale",
+  }), expectFailure("metadata_conflict"));
+  await assert.rejects(env.ordinary.renameSpace(ownerActor, {
+    mindId: created.mindId,
+    expectedMetadataVersion: stable.space.metadataVersion,
+    idempotencyKey: "description-empty-update",
+  }), expectFailure("invalid_request"));
+  await assert.rejects(env.ordinary.renameSpace(ownerActor, {
+    mindId: created.mindId,
+    description: "Valid",
+    expectedMetadataVersion: stable.space.metadataVersion,
+    idempotencyKey: "description-unknown-field",
+    isPersonal: false,
+  }), expectFailure("invalid_request"));
+  await assert.rejects(env.ordinary.renameSpace(ownerActor, {
+    mindId: owner.personalMind.mindId,
+    description: "Forbidden Personal metadata",
+    expectedMetadataVersion: 1,
+    idempotencyKey: "description-personal",
+  }), expectFailure("personal_mind_operation_forbidden"));
+  assert.deepEqual(
+    await env.metadata.readPersonalMindProfile(owner.principalId),
+    personalBefore,
+  );
+  assert.deepEqual(await ordinaryState(env, created.mindId), stable);
+});
+
+test("legacy durable ordinary metadata reconstructs missing description as null without touching Personal Mind", async () => {
+  const env = harness();
+  const owner = await createAccount(env, 1, "Legacy Owner");
+  const created = await env.ordinary.createSpaceWithOwner(
+    registeredActor(owner.principalId, "request_legacy_description", CREATED_AT),
+    {
+      name: "Legacy Ordinary",
+      handle: "legacy-description",
+      idempotencyKey: "legacy-description",
+    },
+  );
+  const snapshot = env.metadata.exportDurableSnapshot();
+  const stored = snapshot.knowledgeSpaces.get(created.mindId);
+  assert.ok(stored);
+  const { description: _description, ...legacyRecord } = stored;
+  snapshot.knowledgeSpaces.set(created.mindId, Object.freeze(legacyRecord));
+
+  const restored = InMemoryRevisionMetadataStore.fromDurableSnapshot(snapshot);
+  const ordinary = await restored.inspectOrdinaryMindStateForTest(created.mindId);
+  assert.ok(ordinary);
+  assert.equal(ordinary.space.description, null);
+  assert.equal(ordinary.space.metadataVersion, stored.metadataVersion);
+  assert.equal(ordinary.space.updatedAt, stored.updatedAt);
+
+  const personal = await restored.readPersonalMindProfile(owner.principalId);
+  assert.ok(personal);
+  assert.equal("description" in personal.personalMind, false);
+  const reconstructed = restored.exportDurableSnapshot();
+  const personalSpace = reconstructed.knowledgeSpaces.get(owner.personalMind.mindId);
+  assert.ok(personalSpace);
+  assert.equal("description" in personalSpace, false);
+});
+
 test("rename replay, payload conflict, stale CAS, Personal target and unauthorized actor fail closed", async () => {
   const env = harness();
   const owner = await createAccount(env, 1, "Owner Profile");
@@ -580,11 +837,13 @@ test("idempotency replay rechecks current active target and settings authorizati
   const renameCommand = {
     mindId: target.mindId,
     name: "Admin Renamed",
+    description: "Updated by current Admin",
     expectedMetadataVersion: beforeRename.space.metadataVersion,
     idempotencyKey: "admin-rename-replay",
   };
   const renamed = await revoked.ordinary.renameSpace(adminActor, renameCommand);
   assert.equal(renamed.name, "Admin Renamed");
+  assert.equal(renamed.description, "Updated by current Admin");
   assert.equal(
     await revoked.metadata.revokeOrdinaryMembershipForTest(
       target.mindId,

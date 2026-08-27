@@ -31,6 +31,7 @@ export interface PublicMindCatalogItem {
   readonly mindId: string;
   readonly route: string;
   readonly name: string;
+  readonly description: string | null;
   readonly summary: string;
   readonly visibility: VisibilityCatalogVisibility;
   readonly isPersonal: boolean;

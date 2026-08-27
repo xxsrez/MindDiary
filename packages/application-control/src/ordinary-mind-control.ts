@@ -1,6 +1,6 @@
 import type { ActorContext } from "@mind-diary/application-contracts";
 import type { ObjectStore, OrdinaryMindIdGenerator, OrdinaryMindSnapshot, OrdinaryMindStore, VerifiedSpaceHost } from "@mind-diary/application-ports";
-import { MARKDOWN_MEDIA_TYPE, createCanonicalRevisionEnvelope, createRevisionManifest, isReservedTopLevelHandle, isReservedTopLevelRoute, parseCanonicalSpaceHandle, serializeRevisionManifest, version } from "@mind-diary/domain";
+import { MARKDOWN_MEDIA_TYPE, createCanonicalRevisionEnvelope, createRevisionManifest, isReservedTopLevelHandle, isReservedTopLevelRoute, normalizeOrdinaryMindDescription, parseCanonicalSpaceHandle, serializeRevisionManifest, version } from "@mind-diary/domain";
 import type { PrincipalId, SpaceId, UtcInstant } from "@mind-diary/domain";
 import { personalProfileIdempotencyKey, PersonalMindControlFailure, registeredSitesPrincipal, PERSONAL_PROFILE_ENCODER } from "./personal-mind-control.js";
 import { parseUtcInstant } from "./token-lifecycle.js";
@@ -10,6 +10,8 @@ import { createInitialOrdinaryMindFiles } from "./initial-mind-files.js";
 export type OrdinaryMindControlFailureCode =
   | "authentication_required"
   | "invalid_display_name"
+  | "invalid_description"
+  | "invalid_request"
   | "invalid_handle"
   | "invalid_visibility"
   | "invalid_exposure_acknowledgement"
@@ -45,12 +47,14 @@ export class OrdinaryMindControlFailure extends Error {
 export interface CreateOrdinaryMindCommand {
   readonly name: string;
   readonly handle: string;
+  readonly description?: string | null;
   readonly idempotencyKey: string;
 }
 
 export interface RenameOrdinaryMindCommand {
   readonly mindId: SpaceId;
-  readonly name: string;
+  readonly name?: string;
+  readonly description?: string | null;
   readonly expectedMetadataVersion: number;
   readonly idempotencyKey: string;
 }
@@ -60,6 +64,7 @@ export interface OrdinaryMindControlDescriptor {
   readonly route: `/${string}`;
   readonly handle: string;
   readonly name: string;
+  readonly description: string | null;
   readonly visibility: "private" | "unlisted" | "public";
   readonly metadataVersion: number;
   readonly accessVersion: number;
@@ -146,6 +151,7 @@ export function ordinaryMindDescriptor(
     route: `/${space.spaceHandle}`,
     handle: space.spaceHandle,
     name: space.name,
+    description: space.description ?? null,
     visibility: space.visibility,
     metadataVersion: space.metadataVersion,
     accessVersion: space.accessVersion,
@@ -203,11 +209,35 @@ export class OrdinaryMindControlService {
         "A registered Sites principal is required.",
       );
     }
-    const displayName = normalizedDisplayName(command?.name);
+    if (
+      command === null ||
+      typeof command !== "object" ||
+      Array.isArray(command) ||
+      Object.keys(command).some(
+        (key) => !["name", "handle", "description", "idempotencyKey"].includes(key),
+      )
+    ) {
+      throw new OrdinaryMindControlFailure("invalid_request", "Mind create request is invalid.");
+    }
+    const displayName = normalizedDisplayName(command.name);
     if (displayName === null) {
       throw new OrdinaryMindControlFailure(
         "invalid_display_name",
         "A valid display name is required.",
+      );
+    }
+    const hasDescription = Object.prototype.hasOwnProperty.call(command, "description");
+    const normalizedDescription = hasDescription
+      ? typeof command.description === "string"
+        ? normalizeOrdinaryMindDescription(command.description)
+        : command.description === null
+          ? Object.freeze({ kind: "valid" as const, value: null })
+          : Object.freeze({ kind: "invalid" as const })
+      : Object.freeze({ kind: "valid" as const, value: null });
+    if (normalizedDescription.kind !== "valid") {
+      throw new OrdinaryMindControlFailure(
+        "invalid_description",
+        "A valid ordinary Mind description is required.",
       );
     }
     if (isReservedTopLevelRoute(command?.handle)) {
@@ -236,10 +266,13 @@ export class OrdinaryMindControlService {
     try {
       const canonicalRequestHash = await this.#objects.calculateSha256(
         PERSONAL_PROFILE_ENCODER.encode(`${JSON.stringify({
-          format: "mind-diary-ordinary-mind-create-v1",
+          format: hasDescription
+            ? "mind-diary-ordinary-mind-create-v2"
+            : "mind-diary-ordinary-mind-create-v1",
           host: this.#host,
           handle: parsedHandle.canonicalHandle,
           display_name: displayName,
+          ...(hasDescription ? { description: normalizedDescription.value } : {}),
         })}\n`),
       );
       const spaceId = this.#ids.nextSpaceId();
@@ -298,6 +331,7 @@ export class OrdinaryMindControlService {
           spaceHandle: parsedHandle.canonicalHandle,
           normalizedHandle: parsedHandle.canonicalHandle,
           name: displayName,
+          description: normalizedDescription.value,
           visibility: "private" as const,
           state: "active" as const,
           metadataVersion: version(1),
@@ -412,6 +446,7 @@ export class OrdinaryMindControlService {
     if (
       command === null ||
       typeof command !== "object" ||
+      Array.isArray(command) ||
       typeof command.mindId !== "string" ||
       command.mindId.length === 0
     ) {
@@ -420,11 +455,52 @@ export class OrdinaryMindControlService {
         "Mind was not found.",
       );
     }
-    const displayName = normalizedDisplayName(command.name);
-    if (displayName === null) {
+    if (
+      Object.keys(command).some(
+        (key) => ![
+          "mindId",
+          "name",
+          "description",
+          "expectedMetadataVersion",
+          "idempotencyKey",
+        ].includes(key),
+      )
+    ) {
       throw new OrdinaryMindControlFailure(
-        "invalid_display_name",
-        "A valid display name is required.",
+        "invalid_request",
+        "Ordinary Mind metadata update fields are invalid.",
+      );
+    }
+    const updatesName = Object.prototype.hasOwnProperty.call(command, "name");
+    const updatesDescription = Object.prototype.hasOwnProperty.call(command, "description");
+    if (!updatesName && !updatesDescription) {
+      throw new OrdinaryMindControlFailure(
+        "invalid_request",
+        "At least one ordinary Mind metadata field is required.",
+      );
+    }
+    let displayName: string | undefined;
+    if (updatesName) {
+      const normalizedName = normalizedDisplayName(command.name);
+      if (normalizedName === null) {
+        throw new OrdinaryMindControlFailure(
+          "invalid_display_name",
+          "A valid display name is required.",
+        );
+      }
+      displayName = normalizedName;
+    }
+    const normalizedDescription = updatesDescription
+      ? typeof command.description === "string"
+        ? normalizeOrdinaryMindDescription(command.description)
+        : command.description === null
+          ? Object.freeze({ kind: "valid" as const, value: null })
+          : Object.freeze({ kind: "invalid" as const })
+      : null;
+    if (normalizedDescription?.kind === "invalid") {
+      throw new OrdinaryMindControlFailure(
+        "invalid_description",
+        "A valid ordinary Mind description is required.",
       );
     }
     const expectedMetadataVersion = ordinaryMindMetadataVersion(
@@ -437,9 +513,14 @@ export class OrdinaryMindControlService {
     try {
       const canonicalRequestHash = await this.#objects.calculateSha256(
         PERSONAL_PROFILE_ENCODER.encode(`${JSON.stringify({
-          format: "mind-diary-ordinary-mind-rename-v1",
+          format: updatesDescription
+            ? "mind-diary-ordinary-mind-metadata-update-v2"
+            : "mind-diary-ordinary-mind-rename-v1",
           mind_id: command.mindId,
-          display_name: displayName,
+          ...(updatesName ? { display_name: displayName } : {}),
+          ...(normalizedDescription === null
+            ? {}
+            : { description: normalizedDescription.value }),
           expected_metadata_version: expectedMetadataVersion,
         })}\n`),
       );
@@ -448,7 +529,10 @@ export class OrdinaryMindControlService {
           transaction.renameOrdinaryMind({
             principalId: trustedActor.principalId,
             spaceId: command.mindId,
-            displayName,
+            ...(displayName === undefined ? {} : { displayName }),
+            ...(normalizedDescription === null
+              ? {}
+              : { description: normalizedDescription.value }),
             expectedMetadataVersion,
             idempotencyKey: checkedIdempotencyKey,
             canonicalRequestHash,
