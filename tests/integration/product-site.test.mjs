@@ -855,12 +855,17 @@ test("pilot Product Site route map keeps one UAT shell, exact active navigation,
     assert.match(html, /href="\/public"/, path);
     assert.match(html, /href="\/invitations"/, path);
     assert.match(html, /href="\/settings\/account"/, path);
-    assert.match(html, /href="\/help\/codex"/, path);
+    assert.match(html, /href="\/help\/codex"[^>]+data-ia-codex-help-link/, path);
     const settingsRoute = path.startsWith("/settings/");
     assert.equal(/data-ia-nav="settings"/.test(html), settingsRoute, path);
     if (settingsRoute) {
       assert.match(html, /href="\/settings\/connections"/, path);
       assert.match(html, /href="\/settings\/developer\/mcp"/, path);
+      assert.deepEqual(
+        [...html.matchAll(/data-ia-settings-section="([^"]+)"/gu)].map((match) => match[1]),
+        ["account", "connections", "advanced-mcp"],
+        path,
+      );
     }
     const expectedCurrentCount = path === "/help"
       ? 0

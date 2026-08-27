@@ -65,6 +65,41 @@ export type MindDiaryNavigationTarget =
   | "tokens"
   | "help";
 
+export const MIND_DIARY_SETTINGS_ENTRY_ROUTE = "/settings/account" as const;
+export const MIND_DIARY_CODEX_HELP_ROUTE = "/help/codex" as const;
+
+export interface MindDiarySettingsSection {
+  readonly id: "account" | "connections" | "advanced-mcp";
+  readonly href:
+    | "/settings/account"
+    | "/settings/connections"
+    | "/settings/developer/mcp";
+  readonly label: "Account" | "Connections" | "Advanced MCP";
+  readonly navigation: "account" | "connections" | "tokens";
+}
+
+/** Stable contextual IA owned by the lower-left Settings entry. */
+export const MIND_DIARY_SETTINGS_SECTIONS: readonly MindDiarySettingsSection[] = Object.freeze([
+  Object.freeze({
+    id: "account",
+    href: MIND_DIARY_SETTINGS_ENTRY_ROUTE,
+    label: "Account",
+    navigation: "account",
+  }),
+  Object.freeze({
+    id: "connections",
+    href: "/settings/connections",
+    label: "Connections",
+    navigation: "connections",
+  }),
+  Object.freeze({
+    id: "advanced-mcp",
+    href: "/settings/developer/mcp",
+    label: "Advanced MCP",
+    navigation: "tokens",
+  }),
+]);
+
 export const DEFAULT_UI_SHELL_MODEL: MindDiaryUiShellModel = Object.freeze({
   displayName: "Andrey",
   activeNavigation: "home",
@@ -126,9 +161,7 @@ export function renderMindDiaryAuthenticatedHeader(
     activeNavigation === "connections" || activeNavigation === "tokens";
   const settingsContext = settingsCurrent
     ? `<nav class="md-context-navigation" aria-label="Settings sections" data-ia-nav="settings">
-        <a href="/settings/account"${activeAttribute(activeNavigation, "account")}>Account</a>
-        <a href="/settings/connections"${activeAttribute(activeNavigation, "connections")}>Connections</a>
-        <a href="/settings/developer/mcp"${activeAttribute(activeNavigation, "tokens")}>Advanced MCP</a>
+        ${MIND_DIARY_SETTINGS_SECTIONS.map((section) => `<a href="${section.href}" data-ia-settings-section="${section.id}"${activeAttribute(activeNavigation, section.navigation)}>${section.label}</a>`).join("\n        ")}
       </nav>`
     : "";
   const settingsCurrentAttribute = settingsCurrent ? ' aria-current="page"' : "";
@@ -158,8 +191,8 @@ export function renderMindDiaryAuthenticatedHeader(
       <a href="/invitations" data-ia-nav-item="invitations"${activeAttribute(activeNavigation, "invitations")}><span aria-hidden="true">✉</span> Invitations</a>
     </nav>
     <nav class="md-navigation md-navigation--utility" aria-label="Utility" data-ia-nav="utility">
-      <a href="/help/codex" data-ia-nav-item="help"${activeAttribute(activeNavigation, "help")}><span aria-hidden="true">?</span> Help with Codex</a>
-      <a href="/settings/account" data-ia-nav-item="settings" data-ia-settings-item${settingsCurrentAttribute}><span aria-hidden="true">⚙</span> Settings</a>
+      <a href="${MIND_DIARY_CODEX_HELP_ROUTE}" data-ia-nav-item="help" data-ia-codex-help-link${activeAttribute(activeNavigation, "help")}><span aria-hidden="true">?</span> Help with Codex</a>
+      <a href="${MIND_DIARY_SETTINGS_ENTRY_ROUTE}" data-ia-nav-item="settings" data-ia-settings-item${settingsCurrentAttribute}><span aria-hidden="true">⚙</span> Settings</a>
     </nav>
   </aside>
   ${settingsContext}`;
@@ -352,8 +385,8 @@ const SAFE_PRODUCT_ROUTES = new Set<string>([
   "/public",
   "/invitations",
   "/help",
-  "/help/codex",
-  "/settings/account",
+  MIND_DIARY_CODEX_HELP_ROUTE,
+  MIND_DIARY_SETTINGS_ENTRY_ROUTE,
   "/settings/connections",
   "/settings/developer/mcp",
   "/settings/mcp",

@@ -1,4 +1,5 @@
 import {
+  MIND_DIARY_CODEX_HELP_ROUTE,
   MIND_DIARY_FAVICON_LINKS,
   MIND_DIARY_UI_ASSETS,
   escapeUntrustedText,
@@ -153,7 +154,7 @@ export function renderConnectionsPageDocument(model: ConnectionsPageModel): stri
   } else if (model.collection.kind === "error") {
     collection = `<section class="md-state md-state--error" role="alert" data-connections-collection data-collection-state="error" data-ia-route-state="error"><h2>Connections are unavailable</h2><p>${escapeUntrustedText(model.collection.message)}</p><a class="md-button md-button--secondary" href="/settings/connections">Try again</a></section>`;
   } else if (model.collection.kind === "empty") {
-    collection = `<section class="md-state md-state--empty" data-connections-collection data-collection-state="empty" data-ia-route-state="empty"><h2>No active connections</h2><p>Install Mind Diary from the available Marketplace, then ask Codex to use one of your Minds. Codex will open the read consent when it first needs access.</p><a class="md-button md-button--primary" href="/help/codex" data-ia-primary-action>Open the three-step guide</a></section>`;
+    collection = `<section class="md-state md-state--empty" data-connections-collection data-collection-state="empty" data-ia-route-state="empty"><h2>No active connections</h2><p>Install Mind Diary from the available Marketplace, then ask Codex to use one of your Minds. Codex will open the read consent when it first needs access.</p><a class="md-button md-button--primary" href="${MIND_DIARY_CODEX_HELP_ROUTE}" data-ia-primary-action>Open the three-step guide</a></section>`;
   } else {
     collection = `<section aria-labelledby="connections-heading" data-connections-collection data-collection-state="ready" data-ia-collection><h2 id="connections-heading">Active connections</h2><div class="md-token-grid">${model.collection.items.map(renderConnectionCard).join("")}</div>${nextLink("/settings/connections", model.collection.nextCursor, "Next connections")}</section>`;
   }

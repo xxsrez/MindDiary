@@ -4,9 +4,12 @@ import test from "node:test";
 
 import {
   DEFAULT_UI_SHELL_MODEL,
+  MIND_DIARY_CODEX_HELP_ROUTE,
   MIND_DIARY_FONT_DELIVERY,
   MIND_DIARY_ISOLATED_ACCOUNT_ACTION,
   MIND_DIARY_ONBOARDING_ASSETS,
+  MIND_DIARY_SETTINGS_ENTRY_ROUTE,
+  MIND_DIARY_SETTINGS_SECTIONS,
   MIND_DIARY_UI_ASSETS,
   escapeUntrustedText,
   renderAuthenticatedOnboarding,
@@ -222,6 +225,76 @@ test("pilot route shell keeps exact links, active state, safe route states, and 
   });
   assert.match(deepHelp, /href="\/settings\/developer\/mcp"[^>]*>Open Advanced MCP<\/a>/);
   assert.equal((deepHelp.match(/aria-current="page"/g) ?? []).length, 0);
+});
+
+test("lower-left Settings and Codex Help expose one stable state-independent IA", () => {
+  assert.equal(MIND_DIARY_SETTINGS_ENTRY_ROUTE, "/settings/account");
+  assert.equal(MIND_DIARY_CODEX_HELP_ROUTE, "/help/codex");
+  assert.deepEqual(MIND_DIARY_SETTINGS_SECTIONS, [
+    {
+      id: "account",
+      href: "/settings/account",
+      label: "Account",
+      navigation: "account",
+    },
+    {
+      id: "connections",
+      href: "/settings/connections",
+      label: "Connections",
+      navigation: "connections",
+    },
+    {
+      id: "advanced-mcp",
+      href: "/settings/developer/mcp",
+      label: "Advanced MCP",
+      navigation: "tokens",
+    },
+  ]);
+
+  for (const activeNavigation of [
+    "home",
+    "my-mind",
+    "minds",
+    "public",
+    "invitations",
+    "account",
+    "connections",
+    "tokens",
+    "help",
+  ]) {
+    const html = renderMindDiaryRoutePage({
+      displayName: "Pilot User",
+      activeNavigation,
+      eyebrow: "Pilot route",
+      title: "Safe page",
+      description: "Server-rendered control state.",
+      state: { kind: "ready", message: "Current state." },
+    });
+    const utility = html.match(/<nav[^>]+data-ia-nav="utility"[\s\S]*?<\/nav>/)?.[0] ?? "";
+    assert.equal((utility.match(/data-ia-codex-help-link/g) ?? []).length, 1, activeNavigation);
+    assert.match(utility, /href="\/help\/codex"[^>]+data-ia-codex-help-link/);
+    assert.match(utility, /href="\/settings\/account"[^>]+data-ia-settings-item/);
+    assert.ok(
+      utility.indexOf("data-ia-codex-help-link") < utility.indexOf("data-ia-settings-item"),
+      activeNavigation,
+    );
+
+    const context = html.match(/<nav[^>]+data-ia-nav="settings"[\s\S]*?<\/nav>/)?.[0] ?? "";
+    if (["account", "connections", "tokens"].includes(activeNavigation)) {
+      assert.deepEqual(
+        [...context.matchAll(/data-ia-settings-section="([^"]+)"/g)].map((match) => match[1]),
+        ["account", "connections", "advanced-mcp"],
+      );
+      assert.doesNotMatch(context, /help\/codex|data-ia-codex-help-link/);
+    } else {
+      assert.equal(context, "");
+    }
+
+    assert.doesNotMatch(
+      `${utility}${context}`,
+      /(?:\/api\/mcp|content:read|binding[_ -]?id|mdp_v1_|client secret)/i,
+    );
+  }
 });
 
 test("loading, empty and error views communicate state without color alone", () => {

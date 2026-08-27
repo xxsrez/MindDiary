@@ -132,6 +132,10 @@ for (const definition of fixtureDefinitions) {
     await assertPageHasNoBrowserErrors(page, async () => {
       await page.goto(`${fixture.origin}/settings/connections`);
       await expect(page.getByRole("heading", { level: 1, name: "Connections" })).toBeVisible();
+      await expect(page.locator("[data-ia-codex-help-link]")).toHaveAttribute(
+        "href",
+        "/help/codex",
+      );
       await expect(page.getByRole("navigation", { name: "Primary" })).toBeVisible();
       await expect(page.locator("[data-connections-page] .md-token-card")).toHaveCount(
         Math.min(definition.count, 20),
@@ -148,6 +152,10 @@ for (const definition of fixtureDefinitions) {
       if (definition.count > 0) {
         const ref = `conn_v1_${"1".padStart(32, "0")}`;
         await page.goto(`${fixture.origin}/settings/connections/${ref}`);
+        await expect(page.locator("[data-ia-codex-help-link]")).toHaveAttribute(
+          "href",
+          "/help/codex",
+        );
         await expect(page.getByRole("heading", {
           level: 1,
           name: "Codex Marketplace on a deliberately narrow mobile viewport",
@@ -297,6 +305,10 @@ test("keyboard-only connection journey exposes progress, revoke, and reconnect s
   await page.goto(`${fixture.origin}/settings/connections`);
   await expect(page.locator("[data-connections-collection]"))
     .toHaveAttribute("data-collection-state", "ready");
+  await expect(page.locator("[data-ia-codex-help-link]")).toHaveAttribute(
+    "href",
+    "/help/codex",
+  );
 
   await page.keyboard.press("Tab");
   await expect(page.getByRole("link", { name: "Skip to main content" })).toBeFocused();
@@ -319,11 +331,19 @@ test("keyboard-only connection journey exposes progress, revoke, and reconnect s
   await page.keyboard.press("Enter");
   await returnToConnections;
   await expect(page.getByRole("heading", { level: 2, name: "No active connections" })).toBeVisible();
+  await expect(page.locator("[data-ia-codex-help-link]")).toHaveAttribute(
+    "href",
+    "/help/codex",
+  );
 
   const reconnect = await context.request.post(`${fixture.origin}/_fixture/reconnect`);
   expect(reconnect.status()).toBe(200);
   await page.reload();
   await expect(page.locator("[data-connections-page] .md-token-card")).toHaveCount(1);
+  await expect(page.locator("[data-ia-codex-help-link]")).toHaveAttribute(
+    "href",
+    "/help/codex",
+  );
   await context.close();
 });
 

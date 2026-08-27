@@ -113,8 +113,45 @@ test("server-resolved route map keeps one compact hierarchy and exact current st
       "href",
       "/settings/account",
     );
+    await expect(page.locator("[data-ia-codex-help-link]")).toHaveCount(1);
+    await expect(page.locator("[data-ia-codex-help-link]")).toHaveAttribute(
+      "href",
+      "/help/codex",
+    );
+    expect(await page.locator('[data-ia-nav="utility"] a').evaluateAll((links) =>
+      links.map((link) => link.getAttribute("data-ia-nav-item"))))
+      .toEqual(["help", "settings"]);
+    if (context !== null) {
+      expect(await page.locator("[data-ia-settings-section]").evaluateAll((links) =>
+        links.map((link) => link.getAttribute("data-ia-settings-section"))))
+        .toEqual(["account", "connections", "advanced-mcp"]);
+    }
     await expectBounded(page);
   }
+});
+
+test("Settings direct navigation and browser Back do not introduce an onboarding flow", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(`${origin}/minds`);
+  await page.locator("[data-ia-settings-item]").click();
+  await expect(page).toHaveURL(`${origin}/settings/account`);
+  await expect(page.locator('[data-ia-settings-section="account"]'))
+    .toHaveAttribute("aria-current", "page");
+
+  await page.locator('[data-ia-settings-section="connections"]').click();
+  await expect(page).toHaveURL(`${origin}/settings/connections`);
+  await page.goBack();
+  await expect(page).toHaveURL(`${origin}/settings/account`);
+
+  await page.goto(`${origin}/help/codex`);
+  await expect(page.locator("[data-ia-codex-help-link]")).toHaveAttribute(
+    "aria-current",
+    "page",
+  );
+  await expect(page.locator('[data-ia-nav="settings"]')).toHaveCount(0);
+  await expect(page.locator("body")).not.toContainText(/setup complete|checklist progress/i);
 });
 
 test("wide rail remains accessible and navigable when client JavaScript is unavailable", async ({
@@ -195,6 +232,9 @@ test("compact drawer traps focus, closes safely, and preserves the visible page 
   await page.keyboard.press("Enter");
   await expect(page.locator("[data-ia-mobile-trigger]")).toHaveAttribute("aria-expanded", "true");
   await expect(page.locator('[data-ia-nav-item="my-mind"]')).toBeFocused();
+  expect(await page.locator('[data-ia-nav="utility"] a').evaluateAll((links) =>
+    links.map((link) => link.getAttribute("data-ia-nav-item"))))
+    .toEqual(["help", "settings"]);
   await expect(page.locator("[data-ia-page-header]")).toBeAttached();
   await page.keyboard.press("Shift+Tab");
   await expect(page.locator("[data-ia-settings-item]")).toBeFocused();
