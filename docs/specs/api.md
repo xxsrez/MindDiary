@@ -344,6 +344,8 @@ Application-layer error имеет стабильный machine code:
 | `forbidden` | Actor известен, но capability отсутствует. |
 | `mind_not_found` | Mind не существует либо не должен быть различим caller. |
 | `handle_unavailable` | Handle occupied, reserved или retired. |
+| `invalid_description` | Ordinary Mind description нарушает normalization/length contract. |
+| `personal_mind_operation_forbidden` | Ordinary-only операция направлена в Personal Mind. |
 | `revision_not_found` | Exact revision/as-of не разрешается. |
 | `historical_read_only` | Mutation направлена не в current HEAD. |
 | `metadata_conflict` | `expected_metadata_version` stale. |
@@ -402,6 +404,7 @@ Application-layer error имеет стабильный machine code:
   "route": "/research-notes",
   "handle": "research-notes",
   "name": "Research Notes",
+  "description": "Research decisions and supporting notes.",
   "is_personal": false,
   "visibility": "private",
   "discovery": "membership",
@@ -422,7 +425,10 @@ Application-layer error имеет стабильный machine code:
 Rules:
 
 - Personal Mind имеет `route: "/me"`, `handle: null`, `is_personal: true` и
-  `visibility: "private"`.
+  `visibility: "private"`; поле `description` в его descriptor отсутствует.
+- Descriptor обычного Mind всегда содержит `description: string | null` после
+  current authorization. Это текущая service metadata, а не content выбранной
+  historical revision.
 - `discovery` — `personal | membership | public_catalog | exact_handle`.
 - Baseline reader имеет `access.kind: "visibility"`, `role: null` и только
   read capabilities.
@@ -750,24 +756,39 @@ MVP cascade.
 ```json
 {
   "name": "Research Notes",
-  "handle": "research-notes"
+  "handle": "research-notes",
+  "description": "Research decisions and supporting notes."
 }
 ```
 
 Success: `201 Created`, `Location: /api/v1/minds/research-notes`, descriptor с
 `visibility: "private"`, sole Owner и initial HEAD. Occupied/reserved/retired
-handle одинаково возвращает `handle_unavailable`.
+handle одинаково возвращает `handle_unavailable`. `description` optional:
+omission, `null` и строка, ставшая пустой после normalization, сохраняют
+`description: null`.
 
 `PATCH /api/v1/minds/{mind_ref}`:
 
 ```json
 {
   "name": "Research Library",
+  "description": "Curated research decisions and evidence.",
   "expected_metadata_version": 7
 }
 ```
 
-Handle в MVP не меняется.
+Request должен содержать `name`, `description` или оба поля. Omitted поле не
+меняется; `description: null` или normalized-empty string очищает описание.
+Оба изменения выполняются атомарно и повышают `metadata_version` ровно на один;
+normalized no-op не повышает version. Update требует current Admin или Owner,
+`Idempotency-Key` и fresh `expected_metadata_version`. Personal Mind получает
+`personal_mind_operation_forbidden`. Handle в MVP не меняется; service metadata
+update не создаёт content revision и не меняет HEAD или access state.
+
+Для `description` create и update используют один contract: NFKC, перевод
+`CRLF`/`CR` в `LF`, trim внешних Unicode whitespace, максимум 500 Unicode code
+points. NUL, остальные C0 controls кроме `LF`, C1 controls и unpaired
+surrogates получают `invalid_description`. Internal `LF` сохраняется.
 
 `PUT /api/v1/minds/{mind_ref}/visibility`:
 

@@ -151,6 +151,7 @@ space_id          # immutable opaque primary identity
 space_handle      # immutable в прототипе URL identity
 normalized_handle # server-derived uniqueness key
 name              # mutable, non-unique display name
+description       # ordinary-only nullable service metadata
 metadata_version  # CAS для metadata/settings
 canonical_path    # derived /{space_handle}
 ```
@@ -187,6 +188,37 @@ Create возвращает одинаковое `handle_unavailable` для occ
 retired values. Это снижает usefulness availability probe, но глобальная
 уникальность всё равно не считается абсолютной защитой от inference.
 
+`description` задаёт краткое описание только обычного Mind и хранится рядом с
+его service metadata. Оно не является `Memory`, частью `OKFBundle`, content
+instruction, поисковым документом или входом модели. Personal Mind не имеет
+этого поля ни в descriptor, ни в durable record; попытка изменить его через
+ordinary-Mind command получает `personal_mind_operation_forbidden`.
+
+На create и update server применяет один canonical normalization contract:
+
+- Unicode NFKC;
+- `CRLF` и одиночный `CR` преобразуются в `LF`;
+- внешние Unicode whitespace удаляются, внутренние переводы строк сохраняются;
+- NUL, остальные C0 controls кроме `LF`, все C1 controls и unpaired UTF-16
+  surrogates отклоняются с `invalid_description`;
+- длина после normalization — не более 500 Unicode code points;
+- отсутствующее поле при create, explicit `null` и строка, ставшая пустой после
+  normalization, означают `null`.
+
+Update может атомарно менять `name`, `description` или оба поля и использует
+`expected_metadata_version` вместе с idempotency key. Отсутствующее поле при
+update не меняется. Один material update повышает `metadata_version` ровно на
+один; повтор того же canonical payload возвращает прежний result, а normalized
+no-op не повышает version. Изменение service description не создаёт content
+revision, не меняет HEAD, ACL, visibility, membership или `access_version`.
+
+Менять `description` могут только текущие Admin и Owner обычного Mind. Оно
+возвращается только после обычного разрешения Mind и authorization: private
+Mind не раскрывает его non-member, unlisted — только authenticated caller по
+точному handle, public — также через current catalog. Historical revision
+selector не восстанавливает старое service description: descriptor всегда
+отражает текущую metadata, доступную после current authorization.
+
 Reserved route Personal Mind:
 
 ```text
@@ -197,7 +229,7 @@ Personal Mind также имеет внутренние `space_id` и service-m
 `space_handle`, но этот handle не показывается и не выбирается пользователем.
 `/me` всегда разрешается через authenticated `principal_id`. Display `name`
 Personal Mind автоматически следует за display name principal и не редактируется
-отдельно.
+отдельно. Ordinary-only `description` у Personal Mind отсутствует.
 
 ## Personal Mind invariants
 
