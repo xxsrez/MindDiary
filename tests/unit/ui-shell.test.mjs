@@ -122,6 +122,7 @@ test("untrusted display text is escaped in text and attribute positions", () => 
   assert.match(html, /<h3><a href="#">/);
   assert.match(html, /&lt;script&gt;globalThis\.pwned=6&lt;\/script&gt;/);
   assert.match(html, /&lt;svg onload=&quot;globalThis\.pwned=4&quot;&gt;/);
+  assert.doesNotMatch(html, /data-mind-card|mind&quot; onmouseover/);
 });
 
 test("ready shell has semantic navigation, product language, form and modal contracts", () => {

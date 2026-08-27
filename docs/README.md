@@ -141,6 +141,9 @@ operation disposition и migration принадлежат MD-337/MD-339.
 - [Synthetic browser Product Site gate](operations/synthetic-browser-gate-runbook.md)
   — blocking local server-bound browser/UI composition, direct API negatives,
   operator boundary и redacted exact-SHA receipt.
+- [Browser-проверка компактного admin shell](operations/admin-shell-browser-uat-runbook.md)
+  — exact-SHA Playwright/Chromium gate для responsive/accessibility matrix и
+  отдельный UAT receipt с asset/deployment identity и числовыми DOM budgets.
 - [Hosted canary операторского каталога](operations/uat-operator-directory-canary.md)
   — three-actor restricted-UAT setup/verify/cleanup/recovery с
   environment-only session references, exact `404` boundary и redacted receipt.

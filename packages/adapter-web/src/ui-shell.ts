@@ -225,7 +225,7 @@ function renderMindCard(mind: UiMindCard): string {
   const personalLabel = mind.isPersonal
     ? '<span class="md-card__personal">My Mind</span>'
     : "";
-  return `<article class="md-card md-entity-row" data-mind-card="${escapeUntrustedText(mind.id)}" data-ia-row>
+  return `<article class="md-card md-entity-row" data-ia-row>
     <h3><a href="${safeMindRoute(mind.route)}">${escapeUntrustedText(mind.name)}</a></h3>
     <div class="md-card__topline">
       ${personalLabel}

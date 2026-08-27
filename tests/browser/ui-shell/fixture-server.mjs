@@ -12,7 +12,7 @@ import {
 
 const fixtureDirectory = fileURLToPath(new URL(".", import.meta.url));
 const root = resolve(fixtureDirectory, "../../..");
-const port = Number.parseInt(process.env.MIND_DIARY_UI_PORT ?? "4178", 10);
+const port = Number.parseInt(process.env.MIND_DIARY_UI_PORT ?? "0", 10);
 const host = "127.0.0.1";
 
 const contentTypes = new Map([
@@ -126,9 +126,44 @@ const routePages = new Map([
   ["/help/codex", ["help", "Use Mind Diary with Codex"]],
   ["/help", ["help", "Help and accessibility"]],
   ["/shared-research", ["minds", "Shared Research"]],
+  ["/fixture-missing", ["minds", "Page unavailable"]],
 ]);
 
-function routePageModel(pathname) {
+function routePageState(state) {
+  if (state === "loading") {
+    return { kind: "loading", message: "Loading the synthetic current state." };
+  }
+  if (state === "empty") {
+    return { kind: "empty", message: "The synthetic collection is empty." };
+  }
+  if (state === "forbidden") {
+    return {
+      kind: "forbidden",
+      message: "This synthetic account cannot open the requested control route.",
+    };
+  }
+  if (state === "not-found") {
+    return {
+      kind: "error",
+      message: "The requested control route was not found. No target metadata is available.",
+    };
+  }
+  if (state === "conflict") {
+    return {
+      kind: "error",
+      message: "The synthetic state changed. Reload the current server state before retrying.",
+    };
+  }
+  if (state === "server-error") {
+    return {
+      kind: "error",
+      message: "The synthetic service is temporarily unavailable. No operation was repeated.",
+    };
+  }
+  return { kind: "ready", message: "Current management state is ready." };
+}
+
+function routePageModel(pathname, state) {
   const route = routePages.get(pathname);
   if (!route) return null;
   return {
@@ -138,8 +173,16 @@ function routePageModel(pathname) {
     eyebrow: "Administration",
     title: route[1],
     description: "Server-resolved control state without raw Memory content.",
-    state: { kind: "ready", message: "Current management state is ready." },
+    state: routePageState(state),
   };
+}
+
+function routePageStatus(state) {
+  if (state === "forbidden") return 403;
+  if (state === "not-found") return 404;
+  if (state === "conflict") return 409;
+  if (state === "server-error") return 500;
+  return 200;
 }
 
 function resolveStaticPath(pathname) {
@@ -195,6 +238,33 @@ const server = createServer(async (request, response) => {
       sendText(response, 200, "application/json; charset=utf-8", '{"ok":true}');
       return;
     }
+    const session = url.searchParams.get("session");
+    if (session === "signed_out") {
+      sendText(
+        response,
+        200,
+        "text/html; charset=utf-8",
+        renderAuthenticatedOnboardingDocument({
+          kind: "anonymous",
+          authEntryPath: "/signin-with-chatgpt",
+        }),
+      );
+      return;
+    }
+    if (["registration_required", "bootstrapping", "bootstrap_error"].includes(session)) {
+      const state = session === "bootstrapping"
+        ? "bootstrapping"
+        : session === "bootstrap_error"
+          ? "error"
+          : "ready";
+      sendText(
+        response,
+        200,
+        "text/html; charset=utf-8",
+        renderAuthenticatedOnboardingDocument(onboardingModel("/welcome", state)),
+      );
+      return;
+    }
     if (url.pathname === "/" || url.pathname === "/minds") {
       const state = url.searchParams.get("state") ?? "ready";
       sendText(
@@ -218,11 +288,12 @@ const server = createServer(async (request, response) => {
       );
       return;
     }
-    const routeModel = routePageModel(url.pathname);
+    const state = url.searchParams.get("state") ?? "ready";
+    const routeModel = routePageModel(url.pathname, state);
     if (routeModel !== null) {
       sendText(
         response,
-        200,
+        routePageStatus(state),
         "text/html; charset=utf-8",
         renderMindDiaryRoutePageDocument(routeModel),
       );
@@ -254,7 +325,11 @@ server.listen(port, host, async () => {
   if (!css.includes("/brand/mind-diary-tokens.css")) {
     throw new Error("UI fixture did not load the canonical token path");
   }
-  process.stdout.write(`Mind Diary UI fixture: http://${host}:${port}/minds\n`);
+  const address = server.address();
+  if (typeof address !== "object" || address === null) {
+    throw new Error("UI fixture did not acquire a loopback port");
+  }
+  process.stdout.write(`Mind Diary UI fixture: http://${host}:${address.port}/minds\n`);
 });
 
 for (const signal of ["SIGINT", "SIGTERM"]) {

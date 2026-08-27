@@ -1246,6 +1246,20 @@ reconnect. Fixture HTTP bodies содержат только synthetic labels и
 refs; reporter сохраняет только названия assertions и pass/fail, без corpus,
 credentials, email или durable user IDs.
 
+Для принятого compact admin shell Release 0.3 действует дополнительный
+exact-candidate gate из
+[`admin-shell browser runbook`](admin-shell-browser-uat-runbook.md):
+`npm run gate:admin-shell-browser -- --candidate-sha <exact-clean-HEAD-sha>
+--evidence-out <private-temp-path>`. Он использует тот же pinned
+Playwright/Chromium, но запускает отдельную closed matrix MD-347 на пяти
+viewports и выдаёт самостоятельный receipt только при полном совпадении
+assertion registry. Hosted complement после Sites deploy не выводится из этого
+local result: in-app Browser связывает exact project/version/deployment,
+artifact и live shell asset digests с четырьмя critical journeys и числовыми
+geometry/accessibility facts; `npm run verify:admin-shell-uat` проверяет closed
+receipt. Generic visual approval, screenshot как evidence и manual review queue
+не являются success path.
+
 Все commands выполняются прямым `argv` без shell. Канонический full dev launcher
 проекта — root `npm run dev`; его machine event сообщает loopback URL,
 readiness и non-secret configuration fingerprint. Dev получает только
