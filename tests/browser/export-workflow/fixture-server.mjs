@@ -16,6 +16,7 @@ const sha256 = `sha256:${createHash("sha256").update(archive).digest("hex")}`;
 let mode = "normal";
 let sequence = 0;
 let startRequests = 0;
+const startAttempts = [];
 const jobs = new Map();
 const jobsByKey = new Map();
 const polls = new Map();
@@ -25,6 +26,7 @@ function reset(nextMode = "normal") {
   mode = nextMode;
   sequence = 0;
   startRequests = 0;
+  startAttempts.length = 0;
   jobs.clear();
   jobsByKey.clear();
   polls.clear();
@@ -68,6 +70,8 @@ const server = createServer(async (request, response) => {
         ok: true,
         mode,
         startRequests,
+        uniqueStartKeys: new Set(startAttempts.map((attempt) => attempt.key)).size,
+        startAttempts,
         uniqueJobs: jobs.size,
         jobs: [...jobs.values()],
       });
@@ -99,6 +103,7 @@ const server = createServer(async (request, response) => {
       }
       const key = request.headers["idempotency-key"];
       const input = await body(request);
+      startAttempts.push({ key, input });
       const selector = input.revision_selector;
       const revisionId = selector?.kind === "head" ? "revision_head_7" : selector?.revision_id;
       if (revisionId === "revision_mixed" && input.profile === "MD-OKF-ZIP-1") {

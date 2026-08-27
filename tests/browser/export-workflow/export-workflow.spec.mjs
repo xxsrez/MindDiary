@@ -95,12 +95,26 @@ test("historical mixed revision requires explicit bundle and unknown start repla
   await page.getByLabel("Historical revision ID").fill("revision_history_2");
   await page.getByRole("button", { name: "Start export" }).click();
   await expect(page.locator("[data-export-status]")).toContainText("same idempotent request");
+  const pendingState = JSON.parse((await page.evaluate(() => Object.values(sessionStorage)))[0]);
+  await page.reload();
+  await expect(page.locator("[data-export-status]")).toContainText("previous start result was not confirmed");
+  await expect(page.getByLabel("Exact historical revision")).toBeChecked();
+  await expect(page.getByLabel("Exact historical revision")).toBeDisabled();
+  await expect(page.getByLabel("Current HEAD")).toBeDisabled();
+  await expect(page.getByLabel("Historical revision ID")).toBeDisabled();
+  await expect(page.getByLabel("Historical revision ID")).toHaveValue("revision_history_2");
+  await expect(page.getByLabel("Archive content")).toBeDisabled();
+  await expect(page.getByLabel("Archive content")).toHaveValue("MD-BUNDLE-ZIP-1");
+  await expect(page.getByRole("button", { name: "Start export" })).toBeEnabled();
   await page.getByRole("button", { name: "Start export" }).click();
   await ready(page);
   const replay = await state();
   expect(replay.startRequests).toBe(2);
+  expect(replay.uniqueStartKeys).toBe(1);
   expect(replay.uniqueJobs).toBe(1);
   expect(replay.jobs[0].revision_id).toBe("revision_history_2");
+  expect(replay.startAttempts[0]).toEqual(replay.startAttempts[1]);
+  expect(replay.startAttempts[1].key).toBe(pendingState.idempotencyKey);
 });
 
 test("expired and access-tightened states fail closed; mobile keyboard flow stays bounded", async ({ browser }) => {

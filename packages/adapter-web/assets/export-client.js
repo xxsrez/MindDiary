@@ -377,9 +377,16 @@
       if (historical) historical.checked = true;
       if (current) current.checked = false;
       if (revisionInput) revisionInput.value = saved.selector.revisionId;
+    } else {
+      if (current) current.checked = true;
+      if (historical) historical.checked = false;
+      if (revisionInput) revisionInput.value = "";
     }
     if (profileInput) profileInput.value = saved.profile;
-    setRevisionControls();
+    // A persisted tuple without a job is an ambiguous start, not a fresh form.
+    // Restore the full selection lock before the user can interact so the only
+    // available submit is an exact replay under the stored idempotency key.
+    setBusy(false);
     if (safeJobId(saved.jobId)) {
       showJob(saved.selector.kind === "revision" ? saved.selector.revisionId : headRevision, "Recovering status");
       say("Recovering the actor-owned export status without starting another job…");
