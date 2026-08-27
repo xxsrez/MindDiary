@@ -1,9 +1,11 @@
 # Компактная административная IA Mind Diary
 
-Статус: accepted contract, 2026-08-27. Документ задаёт проверяемый design
-handoff для MD-347. Он определяет только информационную архитектуру,
-компоновку и доступность Product Site. Наличие контракта не означает, что
-описанный shell уже реализован или развёрнут.
+Статус: accepted contract, обновлено 2026-08-27. Документ задаёт проверяемый
+design handoff для compact Product Site shell. MD-355 уточняет внутри уже
+принятой оболочки Settings IA, устойчивое положение Codex Help и поведение
+прямых/legacy routes. Контракт определяет только информационную архитектуру,
+компоновку и доступность Product Site. Его наличие не доказывает реализацию
+или deployment.
 
 ## Цель и источник направления
 
@@ -165,6 +167,49 @@ navigation.
 | `/help/codex` | `Help with Codex` | — | Optional utility item; не child Settings. |
 | `/help` | none | — | Footer/deep-link route; не расширяет primary IA. |
 | unknown/reserved/unauthorized | none | — | Safe not-found/forbidden без target metadata. |
+
+## Settings IA и устойчивый Codex Help
+
+Нижний `Settings` — один entrypoint административного контейнера, а не новый
+onboarding flow. Он всегда ведёт прямо на `/settings/account`. На
+канонических Settings pages отдельная contextual navigation содержит ровно
+три пункта в стабильном порядке:
+
+1. `Account` → `/settings/account`;
+2. `Connections` → `/settings/connections`;
+3. `Advanced MCP` → `/settings/developer/mcp`.
+
+Account lifecycle content принадлежит отдельной implementation surface.
+Connections сохраняет actor-safe ordinary projection. Personal tokens,
+endpoint details и redacted diagnostics остаются внутри `Advanced MCP` и не
+получают отдельного rail item. Этот IA contract не определяет OAuth detail,
+token behavior или diagnostic semantics и не показывает credential, endpoint,
+scope, binding ID либо другой protocol internal в обычной navigation/copy.
+
+`Help with Codex` остаётся optional utility item непосредственно перед
+`Settings`, а не четвёртым Settings child. Если canonical `/help/codex`
+присутствует в candidate, ссылка на него строится из статического registered
+shell и доступна на ordinary pages, Connections empty/loading/ready/error и
+после revoke/reconnect одинаково. Её наличие, label, route и tab order не
+зависят от connection count, connection lifecycle или personal-token state.
+Страница не ставит и не читает `setup_complete`, progress/checklist,
+completion, dismiss/nag или другой onboarding state.
+
+Direct navigation на каждый canonical child и `/help/codex` сразу открывает
+соответствующий server-resolved page/current state без wizard, forced redirect
+chain или требования установленного Codex. Обычный browser Back возвращает на
+предыдущий route; connection detail дополнительно сохраняет явную ссылку назад
+на `/settings/connections`. Единственный legacy entrypoint этого IA —
+`/settings/mcp`: authenticated `GET`/`HEAD` получает уже принятый `308` на
+`/settings/developer/mcp`, а signed-out request — общий route-agnostic sign-in
+shell. Compatibility route не рендерит вторую navigation или отдельную копию
+Advanced MCP.
+
+Административный Site остаётся самодостаточным без Codex: account, Mind,
+membership, visibility и другие route-owned actions не требуют connection,
+посещения Help или завершённого setup. Никакой новый wizard, redirect,
+checklist, progress, completion либо nagging state этим контрактом не
+добавляется.
 
 ## Component inventory
 
@@ -363,6 +408,9 @@ fallback в implementation test.
 | `IA-NAV-01` | Wide: Personal first, Settings last lower item, route/current map совпадает с fixture. |
 | `IA-NAV-02` | Compact: closed drawer links не tabbable; open → My Mind focus; Escape → trigger focus. |
 | `IA-NAV-03` | Settings parent и exact context child current в разных named nav; authenticated legacy `/settings/mcp` redirect-ится, signed-out legacy request получает общий safe sign-in shell. |
+| `IA-SETTINGS-01` | Lower-left Settings всегда ведёт на `/settings/account`; contextual order ровно Account → Connections → Advanced MCP, diagnostics не становятся отдельным rail item. |
+| `IA-SETTINGS-02` | Stable `/help/codex` link присутствует на каждом registered shell независимо от Connections empty/loading/ready/error и connection revoke/reconnect; Help не становится Settings child. |
+| `IA-SETTINGS-03` | Direct canonical routes и browser Back работают без wizard/redirect chain; единственный legacy `/settings/mcp` использует принятый session-dependent transition без второй IA. |
 | `IA-GEOMETRY-01` | Fixture viewports проходят document/body/major-region overflow budget `<= 1px`. |
 | `IA-GEOMETRY-02` | Rail `240px` на wide, drawer `min(320px, 88vw)`, content `<= 1120px`, hit targets `>= 44px`. |
 | `IA-DENSITY-01` | Ready collections используют bounded rows: `44–56px` wide, `>=56px` compact; no card wall. |

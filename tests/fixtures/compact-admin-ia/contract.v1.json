@@ -102,6 +102,42 @@
     "helpAbsencePreservesSettingsPin": true,
     "drawerRepeatsDesktopOrder": true
   },
+  "settingsInformationArchitecture": {
+    "entryRoute": "/settings/account",
+    "contextOrder": ["account", "connections", "advanced-mcp"],
+    "children": {
+      "account": { "route": "/settings/account", "label": "Account", "owner": "account-settings" },
+      "connections": { "route": "/settings/connections", "label": "Connections", "owner": "ordinary-connections" },
+      "advanced-mcp": { "route": "/settings/developer/mcp", "label": "Advanced MCP", "owner": "personal-tokens-endpoints-diagnostics" }
+    },
+    "codexHelp": {
+      "route": "/help/codex",
+      "label": "Help with Codex",
+      "placement": "utility-before-settings",
+      "settingsChild": false,
+      "availability": "registered-shell-independent-of-connection-state",
+      "connectionStates": ["loading", "empty", "ready", "error", "revoked", "reconnected"]
+    },
+    "directNavigation": {
+      "canonicalRoutes": [
+        "/settings/account",
+        "/settings/connections",
+        "/settings/developer/mcp",
+        "/help/codex"
+      ],
+      "forcedWizard": false,
+      "requiresCodexConnection": false,
+      "browserBackPreservesPreviousRoute": true
+    },
+    "legacyMcp": {
+      "route": "/settings/mcp",
+      "registeredStatus": 308,
+      "registeredLocation": "/settings/developer/mcp",
+      "signedOutBehavior": "route-agnostic-sign-in-shell",
+      "duplicateNavigation": false
+    },
+    "forbiddenState": ["setup-complete", "checklist-progress", "dismissed-help", "nag-count"]
+  },
   "routes": [
     { "pattern": "/", "shellCurrent": "brand-home", "contextCurrent": null },
     { "pattern": "/me", "shellCurrent": "my-mind", "contextCurrent": null },
@@ -442,6 +478,9 @@
     "IA-NAV-01",
     "IA-NAV-02",
     "IA-NAV-03",
+    "IA-SETTINGS-01",
+    "IA-SETTINGS-02",
+    "IA-SETTINGS-03",
     "IA-GEOMETRY-01",
     "IA-GEOMETRY-02",
     "IA-DENSITY-01",

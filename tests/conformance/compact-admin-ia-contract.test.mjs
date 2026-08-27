@@ -11,6 +11,10 @@ const specification = await readFile(
   new URL("docs/specs/compact-admin-information-architecture.md", root),
   "utf8",
 );
+const settingsImplementation = await Promise.all([
+  "packages/adapter-web/src/ui-shell.ts",
+  "packages/adapter-web/src/connections.ts",
+].map((path) => readFile(new URL(path, root), "utf8"))).then((sources) => sources.join("\n"));
 
 function sortedKeys(value) {
   return Object.keys(value).sort();
@@ -44,6 +48,7 @@ test("compact admin IA fixture is a closed versioned contract", () => {
     "geometry",
     "viewports",
     "navigation",
+    "settingsInformationArchitecture",
     "routes",
     "sessionStates",
     "accountStates",
@@ -58,7 +63,7 @@ test("compact admin IA fixture is a closed versioned contract", () => {
     "acceptanceIds",
   ], "top-level contract keys drifted");
   assertUnique(fixture.acceptanceIds, "acceptance IDs must be unique");
-  assert.equal(fixture.acceptanceIds.length, 14);
+  assert.equal(fixture.acceptanceIds.length, 17);
 });
 
 test("breakpoints, geometry, and every acceptance viewport have executable expectations", () => {
@@ -169,6 +174,64 @@ test("navigation order, Settings pinning, and legacy MCP behavior are session-co
     status: 308,
     location: "/settings/developer/mcp",
   });
+});
+
+test("Settings IA keeps stable children, optional Help, and state-free direct routes", () => {
+  const settings = fixture.settingsInformationArchitecture;
+  assertExactKeys(settings, [
+    "entryRoute",
+    "contextOrder",
+    "children",
+    "codexHelp",
+    "directNavigation",
+    "legacyMcp",
+    "forbiddenState",
+  ], "Settings IA contract drifted");
+  assert.equal(settings.entryRoute, "/settings/account");
+  assert.deepEqual(settings.contextOrder, ["account", "connections", "advanced-mcp"]);
+  assert.deepEqual(
+    settings.contextOrder.map((id) => settings.children[id].route),
+    ["/settings/account", "/settings/connections", "/settings/developer/mcp"],
+  );
+  assert.deepEqual(
+    settings.contextOrder.map((id) => settings.children[id].label),
+    ["Account", "Connections", "Advanced MCP"],
+  );
+  assert.equal(settings.codexHelp.route, "/help/codex");
+  assert.equal(settings.codexHelp.placement, "utility-before-settings");
+  assert.equal(settings.codexHelp.settingsChild, false);
+  assert.equal(
+    settings.codexHelp.availability,
+    "registered-shell-independent-of-connection-state",
+  );
+  assert.deepEqual(
+    settings.codexHelp.connectionStates,
+    ["loading", "empty", "ready", "error", "revoked", "reconnected"],
+  );
+  assert.deepEqual(settings.directNavigation.canonicalRoutes, [
+    "/settings/account",
+    "/settings/connections",
+    "/settings/developer/mcp",
+    "/help/codex",
+  ]);
+  assert.equal(settings.directNavigation.forcedWizard, false);
+  assert.equal(settings.directNavigation.requiresCodexConnection, false);
+  assert.equal(settings.directNavigation.browserBackPreservesPreviousRoute, true);
+  assert.deepEqual(settings.legacyMcp, {
+    route: "/settings/mcp",
+    registeredStatus: 308,
+    registeredLocation: "/settings/developer/mcp",
+    signedOutBehavior: "route-agnostic-sign-in-shell",
+    duplicateNavigation: false,
+  });
+  assert.deepEqual(
+    settings.forbiddenState,
+    ["setup-complete", "checklist-progress", "dismissed-help", "nag-count"],
+  );
+  assert.doesNotMatch(
+    settingsImplementation,
+    /(?:localStorage|sessionStorage|setup[_-]complete|onboarding[_-](?:state|progress)|nag[_-](?:count|state)|dismissed[_-]help)/u,
+  );
 });
 
 test("session and account state matrices are closed and fail safe", () => {
