@@ -74,6 +74,7 @@ import {
 } from "@mind-diary/application-control";
 
 export * from "./product-site.js";
+export * from "./bounded-in-memory-ingress.js";
 export { createProductUiStaticAssetResponse } from "@mind-diary/adapter-web";
 
 export const COMPOSITION_SELECTION = {

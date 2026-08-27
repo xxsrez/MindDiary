@@ -78,6 +78,7 @@ import {
   DeterministicOkfExportService,
   ExportJobApplicationService,
   FileIngressCoordinator,
+  GeneratedArtifactIngressService,
   LocalFileUploadIntentCleanupService,
   LocalFileUploadIntentService,
   MCP_CONTENT_DEPLOYMENT_CAPABILITIES,
@@ -128,6 +129,10 @@ import {
   version,
   verifiedSpaceHost,
 } from "@mind-diary/domain";
+import {
+  createBoundedInMemoryIngressAdapter,
+  type BoundedInMemoryIngressPort,
+} from "./bounded-in-memory-ingress.js";
 
 const PRODUCT_SITES_DEPLOYMENT_CAPABILITIES = Object.freeze([
   "content:browse",
@@ -177,6 +182,8 @@ export interface ProductSiteRuntime {
     request: Request,
     deferActivity?: (promise: Promise<unknown>) => void,
   ) => Promise<Response | null>;
+  /** Trusted constructor-owned bytes ingress; never an HTTP or MCP route. */
+  readonly boundedInMemoryIngress: BoundedInMemoryIngressPort;
   /** Bounded request-triggered recovery for exact-revision index work. */
   readonly recoverBackground: (limit?: number) => Promise<Readonly<{
     backfilled: number;
@@ -902,6 +909,11 @@ export async function createProductSiteRuntime(
     metadata,
     objects,
     clock,
+  });
+  const boundedInMemoryIngress = createBoundedInMemoryIngressAdapter({
+    application: new GeneratedArtifactIngressService({
+      staging: bundleFileStaging,
+    }),
   });
   const uploadIntentSecrets = await createLocalFileUploadIntentSecretCodec(
     options.tokenVerifierKey,
@@ -2341,6 +2353,7 @@ export async function createProductSiteRuntime(
   };
 
   return Object.freeze({
+    boundedInMemoryIngress,
     dispatchBackground,
     recoverBackground,
     async fetch(
