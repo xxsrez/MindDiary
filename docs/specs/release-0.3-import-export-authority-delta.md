@@ -18,6 +18,12 @@ import/export workflow.
 проверяет закрытые route/schema/state matrices, но не доказывает runtime cutover
 или UAT.
 
+`evidence.blobs` в fixture — закрытый список затронутых authority/spec/runtime
+источников с SHA-256 exact Git blobs. Проверка читает каждый blob через
+`git show <observed_candidate>:<path>`, а не из working tree и не относительно
+`HEAD^`; поэтому последующий cherry-pick не меняет заявленную evidence base.
+Изменение candidate, path set или digest делает contract test красным.
+
 ## Граница и неизменяемые примитивы
 
 Изменяется inbound owner, а не canonical content lifecycle:

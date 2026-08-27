@@ -1,33 +1,59 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 const root = new URL("../../", import.meta.url);
+const repositoryRoot = fileURLToPath(root);
 const fixture = JSON.parse(await readFile(
   new URL("tests/fixtures/import-export-authority-delta/contract.v1.json", root),
   "utf8",
 ));
 const specification = await readFile(new URL(fixture.source, root), "utf8");
-const webRouting = await readFile(
-  new URL("packages/adapter-web/src/product-http-routing.ts", root),
-  "utf8",
-);
-const mcpDefinitions = await readFile(
-  new URL("packages/adapter-mcp/src/tool-definitions.ts", root),
-  "utf8",
-);
-const markdownImports = await readFile(
-  new URL("packages/application-content/src/markdown-imports.ts", root),
-  "utf8",
-);
-const exportJobs = await readFile(
-  new URL("packages/application-content/src/export-jobs.ts", root),
-  "utf8",
-);
-const exportDownloadHttp = await readFile(
-  new URL("packages/adapter-web/src/export-download-http.ts", root),
-  "utf8",
-);
+
+const expectedEvidencePaths = [
+  "docs/overview.md",
+  "docs/architecture.md",
+  "docs/specs/api.md",
+  "docs/specs/sites-storage-capacity-import.md",
+  "packages/adapter-web/src/product-http-routing.ts",
+  "packages/adapter-web/src/export-download-http.ts",
+  "packages/adapter-mcp/src/tool-definitions.ts",
+  "packages/application-content/src/markdown-imports.ts",
+  "packages/application-content/src/export-jobs.ts",
+  "packages/application-background/src/index.ts",
+  "packages/domain/src/records.ts",
+  "packages/application-ports/src/revisions.ts",
+];
+
+function gitOutput(args) {
+  return execFileSync("git", args, {
+    cwd: repositoryRoot,
+    encoding: "buffer",
+    maxBuffer: 32 * 1024 * 1024,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+}
+
+function candidateBlob(candidate, path) {
+  return gitOutput(["show", `${candidate}:${path}`]);
+}
+
+function candidateText(path) {
+  return candidateBlob(fixture.observed_candidate, path).toString("utf8");
+}
+
+function sha256(bytes) {
+  return createHash("sha256").update(bytes).digest("hex");
+}
+
+const webRouting = candidateText("packages/adapter-web/src/product-http-routing.ts");
+const mcpDefinitions = candidateText("packages/adapter-mcp/src/tool-definitions.ts");
+const markdownImports = candidateText("packages/application-content/src/markdown-imports.ts");
+const exportJobs = candidateText("packages/application-content/src/export-jobs.ts");
+const exportDownloadHttp = candidateText("packages/adapter-web/src/export-download-http.ts");
 
 function keys(value) {
   return Object.keys(value).sort();
@@ -41,16 +67,40 @@ function unique(values, label) {
   assert.equal(new Set(values).size, values.length, label);
 }
 
+function verifyObservedEvidence(candidate, evidence) {
+  assert.match(candidate, /^[0-9a-f]{40}$/u, "observed candidate must be a full Git SHA");
+  assert.equal(
+    gitOutput(["cat-file", "-t", candidate]).toString("utf8").trim(),
+    evidence.git_object_type,
+    "observed candidate object type drifted",
+  );
+  exactKeys(evidence, ["git_object_type", "digest_algorithm", "blobs"], "evidence keys drifted");
+  assert.equal(evidence.git_object_type, "commit");
+  assert.equal(evidence.digest_algorithm, "sha256");
+  assert.deepEqual(evidence.blobs.map(({ path }) => path), expectedEvidencePaths);
+  unique(evidence.blobs.map(({ path }) => path), "evidence paths must be unique");
+  for (const record of evidence.blobs) {
+    exactKeys(record, ["path", "sha256"], `${record.path}: evidence tuple drifted`);
+    assert.match(record.sha256, /^[0-9a-f]{64}$/u, `${record.path}: invalid digest`);
+    assert.equal(
+      sha256(candidateBlob(candidate, record.path)),
+      record.sha256,
+      `${record.path}: observed candidate blob drifted`,
+    );
+  }
+}
+
 test("MD-359 fixture is a closed versioned delta register", () => {
   assert.equal(fixture.$schema, "mind-diary/import-export-authority-delta/v1");
   assert.equal(fixture.version, 1);
   assert.equal(fixture.target_release, "0.3");
-  assert.match(fixture.observed_candidate, /^[0-9a-f]{40}$/u);
+  verifyObservedEvidence(fixture.observed_candidate, fixture.evidence);
   exactKeys(fixture, [
     "$schema",
     "version",
     "source",
     "observed_candidate",
+    "evidence",
     "target_release",
     "authority",
     "routes",
@@ -95,6 +145,28 @@ test("MD-359 fixture is a closed versioned delta register", () => {
     assert.ok(specification.includes(route.current), `${route.id}: current route missing from spec`);
     assert.ok(specification.includes(route.target), `${route.id}: target route missing from spec`);
   }
+});
+
+test("observed evidence rejects candidate, path, and digest drift", () => {
+  const otherCandidate = `${fixture.observed_candidate.slice(0, -1)}${
+    fixture.observed_candidate.endsWith("0") ? "1" : "0"
+  }`;
+  assert.notEqual(otherCandidate, fixture.observed_candidate);
+  assert.throws(() => verifyObservedEvidence(otherCandidate, fixture.evidence));
+
+  const pathDrift = structuredClone(fixture.evidence);
+  pathDrift.blobs[0].path = `${pathDrift.blobs[0].path}.drift`;
+  assert.throws(
+    () => verifyObservedEvidence(fixture.observed_candidate, pathDrift),
+    /Expected values to be strictly deep-equal/u,
+  );
+
+  const digestDrift = structuredClone(fixture.evidence);
+  digestDrift.blobs[0].sha256 = "0".repeat(64);
+  assert.throws(
+    () => verifyObservedEvidence(fixture.observed_candidate, digestDrift),
+    /observed candidate blob drifted/u,
+  );
 });
 
 test("current routes are observed and target export control routes remain explicit gaps", () => {

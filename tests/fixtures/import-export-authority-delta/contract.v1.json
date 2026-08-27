@@ -3,6 +3,60 @@
   "version": 1,
   "source": "docs/specs/release-0.3-import-export-authority-delta.md",
   "observed_candidate": "25d8b8213ff1bf938b57831d1febe8649c283250",
+  "evidence": {
+    "git_object_type": "commit",
+    "digest_algorithm": "sha256",
+    "blobs": [
+      {
+        "path": "docs/overview.md",
+        "sha256": "9896709d82347ceaa1490b3641b4f667367e39e92c15ff5aed340ea441a80f62"
+      },
+      {
+        "path": "docs/architecture.md",
+        "sha256": "18d9507b6ed4fc045938cf5373c8a144b095be6727af6a78dd1f3ee34728d3b7"
+      },
+      {
+        "path": "docs/specs/api.md",
+        "sha256": "993749350d321a7d20b0fa79b714176231e5e55c6d25471027bce2adacbe931f"
+      },
+      {
+        "path": "docs/specs/sites-storage-capacity-import.md",
+        "sha256": "2893ba456e3c0da3820d105d848a4bd42d659ec91851175d13ccc76639f6abc5"
+      },
+      {
+        "path": "packages/adapter-web/src/product-http-routing.ts",
+        "sha256": "ff1d44ba6423eb5dce5b46cab928c00977d7142a30b751c6e4dc85628448824e"
+      },
+      {
+        "path": "packages/adapter-web/src/export-download-http.ts",
+        "sha256": "b49c683ff2b64b610f67410e185576dbdef6eb4da37534b142a47053d23bc3a8"
+      },
+      {
+        "path": "packages/adapter-mcp/src/tool-definitions.ts",
+        "sha256": "22c63e18b28c7f85f928c5fc2ff20295c1ee45168c29cceab796b1ce8b0e5669"
+      },
+      {
+        "path": "packages/application-content/src/markdown-imports.ts",
+        "sha256": "d862a8e80ce84d37107b13a299680ef212868c5591851482a9cb2fc53675723c"
+      },
+      {
+        "path": "packages/application-content/src/export-jobs.ts",
+        "sha256": "39ada9c61417cb4dd6ab13d31d16b0861cc3f39e7c6b29bac5639afb9b77a6e8"
+      },
+      {
+        "path": "packages/application-background/src/index.ts",
+        "sha256": "e8ea74e1e18a0674d69f42d31349de3a8584a4df5f94d06b7b70f6cd9a3ffd77"
+      },
+      {
+        "path": "packages/domain/src/records.ts",
+        "sha256": "4db3d84cc86e05fd0669c9b007d9d8686224ccbd28ad9438250f55ad5a2cb491"
+      },
+      {
+        "path": "packages/application-ports/src/revisions.ts",
+        "sha256": "39eb2c1263c55a6386ce752b7846f55ac15389a10e0695be398293b2e9f9b4ff"
+      }
+    ]
+  },
   "target_release": "0.3",
   "authority": {
     "sites_control_plane_owns": [
