@@ -145,6 +145,9 @@ operation disposition и migration принадлежат MD-337/MD-339.
   — exact-SHA Playwright/Chromium gate для responsive/accessibility matrix и
   nonterminal byte-level UAT readback join; hosted acceptance требует прямых
   same-run Sites connector и in-app Browser observations.
+- [Browser и UAT-проверка import/export exact bytes](operations/import-export-browser-uat-runbook.md)
+  — generated Markdown/invalid/opaque fixtures, failure/recovery matrix,
+  independent archive byte comparison и fail-closed nonterminal offline join.
 - [Hosted canary операторского каталога](operations/uat-operator-directory-canary.md)
   — three-actor restricted-UAT setup/verify/cleanup/recovery с
   environment-only session references, exact `404` boundary и redacted receipt.

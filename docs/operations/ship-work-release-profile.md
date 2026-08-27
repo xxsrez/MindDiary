@@ -1266,6 +1266,22 @@ lookalike inputs, самозаявленные ID/digests/готовый receipt
 approval, screenshot как evidence и manual review queue не являются success
 path.
 
+Для Release 0.3 import/export acceptance действует отдельный exact-candidate
+gate из
+[`import/export browser runbook`](import-export-browser-uat-runbook.md):
+`npm run gate:import-export-browser -- --candidate-sha
+<exact-clean-HEAD-sha> --evidence-out <private-temp-path>`. Он генерирует только
+synthetic Markdown/invalid/opaque bytes, программно устанавливает browser files,
+исполняет runtime suites и закрытую Playwright matrix MD-363. Local receipt
+обязан сохранять `hosted_evidence=false`. После exact UAT cut
+`npm run join:import-export-uat-readback` проверяет archive/candidate/deployment,
+controlled redeploy, browser read-back, exact archive bytes и cleanup, но также
+выдаёт только `structurally_verified_readback`, `acceptance=nonterminal` и
+`provenance=unverified-local-files`. Hosted PASS принадлежит только
+orchestrating agent с прямыми same-run Sites connector и in-app Browser
+observations; local lookalike files, copied IDs и старые receipts не являются
+authority.
+
 Все commands выполняются прямым `argv` без shell. Канонический full dev launcher
 проекта — root `npm run dev`; его machine event сообщает loopback URL,
 readiness и non-secret configuration fingerprint. Dev получает только
