@@ -1956,3 +1956,200 @@ h3 {
     background: CanvasText;
   }
 }
+
+/* MD-362: compact, resumable Markdown snapshot import. */
+.md-import-panel {
+  align-items: start;
+  gap: 1rem;
+}
+
+.md-import-panel > *,
+.md-import-panel form,
+.md-import-panel code {
+  min-width: 0;
+}
+
+.md-import-panel form {
+  display: grid;
+  gap: 0.875rem;
+}
+
+.md-import-target,
+.md-import-receipt dl {
+  display: grid;
+  gap: 0.5rem;
+  margin-block: 1rem 0;
+}
+
+.md-import-target > div,
+.md-import-receipt dl > div {
+  display: grid;
+  grid-template-columns: minmax(7rem, max-content) minmax(0, 1fr);
+  gap: 0.75rem;
+}
+
+.md-import-target dt,
+.md-import-receipt dt {
+  color: var(--mind-diary-muted, #526078);
+  font-weight: 650;
+}
+
+.md-import-target dd,
+.md-import-receipt dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.md-import-review,
+.md-import-progress,
+.md-import-receipt {
+  padding: 1rem;
+  border: 1px solid var(--mind-diary-border, #d9deea);
+  border-radius: 0.75rem;
+  background: var(--mind-diary-surface, #fff);
+}
+
+.md-import-review h3,
+.md-import-receipt h3 {
+  margin-block: 0 0.75rem;
+}
+
+.md-import-counts {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.5rem;
+  margin: 0;
+}
+
+.md-import-counts > div {
+  display: grid;
+  gap: 0.15rem;
+  padding: 0.625rem;
+  border-radius: 0.5rem;
+  background: var(--mind-diary-soft, #f2f5fa);
+}
+
+.md-import-counts dt {
+  color: var(--mind-diary-muted, #526078);
+  font-size: 0.75rem;
+  font-weight: 650;
+}
+
+.md-import-counts dd {
+  margin: 0;
+  font-size: 1.25rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+}
+
+.md-import-checks {
+  display: grid;
+  gap: 0.4rem;
+  margin-block: 0.875rem;
+  padding: 0;
+  list-style: none;
+}
+
+.md-import-checks li::before {
+  display: inline-block;
+  width: 1.25rem;
+  content: "○";
+  font-weight: 700;
+}
+
+.md-import-checks li[data-check-state="passed"]::before {
+  color: var(--mind-diary-success, #17623a);
+  content: "✓";
+}
+
+.md-import-checks li[data-check-state="warning"]::before {
+  color: var(--mind-diary-warning, #7a4b00);
+  content: "!";
+}
+
+.md-import-checks li[data-check-state="failed"]::before {
+  color: var(--mind-diary-danger, #a22b32);
+  content: "×";
+}
+
+.md-import-warning {
+  margin-block: 0.875rem 0;
+}
+
+.md-import-warning label {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.625rem;
+  cursor: pointer;
+}
+
+.md-import-warning input {
+  flex: 0 0 auto;
+  margin-block-start: 0.2rem;
+}
+
+.md-import-progress > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-block-end: 0.5rem;
+}
+
+.md-import-progress progress {
+  display: block;
+  width: 100%;
+  height: 0.75rem;
+  accent-color: var(--mind-diary-accent, #315bcb);
+}
+
+.md-import-progress output {
+  flex: 0 0 auto;
+  color: var(--mind-diary-muted, #526078);
+  font-variant-numeric: tabular-nums;
+}
+
+.md-import-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.625rem;
+}
+
+.md-import-receipt {
+  border-color: var(--mind-diary-success, #17623a);
+}
+
+@media (max-width: 36rem) {
+  .md-import-counts {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .md-import-target > div,
+  .md-import-receipt dl > div {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.15rem;
+  }
+
+  .md-import-actions {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .md-import-actions .md-button {
+    width: 100%;
+  }
+}
+
+@media (forced-colors: active) {
+  .md-import-review,
+  .md-import-progress,
+  .md-import-receipt,
+  .md-import-counts > div {
+    border: 1px solid CanvasText;
+    background: Canvas;
+    color: CanvasText;
+  }
+
+  .md-import-progress progress {
+    forced-color-adjust: auto;
+  }
+}

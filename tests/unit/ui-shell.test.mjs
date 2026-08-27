@@ -462,6 +462,10 @@ test("authenticated My Mind card exposes only /me and Personal-safe management",
   assert.match(html, /data-copy-code="mind-diary-onboarding-concierge-playbook"/u);
   assert.match(html, /data-markdown-import[^>]+data-import-handle="me"/u);
   assert.match(html, /type="file"[^>]+data-import-files/u);
+  assert.match(html, /data-import-target>\/me<\/code>/u);
+  assert.match(html, /data-import-base-revision>revision_personal<\/code>/u);
+  assert.match(html, /data-import-progress[^>]+max="100"/u);
+  assert.match(html, /data-import-receipt-revision/u);
   assert.match(html, /only UTF-8 Markdown/u);
   assert.match(html, /Never store a token in a repository/u);
   assert.doesNotMatch(html, /space_handle|hidden handle|data-(?:share|visibility|transfer|delete)/i);
@@ -472,6 +476,8 @@ test("authenticated My Mind card exposes only /me and Personal-safe management",
   assert.match(shellCss, /\.md-setup-card--single\s*\{\s*grid-template-columns:\s*minmax\(0, 1fr\)/u);
   assert.match(shellCss, /\.md-setup-card pre\s*\{[^}]*max-width:\s*100%[^}]*overflow:\s*auto[^}]*white-space:\s*pre-wrap[^}]*overflow-wrap:\s*anywhere/su);
   assert.match(shellCss, /@media \(max-width: 58rem\)[\s\S]*?\.md-setup-card\s*\{\s*grid-template-columns:\s*minmax\(0, 1fr\)/u);
+  assert.match(shellCss, /\.md-import-counts\s*\{[^}]*grid-template-columns:\s*repeat\(4,/su);
+  assert.match(shellCss, /@media \(max-width: 36rem\)[\s\S]*?\.md-import-actions/su);
 });
 
 test("profile states distinguish saving, success, transient failure, and stale conflict", () => {

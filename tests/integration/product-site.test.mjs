@@ -1074,7 +1074,7 @@ test("ordinary Mind list and exact route wire the UAT management and deletion co
   assert.match(detailHtml, /data-owner-visibility-controls/);
   assert.match(detailHtml, /data-owner-transfer-controls/);
   assert.match(detailHtml, /data-markdown-import data-head-revision="revision_research"/);
-  assert.match(detailHtml, /Exact replacement:/);
+  assert.match(detailHtml, /Snapshot replacement:/);
   assert.match(detailHtml, /every current Markdown file omitted/);
   assert.match(detailHtml, /data-capacity-state="normal"/);
   assert.match(detailHtml, /Counts come from immutable manifest and job metadata/);
@@ -1115,9 +1115,9 @@ test("ordinary Mind list and exact route wire the UAT management and deletion co
   assert.match(assetBody, /markdown-import-mind/);
   assert.match(assetBody, /history\.replaceState/);
   assert.doesNotMatch(assetBody, /localStorage|sessionStorage/);
-  assert.match(assetBody, /"sha256:"\+hex/);
-  assert.match(assetBody, /descriptor_hash!==descriptorHash/);
-  assert.match(assetBody, /Uploading bounded batch/);
+  assert.match(assetBody, /`sha256:\$\{hex/);
+  assert.match(assetBody, /descriptor_hash !== descriptorHash/);
+  assert.match(assetBody, /Uploading bounded batches/);
   assert.match(assetBody, /promotion_checkpoint/);
   assert.doesNotThrow(() => new vm.Script(assetBody));
 

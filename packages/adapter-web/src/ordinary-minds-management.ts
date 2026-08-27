@@ -476,11 +476,15 @@ export function renderMarkdownImportPanel(target: Readonly<{
   mindRef: string;
   headRevisionId: string;
 }>): string {
-  return `<section class="md-setup-card" aria-labelledby="markdown-import-heading" data-markdown-import data-head-revision="${escapeUntrustedText(target.headRevisionId)}" data-import-handle="${escapeUntrustedText(target.mindRef)}">
+  return `<section class="md-setup-card md-import-panel" aria-labelledby="markdown-import-heading" data-markdown-import data-head-revision="${escapeUntrustedText(target.headRevisionId)}" data-import-handle="${escapeUntrustedText(target.mindRef)}">
     <div>
       <p class="md-eyebrow">Markdown snapshot</p>
       <h2 id="markdown-import-heading">Import a folder</h2>
       <p>Select UTF-8 Markdown files, review the exact change plan, then publish the whole snapshot as one immutable revision.</p>
+      <dl class="md-import-target" aria-label="Import target">
+        <div><dt>Target Mind</dt><dd><code data-import-target>/${escapeUntrustedText(target.mindRef)}</code></dd></div>
+        <div><dt>Current revision</dt><dd><code data-import-base-revision>${escapeUntrustedText(target.headRevisionId)}</code></dd></div>
+      </dl>
     </div>
     <form data-markdown-import-form>
       <div class="md-field">
@@ -489,13 +493,43 @@ export function renderMarkdownImportPanel(target: Readonly<{
         <p id="markdown-import-help">Up to 10,000 files, 1 MiB each and 64 MiB total. ZIP and non-Markdown files are not accepted.</p>
       </div>
       <button class="md-button md-button--secondary" type="button" data-plan-markdown-import>Review exact changes</button>
-      <section class="md-caveat" data-import-plan hidden style="display:none">
-        <p><strong>Exact replacement:</strong> <span data-import-additions>0</span> added, <span data-import-replacements>0</span> replaced, <span data-import-deletions>0</span> deleted and <span data-import-unchanged>0</span> unchanged. Existing opaque files remain.</p>
-        <label><input type="checkbox" data-import-confirm> I understand that every current Markdown file omitted from this selection will disappear from the new HEAD. Immutable history remains available.</label>
+      <section class="md-import-review" data-import-plan hidden style="display:none" aria-labelledby="markdown-import-review-heading">
+        <h3 id="markdown-import-review-heading">Exact change plan</h3>
+        <dl class="md-import-counts">
+          <div><dt>Add</dt><dd data-import-additions>0</dd></div>
+          <div><dt>Replace</dt><dd data-import-replacements>0</dd></div>
+          <div><dt>Delete</dt><dd data-import-deletions>0</dd></div>
+          <div><dt>Unchanged</dt><dd data-import-unchanged>0</dd></div>
+        </dl>
+        <ul class="md-import-checks" aria-label="Import checks">
+          <li data-import-path-check data-check-state="pending">Paths: waiting for review.</li>
+          <li data-import-format-check data-check-state="pending">Format: waiting for review.</li>
+          <li data-import-capacity-check data-check-state="pending">Capacity: waiting for server plan.</li>
+        </ul>
+        <div class="md-caveat md-import-warning">
+          <p><strong>Snapshot replacement:</strong> every current Markdown file omitted from this selection will be deleted from the new HEAD. Existing opaque files remain, and immutable history is not erased.</p>
+          <label><input type="checkbox" data-import-confirm> I understand this replacement plan and want to create one new revision.</label>
+        </div>
+      </section>
+      <section class="md-import-progress" data-import-progress-region hidden style="display:none" aria-labelledby="markdown-import-progress-label">
+        <div><strong id="markdown-import-progress-label" data-import-phase>Preparing import</strong><output data-import-progress-text>0%</output></div>
+        <progress data-import-progress max="100" value="0">0%</progress>
       </section>
       <p class="md-form__status" role="status" aria-live="polite" data-import-status></p>
-      <button class="md-button md-button--primary" type="submit" data-start-markdown-import disabled>Start or resume import</button>
-      <button class="md-button md-button--secondary" type="button" data-cancel-markdown-import hidden style="display:none">Cancel staged import</button>
+      <div class="md-import-actions">
+        <button class="md-button md-button--primary" type="submit" data-start-markdown-import disabled>Start or resume import</button>
+        <button class="md-button md-button--secondary" type="button" data-cancel-markdown-import hidden style="display:none">Cancel staged import</button>
+        <button class="md-button md-button--secondary" type="button" data-replan-markdown-import hidden style="display:none">Reload and make a new plan</button>
+      </div>
+      <section class="md-import-receipt" data-import-receipt hidden style="display:none" aria-labelledby="markdown-import-receipt-heading">
+        <h3 id="markdown-import-receipt-heading">Revision created</h3>
+        <dl>
+          <div><dt>Target Mind</dt><dd><code data-import-receipt-target></code></dd></div>
+          <div><dt>Planned from</dt><dd><code data-import-receipt-base></code></dd></div>
+          <div><dt>Committed revision</dt><dd><code data-import-receipt-revision></code></dd></div>
+        </dl>
+        <p>The new snapshot became visible atomically; no partial HEAD was published.</p>
+      </section>
     </form>
   </section>`;
 }

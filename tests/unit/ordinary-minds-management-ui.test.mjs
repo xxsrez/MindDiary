@@ -216,8 +216,38 @@ test("browser management stays metadata-only while import uses its bounded dedic
   const html = renderOrdinaryMindsManagement(detailModel(OWNER_MIND));
   assert.match(html, /Import a folder/);
   assert.match(html, /data-markdown-import[^>]+data-head-revision="revision_owner_fixture"/);
+  assert.match(html, /data-import-target>\/research-notes<\/code>/);
+  assert.match(html, /data-import-base-revision>revision_owner_fixture<\/code>/);
   assert.match(html, /type="file"[^>]+accept="\.md,text\/markdown"/);
-  assert.doesNotMatch(html, /<textarea[^>]+name="(?:text|markdown|path)"/i);
+  assert.match(html, /data-import-additions/);
+  assert.match(html, /data-import-replacements/);
+  assert.match(html, /data-import-deletions/);
+  assert.match(html, /data-import-path-check/);
+  assert.match(html, /data-import-format-check/);
+  assert.match(html, /data-import-capacity-check/);
+  assert.match(html, /Snapshot replacement:/);
+  assert.match(html, /data-import-progress[^>]+max="100"/);
+  assert.match(html, /data-cancel-markdown-import/);
+  assert.match(html, /data-replan-markdown-import/);
+  assert.match(html, /data-import-receipt-revision/);
+  assert.doesNotMatch(html, /<textarea|name="(?:text|markdown|path)"/i);
+});
+
+test("Markdown import is visible only to current write roles", () => {
+  for (const role of ["owner", "admin", "editor"]) {
+    const html = renderOrdinaryMindsManagement(detailModel({ ...OWNER_MIND, role }));
+    assert.match(html, /data-markdown-import/, `${role} should see Markdown import`);
+  }
+
+  const memberReader = renderOrdinaryMindsManagement(detailModel({ ...OWNER_MIND, role: "reader" }));
+  const visibilityReader = renderOrdinaryMindsManagement(detailModel({
+    ...OWNER_MIND,
+    role: "reader",
+    accessKind: "visibility",
+    discovery: "exact_handle",
+  }));
+  assert.doesNotMatch(memberReader, /data-markdown-import/);
+  assert.doesNotMatch(visibilityReader, /data-markdown-import/);
 });
 
 test("all supplied names, labels, announcements, and route errors are escaped", () => {
