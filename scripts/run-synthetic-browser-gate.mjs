@@ -151,6 +151,42 @@ async function mcp(context, secret, name, args = {}) {
   });
 }
 
+async function assertTargetOnlyMcpCatalog(context, secret) {
+  const result = await context.request("/api/mcp", {
+    method: "POST",
+    headers: {
+      accept: "application/json, text/event-stream",
+      authorization: `Bearer ${secret}`,
+      "content-type": "application/json; charset=utf-8",
+      "mcp-method": "tools/list",
+      "mcp-protocol-version": MCP_PROTOCOL,
+    },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: `${context.name}-tools-list`,
+      method: "tools/list",
+      params: {
+        _meta: {
+          "io.modelcontextprotocol/protocolVersion": MCP_PROTOCOL,
+          "io.modelcontextprotocol/clientInfo": { name: "synthetic-browser-gate", version: "1" },
+          "io.modelcontextprotocol/clientCapabilities": {},
+        },
+      },
+    }),
+  });
+  const tools = result.body?.result?.tools;
+  if (!Array.isArray(tools)) fail("mcp_catalog_missing");
+  const serialized = JSON.stringify(tools);
+  if (
+    tools.some(({ name }) => [
+      "get_mind_bindings",
+      "set_read_mind_binding",
+      "set_write_mind_binding",
+    ].includes(name)) ||
+    /write_binding_id|expected_binding_version|target_generation/u.test(serialized)
+  ) fail("mcp_catalog_exposes_binding_authority");
+}
+
 async function issueToken(context, nonce, name) {
   const result = await context.json("/api/v1/mcp-tokens", {
     method: "POST",
@@ -163,6 +199,19 @@ async function issueToken(context, nonce, name) {
     fail("token_issue_projection_invalid");
   }
   return Object.freeze({ secret: value.secret, ref: value.token.personal_token_ref });
+}
+
+async function mutateTokenTarget(context, tokenRef, nonce, body, suffix, expectedStatus = 200) {
+  return context.api(
+    `/api/v1/mcp-tokens/${encodeURIComponent(tokenRef)}/mind-access`,
+    {
+      method: "PATCH",
+      body,
+      idempotencyKey: `browser:${nonce}:target:${suffix}`,
+      csrfPath: "/settings/developer/mcp",
+      expectedStatus,
+    },
+  );
 }
 
 async function setVisibility(context, handle, value, metadataVersion, nonce) {
@@ -334,13 +383,19 @@ async function runScenario({ candidate, evidenceOut, randomBytesImpl, now }) {
 
     const ownerToken = await issueToken(owner, nonce, "owner");
     const participantToken = await issueToken(participant, nonce, "participant");
+    await assertTargetOnlyMcpCatalog(participant, participantToken.secret);
     const readerMind = mcpData(await mcp(participant, participantToken.secret, "list_minds"))
       .minds.find((value) => value.route === `/${handle}`);
     if (!readerMind) fail("reader_mcp_discovery_failed");
-    expectMcpError(await mcp(participant, participantToken.secret, "set_write_mind_binding", {
-      action: "bind", mind: `/${handle}`, expected_binding_version: 0,
-      idempotency_key: `browser:${nonce}:reader-bind`,
-    }), "capability_denied");
+    const readerTarget = await mutateTokenTarget(
+      participant,
+      participantToken.ref,
+      nonce,
+      { action: "select_write", mind_ref: `/${handle}`, expected_target_version: 0 },
+      "reader-denied",
+      409,
+    );
+    expectError(readerTarget, 409, "target_ineligible");
     expectMcpError(await mcp(participant, participantToken.secret, "commit_changeset", {
       mind: `/${handle}`, expected_revision: readerMind.head.revision_id,
       idempotency_key: `browser:${nonce}:reader-write`, summary: "Reader denial", operations: [],
@@ -350,20 +405,39 @@ async function runScenario({ candidate, evidenceOut, randomBytesImpl, now }) {
       method: "PATCH", body: { role: "editor", expected_membership_version: participantMember.membership_version },
       idempotencyKey: `browser:${nonce}:role-editor`, csrfPath: `/${handle}`,
     });
-    const binding = mcpData(await mcp(participant, participantToken.secret, "set_write_mind_binding", {
-      action: "bind", mind: `/${handle}`, expected_binding_version: 0,
-      idempotency_key: `browser:${nonce}:editor-bind`,
-    }));
-    await composition.restart({ serviceOperatorPrincipalIds: [operatorBootstrap.principal_id] });
-    const currentInfo = mcpData(await mcp(participant, participantToken.secret, "get_mind_info", { mind: `/${handle}` }));
+    const selected = data(await mutateTokenTarget(
+      participant,
+      participantToken.ref,
+      nonce,
+      { action: "select_write", mind_ref: `/${handle}`, expected_target_version: 0 },
+      "editor-select",
+    ));
+    if (selected.access?.target_version !== 1) fail("editor_target_select_failed");
+    data(await mutateTokenTarget(
+      participant,
+      participantToken.ref,
+      nonce,
+      { action: "select_write", mind_ref: "/me", expected_target_version: 1 },
+      "switch-personal",
+    ));
+    const staleInfo = mcpData(await mcp(participant, participantToken.secret, "get_mind_info", { mind: `/${handle}` }));
     expectMcpError(await mcp(participant, participantToken.secret, "commit_changeset", {
-      mind: `/${handle}`, write_binding_id: `${binding.current.write_binding_id}:stale`,
-      expected_revision: currentInfo.resolved_revision.revision_id,
+      mind: `/${handle}`,
+      expected_revision: staleInfo.resolved_revision.revision_id,
       idempotency_key: `browser:${nonce}:editor-write-stale`, summary: "Stale generation denial",
       operations: [{ type: "create_file", path: "concepts/must-not-commit.md", text: "---\ntype: Note\ntitle: Must not commit\n---\nDenied.\n" }],
-    }), "write_binding_stale");
+    }), "writable_target_mismatch");
+    data(await mutateTokenTarget(
+      participant,
+      participantToken.ref,
+      nonce,
+      { action: "select_write", mind_ref: `/${handle}`, expected_target_version: 2 },
+      "switch-back",
+    ));
+    await composition.restart({ serviceOperatorPrincipalIds: [operatorBootstrap.principal_id] });
+    const currentInfo = mcpData(await mcp(participant, participantToken.secret, "get_mind_info", { mind: `/${handle}` }));
     const commit = mcpData(await mcp(participant, participantToken.secret, "commit_changeset", {
-      mind: `/${handle}`, write_binding_id: binding.current.write_binding_id,
+      mind: `/${handle}`,
       expected_revision: currentInfo.resolved_revision.revision_id,
       idempotency_key: `browser:${nonce}:editor-write`, summary: "Browser gate fixture",
       operations: [{ type: "create_file", path: "concepts/browser-gate.md", text: "---\ntype: Note\ntitle: Browser gate\n---\nDeterministic.\n" }],

@@ -117,36 +117,28 @@ export function assertDirectPackageServer(server) {
 
 export function assertCodexCompatibleWriteBindingSchema(tools) {
   if (!Array.isArray(tools)) fail("codex_write_binding_schema_incompatible");
-  const definition = tools.find((tool) => tool?.name === "set_write_mind_binding");
-  const schema = definition?.inputSchema;
-  const properties = schema?.properties;
-  const expectedProperties = [
-    "action",
-    "mind",
-    "expected_binding_version",
-    "idempotency_key",
-  ];
-  const forbiddenRootKeywords = ["allOf", "anyOf", "oneOf"];
-  if (
-    !isRecord(schema) ||
-    schema.type !== "object" ||
-    schema.additionalProperties !== false ||
-    forbiddenRootKeywords.some((key) => Object.hasOwn(schema, key)) ||
-    !isRecord(properties) ||
-    JSON.stringify(Object.keys(properties)) !== JSON.stringify(expectedProperties) ||
-    JSON.stringify(schema.required) !== JSON.stringify([
-      "action",
-      "expected_binding_version",
-      "idempotency_key",
-    ]) ||
-    JSON.stringify(properties.action?.enum) !== JSON.stringify(["bind", "unbind"]) ||
-    properties.mind?.type !== "string" ||
-    properties.expected_binding_version?.type !== "integer" ||
-    properties.expected_binding_version?.minimum !== 0 ||
-    properties.idempotency_key?.type !== "string" ||
-    properties.idempotency_key?.minLength !== 1 ||
-    properties.idempotency_key?.maxLength !== 256
-  ) fail("codex_write_binding_schema_incompatible");
+  const retired = new Set([
+    "get_mind_bindings",
+    "set_read_mind_binding",
+    "set_write_mind_binding",
+  ]);
+  if (tools.some((tool) => retired.has(tool?.name))) {
+    fail("codex_write_binding_schema_incompatible");
+  }
+  for (const tool of tools) {
+    if (![
+      "create_file_upload_intent",
+      "stage_bundle_file",
+      "reconcile_file_stage",
+      "commit_changeset",
+      "reconcile_changeset",
+      "capture_knowledge",
+    ].includes(tool?.name)) continue;
+    const serialized = JSON.stringify(tool.inputSchema);
+    if (/write_binding_id|expected_binding_version|target_generation/u.test(serialized)) {
+      fail("codex_write_binding_schema_incompatible");
+    }
+  }
   return true;
 }
 
@@ -1084,34 +1076,37 @@ async function runOAuthScenario({ assertions, nowState }) {
   );
   if (!info.content_capabilities?.includes("commit")) fail("oauth_current_acl_missing_commit");
   assertions.add("oauth.current-acl-readback");
-  const initialBindings = mcpData(
-    await modernTool(owner, writeGrant.tokens.access_token, "oauth-write-bindings-initial", "get_mind_bindings"),
-    "oauth_initial_bindings_failed",
+  const connections = await owner.api("/api/v1/connections");
+  const connection = connections.body?.data?.items?.find((item) => item?.can_write === true);
+  const connectionRef = requiredString(
+    connection?.connection_ref,
+    "oauth_connected_app_not_visible",
   );
-  if (initialBindings.binding_version !== 0 || initialBindings.write_binding !== null) {
-    fail("oauth_initial_bindings_not_empty");
-  }
-  const bound = mcpData(
-    await modernTool(owner, writeGrant.tokens.access_token, "oauth-write-bind", "set_write_mind_binding", {
-      action: "bind",
-      mind: "/me",
-      expected_binding_version: initialBindings.binding_version,
-      idempotency_key: `oauth:${nonce}:bind-write`,
-    }),
-    "oauth_write_binding_failed",
-  );
-  const writeBindingId = requiredString(
-    bound.current?.write_binding_id,
-    "oauth_write_binding_id_missing",
-  );
-  const bindingReadback = mcpData(
-    await modernTool(owner, writeGrant.tokens.access_token, "oauth-write-bindings-readback", "get_mind_bindings"),
-    "oauth_write_binding_readback_failed",
+  const initialConnection = await owner.api(
+    `/api/v1/connections/${encodeURIComponent(connectionRef)}`,
   );
   if (
-    bindingReadback.binding_version !== bound.binding_version ||
-    bindingReadback.write_binding?.write_binding_id !== writeBindingId ||
-    bindingReadback.write_binding?.mind?.route !== "/me"
+    initialConnection.body?.data?.access?.target_version !== 0 ||
+    initialConnection.body?.data?.access?.writable_mind !== null
+  ) fail("oauth_initial_bindings_not_empty");
+  const selected = await owner.api(
+    `/api/v1/connections/${encodeURIComponent(connectionRef)}/mind-access`,
+    {
+      method: "PATCH",
+      body: {
+        action: "select_write",
+        mind_ref: "/me",
+        expected_target_version: 0,
+      },
+      idempotencyKey: `oauth:${nonce}:select-target`,
+      csrfPath: `/settings/connections/${encodeURIComponent(connectionRef)}`,
+    },
+  );
+  const targetReadback = selected.body?.data?.access;
+  if (
+    targetReadback?.target_version !== 1 ||
+    targetReadback?.writable_mind?.route !== "/me" ||
+    /write_binding|binding_owner|space_id|generation/u.test(JSON.stringify(selected.body))
   ) fail("oauth_write_binding_readback_mismatch");
   assertions.add("oauth.explicit-write-binding-readback");
   const refreshedWriteGrant = expectStatus(
@@ -1119,32 +1114,23 @@ async function runOAuthScenario({ assertions, nowState }) {
     200,
     "oauth_bound_grant_refresh_failed",
   );
-  const refreshedBindingReadback = mcpData(
-    await modernTool(
-      owner,
-      refreshedWriteGrant.body.access_token,
-      "oauth-refreshed-write-bindings-readback",
-      "get_mind_bindings",
-    ),
+  mcpData(
+    await modernTool(owner, refreshedWriteGrant.body.access_token, "oauth-refreshed-target-read", "list_minds"),
     "oauth_refreshed_write_binding_readback_failed",
   );
+  const refreshedConnection = await owner.api(
+    `/api/v1/connections/${encodeURIComponent(connectionRef)}`,
+  );
   if (
-    refreshedBindingReadback.binding_version !== bindingReadback.binding_version ||
-    refreshedBindingReadback.write_binding?.write_binding_id !== writeBindingId ||
-    refreshedBindingReadback.write_binding?.mind?.route !== "/me"
+    refreshedConnection.body?.data?.access?.target_version !== 1 ||
+    refreshedConnection.body?.data?.access?.writable_mind?.route !== "/me"
   ) fail("oauth_refresh_changed_write_binding");
   assertions.add("oauth.refresh-preserves-write-binding");
-  const connections = await owner.api("/api/v1/connections");
-  const connection = connections.body?.data?.items?.find((item) => item?.can_write === true);
-  const connectionRef = requiredString(
-    connection?.connection_ref,
-    "oauth_connected_app_not_visible",
-  );
   const connectionDetail = await owner.api(
     `/api/v1/connections/${encodeURIComponent(connectionRef)}`,
   );
   if (
-    connectionDetail.body?.data?.access?.binding_version !== bindingReadback.binding_version ||
+    connectionDetail.body?.data?.access?.target_version !== 1 ||
     connectionDetail.body?.data?.access?.writable_mind?.route !== "/me" ||
     JSON.stringify(connectionDetail.body).includes(String(writeAccessRecord.grant_id))
   ) fail("oauth_connection_safe_projection_mismatch");
@@ -1155,21 +1141,20 @@ async function runOAuthScenario({ assertions, nowState }) {
       method: "PATCH",
       body: {
         action: "clear_write",
-        expected_binding_version: 0,
+        expected_target_version: 0,
       },
       idempotencyKey: `oauth:${nonce}:stale-access`,
       csrfPath: `/settings/connections/${encodeURIComponent(connectionRef)}`,
       expectedStatus: 409,
     },
   );
-  if (staleAccess.body?.error?.code !== "binding_version_conflict") {
+  if (staleAccess.body?.error?.code !== "target_conflict") {
     fail("oauth_connection_stale_cas_not_denied");
   }
   assertions.add("oauth.connection-stale-cas");
-  const expectedRevision = bindingReadback.write_binding.mind.head.revision_id;
+  const expectedRevision = info.resolved_revision.revision_id;
   const commitArguments = {
     mind: "/me",
-    write_binding_id: writeBindingId,
     expected_revision: expectedRevision,
     idempotency_key: `oauth:${nonce}:commit`,
     summary: "OAuth exact-candidate fixture",
@@ -1220,15 +1205,14 @@ async function runOAuthScenario({ assertions, nowState }) {
   const revokedMirror = await metadata.readMcpTokenForAuthorization(writeAccessRecord.id);
   if (revokedMirror?.state !== "revoked") fail("oauth_authorization_mirror_not_revoked");
   assertions.add("oauth.connected-app-mirror-revoke");
-  const revokedBindings = await metadata.readMindBindingSet(
+  const revokedTarget = await metadata.readCredentialWriteTarget(
     String(writeAccessRecord.grant_id),
     String(writeAccessRecord.principal_id),
-    nowState.value.toISOString(),
   );
   if (
-    revokedBindings?.bindingSet.state !== "revoked" ||
-    revokedBindings.writeBinding !== null ||
-    revokedBindings.readBindings.length !== 0
+    revokedTarget?.kind !== "current" ||
+    revokedTarget.state.lifecycleState !== "revoked" ||
+    revokedTarget.state.activeGeneration !== null
   ) fail("oauth_connected_app_binding_owner_not_revoked");
   assertions.add("oauth.connected-app-binding-revoke");
 
@@ -1237,21 +1221,23 @@ async function runOAuthScenario({ assertions, nowState }) {
     await modernTool(owner, reconnect.tokens.access_token, "oauth-reconnect-read", "list_minds"),
     "oauth_reconnect_failed",
   );
-  const reconnectBindings = mcpData(
-    await modernTool(
-      owner,
-      reconnect.tokens.access_token,
-      "oauth-reconnect-bindings",
-      "get_mind_bindings",
-    ),
+  const reconnectAccess = latestAccessRecord(database);
+  const reconnectConnections = await owner.api("/api/v1/connections");
+  const reconnectConnection = reconnectConnections.body?.data?.items?.find(
+    (item) => item?.connection_ref !== connectionRef,
+  );
+  const reconnectRef = requiredString(
+    reconnectConnection?.connection_ref,
     "oauth_reconnect_bindings_failed",
   );
-  const reconnectAccess = latestAccessRecord(database);
+  const reconnectDetail = await owner.api(
+    `/api/v1/connections/${encodeURIComponent(reconnectRef)}`,
+  );
   if (
     reconnectAccess.grant_id === writeAccessRecord.grant_id ||
-    reconnectBindings.binding_version !== 0 ||
-    reconnectBindings.write_binding !== null ||
-    reconnectBindings.read_bindings?.length !== 0
+    reconnectRef === connectionRef ||
+    reconnectDetail.body?.data?.access?.target_version !== 0 ||
+    reconnectDetail.body?.data?.access?.writable_mind !== null
   ) fail("oauth_reconnect_binding_generation_not_empty");
   assertions.add("oauth.reconnect-new-grant");
   assertions.add("oauth.reconnect-empty-binding-generation");

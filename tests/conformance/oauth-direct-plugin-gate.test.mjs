@@ -54,29 +54,33 @@ test("Codex plugin uses the isolated compatibility transport with the canonical 
   }
 });
 
-test("Codex-compatible binding declaration keeps every callable field at the root", () => {
-  const flat = [{
-    name: "set_write_mind_binding",
+test("fresh Codex catalogs have no binding mutation or authority fields", () => {
+  const current = [{
+    name: "commit_changeset",
     inputSchema: {
       type: "object",
       additionalProperties: false,
-      required: ["action", "expected_binding_version", "idempotency_key"],
+      required: ["mind", "expected_revision", "idempotency_key", "operations"],
       properties: {
-        action: { type: "string", enum: ["bind", "unbind"] },
         mind: { type: "string" },
-        expected_binding_version: { type: "integer", minimum: 0 },
-        idempotency_key: { type: "string", minLength: 1, maxLength: 256 },
+        expected_revision: { type: "string" },
+        idempotency_key: { type: "string" },
+        operations: { type: "array" },
       },
     },
   }];
-  assert.equal(assertCodexCompatibleWriteBindingSchema(flat), true);
-  const oldOneOf = structuredClone(flat);
-  oldOneOf[0].inputSchema.oneOf = [
-    { properties: { action: { const: "bind" } }, required: ["mind"] },
-    { properties: { action: { const: "unbind" } }, not: { required: ["mind"] } },
-  ];
+  assert.equal(assertCodexCompatibleWriteBindingSchema(current), true);
+  const legacy = structuredClone(current);
+  legacy.push({ name: "set_write_mind_binding", inputSchema: {} });
   assert.throws(
-    () => assertCodexCompatibleWriteBindingSchema(oldOneOf),
+    () => assertCodexCompatibleWriteBindingSchema(legacy),
+    (error) => error instanceof ProbeFailure &&
+      error.code === "codex_write_binding_schema_incompatible",
+  );
+  const leaked = structuredClone(current);
+  leaked[0].inputSchema.properties.write_binding_id = { type: "string" };
+  assert.throws(
+    () => assertCodexCompatibleWriteBindingSchema(leaked),
     (error) => error instanceof ProbeFailure &&
       error.code === "codex_write_binding_schema_incompatible",
   );
