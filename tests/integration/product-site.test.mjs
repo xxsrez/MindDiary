@@ -1020,7 +1020,7 @@ test("ordinary Mind list and exact route wire the UAT management and deletion co
       if (request.operation === "list_members") return {
         members: [
           { memberId: "membership_owner", displayName: "Product Owner", role: "owner", membershipVersion: 1, isSelf: true },
-          { memberId: "membership_editor", displayName: "Editor Person", role: "editor", membershipVersion: 1, isSelf: false },
+          { memberId: "membership_editor", displayName: "Editor & <Person>", role: "editor", membershipVersion: 1, isSelf: false },
         ],
       };
       if (request.operation === "list_invitations") return { invitations: [] };
@@ -1083,7 +1083,17 @@ test("ordinary Mind list and exact route wire the UAT management and deletion co
   assert.match(detailHtml, /Participants and invitations/);
   assert.match(detailHtml, /data-invitation-form/);
   assert.match(detailHtml, /data-member-role-form/);
-  assert.match(detailHtml, /value="membership_editor">Editor Person — Editor/);
+  const ownershipForm = /<form\b[^>]*data-ownership-transfer-form[^>]*>[\s\S]*?<\/form>/u.exec(detailHtml)?.[0];
+  assert.ok(ownershipForm);
+  assert.match(ownershipForm, /\bdata-source-membership-version="1"/u);
+  const targetOption = [...ownershipForm.matchAll(/<option\b([^>]*)>([^<]*)<\/option>/gu)]
+    .find((match) => /\bvalue="membership_editor"/u.test(match[1] ?? ""));
+  assert.ok(targetOption);
+  assert.match(targetOption[1], /\bvalue="membership_editor"/u);
+  assert.match(targetOption[1], /\bdata-membership-version="1"/u);
+  assert.match(targetOption[1], /\bdata-display-name="Editor &amp; &lt;Person&gt;"/u);
+  assert.equal(targetOption[2], "Editor &amp; &lt;Person&gt; — Editor");
+  assert.doesNotMatch(ownershipForm, /<Person>|<script|onerror=/u);
   assert.match(detailHtml, /mind-diary-ordinary-minds-client\.js/);
 
   const capacity = await handler(new Request(
