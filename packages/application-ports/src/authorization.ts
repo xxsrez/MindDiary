@@ -19,6 +19,7 @@ import {
   type AuditEventId,
   type BindingVersion,
   type Capability,
+  type CredentialWriteTargetState,
   type EffectiveTokenScopes,
   type MindBindingOwnerId,
   type MindBindingSet,
@@ -120,7 +121,19 @@ export interface AuthorizationTransaction extends AuthorizationStateReader {
     principalId: PrincipalId,
     occurredAt: UtcInstant,
   ): Promise<Readonly<MindBindingSetSnapshot> | null>;
+  /** Credential profile snapshot from this exact transaction/read-session. */
+  readCredentialWriteTarget?(
+    bindingOwnerId: MindBindingOwnerId,
+    principalId: PrincipalId,
+  ): Promise<Readonly<CredentialContentAccessProfileSnapshot> | null>;
 }
+
+export type CredentialContentAccessProfileSnapshot =
+  | {
+      readonly kind: "current";
+      readonly state: Readonly<CredentialWriteTargetState>;
+    }
+  | { readonly kind: "pending_upgrade" };
 
 export interface MindBindingSetSnapshot {
   readonly bindingSet: Readonly<MindBindingSet>;

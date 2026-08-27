@@ -1033,14 +1033,14 @@ test("BundleFile dev smoke preserves exact bytes, history, exports, and reconstr
       return typeof value === "function" ? value.bind(target) : value;
     },
   });
-  const issueDirectGrant = async (entry) => {
+  const issueDirectGrant = async (entry, bindingOwnerId = BINDING_OWNER_ID) => {
     const issued = await crypto.issueSecret();
     const created = await env.metadata.runBundleFileDownloadGrantTransaction(
       (transaction) => transaction.createBundleFileDownloadGrant({
         secretVerifier: issued.verifier(),
         requestedByPrincipalId: env.currentActor.principalId,
         tokenId: TOKEN_ID,
-        bindingOwnerId: BINDING_OWNER_ID,
+        bindingOwnerId,
         spaceId: MINDS.ordinary.spaceId,
         revisionId: REVISIONS.next.revisionId,
         path: entry.path,
@@ -1138,6 +1138,132 @@ test("BundleFile dev smoke preserves exact bytes, history, exports, and reconstr
   const pngEntry = committed.envelope.manifest.entries.find(
     (candidate) => candidate.path === "assets/diagram.png",
   );
+  const raceBindingOwnerId = "binding_owner_bundle_file_race";
+  const raceActor = {
+    ...env.currentActor,
+    authentication: {
+      ...env.currentActor.authentication,
+      bindingOwnerId: raceBindingOwnerId,
+    },
+  };
+  const raceProfile = await env.metadata.runCredentialWriteTargetTransaction(
+    (transaction) => transaction.registerCredentialWriteTargetOwner({
+      bindingOwnerId: raceBindingOwnerId,
+      principalId: raceActor.principalId,
+      credentialKind: "oauth_grant",
+      occurredAt: FIXED_NOW,
+    }),
+  );
+  assert.equal(raceProfile.kind, "registered");
+  const raceAuthorizer = new MindBindingContentAuthorizer({
+    delegate: new CapabilityAuthorizer(env.metadata),
+    bindings: env.metadata,
+    readAuthority: "current_acl",
+  });
+  let revokeBeforeGrantTransaction = true;
+  const raceStore = new Proxy(discoveryStore, {
+    get(target, property) {
+      if (property === "runBundleFileDownloadGrantTransaction") {
+        return async (operation) => {
+          if (revokeBeforeGrantTransaction) {
+            revokeBeforeGrantTransaction = false;
+            const revoked = await env.metadata.revokeCredentialWriteTargetOwner({
+              bindingOwnerId: raceBindingOwnerId,
+              principalId: raceActor.principalId,
+              requestId: "request_bundle_grant_race_revoke",
+              auditEventId: "audit_bundle_grant_race_revoke",
+              auditOutboxMessageId: "outbox_bundle_grant_race_revoke",
+              occurredAt: LATER,
+            });
+            assert.equal(revoked.kind, "revoked");
+          }
+          return target.runBundleFileDownloadGrantTransaction(operation);
+        };
+      }
+      const value = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  const raceService = new BundleFileDownloadService({
+    store: raceStore,
+    objects: observedDownloadObjects,
+    authorizer: raceAuthorizer,
+    credentialAccess: raceAuthorizer,
+    host: verifiedSpaceHost("mind-diary.test"),
+    clock: { now: () => LATER },
+    secrets: crypto,
+    downloadUrlBase: "https://mind-diary.test/api/bundle-download",
+  });
+  const grantsBeforeRace = env.metadata.exportDurableSnapshot()
+    .bundleFileDownloadGrants.size;
+  await assert.rejects(
+    raceService.issue(raceActor, {
+      mind: MINDS.ordinary.spaceId,
+      revisionSelector: { kind: "revision", revisionId: REVISIONS.next.revisionId },
+      path: "assets/diagram.png",
+    }),
+    (error) => error?.code === "bundle_file_not_found",
+  );
+  assert.equal(
+    env.metadata.exportDurableSnapshot().bundleFileDownloadGrants.size,
+    grantsBeforeRace,
+  );
+  const consumeRaceOwnerId = "binding_owner_bundle_file_consume_race";
+  assert.equal(
+    (await env.metadata.runCredentialWriteTargetTransaction((transaction) =>
+      transaction.registerCredentialWriteTargetOwner({
+        bindingOwnerId: consumeRaceOwnerId,
+        principalId: env.currentActor.principalId,
+        credentialKind: "oauth_grant",
+        occurredAt: FIXED_NOW,
+      }))).kind,
+    "registered",
+  );
+  const consumeRaceSecret = await issueDirectGrant(pngEntry, consumeRaceOwnerId);
+  let revokeBeforeConsumeTransaction = true;
+  const consumeRaceStore = new Proxy(discoveryStore, {
+    get(target, property) {
+      if (property === "runBundleFileDownloadGrantTransaction") {
+        return async (operation) => {
+          if (revokeBeforeConsumeTransaction) {
+            revokeBeforeConsumeTransaction = false;
+            const revoked = await env.metadata.revokeCredentialWriteTargetOwner({
+              bindingOwnerId: consumeRaceOwnerId,
+              principalId: env.currentActor.principalId,
+              requestId: "request_bundle_consume_race_revoke",
+              auditEventId: "audit_bundle_consume_race_revoke",
+              auditOutboxMessageId: "outbox_bundle_consume_race_revoke",
+              occurredAt: LATER,
+            });
+            assert.equal(revoked.kind, "revoked");
+          }
+          return target.runBundleFileDownloadGrantTransaction(operation);
+        };
+      }
+      const value = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  const consumeRaceService = new BundleFileDownloadService({
+    store: consumeRaceStore,
+    objects: observedDownloadObjects,
+    authorizer: raceAuthorizer,
+    credentialAccess: raceAuthorizer,
+    host: verifiedSpaceHost("mind-diary.test"),
+    clock: { now: () => LATER },
+    secrets: crypto,
+    downloadUrlBase: "https://mind-diary.test/api/bundle-download",
+  });
+  assert.deepEqual(
+    await consumeRaceService.download(serviceActor, consumeRaceSecret),
+    { kind: "not_found" },
+  );
+  const consumeRaceGrant = [...env.metadata.exportDurableSnapshot()
+    .bundleFileDownloadGrants.values()].find(
+      ({ bindingOwnerId }) => bindingOwnerId === consumeRaceOwnerId,
+    );
+  assert.equal(consumeRaceGrant.state, "active");
+  assert.equal(consumeRaceGrant.consumedAt, null);
   const secret = await issueDirectGrant(pngEntry);
   const results = await Promise.all([
     service.download(serviceActor, secret),

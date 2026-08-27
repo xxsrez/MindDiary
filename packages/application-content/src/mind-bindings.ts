@@ -9,6 +9,7 @@ import {
   type AuthorizationDecision,
   type CredentialContentAccessDecision,
   type CredentialContentAccessAuthorizer,
+  type CredentialContentAccessProfileSnapshot,
   type AuthorizationRequest,
   type AuthorizationStamp,
   type AuthorizationTransaction,
@@ -836,6 +837,13 @@ type AllowedAuthorization = Extract<
   { readonly kind: "allowed" }
 >;
 
+interface CredentialAccessProfileReader {
+  readCredentialWriteTarget?(
+    bindingOwnerId: MindBindingOwnerId,
+    principalId: PrincipalId,
+  ): Promise<Readonly<CredentialContentAccessProfileSnapshot> | null>;
+}
+
 function bindingDenied(
   code: Extract<
     AuthorizationDecision,
@@ -908,7 +916,7 @@ export class MindBindingContentAuthorizer
   }
 
   async #authorizeCredentialContentAccessWith(
-    reader: Partial<Pick<CredentialWriteTargetStore, "readCredentialWriteTarget">>,
+    reader: CredentialAccessProfileReader,
     actor: ActorContext,
   ): Promise<CredentialContentAccessDecision> {
     if (
@@ -981,6 +989,11 @@ export class MindBindingContentAuthorizer
       this.#readAuthority === "current_acl" &&
       request.capability !== "content:write"
     ) {
+      const credential = await this.#authorizeCredentialContentAccessWith(
+        transaction,
+        request.actor,
+      );
+      if (credential.kind === "denied") return credential;
       return this.#delegate.reauthorizeInTransaction(
         request,
         transaction,

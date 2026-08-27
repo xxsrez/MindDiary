@@ -439,7 +439,83 @@ test("pending legacy credential fails closed before ACL-derived discovery or rea
   assert.equal(decision.kind, "denied");
   assert.equal(decision.code, "credential_access_upgrade_required");
   assert.equal(decision.retryable, false);
+  const transactional = await metadata.runBundleFileDownloadGrantTransaction(
+    (transaction) => authorizer.reauthorizeInTransaction(
+      {
+        actor: actor(),
+        spaceId: SPACE_A,
+        capability: "content:fetch",
+        revisionMode: "historical",
+      },
+      transaction,
+      { accessVersion: version(1), membershipVersion: version(1), tokenVersion: version(1) },
+    ),
+  );
+  assert.equal(transactional.kind, "denied");
+  assert.equal(transactional.code, "credential_access_upgrade_required");
   assert.equal(aclCalls, 0);
+});
+
+test("transactional content reads recheck credential lifecycle after preflight", async () => {
+  const { metadata } = applicationHarness("credential_write_target");
+  const registered = await metadata.runCredentialWriteTargetTransaction((transaction) =>
+    transaction.registerCredentialWriteTargetOwner({
+      bindingOwnerId: BINDING_OWNER_ID,
+      principalId: PRINCIPAL_ID,
+      credentialKind: "oauth_grant",
+      occurredAt: NOW,
+    }));
+  assert.equal(registered.kind, "registered");
+  const authorizer = new MindBindingContentAuthorizer({
+    delegate: new CapabilityAuthorizer(metadata),
+    bindings: metadata,
+    readAuthority: "current_acl",
+  });
+  const requests = ["content:fetch", "content:browse"].map((capability) => ({
+    actor: actor(),
+    spaceId: SPACE_A,
+    capability,
+    revisionMode: "historical",
+  }));
+  const initial = [];
+  for (const request of requests) {
+    const decision = await authorizer.authorize(request);
+    assert.equal(decision.kind, "allowed", request.capability);
+    initial.push(decision);
+  }
+
+  const revoked = await metadata.revokeCredentialWriteTargetOwner({
+    bindingOwnerId: BINDING_OWNER_ID,
+    principalId: PRINCIPAL_ID,
+    requestId: "request_revoke_between_read_checks",
+    auditEventId: "audit_revoke_between_read_checks",
+    auditOutboxMessageId: "outbox_revoke_between_read_checks",
+    occurredAt: LATER,
+  });
+  assert.equal(revoked.kind, "revoked");
+
+  let simulatedObjectIndexOrGrantEffects = 0;
+  for (const [index, request] of requests.entries()) {
+    const plain = await authorizer.authorize(request);
+    assert.equal(plain.kind, "denied", request.capability);
+    assert.equal(plain.code, "binding_owner_revoked", request.capability);
+    const fenced = await metadata.runBundleFileDownloadGrantTransaction(
+      (transaction) => authorizer.reauthorizeInTransaction(
+        request,
+        transaction,
+        initial[index].stamp,
+      ),
+    );
+    if (fenced.kind === "allowed") simulatedObjectIndexOrGrantEffects += 1;
+    assert.equal(fenced.kind, "denied", request.capability);
+    assert.equal(fenced.code, "binding_owner_revoked", request.capability);
+  }
+  assert.equal(simulatedObjectIndexOrGrantEffects, 0);
+  assert.equal(
+    (await metadata.readCredentialWriteTarget(BINDING_OWNER_ID, PRINCIPAL_ID))
+      .state.lifecycleState,
+    "revoked",
+  );
 });
 
 test("revoking a binding owner invalidates all active records and is terminal", async () => {

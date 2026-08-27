@@ -953,6 +953,10 @@ export abstract class RevisionMetadataReadStore extends RevisionMetadataSnapshot
         const transaction: BundleFileStagingTransaction = Object.freeze({
           ...capacityTransaction,
           kind: "authorization-transaction" as const,
+          readCredentialWriteTarget: (
+            bindingOwnerId: MindBindingOwnerId,
+            principalId: PrincipalId,
+          ) => this.readCredentialWriteTarget(bindingOwnerId, principalId),
           readMindBindingSet: (
             bindingOwnerId: MindBindingOwnerId,
             principalId: PrincipalId,
@@ -1062,6 +1066,10 @@ export abstract class RevisionMetadataReadStore extends RevisionMetadataSnapshot
 
         const transaction: MindBindingTransaction = Object.freeze({
           kind: "authorization-transaction" as const,
+          readCredentialWriteTarget: (
+            bindingOwnerId: MindBindingOwnerId,
+            principalId: PrincipalId,
+          ) => this.readCredentialWriteTarget(bindingOwnerId, principalId),
           readCurrentAuthorizationState: (query: AuthorizationStateQuery) =>
             this.readCurrentAuthorizationState(query),
           readMindBindingSet: async (

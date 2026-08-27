@@ -1,6 +1,8 @@
 import {
+  type MindBindingOwnerId,
   type MembershipControlTransaction,
   type OrdinaryMindMetadataTransaction,
+  type PrincipalId,
 } from "@mind-diary/application-ports";
 
 import {
@@ -194,6 +196,10 @@ export abstract class RevisionMetadataOrdinaryTransactionStore extends RevisionM
 
         const transaction: OrdinaryMindMetadataTransaction = Object.freeze({
           kind: "authorization-transaction" as const,
+          readCredentialWriteTarget: (
+            bindingOwnerId: MindBindingOwnerId,
+            principalId: PrincipalId,
+          ) => this.readCredentialWriteTarget(bindingOwnerId, principalId),
           ...this._membershipTransactionMethods(state),
           ...this._lifecycleTransactionMethods(state),
           ...this._deletionTransactionMethods(state),

@@ -164,6 +164,10 @@ export abstract class RevisionMetadataContentStore extends RevisionMetadataOrdin
         const transaction: MarkdownImportMetadataTransaction = Object.freeze({
           ...capacityTransaction,
           kind: "authorization-transaction" as const,
+          readCredentialWriteTarget: (
+            bindingOwnerId: MindBindingOwnerId,
+            principalId: PrincipalId,
+          ) => this.readCredentialWriteTarget(bindingOwnerId, principalId),
           readMindBindingSet: (
             bindingOwnerId: MindBindingOwnerId,
             principalId: PrincipalId,
@@ -620,6 +624,10 @@ export abstract class RevisionMetadataContentStore extends RevisionMetadataOrdin
         const transaction: ExportStartTransaction = Object.freeze({
           ...this._capacityTransaction(capacityReservations),
           kind: "authorization-transaction" as const,
+          readCredentialWriteTarget: (
+            bindingOwnerId: MindBindingOwnerId,
+            principalId: PrincipalId,
+          ) => this.readCredentialWriteTarget(bindingOwnerId, principalId),
           readMindBindingSet: (
             bindingOwnerId: MindBindingOwnerId,
             principalId: PrincipalId,
@@ -697,6 +705,10 @@ export abstract class RevisionMetadataContentStore extends RevisionMetadataOrdin
         );
         const transaction: ExportDownloadGrantTransaction = Object.freeze({
           kind: "authorization-transaction" as const,
+          readCredentialWriteTarget: (
+            bindingOwnerId: MindBindingOwnerId,
+            principalId: PrincipalId,
+          ) => this.readCredentialWriteTarget(bindingOwnerId, principalId),
           readMindBindingSet: (
             bindingOwnerId: MindBindingOwnerId,
             principalId: PrincipalId,
@@ -756,6 +768,10 @@ export abstract class RevisionMetadataContentStore extends RevisionMetadataOrdin
         );
         const transaction: BundleFileDownloadGrantTransaction = Object.freeze({
           kind: "authorization-transaction" as const,
+          readCredentialWriteTarget: (
+            bindingOwnerId: MindBindingOwnerId,
+            principalId: PrincipalId,
+          ) => this.readCredentialWriteTarget(bindingOwnerId, principalId),
           readMindBindingSet: (
             bindingOwnerId: MindBindingOwnerId,
             principalId: PrincipalId,
