@@ -1,0 +1,385 @@
+# Компактная административная IA Mind Diary
+
+Статус: accepted contract, 2026-08-27. Документ задаёт проверяемый design
+handoff для MD-347. Он определяет только информационную архитектуру,
+компоновку и доступность Product Site. Наличие контракта не означает, что
+описанный shell уже реализован или развёрнут.
+
+## Цель и источник направления
+
+После регистрации человек должен быстро находить свой Personal Mind, список
+доступных Minds, приглашения и настройки, не проходя через крупные
+маркетинговые карточки. На широком экране это компактная административная
+поверхность с постоянной левой навигацией; на узком — тот же порядок в
+закрываемом drawer.
+
+Task Manager используется только как ориентир для трёх качеств: явная
+иерархия, высокая информационная плотность и предсказуемое положение
+навигации. Mind Diary не копирует его цвета, форму контролов, названия,
+компоненты, interaction details или визуальную композицию. Айдентика,
+product language и copy остаются из [brand baseline](../brand.md).
+
+Контракт не добавляет corpus viewer/editor, website AI, новый route, роль,
+видимость, permission, token scope, binding rule или модель доступа. Raw
+content по-прежнему не рендерится в control plane; `/me` и
+`/{space_handle}` остаются management routes. Точные session, routing и
+authorization semantics остаются в [MVP](mvp.md),
+[personalized opening](personalized-opening.md) и
+[Connections](connection-experience.md).
+
+Для MD-347 этот более поздний узкий контракт заменяет только placement
+ordinary Connections в верхней navigation из `connection-experience.md`:
+route и actor-safe projection не меняются, но Connections становится child
+Settings. Остальной Connections contract сохраняет силу.
+
+## Состояния входа и account
+
+Shell выбирается только из server-owned session projection. Клиентский URL,
+email, `principal_id`, `space_id`, role или ранее показанный DOM не выбирают
+состояние.
+
+| Состояние | Shell и первое действие | Что запрещено показывать |
+|---|---|---|
+| `signed_out` | Статическая auth-страница: brand, UAT marker, один `h1`, краткая граница и `Sign in with ChatGPT`. | Левая навигация, названия/счётчики Minds, target route metadata, CSRF, account/profile hints. Все распознанные UI routes получают одинаковый shell. |
+| `registration_required` | Brand + один `main`: создать новый isolated account; manual recovery — вторичное действие через исходный trusted channel. | Предположение о прежнем account, прежние права, verified email, автоматический relink/merge/transfer. |
+| `bootstrapping` | Та же registration surface с `aria-busy="true"`, стабильным idempotency attempt и недоступной повторной primary action. | Навигация зарегистрированного пользователя и частично созданный Personal Mind. |
+| `bootstrap_error` | Причинная ошибка, safe retry с тем же attempt, либо categorical manual recovery. | Ложный success и действие, способное намеренно создать второй account/Personal Mind. |
+| `registered` | Компактный application shell; server-owned static navigation доступна до deferred page collection. | Corpus content, raw IDs, secrets и вывод прав из client state. |
+
+### Состояния `/settings/account`
+
+`/settings/account` не является отдельным auth mode: это страница внутри
+`registered` shell. Она различает следующие панели и никогда не заменяет ими
+server session:
+
+| Панель | Обязательный результат |
+|---|---|
+| `profile_idle` | Текущее безопасное display name, profile version только в transport metadata, primary action `Save`. |
+| `profile_saving` | Контролы изменения имени недоступны, bounded status с `aria-busy`; navigation остаётся usable. |
+| `profile_saved` | Точный server read-back и текстовый success signal, не только цвет. |
+| `profile_error` | Stale success убран; retry повторяет exact command только когда это безопасно. |
+| `profile_conflict` | Текущее состояние перечитывается; UI не угадывает новую version. |
+| `deletion_impact_loading` | Danger zone уже имеет heading, но confirmation недоступна до fresh impact. |
+| `deletion_impact_ready` | Exact cascade и необратимость находятся непосредственно перед confirmation field/action. |
+| `deletion_impact_changed_or_expired` | Старое подтверждение недействительно; impact перечитывается. |
+| `deleting` | Один bounded progress state без повторного destructive command. |
+
+## Каноническая иерархия навигации
+
+### Wide shell
+
+При ширине viewport `>= 1024px` shell состоит из постоянного rail шириной
+`240px` и content column. Rail занимает `100dvh`, остаётся видимым при
+вертикальном scroll content и имеет два блока:
+
+```text
+┌──────────────────────┬─────────────────────────────────────────────┐
+│ Mind Diary       UAT │ Page heading                    Primary CTA │
+│                      │ supporting description                       │
+│ My Mind              ├─────────────────────────────────────────────┤
+│ ──────────────────── │ compact filters / contextual navigation     │
+│ Minds                ├─────────────────────────────────────────────┤
+│ Public Minds         │ compact row                                 │
+│ Invitations          │ compact row                                 │
+│                      │ compact row                                 │
+│                      │ …                                           │
+│ Help with Codex?     │                                             │
+│ Settings             │                                             │
+└──────────────────────┴─────────────────────────────────────────────┘
+```
+
+`My Mind` — особый первый item primary navigation, до разделителя и обычных
+collection routes. Он всегда имеет label `My Mind`, route `/me` и не показывает
+service-managed handle. Display name Personal Mind не используется как nav
+label. Brand открывает `/`; отдельный `Home` item не добавляется.
+
+`Settings` закреплён последним item в нижней части rail и открывает
+`/settings/account`. Optional `Help with Codex` идёт непосредственно перед
+Settings только когда canonical `/help/codex` присутствует в candidate;
+отсутствие Help не сдвигает Settings с нижнего края. Connection и Advanced MCP pages принадлежат Settings и
+используют contextual navigation внутри content, а не отдельные primary items.
+
+### Medium и compact shell
+
+При viewport `< 1024px` постоянный rail заменяется top app bar высотой `56px`.
+Она содержит compact brand/mark, видимый `UAT` marker и menu button с
+`aria-expanded`. Drawer повторяет desktop-порядок без дополнительной mobile IA:
+`My Mind` first, collection routes, затем optional Help и pinned Settings.
+
+Drawer:
+
+- имеет ширину `min(320px, 88vw)` и высоту `100dvh`;
+- закрыт до явного действия и не делает скрытые ссылки tabbable;
+- при открытии получает focus на `My Mind`, удерживает focus внутри drawer,
+  `Escape` закрывает его и возвращает focus menu button;
+- не создаёт горизонтальный scroll document и не скрывает текущий heading от
+  accessibility tree;
+- использует один modal backdrop; motion не требуется для понимания state.
+
+```text
+┌─────────────────────────────────────┐
+│ Mind Diary · UAT              Menu │ 56px
+├─────────────────────────────────────┤
+│ Page heading                        │
+│ Supporting description             │
+│ [Primary action]                    │
+├─────────────────────────────────────┤
+│ compact row / state                 │
+│ compact row                         │
+└─────────────────────────────────────┘
+
+Open drawer:
+┌───────────────────────┬─────────────┐
+│ My Mind               │ backdrop    │
+│ ────────────────────  │             │
+│ Minds                 │             │
+│ Public Minds          │             │
+│ Invitations           │             │
+│                       │             │
+│ Help with Codex?      │             │
+│ Settings              │             │
+└───────────────────────┴─────────────┘
+```
+
+## Route и active-state map
+
+`aria-current="page"` устанавливается по server-resolved route, не по
+string prefix в browser. В каждом именованном navigation landmark ровно один
+current item; Settings pages поэтому могут иметь одновременно current
+`Settings` в utility navigation и current child в отдельной contextual
+navigation.
+
+| Resolved route | Shell current | Context current | Примечание |
+|---|---|---|---|
+| `/` | Brand/home | — | Primary list не получает current item. |
+| `/me` | `My Mind` | — | Особый Personal Mind item. |
+| `/minds` | `Minds` | list/create mode при наличии tabs | Ordinary Minds collection. |
+| `/{space_handle}` | `Minds` | exact Mind management section | Только после handle resolution и authorization. |
+| `/public` | `Public Minds` | — | Authenticated catalog. |
+| `/invitations` | `Invitations` | incoming/sent section по page state | Не раскрывает invitation count в shell. |
+| `/settings/account` | `Settings` | `Account` | Default Settings destination. |
+| `/settings/connections` | `Settings` | `Connections` | Active OAuth connections. |
+| `/settings/connections/{connection_ref}` | `Settings` | `Connections` | Detail наследует parent current state. |
+| `/settings/developer/mcp` | `Settings` | `Advanced MCP` | Protocol details остаются только здесь. |
+| `/settings/mcp` | — | — | `308` redirect, HTML shell не рендерится. |
+| `/help/codex` | `Help with Codex` | — | Optional utility item; не child Settings. |
+| `/help` | none | — | Footer/deep-link route; не расширяет primary IA. |
+| unknown/reserved/unauthorized | none | — | Safe not-found/forbidden без target metadata. |
+
+## Component inventory
+
+Имена ниже — стабильные contract roles, а не требование конкретной UI
+библиотеки. MD-347 может дробить внутреннюю реализацию, но сохраняет семантику
+и test hooks из machine-readable profile.
+
+| Component role | Семантика | Обязательные состояния |
+|---|---|---|
+| `AuthShell` | Signed-out/registration brand + one `main`; без application nav. | signed out, registration, progress, error. |
+| `AppShell` | Wide rail либо compact app bar/drawer + `main`. | ready shell до deferred data. |
+| `SkipLink` | Первый tabbable элемент, переводит focus на `#main-content`. | always visible on focus. |
+| `BrandHome` | Mind Diary lockup/mark, route `/`, UAT соседним textual badge. | current на `/`. |
+| `PrimaryNavigation` | `My Mind`, divider, Minds, Public Minds, Invitations. | один current item либо none на `/settings/**`. |
+| `UtilityNavigation` | Optional Help и нижний Settings. | один current item либо none. |
+| `MobileNavigation` | Menu button, modal drawer, backdrop, focus return. | closed/open/reduced-motion. |
+| `PageHeader` | Один `h1`, bounded description, optional primary action. | narrow/wide; long untrusted title. |
+| `ContextNavigation` | Settings children либо page-local modes. | один current child; horizontal wrap/scroll внутри region only. |
+| `CompactCollection` | List/table semantics для bounded metadata, не card wall. | loading, empty, ready, retryable error. |
+| `EntityRow` | Primary label, bounded secondary metadata, status and actions. | default, current/selected, unavailable, destructive action gated. |
+| `StatusText` | Text + optional icon; цвет никогда не единственный signal. | neutral/success/warning/error. |
+| `Disclosure` | Visibility/privacy/UAT/destructive constraint возле решения. | informative/warning/danger. |
+| `Dialog` | Bounded mutation confirmation с focus trap/return. | opening, submitting, error, closed. |
+| `RouteState` | Loading/empty/error/forbidden внутри текущего shell. | не заменяет navigation и `h1`. |
+
+## Измеримый layout contract
+
+### Breakpoints и размеры
+
+| Token | Значение | Contract |
+|---|---:|---|
+| compact | `320–767px` | Top app bar + drawer; one-column content. |
+| medium | `768–1023px` | Top app bar + drawer; content может использовать две bounded columns. |
+| wide | `>= 1024px` | Persistent `240px` rail + content. |
+| content max | `1120px` | Main inner column; центрируется в оставшейся ширине. |
+| page inline padding | `16px` compact, `24px` medium, `32px` wide | Не уменьшается из-за длинного текста. |
+| rail item / control hit target | минимум `44×44px` | Включая icon-only controls. |
+| compact desktop row | `44–56px` | Базовая metadata row без раскрытого content. |
+| compact mobile row | минимум `56px` | Label и secondary metadata могут занять две строки. |
+| dialog | `min(640px, viewport - 32px)` | `max-height: calc(100dvh - 32px)`, internal scroll. |
+
+Поддерживаемая минимальная ширина viewport — `320px`; `min-width` на `body`
+не должен принудительно расширять document. Стандартная spacing scale:
+`4, 8, 12, 16, 24, 32, 48px`. Новый arbitrary spacing token допускается
+только с отдельным обоснованием; `20px` остаётся card radius из brand baseline,
+а не spacing step.
+
+### Плотность и строки
+
+- Collection page по умолчанию использует rows, не большие promo cards.
+- На wide viewport primary label, status, bounded metadata и primary row action
+  находятся в одной row; вторичные действия уходят в one-menu disclosure.
+- На compact viewport label/status идут первой строкой, metadata/actions —
+  следующей; порядок чтения DOM остаётся label → status → metadata → actions.
+- В row не больше двух status badges и одного постоянно видимого action.
+- Long display names оборачиваются максимум на две visual lines; route,
+  permission или destructive state не исчезают только из-за truncation.
+- Deferred collection не меняет высоту page header и не сдвигает focus.
+
+### Overflow budget
+
+Для каждого acceptance viewport:
+
+```text
+document.scrollWidth <= document.clientWidth + 1px
+body.scrollWidth     <= document.clientWidth + 1px
+```
+
+`main`, rail/drawer, collection, row, dialog и disclosure также не могут иметь
+скрытый horizontal overflow больше `1px`. Допустимый horizontal scroll
+ограничен явным `pre/code` либо contextual tab strip с доступным label; он не
+расширяет document. Неподконтрольные display names, safe client names и error
+copy используют `min-width: 0` и `overflow-wrap: anywhere`.
+
+### First viewport
+
+- `1440×900`: видны весь rail от brand до Settings, один `h1`, primary action
+  (если доступен) и минимум первая complete data row либо complete empty/error
+  action без вертикального scroll.
+- `1024×768`: Settings остаётся видимым в rail; `h1` и начало первого route
+  state/row находятся в viewport. Secondary description может обернуться.
+- `390×844`: app bar, полный `h1`, primary action и начало first route
+  state/row находятся в viewport; drawer первоначально закрыт.
+- `320×568`: brand/UAT, `h1` и primary action или единственное auth action
+  доступны без horizontal scroll; data rows могут требовать vertical scroll.
+- Loading skeleton/status занимает те же page region и не вытесняет heading.
+
+## Landmarks, headings и keyboard
+
+- Первый tabbable control — `SkipLink`; target `#main-content` программно
+  focusable.
+- Registered wide shell: brand → primary nav top-to-bottom → optional Help →
+  Settings → page controls. Visual и DOM order совпадают.
+- Registered compact shell в закрытом состоянии не включает drawer links в
+  tab order. После open focus попадает на `My Mind`; `Tab` не выходит за
+  drawer, `Escape` закрывает и возвращает focus trigger.
+- Page имеет ровно один `h1`. Collection/major panels получают `h2`; row labels
+  не создают пропуски heading levels и обычно являются links или `h3` только
+  когда row — самостоятельная section.
+- Registered shell содержит один `main`, `nav aria-label="Primary"` и
+  `nav aria-label="Utility"`; Settings contextual nav имеет отдельный точный
+  label `Settings sections`.
+- Icon glyphs decorative и имеют `aria-hidden="true"`; accessible name
+  задаётся видимым text. Icon-only control получает точный `aria-label`.
+- Focus indicator — минимум `3px`, контрастный к соседним цветам и не
+  обрезается overflow container. Active state не заменяет focus.
+- Dialog удерживает focus, `Escape` закрывает недеструктивный dialog и после
+  close возвращает focus invoker. Destructive submit не происходит по Escape.
+- Loading region использует bounded `aria-busy`; outcome объявляется в
+  `role="status"` или `role="alert"` один раз, без live-region flooding.
+
+## Brand, responsive и system preferences
+
+- Используются canonical `Ink`, `Paper`, `Memory Plum`, `Living Coral`,
+  `Quiet Brass`, `Quiet Sage`, `White` и текущие brand assets. `Living Coral`,
+  `Quiet Brass` и `Quiet Sage` не становятся цветом мелкого текста на `Paper`.
+- Fraunces остаётся для brand/коротких headings; Inter/system fallback — для
+  navigation, rows и controls. Компактность не достигается уменьшением base
+  text ниже `16px` или hit targets ниже `44px`.
+- Status, selection, error и visibility имеют текст/форму, не только цвет.
+- При `forced-colors: active` rail boundaries, current item, focus, rows,
+  dialogs и disclosure используют system colors; decorative backgrounds могут
+  исчезнуть без потери meaning.
+- При `prefers-reduced-motion: reduce` drawer, disclosure и dialog меняют state
+  без пространственной animation. Auto-playing, looping и decorative motion
+  отсутствуют в любом режиме.
+- Zoom `200%` при CSS viewport `>= 320px` сохраняет все actions и не создаёт
+  page-level horizontal scroll.
+
+## Placement disclosures
+
+| Disclosure | Точное место |
+|---|---|
+| `UAT` | Всегда рядом с brand в signed-out, registration и registered chrome; не только footer. |
+| Personal Mind | На `/me` сразу после heading: `Private — only you`; sharing, publication, transfer и separate delete controls отсутствуют. |
+| `unlisted` / `public` | Непосредственно перед visibility mutation: live HEAD + immutable history, URL not secret для unlisted, возврат в private не отменяет раскрытие. |
+| Destructive Mind/account action | В той же panel непосредственно перед confirmation control и action; не в tooltip/sidebar/footer. |
+| Connection revoke | В connection detail после readable/writable summary и перед revoke button. |
+| Advanced MCP | Protocol scopes/endpoints/token lifecycle только внутри `/settings/developer/mcp`. |
+| Retryable/stale state | В affected collection/panel; stale success и mutation actions убираются до read-back. |
+
+## No-data-leak contract
+
+- Application rail содержит только статические labels и routes. Он не делает
+  eager read names/counts of private Minds, invitations или connections.
+- `signed_out` и `registration_required` не получают application shell markup
+  даже hidden/inert, и не содержат target-specific title/description.
+- Unknown, reserved и unauthorized `/{space_handle}` имеют один safe state без
+  target name, summary, membership, visibility или existence signal.
+- Presentation refs допустимы только в actor-owned route/form action по
+  соответствующему accepted contract; raw grant/token/binding/internal IDs,
+  credentials и download URLs не появляются в visible copy, DOM attributes,
+  telemetry или test snapshots.
+- Untrusted name/error/client text всегда escaped и не используется как HTML,
+  CSS class, route authority или accessible label без server allowlist.
+- Shell не читает content API и не включает raw Memory body, query, snippet,
+  file path или revision content в navigation, disclosure или analytics.
+
+## Automated mapping для MD-347
+
+Машинно-читаемая часть контракта находится в
+[`tests/fixtures/compact-admin-ia/contract.v1.json`](../../tests/fixtures/compact-admin-ia/contract.v1.json).
+MD-347 должна реализовать указанные `data-ia-*` hooks как test-only stable
+semantic roles; copy и internal CSS class не становятся selectors.
+
+| Contract role | Stable hook |
+|---|---|
+| application shell | `data-ia-shell` |
+| main content | `data-ia-main` |
+| primary navigation | `data-ia-nav="primary"` |
+| utility navigation | `data-ia-nav="utility"` |
+| Settings contextual navigation | `data-ia-nav="settings"` |
+| compact menu trigger | `data-ia-mobile-trigger` |
+| compact drawer | `data-ia-mobile-drawer` |
+| page header | `data-ia-page-header` |
+| bounded collection | `data-ia-collection` |
+| compact row | `data-ia-row` |
+| adjacent disclosure | `data-ia-disclosure` |
+
+| Acceptance ID | Объективная проверка MD-347 |
+|---|---|
+| `IA-SESSION-01` | На всех распознанных routes signed-out HTML одинаков по application-data regions: нет `[data-ia-shell]`, navigation, target label, CSRF. |
+| `IA-SESSION-02` | Registration/progress/error states сохраняют isolated-account и stable-retry contract, не показывают registered nav. |
+| `IA-NAV-01` | Wide: Personal first, Settings last lower item, route/current map совпадает с fixture. |
+| `IA-NAV-02` | Compact: closed drawer links не tabbable; open → My Mind focus; Escape → trigger focus. |
+| `IA-NAV-03` | Settings parent и exact context child current в разных named nav; `/settings/mcp` только redirect. |
+| `IA-GEOMETRY-01` | Fixture viewports проходят document/body/major-region overflow budget `<= 1px`. |
+| `IA-GEOMETRY-02` | Rail `240px` на wide, drawer `min(320px, 88vw)`, content `<= 1120px`, hit targets `>= 44px`. |
+| `IA-DENSITY-01` | Ready collections используют bounded rows: `44–56px` wide, `>=56px` compact; no card wall. |
+| `IA-FIRST-01` | Геометрические assertions подтверждают first-viewport expectations на всех fixture viewports. |
+| `IA-A11Y-01` | Landmarks, one `h1`, heading order, skip focus, DOM/visual order и dialog focus return. |
+| `IA-A11Y-02` | Playwright projects `forcedColors: active` и `reducedMotion: reduce` сохраняют state/focus/controls. |
+| `IA-BRAND-01` | Только canonical assets/tokens; no external font request; text contrast baseline не регрессирует. |
+| `IA-PRIVACY-01` | Long malicious labels escaped; signed-out/unauthorized snapshots не содержат private data или raw IDs. |
+| `IA-DISCLOSURE-01` | Visibility/destructive/Personal/connection disclosures находятся в required adjacent regions. |
+
+Минимальные Playwright viewports: `320×568`, `390×844`, `768×1024`,
+`1024×768`, `1440×900`. Geometry assertions являются terminal evidence;
+screenshots допустимы для review, но не заменяют DOM, accessibility и overflow
+checks. Existing header-shell tests должны быть обновлены на этот contract в
+MD-347, а не сохранены ценой второго параллельного navigation shell.
+
+## Вне scope
+
+- реализация CSS/HTML/client behavior и перенос существующих страниц;
+- изменение route/API/error schemas, server projections или lazy-load policy;
+- новый content viewer/editor, Memory preview, search, website AI или chat;
+- изменение Personal Mind invariants, visibility, memberships, ownership,
+  OAuth/personal-token scopes, binding или authorization;
+- новый production theme, dark mode, внешняя font delivery и illustration set;
+- pixel-perfect clone Task Manager или иной сторонней поверхности.
+
+## Связанные документы
+
+- [Базовая айдентика](../brand.md)
+- [MVP](mvp.md)
+- [URL-адресация и Personal Mind](personalized-opening.md)
+- [Connections, Advanced MCP и Codex Help](connection-experience.md)

@@ -1,0 +1,74 @@
+{
+  "$schema": "mind-diary/compact-admin-ia/v1",
+  "source": "docs/specs/compact-admin-information-architecture.md",
+  "breakpoints": {
+    "compact": { "minWidthPx": 320, "maxWidthPx": 767 },
+    "medium": { "minWidthPx": 768, "maxWidthPx": 1023 },
+    "wide": { "minWidthPx": 1024 }
+  },
+  "geometry": {
+    "railWidthPx": 240,
+    "drawerMaxWidthPx": 320,
+    "drawerViewportWidthRatio": 0.88,
+    "contentMaxWidthPx": 1120,
+    "minimumHitTargetPx": 44,
+    "wideRowMinHeightPx": 44,
+    "wideRowMaxHeightPx": 56,
+    "compactRowMinHeightPx": 56,
+    "pageOverflowTolerancePx": 1,
+    "spacingScalePx": [4, 8, 12, 16, 24, 32, 48]
+  },
+  "viewports": [
+    { "id": "minimum", "width": 320, "height": 568 },
+    { "id": "mobile", "width": 390, "height": 844 },
+    { "id": "medium", "width": 768, "height": 1024 },
+    { "id": "wide-minimum", "width": 1024, "height": 768 },
+    { "id": "wide", "width": 1440, "height": 900 }
+  ],
+  "primaryOrder": ["my-mind", "minds", "public", "invitations"],
+  "utilityOrder": ["help-optional", "settings"],
+  "routes": [
+    { "pattern": "/", "shellCurrent": "brand-home", "contextCurrent": null },
+    { "pattern": "/me", "shellCurrent": "my-mind", "contextCurrent": null },
+    { "pattern": "/minds", "shellCurrent": "minds", "contextCurrent": null },
+    { "pattern": "/{space_handle}", "shellCurrent": "minds", "contextCurrent": "mind-management" },
+    { "pattern": "/public", "shellCurrent": "public", "contextCurrent": null },
+    { "pattern": "/invitations", "shellCurrent": "invitations", "contextCurrent": null },
+    { "pattern": "/settings/account", "shellCurrent": "settings", "contextCurrent": "account" },
+    { "pattern": "/settings/connections", "shellCurrent": "settings", "contextCurrent": "connections" },
+    { "pattern": "/settings/connections/{connection_ref}", "shellCurrent": "settings", "contextCurrent": "connections" },
+    { "pattern": "/settings/developer/mcp", "shellCurrent": "settings", "contextCurrent": "advanced-mcp" },
+    { "pattern": "/settings/mcp", "shellCurrent": null, "contextCurrent": null, "redirectTo": "/settings/developer/mcp", "status": 308 },
+    { "pattern": "/help/codex", "shellCurrent": "help-optional", "contextCurrent": null },
+    { "pattern": "/help", "shellCurrent": null, "contextCurrent": null }
+  ],
+  "selectors": {
+    "shell": "[data-ia-shell]",
+    "main": "[data-ia-main]",
+    "primaryNavigation": "[data-ia-nav=primary]",
+    "utilityNavigation": "[data-ia-nav=utility]",
+    "settingsNavigation": "[data-ia-nav=settings]",
+    "mobileTrigger": "[data-ia-mobile-trigger]",
+    "mobileDrawer": "[data-ia-mobile-drawer]",
+    "pageHeader": "[data-ia-page-header]",
+    "collection": "[data-ia-collection]",
+    "row": "[data-ia-row]",
+    "disclosure": "[data-ia-disclosure]"
+  },
+  "acceptanceIds": [
+    "IA-SESSION-01",
+    "IA-SESSION-02",
+    "IA-NAV-01",
+    "IA-NAV-02",
+    "IA-NAV-03",
+    "IA-GEOMETRY-01",
+    "IA-GEOMETRY-02",
+    "IA-DENSITY-01",
+    "IA-FIRST-01",
+    "IA-A11Y-01",
+    "IA-A11Y-02",
+    "IA-BRAND-01",
+    "IA-PRIVACY-01",
+    "IA-DISCLOSURE-01"
+  ]
+}
