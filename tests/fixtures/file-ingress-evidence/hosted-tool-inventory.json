@@ -1,0 +1,144 @@
+{
+  "schema": "mind-diary/file-ingress-hosted-tool-inventory/v1",
+  "source": "mind-diary-hosted-mcp-tools-list",
+  "entries": [
+    {
+      "name": "browse_entries",
+      "source": "mind-diary-hosted-mcp-tools-list",
+      "input_schema_sha256": "sha256:4d99961dffd10bf6bfd27966e8c86a363bfb684bc1da0faebe372826a6a678c7",
+      "output_schema_sha256": "sha256:458ad4cc2d298dc1f799b3e276ca9065b2ca593b32bf38c051f63b996d4ada30"
+    },
+    {
+      "name": "capture_knowledge",
+      "source": "mind-diary-hosted-mcp-tools-list",
+      "input_schema_sha256": "sha256:3ca043fc322e848ac62dad408e0d8307a5e5abbc866f85e4c6c97f883a1353a7",
+      "output_schema_sha256": "sha256:2b473b0fb089ca8f1408a12bc8909574996d237864348eb2e97f1697d5fdcccf"
+    },
+    {
+      "name": "commit_changeset",
+      "source": "mind-diary-hosted-mcp-tools-list",
+      "input_schema_sha256": "sha256:91f1bef0222540728f4cf581dd069a81397f150182d1cd93b866669d3ce6f48a",
+      "output_schema_sha256": "sha256:8083429705cf93d78a4259e4d9c7e83f59b71ab9beabaaa143dac981f9788a89"
+    },
+    {
+      "name": "create_file_upload_intent",
+      "source": "mind-diary-hosted-mcp-tools-list",
+      "input_schema_sha256": "sha256:80fc2b55b2f826de9eb51b0b002b92f7bdcc9ac6a9bcc5c823be4fdde3a2fb34",
+      "output_schema_sha256": "sha256:70641221d09c49912bc1135227c7f6c1112808e0332700ac1f18b113f48f44c3"
+    },
+    {
+      "name": "fetch",
+      "source": "mind-diary-hosted-mcp-tools-list",
+      "input_schema_sha256": "sha256:c5f456ca68129564e9cd0976ffeeb0388cf72730e64ac090596f32914a2b71c0",
+      "output_schema_sha256": "sha256:9c2caeeffa02ab1053a1745b46eabae3b4643c2965420484a2d1e54ad310ea6e"
+    },
+    {
+      "name": "get_bundle_file_download",
+      "source": "mind-diary-hosted-mcp-tools-list",
+      "input_schema_sha256": "sha256:6bf84c53631d8c47e23e41a219cf5ee0325d6be2201c2202e611e9ba6f152b6f",
+      "output_schema_sha256": "sha256:8072a478cdff4df3d856f0b0fcec5cc3222ea200dfdea3f72e42fd656af76744"
+    },
+    {
+      "name": "get_export_status",
+      "source": "mind-diary-hosted-mcp-tools-list",
+      "input_schema_sha256": "sha256:bd1c3090a65c5ee2131f639e333a636dc9ac33df41e0ab7e383b32d1e88350d2",
+      "output_schema_sha256": "sha256:78b505fd1135d5ea3bdd2873398d9034c832c470f4ae9f02650944400fc9be65"
+    },
+    {
+      "name": "get_file_ingress_capabilities",
+      "source": "mind-diary-hosted-mcp-tools-list",
+      "input_schema_sha256": "sha256:71fc596a20f27da3dec80050e5d1f553eba34aea24c2853b853488a811e6b892",
+      "output_schema_sha256": "sha256:114c45747488f723bde356ffaa2aae44db6eba3882a0ac6cbbba9f5c5e217885"
+    },
+    {
+      "name": "get_mind_bindings",
+      "source": "mind-diary-hosted-mcp-tools-list",
+      "input_schema_sha256": "sha256:71fc596a20f27da3dec80050e5d1f553eba34aea24c2853b853488a811e6b892",
+      "output_schema_sha256": "sha256:1b6f83d9126bcde4cb8d177694569c4f334a7b6623405b6f43285467f99fd677"
+    },
+    {
+      "name": "get_mind_info",
+      "source": "mind-diary-hosted-mcp-tools-list",
+      "input_schema_sha256": "sha256:7572b22c658ec6f1dc159561f116d9812ef8d4bc890e14972ccbf13aa282b3a3",
+      "output_schema_sha256": "sha256:9e9c6cb906451d041c77f94ec23a3167d2f84f74fcf1118b1a53bba5defdfdd3"
+    },
+    {
+      "name": "get_revision",
+      "source": "mind-diary-hosted-mcp-tools-list",
+      "input_schema_sha256": "sha256:6ea261a647807df048f10109dd889dbb4457b85e3037cacf4cb7bb45a3364cfb",
+      "output_schema_sha256": "sha256:c647c720788de6b65658cc9adfb83426ea985b45cb0f7e32d18362869a134286"
+    },
+    {
+      "name": "list_bundle_files",
+      "source": "mind-diary-hosted-mcp-tools-list",
+      "input_schema_sha256": "sha256:b1dd55463c61f46e0c519037cbbac6377a057d20b07885758f8743ee585273b2",
+      "output_schema_sha256": "sha256:d40a509452528e202722b9c8e8a1abf82b3ca5975cf6279245c5f7fc79bd99fa"
+    },
+    {
+      "name": "list_minds",
+      "source": "mind-diary-hosted-mcp-tools-list",
+      "input_schema_sha256": "sha256:13f7102b7ce17d77e2e250384c8b2eb071862b0ee5c9e42780dc1d423e0c19eb",
+      "output_schema_sha256": "sha256:4eed01de3b8f9da42e9e6c57dec3a2067205633cb1db19b69b6cfef880671a81"
+    },
+    {
+      "name": "list_revisions",
+      "source": "mind-diary-hosted-mcp-tools-list",
+      "input_schema_sha256": "sha256:44fa017cd21268061d1fb5201cc1d6dca2fa562bf8e9eeb8443a2c64f8953aa1",
+      "output_schema_sha256": "sha256:cf72dab1b5586ef2b517814781ed43cde3112b0df937939f7d0cb1839302dedf"
+    },
+    {
+      "name": "reconcile_changeset",
+      "source": "mind-diary-hosted-mcp-tools-list",
+      "input_schema_sha256": "sha256:91f1bef0222540728f4cf581dd069a81397f150182d1cd93b866669d3ce6f48a",
+      "output_schema_sha256": "sha256:cc779ef608d654a5f6377b3aaa2cde72b2abb667944d0580f61970b9cff8ef72"
+    },
+    {
+      "name": "reconcile_file_stage",
+      "source": "mind-diary-hosted-mcp-tools-list",
+      "input_schema_sha256": "sha256:a0727aa1ede00780b17c4ea3acaa9ea666005397926b07c96b385099e76b6606",
+      "output_schema_sha256": "sha256:6fbd2e5a631a4af7e6a44526d44c8654749481017ee0a2f3a7fe353e1d7d0c7d"
+    },
+    {
+      "name": "resolve_mind",
+      "source": "mind-diary-hosted-mcp-tools-list",
+      "input_schema_sha256": "sha256:6935429077af9267917850448799ef0132f3598367d0f639a64c0f842f978ef5",
+      "output_schema_sha256": "sha256:d1f9da6cd07cee6174cc6a35ba688ffdadc876a128fd1c95999c197804de4a5a"
+    },
+    {
+      "name": "search",
+      "source": "mind-diary-hosted-mcp-tools-list",
+      "input_schema_sha256": "sha256:c6604b13fb10419e675218778cd6e2035fdefa64694bf0d75fddbaf9d8f6937f",
+      "output_schema_sha256": "sha256:1c080d51b31bdc9488d1b3fb8132f546e273456ec5208c33395f2003b6b51708"
+    },
+    {
+      "name": "set_read_mind_binding",
+      "source": "mind-diary-hosted-mcp-tools-list",
+      "input_schema_sha256": "sha256:7d793f06fc0d0a7690dc53c21a32c88a45838d9c4e87ee3e3cac3cdd4baf0be8",
+      "output_schema_sha256": "sha256:f85b65781f98868b6d88a38a744a10201092a8a81ebdb1fcece80400e5687408"
+    },
+    {
+      "name": "set_write_mind_binding",
+      "source": "mind-diary-hosted-mcp-tools-list",
+      "input_schema_sha256": "sha256:061e93d19d8cdf929786f6a41a2497b6be6adeca837a2d83762fbce9e5def2c2",
+      "output_schema_sha256": "sha256:e65a0c2e4c6890b91eadd4eb7abfd637c9f07e84342d294cf75778d0e16857d7"
+    },
+    {
+      "name": "stage_bundle_file",
+      "source": "mind-diary-hosted-mcp-tools-list",
+      "input_schema_sha256": "sha256:22b130a76708ccdd58e9685adf9d4ba1f398a61159b7b84cc6c62d936a3cb316",
+      "output_schema_sha256": "sha256:ec2d48ce5eb0a766c502fc986b0768c5ed185432b88b7068050b601c9fba0c49"
+    },
+    {
+      "name": "start_export",
+      "source": "mind-diary-hosted-mcp-tools-list",
+      "input_schema_sha256": "sha256:eecab8bebdd9db7a9d1db611baf4e562d46dd88766ac9f2fa26010f6a2130e2b",
+      "output_schema_sha256": "sha256:74020f8413f2ec695044a21e1bbe3f70cab8fb5a3cbf92847abfc8da84d5c1c1"
+    },
+    {
+      "name": "validate_mind",
+      "source": "mind-diary-hosted-mcp-tools-list",
+      "input_schema_sha256": "sha256:7572b22c658ec6f1dc159561f116d9812ef8d4bc890e14972ccbf13aa282b3a3",
+      "output_schema_sha256": "sha256:779b4c3e4992537d146ca189d2f0076e14355cc449840e4a74bd26931155d2e8"
+    }
+  ]
+}

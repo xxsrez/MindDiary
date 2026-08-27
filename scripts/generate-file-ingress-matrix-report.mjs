@@ -29,6 +29,9 @@ function parseArguments(argv) {
     if (argument === "--sha") options.candidate = value;
     else if (argument === "--output") options.output = value;
     else if (argument === "--local-receipt") options.localReceipt = resolve(value);
+    else if (argument === "--hosted-deployment-anchor") {
+      options.hostedDeploymentAnchor = resolve(value);
+    }
     else if (argument === "--hosted-receipt") {
       const separator = value.indexOf("=");
       assert(separator > 0 && separator < value.length - 1, "--hosted-receipt must be profile_id=path");
@@ -66,10 +69,14 @@ export async function generateFileIngressMatrixReport({
   output,
   localReceiptPath = null,
   hostedReceiptPaths = [],
+  hostedDeploymentAnchorPath = null,
 }) {
   const config = await loadFileIngressEvidenceConfig(repositoryRoot);
   const candidateSha = resolveCandidateSha(repositoryRoot, candidate);
   const localReceipt = localReceiptPath === null ? null : await readJson(localReceiptPath);
+  const hostedDeploymentAnchor = hostedDeploymentAnchorPath === null
+    ? null
+    : await readJson(hostedDeploymentAnchorPath);
   const hostedReceipts = [];
   for (const { profileId, path } of hostedReceiptPaths) {
     const document = await readJson(path, profileId);
@@ -84,6 +91,7 @@ export async function generateFileIngressMatrixReport({
     candidateSha,
     localReceipt,
     hostedReceipts,
+    hostedDeploymentAnchor,
   });
   const outputPath = await writeReport(repositoryRoot, output, report);
   return Object.freeze({ report, outputPath });
@@ -98,6 +106,7 @@ async function main() {
     output: options.output,
     localReceiptPath: options.localReceipt ?? null,
     hostedReceiptPaths: options.hostedReceipts,
+    hostedDeploymentAnchorPath: options.hostedDeploymentAnchor ?? null,
   });
   console.log(
     `File-ingress matrix ${report.status} for ${report.candidate_sha}: ${relative(repositoryRoot, outputPath)}`,

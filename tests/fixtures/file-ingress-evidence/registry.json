@@ -1,6 +1,20 @@
 {
-  "schema": "mind-diary/file-ingress-evidence-registry/v1",
+  "schema": "mind-diary/file-ingress-evidence-registry/v2",
   "release": "0.3",
+  "hosted_authority": {
+    "target_config_path": "apps/mind-diary-site/.openai/hosting.json",
+    "release_profile_path": "docs/operations/ship-work-release-profile.md",
+    "trusted_runner_boundary": "trusted-runner-no-cryptographic-attestation",
+    "plugin_package": {
+      "plugin_id": "mind-diary@srez-marketplace",
+      "plugin_version": "0.1.0+codex.20260826190538",
+      "plugin_snapshot_sha256": "sha256:cfef907235e16bb70d46f238d52f2c77e2b06084a1d87ae70811131a1d7b65cc",
+      "marketplace_candidate_sha": "611c0f4d593b06ef7c32d08172820b13f57ef07f",
+      "marketplace_tree_sha": "b9c02685624813e6c20fcb5ef9ce7fe94505a81d"
+    },
+    "tool_inventory_path": "tests/fixtures/file-ingress-evidence/hosted-tool-inventory.json",
+    "tool_inventory_sha256": "486e9a43dfff34d4ee784fe30d2cb24615ed820f53f1bce50e1e2dbe37c70ebb"
+  },
   "source_kinds": [
     "session_attachment",
     "local_path",
@@ -20,13 +34,19 @@
       "id": "codex-modern-2026-07-28",
       "environment": "hosted_uat",
       "client_class": "codex",
-      "protocol_profile": "2026-07-28"
+      "client_name": "codex-cli",
+      "client_version": "0.149.1",
+      "protocol_profile": "2026-07-28",
+      "tool_inventory_route": "/api/mcp"
     },
     {
       "id": "codex-compat-2025-11-25",
       "environment": "hosted_uat",
       "client_class": "codex",
-      "protocol_profile": "2025-11-25"
+      "client_name": "codex-cli",
+      "client_version": "0.149.1",
+      "protocol_profile": "2025-11-25",
+      "tool_inventory_route": "/api/mcp/2025-11-25"
     }
   ],
   "assertion_ids": {

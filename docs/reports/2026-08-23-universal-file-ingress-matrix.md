@@ -50,6 +50,10 @@ versioned registry находится в
 [`tests/fixtures/file-ingress-evidence/registry.json`](../../tests/fixtures/file-ingress-evidence/registry.json),
 а deterministic streamed fixtures — в
 [`tests/fixtures/file-ingress-evidence/synthetic-fixtures.json`](../../tests/fixtures/file-ingress-evidence/synthetic-fixtures.json).
+Закрытый ожидаемый `tools/list` inventory с отсортированными именами и digest
+обеих JSON Schema хранится отдельно в
+[`tests/fixtures/file-ingress-evidence/hosted-tool-inventory.json`](../../tests/fixtures/file-ingress-evidence/hosted-tool-inventory.json)
+и сам закреплён digest в registry.
 
 Registry содержит закрытое произведение шести `source_kind` на три profile:
 repository-local contract, Codex modern `2026-07-28` и isolated Codex
@@ -69,7 +73,7 @@ column:
 
 ```bash
 npm run gate:file-ingress-local
-npm run readiness:file-ingress
+npm run report:file-ingress
 ```
 
 Hosted receipt имеет отдельную strict schema на каждый exact Codex profile. Для
@@ -80,6 +84,23 @@ digest/size и иметь ожидаемую `same_host_stable_snapshot`,
 `provider_native_snapshot` или `service_owned_snapshot` semantics. Общий
 receipt также доказывает один mixed-source + Markdown HEAD transition,
 synthetic-only idempotent setup/recovery/cleanup и exact client inventory.
+Client snapshot не принимает произвольную строку или один самозаявленный hash:
+он обязан совпасть с точными `codex-cli` version/profile/route из registry,
+точным `mind-diary@srez-marketplace` version + snapshot + marketplace
+candidate/tree и полным отсортированным inventory. Validator заново вычисляет
+`tool_inventory_sha256` и сравнивает каждую запись `name + source +
+input_schema_sha256 + output_schema_sha256` с repository contract.
+
+Deployment identity приходит не из client receipt, а из отдельного hosted
+deployment anchor. Anchor связывает тот же candidate SHA с текущими
+repository-controlled OpenAI Sites project ID из `.openai/hosting.json`, UAT
+URL/provider/target из release profile, их digest, exact Sites version и
+deployment ID. Оба profile receipts обязаны дословно совпасть с anchor.
+Криптографической аттестации Sites runner сейчас нет: `artifact_sha256`
+проверяет целостность документа, но не происхождение. Поэтому доверенной
+границей остаётся runner, который получает identity через Sites control plane;
+локальный файл от недоверенного автора нельзя считать hosted evidence даже при
+валидной schema.
 
 Для `not_available` row допустим только закрытый typed capability/transport
 code, `artifact_observations: null` и ноль unexpected side effects. Local path
@@ -95,17 +116,20 @@ matrix:
 node scripts/generate-file-ingress-matrix-report.mjs \
   --sha HEAD \
   --local-receipt build/file-ingress/local-receipt.json \
+  --hosted-deployment-anchor /safe/path/sites-deployment-anchor.json \
   --hosted-receipt codex-modern-2026-07-28=/safe/path/modern.json \
   --hosted-receipt codex-compat-2025-11-25=/safe/path/compat.json \
   --output build/file-ingress/matrix-report.json \
   --require-complete
 ```
 
-Missing receipt сохраняется как concrete `hosted_receipt_missing` gap и даёт
-non-zero при `--require-complete`; typed `not_available` также не считается
-acceptance success. Любая failed row даёт non-zero независимо от этого flag.
-Machine report публикует только row/assertion gaps и не содержит поля human
-signoff или reviewer override.
+`npm run readiness:file-ingress` всегда включает `--require-complete`: missing
+receipt сохраняется как concrete `hosted_receipt_missing` gap и завершает
+команду ненулевым кодом. Нестрогая диагностическая проекция доступна отдельно
+как `npm run report:file-ingress`; она не является readiness gate. Typed
+`not_available` также не считается acceptance success. Любая failed row даёт
+non-zero независимо от режима. Machine report публикует только row/assertion
+gaps и не содержит поля human signoff или reviewer override.
 
 ## Повторяемый запуск
 

@@ -6,16 +6,27 @@ import { resolve } from "node:path";
 export const REGISTRY_PATH = "tests/fixtures/file-ingress-evidence/registry.json";
 export const FIXTURE_PLAN_PATH =
   "tests/fixtures/file-ingress-evidence/synthetic-fixtures.json";
-export const REGISTRY_SCHEMA = "mind-diary/file-ingress-evidence-registry/v1";
+export const HOSTED_TOOL_INVENTORY_PATH =
+  "tests/fixtures/file-ingress-evidence/hosted-tool-inventory.json";
+export const HOSTING_CONFIG_PATH = "apps/mind-diary-site/.openai/hosting.json";
+export const RELEASE_PROFILE_PATH = "docs/operations/ship-work-release-profile.md";
+export const REGISTRY_SCHEMA = "mind-diary/file-ingress-evidence-registry/v2";
 export const FIXTURE_SCHEMA = "mind-diary/file-ingress-synthetic-fixtures/v1";
+export const HOSTED_TOOL_INVENTORY_SCHEMA =
+  "mind-diary/file-ingress-hosted-tool-inventory/v1";
 export const LOCAL_RECEIPT_SCHEMA = "mind-diary/file-ingress-local-evidence/v1";
-export const HOSTED_RECEIPT_SCHEMA = "mind-diary/file-ingress-hosted-evidence/v1";
-export const REPORT_SCHEMA = "mind-diary/file-ingress-matrix-report/v1";
+export const HOSTED_DEPLOYMENT_ANCHOR_SCHEMA =
+  "mind-diary/file-ingress-hosted-deployment-anchor/v1";
+export const HOSTED_RECEIPT_SCHEMA = "mind-diary/file-ingress-hosted-evidence/v2";
+export const REPORT_SCHEMA = "mind-diary/file-ingress-matrix-report/v2";
 
 const SHA256 = /^sha256:[0-9a-f]{64}$/u;
 const SHA256_HEX = /^[0-9a-f]{64}$/u;
 const GIT_SHA = /^[0-9a-f]{40}$/u;
 const SAFE_ID = /^[a-z0-9][a-z0-9._/-]{0,127}$/u;
+const SAFE_PROVIDER_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/u;
+const CODEX_VERSION = /^0\.[0-9]+\.[0-9]+$/u;
+const PLUGIN_VERSION = /^[0-9]+\.[0-9]+\.[0-9]+\+codex\.[0-9]{14}$/u;
 const LOCAL_STATUSES = Object.freeze(["passed", "failed", "not_run"]);
 const ROW_STATUSES = Object.freeze(["passed", "not_available", "failed"]);
 const NOT_AVAILABLE_CODES = Object.freeze([
@@ -164,35 +175,119 @@ function validateArtifactDigest(document, code) {
   assert(document.artifact_sha256 === documentDigest(unsignedDocument(document)), code);
 }
 
+function validateToolInventory(toolInventory) {
+  exactKeys(toolInventory, ["schema", "source", "entries"], "invalid_hosted_tool_inventory");
+  assert(
+    toolInventory.schema === HOSTED_TOOL_INVENTORY_SCHEMA,
+    "invalid_hosted_tool_inventory_schema",
+  );
+  assert(
+    toolInventory.source === "mind-diary-hosted-mcp-tools-list",
+    "invalid_hosted_tool_inventory_source",
+  );
+  assert(Array.isArray(toolInventory.entries) && toolInventory.entries.length > 0, "invalid_hosted_tool_inventory");
+  let previous = null;
+  for (const entry of toolInventory.entries) {
+    exactKeys(
+      entry,
+      ["name", "source", "input_schema_sha256", "output_schema_sha256"],
+      "invalid_hosted_tool_inventory_entry",
+    );
+    assert(SAFE_ID.test(entry.name), "invalid_hosted_tool_inventory_entry");
+    assert(entry.source === toolInventory.source, "invalid_hosted_tool_inventory_entry");
+    assert(SHA256.test(entry.input_schema_sha256), "invalid_hosted_tool_inventory_entry");
+    assert(SHA256.test(entry.output_schema_sha256), "invalid_hosted_tool_inventory_entry");
+    assert(previous === null || previous.localeCompare(entry.name) < 0, "invalid_hosted_tool_inventory_order");
+    previous = entry.name;
+  }
+  return toolInventory;
+}
+
+function extractUatProfile(profileText) {
+  const body = /^uat:\n(?<body>(?:(?: {2,}[^\n]*|[ \t]*)\n)*)/mu.exec(profileText)?.groups?.body;
+  assert(typeof body === "string", "invalid_release_profile_uat");
+  const field = (pattern, code = "invalid_release_profile_uat") => {
+    const value = pattern.exec(body)?.[1];
+    assert(typeof value === "string" && value.length > 0, code);
+    return value;
+  };
+  assert(/^  configured: true$/mu.test(body), "invalid_release_profile_uat");
+  assert(/^  product_environment: uat$/mu.test(body), "invalid_release_profile_uat");
+  const provider = field(/^  provider:\n    id: ([^\n]+)$/mu);
+  const targetProvider = field(/^  target:\n    provider: ([^\n]+)$/mu);
+  const targetKind = field(/^    kind: ([^\n]+)$/mu);
+  const configPath = field(/^      document: ([^\n]+)$/mu);
+  const pointer = field(/^      pointer: ([^\n]+)$/mu);
+  const liveUrl = field(/^  url: ([^\n]+)$/mu);
+  assert(provider === "openai-sites" && targetProvider === provider, "invalid_release_profile_uat");
+  assert(targetKind === "project", "invalid_release_profile_uat");
+  assert(configPath === HOSTING_CONFIG_PATH && pointer === "/project_id", "invalid_release_profile_uat");
+  try {
+    const url = new URL(liveUrl);
+    assert(url.protocol === "https:" && url.pathname === "/", "invalid_release_profile_uat");
+  } catch {
+    fail("invalid_release_profile_uat");
+  }
+  return Object.freeze({ provider, targetKind, liveUrl });
+}
+
+function resolveHostedAuthority(hostingConfig, releaseProfileText) {
+  exactKeys(hostingConfig, ["project_id", "d1", "r2"], "invalid_hosting_config");
+  assert(/^appgprj_[a-z0-9]+$/u.test(hostingConfig.project_id), "invalid_hosting_project_id");
+  const profile = extractUatProfile(releaseProfileText);
+  return Object.freeze({
+    provider: profile.provider,
+    product_environment: "uat",
+    target_kind: profile.targetKind,
+    site_project_id: hostingConfig.project_id,
+    live_url: profile.liveUrl,
+    target_config_path: HOSTING_CONFIG_PATH,
+    target_config_sha256: `sha256:${sha256(canonicalJson(hostingConfig))}`,
+    release_profile_path: RELEASE_PROFILE_PATH,
+    release_profile_sha256: `sha256:${sha256(releaseProfileText)}`,
+  });
+}
+
 export async function loadFileIngressEvidenceConfig(repositoryRoot) {
-  const [registryText, fixtureText] = await Promise.all([
+  const [registryText, fixtureText, toolInventoryText, hostingConfigText, releaseProfileText] = await Promise.all([
     readFile(resolve(repositoryRoot, REGISTRY_PATH), "utf8"),
     readFile(resolve(repositoryRoot, FIXTURE_PLAN_PATH), "utf8"),
+    readFile(resolve(repositoryRoot, HOSTED_TOOL_INVENTORY_PATH), "utf8"),
+    readFile(resolve(repositoryRoot, HOSTING_CONFIG_PATH), "utf8"),
+    readFile(resolve(repositoryRoot, RELEASE_PROFILE_PATH), "utf8"),
   ]);
   let registry;
   let fixtures;
+  let toolInventory;
+  let hostingConfig;
   try {
     registry = JSON.parse(registryText);
     fixtures = JSON.parse(fixtureText);
+    toolInventory = JSON.parse(toolInventoryText);
+    hostingConfig = JSON.parse(hostingConfigText);
   } catch (error) {
     fail("invalid_evidence_json", error.message);
   }
-  const validated = validateFileIngressEvidenceConfig(registry, fixtures);
+  const validated = validateFileIngressEvidenceConfig(registry, fixtures, toolInventory);
   return Object.freeze({
     ...validated,
     registry,
     fixtures,
+    toolInventory,
+    hostedAuthority: resolveHostedAuthority(hostingConfig, releaseProfileText),
     registrySha256: sha256(canonicalJson(registry)),
     fixturePlanSha256: sha256(canonicalJson(fixtures)),
+    toolInventorySha256: sha256(canonicalJson(toolInventory)),
   });
 }
 
-export function validateFileIngressEvidenceConfig(registry, fixtures) {
+export function validateFileIngressEvidenceConfig(registry, fixtures, toolInventory) {
   exactKeys(
     registry,
     [
       "schema",
       "release",
+      "hosted_authority",
       "source_kinds",
       "client_profiles",
       "assertion_ids",
@@ -203,17 +298,73 @@ export function validateFileIngressEvidenceConfig(registry, fixtures) {
   );
   assert(registry.schema === REGISTRY_SCHEMA, "invalid_registry_schema");
   assert(registry.release === "0.3", "invalid_registry_release");
+  exactKeys(
+    registry.hosted_authority,
+    [
+      "target_config_path",
+      "release_profile_path",
+      "trusted_runner_boundary",
+      "plugin_package",
+      "tool_inventory_path",
+      "tool_inventory_sha256",
+    ],
+    "invalid_hosted_authority_registry",
+  );
+  assert(
+    registry.hosted_authority.target_config_path === HOSTING_CONFIG_PATH &&
+      registry.hosted_authority.release_profile_path === RELEASE_PROFILE_PATH,
+    "invalid_hosted_authority_registry",
+  );
+  assert(
+    registry.hosted_authority.trusted_runner_boundary ===
+      "trusted-runner-no-cryptographic-attestation",
+    "invalid_hosted_authority_registry",
+  );
+  assert(
+    registry.hosted_authority.tool_inventory_path === HOSTED_TOOL_INVENTORY_PATH &&
+      SHA256_HEX.test(registry.hosted_authority.tool_inventory_sha256),
+    "invalid_hosted_authority_registry",
+  );
+  assert(
+    registry.hosted_authority.tool_inventory_sha256 === sha256(canonicalJson(toolInventory)),
+    "hosted_tool_inventory_registry_mismatch",
+  );
+  validateToolInventory(toolInventory);
+  exactKeys(
+    registry.hosted_authority.plugin_package,
+    [
+      "plugin_id",
+      "plugin_version",
+      "plugin_snapshot_sha256",
+      "marketplace_candidate_sha",
+      "marketplace_tree_sha",
+    ],
+    "invalid_hosted_plugin_contract",
+  );
+  const pluginPackage = registry.hosted_authority.plugin_package;
+  assert(pluginPackage.plugin_id === "mind-diary@srez-marketplace", "invalid_hosted_plugin_contract");
+  assert(PLUGIN_VERSION.test(pluginPackage.plugin_version), "invalid_hosted_plugin_contract");
+  assert(SHA256.test(pluginPackage.plugin_snapshot_sha256), "invalid_hosted_plugin_contract");
+  assert(GIT_SHA.test(pluginPackage.marketplace_candidate_sha), "invalid_hosted_plugin_contract");
+  assert(GIT_SHA.test(pluginPackage.marketplace_tree_sha), "invalid_hosted_plugin_contract");
   const sourceKinds = Object.keys(EXPECTED_TRANSPORTS);
   assert(exactArray(registry.source_kinds, sourceKinds), "invalid_source_kind_registry");
 
   assert(Array.isArray(registry.client_profiles), "invalid_client_profiles");
   const profiles = new Map();
   for (const profile of registry.client_profiles) {
-    exactKeys(
-      profile,
-      ["id", "environment", "client_class", "protocol_profile"],
-      "invalid_client_profile",
-    );
+    const hosted = profile.environment === "hosted_uat";
+    exactKeys(profile, hosted
+      ? [
+          "id",
+          "environment",
+          "client_class",
+          "client_name",
+          "client_version",
+          "protocol_profile",
+          "tool_inventory_route",
+        ]
+      : ["id", "environment", "client_class", "protocol_profile"], "invalid_client_profile");
     assert(SAFE_ID.test(profile.id), "invalid_client_profile");
     assert(
       profile.environment === "local_contract" || profile.environment === "hosted_uat",
@@ -221,6 +372,16 @@ export function validateFileIngressEvidenceConfig(registry, fixtures) {
     );
     safeString(profile.client_class, "invalid_client_profile");
     safeString(profile.protocol_profile, "invalid_client_profile");
+    if (hosted) {
+      assert(profile.client_class === "codex", "invalid_client_profile");
+      assert(profile.client_name === "codex-cli", "invalid_client_profile");
+      assert(CODEX_VERSION.test(profile.client_version), "invalid_client_profile");
+      assert(
+        profile.tool_inventory_route === "/api/mcp" ||
+          profile.tool_inventory_route === "/api/mcp/2025-11-25",
+        "invalid_client_profile",
+      );
+    }
     assert(!profiles.has(profile.id), "duplicate_client_profile");
     profiles.set(profile.id, profile);
   }
@@ -233,6 +394,19 @@ export function validateFileIngressEvidenceConfig(registry, fixtures) {
         "codex-compat-2025-11-25",
       ],
     ),
+    "invalid_client_profile_registry",
+  );
+  assert(
+    profiles.get("codex-modern-2026-07-28")?.client_version === "0.149.1" &&
+      profiles.get("codex-modern-2026-07-28")?.protocol_profile === "2026-07-28" &&
+      profiles.get("codex-modern-2026-07-28")?.tool_inventory_route === "/api/mcp",
+    "invalid_client_profile_registry",
+  );
+  assert(
+    profiles.get("codex-compat-2025-11-25")?.client_version === "0.149.1" &&
+      profiles.get("codex-compat-2025-11-25")?.protocol_profile === "2025-11-25" &&
+      profiles.get("codex-compat-2025-11-25")?.tool_inventory_route ===
+        "/api/mcp/2025-11-25",
     "invalid_client_profile_registry",
   );
 
@@ -489,20 +663,153 @@ export function validateLocalReceipt(
   return receipt;
 }
 
-function validateDeployment(deployment) {
+function targetFingerprint(hostedAuthority, candidateSha, siteVersionId, deploymentId) {
+  return `sha256:${sha256(canonicalJson({
+    candidate_sha: candidateSha,
+    deployment_id: deploymentId,
+    live_url: hostedAuthority.live_url,
+    provider: hostedAuthority.provider,
+    release_profile_sha256: hostedAuthority.release_profile_sha256,
+    site_project_id: hostedAuthority.site_project_id,
+    site_version_id: siteVersionId,
+    target_config_sha256: hostedAuthority.target_config_sha256,
+  }))}`;
+}
+
+export function createHostedDeploymentAnchor({
+  candidateSha,
+  hostedAuthority,
+  siteVersionId,
+  deploymentId,
+}) {
+  assert(GIT_SHA.test(candidateSha), "invalid_candidate_sha");
+  assert(SAFE_PROVIDER_ID.test(siteVersionId), "invalid_hosted_deployment_anchor");
+  assert(SAFE_PROVIDER_ID.test(deploymentId), "invalid_hosted_deployment_anchor");
+  return sealDocument({
+    schema: HOSTED_DEPLOYMENT_ANCHOR_SCHEMA,
+    candidate_sha: candidateSha,
+    provider: hostedAuthority.provider,
+    product_environment: hostedAuthority.product_environment,
+    target_kind: hostedAuthority.target_kind,
+    site_project_id: hostedAuthority.site_project_id,
+    site_version_id: siteVersionId,
+    deployment_id: deploymentId,
+    live_url: hostedAuthority.live_url,
+    target_config_sha256: hostedAuthority.target_config_sha256,
+    release_profile_sha256: hostedAuthority.release_profile_sha256,
+    target_fingerprint: targetFingerprint(
+      hostedAuthority,
+      candidateSha,
+      siteVersionId,
+      deploymentId,
+    ),
+    provenance: Object.freeze({
+      kind: "trusted_sites_control_plane_runner",
+      receipt_schema: "ship-work-release/sites-deployment-result/v1",
+      cryptographic_attestation: "unavailable",
+    }),
+  });
+}
+
+export function validateHostedDeploymentAnchor(
+  anchor,
+  { candidateSha, hostedAuthority },
+) {
+  exactKeys(
+    anchor,
+    [
+      "schema",
+      "candidate_sha",
+      "provider",
+      "product_environment",
+      "target_kind",
+      "site_project_id",
+      "site_version_id",
+      "deployment_id",
+      "live_url",
+      "target_config_sha256",
+      "release_profile_sha256",
+      "target_fingerprint",
+      "provenance",
+      "artifact_sha256",
+    ],
+    "invalid_hosted_deployment_anchor",
+  );
+  assert(anchor.schema === HOSTED_DEPLOYMENT_ANCHOR_SCHEMA, "invalid_hosted_deployment_anchor_schema");
+  assert(anchor.candidate_sha === candidateSha, "hosted_deployment_candidate_sha_mismatch");
+  assert(anchor.provider === hostedAuthority.provider, "hosted_deployment_target_mismatch");
+  assert(
+    anchor.product_environment === hostedAuthority.product_environment &&
+      anchor.target_kind === hostedAuthority.target_kind,
+    "hosted_deployment_target_mismatch",
+  );
+  assert(anchor.site_project_id === hostedAuthority.site_project_id, "hosted_deployment_project_mismatch");
+  assert(anchor.live_url === hostedAuthority.live_url, "hosted_deployment_url_mismatch");
+  assert(SAFE_PROVIDER_ID.test(anchor.site_version_id), "invalid_hosted_deployment_anchor");
+  assert(SAFE_PROVIDER_ID.test(anchor.deployment_id), "invalid_hosted_deployment_anchor");
+  assert(
+    anchor.target_config_sha256 === hostedAuthority.target_config_sha256 &&
+      anchor.release_profile_sha256 === hostedAuthority.release_profile_sha256,
+    "hosted_deployment_profile_mismatch",
+  );
+  assert(
+    anchor.target_fingerprint === targetFingerprint(
+      hostedAuthority,
+      candidateSha,
+      anchor.site_version_id,
+      anchor.deployment_id,
+    ),
+    "hosted_deployment_fingerprint_mismatch",
+  );
+  exactKeys(
+    anchor.provenance,
+    ["kind", "receipt_schema", "cryptographic_attestation"],
+    "invalid_hosted_deployment_provenance",
+  );
+  assert(
+    anchor.provenance.kind === "trusted_sites_control_plane_runner" &&
+      anchor.provenance.receipt_schema === "ship-work-release/sites-deployment-result/v1" &&
+      anchor.provenance.cryptographic_attestation === "unavailable",
+    "invalid_hosted_deployment_provenance",
+  );
+  validateArtifactDigest(anchor, "invalid_hosted_deployment_anchor_digest");
+  return anchor;
+}
+
+function deploymentProjection(anchor) {
+  return Object.freeze({
+    provider: anchor.provider,
+    product_environment: anchor.product_environment,
+    target_kind: anchor.target_kind,
+    site_project_id: anchor.site_project_id,
+    site_version_id: anchor.site_version_id,
+    deployment_id: anchor.deployment_id,
+    live_url: anchor.live_url,
+    candidate_sha: anchor.candidate_sha,
+    target_fingerprint: anchor.target_fingerprint,
+  });
+}
+
+function validateDeployment(deployment, anchor) {
   exactKeys(
     deployment,
-    ["site_project_id", "site_version_id", "deployment_id", "live_url"],
+    [
+      "provider",
+      "product_environment",
+      "target_kind",
+      "site_project_id",
+      "site_version_id",
+      "deployment_id",
+      "live_url",
+      "candidate_sha",
+      "target_fingerprint",
+    ],
     "invalid_hosted_deployment",
   );
-  for (const field of ["site_project_id", "site_version_id", "deployment_id"]) {
-    safeString(deployment[field], "invalid_hosted_deployment", 256);
-  }
-  try {
-    assert(new URL(deployment.live_url).protocol === "https:", "invalid_hosted_deployment");
-  } catch {
-    fail("invalid_hosted_deployment");
-  }
+  assert(
+    canonicalJson(deployment) === canonicalJson(deploymentProjection(anchor)),
+    "hosted_deployment_anchor_mismatch",
+  );
 }
 
 function validateArtifactTuple(tuple, code) {
@@ -583,7 +890,14 @@ function validateMixedChangeset(value, passingRows, failedRows) {
 
 export function validateHostedReceipt(
   receipt,
-  { registry, candidateSha, registrySha256 },
+  {
+    registry,
+    candidateSha,
+    registrySha256,
+    toolInventory,
+    hostedAuthority,
+    hostedDeploymentAnchor,
+  },
 ) {
   exactKeys(
     receipt,
@@ -613,26 +927,72 @@ export function validateHostedReceipt(
   const profileRows = registry.rows.filter(({ client_profile_id }) => client_profile_id === profile.id);
   assert(receipt.actor_class === profileRows[0].actor_class, "invalid_hosted_actor_class");
   assert(receipt.credential_class === profileRows[0].credential_class, "invalid_hosted_credential_class");
+  validateToolInventory(toolInventory);
+  validateHostedDeploymentAnchor(hostedDeploymentAnchor, { candidateSha, hostedAuthority });
 
   exactKeys(
     receipt.client_snapshot,
     [
       "client_class",
+      "client_name",
       "client_version",
       "protocol_profile",
+      "tool_inventory_route",
       "host_fingerprint",
+      "plugin_package",
+      "tool_inventory",
       "tool_inventory_sha256",
+      "capture_boundary",
       "captured_at",
     ],
     "invalid_hosted_client_snapshot",
   );
   assert(receipt.client_snapshot.client_class === profile.client_class, "invalid_hosted_client_snapshot");
-  safeString(receipt.client_snapshot.client_version, "invalid_hosted_client_snapshot");
+  assert(receipt.client_snapshot.client_name === profile.client_name, "invalid_hosted_client_snapshot");
+  assert(
+    CODEX_VERSION.test(receipt.client_snapshot.client_version) &&
+      receipt.client_snapshot.client_version === profile.client_version,
+    "invalid_hosted_client_version",
+  );
   assert(receipt.client_snapshot.protocol_profile === profile.protocol_profile, "invalid_hosted_client_snapshot");
+  assert(
+    receipt.client_snapshot.tool_inventory_route === profile.tool_inventory_route,
+    "invalid_hosted_client_snapshot",
+  );
   assert(SHA256.test(receipt.client_snapshot.host_fingerprint), "invalid_hosted_client_snapshot");
-  assert(SHA256.test(receipt.client_snapshot.tool_inventory_sha256), "invalid_hosted_client_snapshot");
+  exactKeys(
+    receipt.client_snapshot.plugin_package,
+    [
+      "plugin_id",
+      "plugin_version",
+      "plugin_snapshot_sha256",
+      "marketplace_candidate_sha",
+      "marketplace_tree_sha",
+    ],
+    "invalid_hosted_plugin_snapshot",
+  );
+  assert(
+    canonicalJson(receipt.client_snapshot.plugin_package) ===
+      canonicalJson(registry.hosted_authority.plugin_package),
+    "hosted_plugin_snapshot_mismatch",
+  );
+  assert(Array.isArray(receipt.client_snapshot.tool_inventory), "invalid_hosted_client_snapshot");
+  assert(
+    `sha256:${sha256(canonicalJson(receipt.client_snapshot.tool_inventory))}` ===
+      receipt.client_snapshot.tool_inventory_sha256,
+    "hosted_tool_inventory_digest_mismatch",
+  );
+  assert(
+    canonicalJson(receipt.client_snapshot.tool_inventory) === canonicalJson(toolInventory.entries),
+    "hosted_tool_inventory_contract_mismatch",
+  );
+  assert(
+    receipt.client_snapshot.capture_boundary ===
+      registry.hosted_authority.trusted_runner_boundary,
+    "invalid_hosted_client_capture_boundary",
+  );
   assert(Number.isFinite(Date.parse(receipt.client_snapshot.captured_at)), "invalid_hosted_client_snapshot");
-  validateDeployment(receipt.deployment);
+  validateDeployment(receipt.deployment, hostedDeploymentAnchor);
 
   exactKeys(
     receipt.setup_cleanup,
@@ -797,13 +1157,16 @@ function gapRows(rows) {
 export function joinFileIngressEvidence({
   registry,
   fixtures,
+  toolInventory,
+  hostedAuthority,
   candidateSha,
   registrySha256,
   fixturePlanSha256,
   localReceipt = null,
   hostedReceipts = [],
+  hostedDeploymentAnchor = null,
 }) {
-  validateFileIngressEvidenceConfig(registry, fixtures);
+  validateFileIngressEvidenceConfig(registry, fixtures, toolInventory);
   assert(GIT_SHA.test(candidateSha), "invalid_candidate_sha");
   assert(SHA256_HEX.test(registrySha256), "invalid_registry_sha");
   assert(SHA256_HEX.test(fixturePlanSha256), "invalid_fixture_plan_sha");
@@ -856,6 +1219,22 @@ export function joinFileIngressEvidence({
   }
   const validatedHosted = new Map();
   const hostedFailures = new Map();
+  if (hostedReceipts.length > 0) {
+    if (hostedDeploymentAnchor === null) {
+      for (const profile of hostedProfiles) {
+        hostedFailures.set(profile.id, "hosted_deployment_anchor_missing");
+      }
+    } else {
+      try {
+        validateHostedDeploymentAnchor(hostedDeploymentAnchor, { candidateSha, hostedAuthority });
+      } catch (error) {
+        const code = error instanceof FileIngressEvidenceError
+          ? error.code
+          : "invalid_hosted_deployment_anchor";
+        for (const profile of hostedProfiles) hostedFailures.set(profile.id, code);
+      }
+    }
+  }
   if (unknownProfile) {
     for (const profile of hostedProfiles) {
       hostedFailures.set(profile.id, "unknown_hosted_receipt_profile");
@@ -872,7 +1251,14 @@ export function joinFileIngressEvidence({
     try {
       validatedHosted.set(
         profile.id,
-        validateHostedReceipt(receipt, { registry, candidateSha, registrySha256 }),
+        validateHostedReceipt(receipt, {
+          registry,
+          candidateSha,
+          registrySha256,
+          toolInventory,
+          hostedAuthority,
+          hostedDeploymentAnchor,
+        }),
       );
     } catch (error) {
       hostedFailures.set(
@@ -917,7 +1303,7 @@ export function joinFileIngressEvidence({
   });
   const status = aggregate(rows.map(({ status: rowState }) => rowState));
   const deployment = identities.size === 1
-    ? [...validatedHosted.values()][0].deployment
+    ? deploymentProjection(hostedDeploymentAnchor)
     : null;
   return Object.freeze({
     schema: REPORT_SCHEMA,

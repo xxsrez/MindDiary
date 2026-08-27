@@ -5,12 +5,18 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
 
+import { MCP_TOOL_DEFINITIONS } from "../../packages/adapter-mcp/dist/index.js";
+
 import {
   HOSTED_RECEIPT_SCHEMA,
+  canonicalJson,
+  createHostedDeploymentAnchor,
   createLocalReceipt,
   joinFileIngressEvidence,
   loadFileIngressEvidenceConfig,
   sealDocument,
+  sha256,
+  validateHostedDeploymentAnchor,
   validateHostedReceipt,
   validateLocalReceipt,
   verifyDeterministicFixtures,
@@ -18,16 +24,49 @@ import {
 
 const repositoryRoot = resolve(import.meta.dirname, "../..");
 const candidateSha = "a".repeat(40);
-const deployment = Object.freeze({
-  site_project_id: "site-project-md314",
-  site_version_id: "site-version-md314",
-  deployment_id: "deployment-md314",
-  live_url: "https://mind-diary.example.test",
-});
 const digest = (character) => `sha256:${character.repeat(64)}`;
 
 async function config() {
   return loadFileIngressEvidenceConfig(repositoryRoot);
+}
+
+function deploymentAnchor(current, sha = candidateSha, options = {}) {
+  return createHostedDeploymentAnchor({
+    candidateSha: sha,
+    hostedAuthority: current.hostedAuthority,
+    siteVersionId: options.siteVersionId ?? "site-version-md314",
+    deploymentId: options.deploymentId ?? "deployment-md314",
+  });
+}
+
+function deploymentForAnchor(anchor) {
+  return Object.freeze({
+    provider: anchor.provider,
+    product_environment: anchor.product_environment,
+    target_kind: anchor.target_kind,
+    site_project_id: anchor.site_project_id,
+    site_version_id: anchor.site_version_id,
+    deployment_id: anchor.deployment_id,
+    live_url: anchor.live_url,
+    candidate_sha: anchor.candidate_sha,
+    target_fingerprint: anchor.target_fingerprint,
+  });
+}
+
+function hostedValidation(current, anchor = deploymentAnchor(current)) {
+  return {
+    registry: current.registry,
+    candidateSha,
+    registrySha256: current.registrySha256,
+    toolInventory: current.toolInventory,
+    hostedAuthority: current.hostedAuthority,
+    hostedDeploymentAnchor: anchor,
+  };
+}
+
+function reseal(document) {
+  const { artifact_sha256: _artifactSha256, ...unsigned } = document;
+  return sealDocument(unsigned);
 }
 
 function fixtureForRow(current, row) {
@@ -64,6 +103,7 @@ function aggregateRowStatuses(statuses) {
 
 function hostedReceipt(current, profileId, options = {}) {
   const profile = current.registry.client_profiles.find(({ id }) => id === profileId);
+  const anchor = options.anchor ?? deploymentAnchor(current);
   const profileRows = current.registry.rows.filter(({ client_profile_id }) => client_profile_id === profileId);
   const failedRowId = options.failedRowId ?? null;
   const defaultStatus = options.status ?? (failedRowId === null ? "passed" : "not_available");
@@ -146,13 +186,18 @@ function hostedReceipt(current, profileId, options = {}) {
     credential_class: "synthetic_oauth_content_write",
     client_snapshot: {
       client_class: profile.client_class,
-      client_version: "synthetic-contract-fixture-1",
+      client_name: profile.client_name,
+      client_version: profile.client_version,
       protocol_profile: profile.protocol_profile,
+      tool_inventory_route: profile.tool_inventory_route,
       host_fingerprint: digest("b"),
-      tool_inventory_sha256: digest("c"),
+      plugin_package: structuredClone(current.registry.hosted_authority.plugin_package),
+      tool_inventory: structuredClone(current.toolInventory.entries),
+      tool_inventory_sha256: `sha256:${sha256(canonicalJson(current.toolInventory.entries))}`,
+      capture_boundary: current.registry.hosted_authority.trusted_runner_boundary,
       captured_at: "2026-08-27T20:00:00.000Z",
     },
-    deployment: options.deployment ?? deployment,
+    deployment: options.deployment ?? deploymentForAnchor(anchor),
     setup_cleanup: {
       fixture_namespace: "md314-synthetic-conformance",
       synthetic_only: true,
@@ -181,9 +226,23 @@ function passingLocalReceipt(current, sha = candidateSha) {
 
 test("MD-314 registry is versioned, closed across source x profile and names authority boundaries", async () => {
   const current = await config();
-  assert.equal(current.registry.schema, "mind-diary/file-ingress-evidence-registry/v1");
+  assert.equal(current.registry.schema, "mind-diary/file-ingress-evidence-registry/v2");
   assert.equal(current.registry.release, "0.3");
   assert.equal(current.registry.rows.length, 18);
+  assert.equal(current.toolInventory.entries.length, 23);
+  assert.equal(
+    current.registry.hosted_authority.tool_inventory_sha256,
+    current.toolInventorySha256,
+  );
+  assert.deepEqual(
+    current.toolInventory.entries,
+    MCP_TOOL_DEFINITIONS.map((definition) => ({
+      name: definition.name,
+      source: current.toolInventory.source,
+      input_schema_sha256: `sha256:${sha256(canonicalJson(definition.inputSchema))}`,
+      output_schema_sha256: `sha256:${sha256(canonicalJson(definition.outputSchema))}`,
+    })).sort((left, right) => left.name.localeCompare(right.name)),
+  );
   assert.deepEqual(
     current.registry.client_profiles.map(({ id }) => id),
     [
@@ -230,41 +289,37 @@ test("local receipt is deterministic and cannot promote missing hosted evidence"
 
 test("same-candidate modern and compatibility receipts join exact artifact read-back", async () => {
   const current = await config();
+  const anchor = deploymentAnchor(current);
   const modern = hostedReceipt(current, "codex-modern-2026-07-28");
   const compatibility = hostedReceipt(current, "codex-compat-2025-11-25");
   for (const receipt of [modern, compatibility]) {
-    assert.equal(validateHostedReceipt(receipt, {
-      registry: current.registry,
-      candidateSha,
-      registrySha256: current.registrySha256,
-    }), receipt);
+    assert.equal(validateHostedReceipt(receipt, hostedValidation(current, anchor)), receipt);
   }
   const report = joinFileIngressEvidence({
     ...current,
     candidateSha,
     localReceipt: passingLocalReceipt(current),
     hostedReceipts: [modern, compatibility],
+    hostedDeploymentAnchor: anchor,
   });
   assert.equal(report.status, "passed");
   assert.deepEqual(report.summary, { passed: 18, not_available: 0, pending: 0, failed: 0 });
   assert.deepEqual(report.gaps, []);
-  assert.deepEqual(report.deployment, deployment);
+  assert.deepEqual(report.deployment, deploymentForAnchor(anchor));
 });
 
 test("typed hosted not-available is terminal but never counted as passing", async () => {
   const current = await config();
+  const anchor = deploymentAnchor(current);
   const modern = hostedReceipt(current, "codex-modern-2026-07-28", { status: "not_available" });
   const compatibility = hostedReceipt(current, "codex-compat-2025-11-25", { status: "not_available" });
-  validateHostedReceipt(modern, {
-    registry: current.registry,
-    candidateSha,
-    registrySha256: current.registrySha256,
-  });
+  validateHostedReceipt(modern, hostedValidation(current, anchor));
   const report = joinFileIngressEvidence({
     ...current,
     candidateSha,
     localReceipt: passingLocalReceipt(current),
     hostedReceipts: [modern, compatibility],
+    hostedDeploymentAnchor: anchor,
   });
   assert.equal(report.status, "not_available");
   assert.deepEqual(report.summary, { passed: 6, not_available: 12, pending: 0, failed: 0 });
@@ -273,17 +328,97 @@ test("typed hosted not-available is terminal but never counted as passing", asyn
   const unsafe = structuredClone(modern);
   unsafe.rows[0].unexpected_side_effect_count = 1;
   assert.throws(
-    () => validateHostedReceipt(unsafe, {
-      registry: current.registry,
-      candidateSha,
-      registrySha256: current.registrySha256,
-    }),
+    () => validateHostedReceipt(unsafe, hostedValidation(current, anchor)),
     /hosted_not_available_side_effect|invalid_hosted_receipt_digest/u,
   );
 });
 
-test("stale candidates, changed artifact tuples and cross-deployment receipts fail closed", async () => {
+test("hosted target, client version, plugin package and closed tool inventory reject forged evidence", async () => {
   const current = await config();
+  const anchor = deploymentAnchor(current);
+  assert.equal(
+    validateHostedDeploymentAnchor(anchor, {
+      candidateSha,
+      hostedAuthority: current.hostedAuthority,
+    }),
+    anchor,
+  );
+  for (const [field, value, code] of [
+    ["live_url", "https://attacker.example.invalid", "hosted_deployment_url_mismatch"],
+    ["site_project_id", "appgprj_attacker", "hosted_deployment_project_mismatch"],
+    ["deployment_id", "deployment-forged", "hosted_deployment_fingerprint_mismatch"],
+  ]) {
+    const forgedAnchor = structuredClone(anchor);
+    forgedAnchor[field] = value;
+    assert.throws(
+      () => validateHostedDeploymentAnchor(reseal(forgedAnchor), {
+        candidateSha,
+        hostedAuthority: current.hostedAuthority,
+      }),
+      new RegExp(code, "u"),
+    );
+  }
+
+  const cases = [
+    {
+      code: "invalid_hosted_client_version",
+      mutate(receipt) {
+        receipt.client_snapshot.client_version = "synthetic-contract-fixture-1";
+      },
+    },
+    {
+      code: "hosted_plugin_snapshot_mismatch",
+      mutate(receipt) {
+        receipt.client_snapshot.plugin_package.plugin_snapshot_sha256 = digest("9");
+      },
+    },
+    {
+      code: "hosted_plugin_snapshot_mismatch",
+      mutate(receipt) {
+        receipt.client_snapshot.plugin_package.plugin_version =
+          "0.1.0+codex.20260826190539";
+      },
+    },
+    {
+      code: "hosted_tool_inventory_digest_mismatch",
+      mutate(receipt) {
+        receipt.client_snapshot.tool_inventory[0].input_schema_sha256 = digest("8");
+      },
+    },
+    {
+      code: "hosted_tool_inventory_digest_mismatch",
+      mutate(receipt) {
+        receipt.client_snapshot.tool_inventory_sha256 = digest("7");
+      },
+    },
+    {
+      code: "hosted_tool_inventory_contract_mismatch",
+      mutate(receipt) {
+        receipt.client_snapshot.tool_inventory.pop();
+        receipt.client_snapshot.tool_inventory_sha256 =
+          `sha256:${sha256(canonicalJson(receipt.client_snapshot.tool_inventory))}`;
+      },
+    },
+    {
+      code: "hosted_deployment_anchor_mismatch",
+      mutate(receipt) {
+        receipt.deployment.deployment_id = "deployment-forged";
+      },
+    },
+  ];
+  for (const fixture of cases) {
+    const forged = structuredClone(hostedReceipt(current, "codex-modern-2026-07-28"));
+    fixture.mutate(forged);
+    assert.throws(
+      () => validateHostedReceipt(reseal(forged), hostedValidation(current, anchor)),
+      new RegExp(fixture.code, "u"),
+    );
+  }
+});
+
+test("stale candidates, changed artifact tuples and forged deployment receipts fail closed", async () => {
+  const current = await config();
+  const anchor = deploymentAnchor(current);
   const stale = hostedReceipt(current, "codex-modern-2026-07-28", {
     candidateSha: "b".repeat(40),
   });
@@ -293,26 +428,23 @@ test("stale candidates, changed artifact tuples and cross-deployment receipts fa
     sha256: digest("9"),
   };
   assert.throws(
-    () => validateHostedReceipt(changed, {
-      registry: current.registry,
-      candidateSha,
-      registrySha256: current.registrySha256,
-    }),
+    () => validateHostedReceipt(changed, hostedValidation(current, anchor)),
     /hosted_artifact_readback_mismatch|invalid_hosted_receipt_digest/u,
   );
   const otherDeployment = hostedReceipt(current, "codex-compat-2025-11-25", {
-    deployment: { ...deployment, deployment_id: "deployment-other" },
+    deployment: { ...deploymentForAnchor(anchor), deployment_id: "deployment-other" },
   });
   const report = joinFileIngressEvidence({
     ...current,
     candidateSha,
     localReceipt: passingLocalReceipt(current),
     hostedReceipts: [stale, otherDeployment],
+    hostedDeploymentAnchor: anchor,
   });
   assert.equal(report.status, "failed");
   assert.equal(
     report.rows.filter(({ evidence_scope, status }) => evidence_scope === "hosted_uat" && status === "failed").length,
-    6,
+    12,
   );
   assert.equal(
     report.rows.filter(({ status_code }) => status_code === "hosted_candidate_sha_mismatch").length,
@@ -327,15 +459,16 @@ test("stale candidates, changed artifact tuples and cross-deployment receipts fa
       hostedReceipt(current, "codex-modern-2026-07-28"),
       otherDeployment,
     ],
+    hostedDeploymentAnchor: anchor,
   });
   assert.equal(crossDeployment.status, "failed");
   assert.equal(
-    crossDeployment.rows.filter(({ status_code }) => status_code === "cross_profile_deployment_mismatch").length,
-    12,
+    crossDeployment.rows.filter(({ status_code }) => status_code === "hosted_deployment_anchor_mismatch").length,
+    6,
   );
 });
 
-test("a concrete failed row makes the report CLI exit nonzero; missing receipts fail require-complete", async () => {
+test("a concrete failed row exits nonzero and readiness fails on missing hosted receipts by default", async () => {
   const current = await config();
   const head = spawnSync("git", ["rev-parse", "HEAD"], {
     cwd: repositoryRoot,
@@ -345,13 +478,17 @@ test("a concrete failed row makes the report CLI exit nonzero; missing receipts 
   try {
     const localPath = join(directory, "local.json");
     const hostedPath = join(directory, "hosted-modern.json");
+    const anchorPath = join(directory, "deployment-anchor.json");
     const failedOutput = join(directory, "failed-report.json");
     const pendingOutput = join(directory, "pending-report.json");
+    const headAnchor = deploymentAnchor(current, head);
     await writeFile(localPath, JSON.stringify(passingLocalReceipt(current, head)));
+    await writeFile(anchorPath, JSON.stringify(headAnchor));
     await writeFile(
       hostedPath,
       JSON.stringify(hostedReceipt(current, "codex-modern-2026-07-28", {
         candidateSha: head,
+        anchor: headAnchor,
         failedRowId: "hosted.modern.session-attachment",
       })),
     );
@@ -365,6 +502,8 @@ test("a concrete failed row makes the report CLI exit nonzero; missing receipts 
         localPath,
         "--hosted-receipt",
         `codex-modern-2026-07-28=${hostedPath}`,
+        "--hosted-deployment-anchor",
+        anchorPath,
         "--output",
         failedOutput,
       ],
@@ -374,16 +513,15 @@ test("a concrete failed row makes the report CLI exit nonzero; missing receipts 
     assert.equal(JSON.parse(await readFile(failedOutput, "utf8")).status, "failed");
 
     const pending = spawnSync(
-      process.execPath,
+      "npm",
       [
-        "scripts/generate-file-ingress-matrix-report.mjs",
-        "--sha",
-        "HEAD",
+        "run",
+        "readiness:file-ingress",
+        "--",
         "--local-receipt",
         localPath,
         "--output",
         pendingOutput,
-        "--require-complete",
       ],
       { cwd: repositoryRoot, encoding: "utf8" },
     );
