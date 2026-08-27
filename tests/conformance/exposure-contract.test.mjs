@@ -5,6 +5,7 @@ import {
 } from "@mind-diary/adapter-background";
 import {
   MCP_CONTENT_TOOLS,
+  MCP_APPLICATION_BOUNDARY,
   MCP_ENDPOINT,
   MCP_LEGACY_CODEX_ENDPOINT,
   MCP_LEGACY_CODEX_PROTOCOL,
@@ -38,8 +39,6 @@ const expectedMcpTools = [
   "commit_changeset",
   "reconcile_changeset",
   "capture_knowledge",
-  "start_export",
-  "get_export_status",
 ];
 
 test("browser contract exposes control metadata and no raw content routes", () => {
@@ -49,9 +48,13 @@ test("browser contract exposes control metadata and no raw content routes", () =
     assert.match(path, /^\/api\/v1\//);
     assert.doesNotMatch(
       path,
-      /\/(?:content|files|entries|search|fetch|revisions|manifest|objects|exports?)(?:\/|$)/,
+      /\/(?:content|files|entries|search|fetch|revisions|manifest|objects)(?:\/|$)/,
     );
   }
+  assert.ok(routes.includes("POST /api/v1/minds/{mind_ref}/exports"));
+  assert.ok(routes.includes("GET /api/v1/export-jobs/{job_id}"));
+  assert.ok(WEB_APPLICATION_BOUNDARY.commands.includes("start_export"));
+  assert.ok(WEB_APPLICATION_BOUNDARY.queries.includes("get_export_status"));
   assert.equal("browse_entries" in WEB_APPLICATION_BOUNDARY, false);
   assert.equal("commit_changeset" in WEB_APPLICATION_BOUNDARY, false);
 });
@@ -62,6 +65,8 @@ test("MCP contract exposes only custom Mind-aware content tools", () => {
   assert.equal(MCP_LEGACY_CODEX_ENDPOINT, "/api/mcp/2025-11-25");
   assert.equal(MCP_LEGACY_CODEX_PROTOCOL, "2025-11-25");
   assert.deepEqual(MCP_CONTENT_TOOLS, expectedMcpTools);
+  assert.equal(MCP_APPLICATION_BOUNDARY.commands.includes("start_export"), false);
+  assert.equal(MCP_APPLICATION_BOUNDARY.queries.includes("get_export_status"), false);
   const forbiddenControlTools = [
     "bootstrap_account",
     "create_invitation",
@@ -70,6 +75,8 @@ test("MCP contract exposes only custom Mind-aware content tools", () => {
     "transfer_ownership",
     "delete_space",
     "issue_mcp_token",
+    "start_export",
+    "get_export_status",
   ];
   for (const tool of forbiddenControlTools) {
     assert.equal(MCP_CONTENT_TOOLS.includes(tool), false);

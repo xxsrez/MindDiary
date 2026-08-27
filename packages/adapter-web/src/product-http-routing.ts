@@ -155,6 +155,7 @@ export function apiOperation(method: string, pathname: string): {
     const path = { mind_ref: two };
     if (tail.length === 2 && method === "GET") return { operation: "get_mind_info", path };
     if (three === "capacity" && tail.length === 3 && method === "GET") return { operation: "get_capacity_usage", path };
+    if (three === "exports" && tail.length === 3 && method === "POST") return { operation: "start_export", path };
     if (three === "markdown-import-plans" && tail.length === 3 && method === "POST") return { operation: "plan_markdown_import", path };
     if (three === "markdown-imports" && tail.length === 3 && method === "POST") return { operation: "start_markdown_import", path };
     if (tail.length === 2 && method === "PATCH") return { operation: "rename_space", path };
@@ -182,6 +183,9 @@ export function apiOperation(method: string, pathname: string): {
     }
     if (three === "validate" && tail.length === 3 && method === "POST") return { operation: "validate_markdown_import", path };
     if (three === "commit" && tail.length === 3 && method === "POST") return { operation: "commit_markdown_import", path };
+  }
+  if (one === "export-jobs" && two !== null && tail.length === 2 && method === "GET") {
+    return { operation: "get_export_status", path: { job_id: two } };
   }
   if (one === "invitations") {
     if (tail.length === 1 && method === "GET") return { operation: "list_invitations", path: {} };

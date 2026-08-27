@@ -14,6 +14,7 @@ import {
   MCP_ENDPOINT,
   MCP_WWW_AUTHENTICATE,
   MCP_CONTENT_TOOLS,
+  MCP_MOVED_EXPORT_TOOLS,
   MCP_READ_TOOL_DEFINITIONS,
   CANONICAL_DEFINITION_BY_NAME,
   MCP_ADVERTISED_CAPABILITIES,
@@ -30,7 +31,9 @@ type McpAuthenticatedActor = Extract<
   { readonly kind: "authenticated" }
 >["actor"];
 type McpRequestId = Parameters<McpBearerAuthenticator["authenticate"]>[1];
-type McpToolName = (typeof MCP_CONTENT_TOOLS)[number];
+type McpToolName =
+  | (typeof MCP_CONTENT_TOOLS)[number]
+  | (typeof MCP_MOVED_EXPORT_TOOLS)[number];
 type McpReadToolName = (typeof MCP_READ_TOOL_DEFINITIONS)[number]["name"];
 
 const MCP_READ_TOOL_NAMES: ReadonlySet<string> = new Set(
@@ -658,7 +661,8 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
 function isToolName(value: unknown): value is McpToolName {
   return (
     typeof value === "string" &&
-    (MCP_CONTENT_TOOLS as readonly string[]).includes(value)
+    ((MCP_CONTENT_TOOLS as readonly string[]).includes(value) ||
+      (MCP_MOVED_EXPORT_TOOLS as readonly string[]).includes(value))
   );
 }
 

@@ -30,7 +30,7 @@ export const MIND_DIARY_CODEX_RESTORE_EXPORT_PLAYBOOK = `Restore and export one 
 1. Read get_mind_bindings first and require that this exact Mind is the active write binding. Other attached Minds remain read-only. Use list_revisions and get_revision to identify the exact historical revision. Historical mode is read-only.
 2. Fetch the selected historical files and compare them with the current HEAD. Show me the current-to-target paths and ask for explicit confirmation.
 3. Re-read current bindings and current HEAD, then use ordinary commit_changeset with the unchanged opaque write_binding_id to create a new revision matching the selected state. Never write to the historical selector. On stale binding or revision_conflict, stop, rebuild, and reconfirm; never rebind automatically.
-4. Start export with the exact new revision selector. Poll get_export_status until succeeded or a stable failure.
+4. Export is managed only by the authenticated Mind Diary Site. Do not call an MCP export tool; use the Site export control for the exact new revision and follow its creator-private status until success or a stable failure.
 5. Download before expiry without logging or repeating the URL. Verify the returned byte size and SHA-256, then validate the complete OKF bundle.
 For export_expired request a fresh authorized status/grant. Revoked access or a private switch must fail closed; do not work around them.` as const;
 export const MIND_DIARY_STARTER_OKF_TEMPLATE = Object.freeze([

@@ -3,7 +3,6 @@ import type {
   BundleFileStagingService,
   BundleFileDownloadService,
   ChangesetCommitService,
-  ExportJobApplicationService,
   FileIngressCoordinator,
   LocalFileUploadIntentService,
   MindBindingApplicationService,
@@ -21,6 +20,7 @@ import {
 } from "./native-file-input.js";
 import {
   MCP_TOOL_DEFINITIONS,
+  MCP_MOVED_EXPORT_TOOLS,
   createMcpToolErrorResult,
   createMcpToolSuccessResult,
   type McpContentApplication,
@@ -53,9 +53,6 @@ export interface ProductMcpApplicationDependencies {
   readonly bundleFileDownloads: Pick<BundleFileDownloadService, "issue">;
   readonly nativeFiles?: NativeFileTransport;
   readonly capture: Pick<AutomaticCaptureService, "capture">;
-  readonly exports: Pick<ExportJobApplicationService, "start" | "getStatus">;
-  /** Schedules durable work by opaque ID; the payload never carries authority. */
-  readonly scheduleExport?: (jobId: string) => void | Promise<void>;
   readonly scheduleCommitEffects?: () => void | Promise<void>;
 }
 
@@ -116,6 +113,36 @@ function canonicalCommitOperations(value: unknown): unknown {
 
 function stringValue(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+type MovedExportOperation = (typeof MCP_MOVED_EXPORT_TOOLS)[number];
+
+function movedExportOperationResult(
+  operation: MovedExportOperation,
+): Readonly<Record<string, unknown>> {
+  const replacementRoute = operation === "start_export"
+    ? "POST /api/v1/minds/{mind_ref}/exports"
+    : "GET /api/v1/export-jobs/{job_id}";
+  return Object.freeze({
+    resultType: "complete",
+    content: Object.freeze([
+      Object.freeze({
+        type: "text" as const,
+        text: "This export operation moved to the Mind Diary Site.",
+      }),
+    ]),
+    structuredContent: Object.freeze({
+      schema: "mind-diary/mcp-operation-moved/v1",
+      error: Object.freeze({
+        code: "operation_moved_to_sites",
+        operation,
+        destination: "sites_control_plane",
+        replacement_route: replacementRoute,
+        retryable: false,
+      }),
+    }),
+    isError: true,
+  });
 }
 
 function targetMind(argumentsValue: Readonly<Record<string, unknown>>): unknown {
@@ -361,9 +388,10 @@ export class ProductMcpContentApplication implements McpContentApplication {
 
   async authorizeToolCall(request: Parameters<McpContentApplication["authorizeToolCall"]>[0]) {
     if (
+      request.name === "start_export" ||
+      request.name === "get_export_status" ||
       request.name === "list_minds" ||
       request.name === "fetch" ||
-      request.name === "get_export_status" ||
       request.name === "get_mind_bindings" ||
       request.name === "get_file_ingress_capabilities" ||
       request.name === "set_read_mind_binding" ||
@@ -390,9 +418,7 @@ export class ProductMcpContentApplication implements McpContentApplication {
           request.name === "stage_bundle_file" ||
           request.name === "reconcile_file_stage"
           ? "commit"
-          : request.name === "start_export"
-            ? "export"
-            : null;
+          : null;
       if (required !== null && !info.contentCapabilities.includes(required)) {
         return Object.freeze({ kind: "denied" as const, code: "forbidden" });
       }
@@ -411,6 +437,9 @@ export class ProductMcpContentApplication implements McpContentApplication {
   async executeToolCall(request: Parameters<McpContentApplication["executeToolCall"]>[0]): Promise<unknown> {
     const input = camelInput(request.arguments);
     switch (request.name) {
+      case "start_export":
+      case "get_export_status":
+        return movedExportOperationResult(request.name);
       case "list_minds":
         return snakeOutput(await this.#dependencies.discovery.listMinds(request.actor, input));
       case "resolve_mind":
@@ -1161,100 +1190,6 @@ export class ProductMcpContentApplication implements McpContentApplication {
           result.kind === "revision_conflict" ||
             (result.kind === "denied" && result.decision.retryable),
           snakeOutput(result) as Readonly<Record<string, unknown>>,
-        );
-      }
-      case "start_export": {
-        const info = await this.#dependencies.discovery.getMindInfo(request.actor, input.mind, input.revisionSelector);
-        if (!info.contentCapabilities.includes("export")) {
-          return createMcpToolErrorResult(
-            request.actor.requestId,
-            "forbidden",
-            "The requested operation is not allowed.",
-            false,
-          );
-        }
-        const result = await this.#dependencies.exports.start({
-          actor: request.actor,
-          spaceId: info.mind.mindId,
-          revisionSelector: input.revisionSelector as never,
-          profile: input.profile,
-          idempotencyKey: input.idempotencyKey as never,
-        });
-        if (result.kind === "started") {
-          await this.#dependencies.scheduleExport?.(result.job.jobId);
-          return createMcpToolSuccessResult(
-            snakeOutput({
-              job: {
-                jobId: result.job.jobId,
-                status: result.job.status,
-                revisionId: result.job.revisionId,
-                createdAt: result.job.createdAt,
-              },
-            }),
-            "Started an exact-revision export.",
-          );
-        }
-        const code = result.kind === "denied"
-          ? result.decision.code
-          : result.kind === "invalid"
-            ? result.code
-            : result.kind;
-        return createMcpToolErrorResult(
-          request.actor.requestId,
-          code,
-          code === "mind_binding_required"
-            ? "Attach this Mind for reading or select it as the writable target first."
-            : "The export was not started.",
-          result.kind === "denied" && result.decision.retryable,
-          snakeOutput(result) as Readonly<Record<string, unknown>>,
-        );
-      }
-      case "get_export_status": {
-        const jobId = stringValue(input.jobId);
-        const result = await this.#dependencies.exports.getStatus({
-          actor: request.actor,
-          jobId: (jobId ?? "") as never,
-        });
-        if (result.kind !== "found") {
-          return createMcpToolErrorResult(
-            request.actor.requestId,
-            result.kind,
-            "Export job was not found.",
-            false,
-          );
-        }
-        const archive = result.job.archive;
-        const download = result.download;
-        return createMcpToolSuccessResult(
-          snakeOutput({
-            job: {
-              jobId: result.job.jobId,
-              status: result.job.status,
-              revisionId: result.job.revisionId,
-              createdAt: result.job.createdAt,
-              updatedAt: result.job.updatedAt,
-              completedAt: result.job.completedAt,
-              expiresAt: result.job.expiresAt,
-              lastFailureCode: result.job.lastFailureCode,
-              ...(archive === null
-                ? {}
-                : {
-                    archiveFormat: archive.archiveFormat,
-                    mediaType: archive.mediaType,
-                    filename: archive.filename,
-                    contentDisposition: archive.contentDisposition,
-                    sha256: archive.sha256,
-                    size: archive.size,
-                  }),
-              ...(download === null
-                ? {}
-                : {
-                    downloadUrl: download.url,
-                    downloadExpiresAt: download.expiresAt,
-                  }),
-            },
-          }),
-          "Read the exact-revision export status.",
         );
       }
     }

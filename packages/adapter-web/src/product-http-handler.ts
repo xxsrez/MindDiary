@@ -274,11 +274,18 @@ export function createProductWebHttpHandler(
     }
     let input: Readonly<Record<string, unknown>>;
     try {
-      const parsed = camelInput(await (matched.operation === "stage_markdown_import_batch"
+      const raw = await (matched.operation === "stage_markdown_import_batch"
         ? readImportBatchInput(request)
         : matched.operation === "plan_markdown_import"
           ? readInput(request, MAX_IMPORT_PLAN_BODY_BYTES)
-          : readInput(request)));
+          : readInput(request));
+      if (
+        matched.operation === "start_export" &&
+        ("idempotency_key" in raw || "idempotencyKey" in raw)
+      ) {
+        throw new TypeError("export idempotency belongs to the request header");
+      }
+      const parsed = camelInput(raw);
       const idempotencyKey = request.headers.get("idempotency-key");
       input = Object.freeze({
         ...parsed,
@@ -549,7 +556,10 @@ export function createProductWebHttpHandler(
           MUTATION_METHODS.has(request.method) ? "control_write" : "control_read",
         );
       }
-      return json(200, { ok: true, data: snakeOutput(data) });
+      return json(
+        matched.operation === "start_export" ? 202 : 200,
+        { ok: true, data: snakeOutput(data) },
+      );
     } catch (error) {
       const code = failureCode(error);
       return errorResponse(applicationErrorStatus(code), code, requestId);

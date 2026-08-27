@@ -423,6 +423,8 @@ class ProductControlApplication {
       readonly tokens: TokenLifecycleService;
       readonly capacity: CapacityAdmissionService;
       readonly markdownImports: MarkdownImportService;
+      readonly exports: Pick<ExportJobApplicationService, "start" | "getStatus">;
+      readonly scheduleExport: (jobId: string) => void | Promise<void>;
       readonly operatorDirectory: ServiceOperatorDirectoryService;
     },
   ) {}
@@ -481,6 +483,49 @@ class ProductControlApplication {
           idempotencyKey: input.idempotencyKey,
         });
       }
+      case "start_export": {
+        const allowedKeys = new Set([
+          "mind_ref",
+          "revisionSelector",
+          "profile",
+          "idempotencyKey",
+        ]);
+        if (
+          Object.keys(input).some((key) => !allowedKeys.has(key)) ||
+          typeof input.idempotencyKey !== "string" ||
+          input.idempotencyKey.length === 0
+        ) {
+          throw Object.assign(new Error("Invalid export start request."), {
+            code: "invalid_request",
+          });
+        }
+        const mind = await this.#mind(actor, input);
+        const result = await this.services.exports.start({
+          actor: actor as never,
+          spaceId: mind.mindId,
+          revisionSelector: input.revisionSelector,
+          profile: input.profile,
+          idempotencyKey: input.idempotencyKey,
+        });
+        if (result.kind !== "started") {
+          const code = result.kind === "denied"
+            ? result.decision.code
+            : result.kind === "invalid"
+              ? result.code
+              : result.kind;
+          throw Object.assign(new Error("Export was not started."), { code });
+        }
+        await this.services.scheduleExport(String(result.job.jobId));
+        return Object.freeze({
+          job: Object.freeze({
+            jobId: result.job.jobId,
+            status: result.job.status,
+            revisionId: result.job.revisionId,
+            createdAt: result.job.createdAt,
+          }),
+          replayed: result.replayed,
+        });
+      }
       case "get_markdown_import":
         return this.services.markdownImports.status(
           actor as never,
@@ -513,6 +558,41 @@ class ProductControlApplication {
           String(input.import_id ?? ""),
           input.expectedVersion,
         );
+      case "get_export_status": {
+        if (
+          Object.keys(input).some((key) => key !== "job_id") ||
+          typeof input.job_id !== "string" ||
+          input.job_id.length === 0 ||
+          input.job_id.length > 512 ||
+          /[\u0000-\u001f\u007f]/u.test(input.job_id)
+        ) {
+          throw Object.assign(new Error("Invalid export job locator."), {
+            code: "invalid_request",
+          });
+        }
+        const result = await this.services.exports.getStatus({
+          actor: actor as never,
+          jobId: input.job_id as never,
+        });
+        if (result.kind !== "found") {
+          throw Object.assign(new Error("Export job was not found."), {
+            code: "export_job_not_found",
+          });
+        }
+        const { archive, ...job } = result.job;
+        return Object.freeze({
+          job: Object.freeze({
+            ...job,
+            ...(archive === null ? {} : archive),
+            ...(result.download === null
+              ? {}
+              : {
+                  downloadUrl: result.download.url,
+                  downloadExpiresAt: result.download.expiresAt,
+                }),
+          }),
+        });
+      }
       case "rename_space": {
         const mind = await this.#mind(actor, input);
         return this.services.ordinary.renameSpace(actor as never, asRecord(input, { mindId: mind.mindId }) as never);
@@ -978,7 +1058,7 @@ export async function createProductSiteRuntime(
     commits,
   });
   const exports = new ExportJobApplicationService({
-    authorizer: contentAuthorizer,
+    authorizer,
     backgroundAuthorizer,
     metadata,
     digest: objects,
@@ -1044,8 +1124,6 @@ export async function createProductSiteRuntime(
           (result) => result.kind === "captured",
         ),
     },
-    exports,
-    scheduleExport: async (jobId) => options.schedule({ kind: "export", id: jobId }),
   });
   const resolveIdentity = async (
     request: Request,
@@ -1347,6 +1425,8 @@ export async function createProductSiteRuntime(
       clock,
     }),
     markdownImports,
+    exports,
+    scheduleExport: async (jobId) => options.schedule({ kind: "export", id: jobId }),
     operatorDirectory: new ServiceOperatorDirectoryService({
       store: metadata,
       tokens: metadata,

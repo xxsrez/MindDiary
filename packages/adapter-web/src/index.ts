@@ -54,6 +54,8 @@ export const WEB_CONTROL_ROUTES = [
   ["POST", "/api/v1/minds"],
   ["GET", "/api/v1/minds/{mind_ref}"],
   ["GET", "/api/v1/minds/{mind_ref}/capacity"],
+  ["POST", "/api/v1/minds/{mind_ref}/exports"],
+  ["GET", "/api/v1/export-jobs/{job_id}"],
   ["POST", "/api/v1/minds/{mind_ref}/markdown-import-plans"],
   ["POST", "/api/v1/minds/{mind_ref}/markdown-imports"],
   ["GET", "/api/v1/markdown-imports/{import_id}"],

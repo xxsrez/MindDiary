@@ -1037,37 +1037,28 @@ test("empty account reaches a strict starter commit and first useful search/fetc
     unboundCommitBody.result.structuredContent.error.code,
     "write_binding_required",
   );
-  const unboundExport = await modernMcp(runtime, secret, {
-    jsonrpc: "2.0",
-    id: "starter-unbound-export",
-    method: "tools/call",
-    params: {
-      name: "start_export",
-      arguments: {
-        mind: "/me",
+  const unboundExport = await responseFrom(runtime, new Request(
+    `${ORIGIN}/api/v1/minds/me/exports`,
+    {
+      method: "POST",
+      headers: {
+        origin: ORIGIN,
+        "content-type": "application/json",
+        "x-csrf-token": settingsCsrf,
+        "idempotency-key": "export:starter-unbound",
+      },
+      body: JSON.stringify({
         revision_selector: {
           kind: "revision",
           revision_id: personal.head.revision_id,
         },
-        idempotency_key: "export:starter-unbound",
-      },
-      _meta: {
-        "io.modelcontextprotocol/protocolVersion": MCP_TARGET_PROTOCOL,
-        "io.modelcontextprotocol/clientInfo": {
-          name: "mind-diary-starter-e2e",
-          version: "0.0.0",
-        },
-        "io.modelcontextprotocol/clientCapabilities": {},
-      },
+      }),
     },
-  });
-  assert.equal(unboundExport.status, 200);
+  ));
+  assert.equal(unboundExport.status, 202);
   const unboundExportBody = await unboundExport.json();
-  assert.equal(unboundExportBody.result.isError, true);
-  assert.equal(
-    unboundExportBody.result.structuredContent.error.code,
-    "mind_binding_required",
-  );
+  assert.equal(unboundExportBody.ok, true);
+  assert.equal(unboundExportBody.data.job.revision_id, personal.head.revision_id);
   const writeBinding = await modernTool(
     runtime,
     secret,
@@ -1356,20 +1347,26 @@ test("empty account reaches a strict starter commit and first useful search/fetc
     assert.equal(serializedTelemetry.includes(forbidden), false, forbidden);
   }
 
-  const exportStarted = await modernTool(
-    runtime,
-    secret,
-    "starter-export-before-unbind",
-    "start_export",
+  const exportStartedResponse = await responseFrom(runtime, new Request(
+    `${ORIGIN}/api/v1/minds/me/exports`,
     {
-      mind: "/me",
-      revision_selector: {
-        kind: "revision",
-        revision_id: starterRevisionId,
+      method: "POST",
+      headers: {
+        origin: ORIGIN,
+        "content-type": "application/json",
+        "x-csrf-token": settingsCsrf,
+        "idempotency-key": "export:starter-before-unbind",
       },
-      idempotency_key: "export:starter-before-unbind",
+      body: JSON.stringify({
+        revision_selector: {
+          kind: "revision",
+          revision_id: starterRevisionId,
+        },
+      }),
     },
-  );
+  ));
+  assert.equal(exportStartedResponse.status, 202);
+  const exportStarted = (await exportStartedResponse.json()).data;
 
   await modernTool(
     runtime,
@@ -1406,30 +1403,13 @@ test("empty account reaches a strict starter commit and first useful search/fetc
     detachedFetchBody.result.structuredContent.error.code,
     "mind_binding_required",
   );
-  const detachedExportStatus = await modernMcp(runtime, secret, {
-    jsonrpc: "2.0",
-    id: "starter-export-status-after-unbind",
-    method: "tools/call",
-    params: {
-      name: "get_export_status",
-      arguments: { job_id: exportStarted.job.job_id },
-      _meta: {
-        "io.modelcontextprotocol/protocolVersion": MCP_TARGET_PROTOCOL,
-        "io.modelcontextprotocol/clientInfo": {
-          name: "mind-diary-starter-e2e",
-          version: "0.0.0",
-        },
-        "io.modelcontextprotocol/clientCapabilities": {},
-      },
-    },
-  });
+  const detachedExportStatus = await responseFrom(runtime, new Request(
+    `${ORIGIN}/api/v1/export-jobs/${encodeURIComponent(exportStarted.job.job_id)}`,
+  ));
   assert.equal(detachedExportStatus.status, 200);
   const detachedExportStatusBody = await detachedExportStatus.json();
-  assert.equal(detachedExportStatusBody.result.isError, true);
-  assert.equal(
-    detachedExportStatusBody.result.structuredContent.error.code,
-    "not_found",
-  );
+  assert.equal(detachedExportStatusBody.ok, true);
+  assert.equal(detachedExportStatusBody.data.job.revision_id, starterRevisionId);
 });
 
 test("durable Product Site controls one token binding with ownership, CAS, read-back, and revoke fencing", async () => {
@@ -2265,25 +2245,46 @@ test("durable product runtime carries a Sites account token through Codex MCP an
   assert.equal(validatedRestoreBody.result.isError, false);
   assert.equal(validatedRestoreBody.result.structuredContent.data.valid, true);
 
-  const exportStarted = await legacyMcp(runtime, secret, {
-    jsonrpc: "2.0",
-    id: "export-restored-revision",
-    method: "tools/call",
-    params: {
-      _meta: { progressToken: "export-start" },
-      name: "start_export",
-      arguments: {
-        mind: "/me",
-        revision_selector: { kind: "revision", revision_id: restoredRevisionId },
-        idempotency_key: "export-restored:product-runtime-e2e",
+  const exportStarted = await responseFrom(runtime, new Request(
+    `${ORIGIN}/api/v1/minds/me/exports`,
+    {
+      method: "POST",
+      headers: {
+        origin: ORIGIN,
+        "content-type": "application/json",
+        "x-csrf-token": registeredCsrf,
+        "idempotency-key": "export-restored:product-runtime-e2e",
       },
+      body: JSON.stringify({
+        revision_selector: { kind: "revision", revision_id: restoredRevisionId },
+      }),
     },
-  });
-  assert.equal(exportStarted.status, 200);
+  ));
+  assert.equal(exportStarted.status, 202);
   const exportStartedBody = await exportStarted.json();
-  assert.equal(exportStartedBody.result.isError, false, JSON.stringify(exportStartedBody));
-  const exportJob = exportStartedBody.result.structuredContent.data.job;
+  assert.equal(exportStartedBody.ok, true, JSON.stringify(exportStartedBody));
+  const exportJob = exportStartedBody.data.job;
   assert.equal(exportJob.revision_id, restoredRevisionId);
+  runtime = await createProductSiteRuntime(runtimeOptions);
+  const exportReplay = await responseFrom(runtime, new Request(
+    `${ORIGIN}/api/v1/minds/me/exports`,
+    {
+      method: "POST",
+      headers: {
+        origin: ORIGIN,
+        "content-type": "application/json",
+        "x-csrf-token": registeredCsrf,
+        "idempotency-key": "export-restored:product-runtime-e2e",
+      },
+      body: JSON.stringify({
+        revision_selector: { kind: "revision", revision_id: restoredRevisionId },
+      }),
+    },
+  ));
+  assert.equal(exportReplay.status, 202);
+  const exportReplayBody = await exportReplay.json();
+  assert.equal(exportReplayBody.data.replayed, true);
+  assert.equal(exportReplayBody.data.job.job_id, exportJob.job_id);
   const exportWork = scheduled.findLast(
     (work) => work.kind === "export" && work.id === exportJob.job_id,
   );
@@ -2291,20 +2292,13 @@ test("durable product runtime carries a Sites account token through Codex MCP an
   const exportRecovery = await runtime.recoverBackground();
   assert.ok(exportRecovery.dispatched >= 1);
 
-  const exportStatus = await legacyMcp(runtime, secret, {
-    jsonrpc: "2.0",
-    id: "status-restored-export",
-    method: "tools/call",
-    params: {
-      _meta: { progressToken: "export-status" },
-      name: "get_export_status",
-      arguments: { job_id: exportJob.job_id },
-    },
-  });
+  const exportStatus = await responseFrom(runtime, new Request(
+    `${ORIGIN}/api/v1/export-jobs/${encodeURIComponent(exportJob.job_id)}`,
+  ));
   assert.equal(exportStatus.status, 200);
   const exportStatusBody = await exportStatus.json();
-  assert.equal(exportStatusBody.result.isError, false, JSON.stringify(exportStatusBody));
-  const completedExport = exportStatusBody.result.structuredContent.data.job;
+  assert.equal(exportStatusBody.ok, true, JSON.stringify(exportStatusBody));
+  const completedExport = exportStatusBody.data.job;
   assert.equal(completedExport.status, "succeeded");
   assert.equal(completedExport.revision_id, restoredRevisionId);
   assert.equal(completedExport.archive_format, "MD-OKF-ZIP-1");
@@ -2326,7 +2320,7 @@ test("durable product runtime carries a Sites account token through Codex MCP an
   const archiveText = new TextDecoder().decode(archive);
   assert.doesNotMatch(
     archiveText,
-    /principal_|token_|membership|audit|idempotency|runtime-proof/u,
+    /principal_|token_|membership|\bacl\b|audit|service_id|download_url|grant|idempotency|runtime-proof/iu,
   );
 
   const revoked = await responseFrom(runtime, new Request(
@@ -2642,6 +2636,40 @@ test("durable Product Site enforces public baseline access, atomic ownership tra
   ));
   assert.equal(madePublic.status, 200, await madePublic.text());
 
+  const exportWithoutCsrf = await responseFrom(runtime, new Request(
+    `${ORIGIN}/api/v1/minds/visibility-runtime/exports`,
+    {
+      method: "POST",
+      headers: {
+        origin: ORIGIN,
+        "content-type": "application/json",
+        "idempotency-key": "export:visibility-runtime-denied",
+      },
+      body: JSON.stringify({ revision_selector: { kind: "head" } }),
+    },
+  ));
+  assert.equal(exportWithoutCsrf.status, 403);
+  const publicExport = await responseFrom(runtime, new Request(
+    `${ORIGIN}/api/v1/minds/visibility-runtime/exports`,
+    {
+      method: "POST",
+      headers: {
+        origin: ORIGIN,
+        "content-type": "application/json",
+        "x-csrf-token": ownerCsrf,
+        "idempotency-key": "export:visibility-runtime",
+      },
+      body: JSON.stringify({ revision_selector: { kind: "head" } }),
+    },
+  ));
+  assert.equal(publicExport.status, 202, await publicExport.clone().text());
+  const publicExportJob = (await publicExport.json()).data.job;
+  const ownerExportStatus = await responseFrom(runtime, new Request(
+    `${ORIGIN}/api/v1/export-jobs/${encodeURIComponent(publicExportJob.job_id)}`,
+  ));
+  assert.equal(ownerExportStatus.status, 200);
+  assert.equal((await ownerExportStatus.json()).data.job.revision_id, publicExportJob.revision_id);
+
   switchIdentity("visibility.target@example.com", "Target Owner");
   await registerCurrent();
   switchIdentity("visibility.outsider@example.com", "Baseline Reader");
@@ -2668,6 +2696,11 @@ test("durable Product Site enforces public baseline access, atomic ownership tra
   const baselineExactBody = await baselineExact.json();
   assert.equal(baselineExactBody.data.access.kind, "visibility");
   assert.equal(baselineExactBody.data.access.role, null);
+  const foreignExportStatus = await responseFrom(runtime, new Request(
+    `${ORIGIN}/api/v1/export-jobs/${encodeURIComponent(publicExportJob.job_id)}`,
+  ));
+  assert.equal(foreignExportStatus.status, 404);
+  assert.equal((await foreignExportStatus.json()).error.code, "export_job_not_found");
   const baselinePage = await responseFrom(runtime, new Request(`${ORIGIN}/visibility-runtime`));
   assert.equal(baselinePage.status, 200);
   const baselineHtml = await baselinePage.text();

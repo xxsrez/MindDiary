@@ -543,6 +543,12 @@ export class ExportJobApplicationService {
     }
     const job = await this.#metadata.readExportJob(request.jobId);
     if (job === null) return Object.freeze({ kind: "not_found" });
+    if (
+      request.actor.kind !== "registered_principal" ||
+      job.requestedByPrincipalId !== request.actor.principalId
+    ) {
+      return Object.freeze({ kind: "not_found" });
+    }
     const authorization = await this.#authorizer.authorize({
       actor: request.actor,
       spaceId: job.spaceId,
@@ -550,9 +556,6 @@ export class ExportJobApplicationService {
       revisionMode: "historical",
     });
     if (authorization.kind === "denied") {
-      return Object.freeze({ kind: "not_found" });
-    }
-    if (request.actor.kind !== "registered_principal") {
       return Object.freeze({ kind: "not_found" });
     }
     if (

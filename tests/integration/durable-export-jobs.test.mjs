@@ -366,7 +366,7 @@ test("explicit bundle export profile is durable and reaches the reconstructed wo
   assert.equal(status.job.archive.filename, "mind-diary-bundle.zip");
 });
 
-test("job ID is only a locator: missing current access hides status and blocks the worker", async () => {
+test("job status is creator-private even with current read access, and revoke blocks the worker", async () => {
   const env = await harness();
   const started = await env.application().start(startRequest(env.actor));
   assert.equal(started.kind, "started");
@@ -378,7 +378,7 @@ test("job ID is only a locator: missing current access hides status and blocks t
       spaceId: MINDS.ordinary.spaceId,
       tokenId: TOKEN_ID,
     },
-    currentState(outsider, { membership: null }),
+    currentState(outsider),
   );
   assert.deepEqual(
     await env.application().getStatus({ actor: outsider, jobId: started.job.jobId }),

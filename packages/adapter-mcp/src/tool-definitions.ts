@@ -43,6 +43,10 @@ export const MCP_CONTENT_TOOLS = [
   "commit_changeset",
   "reconcile_changeset",
   "capture_knowledge",
+] as const;
+
+/** Removed export names accepted only by a bounded, side-effect-free migration stub. */
+export const MCP_MOVED_EXPORT_TOOLS = [
   "start_export",
   "get_export_status",
 ] as const;
@@ -1103,50 +1107,6 @@ export const MCP_BINDING_TOOL_DEFINITIONS = Object.freeze([
   }),
 ] as const);
 
-const EXPORT_JOB_STATE_SCHEMA = Object.freeze({
-  type: "string",
-  enum: Object.freeze(["queued", "running", "succeeded", "failed", "expired"]),
-});
-
-const EXPORT_JOB_STATUS_SCHEMA = Object.freeze({
-  type: "object",
-  additionalProperties: false,
-  required: Object.freeze(["job_id", "status", "revision_id"]),
-  properties: Object.freeze({
-    job_id: NON_EMPTY_STRING_SCHEMA,
-    status: EXPORT_JOB_STATE_SCHEMA,
-    revision_id: NON_EMPTY_STRING_SCHEMA,
-    created_at: Object.freeze({ type: "string", format: "date-time" }),
-    updated_at: Object.freeze({ type: "string", format: "date-time" }),
-    completed_at: Object.freeze({
-      type: Object.freeze(["string", "null"]),
-      format: "date-time",
-    }),
-    expires_at: Object.freeze({ type: "string", format: "date-time" }),
-    last_failure_code: Object.freeze({ type: Object.freeze(["string", "null"]) }),
-    archive_format: Object.freeze({
-      type: "string",
-      enum: Object.freeze(["MD-OKF-ZIP-1", "MD-BUNDLE-ZIP-1"]),
-    }),
-    media_type: Object.freeze({ const: "application/zip" }),
-    filename: Object.freeze({
-      type: "string",
-      enum: Object.freeze(["mind-diary-okf-bundle.zip", "mind-diary-bundle.zip"]),
-    }),
-    content_disposition: Object.freeze({
-      type: "string",
-      enum: Object.freeze([
-        'attachment; filename="mind-diary-okf-bundle.zip"',
-        'attachment; filename="mind-diary-bundle.zip"',
-      ]),
-    }),
-    sha256: SHA256_SCHEMA,
-    size: Object.freeze({ type: "integer", minimum: 0 }),
-    download_url: Object.freeze({ type: "string", format: "uri" }),
-    download_expires_at: Object.freeze({ type: "string", format: "date-time" }),
-  }),
-});
-
 const NATIVE_FILE_INPUT_SCHEMA = Object.freeze({
   type: "object",
   additionalProperties: false,
@@ -1664,60 +1624,6 @@ const CAPTURE_KNOWLEDGE_OUTPUT_SCHEMA = toolOutputSchema(
   }),
 );
 
-const START_EXPORT_INPUT_SCHEMA = Object.freeze({
-  $schema: JSON_SCHEMA_2020_12,
-  type: "object",
-  additionalProperties: false,
-  required: Object.freeze(["mind", "idempotency_key"]),
-  properties: Object.freeze({
-    mind: NON_EMPTY_STRING_SCHEMA,
-    revision_selector: REVISION_SELECTOR_SCHEMA,
-    profile: Object.freeze({
-      type: "string",
-      enum: Object.freeze(["MD-OKF-ZIP-1", "MD-BUNDLE-ZIP-1"]),
-    }),
-    idempotency_key: NON_EMPTY_STRING_SCHEMA,
-  }),
-});
-
-const START_EXPORT_OUTPUT_SCHEMA = toolOutputSchema(
-  Object.freeze({
-    type: "object",
-    additionalProperties: false,
-    required: Object.freeze(["job"]),
-    properties: Object.freeze({
-      job: Object.freeze({
-        type: "object",
-        additionalProperties: false,
-        required: Object.freeze(["job_id", "status", "revision_id", "created_at"]),
-        properties: Object.freeze({
-          job_id: NON_EMPTY_STRING_SCHEMA,
-          status: Object.freeze({ const: "queued" }),
-          revision_id: NON_EMPTY_STRING_SCHEMA,
-          created_at: Object.freeze({ type: "string", format: "date-time" }),
-        }),
-      }),
-    }),
-  }),
-);
-
-const GET_EXPORT_STATUS_INPUT_SCHEMA = Object.freeze({
-  $schema: JSON_SCHEMA_2020_12,
-  type: "object",
-  additionalProperties: false,
-  required: Object.freeze(["job_id"]),
-  properties: Object.freeze({ job_id: NON_EMPTY_STRING_SCHEMA }),
-});
-
-const GET_EXPORT_STATUS_OUTPUT_SCHEMA = toolOutputSchema(
-  Object.freeze({
-    type: "object",
-    additionalProperties: false,
-    required: Object.freeze(["job"]),
-    properties: Object.freeze({ job: EXPORT_JOB_STATUS_SCHEMA }),
-  }),
-);
-
 /** Native-file staging is provider-specific at the MCP edge and portable below it. */
 export const MCP_BUNDLE_FILE_TOOL_DEFINITIONS = Object.freeze([
   Object.freeze({
@@ -1793,7 +1699,7 @@ export const MCP_BUNDLE_FILE_TOOL_DEFINITIONS = Object.freeze([
   }),
 ] as const);
 
-/** Canonical published definitions for immediate commit and asynchronous export. */
+/** Canonical published definitions for immediate content commits. */
 export const MCP_COMMIT_EXPORT_TOOL_DEFINITIONS = Object.freeze([
   Object.freeze({
     name: "commit_changeset",
@@ -1833,34 +1739,6 @@ export const MCP_COMMIT_EXPORT_TOOL_DEFINITIONS = Object.freeze([
     securitySchemes: WRITE_SECURITY_SCHEMES,
     annotations: Object.freeze({
       readOnlyHint: false,
-      destructiveHint: false,
-      openWorldHint: false,
-    }),
-  }),
-  Object.freeze({
-    name: "start_export",
-    title: "Start an exact-revision OKF export",
-    description:
-      "Create an asynchronous export job fixed to one authorized immutable revision. Preserve the returned exact revision for integrity verification; the archive and download bearer URL are never returned by this call.",
-    inputSchema: START_EXPORT_INPUT_SCHEMA,
-    outputSchema: START_EXPORT_OUTPUT_SCHEMA,
-    securitySchemes: READ_SECURITY_SCHEMES,
-    annotations: Object.freeze({
-      readOnlyHint: false,
-      destructiveHint: false,
-      openWorldHint: false,
-    }),
-  }),
-  Object.freeze({
-    name: "get_export_status",
-    title: "Get export status",
-    description:
-      "Reauthorize and read one export job. A succeeded job may return a new short-lived download grant plus exact SHA-256 and size, never archive bytes. Keep the URL out of logs and prompts, download before expiry, and request a fresh grant only while current access remains valid.",
-    inputSchema: GET_EXPORT_STATUS_INPUT_SCHEMA,
-    outputSchema: GET_EXPORT_STATUS_OUTPUT_SCHEMA,
-    securitySchemes: READ_SECURITY_SCHEMES,
-    annotations: Object.freeze({
-      readOnlyHint: true,
       destructiveHint: false,
       openWorldHint: false,
     }),

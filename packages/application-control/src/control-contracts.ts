@@ -12,6 +12,7 @@ export const CONTROL_QUERIES = [
   "list_members",
   "list_invitations",
   "list_mcp_tokens",
+  "get_export_status",
   "list_service_operator_principals",
 ] as const;
 
@@ -34,6 +35,7 @@ export const CONTROL_COMMANDS = [
   "transfer_ownership",
   "issue_mcp_token",
   "revoke_mcp_token",
+  "start_export",
 ] as const;
 
 export interface ControlBoundaryMarker {

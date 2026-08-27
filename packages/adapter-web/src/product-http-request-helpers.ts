@@ -132,6 +132,7 @@ function safeErrorMessage(code: string): string {
   if (code === "not_found") return "The resource was not found.";
   if (code === "connection_not_found") return "The connection was not found.";
   if (code === "personal_token_not_found") return "The personal token was not found.";
+  if (code === "export_job_not_found") return "The export job was not found.";
   if (code === "forbidden") return "The request is forbidden.";
   if (code === "method_not_allowed") return "The method is not allowed.";
   return "The request could not be completed.";

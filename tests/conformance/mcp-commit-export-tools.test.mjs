@@ -71,11 +71,9 @@ function harness() {
   let nextRequestId = 0;
   let head = "rev_1";
   let commits = 0;
-  let exportJobs = 0;
   let accessAllowed = true;
   let denyAsInactiveToken = false;
   const commitResults = new Map();
-  const exportResults = new Map();
   const authorizationCalls = [];
   const executionCalls = [];
   const writeActor = actor(["content:read", "content:write"]);
@@ -162,39 +160,7 @@ function harness() {
           return result;
         }
 
-        if (request.name === "start_export") {
-          const prior = exportResults.get(request.arguments.idempotency_key);
-          if (prior !== undefined) return prior;
-          const revisionId =
-            request.arguments.revision_selector?.kind === "revision"
-              ? request.arguments.revision_selector.revision_id
-              : head;
-          exportJobs += 1;
-          const result = createMcpToolSuccessResult(
-            {
-              job: {
-                job_id: `export_${exportJobs}`,
-                status: "queued",
-                revision_id: revisionId,
-                created_at: "2026-08-07T13:00:00.000Z",
-              },
-            },
-            `Export queued for revision ${revisionId}.`,
-          );
-          exportResults.set(request.arguments.idempotency_key, result);
-          return result;
-        }
-
-        return createMcpToolSuccessResult(
-          {
-            job: {
-              job_id: request.arguments.job_id,
-              status: "running",
-              revision_id: "rev_1",
-            },
-          },
-          "Export is still running.",
-        );
+        throw new Error(`Unexpected tool ${request.name}`);
       },
     },
   });
@@ -224,7 +190,6 @@ function harness() {
       authorizationCalls,
       executionCalls,
       commits: () => commits,
-      exportJobs: () => exportJobs,
       head: () => head,
       setAccessAllowed(value) {
         accessAllowed = value;
@@ -240,7 +205,7 @@ async function result(response) {
   return (await response.json()).result;
 }
 
-test("publishes strict commit/export schemas and truthful annotations", () => {
+test("publishes strict commit schemas and truthful annotations", () => {
   const definitions = new Map(
     MCP_COMMIT_EXPORT_TOOL_DEFINITIONS.map((definition) => [
       definition.name,
@@ -251,8 +216,6 @@ test("publishes strict commit/export schemas and truthful annotations", () => {
     "commit_changeset",
     "reconcile_changeset",
     "capture_knowledge",
-    "start_export",
-    "get_export_status",
   ]);
 
   const commit = definitions.get("commit_changeset");
@@ -336,27 +299,6 @@ test("publishes strict commit/export schemas and truthful annotations", () => {
   assert.match(capture.description, /exact private active writable Mind/u);
   assert.match(capture.description, /Never use this tool for sensitive, cross-Mind/u);
 
-  const startExport = definitions.get("start_export");
-  assert.deepEqual(startExport.annotations, {
-    readOnlyHint: false,
-    destructiveHint: false,
-    openWorldHint: false,
-  });
-  assert.match(startExport.description, /exact revision/u);
-  const exportStatus = definitions.get("get_export_status");
-  assert.deepEqual(exportStatus.annotations, {
-    readOnlyHint: true,
-    destructiveHint: false,
-    openWorldHint: false,
-  });
-  assert.match(exportStatus.description, /exact SHA-256 and size/u);
-  assert.match(exportStatus.description, /Keep the URL out of logs and prompts/u);
-  assert.equal(
-    "bytes" in
-      exportStatus.outputSchema.properties.data.properties.job
-        .properties,
-    false,
-  );
 });
 
 test("history tool descriptions keep historical restore read-only and require a fresh confirmed commit", () => {
@@ -374,7 +316,7 @@ test("tools/list advertises write scope for step-up while enforcing read-only to
   const writable = await result(await fixture.send(rpc("tools/list")));
   assert.deepEqual(
     writable.tools.map((definition) => definition.name),
-    ["commit_changeset", "reconcile_changeset", "capture_knowledge", "start_export", "get_export_status"],
+    ["commit_changeset", "reconcile_changeset", "capture_knowledge"],
   );
   assert.equal(writable.tools[0].inputSchema.additionalProperties, false);
 
@@ -383,7 +325,7 @@ test("tools/list advertises write scope for step-up while enforcing read-only to
   );
   assert.deepEqual(
     readable.tools.map((definition) => definition.name),
-    ["commit_changeset", "reconcile_changeset", "capture_knowledge", "start_export", "get_export_status"],
+    ["commit_changeset", "reconcile_changeset", "capture_knowledge"],
   );
   assert.deepEqual(readable.tools[0].securitySchemes, [
     { type: "oauth2", scopes: ["content:write"] },
@@ -483,48 +425,4 @@ test("commit is immediate, idempotent, and leaves final state unchanged on inval
   assert.equal(race.status, 401);
   assert.equal((await race.json()).code, "authentication_required");
   assert.equal(fixture.state.head(), "rev_2");
-});
-
-test("export stays asynchronous and exact-revision while status and authentication are rechecked", async () => {
-  const fixture = harness();
-  const start = rpc("tools/call", {
-    name: "start_export",
-    arguments: {
-      mind: "research-notes",
-      revision_selector: { kind: "revision", revision_id: "rev_1" },
-      idempotency_key: "export-key",
-    },
-  });
-  const first = await result(await fixture.send(start));
-  const retry = await result(await fixture.send(start));
-  assert.deepEqual(retry, first);
-  assert.equal(fixture.state.exportJobs(), 1);
-  assert.equal(first.structuredContent.data.job.status, "queued");
-  assert.equal(first.structuredContent.data.job.revision_id, "rev_1");
-  assert.equal("bytes" in first.structuredContent.data.job, false);
-  assert.equal("download_url" in first.structuredContent.data.job, false);
-
-  const statusCall = rpc("tools/call", {
-    id: 2,
-    name: "get_export_status",
-    arguments: { job_id: "export_1" },
-  });
-  const running = await result(await fixture.send(statusCall));
-  assert.equal(running.structuredContent.data.job.status, "running");
-
-  fixture.state.setAccessAllowed(false);
-  const revoked = await result(await fixture.send(statusCall));
-  assert.equal(revoked.structuredContent.error.code, "capability_denied");
-  assert.equal(
-    fixture.state.authorizationCalls.filter((name) => name === "get_export_status").length,
-    2,
-  );
-  assert.equal(
-    fixture.state.executionCalls.filter((name) => name === "get_export_status").length,
-    1,
-  );
-
-  const unauthenticated = await fixture.send(statusCall, null);
-  assert.equal(unauthenticated.status, 401);
-  assert.equal((await unauthenticated.json()).code, "authentication_required");
 });

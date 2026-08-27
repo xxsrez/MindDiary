@@ -1249,6 +1249,83 @@ test("Markdown import REST maps exact plan, resumable multipart checkpoints and 
   assert.equal(calls.length, before);
 });
 
+test("Sites export REST maps exact revision/profile and keeps idempotency in the header", async () => {
+  const calls = [];
+  const handler = createProductWebHttpHandler({
+    applicationOrigin: origin,
+    resolveIdentity: () => ({ kind: "authenticated", actor: registeredActor }),
+    csrf: { issue: () => "csrf-export", verify: (_actor, token) => token === "csrf-export" },
+    control: { execute(request) {
+      calls.push(request);
+      return request.operation === "start_export"
+        ? {
+            job: {
+              jobId: "export_one",
+              status: "queued",
+              revisionId: "revision_historical",
+              createdAt: "2026-08-27T20:00:00.000Z",
+            },
+            replayed: false,
+          }
+        : {
+            job: {
+              jobId: "export_one",
+              status: "succeeded",
+              revisionId: "revision_historical",
+              sha256: `sha256:${"a".repeat(64)}`,
+              size: 123,
+            },
+          };
+    } },
+  });
+
+  const start = await handler(new Request(`${origin}/api/v1/minds/research-notes/exports`, {
+    method: "POST",
+    headers: {
+      origin,
+      "content-type": "application/json",
+      "x-csrf-token": "csrf-export",
+      "idempotency-key": "export:historical",
+    },
+    body: JSON.stringify({
+      revision_selector: { kind: "revision", revision_id: "revision_historical" },
+      profile: "MD-BUNDLE-ZIP-1",
+    }),
+  }));
+  assert.equal(start.status, 202);
+  assert.deepEqual(calls.at(-1), {
+    operation: "start_export",
+    actor: registeredActor,
+    input: {
+      revisionSelector: { kind: "revision", revisionId: "revision_historical" },
+      profile: "MD-BUNDLE-ZIP-1",
+      idempotencyKey: "export:historical",
+      mind_ref: "research-notes",
+    },
+  });
+
+  const bodyKey = await handler(new Request(`${origin}/api/v1/minds/research-notes/exports`, {
+    method: "POST",
+    headers: {
+      origin,
+      "content-type": "application/json",
+      "x-csrf-token": "csrf-export",
+      "idempotency-key": "export:header",
+    },
+    body: JSON.stringify({ idempotency_key: "export:body" }),
+  }));
+  assert.equal(bodyKey.status, 400);
+  assert.equal(calls.length, 1);
+
+  const status = await handler(new Request(`${origin}/api/v1/export-jobs/export_one`));
+  assert.equal(status.status, 200);
+  assert.equal(calls.at(-1).operation, "get_export_status");
+  assert.deepEqual(calls.at(-1).input, { job_id: "export_one" });
+  const statusBody = await status.json();
+  assert.equal(statusBody.data.job.revision_id, "revision_historical");
+  assert.equal(statusBody.data.job.size, 123);
+});
+
 test("collaboration pages expose safe invitation metadata and map every browser action to server-owned commands", async () => {
   const calls = [];
   const handler = createProductWebHttpHandler({

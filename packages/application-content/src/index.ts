@@ -73,7 +73,6 @@ export const CONTENT_QUERIES = [
   "get_revision",
   "validate_revision",
   "list_bundle_files",
-  "get_export_status",
   "reconcile_file_stage",
   "reconcile_changeset",
 ] as const;
@@ -86,7 +85,6 @@ export const CONTENT_COMMANDS = [
   "get_bundle_file_download",
   "capture_knowledge",
   "commit_changeset",
-  "start_export",
 ] as const;
 
 export type McpObservabilityOutcome =
