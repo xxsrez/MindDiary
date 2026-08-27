@@ -419,7 +419,7 @@ test("credential target actions keep recovery-safe clear distinct from select", 
         {
           role: "legacy-helper",
           path: "packages/adapter-web/src/product-http-request-helpers.ts",
-          gitBlob: "f5d07d05f9274d9d1cf41ac005fcbbc2192faed6",
+          gitBlob: "9237ef17c6731f9814689e5a9709c04c82cab232",
         },
         {
           role: "legacy-handler",
@@ -429,7 +429,7 @@ test("credential target actions keep recovery-safe clear distinct from select", 
         {
           role: "legacy-integration-test",
           path: "tests/integration/product-site.test.mjs",
-          gitBlob: "9cc220f39c129cbceab8f806211e5810f46c22d2",
+          gitBlob: "de996938c05cd98f1c0d733cecdf56c2b248cea4",
         },
       ],
     },
@@ -1045,7 +1045,7 @@ test("plugin/help migration has closed owners and exact current source evidence"
         {
           role: "help-route-source",
           path: "packages/adapter-web/src/product-http-request-helpers.ts",
-          gitBlob: "f5d07d05f9274d9d1cf41ac005fcbbc2192faed6",
+          gitBlob: "9237ef17c6731f9814689e5a9709c04c82cab232",
         },
       ],
     },
