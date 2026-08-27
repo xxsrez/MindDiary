@@ -344,13 +344,69 @@ function harness(options) {
   return { memberships, safeEvents, service };
 }
 
-async function authorize(store, principalId, capability) {
+async function authorize(store, principalId, capability, revisionMode = "head") {
   return new CapabilityAuthorizer(store).authorize({
-    actor: actor(principalId, `request_authorize_${principalId}_${capability}`),
+    actor: actor(
+      principalId,
+      `request_authorize_${principalId}_${capability}_${revisionMode}`,
+    ),
     spaceId: SPACE_ID,
     capability,
-    revisionMode: "head",
+    revisionMode,
   });
+}
+
+const READER_EQUIVALENT_CAPABILITIES = Object.freeze([
+  "content:browse",
+  "content:search",
+  "content:fetch",
+  "content:history",
+  "content:validate",
+  "content:export",
+]);
+
+const NON_READER_CAPABILITIES = Object.freeze([
+  "content:write",
+  "members:manage-basic",
+  "members:manage-admin",
+]);
+
+async function assertFormerParticipantBaseline(store, principalId, visibility) {
+  assert.deepEqual(
+    capabilitiesForRole("reader"),
+    READER_EQUIVALENT_CAPABILITIES,
+    "the regression matrix must track the complete accepted Reader capability set",
+  );
+  for (const revisionMode of ["head", "historical"]) {
+    for (const capability of READER_EQUIVALENT_CAPABILITIES) {
+      const result = await authorize(store, principalId, capability, revisionMode);
+      assert.equal(
+        result.kind,
+        "allowed",
+        `${visibility} ${revisionMode} ${capability} should remain reader-equivalent`,
+      );
+      assert.equal(result.grant.kind, "baseline_visibility");
+      assert.equal(result.grant.visibility, visibility);
+    }
+  }
+  for (const capability of NON_READER_CAPABILITIES) {
+    const result = await authorize(store, principalId, capability);
+    assert.equal(result.kind, "denied", `${visibility} must deny ${capability}`);
+    assert.equal(result.code, "capability_denied");
+  }
+}
+
+async function assertFormerPrivateParticipantDenied(store, principalId) {
+  for (const revisionMode of ["head", "historical"]) {
+    for (const capability of [
+      ...READER_EQUIVALENT_CAPABILITIES,
+      ...NON_READER_CAPABILITIES,
+    ]) {
+      const result = await authorize(store, principalId, capability, revisionMode);
+      assert.equal(result.kind, "denied", `private ${revisionMode} must deny ${capability}`);
+      assert.equal(result.code, "access_denied");
+    }
+  }
 }
 
 test("Admin manages only Reader/Editor, Owner additionally manages Admin, and Owner assignment is transfer-only", async () => {
@@ -481,7 +537,7 @@ test("authorized revoke and non-owner leave invalidate current access immediatel
   assert.equal(env.memberships.state.audit.length, 3);
 });
 
-test("revoked public and unlisted participants keep only baseline read while private denial stays non-disclosing", async () => {
+test("revoke preserves full public and unlisted live/history Reader capability only", async () => {
   for (const visibility of ["public", "unlisted"]) {
     const env = harness({ visibility });
     await env.service.revokeMembership(actor("principal_owner", `request_${visibility}_revoke`), {
@@ -491,34 +547,46 @@ test("revoked public and unlisted participants keep only baseline read while pri
       idempotencyKey: `membership-${visibility}-revoke-editor-0001`,
     });
 
-    const read = await authorize(env.memberships, "principal_editor", "content:browse");
-    assert.equal(read.kind, "allowed", `${visibility} should retain baseline read`);
-    assert.equal(read.grant.kind, "baseline_visibility");
-    assert.equal(read.grant.visibility, visibility);
-    assert.equal(
-      (await authorize(env.memberships, "principal_editor", "content:write")).kind,
-      "denied",
-    );
-    assert.equal(
-      (await authorize(env.memberships, "principal_editor", "members:manage-basic")).kind,
-      "denied",
-    );
     assert.equal(env.memberships.member("member_editor").state, "revoked");
+    await assertFormerParticipantBaseline(env.memberships, "principal_editor", visibility);
   }
+});
 
-  const privateMind = harness({ visibility: "private" });
-  await privateMind.service.leaveSpace(actor("principal_editor", "request_private_leave"), {
-    mindId: SPACE_ID,
-    expectedMembershipVersion: 1,
-    idempotencyKey: "membership-private-editor-leave-0001",
-  });
-  const privateRead = await authorize(
-    privateMind.memberships,
-    "principal_editor",
-    "content:browse",
-  );
-  assert.equal(privateRead.kind, "denied");
-  assert.equal(privateRead.code, "access_denied");
+test("leave preserves full public and unlisted live/history Reader capability only", async () => {
+  for (const visibility of ["public", "unlisted"]) {
+    const env = harness({ visibility });
+    await env.service.leaveSpace(actor("principal_editor", `request_${visibility}_leave`), {
+      mindId: SPACE_ID,
+      expectedMembershipVersion: 1,
+      idempotencyKey: `membership-${visibility}-leave-editor-0001`,
+    });
+
+    assert.equal(env.memberships.member("member_editor").state, "revoked");
+    await assertFormerParticipantBaseline(env.memberships, "principal_editor", visibility);
+  }
+});
+
+test("revoke and leave keep former private participants non-disclosing and fully denied", async () => {
+  for (const lifecycle of ["revoke", "leave"]) {
+    const env = harness({ visibility: "private" });
+    if (lifecycle === "revoke") {
+      await env.service.revokeMembership(actor("principal_owner", "request_private_revoke"), {
+        mindId: SPACE_ID,
+        memberId: "member_editor",
+        expectedMembershipVersion: 1,
+        idempotencyKey: "membership-private-revoke-editor-0001",
+      });
+    } else {
+      await env.service.leaveSpace(actor("principal_editor", "request_private_leave"), {
+        mindId: SPACE_ID,
+        expectedMembershipVersion: 1,
+        idempotencyKey: "membership-private-leave-editor-0001",
+      });
+    }
+
+    assert.equal(env.memberships.member("member_editor").state, "revoked");
+    await assertFormerPrivateParticipantDenied(env.memberships, "principal_editor");
+  }
 });
 
 test("membership version CAS, concurrent writers, no-op and exact retry are deterministic", async () => {
