@@ -418,7 +418,7 @@ test("credential target actions keep recovery-safe clear distinct from select", 
         {
           role: "legacy-helper",
           path: "packages/adapter-web/src/product-http-request-helpers.ts",
-          gitBlob: "514ac171ac3eaa4870f74a3b1e64c28f48f49f91",
+          gitBlob: "64cd4fc6cd394636bf576f5e3922a18d05a83226",
         },
         {
           role: "legacy-handler",
@@ -428,7 +428,7 @@ test("credential target actions keep recovery-safe clear distinct from select", 
         {
           role: "legacy-integration-test",
           path: "tests/integration/product-site.test.mjs",
-          gitBlob: "d9f0e09b8b84048727e1503608267bb543f498a4",
+          gitBlob: "18eb8997e3452b882ff67468bc2e4c1995b693b8",
         },
       ],
     },
@@ -974,7 +974,7 @@ test("plugin/help migration has closed owners and exact current source evidence"
         {
           role: "accepted-skill-source-contract",
           path: "docs/specs/plugin-connector.md",
-          gitBlob: "6784b7274aed6998aba762fcdc00f2624e6f4fcf",
+          gitBlob: "044a379139578dd04dc9a33b5921cf2d6def13ed",
         },
         {
           role: "installed-skill-probe-source",
@@ -996,7 +996,7 @@ test("plugin/help migration has closed owners and exact current source evidence"
       sourceEvidence: [{
         role: "help-renderer-source",
         path: "packages/adapter-web/src/connections.ts",
-        gitBlob: "85a74210f0d11f5957d0eab9e6953338b3ad4437",
+        gitBlob: "9e76d0a6ad1bd87c2c7b5ce8f715957c187aa77d",
       }],
     },
     {
@@ -1008,12 +1008,12 @@ test("plugin/help migration has closed owners and exact current source evidence"
         {
           role: "help-playbook-source",
           path: "packages/adapter-web/src/token-management.ts",
-          gitBlob: "e5997bf8a2b3e7a6520b1969492c0614d7ee0cdf",
+          gitBlob: "06cd5adbf721514dd51f1eaf84b22333b6651ab4",
         },
         {
           role: "help-route-source",
           path: "packages/adapter-web/src/product-http-request-helpers.ts",
-          gitBlob: "514ac171ac3eaa4870f74a3b1e64c28f48f49f91",
+          gitBlob: "64cd4fc6cd394636bf576f5e3922a18d05a83226",
         },
       ],
     },
@@ -1025,7 +1025,7 @@ test("plugin/help migration has closed owners and exact current source evidence"
       sourceEvidence: [{
         role: "shared-label-source",
         path: "packages/adapter-web/src/ui-shell.ts",
-        gitBlob: "0b4066e05c5240bc6826f4a9a1efaad33dae641d",
+        gitBlob: "bebae5674a56ebc1daf54f36fcd3f195065a5f20",
       }],
     },
   ]);
