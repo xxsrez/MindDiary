@@ -8,10 +8,12 @@ local companion для `local_path` и `workspace/generated_artifact`, MD-305
 hosted one-use upload-intent service и format-neutral streaming lifecycle
 MD-304.
 `FileIngressCoordinator` сохраняет общую staging/commit semantics и exact
-reconcile. Direct host/provider transport, connector adapter, bounded generated
-bytes и server-generated producer остаются Release 0.3 capabilities и не
-выдаются за поддержку Release 0.2 только потому, что в repository существуют
-их ports, schemas или локальные tests.
+reconcile. Release 0.3 candidate подключает `bounded_in_memory` отдельным
+constructor-owned port для trusted hosted producer, но не публикует его через
+HTTP/MCP или capability discovery до поздней UAT-проверки. Direct host/provider
+transport, connector adapter и server-generated producer также не выдаются за
+поддержку только потому, что в repository существуют их ports, schemas или
+локальные tests.
 
 Release applicability: portable boundary остаётся accepted, но
 [ADR-0019](../decisions/0019-release-0-1-codex-first-small-data-boundary.md)
@@ -181,7 +183,7 @@ double в repository. `implemented_repository` означает только cod
 | `local_path` | Packaged local companion on the current Codex host | Path-free one-use hosted upload intent; companion snapshots one exact regular file | Release 0.2 `implemented_repository`; installed tool inventory and exact disk journey are pending MD-325 | Missing companion is a client-installation failure; local admission returns only observable safe errors; never send the path to hosted MCP |
 | `workspace/generated_artifact` | Packaged local companion with trusted process-configured workspace roots | Same path-free one-use hosted intent | Release 0.2 `implemented_repository`; installed tool inventory and exact workspace journey are pending MD-325 | Unsupported authority fails locally; do not relabel or fall back to URL/provider transport |
 | `connector_object` | Explicit authorized connector adapter | Connector API/object fetch | Release 0.3 `not_available`; provider-neutral ports/tests are not an enabled adapter | No cross-provider, native-file or URL fallback |
-| `bounded_in_memory` | Future trusted producer boundary | Explicit bounded bytes transport | Release 0.3 `not_available`; repository-local helper tests are not a hosted route | No JSON-RPC base64 fallback |
+| `bounded_in_memory` | Trusted constructor-owned Product Site producer boundary | Explicit `Uint8Array` call через `ProductSiteRuntime.boundedInMemoryIngress.stage`; ≤ 4 MiB inclusive | Release 0.3 `not_available` как deployed capability до exact late-UAT evidence; internal composition `implemented_repository` | Нет HTTP/MCP route, JSON-RPC base64, URL или path fallback |
 | `server_generated` | Future trusted server-side producer | Internal producer stream/job output | Release 0.3 `not_available`; repository-local writer tests are not hosted producer wiring | No client URL/path fallback |
 
 All six rows use the same application static gate and the same commit
@@ -362,9 +364,12 @@ This contract preserves the old boundaries:
   new commits target v4 with open advisory media. Deterministic
   `MD-OKF-ZIP-1`/`MD-BUNDLE-ZIP-1` profiles remain separate.
 - `session_attachment` native stage, bounded inline staging, server-generated
-  streaming staging and local companion are repository-local capabilities. None
-  is advertised as hosted MCP/native support without exact client/provider/UAT
-  evidence. `FileIngressCoordinator` dispatches only explicitly enabled
+  streaming staging and local companion are repository-local capabilities. Для
+  `bounded_in_memory` Product Site candidate теперь содержит отдельный
+  constructor-owned internal port с фиксированным provenance и shared staging
+  gate, но public capability row намеренно остаётся `not_available`. Ни одна из
+  этих строк не рекламируется как hosted MCP/native support без exact
+  client/provider/UAT evidence. `FileIngressCoordinator` dispatches only explicitly enabled
   adapters, reports unavailable rows without fallback and delegates every
   mixed-source commit to the existing atomic HEAD-CAS transaction. The
   provider-specific connector binding remains not-available; the local generic

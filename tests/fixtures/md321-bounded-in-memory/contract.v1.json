@@ -1,0 +1,63 @@
+{
+  "$schema": "mind-diary/md321-bounded-in-memory-composition/v1",
+  "version": 1,
+  "release": "0.3",
+  "task": "MD-321",
+  "status": "repository_candidate_not_hosted_evidence",
+  "boundary": {
+    "runtime_property": "ProductSiteRuntime.boundedInMemoryIngress",
+    "operation": "stage",
+    "transport": "constructor_owned_uint8array",
+    "source_kind": "bounded_in_memory",
+    "public_http_route": null,
+    "mcp_tool": null,
+    "advertised_hosted_status": "not_available_until_late_uat"
+  },
+  "admission": {
+    "max_bytes_inclusive": 4194304,
+    "first_rejected_size": 4194305,
+    "safe_inputs": [
+      "server_derived_actor",
+      "space_id",
+      "write_target_generation",
+      "display_filename",
+      "advisory_media_type",
+      "uint8array_bytes",
+      "idempotency_key",
+      "optional_expected_size",
+      "optional_expected_sha256"
+    ],
+    "forbidden_inputs": [
+      "source_kind_override",
+      "provider_object_id",
+      "provider_url",
+      "local_path",
+      "prompt",
+      "credential"
+    ]
+  },
+  "shared_guards": [
+    "safe_filename",
+    "recomputed_sha256_size_media",
+    "current_scope_acl_target",
+    "quota_reservation",
+    "quarantine_promotion",
+    "idempotency",
+    "expiry_and_reconcile"
+  ],
+  "publication": {
+    "stage_result": "verified_staged_file_ref_only",
+    "head_change": "explicit_atomic_commit_changeset_only"
+  },
+  "privacy": {
+    "payload_logs": "forbidden",
+    "structured_content": "forbidden",
+    "model_context": "forbidden"
+  },
+  "evidence": {
+    "unit": "tests/unit/bounded-in-memory-ingress.test.mjs",
+    "integration": "tests/integration/product-site-bounded-in-memory-ingress.test.mjs",
+    "conformance": "tests/conformance/md321-bounded-in-memory-contract.test.mjs",
+    "late_uat_owner": "MD-290"
+  }
+}

@@ -20,8 +20,10 @@ Release applicability: технический contract сохранялся ка
 MD-271 добавляет общий [file-ingress contract](file-ingress.md) и source
 capability matrix для bytes, которые могут попасть в этот `BundleFile` slice.
 В текущем candidate `session_attachment` подключён через OpenAI-native MCP
-parameter, `bounded_in_memory` и `server_generated` используют локальный shared
-staging/streaming pipeline, а MD-272 подключает repository-local companion для
+parameter, `bounded_in_memory` и `server_generated` используют общий
+staging/streaming pipeline, а Product Site composition устанавливает отдельный
+constructor-owned `bounded_in_memory` port для trusted producer. MD-272
+подключает repository-local companion для
 `local_path` и `workspace/generated_artifact`. Native client UAT,
 hosted upload-intent/producer evidence и `connector_object` adapter остаются
 отдельными gates. MD-305 владеет только hosted one-use upload-intent service и
@@ -215,14 +217,19 @@ native attachments. The portable application boundary carries only a safe
 other transport provenance terminate in the source adapter and are never part
 of a staged record or its idempotency payload.
 
-`bounded_in_memory` is an explicit inline path capped at 4 MiB. A
+`bounded_in_memory` is an explicit inline path capped at 4 MiB inclusive.
+Release 0.3 Product Site candidate exposes it only as the constructor-owned
+`ProductSiteRuntime.boundedInMemoryIngress.stage` port: no HTTP/MCP route,
+base64, URL or path transport exists, and public capability discovery remains
+`not_available` until exact late-UAT evidence. A
 `server_generated` producer may provide a bounded byte stream through the
 storage upload port, subject to the 256 MiB per-BundleFile limit; the local
 Sites object adapter sends that stream directly to quarantine storage rather
 than assembling it in application memory. Both paths perform the same SHA-256,
 size, advisory-media, filename, quota, quarantine and binding-owner idempotency
 checks. Generated previews or derived artifacts do not become canonical files
-automatically: an authorized caller must reference the verified
+automatically: staging returns no model-facing `structuredContent`, and an
+authorized caller must reference the verified
 `staged_file_ref` in an explicit atomic `commit_changeset`.
 
 Staging state begins `quarantined`. The synchronous gate checks bounded
