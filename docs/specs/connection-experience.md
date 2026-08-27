@@ -1,11 +1,9 @@
 # Connections, Advanced MCP и Codex Help
 
-Статус: accepted historical Release 0.1/0.2 as-built/evidence contract,
-обновлено 2026-08-27; target operation disposition ожидает MD-337, а access
-replacement принят в [MD-339 contract](credential-write-target.md). Документ задаёт
-пользовательскую information architecture и server-owned projection для
-Release 0.1. Реализация и live UAT evidence проверяются отдельно; наличие этого
-контракта не является утверждением о развёрнутом поведении.
+Статус: accepted historical Release 0.1/0.2 evidence и реализованный локальный
+Release 0.3 target candidate, обновлено 2026-08-28. Access replacement принят
+в [MD-339 contract](credential-write-target.md), реализован MD-343; live UAT
+evidence exact candidate проверяется отдельно.
 
 Release 0.1 contract ниже сохраняется как historical as-built и не становится
 целевой authority Release 0.3. В Release 0.3 Connections остаются Sites-only
@@ -144,8 +142,8 @@ GET /api/v1/connections?limit=20&cursor=opaque
 - revoked/expired между pages не возвращается снова; новая connection после
   upper boundary не вклинивается в текущий traversal;
 - handler сначала получает одну bounded page grants и только затем одним
-  bounded projection read загружает binding summaries для refs этой page.
-  Bindings невидимой page не читаются;
+  bounded projection read загружает target summaries для refs этой page.
+  Targets невидимой page не читаются;
 - response содержит `items`, `next_cursor | null` и не возвращает total count,
   credential history или raw identifiers.
 
@@ -167,11 +165,13 @@ Detail возвращает только actor-safe projection:
 - `Can read` и список `0..N` currently accessible readable Minds;
 - `Can add and change` только после current `content:write` step-up, с одним
   writable Mind либо `Not selected`;
-- transport-only `binding_version` для CAS; он не показывается как
+- transport-only `target_version` для CAS; он не показывается как
   пользовательская copy;
-- stale readable target как `Access unavailable` без name, route, `space_id`
-  или internal binding ID;
-- safe actions attach/detach read, select/switch/clear write и revoke.
+- readable Minds вычисляются из current membership/visibility без persisted
+  attach state;
+- unavailable selected writable target показывается без name, route,
+  `space_id` или generation;
+- safe actions select/switch/clear write и revoke.
 
 Routes и responses не показывают credential, binding или capture mechanics.
 Automatic capture остаётся Advanced/post-MVP capability и не блокирует 0.1
@@ -185,15 +185,15 @@ DELETE /api/v1/connections/{connection_ref}
 ```
 
 Browser mutations требуют same-origin `Origin`, session CSRF,
-`Idempotency-Key`, actor ownership и exact `expected_binding_version`. Mutation
-принимает ровно одно действие: `attach_read`, `detach_read`, `select_write`,
-`clear_write`. Accessible target выбирается через canonical `mind_ref`; stale
-read detach использует connection-owned opaque `stale_access_ref`, который не
-раскрывает binding ID. Unknown fields и mixed actions запрещены.
+`Idempotency-Key`, actor ownership и exact `expected_target_version`. Mutation
+принимает ровно одно действие: `select_write` или `clear_write`. Target
+выбирается через canonical `mind_ref`; browser не получает owner, generation,
+`space_id` или прежние binding identifiers. Unknown fields и mixed actions
+запрещены.
 
 `select_write` существует только при current `content:write`; insufficient
 scope возвращает `409 write_step_up_required` без selector values и без
-изменения state. Binding CAS, current ACL, fail-closed revoke и singleton write
+изменения state. Target CAS, current ACL, fail-closed revoke и singleton write
 invariant остаются authoritative. Success возвращает changed/replayed и fresh
 safe projection; browser не выводит state из отправленного command.
 
@@ -229,7 +229,7 @@ DELETE /api/v1/mcp-tokens/{personal_token_ref}
 ```
 
 Unknown/foreign ref возвращает actor-safe `404 personal_token_not_found` до
-metadata. Personal-token access использует тот же `binding_version`, CAS,
+metadata. Personal-token access использует тот же `target_version`, CAS,
 Mind ACL и safe projection, но может показывать protocol scopes и lifecycle,
 поскольку это Advanced surface. Legacy raw `binding_owner_id` route не
 является browser contract и удаляется из Product Site calls.
@@ -249,7 +249,7 @@ Deterministic server protocol и ещё не подтверждённый fresh-
 | `read_connected` | `Can read`; write row/selector отсутствуют | explicit Codex write intent requests incremental `content:write` |
 | `write_step_up_pending` | host-owned consent; server state ещё read-only | approve -> merge scope into same active grant; deny/cancel -> `read_connected` |
 | `write_enabled_unselected` | `Can add and change`; `Not selected` | select exactly one currently writable Mind |
-| `write_enabled_selected` | exact writable Mind | switch/clear with binding CAS |
+| `write_enabled_selected` | exact writable Mind | switch/clear with target CAS |
 | `revoked_or_expired` | ordinary detail is hidden/404; safe reconnect guidance lives in Help/Advanced | reconnect creates a new empty grant |
 
 Server-side DCR/PKCE, read-first grant, incremental scope merge, refresh,

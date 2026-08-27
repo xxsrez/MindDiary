@@ -223,13 +223,13 @@
 
   const mutate = async (panel, action, values = {}) => {
     const endpoint = panel.dataset.accessEndpoint ?? "";
-    const expected = Number(panel.dataset.bindingVersion ?? "NaN");
+    const expected = Number(panel.dataset.targetVersion ?? "NaN");
     const status = panel.querySelector("[data-access-status]");
     if (!endpoint.startsWith("/api/v1/") || !Number.isSafeInteger(expected) || expected < 0) return;
     panel.setAttribute("aria-busy", "true");
     say(status, "Saving current Mind access…");
     try {
-      await request(endpoint, "PATCH", { action, expected_binding_version: expected, ...values });
+      await request(endpoint, "PATCH", { action, expected_target_version: expected, ...values });
       location.reload();
     } catch (error) {
       say(status, error?.code === "write_step_up_required"
@@ -291,8 +291,6 @@
     const action = target.dataset.accessAction;
     if (panel && action) {
       const values = {};
-      if (target.dataset.mindRef) values.mind_ref = target.dataset.mindRef;
-      if (target.dataset.staleAccessRef) values.stale_access_ref = target.dataset.staleAccessRef;
       await mutate(panel, action, values);
       return;
     }

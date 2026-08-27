@@ -68,8 +68,6 @@ function mind(revisionId) {
 function captureArguments(overrides = {}) {
   return {
     mind: "capture-fixture",
-    write_binding_id: WRITE_BINDING_ID,
-    expected_binding_version: 2,
     expected_revision: "revision_capture_head",
     idempotency_key: "capture-routine-fact",
     classification: "routine_non_sensitive",
@@ -136,7 +134,11 @@ function harness() {
               captureUpdatedAt: NOW,
             },
             readBindings: [],
-            writeBinding: null,
+            writeBinding: {
+              state: "active",
+              spaceId: MIND_ID,
+              writeBindingId: WRITE_BINDING_ID,
+            },
           },
         };
       },
@@ -234,7 +236,7 @@ test("capture_knowledge publishes a closed routine-only contract", () => {
   assert.equal(definition.annotations.destructiveHint, false);
 });
 
-test("capture_knowledge preserves the exact binding tuple and maps capture/no-op safely", async () => {
+test("capture_knowledge derives and pins the exact target generation safely", async () => {
   const env = harness();
   const captured = await env.call(captureArguments());
   assert.equal(captured.isError, false);

@@ -405,11 +405,6 @@ const VALIDATE_MIND_INPUT_SCHEMA = strictInputSchema(
   ["mind"],
 );
 
-const BINDING_VERSION_SCHEMA = Object.freeze({
-  type: "integer",
-  minimum: 0,
-});
-
 const IDEMPOTENCY_KEY_SCHEMA = Object.freeze({
   type: "string",
   minLength: 1,
@@ -943,7 +938,7 @@ const GET_FILE_INGRESS_CAPABILITIES_OUTPUT_SCHEMA = toolOutputSchema(
             "source_kind",
             "server_adapter_status",
             "server_transport",
-            "requires_write_binding",
+            "requires_writable_target",
             "max_bytes",
             "fallback",
           ]),
@@ -957,7 +952,7 @@ const GET_FILE_INGRESS_CAPABILITIES_OUTPUT_SCHEMA = toolOutputSchema(
               type: "string",
               enum: Object.freeze(["companion_upload_intent", "none"]),
             }),
-            requires_write_binding: Object.freeze({ type: "boolean" }),
+            requires_writable_target: Object.freeze({ type: "boolean" }),
             max_bytes: Object.freeze({ type: "integer", minimum: 0 }),
             fallback: Object.freeze({ const: "none" }),
           }),
@@ -970,7 +965,6 @@ const GET_FILE_INGRESS_CAPABILITIES_OUTPUT_SCHEMA = toolOutputSchema(
 const CREATE_FILE_UPLOAD_INTENT_INPUT_SCHEMA = strictInputSchema(
   {
     mind: MIND_SELECTOR_SCHEMA,
-    write_binding_id: OPAQUE_ID_SCHEMA,
     source_kind: Object.freeze({
       type: "string",
       enum: Object.freeze([
@@ -997,7 +991,6 @@ const CREATE_FILE_UPLOAD_INTENT_INPUT_SCHEMA = strictInputSchema(
   },
   [
     "mind",
-    "write_binding_id",
     "source_kind",
     "display_filename",
     "expected_size",
@@ -1033,10 +1026,9 @@ const STAGE_BUNDLE_FILE_INPUT_SCHEMA = Object.freeze({
   $schema: JSON_SCHEMA_2020_12,
   type: "object",
   additionalProperties: false,
-  required: Object.freeze(["mind", "write_binding_id", "file", "idempotency_key"]),
+  required: Object.freeze(["mind", "file", "idempotency_key"]),
   properties: Object.freeze({
     mind: MIND_SELECTOR_SCHEMA,
-    write_binding_id: OPAQUE_ID_SCHEMA,
     file: NATIVE_FILE_INPUT_SCHEMA,
     idempotency_key: IDEMPOTENCY_KEY_SCHEMA,
     display_filename: Object.freeze({ type: "string", minLength: 1, maxLength: 255 }),
@@ -1088,7 +1080,6 @@ const STAGE_BUNDLE_FILE_OUTPUT_SCHEMA = toolOutputSchema(
 const RECONCILE_FILE_STAGE_INPUT_SCHEMA = strictInputSchema(
   {
     mind: MIND_SELECTOR_SCHEMA,
-    write_binding_id: OPAQUE_ID_SCHEMA,
     source_kind: FILE_INGRESS_SOURCE_KIND_SCHEMA,
     display_filename: Object.freeze({ type: "string", minLength: 1, maxLength: 255 }),
     claimed_media_type: FILE_INGRESS_MEDIA_HINT_SCHEMA,
@@ -1105,7 +1096,6 @@ const RECONCILE_FILE_STAGE_INPUT_SCHEMA = strictInputSchema(
   },
   [
     "mind",
-    "write_binding_id",
     "source_kind",
     "display_filename",
     "media_type",
@@ -1232,7 +1222,6 @@ const COMMIT_CHANGESET_INPUT_SCHEMA = Object.freeze({
   additionalProperties: false,
   required: Object.freeze([
     "mind",
-    "write_binding_id",
     "expected_revision",
     "idempotency_key",
     "summary",
@@ -1240,7 +1229,6 @@ const COMMIT_CHANGESET_INPUT_SCHEMA = Object.freeze({
   ]),
   properties: Object.freeze({
     mind: NON_EMPTY_STRING_SCHEMA,
-    write_binding_id: OPAQUE_ID_SCHEMA,
     expected_revision: NON_EMPTY_STRING_SCHEMA,
     idempotency_key: NON_EMPTY_STRING_SCHEMA,
     summary: Object.freeze({ type: "string" }),
@@ -1324,8 +1312,6 @@ const AUTOMATIC_CAPTURE_SOURCE_SCHEMA = Object.freeze({
 const CAPTURE_KNOWLEDGE_INPUT_SCHEMA = strictInputSchema(
   {
     mind: MIND_SELECTOR_SCHEMA,
-    write_binding_id: OPAQUE_ID_SCHEMA,
-    expected_binding_version: BINDING_VERSION_SCHEMA,
     expected_revision: OPAQUE_ID_SCHEMA,
     idempotency_key: IDEMPOTENCY_KEY_SCHEMA,
     classification: Object.freeze({ const: "routine_non_sensitive" }),
@@ -1351,8 +1337,6 @@ const CAPTURE_KNOWLEDGE_INPUT_SCHEMA = strictInputSchema(
   },
   [
     "mind",
-    "write_binding_id",
-    "expected_binding_version",
     "expected_revision",
     "idempotency_key",
     "classification",
@@ -1402,7 +1386,7 @@ export const MCP_BUNDLE_FILE_TOOL_DEFINITIONS = Object.freeze([
     name: "get_file_ingress_capabilities",
     title: "Get file ingress capabilities",
     description:
-      "Read only the hosted service's deployed ingress adapters, binding requirements and limits. This response does not report installed client companions or promise that a specific local path is readable; those require fresh client inventory and local admission. An unavailable source has no implicit base64, URL, local-path or cross-source fallback.",
+      "Read only the hosted service's deployed ingress adapters, writable-target requirements and limits. This response does not report installed client companions or promise that a specific local path is readable; those require fresh client inventory and local admission. An unavailable source has no implicit base64, URL, local-path or cross-source fallback.",
     inputSchema: GET_FILE_INGRESS_CAPABILITIES_INPUT_SCHEMA,
     outputSchema: GET_FILE_INGRESS_CAPABILITIES_OUTPUT_SCHEMA,
     securitySchemes: READ_SECURITY_SCHEMES,
@@ -1416,7 +1400,7 @@ export const MCP_BUNDLE_FILE_TOOL_DEFINITIONS = Object.freeze([
     name: "create_file_upload_intent",
     title: "Create a one-use companion upload intent",
     description:
-      "Create or exactly replay one versioned 10-minute same-origin upload capability for one verified local or workspace-generated regular-file snapshot. The exact active writable Mind binding and current OAuth grant are rechecked server-side. Return only the capability URL to the trusted companion; never provide a local path, bearer, provider locator, arbitrary URL or base64 bytes.",
+      "Create or exactly replay one versioned 10-minute same-origin upload capability for one verified local or workspace-generated regular-file snapshot. The exact Site-selected writable target and current credential are rechecked server-side. Return only the capability URL to the trusted companion; never provide a local path, bearer, provider locator, arbitrary URL or base64 bytes.",
     inputSchema: CREATE_FILE_UPLOAD_INTENT_INPUT_SCHEMA,
     outputSchema: CREATE_FILE_UPLOAD_INTENT_OUTPUT_SCHEMA,
     securitySchemes: WRITE_SECURITY_SCHEMES,
@@ -1430,7 +1414,7 @@ export const MCP_BUNDLE_FILE_TOOL_DEFINITIONS = Object.freeze([
     name: "stage_bundle_file",
     title: "Stage one BundleFile",
     description:
-      "Download exactly one client-native file through the provider transport, verify its bounded bytes and metadata, and create one expiring staged_file_ref pinned to the exact active writable Mind binding. The provider file ID, temporary URL and bytes are never returned or persisted as content. Reuse the same idempotency_key for an uncertain outcome; changed bytes or metadata conflict.",
+      "Download exactly one client-native file through the provider transport, verify its bounded bytes and metadata, and create one expiring staged_file_ref pinned to the exact Site-selected target generation. The provider file ID, temporary URL and bytes are never returned or persisted as content. Reuse the same idempotency_key for an uncertain outcome; changed bytes or metadata conflict.",
     inputSchema: STAGE_BUNDLE_FILE_INPUT_SCHEMA,
     outputSchema: STAGE_BUNDLE_FILE_OUTPUT_SCHEMA,
     securitySchemes: WRITE_SECURITY_SCHEMES,
@@ -1477,7 +1461,7 @@ export const MCP_COMMIT_EXPORT_TOOL_DEFINITIONS = Object.freeze([
     name: "commit_changeset",
     title: "Commit a Mind changeset",
     description:
-      "Atomically apply one non-empty Markdown and/or staged BundleFile changeset through the exact active write_binding_id to the matching current HEAD; a stale generation never redirects to another Mind. Before a substantial, deleting, or currently visible write, preview exact paths and visibility impact to the user and obtain explicit confirmation; then re-read HEAD and use its exact expected_revision. The call immediately creates one immutable revision and never creates a server draft or approval artifact. On revision_conflict, stop and rebuild instead of retrying a changed payload with the same idempotency key.",
+      "Atomically apply one non-empty Markdown and/or staged BundleFile changeset to the exact Site-selected writable target and matching current HEAD; a target switch never redirects an in-flight operation. Before a substantial, deleting, or currently visible write, preview exact paths and visibility impact to the user and obtain explicit confirmation; then re-read HEAD and use its exact expected_revision. The call immediately creates one immutable revision and never creates a server draft or approval artifact. On revision_conflict, stop and rebuild instead of retrying a changed payload with the same idempotency key.",
     inputSchema: COMMIT_CHANGESET_INPUT_SCHEMA,
     outputSchema: COMMIT_CHANGESET_OUTPUT_SCHEMA,
     securitySchemes: WRITE_SECURITY_SCHEMES,
@@ -1505,7 +1489,7 @@ export const MCP_COMMIT_EXPORT_TOOL_DEFINITIONS = Object.freeze([
     name: "capture_knowledge",
     title: "Capture routine knowledge",
     description:
-      "Add one bounded routine, non-sensitive Memory to the exact private active writable Mind after automatic capture was explicitly enabled in the trusted control plane. Use the current binding_version, exact write_binding_id, and exact HEAD. Sources may be only the user's current statement or an entry in that same target HEAD. Never use this tool for sensitive, cross-Mind, external, destructive, or substantial content; request explicit confirmation and use commit_changeset when needed.",
+      "Add one bounded routine, non-sensitive Memory to the exact private Site-selected writable target after automatic capture was explicitly enabled in the trusted control plane. The current target generation and exact HEAD are rechecked server-side. Sources may be only the user's current statement or an entry in that same target HEAD. Never use this tool for sensitive, cross-Mind, external, destructive, or substantial content; request explicit confirmation and use commit_changeset when needed.",
     inputSchema: CAPTURE_KNOWLEDGE_INPUT_SCHEMA,
     outputSchema: CAPTURE_KNOWLEDGE_OUTPUT_SCHEMA,
     securitySchemes: WRITE_SECURITY_SCHEMES,

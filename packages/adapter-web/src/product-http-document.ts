@@ -50,7 +50,7 @@ import {
   type ProductWebControlApplication,
   type ProductWebOAuthConnections,
   type ProductWebPersonalTokens,
-  type ProductWebMindBindings,
+  type ProductWebCredentialWriteTargets,
 } from "./product-http-contracts.js";
 
 import {
@@ -66,7 +66,7 @@ import {
   invitationUi,
   perMindInvitation,
   safeConnectionDetail,
-  safeBindingAccessByOwner,
+  safeWritableTargetAccessByOwner,
   type ProductUiSession,
 } from "./product-http-request-helpers.js";
 
@@ -78,7 +78,7 @@ export async function productUiDocument(input: {
   readonly control: ProductWebControlApplication;
   readonly oauthConnections?: ProductWebOAuthConnections;
   readonly personalTokens?: ProductWebPersonalTokens;
-  readonly mindBindings?: ProductWebMindBindings;
+  readonly writableTargets?: ProductWebCredentialWriteTargets;
   readonly query: Readonly<Record<string, string>>;
   readonly listQuery?: Readonly<{
     readonly state?: "active" | "revoked" | "expired";
@@ -134,7 +134,7 @@ export async function productUiDocument(input: {
   }
 
   if (input.pathname === "/settings/connections") {
-    if (input.oauthConnections === undefined || input.mindBindings === undefined) {
+    if (input.oauthConnections === undefined || input.writableTargets === undefined) {
       throw new TypeError("Connections projection is unavailable");
     }
     return withCsrfMeta(renderConnectionsPageDocument({
@@ -145,7 +145,7 @@ export async function productUiDocument(input: {
 
   const connectionDetailMatch = /^\/settings\/connections\/([^/]+)$/u.exec(input.pathname);
   if (connectionDetailMatch !== null) {
-    if (input.oauthConnections === undefined || input.mindBindings === undefined) {
+    if (input.oauthConnections === undefined || input.writableTargets === undefined) {
       throw Object.assign(new Error("Connection was not found."), { code: "connection_not_found" });
     }
     const connectionRef = connectionDetailMatch[1]!;
@@ -156,12 +156,13 @@ export async function productUiDocument(input: {
     if (connection === null) {
       throw Object.assign(new Error("Connection was not found."), { code: "connection_not_found" });
     }
-    const accessByOwner = await safeBindingAccessByOwner(
+    const accessByOwner = await safeWritableTargetAccessByOwner(
       input.control,
-      input.mindBindings,
+      input.writableTargets,
       input.identity.actor,
       [Object.freeze({
         ownerId: connection.bindingOwnerId,
+        credentialKind: "oauth_grant" as const,
         scopes: connection.scopes,
         state: "active" as const,
       })],
@@ -179,7 +180,7 @@ export async function productUiDocument(input: {
   }
 
   if (input.pathname === "/settings/developer/mcp") {
-    if (input.personalTokens === undefined || input.mindBindings === undefined) {
+    if (input.personalTokens === undefined || input.writableTargets === undefined) {
       throw new TypeError("Personal token projection is unavailable");
     }
     const state = input.listQuery?.state ?? "active";
@@ -194,12 +195,13 @@ export async function productUiDocument(input: {
       } else {
         let access = new Map<string, SafeCredentialAccess>();
         if (state === "active") {
-          access = new Map(await safeBindingAccessByOwner(
+          access = new Map(await safeWritableTargetAccessByOwner(
             input.control,
-            input.mindBindings,
+            input.writableTargets,
             input.identity.actor,
             page.items.map((token) => Object.freeze({
               ownerId: token.bindingOwnerId,
+              credentialKind: "personal_token" as const,
               scopes: token.scopes,
               state: "active" as const,
             })),

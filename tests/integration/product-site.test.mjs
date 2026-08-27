@@ -547,19 +547,16 @@ test("product root, Connections, and Advanced MCP render safe live projections a
       },
       async read() { return null; },
     },
-    mindBindings: {
-      async list() { return []; },
+    writableTargets: {
       async listResolved(_actor, credentials) {
         return credentials.map((credential) => ({
           ownerId: credential.ownerId,
-          bindingVersion: 0,
-          state: "active",
-          readBindings: [],
-          writeBinding: null,
-          automaticCapture: { mode: "disabled", writeBindingId: null, updatedAt: null },
+          credentialKind: credential.credentialKind,
+          lifecycleState: "active",
+          targetVersion: 0,
+          targetMindId: null,
         }));
       },
-      async mutate() { throw new Error("unused"); },
       async mutateResolved() { throw new Error("unused"); },
     },
   });
@@ -875,10 +872,8 @@ test("pilot Product Site route map keeps one UAT shell, exact active navigation,
       async listPage() { return { items: [], nextCursor: null }; },
       async read() { return null; },
     },
-    mindBindings: {
-      async list() { return []; },
+    writableTargets: {
       async listResolved() { return []; },
-      async mutate() { throw new Error("unused"); },
       async mutateResolved() { throw new Error("unused"); },
     },
   });
@@ -1593,11 +1588,12 @@ test("token controls preserve CSRF and expose a one-time secret only in the issu
   assert.equal(JSON.stringify(revokedBody).includes("token_id"), false);
 });
 
-test("Connections project and mutate exact credential access with presentation refs, CAS, and redaction", async () => {
-  const bindingCalls = [];
+test("Connections project and mutate one server-owned writable target with target CAS", async () => {
+  const targetCalls = [];
   const connectionRef = `conn_v1_${"3".repeat(32)}`;
-  const staleAccessRef = `stale_v1_${"4".repeat(32)}`;
   const bindingOwnerId = "md_oauth_grant_internal_must_not_render";
+  let targetVersion = 8;
+  let targetMindId = "space_research";
   let conflict = false;
   const oauthConnection = Object.freeze({
     connectionRef,
@@ -1610,7 +1606,7 @@ test("Connections project and mutate exact credential access with presentation r
   const handler = createProductWebHttpHandler({
     applicationOrigin: origin,
     resolveIdentity: () => ({ kind: "authenticated", actor: registeredActor }),
-    csrf: { issue: () => "csrf-bindings", verify: (_actor, token) => token === "csrf-bindings" },
+    csrf: { issue: () => "csrf-target", verify: (_actor, token) => token === "csrf-target" },
     control: { execute(request) {
       if (request.operation === "get_session") return sessionProjection;
       if (request.operation === "list_minds") return [personalRoute, {
@@ -1630,93 +1626,84 @@ test("Connections project and mutate exact credential access with presentation r
       },
       async revoke() { return true; },
     },
-    mindBindings: {
-      async list() { throw new Error("legacy binding projection must not be used"); },
+    writableTargets: {
       async listResolved(actor, credentials) {
         assert.equal(actor, registeredActor);
         assert.deepEqual(credentials, [{
           ownerId: bindingOwnerId,
+          credentialKind: "oauth_grant",
           scopes: ["content:read", "content:write"],
           state: "active",
         }]);
         return [{
           ownerId: bindingOwnerId,
-          bindingVersion: 8,
-          state: "active",
-          readBindings: [
-            {
-              readBindingId: "read-binding-personal",
-              staleAccessRef: `stale_v1_${"5".repeat(32)}`,
-              mindId: "space_personal",
-            },
-            { readBindingId: "read-binding-hidden", staleAccessRef, mindId: "space_hidden" },
-          ],
-          writeBinding: { writeBindingId: "write-binding-research", mindId: "space_research" },
-          automaticCapture: {
-            mode: "disabled",
-            writeBindingId: null,
-            updatedAt: null,
-          },
+          credentialKind: "oauth_grant",
+          lifecycleState: "active",
+          targetVersion,
+          targetMindId,
         }];
       },
-      async mutate() { throw new Error("legacy binding mutation must not be used"); },
       async mutateResolved(actor, credential, input) {
-        bindingCalls.push({ actor, credential, input });
-        if (conflict) {
-          throw Object.assign(new Error("stale"), { code: "binding_version_conflict" });
-        }
-        return { changed: true, replayed: false, bindingVersion: 9 };
+        targetCalls.push({ actor, credential, input });
+        if (conflict) throw Object.assign(new Error("stale"), { code: "target_conflict" });
+        targetVersion += 1;
+        targetMindId = input.mindRef === "/me" ? "space_personal" : null;
+        return { changed: true, replayed: false, targetVersion };
       },
     },
   });
 
-  const page = await handler(new Request(`${origin}/settings/connections`));
-  assert.equal(page.status, 200);
-  const html = await page.text();
-  assert.match(html, /Loading connections/);
-  assert.match(html, /data-connections-collection/);
-  assert.doesNotMatch(html, /Codex Marketplace|Can read|Can add and change/);
   const collection = await handler(new Request(`${origin}/api/v1/connections`));
   assert.equal(collection.status, 200);
   const collectionBody = await collection.json();
-  assert.equal(collectionBody.data.items[0].client_name, "Codex Marketplace");
-  assert.equal(collectionBody.data.items[0].connection_ref, connectionRef);
-  assert.doesNotMatch(html, /md_oauth_grant_internal_must_not_render|read-binding-|write-binding-|space_(?:personal|research)/);
+  assert.equal(collectionBody.data.items[0].readable_mind_count, 2);
+  assert.equal(collectionBody.data.items[0].writable_mind_selected, true);
 
   const detail = await handler(new Request(`${origin}/settings/connections/${connectionRef}`));
   assert.equal(detail.status, 200);
   const detailHtml = await detail.text();
-  assert.match(detailHtml, /data-connection-detail/);
-  assert.match(detailHtml, /data-binding-version="8"/);
+  assert.match(detailHtml, /data-target-version="8"/);
   assert.match(detailHtml, /Product Owner[\s\S]*\/me[\s\S]*private/);
   assert.match(detailHtml, /Research Notes[\s\S]*\/research-notes[\s\S]*unlisted/);
-  assert.match(detailHtml, /Access unavailable/);
-  assert.match(detailHtml, new RegExp(staleAccessRef));
-  assert.match(detailHtml, /data-access-action="detach_read"/);
   assert.match(detailHtml, /data-access-action="select_write"/);
-  assert.doesNotMatch(detailHtml, /Automatic knowledge capture|routine_non_sensitive|content:read|content:write/);
-  assert.doesNotMatch(detailHtml, /md_oauth_grant_internal_must_not_render|read-binding-|write-binding-|space_(?:hidden|personal|research)/);
+  assert.match(detailHtml, /data-access-action="clear_write"/);
+  assert.doesNotMatch(detailHtml, /attach_read|detach_read|stale_access_ref|binding-version/);
+  assert.doesNotMatch(detailHtml, /md_oauth_grant_internal_must_not_render|space_(?:personal|research)/);
 
   const denied = await handler(new Request(`${origin}/api/v1/connections/${connectionRef}/mind-access`, {
     method: "PATCH",
     headers: { origin, "x-csrf-token": "wrong", "content-type": "application/json" },
-    body: JSON.stringify({ action: "select_write", mind_ref: "/research-notes", expected_binding_version: 8 }),
+    body: JSON.stringify({ action: "select_write", mind_ref: "/me", expected_target_version: 8 }),
   }));
   assert.equal(denied.status, 403);
-  assert.equal(bindingCalls.length, 0);
+  assert.equal(targetCalls.length, 0);
+
+  const removed = await handler(new Request(`${origin}/api/v1/connections/${connectionRef}/mind-access`, {
+    method: "PATCH",
+    headers: {
+      origin,
+      "x-csrf-token": "csrf-target",
+      "content-type": "application/json",
+      "idempotency-key": "target:removed-read",
+    },
+    body: JSON.stringify({ action: "attach_read", mind_ref: "/me", expected_target_version: 8 }),
+  }));
+  assert.equal(removed.status, 400);
+  assert.equal((await removed.json()).error.code, "operation_removed");
+  assert.equal(targetCalls.length, 0);
 
   const applied = await handler(new Request(`${origin}/api/v1/connections/${connectionRef}/mind-access`, {
     method: "PATCH",
     headers: {
       origin,
-      "x-csrf-token": "csrf-bindings",
+      "x-csrf-token": "csrf-target",
       "content-type": "application/json",
-      "idempotency-key": "binding:product-site",
+      "idempotency-key": "target:product-site",
     },
     body: JSON.stringify({
       action: "select_write",
-      mind_ref: "/research-notes",
-      expected_binding_version: 8,
+      mind_ref: "/me",
+      expected_target_version: 8,
     }),
   }));
   assert.equal(applied.status, 200);
@@ -1724,43 +1711,20 @@ test("Connections project and mutate exact credential access with presentation r
   assert.equal(appliedBody.data.connection_ref, connectionRef);
   assert.equal(appliedBody.data.changed, true);
   assert.equal(appliedBody.data.replayed, false);
-  assert.equal(appliedBody.data.access.binding_version, 8);
+  assert.equal(appliedBody.data.access.target_version, 9);
+  assert.equal(appliedBody.data.access.writable_mind.route, "/me");
   assert.equal(JSON.stringify(appliedBody).includes(bindingOwnerId), false);
-  assert.equal(JSON.stringify(appliedBody).includes("read-binding-"), false);
-  assert.equal(bindingCalls[0].actor, registeredActor);
-  assert.deepEqual(bindingCalls[0].credential, {
+  assert.deepEqual(targetCalls[0].credential, {
     ownerId: bindingOwnerId,
+    credentialKind: "oauth_grant",
     scopes: ["content:read", "content:write"],
     state: "active",
   });
-  assert.deepEqual(bindingCalls[0].input, {
-    action: "bind_write",
-    mindRef: "/research-notes",
-    expectedBindingVersion: 8,
-    idempotencyKey: "binding:product-site",
-    binding_owner_id: bindingOwnerId,
-  });
-
-  const detached = await handler(new Request(`${origin}/api/v1/connections/${connectionRef}/mind-access`, {
-    method: "PATCH",
-    headers: {
-      origin,
-      "x-csrf-token": "csrf-bindings",
-      "content-type": "application/json",
-      "idempotency-key": "binding:detach-stale",
-    },
-    body: JSON.stringify({
-      action: "detach_read",
-      stale_access_ref: staleAccessRef,
-      expected_binding_version: 8,
-    }),
-  }));
-  assert.equal(detached.status, 200);
-  assert.deepEqual(bindingCalls[1].input, {
-    action: "detach_read",
-    readBindingId: "read-binding-hidden",
-    expectedBindingVersion: 8,
-    idempotencyKey: "binding:detach-stale",
+  assert.deepEqual(targetCalls[0].input, {
+    action: "select_write",
+    mindRef: "/me",
+    expectedTargetVersion: 8,
+    idempotencyKey: "target:product-site",
     binding_owner_id: bindingOwnerId,
   });
 
@@ -1769,18 +1733,22 @@ test("Connections project and mutate exact credential access with presentation r
     method: "PATCH",
     headers: {
       origin,
-      "x-csrf-token": "csrf-bindings",
+      "x-csrf-token": "csrf-target",
       "content-type": "application/json",
-      "idempotency-key": "binding:stale",
+      "idempotency-key": "target:stale",
     },
-    body: JSON.stringify({ action: "clear_write", expected_binding_version: 8 }),
+    body: JSON.stringify({ action: "clear_write", expected_target_version: 8 }),
   }));
   assert.equal(stale.status, 409);
-  assert.equal((await stale.json()).error.code, "binding_version_conflict");
+  const staleBody = await stale.json();
+  assert.equal(staleBody.error.code, "target_conflict");
+  assert.equal(JSON.stringify(staleBody).includes(bindingOwnerId), false);
 });
 
-test("read-only Connections omit every write control and require a separate write step", async () => {
+
+test("read-only Connections reject selection but allow recovery-safe clear", async () => {
   const connectionRef = `conn_v1_${"6".repeat(32)}`;
+  const targetCalls = [];
   const handler = createProductWebHttpHandler({
     applicationOrigin: origin,
     resolveIdentity: () => ({ kind: "authenticated", actor: registeredActor }),
@@ -1805,20 +1773,20 @@ test("read-only Connections omit every write control and require a separate writ
       },
       async revoke() { return true; },
     },
-    mindBindings: {
-      async list() { return []; },
+    writableTargets: {
       async listResolved() {
         return [{
           ownerId: "read_only_internal_owner",
-          bindingVersion: 1,
-          state: "active",
-          readBindings: [],
-          writeBinding: null,
-          automaticCapture: { mode: "disabled", writeBindingId: null, updatedAt: null },
+          credentialKind: "oauth_grant",
+          lifecycleState: "active",
+          targetVersion: 1,
+          targetMindId: "space_research",
         }];
       },
-      async mutate() { throw new Error("unused"); },
-      async mutateResolved() { throw new Error("write mutation must not run"); },
+      async mutateResolved(_actor, _credential, input) {
+        targetCalls.push(input);
+        return { changed: true, replayed: false, targetVersion: 2 };
+      },
     },
   });
 
@@ -1826,7 +1794,9 @@ test("read-only Connections omit every write control and require a separate writ
   assert.equal(response.status, 200);
   const html = await response.text();
   assert.match(html, /Can add and change:<\/strong> No/);
-  assert.doesNotMatch(html, /data-access-action="select_write"|data-access-action="clear_write"|Select one writable Mind/);
+  assert.match(html, /Previous writable Mind/);
+  assert.match(html, /data-access-action="clear_write"/);
+  assert.doesNotMatch(html, /data-access-action="select_write"|Select one writable Mind/);
 
   const mutation = await handler(new Request(`${origin}/api/v1/connections/${connectionRef}/mind-access`, {
     method: "PATCH",
@@ -1836,10 +1806,25 @@ test("read-only Connections omit every write control and require a separate writ
       "content-type": "application/json",
       "idempotency-key": "read-only:write",
     },
-    body: JSON.stringify({ action: "select_write", mind_ref: "/research-notes", expected_binding_version: 1 }),
+    body: JSON.stringify({ action: "select_write", mind_ref: "/research-notes", expected_target_version: 1 }),
   }));
   assert.equal(mutation.status, 409);
   assert.equal((await mutation.json()).error.code, "write_step_up_required");
+  assert.equal(targetCalls.length, 0);
+
+  const cleared = await handler(new Request(`${origin}/api/v1/connections/${connectionRef}/mind-access`, {
+    method: "PATCH",
+    headers: {
+      origin,
+      "x-csrf-token": "csrf-read-only",
+      "content-type": "application/json",
+      "idempotency-key": "read-only:clear",
+    },
+    body: JSON.stringify({ action: "clear_write", expected_target_version: 1 }),
+  }));
+  assert.equal(cleared.status, 200);
+  assert.equal(targetCalls.length, 1);
+  assert.equal(targetCalls[0].action, "clear_write");
 });
 
 test("connection lookup makes unknown, foreign, and revoked presentation refs indistinguishable", async () => {
@@ -1862,10 +1847,8 @@ test("connection lookup makes unknown, foreign, and revoked presentation refs in
       },
       async revoke() { throw new Error("must not revoke"); },
     },
-    mindBindings: {
-      async list() { bindingReads += 1; return []; },
+    writableTargets: {
       async listResolved() { bindingReads += 1; return []; },
-      async mutate() { throw new Error("must not mutate"); },
       async mutateResolved() { throw new Error("must not mutate"); },
     },
   });
@@ -1915,20 +1898,17 @@ test("connection pages stay bounded to the requested page and reject ambiguous l
       async read() { return null; },
       async revoke() { return false; },
     },
-    mindBindings: {
-      async list() { return []; },
+    writableTargets: {
       async listResolved(_actor, credentials) {
         bindingCalls.push(credentials);
         return credentials.map((credential) => ({
           ownerId: credential.ownerId,
-          bindingVersion: 0,
-          state: "active",
-          readBindings: [],
-          writeBinding: null,
-          automaticCapture: { mode: "disabled", writeBindingId: null, updatedAt: null },
+          credentialKind: credential.credentialKind,
+          lifecycleState: "active",
+          targetVersion: 0,
+          targetMindId: null,
         }));
       },
-      async mutate() { throw new Error("unused"); },
       async mutateResolved() { throw new Error("unused"); },
     },
   });
@@ -1940,8 +1920,8 @@ test("connection pages stay bounded to the requested page and reject ambiguous l
   assert.equal(pageBody.data.next_cursor, "next_page_cursor");
   assert.equal(JSON.stringify(pageBody).includes("page_owner_"), false);
   assert.deepEqual(bindingCalls, [[
-    { ownerId: ownerIds[0], scopes: ["content:read"], state: "active" },
-    { ownerId: ownerIds[1], scopes: ["content:read"], state: "active" },
+    { ownerId: ownerIds[0], credentialKind: "oauth_grant", scopes: ["content:read"], state: "active" },
+    { ownerId: ownerIds[1], credentialKind: "oauth_grant", scopes: ["content:read"], state: "active" },
   ]]);
   assert.deepEqual(listCalls[0], {
     principalId: registeredActor.principalId,
@@ -1978,10 +1958,8 @@ test("product UI keeps control read failures generic and still offers bounded re
       async listPage() { throw new Error("private token table diagnostic"); },
       async read() { return null; },
     },
-    mindBindings: {
-      async list() { return []; },
+    writableTargets: {
       async listResolved() { return []; },
-      async mutate() { throw new Error("unused"); },
       async mutateResolved() { throw new Error("unused"); },
     },
   });

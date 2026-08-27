@@ -804,6 +804,28 @@ async function modernTool(runtime, secret, id, name, args, benchmarkCorrelationI
   return body.result.structuredContent.data;
 }
 
+async function mutatePersonalTokenTarget(
+  runtime,
+  csrf,
+  personalTokenRef,
+  body,
+  idempotencyKey,
+) {
+  return responseFrom(runtime, new Request(
+    `${ORIGIN}/api/v1/mcp-tokens/${encodeURIComponent(personalTokenRef)}/mind-access`,
+    {
+      method: "PATCH",
+      headers: {
+        origin: ORIGIN,
+        "content-type": "application/json",
+        "x-csrf-token": csrf,
+        "idempotency-key": idempotencyKey,
+      },
+      body: JSON.stringify(body),
+    },
+  ));
+}
+
 test("Product Site persists success-only web/MCP activity and hides the UAT directory from non-operators", async () => {
   const database = new FakeD1Database();
   const bucket = new FakeR2Bucket();
@@ -1032,7 +1054,9 @@ test("empty account reaches a strict starter commit and first useful search/fetc
     }),
   }));
   assert.equal(issued.status, 200);
-  const secret = (await issued.json()).data.secret;
+  const issuedBody = await issued.json();
+  const secret = issuedBody.data.secret;
+  const personalTokenRef = issuedBody.data.token.personal_token_ref;
 
   const minds = await modernTool(
     runtime,
@@ -1077,7 +1101,6 @@ test("empty account reaches a strict starter commit and first useful search/fetc
       name: "commit_changeset",
       arguments: {
         mind: "/me",
-        write_binding_id: "write_binding_not_active",
         expected_revision: personal.head.revision_id,
         idempotency_key: "commit:starter-unbound",
         summary: "Must not commit without a binding",
@@ -1102,7 +1125,7 @@ test("empty account reaches a strict starter commit and first useful search/fetc
   assert.equal(unboundCommitBody.result.isError, true);
   assert.equal(
     unboundCommitBody.result.structuredContent.error.code,
-    "write_binding_required",
+    "writable_target_required",
   );
   const unboundExport = await responseFrom(runtime, new Request(
     `${ORIGIN}/api/v1/minds/me/exports`,
@@ -1126,19 +1149,18 @@ test("empty account reaches a strict starter commit and first useful search/fetc
   const unboundExportBody = await unboundExport.json();
   assert.equal(unboundExportBody.ok, true);
   assert.equal(unboundExportBody.data.job.revision_id, personal.head.revision_id);
-  const writeBinding = await modernTool(
+  const selectedTarget = await mutatePersonalTokenTarget(
     runtime,
-    secret,
-    "starter-bind-write",
-    "set_write_mind_binding",
+    settingsCsrf,
+    personalTokenRef,
     {
-      action: "bind",
-      mind: "/me",
-      expected_binding_version: 0,
-      idempotency_key: "binding:starter-e2e",
+      action: "select_write",
+      mind_ref: "/me",
+      expected_target_version: 0,
     },
+    "target:starter-e2e",
   );
-  const writeBindingId = writeBinding.current.write_binding_id;
+  assert.equal(selectedTarget.status, 200, await selectedTarget.clone().text());
   const initialRevisionId = personal.head.revision_id;
   const initialBrowse = await modernTool(
     runtime,
@@ -1175,7 +1197,6 @@ test("empty account reaches a strict starter commit and first useful search/fetc
     "commit_changeset",
     {
       mind: "/me",
-      write_binding_id: writeBindingId,
       expected_revision: initialRevisionId,
       idempotency_key: "commit:starter-e2e",
       summary: "Create strict starter Mind",
@@ -1219,7 +1240,6 @@ test("empty account reaches a strict starter commit and first useful search/fetc
         name: "commit_changeset",
         arguments: {
           mind: "/me",
-          write_binding_id: writeBindingId,
           expected_revision: starterRevisionId,
           idempotency_key: `commit:${id}`,
           summary: "Reject invalid index precondition",
@@ -1435,17 +1455,17 @@ test("empty account reaches a strict starter commit and first useful search/fetc
   assert.equal(exportStartedResponse.status, 202);
   const exportStarted = (await exportStartedResponse.json()).data;
 
-  await modernTool(
+  const clearedTarget = await mutatePersonalTokenTarget(
     runtime,
-    secret,
-    "starter-unbind-write",
-    "set_write_mind_binding",
+    settingsCsrf,
+    personalTokenRef,
     {
-      action: "unbind",
-      expected_binding_version: 1,
-      idempotency_key: "binding:starter-unbind",
+      action: "clear_write",
+      expected_target_version: 1,
     },
+    "target:starter-clear",
   );
+  assert.equal(clearedTarget.status, 200, await clearedTarget.clone().text());
   const detachedFetch = await modernMcp(runtime, secret, {
     jsonrpc: "2.0",
     id: "starter-fetch-after-unbind",
@@ -1560,8 +1580,8 @@ test("durable Product Site controls one token binding with ownership, CAS, read-
   const emptyPage = await responseFrom(runtime, new Request(`${ORIGIN}/settings/developer/mcp`));
   const emptyHtml = await emptyPage.text();
   assert.match(emptyHtml, /Web binding token/u);
-  assert.match(emptyHtml, /data-binding-version="0"/u);
-  assert.match(emptyHtml, /No readable Minds selected/u);
+  assert.match(emptyHtml, /data-target-version="0"/u);
+  assert.match(emptyHtml, /Readable Minds always follow current membership and visibility/u);
   assert.match(emptyHtml, /Can add and change[\s\S]*Not selected/u);
   assert.doesNotMatch(emptyHtml, /Automatic knowledge capture/u);
 
@@ -1582,61 +1602,40 @@ test("durable Product Site controls one token binding with ownership, CAS, read-
   const bound = await mutate({
     action: "select_write",
     mind_ref: "/me",
-    expected_binding_version: 0,
+    expected_target_version: 0,
   }, "binding:web-bind-write");
   assert.equal(bound.status, 200, await bound.clone().text());
   const boundBody = await bound.json();
   assert.equal(boundBody.data.changed, true);
   assert.equal(boundBody.data.replayed, false);
-  assert.equal(boundBody.data.access.binding_version, 1);
+  assert.equal(boundBody.data.access.target_version, 1);
 
   const boundPage = await responseFrom(runtime, new Request(`${ORIGIN}/settings/developer/mcp`));
   const boundHtml = await boundPage.text();
-  assert.match(boundHtml, /data-binding-version="1"/u);
+  assert.match(boundHtml, /data-target-version="1"/u);
   assert.match(boundHtml, /Can add and change[\s\S]*Web Binding E2E[\s\S]*\/me[\s\S]*private/u);
   assert.doesNotMatch(boundHtml, /Automatic knowledge capture|data-binding-action/u);
   assert.doesNotMatch(boundHtml, /principal_|space_personal/u);
 
-  const bindingReadResponse = await modernMcp(runtime, secret, {
-    jsonrpc: "2.0",
-    id: "web-binding-read-back",
-    method: "tools/call",
-    params: {
-      name: "get_mind_bindings",
-      arguments: {},
-      _meta: {
-        "io.modelcontextprotocol/protocolVersion": MCP_TARGET_PROTOCOL,
-        "io.modelcontextprotocol/clientInfo": { name: "web-binding-runtime-e2e", version: "0.0.0" },
-        "io.modelcontextprotocol/clientCapabilities": {},
-      },
-    },
-  });
-  assert.equal(bindingReadResponse.status, 200, await bindingReadResponse.clone().text());
-  const bindingReadBody = await bindingReadResponse.json();
-  assert.equal(bindingReadBody.result?.isError, false, JSON.stringify(bindingReadBody));
-  const bindings = bindingReadBody.result.structuredContent.data;
-  assert.equal(bindings.binding_version, 1);
-  assert.equal(bindings.write_binding.mind.route, "/me");
-  assert.equal(typeof bindings.write_binding.write_binding_id, "string");
-  assert.deepEqual(bindings.automatic_capture, {
-    mode: "disabled",
-    write_binding_id: null,
-    updated_at: null,
-  });
+  assert.equal(boundBody.data.access.writable_mind.route, "/me");
+  assert.equal(JSON.stringify(boundBody).includes("write_binding"), false);
+  assert.equal(JSON.stringify(boundBody).includes("space_id"), false);
 
   const stale = await mutate({
     action: "clear_write",
-    expected_binding_version: 0,
+    expected_target_version: 0,
   }, "binding:web-stale");
   assert.equal(stale.status, 409);
-  assert.equal((await stale.json()).error.code, "binding_version_conflict");
-  const afterStale = await modernTool(runtime, secret, "web-binding-after-stale", "get_mind_bindings", {});
-  assert.equal(afterStale.binding_version, 1);
-  assert.equal(afterStale.write_binding.mind.route, "/me");
+  assert.equal((await stale.json()).error.code, "target_conflict");
+  const afterStalePage = await responseFrom(
+    runtime,
+    new Request(`${ORIGIN}/settings/developer/mcp`),
+  );
+  assert.match(await afterStalePage.text(), /data-target-version="1"/u);
 
   const unknownField = await mutate({
     action: "clear_write",
-    expected_binding_version: 1,
+    expected_target_version: 1,
     principal_id: "must-not-be-accepted",
   }, "binding:web-unknown-field");
   assert.equal(unknownField.status, 400);
@@ -1667,7 +1666,7 @@ test("durable Product Site controls one token binding with ownership, CAS, read-
       body: JSON.stringify({
         action: "select_write",
         mind_ref: "/me",
-        expected_binding_version: 0,
+        expected_target_version: 0,
       }),
     },
   ));
@@ -1686,7 +1685,8 @@ test("durable Product Site controls one token binding with ownership, CAS, read-
     return html.slice(articleStart, articleEnd + "</article>".length);
   };
   const readOnlyPanel = panelFor(readOnlyHtml, readOnlyTokenRef);
-  assert.match(readOnlyPanel, /data-access-action="attach_read"/u);
+  assert.match(readOnlyPanel, /Readable Minds always follow current membership and visibility/u);
+  assert.doesNotMatch(readOnlyPanel, /data-access-action="attach_read"/u);
   assert.doesNotMatch(readOnlyPanel, /data-access-action="select_write"|Select one writable Mind/u);
 
   const revoked = await responseFrom(runtime, new Request(
@@ -1710,7 +1710,7 @@ test("durable Product Site controls one token binding with ownership, CAS, read-
   const afterRevoke = await mutate({
     action: "select_write",
     mind_ref: "/me",
-    expected_binding_version: 2,
+    expected_target_version: 1,
   }, "binding:web-after-revoke");
   assert.equal(afterRevoke.status, 404);
   assert.equal((await afterRevoke.json()).error.code, "personal_token_not_found");
@@ -1732,9 +1732,8 @@ test("durable Product Site controls one token binding with ownership, CAS, read-
         "idempotency-key": "binding:web-expired-read",
       },
       body: JSON.stringify({
-        action: "attach_read",
-        mind_ref: "/me",
-        expected_binding_version: 0,
+        action: "clear_write",
+        expected_target_version: 0,
       }),
     },
   ));
@@ -2049,6 +2048,18 @@ test("durable product runtime carries a Sites account token through Codex MCP an
   assert.match(secret, /^mdp_v1_/u);
   assert.match(personalTokenRef, /^ptok_v1_[0-9a-f]{32}$/u);
   assert.equal(JSON.stringify(issuedBody).includes("token_id"), false);
+  const selectedTarget = await mutatePersonalTokenTarget(
+    runtime,
+    registeredCsrf,
+    personalTokenRef,
+    {
+      action: "select_write",
+      mind_ref: "/me",
+      expected_target_version: 0,
+    },
+    "target:product-runtime-e2e",
+  );
+  assert.equal(selectedTarget.status, 200, await selectedTarget.clone().text());
 
   const discovery = await modernMcp(runtime, secret, {
     jsonrpc: "2.0",
@@ -2150,26 +2161,6 @@ test("durable product runtime carries a Sites account token through Codex MCP an
   );
 
   const previousRevisionId = personalMind.head.revision_id;
-  const boundWrite = await legacyMcp(runtime, secret, {
-    jsonrpc: "2.0",
-    id: "bind-write",
-    method: "tools/call",
-    params: {
-      _meta: { progressToken: "bind-write" },
-      name: "set_write_mind_binding",
-      arguments: {
-        action: "bind",
-        mind: "/me",
-        expected_binding_version: 0,
-        idempotency_key: "binding:product-runtime-e2e",
-      },
-    },
-  });
-  assert.equal(boundWrite.status, 200);
-  const boundWriteBody = await boundWrite.json();
-  assert.equal(boundWriteBody.result.isError, false, JSON.stringify(boundWriteBody));
-  const writeBindingId =
-    boundWriteBody.result.structuredContent.data.current.write_binding_id;
   const committed = await legacyMcp(runtime, secret, {
     jsonrpc: "2.0",
     id: 3,
@@ -2179,7 +2170,6 @@ test("durable product runtime carries a Sites account token through Codex MCP an
       name: "commit_changeset",
       arguments: {
         mind: "/me",
-        write_binding_id: writeBindingId,
         expected_revision: previousRevisionId,
         idempotency_key: "commit:product-runtime-e2e",
         summary: "Prove production transaction authorization",
@@ -2273,7 +2263,6 @@ test("durable product runtime carries a Sites account token through Codex MCP an
       name: "commit_changeset",
       arguments: {
         mind: "/me",
-        write_binding_id: writeBindingId,
         expected_revision: previousRevisionId,
         idempotency_key: "restore-stale:product-runtime-e2e",
         summary: "Attempt stale historical restore",
@@ -2302,7 +2291,6 @@ test("durable product runtime carries a Sites account token through Codex MCP an
       name: "commit_changeset",
       arguments: {
         mind: "/me",
-        write_binding_id: writeBindingId,
         expected_revision: advancedMind.head.revision_id,
         idempotency_key: "restore-fresh:product-runtime-e2e",
         summary: "Restore the selected historical state as a new revision",
@@ -3601,7 +3589,9 @@ test("request-triggered recovery reclaims a revision after an injected index dis
     body: JSON.stringify({ name: "Request recovery", scopes: ["content:write"] }),
   }));
   assert.equal(issued.status, 200);
-  const secret = (await issued.json()).data.secret;
+  const issuedBody = await issued.json();
+  const secret = issuedBody.data.secret;
+  const personalTokenRef = issuedBody.data.token.personal_token_ref;
 
   const personal = (await modernTool(
     runtime,
@@ -3611,18 +3601,18 @@ test("request-triggered recovery reclaims a revision after an injected index dis
     {},
   )).minds.find(({ route }) => route === "/me");
   assert.ok(personal);
-  const writeBinding = await modernTool(
+  const selectedTarget = await mutatePersonalTokenTarget(
     runtime,
-    secret,
-    "request-recovery-bind-write",
-    "set_write_mind_binding",
+    settingsCsrf,
+    personalTokenRef,
     {
-      action: "bind",
-      mind: "/me",
-      expected_binding_version: 0,
-      idempotency_key: "binding:request-recovery",
+      action: "select_write",
+      mind_ref: "/me",
+      expected_target_version: 0,
     },
+    "target:request-recovery",
   );
+  assert.equal(selectedTarget.status, 200, await selectedTarget.clone().text());
   const initialRevisionId = personal.head.revision_id;
   const initialBrowse = await modernTool(
     runtime,
@@ -3643,8 +3633,6 @@ test("request-triggered recovery reclaims a revision after an injected index dis
       name: "commit_changeset",
       arguments: {
         mind: "/me",
-        write_binding_id: writeBinding.current.write_binding_id,
-        expected_binding_version: writeBinding.binding_version,
         expected_revision: initialRevisionId,
         idempotency_key: "commit:request-recovery",
         summary: "Recovery dispatch fixture",
@@ -3852,44 +3840,6 @@ test("request-triggered recovery reclaims a revision after an injected index dis
     finalMinds.minds.find(({ route }) => route === "/me").head.revision_id,
     failedRevisionId,
   );
-
-  await modernTool(
-    restartedRuntime,
-    secret,
-    "request-recovery-unbind-write",
-    "set_write_mind_binding",
-    {
-      action: "unbind",
-      expected_binding_version: writeBinding.binding_version,
-      idempotency_key: "binding:request-recovery-unbind",
-    },
-  );
-
-  const unboundRead = await modernMcp(restartedRuntime, secret, {
-    jsonrpc: "2.0",
-    id: "request-recovery-unbound-read",
-    method: "tools/call",
-    params: {
-      name: "browse_entries",
-      arguments: { mind: "/me" },
-      _meta: {
-        "io.modelcontextprotocol/protocolVersion": MCP_TARGET_PROTOCOL,
-        "io.modelcontextprotocol/clientInfo": {
-          name: "mind-diary-request-recovery-e2e",
-          version: "0.0.0",
-        },
-        "io.modelcontextprotocol/clientCapabilities": {},
-      },
-    },
-  });
-  assert.equal(unboundRead.status, 200);
-  const unboundReadBody = await unboundRead.json();
-  assert.equal(unboundReadBody.result.isError, false);
-  assert.equal(
-    unboundReadBody.result.structuredContent.data.resolved_revision.revision_id,
-    failedRevisionId,
-  );
-  assert.equal(JSON.stringify(unboundReadBody).includes(recoveryMarker), false);
 
   assert.ok(scheduled.some(({ kind }) => kind === "revision_index"));
   for (const line of telemetryLines) {

@@ -35,9 +35,9 @@ import {
   type RegisteredSitesActor,
   type ProductSitesIdentityResolution,
   type ProductWebControlApplication,
+  type ProductWebCredentialWriteTargetOwner,
+  type ProductWebCredentialWriteTargets,
   type ProductWebOAuthConnections,
-  type ProductWebMindBindingOwner,
-  type ProductWebMindBindings,
   type ProductWebPerformanceRecorder,
 } from "./product-http-contracts.js";
 
@@ -622,35 +622,39 @@ function bindingUiCandidate(value: unknown): ProductBindingUiCandidate | null {
 }
 
 function safeCredentialAccess(
-  owner: ProductWebMindBindingOwner | undefined,
+  owner: ProductWebCredentialWriteTargetOwner | undefined,
   candidates: ReadonlyMap<string, MindBindingUiMind>,
-  canWrite: boolean,
+  canRead: boolean,
 ): SafeCredentialAccess | null {
   if (
     owner === undefined ||
-    owner.state !== "active" ||
-    !Number.isSafeInteger(owner.bindingVersion) ||
-    owner.bindingVersion < 0
+    !Number.isSafeInteger(owner.targetVersion) ||
+    owner.targetVersion < 0
   ) return null;
-  const readableMinds = owner.readBindings.map((binding) => {
-    const mind = candidates.get(binding.mindId);
-    if (mind !== undefined) {
-      return Object.freeze({ kind: "available" as const, mind });
-    }
-    if (!/^stale_v1_[0-9a-f]{32}$/u.test(binding.staleAccessRef)) return null;
-    return Object.freeze({
-      kind: "unavailable" as const,
-      staleAccessRef: binding.staleAccessRef,
-    });
-  });
-  if (readableMinds.some((target) => target === null)) return null;
-  const writeCandidate = owner.writeBinding === null
+  if (
+    owner.lifecycleState !== "active" &&
+    owner.lifecycleState !== "pending_upgrade"
+  ) return null;
+  const readableMinds = canRead
+    ? Object.freeze([...candidates.values()]) as readonly SafeConnectionMind[]
+    : Object.freeze([]) as readonly SafeConnectionMind[];
+  const writeCandidate = owner.targetMindId === null
     ? null
-    : candidates.get(owner.writeBinding.mindId) ?? null;
+    : candidates.get(owner.targetMindId) ?? null;
+  const writableTargetState = owner.lifecycleState === "pending_upgrade"
+    ? owner.credentialKind === "personal_token"
+      ? "reissue_required" as const
+      : "reconsent_required" as const
+    : owner.targetMindId === null
+      ? "not_selected" as const
+      : writeCandidate === null
+        ? "unavailable" as const
+        : "selected" as const;
   return Object.freeze({
-    bindingVersion: owner.bindingVersion,
-    readableMinds: Object.freeze(readableMinds as Exclude<(typeof readableMinds)[number], null>[]),
-    ...(canWrite ? { writableMind: writeCandidate } : {}),
+    targetVersion: owner.targetVersion,
+    readableMinds,
+    writableMind: writeCandidate,
+    writableTargetState,
     eligibleMinds: Object.freeze([...candidates.values()]) as readonly SafeConnectionMind[],
   });
 }
@@ -669,7 +673,7 @@ export function safeConnectionListItem(
     canWrite,
     readableMindCount: access.readableMinds.length,
     writableMindSelected:
-      canWrite && access.writableMind !== null && access.writableMind !== undefined,
+      canWrite && (access.writableTargetState === "selected" || access.writableTargetState === "unavailable"),
   });
 }
 
@@ -766,12 +770,13 @@ async function safeBindingCandidates(
   return candidates;
 }
 
-export async function safeBindingAccessByOwner(
+export async function safeWritableTargetAccessByOwner(
   control: ProductWebControlApplication,
-  mindBindings: ProductWebMindBindings,
+  writableTargets: ProductWebCredentialWriteTargets,
   actor: RegisteredSitesActor,
   credentials: readonly Readonly<{
     readonly ownerId: string;
+    readonly credentialKind: "oauth_grant" | "personal_token";
     readonly scopes: readonly ("content:read" | "content:write")[];
     readonly state: "active" | "revoked";
   }>[],
@@ -779,7 +784,7 @@ export async function safeBindingAccessByOwner(
   if (credentials.length === 0) return new Map();
   const [candidates, owners] = await Promise.all([
     safeBindingCandidates(control, actor),
-    mindBindings.listResolved(actor, credentials),
+    writableTargets.listResolved(actor, credentials),
   ]);
   const byOwner = new Map(owners.map((owner) => [owner.ownerId, owner] as const));
   const projections = new Map<string, SafeCredentialAccess>();
@@ -787,7 +792,7 @@ export async function safeBindingAccessByOwner(
     const access = safeCredentialAccess(
       byOwner.get(credential.ownerId),
       candidates,
-      credential.scopes.includes("content:write"),
+      credential.scopes.includes("content:read"),
     );
     if (access === null) throw new TypeError("safe Mind access projection is unavailable");
     projections.set(credential.ownerId, access);
@@ -795,33 +800,35 @@ export async function safeBindingAccessByOwner(
   return projections;
 }
 
-export async function mutateCredentialAccess(input: {
+export async function mutateCredentialWritableTarget(input: {
   readonly actor: RegisteredSitesActor;
-  readonly mindBindings: ProductWebMindBindings;
+  readonly writableTargets: ProductWebCredentialWriteTargets;
   readonly control: ProductWebControlApplication;
   readonly ownerId: string;
+  readonly credentialKind: "oauth_grant" | "personal_token";
   readonly scopes: readonly ("content:read" | "content:write")[];
   readonly request: Readonly<Record<string, unknown>>;
   readonly presentationKey: "connection_ref" | "personal_token_ref";
 }): Promise<Readonly<{ readonly changed: boolean; readonly replayed: boolean }>> {
   const action = input.request.action;
-  const expectedBindingVersion = nonnegativeInteger(input.request.expectedBindingVersion);
+  const expectedTargetVersion = nonnegativeInteger(input.request.expectedTargetVersion);
   const idempotencyKey = requiredString(input.request.idempotencyKey);
+  if (action === "attach_read" || action === "detach_read") {
+    throw Object.assign(new Error("Read access follows current ACL and cannot be selected."), {
+      code: "operation_removed",
+    });
+  }
   if (
-    expectedBindingVersion === null ||
+    expectedTargetVersion === null ||
     idempotencyKey === null ||
-    !["attach_read", "detach_read", "select_write", "clear_write"].includes(String(action))
+    !["select_write", "clear_write"].includes(String(action))
   ) {
     throw Object.assign(new Error("Invalid access mutation."), { code: "invalid_request" });
   }
-  const actionKeys = action === "attach_read" || action === "select_write"
-    ? ["mindRef"]
-    : action === "detach_read"
-      ? ["mindRef", "staleAccessRef"]
-      : [];
+  const actionKeys = action === "select_write" ? ["mindRef"] : [];
   const allowed = new Set([
     "action",
-    "expectedBindingVersion",
+    "expectedTargetVersion",
     "idempotencyKey",
     input.presentationKey,
     ...actionKeys,
@@ -830,65 +837,51 @@ export async function mutateCredentialAccess(input: {
     throw Object.assign(new Error("Invalid access mutation."), { code: "invalid_request" });
   }
   const mindRef = input.request.mindRef;
-  const staleAccessRef = input.request.staleAccessRef;
   if (
-    ((action === "attach_read" || action === "select_write") &&
+    (action === "select_write" &&
       (typeof mindRef !== "string" || !/^\/(?:me|[a-z0-9]+(?:-[a-z0-9]+)*)$/u.test(mindRef))) ||
-    (action === "detach_read" &&
-      !(
-        (typeof mindRef === "string" && /^\/(?:me|[a-z0-9]+(?:-[a-z0-9]+)*)$/u.test(mindRef) && staleAccessRef === undefined) ||
-        (typeof staleAccessRef === "string" && /^stale_v1_[0-9a-f]{32}$/u.test(staleAccessRef) && mindRef === undefined)
-      )) ||
-    (action === "clear_write" && (mindRef !== undefined || staleAccessRef !== undefined))
+    (action === "clear_write" && mindRef !== undefined)
   ) {
     throw Object.assign(new Error("Invalid access mutation."), { code: "invalid_request" });
   }
   if (
-    (action === "select_write" || action === "clear_write") &&
+    action === "select_write" &&
     !input.scopes.includes("content:write")
   ) {
     throw Object.assign(new Error("Write permission is required."), {
       code: "write_step_up_required",
     });
   }
-  const [owners, candidates] = await Promise.all([
-    input.mindBindings.listResolved(input.actor, [Object.freeze({
-      ownerId: input.ownerId,
-      scopes: input.scopes,
-      state: "active" as const,
-    })]),
-    safeBindingCandidates(input.control, input.actor),
-  ]);
-  const owner = owners.find((candidate) => candidate.ownerId === input.ownerId);
-  if (owner === undefined || owner.state !== "active") {
-    throw Object.assign(new Error("Credential was not found."), { code: "not_found" });
-  }
-  let readBindingId: string | undefined;
-  if (action === "detach_read") {
-    const matches = owner.readBindings.filter((binding) =>
-      typeof staleAccessRef === "string"
-        ? binding.staleAccessRef === staleAccessRef
-        : candidates.get(binding.mindId)?.route === mindRef);
-    if (matches.length !== 1) {
-      throw Object.assign(new Error("Readable Mind was not found."), { code: "not_found" });
-    }
-    readBindingId = matches[0]!.readBindingId;
-  }
-  const result = await input.mindBindings.mutateResolved(input.actor, Object.freeze({
+  const owners = await input.writableTargets.listResolved(input.actor, [Object.freeze({
     ownerId: input.ownerId,
+    credentialKind: input.credentialKind,
+    scopes: input.scopes,
+    state: "active" as const,
+  })]);
+  const owner = owners.find((candidate) => candidate.ownerId === input.ownerId);
+  if (owner === undefined || owner.lifecycleState !== "active") {
+    throw Object.assign(new Error("Credential was not found."), { code: "credential_not_found" });
+  }
+  if (action === "select_write") {
+    const candidates = await safeBindingCandidates(input.control, input.actor);
+    const target = [...candidates.values()].find((mind) => mind.route === mindRef);
+    if (target === undefined || !target.canWrite) {
+      throw Object.assign(new Error("Writable Mind is not eligible."), {
+        code: "target_ineligible",
+      });
+    }
+  }
+  const result = await input.writableTargets.mutateResolved(input.actor, Object.freeze({
+    ownerId: input.ownerId,
+    credentialKind: input.credentialKind,
     scopes: input.scopes,
     state: "active" as const,
   }), Object.freeze({
-    action: action === "select_write"
-      ? "bind_write"
-      : action === "clear_write"
-        ? "unbind_write"
-        : action,
+    action,
     binding_owner_id: input.ownerId,
-    expectedBindingVersion,
+    expectedTargetVersion,
     idempotencyKey,
     ...(typeof mindRef === "string" ? { mindRef } : {}),
-    ...(readBindingId === undefined ? {} : { readBindingId }),
   }));
   return Object.freeze({ changed: result.changed, replayed: result.replayed });
 }

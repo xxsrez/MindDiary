@@ -223,7 +223,6 @@ test("publishes strict commit schemas and truthful annotations", () => {
   assert.equal(commit.inputSchema.additionalProperties, false);
   assert.deepEqual(commit.inputSchema.required, [
     "mind",
-    "write_binding_id",
     "expected_revision",
     "idempotency_key",
     "summary",
@@ -275,8 +274,6 @@ test("publishes strict commit schemas and truthful annotations", () => {
   assert.equal(capture.inputSchema.additionalProperties, false);
   assert.deepEqual(capture.inputSchema.required, [
     "mind",
-    "write_binding_id",
-    "expected_binding_version",
     "expected_revision",
     "idempotency_key",
     "classification",
@@ -296,7 +293,7 @@ test("publishes strict commit schemas and truthful annotations", () => {
     destructiveHint: false,
     openWorldHint: false,
   });
-  assert.match(capture.description, /exact private active writable Mind/u);
+  assert.match(capture.description, /exact private Site-selected writable target/u);
   assert.match(capture.description, /Never use this tool for sensitive, cross-Mind/u);
 
 });

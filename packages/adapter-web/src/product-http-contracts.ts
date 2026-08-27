@@ -191,47 +191,29 @@ export interface ProductWebPersonalTokens {
   ): Promise<Readonly<ProductWebPersonalTokenRecord> | null>;
 }
 
-export interface ProductWebMindBindingOwner {
+export interface ProductWebCredentialWriteTargetOwner {
   readonly ownerId: string;
-  readonly bindingVersion: number;
-  readonly state: "active" | "revoked" | "deleted";
-  readonly readBindings: readonly {
-    readonly readBindingId: string;
-    readonly staleAccessRef: string;
-    readonly mindId: string;
-  }[];
-  readonly writeBinding: {
-    readonly writeBindingId: string;
-    readonly mindId: string;
-  } | null;
-  readonly automaticCapture: {
-    readonly mode: "disabled" | "routine_non_sensitive";
-    readonly writeBindingId: string | null;
-    readonly updatedAt: string | null;
-  };
+  readonly credentialKind: "oauth_grant" | "personal_token";
+  readonly lifecycleState: "active" | "pending_upgrade" | "revoked" | "deleted";
+  readonly targetVersion: number;
+  readonly targetMindId: string | null;
 }
 
-export interface ProductWebMindBindings {
-  list(
-    actor: RegisteredSitesActor,
-    ownerIds: readonly string[],
-  ): Promise<readonly ProductWebMindBindingOwner[]>;
+export interface ProductWebCredentialWriteTargets {
   listResolved(
     actor: RegisteredSitesActor,
     credentials: readonly Readonly<{
       readonly ownerId: string;
+      readonly credentialKind: "oauth_grant" | "personal_token";
       readonly scopes: readonly ("content:read" | "content:write")[];
       readonly state: "active" | "revoked";
     }>[],
-  ): Promise<readonly ProductWebMindBindingOwner[]>;
-  mutate(
-    actor: RegisteredSitesActor,
-    request: Readonly<Record<string, unknown>>,
-  ): Promise<unknown>;
+  ): Promise<readonly ProductWebCredentialWriteTargetOwner[]>;
   mutateResolved(
     actor: RegisteredSitesActor,
     credential: Readonly<{
       readonly ownerId: string;
+      readonly credentialKind: "oauth_grant" | "personal_token";
       readonly scopes: readonly ("content:read" | "content:write")[];
       readonly state: "active" | "revoked";
     }>,
@@ -239,7 +221,7 @@ export interface ProductWebMindBindings {
   ): Promise<Readonly<{
     readonly changed: boolean;
     readonly replayed: boolean;
-    readonly bindingVersion: number;
+    readonly targetVersion: number;
   }>>;
 }
 
@@ -268,7 +250,7 @@ export interface ProductWebHttpHandlerDependencies {
   readonly control: ProductWebControlApplication;
   readonly oauthConnections?: ProductWebOAuthConnections;
   readonly personalTokens?: ProductWebPersonalTokens;
-  readonly mindBindings?: ProductWebMindBindings;
+  readonly writableTargets?: ProductWebCredentialWriteTargets;
   readonly activity?: ProductWebActivityRecorder;
   readonly performance?: ProductWebPerformanceRecorder;
   /** Optional hosted-only coalescing window; defaults to zero to protect navigation latency. */

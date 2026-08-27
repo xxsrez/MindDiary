@@ -19,14 +19,16 @@ export interface SafeConnectionMind {
   readonly canWrite: boolean;
 }
 
-export type SafeConnectionReadTarget =
-  | { readonly kind: "available"; readonly mind: SafeConnectionMind }
-  | { readonly kind: "unavailable"; readonly staleAccessRef: string };
-
 export interface SafeCredentialAccess {
-  readonly bindingVersion: number;
-  readonly readableMinds: readonly SafeConnectionReadTarget[];
+  readonly targetVersion: number;
+  readonly readableMinds: readonly SafeConnectionMind[];
   readonly writableMind?: SafeConnectionMind | null;
+  readonly writableTargetState:
+    | "not_selected"
+    | "selected"
+    | "unavailable"
+    | "reconsent_required"
+    | "reissue_required";
   readonly eligibleMinds: readonly SafeConnectionMind[];
 }
 
@@ -88,7 +90,6 @@ export interface AdvancedMcpPageModel {
 
 const CONNECTION_REF = /^conn_v1_[0-9a-f]{32}$/u;
 const PERSONAL_TOKEN_REF = /^ptok_v1_[0-9a-f]{32}$/u;
-const STALE_ACCESS_REF = /^stale_v1_[0-9a-f]{32}$/u;
 
 function safeMindRoute(value: string): string | null {
   return /^\/(?:me|[a-z0-9]+(?:-[a-z0-9]+)*)$/u.test(value) ? value : null;
@@ -138,7 +139,7 @@ function renderConnectionCard(item: ConnectionListItem): string {
       <span class="md-token-state md-token-state--active">● Connected</span>
     </div>
     <dl class="md-token-card__metadata">
-      <div><dt>Can read</dt><dd>${item.canRead ? `${item.readableMindCount} selected` : "No"}</dd></div>
+      <div><dt>Can read</dt><dd>${item.canRead ? `${item.readableMindCount} available` : "No"}</dd></div>
       <div><dt>Can add and change</dt><dd>${item.canWrite ? (item.writableMindSelected ? "One Mind selected" : "Not selected") : "No"}</dd></div>
       <div><dt>Connected</dt><dd>${escapeUntrustedText(dateLabel(item.createdAt))}</dd></div>
       <div><dt>Last used</dt><dd>${escapeUntrustedText(dateLabel(item.lastUsedAt))}</dd></div>
@@ -183,35 +184,37 @@ function renderAccess(
   const safeRef = input.kind === "connection"
     ? (CONNECTION_REF.test(input.ref) ? input.ref : null)
     : (PERSONAL_TOKEN_REF.test(input.ref) ? input.ref : null);
-  if (safeRef === null || !Number.isSafeInteger(access.bindingVersion) || access.bindingVersion < 0) {
+  if (safeRef === null || !Number.isSafeInteger(access.targetVersion) || access.targetVersion < 0) {
     return `<section class="md-state md-state--error" role="alert"><h2>Mind access is unavailable</h2><p>Reload before changing this credential.</p></section>`;
   }
   const base = input.kind === "connection"
     ? `/api/v1/connections/${safeRef}`
     : `/api/v1/mcp-tokens/${safeRef}`;
   const reads = access.readableMinds.length === 0
-    ? `<li>No readable Minds selected.</li>`
-    : access.readableMinds.map((target) => {
-        if (target.kind === "unavailable") {
-          const stale = STALE_ACCESS_REF.test(target.staleAccessRef) ? target.staleAccessRef : null;
-          return `<li><span class="md-binding-target md-binding-target--unavailable"><strong>Access unavailable</strong><span>Mind metadata is hidden because current access no longer permits it.</span></span>${stale === null ? "" : `<button class="md-button md-button--secondary" type="button" data-access-action="detach_read" data-stale-access-ref="${stale}">Remove</button>`}</li>`;
-        }
-        const route = safeMindRoute(target.mind.route);
-        return `<li>${renderMind(target.mind)}${route === null ? "" : `<button class="md-button md-button--secondary" type="button" data-access-action="detach_read" data-mind-ref="${escapeUntrustedText(route)}">Remove</button>`}</li>`;
-      }).join("");
-  const readableOptions = access.eligibleMinds.map((mind) => {
-    const route = safeMindRoute(mind.route);
-    return route === null ? "" : `<option value="${escapeUntrustedText(route)}">${escapeUntrustedText(mind.name)} — ${escapeUntrustedText(route)}</option>`;
-  }).join("");
+    ? `<li>No Minds are currently readable.</li>`
+    : access.readableMinds.map((mind) => `<li>${renderMind(mind)}</li>`).join("");
   const writableOptions = access.eligibleMinds.filter((mind) => mind.canWrite).map((mind) => {
     const route = safeMindRoute(mind.route);
     return route === null ? "" : `<option value="${escapeUntrustedText(route)}">${escapeUntrustedText(mind.name)} — ${escapeUntrustedText(route)}</option>`;
   }).join("");
+  const targetSummary = access.writableTargetState === "selected" && access.writableMind !== null && access.writableMind !== undefined
+    ? renderMind(access.writableMind)
+    : access.writableTargetState === "unavailable"
+      ? '<p><strong>Access unavailable</strong></p><p>Mind metadata is hidden because current access no longer permits it. You can still clear this selection.</p>'
+      : access.writableTargetState === "reconsent_required"
+        ? '<p><strong>Reconnect required</strong></p><p>Reconnect this app to upgrade its write access. The existing target is not used until that succeeds.</p>'
+        : access.writableTargetState === "reissue_required"
+          ? '<p><strong>Reissue required</strong></p><p>Create a new personal token. Legacy write access is not transferred to the new token.</p>'
+          : "<p><strong>Not selected</strong></p>";
+  const targetMutable = access.writableTargetState !== "reconsent_required" && access.writableTargetState !== "reissue_required";
+  const hasSelectedTarget = access.writableTargetState === "selected" || access.writableTargetState === "unavailable";
   const write = input.canWrite
-    ? `<section aria-labelledby="write-access-heading"><h3 id="write-access-heading">Can add and change</h3>${access.writableMind === null || access.writableMind === undefined ? "<p><strong>Not selected</strong></p>" : renderMind(access.writableMind)}<div class="md-binding-controls"><form data-access-form data-access-action="select_write"><label>Select one writable Mind<select name="mind_ref" required><option value="">Choose a Mind</option>${writableOptions}</select></label><button class="md-button md-button--secondary" type="submit">Select</button></form>${access.writableMind === null || access.writableMind === undefined ? "" : `<button class="md-button md-button--secondary" type="button" data-access-action="clear_write">Clear writable Mind</button>`}</div></section>`
-    : "";
-  return `<section class="md-binding-panel" data-access-panel data-access-endpoint="${base}/mind-access" data-binding-version="${access.bindingVersion}">
-    <section aria-labelledby="read-access-heading"><h3 id="read-access-heading">Can read</h3><ul class="md-binding-list">${reads}</ul><form data-access-form data-access-action="attach_read"><label>Add a readable Mind<select name="mind_ref" required><option value="">Choose a Mind</option>${readableOptions}</select></label><button class="md-button md-button--secondary" type="submit">Add</button></form></section>
+    ? `<section aria-labelledby="write-access-heading"><h3 id="write-access-heading">Can add and change</h3>${targetSummary}${targetMutable ? `<div class="md-binding-controls"><form data-access-form data-access-action="select_write"><label>Select one writable Mind<select name="mind_ref" required><option value="">Choose a Mind</option>${writableOptions}</select></label><button class="md-button md-button--secondary" type="submit">Select</button></form>${hasSelectedTarget ? `<button class="md-button md-button--secondary" type="button" data-access-action="clear_write">Clear writable Mind</button>` : ""}</div>` : ""}</section>`
+    : hasSelectedTarget
+      ? `<section aria-labelledby="write-access-heading"><h3 id="write-access-heading">Previous writable Mind</h3>${targetSummary}<p>This credential can no longer write, but you can clear the old selection.</p><button class="md-button md-button--secondary" type="button" data-access-action="clear_write">Clear writable Mind</button></section>`
+      : "";
+  return `<section class="md-binding-panel" data-access-panel data-access-endpoint="${base}/mind-access" data-target-version="${access.targetVersion}">
+    <section aria-labelledby="read-access-heading"><h3 id="read-access-heading">Can read</h3><p>Readable Minds always follow current membership and visibility.</p><ul class="md-binding-list">${reads}</ul></section>
     ${write}
     <p class="md-form__status" role="status" aria-live="polite" data-access-status></p>
   </section>`;

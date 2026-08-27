@@ -231,6 +231,7 @@ export function failureCode(error: unknown): string {
 
 export function applicationErrorStatus(code: string): number {
   if (code === "authentication_required") return 401;
+  if (code === "operation_removed") return 400;
   if (code === "rate_limited") return 429;
   if (code === "search_index_unavailable") return 503;
   if (code === "binding_state_unavailable") return 503;

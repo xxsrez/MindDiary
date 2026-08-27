@@ -52,7 +52,6 @@ test("publishes strict native-file staging metadata and mixed commit operations"
   );
   assert.deepEqual(intent.inputSchema.required, [
     "mind",
-    "write_binding_id",
     "source_kind",
     "display_filename",
     "expected_size",
@@ -104,7 +103,6 @@ test("publishes strict native-file staging metadata and mixed commit operations"
   assert.equal(stage.name, "stage_bundle_file");
   assert.deepEqual(stage.inputSchema.required, [
     "mind",
-    "write_binding_id",
     "file",
     "idempotency_key",
   ]);
@@ -126,7 +124,6 @@ test("publishes strict native-file staging metadata and mixed commit operations"
   );
   assert.deepEqual(reconcile.inputSchema.required, [
     "mind",
-    "write_binding_id",
     "source_kind",
     "display_filename",
     "media_type",
@@ -442,7 +439,6 @@ test("product adapter terminates provider metadata and returns only verified sta
     name: "stage_bundle_file",
     arguments: {
       mind: "bundle-stage",
-      write_binding_id: "write_binding_stage",
       file: {
         file_id: "provider-secret-id",
         download_url: "https://files.oaiusercontent.com/file/temporary-secret",
@@ -521,13 +517,13 @@ test("product adapter terminates provider metadata and returns only verified sta
       source_kind,
       server_adapter_status,
       server_transport,
-      requires_write_binding,
+      requires_writable_target,
       max_bytes,
     }) => [
       source_kind,
       server_adapter_status,
       server_transport,
-      requires_write_binding,
+      requires_writable_target,
       max_bytes,
     ]),
     [
@@ -551,7 +547,6 @@ test("product adapter terminates provider metadata and returns only verified sta
     name: "reconcile_file_stage",
     arguments: {
       mind: "bundle-stage",
-      write_binding_id: "write_binding_stage",
       source_kind: "session_attachment",
       display_filename: "diagram.png",
       claimed_media_type: "image/png",
@@ -577,7 +572,6 @@ test("product adapter terminates provider metadata and returns only verified sta
     name: "reconcile_changeset",
     arguments: {
       mind: "bundle-stage",
-      write_binding_id: "write_binding_stage",
       expected_revision: "revision_head",
       idempotency_key: "commit-diagram",
       summary: "Publish diagram",

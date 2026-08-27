@@ -12,9 +12,10 @@ real-account first-user UAT receipt. Machine-readable OpenAPI и MCP JSON Schema
 сохраняют historical Release 0.1/0.2 evidence и проверяют миграцию к принятой
 [operation disposition Release 0.3](release-0.3-operation-disposition.md).
 Текущий candidate уже удаляет binding mutations и administrative export из
-обоих fresh MCP catalogs/schemas; остальные target route/argument/error changes
-остаются в своих implementation owners. Access shape принята в
-[MD-339 contract](credential-write-target.md).
+обоих fresh MCP catalogs/schemas. MD-343 реализует
+schema-verified credential target REST/UI и write-path generation fence по
+[MD-339 contract](credential-write-target.md); exact hosted UAT evidence нового
+candidate остаётся отдельным gate.
 
 Wire catalog ниже сохраняет historical Release 0.1/0.2 as-built и не
 переписывается MD-336. Целевая product authority Release 0.3 отделена явно;
@@ -397,12 +398,10 @@ Application-layer error имеет стабильный machine code:
 | `metadata_conflict` | `expected_metadata_version` stale. |
 | `revision_conflict` | `expected_revision` stale. |
 | `idempotency_conflict` | Key повторно использован с другим payload. |
-| `mind_binding_required` | Target не подключён для content read. |
-| `write_binding_required` | Active singleton write target отсутствует. |
-| `write_binding_stale` | Переданный immutable write binding больше не active/exact. |
-| `binding_version_conflict` | `expected_binding_version` stale. |
-| `binding_owner_revoked` | Grant/token больше не может использовать binding state. |
-| `binding_state_unavailable` | Persisted binding state malformed или временно недоступен. |
+| `writable_target_required` | Active credential не имеет выбранного writable target либо требует explicit upgrade/reissue. |
+| `writable_target_mismatch` | Explicit Mind не совпадает с Site-selected target; другой target не раскрывается. |
+| `writable_target_unavailable` | Credential, target state или pinned generation больше не usable. |
+| `target_conflict` | Site-only `expected_target_version` stale; mutation не меняет state и не раскрывает target metadata. |
 | `invalid_cursor` | Cursor malformed, expired или относится к другому query. |
 | `invalid_path` | Path нарушает canonical path policy. |
 | `file_exists` | `create_file` направлен в существующий path. |
@@ -1100,71 +1099,48 @@ Issuance errors, retry responses, logs, traces и metrics также не сод
 значения. Revoke идемпотентен и не удаляет audit metadata до account deletion
 policy.
 
-### Product Site Mind bindings
+### Product Site credential writable target
 
-Ordinary `/settings/connections/{connection_ref}` показывает binding state
-active OAuth grant через actor-owned presentation projection, а
-`/settings/developer/mcp` отдельно обслуживает personal tokens. Browser
-получает только current доступные name, route, visibility и write eligibility.
-Если ACL/visibility больше не разрешают
-metadata target, UI показывает `Access unavailable` без `mind_id`, `space_id`,
-name или route; отдельный connection-owned opaque `stale_access_ref` может
-использоваться только для удаления stale binding.
+Ordinary `/settings/connections/{connection_ref}` показывает actor-owned OAuth
+Connection, а `/settings/developer/mcp` — personal tokens. Обе поверхности
+получают derived current readable Minds и максимум один selected writable Mind.
+Browser не получает raw grant/token/owner/generation/`space_id`; unavailable
+selected target отображается без private metadata.
 
-Ordinary mutation использует actor-owned presentation locator, same-origin
-`Origin`, CSRF и `Idempotency-Key`:
+Mutation использует actor-owned presentation locator, same-origin `Origin`,
+CSRF, `Idempotency-Key` и target CAS:
 
 ```http
 PATCH /api/v1/connections/conn_v1_opaque/mind-access
 Content-Type: application/json
-Idempotency-Key: binding:opaque
+Idempotency-Key: target:opaque
 X-CSRF-Token: ...
 ```
-
-Select/switch одного writable Mind:
 
 ```json
 {
   "action": "select_write",
   "mind_ref": "/research-notes",
-  "expected_binding_version": 7
+  "expected_target_version": 7
 }
 ```
 
-Attach read использует `action: "attach_read"` и тот же `mind_ref`. Detach
-доступного target использует `action: "detach_read" + mind_ref`; после потери
-доступа вместо Mind locator передаётся exact собственный `stale_access_ref`.
-Clear использует только `action: "clear_write"` и version. Unknown fields,
-оба target selector одновременно, missing target и отрицательная version
-отклоняются.
+Разрешены только `select_write` и `clear_write`; clear не принимает `mind_ref`.
+Unknown fields, historical attach/detach actions, negative/stale version и
+client authority fields fail closed. Stale version возвращает Site-only
+`409 target_conflict` без state change и target metadata. `select_write`
+проверяет active lifecycle, current `content:write`, exact current writer role
+и eligibility. Recovery-safe `clear_write` требует только actor-owned active
+credential и потому остаётся доступен после ACL/role/target loss; revoked или
+expired credential возвращает indistinguishable actor-safe not-found.
 
-Automatic capture policy не показывается и не изменяется через ordinary
-Connections. Existing Advanced/post-MVP route сохраняет отдельные
-CSRF/CAS/idempotency boundaries; rebind/unbind/revoke/delete по-прежнему
-автоматически сбрасывают policy.
-
-Server не доверяет route owner: он заново подтверждает, что token/grant
-принадлежит текущему Sites principal, active и имеет required scope. Затем
-`mind_ref` разрешается server-side, проверяется current ACL, а mutation
-повторяет обычный transactional binding contract. Revoke/expiry/disconnect
-fail closed; stale version возвращает `409 binding_version_conflict` и никогда
-не переносит writable target автоматически.
-
-Success возвращает только:
-
-```json
-{
-  "changed": true,
-  "replayed": false,
-  "binding_version": 8
-}
-```
-
-После success browser перезагружает exact connection detail и читает
-authoritative server projection. UI явно разделяет readable Minds и ровно один
-`Can add and change` target либо `Not selected`, предупреждает, что switch лишает
-previous target write authority, и показывает immediate live-HEAD/history
-эффект `unlisted`/`public`. Binding не меняет visibility, membership или ACL.
+Success возвращает `changed`, `replayed` и fresh server-owned `access` с
+`target_version`; browser никогда не строит состояние из отправленного command.
+Fresh/reissued/reconnected credential имеет version 0 и empty target. Refresh
+того же OAuth grant сохраняет target; reconnect/reissue создаёт новый owner и
+не копирует target. UI разделяет current readable Minds и ровно один
+`Can add and change` target либо `Not selected`; target не меняет visibility,
+membership, scope или ACL.
 
 Exact query bounds, separate personal-token history cursor, presentation
 identity, identical `404` и write-step-up states заданы в

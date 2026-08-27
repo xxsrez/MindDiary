@@ -70,14 +70,13 @@ loss or target deletion without revealing target metadata. This action-specific
 split is normative; the shared `credential-control` profile must not be
 interpreted as adding the remaining select-only checks to recovery-safe clear.
 
-Это target disposition, а не описание уже изменённого runtime. В текущем
-as-built Sites helper `clear_write` всё ещё требует `content:write`, принимает
-`expected_binding_version`, возвращает `409 write_step_up_required` без write
-scope и пробрасывает stale CAS как `409 binding_version_conflict`. Executable
-fixture проверяет эти legacy predicates/results через реальный helper и HTTP
-handler и отдельно проверяет принятый target contract. MD-343 владеет runtime
-переходом к recovery-safe clear, `expected_target_version` и `target_conflict`;
-до его реализации MD-337 не заявляет target semantics реализованными.
+MD-343 реализует этот target disposition в Sites runtime. Обе actor-owned
+mutation routes принимают только `select_write | clear_write`, используют
+`expected_target_version` и возвращают `409 target_conflict` при stale CAS без
+изменения state или раскрытия target metadata. Read projection теперь выводится
+из current ACL/visibility, а recovery-safe `clear_write` не требует write scope,
+target ACL или writer role. Executable fixture проверяет эту реализацию через
+реальный helper и HTTP handler.
 
 ## REST control routes
 

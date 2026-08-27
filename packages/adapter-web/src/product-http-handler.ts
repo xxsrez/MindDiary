@@ -49,8 +49,8 @@ import {
   strictListQuery,
   strictPublicCatalogQuery,
   safePublicCatalogCursor,
-  safeBindingAccessByOwner,
-  mutateCredentialAccess,
+  safeWritableTargetAccessByOwner,
+  mutateCredentialWritableTarget,
 } from "./product-http-request-helpers.js";
 
 import {
@@ -193,9 +193,9 @@ export function createProductWebHttpHandler(
           ...(dependencies.personalTokens === undefined
             ? {}
             : { personalTokens: dependencies.personalTokens }),
-          ...(dependencies.mindBindings === undefined
+          ...(dependencies.writableTargets === undefined
             ? {}
-            : { mindBindings: dependencies.mindBindings }),
+            : { writableTargets: dependencies.writableTargets }),
           query: Object.freeze(uiQuery),
           listQuery,
         }));
@@ -309,7 +309,7 @@ export function createProductWebHttpHandler(
         if (
           identity.kind !== "authenticated" ||
           dependencies.oauthConnections === undefined ||
-          dependencies.mindBindings === undefined
+          dependencies.writableTargets === undefined
         ) return errorResponse(404, "connection_not_found", requestId);
         if (matched.operation === "list_connections") {
           const query = strictListQuery(url, false);
@@ -318,12 +318,13 @@ export function createProductWebHttpHandler(
             identity.actor.principalId,
             query,
           );
-          const access = await safeBindingAccessByOwner(
+          const access = await safeWritableTargetAccessByOwner(
             dependencies.control,
-            dependencies.mindBindings,
+            dependencies.writableTargets,
             identity.actor,
             page.items.map((connection) => Object.freeze({
               ownerId: connection.bindingOwnerId,
+              credentialKind: "oauth_grant" as const,
               scopes: connection.scopes,
               state: "active" as const,
             })),
@@ -358,11 +359,12 @@ export function createProductWebHttpHandler(
           return json(200, { ok: true, data: { revoked: true } });
         }
         const mutation = matched.operation === "mutate_connection_access"
-          ? await mutateCredentialAccess({
+          ? await mutateCredentialWritableTarget({
             actor: identity.actor,
-            mindBindings: dependencies.mindBindings,
+            writableTargets: dependencies.writableTargets,
             control: dependencies.control,
             ownerId: connection.bindingOwnerId,
+            credentialKind: "oauth_grant",
             scopes: connection.scopes,
             request: input,
             presentationKey: "connection_ref",
@@ -372,12 +374,13 @@ export function createProductWebHttpHandler(
           ? await dependencies.oauthConnections.read(identity.actor.principalId, connectionRef)
           : connection;
         if (fresh === null) return errorResponse(404, "connection_not_found", requestId);
-        const access = await safeBindingAccessByOwner(
+        const access = await safeWritableTargetAccessByOwner(
           dependencies.control,
-          dependencies.mindBindings,
+          dependencies.writableTargets,
           identity.actor,
           [Object.freeze({
             ownerId: fresh.bindingOwnerId,
+            credentialKind: "oauth_grant" as const,
             scopes: fresh.scopes,
             state: "active" as const,
           })],
@@ -401,7 +404,7 @@ export function createProductWebHttpHandler(
         if (
           identity.kind !== "authenticated" ||
           dependencies.personalTokens === undefined ||
-          dependencies.mindBindings === undefined
+          dependencies.writableTargets === undefined
         ) return errorResponse(404, "personal_token_not_found", requestId);
         if (matched.operation === "list_personal_token_page") {
           const query = strictListQuery(url, true);
@@ -409,12 +412,13 @@ export function createProductWebHttpHandler(
           const state = query.state ?? "active";
           const page = await dependencies.personalTokens.listPage(identity.actor, { ...query, state });
           const access = state === "active"
-            ? await safeBindingAccessByOwner(
+            ? await safeWritableTargetAccessByOwner(
                 dependencies.control,
-                dependencies.mindBindings,
+                dependencies.writableTargets,
                 identity.actor,
                 page.items.map((token) => Object.freeze({
                   ownerId: token.bindingOwnerId,
+                  credentialKind: "personal_token" as const,
                   scopes: token.scopes,
                   state: "active" as const,
                 })),
@@ -442,23 +446,25 @@ export function createProductWebHttpHandler(
         if (token === null || token.state !== "active") {
           return errorResponse(404, "personal_token_not_found", requestId);
         }
-        const mutation = await mutateCredentialAccess({
+        const mutation = await mutateCredentialWritableTarget({
           actor: identity.actor,
-          mindBindings: dependencies.mindBindings,
+          writableTargets: dependencies.writableTargets,
           control: dependencies.control,
           ownerId: token.bindingOwnerId,
+          credentialKind: "personal_token",
           scopes: token.scopes,
           request: input,
           presentationKey: "personal_token_ref",
         });
         const fresh = await dependencies.personalTokens.read(identity.actor, personalTokenRef);
         if (fresh === null) return errorResponse(404, "personal_token_not_found", requestId);
-        const access = await safeBindingAccessByOwner(
+        const access = await safeWritableTargetAccessByOwner(
           dependencies.control,
-          dependencies.mindBindings,
+          dependencies.writableTargets,
           identity.actor,
           [Object.freeze({
             ownerId: fresh.bindingOwnerId,
+            credentialKind: "personal_token" as const,
             scopes: fresh.scopes,
             state: "active" as const,
           })],

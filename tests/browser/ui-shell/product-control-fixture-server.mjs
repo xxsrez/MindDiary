@@ -208,10 +208,8 @@ const handler = createProductWebHttpHandler({
     async read() { return null; },
     async revoke() { return false; },
   },
-  mindBindings: {
-    async list() { return []; },
+  writableTargets: {
     async listResolved() { return []; },
-    async mutate() { throw new Error("unused"); },
     async mutateResolved() { throw new Error("unused"); },
   },
 });

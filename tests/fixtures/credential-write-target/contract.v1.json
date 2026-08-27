@@ -4,7 +4,7 @@
   "source": "docs/specs/credential-write-target.md",
   "decision": "docs/decisions/0022-site-controlled-credential-write-target.md",
   "release": "0.3",
-  "status": "accepted_contract_not_implemented",
+  "status": "implemented_repository_candidate_uat_pending",
   "readAuthorization": {
     "explicitMindRequired": true,
     "revisionResolutionRequired": true,

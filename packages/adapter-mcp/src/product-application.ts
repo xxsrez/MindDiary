@@ -159,10 +159,6 @@ function hasExactKeys(
   );
 }
 
-function bindingVersionValue(value: unknown): value is number {
-  return Number.isSafeInteger(value) && (value as number) >= 0;
-}
-
 function idempotencyKeyValue(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
 }
@@ -179,7 +175,6 @@ const FILE_INGRESS_SOURCE_KINDS = new Set([
 function validStageBundleFileInput(input: Readonly<Record<string, unknown>>): boolean {
   const allowed = new Set([
     "mind",
-    "writeBindingId",
     "file",
     "idempotencyKey",
     "displayFilename",
@@ -188,7 +183,6 @@ function validStageBundleFileInput(input: Readonly<Record<string, unknown>>): bo
   ]);
   return Object.keys(input).every((key) => allowed.has(key)) &&
     stringValue(input.mind) !== null &&
-    stringValue(input.writeBindingId) !== null &&
     input.file !== null && typeof input.file === "object" && !Array.isArray(input.file) &&
     idempotencyKeyValue(input.idempotencyKey) &&
     (input.displayFilename === undefined || stringValue(input.displayFilename) !== null) &&
@@ -203,7 +197,6 @@ function validStageBundleFileInput(input: Readonly<Record<string, unknown>>): bo
 function validReconcileFileStageInput(input: Readonly<Record<string, unknown>>): boolean {
   const allowed = new Set([
     "mind",
-    "writeBindingId",
     "sourceKind",
     "displayFilename",
     "claimedMediaType",
@@ -216,7 +209,6 @@ function validReconcileFileStageInput(input: Readonly<Record<string, unknown>>):
   ]);
   return Object.keys(input).every((key) => allowed.has(key)) &&
     stringValue(input.mind) !== null &&
-    stringValue(input.writeBindingId) !== null &&
     typeof input.sourceKind === "string" &&
     FILE_INGRESS_SOURCE_KINDS.has(input.sourceKind) &&
     stringValue(input.displayFilename) !== null &&
@@ -279,8 +271,6 @@ function validCaptureSources(value: unknown): boolean {
 function validCaptureInput(input: Readonly<Record<string, unknown>>): boolean {
   return hasExactKeys(input, [
     "mind",
-    "writeBindingId",
-    "expectedBindingVersion",
     "expectedRevision",
     "idempotencyKey",
     "classification",
@@ -292,8 +282,6 @@ function validCaptureInput(input: Readonly<Record<string, unknown>>): boolean {
     "sources",
   ]) &&
     stringValue(input.mind) !== null &&
-    stringValue(input.writeBindingId) !== null &&
-    bindingVersionValue(input.expectedBindingVersion) &&
     stringValue(input.expectedRevision) !== null &&
     idempotencyKeyValue(input.idempotencyKey) &&
     input.classification === "routine_non_sensitive" &&
@@ -305,12 +293,100 @@ function validCaptureInput(input: Readonly<Record<string, unknown>>): boolean {
     validCaptureSources(input.sources);
 }
 
+function validChangesetInput(input: Readonly<Record<string, unknown>>): boolean {
+  return hasExactKeys(input, [
+    "mind",
+    "expectedRevision",
+    "idempotencyKey",
+    "summary",
+    "operations",
+  ]) &&
+    stringValue(input.mind) !== null &&
+    stringValue(input.expectedRevision) !== null &&
+    idempotencyKeyValue(input.idempotencyKey) &&
+    typeof input.summary === "string" &&
+    Array.isArray(input.operations) && input.operations.length > 0;
+}
+
 /** Complete custom Mind-aware content application behind the MCP HTTP adapters. */
 export class ProductMcpContentApplication implements McpContentApplication {
   readonly #dependencies: ProductMcpApplicationDependencies;
 
   constructor(dependencies: ProductMcpApplicationDependencies) {
     this.#dependencies = dependencies;
+  }
+
+  async #resolveWritableTarget(
+    actor: AuthenticatedActor,
+    spaceId: string,
+  ): Promise<
+    | Readonly<{ kind: "ready"; writeBindingId: string; targetVersion: number }>
+    | Readonly<{ kind: "error"; result: unknown }>
+  > {
+    const current = await this.#dependencies.bindings.read({ actor });
+    if (current.kind === "writable_target_required") {
+      return Object.freeze({
+        kind: "error",
+        result: this.#writableTargetError(actor.requestId, "writable_target_required"),
+      });
+    }
+    if (
+      current.kind !== "ready" ||
+      current.bindings.bindingSet.state !== "active"
+    ) {
+      return Object.freeze({
+        kind: "error",
+        result: this.#writableTargetError(actor.requestId, "writable_target_unavailable"),
+      });
+    }
+    const write = current.bindings.writeBinding;
+    if (write === null) {
+      return Object.freeze({
+        kind: "error",
+        result: this.#writableTargetError(actor.requestId, "writable_target_required"),
+      });
+    }
+    if (write.state !== "active") {
+      return Object.freeze({
+        kind: "error",
+        result: this.#writableTargetError(actor.requestId, "writable_target_unavailable"),
+      });
+    }
+    if (write.spaceId !== spaceId) {
+      return Object.freeze({
+        kind: "error",
+        result: this.#writableTargetError(actor.requestId, "writable_target_mismatch"),
+      });
+    }
+    return Object.freeze({
+      kind: "ready",
+      writeBindingId: write.writeBindingId,
+      targetVersion: current.bindings.bindingSet.bindingVersion,
+    });
+  }
+
+  #writableTargetError(
+    requestId: AuthenticatedActor["requestId"],
+    code:
+      | "writable_target_required"
+      | "writable_target_mismatch"
+      | "writable_target_unavailable",
+    retryable = false,
+  ) {
+    const messages = Object.freeze({
+      writable_target_required:
+        "Select one writable Mind in the Site connection settings before writing.",
+      writable_target_mismatch:
+        "The requested Mind is not the writable target selected for this credential.",
+      writable_target_unavailable:
+        "The selected writable Mind or credential is no longer available.",
+    });
+    return createMcpToolErrorResult(
+      requestId,
+      code,
+      messages[code],
+      retryable,
+    );
   }
 
   async listTools(_request: {
@@ -443,7 +519,7 @@ export class ProductMcpContentApplication implements McpContentApplication {
               sourceKind,
               serverAdapterStatus: available ? "available" : "not_available",
               serverTransport: available ? "companion_upload_intent" : "none",
-              requiresWriteBinding: available,
+              requiresWritableTarget: available,
               maxBytes: available ? 268_435_456 : 0,
               fallback: "none",
             });
@@ -473,7 +549,6 @@ export class ProductMcpContentApplication implements McpContentApplication {
         if (
           !hasExactKeys(input, [
             "mind",
-            "writeBindingId",
             "sourceKind",
             "displayFilename",
             ...(input.claimedMediaType === undefined
@@ -514,6 +589,11 @@ export class ProductMcpContentApplication implements McpContentApplication {
             false,
           );
         }
+        const target = await this.#resolveWritableTarget(
+          request.actor,
+          info.mind.mindId,
+        );
+        if (target.kind === "error") return target.result;
         const {
           mind: _mind,
           ...intentArguments
@@ -521,7 +601,10 @@ export class ProductMcpContentApplication implements McpContentApplication {
         const created = await this.#dependencies.uploadIntents.create(
           request.actor,
           info.mind.mindId,
-          intentArguments,
+          Object.freeze({
+            ...intentArguments,
+            write_binding_id: target.writeBindingId,
+          }),
         );
         if (created.kind === "denied") {
           const decision = created.decision as Readonly<{
@@ -536,6 +619,17 @@ export class ProductMcpContentApplication implements McpContentApplication {
           );
         }
         if (created.kind === "invalid") {
+          if (
+            created.code === "write_binding_required" ||
+            created.code === "write_binding_stale"
+          ) {
+            return this.#writableTargetError(
+              request.actor.requestId,
+              created.code === "write_binding_required"
+                ? "writable_target_required"
+                : "writable_target_unavailable",
+            );
+          }
           return createMcpToolErrorResult(
             request.actor.requestId,
             created.code,
@@ -607,33 +701,11 @@ export class ProductMcpContentApplication implements McpContentApplication {
             false,
           );
         }
-        const current = await this.#dependencies.bindings.read({ actor: request.actor });
-        if (current.kind !== "ready") {
-          return this.#bindingError(request.actor.requestId, current.kind);
-        }
-        if (current.bindings.bindingSet.state !== "active") {
-          return this.#bindingError(request.actor.requestId, "binding_owner_revoked");
-        }
-        const write = current.bindings.writeBinding;
-        if (write === null) {
-          return createMcpToolErrorResult(
-            request.actor.requestId,
-            "write_binding_required",
-            "Select exactly one writable Mind before staging a file.",
-            false,
-          );
-        }
-        if (
-          write.writeBindingId !== input.writeBindingId ||
-          write.spaceId !== info.mind.mindId
-        ) {
-          return createMcpToolErrorResult(
-            request.actor.requestId,
-            "write_binding_stale",
-            "The writable Mind changed; inspect current bindings and stage again.",
-            false,
-          );
-        }
+        const target = await this.#resolveWritableTarget(
+          request.actor,
+          info.mind.mindId,
+        );
+        if (target.kind === "error") return target.result;
         if (
           this.#dependencies.nativeFiles === undefined ||
           this.#dependencies.staging === undefined
@@ -667,7 +739,7 @@ export class ProductMcpContentApplication implements McpContentApplication {
         const staged = await this.#dependencies.staging.stageStream({
           actor: request.actor,
           spaceId: info.mind.mindId,
-          writeBindingId: input.writeBindingId,
+          writeBindingId: target.writeBindingId as never,
           displayFilename: input.displayFilename ?? downloaded.fileName,
           claimedMediaType: downloaded.mimeType,
           stream: downloaded.stream,
@@ -681,6 +753,19 @@ export class ProductMcpContentApplication implements McpContentApplication {
             code?: unknown;
             retryable?: unknown;
           }>;
+          if (
+            decision.code === "write_binding_required" ||
+            decision.code === "write_binding_stale" ||
+            decision.code === "binding_state_unavailable"
+          ) {
+            return this.#writableTargetError(
+              request.actor.requestId,
+              decision.code === "write_binding_required"
+                ? "writable_target_required"
+                : "writable_target_unavailable",
+              decision.retryable === true,
+            );
+          }
           return createMcpToolErrorResult(
             request.actor.requestId,
             typeof decision.code === "string" ? decision.code : "forbidden",
@@ -689,6 +774,12 @@ export class ProductMcpContentApplication implements McpContentApplication {
           );
         }
         if (staged.kind === "invalid") {
+          if (staged.code === "binding_mismatch") {
+            return this.#writableTargetError(
+              request.actor.requestId,
+              "writable_target_unavailable",
+            );
+          }
           const code = stageFailureCode(staged.code);
           return createMcpToolErrorResult(
             request.actor.requestId,
@@ -749,10 +840,15 @@ export class ProductMcpContentApplication implements McpContentApplication {
             false,
           );
         }
+        const target = await this.#resolveWritableTarget(
+          request.actor,
+          info.mind.mindId,
+        );
+        if (target.kind === "error") return target.result;
         const reconciled = await this.#dependencies.ingress.reconcileStage({
           actor: request.actor,
           spaceId: info.mind.mindId,
-          writeBindingId: input.writeBindingId,
+          writeBindingId: target.writeBindingId as never,
           sourceKind: input.sourceKind,
           displayFilename: input.displayFilename,
           claimedMediaType: input.claimedMediaType,
@@ -774,6 +870,19 @@ export class ProductMcpContentApplication implements McpContentApplication {
             code?: unknown;
             retryable?: unknown;
           }>;
+          if (
+            decision.code === "write_binding_required" ||
+            decision.code === "write_binding_stale" ||
+            decision.code === "binding_state_unavailable"
+          ) {
+            return this.#writableTargetError(
+              request.actor.requestId,
+              decision.code === "write_binding_required"
+                ? "writable_target_required"
+                : "writable_target_unavailable",
+              decision.retryable === true,
+            );
+          }
           return createMcpToolErrorResult(
             request.actor.requestId,
             typeof decision.code === "string" ? decision.code : "forbidden",
@@ -782,6 +891,12 @@ export class ProductMcpContentApplication implements McpContentApplication {
           );
         }
         if (reconciled.kind === "invalid") {
+          if (reconciled.code === "binding_mismatch") {
+            return this.#writableTargetError(
+              request.actor.requestId,
+              "writable_target_unavailable",
+            );
+          }
           const code = stageFailureCode(reconciled.code);
           return createMcpToolErrorResult(
             request.actor.requestId,
@@ -815,6 +930,14 @@ export class ProductMcpContentApplication implements McpContentApplication {
           "Created a one-use BundleFile download.",
         );
       case "commit_changeset": {
+        if (!validChangesetInput(input)) {
+          return createMcpToolErrorResult(
+            request.actor.requestId,
+            "invalid_request",
+            "The changeset arguments are invalid.",
+            false,
+          );
+        }
         const info = await this.#dependencies.discovery.getMindInfo(request.actor, input.mind, { kind: "head" });
         if (!info.contentCapabilities.includes("commit")) {
           return createMcpToolErrorResult(
@@ -824,10 +947,15 @@ export class ProductMcpContentApplication implements McpContentApplication {
             false,
           );
         }
+        const target = await this.#resolveWritableTarget(
+          request.actor,
+          info.mind.mindId,
+        );
+        if (target.kind === "error") return target.result;
         const result = await this.#dependencies.commits.commit({
           actor: request.actor,
           spaceId: info.mind.mindId,
-          writeBindingId: input.writeBindingId,
+          writeBindingId: target.writeBindingId as never,
           expectedRevisionId: input.expectedRevision as never,
           idempotencyKey: input.idempotencyKey as never,
           summary: input.summary as never,
@@ -857,20 +985,37 @@ export class ProductMcpContentApplication implements McpContentApplication {
             : result.kind === "invalid"
               ? result.error.code
               : result.kind;
+        if (
+          code === "write_binding_required" ||
+          code === "write_binding_stale" ||
+          code === "binding_state_unavailable"
+        ) {
+          return this.#writableTargetError(
+            request.actor.requestId,
+            code === "write_binding_required"
+              ? "writable_target_required"
+              : "writable_target_unavailable",
+            result.kind === "denied" && result.decision.retryable,
+          );
+        }
         return createMcpToolErrorResult(
           request.actor.requestId,
           code,
-          code === "write_binding_required"
-            ? "Select exactly one writable Mind before committing."
-            : code === "write_binding_stale"
-              ? "The writable Mind changed; inspect current bindings and rebuild the commit."
-              : "The changeset was not committed.",
+          "The changeset was not committed.",
           result.kind === "revision_conflict" ||
             (result.kind === "denied" && result.decision.retryable),
           output as Readonly<Record<string, unknown>>,
         );
       }
       case "reconcile_changeset": {
+        if (!validChangesetInput(input)) {
+          return createMcpToolErrorResult(
+            request.actor.requestId,
+            "invalid_request",
+            "The changeset reconciliation arguments are invalid.",
+            false,
+          );
+        }
         const info = await this.#dependencies.discovery.getMindInfo(
           request.actor,
           input.mind,
@@ -884,10 +1029,15 @@ export class ProductMcpContentApplication implements McpContentApplication {
             false,
           );
         }
+        const target = await this.#resolveWritableTarget(
+          request.actor,
+          info.mind.mindId,
+        );
+        if (target.kind === "error") return target.result;
         const result = await this.#dependencies.ingress.reconcileCommit({
           actor: request.actor,
           spaceId: info.mind.mindId,
-          writeBindingId: input.writeBindingId,
+          writeBindingId: target.writeBindingId as never,
           expectedRevisionId: input.expectedRevision as never,
           idempotencyKey: input.idempotencyKey as never,
           summary: input.summary as never,
@@ -921,6 +1071,19 @@ export class ProductMcpContentApplication implements McpContentApplication {
           : result.kind === "invalid"
             ? result.error.code
             : result.kind;
+        if (
+          code === "write_binding_required" ||
+          code === "write_binding_stale" ||
+          code === "binding_state_unavailable"
+        ) {
+          return this.#writableTargetError(
+            request.actor.requestId,
+            code === "write_binding_required"
+              ? "writable_target_required"
+              : "writable_target_unavailable",
+            result.kind === "denied" && result.decision.retryable,
+          );
+        }
         return createMcpToolErrorResult(
           request.actor.requestId,
           code,
@@ -951,11 +1114,16 @@ export class ProductMcpContentApplication implements McpContentApplication {
             false,
           );
         }
+        const target = await this.#resolveWritableTarget(
+          request.actor,
+          info.mind.mindId,
+        );
+        if (target.kind === "error") return target.result;
         const result = await this.#dependencies.capture.capture({
           actor: request.actor,
           spaceId: info.mind.mindId,
-          writeBindingId: input.writeBindingId,
-          expectedBindingVersion: input.expectedBindingVersion,
+          writeBindingId: target.writeBindingId as never,
+          expectedBindingVersion: target.targetVersion,
           expectedRevisionId: input.expectedRevision,
           idempotencyKey: input.idempotencyKey,
           classification: input.classification,
@@ -994,8 +1162,22 @@ export class ProductMcpContentApplication implements McpContentApplication {
         const code = result.kind === "denied"
           ? result.decision.code
           : result.kind === "invalid"
-            ? result.error.code
-            : result.kind;
+              ? result.error.code
+              : result.kind;
+        if (
+          code === "write_binding_required" ||
+          code === "write_binding_stale" ||
+          code === "binding_state_unavailable" ||
+          code === "capture_binding_stale"
+        ) {
+          return this.#writableTargetError(
+            request.actor.requestId,
+            code === "write_binding_required"
+              ? "writable_target_required"
+              : "writable_target_unavailable",
+            result.kind === "denied" && result.decision.retryable,
+          );
+        }
         const messages: Readonly<Record<string, string>> = Object.freeze({
           invalid_capture_request: "The capture arguments are invalid or outside the routine non-sensitive policy.",
           capture_disabled: "Automatic capture is disabled for this credential.",
@@ -1018,28 +1200,4 @@ export class ProductMcpContentApplication implements McpContentApplication {
     }
   }
 
-  #bindingError(
-    requestId: AuthenticatedActor["requestId"],
-    code: string,
-    retryable = false,
-  ) {
-    const messages: Readonly<Record<string, string>> = Object.freeze({
-      invalid_request: "The binding tool arguments are invalid.",
-      mind_not_found: "Mind was not found.",
-      insufficient_scope: "The token does not allow this binding operation.",
-      capability_denied: "The current principal cannot bind this Mind.",
-      access_denied: "Mind was not found.",
-      binding_owner_revoked: "The token or OAuth grant can no longer use bindings.",
-      binding_state_unavailable: "Mind binding state is unavailable.",
-      idempotency_conflict: "The idempotency key was already used for another binding mutation.",
-      effect_conflict: "Binding audit state changed; retry with a fresh request.",
-    });
-    const safeCode = code === "access_denied" ? "mind_not_found" : code;
-    return createMcpToolErrorResult(
-      requestId,
-      safeCode,
-      messages[code] ?? "The Mind binding operation failed.",
-      retryable,
-    );
-  }
 }

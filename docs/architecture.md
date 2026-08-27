@@ -93,9 +93,9 @@ Import-specific validation и финальная публикация import rev
 standalone-validation или ordinary content-commit surfaces. Shared application
 policies и HEAD CAS не меняют inbound authority.
 
-Ни diagram ниже, ни текущие package names не являются claim, что эта target
-boundary уже реализована. Historical Release 0.1/0.2 binding, staging и export
-flows сохранены как as-built evidence до соответствующих задач. MD-336 не
+Diagram ниже описывает реализованный локальный Release 0.3 target boundary;
+hosted UAT evidence exact candidate остаётся отдельным release gate.
+Historical Release 0.1/0.2 binding flows сохранены как evidence. MD-336 не
 выбирает новые routes, schemas, persistence, UI, description semantics,
 website AI, anonymous publication, token redesign или production/AWS topology.
 
@@ -330,10 +330,10 @@ scenario и redacted receipt заданы в
 
 ## Identity и authentication
 
-Следующие token/OAuth/binding records документируют current 0.1/0.2 runtime.
-Они сохраняются для compatibility evidence и не переопределяют target
-authority Release 0.3; replacement/migration отдельно заданы в
-[MD-339 contract](specs/credential-write-target.md).
+Следующие token/OAuth records включают current Release 0.3 runtime. Historical
+binding terms сохраняются только для compatibility evidence; authoritative
+replacement/migration заданы в
+[MD-339 contract](specs/credential-write-target.md) и реализованы MD-343.
 
 ### Sites account
 
@@ -383,7 +383,9 @@ created_at
 expires_at           # default 90 days
 last_used_at?
 revoked_at?
-binding_set_id       # service metadata, initial empty
+binding_owner_id     # immutable credential owner, server-only
+target_version       # initial 0; browser receives only this CAS version
+active_target?       # nullable exact generation, server-only
 ```
 
 Canonical secret `mdp_v1_<base64url>` содержит ровно 32 random bytes, имеет
@@ -404,9 +406,9 @@ Threat analysis, benchmark и rotation boundary зафиксированы в
 Default и server maximum expiry равны 90 дням. Server проверяет
 expiry/revocation, строит `ActorContext` и затем на каждом tool call заново
 проверяет current Mind access. Token bound к principal, не Mind, и владеет
-independent server-side binding set. Он не даёт control-plane capabilities и не
-логируется. `content:write` включает `content:read`, но commit требует current
-singleton write binding; write-only token не выпускается.
+independent server-side credential target state. Он не даёт control-plane
+capabilities и не логируется. `content:write` включает `content:read`, но commit
+требует current singleton Site-selected target; write-only token не выпускается.
 
 Codex configuration использует `bearer_token_env_var`. Для single-principal UAT Site
 отдельный `env_http_headers` передаёт `OAI-Sites-Authorization`, причём значение
@@ -427,8 +429,8 @@ direct `.mcp.json`; private registered app для pilot 0.1 не требует�
 Sites identity --> principal_id
 public DCR client + PKCE --> OAuth grant
 OAuth access token --> internal authorization mirror --> ActorContext
-OAuth grant --> independent MindBindingSet
-ActorContext + current binding + current ACL + exact Mind/revision --> content use case
+OAuth grant --> independent CredentialWriteTargetState
+ActorContext + current target generation + current ACL + exact Mind/revision --> content use case
 ```
 
 Authorization Server и protected resource живут на одном canonical UAT origin.
@@ -446,16 +448,17 @@ non-destructive окно для проигравшего конкурентно�
 Поздний reuse старого token отзывает grant, всю family и active mirrors.
 
 Immutable OAuth grant, а не rotating access/refresh token и не chat ID, владеет
-binding set. Refresh сохраняет state; revoke делает его unusable; reconnect
-создаёт новый пустой state. Personal token использует тот же application
-contract с `token_id` как stable owner. Полный contract находится в
-[Mind bindings](specs/mind-bindings.md).
+credential target state. Refresh сохраняет state; revoke делает его unusable;
+reconnect создаёт новый owner с empty target. Personal token использует тот же
+application contract с immutable token record как owner. Полный contract — в
+[credential target specification](specs/credential-write-target.md).
 
 Уже отозванный из-за replay grant не восстанавливается на месте. Recovery
 создаёт новый OAuth grant через native Codex reconnect, после чего fresh
-`get_mind_bindings` показывает empty binding set и пользователь заново явно
-выбирает read/write targets. Это recovery от terminal revoke; обычный refresh
-rollover внутри active grant bindings не меняет.
+Site Connection показывает `Not selected`, и пользователь заново выбирает
+writable Mind. Current readable Minds вычисляются из ACL/visibility без attach.
+Это recovery от terminal revoke; обычный refresh rollover внутри active grant
+target не меняет.
 
 Application core уже повторно проверяет current MCP token внутри ACL/CAS/commit
 transaction. Чтобы OAuth adapter не обходил эту boundary, каждому active OAuth
@@ -471,10 +474,10 @@ personal tokens и protocol diagnostics. `connection_ref` — отдельный
 owned presentation locator; raw token/grant/binding IDs не попадают в URL или
 DOM. Browser не получает credential Bearer: trusted Web adapter сначала
 разрешает ref внутри current Sites principal, подтверждает active lifecycle и
-scope, затем вызывает тот же `MindBindingApplicationService` с binding CAS.
-List сначала читает bounded page active grants и одним bounded read — bindings
-только этой page. Accessible targets проецируются из current control metadata;
-утративший доступ target redacted без name/route/`space_id`. Success всегда
+scope, затем вызывает `CredentialWriteTargetApplicationService` с target CAS.
+List сначала читает bounded page active grants и одним bounded read — targets
+только этой page. Readable Minds проецируются из current control metadata;
+утративший доступ selected target redacted без name/route/`space_id`. Success всегда
 заканчивается server-owned read-back. OAuth bearer не даёт membership/account
 control plane. Полный boundary — в
 [Connections contract](specs/connection-experience.md). Direct UAT package
@@ -596,10 +599,9 @@ Sequence ниже сохраняет as-built staging/binding composition. Relea
 server-approved exact target. Выбор target и bulk import/export orchestration
 принадлежат Site; ordinary per-file source admission/stage/reconcile может
 оставаться подготовкой MCP content commit при adapter-owned transport и
-server-approved input. Exact disposition существующих calls определит MD-337,
-а access semantics уже задаёт
-[принятый MD-339 contract](specs/credential-write-target.md); runtime
-implementation остаётся отдельной работой.
+server-approved input. Exact disposition calls задан MD-337, а access
+semantics — [принятым MD-339 contract](specs/credential-write-target.md);
+MD-343 реализует server-side target resolution и generation fence.
 
 ```mermaid
 sequenceDiagram
@@ -611,18 +613,18 @@ sequenceDiagram
     participant W as Index worker
 
     alt native session attachment
-        A->>M: stage_bundle_file(mind, write binding, native file, key)
+        A->>M: stage_bundle_file(mind, native file, key)
     else local/workspace companion
-        A->>M: create_file_upload_intent(mind, binding, filename, size, SHA, key)
+        A->>M: create_file_upload_intent(mind, filename, size, SHA, key)
         M-->>A: versioned same-origin one-use upload URL
         A->>M: credentialless streaming PUT; GET reconciles unknown outcome
     end
     M->>C: bounded verified bytes + canonical metadata
     C->>O: quarantined then verified staged object
     C-->>A: opaque staged_file_ref
-    A->>M: commit_changeset(mind, write_binding_id, expected, key, operations)
-    M->>C: authenticated ActorContext + command
-    C->>D: resolve exact active binding, Mind and current role/token state
+    A->>M: commit_changeset(mind, expected, key, operations)
+    M->>C: authenticated ActorContext + exact server-pinned target generation
+    C->>D: resolve exact active target, Mind and current role/token state
     C->>C: validate OKF + producer file operations/quotas
     C->>O: put content-addressed immutable objects
     C->>D: conditional HEAD CAS + revision + staged consumption + audit/outbox
@@ -642,13 +644,14 @@ sequenceDiagram
 недостижимы и удаляются только bounded garbage collection после safety window.
 
 Multi-file changeset all-or-nothing для Markdown и BundleFile. Staged refs
-pinned к exact binding and consumed only inside successful transaction.
+pinned к exact credential owner + target generation and consumed only inside
+successful transaction.
 `index.md` обновляется explicit replace
 under HEAD CAS; automatic merge отложен. `add_log_entry` парсит canonical
 `log.md`, вставляет событие в newest-first/date-grouped позицию и снова
 валидирует файл. Idempotency result предотвращает duplicate revision/log entry.
 Ключ namespaced по
-`binding_owner_id + write_binding_id + space_id + operation + key` и связан с
+`binding_owner_id + target_generation + space_id + operation + key` и связан с
 canonical request hash: тот же payload возвращает прежний result, другой
 payload с тем же key — `409 Idempotency Conflict`.
 

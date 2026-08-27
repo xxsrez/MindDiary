@@ -98,6 +98,7 @@ import {
 import {
   AccountBootstrapService,
   AccountDeletionService,
+  CredentialWriteTargetApplicationService,
   ControlReadService,
   ControlPrivacySafeObservability,
   InvitationControlService,
@@ -212,19 +213,6 @@ function nextPresentationRef(prefix: "ptok_v1_" | "conn_v1_"): never {
     .map((byte) => byte.toString(16).padStart(2, "0"))
     .join("");
   return `${prefix}${encoded}` as never;
-}
-
-async function staleAccessRef(ownerId: string, readBindingId: string): Promise<string> {
-  const digest = await crypto.subtle.digest(
-    "SHA-256",
-    new TextEncoder().encode(
-      `mind-diary:stale-access-ref:v1\0${ownerId}\0${readBindingId}`,
-    ),
-  );
-  const encoded = [...new Uint8Array(digest).slice(0, 16)]
-    .map((byte) => byte.toString(16).padStart(2, "0"))
-    .join("");
-  return `stale_v1_${encoded}`;
 }
 
 function benchmarkCorrelationId(request: Request): string | null {
@@ -887,6 +875,11 @@ export async function createProductSiteRuntime(
     ids: generated,
     digest: objects,
   });
+  const credentialWriteTargets = new CredentialWriteTargetApplicationService({
+    targets: metadata,
+    ids: generated,
+    digest: objects,
+  });
   const contentAuthorizer = new MindBindingContentAuthorizer({
     delegate: authorizer,
     bindings: metadata,
@@ -1216,6 +1209,32 @@ export async function createProductSiteRuntime(
       if (result.kind !== "registered" && result.kind !== "owner_conflict") {
         throw new Error("OAuth write-target profile initialization failed.");
       }
+      const actor = Object.freeze({
+        kind: "registered_principal" as const,
+        principalId: input.principalId as PrincipalId,
+        authentication: Object.freeze({ kind: "sites_identity" as const }),
+        deploymentCapabilities: PRODUCT_SITES_DEPLOYMENT_CAPABILITIES,
+        requestId: nextOpaque("request-oauth-write-target-upgrade"),
+        occurredAtUtc: input.occurredAt as UtcInstant,
+      });
+      const current = await credentialWriteTargets.read({
+        actor,
+        bindingOwnerId: input.bindingOwnerId as MindBindingOwnerId,
+        credentialScopes: Object.freeze([...input.credentialScopes]) as EffectiveTokenScopes,
+      });
+      if (current?.kind === "pending_upgrade") {
+        const upgraded = await credentialWriteTargets.mutate({
+          actor,
+          bindingOwnerId: input.bindingOwnerId as MindBindingOwnerId,
+          credentialScopes: Object.freeze([...input.credentialScopes]) as EffectiveTokenScopes,
+          operation: "upgrade_legacy",
+          credentialKind: "oauth_grant",
+          idempotencyKey: `oauth-target-upgrade:${input.bindingOwnerId}`,
+        });
+        if (upgraded.kind !== "applied") {
+          throw new Error("OAuth write-target profile upgrade failed.");
+        }
+      }
     },
     async revokeWriteTargetOwner(input) {
       const result = await metadata.revokeCredentialWriteTargetOwner({
@@ -1477,10 +1496,11 @@ export async function createProductSiteRuntime(
     }),
   });
 
-  const listResolvedBindings = async (
+  const listResolvedWritableTargets = async (
     actor: ProductWebActor,
     credentials: readonly Readonly<{
       readonly ownerId: string;
+      readonly credentialKind: "oauth_grant" | "personal_token";
       readonly scopes: readonly ("content:read" | "content:write")[];
       readonly state: "active" | "revoked";
     }>[],
@@ -1488,39 +1508,32 @@ export async function createProductSiteRuntime(
     if (actor.authentication.kind !== "sites_identity") return Object.freeze([]);
     const sitesActor = actor as SitesIdentityActorContext;
     const snapshots = await Promise.all(credentials.map(async (credential) => {
-      const result = await bindings.read({
+      const snapshot = await credentialWriteTargets.read({
         actor: sitesActor,
         bindingOwnerId: credential.ownerId as MindBindingOwnerId,
         credentialScopes: Object.freeze([...credential.scopes]) as EffectiveTokenScopes,
       });
-      if (result.kind !== "ready") return null;
+      if (snapshot === null) return null;
+      if (snapshot.kind === "pending_upgrade") {
+        return Object.freeze({
+          ownerId: credential.ownerId,
+          credentialKind: credential.credentialKind,
+          lifecycleState: "pending_upgrade" as const,
+          targetVersion: 0,
+          targetMindId: null,
+        });
+      }
+      if (snapshot.state.credentialKind !== credential.credentialKind) return null;
       return Object.freeze({
         ownerId: credential.ownerId,
-        bindingVersion: Number(result.bindings.bindingSet.bindingVersion),
-        state: credential.state === "active" ? result.bindings.bindingSet.state : "revoked" as const,
-        readBindings: Object.freeze(await Promise.all(
-          result.bindings.readBindings.map(async (binding) => Object.freeze({
-            readBindingId: String(binding.readBindingId),
-            staleAccessRef: await staleAccessRef(
-              credential.ownerId,
-              String(binding.readBindingId),
-            ),
-            mindId: String(binding.spaceId),
-          })),
-        )),
-        writeBinding: result.bindings.writeBinding === null
+        credentialKind: snapshot.state.credentialKind,
+        lifecycleState: credential.state === "active"
+          ? snapshot.state.lifecycleState
+          : "revoked" as const,
+        targetVersion: Number(snapshot.state.targetVersion),
+        targetMindId: snapshot.state.activeGeneration === null
           ? null
-          : Object.freeze({
-              writeBindingId: String(result.bindings.writeBinding.writeBindingId),
-              mindId: String(result.bindings.writeBinding.spaceId),
-            }),
-        automaticCapture: Object.freeze({
-          mode: result.bindings.bindingSet.automaticCaptureMode,
-          writeBindingId: result.bindings.bindingSet.captureWriteBindingId === null
-            ? null
-            : String(result.bindings.bindingSet.captureWriteBindingId),
-          updatedAt: result.bindings.bindingSet.captureUpdatedAt,
-        }),
+          : String(snapshot.state.activeGeneration.spaceId),
       });
     }));
     return Object.freeze(
@@ -1528,10 +1541,11 @@ export async function createProductSiteRuntime(
     );
   };
 
-  const mutateResolvedBinding = async (
+  const mutateResolvedWritableTarget = async (
     actor: ProductWebActor,
     credential: Readonly<{
       readonly ownerId: string;
+      readonly credentialKind: "oauth_grant" | "personal_token";
       readonly scopes: readonly ("content:read" | "content:write")[];
       readonly state: "active" | "revoked";
     }>,
@@ -1546,47 +1560,42 @@ export async function createProductSiteRuntime(
     if (
       credential.state !== "active" || ownerId !== credential.ownerId ||
       !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u.test(credential.ownerId) ||
-      !(action === "attach_read" || action === "detach_read" ||
-        action === "bind_write" || action === "unbind_write")
+      !(action === "select_write" || action === "clear_write")
     ) {
-      throw Object.assign(new Error("Invalid binding mutation."), { code: "invalid_binding_request" });
+      throw Object.assign(new Error("Invalid writable-target mutation."), { code: "invalid_request" });
     }
     const allowedKeys = new Set([
       "action",
       "binding_owner_id",
-      "expectedBindingVersion",
+      "expectedTargetVersion",
       "idempotencyKey",
-      ...(action === "attach_read" || action === "bind_write"
-        ? ["mindRef"]
-        : action === "detach_read"
-          ? ["mindRef", "readBindingId"]
-          : []),
+      ...(action === "select_write" ? ["mindRef"] : []),
     ]);
     if (
       Object.keys(input).some((key) => !allowedKeys.has(key)) ||
-      !Number.isSafeInteger(input.expectedBindingVersion) ||
-      Number(input.expectedBindingVersion) < 0 ||
+      !Number.isSafeInteger(input.expectedTargetVersion) ||
+      Number(input.expectedTargetVersion) < 0 ||
       typeof input.idempotencyKey !== "string" ||
       input.idempotencyKey.length === 0
     ) {
-      throw Object.assign(new Error("Invalid binding mutation fields."), { code: "invalid_binding_request" });
+      throw Object.assign(new Error("Invalid writable-target mutation fields."), { code: "invalid_request" });
     }
     if (
-      (action === "bind_write" || action === "unbind_write") &&
+      action === "select_write" &&
       !credential.scopes.includes("content:write")
     ) {
-      throw Object.assign(new Error("Write scope is required."), { code: "insufficient_scope" });
+      throw Object.assign(new Error("Write scope is required."), { code: "write_step_up_required" });
     }
-    const bindingCaller = Object.freeze({
+    const caller = Object.freeze({
       actor: sitesActor,
       bindingOwnerId: ownerId as MindBindingOwnerId,
       credentialScopes: Object.freeze([...credential.scopes]) as EffectiveTokenScopes,
     });
-    let spaceId: unknown = null;
-    if (action === "attach_read" || action === "bind_write") {
+    let spaceId: unknown;
+    if (action === "select_write") {
       const mindRef = typeof input.mindRef === "string" ? input.mindRef : null;
       if (mindRef === null || !/^\/(?:me|[a-z0-9]+(?:-[a-z0-9]+)*)$/u.test(mindRef)) {
-        throw Object.assign(new Error("Invalid binding target."), { code: "invalid_mind_ref" });
+        throw Object.assign(new Error("Invalid writable target."), { code: "invalid_request" });
       }
       const resolved = await control.execute({
         operation: "get_mind_info",
@@ -1595,58 +1604,20 @@ export async function createProductSiteRuntime(
       });
       spaceId = (resolved as { readonly mindId?: unknown }).mindId;
     }
-    if (action === "detach_read") {
-      const mindRef = typeof input.mindRef === "string" ? input.mindRef : null;
-      const readBindingId = typeof input.readBindingId === "string" ? input.readBindingId : null;
-      if ((mindRef === null) === (readBindingId === null)) {
-        throw Object.assign(new Error("Exactly one detach target is required."), { code: "invalid_binding_request" });
-      }
-      if (mindRef !== null) {
-        if (!/^\/(?:me|[a-z0-9]+(?:-[a-z0-9]+)*)$/u.test(mindRef)) {
-          throw Object.assign(new Error("Invalid binding target."), { code: "invalid_mind_ref" });
-        }
-        const resolved = await control.execute({
-          operation: "get_mind_info",
-          actor,
-          input: Object.freeze({ mind_ref: mindRef.slice(1) }),
-        });
-        spaceId = (resolved as { readonly mindId?: unknown }).mindId;
-      } else {
-        const current = await bindings.read(bindingCaller);
-        const selected = current.kind === "ready" && readBindingId !== null
-          ? current.bindings.readBindings.find((binding) =>
-              String(binding.readBindingId) === readBindingId)
-          : undefined;
-        if (selected === undefined) {
-          throw Object.assign(new Error("Binding target not found."), { code: "binding_target_not_found" });
-        }
-        spaceId = selected.spaceId;
-      }
-    }
-    const expectedBindingVersion = input.expectedBindingVersion;
-    const idempotencyKey = input.idempotencyKey;
     const result = await runWithCapturedWork(
-      () => action === "attach_read" || action === "detach_read"
-        ? bindings.mutateRead({
-            ...bindingCaller,
-            action: action === "attach_read" ? "attach" : "detach",
-            spaceId: spaceId as never,
-            expectedBindingVersion,
-            idempotencyKey,
-          })
-        : bindings.mutateWrite(action === "bind_write"
+      () => credentialWriteTargets.mutate(action === "select_write"
           ? {
-              ...bindingCaller,
-              action: "bind",
+              ...caller,
+              operation: "select",
               spaceId: spaceId as never,
-              expectedBindingVersion,
-              idempotencyKey,
+              expectedTargetVersion: Number(input.expectedTargetVersion),
+              idempotencyKey: String(input.idempotencyKey),
             }
           : {
-              ...bindingCaller,
-              action: "unbind",
-              expectedBindingVersion,
-              idempotencyKey,
+              ...caller,
+              operation: "clear",
+              expectedTargetVersion: Number(input.expectedTargetVersion),
+              idempotencyKey: String(input.idempotencyKey),
             }),
       (value) => value.kind === "applied" && !value.replayed,
     );
@@ -1654,18 +1625,22 @@ export async function createProductSiteRuntime(
       return Object.freeze({
         changed: result.changed,
         replayed: result.replayed,
-        bindingVersion: Number(result.bindings.bindingSet.bindingVersion),
+        targetVersion: Number(result.state.targetVersion),
       });
     }
-    if (result.kind === "denied") {
-      throw Object.assign(new Error("Binding mutation was denied."), { code: result.decision.code });
-    }
     if (result.kind === "invalid") {
-      throw Object.assign(new Error("Binding mutation is invalid."), { code: result.code });
+      throw Object.assign(new Error("Writable-target mutation is invalid."), { code: "invalid_request" });
     }
-    throw Object.assign(new Error("Binding mutation was not applied."), {
-      code: result.kind === "owner_mismatch" ? "binding_owner_not_found" : result.kind,
-    });
+    const code = result.kind === "target_version_conflict"
+      ? "target_conflict"
+      : result.kind === "write_scope_required"
+        ? "write_step_up_required"
+        : result.kind === "writer_access_required"
+          ? "target_ineligible"
+          : result.kind === "idempotency_conflict"
+            ? "idempotency_conflict"
+            : "credential_not_found";
+    throw Object.assign(new Error("Writable-target mutation was not applied."), { code });
   };
 
   const web = createProductWebHttpHandler({
@@ -1768,237 +1743,12 @@ export async function createProductSiteRuntime(
         }
       },
     },
-    mindBindings: {
+    writableTargets: {
       listResolved(actor, credentials) {
-        return listResolvedBindings(actor, credentials);
+        return listResolvedWritableTargets(actor, credentials);
       },
       mutateResolved(actor, credential, input) {
-        return mutateResolvedBinding(actor, credential, input);
-      },
-      async list(actor, ownerIds) {
-        if (actor.authentication.kind !== "sites_identity") return Object.freeze([]);
-        const sitesActor = actor as SitesIdentityActorContext;
-        const requested = new Set(ownerIds);
-        if (requested.size === 0) return Object.freeze([]);
-        const personalTokens = await control.services.tokens.listMcpTokens(actor as never);
-        const oauthConnections = ownerIds.some((ownerId) => ownerId.startsWith("md_oauth_grant_"))
-          ? (await oauth.listConnectionPage(String(actor.principalId), { limit: 50 })).items
-          : Object.freeze([]);
-        const credentials = [
-          ...personalTokens
-            .filter((token) => !String(token.tokenId).startsWith(OAUTH_ACCESS_RECORD_PREFIX))
-            .map((token) => Object.freeze({
-              ownerId: String(token.tokenId),
-              tokenId: String(token.tokenId),
-              scopes: token.scopes,
-              state: token.state,
-            })),
-          ...oauthConnections.map((connection) => Object.freeze({
-            ownerId: connection.bindingOwnerId,
-            tokenId: connection.bindingOwnerId,
-            scopes: connection.scopes,
-            state: "active" as const,
-          })),
-        ].filter((credential) => requested.has(credential.ownerId));
-        const snapshots = await Promise.all(credentials.map(async (credential) => {
-          const result = await bindings.read({
-            actor: sitesActor,
-            bindingOwnerId: credential.ownerId as MindBindingOwnerId,
-            credentialScopes: Object.freeze([...credential.scopes]) as EffectiveTokenScopes,
-          });
-          if (result.kind !== "ready") return null;
-          return Object.freeze({
-            ownerId: credential.ownerId,
-            bindingVersion: Number(result.bindings.bindingSet.bindingVersion),
-            state: credential.state === "active"
-              ? result.bindings.bindingSet.state
-              : "revoked",
-            readBindings: Object.freeze(await Promise.all(result.bindings.readBindings.map(async (binding) => Object.freeze({
-              readBindingId: String(binding.readBindingId),
-              staleAccessRef: await staleAccessRef(credential.ownerId, String(binding.readBindingId)),
-              mindId: String(binding.spaceId),
-            })))),
-            writeBinding: result.bindings.writeBinding === null
-              ? null
-              : Object.freeze({
-                  writeBindingId: String(result.bindings.writeBinding.writeBindingId),
-                  mindId: String(result.bindings.writeBinding.spaceId),
-                }),
-            automaticCapture: Object.freeze({
-              mode: result.bindings.bindingSet.automaticCaptureMode,
-              writeBindingId: result.bindings.bindingSet.captureWriteBindingId === null
-                ? null
-                : String(result.bindings.bindingSet.captureWriteBindingId),
-              updatedAt: result.bindings.bindingSet.captureUpdatedAt,
-            }),
-          });
-        }));
-        return Object.freeze(snapshots.filter((snapshot): snapshot is NonNullable<typeof snapshot> => snapshot !== null));
-      },
-      async mutate(actor, input) {
-        if (actor.authentication.kind !== "sites_identity") {
-          throw Object.assign(new Error("Sites identity is required."), { code: "authentication_required" });
-        }
-        const sitesActor = actor as SitesIdentityActorContext;
-        const ownerId = typeof input.binding_owner_id === "string"
-          ? input.binding_owner_id
-          : null;
-        const action = input.action;
-        if (
-          ownerId === null ||
-          !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u.test(ownerId) ||
-          !(action === "attach_read" || action === "detach_read" ||
-            action === "bind_write" || action === "unbind_write" ||
-            action === "enable_capture" || action === "disable_capture")
-        ) {
-          throw Object.assign(new Error("Invalid binding mutation."), { code: "invalid_binding_request" });
-        }
-        const baseKeys = [
-          "action",
-          "binding_owner_id",
-          "expectedBindingVersion",
-          "idempotencyKey",
-        ];
-        const allowedKeys = new Set([
-          ...baseKeys,
-          ...(action === "attach_read" || action === "bind_write"
-            ? ["mindRef"]
-            : action === "detach_read"
-              ? ["mindRef", "readBindingId"]
-              : []),
-        ]);
-        if (Object.keys(input).some((key) => !allowedKeys.has(key))) {
-          throw Object.assign(new Error("Unknown binding mutation field."), { code: "invalid_binding_request" });
-        }
-        if (
-          !Number.isSafeInteger(input.expectedBindingVersion) ||
-          Number(input.expectedBindingVersion) < 0 ||
-          typeof input.idempotencyKey !== "string" ||
-          input.idempotencyKey.length === 0
-        ) {
-          throw Object.assign(new Error("Invalid binding mutation concurrency fields."), { code: "invalid_binding_request" });
-        }
-        const personalTokens = await control.services.tokens.listMcpTokens(actor as never);
-        const personal = personalTokens.find((token) =>
-          !String(token.tokenId).startsWith(OAUTH_ACCESS_RECORD_PREFIX) &&
-          String(token.tokenId) === ownerId);
-        const oauthConnections = personal === undefined
-          ? (await oauth.listConnectionPage(String(actor.principalId), { limit: 50 })).items
-          : Object.freeze([]);
-        const connection = oauthConnections.find((item) => item.bindingOwnerId === ownerId);
-        if (personal === undefined && connection === undefined) {
-          throw Object.assign(new Error("Binding owner not found."), { code: "binding_owner_not_found" });
-        }
-        if (personal !== undefined && personal.state !== "active") {
-          throw Object.assign(new Error("Binding owner is not active."), { code: "binding_owner_revoked" });
-        }
-        const scopes = personal?.scopes ?? connection!.scopes;
-        if (
-          (action === "bind_write" || action === "unbind_write" ||
-            action === "enable_capture" || action === "disable_capture") &&
-          !scopes.includes("content:write")
-        ) {
-          throw Object.assign(new Error("Write scope is required."), { code: "insufficient_scope" });
-        }
-        const bindingCaller = Object.freeze({
-          actor: sitesActor,
-          bindingOwnerId: ownerId as MindBindingOwnerId,
-          credentialScopes: Object.freeze([...scopes]) as EffectiveTokenScopes,
-        });
-        const expectedBindingVersion = input.expectedBindingVersion;
-        const idempotencyKey = input.idempotencyKey;
-        let spaceId: unknown = null;
-        if (action === "attach_read" || action === "bind_write") {
-          const mindRef = typeof input.mindRef === "string" ? input.mindRef : null;
-          if (mindRef === null || !/^\/(?:me|[a-z0-9]+(?:-[a-z0-9]+)*)$/u.test(mindRef)) {
-            throw Object.assign(new Error("Invalid binding target."), { code: "invalid_mind_ref" });
-          }
-          const resolved = await control.execute({
-            operation: "get_mind_info",
-            actor,
-            input: Object.freeze({ mind_ref: mindRef.slice(1) }),
-          });
-          spaceId = (resolved as { readonly mindId?: unknown }).mindId;
-        }
-        if (action === "detach_read") {
-          const mindRef = typeof input.mindRef === "string" ? input.mindRef : null;
-          const readBindingId = typeof input.readBindingId === "string"
-            ? input.readBindingId
-            : null;
-          if ((mindRef === null) === (readBindingId === null)) {
-            throw Object.assign(new Error("Exactly one detach target is required."), { code: "invalid_binding_request" });
-          }
-          if (mindRef !== null) {
-            if (!/^\/(?:me|[a-z0-9]+(?:-[a-z0-9]+)*)$/u.test(mindRef)) {
-              throw Object.assign(new Error("Invalid binding target."), { code: "invalid_mind_ref" });
-            }
-            const resolved = await control.execute({
-              operation: "get_mind_info",
-              actor,
-              input: Object.freeze({ mind_ref: mindRef.slice(1) }),
-            });
-            spaceId = (resolved as { readonly mindId?: unknown }).mindId;
-          } else {
-            const current = await bindings.read(bindingCaller);
-            const selected = current.kind === "ready" && readBindingId !== null
-              ? current.bindings.readBindings.find((binding) =>
-                  String(binding.readBindingId) === readBindingId)
-              : undefined;
-            if (selected === undefined) {
-              throw Object.assign(new Error("Binding target not found."), { code: "binding_target_not_found" });
-            }
-            spaceId = selected.spaceId;
-          }
-        }
-        const result = await runWithCapturedWork(
-          () => action === "enable_capture" || action === "disable_capture"
-            ? bindings.mutateAutomaticCapture({
-                ...bindingCaller,
-                action: action === "enable_capture" ? "enable" : "disable",
-                expectedBindingVersion,
-                idempotencyKey,
-              })
-            : action === "attach_read" || action === "detach_read"
-              ? bindings.mutateRead({
-                  ...bindingCaller,
-                  action: action === "attach_read" ? "attach" : "detach",
-                  spaceId: spaceId as never,
-                  expectedBindingVersion,
-                  idempotencyKey,
-                })
-              : bindings.mutateWrite(action === "bind_write"
-                ? {
-                    ...bindingCaller,
-                    action: "bind",
-                    spaceId: spaceId as never,
-                    expectedBindingVersion,
-                    idempotencyKey,
-                  }
-                : {
-                    ...bindingCaller,
-                    action: "unbind",
-                    expectedBindingVersion,
-                    idempotencyKey,
-                  }),
-          (value) => value.kind === "applied" && !value.replayed,
-        );
-        if (result.kind === "applied") {
-          return Object.freeze({
-            changed: result.changed,
-            replayed: result.replayed,
-            bindingVersion: Number(result.bindings.bindingSet.bindingVersion),
-          });
-        }
-        if (result.kind === "denied") {
-          throw Object.assign(new Error("Binding mutation was denied."), { code: result.decision.code });
-        }
-        if (result.kind === "invalid") {
-          throw Object.assign(new Error("Binding mutation is invalid."), { code: result.code });
-        }
-        const code = result.kind === "owner_mismatch"
-          ? "binding_owner_not_found"
-          : result.kind;
-        throw Object.assign(new Error("Binding mutation was not applied."), { code });
+        return mutateResolvedWritableTarget(actor, credential, input);
       },
     },
     activity,

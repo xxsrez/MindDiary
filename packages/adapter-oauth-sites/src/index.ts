@@ -93,6 +93,7 @@ export interface SitesOAuthConnectorOptions {
   readonly registerWriteTargetOwner?: (input: Readonly<{
     bindingOwnerId: string;
     principalId: string;
+    credentialScopes: readonly OAuthScope[];
     occurredAt: string;
   }>) => void | Promise<void>;
   readonly resolveIdentity: (
@@ -934,6 +935,7 @@ export async function createSitesOAuthConnector(
     await options.registerWriteTargetOwner?.({
       bindingOwnerId: grantId,
       principalId: identity.principalId,
+      credentialScopes: grantedScopes,
       occurredAt: timestamp.toISOString(),
     });
     await options.database.batch([

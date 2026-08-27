@@ -1,11 +1,12 @@
 # Credential-scoped writable target Release 0.3
 
-Статус: accepted target contract, 2026-08-27. Документ MD-339 определяет
-access/binding replacement для Release 0.3. Runtime, persistence, wire schemas,
-migration job, UI и UAT evidence ещё не реализованы и не выводятся из этого
-контракта. Exact disposition historical operation names/routes принадлежит
-MD-337; его wire fields и target error taxonomy являются authoritative для
-этой specification.
+Статус: accepted target contract, локально реализован MD-343, 2026-08-28.
+Документ MD-339 определяет access/binding replacement для Release 0.3.
+Repository candidate включает durable state/migration, Sites REST/UI и
+write-path generation fence; hosted UAT evidence для exact candidate остаётся
+отдельным release gate. Exact disposition historical operation names/routes
+принадлежит MD-337; его wire fields и target error taxonomy являются
+authoritative для этой specification.
 
 Решение принято в
 [ADR-0022](../decisions/0022-site-controlled-credential-write-target.md).
@@ -33,10 +34,11 @@ Read-binding/attach state в target model отсутствует. Writable targe
 membership, visibility, scope или role и не кэширует их. Он только сужает
 destination уже существующей write authority одного credential.
 
-Не входят в MD-339: runtime/storage migration implementation, конкретные
-route/tool names, import/export disposition, redesign Connections UI, token
-format, OAuth protocol redesign, production/AWS deployment и новый automatic-
-capture product profile.
+MD-339 задаёт контракт, а MD-343 реализует runtime/storage migration и
+actor-owned target projection/mutation. Конкретный общий tool catalog,
+import/export disposition, token format, OAuth protocol redesign,
+production/AWS deployment и новый automatic-capture product profile остаются
+вне ownership MD-339.
 
 ## Read authorization без binding state
 

@@ -32,7 +32,7 @@ test("credential write target fixture is a closed Release 0.3 contract", () => {
   assert.equal(fixture.$schema, "mind-diary/credential-write-target/v1");
   assert.equal(fixture.version, 1);
   assert.equal(fixture.release, "0.3");
-  assert.equal(fixture.status, "accepted_contract_not_implemented");
+  assert.equal(fixture.status, "implemented_repository_candidate_uat_pending");
   assert.equal(fixture.source, "docs/specs/credential-write-target.md");
   assert.equal(fixture.decision, "docs/decisions/0022-site-controlled-credential-write-target.md");
   exactKeys(fixture, [
@@ -361,7 +361,7 @@ test("ADR preserves historical evidence while superseding only Release 0.3 acces
   assert.match(decision, /Historical Release 0\.1\/0\.2 records и\s+evidence не переписываются/u);
   assert.match(historicalDecision, /частично superseded для Release 0\.3/u);
   assert.match(historicalDecision, /Сохраняются historical implementation и\s+evidence/u);
-  assert.match(specification, /Runtime, persistence, wire schemas,[\s\S]*ещё не реализованы/u);
+  assert.match(specification, /Repository candidate включает durable state\/migration/u);
   assert.match(specification, /Content MCP не публикует target-management или отдельный target-inspection/u);
   assert.match(specification, /Административная export authority в Content MCP также отсутствует/u);
   assert.match(specification, /MD-359 владеет Site export routes и projection/u);

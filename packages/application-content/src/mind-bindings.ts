@@ -103,7 +103,12 @@ export type ReadMindBindingsResult =
       readonly kind: "ready";
       readonly bindings: Readonly<MindBindingSetSnapshot>;
     }
-  | { readonly kind: "invalid_actor" | "binding_state_unavailable" };
+  | {
+      readonly kind:
+        | "invalid_actor"
+        | "binding_state_unavailable"
+        | "writable_target_required";
+    };
 
 export type MindBindingCommandResult =
   | ApplyMindBindingMutationResult
@@ -304,6 +309,24 @@ export class MindBindingApplicationService {
     const caller = validatedCaller(request);
     if (caller === null) {
       return Object.freeze({ kind: "invalid_actor" });
+    }
+    if (this.#writeAuthority === "credential_write_target") {
+      const target = await this.#bindings.readCredentialWriteTarget(
+        caller.bindingOwnerId,
+        caller.principalId,
+      );
+      if (target?.kind === "pending_upgrade") {
+        // Legacy evidence is never exposed as an active generation. The
+        // credential must complete its explicit upgrade/reissue flow first.
+        return Object.freeze({ kind: "writable_target_required" });
+      }
+      if (target?.kind !== "current") {
+        return Object.freeze({ kind: "binding_state_unavailable" });
+      }
+      return Object.freeze({
+        kind: "ready",
+        bindings: legacyProjectionFromCredentialTarget(target.state),
+      });
     }
     const snapshot = await this.#bindings.readMindBindingSet(
       caller.bindingOwnerId,
