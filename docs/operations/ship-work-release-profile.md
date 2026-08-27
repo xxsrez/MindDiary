@@ -1297,6 +1297,22 @@ orchestrating agent с прямыми same-run Sites connector и in-app Browser
 observations; local lookalike files, copied IDs и старые receipts не являются
 authority.
 
+Complete ordinary/Personal Mind admin journey дополнительно закрывается
+exact-candidate gate из
+[`Mind admin browser runbook`](mind-admin-browser-uat-runbook.md):
+`npm run gate:mind-admin-browser -- --candidate-sha <exact-clean-HEAD-sha>
+--evidence-out <private-temp-path>`. Runner создаёт только run-owned actors и
+ordinary Mind, использует два browser contexts, проверяет metadata CAS,
+visibility/catalog, role projections, Personal invariants, runtime
+reconstruction и удаляет ordinary Mind с отрицательным read-back. Local
+receipt всегда содержит `hosted_evidence=false` и `acceptance=local-only`.
+`npm run join:mind-admin-uat-readback` связывает local receipt, exact Sites
+archive и заявленные provider/browser readbacks, но даже при полном совпадении
+выдаёт лишь `structurally_verified_readback`, `acceptance=nonterminal` и
+`provenance=unverified-local-files`. Hosted PASS принадлежит только
+orchestrating agent с прямыми same-run Sites connector и Codex in-app Browser
+observations; локальный script не имеет switch для повышения результата.
+
 Все commands выполняются прямым `argv` без shell. Канонический full dev launcher
 проекта — root `npm run dev`; его machine event сообщает loopback URL,
 readiness и non-secret configuration fingerprint. Dev получает только

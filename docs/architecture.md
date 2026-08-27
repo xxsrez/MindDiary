@@ -352,6 +352,17 @@ seed, client-selected principal, ACL/scope bypass или privileged cleanup. Exa
 scenario и redacted receipt заданы в
 [synthetic runbook](operations/synthetic-multi-principal-runbook.md).
 
+Browser admin journey использует ту же constructor-only composition через два
+server-bound actor listeners и отдельные isolated Playwright contexts. Он
+создаёт account, Personal Mind, ordinary Mind, invitations и membership только
+через shipped web/API surface; обычный Mind удаляется тем же product flow, а
+закрытие in-memory D1/R2 уничтожает остаток run. `restart()` пересобирает
+Product Site runtime поверх тех же adapters и тем самым проверяет
+реконструкцию, не подменяя её storage seed. Этот local path не импортируется в
+product bundle и не считается hosted evidence; UAT acceptance требует прямых
+same-run provider и in-app Browser observations по
+[MD-351 runbook](operations/mind-admin-browser-uat-runbook.md).
+
 ## Identity и authentication
 
 Следующие token/OAuth records включают current Release 0.3 runtime. Historical
