@@ -110,7 +110,7 @@ export function escapeUntrustedText(value: string): string {
 }
 
 function activeAttribute(
-  current: MindDiaryNavigationTarget,
+  current: MindDiaryNavigationTarget | null,
   item: MindDiaryNavigationTarget,
 ): string {
   return current === item ? ' aria-current="page"' : "";
@@ -119,7 +119,7 @@ function activeAttribute(
 /** Shared authenticated Product Site header for the accepted pilot route map. */
 export function renderMindDiaryAuthenticatedHeader(
   displayName: string,
-  activeNavigation: MindDiaryNavigationTarget,
+  activeNavigation: MindDiaryNavigationTarget | null,
 ): string {
   void displayName;
   const settingsCurrent = activeNavigation === "account" ||
@@ -143,7 +143,7 @@ export function renderMindDiaryAuthenticatedHeader(
     </button>
   </header>
   <div class="md-navigation-backdrop" data-navigation-backdrop hidden></div>
-  <aside id="application-navigation" class="md-navigation-surface" aria-label="Application navigation" aria-hidden="true" data-navigation data-ia-rail data-ia-mobile-drawer inert>
+  <aside id="application-navigation" class="md-navigation-surface" aria-label="Application navigation" data-navigation data-ia-rail data-ia-mobile-drawer>
     <div class="md-rail-brand">
       <a class="md-brand" href="/" aria-label="Mind Diary home"${activeAttribute(activeNavigation, "home")}>
         <img src="${MIND_DIARY_UI_ASSETS.lockup}" alt="Mind Diary" width="204" height="48">
@@ -330,6 +330,7 @@ export type MindDiaryRoutePageState =
 export interface MindDiaryRoutePageModel {
   readonly displayName: string;
   readonly activeNavigation: MindDiaryNavigationTarget;
+  readonly shellCurrent?: MindDiaryNavigationTarget | null;
   readonly eyebrow: string;
   readonly title: string;
   readonly description: string;
@@ -344,8 +345,22 @@ export interface MindDiaryRoutePageModel {
   }>[];
 }
 
+const SAFE_PRODUCT_ROUTES = new Set<string>([
+  "/",
+  "/me",
+  "/minds",
+  "/public",
+  "/invitations",
+  "/help",
+  "/help/codex",
+  "/settings/account",
+  "/settings/connections",
+  "/settings/developer/mcp",
+  "/settings/mcp",
+]);
+
 function safeProductRoute(value: string): string {
-  return value === "/" || /^\/(?:me|minds|public|invitations|help|settings\/(?:account|mcp)|[a-z0-9]+(?:-[a-z0-9]+)*)$/u.test(value)
+  return SAFE_PRODUCT_ROUTES.has(value) || /^\/[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(value)
     ? value
     : "#";
 }
@@ -384,12 +399,15 @@ function renderRoutePageGuides(model: MindDiaryRoutePageModel): string {
 }
 
 export function renderMindDiaryRoutePage(model: MindDiaryRoutePageModel): string {
+  const shellCurrent = model.shellCurrent === undefined
+    ? model.activeNavigation
+    : model.shellCurrent;
   const links = model.links?.length
     ? `<nav class="md-route-links" aria-label="Page actions">${model.links.map((link) => `<a class="md-button md-button--secondary" href="${safeProductRoute(link.href)}">${escapeUntrustedText(link.label)}</a>`).join("")}</nav>`
     : "";
   return `<div class="md-shell" data-mind-diary-shell data-ia-shell data-mind-diary-route-page data-route-page="${escapeUntrustedText(model.activeNavigation)}" data-nav-open="false">
     <a class="md-skip-link" href="#main-content" data-ia-skip-link>Skip to main content</a>
-    ${renderMindDiaryAuthenticatedHeader(model.displayName, model.activeNavigation)}
+    ${renderMindDiaryAuthenticatedHeader(model.displayName, shellCurrent)}
     <main id="main-content" class="md-main" tabindex="-1" data-ia-main>
       <div class="md-page-heading" data-ia-page-header><div><p class="md-eyebrow">${escapeUntrustedText(model.eyebrow)}</p><h1>${escapeUntrustedText(model.title)}</h1><p>${escapeUntrustedText(model.description)}</p></div></div>
       ${renderRoutePageState(model.state)}

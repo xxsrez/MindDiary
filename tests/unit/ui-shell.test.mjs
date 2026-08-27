@@ -136,6 +136,8 @@ test("ready shell has semantic navigation, product language, form and modal cont
   assert.match(html, /Hosted environment: UAT/);
   assert.match(html, /data-ia-settings-item/);
   assert.match(html, /data-ia-mobile-drawer/);
+  const drawerMarkup = html.match(/<aside[^>]*data-ia-mobile-drawer[^>]*>/)?.[0] ?? "";
+  assert.doesNotMatch(drawerMarkup, /\s(?:inert|aria-hidden)(?:=|\s|>)/);
   assert.match(html, /data-ia-collection/);
   assert.match(html, /data-ia-row/);
   assert.match(html, /Memories/);
@@ -207,6 +209,19 @@ test("pilot route shell keeps exact links, active state, safe route states, and 
     assert.match(html, /&lt;script&gt;globalThis\.pwned=true&lt;\/script&gt;/);
     assert.match(html, /href="#"/);
   }
+
+  const deepHelp = renderMindDiaryRoutePage({
+    displayName: "Pilot User",
+    activeNavigation: "help",
+    shellCurrent: null,
+    eyebrow: "Pilot help",
+    title: "Help and accessibility",
+    description: "Server-rendered help.",
+    state: { kind: "ready", message: "No private content is rendered." },
+    links: [{ href: "/settings/developer/mcp", label: "Open Advanced MCP" }],
+  });
+  assert.match(deepHelp, /href="\/settings\/developer\/mcp"[^>]*>Open Advanced MCP<\/a>/);
+  assert.equal((deepHelp.match(/aria-current="page"/g) ?? []).length, 0);
 });
 
 test("loading, empty and error views communicate state without color alone", () => {

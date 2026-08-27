@@ -862,7 +862,9 @@ test("pilot Product Site route map keeps one UAT shell, exact active navigation,
       assert.match(html, /href="\/settings\/connections"/, path);
       assert.match(html, /href="\/settings\/developer\/mcp"/, path);
     }
-    const expectedCurrentCount = path === "/settings/developer/mcp"
+    const expectedCurrentCount = path === "/help"
+      ? 0
+      : path === "/settings/developer/mcp"
       ? 3
       : path === "/" || settingsRoute ? 2 : 1;
     assert.equal((html.match(/aria-current="page"/g) ?? []).length, expectedCurrentCount, path);
@@ -882,6 +884,8 @@ test("pilot Product Site route map keeps one UAT shell, exact active navigation,
   assert.match(helpHtml, /data-copy-code="mind-diary-help-concierge-playbook"/u);
   assert.match(helpHtml, /exactly one target/u);
   assert.match(helpHtml, /concierge work, not a product import/u);
+  assert.match(helpHtml, /href="\/settings\/developer\/mcp"[^>]*>Open Advanced MCP<\/a>/u);
+  assert.equal((helpHtml.match(/aria-current="page"/gu) ?? []).length, 0);
 
   const codexHelp = await handler(new Request(`${origin}/help/codex`));
   const codexHelpHtml = await codexHelp.text();

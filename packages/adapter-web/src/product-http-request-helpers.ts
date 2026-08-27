@@ -285,6 +285,7 @@ export function pilotRoutePage(
     return {
       displayName,
       activeNavigation: "help",
+      shellCurrent: null,
       eyebrow: "Pilot help",
       title: "Help and accessibility",
       description: "Mind Diary is hosted in UAT for a restricted authenticated pilot, not production. It has no production SLA or guaranteed recovery.",

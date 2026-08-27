@@ -124,6 +124,7 @@ const routePages = new Map([
   ["/settings/connections/conn_v1_fixture", ["connections", "Fixture connection"]],
   ["/settings/developer/mcp", ["tokens", "Advanced MCP"]],
   ["/help/codex", ["help", "Use Mind Diary with Codex"]],
+  ["/help", ["help", "Help and accessibility"]],
   ["/shared-research", ["minds", "Shared Research"]],
 ]);
 
@@ -133,6 +134,7 @@ function routePageModel(pathname) {
   return {
     displayName: "Fixture User",
     activeNavigation: route[0],
+    shellCurrent: pathname === "/help" ? null : undefined,
     eyebrow: "Administration",
     title: route[1],
     description: "Server-resolved control state without raw Memory content.",

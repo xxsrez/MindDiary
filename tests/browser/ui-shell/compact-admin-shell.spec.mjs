@@ -80,6 +80,7 @@ test("server-resolved route map keeps one compact hierarchy and exact current st
     ["/public", "primary", "Public Minds", null],
     ["/invitations", "primary", "Invitations", null],
     ["/help/codex", "utility", "Help with Codex", null],
+    ["/help", null, null, null],
     ["/settings/account", "utility", "Settings", "Account"],
     ["/settings/connections", "utility", "Settings", "Connections"],
     ["/settings/connections/conn_v1_fixture", "utility", "Settings", "Connections"],
@@ -88,11 +89,15 @@ test("server-resolved route map keeps one compact hierarchy and exact current st
   ];
   for (const [path, nav, current, context] of routes) {
     await page.goto(`${origin}${path}`);
-    await expect(page.locator(`[data-ia-nav="${nav}"]`).getByRole("link", {
-      name: current,
-      exact: true,
-    }))
-      .toHaveAttribute("aria-current", "page");
+    if (current === null) {
+      await expect(page.locator("[data-ia-rail] [aria-current=page]")).toHaveCount(0);
+    } else {
+      await expect(page.locator(`[data-ia-nav="${nav}"]`).getByRole("link", {
+        name: current,
+        exact: true,
+      }))
+        .toHaveAttribute("aria-current", "page");
+    }
     if (context === null) {
       await expect(page.locator('[data-ia-nav="settings"]')).toHaveCount(0);
     } else {
@@ -110,6 +115,28 @@ test("server-resolved route map keeps one compact hierarchy and exact current st
     );
     await expectBounded(page);
   }
+});
+
+test("wide rail remains accessible and navigable when client JavaScript is unavailable", async ({
+  browser,
+}) => {
+  const context = await browser.newContext({
+    viewport: { width: 1440, height: 900 },
+    javaScriptEnabled: false,
+  });
+  const page = await context.newPage();
+  await page.goto(`${origin}/minds`);
+  const rail = page.locator("[data-ia-rail]");
+  await expect(rail).toBeVisible();
+  await expect(rail).not.toHaveAttribute("inert", "");
+  await expect(rail).not.toHaveAttribute("aria-hidden", "true");
+  await expect(page.getByRole("navigation", { name: "Primary" })).toBeVisible();
+  await page.locator('[data-ia-nav-item="my-mind"]').focus();
+  await expect(page.locator('[data-ia-nav-item="my-mind"]')).toBeFocused();
+  await page.locator('[data-ia-nav-item="my-mind"]').click();
+  await expect(page).toHaveURL(`${origin}/me`);
+  await expect(page.getByRole("heading", { level: 1, name: "My Mind" })).toBeVisible();
+  await context.close();
 });
 
 test("accepted viewports keep the rail, first action or row, and document inside budget", async ({
