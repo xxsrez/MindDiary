@@ -7,18 +7,19 @@ import {
 } from "@mind-diary/adapter-metadata-memory";
 import { InMemoryObjectStore } from "@mind-diary/adapter-object-memory";
 import {
-  AuthorizedConnectorIngressService,
   BundleFileStagingService,
   CanonicalRevisionCoordinator,
   ChangesetCommitFailure,
   ChangesetCommitService,
   DEFAULT_CHANGESET_PREFLIGHT_LIMITS,
+  DeterministicOkfExportService,
   FileIngressCoordinator,
   GeneratedArtifactIngressService,
   LocalFileUploadIntentService,
   MindBindingContentAuthorizer,
   createLocalFileUploadIntentSecretCodec,
 } from "@mind-diary/application-content";
+import { createGoogleDriveConnectorIngress } from "@mind-diary/composition-root";
 import { CapabilityAuthorizer } from "@mind-diary/application-ports";
 import { CAPABILITIES, bindingVersion, version } from "@mind-diary/domain";
 import {
@@ -148,6 +149,23 @@ function chunks(bytes) {
     yield bytes.subarray(0, split);
     if (split < bytes.byteLength) yield bytes.subarray(split);
   })();
+}
+
+function storedZipEntry(bytes, expectedPath) {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  let offset = 0;
+  while (offset + 30 <= bytes.byteLength && view.getUint32(offset, true) === 0x04034b50) {
+    assert.equal(view.getUint16(offset + 8, true), 0);
+    const size = view.getUint32(offset + 18, true);
+    const nameLength = view.getUint16(offset + 26, true);
+    const extraLength = view.getUint16(offset + 28, true);
+    const nameStart = offset + 30;
+    const dataStart = nameStart + nameLength + extraLength;
+    const path = new TextDecoder().decode(bytes.subarray(nameStart, nameStart + nameLength));
+    if (path === expectedPath) return bytes.slice(dataStart, dataStart + size);
+    offset = dataStart + size;
+  }
+  return null;
 }
 
 async function harness() {
@@ -362,30 +380,63 @@ test("mixed ingress commits real source services atomically and reconciles every
 
   const connectorRepresentation = Object.freeze({ kind: "binary" });
   const connectorSha256 = await env.objects.calculateSha256(FIXTURES.connector);
-  const connectorService = new AuthorizedConnectorIngressService({
-    staging: env.staging,
-  });
+  const connectorObjectId = "drive_mixed_connector_object";
+  const connectorBindingRef = "drive_mixed_connector_binding";
+  const connectorBearer = "drive_mixed_access_token_sensitive";
+  const { ingress: connectorService, source: connectorSource } =
+    createGoogleDriveConnectorIngress({
+      selection: {
+        bindingRef: connectorBindingRef,
+        objectId: connectorObjectId,
+      },
+      grants: {
+        async resolve() {
+          return {
+            kind: "authorized",
+            accessToken: connectorBearer,
+            grantFingerprint: "drive_mixed_grant_generation",
+          };
+        },
+      },
+      async fetcher(input, init) {
+        const url = new URL(String(input));
+        assert.equal(url.origin, "https://www.googleapis.com");
+        assert.equal(
+          new Headers(init.headers).get("authorization"),
+          `Bearer ${connectorBearer}`,
+        );
+        if (url.searchParams.get("alt") === "media") {
+          return new Response(FIXTURES.connector, {
+            headers: {
+              "content-type": "application/octet-stream",
+              "content-length": String(FIXTURES.connector.byteLength),
+            },
+          });
+        }
+        return new Response(JSON.stringify({
+          id: connectorObjectId,
+          name: "synthetic-connector.bin",
+          mimeType: "application/octet-stream",
+          size: String(FIXTURES.connector.byteLength),
+          sha256Checksum: connectorSha256.slice("sha256:".length),
+          trashed: false,
+          capabilities: { canDownload: true },
+          version: "1",
+          headRevisionId: "drive_mixed_revision_1",
+          ownedByMe: true,
+          owners: [{ permissionId: "drive_mixed_owner" }],
+        }), {
+          headers: { "content-type": "application/json" },
+        });
+      },
+      staging: env.staging,
+    });
   const connector = await connectorService.stage({
     actor: env.currentActor(),
     spaceId: MINDS.ordinary.spaceId,
     writeBindingId: WRITE,
     representation: connectorRepresentation,
-    source: {
-      async readVerifiedSnapshot() {
-        return Object.freeze({
-          kind: "ready",
-          input: Object.freeze({
-            sourceKind: "connector_object",
-            representation: connectorRepresentation,
-            stream: chunks(FIXTURES.connector),
-            displayFilename: "synthetic-connector.bin",
-            advisoryMediaType: "application/octet-stream",
-            size: FIXTURES.connector.byteLength,
-            sha256: connectorSha256,
-          }),
-        });
-      },
-    },
+    source: connectorSource,
     idempotencyKey: "stage-connector",
   });
   assert.equal(connector.kind, "staged");
@@ -479,6 +530,19 @@ test("mixed ingress commits real source services atomically and reconciles every
       await env.objects.calculateSha256(bytes),
     );
   }
+  const webExporter = new DeterministicOkfExportService({
+    materializer: env.revisions,
+    digest: env.objects,
+  });
+  const webExport = await webExporter.exportExactRevision({
+    spaceId: MINDS.ordinary.spaceId,
+    revisionId: committed.envelope.revision.revisionId,
+    profile: "MD-BUNDLE-ZIP-1",
+  });
+  assert.deepEqual(
+    storedZipEntry(webExport.bytes, "assets/connector.bin"),
+    FIXTURES.connector,
+  );
 
   const contentAudits = (await env.metadata.listAuditEventsForTest()).filter(
     (event) => event.eventType === "content.changeset_committed",

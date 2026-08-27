@@ -177,11 +177,17 @@ function unavailable(
  * web-export services remain the only canonical lifecycle.
  */
 export class AuthorizedConnectorIngressService {
-  readonly #staging: Pick<BundleFileStagingService, "stageStream">;
+  readonly #staging: Pick<
+    BundleFileStagingService,
+    "authorizeSourceRead" | "stageStream"
+  >;
   readonly #fetchTimeoutMilliseconds: number;
 
   constructor(dependencies: {
-    readonly staging: Pick<BundleFileStagingService, "stageStream">;
+    readonly staging: Pick<
+      BundleFileStagingService,
+      "authorizeSourceRead" | "stageStream"
+    >;
     /** A stricter bounded timeout is allowed for a specific adapter/test profile. */
     readonly fetchTimeoutMilliseconds?: number;
   }) {
@@ -203,6 +209,15 @@ export class AuthorizedConnectorIngressService {
     }
     if (request.signal?.aborted) {
       return unavailable("file_ingress_transport_unavailable", true);
+    }
+
+    const authorization = await this.#staging.authorizeSourceRead({
+      actor: request.actor,
+      spaceId: request.spaceId,
+      writeBindingId: request.writeBindingId,
+    });
+    if (authorization.kind === "denied") {
+      return Object.freeze({ kind: "denied", decision: authorization });
     }
 
     const timeoutController = new AbortController();

@@ -15,6 +15,17 @@ const COMMON = {
   idempotencyKey: "connector-stage",
 };
 
+const ALLOWED = Object.freeze({
+  kind: "allowed",
+  capability: "content:write",
+  grant: Object.freeze({ kind: "membership", role: "editor" }),
+  stamp: Object.freeze({
+    accessVersion: 1,
+    membershipVersion: 1,
+    tokenVersion: 1,
+  }),
+});
+
 function verifiedInput(overrides = {}) {
   return {
     sourceKind: "connector_object",
@@ -38,6 +49,9 @@ function fixture(
   const service = new AuthorizedConnectorIngressService({
     ...options,
     staging: {
+      async authorizeSourceRead() {
+        return ALLOWED;
+      },
       async stageStream(request) {
         stages.push(request);
         return stageResult;
@@ -52,6 +66,38 @@ function fixture(
   };
   return { service, source, reads, stages };
 }
+
+test("current Mind write authorization is checked before connector metadata", async () => {
+  let reads = 0;
+  const denied = Object.freeze({
+    kind: "denied",
+    code: "write_binding_stale",
+    retryable: false,
+  });
+  const service = new AuthorizedConnectorIngressService({
+    staging: {
+      async authorizeSourceRead(request) {
+        assert.equal(request.spaceId, COMMON.spaceId);
+        assert.equal(request.writeBindingId, COMMON.writeBindingId);
+        return denied;
+      },
+      async stageStream() {
+        throw new Error("must not stage");
+      },
+    },
+  });
+  const result = await service.stage({
+    ...COMMON,
+    source: {
+      async readVerifiedSnapshot() {
+        reads += 1;
+        return { kind: "ready", input: verifiedInput() };
+      },
+    },
+  });
+  assert.deepEqual(result, { kind: "denied", decision: denied });
+  assert.equal(reads, 0);
+});
 
 test("binary connector snapshots expose only verified bytes to shared staging", async () => {
   const env = fixture({ kind: "ready", input: verifiedInput() });
@@ -243,6 +289,7 @@ test("metadata/read/stage drift aborts without a durable staged result or fallba
   let sourceCalls = 0;
   const service = new AuthorizedConnectorIngressService({
     staging: {
+      async authorizeSourceRead() { return ALLOWED; },
       async stageStream(request) {
         try {
           for await (const chunk of request.stream) quarantinedBytes += chunk.byteLength;
@@ -286,6 +333,7 @@ test("the connector deadline remains active until the verified stream finishes",
   const service = new AuthorizedConnectorIngressService({
     fetchTimeoutMilliseconds: 1,
     staging: {
+      async authorizeSourceRead() { return ALLOWED; },
       async stageStream(request) {
         try {
           for await (const _chunk of request.stream) {

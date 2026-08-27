@@ -4,6 +4,7 @@ import type {
 } from "@mind-diary/application-contracts";
 import { FILE_INGRESS_SOURCE_KINDS } from "@mind-diary/application-ports";
 import type {
+  AuthorizationDecision,
   Authorizer,
   BundleFileObjectStore,
   BundleFileStagingStore,
@@ -141,6 +142,8 @@ const EXTENSIONS: Readonly<Record<string, readonly string[]>> = Object.freeze({
   "application/pdf": Object.freeze([".pdf"]),
   "application/zip": Object.freeze([".zip"]),
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document": Object.freeze([".docx"]),
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": Object.freeze([".xlsx"]),
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation": Object.freeze([".pptx"]),
   "image/heic": Object.freeze([".heic", ".heif"]),
   "application/epub+zip": Object.freeze([".epub"]),
   "audio/ogg": Object.freeze([".ogg", ".opus"]),
@@ -152,6 +155,8 @@ const ZIP_CONTAINER_MEDIA_TYPES = new Set<BundleFileMediaType>([
   "application/zip",
   "application/epub+zip",
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation",
 ]);
 const EXTENSION_ADVISORY_MEDIA_TYPES = new Set<BundleFileMediaType>([
   "text/html",
@@ -427,6 +432,41 @@ export class BundleFileStagingService {
       ...(dependencies.capacityLimits === undefined
         ? {}
         : { limits: dependencies.capacityLimits }),
+    });
+  }
+
+  /**
+   * Authorizes an adapter-owned source read before any provider metadata or
+   * bytes are requested. `stageStream` repeats the same check before consuming
+   * the stream and again in its publication transaction; this preflight only
+   * preserves the existing authorize-before-object-read invariant.
+   */
+  async authorizeSourceRead(request: Readonly<{
+    actor: ActorContext;
+    spaceId: SpaceId;
+    writeBindingId: unknown;
+  }>): Promise<AuthorizationDecision> {
+    if (
+      request.actor.kind !== "registered_principal" ||
+      request.actor.authentication.kind !== "mcp_token" ||
+      typeof request.writeBindingId !== "string" ||
+      request.writeBindingId.length === 0
+    ) {
+      return Object.freeze({
+        kind: "denied",
+        code: "invalid_authorization_request",
+        retryable: false,
+      });
+    }
+    return this.#authorizer.authorize({
+      actor: request.actor,
+      spaceId: request.spaceId,
+      capability: "content:write",
+      revisionMode: "head",
+      bindingRequirement: Object.freeze({
+        kind: "write",
+        writeBindingId: request.writeBindingId as WriteMindBindingId,
+      }),
     });
   }
 

@@ -1,0 +1,420 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import {
+  GOOGLE_DRIVE_CONNECTOR_LIMITS,
+  GoogleDriveConnectorObjectSource,
+} from "@mind-diary/composition-root";
+import {
+  GOOGLE_DRIVE_FIXTURES,
+  driveMetadata,
+  sha256,
+} from "../fixtures/google-drive-connector.mjs";
+
+const OPAQUE_BEARER = "drive_access_token_sensitive";
+const GRANT = "drive_grant_fingerprint_sensitive";
+const BINDING = "drive_binding_reference_sensitive";
+const ACTOR = Object.freeze({ kind: "registered_principal" });
+const LIMITS = Object.freeze({
+  maxBytes: 268_435_456,
+  fetchTimeoutMilliseconds: 30_000,
+  maxRedirects: 4,
+});
+
+function selection(objectId) {
+  return { bindingRef: BINDING, objectId };
+}
+
+function authorizedGrants(overrides = {}) {
+  let calls = 0;
+  return {
+    calls: () => calls,
+    async resolve(request) {
+      calls += 1;
+      assert.equal(request.actor, ACTOR);
+      assert.equal(request.bindingRef, BINDING);
+      return typeof overrides.resolve === "function"
+        ? overrides.resolve(calls)
+        : {
+            kind: "authorized",
+            accessToken: OPAQUE_BEARER,
+            grantFingerprint: GRANT,
+          };
+    },
+  };
+}
+
+function fakeProvider(fixture, options = {}) {
+  const calls = [];
+  let metadataReads = 0;
+  let contentReads = 0;
+  return {
+    calls,
+    metadataReads: () => metadataReads,
+    contentReads: () => contentReads,
+    async fetcher(input, init) {
+      const url = new URL(String(input));
+      calls.push({ url, init });
+      assert.equal(url.origin, "https://www.googleapis.com");
+      assert.equal(init.redirect, "manual");
+      assert.equal(init.credentials, "omit");
+      assert.equal(init.referrerPolicy, "no-referrer");
+      assert.equal(new Headers(init.headers).get("authorization"), `Bearer ${OPAQUE_BEARER}`);
+      if (typeof options.response === "function") {
+        const replaced = options.response({ url, init, calls });
+        if (replaced !== undefined) return replaced;
+      }
+      const isExport = url.pathname.endsWith("/export");
+      const isBinary = url.searchParams.get("alt") === "media";
+      if (!isExport && !isBinary) {
+        metadataReads += 1;
+        const override = typeof options.metadata === "function"
+          ? options.metadata(metadataReads)
+          : {};
+        const body = JSON.stringify(driveMetadata(fixture, override));
+        return new Response(body, {
+          headers: {
+            "content-type": "application/json",
+            "content-length": String(new TextEncoder().encode(body).byteLength),
+            etag: `"${fixture.version}"`,
+          },
+        });
+      }
+      contentReads += 1;
+      const bytes = typeof options.bytes === "function"
+        ? options.bytes(contentReads)
+        : fixture.bytes;
+      const mediaType = isExport ? fixture.exportMediaType : fixture.mediaType;
+      return new Response(bytes, {
+        headers: {
+          "content-type": mediaType,
+          "content-length": String(bytes.byteLength),
+        },
+      });
+    },
+  };
+}
+
+async function collect(stream) {
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of stream) {
+    chunks.push(chunk);
+    size += chunk.byteLength;
+  }
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
+}
+
+function representation(fixture) {
+  return fixture.format === undefined
+    ? { kind: "binary" }
+    : {
+        kind: "export_snapshot",
+        format: fixture.format,
+        displayFilename: fixture.displayFilename,
+        mediaType: fixture.exportMediaType,
+      };
+}
+
+test("binary Drive object is streamed byte-for-byte through a fixed provider origin", async () => {
+  const fixture = GOOGLE_DRIVE_FIXTURES.binary;
+  const grants = authorizedGrants();
+  const provider = fakeProvider(fixture);
+  const source = new GoogleDriveConnectorObjectSource(selection(fixture.objectId), {
+    grants,
+    fetcher: provider.fetcher,
+  });
+  const result = await source.readVerifiedSnapshot({
+    actor: ACTOR,
+    representation: { kind: "binary" },
+    limits: LIMITS,
+  });
+  assert.equal(result.kind, "ready");
+  assert.deepEqual(Object.keys(result.input).sort(), [
+    "advisoryMediaType",
+    "displayFilename",
+    "representation",
+    "sha256",
+    "size",
+    "sourceKind",
+    "stream",
+  ]);
+  assert.equal(result.input.displayFilename, fixture.name);
+  assert.equal(result.input.advisoryMediaType, fixture.mediaType);
+  assert.equal(result.input.sha256, sha256(fixture.bytes));
+  assert.deepEqual(await collect(result.input.stream), fixture.bytes);
+  assert.equal(provider.metadataReads(), 3);
+  assert.equal(provider.contentReads(), 1);
+  assert.equal(grants.calls(), 4);
+  assert.equal(
+    provider.calls.some(({ url }) => url.searchParams.get("alt") === "media"),
+    true,
+  );
+});
+
+test("Docs, Sheets and Slides require an explicit supported export snapshot", async (t) => {
+  for (const fixture of [
+    GOOGLE_DRIVE_FIXTURES.document,
+    GOOGLE_DRIVE_FIXTURES.spreadsheet,
+    GOOGLE_DRIVE_FIXTURES.presentation,
+  ]) {
+    await t.test(fixture.format, async () => {
+      const grants = authorizedGrants();
+      const provider = fakeProvider(fixture);
+      const source = new GoogleDriveConnectorObjectSource(selection(fixture.objectId), {
+        grants,
+        fetcher: provider.fetcher,
+      });
+      const binary = await source.readVerifiedSnapshot({
+        actor: ACTOR,
+        representation: { kind: "binary" },
+        limits: LIMITS,
+      });
+      assert.deepEqual(binary, {
+        kind: "unavailable",
+        failure: "source_unavailable",
+      });
+      const exported = await source.readVerifiedSnapshot({
+        actor: ACTOR,
+        representation: representation(fixture),
+        limits: LIMITS,
+      });
+      assert.equal(exported.kind, "ready");
+      assert.equal(exported.input.representation.kind, "export_snapshot");
+      assert.equal(exported.input.displayFilename, fixture.displayFilename);
+      assert.equal(exported.input.advisoryMediaType, fixture.exportMediaType);
+      assert.equal(exported.input.sha256, sha256(fixture.bytes));
+      assert.deepEqual(await collect(exported.input.stream), fixture.bytes);
+      assert.equal(provider.contentReads(), 2);
+      const exportCalls = provider.calls.filter(({ url }) =>
+        url.pathname.endsWith("/export")
+      );
+      assert.equal(exportCalls.length, 2);
+      assert.equal(
+        exportCalls.every(({ url }) =>
+          url.searchParams.get("mimeType") === fixture.exportMediaType
+        ),
+        true,
+      );
+    });
+  }
+});
+
+test("unsupported or implicit native export formats never fetch export bytes", async () => {
+  const fixture = GOOGLE_DRIVE_FIXTURES.document;
+  const provider = fakeProvider(fixture);
+  const source = new GoogleDriveConnectorObjectSource(selection(fixture.objectId), {
+    grants: authorizedGrants(),
+    fetcher: provider.fetcher,
+  });
+  for (const requested of [
+    {
+      kind: "export_snapshot",
+      format: "google-drive/xlsx",
+      displayFilename: "document.xlsx",
+      mediaType: GOOGLE_DRIVE_FIXTURES.spreadsheet.exportMediaType,
+    },
+    {
+      kind: "export_snapshot",
+      format: "google-drive/docx",
+      displayFilename: "document.pdf",
+      mediaType: GOOGLE_DRIVE_FIXTURES.document.exportMediaType,
+    },
+  ]) {
+    assert.deepEqual(await source.readVerifiedSnapshot({
+      actor: ACTOR,
+      representation: requested,
+      limits: LIMITS,
+    }), {
+      kind: "unavailable",
+      failure: "source_unavailable",
+    });
+  }
+  assert.equal(provider.contentReads(), 0);
+});
+
+test("native export race fails when the explicit snapshot bytes change", async () => {
+  const fixture = GOOGLE_DRIVE_FIXTURES.document;
+  const changed = new Uint8Array(fixture.bytes);
+  changed[changed.byteLength - 1] ^= 0xff;
+  const provider = fakeProvider(fixture, {
+    bytes(read) { return read === 1 ? fixture.bytes : changed; },
+  });
+  const source = new GoogleDriveConnectorObjectSource(selection(fixture.objectId), {
+    grants: authorizedGrants(),
+    fetcher: provider.fetcher,
+  });
+  const result = await source.readVerifiedSnapshot({
+    actor: ACTOR,
+    representation: representation(fixture),
+    limits: LIMITS,
+  });
+  assert.equal(result.kind, "ready");
+  await assert.rejects(
+    collect(result.input.stream),
+    /Google Drive connector snapshot is unavailable/u,
+  );
+  assert.equal(provider.contentReads(), 2);
+});
+
+test("grant revocation and object mutation after selection abort the lazy stream", async (t) => {
+  await t.test("grant revoked", async () => {
+    const fixture = GOOGLE_DRIVE_FIXTURES.binary;
+    const grants = authorizedGrants({
+      resolve(call) {
+        return call === 1
+          ? {
+              kind: "authorized",
+              accessToken: OPAQUE_BEARER,
+              grantFingerprint: GRANT,
+            }
+          : { kind: "revoked" };
+      },
+    });
+    const source = new GoogleDriveConnectorObjectSource(selection(fixture.objectId), {
+      grants,
+      fetcher: fakeProvider(fixture).fetcher,
+    });
+    const result = await source.readVerifiedSnapshot({
+      actor: ACTOR,
+      representation: { kind: "binary" },
+      limits: LIMITS,
+    });
+    assert.equal(result.kind, "ready");
+    await assert.rejects(
+      collect(result.input.stream),
+      (error) => error instanceof Error &&
+        error.message === "Google Drive connector snapshot is unavailable",
+    );
+  });
+
+  await t.test("object ownership/version changed", async () => {
+    const fixture = GOOGLE_DRIVE_FIXTURES.binary;
+    const provider = fakeProvider(fixture, {
+      metadata(read) {
+        return read < 2 ? {} : {
+          version: "18",
+          ownedByMe: false,
+          owners: [{ permissionId: "different_owner" }],
+        };
+      },
+    });
+    const source = new GoogleDriveConnectorObjectSource(selection(fixture.objectId), {
+      grants: authorizedGrants(),
+      fetcher: provider.fetcher,
+    });
+    const result = await source.readVerifiedSnapshot({
+      actor: ACTOR,
+      representation: { kind: "binary" },
+      limits: LIMITS,
+    });
+    assert.equal(result.kind, "ready");
+    await assert.rejects(
+      collect(result.input.stream),
+      /Google Drive connector snapshot is unavailable/u,
+    );
+    assert.equal(provider.contentReads(), 0);
+  });
+});
+
+test("redirects, oversize and arbitrary URL-shaped selection fail closed", async () => {
+  const fixture = GOOGLE_DRIVE_FIXTURES.binary;
+  let fetched = 0;
+  const redirected = new GoogleDriveConnectorObjectSource(selection(fixture.objectId), {
+    grants: authorizedGrants(),
+    fetcher: async () => {
+      fetched += 1;
+      return new Response(null, {
+        status: 302,
+        headers: { location: "https://attacker.invalid/object" },
+      });
+    },
+  });
+  assert.deepEqual(await redirected.readVerifiedSnapshot({
+    actor: ACTOR,
+    representation: { kind: "binary" },
+    limits: LIMITS,
+  }), {
+    kind: "unavailable",
+    failure: "transport_unavailable",
+    retryable: false,
+  });
+  assert.equal(fetched, 1);
+
+  const oversizeProvider = fakeProvider(fixture, {
+    metadata() { return { size: String(268_435_457) }; },
+  });
+  const oversize = new GoogleDriveConnectorObjectSource(selection(fixture.objectId), {
+    grants: authorizedGrants(),
+    fetcher: oversizeProvider.fetcher,
+  });
+  assert.deepEqual(await oversize.readVerifiedSnapshot({
+    actor: ACTOR,
+    representation: { kind: "binary" },
+    limits: LIMITS,
+  }), {
+    kind: "unavailable",
+    failure: "source_unavailable",
+  });
+  assert.equal(oversizeProvider.contentReads(), 0);
+
+  let resolverCalled = false;
+  const urlSelection = new GoogleDriveConnectorObjectSource({
+    bindingRef: BINDING,
+    objectId: fixture.objectId,
+    url: "https://www.googleapis.com/drive/v3/files/anything",
+  }, {
+    grants: {
+      async resolve() {
+        resolverCalled = true;
+        return { kind: "revoked" };
+      },
+    },
+    fetcher: async () => { throw new Error("must not fetch"); },
+  });
+  assert.deepEqual(await urlSelection.readVerifiedSnapshot({
+    actor: ACTOR,
+    representation: { kind: "binary" },
+    limits: LIMITS,
+  }), {
+    kind: "unavailable",
+    failure: "source_unavailable",
+  });
+  assert.equal(resolverCalled, false);
+});
+
+test("native export provider limit is enforced before staging", async () => {
+  const fixture = GOOGLE_DRIVE_FIXTURES.document;
+  const provider = fakeProvider(fixture, {
+    response({ url }) {
+      if (url.pathname.endsWith("/export")) {
+        return new Response(Uint8Array.of(1), {
+          headers: {
+            "content-type": fixture.exportMediaType,
+            "content-length": String(
+              GOOGLE_DRIVE_CONNECTOR_LIMITS.maxNativeExportBytes + 1,
+            ),
+          },
+        });
+      }
+    },
+  });
+  const source = new GoogleDriveConnectorObjectSource(selection(fixture.objectId), {
+    grants: authorizedGrants(),
+    fetcher: provider.fetcher,
+  });
+  assert.deepEqual(await source.readVerifiedSnapshot({
+    actor: ACTOR,
+    representation: representation(fixture),
+    limits: LIMITS,
+  }), {
+    kind: "unavailable",
+    failure: "source_unavailable",
+  });
+});
