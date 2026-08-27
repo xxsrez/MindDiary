@@ -9,9 +9,21 @@ class FixtureFailure extends Error {
 
 let minds = [
   {
+    isPersonal: true,
+    mindId: "mind_fixture_personal",
+    route: "/me",
+    name: "Fixture User",
+    headRevisionId: "revision_fixture_personal",
+    visibility: "private",
+    role: "owner",
+    updatedLabel: "Current HEAD is ready",
+  },
+  {
     mindId: "mind_fixture_owner",
     handle: "research-notes",
     name: "Research Notes",
+    description: "Research decisions and supporting notes.",
+    headRevisionId: "revision_fixture_owner",
     visibility: "private",
     role: "owner",
     metadataVersion: 7,
@@ -21,6 +33,8 @@ let minds = [
     mindId: "mind_fixture_member",
     handle: "shared-library",
     name: "Shared Library",
+    description: null,
+    headRevisionId: "revision_fixture_member",
     visibility: "unlisted",
     role: "editor",
     metadataVersion: 4,
@@ -45,7 +59,7 @@ const adapter = {
   },
   async getMind(handle) {
     record("getMind", { handle });
-    const mind = minds.find((candidate) => candidate.handle === handle);
+    const mind = minds.find((candidate) => candidate.isPersonal !== true && candidate.handle === handle);
     if (!mind) throw new FixtureFailure("mind_not_found");
     return cloneMind(mind);
   },
@@ -58,12 +72,15 @@ const adapter = {
       mindId: `mind_fixture_${command.handle}`,
       handle: command.handle,
       name: command.name,
+      description: command.description ?? null,
+      headRevisionId: "revision_fixture_created",
       visibility: "private",
       role: "owner",
       metadataVersion: 1,
       updatedLabel: "Created at fixture time",
     };
-    minds = [created, ...minds.filter((mind) => mind.handle !== command.handle)];
+    const personal = minds.filter((mind) => mind.isPersonal === true);
+    minds = [...personal, created, ...minds.filter((mind) => mind.isPersonal !== true && mind.handle !== command.handle)];
     return cloneMind(created);
   },
   async renameMind(command) {
@@ -85,6 +102,7 @@ const adapter = {
     const renamed = {
       ...current,
       name: command.name,
+      description: command.description,
       metadataVersion: current.metadataVersion + 1,
       updatedLabel: "Renamed at fixture time",
     };

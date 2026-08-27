@@ -17,6 +17,8 @@ const ownerMind = Object.freeze({
   mindId: "mind_fixture_owner",
   handle: "research-notes",
   name: "Research Notes",
+  description: "Research decisions and supporting notes.",
+  headRevisionId: "revision_fixture_owner",
   visibility: "private",
   role: "owner",
   metadataVersion: 7,
@@ -27,10 +29,23 @@ const memberMind = Object.freeze({
   mindId: "mind_fixture_member",
   handle: "shared-library",
   name: "Shared Library",
+  description: null,
+  headRevisionId: "revision_fixture_member",
   visibility: "unlisted",
   role: "editor",
   metadataVersion: 4,
   updatedLabel: "Updated at fixture time",
+});
+
+const personalMind = Object.freeze({
+  isPersonal: true,
+  mindId: "mind_fixture_personal",
+  route: "/me",
+  name: "Fixture User",
+  headRevisionId: "revision_fixture_personal",
+  visibility: "private",
+  role: "owner",
+  updatedLabel: "Current HEAD is ready",
 });
 
 function listModel(state) {
@@ -54,7 +69,7 @@ function listModel(state) {
   }
   return {
     ...base,
-    view: { kind: "list", collection: { kind: "ready", minds: [ownerMind, memberMind] } },
+    view: { kind: "list", collection: { kind: "ready", minds: [memberMind, personalMind, ownerMind] } },
   };
 }
 
@@ -88,6 +103,9 @@ function resolveStaticPath(pathname) {
   }
   if (pathname === "/ui/ui-shell.js") {
     return resolve(root, "packages/adapter-web/dist/ui-shell.js");
+  }
+  if (pathname === "/ui/invitations-membership.js") {
+    return resolve(root, "packages/adapter-web/dist/invitations-membership.js");
   }
   if (pathname === "/fixture/ordinary-minds-client.mjs") {
     return resolve(fixtureDirectory, "fixture-client.mjs");

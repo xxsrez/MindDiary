@@ -2002,6 +2002,9 @@ test("durable product runtime carries a Sites account token through Codex MCP an
   const exactManagementHtml = await exactManagementPage.text();
   assert.match(exactManagementHtml, /data-mind-handle="runtime-shared"/u);
   assert.match(exactManagementHtml, /Runtime Library/u);
+  assert.match(exactManagementHtml, /Updated runtime description/u);
+  assert.match(exactManagementHtml, /id="ordinary-mind-edit-description"/u);
+  assert.match(exactManagementHtml, /Save metadata/u);
   assert.doesNotMatch(exactManagementHtml, /Runtime Shared/u);
 
   const issued = await responseFrom(runtime, new Request(`${ORIGIN}/api/v1/mcp-tokens`, {

@@ -15,6 +15,7 @@ export type OrdinaryMindUiVisibility = "private" | "unlisted" | "public";
 
 /** Control-plane metadata only. Canonical files never enter this UI model. */
 export interface OrdinaryMindUiMind {
+  readonly isPersonal?: false;
   readonly mindId: string;
   readonly handle: string;
   readonly name: string;
@@ -27,6 +28,19 @@ export interface OrdinaryMindUiMind {
   readonly accessKind?: "membership" | "visibility";
   readonly discovery?: "membership" | "exact_handle" | "public_catalog";
 }
+
+export interface PersonalMindUiMind {
+  readonly isPersonal: true;
+  readonly mindId: string;
+  readonly route: "/me";
+  readonly name: string;
+  readonly headRevisionId: string;
+  readonly visibility: "private";
+  readonly role: "owner";
+  readonly updatedLabel: string;
+}
+
+export type MindListUiMind = OrdinaryMindUiMind | PersonalMindUiMind;
 
 export interface OrdinaryMindUiMember {
   readonly memberId: string;
@@ -63,7 +77,7 @@ export type OrdinaryMindCapacity =
   | { readonly kind: "error" };
 
 export type OrdinaryMindsUiCollectionState =
-  | { readonly kind: "ready"; readonly minds: readonly OrdinaryMindUiMind[] }
+  | { readonly kind: "ready"; readonly minds: readonly MindListUiMind[] }
   | { readonly kind: "loading" }
   | { readonly kind: "empty" }
   | { readonly kind: "error"; readonly message: string };
@@ -92,12 +106,14 @@ export interface OrdinaryMindsManagementModel {
 export interface CreateOrdinaryMindUiCommand {
   readonly name: string;
   readonly handle: string;
+  readonly description?: string | null;
   readonly idempotencyKey: string;
 }
 
 export interface RenameOrdinaryMindUiCommand {
   readonly handle: string;
   readonly name: string;
+  readonly description: string | null;
   readonly expectedMetadataVersion: number;
   readonly idempotencyKey: string;
 }
@@ -133,7 +149,7 @@ export interface OrdinaryMindDeletionUiResult {
  * No browse, fetch, file, or changeset method is available on this adapter.
  */
 export interface OrdinaryMindsManagementAdapter {
-  listMinds(): Promise<readonly OrdinaryMindUiMind[]>;
+  listMinds(): Promise<readonly MindListUiMind[]>;
   getMind(handle: string): Promise<OrdinaryMindUiMind>;
   createMind(command: CreateOrdinaryMindUiCommand): Promise<OrdinaryMindUiMind>;
   renameMind(command: RenameOrdinaryMindUiCommand): Promise<OrdinaryMindUiMind>;
@@ -180,11 +196,38 @@ function isSafeMind(value: unknown): value is OrdinaryMindUiMind {
   return typeof mind.mindId === "string" && mind.mindId.length > 0 &&
     safeHandle(mind.handle) !== null &&
     typeof mind.name === "string" && mind.name.trim().length > 0 && mind.name.length <= 80 &&
+    (mind.description === null ||
+      (typeof mind.description === "string" && [...mind.description].length <= 500)) &&
     typeof mind.headRevisionId === "string" && mind.headRevisionId.length > 0 &&
     safeRole(mind.role) === mind.role &&
     safeVisibility(mind.visibility) === mind.visibility &&
     safeMetadataVersion(mind.metadataVersion) !== null &&
     typeof mind.updatedLabel === "string";
+}
+
+function isSafePersonalMind(value: unknown): value is PersonalMindUiMind {
+  if (typeof value !== "object" || value === null) return false;
+  const mind = value as Partial<PersonalMindUiMind>;
+  return mind.isPersonal === true &&
+    typeof mind.mindId === "string" && mind.mindId.length > 0 &&
+    mind.route === "/me" &&
+    typeof mind.name === "string" && mind.name.trim().length > 0 && mind.name.length <= 80 &&
+    typeof mind.headRevisionId === "string" && mind.headRevisionId.length > 0 &&
+    mind.visibility === "private" &&
+    mind.role === "owner" &&
+    typeof mind.updatedLabel === "string";
+}
+
+function isSafeListMind(value: unknown): value is MindListUiMind {
+  return isSafePersonalMind(value) || isSafeMind(value);
+}
+
+function personalFirst(minds: readonly MindListUiMind[]): MindListUiMind[] {
+  return [...minds].sort((left, right) => Number(right.isPersonal === true) - Number(left.isPersonal === true));
+}
+
+function hasExactlyOnePersonalMind(minds: readonly MindListUiMind[]): boolean {
+  return minds.filter((mind) => mind.isPersonal === true).length === 1;
 }
 
 function titleCase(value: string): string {
@@ -222,18 +265,25 @@ function renderMindCard(mind: OrdinaryMindUiMind): string {
   const role = safeRole(mind.role);
   const visibility = safeVisibility(mind.visibility);
   const route = handle === null ? "#" : `/${handle}`;
-  const relationship = role === "owner" ? "Owned by you" : `${titleCase(role)} member`;
+  const relationship = mind.accessKind === "visibility"
+    ? "Reader by visibility"
+    : role === "owner"
+      ? "Owned by you"
+      : `${titleCase(role)} member`;
   const action = handle === null
     ? '<span class="md-token-card__final-state">Unavailable</span>'
-    : `<a class="md-button md-button--secondary" href="${route}" data-manage-mind>Manage</a>`;
-  return `<article class="md-token-card md-entity-row" tabindex="-1" data-mind-card="${escapeUntrustedText(handle ?? "invalid-handle")}" data-mind-role="${role}" data-ia-row>
+    : `<a class="md-button md-button--secondary" href="${route}" data-manage-mind>${mind.accessKind === "visibility" ? "Open read-only" : "Manage"}</a>`;
+  return `<article class="md-token-card md-entity-row md-mind-row" tabindex="-1" data-mind-card="${escapeUntrustedText(handle ?? "invalid-handle")}" data-mind-role="${role}" data-ia-row>
     <div class="md-token-card__heading">
       <div>
         <h3><a href="${route}">${escapeUntrustedText(mind.name)}</a></h3>
         <code>/${escapeUntrustedText(handle ?? "unavailable")}</code>
       </div>
-      <span class="md-token-state md-token-state--active"><span aria-hidden="true">●</span> ${role === "owner" ? "Owner" : "Member"}</span>
+      <span class="md-token-state md-token-state--active"><span aria-hidden="true">●</span> ${mind.accessKind === "visibility" ? "Signed-in reader" : role === "owner" ? "Owner" : "Member"}</span>
     </div>
+    ${mind.description === null
+      ? '<p class="md-card__description">No description yet.</p>'
+      : `<p class="md-card__description">${escapeUntrustedText(mind.description)}</p>`}
     <dl class="md-token-card__metadata">
       <div><dt>Access</dt><dd>${relationship}</dd></div>
       <div><dt>Visibility</dt><dd>${visibilityLabel(visibility)}</dd></div>
@@ -241,6 +291,26 @@ function renderMindCard(mind: OrdinaryMindUiMind): string {
     </dl>
     <div class="md-token-card__action">${action}</div>
   </article>`;
+}
+
+function renderPersonalMindCard(mind: PersonalMindUiMind): string {
+  return `<article class="md-token-card md-entity-row md-mind-row" tabindex="-1" data-mind-card="me" data-mind-role="owner" data-personal-mind data-ia-row data-ia-disclosure>
+    <div class="md-token-card__heading">
+      <div><p class="md-eyebrow">Personal first</p><h3><a href="/me">My Mind</a></h3><code>/me</code></div>
+      <span class="md-token-state md-token-state--active"><span aria-hidden="true">●</span> Personal</span>
+    </div>
+    <p class="md-card__description"><strong>Service-managed Personal Mind:</strong> private, follows ${escapeUntrustedText(mind.name)}’s profile, and has no separate rename, description, publication, transfer, or deletion.</p>
+    <dl class="md-token-card__metadata">
+      <div><dt>Access</dt><dd>Sole Owner</dd></div>
+      <div><dt>Visibility</dt><dd>Private, always</dd></div>
+      <div><dt>Name</dt><dd>Follows your profile</dd></div>
+    </dl>
+    <div class="md-token-card__action"><a class="md-button md-button--secondary" href="/me">Open My Mind</a></div>
+  </article>`;
+}
+
+function renderListMindCard(mind: MindListUiMind): string {
+  return mind.isPersonal === true ? renderPersonalMindCard(mind) : renderMindCard(mind);
 }
 
 function renderCollection(collection: OrdinaryMindsUiCollectionState): string {
@@ -270,12 +340,12 @@ function renderCollection(collection: OrdinaryMindsUiCollectionState): string {
       return `<section aria-labelledby="ordinary-minds-heading" data-minds-collection data-ia-collection>
         <div class="md-section-heading">
           <div>
-            <p class="md-eyebrow">Owned and joined</p>
+            <p class="md-eyebrow">Personal and available</p>
             <h2 id="ordinary-minds-heading">Your Minds</h2>
           </div>
           <button class="md-button md-button--primary" type="button" data-open-create-mind>Create a Mind</button>
         </div>
-        <div class="md-token-grid" data-minds-list>${collection.minds.map(renderMindCard).join("")}</div>
+        <div class="md-token-grid" data-minds-list>${personalFirst(collection.minds).map(renderListMindCard).join("")}</div>
       </section>`;
   }
 }
@@ -308,6 +378,11 @@ function renderCreateDialog(): string {
         <p id="ordinary-mind-handle-help">Suggested from the name and editable before creation. Use lowercase letters, numbers, and single hyphens.</p>
         <p id="ordinary-mind-handle-conflict">Unavailable addresses always use the same message; Mind Diary does not reveal whether an address is occupied, reserved, or retired.</p>
       </div>
+      <div class="md-field">
+        <label for="ordinary-mind-description">Description <span aria-hidden="true">(optional)</span></label>
+        <textarea id="ordinary-mind-description" name="description" maxlength="500" rows="3" aria-describedby="ordinary-mind-description-help"></textarea>
+        <p id="ordinary-mind-description-help">Service metadata only. It is not a Memory, search input, or instruction to Codex.</p>
+      </div>
       <p class="md-caveat"><strong>Private by default.</strong> Only accepted participants can open this Mind until its Owner explicitly changes visibility.</p>
       <p class="md-form__status" role="status" aria-live="polite" data-create-status></p>
       <div class="md-dialog__actions">
@@ -327,7 +402,7 @@ function renderListView(
       <div>
         <p class="md-eyebrow">Build a Mind from Memories</p>
         <h1>Minds</h1>
-        <p>Manage ordinary Minds you own or have joined. My Mind stays separate at <a href="/me">/me</a>.</p>
+        <p>Open your service-managed Personal Mind first, then manage ordinary Minds available through membership or visibility.</p>
       </div>
       ${renderAnnouncement(announcement)}
     </div>
@@ -351,27 +426,32 @@ function renderRouteState(
   </main>`;
 }
 
-function renderRenamePanel(mind: OrdinaryMindUiMind, handle: string): string {
+function renderMetadataPanel(mind: OrdinaryMindUiMind, handle: string): string {
   const role = safeRole(mind.role);
   const version = safeMetadataVersion(mind.metadataVersion);
   if ((role !== "admin" && role !== "owner") || version === null) {
     return `<article class="md-profile-card">
       <p class="md-eyebrow">Current access</p>
       <h2>Settings are read-only</h2>
-      <p>Your ${titleCase(role)} role can open this Mind, but only an Admin or Owner can rename it.</p>
+      <p>Your ${titleCase(role)} role can open this Mind, but only an Admin or Owner can change its name or description.</p>
     </article>`;
   }
   return `<article class="md-profile-card">
     <p class="md-eyebrow">Display settings</p>
-    <h2>Rename this Mind</h2>
-    <p>Only the display name changes. The permanent route remains <strong>/${escapeUntrustedText(handle)}</strong>.</p>
+    <h2>Name and description</h2>
+    <p>These are service metadata only. The permanent route remains <strong>/${escapeUntrustedText(handle)}</strong>; no content revision is created.</p>
     <form data-rename-mind-form data-metadata-version="${version}">
       <div class="md-field">
         <label for="ordinary-mind-rename">Mind name</label>
         <input id="ordinary-mind-rename" name="name" type="text" required maxlength="80" autocomplete="off" value="${escapeUntrustedText(mind.name)}">
       </div>
+      <div class="md-field">
+        <label for="ordinary-mind-edit-description">Description <span aria-hidden="true">(optional)</span></label>
+        <textarea id="ordinary-mind-edit-description" name="description" maxlength="500" rows="4" aria-describedby="ordinary-mind-edit-description-help">${escapeUntrustedText(mind.description ?? "")}</textarea>
+        <p id="ordinary-mind-edit-description-help">Clearing this field removes the description. It is not a Memory, search input, or model instruction.</p>
+      </div>
       <p class="md-form__status" role="status" aria-live="polite" data-rename-status></p>
-      <button class="md-button md-button--primary" type="submit" data-rename-submit>Save name</button>
+      <button class="md-button md-button--primary" type="submit" data-rename-submit>Save metadata</button>
       <button class="md-button md-button--secondary" type="button" data-refresh-mind hidden style="display:none">Reload current settings</button>
     </form>
   </article>`;
@@ -622,6 +702,7 @@ function renderDetailView(
         <article class="md-personal-card">
           <span class="md-card__personal">Ordinary Mind</span>
           <h2 data-route-summary-name>${escapeUntrustedText(mind.name)}</h2>
+          <p data-route-description>${mind.description === null ? "No description yet." : escapeUntrustedText(mind.description)}</p>
           <p>The handle is immutable in this prototype. Renaming never changes this route.</p>
           <dl class="md-personal-summary">
             <div><dt>Route</dt><dd><a href="/${handle}">/${handle}</a></dd></div>
@@ -629,7 +710,7 @@ function renderDetailView(
             <div><dt>Visibility</dt><dd data-route-visibility>${visibilityLabel(visibility)}</dd></div>
           </dl>
         </article>
-        ${renderRenamePanel(mind, handle)}
+        ${renderMetadataPanel(mind, handle)}
       </div>
       ${renderVisibilityPanel(mind, handle)}
       ${role === "reader" || mind.accessKind === "visibility"
@@ -708,7 +789,7 @@ function failureCode(error: unknown): string | null {
   return typeof code === "string" ? code : null;
 }
 
-function collectionFromMinds(minds: readonly OrdinaryMindUiMind[]): OrdinaryMindsUiCollectionState {
+function collectionFromMinds(minds: readonly MindListUiMind[]): OrdinaryMindsUiCollectionState {
   return minds.length === 0 ? { kind: "empty" } : { kind: "ready", minds };
 }
 
@@ -725,13 +806,15 @@ function prependMindCard(shell: HTMLElement, mind: OrdinaryMindUiMind): boolean 
   const list = shell.querySelector<HTMLElement>("[data-minds-list]");
   if (!list) return false;
   const template = shell.ownerDocument.createElement("template");
-  template.innerHTML = renderMindCard(mind);
+  template.innerHTML = renderListMindCard(mind);
   const card = template.content.firstElementChild;
   if (!card) return false;
   const duplicate = Array.from(list.querySelectorAll<HTMLElement>("[data-mind-card]"))
     .find((candidate) => candidate.dataset.mindCard === mind.handle);
   duplicate?.remove();
-  list.prepend(card);
+  const personal = list.querySelector<HTMLElement>("[data-personal-mind]");
+  if (personal) personal.insertAdjacentElement("afterend", card);
+  else list.prepend(card);
   return true;
 }
 
@@ -768,8 +851,10 @@ function createIdempotencyKey(factory: () => string): string | null {
 
 function updateRouteMind(shell: HTMLElement, mind: OrdinaryMindUiMind): void {
   const name = shell.querySelector<HTMLInputElement>("#ordinary-mind-rename");
+  const description = shell.querySelector<HTMLTextAreaElement>("#ordinary-mind-edit-description");
   const form = shell.querySelector<HTMLFormElement>("[data-rename-mind-form]");
   if (name) name.value = mind.name;
+  if (description) description.value = mind.description ?? "";
   if (form) form.dataset.metadataVersion = String(mind.metadataVersion);
   for (const node of Array.from(shell.querySelectorAll<HTMLElement>("[data-route-mind-name], [data-route-summary-name]"))) {
     node.textContent = mind.name;
@@ -778,6 +863,8 @@ function updateRouteMind(shell: HTMLElement, mind: OrdinaryMindUiMind): void {
   const visibility = shell.querySelector<HTMLElement>("[data-route-visibility]");
   if (role) role.textContent = titleCase(mind.role);
   if (visibility) visibility.textContent = visibilityLabel(mind.visibility);
+  const routeDescription = shell.querySelector<HTMLElement>("[data-route-description]");
+  if (routeDescription) routeDescription.textContent = mind.description ?? "No description yet.";
 }
 
 function setDeleteImpactText(shell: HTMLElement, selector: string, value: number): void {
@@ -841,18 +928,19 @@ export function installOrdinaryMindsManagement(
     });
   }
 
-  let listMinds: OrdinaryMindUiMind[] | null = null;
+  let listMinds: MindListUiMind[] | null = null;
 
   const createDialog = shell.querySelector<HTMLDialogElement>("[data-create-mind-dialog]");
   const createForm = shell.querySelector<HTMLFormElement>("[data-create-mind-form]");
   const createName = shell.querySelector<HTMLInputElement>("#ordinary-mind-name");
   const createHandle = shell.querySelector<HTMLInputElement>("#ordinary-mind-handle");
+  const createDescription = shell.querySelector<HTMLTextAreaElement>("#ordinary-mind-description");
   const createStatus = shell.querySelector<HTMLElement>("[data-create-status]");
   const createSubmit = shell.querySelector<HTMLButtonElement>("[data-create-submit]");
   let createInvoker: HTMLElement | null = null;
   let createPending = false;
   let handleEdited = false;
-  let createAttempt: { readonly name: string; readonly handle: string; readonly key: string } | null = null;
+  let createAttempt: { readonly name: string; readonly handle: string; readonly description: string | null; readonly key: string } | null = null;
 
   const resetCreateAttempt = () => {
     createAttempt = null;
@@ -891,26 +979,31 @@ export function installOrdinaryMindsManagement(
       if (createPending || !createForm.reportValidity()) return;
       const name = createName.value.trim();
       const handle = createHandle.value.trim();
-      const key = createAttempt?.name === name && createAttempt.handle === handle
+      const description = createDescription?.value.trim() || null;
+      const key = createAttempt?.name === name && createAttempt.handle === handle &&
+          createAttempt.description === description
         ? createAttempt.key
         : createIdempotencyKey(idempotencyKey);
       if (key === null) {
         createStatus.textContent = "A safe retry key could not be created. Refresh this page and try again.";
         return;
       }
-      createAttempt = { name, handle, key };
+      createAttempt = { name, handle, description, key };
       createPending = true;
       createSubmit.disabled = true;
       createDialog.setAttribute("aria-busy", "true");
       createStatus.textContent = "Creating one private Mind and its Owner membership…";
       try {
-        const created = await adapter.createMind({ name, handle, idempotencyKey: key });
+        const created = await adapter.createMind({ name, handle, description, idempotencyKey: key });
         if (!isSafeMind(created) || created.handle !== handle || created.role !== "owner" || created.visibility !== "private") {
           throw new Error("Invalid create result");
         }
         if (disposed) return;
         if (listMinds !== null) {
-          listMinds = [created, ...listMinds.filter((mind) => mind.handle !== created.handle)];
+          const personal = listMinds.filter((mind) => mind.isPersonal === true);
+          const ordinary = listMinds.filter((mind) =>
+            mind.isPersonal !== true && mind.handle !== created.handle);
+          listMinds = [...personal, created, ...ordinary];
           replaceCollection(shell, collectionFromMinds(listMinds));
         } else if (!prependMindCard(shell, created)) {
           replaceCollection(shell, collectionFromMinds([created]));
@@ -955,9 +1048,11 @@ export function installOrdinaryMindsManagement(
     replaceCollection(shell, { kind: "loading" });
     try {
       const minds = await adapter.listMinds();
-      if (!Array.isArray(minds) || !minds.every(isSafeMind)) throw new Error("Invalid list result");
+      if (!Array.isArray(minds) || !minds.every(isSafeListMind) || !hasExactlyOnePersonalMind(minds)) {
+        throw new Error("Invalid list result");
+      }
       if (disposed) return;
-      listMinds = [...minds];
+      listMinds = personalFirst(minds);
       replaceCollection(shell, collectionFromMinds(listMinds));
     } catch {
       if (!disposed) replaceCollection(shell, { kind: "error", message: "Mind metadata is unavailable. No knowledge files were requested." });
@@ -971,44 +1066,49 @@ export function installOrdinaryMindsManagement(
   const routeMindId = routeContainer?.dataset.mindId ?? null;
   const renameForm = shell.querySelector<HTMLFormElement>("[data-rename-mind-form]");
   const renameInput = shell.querySelector<HTMLInputElement>("#ordinary-mind-rename");
+  const renameDescription = shell.querySelector<HTMLTextAreaElement>("#ordinary-mind-edit-description");
   const renameStatus = shell.querySelector<HTMLElement>("[data-rename-status]");
   const renameSubmit = shell.querySelector<HTMLButtonElement>("[data-rename-submit]");
   const refreshMindButton = shell.querySelector<HTMLButtonElement>("[data-refresh-mind]");
   let renamePending = false;
-  let renameAttempt: { readonly name: string; readonly version: number; readonly key: string } | null = null;
-  if (renameInput) {
-    on<InputEvent>(renameInput, "input", () => {
+  let renameAttempt: { readonly name: string; readonly description: string | null; readonly version: number; readonly key: string } | null = null;
+  for (const field of [renameInput, renameDescription]) {
+    if (!field) continue;
+    on<InputEvent>(field, "input", () => {
       renameAttempt = null;
       if (renameStatus) renameStatus.textContent = "";
       setElementHidden(refreshMindButton, true);
     });
   }
-  if (renameForm && renameInput && renameStatus && renameSubmit && routeHandle !== null) {
+  if (renameForm && renameInput && renameDescription && renameStatus && renameSubmit && routeHandle !== null) {
     on<SubmitEvent>(renameForm, "submit", async (event) => {
       event.preventDefault();
       if (renamePending || !renameForm.reportValidity()) return;
       const name = renameInput.value.trim();
+      const description = renameDescription.value.trim() || null;
       const version = Number.parseInt(renameForm.dataset.metadataVersion ?? "", 10);
       if (safeMetadataVersion(version) === null) {
         renameStatus.textContent = "Reload current settings before renaming this Mind.";
         setElementHidden(refreshMindButton, false);
         return;
       }
-      const key = renameAttempt?.name === name && renameAttempt.version === version
+      const key = renameAttempt?.name === name && renameAttempt.description === description &&
+          renameAttempt.version === version
         ? renameAttempt.key
         : createIdempotencyKey(idempotencyKey);
       if (key === null) {
         renameStatus.textContent = "A safe retry key could not be created. Refresh this page and try again.";
         return;
       }
-      renameAttempt = { name, version, key };
+      renameAttempt = { name, description, version, key };
       renamePending = true;
       renameSubmit.disabled = true;
-      renameStatus.textContent = "Saving the display name…";
+      renameStatus.textContent = "Saving the name and description…";
       try {
         const renamed = await adapter.renameMind({
           handle: routeHandle,
           name,
+          description,
           expectedMetadataVersion: version,
           idempotencyKey: key,
         });
@@ -1019,8 +1119,8 @@ export function installOrdinaryMindsManagement(
         if (disposed) return;
         updateRouteMind(shell, renamed);
         renameAttempt = null;
-        renameStatus.textContent = `Name saved. The route is still /${routeHandle}.`;
-        setAnnouncement(shell, `${renamed.name} was renamed without changing its route.`);
+        renameStatus.textContent = `Metadata saved. The route is still /${routeHandle}.`;
+        setAnnouncement(shell, `${renamed.name} metadata was saved without changing content or route.`);
         setElementHidden(refreshMindButton, true);
       } catch (error) {
         if (disposed) return;
@@ -1028,7 +1128,7 @@ export function installOrdinaryMindsManagement(
           renameStatus.textContent = "This Mind changed in another session. Reload current settings before trying again.";
           setElementHidden(refreshMindButton, false);
         } else {
-          renameStatus.textContent = "The name was not changed. The existing name and route remain in effect.";
+          renameStatus.textContent = "Metadata was not changed. The existing name, description, and route remain in effect.";
         }
       } finally {
         renamePending = false;
@@ -1053,7 +1153,7 @@ export function installOrdinaryMindsManagement(
       updateRouteMind(shell, current);
       renameAttempt = null;
       setElementHidden(refreshMindButton, true);
-      if (renameStatus) renameStatus.textContent = "Current settings loaded. Review the name before saving again.";
+      if (renameStatus) renameStatus.textContent = "Current settings loaded. Review the name and description before saving again.";
       renameInput?.focus();
     } catch {
       if (!disposed && renameStatus) renameStatus.textContent = "Current settings could not be reloaded. The name was not changed.";

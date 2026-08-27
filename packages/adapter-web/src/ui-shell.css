@@ -25,7 +25,8 @@ body {
 
 button,
 input,
-select {
+select,
+textarea {
   font: inherit;
 }
 
@@ -34,7 +35,7 @@ a {
   text-underline-offset: 0.18em;
 }
 
-:where(a, button, input, select, dialog, [tabindex]):focus-visible {
+:where(a, button, input, select, textarea, dialog, [tabindex]):focus-visible {
   outline: 3px solid var(--mind-diary-memory-plum, #6c4bb6);
   outline-offset: 3px;
 }
@@ -545,7 +546,8 @@ h3 {
   font-weight: 750;
 }
 
-.md-field input {
+.md-field input,
+.md-field textarea {
   width: 100%;
   min-height: 2.9rem;
   padding: 0.6rem 0.75rem;
@@ -553,6 +555,10 @@ h3 {
   border-radius: var(--mind-diary-radius-control, 12px);
   color: var(--mind-diary-ink, #182642);
   background: var(--mind-diary-white, #fff);
+}
+
+.md-field textarea {
+  resize: vertical;
 }
 
 .md-field input:user-invalid {
@@ -1718,6 +1724,31 @@ h3 {
   border: 0;
 }
 
+.md-token-card.md-mind-row {
+  grid-template-columns: minmax(9rem, 0.8fr) minmax(10rem, 1fr) minmax(18rem, 1.5fr) auto;
+}
+
+.md-token-card.md-mind-row .md-token-card__heading {
+  grid-column: 1;
+}
+
+.md-token-card.md-mind-row .md-card__description {
+  grid-column: 2;
+  overflow: hidden;
+  margin: 0;
+  text-overflow: ellipsis;
+}
+
+.md-token-card.md-mind-row .md-token-card__metadata {
+  grid-column: 3;
+}
+
+.md-token-card.md-mind-row .md-token-card__action {
+  grid-column: 4;
+  margin: 0;
+  padding: 0;
+}
+
 .md-token-card,
 .md-setup-card,
 .md-profile-card,
@@ -1820,6 +1851,19 @@ h3 {
 
   .md-token-card.md-entity-row .md-token-card__metadata {
     flex-wrap: wrap;
+  }
+
+  .md-token-card.md-mind-row .md-card__description,
+  .md-token-card.md-mind-row .md-token-card__action {
+    grid-column: 1;
+  }
+
+  .md-token-card.md-mind-row .md-card__description {
+    overflow: visible;
+  }
+
+  .md-token-card.md-mind-row .md-token-card__action {
+    justify-content: start;
   }
 }
 

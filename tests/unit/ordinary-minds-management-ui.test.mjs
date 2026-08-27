@@ -17,6 +17,7 @@ const OWNER_MIND = Object.freeze({
   mindId: "mind_owner_fixture",
   handle: "research-notes",
   name: "Research Notes",
+  description: "Research decisions and supporting notes.",
   visibility: "private",
   role: "owner",
   metadataVersion: 7,
@@ -28,6 +29,7 @@ const MEMBER_MIND = Object.freeze({
   mindId: "mind_member_fixture",
   handle: "shared-library",
   name: "Shared Library",
+  description: null,
   visibility: "unlisted",
   role: "editor",
   metadataVersion: 4,
@@ -61,7 +63,33 @@ test("list view distinguishes owned and member Minds with canonical route manage
   assert.match(html, /data-mind-card="shared-library" data-mind-role="editor"/);
   assert.match(html, /Editor member/);
   assert.match(html, /Unlisted/);
+  assert.match(html, /Research decisions and supporting notes\./);
+  assert.match(html, /No description yet\./);
   assert.doesNotMatch(html, /data-mind-card="me"|href="\/me"[^>]*>Manage/);
+});
+
+test("common Minds collection keeps the service-managed Personal Mind first", () => {
+  const html = renderOrdinaryMindsManagement(listModel({
+    kind: "ready",
+    minds: [MEMBER_MIND, {
+      isPersonal: true,
+      mindId: "mind_personal_fixture",
+      route: "/me",
+      name: "Andrey",
+      headRevisionId: "revision_personal_fixture",
+      visibility: "private",
+      role: "owner",
+      updatedLabel: "Current HEAD is ready",
+    }, OWNER_MIND],
+  }));
+
+  assert.ok(html.indexOf('data-mind-card="me"') < html.indexOf('data-mind-card="shared-library"'));
+  assert.match(html, /data-personal-mind/);
+  assert.match(html, /Sole Owner/);
+  assert.match(html, /Private, always/);
+  assert.match(html, /Follows your profile/);
+  assert.match(html, /no separate rename, description, publication, transfer, or deletion/i);
+  assert.match(html, /href="\/me">Open My Mind/);
 });
 
 test("create flow requires a name, offers an editable suggested handle, and states private default", () => {
@@ -73,6 +101,8 @@ test("create flow requires a name, offers an editable suggested handle, and stat
   assert.equal(suggestOrdinaryMindHandle("Заметки"), "new-mind");
   assert.match(html, /id="ordinary-mind-name"[^>]*required[^>]*maxlength="80"/);
   assert.match(html, /id="ordinary-mind-handle"[^>]*required[^>]*minlength="3"[^>]*maxlength="63"/);
+  assert.match(html, /id="ordinary-mind-description"[^>]*maxlength="500"/);
+  assert.match(html, /not a Memory, search input, or instruction to Codex/);
   assert.match(html, /Suggested from the name and editable before creation/);
   assert.match(html, /<strong>Private by default\.<\/strong>/);
   assert.match(html, /occupied, reserved, or retired/);
@@ -81,7 +111,7 @@ test("create flow requires a name, offers an editable suggested handle, and stat
   assert.match(implementation, /No partial Mind is shown; retrying the same details is safe/);
 });
 
-test("route detail renames only the display name and handles stale metadata explicitly", () => {
+test("route detail atomically edits name and description and handles stale metadata explicitly", () => {
   const html = renderOrdinaryMindsManagement(detailModel({
     ...OWNER_MIND,
     visibility: "public",
@@ -89,8 +119,11 @@ test("route detail renames only the display name and handles stale metadata expl
 
   assert.match(html, /data-mind-handle="research-notes"/);
   assert.match(html, /data-metadata-version="7"/);
-  assert.match(html, /Only the display name changes/);
+  assert.match(html, /These are service metadata only/);
   assert.match(html, /The permanent route remains <strong>\/research-notes<\/strong>/);
+  assert.match(html, /id="ordinary-mind-edit-description"[^>]*maxlength="500"/);
+  assert.match(html, /Research decisions and supporting notes\./);
+  assert.match(html, /no content revision is created/i);
   assert.match(html, /Renaming never changes this route/);
   assert.match(implementation, /failureCode\(error\) === "metadata_conflict"/);
   assert.match(implementation, /reload current settings before trying again/i);
@@ -116,6 +149,8 @@ test("delete preview and strong confirmation are rendered only for Owner", () =>
   assert.match(owner, /Delete Mind permanently/);
   assert.match(owner, /there is no recovery and no forensic deletion receipt/i);
   assert.doesNotMatch(admin, /data-owner-delete-controls|data-delete-mind-dialog/);
+  assert.match(admin, /data-rename-mind-form/);
+  assert.doesNotMatch(admin, /data-owner-visibility-controls/);
   assert.doesNotMatch(editor, /data-owner-delete-controls|data-delete-mind-dialog|data-rename-mind-form/);
   assert.match(editor, /Settings are read-only/);
   assert.match(implementation, /Loading the current deletion impact/);
@@ -182,7 +217,7 @@ test("browser management stays metadata-only while import uses its bounded dedic
   assert.match(html, /Import a folder/);
   assert.match(html, /data-markdown-import[^>]+data-head-revision="revision_owner_fixture"/);
   assert.match(html, /type="file"[^>]+accept="\.md,text\/markdown"/);
-  assert.doesNotMatch(html, /<textarea|name="(?:text|markdown|path)"/i);
+  assert.doesNotMatch(html, /<textarea[^>]+name="(?:text|markdown|path)"/i);
 });
 
 test("all supplied names, labels, announcements, and route errors are escaped", () => {
@@ -197,6 +232,7 @@ test("all supplied names, labels, announcements, and route errors are escaped", 
         minds: [{
           ...OWNER_MIND,
           name: `<svg onload="globalThis.pwned=2">`,
+          description: `<img src=x onerror="globalThis.pwned=4">`,
           updatedLabel: `<script>globalThis.pwned=3</script>`,
         }],
       },
@@ -206,6 +242,7 @@ test("all supplied names, labels, announcements, and route errors are escaped", 
   assert.doesNotMatch(html, /<(?:script|svg|img)\b[^>]*(?:onerror|onload|pwned)/i);
   assert.doesNotMatch(html, /\son(?:error|load)\s*=\s*["']/i);
   assert.match(html, /&lt;svg onload=&quot;globalThis\.pwned=2&quot;&gt;/);
+  assert.match(html, /&lt;img src=x onerror=&quot;globalThis\.pwned=4&quot;&gt;/);
 
   const routeError = renderOrdinaryMindsManagement({
     displayName: "Andrey",

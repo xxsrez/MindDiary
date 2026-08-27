@@ -56,7 +56,11 @@ test("heavy navigation pages render their shell before deferred collection reads
 
   await expect(page.getByRole("heading", { name: "Loading your Minds" })).toBeVisible();
   await expect(page.locator("[data-minds-collection]")).toHaveAttribute("aria-busy", "true");
-  await expect(page.getByRole("heading", { name: "No shared Minds yet" })).toBeVisible();
+  await expect(page.locator("[data-minds-list] [data-mind-card]").first()).toHaveAttribute(
+    "data-mind-card",
+    "me",
+  );
+  await expect(page.locator("[data-personal-mind]")).toContainText("Private, always");
 
   await page.unroute("**/api/v1/minds");
   await page.route("**/api/v1/minds", async (route) => {

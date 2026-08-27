@@ -1064,6 +1064,12 @@ test("ordinary Mind list and exact route wire the UAT management and deletion co
   assert.match(assetBody, /expected_invitation_version/);
   assert.match(assetBody, /expected_membership_version/);
   assert.match(assetBody, /request\("GET","\/api\/v1\/minds"\)/);
+  assert.match(assetBody, /validPersonalMind/);
+  assert.match(assetBody, /createAttempt/);
+  assert.match(assetBody, /metadataAttempt/);
+  assert.match(assetBody, /description=createDescription\?\.value\.trim\(\)\|\|null/);
+  assert.match(assetBody, /\{name,handle,description\}/);
+  assert.match(assetBody, /description:renameForm\.elements\.description/);
   assert.match(assetBody, /markdown-import-plans/);
   assert.match(assetBody, /markdown-import-mind/);
   assert.match(assetBody, /history\.replaceState/);
