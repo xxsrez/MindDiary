@@ -55,7 +55,11 @@ Hosted run выполняется после integration exact candidate, пол
 gate, сборки exact Sites archive, save/deploy и terminal provider read-back.
 Интерактивная surface — Codex in-app Browser. Runner создаёт уникальный
 run-owned ordinary Mind и synthetic test actors доступным UAT test seam,
-исполняет тот же closed registry и удаляет ordinary Mind. Существующий Personal
+исполняет тот же closed registry и удаляет ordinary Mind. До mutable journeys
+он снимает authoritative credential inventory baseline, затем создаёт
+отдельный именованный personal token с expiry не более часа, один раз использует
+его для разрешённого content read и сохраняет только hash случайного run label,
+expiry и HTTP status — secret не попадает в evidence. Существующий Personal
 Mind разрешено только читать; менять или удалять его запрещено.
 
 До cleanup сохраняются private raw inputs:
@@ -67,8 +71,13 @@ Mind разрешено только читать; менять или удал�
    должны совпасть.
 2. `browser-readback.json` schema
    `mind-diary/mind-admin-in-app-browser-readback/v1`: direct in-app Browser
-   observations двенадцати journeys, exact candidate/tree, hash local receipt,
+   observations тринадцати journeys, exact candidate/tree, hash local receipt,
    metadata versions, negative HTTP statuses, persistence и cleanup facts.
+   Тринадцатая journey `admin.cleanup-credential-baseline` содержит baseline
+   credential count и SHA-256 нормализованного inventory до/после, нулевое
+   количество run credential после revoke, успешный status его единственного
+   use и `401` следующего запроса после revoke. Raw credential name и secret
+   запрещены.
 3. Exact archive, переданный `save_site_version`, и local receipt того же
    candidate.
 
@@ -110,7 +119,13 @@ Terminal hosted evidence может записать только orchestrating 
 `mind-diary/mind-admin-uat-evidence/v1` должна иметь `status: passed`,
 `hosted_evidence: true`, `provenance: direct-same-run-observation`, exact
 candidate/tree/archive/deployment, hashes и refs каждого raw tool output,
-structural join hash, двенадцать journey rows и cleanup absence read-back.
+structural join hash, тринадцать journey rows и cleanup absence read-back.
+
+Cleanup считается завершённым только после revoke run token, authoritative
+token-list read-back с `run_credential_count_after=0`, равенства baseline
+count/inventory hash, отказа следующего token request, удаления ordinary Mind и
+owner/participant `404` плюс catalog absence. Закрытие browser context или
+отсутствие Mind само по себе credential cleanup не доказывает.
 
 Переданные JSON, opaque provider IDs, старый deployment, screenshot, manual
 approval или полностью совпавший offline join не заменяют прямые observations.

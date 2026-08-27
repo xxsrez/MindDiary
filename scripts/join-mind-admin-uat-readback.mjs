@@ -41,10 +41,18 @@ const JOURNEY_CHECKS = Object.freeze({
     "admin.personal-invariants": ["personal-controls-absent", "personal-mutation-403", "other-personal-undisclosed"],
     "admin.deletion-impact-confirmation": ["impact-counts-recorded", "exact-confirmation", "no-recovery-acknowledged"],
   "admin.cleanup-absence-readback": ["owner-404", "participant-404", "catalog-absent"],
+  "admin.cleanup-credential-baseline": [
+    "credential-baseline-recorded",
+    "run-credential-created-short-lived",
+    "run-credential-used",
+    "run-credential-revoked",
+    "next-request-denied",
+    "credential-baseline-restored",
+  ],
 });
 
 export const MIND_ADMIN_UAT_JOURNEYS = Object.freeze(
-  MIND_ADMIN_BROWSER_ASSERTION_IDS.map((id) => Object.freeze({
+  [...MIND_ADMIN_BROWSER_ASSERTION_IDS, "admin.cleanup-credential-baseline"].map((id) => Object.freeze({
     id,
     checks: Object.freeze(JOURNEY_CHECKS[id]),
   })),
@@ -158,7 +166,40 @@ function browserBinding(readback, expected) {
     if (!isRecord(facts) || !Number.isSafeInteger(facts.metadata_version_before) ||
         !Number.isSafeInteger(facts.metadata_version_after) || facts.metadata_version_before < 1 ||
         facts.metadata_version_after < facts.metadata_version_before || !Number.isSafeInteger(facts.negative_status) ||
-        ![0, 403, 404, 409].includes(facts.negative_status)) fail("uat_journey_facts_missing");
+        ![0, 401, 403, 404, 409].includes(facts.negative_status)) fail("uat_journey_facts_missing");
+    if (expectedJourney.id === "admin.cleanup-credential-baseline") {
+      const requiredKeys = [
+        "baseline_credential_count_after",
+        "baseline_credential_count_before",
+        "baseline_inventory_sha256_after",
+        "baseline_inventory_sha256_before",
+        "metadata_version_after",
+        "metadata_version_before",
+        "negative_status",
+        "run_credential_count_after",
+        "run_credential_denied_status_after_revoke",
+        "run_credential_label_sha256",
+        "run_credential_used_status",
+        "short_lived_expiry_seconds",
+      ];
+      if (canonical(Object.keys(facts).sort()) !== canonical(requiredKeys) ||
+          !Number.isSafeInteger(facts.baseline_credential_count_before) ||
+          facts.baseline_credential_count_before < 0 ||
+          facts.baseline_credential_count_after !== facts.baseline_credential_count_before ||
+          facts.run_credential_count_after !== 0 || facts.run_credential_used_status !== 200 ||
+          facts.run_credential_denied_status_after_revoke !== 401 || facts.negative_status !== 401 ||
+          !SHA256.test(facts.baseline_inventory_sha256_before ?? "") ||
+          facts.baseline_inventory_sha256_after !== facts.baseline_inventory_sha256_before ||
+          !SHA256.test(facts.run_credential_label_sha256 ?? "") ||
+          !Number.isSafeInteger(facts.short_lived_expiry_seconds) ||
+          facts.short_lived_expiry_seconds < 60 || facts.short_lived_expiry_seconds > 3600) {
+        fail("uat_credential_cleanup_facts_missing");
+      }
+    } else if (canonical(Object.keys(facts).sort()) !== canonical([
+      "metadata_version_after", "metadata_version_before", "negative_status",
+    ])) {
+      fail("uat_journey_facts_shape_mismatch");
+    }
     return Object.freeze(structuredClone(matches[0]));
   });
   return Object.freeze({ observedAt, journeys });

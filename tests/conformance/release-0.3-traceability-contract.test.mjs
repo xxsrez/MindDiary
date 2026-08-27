@@ -12,6 +12,14 @@ const specification = await readFile(
   new URL("docs/specs/release-0.3-traceability.md", root),
   "utf8",
 );
+const mindAdminGateSource = await readFile(
+  new URL("scripts/run-mind-admin-browser-gate.mjs", root),
+  "utf8",
+);
+const mindAdminJoinSource = await readFile(
+  new URL("scripts/join-mind-admin-uat-readback.mjs", root),
+  "utf8",
+);
 
 function exactKeys(value, keys, label) {
   assert.deepEqual(Object.keys(value).sort(), [...keys].sort(), label);
@@ -167,7 +175,12 @@ test("local evidence rows are exact runnable commands with existing tests and fi
     assert.match(row.command, /^npm run build --silent && /);
     assert.doesNotMatch(row.command, /<[^>]+>|\b(?:TODO|TBD|manual)\b/i);
     assert.equal(row.externalPrerequisite, "none");
-    assert.equal(row.receiptSchema, "mind-diary/local-traceability-evidence/v1");
+    assert.equal(
+      row.receiptSchema,
+      row.id === "L-MINDS"
+        ? "mind-diary/mind-admin-browser-evidence/v1"
+        : "mind-diary/local-traceability-evidence/v1",
+    );
     assert.equal(row.assertionSource, "requirements.assertionId");
     assert.ok(row.actors.length > 0 && row.actors.length <= 3);
     for (const path of [...row.testPaths, ...row.fixturePaths]) {
@@ -196,6 +209,35 @@ test("local transfer evidence proves Site export and both MCP moved-compatibilit
   );
   assert.match(authority.readBack, /both MCP catalogs/u);
   assert.match(authority.readBack, /without export side effects/u);
+});
+
+test("MD-351 cannot close without the exact-SHA Mind admin browser artifact and credential cleanup", () => {
+  const evidence = evidenceById();
+  const local = evidence.get("L-MINDS");
+  const hosted = evidence.get("U-MINDS");
+  const requirement = fixture.requirements.find(({ task }) => task === "MD-351");
+  assert.ok(requirement.acceptedDecisions.includes("docs/operations/mind-admin-browser-uat-runbook.md"));
+  assert.match(
+    local.command,
+    /npm run gate:mind-admin-browser -- --candidate-sha "\$MIND_DIARY_MD351_CANDIDATE_SHA" --evidence-out "\$MIND_DIARY_MD351_PRIVATE_EVIDENCE_DIR\/mind-admin-browser\.json"$/u,
+  );
+  assert.equal(local.receiptSchema, "mind-diary/mind-admin-browser-evidence/v1");
+  for (const path of [
+    "tests/browser/mind-admin-journey/mind-admin-journey.spec.mjs",
+    "playwright.md351.config.mjs",
+    "scripts/lib/synthetic-browser-composition.mjs",
+  ]) assert.ok(local.fixturePaths.includes(path), `${path} missing from L-MINDS`);
+  for (const hashedContractSource of [
+    "docs/specs/release-0.3-traceability.md",
+    "tests/conformance/release-0.3-traceability-contract.test.mjs",
+    "tests/fixtures/release-0.3-traceability/contract.v1.json",
+  ]) assert.ok(mindAdminGateSource.includes(`\"${hashedContractSource}\"`));
+  assert.ok(hosted.setup.some((step) => step.includes("short-lived personal token")));
+  assert.ok(hosted.cleanup.some((step) => step.includes("next request denied")));
+  assert.ok(hosted.cleanup.some((step) => step.includes("credential count/inventory hash restored")));
+  assert.match(mindAdminJoinSource, /admin\.cleanup-credential-baseline/u);
+  assert.match(mindAdminJoinSource, /run_credential_denied_status_after_revoke/u);
+  assert.match(mindAdminJoinSource, /baseline_inventory_sha256_after/u);
 });
 
 test("hosted evidence rows define exact lineage, receipts, bounded actors and reconciliation", async () => {

@@ -33,7 +33,14 @@ test("MD-351 browser gate CLI is closed to an exact candidate and private receip
 
 test("MD-351 local receipt binds exact tree, executed bytes and toolchain but is not hosted", () => {
   assert.equal(new Set(MIND_ADMIN_BROWSER_ASSERTION_IDS).size, 12);
-  assert.equal(new Set(MIND_ADMIN_BROWSER_SOURCE_FILES).size, 4);
+  assert.equal(new Set(MIND_ADMIN_BROWSER_SOURCE_FILES).size, 13);
+  for (const requiredContractSource of [
+    "docs/specs/release-0.3-traceability.md",
+    "tests/conformance/release-0.3-traceability-contract.test.mjs",
+    "tests/fixtures/release-0.3-traceability/contract.v1.json",
+  ]) {
+    assert.ok(MIND_ADMIN_BROWSER_SOURCE_FILES.includes(requiredContractSource));
+  }
   const sourceHashes = Object.fromEntries(
     MIND_ADMIN_BROWSER_SOURCE_FILES.map((path, index) => [path, sha256(String(index + 1))]),
   );

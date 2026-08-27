@@ -1312,6 +1312,12 @@ archive и заявленные provider/browser readbacks, но даже при
 `provenance=unverified-local-files`. Hosted PASS принадлежит только
 orchestrating agent с прямыми same-run Sites connector и Codex in-app Browser
 observations; локальный script не имеет switch для повышения результата.
+Hosted setup дополнительно снимает authoritative credential-list baseline,
+создаёт и один раз использует run-owned personal token с expiry не более часа.
+Cleanup отзывает его и в том же run доказывает `401` следующего запроса,
+нулевой run-token count и exact восстановление baseline count/inventory hash;
+ни token secret, ни raw credential name в evidence не сохраняются. Mind `404`
+без этого credential read-back не закрывает MD-351.
 
 Все commands выполняются прямым `argv` без shell. Канонический full dev launcher
 проекта — root `npm run dev`; его machine event сообщает loopback URL,

@@ -45,9 +45,18 @@ export const MIND_ADMIN_BROWSER_ASSERTION_IDS = Object.freeze([
 ]);
 
 export const MIND_ADMIN_BROWSER_SOURCE_FILES = Object.freeze([
+  "docs/operations/mind-admin-browser-uat-runbook.md",
+  "docs/operations/ship-work-release-profile.md",
+  "docs/specs/release-0.3-traceability.md",
+  "package.json",
   "playwright.md351.config.mjs",
+  "scripts/join-mind-admin-uat-readback.mjs",
   "scripts/lib/mind-admin-browser-reporter.mjs",
   "scripts/run-mind-admin-browser-gate.mjs",
+  "tests/conformance/mind-admin-browser-gate.test.mjs",
+  "tests/conformance/mind-admin-uat-readback-join.test.mjs",
+  "tests/conformance/release-0.3-traceability-contract.test.mjs",
+  "tests/fixtures/release-0.3-traceability/contract.v1.json",
   TEST_FILE,
 ]);
 

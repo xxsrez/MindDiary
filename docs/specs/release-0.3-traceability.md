@@ -78,8 +78,8 @@ URL в receipt запрещены.
 | `U-AUTHORITY` | `MD-344` | `ship-work-release/uat-release-0.3-authority-target/v1` | local/pool/deployment join, оба web target surface, exact catalogs, ACL/target/reconnect, immutable revision и cleanup |
 | `L-SHELL` | `MD-347` | exact Node + Playwright command in machine registry | DOM, accessibility tree, direct routes, bootstrap |
 | `U-SHELL` | `MD-347` | `ship-work-release/uat-release-0.3-admin-shell/v1` | hosted DOM/session/bootstrap/direct-route reload |
-| `L-MINDS` | `MD-351` | exact ordinary-Mind/visibility/catalog command in registry | metadata, catalog, HEAD and exact absence |
-| `U-MINDS` | `MD-351` | `ship-work-release/uat-release-0.3-minds-admin/v1` | run Mind, redeploy persistence and cleanup |
+| `L-MINDS` | `MD-351` | exact lower-level tests + `gate:mind-admin-browser` на clean candidate SHA с private receipt | metadata, catalog, Personal invariants, conflict, reconstruction and exact absence |
+| `U-MINDS` | `MD-351` | `ship-work-release/uat-release-0.3-minds-admin/v1` | run Mind/credential, redeploy persistence, revoke denial and baseline restoration |
 | `L-ACCESS` | `MD-354` | exact invitation/membership/transfer command in registry | pending/roles/next-request/sole owner |
 | `U-ACCESS` | `MD-354` | `ship-work-release/uat-release-0.3-access-admin/v1` | sequential roles, revoke and pool baseline |
 | `L-CONNECTIONS` | `MD-358` | exact token/OAuth/target/plugin command in registry | target generation, provider/product absence |
@@ -116,6 +116,16 @@ request, отменяет/сверяет jobs, удаляет run Mind, browser 
 сохраняет lineage/fingerprint, читает provider/product/deployment state и
 только затем cleanup/retry. Неизвестный результат получает
 `unknown_external_outcome`; новый nonce поверх неизвестного state запрещён.
+
+Для `L-MINDS` официальный command обязан завершиться exact-SHA
+`npm run gate:mind-admin-browser` и создать
+`mind-diary/mind-admin-browser-evidence/v1`; одних lower-level unit/integration
+tests недостаточно для `MD-351`. Gate receipt хеширует также этот registry,
+его conformance test и runbook. Для `U-MINDS` runner до journeys снимает
+credential inventory baseline, создаёт отдельный short-lived run token,
+использует его один раз, затем отзывает. Passing cleanup требует authoritative
+absence этого token, отказ следующего request и равенство baseline
+count/inventory fingerprint до/после; secret и raw token name запрещены.
 
 ## External prerequisite и blocker taxonomy
 

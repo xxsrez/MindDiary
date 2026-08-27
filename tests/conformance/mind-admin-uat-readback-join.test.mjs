@@ -104,16 +104,31 @@ function browserReadback(receiptBytes) {
     source_tree_sha: expected.sourceTreeSha,
     local_receipt_sha256: sha256(receiptBytes),
     observed_at_utc: "2026-08-27T23:05:00.000Z",
-    journeys: MIND_ADMIN_UAT_JOURNEYS.map(({ id, checks }) => ({
-      id,
-      status: "passed",
-      checks: [...checks],
-      facts: {
+    journeys: MIND_ADMIN_UAT_JOURNEYS.map(({ id, checks }) => {
+      const common = {
         metadata_version_before: 1,
         metadata_version_after: 2,
-        negative_status: id.includes("nondisclosure") || id.includes("cleanup") ? 404 : 0,
-      },
-    })),
+        negative_status: id.includes("nondisclosure") || id === "admin.cleanup-absence-readback" ? 404 : 0,
+      };
+      return {
+        id,
+        status: "passed",
+        checks: [...checks],
+        facts: id === "admin.cleanup-credential-baseline" ? {
+          ...common,
+          negative_status: 401,
+          baseline_credential_count_before: 2,
+          baseline_credential_count_after: 2,
+          baseline_inventory_sha256_before: `sha256:${"8".repeat(64)}`,
+          baseline_inventory_sha256_after: `sha256:${"8".repeat(64)}`,
+          run_credential_count_after: 0,
+          run_credential_used_status: 200,
+          run_credential_denied_status_after_revoke: 401,
+          run_credential_label_sha256: `sha256:${"9".repeat(64)}`,
+          short_lived_expiry_seconds: 900,
+        } : common,
+      };
+    }),
   };
 }
 
@@ -163,6 +178,14 @@ test("fully consistent local files still produce only nonterminal structural evi
   assert.equal(join.acceptance, "nonterminal");
   assert.equal(join.provenance, "unverified-local-files");
   assert.notEqual(join.status, "passed");
+  assert.equal(join.journeys.length, 13);
+  const credentialCleanup = join.journeys.find(({ id }) => id === "admin.cleanup-credential-baseline");
+  assert.equal(credentialCleanup.facts.run_credential_count_after, 0);
+  assert.equal(
+    credentialCleanup.facts.baseline_inventory_sha256_after,
+    credentialCleanup.facts.baseline_inventory_sha256_before,
+  );
+  assert.equal(credentialCleanup.facts.run_credential_denied_status_after_revoke, 401);
   assert.deepEqual(join.unresolved_provenance, [
     "sites-connector-call-origin-not-authenticated-offline",
     "in-app-browser-observation-origin-not-authenticated-offline",
@@ -190,5 +213,15 @@ test("MD-351 structural join rejects receipt, candidate and journey substitution
   assert.throws(
     () => createStructuralJoin(changedJourney, expected),
     (error) => error instanceof ProbeFailure && error.code === "uat_journey_mismatch",
+  );
+
+  const changedCredentialBaseline = inputs();
+  const credentialCleanup = changedCredentialBaseline.browserReadback.journeys.find(
+    ({ id }) => id === "admin.cleanup-credential-baseline",
+  );
+  credentialCleanup.facts.baseline_credential_count_after += 1;
+  assert.throws(
+    () => createStructuralJoin(changedCredentialBaseline, expected),
+    (error) => error instanceof ProbeFailure && error.code === "uat_credential_cleanup_facts_missing",
   );
 });
