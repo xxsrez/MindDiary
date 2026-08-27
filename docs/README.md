@@ -77,24 +77,28 @@ operation disposition и migration принадлежат MD-337/MD-339.
    — закрытый реестр текущих REST, MCP, UI, schema, error и plugin/help
    surfaces с целевым состоянием, владельцами реализации и исполняемыми
    доказательствами различия as-built и target behavior.
-21. [Операторский каталог principals и последняя активность](specs/service-operator-directory.md)
+21. [Трассируемость требований Release 0.3](specs/release-0.3-traceability.md)
+   — closed forward/reverse registry для `MD-329`–`MD-335`: owning Tasks,
+   local commands, synthetic fixtures, hosted runner/receipt contracts,
+   cleanup/recovery и stable assertion IDs.
+22. [Операторский каталог principals и последняя активность](specs/service-operator-directory.md)
    — принятый read-only UAT contract отдельной service-operator authority,
    success-only web/MCP summary, privacy-minimized directory и deletion.
-22. [Автономная доставка work scope](specs/ship-work-release.md) — универсальный
+23. [Автономная доставка work scope](specs/ship-work-release.md) — универсальный
    принятый контракт `ship-work-release`: task-manager adapters, один mutable
    writer по умолчанию, selective lanes и scouts, cohorts, control API,
    dev/UAT promotion и ручная production boundary.
-23. [Контракт project profile](specs/ship-work-release-project-profile.md) —
+24. [Контракт project profile](specs/ship-work-release-project-profile.md) —
    versioned provider-neutral schema обязательных project-specific commands,
    runtime capabilities, gates, environments и evidence rows.
-24. [Контракт task-management adapter](specs/ship-work-release-task-manager.md) —
+25. [Контракт task-management adapter](specs/ship-work-release-task-manager.md) —
    versioned provider-neutral schema identity, snapshots, mutations,
    reconciliation и capability negotiation task-management backend-а.
-25. [Task Manager adapter Mind Diary](specs/ship-work-release-task-manager-srez.md) —
+26. [Task Manager adapter Mind Diary](specs/ship-work-release-task-manager-srez.md) —
     текущая привязка к Project `Mind Diary`, Release `0.1`, exact Task Manager
     refs, bounded reads, versioned task writes и designated scope projection
     anchor.
-26. [Исторический Linear adapter](specs/ship-work-release-linear.md) —
+27. [Исторический Linear adapter](specs/ship-work-release-linear.md) —
     прежнее отображение Linear entities; не является текущим provider, profile
     или source of truth.
 
