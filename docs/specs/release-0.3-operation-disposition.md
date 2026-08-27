@@ -70,6 +70,15 @@ loss or target deletion without revealing target metadata. This action-specific
 split is normative; the shared `credential-control` profile must not be
 interpreted as adding the remaining select-only checks to recovery-safe clear.
 
+Это target disposition, а не описание уже изменённого runtime. В текущем
+as-built Sites helper `clear_write` всё ещё требует `content:write`, принимает
+`expected_binding_version`, возвращает `409 write_step_up_required` без write
+scope и пробрасывает stale CAS как `409 binding_version_conflict`. Executable
+fixture проверяет эти legacy predicates/results через реальный helper и HTTP
+handler и отдельно проверяет принятый target contract. MD-343 владеет runtime
+переходом к recovery-safe clear, `expected_target_version` и `target_conflict`;
+до его реализации MD-337 не заявляет target semantics реализованными.
+
 ## REST control routes
 
 Все строки ниже относятся к текущему `WEB_CONTROL_ROUTES`. `keep` использует
@@ -113,11 +122,11 @@ interpreted as adding the remaining select-only checks to recovery-safe clear.
 | `DELETE /api/v1/invitations/{invitation_id}` | keep → Sites control | Current administrative authority |
 | `GET /api/v1/mcp-tokens` | keep → Sites control | Advanced MCP metadata; no secret/verifier |
 | `POST /api/v1/mcp-tokens` | keep → Sites control | One-time secret issuance |
-| `PATCH /api/v1/mcp-tokens/{personal_token_ref}/mind-access` | change → Sites control | `credential-control`: remove `attach_read`/`detach_read`; retain only select/switch/clear writable target with target-version CAS. Legacy actions fail `400 operation_removed`; stale `expected_target_version` fails `409 target_conflict`, changes no target state, discloses no target metadata and never falls back to last-write-wins. MD-339 owns record/version migration |
+| `PATCH /api/v1/mcp-tokens/{personal_token_ref}/mind-access` | change → Sites control | `credential-control`: remove `attach_read`/`detach_read`; retain only select/switch/clear writable target with target-version CAS. Legacy actions fail `400 operation_removed`; target stale `expected_target_version` fails `409 target_conflict`, changes no target state, discloses no target metadata and never falls back to last-write-wins. MD-339 owns record/version migration; MD-343 owns helper/handler implementation |
 | `DELETE /api/v1/mcp-tokens/{personal_token_ref}` | keep → Sites control | Actor-owned revoke |
 | `GET /api/v1/connections` | change → Sites control | Current active Connections and current-readable projection; remove mutable read-attachment state from response. MD-339 owns projection migration |
 | `GET /api/v1/connections/{connection_ref}` | change → Sites control | `credential-control`: readable Minds are current derived access; writable target remains explicit Site state. MD-339 owns projection migration |
-| `PATCH /api/v1/connections/{connection_ref}/mind-access` | change → Sites control | Same target-only action schema and exact `target_conflict` semantics as personal token. MD-339 |
+| `PATCH /api/v1/connections/{connection_ref}/mind-access` | change → Sites control | Same target-only action schema and exact `target_conflict` semantics as personal token. MD-343 implementation; MD-339 durable state migration |
 | `DELETE /api/v1/connections/{connection_ref}` | keep → Sites control | Actor-owned connection revoke |
 
 The hidden operator alias `GET /api/v1/internal/operators/users` and UI route
@@ -268,7 +277,9 @@ mutation: stale `expected_target_version` получает HTTP `409`, не ме
 state, не раскрывает target metadata и не допускает last-write-wins. Он не
 добавляется в Content MCP writable-target error set. MD-339 обязан сослаться на
 эти имена и определить durable state, migration/reconnect semantics, не
-переименовывая и не дублируя этот register.
+переименовывая и не дублируя этот register; MD-343 реализует Sites
+helper/handler delta. Текущие legacy names в source evidence не являются
+каноническими target aliases.
 
 - remove `write_binding_id` from `create_file_upload_intent`,
   `stage_bundle_file`, `reconcile_file_stage`, `commit_changeset` and
@@ -289,6 +300,8 @@ state, не раскрывает target metadata и не допускает last
 During migration, old MCP names are never forwarded to Site endpoints and old
 REST read-binding actions never become no-op success. Old calls fail explicitly;
 reconnect/reissue/state migration and preservation rules belong to MD-339.
+Sites helper/handler action predicates and legacy error translation belong to
+MD-343.
 Export route creation and exact Site projection belong to MD-359.
 
 ## Verification boundary

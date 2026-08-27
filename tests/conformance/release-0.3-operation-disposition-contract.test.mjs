@@ -21,10 +21,12 @@ import {
   createMcpHttpHandler,
 } from "../../packages/adapter-mcp/dist/index.js";
 import {
+  createProductWebHttpHandler,
   WEB_CONTROL_ROUTES,
 } from "../../packages/adapter-web/dist/index.js";
 import {
   PRODUCT_UI_ROUTES,
+  mutateCredentialAccess,
 } from "../../packages/adapter-web/dist/product-http-request-helpers.js";
 
 const root = new URL("../../", import.meta.url);
@@ -91,6 +93,7 @@ const buildPairs = [
   ["packages/adapter-mcp/src/legacy-codex.ts", "packages/adapter-mcp/dist/legacy-codex.js"],
   ["packages/adapter-mcp/src/tool-definitions.ts", "packages/adapter-mcp/dist/tool-definitions.js"],
   ["packages/adapter-web/src/index.ts", "packages/adapter-web/dist/index.js"],
+  ["packages/adapter-web/src/product-http-handler.ts", "packages/adapter-web/dist/product-http-handler.js"],
   ["packages/adapter-web/src/product-http-request-helpers.ts", "packages/adapter-web/dist/product-http-request-helpers.js"],
   ["packages/application-content/src/mind-browse.ts", "packages/application-content/dist/mind-browse.js"],
 ];
@@ -108,6 +111,82 @@ function contractActor() {
     requestId: "request_operation_contract",
     occurredAtUtc: "2026-08-27T00:00:00.000Z",
   });
+}
+
+function contractSitesActor() {
+  return Object.freeze({
+    kind: "registered_principal",
+    principalId: "principal_sites_operation_contract",
+    authentication: Object.freeze({ kind: "sites_identity" }),
+    deploymentCapabilities: Object.freeze(["content:read", "content:write"]),
+    requestId: "request_sites_operation_contract",
+    occurredAtUtc: "2026-08-27T00:00:00.000Z",
+  });
+}
+
+function currentLegacySitesHandler(scopes, mutateErrorCode) {
+  const actor = contractSitesActor();
+  const connectionRef = `conn_v1_${"a".repeat(32)}`;
+  const ownerId = "legacy_target_owner_contract";
+  let mutationCalls = 0;
+  const handler = createProductWebHttpHandler({
+    applicationOrigin: "https://mind-diary.invalid",
+    resolveIdentity: () => ({ kind: "authenticated", actor }),
+    csrf: { issue: () => "csrf-contract", verify: () => true },
+    control: {
+      execute(request) {
+        if (request.operation === "list_minds") return [];
+        throw new Error(`unexpected control operation: ${request.operation}`);
+      },
+    },
+    oauthConnections: {
+      async listPage() {
+        return { items: [], nextCursor: null };
+      },
+      async read(_principalId, presentedRef) {
+        return presentedRef === connectionRef
+          ? {
+              connectionRef,
+              bindingOwnerId: ownerId,
+              clientName: "Legacy contract connection",
+              scopes,
+              createdAt: "2026-08-27T00:00:00.000Z",
+              lastUsedAt: null,
+            }
+          : null;
+      },
+      async revoke() {
+        return true;
+      },
+    },
+    mindBindings: {
+      async list() {
+        throw new Error("legacy list must not be used");
+      },
+      async listResolved() {
+        return [{
+          ownerId,
+          bindingVersion: 8,
+          state: "active",
+          readBindings: [],
+          writeBinding: { writeBindingId: "legacy-write-binding", mindId: "space_legacy" },
+          automaticCapture: { mode: "disabled", writeBindingId: null, updatedAt: null },
+        }];
+      },
+      async mutate() {
+        throw new Error("legacy mutate must not be used");
+      },
+      async mutateResolved() {
+        mutationCalls += 1;
+        throw Object.assign(new Error("legacy mutation failed"), { code: mutateErrorCode });
+      },
+    },
+  });
+  return {
+    connectionRef,
+    handler,
+    mutationCalls: () => mutationCalls,
+  };
 }
 
 function protocolHarness() {
@@ -315,10 +394,44 @@ test("credential target actions keep recovery-safe clear distinct from select", 
     "idempotency",
   ]);
   assert.deepEqual(fixture.credentialTargetActions, {
+    disposition: "change",
+    implementationOwner: "MD-343",
+    runtimeStatus: "target-not-implemented",
     appliesTo: [
       "PATCH /api/v1/connections/{connection_ref}/mind-access",
       "PATCH /api/v1/mcp-tokens/{personal_token_ref}/mind-access",
     ],
+    currentLegacyRuntime: {
+      inputVersionField: "expected_binding_version",
+      clearWriteRequires: ["content_write_scope"],
+      clearWriteWithoutWriteScope: {
+        httpStatus: 409,
+        code: "write_step_up_required",
+        targetStateChange: "none",
+      },
+      staleExpectedVersion: {
+        httpStatus: 409,
+        code: "binding_version_conflict",
+        targetStateChange: "none",
+      },
+      sourceEvidence: [
+        {
+          role: "legacy-helper",
+          path: "packages/adapter-web/src/product-http-request-helpers.ts",
+          gitBlob: "514ac171ac3eaa4870f74a3b1e64c28f48f49f91",
+        },
+        {
+          role: "legacy-handler",
+          path: "packages/adapter-web/src/product-http-handler.ts",
+          gitBlob: "e908d1f972d0e72d8a5399b9d2b8a7631d318642",
+        },
+        {
+          role: "legacy-integration-test",
+          path: "tests/integration/product-site.test.mjs",
+          gitBlob: "d9f0e09b8b84048727e1503608267bb543f498a4",
+        },
+      ],
+    },
     select_write: {
       checks: [
         "credential_owner_authority",
@@ -350,6 +463,94 @@ test("credential target actions keep recovery-safe clear distinct from select", 
       metadataDisclosure: "none",
     },
   });
+});
+
+test("current Sites helper and handler remain explicitly legacy until MD-343", async () => {
+  const current = fixture.credentialTargetActions.currentLegacyRuntime;
+  for (const evidence of current.sourceEvidence) {
+    const bytes = await readFile(new URL(evidence.path, root));
+    assert.equal(
+      gitBlob(bytes),
+      evidence.gitBlob,
+      `${evidence.role}: current legacy runtime evidence drifted`,
+    );
+  }
+
+  let directMutationCalls = 0;
+  await assert.rejects(
+    mutateCredentialAccess({
+      actor: contractSitesActor(),
+      mindBindings: {
+        async listResolved() {
+          throw new Error("scope rejection must happen before owner projection");
+        },
+        async mutateResolved() {
+          directMutationCalls += 1;
+          throw new Error("scope rejection must happen before mutation");
+        },
+      },
+      control: {
+        execute() {
+          throw new Error("scope rejection must happen before target projection");
+        },
+      },
+      ownerId: "legacy_target_owner_contract",
+      scopes: ["content:read"],
+      request: {
+        action: "clear_write",
+        expectedBindingVersion: 8,
+        idempotencyKey: "legacy-helper-clear",
+      },
+      presentationKey: "connection_ref",
+    }),
+    (error) => error?.code === current.clearWriteWithoutWriteScope.code,
+  );
+  assert.equal(directMutationCalls, 0);
+
+  async function clearWriteRequest(environment, idempotencyKey) {
+    return environment.handler(new Request(
+      `https://mind-diary.invalid/api/v1/connections/${environment.connectionRef}/mind-access`,
+      {
+        method: "PATCH",
+        headers: {
+          origin: "https://mind-diary.invalid",
+          "x-csrf-token": "csrf-contract",
+          "content-type": "application/json",
+          "idempotency-key": idempotencyKey,
+        },
+        body: JSON.stringify({
+          action: "clear_write",
+          expected_binding_version: 8,
+        }),
+      },
+    ));
+  }
+
+  const readOnly = currentLegacySitesHandler(["content:read"], "unexpected_mutation");
+  const missingWriteScope = await clearWriteRequest(readOnly, "legacy-handler-scope");
+  assert.equal(missingWriteScope.status, current.clearWriteWithoutWriteScope.httpStatus);
+  assert.equal(
+    (await missingWriteScope.json()).error.code,
+    current.clearWriteWithoutWriteScope.code,
+  );
+  assert.equal(readOnly.mutationCalls(), 0);
+
+  const stale = currentLegacySitesHandler(
+    ["content:read", "content:write"],
+    current.staleExpectedVersion.code,
+  );
+  const staleVersion = await clearWriteRequest(stale, "legacy-handler-stale");
+  assert.equal(staleVersion.status, current.staleExpectedVersion.httpStatus);
+  assert.equal((await staleVersion.json()).error.code, current.staleExpectedVersion.code);
+  assert.equal(stale.mutationCalls(), 1);
+
+  assert.equal(fixture.credentialTargetActions.disposition, "change");
+  assert.equal(fixture.credentialTargetActions.runtimeStatus, "target-not-implemented");
+  assert.equal(fixture.credentialTargetActions.implementationOwner, "MD-343");
+  assert.notEqual(
+    current.staleExpectedVersion.code,
+    fixture.credentialTargetActions.clear_write.errors.at(-1),
+  );
 });
 
 test("every exported first-party REST route has exactly one disposition", () => {
@@ -523,6 +724,12 @@ test("machine-readable schema diff removes binding fields without removing expli
   );
   for (const diff of restDiffs) {
     assert.ok(fixture.restRoutes.some(({ key }) => key === diff.operation), diff.operation);
+    assert.equal(diff.implementationOwner, "MD-343", diff.operation);
+    assert.equal(
+      fixture.restRoutes.find(({ key }) => key === diff.operation)?.owner,
+      "MD-343",
+      diff.operation,
+    );
     assert.deepEqual(
       [...diff.removeEnum, ...diff.keepEnum].sort(),
       currentServerActions,
@@ -729,7 +936,11 @@ test("both MCP protocol profiles execute their closed keep/change/remove sets", 
 });
 
 test("plugin/help migration has closed owners and exact current source evidence", async () => {
-  assertExactKeys(fixture.migrationOwners, ["MD-339", "MD-359", "integration-owner"], "migration owners");
+  assertExactKeys(
+    fixture.migrationOwners,
+    ["MD-339", "MD-343", "MD-359", "integration-owner"],
+    "migration owners",
+  );
   assert.deepEqual(fixture.pluginHelp, [
     {
       surface: "marketplace-package",

@@ -118,7 +118,21 @@
     }
   },
   "credentialTargetActions": {
+    "disposition": "change",
+    "implementationOwner": "MD-343",
+    "runtimeStatus": "target-not-implemented",
     "appliesTo": ["PATCH /api/v1/connections/{connection_ref}/mind-access", "PATCH /api/v1/mcp-tokens/{personal_token_ref}/mind-access"],
+    "currentLegacyRuntime": {
+      "inputVersionField": "expected_binding_version",
+      "clearWriteRequires": ["content_write_scope"],
+      "clearWriteWithoutWriteScope": {"httpStatus":409,"code":"write_step_up_required","targetStateChange":"none"},
+      "staleExpectedVersion": {"httpStatus":409,"code":"binding_version_conflict","targetStateChange":"none"},
+      "sourceEvidence": [
+        {"role":"legacy-helper","path":"packages/adapter-web/src/product-http-request-helpers.ts","gitBlob":"514ac171ac3eaa4870f74a3b1e64c28f48f49f91"},
+        {"role":"legacy-handler","path":"packages/adapter-web/src/product-http-handler.ts","gitBlob":"e908d1f972d0e72d8a5399b9d2b8a7631d318642"},
+        {"role":"legacy-integration-test","path":"tests/integration/product-site.test.mjs","gitBlob":"d9f0e09b8b84048727e1503608267bb543f498a4"}
+      ]
+    },
     "select_write": {
       "checks": ["credential_owner_authority", "active_lifecycle", "content_write_scope", "current_writer_role", "target_eligibility", "expected_target_version", "idempotency"],
       "errors": ["credential_not_found", "write_step_up_required", "target_conflict", "target_ineligible"],
@@ -168,11 +182,11 @@
     {"key":"DELETE /api/v1/invitations/{invitation_id}","disposition":"keep","profile":"web-write","mindScope":"invitation-pinned","owner":"none"},
     {"key":"GET /api/v1/mcp-tokens","disposition":"keep","profile":"web-read","mindScope":"credential-projection","owner":"none"},
     {"key":"POST /api/v1/mcp-tokens","disposition":"keep","profile":"web-write","mindScope":"credential-lifecycle","owner":"none"},
-    {"key":"PATCH /api/v1/mcp-tokens/{personal_token_ref}/mind-access","disposition":"change","profile":"credential-control","mindScope":"single-writable-target","owner":"MD-339"},
+    {"key":"PATCH /api/v1/mcp-tokens/{personal_token_ref}/mind-access","disposition":"change","profile":"credential-control","mindScope":"single-writable-target","owner":"MD-343"},
     {"key":"DELETE /api/v1/mcp-tokens/{personal_token_ref}","disposition":"keep","profile":"credential-control","mindScope":"credential-lifecycle","owner":"none"},
     {"key":"GET /api/v1/connections","disposition":"change","profile":"credential-control","mindScope":"current-readable-and-single-writable","owner":"MD-339"},
     {"key":"GET /api/v1/connections/{connection_ref}","disposition":"change","profile":"credential-control","mindScope":"current-readable-and-single-writable","owner":"MD-339"},
-    {"key":"PATCH /api/v1/connections/{connection_ref}/mind-access","disposition":"change","profile":"credential-control","mindScope":"single-writable-target","owner":"MD-339"},
+    {"key":"PATCH /api/v1/connections/{connection_ref}/mind-access","disposition":"change","profile":"credential-control","mindScope":"single-writable-target","owner":"MD-343"},
     {"key":"DELETE /api/v1/connections/{connection_ref}","disposition":"keep","profile":"credential-control","mindScope":"credential-lifecycle","owner":"none"}
   ],
   "auxiliaryHttpRoutes": [
@@ -245,8 +259,8 @@
     {"operation":"reconcile_changeset","removeRequired":["write_binding_id"],"keepRequired":["mind","expected_revision","idempotency_key","operations"],"addRequired":[]},
     {"operation":"capture_knowledge","removeRequired":["write_binding_id","expected_binding_version"],"keepRequired":["mind","expected_revision","idempotency_key"],"addRequired":[]},
     {"operation":"get_file_ingress_capabilities","outputRenames":{"sources[].requires_write_binding":"sources[].requires_writable_target"}},
-    {"operation":"PATCH /api/v1/connections/{connection_ref}/mind-access","removeEnum":["attach_read","detach_read"],"keepEnum":["select_write","clear_write"],"renameFields":{"expected_binding_version":"expected_target_version"},"staleExpectedTargetVersion":{"code":"target_conflict","httpStatus":409,"targetStateChange":"none","metadataDisclosure":"none","lastWriteWins":false,"surface":"sites-control","contentMcpError":false}},
-    {"operation":"PATCH /api/v1/mcp-tokens/{personal_token_ref}/mind-access","removeEnum":["attach_read","detach_read"],"keepEnum":["select_write","clear_write"],"renameFields":{"expected_binding_version":"expected_target_version"},"staleExpectedTargetVersion":{"code":"target_conflict","httpStatus":409,"targetStateChange":"none","metadataDisclosure":"none","lastWriteWins":false,"surface":"sites-control","contentMcpError":false}}
+    {"operation":"PATCH /api/v1/connections/{connection_ref}/mind-access","implementationOwner":"MD-343","removeEnum":["attach_read","detach_read"],"keepEnum":["select_write","clear_write"],"renameFields":{"expected_binding_version":"expected_target_version"},"staleExpectedTargetVersion":{"code":"target_conflict","httpStatus":409,"targetStateChange":"none","metadataDisclosure":"none","lastWriteWins":false,"surface":"sites-control","contentMcpError":false}},
+    {"operation":"PATCH /api/v1/mcp-tokens/{personal_token_ref}/mind-access","implementationOwner":"MD-343","removeEnum":["attach_read","detach_read"],"keepEnum":["select_write","clear_write"],"renameFields":{"expected_binding_version":"expected_target_version"},"staleExpectedTargetVersion":{"code":"target_conflict","httpStatus":409,"targetStateChange":"none","metadataDisclosure":"none","lastWriteWins":false,"surface":"sites-control","contentMcpError":false}}
   ],
   "retiredMcpTools": ["get_mind_bindings", "set_read_mind_binding", "set_write_mind_binding", "start_export", "get_export_status"],
   "retiredReadErrors": ["mind_binding_required"],
@@ -282,6 +296,7 @@
   ],
   "migrationOwners": {
     "MD-339": "writable-target representation, legacy binding migration, reconnect/reissue and fail-closed compatibility",
+    "MD-343": "Sites target-only mutation helper/handler implementation and legacy-to-target error translation",
     "MD-359": "Sites-owned import/export delta routes and projections",
     "integration-owner": "runtime implementation, plugin publication and exact UAT evidence after owning contracts"
   }
