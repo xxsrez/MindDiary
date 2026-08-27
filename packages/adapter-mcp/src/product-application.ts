@@ -333,46 +333,20 @@ export class ProductMcpContentApplication implements McpContentApplication {
     readonly actor: AuthenticatedActor;
     readonly cursor?: string;
   }): Promise<Readonly<McpRootResourcePage>> {
-    if (request.cursor !== undefined) {
-      return Object.freeze({ resources: Object.freeze([]), nextCursor: null });
-    }
-    const current = await this.#dependencies.bindings.read({ actor: request.actor });
-    if (
-      current.kind !== "ready" ||
-      current.bindings.bindingSet.state !== "active"
-    ) {
-      return Object.freeze({ resources: Object.freeze([]), nextCursor: null });
-    }
-    const spaceIds = new Set(
-      current.bindings.readBindings
-        .filter((binding) => binding.state === "active")
-        .map((binding) => binding.spaceId),
-    );
-    if (current.bindings.writeBinding?.state === "active") {
-      spaceIds.add(current.bindings.writeBinding.spaceId);
-    }
-    const resources = [];
-    for (const spaceId of [...spaceIds].sort()) {
-      try {
-        const info = await this.#dependencies.discovery.getMindInfo(
-          request.actor,
-          spaceId,
-          { kind: "head" },
-        );
-        resources.push(
-          Object.freeze({
-            uri: rootUri(info.mind.mindId, info.resolvedRevision.revisionId),
-            name: info.mind.name,
-            title: `${info.mind.name} · index.md`,
-            description: "Bound immutable root index of this Mind revision.",
-            mimeType: "text/markdown; charset=utf-8" as const,
-          }),
-        );
-      } catch {
-        // Current ACL loss redacts the stale target instead of leaking metadata.
-      }
-    }
-    return Object.freeze({ resources: Object.freeze(resources), nextCursor: null });
+    const page = await this.#dependencies.discovery.listMinds(request.actor, {
+      ...(request.cursor === undefined ? {} : { cursor: request.cursor }),
+      limit: 100,
+    });
+    return Object.freeze({
+      resources: Object.freeze(page.minds.map((mind) => Object.freeze({
+        uri: rootUri(mind.mindId, mind.head.revisionId),
+        name: mind.name,
+        title: `${mind.name} · index.md`,
+        description: "Current authorized immutable root index of this Mind revision.",
+        mimeType: "text/markdown; charset=utf-8" as const,
+      }))),
+      nextCursor: page.nextCursor,
+    });
   }
 
   async readResource(request: {

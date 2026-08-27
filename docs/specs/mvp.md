@@ -61,6 +61,9 @@ Release 0.3 принимает следующую не пересекающую�
   target;
 - read path не требует mandatory attach/read-binding onboarding, а MCP не
   выбирает, не переключает и не очищает writable target;
+- current ACL/visibility read применяется только к fresh/upgraded credential;
+  pending legacy credential до explicit upgrade/re-consent/reissue получает
+  non-disclosing `credential_access_upgrade_required` и не discover-ит Minds;
 - replace/delete files внутри exact-target commit остаются versioned content
   operations; они не дают MCP account/Mind/credential deletion или другую
   control authority.

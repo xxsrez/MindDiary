@@ -372,6 +372,16 @@ test("current-ACL read mode grants no durable binding authority and follows ACL 
     capability: "content:browse",
     revisionMode: "head",
   };
+  const legacyDenied = await authorizer.authorize(request);
+  assert.equal(legacyDenied.kind, "denied");
+  assert.equal(legacyDenied.code, "credential_access_upgrade_required");
+  await metadata.runCredentialWriteTargetTransaction((transaction) =>
+    transaction.registerCredentialWriteTargetOwner({
+      bindingOwnerId: BINDING_OWNER_ID,
+      principalId: PRINCIPAL_ID,
+      credentialKind: "personal_token",
+      occurredAt: NOW,
+    }));
   const allowed = await authorizer.authorize(request);
   assert.equal(allowed.kind, "allowed");
   assert.equal("bindingVersion" in allowed.stamp, false);
@@ -388,6 +398,48 @@ test("current-ACL read mode grants no durable binding authority and follows ACL 
   const denied = await authorizer.authorize(request);
   assert.equal(denied.kind, "denied");
   assert.equal(denied.code, "access_denied");
+});
+
+test("pending legacy credential fails closed before ACL-derived discovery or read", async () => {
+  const { metadata, service } = applicationHarness("legacy_mind_binding");
+  const attached = await service.mutateRead({
+    actor: actor(),
+    action: "attach",
+    spaceId: SPACE_A,
+    expectedBindingVersion: 0,
+    idempotencyKey: "legacy-read-before-upgrade",
+  });
+  assert.equal(attached.kind, "applied");
+  await metadata.decommissionLegacyMindBindingsForMigration();
+  assert.equal(
+    (await metadata.readCredentialWriteTarget(BINDING_OWNER_ID, PRINCIPAL_ID)).kind,
+    "pending_upgrade",
+  );
+
+  let aclCalls = 0;
+  const authorizer = new MindBindingContentAuthorizer({
+    delegate: {
+      authorize: async () => {
+        aclCalls += 1;
+        throw new Error("legacy credential must not reach ACL authorization");
+      },
+      reauthorizeInTransaction: async () => {
+        throw new Error("legacy credential must not reach transactional authorization");
+      },
+    },
+    bindings: metadata,
+    readAuthority: "current_acl",
+  });
+  const decision = await authorizer.authorize({
+    actor: actor(),
+    spaceId: SPACE_A,
+    capability: "content:browse",
+    revisionMode: "head",
+  });
+  assert.equal(decision.kind, "denied");
+  assert.equal(decision.code, "credential_access_upgrade_required");
+  assert.equal(decision.retryable, false);
+  assert.equal(aclCalls, 0);
 });
 
 test("revoking a binding owner invalidates all active records and is terminal", async () => {

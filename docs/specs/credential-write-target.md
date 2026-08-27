@@ -245,12 +245,18 @@ schema/application/client evidence.
 
 ### Общие правила
 
-1. Каждый legacy owner сначала становится `pending_upgrade`; content read
-   использует новый ACL/visibility contract, но write возвращает canonical
-   `writable_target_required` с безопасной Site-owned remediation state. Новый
-   product error для upgrade не вводится.
+1. Каждый legacy owner сначала становится `pending_upgrade` и fail closed до
+   explicit upgrade/re-consent/reissue. Ни discovery, ни content read не
+   вычисляют доступные Minds из ACL/visibility для такого credential. Они
+   возвращают один non-disclosing compatibility result с code
+   `credential_access_upgrade_required`, schema
+   `mind-diary/credential-access-upgrade-required/v1`, `retryable=false` и
+   remediation только `upgrade | re-consent | reissue`; Mind ID, handle, name,
+   visibility, revision и binding evidence в result отсутствуют.
 2. Legacy `0..N` read records не становятся v1 authority, не ограничивают read
-   и после safety window могут быть удалены/tombstoned.
+   fresh/upgraded credential и после safety window могут быть
+   удалены/tombstoned. После успешного upgrade/re-consent/reissue read сразу
+   использует current ACL/visibility без mutable read-binding state.
 3. Old write binding ID, generation, target version и staged ref не принимаются
    в v1 commit. Pending/unknown historical attempt не возобновляется.
 4. Уже committed revision/idempotency result остаётся историческим фактом и
@@ -298,6 +304,7 @@ write record, target остаётся private и current scope/role действ
 
 | Code | Meaning |
 |---|---|
+| `credential_access_upgrade_required` | Credential ещё не перешёл на `credential-write-target/v1`; discovery/read fail closed без Mind metadata. Разрешённая remediation: upgrade/re-consent/reissue. |
 | `writable_target_required` | Active v1 target отсутствует; включает `pending_upgrade`, а re-consent/reissue показывается как Site state/remediation, не отдельный code. |
 | `writable_target_mismatch` | Explicit Mind не совпадает с current selected target; metadata другого target не раскрывается. |
 | `writable_target_unavailable` | Owner revoked/expired/deleted, pinned generation stale, target/state corrupt/partial/unavailable либо target deleted. |

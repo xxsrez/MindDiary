@@ -3,6 +3,7 @@ import {
   AuthorizedHandleReader,
   type BackgroundWorkStore,
   CapabilityAuthorizer,
+  type CredentialContentAccessAuthorizer,
   type AuthorizationDecision,
   type AuthorizationGrant,
   type AuthorizationStateQuery,
@@ -66,6 +67,9 @@ export type MindDiscoveryFailureCode =
   | "invalid_revision_selector"
   | "mind_not_found"
   | "revision_not_found"
+  | "credential_access_upgrade_required"
+  | "binding_owner_revoked"
+  | "binding_state_unavailable"
   | "discovery_unavailable";
 
 /** Safe application failure that never carries private Mind metadata. */
@@ -192,6 +196,8 @@ export interface MindDiscoveryDependencies {
   readonly indexStatusForStore?: (
     store: MindDiscoveryStore,
   ) => RevisionIndexStatusReader;
+  /** MCP-only profile gate. Omit for trusted Sites and isolated fixtures. */
+  readonly credentialAccess?: CredentialContentAccessAuthorizer;
 }
 
 interface NormalizedListQuery {
@@ -517,6 +523,7 @@ export class MindDiscoveryService {
     | ((store: MindDiscoveryStore) => RevisionIndexStatusReader)
     | undefined;
   readonly #authorizer: CapabilityAuthorizer;
+  readonly #credentialAccess: CredentialContentAccessAuthorizer | undefined;
   readonly #handles: AuthorizedHandleReader<Readonly<OrdinaryMindRouteSnapshot>>;
 
   constructor(dependencies: MindDiscoveryDependencies) {
@@ -524,6 +531,7 @@ export class MindDiscoveryService {
     this.#host = dependencies.host;
     this.#indexStatus = dependencies.indexStatus;
     this.#indexStatusForStore = dependencies.indexStatusForStore;
+    this.#credentialAccess = dependencies.credentialAccess;
     this.#authorizer = new CapabilityAuthorizer(dependencies.store);
     this.#handles = new AuthorizedHandleReader({
       handles: dependencies.store,
@@ -533,6 +541,7 @@ export class MindDiscoveryService {
   }
 
   async listMinds(actor: ActorContext, query?: unknown): Promise<Readonly<ListMindsResult>> {
+    await this.#requireCredentialAccess(actor);
     if (this.#store.withConsistentRead !== undefined) {
       return this.#store.withConsistentRead((store) =>
         new MindDiscoveryService({ store, host: this.#host }).listMinds(actor, query));
@@ -712,6 +721,7 @@ export class MindDiscoveryService {
     actor: ActorContext,
     handle: unknown,
   ): Promise<Readonly<MindDiscoveryDescriptor>> {
+    await this.#requireCredentialAccess(actor);
     this.#requireActor(actor);
     return (await this.#exactHandle(actor, handle)).descriptor;
   }
@@ -721,6 +731,7 @@ export class MindDiscoveryService {
     mind: unknown,
     revisionSelector?: unknown,
   ): Promise<Readonly<MindInfoResult>> {
+    await this.#requireCredentialAccess(actor);
     if (this.#store.withConsistentRead !== undefined) {
       const indexStatusForStore = this.#indexStatusForStore;
       if (indexStatusForStore !== undefined) {
@@ -792,6 +803,18 @@ export class MindDiscoveryService {
     throw new MindDiscoveryFailure(
       "discovery_unavailable",
       "Mind changed while it was being resolved.",
+    );
+  }
+
+  async #requireCredentialAccess(actor: ActorContext): Promise<void> {
+    if (this.#credentialAccess === undefined) return;
+    const decision = await this.#credentialAccess.authorizeCredentialContentAccess(actor);
+    if (decision.kind === "allowed") return;
+    throw new MindDiscoveryFailure(
+      decision.code,
+      decision.code === "credential_access_upgrade_required"
+        ? "Credential access must be upgraded before content discovery or read."
+        : "Credential access is unavailable.",
     );
   }
 

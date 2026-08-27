@@ -5,6 +5,7 @@ import {
   REVISION_MANIFEST_MEDIA_TYPE,
   type AuthorizationDecision,
   type Authorizer,
+  type CredentialContentAccessAuthorizer,
   type BundleFileObjectStore,
   type ObjectStore,
 } from "@mind-diary/application-ports";
@@ -135,6 +136,7 @@ export interface MindValidationDependencies {
   readonly objects: ObjectStore;
   readonly host: VerifiedSpaceHost;
   readonly authorizer?: Authorizer;
+  readonly credentialAccess?: CredentialContentAccessAuthorizer;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -293,6 +295,9 @@ export class MindValidationService {
     this.#discovery = new MindDiscoveryService({
       store: dependencies.store,
       host: dependencies.host,
+      ...(dependencies.credentialAccess === undefined
+        ? {}
+        : { credentialAccess: dependencies.credentialAccess }),
     });
     this.#authorizer =
       dependencies.authorizer ?? new CapabilityAuthorizer(dependencies.store);

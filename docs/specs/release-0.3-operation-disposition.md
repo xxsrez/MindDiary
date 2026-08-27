@@ -52,7 +52,7 @@ actor, authorization checks, базовую схему ошибок и прав�
 | `web-import` | Sites control; current actor with exact Mind write authority; quota/reservation/session/CAS checks | bounded typed import errors; exact Mind and base revision, one final HEAD or no change |
 | `credential-control` | Sites control; credential-owner authority, target-version CAS and idempotency are common; action-specific checks are defined below | unknown/foreign ref is indistinguishable `404`; target selection is `0..1`, never content-selected |
 | `operator-read` | hidden support surface; current registered Sites actor in constructor-only service-operator allowlist | every other actor receives indistinguishable `404`; no content body or new authority |
-| `content-read` | Content MCP; current OAuth/personal-token actor with `content:read`, current ACL/visibility and explicit Mind/revision whenever the operation targets content | no `mind_binding_required`; denied/missing stay indistinguishable where required; no cross-Mind fallback |
+| `content-read` | Content MCP; fresh/upgraded OAuth/personal-token actor with `content:read`, current ACL/visibility and explicit Mind/revision whenever the operation targets content | pending legacy credential получает non-disclosing `credential_access_upgrade_required` (`mind-diary/credential-access-upgrade-required/v1`) до любого ACL-derived discovery/read; no `mind_binding_required`; denied/missing stay indistinguishable where required; no cross-Mind fallback |
 | `content-write` | Content MCP; current actor with `content:write`, current ACL, Site-selected writable target, idempotency and HEAD CAS | `writable_target_required`, `writable_target_mismatch`, `writable_target_unavailable`, revision/idempotency conflicts; one exact target |
 | `content-ingress` | Content MCP or capability-only HTTP; same checks as `content-write` plus source ownership, byte/digest/quota/expiry checks | no provider/local locator below adapter; staged result is pinned to current credential target defined by MD-339 |
 | `mcp-transport` | Content MCP; current OAuth/personal-token actor authenticated on every POST; per-method/per-tool scope and current access checks follow after protocol validation | OAuth challenge or protocol error before application call; no session actor cache |
@@ -302,6 +302,11 @@ helper/handler delta. Текущие legacy names в source evidence не явл
 During migration, old MCP names are never forwarded to Site endpoints and old
 REST read-binding actions never become no-op success. Old calls fail explicitly;
 reconnect/reissue/state migration and preservation rules belong to MD-339.
+Pending legacy credential также не получает список или metadata новых Minds:
+до explicit upgrade/re-consent/reissue все ACL-derived discovery/read operations
+fail closed одним versioned compatibility result. После перехода fresh/upgraded
+profile читает только по current ACL/visibility; historical read bindings не
+становятся authority и `mind_binding_required` не возвращается.
 Sites helper/handler action predicates and legacy error translation belong to
 MD-343.
 Export route creation and exact Site projection belong to MD-359.

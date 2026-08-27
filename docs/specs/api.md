@@ -142,6 +142,13 @@ writable target; его commit только cross-check-ит server-approved tar
 решения по routes/tools остаются MD-337, а exact access shape принята в
 [MD-339 contract](credential-write-target.md).
 
+Перед любым ACL-derived discovery/read MCP проверяет credential access profile.
+Fresh/upgraded profile продолжает current ACL/visibility authorization;
+pending legacy profile получает `credential_access_upgrade_required` со schema
+`mind-diary/credential-access-upgrade-required/v1`, `retryable=false` и
+remediation `upgrade | re-consent | reissue`. Этот result не содержит Mind
+metadata. Historical read-binding state не является fallback authority.
+
 Validation и финальный revision publish внутри Site-owned import являются
 этапами import operation, а не отдельными inbound validate/ordinary-commit
 operations. Internal reuse validator/HEAD CAS не меняет surface ownership.
@@ -374,6 +381,7 @@ Application-layer error имеет стабильный machine code:
 | `authentication_required` | Нет действующей authenticated identity/token. |
 | `token_expired` | MCP token истёк. |
 | `token_revoked` | MCP token отозван. |
+| `credential_access_upgrade_required` | Legacy credential profile должен пройти upgrade/re-consent/reissue до ACL-derived discovery/read; result не раскрывает Mind metadata. |
 | `insufficient_scope` | Token не имеет нужного scope. |
 | `forbidden` | Actor известен, но capability отсутствует. |
 | `mind_not_found` | Mind не существует либо не должен быть различим caller. |

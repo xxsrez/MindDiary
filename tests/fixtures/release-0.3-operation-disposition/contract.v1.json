@@ -71,8 +71,8 @@
       "target": "content-mcp",
       "actor": "oauth-or-personal-token-principal",
       "checks": ["content_read_scope", "explicit_mind_when_targeted", "current_acl_or_visibility", "exact_revision_when_selected"],
-      "errors": ["authentication_required", "forbidden_or_not_found", "invalid_mind_selector", "invalid_revision_selector"],
-      "compatibility": "same-name-no-read-binding"
+      "errors": ["authentication_required", "credential_access_upgrade_required", "forbidden_or_not_found", "invalid_mind_selector", "invalid_revision_selector"],
+      "compatibility": "same-name-current-profile-no-read-binding"
     },
     "content-write": {
       "target": "content-mcp",
@@ -123,6 +123,17 @@
       "errors": ["invalid_params_or_method_not_found"],
       "compatibility": "omit-and-reject"
     }
+  },
+  "credentialAccessCompatibility": {
+    "appliesBefore": ["acl_discovery", "mind_metadata", "canonical_object", "derived_index"],
+    "freshOrUpgradedAuthority": "current_acl_or_visibility",
+    "legacyProfileOutcome": "fail_closed",
+    "code": "credential_access_upgrade_required",
+    "schema": "mind-diary/credential-access-upgrade-required/v1",
+    "retryable": false,
+    "remediation": ["upgrade", "re-consent", "reissue"],
+    "mindMetadataDisclosed": false,
+    "readBindingAuthority": false
   },
   "credentialTargetActions": {
     "disposition": "change",

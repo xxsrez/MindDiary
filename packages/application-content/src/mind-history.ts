@@ -3,6 +3,7 @@ import {
   CapabilityAuthorizer,
   type AuthorizationDecision,
   type Authorizer,
+  type CredentialContentAccessAuthorizer,
 } from "@mind-diary/application-ports";
 import {
   utcInstant,
@@ -110,6 +111,7 @@ export interface MindHistoryDependencies {
   readonly store: MindDiscoveryStore;
   readonly host: VerifiedSpaceHost;
   readonly authorizer?: Authorizer;
+  readonly credentialAccess?: CredentialContentAccessAuthorizer;
 }
 
 interface NormalizedListQuery {

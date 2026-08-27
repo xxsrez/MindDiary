@@ -399,6 +399,11 @@ explicit Mind selector без обязательной read binding, а content 
 Site. Точное представление этого target и переход с historical binding set
 задаёт [MD-339 contract](credential-write-target.md).
 
+Эта read authority включается только для fresh/upgraded credential profile.
+`pending_upgrade` и отсутствующий legacy profile fail closed до explicit
+upgrade/re-consent/reissue с `credential_access_upgrade_required`, не раскрывая
+Mind metadata и не консультируя historical read bindings.
+
 `content:write` включает `content:read`; write-only token в первом прототипе не
 существует. Historical 0.1 content read требовал read binding либо current
 write binding, а commit — exact active immutable `write_binding_id`; этот

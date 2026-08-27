@@ -322,6 +322,16 @@
     "capability": "credential-write-target/v1",
     "legacyInitialLifecycle": "pending_upgrade",
     "legacyReadBindings": "not_authority_and_not_migrated",
+    "contentReadCompatibility": {
+      "freshOrUpgradedAuthority": "current_acl_or_visibility",
+      "legacyProfileOutcome": "fail_closed_before_acl_discovery_or_read",
+      "code": "credential_access_upgrade_required",
+      "schema": "mind-diary/credential-access-upgrade-required/v1",
+      "retryable": false,
+      "remediation": ["upgrade", "re-consent", "reissue"],
+      "mindMetadataDisclosed": false,
+      "readBindingAuthority": false
+    },
     "legacyWriteIdsAcceptedByV1": false,
     "legacyStagedRefsAcceptedByV1": false,
     "unknownAttemptResumed": false,
@@ -347,7 +357,7 @@
       "inPlaceWriteUpgrade": false,
       "newOwner": true,
       "newTarget": "empty",
-      "legacyReadMayContinueUntilLifecycleEnd": true,
+      "legacyReadMayContinueUntilLifecycleEnd": false,
       "legacyWriteOutcome": "writable_target_required",
       "legacyWriteRemediationState": "pending_upgrade_reissue_required"
     },

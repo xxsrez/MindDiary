@@ -336,6 +336,7 @@ test("operation-disposition fixture is a closed versioned contract", () => {
     "source",
     "authority",
     "profiles",
+    "credentialAccessCompatibility",
     "credentialTargetActions",
     "restRoutes",
     "auxiliaryHttpRoutes",
@@ -781,6 +782,29 @@ test("binding errors retire cleanly and target errors apply only to write/ingres
       assert.match(tool.mindScope, /selected.*target/u, tool.name);
     }
   }
+});
+
+test("legacy credentials fail closed before ACL-derived reads with one non-disclosing envelope", () => {
+  assert.deepEqual(fixture.credentialAccessCompatibility, {
+    appliesBefore: ["acl_discovery", "mind_metadata", "canonical_object", "derived_index"],
+    freshOrUpgradedAuthority: "current_acl_or_visibility",
+    legacyProfileOutcome: "fail_closed",
+    code: "credential_access_upgrade_required",
+    schema: "mind-diary/credential-access-upgrade-required/v1",
+    retryable: false,
+    remediation: ["upgrade", "re-consent", "reissue"],
+    mindMetadataDisclosed: false,
+    readBindingAuthority: false,
+  });
+  assert.ok(
+    fixture.profiles["content-read"].errors.includes(
+      "credential_access_upgrade_required",
+    ),
+  );
+  assert.equal(
+    fixture.profiles["content-read"].compatibility,
+    "same-name-current-profile-no-read-binding",
+  );
 });
 
 test("normative resource URI grammars execute through the application builder and parser", async () => {

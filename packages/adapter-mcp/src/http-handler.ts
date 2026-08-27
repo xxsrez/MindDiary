@@ -57,7 +57,7 @@ export interface McpContentApplication {
   listTools(request: {
     readonly actor: McpAuthenticatedActor;
   }): Promise<readonly Readonly<Record<string, unknown>>[]>;
-  /** Enumerates only authorized Personal/accepted-membership root index resources. */
+  /** Enumerates bounded current-access roots; exact-only unlisted Minds stay absent. */
   listRootResources(request: {
     readonly actor: McpAuthenticatedActor;
     readonly cursor?: string;
@@ -559,6 +559,36 @@ interface SafeReadToolFailure {
   readonly code: string;
   readonly message: string;
   readonly retryable: boolean;
+  readonly details?: Readonly<Record<string, unknown>>;
+}
+
+const CREDENTIAL_ACCESS_UPGRADE_DETAILS = Object.freeze({
+  schema: "mind-diary/credential-access-upgrade-required/v1",
+  remediation: Object.freeze(["upgrade", "re-consent", "reissue"]),
+});
+
+function credentialAccessUpgradeToolResult(
+  requestId: McpRequestId,
+): Readonly<Record<string, unknown>> {
+  const message = "Upgrade, re-consent, or reissue this credential before reading content.";
+  return Object.freeze({
+    resultType: "complete",
+    content: Object.freeze([
+      Object.freeze({ type: "text" as const, text: message }),
+    ]),
+    structuredContent: Object.freeze({
+      schema: CREDENTIAL_ACCESS_UPGRADE_DETAILS.schema,
+      ok: false,
+      error: Object.freeze({
+        code: "credential_access_upgrade_required",
+        message,
+        retryable: false,
+        request_id: requestId,
+        remediation: CREDENTIAL_ACCESS_UPGRADE_DETAILS.remediation,
+      }),
+    }),
+    isError: true,
+  });
 }
 
 function readFailureMessage(code: string): string {
@@ -586,6 +616,8 @@ function readFailureMessage(code: string): string {
       return "The Mind changed while it was being read; retry the call.";
     case "mind_binding_required":
       return "Attach this Mind for reading or select it as the writable target first.";
+    case "credential_access_upgrade_required":
+      return "Upgrade, re-consent, or reissue this credential before reading content.";
     case "write_binding_required":
       return "Select exactly one writable Mind before committing.";
     case "write_binding_stale":
@@ -635,6 +667,9 @@ function safeReadToolFailure(error: unknown): SafeReadToolFailure | null {
     code: error.code,
     message: readFailureMessage(error.code),
     retryable,
+    ...(error.code === "credential_access_upgrade_required"
+      ? { details: CREDENTIAL_ACCESS_UPGRADE_DETAILS }
+      : {}),
   });
 }
 
@@ -646,10 +681,11 @@ function toolError(
   format: McpResponseFormat,
   retryable = false,
   meta?: Readonly<Record<string, unknown>>,
+  details?: Readonly<Record<string, unknown>>,
 ): Response {
   return jsonRpcResult(
     id,
-    createMcpToolErrorResult(requestId, code, message, retryable, undefined, meta),
+    createMcpToolErrorResult(requestId, code, message, retryable, details, meta),
     format,
   );
 }
@@ -869,6 +905,47 @@ function resourceNotFoundResponse(
       "x-accel-buffering": "no",
     },
   });
+}
+
+function credentialAccessUpgradeResponse(
+  id: string | number | undefined,
+  format: McpResponseFormat,
+): Response {
+  const payload = {
+    jsonrpc: "2.0",
+    id: id ?? null,
+    error: {
+      code: -32043,
+      message: "Credential access upgrade required",
+      data: Object.freeze({
+        schema: "mind-diary/credential-access-upgrade-required/v1",
+        code: "credential_access_upgrade_required",
+        retryable: false,
+        remediation: Object.freeze(["upgrade", "re-consent", "reissue"]),
+      }),
+    },
+  };
+  if (format === "json") return jsonResponse(400, payload);
+  return new Response(`event: message\ndata: ${JSON.stringify(payload)}\n\n`, {
+    status: 400,
+    headers: {
+      "cache-control": "no-store",
+      "content-type": "text/event-stream; charset=utf-8",
+      "x-accel-buffering": "no",
+    },
+  });
+}
+
+function credentialAccessUpgradeRequired(error: unknown): boolean {
+  return (
+    error instanceof MindDiscoveryFailure ||
+    error instanceof MindBrowseFailure ||
+    error instanceof MindHistoryFailure ||
+    error instanceof MindSearchFailure ||
+    error instanceof MindValidationFailure ||
+    error instanceof BundleFileDownloadFailure
+  ) &&
+    error.code === "credential_access_upgrade_required";
 }
 
 function indistinguishableResourceNotFound(error: unknown): boolean {
@@ -1137,6 +1214,7 @@ export function createMcpHttpHandlerAtEndpoint(
         return response;
       }
       let response: Response;
+      let outcome: McpSafeRequestLogEvent["outcome"];
       try {
         const listed = await dependencies.content.listRootResources({
           actor,
@@ -1164,20 +1242,27 @@ export function createMcpHttpHandlerAtEndpoint(
                 }),
                 responseFormat,
               );
-      } catch {
-        response = jsonResponse(500, {
-          code: "internal_error",
-          request_id: requestId,
-        });
+        outcome = response.status === 200 || response.status === 202
+          ? "authenticated"
+          : "internal_error";
+      } catch (error) {
+        if (credentialAccessUpgradeRequired(error)) {
+          response = credentialAccessUpgradeResponse(rpc.id, responseFormat);
+          outcome = "tool_denied";
+        } else {
+          response = jsonResponse(500, {
+            code: "internal_error",
+            request_id: requestId,
+          });
+          outcome = "internal_error";
+        }
       }
       await safeLog(
         dependencies.logger,
         request,
         requestId,
         response,
-        response.status === 200 || response.status === 202
-          ? "authenticated"
-          : "internal_error",
+        outcome,
       );
       return response;
     }
@@ -1226,7 +1311,10 @@ export function createMcpHttpHandlerAtEndpoint(
           outcome = "authenticated";
         }
       } catch (error) {
-        if (indistinguishableResourceNotFound(error)) {
+        if (credentialAccessUpgradeRequired(error)) {
+          response = credentialAccessUpgradeResponse(rpc.id, responseFormat);
+          outcome = "tool_denied";
+        } else if (indistinguishableResourceNotFound(error)) {
           response = resourceNotFoundResponse(rpc.id, responseFormat);
           outcome = "protocol_error";
         } else {
@@ -1430,6 +1518,21 @@ export function createMcpHttpHandlerAtEndpoint(
         ? safeReadToolFailure(error)
         : null;
       if (safeFailure !== null) {
+        if (safeFailure.code === "credential_access_upgrade_required") {
+          const response = jsonRpcResult(
+            rpc.id,
+            credentialAccessUpgradeToolResult(requestId),
+            responseFormat,
+          );
+          await safeLog(
+            dependencies.logger,
+            request,
+            requestId,
+            response,
+            "tool_denied",
+          );
+          return response;
+        }
         const response = toolError(
           rpc.id,
           requestId,
@@ -1437,6 +1540,8 @@ export function createMcpHttpHandlerAtEndpoint(
           safeFailure.message,
           responseFormat,
           safeFailure.retryable,
+          undefined,
+          safeFailure.details,
         );
         await safeLog(
           dependencies.logger,

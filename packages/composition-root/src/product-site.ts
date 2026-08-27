@@ -880,12 +880,6 @@ export async function createProductSiteRuntime(
     now,
   });
 
-  const discovery = new MindDiscoveryService({
-    store: metadata,
-    host,
-    indexStatus,
-    indexStatusForStore: (store) => new RevisionIndexStatusService(store),
-  });
   const bindings = new MindBindingApplicationService({
     authorizer,
     bindings: metadata,
@@ -903,6 +897,13 @@ export async function createProductSiteRuntime(
           bindings: store,
           delegate: new CapabilityAuthorizer(store),
         })),
+  });
+  const discovery = new MindDiscoveryService({
+    store: metadata,
+    host,
+    indexStatus,
+    indexStatusForStore: (store) => new RevisionIndexStatusService(store),
+    credentialAccess: contentAuthorizer,
   });
   const bundleFileStaging = new BundleFileStagingService({
     authorizer: contentAuthorizer,
@@ -959,6 +960,7 @@ export async function createProductSiteRuntime(
         host,
         locators,
         authorizer: scopedAuthorizer,
+        credentialAccess: scopedAuthorizer,
       }),
       search: new MindSearchService({
         store,
@@ -966,11 +968,13 @@ export async function createProductSiteRuntime(
         host,
         locators,
         authorizer: scopedAuthorizer,
+        credentialAccess: scopedAuthorizer,
       }),
       history: new MindHistoryService({
         store,
         host,
         authorizer: scopedAuthorizer,
+        credentialAccess: scopedAuthorizer,
       }),
     });
   };
@@ -1050,6 +1054,7 @@ export async function createProductSiteRuntime(
     objects,
     host,
     authorizer: contentAuthorizer,
+    credentialAccess: contentAuthorizer,
   });
   const commits = new ChangesetCommitService({
     authorizer: contentAuthorizer,
@@ -1094,6 +1099,7 @@ export async function createProductSiteRuntime(
     store: metadata,
     objects,
     authorizer: contentAuthorizer,
+    credentialAccess: contentAuthorizer,
     host,
     clock,
     secrets: downloadCrypto,

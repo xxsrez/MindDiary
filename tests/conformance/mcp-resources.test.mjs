@@ -1,12 +1,16 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { MindBrowseFailure } from "../../packages/application-content/dist/index.js";
+import {
+  MindBrowseFailure,
+  MindDiscoveryFailure,
+} from "../../packages/application-content/dist/index.js";
 import {
   MCP_ADVERTISED_CAPABILITIES,
   MCP_CONTENT_TOOLS,
   MCP_CUSTOM_PROFILE_GUARDRAILS,
   MCP_RESOURCE_CAPABILITIES,
+  ProductMcpContentApplication,
   createMcpHttpHandler,
   parseMcpResourceUri,
 } from "../../packages/adapter-mcp/dist/index.js";
@@ -61,7 +65,7 @@ function resource(uri, name) {
   };
 }
 
-function harness({ invalidListResource = false, nextCursor = null } = {}) {
+function harness({ invalidListResource = false, nextCursor = null, upgradeRequired = false } = {}) {
   let nextRequestId = 0;
   let accessAllowed = true;
   let head = "rev_member";
@@ -89,6 +93,12 @@ function harness({ invalidListResource = false, nextCursor = null } = {}) {
       },
       async listRootResources(request) {
         rootCalls.push(request);
+        if (upgradeRequired) {
+          throw new MindDiscoveryFailure(
+            "credential_access_upgrade_required",
+            "private legacy state",
+          );
+        }
         return {
           resources: invalidListResource
             ? [resource(EXACT_ENTRY, "Entry must not be enumerated")]
@@ -101,6 +111,12 @@ function harness({ invalidListResource = false, nextCursor = null } = {}) {
       },
       async readResource(request) {
         readCalls.push(request);
+        if (upgradeRequired) {
+          throw new MindBrowseFailure(
+            "credential_access_upgrade_required",
+            "private legacy state",
+          );
+        }
         if (!accessAllowed || request.uri.includes("missing")) {
           throw new MindBrowseFailure(
             "resource_not_found",
@@ -118,13 +134,23 @@ function harness({ invalidListResource = false, nextCursor = null } = {}) {
         return { kind: "allowed" };
       },
       async executeToolCall() {
+        if (upgradeRequired) {
+          throw new MindDiscoveryFailure(
+            "credential_access_upgrade_required",
+            "private legacy state",
+          );
+        }
         return {};
       },
     },
   });
 
   async function send(body) {
-    const name = body.method === "resources/read" ? body.params.uri : undefined;
+    const name = body.method === "resources/read"
+      ? body.params.uri
+      : body.method === "tools/call"
+        ? body.params.name
+        : undefined;
     return handler(
       new Request("https://mind-diary.invalid/api/mcp", {
         method: "POST",
@@ -250,6 +276,36 @@ test("resources/list returns only deterministic authorized root indexes", async 
   assert.equal(JSON.stringify(result).includes("token_read"), false);
 });
 
+test("product resources enumerate the bounded current-access discovery page without bindings", async () => {
+  const queries = [];
+  const application = new ProductMcpContentApplication({
+    discovery: {
+      async listMinds(_actor, query) {
+        queries.push(query);
+        return {
+          minds: [
+            { mindId: "space_personal", name: "Personal", head: { revisionId: "rev_personal" } },
+            { mindId: "space_member", name: "Member", head: { revisionId: "rev_member" } },
+            { mindId: "space_public", name: "Public", head: { revisionId: "rev_public" } },
+          ],
+          nextCursor: "current-access-page-2",
+        };
+      },
+    },
+  });
+  const page = await application.listRootResources({
+    actor: actor(),
+    cursor: "current-access-page-1",
+  });
+  assert.deepEqual(queries, [{ cursor: "current-access-page-1", limit: 100 }]);
+  assert.deepEqual(page.resources.map(({ uri }) => uri), [
+    PERSONAL_ROOT,
+    MEMBER_ROOT,
+    "okf://spaces/space_public/revisions/rev_public/index",
+  ]);
+  assert.equal(page.nextCursor, "current-access-page-2");
+});
+
 test("resources/list preserves an opaque continuation cursor only when present", async () => {
   const fixture = harness({ nextCursor: "page_2" });
   const response = await fixture.send(rpc("resources/list"));
@@ -325,4 +381,51 @@ test("invalid, missing, and unauthorized resources are indistinguishable", async
   assert.deepEqual(await json(denied), expected);
   assert.equal(fixture.readCalls.length, 2);
   assert.equal(JSON.stringify(expected).includes("private"), false);
+});
+
+test("pending legacy credentials get one non-disclosing upgrade envelope before resources or tools", async () => {
+  const fixture = harness({ upgradeRequired: true });
+  const listed = await fixture.send(rpc("resources/list", {}, 41));
+  const read = await fixture.send(rpc("resources/read", { uri: EXACT_ENTRY }, 42));
+  const called = await fixture.send(rpc("tools/call", {
+    name: "list_minds",
+    arguments: {},
+  }, 43));
+
+  assert.equal(listed.status, 400);
+  assert.equal(read.status, 400);
+  for (const [body, id] of [
+    [await json(listed), 41],
+    [await json(read), 42],
+  ]) {
+    assert.deepEqual(body, {
+      jsonrpc: "2.0",
+      id,
+      error: {
+        code: -32043,
+        message: "Credential access upgrade required",
+        data: {
+          schema: "mind-diary/credential-access-upgrade-required/v1",
+          code: "credential_access_upgrade_required",
+          retryable: false,
+          remediation: ["upgrade", "re-consent", "reissue"],
+        },
+      },
+    });
+  }
+  assert.equal(called.status, 200);
+  const toolResult = (await json(called)).result;
+  assert.deepEqual(toolResult.structuredContent, {
+    schema: "mind-diary/credential-access-upgrade-required/v1",
+    ok: false,
+    error: {
+      code: "credential_access_upgrade_required",
+      message: "Upgrade, re-consent, or reissue this credential before reading content.",
+      retryable: false,
+      request_id: "request_resources_3",
+      remediation: ["upgrade", "re-consent", "reissue"],
+    },
+  });
+  assert.equal(toolResult.isError, true);
+  assert.equal(JSON.stringify(toolResult).includes("space_"), false);
 });

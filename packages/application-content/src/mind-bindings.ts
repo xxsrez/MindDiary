@@ -1,4 +1,5 @@
 import type {
+  ActorContext,
   McpTokenActorContext,
   RegisteredPrincipalActorContext,
 } from "@mind-diary/application-contracts";
@@ -6,6 +7,8 @@ import {
   type ApplyMindBindingMutationResult,
   type ApplyCredentialWriteTargetResult,
   type AuthorizationDecision,
+  type CredentialContentAccessDecision,
+  type CredentialContentAccessAuthorizer,
   type AuthorizationRequest,
   type AuthorizationStamp,
   type AuthorizationTransaction,
@@ -843,29 +846,41 @@ function bindingDenied(
   return Object.freeze({ kind: "denied", code, retryable });
 }
 
+function credentialAccessDenied(
+  code: Extract<CredentialContentAccessDecision, { readonly kind: "denied" }>["code"],
+  retryable = false,
+): Extract<CredentialContentAccessDecision, { readonly kind: "denied" }> {
+  return Object.freeze({ kind: "denied", code, retryable });
+}
+
 /**
  * Uses current ACL directly for reads in the new profile and enforces the
  * credential-owned generation for writes. Transactional rechecks fence rebind
  * from commit and export-start effects.
  */
-export class MindBindingContentAuthorizer implements Authorizer {
+export class MindBindingContentAuthorizer
+  implements Authorizer, CredentialContentAccessAuthorizer {
   readonly #delegate: Authorizer;
-  readonly #bindings: MindBindingStore;
+  readonly #bindings: MindBindingStore &
+    Partial<Pick<CredentialWriteTargetStore, "readCredentialWriteTarget">>;
   readonly #readAuthority: "current_acl" | "legacy_mind_binding";
   readonly #consistentRead:
     | (<Result>(operation: (dependencies: Readonly<{
         delegate: Authorizer;
-        bindings: Pick<MindBindingStore, "readMindBindingSet">;
+        bindings: Pick<MindBindingStore, "readMindBindingSet"> &
+          Partial<Pick<CredentialWriteTargetStore, "readCredentialWriteTarget">>;
       }>) => Promise<Result>) => Promise<Result>)
     | undefined;
 
   constructor(dependencies: {
     readonly delegate: Authorizer;
-    readonly bindings: MindBindingStore;
+    readonly bindings: MindBindingStore &
+      Partial<Pick<CredentialWriteTargetStore, "readCredentialWriteTarget">>;
     readonly readAuthority: "current_acl" | "legacy_mind_binding";
     readonly consistentRead?: <Result>(operation: (dependencies: Readonly<{
       delegate: Authorizer;
-      bindings: Pick<MindBindingStore, "readMindBindingSet">;
+      bindings: Pick<MindBindingStore, "readMindBindingSet"> &
+        Partial<Pick<CredentialWriteTargetStore, "readCredentialWriteTarget">>;
     }>) => Promise<Result>) => Promise<Result>;
   }) {
     if (
@@ -886,15 +901,69 @@ export class MindBindingContentAuthorizer implements Authorizer {
     return this.#authorizeWith(this.#bindings, this.#delegate, request);
   }
 
+  async authorizeCredentialContentAccess(
+    actor: ActorContext,
+  ): Promise<CredentialContentAccessDecision> {
+    return this.#authorizeCredentialContentAccessWith(this.#bindings, actor);
+  }
+
+  async #authorizeCredentialContentAccessWith(
+    reader: Partial<Pick<CredentialWriteTargetStore, "readCredentialWriteTarget">>,
+    actor: ActorContext,
+  ): Promise<CredentialContentAccessDecision> {
+    if (
+      actor.kind !== "registered_principal" ||
+      actor.authentication.kind !== "mcp_token"
+    ) {
+      return credentialAccessDenied("authentication_required");
+    }
+    const readCredentialWriteTarget = reader.readCredentialWriteTarget;
+    if (readCredentialWriteTarget === undefined) {
+      return credentialAccessDenied("binding_state_unavailable", true);
+    }
+    let snapshot;
+    try {
+      snapshot = await readCredentialWriteTarget.call(
+        reader,
+        actor.authentication.bindingOwnerId,
+        actor.principalId,
+      );
+    } catch {
+      return credentialAccessDenied("binding_state_unavailable", true);
+    }
+    if (snapshot === null || snapshot.kind === "pending_upgrade") {
+      return credentialAccessDenied("credential_access_upgrade_required");
+    }
+    if (
+      snapshot.state.bindingOwnerId !== actor.authentication.bindingOwnerId ||
+      snapshot.state.principalId !== actor.principalId
+    ) {
+      return credentialAccessDenied("binding_state_unavailable", true);
+    }
+    if (snapshot.state.lifecycleState !== "active") {
+      return credentialAccessDenied("binding_owner_revoked");
+    }
+    return Object.freeze({ kind: "allowed" as const });
+  }
+
   async #authorizeWith(
-    bindings: Pick<MindBindingStore, "readMindBindingSet">,
+    bindings: Pick<MindBindingStore, "readMindBindingSet"> &
+      Partial<Pick<CredentialWriteTargetStore, "readCredentialWriteTarget">>,
     delegate: Authorizer,
     request: AuthorizationRequest,
   ): Promise<AuthorizationDecision> {
     if (
       this.#readAuthority === "current_acl" &&
       request.capability !== "content:write"
-    ) return delegate.authorize(request);
+    ) {
+      const credential = await this.#authorizeCredentialContentAccessWith(
+        bindings,
+        request.actor,
+      );
+      return credential.kind === "denied"
+        ? credential
+        : delegate.authorize(request);
+    }
     const binding = await this.#authorizeBinding(bindings, request);
     if (binding.kind === "denied") return binding;
     const authorization = await delegate.authorize(request);

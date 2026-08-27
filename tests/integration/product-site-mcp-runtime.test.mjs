@@ -1063,10 +1063,11 @@ test("empty account reaches a strict starter commit and first useful search/fetc
   });
   assert.equal(unboundRead.status, 200);
   const unboundReadBody = await unboundRead.json();
-  assert.equal(unboundReadBody.result.isError, true);
-  assert.equal(
-    unboundReadBody.result.structuredContent.error.code,
-    "mind_binding_required",
+  assert.equal(unboundReadBody.result.isError, false);
+  assert.ok(
+    unboundReadBody.result.structuredContent.data.entries.some(
+      ({ path }) => path === "index.md",
+    ),
   );
   const unboundCommit = await modernMcp(runtime, secret, {
     jsonrpc: "2.0",
@@ -1464,10 +1465,31 @@ test("empty account reaches a strict starter commit and first useful search/fetc
   });
   assert.equal(detachedFetch.status, 200);
   const detachedFetchBody = await detachedFetch.json();
-  assert.equal(detachedFetchBody.result.isError, true);
+  assert.equal(detachedFetchBody.result.isError, false);
   assert.equal(
-    detachedFetchBody.result.structuredContent.error.code,
-    "mind_binding_required",
+    detachedFetchBody.result.structuredContent.data.entry.path,
+    "concepts/first-memory.md",
+  );
+  const unboundResources = await modernMcp(runtime, secret, {
+    jsonrpc: "2.0",
+    id: "starter-resources-after-unbind",
+    method: "resources/list",
+    params: {
+      _meta: {
+        "io.modelcontextprotocol/protocolVersion": MCP_TARGET_PROTOCOL,
+        "io.modelcontextprotocol/clientInfo": {
+          name: "mind-diary-starter-e2e",
+          version: "0.0.0",
+        },
+        "io.modelcontextprotocol/clientCapabilities": {},
+      },
+    },
+  });
+  assert.equal(unboundResources.status, 200);
+  const unboundResourcesBody = await unboundResources.json();
+  assert.deepEqual(
+    unboundResourcesBody.result.resources.map(({ uri }) => uri),
+    [`okf://spaces/${personal.mind_id}/revisions/${starterRevisionId}/index`],
   );
   const detachedExportStatus = await responseFrom(runtime, new Request(
     `${ORIGIN}/api/v1/export-jobs/${encodeURIComponent(exportStarted.job.job_id)}`,
@@ -3862,10 +3884,10 @@ test("request-triggered recovery reclaims a revision after an injected index dis
   });
   assert.equal(unboundRead.status, 200);
   const unboundReadBody = await unboundRead.json();
-  assert.equal(unboundReadBody.result.isError, true);
+  assert.equal(unboundReadBody.result.isError, false);
   assert.equal(
-    unboundReadBody.result.structuredContent.error.code,
-    "mind_binding_required",
+    unboundReadBody.result.structuredContent.data.resolved_revision.revision_id,
+    failedRevisionId,
   );
   assert.equal(JSON.stringify(unboundReadBody).includes(recoveryMarker), false);
 

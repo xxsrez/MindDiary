@@ -297,11 +297,32 @@ export type AuthorizationDenialCode =
   | "deployment_capability_disabled"
   | "historical_read_only"
   | "authorization_state_changed"
+  | "credential_access_upgrade_required"
   | "mind_binding_required"
   | "write_binding_required"
   | "write_binding_stale"
   | "binding_owner_revoked"
   | "binding_state_unavailable";
+
+/** Credential-wide MCP compatibility gate evaluated before any Mind lookup. */
+export type CredentialContentAccessDecision =
+  | { readonly kind: "allowed" }
+  | {
+      readonly kind: "denied";
+      readonly code:
+        | "authentication_required"
+        | "credential_access_upgrade_required"
+        | "binding_owner_revoked"
+        | "binding_state_unavailable";
+      readonly retryable: boolean;
+    };
+
+export interface CredentialContentAccessAuthorizer {
+  /** Must complete before discovery metadata, canonical objects, or indexes. */
+  authorizeCredentialContentAccess(
+    actor: ActorContext,
+  ): Promise<CredentialContentAccessDecision>;
+}
 
 export type AuthorizationDecision =
   | {

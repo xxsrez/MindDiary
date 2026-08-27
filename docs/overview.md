@@ -197,7 +197,11 @@ schemas, persistence или deployment:
 
 Read path не требует обязательного onboarding шага «прикрепить Mind»: агент
 discover-ит разрешённые Minds и явно выбирает один Mind/revision в каждом read,
-а server заново проверяет current access. Выбор, switch и clear writable target
+а server заново проверяет current access. Это правило действует для
+fresh/upgraded credential profile; pending legacy credential до explicit
+upgrade/re-consent/reissue fail closed с non-disclosing
+`credential_access_upgrade_required` и не получает ACL-derived список Minds.
+Выбор, switch и clear writable target
 выполняются только на Site; corpus, prompt и MCP tools не могут изменить этот
 target. Bulk import/export и административные destructive actions также не
 являются content MCP capabilities.
@@ -217,10 +221,9 @@ import/export lifecycle.
 
 Exact disposition существующих REST/MCP operations принадлежит MD-337, а
 точная access/binding модель, migration и wire compatibility приняты MD-339 в
-[credential writable-target contract](specs/credential-write-target.md). До
-их runtime-реализации нынешний runtime сохраняет проверенное historical
-0.1/0.2 поведение; эта specification не заявляет его автоматическое
-переключение.
+[credential writable-target contract](specs/credential-write-target.md).
+Historical 0.1/0.2 поведение ниже сохраняется только как явно помеченный
+as-built record и не является Release 0.3 authority.
 Description semantics, website AI, anonymous publication, token redesign и
 production/AWS изменения этим решением не принимаются.
 

@@ -6,6 +6,7 @@ import {
   type ReadExactRevisionIndexResult,
   type QueryExactRevisionIndexResult,
   type SearchIndex,
+  type CredentialContentAccessAuthorizer,
 } from "@mind-diary/application-ports";
 import {
   MARKDOWN_MEDIA_TYPE,
@@ -121,6 +122,7 @@ export interface MindSearchDependencies {
   readonly host: VerifiedSpaceHost;
   readonly locators: MindLocatorCodec;
   readonly authorizer?: Authorizer;
+  readonly credentialAccess?: CredentialContentAccessAuthorizer;
 }
 
 interface NormalizedSearchQuery {
@@ -396,6 +398,9 @@ export class MindSearchService {
     this.#discovery = new MindDiscoveryService({
       store: dependencies.store,
       host: dependencies.host,
+      ...(dependencies.credentialAccess === undefined
+        ? {}
+        : { credentialAccess: dependencies.credentialAccess }),
     });
     this.#authorizer =
       dependencies.authorizer ?? new CapabilityAuthorizer(dependencies.store);

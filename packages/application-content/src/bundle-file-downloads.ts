@@ -2,6 +2,7 @@ import type { ActorContext, McpTokenActorContext } from "@mind-diary/application
 import {
   REVISION_MANIFEST_MEDIA_TYPE,
   type Authorizer,
+  type CredentialContentAccessAuthorizer,
   type BundleFileDownloadGrantStore,
   type BundleFileObjectStore,
   type Clock,
@@ -411,6 +412,7 @@ export class BundleFileDownloadService {
     readonly store: DownloadStore;
     readonly objects: BundleFileObjectStore;
     readonly authorizer: Authorizer;
+    readonly credentialAccess?: CredentialContentAccessAuthorizer;
     readonly host: ConstructorParameters<typeof MindDiscoveryService>[0]["host"];
     readonly clock: Clock;
     readonly secrets: ExportDownloadSecretCrypto;
@@ -420,7 +422,13 @@ export class BundleFileDownloadService {
     this.#store = dependencies.store;
     this.#objects = dependencies.objects;
     this.#authorizer = dependencies.authorizer;
-    this.#discovery = new MindDiscoveryService({ store: dependencies.store, host: dependencies.host });
+    this.#discovery = new MindDiscoveryService({
+      store: dependencies.store,
+      host: dependencies.host,
+      ...(dependencies.credentialAccess === undefined
+        ? {}
+        : { credentialAccess: dependencies.credentialAccess }),
+    });
     this.#clock = dependencies.clock;
     this.#secrets = dependencies.secrets;
     this.#downloadUrlBase = normalizedBase(dependencies.downloadUrlBase);

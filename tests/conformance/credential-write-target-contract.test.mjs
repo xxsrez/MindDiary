@@ -306,6 +306,16 @@ test("migration is explicit, same-owner only, and fail closed", () => {
   assert.equal(migration.capability, "credential-write-target/v1");
   assert.equal(migration.legacyInitialLifecycle, "pending_upgrade");
   assert.equal(migration.legacyReadBindings, "not_authority_and_not_migrated");
+  assert.deepEqual(migration.contentReadCompatibility, {
+    freshOrUpgradedAuthority: "current_acl_or_visibility",
+    legacyProfileOutcome: "fail_closed_before_acl_discovery_or_read",
+    code: "credential_access_upgrade_required",
+    schema: "mind-diary/credential-access-upgrade-required/v1",
+    retryable: false,
+    remediation: ["upgrade", "re-consent", "reissue"],
+    mindMetadataDisclosed: false,
+    readBindingAuthority: false,
+  });
   assert.equal(migration.legacyWriteIdsAcceptedByV1, false);
   assert.equal(migration.legacyStagedRefsAcceptedByV1, false);
   assert.equal(migration.unknownAttemptResumed, false);
@@ -319,6 +329,7 @@ test("migration is explicit, same-owner only, and fail closed", () => {
   assert.equal(migration.personalToken.inPlaceWriteUpgrade, false);
   assert.equal(migration.personalToken.newOwner, true);
   assert.equal(migration.personalToken.newTarget, "empty");
+  assert.equal(migration.personalToken.legacyReadMayContinueUntilLifecycleEnd, false);
   assert.equal(migration.personalToken.legacyWriteOutcome, "writable_target_required");
   assert.equal(
     migration.personalToken.legacyWriteRemediationState,

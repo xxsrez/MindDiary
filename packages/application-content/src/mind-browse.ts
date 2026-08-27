@@ -7,6 +7,7 @@ import {
   type Authorizer,
   type BundleFileObjectStore,
   type ObjectStore,
+  type CredentialContentAccessAuthorizer,
 } from "@mind-diary/application-ports";
 import {
   MARKDOWN_MEDIA_TYPE,
@@ -511,6 +512,7 @@ export interface MindBrowseDependencies {
   readonly host: VerifiedSpaceHost;
   readonly locators: MindLocatorCodec;
   readonly authorizer?: Authorizer;
+  readonly credentialAccess?: CredentialContentAccessAuthorizer;
 }
 
 interface NormalizedBrowseQuery {
@@ -817,6 +819,9 @@ export class MindBrowseService {
     this.#discovery = new MindDiscoveryService({
       store: dependencies.store,
       host: dependencies.host,
+      ...(dependencies.credentialAccess === undefined
+        ? {}
+        : { credentialAccess: dependencies.credentialAccess }),
     });
     this.#authorizer =
       dependencies.authorizer ?? new CapabilityAuthorizer(dependencies.store);

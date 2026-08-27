@@ -79,6 +79,9 @@ Release 0.3 принимает product boundary до изменения runtime:
 
 MCP read path в target architecture не требует mutable read-attachment state:
 explicit Mind/revision selector и current ACL/visibility/scope достаточно.
+Перед ACL-derived discovery и read application проверяет credential profile:
+только fresh/upgraded profile продолжает операцию, а pending legacy profile
+fail closed с versioned `credential_access_upgrade_required` без Mind metadata.
 Site-selected writable target остаётся дополнительным server-side fence для
 commit. Replace/delete files внутри такого commit — versioned content
 semantics, а не control-plane access. Exact operation disposition принадлежит
