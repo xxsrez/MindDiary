@@ -663,6 +663,25 @@ sequenceDiagram
     end
 ```
 
+Native branch закрыт по умолчанию на MCP edge. `stage_bundle_file` появляется в
+fresh route catalog только тогда, когда server composition связан с внешним
+receipt, доказывающим host rewrite для exact profile и parameter. Direct custom
+MCP без rewrite не публикует tool и возвращает
+`native_file_input_unsupported` до target lookup или fetch. Static schema,
+local test, local path, base64 body или arbitrary URL не могут активировать эту
+ветвь. После завершения provider metadata на edge native и companion routes
+используют общий `staged_file_ref`, reconcile и atomic commit lifecycle.
+
+Product Site принимает route только через constructor-owned
+`verifiedNativeFileParameterRoute`. Composition root сам создаёт
+`NativeFileParameterRoute` с фиксированным OpenAI fetch allowlist после проверки
+всех assertion fields и непустого уникального `mcpProfiles` set. Route получает
+только названный modern и/или compatibility handler; sibling profile остаётся
+fail-closed. Missing input сохраняет direct custom MCP без native stage,
+partial/malformed input останавливает создание runtime. Product Worker сейчас
+такой input не задаёт, поэтому repository wiring не превращает MD-317
+`not_available` observation в deployment claim.
+
 Отдельного persisted draft, diff approval и approval token нет. Authorization
 проверяется до validation/object read и повторно внутри transactional boundary,
 если adapter/storage допускает race. Objects, записанные до неудачного HEAD CAS,

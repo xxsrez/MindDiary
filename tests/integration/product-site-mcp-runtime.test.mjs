@@ -598,6 +598,16 @@ class FakeR2Body {
   async arrayBuffer() {
     return new Uint8Array(this.#bytes).buffer;
   }
+
+  get body() {
+    const bytes = new Uint8Array(this.#bytes);
+    return new ReadableStream({
+      start(controller) {
+        controller.enqueue(bytes);
+        controller.close();
+      },
+    });
+  }
 }
 
 class FakeR2Bucket {
@@ -615,9 +625,32 @@ class FakeR2Bucket {
     if (options.onlyIf?.etagMatches && current?.etag !== options.onlyIf.etagMatches) {
       return null;
     }
-    const bytes = value instanceof Uint8Array
-      ? new Uint8Array(value)
-      : new Uint8Array(value);
+    let bytes;
+    if (value instanceof ReadableStream) {
+      const reader = value.getReader();
+      const chunks = [];
+      let size = 0;
+      try {
+        while (true) {
+          const next = await reader.read();
+          if (next.done) break;
+          assert.ok(next.value instanceof Uint8Array);
+          const chunk = new Uint8Array(next.value);
+          chunks.push(chunk);
+          size += chunk.byteLength;
+        }
+      } finally {
+        reader.releaseLock();
+      }
+      bytes = new Uint8Array(size);
+      let offset = 0;
+      for (const chunk of chunks) {
+        bytes.set(chunk, offset);
+        offset += chunk.byteLength;
+      }
+    } else {
+      bytes = new Uint8Array(value);
+    }
     const record = {
       key,
       bytes,
@@ -825,6 +858,275 @@ async function mutatePersonalTokenTarget(
     },
   ));
 }
+
+test("Product Site activates native staging only for an exact verified route composition", async () => {
+  const database = new FakeD1Database();
+  const bucket = new FakeR2Bucket();
+  const nativeBytes = Uint8Array.from([0x4d, 0x44, 0x33, 0x31, 0x35]);
+  const nativeSha256 = `sha256:${createHash("sha256").update(nativeBytes).digest("hex")}`;
+  const baseOptions = {
+    database,
+    bucket,
+    publicOrigin: ORIGIN,
+    identity: {
+      readVerifiedIdentity() {
+        return {
+          kind: "authenticated",
+          verifiedEmail: "native.route.e2e@example.com",
+          verifiedFullName: "Native Route E2E",
+        };
+      },
+    },
+    tokenVerifierKey: key(24),
+    locatorKey: key(64),
+    exportDownloadVerifierKey: key(104),
+    csrfKey: key(144),
+    now: () => new Date("2026-08-28T00:10:00.000Z"),
+    observabilityWriter: { write() {} },
+    schedule() {},
+  };
+
+  await assert.rejects(
+    createProductSiteRuntime({
+      ...baseOptions,
+      verifiedNativeFileParameterRoute: {
+        mcpProfiles: ["modern"],
+        assertion: {
+          profileId: "test-product-site-native-v1",
+          assertionId: "test-receipt:product-site-native:v1",
+          observedAtUtc: "invalid",
+          toolName: "stage_bundle_file",
+          parameterName: "file",
+          sourceKind: "session_attachment",
+          transport: "native_file_parameter",
+        },
+      },
+    }),
+    /exact host rewrite assertion/u,
+  );
+  await assert.rejects(
+    createProductSiteRuntime({
+      ...baseOptions,
+      verifiedNativeFileParameterRoute: {
+        mcpProfiles: [],
+        assertion: {
+          profileId: "test-product-site-native-v1",
+          assertionId: "test-receipt:product-site-native:v1",
+          observedAtUtc: "2026-08-28T00:00:00.000Z",
+          toolName: "stage_bundle_file",
+          parameterName: "file",
+          sourceKind: "session_attachment",
+          transport: "native_file_parameter",
+        },
+      },
+    }),
+    /exact unique MCP profiles/u,
+  );
+
+  const directRuntime = await createProductSiteRuntime(baseOptions);
+  const registration = await responseFrom(directRuntime, new Request(`${ORIGIN}/`));
+  const registrationCsrf = csrfFromHtml(await registration.text());
+  const bootstrap = await responseFrom(directRuntime, new Request(`${ORIGIN}/api/v1/account`, {
+    method: "POST",
+    headers: {
+      origin: ORIGIN,
+      "content-type": "application/json",
+      "x-csrf-token": registrationCsrf,
+      "idempotency-key": "bootstrap:native-route-e2e",
+    },
+    body: JSON.stringify({ action: "create_isolated_account" }),
+  }));
+  assert.equal(bootstrap.status, 200);
+
+  const settings = await responseFrom(
+    directRuntime,
+    new Request(`${ORIGIN}/settings/developer/mcp`),
+  );
+  const settingsCsrf = csrfFromHtml(await settings.text());
+  const issued = await responseFrom(directRuntime, new Request(`${ORIGIN}/api/v1/mcp-tokens`, {
+    method: "POST",
+    headers: {
+      origin: ORIGIN,
+      "content-type": "application/json",
+      "x-csrf-token": settingsCsrf,
+      "idempotency-key": "token:native-route-e2e",
+    },
+    body: JSON.stringify({ name: "Native route E2E", scopes: ["content:write"] }),
+  }));
+  assert.equal(issued.status, 200);
+  const issuedBody = await issued.json();
+  const secret = issuedBody.data.secret;
+  const tokenRef = issuedBody.data.token.personal_token_ref;
+  const selected = await mutatePersonalTokenTarget(
+    directRuntime,
+    settingsCsrf,
+    tokenRef,
+    {
+      action: "select_write",
+      mind_ref: "/me",
+      expected_target_version: 0,
+    },
+    "target:native-route-e2e",
+  );
+  assert.equal(selected.status, 200, await selected.clone().text());
+
+  const meta = {
+    "io.modelcontextprotocol/protocolVersion": MCP_TARGET_PROTOCOL,
+    "io.modelcontextprotocol/clientInfo": {
+      name: "mind-diary-native-route-e2e",
+      version: "0.0.0",
+    },
+    "io.modelcontextprotocol/clientCapabilities": {},
+  };
+  const listTools = async (runtime, id) => {
+    const response = await modernMcp(runtime, secret, {
+      jsonrpc: "2.0",
+      id,
+      method: "tools/list",
+      params: { _meta: meta },
+    });
+    assert.equal(response.status, 200);
+    return (await response.json()).result.tools;
+  };
+
+  const exactStageArguments = {
+    mind: "/me",
+    file: {
+      file_id: "provider-issued-test-file",
+      download_url: "https://files.oaiusercontent.com/file/native-route-test",
+      file_name: "fixture.bin",
+      mime_type: "application/octet-stream",
+    },
+    idempotency_key: "stage:native-route-e2e",
+    expected_size: nativeBytes.byteLength,
+    expected_sha256: nativeSha256,
+  };
+  const directTools = await listTools(directRuntime, "native-direct-list");
+  assert.equal(directTools.some(({ name }) => name === "stage_bundle_file"), false);
+  const directStage = await modernMcp(directRuntime, secret, {
+    jsonrpc: "2.0",
+    id: "native-direct-stage",
+    method: "tools/call",
+    params: {
+      name: "stage_bundle_file",
+      arguments: exactStageArguments,
+      _meta: meta,
+    },
+  });
+  const directStageBody = await directStage.json();
+  assert.equal(directStageBody.result.isError, true);
+  assert.equal(
+    directStageBody.result.structuredContent.error.code,
+    "native_file_input_unsupported",
+  );
+
+  let nativeFetches = 0;
+  let nativeFetchRequest = null;
+  const configuredRuntime = await createProductSiteRuntime({
+    ...baseOptions,
+    verifiedNativeFileParameterRoute: {
+      mcpProfiles: ["modern"],
+      assertion: {
+        profileId: "test-product-site-native-v1",
+        assertionId: "test-receipt:product-site-native:v1",
+        observedAtUtc: "2026-08-28T00:00:00.000Z",
+        toolName: "stage_bundle_file",
+        parameterName: "file",
+        sourceKind: "session_attachment",
+        transport: "native_file_parameter",
+      },
+      async fetcher(input, init) {
+        nativeFetches += 1;
+        nativeFetchRequest = { input: String(input), init };
+        return new Response(nativeBytes, { status: 200 });
+      },
+    },
+  });
+  const configuredTools = await listTools(configuredRuntime, "native-configured-list");
+  const stageDefinition = configuredTools.find(({ name }) => name === "stage_bundle_file");
+  assert.deepEqual(stageDefinition._meta, { "openai/fileParams": ["file"] });
+
+  const legacyInitialize = await legacyMcp(configuredRuntime, secret, {
+    jsonrpc: "2.0",
+    id: "native-compat-initialize",
+    method: "initialize",
+    params: {
+      protocolVersion: "2025-06-18",
+      capabilities: {},
+      clientInfo: { name: "native-route-compat-test", version: "0.0.0" },
+    },
+  });
+  assert.equal(legacyInitialize.status, 200);
+  const legacyList = await legacyMcp(configuredRuntime, secret, {
+    jsonrpc: "2.0",
+    id: "native-compat-list",
+    method: "tools/list",
+    params: {},
+  });
+  const legacyTools = (await legacyList.json()).result.tools;
+  assert.equal(legacyTools.some(({ name }) => name === "stage_bundle_file"), false);
+
+  const capabilities = await modernTool(
+    configuredRuntime,
+    secret,
+    "native-configured-capabilities",
+    "get_file_ingress_capabilities",
+    {},
+  );
+  assert.deepEqual(capabilities.native_file_parameter, {
+    source_kind: "session_attachment",
+    transport: "native_file_parameter",
+    status: "available",
+    route_profile_id: "test-product-site-native-v1",
+    host_rewrite_assertion_id: "test-receipt:product-site-native:v1",
+    host_rewrite_observed_at_utc: "2026-08-28T00:00:00.000Z",
+  });
+
+  const staged = await modernTool(
+    configuredRuntime,
+    secret,
+    "native-configured-stage",
+    "stage_bundle_file",
+    exactStageArguments,
+  );
+  assert.equal(nativeFetches, 1);
+  assert.equal(nativeFetchRequest.input, exactStageArguments.file.download_url);
+  assert.equal(nativeFetchRequest.init.credentials, "omit");
+  assert.equal(nativeFetchRequest.init.redirect, "manual");
+  assert.equal(nativeFetchRequest.init.cache, "no-store");
+  assert.equal(nativeFetchRequest.init.referrerPolicy, "no-referrer");
+  assert.equal(staged.staged_file.sha256, nativeSha256);
+  assert.equal(staged.staged_file.size, nativeBytes.byteLength);
+  assert.equal(staged.staged_file.display_filename, "fixture.bin");
+  assert.doesNotMatch(
+    JSON.stringify(staged),
+    /provider-issued-test-file|native-route-test|download_url|file_id/iu,
+  );
+
+  const reconciled = await modernTool(
+    configuredRuntime,
+    secret,
+    "native-configured-reconcile",
+    "reconcile_file_stage",
+    {
+      mind: "/me",
+      source_kind: "session_attachment",
+      display_filename: staged.staged_file.display_filename,
+      claimed_media_type: "application/octet-stream",
+      media_type: staged.staged_file.media_type,
+      sha256: staged.staged_file.sha256,
+      size: staged.staged_file.size,
+      idempotency_key: exactStageArguments.idempotency_key,
+      expected_size: exactStageArguments.expected_size,
+      expected_sha256: exactStageArguments.expected_sha256,
+    },
+  );
+  assert.equal(reconciled.status, "staged");
+  assert.equal(
+    reconciled.staged_file.staged_file_ref,
+    staged.staged_file.staged_file_ref,
+  );
+});
 
 test("Product Site persists success-only web/MCP activity and hides the UAT directory from non-operators", async () => {
   const database = new FakeD1Database();

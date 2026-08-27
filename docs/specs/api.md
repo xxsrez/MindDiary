@@ -2437,7 +2437,6 @@ Input:
 ```json
 {
   "mind": "research-notes",
-  "write_binding_id": "wbind_opaque",
   "file": {
     "file_id": "provider-opaque",
     "download_url": "https://temporary-openai-host/...",
@@ -2452,6 +2451,21 @@ Input:
 ```
 
 Tool definition advertises `_meta["openai/fileParams"] = ["file"]`.
+Он появляется в fresh catalog только для exact route profile, настроенного с
+external host-rewrite evidence. У current direct custom MCP такого rewrite нет:
+tool отсутствует, а точный direct invocation возвращает non-retryable
+`native_file_input_unsupported` до target resolution или fetch. Local schema и
+unit/conformance execution не доказывают hosted support.
+
+Product Site принимает route только через constructor-owned
+`verifiedNativeFileParameterRoute`. Он проверяет complete external assertion и
+создаёт fixed-allowlist transport внутри composition root; raw transport сам по
+себе не может включить native staging. Непустой уникальный `mcpProfiles` list
+активирует только exact modern и/или compatibility handler, для которого
+доказан host rewrite. Отсутствующая configuration — нормальный direct-custom
+profile; malformed или partial configuration останавливает runtime construction
+без fallback.
+
 `file_id`/`download_url` are current OpenAI adapter transport inputs and never
 cross the portable application port or durable record. Local path, base64 and
 arbitrary remote URL are invalid. The adapter allows bounded HTTPS download and

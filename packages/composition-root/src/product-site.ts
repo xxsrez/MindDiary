@@ -135,6 +135,10 @@ import {
   createBoundedInMemoryIngressAdapter,
   type BoundedInMemoryIngressPort,
 } from "./bounded-in-memory-ingress.js";
+import {
+  createVerifiedNativeFileParameterComposition,
+  type ProductSiteVerifiedNativeFileParameterRouteOptions,
+} from "./native-file-route.js";
 
 const PRODUCT_SITES_DEPLOYMENT_CAPABILITIES = Object.freeze([
   "content:browse",
@@ -175,6 +179,8 @@ export interface ProductSiteRuntimeOptions {
   readonly serviceOperatorPrincipalIds?: readonly string[];
   /** Constructor-only clock dependency; Product Worker uses the system clock. */
   readonly now?: () => Date;
+  /** Exact route/profile evidence; absent keeps native file staging unavailable. */
+  readonly verifiedNativeFileParameterRoute?: ProductSiteVerifiedNativeFileParameterRouteOptions;
   readonly observabilityWriter?: SitesObservabilityWriter;
   readonly schedule: (work: Readonly<{ readonly kind: string; readonly id: string }>) => void | Promise<void>;
 }
@@ -694,6 +700,10 @@ class ProductControlApplication {
 export async function createProductSiteRuntime(
   options: ProductSiteRuntimeOptions,
 ): Promise<Readonly<ProductSiteRuntime>> {
+  const nativeFileComposition = createVerifiedNativeFileParameterComposition(
+    options.verifiedNativeFileParameterRoute,
+  );
+  const nativeFileRoute = nativeFileComposition.route;
   const host = canonicalHost(options.publicOrigin);
   const identityBindingProvider = options.identityBindingProvider ?? SITES_IDENTITY_PROVIDER;
   if (!/^[a-z][a-z0-9-]{0,63}$/u.test(identityBindingProvider)) {
@@ -1111,7 +1121,7 @@ export async function createProductSiteRuntime(
     secrets: downloadCrypto,
     downloadUrlBase: `${options.publicOrigin}/api/bundle-download`,
   });
-  const mcpApplication = new ProductMcpContentApplication({
+  const mcpApplicationDependencies = {
     discovery,
     bindings: {
       read: (request) => bindings.read(request),
@@ -1158,7 +1168,16 @@ export async function createProductSiteRuntime(
           (result) => result.kind === "captured",
         ),
     },
-  });
+  } satisfies ConstructorParameters<typeof ProductMcpContentApplication>[0];
+  const directMcpApplication = new ProductMcpContentApplication(
+    mcpApplicationDependencies,
+  );
+  const nativeMcpApplication = nativeFileRoute === undefined
+    ? null
+    : new ProductMcpContentApplication({
+        ...mcpApplicationDependencies,
+        nativeFileRoute,
+      });
   const resolveIdentity = async (
     request: Request,
   ): Promise<ProductSitesIdentityResolution> => {
@@ -1290,7 +1309,6 @@ export async function createProductSiteRuntime(
   });
   const mcpDependencies = {
     authenticator,
-    content: mcpApplication,
     allowedOrigin: options.publicOrigin,
     oauth: Object.freeze({
       protectedResourceMetadataUrl: oauth.protectedResourceMetadataUrl,
@@ -1301,6 +1319,10 @@ export async function createProductSiteRuntime(
     profile: "modern" | "compatibility",
     deferActivity?: (promise: Promise<unknown>) => void,
   ): Promise<Response> => {
+    const mcpApplication = nativeMcpApplication !== null &&
+      nativeFileComposition.mcpProfiles.includes(profile)
+      ? nativeMcpApplication
+      : directMcpApplication;
     const startedAt = performance.now();
     const requestId = requestIds().nextRequestId();
     const performanceCorrelationId = benchmarkCorrelationId(request);

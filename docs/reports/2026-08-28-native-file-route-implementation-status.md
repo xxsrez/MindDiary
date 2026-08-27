@@ -24,6 +24,11 @@ Mind Diary теперь имеет fail-closed route-кандидат для
 - Fresh `tools/list` включает native stage только для такого route и доступного
   общего staging service. Capability response сообщает exact profile/assertion
   либо typed `not_available` с `null` evidence.
+- `createProductSiteRuntime` имеет explicit constructor-only
+  `verifiedNativeFileParameterRoute` input и создаёт route внутри composition
+  root только для exact unique `mcpProfiles`. Missing input оставляет
+  default/direct catalog без stage; incomplete assertion/profile set закрывает
+  создание runtime. Product Worker сейчас input не задаёт.
 - Provider object имеет закрытую форму `file_id + download_url` с optional
   advisory filename/media. Local path, base64, лишние поля, missing locator и
   arbitrary URL отклоняются.
@@ -35,6 +40,14 @@ Mind Diary теперь имеет fail-closed route-кандидат для
   target binding/generation, idempotency key и optional expected digest/size.
 - SHA-256, size, quota, retry/reconcile, `staged_file_ref` и atomic commit
   остаются общим lifecycle, а не отдельной native реализацией.
+
+Product Site integration test отдельно проверяет обе composition ветви. Default
+runtime не рекламирует stage и закрывает exact direct call до fetch. Runtime с
+полным synthetic assertion только на заявленном modern profile публикует exact
+schema/capability, выполняет allowlisted fetch, сохраняет проверенный staged
+object и возвращает тот же ref через reconcile; незаявленный compatibility
+profile остаётся без stage. Это repository composition evidence; synthetic
+assertion не является внешним host receipt.
 
 ## Проверенная текущая capability
 
