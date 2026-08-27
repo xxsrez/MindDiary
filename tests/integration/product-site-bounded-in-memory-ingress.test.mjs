@@ -199,7 +199,7 @@ test("Product Site candidate stages bounded bytes privately and publishes only b
       body: JSON.stringify({
         action: "select_write",
         mind_ref: "/me",
-        expected_binding_version: 0,
+        expected_target_version: 0,
       }),
     },
   ));
@@ -341,7 +341,6 @@ test("Product Site candidate stages bounded bytes privately and publishes only b
     "reconcile_file_stage",
     {
       mind: "/me",
-      write_binding_id: writeBindingId,
       source_kind: "bounded_in_memory",
       display_filename: "private-chart.png",
       claimed_media_type: "image/png",
@@ -388,7 +387,6 @@ test("Product Site candidate stages bounded bytes privately and publishes only b
     "commit_changeset",
     {
       mind: "/me",
-      write_binding_id: writeBindingId,
       expected_revision: initialHead,
       idempotency_key: "commit:md321-bounded",
       summary: "Publish one bounded generated chart",
