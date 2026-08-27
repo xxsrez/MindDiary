@@ -55,11 +55,12 @@ target через reconnect/reissue и не выдаёт historical schema за 
    expected version, idempotency и server read-back; raw owner/credential/
    `space_id` не являются request authority. `select_write` требует current
    write scope, writer role и target eligibility. Recovery-safe `clear_write`
-   требует credential-owner authority, expected version и idempotency, но не
-   target ACL/role/eligibility, поэтому остаётся доступен после target ACL/role
-   loss или deletion без раскрытия target metadata. Stale expected version
-   получает MD-337 `409 target_conflict`, zero state change и no
-   last-write-wins.
+   требует credential-owner authority, active credential lifecycle, expected
+   version и idempotency, но не target ACL/role/eligibility, поэтому остаётся
+   доступен после target ACL/role loss или deletion без раскрытия target
+   metadata. Revoked/expired credential не может выполнять clear: его
+   owner/target уже unusable. Stale expected version получает MD-337 `409
+   target_conflict`, zero state change и no last-write-wins.
 5. Content commit передаёт explicit Mind, expected HEAD и idempotency key без
    `write_binding_id` или replacement generation field. Server разрешает и
    pin-ит current owner/target generation, а authoritative transaction требует

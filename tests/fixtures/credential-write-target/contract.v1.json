@@ -108,7 +108,7 @@
       },
       "clear_write": {
         "mindRefRequired": false,
-        "requires": [],
+        "requires": ["active_lifecycle"],
         "forbiddenRequirements": [
           "target_acl",
           "current_writer_role",

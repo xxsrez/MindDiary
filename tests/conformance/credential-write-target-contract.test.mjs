@@ -167,7 +167,7 @@ test("only trusted Site inspects or mutates target while MCP has no target tool"
   });
   assert.deepEqual(site.requirementsByAction.clear_write, {
     mindRefRequired: false,
-    requires: [],
+    requires: ["active_lifecycle"],
     forbiddenRequirements: [
       "target_acl",
       "current_writer_role",

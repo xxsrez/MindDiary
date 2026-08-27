@@ -140,10 +140,13 @@ Action-specific authorization намеренно различается:
 - `select_write` (включая switch) требует server-resolved `mind_ref`, active
   credential lifecycle, current `content:write`, current
   `editor | admin | owner` role и eligibility выбранного target;
-- `clear_write` не принимает `mind_ref` и не требует current target ACL,
-  writer role или target eligibility. Exact owner может очистить target после
+- `clear_write` не принимает `mind_ref`, но требует active credential
+  lifecycle. Он не требует current target ACL, writer role или target
+  eligibility. Exact owner active credential может очистить target после
   ACL/role loss или Mind deletion. Это recovery-safe reduction authority;
-  response не раскрывает stale target metadata.
+  response не раскрывает stale target metadata. Revoked/expired credential
+  очистить target не может: его owner/target уже unusable и mutation fail
+  closed без target metadata.
 
 Surface остаётся Site-owned:
 
