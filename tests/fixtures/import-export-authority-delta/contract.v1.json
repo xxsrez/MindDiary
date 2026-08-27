@@ -1,0 +1,356 @@
+{
+  "$schema": "mind-diary/import-export-authority-delta/v1",
+  "version": 1,
+  "source": "docs/specs/release-0.3-import-export-authority-delta.md",
+  "observed_candidate": "25d8b8213ff1bf938b57831d1febe8649c283250",
+  "target_release": "0.3",
+  "authority": {
+    "sites_control_plane_owns": [
+      "import_plan",
+      "import_reservation",
+      "import_staging",
+      "import_validation",
+      "import_promotion",
+      "import_status",
+      "import_cancellation",
+      "export_start",
+      "export_status",
+      "export_download"
+    ],
+    "content_mcp_keeps": [
+      "mind_discovery",
+      "exact_revision_read",
+      "history",
+      "standalone_validation",
+      "ordinary_exact_target_commit"
+    ],
+    "content_mcp_forbids": [
+      "import_start",
+      "import_status",
+      "import_commit",
+      "export_start",
+      "export_status",
+      "archive_bytes"
+    ],
+    "background_keeps": [
+      "complete_export",
+      "expire_export_jobs",
+      "expire_export_grants",
+      "cleanup_import_staging",
+      "cleanup_export_archives"
+    ]
+  },
+  "routes": [
+    {
+      "id": "IM-PLAN",
+      "current": "POST /api/v1/minds/{mind_ref}/markdown-import-plans",
+      "target": "POST /api/v1/minds/{mind_ref}/markdown-import-plans",
+      "disposition": "keep",
+      "policy": "import",
+      "migration_owner": "none",
+      "implementation_owner": "existing-web-import"
+    },
+    {
+      "id": "IM-START",
+      "current": "POST /api/v1/minds/{mind_ref}/markdown-imports",
+      "target": "POST /api/v1/minds/{mind_ref}/markdown-imports",
+      "disposition": "keep",
+      "policy": "import",
+      "migration_owner": "none",
+      "implementation_owner": "existing-web-import"
+    },
+    {
+      "id": "IM-BATCH",
+      "current": "PUT /api/v1/markdown-imports/{import_id}/batches/{checkpoint}",
+      "target": "PUT /api/v1/markdown-imports/{import_id}/batches/{checkpoint}",
+      "disposition": "keep",
+      "policy": "import",
+      "migration_owner": "none",
+      "implementation_owner": "existing-web-import"
+    },
+    {
+      "id": "IM-STATUS",
+      "current": "GET /api/v1/markdown-imports/{import_id}",
+      "target": "GET /api/v1/markdown-imports/{import_id}",
+      "disposition": "keep",
+      "policy": "import",
+      "migration_owner": "none",
+      "implementation_owner": "existing-web-import"
+    },
+    {
+      "id": "IM-VALIDATE",
+      "current": "POST /api/v1/markdown-imports/{import_id}/validate",
+      "target": "POST /api/v1/markdown-imports/{import_id}/validate",
+      "disposition": "keep",
+      "policy": "import",
+      "migration_owner": "none",
+      "implementation_owner": "existing-web-import"
+    },
+    {
+      "id": "IM-COMMIT",
+      "current": "POST /api/v1/markdown-imports/{import_id}/commit",
+      "target": "POST /api/v1/markdown-imports/{import_id}/commit",
+      "disposition": "keep-clarify-v4",
+      "policy": "import",
+      "migration_owner": "integration-doc-sync",
+      "implementation_owner": "existing-web-import"
+    },
+    {
+      "id": "IM-CANCEL",
+      "current": "DELETE /api/v1/markdown-imports/{import_id}",
+      "target": "DELETE /api/v1/markdown-imports/{import_id}",
+      "disposition": "keep",
+      "policy": "import",
+      "migration_owner": "none",
+      "implementation_owner": "existing-web-import"
+    },
+    {
+      "id": "EX-START",
+      "current": "MCP start_export",
+      "target": "POST /api/v1/minds/{mind_ref}/exports",
+      "disposition": "move-and-stub",
+      "policy": "export",
+      "migration_owner": "md-337",
+      "implementation_owner": "unassigned-release-0.3-runtime"
+    },
+    {
+      "id": "EX-STATUS",
+      "current": "MCP get_export_status",
+      "target": "GET /api/v1/export-jobs/{job_id}",
+      "disposition": "move-tighten-creator-and-stub",
+      "policy": "export",
+      "migration_owner": "md-337",
+      "implementation_owner": "unassigned-release-0.3-runtime"
+    },
+    {
+      "id": "EX-DOWNLOAD",
+      "current": "GET /api/v1/exports/{download_secret}",
+      "target": "GET /api/v1/exports/{download_secret}",
+      "disposition": "keep",
+      "policy": "export-download",
+      "migration_owner": "none",
+      "implementation_owner": "existing-web-export"
+    },
+    {
+      "id": "EX-COMPLETE",
+      "current": "internal complete_export",
+      "target": "internal complete_export",
+      "disposition": "keep",
+      "policy": "export-background",
+      "migration_owner": "none",
+      "implementation_owner": "existing-background-export"
+    },
+    {
+      "id": "EX-EXPIRY",
+      "current": "internal export expiry and cleanup",
+      "target": "internal export expiry and cleanup",
+      "disposition": "keep",
+      "policy": "export-background",
+      "migration_owner": "none",
+      "implementation_owner": "existing-background-export"
+    }
+  ],
+  "schemas": [
+    {
+      "id": "SC-IMPORT-PLAN",
+      "current": "mind-diary-markdown-import-plan-v1",
+      "target": "mind-diary-markdown-import-plan-v1",
+      "disposition": "keep"
+    },
+    {
+      "id": "SC-IMPORT-SESSION",
+      "current": "mind-diary-markdown-import-session-v1",
+      "target": "mind-diary-markdown-import-session-v1",
+      "disposition": "keep"
+    },
+    {
+      "id": "SC-IMPORT-BATCH",
+      "current": "mind-diary-markdown-import-batch-v1",
+      "target": "mind-diary-markdown-import-batch-v1",
+      "disposition": "keep"
+    },
+    {
+      "id": "SC-IMPORT-MANIFEST",
+      "current": "mind-diary-revision-manifest-v4",
+      "target": "mind-diary-revision-manifest-v4",
+      "disposition": "change-normative-doc-from-v3"
+    },
+    {
+      "id": "SC-EXPORT-REQUEST",
+      "current": "mind-diary-start-export-request-v1-or-v2",
+      "target": "same-normalized-application-request-from-sites",
+      "disposition": "move-keep-idempotency-hash"
+    },
+    {
+      "id": "SC-EXPORT-JOB",
+      "current": "durable-export-job",
+      "target": "durable-export-job-with-creator-private-status",
+      "disposition": "change-auth-only"
+    },
+    {
+      "id": "SC-EXPORT-GRANT",
+      "current": "response-only-secret-durable-verifier",
+      "target": "response-only-secret-durable-verifier",
+      "disposition": "keep"
+    },
+    {
+      "id": "SC-MCP-MOVED",
+      "current": "absent",
+      "target": "mind-diary/mcp-operation-moved/v1",
+      "disposition": "add"
+    }
+  ],
+  "policies": {
+    "import": {
+      "actor": "registered-sites-principal",
+      "publish_capability": "content:write",
+      "publish_roles": ["editor", "admin", "owner"],
+      "personal_mind_role": "owner",
+      "status_owner": "creating-principal",
+      "cancel_after_role_loss": true,
+      "head_cas": true,
+      "session_version_cas": true,
+      "idempotency_scopes": ["plan", "session", "batch"],
+      "max_batch_files": 256,
+      "max_batch_bytes": 4194304,
+      "max_validation_files": 100,
+      "max_validation_bytes": 4194304,
+      "partial_head_visible": false
+    },
+    "export": {
+      "actor": "registered-sites-principal",
+      "capability": "content:export",
+      "eligible_access": [
+        "reader",
+        "editor",
+        "admin",
+        "owner",
+        "authenticated-public-baseline-reader",
+        "authenticated-unlisted-exact-handle-baseline-reader"
+      ],
+      "status_owner": "requesting-principal",
+      "revision": "exact-immutable",
+      "moves_head": false,
+      "idempotency_namespace": "start_export",
+      "reauthorization_points": [
+        "start-before-and-in-transaction",
+        "status",
+        "grant-in-transaction-and-after",
+        "worker-before-and-after-build",
+        "download-before-bytes-and-before-response"
+      ],
+      "archive_transport": "object-storage-short-lived-grant",
+      "archive_in_json": false,
+      "archive_in_json_rpc": false
+    },
+    "cleanup": {
+      "max_objects_per_pass": 100,
+      "max_bytes_per_pass": 268435456,
+      "max_seconds_per_pass": 20,
+      "uncertain_reachability_action": "skip-and-retry",
+      "closed_states_reopen": false
+    }
+  },
+  "state_machines": {
+    "markdown_import_session": [
+      { "state": "active", "cutover": "keep-resumable" },
+      { "state": "validating", "cutover": "keep-resumable" },
+      { "state": "validated", "cutover": "keep-await-confirmation" },
+      { "state": "validation_failed", "cutover": "keep-closed-cleanup" },
+      { "state": "finalizing", "cutover": "keep-resumable-no-head-until-terminal" },
+      { "state": "committed", "cutover": "keep-terminal-cleanup" },
+      { "state": "canceled", "cutover": "keep-closed-cleanup" },
+      { "state": "expired", "cutover": "keep-closed-cleanup" }
+    ],
+    "export_job": [
+      { "state": "queued", "cutover": "keep-worker-state" },
+      { "state": "running", "cutover": "keep-worker-state" },
+      { "state": "succeeded", "cutover": "keep-archive-new-authorized-grant" },
+      { "state": "failed", "cutover": "keep-retry-state" },
+      { "state": "expired", "cutover": "keep-closed-cleanup" }
+    ],
+    "export_download_grant": [
+      { "state": "active", "cutover": "keep-until-expiry-or-revocation" },
+      { "state": "revoked", "cutover": "keep-closed" },
+      { "state": "expired", "cutover": "keep-closed" }
+    ],
+    "capacity_reservation": [
+      { "state": "active", "cutover": "keep-bound-to-original-operation" },
+      { "state": "consumed", "cutover": "keep-terminal" },
+      { "state": "cleanup_pending", "cutover": "keep-recovery" },
+      { "state": "released", "cutover": "keep-terminal" }
+    ]
+  },
+  "compatibility": {
+    "schema": "mind-diary/mcp-operation-moved/v1",
+    "error_code": "operation_moved_to_sites",
+    "is_error": true,
+    "json_rpc_transport_error": false,
+    "retryable": false,
+    "advertised_after_cutover": false,
+    "profiles": ["2026-07-28", "2025-11-25"],
+    "operations": [
+      {
+        "name": "start_export",
+        "replacement_route": "POST /api/v1/minds/{mind_ref}/exports"
+      },
+      {
+        "name": "get_export_status",
+        "replacement_route": "GET /api/v1/export-jobs/{job_id}"
+      }
+    ],
+    "side_effects": {
+      "target_authorization_reads": 0,
+      "capacity_reservations": 0,
+      "idempotency_writes": 0,
+      "background_jobs": 0,
+      "head_transitions": 0
+    },
+    "forbidden_fields": [
+      "current_status",
+      "download_url",
+      "site_origin",
+      "mind_name",
+      "job_exists"
+    ],
+    "minimum_uat_releases": 1
+  },
+  "gaps": [
+    {
+      "id": "GAP-MCP-EXPORT-EXECUTION",
+      "evidence": "start_export and get_export_status remain advertised executable MCP tools",
+      "owner": "unassigned-release-0.3-runtime"
+    },
+    {
+      "id": "GAP-WEB-EXPORT-CONTROL",
+      "evidence": "Sites start and status routes are absent while grant download exists",
+      "owner": "unassigned-release-0.3-runtime"
+    },
+    {
+      "id": "GAP-EXPORT-STATUS-OWNER",
+      "evidence": "current getStatus reauthorizes access but does not compare requestedByPrincipalId",
+      "owner": "unassigned-release-0.3-runtime"
+    },
+    {
+      "id": "GAP-MCP-MOVED-SCHEMA",
+      "evidence": "versioned operation-moved compatibility result is absent",
+      "owner": "md-337"
+    },
+    {
+      "id": "GAP-IMPORT-V4-DOC",
+      "evidence": "runtime promotes v4 while shared normative text still says v3",
+      "owner": "integration-doc-sync"
+    }
+  ],
+  "non_goals": [
+    "archive-import",
+    "binary-import",
+    "drive-sync",
+    "provider-specific-connector",
+    "aws-deployment",
+    "production-release",
+    "md-264-redecision",
+    "runtime-cutover",
+    "uat-evidence"
+  ]
+}
