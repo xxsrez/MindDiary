@@ -2208,6 +2208,11 @@ test("product MCP facade advertises only canonical content tools and membership 
   );
   assert.equal(tools.some(({ name }) => String(name).includes("member") || String(name).includes("token")), false);
   const roots = await application.listRootResources({ actor });
-  assert.equal(roots.resources.length, 1);
-  assert.equal(roots.resources[0].uri, "okf://spaces/space_one/revisions/revision_one/index");
+  assert.deepEqual(
+    roots.resources.map(({ uri }) => uri),
+    [
+      "okf://spaces/space_one/revisions/revision_one/index",
+      "okf://spaces/space_public/revisions/revision_one/index",
+    ],
+  );
 });
