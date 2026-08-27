@@ -8,10 +8,14 @@ import {
   validateStructuralJoin,
 } from "../../scripts/join-import-export-uat-readback.mjs";
 import {
+  canonical,
+  digest,
+  ProbeFailure,
+} from "../../scripts/lib/multi-principal-probe-core.mjs";
+import {
   createEvidence,
   IMPORT_EXPORT_ASSERTION_IDS,
 } from "../../scripts/run-import-export-browser-gate.mjs";
-import { ProbeFailure } from "../../scripts/lib/multi-principal-probe-core.mjs";
 
 const candidate = "a".repeat(40);
 const siteProjectId = "appgprj_md363fixture";
@@ -184,6 +188,12 @@ function inputs(overrides = {}) {
   };
 }
 
+function recomputeArtifact(value) {
+  const { artifact_sha256: _artifactSha256, ...unsigned } = value;
+  value.artifact_sha256 = digest(canonical(unsigned));
+  return value;
+}
+
 test("MD-363 join CLI has no approval or hosted-pass input", () => {
   assert.deepEqual(parseCli([
     "--local-receipt", "/tmp/local.json",
@@ -220,7 +230,7 @@ test("lookalike local files can prove structure but never produce hosted PASS", 
   assert.match(join.artifact_sha256, /^sha256:[0-9a-f]{64}$/u);
 });
 
-test("tampered bytes, lineage and claimed hosted upgrade fail closed", () => {
+test("tampered bytes and every persisted semantic projection fail closed even with a recomputed artifact hash", () => {
   const wrongArchive = inputs();
   wrongArchive.archiveBytes = Buffer.from("changed", "utf8");
   assert.throws(
@@ -236,23 +246,22 @@ test("tampered bytes, lineage and claimed hosted upgrade fail closed", () => {
   );
 
   const input = inputs();
-  const join = structuredClone(createStructuralJoin(input, { candidate, siteProjectId }));
-  join.status = "passed";
-  join.hosted_evidence = true;
-  assert.throws(
-    () => validateStructuralJoin(join, {
-      expected: { candidate, siteProjectId },
-      local: { artifactSha256: input.localReceipt.artifact_sha256, fixtureManifestSha256: `sha256:${"c".repeat(64)}` },
-      provider: {
-        archiveSha256: sha256(archiveBytes),
-        projectId: siteProjectId,
-        versionId: "appgver_md363fixture",
-        deploymentBeforeId: "appgdep_md363before",
-        deploymentAfterId: "appgdep_md363after",
-      },
-      browser: { runFingerprint: `sha256:${"3".repeat(64)}` },
-      input,
-    }),
-    (error) => error instanceof ProbeFailure && error.code === "invalid_structural_join",
-  );
+  const original = createStructuralJoin(input, { candidate, siteProjectId });
+  const mutations = [
+    (join) => { join.claimed_lineage.site_version_id = "appgver_forged"; },
+    (join) => { join.actor_fingerprints.owner = `sha256:${"9".repeat(64)}`; },
+    (join) => { join.import_matrix.history_unchanged = false; },
+    (join) => { join.exports[1].bytes_match = false; },
+    (join) => { join.cleanup.jobs_absent = false; },
+    (join) => { join.status = "passed"; join.hosted_evidence = true; },
+  ];
+  for (const mutate of mutations) {
+    const join = structuredClone(original);
+    mutate(join);
+    recomputeArtifact(join);
+    assert.throws(
+      () => validateStructuralJoin(join, { expected: { candidate, siteProjectId }, input }),
+      (error) => error instanceof ProbeFailure && error.code === "invalid_structural_join",
+    );
+  }
 });

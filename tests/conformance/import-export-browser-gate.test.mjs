@@ -1,19 +1,32 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import {
+  chmod,
+  lstat,
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import test from "node:test";
 
 import {
   createEvidence,
+  finalizeGateWorkspace,
   generateFixtureWorkspace,
   IMPORT_EXPORT_ASSERTION_IDS,
   parseCli,
   RUNTIME_SUITES,
 } from "../../scripts/run-import-export-browser-gate.mjs";
 import { ProbeFailure } from "../../scripts/lib/multi-principal-probe-core.mjs";
+import { resolvePrivateTempOutputPath } from "../../scripts/lib/private-evidence-output.mjs";
 
 const candidate = "a".repeat(40);
+const repositoryRoot = resolve(import.meta.dirname, "../..");
 
 function toolchain() {
   return {
@@ -27,7 +40,7 @@ function toolchain() {
   };
 }
 
-test("MD-363 gate accepts only exact candidate and private evidence destination", () => {
+test("MD-363 gate CLI accepts only its closed argument shape", () => {
   assert.deepEqual(parseCli([
     "--candidate-sha", candidate,
     "--evidence-out", "/tmp/md363.json",
@@ -41,6 +54,81 @@ test("MD-363 gate accepts only exact candidate and private evidence destination"
       () => parseCli(argv),
       (error) => error instanceof ProbeFailure && error.code === "unsupported_cli_argument",
     );
+  }
+});
+
+test("evidence outputs require a new file in an owner-private real temp directory outside every worktree", async () => {
+  const privateDirectory = await mkdtemp(join(tmpdir(), "mind-diary-md363-output-test-"));
+  const repoBuild = resolve(repositoryRoot, "build");
+  await mkdir(repoBuild, { recursive: true });
+  const worktreeDirectory = await mkdtemp(join(repoBuild, "md363-output-test-"));
+  const publicDirectory = await mkdtemp(join(tmpdir(), "mind-diary-md363-public-test-"));
+  await chmod(publicDirectory, 0o755);
+  try {
+    const safe = join(privateDirectory, "receipt.json");
+    assert.equal(await resolvePrivateTempOutputPath(safe, {
+      repositoryRoot,
+      errorCode: "unsafe_evidence_output",
+    }), join(await realpath(privateDirectory), "receipt.json"));
+    await writeFile(safe, "occupied", { mode: 0o600 });
+    await assert.rejects(
+      resolvePrivateTempOutputPath(safe, { repositoryRoot, errorCode: "unsafe_evidence_output" }),
+      (error) => error instanceof ProbeFailure && error.code === "unsafe_evidence_output",
+    );
+    await assert.rejects(
+      resolvePrivateTempOutputPath(join(worktreeDirectory, "receipt.json"), {
+        repositoryRoot,
+        errorCode: "unsafe_evidence_output",
+      }),
+      (error) => error instanceof ProbeFailure && error.code === "unsafe_evidence_output",
+    );
+    await assert.rejects(
+      resolvePrivateTempOutputPath(join(publicDirectory, "join.json"), {
+        repositoryRoot,
+        errorCode: "unsafe_join_output",
+      }),
+      (error) => error instanceof ProbeFailure && error.code === "unsafe_join_output",
+    );
+
+    const escape = join(privateDirectory, "workspace-link");
+    await symlink(repositoryRoot, escape, "dir");
+    await assert.rejects(
+      resolvePrivateTempOutputPath(join(escape, "receipt.json"), {
+        repositoryRoot,
+        errorCode: "unsafe_evidence_output",
+      }),
+      (error) => error instanceof ProbeFailure && error.code === "unsafe_evidence_output",
+    );
+  } finally {
+    await chmod(publicDirectory, 0o700);
+    await Promise.all([
+      rm(privateDirectory, { recursive: true, force: true }),
+      rm(worktreeDirectory, { recursive: true, force: true }),
+      rm(publicDirectory, { recursive: true, force: true }),
+    ]);
+  }
+});
+
+test("failed Playwright diagnostics survive with a 24-hour cleanup marker while successful workspaces disappear", async () => {
+  const failed = await mkdtemp(join(tmpdir(), "mind-diary-md363-failed-test-"));
+  const passed = await mkdtemp(join(tmpdir(), "mind-diary-md363-passed-test-"));
+  try {
+    await writeFile(join(failed, "failure.png"), "synthetic", { mode: 0o600 });
+    const disposition = await finalizeGateWorkspace(failed, {
+      preserveDiagnostics: true,
+      now: () => new Date("2026-08-27T23:00:00.000Z"),
+    });
+    assert.equal(disposition.preserved, true);
+    assert.equal(disposition.cleanupAfter, "2026-08-28T23:00:00.000Z");
+    assert.match(await readFile(disposition.guidancePath, "utf8"), /delete this entire directory by 2026-08-28T23:00:00\.000Z/u);
+    assert.equal((await lstat(join(failed, "failure.png"))).isFile(), true);
+
+    const completed = await finalizeGateWorkspace(passed, { preserveDiagnostics: false });
+    assert.equal(completed.preserved, false);
+    await assert.rejects(lstat(passed), (error) => error?.code === "ENOENT");
+  } finally {
+    await rm(failed, { recursive: true, force: true });
+    await rm(passed, { recursive: true, force: true });
   }
 });
 

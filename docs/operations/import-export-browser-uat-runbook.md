@@ -57,16 +57,30 @@ Playwright/Chromium, Chromium executable hash, generated fixture manifest и
 Для clean exact candidate:
 
 ```bash
+MD363_TEMP_ROOT=${TMPDIR:-/tmp}
+MD363_EVIDENCE_DIR=$(mktemp -d "${MD363_TEMP_ROOT%/}/mind-diary-md363-evidence.XXXXXX")
 npm run gate:import-export-browser -- \
   --candidate-sha <exact-clean-HEAD-sha> \
-  --evidence-out <private-temp-directory>/import-export-browser.json
+  --evidence-out "$MD363_EVIDENCE_DIR/import-export-browser.json"
 ```
+
+Output обязан быть новым файлом внутри существующего owner-only temporary
+directory (`0700`) вне repository и всех его worktrees. Runner разрешает
+реальный parent path до записи и отклоняет relative path, existing file,
+workspace destination, публичный temp directory и symlink escape. Сам receipt
+создаётся с mode `0600`.
 
 Output имеет schema `mind-diary/import-export-browser-evidence/v1`,
 `status: passed`, но одновременно обязательные
 `hosted_evidence: false`, `acceptance: local-deterministic-only` и
 `provenance: exact-candidate-local-execution`. Такой result доказывает только
 локальную композицию exact candidate.
+
+После успешной browser matrix внутренний temporary workspace удаляется. При
+Playwright failure generated-only diagnostics сохраняются в отдельном
+owner-private temporary directory; stderr и `CLEANUP-GUIDANCE.txt` называют
+exact directory и срок удаления не позднее 24 часов. Failure receipt при этом
+не создаётся.
 
 ## Hosted same-run prerequisites
 
@@ -129,8 +143,11 @@ npm run join:import-export-uat-readback -- \
   --browser-readback <private-temp-directory>/browser-readback.json \
   --artifact-archive <exact-archive-passed-to-save-version> \
   --candidate-sha <exact-deployed-sha> \
-  --join-out <private-temp-directory>/import-export-uat-join.json
+  --join-out "$MD363_EVIDENCE_DIR/import-export-uat-join.json"
 ```
+
+`--join-out` применяет тот же real-parent, owner-only temp, worktree и symlink
+gate, что и `--evidence-out`, и также требует отсутствующий destination file.
 
 Provider input schema
 `mind-diary/import-export-sites-provider-readback/v1` содержит raw results

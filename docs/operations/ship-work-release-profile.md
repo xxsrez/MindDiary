@@ -1270,7 +1270,10 @@ path.
 gate из
 [`import/export browser runbook`](import-export-browser-uat-runbook.md):
 `npm run gate:import-export-browser -- --candidate-sha
-<exact-clean-HEAD-sha> --evidence-out <private-temp-path>`. Он генерирует только
+<exact-clean-HEAD-sha> --evidence-out
+<owner-private-temp-directory/new-file>`. Output resolver отклоняет repository,
+любой его worktree, публичный temp parent, existing file и symlink escape. Gate
+генерирует только
 synthetic Markdown/invalid/opaque bytes, программно устанавливает browser files,
 исполняет runtime suites и закрытую Playwright matrix MD-363. Local receipt
 обязан сохранять `hosted_evidence=false`. После exact UAT cut

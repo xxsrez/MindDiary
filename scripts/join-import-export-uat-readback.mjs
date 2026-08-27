@@ -14,6 +14,7 @@ import {
   ProbeFailure,
   safeCode,
 } from "./lib/multi-principal-probe-core.mjs";
+import { resolvePrivateTempOutputPath } from "./lib/private-evidence-output.mjs";
 import { IMPORT_EXPORT_ASSERTION_IDS } from "./run-import-export-browser-gate.mjs";
 
 const ROOT = resolve(import.meta.dirname, "..");
@@ -197,7 +198,8 @@ function validateBrowserReadback(value, expected) {
   });
 }
 
-export function createStructuralJoin(input, expected) {
+function normalizeStructuralBinding(input, expected) {
+  if (!isRecord(input) || !isRecord(expected)) fail("invalid_structural_join_input");
   const local = validateLocalReceipt(input.localReceipt, expected.candidate);
   const provider = validateProviderReadback(
     input.providerReadback,
@@ -210,7 +212,12 @@ export function createStructuralJoin(input, expected) {
     local,
     provider,
   });
-  const unsigned = Object.freeze({
+  return Object.freeze({ input, expected, local, provider, browser });
+}
+
+function structuralJoinUnsigned(binding) {
+  const { input, expected, local, provider, browser } = binding;
+  return Object.freeze({
     schema: JOIN_SCHEMA,
     status: "structurally_verified_readback",
     hosted_evidence: false,
@@ -247,30 +254,22 @@ export function createStructuralJoin(input, expected) {
       "in-app-browser-observation-origin-not-authenticated-offline",
     ]),
   });
+}
+
+export function createStructuralJoin(input, expected) {
+  const binding = normalizeStructuralBinding(input, expected);
+  const unsigned = structuralJoinUnsigned(binding);
   const result = Object.freeze({ ...unsigned, artifact_sha256: digest(canonical(unsigned)) });
-  validateStructuralJoin(result, { expected, local, provider, browser, input });
+  validateStructuralJoin(result, { expected, input });
   return result;
 }
 
 export function validateStructuralJoin(value, binding) {
   validateArtifact(value, "invalid_structural_join");
-  if (value.schema !== JOIN_SCHEMA || value.status !== "structurally_verified_readback" ||
-      value.hosted_evidence !== false || value.acceptance !== "nonterminal" ||
-      value.provenance !== "unverified-local-files" ||
-      value.evidence_basis !== "offline-byte-and-shape-join-only" ||
-      value.candidate_sha !== binding.expected.candidate || value.live_url !== UAT_URL ||
-      value.byte_bindings?.site_archive_sha256 !== binding.provider.archiveSha256 ||
-      value.byte_bindings?.local_receipt_sha256 !== binding.local.artifactSha256 ||
-      value.byte_bindings?.fixture_manifest_sha256 !== binding.local.fixtureManifestSha256 ||
-      value.input_hashes?.local_receipt_sha256 !== sha256Bytes(binding.input.localReceiptBytes) ||
-      value.input_hashes?.provider_readback_sha256 !== sha256Bytes(binding.input.providerReadbackBytes) ||
-      value.input_hashes?.browser_readback_sha256 !== sha256Bytes(binding.input.browserReadbackBytes) ||
-      value.run_fingerprint !== binding.browser.runFingerprint ||
-      JSON.stringify(value.unresolved_provenance) !== JSON.stringify([
-        "sites-connector-call-origin-not-authenticated-offline",
-        "in-app-browser-observation-origin-not-authenticated-offline",
-      ])) fail("invalid_structural_join");
-  assertionRegistry(value.assertions, "invalid_structural_join_assertions");
+  const normalized = normalizeStructuralBinding(binding?.input, binding?.expected);
+  const expectedUnsigned = structuralJoinUnsigned(normalized);
+  const { artifact_sha256: _artifactSha256, ...actualUnsigned } = value;
+  if (canonical(actualUnsigned) !== canonical(expectedUnsigned)) fail("invalid_structural_join");
   if (value.status === "passed" || value.hosted_evidence === true) fail("offline_hosted_claim_forbidden");
   return value;
 }
@@ -319,6 +318,10 @@ async function main() {
       process.stdout.write("Usage: npm run join:import-export-uat-readback -- --local-receipt <json> --provider-readback <json> --browser-readback <json> --artifact-archive <tgz> --candidate-sha <sha> --join-out <json>\n");
       return;
     }
+    const joinOutput = await resolvePrivateTempOutputPath(options.join_out, {
+      repositoryRoot: ROOT,
+      errorCode: "unsafe_join_output",
+    });
     const [localReceiptBytes, providerReadbackBytes, browserReadbackBytes, archiveBytes] = await Promise.all([
       readFile(options.local_receipt),
       readFile(options.provider_readback),
@@ -335,7 +338,7 @@ async function main() {
       browserReadbackBytes,
       archiveBytes,
     }, expected);
-    await writeFile(options.join_out, `${JSON.stringify(join, null, 2)}\n`, {
+    await writeFile(joinOutput, `${JSON.stringify(join, null, 2)}\n`, {
       flag: "wx",
       mode: 0o600,
     });

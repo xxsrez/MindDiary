@@ -20,6 +20,7 @@ import {
   ProbeFailure,
   safeCode,
 } from "./lib/multi-principal-probe-core.mjs";
+import { resolvePrivateTempOutputPath } from "./lib/private-evidence-output.mjs";
 import { verifyToolchainObservation } from "./run-admin-shell-browser-gate.mjs";
 
 const ROOT = resolve(import.meta.dirname, "..");
@@ -317,13 +318,39 @@ export function createEvidence({ candidate, toolchain, fixture, runtimeSuites, a
   }));
 }
 
+export async function finalizeGateWorkspace(directory, {
+  preserveDiagnostics,
+  now = () => new Date(),
+} = {}) {
+  if (!preserveDiagnostics) {
+    await rm(directory, { recursive: true, force: true });
+    return Object.freeze({ preserved: false });
+  }
+  const cleanupAfter = new Date(now().getTime() + 24 * 60 * 60 * 1_000).toISOString();
+  const guidancePath = resolve(directory, "CLEANUP-GUIDANCE.txt");
+  await writeFile(guidancePath, [
+    "MD-363 generated-only Playwright diagnostics were preserved after a failed run.",
+    `Inspect and delete this entire directory by ${cleanupAfter}.`,
+    `Directory: ${directory}`,
+    "Deletion command:",
+    `node -e 'require(\"node:fs\").rmSync(process.argv[1], { recursive: true, force: true })' ${JSON.stringify(directory)}`,
+    "",
+  ].join("\n"), { flag: "wx", mode: 0o600 });
+  return Object.freeze({ preserved: true, cleanupAfter, guidancePath });
+}
+
 export async function run(options, { now = () => new Date() } = {}) {
   const startedAt = now().toISOString();
+  const evidenceOutput = await resolvePrivateTempOutputPath(options.evidence_out, {
+    repositoryRoot: ROOT,
+    errorCode: "unsafe_evidence_output",
+  });
   const candidate = await exactCandidate(options.candidate_sha);
   const toolchain = await installedToolchain();
   const temporary = await mkdtemp(join(tmpdir(), "mind-diary-md363-gate-"));
   const fixtureRoot = resolve(temporary, "fixtures");
   const reporterOutput = resolve(temporary, "playwright-assertions.json");
+  let preserveDiagnostics = false;
   await mkdir(fixtureRoot);
   try {
     const fixture = await generateFixtureWorkspace(fixtureRoot);
@@ -331,6 +358,7 @@ export async function run(options, { now = () => new Date() } = {}) {
     if (runtime.code !== 0) fail("runtime_matrix_failed");
     const runtimeSuites = Object.freeze(await Promise.all(RUNTIME_SUITES.map(async (path) =>
       Object.freeze({ path, sha256: await fileSha256(resolve(ROOT, path)), status: "passed" }))));
+    preserveDiagnostics = true;
     const browser = await runProcess(process.execPath, [
       PLAYWRIGHT_CLI,
       "test",
@@ -347,10 +375,10 @@ export async function run(options, { now = () => new Date() } = {}) {
       },
     });
     if (browser.code !== 0) {
-      process.stderr.write(`MD-363 synthetic diagnostics: ${temporary}\n`);
       fail("playwright_gate_failed");
     }
     const assertions = verifiedAssertions(JSON.parse(await readFile(reporterOutput, "utf8")));
+    preserveDiagnostics = false;
     const evidence = createEvidence({
       candidate,
       toolchain,
@@ -360,13 +388,18 @@ export async function run(options, { now = () => new Date() } = {}) {
       startedAt,
       completedAt: now().toISOString(),
     });
-    await writeFile(resolve(options.evidence_out), `${JSON.stringify(evidence, null, 2)}\n`, {
+    await writeFile(evidenceOutput, `${JSON.stringify(evidence, null, 2)}\n`, {
       flag: "wx",
       mode: 0o600,
     });
     return evidence;
   } finally {
-    await rm(temporary, { recursive: true, force: true });
+    const disposition = await finalizeGateWorkspace(temporary, { preserveDiagnostics, now });
+    if (disposition.preserved) {
+      process.stderr.write(
+        `MD-363 synthetic diagnostics preserved at ${temporary}; inspect and delete by ${disposition.cleanupAfter}.\n`,
+      );
+    }
   }
 }
 
