@@ -1,0 +1,101 @@
+{
+  "schema": "mind-diary/google-drive-connector-uat-contract/v1",
+  "contract_status": "defined_not_executed",
+  "implementation_task": "MD-284",
+  "verification_task": "MD-319",
+  "runner_id": "ship-work-release/uat-google-drive-connector-object/v1",
+  "provider": "google_drive",
+  "inputs": [
+    "candidate_sha",
+    "deployment_id",
+    "pool_readiness_receipt",
+    "provider_grant_ref",
+    "private_evidence_directory"
+  ],
+  "authority": {
+    "synthetic_fixture_only": true,
+    "persistent_scope_change": "forbidden",
+    "provider_configuration_mutation": "forbidden",
+    "user_owned_file": "forbidden",
+    "external_recipient": "forbidden",
+    "arbitrary_url": "forbidden"
+  },
+  "fixtures": [
+    {
+      "id": "drive-binary",
+      "kind": "binary",
+      "required_evidence": ["source_sha256", "source_size", "download_sha256", "download_size"]
+    },
+    {
+      "id": "drive-document-docx",
+      "kind": "google_native_export",
+      "source_media_type": "application/vnd.google-apps.document",
+      "export_format": "google-drive/docx"
+    },
+    {
+      "id": "drive-spreadsheet-xlsx",
+      "kind": "google_native_export",
+      "source_media_type": "application/vnd.google-apps.spreadsheet",
+      "export_format": "google-drive/xlsx"
+    },
+    {
+      "id": "drive-presentation-pptx",
+      "kind": "google_native_export",
+      "source_media_type": "application/vnd.google-apps.presentation",
+      "export_format": "google-drive/pptx"
+    }
+  ],
+  "assertions": [
+    "GD-UAT-001-exact-candidate-deployment",
+    "GD-UAT-002-one-exact-authorized-object",
+    "GD-UAT-003-binary-byte-for-byte",
+    "GD-UAT-004-native-explicit-export-snapshot",
+    "GD-UAT-005-adapter-secret-and-locator-boundary",
+    "GD-UAT-006-revoked-grant-fails-closed",
+    "GD-UAT-007-ownership-change-fails-closed",
+    "GD-UAT-008-revision-or-export-race-fails-closed",
+    "GD-UAT-009-oversize-timeout-unknown-fail-closed",
+    "GD-UAT-010-no-existence-leak",
+    "GD-UAT-011-current-mind-write-authorization",
+    "GD-UAT-012-stage-commit-download-history-web-export",
+    "GD-UAT-013-persistence-after-redeploy",
+    "GD-UAT-014-content-mcp-has-no-administrative-export",
+    "GD-UAT-015-bounded-cleanup-readback"
+  ],
+  "receipt": {
+    "required_fields": [
+      "schema",
+      "status",
+      "candidate_sha",
+      "deployment_id",
+      "runner_id",
+      "started_at",
+      "completed_at",
+      "assertion_results",
+      "cleanup_status"
+    ],
+    "forbidden_fields": [
+      "access_token",
+      "refresh_token",
+      "authorization_header",
+      "provider_grant_id",
+      "provider_object_id",
+      "provider_revision_id",
+      "provider_export_url",
+      "download_url",
+      "binding_ref",
+      "principal_email",
+      "local_path",
+      "file_content"
+    ],
+    "allowed_statuses": ["passed", "failed", "blocked", "unknown"]
+  },
+  "cleanup": [
+    "delete_synthetic_provider_objects",
+    "revoke_run_scoped_grant",
+    "delete_run_mind",
+    "verify_provider_objects_absent",
+    "verify_run_mind_absent"
+  ],
+  "success_rule": "All assertions pass for one exact candidate and deployment, cleanup passes, and no forbidden receipt field is present. This contract alone is never provider acceptance evidence."
+}

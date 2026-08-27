@@ -25,8 +25,10 @@ staging/streaming pipeline, а Product Site composition устанавливае
 constructor-owned `bounded_in_memory` port для trusted producer. MD-272
 подключает repository-local companion для
 `local_path` и `workspace/generated_artifact`. Native client UAT,
-hosted upload-intent/producer evidence и `connector_object` adapter остаются
-отдельными gates. MD-305 владеет только hosted one-use upload-intent service и
+hosted upload-intent/producer evidence остаются отдельными gates. MD-284
+реализует repository reference adapter `connector_object` для одного exact
+Google Drive object; его exact-provider acceptance отдельно принадлежит
+MD-319. MD-305 владеет только hosted one-use upload-intent service и
 HTTP/MCP composition для local/workspace sources поверх MD-304 core; он не
 меняет этот object/storage contract. Это не разрешает silent base64, arbitrary
 URL или local-path fallback.

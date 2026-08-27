@@ -56,9 +56,10 @@ it reuses the existing atomic `commit_changeset` rather than defining another
 revision transaction. Native client/profile UAT and hosted producer evidence
 remain separate downstream gates. MD-305 implements the repository candidate
 for hosted upload-intent service/HTTP/MCP composition; live hosted companion
-evidence remains a downstream gate. Provider connector bindings remain
-unavailable even though their provider-neutral
-authorized-reader/staging boundary is implemented locally. Historical MD-250
+evidence remains a downstream gate. MD-284 adds a repository-local Google
+Drive reference adapter on the provider-neutral authorized-reader/staging
+boundary. It does not add a public wire shape, enable a hosted binding or prove
+provider UAT; those claims remain unavailable pending MD-319. Historical MD-250
 closed without Release 0.2 promotion. MD-304 owns format-neutral core object
 lifecycle and streaming stage/commit/download/export. MD-305 owns only the
 hosted one-use upload-intent service plus HTTP/MCP metadata/composition for

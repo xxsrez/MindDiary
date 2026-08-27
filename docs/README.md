@@ -132,6 +132,9 @@ operation disposition и migration принадлежат MD-337/MD-339.
 - [Restricted-UAT test account pool](operations/uat-test-account-pool.md) —
   fail-closed logical aliases, owner-authority boundary, redacted inventory,
   exact audience/operator read-back и bounded cleanup/recovery.
+- [UAT-контракт Google Drive `connector_object`](operations/google-drive-connector-object-uat.md)
+  — exact-provider binary/native export matrix, fail-closed race/revoke checks,
+  downstream lifecycle, privacy-safe receipt и bounded cleanup для MD-319.
 - [Multi-principal UAT probe](operations/uat-multi-principal-runbook.md) —
   informational Sites canary двух отдельных real principals, redeploy
   persistence, immediate revoke, redacted receipt и cleanup.

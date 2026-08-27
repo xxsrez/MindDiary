@@ -9,7 +9,7 @@ async function readRepositoryFile(relativePath) {
   return readFile(resolve(repositoryRoot, relativePath), "utf8");
 }
 
-test("MD-312 fixes the Release 0.2 readable-path profile without promoting deferred routes", async () => {
+test("MD-312 readable paths and MD-284 Drive reference keep hosted claims evidence-gated", async () => {
   const spec = await readRepositoryFile("docs/specs/file-ingress.md");
   const sourceKinds = [
     "session_attachment",
@@ -33,6 +33,10 @@ test("MD-312 fixes the Release 0.2 readable-path profile without promoting defer
     if (implementedKinds.has(sourceKind)) {
       assert.ok(row?.includes("Release 0.2 `implemented_repository`"), `Release 0.2 companion status missing: ${sourceKind}`);
       assert.ok(row?.includes("MD-325"), `joined evidence owner missing: ${sourceKind}`);
+    } else if (sourceKind === "connector_object") {
+      assert.ok(row?.includes("Release 0.3 `implemented_repository`"));
+      assert.ok(row?.includes("MD-319"));
+      assert.ok(row?.includes("hosted status остаётся `not_available`"));
     } else {
       assert.ok(row?.includes("Release 0.3 `not_available`"), `source must remain deferred: ${sourceKind}`);
     }

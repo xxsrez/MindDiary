@@ -2,13 +2,17 @@
 
 Статус: accepted contract boundary, 2026-08-23; Release 0.2 readable-path
 profile принят 2026-08-26. `normative_status: accepted`;
-`implementation_status: implemented_repository_for_disk_workspace`: общий
-portable boundary принят, а обязательный Release 0.2 slice использует packaged
-local companion для `local_path` и `workspace/generated_artifact`, MD-305
-hosted one-use upload-intent service и format-neutral streaming lifecycle
-MD-304.
+`implementation_status: implemented_repository_for_disk_workspace`;
+`connector_reference_status: implemented_repository_google_drive`.
+Общий portable boundary принят, обязательный Release 0.2 slice использует
+packaged local companion для `local_path` и `workspace/generated_artifact`,
+MD-305 hosted one-use upload-intent service и format-neutral streaming
+lifecycle MD-304; MD-284 добавляет repository reference adapter одного exact
+Google Drive object. Его exact-provider UAT остаётся отдельным gate MD-319.
 `FileIngressCoordinator` сохраняет общую staging/commit semantics и exact
-reconcile. Release 0.3 candidate подключает `bounded_in_memory` отдельным
+reconcile. Google Drive reference adapter не выдаётся за hosted capability
+только потому, что в repository существуют его code и tests. Release 0.3
+candidate подключает `bounded_in_memory` отдельным
 constructor-owned port для trusted hosted producer, но не публикует его через
 HTTP/MCP или capability discovery до поздней UAT-проверки. MD-322 подключает trusted
 `server_generated` producer stream к hosted composition только как внутренний
@@ -183,7 +187,7 @@ double в repository. `implemented_repository` означает только cod
 | `session_attachment` | MCP/provider adapter | Native client file parameter | Release 0.3 `not_available`; legacy repository schema is not a Release 0.2 support claim | No base64, local-path or arbitrary-URL fallback |
 | `local_path` | Packaged local companion on the current Codex host | Path-free one-use hosted upload intent; companion snapshots one exact regular file | Release 0.2 `implemented_repository`; installed tool inventory and exact disk journey are pending MD-325 | Missing companion is a client-installation failure; local admission returns only observable safe errors; never send the path to hosted MCP |
 | `workspace/generated_artifact` | Packaged local companion with trusted process-configured workspace roots | Same path-free one-use hosted intent | Release 0.2 `implemented_repository`; installed tool inventory and exact workspace journey are pending MD-325 | Unsupported authority fails locally; do not relabel or fall back to URL/provider transport |
-| `connector_object` | Explicit authorized connector adapter | Connector API/object fetch | Release 0.3 `not_available`; provider-neutral ports/tests are not an enabled adapter | No cross-provider, native-file or URL fallback |
+| `connector_object` | Explicit authorized connector adapter | Connector API/object fetch | Release 0.3 `implemented_repository` для Google Drive reference adapter; exact-provider UAT pending MD-319, поэтому hosted status остаётся `not_available` | No cross-provider, implicit native export or URL fallback |
 | `bounded_in_memory` | Trusted constructor-owned Product Site producer boundary | Explicit `Uint8Array` call через `ProductSiteRuntime.boundedInMemoryIngress.stage`; ≤ 4 MiB inclusive | Release 0.3 `not_available` как deployed capability до exact late-UAT evidence; internal composition `implemented_repository` | Нет HTTP/MCP route, JSON-RPC base64, URL или path fallback |
 | `server_generated` | Trusted server-side producer in hosted composition | Internal bounded producer stream; no customer wire transport | Release 0.3 `not_available` as a hosted support claim; `implemented_repository` internal composition, while capability report stays unavailable until late UAT installs and verifies one privacy-safe producer use case | No client URL/path/provider-locator fallback |
 
@@ -222,7 +226,7 @@ contract remains authoritative.
 | `session_attachment` | `file_id` ≤ 1,024 chars; temporary URL ≤ 8,192; name ≤ 1,024; MIME hint ≤ 256; target adapter: 30,000 ms, up to 4 redirects, 256 MiB counting stream | Provider adapter checks HTTPS allowlist, credentials omission, redirect/timeout/stream bound; application recomputes SHA-256, size, advisory media and safe filename | `quarantined → verified → staged_file_ref`; only verified ref may enter commit |
 | `local_path` | One regular file per intent, ≤ 256 MiB; intent 600 s; staged ref 3,600 s | Companion checks regular-file/snapshot/size/digest before upload; application rechecks exact bytes, media and filename after upload | `intent → quarantined → verified`; changed snapshot is a new key, not a changed retry |
 | `workspace/generated_artifact` | One selected artifact per intent, ≤ 256 MiB; intent 600 s; staged ref 3,600 s | Companion checks workspace authority and snapshot; application rechecks bytes, digest, media and safe filename | Same as `local_path`; workspace path never reaches application identity |
-| `connector_object` | One object per stage, ≤ 256 MiB; proposed fetch deadline 30 s and at most 4 provider redirects where the connector permits; staged ref 3,600 s | Connector validates grant/object ownership and bounded fetch; application recomputes digest, size, advisory media and filename | `quarantined → verified`; provider metadata is advisory only |
+| `connector_object` | One object per stage, ≤ 256 MiB; Google Drive reference: 30 s, zero redirects and provider-owned native export limit 10,000,000 bytes; staged ref 3,600 s | Connector validates current actor-owned grant, exact object, stable ownership/version and bounded fetch; application independently recomputes digest, size, advisory media and filename | `quarantined → verified`; provider metadata is advisory only |
 | `bounded_in_memory` | One object per explicit call, ≤ 4,194,304 bytes (4 MiB); no upload intent; staged ref 3,600 s | Calling adapter enforces byte bound; application recomputes digest, size and MIME before quarantine promotion | `quarantined → verified`; larger payload must use an explicit out-of-band source |
 | `server_generated` | One producer output, ≤ 256 MiB inclusive; generation lease 600 s; staged ref 3,600 s | Trusted producer supplies a cancellable stream, but application still checks exact digest, size, advisory media and safe filename | `quarantined → verified`; producer job/prompt identity is not a file identity |
 
@@ -427,9 +431,14 @@ This contract preserves the old boundaries:
   client/provider/UAT evidence. `FileIngressCoordinator` dispatches only explicitly enabled
   adapters, reports unavailable rows without fallback and delegates every
   mixed-source commit to the existing atomic HEAD-CAS transaction. The
-  provider-specific connector binding remains not-available; the local generic
-  reader contract proves only that an authorized adapter can stream verified
-  bytes without leaking provider identity into staging.
+  Google Drive reference adapter is implemented only in the repository. It
+  accepts one exact actor-authorized object ID, never a URL. Binary objects are
+  staged byte-for-byte. Google Docs, Sheets and Slides require an explicit
+  supported export representation (`DOCX`/`XLSX`/`PPTX`, or `PDF`) and are
+  recorded as an export snapshot rather than invented original bytes. Grant,
+  object/revision/ownership locators, export endpoint and credentials terminate
+  inside the adapter. Hosted support remains `not_available` until MD-319 runs
+  the exact-provider UAT contract.
 - Browser raw-content API, provider-wide connector sync, resumable non-Markdown
   upload, preview/OCR/transcription, archive import/extraction and production
   antivirus/CDR are not implied by this source matrix.
@@ -442,9 +451,10 @@ Open questions intentionally left for child implementation decisions:
   Sites routing or a real companion/client installation.
 - Which hosted producer wiring and runtime limits are required before the local
   server-generated writer can be promoted to UAT evidence (MD-273)?
-- Which connector object types and provider-specific ownership proofs can be
-  supported, and how are their bounded fetch receipts represented (future
-  connector work)?
+- Which providers and object types beyond the Google Drive binary and explicit
+  Docs/Sheets/Slides reference profile can be supported? Such support requires
+  a separate adapter and exact-provider receipt; the Google adapter is not a
+  cross-provider fallback.
 - Release 0.3 must separately define exact client/profile receipts for direct
   host/provider, connector and generated routes before any of them can move
   from `not_available` to supported.
