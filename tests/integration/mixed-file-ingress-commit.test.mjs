@@ -359,24 +359,32 @@ test("mixed ingress commits real source services atomically and reconciles every
     "intent-workspace-unknown",
   );
 
+  const connectorRepresentation = Object.freeze({ kind: "binary" });
+  const connectorSha256 = await env.objects.calculateSha256(FIXTURES.connector);
   const connectorService = new AuthorizedConnectorIngressService({
     staging: env.staging,
-    reader: {
-      async read() {
-        return Object.freeze({
-          kind: "ready",
-          stream: chunks(FIXTURES.connector),
-          displayFilename: "synthetic-connector.bin",
-          claimedMediaType: "application/octet-stream",
-        });
-      },
-    },
   });
   const connector = await connectorService.stage({
     actor: env.currentActor(),
     spaceId: MINDS.ordinary.spaceId,
     writeBindingId: WRITE,
-    object: Object.freeze({ synthetic: true }),
+    representation: connectorRepresentation,
+    source: {
+      async readVerifiedSnapshot() {
+        return Object.freeze({
+          kind: "ready",
+          input: Object.freeze({
+            sourceKind: "connector_object",
+            representation: connectorRepresentation,
+            stream: chunks(FIXTURES.connector),
+            displayFilename: "synthetic-connector.bin",
+            advisoryMediaType: "application/octet-stream",
+            size: FIXTURES.connector.byteLength,
+            sha256: connectorSha256,
+          }),
+        });
+      },
+    },
     idempotencyKey: "stage-connector",
   });
   assert.equal(connector.kind, "staged");
