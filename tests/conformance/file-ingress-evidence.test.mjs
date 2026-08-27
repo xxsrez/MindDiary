@@ -229,7 +229,7 @@ test("MD-314 registry is versioned, closed across source x profile and names aut
   assert.equal(current.registry.schema, "mind-diary/file-ingress-evidence-registry/v2");
   assert.equal(current.registry.release, "0.3");
   assert.equal(current.registry.rows.length, 18);
-  assert.equal(current.toolInventory.entries.length, 23);
+  assert.equal(current.toolInventory.entries.length, 18);
   assert.equal(
     current.registry.hosted_authority.tool_inventory_sha256,
     current.toolInventorySha256,

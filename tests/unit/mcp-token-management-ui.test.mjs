@@ -389,7 +389,8 @@ test("production redacted self-check covers both auth boundaries and both MCP pr
   assert.match(PRODUCT_UI_CLIENT_JAVASCRIPT, /button\.closest\("section"\)/u);
   assert.match(PRODUCT_UI_CLIENT_JAVASCRIPT, /This text contains no token or Site credential/u);
   assert.doesNotMatch(PRODUCT_UI_CLIENT_JAVASCRIPT, /\/api\/v1\/mind-bindings\//u);
-  assert.match(PRODUCT_CONNECTIONS_CLIENT_JAVASCRIPT, /expected_binding_version/u);
+  assert.match(PRODUCT_CONNECTIONS_CLIENT_JAVASCRIPT, /expected_target_version/u);
+  assert.doesNotMatch(PRODUCT_CONNECTIONS_CLIENT_JAVASCRIPT, /expected_binding_version/u);
   assert.match(PRODUCT_CONNECTIONS_CLIENT_JAVASCRIPT, /Access changed in another session/u);
 });
 
