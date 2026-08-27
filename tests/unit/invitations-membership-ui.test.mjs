@@ -5,6 +5,7 @@ import test from "node:test";
 import {
   renderInvitationsMembership,
   renderInvitationsMembershipDocument,
+  renderInvitationsMembershipPanel,
 } from "../../packages/adapter-web/dist/invitations-membership.js";
 
 const implementation = await readFile(
@@ -20,6 +21,7 @@ const SNAPSHOT = Object.freeze({
     mindId: "mind_research",
     name: "Research Notes",
     route: "/research-notes",
+    visibility: "private",
     metadataVersion: 7,
   }),
   actor: Object.freeze({
@@ -153,6 +155,47 @@ test("exact-email invitation form exposes only roles the current actor may grant
   assert.match(adminForm, /value="reader"/);
   assert.match(adminForm, /value="editor"/);
   assert.doesNotMatch(adminForm, /value="admin"|value="owner"/);
+});
+
+test("contextual Access starts compact and reveals invitation/member controls on request", () => {
+  const html = renderInvitationsMembershipPanel(SNAPSHOT);
+
+  assert.match(html, /<h2 id="collaboration-heading">Access<\/h2>/);
+  assert.match(html, /data-access-summary/);
+  assert.match(html, /<dt>Visibility<\/dt><dd>Private — Only active participants can read this Mind\.<\/dd>/);
+  assert.match(html, /<dt>Your role<\/dt><dd>Owner<\/dd>/);
+  assert.match(html, /<dt>Participants<\/dt><dd>3<\/dd>/);
+  assert.match(html, /<dt>Pending invitations<\/dt><dd>2 pending — no access is granted until acceptance\.<\/dd>/);
+  assert.match(html, /data-access-participant-summary/);
+  assert.match(html, /<details data-access-invitations>/);
+  assert.match(html, /<summary>Manage invitations<\/summary>/);
+  assert.match(html, /<details data-access-participants>/);
+  assert.match(html, /<summary>Manage participants<\/summary>/);
+  assert.match(html, /autocomplete="off"/);
+  assert.doesNotMatch(html, /type="search"|<datalist/i);
+});
+
+test("global invitation inbox omits outgoing lifecycle even if unsafe input contains it", () => {
+  const incoming = {
+    ...SNAPSHOT.invitations[0],
+    mindId: "mind_external",
+    mindName: "External Mind",
+    mindRoute: "/external-mind",
+  };
+  const outgoing = {
+    ...SNAPSHOT.invitations[2],
+    mindId: "mind_research",
+    mindName: "Research Notes",
+    mindRoute: "/research-notes",
+  };
+  const html = renderInvitationsMembership({
+    displayName: "Andrey",
+    collection: { kind: "global_ready", invitations: [incoming, outgoing] },
+  });
+
+  assert.match(html, /Incoming invitations/);
+  assert.match(html, /External Mind/);
+  assert.doesNotMatch(html, /Sent invitations|invite_outgoing_pending|Pending Candidate/);
 });
 
 test("incoming and outgoing invitation states expose only valid lifecycle actions", () => {

@@ -99,7 +99,8 @@ test("heavy navigation pages render their shell before deferred collection reads
   await page.goto(`${origin}/invitations`, { waitUntil: "domcontentloaded" });
   await expect(page.getByRole("heading", { name: "Loading participants and invitations" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Incoming invitations" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Sent invitations" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Sent invitations" })).toHaveCount(0);
+  await expect(page.getByText("only invitations that need your response")).toBeVisible();
 
   await page.route("**/api/v1/account/deletion-impact", async (route) => {
     await new Promise((resolveDelay) => setTimeout(resolveDelay, 300));
@@ -118,6 +119,111 @@ test("heavy navigation pages render their shell before deferred collection reads
   await expect(page.getByRole("heading", { name: "Loading connections" })).toBeVisible();
   await expect(page.locator("[data-connections-collection]")).toHaveAttribute("aria-busy", "true");
   await expect(page.getByRole("heading", { name: "No active connections" })).toBeVisible();
+});
+
+test("global invitation inbox accepts an incoming event and filters outgoing rows client-side", async ({
+  page,
+}) => {
+  await page.goto(origin);
+  const registration = page.locator("[data-isolated-account-form]");
+  if (await registration.count() > 0) {
+    await registration.evaluate((form) => form.requestSubmit());
+    await page.waitForURL("**/me");
+  }
+  let state = "pending";
+  let rejectState = "pending";
+  let acceptedBody = null;
+  let rejectedBody = null;
+  await page.route("**/api/v1/invitations-overview", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        data: {
+          invitations: [{
+            invitation_id: "invitation_browser_incoming",
+            mind_id: "space_browser_shared",
+            mind_name: "Browser Shared",
+            mind_route: "/browser-shared",
+            direction: "incoming",
+            counterparty_display_name: "Browser Owner",
+            proposed_role: "editor",
+            state,
+            expires_at: "2026-09-04T12:00:00.000Z",
+            invitation_version: 2,
+            can_manage: true,
+          }, {
+            invitation_id: "invitation_browser_reject",
+            mind_id: "space_browser_reject",
+            mind_name: "Browser Reject Mind",
+            mind_route: "/browser-reject",
+            direction: "incoming",
+            counterparty_display_name: "Reject Owner",
+            proposed_role: "reader",
+            state: rejectState,
+            expires_at: "2026-09-04T12:00:00.000Z",
+            invitation_version: 4,
+            can_manage: true,
+          }, {
+            invitation_id: "invitation_browser_outgoing",
+            mind_id: "space_browser_outgoing",
+            mind_name: "Must Not Render",
+            mind_route: "/must-not-render",
+            direction: "outgoing",
+            counterparty_display_name: "Hidden Recipient",
+            proposed_role: "reader",
+            state: "pending",
+            expires_at: "2026-09-04T12:00:00.000Z",
+            invitation_version: 1,
+            can_manage: true,
+          }],
+        },
+      }),
+    });
+  });
+  await page.route("**/api/v1/invitations/invitation_browser_incoming/accept", async (route) => {
+    acceptedBody = route.request().postDataJSON();
+    state = "accepted";
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ ok: true, data: { state } }),
+    });
+  });
+  await page.route("**/api/v1/invitations/invitation_browser_reject/reject", async (route) => {
+    rejectedBody = route.request().postDataJSON();
+    rejectState = "rejected";
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ ok: true, data: { state: rejectState } }),
+    });
+  });
+
+  await page.goto(`${origin}/invitations`);
+  await expect(page.getByRole("heading", { name: "Browser Owner" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Browser Shared" })).toHaveAttribute(
+    "href",
+    "/browser-shared",
+  );
+  await expect(page.getByText("Must Not Render")).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Sent invitations" })).toHaveCount(0);
+  const accepted = page.locator('[data-invitation-card="invitation_browser_incoming"]');
+  await Promise.all([
+    page.waitForNavigation(),
+    accepted.getByRole("button", { name: "Accept" }).click(),
+  ]);
+  expect(acceptedBody).toEqual({ expected_invitation_version: 2 });
+  await expect(accepted).toHaveAttribute("data-invitation-state", "accepted");
+  const rejected = page.locator('[data-invitation-card="invitation_browser_reject"]');
+  await Promise.all([
+    page.waitForNavigation(),
+    rejected.getByRole("button", { name: "Reject" }).click(),
+  ]);
+  expect(rejectedBody).toEqual({ expected_invitation_version: 4 });
+  await expect(rejected).toHaveAttribute("data-invitation-state", "rejected");
+  await expect(page.getByRole("button", { name: /Accept|Reject/u })).toHaveCount(0);
 });
 
 test("Public Minds stops repeated cursors and deduplicates immutable Mind IDs across routes", async ({

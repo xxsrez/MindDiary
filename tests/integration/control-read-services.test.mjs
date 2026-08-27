@@ -277,6 +277,7 @@ test("durable Sites membership CAS and safe read projections survive reconstruct
     incoming.invitations.map(({ direction, counterpartyDisplayName, state }) => [direction, counterpartyDisplayName, state]),
     [["incoming", "Member 1", "accepted"]],
   );
+  assert.equal(incoming.invitations[0].mindRoute, "/shared");
 
   const memberships = new MembershipControlService({
     memberships: metadata,

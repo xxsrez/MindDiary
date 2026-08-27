@@ -1681,17 +1681,9 @@ export async function createProductSiteRuntime(
       async execute(request) {
         const result = await runWithCapturedWork(() =>
           request.operation === "get_invitations_overview"
-            ? metadata.withConsistentRead(async (store) => {
-                const [invitations, minds] = await Promise.all([
-                  new ControlReadService(store).listInvitations(request.actor as never),
-                  new MindRouteService({
-                    routes: store,
-                    host,
-                    logger: controlObservability,
-                  }).listMinds(request.actor as never),
-                ]);
-                return Object.freeze({ invitations, minds });
-              })
+            ? metadata.withConsistentRead((store) =>
+                new ControlReadService(store).listInvitations(request.actor as never),
+              )
             : control.execute(request));
         if (
           request.operation === "delete_account" &&

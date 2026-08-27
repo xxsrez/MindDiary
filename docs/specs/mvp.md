@@ -133,6 +133,16 @@ schemas, migration и UI в MD-336 не входят.
   visibility, transfer и deletion.
 - Membership management доступен только через trusted Sites control plane, не
   через content MCP.
+- Exact ordinary Mind route показывает компактный `Access` summary до любых
+  административных controls: current visibility effect, current actor role,
+  active participants и pending invitations. Invite и lifecycle actions
+  раскрываются только по явному запросу пользователя; Personal Mind остаётся
+  unshareable и не получает этот section.
+- Global `/invitations` — actor-scoped inbox только входящих invitation events.
+  Он позволяет принять или отклонить pending invitation и перейти по
+  server-owned canonical route соответствующего ordinary Mind. Исходящие
+  invitation lifecycle и participant administration остаются contextual внутри
+  exact Mind, чтобы global view не превращался в people directory.
 
 ### Visibility и каталог
 
@@ -473,6 +483,12 @@ visibility в create flow. Exact ordinary route `/{space_handle}` показыв
   необратимости; changed/expired impact полностью инвалидирует подтверждение;
 - Reader/Editor не получают metadata/visibility/delete controls, baseline
   visibility reader не получает membership или административные действия.
+- Для accepted participant exact route сначала показывает компактный `Access`:
+  effective visibility, current role, active participants и pending invitation
+  states. Invite exact registered email, cancel/reissue и разрешённые member
+  actions находятся в progressive disclosure. Pending, expired, rejected и
+  cancelled invitation не отображаются как membership или действующий access;
+  семь дней expiry показываются из current server projection.
 
 Все browser mutations используют session CSRF, один retry-safe
 `Idempotency-Key` на exact attempt и server-owned identity/role. Direct route и

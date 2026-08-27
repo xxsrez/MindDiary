@@ -934,6 +934,7 @@ export interface ControlInvitationProjection {
   readonly invitationId: InvitationId;
   readonly mindId: SpaceId;
   readonly mindName: string;
+  readonly mindRoute: `/${string}`;
   readonly direction: "incoming" | "outgoing";
   readonly counterpartyPrincipalId: PrincipalId;
   readonly counterpartyDisplayName: string;

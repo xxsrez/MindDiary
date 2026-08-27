@@ -20,6 +20,7 @@ export interface InvitationMembershipMind {
   readonly mindId: string;
   readonly name: string;
   readonly route: string;
+  readonly visibility: "private" | "unlisted" | "public";
   readonly metadataVersion: number;
 }
 
@@ -177,6 +178,20 @@ function roleLabel(role: InvitationMembershipRole): string {
   return `${role.slice(0, 1).toUpperCase()}${role.slice(1)}`;
 }
 
+function visibilityLabel(visibility: InvitationMembershipMind["visibility"]): string {
+  return `${visibility.slice(0, 1).toUpperCase()}${visibility.slice(1)}`;
+}
+
+function visibilityEffect(visibility: InvitationMembershipMind["visibility"]): string {
+  if (visibility === "public") {
+    return "Authenticated people can discover and read the live HEAD and history.";
+  }
+  if (visibility === "unlisted") {
+    return "Authenticated people with the exact URL can read the live HEAD and history.";
+  }
+  return "Only active participants can read this Mind.";
+}
+
 function stateLabel(state: InvitationUiState): string {
   return `${state.slice(0, 1).toUpperCase()}${state.slice(1)}`;
 }
@@ -281,9 +296,8 @@ function renderGlobalInvitations(
 ): string {
   return `<div class="md-token-layout" data-global-invitations>
     ${renderGlobalInvitationGroup(invitations, "incoming")}
-    ${renderGlobalInvitationGroup(invitations, "outgoing")}
     <section class="md-setup-card" aria-labelledby="global-invitation-help">
-      <div><p class="md-eyebrow">Per-Mind controls</p><h2 id="global-invitation-help">Invite and manage participants from a Mind</h2><p>Open an ordinary Mind to invite an exact registered account, change roles, revoke access, or leave. This page contains access metadata only.</p></div>
+      <div><p class="md-eyebrow">Per-Mind controls</p><h2 id="global-invitation-help">Manage access from a Mind</h2><p>Open an ordinary Mind to review participants and outgoing invitation lifecycle. This inbox contains only invitations that need your response.</p></div>
       <a class="md-button md-button--secondary" href="/minds">Open your Minds</a>
     </section>
   </div>`;
@@ -401,7 +415,7 @@ function renderInvitationForm(snapshot: InvitationMembershipSnapshot): string {
     <form class="md-token-form" data-invitation-form data-mind-id="${escapeUntrustedText(mindId)}" data-metadata-version="${snapshot.mind.metadataVersion}">
       <div class="md-field">
         <label for="invitation-email">Exact verified email</label>
-        <input id="invitation-email" name="target_verified_email" type="email" required maxlength="254" autocomplete="email" spellcheck="false" aria-describedby="invitation-email-help">
+        <input id="invitation-email" name="target_verified_email" type="email" required maxlength="254" autocomplete="off" spellcheck="false" aria-describedby="invitation-email-help">
         <p id="invitation-email-help">The address must already belong to a registered principal.</p>
       </div>
       <div class="md-field">
@@ -514,20 +528,57 @@ export function renderInvitationsMembershipPanel(
     </section>`;
   }
   const actorRole = safeRole(snapshot.actor.role) ?? "reader";
+  const visibility = snapshot.mind.visibility === "public" ||
+    snapshot.mind.visibility === "unlisted"
+    ? snapshot.mind.visibility
+    : "private";
+  const activeMembers = snapshot.members.filter((member) => member.state === "active");
+  const pendingInvitations = snapshot.invitations.filter(
+    (invitation) => invitation.state === "pending",
+  );
+  const participantSummary = activeMembers.length === 0
+    ? "<p>No active participants are available in the current projection.</p>"
+    : `<ul data-access-participant-summary>${activeMembers.map((member) => {
+        const role = safeRole(member.role) ?? "reader";
+        return `<li><strong>${escapeUntrustedText(member.displayName)}${member.isSelf ? " (you)" : ""}</strong> — ${roleLabel(role)}</li>`;
+      }).join("")}</ul>`;
+  const invitationSummary = pendingInvitations.length === 0
+    ? "No pending invitations."
+    : `${pendingInvitations.length} pending — no access is granted until acceptance.`;
   return `<section class="md-token-layout" aria-labelledby="collaboration-heading" data-invitations-membership-root data-mind-handle="${escapeUntrustedText(handle)}">
     <div class="md-section-heading">
-      <div><p class="md-eyebrow">People and access</p><h2 id="collaboration-heading">Participants and invitations</h2><p>Pending invitations grant no access. Every successful action reloads current server state.</p></div>
+      <div><p class="md-eyebrow">People and access</p><h2 id="collaboration-heading">Access</h2><p>Current server-owned access state. Pending invitations grant no access.</p></div>
       <span class="md-token-state md-token-state--active">You are ${roleLabel(actorRole)}</span>
     </div>
-    ${renderInvitationGroup(snapshot.invitations, "incoming")}
-    ${renderInvitationGroup(snapshot.invitations, "outgoing")}
-    ${renderInvitationForm(snapshot)}
-    <section aria-labelledby="members-heading">
-      <div class="md-section-heading"><div><p class="md-eyebrow">Active access</p><h2 id="members-heading">Participants</h2></div></div>
-      <div class="md-token-grid">${snapshot.members.map((member) => renderMemberCard(member, actorRole)).join("")}</div>
+    <dl class="md-token-card__metadata" data-access-summary>
+      <div><dt>Visibility</dt><dd>${visibilityLabel(visibility)} — ${visibilityEffect(visibility)}</dd></div>
+      <div><dt>Your role</dt><dd>${roleLabel(actorRole)}</dd></div>
+      <div><dt>Participants</dt><dd>${activeMembers.length}</dd></div>
+      <div><dt>Pending invitations</dt><dd>${invitationSummary}</dd></div>
+    </dl>
+    <section aria-labelledby="participant-summary-heading">
+      <div class="md-section-heading"><div><p class="md-eyebrow">Active access</p><h3 id="participant-summary-heading">Participants</h3></div></div>
+      ${participantSummary}
     </section>
-    ${renderLeave(snapshot)}
-    <p><a href="/invitations">Review invitations across all Minds</a></p>
+    <details data-access-invitations>
+      <summary>Manage invitations</summary>
+      <div class="md-token-layout">
+        ${renderInvitationGroup(snapshot.invitations, "incoming")}
+        ${renderInvitationGroup(snapshot.invitations, "outgoing")}
+        ${renderInvitationForm(snapshot)}
+      </div>
+    </details>
+    <details data-access-participants>
+      <summary>Manage participants</summary>
+      <div class="md-token-layout">
+        <section aria-labelledby="members-heading">
+          <div class="md-section-heading"><div><p class="md-eyebrow">Allowed changes</p><h3 id="members-heading">Participant controls</h3></div></div>
+          <div class="md-token-grid">${snapshot.members.map((member) => renderMemberCard(member, actorRole)).join("")}</div>
+        </section>
+        ${renderLeave(snapshot)}
+      </div>
+    </details>
+    <p><a href="/invitations">Review incoming invitations across all Minds</a></p>
   </section>`;
 }
 
@@ -570,7 +621,7 @@ export function renderInvitationsMembership(
     <a class="md-skip-link" href="#main-content" data-ia-skip-link>Skip to main content</a>
     ${renderMindDiaryAuthenticatedHeader(model.displayName, "invitations")}
     <main id="main-content" class="md-main" tabindex="-1" data-ia-main>
-      <div class="md-page-heading" data-ia-page-header><div><p class="md-eyebrow">People and access</p><h1>Invitations and participants</h1><p>Invite registered people, respond to invitations, and manage current access without exposing Mind content.</p></div>${announcement}</div>
+      <div class="md-page-heading" data-ia-page-header><div><p class="md-eyebrow">People and access</p><h1>Incoming invitations</h1><p>Respond to invitation events without exposing Mind content. Outgoing lifecycle and participant controls stay inside each Mind.</p></div>${announcement}</div>
       ${renderCollection(model.collection)}
     </main>
     ${renderMindDiaryAuthenticatedFooter("invitations")}
@@ -596,7 +647,7 @@ export function renderInvitationsMembershipDocument(
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
   ${MIND_DIARY_FAVICON_LINKS}
-  <title>Invitations and participants — Mind Diary</title>
+  <title>Incoming invitations — Mind Diary</title>
   <link rel="stylesheet" href="${MIND_DIARY_UI_ASSETS.tokens}">
   <link rel="stylesheet" href="${MIND_DIARY_UI_ASSETS.shellStyles}">
 </head>

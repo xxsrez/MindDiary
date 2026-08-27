@@ -173,7 +173,7 @@ const handler = createProductWebHttpHandler({
         }
       }
       if (request.operation === "get_invitations_overview") {
-        return { minds: [], invitations: { invitations: [] } };
+        return { invitations: [] };
       }
       if (request.operation === "list_mcp_tokens") {
         return issued ? [{

@@ -355,6 +355,7 @@ export async function productUiDocument(input: {
                   mindId: resolved.mindId,
                   name: resolved.name,
                   route: `/${resolved.handle}`,
+                  visibility: resolved.visibility,
                   metadataVersion: resolved.metadataVersion,
                 }),
                 actor: Object.freeze({

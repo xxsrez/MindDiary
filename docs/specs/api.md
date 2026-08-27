@@ -603,7 +603,7 @@ Problem Details response:
 | `POST` | `/api/v1/minds/{mind_ref}/leave` | Non-owner leaves Mind. |
 | `POST` | `/api/v1/minds/{mind_ref}/ownership-transfer` | Atomic Owner → target, source → Admin. |
 | `GET` | `/api/v1/invitations` | Invitations caller may see. |
-| `GET` | `/api/v1/invitations-overview` | Browser-only allowlist projection invitations + ordinary Mind routes из одного consistent read; без email, principal IDs и content. |
+| `GET` | `/api/v1/invitations-overview` | Browser-only allowlist projection только incoming invitation events с server-owned canonical ordinary Mind route; без email, principal IDs, outgoing invitations и content. |
 | `POST` | `/api/v1/minds/{mind_ref}/invitations` | Invite registered principal. |
 | `POST` | `/api/v1/invitations/{invitation_id}/accept` | Target accepts pending invitation. |
 | `POST` | `/api/v1/invitations/{invitation_id}/reject` | Target rejects pending invitation. |
@@ -902,6 +902,35 @@ Invitation descriptor:
   "invitation_version": 1
 }
 ```
+
+Global inbox использует отдельную browser allowlist projection:
+
+```json
+{
+  "invitations": [
+    {
+      "invitation_id": "invite_opaque",
+      "mind_id": "mind_opaque",
+      "mind_name": "Shared Research",
+      "mind_route": "/shared-research",
+      "direction": "incoming",
+      "counterparty_display_name": "Registered Owner",
+      "proposed_role": "editor",
+      "state": "pending",
+      "expires_at": "2026-08-12T22:00:00Z",
+      "invitation_version": 1,
+      "can_manage": true
+    }
+  ]
+}
+```
+
+Projection включает только incoming events current actor и не зависит от уже
+accepted membership list: canonical `mind_route` приходит из server-side join
+самой invitation с current active ordinary Mind. Invalid route или non-incoming
+row отбрасывается fail closed. Исходящие pending/terminal states читаются через
+contextual exact-Mind access section. Ни этот endpoint, ни exact-email create
+не возвращают directory suggestions, похожие accounts или email адреса.
 
 Account email возвращается только там, где он нужен exact invite workflow и
 caller уже имеет право его видеть; list/member responses по умолчанию используют

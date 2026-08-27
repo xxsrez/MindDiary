@@ -57,11 +57,21 @@ const initialOrdinaryMinds = () => [{
 let ordinaryMinds;
 let calls;
 let conflictMode;
+let collaborationInvitations;
 
 function resetFixture() {
   ordinaryMinds = initialOrdinaryMinds();
   calls = [];
   conflictMode = null;
+  collaborationInvitations = [{
+    invitationId: "invitation-fixture-pending",
+    direction: "outgoing",
+    counterpartyDisplayName: "Taylor Reader",
+    proposedRole: "reader",
+    state: "pending",
+    expiresAt: "2026-09-03T12:00:00.000Z",
+    invitationVersion: 2,
+  }];
 }
 
 resetFixture();
@@ -95,6 +105,7 @@ function collaborationProjection(mind) {
         mindId: mind.mindId,
         name: mind.name,
         route: `/${mind.handle}`,
+        visibility: mind.visibility,
         metadataVersion: mind.metadataVersion,
       },
       actor: {
@@ -103,16 +114,10 @@ function collaborationProjection(mind) {
         membershipVersion: members[0].membershipVersion,
       },
       members,
-      invitations: [{
-        invitationId: "invitation-fixture-pending",
-        direction: "outgoing",
-        counterpartyDisplayName: "Taylor Reader",
-        proposedRole: "reader",
-        state: "pending",
-        expiresAt: "2026-09-03T12:00:00.000Z",
-        invitationVersion: 2,
+      invitations: collaborationInvitations.map((invitation) => ({
+        ...invitation,
         canManage: mind.role === "owner" || mind.role === "admin",
-      }],
+      })),
     },
   };
 }
@@ -381,6 +386,70 @@ const server = createServer(async (request, response) => {
       mind.visibility = body.visibility;
       mind.metadataVersion += 1;
       sendApiSuccess(response, { visibility: mind.visibility });
+      return;
+    }
+
+    const createInvitationMatch = url.pathname.match(/^\/api\/v1\/minds\/([^/]+)\/invitations$/u);
+    if (createInvitationMatch && request.method === "POST") {
+      const handle = decodeURIComponent(createInvitationMatch[1]);
+      const body = await readJson(request);
+      recordCall("createInvitation", request, { handle, ...body });
+      const mind = ordinaryMinds.find((candidate) => candidate.handle === handle);
+      if (!mutationAuthorized(request) || !mind || (mind.role !== "owner" && mind.role !== "admin")) {
+        sendApiError(response, 403, "forbidden");
+        return;
+      }
+      if (body?.target_verified_email !== "registered@example.com") {
+        sendApiError(response, 404, "registered_principal_not_found");
+        return;
+      }
+      collaborationInvitations.push({
+        invitationId: "invitation-fixture-created",
+        direction: "outgoing",
+        counterpartyDisplayName: "Registered Person",
+        proposedRole: body.role,
+        state: "pending",
+        expiresAt: "2026-09-04T12:00:00.000Z",
+        invitationVersion: 1,
+      });
+      sendApiSuccess(response, { state: "pending" });
+      return;
+    }
+
+    const invitationLifecycleMatch = url.pathname.match(/^\/api\/v1\/invitations\/([^/]+)(?:\/(reissue))?$/u);
+    if (invitationLifecycleMatch &&
+        (request.method === "DELETE" ||
+          (request.method === "POST" && invitationLifecycleMatch[2] === "reissue"))) {
+      const invitationId = decodeURIComponent(invitationLifecycleMatch[1]);
+      const body = await readJson(request);
+      const invitation = collaborationInvitations.find(
+        (candidate) => candidate.invitationId === invitationId,
+      );
+      const reissue = invitationLifecycleMatch[2] === "reissue";
+      recordCall(reissue ? "reissueInvitation" : "cancelInvitation", request, {
+        invitationId,
+        ...body,
+      });
+      if (!mutationAuthorized(request) || !invitation ||
+          body?.expected_invitation_version !== invitation.invitationVersion) {
+        sendApiError(response, 409, "invitation_conflict");
+        return;
+      }
+      if (reissue) {
+        invitation.state = "cancelled";
+        invitation.invitationVersion += 1;
+        collaborationInvitations.push({
+          ...invitation,
+          invitationId: `${invitationId}_reissued`,
+          state: "pending",
+          expiresAt: "2026-09-11T12:00:00.000Z",
+          invitationVersion: 1,
+        });
+      } else {
+        invitation.state = "cancelled";
+        invitation.invitationVersion += 1;
+      }
+      sendApiSuccess(response, { state: invitation.state });
       return;
     }
 

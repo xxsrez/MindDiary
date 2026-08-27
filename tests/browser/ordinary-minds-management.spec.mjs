@@ -129,12 +129,68 @@ test("shipped direct route saves name and description under one metadata version
   expect(updateCall.idempotencyKey).toMatch(/^metadata:[0-9a-f-]{36}$/u);
 });
 
+test("shipped Access reveals exact-email invite, cancel, and seven-day reissue with current readback", async ({ page }) => {
+  await page.goto(`${origin}/research-notes`);
+  await expect(page.locator("[data-access-summary]")).toContainText("1 pending");
+  await expect(page.locator("[data-access-participant-summary]")).toContainText("Morgan Editor");
+  await expect(page.locator("[data-invitation-form]")).not.toBeVisible();
+
+  await page.locator("[data-access-invitations] summary").click();
+  const email = page.getByLabel("Exact verified email");
+  await expect(email).toHaveAttribute("autocomplete", "off");
+  await email.fill("registered@example.com");
+  await page.getByLabel("Role after acceptance").selectOption("editor");
+  await Promise.all([
+    page.waitForNavigation(),
+    page.getByRole("button", { name: "Send in-app invitation" }).click(),
+  ]);
+
+  await expect(page.locator("[data-access-summary]")).toContainText("2 pending");
+  await page.locator("[data-access-invitations] summary").click();
+  const created = page.locator('[data-invitation-card="invitation-fixture-created"]');
+  await expect(created).toContainText("Registered Person");
+  await expect(created).toContainText("Sep 4, 2026");
+  await Promise.all([
+    page.waitForNavigation(),
+    created.getByRole("button", { name: "Cancel invitation" }).click(),
+  ]);
+
+  await expect(page.locator("[data-access-summary]")).toContainText("1 pending");
+  await page.locator("[data-access-invitations] summary").click();
+  const cancelled = page.locator('[data-invitation-card="invitation-fixture-created"]');
+  await expect(cancelled).toHaveAttribute("data-invitation-state", "cancelled");
+  await Promise.all([
+    page.waitForNavigation(),
+    cancelled.getByRole("button", { name: "Reissue for 7 days" }).click(),
+  ]);
+
+  await expect(page.locator("[data-access-summary]")).toContainText("2 pending");
+  const calls = await fixtureCalls();
+  expect(calls.find(({ operation }) => operation === "createInvitation").command).toMatchObject({
+    handle: "research-notes",
+    target_verified_email: "registered@example.com",
+    role: "editor",
+    expected_metadata_version: 7,
+  });
+  expect(calls.find(({ operation }) => operation === "cancelInvitation").command)
+    .toMatchObject({ expected_invitation_version: 1 });
+  expect(calls.find(({ operation }) => operation === "reissueInvitation").command)
+    .toMatchObject({ expected_invitation_version: 2 });
+});
+
 test("metadata conflict reload removes every stale control after role downgrade", async ({ page }) => {
   await page.goto(`${origin}/research-notes`);
   await expect(page.locator("[data-owner-delete-controls]")).toBeVisible();
   await expect(page.locator("[data-owner-visibility-controls]")).toBeVisible();
   await expect(page.locator("[data-markdown-import]")).toBeVisible();
   await expect(page.locator("[data-capacity-state]")).toBeVisible();
+  await expect(page.locator('script[src="/ui/mind-diary-ordinary-minds-client.js"]')).toHaveCount(1);
+  await expect(page.locator('script[src="/ui/mind-diary-collaboration-client.js"]')).toHaveCount(0);
+  await expect(page.locator("[data-access-summary]")).toContainText("Private");
+  await expect(page.locator("[data-invitation-form]")).not.toBeVisible();
+  await expect(page.locator("[data-member-role-form]")).not.toBeVisible();
+  await page.locator("[data-access-invitations] summary").click();
+  await page.locator("[data-access-participants] summary").click();
   await expect(page.locator("[data-invitation-form]")).toBeVisible();
   await expect(page.locator("[data-member-role-form]")).toBeVisible();
   await expect(page.locator("[data-ownership-transfer-form]")).toBeVisible();
@@ -172,6 +228,9 @@ test("shipped visibility flow requires exact disclosure acknowledgment", async (
   await form.locator("[data-save-visibility]").click();
 
   await expect(page.locator("[data-route-visibility]")).toHaveText("Public");
+  await expect(page.locator("[data-access-summary]")).toContainText(
+    "Authenticated people can discover and read the live HEAD and history.",
+  );
   const call = (await fixtureCalls()).find(({ operation }) => operation === "changeVisibility");
   expect(call.command).toMatchObject({
     handle: "research-notes",

@@ -1656,6 +1656,7 @@ export abstract class RevisionMetadataReadStore extends RevisionMetadataSnapshot
               invitationId: invitation.invitationId,
               mindId: invitation.spaceId,
               mindName: mind.name,
+              mindRoute: `/${mind.spaceHandle}` as const,
               direction: outgoing ? ("outgoing" as const) : ("incoming" as const),
               counterpartyPrincipalId: counterpartyId,
               counterpartyDisplayName: counterparty.displayName,

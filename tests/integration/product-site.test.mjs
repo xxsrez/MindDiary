@@ -1086,7 +1086,8 @@ test("ordinary Mind list and exact route wire the UAT management and deletion co
   assert.match(detailHtml, /Counts come from immutable manifest and job metadata/);
   assert.match(detailHtml, /Owner headroom/);
   assert.match(detailHtml, /data-invitations-membership-root/);
-  assert.match(detailHtml, /Participants and invitations/);
+  assert.match(detailHtml, /<h2 id="collaboration-heading">Access<\/h2>/);
+  assert.match(detailHtml, /data-access-summary/);
   assert.match(detailHtml, /data-invitation-form/);
   assert.match(detailHtml, /data-member-role-form/);
   const ownershipForm = /<form\b[^>]*data-ownership-transfer-form[^>]*>[\s\S]*?<\/form>/u.exec(detailHtml)?.[0];
@@ -1417,12 +1418,12 @@ test("collaboration pages expose safe invitation metadata and map every browser 
       calls.push(request);
       if (request.operation === "get_session") return sessionProjection;
       if (request.operation === "get_invitations_overview") return {
-        minds: [personalRoute, ordinaryOwnerRoute],
-        invitations: { invitations: [
+        invitations: [
           {
             invitationId: "invitation_incoming",
             mindId: "space_external",
             mindName: "External Collaboration",
+            mindRoute: "/external-collaboration",
             direction: "incoming",
             counterpartyDisplayName: "External Owner",
             proposedRole: "editor",
@@ -1436,6 +1437,7 @@ test("collaboration pages expose safe invitation metadata and map every browser 
             invitationId: "invitation_outgoing",
             mindId: "space_research",
             mindName: "Research Notes",
+            mindRoute: "/research-notes",
             direction: "outgoing",
             counterpartyDisplayName: "Invited Person",
             proposedRole: "reader",
@@ -1443,7 +1445,7 @@ test("collaboration pages expose safe invitation metadata and map every browser 
             expiresAt: "2026-08-09T00:00:00.000Z",
             invitationVersion: 3,
           },
-        ] },
+        ],
       };
       return { applied: true };
     } },
@@ -1461,8 +1463,10 @@ test("collaboration pages expose safe invitation metadata and map every browser 
   const overview = await handler(new Request(`${origin}/api/v1/invitations-overview`));
   assert.equal(overview.status, 200);
   const overviewPayload = await overview.json();
-  assert.equal(overviewPayload.data.invitations.invitations.length, 2);
-  assert.equal(overviewPayload.data.minds.length, 1);
+  assert.equal(overviewPayload.data.invitations.length, 1);
+  assert.equal(overviewPayload.data.invitations[0].direction, "incoming");
+  assert.equal(overviewPayload.data.invitations[0].mind_route, "/external-collaboration");
+  assert.equal(JSON.stringify(overviewPayload).includes("invitation_outgoing"), false);
   assert.equal(JSON.stringify(overviewPayload).includes("must-not-render@example.com"), false);
   assert.equal(JSON.stringify(overviewPayload).includes("principal_must_not_render"), false);
   assert.equal(calls.filter(({ operation }) => operation === "get_invitations_overview").length, 1);
@@ -1475,6 +1479,7 @@ test("collaboration pages expose safe invitation metadata and map every browser 
   assert.match(collaborationClient, /registered_principal_not_found/);
   assert.match(collaborationClient, /api\/v1\/invitations-overview/);
   assert.match(collaborationClient, /data-invitation-action/);
+  assert.match(collaborationClient, /exactEmail/);
 
   const cases = [
     ["POST", "/api/v1/minds/research-notes/invitations", {

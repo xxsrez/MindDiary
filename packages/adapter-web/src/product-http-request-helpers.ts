@@ -495,6 +495,7 @@ export function invitationUi(
   const invitationId = requiredString(source?.invitationId);
   const mindId = requiredString(source?.mindId);
   const mindName = requiredString(source?.mindName);
+  const sourceMindRoute = requiredString(source?.mindRoute);
   const counterpartyDisplayName = requiredString(source?.counterpartyDisplayName);
   const expiresAt = requiredString(source?.expiresAt);
   const invitationVersion = positiveInteger(source?.invitationVersion);
@@ -510,6 +511,12 @@ export function invitationUi(
       state === "rejected" || state === "cancelled")
   ) return null;
   const mind = minds.get(mindId);
+  const mindRoute = sourceMindRoute !== null &&
+    /^\/[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(sourceMindRoute)
+    ? sourceMindRoute
+    : mind === undefined
+      ? "#"
+      : `/${mind.handle}`;
   const canManage = direction === "incoming" || (
     mind?.accessKind !== "visibility" &&
     (mind?.role === "owner" || mind?.role === "admin")
@@ -518,7 +525,7 @@ export function invitationUi(
     invitationId,
     mindId,
     mindName,
-    mindRoute: mind === undefined ? "#" : `/${mind.handle}`,
+    mindRoute,
     direction,
     counterpartyDisplayName,
     proposedRole,
@@ -572,36 +579,17 @@ export function publicUiMind(value: unknown): PublicMindCatalogItem | null {
 }
 
 export function safeInvitationOverview(value: unknown): Readonly<{
-  minds: readonly Readonly<{
-    mindId: string;
-    route: `/${string}`;
-    role: OrdinaryMindUiMind["role"];
-  }>[];
-  invitations: Readonly<{
-    invitations: readonly InvitationMembershipGlobalInvitation[];
-  }>;
+  invitations: readonly InvitationMembershipGlobalInvitation[];
 }> | null {
   const source = record(value);
-  const invitationSource = record(source?.invitations);
-  if (!Array.isArray(source?.minds) || !Array.isArray(invitationSource?.invitations)) {
-    return null;
-  }
-  const ordinaryMinds = source.minds
-    .map(ordinaryUiMind)
-    .filter((mind): mind is OrdinaryMindUiMind => mind !== null);
-  const mindMap = new Map(ordinaryMinds.map((mind) => [mind.mindId, mind] as const));
-  const minds = Object.freeze(ordinaryMinds.map((mind) => Object.freeze({
-    mindId: mind.mindId,
-    route: `/${mind.handle}` as `/${string}`,
-    role: mind.role,
-  })));
-  const invitations = Object.freeze(invitationSource.invitations
-    .map((invitation) => invitationUi(invitation, mindMap))
-    .filter((invitation): invitation is InvitationMembershipGlobalInvitation => invitation !== null));
-  return Object.freeze({
-    minds,
-    invitations: Object.freeze({ invitations }),
-  });
+  if (!Array.isArray(source?.invitations)) return null;
+  const invitations = Object.freeze(source.invitations
+    .map((invitation) => invitationUi(invitation, new Map()))
+    .filter((invitation): invitation is InvitationMembershipGlobalInvitation =>
+      invitation !== null &&
+      invitation.direction === "incoming" &&
+      invitation.mindRoute !== "#"));
+  return Object.freeze({ invitations });
 }
 
 interface ProductBindingUiCandidate {
