@@ -10,10 +10,11 @@ MD-304.
 `FileIngressCoordinator` сохраняет общую staging/commit semantics и exact
 reconcile. Release 0.3 candidate подключает `bounded_in_memory` отдельным
 constructor-owned port для trusted hosted producer, но не публикует его через
-HTTP/MCP или capability discovery до поздней UAT-проверки. Direct host/provider
-transport, connector adapter и server-generated producer также не выдаются за
-поддержку только потому, что в repository существуют их ports, schemas или
-локальные tests.
+HTTP/MCP или capability discovery до поздней UAT-проверки. MD-322 подключает trusted
+`server_generated` producer stream к hosted composition только как внутренний
+application port; он не становится HTTP/MCP surface и не выдаётся за hosted
+support до отдельного late-UAT evidence. Repository ports, schemas и локальные
+tests сами по себе не являются support claim.
 
 Release applicability: portable boundary остаётся accepted, но
 [ADR-0019](../decisions/0019-release-0-1-codex-first-small-data-boundary.md)
@@ -184,7 +185,7 @@ double в repository. `implemented_repository` означает только cod
 | `workspace/generated_artifact` | Packaged local companion with trusted process-configured workspace roots | Same path-free one-use hosted intent | Release 0.2 `implemented_repository`; installed tool inventory and exact workspace journey are pending MD-325 | Unsupported authority fails locally; do not relabel or fall back to URL/provider transport |
 | `connector_object` | Explicit authorized connector adapter | Connector API/object fetch | Release 0.3 `not_available`; provider-neutral ports/tests are not an enabled adapter | No cross-provider, native-file or URL fallback |
 | `bounded_in_memory` | Trusted constructor-owned Product Site producer boundary | Explicit `Uint8Array` call через `ProductSiteRuntime.boundedInMemoryIngress.stage`; ≤ 4 MiB inclusive | Release 0.3 `not_available` как deployed capability до exact late-UAT evidence; internal composition `implemented_repository` | Нет HTTP/MCP route, JSON-RPC base64, URL или path fallback |
-| `server_generated` | Future trusted server-side producer | Internal producer stream/job output | Release 0.3 `not_available`; repository-local writer tests are not hosted producer wiring | No client URL/path fallback |
+| `server_generated` | Trusted server-side producer in hosted composition | Internal bounded producer stream; no customer wire transport | Release 0.3 `not_available` as a hosted support claim; `implemented_repository` internal composition, while capability report stays unavailable until late UAT installs and verifies one privacy-safe producer use case | No client URL/path/provider-locator fallback |
 
 All six rows use the same application static gate and the same commit
 transaction. A source adapter may have a stricter limit, but it cannot raise
@@ -223,7 +224,7 @@ contract remains authoritative.
 | `workspace/generated_artifact` | One selected artifact per intent, ≤ 256 MiB; intent 600 s; staged ref 3,600 s | Companion checks workspace authority and snapshot; application rechecks bytes, digest, media and safe filename | Same as `local_path`; workspace path never reaches application identity |
 | `connector_object` | One object per stage, ≤ 256 MiB; proposed fetch deadline 30 s and at most 4 provider redirects where the connector permits; staged ref 3,600 s | Connector validates grant/object ownership and bounded fetch; application recomputes digest, size, advisory media and filename | `quarantined → verified`; provider metadata is advisory only |
 | `bounded_in_memory` | One object per explicit call, ≤ 4,194,304 bytes (4 MiB); no upload intent; staged ref 3,600 s | Calling adapter enforces byte bound; application recomputes digest, size and MIME before quarantine promotion | `quarantined → verified`; larger payload must use an explicit out-of-band source |
-| `server_generated` | One producer output, ≤ 256 MiB; proposed generation lease 600 s; staged ref 3,600 s | Trusted producer supplies bytes, but application still checks exact digest, size, advisory media and safe filename | `quarantined → verified`; producer job identity is not a file identity |
+| `server_generated` | One producer output, ≤ 256 MiB inclusive; generation lease 600 s; staged ref 3,600 s | Trusted producer supplies a cancellable stream, but application still checks exact digest, size, advisory media and safe filename | `quarantined → verified`; producer job/prompt identity is not a file identity |
 
 The current `session_attachment` values are repository-verified composition
 defaults, not a claim about every OpenAI host or client. A changed timeout,
@@ -245,6 +246,32 @@ export must retain only bounded chunks/prefixes, not a full-file buffer. Exact
 no reachable object/revision. MD-304 owns and supplies that streaming/staging
 contract; MD-305 consumes it through `stageStream` and cannot redefine its
 limits, object identity or lifecycle.
+
+### Trusted `server_generated` composition
+
+MD-322 adds one constructor-owned internal port to hosted composition. A
+trusted backend producer opens exactly one `ReadableStream` or
+`AsyncIterable`; the port passes its chunks directly to existing `stageStream`
+with `source_kind: server_generated`, `max_bytes: 268435456` and a bounded
+600-second producer lease. It does not accept bytes, client path, URL, provider
+locator, prompt or job identity. Display filename and advisory media remain
+ordinary untrusted metadata and pass the common filename/media gate.
+
+The route races producer acquisition and every pending chunk against caller
+cancellation and the lease. Cancellation, timeout, producer exception,
+invalid chunk and byte 268,435,457 close or return the producer best-effort and
+fail closed through the existing quarantine cleanup. Counting and SHA-256 stay
+incremental; the route never assembles the complete artifact in application
+memory. Exact 268,435,456 bytes remain permitted by the shared gate.
+
+Success returns only the service-owned `staged_file_ref`. It does not advance
+HEAD: quota, binding authorization, idempotency, explicit atomic changeset,
+immutable history, exact download, actor-owned Web export and orphan cleanup
+remain the existing BundleFile lifecycle. Content MCP gains neither a
+`server_generated` stage/export tool nor export administration. Until MD-290
+installs one privacy-safe producer use case and records exact-candidate late
+UAT, hosted capability discovery deliberately continues to report
+`server_generated` as `not_available`, transport `none`, maximum `0`.
 
 ### Idempotency and reconcile
 

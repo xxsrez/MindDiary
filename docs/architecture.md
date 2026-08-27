@@ -44,8 +44,12 @@ implementation; MD-272 добавляет repository-local companion для `loc
 закрыт без Release 0.2 promotion. MD-304 владеет format-neutral core stage →
 commit → download/export и object lifecycle; MD-305 владеет только hosted
 one-use upload-intent/metadata/composition для local/workspace sources поверх
-этого core. Joined native-client UAT принадлежит MD-275. Connector и generated
-paths не являются автоматически доступными или fallback capability.
+этого core. MD-322 добавляет constructor-owned внутренний
+`serverGeneratedIngress` к hosted composition: trusted producer передаёт
+cancellable bounded stream напрямую в MD-304 `stageStream`, без полного
+буфера, HTTP/MCP exposure или capability advertisement. Joined native-client
+UAT принадлежит MD-275, а late-UAT producer proof — MD-290. Connector и
+generated paths не являются автоматически доступными или fallback capability.
 
 ## Драйверы и ограничения
 

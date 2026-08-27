@@ -92,6 +92,7 @@ import {
   MindHistoryService,
   MindSearchService,
   MindValidationService,
+  TrustedServerGeneratedIngressService,
   type McpBearerAuthenticator,
   type SitesIdentityActorContext,
 } from "@mind-diary/application-content";
@@ -179,6 +180,10 @@ export interface ProductSiteRuntimeOptions {
 }
 
 export interface ProductSiteRuntime {
+  /** Trusted in-process producer route; deliberately absent from HTTP/MCP discovery. */
+  readonly serverGeneratedIngress: Readonly<
+    Pick<TrustedServerGeneratedIngressService, "stage">
+  >;
   readonly fetch: (
     request: Request,
     deferActivity?: (promise: Promise<unknown>) => void,
@@ -1061,6 +1066,12 @@ export async function createProductSiteRuntime(
   const fileIngress = new FileIngressCoordinator({
     staging: bundleFileStaging,
     commits,
+  });
+  const serverGeneratedIngressService = new TrustedServerGeneratedIngressService({
+    ingress: new GeneratedArtifactIngressService({ staging: bundleFileStaging }),
+  });
+  const serverGeneratedIngress = Object.freeze({
+    stage: serverGeneratedIngressService.stage.bind(serverGeneratedIngressService),
   });
   const markdownImports = new MarkdownImportService({
     authorizer,
@@ -2110,6 +2121,7 @@ export async function createProductSiteRuntime(
 
   return Object.freeze({
     boundedInMemoryIngress,
+    serverGeneratedIngress,
     dispatchBackground,
     recoverBackground,
     async fetch(

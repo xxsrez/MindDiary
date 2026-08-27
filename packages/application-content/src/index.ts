@@ -55,6 +55,7 @@ export * from "./mind-validation.js";
 export * from "./bundle-file-references.js";
 export * from "./bundle-file-downloads.js";
 export * from "./generated-artifacts.js";
+export * from "./server-generated-ingress.js";
 export * from "./local-file-companion.js";
 export * from "./local-file-upload-intents.js";
 export * from "./file-ingress-coordinator.js";

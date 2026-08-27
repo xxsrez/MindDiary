@@ -64,6 +64,11 @@ lifecycle and streaming stage/commit/download/export. MD-305 owns only the
 hosted one-use upload-intent service plus HTTP/MCP metadata/composition for
 local companion and workspace-generated sources; it consumes MD-304 ports and
 does not own BundleFile storage. MD-275 owns the joined UAT gate.
+MD-322 wires the trusted `server_generated` streaming adapter into hosted
+composition as a constructor-owned internal application port. It accepts no
+wire request and adds no MCP/REST tool, route or export surface; the public
+capability row remains `not_available` until MD-290 late UAT installs and
+verifies a privacy-safe producer use case.
 No source may be inferred as hosted capability or used as a silent
 base64/URL/path fallback. Ни одна из этих file/scale rows не блокирует
 Markdown-first Release 0.1 по ADR-0019.
@@ -2240,6 +2245,14 @@ provider identity, account, object locator, path, filename, temporary URL,
 credential or private content. A `not_available` row is terminal capability
 discovery for that deployed composition; the caller may not silently switch
 source kind or transport.
+
+The installed repository composition may expose a trusted in-process
+`server_generated` port to backend code while this public row remains
+`not_available`. That port is neither an MCP tool nor an HTTP route: it accepts
+only a cancellable producer stream plus ordinary filename/media metadata,
+returns a staged ref, and requires the existing explicit atomic commit.
+Producer job/prompt identity, client path, URL and provider locator never enter
+the request or staged record. MCP export administration remains absent.
 
 ### `create_file_upload_intent`
 
