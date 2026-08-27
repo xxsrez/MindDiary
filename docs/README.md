@@ -40,48 +40,51 @@ operation disposition и migration принадлежат MD-337/MD-339.
 10. [Connections, Advanced MCP и Codex Help](specs/connection-experience.md) —
    historical Release 0.1 routes/projections и Release 0.3 Sites-only ownership
    Connections/writable target.
-11. [Mind bindings](specs/mind-bindings.md) — historical Release 0.1/0.2
+11. [Compact admin IA и design contract](specs/compact-admin-information-architecture.md)
+   — измеримые desktop/mobile layouts, density/tokens, route/session states,
+   privacy/destructive disclosures и machine-check mapping для MD-347.
+12. [Mind bindings](specs/mind-bindings.md) — historical Release 0.1/0.2
    binding contract, сохранённый до отдельного MD-339 replacement/migration.
-12. [Границы реализации](specs/implementation-boundaries.md) — trusted
+13. [Границы реализации](specs/implementation-boundaries.md) — trusted
    `ActorContext`, application ports/façades, transaction boundaries и
    enforceable dependency rules для будущего runtime.
-13. [Automatic knowledge capture](specs/automatic-capture.md) — historical
+14. [Automatic knowledge capture](specs/automatic-capture.md) — historical
    default-off capture profile и Release 0.3 граница: Site владеет policy и
    target, Content MCP — только возможным exact-target content commit.
-14. [Traceability matrix MVP 0.1](specs/traceability.md) — критерии 1–29,
+15. [Traceability matrix MVP 0.1](specs/traceability.md) — критерии 1–29,
    owning stories, executable/release evidence, обязательные live flows,
    post-MVP denylist и implementation decisions.
-15. [BundleFile](specs/bundle-files.md) — принятый Release 0.2 producer-defined
+16. [BundleFile](specs/bundle-files.md) — принятый Release 0.2 producer-defined
    format-neutral contract: explicit manifest v4, arbitrary opaque files,
    256 MiB streaming, safe-raster preview, download-only containment, mixed
    atomic commits и Sites-owned import/export boundary Release 0.3.
-16. [Единый file-ingress contract](specs/file-ingress.md) — принятый portable
+17. [Единый file-ingress contract](specs/file-ingress.md) — принятый portable
    boundary, обязательный Release 0.2 readable-path profile через packaged
    local companion и отложенная Release 0.3 matrix direct/provider, connector
    и generated sources; implementation, installed-client и per-path evidence
    разделены.
-17. [Sites storage, capacity и Markdown import](specs/sites-storage-capacity-import.md)
+18. [Sites storage, capacity и Markdown import](specs/sites-storage-capacity-import.md)
    — принятый post-MVP Brain-scale contract: Space-scoped content addressing, v3 delta
    manifests, reconstructable accounting/reservations, bounded Markdown import,
    Sites-owned streaming export/GC и migration/rollback boundary.
-18. [Операторский каталог principals и последняя активность](specs/service-operator-directory.md)
+19. [Операторский каталог principals и последняя активность](specs/service-operator-directory.md)
    — принятый read-only UAT contract отдельной service-operator authority,
    success-only web/MCP summary, privacy-minimized directory и deletion.
-19. [Автономная доставка work scope](specs/ship-work-release.md) — универсальный
+20. [Автономная доставка work scope](specs/ship-work-release.md) — универсальный
    принятый контракт `ship-work-release`: task-manager adapters, один mutable
    writer по умолчанию, selective lanes и scouts, cohorts, control API,
    dev/UAT promotion и ручная production boundary.
-20. [Контракт project profile](specs/ship-work-release-project-profile.md) —
+21. [Контракт project profile](specs/ship-work-release-project-profile.md) —
    versioned provider-neutral schema обязательных project-specific commands,
    runtime capabilities, gates, environments и evidence rows.
-21. [Контракт task-management adapter](specs/ship-work-release-task-manager.md) —
+22. [Контракт task-management adapter](specs/ship-work-release-task-manager.md) —
    versioned provider-neutral schema identity, snapshots, mutations,
    reconciliation и capability negotiation task-management backend-а.
-22. [Task Manager adapter Mind Diary](specs/ship-work-release-task-manager-srez.md) —
+23. [Task Manager adapter Mind Diary](specs/ship-work-release-task-manager-srez.md) —
     текущая привязка к Project `Mind Diary`, Release `0.1`, exact Task Manager
     refs, bounded reads, versioned task writes и designated scope projection
     anchor.
-23. [Исторический Linear adapter](specs/ship-work-release-linear.md) —
+24. [Исторический Linear adapter](specs/ship-work-release-linear.md) —
     прежнее отображение Linear entities; не является текущим provider, profile
     или source of truth.
 
