@@ -39,6 +39,8 @@
     "join:google-drive-connector-uat-readback": "node scripts/join-google-drive-connector-uat-readback.mjs",
     "gate:release-0.3-access-admin": "npm run build --silent && node scripts/run-release-0.3-access-admin-local-gate.mjs",
     "join:release-0.3-access-admin": "node scripts/join-release-0.3-access-admin-uat.mjs",
+    "gate:mind-admin-browser": "npm run build --silent && node scripts/run-mind-admin-browser-gate.mjs",
+    "join:mind-admin-uat-readback": "node scripts/join-mind-admin-uat-readback.mjs",
     "gate:oauth-direct-plugin": "npm run build --silent && node scripts/run-oauth-direct-plugin-probe.mjs",
     "gate:release-0.3-authority-target": "npm run build --silent && node scripts/run-release-0.3-authority-target-local-gate.mjs",
     "join:release-0.3-authority-target": "node scripts/join-release-0.3-authority-target-uat.mjs",
