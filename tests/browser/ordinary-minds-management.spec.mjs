@@ -61,12 +61,24 @@ function participantCard(page, name = "Morgan Editor") {
   return page.locator("[data-member-card]").filter({ has: page.getByRole("heading", { name }) });
 }
 
+async function revealParticipants(page) {
+  const details = page.locator("[data-access-participants]");
+  await expect(details).toHaveCount(1);
+  if (!(await details.evaluate((element) => element.open))) {
+    await details.locator("summary").click();
+  }
+  await expect(details).toHaveJSProperty("open", true);
+}
+
 async function confirmMembershipAction(page, buttonName) {
   const dialog = page.locator("[data-membership-confirmation-dialog]");
   await expect(dialog).toBeVisible();
   await expect(dialog.getByRole("button", { name: buttonName })).toBeDisabled();
   await dialog.getByLabel(/reviewed the current participant, role, and access consequences/u).check();
-  await dialog.getByRole("button", { name: buttonName }).click();
+  await Promise.all([
+    page.waitForEvent("framenavigated", (frame) => frame === page.mainFrame()),
+    dialog.getByRole("button", { name: buttonName }).click(),
+  ]);
 }
 
 test.beforeAll(async () => {
@@ -280,6 +292,7 @@ test("shipped ownership flow reloads the former Owner as Admin", async ({ page }
 
 test("role change waits for contextual confirmation and sends the rendered membership version", async ({ page }) => {
   await page.goto(`${origin}/research-notes`);
+  await revealParticipants(page);
   const card = participantCard(page);
   await card.getByLabel("Role").selectOption("reader");
   await card.getByRole("button", { name: "Update role" }).click();
@@ -292,6 +305,7 @@ test("role change waits for contextual confirmation and sends the rendered membe
   expect((await fixtureCalls()).filter(({ operation }) => operation === "changeMembershipRole")).toHaveLength(0);
   await confirmMembershipAction(page, "Confirm role change");
 
+  await revealParticipants(page);
   await expect(participantCard(page)).toHaveAttribute("data-member-role", "reader");
   const call = (await fixtureCalls()).find(({ operation }) => operation === "changeMembershipRole");
   expect(call.command).toEqual({
@@ -307,11 +321,13 @@ test("role change waits for contextual confirmation and sends the rendered membe
 test("membership conflict discards every stale action and renders the concurrent role", async ({ page }) => {
   await page.goto(`${origin}/research-notes`);
   await setConflict("membership");
+  await revealParticipants(page);
   const card = participantCard(page);
   await card.getByLabel("Role").selectOption("reader");
   await card.getByRole("button", { name: "Update role" }).click();
   await confirmMembershipAction(page, "Confirm role change");
 
+  await revealParticipants(page);
   const current = participantCard(page);
   await expect(current).toHaveAttribute("data-member-role", "admin");
   await expect(current.getByLabel("Role")).toHaveValue("admin");
@@ -328,6 +344,7 @@ test("public revoke explains and preserves visibility-only read without write or
   await visibility.locator("[data-save-visibility]").click();
   await expect(page.locator("[data-route-visibility]")).toHaveText("Public");
 
+  await revealParticipants(page);
   await participantCard(page).getByRole("button", { name: "Revoke access" }).click();
   const dialog = page.locator("[data-membership-confirmation-dialog]");
   await expect(dialog.locator("[data-membership-confirmation-impact]")).toContainText(
@@ -347,6 +364,7 @@ test("public revoke explains and preserves visibility-only read without write or
 
 test("unlisted leave reloads as exact-link baseline read with no membership controls", async ({ page }) => {
   await page.goto(`${origin}/shared-library`);
+  await revealParticipants(page);
   await page.getByRole("button", { name: "Leave this Mind" }).click();
   const dialog = page.locator("[data-membership-confirmation-dialog]");
   await expect(dialog.locator("[data-membership-confirmation-impact]")).toContainText(
@@ -364,6 +382,7 @@ test("unlisted leave reloads as exact-link baseline read with no membership cont
 
 test("private leave reloads to a non-disclosing unavailable route", async ({ page }) => {
   await page.goto(`${origin}/private-room`);
+  await revealParticipants(page);
   await page.getByRole("button", { name: "Leave this Mind" }).click();
   const dialog = page.locator("[data-membership-confirmation-dialog]");
   await expect(dialog.locator("[data-membership-confirmation-impact]")).toContainText(
