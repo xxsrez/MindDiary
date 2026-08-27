@@ -64,27 +64,31 @@ operation disposition и migration принадлежат MD-337/MD-339.
    и generated sources; implementation, installed-client и per-path evidence
    разделены.
 18. [Sites storage, capacity и Markdown import](specs/sites-storage-capacity-import.md)
-   — принятый post-MVP Brain-scale contract: Space-scoped content addressing, v3 delta
-   manifests, reconstructable accounting/reservations, bounded Markdown import,
-   Sites-owned streaming export/GC и migration/rollback boundary.
-19. [Операторский каталог principals и последняя активность](specs/service-operator-directory.md)
+   — принятый post-MVP Brain-scale contract: Space-scoped content addressing,
+   canonical v4 manifests с чтением historical v1/v2/v3, reconstructable
+   accounting/reservations, bounded Markdown import, Sites-owned streaming
+   export/GC и migration/rollback boundary.
+19. [Delta полномочий import/export Release 0.3](specs/release-0.3-import-export-authority-delta.md)
+   — проверяемый register переноса export в Sites control plane, сохранения
+   существующего web-only Markdown import и compatibility boundary Content MCP.
+20. [Операторский каталог principals и последняя активность](specs/service-operator-directory.md)
    — принятый read-only UAT contract отдельной service-operator authority,
    success-only web/MCP summary, privacy-minimized directory и deletion.
-20. [Автономная доставка work scope](specs/ship-work-release.md) — универсальный
+21. [Автономная доставка work scope](specs/ship-work-release.md) — универсальный
    принятый контракт `ship-work-release`: task-manager adapters, один mutable
    writer по умолчанию, selective lanes и scouts, cohorts, control API,
    dev/UAT promotion и ручная production boundary.
-21. [Контракт project profile](specs/ship-work-release-project-profile.md) —
+22. [Контракт project profile](specs/ship-work-release-project-profile.md) —
    versioned provider-neutral schema обязательных project-specific commands,
    runtime capabilities, gates, environments и evidence rows.
-22. [Контракт task-management adapter](specs/ship-work-release-task-manager.md) —
+23. [Контракт task-management adapter](specs/ship-work-release-task-manager.md) —
    versioned provider-neutral schema identity, snapshots, mutations,
    reconciliation и capability negotiation task-management backend-а.
-23. [Task Manager adapter Mind Diary](specs/ship-work-release-task-manager-srez.md) —
+24. [Task Manager adapter Mind Diary](specs/ship-work-release-task-manager-srez.md) —
     текущая привязка к Project `Mind Diary`, Release `0.1`, exact Task Manager
     refs, bounded reads, versioned task writes и designated scope projection
     anchor.
-24. [Исторический Linear adapter](specs/ship-work-release-linear.md) —
+25. [Исторический Linear adapter](specs/ship-work-release-linear.md) —
     прежнее отображение Linear entities; не является текущим provider, profile
     или source of truth.
 

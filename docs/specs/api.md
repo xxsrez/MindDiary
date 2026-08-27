@@ -2611,7 +2611,7 @@ terminal outcome.
 Commit uses `expected_version` and advances verified canonical promotion by at
 most 100 files / 4 MiB per call. It reauthorizes, verifies the sealed plan,
 reservation and exact HEAD on every page. The terminal call creates exactly
-one v3 revision, moves HEAD, consumes the reservation, schedules index/audit
+one v4 revision, moves HEAD, consumes the reservation, schedules index/audit
 work and marks the session committed in one D1 transaction. Earlier promotion
 pages do not change HEAD; their unreachable immutable objects use normal
 bounded cleanup after a stale-head/cancel outcome. `DELETE` before commit is

@@ -17,8 +17,9 @@ cleanup. Весь extension пока не проверен на exact UAT deploy
 
 ADR-0021 accepts manifest v4 as the Release 0.2 format-neutral successor. V4
 keeps the separately digested Space-scoped layout but opens opaque media and
-raises the per-file/counting-stream boundary to 256 MiB. Current local storage
-still writes v3/legacy closed-media objects until MD-304.
+raises the per-file/counting-stream boundary to 256 MiB. Historical candidates
+до MD-304 писали v3/legacy closed-media objects; current local implementation
+пишет v4, сохраняя version-aware чтение immutable v1/v2/v3 revisions.
 
 MD-271 задаёт общий [file-ingress contract](file-ingress.md) для source bytes,
 которые могут быть staged как `BundleFile`. Этот документ отвечает только за
@@ -129,8 +130,8 @@ Release 0.2 new revision uses canonical manifest format
 contract and exact `path + kind + media_type + sha256 + size`, deterministic
 Unicode-scalar ordering and canonical one-line JSON with final newline. V4
 changes opaque `media_type` from a closed enum to open advisory metadata with
-header-safe `application/octet-stream` fallback. Current implementation writes
-v3 until MD-304.
+header-safe `application/octet-stream` fallback. MD-304 завершил local v4 write
+promotion; это не переписывает и не переинтерпретирует historical v1/v2/v3.
 
 Commit строит новый manifest как delta от exact parent:
 
@@ -337,7 +338,7 @@ against the retained opaque entries of the exact base revision; terminal
 sanitized failures schedule cleanup.
 
 Commit/finalize promotes verified objects into the Space-scoped canonical
-namespace in durable pages of at most 100 files / 4 MiB, then writes one v3
+namespace in durable pages of at most 100 files / 4 MiB, then writes one v4
 manifest and uses the normal D1 HEAD transaction. Exactly one new immutable
 revision becomes visible or nothing does. Search index job is queued after
 commit; canonical browse/fetch works immediately. Finalize records the
@@ -402,8 +403,8 @@ Migration is forward-only, resumable and non-destructive:
    rewritten. Embedded v1/v2 manifest bytes retain their original digest.
 3. Record backfill checkpoint and shadow-compare exact materialization,
    retained usage and representative historical reads.
-4. Existing v3 delta writes stay valid. Enable v4 writes only after MD-304
-   verifies arbitrary media, exact 256 MiB streaming and all reachable parent
+4. Existing v3 delta revisions stay valid. MD-304 enabled v4 writes after
+   verifying arbitrary media, exact 256 MiB streaming and all reachable parent
    objects for a Space; old revisions stay immutable and readable.
 5. Reconcile ledger/refcounts from canonical manifests before enabling hard
    admission; until then growth fails closed but reads/deletes continue.
