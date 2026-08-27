@@ -50,7 +50,7 @@ actor, authorization checks, базовую схему ошибок и прав�
 | `web-read` | Sites control; current registered Sites actor; identity и current ACL/visibility до metadata read | `401 authentication_required`, indistinguishable `404` where required; exact Mind only where route contains `mind_ref` |
 | `web-write` | Sites control; current registered Sites actor; same-origin `Origin`, session CSRF, idempotency/CAS where state changes, current named capability | typed `400/403/409`; no content revision unless operation is the internal final step of Site-owned import |
 | `web-import` | Sites control; current actor with exact Mind write authority; quota/reservation/session/CAS checks | bounded typed import errors; exact Mind and base revision, one final HEAD or no change |
-| `credential-control` | Sites control; actor-owned `connection_ref`/`personal_token_ref`, current credential state/scopes and current ACL | unknown/foreign/revoked ref is indistinguishable `404`; target selection is `0..1`, never content-selected |
+| `credential-control` | Sites control; credential-owner authority, target-version CAS and idempotency are common; action-specific checks are defined below | unknown/foreign ref is indistinguishable `404`; target selection is `0..1`, never content-selected |
 | `operator-read` | hidden support surface; current registered Sites actor in constructor-only service-operator allowlist | every other actor receives indistinguishable `404`; no content body or new authority |
 | `content-read` | Content MCP; current OAuth/personal-token actor with `content:read`, current ACL/visibility and explicit Mind/revision whenever the operation targets content | no `mind_binding_required`; denied/missing stay indistinguishable where required; no cross-Mind fallback |
 | `content-write` | Content MCP; current actor with `content:write`, current ACL, Site-selected writable target, idempotency and HEAD CAS | `writable_target_required`, `writable_target_mismatch`, `writable_target_unavailable`, revision/idempotency conflicts; one exact target |
@@ -59,6 +59,15 @@ actor, authorization checks, базовую схему ошибок и прав�
 | `oauth` | OAuth adapter; public-client DCR/PKCE, exact redirect/resource, trusted Sites identity at consent, grant/token lifecycle | standard OAuth errors; resource remains canonical `/api/mcp` |
 | `delivery-grant` | exact content/export delivery; one-use opaque URL grant captures principal/Mind/revision and rechecks current access at download | invalid/expired/revoked/deleted/unauthorized are one indistinguishable `404` |
 | `compat-removed` | no target product capability | omitted from advertised catalog; exact old call returns protocol `Invalid params`/`Method not found`, never silently performs another action |
+
+`select_write` additionally requires active credential lifecycle,
+`content:write`, current writer role and target eligibility. `clear_write`
+requires only credential-owner authority, `expected_target_version` and
+idempotency: target ACL, current writer role and target eligibility are not
+preconditions. Clear therefore remains available after target ACL/role loss or
+target deletion and reveals no target metadata. This action-specific split is
+normative; the shared `credential-control` profile must not be interpreted as
+adding select-only checks to recovery-safe clear.
 
 ## REST control routes
 
@@ -103,11 +112,11 @@ actor, authorization checks, базовую схему ошибок и прав�
 | `DELETE /api/v1/invitations/{invitation_id}` | keep → Sites control | Current administrative authority |
 | `GET /api/v1/mcp-tokens` | keep → Sites control | Advanced MCP metadata; no secret/verifier |
 | `POST /api/v1/mcp-tokens` | keep → Sites control | One-time secret issuance |
-| `PATCH /api/v1/mcp-tokens/{personal_token_ref}/mind-access` | change → Sites control | `credential-control`: remove `attach_read`/`detach_read`; retain only select/switch/clear writable target with target-version CAS. Legacy actions fail `400 operation_removed`. MD-339 owns record/version migration |
+| `PATCH /api/v1/mcp-tokens/{personal_token_ref}/mind-access` | change → Sites control | `credential-control`: remove `attach_read`/`detach_read`; retain only select/switch/clear writable target with target-version CAS. Legacy actions fail `400 operation_removed`; stale `expected_target_version` fails `409 target_conflict`, changes no target state, discloses no target metadata and never falls back to last-write-wins. MD-339 owns record/version migration |
 | `DELETE /api/v1/mcp-tokens/{personal_token_ref}` | keep → Sites control | Actor-owned revoke |
 | `GET /api/v1/connections` | change → Sites control | Current active Connections and current-readable projection; remove mutable read-attachment state from response. MD-339 owns projection migration |
 | `GET /api/v1/connections/{connection_ref}` | change → Sites control | `credential-control`: readable Minds are current derived access; writable target remains explicit Site state. MD-339 owns projection migration |
-| `PATCH /api/v1/connections/{connection_ref}/mind-access` | change → Sites control | Same target-only action schema and error as personal token. MD-339 |
+| `PATCH /api/v1/connections/{connection_ref}/mind-access` | change → Sites control | Same target-only action schema and exact `target_conflict` semantics as personal token. MD-339 |
 | `DELETE /api/v1/connections/{connection_ref}` | keep → Sites control | Actor-owned connection revoke |
 
 The hidden operator alias `GET /api/v1/internal/operators/users` and UI route
@@ -233,23 +242,32 @@ company-knowledge claim.
 | `/settings/connections/{connection_ref}` | change | Only Site can select/switch/clear one writable target; MD-339 state migration |
 | `/settings/developer/mcp` | change | Personal-token lifecycle/endpoints remain; access controls become target-only; no binding tool instructions |
 | `/settings/mcp` | keep | Registered `GET`/`HEAD` stays `308` to Advanced MCP; signed-out safe shell unchanged |
-| `/help/codex` | change | Three steps become install → authenticate/read explicit Minds → choose writable target on Site only when writing; remove “attach readable Minds” guidance |
-| `/help` | change | Starter/concierge copy must not call removed binding/export tools |
-| Marketplace package `mind-diary@srez-marketplace` | change | Keep `AVAILABLE + ON_USE`, compatibility transport `/api/mcp/2025-11-25` and canonical OAuth resource `/api/mcp`; publish new immutable package version for catalog/schema change |
-| Bundled Mind Diary skill | change | Remove `get/set_*_mind_binding` and MCP export instructions; always name one explicit Mind/revision and direct target/export control to Site |
-| Plugin card/help label `Mind Diary UAT` | keep | UAT remains explicit; no production/public-directory claim |
+| `/help/codex` | change | `MD-339`: three steps become install → authenticate/read explicit Minds → choose writable target on Site only when writing; remove “attach readable Minds” guidance |
+| `/help` | change | `integration-owner`: starter/concierge copy must not call removed binding/export tools |
+| Marketplace package `mind-diary@srez-marketplace` | change | Keep `AVAILABLE + ON_USE`, compatibility transport `/api/mcp/2025-11-25` and canonical OAuth resource `/api/mcp`; `integration-owner` publishes a new immutable package version for catalog/schema change |
+| Bundled Mind Diary skill | change | `integration-owner`: remove `get/set_*_mind_binding` and MCP export instructions; always name one explicit Mind/revision and direct target/export control to Site |
+| Plugin card/help label `Mind Diary UAT` | keep | `integration-owner`: UAT remains explicit; no production/public-directory claim |
 
 Static asset routes do not carry product authority and remain unchanged.
+The machine fixture assigns an implementation/migration owner to every row and
+pins each package, skill or Help requirement to exact Git-blob source evidence.
+Those blob pins describe the current legacy artifacts that an implementation
+lane must replace; they are not evidence that the target copy is already
+published.
 
 ## Machine-readable schema diff
 
 The fixture records every changed or removed wire field. Normative highlights:
 
 Имена `expected_target_version`, `requires_writable_target`,
-`writable_target_required`, `writable_target_mismatch` и
-`writable_target_unavailable` являются каноническими machine names этого
-operation contract. MD-339 обязан сослаться на них и определить durable state,
-migration/reconnect semantics, не переименовывая и не дублируя этот register.
+`writable_target_required`, `writable_target_mismatch`,
+`writable_target_unavailable` и `target_conflict` являются каноническими machine
+names этого operation contract. `target_conflict` относится только к Sites
+mutation: stale `expected_target_version` получает HTTP `409`, не меняет target
+state, не раскрывает target metadata и не допускает last-write-wins. Он не
+добавляется в Content MCP writable-target error set. MD-339 обязан сослаться на
+эти имена и определить durable state, migration/reconnect semantics, не
+переименовывая и не дублируя этот register.
 
 - remove `write_binding_id` from `create_file_upload_intent`,
   `stage_bundle_file`, `reconcile_file_stage`, `commit_changeset` and
