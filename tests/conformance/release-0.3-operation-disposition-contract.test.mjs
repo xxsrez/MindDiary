@@ -15,6 +15,7 @@ import {
   MCP_LEGACY_CODEX_ENDPOINT,
   MCP_LEGACY_CODEX_PROTOCOL,
   MCP_MOVED_EXPORT_TOOLS,
+  MCP_RETIRED_BINDING_TOOLS,
   MCP_RETIRED_SITES_ENDPOINT,
   MCP_RESOURCE_CAPABILITIES,
   MCP_TOOL_DEFINITIONS,
@@ -345,6 +346,7 @@ test("operation-disposition fixture is a closed versioned contract", () => {
     "targetMcpCatalog",
     "schemaDiffs",
     "retiredMcpTools",
+    "retiredMcpCompatibility",
     "retiredReadErrors",
     "retiredWriteErrors",
     "targetWriteErrors",
@@ -634,8 +636,12 @@ test("UI inventory covers every registered static route and both dynamic route c
 });
 
 test("all current MCP tools have a disposition and the target catalog is exact", () => {
-  assert.deepEqual(fixture.mcpTools.map(({ name }) => name), MCP_CONTENT_TOOLS);
+  assert.deepEqual(fixture.targetMcpCatalog, MCP_CONTENT_TOOLS);
   assert.deepEqual([...MCP_MOVED_EXPORT_TOOLS], ["start_export", "get_export_status"]);
+  assert.deepEqual(
+    [...MCP_RETIRED_BINDING_TOOLS],
+    ["get_mind_bindings", "set_read_mind_binding", "set_write_mind_binding"],
+  );
   assertUnique(fixture.mcpTools.map(({ name }) => name), "MCP tools must be unique");
   assert.deepEqual(
     fixture.retiredMcpTools,
@@ -646,10 +652,6 @@ test("all current MCP tools have a disposition and the target catalog is exact",
       "start_export",
       "get_export_status",
     ],
-  );
-  assert.deepEqual(
-    fixture.targetMcpCatalog,
-    MCP_CONTENT_TOOLS.filter((name) => !fixture.retiredMcpTools.includes(name)),
   );
   assert.equal(fixture.targetMcpCatalog.length, 18);
   for (const tool of fixture.mcpTools) {
@@ -666,6 +668,36 @@ test("all current MCP tools have a disposition and the target catalog is exact",
       assert.ok(["move", "remove"].includes(currentDisposition), retired);
     }
   }
+});
+
+test("cached binding compatibility is versioned, unadvertised and side-effect-free", () => {
+  assert.deepEqual(fixture.retiredMcpCompatibility, {
+    $schema: "mind-diary/mcp-operation-retired/v1",
+    advertised: false,
+    applicationCalls: 0,
+    sideEffects: "none",
+    operations: {
+      get_mind_bindings: {
+        code: "operation_retired_from_content_mcp",
+        remediation: "inspect_access_on_site",
+        retryable: false,
+      },
+      set_read_mind_binding: {
+        code: "operation_retired_from_content_mcp",
+        remediation: "read_access_follows_current_acl",
+        retryable: false,
+      },
+      set_write_mind_binding: {
+        code: "operation_retired_from_content_mcp",
+        remediation: "manage_writable_target_on_site",
+        retryable: false,
+      },
+    },
+  });
+  assert.deepEqual(
+    Object.keys(fixture.retiredMcpCompatibility.operations),
+    [...MCP_RETIRED_BINDING_TOOLS],
+  );
 });
 
 test("machine-readable schema diff removes binding fields without removing explicit Mind", () => {
@@ -1030,7 +1062,7 @@ test("plugin/help migration has closed owners and exact current source evidence"
         {
           role: "accepted-skill-source-contract",
           path: "docs/specs/plugin-connector.md",
-          gitBlob: "044a379139578dd04dc9a33b5921cf2d6def13ed",
+          gitBlob: "4809631360b21cbb1558ce7ebbb5feebdccefa2d",
         },
         {
           role: "installed-skill-probe-source",
@@ -1064,7 +1096,7 @@ test("plugin/help migration has closed owners and exact current source evidence"
         {
           role: "help-playbook-source",
           path: "packages/adapter-web/src/token-management.ts",
-          gitBlob: "3583b7f5552d2560b8f06c57cd4b26374e6fe8fb",
+          gitBlob: "25b5e1c7c1a50e7705812b3e3565b6157d867009",
         },
         {
           role: "help-route-source",

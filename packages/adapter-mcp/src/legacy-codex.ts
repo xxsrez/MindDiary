@@ -290,7 +290,7 @@ export function createLegacyCodexMcpHttpHandler(
                     version: "0.1.0",
                   },
                   instructions:
-                    "Use list_minds only to discover eligible targets. Inspect get_mind_bindings, attach every intended read target with set_read_mind_binding, and select at most one writable target with set_write_mind_binding. Discovery never creates a binding and there is no implicit /me fallback.",
+                    "Use list_minds to discover currently accessible Minds. Every read explicitly selects one Mind and revision from current access; there is no attach step, implicit /me, or cross-Mind fallback. Manage the writable target and export only on the authenticated Mind Diary Site.",
                 },
               })
             : jsonRpcError(rpc.id, -32602, "Invalid params", 400);

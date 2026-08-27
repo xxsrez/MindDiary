@@ -288,12 +288,12 @@ test("starter and concierge playbooks render as secret-free copy-ready guidance"
   assert.match(MIND_DIARY_CODEX_STARTER_PLAYBOOK, /validate_mind/u);
   assert.match(MIND_DIARY_CODEX_STARTER_PLAYBOOK, /search for a distinctive phrase/u);
   assert.match(MIND_DIARY_CODEX_CONCIERGE_PLAYBOOK, /not a product import/u);
-  assert.match(MIND_DIARY_CODEX_STARTER_PLAYBOOK, /Call get_mind_bindings before any other content operation/u);
+  assert.match(MIND_DIARY_CODEX_STARTER_PLAYBOOK, /Call list_minds before any content operation/u);
   assert.match(MIND_DIARY_CODEX_STARTER_PLAYBOOK, /Never infer a target/u);
-  assert.match(MIND_DIARY_CODEX_STARTER_PLAYBOOK, /Rebind only after my explicit trusted instruction/u);
-  assert.match(MIND_DIARY_CODEX_STARTER_PLAYBOOK, /opaque write_binding_id/u);
-  assert.match(MIND_DIARY_CODEX_SAFE_WRITE_PLAYBOOK, /Other attached Minds remain read-only/u);
-  assert.match(MIND_DIARY_CODEX_SAFE_WRITE_PLAYBOOK, /stale\/changed binding state/u);
+  assert.match(MIND_DIARY_CODEX_STARTER_PLAYBOOK, /Connection \/ Advanced MCP/u);
+  assert.match(MIND_DIARY_CODEX_STARTER_PLAYBOOK, /never mutate the target through MCP/u);
+  assert.match(MIND_DIARY_CODEX_SAFE_WRITE_PLAYBOOK, /Content MCP never selects, clears, or transfers/u);
+  assert.match(MIND_DIARY_CODEX_SAFE_WRITE_PLAYBOOK, /writable_target_required/u);
   assert.match(MIND_DIARY_CODEX_CONCIERGE_PLAYBOOK, /ZIP\/import\/upload\/crawl API/u);
   assert.match(html, /Start one valid Mind with Codex/u);
   assert.match(html, /data-copy-code="mind-diary-starter-playbook"/u);

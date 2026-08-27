@@ -713,10 +713,13 @@ metadata, а не security boundary.
 Target Release 0.3 не относит read/write binding mutation и administrative
 export к authority Content MCP. MCP discover-ит разрешённые Minds, читает
 explicit target без attach и может commit-ить только в exact writable target,
-выбранный на Site. Это category boundary, не новый tool catalog: exact
-keep/move/retire existing aliases принадлежат MD-337, access/binding
-compatibility принята в
-[MD-339 contract](specs/credential-write-target.md).
+выбранный на Site. Fresh catalogs/schemas обоих protocol profiles не содержат
+`get_mind_bindings`, `set_read_mind_binding`, `set_write_mind_binding`,
+`start_export` или `get_export_status`. Exact cached binding names получают
+только versioned side-effect-free retired response до application boundary;
+near-miss names остаются protocol errors. Access/target compatibility принята
+в [MD-339 contract](specs/credential-write-target.md), а полный disposition —
+в [Release 0.3 operation disposition](specs/release-0.3-operation-disposition.md).
 
 ## Sites control plane и internal API
 

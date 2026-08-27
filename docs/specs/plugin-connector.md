@@ -41,13 +41,16 @@ MCP.
   Replace/delete файлов внутри exact content commit остаются content
   mutation, а не административным удалением Mind или account.
 
-MD-337 отдельно определяет disposition каждого исторического tool/route, а
-точный access и writable-target binding contract принят в
-[MD-339 specification](credential-write-target.md). До решений MD-337
-текущие `get_mind_bindings`, `set_read_mind_binding`,
-`set_write_mind_binding`, `start_export` и связанные payloads ниже следует
-читать только как Release 0.1/0.2 as-built. MD-336 не меняет OAuth/token
-protocol, runtime, schemas, UI или deployment.
+[Operation disposition Release 0.3](release-0.3-operation-disposition.md)
+определяет целевую surface каждого исторического tool/route, а точный access и
+writable-target contract принят в
+[MD-339 specification](credential-write-target.md). Исторические
+`get_mind_bindings`, `set_read_mind_binding`, `set_write_mind_binding`,
+`start_export` и связанные payloads ниже следует читать только как Release
+0.1/0.2 as-built: fresh catalogs и schemas Release 0.3 их не публикуют.
+Exact cached binding call получает только versioned side-effect-free retired
+response; неизвестные и похожие имена остаются protocol errors. MD-336 не
+меняет OAuth/token protocol, runtime, schemas, UI или deployment.
 
 ## Текущий implementation checkpoint
 
@@ -244,18 +247,22 @@ disclosure, явный выбор одного Mind/revision, read-before-write,
 расширять OAuth scopes, обходить ACL или переносить control-plane operations в
 content MCP.
 
-До любого content read/write skill обязан вызвать `get_mind_bindings` и
-считать только его fresh response authoritative. Он не выводит target из
-предыдущего search, chat, model memory, похожего name или corpus text. Другие
-attached Minds остаются read-only; отсутствие write binding останавливает
-commit. Rebind допустим только после explicit trusted user intent.
+До любого content read/write skill вызывает `list_minds` и просит выбрать один
+exact Mind. Каждый read явно передаёт этот Mind и revision; доступ берётся из
+текущих ACL/visibility, поэтому attach/detach шага, implicit `/me` и cross-Mind
+fallback нет. Skill не выводит target из предыдущего search, chat, model
+memory, похожего name или corpus text.
 
-Перед capture/commit skill privacy-safe сообщает exact target name, route,
-visibility, `binding_version` и opaque `write_binding_id`, но не показывает
-principal/token/grant/email/internal Mind IDs. После confirmation он повторно
-читает bindings и HEAD; stale version/ID/target останавливает operation без
-automatic transfer. `commit_changeset` передаёт unchanged `write_binding_id`,
-exact `expected_revision` и fresh idempotency key.
+Writable target и export управляются только на authenticated Mind Diary Site.
+Если выбранный Mind не является текущим Site-owned writable target, skill
+направляет пользователя в `Connection / Advanced MCP` и останавливается; он
+никогда не вызывает MCP target/export mutation. Перед capture/commit skill
+privacy-safe сообщает exact target name, route, visibility, revision, paths и
+operations, но не показывает principal/token/grant/email/internal Mind IDs или
+target implementation identifiers. После confirmation он повторно читает
+HEAD; target error либо изменившийся HEAD останавливает operation без
+automatic transfer. `commit_changeset` передаёт exact `expected_revision` и
+fresh idempotency key.
 
 Marketplace catalog получает вторую запись с local source
 `./plugins/mind-diary`, `installation: AVAILABLE` и

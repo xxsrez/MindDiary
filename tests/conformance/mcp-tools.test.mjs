@@ -17,7 +17,6 @@ const READ_TOOL_NAMES = [
   "list_minds",
   "resolve_mind",
   "get_mind_info",
-  "get_mind_bindings",
   "browse_entries",
   "search",
   "fetch",
@@ -262,7 +261,6 @@ test("tools/list ignores provider order, duplicates, and undeclared tools", asyn
             tool.name === "reconcile_changeset" ||
             tool.name === "capture_knowledge" ||
             tool.name === "create_file_upload_intent" ||
-            tool.name === "set_write_mind_binding" ||
             tool.name === "reconcile_file_stage"
             ? "content:write"
             : "content:read",

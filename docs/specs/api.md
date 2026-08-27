@@ -9,17 +9,20 @@ repository candidate. Для Codex Desktop/CLI pilot 0.1 принят direct MCP
 с OAuth при первом использовании. Synthetic multi-principal и OAuth/package
 automation остаются blocking; ADR-0019 дополнительно требует blocking
 real-account first-user UAT receipt. Machine-readable OpenAPI и MCP JSON Schemas
-проверяют только historical current Release 0.1/0.2 wire contract и его
-implementation. Target authority Release 0.3 ещё не имеет schema-verified
-route/tool shape: operation disposition определит MD-337, а access shape уже
-принята в [MD-339 contract](credential-write-target.md), но ещё не реализована.
+сохраняют historical Release 0.1/0.2 evidence и проверяют миграцию к принятой
+[operation disposition Release 0.3](release-0.3-operation-disposition.md).
+Текущий candidate уже удаляет binding mutations и administrative export из
+обоих fresh MCP catalogs/schemas; остальные target route/argument/error changes
+остаются в своих implementation owners. Access shape принята в
+[MD-339 contract](credential-write-target.md).
 
 Wire catalog ниже сохраняет historical Release 0.1/0.2 as-built и не
 переписывается MD-336. Целевая product authority Release 0.3 отделена явно;
-exact route/tool disposition принадлежит MD-337, а access/binding schemas и
-migration приняты в [MD-339 contract](credential-write-target.md). Поэтому
-наличие current route/tool в этом документе не
-делает его владельцем будущей authority.
+exact route/tool disposition принята в
+[operation disposition](release-0.3-operation-disposition.md), а access/target
+schemas и migration — в [MD-339 contract](credential-write-target.md). Поэтому
+наличие historical route/tool в этом документе не возвращает его в current
+authority.
 
 ADR-0015 и [BundleFile specification](bundle-files.md) сохраняют immutable
 staging/commit/download baseline; ADR-0021 принимает Release 0.2 wire target:
@@ -139,8 +142,9 @@ Target read не требует mutable read binding/attach step. MCP не вы�
 writable target; его commit только cross-check-ит server-approved target вместе
 с current ACL/scope/HEAD. Replace/delete в changeset остаются content semantics
 и не открывают account/Mind/credential lifecycle. Exact keep/move/retire
-решения по routes/tools остаются MD-337, а exact access shape принята в
-[MD-339 contract](credential-write-target.md).
+решения заданы в
+[operation disposition](release-0.3-operation-disposition.md), а exact access
+shape — в [MD-339 contract](credential-write-target.md).
 
 Перед любым ACL-derived discovery/read MCP проверяет credential access profile.
 Fresh/upgraded profile продолжает current ACL/visibility authorization;
@@ -1388,9 +1392,9 @@ exception text. Static assets не являются trigger, concurrent requests
 ## Content MCP
 
 Раздел ниже сохраняет historical Release 0.1/0.2 wire contract. Target
-authority Release 0.3 задаётся в начале документа; exact catalog changes
-принадлежат MD-337, а target access semantics —
-[MD-339 contract](credential-write-target.md).
+authority Release 0.3 задаётся в начале документа; exact catalog changes — в
+[operation disposition](release-0.3-operation-disposition.md), а target access
+semantics — в [MD-339 contract](credential-write-target.md).
 
 ### Endpoint selection
 
@@ -1760,17 +1764,25 @@ reserves capacity, writes an object or advances HEAD.
 
 Этот catalog не задаёт Release 0.3 ownership. Binding/target mutations и
 administrative export отсутствуют в target MCP authority, а explicit read
-attach не является precondition. MD-337 владеет exact disposition каждого
-name; compatibility access state and wire migration приняты в
+attach не является precondition. Exact disposition каждого name задан в
+[operation disposition](release-0.3-operation-disposition.md); compatibility
+access state and wire migration приняты в
 [MD-339 contract](credential-write-target.md).
 
-В текущей локальной сборке Release 0.3 `start_export` и `get_export_status`
-отсутствуют в `tools/list` обоих профилей. Точный вызов прежнего имени через
-`tools/call` получает terminal result `mind-diary/mcp-operation-moved/v1` с
-`operation_moved_to_sites`, `isError: true` и новым REST route. Stub не читает
-Mind или job, не выполняет authorization, не резервирует capacity, не пишет
-idempotency и не ставит фоновую работу. Остальные неизвестные имена сохраняют
-`Invalid params`, а удалённые методы отдельных профилей — `Method not found`.
+В текущей локальной сборке Release 0.3 `get_mind_bindings`,
+`set_read_mind_binding`, `set_write_mind_binding`, `start_export` и
+`get_export_status` отсутствуют в `tools/list` и published schemas обоих
+профилей. Точный cached binding call через `tools/call` получает terminal
+`mind-diary/mcp-operation-retired/v1` с
+`operation_retired_from_content_mcp` и `isError: true`; dispatcher не вызывает
+application и не повторяет аргументы или внутренние identifiers. Для write
+target remediation ответ направляет только на authenticated Site. Точный
+export call сохраняет `mind-diary/mcp-operation-moved/v1` с
+`operation_moved_to_sites` и Site REST route. Оба stubs не читают Mind/job, не
+выполняют operation authorization, не резервируют capacity, не пишут
+idempotency и не ставят фоновую работу. Остальные неизвестные и near-miss имена
+сохраняют `Invalid params`, а удалённые методы отдельных профилей — `Method not
+found`.
 
 ## Common MCP schemas
 

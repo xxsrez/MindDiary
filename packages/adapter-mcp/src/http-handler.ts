@@ -14,6 +14,7 @@ import {
   MCP_ENDPOINT,
   MCP_WWW_AUTHENTICATE,
   MCP_CONTENT_TOOLS,
+  MCP_RETIRED_BINDING_TOOLS,
   MCP_MOVED_EXPORT_TOOLS,
   MCP_READ_TOOL_DEFINITIONS,
   CANONICAL_DEFINITION_BY_NAME,
@@ -31,9 +32,11 @@ type McpAuthenticatedActor = Extract<
   { readonly kind: "authenticated" }
 >["actor"];
 type McpRequestId = Parameters<McpBearerAuthenticator["authenticate"]>[1];
-type McpToolName =
+type McpApplicationToolName =
   | (typeof MCP_CONTENT_TOOLS)[number]
   | (typeof MCP_MOVED_EXPORT_TOOLS)[number];
+type McpRetiredBindingToolName = (typeof MCP_RETIRED_BINDING_TOOLS)[number];
+type McpToolName = McpApplicationToolName | McpRetiredBindingToolName;
 type McpReadToolName = (typeof MCP_READ_TOOL_DEFINITIONS)[number]["name"];
 
 const MCP_READ_TOOL_NAMES: ReadonlySet<string> = new Set(
@@ -70,18 +73,18 @@ export interface McpContentApplication {
   /** Legacy compatibility hook; fused handlers execute application authorization once. */
   authorizeToolCall(request: {
     readonly actor: McpAuthenticatedActor;
-    readonly name: McpToolName;
+    readonly name: McpApplicationToolName;
     readonly arguments: Readonly<Record<string, unknown>>;
   }): Promise<McpToolAuthorizationDecision>;
   /** Preferred product path: validates, authorizes and executes in one application graph. */
   executeAuthorizedToolCall?(request: {
     readonly actor: McpAuthenticatedActor;
-    readonly name: McpToolName;
+    readonly name: McpApplicationToolName;
     readonly arguments: Readonly<Record<string, unknown>>;
   }): Promise<unknown>;
   executeToolCall(request: {
     readonly actor: McpAuthenticatedActor;
-    readonly name: McpToolName;
+    readonly name: McpApplicationToolName;
     readonly arguments: Readonly<Record<string, unknown>>;
   }): Promise<unknown>;
 }
@@ -500,7 +503,7 @@ export function createMcpToolErrorResult(
   });
 }
 
-function isReadToolName(name: McpToolName): name is McpReadToolName {
+function isReadToolName(name: McpApplicationToolName): name is McpReadToolName {
   return MCP_READ_TOOL_NAMES.has(name);
 }
 
@@ -512,8 +515,6 @@ function readToolSuccessMessage(name: McpReadToolName): string {
       return "Resolved the Mind.";
     case "get_mind_info":
       return "Resolved the Mind and revision.";
-    case "get_mind_bindings":
-      return "Read the current Mind bindings.";
     case "browse_entries":
       return "Browsed entries in the resolved Mind revision.";
     case "search":
@@ -698,8 +699,46 @@ function isToolName(value: unknown): value is McpToolName {
   return (
     typeof value === "string" &&
     ((MCP_CONTENT_TOOLS as readonly string[]).includes(value) ||
+      (MCP_RETIRED_BINDING_TOOLS as readonly string[]).includes(value) ||
       (MCP_MOVED_EXPORT_TOOLS as readonly string[]).includes(value))
   );
+}
+
+function isRetiredBindingToolName(
+  value: McpToolName,
+): value is McpRetiredBindingToolName {
+  return (MCP_RETIRED_BINDING_TOOLS as readonly string[]).includes(value);
+}
+
+function retiredBindingToolResult(
+  operation: McpRetiredBindingToolName,
+): Readonly<Record<string, unknown>> {
+  const remediation = operation === "get_mind_bindings"
+    ? "inspect_access_on_site"
+    : operation === "set_read_mind_binding"
+      ? "read_access_follows_current_acl"
+      : "manage_writable_target_on_site";
+  const text = operation === "get_mind_bindings"
+    ? "Mind access is inspected on the authenticated Mind Diary Site; use list_minds for current accessible Minds."
+    : operation === "set_read_mind_binding"
+      ? "Readable Minds follow current access; use list_minds and explicitly select one Mind per read."
+      : "Manage the writable target in Connection / Advanced MCP on the authenticated Mind Diary Site.";
+  return Object.freeze({
+    resultType: "complete",
+    content: Object.freeze([
+      Object.freeze({ type: "text" as const, text }),
+    ]),
+    structuredContent: Object.freeze({
+      schema: "mind-diary/mcp-operation-retired/v1",
+      error: Object.freeze({
+        code: "operation_retired_from_content_mcp",
+        operation,
+        remediation,
+        retryable: false,
+      }),
+    }),
+    isError: true,
+  });
 }
 
 function tokenAllowsWrite(actor: McpAuthenticatedActor): boolean {
@@ -1151,7 +1190,7 @@ export function createMcpHttpHandlerAtEndpoint(
             }),
           }),
           instructions:
-            "Use list_minds only to discover eligible targets. Inspect get_mind_bindings, attach every intended read target with set_read_mind_binding, and select at most one writable target with set_write_mind_binding. Discovery never creates a binding and there is no implicit /me fallback.",
+            "Use list_minds to discover currently accessible Minds. Every read explicitly selects one Mind and revision from current access; there is no attach step, implicit /me, or cross-Mind fallback. Manage the writable target and export only on the authenticated Mind Diary Site.",
           ttlMs: 60_000,
           cacheScope: "private" as const,
         }),
@@ -1398,14 +1437,29 @@ export function createMcpHttpHandlerAtEndpoint(
     }
     const toolArguments = Object.freeze({ ...argumentsValue });
 
+    if (isRetiredBindingToolName(name)) {
+      const response = jsonRpcResult(
+        rpc.id,
+        retiredBindingToolResult(name),
+        responseFormat,
+      );
+      await safeLog(
+        dependencies.logger,
+        request,
+        requestId,
+        response,
+        "tool_denied",
+      );
+      return response;
+    }
+
     if (
       (name === "commit_changeset" ||
         name === "reconcile_changeset" ||
         name === "create_file_upload_intent" ||
         name === "stage_bundle_file" ||
         name === "reconcile_file_stage" ||
-        name === "capture_knowledge" ||
-        name === "set_write_mind_binding") &&
+        name === "capture_knowledge") &&
       !tokenAllowsWrite(actor)
     ) {
       const challenge = oauthChallenge(dependencies.oauth, "content:write");

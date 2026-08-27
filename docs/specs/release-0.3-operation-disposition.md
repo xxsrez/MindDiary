@@ -58,7 +58,7 @@ actor, authorization checks, базовую схему ошибок и прав�
 | `mcp-transport` | Content MCP; current OAuth/personal-token actor authenticated on every POST; per-method/per-tool scope and current access checks follow after protocol validation | OAuth challenge or protocol error before application call; no session actor cache |
 | `oauth` | OAuth adapter; public-client DCR/PKCE, exact redirect/resource, trusted Sites identity at consent, grant/token lifecycle | standard OAuth errors; resource remains canonical `/api/mcp` |
 | `delivery-grant` | exact content/export delivery; one-use opaque URL grant captures principal/Mind/revision and rechecks current access at download | invalid/expired/revoked/deleted/unauthorized are one indistinguishable `404` |
-| `compat-removed` | no target product capability | omitted from advertised catalog; exact old call returns protocol `Invalid params`/`Method not found`, never silently performs another action |
+| `compat-removed` | no target product capability | omitted from advertised catalog and schemas; only an exact cached binding tool name receives versioned `mind-diary/mcp-operation-retired/v1` with no application call or side effect. Unknown and near-miss names still receive protocol `Invalid params`/`Method not found` |
 
 `select_write` additionally requires active credential lifecycle,
 `content:write`, current writer role and target eligibility. `clear_write`
@@ -164,7 +164,7 @@ indistinguishable `404` for every other actor.
 | `list_minds` | keep → Content MCP | Existing discovery already lists current allowed Minds and creates no binding |
 | `resolve_mind` | keep → Content MCP | Existing exact-handle discovery already authorizes from current ACL/visibility and creates no binding |
 | `get_mind_info` | change → Content MCP | Keep explicit `mind`/revision selector; remove binding-derived requirements/projection |
-| `get_mind_bindings` | remove → none | Omit from both catalogs; exact old call returns `Invalid params`; target inspection lives on Site. MD-339 migrates state |
+| `get_mind_bindings` | remove → none | Omit from both catalogs/schemas; exact cached call returns side-effect-free `mind-diary/mcp-operation-retired/v1` and points inspection to the actor-owned Site projection without reading binding state. MD-339 migrates state |
 | `browse_entries` | change → Content MCP | Wire selector unchanged; remove `mind_binding_required` |
 | `search` | change → Content MCP | Wire selector unchanged; one Mind/revision only; remove binding requirement |
 | `fetch` | change → Content MCP | Opaque exact-revision locator unchanged; current access only, no binding |
@@ -172,8 +172,8 @@ indistinguishable `404` for every other actor.
 | `get_revision` | change → Content MCP | Explicit Mind + exact revision; historical view stays read-only |
 | `validate_mind` | change → Content MCP | Standalone exact revision validation; not import-session validation |
 | `list_bundle_files` | change → Content MCP | Explicit Mind/revision, no binding; metadata only |
-| `set_read_mind_binding` | remove → none | Omit from catalog; old call `Invalid params`; no replacement because read is stateless. MD-339 removes/migrates records |
-| `set_write_mind_binding` | move → Sites control | Omit from catalog; old call `Invalid params`; Site credential target mutation replaces it. MD-339 |
+| `set_read_mind_binding` | remove → none | Omit from both catalogs/schemas; exact cached call returns side-effect-free `mind-diary/mcp-operation-retired/v1`. There is no mutation replacement because read access is derived from current ACL/visibility. MD-339 removes/migrates records |
+| `set_write_mind_binding` | move → Sites control | Omit from both catalogs/schemas; exact cached call returns side-effect-free `mind-diary/mcp-operation-retired/v1` and directs the user to the actor-owned Site Connection/Advanced MCP control. It never forwards arguments to Site or mutates a target. MD-339 |
 | `get_file_ingress_capabilities` | change → Content MCP | Read-only deployed-adapter report; rename output `requires_write_binding` to `requires_writable_target`; no client/path promise |
 | `create_file_upload_intent` | change → Content MCP | Remove required `write_binding_id`; explicit `mind` must equal Site-selected target; target errors use `content-write` profile. MD-339 |
 | `stage_bundle_file` | change → Content MCP | Remove required `write_binding_id`; native provider object terminates at adapter; staged ref pins current credential target. MD-339 |
@@ -292,7 +292,10 @@ helper/handler delta. Текущие legacy names в source evidence не явл
 - keep required explicit `mind` on every target-sensitive content operation;
 - remove `get_mind_bindings`, `set_read_mind_binding`,
   `set_write_mind_binding`, `start_export`, `get_export_status` from both tool
-  catalogs rather than retaining hidden aliases;
+  catalogs and published schemas. The dispatcher recognizes only the exact
+  cached binding names to return versioned `mind-diary/mcp-operation-retired/v1`
+  without application calls or side effects; this compatibility response is
+  not a hidden alias and cannot perform the retired operation;
 - remove `attach_read`/`detach_read` from both credential `mind-access` REST
   mutations; retain select/switch/clear with an exact target-version CAS;
 - retire binding errors from read paths and use the `content-write` target
@@ -300,7 +303,10 @@ helper/handler delta. Текущие legacy names в source evidence не явл
   selected target.
 
 During migration, old MCP names are never forwarded to Site endpoints and old
-REST read-binding actions never become no-op success. Old calls fail explicitly;
+REST read-binding actions never become no-op success. Exact cached binding calls
+fail explicitly through the versioned retired result; unknown/near-miss names
+remain protocol errors. The result contains no raw owner, binding, generation,
+Mind or credential identifier and does not inspect application state;
 reconnect/reissue/state migration and preservation rules belong to MD-339.
 Pending legacy credential также не получает список или metadata новых Minds:
 до explicit upgrade/re-consent/reissue все ACL-derived discovery/read operations
