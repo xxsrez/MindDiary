@@ -721,38 +721,49 @@ export abstract class RevisionMetadataOrdinaryLifecycleStore extends RevisionMet
             ) {
               return Object.freeze({ kind: "ownership_target_invalid" });
             }
-            if (request.capacityLimits !== undefined) {
-              const targetSpaceIds = new Set(ownedCapacitySpaceIds(
-                target.principalId,
-                tx.revisionSpaces,
-                tx.knowledgeSpaces,
-                tx.memberships,
-              ));
-              targetSpaceIds.add(request.spaceId);
-              const targetUsage = capacityUsageFromCanonicalState({
-                spaceIds: targetSpaceIds,
-                spaces: tx.revisionSpaces,
-                stagedBundleFiles: this._stagedBundleFiles,
-                exportJobs: tx.exportJobs,
-                markdownImportPlans: this._markdownImportPlans,
-                markdownImportSessions: this._markdownImportSessions,
-                markdownImportStagedFiles: this._markdownImportStagedFiles,
-                reservations: this._capacityReservations,
-                reconciledAt: this._capacityReconciledAt,
+            if (
+              source.version !== request.expectedSourceMembershipVersion ||
+              target.version !== request.expectedTargetMembershipVersion
+            ) {
+              return Object.freeze({ kind: "ownership_state_changed" });
+            }
+            const targetSpaceIds = new Set(ownedCapacitySpaceIds(
+              target.principalId,
+              tx.revisionSpaces,
+              tx.knowledgeSpaces,
+              tx.memberships,
+            ));
+            targetSpaceIds.add(request.spaceId);
+            const targetUsage = capacityUsageFromCanonicalState({
+              spaceIds: targetSpaceIds,
+              spaces: tx.revisionSpaces,
+              stagedBundleFiles: this._stagedBundleFiles,
+              exportJobs: tx.exportJobs,
+              markdownImportPlans: this._markdownImportPlans,
+              markdownImportSessions: this._markdownImportSessions,
+              markdownImportStagedFiles: this._markdownImportStagedFiles,
+              reservations: this._capacityReservations,
+              reconciledAt: this._capacityReconciledAt,
+            });
+            const targetReserved = activeReservationAmounts(
+              this._capacityReservations,
+              (reservation) => targetSpaceIds.has(reservation.spaceId),
+            );
+            const principalLimit = request.capacityLimits.principalPhysicalCanonicalBytes;
+            if (
+              targetUsage.trustworthy !== true ||
+              !Number.isSafeInteger(principalLimit) ||
+              principalLimit <= 0
+            ) {
+              return Object.freeze({ kind: "capacity_accounting_untrusted" });
+            }
+            const projectedPrincipalCanonicalBytes =
+              targetUsage.physicalCanonicalBytes +
+              targetReserved.physicalCanonicalBytes;
+            if (projectedPrincipalCanonicalBytes / principalLimit >= 0.85) {
+              return Object.freeze({
+                kind: "ownership_target_capacity_exceeded",
               });
-              const targetReserved = activeReservationAmounts(
-                this._capacityReservations,
-                (reservation) => targetSpaceIds.has(reservation.spaceId),
-              );
-              if (
-                targetUsage.physicalCanonicalBytes +
-                  targetReserved.physicalCanonicalBytes >
-                  request.capacityLimits.principalPhysicalCanonicalBytes
-              ) {
-                return Object.freeze({
-                  kind: "ownership_target_capacity_exceeded",
-                });
-              }
             }
 
             let transferredAggregate: ReturnType<
@@ -767,8 +778,10 @@ export abstract class RevisionMetadataOrdinaryLifecycleStore extends RevisionMet
                 sourcePrincipalId: request.principalId,
                 targetPrincipalId: target.principalId,
                 expectedMetadataVersion: request.expectedMetadataVersion,
-                expectedSourceMembershipVersion: source.version,
-                expectedTargetMembershipVersion: target.version,
+                expectedSourceMembershipVersion:
+                  request.expectedSourceMembershipVersion,
+                expectedTargetMembershipVersion:
+                  request.expectedTargetMembershipVersion,
                 occurredAt: request.occurredAt,
               });
             } catch (error) {

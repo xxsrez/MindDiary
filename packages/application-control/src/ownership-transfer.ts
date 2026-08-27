@@ -13,6 +13,8 @@ export interface TransferOwnershipCommand {
   readonly mindId: SpaceId;
   readonly targetMemberId: MembershipId;
   readonly expectedMetadataVersion: number;
+  readonly expectedSourceMembershipVersion: number;
+  readonly expectedTargetMembershipVersion: number;
   readonly confirmation: typeof OWNERSHIP_TRANSFER_CONFIRMATION;
   readonly idempotencyKey: string;
 }
@@ -32,6 +34,7 @@ export type OwnershipTransferFailureCode =
   | "authentication_required"
   | "invalid_target_member_id"
   | "invalid_metadata_version"
+  | "invalid_membership_version"
   | "invalid_confirmation"
   | "invalid_idempotency_key"
   | "mind_not_found"
@@ -39,6 +42,7 @@ export type OwnershipTransferFailureCode =
   | "forbidden"
   | "ownership_target_invalid"
   | "ownership_target_capacity_exceeded"
+  | "capacity_accounting_untrusted"
   | "metadata_conflict"
   | "ownership_state_changed"
   | "idempotency_conflict"
@@ -75,7 +79,7 @@ export interface OwnershipTransferDependencies {
   readonly objects: Pick<ObjectStore, "calculateSha256">;
   readonly auditIds: OwnershipTransferAuditIdGenerator;
   readonly logger?: OwnershipTransferSafeLogger;
-  readonly capacityLimits?: Readonly<CapacityLimits>;
+  readonly capacityLimits: Readonly<CapacityLimits>;
 }
 
 function ownershipTargetMemberId(value: unknown): MembershipId {
@@ -100,6 +104,17 @@ function ownershipMetadataVersion(value: unknown) {
     throw new OwnershipTransferFailure(
       "invalid_metadata_version",
       "A valid expected metadata version is required.",
+    );
+  }
+}
+
+function ownershipMembershipVersion(value: unknown) {
+  try {
+    return version(value as number);
+  } catch {
+    throw new OwnershipTransferFailure(
+      "invalid_membership_version",
+      "Valid source and target membership versions are required.",
     );
   }
 }
@@ -142,7 +157,7 @@ export class OwnershipTransferService {
   readonly #objects: Pick<ObjectStore, "calculateSha256">;
   readonly #auditIds: OwnershipTransferAuditIdGenerator;
   readonly #logger: OwnershipTransferSafeLogger | undefined;
-  readonly #capacityLimits: Readonly<CapacityLimits> | undefined;
+  readonly #capacityLimits: Readonly<CapacityLimits>;
 
   constructor(dependencies: OwnershipTransferDependencies) {
     this.#ordinaryMinds = dependencies.ordinaryMinds;
@@ -197,6 +212,12 @@ export class OwnershipTransferService {
     const expectedMetadataVersion = ownershipMetadataVersion(
       command.expectedMetadataVersion,
     );
+    const expectedSourceMembershipVersion = ownershipMembershipVersion(
+      command.expectedSourceMembershipVersion,
+    );
+    const expectedTargetMembershipVersion = ownershipMembershipVersion(
+      command.expectedTargetMembershipVersion,
+    );
     if (command.confirmation !== OWNERSHIP_TRANSFER_CONFIRMATION) {
       throw new OwnershipTransferFailure(
         "invalid_confirmation",
@@ -214,6 +235,8 @@ export class OwnershipTransferService {
           mind_id: command.mindId,
           target_member_id: targetMemberId,
           expected_metadata_version: expectedMetadataVersion,
+          expected_source_membership_version: expectedSourceMembershipVersion,
+          expected_target_membership_version: expectedTargetMembershipVersion,
           confirmation: OWNERSHIP_TRANSFER_CONFIRMATION,
         })}\n`),
       );
@@ -224,15 +247,15 @@ export class OwnershipTransferService {
             spaceId: command.mindId,
             targetMembershipId: targetMemberId,
             expectedMetadataVersion,
+            expectedSourceMembershipVersion,
+            expectedTargetMembershipVersion,
             idempotencyKey: checkedIdempotencyKey,
             canonicalRequestHash,
             occurredAt: trustedActor.occurredAtUtc,
             requestId,
             auditEventId: this.#auditIds.nextAuditEventId(),
             auditOutboxMessageId: this.#auditIds.nextOutboxMessageId(),
-            ...(this.#capacityLimits === undefined
-              ? {}
-              : { capacityLimits: this.#capacityLimits }),
+            capacityLimits: this.#capacityLimits,
           }),
       );
       if (transferred.kind === "transferred") {
@@ -289,6 +312,12 @@ export class OwnershipTransferService {
           "The target Owner does not have enough aggregate storage headroom.",
         );
       }
+      if (transferred.kind === "capacity_accounting_untrusted") {
+        throw new OwnershipTransferFailure(
+          "capacity_accounting_untrusted",
+          "Ownership cannot move until aggregate capacity accounting is trustworthy.",
+        );
+      }
       if (transferred.kind === "ownership_state_changed") {
         throw new OwnershipTransferFailure(
           "ownership_state_changed",
@@ -338,11 +367,18 @@ export class OwnershipTransferService {
           error.code === "mind_not_found" ||
           error.code === "personal_mind_operation_forbidden" ||
           error.code === "forbidden" ||
-          error.code === "ownership_target_invalid"
+          error.code === "ownership_target_invalid" ||
+          error.code === "ownership_target_capacity_exceeded"
         ) {
           recordOwnershipTransferEvent(
             this.#logger,
             "ownership_denied",
+            requestId,
+          );
+        } else if (error.code === "capacity_accounting_untrusted") {
+          recordOwnershipTransferEvent(
+            this.#logger,
+            "ownership_failed",
             requestId,
           );
         }

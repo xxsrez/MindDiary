@@ -865,6 +865,7 @@ function services(boundary, generators) {
       ordinaryMinds: boundary.metadata,
       objects: boundary.objects,
       auditIds: generators.audit,
+      capacityLimits: DEFAULT_CAPACITY_LIMITS,
     }),
   };
 }
@@ -1751,6 +1752,12 @@ test("Sites composition persists account, invitation, ownership, HEAD CAS, idemp
       mindId: mind.mindId,
       targetMemberId: accepted.membershipId,
       expectedMetadataVersion: beforeTransfer.space.metadataVersion,
+      expectedSourceMembershipVersion: beforeTransfer.memberships.find(
+        (membership) => membership.principalId === owner.principalId,
+      ).version,
+      expectedTargetMembershipVersion: beforeTransfer.memberships.find(
+        (membership) => membership.membershipId === accepted.membershipId,
+      ).version,
       confirmation: "transfer-ownership",
       idempotencyKey: "transfer-durable",
     },

@@ -738,13 +738,17 @@ async function runScenario({ candidate, evidenceOut, randomBytesImpl, now }) {
   if (typeof ordinaryEntryId !== "string") fail("ordinary_entry_locator_missing");
 
   const ownerMind = data(await actors.owner.api(`/api/v1/minds/${handle}`));
-  const editor = data(await actors.owner.api(`/api/v1/minds/${handle}/members`))
-    .members?.find((member) => member.role === "editor" && !member.is_self);
+  const transferMembers = data(await actors.owner.api(`/api/v1/minds/${handle}/members`)).members;
+  const editor = transferMembers?.find((member) => member.role === "editor" && !member.is_self);
+  const sourceOwner = transferMembers?.find((member) => member.role === "owner" && member.is_self);
+  if (!editor || !sourceOwner) fail("ownership_transfer_members_missing");
   await actors.owner.api(`/api/v1/minds/${handle}/ownership-transfer`, {
     method: "POST",
     body: {
       target_member_id: editor.member_id,
       expected_metadata_version: ownerMind.metadata_version,
+      expected_source_membership_version: sourceOwner.membership_version,
+      expected_target_membership_version: editor.membership_version,
       confirmation: "transfer-ownership",
     },
     idempotencyKey: `synthetic:${nonce}:transfer`,

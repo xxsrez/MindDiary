@@ -243,7 +243,8 @@ export function applicationErrorStatus(code: string): number {
     code === "import_byte_limit_exceeded" ||
     code === "capacity_soft_limit" ||
     code === "capacity_hard_limit" ||
-    code === "capacity_fairness_limit"
+    code === "capacity_fairness_limit" ||
+    code === "ownership_target_capacity_exceeded"
   ) return 422;
   if (
     code === "handle_unavailable" ||

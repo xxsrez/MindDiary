@@ -124,6 +124,8 @@ export interface InvitationsMembershipAdapter {
     readonly mindId: string;
     readonly targetMemberId: string;
     readonly expectedMetadataVersion: number;
+    readonly expectedSourceMembershipVersion: number;
+    readonly expectedTargetMembershipVersion: number;
     readonly confirmation: "transfer-ownership";
     readonly idempotencyKey: string;
   }): Promise<void>;
@@ -414,21 +416,30 @@ function renderInvitationForm(snapshot: InvitationMembershipSnapshot): string {
 
 function renderTransfer(snapshot: InvitationMembershipSnapshot): string {
   const mindId = safeId(snapshot.mind.mindId);
+  const source = snapshot.members.find((member) => member.isSelf && member.role === "owner");
   const candidates = snapshot.members.filter(
     (member) =>
       member.state === "active" &&
       member.role !== "owner" &&
       !member.isSelf &&
-      safeId(member.memberId) !== null,
+      safeId(member.memberId) !== null &&
+      Number.isSafeInteger(member.membershipVersion) &&
+      member.membershipVersion >= 1,
   );
-  if (snapshot.actor.role !== "owner" || mindId === null) {
+  if (
+    snapshot.actor.role !== "owner" ||
+    mindId === null ||
+    source === undefined ||
+    !Number.isSafeInteger(source.membershipVersion) ||
+    source.membershipVersion < 1
+  ) {
     return `<section class="md-setup-card" aria-labelledby="transfer-heading">
       <div><p class="md-eyebrow">Single Owner</p><h2 id="transfer-heading">Transfer ownership</h2><p>Only the current Owner can transfer ownership to an active participant.</p></div>
       <button class="md-button md-button--secondary" type="button" disabled aria-disabled="true">Ownership transfer unavailable</button>
     </section>`;
   }
   const candidateOptions = candidates
-    .map((member) => `<option value="${escapeUntrustedText(member.memberId)}">${escapeUntrustedText(member.displayName)} — ${roleLabel(member.role)}</option>`)
+    .map((member) => `<option value="${escapeUntrustedText(member.memberId)}" data-membership-version="${member.membershipVersion}" data-display-name="${escapeUntrustedText(member.displayName)}">${escapeUntrustedText(member.displayName)} — ${roleLabel(member.role)}</option>`)
     .join("");
   return `<section class="md-setup-card" aria-labelledby="transfer-heading">
     <div>
@@ -436,18 +447,22 @@ function renderTransfer(snapshot: InvitationMembershipSnapshot): string {
       <h2 id="transfer-heading">Transfer ownership</h2>
       <p>Only existing active participants appear here. Pending invitations cannot receive ownership.</p>
     </div>
-    <form class="md-token-form" data-transfer-form data-mind-id="${escapeUntrustedText(mindId)}" data-metadata-version="${snapshot.mind.metadataVersion}">
+    <form class="md-token-form" data-transfer-form data-mind-id="${escapeUntrustedText(mindId)}" data-metadata-version="${snapshot.mind.metadataVersion}" data-source-membership-version="${source.membershipVersion}">
       <div class="md-field">
         <label for="ownership-target">New Owner</label>
         <select id="ownership-target" name="target_member_id" required${candidates.length === 0 ? " disabled" : ""}>
-          ${candidates.length === 0 ? '<option value="">No eligible active participant</option>' : candidateOptions}
+          <option value="">${candidates.length === 0 ? "No eligible active participant" : "Choose an active participant"}</option>${candidateOptions}
         </select>
       </div>
+      <div class="md-caveat" data-transfer-consequences>
+        <h3>Review the exact transfer</h3>
+        <p><strong data-transfer-target-name>No participant selected</strong> will become the sole Owner immediately. You will become Admin. Both changes happen together or neither happens.</p>
+      </div>
       <div class="md-field">
-        <label><input name="confirm_source_admin" type="checkbox" required> I understand that I will become an Admin immediately after transfer.</label>
+        <label><input name="confirm_source_admin" type="checkbox" required> I separately confirm the selected participant becomes sole Owner and I become Admin immediately.</label>
       </div>
       <p class="md-form__status" role="status" aria-live="polite" data-transfer-status></p>
-      <button class="md-button md-button--danger" type="submit" data-control-action${candidates.length === 0 ? " disabled" : ""}>Transfer ownership</button>
+      <button class="md-button md-button--danger" type="submit" data-control-action disabled>Transfer ownership</button>
     </form>
   </section>`;
 }
@@ -656,6 +671,12 @@ function failureMessage(error: unknown): string {
   ) {
     return "Access changed while the action was running. The latest state is shown; review it before retrying.";
   }
+  if (code === "ownership_target_capacity_exceeded") {
+    return "The selected participant does not have enough aggregate storage headroom. Nothing changed; current state was reloaded.";
+  }
+  if (code === "capacity_accounting_untrusted") {
+    return "Current storage accounting could not safely admit the transfer. Nothing changed; current state was reloaded.";
+  }
   if (
     code === "forbidden" ||
     code === "membership_not_found" ||
@@ -674,6 +695,24 @@ function numberAttribute(value: string | undefined): number | null {
   if (value === undefined || !/^\d+$/u.test(value)) return null;
   const parsed = Number.parseInt(value, 10);
   return Number.isSafeInteger(parsed) && parsed >= 1 ? parsed : null;
+}
+
+function syncTransferConfirmation(form: HTMLFormElement): void {
+  const target = form.querySelector<HTMLSelectElement>('select[name="target_member_id"]');
+  const confirmation = form.querySelector<HTMLInputElement>('[name="confirm_source_admin"]');
+  const submit = form.querySelector<HTMLButtonElement>('button[type="submit"]');
+  const targetName = form.querySelector<HTMLElement>("[data-transfer-target-name]");
+  const selected = target?.selectedOptions.item(0);
+  if (targetName) {
+    targetName.textContent = selected?.value
+      ? selected.dataset.displayName ?? "Selected participant"
+      : "No participant selected";
+  }
+  if (submit) {
+    submit.disabled = !selected?.value ||
+      numberAttribute(selected.dataset.membershipVersion) === null ||
+      confirmation?.checked !== true;
+  }
 }
 
 export function installInvitationsMembership(
@@ -763,6 +802,14 @@ export function installInvitationsMembership(
     });
   }
 
+  const initialTransferForm = shell.querySelector<HTMLFormElement>("[data-transfer-form]");
+  if (initialTransferForm) syncTransferConfirmation(initialTransferForm);
+  on<Event>(shell, "change", (event) => {
+    const target = event.target instanceof Element ? event.target : null;
+    const transferForm = target?.closest<HTMLFormElement>("[data-transfer-form]");
+    if (transferForm) syncTransferConfirmation(transferForm);
+  });
+
   on<SubmitEvent>(shell, "submit", (event) => {
     const form = event.target instanceof HTMLFormElement ? event.target : null;
     if (!form) return;
@@ -824,9 +871,16 @@ export function installInvitationsMembership(
       const confirmed = data.get("confirm_source_admin") === "on";
       const mindId = safeId(form.dataset.mindId ?? "");
       const metadataVersion = numberAttribute(form.dataset.metadataVersion);
+      const sourceMembershipVersion = numberAttribute(form.dataset.sourceMembershipVersion);
+      const selected = form.querySelector<HTMLSelectElement>("select[name=\"target_member_id\"]")?.selectedOptions.item(0);
+      const targetMembershipVersion = numberAttribute(selected?.dataset.membershipVersion);
       const status = form.querySelector<HTMLElement>("[data-transfer-status]");
-      if (!confirmed || targetMemberId === null || mindId === null || metadataVersion === null) {
-        if (status) status.textContent = "Choose an active participant and confirm that you become Admin.";
+      if (
+        !confirmed || targetMemberId === null || mindId === null ||
+        metadataVersion === null || sourceMembershipVersion === null ||
+        targetMembershipVersion === null
+      ) {
+        if (status) status.textContent = "Choose an active participant and separately confirm the exact ownership consequences.";
         return;
       }
       void runMutation(
@@ -834,6 +888,8 @@ export function installInvitationsMembership(
           mindId,
           targetMemberId,
           expectedMetadataVersion: metadataVersion,
+          expectedSourceMembershipVersion: sourceMembershipVersion,
+          expectedTargetMembershipVersion: targetMembershipVersion,
           confirmation: "transfer-ownership",
           idempotencyKey: createKey(),
         }),

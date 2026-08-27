@@ -799,8 +799,12 @@ network, которого Sites пока не обещает. Если Streamabl
 4. Ordinary Mind нельзя создать без name/canonical handle/sole Owner; occupied,
    reserved и retired handles дают одинаковый `handle_unavailable`, одинаковые
    display names разрешены.
-5. Owner transfer existing participant атомарно оставляет ровно одного Owner и
-   превращает source в Admin; pending invitation target отклоняется.
+5. Owner transfer exact current active participant атомарно оставляет ровно
+   одного Owner и превращает source в Admin; pending/revoked target и stale
+   metadata/source/target membership versions отклоняются. До role mutation
+   target проходит aggregate capacity admission по committed usage его Minds,
+   передаваемого Mind и active reservations; untrusted/soft/hard outcome не
+   меняет roles, audit, idempotency, ledger или reservations.
 6. Admin управляет Reader/Editor, но не Admin/Owner; Owner управляет Admin и
    visibility. Non-owner leave не оставляет stale access.
 7. Invitation зарегистрированному principal не даёт access до acceptance,

@@ -372,10 +372,19 @@ async function runScenario({ candidate, evidenceOut, randomBytesImpl, now }) {
     assertions.add("role.editor-controlled-write");
 
     mind = data(await owner.json(`/api/v1/minds/${handle}`));
-    const editorMember = data(await owner.json(`/api/v1/minds/${handle}/members`)).members
+    const transferMembers = data(await owner.json(`/api/v1/minds/${handle}/members`)).members;
+    const editorMember = transferMembers
       .find((value) => value.member_id === participantMember.member_id);
+    const sourceOwner = transferMembers.find((value) => value.is_self === true && value.role === "owner");
+    if (!editorMember || !sourceOwner) fail("ownership_transfer_members_missing");
     await owner.json(`/api/v1/minds/${handle}/ownership-transfer`, {
-      method: "POST", body: { target_member_id: editorMember.member_id, expected_metadata_version: mind.metadata_version, confirmation: "transfer-ownership" },
+      method: "POST", body: {
+        target_member_id: editorMember.member_id,
+        expected_metadata_version: mind.metadata_version,
+        expected_source_membership_version: sourceOwner.membership_version,
+        expected_target_membership_version: editorMember.membership_version,
+        confirmation: "transfer-ownership",
+      },
       idempotencyKey: `browser:${nonce}:transfer`, csrfPath: `/${handle}`,
     });
     const transferredMembers = data(await participant.json(`/api/v1/minds/${handle}/members`)).members;

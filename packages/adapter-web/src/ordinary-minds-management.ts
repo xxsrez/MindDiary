@@ -587,9 +587,18 @@ function renderOwnershipPanel(
       <div><p class="md-eyebrow">Single Owner</p><h2 id="ownership-heading">Transfer ownership</h2><p>Current participants are unavailable. Nothing can be transferred until this page is reloaded.</p></div>
     </section>`;
   }
-  const candidates = ownership.members.filter((member) => !member.isSelf && member.role !== "owner");
+  const source = ownership.members.find((member) => member.isSelf && member.role === "owner");
+  if (source === undefined || !Number.isSafeInteger(source.membershipVersion) || source.membershipVersion < 1) {
+    return `<section class="md-setup-card" aria-labelledby="ownership-heading" data-ownership-unavailable>
+      <div><p class="md-eyebrow">Single Owner</p><h2 id="ownership-heading">Transfer ownership</h2><p>Current Owner state is unavailable. Nothing can be transferred until this page is reloaded.</p></div>
+    </section>`;
+  }
+  const candidates = ownership.members.filter((member) =>
+    !member.isSelf && member.role !== "owner" &&
+    Number.isSafeInteger(member.membershipVersion) && member.membershipVersion >= 1
+  );
   const options = candidates.map((member) =>
-    `<option value="${escapeUntrustedText(member.memberId)}">${escapeUntrustedText(member.displayName)} — ${titleCase(member.role)}</option>`,
+    `<option value="${escapeUntrustedText(member.memberId)}" data-membership-version="${member.membershipVersion}" data-display-name="${escapeUntrustedText(member.displayName)}">${escapeUntrustedText(member.displayName)} — ${titleCase(member.role)}</option>`,
   ).join("");
   return `<section class="md-setup-card" aria-labelledby="ownership-heading" data-owner-transfer-controls>
     <div>
@@ -597,14 +606,18 @@ function renderOwnershipPanel(
       <h2 id="ownership-heading">Transfer ownership</h2>
       <p>Only active participants appear here. Pending invitations cannot receive ownership. After transfer, you become Admin and exactly one Owner remains.</p>
     </div>
-    <form data-ownership-transfer-form data-metadata-version="${mind.metadataVersion}">
+    <form data-ownership-transfer-form data-metadata-version="${mind.metadataVersion}" data-source-membership-version="${source.membershipVersion}">
       <div class="md-field">
         <label for="ordinary-mind-ownership-target">New Owner</label>
         <select id="ordinary-mind-ownership-target" name="target_member_id" required${candidates.length === 0 ? " disabled" : ""}>
           <option value="">${candidates.length === 0 ? "No eligible participants" : "Choose an active participant"}</option>${options}
         </select>
       </div>
-      <p><label><input type="checkbox" required data-ownership-confirmation${candidates.length === 0 ? " disabled" : ""}> I understand that I will become Admin and the selected participant will become the sole Owner.</label></p>
+      <section class="md-caveat" data-ownership-consequences>
+        <h3>Review the exact transfer</h3>
+        <p><strong data-ownership-target-name>No participant selected</strong> will become the sole Owner immediately. You will become Admin. Both changes happen together or neither happens.</p>
+      </section>
+      <p><label><input type="checkbox" required data-ownership-confirmation${candidates.length === 0 ? " disabled" : ""}> I separately confirm the selected participant becomes sole Owner and I become Admin immediately.</label></p>
       <p class="md-form__status" role="status" aria-live="assertive" data-ownership-status></p>
       <button class="md-button md-button--danger" type="submit" data-transfer-ownership disabled>Transfer ownership</button>
     </form>

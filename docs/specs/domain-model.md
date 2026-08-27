@@ -261,6 +261,17 @@ target становится Owner, прежний Owner становится Adm
 подтверждение target не нужно, потому что он уже принял membership. Pending
 invitation не подходит для transfer.
 
+Команда transfer фиксирует current metadata version и версии обеих active
+memberships, показанных в подтверждении. Любое concurrent изменение роли,
+revoke, повторное принятие membership или другой ownership transition делает
+команду stale: server не подбирает новый target и не применяет часть перехода.
+Перед сменой ролей та же metadata transaction проверяет aggregate capacity
+нового Owner. В расчёт входят committed physical canonical usage всех уже
+принадлежащих ему Minds, передаваемого Mind и active reservations этих Minds.
+Недоверенный accounting либо достижение soft/hard threshold отклоняет transfer;
+roles, metadata/access versions, audit, idempotency, ledger и reservations
+остаются прежними.
+
 Любой participant, кроме Owner, может выйти самостоятельно. Owner должен
 сначала передать ownership или удалить Mind. Ownerless active state никогда не
 используется как промежуточный или фоновый механизм удаления.

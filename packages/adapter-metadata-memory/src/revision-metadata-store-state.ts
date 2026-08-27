@@ -363,7 +363,7 @@ export abstract class RevisionMetadataStoreState {
           );
           const principalReserved = activeReservationAmounts(
             reservations,
-            (reservation) => reservation.ownerPrincipalId === ownerPrincipalId,
+            (reservation) => principalSpaceIds.has(reservation.spaceId),
           );
           const siteReserved = activeReservationAmounts(reservations, () => true);
 
@@ -407,7 +407,7 @@ export abstract class RevisionMetadataStoreState {
               activeHeavy.filter((reservation) => reservation.spaceId === request.spaceId).length >=
                 limits.activeHeavyPerMind ||
               activeHeavy.filter((reservation) =>
-                reservation.ownerPrincipalId === ownerPrincipalId).length >=
+                principalSpaceIds.has(reservation.spaceId)).length >=
                 limits.activeHeavyPerPrincipal ||
               activeHeavy.length >= limits.activeHeavyPerSite
             ) {

@@ -190,6 +190,16 @@ transfer itself не копирует objects. Same-Space shared digest physical
 считается один раз, logically — в каждой referencing revision. Cross-Space
 sharing запрещено.
 
+Ownership admission использует current owner relation, а не сохранённый actor
+reservation как источник quota ownership: active reservation передаваемого
+Mind учитывается в aggregate нового Owner даже если operation была admitted до
+transfer. Transfer отклоняется при недоверенном accounting и при projected
+principal utilization `>= 85%` (soft threshold, включая hard limit). Проверка и
+две role mutations находятся в одной metadata transaction. Неуспех не меняет
+ownership, usage projection, reservation owner/amount/state, audit или
+idempotency; успешный transfer не копирует canonical objects и не создаёт новую
+capacity reservation.
+
 Ledger events ускоряют projection, но не являются единственной истиной.
 Reconcile повторно вычисляет values from committed D1 manifest/reachability
 records и exact R2 metadata bounded pages. Drift marks accounting

@@ -3070,7 +3070,9 @@ test("durable Product Site enforces public baseline access, atomic ownership tra
   assert.equal(members.status, 200);
   const membersBody = await members.json();
   const targetMember = membersBody.data.members.find(({ display_name }) => display_name === "Target Owner");
+  const sourceMember = membersBody.data.members.find(({ is_self }) => is_self === true);
   assert.ok(targetMember);
+  assert.ok(sourceMember);
   const transferred = await responseFrom(runtime, new Request(
     `${ORIGIN}/api/v1/minds/visibility-runtime/ownership-transfer`,
     {
@@ -3084,6 +3086,8 @@ test("durable Product Site enforces public baseline access, atomic ownership tra
       body: JSON.stringify({
         target_member_id: targetMember.member_id,
         expected_metadata_version: beforeTransferBody.data.metadata_version,
+        expected_source_membership_version: sourceMember.membership_version,
+        expected_target_membership_version: targetMember.membership_version,
         confirmation: "transfer-ownership",
       }),
     },
@@ -3094,7 +3098,26 @@ test("durable Product Site enforces public baseline access, atomic ownership tra
   assert.equal(transferredBody.data.target_role, "owner");
 
   const sourceAfterTransfer = await responseFrom(runtime, new Request(`${ORIGIN}/api/v1/minds/visibility-runtime`));
-  assert.equal((await sourceAfterTransfer.json()).data.access.role, "admin");
+  const sourceAfterTransferBody = await sourceAfterTransfer.json();
+  assert.equal(sourceAfterTransferBody.data.access.role, "admin");
+  const formerOwnerVisibility = await responseFrom(runtime, new Request(
+    `${ORIGIN}/api/v1/minds/visibility-runtime/visibility`,
+    {
+      method: "PUT",
+      headers: {
+        origin: ORIGIN,
+        "content-type": "application/json",
+        "x-csrf-token": transferCsrf,
+        "idempotency-key": "visibility:former-owner-denied",
+      },
+      body: JSON.stringify({
+        visibility: "private",
+        acknowledge_live_head_and_history_exposure: false,
+        expected_metadata_version: sourceAfterTransferBody.data.metadata_version,
+      }),
+    },
+  ));
+  assert.equal(formerOwnerVisibility.status, 403, await formerOwnerVisibility.text());
   switchIdentity("visibility.target@example.com", "Target Owner");
   const targetOwnerCsrf = await pageCsrf();
   const targetAfterTransfer = await responseFrom(runtime, new Request(`${ORIGIN}/api/v1/minds/visibility-runtime`));

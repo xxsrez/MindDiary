@@ -782,13 +782,15 @@ export interface TransferOrdinaryMindOwnershipRequest {
   readonly spaceId: SpaceId;
   readonly targetMembershipId: MembershipId;
   readonly expectedMetadataVersion: Version;
+  readonly expectedSourceMembershipVersion: Version;
+  readonly expectedTargetMembershipVersion: Version;
   readonly idempotencyKey: IdempotencyKey;
   readonly canonicalRequestHash: Sha256Digest;
   readonly occurredAt: UtcInstant;
   readonly requestId: ActorContext["requestId"];
   readonly auditEventId: AuditEventId;
   readonly auditOutboxMessageId: OutboxMessageId;
-  readonly capacityLimits?: Readonly<CapacityLimits>;
+  readonly capacityLimits: Readonly<CapacityLimits>;
 }
 
 /** Exact post-transfer records persisted by one ownership transaction. */
@@ -815,6 +817,7 @@ export type TransferOrdinaryMindOwnershipResult =
         | "forbidden"
         | "ownership_target_invalid"
         | "ownership_target_capacity_exceeded"
+        | "capacity_accounting_untrusted"
         | "ownership_state_changed"
         | "idempotency_conflict"
         | "effect_conflict"

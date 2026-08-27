@@ -3,13 +3,16 @@ import test from "node:test";
 
 import { InMemoryRevisionMetadataStore } from "@mind-diary/adapter-metadata-memory";
 import { InMemoryObjectStore } from "@mind-diary/adapter-object-memory";
+import { DEFAULT_CAPACITY_LIMITS } from "@mind-diary/application-content";
 import {
   AccountBootstrapService,
   InvitationControlService,
+  MembershipControlService,
   OrdinaryMindControlService,
   OwnershipTransferFailure,
   OwnershipTransferService,
 } from "@mind-diary/application-control";
+import { CapabilityAuthorizer } from "@mind-diary/application-ports";
 import { CAPABILITIES, verifiedSpaceHost, version } from "@mind-diary/domain";
 
 const CREATED_AT = "2026-08-07T08:00:00.000Z";
@@ -102,7 +105,15 @@ function harness({ auditIds, capacityLimits } = {}) {
       nextOutboxMessageId: () => `outbox_ownership_${++auditOutbox}`,
     },
     logger: { record: (event) => safeEvents.push(event) },
-    ...(capacityLimits === undefined ? {} : { capacityLimits }),
+    capacityLimits: capacityLimits ?? DEFAULT_CAPACITY_LIMITS,
+  });
+  const memberships = new MembershipControlService({
+    memberships: metadata,
+    digest: objects,
+    auditIds: {
+      nextAuditEventId: () => `audit_membership_ownership_${++auditEvent}`,
+      nextOutboxMessageId: () => `outbox_membership_ownership_${++auditOutbox}`,
+    },
   });
   return {
     metadata,
@@ -111,6 +122,7 @@ function harness({ auditIds, capacityLimits } = {}) {
     bootstrap,
     ordinary,
     invitations,
+    memberships,
     ownership,
   };
 }
@@ -156,6 +168,84 @@ test("ownership transfer fails atomically when the target aggregate exceeds capa
   );
   const after = await state(env, mind.mindId);
   assert.deepEqual(after, before);
+});
+
+test("active reservations on the transferred Mind are admitted against the target aggregate with no partial mutation", async () => {
+  const env = harness();
+  const owner = await createAccount(env, 42, "Reservation Owner");
+  const target = await createAccount(env, 43, "Reservation Target");
+  const mind = await createMind(env, owner, "reserved-capacity-transfer");
+  const targetMemberId = await grantMembership(
+    env,
+    mind.mindId,
+    owner.principalId,
+    target.principalId,
+    "editor",
+    "reserved_capacity_target",
+  );
+  const targetUsage = await env.metadata.readPrincipalCapacityUsage(target.principalId);
+  const mindUsage = await env.metadata.readMindCapacityUsage(mind.mindId);
+  const reservationBytes = 1_024;
+  const baseProjected = targetUsage.physicalCanonicalBytes + mindUsage.physicalCanonicalBytes;
+  const admitted = await env.metadata.runCapacityTransaction((transaction) =>
+    transaction.admitCapacityReservation({
+      reservationId: "capacity:ownership-transfer:active",
+      requestedByPrincipalId: owner.principalId,
+      spaceId: mind.mindId,
+      operation: "commit",
+      operationRef: "ownership-transfer-active-reservation",
+      baseRevisionId: mind.headRevisionId,
+      idempotencyKey: "capacity-ownership-transfer-active",
+      requested: {
+        physicalCanonicalBytes: reservationBytes,
+        temporaryBytes: 0,
+        d1MetadataBytes: 0,
+      },
+      bulk: false,
+      heavy: false,
+      createdAt: ACCEPTED_AT,
+      expiresAt: "2026-08-07T09:00:00.000Z",
+    }, DEFAULT_CAPACITY_LIMITS));
+  assert.equal(admitted.kind, "admitted");
+  const constrainedCapacityLimits = {
+    ...DEFAULT_CAPACITY_LIMITS,
+    principalPhysicalCanonicalBytes: Math.ceil(
+      (baseProjected + Math.floor(reservationBytes / 2)) / 0.85,
+    ),
+  };
+  assert.equal(baseProjected / constrainedCapacityLimits.principalPhysicalCanonicalBytes < 0.85, true);
+  assert.equal(
+    (baseProjected + reservationBytes) / constrainedCapacityLimits.principalPhysicalCanonicalBytes >= 0.85,
+    true,
+  );
+  const constrainedOwnership = new OwnershipTransferService({
+    ordinaryMinds: env.metadata,
+    objects: env.objects,
+    auditIds: {
+      nextAuditEventId: () => "audit_ownership_reserved_capacity",
+      nextOutboxMessageId: () => "outbox_ownership_reserved_capacity",
+    },
+    capacityLimits: constrainedCapacityLimits,
+  });
+  const before = await state(env, mind.mindId);
+  const reservationsBefore = await env.metadata.listCapacityReservationsForTest();
+
+  await assert.rejects(
+    constrainedOwnership.transferOwnership(
+      actor(owner.principalId, "request_reserved_capacity_transfer"),
+      transferCommand(
+        mind.mindId,
+        targetMemberId,
+        before.space.metadataVersion,
+        "reserved-capacity-transfer",
+      ),
+    ),
+    failure("ownership_target_capacity_exceeded"),
+  );
+  assert.deepEqual(await state(env, mind.mindId), before);
+  assert.deepEqual(await env.metadata.listCapacityReservationsForTest(), reservationsBefore);
+  assert.equal((await env.metadata.listAuditEventsForTest()).length, 0);
+  assert.equal((await env.metadata.listAuditOutboxForTest()).length, 0);
 });
 
 async function createAccount(env, index, displayName = `Principal ${index}`) {
@@ -223,6 +313,8 @@ function transferCommand(
     mindId,
     targetMemberId,
     expectedMetadataVersion,
+    expectedSourceMembershipVersion: 1,
+    expectedTargetMembershipVersion: 1,
     confirmation: "transfer-ownership",
     idempotencyKey,
     ...overrides,
@@ -242,6 +334,15 @@ function activeOwners(current) {
     (membership) =>
       membership.state === "active" && membership.role === "owner",
   );
+}
+
+async function authorize(env, principalId, spaceId, capability) {
+  return new CapabilityAuthorizer(env.metadata).authorize({
+    actor: actor(principalId, `request_authorize_${capability}`),
+    spaceId,
+    capability,
+    revisionMode: "head",
+  });
 }
 
 test("pending target is rejected; accepted participant transfer is atomic, audited once and exactly replayable", async () => {
@@ -321,6 +422,10 @@ test("pending target is rejected; accepted participant transfer is atomic, audit
   assert.equal(after.space.headRevisionId, before.space.headRevisionId);
   assert.deepEqual(after.revisions, before.revisions);
   assert.deepEqual(after.invitations, before.invitations);
+  assert.equal((await authorize(env, owner.principalId, mind.mindId, "ownership:transfer")).kind, "denied");
+  assert.equal((await authorize(env, target.principalId, mind.mindId, "ownership:transfer")).kind, "allowed");
+  assert.equal((await authorize(env, owner.principalId, mind.mindId, "content:write")).kind, "allowed");
+  assert.equal((await authorize(env, target.principalId, mind.mindId, "content:write")).kind, "allowed");
 
   const events = await env.metadata.listAuditEventsForTest();
   const outbox = await env.metadata.listAuditOutboxForTest();
@@ -483,6 +588,51 @@ test("source authority, target activity, Personal Mind and metadata CAS fail wit
   );
   assert.deepEqual(await state(env, mind.mindId), revoked);
   assert.equal(activeOwners(revoked).length, 1);
+});
+
+test("a target role change after the Owner read fails the transfer closed on membership CAS", async () => {
+  const env = harness();
+  const owner = await createAccount(env, 20, "Concurrent Owner");
+  const target = await createAccount(env, 21, "Concurrent Target");
+  const mind = await createMind(env, owner, "concurrent-role-transfer");
+  const targetMemberId = await grantMembership(
+    env,
+    mind.mindId,
+    owner.principalId,
+    target.principalId,
+    "editor",
+    "concurrent_role_target",
+  );
+  const beforeRead = await state(env, mind.mindId);
+  const staleCommand = transferCommand(
+    mind.mindId,
+    targetMemberId,
+    beforeRead.space.metadataVersion,
+    "concurrent-role-transfer",
+  );
+  const roleChanged = await env.memberships.changeMembershipRole(
+    actor(owner.principalId, "request_concurrent_role_change", LATER_AT),
+    {
+      mindId: mind.mindId,
+      memberId: targetMemberId,
+      role: "admin",
+      expectedMembershipVersion: 1,
+      idempotencyKey: "concurrent-role-change-before-transfer",
+    },
+  );
+  assert.equal(roleChanged.membershipVersion, 2);
+  const beforeTransfer = await state(env, mind.mindId);
+
+  await assert.rejects(
+    env.ownership.transferOwnership(
+      actor(owner.principalId, "request_stale_membership_transfer", LATER_AT),
+      staleCommand,
+    ),
+    failure("ownership_state_changed"),
+  );
+  assert.deepEqual(await state(env, mind.mindId), beforeTransfer);
+  assert.equal(activeOwners(beforeTransfer).length, 1);
+  assert.equal(activeOwners(beforeTransfer)[0].principalId, owner.principalId);
 });
 
 test("concurrent retries coalesce and competing transfers have one CAS winner and one Owner", async () => {

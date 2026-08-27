@@ -209,6 +209,18 @@ const adapter = {
     if (!source || !target || target.state !== "active" || target.role === "owner") {
       throw failure("ownership_target_invalid", "Target is not active.");
     }
+    if (
+      source.membershipVersion !== command.expectedSourceMembershipVersion ||
+      target.membershipVersion !== command.expectedTargetMembershipVersion
+    ) {
+      throw failure("ownership_state_changed", "Ownership memberships changed.");
+    }
+    if (scenario === "ownership-conflict" && !conflictInjected) {
+      conflictInjected = true;
+      target.state = "revoked";
+      target.membershipVersion += 1;
+      throw failure("ownership_state_changed", "Target was revoked during transfer.");
+    }
     source.role = "admin";
     source.membershipVersion += 1;
     target.role = "owner";

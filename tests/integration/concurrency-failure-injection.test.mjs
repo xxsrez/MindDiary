@@ -192,6 +192,7 @@ function createHarness() {
     ordinaryMinds: metadata,
     objects,
     auditIds: { nextAuditEventId, nextOutboxMessageId },
+    capacityLimits: DEFAULT_CAPACITY_LIMITS,
   });
   const effectIds = {
     nextAuditEventId,
@@ -594,6 +595,10 @@ test(
       mindId: mind.mindId,
       targetMemberId: targetAMembership.membershipId,
       expectedMetadataVersion: state.space.metadataVersion,
+      expectedSourceMembershipVersion: state.memberships.find(
+        (membership) => membership.principalId === owner.principalId,
+      ).version,
+      expectedTargetMembershipVersion: targetAMembership.version,
       confirmation: "transfer-ownership",
       idempotencyKey: "injected-transfer",
     };

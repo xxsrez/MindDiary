@@ -192,11 +192,14 @@ test("ownership transfer lists active non-owner participants and states the sing
   }));
 
   assert.match(html, /data-owner-transfer-controls/);
-  assert.match(html, /value="membership_editor">Editor Person — Editor/);
+  assert.match(html, /value="membership_editor" data-membership-version="2" data-display-name="Editor Person">Editor Person — Editor/);
   assert.doesNotMatch(html, /value="membership_owner"/);
   assert.match(html, /Pending invitations cannot receive ownership/);
   assert.match(html, /become Admin and exactly one Owner remains/);
   assert.match(html, /data-ownership-confirmation/);
+  assert.match(html, /data-source-membership-version="3"/);
+  assert.match(html, /data-ownership-target-name/);
+  assert.match(html, /Both changes happen together or neither happens/);
   assert.match(html, /data-transfer-ownership disabled/);
 });
 

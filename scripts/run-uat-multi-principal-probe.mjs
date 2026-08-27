@@ -303,11 +303,19 @@ async function setup(state, credentials, fetchImpl) {
   await expectMcpMind(client.participant, state.mind.handle, true);
 
   const ownerMind = data(await client.owner.api(`/api/v1/minds/${state.mind.handle}`));
-  const target = data(await client.owner.api(`/api/v1/minds/${state.mind.handle}/members`)).members?.find((item) => item?.is_self === false && item?.role === "editor");
-  if (!target) fail("transfer_target_missing");
+  const transferMembers = data(await client.owner.api(`/api/v1/minds/${state.mind.handle}/members`)).members;
+  const target = transferMembers?.find((item) => item?.is_self === false && item?.role === "editor");
+  const source = transferMembers?.find((item) => item?.is_self === true && item?.role === "owner");
+  if (!target || !source) fail("transfer_target_missing");
   await client.owner.api(`/api/v1/minds/${state.mind.handle}/ownership-transfer`, {
     method: "POST",
-    body: { target_member_id: target.member_id, expected_metadata_version: ownerMind.metadata_version, confirmation: "transfer-ownership" },
+    body: {
+      target_member_id: target.member_id,
+      expected_metadata_version: ownerMind.metadata_version,
+      expected_source_membership_version: source.membership_version,
+      expected_target_membership_version: target.membership_version,
+      confirmation: "transfer-ownership",
+    },
     idempotencyKey: `probe:${state.run_nonce}:transfer`, csrfPath: `/${state.mind.handle}`,
   });
   const sourceAfter = data(await client.owner.api(`/api/v1/minds/${state.mind.handle}`));

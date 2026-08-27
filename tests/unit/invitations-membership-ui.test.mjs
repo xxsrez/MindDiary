@@ -226,9 +226,16 @@ test("ownership transfer lists active participants only and confirms source beco
     /member_owner|member_revoked|invite_outgoing_pending|Pending Candidate/,
   );
   assert.match(html, /Pending invitations cannot receive ownership/);
+  assert.match(transfer, /data-source-membership-version="3"/);
+  assert.match(transfer, /value="member_editor" data-membership-version="5" data-display-name="Eva Editor"/);
+  assert.match(transfer, /data-transfer-target-name/);
+  assert.match(transfer, /sole Owner immediately/);
+  assert.match(transfer, /Both changes happen together or neither happens/);
   assert.match(transfer, /name="confirm_source_admin" type="checkbox" required/);
-  assert.match(transfer, /I will become an Admin immediately after transfer/);
+  assert.match(transfer, /I separately confirm the selected participant becomes sole Owner and I become Admin immediately/);
   assert.match(implementation, /confirmation: "transfer-ownership"/);
+  assert.match(implementation, /expectedSourceMembershipVersion: sourceMembershipVersion/);
+  assert.match(implementation, /expectedTargetMembershipVersion: targetMembershipVersion/);
 });
 
 test("leave and unauthorized controls are fail-closed for the current role", () => {

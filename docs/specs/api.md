@@ -950,12 +950,25 @@ Ownership transfer:
 {
   "target_member_id": "member_opaque",
   "expected_metadata_version": 9,
+  "expected_source_membership_version": 4,
+  "expected_target_membership_version": 7,
   "confirmation": "transfer-ownership"
 }
 ```
 
-Target обязан быть existing active participant. Success одной transaction
+Target обязан быть exact existing active participant из current member
+projection. Отдельное подтверждение показывает его display name и последствия:
+target становится единственным Owner, current Owner — Admin. Любая stale
+metadata/source/target membership version, revoke или concurrent role mutation
+возвращает conflict после authoritative read-back. Success одной transaction
 делает target Owner, source Admin и оставляет ровно одного Owner.
+
+До смены ролей transaction выполняет aggregate capacity admission нового Owner:
+committed physical canonical usage его текущих Minds плюс передаваемый Mind и
+active reservations всех этих Minds. `ownership_target_capacity_exceeded`
+означает достижение soft/hard threshold, `capacity_accounting_untrusted` —
+невозможность доверенно выполнить admission. Оба результата оставляют ownership,
+metadata/access versions, audit, idempotency, ledger и reservations без изменений.
 
 ### MCP token management
 
