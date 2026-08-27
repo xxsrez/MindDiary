@@ -1,8 +1,25 @@
 # Automatic knowledge capture
 
-Статус: accepted contract и локально реализованный candidate, 2026-08-22.
+Статус: accepted historical Release 0.1/0.2 contract и локально реализованный
+candidate, обновлено 2026-08-27.
 Документ задаёт первый bounded Codex-first capture profile. Binding сам capture
 не включает; hosted UAT evidence остаётся отдельным release gate.
+
+## Product authority Release 0.3
+
+Site владеет opt-in policy и выбором единственного writable target. Content
+MCP не включает, не выключает и не переносит policy, не создаёт Connection и
+не меняет target. Если automatic capture останется в целевом surface после
+operation review, он может быть только exact-target content commit: server
+берёт target из доверенного Site-controlled state и заново проверяет scope,
+ACL, visibility и HEAD concurrency.
+
+Read attach не является prerequisite. Исторические `binding_owner_id`,
+`write_binding_id`, `binding_version`, binding actions и wire payloads ниже не
+задают будущий access contract. Их точную замену определяет MD-339, а
+disposition `capture_knowledge` и control route — MD-337. MD-336 не принимает
+новую description semantics и не меняет runtime, schemas, persistence, UI или
+deployment.
 
 ## Назначение и граница
 
@@ -137,7 +154,7 @@ Output сообщает outcome `captured | no_op`, exact target name/route,
 binding/revision/path и validation/read-back state. Не возвращаются internal
 principal/space IDs или source bodies.
 
-## Wire surface
+## Исторический wire surface Release 0.1/0.2
 
 ### Control plane
 

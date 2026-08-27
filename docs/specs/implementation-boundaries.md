@@ -1,6 +1,6 @@
 # Границы реализации domain, application и adapters
 
-Статус: proposal, обновлено 2026-08-09. Документ фиксирует обязательные
+Статус: proposal, обновлено 2026-08-27. Документ фиксирует обязательные
 границы реализации первого прототипа. В репозитории уже существуют TypeScript
 packages, application/adapters, dependency checks, tests и Product Site
 composition, следующие этой карте. Это executable repository evidence, но не
@@ -24,6 +24,27 @@ storage binding. Конкретный runtime может меняться, по�
 Wire contract остаётся в [API specification](api.md), product invariants — в
 [domain model](domain-model.md), deployment topology — в
 [architecture](../architecture.md).
+
+## Target authority и current module map
+
+Release 0.3 product target требует, чтобы Web control application единолично
+владел account/Mind metadata, visibility, memberships/ownership, Connections,
+writable-target selection, token lifecycle, import/export orchestration и
+administrative destructive actions. Content application владеет только
+discovery, explicit-Mind browse/search/fetch/history/standalone validation и
+ordinary atomic commit в server-approved exact target. Target read не требует
+mutable read-binding precondition; MCP не изменяет target или import/export
+lifecycle.
+
+Import-specific validation и final revision publish остаются внутренними
+этапами Site-owned import use case, даже если используют те же domain policies
+и CAS. Это не второй inbound content façade.
+
+Это product boundary, не runtime refactor в MD-336. Existing module lists,
+ports и transaction descriptions ниже сохраняют historical 0.1/0.2
+implementation. MD-337 определит exact operation movement/retirement, MD-339 —
+access/binding representation and migration. До этих задач нельзя считать
+existing content façade target-compliant только из-за этого текста.
 
 ## Целевая карта модулей
 
@@ -248,13 +269,13 @@ MVP policy. Финализация ждёт подтверждённый purge �
 передаёт явным значением domain policies и store operations. Tests используют
 deterministic fake clock; domain и codec не обращаются к process clock.
 
-## Application entry points
+## Historical Release 0.1/0.2 application entry points
 
 Три boundary публикуют отдельные типизированные façades. Общие value types и
 errors разрешены, но application modules не вызывают соседний façade и не
 экспортируют generic repository/CRUD surface.
 
-### Control application
+### Control application as-built
 
 Доступен только Web adapter:
 
@@ -275,7 +296,7 @@ commands:
 Ответы содержат safe account/control metadata и HEAD descriptor, но не raw
 Markdown, manifest body, search snippet, export bytes или content mutation.
 
-### Content application
+### Content application as-built
 
 Доступен только MCP adapter:
 
@@ -314,7 +335,7 @@ Handler принимает explicit job/aggregate ID, перечитывает c
 меняет authored OKF или HEAD напрямую; canonical mutation возможна только
 через обычный content/domain command с теми же authorization/CAS invariants.
 
-## Inbound adapters и exposure
+## Historical inbound adapters и exposure
 
 | Adapter | Может вызвать | Не может публиковать |
 |---|---|---|
@@ -336,6 +357,10 @@ Adapter не импортирует control façade даже если оба р�
 Shared application core означает общие domain policies, ports, errors и
 transaction semantics, а не один универсальный dispatcher, доступный любому
 transport. Internal application API не публикуется как customer network API.
+
+В целевой модели Release 0.3 inbound adapters должны следовать разделу
+authority выше. Точные строки операций намеренно не переписаны в MD-336:
+operation register принадлежит MD-337, а binding/access effects — MD-339.
 
 ## Transaction boundaries
 

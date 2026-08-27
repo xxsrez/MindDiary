@@ -1,6 +1,6 @@
 # Обзор Mind Diary
 
-Статус: proposal, обновлено 2026-08-24. Product behavior первого прототипа
+Статус: proposal, обновлено 2026-08-27. Product behavior первого прототипа
 принято; Product Site реализован, развёрнут как single-principal UAT в OpenAI
 Sites и прошёл
 authenticated web/control, persistence-after-redeploy и обязательные Codex MCP
@@ -184,9 +184,48 @@ retired handle; target-linked audit/idempotency records и forensic deletion
 receipt также не сохраняются. Это сознательный временный trade-off delete-all
 прототипа.
 
-## MCP и web control plane
+## Product authority после Release 0.1
 
-Один MCP connection аутентифицирует пользователя, а не отдельный Mind. Он
+Release 0.3 принимает одно однозначное разделение пользовательских полномочий.
+Это целевой product contract, а не утверждение о уже изменённых routes, tool
+schemas, persistence или deployment:
+
+| Поверхность | Единственная ответственность |
+|---|---|
+| **Sites web control plane** | Account и profile; создание и metadata Minds; visibility, invitations, memberships, roles и ownership; Connections; выбор единственного writable Mind для connection/credential; выпуск и revoke tokens; import/export workflows и их status/download; destructive lifecycle account, Mind, connection и credential. |
+| **Content MCP / Codex plugin** | Discovery разрешённых Minds; browse/search/fetch exact content; history и standalone validation; один ordinary atomic content commit в заранее разрешённый exact target. |
+
+Read path не требует обязательного onboarding шага «прикрепить Mind»: агент
+discover-ит разрешённые Minds и явно выбирает один Mind/revision в каждом read,
+а server заново проверяет current access. Выбор, switch и clear writable target
+выполняются только на Site; corpus, prompt и MCP tools не могут изменить этот
+target. Bulk import/export и административные destructive actions также не
+являются content MCP capabilities.
+
+Standalone validation означает явную проверку выбранного Mind/revision через
+content surface. Проверка staged bytes и bundle перед Site import commit —
+внутренний gate единой import operation, а не второй пользовательский validate
+или generic content-write surface. Финальная публикация import revision также
+остаётся частью Site-owned import lifecycle, даже если application core
+переиспользует те же domain validation и HEAD CAS invariants.
+
+Replace/delete внутри exact-target content commit остаются content semantics:
+они создают новую immutable revision под ACL, scope, validation, idempotency и
+HEAD CAS. Они не дают MCP полномочий удалить account/Mind, изменить metadata,
+visibility, участников, Connection, token, writable target или управлять
+import/export lifecycle.
+
+Exact disposition существующих REST/MCP operations принадлежит MD-337, а
+точная access/binding модель, migration и wire compatibility — MD-339. До их
+реализации нынешний runtime сохраняет проверенное historical 0.1/0.2
+поведение; эта specification не заявляет его автоматическое переключение.
+Description semantics, website AI, anonymous publication, token redesign и
+production/AWS изменения этим решением не принимаются.
+
+## Release 0.1: MCP и web control plane as-built
+
+Ниже сохранён historical contract первого прототипа. Один MCP connection
+аутентифицирует пользователя, а не отдельный Mind. Он
 может discover-ить все Minds, доступные этому principal:
 
 - Personal Mind `/me`;
@@ -215,11 +254,11 @@ company-knowledge compatibility: стандартный `search(query)` не в�
 склонить модель вызвать уже разрешённый write; explicit write scope, history и
 audit ограничивают, а не устраняют этот риск.
 
-Sites отвечает за account/control plane: создание Minds, visibility,
-invitations, roles, ownership, deletion, настройки и выпуск MCP tokens. Content
-files через browser UI не читаются и не редактируются. Web и MCP adapters
-используют общий application core/internal API; raw REST не является
-пользовательской поверхностью.
+В историческом контракте Release 0.1 Sites отвечает за account/control plane:
+создание Minds, visibility, invitations, roles, ownership, deletion, настройки
+и выпуск MCP tokens. Content files через browser UI не читаются и не
+редактируются. Web и MCP adapters используют общий application core/internal
+API; raw REST не является пользовательской поверхностью.
 
 Первый прототип сохраняет revocable personal bearer token как advanced direct-
 client path и поддерживает OAuth 2.1 + PKCE для Marketplace plugin. В Codex
@@ -238,7 +277,7 @@ OAuth connection показывается через actor-owned opaque presenta
 пути предоставляет MCP, storage и server-side operations, но не вызывает LLM от
 своего имени.
 
-## Основной сценарий
+## Целевой основной сценарий Release 0.3
 
 1. Пользователь входит через Sites; account и Personal Mind создаются атомарно.
 2. На сайте он создаёт ordinary Mind, принимает предложенный handle или меняет
@@ -248,16 +287,20 @@ OAuth connection показывается через actor-owned opaque presenta
 4. Пользователь устанавливает direct MCP plugin и проходит OAuth при первом
    use либо выпускает named personal token для advanced setup; другие clients
    становятся supported только после отдельного conformance test.
-5. Агент вызывает `list_minds`, выбирает `/me` или другой доступный Mind,
-   просматривает index/search/fetch.
-6. Editor/Admin/Owner отправляет atomic changeset с current HEAD revision.
-7. Server валидирует OKF и producer file contract, создаёт immutable revision, CAS-продвигает HEAD,
+5. На Site пользователь управляет Connection, readable access projection и
+   выбирает единственный writable Mind; MCP не меняет этот выбор.
+6. Агент discover-ит разрешённые Minds без обязательного read-attach шага,
+   явно выбирает один Mind/revision и использует browse/search/fetch/history.
+7. Editor/Admin/Owner отправляет atomic changeset в server-approved exact
+   writable target с current HEAD revision.
+8. Server валидирует OKF и producer file contract, создаёт immutable revision, CAS-продвигает HEAD,
    пишет audit event и запускает rebuild derived index.
-8. Public/unlisted readers сразу видят новую HEAD; historical selector остаётся
+9. Public/unlisted readers сразу видят новую HEAD; historical selector остаётся
    привязан к exact старой revision и read-only.
-9. Любой Reader/baseline Reader может получить детерминированный export exact
-   разрешённой revision через повторно авторизованный download URL; BundleFile
-   также скачивается отдельным short-lived exact-revision grant.
+10. Reader/baseline Reader запускает на Site детерминированный export exact
+    разрешённой revision; control plane повторно авторизует status/download.
+    BundleFile exact-revision read остаётся content read, но не превращается в
+    административный export workflow.
 
 ## Product principles
 

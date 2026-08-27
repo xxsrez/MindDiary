@@ -1,6 +1,6 @@
 # Спецификация первого прототипа
 
-Статус: proposal, обновлено 2026-08-25. Product requirements ниже приняты;
+Статус: proposal, обновлено 2026-08-27. Product requirements ниже приняты;
 Product Site и direct route/compatibility repair реализованы и развёрнуты как
 single-principal UAT в OpenAI Sites. Обязательные authenticated web/control,
 persistence-after-redeploy и default/modern Codex MCP gates пройдены live;
@@ -9,6 +9,11 @@ OAuth profile реализован в repository candidate. Для Codex Desktop
 blocking synthetic multi-principal automation реализована; OAuth/package
 automation также реализована. ADR-0019 дополнительно требует один blocking
 real-account first-user flow на exact UAT candidate.
+
+Этот документ сохраняет Release 0.1 как historical as-built contract: его
+tool list, binding acceptance и export flow не переписываются задним числом.
+Целевая authority Release 0.3 ниже является отдельным product evolution и не
+доказывает, что runtime, schemas или deployment уже изменены.
 
 Release 0.1 ограничен Codex-first Markdown/OKF 0.2 workflow на небольшом
 детерминированном dataset. Accepted BundleFile, Sites Brain-scale
@@ -39,6 +44,34 @@ Markdown-first Release 0.1.
 
 Первый прототип — один vertical slice. Web UI является control plane, а
 основная работа с content происходит через MCP.
+
+## Product evolution после первого прототипа
+
+Release 0.3 принимает следующую не пересекающуюся authority boundary:
+
+- Sites web control plane единолично управляет account, Minds metadata,
+  visibility, invitations/memberships/ownership, Connections, writable target,
+  tokens, import/export workflows и administrative destructive actions;
+- Content MCP discover-ит разрешённые Minds, читает/search-ит explicit
+  Mind/revision, показывает history, выполняет standalone validation и делает
+  ordinary atomic content commit только в server-approved exact writable
+  target;
+- read path не требует mandatory attach/read-binding onboarding, а MCP не
+  выбирает, не переключает и не очищает writable target;
+- replace/delete files внутри exact-target commit остаются versioned content
+  operations; они не дают MCP account/Mind/credential deletion или другую
+  control authority.
+
+Validation и финальная публикация внутри Site-owned import остаются этапами
+единой bulk import operation, а не вторыми standalone-validation или ordinary
+content-write surfaces.
+
+Exact operation disposition принадлежит MD-337; access/binding representation,
+migration and compatibility — MD-339. Поэтому разделы обязательного scope,
+первая MCP-поверхность и criteria ниже остаются normative history Release 0.1,
+а не перечнем будущих Release 0.3 routes/tools. Description semantics, website
+AI, anonymous publication, token redesign, production/AWS, runtime, persistence,
+schemas, migration и UI в MD-336 не входят.
 
 ## Обязательный scope
 
@@ -357,6 +390,9 @@ Codex pilot 0.1. Production/public plugin остаётся отдельной re
 
 ### Sites control plane
 
+Ниже сохранена historical Release 0.1 surface; это не target operation catalog
+Release 0.3.
+
 Sites UI поддерживает:
 
 - account/bootstrap и `/me`;
@@ -589,7 +625,7 @@ informational canary platform identity/audience behavior, не blocking gate
 релиза 0.1. Historical `mind-diary/multi-principal-evidence/v1` receipts не
 переименовываются и не подменяют synthetic evidence.
 
-## Первая MCP-поверхность
+## Historical Release 0.1 MCP-поверхность
 
 Перед content tools доступны `get_mind_bindings`,
 `set_read_mind_binding` и `set_write_mind_binding`. Mutations используют
@@ -621,7 +657,7 @@ start_export(mind, revision_selector?, profile?, idempotency_key)
 get_export_status(job_id)
 ```
 
-Сигнатуры выше задают product surface. Exact REST/MCP wire schemas, result
+Сигнатуры выше задают historical Release 0.1 product surface. Exact REST/MCP wire schemas, result
 envelopes, pagination, errors, tool annotations и Resources contract находятся
 в [API specification](api.md).
 
@@ -660,7 +696,13 @@ mutations, но не заменяют server authorization. Недоверенн
 residual risk ограничивается explicit write scope, current ACL, history и audit,
 но не считается устранённым.
 
-## Internal application API
+Для Release 0.3 эти names не являются operation-disposition register:
+binding/target mutations и bulk export больше не относятся к MCP authority, а
+read не требует explicit attach. Какие existing names переносятся, остаются
+compatibility aliases или удаляются, решает MD-337; exact access state и
+migration — MD-339.
+
+## Historical Release 0.1 internal application API
 
 Логические command/query contracts разделены по назначению:
 
@@ -885,7 +927,7 @@ consent boundary; password grant, admin mint и client-selected principal
 canary и не переписывает уже доказанный personal-token MVP. Production/public
 plugin требует отдельного target и решения.
 
-## Starter Mind и первый полезный результат
+## Historical Release 0.1 Starter Mind и первый полезный результат
 
 Account bootstrap и создание ordinary Mind продолжают атомарно создавать
 минимальную valid OKF 0.2 revision с `index.md` и `log.md`. Accepted starter

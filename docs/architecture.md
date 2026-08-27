@@ -1,6 +1,6 @@
 # Архитектура Mind Diary
 
-Статус: proposal, обновлено 2026-08-25. Product Site components, adapters,
+Статус: proposal, обновлено 2026-08-27. Product Site components, adapters,
 route migration и isolated Codex bridge реализованы и развёрнуты как
 single-principal UAT в OpenAI Sites. Authenticated web/control,
 persistence-after-redeploy,
@@ -68,6 +68,33 @@ paths не являются автоматически доступными ил
 OKF не определяет transactions, locks, ACL, revisions, query API или MCP. Эти
 свойства принадлежат Mind Diary.
 
+## Целевая authority boundary Release 0.3
+
+Release 0.3 принимает product boundary до изменения runtime:
+
+| Inbound surface | Владеет | Не владеет |
+|---|---|---|
+| Authenticated Sites Web | account/Mind metadata и lifecycle, visibility, memberships/ownership, Connections, writable-target selection, tokens, import/export orchestration и административные destructive actions | raw content browse/search/editor и model-driven content commit |
+| Content MCP | discovery, explicit-Mind browse/search/fetch/history/standalone validation и ordinary atomic commit в server-approved exact writable target | account/Mind/Connection/token control, writable-target mutation, import/export administration и whole-account/whole-Mind deletion |
+
+MCP read path в target architecture не требует mutable read-attachment state:
+explicit Mind/revision selector и current ACL/visibility/scope достаточно.
+Site-selected writable target остаётся дополнительным server-side fence для
+commit. Replace/delete files внутри такого commit — versioned content
+semantics, а не control-plane access. Exact operation disposition принадлежит
+MD-337; representation, migration и compatibility existing bindings — MD-339.
+
+Import-specific validation и финальная публикация import revision являются
+внутренними этапами одной Site-owned import operation, а не вторыми
+standalone-validation или ordinary content-commit surfaces. Shared application
+policies и HEAD CAS не меняют inbound authority.
+
+Ни diagram ниже, ни текущие package names не являются claim, что эта target
+boundary уже реализована. Historical Release 0.1/0.2 binding, staging и export
+flows сохранены как as-built evidence до соответствующих задач. MD-336 не
+выбирает новые routes, schemas, persistence, UI, description semantics,
+website AI, anonymous publication, token redesign или production/AWS topology.
+
 ## Контекст системы
 
 ```mermaid
@@ -84,7 +111,7 @@ flowchart LR
     Index[("Rebuildable search index")]
     Worker["Background worker"]
 
-    Browser -->|"account and metadata operations"| Web
+    Browser -->|"control, target, import/export"| Web
     Agent -->|"Authenticate / PKCE"| OAuth
     OAuth -->|"scoped bearer"| MCP
     Agent -->|"personal bearer + content tools"| MCP
@@ -157,7 +184,7 @@ ports:
 - invitations, membership roles и ownership transfer;
 - visibility и public catalog;
 - token issue/revoke/authenticate;
-- export/validate revision;
+- Site-owned import/export orchestration и content-owned validate revision;
 - browse/search/fetch/history Markdown exact revision;
 - Release 0.2 target list/download exact-revision arbitrary BundleFile и
   verified streaming staging;
@@ -197,6 +224,11 @@ rules зафиксированы в
 [specification границ реализации](specs/implementation-boundaries.md). Runtime
 composition и automated import graph checks реализованы; live Sites semantics
 проверяются отдельно и не выводятся из compile-time изоляции.
+
+Existing package/facade placement в этом документе отражает historical
+runtime. Перенос concrete operations между façades выполняется только после
+MD-337, а access/binding state — после MD-339; MD-336 не меняет dependency
+graph или composition.
 
 ### 3. Protocol adapters
 
@@ -288,6 +320,10 @@ scenario и redacted receipt заданы в
 [synthetic runbook](operations/synthetic-multi-principal-runbook.md).
 
 ## Identity и authentication
+
+Следующие token/OAuth/binding records документируют current 0.1/0.2 runtime.
+Они сохраняются для compatibility evidence и не переопределяют target
+authority Release 0.3; MD-339 отдельно задаст replacement/migration.
 
 ### Sites account
 
@@ -543,7 +579,13 @@ Non-HEAD selector фиксирует `resolved_revision_id` и принудит�
 Каждый read проверяет current membership/baseline grant и token scope. Named
 checkpoints/tags не входят в первый прототип.
 
-## Поток content write
+## Historical 0.1/0.2 поток content write
+
+Sequence ниже сохраняет as-built staging/binding composition. Release 0.3
+сохраняет только конечный content invariant — atomic commit в
+server-approved exact target; user-facing import/staging orchestration и выбор
+target принадлежат Site. Exact разбор существующих calls выполнят MD-337 и
+MD-339.
 
 ```mermaid
 sequenceDiagram
@@ -598,28 +640,32 @@ payload с тем же key — `409 Idempotency Conflict`.
 
 ## Поток content read
 
-1. MCP adapter аутентифицирует token и получает `principal_id` + trusted
-   `binding_owner_id`.
+Target Release 0.3:
+
+1. MCP adapter аутентифицирует credential и получает trusted actor/scope.
 2. Explicit Mind selector разрешается в `space_id`; `/me` разрешается только
    через actor.
-3. Application требует active read binding либо exact write binding.
-4. Authorizer проверяет current membership или visibility grant.
-5. Revision selector разрешается в exact `revision_id`.
-6. Browse/search/list BundleFile применяет `space_id + revision_id` filter до выдачи результатов.
-7. `fetch` перечитывает canonical object той же revision и возвращает
+3. Authorizer проверяет current membership или visibility grant; отдельный
+   read-attach state не требуется.
+4. Revision selector разрешается в exact `revision_id`.
+5. Browse/search/list BundleFile применяет `space_id + revision_id` filter до выдачи результатов.
+6. `fetch` перечитывает canonical object той же revision и возвращает
    provenance/freshness.
-8. BundleFile bytes выдаются только one-use download grant с повторной current
+7. BundleFile bytes выдаются только one-use download grant с повторной current
    authorization; `fetch`/Resources остаются text-only.
-9. Ответ ограничивается budget; truncation обозначается явно.
+8. Ответ ограничивается budget; truncation обозначается явно.
+
+Historical 0.1 additionally required a read or write binding before step 3;
+этот requirement остаётся as-built evidence, но не target authority.
 
 Index для каждой revision derived и rebuildable. При отсутствии/lag historical
 index browse/fetch остаются доступны, а search ждёт rebuild или честно сообщает
 unavailable; fallback на HEAD запрещён.
 
-## MCP surface и multi-Mind boundary
+## Historical MCP surface и target multi-Mind boundary
 
-Один connection discover-ит allowed universe principal, но content использует
-только authoritative bindings и не смешивает corpus:
+As-built Release 0.1/0.2 catalog ниже использует authoritative bindings и не
+смешивает corpus:
 
 ```text
 list_minds -> /me + memberships + public catalog
@@ -650,12 +696,22 @@ Content MCP не содержит invitation, membership, visibility, ownership,
 и audit ограничивают, а не устраняют этот residual risk. Tool annotations — UX
 metadata, а не security boundary.
 
+Target Release 0.3 не относит read/write binding mutation и administrative
+export к authority Content MCP. MCP discover-ит разрешённые Minds, читает
+explicit target без attach и может commit-ить только в exact writable target,
+выбранный на Site. Это category boundary, не новый tool catalog: exact
+keep/move/retire existing aliases принадлежат MD-337, access/binding
+compatibility — MD-339.
+
 ## Sites control plane и internal API
 
-Sites обслуживает только authenticated metadata workflows: account, `/me`, Mind
-list/create/rename, catalog, visibility, invitations, roles, transfer, deletion
-и personal tokens. Работа с OKF files происходит через MCP; browser может
-показывать лишь status/metadata, необходимые для управления.
+Release 0.3 Sites обслуживает authenticated control workflows: account, `/me`,
+Mind list/create/rename, catalog, visibility, invitations, roles, transfer,
+Connections, writable-target selection, token lifecycle, import/export и
+administrative deletion. Browser не получает общий raw OKF reader/editor:
+ordinary content discovery/read/search/history/standalone validation и
+exact-target commit остаются MCP surface. Import/export получают только bounded control-plane
+projection и authorized transfer/status/download, необходимые их lifecycle.
 
 Предлагаемые REST routes, internal command/query boundary и exact MCP
 tools/resources schemas зафиксированы в [API specification](specs/api.md).

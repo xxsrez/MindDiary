@@ -1,6 +1,7 @@
 # Plugin и OAuth Mind Diary
 
-Статус: accepted, обновлено 2026-08-24. OAuth Authorization Server, dual
+Статус: accepted historical Release 0.1/0.2 contract, обновлено 2026-08-27.
+OAuth Authorization Server, dual
 personal/OAuth MCP authentication, write step-up и connected-app revocation
 реализованы. Для Codex Desktop/CLI pilot 0.1 принят direct MCP package с OAuth
 при первом использовании. Blocking package/OAuth automation из ADR-0012
@@ -19,6 +20,33 @@ distribution boundary — в
 carrier релиза 0.1 уточнён
 [ADR-0012](../decisions/0012-synthetic-principal-release-gates.md) и
 [ADR-0019](../decisions/0019-release-0-1-codex-first-small-data-boundary.md).
+
+Этот документ сохраняет проверенный package/OAuth и tool contract первых
+релизов как as-built evidence. Он не является целевой картой product authority
+Release 0.3 и не переносит исторические binding/export tools в будущий Content
+MCP.
+
+## Product authority Release 0.3
+
+- Site создаёт и показывает Connections, отзывает их, управляет writable
+  target, токенами и остальными account/Mind controls.
+- Plugin и Content MCP только discover-ят доступные Minds, читают, ищут,
+  открывают историю, выполняют standalone validation и ordinary content commit
+  в один exact target, уже выбранный пользователем через Site.
+- Read не требует обязательного onboarding attach или mutable read binding:
+  доступные Minds выводятся из текущей identity, ACL и visibility при каждом
+  вызове. Plugin не выбирает и не переключает writable target.
+- Import/export lifecycle, membership, visibility, token management и
+  destructive account/Mind actions не публикуются как Content MCP tools.
+  Replace/delete файлов внутри exact content commit остаются content
+  mutation, а не административным удалением Mind или account.
+
+MD-337 отдельно определяет disposition каждого исторического tool/route, а
+MD-339 — точный access и writable-target binding contract. До этих решений
+текущие `get_mind_bindings`, `set_read_mind_binding`,
+`set_write_mind_binding`, `start_export` и связанные payloads ниже следует
+читать только как Release 0.1/0.2 as-built. MD-336 не меняет OAuth/token
+protocol, runtime, schemas, UI или deployment.
 
 ## Текущий implementation checkpoint
 
@@ -106,7 +134,7 @@ Diary доступной после обновления каталога. Он�
 - production endpoint Task Manager нельзя переносить в Mind Diary; exact
   resource остаётся UAT `/api/mcp` до отдельного production release.
 
-## Целевой пользовательский flow
+## Исторический пользовательский flow Release 0.1
 
 ### Первое подключение
 
@@ -150,7 +178,7 @@ bind-ит exact writable Mind, а commit передаёт immutable `write_bindi
   token не подставляется как скрытый fallback.
 - `Reconnect` запускает новый consent и создаёт новый grant.
 
-## Целевая архитектура
+## Историческая package/OAuth архитектура Release 0.1
 
 ```mermaid
 flowchart LR
@@ -413,7 +441,7 @@ OAuth и ACL. Изменение Site access policy является отдел�
 - reviewer-safe test account и privacy-minimized test data;
 - отдельного решения пользователя о production release и public submission.
 
-## Product UI
+## Product UI Release 0.1/0.2 as-built
 
 Repository contract разделяет ordinary Connections и Advanced MCP:
 
@@ -500,7 +528,7 @@ UAT evidence отдельно связывает exact Git SHA, Site deployment,
 plugin version/cache snapshot и automated receipt; external canary сохраняется
 как отдельное owner observation и не подменяет automated gate.
 
-## Этапы реализации
+## Исторические этапы реализации Release 0.1
 
 ### 0. Read-only resource spike
 

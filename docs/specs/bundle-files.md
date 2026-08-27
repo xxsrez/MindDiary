@@ -29,6 +29,20 @@ HTTP/MCP composition для local/workspace sources поверх MD-304 core; о
 меняет этот object/storage contract. Это не разрешает silent base64, arbitrary
 URL или local-path fallback.
 
+### Release 0.3 product authority
+
+Format-neutral bytes, manifest, containment, exact-revision read/download and
+atomic commit semantics ниже сохраняются. User-facing ingress/import and bulk
+export lifecycle belong to Sites control plane; Content MCP не управляет
+staging/import/export и не выбирает writable target. Его mutation boundary —
+ordinary exact-target content commit, который может использовать только
+server-approved input и остаётся fenced by current ACL/scope/HEAD.
+
+Historical `stage_bundle_file`, binding and export tool descriptions retained
+below document 0.1/0.2 compatibility, not the Release 0.3 operation register.
+MD-337 owns exact disposition; MD-339 owns target/binding compatibility and
+migration. Runtime, schemas, storage and UAT claims do not change in MD-336.
+
 ## Контекст и граница решения
 
 Проверенный внешний факт: OKF 0.2 задаёт переносимое дерево Markdown и ссылки
@@ -259,7 +273,7 @@ accepted in the
 lower applicable BundleFile/Mind/principal/Site limit wins. Implementation and
 capacity UAT remain separate; this slice does not infer larger values.
 
-## Upload and commit lifecycle
+## Historical upload surface and stable commit lifecycle
 
 `stage_bundle_file` is one-Mind content operation and requires `content:write`,
 an active exact `write_binding_id`, current write ACL and:
@@ -317,10 +331,13 @@ commit key/payload; it never restages or changes the key until reconciliation.
 
 ## Read and download lifecycle
 
-`list_bundle_files` requires `content:read`, exact read/write binding and one
-Mind/revision. It returns bounded path, advisory media type, size, SHA-256,
-revision ID, derived inline eligibility and deterministic reference diagnostics; no
-bytes, provider ID or URL.
+Historical Release 0.1/0.2 `list_bundle_files` requires `content:read`, exact
+read/write binding and one Mind/revision. Target Release 0.3 keeps the exact
+Mind/revision selector and current ACL/scope checks but removes binding as a
+read prerequisite; MD-339 defines the compatibility transition. The operation
+returns bounded path, advisory media type, size, SHA-256, revision ID, derived
+inline eligibility and deterministic reference diagnostics; no bytes, provider
+ID or URL.
 
 `get_bundle_file_download` selects exact revision + path, reauthorizes current
 token/scope/ACL/visibility and returns a new opaque one-use grant. Default TTL is
@@ -342,7 +359,7 @@ Task Manager evidence or model content.
 Existing `fetch` and MCP Resources remain Markdown/text-only. No binary/base64
 enters JSON-RPC `structuredContent` or model context automatically.
 
-## Deterministic export compatibility
+## Deterministic Site-owned export compatibility
 
 `MD-OKF-ZIP-1` remains byte-for-byte unchanged and Markdown-only. Existing
 v1/v2/v3 revisions and v4 Markdown-only revisions can request it. A mixed revision never

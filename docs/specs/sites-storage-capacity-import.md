@@ -28,6 +28,22 @@ Space-scoped storage, capacity/reservation и отдельный Markdown import
 и server-generated streaming остаются отдельными local BundleFile paths;
 hosted/native UAT для них по-прежнему требует exact evidence.
 
+### Release 0.3 product authority
+
+Import and export remain Sites control-plane workflows. Site owns plan,
+reservation, staging/validation/finalization, status, cancellation, export
+creation and authorized archive download. Content MCP may discover/read/search/
+history/validate the exact resulting revision and perform a normal atomic
+content commit in its server-approved exact target, but it is not a second
+import/export administrator and does not require read bindings.
+
+Этот authority split не меняет storage, capacity, manifest, checkpoint or GC
+invariants ниже. Exact route/tool disposition belongs to MD-337; writable-target
+and binding migration to MD-339. Current local/UAT status remains unchanged.
+Import validation и final revision publish — внутренние этапы этой единой
+Site-owned operation, не второй standalone validate или ordinary content-write
+surface.
+
 ## Цель и граница
 
 Обычная правка большого Mind не должна читать и заново записывать весь corpus,
@@ -248,13 +264,14 @@ cancel and expiry move reservation to cleanup-pending; a persisted cursor
 reclaims temporary bytes before final release. Unknown outcome reconciles exact
 state before retry.
 
-## Markdown-only import profile
+## Sites-only Markdown import profile
 
 Workflow: `plan -> reserve -> stage batches -> validate -> commit -> finalize`.
 An import session is private to the current Sites-authenticated principal and
 Space, pinned to exact `expected_revision`, idempotency key and contract
-version. The first-party UI does not borrow an MCP credential binding; a future
-MCP import adapter would additionally require its current write binding.
+version. The first-party UI does not borrow an MCP credential binding. The
+historical possibility of an MCP import adapter is no longer target product
+authority in Release 0.3; exact compatibility disposition belongs to MD-337.
 Default TTL is 24 hours; progress/checkpoints survive Worker restart.
 
 ### Plan and path rules
@@ -327,7 +344,7 @@ commit; canonical browse/fetch works immediately. Finalize records the
 idempotent result and schedules staged cleanup. A stale HEAD returns conflict;
 server never rebases or partially imports automatically.
 
-## Export, staging and GC lifecycle
+## Sites-owned export, staging and GC lifecycle
 
 - Staging/import objects have explicit owner/session/state/expiry and are not
   reader-visible.

@@ -1,7 +1,7 @@
 # Roadmap и стратегия проверки Mind Diary
 
 Статус: зафиксированная product direction владельца проекта, обновлено
-2026-08-25.
+2026-08-27.
 Документ определяет последовательность проверки и развития продукта, но не
 является implementation specification, календарным обещанием или свидетельством
 реализованных функций.
@@ -60,9 +60,35 @@ Mind Diary должен сделать работу с OKF заметно про
 - пользователь получает готовый Mind без ручного bootstrap storage;
 - Minds дают понятную гранулярность corpus и access boundary;
 - roles, visibility и revisions обслуживаются сервером;
-- Codex через один MCP connection явно подключает несколько read Minds и
-  единственный versioned writable Mind без ослабления ACL;
-- canonical data остаются переносимыми через deterministic export.
+- Site остаётся единственным местом управления account, Minds metadata,
+  visibility, memberships, Connections, writable target, tokens,
+  import/export и административными destructive actions;
+- Codex через один MCP connection discover-ит и читает разрешённые Minds без
+  обязательного read-binding onboarding, а content commit направляет только в
+  заранее выбранный на Site exact writable Mind без ослабления ACL;
+- canonical data остаются переносимыми через deterministic export, который
+  пользователь запускает и получает через Site control plane.
+
+### Authority contract Release 0.3
+
+Product direction после historical Release 0.1 разделяет surfaces по типу
+намерения, а не по тому, где удобнее разместить один endpoint:
+
+- **Web control plane** владеет всеми изменениями service authority и
+  lifecycle: account/Mind metadata, visibility, participants, Connections,
+  writable target, credentials, import/export и whole-account/whole-Mind либо
+  credential destructive actions.
+- **Content MCP** владеет discovery, explicit-Mind read/search/history,
+  standalone validation и ordinary atomic exact-target content commits. Он не
+  управляет control state и не запускает административный export.
+
+Replace/delete files внутри такого commit остаются versioned content change,
+а не обходом control plane. Exact disposition существующего operation catalog
+принадлежит MD-337; access/binding representation и migration — MD-339. До
+этих задач documented Release 0.1/0.2 tool surface остаётся историческим
+as-built, а не текущей целевой authority. Это решение не выбирает новые UI,
+description semantics, website AI, anonymous publication, token format или
+production/AWS topology.
 
 Пользователь уже оплачивает inference своего Codex client, поэтому Mind Diary
 не несёт LLM API cost в первой фазе. Sites-only UAT выбран как дешёвый
@@ -129,6 +155,13 @@ canonical promotion; exact-SHA UAT capacity/import evidence ещё отсутс�
 Этот profile и его UAT не входят в terminal Release 0.1. ZIP/binary import,
 legacy OKF 0.1, remote sync и cross-Mind merge остаются отдельными post-MVP
 decisions.
+
+User-facing plan/reserve/stage/validate/commit/cancel import lifecycle и
+экспорт exact revision принадлежат Site control plane. Content MCP может после
+этого читать/валидировать exact result и делать обычный exact-target content
+commit, но не становится вторым import/export administrator. Import validation
+и финальный import commit остаются этапами одной Site-owned bulk operation, а
+не дублирующими standalone validate или ordinary content-write surfaces.
 
 ### Named checkpoints
 

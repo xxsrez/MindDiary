@@ -8,7 +8,17 @@ modern/compatibility MCP (`MD-230`) и hard content enforcement (`MD-232`)
 `dev.mind-bindings` и `uat.mind-bindings` join (`MD-235`); UAT evidence остаётся
 привязанным к конкретному candidate/deployment и не выводится из local tests.
 
-## Назначение
+Этот документ остаётся historical Release 0.1/0.2 as-built contract и evidence
+source. Он не определяет target authority Release 0.3: read не требует
+explicit binding/attach, а единственный writable target выбирается и меняется
+только через Sites control plane. Content MCP может discover/read explicit
+Mind и commit-ить в server-approved exact target, но не управляет binding/
+Connection state. Exact replacement records, migration and compatibility
+принадлежат MD-339; keep/move/retire disposition existing operations — MD-337.
+До них runtime и UAT receipts ниже сохраняют прежнюю semantics без silent
+migration.
+
+## Historical Release 0.1/0.2 назначение
 
 Mind ACL и token scopes отвечают на вопрос, **что principal в принципе может
 сделать**. Binding state отвечает на другой вопрос: **какие Minds конкретный

@@ -5,6 +5,14 @@ authenticated web/control и Codex MCP flows. Документы ниже раз
 проверенные внешние факты, реализованный repository behavior, UAT
 evidence, предлагаемый дизайн и ещё не проверенные расширенные workflows.
 
+Целевая product authority Release 0.3 описана прежде всего в
+[обзоре](overview.md#product-authority-после-release-01),
+[roadmap](roadmap.md#authority-contract-release-03),
+[доменной модели](specs/domain-model.md#content-plane-и-control-plane) и
+[архитектуре](architecture.md#целевая-authority-boundary-release-03). Historical
+Release 0.1/0.2 API, Connections и Mind bindings сохраняются как as-built; их
+operation disposition и migration принадлежат MD-337/MD-339.
+
 ## Начать отсюда
 
 1. [Обзор продукта](overview.md) — зачем нужен Mind Diary, какую проблему он
@@ -15,8 +23,8 @@ evidence, предлагаемый дизайн и ещё не проверен�
    основная post-MVP AWS direction.
 3. [Базовая айдентика](brand.md) — `Mind Diary → Mind → Memory`, знак, палитра,
    типографика, голос и canonical assets.
-4. [Архитектура](architecture.md) — переносимое ядро, ревизии OKF, MCP surface,
-   dev/UAT/production environments и post-MVP AWS path.
+4. [Архитектура](architecture.md) — переносимое ядро, целевое разделение Web
+   control plane и Content MCP, ревизии OKF, environments и post-MVP AWS path.
 5. [Доменная модель и доступ](specs/domain-model.md) — KnowledgeSpace,
    содержимое, memberships, роли и owner invariants.
 6. [URL-адресация и персонализированное открытие](specs/personalized-opening.md)
@@ -24,31 +32,29 @@ evidence, предлагаемый дизайн и ещё не проверен�
    personalization.
 7. [Спецификация первого прототипа](specs/mvp.md) — первый проверяемый vertical
    slice и его критерии готовности.
-8. [REST и MCP API](specs/api.md) — предлагаемый wire-level contract control
-   REST, internal application API, MCP tools/resources, schemas и errors.
-9. [Plugin и OAuth](specs/plugin-connector.md) — принятый профиль установки
-   Mind Diary из Srez Marketplace: direct MCP package, OAuth 2.1 + PKCE при
-   первом использовании, identity binding, UAT pilot и production/public
-   границы.
+8. [REST и MCP API](specs/api.md) — historical 0.1/0.2 wire contract и граница
+   будущей operation-disposition работы без premature schema migration.
+9. [Plugin и OAuth](specs/plugin-connector.md) — historical Release 0.1/0.2
+   direct MCP package и OAuth profile плюс Release 0.3 content-only plugin
+   authority без Connection/target controls.
 10. [Connections, Advanced MCP и Codex Help](specs/connection-experience.md) —
-   принятые ordinary/advanced routes, opaque `connection_ref`, bounded
-   projections, write step-up states и browser acceptance.
-11. [Mind bindings](specs/mind-bindings.md) — принятый contract множества
-   read bindings, единственного versioned writable target, CAS/lifecycle,
-   MCP tools, compatibility и automatic-capture boundary.
+   historical Release 0.1 routes/projections и Release 0.3 Sites-only ownership
+   Connections/writable target.
+11. [Mind bindings](specs/mind-bindings.md) — historical Release 0.1/0.2
+   binding contract, сохранённый до отдельного MD-339 replacement/migration.
 12. [Границы реализации](specs/implementation-boundaries.md) — trusted
    `ActorContext`, application ports/façades, transaction boundaries и
    enforceable dependency rules для будущего runtime.
-13. [Automatic knowledge capture](specs/automatic-capture.md) — принятый
-   default-off routine capture profile, exact write-generation pinning,
-   provenance, disclosure, deduplication и confirmation boundary.
+13. [Automatic knowledge capture](specs/automatic-capture.md) — historical
+   default-off capture profile и Release 0.3 граница: Site владеет policy и
+   target, Content MCP — только возможным exact-target content commit.
 14. [Traceability matrix MVP 0.1](specs/traceability.md) — критерии 1–29,
    owning stories, executable/release evidence, обязательные live flows,
    post-MVP denylist и implementation decisions.
 15. [BundleFile](specs/bundle-files.md) — принятый Release 0.2 producer-defined
    format-neutral contract: explicit manifest v4, arbitrary opaque files,
    256 MiB streaming, safe-raster preview, download-only containment, mixed
-   atomic commits и отдельный deterministic export profile.
+   atomic commits и Sites-owned import/export boundary Release 0.3.
 16. [Единый file-ingress contract](specs/file-ingress.md) — принятый portable
    boundary, обязательный Release 0.2 readable-path profile через packaged
    local companion и отложенная Release 0.3 matrix direct/provider, connector
@@ -57,7 +63,7 @@ evidence, предлагаемый дизайн и ещё не проверен�
 17. [Sites storage, capacity и Markdown import](specs/sites-storage-capacity-import.md)
    — принятый post-MVP Brain-scale contract: Space-scoped content addressing, v3 delta
    manifests, reconstructable accounting/reservations, bounded Markdown import,
-   streaming export/GC и migration/rollback boundary.
+   Sites-owned streaming export/GC и migration/rollback boundary.
 18. [Операторский каталог principals и последняя активность](specs/service-operator-directory.md)
    — принятый read-only UAT contract отдельной service-operator authority,
    success-only web/MCP summary, privacy-minimized directory и deletion.

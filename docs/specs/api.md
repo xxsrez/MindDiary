@@ -1,6 +1,6 @@
 # REST и MCP API Mind Diary
 
-Статус: proposal для верификации, обновлено 2026-08-25. Документ уточняет
+Статус: proposal для верификации, обновлено 2026-08-27. Документ уточняет
 wire-level контракты первого прототипа на основе принятых product decisions.
 Product API и direct MCP route/compatibility repair реализованы, развёрнуты как
 single-principal UAT в OpenAI Sites и проверены raw modern calls и реальным
@@ -10,6 +10,12 @@ repository candidate. Для Codex Desktop/CLI pilot 0.1 принят direct MCP
 automation остаются blocking; ADR-0019 дополнительно требует blocking
 real-account first-user UAT receipt. Machine-readable OpenAPI и MCP JSON Schemas
 проверяются на соответствие этому документу и реализации.
+
+Wire catalog ниже сохраняет historical Release 0.1/0.2 as-built и не
+переписывается MD-336. Целевая product authority Release 0.3 отделена явно;
+exact route/tool disposition принадлежит MD-337, а access/binding schemas и
+migration — MD-339. Поэтому наличие current route/tool в этом документе не
+делает его владельцем будущей authority.
 
 ADR-0015 и [BundleFile specification](bundle-files.md) сохраняют immutable
 staging/commit/download baseline; ADR-0021 принимает Release 0.2 wire target:
@@ -75,6 +81,8 @@ flowchart LR
     Agent --> Mcp --> Core
 ```
 
+Historical Release 0.1/0.2 layout:
+
 1. **First-party REST control API** обслуживает Sites UI: account, metadata
    Minds, visibility, invitations, memberships, ownership, deletion и MCP
    tokens. Это не публичный developer API.
@@ -87,6 +95,24 @@ flowchart LR
    вызывают REST и MCP adapters. В первом Sites deployment это не обязательно
    отдельная сеть или HTTP service.
 
+Target Release 0.3 меняет product ownership, но не задаёт здесь premature wire
+diff:
+
+| Surface | Target authority |
+|---|---|
+| **First-party Sites control plane** | Account/Mind metadata and lifecycle, visibility, memberships/ownership, Connections, writable-target selection, token lifecycle, import/export orchestration/status/download и administrative destructive actions. |
+| **Content MCP** | Discovery, explicit-Mind browse/search/fetch/history/standalone validation и ordinary atomic content commit в server-approved exact target. No control operations or administrative export. |
+
+Target read не требует mutable read binding/attach step. MCP не выбирает
+writable target; его commit только cross-check-ит server-approved target вместе
+с current ACL/scope/HEAD. Replace/delete в changeset остаются content semantics
+и не открывают account/Mind/credential lifecycle. Exact keep/move/retire
+решения по routes/tools остаются MD-337, а exact access shape — MD-339.
+
+Validation и финальный revision publish внутри Site-owned import являются
+этапами import operation, а не отдельными inbound validate/ordinary-commit
+operations. Internal reuse validator/HEAD CAS не меняет surface ownership.
+
 Raw Markdown не выдаётся browser REST API. Узкий Markdown import ingress
 принимает bytes только на запись в private staging и не добавляет browser read
 surface; остальные content reads идут через authenticated MCP. Если adapters позже станут
@@ -95,7 +121,8 @@ surface; остальные content reads идут через authenticated MCP.
 
 ## Что уже принято и что предлагается здесь
 
-Принятые product invariants, которые этот документ не меняет:
+Historical Release 0.1/0.2 product invariants, которые current wire catalog не
+переписывает:
 
 - authenticated-only доступ и private-by-default;
 - один principal-bound MCP connection для discovery всех разрешённых Minds и
@@ -441,7 +468,7 @@ Rules:
 `as_of` выбирает revision с максимальным `revision_number`, для которой
 `committed_at <= as_of`. Любой resolved non-HEAD selector read-only.
 
-## First-party REST control API
+## Historical Release 0.1/0.2 first-party REST control API
 
 ### Transport и authentication
 
@@ -587,6 +614,10 @@ Problem Details response:
 
 `mind_ref` в REST — `me` или canonical `space_handle`. Adapter разрешает его
 в internal `space_id` и только затем authorizes request.
+
+Таблица routes выше описывает current wire compatibility. Она не является
+Release 0.3 operation register: MD-337 отдельно определит disposition import,
+export и target-management calls; MD-339 — access/binding calls и schemas.
 
 Internal operator query принимает bounded `query`, `state`,
 `registered_from|to`, `activity_from|to`, `never_active`, `sort`, `direction`,
@@ -1010,7 +1041,7 @@ malformed, expired и revoked bearer получают `401`. Valid read-only bea
 `_meta["mcp/www_authenticate"]` с write challenge, чтобы host мог начать native
 step-up.
 
-## Internal application API
+## Historical Release 0.1/0.2 internal application API
 
 Internal API — не generic CRUD. Adapter создаёт trusted `ActorContext` и
 вызывает один query/command:
@@ -1191,6 +1222,10 @@ exception text. Static assets не являются trigger, concurrent requests
 доказывает новую isolate/cache boundary через обычный `fetch`.
 
 ## Content MCP
+
+Раздел ниже сохраняет historical Release 0.1/0.2 wire contract. Target
+authority Release 0.3 задаётся в начале документа; exact catalog changes
+принадлежат MD-337/MD-339.
 
 ### Endpoint selection
 
@@ -1512,7 +1547,7 @@ Recoverable application error:
 `2025-11-25` adapter сохраняет тот же tool payload, но удаляет только modern
 transport metadata (`resultType`, `ttlMs`, `cacheScope`) из внешнего result.
 
-### Tool catalog
+### Historical tool catalog
 
 | Tool | Scope | `readOnlyHint` | `destructiveHint` | `openWorldHint` |
 |---|---|:---:|:---:|:---:|
@@ -1557,6 +1592,11 @@ locator. Both reconcile tools are read-only but deliberately write-scoped:
 they reauthorize the exact current write generation and inspect only the
 original stage/commit idempotency outcome. `missing` never uploads bytes,
 reserves capacity, writes an object or advances HEAD.
+
+Этот catalog не задаёт Release 0.3 ownership. Binding/target mutations и
+administrative export отсутствуют в target MCP authority, а explicit read
+attach не является precondition. MD-337 владеет exact disposition каждого
+name; MD-339 — compatibility access state and wire migration.
 
 ## Common MCP schemas
 

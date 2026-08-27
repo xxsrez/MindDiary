@@ -5,7 +5,17 @@ information architecture и server-owned projection для Release 0.1. Реал
 и live UAT evidence проверяются отдельно; наличие этого контракта не является
 утверждением о развёрнутом поведении.
 
-## Цель и граница поверхностей
+Release 0.1 contract ниже сохраняется как historical as-built и не становится
+целевой authority Release 0.3. В Release 0.3 Connections остаются Sites-only
+control plane: Site показывает connection, readable access projection и
+единственный writable target и только Site может выбрать/switch/clear target
+или revoke connection. Content MCP discover-ит и читает разрешённые Minds без
+mandatory attach/read-binding onboarding и не изменяет Connection state.
+Exact replacement/migration binding mechanics принадлежат MD-339, а
+disposition существующих operations — MD-337; route/UI redesign в этот
+контрактный шаг не входит.
+
+## Historical Release 0.1 цель и граница поверхностей
 
 Обычный пользователь должен видеть подключение Mind Diary как три действия:
 

@@ -1,6 +1,6 @@
 # Доменная модель и доступ
 
-Статус: proposal, обновлено 2026-08-25. Product decisions первого прототипа
+Статус: proposal, обновлено 2026-08-27. Product decisions первого прототипа
 приняты для первого прототипа; format-neutral BundleFile amendment принят
 отдельно для Release 0.2. Точные wire schemas принадлежат
 [API specification](api.md); repository baseline уже содержит domain,
@@ -27,8 +27,9 @@ Mind Diary: у него есть стабильная identity, дерево OKF
 | `BundleFile` | Принятый producer-defined regular non-Markdown file одной revision с `kind: opaque`; в UI attachment/asset. OKF 0.2 не задаёт эту entity или manifest. Release 0.2 admission format-neutral; preview/index policy separate. |
 | `FileIngressSource` | Closed provenance class `session_attachment`, `local_path`, `workspace/generated_artifact`, `connector_object`, `bounded_in_memory` или `server_generated`; не authorization identity. |
 | `VerifiedFileInput` | Adapter-produced bounded byte stream plus source kind, safe filename, advisory media evidence, size and SHA-256; provider IDs/URLs and local paths terminate at the adapter boundary. |
-| `staged_file_ref` | Service-owned quarantined/verified locator pinned to owner, Space and write binding; it is consumed atomically by a BundleFile changeset and is not a provider/local locator. |
-| `ImportSession` | Private resumable Markdown-only staging aggregate, pinned to principal/write binding/Space/base revision/idempotency key; не revision и не reader-visible content. |
+| `staged_file_ref` | Historical 0.1/0.2 service-owned quarantined/verified locator pinned to owner, Space and write binding; it is consumed atomically by a BundleFile changeset and is not a provider/local locator. Target representation belongs to MD-339. |
+| `ImportSession` | Historical 0.1/0.2 private resumable Markdown-only staging aggregate, pinned to principal/write binding/Space/base revision/idempotency key; не revision и не reader-visible content. Target Site-owned import representation is outside MD-336. |
+| `Writable target` | Выбранный через Sites control plane единственный Mind, в который connection/credential может направить content commit; не membership, не token scope и не MCP-managed setting. Exact record/migration принадлежат MD-339. |
 | `CapacityReservation` | Durable bounded budget for one admitted operation; consumed/released atomically with canonical transition or cleanup. |
 | `Index` / `Log` | Reserved OKF `index.md` и `log.md`, а не обычные `KnowledgeEntry`. |
 | `SpaceMembership` | Принятая связь principal с обычным Mind, ролью и lifecycle state. |
@@ -55,6 +56,8 @@ flowchart LR
     Bundle["OKF Markdown projection"]
     File["BundleFile object"]
     Token["MCP access token"]
+    Connection["OAuth Connection"]
+    Writable["Site-selected writable target"]
 
     Principal -->|"exactly one, sole Owner"| Personal
     Principal -->|"zero or many"| Invitation
@@ -65,16 +68,22 @@ flowchart LR
     Revision -->|"materialize"| Bundle
     Revision -->|"manifest exact bytes"| File
     Principal -->|"zero or many"| Token
-    Token -->|"discover currently allowed Minds"| Space
-    Token -->|"owns one binding set"| MindBindingSet
-    MindBindingSet -->|"0..N read, 0..1 write"| Space
+    Principal -->|"zero or many"| Connection
+    Principal -->|"current ACL / visibility"| Space
+    Connection -->|"zero or one"| Writable
+    Token -->|"zero or one"| Writable
+    Writable -->|"exact commit target"| Space
     Token -->|"always"| Personal
 ```
 
 Один principal может участвовать во многих ordinary Minds. Один MCP connection
-представляет principal, а не отдельный Mind; OAuth grant либо personal token
-владеет независимым binding set `0..N` read и `0..1` write. Каждая content
-operation явно выбирает ровно один Mind и одну revision.
+представляет principal, а не отдельный Mind. Historical Release 0.1 связывал
+OAuth grant либо personal token с independent binding set `0..N` read и `0..1`
+write. Release 0.3 сохраняет exact-target write invariant, но переносит выбор
+writable target исключительно в Sites control plane и убирает mandatory read
+binding из пользовательского read path. Exact replacement records, migration
+и wire compatibility принадлежат MD-339. Каждая content operation по-прежнему
+явно выбирает ровно один Mind и одну revision.
 
 ## Account и identity
 
@@ -313,14 +322,16 @@ capabilities, а не числовое значение enum.
 
 Full export — bulk convenience operation, а не security boundary: Reader и
 baseline Reader уже могут прочитать тот же corpus по файлам. Export требует
-`content:read`, фиксирует exact revision, повторно проверяет current access при
-выдаче download URL и может иметь отдельные rate/size limits.
+current read access, фиксирует exact revision, повторно проверяет current access
+при выдаче download URL и может иметь отдельные rate/size limits. В Release 0.3
+его lifecycle запускает и показывает только Sites control plane; право Reader
+не означает MCP export tool.
 
 Admin не может создать, изменить или удалить Admin/Owner. Owner не назначает
 второго Owner обычной role mutation: только атомарный `transfer_ownership`
 сохраняет invariant единственного Owner.
 
-Effective permissions вызова равны:
+Historical Release 0.1 вычислял effective permissions вызова так:
 
 ```text
 current role or baseline visibility grant
@@ -335,11 +346,18 @@ MCP arguments или cached token claims. Opaque access token определяе
 principal и scopes; Authorizer читает актуальное состояние Mind на каждом
 вызове.
 
+Release 0.3 сохраняет fresh ACL/scope checks, но content read использует
+explicit Mind selector без обязательной read binding, а content commit
+дополнительно обязан совпасть с server-approved writable target, выбранным на
+Site. Точное представление этого target и переход с historical binding set
+задаёт MD-339.
+
 `content:write` включает `content:read`; write-only token в первом прототипе не
-существует. Scope и ACL не выбирают destination: content read требует read
-binding либо current write binding, а commit — exact active immutable
-`write_binding_id`. Полный lifecycle и CAS описаны в
-[Mind bindings](mind-bindings.md).
+существует. Historical 0.1 content read требовал read binding либо current
+write binding, а commit — exact active immutable `write_binding_id`; этот
+as-built lifecycle сохранён в [Mind bindings](mind-bindings.md). Он не задаёт
+Release 0.3 authority: read binding больше не является обязательным, а writable
+target меняется только через Site.
 
 ## Visibility
 
@@ -372,7 +390,7 @@ Content mutation из MCP сразу пытается создать committed r
 server-side draft, diff confirmation и approval artifact в первом прототипе
 нет.
 
-Каноническая команда:
+Historical Release 0.1 wire form канонической команды:
 
 ```text
 commit_changeset(
@@ -394,6 +412,11 @@ commit_changeset(
 меняет ничего. Stale `expected_revision` возвращает `409 Conflict` с current
 revision; клиент перечитывает данные и повторно строит изменение. Автоматический
 semantic merge, branches и last-writer-wins не поддерживаются.
+
+Release 0.3 сохраняет observable result — один atomic commit в
+server-approved exact target под current ACL/scope/HEAD CAS, — но не закрепляет
+historical `write_binding_id` как будущую wire shape. Exact access/binding
+contract принадлежит MD-339, а disposition operation names — MD-337.
 
 Accepted Brain-scale storage model materializes manifest as a separately
 digested Space-scoped object. Legacy v3 uses the historical closed-media entry
@@ -467,16 +490,31 @@ account deletion, напротив, в прототипе физически у�
 
 ## Content plane и control plane
 
-Content MCP не публикует membership и ownership tools рядом с недоверенным
-corpus:
+Release 0.3 задаёт единственного владельца каждой product authority:
 
-- **Sites control plane:** accounts, Minds, visibility, invitations,
-  memberships, roles, ownership, deletion, MCP tokens и settings;
-- **Content MCP:** discovery allowed Minds, управление per-grant/token read и
-  singleton write bindings, bound browse/search/fetch/history, validate/export
-  и immediate content commits;
-- **Internal application API:** единая граница use cases, которой пользуются
-  web и MCP adapters. Raw file endpoints браузеру не выдаются.
+| Surface | Domain capabilities |
+|---|---|
+| **Sites control plane** | Account/profile; Mind create/metadata/visibility; invitations, memberships, roles, ownership; Connections; writable-target selection; token lifecycle; import/export lifecycle; account/Mind/connection/credential destructive actions. |
+| **Content MCP** | Discovery allowed Minds; explicit-Mind browse/search/fetch/history/standalone validation; ordinary atomic content commit только в server-approved exact target. |
+| **Internal application API** | Общие policies/use cases за adapters; не customer surface и не способ дать одному adapter capabilities другого. |
+
+Content MCP не публикует membership, ownership, Connection, writable-target,
+token, import/export или administrative deletion tools рядом с недоверенным
+corpus. Read не требует отдельного attach state; current ACL/visibility и
+explicit Mind/revision проверяются на каждом call. Replace/delete files внутри
+exact-target commit остаются versioned content mutation, но не расширяют MCP до
+whole-Mind/account или credential lifecycle. Browser, в свою очередь, не
+получает raw content editor/read API только потому, что control plane владеет
+import/export orchestration.
+
+Import-specific validation и публикация import revision остаются внутренними
+этапами Site-owned bulk import aggregate. Они могут переиспользовать domain
+validator и HEAD CAS, но не создают второй inbound standalone-validation или
+ordinary content-commit authority.
+
+Historical Release 0.1/0.2 публиковал MCP binding-management и export tools;
+это as-built compatibility, а не target authority. MD-337 владеет exact
+operation disposition, MD-339 — access/binding replacement and migration.
 
 Service-wide operator authority не является ролью Space. Она задаётся только
 constructor configuration по opaque `principal_id`, открывает один read-only
