@@ -52,7 +52,8 @@ Runner выполняет все `GD-UAT-001`–`GD-UAT-015` из machine contra
 - сверяет binary source и staged/downloaded bytes byte-for-byte по size и
   SHA-256;
 - требует exact explicit export representation для Docs/Sheets/Slides;
-- подтверждает shared-drive metadata/export path для всех трёх native типов;
+- подтверждает shared-drive metadata path и native `files.export` по exact
+  `fileId + mimeType` для всех трёх типов без неподдерживаемых query parameters;
 - проверяет revoke, ownership/version mutation, export race, oversize, timeout
   и unknown provider result как fail-closed без existence leak;
 - доказывает current Mind write authorization до provider content read;

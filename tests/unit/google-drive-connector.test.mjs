@@ -245,14 +245,15 @@ test("Docs, Sheets and Slides require an explicit supported export snapshot", as
       assert.equal(
         exportCalls.every(({ url }) =>
           url.searchParams.get("mimeType") === fixture.exportMediaType &&
-          url.searchParams.get("supportsAllDrives") === "true"
+          url.searchParams.has("supportsAllDrives") === false
         ),
         true,
       );
       assert.equal(
-        provider.calls.every(({ url }) =>
-          url.searchParams.get("supportsAllDrives") === "true"
-        ),
+        provider.calls.filter(({ url }) => !url.pathname.endsWith("/export"))
+          .every(({ url }) =>
+            url.searchParams.get("supportsAllDrives") === "true"
+          ),
         true,
       );
     });

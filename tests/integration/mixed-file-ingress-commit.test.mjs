@@ -473,8 +473,8 @@ test("mixed ingress commits real source services atomically and reconciles every
       async fetcher(input) {
         const url = new URL(String(input));
         assert.equal(url.origin, "https://www.googleapis.com");
-        assert.equal(url.searchParams.get("supportsAllDrives"), "true");
         if (url.pathname.endsWith("/export")) {
+          assert.equal(url.searchParams.has("supportsAllDrives"), false);
           assert.equal(url.searchParams.get("mimeType"), nativeMediaType);
           return new Response(FIXTURES.connectorNativeDocx, {
             headers: {
@@ -483,6 +483,7 @@ test("mixed ingress commits real source services atomically and reconciles every
             },
           });
         }
+        assert.equal(url.searchParams.get("supportsAllDrives"), "true");
         return new Response(JSON.stringify({
           id: nativeObjectId,
           name: "Synthetic shared-drive document",

@@ -333,7 +333,6 @@ function exportUrl(objectId: string, mediaType: string): string {
   const url = new URL(
     `${DRIVE_FILES_ENDPOINT}${encodeURIComponent(objectId)}/export`,
   );
-  url.searchParams.set("supportsAllDrives", "true");
   url.searchParams.set("mimeType", mediaType);
   return url.href;
 }
