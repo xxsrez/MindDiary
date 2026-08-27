@@ -8,8 +8,21 @@ import {
   MarkdownImportError,
   MarkdownImportService,
 } from "@mind-diary/application-content";
-import { CapabilityAuthorizer } from "@mind-diary/application-ports";
-import { CAPABILITIES, MARKDOWN_MEDIA_TYPE, version } from "@mind-diary/domain";
+import {
+  CapabilityAuthorizer,
+  REVISION_MANIFEST_MEDIA_TYPE,
+} from "@mind-diary/application-ports";
+import {
+  CAPABILITIES,
+  MARKDOWN_MEDIA_TYPE,
+  REVISION_MANIFEST_FORMAT_V4,
+  bundleFileMediaType,
+  createCanonicalRevisionEnvelope,
+  createRevisionManifest,
+  serializeRevisionManifest,
+  version,
+} from "@mind-diary/domain";
+import { validateOkfBundle } from "@mind-diary/okf-codec";
 import { MINDS, PRINCIPALS } from "@mind-diary/test-fixtures";
 
 const ENCODER = new TextEncoder();
@@ -89,7 +102,11 @@ function effects() {
   };
 }
 
-async function seed(objects, metadata) {
+async function seed(objects, metadata, files = [{
+  path: "index.md",
+  mediaType: MARKDOWN_MEDIA_TYPE,
+  bytes: ENCODER.encode("---\nokf_version: \"0.2\"\n---\n\n# Before\n"),
+}]) {
   const revisions = new CanonicalRevisionCoordinator({ objects, revisions: metadata });
   const committed = await revisions.commit({
     spaceId: MINDS.ordinary.spaceId,
@@ -98,14 +115,79 @@ async function seed(objects, metadata) {
     committedAt: T0,
     committedBy: { kind: "principal", principalId: PRINCIPALS.owner.principalId },
     summary: "Initial import fixture",
-    files: [{
-      path: "index.md",
-      mediaType: MARKDOWN_MEDIA_TYPE,
-      bytes: ENCODER.encode("---\nokf_version: \"0.2\"\n---\n\n# Before\n"),
-    }],
+    files,
   });
   assert.equal(committed.kind, "committed");
   return revisions;
+}
+
+async function seedOpaqueSnapshot(objects, metadata) {
+  const revisions = await seed(objects, metadata);
+  const markdownBytes = ENCODER.encode(
+    "---\nokf_version: \"0.2\"\n---\n\n# Before\n\n![Asset](assets/existing.png)\n",
+  );
+  const markdownObject = await objects.putSpaceCanonicalObject({
+    kind: "markdown",
+    spaceId: MINDS.ordinary.spaceId,
+    bytes: markdownBytes,
+    mediaType: MARKDOWN_MEDIA_TYPE,
+    createdAt: T1,
+  });
+  const opaqueSources = [
+    {
+      path: "assets/existing.png",
+      bytes: Uint8Array.from([0x89, 0x50, 0x4e, 0x47]),
+      mediaType: bundleFileMediaType("image/png"),
+    },
+  ];
+  const opaqueObjects = await Promise.all(opaqueSources.map((file) =>
+    objects.putBundleFile({
+      spaceId: MINDS.ordinary.spaceId,
+      bytes: file.bytes,
+      mediaType: file.mediaType,
+      createdAt: T1,
+    })));
+  const manifest = createRevisionManifest([
+    {
+      kind: "markdown",
+      path: "index.md",
+      sha256: markdownObject.object.sha256,
+      mediaType: MARKDOWN_MEDIA_TYPE,
+      size: markdownObject.object.size,
+    },
+    ...opaqueSources.map((file, index) => ({
+      kind: "opaque",
+      path: file.path,
+      sha256: opaqueObjects[index].object.sha256,
+      mediaType: file.mediaType,
+      size: opaqueObjects[index].object.size,
+    })),
+  ], REVISION_MANIFEST_FORMAT_V4);
+  const manifestBytes = ENCODER.encode(serializeRevisionManifest(manifest));
+  const manifestObject = await objects.putSpaceCanonicalObject({
+    kind: "revision_manifest",
+    spaceId: MINDS.ordinary.spaceId,
+    bytes: manifestBytes,
+    mediaType: REVISION_MANIFEST_MEDIA_TYPE,
+    createdAt: T1,
+  });
+  const envelope = createCanonicalRevisionEnvelope({
+    revisionId: "revision_import_opaque",
+    spaceId: MINDS.ordinary.spaceId,
+    revisionNumber: 2,
+    parentRevisionId: "revision_import_initial",
+    committedAt: T1,
+    committedBy: { kind: "principal", principalId: PRINCIPALS.owner.principalId },
+    manifest,
+    manifestHash: manifestObject.object.sha256,
+    manifestSize: manifestObject.object.size,
+    summary: "Opaque import fixture",
+  });
+  assert.equal((await metadata.commitRevision({
+    expectedHeadRevisionId: "revision_import_initial",
+    envelope,
+  })).kind, "committed");
+  return { revisions, opaqueSources };
 }
 
 async function plannedFiles(objects) {
@@ -186,6 +268,75 @@ test("Markdown import rejects non-canonical, reserved, encoded and overlong path
       error.code === "invalid_import_request" &&
       error.failures.length === invalidPaths.length &&
       error.failures.every((failure) => failure.code === "invalid_import_path"),
+  );
+});
+
+test("exact-HEAD plan reports add, replace, delete, unchanged and seals idempotent descriptors", async () => {
+  const objects = new InMemoryObjectStore();
+  const metadata = new InMemoryRevisionMetadataStore();
+  const initialSources = [
+    { path: "index.md", bytes: ENCODER.encode("# Unchanged\n") },
+    { path: "concepts/replaced.md", bytes: ENCODER.encode("# Before\n") },
+    { path: "concepts/deleted.md", bytes: ENCODER.encode("# Delete me\n") },
+  ];
+  const revisions = await seed(objects, metadata, initialSources.map((file) => ({
+    ...file,
+    mediaType: MARKDOWN_MEDIA_TYPE,
+  })));
+  authorize(metadata);
+  const imports = service({
+    metadata,
+    objects,
+    revisions,
+    clock: { now: () => T1 },
+    generatedIds: ids(),
+  });
+  const desiredSources = [
+    initialSources[0],
+    { path: "concepts/replaced.md", bytes: ENCODER.encode("# After\n") },
+    { path: "concepts/added.md", bytes: ENCODER.encode("# Added\n") },
+  ];
+  const desired = await Promise.all(desiredSources.map(async (file) => ({
+    path: file.path,
+    size: file.bytes.byteLength,
+    sha256: await objects.calculateSha256(file.bytes),
+  })));
+  const request = {
+    actor: actor("request_exact_plan"),
+    spaceId: MINDS.ordinary.spaceId,
+    expectedRevisionId: "revision_import_initial",
+    idempotencyKey: "plan-exact-diff",
+    files: desired,
+  };
+  const planned = await imports.plan(request);
+  assert.deepEqual({
+    additions: planned.plan.additions,
+    replacements: planned.plan.replacements,
+    deletions: planned.plan.deletions,
+    unchanged: planned.plan.unchanged,
+  }, { additions: 1, replacements: 1, deletions: 1, unchanged: 1 });
+  assert.equal(planned.plan.expectedRevisionId, "revision_import_initial");
+  assert.equal(planned.plan.projectedUtilization, "normal");
+  const replay = await imports.plan({ ...request, actor: actor("request_exact_plan_replay") });
+  assert.equal(replay.replayed, true);
+  assert.equal(replay.plan.planId, planned.plan.planId);
+  assert.equal(replay.plan.descriptorHash, planned.plan.descriptorHash);
+  await assert.rejects(
+    imports.plan({
+      ...request,
+      actor: actor("request_exact_plan_changed_replay"),
+      files: desired.slice(0, 2),
+    }),
+    (error) => error instanceof MarkdownImportError && error.code === "import_idempotency_conflict",
+  );
+  await assert.rejects(
+    imports.plan({
+      ...request,
+      actor: actor("request_exact_plan_stale_head"),
+      expectedRevisionId: "revision_unknown",
+      idempotencyKey: "plan-stale-exact-head",
+    }),
+    (error) => error instanceof MarkdownImportError && error.code === "import_head_conflict",
   );
 });
 
@@ -291,6 +442,19 @@ test("Markdown import survives restart, replays a batch, commits one HEAD and cl
     revisionId: "revision_import_committed",
     replayed: false,
   });
+  metadata = InMemoryRevisionMetadataStore.fromDurableSnapshot(metadata.exportDurableSnapshot());
+  revisions = new CanonicalRevisionCoordinator({ objects, revisions: metadata });
+  imports = service({ metadata, objects, revisions, clock, generatedIds });
+  const unknownOutcomeReplay = await imports.commit({
+    actor: actor("request_import_unknown_outcome_replay"),
+    importId: started.session.importId,
+    expectedVersion: validated.session.version,
+  });
+  assert.deepEqual(unknownOutcomeReplay, {
+    kind: "committed",
+    revisionId: "revision_import_committed",
+    replayed: true,
+  });
   const materialized = await revisions.materialize(
     MINDS.ordinary.spaceId,
     "revision_import_committed",
@@ -299,12 +463,143 @@ test("Markdown import survives restart, replays a batch, commits one HEAD and cl
     "concepts/alpha.md",
     "index.md",
   ]);
+  assert.equal(validateOkfBundle(materialized.files
+    .filter((file) => file.kind === "markdown")
+    .map((file) => ({ path: file.path, text: file.text }))).valid, true);
+  assert.equal((await metadata.listRevisions(MINDS.ordinary.spaceId)).length, 2);
   assert.equal((await imports.status(actor(), started.session.importId)).session.state, "committed");
 
   const cleaned = await imports.collectExpired();
   assert.equal(cleaned.deleted, 2);
   assert.equal((await metadata.listMarkdownImportStagedFiles(started.session.importId)).length, 0);
   assert.ok((await metadata.readMarkdownImportSession(started.session.importId)).cleanupCompletedAt);
+});
+
+test("batch checkpoints reject gaps and changed replay while exact replay stays idempotent", async () => {
+  const objects = new InMemoryObjectStore();
+  const metadata = new InMemoryRevisionMetadataStore();
+  const revisions = await seed(objects, metadata);
+  authorize(metadata);
+  const imports = service({
+    metadata,
+    objects,
+    revisions,
+    clock: { now: () => T1 },
+    generatedIds: ids(),
+  });
+  const files = await plannedFiles(objects);
+  const planned = await imports.plan({
+    actor: actor("request_checkpoint_plan"),
+    spaceId: MINDS.ordinary.spaceId,
+    expectedRevisionId: "revision_import_initial",
+    idempotencyKey: "plan-checkpoints",
+    files: files.map(({ path, sha256, size }) => ({ path, sha256, size })),
+  });
+  const started = await imports.start({
+    actor: actor("request_checkpoint_start"),
+    spaceId: MINDS.ordinary.spaceId,
+    planId: planned.plan.planId,
+    idempotencyKey: "session-checkpoints",
+  });
+  await assert.rejects(
+    imports.stageBatch({
+      actor: actor("request_checkpoint_gap"),
+      importId: started.session.importId,
+      checkpoint: 2,
+      expectedVersion: started.session.version,
+      files: [files[0]],
+    }),
+    (error) => error instanceof MarkdownImportError && error.code === "import_checkpoint_conflict",
+  );
+  const first = await imports.stageBatch({
+    actor: actor("request_checkpoint_first"),
+    importId: started.session.importId,
+    checkpoint: 1,
+    expectedVersion: started.session.version,
+    files: [files[0]],
+  });
+  const replay = await imports.stageBatch({
+    actor: actor("request_checkpoint_exact_replay"),
+    importId: started.session.importId,
+    checkpoint: 1,
+    expectedVersion: started.session.version,
+    files: [files[0]],
+  });
+  assert.equal(replay.replayed, true);
+  assert.equal(replay.session.version, first.session.version);
+  await assert.rejects(
+    imports.stageBatch({
+      actor: actor("request_checkpoint_changed_replay"),
+      importId: started.session.importId,
+      checkpoint: 1,
+      expectedVersion: started.session.version,
+      files: [files[1]],
+    }),
+    (error) => error instanceof MarkdownImportError && error.code === "import_idempotency_conflict",
+  );
+  const second = await imports.stageBatch({
+    actor: actor("request_checkpoint_second"),
+    importId: started.session.importId,
+    checkpoint: 2,
+    expectedVersion: first.session.version,
+    files: [files[1]],
+  });
+  assert.equal(second.session.checkpoint, 2);
+  assert.equal(second.session.stagedFileCount, 2);
+});
+
+test("invalid UTF-8 is rejected before checkpoint publication and leaves HEAD unchanged", async () => {
+  const objects = new InMemoryObjectStore();
+  const metadata = new InMemoryRevisionMetadataStore();
+  const revisions = await seed(objects, metadata);
+  authorize(metadata);
+  const imports = service({
+    metadata,
+    objects,
+    revisions,
+    clock: { now: () => T1 },
+    generatedIds: ids(),
+  });
+  const bytes = Uint8Array.from([0x23, 0x20, 0xc3, 0x28]);
+  const file = {
+    path: "invalid-utf8.md",
+    bytes,
+    size: bytes.byteLength,
+    sha256: await objects.calculateSha256(bytes),
+  };
+  const planned = await imports.plan({
+    actor: actor("request_invalid_utf8_plan"),
+    spaceId: MINDS.ordinary.spaceId,
+    expectedRevisionId: "revision_import_initial",
+    idempotencyKey: "plan-invalid-utf8",
+    files: [{ path: file.path, sha256: file.sha256, size: file.size }],
+  });
+  const started = await imports.start({
+    actor: actor("request_invalid_utf8_start"),
+    spaceId: MINDS.ordinary.spaceId,
+    planId: planned.plan.planId,
+    idempotencyKey: "session-invalid-utf8",
+  });
+  await assert.rejects(
+    imports.stageBatch({
+      actor: actor("request_invalid_utf8_stage"),
+      importId: started.session.importId,
+      checkpoint: 1,
+      expectedVersion: started.session.version,
+      files: [file],
+    }),
+    (error) => error instanceof MarkdownImportError &&
+      error.code === "import_validation_failed" &&
+      error.failures.some((failure) => failure.code === "invalid_utf8"),
+  );
+  assert.equal((await metadata.listMarkdownImportStagedFiles(started.session.importId)).length, 0);
+  const failed = await metadata.readMarkdownImportSession(started.session.importId);
+  assert.equal(failed.state, "validation_failed");
+  assert.equal(failed.checkpoint, 0);
+  assert.deepEqual(failed.failures, [{ path: "invalid-utf8.md", code: "invalid_utf8" }]);
+  assert.equal((await imports.collectExpired()).deleted, 0);
+  assert.ok((await metadata.readMarkdownImportSession(started.session.importId)).cleanupCompletedAt);
+  assert.equal(await metadata.readHead(MINDS.ordinary.spaceId), "revision_import_initial");
 });
 
 test("Brain-scale synthetic Markdown snapshot crosses bounded batches and publishes one revision", async () => {
@@ -521,6 +816,100 @@ test("bounded validation rejects a Markdown BundleFile reference missing from th
   assert.equal(await metadata.readHead(MINDS.ordinary.spaceId), "revision_import_initial");
 });
 
+test("snapshot replacement preserves disjoint opaque paths and validates the full Markdown bundle", async () => {
+  const objects = new InMemoryObjectStore();
+  const metadata = new InMemoryRevisionMetadataStore();
+  const { revisions, opaqueSources } = await seedOpaqueSnapshot(objects, metadata);
+  authorize(metadata);
+  const imports = service({
+    metadata,
+    objects,
+    revisions,
+    clock: { now: () => T1 },
+    generatedIds: ids(),
+    revisionId: "revision_import_preserves_opaque",
+  });
+  const sources = [
+    {
+      path: "index.md",
+      bytes: ENCODER.encode(
+        "---\nokf_version: \"0.2\"\n---\n\n# Imported\n\n![Asset](assets/existing.png)\n",
+      ),
+    },
+    {
+      path: "concepts/new.md",
+      bytes: ENCODER.encode("---\ntype: Reference\ntitle: New\n---\n\n# New\n"),
+    },
+  ];
+  const files = await Promise.all(sources.map(async (file) => ({
+    ...file,
+    size: file.bytes.byteLength,
+    sha256: await objects.calculateSha256(file.bytes),
+  })));
+  const planned = await imports.plan({
+    actor: actor("request_opaque_preservation_plan"),
+    spaceId: MINDS.ordinary.spaceId,
+    expectedRevisionId: "revision_import_opaque",
+    idempotencyKey: "plan-opaque-preservation",
+    files: files.map(({ path, sha256, size }) => ({ path, sha256, size })),
+  });
+  assert.deepEqual([
+    planned.plan.additions,
+    planned.plan.replacements,
+    planned.plan.deletions,
+    planned.plan.unchanged,
+  ], [1, 1, 0, 0]);
+  const started = await imports.start({
+    actor: actor("request_opaque_preservation_start"),
+    spaceId: MINDS.ordinary.spaceId,
+    planId: planned.plan.planId,
+    idempotencyKey: "session-opaque-preservation",
+  });
+  const staged = await imports.stageBatch({
+    actor: actor("request_opaque_preservation_stage"),
+    importId: started.session.importId,
+    checkpoint: 1,
+    expectedVersion: started.session.version,
+    files,
+  });
+  const validated = await imports.validate({
+    actor: actor("request_opaque_preservation_validate"),
+    importId: started.session.importId,
+    expectedVersion: staged.session.version,
+  });
+  const committed = await imports.commit({
+    actor: actor("request_opaque_preservation_commit"),
+    importId: started.session.importId,
+    expectedVersion: validated.session.version,
+  });
+  assert.equal(committed.revisionId, "revision_import_preserves_opaque");
+  const materialized = await revisions.materialize(
+    MINDS.ordinary.spaceId,
+    "revision_import_preserves_opaque",
+  );
+  assert.equal(materialized.envelope.manifest.format, REVISION_MANIFEST_FORMAT_V4);
+  assert.deepEqual(materialized.files.map((file) => file.path), [
+    "assets/existing.png",
+    "concepts/new.md",
+    "index.md",
+  ]);
+  const opaque = materialized.files.filter((file) => file.kind === "opaque");
+  assert.deepEqual(opaque.map((file) => ({
+    path: file.path,
+    mediaType: file.mediaType,
+    bytes: [...file.bytes],
+  })), opaqueSources.map((file) => ({
+    path: file.path,
+    mediaType: file.mediaType,
+    bytes: [...file.bytes],
+  })));
+  const fullValidation = validateOkfBundle(materialized.files
+    .filter((file) => file.kind === "markdown")
+    .map((file) => ({ path: file.path, text: file.text })));
+  assert.equal(fullValidation.valid, true);
+  assert.equal((await metadata.listRevisions(MINDS.ordinary.spaceId)).length, 3);
+});
+
 test("plan metadata is admitted against D1 hard capacity and unreferenced expiry is bounded", async () => {
   const objects = new InMemoryObjectStore();
   const metadata = new InMemoryRevisionMetadataStore();
@@ -567,6 +956,71 @@ test("plan metadata is admitted against D1 hard capacity and unreferenced expiry
   const cleaned = await imports.collectExpired({ maxFiles: 10 });
   assert.equal(cleaned.expiredPlans, 1);
   assert.equal(await metadata.readMarkdownImportPlan(accepted.plan.planId), null);
+});
+
+test("expired session cleanup respects the 20-second deadline and resumes from durable file records", async () => {
+  const objects = new InMemoryObjectStore();
+  const metadata = new InMemoryRevisionMetadataStore();
+  const revisions = await seed(objects, metadata);
+  authorize(metadata);
+  let cleanupMode = false;
+  let cleanupClockReads = 0;
+  const expiredAt = "2026-08-24T18:10:00.000Z";
+  const clock = {
+    now: () => {
+      if (!cleanupMode) return T1;
+      const value = new Date(Date.parse(expiredAt) + cleanupClockReads * 11_000).toISOString();
+      cleanupClockReads += 1;
+      return value;
+    },
+  };
+  const imports = service({ metadata, objects, revisions, clock, generatedIds: ids() });
+  const files = await plannedFiles(objects);
+  const planned = await imports.plan({
+    actor: actor("request_expiry_plan"),
+    spaceId: MINDS.ordinary.spaceId,
+    expectedRevisionId: "revision_import_initial",
+    idempotencyKey: "plan-expiry-session",
+    files: files.map(({ path, sha256, size }) => ({ path, sha256, size })),
+  });
+  const started = await imports.start({
+    actor: actor("request_expiry_start"),
+    spaceId: MINDS.ordinary.spaceId,
+    planId: planned.plan.planId,
+    idempotencyKey: "session-expiry-cleanup",
+  });
+  await imports.stageBatch({
+    actor: actor("request_expiry_stage"),
+    importId: started.session.importId,
+    checkpoint: 1,
+    expectedVersion: started.session.version,
+    files,
+  });
+  cleanupMode = true;
+  const first = await imports.collectExpired({ maxFiles: 10, maxDurationMs: 20_000 });
+  assert.deepEqual({
+    examined: first.examined,
+    deleted: first.deleted,
+    timedOut: first.timedOut,
+  }, { examined: 1, deleted: 1, timedOut: true });
+  const expired = await metadata.readMarkdownImportSession(started.session.importId);
+  assert.equal(expired.state, "expired");
+  assert.equal(expired.cleanupCompletedAt, null);
+  assert.equal((await metadata.listMarkdownImportStagedFiles(started.session.importId)).length, 1);
+
+  cleanupClockReads = 0;
+  const resumed = await imports.collectExpired({ maxFiles: 10, maxDurationMs: 20_000 });
+  assert.equal(resumed.deleted, 1);
+  assert.equal(resumed.timedOut, true);
+  assert.equal((await metadata.listMarkdownImportStagedFiles(started.session.importId)).length, 0);
+  assert.equal((await metadata.readMarkdownImportSession(started.session.importId)).cleanupCompletedAt, null);
+
+  cleanupClockReads = 0;
+  const completed = await imports.collectExpired({ maxFiles: 10, maxDurationMs: 20_000 });
+  assert.equal(completed.deleted, 0);
+  assert.equal(completed.timedOut, false);
+  assert.ok((await metadata.readMarkdownImportSession(started.session.importId)).cleanupCompletedAt);
+  assert.equal(await metadata.readHead(MINDS.ordinary.spaceId), "revision_import_initial");
 });
 
 test("quota rejection, cancel and stale HEAD publish no partial imported revision", async () => {
@@ -622,9 +1076,23 @@ test("quota rejection, cancel and stale HEAD publish no partial imported revisio
     planId: acceptedPlan.plan.planId,
     idempotencyKey: "session-cancel",
   });
-  const canceled = await imports.cancel(actor(), started.session.importId, started.session.version);
+  const cancelStaged = await imports.stageBatch({
+    actor: actor("request_cancel_stage"),
+    importId: started.session.importId,
+    checkpoint: 1,
+    expectedVersion: started.session.version,
+    files,
+  });
+  revoke(metadata);
+  const canceled = await imports.cancel(
+    actor("request_cancel_after_role_loss"),
+    started.session.importId,
+    cancelStaged.session.version,
+  );
   assert.equal(canceled.kind, "canceled");
   assert.equal(await metadata.readHead(MINDS.ordinary.spaceId), "revision_import_initial");
+  assert.equal((await imports.collectExpired()).deleted, 2);
+  authorize(metadata);
 
   const conflictPlan = await imports.plan({
     actor: actor(),
@@ -673,6 +1141,12 @@ test("quota rejection, cancel and stale HEAD publish no partial imported revisio
     }),
     (error) => error instanceof MarkdownImportError && error.code === "import_head_conflict",
   );
+  const closed = await metadata.readMarkdownImportSession(conflictSession.session.importId);
+  assert.equal(closed.state, "validation_failed");
+  assert.deepEqual(closed.failures, [{ path: "(snapshot)", code: "import_head_conflict" }]);
+  const conflictCleanup = await imports.collectExpired();
+  assert.equal(conflictCleanup.deleted, 2);
+  assert.ok((await metadata.readMarkdownImportSession(conflictSession.session.importId)).cleanupCompletedAt);
   assert.equal(await metadata.readHead(MINDS.ordinary.spaceId), "revision_competing");
   assert.deepEqual(
     (await metadata.listRevisions(MINDS.ordinary.spaceId)).map((revision) => revision.revision.revisionId),

@@ -2593,6 +2593,11 @@ replay returns the same checkpoint; a gap is `import_checkpoint_conflict` and
 changed replay is `import_idempotency_conflict`. Multipart headers,
 body/content and paths never enter logs or telemetry.
 
+If descriptor-matching bytes are invalid UTF-8, no retry can satisfy that
+sealed plan: the response is `import_validation_failed`, the session closes as
+`validation_failed` with sanitized per-file `invalid_utf8`, reservation cleanup
+is scheduled and HEAD remains unchanged.
+
 Validate uses `expected_version`, seals staging and advances restartable
 whole-corpus OKF validation by at most 100 files / 4 MiB per call. Status states
 are:
@@ -2622,6 +2627,12 @@ work and marks the session committed in one D1 transaction. Earlier promotion
 pages do not change HEAD; their unreachable immutable objects use normal
 bounded cleanup after a stale-head/cancel outcome. `DELETE` before commit is
 idempotent cancel; after commit it cannot undo content.
+
+Once any validation or commit call observes that the exact base HEAD changed,
+the server returns `import_head_conflict`, atomically closes the still-open
+session as `validation_failed` with that sanitized failure code, releases its
+reservation into bounded cleanup and never reopens the session. Already promoted
+but unreachable canonical objects remain covered by ordinary delayed GC.
 
 Stable import/capacity errors:
 

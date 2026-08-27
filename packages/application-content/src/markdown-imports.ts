@@ -66,6 +66,7 @@ export const MARKDOWN_IMPORT_LIMITS = Object.freeze({
   sessionTtlMs: CAPACITY_RESERVATION_TTL_MS.import,
   cleanupMaxFiles: 100,
   cleanupMaxBytes: 268_435_456,
+  cleanupMaxDurationMs: 20_000,
 } as const);
 
 export type MarkdownImportErrorCode =
@@ -616,7 +617,8 @@ export class MarkdownImportService {
           bytes.byteLength !== size || await this.#objects.calculateSha256(bytes) !== sha256
         ) throw new MarkdownImportError("import_file_conflict", "staged bytes differ from plan");
         try { DECODER.decode(bytes); } catch {
-          throw new MarkdownImportError("invalid_import_request", "Markdown must be valid UTF-8");
+          failures.push(sessionFailure(path, "invalid_utf8"));
+          continue;
         }
         batchBytes += bytes.byteLength;
         validated.push({ path, sha256, size, bytes });
@@ -628,6 +630,9 @@ export class MarkdownImportService {
       }
     }
     if (failures.length > 0) {
+      if (failures.some((failure) => failure.code === "invalid_utf8")) {
+        await this.#closeForTerminalFailure(session, failures);
+      }
       throw new MarkdownImportError("import_validation_failed", "import batch validation failed", failures);
     }
     if (batchBytes > MARKDOWN_IMPORT_LIMITS.maxBatchBytes) {
@@ -737,6 +742,7 @@ export class MarkdownImportService {
       parent.revision.revisionId !== session.expectedRevisionId
     ) {
       if (plan !== null && parent !== null) {
+        await this.#closeForHeadConflict(session);
         throw new MarkdownImportError("import_head_conflict", "import base HEAD changed");
       }
       throw new MarkdownImportError("import_validation_failed", "import plan is unavailable");
@@ -866,8 +872,15 @@ export class MarkdownImportService {
       this.#metadata.listMarkdownImportStagedFiles(session.importId),
       this.#revisions.readHeadRevisionEnvelope(session.spaceId),
     ]);
-    if (plan === null || parent === null || parent.revision.revisionId !== session.expectedRevisionId) {
+    if (plan !== null && parent !== null && parent.revision.revisionId !== session.expectedRevisionId) {
+      const closed = await this.#closeForHeadConflict(session);
+      if (closed?.state === "committed" && closed.revisionId !== null) {
+        return Object.freeze({ kind: "committed" as const, revisionId: closed.revisionId, replayed: true });
+      }
       throw new MarkdownImportError("import_head_conflict", "validated import base changed");
+    }
+    if (plan === null || parent === null) {
+      throw new MarkdownImportError("import_validation_failed", "validated import state is unavailable");
     }
     const snapshotFailures = stagedPlanFailures(plan, staged);
     if (
@@ -917,7 +930,7 @@ export class MarkdownImportService {
       promotedBytes += file.size;
     }
     if (promotionCheckpoint < staged.length) {
-      return this.#metadata.runMarkdownImportTransaction(async (transaction) => {
+      const progress = await this.#metadata.runMarkdownImportTransaction(async (transaction) => {
         const current = await this.#authorizer.reauthorizeInTransaction({
           actor,
           spaceId: session.spaceId,
@@ -931,7 +944,7 @@ export class MarkdownImportService {
           (currentSession.state !== "validated" && currentSession.state !== "finalizing")
         ) throw new MarkdownImportError("import_state_conflict", "import session changed during finalization");
         if (await transaction.readHead(session.spaceId) !== session.expectedRevisionId) {
-          throw new MarkdownImportError("import_head_conflict", "import base HEAD changed");
+          return Object.freeze({ kind: "head_conflict" as const });
         }
         const transitioned = await transaction.transitionMarkdownImportSession({
           importId: session.importId,
@@ -951,6 +964,14 @@ export class MarkdownImportService {
           replayed: false,
         });
       });
+      if (progress.kind === "head_conflict") {
+        const closed = await this.#closeForHeadConflict(session);
+        if (closed?.state === "committed" && closed.revisionId !== null) {
+          return Object.freeze({ kind: "committed" as const, revisionId: closed.revisionId, replayed: true });
+        }
+        throw new MarkdownImportError("import_head_conflict", "import base HEAD changed");
+      }
+      return progress;
     }
     if (promotedBytes !== plan.logicalBytes) {
       throw new MarkdownImportError("import_validation_failed", "promoted import byte count differs from plan");
@@ -992,7 +1013,7 @@ export class MarkdownImportService {
       manifestSize: manifestPut.object.size,
       summary,
     });
-    return this.#metadata.runMarkdownImportTransaction(async (transaction) => {
+    const committed = await this.#metadata.runMarkdownImportTransaction(async (transaction) => {
       const current = await this.#authorizer.reauthorizeInTransaction({
         actor,
         spaceId: session.spaceId,
@@ -1006,14 +1027,14 @@ export class MarkdownImportService {
         (currentSession.state !== "validated" && currentSession.state !== "finalizing")
       ) throw new MarkdownImportError("import_state_conflict", "import session changed before commit");
       if (await transaction.readHead(session.spaceId) !== session.expectedRevisionId) {
-        throw new MarkdownImportError("import_head_conflict", "import base HEAD changed");
+        return Object.freeze({ kind: "head_conflict" as const });
       }
       const committed = await transaction.commitRevision({
         expectedHeadRevisionId: session.expectedRevisionId,
         envelope,
       });
       if (committed.kind === "stale_head") {
-        throw new MarkdownImportError("import_head_conflict", "import base HEAD changed");
+        return Object.freeze({ kind: "head_conflict" as const });
       }
       if (committed.kind !== "committed" || committed.replayed) {
         throw new Error(`Markdown import revision commit failed: ${committed.kind}`);
@@ -1090,6 +1111,14 @@ export class MarkdownImportService {
       if (effects.kind !== "staged") throw new Error("Markdown import commit effects failed");
       return Object.freeze({ kind: "committed" as const, revisionId, replayed: false });
     });
+    if (committed.kind === "head_conflict") {
+      const closed = await this.#closeForHeadConflict(session);
+      if (closed?.state === "committed" && closed.revisionId !== null) {
+        return Object.freeze({ kind: "committed" as const, revisionId: closed.revisionId, replayed: true });
+      }
+      throw new MarkdownImportError("import_head_conflict", "import base HEAD changed");
+    }
+    return committed;
   }
 
   async cancel(actorValue: ActorContext, importId: string, expectedVersionValue: unknown) {
@@ -1126,11 +1155,28 @@ export class MarkdownImportService {
     maxSessions?: number;
     maxFiles?: number;
     maxBytes?: number;
+    maxDurationMs?: number;
   }> = {}) {
     const now = this.#clock.now();
     const maxSessions = Math.max(1, Math.min(16, request.maxSessions ?? 4));
-    const maxFiles = Math.max(1, Math.min(1_000, request.maxFiles ?? MARKDOWN_IMPORT_LIMITS.cleanupMaxFiles));
-    const maxBytes = Math.max(1, request.maxBytes ?? MARKDOWN_IMPORT_LIMITS.cleanupMaxBytes);
+    const maxFiles = Math.max(1, Math.min(
+      MARKDOWN_IMPORT_LIMITS.cleanupMaxFiles,
+      request.maxFiles ?? MARKDOWN_IMPORT_LIMITS.cleanupMaxFiles,
+    ));
+    const maxBytes = Math.max(1, Math.min(
+      MARKDOWN_IMPORT_LIMITS.cleanupMaxBytes,
+      request.maxBytes ?? MARKDOWN_IMPORT_LIMITS.cleanupMaxBytes,
+    ));
+    const maxDurationMs = Number.isSafeInteger(request.maxDurationMs) && Number(request.maxDurationMs) > 0
+      ? Math.min(Number(request.maxDurationMs), MARKDOWN_IMPORT_LIMITS.cleanupMaxDurationMs)
+      : MARKDOWN_IMPORT_LIMITS.cleanupMaxDurationMs;
+    const deadline = Date.parse(now) + maxDurationMs;
+    let timedOut = false;
+    const reachedDeadline = () => {
+      if (timedOut) return true;
+      timedOut = Date.parse(this.#clock.now()) >= deadline;
+      return timedOut;
+    };
     const claimed = await this.#metadata.runMarkdownImportTransaction((transaction) =>
       transaction.claimMarkdownImportCleanup({ now, limit: maxSessions }));
     const expiredPlans = await this.#metadata.runMarkdownImportTransaction((transaction) =>
@@ -1140,7 +1186,7 @@ export class MarkdownImportService {
     let reclaimedBytes = 0;
     for (const item of claimed) {
       for (const file of item.files) {
-        if (examined >= maxFiles || reclaimedBytes + file.size > maxBytes) break;
+        if (reachedDeadline() || examined >= maxFiles || reclaimedBytes + file.size > maxBytes) break;
         examined += 1;
         const current = await this.#objects.getStagedBundleFile(file.stagedFileId);
         if (current !== null) {
@@ -1150,9 +1196,10 @@ export class MarkdownImportService {
         }
         await this.#metadata.runMarkdownImportTransaction((transaction) =>
           transaction.deleteMarkdownImportStagedFile(file.stagedFileId));
+        if (reachedDeadline()) break;
       }
       const remaining = await this.#metadata.listMarkdownImportStagedFiles(item.session.importId);
-      if (remaining.length === 0) {
+      if (!timedOut && remaining.length === 0) {
         const current = await this.#metadata.readMarkdownImportSession(item.session.importId);
         if (current !== null) {
           await this.#metadata.runMarkdownImportTransaction((transaction) =>
@@ -1163,7 +1210,7 @@ export class MarkdownImportService {
             }));
         }
       }
-      if (examined >= maxFiles || reclaimedBytes >= maxBytes) break;
+      if (timedOut || examined >= maxFiles || reclaimedBytes >= maxBytes) break;
     }
     return Object.freeze({
       sessions: claimed.length,
@@ -1171,6 +1218,51 @@ export class MarkdownImportService {
       examined,
       deleted,
       reclaimedBytes,
+      timedOut,
+    });
+  }
+
+  async #closeForHeadConflict(session: Readonly<MarkdownImportSession>) {
+    return this.#closeForTerminalFailure(session, Object.freeze([
+      sessionFailure("(snapshot)", "import_head_conflict"),
+    ]));
+  }
+
+  async #closeForTerminalFailure(
+    session: Readonly<MarkdownImportSession>,
+    terminalFailures: readonly Readonly<MarkdownImportSessionFailure>[],
+  ) {
+    const closedAt = this.#clock.now();
+    return this.#metadata.runMarkdownImportTransaction(async (transaction) => {
+      const current = await transaction.readMarkdownImportSession(session.importId);
+      if (current === null) return null;
+      if (
+        current.state !== "active" && current.state !== "validating" &&
+        current.state !== "validated" && current.state !== "finalizing"
+      ) return current;
+      const failures = Object.freeze([
+        ...current.failures,
+        ...terminalFailures,
+      ].slice(0, MARKDOWN_IMPORT_LIMITS.maxFailures));
+      const transitioned = await transaction.transitionMarkdownImportSession({
+        importId: current.importId,
+        expectedVersion: current.version,
+        from: Object.freeze(["active", "validating", "validated", "finalizing"]),
+        to: "validation_failed",
+        updatedAt: closedAt,
+        failures,
+      });
+      if (transitioned.kind !== "updated") {
+        return transaction.readMarkdownImportSession(current.importId);
+      }
+      const canceled = await transaction.cancelCapacityReservation({
+        reservationId: transitioned.session.reservationId,
+        canceledAt: closedAt,
+      });
+      if (canceled !== "cleanup_pending") {
+        throw new Error("Markdown import terminal cleanup was not scheduled");
+      }
+      return transitioned.session;
     });
   }
 

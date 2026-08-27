@@ -319,6 +319,11 @@ size, digest and UTF-8 before marking a file staged. Progress exposes counts,
 bytes and sanitized per-file code/path only to the authorized owner; logs omit
 path/content.
 
+Descriptor-matching bytes that are not valid UTF-8 make the sealed plan
+impossible to satisfy. The server therefore closes that session as
+`validation_failed`, records only sanitized `invalid_utf8`, schedules bounded
+reservation cleanup and leaves HEAD unchanged.
+
 One immutable plan can be claimed by exactly one import session. Exact start
 replay returns that session; a different idempotency key cannot create another
 session or share its reservation.
@@ -343,7 +348,9 @@ manifest and uses the normal D1 HEAD transaction. Exactly one new immutable
 revision becomes visible or nothing does. Search index job is queued after
 commit; canonical browse/fetch works immediately. Finalize records the
 idempotent result and schedules staged cleanup. A stale HEAD returns conflict;
-server never rebases or partially imports automatically.
+server atomically closes the session as `validation_failed` with sanitized
+`import_head_conflict`, schedules bounded staging/reservation cleanup and never
+reopens it. It never rebases or partially imports automatically.
 
 ## Sites-owned export, staging and GC lifecycle
 
