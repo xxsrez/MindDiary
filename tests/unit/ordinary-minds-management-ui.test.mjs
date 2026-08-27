@@ -12,6 +12,10 @@ const implementation = await readFile(
   new URL("../../packages/adapter-web/src/ordinary-minds-management.ts", import.meta.url),
   "utf8",
 );
+const shippedClient = await readFile(
+  new URL("../../packages/adapter-web/assets/ordinary-minds-client.js", import.meta.url),
+  "utf8",
+);
 
 const OWNER_MIND = Object.freeze({
   mindId: "mind_owner_fixture",
@@ -179,10 +183,68 @@ test("Owner visibility controls disclose live HEAD and history while baseline re
   assert.match(baseline, /data-visibility-readonly/);
   assert.match(baseline, /baseline access is read-only and does not create membership/i);
   assert.match(baseline, /exact URL is not a secret/i);
+  assert.match(baseline, /data-membership-baseline="unlisted"/);
+  assert.match(baseline, /You are not a participant in this Mind/);
+  assert.match(baseline, /does not grant membership, content write, invitations, role changes, or other management actions/);
   assert.match(baseline, /data-export-workflow data-export-mind-ref="shared-library"/);
   assert.match(baseline, /Target Mind:[\s\S]*Shared Library[\s\S]*\/shared-library/);
   assert.doesNotMatch(baseline, /data-markdown-import/);
   assert.doesNotMatch(baseline, /data-owner-visibility-controls|data-save-visibility/);
+  assert.doesNotMatch(baseline, /data-member-role-form|data-revoke-member|data-leave-mind|data-membership-confirmation-dialog/);
+});
+
+test("membership actions require contextual confirmation and invalidate stale browser controls", () => {
+  const collaboration = {
+    kind: "ready",
+    snapshot: {
+      mind: {
+        mindId: OWNER_MIND.mindId,
+        name: OWNER_MIND.name,
+        route: `/${OWNER_MIND.handle}`,
+        metadataVersion: OWNER_MIND.metadataVersion,
+      },
+      actor: {
+        memberId: "membership_owner",
+        role: "owner",
+        membershipVersion: 3,
+      },
+      members: [{
+        memberId: "membership_owner",
+        displayName: "Andrey",
+        role: "owner",
+        state: "active",
+        membershipVersion: 3,
+        isSelf: true,
+      }, {
+        memberId: "membership_editor",
+        displayName: "Editor Person",
+        role: "editor",
+        state: "active",
+        membershipVersion: 5,
+        isSelf: false,
+      }],
+      invitations: [],
+    },
+  };
+  const html = renderOrdinaryMindsManagement({
+    displayName: "Andrey",
+    view: { kind: "detail", mind: OWNER_MIND, collaboration },
+  });
+
+  assert.match(html, /data-mind-visibility="private"/);
+  assert.match(html, /data-member-role-form/);
+  assert.match(html, /data-revoke-member/);
+  assert.match(html, /data-membership-confirmation-dialog/);
+  assert.match(html, /I reviewed the current participant, role, and access consequences/);
+  assert.match(shippedClient, /Confirm role change/);
+  assert.match(shippedClient, /Confirm access revocation/);
+  assert.match(shippedClient, /Confirm leaving this Mind/);
+  assert.match(shippedClient, /Public visibility may still allow signed-in read access/);
+  assert.match(shippedClient, /exact link may still allow signed-in read access/);
+  assert.match(shippedClient, /all access ends immediately because this Mind is private/);
+  assert.match(shippedClient, /route\?\.querySelectorAll\("button,input,select,textarea"\)/);
+  assert.match(shippedClient, /membership_version_conflict/);
+  assert.match(shippedClient, /setTimeout\(\(\)=>location\.reload\(\),300\)/);
 });
 
 test("ownership transfer lists active non-owner participants and states the single-Owner result", () => {

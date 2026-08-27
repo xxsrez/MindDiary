@@ -626,8 +626,19 @@ function renderOwnershipPanel(
 }
 
 function renderCollaborationPanel(
+  mind: OrdinaryMindUiMind,
   collaboration: OrdinaryMindCollaboration | undefined,
 ): string {
+  if (mind.accessKind === "visibility") {
+    const visibility = safeVisibility(mind.visibility);
+    const discovery = visibility === "public"
+      ? "through the signed-in public catalog or this exact route"
+      : "only through this exact route";
+    return `<section class="md-setup-card" aria-labelledby="membership-baseline-heading" data-membership-baseline="${visibility}">
+      <div><p class="md-eyebrow">People and access</p><h2 id="membership-baseline-heading">Read access by visibility</h2><p>You are not a participant in this Mind. ${titleCase(visibility)} visibility lets a signed-in person read the live HEAD and immutable history ${discovery}, but it does not grant membership, content write, invitations, role changes, or other management actions.</p></div>
+      <a class="md-button md-button--secondary" href="/minds">Back to Minds</a>
+    </section>`;
+  }
   if (collaboration?.kind === "ready") {
     return renderInvitationsMembershipPanel(collaboration.snapshot);
   }
@@ -635,6 +646,28 @@ function renderCollaborationPanel(
     <div><p class="md-eyebrow">People and access</p><h2 id="collaboration-unavailable-heading">Participants and invitations unavailable</h2><p>No access controls are shown until current participant and invitation state can be read together.</p></div>
     <a class="md-button md-button--secondary" href="/invitations">Open global invitations</a>
   </section>`;
+}
+
+function renderMembershipConfirmationDialog(
+  collaboration: OrdinaryMindCollaboration | undefined,
+): string {
+  if (collaboration?.kind !== "ready") return "";
+  return `<dialog class="md-dialog" aria-labelledby="membership-confirmation-title" aria-describedby="membership-confirmation-impact" data-membership-confirmation-dialog>
+    <form class="md-form" data-membership-confirmation-form>
+      <div class="md-dialog__heading">
+        <div><p class="md-eyebrow">Current membership</p><h2 id="membership-confirmation-title" data-membership-confirmation-title>Confirm access change</h2></div>
+        <button class="md-icon-button" type="button" aria-label="Cancel access change" data-membership-confirmation-cancel>×</button>
+      </div>
+      <p data-membership-confirmation-summary></p>
+      <p class="md-caveat" id="membership-confirmation-impact" data-membership-confirmation-impact></p>
+      <p><label><input type="checkbox" required data-membership-confirmation-check> I reviewed the current participant, role, and access consequences and want to apply this change.</label></p>
+      <p class="md-form__status" role="status" aria-live="assertive" data-membership-confirmation-status></p>
+      <div class="md-dialog__actions">
+        <button class="md-button md-button--secondary" type="button" data-membership-confirmation-cancel>Keep current access</button>
+        <button class="md-button md-button--danger" type="submit" data-membership-confirmation-submit disabled>Confirm access change</button>
+      </div>
+    </form>
+  </dialog>`;
 }
 
 function formatBytes(value: number): string {
@@ -736,7 +769,7 @@ function renderDetailView(
   }
   const role = safeRole(mind.role);
   const visibility = safeVisibility(mind.visibility);
-  return `<main id="main-content" class="md-main" tabindex="-1" data-ia-main data-mind-route data-mind-handle="${handle}" data-mind-id="${escapeUntrustedText(mind.mindId)}">
+  return `<main id="main-content" class="md-main" tabindex="-1" data-ia-main data-mind-route data-mind-handle="${handle}" data-mind-id="${escapeUntrustedText(mind.mindId)}" data-mind-visibility="${visibility}">
     <div class="md-page-heading" data-ia-page-header>
       <div>
         <p class="md-eyebrow">Route-specific management</p>
@@ -771,11 +804,12 @@ function renderDetailView(
         ? ""
         : renderMarkdownImportPanel({ mindRef: handle, headRevisionId: mind.headRevisionId })}
       ${renderCapacityPanel(mind, capacity)}
-      ${renderCollaborationPanel(collaboration)}
+      ${renderCollaborationPanel(mind, collaboration)}
       ${renderOwnershipPanel(mind, ownership)}
       ${renderDeletePanel(mind, handle)}
     </div>
   </main>
+  ${renderMembershipConfirmationDialog(collaboration)}
   ${renderDeleteDialog(mind)}`;
 }
 

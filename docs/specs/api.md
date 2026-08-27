@@ -1013,6 +1013,22 @@ Role mutation:
 Admin изменяет/revokes только Reader/Editor. Owner дополнительно управляет
 Admin. Назначение Owner через этот route запрещено.
 
+`PATCH` role, `DELETE` revoke и `POST .../leave` передают current
+`expected_membership_version` и `Idempotency-Key`. Leave всегда выбирает
+membership текущего Sites principal server-side; клиент не передаёт actor
+`member_id`. До role/revoke/leave Product Site показывает отдельное
+контекстное подтверждение. Для revoke/leave оно явно различает последствия:
+private Mind закрывает весь дальнейший доступ, а public/unlisted Mind может
+оставить бывшему participant только authenticated baseline Reader grant без
+membership, write и management rights.
+
+После каждого success, version/authority conflict или неоднозначной transport
+ошибки browser инвалидирует все actions из показанной membership projection и
+перечитывает canonical `/{space_handle}` route. Только новый server projection
+может снова показать controls. Если actor вышел/был отозван, private Mind
+возвращает неразличимый `mind_not_found`; public/unlisted route может вернуться
+как visibility reader без member list и административных действий.
+
 Ownership transfer:
 
 ```json

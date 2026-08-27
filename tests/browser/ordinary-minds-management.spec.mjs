@@ -57,6 +57,18 @@ async function expectFreshAuthority(page, role) {
   await expect(page.locator("[data-visibility-readonly]")).toBeVisible();
 }
 
+function participantCard(page, name = "Morgan Editor") {
+  return page.locator("[data-member-card]").filter({ has: page.getByRole("heading", { name }) });
+}
+
+async function confirmMembershipAction(page, buttonName) {
+  const dialog = page.locator("[data-membership-confirmation-dialog]");
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole("button", { name: buttonName })).toBeDisabled();
+  await dialog.getByLabel(/reviewed the current participant, role, and access consequences/u).check();
+  await dialog.getByRole("button", { name: buttonName }).click();
+}
+
 test.beforeAll(async () => {
   fixture = spawn(process.execPath, [fixtureServer], {
     cwd: root,
@@ -264,6 +276,103 @@ test("shipped ownership flow reloads the former Owner as Admin", async ({ page }
   });
   expect(call.csrf).toBe("fixture-csrf-token");
   expect(call.idempotencyKey).toMatch(/^ownership:[0-9a-f-]{36}$/u);
+});
+
+test("role change waits for contextual confirmation and sends the rendered membership version", async ({ page }) => {
+  await page.goto(`${origin}/research-notes`);
+  const card = participantCard(page);
+  await card.getByLabel("Role").selectOption("reader");
+  await card.getByRole("button", { name: "Update role" }).click();
+
+  const dialog = page.locator("[data-membership-confirmation-dialog]");
+  await expect(dialog.getByRole("heading", { name: "Confirm role change" })).toBeVisible();
+  await expect(dialog.locator("[data-membership-confirmation-summary]")).toHaveText(
+    "Change Morgan Editor from editor to reader?",
+  );
+  expect((await fixtureCalls()).filter(({ operation }) => operation === "changeMembershipRole")).toHaveLength(0);
+  await confirmMembershipAction(page, "Confirm role change");
+
+  await expect(participantCard(page)).toHaveAttribute("data-member-role", "reader");
+  const call = (await fixtureCalls()).find(({ operation }) => operation === "changeMembershipRole");
+  expect(call.command).toEqual({
+    handle: "research-notes",
+    member_id: "member-fixture-editor",
+    role: "reader",
+    expected_membership_version: 5,
+  });
+  expect(call.csrf).toBe("fixture-csrf-token");
+  expect(call.idempotencyKey).toMatch(/^membership-role:[0-9a-f-]{36}$/u);
+});
+
+test("membership conflict discards every stale action and renders the concurrent role", async ({ page }) => {
+  await page.goto(`${origin}/research-notes`);
+  await setConflict("membership");
+  const card = participantCard(page);
+  await card.getByLabel("Role").selectOption("reader");
+  await card.getByRole("button", { name: "Update role" }).click();
+  await confirmMembershipAction(page, "Confirm role change");
+
+  const current = participantCard(page);
+  await expect(current).toHaveAttribute("data-member-role", "admin");
+  await expect(current.getByLabel("Role")).toHaveValue("admin");
+  await expect(page.locator("[data-membership-confirmation-dialog]")).not.toBeVisible();
+  const call = (await fixtureCalls()).find(({ operation }) => operation === "changeMembershipRole");
+  expect(call.command.expected_membership_version).toBe(5);
+});
+
+test("public revoke explains and preserves visibility-only read without write or management", async ({ page }) => {
+  await page.goto(`${origin}/research-notes`);
+  const visibility = page.locator("[data-visibility-form]");
+  await visibility.locator("[data-visibility-selector]").selectOption("public");
+  await visibility.locator("[data-visibility-ack]").check();
+  await visibility.locator("[data-save-visibility]").click();
+  await expect(page.locator("[data-route-visibility]")).toHaveText("Public");
+
+  await participantCard(page).getByRole("button", { name: "Revoke access" }).click();
+  const dialog = page.locator("[data-membership-confirmation-dialog]");
+  await expect(dialog.locator("[data-membership-confirmation-impact]")).toContainText(
+    "Public visibility may still allow signed-in read access to the live HEAD and history, but never content write or management.",
+  );
+  await confirmMembershipAction(page, "Revoke participant");
+
+  await expect(participantCard(page)).toHaveCount(0);
+  const call = (await fixtureCalls()).find(({ operation }) => operation === "revokeMembership");
+  expect(call.command).toEqual({
+    handle: "research-notes",
+    member_id: "member-fixture-editor",
+    expected_membership_version: 5,
+  });
+  expect(call.idempotencyKey).toMatch(/^membership-revoke:[0-9a-f-]{36}$/u);
+});
+
+test("unlisted leave reloads as exact-link baseline read with no membership controls", async ({ page }) => {
+  await page.goto(`${origin}/shared-library`);
+  await page.getByRole("button", { name: "Leave this Mind" }).click();
+  const dialog = page.locator("[data-membership-confirmation-dialog]");
+  await expect(dialog.locator("[data-membership-confirmation-impact]")).toContainText(
+    "The exact link may still allow signed-in read access to the live HEAD and history, but never content write or management.",
+  );
+  await confirmMembershipAction(page, "Leave this Mind");
+
+  await expect(page.locator('[data-membership-baseline="unlisted"]')).toBeVisible();
+  await expect(page.locator("[data-route-role]")).toHaveText("Reader");
+  await expect(page.locator("[data-member-role-form], [data-leave-mind], [data-membership-confirmation-dialog]")).toHaveCount(0);
+  const call = (await fixtureCalls()).find(({ operation }) => operation === "leaveMind");
+  expect(call.command).toEqual({ handle: "shared-library", expected_membership_version: 3 });
+  expect(call.idempotencyKey).toMatch(/^membership-leave:[0-9a-f-]{36}$/u);
+});
+
+test("private leave reloads to a non-disclosing unavailable route", async ({ page }) => {
+  await page.goto(`${origin}/private-room`);
+  await page.getByRole("button", { name: "Leave this Mind" }).click();
+  const dialog = page.locator("[data-membership-confirmation-dialog]");
+  await expect(dialog.locator("[data-membership-confirmation-impact]")).toContainText(
+    "all access ends immediately because this Mind is private",
+  );
+  await confirmMembershipAction(page, "Leave this Mind");
+
+  await expect(page.getByRole("heading", { name: "Mind settings unavailable" })).toBeVisible();
+  await expect(page.locator("[data-mind-route], [data-member-role-form], [data-leave-mind]")).toHaveCount(0);
 });
 
 test("shipped deletion uses a fresh preview and conscious confirmation", async ({ page }) => {

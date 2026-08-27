@@ -487,6 +487,13 @@ visibility в create flow. Exact ordinary route `/{space_handle}` показыв
 - только Owner открывает short-lived deletion impact. Delete доступен лишь после
   fresh counts, exact confirmation phrase и отдельного подтверждения
   необратимости; changed/expired impact полностью инвалидирует подтверждение;
+- раздел «Доступ» показывает current participant role matrix и разрешает Owner
+  менять/отзывать Admin, Editor и Reader, а Admin — только Editor и Reader.
+  Non-owner participant может выйти сам. Role change, revoke и leave требуют
+  отдельного контекстного подтверждения с точным объяснением теряемых прав и
+  того, останется ли после revoke/leave только public/unlisted baseline read;
+  после любого success/conflict/ambiguous failure страница перечитывает current
+  route и не оставляет старые controls активными;
 - Reader/Editor не получают metadata/visibility/delete controls, baseline
   visibility reader не получает membership или административные действия.
 - Для accepted participant exact route сначала показывает компактный `Access`:

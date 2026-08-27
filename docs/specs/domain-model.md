@@ -347,6 +347,16 @@ SpaceInvitation:
 более одного актуального pending invitation. Membership/invitation — service
 metadata и не входят в `OKFBundle`.
 
+Смена роли, отзыв participation и самостоятельный выход всегда применяются к
+точной active membership под `expected_membership_version`. После успешной или
+конфликтной попытки control plane заново читает current membership и
+visibility, а не продолжает работу со старой проекцией. Revoke/leave прекращает
+все права membership немедленно. Если ordinary Mind остаётся `public` или
+`unlisted`, бывший participant может после fresh authorization сохранить только
+baseline Reader grant этой visibility; он больше не участник и не имеет
+content-write или management capabilities. Для `private` тот же principal
+получает неразличимый `mind_not_found` без metadata disclosure.
+
 ## Роли и capabilities
 
 Роли иерархичны по content capabilities, но authorization проверяет именованные

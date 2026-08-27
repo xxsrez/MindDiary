@@ -1073,7 +1073,7 @@ test("ordinary Mind list and exact route wire the UAT management and deletion co
   const detail = await handler(new Request(`${origin}/research-notes`));
   assert.equal(detail.status, 200);
   const detailHtml = await detail.text();
-  assert.match(detailHtml, /data-mind-route data-mind-handle="research-notes"/);
+  assert.match(detailHtml, /data-mind-route data-mind-handle="research-notes"[^>]*data-mind-visibility="private"/);
   assert.match(detailHtml, /data-owner-delete-controls/);
   assert.match(detailHtml, /data-owner-visibility-controls/);
   assert.match(detailHtml, /data-owner-transfer-controls/);
@@ -1090,6 +1090,8 @@ test("ordinary Mind list and exact route wire the UAT management and deletion co
   assert.match(detailHtml, /data-access-summary/);
   assert.match(detailHtml, /data-invitation-form/);
   assert.match(detailHtml, /data-member-role-form/);
+  assert.match(detailHtml, /data-membership-confirmation-dialog/);
+  assert.match(detailHtml, /I reviewed the current participant, role, and access consequences/);
   const ownershipForm = /<form\b[^>]*data-ownership-transfer-form[^>]*>[\s\S]*?<\/form>/u.exec(detailHtml)?.[0];
   assert.ok(ownershipForm);
   assert.match(ownershipForm, /\bdata-source-membership-version="1"/u);
@@ -1125,6 +1127,10 @@ test("ordinary Mind list and exact route wire the UAT management and deletion co
   assert.match(assetBody, /acknowledge_live_head_and_history_exposure/);
   assert.match(assetBody, /expected_invitation_version/);
   assert.match(assetBody, /expected_membership_version/);
+  assert.match(assetBody, /Confirm access revocation/);
+  assert.match(assetBody, /membership_version_conflict/);
+  assert.match(assetBody, /Public visibility may still allow signed-in read access/);
+  assert.match(assetBody, /route\?\.querySelectorAll\("button,input,select,textarea"\)/);
   assert.match(assetBody, /request\("GET","\/api\/v1\/minds"\)/);
   assert.match(assetBody, /validPersonalMind/);
   assert.match(assetBody, /createAttempt/);

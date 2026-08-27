@@ -481,6 +481,46 @@ test("authorized revoke and non-owner leave invalidate current access immediatel
   assert.equal(env.memberships.state.audit.length, 3);
 });
 
+test("revoked public and unlisted participants keep only baseline read while private denial stays non-disclosing", async () => {
+  for (const visibility of ["public", "unlisted"]) {
+    const env = harness({ visibility });
+    await env.service.revokeMembership(actor("principal_owner", `request_${visibility}_revoke`), {
+      mindId: SPACE_ID,
+      memberId: "member_editor",
+      expectedMembershipVersion: 1,
+      idempotencyKey: `membership-${visibility}-revoke-editor-0001`,
+    });
+
+    const read = await authorize(env.memberships, "principal_editor", "content:browse");
+    assert.equal(read.kind, "allowed", `${visibility} should retain baseline read`);
+    assert.equal(read.grant.kind, "baseline_visibility");
+    assert.equal(read.grant.visibility, visibility);
+    assert.equal(
+      (await authorize(env.memberships, "principal_editor", "content:write")).kind,
+      "denied",
+    );
+    assert.equal(
+      (await authorize(env.memberships, "principal_editor", "members:manage-basic")).kind,
+      "denied",
+    );
+    assert.equal(env.memberships.member("member_editor").state, "revoked");
+  }
+
+  const privateMind = harness({ visibility: "private" });
+  await privateMind.service.leaveSpace(actor("principal_editor", "request_private_leave"), {
+    mindId: SPACE_ID,
+    expectedMembershipVersion: 1,
+    idempotencyKey: "membership-private-editor-leave-0001",
+  });
+  const privateRead = await authorize(
+    privateMind.memberships,
+    "principal_editor",
+    "content:browse",
+  );
+  assert.equal(privateRead.kind, "denied");
+  assert.equal(privateRead.code, "access_denied");
+});
+
 test("membership version CAS, concurrent writers, no-op and exact retry are deterministic", async () => {
   const env = harness();
   const first = env.service.changeMembershipRole(actor("principal_owner", "request_race_a"), {

@@ -52,15 +52,48 @@ const initialOrdinaryMinds = () => [{
   role: "editor",
   metadataVersion: 4,
   updatedLabel: "Updated at fixture time",
+}, {
+  mindId: "mind_fixture_private_member",
+  handle: "private-room",
+  name: "Private Room",
+  description: "Private membership fixture.",
+  headRevisionId: "revision_fixture_private_member",
+  visibility: "private",
+  role: "editor",
+  metadataVersion: 2,
+  updatedLabel: "Updated at fixture time",
 }];
 
 let ordinaryMinds;
+let memberships;
 let calls;
 let conflictMode;
 let collaborationInvitations;
 
+function fixtureMemberId(handle, kind) {
+  if (handle === "research-notes") {
+    return kind === "self" ? "member-fixture-self" : "member-fixture-editor";
+  }
+  return `member-fixture-${kind}-${handle}`;
+}
+
 function resetFixture() {
   ordinaryMinds = initialOrdinaryMinds();
+  memberships = new Map(ordinaryMinds.map((mind) => [mind.handle, [{
+    memberId: fixtureMemberId(mind.handle, "self"),
+    displayName: "Fixture User",
+    role: mind.role,
+    membershipVersion: 3,
+    isSelf: true,
+    state: "active",
+  }, {
+    memberId: fixtureMemberId(mind.handle, "collaborator"),
+    displayName: "Morgan Editor",
+    role: mind.role === "owner" ? "editor" : "owner",
+    membershipVersion: 5,
+    isSelf: false,
+    state: "active",
+  }]]));
   calls = [];
   conflictMode = null;
   collaborationInvitations = [{
@@ -77,23 +110,19 @@ function resetFixture() {
 resetFixture();
 
 function memberProjection(mind) {
-  const self = {
-    memberId: "member-fixture-self",
-    displayName: "Fixture User",
-    role: mind.role,
-    membershipVersion: 3,
-    isSelf: true,
-    state: "active",
-  };
-  const collaborator = {
-    memberId: "member-fixture-editor",
-    displayName: "Morgan Editor",
-    role: mind.role === "owner" ? "editor" : "owner",
-    membershipVersion: 5,
-    isSelf: false,
-    state: "active",
-  };
-  return [self, collaborator];
+  return (memberships.get(mind.handle) ?? []).filter(({ state }) => state === "active");
+}
+
+function activeMember(handle, memberId) {
+  return (memberships.get(handle) ?? []).find(
+    (candidate) => candidate.memberId === memberId && candidate.state === "active",
+  );
+}
+
+function selfMember(handle) {
+  return (memberships.get(handle) ?? []).find(
+    (candidate) => candidate.isSelf && candidate.state === "active",
+  );
 }
 
 function collaborationProjection(mind) {
@@ -184,7 +213,9 @@ function routeModel(pathname) {
     view: {
       kind: "detail",
       mind,
-      collaboration: collaborationProjection(mind),
+      ...(mind.accessKind === "visibility"
+        ? {}
+        : { collaboration: collaborationProjection(mind) }),
       ...(mind.role === "owner" ? {
         ownership: { kind: "ready", members },
         capacity: capacityProjection(),
@@ -202,8 +233,10 @@ function apiMind(mind) {
     name: mind.name,
     description: mind.description,
     visibility: mind.visibility,
-    access: { kind: "membership", role: mind.role },
-    discovery: "membership",
+    access: mind.accessKind === "visibility"
+      ? { kind: "visibility", role: null }
+      : { kind: "membership", role: mind.role },
+    discovery: mind.discovery ?? "membership",
   };
 }
 
@@ -304,7 +337,9 @@ const server = createServer(async (request, response) => {
     }
     if (url.pathname === "/_fixture/conflict" && request.method === "POST") {
       const body = await readJson(request);
-      conflictMode = body?.mode === "downgrade" || body?.mode === "revoke" ? body.mode : null;
+      conflictMode = ["downgrade", "revoke", "membership"].includes(body?.mode)
+        ? body.mode
+        : null;
       sendJson(response, 200, { ok: true, mode: conflictMode });
       return;
     }
@@ -343,6 +378,14 @@ const server = createServer(async (request, response) => {
         updatedLabel: "Created at fixture time",
       };
       ordinaryMinds = [created, ...ordinaryMinds.filter((mind) => mind.handle !== created.handle)];
+      memberships.set(created.handle, [{
+        memberId: fixtureMemberId(created.handle, "self"),
+        displayName: "Fixture User",
+        role: "owner",
+        membershipVersion: 1,
+        isSelf: true,
+        state: "active",
+      }]);
       sendApiSuccess(response, { route: `/${created.handle}` });
       return;
     }
@@ -463,9 +506,97 @@ const server = createServer(async (request, response) => {
         sendApiError(response, 403, "forbidden");
         return;
       }
+      const source = selfMember(handle);
+      const target = activeMember(handle, body.target_member_id);
+      if (!source || !target) {
+        sendApiError(response, 409, "ownership_state_changed");
+        return;
+      }
+      source.role = "admin";
+      source.membershipVersion += 1;
+      target.role = "owner";
+      target.membershipVersion += 1;
       mind.role = "admin";
       mind.metadataVersion += 1;
       sendApiSuccess(response, { role: "admin" });
+      return;
+    }
+
+    const memberMatch = url.pathname.match(/^\/api\/v1\/minds\/([^/]+)\/members\/([^/]+)$/u);
+    if (memberMatch && request.method === "PATCH") {
+      const handle = decodeURIComponent(memberMatch[1]);
+      const memberId = decodeURIComponent(memberMatch[2]);
+      const body = await readJson(request);
+      recordCall("changeMembershipRole", request, { handle, member_id: memberId, ...body });
+      const mind = ordinaryMinds.find((candidate) => candidate.handle === handle);
+      const member = activeMember(handle, memberId);
+      if (!mutationAuthorized(request) || !mind || !member) {
+        sendApiError(response, 404, "membership_not_found");
+        return;
+      }
+      if (conflictMode === "membership") {
+        member.role = "admin";
+        member.membershipVersion += 1;
+        conflictMode = null;
+        sendApiError(response, 409, "membership_version_conflict");
+        return;
+      }
+      if (body?.expected_membership_version !== member.membershipVersion) {
+        sendApiError(response, 409, "membership_version_conflict");
+        return;
+      }
+      member.role = body.role;
+      member.membershipVersion += 1;
+      sendApiSuccess(response, { role: member.role });
+      return;
+    }
+    if (memberMatch && request.method === "DELETE") {
+      const handle = decodeURIComponent(memberMatch[1]);
+      const memberId = decodeURIComponent(memberMatch[2]);
+      const body = await readJson(request);
+      recordCall("revokeMembership", request, { handle, member_id: memberId, ...body });
+      const mind = ordinaryMinds.find((candidate) => candidate.handle === handle);
+      const member = activeMember(handle, memberId);
+      if (!mutationAuthorized(request) || !mind || !member) {
+        sendApiError(response, 404, "membership_not_found");
+        return;
+      }
+      if (body?.expected_membership_version !== member.membershipVersion) {
+        sendApiError(response, 409, "membership_version_conflict");
+        return;
+      }
+      member.state = "revoked";
+      member.membershipVersion += 1;
+      sendApiSuccess(response, { state: "revoked" });
+      return;
+    }
+
+    const leaveMatch = url.pathname.match(/^\/api\/v1\/minds\/([^/]+)\/leave$/u);
+    if (leaveMatch && request.method === "POST") {
+      const handle = decodeURIComponent(leaveMatch[1]);
+      const body = await readJson(request);
+      recordCall("leaveMind", request, { handle, ...body });
+      const index = ordinaryMinds.findIndex((candidate) => candidate.handle === handle);
+      const mind = ordinaryMinds[index];
+      const member = selfMember(handle);
+      if (!mutationAuthorized(request) || !mind || !member || mind.role === "owner") {
+        sendApiError(response, 403, "forbidden");
+        return;
+      }
+      if (body?.expected_membership_version !== member.membershipVersion) {
+        sendApiError(response, 409, "membership_version_conflict");
+        return;
+      }
+      member.state = "revoked";
+      member.membershipVersion += 1;
+      if (mind.visibility === "private") {
+        ordinaryMinds.splice(index, 1);
+      } else {
+        mind.role = "reader";
+        mind.accessKind = "visibility";
+        mind.discovery = mind.visibility === "public" ? "public_catalog" : "exact_handle";
+      }
+      sendApiSuccess(response, { state: "revoked" });
       return;
     }
 
@@ -513,6 +644,7 @@ const server = createServer(async (request, response) => {
         return;
       }
       ordinaryMinds = ordinaryMinds.filter((mind) => mind.handle !== handle);
+      memberships.delete(handle);
       sendApiSuccess(response, { replayed: false });
       return;
     }
