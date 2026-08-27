@@ -921,12 +921,70 @@ const GET_FILE_INGRESS_CAPABILITIES_OUTPUT_SCHEMA = toolOutputSchema(
       "report_scope",
       "client_companion_status",
       "path_admission_status",
+      "native_file_parameter",
       "sources",
     ]),
     properties: Object.freeze({
-      report_scope: Object.freeze({ const: "hosted_server_adapters_only" }),
+      report_scope: Object.freeze({
+        const: "active_route_profile_and_hosted_server_adapters",
+      }),
       client_companion_status: Object.freeze({ const: "not_reported" }),
       path_admission_status: Object.freeze({ const: "not_reported" }),
+      native_file_parameter: Object.freeze({
+        type: "object",
+        additionalProperties: false,
+        required: Object.freeze([
+          "source_kind",
+          "transport",
+          "status",
+          "route_profile_id",
+          "host_rewrite_assertion_id",
+          "host_rewrite_observed_at_utc",
+        ]),
+        properties: Object.freeze({
+          source_kind: Object.freeze({ const: "session_attachment" }),
+          transport: Object.freeze({ const: "native_file_parameter" }),
+          status: Object.freeze({
+            type: "string",
+            enum: Object.freeze(["available", "not_available"]),
+          }),
+          route_profile_id: Object.freeze({
+            type: Object.freeze(["string", "null"]),
+            minLength: 1,
+            maxLength: 128,
+          }),
+          host_rewrite_assertion_id: Object.freeze({
+            type: Object.freeze(["string", "null"]),
+            minLength: 1,
+            maxLength: 256,
+          }),
+          host_rewrite_observed_at_utc: Object.freeze({
+            type: Object.freeze(["string", "null"]),
+            format: "date-time",
+          }),
+        }),
+        allOf: Object.freeze([
+          Object.freeze({
+            if: Object.freeze({
+              properties: Object.freeze({ status: Object.freeze({ const: "available" }) }),
+            }),
+            then: Object.freeze({
+              properties: Object.freeze({
+                route_profile_id: Object.freeze({ type: "string" }),
+                host_rewrite_assertion_id: Object.freeze({ type: "string" }),
+                host_rewrite_observed_at_utc: Object.freeze({ type: "string" }),
+              }),
+            }),
+            else: Object.freeze({
+              properties: Object.freeze({
+                route_profile_id: Object.freeze({ type: "null" }),
+                host_rewrite_assertion_id: Object.freeze({ type: "null" }),
+                host_rewrite_observed_at_utc: Object.freeze({ type: "null" }),
+              }),
+            }),
+          }),
+        ]),
+      }),
       sources: Object.freeze({
         type: "array",
         minItems: 6,
@@ -950,10 +1008,18 @@ const GET_FILE_INGRESS_CAPABILITIES_OUTPUT_SCHEMA = toolOutputSchema(
             }),
             server_transport: Object.freeze({
               type: "string",
-              enum: Object.freeze(["companion_upload_intent", "none"]),
+              enum: Object.freeze([
+                "native_file_parameter",
+                "companion_upload_intent",
+                "none",
+              ]),
             }),
             requires_writable_target: Object.freeze({ type: "boolean" }),
-            max_bytes: Object.freeze({ type: "integer", minimum: 0 }),
+            max_bytes: Object.freeze({
+              type: "integer",
+              minimum: 0,
+              maximum: 268_435_456,
+            }),
             fallback: Object.freeze({ const: "none" }),
           }),
         }),
@@ -1386,7 +1452,7 @@ export const MCP_BUNDLE_FILE_TOOL_DEFINITIONS = Object.freeze([
     name: "get_file_ingress_capabilities",
     title: "Get file ingress capabilities",
     description:
-      "Read only the hosted service's deployed ingress adapters, writable-target requirements and limits. This response does not report installed client companions or promise that a specific local path is readable; those require fresh client inventory and local admission. An unavailable source has no implicit base64, URL, local-path or cross-source fallback.",
+      "Read the active route profile plus hosted ingress adapters, writable-target requirements and limits. Native session_attachment is available only when this exact route is backed by an external host-rewrite assertion; a static file schema is not evidence. This response does not report installed client companions or promise that a specific local path is readable. An unavailable source has no implicit base64, URL, local-path or cross-source fallback.",
     inputSchema: GET_FILE_INGRESS_CAPABILITIES_INPUT_SCHEMA,
     outputSchema: GET_FILE_INGRESS_CAPABILITIES_OUTPUT_SCHEMA,
     securitySchemes: READ_SECURITY_SCHEMES,

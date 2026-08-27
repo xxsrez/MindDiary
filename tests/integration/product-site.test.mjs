@@ -2198,7 +2198,8 @@ test("product MCP facade advertises only canonical content tools and current-acc
   assert.deepEqual(
     tools.map(({ name }) => name),
     MCP_TOOL_DEFINITIONS
-      .filter(({ name }) => name !== "create_file_upload_intent")
+      .filter(({ name }) =>
+        name !== "create_file_upload_intent" && name !== "stage_bundle_file")
       .map(({ name }) => name),
   );
   assert.equal(tools.some(({ name }) => String(name).includes("member") || String(name).includes("token")), false);

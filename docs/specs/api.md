@@ -2232,9 +2232,17 @@ source kind:
 
 ```json
 {
-  "report_scope": "hosted_server_adapters_only",
+  "report_scope": "active_route_profile_and_hosted_server_adapters",
   "client_companion_status": "not_reported",
   "path_admission_status": "not_reported",
+  "native_file_parameter": {
+    "source_kind": "session_attachment",
+    "transport": "native_file_parameter",
+    "status": "not_available",
+    "route_profile_id": null,
+    "host_rewrite_assertion_id": null,
+    "host_rewrite_observed_at_utc": null
+  },
   "sources": [
     {
       "source_kind": "local_path",
@@ -2248,12 +2256,20 @@ source kind:
 }
 ```
 
-`server_adapter_status` is `available | not_available`. It proves only that the
-deployed hosted service has the named server boundary, required writable-target check
-and advertised byte limit. It does not prove that a packaged companion is
-installed or visible in the active Codex client/profile, and it never predicts
-whether one concrete path will pass local admission. Those two facts require,
-respectively, fresh installed-client inventory and a local companion call.
+`server_adapter_status` is `available | not_available`. Для
+`session_attachment` значение `available` требует route-bound external
+assertion: exact host/profile действительно переписал `stage_bundle_file.file`
+в provider-issued object. Projection возвращает только safe profile ID,
+assertion ID и время observation; статическая schema и repository tests этого
+не доказывают. Остальные rows подтверждают только deployed server boundary,
+current writable-target check и advertised byte limit. Response не доказывает,
+что packaged companion установлен в current client или что конкретный path
+пройдёт local admission; для этого нужны fresh installed inventory и companion
+call.
+
+Текущий direct custom MCP route не имеет host-rewrite assertion, поэтому
+сообщает `session_attachment` как `not_available` и не публикует
+`stage_bundle_file` в fresh catalog.
 
 Release 0.2 reports only `local_path` and
 `workspace/generated_artifact` as `available`, both through

@@ -254,6 +254,9 @@ operation disposition и migration принадлежат MD-337/MD-339.
 
 ## Исследования
 
+- [Статус native file route на 2026-08-28](reports/2026-08-28-native-file-route-implementation-status.md)
+  — repository-кандидат MD-315 с profile-gated catalog, безопасным streaming
+  transport и точным внешним blocker: current Codex host не доказал rewrite.
 - [Capability host-managed и same-host file transport на 2026-08-27](reports/2026-08-27-host-managed-file-transport-capability-probe.md)
   — live Codex Desktop matrix native provider parameter, host picker и packaged
   companion с closed assertions, exact synthetic hashes и typed unavailable

@@ -26,6 +26,98 @@ export interface NativeFileTransport {
   download(value: unknown): Promise<Readonly<VerifiedNativeFileDownload>>;
 }
 
+export interface NativeFileHostRewriteAssertion {
+  readonly profileId: string;
+  readonly assertionId: string;
+  readonly observedAtUtc: string;
+  readonly toolName: "stage_bundle_file";
+  readonly parameterName: "file";
+  readonly sourceKind: "session_attachment";
+  readonly transport: "native_file_parameter";
+}
+
+export interface NativeFileParameterRouteOptions {
+  readonly assertion: NativeFileHostRewriteAssertion;
+  readonly fetcher?: typeof fetch;
+  readonly maxRedirects?: number;
+  readonly timeoutMs?: number;
+}
+
+const NATIVE_FILE_MAX_BYTES = 268_435_456;
+const SAFE_EVIDENCE_ID = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$/u;
+const NATIVE_FILE_ROUTE_CONSTRUCTION = Symbol("native-file-route-construction");
+const CANONICAL_UTC = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u;
+
+function validHostRewriteAssertion(
+  value: NativeFileHostRewriteAssertion,
+): boolean {
+  return record(value) &&
+    Object.keys(value).length === 7 &&
+    boundedString(value.profileId, 128) &&
+    SAFE_EVIDENCE_ID.test(value.profileId) &&
+    boundedString(value.assertionId, 256) &&
+    SAFE_EVIDENCE_ID.test(value.assertionId) &&
+    boundedString(value.observedAtUtc, 64) &&
+    CANONICAL_UTC.test(value.observedAtUtc) &&
+    Number.isFinite(Date.parse(value.observedAtUtc)) &&
+    value.toolName === "stage_bundle_file" &&
+    value.parameterName === "file" &&
+    value.sourceKind === "session_attachment" &&
+    value.transport === "native_file_parameter";
+}
+
+/**
+ * One server-side route profile backed by an external receipt that the host
+ * rewrites the native `file` parameter before this adapter sees the request.
+ * Construction is intentionally closed so a raw transport cannot accidentally
+ * make the tool appear in a direct custom-MCP catalog.
+ */
+export class NativeFileParameterRoute {
+  readonly profileId: string;
+  readonly hostRewriteAssertionId: string;
+  readonly hostRewriteObservedAtUtc: string;
+  readonly sourceKind = "session_attachment" as const;
+  readonly transport = "native_file_parameter" as const;
+  readonly #nativeFiles: NativeFileTransport;
+
+  private constructor(
+    construction: symbol,
+    assertion: NativeFileHostRewriteAssertion,
+    nativeFiles: NativeFileTransport,
+  ) {
+    if (construction !== NATIVE_FILE_ROUTE_CONSTRUCTION) {
+      throw new TypeError("native file route construction is closed");
+    }
+    this.profileId = assertion.profileId;
+    this.hostRewriteAssertionId = assertion.assertionId;
+    this.hostRewriteObservedAtUtc = new Date(assertion.observedAtUtc).toISOString();
+    this.#nativeFiles = nativeFiles;
+    Object.freeze(this);
+  }
+
+  static create(options: NativeFileParameterRouteOptions): NativeFileParameterRoute {
+    if (!validHostRewriteAssertion(options.assertion)) {
+      throw new TypeError("native file route requires an exact host rewrite assertion");
+    }
+    return new NativeFileParameterRoute(
+      NATIVE_FILE_ROUTE_CONSTRUCTION,
+      options.assertion,
+      new OpenAiNativeFileTransport({
+        maxBytes: NATIVE_FILE_MAX_BYTES,
+        ...(options.fetcher === undefined ? {} : { fetcher: options.fetcher }),
+        ...(options.maxRedirects === undefined
+          ? {}
+          : { maxRedirects: options.maxRedirects }),
+        ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
+      }),
+    );
+  }
+
+  download(value: unknown): Promise<Readonly<VerifiedNativeFileDownload>> {
+    return this.#nativeFiles.download(value);
+  }
+}
+
 export interface OpenAiNativeFileTransportOptions {
   readonly fetcher?: typeof fetch;
   readonly maxBytes: number;
@@ -154,6 +246,8 @@ export class OpenAiNativeFileTransport implements NativeFileTransport {
               method: "GET",
               redirect: "manual",
               credentials: "omit",
+              cache: "no-store",
+              referrerPolicy: "no-referrer",
               signal: controller.signal,
               headers: Object.freeze({ accept: "application/octet-stream" }),
             }),

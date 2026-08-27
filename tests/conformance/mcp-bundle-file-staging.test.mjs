@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   MCP_BUNDLE_FILE_TOOL_DEFINITIONS,
   MCP_TOOL_DEFINITIONS,
+  NativeFileParameterRoute,
   NativeFileInputFailure,
   OpenAiNativeFileTransport,
   ProductMcpContentApplication,
@@ -83,15 +84,24 @@ test("publishes strict native-file staging metadata and mixed commit operations"
     "report_scope",
     "client_companion_status",
     "path_admission_status",
+    "native_file_parameter",
     "sources",
   ]);
+  assert.equal(
+    capabilityData.properties.native_file_parameter.properties.source_kind.const,
+    "session_attachment",
+  );
+  assert.equal(
+    capabilityData.properties.native_file_parameter.properties.transport.const,
+    "native_file_parameter",
+  );
   assert.deepEqual(
     capabilityData.properties.sources.items.properties.server_adapter_status.enum,
     ["available", "not_available"],
   );
   assert.deepEqual(
     capabilityData.properties.sources.items.properties.server_transport.enum,
-    ["companion_upload_intent", "none"],
+    ["native_file_parameter", "companion_upload_intent", "none"],
   );
   assert.doesNotMatch(
     JSON.stringify(capabilities.outputSchema),
@@ -224,6 +234,23 @@ test("bounded native transport validates every redirect host and never exposes p
       return true;
     },
   );
+  for (const invalid of [
+    "/tmp/private.png",
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB",
+    { localPath: "/tmp/private.png" },
+    { fileId: "invented-without-provider-object" },
+    {
+      fileId: "provider-secret-id",
+      downloadUrl: "https://files.oaiusercontent.com/file/temporary-secret",
+      bytes: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB",
+    },
+  ]) {
+    await assert.rejects(
+      transport.download(invalid),
+      (error) => error instanceof NativeFileInputFailure &&
+        error.code === "native_file_input_unsupported",
+    );
+  }
   const tooSmall = new OpenAiNativeFileTransport({
     maxBytes: PNG.byteLength - 1,
     fetcher: async () => new Response(PNG, { status: 200 }),
@@ -267,6 +294,24 @@ test("bounded native transport validates every redirect host and never exposes p
   );
 });
 
+test("native route activation requires an exact externally observed rewrite assertion", () => {
+  assert.throws(
+    () => NativeFileParameterRoute.create({
+      assertion: {
+        profileId: "test-profile",
+        assertionId: "test-receipt",
+        observedAtUtc: "not-a-canonical-observation",
+        toolName: "stage_bundle_file",
+        parameterName: "file",
+        sourceKind: "session_attachment",
+        transport: "native_file_parameter",
+      },
+      async fetcher() { throw new Error("must not fetch"); },
+    }),
+    /exact host rewrite assertion/u,
+  );
+});
+
 test("product adapter terminates provider metadata and returns only verified staged metadata", async () => {
   let portableRequest = null;
   let listRequest = null;
@@ -307,21 +352,28 @@ test("product adapter terminates provider metadata and returns only verified sta
       async mutateRead() { throw new Error("unused"); },
       async mutateWrite() { throw new Error("unused"); },
     },
-    nativeFiles: {
-      async download(file) {
-        assert.deepEqual(file, {
-          fileId: "provider-secret-id",
-          downloadUrl: "https://files.oaiusercontent.com/file/temporary-secret",
-          fileName: "diagram.png",
-          mimeType: "image/png",
-        });
-        return {
-          stream: (async function* () { yield PNG; })(),
-          fileName: "diagram.png",
-          mimeType: "image/png",
-        };
+    nativeFileRoute: NativeFileParameterRoute.create({
+      assertion: {
+        profileId: "test-app-session-attachment-v1",
+        assertionId: "test-receipt:host-rewrite:stage-bundle-file:v1",
+        observedAtUtc: "2026-08-27T22:30:00.000Z",
+        toolName: "stage_bundle_file",
+        parameterName: "file",
+        sourceKind: "session_attachment",
+        transport: "native_file_parameter",
       },
-    },
+      async fetcher(input, init) {
+        assert.equal(
+          String(input),
+          "https://files.oaiusercontent.com/file/temporary-secret",
+        );
+        assert.equal(init.credentials, "omit");
+        assert.equal(init.redirect, "manual");
+        assert.equal(init.cache, "no-store");
+        assert.equal(init.referrerPolicy, "no-referrer");
+        return new Response(PNG, { status: 200 });
+      },
+    }),
     staging: {
       async stageStream(request) {
         portableRequest = request;
@@ -434,6 +486,15 @@ test("product adapter terminates provider metadata and returns only verified sta
     },
     search: {}, history: {}, validation: {}, commits: {}, capture: {}, exports: {},
   });
+  const supportedCatalog = await application.listTools({ actor: ACTOR });
+  const nativeDefinition = supportedCatalog.find(
+    ({ name }) => name === "stage_bundle_file",
+  );
+  assert.deepEqual(nativeDefinition._meta, { "openai/fileParams": ["file"] });
+  assert.deepEqual(nativeDefinition.inputSchema.properties.file.required, [
+    "file_id",
+    "download_url",
+  ]);
   const result = await application.executeToolCall({
     actor: ACTOR,
     name: "stage_bundle_file",
@@ -460,6 +521,10 @@ test("product adapter terminates provider metadata and returns only verified sta
     Buffer.from(PNG),
   );
   assert.equal("file" in portableRequest, false);
+  assert.equal(portableRequest.sourceKind, "session_attachment");
+  assert.equal(portableRequest.maxBytes, 268_435_456);
+  assert.equal(portableRequest.spaceId, "space_bundle_stage");
+  assert.equal(portableRequest.writeBindingId, "write_binding_stage");
   const serialized = JSON.stringify(result);
   assert.doesNotMatch(serialized, /provider-secret|temporary-secret|download_url|file_id|137,80,78,71/iu);
 
@@ -527,7 +592,7 @@ test("product adapter terminates provider metadata and returns only verified sta
       max_bytes,
     ]),
     [
-      ["session_attachment", "not_available", "none", false, 0],
+      ["session_attachment", "available", "native_file_parameter", true, 268_435_456],
       ["local_path", "not_available", "none", false, 0],
       ["workspace/generated_artifact", "not_available", "none", false, 0],
       ["connector_object", "not_available", "none", false, 0],
@@ -537,8 +602,16 @@ test("product adapter terminates provider metadata and returns only verified sta
   );
   assert.equal(
     capabilities.structuredContent.data.report_scope,
-    "hosted_server_adapters_only",
+    "active_route_profile_and_hosted_server_adapters",
   );
+  assert.deepEqual(capabilities.structuredContent.data.native_file_parameter, {
+    source_kind: "session_attachment",
+    transport: "native_file_parameter",
+    status: "available",
+    route_profile_id: "test-app-session-attachment-v1",
+    host_rewrite_assertion_id: "test-receipt:host-rewrite:stage-bundle-file:v1",
+    host_rewrite_observed_at_utc: "2026-08-27T22:30:00.000Z",
+  });
   assert.equal(capabilities.structuredContent.data.client_companion_status, "not_reported");
   assert.equal(capabilities.structuredContent.data.path_admission_status, "not_reported");
 
@@ -597,6 +670,65 @@ test("product adapter terminates provider metadata and returns only verified sta
       staged_file_id: "staged_safe_ref",
     },
   ]);
+});
+
+test("direct custom MCP omits native staging and fails closed before target or fetch work", async () => {
+  let touched = 0;
+  const unused = new Proxy({}, {
+    get() {
+      return async () => {
+        touched += 1;
+        throw new Error("direct route must fail first");
+      };
+    },
+  });
+  const application = new ProductMcpContentApplication({
+    discovery: unused,
+    browse: unused,
+    search: unused,
+    history: unused,
+    validation: unused,
+    bindings: unused,
+    commits: unused,
+    ingress: unused,
+    bundleFileDownloads: unused,
+    capture: unused,
+  });
+
+  const listed = await application.listTools({ actor: ACTOR });
+  assert.equal(listed.some(({ name }) => name === "stage_bundle_file"), false);
+  const capabilities = await application.executeToolCall({
+    actor: ACTOR,
+    name: "get_file_ingress_capabilities",
+    arguments: {},
+  });
+  assert.deepEqual(capabilities.structuredContent.data.native_file_parameter, {
+    source_kind: "session_attachment",
+    transport: "native_file_parameter",
+    status: "not_available",
+    route_profile_id: null,
+    host_rewrite_assertion_id: null,
+    host_rewrite_observed_at_utc: null,
+  });
+  const called = await application.executeToolCall({
+    actor: ACTOR,
+    name: "stage_bundle_file",
+    arguments: {
+      mind: "bundle-stage",
+      write_binding_id: "write_binding_stage",
+      file: {
+        file_id: "invented-provider-id",
+        download_url: "https://files.oaiusercontent.com/file/invented-url",
+      },
+      idempotency_key: "direct-custom-stage",
+    },
+  });
+  assert.equal(called.isError, true);
+  assert.equal(
+    called.structuredContent.error.code,
+    "native_file_input_unsupported",
+  );
+  assert.equal(touched, 0);
 });
 
 test("read-only catalog omits native staging and direct calls fail before execution", async () => {

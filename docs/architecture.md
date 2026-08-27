@@ -637,7 +637,8 @@ sequenceDiagram
     participant W as Index worker
 
     alt native session attachment
-        A->>M: stage_bundle_file(mind, native file, key)
+        A->>M: host-rewritten native file parameter for an attested route profile
+        M->>M: allowlisted no-credential bounded fetch; source=session_attachment
     else local/workspace companion
         A->>M: create_file_upload_intent(mind, filename, size, SHA, key)
         M-->>A: versioned same-origin one-use upload URL

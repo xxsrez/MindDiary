@@ -12,6 +12,12 @@ Google Drive object. Его exact-provider UAT остаётся отдельны
 `FileIngressCoordinator` сохраняет общую staging/commit semantics и exact
 reconcile. Google Drive reference adapter не выдаётся за hosted capability
 только потому, что в repository существуют его code и tests. Release 0.3
+candidate MD-315 добавляет direct host/provider route, который включается
+только для exact server route profile с внешним assertion фактически
+наблюдавшегося host rewrite. Текущий direct custom MCP такого assertion не
+имеет: `session_attachment` остаётся `not_available`, а `stage_bundle_file` не
+публикуется в fresh catalog. Наличие port, schema или локальных tests не
+является hosted support. Release 0.3
 candidate подключает `bounded_in_memory` отдельным
 constructor-owned port для trusted hosted producer, но не публикует его через
 HTTP/MCP или capability discovery до поздней UAT-проверки. MD-322 подключает trusted
@@ -184,7 +190,7 @@ double в repository. `implemented_repository` означает только cod
 
 | Source kind | Adapter owns reading | Transport boundary | Release status / evidence | Explicit fallback |
 |---|---|---|---|---|
-| `session_attachment` | MCP/provider adapter | Native client file parameter | Release 0.3 `not_available`; legacy repository schema is not a Release 0.2 support claim | No base64, local-path or arbitrary-URL fallback |
+| `session_attachment` | Exact route-profile MCP/provider adapter | Native client file parameter после externally attested host rewrite | Release 0.3 `not_available` для текущего direct custom MCP; MD-315 route-кандидат `implemented_repository`, но не активируется без exact host/profile assertion | Нет base64, local-path, arbitrary-URL или manually invented provider-object fallback |
 | `local_path` | Packaged local companion on the current Codex host | Path-free one-use hosted upload intent; companion snapshots one exact regular file | Release 0.2 `implemented_repository`; installed tool inventory and exact disk journey are pending MD-325 | Missing companion is a client-installation failure; local admission returns only observable safe errors; never send the path to hosted MCP |
 | `workspace/generated_artifact` | Packaged local companion with trusted process-configured workspace roots | Same path-free one-use hosted intent | Release 0.2 `implemented_repository`; installed tool inventory and exact workspace journey are pending MD-325 | Unsupported authority fails locally; do not relabel or fall back to URL/provider transport |
 | `connector_object` | Explicit authorized connector adapter | Connector API/object fetch | Release 0.3 `implemented_repository` для Google Drive reference adapter; exact-provider UAT pending MD-319, поэтому hosted status остаётся `not_available` | No cross-provider, implicit native export or URL fallback |
@@ -472,9 +478,10 @@ Open questions intentionally left for child implementation decisions:
   Docs/Sheets/Slides reference profile can be supported? Such support requires
   a separate adapter and exact-provider receipt; the Google adapter is not a
   cross-provider fallback.
-- Release 0.3 must separately define exact client/profile receipts for direct
-  host/provider, connector and generated routes before any of them can move
-  from `not_available` to supported.
+- Release 0.3 must obtain a real client/host receipt for each direct
+  host/provider route profile before configuring the MD-315 route candidate as
+  available. Connector and generated routes require their own distinct
+  versioned source receipts and cannot reuse the `session_attachment` claim.
 
 Protocol exposure itself is accepted: both modern `2026-07-28` and isolated
 compatibility `2025-11-25` profiles publish the same strict schemas for

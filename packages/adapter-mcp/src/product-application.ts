@@ -13,8 +13,8 @@ import type {
   MindValidationService,
 } from "@mind-diary/application-content";
 import {
+  NativeFileParameterRoute,
   NativeFileInputFailure,
-  type NativeFileTransport,
 } from "./native-file-input.js";
 import {
   MCP_TOOL_DEFINITIONS,
@@ -49,7 +49,7 @@ export interface ProductMcpApplicationDependencies {
     "capabilities" | "reconcileStage" | "reconcileCommit"
   >;
   readonly bundleFileDownloads: Pick<BundleFileDownloadService, "issue">;
-  readonly nativeFiles?: NativeFileTransport;
+  readonly nativeFileRoute?: NativeFileParameterRoute;
   readonly capture: Pick<AutomaticCaptureService, "capture">;
   readonly scheduleCommitEffects?: () => void | Promise<void>;
 }
@@ -392,13 +392,17 @@ export class ProductMcpContentApplication implements McpContentApplication {
   async listTools(_request: {
     readonly actor: AuthenticatedActor;
   }): Promise<readonly Readonly<Record<string, unknown>>[]> {
-    if (
+    const hostedUploadIntents =
       this.#dependencies.uploadIntents !== undefined &&
-      this.#dependencies.uploadIntentUrl !== undefined
-    ) return MCP_TOOL_DEFINITIONS;
+      this.#dependencies.uploadIntentUrl !== undefined;
+    const nativeFileParameter =
+      this.#dependencies.nativeFileRoute instanceof NativeFileParameterRoute &&
+      this.#dependencies.staging !== undefined;
     return Object.freeze(
       MCP_TOOL_DEFINITIONS.filter(
-        (definition) => definition.name !== "create_file_upload_intent",
+        (definition) =>
+          (hostedUploadIntents || definition.name !== "create_file_upload_intent") &&
+          (nativeFileParameter || definition.name !== "stage_bundle_file"),
       ),
     );
   }
@@ -435,6 +439,13 @@ export class ProductMcpContentApplication implements McpContentApplication {
   }
 
   async authorizeToolCall(request: Parameters<McpContentApplication["authorizeToolCall"]>[0]) {
+    if (
+      request.name === "stage_bundle_file" &&
+      (!(this.#dependencies.nativeFileRoute instanceof NativeFileParameterRoute) ||
+        this.#dependencies.staging === undefined)
+    ) {
+      return Object.freeze({ kind: "allowed" as const });
+    }
     if (
       request.name === "start_export" ||
       request.name === "get_export_status" ||
@@ -504,6 +515,11 @@ export class ProductMcpContentApplication implements McpContentApplication {
           const hostedUploadIntents =
             this.#dependencies.uploadIntents !== undefined &&
             this.#dependencies.uploadIntentUrl !== undefined;
+          const nativeFileRoute =
+            this.#dependencies.nativeFileRoute instanceof NativeFileParameterRoute &&
+            this.#dependencies.staging !== undefined
+              ? this.#dependencies.nativeFileRoute
+              : null;
           const sources = Object.freeze([
             "session_attachment",
             "local_path",
@@ -512,13 +528,19 @@ export class ProductMcpContentApplication implements McpContentApplication {
             "bounded_in_memory",
             "server_generated",
           ].map((sourceKind) => {
-            const available = hostedUploadIntents &&
-              (sourceKind === "local_path" ||
-                sourceKind === "workspace/generated_artifact");
+            const nativeAvailable =
+              sourceKind === "session_attachment" && nativeFileRoute !== null;
+            const companionAvailable = hostedUploadIntents &&
+              (sourceKind === "local_path" || sourceKind === "workspace/generated_artifact");
+            const available = nativeAvailable || companionAvailable;
             return Object.freeze({
               sourceKind,
               serverAdapterStatus: available ? "available" : "not_available",
-              serverTransport: available ? "companion_upload_intent" : "none",
+              serverTransport: nativeAvailable
+                ? "native_file_parameter"
+                : companionAvailable
+                  ? "companion_upload_intent"
+                  : "none",
               requiresWritableTarget: available,
               maxBytes: available ? 268_435_456 : 0,
               fallback: "none",
@@ -526,12 +548,21 @@ export class ProductMcpContentApplication implements McpContentApplication {
           }));
         return createMcpToolSuccessResult(
           snakeOutput({
-            reportScope: "hosted_server_adapters_only",
+            reportScope: "active_route_profile_and_hosted_server_adapters",
             clientCompanionStatus: "not_reported",
             pathAdmissionStatus: "not_reported",
+            nativeFileParameter: {
+              sourceKind: "session_attachment",
+              transport: "native_file_parameter",
+              status: nativeFileRoute === null ? "not_available" : "available",
+              routeProfileId: nativeFileRoute?.profileId ?? null,
+              hostRewriteAssertionId: nativeFileRoute?.hostRewriteAssertionId ?? null,
+              hostRewriteObservedAtUtc:
+                nativeFileRoute?.hostRewriteObservedAtUtc ?? null,
+            },
             sources,
           }),
-          "Read the hosted server-adapter matrix; client inventory and path admission are not reported.",
+          "Read the active route profile and hosted server-adapter matrix; client inventory and path admission are not reported.",
         );
         }
       case "create_file_upload_intent": {
@@ -680,6 +711,19 @@ export class ProductMcpContentApplication implements McpContentApplication {
       case "validate_mind":
         return snakeOutput(await this.#dependencies.validation.validateMind(request.actor, input));
       case "stage_bundle_file": {
+        const staging = this.#dependencies.staging;
+        if (
+          !(this.#dependencies.nativeFileRoute instanceof NativeFileParameterRoute) ||
+          staging === undefined
+        ) {
+          return createMcpToolErrorResult(
+            request.actor.requestId,
+            "native_file_input_unsupported",
+            "This deployed route profile has no verified native file parameter rewrite.",
+            false,
+          );
+        }
+        const nativeFileRoute = this.#dependencies.nativeFileRoute;
         if (!validStageBundleFileInput(input)) {
           return createMcpToolErrorResult(
             request.actor.requestId,
@@ -706,20 +750,9 @@ export class ProductMcpContentApplication implements McpContentApplication {
           info.mind.mindId,
         );
         if (target.kind === "error") return target.result;
-        if (
-          this.#dependencies.nativeFiles === undefined ||
-          this.#dependencies.staging === undefined
-        ) {
-          return createMcpToolErrorResult(
-            request.actor.requestId,
-            "native_file_input_unsupported",
-            "This deployed client/profile cannot supply native file input.",
-            false,
-          );
-        }
         let downloaded;
         try {
-          downloaded = await this.#dependencies.nativeFiles.download(input.file);
+          downloaded = await nativeFileRoute.download(input.file);
         } catch (error) {
           if (error instanceof NativeFileInputFailure) {
             return createMcpToolErrorResult(
@@ -736,10 +769,11 @@ export class ProductMcpContentApplication implements McpContentApplication {
             true,
           );
         }
-        const staged = await this.#dependencies.staging.stageStream({
+        const staged = await staging.stageStream({
           actor: request.actor,
           spaceId: info.mind.mindId,
           writeBindingId: target.writeBindingId as never,
+          sourceKind: "session_attachment",
           displayFilename: input.displayFilename ?? downloaded.fileName,
           claimedMediaType: downloaded.mimeType,
           stream: downloaded.stream,
