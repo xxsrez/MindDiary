@@ -14,6 +14,7 @@ import {
   MCP_ENDPOINT,
   MCP_LEGACY_CODEX_ENDPOINT,
   MCP_LEGACY_CODEX_PROTOCOL,
+  MCP_MOVED_EXPORT_TOOLS,
   MCP_RETIRED_SITES_ENDPOINT,
   MCP_RESOURCE_CAPABILITIES,
   MCP_TOOL_DEFINITIONS,
@@ -418,17 +419,17 @@ test("credential target actions keep recovery-safe clear distinct from select", 
         {
           role: "legacy-helper",
           path: "packages/adapter-web/src/product-http-request-helpers.ts",
-          gitBlob: "64cd4fc6cd394636bf576f5e3922a18d05a83226",
+          gitBlob: "f5d07d05f9274d9d1cf41ac005fcbbc2192faed6",
         },
         {
           role: "legacy-handler",
           path: "packages/adapter-web/src/product-http-handler.ts",
-          gitBlob: "e908d1f972d0e72d8a5399b9d2b8a7631d318642",
+          gitBlob: "9129ff9595a76cc495a087107d8b7e87cebe3e6a",
         },
         {
           role: "legacy-integration-test",
           path: "tests/integration/product-site.test.mjs",
-          gitBlob: "18eb8997e3452b882ff67468bc2e4c1995b693b8",
+          gitBlob: "9cc220f39c129cbceab8f806211e5810f46c22d2",
         },
       ],
     },
@@ -564,7 +565,7 @@ test("every exported first-party REST route has exactly one disposition", () => 
     assert.ok(["keep", "change", "move", "remove"].includes(route.disposition), route.key);
     assert.match(specification, new RegExp(route.key.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"), "u"), route.key);
   }
-  assert.equal(current.length, 41);
+  assert.equal(current.length, 43);
 });
 
 test("auxiliary capability, delivery, OAuth, MCP, and retired Sites routes are explicit", () => {
@@ -633,6 +634,7 @@ test("UI inventory covers every registered static route and both dynamic route c
 
 test("all current MCP tools have a disposition and the target catalog is exact", () => {
   assert.deepEqual(fixture.mcpTools.map(({ name }) => name), MCP_CONTENT_TOOLS);
+  assert.deepEqual([...MCP_MOVED_EXPORT_TOOLS], ["start_export", "get_export_status"]);
   assertUnique(fixture.mcpTools.map(({ name }) => name), "MCP tools must be unique");
   assert.deepEqual(
     fixture.retiredMcpTools,
@@ -656,9 +658,12 @@ test("all current MCP tools have a disposition and the target catalog is exact",
   }
   for (const retired of fixture.retiredMcpTools) {
     assert.equal(fixture.targetMcpCatalog.includes(retired), false, retired);
-    assert.ok(["move", "remove"].includes(
-      fixture.mcpTools.find(({ name }) => name === retired)?.disposition,
-    ), retired);
+    const currentDisposition = fixture.mcpTools.find(({ name }) => name === retired)?.disposition;
+    if (currentDisposition === undefined) {
+      assert.ok(MCP_MOVED_EXPORT_TOOLS.includes(retired), retired);
+    } else {
+      assert.ok(["move", "remove"].includes(currentDisposition), retired);
+    }
   }
 });
 
@@ -1035,12 +1040,12 @@ test("plugin/help migration has closed owners and exact current source evidence"
         {
           role: "help-playbook-source",
           path: "packages/adapter-web/src/token-management.ts",
-          gitBlob: "06cd5adbf721514dd51f1eaf84b22333b6651ab4",
+          gitBlob: "3583b7f5552d2560b8f06c57cd4b26374e6fe8fb",
         },
         {
           role: "help-route-source",
           path: "packages/adapter-web/src/product-http-request-helpers.ts",
-          gitBlob: "64cd4fc6cd394636bf576f5e3922a18d05a83226",
+          gitBlob: "f5d07d05f9274d9d1cf41ac005fcbbc2192faed6",
         },
       ],
     },

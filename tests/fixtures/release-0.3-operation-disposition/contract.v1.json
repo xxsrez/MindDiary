@@ -46,6 +46,13 @@
       "errors": ["import_validation_failed", "capacity_limit", "import_conflict"],
       "compatibility": "keep-route"
     },
+    "web-export": {
+      "target": "sites-control",
+      "actor": "registered-sites-principal",
+      "checks": ["sites_identity", "current_read_access", "exact_revision", "explicit_mixed_profile", "creator_private_status", "idempotency", "quota_reservation", "download_reauthorization"],
+      "errors": ["export_profile_required", "export_job_not_found", "capacity_limit", "conflict"],
+      "compatibility": "keep-route"
+    },
     "credential-control": {
       "target": "sites-control",
       "actor": "credential-owner-sites-principal",
@@ -128,9 +135,9 @@
       "clearWriteWithoutWriteScope": {"httpStatus":409,"code":"write_step_up_required","targetStateChange":"none"},
       "staleExpectedVersion": {"httpStatus":409,"code":"binding_version_conflict","targetStateChange":"none"},
       "sourceEvidence": [
-        {"role":"legacy-helper","path":"packages/adapter-web/src/product-http-request-helpers.ts","gitBlob":"64cd4fc6cd394636bf576f5e3922a18d05a83226"},
-        {"role":"legacy-handler","path":"packages/adapter-web/src/product-http-handler.ts","gitBlob":"e908d1f972d0e72d8a5399b9d2b8a7631d318642"},
-        {"role":"legacy-integration-test","path":"tests/integration/product-site.test.mjs","gitBlob":"18eb8997e3452b882ff67468bc2e4c1995b693b8"}
+        {"role":"legacy-helper","path":"packages/adapter-web/src/product-http-request-helpers.ts","gitBlob":"f5d07d05f9274d9d1cf41ac005fcbbc2192faed6"},
+        {"role":"legacy-handler","path":"packages/adapter-web/src/product-http-handler.ts","gitBlob":"9129ff9595a76cc495a087107d8b7e87cebe3e6a"},
+        {"role":"legacy-integration-test","path":"tests/integration/product-site.test.mjs","gitBlob":"9cc220f39c129cbceab8f806211e5810f46c22d2"}
       ]
     },
     "select_write": {
@@ -156,6 +163,8 @@
     {"key":"POST /api/v1/minds","disposition":"keep","profile":"web-write","mindScope":"new-ordinary","owner":"none"},
     {"key":"GET /api/v1/minds/{mind_ref}","disposition":"keep","profile":"web-read","mindScope":"explicit-current-metadata","owner":"none"},
     {"key":"GET /api/v1/minds/{mind_ref}/capacity","disposition":"keep","profile":"web-read","mindScope":"explicit-current-capacity","owner":"none"},
+    {"key":"POST /api/v1/minds/{mind_ref}/exports","disposition":"keep","profile":"web-export","mindScope":"explicit-exact-revision","owner":"MD-361"},
+    {"key":"GET /api/v1/export-jobs/{job_id}","disposition":"keep","profile":"web-export","mindScope":"creator-private-job-pinned-revision","owner":"MD-361"},
     {"key":"POST /api/v1/minds/{mind_ref}/markdown-import-plans","disposition":"keep","profile":"web-import","mindScope":"explicit-base-revision","owner":"none"},
     {"key":"POST /api/v1/minds/{mind_ref}/markdown-imports","disposition":"keep","profile":"web-import","mindScope":"explicit-base-revision","owner":"none"},
     {"key":"GET /api/v1/markdown-imports/{import_id}","disposition":"keep","profile":"web-import","mindScope":"session-pinned","owner":"none"},
@@ -246,9 +255,7 @@
     {"name":"get_bundle_file_download","disposition":"change","profile":"content-read","mindScope":"explicit-mind-revision","owner":"MD-339"},
     {"name":"commit_changeset","disposition":"change","profile":"content-write","mindScope":"explicit-selected-target-head","owner":"MD-339"},
     {"name":"reconcile_changeset","disposition":"change","profile":"content-write","mindScope":"explicit-selected-target-head","owner":"MD-339"},
-    {"name":"capture_knowledge","disposition":"change","profile":"content-write","mindScope":"explicit-selected-private-target-head","owner":"MD-339"},
-    {"name":"start_export","disposition":"move","profile":"compat-removed","mindScope":"explicit-mind-revision","owner":"MD-359"},
-    {"name":"get_export_status","disposition":"move","profile":"compat-removed","mindScope":"job-pinned-revision","owner":"MD-359"}
+    {"name":"capture_knowledge","disposition":"change","profile":"content-write","mindScope":"explicit-selected-private-target-head","owner":"MD-339"}
   ],
   "targetMcpCatalog": ["list_minds", "resolve_mind", "get_mind_info", "browse_entries", "search", "fetch", "list_revisions", "get_revision", "validate_mind", "list_bundle_files", "get_file_ingress_capabilities", "create_file_upload_intent", "stage_bundle_file", "reconcile_file_stage", "get_bundle_file_download", "commit_changeset", "reconcile_changeset", "capture_knowledge"],
   "schemaDiffs": [
@@ -291,7 +298,7 @@
     {"surface":"marketplace-package","disposition":"change","owner":"integration-owner","requirements":["AVAILABLE", "ON_USE", "transport:/api/mcp/2025-11-25", "oauth_resource:/api/mcp", "new_immutable_version"],"sourceEvidence":[{"role":"package-probe-source","path":"scripts/run-oauth-direct-plugin-probe.mjs","gitBlob":"9bf26c534f54f3d2e14b03eb88400eb7232764b2"}]},
     {"surface":"bundled-skill","disposition":"change","owner":"integration-owner","requirements":["explicit_mind", "explicit_revision_when_historical", "no_binding_tools", "no_mcp_export", "site_target_control"],"sourceEvidence":[{"role":"accepted-skill-source-contract","path":"docs/specs/plugin-connector.md","gitBlob":"044a379139578dd04dc9a33b5921cf2d6def13ed"},{"role":"installed-skill-probe-source","path":"scripts/run-oauth-direct-plugin-probe.mjs","gitBlob":"9bf26c534f54f3d2e14b03eb88400eb7232764b2"}]},
     {"surface":"/help/codex","disposition":"change","owner":"MD-339","requirements":["install", "authenticate_read", "read_explicit_mind", "select_write_target_on_site_only_when_writing"],"sourceEvidence":[{"role":"help-renderer-source","path":"packages/adapter-web/src/connections.ts","gitBlob":"2ec56171678dba8e9e716f19b5c9928f985ab634"}]},
-    {"surface":"/help","disposition":"change","owner":"integration-owner","requirements":["no_removed_binding_tools", "no_removed_export_tools"],"sourceEvidence":[{"role":"help-playbook-source","path":"packages/adapter-web/src/token-management.ts","gitBlob":"06cd5adbf721514dd51f1eaf84b22333b6651ab4"},{"role":"help-route-source","path":"packages/adapter-web/src/product-http-request-helpers.ts","gitBlob":"64cd4fc6cd394636bf576f5e3922a18d05a83226"}]},
+    {"surface":"/help","disposition":"change","owner":"integration-owner","requirements":["no_removed_binding_tools", "no_removed_export_tools"],"sourceEvidence":[{"role":"help-playbook-source","path":"packages/adapter-web/src/token-management.ts","gitBlob":"3583b7f5552d2560b8f06c57cd4b26374e6fe8fb"},{"role":"help-route-source","path":"packages/adapter-web/src/product-http-request-helpers.ts","gitBlob":"f5d07d05f9274d9d1cf41ac005fcbbc2192faed6"}]},
     {"surface":"plugin-label","disposition":"keep","owner":"integration-owner","requirements":["Mind Diary UAT", "no_production_claim"],"sourceEvidence":[{"role":"shared-label-source","path":"packages/adapter-web/src/ui-shell.ts","gitBlob":"80e2a6d652b602c05e4a371464c8f96075606bc3"}]}
   ],
   "migrationOwners": {

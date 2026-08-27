@@ -96,6 +96,8 @@ handler и отдельно проверяет принятый target contract.
 | `POST /api/v1/minds` | keep → Sites control | Ordinary Mind create; no migration |
 | `GET /api/v1/minds/{mind_ref}` | keep → Sites control | Current metadata after authorization; no content body |
 | `GET /api/v1/minds/{mind_ref}/capacity` | keep → Sites control | Current authorized capacity projection |
+| `POST /api/v1/minds/{mind_ref}/exports` | keep → Sites control | Actor-owned exact-revision export start; explicit profile for mixed revisions; atomic idempotency, quota reservation and job creation. MD-361 |
+| `GET /api/v1/export-jobs/{job_id}` | keep → Sites control | Creator-private bounded status; current read access is rechecked before issuing a short-lived download grant. MD-361 |
 | `POST /api/v1/minds/{mind_ref}/markdown-import-plans` | keep → Sites control | `web-import`; no MCP alias |
 | `POST /api/v1/minds/{mind_ref}/markdown-imports` | keep → Sites control | `web-import`; no MCP alias |
 | `GET /api/v1/markdown-imports/{import_id}` | keep → Sites control | Actor-owned bounded status; `web-import` |
@@ -180,8 +182,8 @@ indistinguishable `404` for every other actor.
 | `commit_changeset` | change → Content MCP | Remove required `write_binding_id`; keep required explicit `mind`, `expected_revision`, `idempotency_key`, non-empty operations; server verifies `mind` equals Site-selected target. MD-339 |
 | `reconcile_changeset` | change → Content MCP | Same target schema as original commit; missing outcome performs no writes |
 | `capture_knowledge` | change → Content MCP | Remove `write_binding_id` and `expected_binding_version`; keep explicit Mind/HEAD/idempotency/policy payload, require Site-owned enabled policy and same selected private target. MD-339 |
-| `start_export` | move → Sites control | Omit from catalog; old call `Invalid params`; no silent call-through. MD-359 owns Site export start |
-| `get_export_status` | move → Sites control | Omit from catalog; old call `Invalid params`; Site status/download only. MD-359 |
+| `start_export` | move → Sites control | Omit from catalog; exact old call returns side-effect-free `operation_moved_to_sites` with the Sites REST route and never starts a job. MD-359/MD-361 |
+| `get_export_status` | move → Sites control | Omit from catalog; exact old call returns the same side-effect-free migration result; Site status/download only. MD-359/MD-361 |
 
 The target advertised catalog therefore contains 18 tools, in stable order:
 
