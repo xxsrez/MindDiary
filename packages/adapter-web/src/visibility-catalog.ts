@@ -326,11 +326,11 @@ function renderMindPage(model: VisibilityMindRoutePage): string {
     visibility === "unlisted" &&
     mind.discovery === "exact_handle";
   const canMutate = hasOwnerVisibilityAuthority(mind);
-  return `<div class="md-shell" data-mind-diary-shell data-mind-diary-visibility-catalog data-nav-open="false" data-page-kind="mind">
-    <a class="md-skip-link" href="#main-content">Skip to main content</a>
+  return `<div class="md-shell" data-mind-diary-shell data-ia-shell data-mind-diary-visibility-catalog data-nav-open="false" data-page-kind="mind">
+    <a class="md-skip-link" href="#main-content" data-ia-skip-link>Skip to main content</a>
     ${renderMindDiaryAuthenticatedHeader(model.displayName, "minds")}
-    <main id="main-content" class="md-main" tabindex="-1">
-      <div class="md-page-heading">
+    <main id="main-content" class="md-main" tabindex="-1" data-ia-main>
+      <div class="md-page-heading" data-ia-page-header>
         <div>
           <p class="md-eyebrow">Mind visibility</p>
           <h1>${escapeUntrustedText(mind.name)}</h1>
@@ -353,11 +353,11 @@ function renderMindPage(model: VisibilityMindRoutePage): string {
 }
 
 function renderPublicMindCard(mind: PublicMindCatalogItem): string {
-  return `<article class="md-card" data-public-mind-card="${escapeUntrustedText(mind.mindId)}">
+  return `<article class="md-card md-entity-row" data-public-mind-card="${escapeUntrustedText(mind.mindId)}" data-ia-row>
+    <h3><a href="${safeRoute(mind.route, false)}">${escapeUntrustedText(mind.name)}</a></h3>
     <div class="md-card__topline">
       <span class="md-status md-status--public"><span class="md-status__icon" aria-hidden="true">Globe</span> Public — signed-in readers</span>
     </div>
-    <h3><a href="${safeRoute(mind.route, false)}">${escapeUntrustedText(mind.name)}</a></h3>
     <p class="md-card__description">${escapeUntrustedText(mind.summary)}</p>
     <p class="md-caveat">Live HEAD and immutable history are readable. Content changes remain unavailable without Editor membership.</p>
   </article>`;
@@ -366,19 +366,19 @@ function renderPublicMindCard(mind: PublicMindCatalogItem): string {
 function renderCatalogCollection(collection: PublicMindCatalogCollection): string {
   switch (collection.kind) {
     case "loading":
-      return `<section class="md-state md-state--loading" aria-labelledby="public-minds-heading" aria-busy="true" data-public-catalog-collection>
+      return `<section class="md-state md-state--loading" aria-labelledby="public-minds-heading" aria-busy="true" data-public-catalog-collection data-ia-route-state="loading">
         <div class="md-loading-mark" aria-hidden="true"><span></span><span></span><span></span></div>
         <h2 id="public-minds-heading">Opening Public Minds</h2>
         <p role="status" aria-live="polite">Loading catalog entries…</p>
       </section>`;
     case "empty":
-      return `<section class="md-state md-state--empty" aria-labelledby="public-minds-heading" data-public-catalog-collection>
+      return `<section class="md-state md-state--empty" aria-labelledby="public-minds-heading" data-public-catalog-collection data-ia-route-state="empty">
         <span class="md-state__symbol" aria-hidden="true">◎</span>
         <h2 id="public-minds-heading">No Public Minds yet</h2>
         <p>Private, unlisted, and Personal Minds never appear here.</p>
       </section>`;
     case "error":
-      return `<section class="md-state md-state--error" aria-labelledby="public-minds-heading" role="alert" data-public-catalog-collection>
+      return `<section class="md-state md-state--error" aria-labelledby="public-minds-heading" role="alert" data-public-catalog-collection data-ia-route-state="error">
         <span class="md-state__symbol" aria-hidden="true">!</span>
         <h2 id="public-minds-heading">We couldn’t open Public Minds</h2>
         <p>${escapeUntrustedText(collection.message)}</p>
@@ -387,7 +387,7 @@ function renderCatalogCollection(collection: PublicMindCatalogCollection): strin
     case "ready": {
       const minds = publicMindsForCatalog(collection.minds);
       if (minds.length === 0) return renderCatalogCollection({ kind: "empty" });
-      return `<section aria-labelledby="public-minds-heading" data-public-catalog-collection>
+      return `<section aria-labelledby="public-minds-heading" data-public-catalog-collection data-ia-collection>
         <div class="md-section-heading">
           <div><p class="md-eyebrow">Authenticated catalog</p><h2 id="public-minds-heading">Public Minds</h2></div>
         </div>
@@ -405,11 +405,11 @@ function renderCatalogPage(model: PublicMindCatalogPage): string {
         <h2>Sign in to open Public Minds</h2>
         <p>Public Minds are available to registered, signed-in people. Anonymous access is not available.</p>
       </section>`;
-  return `<div class="md-shell" data-mind-diary-shell data-mind-diary-visibility-catalog data-nav-open="false" data-page-kind="catalog">
-    <a class="md-skip-link" href="#main-content">Skip to main content</a>
+  return `<div class="md-shell" data-mind-diary-shell data-ia-shell data-mind-diary-visibility-catalog data-nav-open="false" data-page-kind="catalog">
+    <a class="md-skip-link" href="#main-content" data-ia-skip-link>Skip to main content</a>
     ${renderMindDiaryAuthenticatedHeader(model.displayName, "public")}
-    <main id="main-content" class="md-main" tabindex="-1">
-      <div class="md-page-heading">
+    <main id="main-content" class="md-main" tabindex="-1" data-ia-main>
+      <div class="md-page-heading" data-ia-page-header>
         <div>
           <p class="md-eyebrow">Discover shared knowledge</p>
           <h1>Public Minds</h1>

@@ -689,11 +689,11 @@ export function renderMcpTokenManagement(
   const announcement = model.announcement
     ? `<p class="md-announcement" role="status" aria-live="polite" data-page-announcement><span aria-hidden="true">✓</span> ${escapeUntrustedText(model.announcement)}</p>`
     : `<p class="md-announcement" role="status" aria-live="polite" data-page-announcement hidden></p>`;
-  return `<div class="md-shell md-token-shell" data-mind-diary-shell data-mind-diary-token-management data-nav-open="false">
-    <a class="md-skip-link" href="#main-content">Skip to main content</a>
+  return `<div class="md-shell md-token-shell" data-mind-diary-shell data-ia-shell data-mind-diary-token-management data-nav-open="false">
+    <a class="md-skip-link" href="#main-content" data-ia-skip-link>Skip to main content</a>
     ${renderMindDiaryAuthenticatedHeader(model.displayName, "tokens")}
-    <main id="main-content" class="md-main" tabindex="-1">
-      <div class="md-page-heading">
+    <main id="main-content" class="md-main" tabindex="-1" data-ia-main>
+      <div class="md-page-heading" data-ia-page-header>
         <div>
           <p class="md-eyebrow">Codex-first access</p>
           <h1>MCP setup</h1>

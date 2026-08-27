@@ -121,39 +121,57 @@ export function renderMindDiaryAuthenticatedHeader(
   displayName: string,
   activeNavigation: MindDiaryNavigationTarget,
 ): string {
-  const safeName = escapeUntrustedText(displayName);
-  const initial = escapeUntrustedText(displayName.slice(0, 1).toUpperCase());
-  return `<header class="md-header">
-    <div class="md-brand-lockup">
+  void displayName;
+  const settingsCurrent = activeNavigation === "account" ||
+    activeNavigation === "connections" || activeNavigation === "tokens";
+  const settingsContext = settingsCurrent
+    ? `<nav class="md-context-navigation" aria-label="Settings sections" data-ia-nav="settings">
+        <a href="/settings/account"${activeAttribute(activeNavigation, "account")}>Account</a>
+        <a href="/settings/connections"${activeAttribute(activeNavigation, "connections")}>Connections</a>
+        <a href="/settings/developer/mcp"${activeAttribute(activeNavigation, "tokens")}>Advanced MCP</a>
+      </nav>`
+    : "";
+  const settingsCurrentAttribute = settingsCurrent ? ' aria-current="page"' : "";
+  return `<header class="md-app-bar">
+    <a class="md-app-bar__brand" href="/" aria-label="Mind Diary home"${activeAttribute(activeNavigation, "home")}>
+      <img src="${MIND_DIARY_UI_ASSETS.mark}" alt="" width="36" height="36">
+      <span>Mind Diary</span>
+    </a>
+    <span class="md-environment" aria-label="Hosted environment: UAT" data-ia-uat-marker>UAT</span>
+    <button class="md-menu-button" type="button" aria-expanded="false" aria-controls="application-navigation" aria-label="Navigation" data-menu-button data-ia-mobile-trigger>
+      <span aria-hidden="true">☰</span><span>Menu</span>
+    </button>
+  </header>
+  <div class="md-navigation-backdrop" data-navigation-backdrop hidden></div>
+  <aside id="application-navigation" class="md-navigation-surface" aria-label="Application navigation" aria-hidden="true" data-navigation data-ia-rail data-ia-mobile-drawer inert>
+    <div class="md-rail-brand">
       <a class="md-brand" href="/" aria-label="Mind Diary home"${activeAttribute(activeNavigation, "home")}>
         <img src="${MIND_DIARY_UI_ASSETS.lockup}" alt="Mind Diary" width="204" height="48">
       </a>
-      <span class="md-environment" aria-label="Hosted environment: UAT">UAT</span>
+      <span class="md-environment" aria-label="Hosted environment: UAT" data-ia-uat-marker>UAT</span>
     </div>
-    <button class="md-menu-button" type="button" aria-expanded="false" aria-controls="primary-navigation" data-menu-button>
-      <span aria-hidden="true">Menu</span><span>Navigation</span>
-    </button>
-    <nav id="primary-navigation" class="md-navigation" aria-label="Primary" data-navigation>
-      <a href="/me"${activeAttribute(activeNavigation, "my-mind")}><span aria-hidden="true">●</span> My Mind</a>
-      <a href="/minds"${activeAttribute(activeNavigation, "minds")}><span aria-hidden="true">▤</span> Minds</a>
-      <a href="/public"${activeAttribute(activeNavigation, "public")}><span aria-hidden="true">◎</span> Public Minds</a>
-      <a href="/invitations"${activeAttribute(activeNavigation, "invitations")}><span aria-hidden="true">✉</span> Invitations</a>
-      <a href="/settings/connections"${activeAttribute(activeNavigation, "connections")}><span aria-hidden="true">⌁</span> Connections</a>
+    <nav class="md-navigation md-navigation--primary" aria-label="Primary" data-ia-nav="primary">
+      <a href="/me" data-ia-nav-item="my-mind"${activeAttribute(activeNavigation, "my-mind")}><span aria-hidden="true">●</span> My Mind</a>
+      <span class="md-navigation-divider" aria-hidden="true"></span>
+      <a href="/minds" data-ia-nav-item="minds"${activeAttribute(activeNavigation, "minds")}><span aria-hidden="true">▤</span> Minds</a>
+      <a href="/public" data-ia-nav-item="public"${activeAttribute(activeNavigation, "public")}><span aria-hidden="true">◎</span> Public Minds</a>
+      <a href="/invitations" data-ia-nav-item="invitations"${activeAttribute(activeNavigation, "invitations")}><span aria-hidden="true">✉</span> Invitations</a>
     </nav>
-    <a class="md-profile" href="/settings/account" aria-label="Account settings for ${safeName}"${activeAttribute(activeNavigation, "account")}>
-      <span class="md-profile__initial" aria-hidden="true">${initial}</span>
-      <span>${safeName}</span>
-    </a>
-  </header>`;
+    <nav class="md-navigation md-navigation--utility" aria-label="Utility" data-ia-nav="utility">
+      <a href="/help/codex" data-ia-nav-item="help"${activeAttribute(activeNavigation, "help")}><span aria-hidden="true">?</span> Help with Codex</a>
+      <a href="/settings/account" data-ia-nav-item="settings" data-ia-settings-item${settingsCurrentAttribute}><span aria-hidden="true">⚙</span> Settings</a>
+    </nav>
+  </aside>
+  ${settingsContext}`;
 }
 
 /** Shared footer keeps Help reachable and names the hosted surface as UAT. */
 export function renderMindDiaryAuthenticatedFooter(
   activeNavigation: MindDiaryNavigationTarget,
 ): string {
+  void activeNavigation;
   return `<footer class="md-footer">
-    <p><strong>Mind Diary UAT</strong> keeps the knowledge you choose in versioned Minds.</p>
-    <a href="/help/codex"${activeAttribute(activeNavigation, "help")}>Help with Codex</a>
+    <a href="/help">Support and UAT boundaries</a>
   </footer>`;
 }
 
@@ -174,7 +192,8 @@ function renderMindCard(mind: UiMindCard): string {
   const personalLabel = mind.isPersonal
     ? '<span class="md-card__personal">My Mind</span>'
     : "";
-  return `<article class="md-card" data-mind-card="${escapeUntrustedText(mind.id)}">
+  return `<article class="md-card md-entity-row" data-mind-card="${escapeUntrustedText(mind.id)}" data-ia-row>
+    <h3><a href="${safeMindRoute(mind.route)}">${escapeUntrustedText(mind.name)}</a></h3>
     <div class="md-card__topline">
       ${personalLabel}
       <span class="md-status md-status--${mind.visibility}">
@@ -182,7 +201,6 @@ function renderMindCard(mind: UiMindCard): string {
         ${visibility.label}
       </span>
     </div>
-    <h3><a href="${safeMindRoute(mind.route)}">${escapeUntrustedText(mind.name)}</a></h3>
     <p class="md-card__description">${escapeUntrustedText(mind.description)}</p>
     <dl class="md-card__metadata">
       <div><dt>Access</dt><dd>${mind.role}</dd></div>
@@ -194,33 +212,33 @@ function renderMindCard(mind: UiMindCard): string {
 function renderCollection(collection: UiCollectionState): string {
   switch (collection.kind) {
     case "loading":
-      return `<section class="md-state md-state--loading" aria-labelledby="minds-heading" aria-busy="true" data-home-minds-collection>
+      return `<section class="md-state md-state--loading" aria-labelledby="minds-heading" aria-busy="true" data-home-minds-collection data-ia-route-state="loading">
         <div class="md-loading-mark" aria-hidden="true"><span></span><span></span><span></span></div>
         <h2 id="minds-heading">Opening your Minds</h2>
         <p role="status" aria-live="polite">Loading Mind summaries…</p>
       </section>`;
     case "empty":
-      return `<section class="md-state md-state--empty" aria-labelledby="minds-heading" data-home-minds-collection>
+      return `<section class="md-state md-state--empty" aria-labelledby="minds-heading" data-home-minds-collection data-ia-route-state="empty">
         <span class="md-state__symbol" aria-hidden="true">+</span>
         <h2 id="minds-heading">Create your first shared Mind</h2>
         <p>My Mind is always yours. Create another Mind when you want to build from Memories with other people.</p>
-        <button class="md-button md-button--primary" type="button" data-open-create-dialog>Create a Mind</button>
+        <button class="md-button md-button--primary" type="button" data-open-create-dialog data-ia-primary-action>Create a Mind</button>
       </section>`;
     case "error":
-      return `<section class="md-state md-state--error" aria-labelledby="minds-heading" role="alert" data-home-minds-collection>
+      return `<section class="md-state md-state--error" aria-labelledby="minds-heading" role="alert" data-home-minds-collection data-ia-route-state="error">
         <span class="md-state__symbol" aria-hidden="true">!</span>
         <h2 id="minds-heading">We couldn’t open your Minds</h2>
         <p>${escapeUntrustedText(collection.message)}</p>
         <button class="md-button md-button--secondary" type="button" data-retry>Try again</button>
       </section>`;
     case "ready":
-      return `<section aria-labelledby="minds-heading" data-home-minds-collection>
+      return `<section aria-labelledby="minds-heading" data-home-minds-collection data-ia-collection>
         <div class="md-section-heading">
           <div>
             <p class="md-eyebrow">Your library</p>
             <h2 id="minds-heading">Minds</h2>
           </div>
-          <button class="md-button md-button--primary" type="button" data-open-create-dialog>Create a Mind</button>
+          <button class="md-button md-button--primary" type="button" data-open-create-dialog data-ia-primary-action>Create a Mind</button>
         </div>
         <div class="md-card-grid">${collection.minds.map(renderMindCard).join("")}</div>
       </section>`;
@@ -234,16 +252,16 @@ export function renderMindDiaryUiShell(model: MindDiaryUiShellModel): string {
       </p>`
     : "";
 
-  return `<div class="md-shell" data-mind-diary-shell data-nav-open="false">
-    <a class="md-skip-link" href="#main-content">Skip to main content</a>
+  return `<div class="md-shell" data-mind-diary-shell data-ia-shell data-nav-open="false">
+    <a class="md-skip-link" href="#main-content" data-ia-skip-link>Skip to main content</a>
     ${renderMindDiaryAuthenticatedHeader(model.displayName, model.activeNavigation)}
 
-    <main id="main-content" class="md-main" tabindex="-1">
-      <div class="md-page-heading">
+    <main id="main-content" class="md-main" tabindex="-1" data-ia-main>
+      <div class="md-page-heading" data-ia-page-header>
         <div>
-          <p class="md-eyebrow">Build a Mind from Memories</p>
-          <h1>Welcome back, ${escapeUntrustedText(model.displayName)}</h1>
-          <p>Open a Mind to manage who can use it, or connect Codex to work with its Memories.</p>
+          <p class="md-eyebrow">Workspace</p>
+          <h1>Minds</h1>
+          <p>Manage access and open the Mind you need.</p>
         </div>
         ${announcement}
       </div>
@@ -336,15 +354,15 @@ function renderRoutePageState(state: MindDiaryRoutePageState): string {
   const message = escapeUntrustedText(state.message);
   switch (state.kind) {
     case "ready":
-      return `<section class="md-state" data-route-state="ready"><span class="md-state__symbol" aria-hidden="true">✓</span><h2>Ready in this UAT workspace</h2><p>${message}</p></section>`;
+      return `<section class="md-state" data-route-state="ready" data-ia-route-state="ready"><span class="md-state__symbol" aria-hidden="true">✓</span><h2>Ready in this UAT workspace</h2><p>${message}</p></section>`;
     case "loading":
-      return `<section class="md-state md-state--loading" aria-busy="true" data-route-state="loading"><div class="md-loading-mark" aria-hidden="true"><span></span><span></span><span></span></div><h2>Loading current state</h2><p role="status" aria-live="polite">${message}</p></section>`;
+      return `<section class="md-state md-state--loading" aria-busy="true" data-route-state="loading" data-ia-route-state="loading"><div class="md-loading-mark" aria-hidden="true"><span></span><span></span><span></span></div><h2>Loading current state</h2><p role="status" aria-live="polite">${message}</p></section>`;
     case "empty":
-      return `<section class="md-state md-state--empty" data-route-state="empty"><span class="md-state__symbol" aria-hidden="true">○</span><h2>Nothing to show yet</h2><p>${message}</p></section>`;
+      return `<section class="md-state md-state--empty" data-route-state="empty" data-ia-route-state="empty"><span class="md-state__symbol" aria-hidden="true">○</span><h2>Nothing to show yet</h2><p>${message}</p></section>`;
     case "error":
-      return `<section class="md-state md-state--error" role="alert" data-route-state="error"><span class="md-state__symbol" aria-hidden="true">!</span><h2>Current state is unavailable</h2><p>${message}</p></section>`;
+      return `<section class="md-state md-state--error" role="alert" data-route-state="error" data-ia-route-state="error"><span class="md-state__symbol" aria-hidden="true">!</span><h2>Current state is unavailable</h2><p>${message}</p></section>`;
     case "forbidden":
-      return `<section class="md-state md-state--error" role="alert" data-route-state="forbidden"><span class="md-state__symbol" aria-hidden="true">Lock</span><h2>This route is not available to your account</h2><p>${message}</p></section>`;
+      return `<section class="md-state md-state--error" role="alert" data-route-state="forbidden" data-ia-route-state="forbidden"><span class="md-state__symbol" aria-hidden="true">Lock</span><h2>This route is not available to your account</h2><p>${message}</p></section>`;
   }
 }
 
@@ -369,11 +387,11 @@ export function renderMindDiaryRoutePage(model: MindDiaryRoutePageModel): string
   const links = model.links?.length
     ? `<nav class="md-route-links" aria-label="Page actions">${model.links.map((link) => `<a class="md-button md-button--secondary" href="${safeProductRoute(link.href)}">${escapeUntrustedText(link.label)}</a>`).join("")}</nav>`
     : "";
-  return `<div class="md-shell" data-mind-diary-shell data-mind-diary-route-page data-route-page="${escapeUntrustedText(model.activeNavigation)}" data-nav-open="false">
-    <a class="md-skip-link" href="#main-content">Skip to main content</a>
+  return `<div class="md-shell" data-mind-diary-shell data-ia-shell data-mind-diary-route-page data-route-page="${escapeUntrustedText(model.activeNavigation)}" data-nav-open="false">
+    <a class="md-skip-link" href="#main-content" data-ia-skip-link>Skip to main content</a>
     ${renderMindDiaryAuthenticatedHeader(model.displayName, model.activeNavigation)}
-    <main id="main-content" class="md-main" tabindex="-1">
-      <div class="md-page-heading"><div><p class="md-eyebrow">${escapeUntrustedText(model.eyebrow)}</p><h1>${escapeUntrustedText(model.title)}</h1><p>${escapeUntrustedText(model.description)}</p></div></div>
+    <main id="main-content" class="md-main" tabindex="-1" data-ia-main>
+      <div class="md-page-heading" data-ia-page-header><div><p class="md-eyebrow">${escapeUntrustedText(model.eyebrow)}</p><h1>${escapeUntrustedText(model.title)}</h1><p>${escapeUntrustedText(model.description)}</p></div></div>
       ${renderRoutePageState(model.state)}
       ${renderRoutePageGuides(model)}
       ${links}
@@ -424,20 +442,57 @@ export function installMindDiaryUiShell(
 
   const menuButton = shell.querySelector<HTMLButtonElement>("[data-menu-button]");
   const navigation = shell.querySelector<HTMLElement>("[data-navigation]");
-  const closeNavigation = () => {
-    shell.dataset.navOpen = "false";
-    menuButton?.setAttribute("aria-expanded", "false");
+  const backdrop = shell.querySelector<HTMLElement>("[data-navigation-backdrop]");
+  const view = shell.ownerDocument.defaultView;
+  const wide = view?.matchMedia("(min-width: 1024px)") ?? null;
+  const isWide = () => wide?.matches === true;
+  const navigationFocusables = () => navigation === null
+    ? []
+    : Array.from(navigation.querySelectorAll<HTMLElement>("[data-ia-nav-item]"));
+  const syncNavigation = (open = shell.dataset.navOpen === "true") => {
+    if (!menuButton || !navigation) return;
+    if (isWide()) {
+      shell.dataset.navOpen = "false";
+      menuButton.setAttribute("aria-expanded", "false");
+      navigation.removeAttribute("inert");
+      navigation.removeAttribute("aria-hidden");
+      if (backdrop) backdrop.hidden = true;
+      return;
+    }
+    shell.dataset.navOpen = String(open);
+    menuButton.setAttribute("aria-expanded", String(open));
+    navigation.toggleAttribute("inert", !open);
+    navigation.setAttribute("aria-hidden", String(!open));
+    if (backdrop) backdrop.hidden = !open;
+  };
+  const closeNavigation = (returnFocus = false) => {
+    syncNavigation(false);
+    if (returnFocus) menuButton?.focus();
   };
   if (menuButton && navigation) {
-    on<MouseEvent>(menuButton, "click", () => {
+    syncNavigation(false);
+    const toggleNavigation = () => {
       const open = shell.dataset.navOpen !== "true";
-      shell.dataset.navOpen = String(open);
-      menuButton.setAttribute("aria-expanded", String(open));
-      if (open) navigation.querySelector<HTMLAnchorElement>("a")?.focus();
+      syncNavigation(open);
+      if (open) view?.requestAnimationFrame(() => view.requestAnimationFrame(() => {
+        navigation.querySelector<HTMLAnchorElement>(
+          '[data-ia-nav-item="my-mind"]',
+        )?.focus({ preventScroll: true });
+      }));
+    };
+    on<KeyboardEvent>(menuButton, "keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      toggleNavigation();
     });
+    on<MouseEvent>(menuButton, "click", toggleNavigation);
     for (const link of Array.from(navigation.querySelectorAll("a"))) {
-      on(link, "click", closeNavigation);
+      on(link, "click", () => {
+        if (!isWide()) closeNavigation(false);
+      });
     }
+    if (backdrop) on<MouseEvent>(backdrop, "click", () => closeNavigation(true));
+    if (wide) on<MediaQueryListEvent>(wide, "change", () => syncNavigation(false));
   }
 
   const dialog = shell.querySelector<HTMLDialogElement>("#create-mind-dialog");
@@ -516,15 +571,30 @@ export function installMindDiaryUiShell(
   }
 
   on<KeyboardEvent>(shell, "keydown", (event) => {
-    if (event.key !== "Escape") return;
-    if (dialog && isDialogOpen(dialog)) {
+    if (event.key === "Escape" && dialog && isDialogOpen(dialog)) {
       event.preventDefault();
       closeDialog();
       return;
     }
-    if (shell.dataset.navOpen === "true") {
-      closeNavigation();
-      menuButton?.focus();
+    if (!isWide() && shell.dataset.navOpen === "true") {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeNavigation(true);
+        return;
+      }
+      if (event.key === "Tab") {
+        const items = navigationFocusables();
+        if (items.length === 0) return;
+        const first = items[0];
+        const last = items[items.length - 1];
+        if (event.shiftKey && shell.ownerDocument.activeElement === first) {
+          event.preventDefault();
+          last?.focus();
+        } else if (!event.shiftKey && shell.ownerDocument.activeElement === last) {
+          event.preventDefault();
+          first?.focus();
+        }
+      }
     }
   });
 

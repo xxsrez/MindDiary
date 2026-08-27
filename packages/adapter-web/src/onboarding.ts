@@ -97,15 +97,16 @@ function renderBrandHeader(): string {
       <a class="md-brand" href="/" aria-label="Mind Diary home">
         <img src="${MIND_DIARY_UI_ASSETS.lockup}" alt="Mind Diary" width="204" height="48">
       </a>
-      <span class="md-environment" aria-label="Hosted environment: UAT">UAT</span>
+      <span class="md-environment" aria-label="Hosted environment: UAT" data-ia-uat-marker>UAT</span>
     </div>
   </header>`;
 }
 
 function renderAnonymous(model: Extract<AuthenticatedOnboardingModel, { kind: "anonymous" }>): string {
   return `<div class="md-auth-page" data-authenticated-onboarding data-session-state="anonymous">
+    <a class="md-skip-link" href="#main-content" data-ia-skip-link>Skip to main content</a>
     ${renderBrandHeader()}
-    <main id="main-content" class="md-auth-main">
+    <main id="main-content" class="md-auth-main" tabindex="-1" data-ia-main>
       <section class="md-auth-card md-auth-card--entry" aria-labelledby="auth-entry-title">
         <img class="md-auth-mark" src="${MIND_DIARY_UI_ASSETS.mark}" alt="" width="88" height="88">
         <p class="md-eyebrow">Your Minds, ready when you are</p>
@@ -153,8 +154,9 @@ function renderRegistration(
     ? "This session needs to be refreshed before an account can be created."
     : "";
   return `<div class="md-auth-page" data-authenticated-onboarding data-session-state="registration_required">
+    <a class="md-skip-link" href="#main-content" data-ia-skip-link>Skip to main content</a>
     ${renderBrandHeader()}
-    <main id="main-content" class="md-auth-main md-auth-main--wide">
+    <main id="main-content" class="md-auth-main md-auth-main--wide" tabindex="-1" data-ia-main>
       <div class="md-auth-intro">
         <p class="md-eyebrow">Signed in with ChatGPT</p>
         <h1>Choose how to continue</h1>
@@ -194,8 +196,9 @@ function renderRegistration(
 
 function renderBootstrapping(): string {
   return `<div class="md-auth-page" data-authenticated-onboarding data-session-state="bootstrapping">
+    <a class="md-skip-link" href="#main-content" data-ia-skip-link>Skip to main content</a>
     ${renderBrandHeader()}
-    <main id="main-content" class="md-auth-main">
+    <main id="main-content" class="md-auth-main" tabindex="-1" data-ia-main>
       <section class="md-auth-card md-auth-card--progress" aria-labelledby="bootstrap-progress-title" aria-busy="true">
         <div class="md-loading-mark" aria-hidden="true"><span></span><span></span><span></span></div>
         <p class="md-eyebrow">Setting up your workspace</p>
@@ -215,8 +218,9 @@ function renderBootstrapError(
     ? `<button class="md-button md-button--primary" type="button" data-bootstrap-retry data-bootstrap-key="${escapeUntrustedText(key)}" data-bootstrap-display-name="${escapeUntrustedText(model.displayName)}">Try setup again</button>`
     : "";
   return `<div class="md-auth-page" data-authenticated-onboarding data-session-state="bootstrap_error">
+    <a class="md-skip-link" href="#main-content" data-ia-skip-link>Skip to main content</a>
     ${renderBrandHeader()}
-    <main id="main-content" class="md-auth-main">
+    <main id="main-content" class="md-auth-main" tabindex="-1" data-ia-main>
       <section class="md-auth-card md-auth-card--error" aria-labelledby="bootstrap-error-title" role="alert">
         <span class="md-state__symbol" aria-hidden="true">!</span>
         <p class="md-eyebrow">Setup paused safely</p>
@@ -260,11 +264,11 @@ function renderAuthenticated(
   const profileKeyAttribute = key === null
     ? ""
     : ` data-profile-key="${escapeUntrustedText(key)}"`;
-  return `<div class="md-shell" data-mind-diary-shell data-authenticated-onboarding data-session-state="authenticated" data-control-plane data-nav-open="false">
-    <a class="md-skip-link" href="#main-content">Skip to main content</a>
+  return `<div class="md-shell" data-mind-diary-shell data-ia-shell data-authenticated-onboarding data-session-state="authenticated" data-control-plane data-nav-open="false">
+    <a class="md-skip-link" href="#main-content" data-ia-skip-link>Skip to main content</a>
     ${renderMindDiaryAuthenticatedHeader(model.displayName, "my-mind")}
-    <main id="main-content" class="md-main" tabindex="-1">
-      <div class="md-page-heading">
+    <main id="main-content" class="md-main" tabindex="-1" data-ia-main>
+      <div class="md-page-heading" data-ia-page-header>
         <div>
           <p class="md-eyebrow">Signed in with ChatGPT</p>
           <h1>My Mind</h1>
@@ -272,6 +276,7 @@ function renderAuthenticated(
         </div>
         <p class="md-announcement" role="status"><span aria-hidden="true">✓</span> Account and My Mind are ready.</p>
       </div>
+      <p class="md-caveat" data-ia-disclosure="personal-mind"><strong>Private — only you.</strong> My Mind cannot be shared, published, transferred, or deleted separately from your account.</p>
       <div class="md-my-mind-layout">
         <section class="md-personal-card" aria-labelledby="personal-mind-title" data-personal-mind-card>
           <div class="md-card__topline">

@@ -131,7 +131,7 @@ function nextLink(path: string, cursor: string | null, label: string): string {
 function renderConnectionCard(item: ConnectionListItem): string {
   if (!CONNECTION_REF.test(item.connectionRef)) return "";
   const href = `/settings/connections/${encodeURIComponent(item.connectionRef)}`;
-  return `<article class="md-token-card">
+  return `<article class="md-token-card md-entity-row" data-ia-row>
     <div class="md-token-card__heading">
       <div><h3><a href="${href}">${escapeUntrustedText(item.clientName)}</a></h3><p>Connected app</p></div>
       <span class="md-token-state md-token-state--active">● Connected</span>
@@ -149,19 +149,19 @@ function renderConnectionCard(item: ConnectionListItem): string {
 export function renderConnectionsPageDocument(model: ConnectionsPageModel): string {
   let collection: string;
   if (model.collection.kind === "loading") {
-    collection = `<section class="md-state md-state--loading" aria-busy="true" data-connections-collection data-collection-state="loading"><h2>Loading connections</h2><p role="status" aria-live="polite">Opening current access…</p></section>`;
+    collection = `<section class="md-state md-state--loading" aria-busy="true" data-connections-collection data-collection-state="loading" data-ia-route-state="loading"><h2>Loading connections</h2><p role="status" aria-live="polite">Opening current access…</p></section>`;
   } else if (model.collection.kind === "error") {
-    collection = `<section class="md-state md-state--error" role="alert" data-connections-collection data-collection-state="error"><h2>Connections are unavailable</h2><p>${escapeUntrustedText(model.collection.message)}</p><a class="md-button md-button--secondary" href="/settings/connections">Try again</a></section>`;
+    collection = `<section class="md-state md-state--error" role="alert" data-connections-collection data-collection-state="error" data-ia-route-state="error"><h2>Connections are unavailable</h2><p>${escapeUntrustedText(model.collection.message)}</p><a class="md-button md-button--secondary" href="/settings/connections">Try again</a></section>`;
   } else if (model.collection.kind === "empty") {
-    collection = `<section class="md-state md-state--empty" data-connections-collection data-collection-state="empty"><h2>No active connections</h2><p>Install Mind Diary from the available Marketplace, then ask Codex to use one of your Minds. Codex will open the read consent when it first needs access.</p><a class="md-button md-button--primary" href="/help/codex">Open the three-step guide</a></section>`;
+    collection = `<section class="md-state md-state--empty" data-connections-collection data-collection-state="empty" data-ia-route-state="empty"><h2>No active connections</h2><p>Install Mind Diary from the available Marketplace, then ask Codex to use one of your Minds. Codex will open the read consent when it first needs access.</p><a class="md-button md-button--primary" href="/help/codex" data-ia-primary-action>Open the three-step guide</a></section>`;
   } else {
-    collection = `<section aria-labelledby="connections-heading" data-connections-collection data-collection-state="ready"><h2 id="connections-heading">Active connections</h2><div class="md-token-grid">${model.collection.items.map(renderConnectionCard).join("")}</div>${nextLink("/settings/connections", model.collection.nextCursor, "Next connections")}</section>`;
+    collection = `<section aria-labelledby="connections-heading" data-connections-collection data-collection-state="ready" data-ia-collection><h2 id="connections-heading">Active connections</h2><div class="md-token-grid">${model.collection.items.map(renderConnectionCard).join("")}</div>${nextLink("/settings/connections", model.collection.nextCursor, "Next connections")}</section>`;
   }
-  return document("Connections", `<div class="md-shell" data-mind-diary-shell data-connections-page data-nav-open="false">
-    <a class="md-skip-link" href="#main-content">Skip to main content</a>
+  return document("Connections", `<div class="md-shell" data-mind-diary-shell data-ia-shell data-connections-page data-nav-open="false">
+    <a class="md-skip-link" href="#main-content" data-ia-skip-link>Skip to main content</a>
     ${renderMindDiaryAuthenticatedHeader(model.displayName, "connections")}
-    <main id="main-content" class="md-main" tabindex="-1">
-      <div class="md-page-heading"><div><p class="md-eyebrow">Codex access</p><h1>Connections</h1><p>See what is connected, which Minds it can read, and whether one writable Mind is selected.</p></div></div>
+    <main id="main-content" class="md-main" tabindex="-1" data-ia-main>
+      <div class="md-page-heading" data-ia-page-header><div><p class="md-eyebrow">Codex access</p><h1>Connections</h1><p>See what is connected, which Minds it can read, and whether one writable Mind is selected.</p></div></div>
       ${collection}
       <p class="md-caveat"><a href="/settings/developer/mcp">Advanced MCP</a> is for personal tokens, endpoints, and diagnostics.</p>
     </main>
@@ -219,12 +219,12 @@ function renderAccess(
 export function renderConnectionDetailDocument(model: ConnectionDetailModel): string {
   const connection = model.connection;
   if (!CONNECTION_REF.test(connection.connectionRef)) throw new TypeError("connection ref is invalid");
-  return document(`${connection.clientName} connection`, `<div class="md-shell" data-mind-diary-shell data-connection-detail data-nav-open="false">
-    <a class="md-skip-link" href="#main-content">Skip to main content</a>
+  return document(`${connection.clientName} connection`, `<div class="md-shell" data-mind-diary-shell data-ia-shell data-connection-detail data-nav-open="false">
+    <a class="md-skip-link" href="#main-content" data-ia-skip-link>Skip to main content</a>
     ${renderMindDiaryAuthenticatedHeader(model.displayName, "connections")}
-    <main id="main-content" class="md-main" tabindex="-1">
+    <main id="main-content" class="md-main" tabindex="-1" data-ia-main>
       <p><a href="/settings/connections">← Connections</a></p>
-      <div class="md-page-heading"><div><p class="md-eyebrow">Connected app</p><h1>${escapeUntrustedText(connection.clientName)}</h1><p>Connected ${escapeUntrustedText(dateLabel(connection.createdAt))}; last used ${escapeUntrustedText(dateLabel(connection.lastUsedAt))}.</p></div><span class="md-token-state md-token-state--active">● Connected</span></div>
+      <div class="md-page-heading" data-ia-page-header><div><p class="md-eyebrow">Connected app</p><h1>${escapeUntrustedText(connection.clientName)}</h1><p>Connected ${escapeUntrustedText(dateLabel(connection.createdAt))}; last used ${escapeUntrustedText(dateLabel(connection.lastUsedAt))}.</p></div><span class="md-token-state md-token-state--active">● Connected</span></div>
       ${renderAccess(connection.access, { kind: "connection", ref: connection.connectionRef, canWrite: connection.canWrite })}
       ${connection.canWrite ? "" : '<p class="md-caveat"><strong>Can add and change:</strong> No. Ask Codex to add or change a Memory to start the separate write permission step.</p>'}
       <section class="md-setup-card" aria-labelledby="disconnect-heading"><h2 id="disconnect-heading">Disconnect</h2><p>Revoking stops this app immediately and removes it from Connections.</p><button class="md-button md-button--danger" type="button" data-revoke-connection data-revoke-endpoint="/api/v1/connections/${connection.connectionRef}">Revoke connection</button><p class="md-form__status" role="status" aria-live="polite" data-revoke-status></p></section>
@@ -261,11 +261,11 @@ export function renderAdvancedMcpPageDocument(model: AdvancedMcpPageModel): stri
     : model.collection.kind === "empty"
       ? `<section class="md-state md-state--empty"><h2>No ${model.state} personal tokens</h2><p>Create a token only for direct MCP setup or recovery.</p></section>`
       : `<div class="md-token-grid">${model.collection.items.map(renderPersonalToken).join("")}</div>${nextLink(`/settings/developer/mcp?state=${model.state}`, model.collection.nextCursor, "Next tokens")}`;
-  return document("Advanced MCP", `<div class="md-shell" data-mind-diary-shell data-advanced-mcp data-nav-open="false">
-    <a class="md-skip-link" href="#main-content">Skip to main content</a>
+  return document("Advanced MCP", `<div class="md-shell" data-mind-diary-shell data-ia-shell data-advanced-mcp data-nav-open="false">
+    <a class="md-skip-link" href="#main-content" data-ia-skip-link>Skip to main content</a>
     ${renderMindDiaryAuthenticatedHeader(model.displayName, "tokens")}
-    <main id="main-content" class="md-main" tabindex="-1">
-      <div class="md-page-heading"><div><p class="md-eyebrow">Advanced</p><h1>Advanced MCP</h1><p>Personal tokens, exact endpoints, and protocol-oriented recovery. Marketplace connections live under <a href="/settings/connections">Connections</a>.</p></div></div>
+    <main id="main-content" class="md-main" tabindex="-1" data-ia-main>
+      <div class="md-page-heading" data-ia-page-header><div><p class="md-eyebrow">Advanced</p><h1>Advanced MCP</h1><p>Personal tokens, exact endpoints, and protocol-oriented recovery. Marketplace connections live under <a href="/settings/connections">Connections</a>.</p></div></div>
       <nav aria-label="Personal token state"><a href="?state=active"${model.state === "active" ? ' aria-current="page"' : ""}>Active</a> · <a href="?state=revoked"${model.state === "revoked" ? ' aria-current="page"' : ""}>Revoked</a> · <a href="?state=expired"${model.state === "expired" ? ' aria-current="page"' : ""}>Expired</a></nav>
       <section aria-labelledby="personal-tokens-heading"><div class="md-section-heading"><div><h2 id="personal-tokens-heading">Personal tokens</h2></div></div>${tokens}</section>
       ${renderPersonalTokenCreation()}
@@ -280,11 +280,11 @@ export function renderCodexHelpPageDocument(displayName: string): string {
   const marketplaceUrl = "https://github.com/xxsrez/marketplace";
   const cliInstall = "codex plugin marketplace add xxsrez/marketplace\ncodex plugin add mind-diary@srez-marketplace";
   const readOnlySmoke = "Use Mind Diary to list the Minds I can read. Do not create or change any Memory.";
-  return document("Help with Codex", `<div class="md-shell" data-mind-diary-shell data-codex-help data-nav-open="false">
-    <a class="md-skip-link" href="#main-content">Skip to main content</a>
+  return document("Help with Codex", `<div class="md-shell" data-mind-diary-shell data-ia-shell data-codex-help data-nav-open="false">
+    <a class="md-skip-link" href="#main-content" data-ia-skip-link>Skip to main content</a>
     ${renderMindDiaryAuthenticatedHeader(displayName, "help")}
-    <main id="main-content" class="md-main" tabindex="-1">
-      <div class="md-page-heading"><div><p class="md-eyebrow">Three steps</p><h1>Use Mind Diary with Codex</h1><p>Install the plugin first. Your account connection is a separate OAuth-on-first-use step.</p></div></div>
+    <main id="main-content" class="md-main" tabindex="-1" data-ia-main>
+      <div class="md-page-heading" data-ia-page-header><div><p class="md-eyebrow">Three steps</p><h1>Use Mind Diary with Codex</h1><p>Install the plugin first. Your account connection is a separate OAuth-on-first-use step.</p></div></div>
       <div class="md-client-tabs" role="tablist" aria-label="Choose a Codex setup path">
         <button class="md-button md-button--secondary" id="codex-client-desktop-tab" type="button" role="tab" aria-selected="true" aria-controls="codex-client-desktop-panel" tabindex="0" data-codex-client-tab="desktop">Desktop</button>
         <button class="md-button md-button--secondary" id="codex-client-cli-tab" type="button" role="tab" aria-selected="false" aria-controls="codex-client-cli-panel" tabindex="-1" data-codex-client-tab="cli">CLI</button>

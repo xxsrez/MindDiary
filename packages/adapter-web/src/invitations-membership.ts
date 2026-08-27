@@ -293,7 +293,7 @@ function renderInvitationCard(invitation: InvitationMembershipInvitation): strin
   const direction = invitation.direction === "incoming" ? "incoming" : "outgoing";
   const proposedRole = safeProposedRole(invitation.proposedRole) ?? "reader";
   const statusStyle = state === "pending" ? "active" : "expired";
-  return `<article class="md-token-card" data-invitation-card="${escapeUntrustedText(invitationId ?? "invalid-invitation-id")}" data-invitation-direction="${direction}" data-invitation-state="${state}">
+  return `<article class="md-token-card md-entity-row" data-invitation-card="${escapeUntrustedText(invitationId ?? "invalid-invitation-id")}" data-invitation-direction="${direction}" data-invitation-state="${state}" data-ia-row>
     <div class="md-token-card__heading">
       <div>
         <p class="md-eyebrow">${direction === "incoming" ? "From" : "To"}</p>
@@ -372,7 +372,7 @@ function renderMemberCard(
         <p class="md-caveat">${memberDisabledReason(actorRole, member)}</p>
         <button class="md-button md-button--secondary" type="button" disabled aria-disabled="true">Role controls unavailable</button>
       </div>`;
-  return `<article class="md-token-card" data-member-card="${escapeUntrustedText(memberId ?? "invalid-member-id")}" data-member-role="${role}" data-member-state="${member.state === "active" ? "active" : "revoked"}">
+  return `<article class="md-token-card md-entity-row" data-member-card="${escapeUntrustedText(memberId ?? "invalid-member-id")}" data-member-role="${role}" data-member-state="${member.state === "active" ? "active" : "revoked"}" data-ia-row>
     <div class="md-token-card__heading">
       <div><h3>${escapeUntrustedText(member.displayName)}${member.isSelf ? " (you)" : ""}</h3></div>
       <span class="md-token-state md-token-state--${member.state === "active" ? "active" : "revoked"}">${member.state === "active" ? roleLabel(role) : "Revoked"}</span>
@@ -519,29 +519,29 @@ export function renderInvitationsMembershipPanel(
 function renderCollection(collection: InvitationMembershipCollectionState): string {
   switch (collection.kind) {
     case "loading":
-      return `<section class="md-state md-state--loading" aria-labelledby="people-heading" aria-busy="true" data-people-collection>
+      return `<section class="md-state md-state--loading" aria-labelledby="people-heading" aria-busy="true" data-people-collection data-ia-route-state="loading">
         <div class="md-loading-mark" aria-hidden="true"><span></span><span></span><span></span></div>
         <h2 id="people-heading">Loading participants and invitations</h2>
         <p role="status" aria-live="polite">Checking current access…</p>
       </section>`;
     case "error":
-      return `<section class="md-state md-state--error" aria-labelledby="people-heading" role="alert" data-people-collection>
+      return `<section class="md-state md-state--error" aria-labelledby="people-heading" role="alert" data-people-collection data-ia-route-state="error">
         <span class="md-state__symbol" aria-hidden="true">!</span>
         <h2 id="people-heading">Current access could not be verified</h2>
         <p>${escapeUntrustedText(collection.message)}</p>
         <button class="md-button md-button--secondary" type="button" data-people-retry>Try again</button>
       </section>`;
     case "unavailable":
-      return `<section class="md-state" aria-labelledby="people-heading" data-people-collection data-access-unavailable>
+      return `<section class="md-state" aria-labelledby="people-heading" data-people-collection data-access-unavailable data-ia-route-state="forbidden">
         <span class="md-state__symbol" aria-hidden="true">○</span>
         <h2 id="people-heading">Management access is no longer available</h2>
         <p>${escapeUntrustedText(collection.message)}</p>
         <a class="md-button md-button--secondary" href="/minds">Back to Minds</a>
       </section>`;
     case "global_ready":
-      return `<section data-people-collection data-invitations-membership-root>${renderGlobalInvitations(collection.invitations)}</section>`;
+      return `<section data-people-collection data-invitations-membership-root data-ia-collection>${renderGlobalInvitations(collection.invitations)}</section>`;
     case "ready":
-      return `<section data-people-collection>${renderReady(collection.snapshot)}</section>`;
+      return `<section data-people-collection data-ia-collection>${renderReady(collection.snapshot)}</section>`;
   }
 }
 
@@ -551,11 +551,11 @@ export function renderInvitationsMembership(
   const announcement = model.announcement
     ? `<p class="md-announcement" role="status" aria-live="polite" data-page-announcement>${escapeUntrustedText(model.announcement)}</p>`
     : `<p class="md-announcement" role="status" aria-live="polite" data-page-announcement hidden></p>`;
-  return `<div class="md-shell" data-mind-diary-shell data-invitations-membership-shell data-nav-open="false">
-    <a class="md-skip-link" href="#main-content">Skip to main content</a>
+  return `<div class="md-shell" data-mind-diary-shell data-ia-shell data-invitations-membership-shell data-nav-open="false">
+    <a class="md-skip-link" href="#main-content" data-ia-skip-link>Skip to main content</a>
     ${renderMindDiaryAuthenticatedHeader(model.displayName, "invitations")}
-    <main id="main-content" class="md-main" tabindex="-1">
-      <div class="md-page-heading"><div><p class="md-eyebrow">People and access</p><h1>Invitations and participants</h1><p>Invite registered people, respond to invitations, and manage current access without exposing Mind content.</p></div>${announcement}</div>
+    <main id="main-content" class="md-main" tabindex="-1" data-ia-main>
+      <div class="md-page-heading" data-ia-page-header><div><p class="md-eyebrow">People and access</p><h1>Invitations and participants</h1><p>Invite registered people, respond to invitations, and manage current access without exposing Mind content.</p></div>${announcement}</div>
       ${renderCollection(model.collection)}
     </main>
     ${renderMindDiaryAuthenticatedFooter("invitations")}

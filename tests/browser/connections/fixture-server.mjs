@@ -12,6 +12,7 @@ import {
   PRODUCT_UI_CLIENT_JAVASCRIPT,
   PRODUCT_UI_FAVICON_SVG,
   PRODUCT_UI_LOCKUP_SVG,
+  PRODUCT_UI_MARK_SVG,
   PRODUCT_UI_SHELL_CSS,
   PRODUCT_UI_TOKENS_CSS,
 } from "../../../packages/adapter-web/dist/product-ui-assets.js";
@@ -211,6 +212,10 @@ const server = createServer(async (request, response) => {
     }
     if (url.pathname === "/brand/mind-diary-lockup.svg") {
       send(response, 200, "image/svg+xml; charset=utf-8", PRODUCT_UI_LOCKUP_SVG);
+      return;
+    }
+    if (url.pathname === "/brand/mind-diary-mark.svg") {
+      send(response, 200, "image/svg+xml; charset=utf-8", PRODUCT_UI_MARK_SVG);
       return;
     }
     if (url.pathname === "/favicon.svg") {

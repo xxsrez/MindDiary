@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 
 import {
   renderAuthenticatedOnboardingDocument,
+  renderMindDiaryRoutePageDocument,
   renderMindDiaryUiShellDocument,
 } from "../../../packages/adapter-web/dist/index.js";
 
@@ -115,6 +116,30 @@ function onboardingModel(pathname, state) {
   };
 }
 
+const routePages = new Map([
+  ["/public", ["public", "Public Minds"]],
+  ["/invitations", ["invitations", "Invitations"]],
+  ["/settings/account", ["account", "Account and profile"]],
+  ["/settings/connections", ["connections", "Connections"]],
+  ["/settings/connections/conn_v1_fixture", ["connections", "Fixture connection"]],
+  ["/settings/developer/mcp", ["tokens", "Advanced MCP"]],
+  ["/help/codex", ["help", "Use Mind Diary with Codex"]],
+  ["/shared-research", ["minds", "Shared Research"]],
+]);
+
+function routePageModel(pathname) {
+  const route = routePages.get(pathname);
+  if (!route) return null;
+  return {
+    displayName: "Fixture User",
+    activeNavigation: route[0],
+    eyebrow: "Administration",
+    title: route[1],
+    description: "Server-resolved control state without raw Memory content.",
+    state: { kind: "ready", message: "Current management state is ready." },
+  };
+}
+
 function resolveStaticPath(pathname) {
   if (pathname === "/brand/mind-diary-tokens.css") {
     return resolve(root, "docs/assets/brand/mind-diary-tokens.css");
@@ -136,6 +161,15 @@ function resolveStaticPath(pathname) {
   }
   if (pathname === "/ui/onboarding.js") {
     return resolve(root, "packages/adapter-web/dist/onboarding.js");
+  }
+  if (pathname === "/ui/token-management.js") {
+    return resolve(root, "packages/adapter-web/dist/token-management.js");
+  }
+  if (pathname === "/ui/ordinary-minds-management.js") {
+    return resolve(root, "packages/adapter-web/dist/ordinary-minds-management.js");
+  }
+  if (pathname === "/ui/invitations-membership.js") {
+    return resolve(root, "packages/adapter-web/dist/invitations-membership.js");
   }
   if (pathname === "/fixture/onboarding-client.mjs") {
     return resolve(root, "tests/browser/ui-shell/onboarding-client.mjs");
@@ -179,6 +213,16 @@ const server = createServer(async (request, response) => {
           onboardingModel(url.pathname, state),
           "/fixture/onboarding-client.mjs",
         ),
+      );
+      return;
+    }
+    const routeModel = routePageModel(url.pathname);
+    if (routeModel !== null) {
+      sendText(
+        response,
+        200,
+        "text/html; charset=utf-8",
+        renderMindDiaryRoutePageDocument(routeModel),
       );
       return;
     }

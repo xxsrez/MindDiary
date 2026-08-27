@@ -524,8 +524,10 @@ test("product root, Connections, and Advanced MCP render safe live projections a
   const rootHtml = await root.text();
   assert.match(rootHtml, /data-mind-diary-shell/);
   assert.match(rootHtml, /data-home-minds-collection/);
-  assert.match(rootHtml, /Product Owner/);
-  assert.match(rootHtml, /href="\/settings\/connections"/);
+  assert.match(rootHtml, /data-ia-nav="primary"[\s\S]*href="\/me"[\s\S]*href="\/minds"/);
+  assert.match(rootHtml, /data-ia-settings-item[\s\S]*href="\/settings\/account"|href="\/settings\/account"[\s\S]*data-ia-settings-item/);
+  assert.doesNotMatch(rootHtml, /Product Owner/);
+  assert.doesNotMatch(rootHtml, /href="\/settings\/connections"/);
   assert.match(rootHtml, /rel="icon" href="\/favicon\.ico" sizes="16x16 32x32"/);
   assert.match(rootHtml, /rel="icon" href="\/favicon\.svg" type="image\/svg\+xml" sizes="any"/);
   assert.match(rootHtml, /rel="icon" href="\/favicon-32x32\.png" type="image\/png" sizes="32x32"/);
@@ -559,6 +561,7 @@ test("product root, Connections, and Advanced MCP render safe live projections a
     ["/favicon.svg", "image/svg+xml; charset=utf-8", "#6C4BB6"],
     ["/ui/mind-diary-shell.css", "text/css; charset=utf-8", "md-token-grid"],
     ["/brand/mind-diary-lockup.svg", "image/svg+xml; charset=utf-8", "Mind Diary logo"],
+    ["/brand/mind-diary-mark.svg", "image/svg+xml; charset=utf-8", "Mind Diary mark"],
     ["/ui/mind-diary-onboarding-client.js", "text/javascript; charset=utf-8", "/api/v1/account"],
     ["/ui/mind-diary-token-client.js", "text/javascript; charset=utf-8", "/api/mcp/2025-11-25"],
     ["/ui/mind-diary-connections-client.js", "text/javascript; charset=utf-8", "accessEndpoint"],
@@ -665,7 +668,7 @@ test("account settings wires profile CAS, fresh deletion impact, same-key retry 
   assert.match(html, /Loading the exact deletion preview/);
   assert.doesNotMatch(html, /Research Notes/);
   assert.match(html, /mind-diary-account-client\.js/);
-  assert.equal((html.match(/aria-current="page"/g) ?? []).length, 1);
+  assert.equal((html.match(/aria-current="page"/g) ?? []).length, 2);
   assert.doesNotMatch(html, /must-not-render@example\.com|PRIVATE ACCOUNT CONTENT|principal_one|revision_personal/);
 
   const impactResponse = await handler(new Request(`${origin}/api/v1/account/deletion-impact`));
@@ -852,11 +855,17 @@ test("pilot Product Site route map keeps one UAT shell, exact active navigation,
     assert.match(html, /href="\/public"/, path);
     assert.match(html, /href="\/invitations"/, path);
     assert.match(html, /href="\/settings\/account"/, path);
-    assert.match(html, /href="\/settings\/connections"/, path);
     assert.match(html, /href="\/help\/codex"/, path);
-    if (path !== "/settings/developer/mcp") {
-      assert.equal((html.match(/aria-current="page"/g) ?? []).length, 1, path);
+    const settingsRoute = path.startsWith("/settings/");
+    assert.equal(/data-ia-nav="settings"/.test(html), settingsRoute, path);
+    if (settingsRoute) {
+      assert.match(html, /href="\/settings\/connections"/, path);
+      assert.match(html, /href="\/settings\/developer\/mcp"/, path);
     }
+    const expectedCurrentCount = path === "/settings/developer/mcp"
+      ? 3
+      : path === "/" || settingsRoute ? 2 : 1;
+    assert.equal((html.match(/aria-current="page"/g) ?? []).length, expectedCurrentCount, path);
     assert.doesNotMatch(html, /owner-only production Site|current Site is production/i, path);
   }
 

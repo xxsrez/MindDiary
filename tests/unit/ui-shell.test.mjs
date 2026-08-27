@@ -124,8 +124,9 @@ test("untrusted display text is escaped in text and attribute positions", () => 
 test("ready shell has semantic navigation, product language, form and modal contracts", () => {
   const html = renderMindDiaryUiShell(DEFAULT_UI_SHELL_MODEL);
   assert.match(html, /<header\b/);
-  assert.match(html, /<nav[^>]+aria-label="Primary"/);
-  assert.match(html, /<main id="main-content"[^>]+tabindex="-1"/);
+  assert.match(html, /<nav[^>]+aria-label="Primary"[^>]+data-ia-nav="primary"/);
+  assert.match(html, /<nav[^>]+aria-label="Utility"[^>]+data-ia-nav="utility"/);
+  assert.match(html, /<main id="main-content"[^>]+tabindex="-1"[^>]+data-ia-main/);
   assert.match(html, /<footer\b/);
   assert.match(html, /aria-current="page"/);
   assert.match(html, />My Mind</);
@@ -133,7 +134,10 @@ test("ready shell has semantic navigation, product language, form and modal cont
   assert.match(html, /Public Minds<\/a>/);
   assert.match(html, /href="\/settings\/account"/);
   assert.match(html, /Hosted environment: UAT/);
-  assert.match(html, /<strong>Mind Diary UAT<\/strong>/);
+  assert.match(html, /data-ia-settings-item/);
+  assert.match(html, /data-ia-mobile-drawer/);
+  assert.match(html, /data-ia-collection/);
+  assert.match(html, /data-ia-row/);
   assert.match(html, /Memories/);
   assert.match(html, /Create a Mind/);
   assert.match(html, /<dialog[^>]+aria-labelledby="create-mind-title"[^>]+aria-describedby=/);
@@ -141,6 +145,10 @@ test("ready shell has semantic navigation, product language, form and modal cont
   assert.match(html, /<label for="mind-handle">Web address<\/label>/);
   assert.match(html, /role="status" aria-live="polite"/);
   assert.doesNotMatch(html, /<(?:textarea|iframe)\b|contenteditable|type="file"/i);
+  assert.doesNotMatch(
+    html.match(/<nav[^>]+data-ia-nav="primary"[\s\S]*?<\/nav>/)?.[0] ?? "",
+    /settings\/connections|Advanced MCP/,
+  );
   assert.doesNotMatch(html, /\b(?:brain|robot|neon|train your mind|knows everything)\b/i);
 });
 
@@ -165,7 +173,16 @@ test("pilot route shell keeps exact links, active state, safe route states, and 
       state: { kind: "ready", message: "No private content is rendered." },
       links: [{ href: expectedRoute, label: "Current route" }],
     });
-    assert.equal((html.match(/aria-current="page"/g) ?? []).length, 1, activeNavigation);
+    const expectedCurrent = activeNavigation === "home"
+      ? 2
+      : activeNavigation === "account" || activeNavigation === "connections"
+        ? 2
+        : 1;
+    assert.equal(
+      (html.match(/aria-current="page"/g) ?? []).length,
+      expectedCurrent,
+      activeNavigation,
+    );
     assert.match(html, new RegExp(`href="${expectedRoute.replaceAll("/", "\\/")}"`));
     assert.match(html, /Hosted environment: UAT/);
     assert.match(html, /href="\/public"/);
@@ -228,12 +245,14 @@ test("document and CSS provide responsive keyboard and high-contrast foundations
   assert.match(shellCss, /outline:\s*3px solid var\(--mind-diary-memory-plum/);
   assert.match(shellCss, /min-height:\s*2\.75rem/);
   assert.match(shellCss, /@media \(max-width: 36rem\)/);
+  assert.match(shellCss, /@media \(min-width: 64rem\)/);
   assert.match(shellCss, /@media \(prefers-reduced-motion: reduce\)/);
   assert.match(shellCss, /@media \(forced-colors: active\)/);
   assert.match(shellCss, /\.md-status__icon/);
   assert.match(shellCss, /\.md-state--error/);
   assert.match(shellCss, /\.md-environment/);
-  assert.match(shellCss, /\.md-profile\[aria-current="page"\]/);
+  assert.match(shellCss, /\.md-navigation-surface/);
+  assert.match(shellCss, /\.md-context-navigation a\[aria-current="page"\]/);
 });
 
 test("anonymous onboarding exposes only the Sites auth entry, never the control plane", () => {

@@ -226,7 +226,7 @@ function renderMindCard(mind: OrdinaryMindUiMind): string {
   const action = handle === null
     ? '<span class="md-token-card__final-state">Unavailable</span>'
     : `<a class="md-button md-button--secondary" href="${route}" data-manage-mind>Manage</a>`;
-  return `<article class="md-token-card" tabindex="-1" data-mind-card="${escapeUntrustedText(handle ?? "invalid-handle")}" data-mind-role="${role}">
+  return `<article class="md-token-card md-entity-row" tabindex="-1" data-mind-card="${escapeUntrustedText(handle ?? "invalid-handle")}" data-mind-role="${role}" data-ia-row>
     <div class="md-token-card__heading">
       <div>
         <h3><a href="${route}">${escapeUntrustedText(mind.name)}</a></h3>
@@ -246,20 +246,20 @@ function renderMindCard(mind: OrdinaryMindUiMind): string {
 function renderCollection(collection: OrdinaryMindsUiCollectionState): string {
   switch (collection.kind) {
     case "loading":
-      return `<section class="md-state md-state--loading" aria-labelledby="ordinary-minds-heading" aria-busy="true" data-minds-collection>
+      return `<section class="md-state md-state--loading" aria-labelledby="ordinary-minds-heading" aria-busy="true" data-minds-collection data-ia-route-state="loading">
         <div class="md-loading-mark" aria-hidden="true"><span></span><span></span><span></span></div>
         <h2 id="ordinary-minds-heading">Loading your Minds</h2>
         <p role="status" aria-live="polite">Checking owned and member Minds…</p>
       </section>`;
     case "empty":
-      return `<section class="md-state md-state--empty" aria-labelledby="ordinary-minds-heading" data-minds-collection>
+      return `<section class="md-state md-state--empty" aria-labelledby="ordinary-minds-heading" data-minds-collection data-ia-route-state="empty">
         <span class="md-state__symbol" aria-hidden="true">+</span>
         <h2 id="ordinary-minds-heading">No shared Minds yet</h2>
         <p>Create an ordinary Mind when you want a separate knowledge space or a place to collaborate.</p>
         <button class="md-button md-button--primary" type="button" data-open-create-mind>Create a Mind</button>
       </section>`;
     case "error":
-      return `<section class="md-state md-state--error" aria-labelledby="ordinary-minds-heading" role="alert" data-minds-collection>
+      return `<section class="md-state md-state--error" aria-labelledby="ordinary-minds-heading" role="alert" data-minds-collection data-ia-route-state="error">
         <span class="md-state__symbol" aria-hidden="true">!</span>
         <h2 id="ordinary-minds-heading">We couldn’t load your Minds</h2>
         <p>${escapeUntrustedText(collection.message)}</p>
@@ -267,7 +267,7 @@ function renderCollection(collection: OrdinaryMindsUiCollectionState): string {
       </section>`;
     case "ready":
       if (collection.minds.length === 0) return renderCollection({ kind: "empty" });
-      return `<section aria-labelledby="ordinary-minds-heading" data-minds-collection>
+      return `<section aria-labelledby="ordinary-minds-heading" data-minds-collection data-ia-collection>
         <div class="md-section-heading">
           <div>
             <p class="md-eyebrow">Owned and joined</p>
@@ -322,8 +322,8 @@ function renderListView(
   view: Extract<OrdinaryMindsManagementView, { readonly kind: "list" }>,
   announcement: string | undefined,
 ): string {
-  return `<main id="main-content" class="md-main" tabindex="-1">
-    <div class="md-page-heading">
+  return `<main id="main-content" class="md-main" tabindex="-1" data-ia-main>
+    <div class="md-page-heading" data-ia-page-header>
       <div>
         <p class="md-eyebrow">Build a Mind from Memories</p>
         <h1>Minds</h1>
@@ -345,8 +345,8 @@ function renderRouteState(
   const state = view.kind === "route_loading"
     ? `<section class="md-state md-state--loading" aria-busy="true"><div class="md-loading-mark" aria-hidden="true"><span></span><span></span><span></span></div><h2>${heading}</h2><p role="status" aria-live="polite">Loading metadata for /${escapeUntrustedText(handle ?? "unknown")}…</p></section>`
     : `<section class="md-state md-state--error" role="alert"><span class="md-state__symbol" aria-hidden="true">!</span><h2>${heading}</h2><p>${escapeUntrustedText(view.message)}</p><a class="md-button md-button--secondary" href="/minds">Back to Minds</a></section>`;
-  return `<main id="main-content" class="md-main" tabindex="-1">
-    <div class="md-page-heading"><div><p class="md-eyebrow">Route-specific management</p><h1>Mind settings</h1></div>${renderAnnouncement(announcement)}</div>
+  return `<main id="main-content" class="md-main" tabindex="-1" data-ia-main>
+    <div class="md-page-heading" data-ia-page-header><div><p class="md-eyebrow">Route-specific management</p><h1>Mind settings</h1></div>${renderAnnouncement(announcement)}</div>
     ${state}
   </main>`;
 }
@@ -608,8 +608,8 @@ function renderDetailView(
   }
   const role = safeRole(mind.role);
   const visibility = safeVisibility(mind.visibility);
-  return `<main id="main-content" class="md-main" tabindex="-1" data-mind-route data-mind-handle="${handle}" data-mind-id="${escapeUntrustedText(mind.mindId)}">
-    <div class="md-page-heading">
+  return `<main id="main-content" class="md-main" tabindex="-1" data-ia-main data-mind-route data-mind-handle="${handle}" data-mind-id="${escapeUntrustedText(mind.mindId)}">
+    <div class="md-page-heading" data-ia-page-header>
       <div>
         <p class="md-eyebrow">Route-specific management</p>
           <h1 data-route-mind-name>${escapeUntrustedText(mind.name)}</h1>
@@ -656,8 +656,8 @@ export function renderOrdinaryMindsManagement(model: OrdinaryMindsManagementMode
           model.announcement,
         )
       : renderRouteState(model.view, model.announcement);
-  return `<div class="md-shell" data-mind-diary-shell data-ordinary-minds-management data-nav-open="false" data-management-view="${model.view.kind}">
-    <a class="md-skip-link" href="#main-content">Skip to main content</a>
+  return `<div class="md-shell" data-mind-diary-shell data-ia-shell data-ordinary-minds-management data-nav-open="false" data-management-view="${model.view.kind}">
+    <a class="md-skip-link" href="#main-content" data-ia-skip-link>Skip to main content</a>
     ${renderMindDiaryAuthenticatedHeader(model.displayName, "minds")}
     ${body}
     ${renderMindDiaryAuthenticatedFooter("minds")}
