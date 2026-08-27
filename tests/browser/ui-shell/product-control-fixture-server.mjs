@@ -36,6 +36,35 @@ let identityState = configuredIdentityState;
 let displayName = "Browser Fixture";
 let profileVersion = 1;
 let issued = false;
+const publicCatalogCursor = "mdc1_eyJ2IjoxLCJxIjoicHVibGljX21pbmRzIiwiZyI6MSwibyI6MjR9";
+const publicCatalogMinds = Object.freeze([
+  Object.freeze({
+    mindId: "space_browser_public_one",
+    route: "/browser-public-one",
+    handle: "browser-public-one",
+    name: "Browser Public One",
+    description: "First bounded Public Minds page.",
+    isPersonal: false,
+    visibility: "public",
+    discovery: "public_catalog",
+    access: Object.freeze({ kind: "visibility", role: null, capabilities: ["content:read"] }),
+    metadataVersion: 3,
+    headRevisionId: "revision_browser_public_one",
+  }),
+  Object.freeze({
+    mindId: "space_browser_public_two",
+    route: "/browser-public-two",
+    handle: "browser-public-two",
+    name: "Browser Public Two",
+    description: "Second bounded Public Minds page.",
+    isPersonal: false,
+    visibility: "public",
+    discovery: "public_catalog",
+    access: Object.freeze({ kind: "visibility", role: null, capabilities: ["content:read"] }),
+    metadataVersion: 2,
+    headRevisionId: "revision_browser_public_two",
+  }),
+]);
 
 const session = () => ({
   principal: { principalId: registeredActor.principalId, displayName, profileVersion },
@@ -131,7 +160,17 @@ const handler = createProductWebHttpHandler({
         }];
       }
       if (request.operation === "list_public_minds") {
-        return { minds: [] };
+        return request.input.cursor === publicCatalogCursor
+          ? { minds: [publicCatalogMinds[1]], nextCursor: null }
+          : { minds: [publicCatalogMinds[0]], nextCursor: publicCatalogCursor };
+      }
+      if (request.operation === "get_mind_info") {
+        const selected = publicCatalogMinds.find(
+          (mind) => mind.handle === request.input.mind_ref,
+        );
+        if (selected !== undefined) {
+          return { ...selected, discovery: "exact_handle" };
+        }
       }
       if (request.operation === "get_invitations_overview") {
         return { minds: [], invitations: { invitations: [] } };

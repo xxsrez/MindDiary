@@ -486,6 +486,13 @@ test("every call observes revocation, visibility, deleting, and corrupted handle
     )).visibility,
     "public",
   );
+  const formerMemberRead = await env.routes.resolveExactMind(
+    memberActor,
+    "shared-current",
+  );
+  assert.equal(formerMemberRead.visibility, "public");
+  assert.equal(formerMemberRead.access.kind, "visibility");
+  assert.equal(formerMemberRead.access.role, null);
   assert.equal(
     await env.metadata.changeOrdinaryVisibilityForTest(
       shared.mindId,
@@ -499,6 +506,10 @@ test("every call observes revocation, visibility, deleting, and corrupted handle
       registeredActor(outsider.principalId),
       "shared-current",
     ),
+    expectRouteFailure("mind_not_found"),
+  );
+  await assert.rejects(
+    env.routes.resolveExactMind(memberActor, "shared-current"),
     expectRouteFailure("mind_not_found"),
   );
 
@@ -521,6 +532,30 @@ test("every call observes revocation, visibility, deleting, and corrupted handle
     ),
     expectRouteFailure("mind_not_found"),
   );
+});
+
+test("private exact opening denies before route metadata is read", async () => {
+  const env = harness();
+  const owner = await createAccount(env, 1);
+  const visitor = await createAccount(env, 2);
+  await createMind(
+    env,
+    owner,
+    "private-before-metadata",
+    "Private name must not escape",
+    "Private description must not escape",
+  );
+  const traced = tracedStore(env.metadata);
+  const routes = new MindRouteService({ routes: traced.store, host: HOST });
+
+  await assert.rejects(
+    routes.resolveExactMind(
+      registeredActor(visitor.principalId, "request_private_before_metadata"),
+      "private-before-metadata",
+    ),
+    expectRouteFailure("mind_not_found"),
+  );
+  assert.deepEqual(traced.trace, ["resolve", "authorize"]);
 });
 
 test("exact resolve ordering is resolve then authorize then metadata then final authorize", async () => {

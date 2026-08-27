@@ -150,6 +150,22 @@ schemas, migration и UI в MD-336 не входят.
   public/unlisted readers. Switch в private немедленно прекращает baseline
   access, но не отменяет уже состоявшееся раскрытие. Перед включением этих
   modes UI предупреждает, что они открывают live HEAD и всю immutable history.
+- Аутентифицированный каталог Public Minds использует ограниченную курсорную
+  пагинацию и показывает только текущие активные ordinary Minds с
+  `visibility: public`. Браузер получает компактную проекцию только с полями
+  `mind_id`, canonical `route`, `name`, nullable `description` и её ограниченной
+  однострочной `summary`; Personal,
+  private, unlisted, revision/access identifiers и raw content не попадают в
+  ответ. Каждый непрозрачный кандидат заново проходит current authorization и
+  visibility check до чтения route metadata; catalog projection и cursor не
+  являются доказательством права доступа.
+- Каталог не вводит избранное, фильтры, рекомендации, ранжирование, полнотекстовый
+  поиск по corpus или анонимную публикацию. Переход по карточке открывает
+  обычный `/{space_handle}` control-plane detail route, который заново
+  разрешает handle и проверяет current membership либо visibility. Поэтому
+  бывший участник всё ещё читает public Mind по baseline grant, но после
+  перехода в private получает тот же non-disclosing not-found result, что для
+  отсутствующего Mind.
 
 ### Canonical content и export
 
@@ -760,9 +776,14 @@ network, которого Sites пока не обещает. Если Streamabl
    `GET`/`HEAD` распознанного UI route может получить только одинаковый
    статический sign-in shell с `/signin-with-chatgpt`; authenticated public,
    unlisted-by-exact-handle и private member получают строго описанные rights.
-9. Public catalog содержит public, но не unlisted/private Minds. Переключение в
-   private немедленно закрывает baseline reads; UI заранее объясняет, что
-   unlisted не secret и что прежнее раскрытие HEAD/history необратимо.
+9. Аутентифицированный ограниченный каталог Public Minds содержит только
+   текущие активные ordinary public Minds, разбивается на страницы без повторов
+   и возвращает только компактный разрешённый набор metadata; Personal,
+   unlisted/private и raw content отсутствуют. Переход с карточки заново
+   проверяет current route access, включая baseline read бывшего участника
+   public Mind. Переключение в private немедленно закрывает
+   catalog/direct/history reads без раскрытия metadata; UI заранее объясняет,
+   что unlisted URL не secret и что прежнее раскрытие HEAD/history необратимо.
 10. `list_minds` одного MCP principal показывает `/me`, memberships и public
     catalog; чужой private Mind отсутствует, unlisted без exact resolve не
     обнаруживается.

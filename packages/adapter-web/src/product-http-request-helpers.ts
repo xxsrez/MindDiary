@@ -725,6 +725,41 @@ export function strictListQuery(
   });
 }
 
+const PUBLIC_CATALOG_CURSOR_PATTERN = /^mdc1_[A-Za-z0-9_-]{1,251}$/u;
+
+export function strictPublicCatalogQuery(
+  url: URL,
+): Readonly<{
+  readonly limit: number;
+  readonly cursor?: string;
+}> | null {
+  let keysAreValid = true;
+  url.searchParams.forEach((_value, key) => {
+    if (
+      (key !== "limit" && key !== "cursor") ||
+      url.searchParams.getAll(key).length !== 1
+    ) keysAreValid = false;
+  });
+  if (!keysAreValid) return null;
+  const limitValue = url.searchParams.get("limit");
+  const cursor = url.searchParams.get("cursor");
+  if (
+    (limitValue !== null && !/^(?:[1-9]|[1-4][0-9]|50)$/u.test(limitValue)) ||
+    (cursor !== null && !PUBLIC_CATALOG_CURSOR_PATTERN.test(cursor))
+  ) return null;
+  return Object.freeze({
+    limit: limitValue === null ? 24 : Number(limitValue),
+    ...(cursor === null ? {} : { cursor }),
+  });
+}
+
+export function safePublicCatalogCursor(value: unknown): string | null | undefined {
+  if (value === null) return null;
+  return typeof value === "string" && PUBLIC_CATALOG_CURSOR_PATTERN.test(value)
+    ? value
+    : undefined;
+}
+
 async function safeBindingCandidates(
   control: ProductWebControlApplication,
   actor: RegisteredSitesActor,

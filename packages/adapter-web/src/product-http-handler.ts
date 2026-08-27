@@ -47,6 +47,8 @@ import {
   safeConnectionListItem,
   safeConnectionDetail,
   strictListQuery,
+  strictPublicCatalogQuery,
+  safePublicCatalogCursor,
   safeBindingAccessByOwner,
   mutateCredentialAccess,
 } from "./product-http-request-helpers.js";
@@ -516,13 +518,19 @@ export function createProductWebHttpHandler(
         return json(200, { ok: true, data: snakeOutput(impact) });
       }
       if (matched.operation === "list_public_minds") {
+        const query = strictPublicCatalogQuery(url);
+        if (query === null) return errorResponse(400, "invalid_request", requestId);
         const source = record(await dependencies.control.execute({
           operation: matched.operation,
           actor: identity.actor,
-          input,
+          input: query,
         }));
         if (source === null || !Array.isArray(source.minds)) {
           throw new TypeError("safe Public Mind catalog is unavailable");
+        }
+        const nextCursor = safePublicCatalogCursor(source.nextCursor);
+        if (nextCursor === undefined) {
+          throw new TypeError("safe Public Mind catalog cursor is unavailable");
         }
         const minds = Object.freeze(source.minds
           .map(publicUiMind)
@@ -530,7 +538,11 @@ export function createProductWebHttpHandler(
         if (identity.kind === "authenticated") {
           await activity.record(deferActivity, identity.actor, "control_read");
         }
-        return json(200, { ok: true, data: snakeOutput({ minds }) });
+        return json(200, {
+          ok: true,
+          data: snakeOutput({ minds }),
+          next_cursor: nextCursor,
+        });
       }
       if (matched.operation === "get_invitations_overview") {
         const overview = safeInvitationOverview(await dependencies.control.execute({

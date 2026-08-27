@@ -342,6 +342,8 @@ test("product web authenticates UI and fail-closes browser mutations", async () 
 
 test("authenticated UI reuses the identity session snapshot instead of rereading it", async () => {
   const calls = [];
+  const catalogInputs = [];
+  const nextCursor = "mdc1_eyJ2IjoxLCJxIjoicHVibGljX21pbmRzIiwiZyI6MSwibyI6MjR9";
   const handler = createProductWebHttpHandler({
     applicationOrigin: origin,
     resolveIdentity: () => ({
@@ -352,7 +354,9 @@ test("authenticated UI reuses the identity session snapshot instead of rereading
     csrf: { issue: () => "csrf-session-snapshot", verify: () => true },
     control: { execute(request) {
       calls.push(request.operation);
-      if (request.operation === "list_public_minds") return { minds: [
+      if (request.operation === "list_public_minds") {
+        catalogInputs.push(request.input);
+        return { minds: [
         {
           mindId: "space_public_notes",
           route: "/public-notes",
@@ -372,7 +376,8 @@ test("authenticated UI reuses the identity session snapshot instead of rereading
           visibility: "public",
           discovery: "public_catalog",
         },
-      ], nextCursor: "cursor_must_not_render" };
+      ], nextCursor };
+      }
       throw new Error(`unexpected control operation: ${request.operation}`);
     } },
   });
@@ -402,8 +407,44 @@ test("authenticated UI reuses the identity session snapshot instead of rereading
   }]);
   assert.equal(JSON.stringify(catalogPayload).includes("principal_must_not_render"), false);
   assert.equal(JSON.stringify(catalogPayload).includes("PRIVATE CATALOG CONTENT"), false);
-  assert.equal(JSON.stringify(catalogPayload).includes("cursor_must_not_render"), false);
-  assert.deepEqual(calls, ["list_public_minds"]);
+  assert.equal(catalogPayload.next_cursor, nextCursor);
+  assert.deepEqual(catalogInputs, [{ limit: 24 }]);
+
+  const nextPage = await handler(new Request(
+    `${origin}/api/v1/public-minds?limit=1&cursor=${nextCursor}`,
+  ));
+  assert.equal(nextPage.status, 200);
+  assert.deepEqual(catalogInputs.at(-1), { limit: 1, cursor: nextCursor });
+  assert.deepEqual(calls, ["list_public_minds", "list_public_minds"]);
+});
+
+test("Public Minds HTTP pagination rejects malformed query before application access", async () => {
+  let controlCalls = 0;
+  const handler = createProductWebHttpHandler({
+    applicationOrigin: origin,
+    resolveIdentity: () => ({
+      kind: "authenticated",
+      actor: registeredActor,
+      session: sessionProjection,
+    }),
+    csrf: { issue: () => "csrf-public-query", verify: () => true },
+    control: { execute() { controlCalls += 1; throw new Error("must not execute"); } },
+  });
+
+  for (const query of [
+    "?limit=0",
+    "?limit=51",
+    "?limit=1.5",
+    "?cursor=",
+    "?cursor=not-a-catalog-cursor",
+    "?limit=1&limit=2",
+    "?filter=public",
+  ]) {
+    const response = await handler(new Request(`${origin}/api/v1/public-minds${query}`));
+    assert.equal(response.status, 400, query);
+    assert.equal((await response.json()).error.code, "invalid_request", query);
+  }
+  assert.equal(controlCalls, 0);
 });
 
 test("successful web activity can run after the response through host deferral", async () => {

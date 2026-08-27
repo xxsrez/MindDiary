@@ -595,7 +595,7 @@ Problem Details response:
 | `PATCH` | `/api/v1/minds/{mind_ref}` | Rename display name/settings. |
 | `GET` | `/api/v1/minds/{mind_ref}/deletion-impact` | Preview Mind deletion. |
 | `DELETE` | `/api/v1/minds/{mind_ref}` | Irreversible whole-Mind deletion. |
-| `GET` | `/api/v1/public-minds` | Authenticated public catalog. |
+| `GET` | `/api/v1/public-minds` | Authenticated bounded public catalog; optional exact-once `cursor` and integer `limit`, default `24`, maximum `50`. |
 | `PUT` | `/api/v1/minds/{mind_ref}/visibility` | Owner-only visibility change. |
 | `GET` | `/api/v1/minds/{mind_ref}/members` | Active participants. |
 | `PATCH` | `/api/v1/minds/{mind_ref}/members/{member_id}` | Allowed role mutation. |
@@ -817,6 +817,59 @@ Acknowledgement обязательно при переходе из `private` в
 Mind deletion использует тот же двухшаговый `deletion-impact` contract, что
 account deletion. Personal Mind получает `forbidden`; Owner ordinary Mind
 должен подтвердить удаление всей history и participants.
+
+`GET /api/v1/public-minds` принимает только необязательные query-параметры
+`cursor` и `limit`. Повтор параметра, неизвестный параметр, пустой либо неверный
+cursor и `limit` вне `1..50` возвращают `400 invalid_request` до обращения к
+application layer. Первая страница использует server default `24`; следующий
+запрос передаёт точный непрозрачный `next_cursor`. Cursor относится к immutable
+catalog snapshot и не разбирается браузером; истёкшая generation получает
+`400 invalid_cursor`, после чего UI начинает новый snapshot с первой страницы.
+
+Успешный ответ возвращает отдельный top-level cursor и компактные элементы
+каталога:
+
+```json
+{
+  "data": {
+    "minds": [
+      {
+        "mind_id": "mind_opaque",
+        "route": "/research-notes",
+        "name": "Research Notes",
+        "description": "Public research decisions and evidence.",
+        "summary": "Public research decisions and evidence.",
+        "visibility": "public",
+        "is_personal": false,
+        "discovery": "public_catalog"
+      }
+    ]
+  },
+  "next_cursor": "opaque-cursor",
+  "request_id": "req_opaque"
+}
+```
+
+`description` — current authorized ordinary-Mind service metadata либо `null`;
+`summary` — однострочная проекция не длиннее 180 Unicode code points с
+нейтральным fallback. Ответ не содержит `handle` отдельно от canonical
+route, revision/access/membership IDs, role/capabilities, corpus snippets,
+content counts или ranking signal. Personal, private и unlisted candidates
+отбрасываются до projection. Каждый непрозрачный кандидат каталога проходит current
+authorization и `visibility: public` до чтения route metadata и ещё одну
+проверку актуального состояния перед выдачей. Хранилище каталога, cursor и
+старая страница не являются authority; public → private или deletion между
+чтениями страниц скрывает кандидата без утечки metadata.
+
+Переход по `route` использует обычный
+`GET /api/v1/minds/{mind_ref}`/`/{space_handle}` resolver. Он заново разрешает
+handle, авторизует current membership либо public/unlisted baseline grant до
+metadata/object reads и повторно проверяет current state. Бывший участник такого
+public Mind получает visibility baseline Reader, а не resurrected membership;
+после public → private тот же request возвращает indistinguishable
+`404 mind_not_found`. Каталог не добавляет anonymous access, favorites,
+filters, recommendations, ranking, corpus full-text search или отдельную модель
+публикации.
 
 ### Memberships, invitations и ownership
 

@@ -630,6 +630,42 @@ test("projection corruption and malformed candidates never become descriptors or
   );
 });
 
+test("a corrupted private catalog candidate is denied before its metadata is read", async () => {
+  const env = harness();
+  const owner = await createAccount(env, 1, "Private Projection Owner");
+  const visitor = await createAccount(env, 2, "Private Projection Visitor");
+  const privateMind = await createMind(
+    env,
+    owner,
+    "private-projection-leak",
+    "PRIVATE CATALOG NAME",
+    "PRIVATE CATALOG DESCRIPTION",
+  );
+  await env.metadata.corruptPublicMindCatalogForTest([privateMind.mindId]);
+  let privateMetadataReads = 0;
+  const store = new Proxy(env.metadata, {
+    get(target, property) {
+      const value = Reflect.get(target, property, target);
+      if (property === "readResolvedSpace") {
+        return async (spaceId) => {
+          if (spaceId === privateMind.mindId) privateMetadataReads += 1;
+          return value.call(target, spaceId);
+        };
+      }
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  const catalog = new PublicMindCatalogService({ catalog: store, host: HOST });
+
+  const listed = await catalog.listPublicMinds(
+    registeredActor(visitor.principalId, "request_private_projection_leak"),
+    { limit: 24 },
+  );
+  assert.deepEqual(listed.minds, []);
+  assert.equal(privateMetadataReads, 0);
+  assert.equal(JSON.stringify(listed).includes("PRIVATE CATALOG"), false);
+});
+
 test("malformed adapter pages fail with a stable safe catalog error", async () => {
   const env = harness();
   const account = await createAccount(env, 1);

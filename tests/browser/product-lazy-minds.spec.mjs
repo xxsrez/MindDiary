@@ -71,13 +71,26 @@ test("heavy navigation pages render their shell before deferred collection reads
   await expect(page.getByRole("heading", { name: "Opening your Minds" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Minds", exact: true })).toBeVisible();
 
-  await page.route("**/api/v1/public-minds", async (route) => {
+  await page.route("**/api/v1/public-minds*", async (route) => {
     await new Promise((resolveDelay) => setTimeout(resolveDelay, 300));
     await route.continue();
   });
   await page.goto(`${origin}/public`, { waitUntil: "domcontentloaded" });
   await expect(page.getByRole("heading", { name: "Opening Public Minds" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "No Public Minds yet" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Browser Public One" })).toBeVisible();
+  await expect(page.getByText("First bounded Public Minds page.")).toBeVisible();
+  await expect(page.getByRole("link", { name: "Browser Public Two" })).toHaveCount(0);
+  await page.getByRole("button", { name: "Load more" }).click();
+  await expect(page.getByRole("link", { name: "Browser Public Two" })).toBeVisible();
+  await expect(page.getByText("Second bounded Public Minds page.")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Load more" })).toHaveCount(0);
+
+  await page.getByRole("link", { name: "Browser Public One" }).click();
+  await expect(page).toHaveURL(`${origin}/browser-public-one`);
+  await expect(page.getByRole("heading", { level: 1, name: "Browser Public One", exact: true })).toBeVisible();
+  await expect(page.locator("[data-visibility-readonly]")).toContainText("baseline access is read-only");
+  await expect(page.locator("[data-owner-visibility-controls]")).toHaveCount(0);
+  await expect(page.locator("[data-member-role-form], [data-owner-transfer-controls]")).toHaveCount(0);
 
   await page.route("**/api/v1/invitations-overview", async (route) => {
     await new Promise((resolveDelay) => setTimeout(resolveDelay, 300));
