@@ -429,7 +429,7 @@ test("credential target actions keep recovery-safe clear distinct from select", 
         {
           role: "legacy-integration-test",
           path: "tests/integration/product-site.test.mjs",
-          gitBlob: "a72ffb75ae603159c49610a7255dfcd46ff7695b",
+          gitBlob: "9f5e07ad16a080bc0b97b52ef4eabc0388bddc47",
         },
       ],
     },

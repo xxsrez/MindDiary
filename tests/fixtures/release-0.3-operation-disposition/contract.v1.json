@@ -137,7 +137,7 @@
       "sourceEvidence": [
         {"role":"legacy-helper","path":"packages/adapter-web/src/product-http-request-helpers.ts","gitBlob":"0cedf7e884f6e90f58c0578307f2565ab9663a42"},
         {"role":"legacy-handler","path":"packages/adapter-web/src/product-http-handler.ts","gitBlob":"a45f1500c9e2604019940c04f3f9acc62204616f"},
-        {"role":"legacy-integration-test","path":"tests/integration/product-site.test.mjs","gitBlob":"a72ffb75ae603159c49610a7255dfcd46ff7695b"}
+        {"role":"legacy-integration-test","path":"tests/integration/product-site.test.mjs","gitBlob":"9f5e07ad16a080bc0b97b52ef4eabc0388bddc47"}
       ]
     },
     "select_write": {

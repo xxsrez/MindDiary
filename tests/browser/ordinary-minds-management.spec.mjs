@@ -199,6 +199,8 @@ test("shipped ownership flow reloads the former Owner as Admin", async ({ page }
     handle: "research-notes",
     target_member_id: "member-fixture-editor",
     expected_metadata_version: 7,
+    expected_source_membership_version: 3,
+    expected_target_membership_version: 5,
     confirmation: "transfer-ownership",
   });
   expect(call.csrf).toBe("fixture-csrf-token");
