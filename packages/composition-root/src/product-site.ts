@@ -1069,6 +1069,7 @@ export async function createProductSiteRuntime(
   });
   const serverGeneratedIngressService = new TrustedServerGeneratedIngressService({
     ingress: new GeneratedArtifactIngressService({ staging: bundleFileStaging }),
+    reconciliation: bundleFileStaging,
   });
   const serverGeneratedIngress = Object.freeze({
     stage: serverGeneratedIngressService.stage.bind(serverGeneratedIngressService),

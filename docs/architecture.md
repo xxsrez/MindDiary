@@ -47,7 +47,11 @@ one-use upload-intent/metadata/composition для local/workspace sources пов
 этого core. MD-322 добавляет constructor-owned внутренний
 `serverGeneratedIngress` к hosted composition: trusted producer передаёт
 cancellable bounded stream напрямую в MD-304 `stageStream`, без полного
-буфера, HTTP/MCP exposure или capability advertisement. Joined native-client
+буфера, HTTP/MCP exposure или capability advertisement. Exact safe
+media/size/SHA receipt сначала проходит producer-free reconcile в
+owner/Space/current writable-target namespace, поэтому uncertain retry не
+повторяет generation/upload, а mismatch останавливается до object storage.
+Joined native-client
 UAT принадлежит MD-275, а late-UAT producer proof — MD-290. Connector и
 generated paths не являются автоматически доступными или fallback capability.
 

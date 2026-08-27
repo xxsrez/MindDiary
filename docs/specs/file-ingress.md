@@ -254,8 +254,18 @@ trusted backend producer opens exactly one `ReadableStream` or
 `AsyncIterable`; the port passes its chunks directly to existing `stageStream`
 with `source_kind: server_generated`, `max_bytes: 268435456` and a bounded
 600-second producer lease. It does not accept bytes, client path, URL, provider
-locator, prompt or job identity. Display filename and advisory media remain
-ordinary untrusted metadata and pass the common filename/media gate.
+locator, prompt or job identity. The caller supplies an exact safe receipt —
+display filename, canonical media type, size and SHA-256 — which passes the
+common filename/media/size/digest gate and contains no producer authority.
+
+Before opening the producer, the port uses existing stage reconciliation with
+the current actor, owner namespace, Space, exact writable target, source kind,
+idempotency key and safe receipt. `missing` is the only outcome that may invoke
+the producer. An existing matching success returns its original
+`staged_file_ref`; changed metadata/digest/size returns
+`idempotency_conflict`; authorization, expiry, consumed/rejected state and
+storage failures fail closed. Therefore an uncertain same-key retry performs
+no generation, reservation or object upload.
 
 The route races producer acquisition and every pending chunk against caller
 cancellation and the lease. Cancellation, timeout, producer exception,
@@ -265,9 +275,9 @@ incremental; the route never assembles the complete artifact in application
 memory. Exact 268,435,456 bytes remain permitted by the shared gate.
 
 Success returns only the service-owned `staged_file_ref`. It does not advance
-HEAD: quota, binding authorization, idempotency, explicit atomic changeset,
-immutable history, exact download, actor-owned Web export and orphan cleanup
-remain the existing BundleFile lifecycle. Content MCP gains neither a
+HEAD: quota, exact writable-target authorization, idempotency, explicit atomic
+changeset, immutable history, exact download, actor-owned Web export and orphan
+cleanup remain the existing BundleFile lifecycle. Content MCP gains neither a
 `server_generated` stage/export tool nor export administration. Until MD-290
 installs one privacy-safe producer use case and records exact-candidate late
 UAT, hosted capability discovery deliberately continues to report

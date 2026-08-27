@@ -21,26 +21,41 @@ test("MD-322 evidence contract fixes the trusted stream, limit and lease boundar
     maxBytes: 268_435_456,
     producerLeaseMilliseconds: 600_000,
   });
-  const [source, specification, architecture, traceability, coreEvidence] = await Promise.all([
+  const [
+    source,
+    specification,
+    architecture,
+    traceability,
+    coreEvidence,
+    retryEvidence,
+  ] = await Promise.all([
     repositoryFile("packages/application-content/src/server-generated-ingress.ts"),
     repositoryFile("docs/specs/file-ingress.md"),
     repositoryFile("docs/architecture.md"),
     repositoryFile("docs/specs/traceability.md"),
     repositoryFile("tests/integration/bundle-files-core.test.mjs"),
+    repositoryFile("tests/integration/server-generated-composition.test.mjs"),
   ]);
   assert.match(source, /class TrustedServerGeneratedIngressService/u);
   assert.match(source, /AbortSignal\.any/u);
   assert.match(source, /Promise\.race/u);
   assert.match(source, /stageServerGenerated/u);
+  assert.ok(
+    source.indexOf("#reconciliation.reconcile") <
+      source.indexOf("request.producer(Object.freeze"),
+  );
   assert.match(specification, /Exact 268,435,456 bytes remain permitted/u);
   assert.match(specification, /byte 268,435,457[\s\S]*fail closed/u);
   assert.match(specification, /600-second producer lease/u);
+  assert.match(specification, /uncertain same-key retry performs[\s\S]*no generation/u);
   assert.match(architecture, /serverGeneratedIngress/u);
   assert.match(traceability, /FI6-ServerGeneratedComposition/u);
   assert.match(traceability, /"server-generated-composition"/u);
   assert.match(coreEvidence, /accepts exact 256 MiB and rejects byte 268435457/u);
   assert.match(coreEvidence, /completedBytes: 268_435_456/u);
   assert.match(coreEvidence, /overflowObjects\.evidence\.aborted, true/u);
+  assert.match(retryEvidence, /assert\.equal\(producerInvocations, 1\)/u);
+  assert.match(retryEvidence, /objectCallsAfterSuccess/u);
 });
 
 test("the internal request cannot carry bytes or source/provider identity", async () => {
@@ -54,7 +69,7 @@ test("the internal request cannot carry bytes or source/provider identity", asyn
     "bytes", "path", "url", "provider", "locator", "prompt", "jobId", "sourceKind",
   ]) assert.doesNotMatch(request, new RegExp(`\\b${forbidden}\\b`, "iu"), forbidden);
   for (const required of [
-    "producer", "displayFilename", "claimedMediaType", "idempotencyKey",
+    "producer", "displayFilename", "expectedMediaType", "idempotencyKey",
     "writeBindingId", "expectedSize", "expectedSha256", "signal",
   ]) assert.match(request, new RegExp(`\\b${required}\\b`, "u"), required);
 });

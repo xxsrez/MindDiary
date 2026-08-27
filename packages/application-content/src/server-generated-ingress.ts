@@ -1,5 +1,6 @@
 import type { McpTokenActorContext } from "@mind-diary/application-contracts";
 import type { SpaceId } from "@mind-diary/domain";
+import type { BundleFileStagingService } from "./bundle-files.js";
 import {
   GENERATED_ARTIFACT_LIMITS,
   GeneratedArtifactIngressService,
@@ -33,10 +34,11 @@ export interface StageTrustedServerGeneratedRequest {
   readonly spaceId: SpaceId;
   readonly writeBindingId: unknown;
   readonly displayFilename: unknown;
-  readonly claimedMediaType: unknown;
+  /** Exact safe canonical media receipt, not source authority. */
+  readonly expectedMediaType: unknown;
   readonly idempotencyKey: unknown;
-  readonly expectedSize?: unknown;
-  readonly expectedSha256?: unknown;
+  readonly expectedSize: unknown;
+  readonly expectedSha256: unknown;
   readonly producer: TrustedServerGeneratedProducer;
   readonly signal?: AbortSignal;
 }
@@ -180,14 +182,17 @@ function cancelled(): GeneratedArtifactIngressResult {
  */
 export class TrustedServerGeneratedIngressService {
   readonly #ingress: Pick<GeneratedArtifactIngressService, "stageServerGenerated">;
+  readonly #reconciliation: Pick<BundleFileStagingService, "reconcile">;
   readonly #producerLeaseMilliseconds: number;
 
   constructor(dependencies: {
     readonly ingress: Pick<GeneratedArtifactIngressService, "stageServerGenerated">;
+    readonly reconciliation: Pick<BundleFileStagingService, "reconcile">;
     /** Tests/adapters may choose a stricter lease, never a wider one. */
     readonly producerLeaseMilliseconds?: number;
   }) {
     this.#ingress = dependencies.ingress;
+    this.#reconciliation = dependencies.reconciliation;
     const lease = dependencies.producerLeaseMilliseconds ??
       SERVER_GENERATED_INGRESS_LIMITS.producerLeaseMilliseconds;
     if (
@@ -202,6 +207,30 @@ export class TrustedServerGeneratedIngressService {
   ): Promise<GeneratedArtifactIngressResult> {
     if (request.signal?.aborted) return cancelled();
     if (typeof request.producer !== "function") return unavailable();
+
+    // The exact producer receipt makes an uncertain retry resolvable without
+    // invoking the producer or touching object storage. Existing reconcile
+    // owns validation, current target authorization, namespace isolation,
+    // expiry/state checks and canonical request-hash conflict detection.
+    try {
+      const prior = await this.#reconciliation.reconcile({
+        actor: request.actor,
+        spaceId: request.spaceId,
+        writeBindingId: request.writeBindingId,
+        displayFilename: request.displayFilename,
+        claimedMediaType: request.expectedMediaType,
+        idempotencyKey: request.idempotencyKey,
+        sourceKind: "server_generated",
+        expectedSize: request.expectedSize,
+        expectedSha256: request.expectedSha256,
+        mediaType: request.expectedMediaType,
+        size: request.expectedSize,
+        sha256: request.expectedSha256,
+      });
+      if (prior.kind !== "missing") return prior;
+    } catch {
+      return unavailable();
+    }
 
     const leaseController = new AbortController();
     const signal = request.signal === undefined
@@ -249,7 +278,7 @@ export class TrustedServerGeneratedIngressService {
         spaceId: request.spaceId,
         writeBindingId: request.writeBindingId,
         displayFilename: request.displayFilename,
-        claimedMediaType: request.claimedMediaType,
+        claimedMediaType: request.expectedMediaType,
         idempotencyKey: request.idempotencyKey,
         stream: guarded.stream,
         expectedSize: request.expectedSize,
@@ -261,6 +290,10 @@ export class TrustedServerGeneratedIngressService {
         result.code === "generated_artifact_cancelled" &&
         request.signal?.aborted !== true && leaseController.signal.aborted
       ) return unavailable();
+      if (
+        result.kind === "staged" &&
+        result.record.mediaType !== request.expectedMediaType
+      ) return Object.freeze({ kind: "invalid", code: "bundle_file_media_mismatch" });
       return result;
     } catch {
       return request.signal?.aborted ? cancelled() : unavailable();

@@ -2249,8 +2249,12 @@ source kind or transport.
 The installed repository composition may expose a trusted in-process
 `server_generated` port to backend code while this public row remains
 `not_available`. That port is neither an MCP tool nor an HTTP route: it accepts
-only a cancellable producer stream plus ordinary filename/media metadata,
-returns a staged ref, and requires the existing explicit atomic commit.
+only a cancellable producer stream plus an exact safe filename/media/size/SHA
+receipt, returns a staged ref, and requires the existing explicit atomic
+commit. Before invoking the producer it reconciles that receipt in the
+owner/Space/exact-writable-target idempotency namespace: a matching uncertain
+retry returns the prior staged ref, while a mismatch fails without generation
+or object upload.
 Producer job/prompt identity, client path, URL and provider locator never enter
 the request or staged record. MCP export administration remains absent.
 

@@ -12,12 +12,15 @@ const COMMON = {
   spaceId: "space_generated",
   writeBindingId: "write_generated",
   displayFilename: "generated.bin",
-  claimedMediaType: "application/octet-stream",
+  expectedMediaType: "application/octet-stream",
+  expectedSize: BYTES.byteLength,
+  expectedSha256: `sha256:${"a".repeat(64)}`,
   idempotencyKey: "server-generated:stage",
 };
 
 function fixture(options = {}) {
   const stages = [];
+  const reconciles = [];
   const service = new TrustedServerGeneratedIngressService({
     producerLeaseMilliseconds: options.producerLeaseMilliseconds ?? 50,
     ingress: {
@@ -38,13 +41,20 @@ function fixture(options = {}) {
           record: {
             stagedFileId: "staged_generated",
             sourceKind: "server_generated",
+            mediaType: request.claimedMediaType,
             size: chunks.reduce((size, chunk) => size + chunk.byteLength, 0),
           },
         };
       },
     },
+    reconciliation: {
+      async reconcile(request) {
+        reconciles.push(request);
+        return options.reconcileResult ?? { kind: "missing" };
+      },
+    },
   });
-  return { service, stages };
+  return { service, stages, reconciles };
 }
 
 test("trusted producer forwards only a bounded stream to the shared ingress", async () => {
@@ -52,8 +62,6 @@ test("trusted producer forwards only a bounded stream to the shared ingress", as
   let producerContext;
   const result = await env.service.stage({
     ...COMMON,
-    expectedSize: BYTES.byteLength,
-    expectedSha256: `sha256:${"a".repeat(64)}`,
     producer(context) {
       producerContext = context;
       return new ReadableStream({
@@ -74,6 +82,11 @@ test("trusted producer forwards only a bounded stream to the shared ingress", as
   assert.equal(result.kind, "staged");
   assert.equal(producerContext.maxBytes, 268_435_456);
   assert.equal(producerContext.signal instanceof AbortSignal, true);
+  assert.equal(env.reconciles.length, 1);
+  assert.equal(env.reconciles[0].sourceKind, "server_generated");
+  assert.equal(env.reconciles[0].mediaType, "application/octet-stream");
+  assert.equal(env.reconciles[0].sha256, COMMON.expectedSha256);
+  assert.equal(env.reconciles[0].size, BYTES.byteLength);
   assert.deepEqual(env.stages[0].chunks, [BYTES.subarray(0, 7), BYTES.subarray(7)]);
   assert.equal(env.stages[0].sourceKind, undefined);
   for (const forbidden of [
@@ -88,6 +101,7 @@ test("the accepted producer lease and size ceiling are exact and cannot widen", 
   });
   assert.throws(() => new TrustedServerGeneratedIngressService({
     ingress: { stageServerGenerated() { throw new Error("unreachable"); } },
+    reconciliation: { reconcile() { throw new Error("unreachable"); } },
     producerLeaseMilliseconds: 600_001,
   }), /outside the accepted bound/u);
 });
@@ -173,6 +187,9 @@ test("shared preflight rejection closes an unopened producer iterator", async ()
     ingress: {
       async stageServerGenerated() { return expected; },
     },
+    reconciliation: {
+      async reconcile() { return { kind: "missing" }; },
+    },
   });
   const result = await service.stage({
     ...COMMON,
@@ -190,6 +207,63 @@ test("shared preflight rejection closes an unopened producer iterator", async ()
   });
   assert.equal(result, expected);
   assert.equal(returned, true);
+});
+
+test("successful uncertain retry and changed receipt resolve before producer or objects", async () => {
+  let producerInvocations = 0;
+  let objectWrites = 0;
+  let staged = null;
+  const service = new TrustedServerGeneratedIngressService({
+    producerLeaseMilliseconds: 50,
+    reconciliation: {
+      async reconcile(request) {
+        if (staged === null) return { kind: "missing" };
+        const matches = request.displayFilename === COMMON.displayFilename &&
+          request.mediaType === COMMON.expectedMediaType &&
+          request.size === COMMON.expectedSize &&
+          request.sha256 === COMMON.expectedSha256;
+        return matches
+          ? { kind: "staged", record: staged, replayed: true }
+          : { kind: "invalid", code: "idempotency_conflict" };
+      },
+    },
+    ingress: {
+      async stageServerGenerated(request) {
+        for await (const chunk of request.stream) objectWrites += chunk.byteLength;
+        staged = {
+          stagedFileId: "staged_uncertain_retry",
+          sourceKind: "server_generated",
+          mediaType: COMMON.expectedMediaType,
+          size: COMMON.expectedSize,
+          sha256: COMMON.expectedSha256,
+        };
+        return { kind: "staged", record: staged, replayed: false };
+      },
+    },
+  });
+  const request = {
+    ...COMMON,
+    producer: () => {
+      producerInvocations += 1;
+      return (async function* () { yield BYTES; })();
+    },
+  };
+
+  const first = await service.stage(request);
+  const retry = await service.stage(request);
+  assert.equal(first.kind, "staged");
+  assert.equal(retry.kind, "staged");
+  assert.equal(retry.replayed, true);
+  assert.equal(retry.record.stagedFileId, first.record.stagedFileId);
+  assert.equal(producerInvocations, 1);
+  assert.equal(objectWrites, BYTES.byteLength);
+
+  assert.deepEqual(await service.stage({
+    ...request,
+    expectedSha256: `sha256:${"b".repeat(64)}`,
+  }), { kind: "invalid", code: "idempotency_conflict" });
+  assert.equal(producerInvocations, 1);
+  assert.equal(objectWrites, BYTES.byteLength);
 });
 
 test("producer acquisition, iteration and shape failures collapse without fallback", async (t) => {

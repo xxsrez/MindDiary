@@ -22,7 +22,17 @@ const NOW = "2026-08-27T20:00:00.000Z";
 const PDF = new TextEncoder().encode("%PDF-1.7\n% privacy-safe generated fixture\n");
 
 class StreamingFakeR2Bucket extends FakeR2Bucket {
+  reads = 0;
+  writes = 0;
+  deletes = 0;
+
+  async get(key) {
+    this.reads += 1;
+    return super.get(key);
+  }
+
   async put(key, value, options = {}) {
+    this.writes += 1;
     if (!(value instanceof ReadableStream)) return super.put(key, value, options);
     const reader = value.getReader();
     const chunks = [];
@@ -45,6 +55,11 @@ class StreamingFakeR2Bucket extends FakeR2Bucket {
       offset += chunk.byteLength;
     }
     return super.put(key, bytes, options);
+  }
+
+  async delete(keyOrKeys) {
+    this.deletes += 1;
+    return super.delete(keyOrKeys);
   }
 }
 
@@ -265,7 +280,7 @@ test("hosted composition stages one trusted stream and reuses commit/history/dow
     spaceId,
     writeBindingId,
     displayFilename: "safe-generated.pdf",
-    claimedMediaType: "application/pdf",
+    expectedMediaType: "application/pdf",
     expectedSize: PDF.byteLength,
     expectedSha256: sha256(PDF),
   };
@@ -292,32 +307,69 @@ test("hosted composition stages one trusted stream and reuses commit/history/dow
     prompt: "private generation prompt",
     jobId: "private-generation-job",
   };
+  let producerInvocations = 0;
   const staged = await runtime.serverGeneratedIngress.stage({
     ...common,
     idempotencyKey: "stage:server-generated-success",
-    producer: () => new ReadableStream({
-      start(controller) {
-        controller.enqueue(PDF.subarray(0, 11));
-        controller.enqueue(PDF.subarray(11));
-        controller.close();
-      },
-    }),
+    producer: () => {
+      producerInvocations += 1;
+      return new ReadableStream({
+        start(controller) {
+          controller.enqueue(PDF.subarray(0, 11));
+          controller.enqueue(PDF.subarray(11));
+          controller.close();
+        },
+      });
+    },
     ...privacySentinels,
   });
   assert.equal(staged.kind, "staged");
   assert.equal(staged.record.sourceKind, "server_generated");
   assert.equal(staged.record.size, PDF.byteLength);
   assert.equal(staged.record.sha256, sha256(PDF));
+  const objectCallsAfterSuccess = {
+    reads: bucket.reads,
+    writes: bucket.writes,
+    deletes: bucket.deletes,
+  };
 
   runtime = await createProductSiteRuntime(runtimeOptions);
   const replayed = await runtime.serverGeneratedIngress.stage({
     ...common,
     idempotencyKey: "stage:server-generated-success",
-    producer: () => (async function* () { yield PDF; })(),
+    producer: () => {
+      producerInvocations += 1;
+      return (async function* () { yield PDF; })();
+    },
   });
   assert.equal(replayed.kind, "staged");
   assert.equal(replayed.replayed, true);
   assert.equal(replayed.record.stagedFileId, staged.record.stagedFileId);
+  assert.equal(producerInvocations, 1);
+  assert.deepEqual({
+    reads: bucket.reads,
+    writes: bucket.writes,
+    deletes: bucket.deletes,
+  }, objectCallsAfterSuccess);
+
+  const objectsBeforeConflict = bucket.records.size;
+  const conflict = await runtime.serverGeneratedIngress.stage({
+    ...common,
+    expectedSha256: `sha256:${"f".repeat(64)}`,
+    idempotencyKey: "stage:server-generated-success",
+    producer: () => {
+      producerInvocations += 1;
+      return (async function* () { yield PDF; })();
+    },
+  });
+  assert.deepEqual(conflict, { kind: "invalid", code: "idempotency_conflict" });
+  assert.equal(producerInvocations, 1);
+  assert.equal(bucket.records.size, objectsBeforeConflict);
+  assert.deepEqual({
+    reads: bucket.reads,
+    writes: bucket.writes,
+    deletes: bucket.deletes,
+  }, objectCallsAfterSuccess);
 
   const beforeCommit = await modernTool(runtime, secret, "generated-before", "list_minds", {});
   assert.equal(
