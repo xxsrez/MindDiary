@@ -240,6 +240,7 @@ export class OrdinaryMindControlService {
         "A valid ordinary Mind description is required.",
       );
     }
+    const hasCanonicalDescription = normalizedDescription.value !== null;
     if (isReservedTopLevelRoute(command?.handle)) {
       throw new OrdinaryMindControlFailure(
         "handle_unavailable",
@@ -266,13 +267,15 @@ export class OrdinaryMindControlService {
     try {
       const canonicalRequestHash = await this.#objects.calculateSha256(
         PERSONAL_PROFILE_ENCODER.encode(`${JSON.stringify({
-          format: hasDescription
+          format: hasCanonicalDescription
             ? "mind-diary-ordinary-mind-create-v2"
             : "mind-diary-ordinary-mind-create-v1",
           host: this.#host,
           handle: parsedHandle.canonicalHandle,
           display_name: displayName,
-          ...(hasDescription ? { description: normalizedDescription.value } : {}),
+          ...(hasCanonicalDescription
+            ? { description: normalizedDescription.value }
+            : {}),
         })}\n`),
       );
       const spaceId = this.#ids.nextSpaceId();

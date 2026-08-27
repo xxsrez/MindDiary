@@ -9,6 +9,11 @@ import {
   resolveProductSitesIdentity,
 } from "../../packages/adapter-web/dist/index.js";
 import {
+  ordinaryUiMind,
+  publicUiMind,
+  uiMind,
+} from "../../packages/adapter-web/dist/product-http-request-helpers.js";
+import {
   MCP_TOOL_DEFINITIONS,
   ProductMcpContentApplication,
 } from "../../packages/adapter-mcp/dist/index.js";
@@ -144,12 +149,32 @@ const ordinaryOwnerRoute = Object.freeze({
   route: "/research-notes",
   handle: "research-notes",
   name: "Research Notes",
+  description: null,
   isPersonal: false,
   visibility: "private",
   discovery: "membership",
   access: Object.freeze({ kind: "membership", role: "owner", capabilities: ["content:read", "content:write"] }),
   metadataVersion: 7,
   headRevisionId: "revision_research",
+});
+
+test("ordinary web projections require description while Personal intentionally omits it", () => {
+  assert.equal("description" in personalRoute, false);
+  assert.notEqual(uiMind(personalRoute), null);
+
+  const { description: _description, ...ordinaryWithoutDescription } = ordinaryOwnerRoute;
+  assert.equal(uiMind(ordinaryWithoutDescription), null);
+  assert.equal(ordinaryUiMind(ordinaryWithoutDescription), null);
+
+  const publicMind = {
+    ...ordinaryOwnerRoute,
+    visibility: "public",
+    discovery: "public_catalog",
+    access: { kind: "visibility", role: null, capabilities: ["content:read"] },
+  };
+  assert.notEqual(publicUiMind(publicMind), null);
+  const { description: _publicDescription, ...publicWithoutDescription } = publicMind;
+  assert.equal(publicUiMind(publicWithoutDescription), null);
 });
 
 test("authenticated home emits correlated privacy-safe performance stages", async () => {
@@ -327,17 +352,27 @@ test("authenticated UI reuses the identity session snapshot instead of rereading
     csrf: { issue: () => "csrf-session-snapshot", verify: () => true },
     control: { execute(request) {
       calls.push(request.operation);
-      if (request.operation === "list_public_minds") return { minds: [{
-        mindId: "space_public_notes",
-        route: "/public-notes",
-        name: "Public Notes",
-        description: "A public\nplain-text description.",
-        isPersonal: false,
-        visibility: "public",
-        discovery: "public_catalog",
-        principalId: "principal_must_not_render",
-        privateContent: "PRIVATE CATALOG CONTENT",
-      }], nextCursor: "cursor_must_not_render" };
+      if (request.operation === "list_public_minds") return { minds: [
+        {
+          mindId: "space_public_notes",
+          route: "/public-notes",
+          name: "Public Notes",
+          description: "A public\nplain-text description.",
+          isPersonal: false,
+          visibility: "public",
+          discovery: "public_catalog",
+          principalId: "principal_must_not_render",
+          privateContent: "PRIVATE CATALOG CONTENT",
+        },
+        {
+          mindId: "space_schema_drift",
+          route: "/schema-drift",
+          name: "Missing required description",
+          isPersonal: false,
+          visibility: "public",
+          discovery: "public_catalog",
+        },
+      ], nextCursor: "cursor_must_not_render" };
       throw new Error(`unexpected control operation: ${request.operation}`);
     } },
   });

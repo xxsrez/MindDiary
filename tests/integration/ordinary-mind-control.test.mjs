@@ -458,6 +458,22 @@ test("ordinary description create and partial metadata update normalize atomical
     idempotencyKey: "description-omitted",
   });
   assert.equal(omitted.description, null);
+  for (const description of [null, " \r\n\t "]) {
+    const replay = await env.ordinary.createSpaceWithOwner(actor, {
+      name: "Omitted",
+      handle: "description-omitted",
+      description,
+      idempotencyKey: "description-omitted",
+    });
+    assert.equal(replay.replayed, true);
+    assert.deepEqual({ ...replay, replayed: false }, omitted);
+  }
+  await assert.rejects(env.ordinary.createSpaceWithOwner(actor, {
+    name: "Omitted",
+    handle: "description-omitted",
+    description: "Material description",
+    idempotencyKey: "description-omitted",
+  }), expectFailure("idempotency_conflict"));
   const explicitNull = await env.ordinary.createSpaceWithOwner(actor, {
     name: "Null",
     handle: "description-null",

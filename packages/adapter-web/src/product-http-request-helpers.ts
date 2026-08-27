@@ -234,7 +234,7 @@ export function requiredString(value: unknown): string | null {
 }
 
 function ordinaryDescription(value: unknown): string | null | undefined {
-  return value === undefined || value === null
+  return value === null
     ? null
     : typeof value === "string"
       ? value
