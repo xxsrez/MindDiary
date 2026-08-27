@@ -254,6 +254,26 @@ side-effect-free moved result из этого register. Это уточняет 
 Незакрытым остаётся пункт 5 в части dev/UAT/live evidence и rollback. Этот
 follow-up не утверждает deployment или production readiness.
 
+## Product Site UI boundary MD-367
+
+MD-367 добавляет только browser orchestration поверх routes MD-361. На `/me`
+и авторизованном `/{space_handle}` export является отдельной от Markdown import
+панелью: target Mind всегда видим, selector ограничен current HEAD либо exact
+historical `revision_id`, а archive profile выбирается явно. Browser сохраняет
+для refresh/navigation только versioned actor-local request tuple и opaque
+`job_id`; idempotency key записывается до start request, поэтому неизвестный
+transport outcome безопасно replay-ится без второго job.
+
+Status polling bounded; ready receipt показывает exact revision, size и
+SHA-256. Response-only download URL не попадает в durable browser state. Перед
+сохранением optional verify/save path независимо сравнивает actual downloaded
+bytes, `Content-Length`, exact size и SHA-256 с receipt. Revoked access,
+visibility tightening, expiry и foreign job остаются одним fail-closed
+unavailable state. UI не добавляет history-backup, restore/import, raw archive
+JSON, MCP export alias, cross-Mind workflow или новую storage/job lifecycle.
+Hosted exact-byte UAT остаётся downstream release evidence, а не выводится из
+component/browser tests.
+
 ## Acceptance граница MD-359
 
 MD-359 завершён как contract delta, когда Markdown и machine fixture совпадают,

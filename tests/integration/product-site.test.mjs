@@ -315,11 +315,15 @@ test("product web authenticates UI and fail-closes browser mutations", async () 
   assert.match(pageHtml, /mind-diary-onboarding-client\.js/);
   assert.match(pageHtml, /mind-diary-csrf-token/);
   assert.match(pageHtml, /data-markdown-import data-head-revision="revision_personal" data-import-handle="me"/);
+  assert.match(pageHtml, /data-export-workflow data-export-mind-ref="me" data-export-route="\/me"/);
+  assert.match(pageHtml, /Target Mind:[\s\S]*Product Owner[\s\S]*<code data-export-target-route>\/me<\/code>/);
   assert.doesNotMatch(pageHtml, /principal_one|Bearer must-not-be-used-by-web/);
   assert.equal(page.headers.get("cache-control"), "no-store");
   const onboardingAsset = await handler(new Request(`${origin}/ui/mind-diary-onboarding-client.js`));
   const onboardingJavaScript = await onboardingAsset.text();
   assert.match(onboardingJavaScript, /markdown-import-plans/);
+  assert.match(onboardingJavaScript, /export-jobs/);
+  assert.match(onboardingJavaScript, /crypto\.subtle\.digest\("SHA-256", bytes\)/);
   assert.doesNotThrow(() => new vm.Script(onboardingJavaScript));
 
   const denied = await handler(new Request(`${origin}/api/v1/minds`, {
@@ -1075,6 +1079,8 @@ test("ordinary Mind list and exact route wire the UAT management and deletion co
   assert.match(detailHtml, /data-owner-transfer-controls/);
   assert.match(detailHtml, /data-markdown-import data-head-revision="revision_research"/);
   assert.match(detailHtml, /Snapshot replacement:/);
+  assert.match(detailHtml, /data-export-workflow data-export-mind-ref="research-notes" data-export-route="\/research-notes"/);
+  assert.match(detailHtml, /Target Mind:[\s\S]*Research Notes/);
   assert.match(detailHtml, /every current Markdown file omitted/);
   assert.match(detailHtml, /data-capacity-state="normal"/);
   assert.match(detailHtml, /Counts come from immutable manifest and job metadata/);
@@ -1106,8 +1112,12 @@ test("ordinary Mind list and exact route wire the UAT management and deletion co
   assert.equal(JSON.stringify(capacityBody).includes("path"), false);
 
   const asset = await handler(new Request(`${origin}/ui/mind-diary-ordinary-minds-client.js`));
+  const ordinaryJavaScript = await asset.text();
+  assert.match(ordinaryJavaScript, /export-jobs/);
+  assert.match(ordinaryJavaScript, /MD-BUNDLE-ZIP-1/);
+  assert.doesNotThrow(() => new vm.Script(ordinaryJavaScript));
   assert.equal(asset.status, 200);
-  const assetBody = await asset.text();
+  const assetBody = ordinaryJavaScript;
   assert.match(assetBody, /deletion-impact/);
   assert.match(assetBody, /delete-mind:/);
   assert.match(assetBody, /ownership-transfer/);
@@ -1124,7 +1134,8 @@ test("ordinary Mind list and exact route wire the UAT management and deletion co
   assert.match(assetBody, /markdown-import-plans/);
   assert.match(assetBody, /markdown-import-mind/);
   assert.match(assetBody, /history\.replaceState/);
-  assert.doesNotMatch(assetBody, /localStorage|sessionStorage/);
+  assert.doesNotMatch(assetBody, /localStorage/);
+  assert.match(assetBody, /sessionStorage/);
   assert.match(assetBody, /`sha256:\$\{hex/);
   assert.match(assetBody, /descriptor_hash !== descriptorHash/);
   assert.match(assetBody, /Uploading bounded batches/);

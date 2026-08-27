@@ -9,6 +9,7 @@ import {
   renderInvitationsMembershipPanel,
   type InvitationMembershipSnapshot,
 } from "./invitations-membership.js";
+import { renderProductExportWorkflowPanel } from "./export-workflow.js";
 
 export type OrdinaryMindUiRole = "reader" | "editor" | "admin" | "owner";
 export type OrdinaryMindUiVisibility = "private" | "unlisted" | "public";
@@ -760,6 +761,12 @@ function renderDetailView(
         ${renderMetadataPanel(mind, handle)}
       </div>
       ${renderVisibilityPanel(mind, handle)}
+      ${renderProductExportWorkflowPanel({
+        mindRef: handle,
+        route: `/${handle}`,
+        name: mind.name,
+        headRevisionId: mind.headRevisionId,
+      })}
       ${role === "reader" || mind.accessKind === "visibility"
         ? ""
         : renderMarkdownImportPanel({ mindRef: handle, headRevisionId: mind.headRevisionId })}

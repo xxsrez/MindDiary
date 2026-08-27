@@ -2855,6 +2855,61 @@ Revoked membership/token или private switch не обходятся retry: с
 быть восстановлен current access. Download URL и bearer secret не попадают в
 prompt transcript, config, issue, logs или analytics.
 
+### Product Site export flow
+
+Release 0.3 показывает export как отдельное компактное действие на странице
+конкретного Mind (`/me` или `/{space_handle}`). Это не часть Markdown import и
+не кнопка восстановления: import заменяет Markdown snapshot новой revision, а
+export только фиксирует и скачивает одну уже существующую immutable revision.
+UI не обещает backup всей истории, restore, ZIP import или сохранение service
+metadata.
+
+Панель появляется только после server-side разрешения Mind и current read
+access. Она всегда показывает display name и canonical route target Mind,
+никогда не выводит `space_id`. Пользователь явно выбирает:
+
+- current HEAD, которую start route один раз разрешает в exact `revision_id`;
+- exact historical `revision_id`, без `as_of`, fuzzy label или fallback на
+  HEAD;
+- explicit `MD-BUNDLE-ZIP-1` для всех canonical files либо
+  `MD-OKF-ZIP-1` только для доказанно Markdown-only revision. Mixed revision с
+  legacy profile получает `export_profile_required`, после чего UI предлагает
+  выбрать полный bundle profile, а не повторяет запрос с неявным fallback.
+
+Перед первым `POST` browser сохраняет в session-scoped state только versioned
+tuple `mind_ref + revision_selector + profile + Idempotency-Key` и после
+успеха добавляет opaque `job_id`. Поэтому transport-unknown start, refresh,
+переход на другую страницу и возврат в том же tab повторяют exact key/payload
+либо читают creator-owned status; они не создают второй job. Состояние не
+содержит display name, principal/Space identity, paths, content, archive bytes,
+object key, grant secret или download URL. Новый сознательный export очищает
+предыдущий terminal tuple и получает новый key.
+
+Browser делает один immediate status read и не больше восьми автоматических
+polls с bounded delay. После этого пользователь получает явное действие
+`Check status`; background work не превращается в unbounded page loop. Status
+всегда повторяет target Mind и exact `revision_id`. Terminal ready receipt
+показывает `archive_format`, `filename`, exact `size`, SHA-256 и expiry нового
+grant. `failed`/`expired` показываются как terminal job state без предположения,
+что HEAD или content изменились.
+
+`download_url` остаётся только в volatile page memory. Он не записывается в
+URL/history, DOM attributes, Web Storage, telemetry или error text. Действие
+`Verify and save archive` выполняет same-origin credentialed `GET` без redirect,
+сверяет HTTP `Content-Length`, фактический byte length и SHA-256 полученных
+bytes с ready receipt и только после полного совпадения передаёт их browser
+download. Несовпадение, network error, unsupported crypto или malformed receipt
+не сохраняют файл и требуют нового status/grant. Grant one-use: прямой download
+и verify/save являются альтернативными действиями над одним текущим URL.
+
+Любой status/download response для foreign, revoked, visibility-tightened,
+deleted, expired или otherwise unavailable target обрабатывается одинаково:
+UI удаляет volatile grant, не раскрывает причину/metadata и предлагает вернуться
+к текущему Mind либо начать новый export только после восстановления current
+access. Reader, baseline Reader, Editor, Admin и Owner используют один flow;
+наличие страницы или сохранённого `job_id` никогда не заменяет server-side
+reauthorization.
+
 ## MCP Resources
 
 Resources дополняют, но не заменяют tools. `fetch` остаётся обязательным

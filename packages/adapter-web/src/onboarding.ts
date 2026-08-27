@@ -11,6 +11,7 @@ import {
   MIND_DIARY_CODEX_STARTER_PLAYBOOK,
 } from "./token-management.js";
 import { renderMarkdownImportPanel } from "./ordinary-minds-management.js";
+import { renderProductExportWorkflowPanel } from "./export-workflow.js";
 
 export const MIND_DIARY_ONBOARDING_ASSETS = Object.freeze({
   shellStyles: MIND_DIARY_UI_ASSETS.shellStyles,
@@ -317,6 +318,12 @@ function renderAuthenticated(
           <a class="md-button md-button--secondary" href="/settings/connections">View Connections</a>
         </nav>
       </section>
+      ${renderProductExportWorkflowPanel({
+        mindRef: "me",
+        route: "/me",
+        name: model.personalMind.name,
+        headRevisionId: model.personalMind.headRevisionId,
+      })}
       ${renderMarkdownImportPanel({
         mindRef: "me",
         headRevisionId: model.personalMind.headRevisionId,

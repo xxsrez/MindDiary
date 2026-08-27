@@ -15,6 +15,7 @@ export const PRODUCT_UI_TEXT_ASSETS = Object.freeze([
   ["PRODUCT_UI_CLIENT_JAVASCRIPT", "packages/adapter-web/assets/product-ui-client.js"],
   ["PRODUCT_ORDINARY_MINDS_CLIENT_JAVASCRIPT", "packages/adapter-web/assets/ordinary-minds-client.js"],
   ["PRODUCT_MARKDOWN_IMPORT_CLIENT_JAVASCRIPT", "packages/adapter-web/assets/markdown-import-client.js"],
+  ["PRODUCT_EXPORT_CLIENT_JAVASCRIPT", "packages/adapter-web/assets/export-client.js"],
   ["PRODUCT_COLLABORATION_CLIENT_JAVASCRIPT", "packages/adapter-web/assets/collaboration-client.js"],
   ["PRODUCT_CONNECTIONS_CLIENT_JAVASCRIPT", "packages/adapter-web/assets/connections-client.js"],
   ["PRODUCT_VISIBILITY_CATALOG_CLIENT_JAVASCRIPT", "packages/adapter-web/assets/visibility-catalog-client.js"],

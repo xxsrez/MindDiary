@@ -14,6 +14,7 @@ export * from "./product-http.js";
 export * from "./export-download-http.js";
 export * from "./bundle-file-download-http.js";
 export * from "./ordinary-minds-management.js";
+export * from "./export-workflow.js";
 export * from "./operator-directory.js";
 export * from "./account-deletion.js";
 export * from "./invitations-membership.js";

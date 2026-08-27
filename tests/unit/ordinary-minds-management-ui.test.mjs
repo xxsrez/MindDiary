@@ -179,6 +179,9 @@ test("Owner visibility controls disclose live HEAD and history while baseline re
   assert.match(baseline, /data-visibility-readonly/);
   assert.match(baseline, /baseline access is read-only and does not create membership/i);
   assert.match(baseline, /exact URL is not a secret/i);
+  assert.match(baseline, /data-export-workflow data-export-mind-ref="shared-library"/);
+  assert.match(baseline, /Target Mind:[\s\S]*Shared Library[\s\S]*\/shared-library/);
+  assert.doesNotMatch(baseline, /data-markdown-import/);
   assert.doesNotMatch(baseline, /data-owner-visibility-controls|data-save-visibility/);
 });
 
