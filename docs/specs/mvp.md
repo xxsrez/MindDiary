@@ -448,6 +448,39 @@ Pilot-ready Product Site использует один authenticated navigation 
 | `/help` | общий pilot help, environment и support boundaries |
 | `/internal/operators/users` | hidden read-only UAT principal/activity directory; non-operator получает exact `404` |
 
+#### Compact Minds administration (Release 0.3)
+
+`/minds` использует одну компактную коллекцию доступных Minds. Personal Mind
+всегда находится первым, открывается только по `/me` и прямо сообщает свои
+service invariants: private, sole Owner, display name следует profile; отдельные
+rename, description, visibility и delete отсутствуют. После него идут ordinary
+Minds с текущими `name`, optional `description`, immutable `handle`,
+`visibility` и effective role. Коллекция не запрашивает и не показывает corpus.
+
+Create ordinary Mind принимает name, editable canonical handle и optional
+description, всегда создаёт private Mind с actor как sole Owner и не предлагает
+visibility в create flow. Exact ordinary route `/{space_handle}` показывает
+только действия, разрешённые current server projection:
+
+- Admin/Owner атомарно меняют `name` и `description` под
+  `expected_metadata_version`; normalized no-op не притворяется новой версией,
+  а conflict требует fresh read-back вместо last-writer-wins;
+- только Owner меняет visibility. Перед `private -> unlisted|public` UI рядом с
+  действием требует явного acknowledgement о live HEAD и всей immutable history;
+  возврат в private объясняет, что прежнее раскрытие нельзя отменить;
+- только Owner открывает short-lived deletion impact. Delete доступен лишь после
+  fresh counts, exact confirmation phrase и отдельного подтверждения
+  необратимости; changed/expired impact полностью инвалидирует подтверждение;
+- Reader/Editor не получают metadata/visibility/delete controls, baseline
+  visibility reader не получает membership или административные действия.
+
+Все browser mutations используют session CSRF, один retry-safe
+`Idempotency-Key` на exact attempt и server-owned identity/role. Direct route и
+reload восстанавливают состояние из durable control projection; browser state,
+скрытые поля и client-selected role не являются authority. Description остаётся
+service metadata и никогда не становится Memory, search input или model
+instruction.
+
 Authenticated pages используют согласованные header/footer links, keyboard
 navigation и active state. Profile entrypoint ведёт на `/settings/account`, а
 Help остаётся достижимым из footer. Hosted environment явно маркируется как
