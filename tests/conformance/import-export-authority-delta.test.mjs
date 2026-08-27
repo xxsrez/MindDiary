@@ -5,6 +5,11 @@ import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
+import {
+  MCP_CONTENT_TOOLS,
+  MCP_MOVED_EXPORT_TOOLS,
+} from "../../packages/adapter-mcp/dist/index.js";
+
 const root = new URL("../../", import.meta.url);
 const repositoryRoot = fileURLToPath(root);
 const fixture = JSON.parse(await readFile(
@@ -41,19 +46,20 @@ function candidateBlob(candidate, path) {
   return gitOutput(["show", `${candidate}:${path}`]);
 }
 
-function candidateText(path) {
-  return candidateBlob(fixture.observed_candidate, path).toString("utf8");
+async function currentText(path) {
+  return readFile(new URL(path, root), "utf8");
 }
 
 function sha256(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
-const webRouting = candidateText("packages/adapter-web/src/product-http-routing.ts");
-const mcpDefinitions = candidateText("packages/adapter-mcp/src/tool-definitions.ts");
-const markdownImports = candidateText("packages/application-content/src/markdown-imports.ts");
-const exportJobs = candidateText("packages/application-content/src/export-jobs.ts");
-const exportDownloadHttp = candidateText("packages/adapter-web/src/export-download-http.ts");
+const webRouting = await currentText("packages/adapter-web/src/product-http-routing.ts");
+const mcpDefinitions = await currentText("packages/adapter-mcp/src/tool-definitions.ts");
+const mcpProductApplication = await currentText("packages/adapter-mcp/src/product-application.ts");
+const markdownImports = await currentText("packages/application-content/src/markdown-imports.ts");
+const exportJobs = await currentText("packages/application-content/src/export-jobs.ts");
+const exportDownloadHttp = await currentText("packages/adapter-web/src/export-download-http.ts");
 
 function keys(value) {
   return Object.keys(value).sort();
@@ -169,7 +175,7 @@ test("observed evidence rejects candidate, path, and digest drift", () => {
   );
 });
 
-test("current routes are observed and target export control routes remain explicit gaps", () => {
+test("current source exposes Site export control and omits administrative export from MCP schemas", () => {
   for (const operation of [
     "plan_markdown_import",
     "start_markdown_import",
@@ -180,16 +186,21 @@ test("current routes are observed and target export control routes remain explic
     "cancel_markdown_import",
   ]) assert.ok(webRouting.includes(`operation: "${operation}"`), operation);
 
-  assert.match(mcpDefinitions, /name: "start_export"/u);
-  assert.match(mcpDefinitions, /name: "get_export_status"/u);
   assert.ok(exportDownloadHttp.includes("api\\/v1\\/exports"));
-  assert.doesNotMatch(webRouting, /operation: "start_export"/u);
-  assert.doesNotMatch(webRouting, /operation: "get_export_status"/u);
-  assert.doesNotMatch(webRouting, /export-jobs/u);
-  assert.ok(
-    fixture.gaps.some(({ id }) => id === "GAP-WEB-EXPORT-CONTROL"),
-    "missing target routes must remain a declared gap",
+  assert.match(webRouting, /operation: "start_export"/u);
+  assert.match(webRouting, /operation: "get_export_status"/u);
+  assert.match(webRouting, /export-jobs/u);
+  assert.deepEqual([...MCP_MOVED_EXPORT_TOOLS], ["start_export", "get_export_status"]);
+  assert.equal(MCP_CONTENT_TOOLS.includes("start_export"), false);
+  assert.equal(MCP_CONTENT_TOOLS.includes("get_export_status"), false);
+  assert.match(
+    mcpDefinitions,
+    /MCP_MOVED_EXPORT_TOOLS[\s\S]*"start_export"[\s\S]*"get_export_status"/u,
   );
+  assert.doesNotMatch(mcpDefinitions, /name: "start_export"/u);
+  assert.doesNotMatch(mcpDefinitions, /name: "get_export_status"/u);
+  assert.match(mcpProductApplication, /mind-diary\/mcp-operation-moved\/v1/u);
+  assert.match(mcpProductApplication, /operation_moved_to_sites/u);
 
   const disposition = new Map(fixture.routes.map((route) => [route.id, route.disposition]));
   assert.equal(disposition.get("EX-START"), "move-and-stub");

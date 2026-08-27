@@ -6,7 +6,8 @@
 автоматическими локальными проверками и hosted UAT evidence. Канонический
 машинный реестр —
 `tests/fixtures/release-0.3-traceability/contract.v1.json`; его закрытую схему,
-forward/reverse coverage и существование source/test/fixture paths проверяет
+forward/reverse coverage, hashed export-cutover source evidence и существование
+source/test/fixture paths проверяет
 `tests/conformance/release-0.3-traceability-contract.test.mjs`.
 
 Passing validator доказывает полноту verification contract, но не наличие ещё
@@ -83,7 +84,7 @@ URL в receipt запрещены.
 | `U-ACCESS` | `MD-354` | `ship-work-release/uat-release-0.3-access-admin/v1` | sequential roles, revoke and pool baseline |
 | `L-CONNECTIONS` | `MD-358` | exact token/OAuth/target/plugin command in registry | target generation, provider/product absence |
 | `U-CONNECTIONS` | `MD-358` | `ship-work-release/uat-release-0.3-connections/v1` | fresh client, target/revoke/provider join |
-| `L-TRANSFER` | `MD-363` | exact import/export/bytes/hash/grant command in registry | revision, bytes/hash, grant, HEAD and cleanup |
+| `L-TRANSFER` | `MD-363` | exact Site import/export + both-profile MCP moved-result + bytes/hash/grant command in registry | Site routes, absent MCP export catalog, moved results, revision, bytes/hash, grant, HEAD and cleanup |
 | `U-TRANSFER` | `MD-363` | `ship-work-release/uat-release-0.3-import-export/v1` | browser plan, bytes/history/redeploy/absence |
 
 Hosted runner IDs — stable check-definition identifiers. Их implementation и

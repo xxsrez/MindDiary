@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { access, readFile } from "node:fs/promises";
 import test from "node:test";
 
@@ -24,6 +25,13 @@ function sorted(values) {
   return [...values].sort();
 }
 
+function gitBlob(bytes) {
+  return createHash("sha1")
+    .update(`blob ${bytes.length}\0`)
+    .update(bytes)
+    .digest("hex");
+}
+
 function evidenceById() {
   return new Map(fixture.evidence.map((row) => [row.id, row]));
 }
@@ -41,7 +49,7 @@ const automationSafeDownstream = [
 
 test("Release 0.3 traceability fixture has a closed scope and policy", () => {
   exactKeys(fixture, [
-    "$schema", "version", "release", "status", "source", "scope", "reusedAssets", "policies", "requirements", "evidence",
+    "$schema", "version", "release", "status", "source", "sourceEvidence", "scope", "reusedAssets", "policies", "requirements", "evidence",
   ], "top-level traceability contract drifted");
   assert.equal(fixture.$schema, "mind-diary/release-0.3-traceability/v1");
   assert.equal(fixture.version, 1);
@@ -79,6 +87,30 @@ test("Release 0.3 traceability fixture has a closed scope and policy", () => {
     allowedAction: "password_mfa_or_passkey_for_existing_restricted_uat_accounts_only",
     resumeSignal: "three_distinct_short_lived_session_references_and_fresh_pool_read_back_are_available",
   });
+});
+
+test("export cutover source evidence is hashed and bound to the authority assertion", async () => {
+  assert.deepEqual(fixture.sourceEvidence, [
+    {
+      assertionId: "r03.transfer.web-authority",
+      role: "site-export-authority-conformance",
+      path: "tests/conformance/import-export-authority-delta.test.mjs",
+      gitBlob: "4c55bad74314a681ab8ec36c6b43900b2ac326b7",
+    },
+    {
+      assertionId: "r03.transfer.web-authority",
+      role: "mcp-export-cutover-conformance",
+      path: "tests/conformance/mcp-export-move.test.mjs",
+      gitBlob: "0d68a3a701fab6d747d824fadac5b1f9f5640eec",
+    },
+  ]);
+  const assertionIds = new Set(fixture.requirements.map(({ assertionId }) => assertionId));
+  for (const evidence of fixture.sourceEvidence) {
+    exactKeys(evidence, ["assertionId", "role", "path", "gitBlob"], evidence.role);
+    assert.ok(assertionIds.has(evidence.assertionId), evidence.assertionId);
+    const bytes = await readFile(new URL(evidence.path, root));
+    assert.equal(gitBlob(bytes), evidence.gitBlob, `${evidence.role} source drifted`);
+  }
 });
 
 test("MD-237, MD-282, MD-299 and MD-300 reuse points are exact existing sources", async () => {
@@ -146,6 +178,24 @@ test("local evidence rows are exact runnable commands with existing tests and fi
       assert.ok(row[field].length > 0, `${row.id} ${field} is empty`);
     }
   }
+});
+
+test("local transfer evidence proves Site export and both MCP moved-compatibility profiles", () => {
+  const transfer = fixture.evidence.find(({ id }) => id === "L-TRANSFER");
+  assert.ok(transfer.testPaths.includes("tests/conformance/import-export-authority-delta.test.mjs"));
+  assert.ok(transfer.testPaths.includes("tests/conformance/mcp-export-move.test.mjs"));
+  assert.match(transfer.readBack, /Site export routes/u);
+  assert.match(transfer.readBack, /both MCP catalogs\/moved results/u);
+
+  const authority = fixture.requirements.find(({ id }) => id === "R03-335-AUTHORITY");
+  assert.equal(authority.surfaces.rest, "Site import/export job routes");
+  assert.equal(authority.surfaces.mcp, "start/get export tools absent");
+  assert.equal(
+    authority.surfaces.migration,
+    "exact cached export calls return moved-to-Site results",
+  );
+  assert.match(authority.readBack, /both MCP catalogs/u);
+  assert.match(authority.readBack, /without export side effects/u);
 });
 
 test("hosted evidence rows define exact lineage, receipts, bounded actors and reconciliation", async () => {
