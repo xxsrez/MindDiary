@@ -300,10 +300,13 @@ List operations используют:
 ### Idempotency и concurrency
 
 - REST mutation передаёт `Idempotency-Key` header.
-- MCP `create_file_upload_intent`, `stage_bundle_file`, `commit_changeset`,
-  `capture_knowledge` и `start_export` передают
+- MCP `create_file_upload_intent`, `stage_bundle_file`, `commit_changeset` и
+  `capture_knowledge` передают
   `idempotency_key` как
   explicit tool argument.
+- Запуск экспорта через Sites передаёт ключ только в `Idempotency-Key`; тело
+  запроса не может подменить заголовок. Persisted namespace остаётся
+  `start_export`, поэтому точный повтор не зависит от смены transport surface.
 - Key namespaced server-side по actor, operation и target aggregate и связан с
   canonical request hash.
 - Retry с тем же key и payload возвращает прежний result.
@@ -622,14 +625,17 @@ Problem Details response:
 | `POST` | `/api/v1/markdown-imports/{import_id}/validate` | Local candidate: advance one bounded validation page; repeat through `validated`. |
 | `POST` | `/api/v1/markdown-imports/{import_id}/commit` | Local candidate: advance bounded canonical promotion; last call performs one HEAD CAS. |
 | `DELETE` | `/api/v1/markdown-imports/{import_id}` | Local candidate: cancel before HEAD commit and schedule bounded cleanup. |
+| `POST` | `/api/v1/minds/{mind_ref}/exports` | Release 0.3 local candidate: start one creator-owned exact-revision export; returns `202`. |
+| `GET` | `/api/v1/export-jobs/{job_id}` | Release 0.3 local candidate: creator-private safe status/receipt and, after current reauthorization, a fresh short-lived download grant. |
 
 `mind_ref` в REST — `me` или canonical `space_handle`. Adapter разрешает его
 в internal `space_id` и только затем authorizes request.
 
-Таблица routes выше описывает current wire compatibility. Она не является
-Release 0.3 operation register: MD-337 отдельно определит disposition import,
-export и target-management calls; access/binding calls и schemas ограничены
-[MD-339 contract](credential-write-target.md).
+Таблица routes выше описывает текущую локальную сборку и wire compatibility.
+Управление экспортом Release 0.3 уже перенесено в Sites REST; существующий
+response-only route `GET /api/v1/exports/{download_secret}` сохраняется.
+Полный operation register принят в MD-337, а access/binding calls и schemas
+ограничены [MD-339 contract](credential-write-target.md).
 
 Internal operator query принимает bounded `query`, `state`,
 `registered_from|to`, `activity_from|to`, `never_active`, `sort`, `direction`,
@@ -1626,6 +1632,14 @@ administrative export отсутствуют в target MCP authority, а explici
 attach не является precondition. MD-337 владеет exact disposition каждого
 name; compatibility access state and wire migration приняты в
 [MD-339 contract](credential-write-target.md).
+
+В текущей локальной сборке Release 0.3 `start_export` и `get_export_status`
+отсутствуют в `tools/list` обоих профилей. Точный вызов прежнего имени через
+`tools/call` получает terminal result `mind-diary/mcp-operation-moved/v1` с
+`operation_moved_to_sites`, `isError: true` и новым REST route. Stub не читает
+Mind или job, не выполняет authorization, не резервирует capacity, не пишет
+idempotency и не ставит фоновую работу. Остальные неизвестные имена сохраняют
+`Invalid params`, а удалённые методы отдельных профилей — `Method not found`.
 
 ## Common MCP schemas
 
@@ -2659,17 +2673,19 @@ Implementation must keep current generic request/body limits for ordinary
 routes and add explicit streaming multipart limits here. UI admission does not
 raise the accepted per-file/Mind/principal/Site limits.
 
-### `start_export`
+### Sites `POST /api/v1/minds/{mind_ref}/exports`
 
-Input:
+JSON body и обязательный header:
 
 ```json
 {
-  "mind": "research-notes",
   "revision_selector": { "kind": "head" },
-  "profile": "MD-BUNDLE-ZIP-1",
-  "idempotency_key": "01J..."
+  "profile": "MD-BUNDLE-ZIP-1"
 }
+```
+
+```http
+Idempotency-Key: 01J...
 ```
 
 Output:
@@ -2681,7 +2697,8 @@ Output:
     "status": "queued",
     "revision_id": "rev_exact",
     "created_at": "2026-08-05T22:00:00Z"
-  }
+  },
+  "replayed": false
 }
 ```
 
@@ -2694,9 +2711,12 @@ Neither profile includes ACL, memberships, service identity, staging, audit or
 tokens. Builders run before background job/download-grant layer; implementation
 of builder alone does not prove asynchronous authorization or download.
 
-### `get_export_status`
+### Sites `GET /api/v1/export-jobs/{job_id}`
 
-Input: `{ "job_id": "export_opaque" }`.
+Вход: только opaque `job_id` из path; query и body отсутствуют. Для
+неизвестного, чужого, удалённого или недоступного job ответ один и тот же:
+`404 export_job_not_found`. Даже principal с текущим правом чтения не видит
+job, созданный другим principal.
 
 Output state:
 
@@ -2724,7 +2744,8 @@ Succeeded response:
 }
 ```
 
-Server повторно проверяет current Mind access до выдачи нового download grant.
+Server сначала проверяет creator ownership, затем повторно проверяет current
+Mind access до выдачи нового download grant.
 Каждый grant использует новый opaque bearer secret, живёт 5 минут по умолчанию
 и не может жить дольше server maximum 10 минут или самого export job. URL и
 secret являются consume-on-response material: они не сохраняются в export job,
@@ -2763,7 +2784,7 @@ import/extraction behavior.
 Client recovery flow сохраняет returned exact `revision_id`, скачивает grant
 до `download_expires_at`, сравнивает exact byte size и SHA-256 всего archive и
 валидирует весь распакованный OKF bundle. `export_expired` означает новый
-authorized `get_export_status`/grant, но не повторное использование URL.
+authorized Sites status/grant, но не повторное использование URL.
 Revoked membership/token или private switch не обходятся retry: сначала должен
 быть восстановлен current access. Download URL и bearer secret не попадают в
 prompt transcript, config, issue, logs или analytics.

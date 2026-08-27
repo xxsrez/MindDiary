@@ -214,7 +214,11 @@ Stub сохраняется минимум один UAT release после cutov
 отдельного compatibility decision с client evidence. Это migration aid, а не
 постоянная Content MCP authority.
 
-## Реальные implementation gaps
+## Пробелы зафиксированной сборки
+
+Список ниже относится к evidence-locked candidate этого register и сохраняется
+как историческое доказательство причин runtime cutover. Более позднюю локальную
+сборку MD-361 он не описывает.
 
 1. `start_export`/`get_export_status` всё ещё advertised и исполняются MCP
    adapter; target REST start/status routes отсутствуют.
@@ -235,6 +239,20 @@ MD-337 owns the complete cross-surface operation register and must consume
 these import/export dispositions without inventing a second lifecycle.
 MD-339 owns credential writable-target migration; import/export remain
 Sites-authenticated and must not acquire a read/write binding precondition.
+
+## Локальная реализация MD-361
+
+MD-361 закрывает пункты 1–3 в локальной сборке: Sites REST принимает запуск и
+доступный только создателю статус, существующие exact-revision
+engine/job/grant/download переиспользуются, а оба MCP-каталога больше не
+публикуют export names. Точные вызовы прежних имён получают versioned
+side-effect-free moved result из этого register. Это уточняет общий rule
+`Invalid params` из MD-337 только для двух evidence-backed export names и
+минимум на один UAT release; остальные неизвестные tools и удалённые методы
+отдельных профилей сохраняют protocol behavior MD-337.
+
+Незакрытым остаётся пункт 5 в части dev/UAT/live evidence и rollback. Этот
+follow-up не утверждает deployment или production readiness.
 
 ## Acceptance граница MD-359
 
