@@ -50,6 +50,31 @@ export interface VerifiedFileInput {
   readonly sha256: Sha256Digest;
 }
 
+/**
+ * Safe adapter-to-ingress classification for a failure discovered while the
+ * verified stream is being consumed. It carries no provider reason, locator or
+ * credential. Source failures intentionally collapse revoke, ownership drift,
+ * object mutation and export-snapshot drift into one terminal outcome.
+ */
+export class ConnectorObjectStreamFailure extends Error {
+  readonly name = "ConnectorObjectStreamFailure";
+
+  private constructor(
+    readonly failure: "source_unavailable" | "transport_unavailable",
+    readonly retryable: boolean,
+  ) {
+    super("Connector object snapshot is unavailable");
+  }
+
+  static sourceUnavailable(): ConnectorObjectStreamFailure {
+    return new ConnectorObjectStreamFailure("source_unavailable", false);
+  }
+
+  static transportUnavailable(retryable = true): ConnectorObjectStreamFailure {
+    return new ConnectorObjectStreamFailure("transport_unavailable", retryable);
+  }
+}
+
 export type ConnectorObjectReadResult =
   | Readonly<{ kind: "ready"; input: Readonly<VerifiedFileInput> }>
   | Readonly<{
@@ -283,13 +308,28 @@ export class AuthorizedConnectorIngressService {
       }
 
       let result: StageBundleFileStreamResult;
+      const lateFailure: { current: ConnectorObjectStreamFailure | null } = {
+        current: null,
+      };
+      const classifiedStream = Object.freeze({
+        async *[Symbol.asyncIterator]() {
+          try {
+            for await (const chunk of source.input.stream) yield chunk;
+          } catch (error) {
+            if (error instanceof ConnectorObjectStreamFailure) {
+              lateFailure.current = error;
+            }
+            throw error;
+          }
+        },
+      });
       try {
         result = await this.#staging.stageStream({
           actor: request.actor,
           spaceId: request.spaceId,
           writeBindingId: request.writeBindingId,
           sourceKind: "connector_object",
-          stream: source.input.stream,
+          stream: classifiedStream,
           maxBytes: CONNECTOR_OBJECT_LIMITS.maxBytes,
           displayFilename: source.input.displayFilename,
           claimedMediaType: source.input.advisoryMediaType,
@@ -299,9 +339,25 @@ export class AuthorizedConnectorIngressService {
           signal,
         });
       } catch {
+        if (lateFailure.current !== null) {
+          return lateFailure.current.failure === "source_unavailable"
+            ? unavailable("file_ingress_source_unavailable", false)
+            : unavailable(
+                "file_ingress_transport_unavailable",
+                lateFailure.current.retryable,
+              );
+        }
         return unavailable("file_ingress_transport_unavailable", true);
       }
       if (result.kind === "stream_invalid" && result.code === "stream_transport_unavailable") {
+        if (lateFailure.current !== null) {
+          return lateFailure.current.failure === "source_unavailable"
+            ? unavailable("file_ingress_source_unavailable", false)
+            : unavailable(
+                "file_ingress_transport_unavailable",
+                lateFailure.current.retryable,
+              );
+        }
         return unavailable("file_ingress_transport_unavailable", true);
       }
       if (

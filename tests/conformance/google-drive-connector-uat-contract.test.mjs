@@ -23,6 +23,7 @@ const expectedAssertions = [
   "GD-UAT-013-persistence-after-redeploy",
   "GD-UAT-014-content-mcp-has-no-administrative-export",
   "GD-UAT-015-bounded-cleanup-readback",
+  "GD-UAT-016-shared-drive-native-export",
 ];
 
 test("Google Drive UAT contract remains exact, privacy-safe and non-executed", async () => {

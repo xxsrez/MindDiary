@@ -6,7 +6,9 @@ import {
   InMemoryRevisionMetadataStore,
 } from "@mind-diary/adapter-metadata-memory";
 import { InMemoryObjectStore } from "@mind-diary/adapter-object-memory";
+import { createWebCryptoExportDownloadSecretCrypto } from "@mind-diary/adapter-security-webcrypto";
 import {
+  BundleFileDownloadService,
   BundleFileStagingService,
   CanonicalRevisionCoordinator,
   ChangesetCommitFailure,
@@ -21,7 +23,12 @@ import {
 } from "@mind-diary/application-content";
 import { createGoogleDriveConnectorIngress } from "@mind-diary/composition-root";
 import { CapabilityAuthorizer } from "@mind-diary/application-ports";
-import { CAPABILITIES, bindingVersion, version } from "@mind-diary/domain";
+import {
+  CAPABILITIES,
+  bindingVersion,
+  verifiedSpaceHost,
+  version,
+} from "@mind-diary/domain";
 import {
   CANONICAL_REVISION_FILES,
   FIXED_NOW,
@@ -57,6 +64,10 @@ const FIXTURES = Object.freeze({
     0xde, 0xad, 0xbe, 0xef, 0x00, 0x7f, 0x80, 0xff, 0x21,
   ]),
   connector: Uint8Array.from([0x43, 0x4f, 0x4e, 0x4e, 0x45, 0x43, 0x54]),
+  connectorNativeDocx: Uint8Array.from([
+    0x50, 0x4b, 0x03, 0x04, 0x44, 0x52, 0x49, 0x56, 0x45, 0x2d, 0x44, 0x4f,
+    0x43, 0x58,
+  ]),
   bounded: Uint8Array.from([0x42, 0x4f, 0x55, 0x4e, 0x44, 0x45, 0x44]),
   generated: Uint8Array.from([0x47, 0x45, 0x4e, 0x45, 0x52, 0x41, 0x54, 0x45, 0x44]),
 });
@@ -441,6 +452,66 @@ test("mixed ingress commits real source services atomically and reconciles every
   });
   assert.equal(connector.kind, "staged");
 
+  const nativeObjectId = "drive_mixed_native_document";
+  const nativeMediaType =
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+  const { ingress: nativeService, source: nativeSource } =
+    createGoogleDriveConnectorIngress({
+      selection: {
+        bindingRef: connectorBindingRef,
+        objectId: nativeObjectId,
+      },
+      grants: {
+        async resolve() {
+          return {
+            kind: "authorized",
+            accessToken: connectorBearer,
+            grantFingerprint: "drive_mixed_grant_generation",
+          };
+        },
+      },
+      async fetcher(input) {
+        const url = new URL(String(input));
+        assert.equal(url.origin, "https://www.googleapis.com");
+        assert.equal(url.searchParams.get("supportsAllDrives"), "true");
+        if (url.pathname.endsWith("/export")) {
+          assert.equal(url.searchParams.get("mimeType"), nativeMediaType);
+          return new Response(FIXTURES.connectorNativeDocx, {
+            headers: {
+              "content-type": nativeMediaType,
+              "content-length": String(FIXTURES.connectorNativeDocx.byteLength),
+            },
+          });
+        }
+        return new Response(JSON.stringify({
+          id: nativeObjectId,
+          name: "Synthetic shared-drive document",
+          mimeType: "application/vnd.google-apps.document",
+          trashed: false,
+          capabilities: { canDownload: true },
+          version: "1",
+          driveId: "drive_mixed_shared_drive",
+        }), {
+          headers: { "content-type": "application/json" },
+        });
+      },
+      staging: env.staging,
+    });
+  const nativeConnector = await nativeService.stage({
+    actor: env.currentActor(),
+    spaceId: MINDS.ordinary.spaceId,
+    writeBindingId: WRITE,
+    representation: {
+      kind: "export_snapshot",
+      format: "google-drive/docx",
+      displayFilename: "synthetic-shared-drive-document.docx",
+      mediaType: nativeMediaType,
+    },
+    source: nativeSource,
+    idempotencyKey: "stage-native-connector",
+  });
+  assert.equal(nativeConnector.kind, "staged");
+
   const generatedService = new GeneratedArtifactIngressService({ staging: env.staging });
   const bounded = await generatedService.stageBoundedInMemory({
     actor: env.currentActor(),
@@ -479,6 +550,11 @@ test("mixed ingress commits real source services atomically and reconciles every
     ["assets/local.heic", FIXTURES.localHeic, localHeic.record],
     ["assets/workspace.bin", FIXTURES.workspaceUnknown, workspace.record],
     ["assets/connector.bin", FIXTURES.connector, connector.record],
+    [
+      "assets/connector-native.docx",
+      FIXTURES.connectorNativeDocx,
+      nativeConnector.record,
+    ],
     ["assets/bounded.bin", FIXTURES.bounded, bounded.record],
     ["assets/bounded-copy.bin", FIXTURES.bounded, boundedCopy.record],
     ["assets/generated.bin", FIXTURES.generated, generated.record],
@@ -543,6 +619,71 @@ test("mixed ingress commits real source services atomically and reconciles every
     storedZipEntry(webExport.bytes, "assets/connector.bin"),
     FIXTURES.connector,
   );
+  assert.deepEqual(
+    storedZipEntry(webExport.bytes, "assets/connector-native.docx"),
+    FIXTURES.connectorNativeDocx,
+  );
+
+  const downloadCrypto = await createWebCryptoExportDownloadSecretCrypto({
+    verifierKey: new Uint8Array(32).fill(41),
+  });
+  const discoveryStore = new Proxy(env.metadata, {
+    get(target, property) {
+      if (property === "readResolvedSpace") {
+        return async (spaceId) => spaceId === MINDS.ordinary.spaceId
+          ? {
+              host: verifiedSpaceHost("mind-diary.test"),
+              canonicalHandle: "mixed-ingress",
+              space: {
+                spaceId,
+                spaceHandle: "mixed-ingress",
+                normalizedHandle: "mixed-ingress",
+                name: "Mixed ingress",
+                visibility: "private",
+                state: "active",
+                metadataVersion: version(1),
+                accessVersion: version(1),
+                headRevisionId: committed.envelope.revision.revisionId,
+                createdAt: START,
+                updatedAt: START,
+              },
+            }
+          : null;
+      }
+      const value = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  const downloads = new BundleFileDownloadService({
+    store: discoveryStore,
+    objects: env.objects,
+    authorizer: env.authorizer,
+    host: verifiedSpaceHost("mind-diary.test"),
+    clock: env.clock,
+    secrets: downloadCrypto,
+    downloadUrlBase: "https://mind-diary.test/api/bundle-download",
+  });
+  const issued = await downloads.issue(env.currentActor(), {
+    mind: MINDS.ordinary.spaceId,
+    revisionSelector: {
+      kind: "revision",
+      revisionId: committed.envelope.revision.revisionId,
+    },
+    path: "assets/connector-native.docx",
+  });
+  const downloadSecret = new URL(issued.downloadUrl).pathname.split("/").at(-1);
+  const downloaded = await downloads.download({
+    kind: "service",
+    serviceId: "mixed-ingress-download",
+    deploymentCapabilities: CAPABILITIES,
+    requestId: "request_mixed_ingress_download",
+    occurredAtUtc: env.clock.now(),
+  }, downloadSecret);
+  assert.equal(downloaded.kind, "download");
+  assert.deepEqual(
+    new Uint8Array(await new Response(downloaded.body).arrayBuffer()),
+    FIXTURES.connectorNativeDocx,
+  );
 
   const contentAudits = (await env.metadata.listAuditEventsForTest()).filter(
     (event) => event.eventType === "content.changeset_committed",
@@ -558,6 +699,7 @@ test("mixed ingress commits real source services atomically and reconciles every
     [
       "bounded_in_memory",
       "bounded_in_memory",
+      "connector_object",
       "connector_object",
       "local_path",
       "local_path",
@@ -580,6 +722,11 @@ test("mixed ingress commits real source services atomically and reconciles every
     localOpus.capability,
     localHeic.capability,
     workspace.capability,
+    connectorBearer,
+    connectorBindingRef,
+    connectorObjectId,
+    nativeObjectId,
+    "drive_mixed_shared_drive",
   ]) assert.equal(auditSource.includes(forbidden), false);
 
   const reconciled = await env.ingress.reconcileCommit(request);

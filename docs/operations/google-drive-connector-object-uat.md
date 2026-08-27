@@ -33,9 +33,11 @@ provider mutation и browser launch выполняются только при �
 ## Фикстуры
 
 - один обычный binary object с заранее вычисленными exact size/SHA-256;
-- один Google Doc с явным export snapshot `google-drive/docx`;
-- один Google Sheet с явным export snapshot `google-drive/xlsx`;
-- одна Google Slides presentation с явным export snapshot
+- один Google Doc в synthetic shared drive с явным export snapshot
+  `google-drive/docx`;
+- один Google Sheet в synthetic shared drive с явным export snapshot
+  `google-drive/xlsx`;
+- одна Google Slides presentation в synthetic shared drive с явным export snapshot
   `google-drive/pptx`.
 
 Для native objects исходные provider bytes не выдумываются: evidence относится
@@ -50,6 +52,7 @@ Runner выполняет все `GD-UAT-001`–`GD-UAT-015` из machine contra
 - сверяет binary source и staged/downloaded bytes byte-for-byte по size и
   SHA-256;
 - требует exact explicit export representation для Docs/Sheets/Slides;
+- подтверждает shared-drive metadata/export path для всех трёх native типов;
 - проверяет revoke, ownership/version mutation, export race, oversize, timeout
   и unknown provider result как fail-closed без existence leak;
 - доказывает current Mind write authorization до provider content read;

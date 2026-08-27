@@ -226,7 +226,7 @@ contract remains authoritative.
 | `session_attachment` | `file_id` ≤ 1,024 chars; temporary URL ≤ 8,192; name ≤ 1,024; MIME hint ≤ 256; target adapter: 30,000 ms, up to 4 redirects, 256 MiB counting stream | Provider adapter checks HTTPS allowlist, credentials omission, redirect/timeout/stream bound; application recomputes SHA-256, size, advisory media and safe filename | `quarantined → verified → staged_file_ref`; only verified ref may enter commit |
 | `local_path` | One regular file per intent, ≤ 256 MiB; intent 600 s; staged ref 3,600 s | Companion checks regular-file/snapshot/size/digest before upload; application rechecks exact bytes, media and filename after upload | `intent → quarantined → verified`; changed snapshot is a new key, not a changed retry |
 | `workspace/generated_artifact` | One selected artifact per intent, ≤ 256 MiB; intent 600 s; staged ref 3,600 s | Companion checks workspace authority and snapshot; application rechecks bytes, digest, media and safe filename | Same as `local_path`; workspace path never reaches application identity |
-| `connector_object` | One object per stage, ≤ 256 MiB; Google Drive reference: 30 s, zero redirects and provider-owned native export limit 10,000,000 bytes; staged ref 3,600 s | Connector validates current actor-owned grant, exact object, stable ownership/version and bounded fetch; application independently recomputes digest, size, advisory media and filename | `quarantined → verified`; provider metadata is advisory only |
+| `connector_object` | One object per stage, ≤ 256 MiB; Google Drive reference: 30 s, zero redirects, `supportsAllDrives=true` on metadata/binary/export reads and provider-owned native export limit 10,000,000 bytes; staged ref 3,600 s | Connector validates current actor-owned grant, exact object, stable ownership/version and bounded fetch; application independently recomputes digest, size, advisory media and filename | `quarantined → verified`; provider metadata is advisory only |
 | `bounded_in_memory` | One object per explicit call, ≤ 4,194,304 bytes (4 MiB); no upload intent; staged ref 3,600 s | Calling adapter enforces byte bound; application recomputes digest, size and MIME before quarantine promotion | `quarantined → verified`; larger payload must use an explicit out-of-band source |
 | `server_generated` | One producer output, ≤ 256 MiB inclusive; generation lease 600 s; staged ref 3,600 s | Trusted producer supplies a cancellable stream, but application still checks exact digest, size, advisory media and safe filename | `quarantined → verified`; producer job/prompt identity is not a file identity |
 
@@ -439,6 +439,10 @@ This contract preserves the old boundaries:
   object/revision/ownership locators, export endpoint and credentials terminate
   inside the adapter. Hosted support remains `not_available` until MD-319 runs
   the exact-provider UAT contract.
+  Revoke, ownership/version drift and changed export bytes discovered during
+  streaming collapse to terminal non-retryable `file_ingress_source_unavailable`;
+  an actual transient provider transport failure remains retryable. Both paths
+  abort quarantine and expose no provider existence detail.
 - Browser raw-content API, provider-wide connector sync, resumable non-Markdown
   upload, preview/OCR/transcription, archive import/extraction and production
   antivirus/CDR are not implied by this source matrix.

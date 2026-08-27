@@ -1,6 +1,7 @@
 import {
   AuthorizedConnectorIngressService,
   CONNECTOR_OBJECT_LIMITS,
+  ConnectorObjectStreamFailure,
   IncrementalSha256,
   type AuthorizedConnectorObjectSource,
   type BundleFileStagingService,
@@ -332,6 +333,7 @@ function exportUrl(objectId: string, mediaType: string): string {
   const url = new URL(
     `${DRIVE_FILES_ENDPOINT}${encodeURIComponent(objectId)}/export`,
   );
+  url.searchParams.set("supportsAllDrives", "true");
   url.searchParams.set("mimeType", mediaType);
   return url.href;
 }
@@ -640,8 +642,13 @@ export class GoogleDriveConnectorObjectSource implements AuthorizedConnectorObje
             request.signal,
           );
           completed = true;
-        } catch {
-          throw new Error(SAFE_STREAM_ERROR);
+        } catch (error) {
+          if (error instanceof DriveAdapterFailure) {
+            throw error.boundary === "source"
+              ? ConnectorObjectStreamFailure.sourceUnavailable()
+              : ConnectorObjectStreamFailure.transportUnavailable(error.retryable);
+          }
+          throw ConnectorObjectStreamFailure.transportUnavailable(true);
         } finally {
           if (!completed) await reader?.cancel().catch(() => undefined);
           reader?.releaseLock();

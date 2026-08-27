@@ -60,7 +60,8 @@
     "GD-UAT-012-stage-commit-download-history-web-export",
     "GD-UAT-013-persistence-after-redeploy",
     "GD-UAT-014-content-mcp-has-no-administrative-export",
-    "GD-UAT-015-bounded-cleanup-readback"
+    "GD-UAT-015-bounded-cleanup-readback",
+    "GD-UAT-016-shared-drive-native-export"
   ],
   "receipt": {
     "required_fields": [

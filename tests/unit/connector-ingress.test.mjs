@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   AuthorizedConnectorIngressService,
   CONNECTOR_OBJECT_LIMITS,
+  ConnectorObjectStreamFailure,
 } from "@mind-diary/application-content";
 
 const SHA256 = `sha256:${"a".repeat(64)}`;
@@ -283,7 +284,7 @@ test("redirect, timeout and provider failures have one bounded transport outcome
   assert.equal(bounded.stages.length, 0);
 });
 
-test("metadata/read/stage drift aborts without a durable staged result or fallback", async () => {
+test("late source drift remains terminal after quarantine cleanup", async () => {
   let quarantinedBytes = 0;
   let durableStages = 0;
   let sourceCalls = 0;
@@ -310,7 +311,7 @@ test("metadata/read/stage drift aborts without a durable staged result or fallba
         input: verifiedInput({
           stream: (async function* () {
             yield Uint8Array.of(1);
-            throw new Error("final object revision check failed");
+            throw ConnectorObjectStreamFailure.sourceUnavailable();
           })(),
         }),
       };
@@ -319,12 +320,48 @@ test("metadata/read/stage drift aborts without a durable staged result or fallba
 
   assert.deepEqual(await service.stage({ ...COMMON, source }), {
     kind: "invalid",
-    code: "file_ingress_transport_unavailable",
-    retryable: true,
+    code: "file_ingress_source_unavailable",
+    retryable: false,
   });
   assert.equal(sourceCalls, 1);
   assert.equal(quarantinedBytes, 0);
   assert.equal(durableStages, 0);
+});
+
+test("late transient transport failure remains retryable after cleanup", async () => {
+  const service = new AuthorizedConnectorIngressService({
+    staging: {
+      async authorizeSourceRead() { return ALLOWED; },
+      async stageStream(request) {
+        try {
+          for await (const _chunk of request.stream) {
+            // Consume until the adapter reports its final transport check.
+          }
+          return { kind: "staged", record: {}, replayed: false };
+        } catch {
+          return { kind: "stream_invalid", code: "stream_transport_unavailable" };
+        }
+      },
+    },
+  });
+  const source = {
+    async readVerifiedSnapshot() {
+      return {
+        kind: "ready",
+        input: verifiedInput({
+          stream: (async function* () {
+            yield Uint8Array.of(1);
+            throw ConnectorObjectStreamFailure.transportUnavailable(true);
+          })(),
+        }),
+      };
+    },
+  };
+  assert.deepEqual(await service.stage({ ...COMMON, source }), {
+    kind: "invalid",
+    code: "file_ingress_transport_unavailable",
+    retryable: true,
+  });
 });
 
 test("the connector deadline remains active until the verified stream finishes", async () => {

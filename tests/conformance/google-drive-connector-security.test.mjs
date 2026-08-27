@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import test from "node:test";
 
 import { GoogleDriveConnectorObjectSource } from "@mind-diary/composition-root";
+import { ConnectorObjectStreamFailure } from "@mind-diary/application-content";
 
 const OPAQUE_BEARER = "drive_token_must_never_escape";
 const GRANT = "drive_grant_must_never_escape";
@@ -111,7 +112,10 @@ test("provider errors and stream failures expose no token, locator, grant or URL
       }
     },
     (error) => {
-      assert.equal(error.message, "Google Drive connector snapshot is unavailable");
+      assert.equal(error instanceof ConnectorObjectStreamFailure, true);
+      assert.equal(error.failure, "transport_unavailable");
+      assert.equal(error.retryable, true);
+      assert.equal(error.message, "Connector object snapshot is unavailable");
       for (const forbidden of [OPAQUE_BEARER, GRANT, BINDING, OBJECT, "googleapis.com"]) {
         assert.equal(error.message.includes(forbidden), false, forbidden);
       }

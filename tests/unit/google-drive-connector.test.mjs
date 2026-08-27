@@ -4,7 +4,11 @@ import test from "node:test";
 import {
   GOOGLE_DRIVE_CONNECTOR_LIMITS,
   GoogleDriveConnectorObjectSource,
+  createGoogleDriveConnectorIngress,
 } from "@mind-diary/composition-root";
+import {
+  AuthorizedConnectorIngressService,
+} from "@mind-diary/application-content";
 import {
   GOOGLE_DRIVE_FIXTURES,
   driveMetadata,
@@ -19,6 +23,12 @@ const LIMITS = Object.freeze({
   maxBytes: 268_435_456,
   fetchTimeoutMilliseconds: 30_000,
   maxRedirects: 4,
+});
+const ALLOWED = Object.freeze({
+  kind: "allowed",
+  capability: "content:write",
+  grant: Object.freeze({ kind: "membership", role: "editor" }),
+  stamp: Object.freeze({ accessVersion: 1, membershipVersion: 1, tokenVersion: 1 }),
 });
 
 function selection(objectId) {
@@ -111,6 +121,33 @@ async function collect(stream) {
   return bytes;
 }
 
+function consumingIngress() {
+  return new AuthorizedConnectorIngressService({
+    staging: {
+      async authorizeSourceRead() { return ALLOWED; },
+      async stageStream(request) {
+        try {
+          await collect(request.stream);
+          return { kind: "staged", record: {}, replayed: false };
+        } catch {
+          return { kind: "stream_invalid", code: "stream_transport_unavailable" };
+        }
+      },
+    },
+  });
+}
+
+function stageSource(source, requestedRepresentation) {
+  return consumingIngress().stage({
+    actor: ACTOR,
+    spaceId: "space_google_drive_unit",
+    writeBindingId: "write_google_drive_unit",
+    source,
+    representation: requestedRepresentation,
+    idempotencyKey: "stage-google-drive-unit",
+  });
+}
+
 function representation(fixture) {
   return fixture.format === undefined
     ? { kind: "binary" }
@@ -166,7 +203,16 @@ test("Docs, Sheets and Slides require an explicit supported export snapshot", as
   ]) {
     await t.test(fixture.format, async () => {
       const grants = authorizedGrants();
-      const provider = fakeProvider(fixture);
+      const sharedDriveId = `shared_${fixture.objectId}`;
+      const provider = fakeProvider(fixture, {
+        metadata() {
+          return {
+            driveId: sharedDriveId,
+            ownedByMe: undefined,
+            owners: undefined,
+          };
+        },
+      });
       const source = new GoogleDriveConnectorObjectSource(selection(fixture.objectId), {
         grants,
         fetcher: provider.fetcher,
@@ -198,7 +244,14 @@ test("Docs, Sheets and Slides require an explicit supported export snapshot", as
       assert.equal(exportCalls.length, 2);
       assert.equal(
         exportCalls.every(({ url }) =>
-          url.searchParams.get("mimeType") === fixture.exportMediaType
+          url.searchParams.get("mimeType") === fixture.exportMediaType &&
+          url.searchParams.get("supportsAllDrives") === "true"
+        ),
+        true,
+      );
+      assert.equal(
+        provider.calls.every(({ url }) =>
+          url.searchParams.get("supportsAllDrives") === "true"
         ),
         true,
       );
@@ -246,20 +299,35 @@ test("native export race fails when the explicit snapshot bytes change", async (
   const provider = fakeProvider(fixture, {
     bytes(read) { return read === 1 ? fixture.bytes : changed; },
   });
-  const source = new GoogleDriveConnectorObjectSource(selection(fixture.objectId), {
+  const { ingress, source } = createGoogleDriveConnectorIngress({
+    selection: selection(fixture.objectId),
     grants: authorizedGrants(),
     fetcher: provider.fetcher,
+    staging: {
+      async authorizeSourceRead() { return ALLOWED; },
+      async stageStream(request) {
+        try {
+          await collect(request.stream);
+          return { kind: "staged", record: {}, replayed: false };
+        } catch {
+          return { kind: "stream_invalid", code: "stream_transport_unavailable" };
+        }
+      },
+    },
   });
-  const result = await source.readVerifiedSnapshot({
+  const result = await ingress.stage({
     actor: ACTOR,
+    spaceId: "space_native_export_race",
+    writeBindingId: "write_native_export_race",
+    source,
     representation: representation(fixture),
-    limits: LIMITS,
+    idempotencyKey: "stage-native-export-race",
   });
-  assert.equal(result.kind, "ready");
-  await assert.rejects(
-    collect(result.input.stream),
-    /Google Drive connector snapshot is unavailable/u,
-  );
+  assert.deepEqual(result, {
+    kind: "invalid",
+    code: "file_ingress_source_unavailable",
+    retryable: false,
+  });
   assert.equal(provider.contentReads(), 2);
 });
 
@@ -281,17 +349,11 @@ test("grant revocation and object mutation after selection abort the lazy stream
       grants,
       fetcher: fakeProvider(fixture).fetcher,
     });
-    const result = await source.readVerifiedSnapshot({
-      actor: ACTOR,
-      representation: { kind: "binary" },
-      limits: LIMITS,
+    assert.deepEqual(await stageSource(source, { kind: "binary" }), {
+      kind: "invalid",
+      code: "file_ingress_source_unavailable",
+      retryable: false,
     });
-    assert.equal(result.kind, "ready");
-    await assert.rejects(
-      collect(result.input.stream),
-      (error) => error instanceof Error &&
-        error.message === "Google Drive connector snapshot is unavailable",
-    );
   });
 
   await t.test("object ownership/version changed", async () => {
@@ -309,16 +371,11 @@ test("grant revocation and object mutation after selection abort the lazy stream
       grants: authorizedGrants(),
       fetcher: provider.fetcher,
     });
-    const result = await source.readVerifiedSnapshot({
-      actor: ACTOR,
-      representation: { kind: "binary" },
-      limits: LIMITS,
+    assert.deepEqual(await stageSource(source, { kind: "binary" }), {
+      kind: "invalid",
+      code: "file_ingress_source_unavailable",
+      retryable: false,
     });
-    assert.equal(result.kind, "ready");
-    await assert.rejects(
-      collect(result.input.stream),
-      /Google Drive connector snapshot is unavailable/u,
-    );
     assert.equal(provider.contentReads(), 0);
   });
 });
