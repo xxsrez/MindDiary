@@ -1272,8 +1272,9 @@ gate из
 `npm run gate:import-export-browser -- --candidate-sha
 <exact-clean-HEAD-sha> --evidence-out
 <owner-private-temp-directory/new-file>`. Output resolver отклоняет repository,
-любой его worktree, публичный temp parent, existing file и symlink escape. Gate
-генерирует только
+любой его worktree, не-exact-`0700` temp parent, existing file и symlink escape;
+atomic `O_EXCL | O_NOFOLLOW` reservation повторно сверяет realpath и
+device/inode до evidence bytes. Gate генерирует только
 synthetic Markdown/invalid/opaque bytes, программно устанавливает browser files,
 исполняет runtime suites и закрытую Playwright matrix MD-363. Local receipt
 обязан сохранять `hosted_evidence=false`. После exact UAT cut

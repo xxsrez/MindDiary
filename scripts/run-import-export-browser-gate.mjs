@@ -20,7 +20,7 @@ import {
   ProbeFailure,
   safeCode,
 } from "./lib/multi-principal-probe-core.mjs";
-import { resolvePrivateTempOutputPath } from "./lib/private-evidence-output.mjs";
+import { reservePrivateTempOutput } from "./lib/private-evidence-output.mjs";
 import { verifyToolchainObservation } from "./run-admin-shell-browser-gate.mjs";
 
 const ROOT = resolve(import.meta.dirname, "..");
@@ -341,10 +341,6 @@ export async function finalizeGateWorkspace(directory, {
 
 export async function run(options, { now = () => new Date() } = {}) {
   const startedAt = now().toISOString();
-  const evidenceOutput = await resolvePrivateTempOutputPath(options.evidence_out, {
-    repositoryRoot: ROOT,
-    errorCode: "unsafe_evidence_output",
-  });
   const candidate = await exactCandidate(options.candidate_sha);
   const toolchain = await installedToolchain();
   const temporary = await mkdtemp(join(tmpdir(), "mind-diary-md363-gate-"));
@@ -388,10 +384,15 @@ export async function run(options, { now = () => new Date() } = {}) {
       startedAt,
       completedAt: now().toISOString(),
     });
-    await writeFile(evidenceOutput, `${JSON.stringify(evidence, null, 2)}\n`, {
-      flag: "wx",
-      mode: 0o600,
+    const output = await reservePrivateTempOutput(options.evidence_out, {
+      repositoryRoot: ROOT,
+      errorCode: "unsafe_evidence_output",
     });
+    try {
+      await output.write(`${JSON.stringify(evidence, null, 2)}\n`);
+    } finally {
+      await output.abort();
+    }
     return evidence;
   } finally {
     const disposition = await finalizeGateWorkspace(temporary, { preserveDiagnostics, now });

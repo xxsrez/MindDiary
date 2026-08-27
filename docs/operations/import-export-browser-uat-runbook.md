@@ -65,10 +65,15 @@ npm run gate:import-export-browser -- \
 ```
 
 Output обязан быть новым файлом внутри существующего owner-only temporary
-directory (`0700`) вне repository и всех его worktrees. Runner разрешает
-реальный parent path до записи и отклоняет relative path, existing file,
-workspace destination, публичный temp directory и symlink escape. Сам receipt
-создаётся с mode `0600`.
+directory с exact mode `0700`, owner write/execute и расположением вне
+repository и всех его worktrees. `0500`, более широкие modes и ACL-effective
+denial отклоняются. Непосредственно перед записью runner атомарно резервирует
+файл через `O_CREAT | O_EXCL | O_NOFOLLOW` с mode `0600` и держит открытый
+FileHandle до final write, `fsync` и close. После open он повторно сверяет
+realpath, device/inode parent и candidate, ownership/modes и forbidden roots с
+pre-open наблюдением. Relative path, existing file, workspace destination,
+public temp directory и symlink escape fail closed до evidence bytes; точный
+пустой reservation удаляется.
 
 Output имеет schema `mind-diary/import-export-browser-evidence/v1`,
 `status: passed`, но одновременно обязательные
@@ -146,8 +151,9 @@ npm run join:import-export-uat-readback -- \
   --join-out "$MD363_EVIDENCE_DIR/import-export-uat-join.json"
 ```
 
-`--join-out` применяет тот же real-parent, owner-only temp, worktree и symlink
-gate, что и `--evidence-out`, и также требует отсутствующий destination file.
+`--join-out` применяет ту же atomic reservation, post-open identity revalidation,
+owner-only temp, worktree и symlink gate, что и `--evidence-out`, и также
+требует отсутствующий destination file.
 
 Provider input schema
 `mind-diary/import-export-sites-provider-readback/v1` содержит raw results

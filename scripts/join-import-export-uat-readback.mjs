@@ -2,7 +2,7 @@
 
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -14,7 +14,7 @@ import {
   ProbeFailure,
   safeCode,
 } from "./lib/multi-principal-probe-core.mjs";
-import { resolvePrivateTempOutputPath } from "./lib/private-evidence-output.mjs";
+import { reservePrivateTempOutput } from "./lib/private-evidence-output.mjs";
 import { IMPORT_EXPORT_ASSERTION_IDS } from "./run-import-export-browser-gate.mjs";
 
 const ROOT = resolve(import.meta.dirname, "..");
@@ -318,10 +318,6 @@ async function main() {
       process.stdout.write("Usage: npm run join:import-export-uat-readback -- --local-receipt <json> --provider-readback <json> --browser-readback <json> --artifact-archive <tgz> --candidate-sha <sha> --join-out <json>\n");
       return;
     }
-    const joinOutput = await resolvePrivateTempOutputPath(options.join_out, {
-      repositoryRoot: ROOT,
-      errorCode: "unsafe_join_output",
-    });
     const [localReceiptBytes, providerReadbackBytes, browserReadbackBytes, archiveBytes] = await Promise.all([
       readFile(options.local_receipt),
       readFile(options.provider_readback),
@@ -338,10 +334,15 @@ async function main() {
       browserReadbackBytes,
       archiveBytes,
     }, expected);
-    await writeFile(joinOutput, `${JSON.stringify(join, null, 2)}\n`, {
-      flag: "wx",
-      mode: 0o600,
+    const output = await reservePrivateTempOutput(options.join_out, {
+      repositoryRoot: ROOT,
+      errorCode: "unsafe_join_output",
     });
+    try {
+      await output.write(`${JSON.stringify(join, null, 2)}\n`);
+    } finally {
+      await output.abort();
+    }
     process.stdout.write(`${JSON.stringify({
       status: join.status,
       hosted_evidence: join.hosted_evidence,

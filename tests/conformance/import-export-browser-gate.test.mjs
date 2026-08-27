@@ -5,7 +5,7 @@ import {
   mkdir,
   mkdtemp,
   readFile,
-  realpath,
+  rename,
   rm,
   symlink,
   writeFile,
@@ -23,7 +23,7 @@ import {
   RUNTIME_SUITES,
 } from "../../scripts/run-import-export-browser-gate.mjs";
 import { ProbeFailure } from "../../scripts/lib/multi-principal-probe-core.mjs";
-import { resolvePrivateTempOutputPath } from "../../scripts/lib/private-evidence-output.mjs";
+import { reservePrivateTempOutput } from "../../scripts/lib/private-evidence-output.mjs";
 
 const candidate = "a".repeat(40);
 const repositoryRoot = resolve(import.meta.dirname, "../..");
@@ -57,55 +57,94 @@ test("MD-363 gate CLI accepts only its closed argument shape", () => {
   }
 });
 
-test("evidence outputs require a new file in an owner-private real temp directory outside every worktree", async () => {
+test("evidence output reservation requires exact 0700 parent and atomically owns the new 0600 file", async () => {
   const privateDirectory = await mkdtemp(join(tmpdir(), "mind-diary-md363-output-test-"));
   const repoBuild = resolve(repositoryRoot, "build");
   await mkdir(repoBuild, { recursive: true });
   const worktreeDirectory = await mkdtemp(join(repoBuild, "md363-output-test-"));
-  const publicDirectory = await mkdtemp(join(tmpdir(), "mind-diary-md363-public-test-"));
-  await chmod(publicDirectory, 0o755);
+  const invalidModeDirectory = await mkdtemp(join(tmpdir(), "mind-diary-md363-mode-test-"));
   try {
     const safe = join(privateDirectory, "receipt.json");
-    assert.equal(await resolvePrivateTempOutputPath(safe, {
+    const output = await reservePrivateTempOutput(safe, {
       repositoryRoot,
       errorCode: "unsafe_evidence_output",
-    }), join(await realpath(privateDirectory), "receipt.json"));
-    await writeFile(safe, "occupied", { mode: 0o600 });
+    });
+    await output.write("reserved evidence\n");
+    assert.equal(await readFile(safe, "utf8"), "reserved evidence\n");
+    assert.equal((await lstat(safe)).mode & 0o777, 0o600);
     await assert.rejects(
-      resolvePrivateTempOutputPath(safe, { repositoryRoot, errorCode: "unsafe_evidence_output" }),
+      reservePrivateTempOutput(safe, { repositoryRoot, errorCode: "unsafe_evidence_output" }),
       (error) => error instanceof ProbeFailure && error.code === "unsafe_evidence_output",
     );
+    const symlinkTarget = join(worktreeDirectory, "symlink-target.json");
+    const symlinkOutput = join(privateDirectory, "symlink-output.json");
+    await symlink(symlinkTarget, symlinkOutput);
     await assert.rejects(
-      resolvePrivateTempOutputPath(join(worktreeDirectory, "receipt.json"), {
+      reservePrivateTempOutput(symlinkOutput, { repositoryRoot, errorCode: "unsafe_evidence_output" }),
+      (error) => error instanceof ProbeFailure && error.code === "unsafe_evidence_output",
+    );
+    await assert.rejects(lstat(symlinkTarget), (error) => error?.code === "ENOENT");
+    await assert.rejects(
+      reservePrivateTempOutput(join(worktreeDirectory, "receipt.json"), {
         repositoryRoot,
         errorCode: "unsafe_evidence_output",
       }),
       (error) => error instanceof ProbeFailure && error.code === "unsafe_evidence_output",
     );
-    await assert.rejects(
-      resolvePrivateTempOutputPath(join(publicDirectory, "join.json"), {
-        repositoryRoot,
-        errorCode: "unsafe_join_output",
-      }),
-      (error) => error instanceof ProbeFailure && error.code === "unsafe_join_output",
-    );
-
-    const escape = join(privateDirectory, "workspace-link");
-    await symlink(repositoryRoot, escape, "dir");
-    await assert.rejects(
-      resolvePrivateTempOutputPath(join(escape, "receipt.json"), {
-        repositoryRoot,
-        errorCode: "unsafe_evidence_output",
-      }),
-      (error) => error instanceof ProbeFailure && error.code === "unsafe_evidence_output",
-    );
+    for (const mode of [0o500, 0o755]) {
+      await chmod(invalidModeDirectory, mode);
+      await assert.rejects(
+        reservePrivateTempOutput(join(invalidModeDirectory, `join-${mode.toString(8)}.json`), {
+          repositoryRoot,
+          errorCode: "unsafe_join_output",
+        }),
+        (error) => error instanceof ProbeFailure && error.code === "unsafe_join_output",
+      );
+    }
   } finally {
-    await chmod(publicDirectory, 0o700);
+    await chmod(invalidModeDirectory, 0o700);
     await Promise.all([
       rm(privateDirectory, { recursive: true, force: true }),
       rm(worktreeDirectory, { recursive: true, force: true }),
-      rm(publicDirectory, { recursive: true, force: true }),
+      rm(invalidModeDirectory, { recursive: true, force: true }),
     ]);
+  }
+});
+
+test("repeated parent swaps after validation create no surviving file in the worktree", async () => {
+  const repoBuild = resolve(repositoryRoot, "build");
+  await mkdir(repoBuild, { recursive: true });
+  const worktreeDirectory = await mkdtemp(join(repoBuild, "md363-race-target-"));
+  try {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const parent = await mkdtemp(join(tmpdir(), `mind-diary-md363-race-${attempt}-`));
+      const moved = `${parent}-moved`;
+      const filename = `receipt-${attempt}.json`;
+      try {
+        await assert.rejects(
+          reservePrivateTempOutput(join(parent, filename), {
+            repositoryRoot,
+            errorCode: "unsafe_evidence_output",
+            testHooks: {
+              async afterInitialValidation() {
+                await rename(parent, moved);
+                await symlink(worktreeDirectory, parent, "dir");
+              },
+            },
+          }),
+          (error) => error instanceof ProbeFailure && error.code === "unsafe_evidence_output",
+        );
+        await assert.rejects(
+          lstat(join(worktreeDirectory, filename)),
+          (error) => error?.code === "ENOENT",
+        );
+      } finally {
+        await rm(parent, { recursive: true, force: true });
+        await rm(moved, { recursive: true, force: true });
+      }
+    }
+  } finally {
+    await rm(worktreeDirectory, { recursive: true, force: true });
   }
 });
 
