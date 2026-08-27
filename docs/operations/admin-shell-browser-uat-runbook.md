@@ -15,11 +15,14 @@ npm run gate:admin-shell-browser -- \
   --evidence-out <private-temp-directory>/admin-shell-browser.json
 ```
 
-Одна команда использует зафиксированные `@playwright/test@1.62.1` и
-`@playwright/browser-chromium@1.62.1`, поднимает fixture на случайном loopback
-port, запускает один isolated headless Chromium worker и после suite завершает
-server. User Chrome profile, extensions, login и system/default browser не
-используются.
+Одна команда сверяет root package, lock integrity, установленные packages и
+фактический `playwright --version`, затем запускает и сверяет фактический
+Chromium binary `151.0.7922.34` revision `1234`. Только этот проверенный binary
+передаётся Playwright как explicit executable; receipt содержит выполненные
+версии и SHA-256 binary, а не пересказ `package.json`. После этого gate
+поднимает fixture на случайном loopback port, запускает один isolated headless
+Chromium worker и завершает server. User Chrome profile, extensions, login и
+system/default browser не используются.
 
 Closed assertion registry охватывает signed-out/registration/registered
 sessions, wide и compact navigation, direct/back, loading/empty/forbidden/
@@ -44,15 +47,29 @@ gate, Sites artifact build/save/deploy и current-deployment read-back. Surface
 default browser и обычный Chrome не запускаются; Chrome допустим лишь после
 отдельно установленного in-app ограничения по общему browser policy.
 
-До journeys необходимо связать одну lineage:
+До journeys сохраняются два private raw read-back input и exact archive:
 
-- exact candidate Git SHA и его tree SHA;
-- tracked Sites project ID из
-  `apps/mind-diary-site/.openai/hosting.json`;
-- exact saved Site version ID и deployed deployment ID после current read-back;
-- SHA-256 опубликованного archive и `server/index.js` из release artifact;
-- SHA-256 live bytes `/ui/mind-diary-shell.css` и
-  `/ui/mind-diary-shell-client.js` на том же deployment.
+- `provider-readback.json` schema
+  `mind-diary/admin-shell-sites-provider-readback/v1` содержит только exact
+  connector results `get_site`, `save_site_version`, `get_site_version`,
+  initial deploy и terminal successful `get_deployment_status`. Поля `site`,
+  `saved_version`, `version`, `deployment_start`, `deployment` копируются из
+  этих пяти результатов, `generator` равен
+  `codex-sites-connector-readback/v1`; ID не вводятся отдельно в CLI;
+- exact archive, переданный `save_site_version`; remote-build fallback не
+  образует достаточной MD-347 lineage, потому что verifier обязан сам прочитать
+  `dist/server/index.js` из этого archive;
+- `browser-readback.json` schema
+  `mind-diary/admin-shell-in-app-browser-readback/v1` содержит raw asset bytes
+  и четыре DOM/accessibility/geometry journeys из одного approved in-app
+  Browser observation после provider read-back.
+
+Verifier сам получает candidate tree и tracked project из Git, считает archive
+и server bundle SHA-256, сверяет archive hash/size с `get_site_version`, а
+candidate SHA — с его `source.commit_sha`. Затем он считает live asset hashes
+из raw bytes и требует exact byte equality с asset composition того же Git
+candidate. Самозаявленные digest, version/deployment ID или готовый receipt в
+CLI не принимаются.
 
 Live asset digest вычисляется из bytes, а не из URL, cache label или visual
 similarity. В Browser на UAT origin используется следующий bounded same-origin
@@ -62,11 +79,23 @@ collector:
 async (paths) => {
   const hex = (bytes) => [...new Uint8Array(bytes)]
     .map((value) => value.toString(16).padStart(2, "0")).join("");
-  const result = {};
+  const result = [];
   for (const path of paths) {
     const response = await fetch(path, { cache: "no-store", credentials: "same-origin" });
     if (!response.ok) throw new Error(`${path}: HTTP ${response.status}`);
-    result[path] = `sha256:${hex(await crypto.subtle.digest("SHA-256", await response.arrayBuffer()))}`;
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    let binary = "";
+    for (let offset = 0; offset < bytes.length; offset += 8192) {
+      binary += String.fromCharCode(...bytes.subarray(offset, offset + 8192));
+    }
+    result.push({
+      path,
+      response_url: response.url,
+      status: response.status,
+      content_type: response.headers.get("content-type"),
+      body_base64: btoa(binary),
+      body_sha256: `sha256:${hex(await crypto.subtle.digest("SHA-256", bytes))}`,
+    });
   }
   return result;
 }
@@ -90,21 +119,27 @@ hit target `>=44px`, header полностью и key content начало вн�
 `scripts/verify-admin-shell-uat-receipt.mjs`; произвольное `approved`, ссылка на
 скриншот или ручная очередь не принимаются.
 
-Receipt хранится только в private temporary evidence storage. В нём запрещены
-email, cookie, authorization/token, principal/Mind/revision IDs, private
-content, download URL и screenshot path. После формирования проверка выполняется
-на том же checkout:
+Оба raw inputs и итоговый receipt хранятся только в private temporary evidence
+storage. Raw asset bytes остаются только в browser input и не переходят в
+receipt. В итоговом документе запрещены email, cookie, authorization/token,
+principal/Mind/revision IDs, private content, download URL и screenshot path.
+Verifier не принимает заранее сформированный receipt: он создаёт новый mode
+`0600` `mind-diary/admin-shell-uat-evidence/v2` на том же checkout:
 
 ```bash
 npm run verify:admin-shell-uat -- \
-  --receipt <private-temp-directory>/admin-shell-uat.json \
+  --provider-readback <private-temp-directory>/provider-readback.json \
+  --browser-readback <private-temp-directory>/browser-readback.json \
+  --artifact-archive <exact-archive-passed-to-save-site-version> \
   --candidate-sha <exact-deployed-sha> \
-  --site-version-id <exact-saved-version-id> \
-  --deployment-id <exact-current-deployment-id>
+  --receipt-out <private-temp-directory>/admin-shell-uat.json
 ```
 
-Verifier read-back-ит tracked project identity и Git tree, требует четыре
-journeys/asset digests, проверяет budgets, lineage и canonical receipt digest.
-Любой missing/mismatched field, failed journey или unsafe evidence завершает
-command ненулевым кодом. Только passing local receipt плюс passing hosted
-receipt относятся к завершённой browser-части MD-347.
+Final receipt cryptographically включает hashes обоих raw input, archive,
+server bundle и обоих live assets. Любой изменённый byte, подставленный ID,
+missing/mismatched field, failed journey или unsafe evidence завершает command
+ненулевым кодом. Local JSON, созданный без реальных Sites connector calls и
+in-app Browser observation, не является hosted evidence даже при правильной
+форме; approved surfaces являются authority источника, verifier обеспечивает
+целостность и exact join после capture. Только passing local receipt плюс
+passing hosted receipt относятся к завершённой browser-части MD-347.

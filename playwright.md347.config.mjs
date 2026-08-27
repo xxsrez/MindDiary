@@ -8,6 +8,10 @@ const diagnostics = resolve(
 const report = resolve(
   process.env.MIND_DIARY_MD347_REPORT ?? "build/md347-playwright-assertions.json",
 );
+const executablePath = process.env.MIND_DIARY_MD347_CHROMIUM_EXECUTABLE;
+if (typeof executablePath !== "string" || executablePath.length === 0) {
+  throw new Error("MD-347 requires the gate-verified Chromium executable");
+}
 
 export default defineConfig({
   testDir: "./tests/browser",
@@ -30,6 +34,7 @@ export default defineConfig({
     reducedMotion: "reduce",
     colorScheme: "light",
     serviceWorkers: "block",
+    launchOptions: { executablePath },
     screenshot: "only-on-failure",
     trace: "off",
     video: "off",

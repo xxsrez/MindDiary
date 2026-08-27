@@ -27,6 +27,10 @@ const brandTokens = await readFile(
   new URL("../../docs/assets/brand/mind-diary-tokens.css", import.meta.url),
   "utf8",
 );
+const productUiClient = await readFile(
+  new URL("../../packages/adapter-web/assets/product-ui-client.js", import.meta.url),
+  "utf8",
+);
 
 function tokenHex(name) {
   const match = brandTokens.match(new RegExp(`--mind-diary-${name}:\\s*(#[0-9a-f]{6})`, "i"));
@@ -123,6 +127,7 @@ test("untrusted display text is escaped in text and attribute positions", () => 
   assert.match(html, /&lt;script&gt;globalThis\.pwned=6&lt;\/script&gt;/);
   assert.match(html, /&lt;svg onload=&quot;globalThis\.pwned=4&quot;&gt;/);
   assert.doesNotMatch(html, /data-mind-card|mind&quot; onmouseover/);
+  assert.doesNotMatch(productUiClient, /dataset\.mindCard|id:value\.mind_id/);
 });
 
 test("ready shell has semantic navigation, product language, form and modal contracts", () => {

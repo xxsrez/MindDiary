@@ -1253,12 +1253,14 @@ exact-candidate gate из
 --evidence-out <private-temp-path>`. Он использует тот же pinned
 Playwright/Chromium, но запускает отдельную closed matrix MD-347 на пяти
 viewports и выдаёт самостоятельный receipt только при полном совпадении
-assertion registry. Hosted complement после Sites deploy не выводится из этого
-local result: in-app Browser связывает exact project/version/deployment,
-artifact и live shell asset digests с четырьмя critical journeys и числовыми
-geometry/accessibility facts; `npm run verify:admin-shell-uat` проверяет closed
-receipt. Generic visual approval, screenshot как evidence и manual review queue
-не являются success path.
+assertion registry. Gate сверяет фактически выполненные Playwright/Chromium с
+package, lock integrity и закреплённым browser revision и сохраняет hash exact
+executable. Hosted complement после Sites deploy не выводится из local result:
+`npm run verify:admin-shell-uat` пересчитывает exact archive/server и raw live
+asset bytes, связывает их с save/version/deploy/current connector read-backs и
+четырьмя in-app Browser journeys. Самозаявленные ID/digests/готовый receipt,
+generic visual approval, screenshot как evidence и manual review queue не
+являются success path.
 
 Все commands выполняются прямым `argv` без shell. Канонический full dev launcher
 проекта — root `npm run dev`; его machine event сообщает loopback URL,

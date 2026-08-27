@@ -1,11 +1,15 @@
 #!/usr/bin/env node
 
 import { execFile, spawn } from "node:child_process";
+import { createHash } from "node:crypto";
+import { createReadStream } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
+
+import { chromium } from "@playwright/test";
 
 import {
   assertRedactedDocument,
@@ -23,6 +27,19 @@ const PLAYWRIGHT_CLI = resolve(ROOT, "node_modules/@playwright/test/cli.js");
 const PLAYWRIGHT_CONFIG = resolve(ROOT, "playwright.md347.config.mjs");
 const TEST_FILE = "tests/browser/ui-shell/compact-admin-shell.spec.mjs";
 const execFileAsync = promisify(execFile);
+
+const EXPECTED_TOOLCHAIN = Object.freeze({
+  playwright: "1.62.1",
+  browserPackage: "1.62.1",
+  core: "1.62.1",
+  chromiumRevision: "1234",
+  chromiumVersion: "151.0.7922.34",
+  integrity: Object.freeze({
+    playwright: "sha512-DTcUc8qii+cpHvtOwggMtBRMjKZHXYWdw8syRYu2vtzuq4Wxphqq4NfCs5Zt44L6mA8rfDfj+PHnxFc/FeK6mQ==",
+    browserPackage: "sha512-DU/t4TSqHvAc+uFMt972forQYqBTh/ul7lZ8U81HYGyxnf6vSPPz9NzuE0OR3x/elqvvGm+n4gcny+QSKT+FDw==",
+    core: "sha512-wPYSwEBJY9GHraISXqyqtx0na0LpO3XEX7jNDhntbex7tzUS7kLnZsOlFruFJB4Hi/rhDMjXGqHewDZ68nYZVw==",
+  }),
+});
 
 export const ADMIN_SHELL_BROWSER_ASSERTION_IDS = Object.freeze([
   "IA-SESSION-01",
@@ -123,15 +140,127 @@ async function exactCandidate(requestedCandidate) {
   return current;
 }
 
-async function packageVersions() {
-  const rootPackage = JSON.parse(await readFile(resolve(ROOT, "package.json"), "utf8"));
-  const playwright = rootPackage.devDependencies?.["@playwright/test"];
-  const chromium = rootPackage.devDependencies?.["@playwright/browser-chromium"];
-  if (playwright !== "1.62.1" || chromium !== "1.62.1") fail("unpinned_browser_toolchain");
-  if (rootPackage.allowScripts?.["@playwright/browser-chromium@1.62.1"] !== true) {
-    fail("chromium_install_not_tracked");
+function packageLockEntry(lockfile, name) {
+  return lockfile.packages?.[`node_modules/${name}`];
+}
+
+function actualVersion(output, prefix, code) {
+  const value = output.trim();
+  if (!value.startsWith(prefix)) fail(code);
+  const version = value.slice(prefix.length).trim();
+  if (!/^\d+\.\d+\.\d+(?:\.\d+)?$/u.test(version)) fail(code);
+  return version;
+}
+
+export function verifyToolchainObservation(observation) {
+  const rootPlaywright = observation.rootPackage.devDependencies?.["@playwright/test"];
+  const rootBrowser = observation.rootPackage.devDependencies?.["@playwright/browser-chromium"];
+  const lockPlaywright = packageLockEntry(observation.lockfile, "@playwright/test");
+  const lockBrowser = packageLockEntry(observation.lockfile, "@playwright/browser-chromium");
+  const lockCore = packageLockEntry(observation.lockfile, "playwright-core");
+  const chromiumEntry = observation.browserManifest.browsers?.find(
+    (entry) => entry.name === "chromium",
+  );
+  const cliVersion = actualVersion(
+    observation.cliVersionOutput,
+    "Version ",
+    "playwright_runtime_version_mismatch",
+  );
+  const browserVersion = actualVersion(
+    observation.browserVersionOutput,
+    "Google Chrome for Testing ",
+    "chromium_runtime_version_mismatch",
+  );
+  if (
+    rootPlaywright !== EXPECTED_TOOLCHAIN.playwright ||
+    rootBrowser !== EXPECTED_TOOLCHAIN.browserPackage ||
+    observation.rootPackage.allowScripts?.[
+      `@playwright/browser-chromium@${EXPECTED_TOOLCHAIN.browserPackage}`
+    ] !== true ||
+    lockPlaywright?.version !== EXPECTED_TOOLCHAIN.playwright ||
+    lockPlaywright?.integrity !== EXPECTED_TOOLCHAIN.integrity.playwright ||
+    lockBrowser?.version !== EXPECTED_TOOLCHAIN.browserPackage ||
+    lockBrowser?.integrity !== EXPECTED_TOOLCHAIN.integrity.browserPackage ||
+    lockCore?.version !== EXPECTED_TOOLCHAIN.core ||
+    lockCore?.integrity !== EXPECTED_TOOLCHAIN.integrity.core ||
+    observation.installedPlaywright.version !== EXPECTED_TOOLCHAIN.playwright ||
+    observation.installedBrowser.version !== EXPECTED_TOOLCHAIN.browserPackage ||
+    observation.installedCore.version !== EXPECTED_TOOLCHAIN.core
+  ) fail("unpinned_browser_toolchain");
+  if (cliVersion !== EXPECTED_TOOLCHAIN.playwright) {
+    fail("playwright_runtime_version_mismatch");
   }
-  return Object.freeze({ playwright, chromium });
+  if (
+    chromiumEntry?.revision !== EXPECTED_TOOLCHAIN.chromiumRevision ||
+    chromiumEntry?.browserVersion !== EXPECTED_TOOLCHAIN.chromiumVersion ||
+    browserVersion !== EXPECTED_TOOLCHAIN.chromiumVersion ||
+    !observation.executablePath.includes(
+      `/chromium-${EXPECTED_TOOLCHAIN.chromiumRevision}/`,
+    )
+  ) fail("chromium_runtime_version_mismatch");
+  return Object.freeze({
+    playwright_package_version: EXPECTED_TOOLCHAIN.playwright,
+    playwright_cli_version: cliVersion,
+    chromium_package_version: EXPECTED_TOOLCHAIN.browserPackage,
+    playwright_core_version: EXPECTED_TOOLCHAIN.core,
+    chromium_revision: EXPECTED_TOOLCHAIN.chromiumRevision,
+    chromium_browser_version: browserVersion,
+    executable_path: observation.executablePath,
+  });
+}
+
+async function fileSha256(path) {
+  const hash = createHash("sha256");
+  await new Promise((resolveStream, rejectStream) => {
+    const stream = createReadStream(path);
+    stream.once("error", rejectStream);
+    stream.on("data", (chunk) => hash.update(chunk));
+    stream.once("end", resolveStream);
+  });
+  return `sha256:${hash.digest("hex")}`;
+}
+
+async function installedToolchain() {
+  const [
+    rootPackage,
+    lockfile,
+    installedPlaywright,
+    installedBrowser,
+    installedCore,
+    browserManifest,
+    cliResult,
+  ] = await Promise.all([
+    readFile(resolve(ROOT, "package.json"), "utf8").then(JSON.parse),
+    readFile(resolve(ROOT, "package-lock.json"), "utf8").then(JSON.parse),
+    readFile(resolve(ROOT, "node_modules/@playwright/test/package.json"), "utf8").then(JSON.parse),
+    readFile(resolve(ROOT, "node_modules/@playwright/browser-chromium/package.json"), "utf8").then(JSON.parse),
+    readFile(resolve(ROOT, "node_modules/playwright-core/package.json"), "utf8").then(JSON.parse),
+    readFile(resolve(ROOT, "node_modules/playwright-core/browsers.json"), "utf8").then(JSON.parse),
+    execFileAsync(process.execPath, [PLAYWRIGHT_CLI, "--version"], {
+      cwd: ROOT,
+      encoding: "utf8",
+    }),
+  ]);
+  const executablePath = chromium.executablePath();
+  const browserResult = await execFileAsync(executablePath, ["--version"], {
+    cwd: ROOT,
+    encoding: "utf8",
+  });
+  const verified = verifyToolchainObservation({
+    rootPackage,
+    lockfile,
+    installedPlaywright,
+    installedBrowser,
+    installedCore,
+    browserManifest,
+    cliVersionOutput: cliResult.stdout,
+    browserVersionOutput: browserResult.stdout,
+    executablePath,
+  });
+  return Object.freeze({
+    ...verified,
+    chromium_executable_sha256: await fileSha256(executablePath),
+  });
 }
 
 function verifiedAssertions(report) {
@@ -157,16 +286,21 @@ function verifiedAssertions(report) {
     Object.freeze({ id, status: "passed" })));
 }
 
-export function createEvidence({ candidate, versions, assertions, startedAt, completedAt }) {
+export function createEvidence({ candidate, toolchain, assertions, startedAt, completedAt }) {
   const unsigned = Object.freeze({
     schema: EVIDENCE_SCHEMA,
     status: "passed",
     candidate_sha: candidate,
     runner: Object.freeze({
       name: "Playwright",
-      version: versions.playwright,
+      package_version: toolchain.playwright_package_version,
+      executed_cli_version: toolchain.playwright_cli_version,
       browser: "Chromium",
-      browser_package_version: versions.chromium,
+      browser_package_version: toolchain.chromium_package_version,
+      playwright_core_version: toolchain.playwright_core_version,
+      browser_revision: toolchain.chromium_revision,
+      executed_browser_version: toolchain.chromium_browser_version,
+      browser_executable_sha256: toolchain.chromium_executable_sha256,
       workers: 1,
       locale: "en-US",
       timezone: "UTC",
@@ -196,7 +330,7 @@ export function createEvidence({ candidate, versions, assertions, startedAt, com
 export async function run(options, { now = () => new Date() } = {}) {
   const startedAt = now().toISOString();
   const candidate = await exactCandidate(options.candidate_sha);
-  const versions = await packageVersions();
+  const toolchain = await installedToolchain();
   const diagnosticsDirectory = await mkdtemp(join(tmpdir(), "mind-diary-md347-browser-"));
   const reporterOutput = join(diagnosticsDirectory, "playwright-assertions.json");
   const child = await runProcess(process.execPath, [
@@ -210,6 +344,7 @@ export async function run(options, { now = () => new Date() } = {}) {
       ...process.env,
       MIND_DIARY_MD347_DIAGNOSTICS: diagnosticsDirectory,
       MIND_DIARY_MD347_REPORT: reporterOutput,
+      MIND_DIARY_MD347_CHROMIUM_EXECUTABLE: toolchain.executable_path,
     },
   });
   if (child.code !== 0) {
@@ -220,7 +355,7 @@ export async function run(options, { now = () => new Date() } = {}) {
   const assertions = verifiedAssertions(report);
   const evidence = createEvidence({
     candidate,
-    versions,
+    toolchain,
     assertions,
     startedAt,
     completedAt: now().toISOString(),
