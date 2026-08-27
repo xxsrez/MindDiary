@@ -117,31 +117,42 @@ stale denial; exact retention задаётся implementation policy без по
 | Mind deletion | Generation unusable и затем reconciled/tombstoned; no replacement target. |
 | Corrupt/unavailable state | Inspect/mutation/commit fail closed без guessed target. |
 
-Каждая Site mutation требует canonical `expected_target_version` и idempotency key.
-Transaction разрешает exact owner из trusted presentation ref, сверяет
-version, reauthorizes target, создаёт/инвалидирует generation, повышает version
-ровно один раз и сохраняет canonical result + request hash. Idempotency
-namespace — `binding_owner_id + writable-target-operation + key`. Exact replay
-возвращает прежний result; changed payload — `idempotency_conflict`; stale CAS
-возвращает conflict без target metadata leakage. Exact route-level mapping
-принадлежит MD-337 и не вводит отдельный MD-339 machine code.
+Каждая Site mutation требует canonical `expected_target_version` и idempotency
+key. Transaction разрешает exact owner из trusted presentation ref и применяет
+action-specific checks ниже. Idempotency namespace — `binding_owner_id +
+writable-target-operation + key`. Exact replay возвращает прежний result;
+changed payload — `idempotency_conflict`.
+
+Stale `expected_target_version` всегда возвращает принадлежащий реестру MD-337
+Site-only `409 target_conflict`: target state не меняется, target metadata не
+раскрывается, last-write-wins запрещён. `target_conflict` не является четвёртой
+Content MCP writable-target ошибкой и не переопределяется MD-339.
 
 ## Sites control plane
 
-Select, switch и clear вызываются только authenticated trusted Web adapter:
+Select, switch и clear вызываются только authenticated trusted Web adapter.
+Общие требования к обеим action: current Sites principal, actor-owned opaque
+credential presentation ref, подтверждённая credential-owner authority,
+`expected_target_version`, idempotency key и fresh server read-back.
+
+Action-specific authorization намеренно различается:
+
+- `select_write` (включая switch) требует server-resolved `mind_ref`, active
+  credential lifecycle, current `content:write`, current
+  `editor | admin | owner` role и eligibility выбранного target;
+- `clear_write` не принимает `mind_ref` и не требует current target ACL,
+  writer role или target eligibility. Exact owner может очистить target после
+  ACL/role loss или Mind deletion. Это recovery-safe reduction authority;
+  response не раскрывает stale target metadata.
+
+Surface остаётся Site-owned:
 
 - ordinary OAuth — actor-owned Connection detail;
 - personal token — actor-owned Advanced MCP detail;
-- mutation принимает presentation ref, action, server-resolved `mind_ref`,
-  expected version и idempotency key;
-- server повторно подтверждает current Sites principal, exact owner,
-  credential lifecycle/scope и current write role;
 - raw grant/token/owner/generation/`space_id` не попадает в browser URL, form,
   DOM, analytics или user-facing error;
 - success заканчивается fresh server read-back; UI не строит state из request;
-- clear inaccessible/deleted target допускается через owner-scoped opaque
-  stale presentation ref и не требует target ACL, потому что только уменьшает
-  authority.
+- stale CAS не меняет generation/version и не возвращает target metadata.
 
 Connection detail показывает derived readable access projection, а не
 persisted read bindings. Такой список — bounded snapshot current ACL/
@@ -159,6 +170,12 @@ canonical `writable_target_required | writable_target_mismatch |
 writable_target_unavailable` без private target metadata. Capability report
 использует canonical boolean `requires_writable_target`, не historical
 `requires_write_binding`.
+
+Административная export authority в Content MCP также отсутствует:
+`start_export` и `get_export_status` удаляются из обоих catalogs по MD-337.
+MD-359 владеет Site export routes и projection; MD-339 не дублирует их design.
+Обычные explicit content reads/BundleFile delivery от этого не получают
+административную export capability.
 
 Целевая content commit shape содержит минимум:
 
@@ -290,6 +307,11 @@ indistinguishable до authorization. Logs/audit/telemetry не содержат
 credential/owner/generation IDs, private Mind metadata, prompt, content,
 staged locator или target-selection request body.
 
+Отдельный `target_conflict` принадлежит только Sites mutation register MD-337:
+он означает stale `expected_target_version`, всегда даёт zero state change,
+zero target metadata disclosure и запрещает last-write-wins. Он не добавляется
+в таблицу Content MCP ошибок выше.
+
 ## Acceptance matrix
 
 Machine-readable closed contract:
@@ -299,13 +321,17 @@ Machine-readable closed contract:
 1. private/member, public catalog, exact-handle unlisted и historical current-
    access read без read binding;
 2. owner isolation для двух grants/tokens одного principal;
-3. Site-only select/switch/clear/inspect, version CAS, idempotent same-target и
-   отсутствие MCP target inspection/mutation;
+3. Site-only select/switch/clear/inspect, action-specific authorization,
+   recovery-safe clear после ACL/role loss/deletion, version CAS,
+   `target_conflict`, idempotent same-target и отсутствие MCP target
+   inspection/mutation;
 4. exact generation/Mind/scope/role/HEAD/idempotency commit и zero side effects
    для stale/revoke/wrong-Mind/access-loss/corrupt state;
 5. OAuth refresh preservation, reconnect/reissue empty target и no owner copy;
 6. explicit legacy re-consent/reissue, exact unambiguous same-owner preservation
    и ambiguous/corrupt fail-closed path;
 7. capture/staged generation pinning, no transfer and fail-closed migration;
-8. modern/compatibility protocol envelopes invoking one target-v1 application
+8. отсутствие administrative export authority в Content MCP с disposition в
+   MD-337 и Site route/projection ownership в MD-359;
+9. modern/compatibility protocol envelopes invoking one target-v1 application
    semantics without legacy ID/replacement-generation wire fields.

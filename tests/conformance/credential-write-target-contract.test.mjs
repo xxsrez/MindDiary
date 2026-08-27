@@ -55,7 +55,7 @@ test("credential write target fixture is a closed Release 0.3 contract", () => {
     "acceptanceIds",
   ], "top-level contract drifted");
   unique(fixture.acceptanceIds, "acceptance IDs must be unique");
-  assert.equal(fixture.acceptanceIds.length, 11);
+  assert.equal(fixture.acceptanceIds.length, 13);
 });
 
 test("reads use explicit selectors and current ACL or visibility without read binding", () => {
@@ -129,36 +129,103 @@ test("target transitions are versioned, idempotent, and never fall back", () => 
 });
 
 test("only trusted Site inspects or mutates target while MCP has no target tool", () => {
-  assert.equal(fixture.siteControl.mutationSurface, "trusted_sites_web_only");
-  assert.equal(fixture.siteControl.oauthLocation, "connection_detail");
-  assert.equal(fixture.siteControl.personalTokenLocation, "advanced_mcp");
-  assert.deepEqual(fixture.siteControl.actions, ["select_write", "clear_write"]);
-  assert.equal(fixture.siteControl.switchSemantics, "select_write_when_target_exists");
+  const site = fixture.siteControl;
+  exactKeys(site, [
+    "mutationSurface",
+    "oauthLocation",
+    "personalTokenLocation",
+    "actions",
+    "switchSemantics",
+    "commonRequires",
+    "requirementsByAction",
+    "versionConflict",
+    "forbiddenBrowserAuthorityFields",
+    "readableProjectionPersistedAsBinding",
+  ], "Site control contract drifted");
+  assert.equal(site.mutationSurface, "trusted_sites_web_only");
+  assert.equal(site.oauthLocation, "connection_detail");
+  assert.equal(site.personalTokenLocation, "advanced_mcp");
+  assert.deepEqual(site.actions, ["select_write", "clear_write"]);
+  assert.equal(site.switchSemantics, "select_write_when_target_exists");
   for (const required of [
+    "sites_principal",
+    "credential_owner_authority",
     "actor_owned_presentation_ref",
     "expected_target_version",
     "idempotency_key",
-    "current_write_scope",
-    "current_writer_role",
     "server_read_back",
-  ]) assert.ok(fixture.siteControl.requires.includes(required), required);
-  assert.equal(fixture.siteControl.readableProjectionPersistedAsBinding, false);
-  assert.equal(fixture.mcp.targetInspection, false);
-  assert.equal(fixture.mcp.targetInspectionSurface, "trusted_sites_web_only");
-  assert.equal(fixture.mcp.targetMutation, false);
-  assert.deepEqual(fixture.mcp.removedTargetTools, [
+  ]) assert.ok(site.commonRequires.includes(required), required);
+  exactKeys(site.requirementsByAction, ["select_write", "clear_write"], "Site actions drifted");
+  assert.deepEqual(site.requirementsByAction.select_write, {
+    mindRefRequired: true,
+    requires: [
+      "active_lifecycle",
+      "content_write_scope",
+      "current_writer_role",
+      "target_eligibility",
+    ],
+  });
+  assert.deepEqual(site.requirementsByAction.clear_write, {
+    mindRefRequired: false,
+    requires: [],
+    forbiddenRequirements: [
+      "target_acl",
+      "current_writer_role",
+      "target_eligibility",
+    ],
+    allowedAfter: ["target_acl_loss", "target_role_loss", "target_deletion"],
+    targetMetadataDisclosure: false,
+    authorityEffect: "reduce_only",
+  });
+  assert.deepEqual(site.versionConflict, {
+    condition: "stale_expected_target_version",
+    code: "target_conflict",
+    httpStatus: 409,
+    stateChange: false,
+    targetMetadataDisclosure: false,
+    lastWriteWins: false,
+    owner: "MD-337",
+  });
+  assert.equal(site.readableProjectionPersistedAsBinding, false);
+  const mcp = fixture.mcp;
+  exactKeys(mcp, [
+    "targetInspection",
+    "targetInspectionSurface",
+    "targetMutation",
+    "exportAuthority",
+    "removedTargetTools",
+    "removedAdministrativeExportTools",
+    "exportDispositionOwnedBy",
+    "exportRoutesAndProjectionOwnedBy",
+    "capabilityTargetField",
+    "canonicalTargetErrors",
+    "protocolProfilesShareSemantics",
+    "operationNamesOwnedBy",
+  ], "Content MCP authority contract drifted");
+  assert.equal(mcp.targetInspection, false);
+  assert.equal(mcp.targetInspectionSurface, "trusted_sites_web_only");
+  assert.equal(mcp.targetMutation, false);
+  assert.equal(mcp.exportAuthority, "absent");
+  assert.deepEqual(mcp.removedTargetTools, [
     "get_mind_bindings",
     "set_read_mind_binding",
     "set_write_mind_binding",
   ]);
-  assert.equal(fixture.mcp.capabilityTargetField, "requires_writable_target");
-  assert.deepEqual(fixture.mcp.canonicalTargetErrors, [
+  assert.deepEqual(mcp.removedAdministrativeExportTools, [
+    "start_export",
+    "get_export_status",
+  ]);
+  assert.equal(mcp.exportDispositionOwnedBy, "MD-337");
+  assert.equal(mcp.exportRoutesAndProjectionOwnedBy, "MD-359");
+  assert.equal(mcp.capabilityTargetField, "requires_writable_target");
+  assert.deepEqual(mcp.canonicalTargetErrors, [
     "writable_target_required",
     "writable_target_mismatch",
     "writable_target_unavailable",
   ]);
-  assert.equal(fixture.mcp.protocolProfilesShareSemantics, true);
-  assert.equal(fixture.mcp.operationNamesOwnedBy, "MD-337");
+  assert.ok(!mcp.canonicalTargetErrors.includes("target_conflict"));
+  assert.equal(mcp.protocolProfilesShareSemantics, true);
+  assert.equal(mcp.operationNamesOwnedBy, "MD-337");
 });
 
 test("commit is fenced by exact generation, Mind, scope, role, HEAD, and idempotency", () => {
@@ -285,6 +352,8 @@ test("ADR preserves historical evidence while superseding only Release 0.3 acces
   assert.match(historicalDecision, /Сохраняются historical implementation и\s+evidence/u);
   assert.match(specification, /Runtime, persistence, wire schemas,[\s\S]*ещё не реализованы/u);
   assert.match(specification, /Content MCP не публикует target-management или отдельный target-inspection/u);
+  assert.match(specification, /Административная export authority в Content MCP также отсутствует/u);
+  assert.match(specification, /MD-359 владеет Site export routes и projection/u);
   assert.match(specification, /Same-owner OAuth preservation/u);
   assert.equal(fixture.legacyCompatibility.historicalContractRetained, true);
   assert.equal(fixture.legacyCompatibility.historicalEvidenceReclassifiedAsTarget, false);

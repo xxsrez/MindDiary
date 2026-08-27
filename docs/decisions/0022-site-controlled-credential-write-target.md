@@ -45,13 +45,21 @@ target через reconnect/reissue и не выдаёт historical schema за 
 3. Select, switch и clear доступны только trusted Sites Web: ordinary
    Connection detail для OAuth и Advanced MCP для personal token. Там же живёт
    privacy-safe target inspect/read-back. Content MCP не имеет отдельного
-   target inspection или mutation tool; corpus, prompt, model memory и read
-   result target не выбирают.
+   target inspection или mutation tool и не имеет administrative export
+   authority; MD-337 владеет disposition MCP operations, MD-359 — Site export
+   routes/projection. Corpus, prompt, model memory и read result target не
+   выбирают.
 4. Каждый material select/switch/clear увеличивает `target_version` и создаёт
    либо инвалидирует never-reused `target_generation`. Same-target select —
    idempotent no-op. Browser command использует actor-owned presentation ref,
    expected version, idempotency и server read-back; raw owner/credential/
-   `space_id` не являются request authority.
+   `space_id` не являются request authority. `select_write` требует current
+   write scope, writer role и target eligibility. Recovery-safe `clear_write`
+   требует credential-owner authority, expected version и idempotency, но не
+   target ACL/role/eligibility, поэтому остаётся доступен после target ACL/role
+   loss или deletion без раскрытия target metadata. Stale expected version
+   получает MD-337 `409 target_conflict`, zero state change и no
+   last-write-wins.
 5. Content commit передаёт explicit Mind, expected HEAD и idempotency key без
    `write_binding_id` или replacement generation field. Server разрешает и
    pin-ит current owner/target generation, а authoritative transaction требует
@@ -81,6 +89,8 @@ Exact keep/move/retire operation names, wire fields и canonical target errors
 `expected_target_version`, `requires_writable_target`,
 `writable_target_required`, `writable_target_mismatch` и
 `writable_target_unavailable` без собственных конкурирующих aliases.
+Site-only `target_conflict` также принадлежит MD-337 и не расширяет этот
+трёхэлементный Content MCP error set.
 
 ## Последствия
 

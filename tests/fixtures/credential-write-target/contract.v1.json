@@ -88,15 +88,50 @@
     "personalTokenLocation": "advanced_mcp",
     "actions": ["select_write", "clear_write"],
     "switchSemantics": "select_write_when_target_exists",
-    "requires": [
+    "commonRequires": [
+      "sites_principal",
+      "credential_owner_authority",
       "actor_owned_presentation_ref",
       "expected_target_version",
       "idempotency_key",
-      "current_credential_lifecycle",
-      "current_write_scope",
-      "current_writer_role",
       "server_read_back"
     ],
+    "requirementsByAction": {
+      "select_write": {
+        "mindRefRequired": true,
+        "requires": [
+          "active_lifecycle",
+          "content_write_scope",
+          "current_writer_role",
+          "target_eligibility"
+        ]
+      },
+      "clear_write": {
+        "mindRefRequired": false,
+        "requires": [],
+        "forbiddenRequirements": [
+          "target_acl",
+          "current_writer_role",
+          "target_eligibility"
+        ],
+        "allowedAfter": [
+          "target_acl_loss",
+          "target_role_loss",
+          "target_deletion"
+        ],
+        "targetMetadataDisclosure": false,
+        "authorityEffect": "reduce_only"
+      }
+    },
+    "versionConflict": {
+      "condition": "stale_expected_target_version",
+      "code": "target_conflict",
+      "httpStatus": 409,
+      "stateChange": false,
+      "targetMetadataDisclosure": false,
+      "lastWriteWins": false,
+      "owner": "MD-337"
+    },
     "forbiddenBrowserAuthorityFields": [
       "binding_owner_id",
       "credential_id",
@@ -110,11 +145,18 @@
     "targetInspection": false,
     "targetInspectionSurface": "trusted_sites_web_only",
     "targetMutation": false,
+    "exportAuthority": "absent",
     "removedTargetTools": [
       "get_mind_bindings",
       "set_read_mind_binding",
       "set_write_mind_binding"
     ],
+    "removedAdministrativeExportTools": [
+      "start_export",
+      "get_export_status"
+    ],
+    "exportDispositionOwnedBy": "MD-337",
+    "exportRoutesAndProjectionOwnedBy": "MD-359",
     "capabilityTargetField": "requires_writable_target",
     "canonicalTargetErrors": [
       "writable_target_required",
@@ -358,7 +400,9 @@
     "WT-READ-001",
     "WT-OWNER-001",
     "WT-SITE-001",
+    "WT-SITE-002",
     "WT-MCP-001",
+    "WT-MCP-EXPORT-001",
     "WT-COMMIT-001",
     "WT-FAIL-001",
     "WT-FAIL-002",
