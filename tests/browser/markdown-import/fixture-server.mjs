@@ -29,6 +29,8 @@ let plan = null;
 let session = null;
 let startCalls = 0;
 let commitCalls = 0;
+let statusReadCalls = 0;
+let statusFailuresRemaining = 0;
 let revoked = false;
 
 const snakePlan = (files = [
@@ -78,7 +80,7 @@ function reset(nextScenario) {
   plan = snakePlan();
   session = nextScenario === "open"
     ? openSession("active")
-    : nextScenario === "validating"
+    : nextScenario === "validating" || nextScenario === "transient-once"
       ? openSession("validating")
       : nextScenario === "head-session"
         ? openSession("validation_failed")
@@ -87,6 +89,8 @@ function reset(nextScenario) {
           : null;
   startCalls = 0;
   commitCalls = 0;
+  statusReadCalls = 0;
+  statusFailuresRemaining = nextScenario === "transient-once" ? 1 : 0;
   revoked = false;
 }
 
@@ -146,7 +150,13 @@ const server = createServer(async (request, response) => {
       return;
     }
     if (url.pathname === "/_fixture/state") {
-      sendJson(response, 200, { scenario, start_calls: startCalls, commit_calls: commitCalls, session });
+      sendJson(response, 200, {
+        scenario,
+        start_calls: startCalls,
+        commit_calls: commitCalls,
+        status_read_calls: statusReadCalls,
+        session,
+      });
       return;
     }
     if (url.pathname === "/research-notes" || url.pathname === "/reader") {
@@ -188,6 +198,15 @@ const server = createServer(async (request, response) => {
 
     const statusMatch = url.pathname.match(/^\/api\/v1\/markdown-imports\/([^/]+)$/u);
     if (statusMatch && request.method === "GET") {
+      statusReadCalls += 1;
+      if (statusFailuresRemaining > 0) {
+        statusFailuresRemaining -= 1;
+        sendJson(response, 503, {
+          ok: false,
+          error: { code: "binding_state_unavailable", message: "private/redeploy/storage-shard" },
+        });
+        return;
+      }
       if (revoked || session === null || statusMatch[1] !== session.import_id) {
         sendJson(response, 403, { ok: false, error: { code: "forbidden" } });
         return;

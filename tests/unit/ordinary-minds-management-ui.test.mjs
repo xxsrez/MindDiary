@@ -228,6 +228,7 @@ test("browser management stays metadata-only while import uses its bounded dedic
   assert.match(html, /Snapshot replacement:/);
   assert.match(html, /data-import-progress[^>]+max="100"/);
   assert.match(html, /data-cancel-markdown-import/);
+  assert.match(html, /data-retry-markdown-import-status/);
   assert.match(html, /data-replan-markdown-import/);
   assert.match(html, /data-import-receipt-revision/);
   assert.doesNotMatch(html, /<textarea|name="(?:text|markdown|path)"/i);

@@ -12,6 +12,10 @@ test("Markdown import recovery uses actor-owned server status and no browser sto
   assert.match(client, /json\("GET", `\/api\/v1\/markdown-imports/u);
   assert.match(client, /const current = await freshSession\(\);/u);
   assert.match(client, /sessionAttemptKey \?\?=/u);
+  assert.match(client, /status_read_unavailable/u);
+  assert.match(client, /recoveryPending/u);
+  assert.match(client, /The saved import locator was kept/u);
+  assert.match(client, /import_session_not_found/u);
   assert.doesNotMatch(client, /\b(?:localStorage|sessionStorage|indexedDB)\b/u);
 });
 

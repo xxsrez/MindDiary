@@ -142,6 +142,30 @@ test("a durable validation checkpoint resumes to one receipt without a second st
   expect(state.commit_calls).toBe(1);
 });
 
+test("a transient 503 keeps the exact locator and resumes safely after refresh", async ({ page, request }) => {
+  await reset(request, "transient-once");
+  const resume = "#markdown-import=import_recovery&markdown-import-mind=research-notes";
+  await page.goto(`${origin}/research-notes${resume}`);
+  await expect(page.locator("[data-import-status]")).toContainText("temporarily unavailable");
+  await expect(page.locator("[data-retry-markdown-import-status]")).toBeVisible();
+  await expect(page.locator("[data-import-files]")).toBeDisabled();
+  expect(page.url()).toContain(resume);
+  await expect(page.locator("body")).not.toContainText("private/redeploy/storage-shard");
+
+  await page.reload();
+  await expect(page.locator("[data-import-status]")).toContainText("validation can resume");
+  await expect(page.locator("[data-retry-markdown-import-status]")).toBeHidden();
+  expect(page.url()).toContain(resume);
+  await page.locator("[data-import-confirm]").check();
+  await page.locator("[data-start-markdown-import]").click();
+  await expect(page.locator("[data-import-receipt-revision]")).toHaveText("revision_import_fixture");
+  expect(page.url()).not.toContain("markdown-import=");
+  const state = await (await request.get(`${origin}/_fixture/state`)).json();
+  expect(state.status_read_calls).toBeGreaterThanOrEqual(2);
+  expect(state.start_calls).toBe(0);
+  expect(state.commit_calls).toBe(1);
+});
+
 test("concurrent HEAD change requires a fresh plan before or during commit", async ({ page, request }) => {
   await reset(request, "head-plan");
   await page.goto(`${origin}/research-notes`);

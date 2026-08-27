@@ -519,6 +519,7 @@ export function renderMarkdownImportPanel(target: Readonly<{
       <div class="md-import-actions">
         <button class="md-button md-button--primary" type="submit" data-start-markdown-import disabled>Start or resume import</button>
         <button class="md-button md-button--secondary" type="button" data-cancel-markdown-import hidden style="display:none">Cancel staged import</button>
+        <button class="md-button md-button--secondary" type="button" data-retry-markdown-import-status hidden style="display:none">Retry recovery</button>
         <button class="md-button md-button--secondary" type="button" data-replan-markdown-import hidden style="display:none">Reload and make a new plan</button>
       </div>
       <section class="md-import-receipt" data-import-receipt hidden style="display:none" aria-labelledby="markdown-import-receipt-heading">

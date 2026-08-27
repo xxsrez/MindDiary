@@ -11,6 +11,7 @@
   const confirm = panel.querySelector("[data-import-confirm]");
   const start = panel.querySelector("[data-start-markdown-import]");
   const cancel = panel.querySelector("[data-cancel-markdown-import]");
+  const retryRecovery = panel.querySelector("[data-retry-markdown-import-status]");
   const replan = panel.querySelector("[data-replan-markdown-import]");
   const status = panel.querySelector("[data-import-status]");
   const form = panel.querySelector("[data-markdown-import-form]");
@@ -33,6 +34,7 @@
   let session = null;
   let sessionPlan = null;
   let busy = false;
+  let recoveryPending = false;
   let planAttemptKey = null;
   let sessionAttemptKey = null;
 
@@ -45,7 +47,10 @@
     if (status) status.textContent = message;
   };
   const key = (prefix) => `${prefix}:${crypto.randomUUID()}`;
-  const taggedError = (code) => Object.assign(new Error("Import request failed"), { code });
+  const taggedError = (code, statusCode = 0, statusRead = false) => Object.assign(
+    new Error("Import request failed"),
+    { code, statusCode, statusRead },
+  );
   const number = (value) => Number.isSafeInteger(value) && value >= 0 ? value : 0;
 
   const setCheck = (node, state, message) => {
@@ -82,15 +87,21 @@
   };
 
   const json = async (method, path, body, idempotencyKey) => {
+    const statusRead = method === "GET" && /^\/api\/v1\/markdown-imports\//u.test(path);
     const headers = { accept: "application/json", "x-csrf-token": csrf };
     if (body !== undefined) headers["content-type"] = "application/json";
     if (idempotencyKey) headers["idempotency-key"] = idempotencyKey;
-    const response = await fetch(path, {
-      method,
-      headers,
-      credentials: "same-origin",
-      body: body === undefined ? undefined : JSON.stringify(body),
-    });
+    let response;
+    try {
+      response = await fetch(path, {
+        method,
+        headers,
+        credentials: "same-origin",
+        body: body === undefined ? undefined : JSON.stringify(body),
+      });
+    } catch {
+      throw taggedError(statusRead ? "status_read_unavailable" : "operation_failed", 0, statusRead);
+    }
     let payload = null;
     try {
       payload = await response.json();
@@ -98,7 +109,7 @@
       // The fixed error below deliberately avoids reflecting an intermediary response.
     }
     if (!response.ok || payload?.ok !== true) {
-      throw taggedError(payload?.error?.code ?? "operation_failed");
+      throw taggedError(payload?.error?.code ?? "operation_failed", response.status, statusRead);
     }
     return payload.data;
   };
@@ -143,6 +154,8 @@
     if (currentRevisionNode) currentRevisionNode.textContent = revisionId;
     head = revisionId;
     panel.dataset.headRevision = revisionId;
+    recoveryPending = false;
+    shown(retryRecovery, false);
     shown(receipt, true);
     setProgress("Import complete", 100, "100%");
     say(`Import committed as revision ${revisionId}. No partial snapshot was visible.`);
@@ -150,6 +163,7 @@
 
   const headConflict = () => {
     persist(null);
+    recoveryPending = false;
     session = null;
     sessionPlan = null;
     plan = null;
@@ -158,6 +172,7 @@
     sessionAttemptKey = null;
     if (confirm) confirm.checked = false;
     shown(cancel, false);
+    shown(retryRecovery, false);
     shown(replan, true);
     setCheck(capacityCheck, "failed", "Plan conflict: the current revision changed.");
     say("This plan is based on an older revision. Reload the Mind and review a new plan.");
@@ -169,13 +184,14 @@
       session?.state === "validating" ||
       session?.state === "finalizing" ||
       (session?.state === "active" && files.length > 0);
-    if (start) start.disabled = busy || confirm?.checked !== true || !canContinue;
-    if (review) review.disabled = busy;
-    if (input) input.disabled = busy;
+    if (start) start.disabled = busy || recoveryPending || confirm?.checked !== true || !canContinue;
+    if (review) review.disabled = busy || recoveryPending;
+    if (input) input.disabled = busy || recoveryPending;
     if (cancel) {
       cancel.disabled = busy;
       shown(cancel, session !== null && openStates.has(session.state));
     }
+    if (retryRecovery) retryRecovery.disabled = busy;
   };
 
   const scalar = (left, right) => {
@@ -311,6 +327,8 @@
     const current = await json("GET", `/api/v1/markdown-imports/${encodeURIComponent(session.import_id)}`);
     session = current.session;
     sessionPlan = current.plan;
+    recoveryPending = false;
+    shown(retryRecovery, false);
     setStats(sessionPlan);
     setPlanChecks(sessionPlan);
     progressForSession(session, sessionPlan);
@@ -355,9 +373,38 @@
 
   const unavailableSavedSession = () => {
     persist(null);
+    recoveryPending = false;
     session = null;
     sessionPlan = null;
+    plan = null;
+    files = [];
+    if (input) input.value = "";
+    if (confirm) confirm.checked = false;
+    shown(summary, false);
+    shown(progressRegion, false);
+    shown(receipt, false);
+    shown(cancel, false);
+    shown(retryRecovery, false);
     say("This staged import is unavailable to this account. No operation details were shown.");
+  };
+
+  const retriableSavedSession = () => {
+    recoveryPending = true;
+    shown(retryRecovery, true);
+    say("Recovery status is temporarily unavailable. The saved import locator was kept; retry recovery or reload this page.");
+  };
+
+  const confirmedStatusUnavailable = (error) => error?.statusRead === true && (
+    error.statusCode === 401 || error.statusCode === 403 ||
+    error.code === "authentication_required" ||
+    error.code === "registration_required" ||
+    error.code === "forbidden" ||
+    error.code === "import_session_not_found"
+  );
+
+  const handleStatusReadFailure = (error) => {
+    if (confirmedStatusUnavailable(error)) unavailableSavedSession();
+    else retriableSavedSession();
   };
 
   const terminalSession = (current, currentPlan) => {
@@ -368,9 +415,11 @@
       return;
     }
     persist(null);
+    recoveryPending = false;
     session = null;
     sessionPlan = null;
     shown(cancel, false);
+    shown(retryRecovery, false);
     say(current.state === "canceled"
       ? "The staged import was canceled. The current revision was unchanged."
       : current.state === "expired"
@@ -381,10 +430,15 @@
   const loadSaved = async () => {
     const id = saved();
     if (!id) return;
+    recoveryPending = true;
+    sync();
+    say("Checking the saved import status…");
     try {
       const data = await json("GET", `/api/v1/markdown-imports/${encodeURIComponent(id)}`);
       session = data.session;
       sessionPlan = data.plan;
+      recoveryPending = false;
+      shown(retryRecovery, false);
       if (session.state === "committed") {
         persist(null);
         showReceipt(session.expected_revision_id ?? head, session.revision_id);
@@ -407,8 +461,8 @@
           : session.state === "finalizing"
             ? "Revision publication can resume from its saved checkpoint. Confirm to continue."
             : "The uploaded snapshot is validated. Confirm to publish its one revision.");
-    } catch {
-      unavailableSavedSession();
+    } catch (error) {
+      handleStatusReadFailure(error);
     } finally {
       sync();
     }
@@ -464,7 +518,9 @@
       if (confirm) confirm.checked = false;
     } catch (error) {
       plan = null;
-      if (error?.code === "local_path_conflict") {
+      if (error?.statusRead === true) {
+        handleStatusReadFailure(error);
+      } else if (error?.code === "local_path_conflict") {
         setCheck(pathCheck, "failed", "Path conflict: use unique normalized relative .md paths.");
         setCheck(formatCheck, "pending", "Format: not checked after the path conflict.");
         setCheck(capacityCheck, "pending", "Capacity: no server plan was created.");
@@ -484,7 +540,7 @@
       } else if (error?.code?.includes("limit") || error?.code?.startsWith("capacity_")) {
         setCheck(capacityCheck, "failed", "Capacity conflict: reduce the snapshot before starting.");
       }
-      if (error?.code !== "import_head_conflict") say(failMessage(error));
+      if (error?.statusRead !== true && error?.code !== "import_head_conflict") say(failMessage(error));
     } finally {
       busy = false;
       sync();
@@ -576,7 +632,9 @@
       if (confirm) confirm.checked = false;
       shown(cancel, false);
     } catch (error) {
-      if (error?.code === "import_head_conflict") {
+      if (error?.statusRead === true) {
+        handleStatusReadFailure(error);
+      } else if (error?.code === "import_head_conflict") {
         headConflict();
       } else if (error?.code === "import_validation_failed" && session?.import_id) {
         try {
@@ -591,8 +649,8 @@
             sessionPlan = null;
             say(`Validation stopped with ${safeFailures.length} reported file error(s)${sample ? `: ${sample}` : ""}. The current revision was unchanged.`);
           }
-        } catch {
-          unavailableSavedSession();
+        } catch (statusError) {
+          handleStatusReadFailure(statusError);
         }
       } else {
         say(failMessage(error));
@@ -614,6 +672,7 @@
         { expected_version: session.version },
       );
       persist(null);
+      recoveryPending = false;
       session = null;
       sessionPlan = null;
       plan = null;
@@ -624,9 +683,22 @@
       if (confirm) confirm.checked = false;
       shown(summary, false);
       shown(progressRegion, false);
+      shown(retryRecovery, false);
       say("Staged import canceled. The current revision was unchanged; cleanup is queued.");
     } catch (error) {
       say(failMessage(error));
+    } finally {
+      busy = false;
+      sync();
+    }
+  });
+
+  retryRecovery?.addEventListener("click", async () => {
+    if (busy) return;
+    busy = true;
+    sync();
+    try {
+      await loadSaved();
     } finally {
       busy = false;
       sync();
