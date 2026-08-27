@@ -1,0 +1,273 @@
+{
+  "$schema": "mind-diary/release-0.3-operation-disposition/v1",
+  "version": 1,
+  "source": "docs/specs/release-0.3-operation-disposition.md",
+  "authority": {
+    "sitesControl": ["account", "mind_metadata", "visibility", "membership", "ownership", "connections", "writable_target", "credentials", "bulk_import", "bulk_export", "administrative_deletion"],
+    "contentMcp": ["discovery", "browse", "search", "fetch", "history", "standalone_validation", "per_file_ingress", "exact_target_content_commit"],
+    "implicitPersonalMindFallback": false,
+    "implicitCrossMind": false,
+    "readBindingRequired": false,
+    "writableTargetSelectedOn": "sites"
+  },
+  "profiles": {
+    "web-session": {
+      "target": "sites-control",
+      "actor": "platform-authenticated-identity",
+      "checks": ["sites_identity_resolution", "safe_session_projection"],
+      "errors": ["authentication_required", "identity_binding_unavailable"],
+      "compatibility": "keep-route"
+    },
+    "web-bootstrap": {
+      "target": "sites-control",
+      "actor": "platform-authenticated-unregistered-identity",
+      "checks": ["sites_identity", "external_binding_resolution", "idempotent_isolated_bootstrap"],
+      "errors": ["identity_binding_unavailable", "bootstrap_conflict"],
+      "compatibility": "keep-route"
+    },
+    "web-read": {
+      "target": "sites-control",
+      "actor": "registered-sites-principal",
+      "checks": ["sites_identity", "current_acl_or_visibility", "authorize_before_metadata"],
+      "errors": ["authentication_required", "indistinguishable_not_found"],
+      "compatibility": "keep-route"
+    },
+    "web-write": {
+      "target": "sites-control",
+      "actor": "registered-sites-principal",
+      "checks": ["sites_identity", "same_origin", "csrf", "current_named_capability", "idempotency_or_cas"],
+      "errors": ["invalid_request", "forbidden", "conflict"],
+      "compatibility": "keep-route"
+    },
+    "web-import": {
+      "target": "sites-control",
+      "actor": "registered-sites-principal",
+      "checks": ["current_content_write", "quota_reservation", "session_owner", "base_revision", "head_cas"],
+      "errors": ["import_validation_failed", "capacity_limit", "import_conflict"],
+      "compatibility": "keep-route"
+    },
+    "credential-control": {
+      "target": "sites-control",
+      "actor": "credential-owner-sites-principal",
+      "checks": ["presentation_ref_owner", "credential_active", "current_scopes", "current_acl", "target_version_cas"],
+      "errors": ["credential_not_found", "operation_removed", "write_step_up_required", "target_conflict"],
+      "compatibility": "reject-old-read-actions"
+    },
+    "operator-read": {
+      "target": "sites-control",
+      "actor": "constructor-allowlisted-service-operator",
+      "checks": ["sites_identity", "service_operator_allowlist", "privacy_safe_projection"],
+      "errors": ["indistinguishable_not_found"],
+      "compatibility": "keep-route"
+    },
+    "content-read": {
+      "target": "content-mcp",
+      "actor": "oauth-or-personal-token-principal",
+      "checks": ["content_read_scope", "explicit_mind_when_targeted", "current_acl_or_visibility", "exact_revision_when_selected"],
+      "errors": ["authentication_required", "forbidden_or_not_found", "invalid_mind_selector", "invalid_revision_selector"],
+      "compatibility": "same-name-no-read-binding"
+    },
+    "content-write": {
+      "target": "content-mcp",
+      "actor": "oauth-or-personal-token-principal",
+      "checks": ["content_write_scope", "explicit_mind", "site_selected_target_match", "current_acl", "idempotency", "head_cas"],
+      "errors": ["writable_target_required", "writable_target_mismatch", "writable_target_unavailable", "revision_conflict", "idempotency_conflict"],
+      "compatibility": "same-name-new-target-schema"
+    },
+    "content-ingress": {
+      "target": "content-mcp",
+      "actor": "oauth-or-personal-token-principal",
+      "checks": ["content_write_scope", "site_selected_target_match", "source_owner", "size", "sha256", "quota", "expiry"],
+      "errors": ["writable_target_required", "writable_target_mismatch", "file_ingress_source_unavailable", "file_ingress_intent_conflict", "capacity_limit"],
+      "compatibility": "same-name-new-target-schema"
+    },
+    "mcp-transport": {
+      "target": "content-mcp",
+      "actor": "oauth-or-personal-token-principal",
+      "checks": ["bearer_every_post", "exact_resource", "protocol_envelope", "per_method_or_tool_scope", "current_access"],
+      "errors": ["oauth_challenge", "protocol_error", "tool_error"],
+      "compatibility": "profile-specific-lifecycle"
+    },
+    "capability-ingress": {
+      "target": "content-delivery",
+      "actor": "one-use-capability",
+      "checks": ["same_origin_capability", "target_pin", "size", "sha256", "quota", "expiry"],
+      "errors": ["not_found", "gone", "conflict", "invalid_request"],
+      "compatibility": "keep-route-new-target-pin"
+    },
+    "oauth": {
+      "target": "oauth-adapter",
+      "actor": "public-client-or-sites-principal",
+      "checks": ["pkce", "exact_redirect", "exact_resource", "trusted_sites_identity", "grant_lifecycle"],
+      "errors": ["oauth_protocol_error"],
+      "compatibility": "keep-route"
+    },
+    "delivery-grant": {
+      "target": "content-delivery",
+      "actor": "one-use-opaque-grant",
+      "checks": ["grant_verifier", "captured_principal", "captured_mind_revision", "current_read_access", "one_use"],
+      "errors": ["indistinguishable_not_found"],
+      "compatibility": "keep-or-move-issuer"
+    },
+    "compat-removed": {
+      "target": "none",
+      "actor": "none",
+      "checks": [],
+      "errors": ["invalid_params_or_method_not_found"],
+      "compatibility": "omit-and-reject"
+    }
+  },
+  "restRoutes": [
+    {"key":"GET /api/v1/session","disposition":"keep","profile":"web-session","mindScope":"none","owner":"none"},
+    {"key":"POST /api/v1/account","disposition":"keep","profile":"web-bootstrap","mindScope":"personal-bootstrap","owner":"none"},
+    {"key":"PATCH /api/v1/account","disposition":"keep","profile":"web-write","mindScope":"personal-metadata","owner":"none"},
+    {"key":"GET /api/v1/account/deletion-impact","disposition":"keep","profile":"web-read","mindScope":"account-cascade","owner":"none"},
+    {"key":"DELETE /api/v1/account","disposition":"keep","profile":"web-write","mindScope":"account-cascade","owner":"none"},
+    {"key":"GET /api/v1/minds","disposition":"keep","profile":"web-read","mindScope":"current-access-metadata","owner":"none"},
+    {"key":"POST /api/v1/minds","disposition":"keep","profile":"web-write","mindScope":"new-ordinary","owner":"none"},
+    {"key":"GET /api/v1/minds/{mind_ref}","disposition":"keep","profile":"web-read","mindScope":"explicit-current-metadata","owner":"none"},
+    {"key":"GET /api/v1/minds/{mind_ref}/capacity","disposition":"keep","profile":"web-read","mindScope":"explicit-current-capacity","owner":"none"},
+    {"key":"POST /api/v1/minds/{mind_ref}/markdown-import-plans","disposition":"keep","profile":"web-import","mindScope":"explicit-base-revision","owner":"none"},
+    {"key":"POST /api/v1/minds/{mind_ref}/markdown-imports","disposition":"keep","profile":"web-import","mindScope":"explicit-base-revision","owner":"none"},
+    {"key":"GET /api/v1/markdown-imports/{import_id}","disposition":"keep","profile":"web-import","mindScope":"session-pinned","owner":"none"},
+    {"key":"PUT /api/v1/markdown-imports/{import_id}/batches/{checkpoint}","disposition":"keep","profile":"web-import","mindScope":"session-pinned","owner":"none"},
+    {"key":"POST /api/v1/markdown-imports/{import_id}/validate","disposition":"keep","profile":"web-import","mindScope":"session-pinned","owner":"none"},
+    {"key":"POST /api/v1/markdown-imports/{import_id}/commit","disposition":"keep","profile":"web-import","mindScope":"session-pinned-exact-head","owner":"none"},
+    {"key":"DELETE /api/v1/markdown-imports/{import_id}","disposition":"keep","profile":"web-import","mindScope":"session-pinned","owner":"none"},
+    {"key":"PATCH /api/v1/minds/{mind_ref}","disposition":"keep","profile":"web-write","mindScope":"explicit-current-metadata","owner":"none"},
+    {"key":"GET /api/v1/minds/{mind_ref}/deletion-impact","disposition":"keep","profile":"web-read","mindScope":"explicit-whole-mind","owner":"none"},
+    {"key":"DELETE /api/v1/minds/{mind_ref}","disposition":"keep","profile":"web-write","mindScope":"explicit-whole-mind","owner":"none"},
+    {"key":"GET /api/v1/public-minds","disposition":"keep","profile":"web-read","mindScope":"public-catalog-metadata","owner":"none"},
+    {"key":"PUT /api/v1/minds/{mind_ref}/visibility","disposition":"keep","profile":"web-write","mindScope":"explicit-current-metadata","owner":"none"},
+    {"key":"GET /api/v1/minds/{mind_ref}/members","disposition":"keep","profile":"web-read","mindScope":"explicit-current-membership","owner":"none"},
+    {"key":"PATCH /api/v1/minds/{mind_ref}/members/{member_id}","disposition":"keep","profile":"web-write","mindScope":"explicit-current-membership","owner":"none"},
+    {"key":"DELETE /api/v1/minds/{mind_ref}/members/{member_id}","disposition":"keep","profile":"web-write","mindScope":"explicit-current-membership","owner":"none"},
+    {"key":"POST /api/v1/minds/{mind_ref}/leave","disposition":"keep","profile":"web-write","mindScope":"explicit-current-membership","owner":"none"},
+    {"key":"POST /api/v1/minds/{mind_ref}/ownership-transfer","disposition":"keep","profile":"web-write","mindScope":"explicit-current-membership","owner":"none"},
+    {"key":"GET /api/v1/invitations","disposition":"keep","profile":"web-read","mindScope":"invitation-pinned","owner":"none"},
+    {"key":"GET /api/v1/invitations-overview","disposition":"keep","profile":"web-read","mindScope":"invitation-pinned","owner":"none"},
+    {"key":"POST /api/v1/minds/{mind_ref}/invitations","disposition":"keep","profile":"web-write","mindScope":"explicit-current-membership","owner":"none"},
+    {"key":"POST /api/v1/invitations/{invitation_id}/accept","disposition":"keep","profile":"web-write","mindScope":"invitation-pinned","owner":"none"},
+    {"key":"POST /api/v1/invitations/{invitation_id}/reject","disposition":"keep","profile":"web-write","mindScope":"invitation-pinned","owner":"none"},
+    {"key":"POST /api/v1/invitations/{invitation_id}/reissue","disposition":"keep","profile":"web-write","mindScope":"invitation-pinned","owner":"none"},
+    {"key":"DELETE /api/v1/invitations/{invitation_id}","disposition":"keep","profile":"web-write","mindScope":"invitation-pinned","owner":"none"},
+    {"key":"GET /api/v1/mcp-tokens","disposition":"keep","profile":"web-read","mindScope":"credential-projection","owner":"none"},
+    {"key":"POST /api/v1/mcp-tokens","disposition":"keep","profile":"web-write","mindScope":"credential-lifecycle","owner":"none"},
+    {"key":"PATCH /api/v1/mcp-tokens/{personal_token_ref}/mind-access","disposition":"change","profile":"credential-control","mindScope":"single-writable-target","owner":"MD-339"},
+    {"key":"DELETE /api/v1/mcp-tokens/{personal_token_ref}","disposition":"keep","profile":"credential-control","mindScope":"credential-lifecycle","owner":"none"},
+    {"key":"GET /api/v1/connections","disposition":"change","profile":"credential-control","mindScope":"current-readable-and-single-writable","owner":"MD-339"},
+    {"key":"GET /api/v1/connections/{connection_ref}","disposition":"change","profile":"credential-control","mindScope":"current-readable-and-single-writable","owner":"MD-339"},
+    {"key":"PATCH /api/v1/connections/{connection_ref}/mind-access","disposition":"change","profile":"credential-control","mindScope":"single-writable-target","owner":"MD-339"},
+    {"key":"DELETE /api/v1/connections/{connection_ref}","disposition":"keep","profile":"credential-control","mindScope":"credential-lifecycle","owner":"none"}
+  ],
+  "auxiliaryHttpRoutes": [
+    {"key":"GET /api/v1/internal/operators/users","disposition":"keep","profile":"operator-read","owner":"none"},
+    {"key":"GET /internal/operators/users","disposition":"keep","profile":"operator-read","owner":"none"},
+    {"key":"GET /api/v1/exports/{grant}","disposition":"move","profile":"delivery-grant","owner":"MD-359"},
+    {"key":"GET /api/bundle-download/{grant}","disposition":"keep","profile":"delivery-grant","owner":"none"},
+    {"key":"GET /api/file-ingress/v1/upload-intents/{capability}","disposition":"change","profile":"capability-ingress","owner":"MD-339"},
+    {"key":"PUT /api/file-ingress/v1/upload-intents/{capability}","disposition":"change","profile":"capability-ingress","owner":"MD-339"},
+    {"key":"GET /.well-known/oauth-protected-resource","disposition":"keep","profile":"oauth","owner":"none"},
+    {"key":"GET /.well-known/oauth-protected-resource/api/mcp","disposition":"keep","profile":"oauth","owner":"none"},
+    {"key":"GET /.well-known/oauth-authorization-server","disposition":"keep","profile":"oauth","owner":"none"},
+    {"key":"GET /.well-known/openid-configuration","disposition":"keep","profile":"oauth","owner":"none"},
+    {"key":"POST /oauth/register","disposition":"keep","profile":"oauth","owner":"none"},
+    {"key":"GET /oauth/authorize","disposition":"keep","profile":"oauth","owner":"none"},
+    {"key":"POST /oauth/authorize","disposition":"keep","profile":"oauth","owner":"none"},
+    {"key":"POST /oauth/token","disposition":"keep","profile":"oauth","owner":"none"},
+    {"key":"POST /oauth/revoke","disposition":"keep","profile":"oauth","owner":"none"},
+    {"key":"POST /api/mcp","disposition":"change","profile":"mcp-transport","owner":"MD-339"},
+    {"key":"POST /api/mcp/2025-11-25","disposition":"change","profile":"mcp-transport","owner":"MD-339"},
+    {"key":"ANY /mcp","disposition":"remove","profile":"compat-removed","owner":"none"}
+  ],
+  "uiRoutes": [
+    {"pattern":"/","disposition":"keep","owner":"none"},
+    {"pattern":"/me","disposition":"keep","owner":"none"},
+    {"pattern":"/minds","disposition":"keep","owner":"none"},
+    {"pattern":"/{space_handle}","disposition":"keep","owner":"none"},
+    {"pattern":"/public","disposition":"keep","owner":"none"},
+    {"pattern":"/invitations","disposition":"keep","owner":"none"},
+    {"pattern":"/settings/account","disposition":"keep","owner":"none"},
+    {"pattern":"/settings/mcp","disposition":"keep","owner":"none"},
+    {"pattern":"/settings/connections","disposition":"change","owner":"MD-339"},
+    {"pattern":"/settings/connections/{connection_ref}","disposition":"change","owner":"MD-339"},
+    {"pattern":"/settings/developer/mcp","disposition":"change","owner":"MD-339"},
+    {"pattern":"/help/codex","disposition":"change","owner":"MD-339"},
+    {"pattern":"/help","disposition":"change","owner":"MD-339"},
+    {"pattern":"/internal/operators/users","disposition":"keep","owner":"none"}
+  ],
+  "mcpTools": [
+    {"name":"list_minds","disposition":"keep","profile":"content-read","mindScope":"discovery-current-access","owner":"none"},
+    {"name":"resolve_mind","disposition":"keep","profile":"content-read","mindScope":"explicit-handle","owner":"none"},
+    {"name":"get_mind_info","disposition":"change","profile":"content-read","mindScope":"explicit-mind-revision","owner":"MD-339"},
+    {"name":"get_mind_bindings","disposition":"remove","profile":"compat-removed","mindScope":"none","owner":"MD-339"},
+    {"name":"browse_entries","disposition":"change","profile":"content-read","mindScope":"explicit-mind-revision","owner":"MD-339"},
+    {"name":"search","disposition":"change","profile":"content-read","mindScope":"explicit-mind-revision","owner":"MD-339"},
+    {"name":"fetch","disposition":"change","profile":"content-read","mindScope":"opaque-exact-revision-locator","owner":"MD-339"},
+    {"name":"list_revisions","disposition":"change","profile":"content-read","mindScope":"explicit-mind","owner":"MD-339"},
+    {"name":"get_revision","disposition":"change","profile":"content-read","mindScope":"explicit-mind-exact-revision","owner":"MD-339"},
+    {"name":"validate_mind","disposition":"change","profile":"content-read","mindScope":"explicit-mind-revision","owner":"MD-339"},
+    {"name":"list_bundle_files","disposition":"change","profile":"content-read","mindScope":"explicit-mind-revision","owner":"MD-339"},
+    {"name":"set_read_mind_binding","disposition":"remove","profile":"compat-removed","mindScope":"none","owner":"MD-339"},
+    {"name":"set_write_mind_binding","disposition":"move","profile":"compat-removed","mindScope":"single-writable-target","owner":"MD-339"},
+    {"name":"get_file_ingress_capabilities","disposition":"change","profile":"content-read","mindScope":"none","owner":"MD-339"},
+    {"name":"create_file_upload_intent","disposition":"change","profile":"content-ingress","mindScope":"explicit-selected-target","owner":"MD-339"},
+    {"name":"stage_bundle_file","disposition":"change","profile":"content-ingress","mindScope":"explicit-selected-target","owner":"MD-339"},
+    {"name":"reconcile_file_stage","disposition":"change","profile":"content-ingress","mindScope":"explicit-selected-target","owner":"MD-339"},
+    {"name":"get_bundle_file_download","disposition":"change","profile":"content-read","mindScope":"explicit-mind-revision","owner":"MD-339"},
+    {"name":"commit_changeset","disposition":"change","profile":"content-write","mindScope":"explicit-selected-target-head","owner":"MD-339"},
+    {"name":"reconcile_changeset","disposition":"change","profile":"content-write","mindScope":"explicit-selected-target-head","owner":"MD-339"},
+    {"name":"capture_knowledge","disposition":"change","profile":"content-write","mindScope":"explicit-selected-private-target-head","owner":"MD-339"},
+    {"name":"start_export","disposition":"move","profile":"compat-removed","mindScope":"explicit-mind-revision","owner":"MD-359"},
+    {"name":"get_export_status","disposition":"move","profile":"compat-removed","mindScope":"job-pinned-revision","owner":"MD-359"}
+  ],
+  "targetMcpCatalog": ["list_minds", "resolve_mind", "get_mind_info", "browse_entries", "search", "fetch", "list_revisions", "get_revision", "validate_mind", "list_bundle_files", "get_file_ingress_capabilities", "create_file_upload_intent", "stage_bundle_file", "reconcile_file_stage", "get_bundle_file_download", "commit_changeset", "reconcile_changeset", "capture_knowledge"],
+  "schemaDiffs": [
+    {"operation":"create_file_upload_intent","removeRequired":["write_binding_id"],"keepRequired":["mind","source_kind","display_filename","expected_size","expected_sha256","idempotency_key"],"addRequired":[]},
+    {"operation":"stage_bundle_file","removeRequired":["write_binding_id"],"keepRequired":["mind","file","idempotency_key"],"addRequired":[]},
+    {"operation":"reconcile_file_stage","removeRequired":["write_binding_id"],"keepRequired":["mind","source_kind","display_filename","media_type","sha256","size","idempotency_key"],"addRequired":[]},
+    {"operation":"commit_changeset","removeRequired":["write_binding_id"],"keepRequired":["mind","expected_revision","idempotency_key","operations"],"addRequired":[]},
+    {"operation":"reconcile_changeset","removeRequired":["write_binding_id"],"keepRequired":["mind","expected_revision","idempotency_key","operations"],"addRequired":[]},
+    {"operation":"capture_knowledge","removeRequired":["write_binding_id","expected_binding_version"],"keepRequired":["mind","expected_revision","idempotency_key"],"addRequired":[]},
+    {"operation":"get_file_ingress_capabilities","outputRenames":{"sources[].requires_write_binding":"sources[].requires_writable_target"}},
+    {"operation":"PATCH /api/v1/connections/{connection_ref}/mind-access","removeEnum":["attach_read","detach_read"],"keepEnum":["select_write","clear_write"],"renameFields":{"expected_binding_version":"expected_target_version"}},
+    {"operation":"PATCH /api/v1/mcp-tokens/{personal_token_ref}/mind-access","removeEnum":["attach_read","detach_read"],"keepEnum":["select_write","clear_write"],"renameFields":{"expected_binding_version":"expected_target_version"}}
+  ],
+  "retiredMcpTools": ["get_mind_bindings", "set_read_mind_binding", "set_write_mind_binding", "start_export", "get_export_status"],
+  "retiredReadErrors": ["mind_binding_required"],
+  "retiredWriteErrors": ["write_binding_required", "write_binding_stale", "binding_owner_revoked", "binding_state_unavailable"],
+  "targetWriteErrors": ["writable_target_required", "writable_target_mismatch", "writable_target_unavailable"],
+  "protocolProfiles": {
+    "2026-07-28": {
+      "endpoint": "/api/mcp",
+      "keep": ["resources/templates/list"],
+      "change": ["server/discover", "resources/list", "resources/read", "tools/list", "tools/call"],
+      "removeWithMethodNotFound": ["initialize", "ping"]
+    },
+    "2025-11-25": {
+      "endpoint": "/api/mcp/2025-11-25",
+      "keep": ["notifications/initialized", "ping"],
+      "change": ["initialize", "tools/list", "tools/call"],
+      "removeWithMethodNotFound": ["server/discover", "resources/templates/list", "resources/list", "resources/read"]
+    }
+  },
+  "resources": {
+    "modern": ["resources/list", "resources/read", "resources/templates/list-empty"],
+    "compatibility": [],
+    "uriPatterns": ["okf://spaces/{space-id}/revisions/{revision-id}/index", "okf://spaces/{space-id}/revisions/{revision-id}/entries/{path}"],
+    "implicitHeadFallback": false,
+    "bearerUri": false
+  },
+  "pluginHelp": [
+    {"surface":"marketplace-package","disposition":"change","requirements":["AVAILABLE", "ON_USE", "transport:/api/mcp/2025-11-25", "oauth_resource:/api/mcp", "new_immutable_version"]},
+    {"surface":"bundled-skill","disposition":"change","requirements":["explicit_mind", "explicit_revision_when_historical", "no_binding_tools", "no_mcp_export", "site_target_control"]},
+    {"surface":"/help/codex","disposition":"change","requirements":["install", "authenticate_read", "read_explicit_mind", "select_write_target_on_site_only_when_writing"]},
+    {"surface":"/help","disposition":"change","requirements":["no_removed_binding_tools", "no_removed_export_tools"]},
+    {"surface":"plugin-label","disposition":"keep","requirements":["Mind Diary UAT", "no_production_claim"]}
+  ],
+  "migrationOwners": {
+    "MD-339": "writable-target representation, legacy binding migration, reconnect/reissue and fail-closed compatibility",
+    "MD-359": "Sites-owned import/export delta routes and projections",
+    "integration-owner": "runtime implementation, plugin publication and exact UAT evidence after owning contracts"
+  }
+}
