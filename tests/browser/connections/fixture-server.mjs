@@ -92,8 +92,9 @@ const personalTokens = Array.from({ length: requestedCount }, (_, offset) => {
 
 const revokedConnections = new Set();
 const revokedTokens = new Set();
-let bindingVersion = 4;
+let targetVersion = 4;
 let createdToken = null;
+const clearedConnectionTargets = new Set();
 
 function cookie(request, name) {
   const header = request.headers.cookie ?? "";
@@ -126,23 +127,24 @@ function page(items, cursor) {
   });
 }
 
-function access(canWrite = true) {
+function access(canWrite = true, hasSelectedTarget = canWrite) {
   return Object.freeze({
-    bindingVersion,
-    readableMinds: Object.freeze([
-      Object.freeze({ kind: "available", mind: minds[0] }),
-      Object.freeze({
-        kind: "unavailable",
-        staleAccessRef: presentationRef("stale_v1_", 1),
-      }),
-    ]),
-    writableMind: canWrite ? minds[1] : undefined,
+    targetVersion,
+    readableMinds: minds,
+    writableMind: hasSelectedTarget ? minds[1] : null,
+    writableTargetState: hasSelectedTarget ? "selected" : "not_selected",
     eligibleMinds: minds,
   });
 }
 
 function connectionDetail(item) {
-  return Object.freeze({ ...item, access: access(item.canWrite) });
+  return Object.freeze({
+    ...item,
+    access: access(
+      item.canWrite,
+      item.canWrite && !clearedConnectionTargets.has(item.connectionRef),
+    ),
+  });
 }
 
 function tokenDetail(item) {
@@ -323,12 +325,23 @@ const server = createServer(async (request, response) => {
     if (connectionApi && method === "PATCH" && url.pathname.endsWith("/mind-access")) {
       const command = await body(request);
       await new Promise((resolve) => setTimeout(resolve, 120));
-      if (command?.expected_binding_version !== bindingVersion) {
-        json(response, 409, { error: { code: "binding_version_conflict" } });
+      if (command?.expected_target_version !== targetVersion) {
+        json(response, 409, { error: { code: "target_conflict" } });
         return;
       }
-      bindingVersion += 1;
-      json(response, 200, { ok: true, data: { changed: true, replayed: false } });
+      if (command?.action === "clear_write") {
+        clearedConnectionTargets.add(connectionApi[1]);
+      } else if (command?.action === "select_write") {
+        clearedConnectionTargets.delete(connectionApi[1]);
+      } else {
+        json(response, 400, { error: { code: "invalid_request" } });
+        return;
+      }
+      targetVersion += 1;
+      json(response, 200, {
+        ok: true,
+        data: { changed: true, replayed: false, target_version: targetVersion },
+      });
       return;
     }
     if (url.pathname === "/api/v1/mcp-tokens" && method === "POST") {
