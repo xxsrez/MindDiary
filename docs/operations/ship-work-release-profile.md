@@ -1256,11 +1256,15 @@ viewports и выдаёт самостоятельный receipt только п
 assertion registry. Gate сверяет фактически выполненные Playwright/Chromium с
 package, lock integrity и закреплённым browser revision и сохраняет hash exact
 executable. Hosted complement после Sites deploy не выводится из local result:
-`npm run verify:admin-shell-uat` пересчитывает exact archive/server и raw live
-asset bytes, связывает их с save/version/deploy/current connector read-backs и
-четырьмя in-app Browser journeys. Самозаявленные ID/digests/готовый receipt,
-generic visual approval, screenshot как evidence и manual review queue не
-являются success path.
+`npm run join:admin-shell-uat-readback` пересчитывает exact archive/server и raw
+live asset bytes, но всегда выдаёт только nonterminal
+`structurally_verified_readback`, `hosted_evidence=false` и
+`provenance=unverified-local-files`. Hosted PASS может зафиксировать только
+orchestrating agent по прямым same-run Sites connector и in-app Browser
+observations, отдельно сохранив hashes raw tool outputs и их refs. Локальные
+lookalike inputs, самозаявленные ID/digests/готовый receipt, generic visual
+approval, screenshot как evidence и manual review queue не являются success
+path.
 
 Все commands выполняются прямым `argv` без shell. Канонический full dev launcher
 проекта — root `npm run dev`; его machine event сообщает loopback URL,

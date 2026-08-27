@@ -64,12 +64,14 @@ default browser и обычный Chrome не запускаются; Chrome д�
   и четыре DOM/accessibility/geometry journeys из одного approved in-app
   Browser observation после provider read-back.
 
-Verifier сам получает candidate tree и tracked project из Git, считает archive
-и server bundle SHA-256, сверяет archive hash/size с `get_site_version`, а
-candidate SHA — с его `source.commit_sha`. Затем он считает live asset hashes
-из raw bytes и требует exact byte equality с asset composition того же Git
-candidate. Самозаявленные digest, version/deployment ID или готовый receipt в
-CLI не принимаются.
+Offline joiner получает candidate tree и tracked project из Git, считает
+archive и server bundle SHA-256, сверяет archive hash/size с заявленным
+`get_site_version`, а candidate SHA — с его `source.commit_sha`. Затем он
+считает live asset hashes из raw bytes и требует exact byte equality с asset
+composition того же Git candidate. Это доказывает согласованность байтов и
+полей, но не доказывает, что JSON действительно вернули Sites connector и
+in-app Browser: локальная программа не имеет platform attestation для такого
+утверждения.
 
 Live asset digest вычисляется из bytes, а не из URL, cache label или visual
 similarity. В Browser на UAT origin используется следующий bounded same-origin
@@ -116,30 +118,65 @@ bottom, first key content top, document/body overflow и минимальный 
 проверенных navigation/action targets. Бюджеты: overflow `0..1px`, один `h1`,
 hit target `>=44px`, header полностью и key content начало внутри viewport.
 Названия обязательных checks и exact JSON shape задаёт
-`scripts/verify-admin-shell-uat-receipt.mjs`; произвольное `approved`, ссылка на
+`scripts/join-admin-shell-uat-readback.mjs`; произвольное `approved`, ссылка на
 скриншот или ручная очередь не принимаются.
 
-Оба raw inputs и итоговый receipt хранятся только в private temporary evidence
-storage. Raw asset bytes остаются только в browser input и не переходят в
-receipt. В итоговом документе запрещены email, cookie, authorization/token,
+Оба raw inputs и итоговый structural join хранятся только в private temporary
+evidence storage. Raw asset bytes остаются только в browser input и не
+переходят в join. В нём запрещены email, cookie, authorization/token,
 principal/Mind/revision IDs, private content, download URL и screenshot path.
-Verifier не принимает заранее сформированный receipt: он создаёт новый mode
-`0600` `mind-diary/admin-shell-uat-evidence/v2` на том же checkout:
+Команда создаёт mode `0600`
+`mind-diary/admin-shell-uat-readback-join/v1`:
 
 ```bash
-npm run verify:admin-shell-uat -- \
+npm run join:admin-shell-uat-readback -- \
   --provider-readback <private-temp-directory>/provider-readback.json \
   --browser-readback <private-temp-directory>/browser-readback.json \
   --artifact-archive <exact-archive-passed-to-save-site-version> \
   --candidate-sha <exact-deployed-sha> \
-  --receipt-out <private-temp-directory>/admin-shell-uat.json
+  --join-out <private-temp-directory>/admin-shell-uat-readback-join.json
 ```
 
-Final receipt cryptographically включает hashes обоих raw input, archive,
-server bundle и обоих live assets. Любой изменённый byte, подставленный ID,
-missing/mismatched field, failed journey или unsafe evidence завершает command
-ненулевым кодом. Local JSON, созданный без реальных Sites connector calls и
-in-app Browser observation, не является hosted evidence даже при правильной
-форме; approved surfaces являются authority источника, verifier обеспечивает
-целостность и exact join после capture. Только passing local receipt плюс
-passing hosted receipt относятся к завершённой browser-части MD-347.
+Join включает hashes обоих raw input, archive, server bundle и live assets.
+Любой изменённый byte, несогласованный ID, failed journey или unsafe evidence
+завершает command ненулевым кодом. Даже успешная структурная проверка всегда
+выдаёт только:
+
+```json
+{
+  "status": "structurally_verified_readback",
+  "hosted_evidence": false,
+  "acceptance": "nonterminal",
+  "provenance": "unverified-local-files"
+}
+```
+
+Локальный join никогда не пишет `status: passed`, не создаёт hosted receipt и
+не может повысить локальные lookalike JSON/archive до UAT evidence.
+
+### Same-run hosted acceptance
+
+Hosted acceptance может зафиксировать только тот orchestrating agent, который
+в одном непрерывном run сам вызвал Sites connector для save/version/deploy/
+terminal read-back и сам выполнил observations в Codex in-app Browser. Он
+сохраняет raw outputs каждого Sites call и Browser read-back отдельно,
+вычисляет их SHA-256, сопоставляет с structural join и ссылается на конкретные
+same-run tool observations. Переданные файлы, старый task report или чужой
+receipt не заменяют прямое наблюдение.
+
+Такой agent-owned record использует schema
+`mind-diary/admin-shell-uat-evidence/v3`, `status: passed`,
+`hosted_evidence: true`, `provenance: direct-same-run-observation` и содержит:
+
+- exact candidate/tree и structural join SHA-256;
+- пять отдельных Sites operation refs с hashes их raw outputs;
+- in-app Browser observation ref и hash его raw read-back;
+- exact project/version/deployment/archive/server/live-asset lineage;
+- четыре принятых journeys и числовые budgets.
+
+Ни один local script в репозитории не создаёт и не валидирует этот `v3` как
+hosted PASS: authority выводится из реально наблюдаемых tool calls текущего
+orchestrator run, а не из формы файла. При отсутствии этих прямых observations
+результат остаётся nonterminal независимо от совпадения всех hashes. Только
+passing local browser receipt и direct same-run hosted acceptance завершают
+browser-часть MD-347.

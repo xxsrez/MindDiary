@@ -16,8 +16,9 @@ import {
   safeCode,
 } from "./lib/multi-principal-probe-core.mjs";
 
+// This process verifies byte/shape consistency only; it cannot attest hosted provenance.
 const ROOT = resolve(import.meta.dirname, "..");
-const RECEIPT_SCHEMA = "mind-diary/admin-shell-uat-evidence/v2";
+const STRUCTURAL_JOIN_SCHEMA = "mind-diary/admin-shell-uat-readback-join/v1";
 const PROVIDER_READBACK_SCHEMA = "mind-diary/admin-shell-sites-provider-readback/v1";
 const BROWSER_READBACK_SCHEMA = "mind-diary/admin-shell-in-app-browser-readback/v1";
 const UAT_URL = "https://mind-diary.example.invalid";
@@ -98,7 +99,7 @@ export function parseCli(argv) {
     "browser_readback",
     "artifact_archive",
     "candidate_sha",
-    "receipt_out",
+    "join_out",
   ];
   for (const key of Object.keys(options)) if (!supported.includes(key)) fail("unsupported_cli_argument");
   for (const key of supported) if (typeof options[key] !== "string") fail(`missing_${key}`);
@@ -288,81 +289,99 @@ function browserBinding(readback, expected, candidateAssets) {
   return Object.freeze({ assets: Object.freeze(assets), journeys, observedAt });
 }
 
-export function createVerifiedReceipt(input, expected) {
+export function createStructuralJoin(input, expected) {
   const provider = providerBinding(input.providerReadback, expected, input.archiveBytes);
   const browser = browserBinding(input.browserReadback, {
     providerObservedAt: provider.provider_observed_at_utc,
   }, input.candidateAssets);
   const serverBundleSha256 = sha256Bytes(input.serverBundleBytes);
   const unsigned = Object.freeze({
-    schema: RECEIPT_SCHEMA,
-    status: "passed",
+    schema: STRUCTURAL_JOIN_SCHEMA,
+    status: "structurally_verified_readback",
+    hosted_evidence: false,
+    acceptance: "nonterminal",
+    provenance: "unverified-local-files",
     candidate_sha: expected.candidateSha,
     live_url: UAT_URL,
-    evidence_basis: "provider-readback-plus-in-app-browser-raw-bytes-dom-accessibility-geometry",
-    browser_surface: "codex-in-app-browser",
+    evidence_basis: "offline-byte-and-shape-join-only",
+    claimed_browser_surface: "codex-in-app-browser",
     observed_at_utc: browser.observedAt,
-    lineage: Object.freeze({
+    claimed_lineage: Object.freeze({
       candidate_sha: expected.candidateSha,
       source_tree_sha: expected.sourceTreeSha,
       site_project_id: provider.site_project_id,
       site_version_id: provider.site_version_id,
       deployment_id: provider.deployment_id,
       version_number: provider.version_number,
+    }),
+    byte_bindings: Object.freeze({
       artifact_archive_sha256: provider.artifact_archive_sha256,
       server_bundle_sha256: serverBundleSha256,
       shell_css_sha256: browser.assets["/ui/mind-diary-shell.css"],
       shell_client_sha256: browser.assets["/ui/mind-diary-shell-client.js"],
     }),
-    evidence_inputs: Object.freeze({
+    input_hashes: Object.freeze({
       provider_readback_sha256: sha256Bytes(input.providerReadbackBytes),
       browser_readback_sha256: sha256Bytes(input.browserReadbackBytes),
     }),
+    unresolved_provenance: Object.freeze([
+      "sites-connector-call-origin-not-authenticated-offline",
+      "in-app-browser-observation-origin-not-authenticated-offline",
+    ]),
     journeys: browser.journeys,
   });
-  const receipt = Object.freeze({
+  const join = Object.freeze({
     ...unsigned,
     artifact_sha256: digest(canonical(unsigned)),
   });
-  validateReceipt(receipt, { ...expected, provider, browser, serverBundleSha256, input });
-  return receipt;
+  validateStructuralJoin(join, { ...expected, provider, browser, serverBundleSha256, input });
+  return join;
 }
 
-export function validateReceipt(receipt, binding) {
-  if (!isRecord(receipt) || receipt.schema !== RECEIPT_SCHEMA || receipt.status !== "passed" ||
-      receipt.candidate_sha !== binding.candidateSha || receipt.live_url !== UAT_URL ||
-      receipt.evidence_basis !==
-        "provider-readback-plus-in-app-browser-raw-bytes-dom-accessibility-geometry" ||
-      receipt.browser_surface !== "codex-in-app-browser" || !isRecord(receipt.lineage) ||
-      !isRecord(receipt.evidence_inputs) || !Array.isArray(receipt.journeys)) {
-    fail("invalid_uat_receipt");
+export function validateStructuralJoin(join, binding) {
+  if (!isRecord(join) || join.schema !== STRUCTURAL_JOIN_SCHEMA ||
+      join.status !== "structurally_verified_readback" || join.hosted_evidence !== false ||
+      join.acceptance !== "nonterminal" || join.provenance !== "unverified-local-files" ||
+      join.candidate_sha !== binding.candidateSha || join.live_url !== UAT_URL ||
+      join.evidence_basis !== "offline-byte-and-shape-join-only" ||
+      join.claimed_browser_surface !== "codex-in-app-browser" ||
+      !isRecord(join.claimed_lineage) || !isRecord(join.byte_bindings) ||
+      !isRecord(join.input_hashes) || !Array.isArray(join.journeys) ||
+      canonical(join.unresolved_provenance) !== canonical([
+        "sites-connector-call-origin-not-authenticated-offline",
+        "in-app-browser-observation-origin-not-authenticated-offline",
+      ])) {
+    fail("invalid_uat_structural_join");
   }
-  const expectedLineage = {
+  const expectedClaimedLineage = {
     candidate_sha: binding.candidateSha,
     source_tree_sha: binding.sourceTreeSha,
     site_project_id: binding.provider.site_project_id,
     site_version_id: binding.provider.site_version_id,
     deployment_id: binding.provider.deployment_id,
     version_number: binding.provider.version_number,
+  };
+  const expectedByteBindings = {
     artifact_archive_sha256: binding.provider.artifact_archive_sha256,
     server_bundle_sha256: binding.serverBundleSha256,
     shell_css_sha256: binding.browser.assets["/ui/mind-diary-shell.css"],
     shell_client_sha256: binding.browser.assets["/ui/mind-diary-shell-client.js"],
   };
-  if (canonical(receipt.lineage) !== canonical(expectedLineage) ||
-      receipt.evidence_inputs.provider_readback_sha256 !==
+  if (canonical(join.claimed_lineage) !== canonical(expectedClaimedLineage) ||
+      canonical(join.byte_bindings) !== canonical(expectedByteBindings) ||
+      join.input_hashes.provider_readback_sha256 !==
         sha256Bytes(binding.input.providerReadbackBytes) ||
-      receipt.evidence_inputs.browser_readback_sha256 !==
+      join.input_hashes.browser_readback_sha256 !==
         sha256Bytes(binding.input.browserReadbackBytes) ||
-      canonical(receipt.journeys) !== canonical(binding.browser.journeys)) {
+      canonical(join.journeys) !== canonical(binding.browser.journeys)) {
     fail("uat_evidence_binding_mismatch");
   }
-  const { artifact_sha256: artifactSha256, ...unsigned } = receipt;
+  const { artifact_sha256: artifactSha256, ...unsigned } = join;
   if (!SHA256.test(artifactSha256 ?? "") || artifactSha256 !== digest(canonical(unsigned))) {
-    fail("uat_receipt_digest_mismatch");
+    fail("uat_structural_join_digest_mismatch");
   }
-  assertPrivacySafe(receipt);
-  return receipt;
+  assertPrivacySafe(join);
+  return join;
 }
 
 async function trackedContext(candidate) {
@@ -398,7 +417,7 @@ async function main() {
   try {
     const options = parseCli(process.argv.slice(2));
     if (options.help) {
-      process.stdout.write("Usage: npm run verify:admin-shell-uat -- --provider-readback <private-json> --browser-readback <private-json> --artifact-archive <exact-sites-tar.gz> --candidate-sha <exact-deployed-sha> --receipt-out <new-private-json>\n");
+      process.stdout.write("Usage: npm run join:admin-shell-uat-readback -- --provider-readback <private-json> --browser-readback <private-json> --artifact-archive <exact-sites-tar.gz> --candidate-sha <exact-deployed-sha> --join-out <new-private-json>\n");
       return;
     }
     const tracked = await trackedContext(options.candidate_sha);
@@ -426,18 +445,19 @@ async function main() {
       serverBundleBytes,
       candidateAssets: tracked.candidateAssets,
     });
-    const receipt = createVerifiedReceipt(input, tracked);
-    await writeFile(options.receipt_out, `${JSON.stringify(receipt, null, 2)}\n`, {
+    const join = createStructuralJoin(input, tracked);
+    await writeFile(options.join_out, `${JSON.stringify(join, null, 2)}\n`, {
       encoding: "utf8",
       flag: "wx",
       mode: 0o600,
     });
     process.stdout.write(`${JSON.stringify({
-      status: "passed",
-      candidate_sha: receipt.candidate_sha,
-      site_version_id: receipt.lineage.site_version_id,
-      deployment_id: receipt.lineage.deployment_id,
-      artifact_sha256: receipt.artifact_sha256,
+      status: join.status,
+      hosted_evidence: join.hosted_evidence,
+      acceptance: join.acceptance,
+      provenance: join.provenance,
+      candidate_sha: join.candidate_sha,
+      artifact_sha256: join.artifact_sha256,
     })}\n`);
   } catch (error) {
     process.stderr.write(`${JSON.stringify({

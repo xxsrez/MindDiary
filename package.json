@@ -30,7 +30,7 @@
     "gate:synthetic-multi-principal": "npm run build --silent && node scripts/run-synthetic-multi-principal-probe.mjs",
     "gate:synthetic-browser": "npm run build --silent && node scripts/run-synthetic-browser-gate.mjs",
     "gate:admin-shell-browser": "npm run build --silent && node scripts/run-admin-shell-browser-gate.mjs",
-    "verify:admin-shell-uat": "node scripts/verify-admin-shell-uat-receipt.mjs",
+    "join:admin-shell-uat-readback": "node scripts/join-admin-shell-uat-readback.mjs",
     "gate:oauth-direct-plugin": "npm run build --silent && node scripts/run-oauth-direct-plugin-probe.mjs",
     "gate:file-ingress-local": "npm run build --silent && node scripts/run-file-ingress-local-gate.mjs --sha HEAD --output build/file-ingress/local-receipt.json",
     "gate:performance": "npm run build --silent && node scripts/benchmark-runtime-performance.mjs",

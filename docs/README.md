@@ -143,7 +143,8 @@ operation disposition и migration принадлежат MD-337/MD-339.
   operator boundary и redacted exact-SHA receipt.
 - [Browser-проверка компактного admin shell](operations/admin-shell-browser-uat-runbook.md)
   — exact-SHA Playwright/Chromium gate для responsive/accessibility matrix и
-  отдельный UAT receipt с asset/deployment identity и числовыми DOM budgets.
+  nonterminal byte-level UAT readback join; hosted acceptance требует прямых
+  same-run Sites connector и in-app Browser observations.
 - [Hosted canary операторского каталога](operations/uat-operator-directory-canary.md)
   — three-actor restricted-UAT setup/verify/cleanup/recovery с
   environment-only session references, exact `404` boundary и redacted receipt.
