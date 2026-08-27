@@ -42,6 +42,71 @@ UAT deployment фиксируются отдельным release receipt, пот
 `not-available` является честным terminal result одной matrix row, но не
 делает release-blocking aggregate acceptance успешной.
 
+## Исполняемый evidence contract Release 0.3 (MD-314)
+
+MD-314 заменяет ручную интерпретацию этой таблицы машинным join, но не меняет
+исторические hosted observations выше и не превращает их в success. Его
+versioned registry находится в
+[`tests/fixtures/file-ingress-evidence/registry.json`](../../tests/fixtures/file-ingress-evidence/registry.json),
+а deterministic streamed fixtures — в
+[`tests/fixtures/file-ingress-evidence/synthetic-fixtures.json`](../../tests/fixtures/file-ingress-evidence/synthetic-fixtures.json).
+
+Registry содержит закрытое произведение шести `source_kind` на три profile:
+repository-local contract, Codex modern `2026-07-28` и isolated Codex
+compatibility `2025-11-25`. Каждая строка явно фиксирует transport,
+`actor_class`, `credential_class`, snapshot semantics, external prerequisite и
+`human_only_boundary`. Текущий synthetic gate не требует человеческой
+приёмки: для всех строк boundary равна `none`; недоступная внешняя capability
+остаётся `not_available`.
+
+Local receipt создаётся только в clean worktree exact `HEAD` и связывает
+candidate SHA, canonical registry digest, fixture-plan digest и закрытые
+assertion IDs. Он исполняет source adapters, 4 MiB и 256 MiB/+1 границы,
+streaming без full-file buffer, mixed-source + Markdown HEAD-CAS commit,
+stale/changed/retry, exact history/download/export и privacy checks. Local
+receipt доказывает только repository contract и никогда не заполняет hosted
+column:
+
+```bash
+npm run gate:file-ingress-local
+npm run readiness:file-ingress
+```
+
+Hosted receipt имеет отдельную strict schema на каждый exact Codex profile. Для
+`passed` row он обязан содержать один и тот же safe exact tuple
+`canonical_path + sha256 + size` после commit, history, download, actor-owned
+web export и post-redeploy read-back, а source snapshot обязан совпасть по
+digest/size и иметь ожидаемую `same_host_stable_snapshot`,
+`provider_native_snapshot` или `service_owned_snapshot` semantics. Общий
+receipt также доказывает один mixed-source + Markdown HEAD transition,
+synthetic-only idempotent setup/recovery/cleanup и exact client inventory.
+
+Для `not_available` row допустим только закрытый typed capability/transport
+code, `artifact_observations: null` и ноль unexpected side effects. Local path
+и workspace cross-host outcome дополнительно требует assertion об отсутствии
+URL/base64/provider/source fallback. `failed` row, stale/wrong candidate,
+registry drift, duplicate profile receipt или разные deployments дают
+machine-failed result; ни один из них не может быть повышен вручную.
+
+Terminal MD-311 join передаёт оба profile receipts явно и требует complete
+matrix:
+
+```bash
+node scripts/generate-file-ingress-matrix-report.mjs \
+  --sha HEAD \
+  --local-receipt build/file-ingress/local-receipt.json \
+  --hosted-receipt codex-modern-2026-07-28=/safe/path/modern.json \
+  --hosted-receipt codex-compat-2025-11-25=/safe/path/compat.json \
+  --output build/file-ingress/matrix-report.json \
+  --require-complete
+```
+
+Missing receipt сохраняется как concrete `hosted_receipt_missing` gap и даёт
+non-zero при `--require-complete`; typed `not_available` также не считается
+acceptance success. Любая failed row даёт non-zero независимо от этого flag.
+Machine report публикует только row/assertion gaps и не содержит поля human
+signoff или reviewer override.
+
 ## Повторяемый запуск
 
 Из clean checkout exact candidate:

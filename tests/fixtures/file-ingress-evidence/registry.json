@@ -1,0 +1,700 @@
+{
+  "schema": "mind-diary/file-ingress-evidence-registry/v1",
+  "release": "0.3",
+  "source_kinds": [
+    "session_attachment",
+    "local_path",
+    "workspace/generated_artifact",
+    "connector_object",
+    "bounded_in_memory",
+    "server_generated"
+  ],
+  "client_profiles": [
+    {
+      "id": "repository-node-test-v1",
+      "environment": "local_contract",
+      "client_class": "node_test_runner",
+      "protocol_profile": "application_contract"
+    },
+    {
+      "id": "codex-modern-2026-07-28",
+      "environment": "hosted_uat",
+      "client_class": "codex",
+      "protocol_profile": "2026-07-28"
+    },
+    {
+      "id": "codex-compat-2025-11-25",
+      "environment": "hosted_uat",
+      "client_class": "codex",
+      "protocol_profile": "2025-11-25"
+    }
+  ],
+  "assertion_ids": {
+    "local": [
+      "local.registry.closed-versioned",
+      "local.fixtures.deterministic-streamed",
+      "local.actor.synthetic-content-write",
+      "local.session-attachment.provider-native-contract",
+      "local.local-path.same-host-stable-snapshot",
+      "local.workspace.same-host-authority",
+      "local.connector.authorized-provider-object",
+      "local.bounded-in-memory.4mib-inclusive-plus-one",
+      "local.server-generated.streaming",
+      "local.boundary.256mib-inclusive-plus-one",
+      "local.streaming.no-full-buffer",
+      "local.mixed.atomic-markdown-and-all-sources",
+      "local.reconcile.stale-changed-retry",
+      "local.readback.commit-history-download-export",
+      "local.cross-host-and-provider-snapshot.fail-closed",
+      "local.unsupported.typed-zero-side-effects",
+      "local.privacy.redacted"
+    ],
+    "hosted": [
+      "hosted.profile.exact-client-inventory",
+      "hosted.actor.synthetic-oauth-content-write",
+      "hosted.snapshot.source-semantics",
+      "hosted.stage.exact-transport",
+      "hosted.commit.atomic-mixed-markdown-and-sources",
+      "hosted.readback.commit-history-download-web-export-redeploy",
+      "hosted.reconcile.stale-changed-retry",
+      "hosted.cleanup.synthetic-idempotent",
+      "hosted.privacy.redacted",
+      "hosted.unavailable.typed",
+      "hosted.unavailable.zero-side-effects",
+      "hosted.cross-host.no-fallback"
+    ]
+  },
+  "local_command_groups": [
+    {
+      "id": "source-adapters",
+      "command": [
+        "node",
+        "--test",
+        "tests/conformance/mcp-bundle-file-staging.test.mjs",
+        "tests/unit/local-file-companion.test.mjs",
+        "tests/integration/local-file-companion.test.mjs",
+        "tests/unit/local-file-upload-intents.test.mjs",
+        "tests/unit/connector-ingress.test.mjs",
+        "tests/unit/generated-artifacts.test.mjs"
+      ],
+      "assertion_ids": [
+        "local.session-attachment.provider-native-contract",
+        "local.local-path.same-host-stable-snapshot",
+        "local.workspace.same-host-authority",
+        "local.connector.authorized-provider-object",
+        "local.bounded-in-memory.4mib-inclusive-plus-one",
+        "local.server-generated.streaming",
+        "local.cross-host-and-provider-snapshot.fail-closed"
+      ]
+    },
+    {
+      "id": "streaming-boundaries",
+      "command": [
+        "node",
+        "--test",
+        "tests/integration/bundle-files-core.test.mjs",
+        "tests/integration/local-file-companion.test.mjs",
+        "tests/conformance/bundle-file-format-neutral-contract.test.mjs"
+      ],
+      "assertion_ids": [
+        "local.boundary.256mib-inclusive-plus-one",
+        "local.streaming.no-full-buffer"
+      ]
+    },
+    {
+      "id": "atomic-reconcile",
+      "command": [
+        "node",
+        "--test",
+        "tests/integration/mixed-file-ingress-commit.test.mjs",
+        "tests/integration/changeset-idempotency.test.mjs",
+        "tests/unit/file-ingress-coordinator.test.mjs",
+        "tests/conformance/mcp-binding-tools.test.mjs"
+      ],
+      "assertion_ids": [
+        "local.actor.synthetic-content-write",
+        "local.mixed.atomic-markdown-and-all-sources",
+        "local.reconcile.stale-changed-retry",
+        "local.unsupported.typed-zero-side-effects"
+      ]
+    },
+    {
+      "id": "exact-readback",
+      "command": [
+        "node",
+        "--test",
+        "tests/integration/bundle-files-core.test.mjs",
+        "tests/integration/export-download-grants.test.mjs",
+        "tests/unit/export-determinism.test.mjs",
+        "tests/integration/incremental-okf-transfer.test.mjs"
+      ],
+      "assertion_ids": [
+        "local.readback.commit-history-download-export"
+      ]
+    },
+    {
+      "id": "privacy",
+      "command": [
+        "node",
+        "--test",
+        "tests/integration/security-privacy-threat.test.mjs",
+        "tests/integration/privacy-safe-observability.test.mjs",
+        "tests/conformance/mcp-bundle-file-staging.test.mjs"
+      ],
+      "assertion_ids": [
+        "local.privacy.redacted"
+      ]
+    }
+  ],
+  "rows": [
+    {
+      "id": "local.session-attachment",
+      "evidence_scope": "local_contract",
+      "source_kind": "session_attachment",
+      "transport_id": "native_file_parameter",
+      "client_profile_id": "repository-node-test-v1",
+      "actor_class": "synthetic_registered_principal",
+      "credential_class": "synthetic_mcp_content_write",
+      "snapshot_semantics": "provider_native_snapshot",
+      "external_prerequisite": "none",
+      "human_only_boundary": "none",
+      "fixture_ids": ["session-attachment-small"],
+      "pass_assertion_ids": [
+        "local.registry.closed-versioned",
+        "local.fixtures.deterministic-streamed",
+        "local.actor.synthetic-content-write",
+        "local.session-attachment.provider-native-contract",
+        "local.streaming.no-full-buffer",
+        "local.mixed.atomic-markdown-and-all-sources",
+        "local.reconcile.stale-changed-retry",
+        "local.readback.commit-history-download-export",
+        "local.cross-host-and-provider-snapshot.fail-closed",
+        "local.unsupported.typed-zero-side-effects",
+        "local.privacy.redacted"
+      ],
+      "not_available_assertion_ids": []
+    },
+    {
+      "id": "local.local-path",
+      "evidence_scope": "local_contract",
+      "source_kind": "local_path",
+      "transport_id": "companion_upload_intent",
+      "client_profile_id": "repository-node-test-v1",
+      "actor_class": "synthetic_registered_principal",
+      "credential_class": "synthetic_mcp_content_write",
+      "snapshot_semantics": "same_host_stable_snapshot",
+      "external_prerequisite": "none",
+      "human_only_boundary": "none",
+      "fixture_ids": ["local-path-256mib", "local-path-256mib-plus-one"],
+      "pass_assertion_ids": [
+        "local.registry.closed-versioned",
+        "local.fixtures.deterministic-streamed",
+        "local.actor.synthetic-content-write",
+        "local.local-path.same-host-stable-snapshot",
+        "local.boundary.256mib-inclusive-plus-one",
+        "local.streaming.no-full-buffer",
+        "local.mixed.atomic-markdown-and-all-sources",
+        "local.reconcile.stale-changed-retry",
+        "local.readback.commit-history-download-export",
+        "local.cross-host-and-provider-snapshot.fail-closed",
+        "local.unsupported.typed-zero-side-effects",
+        "local.privacy.redacted"
+      ],
+      "not_available_assertion_ids": []
+    },
+    {
+      "id": "local.workspace-generated",
+      "evidence_scope": "local_contract",
+      "source_kind": "workspace/generated_artifact",
+      "transport_id": "companion_upload_intent",
+      "client_profile_id": "repository-node-test-v1",
+      "actor_class": "synthetic_registered_principal",
+      "credential_class": "synthetic_mcp_content_write",
+      "snapshot_semantics": "same_host_stable_snapshot",
+      "external_prerequisite": "none",
+      "human_only_boundary": "none",
+      "fixture_ids": ["workspace-generated-small"],
+      "pass_assertion_ids": [
+        "local.registry.closed-versioned",
+        "local.fixtures.deterministic-streamed",
+        "local.actor.synthetic-content-write",
+        "local.workspace.same-host-authority",
+        "local.streaming.no-full-buffer",
+        "local.mixed.atomic-markdown-and-all-sources",
+        "local.reconcile.stale-changed-retry",
+        "local.readback.commit-history-download-export",
+        "local.cross-host-and-provider-snapshot.fail-closed",
+        "local.unsupported.typed-zero-side-effects",
+        "local.privacy.redacted"
+      ],
+      "not_available_assertion_ids": []
+    },
+    {
+      "id": "local.connector-object",
+      "evidence_scope": "local_contract",
+      "source_kind": "connector_object",
+      "transport_id": "authorized_connector_object",
+      "client_profile_id": "repository-node-test-v1",
+      "actor_class": "synthetic_registered_principal",
+      "credential_class": "synthetic_mcp_content_write",
+      "snapshot_semantics": "provider_native_snapshot",
+      "external_prerequisite": "none",
+      "human_only_boundary": "none",
+      "fixture_ids": ["connector-object-small"],
+      "pass_assertion_ids": [
+        "local.registry.closed-versioned",
+        "local.fixtures.deterministic-streamed",
+        "local.actor.synthetic-content-write",
+        "local.connector.authorized-provider-object",
+        "local.streaming.no-full-buffer",
+        "local.mixed.atomic-markdown-and-all-sources",
+        "local.reconcile.stale-changed-retry",
+        "local.readback.commit-history-download-export",
+        "local.cross-host-and-provider-snapshot.fail-closed",
+        "local.unsupported.typed-zero-side-effects",
+        "local.privacy.redacted"
+      ],
+      "not_available_assertion_ids": []
+    },
+    {
+      "id": "local.bounded-in-memory",
+      "evidence_scope": "local_contract",
+      "source_kind": "bounded_in_memory",
+      "transport_id": "bounded_bytes",
+      "client_profile_id": "repository-node-test-v1",
+      "actor_class": "synthetic_registered_principal",
+      "credential_class": "synthetic_mcp_content_write",
+      "snapshot_semantics": "service_owned_snapshot",
+      "external_prerequisite": "none",
+      "human_only_boundary": "none",
+      "fixture_ids": ["bounded-4mib", "bounded-4mib-plus-one"],
+      "pass_assertion_ids": [
+        "local.registry.closed-versioned",
+        "local.fixtures.deterministic-streamed",
+        "local.actor.synthetic-content-write",
+        "local.bounded-in-memory.4mib-inclusive-plus-one",
+        "local.mixed.atomic-markdown-and-all-sources",
+        "local.reconcile.stale-changed-retry",
+        "local.readback.commit-history-download-export",
+        "local.unsupported.typed-zero-side-effects",
+        "local.privacy.redacted"
+      ],
+      "not_available_assertion_ids": []
+    },
+    {
+      "id": "local.server-generated",
+      "evidence_scope": "local_contract",
+      "source_kind": "server_generated",
+      "transport_id": "producer_stream",
+      "client_profile_id": "repository-node-test-v1",
+      "actor_class": "synthetic_registered_principal",
+      "credential_class": "synthetic_mcp_content_write",
+      "snapshot_semantics": "service_owned_snapshot",
+      "external_prerequisite": "none",
+      "human_only_boundary": "none",
+      "fixture_ids": ["server-generated-256mib", "server-generated-256mib-plus-one"],
+      "pass_assertion_ids": [
+        "local.registry.closed-versioned",
+        "local.fixtures.deterministic-streamed",
+        "local.actor.synthetic-content-write",
+        "local.server-generated.streaming",
+        "local.boundary.256mib-inclusive-plus-one",
+        "local.streaming.no-full-buffer",
+        "local.mixed.atomic-markdown-and-all-sources",
+        "local.reconcile.stale-changed-retry",
+        "local.readback.commit-history-download-export",
+        "local.unsupported.typed-zero-side-effects",
+        "local.privacy.redacted"
+      ],
+      "not_available_assertion_ids": []
+    },
+    {
+      "id": "hosted.modern.session-attachment",
+      "evidence_scope": "hosted_uat",
+      "source_kind": "session_attachment",
+      "transport_id": "native_file_parameter",
+      "client_profile_id": "codex-modern-2026-07-28",
+      "actor_class": "synthetic_registered_principal",
+      "credential_class": "synthetic_oauth_content_write",
+      "snapshot_semantics": "provider_native_snapshot",
+      "external_prerequisite": "synthetic_client_attachment",
+      "human_only_boundary": "none",
+      "fixture_ids": ["session-attachment-small"],
+      "pass_assertion_ids": [
+        "hosted.profile.exact-client-inventory",
+        "hosted.actor.synthetic-oauth-content-write",
+        "hosted.snapshot.source-semantics",
+        "hosted.stage.exact-transport",
+        "hosted.commit.atomic-mixed-markdown-and-sources",
+        "hosted.readback.commit-history-download-web-export-redeploy",
+        "hosted.reconcile.stale-changed-retry",
+        "hosted.cleanup.synthetic-idempotent",
+        "hosted.privacy.redacted"
+      ],
+      "not_available_assertion_ids": [
+        "hosted.profile.exact-client-inventory",
+        "hosted.actor.synthetic-oauth-content-write",
+        "hosted.unavailable.typed",
+        "hosted.unavailable.zero-side-effects",
+        "hosted.cleanup.synthetic-idempotent",
+        "hosted.privacy.redacted"
+      ]
+    },
+    {
+      "id": "hosted.modern.local-path",
+      "evidence_scope": "hosted_uat",
+      "source_kind": "local_path",
+      "transport_id": "companion_upload_intent",
+      "client_profile_id": "codex-modern-2026-07-28",
+      "actor_class": "synthetic_registered_principal",
+      "credential_class": "synthetic_oauth_content_write",
+      "snapshot_semantics": "same_host_stable_snapshot",
+      "external_prerequisite": "packaged_local_companion_same_host",
+      "human_only_boundary": "none",
+      "fixture_ids": ["local-path-256mib", "local-path-256mib-plus-one"],
+      "pass_assertion_ids": [
+        "hosted.profile.exact-client-inventory",
+        "hosted.actor.synthetic-oauth-content-write",
+        "hosted.snapshot.source-semantics",
+        "hosted.stage.exact-transport",
+        "hosted.commit.atomic-mixed-markdown-and-sources",
+        "hosted.readback.commit-history-download-web-export-redeploy",
+        "hosted.reconcile.stale-changed-retry",
+        "hosted.cleanup.synthetic-idempotent",
+        "hosted.privacy.redacted"
+      ],
+      "not_available_assertion_ids": [
+        "hosted.profile.exact-client-inventory",
+        "hosted.actor.synthetic-oauth-content-write",
+        "hosted.unavailable.typed",
+        "hosted.unavailable.zero-side-effects",
+        "hosted.cross-host.no-fallback",
+        "hosted.cleanup.synthetic-idempotent",
+        "hosted.privacy.redacted"
+      ]
+    },
+    {
+      "id": "hosted.modern.workspace-generated",
+      "evidence_scope": "hosted_uat",
+      "source_kind": "workspace/generated_artifact",
+      "transport_id": "companion_upload_intent",
+      "client_profile_id": "codex-modern-2026-07-28",
+      "actor_class": "synthetic_registered_principal",
+      "credential_class": "synthetic_oauth_content_write",
+      "snapshot_semantics": "same_host_stable_snapshot",
+      "external_prerequisite": "packaged_local_companion_trusted_workspace",
+      "human_only_boundary": "none",
+      "fixture_ids": ["workspace-generated-small"],
+      "pass_assertion_ids": [
+        "hosted.profile.exact-client-inventory",
+        "hosted.actor.synthetic-oauth-content-write",
+        "hosted.snapshot.source-semantics",
+        "hosted.stage.exact-transport",
+        "hosted.commit.atomic-mixed-markdown-and-sources",
+        "hosted.readback.commit-history-download-web-export-redeploy",
+        "hosted.reconcile.stale-changed-retry",
+        "hosted.cleanup.synthetic-idempotent",
+        "hosted.privacy.redacted"
+      ],
+      "not_available_assertion_ids": [
+        "hosted.profile.exact-client-inventory",
+        "hosted.actor.synthetic-oauth-content-write",
+        "hosted.unavailable.typed",
+        "hosted.unavailable.zero-side-effects",
+        "hosted.cross-host.no-fallback",
+        "hosted.cleanup.synthetic-idempotent",
+        "hosted.privacy.redacted"
+      ]
+    },
+    {
+      "id": "hosted.modern.connector-object",
+      "evidence_scope": "hosted_uat",
+      "source_kind": "connector_object",
+      "transport_id": "authorized_connector_object",
+      "client_profile_id": "codex-modern-2026-07-28",
+      "actor_class": "synthetic_registered_principal",
+      "credential_class": "synthetic_oauth_content_write",
+      "snapshot_semantics": "provider_native_snapshot",
+      "external_prerequisite": "configured_synthetic_provider_connector_object",
+      "human_only_boundary": "none",
+      "fixture_ids": ["connector-object-small"],
+      "pass_assertion_ids": [
+        "hosted.profile.exact-client-inventory",
+        "hosted.actor.synthetic-oauth-content-write",
+        "hosted.snapshot.source-semantics",
+        "hosted.stage.exact-transport",
+        "hosted.commit.atomic-mixed-markdown-and-sources",
+        "hosted.readback.commit-history-download-web-export-redeploy",
+        "hosted.reconcile.stale-changed-retry",
+        "hosted.cleanup.synthetic-idempotent",
+        "hosted.privacy.redacted"
+      ],
+      "not_available_assertion_ids": [
+        "hosted.profile.exact-client-inventory",
+        "hosted.actor.synthetic-oauth-content-write",
+        "hosted.unavailable.typed",
+        "hosted.unavailable.zero-side-effects",
+        "hosted.cleanup.synthetic-idempotent",
+        "hosted.privacy.redacted"
+      ]
+    },
+    {
+      "id": "hosted.modern.bounded-in-memory",
+      "evidence_scope": "hosted_uat",
+      "source_kind": "bounded_in_memory",
+      "transport_id": "bounded_bytes",
+      "client_profile_id": "codex-modern-2026-07-28",
+      "actor_class": "synthetic_registered_principal",
+      "credential_class": "synthetic_oauth_content_write",
+      "snapshot_semantics": "service_owned_snapshot",
+      "external_prerequisite": "trusted_bounded_bytes_producer",
+      "human_only_boundary": "none",
+      "fixture_ids": ["bounded-4mib", "bounded-4mib-plus-one"],
+      "pass_assertion_ids": [
+        "hosted.profile.exact-client-inventory",
+        "hosted.actor.synthetic-oauth-content-write",
+        "hosted.snapshot.source-semantics",
+        "hosted.stage.exact-transport",
+        "hosted.commit.atomic-mixed-markdown-and-sources",
+        "hosted.readback.commit-history-download-web-export-redeploy",
+        "hosted.reconcile.stale-changed-retry",
+        "hosted.cleanup.synthetic-idempotent",
+        "hosted.privacy.redacted"
+      ],
+      "not_available_assertion_ids": [
+        "hosted.profile.exact-client-inventory",
+        "hosted.actor.synthetic-oauth-content-write",
+        "hosted.unavailable.typed",
+        "hosted.unavailable.zero-side-effects",
+        "hosted.cleanup.synthetic-idempotent",
+        "hosted.privacy.redacted"
+      ]
+    },
+    {
+      "id": "hosted.modern.server-generated",
+      "evidence_scope": "hosted_uat",
+      "source_kind": "server_generated",
+      "transport_id": "producer_stream",
+      "client_profile_id": "codex-modern-2026-07-28",
+      "actor_class": "synthetic_registered_principal",
+      "credential_class": "synthetic_oauth_content_write",
+      "snapshot_semantics": "service_owned_snapshot",
+      "external_prerequisite": "trusted_server_producer",
+      "human_only_boundary": "none",
+      "fixture_ids": ["server-generated-256mib", "server-generated-256mib-plus-one"],
+      "pass_assertion_ids": [
+        "hosted.profile.exact-client-inventory",
+        "hosted.actor.synthetic-oauth-content-write",
+        "hosted.snapshot.source-semantics",
+        "hosted.stage.exact-transport",
+        "hosted.commit.atomic-mixed-markdown-and-sources",
+        "hosted.readback.commit-history-download-web-export-redeploy",
+        "hosted.reconcile.stale-changed-retry",
+        "hosted.cleanup.synthetic-idempotent",
+        "hosted.privacy.redacted"
+      ],
+      "not_available_assertion_ids": [
+        "hosted.profile.exact-client-inventory",
+        "hosted.actor.synthetic-oauth-content-write",
+        "hosted.unavailable.typed",
+        "hosted.unavailable.zero-side-effects",
+        "hosted.cleanup.synthetic-idempotent",
+        "hosted.privacy.redacted"
+      ]
+    },
+    {
+      "id": "hosted.compat.session-attachment",
+      "evidence_scope": "hosted_uat",
+      "source_kind": "session_attachment",
+      "transport_id": "native_file_parameter",
+      "client_profile_id": "codex-compat-2025-11-25",
+      "actor_class": "synthetic_registered_principal",
+      "credential_class": "synthetic_oauth_content_write",
+      "snapshot_semantics": "provider_native_snapshot",
+      "external_prerequisite": "synthetic_client_attachment",
+      "human_only_boundary": "none",
+      "fixture_ids": ["session-attachment-small"],
+      "pass_assertion_ids": [
+        "hosted.profile.exact-client-inventory",
+        "hosted.actor.synthetic-oauth-content-write",
+        "hosted.snapshot.source-semantics",
+        "hosted.stage.exact-transport",
+        "hosted.commit.atomic-mixed-markdown-and-sources",
+        "hosted.readback.commit-history-download-web-export-redeploy",
+        "hosted.reconcile.stale-changed-retry",
+        "hosted.cleanup.synthetic-idempotent",
+        "hosted.privacy.redacted"
+      ],
+      "not_available_assertion_ids": [
+        "hosted.profile.exact-client-inventory",
+        "hosted.actor.synthetic-oauth-content-write",
+        "hosted.unavailable.typed",
+        "hosted.unavailable.zero-side-effects",
+        "hosted.cleanup.synthetic-idempotent",
+        "hosted.privacy.redacted"
+      ]
+    },
+    {
+      "id": "hosted.compat.local-path",
+      "evidence_scope": "hosted_uat",
+      "source_kind": "local_path",
+      "transport_id": "companion_upload_intent",
+      "client_profile_id": "codex-compat-2025-11-25",
+      "actor_class": "synthetic_registered_principal",
+      "credential_class": "synthetic_oauth_content_write",
+      "snapshot_semantics": "same_host_stable_snapshot",
+      "external_prerequisite": "packaged_local_companion_same_host",
+      "human_only_boundary": "none",
+      "fixture_ids": ["local-path-256mib", "local-path-256mib-plus-one"],
+      "pass_assertion_ids": [
+        "hosted.profile.exact-client-inventory",
+        "hosted.actor.synthetic-oauth-content-write",
+        "hosted.snapshot.source-semantics",
+        "hosted.stage.exact-transport",
+        "hosted.commit.atomic-mixed-markdown-and-sources",
+        "hosted.readback.commit-history-download-web-export-redeploy",
+        "hosted.reconcile.stale-changed-retry",
+        "hosted.cleanup.synthetic-idempotent",
+        "hosted.privacy.redacted"
+      ],
+      "not_available_assertion_ids": [
+        "hosted.profile.exact-client-inventory",
+        "hosted.actor.synthetic-oauth-content-write",
+        "hosted.unavailable.typed",
+        "hosted.unavailable.zero-side-effects",
+        "hosted.cross-host.no-fallback",
+        "hosted.cleanup.synthetic-idempotent",
+        "hosted.privacy.redacted"
+      ]
+    },
+    {
+      "id": "hosted.compat.workspace-generated",
+      "evidence_scope": "hosted_uat",
+      "source_kind": "workspace/generated_artifact",
+      "transport_id": "companion_upload_intent",
+      "client_profile_id": "codex-compat-2025-11-25",
+      "actor_class": "synthetic_registered_principal",
+      "credential_class": "synthetic_oauth_content_write",
+      "snapshot_semantics": "same_host_stable_snapshot",
+      "external_prerequisite": "packaged_local_companion_trusted_workspace",
+      "human_only_boundary": "none",
+      "fixture_ids": ["workspace-generated-small"],
+      "pass_assertion_ids": [
+        "hosted.profile.exact-client-inventory",
+        "hosted.actor.synthetic-oauth-content-write",
+        "hosted.snapshot.source-semantics",
+        "hosted.stage.exact-transport",
+        "hosted.commit.atomic-mixed-markdown-and-sources",
+        "hosted.readback.commit-history-download-web-export-redeploy",
+        "hosted.reconcile.stale-changed-retry",
+        "hosted.cleanup.synthetic-idempotent",
+        "hosted.privacy.redacted"
+      ],
+      "not_available_assertion_ids": [
+        "hosted.profile.exact-client-inventory",
+        "hosted.actor.synthetic-oauth-content-write",
+        "hosted.unavailable.typed",
+        "hosted.unavailable.zero-side-effects",
+        "hosted.cross-host.no-fallback",
+        "hosted.cleanup.synthetic-idempotent",
+        "hosted.privacy.redacted"
+      ]
+    },
+    {
+      "id": "hosted.compat.connector-object",
+      "evidence_scope": "hosted_uat",
+      "source_kind": "connector_object",
+      "transport_id": "authorized_connector_object",
+      "client_profile_id": "codex-compat-2025-11-25",
+      "actor_class": "synthetic_registered_principal",
+      "credential_class": "synthetic_oauth_content_write",
+      "snapshot_semantics": "provider_native_snapshot",
+      "external_prerequisite": "configured_synthetic_provider_connector_object",
+      "human_only_boundary": "none",
+      "fixture_ids": ["connector-object-small"],
+      "pass_assertion_ids": [
+        "hosted.profile.exact-client-inventory",
+        "hosted.actor.synthetic-oauth-content-write",
+        "hosted.snapshot.source-semantics",
+        "hosted.stage.exact-transport",
+        "hosted.commit.atomic-mixed-markdown-and-sources",
+        "hosted.readback.commit-history-download-web-export-redeploy",
+        "hosted.reconcile.stale-changed-retry",
+        "hosted.cleanup.synthetic-idempotent",
+        "hosted.privacy.redacted"
+      ],
+      "not_available_assertion_ids": [
+        "hosted.profile.exact-client-inventory",
+        "hosted.actor.synthetic-oauth-content-write",
+        "hosted.unavailable.typed",
+        "hosted.unavailable.zero-side-effects",
+        "hosted.cleanup.synthetic-idempotent",
+        "hosted.privacy.redacted"
+      ]
+    },
+    {
+      "id": "hosted.compat.bounded-in-memory",
+      "evidence_scope": "hosted_uat",
+      "source_kind": "bounded_in_memory",
+      "transport_id": "bounded_bytes",
+      "client_profile_id": "codex-compat-2025-11-25",
+      "actor_class": "synthetic_registered_principal",
+      "credential_class": "synthetic_oauth_content_write",
+      "snapshot_semantics": "service_owned_snapshot",
+      "external_prerequisite": "trusted_bounded_bytes_producer",
+      "human_only_boundary": "none",
+      "fixture_ids": ["bounded-4mib", "bounded-4mib-plus-one"],
+      "pass_assertion_ids": [
+        "hosted.profile.exact-client-inventory",
+        "hosted.actor.synthetic-oauth-content-write",
+        "hosted.snapshot.source-semantics",
+        "hosted.stage.exact-transport",
+        "hosted.commit.atomic-mixed-markdown-and-sources",
+        "hosted.readback.commit-history-download-web-export-redeploy",
+        "hosted.reconcile.stale-changed-retry",
+        "hosted.cleanup.synthetic-idempotent",
+        "hosted.privacy.redacted"
+      ],
+      "not_available_assertion_ids": [
+        "hosted.profile.exact-client-inventory",
+        "hosted.actor.synthetic-oauth-content-write",
+        "hosted.unavailable.typed",
+        "hosted.unavailable.zero-side-effects",
+        "hosted.cleanup.synthetic-idempotent",
+        "hosted.privacy.redacted"
+      ]
+    },
+    {
+      "id": "hosted.compat.server-generated",
+      "evidence_scope": "hosted_uat",
+      "source_kind": "server_generated",
+      "transport_id": "producer_stream",
+      "client_profile_id": "codex-compat-2025-11-25",
+      "actor_class": "synthetic_registered_principal",
+      "credential_class": "synthetic_oauth_content_write",
+      "snapshot_semantics": "service_owned_snapshot",
+      "external_prerequisite": "trusted_server_producer",
+      "human_only_boundary": "none",
+      "fixture_ids": ["server-generated-256mib", "server-generated-256mib-plus-one"],
+      "pass_assertion_ids": [
+        "hosted.profile.exact-client-inventory",
+        "hosted.actor.synthetic-oauth-content-write",
+        "hosted.snapshot.source-semantics",
+        "hosted.stage.exact-transport",
+        "hosted.commit.atomic-mixed-markdown-and-sources",
+        "hosted.readback.commit-history-download-web-export-redeploy",
+        "hosted.reconcile.stale-changed-retry",
+        "hosted.cleanup.synthetic-idempotent",
+        "hosted.privacy.redacted"
+      ],
+      "not_available_assertion_ids": [
+        "hosted.profile.exact-client-inventory",
+        "hosted.actor.synthetic-oauth-content-write",
+        "hosted.unavailable.typed",
+        "hosted.unavailable.zero-side-effects",
+        "hosted.cleanup.synthetic-idempotent",
+        "hosted.privacy.redacted"
+      ]
+    }
+  ]
+}
