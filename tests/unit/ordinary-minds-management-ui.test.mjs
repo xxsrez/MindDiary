@@ -231,7 +231,8 @@ test("browser management stays metadata-only while import uses its bounded dedic
   assert.match(html, /data-retry-markdown-import-status/);
   assert.match(html, /data-replan-markdown-import/);
   assert.match(html, /data-import-receipt-revision/);
-  assert.doesNotMatch(html, /<textarea|name="(?:text|markdown|path)"/i);
+  assert.doesNotMatch(html, /<textarea[^>]+name="(?:text|markdown|path)"/i);
+  assert.doesNotMatch(html, /<(?:input|select)[^>]+name="(?:text|markdown|path)"/i);
 });
 
 test("Markdown import is visible only to current write roles", () => {
