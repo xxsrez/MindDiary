@@ -150,7 +150,6 @@ export interface OrdinaryMindDeletionUiResult {
  */
 export interface OrdinaryMindsManagementAdapter {
   listMinds(): Promise<readonly MindListUiMind[]>;
-  getMind(handle: string): Promise<OrdinaryMindUiMind>;
   createMind(command: CreateOrdinaryMindUiCommand): Promise<OrdinaryMindUiMind>;
   renameMind(command: RenameOrdinaryMindUiCommand): Promise<OrdinaryMindUiMind>;
   getDeletionImpact(handle: string): Promise<OrdinaryMindDeletionImpactUi>;
@@ -1172,30 +1171,41 @@ export function installOrdinaryMindsManagement(
     });
   }
 
-  let refreshMindPending = false;
-  const refreshRouteMind = async () => {
-    if (refreshMindPending || routeHandle === null || !refreshMindButton) return;
-    refreshMindPending = true;
-    refreshMindButton.disabled = true;
-    if (renameStatus) renameStatus.textContent = "Reloading current settings…";
-    try {
-      const current = await adapter.getMind(routeHandle);
-      if (!isSafeMind(current) || current.handle !== routeHandle ||
-          routeMindId === null || current.mindId !== routeMindId) {
-        throw new Error("Invalid Mind result");
-      }
-      if (disposed) return;
-      updateRouteMind(shell, current);
-      renameAttempt = null;
-      setElementHidden(refreshMindButton, true);
-      if (renameStatus) renameStatus.textContent = "Current settings loaded. Review the name and description before saving again.";
-      renameInput?.focus();
-    } catch {
-      if (!disposed && renameStatus) renameStatus.textContent = "Current settings could not be reloaded. The name was not changed.";
-    } finally {
-      refreshMindPending = false;
-      if (!disposed) refreshMindButton.disabled = false;
+  const failClosedStaleRoute = () => {
+    const ownerDocument = root.nodeType === 9 ? root as Document : root.ownerDocument;
+    const routeMain = shell.querySelector<HTMLElement>("[data-mind-route]");
+    const layout = routeMain?.querySelector<HTMLElement>(".md-token-layout");
+    if (ownerDocument === null) {
+      layout?.remove();
+      shell.querySelector<HTMLDialogElement>("[data-delete-mind-dialog]")?.remove();
+      return;
     }
+    if (layout) {
+      const state = ownerDocument.createElement("section");
+      state.className = "md-state md-state--error";
+      state.setAttribute("role", "alert");
+      state.dataset.routeAuthorityStale = "";
+      const heading = ownerDocument.createElement("h2");
+      heading.textContent = "Current access must be reloaded";
+      const explanation = ownerDocument.createElement("p");
+      explanation.textContent = "All Mind controls are hidden because the page could not reload current server authority.";
+      state.append(heading, explanation);
+      layout.replaceWith(state);
+    }
+    shell.querySelector<HTMLDialogElement>("[data-delete-mind-dialog]")?.remove();
+  };
+
+  const refreshRouteMind = () => {
+    if (routeHandle === null || !refreshMindButton || refreshMindButton.disabled) return;
+    refreshMindButton.disabled = true;
+    if (renameStatus) renameStatus.textContent = "Reloading all Mind settings and current permissions…";
+    const ownerDocument = root.nodeType === 9 ? root as Document : root.ownerDocument;
+    const view = ownerDocument?.defaultView ?? null;
+    if (view === null) {
+      failClosedStaleRoute();
+      return;
+    }
+    view.location.reload();
   };
 
   const deleteDialog = shell.querySelector<HTMLDialogElement>("[data-delete-mind-dialog]");

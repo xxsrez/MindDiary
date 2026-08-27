@@ -203,7 +203,9 @@ test("ownership transfer lists active non-owner participants and states the sing
 test("browser management stays metadata-only while import uses its bounded dedicated ingress", () => {
   assert.match(implementation, /interface OrdinaryMindsManagementAdapter/);
   assert.match(implementation, /listMinds\(\)/);
-  assert.match(implementation, /getMind\(handle: string\)/);
+  assert.match(implementation, /view\.location\.reload\(\)/);
+  assert.match(implementation, /failClosedStaleRoute/);
+  assert.match(implementation, /All Mind controls are hidden/);
   assert.match(implementation, /createMind\(command:/);
   assert.match(implementation, /renameMind\(command:/);
   assert.match(implementation, /getDeletionImpact\(handle: string\)/);

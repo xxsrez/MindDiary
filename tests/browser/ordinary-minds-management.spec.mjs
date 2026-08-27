@@ -26,6 +26,37 @@ async function waitForFixture() {
   throw new Error("ordinary Minds fixture health check timed out");
 }
 
+async function resetFixture() {
+  const response = await fetch(`${origin}/_fixture/reset`, { method: "POST" });
+  if (!response.ok) throw new Error("ordinary Minds fixture reset failed");
+}
+
+async function setConflict(mode) {
+  const response = await fetch(`${origin}/_fixture/conflict`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ mode }),
+  });
+  if (!response.ok) throw new Error("ordinary Minds fixture conflict setup failed");
+}
+
+async function fixtureCalls() {
+  const response = await fetch(`${origin}/_fixture/calls`);
+  return (await response.json()).calls;
+}
+
+async function expectFreshAuthority(page, role) {
+  await expect(page.locator("[data-route-role]")).toHaveText(role);
+  await expect(page.locator("[data-rename-mind-form]")).toHaveCount(0);
+  await expect(page.locator("[data-owner-delete-controls], [data-delete-mind-dialog]")).toHaveCount(0);
+  await expect(page.locator("[data-owner-visibility-controls]")).toHaveCount(0);
+  await expect(page.locator("[data-owner-transfer-controls], [data-ownership-transfer-form]")).toHaveCount(0);
+  await expect(page.locator("[data-markdown-import]")).toHaveCount(0);
+  await expect(page.locator("[data-capacity-state], [data-capacity-unavailable]")).toHaveCount(0);
+  await expect(page.locator("[data-invitation-form], [data-member-role-form]")).toHaveCount(0);
+  await expect(page.locator("[data-visibility-readonly]")).toBeVisible();
+}
+
 test.beforeAll(async () => {
   fixture = spawn(process.execPath, [fixtureServer], {
     cwd: root,
@@ -38,14 +69,19 @@ test.beforeAll(async () => {
   await waitForFixture();
 });
 
+test.beforeEach(async () => {
+  await resetFixture();
+});
+
 test.afterAll(async () => {
   if (fixture.exitCode !== null) return;
   fixture.kill("SIGTERM");
   await new Promise((resolveExit) => fixture.once("exit", resolveExit));
 });
 
-test("Personal Mind stays first and ordinary create carries private metadata", async ({ page }) => {
+test("shipped client keeps Personal first and creates private metadata", async ({ page }) => {
   await page.goto(`${origin}/minds`);
+  await expect(page.locator('script[src="/ui/mind-diary-ordinary-minds-client.js"]')).toHaveCount(1);
   await expect(page.locator("[data-minds-list] [data-mind-card]").first()).toHaveAttribute(
     "data-mind-card",
     "me",
@@ -59,20 +95,19 @@ test("Personal Mind stays first and ordinary create carries private metadata", a
   await page.getByLabel("Description (optional)").fill("Release decisions and evidence.");
   await page.getByRole("button", { name: "Create Mind" }).click();
 
-  await expect(page.locator('[data-mind-card="delivery-notes"]')).toContainText(
-    "Release decisions and evidence.",
-  );
-  const createCall = await page.evaluate(() =>
-    globalThis.__ordinaryMindsCalls.find(({ operation }) => operation === "createMind"));
-  expect(createCall.command).toMatchObject({
+  await expect(page).toHaveURL(`${origin}/delivery-notes`);
+  await expect(page.locator("[data-route-description]")).toHaveText("Release decisions and evidence.");
+  const createCall = (await fixtureCalls()).find(({ operation }) => operation === "createMind");
+  expect(createCall.command).toEqual({
     name: "Delivery Notes",
     handle: "delivery-notes",
     description: "Release decisions and evidence.",
   });
-  expect(createCall.command.idempotencyKey).toMatch(/^fixture-key-/u);
+  expect(createCall.csrf).toBe("fixture-csrf-token");
+  expect(createCall.idempotencyKey).toMatch(/^mind:[0-9a-f-]{36}$/u);
 });
 
-test("direct route saves name and description under one metadata version", async ({ page }) => {
+test("shipped direct route saves name and description under one metadata version", async ({ page }) => {
   await page.goto(`${origin}/research-notes`);
   await expect(page.locator("[data-route-description]")).toHaveText(
     "Research decisions and supporting notes.",
@@ -81,26 +116,97 @@ test("direct route saves name and description under one metadata version", async
   await page.getByLabel("Description (optional)").fill("Curated evidence.");
   await page.getByRole("button", { name: "Save metadata" }).click();
 
-  await expect(page.locator("[data-rename-status]")).toContainText("Metadata saved");
   await expect(page.locator("[data-route-mind-name]")).toHaveText("Research Library");
   await expect(page.locator("[data-route-description]")).toHaveText("Curated evidence.");
-  const updateCall = await page.evaluate(() =>
-    globalThis.__ordinaryMindsCalls.find(({ operation }) => operation === "renameMind"));
-  expect(updateCall.command).toMatchObject({
+  const updateCall = (await fixtureCalls()).find(({ operation }) => operation === "updateMetadata");
+  expect(updateCall.command).toEqual({
     handle: "research-notes",
     name: "Research Library",
     description: "Curated evidence.",
-    expectedMetadataVersion: 7,
+    expected_metadata_version: 7,
   });
+  expect(updateCall.csrf).toBe("fixture-csrf-token");
+  expect(updateCall.idempotencyKey).toMatch(/^metadata:[0-9a-f-]{36}$/u);
 });
 
-test("stale metadata and deletion both require a fresh conscious read", async ({ page }) => {
+test("metadata conflict reload removes every stale control after role downgrade", async ({ page }) => {
   await page.goto(`${origin}/research-notes`);
+  await expect(page.locator("[data-owner-delete-controls]")).toBeVisible();
+  await expect(page.locator("[data-owner-visibility-controls]")).toBeVisible();
+  await expect(page.locator("[data-markdown-import]")).toBeVisible();
+  await expect(page.locator("[data-capacity-state]")).toBeVisible();
+  await expect(page.locator("[data-invitation-form]")).toBeVisible();
+  await expect(page.locator("[data-member-role-form]")).toBeVisible();
+  await expect(page.locator("[data-ownership-transfer-form]")).toBeVisible();
+
+  await setConflict("downgrade");
   await page.getByLabel("Mind name").fill("Conflicting name");
   await page.getByRole("button", { name: "Save metadata" }).click();
   await expect(page.locator("[data-rename-status]")).toContainText("changed in another session");
-  await expect(page.getByRole("button", { name: "Reload current settings" })).toBeVisible();
+  await page.getByRole("button", { name: "Reload current settings" }).click();
 
+  await expectFreshAuthority(page, "Reader");
+  await expect(page.getByRole("heading", { name: "Settings are read-only" })).toBeVisible();
+});
+
+test("metadata conflict reload fails closed after access revocation", async ({ page }) => {
+  await page.goto(`${origin}/research-notes`);
+  await setConflict("revoke");
+  await page.getByLabel("Mind name").fill("Conflicting name");
+  await page.getByRole("button", { name: "Save metadata" }).click();
+  await expect(page.getByRole("button", { name: "Reload current settings" })).toBeVisible();
+  await page.getByRole("button", { name: "Reload current settings" }).click();
+
+  await expect(page.getByRole("heading", { name: "Mind settings unavailable" })).toBeVisible();
+  await expect(page.locator("[data-mind-route]")).toHaveCount(0);
+  await expect(page.locator("[data-control-action], [data-owner-delete-controls], [data-markdown-import]")).toHaveCount(0);
+});
+
+test("shipped visibility flow requires exact disclosure acknowledgment", async ({ page }) => {
+  await page.goto(`${origin}/research-notes`);
+  const form = page.locator("[data-visibility-form]");
+  await form.locator("[data-visibility-selector]").selectOption("public");
+  await expect(form.locator("[data-visibility-exposure]")).toBeVisible();
+  await expect(form.locator("[data-save-visibility]")).toBeDisabled();
+  await form.locator("[data-visibility-ack]").check();
+  await form.locator("[data-save-visibility]").click();
+
+  await expect(page.locator("[data-route-visibility]")).toHaveText("Public");
+  const call = (await fixtureCalls()).find(({ operation }) => operation === "changeVisibility");
+  expect(call.command).toMatchObject({
+    handle: "research-notes",
+    visibility: "public",
+    acknowledge_live_head_and_history_exposure: true,
+    expected_metadata_version: 7,
+  });
+  expect(call.csrf).toBe("fixture-csrf-token");
+  expect(call.idempotencyKey).toMatch(/^visibility:[0-9a-f-]{36}$/u);
+});
+
+test("shipped ownership flow reloads the former Owner as Admin", async ({ page }) => {
+  await page.goto(`${origin}/research-notes`);
+  const form = page.locator("[data-ownership-transfer-form]");
+  await form.getByLabel("New Owner").selectOption("member-fixture-editor");
+  await form.getByLabel(/sole Owner/u).check();
+  await form.getByRole("button", { name: "Transfer ownership" }).click();
+
+  await expect(page.locator("[data-route-role]")).toHaveText("Admin");
+  await expect(page.locator("[data-rename-mind-form]")).toBeVisible();
+  await expect(page.locator("[data-owner-delete-controls], [data-owner-visibility-controls]")).toHaveCount(0);
+  await expect(page.locator("[data-visibility-readonly]")).toBeVisible();
+  const call = (await fixtureCalls()).find(({ operation }) => operation === "transferOwnership");
+  expect(call.command).toEqual({
+    handle: "research-notes",
+    target_member_id: "member-fixture-editor",
+    expected_metadata_version: 7,
+    confirmation: "transfer-ownership",
+  });
+  expect(call.csrf).toBe("fixture-csrf-token");
+  expect(call.idempotencyKey).toMatch(/^ownership:[0-9a-f-]{36}$/u);
+});
+
+test("shipped deletion uses a fresh preview and conscious confirmation", async ({ page }) => {
+  await page.goto(`${origin}/research-notes`);
   await page.getByRole("button", { name: "Review deletion impact" }).click();
   await expect(page.locator("[data-impact-revisions]")).toHaveText("12");
   await expect(page.locator("[data-impact-members]")).toHaveText("3");
@@ -109,6 +215,15 @@ test("stale metadata and deletion both require a fresh conscious read", async ({
   await page.getByLabel(/recovery is unavailable/u).check();
   await expect(page.getByRole("button", { name: "Delete Mind permanently" })).toBeEnabled();
   await page.getByRole("button", { name: "Delete Mind permanently" }).click();
-  await expect(page.getByRole("heading", { name: "Mind deleted" })).toBeVisible();
-  await expect(page.getByText("permanently retired")).toBeVisible();
+
+  await expect(page).toHaveURL(`${origin}/minds`);
+  await expect(page.locator('[data-mind-card="research-notes"]')).toHaveCount(0);
+  const call = (await fixtureCalls()).find(({ operation }) => operation === "deleteMind");
+  expect(call.command).toMatchObject({
+    handle: "research-notes",
+    impact_id: "impact_fixture_owner_0001",
+    confirmation: phrase,
+  });
+  expect(call.csrf).toBe("fixture-csrf-token");
+  expect(call.idempotencyKey).toMatch(/^delete:[0-9a-f-]{36}$/u);
 });
