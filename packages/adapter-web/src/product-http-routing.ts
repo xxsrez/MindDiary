@@ -237,6 +237,7 @@ export function applicationErrorStatus(code: string): number {
   if (code === "capacity_accounting_untrusted") return 503;
   if (
     code === "okf_validation_failed" ||
+    code === "export_profile_required" ||
     code === "import_validation_failed" ||
     code === "import_file_limit_exceeded" ||
     code === "import_byte_limit_exceeded" ||

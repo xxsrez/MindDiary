@@ -2,6 +2,15 @@ import assert from "node:assert/strict";
 import { createHash, createHmac } from "node:crypto";
 import test from "node:test";
 
+import { createSitesMetadataStore } from "@mind-diary/adapter-metadata-sites";
+import { createSitesObjectStore } from "@mind-diary/adapter-object-sites";
+import { REVISION_MANIFEST_MEDIA_TYPE } from "@mind-diary/application-ports";
+import {
+  REVISION_MANIFEST_FORMAT_V4,
+  createCanonicalRevisionEnvelope,
+  createRevisionManifest,
+  serializeRevisionManifest,
+} from "@mind-diary/domain";
 import {
   MCP_ENDPOINT,
   MCP_LEGACY_CODEX_ENDPOINT,
@@ -643,6 +652,63 @@ class FakeR2Bucket {
 
 function key(seed) {
   return Uint8Array.from({ length: 32 }, (_value, index) => (seed + index) % 256);
+}
+
+async function seedMixedExactRevision({
+  database,
+  bucket,
+  spaceId,
+  parentRevisionId,
+  revisionId,
+  committedAt,
+}) {
+  const metadata = await createSitesMetadataStore(database);
+  const objects = await createSitesObjectStore(bucket);
+  const parent = await metadata.readRevision(spaceId, parentRevisionId);
+  assert.ok(parent);
+  const opaqueBytes = new TextEncoder().encode("%PDF-1.7\n% synthetic REST export fixture\n");
+  const opaque = await objects.putBundleFile({
+    spaceId,
+    bytes: opaqueBytes,
+    mediaType: "application/pdf",
+    createdAt: committedAt,
+  });
+  const manifest = createRevisionManifest([
+    ...parent.manifest.entries,
+    {
+      kind: "opaque",
+      path: "assets/export-proof.pdf",
+      sha256: opaque.object.sha256,
+      mediaType: opaque.object.mediaType,
+      size: opaque.object.size,
+    },
+  ], REVISION_MANIFEST_FORMAT_V4);
+  const manifestBytes = new TextEncoder().encode(serializeRevisionManifest(manifest));
+  const manifestObject = await objects.putSpaceCanonicalObject({
+    kind: "revision_manifest",
+    spaceId,
+    bytes: manifestBytes,
+    mediaType: REVISION_MANIFEST_MEDIA_TYPE,
+    createdAt: committedAt,
+  });
+  const envelope = createCanonicalRevisionEnvelope({
+    revisionId,
+    spaceId,
+    revisionNumber: parent.revision.revisionNumber + 1,
+    parentRevisionId,
+    committedAt,
+    committedBy: parent.revision.committedBy,
+    manifest,
+    manifestHash: manifestObject.object.sha256,
+    manifestSize: manifestObject.object.size,
+    summary: "Synthetic mixed exact-revision REST export fixture",
+  });
+  const committed = await metadata.commitRevision({
+    expectedHeadRevisionId: parentRevisionId,
+    envelope,
+  });
+  assert.equal(committed.kind, "committed");
+  return { metadata, envelope };
 }
 
 const PERFORMANCE_CORRELATION_KEY = key(201);
@@ -2555,6 +2621,121 @@ test("durable product runtime carries a Sites account token through Codex MCP an
   }
 });
 
+test("Sites export REST rejects an implicit legacy profile for one exact mixed revision without side effects", async () => {
+  const database = new FakeD1Database();
+  const bucket = new FakeR2Bucket();
+  const scheduled = [];
+  const committedAt = "2026-08-27T21:30:00.000Z";
+  const runtime = await createProductSiteRuntime({
+    database,
+    bucket,
+    publicOrigin: ORIGIN,
+    identity: {
+      readVerifiedIdentity() {
+        return {
+          kind: "authenticated",
+          verifiedEmail: "mixed.export.rest@example.com",
+          verifiedFullName: "Mixed Export REST",
+        };
+      },
+    },
+    tokenVerifierKey: key(5),
+    locatorKey: key(45),
+    exportDownloadVerifierKey: key(85),
+    csrfKey: key(125),
+    now: () => new Date(committedAt),
+    observabilityWriter: { write() {} },
+    schedule(work) { scheduled.push(work); },
+  });
+
+  const registration = await responseFrom(runtime, new Request(`${ORIGIN}/`));
+  const csrf = csrfFromHtml(await registration.text());
+  const bootstrap = await responseFrom(runtime, new Request(`${ORIGIN}/api/v1/account`, {
+    method: "POST",
+    headers: {
+      origin: ORIGIN,
+      "content-type": "application/json",
+      "x-csrf-token": csrf,
+      "idempotency-key": "bootstrap:mixed-export-rest",
+    },
+    body: JSON.stringify({ action: "create_isolated_account" }),
+  }));
+  assert.equal(bootstrap.status, 200);
+  const settings = await responseFrom(runtime, new Request(`${ORIGIN}/settings/developer/mcp`));
+  const exportCsrf = csrfFromHtml(await settings.text());
+  const session = await responseFrom(runtime, new Request(`${ORIGIN}/api/v1/session`));
+  const sessionBody = await session.json();
+  const spaceId = sessionBody.data.personal_mind.mind_id;
+  const parentRevisionId = sessionBody.data.personal_mind.head_revision_id;
+  const mixedRevisionId = "revision_sites_mixed_export_rest";
+  const { metadata } = await seedMixedExactRevision({
+    database,
+    bucket,
+    spaceId,
+    parentRevisionId,
+    revisionId: mixedRevisionId,
+    committedAt,
+  });
+
+  const jobsBefore = await metadata.listExportJobsForTest();
+  const grantsBefore = await metadata.listExportDownloadGrantsForTest();
+  const reservationsBefore = await metadata.listCapacityReservationsForTest();
+  const scheduledExportsBefore = scheduled.filter(({ kind }) => kind === "export").length;
+  const idempotencyKey = "export:mixed-profile-required-rest";
+  const implicitProfile = await responseFrom(runtime, new Request(
+    `${ORIGIN}/api/v1/minds/me/exports`,
+    {
+      method: "POST",
+      headers: {
+        origin: ORIGIN,
+        "content-type": "application/json",
+        "x-csrf-token": exportCsrf,
+        "idempotency-key": idempotencyKey,
+      },
+      body: JSON.stringify({
+        revision_selector: { kind: "revision", revision_id: mixedRevisionId },
+      }),
+    },
+  ));
+  assert.equal(implicitProfile.status, 422, await implicitProfile.clone().text());
+  const implicitProfileBody = await implicitProfile.json();
+  assert.equal(implicitProfileBody.error.code, "export_profile_required");
+  assert.equal(implicitProfileBody.error.retryable, false);
+  assert.deepEqual(await metadata.listExportJobsForTest(), jobsBefore);
+  assert.deepEqual(await metadata.listExportDownloadGrantsForTest(), grantsBefore);
+  assert.deepEqual(await metadata.listCapacityReservationsForTest(), reservationsBefore);
+  assert.equal(
+    scheduled.filter(({ kind }) => kind === "export").length,
+    scheduledExportsBefore,
+  );
+
+  const explicitProfile = await responseFrom(runtime, new Request(
+    `${ORIGIN}/api/v1/minds/me/exports`,
+    {
+      method: "POST",
+      headers: {
+        origin: ORIGIN,
+        "content-type": "application/json",
+        "x-csrf-token": exportCsrf,
+        "idempotency-key": idempotencyKey,
+      },
+      body: JSON.stringify({
+        revision_selector: { kind: "revision", revision_id: mixedRevisionId },
+        profile: "MD-BUNDLE-ZIP-1",
+      }),
+    },
+  ));
+  assert.equal(explicitProfile.status, 202, await explicitProfile.clone().text());
+  const explicitProfileBody = await explicitProfile.json();
+  assert.equal(explicitProfileBody.data.replayed, false);
+  assert.equal(explicitProfileBody.data.job.revision_id, mixedRevisionId);
+  assert.equal((await metadata.listExportJobsForTest()).length, jobsBefore.length + 1);
+  assert.equal(
+    scheduled.filter(({ kind }) => kind === "export").length,
+    scheduledExportsBefore + 1,
+  );
+});
+
 test("durable Product Site enforces public baseline access, atomic ownership transfer, and immediate private revoke", async () => {
   const database = new FakeD1Database();
   const bucket = new FakeR2Bucket();
@@ -2701,6 +2882,44 @@ test("durable Product Site enforces public baseline access, atomic ownership tra
   ));
   assert.equal(foreignExportStatus.status, 404);
   assert.equal((await foreignExportStatus.json()).error.code, "export_job_not_found");
+  const publicOwnerExportRecovery = await runtime.recoverBackground();
+  assert.ok(publicOwnerExportRecovery.dispatched >= 1);
+  const baselineReaderExport = await responseFrom(runtime, new Request(
+    `${ORIGIN}/api/v1/minds/visibility-runtime/exports`,
+    {
+      method: "POST",
+      headers: {
+        origin: ORIGIN,
+        "content-type": "application/json",
+        "x-csrf-token": outsiderCsrf,
+        "idempotency-key": "export:visibility-baseline-reader",
+      },
+      body: JSON.stringify({ revision_selector: { kind: "head" } }),
+    },
+  ));
+  assert.equal(baselineReaderExport.status, 202, await baselineReaderExport.clone().text());
+  const baselineReaderExportJob = (await baselineReaderExport.json()).data.job;
+  const baselineExportRecovery = await runtime.recoverBackground();
+  assert.ok(baselineExportRecovery.dispatched >= 1);
+  const baselineReaderExportStatus = await responseFrom(runtime, new Request(
+    `${ORIGIN}/api/v1/export-jobs/${encodeURIComponent(baselineReaderExportJob.job_id)}`,
+  ));
+  assert.equal(baselineReaderExportStatus.status, 200);
+  const baselineReaderExportStatusBody = await baselineReaderExportStatus.json();
+  const baselineReaderCompletedExport = baselineReaderExportStatusBody.data.job;
+  assert.equal(baselineReaderCompletedExport.status, "succeeded");
+  assert.equal(
+    baselineReaderCompletedExport.revision_id,
+    baselineReaderExportJob.revision_id,
+  );
+  assert.match(baselineReaderCompletedExport.download_url, /^https:\/\/mind-diary\.example\/api\/v1\/exports\//u);
+  const visibilityMetadata = await createSitesMetadataStore(database);
+  const grantsBeforePrivate = await visibilityMetadata.listExportDownloadGrantsForTest();
+  const baselineReaderGrant = grantsBeforePrivate.find(
+    ({ jobId }) => jobId === baselineReaderExportJob.job_id,
+  );
+  assert.ok(baselineReaderGrant);
+  assert.equal(baselineReaderGrant.state, "active");
   const baselinePage = await responseFrom(runtime, new Request(`${ORIGIN}/visibility-runtime`));
   assert.equal(baselinePage.status, 200);
   const baselineHtml = await baselinePage.text();
@@ -2903,6 +3122,45 @@ test("durable Product Site enforces public baseline access, atomic ownership tra
   const privateExact = await responseFrom(runtime, new Request(`${ORIGIN}/api/v1/minds/visibility-runtime`));
   assert.equal(privateExact.status, 404);
   assert.equal((await privateExact.json()).error.code, "mind_not_found");
+  const grantsBeforeDeniedStatus = await visibilityMetadata.listExportDownloadGrantsForTest();
+  const deniedCreatorStatus = await responseFrom(runtime, new Request(
+    `${ORIGIN}/api/v1/export-jobs/${encodeURIComponent(baselineReaderExportJob.job_id)}`,
+  ));
+  assert.equal(deniedCreatorStatus.status, 404);
+  const deniedCreatorStatusText = await deniedCreatorStatus.text();
+  assert.equal(JSON.parse(deniedCreatorStatusText).error.code, "export_job_not_found");
+  for (const forbidden of [
+    baselineReaderExportJob.job_id,
+    baselineReaderExportJob.revision_id,
+    baselineReaderCompletedExport.sha256,
+    "download_url",
+    "archive_format",
+    "\"size\"",
+  ]) {
+    assert.equal(deniedCreatorStatusText.includes(forbidden), false, forbidden);
+  }
+  assert.deepEqual(
+    await visibilityMetadata.listExportDownloadGrantsForTest(),
+    grantsBeforeDeniedStatus,
+  );
+
+  const deniedStaleDownload = await responseFrom(
+    runtime,
+    new Request(baselineReaderCompletedExport.download_url),
+  );
+  assert.equal(deniedStaleDownload.status, 404);
+  assert.equal(deniedStaleDownload.headers.get("content-type"), "application/json; charset=utf-8");
+  assert.equal(deniedStaleDownload.headers.get("content-disposition"), null);
+  assert.equal(
+    await deniedStaleDownload.text(),
+    '{"ok":false,"error":{"code":"not_found","message":"The resource was not found.","retryable":false}}\n',
+  );
+  const grantsAfterDeniedDownload = await visibilityMetadata.listExportDownloadGrantsForTest();
+  assert.equal(grantsAfterDeniedDownload.length, grantsBeforePrivate.length);
+  assert.equal(
+    grantsAfterDeniedDownload.find(({ jobId }) => jobId === baselineReaderExportJob.job_id)?.state,
+    "revoked",
+  );
   const privateCatalog = await responseFrom(runtime, new Request(`${ORIGIN}/public`));
   const privateCatalogHtml = await privateCatalog.text();
   assert.doesNotMatch(privateCatalogHtml, /Visibility Runtime/);
