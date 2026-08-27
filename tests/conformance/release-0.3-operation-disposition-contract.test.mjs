@@ -935,6 +935,33 @@ test("both MCP protocol profiles execute their closed keep/change/remove sets", 
   );
 });
 
+test("MD-355 Settings IA source evidence matches its changed renderers", async () => {
+  const expectations = [
+    {
+      surface: "/help/codex",
+      role: "help-renderer-source",
+      path: "packages/adapter-web/src/connections.ts",
+      gitBlob: "2ec56171678dba8e9e716f19b5c9928f985ab634",
+    },
+    {
+      surface: "plugin-label",
+      role: "shared-label-source",
+      path: "packages/adapter-web/src/ui-shell.ts",
+      gitBlob: "80e2a6d652b602c05e4a371464c8f96075606bc3",
+    },
+  ];
+  for (const expected of expectations) {
+    const entry = fixture.pluginHelp.find(({ surface }) => surface === expected.surface);
+    const evidence = entry?.sourceEvidence.find(({ role }) => role === expected.role);
+    assert.deepEqual(evidence, {
+      role: expected.role,
+      path: expected.path,
+      gitBlob: expected.gitBlob,
+    });
+    assert.equal(gitBlob(await readFile(new URL(expected.path, root))), expected.gitBlob);
+  }
+});
+
 test("plugin/help migration has closed owners and exact current source evidence", async () => {
   assertExactKeys(
     fixture.migrationOwners,
@@ -996,7 +1023,7 @@ test("plugin/help migration has closed owners and exact current source evidence"
       sourceEvidence: [{
         role: "help-renderer-source",
         path: "packages/adapter-web/src/connections.ts",
-        gitBlob: "9e76d0a6ad1bd87c2c7b5ce8f715957c187aa77d",
+        gitBlob: "2ec56171678dba8e9e716f19b5c9928f985ab634",
       }],
     },
     {
@@ -1025,7 +1052,7 @@ test("plugin/help migration has closed owners and exact current source evidence"
       sourceEvidence: [{
         role: "shared-label-source",
         path: "packages/adapter-web/src/ui-shell.ts",
-        gitBlob: "bebae5674a56ebc1daf54f36fcd3f195065a5f20",
+        gitBlob: "80e2a6d652b602c05e4a371464c8f96075606bc3",
       }],
     },
   ]);
