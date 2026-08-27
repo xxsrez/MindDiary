@@ -82,7 +82,8 @@ explicit Mind/revision selector и current ACL/visibility/scope достаточ
 Site-selected writable target остаётся дополнительным server-side fence для
 commit. Replace/delete files внутри такого commit — versioned content
 semantics, а не control-plane access. Exact operation disposition принадлежит
-MD-337; representation, migration и compatibility existing bindings — MD-339.
+MD-337; representation, migration и compatibility existing bindings приняты в
+[MD-339 contract](specs/credential-write-target.md).
 
 Import-specific validation и финальная публикация import revision являются
 внутренними этапами одной Site-owned import operation, а не вторыми
@@ -227,8 +228,9 @@ composition и automated import graph checks реализованы; live Sites 
 
 Existing package/facade placement в этом документе отражает historical
 runtime. Перенос concrete operations между façades выполняется только после
-MD-337, а access/binding state — после MD-339; MD-336 не меняет dependency
-graph или composition.
+MD-337, а access/binding state — при реализации принятого
+[MD-339 contract](specs/credential-write-target.md); MD-336 не меняет
+dependency graph или composition.
 
 ### 3. Protocol adapters
 
@@ -323,7 +325,8 @@ scenario и redacted receipt заданы в
 
 Следующие token/OAuth/binding records документируют current 0.1/0.2 runtime.
 Они сохраняются для compatibility evidence и не переопределяют target
-authority Release 0.3; MD-339 отдельно задаст replacement/migration.
+authority Release 0.3; replacement/migration отдельно заданы в
+[MD-339 contract](specs/credential-write-target.md).
 
 ### Sites account
 
@@ -586,8 +589,10 @@ Sequence ниже сохраняет as-built staging/binding composition. Relea
 server-approved exact target. Выбор target и bulk import/export orchestration
 принадлежат Site; ordinary per-file source admission/stage/reconcile может
 оставаться подготовкой MCP content commit при adapter-owned transport и
-server-approved input. Exact разбор существующих calls выполнят MD-337 и
-MD-339.
+server-approved input. Exact disposition существующих calls определит MD-337,
+а access semantics уже задаёт
+[принятый MD-339 contract](specs/credential-write-target.md); runtime
+implementation остаётся отдельной работой.
 
 ```mermaid
 sequenceDiagram
@@ -703,7 +708,8 @@ export к authority Content MCP. MCP discover-ит разрешённые Minds,
 explicit target без attach и может commit-ить только в exact writable target,
 выбранный на Site. Это category boundary, не новый tool catalog: exact
 keep/move/retire existing aliases принадлежат MD-337, access/binding
-compatibility — MD-339.
+compatibility принята в
+[MD-339 contract](specs/credential-write-target.md).
 
 ## Sites control plane и internal API
 

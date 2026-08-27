@@ -1,7 +1,9 @@
 # Multiple-read/single-write Mind bindings
 
 Статус: accepted historical Release 0.1/0.2 as-built/evidence contract,
-обновлено 2026-08-27; target replacement ожидает MD-337/MD-339. Локальные
+обновлено 2026-08-27; target replacement принят MD-339 в
+[credential writable-target contract](credential-write-target.md), а exact
+operation disposition ожидает MD-337. Локальные
 durable state/application/persistence (`MD-231`), одинаковый binding tool
 surface для modern/compatibility MCP (`MD-230`) и hard content enforcement
 (`MD-232`) подтверждены. Product UI и exact Marketplace plugin guidance
@@ -15,9 +17,9 @@ explicit binding/attach, а единственный writable target выбир�
 только через Sites control plane. Content MCP может discover/read explicit
 Mind и commit-ить в server-approved exact target, но не управляет binding/
 Connection state. Exact replacement records, migration and compatibility
-принадлежат MD-339; keep/move/retire disposition existing operations — MD-337.
-До них runtime и UAT receipts ниже сохраняют прежнюю semantics без silent
-migration.
+зафиксированы в новом target contract; keep/move/retire disposition existing
+operations — MD-337. До runtime migration historical implementation и UAT
+receipts ниже сохраняют прежнюю semantics без silent migration.
 
 ## Historical Release 0.1/0.2 назначение
 

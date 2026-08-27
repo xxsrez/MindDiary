@@ -42,7 +42,8 @@ MCP.
   mutation, а не административным удалением Mind или account.
 
 MD-337 отдельно определяет disposition каждого исторического tool/route, а
-MD-339 — точный access и writable-target binding contract. До этих решений
+точный access и writable-target binding contract принят в
+[MD-339 specification](credential-write-target.md). До решений MD-337
 текущие `get_mind_bindings`, `set_read_mind_binding`,
 `set_write_mind_binding`, `start_export` и связанные payloads ниже следует
 читать только как Release 0.1/0.2 as-built. MD-336 не меняет OAuth/token

@@ -1,8 +1,18 @@
 # ADR-0013: multiple-read/single-write Mind bindings
 
-Статус: accepted, 2026-08-22. Решение изменяет principal-wide content access из
+Статус: accepted historical Release 0.1/0.2, 2026-08-22; применимые части
+частично superseded для Release 0.3 через
+[ADR-0022](0022-site-controlled-credential-write-target.md). Решение изменяет
+principal-wide content access из
 [ADR-0003](0003-user-scoped-mcp-and-direct-commits.md), но сохраняет один MCP
 connection на principal, explicit single-Mind operations и immediate commits.
+
+Для Release 0.3 больше не действуют обязательные `read_bindings`, attach/detach
+как prerequisite content read, MCP mutation binding state и denial content
+read только из-за empty binding set. Сохраняются historical implementation и
+evidence, а также credential-scoped singleton destination, fresh ACL/scope,
+versioned CAS/idempotency, stale fence и запрет implicit fallback. Их целевая
+форма задана ADR-0022; этот документ не переписывает историю 0.1/0.2.
 
 ## Контекст
 

@@ -40,7 +40,8 @@ server-approved; MCP не создаёт bulk import session, не меняет 
 Existing MCP upload/stage/reconcile descriptions ниже остаются historical
 0.1/0.2 compatibility, а не target operation register. MD-336 не решает, какие
 exact tools сохраняются: disposition принадлежит MD-337; writable-target/
-binding representation and migration — MD-339. MD-336 не меняет runtime,
+binding representation and migration приняты в
+[MD-339 contract](credential-write-target.md). MD-336 не меняет runtime,
 schemas, storage or UAT claims.
 
 ## Цель и граница

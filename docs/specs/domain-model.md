@@ -27,9 +27,9 @@ Mind Diary: у него есть стабильная identity, дерево OKF
 | `BundleFile` | Принятый producer-defined regular non-Markdown file одной revision с `kind: opaque`; в UI attachment/asset. OKF 0.2 не задаёт эту entity или manifest. Release 0.2 admission format-neutral; preview/index policy separate. |
 | `FileIngressSource` | Closed provenance class `session_attachment`, `local_path`, `workspace/generated_artifact`, `connector_object`, `bounded_in_memory` или `server_generated`; не authorization identity. |
 | `VerifiedFileInput` | Adapter-produced bounded byte stream plus source kind, safe filename, advisory media evidence, size and SHA-256; provider IDs/URLs and local paths terminate at the adapter boundary. |
-| `staged_file_ref` | Historical 0.1/0.2 service-owned quarantined/verified locator pinned to owner, Space and write binding; it is consumed atomically by a BundleFile changeset and is not a provider/local locator. Target representation belongs to MD-339. |
+| `staged_file_ref` | Historical 0.1/0.2 service-owned quarantined/verified locator pinned to owner, Space and write binding; it is consumed atomically by a BundleFile changeset and is not a provider/local locator. Target representation is defined by the MD-339 credential writable-target contract. |
 | `ImportSession` | Historical 0.1/0.2 private resumable Markdown-only staging aggregate, pinned to principal/write binding/Space/base revision/idempotency key; не revision и не reader-visible content. Target Site-owned import representation is outside MD-336. |
-| `Writable target` | Выбранный через Sites control plane единственный Mind, в который connection/credential может направить content commit; не membership, не token scope и не MCP-managed setting. Exact record/migration принадлежат MD-339. |
+| `Writable target` | Выбранный через Sites control plane единственный Mind, в который connection/credential может направить content commit; не membership, не token scope и не MCP-managed setting. Exact record/migration определены в [MD-339 contract](credential-write-target.md). |
 | `CapacityReservation` | Durable bounded budget for one admitted operation; consumed/released atomically with canonical transition or cleanup. |
 | `Index` / `Log` | Reserved OKF `index.md` и `log.md`, а не обычные `KnowledgeEntry`. |
 | `SpaceMembership` | Принятая связь principal с обычным Mind, ролью и lifecycle state. |
@@ -82,7 +82,8 @@ OAuth grant либо personal token с independent binding set `0..N` read и `0
 write. Release 0.3 сохраняет exact-target write invariant, но переносит выбор
 writable target исключительно в Sites control plane и убирает mandatory read
 binding из пользовательского read path. Exact replacement records, migration
-и wire compatibility принадлежат MD-339. Каждая content operation по-прежнему
+и wire compatibility определены в
+[credential writable-target contract](credential-write-target.md). Каждая content operation по-прежнему
 явно выбирает ровно один Mind и одну revision. Token только аутентифицирует
 principal: он не выбирает Personal Mind или другой Mind. Read требует explicit
 selector, а commit дополнительно совпадает с Site-selected writable target;
@@ -385,7 +386,7 @@ Release 0.3 сохраняет fresh ACL/scope checks, но content read исп�
 explicit Mind selector без обязательной read binding, а content commit
 дополнительно обязан совпасть с server-approved writable target, выбранным на
 Site. Точное представление этого target и переход с historical binding set
-задаёт MD-339.
+задаёт [MD-339 contract](credential-write-target.md).
 
 `content:write` включает `content:read`; write-only token в первом прототипе не
 существует. Historical 0.1 content read требовал read binding либо current
@@ -451,7 +452,8 @@ semantic merge, branches и last-writer-wins не поддерживаются.
 Release 0.3 сохраняет observable result — один atomic commit в
 server-approved exact target под current ACL/scope/HEAD CAS, — но не закрепляет
 historical `write_binding_id` как будущую wire shape. Exact access/binding
-contract принадлежит MD-339, а disposition operation names — MD-337.
+contract принят в [MD-339 specification](credential-write-target.md), а
+disposition operation names — MD-337.
 
 Accepted Brain-scale storage model materializes manifest as a separately
 digested Space-scoped object. Legacy v3 uses the historical closed-media entry
@@ -549,7 +551,8 @@ ordinary content-commit authority.
 
 Historical Release 0.1/0.2 публиковал MCP binding-management и export tools;
 это as-built compatibility, а не target authority. MD-337 владеет exact
-operation disposition, MD-339 — access/binding replacement and migration.
+operation disposition; access/binding replacement and migration приняты в
+[MD-339 contract](credential-write-target.md).
 
 Service-wide operator authority не является ролью Space. Она задаётся только
 constructor configuration по opaque `principal_id`, открывает один read-only

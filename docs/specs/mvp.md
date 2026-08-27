@@ -67,7 +67,8 @@ Validation и финальная публикация внутри Site-owned im
 content-write surfaces.
 
 Exact operation disposition принадлежит MD-337; access/binding representation,
-migration and compatibility — MD-339. Поэтому разделы обязательного scope,
+migration and compatibility приняты в
+[MD-339 contract](credential-write-target.md). Поэтому разделы обязательного scope,
 первая MCP-поверхность и criteria ниже остаются normative history Release 0.1,
 а не перечнем будущих Release 0.3 routes/tools. Description semantics, website
 AI, anonymous publication, token redesign, production/AWS, runtime, persistence,
@@ -700,7 +701,7 @@ residual risk ограничивается explicit write scope, current ACL, hi
 binding/target mutations и bulk export больше не относятся к MCP authority, а
 read не требует explicit attach. Какие existing names переносятся, остаются
 compatibility aliases или удаляются, решает MD-337; exact access state и
-migration — MD-339.
+migration приняты в [MD-339 contract](credential-write-target.md).
 
 ## Historical Release 0.1 internal application API
 

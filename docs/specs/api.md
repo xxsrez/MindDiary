@@ -11,12 +11,14 @@ automation остаются blocking; ADR-0019 дополнительно тре
 real-account first-user UAT receipt. Machine-readable OpenAPI и MCP JSON Schemas
 проверяют только historical current Release 0.1/0.2 wire contract и его
 implementation. Target authority Release 0.3 ещё не имеет schema-verified
-route/tool shape: её определят и проверят MD-337/MD-339.
+route/tool shape: operation disposition определит MD-337, а access shape уже
+принята в [MD-339 contract](credential-write-target.md), но ещё не реализована.
 
 Wire catalog ниже сохраняет historical Release 0.1/0.2 as-built и не
 переписывается MD-336. Целевая product authority Release 0.3 отделена явно;
 exact route/tool disposition принадлежит MD-337, а access/binding schemas и
-migration — MD-339. Поэтому наличие current route/tool в этом документе не
+migration приняты в [MD-339 contract](credential-write-target.md). Поэтому
+наличие current route/tool в этом документе не
 делает его владельцем будущей authority.
 
 ADR-0015 и [BundleFile specification](bundle-files.md) сохраняют immutable
@@ -109,7 +111,8 @@ Target read не требует mutable read binding/attach step. MCP не вы�
 writable target; его commit только cross-check-ит server-approved target вместе
 с current ACL/scope/HEAD. Replace/delete в changeset остаются content semantics
 и не открывают account/Mind/credential lifecycle. Exact keep/move/retire
-решения по routes/tools остаются MD-337, а exact access shape — MD-339.
+решения по routes/tools остаются MD-337, а exact access shape принята в
+[MD-339 contract](credential-write-target.md).
 
 Validation и финальный revision publish внутри Site-owned import являются
 этапами import operation, а не отдельными inbound validate/ordinary-commit
@@ -625,7 +628,8 @@ Problem Details response:
 
 Таблица routes выше описывает current wire compatibility. Она не является
 Release 0.3 operation register: MD-337 отдельно определит disposition import,
-export и target-management calls; MD-339 — access/binding calls и schemas.
+export и target-management calls; access/binding calls и schemas ограничены
+[MD-339 contract](credential-write-target.md).
 
 Internal operator query принимает bounded `query`, `state`,
 `registered_from|to`, `activity_from|to`, `never_active`, `sort`, `direction`,
@@ -1248,7 +1252,8 @@ exception text. Static assets не являются trigger, concurrent requests
 
 Раздел ниже сохраняет historical Release 0.1/0.2 wire contract. Target
 authority Release 0.3 задаётся в начале документа; exact catalog changes
-принадлежат MD-337/MD-339.
+принадлежат MD-337, а target access semantics —
+[MD-339 contract](credential-write-target.md).
 
 ### Endpoint selection
 
@@ -1619,7 +1624,8 @@ reserves capacity, writes an object or advances HEAD.
 Этот catalog не задаёт Release 0.3 ownership. Binding/target mutations и
 administrative export отсутствуют в target MCP authority, а explicit read
 attach не является precondition. MD-337 владеет exact disposition каждого
-name; MD-339 — compatibility access state and wire migration.
+name; compatibility access state and wire migration приняты в
+[MD-339 contract](credential-write-target.md).
 
 ## Common MCP schemas
 

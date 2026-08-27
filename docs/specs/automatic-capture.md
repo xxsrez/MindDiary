@@ -16,7 +16,8 @@ ACL, visibility и HEAD concurrency.
 
 Read attach не является prerequisite. Исторические `binding_owner_id`,
 `write_binding_id`, `binding_version`, binding actions и wire payloads ниже не
-задают будущий access contract. Их точную замену определяет MD-339, а
+задают будущий access contract. Их точная замена принята в
+[MD-339 contract](credential-write-target.md), а
 disposition `capture_knowledge` и control route — MD-337. MD-336 не принимает
 новую description semantics и не меняет runtime, schemas, persistence, UI или
 deployment.

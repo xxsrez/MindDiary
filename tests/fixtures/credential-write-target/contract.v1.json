@@ -1,0 +1,339 @@
+{
+  "$schema": "mind-diary/credential-write-target/v1",
+  "version": 1,
+  "source": "docs/specs/credential-write-target.md",
+  "decision": "docs/decisions/0022-site-controlled-credential-write-target.md",
+  "release": "0.3",
+  "status": "accepted_contract_not_implemented",
+  "readAuthorization": {
+    "explicitMindRequired": true,
+    "revisionResolutionRequired": true,
+    "clientRevisionSelectorRequired": false,
+    "omittedRevision": "resolve_current_head_to_exact_revision",
+    "contentReadScopeRequired": true,
+    "readBindingRequired": false,
+    "crossMindQueryAllowed": false,
+    "currentAccessRechecked": true,
+    "cases": {
+      "personal": {
+        "discovery": "trusted_actor_me",
+        "requiredAccess": "own_principal"
+      },
+      "private": {
+        "discovery": "membership_only",
+        "requiredAccess": "active_membership_read"
+      },
+      "unlisted_exact_handle": {
+        "discovery": "exact_handle_only",
+        "requiredAccess": "authenticated_baseline_reader_or_membership"
+      },
+      "public_catalog": {
+        "discovery": "authenticated_catalog_or_exact_handle",
+        "requiredAccess": "authenticated_baseline_reader_or_membership"
+      },
+      "historical": {
+        "discovery": "after_current_mind_authorization",
+        "requiredAccess": "current_access_not_historical_acl"
+      }
+    }
+  },
+  "ownership": {
+    "serverDerivedOwnerField": "binding_owner_id",
+    "ownerKinds": ["oauth_grant", "personal_token"],
+    "ownerImmutable": true,
+    "ownerIndependentPerCredential": true,
+    "accessRefreshPreservesOwner": true,
+    "oauthReconnectCreatesNewOwner": true,
+    "personalTokenReissueCreatesNewOwner": true,
+    "clientOwnerFieldsAccepted": false
+  },
+  "targetState": {
+    "contractVersion": "credential-write-target/v1",
+    "initialTargetVersion": 0,
+    "maximumActiveTargets": 1,
+    "generationOpaque": true,
+    "generationNeverReused": true,
+    "authorityCachedInTarget": [],
+    "transitions": {
+      "select_empty": {
+        "versionDelta": 1,
+        "generation": "new",
+        "previous": "none"
+      },
+      "switch_other": {
+        "versionDelta": 1,
+        "generation": "new",
+        "previous": "invalidated"
+      },
+      "select_same": {
+        "versionDelta": 0,
+        "generation": "preserved",
+        "result": "idempotent_no_op"
+      },
+      "clear": {
+        "versionDelta": 1,
+        "generation": "none",
+        "previous": "invalidated"
+      },
+      "revoke_or_expire": {
+        "versionDelta": 0,
+        "generation": "unusable",
+        "fallback": "none"
+      }
+    }
+  },
+  "siteControl": {
+    "mutationSurface": "trusted_sites_web_only",
+    "oauthLocation": "connection_detail",
+    "personalTokenLocation": "advanced_mcp",
+    "actions": ["select", "switch", "clear"],
+    "requires": [
+      "actor_owned_presentation_ref",
+      "expected_target_version",
+      "idempotency_key",
+      "current_credential_lifecycle",
+      "current_write_scope",
+      "current_writer_role",
+      "server_read_back"
+    ],
+    "forbiddenBrowserAuthorityFields": [
+      "binding_owner_id",
+      "credential_id",
+      "principal_id",
+      "space_id",
+      "role"
+    ],
+    "readableProjectionPersistedAsBinding": false
+  },
+  "mcp": {
+    "inspection": "privacy_safe_current_credential_only",
+    "targetMutation": false,
+    "inspectionFields": [
+      "access_contract",
+      "target_version",
+      "writable_target"
+    ],
+    "inspectionForbiddenFields": [
+      "binding_owner_id",
+      "credential_id",
+      "principal_id",
+      "space_id"
+    ],
+    "protocolProfilesShareSemantics": true,
+    "operationNamesOwnedBy": "MD-337"
+  },
+  "commit": {
+    "requiredInputFields": [
+      "mind",
+      "write_target_generation",
+      "expected_revision",
+      "idempotency_key",
+      "operations"
+    ],
+    "forbiddenAuthorityInputFields": [
+      "binding_owner_id",
+      "principal_id",
+      "space_id",
+      "role",
+      "scope",
+      "target_version"
+    ],
+    "transactionChecks": [
+      "active_credential",
+      "exact_immutable_owner",
+      "content_write_scope",
+      "active_target_generation",
+      "explicit_mind_matches_generation",
+      "current_writer_role",
+      "staged_refs_same_owner_generation",
+      "expected_head",
+      "validation_and_quotas",
+      "idempotency"
+    ],
+    "idempotencyNamespace": [
+      "binding_owner_id",
+      "target_generation",
+      "space_id",
+      "operation",
+      "key"
+    ],
+    "fallback": "none"
+  },
+  "failureMatrix": [
+    {
+      "case": "missing_target",
+      "code": "write_target_required",
+      "reachableObject": false,
+      "revision": false,
+      "headMove": false,
+      "auditOrOutbox": false,
+      "indexEffect": false,
+      "stagedConsumption": false,
+      "fallback": "none"
+    },
+    {
+      "case": "legacy_owner_pending_upgrade",
+      "code": "write_target_upgrade_required",
+      "reachableObject": false,
+      "revision": false,
+      "headMove": false,
+      "auditOrOutbox": false,
+      "indexEffect": false,
+      "stagedConsumption": false,
+      "fallback": "none"
+    },
+    {
+      "case": "stale_generation",
+      "code": "write_target_stale",
+      "reachableObject": false,
+      "revision": false,
+      "headMove": false,
+      "auditOrOutbox": false,
+      "indexEffect": false,
+      "stagedConsumption": false,
+      "fallback": "none"
+    },
+    {
+      "case": "wrong_mind",
+      "code": "write_target_mismatch",
+      "reachableObject": false,
+      "revision": false,
+      "headMove": false,
+      "auditOrOutbox": false,
+      "indexEffect": false,
+      "stagedConsumption": false,
+      "fallback": "none"
+    },
+    {
+      "case": "revoked_or_expired_owner",
+      "code": "write_target_owner_unavailable",
+      "reachableObject": false,
+      "revision": false,
+      "headMove": false,
+      "auditOrOutbox": false,
+      "indexEffect": false,
+      "stagedConsumption": false,
+      "fallback": "none"
+    },
+    {
+      "case": "scope_or_role_loss",
+      "code": "insufficient_scope_or_forbidden",
+      "reachableObject": false,
+      "revision": false,
+      "headMove": false,
+      "auditOrOutbox": false,
+      "indexEffect": false,
+      "stagedConsumption": false,
+      "fallback": "none"
+    },
+    {
+      "case": "visibility_removes_read_grant",
+      "code": "mind_not_found",
+      "reachableObject": false,
+      "revision": false,
+      "headMove": false,
+      "auditOrOutbox": false,
+      "indexEffect": false,
+      "stagedConsumption": false,
+      "fallback": "none"
+    },
+    {
+      "case": "corrupt_or_partial_state",
+      "code": "write_target_state_unavailable",
+      "reachableObject": false,
+      "revision": false,
+      "headMove": false,
+      "auditOrOutbox": false,
+      "indexEffect": false,
+      "stagedConsumption": false,
+      "fallback": "none"
+    },
+    {
+      "case": "stale_head",
+      "code": "revision_conflict",
+      "reachableObject": false,
+      "revision": false,
+      "headMove": false,
+      "auditOrOutbox": false,
+      "indexEffect": false,
+      "stagedConsumption": false,
+      "fallback": "none"
+    }
+  ],
+  "migration": {
+    "capability": "credential-write-target/v1",
+    "legacyInitialLifecycle": "pending_upgrade",
+    "legacyReadBindings": "not_authority_and_not_migrated",
+    "legacyWriteIdsAcceptedByV1": false,
+    "legacyStagedRefsAcceptedByV1": false,
+    "unknownAttemptResumed": false,
+    "completedImmutableResultPreserved": true,
+    "oauth": {
+      "explicitAction": "same_grant_reconsent",
+      "sameOwnerRequired": true,
+      "preserveOnly": "exactly_one_unambiguous_active_target",
+      "requiredChecks": [
+        "active_same_grant_owner",
+        "one_active_legacy_write_record",
+        "no_contradictory_generation",
+        "one_active_resolved_mind",
+        "content_write_scope",
+        "current_writer_role",
+        "atomic_new_v1_generation"
+      ],
+      "oldGenerationReused": false,
+      "failedCheckOutcome": "active_v1_owner_empty_target"
+    },
+    "personalToken": {
+      "explicitAction": "reissue_required",
+      "inPlaceWriteUpgrade": false,
+      "newOwner": true,
+      "newTarget": "empty",
+      "legacyReadMayContinueUntilLifecycleEnd": true,
+      "legacyWriteOutcome": "write_target_upgrade_required"
+    },
+    "reconnect": {
+      "newOwner": true,
+      "newTarget": "empty",
+      "targetCopyAllowed": false
+    },
+    "ambiguousCorruptOrPartialOutcome": "empty_or_unavailable_never_guessed"
+  },
+  "captureAndStaging": {
+    "captureDefault": "disabled",
+    "capturePin": ["binding_owner_id", "target_generation"],
+    "captureEnableSurface": "trusted_sites_web_only",
+    "captureTransferAcrossGeneration": false,
+    "captureTransferAcrossOwner": false,
+    "captureMigrationPreserveRequiresSeparateConfirmation": true,
+    "captureTransactionRechecks": [
+      "owner",
+      "generation",
+      "content_write_scope",
+      "current_writer_role",
+      "private_visibility",
+      "expected_head"
+    ],
+    "newStagedRefPin": ["binding_owner_id", "target_generation"],
+    "legacyStagedRefRemap": false
+  },
+  "legacyCompatibility": {
+    "historicalContractRetained": true,
+    "historicalEvidenceReclassifiedAsTarget": false,
+    "silentOldIdTranslation": false,
+    "silentPersonalFallback": false,
+    "wireAliasDispositionOwnedBy": "MD-337"
+  },
+  "acceptanceIds": [
+    "WT-READ-001",
+    "WT-OWNER-001",
+    "WT-SITE-001",
+    "WT-MCP-001",
+    "WT-COMMIT-001",
+    "WT-FAIL-001",
+    "WT-MIGRATE-001",
+    "WT-MIGRATE-002",
+    "WT-CAPTURE-001",
+    "WT-COMPAT-001"
+  ]
+}

@@ -1,7 +1,8 @@
 # Connections, Advanced MCP и Codex Help
 
 Статус: accepted historical Release 0.1/0.2 as-built/evidence contract,
-обновлено 2026-08-27; target replacement ожидает MD-337/MD-339. Документ задаёт
+обновлено 2026-08-27; target operation disposition ожидает MD-337, а access
+replacement принят в [MD-339 contract](credential-write-target.md). Документ задаёт
 пользовательскую information architecture и server-owned projection для
 Release 0.1. Реализация и live UAT evidence проверяются отдельно; наличие этого
 контракта не является утверждением о развёрнутом поведении.
@@ -12,7 +13,8 @@ control plane: Site показывает connection, readable access projection 
 единственный writable target и только Site может выбрать/switch/clear target
 или revoke connection. Content MCP discover-ит и читает разрешённые Minds без
 mandatory attach/read-binding onboarding и не изменяет Connection state.
-Exact replacement/migration binding mechanics принадлежат MD-339, а
+Exact replacement/migration binding mechanics приняты в
+[MD-339 contract](credential-write-target.md), а
 disposition существующих operations — MD-337; route/UI redesign в этот
 контрактный шаг не входит.
 

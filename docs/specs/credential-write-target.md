@@ -1,0 +1,319 @@
+# Credential-scoped writable target Release 0.3
+
+Статус: accepted target contract, 2026-08-27. Документ MD-339 определяет
+access/binding replacement для Release 0.3. Runtime, persistence, wire schemas,
+migration job, UI и UAT evidence ещё не реализованы и не выводятся из этого
+контракта. Exact disposition historical operation names/routes принадлежит
+MD-337.
+
+Решение принято в
+[ADR-0022](../decisions/0022-site-controlled-credential-write-target.md).
+[Historical Mind bindings](mind-bindings.md) остаются evidence Release
+0.1/0.2 и не являются target authority.
+
+## Цель и границы
+
+Contract разделяет две независимые проверки:
+
+```text
+effective_read = active credential
+               ∩ content:read
+               ∩ explicit Mind + exact resolved revision
+               ∩ current membership or baseline visibility grant
+
+effective_write = active credential
+                ∩ content:write
+                ∩ current Editor/Admin/Owner role
+                ∩ exact owner + active target generation + exact Mind
+                ∩ expected HEAD + idempotency
+```
+
+Read-binding/attach state в target model отсутствует. Writable target не даёт
+membership, visibility, scope или role и не кэширует их. Он только сужает
+destination уже существующей write authority одного credential.
+
+Не входят в MD-339: runtime/storage migration implementation, конкретные
+route/tool names, import/export disposition, redesign Connections UI, token
+format, OAuth protocol redesign, production/AWS deployment и новый automatic-
+capture product profile.
+
+## Read authorization без binding state
+
+Каждый read call передаёт один explicit Mind. Revision selector может быть
+omitted только как точное обозначение HEAD: server в начале call разрешает его
+в immutable `resolved_revision_id`; historical selector также разрешается
+ровно один раз. Затем server проверяет current credential, scope и доступ до
+metadata/object/index read:
+
+| Mind state | Authenticated caller read |
+|---|---|
+| Personal `/me` | Только собственный principal, разрешённый из trusted actor. |
+| Ordinary `private` | Только current active membership с read capability. |
+| Ordinary `unlisted` | Membership либо authenticated exact-handle resolve; catalog enumeration запрещена. |
+| Ordinary `public` | Membership либо authenticated public catalog/exact resolve. |
+| Historical revision | Те же current rules; старые ACL не восстанавливаются. |
+
+`content:write` включает `content:read`, но write target не нужен для browse,
+search, fetch, history, standalone validation или exact-revision BundleFile
+read. Empty/missing/corrupt historical read-binding records не блокируют и не
+расширяют read. Cross-Mind query отсутствует: каждый call всё равно выбирает
+ровно один Mind.
+
+## Authoritative owner и records
+
+`binding_owner_id` остаётся internal server-derived identity stable
+authorization artifact:
+
+- OAuth owner принадлежит immutable grant, а не rotating access/refresh token;
+- personal-token owner принадлежит immutable token record;
+- два grants/tokens одного principal имеют независимые states;
+- client не передаёт owner, credential ID, principal, role или `space_id`.
+
+Целевая минимальная модель:
+
+```text
+CredentialWriteTargetState:
+  binding_owner_id          # immutable, server-derived
+  principal_id              # current owner principal, not request authority
+  credential_kind           # oauth_grant | personal_token
+  contract_version          # credential-write-target/v1
+  lifecycle                 # active | pending_upgrade | revoked | deleted
+  target_version            # monotonic unsigned integer, initial 0
+  active_target_generation? # nullable, at most one
+  created_at
+  updated_at
+
+WritableTargetGeneration:
+  target_generation         # opaque immutable ID, never reused/reactivated
+  binding_owner_id
+  space_id
+  generation_number         # monotonic within owner
+  selected_at
+  invalidated_at?
+```
+
+Storage enforces at most one active generation per owner. ACL, role,
+visibility, scopes, HEAD, name и route не хранятся в generation как authority.
+Inactive generations остаются tombstones достаточно долго для deterministic
+stale denial; exact retention задаётся implementation policy без повторного
+использования ID.
+
+## Lifecycle и concurrency
+
+| Event | Result |
+|---|---|
+| New OAuth grant/personal token | Active v1 owner, `target_version=0`, target `null`. |
+| Select при empty target | Fresh scope/role check; создаётся new generation, version +1. |
+| Switch на другой Mind | Previous generation invalidated и new generation created одной transaction, version +1. |
+| Select exact same active Mind | Idempotent no-op; generation/version сохраняются. |
+| Clear | Active generation invalidated, target `null`, version +1. |
+| OAuth access/refresh rotation | Same grant owner и target сохраняются. |
+| Revoke/expiry | Owner/target немедленно unusable; no fallback. |
+| Reconnect | New grant/owner с empty target; old owner не оживает. |
+| Personal token reissue | New token/owner с empty target; old target не копируется. |
+| ACL/role loss | Target record может остаться для safe clear, но commit fail closed. |
+| Visibility change | Read пересчитывается; write по-прежнему требует current writer membership. |
+| Mind deletion | Generation unusable и затем reconciled/tombstoned; no replacement target. |
+| Corrupt/unavailable state | Inspect/mutation/commit fail closed без guessed target. |
+
+Каждая Site mutation требует `expected_target_version` и idempotency key.
+Transaction разрешает exact owner из trusted presentation ref, сверяет
+version, reauthorizes target, создаёт/инвалидирует generation, повышает version
+ровно один раз и сохраняет canonical result + request hash. Idempotency
+namespace — `binding_owner_id + writable-target-operation + key`. Exact replay
+возвращает прежний result; changed payload — `idempotency_conflict`; stale CAS
+— `write_target_version_conflict` без target metadata leakage.
+
+## Sites control plane
+
+Select, switch и clear вызываются только authenticated trusted Web adapter:
+
+- ordinary OAuth — actor-owned Connection detail;
+- personal token — actor-owned Advanced MCP detail;
+- mutation принимает presentation ref, action, server-resolved `mind_ref`,
+  expected version и idempotency key;
+- server повторно подтверждает current Sites principal, exact owner,
+  credential lifecycle/scope и current write role;
+- raw grant/token/owner/generation/`space_id` не попадает в browser URL, form,
+  DOM, analytics или user-facing error;
+- success заканчивается fresh server read-back; UI не строит state из request;
+- clear inaccessible/deleted target допускается через owner-scoped opaque
+  stale presentation ref и не требует target ACL, потому что только уменьшает
+  authority.
+
+Connection detail показывает derived readable access projection, а не
+persisted read bindings. Такой список — bounded snapshot current ACL/
+visibility; он не является prerequisite content read и не переносится в MCP
+как authority.
+
+## MCP inspection и content commit
+
+Content MCP имеет только privacy-safe inspection exact current credential:
+
+```json
+{
+  "access_contract": "credential-write-target/v1",
+  "target_version": 8,
+  "writable_target": {
+    "target_generation": "wtgen_opaque",
+    "state": "active",
+    "mind": { "route": "/research-notes", "name": "Research Notes" }
+  }
+}
+```
+
+`writable_target` может быть `null`. После access loss `mind` отсутствует и
+state может быть только `unavailable`; owner/principal/space/internal
+credential IDs не возвращаются. MCP inspection не принимает action,
+`expected_target_version` или idempotency key и не изменяет state. Exact
+query/tool name выберет MD-337.
+
+Целевая content commit shape содержит минимум:
+
+```json
+{
+  "mind": "research-notes",
+  "write_target_generation": "wtgen_opaque",
+  "expected_revision": "rev_current",
+  "idempotency_key": "01J...",
+  "operations": []
+}
+```
+
+`mind` остаётся explicit cross-check, но не authority. Client не передаёт
+`binding_owner_id`, target version, role или scope. Authoritative transaction:
+
+1. аутентифицирует current credential и получает exact immutable owner;
+2. требует `content:write`;
+3. читает current active target state и exact generation;
+4. разрешает `mind` и требует совпадение `space_id`;
+5. проверяет current active role `editor | admin | owner`;
+6. проверяет staged refs/automatic policy against same owner + generation;
+7. проверяет `expected_revision`, validation, quotas и idempotency;
+8. одной transaction создаёт revision, продвигает HEAD, consumes exact staged
+   refs и пишет audit/outbox либо не меняет ничего.
+
+Idempotency namespace включает owner + target generation + `space_id` +
+operation + key. Rebind/clear/revoke между prepare и transaction, wrong Mind,
+stale HEAD, scope/role loss или corrupt state не перенаправляют payload в
+previous/current/Personal/«единственный доступный» Mind. No-write outcome не
+создаёт reachable object, revision, HEAD, audit/outbox/index effect и не
+consumes staged ref.
+
+Historical `write_binding_id` и `expected_binding_version` не принимаются как
+v1 target generation/version. Protocol compatibility profiles могут иметь
+разные envelopes, но вызывают одну semantics. MD-337 может сохранить aliases
+только с explicit v1 schema; silent translation old ID или target mutation
+через MCP запрещены.
+
+## Capture, staging и in-flight work
+
+Automatic capture остаётся отдельным default-off Sites consent. Если operation
+сохраняется после MD-337, policy record содержит exact
+`binding_owner_id + target_generation`; enable требует active target,
+`content:write`, writer role и private visibility. Capture transaction
+повторяет owner/generation/scope/role/visibility/HEAD checks.
+
+Switch, clear, revoke, expiry, delete или generation migration disables policy
+до новой explicit Site action. Policy/payload никогда не переносится в new
+generation/owner. ACL/scope/visibility drift даёт no-write даже если record ещё
+существует.
+
+Новые staged refs также pin-ятся к exact owner + target generation. Pre-v1
+legacy staged refs не remap-ятся: пользователь заново stages bytes после
+successful upgrade. Уже committed immutable revisions не меняются.
+
+## Versioned migration Release 0.1/0.2 → 0.3
+
+Rollout использует capability `credential-write-target/v1` и fail-closed
+owner-level state. Target runtime cut не считается выполненным до joined
+schema/application/client evidence.
+
+### Общие правила
+
+1. Каждый legacy owner сначала становится `pending_upgrade`; content read
+   использует новый ACL/visibility contract, но write возвращает
+   `write_target_upgrade_required`.
+2. Legacy `0..N` read records не становятся v1 authority, не ограничивают read
+   и после safety window могут быть удалены/tombstoned.
+3. Old write binding ID, generation, target version и staged ref не принимаются
+   в v1 commit. Pending/unknown historical attempt не возобновляется.
+4. Уже committed revision/idempotency result остаётся историческим фактом и
+   может быть reconciled как immutable result; migration не повторяет effect.
+5. Ambiguous, duplicate, foreign-owner, corrupt, partially migrated или
+   unavailable state получает empty target либо terminal unavailable error,
+   но никогда guessed target.
+
+### OAuth grant
+
+In-place target preservation разрешено только после explicit re-consent к v1
+в том же immutable active grant и при одновременном выполнении всех условий:
+
+- owner до и после upgrade совпадает byte-for-byte;
+- существует ровно один active legacy write record и zero contradictory active
+  generations;
+- target разрешается в ровно один active Mind;
+- current grant имеет `content:write`;
+- current principal имеет writer role exact target;
+- current state доступен и migration transaction может атомарно создать одну
+  new v1 generation.
+
+Сохраняется только `space_id`: old ID/version не переиспользуются. Any failed
+condition даёт active v1 owner с empty target и требует Site select. Если OAuth
+host не может re-consent внутри same grant, reconnect создаёт new owner empty;
+target copy запрещён.
+
+### Personal token
+
+Legacy personal token не получает v1 write authority in place. Advanced MCP
+показывает `reissue required`; новый token получает new immutable owner и empty
+target. Старый token до revoke/expiry может читать по current scope/ACL, но его
+commit fail closed с `write_target_upgrade_required`. Secret/token record,
+target, capture consent и pending payload не копируются.
+
+### Automatic capture migration
+
+Default migration outcome — disabled. Same-owner OAuth preservation может
+перепривязать policy к new generation только отдельной explicit Site
+confirmation и только если old policy однозначно pin-илась к preserved old
+write record, target остаётся private и current scope/role действуют. Без
+любого условия policy disabled. Reconnect/reissue всегда disabled.
+
+## Error semantics и privacy
+
+| Code | Meaning |
+|---|---|
+| `write_target_required` | Active v1 target отсутствует. |
+| `write_target_upgrade_required` | Legacy owner ещё не re-consented/reissued/upgraded. |
+| `write_target_stale` | Generation больше не active exact owner. |
+| `write_target_mismatch` | Explicit Mind не совпадает с current generation; target metadata не раскрывается. |
+| `write_target_version_conflict` | Site mutation built on stale target version. |
+| `write_target_owner_unavailable` | Credential revoked/expired/deleted или owner cannot be resolved. |
+| `write_target_state_unavailable` | Persisted target state corrupt/partial/temporarily unavailable. |
+
+Historical wire aliases могут map-иться на эти classes только в explicit
+versioned adapter, зарегистрированном MD-337. Они не меняют semantics и не
+позволяют old IDs. Missing/foreign/wrong-owner/private denial остаётся
+indistinguishable до authorization. Logs/audit/telemetry не содержат raw
+credential/owner/generation IDs, private Mind metadata, prompt, content,
+staged locator или target-selection request body.
+
+## Acceptance matrix
+
+Machine-readable closed contract:
+[`tests/fixtures/credential-write-target/contract.v1.json`](../../tests/fixtures/credential-write-target/contract.v1.json).
+Минимальное objective evidence должно проверить:
+
+1. private/member, public catalog, exact-handle unlisted и historical current-
+   access read без read binding;
+2. owner isolation для двух grants/tokens одного principal;
+3. Site-only select/switch/clear, version CAS, idempotent same-target и MCP
+   inspect-only;
+4. exact generation/Mind/scope/role/HEAD/idempotency commit и zero side effects
+   для stale/revoke/wrong-Mind/access-loss/corrupt state;
+5. OAuth refresh preservation, reconnect/reissue empty target и no owner copy;
+6. explicit legacy re-consent/reissue, exact unambiguous same-owner preservation
+   и ambiguous/corrupt fail-closed path;
+7. capture/staged generation pinning, no transfer and fail-closed migration;
+8. modern/compatibility protocol envelopes invoking one target-v1 application
+   semantics without legacy ID translation.

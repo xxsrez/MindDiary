@@ -216,9 +216,11 @@ visibility, участников, Connection, token, writable target или уп
 import/export lifecycle.
 
 Exact disposition существующих REST/MCP operations принадлежит MD-337, а
-точная access/binding модель, migration и wire compatibility — MD-339. До их
-реализации нынешний runtime сохраняет проверенное historical 0.1/0.2
-поведение; эта specification не заявляет его автоматическое переключение.
+точная access/binding модель, migration и wire compatibility приняты MD-339 в
+[credential writable-target contract](specs/credential-write-target.md). До
+их runtime-реализации нынешний runtime сохраняет проверенное historical
+0.1/0.2 поведение; эта specification не заявляет его автоматическое
+переключение.
 Description semantics, website AI, anonymous publication, token redesign и
 production/AWS изменения этим решением не принимаются.
 
