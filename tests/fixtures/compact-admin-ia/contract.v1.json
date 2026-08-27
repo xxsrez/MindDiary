@@ -1,6 +1,7 @@
 {
   "$schema": "mind-diary/compact-admin-ia/v1",
   "source": "docs/specs/compact-admin-information-architecture.md",
+  "version": 1,
   "breakpoints": {
     "compact": { "minWidthPx": 320, "maxWidthPx": 767 },
     "medium": { "minWidthPx": 768, "maxWidthPx": 1023 },
@@ -19,14 +20,88 @@
     "spacingScalePx": [4, 8, 12, 16, 24, 32, 48]
   },
   "viewports": [
-    { "id": "minimum", "width": 320, "height": 568 },
-    { "id": "mobile", "width": 390, "height": 844 },
-    { "id": "medium", "width": 768, "height": 1024 },
-    { "id": "wide-minimum", "width": 1024, "height": 768 },
-    { "id": "wide", "width": 1440, "height": 900 }
+    {
+      "id": "minimum",
+      "width": 320,
+      "height": 568,
+      "layoutMode": "compact",
+      "maxOverflowPx": 1,
+      "railVisible": false,
+      "drawerInitiallyOpen": false,
+      "settingsVisibleWithoutOpeningDrawer": false,
+      "requiredFirstVisibleSelectors": ["[data-ia-uat-marker]", "[data-ia-page-header]"],
+      "completeOneOfSelectors": ["[data-ia-primary-action]", "[data-ia-route-state]"],
+      "firstRowStartsInViewport": false,
+      "minimumCompleteRowsWhenReady": 0
+    },
+    {
+      "id": "mobile",
+      "width": 390,
+      "height": 844,
+      "layoutMode": "compact",
+      "maxOverflowPx": 1,
+      "railVisible": false,
+      "drawerInitiallyOpen": false,
+      "settingsVisibleWithoutOpeningDrawer": false,
+      "requiredFirstVisibleSelectors": ["[data-ia-uat-marker]", "[data-ia-page-header]", "[data-ia-mobile-trigger]"],
+      "completeOneOfSelectors": ["[data-ia-primary-action]", "[data-ia-route-state]"],
+      "firstRowStartsInViewport": true,
+      "minimumCompleteRowsWhenReady": 0
+    },
+    {
+      "id": "medium",
+      "width": 768,
+      "height": 1024,
+      "layoutMode": "medium",
+      "maxOverflowPx": 1,
+      "railVisible": false,
+      "drawerInitiallyOpen": false,
+      "settingsVisibleWithoutOpeningDrawer": false,
+      "requiredFirstVisibleSelectors": ["[data-ia-uat-marker]", "[data-ia-page-header]", "[data-ia-mobile-trigger]"],
+      "completeOneOfSelectors": ["[data-ia-primary-action]", "[data-ia-route-state]", "[data-ia-row]"],
+      "firstRowStartsInViewport": true,
+      "minimumCompleteRowsWhenReady": 0
+    },
+    {
+      "id": "wide-minimum",
+      "width": 1024,
+      "height": 768,
+      "layoutMode": "wide",
+      "maxOverflowPx": 1,
+      "railVisible": true,
+      "drawerInitiallyOpen": false,
+      "settingsVisibleWithoutOpeningDrawer": true,
+      "requiredFirstVisibleSelectors": ["[data-ia-rail]", "[data-ia-uat-marker]", "[data-ia-page-header]", "[data-ia-settings-item]"],
+      "completeOneOfSelectors": ["[data-ia-primary-action]", "[data-ia-route-state]", "[data-ia-row]"],
+      "firstRowStartsInViewport": true,
+      "minimumCompleteRowsWhenReady": 0
+    },
+    {
+      "id": "wide",
+      "width": 1440,
+      "height": 900,
+      "layoutMode": "wide",
+      "maxOverflowPx": 1,
+      "railVisible": true,
+      "drawerInitiallyOpen": false,
+      "settingsVisibleWithoutOpeningDrawer": true,
+      "requiredFirstVisibleSelectors": ["[data-ia-rail]", "[data-ia-uat-marker]", "[data-ia-page-header]", "[data-ia-settings-item]"],
+      "completeOneOfSelectors": ["[data-ia-row]", "[data-ia-route-state]"],
+      "firstRowStartsInViewport": true,
+      "minimumCompleteRowsWhenReady": 1
+    }
   ],
-  "primaryOrder": ["my-mind", "minds", "public", "invitations"],
-  "utilityOrder": ["help-optional", "settings"],
+  "navigation": {
+    "primaryOrder": ["my-mind", "minds", "public", "invitations"],
+    "utilityOrder": ["help-optional", "settings"],
+    "personalMindFirst": true,
+    "settingsPinnedToBottom": true,
+    "settingsIsLastUtilityItem": true,
+    "helpOptional": true,
+    "helpPositionWhenPresent": "immediately-before-settings",
+    "helpAbsencePreservesSettingsPin": true,
+    "drawerRepeatsDesktopOrder": true
+  },
   "routes": [
     { "pattern": "/", "shellCurrent": "brand-home", "contextCurrent": null },
     { "pattern": "/me", "shellCurrent": "my-mind", "contextCurrent": null },
@@ -38,19 +113,325 @@
     { "pattern": "/settings/connections", "shellCurrent": "settings", "contextCurrent": "connections" },
     { "pattern": "/settings/connections/{connection_ref}", "shellCurrent": "settings", "contextCurrent": "connections" },
     { "pattern": "/settings/developer/mcp", "shellCurrent": "settings", "contextCurrent": "advanced-mcp" },
-    { "pattern": "/settings/mcp", "shellCurrent": null, "contextCurrent": null, "redirectTo": "/settings/developer/mcp", "status": 308 },
+    {
+      "pattern": "/settings/mcp",
+      "shellCurrent": null,
+      "contextCurrent": null,
+      "behaviorBySession": {
+        "signed_out": {
+          "kind": "safe_sign_in_shell",
+          "status": 200,
+          "routeAgnostic": true,
+          "targetMetadataAllowed": false
+        },
+        "registered": {
+          "kind": "redirect",
+          "status": 308,
+          "location": "/settings/developer/mcp"
+        }
+      }
+    },
     { "pattern": "/help/codex", "shellCurrent": "help-optional", "contextCurrent": null },
     { "pattern": "/help", "shellCurrent": null, "contextCurrent": null }
   ],
+  "sessionStates": {
+    "signed_out": {
+      "shell": "auth",
+      "applicationNavigation": false,
+      "ariaBusy": false,
+      "primaryAction": "sign-in",
+      "targetMetadataAllowed": false,
+      "requiredRegions": ["brand", "uat-marker", "main", "sign-in-action"],
+      "forbiddenRegions": ["application-navigation", "csrf", "target-metadata"],
+      "expectedEffect": "platform-sign-in-entry-only"
+    },
+    "registration_required": {
+      "shell": "auth",
+      "applicationNavigation": false,
+      "ariaBusy": false,
+      "primaryAction": "create-isolated-account",
+      "targetMetadataAllowed": false,
+      "requiredRegions": ["brand", "uat-marker", "main", "isolated-account-action", "manual-recovery-boundary"],
+      "forbiddenRegions": ["application-navigation", "prior-account-facts", "automatic-relink"],
+      "expectedEffect": "explicit-isolated-account-or-manual-recovery"
+    },
+    "bootstrapping": {
+      "shell": "auth",
+      "applicationNavigation": false,
+      "ariaBusy": true,
+      "primaryAction": null,
+      "targetMetadataAllowed": false,
+      "requiredRegions": ["brand", "uat-marker", "main", "bounded-progress"],
+      "forbiddenRegions": ["application-navigation", "partial-personal-mind", "duplicate-bootstrap-action"],
+      "expectedEffect": "one-atomic-account-bootstrap"
+    },
+    "bootstrap_error": {
+      "shell": "auth",
+      "applicationNavigation": false,
+      "ariaBusy": false,
+      "primaryAction": "retry-same-attempt-or-manual-recovery",
+      "targetMetadataAllowed": false,
+      "requiredRegions": ["brand", "uat-marker", "main", "causal-error", "stable-retry"],
+      "forbiddenRegions": ["application-navigation", "new-bootstrap-attempt", "false-success"],
+      "expectedEffect": "retry-exact-bootstrap-attempt"
+    },
+    "registered": {
+      "shell": "application",
+      "applicationNavigation": true,
+      "ariaBusy": false,
+      "primaryAction": "route-owned",
+      "targetMetadataAllowed": "only-after-route-authorization",
+      "requiredRegions": ["brand", "uat-marker", "primary-navigation", "utility-navigation", "main"],
+      "forbiddenRegions": ["raw-content", "raw-identifiers", "credentials"],
+      "expectedEffect": "render-authorized-control-projection"
+    }
+  },
+  "accountStates": {
+    "profile_idle": {
+      "allowedActions": ["save-current-input"],
+      "forbiddenActions": ["delete-without-impact"],
+      "ariaBusy": false,
+      "expectedEffect": "await-profile-command"
+    },
+    "profile_saving": {
+      "allowedActions": [],
+      "forbiddenActions": ["edit-profile", "repeat-profile-command"],
+      "ariaBusy": true,
+      "expectedEffect": "one-profile-command-in-flight"
+    },
+    "profile_saved": {
+      "allowedActions": ["edit-next-profile-value"],
+      "forbiddenActions": ["infer-state-from-request"],
+      "ariaBusy": false,
+      "expectedEffect": "show-server-read-back-and-text-success"
+    },
+    "profile_error": {
+      "allowedActions": ["retry-same-command-when-safe"],
+      "forbiddenActions": ["show-stale-success"],
+      "ariaBusy": false,
+      "expectedEffect": "preserve-causal-error-and-safe-retry"
+    },
+    "profile_conflict": {
+      "allowedActions": ["reload-authoritative-profile"],
+      "forbiddenActions": ["guess-profile-version", "replay-stale-command"],
+      "ariaBusy": false,
+      "expectedEffect": "reload-before-new-profile-command"
+    },
+    "deletion_impact_loading": {
+      "allowedActions": [],
+      "forbiddenActions": ["confirm-account-deletion", "delete-account"],
+      "ariaBusy": true,
+      "expectedEffect": "load-fresh-account-deletion-impact"
+    },
+    "deletion_impact_ready": {
+      "allowedActions": ["enter-exact-confirmation", "delete-after-valid-confirmation"],
+      "forbiddenActions": ["delete-without-fresh-impact", "delete-without-exact-confirmation"],
+      "ariaBusy": false,
+      "expectedEffect": "bind-confirmation-to-exact-cascade"
+    },
+    "deletion_impact_changed_or_expired": {
+      "allowedActions": ["reload-deletion-impact"],
+      "forbiddenActions": ["reuse-old-confirmation", "delete-account"],
+      "ariaBusy": false,
+      "expectedEffect": "invalidate-confirmation-and-reload-impact"
+    },
+    "deleting": {
+      "allowedActions": [],
+      "forbiddenActions": ["repeat-delete-command", "navigate-to-stale-account-state"],
+      "ariaBusy": true,
+      "expectedEffect": "one-account-deletion-command-in-flight"
+    }
+  },
+  "routeSafetyStates": {
+    "unknown": {
+      "session": "registered",
+      "httpStatus": 404,
+      "renderedState": "not_found_or_forbidden",
+      "shellCurrent": null,
+      "targetMetadataAllowed": false,
+      "forbiddenFields": ["target-name", "target-summary", "membership", "visibility", "existence-signal"],
+      "expectedEffect": "no-route-target-read"
+    },
+    "reserved": {
+      "session": "registered",
+      "httpStatus": 404,
+      "renderedState": "not_found_or_forbidden",
+      "shellCurrent": null,
+      "targetMetadataAllowed": false,
+      "forbiddenFields": ["target-name", "target-summary", "membership", "visibility", "existence-signal"],
+      "expectedEffect": "no-route-target-read"
+    },
+    "unauthorized": {
+      "session": "registered",
+      "httpStatus": 404,
+      "renderedState": "not_found_or_forbidden",
+      "shellCurrent": null,
+      "targetMetadataAllowed": false,
+      "forbiddenFields": ["target-name", "target-summary", "membership", "visibility", "existence-signal"],
+      "expectedEffect": "indistinguishable-private-target-denial"
+    }
+  },
+  "privacy": {
+    "forbiddenInApplicationShell": [
+      "principal_id",
+      "space_id",
+      "revision_id",
+      "oauth_grant_id",
+      "token_id",
+      "binding_owner_id",
+      "credential",
+      "download_url",
+      "memory_body",
+      "query",
+      "snippet",
+      "file_path"
+    ],
+    "signedOutForbiddenSelectors": ["[data-ia-shell]", "[data-ia-nav]", "[name=csrf-token]", "[data-ia-target-metadata]"],
+    "untrustedText": {
+      "htmlEscaped": true,
+      "maySelectRouteAuthority": false,
+      "maySelectCssClass": false,
+      "mustNotExecute": true
+    },
+    "safeRouteStateIds": ["unknown", "reserved", "unauthorized"]
+  },
+  "destructiveFlows": {
+    "account-delete": {
+      "routePattern": "/settings/account",
+      "samePanel": true,
+      "orderedSelectors": [
+        "[data-ia-disclosure=account-delete]",
+        "[data-ia-impact=account-delete]",
+        "[data-ia-confirmation=account-delete]",
+        "[data-ia-destructive-action=account-delete]"
+      ],
+      "actionGate": "fresh-impact-and-exact-confirmation",
+      "expectedEffect": "delete-account-by-accepted-cascade"
+    },
+    "mind-delete": {
+      "routePattern": "/{space_handle}",
+      "samePanel": true,
+      "orderedSelectors": [
+        "[data-ia-disclosure=mind-delete]",
+        "[data-ia-impact=mind-delete]",
+        "[data-ia-confirmation=mind-delete]",
+        "[data-ia-destructive-action=mind-delete]"
+      ],
+      "actionGate": "fresh-impact-and-exact-confirmation",
+      "expectedEffect": "delete-mind-and-all-history"
+    },
+    "connection-revoke": {
+      "routePattern": "/settings/connections/{connection_ref}",
+      "samePanel": true,
+      "orderedSelectors": [
+        "[data-ia-connection-access-summary]",
+        "[data-ia-disclosure=connection-revoke]",
+        "[data-ia-confirmation=connection-revoke]",
+        "[data-ia-destructive-action=connection-revoke]"
+      ],
+      "actionGate": "explicit-confirmation",
+      "expectedEffect": "revoke-grant-and-hide-ordinary-connection"
+    }
+  },
+  "disclosures": {
+    "uat": {
+      "selector": "[data-ia-uat-marker]",
+      "requiredRoutes": "all-ui-routes",
+      "expectedEffect": "identify-test-environment-before-action"
+    },
+    "personal-mind": {
+      "routePattern": "/me",
+      "selector": "[data-ia-disclosure=personal-mind]",
+      "adjacentTo": "[data-ia-page-header]",
+      "expectedEffect": "explain-private-only-and-absent-sharing-controls"
+    },
+    "visibility": {
+      "routePattern": "/{space_handle}",
+      "selector": "[data-ia-disclosure=visibility]",
+      "mustPrecede": "[data-ia-visibility-action]",
+      "expectedEffect": "block-visibility-command-until-full-warning-is-visible"
+    },
+    "advanced-mcp": {
+      "routePattern": "/settings/developer/mcp",
+      "selector": "[data-ia-disclosure=advanced-mcp]",
+      "mustNotAppearIn": ["primary-navigation", "ordinary-connections-list"],
+      "expectedEffect": "keep-protocol-details-in-advanced-surface"
+    }
+  },
+  "accessibility": {
+    "landmarks": {
+      "main": { "selector": "[data-ia-main]", "count": 1 },
+      "primaryNavigation": { "selector": "[data-ia-nav=primary]", "accessibleName": "Primary", "count": 1, "registeredOnly": true },
+      "utilityNavigation": { "selector": "[data-ia-nav=utility]", "accessibleName": "Utility", "count": 1, "registeredOnly": true },
+      "settingsNavigation": { "selector": "[data-ia-nav=settings]", "accessibleName": "Settings sections", "count": 1, "settingsRoutesOnly": true }
+    },
+    "headings": {
+      "h1Count": 1,
+      "majorPanelLevel": 2,
+      "maximumRowHeadingLevel": 3,
+      "skippedLevelsAllowed": false
+    },
+    "focus": {
+      "firstTabSelector": "[data-ia-skip-link]",
+      "skipTargetSelector": "[data-ia-main]",
+      "minimumIndicatorPx": 3,
+      "drawerOpenFocusSelector": "[data-ia-nav-item=my-mind]",
+      "drawerClosedLinksTabbable": false,
+      "drawerTrapsFocus": true,
+      "escapeReturnsToSelector": "[data-ia-mobile-trigger]",
+      "dialogTrapsFocus": true,
+      "dialogReturnsFocusToInvoker": true,
+      "escapeSubmitsDestructiveAction": false
+    }
+  },
+  "preferences": {
+    "forcedColors": {
+      "emulation": "active",
+      "useSystemColors": true,
+      "meaningSurvivesBackgroundRemoval": true,
+      "requiredVisibleStates": ["focus", "current-item", "row-boundary", "dialog-boundary", "disclosure-boundary"]
+    },
+    "reducedMotion": {
+      "emulation": "reduce",
+      "spatialMotionAllowed": false,
+      "stateChangeRemainsImmediate": true,
+      "focusOrderUnchanged": true,
+      "loopingMotionAllowed": false
+    }
+  },
+  "brand": {
+    "canonicalTokens": ["ink", "paper", "memory-plum", "living-coral", "quiet-brass", "quiet-sage", "white"],
+    "canonicalAssets": ["/brand/mind-diary-lockup.svg", "/brand/mind-diary-mark.svg"],
+    "externalFontRequestsAllowed": false,
+    "minimumBaseTextPx": 16,
+    "smallTextForegroundTokensForbidden": ["living-coral", "quiet-brass", "quiet-sage"],
+    "forbiddenVisualFlags": [
+      "anatomical-brain",
+      "neural-network",
+      "robot",
+      "neon-ai-gradient",
+      "cyberpunk",
+      "dark-secret-vault",
+      "childrens-locked-diary",
+      "recognizable-franchise-symbol",
+      "looping-glow"
+    ]
+  },
   "selectors": {
     "shell": "[data-ia-shell]",
     "main": "[data-ia-main]",
+    "skipLink": "[data-ia-skip-link]",
+    "rail": "[data-ia-rail]",
     "primaryNavigation": "[data-ia-nav=primary]",
     "utilityNavigation": "[data-ia-nav=utility]",
     "settingsNavigation": "[data-ia-nav=settings]",
+    "settingsItem": "[data-ia-settings-item]",
     "mobileTrigger": "[data-ia-mobile-trigger]",
     "mobileDrawer": "[data-ia-mobile-drawer]",
+    "uatMarker": "[data-ia-uat-marker]",
     "pageHeader": "[data-ia-page-header]",
+    "primaryAction": "[data-ia-primary-action]",
+    "routeState": "[data-ia-route-state]",
     "collection": "[data-ia-collection]",
     "row": "[data-ia-row]",
     "disclosure": "[data-ia-disclosure]"

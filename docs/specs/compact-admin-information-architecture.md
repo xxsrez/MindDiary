@@ -161,7 +161,7 @@ navigation.
 | `/settings/connections` | `Settings` | `Connections` | Active OAuth connections. |
 | `/settings/connections/{connection_ref}` | `Settings` | `Connections` | Detail наследует parent current state. |
 | `/settings/developer/mcp` | `Settings` | `Advanced MCP` | Protocol details остаются только здесь. |
-| `/settings/mcp` | — | — | `308` redirect, HTML shell не рендерится. |
+| `/settings/mcp` | session-dependent | — | Authenticated `GET`/`HEAD` получает `308` на `/settings/developer/mcp`; signed-out request остаётся распознанным UI route и получает общий route-agnostic sign-in shell без target data. |
 | `/help/codex` | `Help with Codex` | — | Optional utility item; не child Settings. |
 | `/help` | none | — | Footer/deep-link route; не расширяет primary IA. |
 | unknown/reserved/unauthorized | none | — | Safe not-found/forbidden без target metadata. |
@@ -296,15 +296,16 @@ copy используют `min-width: 0` и `overflow-wrap: anywhere`.
 
 ## Placement disclosures
 
-| Disclosure | Точное место |
-|---|---|
-| `UAT` | Всегда рядом с brand в signed-out, registration и registered chrome; не только footer. |
-| Personal Mind | На `/me` сразу после heading: `Private — only you`; sharing, publication, transfer и separate delete controls отсутствуют. |
-| `unlisted` / `public` | Непосредственно перед visibility mutation: live HEAD + immutable history, URL not secret для unlisted, возврат в private не отменяет раскрытие. |
-| Destructive Mind/account action | В той же panel непосредственно перед confirmation control и action; не в tooltip/sidebar/footer. |
-| Connection revoke | В connection detail после readable/writable summary и перед revoke button. |
-| Advanced MCP | Protocol scopes/endpoints/token lifecycle только внутри `/settings/developer/mcp`. |
-| Retryable/stale state | В affected collection/panel; stale success и mutation actions убираются до read-back. |
+| Disclosure | Точное место | Ожидаемый эффект |
+|---|---|---|
+| `UAT` | Всегда рядом с brand в signed-out, registration и registered chrome; не только footer. | Пользователь отличает тестовую среду до любого действия. |
+| Personal Mind | На `/me` сразу после heading: `Private — only you`; sharing, publication, transfer и separate delete controls отсутствуют. | Не возникает ложного ожидания sharing/publication/separate deletion. |
+| `unlisted` / `public` | Непосредственно перед visibility mutation: live HEAD + immutable history, URL not secret для unlisted, возврат в private не отменяет раскрытие. | Visibility command недоступна до отображения полного предупреждения. |
+| Account deletion | В account danger zone: disclosure → exact cascade → confirmation field → destructive action. | Action недоступна без fresh impact и exact confirmation; success удаляет account по accepted cascade. |
+| Mind deletion | В exact Mind danger zone: disclosure → exact impact → confirmation field → destructive action. | Action недоступна без fresh impact и exact confirmation; success удаляет весь Mind и историю. |
+| Connection revoke | В connection detail: readable/writable summary → revoke disclosure → confirmation/action. | Revoke fail-closed закрывает grant и убирает connection из ordinary list. |
+| Advanced MCP | Protocol scopes/endpoints/token lifecycle только внутри `/settings/developer/mcp`. | Protocol details не попадают в ordinary shell или Connections list. |
+| Retryable/stale state | В affected collection/panel; stale success и mutation actions убираются до read-back. | UI сначала перечитывает authoritative state и не повторяет guessed mutation. |
 
 ## No-data-leak contract
 
@@ -329,17 +330,28 @@ copy используют `min-width: 0` и `overflow-wrap: anywhere`.
 [`tests/fixtures/compact-admin-ia/contract.v1.json`](../../tests/fixtures/compact-admin-ia/contract.v1.json).
 MD-347 должна реализовать указанные `data-ia-*` hooks как test-only stable
 semantic roles; copy и internal CSS class не становятся selectors.
+Fixture содержит закрытые route/session/account/privacy/destructive matrices,
+per-viewport first-visible expectations, navigation pinning, landmarks/focus,
+system-preference и brand/forbidden-visual contracts. Новое состояние или
+визуальный flag требует явного обновления версии контракта, а не silent
+fallback в implementation test.
 
 | Contract role | Stable hook |
 |---|---|
 | application shell | `data-ia-shell` |
 | main content | `data-ia-main` |
+| skip link | `data-ia-skip-link` |
+| persistent wide rail | `data-ia-rail` |
 | primary navigation | `data-ia-nav="primary"` |
 | utility navigation | `data-ia-nav="utility"` |
 | Settings contextual navigation | `data-ia-nav="settings"` |
+| pinned Settings item | `data-ia-settings-item` |
 | compact menu trigger | `data-ia-mobile-trigger` |
 | compact drawer | `data-ia-mobile-drawer` |
+| UAT marker | `data-ia-uat-marker` |
 | page header | `data-ia-page-header` |
+| page primary action | `data-ia-primary-action` |
+| route loading/empty/error/forbidden state | `data-ia-route-state` |
 | bounded collection | `data-ia-collection` |
 | compact row | `data-ia-row` |
 | adjacent disclosure | `data-ia-disclosure` |
@@ -350,7 +362,7 @@ semantic roles; copy и internal CSS class не становятся selectors.
 | `IA-SESSION-02` | Registration/progress/error states сохраняют isolated-account и stable-retry contract, не показывают registered nav. |
 | `IA-NAV-01` | Wide: Personal first, Settings last lower item, route/current map совпадает с fixture. |
 | `IA-NAV-02` | Compact: closed drawer links не tabbable; open → My Mind focus; Escape → trigger focus. |
-| `IA-NAV-03` | Settings parent и exact context child current в разных named nav; `/settings/mcp` только redirect. |
+| `IA-NAV-03` | Settings parent и exact context child current в разных named nav; authenticated legacy `/settings/mcp` redirect-ится, signed-out legacy request получает общий safe sign-in shell. |
 | `IA-GEOMETRY-01` | Fixture viewports проходят document/body/major-region overflow budget `<= 1px`. |
 | `IA-GEOMETRY-02` | Rail `240px` на wide, drawer `min(320px, 88vw)`, content `<= 1120px`, hit targets `>= 44px`. |
 | `IA-DENSITY-01` | Ready collections используют bounded rows: `44–56px` wide, `>=56px` compact; no card wall. |
