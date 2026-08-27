@@ -6,6 +6,7 @@ import type {
   ExportDownloadGrant,
   ExportJob,
   JobId,
+  LegacyCredentialWriteTargetUpgradeSnapshot,
   MindBindingOwnerId,
   PrincipalActivitySummary,
   PrincipalId,
@@ -30,6 +31,7 @@ import type {
   MembershipMap,
   MembershipMutationRecord,
   MutableMindBindingOwnerState,
+  MutableCredentialWriteTargetOwnerState,
   OrdinaryMindDeletionCleanupMap,
   OrdinaryMindDeletionImpactMap,
   OrdinaryMindDeletionState,
@@ -79,6 +81,14 @@ export interface OrdinaryMindTransactionState {
   accountDeletionCleanup: AccountDeletionCleanupMap;
   authorizationStates: Map<string, AuthorizationState>;
   mindBindingOwners: Map<MindBindingOwnerId, MutableMindBindingOwnerState>;
+  credentialWriteTargetOwners: Map<
+    MindBindingOwnerId,
+    MutableCredentialWriteTargetOwnerState
+  >;
+  legacyCredentialWriteTargetUpgrades: Map<
+    MindBindingOwnerId,
+    Readonly<LegacyCredentialWriteTargetUpgradeSnapshot>
+  >;
 }
 
 export function ordinaryMindDeletionState(

@@ -276,6 +276,13 @@ function ids(capture?: {
       capture?.auditOutbox?.(id);
       return id;
     },
+    nextCredentialWriteTargetGenerationId: () => nextOpaque("write-target-generation"),
+    nextCredentialWriteTargetAuditEventId: () => nextOpaque("audit-write-target"),
+    nextCredentialWriteTargetOutboxMessageId: () => {
+      const id = nextOpaque("outbox-write-target");
+      capture?.auditOutbox?.(id);
+      return id;
+    },
     nextPersonalSpaceHandle: () => `personal-${crypto.randomUUID()}`,
     nextAuditEventId: () => nextOpaque("audit"),
     nextOutboxMessageId: () => {
@@ -1175,17 +1182,31 @@ export async function createProductSiteRuntime(
     publicOrigin: options.publicOrigin,
     verifierKey: options.tokenVerifierKey,
     authorizationTokens: metadata,
-    async revokeBindingOwner(input) {
-      const result = await metadata.revokeMindBindingOwner({
+    async registerWriteTargetOwner(input) {
+      const result = await metadata.runCredentialWriteTargetTransaction(
+        (transaction) => transaction.registerCredentialWriteTargetOwner({
+          bindingOwnerId: input.bindingOwnerId as MindBindingOwnerId,
+          principalId: input.principalId as PrincipalId,
+          credentialKind: "oauth_grant",
+          occurredAt: input.occurredAt as UtcInstant,
+        }),
+      );
+      // A legacy owner stays pending until the separate explicit upgrade.
+      if (result.kind !== "registered" && result.kind !== "owner_conflict") {
+        throw new Error("OAuth write-target profile initialization failed.");
+      }
+    },
+    async revokeWriteTargetOwner(input) {
+      const result = await metadata.revokeCredentialWriteTargetOwner({
         bindingOwnerId: input.bindingOwnerId as MindBindingOwnerId,
         principalId: input.principalId as PrincipalId,
-        requestId: nextOpaque("request-oauth-binding-revoke"),
-        auditEventId: generated.nextMindBindingAuditEventId(),
-        auditOutboxMessageId: generated.nextMindBindingOutboxMessageId(),
+        requestId: nextOpaque("request-oauth-write-target-revoke"),
+        auditEventId: generated.nextCredentialWriteTargetAuditEventId(),
+        auditOutboxMessageId: generated.nextCredentialWriteTargetOutboxMessageId(),
         occurredAt: input.occurredAt as UtcInstant,
       });
       if (result.kind !== "revoked" && result.kind !== "not_found") {
-        throw new Error("OAuth binding owner revocation failed.");
+        throw new Error("OAuth write-target owner revocation failed.");
       }
     },
     now,
@@ -1415,8 +1436,8 @@ export async function createProductSiteRuntime(
       tokenIds: generated,
       personalTokenRefs: generated,
       tokens: metadata,
-      bindingOwners: metadata,
-      bindingIds: generated,
+      writeTargets: metadata,
+      writeTargetIds: generated,
       logger: controlObservability,
     }),
     capacity: new CapacityAdmissionService({

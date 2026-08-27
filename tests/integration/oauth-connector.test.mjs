@@ -290,19 +290,29 @@ async function pkce(value) {
 async function environment(options = {}) {
   const database = new OAuthD1();
   const authorizationTokens = new InMemoryMcpTokenStore();
-  const bindingRevocations = [];
+  const targetRegistrations = [];
+  const targetRevocations = [];
   const connector = await createSitesOAuthConnector({
     database,
     publicOrigin: ORIGIN,
     verifierKey: Uint8Array.from({ length: 32 }, (_value, index) => index + 1),
     authorizationTokens,
-    revokeBindingOwner: options.revokeBindingOwner ?? ((input) => {
-      bindingRevocations.push(input);
+    registerWriteTargetOwner: options.registerWriteTargetOwner ?? ((input) => {
+      targetRegistrations.push(input);
+    }),
+    revokeWriteTargetOwner: options.revokeWriteTargetOwner ?? ((input) => {
+      targetRevocations.push(input);
     }),
     ...(options.now ? { now: options.now } : {}),
     resolveIdentity: async () => ({ kind: "authenticated", principalId: "principal_1" }),
   });
-  return { database, connector, authorizationTokens, bindingRevocations };
+  return {
+    database,
+    connector,
+    authorizationTokens,
+    targetRegistrations,
+    targetRevocations,
+  };
 }
 
 async function register(connector) {
@@ -362,7 +372,12 @@ async function authorize(connector, clientId, scopes = "content:read") {
 }
 
 test("OAuth discovery, DCR, PKCE, read grant, step-up, and revoke are durable", async () => {
-  const { connector, authorizationTokens, bindingRevocations } = await environment();
+  const {
+    connector,
+    authorizationTokens,
+    targetRegistrations,
+    targetRevocations,
+  } = await environment();
   const protectedMetadata = await connector.fetch(
     new Request(`${ORIGIN}/.well-known/oauth-protected-resource/api/mcp`),
   );
@@ -390,6 +405,13 @@ test("OAuth discovery, DCR, PKCE, read grant, step-up, and revoke are durable", 
   assert.equal(readTokens.scope, "content:read");
   const authenticatedRead = await connector.authenticator.authenticate(readTokens.access_token, "request_1");
   assert.equal(authenticatedRead.kind, "authenticated");
+  assert.deepEqual(targetRegistrations.map(({ bindingOwnerId, principalId }) => ({
+    bindingOwnerId,
+    principalId,
+  })), [{
+    bindingOwnerId: authenticatedRead.actor.authentication.bindingOwnerId,
+    principalId: "principal_1",
+  }]);
   assert.deepEqual(authenticatedRead.actor.authentication.effectiveScopes, ["content:read"]);
   assert.equal(
     (await authorizationTokens.readMcpTokenForAuthorization(
@@ -409,6 +431,11 @@ test("OAuth discovery, DCR, PKCE, read grant, step-up, and revoke are durable", 
   assert.equal(writeTokens.scope, "content:read content:write");
   const authenticatedWrite = await connector.authenticator.authenticate(writeTokens.access_token, "request_2");
   assert.deepEqual(authenticatedWrite.actor.authentication.effectiveScopes, ["content:read", "content:write"]);
+  assert.equal(targetRegistrations.length, 2);
+  assert.equal(
+    targetRegistrations[1].bindingOwnerId,
+    targetRegistrations[0].bindingOwnerId,
+  );
   const connections = (await connector.listConnectionPage("principal_1")).items;
   assert.equal(connections.length, 1);
   assert.deepEqual(connections[0].scopes, ["content:read", "content:write"]);
@@ -417,15 +444,15 @@ test("OAuth discovery, DCR, PKCE, read grant, step-up, and revoke are durable", 
     await connector.revokeConnection("principal_1", connections[0].connectionRef),
     true,
   );
-  assert.equal(bindingRevocations.length, 1);
+  assert.equal(targetRevocations.length, 1);
   assert.deepEqual(
     {
-      bindingOwnerId: bindingRevocations[0].bindingOwnerId,
-      principalId: bindingRevocations[0].principalId,
+      bindingOwnerId: targetRevocations[0].bindingOwnerId,
+      principalId: targetRevocations[0].principalId,
     },
     { bindingOwnerId: connections[0].bindingOwnerId, principalId: "principal_1" },
   );
-  assert.equal(Number.isFinite(Date.parse(bindingRevocations[0].occurredAt)), true);
+  assert.equal(Number.isFinite(Date.parse(targetRevocations[0].occurredAt)), true);
   assert.deepEqual(await connector.authenticator.authenticate(writeTokens.access_token, "request_3"), { kind: "invalid" });
   assert.equal(
     (await authorizationTokens.readMcpTokenForAuthorization(
@@ -436,6 +463,11 @@ test("OAuth discovery, DCR, PKCE, read grant, step-up, and revoke are durable", 
 
   const reconnectedRead = await authorize(connector, client.client_id);
   assert.equal(reconnectedRead.scope, "content:read");
+  assert.equal(targetRegistrations.length, 3);
+  assert.notEqual(
+    targetRegistrations[2].bindingOwnerId,
+    targetRegistrations[0].bindingOwnerId,
+  );
   assert.deepEqual(
     (await connector.listConnectionPage("principal_1")).items[0].scopes,
     ["content:read"],
@@ -520,7 +552,7 @@ test("connection refs and bounded cursors preserve actor-safe stable traversal",
 
 test("refresh rotation tolerates bounded concurrent reuse without revoking the connection", async () => {
   const current = new Date("2026-08-26T20:00:00.000Z");
-  const { connector, bindingRevocations } = await environment({ now: () => new Date(current) });
+  const { connector, targetRevocations } = await environment({ now: () => new Date(current) });
   const client = await register(connector);
   const issued = await authorize(connector, client.client_id);
   const grantId = (await connector.listConnectionPage("principal_1")).items[0].bindingOwnerId;
@@ -541,7 +573,7 @@ test("refresh rotation tolerates bounded concurrent reuse without revoking the c
   assert.notEqual(rotatedBody.refresh_token, issued.refresh_token);
   assert.equal(concurrentBody.error, "invalid_grant");
   assert.match(concurrentBody.error_description, /reload the latest stored credentials/u);
-  assert.equal(bindingRevocations.length, 0);
+  assert.equal(targetRevocations.length, 0);
   assert.equal((await connector.listConnectionPage("principal_1")).items[0].bindingOwnerId, grantId);
   assert.equal(
     (await connector.authenticator.authenticate(rotatedBody.access_token, "request_concurrent")).kind,
@@ -551,7 +583,7 @@ test("refresh rotation tolerates bounded concurrent reuse without revoking the c
 
 test("refresh reuse after the bounded grace revokes the entire connection", async () => {
   let current = new Date("2026-08-26T20:00:00.000Z");
-  const { connector, bindingRevocations } = await environment({ now: () => new Date(current) });
+  const { connector, targetRevocations } = await environment({ now: () => new Date(current) });
   const client = await register(connector);
   const issued = await authorize(connector, client.client_id);
   const grantId = (await connector.listConnectionPage("principal_1")).items[0].bindingOwnerId;
@@ -573,9 +605,9 @@ test("refresh reuse after the bounded grace revokes the entire connection", asyn
   }));
   assert.equal(reused.status, 400);
   assert.equal((await reused.json()).error, "invalid_grant");
-  assert.equal(bindingRevocations.length, 1);
-  assert.equal(bindingRevocations[0].principalId, "principal_1");
-  assert.equal(bindingRevocations[0].bindingOwnerId, grantId);
+  assert.equal(targetRevocations.length, 1);
+  assert.equal(targetRevocations[0].principalId, "principal_1");
+  assert.equal(targetRevocations[0].bindingOwnerId, grantId);
   assert.deepEqual(await connector.authenticator.authenticate(rotatedBody.access_token, "request_reuse"), { kind: "invalid" });
 });
 

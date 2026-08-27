@@ -1,12 +1,28 @@
 
 import { RevisionMetadataStoreState } from "./revision-metadata-store-state.js";
+import {
+  cloneCredentialWriteTargetOwners,
+  cloneLegacyCredentialWriteTargetUpgrades,
+  migrateLegacyMindBindingOwners,
+} from "./credential-write-target-internals.js";
 
 export abstract class RevisionMetadataSnapshotStore extends RevisionMetadataStoreState {
   /** Trusted adapter checkpoint; canonical objects remain outside this projection. */
     exportDurableSnapshot(): unknown {
       const reachabilityCounts = this._objectReachabilityCounts();
+      const legacyCredentialWriteTargetUpgrades = new Map(
+        this._legacyCredentialWriteTargetUpgrades,
+      );
+      for (const [ownerId, evidence] of migrateLegacyMindBindingOwners(
+        this._mindBindingOwners,
+      )) {
+        if (
+          !this._credentialWriteTargetOwners.has(ownerId) &&
+          !legacyCredentialWriteTargetUpgrades.has(ownerId)
+        ) legacyCredentialWriteTargetUpgrades.set(ownerId, evidence);
+      }
       return {
-        v: 1,
+        v: 2,
         spaces: new Map(this._spaces),
         revisionsById: new Map(this._revisionsById),
         objectReachabilityCounts: Object.freeze({
@@ -51,7 +67,13 @@ export abstract class RevisionMetadataSnapshotStore extends RevisionMetadataStor
         ordinaryMindDeletionCleanup: new Map(this._ordinaryMindDeletionCleanup),
         accountDeletionImpacts: new Map(this._accountDeletionImpacts),
         accountDeletionCleanup: new Map(this._accountDeletionCleanup),
-        mindBindingOwners: new Map(this._mindBindingOwners),
+        credentialWriteTargetOwners: cloneCredentialWriteTargetOwners(
+          this._credentialWriteTargetOwners,
+        ),
+        legacyCredentialWriteTargetUpgrades:
+          cloneLegacyCredentialWriteTargetUpgrades(
+            legacyCredentialWriteTargetUpgrades,
+          ),
         activeHandlesByKey: new Map(this._activeHandlesByKey),
         activeHandlesBySpace: new Map(this._activeHandlesBySpace),
         retiredHandles: new Map(this._retiredHandles),

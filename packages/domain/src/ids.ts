@@ -15,7 +15,11 @@ export type TokenId = OpaqueId<"token">;
 export type OAuthConnectionRef = OpaqueId<"oauth-connection-ref">;
 export type PersonalTokenRef = OpaqueId<"personal-token-ref">;
 export type MindBindingOwnerId = OpaqueId<"mind-binding-owner">;
+export type CredentialWriteTargetGenerationId =
+  OpaqueId<"credential-write-target-generation">;
+/** @deprecated Compatibility-only identity for pre credential-write-target/v1 snapshots. */
 export type ReadMindBindingId = OpaqueId<"read-mind-binding">;
+/** @deprecated Compatibility-only identity for pre credential-write-target/v1 snapshots. */
 export type WriteMindBindingId = OpaqueId<"write-mind-binding">;
 export type StagedBundleFileId = OpaqueId<"staged-bundle-file">;
 export type JobId = OpaqueId<"job">;

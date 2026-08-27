@@ -9,6 +9,8 @@ import type {
 import type {
   AccountDeletionContext,
   ApplyAutomaticCapturePolicyRequest,
+  ApplyCredentialWriteTargetRequest,
+  ApplyCredentialWriteTargetResult,
   ApplyMindBindingMutationResult,
   ApplyReadMindBindingRequest,
   ApplyWriteMindBindingRequest,
@@ -23,6 +25,8 @@ import type {
   CapacityUsageSnapshot,
   CheckIdempotencyRequest,
   CompleteIdempotencyRequest,
+  CredentialWriteTargetSnapshot,
+  CredentialWriteTargetTransaction,
   ControlInvitationProjection,
   ControlMemberProjection,
   ExternalIdentityBindingLookup,
@@ -47,11 +51,15 @@ import type {
   PrincipalAccountSnapshot,
   PrincipalActivitySummary,
   PrincipalId,
+  RegisterCredentialWriteTargetOwnerRequest,
+  RegisterCredentialWriteTargetOwnerResult,
   PublicMindCatalogPageRequest,
   PublicMindCatalogPageResult,
   RecordPrincipalActivityRequest,
   RevokeMindBindingOwnerRequest,
   RevokeMindBindingOwnerResult,
+  RevokeCredentialWriteTargetOwnerRequest,
+  RevokeCredentialWriteTargetOwnerResult,
   ServiceOperatorDirectoryPage,
   ServiceOperatorDirectoryQuery,
   ServiceOperatorPrincipalProjection,
@@ -82,6 +90,8 @@ import {
   cloneAuthorizationState,
   cloneCapacityReservation,
   cloneCapacityReservations,
+  cloneCredentialWriteTargetOwners,
+  cloneLegacyCredentialWriteTargetUpgrades,
   cloneEnvelope,
   cloneIdempotencyRecords,
   cloneMindBindingOwners,
@@ -89,35 +99,62 @@ import {
   compareDirectoryRows,
   compareUnicodeScalarValues,
   completeIdempotencyAgainst,
+  credentialWriteTargetEffectsAvailable,
+  credentialWriteTargetSnapshot,
   createStagedBundleFileAgainst,
   decodePublicCatalogCursor,
   decodeServiceOperatorCursor,
   emptyMindBindingOwnerState,
+  freshCredentialWriteTargetOwnerState,
   encodePublicCatalogCursor,
   encodeServiceOperatorCursor,
   freezeStagedBundleFile,
   maxUtilizationState,
   mindBindingEffectsAvailable,
   mindBindingSnapshot,
+  migrateLegacyMindBindingOwners,
   normalizeDirectorySearch,
   ownedCapacitySpaceIds,
   personalMindProfileFromAccount,
   readMembershipReplay,
   recordMindBindingMutation,
+  recordCredentialWriteTargetMutation,
+  replayCredentialWriteTargetMutation,
   replayMindBindingMutation,
   stageMindBindingAudit,
+  stageCredentialWriteTargetAudit,
+  stageCredentialWriteTargetRevokeAudit,
   stageMindBindingRevokeAudit,
   validMindBindingMutationBase,
+  validCredentialWriteTargetMutation,
 } from "./metadata-store-internals.js";
 import {
   bindingVersion,
+  clearCredentialWriteTarget,
+  configureCredentialAutomaticCapture,
   isReservedTopLevelHandle,
   parseCanonicalSpaceHandle,
+  revokeCredentialWriteTarget,
+  selectCredentialWriteTarget,
+  upgradeLegacyCredentialWriteTarget,
   version,
 } from "@mind-diary/application-ports";
 import { RevisionMetadataSnapshotStore } from "./revision-metadata-snapshot-store.js";
 
 export abstract class RevisionMetadataReadStore extends RevisionMetadataSnapshotStore {
+  async decommissionLegacyMindBindingsForMigration(): Promise<void> {
+      await this._runExclusive(async () => {
+        for (const [ownerId, evidence] of migrateLegacyMindBindingOwners(
+          this._mindBindingOwners,
+        )) {
+          if (
+            !this._credentialWriteTargetOwners.has(ownerId) &&
+            !this._legacyCredentialWriteTargetUpgrades.has(ownerId)
+          ) this._legacyCredentialWriteTargetUpgrades.set(ownerId, evidence);
+        }
+        this._mindBindingOwners.clear();
+      });
+    }
   async recordPrincipalActivity(
       request: Readonly<RecordPrincipalActivityRequest>,
     ): Promise<void> {
@@ -571,6 +608,322 @@ export abstract class RevisionMetadataReadStore extends RevisionMetadataSnapshot
       return mindBindingSnapshot(
         state ?? emptyMindBindingOwnerState(bindingOwnerId, principalId, occurredAt),
       );
+    }
+
+  async readCredentialWriteTarget(
+      bindingOwnerId: MindBindingOwnerId,
+      principalId: PrincipalId,
+    ): Promise<Readonly<CredentialWriteTargetSnapshot> | null> {
+      if (
+        !BOUNDED_OPAQUE_ID.test(bindingOwnerId) ||
+        !BOUNDED_OPAQUE_ID.test(principalId)
+      ) return null;
+      const current = this._credentialWriteTargetOwners.get(bindingOwnerId);
+      const legacy = this._legacyCredentialWriteTargetUpgrades.get(bindingOwnerId);
+      if (
+        (current !== undefined && current.state.principalId !== principalId) ||
+        (legacy !== undefined && legacy.principalId !== principalId)
+      ) return null;
+      return credentialWriteTargetSnapshot(current, legacy);
+    }
+
+  async runCredentialWriteTargetTransaction<Result>(
+      operation: (transaction: CredentialWriteTargetTransaction) => Promise<Result>,
+    ): Promise<Result> {
+      return this._runExclusive(async () => {
+        const owners = cloneCredentialWriteTargetOwners(
+          this._credentialWriteTargetOwners,
+        );
+        const legacy = cloneLegacyCredentialWriteTargetUpgrades(
+          this._legacyCredentialWriteTargetUpgrades,
+        );
+        const auditEvents = new Map(
+          [...this._auditEvents].map(([id, event]) => [id, cloneAuditEvent(event)]),
+        );
+        const auditOutbox = new Map(
+          [...this._auditOutbox].map(([id, message]) => [id, cloneAuditOutbox(message)]),
+        );
+
+        const generationIdUsed = (generationId: string): boolean =>
+          [...owners.values()].some((owner) =>
+            owner.retiredGenerationIds.has(generationId) ||
+            owner.state.activeGeneration?.generationId === generationId ||
+            [...owner.idempotency.values()].some(
+              (record) => record.result.state.activeGeneration?.generationId === generationId,
+            ),
+          );
+        const writerRoleFor = async (
+          principalId: PrincipalId,
+          spaceId: SpaceId | null,
+        ) => {
+          if (spaceId === null) return null;
+          const state = await this.readCurrentAuthorizationState({
+            principalId,
+            spaceId,
+            tokenId: null,
+          });
+          const role =
+            state?.principal.state === "active" &&
+            state.space.state === "active" &&
+            state.membership?.state === "active" &&
+            state.membership.principalId === principalId &&
+            state.membership.spaceId === spaceId
+              ? state.membership.role
+              : null;
+          return role;
+        };
+
+        const transaction: CredentialWriteTargetTransaction = Object.freeze({
+          kind: "credential-write-target-transaction" as const,
+          readCredentialWriteTarget: async (
+            bindingOwnerId: MindBindingOwnerId,
+            principalId: PrincipalId,
+          ) => {
+            const current = owners.get(bindingOwnerId);
+            const migration = legacy.get(bindingOwnerId);
+            if (
+              (current !== undefined && current.state.principalId !== principalId) ||
+              (migration !== undefined && migration.principalId !== principalId)
+            ) return null;
+            return credentialWriteTargetSnapshot(current, migration);
+          },
+          registerCredentialWriteTargetOwner: async (
+            request: Readonly<RegisterCredentialWriteTargetOwnerRequest>,
+          ): Promise<RegisterCredentialWriteTargetOwnerResult> => {
+            if (
+              !BOUNDED_OPAQUE_ID.test(request.bindingOwnerId) ||
+              !BOUNDED_OPAQUE_ID.test(request.principalId) ||
+              (request.credentialKind !== "oauth_grant" &&
+                request.credentialKind !== "personal_token") ||
+              !Number.isFinite(Date.parse(request.occurredAt))
+            ) return Object.freeze({ kind: "invalid_record" });
+            const existing = owners.get(request.bindingOwnerId);
+            if (existing !== undefined) {
+              return existing.state.principalId === request.principalId &&
+                  existing.state.credentialKind === request.credentialKind
+                ? Object.freeze({
+                    kind: "registered" as const,
+                    state: existing.state,
+                    replayed: true,
+                  })
+                : Object.freeze({ kind: "owner_conflict" as const });
+            }
+            // A legacy owner cannot bypass explicit upgrade/re-consent by being
+            // registered as if it were a fresh credential.
+            if (legacy.has(request.bindingOwnerId)) {
+              return Object.freeze({ kind: "owner_conflict" });
+            }
+            const created = freshCredentialWriteTargetOwnerState(request);
+            owners.set(request.bindingOwnerId, created);
+            return Object.freeze({
+              kind: "registered" as const,
+              state: created.state,
+              replayed: false,
+            });
+          },
+          applyCredentialWriteTarget: async (
+            request: Readonly<ApplyCredentialWriteTargetRequest>,
+          ): Promise<ApplyCredentialWriteTargetResult> => {
+            if (!validCredentialWriteTargetMutation(request)) {
+              return Object.freeze({ kind: "invalid_record" });
+            }
+            let owner = owners.get(request.bindingOwnerId);
+            if (owner !== undefined) {
+              if (owner.state.principalId !== request.principalId) {
+                return Object.freeze({ kind: "owner_mismatch" });
+              }
+              const replay = replayCredentialWriteTargetMutation(owner, request);
+              if (replay !== null) return replay;
+            }
+
+            let transition;
+            if (request.operation === "upgrade_legacy") {
+              const evidence = legacy.get(request.bindingOwnerId);
+              if (evidence === undefined) {
+                return Object.freeze({
+                  kind: owner === undefined ? "not_found" : "credential_inactive",
+                });
+              }
+              if (evidence.principalId !== request.principalId) {
+                return Object.freeze({ kind: "owner_mismatch" });
+              }
+              if (generationIdUsed(request.generationId)) {
+                return Object.freeze({ kind: "invalid_record" });
+              }
+              transition = upgradeLegacyCredentialWriteTarget({
+                evidence,
+                bindingOwnerId: request.bindingOwnerId,
+                principalId: request.principalId,
+                credentialKind: request.credentialKind,
+                generationId: request.generationId,
+                authority: {
+                  hasContentWriteScope: request.credentialHasWriteScope,
+                  currentRole: await writerRoleFor(
+                    request.principalId,
+                    evidence.candidateSpaceId,
+                  ),
+                },
+                occurredAt: request.occurredAt,
+              });
+              if (transition.kind === "applied") {
+                owner = {
+                  state: transition.state,
+                  retiredGenerationIds: new Set(),
+                  idempotency: new Map(),
+                };
+                owners.set(request.bindingOwnerId, owner);
+                legacy.delete(request.bindingOwnerId);
+              }
+            } else {
+              if (owner === undefined) {
+                return Object.freeze({
+                  kind: legacy.has(request.bindingOwnerId)
+                    ? "pending_upgrade"
+                    : "not_found",
+                });
+              }
+              if (
+                request.operation === "select" &&
+                owner.state.activeGeneration?.spaceId !== request.spaceId &&
+                generationIdUsed(request.generationId)
+              ) return Object.freeze({ kind: "invalid_record" });
+              if (request.operation === "select") {
+                transition = selectCredentialWriteTarget(owner.state, {
+                  principalId: request.principalId,
+                  spaceId: request.spaceId,
+                  expectedTargetVersion: request.expectedTargetVersion,
+                  generationId: request.generationId,
+                  authority: {
+                    hasContentWriteScope: request.credentialHasWriteScope,
+                    currentRole: await writerRoleFor(
+                      request.principalId,
+                      request.spaceId,
+                    ),
+                  },
+                  occurredAt: request.occurredAt,
+                });
+              } else if (request.operation === "clear") {
+                transition = clearCredentialWriteTarget(owner.state, request);
+              } else {
+                transition = configureCredentialAutomaticCapture(owner.state, {
+                  ...request,
+                  authority: {
+                    hasContentWriteScope: request.credentialHasWriteScope,
+                    currentRole: await writerRoleFor(
+                      request.principalId,
+                      owner.state.activeGeneration?.spaceId ?? null,
+                    ),
+                  },
+                });
+              }
+            }
+            if (transition.kind !== "applied") {
+              return Object.freeze({ kind: transition.kind });
+            }
+            if (owner === undefined) return Object.freeze({ kind: "invalid_record" });
+            if (
+              !credentialWriteTargetEffectsAvailable(
+                request,
+                auditEvents,
+                auditOutbox,
+              )
+            ) return Object.freeze({ kind: "effect_conflict" });
+            const previousGenerationId = owner.state.activeGeneration?.generationId;
+            owner.state = transition.state;
+            if (
+              previousGenerationId !== undefined &&
+              previousGenerationId !== transition.state.activeGeneration?.generationId
+            ) owner.retiredGenerationIds.add(previousGenerationId);
+            const result = Object.freeze({
+              kind: "applied" as const,
+              state: transition.state,
+              changed: transition.changed,
+              replayed: false,
+            });
+            stageCredentialWriteTargetAudit(
+              request,
+              result,
+              auditEvents,
+              auditOutbox,
+            );
+            recordCredentialWriteTargetMutation(owner, request, result);
+            return result;
+          },
+        });
+
+        const result = await operation(transaction);
+        this._credentialWriteTargetOwners = owners;
+        this._legacyCredentialWriteTargetUpgrades = legacy;
+        this._auditEvents = auditEvents;
+        this._auditOutbox = auditOutbox;
+        return result;
+      });
+    }
+
+  async revokeCredentialWriteTargetOwner(
+      request: Readonly<RevokeCredentialWriteTargetOwnerRequest>,
+    ): Promise<RevokeCredentialWriteTargetOwnerResult> {
+      return this._runExclusive(async () => {
+        if (
+          !BOUNDED_OPAQUE_ID.test(request.bindingOwnerId) ||
+          !BOUNDED_OPAQUE_ID.test(request.principalId) ||
+          !BOUNDED_OPAQUE_ID.test(request.requestId) ||
+          !BOUNDED_OPAQUE_ID.test(request.auditEventId) ||
+          !BOUNDED_OPAQUE_ID.test(request.auditOutboxMessageId) ||
+          !Number.isFinite(Date.parse(request.occurredAt))
+        ) return Object.freeze({ kind: "invalid_record" });
+        const owner = this._credentialWriteTargetOwners.get(request.bindingOwnerId);
+        const legacy = this._legacyCredentialWriteTargetUpgrades.get(
+          request.bindingOwnerId,
+        );
+        if (owner === undefined) {
+          if (legacy === undefined) return Object.freeze({ kind: "not_found" });
+          if (legacy.principalId !== request.principalId) {
+            return Object.freeze({ kind: "owner_mismatch" });
+          }
+          // Pending legacy credentials are already fail-closed. Revocation
+          // removes the last migration-only evidence and cannot revive target IDs.
+          this._legacyCredentialWriteTargetUpgrades.delete(request.bindingOwnerId);
+          return Object.freeze({ kind: "revoked", changed: true, replayed: false });
+        }
+        if (owner.state.principalId !== request.principalId) {
+          return Object.freeze({ kind: "owner_mismatch" });
+        }
+        const transition = revokeCredentialWriteTarget(
+          owner.state,
+          request.principalId,
+          request.occurredAt,
+        );
+        if (transition.kind !== "applied") {
+          return Object.freeze({
+            kind: transition.kind === "owner_mismatch"
+              ? "owner_mismatch" as const
+              : "invalid_record" as const,
+          });
+        }
+        if (!transition.changed) {
+          return Object.freeze({ kind: "revoked", changed: false, replayed: true });
+        }
+        if (
+          !credentialWriteTargetEffectsAvailable(
+            request,
+            this._auditEvents,
+            this._auditOutbox,
+          )
+        ) return Object.freeze({ kind: "effect_conflict" });
+        const previousGenerationId = owner.state.activeGeneration?.generationId;
+        owner.state = transition.state;
+        if (previousGenerationId !== undefined) {
+          owner.retiredGenerationIds.add(previousGenerationId);
+        }
+        stageCredentialWriteTargetRevokeAudit(
+          request,
+          true,
+          this._auditEvents,
+          this._auditOutbox,
+        );
+        return Object.freeze({ kind: "revoked", changed: true, replayed: false });
+      });
     }
 
   async readStagedBundleFile(

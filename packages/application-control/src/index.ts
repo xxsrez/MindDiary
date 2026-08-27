@@ -27,3 +27,5 @@ export { PublicMindCatalogFailure, PublicMindCatalogService } from "./public-min
 export type { PublicMindCatalogFailureCode, ListPublicMindsQuery, PublicMindCatalogResult, PublicMindCatalogSafeEvent, PublicMindCatalogSafeLogger, PublicMindCatalogDependencies } from "./public-mind-catalog.js";
 export { ControlReadFailure, ControlReadService, PrincipalActivityService, ServiceOperatorDirectoryFailure, ServiceOperatorDirectoryService, ControlPrivacySafeObservability } from "./control-read-and-observability.js";
 export type { ControlPrivacySafeEvent, ControlReadFailureCode, ServiceOperatorDirectoryFailureCode } from "./control-read-and-observability.js";
+export { CredentialWriteTargetApplicationService } from "./credential-write-target.js";
+export type { CredentialWriteTargetDependencies, CredentialWriteTargetCaller, CredentialWriteTargetCommand, CredentialWriteTargetCommandResult } from "./credential-write-target.js";

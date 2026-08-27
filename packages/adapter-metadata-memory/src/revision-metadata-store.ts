@@ -15,6 +15,7 @@ import type {
   KnowledgeSpaceMap,
   MembershipMap,
   MutableMindBindingOwnerState,
+  MutableCredentialWriteTargetOwnerState,
   OrdinaryMindDeletionCleanupMap,
   OrdinaryMindDeletionImpactMap,
   OrdinaryMindIdempotencyRecord,
@@ -37,6 +38,7 @@ import type {
   CapacityReservation,
   CapacityUsageSnapshot,
   ContentCommitMetadataStore,
+  CredentialWriteTargetStore,
   ControlReadStore,
   ExportDownloadGrant,
   ExportDownloadGrantStore,
@@ -48,6 +50,7 @@ import type {
   MarkdownImportStagedFile,
   MembershipControlStore,
   MindBindingOwnerId,
+  LegacyCredentialWriteTargetUpgradeSnapshot,
   MindBindingStore,
   ObjectCleanupCheckpointStore,
   OrdinaryMindStore,
@@ -67,6 +70,11 @@ import {
   cloneObjectCleanupCheckpoint,
   cloneObjectReachabilityCounts,
   clonePrincipalActivity,
+  cloneCredentialWriteTargetOwners,
+  cloneLegacyCredentialWriteTargetUpgrades,
+  migrateLegacyMindBindingOwners,
+  validCredentialWriteTargetOwnersSnapshot,
+  validLegacyCredentialWriteTargetUpgradesSnapshot,
 } from "./metadata-store-internals.js";
 import { RevisionMetadataSupportStore } from "./revision-metadata-support-store.js";
 
@@ -84,6 +92,7 @@ export class InMemoryRevisionMetadataStore extends RevisionMetadataSupportStore
     ObjectCleanupCheckpointStore,
     MembershipControlStore,
     ControlReadStore,
+    CredentialWriteTargetStore,
     ServiceOperatorDirectoryStore,
     MindBindingStore {
   /** Restores a checkpoint produced by exportDurableSnapshot, failing closed on corruption. */
@@ -98,13 +107,28 @@ export class InMemoryRevisionMetadataStore extends RevisionMetadataSupportStore
         "externalBindings", "knowledgeSpaces", "personalBindings", "memberships", "invitations",
         "personalProfileIdempotencyRecords", "ordinaryMindIdempotencyRecords",
         "membershipMutationRecords", "ordinaryMindDeletionImpacts", "ordinaryMindDeletionCleanup",
-        "accountDeletionImpacts", "accountDeletionCleanup", "mindBindingOwners",
+        "accountDeletionImpacts", "accountDeletionCleanup",
         "activeHandlesByKey", "activeHandlesBySpace", "retiredHandles",
         "publicMindCatalogSnapshots", "authorizationStates",
       ] as const;
       if (
-        snapshot.v !== 1 ||
+        (snapshot.v !== 1 && snapshot.v !== 2) ||
         !mapFields.every((field) => snapshot[field] instanceof Map) ||
+        (snapshot.v === 1 && !(snapshot.mindBindingOwners instanceof Map)) ||
+        (snapshot.v === 2 &&
+          (!(snapshot.credentialWriteTargetOwners instanceof Map) ||
+            !(snapshot.legacyCredentialWriteTargetUpgrades instanceof Map) ||
+            !validCredentialWriteTargetOwnersSnapshot(
+              snapshot.credentialWriteTargetOwners as Map<MindBindingOwnerId, unknown>,
+            ) ||
+            !validLegacyCredentialWriteTargetUpgradesSnapshot(
+              snapshot.legacyCredentialWriteTargetUpgrades as Map<MindBindingOwnerId, unknown>,
+            ) ||
+            [...(snapshot.credentialWriteTargetOwners as Map<MindBindingOwnerId, unknown>).keys()]
+              .some((ownerId) =>
+                (snapshot.legacyCredentialWriteTargetUpgrades as Map<MindBindingOwnerId, unknown>)
+                  .has(ownerId),
+              ))) ||
         !(snapshot.publicMindCatalogSpaceIds instanceof Set) ||
         !Number.isSafeInteger(snapshot.publicMindCatalogGeneration) ||
         (snapshot.publicMindCatalogGeneration as number) < 0 ||
@@ -218,7 +242,32 @@ export class InMemoryRevisionMetadataStore extends RevisionMetadataSupportStore
       restored._ordinaryMindDeletionCleanup = new Map(snapshot.ordinaryMindDeletionCleanup as OrdinaryMindDeletionCleanupMap);
       restored._accountDeletionImpacts = new Map(snapshot.accountDeletionImpacts as AccountDeletionImpactMap);
       restored._accountDeletionCleanup = new Map(snapshot.accountDeletionCleanup as AccountDeletionCleanupMap);
-      restored._mindBindingOwners = new Map(snapshot.mindBindingOwners as Map<MindBindingOwnerId, MutableMindBindingOwnerState>);
+      if (snapshot.v === 1) {
+        const legacyOwners = new Map(
+          snapshot.mindBindingOwners as Map<MindBindingOwnerId, MutableMindBindingOwnerState>,
+        );
+        // Read-binding projections are intentionally discarded. Only bounded,
+        // fail-closed write evidence survives for an explicit same-owner upgrade.
+        restored._legacyCredentialWriteTargetUpgrades =
+          migrateLegacyMindBindingOwners(legacyOwners);
+        restored._mindBindingOwners = new Map();
+      } else {
+        restored._credentialWriteTargetOwners = cloneCredentialWriteTargetOwners(
+          snapshot.credentialWriteTargetOwners as Map<
+            MindBindingOwnerId,
+            MutableCredentialWriteTargetOwnerState
+          >,
+        );
+        restored._legacyCredentialWriteTargetUpgrades =
+          cloneLegacyCredentialWriteTargetUpgrades(
+            snapshot.legacyCredentialWriteTargetUpgrades as Map<
+              MindBindingOwnerId,
+              Readonly<LegacyCredentialWriteTargetUpgradeSnapshot>
+            >,
+          );
+        // A forward snapshot never revives the removed legacy authority model.
+        restored._mindBindingOwners = new Map();
+      }
       restored._activeHandlesByKey = new Map(snapshot.activeHandlesByKey as ActiveHandleByKeyMap);
       restored._activeHandlesBySpace = new Map(snapshot.activeHandlesBySpace as ActiveHandleBySpaceMap);
       restored._retiredHandles = new Map(snapshot.retiredHandles as RetiredHandleMap);

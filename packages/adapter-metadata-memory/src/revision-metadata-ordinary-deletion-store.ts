@@ -14,6 +14,8 @@ import {
   ordinaryMindSnapshotFromMaps,
   purgeMindBindingsForPrincipal,
   purgeMindBindingsForSpace,
+  purgeCredentialWriteTargetsForPrincipal,
+  purgeCredentialWriteTargetsForSpace,
   stagePublicCatalogSnapshot,
   targetRecordSelection,
   type Digest,
@@ -343,6 +345,12 @@ export abstract class RevisionMetadataOrdinaryDeletionStore extends RevisionMeta
               spaceId,
               request.occurredAt,
             );
+            purgeCredentialWriteTargetsForSpace(
+              tx.credentialWriteTargetOwners,
+              tx.legacyCredentialWriteTargetUpgrades,
+              spaceId,
+              request.occurredAt,
+            );
             this._failOrdinaryMindIfRequested("delete_after_target_records");
 
             tx.publicCatalogSpaceIds = derivePublicMindCatalogSpaceIds(
@@ -659,6 +667,12 @@ export abstract class RevisionMetadataOrdinaryDeletionStore extends RevisionMeta
                 spaceId,
                 request.occurredAt,
               );
+              purgeCredentialWriteTargetsForSpace(
+                tx.credentialWriteTargetOwners,
+                tx.legacyCredentialWriteTargetUpgrades,
+                spaceId,
+                request.occurredAt,
+              );
             }
             this._failAccountDeletionIfRequested("delete_after_target_records");
 
@@ -775,6 +789,11 @@ export abstract class RevisionMetadataOrdinaryDeletionStore extends RevisionMeta
             tx.principalActivities.delete(request.principalId);
             purgeMindBindingsForPrincipal(
               tx.mindBindingOwners,
+              request.principalId,
+            );
+            purgeCredentialWriteTargetsForPrincipal(
+              tx.credentialWriteTargetOwners,
+              tx.legacyCredentialWriteTargetUpgrades,
               request.principalId,
             );
             for (const [key, state] of tx.authorizationStates) {

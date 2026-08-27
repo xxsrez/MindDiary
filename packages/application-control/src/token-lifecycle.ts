@@ -1,5 +1,5 @@
 import type { ActorContext } from "@mind-diary/application-contracts";
-import type { Clock, IssuedTokenSecret, McpTokenMetadata, McpTokenPagePosition, McpTokenPageState, McpTokenStore, MindBindingIdGenerator, MindBindingStore, TokenHasher, TokenIdGenerator, PersonalTokenRefGenerator } from "@mind-diary/application-ports";
+import type { Clock, CredentialWriteTargetIdGenerator, CredentialWriteTargetStore, IssuedTokenSecret, McpTokenMetadata, McpTokenPagePosition, McpTokenPageState, McpTokenStore, TokenHasher, TokenIdGenerator, PersonalTokenRefGenerator } from "@mind-diary/application-ports";
 import { normalizeTokenScopes } from "@mind-diary/domain";
 import type { AccessTokenState, EffectiveTokenScopes, MindBindingOwnerId, PrincipalId, PersonalTokenRef, TokenId, TokenScope, UtcInstant } from "@mind-diary/domain";
 import { safeBootstrapRequestId } from "./account-bootstrap.js";
@@ -144,10 +144,13 @@ export interface TokenLifecycleDependencies {
   readonly tokenIds: TokenIdGenerator;
   readonly personalTokenRefs?: PersonalTokenRefGenerator;
   readonly tokens: McpTokenStore;
-  readonly bindingOwners?: Pick<MindBindingStore, "revokeMindBindingOwner">;
-  readonly bindingIds?: Pick<
-    MindBindingIdGenerator,
-    "nextMindBindingAuditEventId" | "nextMindBindingOutboxMessageId"
+  readonly writeTargets?: Pick<
+    CredentialWriteTargetStore,
+    "runCredentialWriteTargetTransaction" | "revokeCredentialWriteTargetOwner"
+  >;
+  readonly writeTargetIds?: Pick<
+    CredentialWriteTargetIdGenerator,
+    "nextCredentialWriteTargetAuditEventId" | "nextCredentialWriteTargetOutboxMessageId"
   >;
   readonly logger?: TokenLifecycleSafeLogger;
 }
@@ -369,10 +372,13 @@ export class TokenLifecycleService {
   readonly #tokenIds: TokenIdGenerator;
   readonly #personalTokenRefs: PersonalTokenRefGenerator;
   readonly #tokens: McpTokenStore;
-  readonly #bindingOwners: Pick<MindBindingStore, "revokeMindBindingOwner"> | undefined;
-  readonly #bindingIds: Pick<
-    MindBindingIdGenerator,
-    "nextMindBindingAuditEventId" | "nextMindBindingOutboxMessageId"
+  readonly #writeTargets: Pick<
+    CredentialWriteTargetStore,
+    "runCredentialWriteTargetTransaction" | "revokeCredentialWriteTargetOwner"
+  > | undefined;
+  readonly #writeTargetIds: Pick<
+    CredentialWriteTargetIdGenerator,
+    "nextCredentialWriteTargetAuditEventId" | "nextCredentialWriteTargetOutboxMessageId"
   > | undefined;
   readonly #logger: TokenLifecycleSafeLogger | undefined;
 
@@ -387,8 +393,8 @@ export class TokenLifecycleService {
       },
     });
     this.#tokens = dependencies.tokens;
-    this.#bindingOwners = dependencies.bindingOwners;
-    this.#bindingIds = dependencies.bindingIds;
+    this.#writeTargets = dependencies.writeTargets;
+    this.#writeTargetIds = dependencies.writeTargetIds;
     this.#logger = dependencies.logger;
   }
 
@@ -470,6 +476,22 @@ export class TokenLifecycleService {
         "token_lifecycle_unavailable",
         "Token presentation identifier generation is unavailable.",
       );
+    }
+    if (this.#writeTargets !== undefined) {
+      const registered = await this.#writeTargets.runCredentialWriteTargetTransaction(
+        (transaction) => transaction.registerCredentialWriteTargetOwner({
+          bindingOwnerId: tokenId as unknown as MindBindingOwnerId,
+          principalId,
+          credentialKind: "personal_token",
+          occurredAt: canonicalUtcInstant(createdAtMilliseconds),
+        }),
+      );
+      if (registered.kind !== "registered") {
+        throw new TokenLifecycleFailure(
+          "token_lifecycle_unavailable",
+          "Token write-target profile could not be initialized.",
+        );
+      }
     }
     const issuedSecret = await this.#tokenHasher.issueSecret();
     const persistence = issuedSecret.persistence();
@@ -723,13 +745,13 @@ export class TokenLifecycleService {
         "Token was not found.",
       );
     }
-    if (this.#bindingOwners !== undefined && this.#bindingIds !== undefined) {
-      const bindingResult = await this.#bindingOwners.revokeMindBindingOwner({
+    if (this.#writeTargets !== undefined && this.#writeTargetIds !== undefined) {
+      const bindingResult = await this.#writeTargets.revokeCredentialWriteTargetOwner({
         bindingOwnerId: tokenId as unknown as MindBindingOwnerId,
         principalId,
         requestId: actor.requestId,
-        auditEventId: this.#bindingIds.nextMindBindingAuditEventId(),
-        auditOutboxMessageId: this.#bindingIds.nextMindBindingOutboxMessageId(),
+        auditEventId: this.#writeTargetIds.nextCredentialWriteTargetAuditEventId(),
+        auditOutboxMessageId: this.#writeTargetIds.nextCredentialWriteTargetOutboxMessageId(),
         occurredAt: canonicalUtcInstant(revokedAtMilliseconds),
       });
       if (bindingResult.kind !== "revoked" && bindingResult.kind !== "not_found") {

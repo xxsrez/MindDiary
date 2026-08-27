@@ -380,25 +380,51 @@ test("presentation-ref token pages are actor-bound, stable, bounded, and omit st
   );
 });
 
-test("token revoke fences its binding owner on first use and idempotent retry", async () => {
+test("token issue creates an empty write-target owner and revoke fences it idempotently", async () => {
+  const registrations = [];
   const revocations = [];
   let auditId = 0;
   let outboxId = 0;
   const { service } = await fixture({
-    bindingOwners: {
-      async revokeMindBindingOwner(request) {
+    writeTargets: {
+      async runCredentialWriteTargetTransaction(operation) {
+        return operation({
+          async registerCredentialWriteTargetOwner(request) {
+            registrations.push(request);
+            return {
+              kind: "registered",
+              state: {
+                bindingOwnerId: request.bindingOwnerId,
+                principalId: request.principalId,
+                credentialKind: request.credentialKind,
+                contractVersion: "credential-write-target/v1",
+                lifecycleState: "active",
+                targetVersion: 0,
+                activeGeneration: null,
+                automaticCaptureMode: "disabled",
+                captureGenerationId: null,
+                createdAt: request.occurredAt,
+                upgradedAt: null,
+                updatedAt: request.occurredAt,
+                revokedAt: null,
+              },
+              replayed: false,
+            };
+          },
+        });
+      },
+      async revokeCredentialWriteTargetOwner(request) {
         revocations.push(request);
         return {
           kind: "revoked",
-          invalidatedReadBindings: revocations.length === 1 ? 2 : 0,
-          invalidatedWriteBindings: revocations.length === 1 ? 1 : 0,
+          changed: revocations.length === 1,
           replayed: revocations.length !== 1,
         };
       },
     },
-    bindingIds: {
-      nextMindBindingAuditEventId: () => `audit_token_binding_${++auditId}`,
-      nextMindBindingOutboxMessageId: () => `outbox_token_binding_${++outboxId}`,
+    writeTargetIds: {
+      nextCredentialWriteTargetAuditEventId: () => `audit_token_target_${++auditId}`,
+      nextCredentialWriteTargetOutboxMessageId: () => `outbox_token_target_${++outboxId}`,
     },
   });
   const actor = sitesActor("principal_binding_revoke");
@@ -406,6 +432,12 @@ test("token revoke fences its binding owner on first use and idempotent retry", 
     name: "binding owner",
     scopes: ["content:write"],
   });
+  assert.deepEqual(registrations, [{
+    bindingOwnerId: issued.token.tokenId,
+    principalId: actor.principalId,
+    credentialKind: "personal_token",
+    occurredAt: START,
+  }]);
 
   const first = await service.revokeMcpToken(actor, issued.token.tokenId);
   const retry = await service.revokeMcpToken(actor, issued.token.tokenId);

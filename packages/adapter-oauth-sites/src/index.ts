@@ -85,7 +85,12 @@ export interface SitesOAuthConnectorOptions {
     McpTokenStore,
     "createMcpToken" | "revokeMcpToken"
   >;
-  readonly revokeBindingOwner?: (input: Readonly<{
+  readonly revokeWriteTargetOwner?: (input: Readonly<{
+    bindingOwnerId: string;
+    principalId: string;
+    occurredAt: string;
+  }>) => void | Promise<void>;
+  readonly registerWriteTargetOwner?: (input: Readonly<{
     bindingOwnerId: string;
     principalId: string;
     occurredAt: string;
@@ -922,6 +927,15 @@ export async function createSitesOAuthConnector(
     const codeVerifier = await verifier(code, OAUTH_AUTHORIZATION_CODE_PREFIX);
     if (codeVerifier === null) throw new Error("OAuth authorization code generation failed");
     const timestamp = now();
+    // Initialize the owner before publishing a usable credential. A later D1
+    // failure can leave only an empty orphan profile, which has no capability;
+    // the inverse ordering could expose an active grant without its fail-closed
+    // target profile.
+    await options.registerWriteTargetOwner?.({
+      bindingOwnerId: grantId,
+      principalId: identity.principalId,
+      occurredAt: timestamp.toISOString(),
+    });
     await options.database.batch([
       options.database
         .prepare(`/*md-oauth-grant-upsert*/ INSERT INTO md_oauth_grants
@@ -1019,7 +1033,7 @@ export async function createSitesOAuthConnector(
   ): Promise<void> => {
     const timestamp = now().toISOString();
     await revokeMirroredGrant(grantId, timestamp);
-    await options.revokeBindingOwner?.({
+    await options.revokeWriteTargetOwner?.({
       bindingOwnerId: grantId,
       principalId,
       occurredAt: timestamp,
@@ -1514,7 +1528,7 @@ export async function createSitesOAuthConnector(
     const grantId = connection.bindingOwnerId;
     const timestamp = now().toISOString();
     await revokeMirroredGrant(grantId, timestamp);
-    await options.revokeBindingOwner?.({
+    await options.revokeWriteTargetOwner?.({
       bindingOwnerId: grantId,
       principalId,
       occurredAt: timestamp,

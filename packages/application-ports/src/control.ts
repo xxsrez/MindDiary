@@ -5,6 +5,7 @@ import type {
 
 import {
   type AuditEventId,
+  type CredentialWriteTargetGenerationId,
   type BackgroundJob,
   type CanonicalRevisionEnvelope,
   type CanonicalSpaceHandle,
@@ -67,6 +68,12 @@ export interface MindBindingIdGenerator {
   nextWriteMindBindingId(): WriteMindBindingId;
   nextMindBindingAuditEventId(): AuditEventId;
   nextMindBindingOutboxMessageId(): OutboxMessageId;
+}
+
+export interface CredentialWriteTargetIdGenerator {
+  nextCredentialWriteTargetGenerationId(): CredentialWriteTargetGenerationId;
+  nextCredentialWriteTargetAuditEventId(): AuditEventId;
+  nextCredentialWriteTargetOutboxMessageId(): OutboxMessageId;
 }
 
 export interface ExternalIdentityBindingLookup {

@@ -1,5 +1,6 @@
 import type {
   AuditEventId,
+  CredentialWriteTargetGenerationId,
   DeletedPrincipalId,
   ExternalBindingId,
   IdempotencyKey,
@@ -52,6 +53,15 @@ export const INVITATION_STATES = [
   "expired",
 ] as const;
 export const ACCESS_TOKEN_STATES = ["active", "revoked", "expired"] as const;
+export const CREDENTIAL_WRITE_TARGET_CONTRACT_VERSION =
+  "credential-write-target/v1" as const;
+export const CREDENTIAL_KINDS = ["oauth_grant", "personal_token"] as const;
+export const CREDENTIAL_WRITE_TARGET_LIFECYCLE_STATES = [
+  "active",
+  "pending_upgrade",
+  "revoked",
+  "deleted",
+] as const;
 export const MIND_BINDING_SET_STATES = ["active", "revoked", "deleted"] as const;
 export const MIND_BINDING_STATES = ["active", "invalidated"] as const;
 export const AUTOMATIC_CAPTURE_MODES = ["disabled", "routine_non_sensitive"] as const;
@@ -90,6 +100,9 @@ export type SpaceLifecycleState = (typeof SPACE_LIFECYCLE_STATES)[number];
 export type MembershipState = (typeof MEMBERSHIP_STATES)[number];
 export type InvitationState = (typeof INVITATION_STATES)[number];
 export type AccessTokenState = (typeof ACCESS_TOKEN_STATES)[number];
+export type CredentialKind = (typeof CREDENTIAL_KINDS)[number];
+export type CredentialWriteTargetLifecycleState =
+  (typeof CREDENTIAL_WRITE_TARGET_LIFECYCLE_STATES)[number];
 export type MindBindingSetState = (typeof MIND_BINDING_SET_STATES)[number];
 export type MindBindingState = (typeof MIND_BINDING_STATES)[number];
 export type AutomaticCaptureMode = (typeof AUTOMATIC_CAPTURE_MODES)[number];
@@ -217,7 +230,39 @@ export interface AccessTokenMetadata {
   readonly revokedAt: UtcInstant | null;
 }
 
-/** Server-side selection owned by one OAuth grant or personal token. */
+/**
+ * The only durable write selection accepted by credential-write-target/v1.
+ * Generation identifiers are opaque, owner-scoped and never reused.
+ */
+export interface WritableTargetGeneration {
+  readonly generationId: CredentialWriteTargetGenerationId;
+  readonly bindingOwnerId: MindBindingOwnerId;
+  readonly spaceId: SpaceId;
+  readonly generation: number;
+  readonly selectedAt: UtcInstant;
+}
+
+/**
+ * Credential-owned write profile. Content reads deliberately have no binding
+ * projection: they are derived from the current ACL and explicit target only.
+ */
+export interface CredentialWriteTargetState {
+  readonly bindingOwnerId: MindBindingOwnerId;
+  readonly principalId: PrincipalId;
+  readonly credentialKind: CredentialKind;
+  readonly contractVersion: typeof CREDENTIAL_WRITE_TARGET_CONTRACT_VERSION;
+  readonly lifecycleState: CredentialWriteTargetLifecycleState;
+  readonly targetVersion: BindingVersion;
+  readonly activeGeneration: Readonly<WritableTargetGeneration> | null;
+  readonly automaticCaptureMode: AutomaticCaptureMode;
+  readonly captureGenerationId: CredentialWriteTargetGenerationId | null;
+  readonly createdAt: UtcInstant;
+  readonly upgradedAt: UtcInstant | null;
+  readonly updatedAt: UtcInstant;
+  readonly revokedAt: UtcInstant | null;
+}
+
+/** @deprecated Compatibility-only record for pre credential-write-target/v1 replay. */
 export interface MindBindingSet {
   readonly bindingOwnerId: MindBindingOwnerId;
   readonly principalId: PrincipalId;
@@ -230,6 +275,7 @@ export interface MindBindingSet {
   readonly updatedAt: UtcInstant;
 }
 
+/** @deprecated Compatibility-only record for pre credential-write-target/v1 replay. */
 export interface ReadMindBinding {
   readonly readBindingId: ReadMindBindingId;
   readonly bindingOwnerId: MindBindingOwnerId;
@@ -239,6 +285,7 @@ export interface ReadMindBinding {
   readonly invalidatedAt: UtcInstant | null;
 }
 
+/** @deprecated Compatibility-only record for pre credential-write-target/v1 replay. */
 export interface WriteMindBinding {
   readonly writeBindingId: WriteMindBindingId;
   readonly bindingOwnerId: MindBindingOwnerId;

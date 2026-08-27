@@ -1,5 +1,6 @@
 export type { CanonicalRevisionEnvelope } from "@mind-diary/domain";
 export type {
+  AuditEventId,
   AuditEvent,
   AuditOutboxMessage,
   BackgroundJob,
@@ -19,6 +20,7 @@ export type {
 } from "@mind-diary/domain";
 export {
   DomainInvariantError,
+  CREDENTIAL_WRITE_TARGET_CONTRACT_VERSION,
   PrincipalAccount,
   REVISION_MANIFEST_FORMAT_V3,
   REVISION_MANIFEST_FORMAT_V4,
@@ -35,7 +37,13 @@ export {
   serializeRevisionManifest,
   roleHasCapability,
   bindingVersion,
+  clearCredentialWriteTarget,
   compareUnicodeScalarValues,
+  configureCredentialAutomaticCapture,
+  createFreshCredentialWriteTargetState,
+  revokeCredentialWriteTarget,
+  selectCredentialWriteTarget,
+  upgradeLegacyCredentialWriteTarget,
   type CanonicalSpaceHandle,
   type HandlePolicyFailureReason,
   type VerifiedSpaceHost,
@@ -44,6 +52,10 @@ export type {
   ExternalIdentityBinding,
   AutomaticCaptureMode,
   BindingVersion,
+  CredentialKind,
+  CredentialWriteTargetGenerationId,
+  CredentialWriteTargetLifecycleState,
+  CredentialWriteTargetState,
   SpaceInvitation,
   KnowledgeSpace,
   MindBindingOwnerId,
@@ -55,10 +67,12 @@ export type {
   ReadMindBinding,
   ReadMindBindingId,
   Sha256Digest,
+  SpaceId,
   SensitiveExternalBinding,
   SpaceMembership,
   WriteMindBinding,
   WriteMindBindingId,
+  WritableTargetGeneration,
   StagedBundleFileId,
   UtcInstant,
 } from "@mind-diary/domain";
@@ -69,5 +83,6 @@ export * from "./objects.js";
 export * from "./upload-intents.js";
 export * from "./revisions.js";
 export * from "./authorization.js";
+export * from "./credential-write-targets.js";
 export * from "./tokens.js";
 export * from "./observability.js";

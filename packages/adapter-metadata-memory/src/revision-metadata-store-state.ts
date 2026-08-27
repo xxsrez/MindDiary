@@ -17,6 +17,7 @@ import type {
   InvitationMap,
   KnowledgeSpaceMap,
   MembershipMap,
+  MutableCredentialWriteTargetOwnerState,
   MutableMindBindingOwnerState,
   ObjectReachabilityCounts,
   OrdinaryMindDeletionCleanupMap,
@@ -47,6 +48,7 @@ import type {
   ExportDownloadGrant,
   ExportJob,
   JobId,
+  LegacyCredentialWriteTargetUpgradeSnapshot,
   MarkdownImportPlan,
   MarkdownImportSession,
   MarkdownImportStagedFile,
@@ -199,6 +201,16 @@ export abstract class RevisionMetadataStoreState {
   protected _mindBindingOwners = new Map<
       MindBindingOwnerId,
       MutableMindBindingOwnerState
+    >();
+
+  protected _credentialWriteTargetOwners = new Map<
+      MindBindingOwnerId,
+      MutableCredentialWriteTargetOwnerState
+    >();
+
+  protected _legacyCredentialWriteTargetUpgrades = new Map<
+      MindBindingOwnerId,
+      Readonly<LegacyCredentialWriteTargetUpgradeSnapshot>
     >();
 
   protected _activeHandlesByKey: ActiveHandleByKeyMap = new Map();

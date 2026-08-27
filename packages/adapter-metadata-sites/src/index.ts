@@ -178,6 +178,7 @@ const TRANSACTION_METHODS = new Set([
   "runExportDownloadGrantTransaction",
   "runBundleFileDownloadGrantTransaction",
   "runMindBindingTransaction",
+  "runCredentialWriteTargetTransaction",
   "runBundleFileStagingTransaction",
   "runCapacityTransaction",
 ]);
@@ -219,6 +220,7 @@ const METADATA_MUTATIONS = new Set([
   "markOrdinaryMindDeletingForTest",
   "setCurrentAuthorizationStateForTest",
   "revokeMindBindingOwner",
+  "revokeCredentialWriteTargetOwner",
   "collectStagedBundleFilesForGc",
   "deleteExpiredStagedBundleFileRecord",
   "reconcileCapacityUsage",
@@ -356,6 +358,9 @@ function shouldCheckpointEvent(event: DurableEvent, sequence: number): boolean {
     // The fenced event is already canonical durability. Binding selection is
     // latency-sensitive UI/MCP setup, so avoid rewriting the full materialized
     // snapshot for every attach or rebind while keeping restart replay bounded.
+    return sequence % MIND_BINDING_SNAPSHOT_CADENCE === 0;
+  }
+  if (event.method === "runCredentialWriteTargetTransaction") {
     return sequence % MIND_BINDING_SNAPSHOT_CADENCE === 0;
   }
   if (OBJECT_CLEANUP_CHECKPOINT_METHODS.has(event.method)) {
@@ -881,6 +886,10 @@ export class SitesMetadataStore {
       expected = row.sequence;
       shouldCheckpoint ||= shouldCheckpointEvent(event, expected);
     }
+    // Historical read/write-binding tail events are replayed only to recover a
+    // bounded migration candidate. They are then discarded before serving any
+    // request, so replay cannot revive removed read authority or stale IDs.
+    await metadata.decommissionLegacyMindBindingsForMigration();
     return Object.freeze({ sequence: expected, shouldCheckpoint });
   }
 

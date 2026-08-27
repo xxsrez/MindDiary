@@ -17,6 +17,8 @@ import {
   cloneIndexState,
   cloneMembershipMutationRecords,
   cloneMindBindingOwners,
+  cloneCredentialWriteTargetOwners,
+  cloneLegacyCredentialWriteTargetUpgrades,
   cloneOrdinaryMindDeletionCleanups,
   cloneOrdinaryMindDeletionImpacts,
   cloneOrdinaryMindIdempotencyRecords,
@@ -145,6 +147,13 @@ export abstract class RevisionMetadataOrdinaryTransactionStore extends RevisionM
           ]),
         );
         let mindBindingOwners = cloneMindBindingOwners(this._mindBindingOwners);
+        let credentialWriteTargetOwners = cloneCredentialWriteTargetOwners(
+          this._credentialWriteTargetOwners,
+        );
+        let legacyCredentialWriteTargetUpgrades =
+          cloneLegacyCredentialWriteTargetUpgrades(
+            this._legacyCredentialWriteTargetUpgrades,
+          );
 
         const state: OrdinaryMindTransactionState = {
           principals,
@@ -179,6 +188,8 @@ export abstract class RevisionMetadataOrdinaryTransactionStore extends RevisionM
           accountDeletionCleanup,
           authorizationStates,
           mindBindingOwners,
+          credentialWriteTargetOwners,
+          legacyCredentialWriteTargetUpgrades,
         };
 
         const transaction: OrdinaryMindMetadataTransaction = Object.freeze({
@@ -221,6 +232,9 @@ export abstract class RevisionMetadataOrdinaryTransactionStore extends RevisionM
         this._accountDeletionImpacts = state.accountDeletionImpacts;
         this._accountDeletionCleanup = state.accountDeletionCleanup;
         this._mindBindingOwners = state.mindBindingOwners;
+        this._credentialWriteTargetOwners = state.credentialWriteTargetOwners;
+        this._legacyCredentialWriteTargetUpgrades =
+          state.legacyCredentialWriteTargetUpgrades;
         this._authorizationStates.clear();
         state.authorizationStates.forEach((state, key) =>
           this._authorizationStates.set(key, state));
