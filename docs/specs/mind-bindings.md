@@ -1,10 +1,11 @@
 # Multiple-read/single-write Mind bindings
 
-Статус: accepted product/domain/API contract, 2026-08-22. Локальные durable
-state/application/persistence (`MD-231`), одинаковый binding tool surface для
-modern/compatibility MCP (`MD-230`) и hard content enforcement (`MD-232`)
-подтверждены. Product UI и exact Marketplace plugin guidance (`MD-233`)
-подтверждены локально. Canonical release profile содержит blocking
+Статус: accepted historical Release 0.1/0.2 as-built/evidence contract,
+обновлено 2026-08-27; target replacement ожидает MD-337/MD-339. Локальные
+durable state/application/persistence (`MD-231`), одинаковый binding tool
+surface для modern/compatibility MCP (`MD-230`) и hard content enforcement
+(`MD-232`) подтверждены. Product UI и exact Marketplace plugin guidance
+(`MD-233`) подтверждены локально. Canonical release profile содержит blocking
 `dev.mind-bindings` и `uat.mind-bindings` join (`MD-235`); UAT evidence остаётся
 привязанным к конкретному candidate/deployment и не выводится из local tests.
 

@@ -9,7 +9,9 @@ repository candidate. Для Codex Desktop/CLI pilot 0.1 принят direct MCP
 с OAuth при первом использовании. Synthetic multi-principal и OAuth/package
 automation остаются blocking; ADR-0019 дополнительно требует blocking
 real-account first-user UAT receipt. Machine-readable OpenAPI и MCP JSON Schemas
-проверяются на соответствие этому документу и реализации.
+проверяют только historical current Release 0.1/0.2 wire contract и его
+implementation. Target authority Release 0.3 ещё не имеет schema-verified
+route/tool shape: её определят и проверят MD-337/MD-339.
 
 Wire catalog ниже сохраняет historical Release 0.1/0.2 as-built и не
 переписывается MD-336. Целевая product authority Release 0.3 отделена явно;

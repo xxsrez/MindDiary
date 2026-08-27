@@ -69,11 +69,11 @@ flowchart LR
     Revision -->|"manifest exact bytes"| File
     Principal -->|"zero or many"| Token
     Principal -->|"zero or many"| Connection
+    Token -->|"authenticates"| Principal
     Principal -->|"current ACL / visibility"| Space
     Connection -->|"zero or one"| Writable
     Token -->|"zero or one"| Writable
     Writable -->|"exact commit target"| Space
-    Token -->|"always"| Personal
 ```
 
 Один principal может участвовать во многих ordinary Minds. Один MCP connection
@@ -83,7 +83,10 @@ write. Release 0.3 сохраняет exact-target write invariant, но пер�
 writable target исключительно в Sites control plane и убирает mandatory read
 binding из пользовательского read path. Exact replacement records, migration
 и wire compatibility принадлежат MD-339. Каждая content operation по-прежнему
-явно выбирает ровно один Mind и одну revision.
+явно выбирает ровно один Mind и одну revision. Token только аутентифицирует
+principal: он не выбирает Personal Mind или другой Mind. Read требует explicit
+selector, а commit дополнительно совпадает с Site-selected writable target;
+неявного fallback на `/me` нет.
 
 ## Account и identity
 

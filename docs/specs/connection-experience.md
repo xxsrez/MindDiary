@@ -1,9 +1,10 @@
 # Connections, Advanced MCP и Codex Help
 
-Статус: accepted contract, 2026-08-25. Документ задаёт пользовательскую
-information architecture и server-owned projection для Release 0.1. Реализация
-и live UAT evidence проверяются отдельно; наличие этого контракта не является
-утверждением о развёрнутом поведении.
+Статус: accepted historical Release 0.1/0.2 as-built/evidence contract,
+обновлено 2026-08-27; target replacement ожидает MD-337/MD-339. Документ задаёт
+пользовательскую information architecture и server-owned projection для
+Release 0.1. Реализация и live UAT evidence проверяются отдельно; наличие этого
+контракта не является утверждением о развёрнутом поведении.
 
 Release 0.1 contract ниже сохраняется как historical as-built и не становится
 целевой authority Release 0.3. В Release 0.3 Connections остаются Sites-only
