@@ -953,6 +953,11 @@ test("pilot Product Site route map keeps one UAT shell, exact active navigation,
   assert.match(codexHelpHtml, /data-codex-client-tab="desktop"/);
   assert.match(codexHelpHtml, /data-codex-client-tab="cli"/);
   assert.match(codexHelpHtml, /data-copy-code="codex-help-cli-install"/);
+  assert.match(codexHelpHtml, /Discover readable Minds and start/u);
+  assert.match(codexHelpHtml, /current memberships and visibility automatically/u);
+  assert.match(codexHelpHtml, /Writing is optional/u);
+  assert.match(codexHelpHtml, /select at most one writable Mind/u);
+  assert.match(codexHelpHtml, /Only the Mind Diary Site can select, switch, or clear this target/u);
   assert.match(codexHelpHtml, /Create the first useful Memory/);
   assert.match(codexHelpHtml, /href="\/me#first-result-title">Open the starter card/);
   assert.match(codexHelpHtml, /href="\/settings\/developer\/mcp">Advanced MCP/);
@@ -960,6 +965,7 @@ test("pilot Product Site route map keeps one UAT shell, exact active navigation,
     codexHelpHtml,
     /MIND_DIARY_TOKEN|api\/mcp|client secret|PKCE|DCR|content:read|binding_version|write_binding_id/i,
   );
+  assert.doesNotMatch(codexHelpHtml, /Choose readable Minds|attach at least one Mind/u);
 
   for (const path of ["/api", "/mcp", "/settings", "/settings/unknown", "/minds/extra"]) {
     assert.equal(await handler(new Request(`${origin}${path}`)), null, path);

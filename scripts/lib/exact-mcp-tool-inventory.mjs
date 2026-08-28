@@ -1,0 +1,72 @@
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+
+import { canonical } from "./multi-principal-probe-core.mjs";
+
+const INVENTORY_PATH = new URL(
+  "../../tests/fixtures/file-ingress-evidence/hosted-tool-inventory.json",
+  import.meta.url,
+);
+const EXPECTED_SCHEMA = "mind-diary/file-ingress-hosted-tool-inventory/v1";
+const EXPECTED_SOURCE = "mind-diary-hosted-mcp-tools-list";
+
+function schemaHash(value) {
+  return `sha256:${createHash("sha256").update(canonical(value)).digest("hex")}`;
+}
+
+function loadExpectedInventory() {
+  const value = JSON.parse(readFileSync(INVENTORY_PATH, "utf8"));
+  if (
+    value?.schema !== EXPECTED_SCHEMA ||
+    value?.source !== EXPECTED_SOURCE ||
+    !Array.isArray(value.entries) ||
+    value.entries.length !== 18
+  ) {
+    throw new TypeError("Exact MCP tool inventory fixture is invalid.");
+  }
+  const entries = value.entries.map((entry) => Object.freeze({ ...entry }));
+  const names = entries.map(({ name }) => name);
+  if (
+    new Set(names).size !== 18 ||
+    names.some((name) => typeof name !== "string") ||
+    names.some((name, index) => index > 0 && name <= names[index - 1])
+  ) {
+    throw new TypeError("Exact MCP tool inventory fixture is not closed and sorted.");
+  }
+  return Object.freeze(entries);
+}
+
+export const EXPECTED_MCP_TOOL_INVENTORY = loadExpectedInventory();
+export const EXPECTED_MCP_TOOL_NAMES = Object.freeze(
+  EXPECTED_MCP_TOOL_INVENTORY.map(({ name }) => name),
+);
+
+export function matchesExactMcpToolInventory(tools) {
+  if (!Array.isArray(tools) || tools.length !== EXPECTED_MCP_TOOL_INVENTORY.length) {
+    return false;
+  }
+  const entries = [];
+  for (const tool of tools) {
+    if (
+      tool === null ||
+      typeof tool !== "object" ||
+      typeof tool.name !== "string" ||
+      tool.inputSchema === null ||
+      typeof tool.inputSchema !== "object" ||
+      Array.isArray(tool.inputSchema) ||
+      tool.outputSchema === null ||
+      typeof tool.outputSchema !== "object" ||
+      Array.isArray(tool.outputSchema)
+    ) {
+      return false;
+    }
+    entries.push(Object.freeze({
+      name: tool.name,
+      source: EXPECTED_SOURCE,
+      input_schema_sha256: schemaHash(tool.inputSchema),
+      output_schema_sha256: schemaHash(tool.outputSchema),
+    }));
+  }
+  entries.sort((left, right) => left.name.localeCompare(right.name));
+  return canonical(entries) === canonical(EXPECTED_MCP_TOOL_INVENTORY);
+}

@@ -29,6 +29,7 @@ import {
   FakeR2Bucket,
   deterministicKey,
 } from "./lib/fake-sites-storage.mjs";
+import { matchesExactMcpToolInventory } from "./lib/exact-mcp-tool-inventory.mjs";
 import { assertNoSyntheticProductAuthority } from "./lib/synthetic-product-negative.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -37,6 +38,8 @@ const ORIGIN = "https://synthetic-gate.invalid";
 const EVIDENCE_SCHEMA = "mind-diary/synthetic-multi-principal-evidence/v1";
 const BINDING_NAMESPACE = "synthetic-test";
 const ACTOR_CLASS = "synthetic-principal";
+const MODERN_PROTOCOL = "2026-07-28";
+const COMPAT_PROTOCOL = "2025-11-25";
 
 function opaque(prefix, bytes = randomBytes) {
   return `${prefix}-${bytes(16).toString("hex")}`;
@@ -106,15 +109,15 @@ async function mutatePersonalTarget(actor, body, idempotencyKey, expectedStatus)
   );
 }
 
-async function assertTargetOnlyMcpCatalog(actor) {
-  const response = await actor.request("/api/mcp", {
+async function assertExactMcpCatalogs(actor) {
+  const modern = await actor.request("/api/mcp", {
     method: "POST",
     headers: {
       accept: "application/json, text/event-stream",
       authorization: `Bearer ${actor.mcpToken}`,
       "content-type": "application/json; charset=utf-8",
       "mcp-method": "tools/list",
-      "mcp-protocol-version": "2026-07-28",
+      "mcp-protocol-version": MODERN_PROTOCOL,
     },
     body: JSON.stringify({
       jsonrpc: "2.0",
@@ -122,7 +125,7 @@ async function assertTargetOnlyMcpCatalog(actor) {
       method: "tools/list",
       params: {
         _meta: {
-          "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+          "io.modelcontextprotocol/protocolVersion": MODERN_PROTOCOL,
           "io.modelcontextprotocol/clientInfo": {
             name: "synthetic-multi-principal-probe",
             version: "1",
@@ -132,16 +135,63 @@ async function assertTargetOnlyMcpCatalog(actor) {
       },
     }),
   });
-  const tools = response.body?.result?.tools;
-  if (!Array.isArray(tools)) fail("mcp_catalog_missing");
+  if (modern.status !== 200 || !matchesExactMcpToolInventory(modern.body?.result?.tools)) {
+    fail("mcp_modern_catalog_mismatch", { status: modern.status });
+  }
+
+  const initialized = await actor.request("/api/mcp/2025-11-25", {
+    method: "POST",
+    headers: {
+      accept: "application/json, text/event-stream",
+      authorization: `Bearer ${actor.mcpToken}`,
+      "content-type": "application/json; charset=utf-8",
+    },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: `${actor.actorClass}-compat-initialize`,
+      method: "initialize",
+      params: {
+        protocolVersion: "2025-06-18",
+        capabilities: {},
+        clientInfo: { name: "synthetic-multi-principal-probe", version: "1" },
+      },
+    }),
+  });
   if (
-    tools.some(({ name }) => [
-      "get_mind_bindings",
-      "set_read_mind_binding",
-      "set_write_mind_binding",
-    ].includes(name)) ||
-    /write_binding_id|expected_binding_version|target_generation/u.test(JSON.stringify(tools))
-  ) fail("mcp_catalog_exposes_binding_authority");
+    initialized.status !== 200 ||
+    initialized.body?.result?.protocolVersion !== COMPAT_PROTOCOL
+  ) fail("mcp_compat_initialize_failed", { status: initialized.status });
+
+  const notified = await actor.request("/api/mcp/2025-11-25", {
+    method: "POST",
+    headers: {
+      accept: "application/json, text/event-stream",
+      authorization: `Bearer ${actor.mcpToken}`,
+      "content-type": "application/json; charset=utf-8",
+      "mcp-protocol-version": COMPAT_PROTOCOL,
+    },
+    body: JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }),
+  });
+  if (notified.status !== 202) fail("mcp_compat_initialized_failed", { status: notified.status });
+
+  const compat = await actor.request("/api/mcp/2025-11-25", {
+    method: "POST",
+    headers: {
+      accept: "application/json, text/event-stream",
+      authorization: `Bearer ${actor.mcpToken}`,
+      "content-type": "application/json; charset=utf-8",
+      "mcp-protocol-version": COMPAT_PROTOCOL,
+    },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: `${actor.actorClass}-compat-tools-list`,
+      method: "tools/list",
+      params: {},
+    }),
+  });
+  if (compat.status !== 200 || !matchesExactMcpToolInventory(compat.body?.result?.tools)) {
+    fail("mcp_compat_catalog_mismatch", { status: compat.status });
+  }
 }
 
 function createEvidence({ candidate, startedAt, completedAt, runFingerprint, actorFingerprints, passed }) {
@@ -390,7 +440,7 @@ async function runScenario({ candidate, evidenceOut, randomBytesImpl, now }) {
     actors.owner.mcpToken === actors.participant.mcpToken ||
     actors.owner.mcpTokenRef === actors.participant.mcpTokenRef
   ) fail("shared_mcp_credential_forbidden");
-  await assertTargetOnlyMcpCatalog(actors.participant);
+  await assertExactMcpCatalogs(actors.participant);
   const initialCredentialInspection = await createSitesMetadataStore(database);
   const initialParticipantToken = await initialCredentialInspection
     .readMcpTokenMetadataByPresentationRef(

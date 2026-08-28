@@ -186,8 +186,17 @@ for (const definition of fixtureDefinitions) {
       await expect(page.getByRole("heading", { level: 2, name: "Install Mind Diary" })).toBeVisible();
       await expect(page.getByRole("heading", {
         level: 2,
-        name: "Choose readable Minds and start",
+        name: "Discover readable Minds and start",
       })).toBeVisible();
+      await expect(page.getByLabel("Desktop").getByText(
+        "Readable Minds follow your current memberships and visibility automatically; there is no read attachment step.",
+      )).toBeVisible();
+      await expect(page.getByText("Writing is optional.", { exact: false })).toBeVisible();
+      await expect(page.getByText("select at most one writable Mind", { exact: false })).toBeVisible();
+      await expect(page.getByText(
+        "Only the Mind Diary Site can select, switch, or clear this target; Codex cannot manage it through content MCP.",
+      )).toBeVisible();
+      await expect(page.getByText(/Choose readable Minds|attach at least one Mind/u)).toHaveCount(0);
       await expect(page.getByText("Revoke and reconnect only when the existing connection is no longer usable.")).toBeVisible();
       const accessibilityTree = await page.locator("main").ariaSnapshot();
       expect(accessibilityTree).toContain('heading "Use Mind Diary with Codex"');

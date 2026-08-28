@@ -1850,6 +1850,12 @@ test("durable product runtime carries a Sites account token through Codex MCP an
     codexHelpHtml,
     /Use Mind Diary to list the Minds I can read\. Do not create or change any Memory\./u,
   );
+  assert.match(codexHelpHtml, /Discover readable Minds and start/u);
+  assert.match(codexHelpHtml, /current memberships and visibility automatically/u);
+  assert.match(codexHelpHtml, /Writing is optional/u);
+  assert.match(codexHelpHtml, /select at most one writable Mind/u);
+  assert.match(codexHelpHtml, /Only the Mind Diary Site can select, switch, or clear this target/u);
+  assert.doesNotMatch(codexHelpHtml, /Choose readable Minds|attach at least one Mind/u);
   assert.match(codexHelpHtml, /Create the first useful Memory/u);
   assert.match(codexHelpHtml, /href="\/me#first-result-title">Open the starter card/u);
 

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
+import { MCP_TOOL_DEFINITIONS } from "../../packages/adapter-mcp/dist/index.js";
 import {
   ProbeFailure,
   canonical,
@@ -54,36 +55,34 @@ test("Codex plugin uses the isolated compatibility transport with the canonical 
   }
 });
 
-test("fresh Codex catalogs have no binding mutation or authority fields", () => {
-  const current = [{
-    name: "commit_changeset",
-    inputSchema: {
-      type: "object",
-      additionalProperties: false,
-      required: ["mind", "expected_revision", "idempotency_key", "operations"],
-      properties: {
-        mind: { type: "string" },
-        expected_revision: { type: "string" },
-        idempotency_key: { type: "string" },
-        operations: { type: "array" },
-      },
-    },
-  }];
+test("fresh Codex catalogs match the closed 18-tool names and schema hashes", () => {
+  const current = MCP_TOOL_DEFINITIONS.map(({ name, inputSchema, outputSchema }) => ({
+    name,
+    inputSchema,
+    outputSchema,
+  }));
+  assert.equal(current.length, 18);
   assert.equal(assertCodexCompatibleWriteBindingSchema(current), true);
-  const legacy = structuredClone(current);
-  legacy.push({ name: "set_write_mind_binding", inputSchema: {} });
-  assert.throws(
-    () => assertCodexCompatibleWriteBindingSchema(legacy),
-    (error) => error instanceof ProbeFailure &&
-      error.code === "codex_write_binding_schema_incompatible",
-  );
-  const leaked = structuredClone(current);
-  leaked[0].inputSchema.properties.write_binding_id = { type: "string" };
-  assert.throws(
-    () => assertCodexCompatibleWriteBindingSchema(leaked),
-    (error) => error instanceof ProbeFailure &&
-      error.code === "codex_write_binding_schema_incompatible",
-  );
+  const mismatches = [
+    current.slice(1),
+    [...current, {
+      name: "delete_all_minds",
+      inputSchema: { type: "object", properties: {} },
+      outputSchema: { type: "object", properties: {} },
+      annotations: { destructiveHint: true },
+    }],
+    current.map((tool, index) => index === 0 ? {
+      ...structuredClone(tool),
+      inputSchema: { ...structuredClone(tool.inputSchema), description: "runtime drift" },
+    } : tool),
+  ];
+  for (const mismatch of mismatches) {
+    assert.throws(
+      () => assertCodexCompatibleWriteBindingSchema(mismatch),
+      (error) => error instanceof ProbeFailure &&
+        error.code === "codex_write_binding_schema_incompatible",
+    );
+  }
 });
 
 function promptInputFixture(line) {

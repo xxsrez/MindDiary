@@ -22,13 +22,15 @@ import {
   createSyntheticBrowserComposition,
   SYNTHETIC_BROWSER_BINDING_NAMESPACE,
 } from "./lib/synthetic-browser-composition.mjs";
+import { matchesExactMcpToolInventory } from "./lib/exact-mcp-tool-inventory.mjs";
 import { assertNoSyntheticProductAuthority } from "./lib/synthetic-product-negative.mjs";
 
 const execFileAsync = promisify(execFile);
 const ROOT = resolve(import.meta.dirname, "..");
 const EVIDENCE_SCHEMA = "mind-diary/synthetic-browser-evidence/v1";
 const ACTOR_CLASS = "synthetic-browser-principal";
-const MCP_PROTOCOL = "2026-07-28";
+const MODERN_PROTOCOL = "2026-07-28";
+const COMPAT_PROTOCOL = "2025-11-25";
 
 // This registry is intentionally closed: a passing receipt cannot silently
 // omit a browser boundary, UI, API, ACL, operator, restart, or cleanup check.
@@ -132,7 +134,7 @@ async function mcp(context, secret, name, args = {}) {
       "content-type": "application/json; charset=utf-8",
       "mcp-method": "tools/call",
       "mcp-name": name,
-      "mcp-protocol-version": MCP_PROTOCOL,
+      "mcp-protocol-version": MODERN_PROTOCOL,
     },
     body: JSON.stringify({
       jsonrpc: "2.0",
@@ -142,7 +144,7 @@ async function mcp(context, secret, name, args = {}) {
         name,
         arguments: args,
         _meta: {
-          "io.modelcontextprotocol/protocolVersion": MCP_PROTOCOL,
+          "io.modelcontextprotocol/protocolVersion": MODERN_PROTOCOL,
           "io.modelcontextprotocol/clientInfo": { name: "synthetic-browser-gate", version: "1" },
           "io.modelcontextprotocol/clientCapabilities": {},
         },
@@ -151,15 +153,15 @@ async function mcp(context, secret, name, args = {}) {
   });
 }
 
-async function assertTargetOnlyMcpCatalog(context, secret) {
-  const result = await context.request("/api/mcp", {
+async function assertExactMcpCatalogs(context, secret) {
+  const modern = await context.request("/api/mcp", {
     method: "POST",
     headers: {
       accept: "application/json, text/event-stream",
       authorization: `Bearer ${secret}`,
       "content-type": "application/json; charset=utf-8",
       "mcp-method": "tools/list",
-      "mcp-protocol-version": MCP_PROTOCOL,
+      "mcp-protocol-version": MODERN_PROTOCOL,
     },
     body: JSON.stringify({
       jsonrpc: "2.0",
@@ -167,24 +169,70 @@ async function assertTargetOnlyMcpCatalog(context, secret) {
       method: "tools/list",
       params: {
         _meta: {
-          "io.modelcontextprotocol/protocolVersion": MCP_PROTOCOL,
+          "io.modelcontextprotocol/protocolVersion": MODERN_PROTOCOL,
           "io.modelcontextprotocol/clientInfo": { name: "synthetic-browser-gate", version: "1" },
           "io.modelcontextprotocol/clientCapabilities": {},
         },
       },
     }),
   });
-  const tools = result.body?.result?.tools;
-  if (!Array.isArray(tools)) fail("mcp_catalog_missing");
-  const serialized = JSON.stringify(tools);
+  if (modern.status !== 200 || !matchesExactMcpToolInventory(modern.body?.result?.tools)) {
+    fail("mcp_modern_catalog_mismatch", { status: modern.status });
+  }
+
+  const initialized = await context.request("/api/mcp/2025-11-25", {
+    method: "POST",
+    headers: {
+      accept: "application/json, text/event-stream",
+      authorization: `Bearer ${secret}`,
+      "content-type": "application/json; charset=utf-8",
+    },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: `${context.name}-compat-initialize`,
+      method: "initialize",
+      params: {
+        protocolVersion: "2025-06-18",
+        capabilities: {},
+        clientInfo: { name: "synthetic-browser-gate", version: "1" },
+      },
+    }),
+  });
   if (
-    tools.some(({ name }) => [
-      "get_mind_bindings",
-      "set_read_mind_binding",
-      "set_write_mind_binding",
-    ].includes(name)) ||
-    /write_binding_id|expected_binding_version|target_generation/u.test(serialized)
-  ) fail("mcp_catalog_exposes_binding_authority");
+    initialized.status !== 200 ||
+    initialized.body?.result?.protocolVersion !== COMPAT_PROTOCOL
+  ) fail("mcp_compat_initialize_failed", { status: initialized.status });
+
+  const notified = await context.request("/api/mcp/2025-11-25", {
+    method: "POST",
+    headers: {
+      accept: "application/json, text/event-stream",
+      authorization: `Bearer ${secret}`,
+      "content-type": "application/json; charset=utf-8",
+      "mcp-protocol-version": COMPAT_PROTOCOL,
+    },
+    body: JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }),
+  });
+  if (notified.status !== 202) fail("mcp_compat_initialized_failed", { status: notified.status });
+
+  const compat = await context.request("/api/mcp/2025-11-25", {
+    method: "POST",
+    headers: {
+      accept: "application/json, text/event-stream",
+      authorization: `Bearer ${secret}`,
+      "content-type": "application/json; charset=utf-8",
+      "mcp-protocol-version": COMPAT_PROTOCOL,
+    },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: `${context.name}-compat-tools-list`,
+      method: "tools/list",
+      params: {},
+    }),
+  });
+  if (compat.status !== 200 || !matchesExactMcpToolInventory(compat.body?.result?.tools)) {
+    fail("mcp_compat_catalog_mismatch", { status: compat.status });
+  }
 }
 
 async function issueToken(context, nonce, name) {
@@ -383,7 +431,7 @@ async function runScenario({ candidate, evidenceOut, randomBytesImpl, now }) {
 
     const ownerToken = await issueToken(owner, nonce, "owner");
     const participantToken = await issueToken(participant, nonce, "participant");
-    await assertTargetOnlyMcpCatalog(participant, participantToken.secret);
+    await assertExactMcpCatalogs(participant, participantToken.secret);
     const readerMind = mcpData(await mcp(participant, participantToken.secret, "list_minds"))
       .minds.find((value) => value.route === `/${handle}`);
     if (!readerMind) fail("reader_mcp_discovery_failed");

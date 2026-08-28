@@ -34,6 +34,7 @@ import {
   FakeR2Bucket,
   deterministicKey,
 } from "./lib/fake-sites-storage.mjs";
+import { matchesExactMcpToolInventory } from "./lib/exact-mcp-tool-inventory.mjs";
 import { assertNoSyntheticProductAuthority } from "./lib/synthetic-product-negative.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -116,29 +117,7 @@ export function assertDirectPackageServer(server) {
 }
 
 export function assertCodexCompatibleWriteBindingSchema(tools) {
-  if (!Array.isArray(tools)) fail("codex_write_binding_schema_incompatible");
-  const retired = new Set([
-    "get_mind_bindings",
-    "set_read_mind_binding",
-    "set_write_mind_binding",
-  ]);
-  if (tools.some((tool) => retired.has(tool?.name))) {
-    fail("codex_write_binding_schema_incompatible");
-  }
-  for (const tool of tools) {
-    if (![
-      "create_file_upload_intent",
-      "stage_bundle_file",
-      "reconcile_file_stage",
-      "commit_changeset",
-      "reconcile_changeset",
-      "capture_knowledge",
-    ].includes(tool?.name)) continue;
-    const serialized = JSON.stringify(tool.inputSchema);
-    if (/write_binding_id|expected_binding_version|target_generation/u.test(serialized)) {
-      fail("codex_write_binding_schema_incompatible");
-    }
-  }
+  if (!matchesExactMcpToolInventory(tools)) fail("codex_write_binding_schema_incompatible");
   return true;
 }
 
@@ -770,7 +749,7 @@ function expectMcpError(response, expected, code) {
   return response.body.result;
 }
 
-async function assertCompatibilityRead(actor, token, { verifyBindingSchema = false } = {}) {
+async function assertCompatibilityRead(actor, token) {
   const initialized = await compatibility(actor, token, {
     jsonrpc: "2.0",
     id: "oauth-compat-init",
@@ -788,16 +767,14 @@ async function assertCompatibilityRead(actor, token, { verifyBindingSchema = fal
     jsonrpc: "2.0",
     method: "notifications/initialized",
   }), 202, "oauth_compat_initialized_failed");
-  if (verifyBindingSchema) {
-    const tools = await compatibility(actor, token, {
-      jsonrpc: "2.0",
-      id: "oauth-compat-tools",
-      method: "tools/list",
-      params: {},
-    });
-    if (tools.status !== 200) fail("oauth_compat_tools_list_failed");
-    assertCodexCompatibleWriteBindingSchema(tools.body?.result?.tools);
-  }
+  const tools = await compatibility(actor, token, {
+    jsonrpc: "2.0",
+    id: "oauth-compat-tools",
+    method: "tools/list",
+    params: {},
+  });
+  if (tools.status !== 200) fail("oauth_compat_tools_list_failed");
+  assertCodexCompatibleWriteBindingSchema(tools.body?.result?.tools);
   const listed = await compatibility(actor, token, {
     jsonrpc: "2.0",
     id: "oauth-compat-list",
@@ -985,9 +962,7 @@ async function runOAuthScenario({ assertions, nowState }) {
   );
   if (!modernList.minds?.some((mind) => mind.route === "/me")) fail("oauth_personal_mind_missing");
   assertions.add("oauth.read-grant-modern-runtime");
-  const compatList = await assertCompatibilityRead(owner, readGrant.tokens.access_token, {
-    verifyBindingSchema: true,
-  });
+  const compatList = await assertCompatibilityRead(owner, readGrant.tokens.access_token);
   if (!compatList.minds?.some((mind) => mind.route === "/me")) fail("oauth_compat_personal_mind_missing");
   assertions.add("oauth.read-grant-compat-runtime");
   assertions.add("oauth.codex-compatible-write-binding-schema");
