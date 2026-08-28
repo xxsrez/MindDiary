@@ -1,0 +1,38 @@
+{
+  "$schema": "mind-diary/release-0.3-access-admin-contract/v1",
+  "release": "0.3",
+  "status": "accepted_verification_contract_not_runtime_evidence",
+  "owner": "MD-354",
+  "runnerId": "ship-work-release/uat-release-0.3-access-admin/v1",
+  "localReceiptSchema": "mind-diary/release-0.3-access-admin-local-evidence/v1",
+  "hostedObservationSchema": "mind-diary/uat-release-0.3-access-admin-observation/v1",
+  "hostedJoinSchema": "mind-diary/uat-release-0.3-access-admin-evidence/v1",
+  "actorAliases": ["UAT-OPERATOR", "UAT-MIND-ROLE", "UAT-ORDINARY"],
+  "roleSequence": ["none", "reader", "editor", "admin", "owner", "admin", "none", "reader", "none"],
+  "invitationSequence": ["pending", "cancelled", "reissued", "accepted", "rejected"],
+  "visibilitySequence": ["private", "public", "unlisted", "private"],
+  "requiredSurfaces": ["browser", "rest", "mcp", "content_read", "content_write", "membership_manage"],
+  "localCarriers": [
+    "mind-diary/synthetic-multi-principal-evidence/v1",
+    "mind-diary/synthetic-browser-evidence/v1"
+  ],
+  "joinRules": {
+    "candidate": "local_pool_and_hosted_exact_match",
+    "deployment": "pool_and_hosted_exact_match",
+    "actorPool": "exact_three_ordered_fingerprints",
+    "hostedFromLocal": "forbidden",
+    "mcpControlMutations": "absent_from_exact_content_catalog",
+    "visibilityBaseline": "authenticated_reader_equivalent_only",
+    "privateRevocation": "non_enumerating_next_request",
+    "cleanup": "tokens_mind_roles_and_pool_baseline_read_back_required",
+    "production": "excluded"
+  },
+  "blockerCodes": [
+    "service_fault",
+    "product_defect",
+    "missing_external_capability",
+    "credential_role_or_approval",
+    "unknown_external_outcome",
+    "blocked_by_dependency"
+  ]
+}
