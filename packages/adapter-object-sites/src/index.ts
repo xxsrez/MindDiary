@@ -308,16 +308,37 @@ type FixedLengthStreamConstructor = new (
   expectedLength: number,
 ) => StagedUploadTransform;
 
-function stagedUploadTransform(expectedSize: number | undefined): StagedUploadTransform {
+function fixedLengthTransform(expectedSize: number): StagedUploadTransform | null {
   const fixedLengthStream = (
     globalThis as typeof globalThis & {
       readonly FixedLengthStream?: FixedLengthStreamConstructor;
     }
   ).FixedLengthStream;
-  if (expectedSize !== undefined && typeof fixedLengthStream === "function") {
+  if (typeof fixedLengthStream === "function") {
     return new fixedLengthStream(expectedSize);
   }
+  return null;
+}
+
+function stagedUploadTransform(expectedSize: number | undefined): StagedUploadTransform {
+  if (expectedSize !== undefined) {
+    const fixedLength = fixedLengthTransform(expectedSize);
+    if (fixedLength !== null) return fixedLength;
+  }
   return new TransformStream<Uint8Array, Uint8Array>();
+}
+
+function fixedLengthDownloadBody(
+  body: ReadableStream<Uint8Array>,
+  expectedSize: number,
+): ReadableStream<Uint8Array> {
+  const fixedLength = fixedLengthTransform(expectedSize);
+  if (fixedLength === null) return body;
+  void body.pipeTo(fixedLength.writable).catch(() => {
+    // Source failures and consumer cancellation are already propagated through
+    // the fixed-length readable; only suppress the detached pipe promise.
+  });
+  return fixedLength.readable;
 }
 
 async function verifyBodyStream(
@@ -1367,7 +1388,11 @@ export class SitesObjectStore implements BundleFileObjectStore, ExportArchiveSto
         controller.enqueue(bytes);
       },
     });
-    return Object.freeze({ sha256, size, body });
+    return Object.freeze({
+      sha256,
+      size,
+      body: fixedLengthDownloadBody(body, size),
+    });
   }
 
   async readExportArchive(objectKey: string): Promise<Uint8Array | null> {

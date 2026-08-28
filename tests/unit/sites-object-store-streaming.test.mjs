@@ -207,6 +207,64 @@ test("Sites staged writer uses the Cloudflare fixed-length stream for an exact s
   }
 });
 
+test("Sites streamed export download preserves its exact HTTP length boundary", async () => {
+  const original = Object.getOwnPropertyDescriptor(globalThis, "FixedLengthStream");
+  const requestedLengths = [];
+  class ProbeFixedLengthStream {
+    constructor(expectedLength) {
+      requestedLengths.push(expectedLength);
+      const transform = new TransformStream();
+      this.readable = transform.readable;
+      this.writable = transform.writable;
+    }
+  }
+  Object.defineProperty(globalThis, "FixedLengthStream", {
+    configurable: true,
+    writable: true,
+    value: ProbeFixedLengthStream,
+  });
+  try {
+    const bucket = new StreamingBucket();
+    const objects = await createSitesObjectStore(bucket);
+    const sha256 = await objects.calculateSha256(PNG);
+    const upload = await objects.beginExportArchiveUpload({
+      jobId: "export_sites_fixed_length",
+      spaceId: "space_sites_fixed_length",
+      claimVersion: 1,
+      archiveFormat: "MD-BUNDLE-ZIP-1",
+      filename: "mind-diary-bundle.zip",
+      contentDisposition: 'attachment; filename="mind-diary-bundle.zip"',
+      createdAt: CREATED_AT,
+    });
+    await upload.write(PNG);
+    const completed = await upload.complete({ sha256, size: PNG.byteLength });
+    assert.equal(completed.kind, "stored");
+
+    const opened = await objects.openExportArchive(completed.archive.objectKey);
+    assert.ok(opened);
+    assert.equal(opened.body instanceof Uint8Array, false);
+    assert.deepEqual(requestedLengths, [PNG.byteLength]);
+    assert.deepEqual(
+      new Uint8Array(await new Response(opened.body).arrayBuffer()),
+      PNG,
+    );
+
+    const partRecord = [...bucket.records.entries()].find(([key]) =>
+      key.includes("/stream/parts/"));
+    assert.ok(partRecord);
+    partRecord[1].bytes[0] ^= 0xff;
+    const corrupted = await objects.openExportArchive(completed.archive.objectKey);
+    await assert.rejects(
+      corrupted.body.getReader().read(),
+      /R2 export part is invalid/u,
+    );
+    assert.deepEqual(requestedLengths, [PNG.byteLength, PNG.byteLength]);
+  } finally {
+    if (original === undefined) delete globalThis.FixedLengthStream;
+    else Object.defineProperty(globalThis, "FixedLengthStream", original);
+  }
+});
+
 test("Sites staged generated writer aborts partial streams without publication", async () => {
   const bucket = new StreamingBucket();
   const objects = await createSitesObjectStore(bucket);

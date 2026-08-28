@@ -2971,7 +2971,10 @@ server повторно проверяет current principal read access к exac
 Reader, expired job/grant, удалённый или повреждённый archive fail closed.
 Sites download возвращает `ReadableStream` и проверяет size/SHA-256 каждого R2
 part; application сопоставляет overall digest/size с durable succeeded job до
-response и выполняет final authorization recheck.
+response и выполняет final authorization recheck. На hosted Workers этот
+stream проходит через `FixedLengthStream` с durable exact size, чтобы
+`Content-Length` сохранялся через Sites/Cloudflare response boundary и
+browser мог независимо сверить HTTP length с receipt и фактическими bytes.
 `MD-OKF-ZIP-1` — classic ZIP без compression: paths остаются bundle-relative
 UTF-8, entries отсортированы по unsigned UTF-8 bytes, DOS time фиксирован в
 `1980-01-01T00:00:00`, regular-file mode — `0644`, extra/comment/directory
