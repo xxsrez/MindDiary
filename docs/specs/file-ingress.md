@@ -262,13 +262,23 @@ reconcile and request hashing, so parameters such as
 `application/pdf; charset=binary` are equivalent to `application/pdf`.
 
 Before opening the producer, the port uses existing stage reconciliation with
-the current actor, owner namespace, Space, exact writable target, source kind,
-idempotency key and safe receipt. `missing` is the only outcome that may invoke
-the producer. An existing matching success returns its original
+the current actor, server-derived credential owner, Space and exact active
+target generation plus source kind, idempotency key and safe receipt. The
+caller supplies neither owner nor generation. `missing` is the only outcome
+that may invoke the producer. An existing matching success returns its original
 `staged_file_ref`; changed metadata/digest/size returns
 `idempotency_conflict`; authorization, expiry, consumed/rejected state and
 storage failures fail closed. Therefore an uncertain same-key retry performs
 no generation, reservation or object upload.
+
+The resolved generation is passed only through trusted application context.
+The shared staging authorization checks the same credential owner, generation
+and Space before reservation, then repeats that check inside the metadata
+transaction against the pinned target-version stamp. Clear, switch, revoke or
+target corruption between reconcile and stage therefore returns a canonical
+`writable_target_required | writable_target_mismatch |
+writable_target_unavailable` outcome; it never redirects bytes to another
+Mind and leaves no hidden staged state.
 
 The route races producer acquisition and every pending chunk against caller
 cancellation and the lease. Cancellation, timeout, producer exception,
@@ -293,13 +303,13 @@ UAT, hosted capability discovery deliberately continues to report
 
 ### Idempotency and reconcile
 
-- Stage idempotency is namespaced by binding owner, operation and key. The
-  canonical payload hash includes `source_kind`, exact bytes digest/size and
-  safe canonical metadata. Same key and same payload return the same
+- Stage idempotency is namespaced by credential owner, exact target generation,
+  Space, operation and key. The canonical payload hash includes `source_kind`,
+  exact bytes digest/size and safe canonical metadata. Same key and same payload return the same
   `staged_file_ref`/expiry; a changed source, snapshot, metadata or digest
   returns `idempotency_conflict`.
 - An unknown stage or upload-intent outcome is reconciled by repeating the
-  exact safe receipt: current actor/binding, source kind, idempotency key,
+  exact safe receipt: current actor/target, source kind, idempotency key,
   canonical metadata, digest and size. `reconcileStage` never uploads bytes or
   reserves capacity; it returns the existing verified ref, `missing`, a stable
   state error or `idempotency_conflict`. The client does not change source,
@@ -307,9 +317,9 @@ UAT, hosted capability discovery deliberately continues to report
 - Upload intents are one-use. Exact replay of the same idempotency key may
   recover the same intent before expiry; a changed payload or second consumer
   returns `file_ingress_intent_conflict`. OAuth access-record rotation within
-  the same still-active principal/grant/exact binding atomically refreshes the
+  the same still-active principal/grant/exact target generation atomically refreshes the
   replayed intent authorization reference; it cannot change body identity or
-  resurrect a revoked grant/binding.
+  resurrect a revoked credential owner or target.
 - A successful `commit_changeset` consumes every referenced staged ref in its
   single HEAD transaction. An unknown commit outcome is reconciled with the
   exact commit key/payload through `reconcileCommit`; replay returns the same

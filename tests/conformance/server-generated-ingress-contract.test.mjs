@@ -44,6 +44,10 @@ test("MD-322 evidence contract fixes the trusted stream, limit and lease boundar
   assert.match(source, /stageServerGenerated/u);
   assert.match(source, /bundleFileMediaType\(request\.expectedMediaType\)/u);
   assert.ok(
+    source.indexOf("const target = await this.#resolveWritableTarget") <
+      source.indexOf("#reconciliation.reconcile"),
+  );
+  assert.ok(
     source.indexOf("#reconciliation.reconcile") <
       source.indexOf("request.producer(Object.freeze"),
   );
@@ -67,6 +71,8 @@ test("MD-322 evidence contract fixes the trusted stream, limit and lease boundar
   assert.match(retryEvidence, /application\/pdf; charset=binary/u);
   assert.match(retryEvidence, /allocatedReservationsBeforeWrongMedia/u);
   assert.match(retryEvidence, /collectStagedBundleFilesForGc/u);
+  assert.match(retryEvidence, /expected_target_version/u);
+  assert.match(retryEvidence, /writable_target_unavailable/u);
 });
 
 test("the internal request cannot carry bytes or source/provider identity", async () => {
@@ -79,10 +85,14 @@ test("the internal request cannot carry bytes or source/provider identity", asyn
   for (const forbidden of [
     "bytes", "path", "url", "provider", "locator", "prompt", "jobId", "sourceKind",
   ]) assert.doesNotMatch(request, new RegExp(`\\b${forbidden}\\b`, "iu"), forbidden);
-  for (const required of [
-    "producer", "displayFilename", "expectedMediaType", "idempotencyKey",
-    "writeBindingId", "expectedSize", "expectedSha256", "signal",
-  ]) assert.match(request, new RegExp(`\\b${required}\\b`, "u"), required);
+  assert.deepEqual(
+    [...request.matchAll(/readonly\s+([A-Za-z][A-Za-z0-9]*)(?:\?)?:/gu)]
+      .map((match) => match[1]),
+    [
+      "actor", "spaceId", "displayFilename", "expectedMediaType",
+      "idempotencyKey", "expectedSize", "expectedSha256", "producer", "signal",
+    ],
+  );
 });
 
 test("hosted composition exposes no customer route, MCP stage or MCP export claim", async () => {

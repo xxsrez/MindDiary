@@ -7,10 +7,18 @@ import {
 } from "@mind-diary/application-content";
 
 const BYTES = new TextEncoder().encode("server-generated fixture");
+const TARGET_OWNER = "target_owner_generated";
+const TARGET_GENERATION = "target_generation_generated";
 const COMMON = {
-  actor: { kind: "registered_principal" },
+  actor: {
+    kind: "registered_principal",
+    principalId: "principal_generated",
+    authentication: {
+      kind: "mcp_token",
+      bindingOwnerId: TARGET_OWNER,
+    },
+  },
   spaceId: "space_generated",
-  writeBindingId: "write_generated",
   displayFilename: "generated.bin",
   expectedMediaType: "application/octet-stream",
   expectedSize: BYTES.byteLength,
@@ -18,9 +26,37 @@ const COMMON = {
   idempotencyKey: "server-generated:stage",
 };
 
+function currentTarget(overrides = {}) {
+  return {
+    kind: "current",
+    state: {
+      bindingOwnerId: TARGET_OWNER,
+      principalId: COMMON.actor.principalId,
+      lifecycleState: "active",
+      targetVersion: 3,
+      activeGeneration: {
+        generationId: TARGET_GENERATION,
+        bindingOwnerId: TARGET_OWNER,
+        spaceId: COMMON.spaceId,
+      },
+      ...overrides,
+    },
+  };
+}
+
+function targetReader(result = currentTarget(), reads = []) {
+  return {
+    async readCredentialWriteTarget(ownerId, principalId) {
+      reads.push({ ownerId, principalId });
+      return result;
+    },
+  };
+}
+
 function fixture(options = {}) {
   const stages = [];
   const reconciles = [];
+  const targetReads = [];
   const service = new TrustedServerGeneratedIngressService({
     producerLeaseMilliseconds: options.producerLeaseMilliseconds ?? 50,
     ingress: {
@@ -53,8 +89,12 @@ function fixture(options = {}) {
         return options.reconcileResult ?? { kind: "missing" };
       },
     },
+    targets: targetReader(
+      Object.hasOwn(options, "targetResult") ? options.targetResult : currentTarget(),
+      targetReads,
+    ),
   });
-  return { service, stages, reconciles };
+  return { service, stages, reconciles, targetReads };
 }
 
 test("trusted producer forwards only a bounded stream to the shared ingress", async () => {
@@ -83,6 +123,10 @@ test("trusted producer forwards only a bounded stream to the shared ingress", as
   assert.equal(producerContext.maxBytes, 268_435_456);
   assert.equal(producerContext.signal instanceof AbortSignal, true);
   assert.equal(env.reconciles.length, 1);
+  assert.deepEqual(env.targetReads, [{
+    ownerId: TARGET_OWNER,
+    principalId: COMMON.actor.principalId,
+  }]);
   assert.equal(env.reconciles[0].sourceKind, "server_generated");
   assert.equal(env.reconciles[0].mediaType, "application/octet-stream");
   assert.equal(env.reconciles[0].sha256, COMMON.expectedSha256);
@@ -119,8 +163,36 @@ test("the accepted producer lease and size ceiling are exact and cannot widen", 
   assert.throws(() => new TrustedServerGeneratedIngressService({
     ingress: { stageServerGenerated() { throw new Error("unreachable"); } },
     reconciliation: { reconcile() { throw new Error("unreachable"); } },
+    targets: targetReader(),
     producerLeaseMilliseconds: 600_001,
   }), /outside the accepted bound/u);
+});
+
+test("credential owner target is required and exact before producer acquisition", async () => {
+  for (const [targetResult, code] of [
+    [currentTarget({ activeGeneration: null }), "writable_target_required"],
+    [currentTarget({
+      activeGeneration: {
+        generationId: "target_generation_other",
+        bindingOwnerId: TARGET_OWNER,
+        spaceId: "space_other",
+      },
+    }), "writable_target_mismatch"],
+    [null, "writable_target_unavailable"],
+  ]) {
+    const env = fixture({ targetResult });
+    let producerInvocations = 0;
+    assert.deepEqual(await env.service.stage({
+      ...COMMON,
+      producer() {
+        producerInvocations += 1;
+        return (async function* () { yield BYTES; })();
+      },
+    }), { kind: "invalid", code });
+    assert.equal(producerInvocations, 0);
+    assert.equal(env.reconciles.length, 0);
+    assert.equal(env.stages.length, 0);
+  }
 });
 
 test("timeout while opening a producer fails closed and signals the producer", async () => {
@@ -207,6 +279,7 @@ test("shared preflight rejection closes an unopened producer iterator", async ()
     reconciliation: {
       async reconcile() { return { kind: "missing" }; },
     },
+    targets: targetReader(),
   });
   const result = await service.stage({
     ...COMMON,
@@ -244,6 +317,7 @@ test("successful uncertain retry and changed receipt resolve before producer or 
           : { kind: "invalid", code: "idempotency_conflict" };
       },
     },
+    targets: targetReader(),
     ingress: {
       async stageServerGenerated(request) {
         for await (const chunk of request.stream) objectWrites += chunk.byteLength;

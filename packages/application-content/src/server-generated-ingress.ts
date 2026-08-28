@@ -1,5 +1,10 @@
 import type { McpTokenActorContext } from "@mind-diary/application-contracts";
-import { bundleFileMediaType, type SpaceId } from "@mind-diary/domain";
+import type { CredentialWriteTargetStore } from "@mind-diary/application-ports";
+import {
+  bundleFileMediaType,
+  type CredentialWriteTargetGenerationId,
+  type SpaceId,
+} from "@mind-diary/domain";
 import type { BundleFileStagingService } from "./bundle-files.js";
 import {
   GENERATED_ARTIFACT_LIMITS,
@@ -32,7 +37,6 @@ export type TrustedServerGeneratedProducer = (
 export interface StageTrustedServerGeneratedRequest {
   readonly actor: McpTokenActorContext;
   readonly spaceId: SpaceId;
-  readonly writeBindingId: unknown;
   readonly displayFilename: unknown;
   /** Exact safe canonical media receipt, not source authority. */
   readonly expectedMediaType: unknown;
@@ -42,6 +46,16 @@ export interface StageTrustedServerGeneratedRequest {
   readonly producer: TrustedServerGeneratedProducer;
   readonly signal?: AbortSignal;
 }
+
+export type TrustedServerGeneratedIngressResult =
+  | GeneratedArtifactIngressResult
+  | {
+      readonly kind: "invalid";
+      readonly code:
+        | "writable_target_required"
+        | "writable_target_mismatch"
+        | "writable_target_unavailable";
+    };
 
 const ABORTED = Symbol("server-generated-producer-aborted");
 
@@ -173,6 +187,47 @@ function cancelled(): GeneratedArtifactIngressResult {
   });
 }
 
+type ResolvedWritableTarget = Readonly<{
+  kind: "ready";
+  generationId: CredentialWriteTargetGenerationId;
+  targetVersion: number;
+}>;
+
+type WritableTargetFailure = Extract<
+  TrustedServerGeneratedIngressResult,
+  { readonly kind: "invalid" }
+> & {
+  readonly code:
+    | "writable_target_required"
+    | "writable_target_mismatch"
+    | "writable_target_unavailable";
+};
+
+function writableTargetFailure(code: WritableTargetFailure["code"]): WritableTargetFailure {
+  return Object.freeze({ kind: "invalid", code });
+}
+
+function mapCurrentTargetFailure<Result extends GeneratedArtifactIngressResult | {
+  readonly kind: "missing";
+}>(result: Result): Result | WritableTargetFailure {
+  if (result.kind === "denied") {
+    const decision = result.decision as Readonly<{ readonly code?: unknown }>;
+    if (decision.code === "write_binding_required") {
+      return writableTargetFailure("writable_target_required");
+    }
+    if (
+      decision.code === "write_binding_stale" ||
+      decision.code === "binding_state_unavailable" ||
+      decision.code === "binding_owner_revoked" ||
+      decision.code === "authorization_state_changed"
+    ) return writableTargetFailure("writable_target_unavailable");
+  }
+  if (result.kind === "invalid" && result.code === "binding_mismatch") {
+    return writableTargetFailure("writable_target_unavailable");
+  }
+  return result;
+}
+
 /**
  * Trusted hosted-composition boundary for one server-generated output.
  *
@@ -183,16 +238,19 @@ function cancelled(): GeneratedArtifactIngressResult {
 export class TrustedServerGeneratedIngressService {
   readonly #ingress: Pick<GeneratedArtifactIngressService, "stageServerGenerated">;
   readonly #reconciliation: Pick<BundleFileStagingService, "reconcile">;
+  readonly #targets: Pick<CredentialWriteTargetStore, "readCredentialWriteTarget">;
   readonly #producerLeaseMilliseconds: number;
 
   constructor(dependencies: {
     readonly ingress: Pick<GeneratedArtifactIngressService, "stageServerGenerated">;
     readonly reconciliation: Pick<BundleFileStagingService, "reconcile">;
+    readonly targets: Pick<CredentialWriteTargetStore, "readCredentialWriteTarget">;
     /** Tests/adapters may choose a stricter lease, never a wider one. */
     readonly producerLeaseMilliseconds?: number;
   }) {
     this.#ingress = dependencies.ingress;
     this.#reconciliation = dependencies.reconciliation;
+    this.#targets = dependencies.targets;
     const lease = dependencies.producerLeaseMilliseconds ??
       SERVER_GENERATED_INGRESS_LIMITS.producerLeaseMilliseconds;
     if (
@@ -204,23 +262,25 @@ export class TrustedServerGeneratedIngressService {
 
   async stage(
     request: StageTrustedServerGeneratedRequest,
-  ): Promise<GeneratedArtifactIngressResult> {
+  ): Promise<TrustedServerGeneratedIngressResult> {
     if (request.signal?.aborted) return cancelled();
     if (typeof request.producer !== "function") return unavailable();
     if (typeof request.expectedMediaType !== "string") {
       return Object.freeze({ kind: "invalid", code: "media_type_not_allowed" });
     }
     const expectedMediaType = bundleFileMediaType(request.expectedMediaType);
+    const target = await this.#resolveWritableTarget(request.actor, request.spaceId);
+    if (target.kind === "invalid") return target;
 
     // The exact producer receipt makes an uncertain retry resolvable without
     // invoking the producer or touching object storage. Existing reconcile
     // owns validation, current target authorization, namespace isolation,
     // expiry/state checks and canonical request-hash conflict detection.
     try {
-      const prior = await this.#reconciliation.reconcile({
+      const prior = mapCurrentTargetFailure(await this.#reconciliation.reconcile({
         actor: request.actor,
         spaceId: request.spaceId,
-        writeBindingId: request.writeBindingId,
+        writeBindingId: target.generationId,
         displayFilename: request.displayFilename,
         claimedMediaType: expectedMediaType,
         idempotencyKey: request.idempotencyKey,
@@ -231,7 +291,7 @@ export class TrustedServerGeneratedIngressService {
         mediaType: expectedMediaType,
         size: request.expectedSize,
         sha256: request.expectedSha256,
-      });
+      }));
       if (prior.kind !== "missing") return prior;
     } catch {
       return unavailable();
@@ -281,7 +341,7 @@ export class TrustedServerGeneratedIngressService {
       const result = await this.#ingress.stageServerGenerated({
         actor: request.actor,
         spaceId: request.spaceId,
-        writeBindingId: request.writeBindingId,
+        writeBindingId: target.generationId,
         displayFilename: request.displayFilename,
         claimedMediaType: expectedMediaType,
         expectedMediaType,
@@ -296,7 +356,7 @@ export class TrustedServerGeneratedIngressService {
         result.code === "generated_artifact_cancelled" &&
         request.signal?.aborted !== true && leaseController.signal.aborted
       ) return unavailable();
-      return result;
+      return mapCurrentTargetFailure(result);
     } catch {
       return request.signal?.aborted ? cancelled() : unavailable();
     } finally {
@@ -304,5 +364,40 @@ export class TrustedServerGeneratedIngressService {
       if (stopOpening !== undefined) signal.removeEventListener("abort", stopOpening);
       settleProducer();
     }
+  }
+
+  async #resolveWritableTarget(
+    actor: McpTokenActorContext,
+    spaceId: SpaceId,
+  ): Promise<ResolvedWritableTarget | WritableTargetFailure> {
+    let snapshot;
+    try {
+      snapshot = await this.#targets.readCredentialWriteTarget(
+        actor.authentication.bindingOwnerId,
+        actor.principalId,
+      );
+    } catch {
+      return writableTargetFailure("writable_target_unavailable");
+    }
+    if (snapshot?.kind === "pending_upgrade") {
+      return writableTargetFailure("writable_target_required");
+    }
+    if (
+      snapshot?.kind !== "current" ||
+      snapshot.state.bindingOwnerId !== actor.authentication.bindingOwnerId ||
+      snapshot.state.principalId !== actor.principalId ||
+      snapshot.state.lifecycleState !== "active"
+    ) return writableTargetFailure("writable_target_unavailable");
+    const generation = snapshot.state.activeGeneration;
+    if (generation === null) return writableTargetFailure("writable_target_required");
+    if (
+      generation.bindingOwnerId !== actor.authentication.bindingOwnerId ||
+      generation.spaceId !== spaceId
+    ) return writableTargetFailure("writable_target_mismatch");
+    return Object.freeze({
+      kind: "ready",
+      generationId: generation.generationId,
+      targetVersion: snapshot.state.targetVersion,
+    });
   }
 }

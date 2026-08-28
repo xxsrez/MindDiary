@@ -192,7 +192,7 @@ test("hosted composition stages one trusted stream and reuses commit/history/dow
   const secret = issuedData.secret;
   const personalTokenRef = issuedData.token.personal_token_ref;
 
-  const bound = await responseFrom(runtime, new Request(
+  const selected = await responseFrom(runtime, new Request(
     `${ORIGIN}/api/v1/mcp-tokens/${encodeURIComponent(personalTokenRef)}/mind-access`,
     {
       method: "PATCH",
@@ -200,24 +200,16 @@ test("hosted composition stages one trusted stream and reuses commit/history/dow
         origin: ORIGIN,
         "content-type": "application/json",
         "x-csrf-token": csrf,
-        "idempotency-key": "binding:server-generated-composition",
+        "idempotency-key": "target:server-generated-composition",
       },
       body: JSON.stringify({
         action: "select_write",
         mind_ref: "/me",
-        expected_binding_version: 0,
+        expected_target_version: 0,
       }),
     },
   ));
-  assert.equal(bound.status, 200, await bound.clone().text());
-  const bindings = await modernTool(
-    runtime,
-    secret,
-    "generated-bindings",
-    "get_mind_bindings",
-    {},
-  );
-  const writeBindingId = bindings.write_binding.write_binding_id;
+  assert.equal(selected.status, 200, await selected.clone().text());
 
   const capabilities = await modernTool(
     runtime,
@@ -232,7 +224,7 @@ test("hosted composition stages one trusted stream and reuses commit/history/dow
       source_kind: "server_generated",
       server_adapter_status: "not_available",
       server_transport: "none",
-      requires_write_binding: false,
+      requires_writable_target: false,
       max_bytes: 0,
       fallback: "none",
     },
@@ -278,7 +270,6 @@ test("hosted composition stages one trusted stream and reuses commit/history/dow
   const common = {
     actor,
     spaceId,
-    writeBindingId,
     displayFilename: "safe-generated.pdf",
     expectedMediaType: "application/pdf; charset=binary",
     expectedSize: PDF.byteLength,
@@ -299,6 +290,76 @@ test("hosted composition stages one trusted stream and reuses commit/history/dow
     code: "generated_artifact_streaming_unavailable",
   });
   assert.equal(stagedObjectCount(bucket), beforeFailedStage);
+
+  const objectsBeforeTargetRace = stagedObjectCount(bucket);
+  const objectCallsBeforeTargetRace = {
+    reads: bucket.reads,
+    writes: bucket.writes,
+    deletes: bucket.deletes,
+  };
+  const allocatedReservationsBeforeTargetRace = (
+    await (await createSitesMetadataStore(database)).listCapacityReservationsForTest()
+  ).filter(({ state }) => state !== "released");
+  let targetRaceProducerInvocations = 0;
+  const targetRace = await runtime.serverGeneratedIngress.stage({
+    ...common,
+    idempotencyKey: "stage:server-generated-target-race",
+    producer: async () => {
+      targetRaceProducerInvocations += 1;
+      const cleared = await responseFrom(runtime, new Request(
+        `${ORIGIN}/api/v1/mcp-tokens/${encodeURIComponent(personalTokenRef)}/mind-access`,
+        {
+          method: "PATCH",
+          headers: {
+            origin: ORIGIN,
+            "content-type": "application/json",
+            "x-csrf-token": csrf,
+            "idempotency-key": "target:server-generated-race-clear",
+          },
+          body: JSON.stringify({
+            action: "clear_write",
+            expected_target_version: 1,
+          }),
+        },
+      ));
+      assert.equal(cleared.status, 200, await cleared.clone().text());
+      const reselected = await responseFrom(runtime, new Request(
+        `${ORIGIN}/api/v1/mcp-tokens/${encodeURIComponent(personalTokenRef)}/mind-access`,
+        {
+          method: "PATCH",
+          headers: {
+            origin: ORIGIN,
+            "content-type": "application/json",
+            "x-csrf-token": csrf,
+            "idempotency-key": "target:server-generated-race-reselect",
+          },
+          body: JSON.stringify({
+            action: "select_write",
+            mind_ref: "/me",
+            expected_target_version: 2,
+          }),
+        },
+      ));
+      assert.equal(reselected.status, 200, await reselected.clone().text());
+      return (async function* () { yield PDF; })();
+    },
+  });
+  assert.deepEqual(targetRace, {
+    kind: "invalid",
+    code: "writable_target_unavailable",
+  });
+  assert.equal(targetRaceProducerInvocations, 1);
+  assert.equal(stagedObjectCount(bucket), objectsBeforeTargetRace);
+  assert.deepEqual({
+    reads: bucket.reads,
+    writes: bucket.writes,
+    deletes: bucket.deletes,
+  }, objectCallsBeforeTargetRace);
+  assert.deepEqual(
+    (await (await createSitesMetadataStore(database)).listCapacityReservationsForTest())
+      .filter(({ state }) => state !== "released"),
+    allocatedReservationsBeforeTargetRace,
+  );
 
   const wrongMediaKey = "stage:server-generated-media-correction";
   const metadataBeforeWrongMedia = await createSitesMetadataStore(database);
@@ -428,7 +489,6 @@ test("hosted composition stages one trusted stream and reuses commit/history/dow
     "commit_changeset",
     {
       mind: "/me",
-      write_binding_id: writeBindingId,
       expected_revision: initialRevisionId,
       idempotency_key: "commit:server-generated-composition",
       summary: "Commit a privacy-safe generated fixture",

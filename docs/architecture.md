@@ -49,8 +49,12 @@ one-use upload-intent/metadata/composition для local/workspace sources пов
 cancellable bounded stream напрямую в MD-304 `stageStream`, без полного
 буфера, HTTP/MCP exposure или capability advertisement. Exact safe
 media/size/SHA receipt сначала проходит producer-free reconcile в
-owner/Space/current writable-target namespace, поэтому uncertain retry не
-повторяет generation/upload. Ожидаемый MIME заранее нормализуется до
+namespace точного credential owner + active target generation + Space, поэтому
+uncertain retry не повторяет generation/upload. Owner и generation выводятся
+только из trusted actor/current server state и не принимаются входом порта;
+generation и target-version stamp повторно проверяются внутри staging
+transaction, поэтому clear/switch/revoke race не перенаправляет bytes.
+Ожидаемый MIME заранее нормализуется до
 канонической основы; несовпадение с распознанным типом останавливает операцию
 до публикации временного объекта и фиксации idempotency outcome, а временный
 поток записи и резерв квоты очищаются без скрытого staged-состояния.
