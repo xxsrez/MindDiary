@@ -407,7 +407,7 @@ function validateTelemetryEvent(value) {
     !isSafeCorrelation(value.requestId, REQUEST_ID) || !isSafeCorrelation(value.jobId, JOB_ID) ||
     typeof value.lineage.candidateSha !== "string" || !SHA.test(value.lineage.candidateSha) ||
     typeof value.lineage.siteVersionId !== "string" ||
-      !/^appgver_[a-z0-9]+$/u.test(value.lineage.siteVersionId) ||
+      !/^(?:appgver_[a-z0-9]+|appgprj_[a-z0-9]+~appgver_[a-z0-9]+)$/u.test(value.lineage.siteVersionId) ||
     typeof value.lineage.deploymentId !== "string" || !DEPLOYMENT.test(value.lineage.deploymentId) ||
     !isSafeCorrelation(value.benchmarkCorrelationId, BENCHMARK_CORRELATION_ID) ||
     (value.kind === "operational" && value.cohort !== null) ||

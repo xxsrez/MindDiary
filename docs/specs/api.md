@@ -122,6 +122,64 @@ receipt публичный `get_file_ingress_capabilities` продолжает 
 `max_bytes: 0`; repository composition сама по себе не является hosted support
 evidence.
 
+### Restricted-UAT generated-source route — не public API
+
+`GET|POST /api/internal/uat/generated-sources` устанавливается только
+constructor-gated composition при exact `uat + restricted-uat + 40-hex
+candidate SHA`; partial, production-like или malformed configuration оставляет
+route скрытым. Он отсутствует в OpenAPI/MCP discovery и не меняет public
+capability rows.
+
+Оба метода требуют trusted Sites identity registered principal. `GET` не
+требует CSRF и возвращает exact shape:
+
+```json
+{
+  "ok": true,
+  "data": {
+    "schema": "mind-diary/restricted-uat-generated-source-test/v1",
+    "candidate_sha": "0123456789abcdef0123456789abcdef01234567",
+    "capability_rows": [
+      { "source_kind": "bounded_in_memory", "test_composition_status": "available", "test_transport": "constructor_owned_bytes", "max_bytes": 4194304 },
+      { "source_kind": "server_generated", "test_composition_status": "available", "test_transport": "constructor_owned_stream", "max_bytes": 268435456 }
+    ]
+  }
+}
+```
+
+Это только test-composition projection.
+
+`POST` дополнительно требует `application/json`, exact same-origin `Origin` и
+actor-bound `X-CSRF-Token`. Unknown fields запрещены; body ровно:
+
+```json
+{
+  "action": "run_matrix",
+  "personal_token_ref": "ptok_v1_0123456789abcdef0123456789abcdef",
+  "run_id": "generated-uat-run-001"
+}
+```
+
+`run_id` имеет grammar `[A-Za-z0-9][A-Za-z0-9._:-]{7,63}`. Ref должен
+разрешаться внутри current actor в active token с exact name
+`UAT Generated Sources`, effective `content:write`, expiry не более восьми
+суток от `created_at` и current writable target на fresh active private
+sole-owner ordinary Mind. Owner, Space и generation выводятся только из server
+state. Request не принимает bytes/base64, path, URL, filename/media, provider
+locator, prompt/job, Mind, principal, owner, binding/generation, target version
+или generation instructions.
+
+Server-owned matrix проверяет exact 4 MiB/+1, digest/stale target, stream
+overflow/cancel/timeout/producer error, stage replay, no-HEAD-before-commit и
+один atomic two-file commit с exact replay. Success использует тот же
+`{"ok":true,"data":...}` envelope и те же `schema`, `candidate_sha` и
+`capability_rows`, затем добавляет exact keys `status: "passed"`, 15 safe
+`assertions`, `staged` size/SHA receipts и
+`commit: {"one_revision":true,"replayed":true}`. Route не выполняет
+redeploy, history/download/Web-export read-back, revoke или cleanup. Public
+`get_file_ingress_capabilities` по-прежнему возвращает обе строки как
+`not_available`, `none`, `0`.
+
 ## Назначение и граница
 
 Mind Diary имеет четыре разные API-границы:

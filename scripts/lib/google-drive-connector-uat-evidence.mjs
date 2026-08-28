@@ -188,7 +188,7 @@ const PRODUCT_ASSERTION_IDS = Object.freeze(GOOGLE_DRIVE_UAT_ASSERTION_IDS.filte
 
 const SHA256 = /^sha256:[0-9a-f]{64}$/u;
 const PROJECT_ID = /^appgprj_[a-z0-9]+$/u;
-const VERSION_ID = /^appgver_[a-z0-9]+$/u;
+const VERSION_ID = /^(?:appgver_[a-z0-9]+|appgprj_[a-z0-9]+~appgver_[a-z0-9]+)$/u;
 const DEPLOYMENT_ID = /^appgdep_[a-z0-9]+$/u;
 const SAFE_CODE = /^[a-z][a-z0-9_]{0,63}$/u;
 const UTC_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/u;

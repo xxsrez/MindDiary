@@ -37,15 +37,30 @@ producer-error rows. Receipt связывает exact SHA с хешами исп
 ## Hosted same-run UAT
 
 Root release owner сначала сверяет exact UAT project/version/deployment через
-Sites control plane. В уже подготовленной restricted-UAT test session normal
-server commands должны:
+Sites control plane. Exact Worker должен иметь одновременно
+`MIND_DIARY_DEPLOYMENT_CLASS=uat`,
+`MIND_DIARY_DEPLOYMENT_POSTURE=restricted-uat` и
+`MIND_DIARY_RELEASE_CANDIDATE_SHA=<exact-clean-HEAD-sha>`; иначе hidden
+`/api/internal/uat/generated-sources` не устанавливается.
+
+Authenticated `GET` этого route должен вернуть schema
+`mind-diary/restricted-uat-generated-source-test/v1`, exact candidate и две
+`test_composition_status: available` rows: `constructor_owned_bytes`/4 MiB и
+`constructor_owned_stream`/256 MiB. Это отдельная test projection: public MCP
+rows одновременно остаются `not_available`, `none`, `0`.
+
+В уже подготовленной restricted-UAT test session normal server commands должны:
 
 1. создать fresh private ordinary Mind с synthetic content only;
-2. выпустить dedicated credential с коротким expiry и `content:write`;
+2. выпустить personal token с exact name `UAT Generated Sources`, active
+   `content:write` и expiry не более восьми суток от `created_at`;
 3. выбрать этот Mind единственным writable target через authenticated Site;
-4. stage-ить exact 4 MiB bounded fixture и representative generated stream;
+4. вызвать same-origin, CSRF-protected
+   `POST /api/internal/uat/generated-sources` с JSON ровно
+   `{ "action": "run_matrix", "personal_token_ref": "<actor-owned-ref>",
+   "run_id": "<8..64 bounded id>" }`;
 5. проверить +1 byte, overflow, cancel, timeout, producer error, stale target,
-   digest mismatch и revoke как no-HEAD/no-partial-effect outcomes;
+   digest mismatch и reconcile/replay как no-HEAD/no-partial-effect outcomes;
 6. reconcile exact stage/commit payload после искусственно неизвестного
    transport outcome без повторного object/revision effect;
 7. одним explicit changeset commit-ить оба refs, затем проверить history,
@@ -55,15 +70,23 @@ server commands должны:
 9. revoke-нуть dedicated credential, удалить только run-owned Mind и перечитать
    отсутствие target/Mind.
 
-Owner/generation/version никогда не являются runner input. Trusted runtime
+POST принимает только три указанных поля: никакие bytes/base64, path, URL,
+Mind, owner, generation, filename/media/digest, provider locator, prompt/job
+или способ generation не являются input. Owner/generation/version никогда не
+являются runner input. Trusted runtime
 сам выводит credential owner и active target generation; Content MCP request не
 может передать `write_binding_id` или replacement generation field.
 
+Matrix response заканчивается одним commit и возвращает только candidate/test
+rows, 15 safe assertion statuses, size/SHA receipts и
+`one_revision/replayed`. History/download/export read-back, distinct redeploy,
+revoke и cleanup выполняются и фиксируются отдельно; route не может выдать их
+за собственные эффекты или terminal acceptance.
+
 Fresh trusted-test-composition response не является публичным MCP capability
 report: публичные rows остаются `not_available`, transport `none`, limit `0`.
-Если test-composition response возвращает для обоих внутренних routes
-`test_composition_status: not_available`, `test_transport: none`, limit `0`,
-это точный product/platform blocker `hosted_generated_sources_not_available`.
+Если hidden GET отсутствует или не возвращает обе exact available rows, это
+точный product/platform blocker `hosted_generated_sources_not_available`.
 Local implementation, ручной файл и другой transport его не заменяют.
 
 ## Private readbacks и offline join

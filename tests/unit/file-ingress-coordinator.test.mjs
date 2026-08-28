@@ -23,9 +23,10 @@ function record(sourceKind) {
   };
 }
 
-function coordinator(adapters = {}) {
+function coordinator(adapters = {}, capabilityStatus = {}) {
   return new FileIngressCoordinator({
     adapters,
+    capabilityStatus,
     staging: {
       async reconcile(request) {
         return { kind: "stage_reconcile", request };
@@ -54,6 +55,9 @@ test("capabilities expose all sources and never invent an absent adapter", () =>
         return { kind: "staged", record: record("bounded_in_memory"), replayed: false };
       },
     },
+  }, {
+    session_attachment: "available_hosted",
+    bounded_in_memory: "not_available",
   });
   assert.deepEqual(
     service.capabilities().map(({ sourceKind, status, fallback }) => [
@@ -62,13 +66,50 @@ test("capabilities expose all sources and never invent an absent adapter", () =>
       fallback,
     ]),
     [
-      ["session_attachment", "available_local", "none"],
+      ["session_attachment", "available_hosted", "none"],
       ["local_path", "not_available", "none"],
       ["workspace/generated_artifact", "not_available", "none"],
       ["connector_object", "not_available", "none"],
-      ["bounded_in_memory", "available_local", "none"],
+      ["bounded_in_memory", "not_available", "none"],
       ["server_generated", "not_available", "none"],
     ],
+  );
+});
+
+test("installed adapters remain local unless explicitly declared hosted", () => {
+  const adapter = {
+    async stage() {
+      return { kind: "staged", record: record("server_generated"), replayed: false };
+    },
+  };
+  assert.equal(
+    coordinator({ server_generated: adapter }).capabilities().find(
+      ({ sourceKind }) => sourceKind === "server_generated",
+    ).status,
+    "available_local",
+  );
+  assert.equal(
+    coordinator(
+      { server_generated: adapter },
+      { server_generated: "available_hosted" },
+    ).capabilities().find(
+      ({ sourceKind }) => sourceKind === "server_generated",
+    ).status,
+    "available_hosted",
+  );
+});
+
+test("edge-owned hosted routes register capability without becoming stage adapters", async () => {
+  const service = coordinator({}, {
+    local_path: "available_hosted",
+  });
+  assert.equal(
+    service.capabilities().find(({ sourceKind }) => sourceKind === "local_path").status,
+    "available_hosted",
+  );
+  assert.deepEqual(
+    await service.stage({ sourceKind: "local_path", payload: {} }),
+    { kind: "invalid", code: "file_ingress_source_unsupported" },
   );
 });
 

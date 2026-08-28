@@ -35,6 +35,7 @@ import {
   deterministicKey,
 } from "./lib/fake-sites-storage.mjs";
 import {
+  matchesExactDefaultMcpToolInventory,
   matchesExactMcpToolInventory,
   matchesExactReadOnlyMcpToolInventory,
 } from "./lib/exact-mcp-tool-inventory.mjs";
@@ -72,9 +73,9 @@ export const OAUTH_DIRECT_PLUGIN_ASSERTION_IDS = Object.freeze([
   "package.automatic-capture-skill-policy",
   "package.mcp-resolution",
   "package.task-manager-separate",
-  "oauth.codex-compatible-write-binding-schema",
-  "oauth.catalog-modern-exact-18",
-  "oauth.catalog-compat-exact-18",
+  "oauth.codex-compatible-default-write-schema",
+  "oauth.catalog-modern-default-exact-17",
+  "oauth.catalog-compat-default-exact-17",
   "oauth.protected-resource-discovery",
   "oauth.authorization-server-discovery",
   "oauth.public-dcr-no-secret",
@@ -124,6 +125,18 @@ export function assertDirectPackageServer(server) {
 export function assertCodexCompatibleWriteBindingSchema(tools) {
   if (!matchesExactMcpToolInventory(tools)) {
     fail("codex_write_binding_schema_incompatible", {
+      toolCount: Array.isArray(tools) ? tools.length : null,
+      toolNames: Array.isArray(tools)
+        ? tools.map((tool) => typeof tool?.name === "string" ? tool.name : "invalid")
+        : [],
+    });
+  }
+  return true;
+}
+
+export function assertCodexCompatibleDefaultWriteCatalog(tools) {
+  if (!matchesExactDefaultMcpToolInventory(tools)) {
+    fail("codex_default_write_catalog_incompatible", {
       toolCount: Array.isArray(tools) ? tools.length : null,
       toolNames: Array.isArray(tools)
         ? tools.map((tool) => typeof tool?.name === "string" ? tool.name : "invalid")
@@ -574,21 +587,6 @@ function createHarness({ database, bucket, identities, scheduled, now }) {
     exportDownloadVerifierKey: deterministicKey(97),
     csrfKey: deterministicKey(137),
     now,
-    verifiedNativeFileParameterRoute: {
-      mcpProfiles: ["modern", "compatibility"],
-      assertion: {
-        profileId: "oauth-direct-plugin-local-native-v1",
-        assertionId: "local-synthetic:oauth-direct-plugin:native-route:v1",
-        observedAtUtc: "2026-08-28T00:00:00.000Z",
-        toolName: "stage_bundle_file",
-        parameterName: "file",
-        sourceKind: "session_attachment",
-        transport: "native_file_parameter",
-      },
-      async fetcher() {
-        throw new Error("OAuth direct-plugin catalog probe must not fetch native file bytes.");
-      },
-    },
     observabilityWriter: { write() {} },
     schedule(work) { scheduled.push(work); },
   };
@@ -814,7 +812,7 @@ function expectMcpError(response, expected, code) {
   return response.body.result;
 }
 
-async function assertCompatibilityRead(actor, token, { writeCatalog = false } = {}) {
+async function assertCompatibilityRead(actor, token, { defaultWriteCatalog = false } = {}) {
   const initialized = await compatibility(actor, token, {
     jsonrpc: "2.0",
     id: "oauth-compat-init",
@@ -839,7 +837,9 @@ async function assertCompatibilityRead(actor, token, { writeCatalog = false } = 
     params: {},
   });
   if (tools.status !== 200) fail("oauth_compat_tools_list_failed");
-  if (writeCatalog) assertCodexCompatibleWriteBindingSchema(tools.body?.result?.tools);
+  if (defaultWriteCatalog) {
+    assertCodexCompatibleDefaultWriteCatalog(tools.body?.result?.tools);
+  }
   else assertCodexCompatibleReadCatalog(tools.body?.result?.tools);
   const listed = await compatibility(actor, token, {
     jsonrpc: "2.0",
@@ -1117,11 +1117,13 @@ async function runOAuthScenario({ assertions, nowState }) {
     },
   });
   if (advertisedWriteTools.status !== 200) fail("oauth_write_tools_list_failed");
-  assertCodexCompatibleWriteBindingSchema(advertisedWriteTools.body?.result?.tools);
-  assertions.add("oauth.catalog-modern-exact-18");
-  await assertCompatibilityRead(owner, writeGrant.tokens.access_token, { writeCatalog: true });
-  assertions.add("oauth.catalog-compat-exact-18");
-  assertions.add("oauth.codex-compatible-write-binding-schema");
+  assertCodexCompatibleDefaultWriteCatalog(advertisedWriteTools.body?.result?.tools);
+  assertions.add("oauth.catalog-modern-default-exact-17");
+  await assertCompatibilityRead(owner, writeGrant.tokens.access_token, {
+    defaultWriteCatalog: true,
+  });
+  assertions.add("oauth.catalog-compat-default-exact-17");
+  assertions.add("oauth.codex-compatible-default-write-schema");
   const writeAccessRecord = latestAccessRecord(database);
   const metadata = await createSitesMetadataStore(database);
   const activeMirror = await metadata.readMcpTokenForAuthorization(writeAccessRecord.id);
@@ -1309,7 +1311,9 @@ async function runOAuthScenario({ assertions, nowState }) {
     "personal_token_modern_failed",
   );
   assertions.add("personal-token.modern-regression");
-  await assertCompatibilityRead(owner, owner.mcpToken, { writeCatalog: true });
+  await assertCompatibilityRead(owner, owner.mcpToken, {
+    defaultWriteCatalog: true,
+  });
   assertions.add("personal-token.compat-regression");
 
   if (ownerSession.personal_mind?.route !== "/me") fail("oauth_owner_session_invalid");

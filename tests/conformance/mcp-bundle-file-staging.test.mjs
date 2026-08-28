@@ -410,7 +410,9 @@ test("product adapter terminates provider metadata and returns only verified sta
             ["server_generated", "producer_stream", 67_108_864],
           ].map(([sourceKind, transport, maxBytes]) => ({
             sourceKind,
-            status: "not_available",
+            status: sourceKind === "bounded_in_memory"
+              ? "available_local"
+              : "not_available",
             transport,
             maxBytes,
             fallback: "none",
@@ -592,7 +594,7 @@ test("product adapter terminates provider metadata and returns only verified sta
       max_bytes,
     ]),
     [
-      ["session_attachment", "available", "native_file_parameter", true, 268_435_456],
+      ["session_attachment", "available", "native_file_parameter", true, 67_108_864],
       ["local_path", "not_available", "none", false, 0],
       ["workspace/generated_artifact", "not_available", "none", false, 0],
       ["connector_object", "not_available", "none", false, 0],
@@ -690,7 +692,11 @@ test("direct custom MCP omits native staging and fails closed before target or f
     validation: unused,
     bindings: unused,
     commits: unused,
-    ingress: unused,
+    ingress: {
+      capabilities() { return []; },
+      reconcileStage: unused.reconcileStage,
+      reconcileCommit: unused.reconcileCommit,
+    },
     bundleFileDownloads: unused,
     capture: unused,
   });
@@ -728,6 +734,107 @@ test("direct custom MCP omits native staging and fails closed before target or f
     "native_file_input_unsupported",
   );
   assert.equal(touched, 0);
+});
+
+test("public capability projection requires hosted registry plus an accepted public route", async () => {
+  const application = new ProductMcpContentApplication({
+    ingress: {
+      capabilities() {
+        return [
+          {
+            sourceKind: "session_attachment",
+            status: "available_local",
+            transport: "native_file_parameter",
+            maxBytes: 268_435_456,
+            fallback: "none",
+          },
+          {
+            sourceKind: "local_path",
+            status: "available_hosted",
+            transport: "local_companion",
+            maxBytes: 67_108_864,
+            fallback: "none",
+          },
+          {
+            sourceKind: "workspace/generated_artifact",
+            status: "available_local",
+            transport: "local_companion",
+            maxBytes: 67_108_864,
+            fallback: "none",
+          },
+          {
+            sourceKind: "connector_object",
+            status: "available_hosted",
+            transport: "authorized_connector",
+            maxBytes: 67_108_864,
+            fallback: "none",
+          },
+          {
+            sourceKind: "bounded_in_memory",
+            status: "available_hosted",
+            transport: "bounded_bytes",
+            maxBytes: 4_194_304,
+            fallback: "none",
+          },
+          {
+            sourceKind: "server_generated",
+            status: "available_local",
+            transport: "producer_stream",
+            maxBytes: 67_108_864,
+            fallback: "none",
+          },
+        ];
+      },
+    },
+    nativeFileRoute: NativeFileParameterRoute.create({
+      assertion: {
+        profileId: "test-local-only-session-attachment-v1",
+        assertionId: "test-receipt:local-only-host-rewrite:v1",
+        observedAtUtc: "2026-08-28T18:00:00.000Z",
+        toolName: "stage_bundle_file",
+        parameterName: "file",
+        sourceKind: "session_attachment",
+        transport: "native_file_parameter",
+      },
+      async fetcher() {
+        throw new Error("capability projection must not fetch");
+      },
+    }),
+    staging: {},
+    uploadIntents: {},
+    uploadIntentUrl() {
+      return "https://mind-diary.invalid/api/v1/file-upload-intents/test";
+    },
+  });
+  const capabilities = await application.executeToolCall({
+    actor: ACTOR,
+    name: "get_file_ingress_capabilities",
+    arguments: {},
+  });
+  assert.equal(capabilities.isError, false);
+  assert.deepEqual(
+    capabilities.structuredContent.data.sources.map(({
+      source_kind,
+      server_adapter_status,
+      server_transport,
+      requires_writable_target,
+      max_bytes,
+    }) => [
+      source_kind,
+      server_adapter_status,
+      server_transport,
+      requires_writable_target,
+      max_bytes,
+    ]),
+    [
+      ["session_attachment", "not_available", "none", false, 0],
+      ["local_path", "available", "companion_upload_intent", true, 67_108_864],
+      ["workspace/generated_artifact", "not_available", "none", false, 0],
+      ["connector_object", "not_available", "none", false, 0],
+      ["bounded_in_memory", "not_available", "none", false, 0],
+      ["server_generated", "not_available", "none", false, 0],
+    ],
+  );
 });
 
 test("read-only catalog omits native staging and direct calls fail before execution", async () => {

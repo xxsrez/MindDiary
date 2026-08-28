@@ -28,10 +28,11 @@ const siteSourceCommitSha = "b".repeat(40);
 const siteSourceTreeSha = "c".repeat(40);
 const siteSourceMode = "subtree-mirror";
 const siteProjectId = "appgprj_md358fixture";
-const versionId = "appgver_md358fixture";
+const versionId = `${siteProjectId}~appgver_md358fixture`;
 const deploymentBefore = "appgdep_md358before";
 const deploymentAfter = "appgdep_md358after";
 const archiveBytes = Buffer.from("exact md358 site archive", "utf8");
+const providerArchiveBytes = Buffer.from("normalized md358 provider tar", "utf8");
 const hostedAssertionIds = [
   "SC-LINEAGE-01",
   "SC-NAV-01",
@@ -119,16 +120,17 @@ function providerReadback() {
   return {
     schema: "mind-diary/settings-connections-sites-provider-readback/v1",
     generator: "codex-sites-connector-readback/v1",
-    observed_at_utc: "2026-08-28T01:04:00.000Z",
+    observed_at_utc: "2026-08-28T01:04:00.123456+00:00",
     site: { id: siteProjectId, status: "active", current_live_url: "https://mind-diary.example.invalid" },
     version: {
       id: versionId,
       project_id: siteProjectId,
       source: { commit_sha: siteSourceCommitSha },
       archive_storage: {
-        archive_format: "tar.gz",
-        content_hash: sha256(archiveBytes),
-        size_bytes: archiveBytes.byteLength,
+        archive_format: "tar",
+        content_hash: sha256(providerArchiveBytes).slice("sha256:".length),
+        size_bytes: providerArchiveBytes.byteLength,
+        file_count: 58,
       },
     },
     deployment_before: {
@@ -138,7 +140,7 @@ function providerReadback() {
       type: "publish",
       status: "succeeded",
       url: "https://mind-diary.example.invalid",
-      updated_at: "2026-08-28T01:01:30.000Z",
+      updated_at: "2026-08-28T01:01:30+00:00",
     },
     redeploy_start: {
       id: deploymentAfter,
@@ -147,7 +149,7 @@ function providerReadback() {
       type: "publish",
       status: "publishing",
       url: null,
-      updated_at: "2026-08-28T01:02:00.000Z",
+      updated_at: "2026-08-28T01:02:00.123456+00:00",
     },
     deployment_after: {
       id: deploymentAfter,
@@ -156,7 +158,7 @@ function providerReadback() {
       type: "publish",
       status: "succeeded",
       url: "https://mind-diary.example.invalid",
-      updated_at: "2026-08-28T01:03:00.000Z",
+      updated_at: "2026-08-28T01:03:00.999999+00:00",
     },
   };
 }
@@ -196,7 +198,7 @@ function providerBoundaryReadback() {
       site_project_id: siteProjectId,
       site_version_id: versionId,
       deployment_id: deploymentAfter,
-      archive_sha256: sha256(archiveBytes),
+      archive_sha256: sha256(providerArchiveBytes),
     },
     observed_at_utc: "2026-08-28T01:04:30.000Z",
     application_evidence: [
@@ -317,7 +319,10 @@ test("lookalike files join exact lineage and cleanup but can never produce hoste
   assert.equal(value.acceptance, "nonterminal");
   assert.equal(value.provenance, "unverified-local-files");
   assert.equal(value.claimed_lineage.deployment_after_id, deploymentAfter);
-  assert.equal(value.claimed_lineage.site_archive_sha256, sha256(archiveBytes));
+  assert.equal(value.claimed_lineage.site_version_id, versionId);
+  assert.equal(value.claimed_lineage.upload_archive_sha256, sha256(archiveBytes));
+  assert.equal(value.claimed_lineage.provider_archive_sha256, sha256(providerArchiveBytes));
+  assert.equal(value.claimed_lineage.provider_archive_format, "tar");
   assert.equal(value.cleanup.provider_credentials_absent, true);
   assert.match(value.artifact_sha256, /^sha256:[0-9a-f]{64}$/u);
 });

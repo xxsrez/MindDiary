@@ -5,6 +5,7 @@ import {
   GOOGLE_DRIVE_CONNECTOR_LIMITS,
   GoogleDriveConnectorObjectSource,
   createGoogleDriveConnectorIngress,
+  createGoogleDriveRunConnectorStageOperation,
 } from "@mind-diary/composition-root";
 import {
   AuthorizedConnectorIngressService,
@@ -21,6 +22,8 @@ const BINDING = "drive_binding_reference_sensitive";
 const TARGET_OWNER = "target_owner_google_drive_unit";
 const TARGET_GENERATION = "target_generation_google_drive_unit";
 const SPACE = "space_google_drive_unit";
+const RUN_FINGERPRINT = `sha256:${"b".repeat(64)}`;
+const CLEANUP_OWNER = "cleanup_owner_google_drive_unit";
 const ACTOR = Object.freeze({
   kind: "registered_principal",
   principalId: "principal_google_drive_unit",
@@ -66,6 +69,17 @@ function targetReader(spaceId = SPACE) {
 
 function selection(objectId) {
   return { bindingRef: BINDING, objectId };
+}
+
+function runProviderBinding(objectId) {
+  return Object.freeze({
+    bindingRef: BINDING,
+    objectId,
+    runOwnership: Object.freeze({
+      runFingerprint: RUN_FINGERPRINT,
+      cleanupOwnerRef: CLEANUP_OWNER,
+    }),
+  });
 }
 
 function authorizedGrants(overrides = {}) {
@@ -507,5 +521,257 @@ test("native export provider limit is enforced before staging", async () => {
   }), {
     kind: "unavailable",
     failure: "source_unavailable",
+  });
+});
+
+test("run-scoped stage resolves target before exact provider binding and preserves cleanup ownership", async () => {
+  const fixture = GOOGLE_DRIVE_FIXTURES.binary;
+  const providerBinding = runProviderBinding(fixture.objectId);
+  const provider = fakeProvider(fixture);
+  const events = [];
+  const storeBindings = [];
+  const staged = [];
+  const operation = createGoogleDriveRunConnectorStageOperation({
+    grantStore: {
+      async resolveRunObjectGrant(request) {
+        events.push("grant-store");
+        assert.equal(request.actor, ACTOR);
+        storeBindings.push(request.providerBinding);
+        return {
+          kind: "authorized",
+          providerBinding,
+          accessToken: OPAQUE_BEARER,
+          grantFingerprint: GRANT,
+        };
+      },
+    },
+    async fetcher(input, init) {
+      events.push("provider-read");
+      return provider.fetcher(input, init);
+    },
+    targets: {
+      async readCredentialWriteTarget(ownerId, principalId) {
+        events.push("target-read");
+        return targetReader().readCredentialWriteTarget(ownerId, principalId);
+      },
+    },
+    staging: {
+      async authorizeSourceRead() {
+        events.push("mind-authorization");
+        return ALLOWED;
+      },
+      async stageStream(request) {
+        events.push("stage-stream");
+        await collect(request.stream);
+        staged.push(request);
+        return { kind: "staged", record: {}, replayed: false };
+      },
+    },
+  });
+
+  assert.deepEqual(await operation.stage({
+    actor: ACTOR,
+    spaceId: SPACE,
+    providerBinding,
+    representation: { kind: "binary" },
+    idempotencyKey: "run-stage-google-drive-unit",
+  }), {
+    kind: "staged",
+    record: {},
+    replayed: false,
+  });
+  assert.deepEqual(events.slice(0, 4), [
+    "target-read",
+    "mind-authorization",
+    "grant-store",
+    "provider-read",
+  ]);
+  assert.equal(storeBindings.length, 4);
+  for (const value of storeBindings) assert.deepEqual(value, providerBinding);
+  assert.equal(staged.length, 1);
+  assert.equal(staged[0].sourceKind, "connector_object");
+  for (const forbidden of [
+    "providerBinding", "bindingRef", "objectId", "runOwnership", "accessToken",
+  ]) assert.equal(forbidden in staged[0], false, forbidden);
+});
+
+test("run-scoped stage never resolves a grant or provider before writable target authorization", async () => {
+  const fixture = GOOGLE_DRIVE_FIXTURES.binary;
+  let storeReads = 0;
+  let providerReads = 0;
+  let authorizationReads = 0;
+  const operation = createGoogleDriveRunConnectorStageOperation({
+    grantStore: {
+      async resolveRunObjectGrant() {
+        storeReads += 1;
+        throw new Error("must not resolve");
+      },
+    },
+    async fetcher() {
+      providerReads += 1;
+      throw new Error("must not fetch");
+    },
+    targets: {
+      async readCredentialWriteTarget() { return null; },
+    },
+    staging: {
+      async authorizeSourceRead() {
+        authorizationReads += 1;
+        return ALLOWED;
+      },
+      async stageStream() { throw new Error("must not stage"); },
+    },
+  });
+
+  assert.deepEqual(await operation.stage({
+    actor: ACTOR,
+    spaceId: SPACE,
+    providerBinding: runProviderBinding(fixture.objectId),
+    representation: { kind: "binary" },
+    idempotencyKey: "run-stage-no-target",
+  }), {
+    kind: "invalid",
+    code: "writable_target_unavailable",
+  });
+  assert.equal(authorizationReads, 0);
+  assert.equal(storeReads, 0);
+  assert.equal(providerReads, 0);
+});
+
+test("run-scoped grant revoke during stream verification fails closed", async () => {
+  const fixture = GOOGLE_DRIVE_FIXTURES.binary;
+  const providerBinding = runProviderBinding(fixture.objectId);
+  const provider = fakeProvider(fixture);
+  let storeReads = 0;
+  let durableStages = 0;
+  const operation = createGoogleDriveRunConnectorStageOperation({
+    grantStore: {
+      async resolveRunObjectGrant() {
+        storeReads += 1;
+        return storeReads === 1
+          ? {
+              kind: "authorized",
+              providerBinding,
+              accessToken: OPAQUE_BEARER,
+              grantFingerprint: GRANT,
+            }
+          : { kind: "revoked" };
+      },
+    },
+    fetcher: provider.fetcher,
+    targets: targetReader(),
+    staging: {
+      async authorizeSourceRead() { return ALLOWED; },
+      async stageStream(request) {
+        try {
+          await collect(request.stream);
+          durableStages += 1;
+          return { kind: "staged", record: {}, replayed: false };
+        } catch {
+          return { kind: "stream_invalid", code: "stream_transport_unavailable" };
+        }
+      },
+    },
+  });
+
+  assert.deepEqual(await operation.stage({
+    actor: ACTOR,
+    spaceId: SPACE,
+    providerBinding,
+    representation: { kind: "binary" },
+    idempotencyKey: "run-stage-revoked",
+  }), {
+    kind: "invalid",
+    code: "file_ingress_source_unavailable",
+    retryable: false,
+  });
+  assert.equal(storeReads, 2);
+  assert.equal(provider.metadataReads(), 1);
+  assert.equal(provider.contentReads(), 0);
+  assert.equal(durableStages, 0);
+});
+
+test("run-scoped stage rejects mismatched or expanded provider bindings", async (t) => {
+  const fixture = GOOGLE_DRIVE_FIXTURES.binary;
+  const providerBinding = runProviderBinding(fixture.objectId);
+  await t.test("store echoes different cleanup owner", async () => {
+    let providerReads = 0;
+    const operation = createGoogleDriveRunConnectorStageOperation({
+      grantStore: {
+        async resolveRunObjectGrant() {
+          return {
+            kind: "authorized",
+            providerBinding: {
+              ...providerBinding,
+              runOwnership: {
+                ...providerBinding.runOwnership,
+                cleanupOwnerRef: "cleanup_owner_other",
+              },
+            },
+            accessToken: OPAQUE_BEARER,
+            grantFingerprint: GRANT,
+          };
+        },
+      },
+      async fetcher() {
+        providerReads += 1;
+        throw new Error("must not fetch");
+      },
+      targets: targetReader(),
+      staging: {
+        async authorizeSourceRead() { return ALLOWED; },
+        async stageStream() { throw new Error("must not stage"); },
+      },
+    });
+    assert.deepEqual(await operation.stage({
+      actor: ACTOR,
+      spaceId: SPACE,
+      providerBinding,
+      representation: { kind: "binary" },
+      idempotencyKey: "run-stage-owner-mismatch",
+    }), {
+      kind: "invalid",
+      code: "file_ingress_source_unavailable",
+      retryable: false,
+    });
+    assert.equal(providerReads, 0);
+  });
+
+  await t.test("URL-shaped expansion is not a provider binding", async () => {
+    let storeReads = 0;
+    let providerReads = 0;
+    const operation = createGoogleDriveRunConnectorStageOperation({
+      grantStore: {
+        async resolveRunObjectGrant() {
+          storeReads += 1;
+          return { kind: "revoked" };
+        },
+      },
+      async fetcher() {
+        providerReads += 1;
+        throw new Error("must not fetch");
+      },
+      targets: targetReader(),
+      staging: {
+        async authorizeSourceRead() { return ALLOWED; },
+        async stageStream() { throw new Error("must not stage"); },
+      },
+    });
+    assert.deepEqual(await operation.stage({
+      actor: ACTOR,
+      spaceId: SPACE,
+      providerBinding: {
+        ...providerBinding,
+        url: "https://www.googleapis.com/drive/v3/files/anything",
+      },
+      representation: { kind: "binary" },
+      idempotencyKey: "run-stage-url-expanded",
+    }), {
+      kind: "invalid",
+      code: "file_ingress_source_unavailable",
+      retryable: false,
+    });
+    assert.equal(storeReads, 0);
+    assert.equal(providerReads, 0);
   });
 });

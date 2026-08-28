@@ -17,6 +17,7 @@ import {
   CODEX_PLUGIN_OAUTH_RESOURCE,
   OAUTH_DIRECT_PLUGIN_ASSERTION_IDS,
   assertAutomaticCaptureSkillPolicy,
+  assertCodexCompatibleDefaultWriteCatalog,
   assertCodexCompatibleReadCatalog,
   assertCodexCompatibleWriteBindingSchema,
   assertCodexClientVersion,
@@ -57,7 +58,7 @@ test("Codex plugin uses the isolated compatibility transport with the canonical 
   }
 });
 
-test("fresh Codex catalogs include native-route evidence and match the closed schema hashes", () => {
+test("full schema inventory stays closed while the deployed default catalog omits native staging", () => {
   const current = MCP_TOOL_DEFINITIONS.map(({ name, inputSchema, outputSchema }) => ({
     name,
     inputSchema,
@@ -77,6 +78,9 @@ test("fresh Codex catalogs include native-route evidence and match the closed sc
     ],
   );
   assert.equal(assertCodexCompatibleWriteBindingSchema(current), true);
+  const defaultWriteCatalog = current.filter(({ name }) => name !== "stage_bundle_file");
+  assert.equal(defaultWriteCatalog.length, 17);
+  assert.equal(assertCodexCompatibleDefaultWriteCatalog(defaultWriteCatalog), true);
   assert.equal(assertCodexCompatibleReadCatalog(current.filter(
     ({ name }) => name !== "create_file_upload_intent" && name !== "stage_bundle_file",
   )), true);
@@ -100,6 +104,20 @@ test("fresh Codex catalogs include native-route evidence and match the closed sc
         error.code === "codex_write_binding_schema_incompatible",
     );
   }
+  assert.throws(
+    () => assertCodexCompatibleDefaultWriteCatalog(current),
+    (error) => error instanceof ProbeFailure &&
+      error.code === "codex_default_write_catalog_incompatible",
+  );
+});
+
+test("OAuth direct-plugin probe never fabricates native-route authority", async () => {
+  const source = await readFile(
+    new URL("../../scripts/run-oauth-direct-plugin-probe.mjs", import.meta.url),
+    "utf8",
+  );
+  assert.doesNotMatch(source, /verifiedNativeFileParameterRoute/u);
+  assert.doesNotMatch(source, /local-synthetic:oauth-direct-plugin:native-route/u);
 });
 
 function promptInputFixture(line) {

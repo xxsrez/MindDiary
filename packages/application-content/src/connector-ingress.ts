@@ -119,6 +119,28 @@ export interface StageAuthorizedConnectorObjectRequest {
   readonly signal?: AbortSignal;
 }
 
+/**
+ * Provider-neutral input for an adapter-owned connector stage operation.
+ *
+ * The adapter binds its provider locator and grant behind this boundary, then
+ * delegates to `AuthorizedConnectorIngressService`. Provider binding, object
+ * ID, run ownership and credentials therefore never become MCP/application
+ * request fields.
+ */
+export type StageBoundConnectorObjectRequest = Omit<
+  StageAuthorizedConnectorObjectRequest,
+  "source"
+>;
+
+/** Narrow construction contract for an internal, adapter-bound stage path. */
+export interface AuthorizedConnectorObjectStageOperation<
+  Request extends StageBoundConnectorObjectRequest = StageBoundConnectorObjectRequest,
+> {
+  stage(
+    request: Request,
+  ): Promise<AuthorizedConnectorIngressResult>;
+}
+
 export type AuthorizedConnectorIngressResult =
   | StageBundleFileStreamResult
   | Readonly<{

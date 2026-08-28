@@ -29,6 +29,14 @@ export declare function productWorkerConfigFingerprint(
   publicOrigin: string,
 ): string;
 
+export declare function restrictedUatGeneratedSourceTestConfig(
+  environment: Record<string, unknown>,
+): Readonly<{
+  readonly deploymentClass: "uat";
+  readonly deploymentPosture: "restricted-uat";
+  readonly candidateSha: string;
+}> | undefined;
+
 export declare function createMindDiaryProductWorker<
   Environment extends object,
   Context extends { waitUntil(promise: Promise<unknown>): void },

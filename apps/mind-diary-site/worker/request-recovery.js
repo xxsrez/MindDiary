@@ -165,6 +165,25 @@ export function productWorkerConfigFingerprint(environment, publicOrigin) {
   return `${publicOrigin}\u0000${hash.toString(16).padStart(8, "0")}`;
 }
 
+/**
+ * Constructor-only activation for the generated-source matrix. A partial or
+ * production-like environment never installs the route.
+ */
+export function restrictedUatGeneratedSourceTestConfig(environment) {
+  const candidateSha = environment.MIND_DIARY_RELEASE_CANDIDATE_SHA;
+  if (
+    environment.MIND_DIARY_DEPLOYMENT_CLASS !== "uat" ||
+    environment.MIND_DIARY_DEPLOYMENT_POSTURE !== "restricted-uat" ||
+    typeof candidateSha !== "string" ||
+    !/^[0-9a-f]{40}$/u.test(candidateSha)
+  ) return undefined;
+  return Object.freeze({
+    deploymentClass: "uat",
+    deploymentPosture: "restricted-uat",
+    candidateSha,
+  });
+}
+
 function dispatchScheduled(runtime, work) {
   return runtime.dispatchBackground(
     work.kind === "export"
@@ -201,24 +220,31 @@ export function createMindDiaryProductWorker(options) {
           environment,
           fingerprint,
           dispatch: dispatchScheduled,
-          create: (schedule) => options.createRuntime({
-            database: environment.DB,
-            bucket: environment.MIND_DIARY_BUCKET,
-            ...config,
-            identity: {
-              readVerifiedIdentity(platformRequest) {
-                const email = platformRequest.headers.get("oai-authenticated-user-email");
-                if (email === null) return Object.freeze({ kind: "unauthenticated" });
-                const fullName = decodeFullName(platformRequest.headers);
-                return Object.freeze({
-                  kind: "authenticated",
-                  verifiedEmail: email,
-                  ...(fullName === undefined ? {} : { verifiedFullName: fullName }),
-                });
+          create: (schedule) => {
+            const generatedSourceTest =
+              restrictedUatGeneratedSourceTestConfig(environment);
+            return options.createRuntime({
+              database: environment.DB,
+              bucket: environment.MIND_DIARY_BUCKET,
+              ...config,
+              ...(generatedSourceTest === undefined
+                ? {}
+                : { restrictedUatGeneratedSourceTest: generatedSourceTest }),
+              identity: {
+                readVerifiedIdentity(platformRequest) {
+                  const email = platformRequest.headers.get("oai-authenticated-user-email");
+                  if (email === null) return Object.freeze({ kind: "unauthenticated" });
+                  const fullName = decodeFullName(platformRequest.headers);
+                  return Object.freeze({
+                    kind: "authenticated",
+                    verifiedEmail: email,
+                    ...(fullName === undefined ? {} : { verifiedFullName: fullName }),
+                  });
+                },
               },
-            },
-            schedule,
-          }),
+              schedule,
+            });
+          },
         });
         const runtime = await acquired.runtime;
         return recoveryCoordinator.respond({

@@ -257,6 +257,28 @@ no reachable object/revision. MD-304 owns and supplies that streaming/staging
 contract; MD-305 consumes it through `stageStream` and cannot redefine its
 limits, object identity or lifecycle.
 
+### Restricted-UAT generated-source test composition
+
+Current repository candidate устанавливает hidden
+`/api/internal/uat/generated-sources` только через constructor option для exact
+`uat + restricted-uat + candidate SHA`. Authenticated `GET` показывает две
+отдельные test-composition rows; same-origin/CSRF `POST` принимает только
+`action: run_matrix`, actor-owned `personal_token_ref` и bounded `run_id`.
+Dedicated active `content:write` token с exact name `UAT Generated Sources` и
+сроком не более восьми суток должен указывать на fresh private sole-owner
+ordinary Mind текущего Sites principal.
+
+Caller не передаёт bytes/base64, path, URL, Mind, owner, generation,
+media/digest, provider locator или producer choice. Composition сама создаёт
+deterministic exact 4 MiB bytes и representative stream и выполняет 15 fixed
+checks: +1 byte, digest/target fences, overflow, cancellation, timeout,
+producer error, stage replay, no HEAD before commit и one-revision commit
+replay. Это restricted test caller, не general-purpose HTTP/MCP ingress.
+Public rows `bounded_in_memory` и `server_generated` остаются
+`not_available`/`none`/`0`; route не выполняет distinct redeploy,
+history/download/export read-back, revoke или cleanup, и его success сам по
+себе не является terminal hosted evidence.
+
 ### Trusted `server_generated` composition
 
 MD-322 adds one constructor-owned internal port to hosted composition. A

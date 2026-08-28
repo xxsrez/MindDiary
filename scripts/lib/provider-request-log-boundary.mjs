@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
 
+import { isProviderVersionId } from "./sites-provider-readback.mjs";
+
 export const PROVIDER_REQUEST_LOG_BOUNDARY_SCHEMA =
   "mind-diary/provider-request-log-boundary-receipt/v1";
 
@@ -124,8 +126,7 @@ function deployment(value) {
   if (
     typeof value.site_project_id !== "string" ||
     !/^appgprj_[a-z0-9]+$/u.test(value.site_project_id) ||
-    typeof value.site_version_id !== "string" ||
-    !/^appgver_[a-z0-9]+$/u.test(value.site_version_id) ||
+    !isProviderVersionId(value.site_version_id) ||
     typeof value.deployment_id !== "string" ||
     !/^appgdep_[a-z0-9]+$/u.test(value.deployment_id) ||
     !SHA256.test(value.archive_sha256)

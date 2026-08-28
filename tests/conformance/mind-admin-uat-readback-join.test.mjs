@@ -22,6 +22,8 @@ const expected = Object.freeze({
   siteProjectId: "appgprj_fixture351",
 });
 const archiveBytes = Buffer.from("exact packaged Sites archive for MD-351", "utf8");
+const providerArchiveBytes = Buffer.from("normalized Sites tar for MD-351", "utf8");
+const versionId = `${expected.siteProjectId}~appgver_fixture351`;
 
 function sha256(value) {
   return `sha256:${createHash("sha256").update(value).digest("hex")}`;
@@ -49,29 +51,30 @@ function localReceipt() {
 
 function providerReadback() {
   const storage = {
-    archive_format: "tar.gz",
-    content_hash: sha256(archiveBytes),
-    size_bytes: archiveBytes.byteLength,
+    archive_format: "tar",
+    content_hash: sha256(providerArchiveBytes).slice("sha256:".length),
+    size_bytes: providerArchiveBytes.byteLength,
+    file_count: 51,
   };
   return {
     schema: "mind-diary/mind-admin-sites-provider-readback/v1",
     generator: "codex-sites-connector-readback/v1",
-    observed_at_utc: "2026-08-27T23:04:00.000Z",
+    observed_at_utc: "2026-08-27T23:04:00.123456+00:00",
     site: {
       id: expected.siteProjectId,
       status: "active",
       current_live_url: "https://mind-diary.example.invalid",
-      updated_at: "2026-08-27T23:02:00.000Z",
+      updated_at: "2026-08-27T23:02:00+00:00",
     },
     saved_version: {
-      id: "appgver_fixture351",
+      id: versionId,
       project_id: expected.siteProjectId,
       version_number: 351,
       source: { commit_sha: expected.siteSourceCommitSha },
       archive_storage: { ...storage },
     },
     version: {
-      id: "appgver_fixture351",
+      id: versionId,
       project_id: expected.siteProjectId,
       version_number: 351,
       source: { commit_sha: expected.siteSourceCommitSha },
@@ -80,19 +83,19 @@ function providerReadback() {
     deployment_start: {
       id: "appgdep_fixture351",
       project_id: expected.siteProjectId,
-      version_id: "appgver_fixture351",
+      version_id: versionId,
       status: "publishing",
       type: "publish",
-      updated_at: "2026-08-27T23:02:30.000Z",
+      updated_at: "2026-08-27T23:02:30+00:00",
     },
     deployment: {
       id: "appgdep_fixture351",
       project_id: expected.siteProjectId,
-      version_id: "appgver_fixture351",
+      version_id: versionId,
       status: "succeeded",
       type: "publish",
       url: "https://mind-diary.example.invalid",
-      updated_at: "2026-08-27T23:03:00.000Z",
+      updated_at: "2026-08-27T23:03:00.999999+00:00",
     },
   };
 }
@@ -181,6 +184,10 @@ test("fully consistent local files still produce only nonterminal structural evi
   assert.equal(join.acceptance, "nonterminal");
   assert.equal(join.provenance, "unverified-local-files");
   assert.equal(join.claimed_lineage.site_source_commit_sha, expected.siteSourceCommitSha);
+  assert.equal(join.claimed_lineage.site_version_id, versionId);
+  assert.equal(join.claimed_lineage.upload_archive_sha256, sha256(archiveBytes));
+  assert.equal(join.claimed_lineage.provider_archive_sha256, sha256(providerArchiveBytes));
+  assert.equal(join.claimed_lineage.provider_archive_format, "tar");
   assert.notEqual(join.status, "passed");
   assert.equal(join.journeys.length, 13);
   const credentialCleanup = join.journeys.find(({ id }) => id === "admin.cleanup-credential-baseline");

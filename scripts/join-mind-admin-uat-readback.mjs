@@ -19,6 +19,11 @@ import {
   resolveSiteSourceProvenance,
   validateProviderSourceCommit,
 } from "./lib/sites-source-provenance.mjs";
+import {
+  providerArchiveBinding,
+  providerTimestamp,
+  providerVersionId,
+} from "./lib/sites-provider-readback.mjs";
 
 const ROOT = resolve(import.meta.dirname, "..");
 const STRUCTURAL_JOIN_SCHEMA = "mind-diary/mind-admin-uat-readback-join/v1";
@@ -28,7 +33,6 @@ const BROWSER_SCHEMA = "mind-diary/mind-admin-in-app-browser-readback/v1";
 const UAT_URL = "https://mind-diary.example.invalid";
 const SHA256 = /^sha256:[0-9a-f]{64}$/u;
 const PROVIDER_PROJECT = /^appgprj_[a-z0-9]+$/u;
-const PROVIDER_VERSION = /^appgver_[a-z0-9]+$/u;
 const PROVIDER_DEPLOYMENT = /^appgdep_[a-z0-9]+$/u;
 
 const JOURNEY_CHECKS = Object.freeze({
@@ -84,8 +88,7 @@ function sha256(value) {
 }
 
 function utc(value, code) {
-  if (typeof value !== "string" || Number.isNaN(Date.parse(value)) || new Date(value).toISOString() !== value) fail(code);
-  return value;
+  return providerTimestamp(value, code);
 }
 
 function assertPrivacySafe(value) {
@@ -119,8 +122,9 @@ function providerBinding(readback, expected, archiveBytes) {
       !isRecord(readback.deployment_start) || !isRecord(readback.deployment)) fail("invalid_provider_readback");
   const { site, saved_version: saved, version, deployment_start: started, deployment } = readback;
   const observedAt = utc(readback.observed_at_utc, "invalid_provider_observed_at");
+  const versionId = providerVersionId(version.id, "provider_readback_lineage_mismatch");
   if (!PROVIDER_PROJECT.test(site.id ?? "") || site.id !== expected.siteProjectId || site.status !== "active" ||
-      site.current_live_url !== UAT_URL || !PROVIDER_VERSION.test(version.id ?? "") || saved.id !== version.id ||
+      site.current_live_url !== UAT_URL || saved.id !== versionId ||
       saved.project_id !== site.id || version.project_id !== site.id ||
       validateProviderSourceCommit(
         saved.source?.commit_sha,
@@ -132,30 +136,28 @@ function providerBinding(readback, expected, archiveBytes) {
         "provider_readback_lineage_mismatch",
       ) !== expected.siteSourceCommitSha ||
       !PROVIDER_DEPLOYMENT.test(deployment.id ?? "") || started.id !== deployment.id ||
-      started.version_id !== version.id || deployment.version_id !== version.id ||
+      started.version_id !== versionId || deployment.version_id !== versionId ||
       deployment.project_id !== site.id || deployment.status !== "succeeded" || deployment.type !== "publish" ||
       deployment.url !== UAT_URL || !isRecord(saved.archive_storage) || !isRecord(version.archive_storage)) {
     fail("provider_readback_lineage_mismatch");
   }
   utc(site.updated_at, "invalid_provider_site_readback");
   utc(started.updated_at, "invalid_provider_deployment_start");
-  utc(deployment.updated_at, "invalid_provider_deployment_readback");
-  if (Date.parse(observedAt) < Date.parse(deployment.updated_at)) fail("provider_readback_lineage_mismatch");
-  const archiveSha = sha256(archiveBytes);
-  for (const storage of [saved.archive_storage, version.archive_storage]) {
-    const normalized = String(storage.content_hash ?? "").replace(/^((?!sha256:).*)$/u, "sha256:$1");
-    if (normalized !== archiveSha || storage.archive_format !== "tar.gz" || storage.size_bytes !== archiveBytes.byteLength) {
-      fail("uat_archive_identity_mismatch");
-    }
-  }
+  const deploymentUpdatedAt = utc(deployment.updated_at, "invalid_provider_deployment_readback");
+  if (Date.parse(observedAt) < Date.parse(deploymentUpdatedAt)) fail("provider_readback_lineage_mismatch");
+  const archive = providerArchiveBinding({
+    archiveBytes,
+    storages: [saved.archive_storage, version.archive_storage],
+    invalidCode: "uat_archive_identity_mismatch",
+  });
   return Object.freeze({
     siteProjectId: site.id,
     siteSourceCommitSha: expected.siteSourceCommitSha,
-    siteVersionId: version.id,
+    siteVersionId: versionId,
     deploymentId: deployment.id,
     versionNumber: version.version_number,
     observedAt,
-    archiveSha,
+    ...archive,
   });
 }
 
@@ -243,7 +245,12 @@ export function createStructuralJoin(input, expected) {
       site_version_id: provider.siteVersionId,
       deployment_id: provider.deploymentId,
       version_number: provider.versionNumber,
-      artifact_archive_sha256: provider.archiveSha,
+      upload_archive_sha256: provider.uploadArchiveSha256,
+      upload_archive_size_bytes: provider.uploadArchiveSizeBytes,
+      provider_archive_sha256: provider.providerArchiveSha256,
+      provider_archive_size_bytes: provider.providerArchiveSizeBytes,
+      provider_archive_file_count: provider.providerArchiveFileCount,
+      provider_archive_format: provider.providerArchiveFormat,
     }),
     input_hashes: Object.freeze({
       local_receipt_sha256: local.inputSha256,

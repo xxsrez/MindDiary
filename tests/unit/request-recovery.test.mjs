@@ -11,6 +11,7 @@ import {
   createMindDiaryProductWorker,
   isRecoveryEligibleRequest,
   productWorkerConfigFingerprint,
+  restrictedUatGeneratedSourceTestConfig,
 } from "../../apps/mind-diary-site/worker/request-recovery.js";
 
 const ORIGIN = "https://mind-diary.example";
@@ -156,6 +157,66 @@ test("runtime cache fingerprint fences every restricted UAT configuration genera
     assert.notEqual(fingerprint, baseline, name);
     assert.equal(fingerprint.includes(value), false, name);
   }
+});
+
+test("generated-source test composition installs only for exact restricted UAT lineage", async () => {
+  const candidateSha = "a".repeat(40);
+  assert.deepEqual(restrictedUatGeneratedSourceTestConfig({
+    MIND_DIARY_DEPLOYMENT_CLASS: "uat",
+    MIND_DIARY_DEPLOYMENT_POSTURE: "restricted-uat",
+    MIND_DIARY_RELEASE_CANDIDATE_SHA: candidateSha,
+  }), {
+    deploymentClass: "uat",
+    deploymentPosture: "restricted-uat",
+    candidateSha,
+  });
+  for (const environment of [
+    {},
+    {
+      MIND_DIARY_DEPLOYMENT_CLASS: "production",
+      MIND_DIARY_DEPLOYMENT_POSTURE: "restricted-uat",
+      MIND_DIARY_RELEASE_CANDIDATE_SHA: candidateSha,
+    },
+    {
+      MIND_DIARY_DEPLOYMENT_CLASS: "uat",
+      MIND_DIARY_DEPLOYMENT_POSTURE: "public",
+      MIND_DIARY_RELEASE_CANDIDATE_SHA: candidateSha,
+    },
+    {
+      MIND_DIARY_DEPLOYMENT_CLASS: "uat",
+      MIND_DIARY_DEPLOYMENT_POSTURE: "restricted-uat",
+      MIND_DIARY_RELEASE_CANDIDATE_SHA: "not-a-sha",
+    },
+  ]) assert.equal(restrictedUatGeneratedSourceTestConfig(environment), undefined);
+
+  let createdOptions;
+  const worker = createMindDiaryProductWorker({
+    async createRuntime(options) {
+      createdOptions = options;
+      return {
+        async fetch() { return new Response("ok"); },
+        async recoverBackground() {},
+        async dispatchBackground() {},
+      };
+    },
+    readConfig() { return { publicOrigin: ORIGIN }; },
+    async fallbackFetch() { return new Response("fallback", { status: 404 }); },
+  });
+  const environment = {
+    MIND_DIARY_DEPLOYMENT_CLASS: "uat",
+    MIND_DIARY_DEPLOYMENT_POSTURE: "restricted-uat",
+    MIND_DIARY_RELEASE_CANDIDATE_SHA: candidateSha,
+  };
+  await worker.fetch(
+    new Request(`${ORIGIN}/`),
+    environment,
+    { waitUntil() {} },
+  );
+  assert.deepEqual(createdOptions.restrictedUatGeneratedSourceTest, {
+    deploymentClass: "uat",
+    deploymentPosture: "restricted-uat",
+    candidateSha,
+  });
 });
 
 test("only a successful explicit post-load HEAD pulse can trigger recovery", () => {

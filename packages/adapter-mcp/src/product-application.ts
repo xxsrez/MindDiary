@@ -3,6 +3,7 @@ import type {
   BundleFileStagingService,
   BundleFileDownloadService,
   ChangesetCommitService,
+  FileIngressCapability,
   FileIngressCoordinator,
   LocalFileUploadIntentService,
   MindBindingApplicationService,
@@ -172,6 +173,54 @@ const FILE_INGRESS_SOURCE_KINDS = new Set([
   "bounded_in_memory",
   "server_generated",
 ]);
+
+type FileIngressCapabilityRegistry = ReadonlyMap<
+  FileIngressCapability["sourceKind"],
+  Readonly<FileIngressCapability>
+>;
+
+function fileIngressCapabilityRegistry(
+  ingress: Pick<FileIngressCoordinator, "capabilities">,
+): FileIngressCapabilityRegistry {
+  const registry = new Map<
+    FileIngressCapability["sourceKind"],
+    Readonly<FileIngressCapability>
+  >();
+  let capabilities: readonly Readonly<FileIngressCapability>[];
+  try {
+    capabilities = ingress.capabilities();
+  } catch {
+    return registry;
+  }
+  if (!Array.isArray(capabilities)) return registry;
+  for (const capability of capabilities) {
+    if (
+      capability !== null &&
+      typeof capability === "object" &&
+      FILE_INGRESS_SOURCE_KINDS.has(capability.sourceKind) &&
+      !registry.has(capability.sourceKind)
+    ) {
+      registry.set(capability.sourceKind, capability);
+    }
+  }
+  return registry;
+}
+
+function hostedRegistryCapability(
+  registry: FileIngressCapabilityRegistry,
+  sourceKind: FileIngressCapability["sourceKind"],
+  transport: FileIngressCapability["transport"],
+): Readonly<FileIngressCapability> | null {
+  const capability = registry.get(sourceKind);
+  return capability?.status === "available_hosted" &&
+      capability.transport === transport &&
+      Number.isSafeInteger(capability.maxBytes) &&
+      capability.maxBytes > 0 &&
+      capability.maxBytes <= 268_435_456
+    ? capability
+    : null;
+}
+
 function validStageBundleFileInput(input: Readonly<Record<string, unknown>>): boolean {
   const allowed = new Set([
     "mind",
@@ -512,10 +561,18 @@ export class ProductMcpContentApplication implements McpContentApplication {
           );
         }
         {
+          const capabilityRegistry = fileIngressCapabilityRegistry(
+            this.#dependencies.ingress,
+          );
           const hostedUploadIntents =
             this.#dependencies.uploadIntents !== undefined &&
             this.#dependencies.uploadIntentUrl !== undefined;
-          const nativeFileRoute =
+          const nativeCapability = hostedRegistryCapability(
+            capabilityRegistry,
+            "session_attachment",
+            "native_file_parameter",
+          );
+          const nativeFileRoute = nativeCapability !== null &&
             this.#dependencies.nativeFileRoute instanceof NativeFileParameterRoute &&
             this.#dependencies.staging !== undefined
               ? this.#dependencies.nativeFileRoute
@@ -530,9 +587,23 @@ export class ProductMcpContentApplication implements McpContentApplication {
           ].map((sourceKind) => {
             const nativeAvailable =
               sourceKind === "session_attachment" && nativeFileRoute !== null;
+            const companionCapability = sourceKind === "local_path" ||
+                sourceKind === "workspace/generated_artifact"
+              ? hostedRegistryCapability(
+                  capabilityRegistry,
+                  sourceKind,
+                  "local_companion",
+                )
+              : null;
             const companionAvailable = hostedUploadIntents &&
+              companionCapability !== null &&
               (sourceKind === "local_path" || sourceKind === "workspace/generated_artifact");
             const available = nativeAvailable || companionAvailable;
+            const maxBytes = nativeAvailable
+              ? nativeCapability?.maxBytes ?? 0
+              : companionAvailable
+                ? companionCapability?.maxBytes ?? 0
+                : 0;
             return Object.freeze({
               sourceKind,
               serverAdapterStatus: available ? "available" : "not_available",
@@ -542,7 +613,7 @@ export class ProductMcpContentApplication implements McpContentApplication {
                   ? "companion_upload_intent"
                   : "none",
               requiresWritableTarget: available,
-              maxBytes: available ? 268_435_456 : 0,
+              maxBytes,
               fallback: "none",
             });
           }));

@@ -139,6 +139,16 @@ import {
   createVerifiedNativeFileParameterComposition,
   type ProductSiteVerifiedNativeFileParameterRouteOptions,
 } from "./native-file-route.js";
+import {
+  assertRestrictedUatGeneratedSourceTestConfig,
+  createRestrictedUatGeneratedSourceHandler,
+  type RestrictedUatGeneratedSourceTestConfig,
+} from "./restricted-uat-generated-sources.js";
+
+export {
+  RESTRICTED_UAT_GENERATED_SOURCE_TEST_ROUTE,
+  RESTRICTED_UAT_GENERATED_SOURCE_TOKEN_NAME,
+} from "./restricted-uat-generated-sources.js";
 
 const PRODUCT_SITES_DEPLOYMENT_CAPABILITIES = Object.freeze([
   "content:browse",
@@ -177,6 +187,13 @@ export interface ProductSiteRuntimeOptions {
   readonly performanceCorrelationKey?: Uint8Array;
   /** Constructor-only service authority. Missing/empty configuration fails closed. */
   readonly serviceOperatorPrincipalIds?: readonly string[];
+  /**
+   * Constructor-only test seam. The deployed Worker supplies it only for the
+   * exact restricted-UAT posture; ordinary product compositions omit it.
+   */
+  readonly restrictedUatGeneratedSourceTest?: Readonly<
+    RestrictedUatGeneratedSourceTestConfig
+  >;
   /** Constructor-only clock dependency; Product Worker uses the system clock. */
   readonly now?: () => Date;
   /** Exact route/profile evidence; absent keeps native file staging unavailable. */
@@ -709,6 +726,9 @@ export async function createProductSiteRuntime(
   if (!/^[a-z][a-z0-9-]{0,63}$/u.test(identityBindingProvider)) {
     throw new TypeError("identityBindingProvider must be a bounded provider name");
   }
+  const restrictedUatGeneratedSourceTest =
+    options.restrictedUatGeneratedSourceTest;
+  assertRestrictedUatGeneratedSourceTestConfig(restrictedUatGeneratedSourceTest);
   const now = options.now ?? (() => new Date());
   const clock = Object.freeze({ now: () => now().toISOString() as never });
   if (
@@ -1074,6 +1094,13 @@ export async function createProductSiteRuntime(
     effectIds: generated,
   });
   const fileIngress = new FileIngressCoordinator({
+    capabilityStatus: Object.freeze({
+      ...(nativeFileRoute === undefined
+        ? {}
+        : { session_attachment: "available_hosted" as const }),
+      local_path: "available_hosted",
+      "workspace/generated_artifact": "available_hosted",
+    }),
     staging: bundleFileStaging,
     commits,
   });
@@ -1082,6 +1109,15 @@ export async function createProductSiteRuntime(
     reconciliation: bundleFileStaging,
     targets: metadata,
   });
+  const restrictedUatTimeoutIngressService =
+    restrictedUatGeneratedSourceTest === undefined
+      ? null
+      : new TrustedServerGeneratedIngressService({
+          ingress: new GeneratedArtifactIngressService({ staging: bundleFileStaging }),
+          reconciliation: bundleFileStaging,
+          targets: metadata,
+          producerLeaseMilliseconds: 25,
+        });
   const serverGeneratedIngress = Object.freeze({
     stage: serverGeneratedIngressService.stage.bind(serverGeneratedIngressService),
   });
@@ -1678,6 +1714,28 @@ export async function createProductSiteRuntime(
     throw Object.assign(new Error("Writable-target mutation was not applied."), { code });
   };
 
+  const restrictedUatGeneratedSourceHandler =
+    restrictedUatGeneratedSourceTest === undefined
+      ? async (_request: Request): Promise<Response | null> => null
+      : createRestrictedUatGeneratedSourceHandler({
+          config: restrictedUatGeneratedSourceTest,
+          publicOrigin: options.publicOrigin,
+          resolveIdentity,
+          verifyCsrf: (actor, token) => csrf.verify(actor, token),
+          metadata,
+          objects,
+          boundedInMemoryIngress,
+          serverGeneratedIngress: serverGeneratedIngressService,
+          timeoutIngress: restrictedUatTimeoutIngressService!,
+          commit: (request) =>
+            runWithCapturedWork(
+              () => commits.commit(request),
+              (result) => result.kind === "committed" && !result.replayed,
+            ),
+          clockNow: () => clock.now(),
+          nextRequestId: () => nextOpaque("uat-generated-source-request"),
+        });
+
   const web = createProductWebHttpHandler({
     applicationOrigin: options.publicOrigin,
     csrf,
@@ -2185,6 +2243,7 @@ export async function createProductSiteRuntime(
       );
       try {
         const response =
+          (await restrictedUatGeneratedSourceHandler(request)) ??
           (await exportDownload(request)) ??
           (await bundleFileDownload(request)) ??
           (await fileUploadIntent(request)) ??

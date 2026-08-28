@@ -62,6 +62,23 @@ Joined native-client
 UAT принадлежит MD-275, а late-UAT producer proof — MD-290. Connector и
 generated paths не являются автоматически доступными или fallback capability.
 
+Repository candidate MD-290 добавляет отдельную restricted-UAT test
+composition, а не product capability. Product Worker передаёт constructor
+option только при exact `MIND_DIARY_DEPLOYMENT_CLASS=uat`,
+`MIND_DIARY_DEPLOYMENT_POSTURE=restricted-uat` и 40-hex
+`MIND_DIARY_RELEASE_CANDIDATE_SHA`; иначе скрытый
+`/api/internal/uat/generated-sources` не устанавливается. Authenticated `GET`
+возвращает только candidate SHA и test-composition rows, а same-origin,
+CSRF-protected `POST` принимает ровно `action=run_matrix`, actor-owned
+`personal_token_ref` и bounded `run_id`. Dedicated token должен иметь exact
+name `UAT Generated Sources`, effective `content:write`, срок не более восьми
+суток и current target на fresh private sole-owner ordinary Mind. Bytes, path,
+URL, Mind, owner, generation и способ generation caller не передаёт: runtime
+сам создаёт deterministic 4 MiB/stream fixtures и выполняет fixed matrix.
+Public MCP rows для `bounded_in_memory`/`server_generated` остаются
+`not_available`; distinct redeploy, exact-byte read-back, revoke и cleanup —
+отдельные terminal UAT observations, не эффекты этого route.
+
 ## Драйверы и ограничения
 
 Архитектура должна поддержать одновременно:

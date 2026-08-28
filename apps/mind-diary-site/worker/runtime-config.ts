@@ -16,6 +16,22 @@ export interface ProductEnv {
   readonly MIND_DIARY_PERFORMANCE_CORRELATION_KEY?: string;
 }
 
+/**
+ * Deployed Worker configuration deliberately has no native-file route field.
+ * The repository-only constructor seam is not runtime authority: adding it
+ * here requires a separately accepted host-rewrite receipt contract.
+ */
+export interface ProductWorkerRuntimeConfig {
+  readonly publicOrigin: string;
+  readonly tokenVerifierKey: Uint8Array;
+  readonly locatorKey: Uint8Array;
+  readonly exportDownloadVerifierKey: Uint8Array;
+  readonly csrfKey: Uint8Array;
+  readonly performanceCorrelationKey?: Uint8Array;
+  readonly serviceOperatorPrincipalIds: readonly string[];
+  readonly verifiedNativeFileParameterRoute?: never;
+}
+
 function serviceOperatorPrincipalIds(value: string | undefined): readonly string[] {
   if (value === undefined || value.trim() === "") return Object.freeze([]);
   const ids = value.split(",").map((candidate) => candidate.trim());
@@ -81,7 +97,10 @@ export function resolveRuntimePublicOrigin(
   return requestOrigin;
 }
 
-export function readRuntimeConfig(request: Request, env: ProductEnv) {
+export function readRuntimeConfig(
+  request: Request,
+  env: ProductEnv,
+): Readonly<ProductWorkerRuntimeConfig> {
   const requestOrigin = new URL(request.url).origin;
   const publicOrigin = resolveRuntimePublicOrigin(requestOrigin, env.MIND_DIARY_PUBLIC_ORIGIN);
   const performanceCorrelationKey = decodeOptionalKey(

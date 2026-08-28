@@ -23,6 +23,8 @@ const siteSourceTreeSha = "c".repeat(40);
 const siteSourceMode = "subtree-mirror";
 const siteProjectId = "appgprj_md363fixture";
 const archiveBytes = Buffer.from("exact md363 site archive", "utf8");
+const providerArchiveBytes = Buffer.from("normalized md363 provider tar", "utf8");
+const versionId = `${siteProjectId}~appgver_md363fixture`;
 
 function sha256(bytes) {
   return `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
@@ -57,48 +59,49 @@ function providerReadback() {
   return {
     schema: "mind-diary/import-export-sites-provider-readback/v1",
     generator: "codex-sites-connector-readback/v1",
-    observed_at_utc: "2026-08-27T23:04:00.000Z",
+    observed_at_utc: "2026-08-27T23:04:00.123456+00:00",
     site: {
       id: siteProjectId,
       status: "active",
       current_live_url: "https://mind-diary.example.invalid",
     },
     version: {
-      id: "appgver_md363fixture",
+      id: versionId,
       project_id: siteProjectId,
       source: { commit_sha: siteSourceCommitSha },
       archive_storage: {
-        archive_format: "tar.gz",
-        content_hash: sha256(archiveBytes),
-        size_bytes: archiveBytes.byteLength,
+        archive_format: "tar",
+        content_hash: sha256(providerArchiveBytes).slice("sha256:".length),
+        size_bytes: providerArchiveBytes.byteLength,
+        file_count: 63,
       },
     },
     deployment_before: {
       id: "appgdep_md363before",
       project_id: siteProjectId,
-      version_id: "appgver_md363fixture",
+      version_id: versionId,
       type: "publish",
       status: "succeeded",
       url: "https://mind-diary.example.invalid",
-      updated_at: "2026-08-27T23:01:30.000Z",
+      updated_at: "2026-08-27T23:01:30+00:00",
     },
     redeploy_start: {
       id: "appgdep_md363after",
       project_id: siteProjectId,
-      version_id: "appgver_md363fixture",
+      version_id: versionId,
       type: "publish",
       status: "publishing",
       url: null,
-      updated_at: "2026-08-27T23:02:00.000Z",
+      updated_at: "2026-08-27T23:02:00.123456+00:00",
     },
     deployment_after: {
       id: "appgdep_md363after",
       project_id: siteProjectId,
-      version_id: "appgver_md363fixture",
+      version_id: versionId,
       type: "publish",
       status: "succeeded",
       url: "https://mind-diary.example.invalid",
-      updated_at: "2026-08-27T23:03:00.000Z",
+      updated_at: "2026-08-27T23:03:00.999999+00:00",
     },
   };
 }
@@ -233,17 +236,20 @@ test("lookalike local files can prove structure but never produce hosted PASS", 
   assert.equal(join.acceptance, "nonterminal");
   assert.equal(join.provenance, "unverified-local-files");
   assert.notEqual(join.status, "passed");
-  assert.equal(join.byte_bindings.site_archive_sha256, sha256(archiveBytes));
+  assert.equal(join.claimed_lineage.site_version_id, versionId);
+  assert.equal(join.byte_bindings.upload_archive_sha256, sha256(archiveBytes));
+  assert.equal(join.byte_bindings.provider_archive_sha256, sha256(providerArchiveBytes));
+  assert.equal(join.byte_bindings.provider_archive_format, "tar");
   assert.equal(join.byte_bindings.local_receipt_sha256, input.localReceipt.artifact_sha256);
   assert.equal(join.byte_bindings.fixture_manifest_sha256, `sha256:${"c".repeat(64)}`);
   assert.match(join.artifact_sha256, /^sha256:[0-9a-f]{64}$/u);
 });
 
-test("tampered bytes and every persisted semantic projection fail closed even with a recomputed artifact hash", () => {
-  const wrongArchive = inputs();
-  wrongArchive.archiveBytes = Buffer.from("changed", "utf8");
+test("invalid provider metadata and every persisted semantic projection fail closed even with a recomputed artifact hash", () => {
+  const wrongProvider = providerReadback();
+  wrongProvider.version.archive_storage.content_hash = "not-a-sha256";
   assert.throws(
-    () => createStructuralJoin(wrongArchive, {
+    () => createStructuralJoin(inputs({ providerReadback: wrongProvider }), {
       candidate,
       siteProjectId,
       siteSourceCommitSha,

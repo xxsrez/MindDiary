@@ -282,7 +282,7 @@ const SHA = /^[0-9a-f]{40}$/u;
 const SHA256 = /^sha256:[0-9a-f]{64}$/u;
 const DEPLOYMENT = /^appgdep_[a-z0-9]+$/u;
 const PROJECT = /^appgprj_[a-z0-9]+$/u;
-const VERSION = /^appgver_[a-z0-9]+$/u;
+const VERSION = /^(?:appgver_[a-z0-9]+|appgprj_[a-z0-9]+~appgver_[a-z0-9]+)$/u;
 const FINGERPRINT = /^actor-[a-z0-9]{16,64}$/u;
 const UTC_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/u;
 

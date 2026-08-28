@@ -21,7 +21,7 @@ const ROOT = resolve(import.meta.dirname, "..");
 const CONTRACT_PATH = resolve(ROOT, "tests/fixtures/generated-source-uat/contract.v1.json");
 const SHA256 = /^sha256:[0-9a-f]{64}$/u;
 const DEPLOYMENT = /^appgdep_[a-z0-9]+$/u;
-const VERSION = /^appgver_[a-z0-9]+$/u;
+const VERSION = /^(?:appgver_[a-z0-9]+|appgprj_[a-z0-9]+~appgver_[a-z0-9]+)$/u;
 const PROJECT = /^appgprj_[a-z0-9]+$/u;
 const PRIVATE_TEXT = /(?:mdp_v1_|mdo_(?:code|access|refresh)_|authorization|cookie|download_url|https?:\/\/|@[a-z0-9.-]+\.[a-z]{2,}|\/(?:Users|private|tmp)\/)/iu;
 

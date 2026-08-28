@@ -125,11 +125,12 @@ export class FileIngressCoordinator {
     return Object.freeze(FILE_INGRESS_SOURCE_KINDS.map((sourceKind) => {
       const adapter = this.#adapters[sourceKind];
       const declared = this.#capabilityStatus[sourceKind];
-      const status = adapter === undefined
+      // Edge-owned routes (for example native-file and companion upload intents)
+      // can register their deployed status without becoming coordinator stage
+      // adapters. Undeclared in-process adapters stay local by default.
+      const status = declared ?? (adapter === undefined
         ? "not_available"
-        : declared === "available_hosted"
-          ? "available_hosted"
-          : "available_local";
+        : "available_local");
       return Object.freeze({ sourceKind, status, ...CAPABILITY_BASE[sourceKind] });
     }));
   }

@@ -20,6 +20,11 @@ import {
   resolveSiteSourceProvenance,
   validateProviderSourceCommit,
 } from "./lib/sites-source-provenance.mjs";
+import {
+  providerArchiveBinding,
+  providerTimestamp,
+  providerVersionId,
+} from "./lib/sites-provider-readback.mjs";
 import { verifyProviderRequestLogBoundaryReceipt } from "./lib/provider-request-log-boundary.mjs";
 import { verifyUatTestAccountPoolReadinessReceipt } from "./lib/uat-test-account-pool-contract.mjs";
 import {
@@ -37,7 +42,6 @@ const UAT_URL = "https://mind-diary.example.invalid";
 const SHA = /^[0-9a-f]{40}$/u;
 const SHA256 = /^sha256:[0-9a-f]{64}$/u;
 const PROJECT_ID = /^appgprj_[a-z0-9]+$/u;
-const VERSION_ID = /^appgver_[a-z0-9]+$/u;
 const DEPLOYMENT_ID = /^appgdep_[a-z0-9]+$/u;
 const ACTOR_FINGERPRINT = /^actor-[a-z0-9]{16,64}$/u;
 
@@ -46,9 +50,7 @@ function sha256Bytes(value) {
 }
 
 function utc(value, code) {
-  if (typeof value !== "string" || Number.isNaN(Date.parse(value)) ||
-      new Date(value).toISOString() !== value) fail(code);
-  return value;
+  return providerTimestamp(value, code);
 }
 
 function validateArtifact(value, code) {
@@ -161,23 +163,20 @@ function validateProviderReadback(value, expected, archiveBytes) {
       !isRecord(value.deployment_before) || !isRecord(value.redeploy_start) ||
       !isRecord(value.deployment_after)) fail("invalid_provider_readback");
   const observedAt = utc(value.observed_at_utc, "invalid_provider_observed_at");
-  const archiveSha256 = sha256Bytes(archiveBytes);
   const { site, version, deployment_before: before, redeploy_start: start, deployment_after: after } = value;
+  const versionId = providerVersionId(version.id, "provider_lineage_mismatch");
   if (!PROJECT_ID.test(site.id ?? "") || site.id !== expected.siteProjectId ||
       site.status !== "active" || site.current_live_url !== UAT_URL ||
-      !VERSION_ID.test(version.id ?? "") || version.project_id !== site.id ||
+      version.project_id !== site.id ||
       validateProviderSourceCommit(
         version.source?.commit_sha,
         expected,
         "provider_lineage_mismatch",
-      ) !== expected.siteSourceCommitSha ||
-      version.archive_storage?.content_hash !== archiveSha256 ||
-      version.archive_storage?.size_bytes !== archiveBytes.byteLength ||
-      version.archive_storage?.archive_format !== "tar.gz") fail("provider_lineage_mismatch");
+      ) !== expected.siteSourceCommitSha) fail("provider_lineage_mismatch");
   for (const deployment of [before, start, after]) {
     utc(deployment.updated_at, "invalid_deployment_timestamp");
     if (!DEPLOYMENT_ID.test(deployment.id ?? "") || deployment.project_id !== site.id ||
-        deployment.version_id !== version.id || deployment.type !== "publish") {
+        deployment.version_id !== versionId || deployment.type !== "publish") {
       fail("provider_deployment_mismatch");
     }
   }
@@ -188,14 +187,20 @@ function validateProviderReadback(value, expected, archiveBytes) {
       Date.parse(start.updated_at) < Date.parse(before.updated_at) ||
       Date.parse(after.updated_at) < Date.parse(start.updated_at) ||
       Date.parse(observedAt) < Date.parse(after.updated_at)) fail("provider_redeploy_mismatch");
+  const archive = providerArchiveBinding({
+    archiveBytes,
+    storages: [version.archive_storage],
+    invalidCode: "provider_lineage_mismatch",
+  });
   return Object.freeze({
     observedAt,
     projectId: site.id,
     siteSourceCommitSha: expected.siteSourceCommitSha,
-    versionId: version.id,
+    versionId,
     deploymentBeforeId: before.id,
     deploymentAfterId: after.id,
-    archiveSha256,
+    archiveSha256: archive.providerArchiveSha256,
+    ...archive,
   });
 }
 
@@ -399,7 +404,12 @@ function unsignedJoin(binding) {
       site_version_id: provider.versionId,
       deployment_before_id: provider.deploymentBeforeId,
       deployment_after_id: provider.deploymentAfterId,
-      site_archive_sha256: provider.archiveSha256,
+      upload_archive_sha256: provider.uploadArchiveSha256,
+      upload_archive_size_bytes: provider.uploadArchiveSizeBytes,
+      provider_archive_sha256: provider.providerArchiveSha256,
+      provider_archive_size_bytes: provider.providerArchiveSizeBytes,
+      provider_archive_file_count: provider.providerArchiveFileCount,
+      provider_archive_format: provider.providerArchiveFormat,
       plugin_version: local.pluginVersion,
       client: local.client,
       client_version: local.clientVersion,

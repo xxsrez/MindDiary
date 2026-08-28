@@ -4,10 +4,13 @@ import {
   ConnectorObjectStreamFailure,
   IncrementalSha256,
   type AuthorizedConnectorObjectSource,
+  type AuthorizedConnectorObjectStageOperation,
+  type AuthorizedConnectorIngressResult,
   type BundleFileStagingService,
   type ConnectorObjectReadLimits,
   type ConnectorObjectReadResult,
   type ConnectorObjectRepresentation,
+  type StageBoundConnectorObjectRequest,
   type VerifiedFileInput,
 } from "@mind-diary/application-content";
 import type { Sha256Digest } from "@mind-diary/domain";
@@ -66,6 +69,21 @@ export interface GoogleDriveObjectSelection {
   readonly objectId: string;
 }
 
+/**
+ * Private synthetic-run ownership retained by the provider binding store so
+ * the orchestrator can perform reduce-only cleanup and exact absence readback.
+ * Neither field is a provider credential or a public product identifier.
+ */
+export interface GoogleDriveRunOwnership {
+  readonly runFingerprint: Sha256Digest;
+  readonly cleanupOwnerRef: string;
+}
+
+/** One exact run-owned object behind one exact actor-owned connector binding. */
+export interface GoogleDriveRunObjectBinding extends GoogleDriveObjectSelection {
+  readonly runOwnership: Readonly<GoogleDriveRunOwnership>;
+}
+
 export type GoogleDriveGrantResolution =
   | Readonly<{
       kind: "authorized";
@@ -82,6 +100,31 @@ export interface GoogleDriveGrantResolver {
     actor: ConnectorActor;
     bindingRef: string;
   }>): Promise<GoogleDriveGrantResolution>;
+}
+
+export type GoogleDriveRunGrantResolution =
+  | Readonly<{
+      kind: "authorized";
+      providerBinding: Readonly<GoogleDriveRunObjectBinding>;
+      accessToken: string;
+      grantFingerprint: string;
+    }>
+  | Readonly<{ kind: "missing" | "revoked" | "foreign" }>
+  | Readonly<{ kind: "unavailable"; retryable: boolean }>;
+
+/**
+ * Explicit private store port for the run-scoped UAT seam.
+ *
+ * Implementations must resolve the current actor, exact binding/object pair
+ * and run owner in one read. Every adapter recheck calls this port again, so a
+ * concurrent revoke or run-owner change fails closed before more provider
+ * bytes can be accepted.
+ */
+export interface GoogleDriveRunGrantStore {
+  resolveRunObjectGrant(request: Readonly<{
+    actor: ConnectorActor;
+    providerBinding: Readonly<GoogleDriveRunObjectBinding>;
+  }>): Promise<GoogleDriveRunGrantResolution>;
 }
 
 export interface GoogleDriveConnectorObjectSourceOptions {
@@ -188,6 +231,46 @@ function parseSelection(value: unknown): Readonly<GoogleDriveObjectSelection> | 
     !DRIVE_ID.test(value.objectId)
   ) return null;
   return Object.freeze({ bindingRef: value.bindingRef, objectId: value.objectId });
+}
+
+function parseRunOwnership(value: unknown): Readonly<GoogleDriveRunOwnership> | null {
+  if (!isRecord(value) || !exactKeys(value, ["cleanupOwnerRef", "runFingerprint"])) {
+    return null;
+  }
+  if (
+    typeof value.runFingerprint !== "string" ||
+    !/^sha256:[0-9a-f]{64}$/u.test(value.runFingerprint) ||
+    !boundedString(value.cleanupOwnerRef, GOOGLE_DRIVE_CONNECTOR_LIMITS.maxBindingCharacters) ||
+    !SAFE_OPAQUE.test(value.cleanupOwnerRef)
+  ) return null;
+  return Object.freeze({
+    runFingerprint: value.runFingerprint as Sha256Digest,
+    cleanupOwnerRef: value.cleanupOwnerRef,
+  });
+}
+
+function parseRunObjectBinding(
+  value: unknown,
+): Readonly<GoogleDriveRunObjectBinding> | null {
+  if (!isRecord(value) || !exactKeys(value, ["bindingRef", "objectId", "runOwnership"])) {
+    return null;
+  }
+  const selection = parseSelection({
+    bindingRef: value.bindingRef,
+    objectId: value.objectId,
+  });
+  const runOwnership = parseRunOwnership(value.runOwnership);
+  if (selection === null || runOwnership === null) return null;
+  return Object.freeze({ ...selection, runOwnership });
+}
+
+function runObjectBindingsEqual(
+  left: GoogleDriveRunObjectBinding,
+  right: GoogleDriveRunObjectBinding,
+): boolean {
+  return left.bindingRef === right.bindingRef && left.objectId === right.objectId &&
+    left.runOwnership.runFingerprint === right.runOwnership.runFingerprint &&
+    left.runOwnership.cleanupOwnerRef === right.runOwnership.cleanupOwnerRef;
 }
 
 function safeFilename(value: unknown): value is string {
@@ -796,4 +879,121 @@ export function createGoogleDriveConnectorIngress(options: Readonly<{
       : { fetchTimeoutMilliseconds: options.fetchTimeoutMilliseconds }),
   });
   return Object.freeze({ source, ingress });
+}
+
+export type StageGoogleDriveRunConnectorObjectRequest =
+  StageBoundConnectorObjectRequest & Readonly<{
+    /** Exact private provider binding; URLs, queries and folders are invalid. */
+    providerBinding: Readonly<GoogleDriveRunObjectBinding>;
+  }>;
+
+export interface GoogleDriveRunConnectorStageOperation extends
+  AuthorizedConnectorObjectStageOperation<StageGoogleDriveRunConnectorObjectRequest> {}
+
+class StoredGoogleDriveRunGrantResolver implements GoogleDriveGrantResolver {
+  constructor(
+    private readonly providerBinding: Readonly<GoogleDriveRunObjectBinding> | null,
+    private readonly store: GoogleDriveRunGrantStore,
+  ) {}
+
+  async resolve(request: Readonly<{
+    actor: ConnectorActor;
+    bindingRef: string;
+  }>): Promise<GoogleDriveGrantResolution> {
+    if (
+      this.providerBinding === null ||
+      request.bindingRef !== this.providerBinding.bindingRef
+    ) return Object.freeze({ kind: "missing" });
+
+    let resolution: GoogleDriveRunGrantResolution;
+    try {
+      resolution = await this.store.resolveRunObjectGrant({
+        actor: request.actor,
+        providerBinding: this.providerBinding,
+      });
+    } catch {
+      return Object.freeze({ kind: "unavailable", retryable: true });
+    }
+    if (!isRecord(resolution) || typeof resolution.kind !== "string") {
+      return Object.freeze({ kind: "unavailable", retryable: true });
+    }
+    if (
+      resolution.kind === "missing" || resolution.kind === "revoked" ||
+      resolution.kind === "foreign"
+    ) return Object.freeze({ kind: resolution.kind });
+    if (resolution.kind === "unavailable") {
+      return typeof resolution.retryable === "boolean"
+        ? Object.freeze({ kind: "unavailable", retryable: resolution.retryable })
+        : Object.freeze({ kind: "unavailable", retryable: true });
+    }
+    if (resolution.kind !== "authorized") {
+      return Object.freeze({ kind: "unavailable", retryable: true });
+    }
+    const currentBinding = parseRunObjectBinding(resolution.providerBinding);
+    if (
+      currentBinding === null ||
+      !runObjectBindingsEqual(this.providerBinding, currentBinding)
+    ) return Object.freeze({ kind: "foreign" });
+    return Object.freeze({
+      kind: "authorized",
+      accessToken: resolution.accessToken,
+      grantFingerprint: resolution.grantFingerprint,
+    });
+  }
+}
+
+/**
+ * Constructs the private run-scoped Google Drive stage seam used by MD-319.
+ *
+ * It deliberately requires an explicit store and fetcher. It does not read
+ * process credentials, publish a wire route or fall back to a production
+ * provider. The portable ingress resolves the current writable target and
+ * Mind authorization before this operation can read the run store or provider.
+ */
+export function createGoogleDriveRunConnectorStageOperation(options: Readonly<{
+  grantStore: GoogleDriveRunGrantStore;
+  fetcher: typeof fetch;
+  staging: Pick<
+    BundleFileStagingService,
+    "authorizeSourceRead" | "stageStream"
+  >;
+  targets: Pick<CredentialWriteTargetStore, "readCredentialWriteTarget">;
+  fetchTimeoutMilliseconds?: number;
+}>): GoogleDriveRunConnectorStageOperation {
+  const ingress = new AuthorizedConnectorIngressService({
+    staging: options.staging,
+    targets: options.targets,
+    ...(options.fetchTimeoutMilliseconds === undefined
+      ? {}
+      : { fetchTimeoutMilliseconds: options.fetchTimeoutMilliseconds }),
+  });
+
+  return Object.freeze({
+    async stage(
+      request: StageGoogleDriveRunConnectorObjectRequest,
+    ): Promise<AuthorizedConnectorIngressResult> {
+      const providerBinding = parseRunObjectBinding(request.providerBinding);
+      const grants = new StoredGoogleDriveRunGrantResolver(
+        providerBinding,
+        options.grantStore,
+      );
+      const source = createGoogleDriveConnectorObjectSource(
+        providerBinding === null
+          ? null
+          : {
+              bindingRef: providerBinding.bindingRef,
+              objectId: providerBinding.objectId,
+            },
+        { grants, fetcher: options.fetcher },
+      );
+      return ingress.stage({
+        actor: request.actor,
+        spaceId: request.spaceId,
+        source,
+        representation: request.representation,
+        idempotencyKey: request.idempotencyKey,
+        ...(request.signal === undefined ? {} : { signal: request.signal }),
+      });
+    },
+  });
 }

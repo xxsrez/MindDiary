@@ -163,7 +163,7 @@ export function verifyUatOperatorDirectoryJoinEvidence(value) {
       "archive_sha256",
     ]) ||
     !/^appgprj_[a-z0-9]+$/u.test(value.deployment.site_project_id) ||
-    !/^appgver_[a-z0-9]+$/u.test(value.deployment.site_version_id) ||
+    !/^(?:appgver_[a-z0-9]+|appgprj_[a-z0-9]+~appgver_[a-z0-9]+)$/u.test(value.deployment.site_version_id) ||
     !SHA256.test(value.deployment?.archive_sha256) ||
     typeof value.run_fingerprint !== "string" ||
     !/^uatop-run-[0-9a-f]{32}$/u.test(value.run_fingerprint) ||

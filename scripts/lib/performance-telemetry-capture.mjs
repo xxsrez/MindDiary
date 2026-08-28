@@ -91,7 +91,7 @@ function exactDeployment(value) {
   assertExactKeys(value, DEPLOYMENT_KEYS, "invalid_deployment");
   if (
     typeof value.site_project_id !== "string" || !/^appgprj_[a-z0-9]+$/u.test(value.site_project_id) ||
-    typeof value.site_version_id !== "string" || !/^appgver_[a-z0-9]+$/u.test(value.site_version_id) ||
+    typeof value.site_version_id !== "string" || !/^(?:appgver_[a-z0-9]+|appgprj_[a-z0-9]+~appgver_[a-z0-9]+)$/u.test(value.site_version_id) ||
     typeof value.deployment_id !== "string" || !/^appgdep_[a-z0-9]+$/u.test(value.deployment_id) ||
     typeof value.archive_sha256 !== "string" || !SHA256.test(value.archive_sha256)
   ) fail("invalid_deployment");
