@@ -28,7 +28,7 @@ const BROWSER_READBACK_SCHEMA = "mind-diary/admin-shell-in-app-browser-readback/
 const UAT_URL = "https://mind-diary.example.invalid";
 const SHA256 = /^sha256:[0-9a-f]{64}$/u;
 const PROVIDER_PROJECT = /^appgprj_[a-z0-9]+$/u;
-const PROVIDER_VERSION = /^appgver_[a-z0-9]+$/u;
+const PROVIDER_VERSION = /^(?:appgver_[a-z0-9]+|appgprj_[a-z0-9]+~appgver_[a-z0-9]+)$/u;
 const PROVIDER_DEPLOYMENT = /^appgdep_[a-z0-9]+$/u;
 const BASE64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u;
 const RFC3339 = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/u;

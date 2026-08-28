@@ -53,6 +53,7 @@ function journeys() {
 }
 
 function providerReadback() {
+  const versionId = `${expected.siteProjectId}~appgver_fixture123`;
   return {
     schema: "mind-diary/admin-shell-sites-provider-readback/v1",
     generator: "codex-sites-connector-readback/v1",
@@ -64,7 +65,7 @@ function providerReadback() {
       updated_at: "2026-08-27T22:29:00.000000+00:00",
     },
     saved_version: {
-      id: "appgver_fixture123",
+      id: versionId,
       project_id: expected.siteProjectId,
       version_number: 347,
       source: { commit_sha: expected.siteSourceCommitSha },
@@ -76,7 +77,7 @@ function providerReadback() {
       },
     },
     version: {
-      id: "appgver_fixture123",
+      id: versionId,
       project_id: expected.siteProjectId,
       version_number: 347,
       source: { commit_sha: expected.siteSourceCommitSha },
@@ -90,7 +91,7 @@ function providerReadback() {
     deployment_start: {
       id: "appgdep_fixture123",
       project_id: expected.siteProjectId,
-      version_id: "appgver_fixture123",
+      version_id: versionId,
       status: "publishing",
       type: "publish",
       url: null,
@@ -99,7 +100,7 @@ function providerReadback() {
     deployment: {
       id: "appgdep_fixture123",
       project_id: expected.siteProjectId,
-      version_id: "appgver_fixture123",
+      version_id: versionId,
       status: "succeeded",
       type: "publish",
       url: "https://mind-diary.example.invalid",
