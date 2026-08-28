@@ -216,7 +216,11 @@ test("complete ordinary and Personal Mind admin journey", async ({ browser }) =>
 
     await test.step(`route=/${handle} actor=owner-and-participant assertion=admin.role-projections`, async () => {
       await ownerPage.goto(`${ownerOrigin}/${handle}`);
-      const invitation = ownerPage.locator("[data-invitation-form]");
+      const invitationDisclosure = ownerPage.locator("details[data-access-invitations]");
+      await expect(invitationDisclosure).not.toHaveAttribute("open", "");
+      await invitationDisclosure.locator("summary").click();
+      await expect(invitationDisclosure).toHaveAttribute("open", "");
+      const invitation = invitationDisclosure.locator("[data-invitation-form]");
       await invitation.getByLabel("Exact verified email").fill(participantEmail);
       await invitation.getByLabel("Role after acceptance").selectOption("reader");
       await Promise.all([
@@ -232,11 +236,20 @@ test("complete ordinary and Personal Mind admin journey", async ({ browser }) =>
       await expect(participantPage.locator("[data-route-role]")).toHaveText("Reader");
       await expect(participantPage.locator("[data-rename-mind-form], [data-owner-delete-controls]")).toHaveCount(0);
       await ownerPage.reload();
-      const member = ownerPage.locator("[data-member-card]").filter({ hasText: "MD 351 Participant" });
+      const participantDisclosure = ownerPage.locator("details[data-access-participants]");
+      await expect(participantDisclosure).not.toHaveAttribute("open", "");
+      await participantDisclosure.locator("summary").click();
+      await expect(participantDisclosure).toHaveAttribute("open", "");
+      const member = participantDisclosure.locator("[data-member-card]").filter({ hasText: "MD 351 Participant" });
       await member.getByLabel("Role").selectOption("admin");
+      await member.getByRole("button", { name: "Update role" }).click();
+      const roleDialog = ownerPage.locator("[data-membership-confirmation-dialog]");
+      await expect(roleDialog.getByRole("heading", { name: "Confirm role change" })).toBeVisible();
+      await expect(roleDialog.getByRole("button", { name: "Confirm role change" })).toBeDisabled();
+      await roleDialog.getByLabel(/reviewed the current participant, role, and access consequences/u).check();
       await Promise.all([
-        ownerPage.waitForNavigation(),
-        member.getByRole("button", { name: "Update role" }).click(),
+        ownerPage.waitForEvent("framenavigated", (frame) => frame === ownerPage.mainFrame()),
+        roleDialog.getByRole("button", { name: "Confirm role change" }).click(),
       ]);
       await participantPage.reload();
       await expect(participantPage.locator("[data-route-role]")).toHaveText("Admin");
