@@ -171,7 +171,7 @@ for (const definition of fixtureDefinitions) {
       await page.goto(`${fixture.origin}/settings/developer/mcp`);
       await expect(page.getByRole("heading", { level: 1, name: "Advanced MCP" })).toBeVisible();
       await expect(page.getByRole("navigation", { name: "Personal token state" })).toBeVisible();
-      await expect(page.locator("[data-personal-token-ref]")).toHaveCount(
+      await expect(page.locator("[data-personal-token]")).toHaveCount(
         Math.min(definition.count, 20),
       );
       await expect(page.getByRole("link", { name: "Next tokens" })).toHaveCount(
@@ -243,6 +243,33 @@ test("mobile viewport keeps every route bounded and opens primary navigation by 
     "false",
   );
   await expect(page.getByRole("button", { name: "Navigation" })).toBeFocused();
+  await context.close();
+});
+
+test("ordinary Connections and Help never load personal-token history or diagnostics", async ({
+  browser,
+}) => {
+  const fixture = fixtures.find((candidate) => candidate.count === 1);
+  const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  const page = await context.newPage();
+  const requested = [];
+  page.on("request", (request) => requested.push(new URL(request.url()).pathname));
+  const ref = `conn_v1_${"1".padStart(32, "0")}`;
+
+  for (const path of [
+    "/settings/connections",
+    `/settings/connections/${ref}`,
+    "/help/codex",
+  ]) {
+    await page.goto(`${fixture.origin}${path}`);
+    await expect(page.locator("main")).toBeVisible();
+  }
+
+  expect(requested.some((path) => path.startsWith("/api/v1/mcp-tokens"))).toBe(false);
+  expect(requested.some((path) => path === "/api/mcp" || path.startsWith("/api/mcp/")))
+    .toBe(false);
+  await expect(page.locator("body")).not.toContainText(/content:(?:read|write)/u);
+  await expect(page.locator("body")).not.toContainText(/Modern MCP|Compatibility MCP/u);
   await context.close();
 });
 
@@ -358,6 +385,59 @@ test("keyboard-only connection journey exposes progress, revoke, and reconnect s
   await context.close();
 });
 
+test("Advanced MCP owns the personal-token target, history, and revoke journey", async ({
+  browser,
+}) => {
+  const fixture = fixtures.find((candidate) => candidate.count === 1);
+  const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  const page = await context.newPage();
+  await page.goto(`${fixture.origin}/settings/developer/mcp?state=active`);
+
+  const token = page.locator("[data-personal-token]").first();
+  await expect(token.getByRole("heading", { name: "Readable access" })).toBeVisible();
+  await expect(token.getByText("there is no read selector", { exact: false })).toBeVisible();
+  await expect(token.getByRole("heading", { name: "Writable target" })).toBeVisible();
+  await tabUntil(page, '[data-personal-token] [data-access-action="clear_write"]');
+  const clearReload = page.waitForNavigation({ waitUntil: "load" });
+  await page.keyboard.press("Enter");
+  await clearReload;
+  await expect(page.locator("[data-personal-token]").first()).toContainText("Not selected");
+  await expect(page.locator("[data-personal-token]").first()).toContainText(
+    "My Mind is never selected automatically.",
+  );
+
+  const selector = page.locator('[data-personal-token] select[name="mind_ref"]').first();
+  await selector.selectOption("/me");
+  await selector.focus();
+  await page.keyboard.press("Tab");
+  const selectReload = page.waitForNavigation({ waitUntil: "load" });
+  await page.keyboard.press("Enter");
+  await selectReload;
+  await expect(page.locator("[data-personal-token]").first()).toContainText(
+    "Personal notes with a deliberately long mobile label",
+  );
+
+  const revoke = page.locator("[data-personal-token]").first()
+    .getByRole("button", { name: "Revoke token" });
+  const revokeReload = page.waitForNavigation({ waitUntil: "load" });
+  await revoke.click();
+  await revokeReload;
+  await expect(page.locator("[data-personal-token]")).toHaveCount(0);
+
+  await page.goto(`${fixture.origin}/settings/developer/mcp?state=revoked`);
+  await expect(page.locator("[data-personal-token]")).toHaveCount(1);
+  await expect(page.locator("[data-personal-token]").first()).toContainText("revoked");
+  await expect(page.locator("[data-access-panel]")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Revoke token" })).toHaveCount(0);
+
+  await page.goto(`${fixture.origin}/settings/developer/mcp?state=expired`);
+  await expect(page.locator("[data-personal-token]")).toHaveCount(1);
+  await expect(page.locator("[data-personal-token]").first()).toContainText("expired");
+  await expect(page.locator("[data-access-panel]")).toHaveCount(0);
+  await expectNoHorizontalOverflow(page);
+  await context.close();
+});
+
 test("Advanced MCP dialog receives and restores focus without exposing raw identifiers", async ({
   browser,
 }) => {
@@ -367,6 +447,7 @@ test("Advanced MCP dialog receives and restores focus without exposing raw ident
   await page.goto(`${fixture.origin}/settings/developer/mcp`);
   await tabUntil(page, "#token-name");
   await page.keyboard.type("Keyboard-created fixture token");
+  await page.locator("#token-access").selectOption("content:write");
   await tabUntil(page, "[data-token-submit]");
   await page.keyboard.press("Enter");
   const dialog = page.getByRole("dialog", { name: "Copy your token now" });
@@ -379,8 +460,16 @@ test("Advanced MCP dialog receives and restores focus without exposing raw ident
   await page.keyboard.press("Enter");
   await expect(dialog).toBeHidden();
   await expect(page.locator("[data-secret-value]")).toHaveText("Secret is not available.");
+  await expect(page.locator("[data-personal-token]").first()).toContainText(
+    "Keyboard-created fixture token",
+  );
+  await expect(page.locator("[data-personal-token]").first()).toContainText("Not selected");
+  await expect(page.locator("[data-personal-token]").first()).toContainText(
+    "My Mind is never selected automatically.",
+  );
   await expect(page.locator("body")).not.toContainText("[deterministic one-time fixture value]");
   await expect(page.locator("body")).not.toContainText(/(?:token|grant|binding)_[A-Za-z0-9._:-]{8,}/u);
+  expect(page.url()).not.toMatch(/ptok_v1_|mdp_v1_|secret|token_id|binding_owner/u);
   await context.close();
 });
 
@@ -401,6 +490,6 @@ test("deterministic error fixtures keep actions unavailable on both credential s
   await expect(page.getByRole("link", { name: "Manage access" })).toHaveCount(0);
   await page.goto(`${fixture.origin}/settings/developer/mcp`);
   await expect(page.getByRole("alert")).toContainText("Personal tokens are unavailable");
-  await expect(page.locator("[data-personal-token-ref]")).toHaveCount(0);
+  await expect(page.locator("[data-personal-token]")).toHaveCount(0);
   await context.close();
 });

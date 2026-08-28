@@ -586,6 +586,7 @@ test("product root, Connections, and Advanced MCP render safe live projections a
 
   const tokens = await handler(new Request(`${origin}/settings/developer/mcp`));
   assert.equal(tokens.status, 200);
+  assert.equal(tokens.headers.get("cache-control"), "no-store");
   const tokenHtml = await tokens.text();
   assert.match(tokenHtml, /data-advanced-mcp/);
   assert.match(tokenHtml, /Codex on Mac/);
@@ -598,6 +599,8 @@ test("product root, Connections, and Advanced MCP render safe live projections a
   assert.match(tokenHtml, /https:\/\/mind-diary\.example\/api\/mcp/);
   assert.doesNotMatch(tokenHtml, /&lt;your-mind-diary-site&gt;/);
   assert.doesNotMatch(tokenHtml, /synthetic-show-once-value|verifier|principal_one|token_internal_must_not_render/i);
+  assert.doesNotMatch(tokenHtml, /token_id|binding_owner|target_generation|space_/u);
+  assert.doesNotMatch(tokenHtml, /data-personal-token-ref/u);
 
   for (const [path, contentType, marker] of [
     ["/favicon.svg", "image/svg+xml; charset=utf-8", "#6C4BB6"],
@@ -621,6 +624,9 @@ test("product root, Connections, and Advanced MCP render safe live projections a
     if (path.endsWith(".js")) assert.doesNotThrow(() => new vm.Script(body));
     if (path === "/ui/mind-diary-connections-client.js") {
       assert.doesNotMatch(body, /api\/v1\/oauth-connections|api\/v1\/mind-bindings/);
+      assert.match(body, /cache:\s*"no-store"/u);
+      assert.match(body, /updated access could not be read back/u);
+      assert.doesNotMatch(body, /console\.|localStorage|sessionStorage|sendBeacon/u);
     }
   }
   const hostedShellCss = await (await handler(new Request(`${origin}/ui/mind-diary-shell.css`))).text();
@@ -1575,6 +1581,7 @@ test("token controls preserve CSRF and expose a one-time secret only in the issu
     body: JSON.stringify({ name: "Codex", scopes: ["content:write"], expires_at: "2026-08-15T00:00:00.000Z" }),
   }));
   assert.equal(issued.status, 200);
+  assert.equal(issued.headers.get("cache-control"), "no-store");
   const issuedBody = await issued.json();
   assert.equal(issuedBody.data.secret, "synthetic-show-once-value");
   assert.equal(issuedBody.data.token.personal_token_ref, personalTokenRef);

@@ -237,22 +237,26 @@ function renderOrdinaryConnectionAccess(
   </section>`;
 }
 
-function renderAccess(
+function renderAdvancedTokenAccess(
   access: SafeCredentialAccess,
-  input: { readonly kind: "connection" | "personal_token"; readonly ref: string; readonly canWrite: boolean },
+  input: {
+    readonly personalTokenRef: string;
+    readonly canWrite: boolean;
+    readonly headingSuffix: string;
+  },
 ): string {
-  const safeRef = input.kind === "connection"
-    ? (CONNECTION_REF.test(input.ref) ? input.ref : null)
-    : (PERSONAL_TOKEN_REF.test(input.ref) ? input.ref : null);
-  if (safeRef === null || !Number.isSafeInteger(access.targetVersion) || access.targetVersion < 0) {
+  if (
+    !PERSONAL_TOKEN_REF.test(input.personalTokenRef) ||
+    !/^[a-z0-9-]{1,40}$/u.test(input.headingSuffix) ||
+    !Number.isSafeInteger(access.targetVersion) || access.targetVersion < 0
+  ) {
     return `<section class="md-state md-state--error" role="alert"><h2>Mind access is unavailable</h2><p>Reload before changing this credential.</p></section>`;
   }
-  const base = input.kind === "connection"
-    ? `/api/v1/connections/${safeRef}`
-    : `/api/v1/mcp-tokens/${safeRef}`;
-  const reads = access.readableMinds.length === 0
-    ? `<li>No Minds are currently readable.</li>`
-    : access.readableMinds.map((mind) => `<li>${renderMind(mind)}</li>`).join("");
+  const base = `/api/v1/mcp-tokens/${input.personalTokenRef}`;
+  const readableCount = access.readableMinds.length;
+  const readableSummary = readableCount === 0
+    ? "No Minds are currently readable."
+    : `${readableCount} ${readableCount === 1 ? "Mind is" : "Minds are"} currently readable.`;
   const writableOptions = access.eligibleMinds.filter((mind) => mind.canWrite).map((mind) => {
     const route = safeMindRoute(mind.route);
     return route === null ? "" : `<option value="${escapeUntrustedText(route)}">${escapeUntrustedText(mind.name)} — ${escapeUntrustedText(route)}</option>`;
@@ -265,16 +269,23 @@ function renderAccess(
         ? '<p><strong>Reconnect required</strong></p><p>Reconnect this app to upgrade its write access. The existing target is not used until that succeeds.</p>'
         : access.writableTargetState === "reissue_required"
           ? '<p><strong>Reissue required</strong></p><p>Create a new personal token. Legacy write access is not transferred to the new token.</p>'
-          : "<p><strong>Not selected</strong></p>";
+          : '<p><strong>Not selected</strong></p><p>No Mind receives changes. My Mind is never selected automatically.</p>';
   const targetMutable = access.writableTargetState !== "reconsent_required" && access.writableTargetState !== "reissue_required";
   const hasSelectedTarget = access.writableTargetState === "selected" || access.writableTargetState === "unavailable";
+  const readHeading = `token-read-access-${input.headingSuffix}`;
+  const writeHeading = `token-write-access-${input.headingSuffix}`;
+  const selector = targetMutable && writableOptions.length > 0
+    ? `<form data-access-form data-access-action="select_write"><label>${hasSelectedTarget ? "Switch" : "Select"} writable Mind<select name="mind_ref" required><option value="">Choose a Mind</option>${writableOptions}</select></label><button class="md-button md-button--secondary" type="submit">${hasSelectedTarget ? "Switch" : "Select"}</button></form>`
+    : targetMutable
+      ? '<p>No currently writable Minds are available.</p>'
+      : "";
   const write = input.canWrite
-    ? `<section aria-labelledby="write-access-heading"><h3 id="write-access-heading">Can add and change</h3>${targetSummary}${targetMutable ? `<div class="md-binding-controls"><form data-access-form data-access-action="select_write"><label>Select one writable Mind<select name="mind_ref" required><option value="">Choose a Mind</option>${writableOptions}</select></label><button class="md-button md-button--secondary" type="submit">Select</button></form>${hasSelectedTarget ? `<button class="md-button md-button--secondary" type="button" data-access-action="clear_write">Clear writable Mind</button>` : ""}</div>` : ""}</section>`
+    ? `<section aria-labelledby="${writeHeading}"><h4 id="${writeHeading}">Writable target</h4>${targetSummary}${targetMutable ? `<div class="md-binding-controls">${selector}${hasSelectedTarget ? `<button class="md-button md-button--secondary" type="button" data-access-action="clear_write">Clear writable Mind</button>` : ""}</div>` : ""}</section>`
     : hasSelectedTarget
-      ? `<section aria-labelledby="write-access-heading"><h3 id="write-access-heading">Previous writable Mind</h3>${targetSummary}<p>This credential can no longer write, but you can clear the old selection.</p><button class="md-button md-button--secondary" type="button" data-access-action="clear_write">Clear writable Mind</button></section>`
+      ? `<section aria-labelledby="${writeHeading}"><h4 id="${writeHeading}">Previous writable target</h4>${targetSummary}<p>This token can no longer write, but you can clear the old selection.</p><button class="md-button md-button--secondary" type="button" data-access-action="clear_write">Clear writable Mind</button></section>`
       : "";
   return `<section class="md-binding-panel" data-access-panel data-access-endpoint="${base}/mind-access" data-target-version="${access.targetVersion}">
-    <section aria-labelledby="read-access-heading"><h3 id="read-access-heading">Can read</h3><p>Readable Minds always follow current membership and visibility.</p><ul class="md-binding-list">${reads}</ul></section>
+    <section aria-labelledby="${readHeading}"><h4 id="${readHeading}">Readable access</h4><p>${escapeUntrustedText(readableSummary)} This always follows current membership and visibility; there is no read selector.</p></section>
     ${write}
     <p class="md-form__status" role="status" aria-live="polite" data-access-status></p>
   </section>`;
@@ -296,13 +307,13 @@ export function renderConnectionDetailDocument(model: ConnectionDetailModel): st
   </div>`);
 }
 
-function renderPersonalToken(token: PersonalTokenItem): string {
+function renderPersonalToken(token: PersonalTokenItem, index: number): string {
   if (!PERSONAL_TOKEN_REF.test(token.personalTokenRef)) return "";
   const canWrite = token.scopes.includes("content:write");
-  return `<article class="md-token-card" data-personal-token-ref="${token.personalTokenRef}">
+  return `<article class="md-token-card" data-personal-token>
     <div class="md-token-card__heading"><div><h3>${escapeUntrustedText(token.name)}</h3><p><code>${escapeUntrustedText(token.displayPrefix)}</code></p></div><span class="md-token-state md-token-state--${token.state}">${escapeUntrustedText(token.state)}</span></div>
     <dl class="md-token-card__metadata"><div><dt>Scopes</dt><dd>${canWrite ? "content:read, content:write" : "content:read"}</dd></div><div><dt>Expires</dt><dd>${escapeUntrustedText(dateLabel(token.expiresAt))}</dd></div><div><dt>Last used</dt><dd>${escapeUntrustedText(dateLabel(token.lastUsedAt))}</dd></div></dl>
-    ${token.state === "active" && token.access !== undefined ? renderAccess(token.access, { kind: "personal_token", ref: token.personalTokenRef, canWrite }) : ""}
+    ${token.state === "active" && token.access !== undefined ? renderAdvancedTokenAccess(token.access, { personalTokenRef: token.personalTokenRef, canWrite, headingSuffix: `item-${index + 1}` }) : ""}
     ${token.state === "active" ? `<button class="md-button md-button--danger" type="button" data-revoke-personal-token data-revoke-endpoint="/api/v1/mcp-tokens/${token.personalTokenRef}">Revoke token</button><p class="md-form__status" role="status" aria-live="polite" data-revoke-status></p>` : ""}
   </article>`;
 }

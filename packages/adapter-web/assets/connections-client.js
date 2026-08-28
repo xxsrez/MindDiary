@@ -7,15 +7,17 @@
   const cursorPattern = /^[A-Za-z0-9_-]{1,2048}$/u;
 
   const request = async (endpoint, method, body) => {
+    const headers = { accept: "application/json" };
+    if (body !== undefined) headers["content-type"] = "application/json";
+    if (method !== "GET") {
+      headers["x-csrf-token"] = csrf;
+      headers["idempotency-key"] = crypto.randomUUID();
+    }
     const response = await fetch(endpoint, {
       method,
-      headers: {
-        accept: "application/json",
-        "content-type": "application/json",
-        "x-csrf-token": csrf,
-        "idempotency-key": crypto.randomUUID(),
-      },
+      headers,
       credentials: "same-origin",
+      cache: "no-store",
       body: body === undefined ? undefined : JSON.stringify(body),
     });
     const payload = await response.json().catch(() => null);
@@ -229,7 +231,15 @@
     panel.setAttribute("aria-busy", "true");
     say(status, "Saving current Mind access…");
     try {
-      await request(endpoint, "PATCH", { action, expected_target_version: expected, ...values });
+      const result = await request(endpoint, "PATCH", {
+        action,
+        expected_target_version: expected,
+        ...values,
+      });
+      if (
+        !Number.isSafeInteger(result?.access?.target_version) ||
+        result.access.target_version < expected
+      ) throw new Error("The updated access could not be read back.");
       location.reload();
     } catch (error) {
       say(status, error?.code === "write_step_up_required"
@@ -250,32 +260,6 @@
       const mindRef = new FormData(accessForm).get("mind_ref");
       if (panel && typeof mindRef === "string" && mindRef) await mutate(panel, action, { mind_ref: mindRef });
       return;
-    }
-    const tokenForm = event.target.closest?.("[data-personal-token-form]");
-    if (!tokenForm) return;
-    event.preventDefault();
-    const data = new FormData(tokenForm);
-    const name = String(data.get("name") ?? "");
-    const scope = String(data.get("scope") ?? "");
-    const days = Number(data.get("expiry_days") ?? "90");
-    const status = tokenForm.querySelector("[data-token-form-status]");
-    say(status, "Creating a personal token…");
-    try {
-      const payload = await request("/api/v1/mcp-tokens", "POST", {
-        name,
-        scopes: [scope],
-        expires_at: new Date(Date.now() + days * 86_400_000).toISOString(),
-      });
-      const dialog = shell.querySelector("[data-secret-dialog]");
-      const value = dialog?.querySelector("[data-secret-value]");
-      if (value) value.textContent = payload?.secret ?? "";
-      if (dialog) {
-        if (typeof dialog.showModal === "function") dialog.showModal();
-        else dialog.setAttribute("open", "");
-      }
-      say(status, "Token created. Copy the secret before closing.");
-    } catch (error) {
-      say(status, error?.message ?? "Token could not be created.");
     }
   });
 
@@ -309,15 +293,6 @@
         say(status, error?.message ?? "Revocation could not be completed.");
       }
       return;
-    }
-    if (target.hasAttribute("data-close-secret")) {
-      const dialog = target.closest("dialog");
-      const value = dialog?.querySelector("[data-secret-value]");
-      if (value) value.textContent = "";
-      if (dialog) {
-        if (typeof dialog.close === "function") dialog.close();
-        else dialog.removeAttribute("open");
-      }
     }
   });
 

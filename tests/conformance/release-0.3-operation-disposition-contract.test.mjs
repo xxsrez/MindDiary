@@ -680,8 +680,8 @@ test("machine-readable schema diff removes binding fields without removing expli
     "select_write",
   ]);
   assert.match(connectionsServer, /data-target-version="\$\{access\.targetVersion\}"/u);
-  assert.match(connectionsServer, /\/api\/v1\/connections\/\$\{safeRef\}/u);
-  assert.match(connectionsServer, /\/api\/v1\/mcp-tokens\/\$\{safeRef\}/u);
+  assert.match(connectionsServer, /\/api\/v1\/connections\/\$\{connectionRef\}/u);
+  assert.match(connectionsServer, /\/api\/v1\/mcp-tokens\/\$\{input\.personalTokenRef\}/u);
   assert.match(connectionsClient, /panel\.dataset\.targetVersion/u);
   assert.match(connectionsClient, /expected_target_version:\s*expected/u);
   assert.doesNotMatch(connectionsClient, /expected_binding_version/u);
@@ -930,7 +930,7 @@ test("MD-355 Settings IA source evidence matches its changed renderers", async (
       surface: "/help/codex",
       role: "help-renderer-source",
       path: "packages/adapter-web/src/connections.ts",
-      gitBlob: "dd9e02051764e3f72eb807c9471fead83f994b11",
+      gitBlob: "01175cf0823eb820ba99b79c666696a396041c7e",
     },
     {
       surface: "plugin-label",
@@ -1012,7 +1012,7 @@ test("plugin/help migration has closed owners and exact current source evidence"
       sourceEvidence: [{
         role: "help-renderer-source",
         path: "packages/adapter-web/src/connections.ts",
-        gitBlob: "dd9e02051764e3f72eb807c9471fead83f994b11",
+        gitBlob: "01175cf0823eb820ba99b79c666696a396041c7e",
       }],
     },
     {

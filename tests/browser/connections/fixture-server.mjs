@@ -95,6 +95,7 @@ const revokedTokens = new Set();
 let targetVersion = 4;
 let createdToken = null;
 const clearedConnectionTargets = new Set();
+const clearedTokenTargets = new Set();
 
 function cookie(request, name) {
   const header = request.headers.cookie ?? "";
@@ -116,6 +117,26 @@ function activeTokens() {
       : [createdToken]),
     ...personalTokens.filter((item) => !revokedTokens.has(item.personalTokenRef)),
   ];
+}
+
+function tokensForState(state) {
+  const all = [
+    ...(createdToken === null ? [] : [createdToken]),
+    ...personalTokens,
+  ];
+  if (state === "revoked") {
+    return all
+      .filter((item) => revokedTokens.has(item.personalTokenRef))
+      .map((item) => Object.freeze({ ...item, state: "revoked", revokedAt: "2026-08-28T00:00:00.000Z" }));
+  }
+  if (state === "expired") {
+    return personalTokens.slice(0, Math.min(requestedCount, 1)).map((item) => Object.freeze({
+      ...item,
+      state: "expired",
+      expiresAt: "2026-08-01T00:00:00.000Z",
+    }));
+  }
+  return activeTokens();
 }
 
 function page(items, cursor) {
@@ -148,7 +169,20 @@ function connectionDetail(item) {
 }
 
 function tokenDetail(item) {
-  return Object.freeze({ ...item, access: access(item.scopes.includes("content:write")) });
+  const selected = item.scopes.includes("content:write") &&
+    item !== createdToken &&
+    !clearedTokenTargets.has(item.personalTokenRef);
+  return Object.freeze({ ...item, access: access(item.scopes.includes("content:write"), selected) });
+}
+
+function accessJson(value) {
+  return Object.freeze({
+    target_version: value.targetVersion,
+    readable_minds: value.readableMinds,
+    writable_mind: value.writableMind,
+    writable_target_state: value.writableTargetState,
+    eligible_minds: value.eligibleMinds,
+  });
 }
 
 function withFixtureMeta(html) {
@@ -249,18 +283,25 @@ const server = createServer(async (request, response) => {
       return;
     }
     if (url.pathname === "/settings/developer/mcp" && method === "GET") {
-      const active = activeTokens();
-      const result = page(active, url.searchParams.get("cursor"));
+      const state = ["active", "revoked", "expired"].includes(url.searchParams.get("state"))
+        ? url.searchParams.get("state")
+        : "active";
+      const tokens = tokensForState(state);
+      const result = page(tokens, url.searchParams.get("cursor"));
       const collection = errorFixture
         ? { kind: "error", message: "Deterministic personal-token failure." }
-        : active.length === 0
+        : tokens.length === 0
           ? { kind: "empty" }
-          : { kind: "ready", items: result.items.map(tokenDetail), nextCursor: result.nextCursor };
+          : {
+              kind: "ready",
+              items: result.items.map((item) => state === "active" ? tokenDetail(item) : item),
+              nextCursor: result.nextCursor,
+            };
       send(response, 200, "text/html; charset=utf-8", withFixtureMeta(
         renderAdvancedMcpPageDocument({
           displayName: "Browser Fixture",
           siteOrigin: `http://${host}:${port}`,
-          state: "active",
+          state,
           collection,
         }),
       ));
@@ -340,7 +381,11 @@ const server = createServer(async (request, response) => {
       targetVersion += 1;
       json(response, 200, {
         ok: true,
-        data: { changed: true, replayed: false, target_version: targetVersion },
+        data: {
+          changed: true,
+          replayed: false,
+          access: accessJson(access(true, !clearedConnectionTargets.has(connectionApi[1]))),
+        },
       });
       return;
     }
@@ -365,10 +410,35 @@ const server = createServer(async (request, response) => {
       });
       return;
     }
-    const tokenApi = /^\/api\/v1\/mcp-tokens\/(ptok_v1_[0-9a-f]{32})$/u.exec(url.pathname);
-    if (tokenApi && method === "DELETE") {
+    const tokenApi = /^\/api\/v1\/mcp-tokens\/(ptok_v1_[0-9a-f]{32})(?:\/mind-access)?$/u.exec(url.pathname);
+    if (tokenApi && method === "DELETE" && !url.pathname.endsWith("/mind-access")) {
       revokedTokens.add(tokenApi[1]);
       json(response, 200, { ok: true, data: { token: { state: "revoked" } } });
+      return;
+    }
+    if (tokenApi && method === "PATCH" && url.pathname.endsWith("/mind-access")) {
+      const command = await body(request);
+      if (command?.expected_target_version !== targetVersion) {
+        json(response, 409, { error: { code: "target_conflict" } });
+        return;
+      }
+      if (command?.action === "clear_write") {
+        clearedTokenTargets.add(tokenApi[1]);
+      } else if (command?.action === "select_write") {
+        clearedTokenTargets.delete(tokenApi[1]);
+      } else {
+        json(response, 400, { error: { code: "invalid_request" } });
+        return;
+      }
+      targetVersion += 1;
+      json(response, 200, {
+        ok: true,
+        data: {
+          changed: true,
+          replayed: false,
+          access: accessJson(access(true, !clearedTokenTargets.has(tokenApi[1]))),
+        },
+      });
       return;
     }
     if (
