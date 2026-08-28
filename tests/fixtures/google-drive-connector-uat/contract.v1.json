@@ -9,8 +9,25 @@
     "candidate_sha",
     "deployment_id",
     "pool_readiness_receipt",
-    "provider_grant_ref",
+    "environment_only_provider_grant_reference",
     "private_evidence_directory"
+  ],
+  "evidence_schemas": {
+    "local_plan": "mind-diary/google-drive-connector-uat-plan/v1",
+    "sites_readback": "mind-diary/google-drive-connector-sites-readback/v1",
+    "provider_readback": "mind-diary/google-drive-connector-provider-readback/v1",
+    "product_readback": "mind-diary/google-drive-connector-product-readback/v1",
+    "structural_join": "mind-diary/google-drive-connector-uat-readback-join/v1",
+    "terminal_hosted": "mind-diary/google-drive-connector-uat-evidence/v1"
+  },
+  "fixture_plan": "tests/fixtures/google-drive-connector-uat/synthetic-fixture-plan.v1.json",
+  "blocker_taxonomy": [
+    "service_fault",
+    "product_defect",
+    "missing_external_capability",
+    "credential_role_or_approval",
+    "unknown_external_outcome",
+    "blocked_by_dependency"
   ],
   "authority": {
     "synthetic_fixture_only": true,
@@ -63,6 +80,24 @@
     "GD-UAT-015-bounded-cleanup-readback",
     "GD-UAT-016-shared-drive-native-export"
   ],
+  "negative_matrix": [
+    "selector-url-forbidden",
+    "selector-query-forbidden",
+    "selector-folder-forbidden",
+    "grant-revoked",
+    "ownership-changed",
+    "version-changed",
+    "native-export-bytes-changed",
+    "binary-size-plus-one",
+    "native-export-size-plus-one",
+    "provider-timeout",
+    "provider-unknown-outcome",
+    "provider-not-found",
+    "provider-forbidden",
+    "writable-target-missing",
+    "writable-target-mismatch",
+    "writable-target-concurrently-changed"
+  ],
   "receipt": {
     "required_fields": [
       "schema",
@@ -73,7 +108,10 @@
       "started_at",
       "completed_at",
       "assertion_results",
-      "cleanup_status"
+      "cleanup_status",
+      "hosted_evidence",
+      "provenance",
+      "raw_observation_refs"
     ],
     "forbidden_fields": [
       "access_token",
@@ -98,5 +136,7 @@
     "verify_provider_objects_absent",
     "verify_run_mind_absent"
   ],
+  "local_preflight_rule": "The local plan receipt validates exact candidate, deployment, pool and fixture lineage, leaves every hosted assertion and cleanup row not_run, and always has hosted_evidence=false with nonterminal acceptance.",
+  "structural_join_rule": "The offline join validates closed readback shapes, snapshots, negative cases and cleanup but always returns structurally_verified_readback, hosted_evidence=false, acceptance=nonterminal and provenance=unverified-local-files.",
   "success_rule": "All assertions pass for one exact candidate and deployment, cleanup passes, and no forbidden receipt field is present. This contract alone is never provider acceptance evidence."
 }
