@@ -211,9 +211,14 @@ test("hosted evidence rows define exact lineage, receipts, bounded actors and re
     assert.ok(row.runnerInputs.includes("deployment_id"));
     assert.ok(row.runnerInputs.includes("pool_readiness_receipt"));
     assert.ok(row.runnerInputs.includes("private_evidence_dir"));
-    assert.deepEqual(row.receiptFields, [
-      "status", "candidate_sha", "deployment_id", "runner_id", "actor_fingerprints", "assertions", "read_back", "cleanup", "artifact_sha256",
-    ]);
+    const expectedReceiptFields = [
+      "status", "candidate_sha", "deployment_id", "runner_id", "actor_fingerprints",
+      "assertions", "read_back", "cleanup", "artifact_sha256",
+    ];
+    assert.deepEqual(
+      row.receiptFields,
+      row.id === "U-AUTHORITY" ? ["schema", ...expectedReceiptFields] : expectedReceiptFields,
+    );
     assert.equal(row.assertionSource, "requirements.assertionId");
     assert.equal(row.externalPrerequisite, "policies.externalPrerequisite");
     assert.ok(row.actors.length > 0 && row.actors.length <= fixture.policies.maximumHostedActors);

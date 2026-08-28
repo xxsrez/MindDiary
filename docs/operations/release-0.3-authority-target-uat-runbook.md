@@ -47,6 +47,9 @@ npm run gate:release-0.3-authority-target -- \
 
 Если Git worktree расположен не рядом с checkout `Srez Marketplace`, добавить
 `--marketplace-root /absolute/path/to/clean/Srez Marketplace`.
+Отсутствующий либо не-Git default sibling останавливает gate с безопасным
+`marketplace_checkout_unavailable`; он не сворачивается в
+`unexpected_response` и не разрешает пропустить direct-plugin proof.
 
 Заменить SHA на полный SHA exact clean `HEAD`. Gate сам повторно сверяет HEAD и
 clean worktree до и после проб. Он последовательно запускает:
@@ -175,7 +178,10 @@ before/after read-back. Raw response, identity и content не сохраняю�
 
 ## 5. Machine join
 
-Final output также должен быть новым private temp file:
+Final output также должен быть новым private temp file. Поле `schema` находится
+на верхнем уровне и обязано быть равно
+`mind-diary/uat-release-0.3-authority-target-evidence/v1`; вложенный
+`read_back` не подменяет schema квитанции:
 
 ```bash
 npm run join:release-0.3-authority-target -- \

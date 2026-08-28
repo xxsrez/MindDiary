@@ -310,8 +310,34 @@ async function directoryFiles(root, directory = root) {
   return result;
 }
 
+export async function assertMarketplaceCheckoutAvailable(
+  marketplaceRoot,
+  { statImpl = stat } = {},
+) {
+  if (typeof marketplaceRoot !== "string" || marketplaceRoot.length === 0) {
+    fail("marketplace_checkout_unavailable");
+  }
+  try {
+    const value = await statImpl(marketplaceRoot);
+    if (!value?.isDirectory()) fail("marketplace_checkout_unavailable");
+  } catch (error) {
+    if (error instanceof ProbeFailure) throw error;
+    fail("marketplace_checkout_unavailable");
+  }
+  return true;
+}
+
 async function inspectMarketplace(marketplaceRoot) {
-  const status = String(await git(marketplaceRoot, ["status", "--porcelain", "--untracked-files=all"]));
+  await assertMarketplaceCheckoutAvailable(marketplaceRoot);
+  let status;
+  try {
+    status = String(await git(
+      marketplaceRoot,
+      ["status", "--porcelain", "--untracked-files=all"],
+    ));
+  } catch {
+    fail("marketplace_checkout_unavailable");
+  }
   if (status.trim() !== "") fail("marketplace_worktree_not_clean");
   const head = String(await git(marketplaceRoot, ["rev-parse", "HEAD"])).trim();
   const tree = String(await git(marketplaceRoot, ["rev-parse", "HEAD^{tree}"])).trim();

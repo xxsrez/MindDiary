@@ -307,10 +307,10 @@ test("UAT join binds local, pool and hosted evidence to one candidate, deploymen
     hostedObservation: hostedObservation(),
   });
   assert.deepEqual(Object.keys(joined), [
-    "status", "candidate_sha", "deployment_id", "runner_id", "actor_fingerprints",
-    "assertions", "read_back", "cleanup", "artifact_sha256",
+    "schema", "status", "candidate_sha", "deployment_id", "runner_id",
+    "actor_fingerprints", "assertions", "read_back", "cleanup", "artifact_sha256",
   ]);
-  assert.equal(joined.read_back.schema, RELEASE_03_AUTHORITY_TARGET_JOIN_SCHEMA);
+  assert.equal(joined.schema, RELEASE_03_AUTHORITY_TARGET_JOIN_SCHEMA);
   assert.deepEqual(joined.assertions, passed(RELEASE_03_FINAL_ASSERTION_IDS));
   assert.deepEqual(verifyRelease03AuthorityTargetUatJoin(joined), joined);
 

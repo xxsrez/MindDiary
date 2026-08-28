@@ -423,6 +423,7 @@ export function createRelease03AuthorityTargetUatJoin(input) {
     fail("actor_pool_lineage_mismatch");
   }
   const unsigned = Object.freeze({
+    schema: RELEASE_03_AUTHORITY_TARGET_JOIN_SCHEMA,
     status: "passed",
     candidate_sha: hosted.candidate_sha,
     deployment_id: hosted.deployment_id,
@@ -430,7 +431,6 @@ export function createRelease03AuthorityTargetUatJoin(input) {
     actor_fingerprints: Object.freeze([...hosted.actor_fingerprints]),
     assertions: Object.freeze(assertionRows(RELEASE_03_FINAL_ASSERTION_IDS)),
     read_back: Object.freeze({
-      schema: RELEASE_03_AUTHORITY_TARGET_JOIN_SCHEMA,
       local_evidence_sha256: local.artifact_sha256,
       pool_readiness_sha256: pool.artifact_sha256,
       hosted_observation_sha256: hosted.artifact_sha256,
@@ -453,9 +453,10 @@ export function createRelease03AuthorityTargetUatJoin(input) {
 export function verifyRelease03AuthorityTargetUatJoin(value) {
   if (
     !exactKeys(value, [
-      "status", "candidate_sha", "deployment_id", "runner_id", "actor_fingerprints",
-      "assertions", "read_back", "cleanup", "artifact_sha256",
+      "schema", "status", "candidate_sha", "deployment_id", "runner_id",
+      "actor_fingerprints", "assertions", "read_back", "cleanup", "artifact_sha256",
     ]) ||
+    value.schema !== RELEASE_03_AUTHORITY_TARGET_JOIN_SCHEMA ||
     value.status !== "passed" || !SHA.test(value.candidate_sha) ||
     !DEPLOYMENT.test(value.deployment_id) ||
     value.runner_id !== RELEASE_03_AUTHORITY_TARGET_RUNNER_ID ||
@@ -464,11 +465,10 @@ export function verifyRelease03AuthorityTargetUatJoin(value) {
     value.actor_fingerprints.some((fingerprint) => !ACTOR_FINGERPRINT.test(fingerprint)) ||
     !exactPassedRows(value.assertions, RELEASE_03_FINAL_ASSERTION_IDS) ||
     !exactKeys(value.read_back, [
-      "schema", "local_evidence_sha256", "pool_readiness_sha256",
-      "hosted_observation_sha256", "deployment", "web_surfaces", "modern_tool_count",
+      "local_evidence_sha256", "pool_readiness_sha256", "hosted_observation_sha256",
+      "deployment", "web_surfaces", "modern_tool_count",
       "compatibility_tool_count", "immutable_revision", "run_fingerprint", "observed_at_utc",
     ]) ||
-    value.read_back.schema !== RELEASE_03_AUTHORITY_TARGET_JOIN_SCHEMA ||
     !SHA256.test(value.read_back.local_evidence_sha256) ||
     !SHA256.test(value.read_back.pool_readiness_sha256) ||
     !SHA256.test(value.read_back.hosted_observation_sha256) ||

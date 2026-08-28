@@ -21,6 +21,7 @@ import {
   assertCodexCompatibleWriteBindingSchema,
   assertCodexClientVersion,
   assertDirectPackageServer,
+  assertMarketplaceCheckoutAvailable,
   createEvidence,
   parseCli,
   parseCodexSkillDiscovery,
@@ -244,6 +245,21 @@ test("OAuth direct-plugin CLI exposes no identity, scope, token, route, or runti
       (error) => error instanceof ProbeFailure && error.code === "unsupported_cli_argument",
     );
   }
+});
+
+test("missing default Marketplace sibling is an explicit safe precondition blocker", async () => {
+  await assert.rejects(
+    assertMarketplaceCheckoutAvailable("/private/tmp/missing-marketplace-fixture", {
+      statImpl: async () => {
+        const error = new Error("fixture missing");
+        error.code = "ENOENT";
+        throw error;
+      },
+    }),
+    (error) => error instanceof ProbeFailure &&
+      error.code === "marketplace_checkout_unavailable" &&
+      Object.keys(error.details).length === 0,
+  );
 });
 
 test("shared Fake D1 fails closed for incomplete and unknown OAuth SQL", async () => {
