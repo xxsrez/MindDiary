@@ -70,6 +70,8 @@ export const OAUTH_DIRECT_PLUGIN_ASSERTION_IDS = Object.freeze([
   "package.mcp-resolution",
   "package.task-manager-separate",
   "oauth.codex-compatible-write-binding-schema",
+  "oauth.catalog-modern-exact-18",
+  "oauth.catalog-compat-exact-18",
   "oauth.protected-resource-discovery",
   "oauth.authorization-server-discovery",
   "oauth.public-dcr-no-secret",
@@ -941,6 +943,7 @@ async function runOAuthScenario({ assertions, nowState }) {
   });
   if (advertisedModernTools.status !== 200) fail("oauth_modern_tools_list_failed");
   assertCodexCompatibleWriteBindingSchema(advertisedModernTools.body?.result?.tools);
+  assertions.add("oauth.catalog-modern-exact-18");
   const discovery = await modern(owner, readGrant.tokens.access_token, {
     jsonrpc: "2.0",
     id: "oauth-modern-discovery",
@@ -964,6 +967,7 @@ async function runOAuthScenario({ assertions, nowState }) {
   assertions.add("oauth.read-grant-modern-runtime");
   const compatList = await assertCompatibilityRead(owner, readGrant.tokens.access_token);
   if (!compatList.minds?.some((mind) => mind.route === "/me")) fail("oauth_compat_personal_mind_missing");
+  assertions.add("oauth.catalog-compat-exact-18");
   assertions.add("oauth.read-grant-compat-runtime");
   assertions.add("oauth.codex-compatible-write-binding-schema");
   const personal = modernList.minds.find((mind) => mind.route === "/me");

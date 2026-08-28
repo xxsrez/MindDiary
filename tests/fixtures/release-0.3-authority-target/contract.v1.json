@@ -1,0 +1,96 @@
+{
+  "$schema": "mind-diary/release-0.3-authority-target-contract/v1",
+  "release": "0.3",
+  "status": "accepted_verification_contract_not_runtime_evidence",
+  "owner": "MD-344",
+  "runnerId": "ship-work-release/uat-release-0.3-authority-target/v1",
+  "localReceiptSchema": "mind-diary/release-0.3-authority-target-local-evidence/v1",
+  "hostedObservationSchema": "mind-diary/uat-release-0.3-authority-target-observation/v1",
+  "hostedJoinSchema": "mind-diary/uat-release-0.3-authority-target-evidence/v1",
+  "toolInventory": [
+    "browse_entries",
+    "capture_knowledge",
+    "commit_changeset",
+    "create_file_upload_intent",
+    "fetch",
+    "get_bundle_file_download",
+    "get_file_ingress_capabilities",
+    "get_mind_info",
+    "get_revision",
+    "list_bundle_files",
+    "list_minds",
+    "list_revisions",
+    "reconcile_changeset",
+    "reconcile_file_stage",
+    "resolve_mind",
+    "search",
+    "stage_bundle_file",
+    "validate_mind"
+  ],
+  "removedOrMovedTools": [
+    "get_mind_bindings",
+    "set_read_mind_binding",
+    "set_write_mind_binding",
+    "start_export",
+    "get_export_status"
+  ],
+  "webSurfaces": [
+    "oauth-connection",
+    "personal-token-advanced-mcp"
+  ],
+  "credentialCases": [
+    "fresh-oauth-empty-target",
+    "legacy-oauth-pending-upgrade",
+    "same-owner-oauth-upgrade-preserves-space-new-generation",
+    "oauth-reconnect-empty-target",
+    "fresh-personal-token-empty-target",
+    "legacy-personal-token-pending-upgrade",
+    "personal-token-reissue-empty-target",
+    "capture-no-transfer"
+  ],
+  "authorityCases": [
+    "personal-discovery",
+    "membership-discovery",
+    "public-discovery",
+    "unlisted-exact-discovery",
+    "private-non-enumeration",
+    "membership-change-immediate",
+    "visibility-change-immediate",
+    "credential-revoke-next-request",
+    "oauth-owner-isolation",
+    "personal-token-owner-isolation",
+    "exact-target-generation",
+    "stale-head-no-side-effect",
+    "wrong-mind-no-side-effect",
+    "retired-binding-tools-absent",
+    "moved-export-tools-absent"
+  ],
+  "localSources": [
+    "scripts/lib/release-0.3-authority-target-evidence.mjs",
+    "scripts/run-release-0.3-authority-target-local-gate.mjs",
+    "scripts/run-synthetic-multi-principal-probe.mjs",
+    "scripts/run-oauth-direct-plugin-probe.mjs",
+    "tests/conformance/credential-write-target-contract.test.mjs",
+    "tests/integration/credential-write-target-state.test.mjs",
+    "tests/conformance/mcp-binding-tools.test.mjs",
+    "tests/conformance/mcp-export-move.test.mjs",
+    "tests/conformance/release-0.3-operation-disposition-contract.test.mjs"
+  ],
+  "joinRules": {
+    "candidate": "local_pool_and_hosted_observation_exact_match",
+    "deployment": "pool_and_hosted_observation_exact_match",
+    "actorPool": "same_three_ordered_fingerprints",
+    "hostedFromLocal": "forbidden",
+    "immutableRevision": "commit_head_history_fetch_and_content_hash_exact_match",
+    "cleanup": "credential_denial_mind_absence_and_pool_baseline_read_back_required",
+    "production": "excluded"
+  },
+  "blockerCodes": [
+    "service_fault",
+    "product_defect",
+    "missing_external_capability",
+    "credential_role_or_approval",
+    "unknown_external_outcome",
+    "blocked_by_dependency"
+  ]
+}

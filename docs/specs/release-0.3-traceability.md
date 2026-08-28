@@ -75,7 +75,7 @@ URL в receipt запрещены.
 | Evidence | Owner | Exact command или runner | Основной read-back |
 |---|---|---|---|
 | `L-AUTHORITY` | `MD-338` | `npm run build --silent && node --test tests/conformance/release-0.3-operation-disposition-contract.test.mjs tests/conformance/credential-write-target-contract.test.mjs tests/integration/synthetic-multi-principal-probe.test.mjs` | closed catalogs, ACL/target/restart/cleanup |
-| `U-AUTHORITY` | `MD-344` | `ship-work-release/uat-release-0.3-authority-target/v1` | deployment catalogs, ACL/target/reconnect/cleanup |
+| `U-AUTHORITY` | `MD-344` | `ship-work-release/uat-release-0.3-authority-target/v1` | local/pool/deployment join, оба web target surface, exact catalogs, ACL/target/reconnect, immutable revision и cleanup |
 | `L-SHELL` | `MD-347` | exact Node + Playwright command in machine registry | DOM, accessibility tree, direct routes, bootstrap |
 | `U-SHELL` | `MD-347` | `ship-work-release/uat-release-0.3-admin-shell/v1` | hosted DOM/session/bootstrap/direct-route reload |
 | `L-MINDS` | `MD-351` | exact ordinary-Mind/visibility/catalog command in registry | metadata, catalog, HEAD and exact absence |

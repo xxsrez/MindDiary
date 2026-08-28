@@ -154,6 +154,9 @@ operation disposition и migration принадлежат MD-337/MD-339.
 - [Generated-source ingress UAT](operations/generated-source-uat-runbook.md) —
   exact-candidate local gate, restricted-UAT bounded/streaming matrix,
   distinct-redeploy read-back и fail-closed offline join для MD-290.
+- [ACL reads и singleton write target Release 0.3](operations/release-0.3-authority-target-uat-runbook.md)
+  — exact-candidate local gate, readiness-bound three-actor UAT matrix,
+  immutable revision read-back, cleanup и fail-closed machine join.
 - [Hosted canary операторского каталога](operations/uat-operator-directory-canary.md)
   — three-actor restricted-UAT setup/verify/cleanup/recovery с
   environment-only session references, exact `404` boundary и redacted receipt.

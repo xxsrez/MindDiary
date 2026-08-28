@@ -186,6 +186,7 @@ bootstrap.idempotent-replay
 bootstrap.synthetic-binding-namespace
 personal-isolation.cross-account-denied
 tokens.distinct-principal-bound
+catalogs.modern-compat-exact-18
 private.web-non-enumeration
 private.list-non-enumeration
 private.history-non-enumeration
@@ -198,6 +199,7 @@ invitation.accept-replay-single-membership
 role-transition.reader-read-only
 role-transition.editor-controlled-commit
 role-transition.stale-head-no-partial-state
+writes.wrong-mind-no-side-effect
 background.search-and-audit-materialized
 ownership-transfer.exactly-one-owner
 restart-persistence.accounts-personal-minds

@@ -441,6 +441,7 @@ async function runScenario({ candidate, evidenceOut, randomBytesImpl, now }) {
     actors.owner.mcpTokenRef === actors.participant.mcpTokenRef
   ) fail("shared_mcp_credential_forbidden");
   await assertExactMcpCatalogs(actors.participant);
+  assertions.add("catalogs.modern-compat-exact-18");
   const initialCredentialInspection = await createSitesMetadataStore(database);
   const initialParticipantToken = await initialCredentialInspection
     .readMcpTokenMetadataByPresentationRef(
@@ -751,6 +752,7 @@ async function runScenario({ candidate, evidenceOut, randomBytesImpl, now }) {
     personalAfterRebindDenial !== personalBeforeRebind
   ) fail("stale_write_after_rebind_created_side_effect");
   assertions.add("bindings.rebind-stale-no-side-effect");
+  assertions.add("writes.wrong-mind-no-side-effect");
 
   const personalCommitArguments = {
     mind: "/me",
