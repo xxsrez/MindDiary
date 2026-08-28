@@ -574,6 +574,21 @@ function createHarness({ database, bucket, identities, scheduled, now }) {
     exportDownloadVerifierKey: deterministicKey(97),
     csrfKey: deterministicKey(137),
     now,
+    verifiedNativeFileParameterRoute: {
+      mcpProfiles: ["modern", "compatibility"],
+      assertion: {
+        profileId: "oauth-direct-plugin-local-native-v1",
+        assertionId: "local-synthetic:oauth-direct-plugin:native-route:v1",
+        observedAtUtc: "2026-08-28T00:00:00.000Z",
+        toolName: "stage_bundle_file",
+        parameterName: "file",
+        sourceKind: "session_attachment",
+        transport: "native_file_parameter",
+      },
+      async fetcher() {
+        throw new Error("OAuth direct-plugin catalog probe must not fetch native file bytes.");
+      },
+    },
     observabilityWriter: { write() {} },
     schedule(work) { scheduled.push(work); },
   };

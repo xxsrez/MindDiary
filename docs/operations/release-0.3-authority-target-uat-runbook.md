@@ -57,6 +57,9 @@ clean worktree до и после проб. Он последовательно 
 - synthetic multi-principal probe через normal product bootstrap;
 - OAuth direct-plugin probe с fresh/read/write/revoke/reconnect и personal-token
   regression;
+- constructor-only synthetic verified-native profile для exact 18-tool
+  modern/compat catalogs; его fail-closed fetcher не читает bytes и не является
+  hosted route evidence;
 - credential target contract и persisted-state migration tests;
 - exact modern/compat 18-tool catalog, retired binding tools и moved export
   tests;
