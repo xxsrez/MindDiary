@@ -151,6 +151,9 @@ operation disposition и migration принадлежат MD-337/MD-339.
 - [Browser и UAT-проверка import/export exact bytes](operations/import-export-browser-uat-runbook.md)
   — generated Markdown/invalid/opaque fixtures, failure/recovery matrix,
   independent archive byte comparison и fail-closed nonterminal offline join.
+- [Generated-source ingress UAT](operations/generated-source-uat-runbook.md) —
+  exact-candidate local gate, restricted-UAT bounded/streaming matrix,
+  distinct-redeploy read-back и fail-closed offline join для MD-290.
 - [Hosted canary операторского каталога](operations/uat-operator-directory-canary.md)
   — three-actor restricted-UAT setup/verify/cleanup/recovery с
   environment-only session references, exact `404` boundary и redacted receipt.

@@ -1231,6 +1231,17 @@ name, ни URL, ни старый receipt не используются вмес
 
 ### Deterministic real-browser gate
 
+Для MD-290 generated-source evidence сначала выполняется
+`npm run gate:generated-source-local -- --candidate-sha <exact-clean-HEAD-sha>
+--evidence-out <owner-private-temp-directory/new-file>`. После exact UAT cut и
+distinct controlled redeploy private provider/browser readbacks соединяются
+через `npm run join:generated-source-uat -- ...` по
+[`generated-source runbook`](generated-source-uat-runbook.md). Оба repository
+artifact сохраняют `hosted_evidence=false`; terminal hosted claim требует
+непосредственного Sites и in-app Browser provenance. CLI принимает только exact
+candidate/deployment IDs и private evidence paths; bytes, URL, credentials,
+prompt/job identity и private names запрещены.
+
 Root acceptance запускает `playwright test --config=playwright.config.mjs`
 после одного clean build. Конфигурация использует headless Chromium, один
 worker, `UTC`, `en-US`, reduced motion, заблокированные service workers и

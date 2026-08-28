@@ -33,6 +33,8 @@
     "join:admin-shell-uat-readback": "node scripts/join-admin-shell-uat-readback.mjs",
     "gate:import-export-browser": "npm run build --silent && node scripts/run-import-export-browser-gate.mjs",
     "join:import-export-uat-readback": "node scripts/join-import-export-uat-readback.mjs",
+    "gate:generated-source-local": "npm run build --silent && node scripts/run-generated-source-local-gate.mjs",
+    "join:generated-source-uat": "node scripts/join-generated-source-uat-readback.mjs",
     "gate:oauth-direct-plugin": "npm run build --silent && node scripts/run-oauth-direct-plugin-probe.mjs",
     "gate:file-ingress-local": "npm run build --silent && node scripts/run-file-ingress-local-gate.mjs --sha HEAD --output build/file-ingress/local-receipt.json",
     "gate:performance": "npm run build --silent && node scripts/benchmark-runtime-performance.mjs",

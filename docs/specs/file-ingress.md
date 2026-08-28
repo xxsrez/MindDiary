@@ -304,6 +304,12 @@ cleanup remain the existing BundleFile lifecycle. Content MCP gains neither a
 installs one privacy-safe producer use case and records exact-candidate late
 UAT, hosted capability discovery deliberately continues to report
 `server_generated` as `not_available`, transport `none`, maximum `0`.
+MD-290 uses the canonical local gate and fail-closed UAT join from
+[`generated-source-uat-runbook.md`](../operations/generated-source-uat-runbook.md).
+Neither receipt can promote the row by itself: only same-run live Sites and
+in-app Browser provenance across a distinct redeploy can establish hosted
+support; a fresh unchanged unavailable row is recorded as the exact missing
+wiring blocker.
 
 ### Idempotency and reconcile
 
