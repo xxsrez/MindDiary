@@ -53,6 +53,12 @@ function passed(ids) {
   return ids.map((id) => ({ id, status: "passed" }));
 }
 
+function rehash(value) {
+  const copy = structuredClone(value);
+  delete copy.artifact_sha256;
+  return { ...copy, artifact_sha256: digest(canonical(copy)) };
+}
+
 function syntheticEvidence() {
   return createSyntheticEvidence({
     candidate: CANDIDATE,
@@ -240,11 +246,15 @@ test("local evidence is exact-candidate, fully hashed, and explicitly non-hosted
 test("hosted observation requires both web surfaces, all credential cases, and immutable read-back", () => {
   const evidence = hostedObservation();
   assert.deepEqual(verifyRelease03AuthorityTargetHostedObservation(evidence), evidence);
-  for (const mutate of [
-    (input) => input.webSurfaces.pop(),
-    (input) => input.credentialCases.pop(),
-    (input) => { input.immutableRevision.fetch_matches_commit = false; },
-    (input) => { input.cleanup.pool_baseline_unchanged = false; },
+  for (const [expectedCode, mutate] of [
+    ["invalid_web_surface_read_back", (input) => input.webSurfaces.pop()],
+    ["invalid_credential_cases", (input) => input.credentialCases.pop()],
+    ["invalid_immutable_revision_read_back", (input) => {
+      input.immutableRevision.fetch_matches_commit = false;
+    }],
+    ["invalid_cleanup_read_back", (input) => {
+      input.cleanup.pool_baseline_unchanged = false;
+    }],
   ]) {
     const input = {
       candidateSha: CANDIDATE,
@@ -282,7 +292,11 @@ test("hosted observation requires both web surfaces, all credential cases, and i
       observedAtUtc: T1,
     };
     mutate(input);
-    assert.throws(() => createRelease03AuthorityTargetHostedObservation(input));
+    assert.throws(
+      () => createRelease03AuthorityTargetHostedObservation(input),
+      (error) => error instanceof Release03AuthorityTargetEvidenceError &&
+        error.code === expectedCode,
+    );
   }
 });
 
@@ -312,15 +326,37 @@ test("UAT join binds local, pool and hosted evidence to one candidate, deploymen
 
   const wrongCandidate = structuredClone(hostedObservation());
   wrongCandidate.candidate_sha = "b".repeat(40);
-  const { artifact_sha256: _artifact, ...unsigned } = wrongCandidate;
-  wrongCandidate.artifact_sha256 = digest(canonical(unsigned));
   assert.throws(
     () => createRelease03AuthorityTargetUatJoin({
       localEvidence: localEvidence(),
       poolEvidence: readyPool(),
-      hostedObservation: wrongCandidate,
+      hostedObservation: rehash(wrongCandidate),
     }),
     (error) => error instanceof Release03AuthorityTargetEvidenceError &&
       error.code === "candidate_lineage_mismatch",
+  );
+
+  const wrongDeployment = structuredClone(hostedObservation());
+  wrongDeployment.deployment_id = "appgdep_otherfixture";
+  assert.throws(
+    () => createRelease03AuthorityTargetUatJoin({
+      localEvidence: localEvidence(),
+      poolEvidence: readyPool(),
+      hostedObservation: rehash(wrongDeployment),
+    }),
+    (error) => error instanceof Release03AuthorityTargetEvidenceError &&
+      error.code === "deployment_lineage_mismatch",
+  );
+
+  const wrongActors = structuredClone(hostedObservation());
+  wrongActors.actor_fingerprints.reverse();
+  assert.throws(
+    () => createRelease03AuthorityTargetUatJoin({
+      localEvidence: localEvidence(),
+      poolEvidence: readyPool(),
+      hostedObservation: rehash(wrongActors),
+    }),
+    (error) => error instanceof Release03AuthorityTargetEvidenceError &&
+      error.code === "actor_pool_lineage_mismatch",
   );
 });
