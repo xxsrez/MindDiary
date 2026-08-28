@@ -17,6 +17,9 @@ import { ProbeFailure } from "../../scripts/lib/multi-principal-probe-core.mjs";
 const expected = Object.freeze({
   candidateSha: "a".repeat(40),
   sourceTreeSha: "b".repeat(40),
+  siteSourceCommitSha: "c".repeat(40),
+  siteSourceTreeSha: "d".repeat(40),
+  siteSourceMode: "subtree-mirror",
   siteProjectId: "appgprj_fixture123",
 });
 const archiveBytes = Buffer.from("exact packaged Sites archive fixture", "utf8");
@@ -63,7 +66,7 @@ function providerReadback() {
       id: "appgver_fixture123",
       project_id: expected.siteProjectId,
       version_number: 347,
-      source: { commit_sha: expected.candidateSha },
+      source: { commit_sha: expected.siteSourceCommitSha },
       archive_storage: {
         archive_format: "tar.gz",
         content_hash: sha256(archiveBytes),
@@ -74,7 +77,7 @@ function providerReadback() {
       id: "appgver_fixture123",
       project_id: expected.siteProjectId,
       version_number: 347,
-      source: { commit_sha: expected.candidateSha },
+      source: { commit_sha: expected.siteSourceCommitSha },
       archive_storage: {
         archive_format: "tar.gz",
         content_hash: sha256(archiveBytes),
@@ -180,6 +183,8 @@ test("local join binds bytes but remains explicitly nonterminal and non-hosted",
   assert.equal(join.byte_bindings.server_bundle_sha256, sha256(serverBundleBytes));
   assert.equal(join.byte_bindings.shell_css_sha256, sha256(cssBytes));
   assert.equal(join.byte_bindings.shell_client_sha256, sha256(clientBytes));
+  assert.equal(join.claimed_lineage.site_source_commit_sha, expected.siteSourceCommitSha);
+  assert.equal(join.claimed_lineage.site_source_tree_sha, expected.siteSourceTreeSha);
   assert.equal(JSON.stringify(join).includes("body_base64"), false);
   assert.notEqual(join.status, "passed");
 });
@@ -216,6 +221,7 @@ test("fake hashes, live bytes and opaque IDs cannot replace bound inputs", () =>
       ...expected,
       provider: {
         site_project_id: input.providerReadback.site.id,
+        site_source_commit_sha: expected.siteSourceCommitSha,
         site_version_id: input.providerReadback.version.id,
         deployment_id: input.providerReadback.deployment.id,
         version_number: input.providerReadback.version.version_number,
@@ -229,6 +235,8 @@ test("fake hashes, live bytes and opaque IDs cannot replace bound inputs", () =>
         journeys: journeys(),
       },
       serverBundleSha256: sha256(serverBundleBytes),
+      siteSourceTreeSha: expected.siteSourceTreeSha,
+      siteSourceMode: expected.siteSourceMode,
       input,
     }),
     (error) => error instanceof ProbeFailure && error.code === "uat_evidence_binding_mismatch",

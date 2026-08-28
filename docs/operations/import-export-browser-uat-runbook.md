@@ -158,8 +158,13 @@ owner-only temp, worktree и symlink gate, что и `--evidence-out`, и так
 Provider input schema
 `mind-diary/import-export-sites-provider-readback/v1` содержит raw results
 current Site/version, successful deployment before redeploy, redeploy start и
-successful terminal read-back after redeploy. Join пересчитывает archive hash,
-проверяет candidate/project/version/deployment lineage, generated fixture
+successful terminal read-back after redeploy. Sites source `commit_sha` в
+текущей конфигурации — отдельный subtree-mirror commit. Joiner получает его
+только из provider input и fail closed сверяет локально: subject обязан быть
+`Mirror MindDiary <candidate-sha>`, а tree — точно совпадать с
+`<candidate-sha>:apps/mind-diary-site`. Поэтому mirror SHA не подменяет
+монорепозиторный candidate и не сравнивается с ним как равный. Join
+пересчитывает archive hash, проверяет candidate/project/version/deployment lineage, generated fixture
 manifest, closed assertion registry, exact export comparisons и cleanup.
 
 Даже полностью согласованный join всегда возвращает только:

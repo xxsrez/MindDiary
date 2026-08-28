@@ -15,6 +15,10 @@ import {
   safeCode,
 } from "./lib/multi-principal-probe-core.mjs";
 import { reservePrivateTempOutput } from "./lib/private-evidence-output.mjs";
+import {
+  resolveSiteSourceProvenance,
+  validateProviderSourceCommit,
+} from "./lib/sites-source-provenance.mjs";
 import { IMPORT_EXPORT_ASSERTION_IDS } from "./run-import-export-browser-gate.mjs";
 
 const ROOT = resolve(import.meta.dirname, "..");
@@ -75,7 +79,7 @@ function validateLocalReceipt(value, candidate) {
   });
 }
 
-function validateProviderReadback(value, candidate, archiveBytes, trackedProjectId) {
+function validateProviderReadback(value, expected, archiveBytes) {
   if (!isRecord(value) || value.schema !== PROVIDER_SCHEMA ||
       value.generator !== "codex-sites-connector-readback/v1" ||
       !isRecord(value.site) || !isRecord(value.version) ||
@@ -84,9 +88,13 @@ function validateProviderReadback(value, candidate, archiveBytes, trackedProject
   const observedAt = utc(value.observed_at_utc, "invalid_provider_observed_at");
   const archiveSha256 = sha256Bytes(archiveBytes);
   const { site, version, deployment_before: before, redeploy_start: start, deployment_after: after } = value;
-  if (!PROJECT_ID.test(site.id ?? "") || site.id !== trackedProjectId || site.status !== "active" ||
+  if (!PROJECT_ID.test(site.id ?? "") || site.id !== expected.siteProjectId || site.status !== "active" ||
       site.current_live_url !== UAT_URL || !VERSION_ID.test(version.id ?? "") ||
-      version.project_id !== site.id || version.source?.commit_sha !== candidate ||
+      version.project_id !== site.id || validateProviderSourceCommit(
+        version.source?.commit_sha,
+        expected,
+        "provider_lineage_mismatch",
+      ) !== expected.siteSourceCommitSha ||
       version.archive_storage?.content_hash !== archiveSha256 ||
       version.archive_storage?.size_bytes !== archiveBytes.byteLength ||
       version.archive_storage?.archive_format !== "tar.gz") fail("provider_lineage_mismatch");
@@ -107,6 +115,7 @@ function validateProviderReadback(value, candidate, archiveBytes, trackedProject
   return Object.freeze({
     observedAt,
     projectId: site.id,
+    siteSourceCommitSha: expected.siteSourceCommitSha,
     versionId: version.id,
     deploymentBeforeId: before.id,
     deploymentAfterId: after.id,
@@ -203,9 +212,8 @@ function normalizeStructuralBinding(input, expected) {
   const local = validateLocalReceipt(input.localReceipt, expected.candidate);
   const provider = validateProviderReadback(
     input.providerReadback,
-    expected.candidate,
+    expected,
     input.archiveBytes,
-    expected.siteProjectId,
   );
   const browser = validateBrowserReadback(input.browserReadback, {
     candidate: expected.candidate,
@@ -229,6 +237,9 @@ function structuralJoinUnsigned(binding) {
     observed_at_utc: browser.observedAt,
     claimed_lineage: Object.freeze({
       site_project_id: provider.projectId,
+      site_source_commit_sha: provider.siteSourceCommitSha,
+      site_source_tree_sha: expected.siteSourceTreeSha,
+      site_source_mode: expected.siteSourceMode,
       site_version_id: provider.versionId,
       deployment_before_id: provider.deploymentBeforeId,
       deployment_after_id: provider.deploymentAfterId,
@@ -294,17 +305,27 @@ export function parseCli(argv) {
   return options;
 }
 
-function trackedContext(candidate) {
+function trackedContext(candidate, providerSourceCommitSha) {
   if (!SHA.test(candidate)) fail("invalid_candidate_sha");
   try {
-    execFileSync("git", ["cat-file", "-e", `${candidate}^{commit}`], { cwd: ROOT, stdio: "ignore" });
+    const source = resolveSiteSourceProvenance({
+      root: ROOT,
+      candidate,
+      providerSourceCommitSha,
+    });
     const hosting = JSON.parse(execFileSync(
       "git",
       ["show", `${candidate}:apps/mind-diary-site/.openai/hosting.json`],
       { cwd: ROOT, encoding: "utf8" },
     ));
     if (!PROJECT_ID.test(hosting.project_id ?? "")) fail("invalid_tracked_site_project");
-    return Object.freeze({ candidate, siteProjectId: hosting.project_id });
+    return Object.freeze({
+      candidate: source.candidateSha,
+      siteProjectId: hosting.project_id,
+      siteSourceCommitSha: source.siteSourceCommitSha,
+      siteSourceTreeSha: source.siteSourceTreeSha,
+      siteSourceMode: source.siteSourceMode,
+    });
   } catch (error) {
     if (error instanceof ProbeFailure) throw error;
     fail("tracked_candidate_unavailable");
@@ -324,10 +345,14 @@ async function main() {
       readFile(options.browser_readback),
       readFile(options.artifact_archive),
     ]);
-    const expected = trackedContext(options.candidate_sha);
+    const providerReadback = JSON.parse(providerReadbackBytes.toString("utf8"));
+    const expected = trackedContext(
+      options.candidate_sha,
+      providerReadback?.version?.source?.commit_sha,
+    );
     const join = createStructuralJoin({
       localReceipt: JSON.parse(localReceiptBytes.toString("utf8")),
-      providerReadback: JSON.parse(providerReadbackBytes.toString("utf8")),
+      providerReadback,
       browserReadback: JSON.parse(browserReadbackBytes.toString("utf8")),
       localReceiptBytes,
       providerReadbackBytes,

@@ -1370,6 +1370,17 @@ tree SHA и SHA-256 server bundle. Перед упаковкой release checkou
 `dist/server/index.js`. Это отдельный artifact gate после сборки, а не часть
 repository gate до фиксации candidate SHA.
 
+Sites project использует отдельный source repository, содержащий только
+`apps/mind-diary-site`. Поэтому provider `source.commit_sha` не обязан и в
+текущей конфигурации не может равняться SHA монорепозитория. Перед save агент
+создаёт или перечитывает subtree-mirror commit с exact tree
+`<candidate-sha>:apps/mind-diary-site` и subject
+`Mirror MindDiary <candidate-sha>`, публикует его в configured Sites source
+`main` и передаёт именно этот source SHA provider. Evidence сохраняет оба SHA и
+оба tree; equality comparison допустим только для direct-candidate topology.
+Несовпадение mirror subject/tree с candidate fail closed и не компенсируется
+archive hash либо release metadata.
+
 ## Performance gate
 
 Изменения metadata/runtime/MCP read path, search storage или locator layout

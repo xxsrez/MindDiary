@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 
-import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
@@ -16,6 +15,10 @@ import {
   safeCode,
 } from "./lib/multi-principal-probe-core.mjs";
 import { MIND_ADMIN_BROWSER_ASSERTION_IDS } from "./run-mind-admin-browser-gate.mjs";
+import {
+  resolveSiteSourceProvenance,
+  validateProviderSourceCommit,
+} from "./lib/sites-source-provenance.mjs";
 
 const ROOT = resolve(import.meta.dirname, "..");
 const STRUCTURAL_JOIN_SCHEMA = "mind-diary/mind-admin-uat-readback-join/v1";
@@ -119,7 +122,15 @@ function providerBinding(readback, expected, archiveBytes) {
   if (!PROVIDER_PROJECT.test(site.id ?? "") || site.id !== expected.siteProjectId || site.status !== "active" ||
       site.current_live_url !== UAT_URL || !PROVIDER_VERSION.test(version.id ?? "") || saved.id !== version.id ||
       saved.project_id !== site.id || version.project_id !== site.id ||
-      saved.source?.commit_sha !== expected.candidateSha || version.source?.commit_sha !== expected.candidateSha ||
+      validateProviderSourceCommit(
+        saved.source?.commit_sha,
+        expected,
+        "provider_readback_lineage_mismatch",
+      ) !== expected.siteSourceCommitSha || validateProviderSourceCommit(
+        version.source?.commit_sha,
+        expected,
+        "provider_readback_lineage_mismatch",
+      ) !== expected.siteSourceCommitSha ||
       !PROVIDER_DEPLOYMENT.test(deployment.id ?? "") || started.id !== deployment.id ||
       started.version_id !== version.id || deployment.version_id !== version.id ||
       deployment.project_id !== site.id || deployment.status !== "succeeded" || deployment.type !== "publish" ||
@@ -139,6 +150,7 @@ function providerBinding(readback, expected, archiveBytes) {
   }
   return Object.freeze({
     siteProjectId: site.id,
+    siteSourceCommitSha: expected.siteSourceCommitSha,
     siteVersionId: version.id,
     deploymentId: deployment.id,
     versionNumber: version.version_number,
@@ -225,6 +237,9 @@ export function createStructuralJoin(input, expected) {
     evidence_basis: "offline-byte-and-shape-join-only",
     claimed_lineage: Object.freeze({
       site_project_id: provider.siteProjectId,
+      site_source_commit_sha: provider.siteSourceCommitSha,
+      site_source_tree_sha: expected.siteSourceTreeSha,
+      site_source_mode: expected.siteSourceMode,
       site_version_id: provider.siteVersionId,
       deployment_id: provider.deploymentId,
       version_number: provider.versionNumber,
@@ -246,10 +261,21 @@ export function createStructuralJoin(input, expected) {
   return join;
 }
 
-async function trackedContext(candidate) {
+async function trackedContext(candidate, providerSourceCommitSha) {
   const hosting = JSON.parse(await readFile(resolve(ROOT, "apps/mind-diary-site/.openai/hosting.json"), "utf8"));
-  const tree = execFileSync("git", ["rev-parse", `${candidate}^{tree}`], { cwd: ROOT, encoding: "utf8" }).trim();
-  return Object.freeze({ candidateSha: candidateSha(candidate), sourceTreeSha: candidateSha(tree), siteProjectId: hosting.project_id });
+  const source = resolveSiteSourceProvenance({
+    root: ROOT,
+    candidate,
+    providerSourceCommitSha,
+  });
+  return Object.freeze({
+    candidateSha: candidateSha(source.candidateSha),
+    sourceTreeSha: candidateSha(source.candidateTreeSha),
+    siteSourceCommitSha: candidateSha(source.siteSourceCommitSha),
+    siteSourceTreeSha: candidateSha(source.siteSourceTreeSha),
+    siteSourceMode: source.siteSourceMode,
+    siteProjectId: hosting.project_id,
+  });
 }
 
 async function main() {
@@ -259,13 +285,17 @@ async function main() {
       process.stdout.write("Usage: npm run join:mind-admin-uat-readback -- --local-receipt <local-json> --provider-readback <private-json> --browser-readback <private-json> --artifact-archive <exact-sites-tar.gz> --candidate-sha <exact-deployed-sha> --join-out <new-private-json>\n");
       return;
     }
-    const expected = await trackedContext(options.candidate_sha);
     const [localReceiptBytes, providerReadbackBytes, browserReadbackBytes, archiveBytes] = await Promise.all([
       readFile(options.local_receipt), readFile(options.provider_readback), readFile(options.browser_readback), readFile(options.artifact_archive),
     ]);
+    const providerReadback = JSON.parse(providerReadbackBytes);
+    const expected = await trackedContext(
+      options.candidate_sha,
+      providerReadback?.version?.source?.commit_sha,
+    );
     const join = createStructuralJoin({
       localReceipt: JSON.parse(localReceiptBytes),
-      providerReadback: JSON.parse(providerReadbackBytes),
+      providerReadback,
       browserReadback: JSON.parse(browserReadbackBytes),
       localReceiptBytes,
       providerReadbackBytes,

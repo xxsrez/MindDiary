@@ -68,7 +68,11 @@ Mind разрешено только читать; менять или удал�
    `mind-diary/mind-admin-sites-provider-readback/v1`: exact results
    `get_site`, `save_site_version`, `get_site_version`, initial deploy и
    terminal successful deployment read-back; archive hash/size и candidate SHA
-   должны совпасть.
+   должны совпасть. `source.commit_sha` не вводится отдельно: для текущего
+   source repository это subtree-mirror commit, чей subject обязан быть
+   `Mirror MindDiary <candidate-sha>`, а tree — точно равен
+   `<candidate-sha>:apps/mind-diary-site`. Direct-candidate topology допустима
+   только при фактическом совпадении обоих SHA.
 2. `browser-readback.json` schema
    `mind-diary/mind-admin-in-app-browser-readback/v1`: direct in-app Browser
    observations тринадцати journeys, exact candidate/tree, hash local receipt,
@@ -93,7 +97,7 @@ npm run join:mind-admin-uat-readback -- \
   --join-out <private-temp-directory>/mind-admin-uat-readback-join.json
 ```
 
-Join проверяет candidate/tree, local receipt digest и registry, provider
+Join проверяет candidate/tree, mirror commit/tree, local receipt digest и registry, provider
 lineage, archive bytes, timestamps, browser journey registry и bounded facts.
 Email, token/cookie/authorization, internal IDs, private content, download URL,
 raw bodies и screenshot paths запрещены. Однако локальный процесс не способен

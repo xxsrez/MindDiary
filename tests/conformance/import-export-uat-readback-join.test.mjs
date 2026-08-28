@@ -18,6 +18,9 @@ import {
 } from "../../scripts/run-import-export-browser-gate.mjs";
 
 const candidate = "a".repeat(40);
+const siteSourceCommitSha = "b".repeat(40);
+const siteSourceTreeSha = "c".repeat(40);
+const siteSourceMode = "subtree-mirror";
 const siteProjectId = "appgprj_md363fixture";
 const archiveBytes = Buffer.from("exact md363 site archive", "utf8");
 
@@ -63,7 +66,7 @@ function providerReadback() {
     version: {
       id: "appgver_md363fixture",
       project_id: siteProjectId,
-      source: { commit_sha: candidate },
+      source: { commit_sha: siteSourceCommitSha },
       archive_storage: {
         archive_format: "tar.gz",
         content_hash: sha256(archiveBytes),
@@ -218,7 +221,13 @@ test("MD-363 join CLI has no approval or hosted-pass input", () => {
 
 test("lookalike local files can prove structure but never produce hosted PASS", () => {
   const input = inputs();
-  const join = createStructuralJoin(input, { candidate, siteProjectId });
+  const join = createStructuralJoin(input, {
+    candidate,
+    siteProjectId,
+    siteSourceCommitSha,
+    siteSourceTreeSha,
+    siteSourceMode,
+  });
   assert.equal(join.status, "structurally_verified_readback");
   assert.equal(join.hosted_evidence, false);
   assert.equal(join.acceptance, "nonterminal");
@@ -234,19 +243,37 @@ test("tampered bytes and every persisted semantic projection fail closed even wi
   const wrongArchive = inputs();
   wrongArchive.archiveBytes = Buffer.from("changed", "utf8");
   assert.throws(
-    () => createStructuralJoin(wrongArchive, { candidate, siteProjectId }),
+    () => createStructuralJoin(wrongArchive, {
+      candidate,
+      siteProjectId,
+      siteSourceCommitSha,
+      siteSourceTreeSha,
+      siteSourceMode,
+    }),
     (error) => error instanceof ProbeFailure && error.code === "provider_lineage_mismatch",
   );
 
   const wrongBrowser = browserReadback();
   wrongBrowser.exports[2].bytes_sha256 = `sha256:${"9".repeat(64)}`;
   assert.throws(
-    () => createStructuralJoin(inputs({ browserReadback: wrongBrowser }), { candidate, siteProjectId }),
+    () => createStructuralJoin(inputs({ browserReadback: wrongBrowser }), {
+      candidate,
+      siteProjectId,
+      siteSourceCommitSha,
+      siteSourceTreeSha,
+      siteSourceMode,
+    }),
     (error) => error instanceof ProbeFailure && error.code === "browser_export_digest_mismatch",
   );
 
   const input = inputs();
-  const original = createStructuralJoin(input, { candidate, siteProjectId });
+  const original = createStructuralJoin(input, {
+    candidate,
+    siteProjectId,
+    siteSourceCommitSha,
+    siteSourceTreeSha,
+    siteSourceMode,
+  });
   const mutations = [
     (join) => { join.claimed_lineage.site_version_id = "appgver_forged"; },
     (join) => { join.actor_fingerprints.owner = `sha256:${"9".repeat(64)}`; },
@@ -260,7 +287,16 @@ test("tampered bytes and every persisted semantic projection fail closed even wi
     mutate(join);
     recomputeArtifact(join);
     assert.throws(
-      () => validateStructuralJoin(join, { expected: { candidate, siteProjectId }, input }),
+      () => validateStructuralJoin(join, {
+        expected: {
+          candidate,
+          siteProjectId,
+          siteSourceCommitSha,
+          siteSourceTreeSha,
+          siteSourceMode,
+        },
+        input,
+      }),
       (error) => error instanceof ProbeFailure && error.code === "invalid_structural_join",
     );
   }

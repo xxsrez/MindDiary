@@ -175,12 +175,19 @@ npm run join:settings-connections-uat -- \
 Provider input schema
 `mind-diary/settings-connections-sites-provider-readback/v1` связывает exact
 archive с candidate/version, initial deployment и distinct controlled redeploy.
+Текущий Sites source `commit_sha` является отдельным subtree-mirror commit:
+joiner извлекает его только из provider input, требует subject
+`Mirror MindDiary <candidate-sha>` и exact tree
+`<candidate-sha>:apps/mind-diary-site`. Mirror SHA не выдаётся за SHA
+монорепозитория; direct-candidate topology принимается только при реальном
+совпадении SHA.
 Browser input schema
 `mind-diary/settings-connections-in-app-browser-readback/v1` содержит closed
 matrix Help/OAuth/personal-token/redeploy/privacy/cleanup и exact actor/plugin/
 client lineage. Raw responses и secrets запрещены.
 
-Join fail closed проверяет archive bytes, candidate/deployment/version,
+Join fail closed проверяет archive bytes, candidate, source mirror,
+deployment/version,
 readiness actors, provider boundary, local receipt, plugin/client versions,
 все assertion IDs и полный cleanup. Output резервируется атомарно в private
 temp и всегда имеет только:

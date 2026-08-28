@@ -15,6 +15,10 @@ import {
   ProbeFailure,
   safeCode,
 } from "./lib/multi-principal-probe-core.mjs";
+import {
+  resolveSiteSourceProvenance,
+  validateProviderSourceCommit,
+} from "./lib/sites-source-provenance.mjs";
 
 // This process verifies byte/shape consistency only; it cannot attest hosted provenance.
 const ROOT = resolve(import.meta.dirname, "..");
@@ -209,10 +213,18 @@ function providerBinding(readback, expected, archiveBytes) {
     site.status !== "active" || site.current_live_url !== UAT_URL ||
     savedVersion.id !== version.id || savedVersion.project_id !== site.id ||
     savedVersion.version_number !== version.version_number ||
-    savedVersion.source?.commit_sha !== expected.candidateSha ||
+    validateProviderSourceCommit(
+      savedVersion.source?.commit_sha,
+      expected,
+      "provider_readback_lineage_mismatch",
+    ) !== expected.siteSourceCommitSha ||
     !isRecord(savedVersion.archive_storage) ||
     !PROVIDER_VERSION.test(version.id ?? "") || version.project_id !== site.id ||
-    version.source?.commit_sha !== expected.candidateSha ||
+    validateProviderSourceCommit(
+      version.source?.commit_sha,
+      expected,
+      "provider_readback_lineage_mismatch",
+    ) !== expected.siteSourceCommitSha ||
     !Number.isSafeInteger(version.version_number) || version.version_number < 1 ||
     !isRecord(version.archive_storage) ||
     deploymentStart.id !== deployment.id || deploymentStart.project_id !== site.id ||
@@ -238,6 +250,7 @@ function providerBinding(readback, expected, archiveBytes) {
   }
   return Object.freeze({
     site_project_id: site.id,
+    site_source_commit_sha: expected.siteSourceCommitSha,
     site_version_id: version.id,
     deployment_id: deployment.id,
     version_number: version.version_number,
@@ -309,6 +322,9 @@ export function createStructuralJoin(input, expected) {
     claimed_lineage: Object.freeze({
       candidate_sha: expected.candidateSha,
       source_tree_sha: expected.sourceTreeSha,
+      site_source_commit_sha: provider.site_source_commit_sha,
+      site_source_tree_sha: expected.siteSourceTreeSha,
+      site_source_mode: expected.siteSourceMode,
       site_project_id: provider.site_project_id,
       site_version_id: provider.site_version_id,
       deployment_id: provider.deployment_id,
@@ -356,6 +372,9 @@ export function validateStructuralJoin(join, binding) {
   const expectedClaimedLineage = {
     candidate_sha: binding.candidateSha,
     source_tree_sha: binding.sourceTreeSha,
+    site_source_commit_sha: binding.provider.site_source_commit_sha,
+    site_source_tree_sha: binding.siteSourceTreeSha,
+    site_source_mode: binding.siteSourceMode,
     site_project_id: binding.provider.site_project_id,
     site_version_id: binding.provider.site_version_id,
     deployment_id: binding.provider.deployment_id,
@@ -384,16 +403,16 @@ export function validateStructuralJoin(join, binding) {
   return join;
 }
 
-async function trackedContext(candidate) {
+async function trackedContext(candidate, providerSourceCommitSha) {
   const hosting = JSON.parse(await readFile(
     resolve(ROOT, "apps/mind-diary-site/.openai/hosting.json"),
     "utf8",
   ));
-  const sourceTree = execFileSync(
-    "git",
-    ["rev-parse", `${candidate}^{tree}`],
-    { cwd: ROOT, encoding: "utf8" },
-  ).trim();
+  const source = resolveSiteSourceProvenance({
+    root: ROOT,
+    candidate,
+    providerSourceCommitSha,
+  });
   const candidateAssets = {};
   for (const asset of LIVE_ASSETS) {
     const sourceParts = asset.sources.map((source) => execFileSync(
@@ -406,8 +425,11 @@ async function trackedContext(candidate) {
     );
   }
   return Object.freeze({
-    candidateSha: candidateSha(candidate),
-    sourceTreeSha: candidateSha(sourceTree),
+    candidateSha: candidateSha(source.candidateSha),
+    sourceTreeSha: candidateSha(source.candidateTreeSha),
+    siteSourceCommitSha: candidateSha(source.siteSourceCommitSha),
+    siteSourceTreeSha: candidateSha(source.siteSourceTreeSha),
+    siteSourceMode: source.siteSourceMode,
     siteProjectId: hosting.project_id,
     candidateAssets: Object.freeze(candidateAssets),
   });
@@ -420,12 +442,16 @@ async function main() {
       process.stdout.write("Usage: npm run join:admin-shell-uat-readback -- --provider-readback <private-json> --browser-readback <private-json> --artifact-archive <exact-sites-tar.gz> --candidate-sha <exact-deployed-sha> --join-out <new-private-json>\n");
       return;
     }
-    const tracked = await trackedContext(options.candidate_sha);
     const [providerReadbackBytes, browserReadbackBytes, archiveBytes] = await Promise.all([
       readFile(options.provider_readback),
       readFile(options.browser_readback),
       readFile(options.artifact_archive),
     ]);
+    const providerReadback = JSON.parse(providerReadbackBytes.toString("utf8"));
+    const tracked = await trackedContext(
+      options.candidate_sha,
+      providerReadback?.version?.source?.commit_sha,
+    );
     let serverBundleBytes;
     try {
       serverBundleBytes = execFileSync(
@@ -437,7 +463,7 @@ async function main() {
       fail("artifact_server_bundle_missing");
     }
     const input = Object.freeze({
-      providerReadback: JSON.parse(providerReadbackBytes.toString("utf8")),
+      providerReadback,
       browserReadback: JSON.parse(browserReadbackBytes.toString("utf8")),
       providerReadbackBytes,
       browserReadbackBytes,

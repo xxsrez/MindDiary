@@ -16,6 +16,9 @@ import { ProbeFailure } from "../../scripts/lib/multi-principal-probe-core.mjs";
 const expected = Object.freeze({
   candidateSha: "a".repeat(40),
   sourceTreeSha: "b".repeat(40),
+  siteSourceCommitSha: "c".repeat(40),
+  siteSourceTreeSha: "d".repeat(40),
+  siteSourceMode: "subtree-mirror",
   siteProjectId: "appgprj_fixture351",
 });
 const archiveBytes = Buffer.from("exact packaged Sites archive for MD-351", "utf8");
@@ -64,14 +67,14 @@ function providerReadback() {
       id: "appgver_fixture351",
       project_id: expected.siteProjectId,
       version_number: 351,
-      source: { commit_sha: expected.candidateSha },
+      source: { commit_sha: expected.siteSourceCommitSha },
       archive_storage: { ...storage },
     },
     version: {
       id: "appgver_fixture351",
       project_id: expected.siteProjectId,
       version_number: 351,
-      source: { commit_sha: expected.candidateSha },
+      source: { commit_sha: expected.siteSourceCommitSha },
       archive_storage: { ...storage },
     },
     deployment_start: {
@@ -177,6 +180,7 @@ test("fully consistent local files still produce only nonterminal structural evi
   assert.equal(join.hosted_evidence, false);
   assert.equal(join.acceptance, "nonterminal");
   assert.equal(join.provenance, "unverified-local-files");
+  assert.equal(join.claimed_lineage.site_source_commit_sha, expected.siteSourceCommitSha);
   assert.notEqual(join.status, "passed");
   assert.equal(join.journeys.length, 13);
   const credentialCleanup = join.journeys.find(({ id }) => id === "admin.cleanup-credential-baseline");

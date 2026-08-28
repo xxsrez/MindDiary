@@ -24,6 +24,9 @@ import {
 } from "../../scripts/run-settings-connections-local-gate.mjs";
 
 const candidate = "a".repeat(40);
+const siteSourceCommitSha = "b".repeat(40);
+const siteSourceTreeSha = "c".repeat(40);
+const siteSourceMode = "subtree-mirror";
 const siteProjectId = "appgprj_md358fixture";
 const versionId = "appgver_md358fixture";
 const deploymentBefore = "appgdep_md358before";
@@ -58,6 +61,9 @@ function expected() {
   return {
     candidate,
     siteProjectId,
+    siteSourceCommitSha,
+    siteSourceTreeSha,
+    siteSourceMode,
     contractSha256: marked("1"),
     contract: {
       local_assertion_ids: localAssertionIds,
@@ -118,7 +124,7 @@ function providerReadback() {
     version: {
       id: versionId,
       project_id: siteProjectId,
-      source: { commit_sha: candidate },
+      source: { commit_sha: siteSourceCommitSha },
       archive_storage: {
         archive_format: "tar.gz",
         content_hash: sha256(archiveBytes),

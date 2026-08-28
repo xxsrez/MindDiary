@@ -66,7 +66,13 @@ default browser и обычный Chrome не запускаются; Chrome д�
 
 Offline joiner получает candidate tree и tracked project из Git, считает
 archive и server bundle SHA-256, сверяет archive hash/size с заявленным
-`get_site_version`, а candidate SHA — с его `source.commit_sha`. Затем он
+`get_site_version`. Для текущего Sites source repository его
+`source.commit_sha` является отдельным commit поддерева
+`apps/mind-diary-site`, а не SHA монорепозитория. Joiner извлекает этот SHA из
+provider read-back, требует доступный Git commit с subject
+`Mirror MindDiary <candidate-sha>` и exact tree, равный
+`<candidate-sha>:apps/mind-diary-site`; direct-candidate topology принимается
+только при фактическом совпадении обоих SHA. Затем joiner
 считает live asset hashes из raw bytes и требует exact byte equality с asset
 composition того же Git candidate. Это доказывает согласованность байтов и
 полей, но не доказывает, что JSON действительно вернули Sites connector и

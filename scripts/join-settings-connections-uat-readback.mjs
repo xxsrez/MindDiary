@@ -16,6 +16,10 @@ import {
   safeCode,
 } from "./lib/multi-principal-probe-core.mjs";
 import { reservePrivateTempOutput } from "./lib/private-evidence-output.mjs";
+import {
+  resolveSiteSourceProvenance,
+  validateProviderSourceCommit,
+} from "./lib/sites-source-provenance.mjs";
 import { verifyProviderRequestLogBoundaryReceipt } from "./lib/provider-request-log-boundary.mjs";
 import { verifyUatTestAccountPoolReadinessReceipt } from "./lib/uat-test-account-pool-contract.mjs";
 import {
@@ -162,7 +166,11 @@ function validateProviderReadback(value, expected, archiveBytes) {
   if (!PROJECT_ID.test(site.id ?? "") || site.id !== expected.siteProjectId ||
       site.status !== "active" || site.current_live_url !== UAT_URL ||
       !VERSION_ID.test(version.id ?? "") || version.project_id !== site.id ||
-      version.source?.commit_sha !== expected.candidate ||
+      validateProviderSourceCommit(
+        version.source?.commit_sha,
+        expected,
+        "provider_lineage_mismatch",
+      ) !== expected.siteSourceCommitSha ||
       version.archive_storage?.content_hash !== archiveSha256 ||
       version.archive_storage?.size_bytes !== archiveBytes.byteLength ||
       version.archive_storage?.archive_format !== "tar.gz") fail("provider_lineage_mismatch");
@@ -183,6 +191,7 @@ function validateProviderReadback(value, expected, archiveBytes) {
   return Object.freeze({
     observedAt,
     projectId: site.id,
+    siteSourceCommitSha: expected.siteSourceCommitSha,
     versionId: version.id,
     deploymentBeforeId: before.id,
     deploymentAfterId: after.id,
@@ -384,6 +393,9 @@ function unsignedJoin(binding) {
     observed_at_utc: browser.observedAt,
     claimed_lineage: Object.freeze({
       site_project_id: provider.projectId,
+      site_source_commit_sha: provider.siteSourceCommitSha,
+      site_source_tree_sha: expected.siteSourceTreeSha,
+      site_source_mode: expected.siteSourceMode,
       site_version_id: provider.versionId,
       deployment_before_id: provider.deploymentBeforeId,
       deployment_after_id: provider.deploymentAfterId,
@@ -471,10 +483,14 @@ export function parseCli(argv) {
   return options;
 }
 
-function trackedContext(candidate) {
+function trackedContext(candidate, providerSourceCommitSha) {
   if (!SHA.test(candidate)) fail("invalid_candidate_sha");
   try {
-    execFileSync("git", ["cat-file", "-e", `${candidate}^{commit}`], { cwd: ROOT, stdio: "ignore" });
+    const source = resolveSiteSourceProvenance({
+      root: ROOT,
+      candidate,
+      providerSourceCommitSha,
+    });
     const hosting = JSON.parse(execFileSync(
       "git",
       ["show", `${candidate}:apps/mind-diary-site/.openai/hosting.json`],
@@ -491,8 +507,11 @@ function trackedContext(candidate) {
       fail("invalid_tracked_context");
     }
     return Object.freeze({
-      candidate,
+      candidate: source.candidateSha,
       siteProjectId: hosting.project_id,
+      siteSourceCommitSha: source.siteSourceCommitSha,
+      siteSourceTreeSha: source.siteSourceTreeSha,
+      siteSourceMode: source.siteSourceMode,
       contractSha256: sha256Bytes(contractBytes),
       contract,
     });
@@ -524,10 +543,14 @@ async function main() {
       readFile(options.browser_readback),
       readFile(options.artifact_archive),
     ]);
-    const expected = trackedContext(options.candidate_sha);
+    const providerReadback = JSON.parse(providerReadbackBytes.toString("utf8"));
+    const expected = trackedContext(
+      options.candidate_sha,
+      providerReadback?.version?.source?.commit_sha,
+    );
     const input = {
       localReceipt: JSON.parse(localReceiptBytes.toString("utf8")),
-      providerReadback: JSON.parse(providerReadbackBytes.toString("utf8")),
+      providerReadback,
       poolReadback: JSON.parse(poolReadbackBytes.toString("utf8")),
       providerBoundaryReadback: JSON.parse(providerBoundaryReadbackBytes.toString("utf8")),
       browserReadback: JSON.parse(browserReadbackBytes.toString("utf8")),
