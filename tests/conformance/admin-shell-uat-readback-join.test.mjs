@@ -23,6 +23,7 @@ const expected = Object.freeze({
   siteProjectId: "appgprj_fixture123",
 });
 const archiveBytes = Buffer.from("exact packaged Sites archive fixture", "utf8");
+const providerArchiveBytes = Buffer.from("normalized provider tar fixture", "utf8");
 const serverBundleBytes = Buffer.from("export default { fetch() {} };", "utf8");
 const cssBytes = Buffer.from("body { color: CanvasText; }\n", "utf8");
 const clientBytes = Buffer.from("document.documentElement.dataset.ready = 'true';\n", "utf8");
@@ -60,7 +61,7 @@ function providerReadback() {
       id: expected.siteProjectId,
       status: "active",
       current_live_url: "https://mind-diary.example.invalid",
-      updated_at: "2026-08-27T22:29:00.000Z",
+      updated_at: "2026-08-27T22:29:00.000000+00:00",
     },
     saved_version: {
       id: "appgver_fixture123",
@@ -68,9 +69,10 @@ function providerReadback() {
       version_number: 347,
       source: { commit_sha: expected.siteSourceCommitSha },
       archive_storage: {
-        archive_format: "tar.gz",
-        content_hash: sha256(archiveBytes),
-        size_bytes: archiveBytes.byteLength,
+        archive_format: "tar",
+        content_hash: sha256(providerArchiveBytes),
+        size_bytes: providerArchiveBytes.byteLength,
+        file_count: 55,
       },
     },
     version: {
@@ -79,9 +81,10 @@ function providerReadback() {
       version_number: 347,
       source: { commit_sha: expected.siteSourceCommitSha },
       archive_storage: {
-        archive_format: "tar.gz",
-        content_hash: sha256(archiveBytes),
-        size_bytes: archiveBytes.byteLength,
+        archive_format: "tar",
+        content_hash: sha256(providerArchiveBytes),
+        size_bytes: providerArchiveBytes.byteLength,
+        file_count: 55,
       },
     },
     deployment_start: {
@@ -91,7 +94,7 @@ function providerReadback() {
       status: "publishing",
       type: "publish",
       url: null,
-      updated_at: "2026-08-27T22:29:30.000Z",
+      updated_at: "2026-08-27T22:29:30.000000+00:00",
     },
     deployment: {
       id: "appgdep_fixture123",
@@ -100,7 +103,7 @@ function providerReadback() {
       status: "succeeded",
       type: "publish",
       url: "https://mind-diary.example.invalid",
-      updated_at: "2026-08-27T22:30:00.000Z",
+      updated_at: "2026-08-27T22:30:00.000000+00:00",
     },
   };
 }
@@ -179,7 +182,12 @@ test("local join binds bytes but remains explicitly nonterminal and non-hosted",
   assert.equal(join.hosted_evidence, false);
   assert.equal(join.acceptance, "nonterminal");
   assert.equal(join.provenance, "unverified-local-files");
-  assert.equal(join.byte_bindings.artifact_archive_sha256, sha256(archiveBytes));
+  assert.equal(join.byte_bindings.upload_archive_sha256, sha256(archiveBytes));
+  assert.equal(join.byte_bindings.upload_archive_size_bytes, archiveBytes.byteLength);
+  assert.equal(join.byte_bindings.provider_archive_sha256, sha256(providerArchiveBytes));
+  assert.equal(join.byte_bindings.provider_archive_size_bytes, providerArchiveBytes.byteLength);
+  assert.equal(join.byte_bindings.provider_archive_file_count, 55);
+  assert.equal(join.byte_bindings.provider_archive_format, "tar");
   assert.equal(join.byte_bindings.server_bundle_sha256, sha256(serverBundleBytes));
   assert.equal(join.byte_bindings.shell_css_sha256, sha256(cssBytes));
   assert.equal(join.byte_bindings.shell_client_sha256, sha256(clientBytes));
@@ -194,7 +202,8 @@ test("fake hashes, live bytes and opaque IDs cannot replace bound inputs", () =>
   fakeArchiveHash.version.archive_storage.content_hash = `sha256:${"f".repeat(64)}`;
   assert.throws(
     () => createStructuralJoin(inputs({ providerReadback: fakeArchiveHash }), expected),
-    (error) => error instanceof ProbeFailure && error.code === "uat_archive_digest_mismatch",
+    (error) => error instanceof ProbeFailure &&
+      error.code === "uat_provider_archive_identity_mismatch",
   );
 
   const fakeLiveHash = browserReadback();
@@ -225,7 +234,12 @@ test("fake hashes, live bytes and opaque IDs cannot replace bound inputs", () =>
         site_version_id: input.providerReadback.version.id,
         deployment_id: input.providerReadback.deployment.id,
         version_number: input.providerReadback.version.version_number,
-        artifact_archive_sha256: sha256(archiveBytes),
+        upload_archive_sha256: sha256(archiveBytes),
+        upload_archive_size_bytes: archiveBytes.byteLength,
+        provider_archive_sha256: sha256(providerArchiveBytes),
+        provider_archive_size_bytes: providerArchiveBytes.byteLength,
+        provider_archive_file_count: 55,
+        provider_archive_format: "tar",
       },
       browser: {
         assets: {

@@ -31,6 +31,7 @@ const PROVIDER_PROJECT = /^appgprj_[a-z0-9]+$/u;
 const PROVIDER_VERSION = /^appgver_[a-z0-9]+$/u;
 const PROVIDER_DEPLOYMENT = /^appgdep_[a-z0-9]+$/u;
 const BASE64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u;
+const RFC3339 = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/u;
 const SERVER_ENTRY = "dist/server/index.js";
 const LIVE_ASSETS = Object.freeze([
   Object.freeze({
@@ -122,9 +123,10 @@ function normalizedSha256(value, code) {
 }
 
 function utc(value, code) {
-  if (typeof value !== "string" || Number.isNaN(Date.parse(value)) ||
-      new Date(value).toISOString() !== value) fail(code);
-  return value;
+  if (typeof value !== "string" || !RFC3339.test(value) || Number.isNaN(Date.parse(value))) {
+    fail(code);
+  }
+  return new Date(value).toISOString();
 }
 
 function exactStrings(actual, expected, code) {
@@ -205,9 +207,15 @@ function providerBinding(readback, expected, archiveBytes) {
   const deploymentStart = readback.deployment_start;
   const deployment = readback.deployment;
   const observedAt = utc(readback.observed_at_utc, "invalid_provider_observed_at");
-  utc(site.updated_at, "invalid_provider_site_readback");
-  utc(deploymentStart.updated_at, "invalid_provider_deployment_start");
-  utc(deployment.updated_at, "invalid_provider_deployment_readback");
+  const siteUpdatedAt = utc(site.updated_at, "invalid_provider_site_readback");
+  const deploymentStartedAt = utc(
+    deploymentStart.updated_at,
+    "invalid_provider_deployment_start",
+  );
+  const deploymentUpdatedAt = utc(
+    deployment.updated_at,
+    "invalid_provider_deployment_readback",
+  );
   if (
     !PROVIDER_PROJECT.test(site.id ?? "") || site.id !== expected.siteProjectId ||
     site.status !== "active" || site.current_live_url !== UAT_URL ||
@@ -233,28 +241,39 @@ function providerBinding(readback, expected, archiveBytes) {
     !PROVIDER_DEPLOYMENT.test(deployment.id ?? "") || deployment.project_id !== site.id ||
     deployment.version_id !== version.id || deployment.status !== "succeeded" ||
     deployment.type !== "publish" || deployment.url !== UAT_URL ||
-    Date.parse(deployment.updated_at) < Date.parse(deploymentStart.updated_at) ||
-    Date.parse(observedAt) < Date.parse(deployment.updated_at)
+    Date.parse(deploymentUpdatedAt) < Date.parse(deploymentStartedAt) ||
+    Date.parse(observedAt) < Date.parse(deploymentUpdatedAt) ||
+    Date.parse(observedAt) < Date.parse(siteUpdatedAt)
   ) fail("provider_readback_lineage_mismatch");
-  const archiveSha256 = sha256Bytes(archiveBytes);
-  for (const archiveStorage of [savedVersion.archive_storage, version.archive_storage]) {
-    if (normalizedSha256(
-      archiveStorage.content_hash,
-      "invalid_provider_archive_hash",
-    ) !== archiveSha256) fail("uat_archive_digest_mismatch");
+  const savedArchive = savedVersion.archive_storage;
+  const versionArchive = version.archive_storage;
+  const providerArchiveSha256 = normalizedSha256(
+    versionArchive.content_hash,
+    "invalid_provider_archive_hash",
+  );
+  if (normalizedSha256(savedArchive.content_hash, "invalid_provider_archive_hash") !==
+      providerArchiveSha256 || savedArchive.archive_format !== versionArchive.archive_format ||
+      savedArchive.size_bytes !== versionArchive.size_bytes ||
+      savedArchive.file_count !== versionArchive.file_count ||
+      !["tar", "tar.gz"].includes(versionArchive.archive_format) ||
+      !Number.isSafeInteger(versionArchive.size_bytes) || versionArchive.size_bytes < 1 ||
+      (versionArchive.file_count !== undefined && versionArchive.file_count !== null &&
+        (!Number.isSafeInteger(versionArchive.file_count) || versionArchive.file_count < 1))) {
+    fail("uat_provider_archive_identity_mismatch");
   }
-  if ([savedVersion.archive_storage, version.archive_storage].some((archiveStorage) =>
-    archiveStorage.archive_format !== "tar.gz" ||
-    archiveStorage.size_bytes !== archiveBytes.byteLength)) {
-    fail("uat_archive_identity_mismatch");
-  }
+  const uploadArchiveSha256 = sha256Bytes(archiveBytes);
   return Object.freeze({
     site_project_id: site.id,
     site_source_commit_sha: expected.siteSourceCommitSha,
     site_version_id: version.id,
     deployment_id: deployment.id,
     version_number: version.version_number,
-    artifact_archive_sha256: archiveSha256,
+    upload_archive_sha256: uploadArchiveSha256,
+    upload_archive_size_bytes: archiveBytes.byteLength,
+    provider_archive_sha256: providerArchiveSha256,
+    provider_archive_size_bytes: versionArchive.size_bytes,
+    provider_archive_file_count: versionArchive.file_count ?? null,
+    provider_archive_format: versionArchive.archive_format,
     provider_observed_at_utc: observedAt,
   });
 }
@@ -331,7 +350,12 @@ export function createStructuralJoin(input, expected) {
       version_number: provider.version_number,
     }),
     byte_bindings: Object.freeze({
-      artifact_archive_sha256: provider.artifact_archive_sha256,
+      upload_archive_sha256: provider.upload_archive_sha256,
+      upload_archive_size_bytes: provider.upload_archive_size_bytes,
+      provider_archive_sha256: provider.provider_archive_sha256,
+      provider_archive_size_bytes: provider.provider_archive_size_bytes,
+      provider_archive_file_count: provider.provider_archive_file_count,
+      provider_archive_format: provider.provider_archive_format,
       server_bundle_sha256: serverBundleSha256,
       shell_css_sha256: browser.assets["/ui/mind-diary-shell.css"],
       shell_client_sha256: browser.assets["/ui/mind-diary-shell-client.js"],
@@ -342,6 +366,7 @@ export function createStructuralJoin(input, expected) {
     }),
     unresolved_provenance: Object.freeze([
       "sites-connector-call-origin-not-authenticated-offline",
+      "sites-normalized-archive-not-byte-identical-to-upload-offline",
       "in-app-browser-observation-origin-not-authenticated-offline",
     ]),
     journeys: browser.journeys,
@@ -365,6 +390,7 @@ export function validateStructuralJoin(join, binding) {
       !isRecord(join.input_hashes) || !Array.isArray(join.journeys) ||
       canonical(join.unresolved_provenance) !== canonical([
         "sites-connector-call-origin-not-authenticated-offline",
+        "sites-normalized-archive-not-byte-identical-to-upload-offline",
         "in-app-browser-observation-origin-not-authenticated-offline",
       ])) {
     fail("invalid_uat_structural_join");
@@ -381,7 +407,12 @@ export function validateStructuralJoin(join, binding) {
     version_number: binding.provider.version_number,
   };
   const expectedByteBindings = {
-    artifact_archive_sha256: binding.provider.artifact_archive_sha256,
+    upload_archive_sha256: binding.provider.upload_archive_sha256,
+    upload_archive_size_bytes: binding.provider.upload_archive_size_bytes,
+    provider_archive_sha256: binding.provider.provider_archive_sha256,
+    provider_archive_size_bytes: binding.provider.provider_archive_size_bytes,
+    provider_archive_file_count: binding.provider.provider_archive_file_count,
+    provider_archive_format: binding.provider.provider_archive_format,
     server_bundle_sha256: binding.serverBundleSha256,
     shell_css_sha256: binding.browser.assets["/ui/mind-diary-shell.css"],
     shell_client_sha256: binding.browser.assets["/ui/mind-diary-shell-client.js"],

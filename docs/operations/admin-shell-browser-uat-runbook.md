@@ -65,8 +65,14 @@ default browser и обычный Chrome не запускаются; Chrome д�
   Browser observation после provider read-back.
 
 Offline joiner получает candidate tree и tracked project из Git, считает
-archive и server bundle SHA-256, сверяет archive hash/size с заявленным
-`get_site_version`. Для текущего Sites source repository его
+SHA-256 и размер переданного upload archive и server bundle. Текущий Sites
+connector после загрузки `.tgz` возвращает identity нормализованного provider
+`tar`, а не исходного upload archive: `save_site_version` и
+`get_site_version` обязаны сообщить одинаковые provider format/hash/size и
+file count, но эти значения сохраняются отдельно от upload archive
+hash/size. Offline join не утверждает byte equality двух представлений и явно
+оставляет `sites-normalized-archive-not-byte-identical-to-upload-offline` в
+`unresolved_provenance`. Для текущего Sites source repository его
 `source.commit_sha` является отдельным commit поддерева
 `apps/mind-diary-site`, а не SHA монорепозитория. Joiner извлекает этот SHA из
 provider read-back, требует доступный Git commit с subject
@@ -143,7 +149,8 @@ npm run join:admin-shell-uat-readback -- \
   --join-out <private-temp-directory>/admin-shell-uat-readback-join.json
 ```
 
-Join включает hashes обоих raw input, archive, server bundle и live assets.
+Join включает hashes обоих raw input, upload archive, нормализованного provider
+archive, server bundle и live assets.
 Любой изменённый byte, несогласованный ID, failed journey или unsafe evidence
 завершает command ненулевым кодом. Даже успешная структурная проверка всегда
 выдаёт только:

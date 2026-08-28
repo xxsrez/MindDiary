@@ -1381,6 +1381,13 @@ Sites project использует отдельный source repository, сод�
 Несовпадение mirror subject/tree с candidate fail closed и не компенсируется
 archive hash либо release metadata.
 
+Sites connector нормализует переданный `.tgz` и в `archive_storage` сообщает
+identity своего provider `tar`, а не исходные bytes upload archive. Release
+evidence поэтому фиксирует две разные identity: локальные hash/size exact
+upload archive и одинаковые между save/read-back provider
+format/hash/size/file-count. Offline join не приравнивает их и сохраняет эту
+недоказуемую без platform attestation связь в `unresolved_provenance`.
+
 ## Performance gate
 
 Изменения metadata/runtime/MCP read path, search storage или locator layout
