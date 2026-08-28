@@ -437,8 +437,15 @@ This contract preserves the old boundaries:
   supported export representation (`DOCX`/`XLSX`/`PPTX`, or `PDF`) and are
   recorded as an export snapshot rather than invented original bytes. Grant,
   object/revision/ownership locators, export endpoint and credentials terminate
-  inside the adapter. Hosted support remains `not_available` until MD-319 runs
-  the exact-provider UAT contract.
+  inside the adapter. Before grant resolution or provider metadata, application
+  resolves the exact active writable target from the authenticated MCP actor
+  and web-owned credential state. Connector stage accepts no caller-supplied
+  credential owner, target generation or target version; it passes the resolved
+  generation only through trusted application context into shared staging.
+  Missing, mismatched, revoked or concurrently changed targets use the canonical
+  `writable_target_*` taxonomy and never redirect bytes or touch the provider.
+  Hosted support remains `not_available` until MD-319 runs the exact-provider
+  UAT contract.
   Revoke, ownership/version drift and changed export bytes discovered during
   streaming collapse to terminal non-retryable `file_ingress_source_unavailable`;
   an actual transient provider transport failure remains retryable. Both paths

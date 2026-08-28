@@ -18,7 +18,7 @@ const expectedAssertions = [
   "GD-UAT-008-revision-or-export-race-fails-closed",
   "GD-UAT-009-oversize-timeout-unknown-fail-closed",
   "GD-UAT-010-no-existence-leak",
-  "GD-UAT-011-current-mind-write-authorization",
+  "GD-UAT-011-current-writable-target-authorization",
   "GD-UAT-012-stage-commit-download-history-web-export",
   "GD-UAT-013-persistence-after-redeploy",
   "GD-UAT-014-content-mcp-has-no-administrative-export",

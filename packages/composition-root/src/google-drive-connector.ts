@@ -11,6 +11,7 @@ import {
   type VerifiedFileInput,
 } from "@mind-diary/application-content";
 import type { Sha256Digest } from "@mind-diary/domain";
+import type { CredentialWriteTargetStore } from "@mind-diary/application-ports";
 
 export const GOOGLE_DRIVE_CONNECTOR_LIMITS = Object.freeze({
   maxObjectBytes: CONNECTOR_OBJECT_LIMITS.maxBytes,
@@ -777,6 +778,7 @@ export function createGoogleDriveConnectorIngress(options: Readonly<{
     BundleFileStagingService,
     "authorizeSourceRead" | "stageStream"
   >;
+  targets: Pick<CredentialWriteTargetStore, "readCredentialWriteTarget">;
   fetchTimeoutMilliseconds?: number;
 }>): Readonly<{
   source: AuthorizedConnectorObjectSource;
@@ -788,6 +790,7 @@ export function createGoogleDriveConnectorIngress(options: Readonly<{
   });
   const ingress = new AuthorizedConnectorIngressService({
     staging: options.staging,
+    targets: options.targets,
     ...(options.fetchTimeoutMilliseconds === undefined
       ? {}
       : { fetchTimeoutMilliseconds: options.fetchTimeoutMilliseconds }),

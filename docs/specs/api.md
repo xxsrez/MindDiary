@@ -81,6 +81,14 @@ reconcile and canonical request hashing. A detected mismatch is rejected in
 the shared streaming gate before object promotion/idempotency completion; the
 temporary writer and quota reservation are released, leaving the same key
 available for one corrected request.
+MD-284 uses the same server-owned target authority for repository-local
+`connector_object` ingress: its application request accepts an authenticated
+MCP actor, explicit Mind, bounded source capability, representation and
+idempotency key, but no owner, generation or target-version field. The current
+target and Mind write authorization are both established before the adapter may
+resolve its grant or read provider metadata. Target absence, mismatch, revoke or
+race returns the canonical `writable_target_*` result and cannot reveal whether
+the selected provider object exists.
 No source may be inferred as hosted capability or used as a silent
 base64/URL/path fallback. Ни одна из этих file/scale rows не блокирует
 Markdown-first Release 0.1 по ADR-0019.

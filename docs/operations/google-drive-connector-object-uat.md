@@ -56,7 +56,9 @@ Runner выполняет все `GD-UAT-001`–`GD-UAT-015` из machine contra
   `fileId + mimeType` для всех трёх типов без неподдерживаемых query parameters;
 - проверяет revoke, ownership/version mutation, export race, oversize, timeout
   и unknown provider result как fail-closed без existence leak;
-- доказывает current Mind write authorization до provider content read;
+- доказывает server-derived current writable target и current Mind write
+  authorization до grant resolution/provider metadata read; runner не передаёт
+  owner, generation или target version во ingress request;
 - завершает общий lifecycle: staged ref → atomic commit → exact revision
   download/history → Sites-owned web export → redeploy read-back;
 - отдельно подтверждает отсутствие administrative export у Content MCP.

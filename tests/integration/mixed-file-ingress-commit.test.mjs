@@ -154,6 +154,40 @@ async function bindWrite(metadata, currentActor, spaceId, writeBindingId, suffix
   assert.equal(result.kind, "applied");
 }
 
+async function selectCredentialWriteTarget(
+  metadata,
+  currentActor,
+  spaceId,
+  generationId,
+  suffix,
+) {
+  const registered = await metadata.runCredentialWriteTargetTransaction((transaction) =>
+    transaction.registerCredentialWriteTargetOwner({
+      bindingOwnerId: currentActor.authentication.bindingOwnerId,
+      principalId: currentActor.principalId,
+      credentialKind: "oauth_grant",
+      occurredAt: currentActor.occurredAtUtc,
+    }));
+  assert.equal(registered.kind, "registered");
+  const selected = await metadata.runCredentialWriteTargetTransaction((transaction) =>
+    transaction.applyCredentialWriteTarget({
+      bindingOwnerId: currentActor.authentication.bindingOwnerId,
+      principalId: currentActor.principalId,
+      operation: "select",
+      spaceId,
+      expectedTargetVersion: 0,
+      generationId,
+      credentialHasWriteScope: true,
+      idempotencyKey: `target-${suffix}`,
+      canonicalRequestHash: HASH,
+      requestId: `request_target_${suffix}`,
+      auditEventId: `audit_target_${suffix}`,
+      auditOutboxMessageId: `outbox_target_${suffix}`,
+      occurredAt: currentActor.occurredAtUtc,
+    }));
+  assert.equal(selected.kind, "applied");
+}
+
 function chunks(bytes) {
   const split = Math.max(1, Math.floor(bytes.byteLength / 2));
   return (async function* () {
@@ -201,7 +235,22 @@ async function harness() {
     },
     authorizationState(),
   );
+  metadata.setCurrentAuthorizationStateForTest(
+    {
+      principalId: currentActor.principalId,
+      spaceId: MINDS.ordinary.spaceId,
+      tokenId: null,
+    },
+    Object.freeze({ ...authorizationState(), token: null }),
+  );
   await bindWrite(metadata, currentActor, MINDS.ordinary.spaceId, WRITE, "mixed");
+  await selectCredentialWriteTarget(
+    metadata,
+    currentActor,
+    MINDS.ordinary.spaceId,
+    WRITE,
+    "mixed",
+  );
 
   const revisions = new CanonicalRevisionCoordinator({ objects, revisions: metadata });
   await revisions.commit({
@@ -441,11 +490,11 @@ test("mixed ingress commits real source services atomically and reconciles every
         });
       },
       staging: env.staging,
+      targets: env.metadata,
     });
   const connector = await connectorService.stage({
     actor: env.currentActor(),
     spaceId: MINDS.ordinary.spaceId,
-    writeBindingId: WRITE,
     representation: connectorRepresentation,
     source: connectorSource,
     idempotencyKey: "stage-connector",
@@ -497,11 +546,11 @@ test("mixed ingress commits real source services atomically and reconciles every
         });
       },
       staging: env.staging,
+      targets: env.metadata,
     });
   const nativeConnector = await nativeService.stage({
     actor: env.currentActor(),
     spaceId: MINDS.ordinary.spaceId,
-    writeBindingId: WRITE,
     representation: {
       kind: "export_snapshot",
       format: "google-drive/docx",

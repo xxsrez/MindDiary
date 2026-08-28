@@ -1,5 +1,10 @@
-import type { ActorContext } from "@mind-diary/application-contracts";
-import type { Sha256Digest, SpaceId } from "@mind-diary/domain";
+import type { McpTokenActorContext } from "@mind-diary/application-contracts";
+import type { CredentialWriteTargetStore } from "@mind-diary/application-ports";
+import type {
+  CredentialWriteTargetGenerationId,
+  Sha256Digest,
+  SpaceId,
+} from "@mind-diary/domain";
 import {
   BUNDLE_FILE_LIMITS,
   type BundleFileStagingService,
@@ -98,7 +103,7 @@ export type ConnectorObjectReadResult =
  */
 export interface AuthorizedConnectorObjectSource {
   readVerifiedSnapshot(request: Readonly<{
-    actor: ActorContext;
+    actor: McpTokenActorContext;
     representation: ConnectorObjectRepresentation;
     limits: Readonly<ConnectorObjectReadLimits>;
     signal?: AbortSignal;
@@ -106,9 +111,8 @@ export interface AuthorizedConnectorObjectSource {
 }
 
 export interface StageAuthorizedConnectorObjectRequest {
-  readonly actor: ActorContext;
+  readonly actor: McpTokenActorContext;
   readonly spaceId: SpaceId;
-  readonly writeBindingId: unknown;
   readonly source: AuthorizedConnectorObjectSource;
   readonly representation: ConnectorObjectRepresentation;
   readonly idempotencyKey: unknown;
@@ -121,8 +125,11 @@ export type AuthorizedConnectorIngressResult =
       kind: "invalid";
       code:
         | "file_ingress_source_unavailable"
-        | "file_ingress_transport_unavailable";
-      retryable: boolean;
+        | "file_ingress_transport_unavailable"
+        | "writable_target_required"
+        | "writable_target_mismatch"
+        | "writable_target_unavailable";
+      retryable?: boolean;
     }>;
 
 const SHA256 = /^sha256:[0-9a-f]{64}$/u;
@@ -194,6 +201,44 @@ function unavailable(
   return Object.freeze({ kind: "invalid", code, retryable });
 }
 
+type ResolvedWritableTarget = Readonly<{
+  kind: "ready";
+  generationId: CredentialWriteTargetGenerationId;
+}>;
+
+type WritableTargetFailure = Readonly<{
+  kind: "invalid";
+  code:
+    | "writable_target_required"
+    | "writable_target_mismatch"
+    | "writable_target_unavailable";
+}>;
+
+function writableTargetFailure(code: WritableTargetFailure["code"]): WritableTargetFailure {
+  return Object.freeze({ kind: "invalid", code });
+}
+
+function mapCurrentTargetFailure<Result extends StageBundleFileStreamResult>(
+  result: Result,
+): Result | WritableTargetFailure {
+  if (result.kind === "denied") {
+    const decision = result.decision as Readonly<{ readonly code?: unknown }>;
+    if (decision.code === "write_binding_required") {
+      return writableTargetFailure("writable_target_required");
+    }
+    if (
+      decision.code === "write_binding_stale" ||
+      decision.code === "binding_state_unavailable" ||
+      decision.code === "binding_owner_revoked" ||
+      decision.code === "authorization_state_changed"
+    ) return writableTargetFailure("writable_target_unavailable");
+  }
+  if (result.kind === "invalid" && result.code === "binding_mismatch") {
+    return writableTargetFailure("writable_target_unavailable");
+  }
+  return result;
+}
+
 /**
  * Provider-neutral connector ingress. The object-bound adapter owns source
  * authorization, representation selection and bounded transport. Existing
@@ -206,6 +251,7 @@ export class AuthorizedConnectorIngressService {
     BundleFileStagingService,
     "authorizeSourceRead" | "stageStream"
   >;
+  readonly #targets: Pick<CredentialWriteTargetStore, "readCredentialWriteTarget">;
   readonly #fetchTimeoutMilliseconds: number;
 
   constructor(dependencies: {
@@ -213,10 +259,12 @@ export class AuthorizedConnectorIngressService {
       BundleFileStagingService,
       "authorizeSourceRead" | "stageStream"
     >;
+    readonly targets: Pick<CredentialWriteTargetStore, "readCredentialWriteTarget">;
     /** A stricter bounded timeout is allowed for a specific adapter/test profile. */
     readonly fetchTimeoutMilliseconds?: number;
   }) {
     this.#staging = dependencies.staging;
+    this.#targets = dependencies.targets;
     const timeout = dependencies.fetchTimeoutMilliseconds ??
       CONNECTOR_OBJECT_LIMITS.fetchTimeoutMilliseconds;
     if (
@@ -236,13 +284,19 @@ export class AuthorizedConnectorIngressService {
       return unavailable("file_ingress_transport_unavailable", true);
     }
 
+    const target = await this.#resolveWritableTarget(request.actor, request.spaceId);
+    if (target.kind === "invalid") return target;
+
     const authorization = await this.#staging.authorizeSourceRead({
       actor: request.actor,
       spaceId: request.spaceId,
-      writeBindingId: request.writeBindingId,
+      writeBindingId: target.generationId,
     });
     if (authorization.kind === "denied") {
-      return Object.freeze({ kind: "denied", decision: authorization });
+      return mapCurrentTargetFailure(Object.freeze({
+        kind: "denied",
+        decision: authorization,
+      }));
     }
 
     const timeoutController = new AbortController();
@@ -327,7 +381,7 @@ export class AuthorizedConnectorIngressService {
         result = await this.#staging.stageStream({
           actor: request.actor,
           spaceId: request.spaceId,
-          writeBindingId: request.writeBindingId,
+          writeBindingId: target.generationId,
           sourceKind: "connector_object",
           stream: classifiedStream,
           maxBytes: CONNECTOR_OBJECT_LIMITS.maxBytes,
@@ -366,9 +420,40 @@ export class AuthorizedConnectorIngressService {
       ) {
         return unavailable("file_ingress_source_unavailable", false);
       }
-      return result;
+      return mapCurrentTargetFailure(result);
     } finally {
       clearTimeout(timeoutHandle);
     }
+  }
+
+  async #resolveWritableTarget(
+    actor: McpTokenActorContext,
+    spaceId: SpaceId,
+  ): Promise<ResolvedWritableTarget | WritableTargetFailure> {
+    let snapshot;
+    try {
+      snapshot = await this.#targets.readCredentialWriteTarget(
+        actor.authentication.bindingOwnerId,
+        actor.principalId,
+      );
+    } catch {
+      return writableTargetFailure("writable_target_unavailable");
+    }
+    if (snapshot?.kind === "pending_upgrade") {
+      return writableTargetFailure("writable_target_required");
+    }
+    if (
+      snapshot?.kind !== "current" ||
+      snapshot.state.bindingOwnerId !== actor.authentication.bindingOwnerId ||
+      snapshot.state.principalId !== actor.principalId ||
+      snapshot.state.lifecycleState !== "active"
+    ) return writableTargetFailure("writable_target_unavailable");
+    const generation = snapshot.state.activeGeneration;
+    if (generation === null) return writableTargetFailure("writable_target_required");
+    if (
+      generation.bindingOwnerId !== actor.authentication.bindingOwnerId ||
+      generation.spaceId !== spaceId
+    ) return writableTargetFailure("writable_target_mismatch");
+    return Object.freeze({ kind: "ready", generationId: generation.generationId });
   }
 }

@@ -18,7 +18,17 @@ import {
 const OPAQUE_BEARER = "drive_access_token_sensitive";
 const GRANT = "drive_grant_fingerprint_sensitive";
 const BINDING = "drive_binding_reference_sensitive";
-const ACTOR = Object.freeze({ kind: "registered_principal" });
+const TARGET_OWNER = "target_owner_google_drive_unit";
+const TARGET_GENERATION = "target_generation_google_drive_unit";
+const SPACE = "space_google_drive_unit";
+const ACTOR = Object.freeze({
+  kind: "registered_principal",
+  principalId: "principal_google_drive_unit",
+  authentication: Object.freeze({
+    kind: "mcp_token",
+    bindingOwnerId: TARGET_OWNER,
+  }),
+});
 const LIMITS = Object.freeze({
   maxBytes: 268_435_456,
   fetchTimeoutMilliseconds: 30_000,
@@ -30,6 +40,29 @@ const ALLOWED = Object.freeze({
   grant: Object.freeze({ kind: "membership", role: "editor" }),
   stamp: Object.freeze({ accessVersion: 1, membershipVersion: 1, tokenVersion: 1 }),
 });
+
+function targetReader(spaceId = SPACE) {
+  return {
+    async readCredentialWriteTarget(ownerId, principalId) {
+      assert.equal(ownerId, TARGET_OWNER);
+      assert.equal(principalId, ACTOR.principalId);
+      return {
+        kind: "current",
+        state: {
+          bindingOwnerId: TARGET_OWNER,
+          principalId: ACTOR.principalId,
+          lifecycleState: "active",
+          targetVersion: 1,
+          activeGeneration: {
+            generationId: TARGET_GENERATION,
+            bindingOwnerId: TARGET_OWNER,
+            spaceId,
+          },
+        },
+      };
+    },
+  };
+}
 
 function selection(objectId) {
   return { bindingRef: BINDING, objectId };
@@ -123,6 +156,7 @@ async function collect(stream) {
 
 function consumingIngress() {
   return new AuthorizedConnectorIngressService({
+    targets: targetReader(),
     staging: {
       async authorizeSourceRead() { return ALLOWED; },
       async stageStream(request) {
@@ -140,8 +174,7 @@ function consumingIngress() {
 function stageSource(source, requestedRepresentation) {
   return consumingIngress().stage({
     actor: ACTOR,
-    spaceId: "space_google_drive_unit",
-    writeBindingId: "write_google_drive_unit",
+    spaceId: SPACE,
     source,
     representation: requestedRepresentation,
     idempotencyKey: "stage-google-drive-unit",
@@ -304,6 +337,7 @@ test("native export race fails when the explicit snapshot bytes change", async (
     selection: selection(fixture.objectId),
     grants: authorizedGrants(),
     fetcher: provider.fetcher,
+    targets: targetReader("space_native_export_race"),
     staging: {
       async authorizeSourceRead() { return ALLOWED; },
       async stageStream(request) {
@@ -319,7 +353,6 @@ test("native export race fails when the explicit snapshot bytes change", async (
   const result = await ingress.stage({
     actor: ACTOR,
     spaceId: "space_native_export_race",
-    writeBindingId: "write_native_export_race",
     source,
     representation: representation(fixture),
     idempotencyKey: "stage-native-export-race",
