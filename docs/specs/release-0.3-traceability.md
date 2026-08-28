@@ -82,7 +82,7 @@ URL в receipt запрещены.
 | `U-MINDS` | `MD-351` | `ship-work-release/uat-release-0.3-minds-admin/v1` | run Mind/credential, redeploy persistence, revoke denial and baseline restoration |
 | `L-ACCESS` | `MD-354` | exact invitation/membership/transfer command in registry | pending/roles/next-request/sole owner |
 | `U-ACCESS` | `MD-354` | `ship-work-release/uat-release-0.3-access-admin/v1` | sequential roles, revoke and pool baseline |
-| `L-CONNECTIONS` | `MD-358` | `npm run gate:settings-connections-local` | exact plugin/client, browser target lifecycle, hosted `not-run` |
+| `L-CONNECTIONS` | `MD-358` | `npm run gate:settings-connections-local` | exact plugin/client, 17/16/18/19 route catalogs, browser target lifecycle, hosted `not-run` |
 | `U-CONNECTIONS` | `MD-358` | `ship-work-release/uat-release-0.3-connections/v1` + structural join | fresh client, redeploy, target/revoke/provider/cleanup join |
 | `L-TRANSFER` | `MD-363` | exact Site import/export + both-profile MCP moved-result + bytes/hash/grant command in registry | Site routes, absent MCP export catalog, moved results, revision, bytes/hash, grant, HEAD and cleanup |
 | `U-TRANSFER` | `MD-363` | `ship-work-release/uat-release-0.3-import-export/v1` | browser plan, bytes/history/redeploy/absence |

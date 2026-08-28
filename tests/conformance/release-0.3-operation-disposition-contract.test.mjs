@@ -974,7 +974,7 @@ test("plugin/help migration has closed owners and exact current source evidence"
       sourceEvidence: [{
         role: "package-probe-source",
         path: "scripts/run-oauth-direct-plugin-probe.mjs",
-        gitBlob: "bdaf831e568a96689071cdeaf7a2fb23bf973fa6",
+        gitBlob: "763c8e4b9cca5e12211a1fabb7ec0e6aa7baae40",
       }],
     },
     {
@@ -997,7 +997,7 @@ test("plugin/help migration has closed owners and exact current source evidence"
         {
           role: "installed-skill-probe-source",
           path: "scripts/run-oauth-direct-plugin-probe.mjs",
-          gitBlob: "bdaf831e568a96689071cdeaf7a2fb23bf973fa6",
+          gitBlob: "763c8e4b9cca5e12211a1fabb7ec0e6aa7baae40",
         },
       ],
     },

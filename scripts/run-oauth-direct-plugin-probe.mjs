@@ -122,6 +122,15 @@ export function assertDirectPackageServer(server) {
   return true;
 }
 
+export function assertFreshOAuthMcpServerProjection(server, expectedUrl = CODEX_PLUGIN_MCP_URL) {
+  if (
+    server?.transport?.type !== "streamable_http" ||
+    server?.transport?.url !== expectedUrl ||
+    server?.auth_status !== "o_auth"
+  ) fail("installed_mcp_resolution_mismatch");
+  return true;
+}
+
 export function assertCodexCompatibleWriteBindingSchema(tools) {
   if (!matchesExactVerifiedNativeMcpToolInventory(tools)) {
     fail("codex_write_binding_schema_incompatible", {
@@ -535,11 +544,7 @@ async function verifyFreshPluginContext(snapshot, assertions) {
     }
     const mcpList = await codexJson(codexHome, ["mcp", "list", "--json"], "mcp_list_failed");
     const server = mcpList.find?.((entry) => entry.name === "mind-diary");
-    if (
-      server?.transport?.type !== "streamable_http" ||
-      server?.transport?.url !== CODEX_PLUGIN_MCP_URL ||
-      server?.auth_status !== "not_logged_in"
-    ) fail("installed_mcp_resolution_mismatch");
+    assertFreshOAuthMcpServerProjection(server);
     assertions.add("package.mcp-resolution");
   } finally {
     await rm(codexHome, { recursive: true, force: true });

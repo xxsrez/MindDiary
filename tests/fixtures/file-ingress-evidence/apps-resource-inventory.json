@@ -1,0 +1,11 @@
+{
+  "schema": "mind-diary/file-ingress-hosted-resource-inventory/v1",
+  "source": "mind-diary-hosted-mcp-resources-read",
+  "entries": [
+    {
+      "uri": "ui://mind-diary/file-ingress/v1.html",
+      "mime_type": "text/html;profile=mcp-app",
+      "content_sha256": "sha256:8e00532cbdb62f47b50cd70a7529c90e46efef2dab1b466bb103c6cf9ded339b"
+    }
+  ]
+}

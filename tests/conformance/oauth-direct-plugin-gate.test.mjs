@@ -22,6 +22,7 @@ import {
   assertCodexCompatibleWriteBindingSchema,
   assertCodexClientVersion,
   assertDirectPackageServer,
+  assertFreshOAuthMcpServerProjection,
   assertMarketplaceCheckoutAvailable,
   createEvidence,
   parseCli,
@@ -54,6 +55,36 @@ test("Codex plugin uses the isolated compatibility transport with the canonical 
     assert.throws(
       () => assertDirectPackageServer(server),
       (error) => error instanceof ProbeFailure && error.code === "direct_resource_mismatch",
+    );
+  }
+});
+
+test("fresh Codex MCP projection identifies an OAuth-capable server without claiming login", () => {
+  assert.equal(assertFreshOAuthMcpServerProjection({
+    transport: {
+      type: "streamable_http",
+      url: CODEX_PLUGIN_MCP_URL,
+    },
+    auth_status: "o_auth",
+  }), true);
+  for (const server of [
+    {
+      transport: { type: "streamable_http", url: CODEX_PLUGIN_MCP_URL },
+      auth_status: "not_logged_in",
+    },
+    {
+      transport: { type: "streamable_http", url: CODEX_PLUGIN_OAUTH_RESOURCE },
+      auth_status: "o_auth",
+    },
+    {
+      transport: { type: "stdio", url: CODEX_PLUGIN_MCP_URL },
+      auth_status: "o_auth",
+    },
+  ]) {
+    assert.throws(
+      () => assertFreshOAuthMcpServerProjection(server),
+      (error) => error instanceof ProbeFailure &&
+        error.code === "installed_mcp_resolution_mismatch",
     );
   }
 });

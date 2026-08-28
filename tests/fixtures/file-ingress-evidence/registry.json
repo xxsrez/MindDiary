@@ -1,19 +1,10 @@
 {
-  "schema": "mind-diary/file-ingress-evidence-registry/v2",
+  "schema": "mind-diary/file-ingress-evidence-registry/v3",
   "release": "0.3",
   "hosted_authority": {
     "target_config_path": "apps/mind-diary-site/.openai/hosting.json",
     "release_profile_path": "docs/operations/ship-work-release-profile.md",
-    "trusted_runner_boundary": "trusted-runner-no-cryptographic-attestation",
-    "plugin_package": {
-      "plugin_id": "mind-diary@srez-marketplace",
-      "plugin_version": "0.1.0+codex.20260826190538",
-      "plugin_snapshot_sha256": "sha256:cfef907235e16bb70d46f238d52f2c77e2b06084a1d87ae70811131a1d7b65cc",
-      "marketplace_candidate_sha": "611c0f4d593b06ef7c32d08172820b13f57ef07f",
-      "marketplace_tree_sha": "b9c02685624813e6c20fcb5ef9ce7fe94505a81d"
-    },
-    "tool_inventory_path": "tests/fixtures/file-ingress-evidence/hosted-tool-inventory.json",
-    "tool_inventory_sha256": "6968b26e47d215516c113a4776e4162b97f885564df7dbffd0e26ec3021c5089"
+    "trusted_runner_boundary": "trusted-runner-no-cryptographic-attestation"
   },
   "source_kinds": [
     "session_attachment",
@@ -23,30 +14,189 @@
     "bounded_in_memory",
     "server_generated"
   ],
+  "source_acceptance": [
+    {
+      "source_kind": "session_attachment",
+      "required_pass_profiles": [
+        "openai-apps-2026-07-28"
+      ],
+      "required_not_available_profiles": [
+        "codex-modern-2026-07-28",
+        "codex-compat-2025-11-25"
+      ]
+    },
+    {
+      "source_kind": "local_path",
+      "required_pass_profiles": [
+        "codex-compat-2025-11-25"
+      ],
+      "required_not_available_profiles": []
+    },
+    {
+      "source_kind": "workspace/generated_artifact",
+      "required_pass_profiles": [
+        "codex-compat-2025-11-25"
+      ],
+      "required_not_available_profiles": []
+    },
+    {
+      "source_kind": "connector_object",
+      "required_pass_profiles": [
+        "google-drive-restricted-uat-v1"
+      ],
+      "required_not_available_profiles": []
+    },
+    {
+      "source_kind": "bounded_in_memory",
+      "required_pass_profiles": [
+        "generated-source-restricted-uat-v1"
+      ],
+      "required_not_available_profiles": []
+    },
+    {
+      "source_kind": "server_generated",
+      "required_pass_profiles": [
+        "generated-source-restricted-uat-v1"
+      ],
+      "required_not_available_profiles": []
+    }
+  ],
   "client_profiles": [
     {
       "id": "repository-node-test-v1",
       "environment": "local_contract",
       "client_class": "node_test_runner",
-      "protocol_profile": "application_contract"
+      "protocol_profile": "application_contract",
+      "source_kinds": [
+        "session_attachment",
+        "local_path",
+        "workspace/generated_artifact",
+        "connector_object",
+        "bounded_in_memory",
+        "server_generated"
+      ]
     },
     {
       "id": "codex-modern-2026-07-28",
       "environment": "hosted_uat",
       "client_class": "codex",
       "client_name": "codex-cli",
-      "client_version": "0.149.1",
+      "client_version": "0.150.1",
       "protocol_profile": "2026-07-28",
-      "tool_inventory_route": "/api/mcp"
+      "transport_route": "/api/mcp",
+      "source_kinds": [
+        "session_attachment"
+      ],
+      "artifact_contract": {
+        "kind": "codex_client_config",
+        "authority": "pinned_repository",
+        "identity": {
+          "config_source": "docs/operations/ship-work-release-profile.md",
+          "transport_route": "/api/mcp",
+          "oauth_resource": "/api/mcp"
+        }
+      },
+      "tool_inventory": {
+        "path": "tests/fixtures/file-ingress-evidence/direct-tool-inventory.json",
+        "sha256": "944162bfb09ce411ee4f407ba9076b79e2dc2df9f98f626e2142eb6e0a442aaa"
+      },
+      "resource_inventory": null
     },
     {
       "id": "codex-compat-2025-11-25",
       "environment": "hosted_uat",
       "client_class": "codex",
       "client_name": "codex-cli",
-      "client_version": "0.149.1",
+      "client_version": "0.150.1",
       "protocol_profile": "2025-11-25",
-      "tool_inventory_route": "/api/mcp/2025-11-25"
+      "transport_route": "/api/mcp/2025-11-25",
+      "source_kinds": [
+        "session_attachment",
+        "local_path",
+        "workspace/generated_artifact"
+      ],
+      "artifact_contract": {
+        "kind": "codex_plugin",
+        "authority": "pinned_repository",
+        "identity": {
+          "plugin_id": "mind-diary@srez-marketplace",
+          "plugin_version": "0.1.0+codex.20260826190538",
+          "plugin_snapshot_sha256": "sha256:cfef907235e16bb70d46f238d52f2c77e2b06084a1d87ae70811131a1d7b65cc",
+          "marketplace_candidate_sha": "425745892e538845087ba6cdb06509c578880899",
+          "marketplace_tree_sha": "cb17638d8309e34794a4afa402d0124e68fccaff"
+        }
+      },
+      "tool_inventory": {
+        "path": "tests/fixtures/file-ingress-evidence/direct-tool-inventory.json",
+        "sha256": "944162bfb09ce411ee4f407ba9076b79e2dc2df9f98f626e2142eb6e0a442aaa"
+      },
+      "resource_inventory": null
+    },
+    {
+      "id": "openai-apps-2026-07-28",
+      "environment": "hosted_uat",
+      "client_class": "openai_app",
+      "client_name": "chatgpt-mcp-apps",
+      "client_version": "not-reported-by-host",
+      "protocol_profile": "2026-07-28",
+      "transport_route": "/api/mcp/apps",
+      "source_kinds": [
+        "session_attachment"
+      ],
+      "artifact_contract": {
+        "kind": "openai_app_registration",
+        "authority": "external_receipt_required",
+        "identity": null
+      },
+      "tool_inventory": {
+        "path": "tests/fixtures/file-ingress-evidence/hosted-tool-inventory.json",
+        "sha256": "6968b26e47d215516c113a4776e4162b97f885564df7dbffd0e26ec3021c5089"
+      },
+      "resource_inventory": {
+        "path": "tests/fixtures/file-ingress-evidence/apps-resource-inventory.json",
+        "sha256": "4a3e4877663c03d43ff0b101ca74615acde59e356889cd047aca41161b0e52e8"
+      }
+    },
+    {
+      "id": "google-drive-restricted-uat-v1",
+      "environment": "hosted_uat",
+      "client_class": "provider_connector_runner",
+      "client_name": "google-drive",
+      "client_version": "v1",
+      "protocol_profile": "product-adapter-contract",
+      "transport_route": "internal:google-drive-connector-stage",
+      "source_kinds": [
+        "connector_object"
+      ],
+      "artifact_contract": {
+        "kind": "restricted_provider_grant",
+        "authority": "external_receipt_required",
+        "identity": null
+      },
+      "tool_inventory": null,
+      "resource_inventory": null
+    },
+    {
+      "id": "generated-source-restricted-uat-v1",
+      "environment": "hosted_uat",
+      "client_class": "restricted_uat_runner",
+      "client_name": "generated-source-canary",
+      "client_version": "v1",
+      "protocol_profile": "product-adapter-contract",
+      "transport_route": "/api/v1/uat/generated-source",
+      "source_kinds": [
+        "bounded_in_memory",
+        "server_generated"
+      ],
+      "artifact_contract": {
+        "kind": "hosted_runner",
+        "authority": "pinned_repository",
+        "identity": {
+          "runner_id": "ship-work-release/uat-generated-source-canary/v1"
+        }
+      },
+      "tool_inventory": null,
+      "resource_inventory": null
     }
   ],
   "assertion_ids": {
@@ -178,7 +328,9 @@
       "snapshot_semantics": "provider_native_snapshot",
       "external_prerequisite": "none",
       "human_only_boundary": "none",
-      "fixture_ids": ["session-attachment-small"],
+      "fixture_ids": [
+        "session-attachment-small"
+      ],
       "pass_assertion_ids": [
         "local.registry.closed-versioned",
         "local.fixtures.deterministic-streamed",
@@ -192,7 +344,8 @@
         "local.unsupported.typed-zero-side-effects",
         "local.privacy.redacted"
       ],
-      "not_available_assertion_ids": []
+      "not_available_assertion_ids": [],
+      "acceptance_expectation": "passed"
     },
     {
       "id": "local.local-path",
@@ -205,7 +358,10 @@
       "snapshot_semantics": "same_host_stable_snapshot",
       "external_prerequisite": "none",
       "human_only_boundary": "none",
-      "fixture_ids": ["local-path-256mib", "local-path-256mib-plus-one"],
+      "fixture_ids": [
+        "local-path-256mib",
+        "local-path-256mib-plus-one"
+      ],
       "pass_assertion_ids": [
         "local.registry.closed-versioned",
         "local.fixtures.deterministic-streamed",
@@ -220,7 +376,8 @@
         "local.unsupported.typed-zero-side-effects",
         "local.privacy.redacted"
       ],
-      "not_available_assertion_ids": []
+      "not_available_assertion_ids": [],
+      "acceptance_expectation": "passed"
     },
     {
       "id": "local.workspace-generated",
@@ -233,7 +390,9 @@
       "snapshot_semantics": "same_host_stable_snapshot",
       "external_prerequisite": "none",
       "human_only_boundary": "none",
-      "fixture_ids": ["workspace-generated-small"],
+      "fixture_ids": [
+        "workspace-generated-small"
+      ],
       "pass_assertion_ids": [
         "local.registry.closed-versioned",
         "local.fixtures.deterministic-streamed",
@@ -247,7 +406,8 @@
         "local.unsupported.typed-zero-side-effects",
         "local.privacy.redacted"
       ],
-      "not_available_assertion_ids": []
+      "not_available_assertion_ids": [],
+      "acceptance_expectation": "passed"
     },
     {
       "id": "local.connector-object",
@@ -260,7 +420,9 @@
       "snapshot_semantics": "provider_native_snapshot",
       "external_prerequisite": "none",
       "human_only_boundary": "none",
-      "fixture_ids": ["connector-object-small"],
+      "fixture_ids": [
+        "connector-object-small"
+      ],
       "pass_assertion_ids": [
         "local.registry.closed-versioned",
         "local.fixtures.deterministic-streamed",
@@ -274,7 +436,8 @@
         "local.unsupported.typed-zero-side-effects",
         "local.privacy.redacted"
       ],
-      "not_available_assertion_ids": []
+      "not_available_assertion_ids": [],
+      "acceptance_expectation": "passed"
     },
     {
       "id": "local.bounded-in-memory",
@@ -287,7 +450,10 @@
       "snapshot_semantics": "service_owned_snapshot",
       "external_prerequisite": "none",
       "human_only_boundary": "none",
-      "fixture_ids": ["bounded-4mib", "bounded-4mib-plus-one"],
+      "fixture_ids": [
+        "bounded-4mib",
+        "bounded-4mib-plus-one"
+      ],
       "pass_assertion_ids": [
         "local.registry.closed-versioned",
         "local.fixtures.deterministic-streamed",
@@ -299,7 +465,8 @@
         "local.unsupported.typed-zero-side-effects",
         "local.privacy.redacted"
       ],
-      "not_available_assertion_ids": []
+      "not_available_assertion_ids": [],
+      "acceptance_expectation": "passed"
     },
     {
       "id": "local.server-generated",
@@ -312,7 +479,10 @@
       "snapshot_semantics": "service_owned_snapshot",
       "external_prerequisite": "none",
       "human_only_boundary": "none",
-      "fixture_ids": ["server-generated-256mib", "server-generated-256mib-plus-one"],
+      "fixture_ids": [
+        "server-generated-256mib",
+        "server-generated-256mib-plus-one"
+      ],
       "pass_assertion_ids": [
         "local.registry.closed-versioned",
         "local.fixtures.deterministic-streamed",
@@ -326,7 +496,8 @@
         "local.unsupported.typed-zero-side-effects",
         "local.privacy.redacted"
       ],
-      "not_available_assertion_ids": []
+      "not_available_assertion_ids": [],
+      "acceptance_expectation": "passed"
     },
     {
       "id": "hosted.modern.session-attachment",
@@ -339,7 +510,9 @@
       "snapshot_semantics": "provider_native_snapshot",
       "external_prerequisite": "synthetic_client_attachment",
       "human_only_boundary": "none",
-      "fixture_ids": ["session-attachment-small"],
+      "fixture_ids": [
+        "session-attachment-small"
+      ],
       "pass_assertion_ids": [
         "hosted.profile.exact-client-inventory",
         "hosted.actor.synthetic-oauth-content-write",
@@ -358,169 +531,8 @@
         "hosted.unavailable.zero-side-effects",
         "hosted.cleanup.synthetic-idempotent",
         "hosted.privacy.redacted"
-      ]
-    },
-    {
-      "id": "hosted.modern.local-path",
-      "evidence_scope": "hosted_uat",
-      "source_kind": "local_path",
-      "transport_id": "companion_upload_intent",
-      "client_profile_id": "codex-modern-2026-07-28",
-      "actor_class": "synthetic_registered_principal",
-      "credential_class": "synthetic_oauth_content_write",
-      "snapshot_semantics": "same_host_stable_snapshot",
-      "external_prerequisite": "packaged_local_companion_same_host",
-      "human_only_boundary": "none",
-      "fixture_ids": ["local-path-256mib", "local-path-256mib-plus-one"],
-      "pass_assertion_ids": [
-        "hosted.profile.exact-client-inventory",
-        "hosted.actor.synthetic-oauth-content-write",
-        "hosted.snapshot.source-semantics",
-        "hosted.stage.exact-transport",
-        "hosted.commit.atomic-mixed-markdown-and-sources",
-        "hosted.readback.commit-history-download-web-export-redeploy",
-        "hosted.reconcile.stale-changed-retry",
-        "hosted.cleanup.synthetic-idempotent",
-        "hosted.privacy.redacted"
       ],
-      "not_available_assertion_ids": [
-        "hosted.profile.exact-client-inventory",
-        "hosted.actor.synthetic-oauth-content-write",
-        "hosted.unavailable.typed",
-        "hosted.unavailable.zero-side-effects",
-        "hosted.cross-host.no-fallback",
-        "hosted.cleanup.synthetic-idempotent",
-        "hosted.privacy.redacted"
-      ]
-    },
-    {
-      "id": "hosted.modern.workspace-generated",
-      "evidence_scope": "hosted_uat",
-      "source_kind": "workspace/generated_artifact",
-      "transport_id": "companion_upload_intent",
-      "client_profile_id": "codex-modern-2026-07-28",
-      "actor_class": "synthetic_registered_principal",
-      "credential_class": "synthetic_oauth_content_write",
-      "snapshot_semantics": "same_host_stable_snapshot",
-      "external_prerequisite": "packaged_local_companion_trusted_workspace",
-      "human_only_boundary": "none",
-      "fixture_ids": ["workspace-generated-small"],
-      "pass_assertion_ids": [
-        "hosted.profile.exact-client-inventory",
-        "hosted.actor.synthetic-oauth-content-write",
-        "hosted.snapshot.source-semantics",
-        "hosted.stage.exact-transport",
-        "hosted.commit.atomic-mixed-markdown-and-sources",
-        "hosted.readback.commit-history-download-web-export-redeploy",
-        "hosted.reconcile.stale-changed-retry",
-        "hosted.cleanup.synthetic-idempotent",
-        "hosted.privacy.redacted"
-      ],
-      "not_available_assertion_ids": [
-        "hosted.profile.exact-client-inventory",
-        "hosted.actor.synthetic-oauth-content-write",
-        "hosted.unavailable.typed",
-        "hosted.unavailable.zero-side-effects",
-        "hosted.cross-host.no-fallback",
-        "hosted.cleanup.synthetic-idempotent",
-        "hosted.privacy.redacted"
-      ]
-    },
-    {
-      "id": "hosted.modern.connector-object",
-      "evidence_scope": "hosted_uat",
-      "source_kind": "connector_object",
-      "transport_id": "authorized_connector_object",
-      "client_profile_id": "codex-modern-2026-07-28",
-      "actor_class": "synthetic_registered_principal",
-      "credential_class": "synthetic_oauth_content_write",
-      "snapshot_semantics": "provider_native_snapshot",
-      "external_prerequisite": "configured_synthetic_provider_connector_object",
-      "human_only_boundary": "none",
-      "fixture_ids": ["connector-object-small"],
-      "pass_assertion_ids": [
-        "hosted.profile.exact-client-inventory",
-        "hosted.actor.synthetic-oauth-content-write",
-        "hosted.snapshot.source-semantics",
-        "hosted.stage.exact-transport",
-        "hosted.commit.atomic-mixed-markdown-and-sources",
-        "hosted.readback.commit-history-download-web-export-redeploy",
-        "hosted.reconcile.stale-changed-retry",
-        "hosted.cleanup.synthetic-idempotent",
-        "hosted.privacy.redacted"
-      ],
-      "not_available_assertion_ids": [
-        "hosted.profile.exact-client-inventory",
-        "hosted.actor.synthetic-oauth-content-write",
-        "hosted.unavailable.typed",
-        "hosted.unavailable.zero-side-effects",
-        "hosted.cleanup.synthetic-idempotent",
-        "hosted.privacy.redacted"
-      ]
-    },
-    {
-      "id": "hosted.modern.bounded-in-memory",
-      "evidence_scope": "hosted_uat",
-      "source_kind": "bounded_in_memory",
-      "transport_id": "bounded_bytes",
-      "client_profile_id": "codex-modern-2026-07-28",
-      "actor_class": "synthetic_registered_principal",
-      "credential_class": "synthetic_oauth_content_write",
-      "snapshot_semantics": "service_owned_snapshot",
-      "external_prerequisite": "trusted_bounded_bytes_producer",
-      "human_only_boundary": "none",
-      "fixture_ids": ["bounded-4mib", "bounded-4mib-plus-one"],
-      "pass_assertion_ids": [
-        "hosted.profile.exact-client-inventory",
-        "hosted.actor.synthetic-oauth-content-write",
-        "hosted.snapshot.source-semantics",
-        "hosted.stage.exact-transport",
-        "hosted.commit.atomic-mixed-markdown-and-sources",
-        "hosted.readback.commit-history-download-web-export-redeploy",
-        "hosted.reconcile.stale-changed-retry",
-        "hosted.cleanup.synthetic-idempotent",
-        "hosted.privacy.redacted"
-      ],
-      "not_available_assertion_ids": [
-        "hosted.profile.exact-client-inventory",
-        "hosted.actor.synthetic-oauth-content-write",
-        "hosted.unavailable.typed",
-        "hosted.unavailable.zero-side-effects",
-        "hosted.cleanup.synthetic-idempotent",
-        "hosted.privacy.redacted"
-      ]
-    },
-    {
-      "id": "hosted.modern.server-generated",
-      "evidence_scope": "hosted_uat",
-      "source_kind": "server_generated",
-      "transport_id": "producer_stream",
-      "client_profile_id": "codex-modern-2026-07-28",
-      "actor_class": "synthetic_registered_principal",
-      "credential_class": "synthetic_oauth_content_write",
-      "snapshot_semantics": "service_owned_snapshot",
-      "external_prerequisite": "trusted_server_producer",
-      "human_only_boundary": "none",
-      "fixture_ids": ["server-generated-256mib", "server-generated-256mib-plus-one"],
-      "pass_assertion_ids": [
-        "hosted.profile.exact-client-inventory",
-        "hosted.actor.synthetic-oauth-content-write",
-        "hosted.snapshot.source-semantics",
-        "hosted.stage.exact-transport",
-        "hosted.commit.atomic-mixed-markdown-and-sources",
-        "hosted.readback.commit-history-download-web-export-redeploy",
-        "hosted.reconcile.stale-changed-retry",
-        "hosted.cleanup.synthetic-idempotent",
-        "hosted.privacy.redacted"
-      ],
-      "not_available_assertion_ids": [
-        "hosted.profile.exact-client-inventory",
-        "hosted.actor.synthetic-oauth-content-write",
-        "hosted.unavailable.typed",
-        "hosted.unavailable.zero-side-effects",
-        "hosted.cleanup.synthetic-idempotent",
-        "hosted.privacy.redacted"
-      ]
+      "acceptance_expectation": "not_available"
     },
     {
       "id": "hosted.compat.session-attachment",
@@ -533,7 +545,9 @@
       "snapshot_semantics": "provider_native_snapshot",
       "external_prerequisite": "synthetic_client_attachment",
       "human_only_boundary": "none",
-      "fixture_ids": ["session-attachment-small"],
+      "fixture_ids": [
+        "session-attachment-small"
+      ],
       "pass_assertion_ids": [
         "hosted.profile.exact-client-inventory",
         "hosted.actor.synthetic-oauth-content-write",
@@ -552,7 +566,8 @@
         "hosted.unavailable.zero-side-effects",
         "hosted.cleanup.synthetic-idempotent",
         "hosted.privacy.redacted"
-      ]
+      ],
+      "acceptance_expectation": "not_available"
     },
     {
       "id": "hosted.compat.local-path",
@@ -565,7 +580,10 @@
       "snapshot_semantics": "same_host_stable_snapshot",
       "external_prerequisite": "packaged_local_companion_same_host",
       "human_only_boundary": "none",
-      "fixture_ids": ["local-path-256mib", "local-path-256mib-plus-one"],
+      "fixture_ids": [
+        "local-path-256mib",
+        "local-path-256mib-plus-one"
+      ],
       "pass_assertion_ids": [
         "hosted.profile.exact-client-inventory",
         "hosted.actor.synthetic-oauth-content-write",
@@ -585,7 +603,8 @@
         "hosted.cross-host.no-fallback",
         "hosted.cleanup.synthetic-idempotent",
         "hosted.privacy.redacted"
-      ]
+      ],
+      "acceptance_expectation": "passed"
     },
     {
       "id": "hosted.compat.workspace-generated",
@@ -598,7 +617,9 @@
       "snapshot_semantics": "same_host_stable_snapshot",
       "external_prerequisite": "packaged_local_companion_trusted_workspace",
       "human_only_boundary": "none",
-      "fixture_ids": ["workspace-generated-small"],
+      "fixture_ids": [
+        "workspace-generated-small"
+      ],
       "pass_assertion_ids": [
         "hosted.profile.exact-client-inventory",
         "hosted.actor.synthetic-oauth-content-write",
@@ -618,20 +639,23 @@
         "hosted.cross-host.no-fallback",
         "hosted.cleanup.synthetic-idempotent",
         "hosted.privacy.redacted"
-      ]
+      ],
+      "acceptance_expectation": "passed"
     },
     {
-      "id": "hosted.compat.connector-object",
+      "id": "hosted.apps.session-attachment",
       "evidence_scope": "hosted_uat",
-      "source_kind": "connector_object",
-      "transport_id": "authorized_connector_object",
-      "client_profile_id": "codex-compat-2025-11-25",
+      "source_kind": "session_attachment",
+      "transport_id": "native_file_parameter",
+      "client_profile_id": "openai-apps-2026-07-28",
       "actor_class": "synthetic_registered_principal",
       "credential_class": "synthetic_oauth_content_write",
       "snapshot_semantics": "provider_native_snapshot",
-      "external_prerequisite": "configured_synthetic_provider_connector_object",
+      "external_prerequisite": "exact OpenAI App registration receipt and restricted UAT session",
       "human_only_boundary": "none",
-      "fixture_ids": ["connector-object-small"],
+      "fixture_ids": [
+        "session-attachment-small"
+      ],
       "pass_assertion_ids": [
         "hosted.profile.exact-client-inventory",
         "hosted.actor.synthetic-oauth-content-write",
@@ -650,20 +674,59 @@
         "hosted.unavailable.zero-side-effects",
         "hosted.cleanup.synthetic-idempotent",
         "hosted.privacy.redacted"
-      ]
+      ],
+      "acceptance_expectation": "passed"
     },
     {
-      "id": "hosted.compat.bounded-in-memory",
+      "id": "hosted.google-drive.connector-object",
+      "evidence_scope": "hosted_uat",
+      "source_kind": "connector_object",
+      "transport_id": "authorized_connector_object",
+      "client_profile_id": "google-drive-restricted-uat-v1",
+      "actor_class": "synthetic_registered_principal",
+      "credential_class": "synthetic_oauth_content_write",
+      "snapshot_semantics": "provider_native_snapshot",
+      "external_prerequisite": "restricted UAT Google Drive grant and run-owned provider object",
+      "human_only_boundary": "none",
+      "fixture_ids": [
+        "connector-object-small"
+      ],
+      "pass_assertion_ids": [
+        "hosted.profile.exact-client-inventory",
+        "hosted.actor.synthetic-oauth-content-write",
+        "hosted.snapshot.source-semantics",
+        "hosted.stage.exact-transport",
+        "hosted.commit.atomic-mixed-markdown-and-sources",
+        "hosted.readback.commit-history-download-web-export-redeploy",
+        "hosted.reconcile.stale-changed-retry",
+        "hosted.cleanup.synthetic-idempotent",
+        "hosted.privacy.redacted"
+      ],
+      "not_available_assertion_ids": [
+        "hosted.profile.exact-client-inventory",
+        "hosted.actor.synthetic-oauth-content-write",
+        "hosted.unavailable.typed",
+        "hosted.unavailable.zero-side-effects",
+        "hosted.cleanup.synthetic-idempotent",
+        "hosted.privacy.redacted"
+      ],
+      "acceptance_expectation": "passed"
+    },
+    {
+      "id": "hosted.generated-source.bounded-in-memory",
       "evidence_scope": "hosted_uat",
       "source_kind": "bounded_in_memory",
       "transport_id": "bounded_bytes",
-      "client_profile_id": "codex-compat-2025-11-25",
+      "client_profile_id": "generated-source-restricted-uat-v1",
       "actor_class": "synthetic_registered_principal",
       "credential_class": "synthetic_oauth_content_write",
       "snapshot_semantics": "service_owned_snapshot",
-      "external_prerequisite": "trusted_bounded_bytes_producer",
+      "external_prerequisite": "authenticated restricted UAT session and exact deployed hidden route",
       "human_only_boundary": "none",
-      "fixture_ids": ["bounded-4mib", "bounded-4mib-plus-one"],
+      "fixture_ids": [
+        "bounded-4mib",
+        "bounded-4mib-plus-one"
+      ],
       "pass_assertion_ids": [
         "hosted.profile.exact-client-inventory",
         "hosted.actor.synthetic-oauth-content-write",
@@ -682,20 +745,24 @@
         "hosted.unavailable.zero-side-effects",
         "hosted.cleanup.synthetic-idempotent",
         "hosted.privacy.redacted"
-      ]
+      ],
+      "acceptance_expectation": "passed"
     },
     {
-      "id": "hosted.compat.server-generated",
+      "id": "hosted.generated-source.server-generated",
       "evidence_scope": "hosted_uat",
       "source_kind": "server_generated",
       "transport_id": "producer_stream",
-      "client_profile_id": "codex-compat-2025-11-25",
+      "client_profile_id": "generated-source-restricted-uat-v1",
       "actor_class": "synthetic_registered_principal",
       "credential_class": "synthetic_oauth_content_write",
       "snapshot_semantics": "service_owned_snapshot",
-      "external_prerequisite": "trusted_server_producer",
+      "external_prerequisite": "authenticated restricted UAT session and exact deployed hidden route",
       "human_only_boundary": "none",
-      "fixture_ids": ["server-generated-256mib", "server-generated-256mib-plus-one"],
+      "fixture_ids": [
+        "server-generated-256mib",
+        "server-generated-256mib-plus-one"
+      ],
       "pass_assertion_ids": [
         "hosted.profile.exact-client-inventory",
         "hosted.actor.synthetic-oauth-content-write",
@@ -714,7 +781,8 @@
         "hosted.unavailable.zero-side-effects",
         "hosted.cleanup.synthetic-idempotent",
         "hosted.privacy.redacted"
-      ]
+      ],
+      "acceptance_expectation": "passed"
     }
   ]
 }

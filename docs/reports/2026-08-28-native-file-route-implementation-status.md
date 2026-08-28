@@ -50,6 +50,16 @@ Conformance и Product Site integration tests проверяют direct 17, read
 context handoff, route-specific metadata, default direct denial и bounded
 provider transport. Это repository evidence, не host observation.
 
+MD-314 executable evidence registry обновлён до v3. Он отдельно закрепляет
+direct 17-tool catalog, Apps 19-tool catalog и Apps resource digest. Для
+`session_attachment` успешный Apps receipt является обязательной положительной
+композицией, а `not_available` на direct/compat — обязательным отрицательным
+доказательством и не делает aggregate ошибочным. MD-311 дополнительно требует
+отдельный cross-source receipt: один exact deployment, все шесть source kinds,
+Markdown, один HEAD transition, post-redeploy equality и cleanup. Пока Apps
+registration receipt отсутствует, этот join остаётся `pending`, а не получает
+fabricated technical ID.
+
 ## Проверенная текущая capability
 
 Исходный MD-317 probe проверял Codex Desktop `26.820.60940` build `7119` и

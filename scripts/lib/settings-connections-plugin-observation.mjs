@@ -22,6 +22,7 @@ import {
 import {
   assertCodexClientVersion,
   assertDirectPackageServer,
+  assertFreshOAuthMcpServerProjection,
   assertMarketplaceCheckoutAvailable,
 } from "../run-oauth-direct-plugin-probe.mjs";
 
@@ -197,10 +198,12 @@ async function verifyFreshInstall(snapshot) {
     const mcpList = await codexJson(codexHome, ["mcp", "list", "--json"],
       "settings_connections_mcp_list_failed");
     const server = mcpList.find?.((entry) => entry.name === "mind-diary");
-    if (server?.transport?.type !== "streamable_http" ||
-        server?.transport?.url !==
-          "https://mind-diary.example.invalid/api/mcp/2025-11-25" ||
-        server?.auth_status !== "not_logged_in") {
+    try {
+      assertFreshOAuthMcpServerProjection(
+        server,
+        "https://mind-diary.example.invalid/api/mcp/2025-11-25",
+      );
+    } catch {
       fail("settings_connections_mcp_resolution_mismatch");
     }
     return Object.freeze({ marketplace_added: true, plugin_installed: true, mcp_resolved: true });

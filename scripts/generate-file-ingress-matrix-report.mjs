@@ -32,6 +32,9 @@ function parseArguments(argv) {
     else if (argument === "--hosted-deployment-anchor") {
       options.hostedDeploymentAnchor = resolve(value);
     }
+    else if (argument === "--hosted-cross-source-receipt") {
+      options.hostedCrossSourceReceipt = resolve(value);
+    }
     else if (argument === "--hosted-receipt") {
       const separator = value.indexOf("=");
       assert(separator > 0 && separator < value.length - 1, "--hosted-receipt must be profile_id=path");
@@ -70,6 +73,7 @@ export async function generateFileIngressMatrixReport({
   localReceiptPath = null,
   hostedReceiptPaths = [],
   hostedDeploymentAnchorPath = null,
+  hostedCrossSourceReceiptPath = null,
 }) {
   const config = await loadFileIngressEvidenceConfig(repositoryRoot);
   const candidateSha = resolveCandidateSha(repositoryRoot, candidate);
@@ -77,6 +81,9 @@ export async function generateFileIngressMatrixReport({
   const hostedDeploymentAnchor = hostedDeploymentAnchorPath === null
     ? null
     : await readJson(hostedDeploymentAnchorPath);
+  const hostedCrossSourceReceipt = hostedCrossSourceReceiptPath === null
+    ? null
+    : await readJson(hostedCrossSourceReceiptPath);
   const hostedReceipts = [];
   for (const { profileId, path } of hostedReceiptPaths) {
     const document = await readJson(path, profileId);
@@ -92,6 +99,7 @@ export async function generateFileIngressMatrixReport({
     localReceipt,
     hostedReceipts,
     hostedDeploymentAnchor,
+    hostedCrossSourceReceipt,
   });
   const outputPath = await writeReport(repositoryRoot, output, report);
   return Object.freeze({ report, outputPath });
@@ -107,6 +115,7 @@ async function main() {
     localReceiptPath: options.localReceipt ?? null,
     hostedReceiptPaths: options.hostedReceipts,
     hostedDeploymentAnchorPath: options.hostedDeploymentAnchor ?? null,
+    hostedCrossSourceReceiptPath: options.hostedCrossSourceReceipt ?? null,
   });
   console.log(
     `File-ingress matrix ${report.status} for ${report.candidate_sha}: ${relative(repositoryRoot, outputPath)}`,

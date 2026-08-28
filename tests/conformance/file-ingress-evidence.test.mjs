@@ -5,10 +5,16 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
 
-import { MCP_TOOL_DEFINITIONS } from "../../packages/adapter-mcp/dist/index.js";
+import {
+  FILE_INGRESS_WIDGET_HTML,
+  FILE_INGRESS_WIDGET_URI,
+  MCP_APPS_RESOURCE_MIME_TYPE,
+  MCP_TOOL_DEFINITIONS,
+} from "../../packages/adapter-mcp/dist/index.js";
 
 import {
   HOSTED_RECEIPT_SCHEMA,
+  HOSTED_CROSS_SOURCE_RECEIPT_SCHEMA,
   canonicalJson,
   createHostedDeploymentAnchor,
   createLocalReceipt,
@@ -17,6 +23,7 @@ import {
   sealDocument,
   sha256,
   validateHostedDeploymentAnchor,
+  validateHostedCrossSourceReceipt,
   validateHostedReceipt,
   validateLocalReceipt,
   verifyDeterministicFixtures,
@@ -58,7 +65,8 @@ function hostedValidation(current, anchor = deploymentAnchor(current)) {
     registry: current.registry,
     candidateSha,
     registrySha256: current.registrySha256,
-    toolInventory: current.toolInventory,
+    toolInventories: current.toolInventories,
+    resourceInventories: current.resourceInventories,
     hostedAuthority: current.hostedAuthority,
     hostedDeploymentAnchor: anchor,
   };
@@ -106,14 +114,16 @@ function hostedReceipt(current, profileId, options = {}) {
   const anchor = options.anchor ?? deploymentAnchor(current);
   const profileRows = current.registry.rows.filter(({ client_profile_id }) => client_profile_id === profileId);
   const failedRowId = options.failedRowId ?? null;
-  const defaultStatus = options.status ?? (failedRowId === null ? "passed" : "not_available");
+  const defaultStatus = options.status ?? null;
   const failedAssertionId = "hosted.stage.exact-transport";
   const assertions = current.registry.assertion_ids.hosted.map((id) => ({
     id,
     status: id === failedAssertionId && failedRowId !== null ? "failed" : "passed",
   }));
   const rows = profileRows.map((row) => {
-    const status = row.id === failedRowId ? "failed" : defaultStatus;
+    const status = row.id === failedRowId
+      ? "failed"
+      : defaultStatus ?? row.acceptance_expectation;
     if (status === "passed") {
       return {
         row_id: row.id,
@@ -176,6 +186,24 @@ function hostedReceipt(current, profileId, options = {}) {
           post_redeploy: true,
           error_code: null,
         };
+  const toolInventory = profile.tool_inventory === null
+    ? []
+    : current.toolInventories[profile.tool_inventory.path].entries;
+  const resourceInventory = profile.resource_inventory === null
+    ? []
+    : current.resourceInventories[profile.resource_inventory.path].entries;
+  let installedIdentity = profile.artifact_contract.identity;
+  if (profile.artifact_contract.kind === "openai_app_registration") {
+    installedIdentity = {
+      technical_id: "plugin_asdk_app_fixture1234",
+      registration_snapshot_sha256: digest("6"),
+    };
+  } else if (profile.artifact_contract.kind === "restricted_provider_grant") {
+    installedIdentity = {
+      grant_fingerprint: digest("7"),
+      provider_account_fingerprint: digest("8"),
+    };
+  }
   return sealDocument({
     schema: HOSTED_RECEIPT_SCHEMA,
     status: aggregateRowStatuses(rows.map(({ status }) => status)),
@@ -189,11 +217,16 @@ function hostedReceipt(current, profileId, options = {}) {
       client_name: profile.client_name,
       client_version: profile.client_version,
       protocol_profile: profile.protocol_profile,
-      tool_inventory_route: profile.tool_inventory_route,
+      transport_route: profile.transport_route,
       host_fingerprint: digest("b"),
-      plugin_package: structuredClone(current.registry.hosted_authority.plugin_package),
-      tool_inventory: structuredClone(current.toolInventory.entries),
-      tool_inventory_sha256: `sha256:${sha256(canonicalJson(current.toolInventory.entries))}`,
+      installed_artifact: {
+        kind: profile.artifact_contract.kind,
+        identity: structuredClone(installedIdentity),
+      },
+      tool_inventory: structuredClone(toolInventory),
+      tool_inventory_sha256: `sha256:${sha256(canonicalJson(toolInventory))}`,
+      resource_inventory: structuredClone(resourceInventory),
+      resource_inventory_sha256: `sha256:${sha256(canonicalJson(resourceInventory))}`,
       capture_boundary: current.registry.hosted_authority.trusted_runner_boundary,
       captured_at: "2026-08-27T20:00:00.000Z",
     },
@@ -212,6 +245,27 @@ function hostedReceipt(current, profileId, options = {}) {
   });
 }
 
+function hostedCrossSourceReceipt(current, anchor = deploymentAnchor(current)) {
+  return sealDocument({
+    schema: HOSTED_CROSS_SOURCE_RECEIPT_SCHEMA,
+    status: "passed",
+    candidate_sha: candidateSha,
+    registry_sha256: current.registrySha256,
+    deployment: deploymentForAnchor(anchor),
+    source_row_ids: current.registry.source_acceptance.map((rule) => {
+      const profileId = rule.required_pass_profiles[0];
+      return current.registry.rows.find((row) =>
+        row.client_profile_id === profileId && row.source_kind === rule.source_kind).id;
+    }),
+    revision_fingerprint: digest("a"),
+    markdown_sha256: digest("c"),
+    head_transitions: 1,
+    post_redeploy: true,
+    cleanup_replayed: true,
+    remaining_side_effects: 0,
+  });
+}
+
 function passingLocalReceipt(current, sha = candidateSha) {
   return createLocalReceipt({
     registry: current.registry,
@@ -226,22 +280,41 @@ function passingLocalReceipt(current, sha = candidateSha) {
 
 test("MD-314 registry is versioned, closed across source x profile and names authority boundaries", async () => {
   const current = await config();
-  assert.equal(current.registry.schema, "mind-diary/file-ingress-evidence-registry/v2");
+  assert.equal(current.registry.schema, "mind-diary/file-ingress-evidence-registry/v3");
   assert.equal(current.registry.release, "0.3");
-  assert.equal(current.registry.rows.length, 18);
-  assert.equal(current.toolInventory.entries.length, 19);
-  assert.equal(
-    current.registry.hosted_authority.tool_inventory_sha256,
-    current.toolInventorySha256,
-  );
+  assert.equal(current.registry.rows.length, 14);
+  const appsInventory = current.toolInventories[
+    "tests/fixtures/file-ingress-evidence/hosted-tool-inventory.json"
+  ];
+  const directInventory = current.toolInventories[
+    "tests/fixtures/file-ingress-evidence/direct-tool-inventory.json"
+  ];
+  assert.equal(appsInventory.entries.length, 19);
+  assert.equal(directInventory.entries.length, 17);
   assert.deepEqual(
-    current.toolInventory.entries,
+    appsInventory.entries,
     MCP_TOOL_DEFINITIONS.map((definition) => ({
       name: definition.name,
-      source: current.toolInventory.source,
+      source: appsInventory.source,
       input_schema_sha256: `sha256:${sha256(canonicalJson(definition.inputSchema))}`,
       output_schema_sha256: `sha256:${sha256(canonicalJson(definition.outputSchema))}`,
     })).sort((left, right) => left.name.localeCompare(right.name)),
+  );
+  assert.deepEqual(
+    directInventory.entries.map(({ name }) => name),
+    appsInventory.entries
+      .map(({ name }) => name)
+      .filter((name) => name !== "open_bundle_file_picker" && name !== "stage_bundle_file"),
+  );
+  assert.deepEqual(
+    current.resourceInventories[
+      "tests/fixtures/file-ingress-evidence/apps-resource-inventory.json"
+    ].entries,
+    [{
+      uri: FILE_INGRESS_WIDGET_URI,
+      mime_type: MCP_APPS_RESOURCE_MIME_TYPE,
+      content_sha256: `sha256:${sha256(FILE_INGRESS_WIDGET_HTML)}`,
+    }],
   );
   assert.deepEqual(
     current.registry.client_profiles.map(({ id }) => id),
@@ -249,8 +322,46 @@ test("MD-314 registry is versioned, closed across source x profile and names aut
       "repository-node-test-v1",
       "codex-modern-2026-07-28",
       "codex-compat-2025-11-25",
+      "openai-apps-2026-07-28",
+      "google-drive-restricted-uat-v1",
+      "generated-source-restricted-uat-v1",
     ],
   );
+  assert.deepEqual(current.registry.source_acceptance, [
+    {
+      source_kind: "session_attachment",
+      required_pass_profiles: ["openai-apps-2026-07-28"],
+      required_not_available_profiles: [
+        "codex-modern-2026-07-28",
+        "codex-compat-2025-11-25",
+      ],
+    },
+    {
+      source_kind: "local_path",
+      required_pass_profiles: ["codex-compat-2025-11-25"],
+      required_not_available_profiles: [],
+    },
+    {
+      source_kind: "workspace/generated_artifact",
+      required_pass_profiles: ["codex-compat-2025-11-25"],
+      required_not_available_profiles: [],
+    },
+    {
+      source_kind: "connector_object",
+      required_pass_profiles: ["google-drive-restricted-uat-v1"],
+      required_not_available_profiles: [],
+    },
+    {
+      source_kind: "bounded_in_memory",
+      required_pass_profiles: ["generated-source-restricted-uat-v1"],
+      required_not_available_profiles: [],
+    },
+    {
+      source_kind: "server_generated",
+      required_pass_profiles: ["generated-source-restricted-uat-v1"],
+      required_not_available_profiles: [],
+    },
+  ]);
   for (const row of current.registry.rows) {
     assert.match(row.actor_class, /^synthetic_/u);
     assert.match(row.credential_class, /^synthetic_/u);
@@ -282,50 +393,115 @@ test("local receipt is deterministic and cannot promote missing hosted evidence"
     hostedReceipts: [],
   });
   assert.equal(report.status, "pending");
-  assert.deepEqual(report.summary, { passed: 6, not_available: 0, pending: 12, failed: 0 });
-  assert.equal(report.gaps.length, 12);
+  assert.deepEqual(report.summary, { passed: 6, not_available: 0, pending: 8, failed: 0 });
+  assert.equal(report.gaps.length, 8);
   assert.equal(report.gaps.every(({ code }) => code === "hosted_receipt_missing"), true);
 });
 
-test("same-candidate modern and compatibility receipts join exact artifact read-back", async () => {
+test("same-candidate composition receipts and cross-source receipt join exact artifact read-back", async () => {
   const current = await config();
   const anchor = deploymentAnchor(current);
-  const modern = hostedReceipt(current, "codex-modern-2026-07-28");
-  const compatibility = hostedReceipt(current, "codex-compat-2025-11-25");
-  for (const receipt of [modern, compatibility]) {
+  const receipts = current.registry.client_profiles
+    .filter(({ environment }) => environment === "hosted_uat")
+    .map(({ id }) => hostedReceipt(current, id));
+  for (const receipt of receipts) {
     assert.equal(validateHostedReceipt(receipt, hostedValidation(current, anchor)), receipt);
   }
+  const crossSource = hostedCrossSourceReceipt(current, anchor);
+  assert.equal(validateHostedCrossSourceReceipt(crossSource, {
+    registry: current.registry,
+    candidateSha,
+    registrySha256: current.registrySha256,
+    hostedAuthority: current.hostedAuthority,
+    hostedDeploymentAnchor: anchor,
+  }), crossSource);
   const report = joinFileIngressEvidence({
     ...current,
     candidateSha,
     localReceipt: passingLocalReceipt(current),
-    hostedReceipts: [modern, compatibility],
+    hostedReceipts: receipts,
     hostedDeploymentAnchor: anchor,
+    hostedCrossSourceReceipt: crossSource,
   });
   assert.equal(report.status, "passed");
-  assert.deepEqual(report.summary, { passed: 18, not_available: 0, pending: 0, failed: 0 });
+  assert.deepEqual(report.summary, { passed: 12, not_available: 2, pending: 0, failed: 0 });
+  assert.equal(report.cross_source_status, "passed");
   assert.deepEqual(report.gaps, []);
   assert.deepEqual(report.deployment, deploymentForAnchor(anchor));
+});
+
+test("source quorum accepts required direct negatives but still requires one cross-source receipt", async () => {
+  const current = await config();
+  const anchor = deploymentAnchor(current);
+  const receipts = current.registry.client_profiles
+    .filter(({ environment }) => environment === "hosted_uat")
+    .map(({ id }) => hostedReceipt(current, id));
+  const report = joinFileIngressEvidence({
+    ...current,
+    candidateSha,
+    localReceipt: passingLocalReceipt(current),
+    hostedReceipts: receipts,
+    hostedDeploymentAnchor: anchor,
+  });
+  assert.equal(report.status, "pending");
+  assert.equal(report.cross_source_status, "pending");
+  assert.deepEqual(report.gaps, [{
+    source_kind: null,
+    row_id: null,
+    expected_status: "passed",
+    status: "pending",
+    code: "hosted_cross_source_receipt_missing",
+  }]);
+
+  const unsafeDirect = hostedReceipt(current, "codex-modern-2026-07-28", {
+    status: "passed",
+  });
+  const unsafeReport = joinFileIngressEvidence({
+    ...current,
+    candidateSha,
+    localReceipt: passingLocalReceipt(current),
+    hostedReceipts: receipts.map((receipt) =>
+      receipt.client_profile_id === unsafeDirect.client_profile_id ? unsafeDirect : receipt),
+    hostedDeploymentAnchor: anchor,
+    hostedCrossSourceReceipt: hostedCrossSourceReceipt(current, anchor),
+  });
+  assert.equal(unsafeReport.status, "failed");
+  assert.equal(
+    unsafeReport.gaps.some(({ code }) => code === "unexpected_supported_composition"),
+    true,
+  );
+});
+
+test("Apps registration identity must come from an exact external receipt", async () => {
+  const current = await config();
+  const anchor = deploymentAnchor(current);
+  const forged = structuredClone(hostedReceipt(current, "openai-apps-2026-07-28"));
+  forged.client_snapshot.installed_artifact.identity.technical_id = "pending-or-invented";
+  assert.throws(
+    () => validateHostedReceipt(reseal(forged), hostedValidation(current, anchor)),
+    /invalid_hosted_app_registration/u,
+  );
 });
 
 test("typed hosted not-available is terminal but never counted as passing", async () => {
   const current = await config();
   const anchor = deploymentAnchor(current);
-  const modern = hostedReceipt(current, "codex-modern-2026-07-28", { status: "not_available" });
-  const compatibility = hostedReceipt(current, "codex-compat-2025-11-25", { status: "not_available" });
-  validateHostedReceipt(modern, hostedValidation(current, anchor));
+  const receipts = current.registry.client_profiles
+    .filter(({ environment }) => environment === "hosted_uat")
+    .map(({ id }) => hostedReceipt(current, id, { status: "not_available" }));
+  validateHostedReceipt(receipts[0], hostedValidation(current, anchor));
   const report = joinFileIngressEvidence({
     ...current,
     candidateSha,
     localReceipt: passingLocalReceipt(current),
-    hostedReceipts: [modern, compatibility],
+    hostedReceipts: receipts,
     hostedDeploymentAnchor: anchor,
   });
   assert.equal(report.status, "not_available");
-  assert.deepEqual(report.summary, { passed: 6, not_available: 12, pending: 0, failed: 0 });
+  assert.deepEqual(report.summary, { passed: 6, not_available: 8, pending: 0, failed: 0 });
   assert.equal(report.gaps.every(({ status }) => status === "not_available"), true);
 
-  const unsafe = structuredClone(modern);
+  const unsafe = structuredClone(receipts[0]);
   unsafe.rows[0].unexpected_side_effect_count = 1;
   assert.throws(
     () => validateHostedReceipt(unsafe, hostedValidation(current, anchor)),
@@ -333,7 +509,7 @@ test("typed hosted not-available is terminal but never counted as passing", asyn
   );
 });
 
-test("hosted target, client version, plugin package and closed tool inventory reject forged evidence", async () => {
+test("hosted target, client artifact and profile-specific inventories reject forged evidence", async () => {
   const current = await config();
   const anchor = deploymentAnchor(current);
   assert.equal(
@@ -367,15 +543,15 @@ test("hosted target, client version, plugin package and closed tool inventory re
       },
     },
     {
-      code: "hosted_plugin_snapshot_mismatch",
+      code: "hosted_installed_artifact_mismatch",
       mutate(receipt) {
-        receipt.client_snapshot.plugin_package.plugin_snapshot_sha256 = digest("9");
+        receipt.client_snapshot.installed_artifact.identity.plugin_snapshot_sha256 = digest("9");
       },
     },
     {
-      code: "hosted_plugin_snapshot_mismatch",
+      code: "hosted_installed_artifact_mismatch",
       mutate(receipt) {
-        receipt.client_snapshot.plugin_package.plugin_version =
+        receipt.client_snapshot.installed_artifact.identity.plugin_version =
           "0.1.0+codex.20260826190539";
       },
     },
@@ -407,7 +583,7 @@ test("hosted target, client version, plugin package and closed tool inventory re
     },
   ];
   for (const fixture of cases) {
-    const forged = structuredClone(hostedReceipt(current, "codex-modern-2026-07-28"));
+    const forged = structuredClone(hostedReceipt(current, "codex-compat-2025-11-25"));
     fixture.mutate(forged);
     assert.throws(
       () => validateHostedReceipt(reseal(forged), hostedValidation(current, anchor)),
@@ -422,7 +598,7 @@ test("stale candidates, changed artifact tuples and forged deployment receipts f
   const stale = hostedReceipt(current, "codex-modern-2026-07-28", {
     candidateSha: "b".repeat(40),
   });
-  const changed = structuredClone(hostedReceipt(current, "codex-modern-2026-07-28"));
+  const changed = structuredClone(hostedReceipt(current, "openai-apps-2026-07-28"));
   changed.rows[0].artifact_observations.history = {
     ...changed.rows[0].artifact_observations.history,
     sha256: digest("9"),
@@ -444,11 +620,11 @@ test("stale candidates, changed artifact tuples and forged deployment receipts f
   assert.equal(report.status, "failed");
   assert.equal(
     report.rows.filter(({ evidence_scope, status }) => evidence_scope === "hosted_uat" && status === "failed").length,
-    12,
+    4,
   );
   assert.equal(
     report.rows.filter(({ status_code }) => status_code === "hosted_candidate_sha_mismatch").length,
-    6,
+    1,
   );
 
   const crossDeployment = joinFileIngressEvidence({
@@ -464,7 +640,7 @@ test("stale candidates, changed artifact tuples and forged deployment receipts f
   assert.equal(crossDeployment.status, "failed");
   assert.equal(
     crossDeployment.rows.filter(({ status_code }) => status_code === "hosted_deployment_anchor_mismatch").length,
-    6,
+    3,
   );
 });
 

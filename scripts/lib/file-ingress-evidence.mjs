@@ -6,19 +6,27 @@ import { resolve } from "node:path";
 export const REGISTRY_PATH = "tests/fixtures/file-ingress-evidence/registry.json";
 export const FIXTURE_PLAN_PATH =
   "tests/fixtures/file-ingress-evidence/synthetic-fixtures.json";
-export const HOSTED_TOOL_INVENTORY_PATH =
+export const APPS_TOOL_INVENTORY_PATH =
   "tests/fixtures/file-ingress-evidence/hosted-tool-inventory.json";
+export const DIRECT_TOOL_INVENTORY_PATH =
+  "tests/fixtures/file-ingress-evidence/direct-tool-inventory.json";
+export const APPS_RESOURCE_INVENTORY_PATH =
+  "tests/fixtures/file-ingress-evidence/apps-resource-inventory.json";
 export const HOSTING_CONFIG_PATH = "apps/mind-diary-site/.openai/hosting.json";
 export const RELEASE_PROFILE_PATH = "docs/operations/ship-work-release-profile.md";
-export const REGISTRY_SCHEMA = "mind-diary/file-ingress-evidence-registry/v2";
+export const REGISTRY_SCHEMA = "mind-diary/file-ingress-evidence-registry/v3";
 export const FIXTURE_SCHEMA = "mind-diary/file-ingress-synthetic-fixtures/v1";
 export const HOSTED_TOOL_INVENTORY_SCHEMA =
   "mind-diary/file-ingress-hosted-tool-inventory/v1";
+export const HOSTED_RESOURCE_INVENTORY_SCHEMA =
+  "mind-diary/file-ingress-hosted-resource-inventory/v1";
 export const LOCAL_RECEIPT_SCHEMA = "mind-diary/file-ingress-local-evidence/v1";
 export const HOSTED_DEPLOYMENT_ANCHOR_SCHEMA =
   "mind-diary/file-ingress-hosted-deployment-anchor/v1";
-export const HOSTED_RECEIPT_SCHEMA = "mind-diary/file-ingress-hosted-evidence/v2";
-export const REPORT_SCHEMA = "mind-diary/file-ingress-matrix-report/v2";
+export const HOSTED_RECEIPT_SCHEMA = "mind-diary/file-ingress-hosted-evidence/v3";
+export const HOSTED_CROSS_SOURCE_RECEIPT_SCHEMA =
+  "mind-diary/file-ingress-hosted-cross-source-evidence/v1";
+export const REPORT_SCHEMA = "mind-diary/file-ingress-matrix-report/v3";
 
 const SHA256 = /^sha256:[0-9a-f]{64}$/u;
 const SHA256_HEX = /^[0-9a-f]{64}$/u;
@@ -27,6 +35,7 @@ const SAFE_ID = /^[a-z0-9][a-z0-9._/-]{0,127}$/u;
 const SAFE_PROVIDER_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/u;
 const CODEX_VERSION = /^0\.[0-9]+\.[0-9]+$/u;
 const PLUGIN_VERSION = /^[0-9]+\.[0-9]+\.[0-9]+\+codex\.[0-9]{14}$/u;
+const APP_TECHNICAL_ID = /^plugin_asdk_app_[A-Za-z0-9_-]{8,128}$/u;
 const LOCAL_STATUSES = Object.freeze(["passed", "failed", "not_run"]);
 const ROW_STATUSES = Object.freeze(["passed", "not_available", "failed"]);
 const NOT_AVAILABLE_CODES = Object.freeze([
@@ -203,6 +212,44 @@ function validateToolInventory(toolInventory) {
   return toolInventory;
 }
 
+function validateResourceInventory(resourceInventory) {
+  exactKeys(resourceInventory, ["schema", "source", "entries"], "invalid_hosted_resource_inventory");
+  assert(
+    resourceInventory.schema === HOSTED_RESOURCE_INVENTORY_SCHEMA,
+    "invalid_hosted_resource_inventory_schema",
+  );
+  assert(
+    resourceInventory.source === "mind-diary-hosted-mcp-resources-read",
+    "invalid_hosted_resource_inventory_source",
+  );
+  assert(Array.isArray(resourceInventory.entries), "invalid_hosted_resource_inventory");
+  let previous = null;
+  for (const entry of resourceInventory.entries) {
+    exactKeys(
+      entry,
+      ["uri", "mime_type", "content_sha256"],
+      "invalid_hosted_resource_inventory_entry",
+    );
+    safeString(entry.uri, "invalid_hosted_resource_inventory_entry", 512);
+    safeString(entry.mime_type, "invalid_hosted_resource_inventory_entry", 128);
+    assert(SHA256.test(entry.content_sha256), "invalid_hosted_resource_inventory_entry");
+    assert(previous === null || previous.localeCompare(entry.uri) < 0, "invalid_hosted_resource_inventory_order");
+    previous = entry.uri;
+  }
+  return resourceInventory;
+}
+
+function inventoryAt(inventories, reference, validator, code) {
+  if (reference === null) return null;
+  exactKeys(reference, ["path", "sha256"], code);
+  assert(SHA256_HEX.test(reference.sha256), code);
+  const inventory = inventories[reference.path];
+  assert(inventory !== undefined, code);
+  validator(inventory);
+  assert(reference.sha256 === sha256(canonicalJson(inventory)), code);
+  return inventory;
+}
+
 function extractUatProfile(profileText) {
   const body = /^uat:\n(?<body>(?:(?: {2,}[^\n]*|[ \t]*)\n)*)/mu.exec(profileText)?.groups?.body;
   assert(typeof body === "string", "invalid_release_profile_uat");
@@ -249,39 +296,62 @@ function resolveHostedAuthority(hostingConfig, releaseProfileText) {
 }
 
 export async function loadFileIngressEvidenceConfig(repositoryRoot) {
-  const [registryText, fixtureText, toolInventoryText, hostingConfigText, releaseProfileText] = await Promise.all([
+  const [registryText, fixtureText, directToolInventoryText, appsToolInventoryText, appsResourceInventoryText, hostingConfigText, releaseProfileText] = await Promise.all([
     readFile(resolve(repositoryRoot, REGISTRY_PATH), "utf8"),
     readFile(resolve(repositoryRoot, FIXTURE_PLAN_PATH), "utf8"),
-    readFile(resolve(repositoryRoot, HOSTED_TOOL_INVENTORY_PATH), "utf8"),
+    readFile(resolve(repositoryRoot, DIRECT_TOOL_INVENTORY_PATH), "utf8"),
+    readFile(resolve(repositoryRoot, APPS_TOOL_INVENTORY_PATH), "utf8"),
+    readFile(resolve(repositoryRoot, APPS_RESOURCE_INVENTORY_PATH), "utf8"),
     readFile(resolve(repositoryRoot, HOSTING_CONFIG_PATH), "utf8"),
     readFile(resolve(repositoryRoot, RELEASE_PROFILE_PATH), "utf8"),
   ]);
   let registry;
   let fixtures;
-  let toolInventory;
+  let directToolInventory;
+  let appsToolInventory;
+  let appsResourceInventory;
   let hostingConfig;
   try {
     registry = JSON.parse(registryText);
     fixtures = JSON.parse(fixtureText);
-    toolInventory = JSON.parse(toolInventoryText);
+    directToolInventory = JSON.parse(directToolInventoryText);
+    appsToolInventory = JSON.parse(appsToolInventoryText);
+    appsResourceInventory = JSON.parse(appsResourceInventoryText);
     hostingConfig = JSON.parse(hostingConfigText);
   } catch (error) {
     fail("invalid_evidence_json", error.message);
   }
-  const validated = validateFileIngressEvidenceConfig(registry, fixtures, toolInventory);
+  const toolInventories = Object.freeze({
+    [DIRECT_TOOL_INVENTORY_PATH]: directToolInventory,
+    [APPS_TOOL_INVENTORY_PATH]: appsToolInventory,
+  });
+  const resourceInventories = Object.freeze({
+    [APPS_RESOURCE_INVENTORY_PATH]: appsResourceInventory,
+  });
+  const validated = validateFileIngressEvidenceConfig(
+    registry,
+    fixtures,
+    toolInventories,
+    resourceInventories,
+  );
   return Object.freeze({
     ...validated,
     registry,
     fixtures,
-    toolInventory,
+    toolInventories,
+    resourceInventories,
     hostedAuthority: resolveHostedAuthority(hostingConfig, releaseProfileText),
     registrySha256: sha256(canonicalJson(registry)),
     fixturePlanSha256: sha256(canonicalJson(fixtures)),
-    toolInventorySha256: sha256(canonicalJson(toolInventory)),
   });
 }
 
-export function validateFileIngressEvidenceConfig(registry, fixtures, toolInventory) {
+export function validateFileIngressEvidenceConfig(
+  registry,
+  fixtures,
+  toolInventories,
+  resourceInventories,
+) {
   exactKeys(
     registry,
     [
@@ -289,6 +359,7 @@ export function validateFileIngressEvidenceConfig(registry, fixtures, toolInvent
       "release",
       "hosted_authority",
       "source_kinds",
+      "source_acceptance",
       "client_profiles",
       "assertion_ids",
       "local_command_groups",
@@ -304,9 +375,6 @@ export function validateFileIngressEvidenceConfig(registry, fixtures, toolInvent
       "target_config_path",
       "release_profile_path",
       "trusted_runner_boundary",
-      "plugin_package",
-      "tool_inventory_path",
-      "tool_inventory_sha256",
     ],
     "invalid_hosted_authority_registry",
   );
@@ -320,33 +388,6 @@ export function validateFileIngressEvidenceConfig(registry, fixtures, toolInvent
       "trusted-runner-no-cryptographic-attestation",
     "invalid_hosted_authority_registry",
   );
-  assert(
-    registry.hosted_authority.tool_inventory_path === HOSTED_TOOL_INVENTORY_PATH &&
-      SHA256_HEX.test(registry.hosted_authority.tool_inventory_sha256),
-    "invalid_hosted_authority_registry",
-  );
-  assert(
-    registry.hosted_authority.tool_inventory_sha256 === sha256(canonicalJson(toolInventory)),
-    "hosted_tool_inventory_registry_mismatch",
-  );
-  validateToolInventory(toolInventory);
-  exactKeys(
-    registry.hosted_authority.plugin_package,
-    [
-      "plugin_id",
-      "plugin_version",
-      "plugin_snapshot_sha256",
-      "marketplace_candidate_sha",
-      "marketplace_tree_sha",
-    ],
-    "invalid_hosted_plugin_contract",
-  );
-  const pluginPackage = registry.hosted_authority.plugin_package;
-  assert(pluginPackage.plugin_id === "mind-diary@srez-marketplace", "invalid_hosted_plugin_contract");
-  assert(PLUGIN_VERSION.test(pluginPackage.plugin_version), "invalid_hosted_plugin_contract");
-  assert(SHA256.test(pluginPackage.plugin_snapshot_sha256), "invalid_hosted_plugin_contract");
-  assert(GIT_SHA.test(pluginPackage.marketplace_candidate_sha), "invalid_hosted_plugin_contract");
-  assert(GIT_SHA.test(pluginPackage.marketplace_tree_sha), "invalid_hosted_plugin_contract");
   const sourceKinds = Object.keys(EXPECTED_TRANSPORTS);
   assert(exactArray(registry.source_kinds, sourceKinds), "invalid_source_kind_registry");
 
@@ -362,9 +403,13 @@ export function validateFileIngressEvidenceConfig(registry, fixtures, toolInvent
           "client_name",
           "client_version",
           "protocol_profile",
-          "tool_inventory_route",
+          "transport_route",
+          "source_kinds",
+          "artifact_contract",
+          "tool_inventory",
+          "resource_inventory",
         ]
-      : ["id", "environment", "client_class", "protocol_profile"], "invalid_client_profile");
+      : ["id", "environment", "client_class", "protocol_profile", "source_kinds"], "invalid_client_profile");
     assert(SAFE_ID.test(profile.id), "invalid_client_profile");
     assert(
       profile.environment === "local_contract" || profile.environment === "hosted_uat",
@@ -372,15 +417,84 @@ export function validateFileIngressEvidenceConfig(registry, fixtures, toolInvent
     );
     safeString(profile.client_class, "invalid_client_profile");
     safeString(profile.protocol_profile, "invalid_client_profile");
+    uniqueStrings(profile.source_kinds, "invalid_client_profile");
+    assert(profile.source_kinds.every((sourceKind) => sourceKinds.includes(sourceKind)), "invalid_client_profile");
     if (hosted) {
-      assert(profile.client_class === "codex", "invalid_client_profile");
-      assert(profile.client_name === "codex-cli", "invalid_client_profile");
-      assert(CODEX_VERSION.test(profile.client_version), "invalid_client_profile");
-      assert(
-        profile.tool_inventory_route === "/api/mcp" ||
-          profile.tool_inventory_route === "/api/mcp/2025-11-25",
-        "invalid_client_profile",
+      safeString(profile.client_name, "invalid_client_profile");
+      safeString(profile.client_version, "invalid_client_profile");
+      safeString(profile.transport_route, "invalid_client_profile", 256);
+      exactKeys(
+        profile.artifact_contract,
+        ["kind", "authority", "identity"],
+        "invalid_hosted_artifact_contract",
       );
+      safeString(profile.artifact_contract.kind, "invalid_hosted_artifact_contract");
+      assert(
+        profile.artifact_contract.authority === "pinned_repository" ||
+          profile.artifact_contract.authority === "external_receipt_required",
+        "invalid_hosted_artifact_contract",
+      );
+      if (profile.artifact_contract.authority === "pinned_repository") {
+        assert(isRecord(profile.artifact_contract.identity), "invalid_hosted_artifact_contract");
+      } else {
+        assert(profile.artifact_contract.identity === null, "invalid_hosted_artifact_contract");
+      }
+      inventoryAt(
+        toolInventories,
+        profile.tool_inventory,
+        validateToolInventory,
+        "invalid_profile_tool_inventory",
+      );
+      inventoryAt(
+        resourceInventories,
+        profile.resource_inventory,
+        validateResourceInventory,
+        "invalid_profile_resource_inventory",
+      );
+      if (profile.artifact_contract.kind === "codex_plugin") {
+        assert(profile.client_class === "codex" && profile.client_name === "codex-cli", "invalid_client_profile");
+        assert(CODEX_VERSION.test(profile.client_version), "invalid_client_profile");
+        exactKeys(
+          profile.artifact_contract.identity,
+          [
+            "plugin_id",
+            "plugin_version",
+            "plugin_snapshot_sha256",
+            "marketplace_candidate_sha",
+            "marketplace_tree_sha",
+          ],
+          "invalid_hosted_plugin_contract",
+        );
+        const pluginPackage = profile.artifact_contract.identity;
+        assert(pluginPackage.plugin_id === "mind-diary@srez-marketplace", "invalid_hosted_plugin_contract");
+        assert(PLUGIN_VERSION.test(pluginPackage.plugin_version), "invalid_hosted_plugin_contract");
+        assert(SHA256.test(pluginPackage.plugin_snapshot_sha256), "invalid_hosted_plugin_contract");
+        assert(GIT_SHA.test(pluginPackage.marketplace_candidate_sha), "invalid_hosted_plugin_contract");
+        assert(GIT_SHA.test(pluginPackage.marketplace_tree_sha), "invalid_hosted_plugin_contract");
+      } else if (profile.artifact_contract.kind === "codex_client_config") {
+        exactKeys(
+          profile.artifact_contract.identity,
+          ["config_source", "transport_route", "oauth_resource"],
+          "invalid_hosted_codex_config_contract",
+        );
+        assert(
+          profile.artifact_contract.identity.config_source === RELEASE_PROFILE_PATH &&
+            profile.artifact_contract.identity.transport_route === profile.transport_route &&
+            profile.artifact_contract.identity.oauth_resource === "/api/mcp",
+          "invalid_hosted_codex_config_contract",
+        );
+      } else if (profile.artifact_contract.kind === "hosted_runner") {
+        exactKeys(
+          profile.artifact_contract.identity,
+          ["runner_id"],
+          "invalid_hosted_runner_contract",
+        );
+        assert(
+          profile.artifact_contract.identity.runner_id ===
+            "ship-work-release/uat-generated-source-canary/v1",
+          "invalid_hosted_runner_contract",
+        );
+      }
     }
     assert(!profiles.has(profile.id), "duplicate_client_profile");
     profiles.set(profile.id, profile);
@@ -392,23 +506,83 @@ export function validateFileIngressEvidenceConfig(registry, fixtures, toolInvent
         "repository-node-test-v1",
         "codex-modern-2026-07-28",
         "codex-compat-2025-11-25",
+        "openai-apps-2026-07-28",
+        "google-drive-restricted-uat-v1",
+        "generated-source-restricted-uat-v1",
       ],
     ),
     "invalid_client_profile_registry",
   );
   assert(
-    profiles.get("codex-modern-2026-07-28")?.client_version === "0.149.1" &&
+    profiles.get("codex-modern-2026-07-28")?.client_version === "0.150.1" &&
       profiles.get("codex-modern-2026-07-28")?.protocol_profile === "2026-07-28" &&
-      profiles.get("codex-modern-2026-07-28")?.tool_inventory_route === "/api/mcp",
+      profiles.get("codex-modern-2026-07-28")?.transport_route === "/api/mcp" &&
+      profiles.get("codex-modern-2026-07-28")?.artifact_contract.kind ===
+        "codex_client_config",
     "invalid_client_profile_registry",
   );
   assert(
-    profiles.get("codex-compat-2025-11-25")?.client_version === "0.149.1" &&
+    profiles.get("codex-compat-2025-11-25")?.client_version === "0.150.1" &&
       profiles.get("codex-compat-2025-11-25")?.protocol_profile === "2025-11-25" &&
-      profiles.get("codex-compat-2025-11-25")?.tool_inventory_route ===
+      profiles.get("codex-compat-2025-11-25")?.transport_route ===
         "/api/mcp/2025-11-25",
     "invalid_client_profile_registry",
   );
+  assert(
+    profiles.get("openai-apps-2026-07-28")?.transport_route === "/api/mcp/apps" &&
+      profiles.get("openai-apps-2026-07-28")?.client_class === "openai_app" &&
+      profiles.get("openai-apps-2026-07-28")?.client_name === "chatgpt-mcp-apps" &&
+      profiles.get("openai-apps-2026-07-28")?.client_version ===
+        "not-reported-by-host" &&
+      profiles.get("openai-apps-2026-07-28")?.artifact_contract.kind ===
+        "openai_app_registration" &&
+      profiles.get("openai-apps-2026-07-28")?.artifact_contract.authority ===
+        "external_receipt_required",
+    "invalid_client_profile_registry",
+  );
+  assert(
+    profiles.get("google-drive-restricted-uat-v1")?.client_class ===
+      "provider_connector_runner" &&
+      profiles.get("google-drive-restricted-uat-v1")?.transport_route ===
+        "internal:google-drive-connector-stage" &&
+      profiles.get("google-drive-restricted-uat-v1")?.artifact_contract.kind ===
+        "restricted_provider_grant" &&
+      profiles.get("generated-source-restricted-uat-v1")?.client_class ===
+        "restricted_uat_runner" &&
+      profiles.get("generated-source-restricted-uat-v1")?.transport_route ===
+        "/api/v1/uat/generated-source" &&
+      profiles.get("generated-source-restricted-uat-v1")?.artifact_contract.kind ===
+        "hosted_runner",
+    "invalid_client_profile_registry",
+  );
+
+  assert(Array.isArray(registry.source_acceptance), "invalid_source_acceptance");
+  assert(registry.source_acceptance.length === sourceKinds.length, "invalid_source_acceptance");
+  const expectedRows = [];
+  for (const profile of registry.client_profiles) {
+    for (const sourceKind of profile.source_kinds) expectedRows.push([profile.id, sourceKind]);
+  }
+  for (let index = 0; index < registry.source_acceptance.length; index += 1) {
+    const rule = registry.source_acceptance[index];
+    exactKeys(
+      rule,
+      ["source_kind", "required_pass_profiles", "required_not_available_profiles"],
+      "invalid_source_acceptance",
+    );
+    assert(rule.source_kind === sourceKinds[index], "invalid_source_acceptance");
+    uniqueStrings(rule.required_pass_profiles, "invalid_source_acceptance");
+    uniqueStrings(rule.required_not_available_profiles, "invalid_source_acceptance");
+    assert(rule.required_pass_profiles.length > 0, "invalid_source_acceptance");
+    const referenced = [...rule.required_pass_profiles, ...rule.required_not_available_profiles];
+    assert(new Set(referenced).size === referenced.length, "invalid_source_acceptance");
+    for (const profileId of referenced) {
+      const profile = profiles.get(profileId);
+      assert(
+        profile?.environment === "hosted_uat" && profile.source_kinds.includes(rule.source_kind),
+        "invalid_source_acceptance",
+      );
+    }
+  }
 
   exactKeys(registry.assertion_ids, ["local", "hosted"], "invalid_assertion_registry");
   uniqueStrings(registry.assertion_ids.local, "invalid_local_assertion_registry");
@@ -471,12 +645,6 @@ export function validateFileIngressEvidenceConfig(registry, fixtures, toolInvent
 
   assert(Array.isArray(registry.rows), "invalid_rows");
   const rows = new Map();
-  const expectedRows = [];
-  for (const profile of registry.client_profiles) {
-    for (const sourceKind of sourceKinds) {
-      expectedRows.push([profile.id, sourceKind]);
-    }
-  }
   assert(registry.rows.length === expectedRows.length, "invalid_row_count");
   for (let index = 0; index < registry.rows.length; index += 1) {
     const row = registry.rows[index];
@@ -496,6 +664,7 @@ export function validateFileIngressEvidenceConfig(registry, fixtures, toolInvent
         "fixture_ids",
         "pass_assertion_ids",
         "not_available_assertion_ids",
+        "acceptance_expectation",
       ],
       "invalid_row",
     );
@@ -518,6 +687,11 @@ export function validateFileIngressEvidenceConfig(registry, fixtures, toolInvent
     }
     uniqueStrings(row.pass_assertion_ids, "invalid_row_assertions");
     uniqueStrings(row.not_available_assertion_ids, "invalid_row_assertions");
+    assert(
+      row.acceptance_expectation === "passed" ||
+        row.acceptance_expectation === "not_available",
+      "invalid_row_expectation",
+    );
     const allowed = row.evidence_scope === "local_contract" ? localAssertions : hostedAssertions;
     assert(row.pass_assertion_ids.every((id) => allowed.has(id)), "unknown_row_assertion");
     assert(row.not_available_assertion_ids.every((id) => allowed.has(id)), "unknown_row_assertion");
@@ -525,10 +699,20 @@ export function validateFileIngressEvidenceConfig(registry, fixtures, toolInvent
       assert(row.actor_class === "synthetic_registered_principal", "invalid_local_actor_class");
       assert(row.credential_class === "synthetic_mcp_content_write", "invalid_local_credential_class");
       assert(row.not_available_assertion_ids.length === 0, "invalid_local_not_available_contract");
+      assert(row.acceptance_expectation === "passed", "invalid_local_expectation");
     } else {
       assert(row.actor_class === "synthetic_registered_principal", "invalid_hosted_actor_class");
       assert(row.credential_class === "synthetic_oauth_content_write", "invalid_hosted_credential_class");
       assert(row.not_available_assertion_ids.length > 0, "missing_hosted_not_available_contract");
+      const sourceRule = registry.source_acceptance.find(
+        ({ source_kind: sourceKind }) => sourceKind === row.source_kind,
+      );
+      const expected = sourceRule.required_pass_profiles.includes(row.client_profile_id)
+        ? "passed"
+        : sourceRule.required_not_available_profiles.includes(row.client_profile_id)
+          ? "not_available"
+          : null;
+      assert(expected === row.acceptance_expectation, "invalid_hosted_expectation");
     }
     rows.set(row.id, row);
   }
@@ -888,13 +1072,48 @@ function validateMixedChangeset(value, passingRows, failedRows) {
   assert(value.error_code === null, "invalid_hosted_mixed_changeset");
 }
 
+function validateInstalledArtifact(installedArtifact, contract) {
+  exactKeys(installedArtifact, ["kind", "identity"], "invalid_hosted_installed_artifact");
+  assert(installedArtifact.kind === contract.kind, "hosted_installed_artifact_kind_mismatch");
+  assert(isRecord(installedArtifact.identity), "invalid_hosted_installed_artifact");
+  if (contract.authority === "pinned_repository") {
+    assert(
+      canonicalJson(installedArtifact.identity) === canonicalJson(contract.identity),
+      "hosted_installed_artifact_mismatch",
+    );
+    return;
+  }
+  if (contract.kind === "openai_app_registration") {
+    exactKeys(
+      installedArtifact.identity,
+      ["technical_id", "registration_snapshot_sha256"],
+      "invalid_hosted_app_registration",
+    );
+    assert(APP_TECHNICAL_ID.test(installedArtifact.identity.technical_id), "invalid_hosted_app_registration");
+    assert(SHA256.test(installedArtifact.identity.registration_snapshot_sha256), "invalid_hosted_app_registration");
+    return;
+  }
+  if (contract.kind === "restricted_provider_grant") {
+    exactKeys(
+      installedArtifact.identity,
+      ["grant_fingerprint", "provider_account_fingerprint"],
+      "invalid_hosted_provider_grant",
+    );
+    assert(SHA256.test(installedArtifact.identity.grant_fingerprint), "invalid_hosted_provider_grant");
+    assert(SHA256.test(installedArtifact.identity.provider_account_fingerprint), "invalid_hosted_provider_grant");
+    return;
+  }
+  fail("invalid_hosted_installed_artifact");
+}
+
 export function validateHostedReceipt(
   receipt,
   {
     registry,
     candidateSha,
     registrySha256,
-    toolInventory,
+    toolInventories,
+    resourceInventories,
     hostedAuthority,
     hostedDeploymentAnchor,
   },
@@ -927,8 +1146,19 @@ export function validateHostedReceipt(
   const profileRows = registry.rows.filter(({ client_profile_id }) => client_profile_id === profile.id);
   assert(receipt.actor_class === profileRows[0].actor_class, "invalid_hosted_actor_class");
   assert(receipt.credential_class === profileRows[0].credential_class, "invalid_hosted_credential_class");
-  validateToolInventory(toolInventory);
   validateHostedDeploymentAnchor(hostedDeploymentAnchor, { candidateSha, hostedAuthority });
+  const expectedToolInventory = inventoryAt(
+    toolInventories,
+    profile.tool_inventory,
+    validateToolInventory,
+    "invalid_profile_tool_inventory",
+  );
+  const expectedResourceInventory = inventoryAt(
+    resourceInventories,
+    profile.resource_inventory,
+    validateResourceInventory,
+    "invalid_profile_resource_inventory",
+  );
 
   exactKeys(
     receipt.client_snapshot,
@@ -937,11 +1167,13 @@ export function validateHostedReceipt(
       "client_name",
       "client_version",
       "protocol_profile",
-      "tool_inventory_route",
+      "transport_route",
       "host_fingerprint",
-      "plugin_package",
+      "installed_artifact",
       "tool_inventory",
       "tool_inventory_sha256",
+      "resource_inventory",
+      "resource_inventory_sha256",
       "capture_boundary",
       "captured_at",
     ],
@@ -949,33 +1181,14 @@ export function validateHostedReceipt(
   );
   assert(receipt.client_snapshot.client_class === profile.client_class, "invalid_hosted_client_snapshot");
   assert(receipt.client_snapshot.client_name === profile.client_name, "invalid_hosted_client_snapshot");
-  assert(
-    CODEX_VERSION.test(receipt.client_snapshot.client_version) &&
-      receipt.client_snapshot.client_version === profile.client_version,
-    "invalid_hosted_client_version",
-  );
+  assert(receipt.client_snapshot.client_version === profile.client_version, "invalid_hosted_client_version");
   assert(receipt.client_snapshot.protocol_profile === profile.protocol_profile, "invalid_hosted_client_snapshot");
   assert(
-    receipt.client_snapshot.tool_inventory_route === profile.tool_inventory_route,
+    receipt.client_snapshot.transport_route === profile.transport_route,
     "invalid_hosted_client_snapshot",
   );
   assert(SHA256.test(receipt.client_snapshot.host_fingerprint), "invalid_hosted_client_snapshot");
-  exactKeys(
-    receipt.client_snapshot.plugin_package,
-    [
-      "plugin_id",
-      "plugin_version",
-      "plugin_snapshot_sha256",
-      "marketplace_candidate_sha",
-      "marketplace_tree_sha",
-    ],
-    "invalid_hosted_plugin_snapshot",
-  );
-  assert(
-    canonicalJson(receipt.client_snapshot.plugin_package) ===
-      canonicalJson(registry.hosted_authority.plugin_package),
-    "hosted_plugin_snapshot_mismatch",
-  );
+  validateInstalledArtifact(receipt.client_snapshot.installed_artifact, profile.artifact_contract);
   assert(Array.isArray(receipt.client_snapshot.tool_inventory), "invalid_hosted_client_snapshot");
   assert(
     `sha256:${sha256(canonicalJson(receipt.client_snapshot.tool_inventory))}` ===
@@ -983,8 +1196,20 @@ export function validateHostedReceipt(
     "hosted_tool_inventory_digest_mismatch",
   );
   assert(
-    canonicalJson(receipt.client_snapshot.tool_inventory) === canonicalJson(toolInventory.entries),
+    canonicalJson(receipt.client_snapshot.tool_inventory) ===
+      canonicalJson(expectedToolInventory?.entries ?? []),
     "hosted_tool_inventory_contract_mismatch",
+  );
+  assert(Array.isArray(receipt.client_snapshot.resource_inventory), "invalid_hosted_client_snapshot");
+  assert(
+    `sha256:${sha256(canonicalJson(receipt.client_snapshot.resource_inventory))}` ===
+      receipt.client_snapshot.resource_inventory_sha256,
+    "hosted_resource_inventory_digest_mismatch",
+  );
+  assert(
+    canonicalJson(receipt.client_snapshot.resource_inventory) ===
+      canonicalJson(expectedResourceInventory?.entries ?? []),
+    "hosted_resource_inventory_contract_mismatch",
   );
   assert(
     receipt.client_snapshot.capture_boundary ===
@@ -1078,6 +1303,63 @@ export function validateHostedReceipt(
   return receipt;
 }
 
+export function validateHostedCrossSourceReceipt(
+  receipt,
+  {
+    registry,
+    candidateSha,
+    registrySha256,
+    hostedAuthority,
+    hostedDeploymentAnchor,
+  },
+) {
+  exactKeys(
+    receipt,
+    [
+      "schema",
+      "status",
+      "candidate_sha",
+      "registry_sha256",
+      "deployment",
+      "source_row_ids",
+      "revision_fingerprint",
+      "markdown_sha256",
+      "head_transitions",
+      "post_redeploy",
+      "cleanup_replayed",
+      "remaining_side_effects",
+      "artifact_sha256",
+    ],
+    "invalid_hosted_cross_source_receipt",
+  );
+  assert(
+    receipt.schema === HOSTED_CROSS_SOURCE_RECEIPT_SCHEMA,
+    "invalid_hosted_cross_source_receipt_schema",
+  );
+  assert(receipt.status === "passed", "invalid_hosted_cross_source_receipt");
+  assert(receipt.candidate_sha === candidateSha, "hosted_candidate_sha_mismatch");
+  assert(receipt.registry_sha256 === registrySha256, "hosted_registry_sha_mismatch");
+  validateHostedDeploymentAnchor(hostedDeploymentAnchor, { candidateSha, hostedAuthority });
+  validateDeployment(receipt.deployment, hostedDeploymentAnchor);
+  const expectedRows = registry.source_acceptance.map((rule) => {
+    assert(rule.required_pass_profiles.length === 1, "invalid_source_acceptance");
+    const profileId = rule.required_pass_profiles[0];
+    return registry.rows.find(
+      (row) => row.client_profile_id === profileId && row.source_kind === rule.source_kind,
+    )?.id;
+  });
+  assert(expectedRows.every((rowId) => typeof rowId === "string"), "invalid_source_acceptance");
+  assert(exactArray(receipt.source_row_ids, expectedRows), "invalid_hosted_cross_source_rows");
+  assert(SHA256.test(receipt.revision_fingerprint), "invalid_hosted_cross_source_receipt");
+  assert(SHA256.test(receipt.markdown_sha256), "invalid_hosted_cross_source_receipt");
+  assert(receipt.head_transitions === 1, "invalid_hosted_cross_source_receipt");
+  assert(receipt.post_redeploy === true, "invalid_hosted_cross_source_receipt");
+  assert(receipt.cleanup_replayed === true, "invalid_hosted_cross_source_receipt");
+  assert(receipt.remaining_side_effects === 0, "invalid_hosted_cross_source_receipt");
+  validateArtifactDigest(receipt, "invalid_hosted_cross_source_receipt_digest");
+  return receipt;
+}
+
 function receiptIdentity(receipt) {
   return canonicalJson(receipt.deployment);
 }
@@ -1112,6 +1394,7 @@ function registryRowProjection(row) {
     snapshot_semantics: row.snapshot_semantics,
     external_prerequisite: row.external_prerequisite,
     human_only_boundary: row.human_only_boundary,
+    acceptance_expectation: row.acceptance_expectation,
   });
 }
 
@@ -1128,36 +1411,70 @@ function projectedReceiptRow(registryRow, receiptRow, assertionMapValue) {
   });
 }
 
-function gapRows(rows) {
+function sourceAcceptanceResults(registry, rows) {
+  const results = [];
   const gaps = [];
-  for (const row of rows) {
-    if (row.status === "passed") continue;
-    const failedAssertions = row.assertion_statuses.filter(({ status }) => status !== "passed");
-    if (failedAssertions.length === 0) {
-      gaps.push(Object.freeze({
-        row_id: row.row_id,
-        assertion_id: null,
-        status: row.status,
-        code: row.status_code,
-      }));
-      continue;
+  const byComposition = new Map(rows.map((row) => [
+    `${row.client_profile_id}\u0000${row.source_kind}`,
+    row,
+  ]));
+  for (const rule of registry.source_acceptance) {
+    const required = [];
+    const local = byComposition.get(`repository-node-test-v1\u0000${rule.source_kind}`);
+    required.push({ row: local, expectation: "passed" });
+    for (const profileId of rule.required_pass_profiles) {
+      required.push({
+        row: byComposition.get(`${profileId}\u0000${rule.source_kind}`),
+        expectation: "passed",
+      });
     }
-    for (const assertion of failedAssertions) {
-      gaps.push(Object.freeze({
-        row_id: row.row_id,
-        assertion_id: assertion.id,
-        status: assertion.status === "not_run" ? "pending" : assertion.status,
-        code: row.status_code,
-      }));
+    for (const profileId of rule.required_not_available_profiles) {
+      required.push({
+        row: byComposition.get(`${profileId}\u0000${rule.source_kind}`),
+        expectation: "not_available",
+      });
     }
+    let status = "passed";
+    for (const item of required) {
+      const actual = item.row?.status ?? "failed";
+      if (actual === item.expectation) continue;
+      let code = item.row?.status_code ?? "required_composition_missing";
+      let gapStatus = actual;
+      if (item.expectation === "not_available" && actual === "passed") {
+        code = "unexpected_supported_composition";
+        gapStatus = "failed";
+      }
+      gaps.push(Object.freeze({
+        source_kind: rule.source_kind,
+        row_id: item.row?.row_id ?? null,
+        expected_status: item.expectation,
+        status: gapStatus,
+        code,
+      }));
+      if (gapStatus === "failed") status = "failed";
+      else if (status !== "failed" && gapStatus === "pending") status = "pending";
+      else if (status === "passed" && gapStatus === "not_available") status = "not_available";
+    }
+    results.push(Object.freeze({
+      source_kind: rule.source_kind,
+      status,
+      required_pass_profiles: Object.freeze([...rule.required_pass_profiles]),
+      required_not_available_profiles: Object.freeze([
+        ...rule.required_not_available_profiles,
+      ]),
+    }));
   }
-  return Object.freeze(gaps);
+  return Object.freeze({
+    results: Object.freeze(results),
+    gaps: Object.freeze(gaps),
+  });
 }
 
 export function joinFileIngressEvidence({
   registry,
   fixtures,
-  toolInventory,
+  toolInventories,
+  resourceInventories,
   hostedAuthority,
   candidateSha,
   registrySha256,
@@ -1165,8 +1482,9 @@ export function joinFileIngressEvidence({
   localReceipt = null,
   hostedReceipts = [],
   hostedDeploymentAnchor = null,
+  hostedCrossSourceReceipt = null,
 }) {
-  validateFileIngressEvidenceConfig(registry, fixtures, toolInventory);
+  validateFileIngressEvidenceConfig(registry, fixtures, toolInventories, resourceInventories);
   assert(GIT_SHA.test(candidateSha), "invalid_candidate_sha");
   assert(SHA256_HEX.test(registrySha256), "invalid_registry_sha");
   assert(SHA256_HEX.test(fixturePlanSha256), "invalid_fixture_plan_sha");
@@ -1255,7 +1573,8 @@ export function joinFileIngressEvidence({
           registry,
           candidateSha,
           registrySha256,
-          toolInventory,
+          toolInventories,
+          resourceInventories,
           hostedAuthority,
           hostedDeploymentAnchor,
         }),
@@ -1301,7 +1620,46 @@ export function joinFileIngressEvidence({
     pending: rows.filter(({ status }) => status === "pending").length,
     failed: rows.filter(({ status }) => status === "failed").length,
   });
-  const status = aggregate(rows.map(({ status: rowState }) => rowState));
+  const sourceAcceptance = sourceAcceptanceResults(registry, rows);
+  let status = aggregate(sourceAcceptance.results.map(({ status: sourceStatus }) => sourceStatus));
+  const gaps = [...sourceAcceptance.gaps];
+  let crossSourceStatus = "not_run";
+  if (status === "passed") {
+    if (hostedCrossSourceReceipt === null) {
+      status = "pending";
+      crossSourceStatus = "pending";
+      gaps.push(Object.freeze({
+        source_kind: null,
+        row_id: null,
+        expected_status: "passed",
+        status: "pending",
+        code: "hosted_cross_source_receipt_missing",
+      }));
+    } else {
+      try {
+        validateHostedCrossSourceReceipt(hostedCrossSourceReceipt, {
+          registry,
+          candidateSha,
+          registrySha256,
+          hostedAuthority,
+          hostedDeploymentAnchor,
+        });
+        crossSourceStatus = "passed";
+      } catch (error) {
+        status = "failed";
+        crossSourceStatus = "failed";
+        gaps.push(Object.freeze({
+          source_kind: null,
+          row_id: null,
+          expected_status: "passed",
+          status: "failed",
+          code: error instanceof FileIngressEvidenceError
+            ? error.code
+            : "invalid_hosted_cross_source_receipt",
+        }));
+      }
+    }
+  }
   const deployment = identities.size === 1
     ? deploymentProjection(hostedDeploymentAnchor)
     : null;
@@ -1313,8 +1671,10 @@ export function joinFileIngressEvidence({
     fixture_plan: Object.freeze({ path: FIXTURE_PLAN_PATH, sha256: fixturePlanSha256 }),
     status,
     summary,
+    source_acceptance: sourceAcceptance.results,
+    cross_source_status: crossSourceStatus,
     deployment,
     rows,
-    gaps: gapRows(rows),
+    gaps: Object.freeze(gaps),
   });
 }

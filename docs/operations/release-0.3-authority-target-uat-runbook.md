@@ -57,6 +57,10 @@ clean worktree до и после проб. Он последовательно 
 - synthetic multi-principal probe через normal product bootstrap;
 - OAuth direct-plugin probe с fresh/read/write/revoke/reconnect и personal-token
   regression;
+- fresh Codex 0.150.1 profile обязан разрешить установленный HTTP server как
+  OAuth-capable (`auth_status: o_auth`) без автоматического входа или сохранённой
+  credential; прежняя строка `not_logged_in` считается несовместимой проекцией,
+  а не доказательством более безопасного состояния;
 - constructor-only synthetic verified-native profile для exact 18-tool
   modern/compat catalogs; его fail-closed fetcher не читает bytes и не является
   hosted route evidence;

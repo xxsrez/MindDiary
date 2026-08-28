@@ -50,18 +50,25 @@ versioned registry находится в
 [`tests/fixtures/file-ingress-evidence/registry.json`](../../tests/fixtures/file-ingress-evidence/registry.json),
 а deterministic streamed fixtures — в
 [`tests/fixtures/file-ingress-evidence/synthetic-fixtures.json`](../../tests/fixtures/file-ingress-evidence/synthetic-fixtures.json).
-Закрытый ожидаемый `tools/list` inventory с отсортированными именами и digest
-обеих JSON Schema хранится отдельно в
-[`tests/fixtures/file-ingress-evidence/hosted-tool-inventory.json`](../../tests/fixtures/file-ingress-evidence/hosted-tool-inventory.json)
-и сам закреплён digest в registry.
+Registry v3 больше не строит ложное полное произведение source × client.
+Каждый source связывается только с теми hosted compositions, которые обязаны
+дать положительное доказательство, и с обязательными отрицательными
+проекциями. Для `session_attachment` Apps receipt должен пройти, а direct и
+compatibility обязаны остаться `not_available`; такой отрицательный результат
+не отравляет aggregate. Для `local_path`/workspace положительной композицией
+остаётся установленный Codex companion, для `connector_object` — restricted
+Google Drive adapter, для bounded/server-generated sources — hidden UAT runner.
 
-Registry содержит закрытое произведение шести `source_kind` на три profile:
-repository-local contract, Codex modern `2026-07-28` и isolated Codex
-compatibility `2025-11-25`. Каждая строка явно фиксирует transport,
-`actor_class`, `credential_class`, snapshot semantics, external prerequisite и
-`human_only_boundary`. Текущий synthetic gate не требует человеческой
-приёмки: для всех строк boundary равна `none`; недоступная внешняя capability
-остаётся `not_available`.
+Direct 17-tool и Apps 19-tool inventories закреплены раздельно в
+[`direct-tool-inventory.json`](../../tests/fixtures/file-ingress-evidence/direct-tool-inventory.json)
+и
+[`hosted-tool-inventory.json`](../../tests/fixtures/file-ingress-evidence/hosted-tool-inventory.json).
+Exact Apps UI resource имеет отдельный digest в
+[`apps-resource-inventory.json`](../../tests/fixtures/file-ingress-evidence/apps-resource-inventory.json).
+Compatibility package и modern Codex config pinned repository contract-ом;
+OpenAI App registration и restricted provider grant принимаются только из fresh external receipt с
+privacy-safe identity/fingerprint. Неизвестный `plugin_asdk_app` ID не
+подставляется.
 
 Local receipt создаётся только в clean worktree exact `HEAD` и связывает
 candidate SHA, canonical registry digest, fixture-plan digest и закрытые
@@ -76,26 +83,24 @@ npm run gate:file-ingress-local
 npm run report:file-ingress
 ```
 
-Hosted receipt имеет отдельную strict schema на каждый exact Codex profile. Для
+Hosted receipt имеет отдельную strict schema на каждую exact composition. Для
 `passed` row он обязан содержать один и тот же safe exact tuple
 `canonical_path + sha256 + size` после commit, history, download, actor-owned
 web export и post-redeploy read-back, а source snapshot обязан совпасть по
 digest/size и иметь ожидаемую `same_host_stable_snapshot`,
-`provider_native_snapshot` или `service_owned_snapshot` semantics. Общий
-receipt также доказывает один mixed-source + Markdown HEAD transition,
-synthetic-only idempotent setup/recovery/cleanup и exact client inventory.
-Client snapshot не принимает произвольную строку или один самозаявленный hash:
-он обязан совпасть с точными `codex-cli` version/profile/route из registry,
-точным `mind-diary@srez-marketplace` version + snapshot + marketplace
-candidate/tree и полным отсортированным inventory. Validator заново вычисляет
-`tool_inventory_sha256` и сравнивает каждую запись `name + source +
-input_schema_sha256 + output_schema_sha256` с repository contract.
+`provider_native_snapshot` или `service_owned_snapshot` semantics. Receipt
+также доказывает synthetic-only idempotent setup/recovery/cleanup и точные
+client/artifact/tool/resource projections. Validator заново вычисляет digests
+и не принимает один самозаявленный hash. Отдельный cross-source receipt
+обязателен после положительных source rows: он связывает все шесть sources,
+Markdown, ровно один HEAD transition, post-redeploy read-back и cleanup.
 
 Deployment identity приходит не из client receipt, а из отдельного hosted
 deployment anchor. Anchor связывает тот же candidate SHA с текущими
 repository-controlled OpenAI Sites project ID из `.openai/hosting.json`, UAT
 URL/provider/target из release profile, их digest, exact Sites version и
-deployment ID. Оба profile receipts обязаны дословно совпасть с anchor.
+deployment ID. Все composition receipts и cross-source receipt обязаны
+дословно совпасть с anchor.
 Криптографической аттестации Sites runner сейчас нет: `artifact_sha256`
 проверяет целостность документа, но не происхождение. Поэтому доверенной
 границей остаётся runner, который получает identity через Sites control plane;
@@ -109,27 +114,32 @@ URL/base64/provider/source fallback. `failed` row, stale/wrong candidate,
 registry drift, duplicate profile receipt или разные deployments дают
 machine-failed result; ни один из них не может быть повышен вручную.
 
-Terminal MD-311 join передаёт оба profile receipts явно и требует complete
-matrix:
+Terminal MD-311 join передаёт все обязательные composition receipts и отдельный
+cross-source receipt, затем требует complete matrix:
 
 ```bash
 node scripts/generate-file-ingress-matrix-report.mjs \
   --sha HEAD \
   --local-receipt build/file-ingress/local-receipt.json \
   --hosted-deployment-anchor /safe/path/sites-deployment-anchor.json \
-  --hosted-receipt codex-modern-2026-07-28=/safe/path/modern.json \
+  --hosted-receipt codex-modern-2026-07-28=/safe/path/modern-negative.json \
   --hosted-receipt codex-compat-2025-11-25=/safe/path/compat.json \
+  --hosted-receipt openai-apps-2026-07-28=/safe/path/apps.json \
+  --hosted-receipt google-drive-restricted-uat-v1=/safe/path/google-drive.json \
+  --hosted-receipt generated-source-restricted-uat-v1=/safe/path/generated.json \
+  --hosted-cross-source-receipt /safe/path/cross-source.json \
   --output build/file-ingress/matrix-report.json \
   --require-complete
 ```
 
 `npm run readiness:file-ingress` всегда включает `--require-complete`: missing
-receipt сохраняется как concrete `hosted_receipt_missing` gap и завершает
+composition или cross-source receipt сохраняется как concrete gap и завершает
 команду ненулевым кодом. Нестрогая диагностическая проекция доступна отдельно
 как `npm run report:file-ingress`; она не является readiness gate. Typed
-`not_available` также не считается acceptance success. Любая failed row даёт
-non-zero независимо от режима. Machine report публикует только row/assertion
-gaps и не содержит поля human signoff или reviewer override.
+`not_available` считается нормой только для явно обязательной отрицательной
+composition; для required-pass composition это non-passing source result.
+Любая failed row даёт non-zero независимо от режима. Machine report не имеет
+human signoff или reviewer override.
 
 ## Повторяемый запуск
 

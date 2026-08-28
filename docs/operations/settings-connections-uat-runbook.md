@@ -51,7 +51,10 @@ Runner последовательно:
 1. сверяет exact clean candidate до и после выполнения;
 2. в отдельном временном `CODEX_HOME` устанавливает fresh Marketplace/plugin и
    получает фактические HEAD/tree, plugin snapshot/version, MCP resolution и
-   Codex client/version, не меняя shared OAuth direct-plugin profile;
+   Codex client/version, не меняя shared OAuth direct-plugin profile; для
+   Codex 0.150.1 установленный HTTP server обязан иметь
+   `auth_status: o_auth`, что означает доступный OAuth flow, но не выполненный
+   вход и не наличие сохранённой credential;
 3. исполняет точечные OAuth, personal-token, target-state, Product Site MCP,
    native staging и UI contract suites;
 4. запускает pinned Playwright `1.62.1` и Chromium `151.0.7922.34` revision
