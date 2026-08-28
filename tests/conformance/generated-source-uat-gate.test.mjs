@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 
 import {
@@ -9,6 +11,7 @@ import {
 import {
   createStructuralJoin,
   parseCli as parseJoinCli,
+  readPrivateReceipt,
 } from "../../scripts/join-generated-source-uat-readback.mjs";
 import {
   canonical,
@@ -58,8 +61,8 @@ function providerReadback() {
 
 function availableRows() {
   return [
-    { source_kind: "bounded_in_memory", server_adapter_status: "available", server_transport: "trusted_internal", max_bytes: 4_194_304 },
-    { source_kind: "server_generated", server_adapter_status: "available", server_transport: "trusted_internal_stream", max_bytes: 268_435_456 },
+    { source_kind: "bounded_in_memory", test_composition_status: "available", test_transport: "constructor_owned_bytes", max_bytes: 4_194_304 },
+    { source_kind: "server_generated", test_composition_status: "available", test_transport: "constructor_owned_stream", max_bytes: 268_435_456 },
   ];
 }
 
@@ -81,7 +84,9 @@ function browserPassed() {
       exact_sha256: true,
       exact_bytes: true,
       one_revision: true,
+      no_partial_head: true,
       no_duplicate_object: true,
+      no_duplicate_revision: true,
     },
     cleanup: {
       credential_revoked: true,
@@ -103,8 +108,8 @@ function browserBlocked() {
     setup_deployment_id: setup,
     verify_deployment_id: verify,
     capability_rows: [
-      { source_kind: "bounded_in_memory", server_adapter_status: "not_available", server_transport: "none", max_bytes: 0 },
-      { source_kind: "server_generated", server_adapter_status: "not_available", server_transport: "none", max_bytes: 0 },
+      { source_kind: "bounded_in_memory", test_composition_status: "not_available", test_transport: "none", max_bytes: 0 },
+      { source_kind: "server_generated", test_composition_status: "not_available", test_transport: "none", max_bytes: 0 },
     ],
   });
 }
@@ -183,5 +188,65 @@ test("join rejects copied lineage, same deployment, incomplete cleanup and artif
   assert.throws(
     () => createStructuralJoin({ ...base, provider: tampered }, { candidate, setup, verify }, contract),
     (error) => error instanceof ProbeFailure && error.code === "invalid_provider_readback",
+  );
+});
+
+test("join rejects contradictory passed capability rows", () => {
+  const browser = browserPassed();
+  browser.capability_rows = [
+    { source_kind: "bounded_in_memory", test_composition_status: "not_available", test_transport: "none", max_bytes: 0 },
+    { source_kind: "server_generated", test_composition_status: "available", test_transport: "wrong", max_bytes: 1 },
+  ];
+  browser.artifact_sha256 = digest(canonical((({ artifact_sha256: _, ...rest }) => rest)(browser)));
+  assert.throws(
+    () => createStructuralJoin({
+      local: localReceipt(),
+      provider: providerReadback(),
+      browser,
+    }, { candidate, setup, verify }, contract),
+    (error) => error instanceof ProbeFailure && error.code === "invalid_hosted_capability_rows",
+  );
+});
+
+test("join rejects local receipts without the exact executed suite bindings", () => {
+  const { suites: _, artifact_sha256: __, ...unsigned } = localReceipt();
+  const local = artifact(unsigned);
+  assert.throws(
+    () => createStructuralJoin({
+      local,
+      provider: providerReadback(),
+      browser: browserPassed(),
+    }, { candidate, setup, verify }, contract),
+    (error) => error instanceof ProbeFailure && error.code === "invalid_local_suite_bindings",
+  );
+});
+
+test("join input receipts require a private temp parent and exact 0600 file", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "mind-diary-md290-private-input-"));
+  const path = join(directory, "receipt.json");
+  try {
+    await writeFile(path, '{"synthetic":true}\n', { mode: 0o600 });
+    assert.deepEqual(await readPrivateReceipt(path), { synthetic: true });
+    await chmod(path, 0o644);
+    await assert.rejects(
+      readPrivateReceipt(path),
+      (error) => error instanceof ProbeFailure && error.code === "unsafe_private_receipt",
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("join rejects unrecognized receipt fields instead of carrying private payloads", () => {
+  const browser = browserPassed();
+  browser.private_name = "synthetic-private-name";
+  browser.artifact_sha256 = digest(canonical((({ artifact_sha256: _, ...rest }) => rest)(browser)));
+  assert.throws(
+    () => createStructuralJoin({
+      local: localReceipt(),
+      provider: providerReadback(),
+      browser,
+    }, { candidate, setup, verify }, contract),
+    (error) => error instanceof ProbeFailure && error.code === "invalid_browser_readback",
   );
 });

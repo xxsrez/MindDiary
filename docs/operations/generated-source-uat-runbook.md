@@ -59,10 +59,12 @@ Owner/generation/version никогда не являются runner input. Trus
 сам выводит credential owner и active target generation; Content MCP request не
 может передать `write_binding_id` или replacement generation field.
 
-Если fresh hosted capability response по-прежнему возвращает для обоих rows
-`not_available`, transport `none`, limit `0`, это точный product/platform
-blocker `hosted_generated_sources_not_available`. Local implementation,
-ручной файл и другой transport его не заменяют.
+Fresh trusted-test-composition response не является публичным MCP capability
+report: публичные rows остаются `not_available`, transport `none`, limit `0`.
+Если test-composition response возвращает для обоих внутренних routes
+`test_composition_status: not_available`, `test_transport: none`, limit `0`,
+это точный product/platform blocker `hosted_generated_sources_not_available`.
+Local implementation, ручной файл и другой transport его не заменяют.
 
 ## Private readbacks и offline join
 
@@ -70,7 +72,9 @@ Provider readback имеет schema
 `mind-diary/generated-source-sites-readback/v1`, exact candidate, project/version,
 два distinct succeeded deployment ID и собственный content hash. In-app Browser
 readback имеет schema `mind-diary/generated-source-browser-readback/v1`, exact
-lineage, closed assertion set, boolean exact-byte/read-back и cleanup matrix
+lineage, closed assertion set с отдельными overflow/cancel/timeout/error,
+stale-target, digest-mismatch, no-partial-HEAD и no-duplicate rows, boolean
+exact-byte/read-back и cleanup matrix
 либо fresh blocker row. Оба документа исключают URL, credentials, private names,
 raw content paths/bytes и response bodies.
 
