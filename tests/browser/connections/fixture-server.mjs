@@ -9,7 +9,10 @@ import {
 import {
   PRODUCT_CONNECTIONS_CLIENT_JAVASCRIPT,
   PRODUCT_SHELL_INTERACTIONS_JAVASCRIPT,
+  PRODUCT_UI_APPLE_TOUCH_ICON_PNG,
   PRODUCT_UI_CLIENT_JAVASCRIPT,
+  PRODUCT_UI_FAVICON_ICO,
+  PRODUCT_UI_FAVICON_PNG,
   PRODUCT_UI_FAVICON_SVG,
   PRODUCT_UI_LOCKUP_SVG,
   PRODUCT_UI_MARK_SVG,
@@ -254,8 +257,20 @@ const server = createServer(async (request, response) => {
       send(response, 200, "image/svg+xml; charset=utf-8", PRODUCT_UI_MARK_SVG);
       return;
     }
+    if (url.pathname === "/favicon.ico") {
+      send(response, 200, "image/x-icon", PRODUCT_UI_FAVICON_ICO);
+      return;
+    }
     if (url.pathname === "/favicon.svg") {
       send(response, 200, "image/svg+xml; charset=utf-8", PRODUCT_UI_FAVICON_SVG);
+      return;
+    }
+    if (url.pathname === "/favicon-32x32.png") {
+      send(response, 200, "image/png", PRODUCT_UI_FAVICON_PNG);
+      return;
+    }
+    if (url.pathname === "/apple-touch-icon.png") {
+      send(response, 200, "image/png", PRODUCT_UI_APPLE_TOUCH_ICON_PNG);
       return;
     }
     if (url.pathname === "/ui/mind-diary-connections-client.js") {

@@ -1,0 +1,67 @@
+{
+  "schema": "mind-diary/settings-connections-uat-contract/v1",
+  "task": "MD-358",
+  "runner_id": "ship-work-release/uat-release-0.3-connections/v1",
+  "local_receipt_schema": "mind-diary/settings-connections-local-evidence/v1",
+  "provider_readback_schema": "mind-diary/settings-connections-sites-provider-readback/v1",
+  "browser_readback_schema": "mind-diary/settings-connections-in-app-browser-readback/v1",
+  "join_schema": "mind-diary/settings-connections-uat-readback-join/v1",
+  "local_assertion_ids": [
+    "SC-NAV-01",
+    "SC-OAUTH-01",
+    "SC-OAUTH-02",
+    "SC-TOKEN-01",
+    "SC-TOKEN-02",
+    "SC-PRIVACY-01",
+    "SC-FAIL-CLOSED-01"
+  ],
+  "hosted_assertion_ids": [
+    "SC-LINEAGE-01",
+    "SC-NAV-01",
+    "SC-OAUTH-01",
+    "SC-OAUTH-02",
+    "SC-OAUTH-03",
+    "SC-TOKEN-01",
+    "SC-TOKEN-02",
+    "SC-TOKEN-03",
+    "SC-REDEPLOY-01",
+    "SC-PRIVACY-01",
+    "SC-CLEANUP-01"
+  ],
+  "browser_test_titles": {
+    "real DOM exposes four canonical routes for the 0-item fixture": "SC-NAV-01",
+    "real DOM exposes four canonical routes for the 1-item fixture": "SC-OAUTH-01",
+    "real DOM exposes four canonical routes for the 21-item fixture": "SC-OAUTH-01",
+    "mobile viewport keeps every route bounded and opens primary navigation by keyboard": "SC-NAV-01",
+    "ordinary Connections and Help never load personal-token history or diagnostics": "SC-PRIVACY-01",
+    "Codex guide switches Desktop and CLI paths by keyboard and copies exact current inputs": "SC-NAV-01",
+    "keyboard-only connection journey exposes progress, revoke, and reconnect states": "SC-OAUTH-02",
+    "Advanced MCP owns the personal-token target, history, and revoke journey": "SC-TOKEN-01",
+    "Advanced MCP dialog receives and restores focus without exposing raw identifiers": "SC-TOKEN-02",
+    "deterministic error fixtures keep actions unavailable on both credential surfaces": "SC-FAIL-CLOSED-01"
+  },
+  "hosted_states": {
+    "help": ["no_connection", "active", "revoked"],
+    "oauth": ["no_connection", "active", "selected", "switched", "cleared", "revoked", "reconnected_empty"],
+    "personal_token": ["created_empty", "selected", "switched", "cleared", "revoked", "reissued_empty"],
+    "redeploy": ["connection_persisted", "token_persisted", "target_persisted"],
+    "cleanup": ["provider_credentials_absent", "product_credentials_absent", "targets_absent", "run_mind_absent", "pool_baseline_restored"]
+  },
+  "forbidden_receipt_patterns": [
+    "email",
+    "authorization",
+    "cookie",
+    "csrf",
+    "mdp_v1_",
+    "mdo_access_",
+    "mdo_refresh_",
+    "principal_id",
+    "space_id",
+    "token_id",
+    "grant_id",
+    "binding_owner_id",
+    "raw_response_body",
+    "private_content",
+    "download_url"
+  ]
+}

@@ -152,6 +152,9 @@ operation disposition и migration принадлежат MD-337/MD-339.
   — exact-SHA Playwright/Chromium gate для responsive/accessibility matrix и
   nonterminal byte-level UAT readback join; hosted acceptance требует прямых
   same-run Sites connector и in-app Browser observations.
+- [Browser и UAT-проверка Settings / Connections](operations/settings-connections-uat-runbook.md)
+  — fresh OAuth/plugin и personal-token target lifecycle, стабильный Codex
+  Help, controlled redeploy, privacy/cleanup и nonterminal offline join MD-358.
 - [Browser и UAT-проверка import/export exact bytes](operations/import-export-browser-uat-runbook.md)
   — generated Markdown/invalid/opaque fixtures, failure/recovery matrix,
   independent archive byte comparison и fail-closed nonterminal offline join.

@@ -103,7 +103,9 @@ async function assertPageHasNoBrowserErrors(page, action) {
   const errors = [];
   page.on("pageerror", (error) => errors.push(`pageerror:${error.name}`));
   page.on("console", (message) => {
-    if (message.type() === "error") errors.push(`console:${message.type()}`);
+    if (message.type() === "error") {
+      errors.push(`console:${message.text().slice(0, 200) || message.type()}`);
+    }
   });
   await action();
   expect(errors).toEqual([]);

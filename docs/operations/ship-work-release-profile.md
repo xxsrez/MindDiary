@@ -1319,6 +1319,29 @@ Cleanup отзывает его и в том же run доказывает `401`
 ни token secret, ни raw credential name в evidence не сохраняются. Mind `404`
 без этого credential read-back не закрывает MD-351.
 
+Для Release 0.3 Settings / Connections acceptance применяется отдельный
+exact-candidate gate из
+[`Settings / Connections runbook`](settings-connections-uat-runbook.md):
+`npm run gate:settings-connections-local -- --candidate-sha
+<exact-clean-HEAD-sha> --evidence-out
+<owner-private-temp-directory/new-file>`. Gate устанавливает fresh plugin в
+изолированный временный Codex context, фиксирует exact plugin/client version,
+исполняет target/OAuth runtime suites и pinned Chromium на server-bound
+Connections fixtures. MD-358 receipt различает default Product Site write
+catalog `17`, read-only `16` и verified-native `18`, не меняя intentional
+shared OAuth direct-plugin full-write profile `18`. Local receipt всегда сохраняет
+`hosted_evidence=false` и `hosted_status=not-run`.
+
+После exact UAT cut `npm run join:settings-connections-uat -- ...` сверяет
+archive/candidate/version, distinct controlled redeploy, restricted actor pool,
+provider boundary, fresh client, Help/OAuth/personal-token browser matrix и
+provider/product cleanup. Join всегда выдаёт только
+`structurally_verified_readback`, `acceptance=nonterminal` и
+`provenance=unverified-local-files`. Hosted PASS может зафиксировать только
+orchestrating agent по прямым same-run Sites connector, in-app Browser и fresh
+Codex/plugin observations; локальные JSON, copied IDs и старые receipts не
+являются authority.
+
 Все commands выполняются прямым `argv` без shell. Канонический full dev launcher
 проекта — root `npm run dev`; его machine event сообщает loopback URL,
 readiness и non-secret configuration fingerprint. Dev получает только
