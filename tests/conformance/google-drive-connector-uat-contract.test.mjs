@@ -5,6 +5,7 @@ import test from "node:test";
 import {
   GOOGLE_DRIVE_UAT_BLOCKER_CATEGORIES,
   GOOGLE_DRIVE_UAT_NEGATIVE_CASES,
+  GOOGLE_DRIVE_UAT_TERMINAL_SCHEMA,
   validateGoogleDriveUatContract,
   validateGoogleDriveUatFixturePlan,
 } from "../../scripts/lib/google-drive-connector-uat-evidence.mjs";
@@ -91,9 +92,31 @@ test("Google Drive UAT contract remains exact, privacy-safe and non-executed", a
     contract.evidence_schemas.structural_join,
     "mind-diary/google-drive-connector-uat-readback-join/v1",
   );
+  assert.equal(contract.evidence_schemas.terminal_hosted, GOOGLE_DRIVE_UAT_TERMINAL_SCHEMA);
   assert.match(contract.local_preflight_rule, /hosted_evidence=false/u);
   assert.match(contract.structural_join_rule, /acceptance=nonterminal/u);
   assert.match(contract.success_rule, /never provider acceptance evidence/u);
+});
+
+test("terminal hosted schema is part of the closed MD-319 contract", async () => {
+  const contract = JSON.parse(await readFile(contractUrl, "utf8"));
+  for (const mutate of [
+    (value) => {
+      value.evidence_schemas.terminal_hosted =
+        "mind-diary/google-drive-connector-uat-evidence/v999";
+    },
+    (value) => {
+      value.evidence_schemas.unreviewed_terminal_alias =
+        "mind-diary/google-drive-connector-uat-evidence/v1";
+    },
+  ]) {
+    const changed = structuredClone(contract);
+    mutate(changed);
+    assert.throws(
+      () => validateGoogleDriveUatContract(changed),
+      (error) => error?.code === "invalid_google_drive_uat_contract",
+    );
+  }
 });
 
 test("synthetic fixture plan fixes binary bytes and native representations without pretending export bytes", async () => {

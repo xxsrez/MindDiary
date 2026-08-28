@@ -25,6 +25,8 @@ export const GOOGLE_DRIVE_UAT_PRODUCT_READBACK_SCHEMA =
   "mind-diary/google-drive-connector-product-readback/v1";
 export const GOOGLE_DRIVE_UAT_JOIN_SCHEMA =
   "mind-diary/google-drive-connector-uat-readback-join/v1";
+export const GOOGLE_DRIVE_UAT_TERMINAL_SCHEMA =
+  "mind-diary/google-drive-connector-uat-evidence/v1";
 
 export const GOOGLE_DRIVE_UAT_ASSERTION_IDS = Object.freeze([
   "GD-UAT-001-exact-candidate-deployment",
@@ -299,12 +301,20 @@ export function validateGoogleDriveUatContract(contract) {
       contract.assertions.some((id, index) => id !== GOOGLE_DRIVE_UAT_ASSERTION_IDS[index])) {
     fail("invalid_google_drive_uat_contract");
   }
-  if (!isRecord(contract.evidence_schemas) ||
-      contract.evidence_schemas.local_plan !== GOOGLE_DRIVE_UAT_PLAN_SCHEMA ||
+  exactKeys(contract.evidence_schemas, [
+    "local_plan",
+    "sites_readback",
+    "provider_readback",
+    "product_readback",
+    "structural_join",
+    "terminal_hosted",
+  ], "invalid_google_drive_uat_contract");
+  if (contract.evidence_schemas.local_plan !== GOOGLE_DRIVE_UAT_PLAN_SCHEMA ||
       contract.evidence_schemas.sites_readback !== GOOGLE_DRIVE_UAT_SITES_READBACK_SCHEMA ||
       contract.evidence_schemas.provider_readback !== GOOGLE_DRIVE_UAT_PROVIDER_READBACK_SCHEMA ||
       contract.evidence_schemas.product_readback !== GOOGLE_DRIVE_UAT_PRODUCT_READBACK_SCHEMA ||
       contract.evidence_schemas.structural_join !== GOOGLE_DRIVE_UAT_JOIN_SCHEMA ||
+      contract.evidence_schemas.terminal_hosted !== GOOGLE_DRIVE_UAT_TERMINAL_SCHEMA ||
       !Array.isArray(contract.blocker_taxonomy) ||
       contract.blocker_taxonomy.some((value, index) =>
         value !== GOOGLE_DRIVE_UAT_BLOCKER_CATEGORIES[index])) {
