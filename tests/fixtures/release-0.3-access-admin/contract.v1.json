@@ -9,7 +9,7 @@
   "hostedJoinSchema": "mind-diary/uat-release-0.3-access-admin-evidence/v1",
   "actorAliases": ["UAT-OPERATOR", "UAT-MIND-ROLE", "UAT-ORDINARY"],
   "roleSequence": ["none", "reader", "editor", "admin", "owner", "admin", "none", "reader", "none"],
-  "invitationSequence": ["pending", "cancelled", "reissued", "accepted", "rejected"],
+  "invitationSequence": ["pending", "cancelled", "reissued", "rejected", "accepted"],
   "visibilitySequence": ["private", "public", "unlisted", "private"],
   "requiredSurfaces": ["browser", "rest", "mcp", "content_read", "content_write", "membership_manage"],
   "localCarriers": [

@@ -108,6 +108,7 @@ export const RELEASE_03_ACCESS_ADMIN_LOCAL_TEST_PATHS = Object.freeze([
 ]);
 
 export const RELEASE_03_ACCESS_ADMIN_LOCAL_SOURCE_PATHS = Object.freeze([
+  "docs/operations/release-0.3-access-admin-uat-runbook.md",
   "scripts/lib/exact-mcp-tool-inventory.mjs",
   "scripts/lib/multi-principal-probe-core.mjs",
   "scripts/lib/release-0.3-access-admin-evidence.mjs",
@@ -118,6 +119,7 @@ export const RELEASE_03_ACCESS_ADMIN_LOCAL_SOURCE_PATHS = Object.freeze([
   "scripts/join-release-0.3-access-admin-uat.mjs",
   "tests/fixtures/file-ingress-evidence/hosted-tool-inventory.json",
   "tests/fixtures/release-0.3-access-admin/contract.v1.json",
+  "tests/fixtures/release-0.3-traceability/contract.v1.json",
   ...RELEASE_03_ACCESS_ADMIN_LOCAL_TEST_PATHS,
 ]);
 
@@ -272,8 +274,8 @@ export const RELEASE_03_ACCESS_ADMIN_INVITATION_ROWS = Object.freeze([
   Object.freeze({ id: "pending", state: "pending", access_granted: false, expiry_policy: "seven-days" }),
   Object.freeze({ id: "cancelled", state: "cancelled", access_granted: false, expiry_policy: "terminal" }),
   Object.freeze({ id: "reissued", state: "pending", access_granted: false, expiry_policy: "fresh-seven-days" }),
-  Object.freeze({ id: "accepted", state: "accepted", access_granted: true, expiry_policy: "terminal" }),
   Object.freeze({ id: "rejected", state: "rejected", access_granted: false, expiry_policy: "terminal" }),
+  Object.freeze({ id: "accepted", state: "accepted", access_granted: true, expiry_policy: "terminal" }),
 ]);
 
 const SHA = /^[0-9a-f]{40}$/u;
@@ -343,7 +345,7 @@ function exactHashMap(value) {
     fail("invalid_local_source_hashes");
   }
   for (const [path, hash] of Object.entries(value)) {
-    if (!/^(?:scripts|tests)\/[A-Za-z0-9._/-]+$/u.test(path) || path.includes("..") || !SHA256.test(hash)) {
+    if (!/^(?:docs|scripts|tests)\/[A-Za-z0-9._/-]+$/u.test(path) || path.includes("..") || !SHA256.test(hash)) {
       fail("invalid_local_source_hashes");
     }
   }

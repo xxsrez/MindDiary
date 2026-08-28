@@ -12,6 +12,10 @@ lifecycle на трёх уже существующих actors из
 `UAT-MIND-ROLE` и `UAT-ORDINARY`. Роли исполняются последовательно теми же
 actors; новый пользователь, email-получатель или standing credential не нужны.
 
+Канонический порядок actors во всех receipt и registry:
+`UAT-OPERATOR → UAT-MIND-ROLE → UAT-ORDINARY`. Канонический invitation
+sequence: `pending → cancelled → reissued → rejected → accepted`.
+
 Проверка связывает четыре независимых источника:
 
 1. exact-candidate local receipt из трёх-principal synthetic browser carrier,
@@ -88,9 +92,9 @@ read-back. Следующий пункт не использует прежни�
    membership и не даёт access. Owner отменяет её, перечитывает terminal
    `cancelled`, затем reissue создаёт ровно одну новую pending invitation со
    fresh seven-day expiry; старая не может быть принята.
-3. Target reject-ит отдельную pending invitation; state становится `rejected`,
-   membership не появляется. Новый exact invite принимается один раз; replay
-   не создаёт duplicate membership.
+3. Target reject-ит reissued pending invitation; state становится `rejected`,
+   membership не появляется. Новый exact invite принимается один раз; state
+   становится `accepted`, а replay не создаёт duplicate membership.
 4. В Reader state Browser/REST/MCP/content read разрешены, write target,
    content commit и membership management запрещены.
 5. Owner повышает target до Editor. Fresh read-back разрешает content write и

@@ -20,6 +20,7 @@ import {
 import { EXPECTED_MCP_TOOL_NAMES } from "../../scripts/lib/exact-mcp-tool-inventory.mjs";
 import { SYNTHETIC_ASSERTION_IDS, canonical, digest } from "../../scripts/lib/multi-principal-probe-core.mjs";
 import {
+  REQUIRED_UAT_TEST_ACTOR_ALIASES,
   createPendingUatTestAccountPoolInventory,
   createUatTestAccountPoolReadinessReceipt,
 } from "../../scripts/lib/uat-test-account-pool-contract.mjs";
@@ -318,4 +319,53 @@ test("checked-in MD-354 contract is closed and explicitly excludes production", 
   ]);
   assert.equal(contract.joinRules.hostedFromLocal, "forbidden");
   assert.equal(contract.joinRules.production, "excluded");
+});
+
+test("pool, U-ACCESS, MD-354 contract and runbook share one exact actor and invitation order", async () => {
+  const [contract, traceability, runbook] = await Promise.all([
+    readFile(
+      new URL("../fixtures/release-0.3-access-admin/contract.v1.json", import.meta.url),
+      "utf8",
+    ).then(JSON.parse),
+    readFile(
+      new URL("../fixtures/release-0.3-traceability/contract.v1.json", import.meta.url),
+      "utf8",
+    ).then(JSON.parse),
+    readFile(
+      new URL("../../docs/operations/release-0.3-access-admin-uat-runbook.md", import.meta.url),
+      "utf8",
+    ),
+  ]);
+  const uAccess = traceability.evidence.find(({ id }) => id === "U-ACCESS");
+  assert.deepEqual(traceability.policies.hostedActors, REQUIRED_UAT_TEST_ACTOR_ALIASES);
+  assert.deepEqual(contract.actorAliases, REQUIRED_UAT_TEST_ACTOR_ALIASES);
+  assert.deepEqual(uAccess.actors, REQUIRED_UAT_TEST_ACTOR_ALIASES);
+  assert.ok(uAccess.fixturePaths.includes(
+    "tests/fixtures/release-0.3-access-admin/contract.v1.json",
+  ));
+  const invitationOrder = RELEASE_03_ACCESS_ADMIN_INVITATION_ROWS.map(({ id }) => id);
+  assert.deepEqual(contract.invitationSequence, invitationOrder);
+  assert.ok(runbook.includes(
+    "`UAT-OPERATOR → UAT-MIND-ROLE → UAT-ORDINARY`",
+  ));
+  assert.ok(runbook.includes(
+    "`pending → cancelled → reissued → rejected → accepted`",
+  ));
+});
+
+test("MD-354 branch preserves current durable token UI assertions", async () => {
+  const runtimeTest = await readFile(
+    new URL("../integration/product-site-mcp-runtime.test.mjs", import.meta.url),
+    "utf8",
+  );
+  for (const stale of [
+    "assert.match(emptyHtml, /Readable Minds always follow current membership and visibility/u);",
+    "assert.match(emptyHtml, /Can add and change[\\s\\S]*Not selected/u);",
+    "const marker = `data-personal-token-ref=\"${tokenRef}\"`;",
+  ]) assert.equal(runtimeTest.includes(stale), false, stale);
+  for (const current of [
+    "const marker = `<h3>${tokenName}</h3>`;",
+    "assert.doesNotMatch(readOnlyHtml, /data-personal-token-ref/u);",
+    "assert.match(boundHtml, /Writable target[\\s\\S]*Web Binding E2E",
+  ]) assert.equal(runtimeTest.includes(current), true, current);
 });
