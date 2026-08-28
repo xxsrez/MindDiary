@@ -27,7 +27,7 @@ import {
   digest,
   canonical,
 } from "../../scripts/lib/multi-principal-probe-core.mjs";
-import { EXPECTED_MCP_TOOL_NAMES } from "../../scripts/lib/exact-mcp-tool-inventory.mjs";
+import { EXPECTED_DEFAULT_MCP_TOOL_NAMES } from "../../scripts/lib/exact-mcp-tool-inventory.mjs";
 import {
   createPendingUatTestAccountPoolInventory,
   createUatTestAccountPoolReadinessReceipt,
@@ -130,7 +130,7 @@ function readyPool() {
 function catalog(protocol) {
   return {
     protocol,
-    tool_names: [...EXPECTED_MCP_TOOL_NAMES],
+    tool_names: [...EXPECTED_DEFAULT_MCP_TOOL_NAMES],
     retired_binding_tools_absent: true,
     moved_export_tools_absent: true,
   };
@@ -174,14 +174,14 @@ function hostedObservation() {
   });
 }
 
-test("MD-344 contract fixture is closed and reuses the exact 18-tool inventory", async () => {
+test("MD-344 contract fixture is closed and reuses the exact 17-tool direct inventory", async () => {
   const fixture = JSON.parse(await readFile(
     new URL("../fixtures/release-0.3-authority-target/contract.v1.json", import.meta.url),
     "utf8",
   ));
   assert.equal(fixture.release, "0.3");
   assert.equal(fixture.owner, "MD-344");
-  assert.deepEqual(fixture.toolInventory, EXPECTED_MCP_TOOL_NAMES);
+  assert.deepEqual(fixture.toolInventory, EXPECTED_DEFAULT_MCP_TOOL_NAMES);
   assert.deepEqual(fixture.credentialCases, RELEASE_03_HOSTED_CREDENTIAL_CASE_IDS);
   assert.deepEqual(fixture.authorityCases, RELEASE_03_HOSTED_AUTHORITY_CASE_IDS);
   for (const source of fixture.localSources) {

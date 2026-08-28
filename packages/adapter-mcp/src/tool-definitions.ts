@@ -2,9 +2,11 @@ import {
   CONTENT_COMMANDS,
   CONTENT_QUERIES,
 } from "@mind-diary/application-content";
+import { FILE_INGRESS_WIDGET_URI } from "./file-ingress-widget.js";
 
 export const MCP_TARGET_PROTOCOL = "2026-07-28" as const;
 export const MCP_ENDPOINT = "/api/mcp" as const;
+export const MCP_APPS_ENDPOINT = "/api/mcp/apps" as const;
 export const MCP_LEGACY_CODEX_PROTOCOL = "2025-11-25" as const;
 export const MCP_LEGACY_CODEX_ENDPOINT = "/api/mcp/2025-11-25" as const;
 export const MCP_RETIRED_SITES_ENDPOINT = "/mcp" as const;
@@ -33,6 +35,7 @@ export const MCP_CONTENT_TOOLS = [
   "validate_mind",
   "list_bundle_files",
   "get_file_ingress_capabilities",
+  "open_bundle_file_picker",
   "create_file_upload_intent",
   "stage_bundle_file",
   "reconcile_file_stage",
@@ -938,6 +941,7 @@ const GET_FILE_INGRESS_CAPABILITIES_OUTPUT_SCHEMA = toolOutputSchema(
           "transport",
           "status",
           "route_profile_id",
+          "verification_status",
           "host_rewrite_assertion_id",
           "host_rewrite_observed_at_utc",
         ]),
@@ -952,6 +956,14 @@ const GET_FILE_INGRESS_CAPABILITIES_OUTPUT_SCHEMA = toolOutputSchema(
             type: Object.freeze(["string", "null"]),
             minLength: 1,
             maxLength: 128,
+          }),
+          verification_status: Object.freeze({
+            type: "string",
+            enum: Object.freeze([
+              "declared_unverified",
+              "verified",
+              "not_available",
+            ]),
           }),
           host_rewrite_assertion_id: Object.freeze({
             type: Object.freeze(["string", "null"]),
@@ -971,15 +983,30 @@ const GET_FILE_INGRESS_CAPABILITIES_OUTPUT_SCHEMA = toolOutputSchema(
             then: Object.freeze({
               properties: Object.freeze({
                 route_profile_id: Object.freeze({ type: "string" }),
-                host_rewrite_assertion_id: Object.freeze({ type: "string" }),
-                host_rewrite_observed_at_utc: Object.freeze({ type: "string" }),
+                verification_status: Object.freeze({
+                  enum: Object.freeze(["declared_unverified", "verified"]),
+                }),
               }),
             }),
             else: Object.freeze({
               properties: Object.freeze({
                 route_profile_id: Object.freeze({ type: "null" }),
+                verification_status: Object.freeze({ const: "not_available" }),
                 host_rewrite_assertion_id: Object.freeze({ type: "null" }),
                 host_rewrite_observed_at_utc: Object.freeze({ type: "null" }),
+              }),
+            }),
+          }),
+          Object.freeze({
+            if: Object.freeze({
+              properties: Object.freeze({
+                verification_status: Object.freeze({ const: "verified" }),
+              }),
+            }),
+            then: Object.freeze({
+              properties: Object.freeze({
+                host_rewrite_assertion_id: Object.freeze({ type: "string" }),
+                host_rewrite_observed_at_utc: Object.freeze({ type: "string" }),
               }),
             }),
           }),
@@ -1024,6 +1051,23 @@ const GET_FILE_INGRESS_CAPABILITIES_OUTPUT_SCHEMA = toolOutputSchema(
           }),
         }),
       }),
+    }),
+  }),
+);
+
+const OPEN_BUNDLE_FILE_PICKER_INPUT_SCHEMA = strictInputSchema({
+  mind: MIND_SELECTOR_SCHEMA,
+  path: Object.freeze({ type: "string", minLength: 1, maxLength: 1_024 }),
+  idempotency_key: IDEMPOTENCY_KEY_SCHEMA,
+}, ["mind", "path", "idempotency_key"]);
+
+const OPEN_BUNDLE_FILE_PICKER_OUTPUT_SCHEMA = toolOutputSchema(
+  Object.freeze({
+    type: "object",
+    additionalProperties: false,
+    required: Object.freeze(["status"]),
+    properties: Object.freeze({
+      status: Object.freeze({ const: "ready" }),
     }),
   }),
 );
@@ -1452,7 +1496,7 @@ export const MCP_BUNDLE_FILE_TOOL_DEFINITIONS = Object.freeze([
     name: "get_file_ingress_capabilities",
     title: "Get file ingress capabilities",
     description:
-      "Read the active route profile plus hosted ingress adapters, writable-target requirements and limits. Native session_attachment is available only when this exact route is backed by an external host-rewrite assertion; a static file schema is not evidence. This response does not report installed client companions or promise that a specific local path is readable. An unavailable source has no implicit base64, URL, local-path or cross-source fallback.",
+      "Read the active route profile plus hosted ingress adapters, writable-target requirements and limits. A declared_unverified MCP Apps route permits a real host probe but is not hosted-support evidence; verified requires an external receipt. This response does not report installed client companions or promise that a specific local path is readable. An unavailable source has no implicit base64, URL, local-path or cross-source fallback.",
     inputSchema: GET_FILE_INGRESS_CAPABILITIES_INPUT_SCHEMA,
     outputSchema: GET_FILE_INGRESS_CAPABILITIES_OUTPUT_SCHEMA,
     securitySchemes: READ_SECURITY_SCHEMES,
@@ -1460,6 +1504,27 @@ export const MCP_BUNDLE_FILE_TOOL_DEFINITIONS = Object.freeze([
       readOnlyHint: true,
       destructiveHint: false,
       openWorldHint: false,
+    }),
+  }),
+  Object.freeze({
+    name: "open_bundle_file_picker",
+    title: "Choose one file to stage",
+    description:
+      "Open the private MCP Apps file picker for one explicit Mind, exact target path and operation key. The picker keeps provider file identifiers, temporary URLs, private filenames and bytes outside model-visible content, then calls the app-only staging tool after an explicit selection. Use the returned opaque staged_file_ref at the requested path; separate picker calls may be combined in one atomic changeset.",
+    inputSchema: OPEN_BUNDLE_FILE_PICKER_INPUT_SCHEMA,
+    outputSchema: OPEN_BUNDLE_FILE_PICKER_OUTPUT_SCHEMA,
+    securitySchemes: WRITE_SECURITY_SCHEMES,
+    annotations: Object.freeze({
+      readOnlyHint: true,
+      destructiveHint: false,
+      openWorldHint: false,
+    }),
+    _meta: Object.freeze({
+      ui: Object.freeze({
+        resourceUri: FILE_INGRESS_WIDGET_URI,
+        visibility: Object.freeze(["model", "app"]),
+      }),
+      "openai/outputTemplate": FILE_INGRESS_WIDGET_URI,
     }),
   }),
   Object.freeze({
@@ -1489,7 +1554,10 @@ export const MCP_BUNDLE_FILE_TOOL_DEFINITIONS = Object.freeze([
       destructiveHint: false,
       openWorldHint: true,
     }),
-    _meta: Object.freeze({ "openai/fileParams": Object.freeze(["file"]) }),
+    _meta: Object.freeze({
+      "openai/fileParams": Object.freeze(["file"]),
+      ui: Object.freeze({ visibility: Object.freeze(["app"]) }),
+    }),
   }),
   Object.freeze({
     name: "reconcile_file_stage",
@@ -1624,8 +1692,11 @@ export interface McpRootResourcePage {
 
 export interface McpImmutableResourceRead {
   readonly uri: string;
-  readonly mimeType: "text/markdown; charset=utf-8";
+  readonly mimeType:
+    | "text/markdown; charset=utf-8"
+    | "text/html;profile=mcp-app";
   readonly text: string;
+  readonly _meta?: Readonly<Record<string, unknown>>;
 }
 
 export interface ParsedMcpResourceUri {

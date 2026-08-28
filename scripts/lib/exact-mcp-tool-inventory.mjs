@@ -20,14 +20,14 @@ function loadExpectedInventory() {
     value?.schema !== EXPECTED_SCHEMA ||
     value?.source !== EXPECTED_SOURCE ||
     !Array.isArray(value.entries) ||
-    value.entries.length !== 18
+    value.entries.length !== 19
   ) {
     throw new TypeError("Exact MCP tool inventory fixture is invalid.");
   }
   const entries = value.entries.map((entry) => Object.freeze({ ...entry }));
   const names = entries.map(({ name }) => name);
   if (
-    new Set(names).size !== 18 ||
+    new Set(names).size !== 19 ||
     names.some((name) => typeof name !== "string") ||
     names.some((name, index) => index > 0 && name <= names[index - 1])
   ) {
@@ -41,7 +41,11 @@ export const EXPECTED_MCP_TOOL_NAMES = Object.freeze(
   EXPECTED_MCP_TOOL_INVENTORY.map(({ name }) => name),
 );
 export const EXPECTED_DEFAULT_MCP_TOOL_NAMES = Object.freeze(
-  EXPECTED_MCP_TOOL_NAMES.filter((name) => name !== "stage_bundle_file"),
+  EXPECTED_MCP_TOOL_NAMES.filter((name) =>
+    name !== "open_bundle_file_picker" && name !== "stage_bundle_file"),
+);
+export const EXPECTED_VERIFIED_NATIVE_MCP_TOOL_NAMES = Object.freeze(
+  EXPECTED_MCP_TOOL_NAMES.filter((name) => name !== "open_bundle_file_picker"),
 );
 
 function matchesInventory(tools, expected) {
@@ -78,13 +82,23 @@ export function matchesExactMcpToolInventory(tools) {
   return matchesInventory(tools, EXPECTED_MCP_TOOL_INVENTORY);
 }
 
+export function matchesExactVerifiedNativeMcpToolInventory(tools) {
+  return matchesInventory(
+    tools,
+    EXPECTED_MCP_TOOL_INVENTORY.filter(
+      ({ name }) => name !== "open_bundle_file_picker",
+    ),
+  );
+}
+
 // The Product Site has no constructor-owned host rewrite assertion. Its
 // default write catalog therefore keeps ordinary upload intents but omits the
 // native file-parameter route until one exact host/profile proves the rewrite.
 export function matchesExactDefaultMcpToolInventory(tools) {
   return matchesInventory(
     tools,
-    EXPECTED_MCP_TOOL_INVENTORY.filter(({ name }) => name !== "stage_bundle_file"),
+    EXPECTED_MCP_TOOL_INVENTORY.filter(({ name }) =>
+      name !== "open_bundle_file_picker" && name !== "stage_bundle_file"),
   );
 }
 
@@ -92,6 +106,8 @@ export function matchesExactReadOnlyMcpToolInventory(tools) {
   return matchesInventory(
     tools,
     EXPECTED_MCP_TOOL_INVENTORY.filter(({ name }) =>
-      name !== "create_file_upload_intent" && name !== "stage_bundle_file"),
+      name !== "open_bundle_file_picker" &&
+      name !== "create_file_upload_intent" &&
+      name !== "stage_bundle_file"),
   );
 }

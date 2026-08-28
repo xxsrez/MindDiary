@@ -18,6 +18,12 @@ import {
   NativeFileInputFailure,
 } from "./native-file-input.js";
 import {
+  FILE_INGRESS_WIDGET_HTML,
+  FILE_INGRESS_WIDGET_META,
+  FILE_INGRESS_WIDGET_URI,
+  MCP_APPS_RESOURCE_MIME_TYPE,
+} from "./file-ingress-widget.js";
+import {
   MCP_TOOL_DEFINITIONS,
   MCP_MOVED_EXPORT_TOOLS,
   createMcpToolErrorResult,
@@ -243,6 +249,17 @@ function validStageBundleFileInput(input: Readonly<Record<string, unknown>>): bo
       (typeof input.expectedSha256 === "string" && SHA256.test(input.expectedSha256)));
 }
 
+function validOpenBundleFilePickerInput(
+  input: Readonly<Record<string, unknown>>,
+): boolean {
+  return hasExactKeys(input, ["mind", "path", "idempotencyKey"]) &&
+    stringValue(input.mind) !== null &&
+    typeof input.path === "string" &&
+    input.path.length > 0 &&
+    input.path.length <= 1_024 &&
+    idempotencyKeyValue(input.idempotencyKey);
+}
+
 function validReconcileFileStageInput(input: Readonly<Record<string, unknown>>): boolean {
   const allowed = new Set([
     "mind",
@@ -447,11 +464,24 @@ export class ProductMcpContentApplication implements McpContentApplication {
     const nativeFileParameter =
       this.#dependencies.nativeFileRoute instanceof NativeFileParameterRoute &&
       this.#dependencies.staging !== undefined;
+    const mcpAppsProfile = nativeFileParameter &&
+      this.#dependencies.nativeFileRoute?.routeKind === "openai_mcp_apps";
     return Object.freeze(
       MCP_TOOL_DEFINITIONS.filter(
         (definition) =>
           (hostedUploadIntents || definition.name !== "create_file_upload_intent") &&
-          (nativeFileParameter || definition.name !== "stage_bundle_file"),
+          (nativeFileParameter || definition.name !== "stage_bundle_file") &&
+          (mcpAppsProfile || definition.name !== "open_bundle_file_picker"),
+      ).map((definition) =>
+        definition.name === "stage_bundle_file" &&
+        this.#dependencies.nativeFileRoute?.routeKind === "verified_host_rewrite"
+          ? Object.freeze({
+              ...definition,
+              _meta: Object.freeze({
+                "openai/fileParams": Object.freeze(["file"]),
+              }),
+            })
+          : definition,
       ),
     );
   }
@@ -480,6 +510,17 @@ export class ProductMcpContentApplication implements McpContentApplication {
     readonly actor: AuthenticatedActor;
     readonly uri: string;
   }): Promise<Readonly<McpImmutableResourceRead>> {
+    if (
+      request.uri === FILE_INGRESS_WIDGET_URI &&
+      this.#dependencies.nativeFileRoute?.routeKind === "openai_mcp_apps"
+    ) {
+      return Object.freeze({
+        uri: FILE_INGRESS_WIDGET_URI,
+        mimeType: MCP_APPS_RESOURCE_MIME_TYPE,
+        text: FILE_INGRESS_WIDGET_HTML,
+        _meta: FILE_INGRESS_WIDGET_META,
+      });
+    }
     const result = await this.#dependencies.browse.readResource(
       request.actor,
       request.uri,
@@ -489,9 +530,11 @@ export class ProductMcpContentApplication implements McpContentApplication {
 
   async authorizeToolCall(request: Parameters<McpContentApplication["authorizeToolCall"]>[0]) {
     if (
-      request.name === "stage_bundle_file" &&
+      (request.name === "stage_bundle_file" || request.name === "open_bundle_file_picker") &&
       (!(this.#dependencies.nativeFileRoute instanceof NativeFileParameterRoute) ||
-        this.#dependencies.staging === undefined)
+        this.#dependencies.staging === undefined ||
+        (request.name === "open_bundle_file_picker" &&
+          this.#dependencies.nativeFileRoute.routeKind !== "openai_mcp_apps"))
     ) {
       return Object.freeze({ kind: "allowed" as const });
     }
@@ -627,6 +670,8 @@ export class ProductMcpContentApplication implements McpContentApplication {
               transport: "native_file_parameter",
               status: nativeFileRoute === null ? "not_available" : "available",
               routeProfileId: nativeFileRoute?.profileId ?? null,
+              verificationStatus:
+                nativeFileRoute?.verificationStatus ?? "not_available",
               hostRewriteAssertionId: nativeFileRoute?.hostRewriteAssertionId ?? null,
               hostRewriteObservedAtUtc:
                 nativeFileRoute?.hostRewriteObservedAtUtc ?? null,
@@ -636,6 +681,49 @@ export class ProductMcpContentApplication implements McpContentApplication {
           "Read the active route profile and hosted server-adapter matrix; client inventory and path admission are not reported.",
         );
         }
+      case "open_bundle_file_picker": {
+        if (
+          this.#dependencies.nativeFileRoute?.routeKind !== "openai_mcp_apps" ||
+          this.#dependencies.staging === undefined
+        ) {
+          return createMcpToolErrorResult(
+            request.actor.requestId,
+            "native_file_input_unsupported",
+            "This deployed route profile has no private MCP Apps file picker.",
+            false,
+          );
+        }
+        if (!validOpenBundleFilePickerInput(input)) {
+          return createMcpToolErrorResult(
+            request.actor.requestId,
+            "invalid_request",
+            "The file picker arguments are invalid.",
+            false,
+          );
+        }
+        const info = await this.#dependencies.discovery.getMindInfo(
+          request.actor,
+          input.mind,
+          { kind: "head" },
+        );
+        if (!info.contentCapabilities.includes("commit")) {
+          return createMcpToolErrorResult(
+            request.actor.requestId,
+            "forbidden",
+            "The requested operation is not allowed.",
+            false,
+          );
+        }
+        const target = await this.#resolveWritableTarget(
+          request.actor,
+          info.mind.mindId,
+        );
+        if (target.kind === "error") return target.result;
+        return createMcpToolSuccessResult(
+          { status: "ready" },
+          "Opened the private file picker for the selected writable Mind.",
+        );
+      }
       case "create_file_upload_intent": {
         if (
           this.#dependencies.uploadIntents === undefined ||
@@ -845,7 +933,9 @@ export class ProductMcpContentApplication implements McpContentApplication {
           spaceId: info.mind.mindId,
           writeBindingId: target.writeBindingId as never,
           sourceKind: "session_attachment",
-          displayFilename: input.displayFilename ?? downloaded.fileName,
+          displayFilename: nativeFileRoute.routeKind === "openai_mcp_apps"
+            ? "selected-file"
+            : input.displayFilename ?? downloaded.fileName,
           claimedMediaType: downloaded.mimeType,
           stream: downloaded.stream,
           maxBytes: 268_435_456,

@@ -42,6 +42,7 @@ test("publishes strict native-file staging metadata and mixed commit operations"
     MCP_BUNDLE_FILE_TOOL_DEFINITIONS.map(({ name }) => name),
     [
       "get_file_ingress_capabilities",
+      "open_bundle_file_picker",
       "create_file_upload_intent",
       "stage_bundle_file",
       "reconcile_file_stage",
@@ -119,7 +120,10 @@ test("publishes strict native-file staging metadata and mixed commit operations"
   assert.equal(stage.inputSchema.additionalProperties, false);
   assert.deepEqual(stage.inputSchema.properties.file.required, ["file_id", "download_url"]);
   assert.equal(stage.inputSchema.properties.file.additionalProperties, false);
-  assert.deepEqual(stage._meta, { "openai/fileParams": ["file"] });
+  assert.deepEqual(stage._meta, {
+    "openai/fileParams": ["file"],
+    ui: { visibility: ["app"] },
+  });
   assert.deepEqual(stage.securitySchemes, [{ type: "oauth2", scopes: ["content:write"] }]);
   assert.deepEqual(stage.annotations, {
     readOnlyHint: false,
@@ -492,7 +496,9 @@ test("product adapter terminates provider metadata and returns only verified sta
   const nativeDefinition = supportedCatalog.find(
     ({ name }) => name === "stage_bundle_file",
   );
-  assert.deepEqual(nativeDefinition._meta, { "openai/fileParams": ["file"] });
+  assert.deepEqual(nativeDefinition._meta, {
+    "openai/fileParams": ["file"],
+  });
   assert.deepEqual(nativeDefinition.inputSchema.properties.file.required, [
     "file_id",
     "download_url",
@@ -611,6 +617,7 @@ test("product adapter terminates provider metadata and returns only verified sta
     transport: "native_file_parameter",
     status: "available",
     route_profile_id: "test-app-session-attachment-v1",
+    verification_status: "verified",
     host_rewrite_assertion_id: "test-receipt:host-rewrite:stage-bundle-file:v1",
     host_rewrite_observed_at_utc: "2026-08-27T22:30:00.000Z",
   });
@@ -713,6 +720,7 @@ test("direct custom MCP omits native staging and fails closed before target or f
     transport: "native_file_parameter",
     status: "not_available",
     route_profile_id: null,
+    verification_status: "not_available",
     host_rewrite_assertion_id: null,
     host_rewrite_observed_at_utc: null,
   });

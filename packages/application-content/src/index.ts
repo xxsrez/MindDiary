@@ -108,6 +108,7 @@ export type McpPerformanceTool =
   | "get_mind_info"
   | "get_mind_bindings"
   | "get_file_ingress_capabilities"
+  | "open_bundle_file_picker"
   | "browse_entries"
   | "search"
   | "fetch"

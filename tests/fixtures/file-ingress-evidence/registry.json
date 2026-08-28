@@ -13,7 +13,7 @@
       "marketplace_tree_sha": "b9c02685624813e6c20fcb5ef9ce7fe94505a81d"
     },
     "tool_inventory_path": "tests/fixtures/file-ingress-evidence/hosted-tool-inventory.json",
-    "tool_inventory_sha256": "00c84e332c5a97a428fe50ff8cf4ef70aa1e3d9d07c6fbcbf697812271814f34"
+    "tool_inventory_sha256": "6968b26e47d215516c113a4776e4162b97f885564df7dbffd0e26ec3021c5089"
   },
   "source_kinds": [
     "session_attachment",

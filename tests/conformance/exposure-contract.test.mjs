@@ -29,6 +29,7 @@ const expectedMcpTools = [
   "validate_mind",
   "list_bundle_files",
   "get_file_ingress_capabilities",
+  "open_bundle_file_picker",
   "create_file_upload_intent",
   "stage_bundle_file",
   "reconcile_file_stage",

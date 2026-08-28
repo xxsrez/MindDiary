@@ -1481,12 +1481,13 @@ target/deployment обязан повторить route probe. В текущем
 `/mcp` не является alias, и server не redirect-ит с него request с
 `Authorization` header.
 
-Product source candidate публикует два намеренно раздельных endpoint:
+Product source candidate публикует три намеренно раздельных endpoint:
 
 | Endpoint | Protocol/lifecycle | Client gate |
 |---|---|---|
 | `POST /api/mcp` | pinned final `2026-07-28`, stateless и начиная с `server/discover` | MCP Inspector, modern clients и `codex-cli 0.147.0` с opt-in `mcp_2026_07_28` |
 | `POST /api/mcp/2025-11-25` | isolated initialize lifecycle предыдущей stable revision `2025-11-25` без server session | default `codex-cli 0.147.0` |
+| `POST /api/mcp/apps` | pinned final `2026-07-28`, stateless, с exact MCP Apps UI resource и native file route | OpenAI/MCP Apps host; support claim только после fresh hosted picker/stage receipt |
 
 Оба endpoint требуют один и тот же principal Bearer token и вызывают одну
 content application boundary. Authentication, token lifecycle/scopes и current
@@ -2298,6 +2299,7 @@ source kind:
     "transport": "native_file_parameter",
     "status": "not_available",
     "route_profile_id": null,
+    "verification_status": "not_available",
     "host_rewrite_assertion_id": null,
     "host_rewrite_observed_at_utc": null
   },
@@ -2315,19 +2317,23 @@ source kind:
 ```
 
 `server_adapter_status` is `available | not_available`. Для
-`session_attachment` значение `available` требует route-bound external
-assertion: exact host/profile действительно переписал `stage_bundle_file.file`
-в provider-issued object. Projection возвращает только safe profile ID,
-assertion ID и время observation; статическая schema и repository tests этого
-не доказывают. Остальные rows подтверждают только deployed server boundary,
+`session_attachment` `/api/mcp/apps` сообщает server adapter как `available`,
+но отдельный `verification_status: declared_unverified` сохраняется, пока fresh
+hosted receipt не подтвердит selection → provider object → staging на exact
+candidate/deployment. После такого receipt exact route может сообщить
+`verification_status: verified`. Direct и compatibility profiles сообщают
+`not_available`. Projection возвращает только safe route profile/state;
+provider ID, URL, filename и observation payload не возвращаются. Статическая
+schema, UI resource и repository tests hosted support не доказывают. Остальные
+rows подтверждают только deployed server boundary,
 current writable-target check и advertised byte limit. Response не доказывает,
 что packaged companion установлен в current client или что конкретный path
 пройдёт local admission; для этого нужны fresh installed inventory и companion
 call.
 
-Текущий direct custom MCP route не имеет host-rewrite assertion, поэтому
-сообщает `session_attachment` как `not_available` и не публикует
-`stage_bundle_file` в fresh catalog.
+Direct custom MCP routes сообщают `session_attachment` как `not_available` и не
+публикуют `stage_bundle_file`. Только exact Apps profile публикует app-only
+stage и model-visible picker.
 
 Release 0.2 reports only `local_path` and
 `workspace/generated_artifact` as `available`, both through
@@ -2508,21 +2514,32 @@ Input:
 }
 ```
 
-Tool definition advertises `_meta["openai/fileParams"] = ["file"]`.
-Он появляется в fresh catalog только для exact route profile, настроенного с
-external host-rewrite evidence. У current direct custom MCP такого rewrite нет:
-tool отсутствует, а точный direct invocation возвращает non-retryable
+Tool definition advertises `_meta["openai/fileParams"] = ["file"]` and Apps UI
+visibility `app`. Он появляется только в fresh `/api/mcp/apps` catalog. Direct
+и compatibility invocation возвращает non-retryable
 `native_file_input_unsupported` до target resolution или fetch. Local schema и
 unit/conformance execution не доказывают hosted support.
 
-Product Site принимает route только через constructor-owned
-`verifiedNativeFileParameterRoute`. Он проверяет complete external assertion и
-создаёт fixed-allowlist transport внутри composition root; raw transport сам по
-себе не может включить native staging. Непустой уникальный `mcpProfiles` list
-активирует только exact modern и/или compatibility handler, для которого
-доказан host rewrite. Отсутствующая configuration — нормальный direct-custom
-profile; malformed или partial configuration останавливает runtime construction
-без fallback.
+Apps route — sealed compile-time composition, не env/request configuration.
+Он создаёт fixed-allowlist transport внутри composition root; raw transport,
+client hints или arbitrary endpoint не могут включить native staging. Отдельный
+model-visible `open_bundle_file_picker` связан с
+`ui://mind-diary/file-ingress/v1.html`; resource read возвращает
+`text/html;profile=mcp-app` и не проходит через OKF URI parser.
+
+Widget получает `mind`, точный target `path` и `idempotency_key` в tool input,
+так что место будущего commit выбрано до открытия picker. Он feature-detects
+`selectFiles`, использует explicit `uploadFile` fallback, получает temporary URL
+через `getFileDownloadUrl` и вызывает app-only stage через `tools/call`. Каждый
+вызов возвращает независимый opaque staged ref; несколько ref можно объединить
+в один atomic changeset. После успешного stage widget вызывает
+`ui/update-model-context` с закрытым payload
+`{schema, action, mind, path, staged_file_ref}`; это переносит только
+service-owned receipt и уже model-visible target intent, не выполняя commit.
+Widget не передаёт provider `file_name`, а Apps server независимо закрепляет
+neutral `display_filename = selected-file` и игнорирует входной override.
+Поэтому File ID/URL/bytes/private filename не попадают в model context, durable
+state, widget state, DOM attributes, result metadata или logs.
 
 `file_id`/`download_url` are current OpenAI adapter transport inputs and never
 cross the portable application port or durable record. Local path, base64 and

@@ -61,8 +61,9 @@ clean worktree до и после проб. Он последовательно 
   modern/compat catalogs; его fail-closed fetcher не читает bytes и не является
   hosted route evidence;
 - credential target contract и persisted-state migration tests;
-- exact modern/compat 18-tool catalog, retired binding tools и moved export
-  tests;
+- exact direct modern/compat 17-tool catalog, который не рекламирует
+  MCP Apps picker или unverified native stage, retired binding tools и moved
+  export tests;
 - stale HEAD и wrong Mind zero-side-effect assertions.
 
 Local receipt фиксирует hashes двух probe receipts, каждого test output и
@@ -110,8 +111,10 @@ read-back предыдущего, а не локальное предполож�
 ### Каталоги и discovery
 
 - Fresh write-capable modern client (`2026-07-28`) и compatibility client
-  (`2025-11-25`) получают ровно 18 names из contract fixture. Read-only grant
-  получает exact 16-tool subset без двух write-only native staging tools.
+  (`2025-11-25`) получают ровно 17 names из direct contract fixture. Read-only
+  grant получает exact 16-tool subset без `create_file_upload_intent`. Отдельный
+  Apps profile имеет 19-tool projection, но его hosted picker/stage receipt
+  проверяется по MD-315/MD-316 и не подменяется direct catalog observation.
 - `get_mind_bindings`, `set_read_mind_binding`,
   `set_write_mind_binding`, `start_export`, `get_export_status` отсутствуют в
   обоих catalogs. Exact cached calls возвращают принятый bounded compatibility

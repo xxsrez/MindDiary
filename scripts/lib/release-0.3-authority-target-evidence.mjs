@@ -9,7 +9,7 @@ import {
   canonical,
   isRecord,
 } from "./multi-principal-probe-core.mjs";
-import { EXPECTED_MCP_TOOL_NAMES } from "./exact-mcp-tool-inventory.mjs";
+import { EXPECTED_DEFAULT_MCP_TOOL_NAMES } from "./exact-mcp-tool-inventory.mjs";
 import { verifyUatTestAccountPoolReadinessReceipt } from "./uat-test-account-pool-contract.mjs";
 
 export const RELEASE_03_AUTHORITY_TARGET_RUNNER_ID =
@@ -26,7 +26,7 @@ export const RELEASE_03_LOCAL_ASSERTION_IDS = Object.freeze([
   "local.personal-membership-public-unlisted-private",
   "local.membership-visibility-revoke-immediate",
   "local.owner-isolation-oauth-and-personal-token",
-  "local.modern-compat-catalog-exact-18",
+  "local.modern-compat-catalog-exact-17",
   "local.target-exact-generation-stale-head-wrong-mind",
   "local.fresh-reconnect-reissue-empty-target",
   "local.legacy-and-same-owner-upgrade",
@@ -269,7 +269,7 @@ function verifyCatalogReadBack(value) {
     if (
       !exactKeys(row, ["protocol", "tool_names", "retired_binding_tools_absent", "moved_export_tools_absent"]) ||
       row.protocol !== (profile === "modern" ? "2026-07-28" : "2025-11-25") ||
-      canonical(row.tool_names) !== canonical(EXPECTED_MCP_TOOL_NAMES) ||
+      canonical(row.tool_names) !== canonical(EXPECTED_DEFAULT_MCP_TOOL_NAMES) ||
       row.retired_binding_tools_absent !== true ||
       row.moved_export_tools_absent !== true
     ) fail("invalid_catalog_read_back");
@@ -472,8 +472,8 @@ export function verifyRelease03AuthorityTargetUatJoin(value) {
     !SHA256.test(value.read_back.local_evidence_sha256) ||
     !SHA256.test(value.read_back.pool_readiness_sha256) ||
     !SHA256.test(value.read_back.hosted_observation_sha256) ||
-    value.read_back.modern_tool_count !== 18 ||
-    value.read_back.compatibility_tool_count !== 18 ||
+    value.read_back.modern_tool_count !== 17 ||
+    value.read_back.compatibility_tool_count !== 17 ||
     !RUN_FINGERPRINT.test(value.read_back.run_fingerprint)
   ) fail("invalid_uat_join_evidence");
   verifySurfaceReadBack(value.read_back.web_surfaces);

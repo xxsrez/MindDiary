@@ -37,6 +37,9 @@ test("MD-312 readable paths and MD-284 Drive reference keep hosted claims eviden
       assert.ok(row?.includes("Release 0.3 `implemented_repository`"));
       assert.ok(row?.includes("MD-319"));
       assert.ok(row?.includes("hosted status остаётся `not_available`"));
+    } else if (sourceKind === "session_attachment") {
+      assert.ok(row?.includes("Apps server adapter may be `available`"));
+      assert.ok(row?.includes("support claim remains pending real picker/stage receipt"));
     } else {
       assert.ok(row?.includes("Release 0.3 `not_available`"), `source must remain deferred: ${sourceKind}`);
     }

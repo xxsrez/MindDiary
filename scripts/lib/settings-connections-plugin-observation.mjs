@@ -17,6 +17,7 @@ import {
   matchesExactDefaultMcpToolInventory,
   matchesExactMcpToolInventory,
   matchesExactReadOnlyMcpToolInventory,
+  matchesExactVerifiedNativeMcpToolInventory,
 } from "./exact-mcp-tool-inventory.mjs";
 import {
   assertCodexClientVersion,
@@ -108,12 +109,18 @@ export function verifySettingsConnectionsCatalogProfiles() {
     inputSchema,
     outputSchema,
   }));
-  const defaultWrite = full.filter(({ name }) => name !== "stage_bundle_file");
+  const apps = full;
+  const verifiedNative = full.filter(({ name }) => name !== "open_bundle_file_picker");
+  const defaultWrite = full.filter(({ name }) =>
+    name !== "open_bundle_file_picker" && name !== "stage_bundle_file");
   const readOnly = full.filter(({ name }) =>
-    name !== "create_file_upload_intent" && name !== "stage_bundle_file");
+    name !== "open_bundle_file_picker" &&
+    name !== "create_file_upload_intent" &&
+    name !== "stage_bundle_file");
   if (!matchesExactDefaultMcpToolInventory(defaultWrite) ||
       !matchesExactReadOnlyMcpToolInventory(readOnly) ||
-      !matchesExactMcpToolInventory(full)) {
+      !matchesExactVerifiedNativeMcpToolInventory(verifiedNative) ||
+      !matchesExactMcpToolInventory(apps)) {
     fail("settings_connections_catalog_profile_mismatch");
   }
   return Object.freeze({

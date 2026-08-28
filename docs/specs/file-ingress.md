@@ -12,12 +12,14 @@ Google Drive object. Его exact-provider UAT остаётся отдельны
 `FileIngressCoordinator` сохраняет общую staging/commit semantics и exact
 reconcile. Google Drive reference adapter не выдаётся за hosted capability
 только потому, что в repository существуют его code и tests. Release 0.3
-candidate MD-315 добавляет direct host/provider route, который включается
-только для exact server route profile с внешним assertion фактически
-наблюдавшегося host rewrite. Текущий direct custom MCP такого assertion не
-имеет: `session_attachment` остаётся `not_available`, а `stage_bundle_file` не
-публикуется в fresh catalog. Наличие port, schema или локальных tests не
-является hosted support. Release 0.3
+candidate MD-315/MD-316 добавляет отдельный compile-time MCP Apps route
+`/api/mcp/apps`, picker UI и app-only native stage. Direct `/api/mcp` и
+compatibility `/api/mcp/2025-11-25` остаются без native tool. Apps route
+позволяет получить реальный hosted receipt, но не заменяет его: наличие
+endpoint, schema, widget или локальных tests не является hosted support.
+Подробное решение зафиксировано в
+[ADR-0023](../decisions/0023-dedicated-mcp-apps-file-ingress-profile.md).
+Release 0.3
 candidate подключает `bounded_in_memory` отдельным
 constructor-owned port для trusted hosted producer, но не публикует его через
 HTTP/MCP или capability discovery до поздней UAT-проверки. MD-322 подключает trusted
@@ -190,7 +192,7 @@ double в repository. `implemented_repository` означает только cod
 
 | Source kind | Adapter owns reading | Transport boundary | Release status / evidence | Explicit fallback |
 |---|---|---|---|---|
-| `session_attachment` | Exact route-profile MCP/provider adapter | Native client file parameter после externally attested host rewrite | Release 0.3 `not_available` для текущего direct custom MCP; MD-315 route-кандидат `implemented_repository`, но не активируется без exact host/profile assertion | Нет base64, local-path, arbitrary-URL или manually invented provider-object fallback |
+| `session_attachment` | Exact MCP Apps route/provider adapter | Host file-library/upload selection → provider-issued file object on `/api/mcp/apps` | Direct/compatibility MCP: `not_available`; Apps server adapter may be `available` with separate `declared_unverified` verification state, while support claim remains pending real picker/stage receipt | Нет base64, local-path, arbitrary-URL или manually invented provider-object fallback |
 | `local_path` | Packaged local companion on the current Codex host | Path-free one-use hosted upload intent; companion snapshots one exact regular file | Release 0.2 `implemented_repository`; installed tool inventory and exact disk journey are pending MD-325 | Missing companion is a client-installation failure; local admission returns only observable safe errors; never send the path to hosted MCP |
 | `workspace/generated_artifact` | Packaged local companion with trusted process-configured workspace roots | Same path-free one-use hosted intent | Release 0.2 `implemented_repository`; installed tool inventory and exact workspace journey are pending MD-325 | Unsupported authority fails locally; do not relabel or fall back to URL/provider transport |
 | `connector_object` | Explicit authorized connector adapter | Connector API/object fetch | Release 0.3 `implemented_repository` для Google Drive reference adapter; exact-provider UAT pending MD-319, поэтому hosted status остаётся `not_available` | No cross-provider, implicit native export or URL fallback |
@@ -369,13 +371,37 @@ wiring blocker.
   behind the existing 24-hour orphan safety window; no source provider is
   queried by GC.
 
-## Historical native MCP capability negotiation
+## Native MCP Apps capability negotiation
 
-The legacy `stage_bundle_file` tool is the `session_attachment` profile. Its
-schema may remain available for compatibility, but Release 0.2 does not claim
-or require that transport. Direct host/provider input stays `not_available`
-until Release 0.3 evidence; a static `_meta["openai/fileParams"]` declaration is
-not installed-client or hosted support proof and never activates fallback.
+`stage_bundle_file` is the `session_attachment` profile. Its strict file schema
+does not make direct MCP capable: `/api/mcp` and `/api/mcp/2025-11-25` hide the
+tool. Only the sealed `/api/mcp/apps` projection publishes it, with
+`_meta["openai/fileParams"]` and UI visibility `app`. The same projection
+publishes `open_bundle_file_picker` linked to exact
+`ui://mind-diary/file-ingress/v1.html`; the UI resource is not an OKF resource
+and is never listed among Mind roots.
+
+The picker input fixes one explicit target `path` before selection. Each picker
+call stages exactly one independent opaque ref; callers may combine refs from
+separate calls in one atomic changeset. The MCP Apps route always persists the
+neutral staging label `selected-file`: it ignores both provider `file_name` and
+any caller-supplied display-name override, so a private source filename cannot
+enter durable state or model-visible structured output.
+
+После успешного app-only stage widget проверяет server-issued receipt и через
+`ui/update-model-context` передаёт модели только explicit `mind`, выбранный до
+picker target `path` и opaque `staged_file_ref`. Этот context не выполняет
+commit и не является authorization binding: следующий `commit_changeset`
+по-прежнему независимо валидирует exact path, current target generation, ACL,
+HEAD и staged ref. Если host отклоняет context update, widget честно сообщает,
+что stage состоялся, но продолжать changeset нельзя до повторной передачи
+receipt; provider object при этом не попадает в разговор.
+
+The Apps server adapter may report `available` so the host can be probed, while
+`verification_status` remains `declared_unverified`. A support claim still
+requires exact candidate, deployment, fresh plugin inventory and a real
+selection → provider envelope → stage receipt; only then is `verified`
+appropriate. Schema or widget presence does not activate a fallback.
 
 Read-only credentials do not gain staging by seeing the tool definition. The
 server checks token scope, current write binding, current ACL and exact Mind
@@ -500,9 +526,9 @@ Open questions intentionally left for child implementation decisions:
   Docs/Sheets/Slides reference profile can be supported? Such support requires
   a separate adapter and exact-provider receipt; the Google adapter is not a
   cross-provider fallback.
-- Release 0.3 must obtain a real client/host receipt for each direct
-  host/provider route profile before configuring the MD-315 route candidate as
-  available. Connector and generated routes require their own distinct
+- Release 0.3 must obtain a real client/host receipt for `/api/mcp/apps` before
+  claiming MD-315/MD-316 available. Connector and generated routes require
+  their own distinct
   versioned source receipts and cannot reuse the `session_attachment` claim.
 
 Protocol exposure itself is accepted: both modern `2026-07-28` and isolated

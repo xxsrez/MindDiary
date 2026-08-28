@@ -91,7 +91,7 @@ function harness() {
           { name: "unknown_private_tool" },
           ...[...MCP_TOOL_DEFINITIONS]
             .reverse()
-            .flatMap(({ name }) => [{ name }, { name }]),
+            .flatMap((definition) => [definition, definition]),
         ];
       },
       async authorizeToolCall(request) {
@@ -246,7 +246,9 @@ test("tools/list ignores provider order, duplicates, and undeclared tools", asyn
   assert.deepEqual(
     result.tools.map(({ name }) => name),
     MCP_CONTENT_TOOLS.filter(
-      (name) => name !== "stage_bundle_file" && name !== "create_file_upload_intent",
+      (name) => name !== "open_bundle_file_picker" &&
+        name !== "stage_bundle_file" &&
+        name !== "create_file_upload_intent",
     ),
   );
   for (const tool of result.tools) {

@@ -135,7 +135,7 @@ Private observation имеет schema
 
 - exact candidate/deployment/project/version status;
 - pool receipt hash и три ordered opaque actor fingerprints;
-- exact 18-name content MCP catalog;
+- exact 17-name direct content MCP catalog;
 - закрытые state/invitation/assertion rows;
 - boolean read-back и cleanup matrix;
 - UTC observation time и artifact hash.

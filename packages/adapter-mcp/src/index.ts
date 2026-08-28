@@ -1,10 +1,12 @@
 export * from "./native-file-input.js";
+export * from "./file-ingress-widget.js";
 export * from "./file-upload-intent.js";
 export * from "./product-application.js";
 
 export {
   MCP_TARGET_PROTOCOL,
   MCP_ENDPOINT,
+  MCP_APPS_ENDPOINT,
   MCP_LEGACY_CODEX_PROTOCOL,
   MCP_LEGACY_CODEX_ENDPOINT,
   MCP_RETIRED_SITES_ENDPOINT,
@@ -36,6 +38,7 @@ export {
   createMcpToolSuccessResult,
   createMcpToolErrorResult,
   createMcpHttpHandler,
+  createMcpHttpHandlerAtEndpoint,
 } from "./http-handler.js";
 
 export type {

@@ -186,7 +186,7 @@ bootstrap.idempotent-replay
 bootstrap.synthetic-binding-namespace
 personal-isolation.cross-account-denied
 tokens.distinct-principal-bound
-catalogs.modern-compat-exact-18
+catalogs.modern-compat-exact-17
 private.web-non-enumeration
 private.list-non-enumeration
 private.history-non-enumeration

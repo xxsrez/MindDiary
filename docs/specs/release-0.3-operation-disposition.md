@@ -153,6 +153,7 @@ indistinguishable `404` for every other actor.
 | `POST /oauth/token` | keep → OAuth | PKCE/refresh/resource/grant checks |
 | `POST /oauth/revoke` | keep → OAuth | Credential revoke; Site Connection UI remains product control |
 | `POST /api/mcp` | change → Content MCP modern | Catalog/instructions/schema changes below; canonical OAuth resource unchanged |
+| `POST /api/mcp/apps` | change → Content MCP Apps | Isolated modern route profile for the static file picker and app-only native staging; same canonical OAuth audience `/api/mcp`; MD-315/MD-316 |
 | `POST /api/mcp/2025-11-25` | change → Content MCP compatibility | Isolated legacy lifecycle, same target tool catalog |
 | any `/mcp` | remove → none | Preserve explicit product `404 route_not_found`; never redirect a bearer request |
 
@@ -174,6 +175,7 @@ indistinguishable `404` for every other actor.
 | `set_read_mind_binding` | remove → none | Omit from both catalogs/schemas; exact cached call returns side-effect-free `mind-diary/mcp-operation-retired/v1`. There is no mutation replacement because read access is derived from current ACL/visibility. MD-339 removes/migrates records |
 | `set_write_mind_binding` | move → Sites control | Omit from both catalogs/schemas; exact cached call returns side-effect-free `mind-diary/mcp-operation-retired/v1` and directs the user to the actor-owned Site Connection/Advanced MCP control. It never forwards arguments to Site or mutates a target. MD-339 |
 | `get_file_ingress_capabilities` | change → Content MCP | Read-only deployed-adapter report; rename output `requires_write_binding` to `requires_writable_target`; no client/path promise |
+| `open_bundle_file_picker` | change → Content MCP Apps | Model-visible preflight for one explicit writable Mind; links the static MCP Apps UI resource and exposes no provider file ID, URL or bytes. Direct and compatibility profiles omit it. MD-316 |
 | `create_file_upload_intent` | change → Content MCP | Remove required `write_binding_id`; explicit `mind` must equal Site-selected target; target errors use `content-write` profile. MD-339 |
 | `stage_bundle_file` | change → Content MCP | Remove required `write_binding_id`; native provider object terminates at adapter; staged ref pins current credential target. MD-339 |
 | `reconcile_file_stage` | change → Content MCP | Remove required `write_binding_id`; reconcile exact original target/source/digest/idempotency payload |
@@ -184,7 +186,11 @@ indistinguishable `404` for every other actor.
 | `start_export` | move → Sites control | Omit from catalog; exact old call returns side-effect-free `operation_moved_to_sites` with the Sites REST route and never starts a job. MD-359/MD-361 |
 | `get_export_status` | move → Sites control | Omit from catalog; exact old call returns the same side-effect-free migration result; Site status/download only. MD-359/MD-361 |
 
-The target advertised catalog therefore contains 18 tools, in stable order:
+The complete target schema catalog therefore contains 19 tools, in stable order.
+Endpoint profiles publish only their exact safe projection: direct modern and
+compatibility omit both `open_bundle_file_picker` and `stage_bundle_file`, a
+constructor-verified native route may publish `stage_bundle_file` without the
+picker, and `/api/mcp/apps` publishes the complete catalog.
 
 ```text
 list_minds
@@ -198,6 +204,7 @@ get_revision
 validate_mind
 list_bundle_files
 get_file_ingress_capabilities
+open_bundle_file_picker
 create_file_upload_intent
 stage_bundle_file
 reconcile_file_stage
@@ -217,7 +224,7 @@ Modern `2026-07-28`:
 | `resources/templates/list` | keep | Authenticated empty list; no implicit templates |
 | `resources/list` | change | Enumerate only authorized root `index` resources from current access, without binding |
 | `resources/read` | change | Reauthorize exact `okf://spaces/{space_id}/revisions/{revision_id}/...`; no HEAD or cross-Mind fallback |
-| `tools/list` | change | Advertise exactly the 18-tool target catalog |
+| `tools/list` | change | Advertise the 17-tool direct projection; omit the Apps picker and native stage |
 | `tools/call` | change | Execute only advertised target tool and target schemas |
 | `initialize` | remove | Preserve explicit `Method not found`; modern profile never starts legacy lifecycle |
 | `ping` | remove | Preserve current `Method not found`; not silently added by this migration |
@@ -229,10 +236,18 @@ Compatibility `2025-11-25`:
 | `initialize` | change | Keep isolated negotiation; update instructions and advertised tool capability |
 | `notifications/initialized` | keep | `202` for exact notification |
 | `ping` | keep | Empty successful result |
-| `tools/list` | change | Same 18-tool target catalog; no legacy-only authority |
+| `tools/list` | change | Same 17-tool direct projection; no legacy-only authority or Apps file picker |
 | `tools/call` | change | Same target schemas and authorization |
 | `resources/templates/list`, `resources/list`, `resources/read` | remove | Preserve compatibility `Method not found`; resources are not silently widened in this profile |
 | `server/discover` | remove | Preserve compatibility `Method not found` |
+
+MCP Apps `/api/mcp/apps` uses the same modern `2026-07-28` lifecycle, publishes
+the complete 19-tool catalog, and additionally serves the exact static
+`ui://mind-diary/file-ingress/v1.html` resource. `stage_bundle_file` remains
+app-only through `_meta.ui.visibility`; its provider file object and full stage
+result are not projected into model-visible `structuredContent`. После stage
+widget передаёт через `ui/update-model-context` только explicit `mind`/target
+`path` и opaque `staged_file_ref`, необходимые следующему явному changeset.
 
 Resource URI grammar remains exact and token-free:
 

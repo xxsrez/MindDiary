@@ -64,7 +64,7 @@ test("full schema inventory stays closed while the deployed default catalog omit
     inputSchema,
     outputSchema,
   }));
-  assert.equal(current.length, 18);
+  assert.equal(current.length, 19);
   const nativeIngress = current.find(({ name }) => name === "get_file_ingress_capabilities");
   assert.deepEqual(
     nativeIngress?.outputSchema?.properties?.data?.properties?.native_file_parameter?.required,
@@ -73,26 +73,34 @@ test("full schema inventory stays closed while the deployed default catalog omit
       "transport",
       "status",
       "route_profile_id",
+      "verification_status",
       "host_rewrite_assertion_id",
       "host_rewrite_observed_at_utc",
     ],
   );
-  assert.equal(assertCodexCompatibleWriteBindingSchema(current), true);
-  const defaultWriteCatalog = current.filter(({ name }) => name !== "stage_bundle_file");
+  const verifiedNativeCatalog = current.filter(
+    ({ name }) => name !== "open_bundle_file_picker",
+  );
+  assert.equal(verifiedNativeCatalog.length, 18);
+  assert.equal(assertCodexCompatibleWriteBindingSchema(verifiedNativeCatalog), true);
+  const defaultWriteCatalog = current.filter(({ name }) =>
+    name !== "open_bundle_file_picker" && name !== "stage_bundle_file");
   assert.equal(defaultWriteCatalog.length, 17);
   assert.equal(assertCodexCompatibleDefaultWriteCatalog(defaultWriteCatalog), true);
   assert.equal(assertCodexCompatibleReadCatalog(current.filter(
-    ({ name }) => name !== "create_file_upload_intent" && name !== "stage_bundle_file",
+    ({ name }) => name !== "open_bundle_file_picker" &&
+      name !== "create_file_upload_intent" &&
+      name !== "stage_bundle_file",
   )), true);
   const mismatches = [
-    current.slice(1),
-    [...current, {
+    verifiedNativeCatalog.slice(1),
+    [...verifiedNativeCatalog, {
       name: "delete_all_minds",
       inputSchema: { type: "object", properties: {} },
       outputSchema: { type: "object", properties: {} },
       annotations: { destructiveHint: true },
     }],
-    current.map((tool, index) => index === 0 ? {
+    verifiedNativeCatalog.map((tool, index) => index === 0 ? {
       ...structuredClone(tool),
       inputSchema: { ...structuredClone(tool.inputSchema), description: "runtime drift" },
     } : tool),

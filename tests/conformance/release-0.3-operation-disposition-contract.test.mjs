@@ -10,6 +10,7 @@ import {
 } from "../../packages/application-content/dist/index.js";
 import {
   FILE_UPLOAD_INTENT_ROUTE_PREFIX,
+  MCP_APPS_ENDPOINT,
   MCP_CONTENT_TOOLS,
   MCP_ENDPOINT,
   MCP_LEGACY_CODEX_ENDPOINT,
@@ -526,6 +527,7 @@ test("auxiliary capability, delivery, OAuth, MCP, and retired Sites routes are e
     "POST /oauth/token",
     "POST /oauth/revoke",
     `POST ${MCP_ENDPOINT}`,
+    `POST ${MCP_APPS_ENDPOINT}`,
     `POST ${MCP_LEGACY_CODEX_ENDPOINT}`,
     `ANY ${MCP_RETIRED_SITES_ENDPOINT}`,
   ]);
@@ -588,7 +590,7 @@ test("all current MCP tools have a disposition and the target catalog is exact",
       "get_export_status",
     ],
   );
-  assert.equal(fixture.targetMcpCatalog.length, 18);
+  assert.equal(fixture.targetMcpCatalog.length, 19);
   for (const tool of fixture.mcpTools) {
     assertExactKeys(tool, ["name", "disposition", "profile", "mindScope", "owner"], tool.name);
     assert.ok(profiles.has(tool.profile), `${tool.name}: unknown profile`);
@@ -972,7 +974,7 @@ test("plugin/help migration has closed owners and exact current source evidence"
       sourceEvidence: [{
         role: "package-probe-source",
         path: "scripts/run-oauth-direct-plugin-probe.mjs",
-        gitBlob: "e41e1ccff3d214599ed36ab0dfc4828b879e46a8",
+        gitBlob: "bdaf831e568a96689071cdeaf7a2fb23bf973fa6",
       }],
     },
     {
@@ -990,12 +992,12 @@ test("plugin/help migration has closed owners and exact current source evidence"
         {
           role: "accepted-skill-source-contract",
           path: "docs/specs/plugin-connector.md",
-          gitBlob: "e6aa419d232ab0b552def22e913fafa06b52b3ca",
+          gitBlob: "674ff8ff7df030d205ecb5e38de9ec1bf447ea67",
         },
         {
           role: "installed-skill-probe-source",
           path: "scripts/run-oauth-direct-plugin-probe.mjs",
-          gitBlob: "e41e1ccff3d214599ed36ab0dfc4828b879e46a8",
+          gitBlob: "bdaf831e568a96689071cdeaf7a2fb23bf973fa6",
         },
       ],
     },

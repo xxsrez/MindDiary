@@ -17,9 +17,9 @@ export interface ProductEnv {
 }
 
 /**
- * Deployed Worker configuration deliberately has no native-file route field.
- * The repository-only constructor seam is not runtime authority: adding it
- * here requires a separately accepted host-rewrite receipt contract.
+ * Deployed Worker configuration deliberately has no request/env-selectable
+ * native-file route field. `/api/mcp/apps` is a sealed compile-time Product
+ * Site profile; external receipts change evidence state, not request authority.
  */
 export interface ProductWorkerRuntimeConfig {
   readonly publicOrigin: string;

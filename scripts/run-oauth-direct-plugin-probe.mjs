@@ -36,8 +36,8 @@ import {
 } from "./lib/fake-sites-storage.mjs";
 import {
   matchesExactDefaultMcpToolInventory,
-  matchesExactMcpToolInventory,
   matchesExactReadOnlyMcpToolInventory,
+  matchesExactVerifiedNativeMcpToolInventory,
 } from "./lib/exact-mcp-tool-inventory.mjs";
 import { assertNoSyntheticProductAuthority } from "./lib/synthetic-product-negative.mjs";
 
@@ -123,7 +123,7 @@ export function assertDirectPackageServer(server) {
 }
 
 export function assertCodexCompatibleWriteBindingSchema(tools) {
-  if (!matchesExactMcpToolInventory(tools)) {
+  if (!matchesExactVerifiedNativeMcpToolInventory(tools)) {
     fail("codex_write_binding_schema_incompatible", {
       toolCount: Array.isArray(tools) ? tools.length : null,
       toolNames: Array.isArray(tools)

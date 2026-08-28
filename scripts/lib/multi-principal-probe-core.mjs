@@ -26,7 +26,7 @@ export const SYNTHETIC_ASSERTION_IDS = Object.freeze([
   "bootstrap.synthetic-binding-namespace",
   "personal-isolation.cross-account-denied",
   "tokens.distinct-principal-bound",
-  "catalogs.modern-compat-exact-18",
+  "catalogs.modern-compat-exact-17",
   "bindings.initial-empty",
   "private.web-non-enumeration",
   "private.list-non-enumeration",

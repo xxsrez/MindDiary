@@ -99,7 +99,7 @@ function harness() {
     },
     content: {
       async listTools() {
-        return MCP_COMMIT_EXPORT_TOOL_DEFINITIONS.map(({ name }) => ({ name }));
+        return MCP_COMMIT_EXPORT_TOOL_DEFINITIONS;
       },
       async authorizeToolCall(request) {
         authorizationCalls.push(request.name);

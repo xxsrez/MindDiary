@@ -261,12 +261,16 @@ operation disposition и migration принадлежат MD-337/MD-339.
   — read bindings заменены current ACL/visibility, а per-credential singleton
   write target управляется только через Sites control plane с CAS, active
   credential lifecycle и fail-closed migration.
+- [ADR-0023: отдельный MCP Apps профиль для native file ingress](decisions/0023-dedicated-mcp-apps-file-ingress-profile.md)
+  — route-specific `/api/mcp/apps`, app-only native stage, static picker UI и
+  обязательный внешний hosted receipt без fabricated activation assertion.
 
 ## Исследования
 
 - [Статус native file route на 2026-08-28](reports/2026-08-28-native-file-route-implementation-status.md)
-  — repository-кандидат MD-315 с profile-gated catalog, безопасным streaming
-  transport и точным внешним blocker: current Codex host не доказал rewrite.
+  — repository-кандидат MD-315/MD-316 с отдельным `/api/mcp/apps`, безопасным
+  picker/context handoff и точным внешним blocker: installed Apps package и
+  реальный hosted picker/stage flow ещё не доказаны.
 - [Capability host-managed и same-host file transport на 2026-08-27](reports/2026-08-27-host-managed-file-transport-capability-probe.md)
   — live Codex Desktop matrix native provider parameter, host picker и packaged
   companion с closed assertions, exact synthetic hashes и typed unavailable

@@ -441,7 +441,7 @@ async function runScenario({ candidate, evidenceOut, randomBytesImpl, now }) {
     actors.owner.mcpTokenRef === actors.participant.mcpTokenRef
   ) fail("shared_mcp_credential_forbidden");
   await assertExactMcpCatalogs(actors.participant);
-  assertions.add("catalogs.modern-compat-exact-18");
+  assertions.add("catalogs.modern-compat-exact-17");
   const initialCredentialInspection = await createSitesMetadataStore(database);
   const initialParticipantToken = await initialCredentialInspection
     .readMcpTokenMetadataByPresentationRef(

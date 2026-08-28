@@ -43,6 +43,12 @@ export interface NativeFileParameterRouteOptions {
   readonly timeoutMs?: number;
 }
 
+export interface OpenAiMcpAppsNativeFileParameterRouteOptions {
+  readonly fetcher?: typeof fetch;
+  readonly maxRedirects?: number;
+  readonly timeoutMs?: number;
+}
+
 const NATIVE_FILE_MAX_BYTES = 268_435_456;
 const SAFE_EVIDENCE_ID = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$/u;
 const NATIVE_FILE_ROUTE_CONSTRUCTION = Symbol("native-file-route-construction");
@@ -73,24 +79,34 @@ function validHostRewriteAssertion(
  * make the tool appear in a direct custom-MCP catalog.
  */
 export class NativeFileParameterRoute {
+  readonly routeKind: "verified_host_rewrite" | "openai_mcp_apps";
   readonly profileId: string;
-  readonly hostRewriteAssertionId: string;
-  readonly hostRewriteObservedAtUtc: string;
+  readonly verificationStatus: "declared_unverified" | "verified";
+  readonly hostRewriteAssertionId: string | null;
+  readonly hostRewriteObservedAtUtc: string | null;
   readonly sourceKind = "session_attachment" as const;
   readonly transport = "native_file_parameter" as const;
   readonly #nativeFiles: NativeFileTransport;
 
   private constructor(
     construction: symbol,
-    assertion: NativeFileHostRewriteAssertion,
+    profile: Readonly<{
+      routeKind: "verified_host_rewrite" | "openai_mcp_apps";
+      profileId: string;
+      verificationStatus: "declared_unverified" | "verified";
+      hostRewriteAssertionId: string | null;
+      hostRewriteObservedAtUtc: string | null;
+    }>,
     nativeFiles: NativeFileTransport,
   ) {
     if (construction !== NATIVE_FILE_ROUTE_CONSTRUCTION) {
       throw new TypeError("native file route construction is closed");
     }
-    this.profileId = assertion.profileId;
-    this.hostRewriteAssertionId = assertion.assertionId;
-    this.hostRewriteObservedAtUtc = new Date(assertion.observedAtUtc).toISOString();
+    this.routeKind = profile.routeKind;
+    this.profileId = profile.profileId;
+    this.verificationStatus = profile.verificationStatus;
+    this.hostRewriteAssertionId = profile.hostRewriteAssertionId;
+    this.hostRewriteObservedAtUtc = profile.hostRewriteObservedAtUtc;
     this.#nativeFiles = nativeFiles;
     Object.freeze(this);
   }
@@ -101,7 +117,40 @@ export class NativeFileParameterRoute {
     }
     return new NativeFileParameterRoute(
       NATIVE_FILE_ROUTE_CONSTRUCTION,
-      options.assertion,
+      Object.freeze({
+        routeKind: "verified_host_rewrite" as const,
+        profileId: options.assertion.profileId,
+        verificationStatus: "verified" as const,
+        hostRewriteAssertionId: options.assertion.assertionId,
+        hostRewriteObservedAtUtc: new Date(options.assertion.observedAtUtc).toISOString(),
+      }),
+      new OpenAiNativeFileTransport({
+        maxBytes: NATIVE_FILE_MAX_BYTES,
+        ...(options.fetcher === undefined ? {} : { fetcher: options.fetcher }),
+        ...(options.maxRedirects === undefined
+          ? {}
+          : { maxRedirects: options.maxRedirects }),
+        ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
+      }),
+    );
+  }
+
+  /**
+   * Sealed route published only by the exact MCP Apps endpoint. The declaration
+   * permits a real host probe; it is deliberately not a hosted-support receipt.
+   */
+  static createOpenAiMcpApps(
+    options: OpenAiMcpAppsNativeFileParameterRouteOptions = {},
+  ): NativeFileParameterRoute {
+    return new NativeFileParameterRoute(
+      NATIVE_FILE_ROUTE_CONSTRUCTION,
+      Object.freeze({
+        routeKind: "openai_mcp_apps" as const,
+        profileId: "openai-mcp-apps-v1",
+        verificationStatus: "declared_unverified" as const,
+        hostRewriteAssertionId: null,
+        hostRewriteObservedAtUtc: null,
+      }),
       new OpenAiNativeFileTransport({
         maxBytes: NATIVE_FILE_MAX_BYTES,
         ...(options.fetcher === undefined ? {} : { fetcher: options.fetcher }),

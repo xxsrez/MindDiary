@@ -87,9 +87,9 @@ deployment; automation не подменяет этот host/UI evidence.
 Mind Diary добавляется в существующий Srez Marketplace вторым plugin рядом с
 Task Manager. Для Codex Desktop/CLI pilot 0.1 принят следующий путь:
 
-1. Package распространяет thin skill и проверенный Codex compatibility
-   transport `/api/mcp/2025-11-25`; canonical OAuth resource/audience остаётся
-   `/api/mcp`.
+1. Package сохраняет thin skill и проверенный Codex compatibility transport
+   `/api/mcp/2025-11-25`, а MCP Apps-capable integration использует отдельный
+   `/api/mcp/apps`; canonical OAuth resource/audience остаётся `/api/mcp`.
 2. Установка с policy `AVAILABLE + ON_USE` завершается без product OAuth и без
    чтения private registered app.
 3. Первый content tool call запускает native OAuth discovery, DCR и PKCE к
@@ -121,7 +121,7 @@ Diary доступной после обновления каталога. Он�
 | Marketplace | `srez-marketplace` | тот же Marketplace |
 | Plugin package | `plugins/task-manager` | новый `plugins/mind-diary` |
 | Connection | direct production MCP в `.mcp.json` | проверенный Codex compatibility transport и отдельный canonical UAT OAuth resource в `.mcp.json` |
-| Transport fallback | public MCP URL в `.mcp.json` | exact `/api/mcp/2025-11-25` для default Codex; `/api/mcp` остаётся modern resource/audience |
+| Transport profiles | public MCP URL в `.mcp.json` | exact `/api/mcp/2025-11-25` для default Codex; `/api/mcp/apps` для MCP Apps native picker; `/api/mcp` остаётся modern resource/audience |
 | Installation | `AVAILABLE` + `ON_USE` | то же поведение |
 | OAuth | authorization code + PKCE, DCR | тот же protocol profile, но Mind Diary scopes и identity rules |
 | Data authorization | internal Task Manager user | internal immutable Mind Diary `principal_id` |
@@ -422,7 +422,9 @@ client/adapter conformance.
 conformance на exact Codex build, но не должна автоматически менять resource
 audience.
 
-Оба adapters вызывают существующий content application contract. OAuth меняет
+Все adapters вызывают существующий content application contract. Apps profile
+добавляет только route-specific picker/UI resource и app-only native stage;
+direct/compatibility catalogs их не наследуют. OAuth меняет
 authentication boundary и discovery, но не tool payload, ACL или revision
 semantics.
 

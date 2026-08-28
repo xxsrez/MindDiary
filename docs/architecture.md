@@ -691,23 +691,24 @@ sequenceDiagram
     end
 ```
 
-Native branch закрыт по умолчанию на MCP edge. `stage_bundle_file` появляется в
-fresh route catalog только тогда, когда server composition связан с внешним
-receipt, доказывающим host rewrite для exact profile и parameter. Direct custom
-MCP без rewrite не публикует tool и возвращает
-`native_file_input_unsupported` до target lookup или fetch. Static schema,
-local test, local path, base64 body или arbitrary URL не могут активировать эту
-ветвь. После завершения provider metadata на edge native и companion routes
-используют общий `staged_file_ref`, reconcile и atomic commit lifecycle.
+Native branch закрыт на обычном MCP edge. `/api/mcp` и isolated compatibility
+`/api/mcp/2025-11-25` не публикуют `stage_bundle_file` и возвращают
+`native_file_input_unsupported` до target lookup или fetch. Отдельный modern
+`/api/mcp/apps` создаёт sealed compile-time `NativeFileParameterRoute`,
+публикует app-only stage и exact picker UI resource. Route нельзя выбрать через
+env, `userAgent`, session или request `_meta`; static endpoint принадлежит
+composition root.
 
-Product Site принимает route только через constructor-owned
-`verifiedNativeFileParameterRoute`. Composition root сам создаёт
-`NativeFileParameterRoute` с фиксированным OpenAI fetch allowlist после проверки
-всех assertion fields и непустого уникального `mcpProfiles` set. Route получает
-только названный modern и/или compatibility handler; sibling profile остаётся
-fail-closed. Missing input сохраняет direct custom MCP без native stage,
-partial/malformed input останавливает создание runtime. Product Worker сейчас
-такой input не задаёт, поэтому repository wiring не превращает MD-317
+Provider file object на Apps edge остаётся недоверенным envelope. OAuth scope,
+current ACL, Mind и exact Site-selected writable target проверяются до fetch;
+затем fixed OpenAI HTTPS allowlist, no-credential redirects, timeout и counting
+stream защищают transport. Provider ID/URL обрываются на edge, а native и
+companion routes используют общий privacy-safe `staged_file_ref`, reconcile и
+atomic commit lifecycle. Apps widget переносит в model context только этот
+opaque ref и уже явные `mind`/target path через `ui/update-model-context`;
+полный app-only stage result и provider envelope туда не попадают. Реальный
+host picker/rewrite receipt остаётся UAT evidence и не заменяется compile-time
+profile, schema или tests. Поэтому repository wiring само по себе не превращает MD-317
 `not_available` observation в deployment claim.
 
 Отдельного persisted draft, diff approval и approval token нет. Authorization

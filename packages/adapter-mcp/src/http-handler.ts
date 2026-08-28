@@ -1,4 +1,8 @@
 import {
+  FILE_INGRESS_WIDGET_URI,
+  MCP_APPS_RESOURCE_MIME_TYPE,
+} from "./file-ingress-widget.js";
+import {
   MindBrowseFailure,
   MindDiscoveryFailure,
   MindHistoryFailure,
@@ -17,7 +21,6 @@ import {
   MCP_RETIRED_BINDING_TOOLS,
   MCP_MOVED_EXPORT_TOOLS,
   MCP_READ_TOOL_DEFINITIONS,
-  CANONICAL_DEFINITION_BY_NAME,
   MCP_ADVERTISED_CAPABILITIES,
   RESOURCE_CONTROL_CHARACTER,
   parseMcpResourceUri,
@@ -787,9 +790,11 @@ function listedTools(
   actor: McpAuthenticatedActor,
   definitions: readonly Readonly<Record<string, unknown>>[],
 ): readonly Readonly<Record<string, unknown>>[] {
-  const available = new Set(
+  const available = new Map(
     definitions.flatMap((definition) =>
-      typeof definition.name === "string" ? [definition.name] : [],
+      typeof definition.name === "string"
+        ? [[definition.name, definition] as const]
+        : [],
     ),
   );
   return Object.freeze(
@@ -798,10 +803,11 @@ function listedTools(
         (name) =>
           available.has(name) &&
           ((name !== "stage_bundle_file" &&
-            name !== "create_file_upload_intent") ||
+            name !== "create_file_upload_intent" &&
+            name !== "open_bundle_file_picker") ||
             tokenAllowsWrite(actor)),
       )
-      .map((name) => CANONICAL_DEFINITION_BY_NAME.get(name))
+      .map((name) => available.get(name))
       .filter(
         (definition): definition is Readonly<Record<string, unknown>> =>
           definition !== undefined,
@@ -839,7 +845,7 @@ function exactResourceReadUri(
     keys.length !== 2 ||
     keys[0] !== "_meta" ||
     keys[1] !== "uri" ||
-    parseMcpResourceUri(params.uri) === null
+    (parseMcpResourceUri(params.uri) === null && params.uri !== FILE_INGRESS_WIDGET_URI)
   ) {
     return null;
   }
@@ -913,9 +919,14 @@ function normalizedResourceRead(
   if (
     !isRecord(value) ||
     value.uri !== expectedUri ||
-    parseMcpResourceUri(value.uri) === null ||
-    value.mimeType !== "text/markdown; charset=utf-8" ||
-    typeof value.text !== "string"
+    !(
+      (parseMcpResourceUri(value.uri) !== null &&
+        value.mimeType === "text/markdown; charset=utf-8") ||
+      (value.uri === FILE_INGRESS_WIDGET_URI &&
+        value.mimeType === MCP_APPS_RESOURCE_MIME_TYPE)
+    ) ||
+    typeof value.text !== "string" ||
+    (value._meta !== undefined && !isRecord(value._meta))
   ) {
     return null;
   }
@@ -923,6 +934,7 @@ function normalizedResourceRead(
     uri: value.uri,
     mimeType: value.mimeType,
     text: value.text,
+    ...(value._meta === undefined ? {} : { _meta: value._meta }),
   });
 }
 
@@ -1342,6 +1354,7 @@ export function createMcpHttpHandlerAtEndpoint(
                   uri: read.uri,
                   mimeType: read.mimeType,
                   text: read.text,
+                  ...(read._meta === undefined ? {} : { _meta: read._meta }),
                 }),
               ]),
             },
@@ -1457,6 +1470,7 @@ export function createMcpHttpHandlerAtEndpoint(
       (name === "commit_changeset" ||
         name === "reconcile_changeset" ||
         name === "create_file_upload_intent" ||
+        name === "open_bundle_file_picker" ||
         name === "stage_bundle_file" ||
         name === "reconcile_file_stage" ||
         name === "capture_knowledge") &&
