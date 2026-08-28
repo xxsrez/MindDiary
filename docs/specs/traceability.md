@@ -362,7 +362,7 @@ failure; отсутствующий receipt остаётся pending.
     { "id": "aws-runtime", "claim": "AWS, AgentCore and a separate production runtime are not the Sites MVP fallback.", "evidence": ["architecture-check"] },
     { "id": "imports", "claim": "BundleFile, Brain-scale and Markdown import capabilities are post-MVP and cannot satisfy Release 0.1 readiness.", "evidence": ["okf-unit", "changeset-preflight"] },
     { "id": "checkpoints", "claim": "Branches, merge, moving tags and named checkpoints are absent.", "evidence": ["mind-history"] },
-    { "id": "bundle-file-expansion", "claim": "BundleFile and universal file-ingress surfaces are post-MVP and are not advertised as Release 0.1 support or used as a fallback.", "evidence": ["okf-unit", "changeset-preflight", "file-ingress-contract"] },
+    { "id": "bundle-file-expansion", "claim": "BundleFile and universal file-ingress surfaces are post-MVP and are not advertised as Release 0.1 support or used as a fallback.", "evidence": ["okf-unit", "changeset-preflight", "file-ingress-contract", "server-generated-composition"] },
     { "id": "personalization", "claim": "Personalized landing and website AI are not exposed.", "evidence": ["exposure-contract"] },
     { "id": "oauth-company-knowledge", "claim": "ChatGPT Web/public-directory and company-knowledge profiles are not claimed by the direct Codex UAT plugin.", "evidence": ["mcp-transport", "mcp-tools"] },
     { "id": "claude-support", "claim": "Claude Code is not a supported client without its own conformance evidence.", "evidence": ["mcp-transport"] },

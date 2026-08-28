@@ -89,7 +89,9 @@ test("registry binds all 29 criteria to one owner and concrete candidate paths",
   assert.equal(registry.criteria.filter(({ local_evidence }) => local_evidence.length === 0).length, 1);
   assert.equal(registry.criteria.at(-1).id, 29);
   assert.equal(registry.criteria.find(({ id }) => id === 21).local_evidence.includes("file-ingress-contract"), false);
+  assert.equal(registry.criteria.some(({ local_evidence }) => local_evidence.includes("server-generated-composition")), false);
   assert.ok(registry.post_mvp_denylist.some(({ evidence }) => evidence.includes("file-ingress-contract")));
+  assert.ok(registry.post_mvp_denylist.some(({ evidence }) => evidence.includes("server-generated-composition")));
   assert.deepEqual(Object.keys(registry.live_evidence).sort(), ["CX", "MI", "P", "R", "W"]);
 });
 
