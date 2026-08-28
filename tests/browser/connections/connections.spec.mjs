@@ -143,6 +143,10 @@ for (const definition of fixtureDefinitions) {
       await expect(page.getByRole("link", { name: "Next connections" })).toHaveCount(
         definition.count === 21 ? 1 : 0,
       );
+      await expect(page.locator("[data-connections-collection]")).toHaveAttribute(
+        "data-collection-state",
+        definition.count === 0 ? "empty" : "ready",
+      );
       if (definition.count === 0) {
         await expect(page.getByRole("link", { name: "Open the three-step guide" }))
           .toHaveAttribute("href", "/help/codex");
@@ -150,6 +154,16 @@ for (const definition of fixtureDefinitions) {
       await expectNoHorizontalOverflow(page);
 
       if (definition.count > 0) {
+        const hydratedCard = page.locator("[data-connections-collection] .md-token-card").first();
+        const hydratedReadSummary = hydratedCard
+          .locator("dt", { hasText: /^Can read$/u })
+          .locator("..").locator("dd");
+        await expect(hydratedReadSummary).toHaveText("1 available");
+        await expect(hydratedReadSummary).not.toContainText("selected");
+        await expect(page.locator("[data-connections-collection]")).not.toContainText(
+          /read selector|attach|detach/iu,
+        );
+
         const ref = `conn_v1_${"1".padStart(32, "0")}`;
         await page.goto(`${fixture.origin}/settings/connections/${ref}`);
         await expect(page.locator("[data-ia-codex-help-link]")).toHaveAttribute(
@@ -160,10 +174,14 @@ for (const definition of fixtureDefinitions) {
           level: 1,
           name: "Codex Marketplace on a deliberately narrow mobile viewport",
         })).toBeVisible();
-        await expect(page.getByRole("heading", { level: 2, name: "Can read" })).toBeVisible();
+        const readHeading = page.getByRole("heading", { level: 2, name: "Can read" });
+        await expect(readHeading).toBeVisible();
         await expect(page.getByRole("heading", { level: 2, name: "Can add and change" })).toBeVisible();
         await expect(page.getByText("3 Minds are readable with your current access.", { exact: false })).toBeVisible();
-        await expect(page.getByText(/there is no read selector/u)).toBeVisible();
+        const readSummary = readHeading.locator("..");
+        await expect(readSummary).toContainText("Access follows current membership and visibility automatically.");
+        await expect(readSummary.locator("li, select, button")).toHaveCount(0);
+        await expect(readSummary).not.toContainText(/read selector|attach|detach/iu);
         await expect(page.getByRole("button", { name: "Revoke connection" })).toBeVisible();
         await expectNoHorizontalOverflow(page);
       }

@@ -130,7 +130,7 @@
 
     const metadata = node("dl", "md-token-card__metadata");
     metadata.append(
-      definition("Can read", item.can_read ? `${item.readable_mind_count} selected` : "No"),
+      definition("Can read", item.can_read ? `${item.readable_mind_count} available` : "No"),
       definition("Can add and change", item.can_write ? (item.writable_mind_selected ? "One Mind selected" : "Not selected") : "No"),
       definition("Connected", dateLabel(item.created_at)),
       definition("Last used", dateLabel(item.last_used_at)),

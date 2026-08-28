@@ -231,7 +231,7 @@ function renderOrdinaryConnectionAccess(
       : '<section aria-labelledby="connection-write-access-heading"><h2 id="connection-write-access-heading">Can add and change</h2><p>No. Ask Codex to add or change a Memory to start the separate write permission step.</p></section>';
 
   return `<section class="md-binding-panel" data-access-panel data-access-endpoint="${endpoint}" data-target-version="${access.targetVersion}">
-    <section aria-labelledby="connection-read-access-heading"><h2 id="connection-read-access-heading">Can read</h2><p>${escapeUntrustedText(readableSummary)} Read access follows current membership and visibility automatically; there is no read selector.</p></section>
+    <section aria-labelledby="connection-read-access-heading"><h2 id="connection-read-access-heading">Can read</h2><p>${escapeUntrustedText(readableSummary)} Access follows current membership and visibility automatically.</p></section>
     ${writable}
     <p class="md-form__status" role="status" aria-live="polite" data-access-status></p>
   </section>`;

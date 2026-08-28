@@ -38,7 +38,7 @@ signal `OAuth on first use`, чтобы отделить установленн�
 | Route | Surface |
 |---|---|
 | `/settings/connections` | bounded список active OAuth connections текущего actor; ordinary navigation target |
-| `/settings/connections/{connection_ref}` | actor-owned connection detail, readable Minds, optional writable Mind и revoke |
+| `/settings/connections/{connection_ref}` | actor-owned connection detail, concise effective-access summary, optional writable Mind и revoke |
 | `/settings/developer/mcp` | Advanced MCP: personal tokens и их bounded history, endpoint/config, diagnostics и protocol-oriented recovery |
 | `/help/codex` | три пользовательских шага, ожидаемые Codex prompts и безопасное устранение ошибок |
 
@@ -149,7 +149,10 @@ GET /api/v1/connections?limit=20&cursor=opaque
 
 Один item содержит только `connection_ref`, safe client display name, created/
 last-used timestamps, пользовательские capabilities `can_read`/`can_write` и
-safe access summary. Ordinary copy отображает `Can read` и `Can add and change`,
+safe access summary. `readable_mind_count` — только aggregate count из current
+ACL/visibility: ordinary list называет эти Minds `available`, а не `selected`,
+не перечисляет их name/route/visibility и не вводит read selection, attach или
+detach semantics. Ordinary copy отображает `Can read` и `Can add and change`,
 а не protocol scopes. `can_write=false` не сопровождается selector или
 disabled write controls: write surface отсутствует до успешного step-up.
 
@@ -162,18 +165,23 @@ GET /api/v1/connections/{connection_ref}
 Detail возвращает только actor-safe projection:
 
 - client display name и active lifecycle;
-- `Can read` и список `0..N` currently accessible readable Minds;
+- `Can read` и concise `0..N` effective-access count/summary, вычисленный из
+  current ACL/visibility; readable Mind list не рендерится;
 - `Can add and change` только после current `content:write` step-up, с одним
   writable Mind либо `Not selected`;
 - transport-only `target_version` для CAS; он не показывается как
   пользовательская copy;
-- readable Minds вычисляются из current membership/visibility без persisted
-  attach state;
+- read summary не имеет selector, selection, attach/detach или persisted state;
+  count меняется вместе с current membership/visibility;
 - unavailable selected writable target показывается без name, route,
   `space_id` или generation;
 - safe actions select/switch/clear write и revoke.
 
-Routes и responses не показывают credential, binding или capture mechanics.
+Read summary не раскрывает names, routes, visibility и metadata отдельных
+readable либо уже недоступных Minds. Exact name/route допустимы только для
+currently accessible selected/eligible writable target внутри write surface;
+lost target остаётся redacted. Routes, DOM и ordinary responses не показывают
+raw credential/token IDs, owner/generation, binding или capture mechanics.
 Automatic capture остаётся Advanced/post-MVP capability и не блокирует 0.1
 onboarding.
 

@@ -6,6 +6,7 @@ import {
   renderConnectionDetailDocument,
   renderConnectionsPageDocument,
 } from "../../packages/adapter-web/dist/index.js";
+import { PRODUCT_CONNECTIONS_CLIENT_JAVASCRIPT } from "../../packages/adapter-web/dist/product-ui-assets.js";
 
 const CONNECTION_REF = `conn_v1_${"a".repeat(32)}`;
 const PERSONAL_TOKEN_REF = `ptok_v1_${"b".repeat(32)}`;
@@ -74,9 +75,21 @@ test("ordinary Connections keeps status and capabilities human-readable and boun
     assert.doesNotMatch(document, /attach_read|detach_read|read_binding|write_binding/u);
   }
   assert.match(html, /3 Minds are readable with your current access/);
-  assert.match(html, /there is no read selector/);
+  assert.match(html, /Access follows current membership and visibility automatically/);
   assert.doesNotMatch(html, /<ul class="md-binding-list"/);
+  assert.doesNotMatch(html, /read selector|attach|detach/iu);
   assert.match(html, /data-revoke-connection/);
+});
+
+test("hydrated ordinary Connections calls readable Minds available, never selected", () => {
+  assert.match(
+    PRODUCT_CONNECTIONS_CLIENT_JAVASCRIPT,
+    /definition\("Can read", item\.can_read \? `\$\{item\.readable_mind_count\} available`/u,
+  );
+  assert.doesNotMatch(
+    PRODUCT_CONNECTIONS_CLIENT_JAVASCRIPT,
+    /readable_mind_count\} selected|read selector|attach_read|detach_read/iu,
+  );
 });
 
 test("write-capable Connection starts empty without a Personal Mind fallback", () => {

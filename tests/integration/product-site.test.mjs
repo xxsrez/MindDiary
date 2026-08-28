@@ -626,6 +626,8 @@ test("product root, Connections, and Advanced MCP render safe live projections a
       assert.doesNotMatch(body, /api\/v1\/oauth-connections|api\/v1\/mind-bindings/);
       assert.match(body, /cache:\s*"no-store"/u);
       assert.match(body, /updated access could not be read back/u);
+      assert.match(body, /readable_mind_count\} available/u);
+      assert.doesNotMatch(body, /readable_mind_count\} selected|read selector|attach_read|detach_read/iu);
       assert.doesNotMatch(body, /console\.|localStorage|sessionStorage|sendBeacon/u);
     }
   }
@@ -1677,7 +1679,8 @@ test("Connections project and mutate one server-owned writable target with targe
   const detailHtml = await detail.text();
   assert.match(detailHtml, /data-target-version="8"/);
   assert.match(detailHtml, /2 Minds are readable with your current access/);
-  assert.match(detailHtml, /there is no read selector/);
+  assert.match(detailHtml, /Access follows current membership and visibility automatically/);
+  assert.doesNotMatch(detailHtml, /<ul class="md-binding-list"|read selector/iu);
   assert.match(detailHtml, /Research Notes[\s\S]*\/research-notes[\s\S]*unlisted/);
   assert.match(detailHtml, /data-access-action="select_write"/);
   assert.match(detailHtml, /data-access-action="clear_write"/);
