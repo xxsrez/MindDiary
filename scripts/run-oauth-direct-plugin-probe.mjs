@@ -34,7 +34,10 @@ import {
   FakeR2Bucket,
   deterministicKey,
 } from "./lib/fake-sites-storage.mjs";
-import { matchesExactMcpToolInventory } from "./lib/exact-mcp-tool-inventory.mjs";
+import {
+  matchesExactMcpToolInventory,
+  matchesExactReadOnlyMcpToolInventory,
+} from "./lib/exact-mcp-tool-inventory.mjs";
 import { assertNoSyntheticProductAuthority } from "./lib/synthetic-product-negative.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -46,7 +49,7 @@ const REDIRECT = "https://chatgpt.com/connector_platform_oauth_redirect";
 const EVIDENCE_SCHEMA = "mind-diary/oauth-direct-plugin-evidence/v1";
 const BINDING_NAMESPACE = "synthetic-test";
 const CLIENT = "codex-cli";
-const CLIENT_VERSION = "0.149.1";
+const CLIENT_VERSION = "0.150.1";
 const CODEX_SKILL_DISCOVERY_PROMPT =
   "Check whether the installed Mind Diary skill is available. Do not call tools.";
 const MAX_CODEX_PROMPT_INPUT_BYTES = 2 * 1024 * 1024;
@@ -119,7 +122,26 @@ export function assertDirectPackageServer(server) {
 }
 
 export function assertCodexCompatibleWriteBindingSchema(tools) {
-  if (!matchesExactMcpToolInventory(tools)) fail("codex_write_binding_schema_incompatible");
+  if (!matchesExactMcpToolInventory(tools)) {
+    fail("codex_write_binding_schema_incompatible", {
+      toolCount: Array.isArray(tools) ? tools.length : null,
+      toolNames: Array.isArray(tools)
+        ? tools.map((tool) => typeof tool?.name === "string" ? tool.name : "invalid")
+        : [],
+    });
+  }
+  return true;
+}
+
+export function assertCodexCompatibleReadCatalog(tools) {
+  if (!matchesExactReadOnlyMcpToolInventory(tools)) {
+    fail("codex_read_catalog_incompatible", {
+      toolCount: Array.isArray(tools) ? tools.length : null,
+      toolNames: Array.isArray(tools)
+        ? tools.map((tool) => typeof tool?.name === "string" ? tool.name : "invalid")
+        : [],
+    });
+  }
   return true;
 }
 
@@ -751,7 +773,7 @@ function expectMcpError(response, expected, code) {
   return response.body.result;
 }
 
-async function assertCompatibilityRead(actor, token) {
+async function assertCompatibilityRead(actor, token, { writeCatalog = false } = {}) {
   const initialized = await compatibility(actor, token, {
     jsonrpc: "2.0",
     id: "oauth-compat-init",
@@ -776,7 +798,8 @@ async function assertCompatibilityRead(actor, token) {
     params: {},
   });
   if (tools.status !== 200) fail("oauth_compat_tools_list_failed");
-  assertCodexCompatibleWriteBindingSchema(tools.body?.result?.tools);
+  if (writeCatalog) assertCodexCompatibleWriteBindingSchema(tools.body?.result?.tools);
+  else assertCodexCompatibleReadCatalog(tools.body?.result?.tools);
   const listed = await compatibility(actor, token, {
     jsonrpc: "2.0",
     id: "oauth-compat-list",
@@ -942,8 +965,7 @@ async function runOAuthScenario({ assertions, nowState }) {
     },
   });
   if (advertisedModernTools.status !== 200) fail("oauth_modern_tools_list_failed");
-  assertCodexCompatibleWriteBindingSchema(advertisedModernTools.body?.result?.tools);
-  assertions.add("oauth.catalog-modern-exact-18");
+  assertCodexCompatibleReadCatalog(advertisedModernTools.body?.result?.tools);
   const discovery = await modern(owner, readGrant.tokens.access_token, {
     jsonrpc: "2.0",
     id: "oauth-modern-discovery",
@@ -967,9 +989,7 @@ async function runOAuthScenario({ assertions, nowState }) {
   assertions.add("oauth.read-grant-modern-runtime");
   const compatList = await assertCompatibilityRead(owner, readGrant.tokens.access_token);
   if (!compatList.minds?.some((mind) => mind.route === "/me")) fail("oauth_compat_personal_mind_missing");
-  assertions.add("oauth.catalog-compat-exact-18");
   assertions.add("oauth.read-grant-compat-runtime");
-  assertions.add("oauth.codex-compatible-write-binding-schema");
   const personal = modernList.minds.find((mind) => mind.route === "/me");
   const writeChallenge = expectMcpError(
     await modernTool(owner, readGrant.tokens.access_token, "oauth-read-write", "commit_changeset", {
@@ -1043,6 +1063,24 @@ async function runOAuthScenario({ assertions, nowState }) {
   });
   if (writeGrant.tokens?.scope !== "content:read content:write") fail("oauth_write_scope_mismatch");
   assertions.add("oauth.write-step-up");
+  const advertisedWriteTools = await modern(owner, writeGrant.tokens.access_token, {
+    jsonrpc: "2.0",
+    id: "oauth-write-tools",
+    method: "tools/list",
+    params: {
+      _meta: {
+        "io.modelcontextprotocol/protocolVersion": MODERN_PROTOCOL,
+        "io.modelcontextprotocol/clientInfo": { name: "oauth-direct-plugin-gate", version: "1" },
+        "io.modelcontextprotocol/clientCapabilities": {},
+      },
+    },
+  });
+  if (advertisedWriteTools.status !== 200) fail("oauth_write_tools_list_failed");
+  assertCodexCompatibleWriteBindingSchema(advertisedWriteTools.body?.result?.tools);
+  assertions.add("oauth.catalog-modern-exact-18");
+  await assertCompatibilityRead(owner, writeGrant.tokens.access_token, { writeCatalog: true });
+  assertions.add("oauth.catalog-compat-exact-18");
+  assertions.add("oauth.codex-compatible-write-binding-schema");
   const writeAccessRecord = latestAccessRecord(database);
   const metadata = await createSitesMetadataStore(database);
   const activeMirror = await metadata.readMcpTokenForAuthorization(writeAccessRecord.id);
@@ -1230,7 +1268,7 @@ async function runOAuthScenario({ assertions, nowState }) {
     "personal_token_modern_failed",
   );
   assertions.add("personal-token.modern-regression");
-  await assertCompatibilityRead(owner, owner.mcpToken);
+  await assertCompatibilityRead(owner, owner.mcpToken, { writeCatalog: true });
   assertions.add("personal-token.compat-regression");
 
   if (ownerSession.personal_mind?.route !== "/me") fail("oauth_owner_session_invalid");

@@ -45,6 +45,9 @@ npm run gate:release-0.3-authority-target -- \
   --evidence-out /private/tmp/mind-diary-r03-authority-LOCAL/local.json
 ```
 
+Если Git worktree расположен не рядом с checkout `Srez Marketplace`, добавить
+`--marketplace-root /absolute/path/to/clean/Srez Marketplace`.
+
 Заменить SHA на полный SHA exact clean `HEAD`. Gate сам повторно сверяет HEAD и
 clean worktree до и после проб. Он последовательно запускает:
 
@@ -100,8 +103,9 @@ read-back предыдущего, а не локальное предполож�
 
 ### Каталоги и discovery
 
-- Fresh modern client (`2026-07-28`) и fresh compatibility client
-  (`2025-11-25`) получают ровно 18 names из contract fixture.
+- Fresh write-capable modern client (`2026-07-28`) и compatibility client
+  (`2025-11-25`) получают ровно 18 names из contract fixture. Read-only grant
+  получает exact 16-tool subset без двух write-only native staging tools.
 - `get_mind_bindings`, `set_read_mind_binding`,
   `set_write_mind_binding`, `start_export`, `get_export_status` отсутствуют в
   обоих catalogs. Exact cached calls возвращают принятый bounded compatibility

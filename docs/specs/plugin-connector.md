@@ -1,6 +1,6 @@
 # Plugin и OAuth Mind Diary
 
-Статус: accepted historical Release 0.1/0.2 contract, обновлено 2026-08-27.
+Статус: accepted historical Release 0.1/0.2 contract, обновлено 2026-08-28.
 OAuth Authorization Server, dual
 personal/OAuth MCP authentication, write step-up и connected-app revocation
 реализованы. Для Codex Desktop/CLI pilot 0.1 принят direct MCP package с OAuth
@@ -407,7 +407,7 @@ internal `principal_id`.
 ## MCP endpoint decision
 
 Canonical resource/audience pilot-а — existing `POST /api/mcp` с profile
-`2026-07-28`. Однако проверенная пара default `codex-cli 0.149.1` требует
+`2026-07-28`. Однако проверенная пара default `codex-cli 0.150.1` требует
 изолированный compatibility lifecycle `2025-11-25`, поэтому `.mcp.json`
 задаёт transport URL `/api/mcp/2025-11-25` и отдельный `oauth_resource`
 `/api/mcp`. Это не fallback между lifecycle внутри request и не смена OAuth

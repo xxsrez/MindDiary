@@ -41,8 +41,8 @@ export const EXPECTED_MCP_TOOL_NAMES = Object.freeze(
   EXPECTED_MCP_TOOL_INVENTORY.map(({ name }) => name),
 );
 
-export function matchesExactMcpToolInventory(tools) {
-  if (!Array.isArray(tools) || tools.length !== EXPECTED_MCP_TOOL_INVENTORY.length) {
+function matchesInventory(tools, expected) {
+  if (!Array.isArray(tools) || tools.length !== expected.length) {
     return false;
   }
   const entries = [];
@@ -68,5 +68,17 @@ export function matchesExactMcpToolInventory(tools) {
     }));
   }
   entries.sort((left, right) => left.name.localeCompare(right.name));
-  return canonical(entries) === canonical(EXPECTED_MCP_TOOL_INVENTORY);
+  return canonical(entries) === canonical(expected);
+}
+
+export function matchesExactMcpToolInventory(tools) {
+  return matchesInventory(tools, EXPECTED_MCP_TOOL_INVENTORY);
+}
+
+export function matchesExactReadOnlyMcpToolInventory(tools) {
+  return matchesInventory(
+    tools,
+    EXPECTED_MCP_TOOL_INVENTORY.filter(({ name }) =>
+      name !== "create_file_upload_intent" && name !== "stage_bundle_file"),
+  );
 }

@@ -17,6 +17,7 @@ import {
   CODEX_PLUGIN_OAUTH_RESOURCE,
   OAUTH_DIRECT_PLUGIN_ASSERTION_IDS,
   assertAutomaticCaptureSkillPolicy,
+  assertCodexCompatibleReadCatalog,
   assertCodexCompatibleWriteBindingSchema,
   assertCodexClientVersion,
   assertDirectPackageServer,
@@ -63,6 +64,9 @@ test("fresh Codex catalogs match the closed 18-tool names and schema hashes", ()
   }));
   assert.equal(current.length, 18);
   assert.equal(assertCodexCompatibleWriteBindingSchema(current), true);
+  assert.equal(assertCodexCompatibleReadCatalog(current.filter(
+    ({ name }) => name !== "create_file_upload_intent" && name !== "stage_bundle_file",
+  )), true);
   const mismatches = [
     current.slice(1),
     [...current, {
@@ -204,7 +208,7 @@ test("Codex prompt-input discovery fails closed for cache-only, wrong-source, an
 });
 
 test("Codex client version and prompt-input command availability fail closed", async () => {
-  assertCodexClientVersion("codex-cli 0.149.1\n");
+  assertCodexClientVersion("codex-cli 0.150.1\n");
   assert.throws(
     () => assertCodexClientVersion("codex-cli 0.147.0\n"),
     (error) => error instanceof ProbeFailure && error.code === "codex_version_mismatch",

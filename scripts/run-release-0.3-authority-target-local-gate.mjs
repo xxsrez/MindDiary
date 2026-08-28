@@ -47,7 +47,20 @@ async function runNode(args, code) {
       encoding: "utf8",
       maxBuffer: 16 * 1024 * 1024,
     });
-  } catch {
+  } catch (error) {
+    const lines = typeof error?.stderr === "string"
+      ? error.stderr.trim().split("\n").reverse()
+      : [];
+    for (const line of lines) {
+      try {
+        const parsed = JSON.parse(line);
+        if (typeof parsed?.code === "string" && /^[a-z][a-z0-9_]{0,63}$/u.test(parsed.code)) {
+          fail(parsed.code);
+        }
+      } catch (parseError) {
+        if (parseError instanceof Release03AuthorityTargetEvidenceError) throw parseError;
+      }
+    }
     fail(code);
   }
 }
