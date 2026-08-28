@@ -715,7 +715,6 @@ test("direct custom MCP omits native staging and fails closed before target or f
     name: "stage_bundle_file",
     arguments: {
       mind: "bundle-stage",
-      write_binding_id: "write_binding_stage",
       file: {
         file_id: "invented-provider-id",
         download_url: "https://files.oaiusercontent.com/file/invented-url",
