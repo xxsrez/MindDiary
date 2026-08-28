@@ -29,7 +29,7 @@ import {
   FakeR2Bucket,
   deterministicKey,
 } from "./lib/fake-sites-storage.mjs";
-import { matchesExactMcpToolInventory } from "./lib/exact-mcp-tool-inventory.mjs";
+import { matchesExactDefaultMcpToolInventory } from "./lib/exact-mcp-tool-inventory.mjs";
 import { assertNoSyntheticProductAuthority } from "./lib/synthetic-product-negative.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -135,7 +135,7 @@ async function assertExactMcpCatalogs(actor) {
       },
     }),
   });
-  if (modern.status !== 200 || !matchesExactMcpToolInventory(modern.body?.result?.tools)) {
+  if (modern.status !== 200 || !matchesExactDefaultMcpToolInventory(modern.body?.result?.tools)) {
     fail("mcp_modern_catalog_mismatch", { status: modern.status });
   }
 
@@ -189,7 +189,7 @@ async function assertExactMcpCatalogs(actor) {
       params: {},
     }),
   });
-  if (compat.status !== 200 || !matchesExactMcpToolInventory(compat.body?.result?.tools)) {
+  if (compat.status !== 200 || !matchesExactDefaultMcpToolInventory(compat.body?.result?.tools)) {
     fail("mcp_compat_catalog_mismatch", { status: compat.status });
   }
 }

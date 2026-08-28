@@ -40,6 +40,9 @@ export const EXPECTED_MCP_TOOL_INVENTORY = loadExpectedInventory();
 export const EXPECTED_MCP_TOOL_NAMES = Object.freeze(
   EXPECTED_MCP_TOOL_INVENTORY.map(({ name }) => name),
 );
+export const EXPECTED_DEFAULT_MCP_TOOL_NAMES = Object.freeze(
+  EXPECTED_MCP_TOOL_NAMES.filter((name) => name !== "stage_bundle_file"),
+);
 
 function matchesInventory(tools, expected) {
   if (!Array.isArray(tools) || tools.length !== expected.length) {
@@ -73,6 +76,16 @@ function matchesInventory(tools, expected) {
 
 export function matchesExactMcpToolInventory(tools) {
   return matchesInventory(tools, EXPECTED_MCP_TOOL_INVENTORY);
+}
+
+// The Product Site has no constructor-owned host rewrite assertion. Its
+// default write catalog therefore keeps ordinary upload intents but omits the
+// native file-parameter route until one exact host/profile proves the rewrite.
+export function matchesExactDefaultMcpToolInventory(tools) {
+  return matchesInventory(
+    tools,
+    EXPECTED_MCP_TOOL_INVENTORY.filter(({ name }) => name !== "stage_bundle_file"),
+  );
 }
 
 export function matchesExactReadOnlyMcpToolInventory(tools) {

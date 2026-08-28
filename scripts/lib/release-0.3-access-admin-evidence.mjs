@@ -5,7 +5,7 @@ import {
   digest,
   isRecord,
 } from "./multi-principal-probe-core.mjs";
-import { EXPECTED_MCP_TOOL_NAMES } from "./exact-mcp-tool-inventory.mjs";
+import { EXPECTED_DEFAULT_MCP_TOOL_NAMES } from "./exact-mcp-tool-inventory.mjs";
 import { verifyUatTestAccountPoolReadinessReceipt } from "./uat-test-account-pool-contract.mjs";
 
 export const RELEASE_03_ACCESS_ADMIN_RUNNER_ID =
@@ -456,7 +456,7 @@ export function createRelease03AccessAdminHostedObservation(input) {
   exactActorFingerprints(input.actorFingerprints);
   if (canonical(input.stateRows) !== canonical(RELEASE_03_ACCESS_ADMIN_STATE_ROWS) ||
       canonical(input.invitationRows) !== canonical(RELEASE_03_ACCESS_ADMIN_INVITATION_ROWS) ||
-      canonical(input.mcpToolNames) !== canonical(EXPECTED_MCP_TOOL_NAMES)) fail("invalid_hosted_observation_rows");
+      canonical(input.mcpToolNames) !== canonical(EXPECTED_DEFAULT_MCP_TOOL_NAMES)) fail("invalid_hosted_observation_rows");
   exactBooleanRecord(input.readBack, [
     "browser_rest_mcp_content_each_state",
     "current_role_on_every_request",
@@ -518,7 +518,7 @@ export function verifyRelease03AccessAdminHostedObservation(value) {
       !exactPassedRows(value.assertions, RELEASE_03_ACCESS_ADMIN_HOSTED_ASSERTION_IDS) ||
       canonical(value.state_rows) !== canonical(RELEASE_03_ACCESS_ADMIN_STATE_ROWS) ||
       canonical(value.invitation_rows) !== canonical(RELEASE_03_ACCESS_ADMIN_INVITATION_ROWS) ||
-      canonical(value.mcp_tool_names) !== canonical(EXPECTED_MCP_TOOL_NAMES)) {
+      canonical(value.mcp_tool_names) !== canonical(EXPECTED_DEFAULT_MCP_TOOL_NAMES)) {
     fail("invalid_hosted_observation");
   }
   exactActorFingerprints(value.actor_fingerprints);

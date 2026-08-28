@@ -17,7 +17,10 @@ import {
   createRelease03AccessAdminLocalEvidence,
   createRelease03AccessAdminUatJoin,
 } from "../../scripts/lib/release-0.3-access-admin-evidence.mjs";
-import { EXPECTED_MCP_TOOL_NAMES } from "../../scripts/lib/exact-mcp-tool-inventory.mjs";
+import {
+  EXPECTED_DEFAULT_MCP_TOOL_NAMES,
+  EXPECTED_MCP_TOOL_NAMES,
+} from "../../scripts/lib/exact-mcp-tool-inventory.mjs";
 import { SYNTHETIC_ASSERTION_IDS, canonical, digest } from "../../scripts/lib/multi-principal-probe-core.mjs";
 import {
   REQUIRED_UAT_TEST_ACTOR_ALIASES,
@@ -29,6 +32,15 @@ import {
   parseCli as parseJoinCli,
   readPrivateReceipt,
 } from "../../scripts/join-release-0.3-access-admin-uat.mjs";
+
+test("default Product Site catalog omits only the unverified native-file route", () => {
+  assert.equal(EXPECTED_DEFAULT_MCP_TOOL_NAMES.includes("stage_bundle_file"), false);
+  assert.equal(EXPECTED_DEFAULT_MCP_TOOL_NAMES.includes("create_file_upload_intent"), true);
+  assert.deepEqual(
+    EXPECTED_MCP_TOOL_NAMES.filter((name) => name !== "stage_bundle_file"),
+    EXPECTED_DEFAULT_MCP_TOOL_NAMES,
+  );
+});
 
 const candidate = "a".repeat(40);
 const deployment = "appgdep_md354fixture";
@@ -137,7 +149,7 @@ function hostedObservation(pool = readyPoolReceipt()) {
     versionId: "appgver_md354fixture",
     poolReceiptSha256: pool.artifact_sha256,
     actorFingerprints,
-    mcpToolNames: EXPECTED_MCP_TOOL_NAMES,
+    mcpToolNames: EXPECTED_DEFAULT_MCP_TOOL_NAMES,
     stateRows: RELEASE_03_ACCESS_ADMIN_STATE_ROWS,
     invitationRows: RELEASE_03_ACCESS_ADMIN_INVITATION_ROWS,
     readBack: allTrue([
@@ -179,7 +191,7 @@ test("hosted observation closes role, invitation, visibility, surface and cleanu
   const receipt = hostedObservation();
   assert.deepEqual(receipt.state_rows, RELEASE_03_ACCESS_ADMIN_STATE_ROWS);
   assert.deepEqual(receipt.invitation_rows, RELEASE_03_ACCESS_ADMIN_INVITATION_ROWS);
-  assert.deepEqual(receipt.mcp_tool_names, EXPECTED_MCP_TOOL_NAMES);
+  assert.deepEqual(receipt.mcp_tool_names, EXPECTED_DEFAULT_MCP_TOOL_NAMES);
   assert.deepEqual(
     receipt.assertions.map(({ id }) => id),
     RELEASE_03_ACCESS_ADMIN_HOSTED_ASSERTION_IDS,
@@ -230,7 +242,7 @@ test("hosted observation rejects control MCP drift and incomplete state or clean
     versionId: "appgver_md354fixture",
     poolReceiptSha256: pool.artifact_sha256,
     actorFingerprints,
-    mcpToolNames: EXPECTED_MCP_TOOL_NAMES,
+    mcpToolNames: EXPECTED_DEFAULT_MCP_TOOL_NAMES,
     stateRows: RELEASE_03_ACCESS_ADMIN_STATE_ROWS,
     invitationRows: RELEASE_03_ACCESS_ADMIN_INVITATION_ROWS,
     readBack: allTrue([
@@ -248,7 +260,7 @@ test("hosted observation rejects control MCP drift and incomplete state or clean
   assert.throws(
     () => createRelease03AccessAdminHostedObservation({
       ...args,
-      mcpToolNames: [...EXPECTED_MCP_TOOL_NAMES, "change_visibility"],
+      mcpToolNames: [...EXPECTED_DEFAULT_MCP_TOOL_NAMES, "change_visibility"],
     }),
     Release03AccessAdminEvidenceError,
   );
