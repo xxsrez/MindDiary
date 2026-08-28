@@ -146,6 +146,9 @@ export async function run(options, { now = () => new Date() } = {}) {
   const contract = validateContract(JSON.parse(await readFile(CONTRACT_PATH, "utf8")));
   const result = await runTests(contract.local_suites);
   if (result.code !== 0) fail("generated_source_local_matrix_failed");
+  if (!/[#ℹ]\s+fail\s+0(?:\r?\n|$)/u.test(result.stdout) ||
+      !/[#ℹ]\s+skipped\s+0(?:\r?\n|$)/u.test(result.stdout) ||
+      /#\s+SKIP\b/u.test(result.stdout)) fail("generated_source_local_matrix_incomplete");
   for (const name of contract.required_test_names) {
     if (!result.stdout.includes(name)) fail("generated_source_test_evidence_missing");
   }
@@ -154,6 +157,9 @@ export async function run(options, { now = () => new Date() } = {}) {
     sha256: await fileSha256(resolve(ROOT, path)),
     status: "passed",
   })));
+  // Recheck after every executable suite and file hash. A test or concurrent
+  // writer cannot move HEAD or dirty the candidate and still receive a receipt.
+  await exactCandidate(candidate);
   const evidence = createLocalEvidence({
     candidate,
     contract,
