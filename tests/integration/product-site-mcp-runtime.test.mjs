@@ -1581,8 +1581,8 @@ test("durable Product Site controls one token binding with ownership, CAS, read-
   const emptyHtml = await emptyPage.text();
   assert.match(emptyHtml, /Web binding token/u);
   assert.match(emptyHtml, /data-target-version="0"/u);
-  assert.match(emptyHtml, /Readable Minds always follow current membership and visibility/u);
-  assert.match(emptyHtml, /Can add and change[\s\S]*Not selected/u);
+  assert.match(emptyHtml, /\d+ Minds? (?:is|are) currently readable\. This always follows current membership and visibility/u);
+  assert.match(emptyHtml, /Writable target[\s\S]*Not selected[\s\S]*Select writable Mind/u);
   assert.doesNotMatch(emptyHtml, /Automatic knowledge capture/u);
 
   const mutate = (body, idempotencyKey) => responseFrom(runtime, new Request(
@@ -1613,7 +1613,7 @@ test("durable Product Site controls one token binding with ownership, CAS, read-
   const boundPage = await responseFrom(runtime, new Request(`${ORIGIN}/settings/developer/mcp`));
   const boundHtml = await boundPage.text();
   assert.match(boundHtml, /data-target-version="1"/u);
-  assert.match(boundHtml, /Can add and change[\s\S]*Web Binding E2E[\s\S]*\/me[\s\S]*private/u);
+  assert.match(boundHtml, /Writable target[\s\S]*Web Binding E2E[\s\S]*\/me[\s\S]*private/u);
   assert.doesNotMatch(boundHtml, /Automatic knowledge capture|data-binding-action/u);
   assert.doesNotMatch(boundHtml, /principal_|space_personal/u);
 
@@ -1674,18 +1674,19 @@ test("durable Product Site controls one token binding with ownership, CAS, read-
   assert.equal((await readOnlyWrite.json()).error.code, "write_step_up_required");
   const readOnlyPage = await responseFrom(runtime, new Request(`${ORIGIN}/settings/developer/mcp`));
   const readOnlyHtml = await readOnlyPage.text();
-  const panelFor = (html, tokenRef) => {
-    const marker = `data-personal-token-ref="${tokenRef}"`;
+  const panelFor = (html, tokenName) => {
+    const marker = `<h3>${tokenName}</h3>`;
     const markerStart = html.indexOf(marker);
-    assert.notEqual(markerStart, -1, `missing personal-token panel for ${tokenRef}`);
+    assert.notEqual(markerStart, -1, `missing personal-token panel for ${tokenName}`);
     const articleStart = html.lastIndexOf("<article", markerStart);
     const articleEnd = html.indexOf("</article>", markerStart);
     assert.notEqual(articleStart, -1);
     assert.notEqual(articleEnd, -1);
     return html.slice(articleStart, articleEnd + "</article>".length);
   };
-  const readOnlyPanel = panelFor(readOnlyHtml, readOnlyTokenRef);
-  assert.match(readOnlyPanel, /Readable Minds always follow current membership and visibility/u);
+  assert.doesNotMatch(readOnlyHtml, /data-personal-token-ref/u);
+  const readOnlyPanel = panelFor(readOnlyHtml, "Read-only binding token");
+  assert.match(readOnlyPanel, /\d+ Minds? (?:is|are) currently readable\. This always follows current membership and visibility/u);
   assert.doesNotMatch(readOnlyPanel, /data-access-action="attach_read"/u);
   assert.doesNotMatch(readOnlyPanel, /data-access-action="select_write"|Select one writable Mind/u);
 
@@ -1704,7 +1705,7 @@ test("durable Product Site controls one token binding with ownership, CAS, read-
   const revokedPage = await responseFrom(runtime, new Request(`${ORIGIN}/settings/developer/mcp?state=revoked`));
   const revokedHtml = await revokedPage.text();
   assert.match(revokedHtml, /Web binding token/u);
-  const revokedPanel = panelFor(revokedHtml, personalTokenRef);
+  const revokedPanel = panelFor(revokedHtml, "Web binding token");
   assert.doesNotMatch(revokedPanel, /data-access-form|data-access-action/u);
 
   const afterRevoke = await mutate({
@@ -1718,7 +1719,7 @@ test("durable Product Site controls one token binding with ownership, CAS, read-
   currentTime = new Date("2027-01-22T11:00:00.000Z");
   const expiredPage = await responseFrom(runtime, new Request(`${ORIGIN}/settings/developer/mcp?state=expired`));
   const expiredHtml = await expiredPage.text();
-  const expiredReadOnlyPanel = panelFor(expiredHtml, readOnlyTokenRef);
+  const expiredReadOnlyPanel = panelFor(expiredHtml, "Read-only binding token");
   assert.match(expiredReadOnlyPanel, /expired/u);
   assert.doesNotMatch(expiredReadOnlyPanel, /data-access-form|data-access-action/u);
   const expiredMutation = await responseFrom(runtime, new Request(
