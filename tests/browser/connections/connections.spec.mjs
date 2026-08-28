@@ -160,8 +160,10 @@ for (const definition of fixtureDefinitions) {
           level: 1,
           name: "Codex Marketplace on a deliberately narrow mobile viewport",
         })).toBeVisible();
-        await expect(page.getByRole("heading", { level: 3, name: "Can read" })).toBeVisible();
-        await expect(page.getByRole("heading", { level: 3, name: "Can add and change" })).toBeVisible();
+        await expect(page.getByRole("heading", { level: 2, name: "Can read" })).toBeVisible();
+        await expect(page.getByRole("heading", { level: 2, name: "Can add and change" })).toBeVisible();
+        await expect(page.getByText("3 Minds are readable with your current access.", { exact: false })).toBeVisible();
+        await expect(page.getByText(/there is no read selector/u)).toBeVisible();
         await expect(page.getByRole("button", { name: "Revoke connection" })).toBeVisible();
         await expectNoHorizontalOverflow(page);
       }

@@ -177,6 +177,66 @@ function renderMind(mind: SafeConnectionMind): string {
   return `<span class="md-binding-target"><strong>${escapeUntrustedText(mind.name)}</strong><code>${escapeUntrustedText(route)}</code><span>${escapeUntrustedText(mind.visibility)}</span></span>`;
 }
 
+function renderOrdinaryConnectionAccess(
+  access: SafeCredentialAccess,
+  connectionRef: string,
+  canWrite: boolean,
+): string {
+  if (
+    !CONNECTION_REF.test(connectionRef) ||
+    !Number.isSafeInteger(access.targetVersion) ||
+    access.targetVersion < 0
+  ) {
+    return `<section class="md-state md-state--error" role="alert"><h2>Mind access is unavailable</h2><p>Reload before changing this connection.</p></section>`;
+  }
+  const endpoint = `/api/v1/connections/${connectionRef}/mind-access`;
+  const readableCount = access.readableMinds.length;
+  const readableSummary = readableCount === 0
+    ? "No Minds are readable with your current access."
+    : `${readableCount} ${readableCount === 1 ? "Mind is" : "Minds are"} readable with your current access.`;
+  const writableOptions = access.eligibleMinds
+    .filter((mind) => mind.canWrite)
+    .map((mind) => {
+      const route = safeMindRoute(mind.route);
+      return route === null
+        ? ""
+        : `<option value="${escapeUntrustedText(route)}">${escapeUntrustedText(mind.name)} — ${escapeUntrustedText(route)}</option>`;
+    })
+    .join("");
+  const targetSummary =
+    access.writableTargetState === "selected" &&
+    access.writableMind !== null && access.writableMind !== undefined
+      ? renderMind(access.writableMind)
+      : access.writableTargetState === "unavailable"
+        ? '<p><strong>Unavailable</strong></p><p>The former target is disabled because current access no longer permits it. Its metadata stays hidden.</p>'
+        : access.writableTargetState === "reconsent_required"
+          ? '<p><strong>Reconnect required</strong></p><p>Reconnect this app before choosing a new writable Mind. The former target is not used.</p>'
+          : '<p><strong>Not selected</strong></p><p>No Mind receives changes. My Mind is never selected automatically.</p>';
+  const targetMutable = access.writableTargetState !== "reconsent_required" &&
+    access.writableTargetState !== "reissue_required";
+  const hasSelectedTarget = access.writableTargetState === "selected" ||
+    access.writableTargetState === "unavailable";
+  const selector = canWrite && targetMutable && writableOptions.length > 0
+    ? `<form data-access-form data-access-action="select_write"><label>${hasSelectedTarget ? "Switch" : "Select"} writable Mind<select name="mind_ref" required><option value="">Choose a Mind</option>${writableOptions}</select></label><button class="md-button md-button--secondary" type="submit">${hasSelectedTarget ? "Switch" : "Select"}</button></form>`
+    : canWrite && targetMutable
+      ? '<p>No currently writable Minds are available.</p>'
+      : "";
+  const clear = hasSelectedTarget && targetMutable
+    ? '<button class="md-button md-button--secondary" type="button" data-access-action="clear_write">Clear writable Mind</button>'
+    : "";
+  const writable = canWrite
+    ? `<section aria-labelledby="connection-write-access-heading"><h2 id="connection-write-access-heading">Can add and change</h2>${targetSummary}<div class="md-binding-controls">${selector}${clear}</div></section>`
+    : hasSelectedTarget
+      ? `<section aria-labelledby="connection-write-recovery-heading"><h2 id="connection-write-recovery-heading">Previous writable Mind</h2>${targetSummary}<p>This connection cannot write now. Clearing only removes the disabled selection.</p>${clear}</section>`
+      : '<section aria-labelledby="connection-write-access-heading"><h2 id="connection-write-access-heading">Can add and change</h2><p>No. Ask Codex to add or change a Memory to start the separate write permission step.</p></section>';
+
+  return `<section class="md-binding-panel" data-access-panel data-access-endpoint="${endpoint}" data-target-version="${access.targetVersion}">
+    <section aria-labelledby="connection-read-access-heading"><h2 id="connection-read-access-heading">Can read</h2><p>${escapeUntrustedText(readableSummary)} Read access follows current membership and visibility automatically; there is no read selector.</p></section>
+    ${writable}
+    <p class="md-form__status" role="status" aria-live="polite" data-access-status></p>
+  </section>`;
+}
+
 function renderAccess(
   access: SafeCredentialAccess,
   input: { readonly kind: "connection" | "personal_token"; readonly ref: string; readonly canWrite: boolean },
@@ -229,8 +289,7 @@ export function renderConnectionDetailDocument(model: ConnectionDetailModel): st
     <main id="main-content" class="md-main" tabindex="-1" data-ia-main>
       <p><a href="/settings/connections">← Connections</a></p>
       <div class="md-page-heading" data-ia-page-header><div><p class="md-eyebrow">Connected app</p><h1>${escapeUntrustedText(connection.clientName)}</h1><p>Connected ${escapeUntrustedText(dateLabel(connection.createdAt))}; last used ${escapeUntrustedText(dateLabel(connection.lastUsedAt))}.</p></div><span class="md-token-state md-token-state--active">● Connected</span></div>
-      ${renderAccess(connection.access, { kind: "connection", ref: connection.connectionRef, canWrite: connection.canWrite })}
-      ${connection.canWrite ? "" : '<p class="md-caveat"><strong>Can add and change:</strong> No. Ask Codex to add or change a Memory to start the separate write permission step.</p>'}
+      ${renderOrdinaryConnectionAccess(connection.access, connection.connectionRef, connection.canWrite)}
       <section class="md-setup-card" aria-labelledby="disconnect-heading"><h2 id="disconnect-heading">Disconnect</h2><p>Revoking stops this app immediately and removes it from Connections.</p><button class="md-button md-button--danger" type="button" data-revoke-connection data-revoke-endpoint="/api/v1/connections/${connection.connectionRef}">Revoke connection</button><p class="md-form__status" role="status" aria-live="polite" data-revoke-status></p></section>
     </main>
     ${renderMindDiaryAuthenticatedFooter("connections")}

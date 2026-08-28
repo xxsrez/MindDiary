@@ -1669,7 +1669,8 @@ test("Connections project and mutate one server-owned writable target with targe
   assert.equal(detail.status, 200);
   const detailHtml = await detail.text();
   assert.match(detailHtml, /data-target-version="8"/);
-  assert.match(detailHtml, /Product Owner[\s\S]*\/me[\s\S]*private/);
+  assert.match(detailHtml, /2 Minds are readable with your current access/);
+  assert.match(detailHtml, /there is no read selector/);
   assert.match(detailHtml, /Research Notes[\s\S]*\/research-notes[\s\S]*unlisted/);
   assert.match(detailHtml, /data-access-action="select_write"/);
   assert.match(detailHtml, /data-access-action="clear_write"/);
@@ -1799,8 +1800,8 @@ test("read-only Connections reject selection but allow recovery-safe clear", asy
   const response = await handler(new Request(`${origin}/settings/connections/${connectionRef}`));
   assert.equal(response.status, 200);
   const html = await response.text();
-  assert.match(html, /Can add and change:<\/strong> No/);
   assert.match(html, /Previous writable Mind/);
+  assert.match(html, /This connection cannot write now/);
   assert.match(html, /data-access-action="clear_write"/);
   assert.doesNotMatch(html, /data-access-action="select_write"|Select one writable Mind/);
 
