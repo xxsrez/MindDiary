@@ -19,6 +19,9 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@v5
+        with:
+          # Conformance binds accepted deltas to exact historical Git objects.
+          fetch-depth: 0
       - name: Use pinned Node baseline
         uses: actions/setup-node@v5
         with:
