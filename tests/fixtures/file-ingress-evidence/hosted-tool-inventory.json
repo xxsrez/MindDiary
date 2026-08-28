@@ -42,7 +42,7 @@
       "name": "get_file_ingress_capabilities",
       "source": "mind-diary-hosted-mcp-tools-list",
       "input_schema_sha256": "sha256:71fc596a20f27da3dec80050e5d1f553eba34aea24c2853b853488a811e6b892",
-      "output_schema_sha256": "sha256:002c2888211d5ddb1865071c5271ad53f4735dbfdc235cce383fcadc15034573"
+      "output_schema_sha256": "sha256:155e3e1bc12922507ae530eb57e876c357c12858f2ba3b1f78ad7ff1203d45a8"
     },
     {
       "name": "get_mind_info",

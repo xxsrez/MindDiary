@@ -57,13 +57,25 @@ test("Codex plugin uses the isolated compatibility transport with the canonical 
   }
 });
 
-test("fresh Codex catalogs match the closed 18-tool names and schema hashes", () => {
+test("fresh Codex catalogs include native-route evidence and match the closed schema hashes", () => {
   const current = MCP_TOOL_DEFINITIONS.map(({ name, inputSchema, outputSchema }) => ({
     name,
     inputSchema,
     outputSchema,
   }));
   assert.equal(current.length, 18);
+  const nativeIngress = current.find(({ name }) => name === "get_file_ingress_capabilities");
+  assert.deepEqual(
+    nativeIngress?.outputSchema?.properties?.data?.properties?.native_file_parameter?.required,
+    [
+      "source_kind",
+      "transport",
+      "status",
+      "route_profile_id",
+      "host_rewrite_assertion_id",
+      "host_rewrite_observed_at_utc",
+    ],
+  );
   assert.equal(assertCodexCompatibleWriteBindingSchema(current), true);
   assert.equal(assertCodexCompatibleReadCatalog(current.filter(
     ({ name }) => name !== "create_file_upload_intent" && name !== "stage_bundle_file",
