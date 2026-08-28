@@ -266,6 +266,11 @@ schema/application/client evidence.
 5. Ambiguous, duplicate, foreign-owner, corrupt, partially migrated или
    unavailable state получает empty target либо terminal unavailable error,
    но никогда guessed target.
+6. First-party credential administration не превращает отсутствующий
+   normalized owner record у уже principal-scoped active legacy credential в
+   общий `403`: Connections показывает `re-consent required`, Advanced MCP —
+   `reissue required`. До remediation обе проекции имеют empty target и не
+   содержат ACL-derived Mind names, routes или selectable candidates.
 
 ### OAuth grant
 

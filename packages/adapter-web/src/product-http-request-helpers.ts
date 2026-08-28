@@ -635,21 +635,28 @@ function safeCredentialAccess(
     owner.lifecycleState !== "active" &&
     owner.lifecycleState !== "pending_upgrade"
   ) return null;
+  if (owner.lifecycleState === "pending_upgrade") {
+    return Object.freeze({
+      targetVersion: owner.targetVersion,
+      readableMinds: Object.freeze([]) as readonly SafeConnectionMind[],
+      writableMind: null,
+      writableTargetState: owner.credentialKind === "personal_token"
+        ? "reissue_required" as const
+        : "reconsent_required" as const,
+      eligibleMinds: Object.freeze([]) as readonly SafeConnectionMind[],
+    });
+  }
   const readableMinds = canRead
     ? Object.freeze([...candidates.values()]) as readonly SafeConnectionMind[]
     : Object.freeze([]) as readonly SafeConnectionMind[];
   const writeCandidate = owner.targetMindId === null
     ? null
     : candidates.get(owner.targetMindId) ?? null;
-  const writableTargetState = owner.lifecycleState === "pending_upgrade"
-    ? owner.credentialKind === "personal_token"
-      ? "reissue_required" as const
-      : "reconsent_required" as const
-    : owner.targetMindId === null
-      ? "not_selected" as const
-      : writeCandidate === null
-        ? "unavailable" as const
-        : "selected" as const;
+  const writableTargetState = owner.targetMindId === null
+    ? "not_selected" as const
+    : writeCandidate === null
+      ? "unavailable" as const
+      : "selected" as const;
   return Object.freeze({
     targetVersion: owner.targetVersion,
     readableMinds,
@@ -782,15 +789,27 @@ export async function safeWritableTargetAccessByOwner(
   }>[],
 ): Promise<ReadonlyMap<string, SafeCredentialAccess>> {
   if (credentials.length === 0) return new Map();
-  const [candidates, owners] = await Promise.all([
-    safeBindingCandidates(control, actor),
-    writableTargets.listResolved(actor, credentials),
-  ]);
+  const owners = await writableTargets.listResolved(actor, credentials);
   const byOwner = new Map(owners.map((owner) => [owner.ownerId, owner] as const));
+  const resolvedOwners = credentials.map((credential) => byOwner.get(credential.ownerId) ?? (
+    credential.state === "active"
+      ? Object.freeze({
+          ownerId: credential.ownerId,
+          credentialKind: credential.credentialKind,
+          lifecycleState: "pending_upgrade" as const,
+          targetVersion: 0,
+          targetMindId: null,
+        })
+      : undefined
+  ));
+  const candidates = resolvedOwners.some((owner) => owner?.lifecycleState === "active")
+    ? await safeBindingCandidates(control, actor)
+    : new Map<string, MindBindingUiMind>();
   const projections = new Map<string, SafeCredentialAccess>();
-  for (const credential of credentials) {
+  for (const [index, credential] of credentials.entries()) {
+    const owner = resolvedOwners[index];
     const access = safeCredentialAccess(
-      byOwner.get(credential.ownerId),
+      owner,
       candidates,
       credential.scopes.includes("content:read"),
     );

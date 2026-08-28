@@ -1029,7 +1029,7 @@ test("plugin/help migration has closed owners and exact current source evidence"
         {
           role: "help-route-source",
           path: "packages/adapter-web/src/product-http-request-helpers.ts",
-          gitBlob: "5ee5465442d0b53acb34cd529a61aa8569989ecc",
+          gitBlob: "cc06f9dae5008737f039c2a5d2516d1ed4e3f2cb",
         },
       ],
     },

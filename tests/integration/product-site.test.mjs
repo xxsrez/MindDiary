@@ -1762,6 +1762,71 @@ test("Connections project and mutate one server-owned writable target with targe
   assert.equal(JSON.stringify(staleBody).includes(bindingOwnerId), false);
 });
 
+test("legacy Connections without a normalized target stay recoverable and disclose no Minds", async () => {
+  const connectionRef = `conn_v1_${"5".repeat(32)}`;
+  const bindingOwnerId = "legacy_connection_owner";
+  const handler = createProductWebHttpHandler({
+    applicationOrigin: origin,
+    resolveIdentity: () => ({ kind: "authenticated", actor: registeredActor }),
+    csrf: { issue: () => "csrf-legacy-connection", verify: () => true },
+    control: { execute(request) {
+      if (request.operation === "get_session") return sessionProjection;
+      if (request.operation === "list_minds") {
+        throw new Error("legacy recovery must not depend on ACL-derived Minds");
+      }
+      throw new Error("unexpected operation");
+    } },
+    oauthConnections: {
+      async listPage() {
+        return {
+          items: [{
+            connectionRef,
+            bindingOwnerId,
+            clientName: "Legacy Codex",
+            scopes: ["content:read", "content:write"],
+            createdAt: "2026-08-08T00:00:00.000Z",
+            lastUsedAt: null,
+          }],
+          nextCursor: null,
+        };
+      },
+      async read(_principalId, presentedRef) {
+        return presentedRef === connectionRef ? {
+          connectionRef,
+          bindingOwnerId,
+          clientName: "Legacy Codex",
+          scopes: ["content:read", "content:write"],
+          createdAt: "2026-08-08T00:00:00.000Z",
+          lastUsedAt: null,
+        } : null;
+      },
+      async revoke() { return true; },
+    },
+    writableTargets: {
+      async listResolved() { return []; },
+      async mutateResolved() { throw new Error("legacy target must not mutate"); },
+    },
+  });
+
+  const collection = await handler(new Request(`${origin}/api/v1/connections`));
+  assert.equal(collection.status, 200);
+  const collectionBody = await collection.json();
+  assert.equal(collectionBody.data.items[0].readable_mind_count, 0);
+  assert.equal(collectionBody.data.items[0].writable_mind_selected, false);
+  assert.doesNotMatch(JSON.stringify(collectionBody), /My Mind|Research Notes|\/me|\/research-notes/u);
+
+  const detail = await handler(new Request(`${origin}/settings/connections/${connectionRef}`));
+  assert.equal(detail.status, 200);
+  const detailHtml = await detail.text();
+  assert.match(detailHtml, /Reconnect required/);
+  assert.match(detailHtml, /No Minds are readable with your current access/);
+  const accessPanel = detailHtml.match(
+    /<section class="md-binding-panel"[\s\S]*?<section class="md-setup-card"/u,
+  )?.[0] ?? "";
+  assert.notEqual(accessPanel, "");
+  assert.doesNotMatch(accessPanel, /My Mind|Research Notes|\/me|\/research-notes|name="mind_ref"/u);
+});
+
 
 test("read-only Connections reject selection but allow recovery-safe clear", async () => {
   const connectionRef = `conn_v1_${"6".repeat(32)}`;
