@@ -45,19 +45,31 @@ test("failed initialization is evicted and configuration mismatch creates a clea
   );
 });
 
-test("hung initialization is bounded and evicted so a later request can retry", async () => {
+test("a timed-out request leaves the sole initialization flight shared with an early retry", async () => {
   const cache = new IsolateRuntimeCache();
   const environment = {};
   let attempts = 0;
-  const hangingCreate = async () => {
+  let concurrent = 0;
+  let maximumConcurrent = 0;
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const dispatched = [];
+  const create = async (schedule) => {
     attempts += 1;
-    return new Promise(() => {});
+    concurrent += 1;
+    maximumConcurrent = Math.max(maximumConcurrent, concurrent);
+    await gate;
+    schedule({ id: "job-from-late-initialization" });
+    concurrent -= 1;
+    return { generation: attempts };
   };
   const first = cache.acquire({
     environment,
     fingerprint: "a",
-    create: hangingCreate,
-    dispatch: async () => undefined,
+    create,
+    dispatch: async (runtime, work) => {
+      dispatched.push([runtime.generation, work.id]);
+    },
     initializationTimeoutMs: 25,
   });
   const firstOutcome = await Promise.race([
@@ -71,11 +83,77 @@ test("hung initialization is bounded and evicted so a later request can retry", 
   const retry = cache.acquire({
     environment,
     fingerprint: "a",
-    create: async () => ({ generation: 2 }),
+    create,
+    dispatch: async (runtime, work) => {
+      dispatched.push([runtime.generation, work.id]);
+    },
+    initializationTimeoutMs: 1_000,
+  });
+  await Promise.resolve();
+  assert.equal(attempts, 1);
+  assert.equal(maximumConcurrent, 1);
+
+  release();
+  assert.deepEqual(await retry.runtime, { generation: 1 });
+  const scheduled = retry.drainScheduled();
+  assert.equal(scheduled.length, 1);
+  await Promise.all(scheduled);
+  assert.deepEqual(dispatched, [[1, "job-from-late-initialization"]]);
+  assert.equal(maximumConcurrent, 1);
+  assert.deepEqual(
+    await cache.acquire({
+      environment,
+      fingerprint: "a",
+      create,
+      dispatch: async () => undefined,
+    }).runtime,
+    { generation: 1 },
+  );
+  assert.equal(attempts, 1);
+});
+
+test("late initialization failure evicts only after settlement and permits a clean retry", async () => {
+  const cache = new IsolateRuntimeCache();
+  const environment = {};
+  let attempts = 0;
+  let rejectInitialization;
+  const create = async () => {
+    attempts += 1;
+    if (attempts === 1) {
+      return new Promise((_, reject) => { rejectInitialization = reject; });
+    }
+    return { generation: attempts };
+  };
+  const first = cache.acquire({
+    environment,
+    fingerprint: "a",
+    create,
     dispatch: async () => undefined,
     initializationTimeoutMs: 25,
   });
-  assert.deepEqual(await retry.runtime, { generation: 2 });
+  await assert.rejects(first.runtime, { code: "runtime_initialization_timeout" });
+
+  const shared = cache.acquire({
+    environment,
+    fingerprint: "a",
+    create,
+    dispatch: async () => undefined,
+    initializationTimeoutMs: 1_000,
+  });
+  assert.equal(attempts, 1);
+  rejectInitialization(new Error("late synthetic init failure"));
+  await assert.rejects(shared.runtime, /late synthetic init failure/u);
+
+  assert.deepEqual(
+    await cache.acquire({
+      environment,
+      fingerprint: "a",
+      create,
+      dispatch: async () => undefined,
+    }).runtime,
+    { generation: 2 },
+  );
+  assert.equal(attempts, 2);
 });
 
 test("scheduled work is drained without retaining any request execution context", async () => {

@@ -54,13 +54,16 @@ test("production Worker disables request-triggered recovery by default", async (
   assert.equal(waits.length, 0);
 });
 
-test("a cold runtime failure returns a bounded 503 and the next request retries cleanly", async () => {
+test("a cold runtime timeout returns bounded 503s without retaining request contexts or duplicating initialization", async () => {
+  const environment = {};
   let attempts = 0;
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
   const worker = createMindDiaryProductWorker({
     runtimeInitializationTimeoutMs: 25,
     async createRuntime() {
       attempts += 1;
-      if (attempts === 1) return new Promise(() => {});
+      await gate;
       return {
         async fetch() { return new Response("ok"); },
         async recoverBackground() {},
@@ -70,22 +73,35 @@ test("a cold runtime failure returns a bounded 503 and the next request retries 
     readConfig() { return { publicOrigin: ORIGIN }; },
     async fallbackFetch() { return new Response("fallback", { status: 404 }); },
   });
-  const context = { waitUntil() {} };
+  const firstWaits = [];
   const first = await worker.fetch(
     new Request(`${ORIGIN}/minds`, { headers: { accept: "text/html" } }),
-    {},
-    context,
+    environment,
+    { waitUntil: (promise) => firstWaits.push(promise) },
   );
   assert.equal(first.status, 503);
   assert.equal(attempts, 1);
+  assert.equal(firstWaits.length, 0);
+
+  const secondWaits = [];
   const second = await worker.fetch(
     new Request(`${ORIGIN}/minds`, { headers: { accept: "text/html" } }),
-    {},
-    context,
+    environment,
+    { waitUntil: (promise) => secondWaits.push(promise) },
   );
-  assert.equal(second.status, 200);
-  assert.equal(await second.text(), "ok");
-  assert.equal(attempts, 2);
+  assert.equal(second.status, 503);
+  assert.equal(attempts, 1);
+  assert.equal(secondWaits.length, 0);
+
+  release();
+  const third = await worker.fetch(
+    new Request(`${ORIGIN}/minds`, { headers: { accept: "text/html" } }),
+    environment,
+    { waitUntil() {} },
+  );
+  assert.equal(third.status, 200);
+  assert.equal(await third.text(), "ok");
+  assert.equal(attempts, 1);
 });
 
 test("production Worker disables best-effort Web activity writes by default", async () => {

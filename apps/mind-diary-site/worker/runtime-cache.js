@@ -33,30 +33,32 @@ export class IsolateRuntimeCache {
     if (slot === undefined || slot.fingerprint !== options.fingerprint) {
       const created = {
         fingerprint: options.fingerprint,
-        runtime: Promise.reject(new Error("runtime initialization not started")),
+        initialization: undefined,
         scheduled: new Set(),
       };
-      // The placeholder rejection is never observed: replace it synchronously.
-      created.runtime.catch(() => undefined);
       const schedule = (work) => {
-        const pending = created.runtime
+        const pending = created.initialization
           .then((runtime) => options.dispatch(runtime, work))
           .catch(() => undefined);
         created.scheduled.add(pending);
       };
+      // create runs in a microtask, after initialization has been assigned, so
+      // schedule can safely share the same immutable flight.
       const initialization = Promise.resolve().then(() => options.create(schedule));
-      created.runtime = withInitializationTimeout(initialization, timeoutMs).catch((error) => {
+      created.initialization = initialization;
+      // A request timeout bounds only that request. The underlying flight stays
+      // authoritative until it settles, preventing an overlapping generation.
+      void initialization.catch(() => {
         if (this.#slots.get(options.environment) === created) {
           this.#slots.delete(options.environment);
         }
-        throw error;
       });
       slot = created;
       this.#slots.set(options.environment, created);
     }
     const selected = slot;
     return Object.freeze({
-      runtime: selected.runtime,
+      runtime: withInitializationTimeout(selected.initialization, timeoutMs),
       drainScheduled: () => {
         const drained = Object.freeze([...selected.scheduled]);
         selected.scheduled.clear();
