@@ -139,6 +139,7 @@ class FakeD1Database {
   #failTag = null;
   #batchTail = Promise.resolve();
   #activityWriteGate = null;
+  #metadataReadGate = null;
 
   prepare(sql) {
     return new FakeD1Statement(this, sql);
@@ -197,6 +198,15 @@ class FakeD1Database {
     const wait = new Promise((resolve) => { release = resolve; });
     const started = new Promise((resolve) => { markStarted = resolve; });
     this.#activityWriteGate = { wait, markStarted };
+    return Object.freeze({ started, release });
+  }
+
+  holdNextMetadataRead() {
+    let release;
+    let markStarted;
+    const wait = new Promise((resolve) => { release = resolve; });
+    const started = new Promise((resolve) => { markStarted = resolve; });
+    this.#metadataReadGate = { wait, markStarted };
     return Object.freeze({ started, release });
   }
 
@@ -580,6 +590,12 @@ class FakeD1Database {
     }
     if (sql.includes("/*md-metadata-events-tail*/")) {
       this.metadataReadLog.push("tail");
+      if (this.#metadataReadGate !== null) {
+        const gate = this.#metadataReadGate;
+        this.#metadataReadGate = null;
+        gate.markStarted();
+        await gate.wait;
+      }
       return {
         success: true,
         results: this.metadataEvents
@@ -718,6 +734,30 @@ test("Sites metadata applies cold schema migrations in one D1 batch", async () =
     0,
   );
   assert.deepEqual(database.batchStatementCounts, [expectedMigrationStatements, 3]);
+});
+
+test("hung metadata D1 reads fail fast and release the serialized read queue", async () => {
+  const database = new FakeD1Database();
+  const store = await createSitesMetadataStore(database, { d1TimeoutMs: 25 });
+  const gate = database.holdNextMetadataRead();
+  const first = store.readAccount("principal_missing");
+  await gate.started;
+  const second = store.readAccount("principal_missing");
+
+  const firstOutcome = await Promise.race([
+    first.then(() => "completed", (error) => error),
+    new Promise((resolve) => setTimeout(() => resolve("blocked"), 100)),
+  ]);
+  gate.release();
+  assert.notEqual(firstOutcome, "blocked");
+  assert.equal(firstOutcome?.code, "metadata_d1_timeout");
+  assert.equal(firstOutcome?.message, "D1 metadata tail read timed out");
+  const secondOutcome = await Promise.race([
+    second.then(() => "completed"),
+    new Promise((resolve) => setTimeout(() => resolve("blocked"), 100)),
+  ]);
+  assert.equal(secondOutcome, "completed");
+  await second;
 });
 
 class FakeR2Body {

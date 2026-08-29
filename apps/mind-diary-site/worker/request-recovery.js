@@ -1,4 +1,7 @@
-import { IsolateRuntimeCache } from "./runtime-cache.js";
+import {
+  IsolateRuntimeCache,
+  RUNTIME_INITIALIZATION_TIMEOUT_MS,
+} from "./runtime-cache.js";
 
 const STATIC_PATH_PREFIXES = Object.freeze([
   "/_next/",
@@ -213,6 +216,8 @@ export function createMindDiaryProductWorker(options) {
     throw new TypeError("product Worker dependencies are required");
   }
   const runtimeCache = options.runtimeCache ?? new IsolateRuntimeCache();
+  const runtimeInitializationTimeoutMs =
+    options.runtimeInitializationTimeoutMs ?? RUNTIME_INITIALIZATION_TIMEOUT_MS;
   // Sites shares the Worker/D1 resource budget between foreground requests and
   // waitUntil work. Keep request-triggered recovery opt-in until a dedicated
   // scheduler exists; operator-owned full recovery remains available through
@@ -234,6 +239,7 @@ export function createMindDiaryProductWorker(options) {
         const acquired = runtimeCache.acquire({
           environment,
           fingerprint,
+          initializationTimeoutMs: runtimeInitializationTimeoutMs,
           dispatch: dispatchScheduled,
           create: (schedule) => {
             const generatedSourceTest =

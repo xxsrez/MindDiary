@@ -1,3 +1,5 @@
+export const RUNTIME_INITIALIZATION_TIMEOUT_MS: number;
+
 export interface RuntimeCacheHandle<Runtime> {
   readonly runtime: Promise<Runtime>;
   /** Removes only work captured by this isolate slot; no request context is retained. */
@@ -19,5 +21,6 @@ export declare class IsolateRuntimeCache<
       runtime: Runtime,
       work: Readonly<Work>,
     ) => Promise<unknown>;
+    readonly initializationTimeoutMs?: number;
   }): RuntimeCacheHandle<Runtime>;
 }

@@ -244,6 +244,7 @@ const TOKEN_MUTATIONS = new Set([
 const MAX_CAS_ATTEMPTS = 16;
 const SNAPSHOT_CHUNK_CODE_UNITS = 256 * 1_024;
 const SITES_METADATA_SCHEMA_VERSION = SITES_METADATA_MIGRATIONS.at(-1)?.version ?? 0;
+export const SITES_METADATA_D1_TIMEOUT_MS = 2_500;
 const TOKEN_SNAPSHOT_CADENCE = 16;
 const MIND_BINDING_SNAPSHOT_CADENCE = 16;
 const OBJECT_CLEANUP_SNAPSHOT_CADENCE = 16;
@@ -326,6 +327,27 @@ function decode<Value>(value: string): Value {
 
 function changes(result: D1ResultLike): number {
   return Number(result.meta?.changes ?? 0);
+}
+
+async function withD1Timeout<Result>(
+  operation: Promise<Result>,
+  timeoutMs: number,
+  description: string,
+): Promise<Result> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      reject(Object.assign(
+        new Error(`D1 ${description} timed out`),
+        { code: "metadata_d1_timeout" },
+      ));
+    }, timeoutMs);
+  });
+  try {
+    return await Promise.race([operation, timeout]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
 }
 
 function methodOf(target: object, property: string): (...args: unknown[]) => unknown {
@@ -444,6 +466,7 @@ async function currentRouteAuthorizationStateWithToken(
 export class SitesMetadataStore {
   readonly kind = "metadata-store" as const;
   readonly #database: D1DatabaseLike;
+  readonly #d1TimeoutMs: number;
   #metadata = new InMemoryRevisionMetadataStore();
   #tokens = new InMemoryMcpTokenStore();
   #sequence = 0;
@@ -453,8 +476,15 @@ export class SitesMetadataStore {
   #activityTail: Promise<void> = Promise.resolve();
   #proxy: this;
 
-  constructor(database: D1DatabaseLike) {
+  constructor(
+    database: D1DatabaseLike,
+    options: Readonly<{ readonly d1TimeoutMs?: number }> = {},
+  ) {
     this.#database = database;
+    this.#d1TimeoutMs = options.d1TimeoutMs ?? SITES_METADATA_D1_TIMEOUT_MS;
+    if (!Number.isSafeInteger(this.#d1TimeoutMs) || this.#d1TimeoutMs < 1) {
+      throw new TypeError("metadata D1 timeout must be a positive integer");
+    }
     const proxy = new Proxy(this, {
       get: (target, property, receiver) => {
         if (typeof property !== "string") return Reflect.get(target, property, receiver);
@@ -646,7 +676,10 @@ export class SitesMetadataStore {
           .bind(migration.version, migration.name, appliedAt),
       );
     }
-    await this.#database.batch(statements);
+    await this.#boundedD1(
+      this.#database.batch(statements),
+      "metadata schema migration",
+    );
     this.#initialized = true;
   }
 
@@ -654,6 +687,10 @@ export class SitesMetadataStore {
     if (property in this.#metadata) return { target: "metadata" };
     if (property in this.#tokens) return { target: "tokens" };
     return null;
+  }
+
+  #boundedD1<Result>(operation: Promise<Result>, description: string): Promise<Result> {
+    return withD1Timeout(operation, this.#d1TimeoutMs, description);
   }
 
   async #refresh(): Promise<void> {
@@ -687,8 +724,9 @@ export class SitesMetadataStore {
   }
 
   async #load(): Promise<LoadedState> {
-    const result = await this.#database
-      .prepare(
+    const result = await this.#boundedD1(
+      this.#database
+        .prepare(
         `/*md-metadata-cold-load*/ WITH
          schema_guard AS (
            SELECT
@@ -767,8 +805,10 @@ export class SitesMetadataStore {
            )
            AND NOT EXISTS (SELECT 1 FROM md_metadata_events)
          ORDER BY row_kind ASC, sequence ASC, chunk_index ASC`,
-      )
-      .all<DurableColdLoadRow>();
+        )
+        .all<DurableColdLoadRow>(),
+      "metadata cold load",
+    );
     const rows = [...(result.results ?? [])];
     if (
       rows.length === 0 ||
@@ -856,13 +896,16 @@ export class SitesMetadataStore {
     tokens: InMemoryMcpTokenStore,
     afterSequence: number,
   ): Promise<TailReplayResult> {
-    const result = await this.#database
-      .prepare(
+    const result = await this.#boundedD1(
+      this.#database
+        .prepare(
         `/*md-metadata-events-tail*/ SELECT sequence, target, operation, payload_json
          FROM md_metadata_events WHERE sequence > ?1 ORDER BY sequence ASC`,
-      )
-      .bind(afterSequence)
-      .all<DurableEventRow>();
+        )
+        .bind(afterSequence)
+        .all<DurableEventRow>(),
+      "metadata tail read",
+    );
     return this.#replayRows(metadata, tokens, afterSequence, result.results ?? []);
   }
 
@@ -1043,22 +1086,25 @@ export class SitesMetadataStore {
     tokens: InMemoryMcpTokenStore,
   ): Promise<boolean> {
     const sequence = expectedSequence + 1;
-    const result = await this.#database
-      .prepare(
+    const result = await this.#boundedD1(
+      this.#database
+        .prepare(
         `/*md-metadata-append*/ INSERT INTO md_metadata_events
          (sequence, target, operation, payload_json, committed_at)
          SELECT ?1, ?2, ?3, ?4, ?5
          WHERE COALESCE((SELECT MAX(sequence) FROM md_metadata_events), 0) = ?6`,
-      )
-      .bind(
-        sequence,
-        event.target,
-        event.method,
-        encode(event),
-        new Date().toISOString(),
-        expectedSequence,
-      )
-      .run();
+        )
+        .bind(
+          sequence,
+          event.target,
+          event.method,
+          encode(event),
+          new Date().toISOString(),
+          expectedSequence,
+        )
+        .run(),
+      "metadata append",
+    );
     if (changes(result) !== 1) return false;
     if (shouldCheckpointEvent(event, sequence)) {
       try {
@@ -1115,14 +1161,18 @@ export class SitesMetadataStore {
          )`,
       ),
     );
-    await this.#database.batch(statements);
+    await this.#boundedD1(
+      this.#database.batch(statements),
+      "metadata snapshot write",
+    );
   }
 
   async #upsertPrincipalActivity(
     summary: Readonly<PrincipalActivitySummary>,
   ): Promise<void> {
-    await this.#database
-      .prepare(
+    await this.#boundedD1(
+      this.#database
+        .prepare(
         `/*md-principal-activity-upsert*/ INSERT INTO md_principal_activity
          (principal_id, last_web_seen_at, last_mcp_seen_at, last_activity_at,
           last_activity_surface, last_activity_kind)
@@ -1157,16 +1207,18 @@ export class SitesMetadataStore {
              THEN excluded.last_activity_kind
              ELSE md_principal_activity.last_activity_kind
            END`,
-      )
-      .bind(
-        summary.principalId,
-        summary.lastWebSeenAt,
-        summary.lastMcpSeenAt,
-        summary.lastActivityAt,
-        summary.lastActivitySurface,
-        summary.lastActivityKind,
-      )
-      .run();
+        )
+        .bind(
+          summary.principalId,
+          summary.lastWebSeenAt,
+          summary.lastMcpSeenAt,
+          summary.lastActivityAt,
+          summary.lastActivitySurface,
+          summary.lastActivityKind,
+        )
+        .run(),
+      "principal activity write",
+    );
   }
 
   async #readPrincipalActivityRows(
@@ -1185,7 +1237,10 @@ export class SitesMetadataStore {
              FROM md_principal_activity WHERE principal_id = ?1`,
           )
           .bind(principalId);
-    const result = await statement.all<PrincipalActivityRow>();
+    const result = await this.#boundedD1(
+      statement.all<PrincipalActivityRow>(),
+      "principal activity read",
+    );
     return Object.freeze([...(result.results ?? [])]);
   }
 
@@ -1235,13 +1290,16 @@ export class SitesMetadataStore {
   }
 
   async #deletePrincipalActivity(principalId: PrincipalId): Promise<void> {
-    await this.#database
-      .prepare(
+    await this.#boundedD1(
+      this.#database
+        .prepare(
         `/*md-principal-activity-delete*/ DELETE FROM md_principal_activity
          WHERE principal_id = ?1`,
-      )
-      .bind(principalId)
-      .run();
+        )
+        .bind(principalId)
+        .run(),
+      "principal activity delete",
+    );
   }
 
   async #cleanupPrincipalActivityAfterTransaction(
@@ -1312,8 +1370,9 @@ export interface SitesMetadataStore
 
 export async function createSitesMetadataStore(
   database: D1DatabaseLike,
+  options: Readonly<{ readonly d1TimeoutMs?: number }> = {},
 ): Promise<SitesMetadataStore> {
-  return new SitesMetadataStore(database).ready();
+  return new SitesMetadataStore(database, options).ready();
 }
 
 export * from "./local-file-upload-intent-store.js";

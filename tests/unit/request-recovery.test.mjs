@@ -54,6 +54,40 @@ test("production Worker disables request-triggered recovery by default", async (
   assert.equal(waits.length, 0);
 });
 
+test("a cold runtime failure returns a bounded 503 and the next request retries cleanly", async () => {
+  let attempts = 0;
+  const worker = createMindDiaryProductWorker({
+    runtimeInitializationTimeoutMs: 25,
+    async createRuntime() {
+      attempts += 1;
+      if (attempts === 1) return new Promise(() => {});
+      return {
+        async fetch() { return new Response("ok"); },
+        async recoverBackground() {},
+        async dispatchBackground() {},
+      };
+    },
+    readConfig() { return { publicOrigin: ORIGIN }; },
+    async fallbackFetch() { return new Response("fallback", { status: 404 }); },
+  });
+  const context = { waitUntil() {} };
+  const first = await worker.fetch(
+    new Request(`${ORIGIN}/minds`, { headers: { accept: "text/html" } }),
+    {},
+    context,
+  );
+  assert.equal(first.status, 503);
+  assert.equal(attempts, 1);
+  const second = await worker.fetch(
+    new Request(`${ORIGIN}/minds`, { headers: { accept: "text/html" } }),
+    {},
+    context,
+  );
+  assert.equal(second.status, 200);
+  assert.equal(await second.text(), "ok");
+  assert.equal(attempts, 2);
+});
+
 test("production Worker disables best-effort Web activity writes by default", async () => {
   let createdOptions;
   const worker = createMindDiaryProductWorker({

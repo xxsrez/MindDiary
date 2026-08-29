@@ -45,6 +45,39 @@ test("failed initialization is evicted and configuration mismatch creates a clea
   );
 });
 
+test("hung initialization is bounded and evicted so a later request can retry", async () => {
+  const cache = new IsolateRuntimeCache();
+  const environment = {};
+  let attempts = 0;
+  const hangingCreate = async () => {
+    attempts += 1;
+    return new Promise(() => {});
+  };
+  const first = cache.acquire({
+    environment,
+    fingerprint: "a",
+    create: hangingCreate,
+    dispatch: async () => undefined,
+    initializationTimeoutMs: 25,
+  });
+  const firstOutcome = await Promise.race([
+    first.runtime.then(() => "completed", (error) => error),
+    new Promise((resolve) => setTimeout(() => resolve("blocked"), 100)),
+  ]);
+  assert.notEqual(firstOutcome, "blocked");
+  assert.match(firstOutcome.message, /timed out/u);
+  assert.equal(attempts, 1);
+
+  const retry = cache.acquire({
+    environment,
+    fingerprint: "a",
+    create: async () => ({ generation: 2 }),
+    dispatch: async () => undefined,
+    initializationTimeoutMs: 25,
+  });
+  assert.deepEqual(await retry.runtime, { generation: 2 });
+});
+
 test("scheduled work is drained without retaining any request execution context", async () => {
   const cache = new IsolateRuntimeCache();
   const environment = {};
