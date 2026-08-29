@@ -862,15 +862,21 @@ export async function createProductSiteRuntime(
       release();
     }
   };
-  const [metadata, objects, index, audit, tokenHasher, downloadCrypto, csrf] = await Promise.all([
-    createSitesMetadataStore(options.database),
+  // D1 serializes schema-changing batches. Starting metadata, search, audit
+  // and the other D1-backed adapters in one Promise.all made cold isolates
+  // contend on the same database and could hold the first page for tens of
+  // seconds. Keep non-D1 crypto/R2 setup parallel, but establish each D1
+  // schema in a deterministic order before serving a request.
+  const [objects, tokenHasher, downloadCrypto, csrf] = await Promise.all([
     createSitesObjectStore(options.bucket),
-    createSitesSearchIndex(options.database),
-    createSitesAuditSink(options.database),
     createWebCryptoTokenHasher({ verifierKey: options.tokenVerifierKey }),
     createWebCryptoExportDownloadSecretCrypto({ verifierKey: options.exportDownloadVerifierKey }),
     createCsrf(options.csrfKey),
   ]);
+  const metadata = await createSitesMetadataStore(options.database);
+  const index = await createSitesSearchIndex(options.database);
+  const audit = await createSitesAuditSink(options.database);
+  const uploadIntentMetadata = await createSitesLocalFileUploadIntentStore(options.database);
   const tokensMissingPresentationRefs = await metadata.listMcpTokensMissingPresentationRefs();
   if (tokensMissingPresentationRefs.length > 0) {
     await metadata.assignPersonalTokenRefs(tokensMissingPresentationRefs.map((tokenId) =>
@@ -963,9 +969,6 @@ export async function createProductSiteRuntime(
   });
   const uploadIntentSecrets = await createLocalFileUploadIntentSecretCodec(
     options.tokenVerifierKey,
-  );
-  const uploadIntentMetadata = await createSitesLocalFileUploadIntentStore(
-    options.database,
   );
   const uploadIntents = new LocalFileUploadIntentService({
     authorizer: contentAuthorizer,

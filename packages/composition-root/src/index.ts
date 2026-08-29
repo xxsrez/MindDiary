@@ -119,12 +119,15 @@ export interface SitesPersistenceBoundaryOptions {
 export async function createSitesPersistenceBoundary(
   options: SitesPersistenceBoundaryOptions,
 ) {
-  const [metadata, objects, index, audit] = await Promise.all([
+  // D1 schema batches must not compete with one another during a cold start.
+  // Keep the R2 adapter parallel, then initialize each D1-backed adapter in a
+  // deterministic order so the first request does not inherit lock waits.
+  const [metadata, objects] = await Promise.all([
     createSitesMetadataStore(options.database),
     createSitesObjectStore(options.bucket),
-    createSitesSearchIndex(options.database),
-    createSitesAuditSink(options.database),
   ]);
+  const index = await createSitesSearchIndex(options.database);
+  const audit = await createSitesAuditSink(options.database);
   return Object.freeze({
     metadata,
     tokens: metadata,

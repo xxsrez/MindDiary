@@ -936,7 +936,9 @@ explicit target Mind. General cross-Mind search/synthesis требует нов�
   остаются operator-owned работой вне navigation path.
   Cold-isolate schema bootstrap отправляет все ordered idempotent metadata
   migrations одним D1 batch вместо отдельного network round-trip на каждую
-  migration. Current-schema cold load одним guarded SQL получает snapshot chunks
+  migration; отдельные D1-backed adapters (metadata, search, audit,
+  upload-intent) запускают свои schema batches последовательно, а не
+  конкурируют за один D1 lock. Current-schema cold load одним guarded SQL получает snapshot chunks
   и canonical event tail; fresh/older schema автоматически применяет migration
   batch и повторяет тот же read. Таким образом обычный isolate startup не делает
   отдельные head, chunks, tail и no-op migration round-trips.
