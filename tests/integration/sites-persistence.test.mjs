@@ -139,6 +139,7 @@ class FakeD1Database {
   #failTag = null;
   #batchTail = Promise.resolve();
   #activityWriteGate = null;
+  #metadataAppendGate = null;
   #metadataReadGate = null;
 
   prepare(sql) {
@@ -210,6 +211,15 @@ class FakeD1Database {
     return Object.freeze({ started, release });
   }
 
+  holdNextMetadataAppend({ failAfterRelease = false } = {}) {
+    let release;
+    let markStarted;
+    const wait = new Promise((resolve) => { release = resolve; });
+    const started = new Promise((resolve) => { markStarted = resolve; });
+    this.#metadataAppendGate = { wait, markStarted, failAfterRelease };
+    return Object.freeze({ started, release });
+  }
+
   #maybeFail(sql) {
     if (this.#failTag && sql.includes(this.#failTag)) {
       const tag = this.#failTag;
@@ -219,6 +229,15 @@ class FakeD1Database {
   }
 
   async run(sql, values) {
+    if (sql.includes("/*md-metadata-append*/") && this.#metadataAppendGate !== null) {
+      const gate = this.#metadataAppendGate;
+      this.#metadataAppendGate = null;
+      gate.markStarted();
+      await gate.wait;
+      if (gate.failAfterRelease) {
+        throw new Error("synthetic delayed D1 append failure");
+      }
+    }
     this.#maybeFail(sql);
     if (values.some((value) =>
       typeof value === "string" && value.length > this.maxBoundStringLength)) {
@@ -758,6 +777,72 @@ test("hung metadata D1 reads fail fast and release the serialized read queue", a
   ]);
   assert.equal(secondOutcome, "completed");
   await second;
+});
+
+test("canonical metadata append waits past the read timeout and restart replay stays singular", async () => {
+  const database = new FakeD1Database();
+  const store = await createSitesMetadataStore(database, { d1TimeoutMs: 25 });
+  const gate = database.holdNextMetadataAppend();
+  const principalId = opaqueId("principal_delayed_append_success");
+  const mutation = store.createMcpToken({
+    tokenId: "token_delayed_append_success",
+    principalId,
+    name: "Delayed append success",
+    verifier: `hmac-sha256:v1:${"d".repeat(64)}`,
+    displayPrefix: "mdp_v1_abcdef…",
+    scopes: ["content:read"],
+    createdAt: T0,
+    expiresAt: "2026-11-06T08:00:00.000Z",
+  });
+  await gate.started;
+
+  const outcomeBeforeRelease = await Promise.race([
+    mutation.then(() => "settled", () => "settled"),
+    new Promise((resolve) => setTimeout(() => resolve("pending"), 75)),
+  ]);
+  assert.equal(outcomeBeforeRelease, "pending");
+  gate.release();
+
+  assert.equal((await mutation).kind, "created");
+  assert.equal(database.metadataEvents.length, 1);
+  const restarted = await createSitesMetadataStore(database);
+  assert.deepEqual(
+    (await restarted.listMcpTokenMetadata(principalId)).map((token) => token.tokenId),
+    ["token_delayed_append_success"],
+  );
+  const replayedAgain = await createSitesMetadataStore(database);
+  assert.equal((await replayedAgain.listMcpTokenMetadata(principalId)).length, 1);
+  assert.equal(database.metadataEvents.length, 1);
+});
+
+test("canonical metadata append reports a late D1 failure without a durable event", async () => {
+  const database = new FakeD1Database();
+  const store = await createSitesMetadataStore(database, { d1TimeoutMs: 25 });
+  const gate = database.holdNextMetadataAppend({ failAfterRelease: true });
+  const principalId = opaqueId("principal_delayed_append_failure");
+  const mutation = store.createMcpToken({
+    tokenId: "token_delayed_append_failure",
+    principalId,
+    name: "Delayed append failure",
+    verifier: `hmac-sha256:v1:${"e".repeat(64)}`,
+    displayPrefix: "mdp_v1_abcdef…",
+    scopes: ["content:read"],
+    createdAt: T0,
+    expiresAt: "2026-11-06T08:00:00.000Z",
+  });
+  await gate.started;
+
+  const outcomeBeforeRelease = await Promise.race([
+    mutation.then(() => "settled", () => "settled"),
+    new Promise((resolve) => setTimeout(() => resolve("pending"), 75)),
+  ]);
+  assert.equal(outcomeBeforeRelease, "pending");
+  gate.release();
+
+  await assert.rejects(mutation, /synthetic delayed D1 append failure/u);
+  assert.equal(database.metadataEvents.length, 0);
+  const restarted = await createSitesMetadataStore(database);
+  assert.deepEqual(await restarted.listMcpTokenMetadata(principalId), []);
 });
 
 class FakeR2Body {

@@ -1086,25 +1086,26 @@ export class SitesMetadataStore {
     tokens: InMemoryMcpTokenStore,
   ): Promise<boolean> {
     const sequence = expectedSequence + 1;
-    const result = await this.#boundedD1(
-      this.#database
-        .prepare(
+    // D1 promises do not expose cancellation. Timing out this canonical write
+    // would let the caller observe failure while the same INSERT can still
+    // commit, making an automatic retry ambiguous. Reads and derived writes
+    // remain bounded, but the fenced event append must reach its exact result.
+    const result = await this.#database
+      .prepare(
         `/*md-metadata-append*/ INSERT INTO md_metadata_events
          (sequence, target, operation, payload_json, committed_at)
          SELECT ?1, ?2, ?3, ?4, ?5
          WHERE COALESCE((SELECT MAX(sequence) FROM md_metadata_events), 0) = ?6`,
-        )
-        .bind(
-          sequence,
-          event.target,
-          event.method,
-          encode(event),
-          new Date().toISOString(),
-          expectedSequence,
-        )
-        .run(),
-      "metadata append",
-    );
+      )
+      .bind(
+        sequence,
+        event.target,
+        event.method,
+        encode(event),
+        new Date().toISOString(),
+        expectedSequence,
+      )
+      .run();
     if (changes(result) !== 1) return false;
     if (shouldCheckpointEvent(event, sequence)) {
       try {
