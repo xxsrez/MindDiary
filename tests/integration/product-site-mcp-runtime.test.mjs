@@ -4116,6 +4116,7 @@ test("request-triggered recovery reclaims a revision after an injected index dis
     async createRuntime(options) {
       restartedRuntime = await createProductSiteRuntime({
         ...options,
+        webActivityEnabled: true,
         observabilityWriter: { write(line) { telemetryLines.push(line); } },
       });
       return restartedRuntime;

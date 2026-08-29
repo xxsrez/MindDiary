@@ -195,6 +195,8 @@ export interface ProductSiteRuntimeOptions {
   readonly csrfKey: Uint8Array;
   /** Optional 256-bit gate-only key authenticating bounded benchmark correlation. */
   readonly performanceCorrelationKey?: Uint8Array;
+  /** Optional UAT safeguard: skip best-effort Web activity writes on navigation. */
+  readonly webActivityEnabled?: boolean;
   /** Constructor-only service authority. Missing/empty configuration fails closed. */
   readonly serviceOperatorPrincipalIds?: readonly string[];
   /**
@@ -1865,7 +1867,7 @@ export async function createProductSiteRuntime(
         return mutateResolvedWritableTarget(actor, credential, input);
       },
     },
-    activity,
+    ...(options.webActivityEnabled === false ? {} : { activity }),
   });
   const exportDownload = createProductExportDownloadHttpHandler({
     async download(secret) {

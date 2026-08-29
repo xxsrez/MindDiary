@@ -931,8 +931,9 @@ explicit target Mind. General cross-Mind search/synthesis требует нов�
   отключён: Sites делит ресурсный бюджет Worker/D1 между foreground request и
   `waitUntil`, поэтому даже bounded request-triggered pass может занять общий
   контур и вызвать starvation навигации. Request recovery оставлен opt-in для
-  изолированных проверок, а тяжёлые batch recovery остаются operator-owned
-  работой вне navigation path.
+  изолированных проверок; UAT также не пишет best-effort Web activity в
+  `waitUntil`, пока для неё нет отдельной очереди. Тяжёлые batch recovery
+  остаются operator-owned работой вне navigation path.
   Cold-isolate schema bootstrap отправляет все ordered idempotent metadata
   migrations одним D1 batch вместо отдельного network round-trip на каждую
   migration. Current-schema cold load одним guarded SQL получает snapshot chunks

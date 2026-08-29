@@ -54,6 +54,26 @@ test("production Worker disables request-triggered recovery by default", async (
   assert.equal(waits.length, 0);
 });
 
+test("production Worker disables best-effort Web activity writes by default", async () => {
+  let createdOptions;
+  const worker = createMindDiaryProductWorker({
+    async createRuntime(options) {
+      createdOptions = options;
+      return {
+        async fetch() { return new Response("ok"); },
+        async recoverBackground() {},
+        async dispatchBackground() {},
+      };
+    },
+    readConfig() { return { publicOrigin: ORIGIN }; },
+    async fallbackFetch() { return new Response("fallback", { status: 404 }); },
+  });
+  await worker.fetch(new Request(`${ORIGIN}/minds`, { headers: { accept: "text/html" } }), {}, {
+    waitUntil() {},
+  });
+  assert.equal(createdOptions.webActivityEnabled, false);
+});
+
 test("foreground reads never inherit scheduled work from request recovery", async () => {
   let schedule;
   let releaseDispatch;

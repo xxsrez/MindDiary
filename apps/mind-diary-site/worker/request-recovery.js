@@ -238,6 +238,10 @@ export function createMindDiaryProductWorker(options) {
               database: environment.DB,
               bucket: environment.MIND_DIARY_BUCKET,
               ...config,
+              // Web activity is observational and writes to the same D1
+              // binding as navigation. Keep it opt-in on Sites until a
+              // dedicated queue exists; MCP activity remains unchanged.
+              webActivityEnabled: false,
               ...(generatedSourceTest === undefined
                 ? {}
                 : { restrictedUatGeneratedSourceTest: generatedSourceTest }),
