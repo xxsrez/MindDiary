@@ -46,8 +46,9 @@ test("foreground reads never inherit scheduled work from request recovery", asyn
       schedule = capturedSchedule;
       return {
         async fetch() { return new Response("ok"); },
-        async recoverBackground(limit) {
+        async recoverBackground(limit, mode) {
           assert.equal(limit, 4);
+          assert.equal(mode, "request");
           schedule({ kind: "revision_index", id: "job_recovery" });
         },
         async dispatchBackground() { await dispatchGate; },

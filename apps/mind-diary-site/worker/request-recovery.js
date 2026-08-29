@@ -257,7 +257,7 @@ export function createMindDiaryProductWorker(options) {
               // Request-triggered maintenance must remain a tiny repair tick.
               // Larger batches are explicit operator work: on Sites they can
               // occupy the shared D1 binding long enough to starve navigation.
-              return await runtime.recoverBackground(4);
+              return await runtime.recoverBackground(4, "request");
             } finally {
               // Work produced by recovery belongs to the pulse that started
               // it. Never leave it for an unrelated foreground read to adopt.

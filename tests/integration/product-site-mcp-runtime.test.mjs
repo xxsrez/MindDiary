@@ -1602,6 +1602,18 @@ test("empty account reaches a strict starter commit and first useful search/fetc
   assert.equal(readyInfo.index_status.status, "ready");
   assert.equal(readyInfo.index_status.retryable, false);
 
+  const telemetryBeforeRequestRecovery = telemetryLines.length;
+  const requestRecovery = await runtime.recoverBackground(1, "request");
+  assert.equal(requestRecovery.failed, 0);
+  const requestRecoveryOperations = telemetryLines
+    .slice(telemetryBeforeRequestRecovery)
+    .map((line) => JSON.parse(line).operation)
+    .filter((operation) => operation?.startsWith("recovery_"));
+  assert.deepEqual(
+    requestRecoveryOperations.sort(),
+    ["recovery_index_dispatch", "recovery_index_gaps", "recovery_total"].sort(),
+  );
+
   for (const [id, digest, expectedStatus, expectedCode] of [
     ["starter-index-stale-digest", initialIndexDigest, 200, "file_digest_mismatch"],
     ["starter-index-malformed-digest", "sha256:not-a-digest", 200, "invalid_operation"],

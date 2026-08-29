@@ -175,6 +175,13 @@ export interface ProductSiteTrustedIdentityReader {
     | Promise<TrustedSitesIdentitySnapshot>;
 }
 
+/**
+ * Full recovery is operator/background work. The request pulse is deliberately
+ * limited to exact-revision index reconciliation so it cannot run cleanup or
+ * export scans on the foreground metadata queue.
+ */
+export type ProductSiteRecoveryMode = "full" | "request";
+
 export interface ProductSiteRuntimeOptions {
   readonly database: MetadataD1DatabaseLike & SearchD1DatabaseLike & AuditD1DatabaseLike & OAuthD1DatabaseLike;
   readonly bucket: R2BucketLike;
@@ -216,8 +223,11 @@ export interface ProductSiteRuntime {
   ) => Promise<Response | null>;
   /** Trusted constructor-owned bytes ingress; never an HTTP or MCP route. */
   readonly boundedInMemoryIngress: BoundedInMemoryIngressPort;
-  /** Bounded request-triggered recovery for exact-revision index work. */
-  readonly recoverBackground: (limit?: number) => Promise<Readonly<{
+  /** Bounded recovery; request mode is restricted to exact-revision index work. */
+  readonly recoverBackground: (
+    limit?: number,
+    mode?: ProductSiteRecoveryMode,
+  ) => Promise<Readonly<{
     backfilled: number;
     repaired: number;
     dispatched: number;
@@ -1993,7 +2003,14 @@ export async function createProductSiteRuntime(
     },
   });
 
-  const recoverBackground = async (requestedLimit = 16) => {
+  const recoverBackground = async (
+    requestedLimit = 16,
+    mode: ProductSiteRecoveryMode = "full",
+  ) => {
+    if (mode !== "full" && mode !== "request") {
+      throw new TypeError("unknown product recovery mode");
+    }
+    const requestTick = mode === "request";
     const limit = Number.isSafeInteger(requestedLimit)
       ? Math.max(1, Math.min(64, requestedLimit))
       : 16;
@@ -2117,61 +2134,65 @@ export async function createProductSiteRuntime(
         }
         return settled;
       });
-      const exportResults = await stage("recovery_export_dispatch", async () => {
-        const due = await metadata.listRecoverableExportJobs(clock.now(), limit);
-        const settled: PromiseSettledResult<unknown>[] = [];
-        for (const job of due) {
-          try {
-            settled.push({
-              status: "fulfilled",
-              value: await dispatchBackground({ kind: "export", jobId: job.jobId }),
-            });
-          } catch (reason) {
-            settled.push({ status: "rejected", reason });
-          }
-        }
-        return settled;
-      });
+      const exportResults = requestTick
+        ? []
+        : await stage("recovery_export_dispatch", async () => {
+            const due = await metadata.listRecoverableExportJobs(clock.now(), limit);
+            const settled: PromiseSettledResult<unknown>[] = [];
+            for (const job of due) {
+              try {
+                settled.push({
+                  status: "fulfilled",
+                  value: await dispatchBackground({ kind: "export", jobId: job.jobId }),
+                });
+              } catch (reason) {
+                settled.push({ status: "rejected", reason });
+              }
+            }
+            return settled;
+          });
       let cleanupDeleted = 0;
       let cleanupReclaimedBytes = 0;
       let cleanupFailures = 0;
-      try {
-        const staged = await stage(
-          "recovery_staging_cleanup",
-          () => bundleFileStaging.collectExpired(),
-        );
-        cleanupDeleted += staged.deleted;
-        cleanupReclaimedBytes += staged.bytes;
-        const expiredIntents = await stage(
-          "recovery_staging_cleanup",
-          () => uploadIntentCleanup.run(),
-        );
-        cleanupDeleted += expiredIntents.deleted;
-        const imported = await stage(
-          "recovery_import_cleanup",
-          () => markdownImports.collectExpired({
-            maxSessions: Math.min(16, limit),
-            maxFiles: limit,
-          }),
-        );
-        cleanupDeleted += imported.deleted;
-        cleanupReclaimedBytes += imported.reclaimedBytes;
-        const cleaned = await stage(
-          "recovery_object_cleanup",
-          () => objectCleanup.handle({
-            actor: recoveryActor,
-            createdBefore: new Date(
-              Date.parse(nowUtc) - BUNDLE_FILE_LIMITS.gcSafetyMilliseconds,
-            ).toISOString(),
-            maxObjects: limit,
-            maxBytes: BUNDLE_FILE_LIMITS.gcMaxBytes,
-            maxDurationMs: 5_000,
-          }),
-        );
-        cleanupDeleted += cleaned.deleted;
-        cleanupReclaimedBytes += cleaned.reclaimedBytes;
-      } catch {
-        cleanupFailures = 1;
+      if (!requestTick) {
+        try {
+          const staged = await stage(
+            "recovery_staging_cleanup",
+            () => bundleFileStaging.collectExpired(),
+          );
+          cleanupDeleted += staged.deleted;
+          cleanupReclaimedBytes += staged.bytes;
+          const expiredIntents = await stage(
+            "recovery_staging_cleanup",
+            () => uploadIntentCleanup.run(),
+          );
+          cleanupDeleted += expiredIntents.deleted;
+          const imported = await stage(
+            "recovery_import_cleanup",
+            () => markdownImports.collectExpired({
+              maxSessions: Math.min(16, limit),
+              maxFiles: limit,
+            }),
+          );
+          cleanupDeleted += imported.deleted;
+          cleanupReclaimedBytes += imported.reclaimedBytes;
+          const cleaned = await stage(
+            "recovery_object_cleanup",
+            () => objectCleanup.handle({
+              actor: recoveryActor,
+              createdBefore: new Date(
+                Date.parse(nowUtc) - BUNDLE_FILE_LIMITS.gcSafetyMilliseconds,
+              ).toISOString(),
+              maxObjects: limit,
+              maxBytes: BUNDLE_FILE_LIMITS.gcMaxBytes,
+              maxDurationMs: 5_000,
+            }),
+          );
+          cleanupDeleted += cleaned.deleted;
+          cleanupReclaimedBytes += cleaned.reclaimedBytes;
+        } catch {
+          cleanupFailures = 1;
+        }
       }
       const result = Object.freeze({
         backfilled: reconciliation.backfilled,

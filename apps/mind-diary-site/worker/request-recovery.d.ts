@@ -1,5 +1,7 @@
 export const REQUEST_RECOVERY_CADENCE_MS: number;
 export const REQUEST_RECOVERY_IDLE_MS: number;
+export const REQUEST_RECOVERY_PULSE_HEADER: string;
+export type ProductSiteRecoveryMode = "full" | "request";
 
 export function isRecoveryEligibleRequest(
   request: Request,
@@ -46,7 +48,7 @@ export declare function createMindDiaryProductWorker<
       request: Request,
       deferActivity?: (promise: Promise<unknown>) => void,
     ): Promise<Response | null>;
-    recoverBackground(): Promise<unknown>;
+    recoverBackground(limit?: number, mode?: ProductSiteRecoveryMode): Promise<unknown>;
     dispatchBackground(work: Readonly<Record<string, unknown>>): Promise<unknown>;
   },
 >(options: {
