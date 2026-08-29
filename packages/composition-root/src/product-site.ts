@@ -1860,6 +1860,11 @@ export async function createProductSiteRuntime(
         }
         return result;
       },
+      withConsistentRead<Result>(
+        operation: (readControl: ProductWebControlApplication) => Promise<Result>,
+      ): Promise<Result> {
+        return control.withConsistentRead(operation);
+      },
     },
     resolveIdentity,
     oauthConnections: {
