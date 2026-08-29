@@ -138,6 +138,7 @@ class FakeD1Database {
   #appliedUploadIntentSchema = new Set();
   #failTag = null;
   #batchTail = Promise.resolve();
+  #activityWriteGate = null;
 
   prepare(sql) {
     return new FakeD1Statement(this, sql);
@@ -188,6 +189,15 @@ class FakeD1Database {
 
   failNext(tag) {
     this.#failTag = tag;
+  }
+
+  holdNextActivityWrite() {
+    let release;
+    let markStarted;
+    const wait = new Promise((resolve) => { release = resolve; });
+    const started = new Promise((resolve) => { markStarted = resolve; });
+    this.#activityWriteGate = { wait, markStarted };
+    return Object.freeze({ started, release });
   }
 
   #maybeFail(sql) {
@@ -262,6 +272,12 @@ class FakeD1Database {
       return { success: true, meta: { changes: changed } };
     }
     if (sql.includes("/*md-principal-activity-upsert*/")) {
+      if (this.#activityWriteGate !== null) {
+        const gate = this.#activityWriteGate;
+        this.#activityWriteGate = null;
+        gate.markStarted();
+        await gate.wait;
+      }
       const current = this.principalActivities.get(values[0]);
       const next = {
         principal_id: values[0],
@@ -1570,6 +1586,41 @@ test("high-frequency principal activity bypasses the canonical log and large sna
   assert.equal(
     (await checkpointRestart.readPrincipalActivity(created.principalId)).lastWebSeenAt,
     new Date(Date.parse(T0) + 20_000).toISOString(),
+  );
+});
+
+test("deferred principal activity does not block canonical metadata reads", async () => {
+  const database = new FakeD1Database();
+  const boundary = await createSitesPersistenceBoundary({
+    database,
+    bucket: new FakeR2Bucket(),
+  });
+  const created = await services(boundary, ids()).bootstrap.bootstrapAccount(
+    preRegistrationActor(92),
+    { action: "create_isolated_account" },
+  );
+  const gate = database.holdNextActivityWrite();
+  const activity = boundary.metadata.recordPrincipalActivity({
+    principalId: created.principalId,
+    surface: "web",
+    kind: "page",
+    observedAt: new Date(Date.parse(T0) + 30_000).toISOString(),
+  });
+  await gate.started;
+
+  const read = boundary.metadata.readAccount(created.principalId);
+  const outcome = await Promise.race([
+    read.then(() => "completed"),
+    new Promise((resolve) => setTimeout(() => resolve("blocked"), 100)),
+  ]);
+  gate.release();
+  await activity;
+  await read;
+
+  assert.equal(outcome, "completed");
+  assert.equal(
+    (await boundary.metadata.readPrincipalActivity(created.principalId)).lastWebSeenAt,
+    new Date(Date.parse(T0) + 30_000).toISOString(),
   );
 });
 

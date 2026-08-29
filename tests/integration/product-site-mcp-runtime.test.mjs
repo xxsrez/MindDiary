@@ -1663,7 +1663,7 @@ test("empty account reaches a strict starter commit and first useful search/fetc
     "browse_entries",
     { mind: "/me", revision_selector: { kind: "revision", revision_id: starterRevisionId } },
   );
-  assert.equal(database.metadataTailReads - tailReadsBeforeBrowse, 3);
+  assert.equal(database.metadataTailReads - tailReadsBeforeBrowse, 2);
   const indexEntry = browsed.entries.find(({ path }) => path === "index.md");
   assert.ok(indexEntry);
   const tailReadsBeforeFetch = database.metadataTailReads;
@@ -1675,7 +1675,7 @@ test("empty account reaches a strict starter commit and first useful search/fetc
     "fetch",
     { id: indexEntry.entry_id },
   );
-  assert.equal(database.metadataTailReads - tailReadsBeforeFetch, 3);
+  assert.equal(database.metadataTailReads - tailReadsBeforeFetch, 2);
   assert.equal(database.locatorHandles.size, locatorHandlesBeforeFetch);
   assert.equal(fetchedIndex.entry.entry_id, indexEntry.entry_id);
   assert.match(fetchedIndex.text, /First useful Memory/u);
@@ -1707,7 +1707,7 @@ test("empty account reaches a strict starter commit and first useful search/fetc
     "search",
     { mind: "/me", query: "concrete reusable note" },
   );
-  assert.equal(database.metadataTailReads - tailReadsBeforeRepeatedSearch, 3);
+  assert.equal(database.metadataTailReads - tailReadsBeforeRepeatedSearch, 2);
   const forgedCorrelation = await responseFrom(runtime, new Request(`${ORIGIN}/`, {
     headers: {
       "x-mind-diary-performance-correlation-id": "benchmark_forged_without_signature",
@@ -2184,7 +2184,7 @@ test("durable product runtime carries a Sites account token through Codex MCP an
   assert.match(await personalPage.text(), /<h1>My Mind<\/h1>/u);
   assert.equal(deferredPersonalActivity.length, 1);
   await Promise.all(deferredPersonalActivity);
-  assert.equal(database.metadataTailReads - tailReadsBeforePersonalPage, 2);
+  assert.equal(database.metadataTailReads - tailReadsBeforePersonalPage, 1);
 
   const tailReadsBeforeInvitationsPage = database.metadataTailReads;
   const deferredInvitationsActivity = [];
@@ -2204,7 +2204,7 @@ test("durable product runtime carries a Sites account token through Codex MCP an
   assert.deepEqual(invitationOverviewBody.data.invitations, []);
   assert.equal(deferredInvitationsActivity.length, 1);
   await Promise.all(deferredInvitationsActivity);
-  assert.equal(database.metadataTailReads - tailReadsBeforeInvitationsPage, 5);
+  assert.equal(database.metadataTailReads - tailReadsBeforeInvitationsPage, 3);
 
   const settings = await responseFrom(runtime, new Request(`${ORIGIN}/settings/developer/mcp`));
   assert.equal(settings.status, 200);

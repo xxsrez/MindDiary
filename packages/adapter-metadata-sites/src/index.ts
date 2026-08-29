@@ -450,6 +450,7 @@ export class SitesMetadataStore {
   #initialized = false;
   #loaded = false;
   #tail: Promise<void> = Promise.resolve();
+  #activityTail: Promise<void> = Promise.resolve();
   #proxy: this;
 
   constructor(database: D1DatabaseLike) {
@@ -501,14 +502,17 @@ export class SitesMetadataStore {
   async recordPrincipalActivity(
     request: Readonly<RecordPrincipalActivityRequest>,
   ): Promise<void> {
-    await this.#exclusive(async () => {
-      await this.#refresh();
-      const view = this.#cloneMetadata(this.#metadata);
-      await view.recordPrincipalActivity(request);
-      const summary = await view.readPrincipalActivity(request.principalId);
-      if (summary === null) return;
-      await this.#upsertPrincipalActivity(summary);
-    });
+    // The store is fully loaded by ready(), and every successful product actor
+    // has already crossed a current metadata read before this best-effort
+    // observation is scheduled. Validate against an immutable in-process view,
+    // then serialize only the independent activity projection write. Keeping
+    // D1 I/O off #tail prevents a deferred page observation from head-of-line
+    // blocking the next authenticated navigation.
+    const view = this.#cloneMetadata(this.#metadata);
+    await view.recordPrincipalActivity(request);
+    const summary = await view.readPrincipalActivity(request.principalId);
+    if (summary === null) return;
+    await this.#activityExclusive(() => this.#upsertPrincipalActivity(summary));
   }
 
   async readPrincipalActivity(
@@ -1261,7 +1265,8 @@ export class SitesMetadataStore {
       typeof request.principalId !== "string"
     ) return;
     try {
-      await this.#deletePrincipalActivity(request.principalId as PrincipalId);
+      await this.#activityExclusive(() =>
+        this.#deletePrincipalActivity(request.principalId as PrincipalId));
     } catch {
       // The account deletion event is canonical. A stale observational row is
       // invisible without its principal and is removed on an exact activity read.
@@ -1272,6 +1277,22 @@ export class SitesMetadataStore {
     const previous = this.#tail;
     let release: () => void = () => undefined;
     this.#tail = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await previous;
+    try {
+      return await operation();
+    } finally {
+      release();
+    }
+  }
+
+  async #activityExclusive<Result>(
+    operation: () => Promise<Result>,
+  ): Promise<Result> {
+    const previous = this.#activityTail;
+    let release: () => void = () => undefined;
+    this.#activityTail = new Promise<void>((resolve) => {
       release = resolve;
     });
     await previous;
