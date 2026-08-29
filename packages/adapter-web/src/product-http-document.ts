@@ -295,114 +295,121 @@ export async function productUiDocument(input: {
   const reservedUiRoute = routeMatch === null || RESERVED_UI_HANDLES.has(routeMatch[1]!);
   if (!reservedUiRoute && routeMatch !== null) {
     const handle = routeMatch[1]!;
-    let view: OrdinaryMindsManagementModel["view"];
-    try {
-      const resolved = ordinaryUiMind(await input.control.execute({
-        operation: "get_mind_info",
-        actor: input.identity.actor,
-        input: Object.freeze({ mind_ref: handle }),
-      }));
-      if (resolved === null) {
-        view = { kind: "route_error", handle, message: "Mind settings are unavailable." };
-      } else {
-        let ownership: OrdinaryMindOwnershipCandidates | undefined;
-        let capacity: OrdinaryMindCapacity | undefined;
-        let collaboration: Extract<
-          OrdinaryMindsManagementModel["view"],
-          { readonly kind: "detail" }
-        >["collaboration"];
-        if (resolved.accessKind !== "visibility") {
-          try {
-            const [memberResult, invitationResult] = await Promise.all([
-              input.control.execute({
-                operation: "list_members",
+    const renderDetail = async (
+      control: ProductWebControlApplication,
+    ): Promise<string> => {
+      let view: OrdinaryMindsManagementModel["view"];
+      try {
+        const resolved = ordinaryUiMind(await control.execute({
+          operation: "get_mind_info",
+          actor: input.identity.actor,
+          input: Object.freeze({ mind_ref: handle }),
+        }));
+        if (resolved === null) {
+          view = { kind: "route_error", handle, message: "Mind settings are unavailable." };
+        } else {
+          let ownership: OrdinaryMindOwnershipCandidates | undefined;
+          let capacity: OrdinaryMindCapacity | undefined;
+          let collaboration: Extract<
+            OrdinaryMindsManagementModel["view"],
+            { readonly kind: "detail" }
+          >["collaboration"];
+          if (resolved.accessKind !== "visibility") {
+            try {
+              const [memberResult, invitationResult] = await Promise.all([
+                control.execute({
+                  operation: "list_members",
+                  actor: input.identity.actor,
+                  input: Object.freeze({ mind_ref: handle }),
+                }),
+                control.execute({
+                  operation: "list_invitations",
+                  actor: input.identity.actor,
+                  input: Object.freeze({}),
+                }),
+              ]);
+              const memberRecord = record(memberResult);
+              const members = Array.isArray(memberRecord?.members)
+                ? memberRecord.members
+                  .map(ordinaryUiMember)
+                  .filter((member): member is OrdinaryMindUiMember => member !== null)
+                : [];
+              const self = members.find((member) => member.isSelf);
+              if (self === undefined || self.role !== resolved.role) {
+                throw new TypeError("current membership projection is unavailable");
+              }
+              const mindMap = new Map([[resolved.mindId, resolved] as const]);
+              const invitationRecord = record(invitationResult);
+              const invitations = Array.isArray(invitationRecord?.invitations)
+                ? invitationRecord.invitations
+                  .map((invitation) => invitationUi(invitation, mindMap))
+                  .filter((invitation): invitation is InvitationMembershipGlobalInvitation =>
+                    invitation !== null && invitation.mindId === resolved.mindId)
+                  .map(perMindInvitation)
+                : [];
+              const collaborationMembers: readonly InvitationMembershipMember[] = Object.freeze(
+                members.map((member) => Object.freeze({
+                  ...member,
+                  state: "active" as const,
+                })),
+              );
+              collaboration = {
+                kind: "ready",
+                snapshot: Object.freeze({
+                  mind: Object.freeze({
+                    mindId: resolved.mindId,
+                    name: resolved.name,
+                    route: `/${resolved.handle}`,
+                    visibility: resolved.visibility,
+                    metadataVersion: resolved.metadataVersion,
+                  }),
+                  actor: Object.freeze({
+                    memberId: self.memberId,
+                    role: self.role,
+                    membershipVersion: self.membershipVersion,
+                  }),
+                  members: collaborationMembers,
+                  invitations: Object.freeze(invitations),
+                }),
+              };
+              if (resolved.role === "owner") {
+                ownership = { kind: "ready", members: Object.freeze(members) };
+              }
+            } catch {
+              collaboration = { kind: "error" };
+              if (resolved.role === "owner") ownership = { kind: "error" };
+            }
+          }
+          if (resolved.role === "owner") {
+            try {
+              capacity = ordinaryMindCapacity(await control.execute({
+                operation: "get_capacity_usage",
                 actor: input.identity.actor,
                 input: Object.freeze({ mind_ref: handle }),
-              }),
-              input.control.execute({
-                operation: "list_invitations",
-                actor: input.identity.actor,
-                input: Object.freeze({}),
-              }),
-            ]);
-            const memberRecord = record(memberResult);
-            const members = Array.isArray(memberRecord?.members)
-              ? memberRecord.members
-                .map(ordinaryUiMember)
-                .filter((member): member is OrdinaryMindUiMember => member !== null)
-              : [];
-            const self = members.find((member) => member.isSelf);
-            if (self === undefined || self.role !== resolved.role) {
-              throw new TypeError("current membership projection is unavailable");
+              })) ?? { kind: "error" };
+            } catch {
+              capacity = { kind: "error" };
             }
-            const mindMap = new Map([[resolved.mindId, resolved] as const]);
-            const invitationRecord = record(invitationResult);
-            const invitations = Array.isArray(invitationRecord?.invitations)
-              ? invitationRecord.invitations
-                .map((invitation) => invitationUi(invitation, mindMap))
-                .filter((invitation): invitation is InvitationMembershipGlobalInvitation =>
-                  invitation !== null && invitation.mindId === resolved.mindId)
-                .map(perMindInvitation)
-              : [];
-            const collaborationMembers: readonly InvitationMembershipMember[] = Object.freeze(
-              members.map((member) => Object.freeze({
-                ...member,
-                state: "active" as const,
-              })),
-            );
-            collaboration = {
-              kind: "ready",
-              snapshot: Object.freeze({
-                mind: Object.freeze({
-                  mindId: resolved.mindId,
-                  name: resolved.name,
-                  route: `/${resolved.handle}`,
-                  visibility: resolved.visibility,
-                  metadataVersion: resolved.metadataVersion,
-                }),
-                actor: Object.freeze({
-                  memberId: self.memberId,
-                  role: self.role,
-                  membershipVersion: self.membershipVersion,
-                }),
-                members: collaborationMembers,
-                invitations: Object.freeze(invitations),
-              }),
-            };
-            if (resolved.role === "owner") {
-              ownership = { kind: "ready", members: Object.freeze(members) };
-            }
-          } catch {
-            collaboration = { kind: "error" };
-            if (resolved.role === "owner") ownership = { kind: "error" };
           }
+          view = {
+            kind: "detail",
+            mind: resolved,
+            ...(ownership === undefined ? {} : { ownership }),
+            ...(collaboration === undefined ? {} : { collaboration }),
+            ...(capacity === undefined ? {} : { capacity }),
+          };
         }
-        if (resolved.role === "owner") {
-          try {
-            capacity = ordinaryMindCapacity(await input.control.execute({
-              operation: "get_capacity_usage",
-              actor: input.identity.actor,
-              input: Object.freeze({ mind_ref: handle }),
-            })) ?? { kind: "error" };
-          } catch {
-            capacity = { kind: "error" };
-          }
-        }
-        view = {
-          kind: "detail",
-          mind: resolved,
-          ...(ownership === undefined ? {} : { ownership }),
-          ...(collaboration === undefined ? {} : { collaboration }),
-          ...(capacity === undefined ? {} : { capacity }),
-        };
+      } catch {
+        view = { kind: "route_error", handle, message: "Mind settings are unavailable." };
       }
-    } catch {
-      view = { kind: "route_error", handle, message: "Mind settings are unavailable." };
-    }
-    return withCsrfMeta(renderOrdinaryMindsManagementDocument({
-      displayName: session.displayName,
-      view,
-    }, "/ui/mind-diary-ordinary-minds-client.js"), input.csrfToken);
+      return withCsrfMeta(renderOrdinaryMindsManagementDocument({
+        displayName: session.displayName,
+        view,
+      }, "/ui/mind-diary-ordinary-minds-client.js"), input.csrfToken);
+    };
+    return input.control.withConsistentRead === undefined
+      ? renderDetail(input.control)
+      : input.control.withConsistentRead(renderDetail);
   }
 
   let collection: MindDiaryUiShellModel["collection"];

@@ -54,6 +54,7 @@ import {
   type ProductSitesIdentityResolution,
   type ProductSitesSessionSnapshot,
   type ProductWebActor,
+  type ProductWebControlApplication,
   type TrustedSitesIdentitySnapshot,
 } from "@mind-diary/adapter-web";
 import {
@@ -471,8 +472,23 @@ class ProductControlApplication {
       readonly exports: Pick<ExportJobApplicationService, "start" | "getStatus">;
       readonly scheduleExport: (jobId: string) => void | Promise<void>;
       readonly operatorDirectory: ServiceOperatorDirectoryService;
+      /** Optional read-session bridge used by server-rendered detail pages. */
+      readonly consistentRead?: <Result>(
+        operation: (control: ProductWebControlApplication) => Promise<Result>,
+      ) => Promise<Result>;
     },
   ) {}
+
+  withConsistentRead<Result>(
+    operation: (control: ProductWebControlApplication) => Promise<Result>,
+  ): Promise<Result> {
+    if (typeof operation !== "function") {
+      throw new TypeError("consistent read callback is required");
+    }
+    return this.services.consistentRead === undefined
+      ? operation(this)
+      : this.services.consistentRead(operation);
+  }
 
   async #mind(actor: ProductWebActor, input: Readonly<Record<string, unknown>>) {
     const ref = input.mind_ref;
@@ -1560,7 +1576,7 @@ export async function createProductSiteRuntime(
   };
 
   const commonAuditIds = generated;
-  const control = new ProductControlApplication({
+  const controlServices = {
     bootstrap: new AccountBootstrapService({ accounts: metadata, objects, ids: generated, logger: controlObservability }),
     personal: new PersonalMindControlService({ personalMinds: metadata, digest: objects, logger: controlObservability }),
     ordinary: new OrdinaryMindControlService({ ordinaryMinds: metadata, objects, ids: generated, host, logger: controlObservability }),
@@ -1596,13 +1612,35 @@ export async function createProductSiteRuntime(
     }),
     markdownImports,
     exports,
-    scheduleExport: async (jobId) => options.schedule({ kind: "export", id: jobId }),
+    scheduleExport: async (jobId: string) => options.schedule({ kind: "export", id: jobId }),
     operatorDirectory: new ServiceOperatorDirectoryService({
       store: metadata,
       tokens: metadata,
       operatorPrincipalIds: configuredOperatorPrincipalIds,
       ids: generated,
     }),
+  };
+  const consistentRead = async <Result>(
+    operation: (control: ProductWebControlApplication) => Promise<Result>,
+  ): Promise<Result> => metadata.withConsistentRead(async (readStore) => {
+    // The detail page performs several independent reads. Rebind only the
+    // read services to this one refreshed snapshot; mutation services remain
+    // on the live store and are never exposed through this callback.
+    const readControl = new ProductControlApplication({
+      ...controlServices,
+      reads: new ControlReadService(readStore),
+      routes: new MindRouteService({ routes: readStore, host, logger: controlObservability }),
+      capacity: new CapacityAdmissionService({
+        metadata: readStore,
+        authorizer: new CapabilityAuthorizer(readStore),
+        clock,
+      }),
+    });
+    return operation(readControl);
+  });
+  const control = new ProductControlApplication({
+    ...controlServices,
+    consistentRead,
   });
 
   const listResolvedWritableTargets = async (

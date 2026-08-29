@@ -1179,6 +1179,68 @@ test("ordinary Mind list and exact route wire the UAT management and deletion co
   assert.equal(deleteCall.input.idempotencyKey, "delete:12345678");
 });
 
+test("ordinary Mind detail uses one consistent read session when the control plane provides it", async () => {
+  let sessions = 0;
+  let escapedCalls = 0;
+  const readControl = {
+    execute(request) {
+      if (request.operation === "get_mind_info") return ordinaryOwnerRoute;
+      if (request.operation === "list_members") return {
+        members: [{
+          memberId: "membership_owner",
+          displayName: "Product Owner",
+          role: "owner",
+          membershipVersion: 1,
+          isSelf: true,
+        }],
+      };
+      if (request.operation === "list_invitations") return { invitations: [] };
+      if (request.operation === "get_capacity_usage") return {
+        kind: "found",
+        usage: {
+          logicalHeadBytes: 1_024,
+          logicalRetainedBytes: 2_048,
+          physicalCanonicalBytes: 1_536,
+          temporaryBytes: 0,
+          d1MetadataBytes: 4_096,
+          reservedBytes: 0,
+          storageAmplification: 1.5,
+        },
+        principalUsage: { physicalCanonicalBytes: 2_048 },
+        mindCanonicalHeadroomBytes: 2_147_482_112,
+        principalCanonicalHeadroomBytes: 8_589_932_544,
+        utilization: "normal",
+      };
+      throw new Error(`unexpected read operation: ${request.operation}`);
+    },
+  };
+  const handler = createProductWebHttpHandler({
+    applicationOrigin: origin,
+    resolveIdentity: () => ({
+      kind: "authenticated",
+      actor: registeredActor,
+      session: sessionProjection,
+    }),
+    csrf: { issue: () => "csrf-consistent", verify: () => true },
+    control: {
+      execute() {
+        escapedCalls += 1;
+        throw new Error("detail read escaped the consistent session");
+      },
+      withConsistentRead(operation) {
+        sessions += 1;
+        return operation(readControl);
+      },
+    },
+  });
+
+  const response = await handler(new Request(`${origin}/research-notes`));
+  assert.equal(response.status, 200);
+  assert.match(await response.text(), /data-mind-route data-mind-handle="research-notes"/u);
+  assert.equal(sessions, 1);
+  assert.equal(escapedCalls, 0);
+});
+
 test("Markdown import REST maps exact plan, resumable multipart checkpoints and terminal commands", async () => {
   const calls = [];
   const handler = createProductWebHttpHandler({

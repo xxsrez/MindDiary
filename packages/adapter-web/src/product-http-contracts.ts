@@ -141,6 +141,14 @@ export interface ProductWebControlApplication {
     readonly actor: ProductWebActor;
     readonly input: Readonly<Record<string, unknown>>;
   }): unknown | Promise<unknown>;
+  /**
+   * Runs a bounded read-only page projection against one consistent snapshot
+   * when the backing store supports it. Test doubles and small adapters may
+   * omit this optional optimization and use the regular execute path.
+   */
+  withConsistentRead?<Result>(
+    operation: (control: ProductWebControlApplication) => Promise<Result>,
+  ): Promise<Result>;
 }
 
 export interface ProductWebOAuthConnections {
