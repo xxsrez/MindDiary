@@ -254,6 +254,36 @@ test("authenticated catalog returns only current public ordinary Minds without f
   }
 });
 
+test("catalog uses one consistent read session when the metadata store provides it", async () => {
+  const env = harness();
+  const owner = await createAccount(env, 1, "Consistent Catalog Owner");
+  const visitor = await createAccount(env, 2, "Consistent Catalog Visitor");
+  const publicMind = await createMind(env, owner, "consistent-public", "Consistent Public");
+  await changeVisibility(env, owner, publicMind, "public", "consistent-public");
+
+  let sessions = 0;
+  const consistentCatalog = new Proxy(env.metadata, {
+    get(target, property) {
+      if (property === "withConsistentRead") {
+        return async (operation) => {
+          sessions += 1;
+          return operation(target);
+        };
+      }
+      const value = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  const catalog = new PublicMindCatalogService({
+    catalog: consistentCatalog,
+    host: HOST,
+  });
+
+  const result = await catalog.listPublicMinds(registeredActor(visitor.principalId));
+  assert.deepEqual(result.minds.map((mind) => mind.route), ["/consistent-public"]);
+  assert.equal(sessions, 1);
+});
+
 test("anonymous, MCP, service and inactive actors are denied before catalog reads, including empty pages", async () => {
   const env = harness();
   const account = await createAccount(env, 1);

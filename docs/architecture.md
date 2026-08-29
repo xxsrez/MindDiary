@@ -895,8 +895,8 @@ explicit target Mind. General cross-Mind search/synthesis требует нов�
   foreground request может пройти между bounded recovery operations. Каждый
   recovery stage и весь flight публикуют только closed privacy-safe latency и
   outcome telemetry без identity, URL, content или storage keys.
-- Content `list_minds`, exact Mind discovery и web/control membership list
-  выполняют по одному consistent metadata read-session: один D1 snapshot/tail
+- Content `list_minds`, exact Mind discovery, public catalog и web/control
+  membership list выполняют по одному consistent metadata read-session: один D1 snapshot/tail
   refresh питает personal binding, membership/public candidates, authorization
   state, route/revision projections и публикуемый revision-index status.
   Binding-aware content authorization читает binding и current access из того

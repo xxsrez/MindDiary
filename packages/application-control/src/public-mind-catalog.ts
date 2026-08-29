@@ -120,11 +120,13 @@ function recordPublicMindCatalogEvent(
 /** Authenticated, fail-closed discovery over opaque public projection IDs. */
 export class PublicMindCatalogService {
   readonly #catalog: PublicMindCatalogStore;
+  readonly #host: VerifiedSpaceHost;
   readonly #routes: MindRouteService;
   readonly #logger: PublicMindCatalogSafeLogger | undefined;
 
   constructor(dependencies: PublicMindCatalogDependencies) {
     this.#catalog = dependencies.catalog;
+    this.#host = dependencies.host;
     this.#routes = new MindRouteService({
       routes: dependencies.catalog,
       host: dependencies.host,
@@ -140,6 +142,25 @@ export class PublicMindCatalogService {
     query: Readonly<ListPublicMindsQuery>,
   ): Promise<Readonly<PublicMindCatalogResult>>;
   async listPublicMinds(
+    actor: ActorContext,
+    query: unknown = {},
+  ): Promise<Readonly<PublicMindCatalogResult>> {
+    if (this.#catalog.withConsistentRead !== undefined) {
+      return this.#catalog.withConsistentRead((catalog) => {
+        const consistent = new PublicMindCatalogService({
+          // The consistent-read view preserves the derived catalog method at
+          // runtime; the base port types the callback as a route-only view.
+          catalog: catalog as PublicMindCatalogStore,
+          host: this.#host,
+          ...(this.#logger === undefined ? {} : { logger: this.#logger }),
+        });
+        return consistent.#listPublicMinds(actor, query);
+      });
+    }
+    return this.#listPublicMinds(actor, query);
+  }
+
+  async #listPublicMinds(
     actor: ActorContext,
     query: unknown = {},
   ): Promise<Readonly<PublicMindCatalogResult>> {
