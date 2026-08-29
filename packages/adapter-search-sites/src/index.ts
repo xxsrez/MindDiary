@@ -8,6 +8,14 @@ import type {
 
 export const SITES_SEARCH_ADAPTER = "sites-d1-exact-revision" as const;
 const SITES_SEARCH_SCHEMA_VERSION = 3;
+const SITES_SEARCH_SCHEMA_OBJECTS = Object.freeze([
+  "md_search_schema_migrations",
+  "md_exact_revision_search",
+  "md_search_documents",
+  "md_search_revision_documents",
+  "md_search_revision_order",
+  "md_search_document_lexical",
+]);
 
 export interface D1ResultLike<Row = Record<string, unknown>> {
   readonly results?: readonly Row[];
@@ -88,7 +96,8 @@ interface SearchProjectionCountRow {
   readonly indexed_count: number;
 }
 
-interface SchemaVersionRow {
+interface SchemaProbeRow {
+  readonly name?: string;
   readonly version?: number | string;
 }
 
@@ -174,11 +183,25 @@ export class SitesExactRevisionSearchIndex implements SearchIndex {
     try {
       const result = await this.#database
         .prepare(
-          `/*md-search-schema-probe*/ SELECT COALESCE(MAX(version), 0) AS version
-           FROM md_search_schema_migrations`,
+          `/*md-search-schema-probe*/ SELECT name,
+             (SELECT COALESCE(MAX(version), 0)
+              FROM md_search_schema_migrations) AS version
+           FROM sqlite_master
+           WHERE type IN ('table', 'index')
+             AND name IN ('md_search_schema_migrations',
+                          'md_exact_revision_search',
+                          'md_search_documents',
+                          'md_search_revision_documents',
+                          'md_search_revision_order',
+                          'md_search_document_lexical')`,
         )
-        .all<SchemaVersionRow>();
-      if (Number(result.results?.[0]?.version ?? 0) >= SITES_SEARCH_SCHEMA_VERSION) {
+        .all<SchemaProbeRow>();
+      const rows = result.results ?? [];
+      const names = new Set(rows.map((row) => row.name));
+      if (
+        Number(rows[0]?.version ?? 0) >= SITES_SEARCH_SCHEMA_VERSION &&
+        SITES_SEARCH_SCHEMA_OBJECTS.every((name) => names.has(name))
+      ) {
         return;
       }
     } catch {

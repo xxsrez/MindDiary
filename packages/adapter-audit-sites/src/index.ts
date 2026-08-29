@@ -215,6 +215,12 @@ export function createSitesPrivacySafeObservabilitySink(
 
 export const SITES_AUDIT_ADAPTER = "sites-d1-privacy-safe-audit" as const;
 const SITES_AUDIT_SCHEMA_VERSION = 1;
+const SITES_AUDIT_SCHEMA_OBJECTS = Object.freeze([
+  "md_audit_schema_migrations",
+  "md_delivered_audit_events",
+  "md_audit_space_idx",
+  "md_audit_principal_idx",
+]);
 
 export interface D1ResultLike<Row = Record<string, unknown>> {
   readonly results?: readonly Row[];
@@ -256,7 +262,8 @@ interface AuditRow {
   readonly event_json: string;
 }
 
-interface SchemaVersionRow {
+interface SchemaProbeRow {
+  readonly name?: string;
   readonly version?: number | string;
 }
 
@@ -309,11 +316,23 @@ export class SitesAuditSink implements AuditSink {
     try {
       const result = await this.#database
         .prepare(
-          `/*md-audit-schema-probe*/ SELECT COALESCE(MAX(version), 0) AS version
-           FROM md_audit_schema_migrations`,
+          `/*md-audit-schema-probe*/ SELECT name,
+             (SELECT COALESCE(MAX(version), 0)
+              FROM md_audit_schema_migrations) AS version
+           FROM sqlite_master
+           WHERE type IN ('table', 'index')
+             AND name IN ('md_audit_schema_migrations',
+                          'md_delivered_audit_events',
+                          'md_audit_space_idx',
+                          'md_audit_principal_idx')`,
         )
-        .all<SchemaVersionRow>();
-      if (Number(result.results?.[0]?.version ?? 0) >= SITES_AUDIT_SCHEMA_VERSION) {
+        .all<SchemaProbeRow>();
+      const rows = result.results ?? [];
+      const names = new Set(rows.map((row) => row.name));
+      if (
+        Number(rows[0]?.version ?? 0) >= SITES_AUDIT_SCHEMA_VERSION &&
+        SITES_AUDIT_SCHEMA_OBJECTS.every((name) => names.has(name))
+      ) {
         return;
       }
     } catch {

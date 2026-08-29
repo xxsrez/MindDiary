@@ -881,20 +881,17 @@ explicit target Mind. General cross-Mind search/synthesis требует нов�
   state в cache не сохраняются; background promises прикрепляются только к
   текущему request context. Failed initialization удаляется из cache, а config
   drift создаёт чистое поколение.
-- Request-triggered recovery запускается только отдельным same-origin `HEAD`
-  pulse после browser `load`/idle, поэтому navigation response не владеет его
-  `waitUntil`. Обычный document GET, OAuth, API, MCP и static assets recovery не
-  запускают. Pulse ждёт трёхсекундное quiet window и
-  объединяется в один isolate-level flight на deployment/config fingerprint с
-  30-секундной cadence после завершения. Новый pulse до старта recovery fence-ит
-  старое generation без переноса timer, AbortSignal или другого I/O object между
-  Cloudflare request contexts. Due index и
-  queued/failed/expired-claim export jobs dispatch-ятся последовательно,
-  поэтому recovery не
-  ставит веер metadata operations впереди authenticated reads; следующий
-  foreground request может пройти между bounded recovery operations. Каждый
-  recovery stage и весь flight публикуют только closed privacy-safe latency и
-  outcome telemetry без identity, URL, content или storage keys.
+- Request-triggered recovery остаётся opt-in и в текущем UAT Worker отключён.
+  При явном включении его запускает только отдельный same-origin `HEAD` pulse;
+  обычный document GET, OAuth, API, MCP и static assets recovery не запускают.
+  Pulse ждёт пятисекундное quiet window и объединяется в один isolate-level
+  flight на deployment/config fingerprint с completion-based cadence пять
+  минут. Новый pulse до старта recovery fence-ит старое generation без переноса
+  timer, AbortSignal или другого I/O object между Cloudflare request contexts.
+  Request mode выполняет только bounded reconciliation и dispatch exact-revision
+  index; export и cleanup остаются full operator-owned recovery. Каждый stage и
+  весь flight публикуют только closed privacy-safe latency и outcome telemetry
+  без identity, URL, content или storage keys.
 - Content `list_minds`, exact Mind discovery, public catalog и web/control
   membership list выполняют по одному consistent metadata read-session: один D1 snapshot/tail
   refresh питает personal binding, membership/public candidates, authorization
@@ -936,9 +933,10 @@ explicit target Mind. General cross-Mind search/synthesis требует нов�
   остаются operator-owned работой вне navigation path.
   Cold-isolate schema bootstrap отправляет все ordered idempotent metadata
   migrations одним D1 batch вместо отдельного network round-trip на каждую
-  migration; отдельные D1-backed adapters (metadata, search, audit,
-  upload-intent) запускают свои schema batches последовательно, а не
-  конкурируют за один D1 lock. Current-schema cold load одним guarded SQL получает snapshot chunks
+  migration. Search, audit, locator и upload-intent adapters лениво проверяют
+  version и полный набор своих schema objects; missing/outdated schema запускает
+  один single-flight idempotent batch только для затронутого adapter, а
+  current schema не делает DDL. Current-schema cold load одним guarded SQL получает snapshot chunks
   и canonical event tail; fresh/older schema автоматически применяет migration
   batch и повторяет тот же read. Таким образом обычный isolate startup не делает
   отдельные head, chunks, tail и no-op migration round-trips.
