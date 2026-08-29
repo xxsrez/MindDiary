@@ -879,8 +879,15 @@ explicit target Mind. General cross-Mind search/synthesis требует нов�
   одинакового deployment/config fingerprint и single-flight-ит concurrent cold
   initialization. Request `ExecutionContext`, request/response и private actor
   state в cache не сохраняются; background promises прикрепляются только к
-  текущему request context. Failed initialization удаляется из cache, а config
-  drift создаёт чистое поколение.
+  текущему request context. Пятисекундный request timeout ограничивает только
+  ожидание конкретного запроса: исходный initialization flight остаётся
+  единственным источником истины до фактического завершения. Поздний успех
+  переиспользуется следующими запросами, а только фактическая ошибка удаляет
+  slot и разрешает чистый retry; поэтому timeout не создаёт параллельную
+  initialization и не переносит request context в cache. Если provider promise
+  не завершается вообще, каждый request получает bounded `503`, пока не
+  изменится config fingerprint или не будет пересоздан isolate. Config drift
+  сразу создаёт чистое поколение.
 - Request-triggered recovery остаётся opt-in и в текущем UAT Worker отключён.
   При явном включении его запускает только отдельный same-origin `HEAD` pulse;
   обычный document GET, OAuth, API, MCP и static assets recovery не запускают.
@@ -916,7 +923,14 @@ explicit target Mind. General cross-Mind search/synthesis требует нов�
   create/revoke и остальные token-lifecycle mutations также сразу сохраняются
   каноническим fenced event, а полный materialized snapshot checkpoint-ится с
   cadence 16: обычный OAuth refresh не ждёт синхронной перезаписи всего
-  metadata state, при этом cold restart replay-ит bounded tail. Пустые
+  metadata state, при этом cold restart replay-ит bounded tail.
+  Canonical `md_metadata_events` append не обрывается локальным timeout: без
+  cancellation или authoritative provider outcome такой timeout неоднозначно
+  разделял бы late commit и failure и мог бы спровоцировать повторную mutation.
+  Поэтому write queue ждёт точный D1 result, тогда как reads и производные
+  snapshot checkpoints остаются bounded; late failure не публикует success, а
+  late success восстанавливается из единственного durable event после restart.
+  Пустые
   staged-file и Markdown-import cleanup passes вообще не добавляют canonical
   event. Последовательные warm mutations получают detached CAS base клонированием
   одного tail-refreshed in-process state, а не повторным чтением и parsing всего
